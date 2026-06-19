@@ -70,8 +70,7 @@ use crate::screens::course_session::{ActiveCourseSession, CourseEntryResult, Cou
 use crate::screens::key_config_edit::KeyConfigEditSession;
 use crate::screens::play_finish::FinishedPlaySession;
 use crate::screens::play_loop::{
-    PlayAdvanceOutcome, PlayEndingSkinTimers, advance_running_play_session_until_result,
-    refresh_play_ending_snapshot,
+    PlayEndingSkinTimers, advance_running_play_session, refresh_play_ending_snapshot,
 };
 use crate::screens::play_session::AppliedArrange;
 use crate::screens::play_session::build_practice_prepared_from_preloaded;
@@ -894,7 +893,7 @@ struct PracticeChartDefaults {
 struct PlayEndingTransition {
     started_at: Instant,
     fadeout_started_at: Option<Instant>,
-    finished: FinishedPlaySession,
+    finished: Option<FinishedPlaySession>,
     failed: bool,
     full_combo_elapsed_at_finish_ms: Option<i32>,
 }
@@ -3224,6 +3223,13 @@ impl WinitApp {
         let play_control = (!event.repeat).then(|| physical_key_name(event.physical_key)).flatten();
         let has_play_control_context =
             self.active_play.is_some() || self.pending_play_start.is_some();
+        if event.state == ElementState::Pressed
+            && !event.repeat
+            && let Some(control) = play_control.as_deref()
+            && self.handle_quick_retry_control(control)
+        {
+            return;
+        }
         if has_play_control_context && let Some(control) = play_control.as_deref() {
             self.update_play_e1_control_state(control, event.state == ElementState::Pressed);
         }
@@ -3822,6 +3828,9 @@ impl WinitApp {
     fn route_gamepad_button(&mut self, button: &str, pressed: bool) {
         let has_play_control_context =
             self.active_play.is_some() || self.pending_play_start.is_some();
+        if pressed && self.handle_quick_retry_control(button) {
+            return;
+        }
         if has_play_control_context {
             self.update_play_e1_control_state(button, pressed);
         }
@@ -6630,6 +6639,71 @@ impl WinitApp {
         options
     }
 
+    fn active_play_retry_options(&self, mode: ResultRetryMode) -> PlayStartOptions {
+        let mut options = self.play_start_options();
+        if let Some(active) = &self.active_play {
+            let applied = &active.running.applied_arrange;
+            options.arrange = applied.arrange;
+            options.arrange_2p = applied.arrange_2p;
+            options.double_option = applied.double_option;
+            match mode {
+                ResultRetryMode::SameArrange => {
+                    options.arrange_seed = applied.seed;
+                    options.arrange_pattern = applied.pattern.clone();
+                }
+                ResultRetryMode::DifferentArrange => {
+                    options.arrange_seed = None;
+                    options.arrange_pattern = None;
+                }
+            }
+        }
+        options
+    }
+
+    fn handle_quick_retry_control(&mut self, control: &str) -> bool {
+        let Some(ending) = &self.play_ending else {
+            return false;
+        };
+        if !ending.failed
+            || self.active_course.is_some()
+            || self.practice_session.is_some()
+            || self.last_play_was_autoplay
+        {
+            return false;
+        }
+        let mode = if self.select_keys.is_start(control) {
+            Some(ResultRetryMode::DifferentArrange)
+        } else if self.select_keys.is_e2_action(control) || matches!(control, "Select") {
+            Some(ResultRetryMode::SameArrange)
+        } else {
+            None
+        };
+        let Some(mode) = mode else {
+            return false;
+        };
+        self.quick_retry_active_play(mode);
+        true
+    }
+
+    fn quick_retry_active_play(&mut self, mode: ResultRetryMode) {
+        let Some(chart_id) = self.last_started_chart_id else {
+            tracing::warn!("quick retry ignored without previous chart id");
+            return;
+        };
+        let options = self.active_play_retry_options(mode);
+        tracing::info!(chart_id, ?mode, "quick retrying chart");
+        self.save_current_play_options(
+            self.active_play.as_ref().map(|active| active.running.session.hispeed),
+            "quick retry",
+        );
+        self.active_play = None;
+        self.play_ending = None;
+        self.finished_play = None;
+        self.draining_audio = None;
+        self.clear_play_control_holds();
+        self.start_chart_with_options(chart_id, options);
+    }
+
     /// Key5/Key7 の現在の押下状態を記録する。フェードアウト中も含めて
     /// 常に呼び、終了アニメーション終了時に retry arrange を決める。
     fn track_result_lane_hold(&mut self, control: &PhysicalControl, pressed: bool) {
@@ -6957,18 +7031,54 @@ impl WinitApp {
     }
 
     fn finish_play_ending(&mut self) {
-        let Some(ending) = self.play_ending.take() else {
+        let Some(mut ending) = self.play_ending.take() else {
             return;
         };
-        if let Some(started) = self.active_play.take() {
-            self.draining_audio = Some(started.running.audio);
-        }
+        let Some(mut started) = self.active_play.take() else {
+            return;
+        };
+        let finished = match ending.finished.take() {
+            Some(finished) => finished,
+            None => {
+                match crate::screens::play_finish::finish_session_result_once(
+                    &mut started.running.finished,
+                    &mut self.boot.score_db,
+                    crate::screens::play_finish::FinishSessionResultOnceRequest {
+                        profile_paths: &self.boot.profile_paths,
+                        replay_config: &self.boot.profile_config.replay,
+                        ir_config: &self.boot.profile_config.ir,
+                        session: &started.running.session,
+                        played_at: now_unix_seconds(),
+                        applied_arrange: &started.running.applied_arrange,
+                        target_ex_score: started.running.target_ex_score,
+                        score_key: started.running.score_key,
+                        practice_mode: started.running.practice_mode,
+                    },
+                ) {
+                    Ok(mut finished) => {
+                        finished.summary.graph = started
+                            .running
+                            .result_graph
+                            .snapshot_for_session(&started.running.session);
+                        finished
+                    }
+                    Err(error) => {
+                        tracing::error!(%error, "failed to finish play session");
+                        self.draining_audio = Some(started.running.audio);
+                        self.refresh_player_stats_snapshot();
+                        self.leave_result();
+                        return;
+                    }
+                }
+            }
+        };
+        self.draining_audio = Some(started.running.audio);
         self.refresh_player_stats_snapshot();
         if self.active_course.is_some() {
-            self.advance_course_after_finish(ending.finished);
+            self.advance_course_after_finish(finished);
             return;
         }
-        self.finished_play = Some(ending.finished);
+        self.finished_play = Some(finished);
         self.result_gauge_graph_type = self
             .finished_play
             .as_ref()
@@ -7710,16 +7820,16 @@ impl WinitApp {
             video_update_time,
         );
 
-        let advance_outcome = advance_running_play_session_until_result(
-            &mut active_play.running,
-            &mut self.boot.score_db,
-            &self.boot.profile_paths,
-            &self.boot.profile_config.replay,
-            &self.boot.profile_config.ir,
-            now_unix_seconds(),
-        );
+        let advance_outcome = advance_running_play_session(&mut active_play.running);
         match advance_outcome {
-            Ok(PlayAdvanceOutcome::Playing(frame)) => {
+            Ok(frame)
+                if !matches!(
+                    frame.state,
+                    bmz_gameplay::session::PlayState::Finished
+                        | bmz_gameplay::session::PlayState::Failed
+                ) =>
+            {
+                active_play.running.result_graph.record_frame(&frame);
                 let mine_hits = frame.mine_hits.len();
                 let mut snapshot = frame.render_snapshot;
                 self.apply_profile_fast_slow_filter(&mut snapshot);
@@ -7738,7 +7848,8 @@ impl WinitApp {
                 self.last_play_snapshot = Some(snapshot);
                 self.play_landmine_se(mine_hits);
             }
-            Ok(PlayAdvanceOutcome::Finished { frame, finished }) => {
+            Ok(frame) => {
+                active_play.running.result_graph.record_frame(&frame);
                 if self
                     .practice_session
                     .as_ref()
@@ -7776,7 +7887,7 @@ impl WinitApp {
                     fadeout_started_at: None,
                     failed: frame.state == bmz_gameplay::session::PlayState::Failed,
                     full_combo_elapsed_at_finish_ms,
-                    finished,
+                    finished: None,
                 });
                 self.update_play_ending_snapshot();
             }
