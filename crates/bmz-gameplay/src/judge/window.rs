@@ -81,8 +81,8 @@ pub const fn beatoraja_note_judge_window_for_keymode(key_mode: KeyMode) -> Judge
             good_us: 100_000,
             bad_fast_us: 150_000,
             bad_slow_us: 150_000,
-            empty_poor_fast_us: 150_000,
-            empty_poor_slow_us: 500_000,
+            empty_poor_fast_us: 500_000,
+            empty_poor_slow_us: 150_000,
             mine_hit_us: 16_000,
         },
         KeyMode::K9 => JudgeWindow {
@@ -91,8 +91,8 @@ pub const fn beatoraja_note_judge_window_for_keymode(key_mode: KeyMode) -> Judge
             good_us: 117_000,
             bad_fast_us: 183_000,
             bad_slow_us: 183_000,
-            empty_poor_fast_us: 175_000,
-            empty_poor_slow_us: 500_000,
+            empty_poor_fast_us: 500_000,
+            empty_poor_slow_us: 175_000,
             mine_hit_us: 16_000,
         },
         KeyMode::K7 | KeyMode::K14 => JudgeWindow {
@@ -101,8 +101,8 @@ pub const fn beatoraja_note_judge_window_for_keymode(key_mode: KeyMode) -> Judge
             good_us: 150_000,
             bad_fast_us: 280_000,
             bad_slow_us: 220_000,
-            empty_poor_fast_us: 150_000,
-            empty_poor_slow_us: 500_000,
+            empty_poor_fast_us: 500_000,
+            empty_poor_slow_us: 150_000,
             mine_hit_us: 16_000,
         },
         // beatoraja `Beatoraja_Other` uses SEVENKEYS rules.
@@ -112,8 +112,8 @@ pub const fn beatoraja_note_judge_window_for_keymode(key_mode: KeyMode) -> Judge
             good_us: 150_000,
             bad_fast_us: 280_000,
             bad_slow_us: 220_000,
-            empty_poor_fast_us: 150_000,
-            empty_poor_slow_us: 500_000,
+            empty_poor_fast_us: 500_000,
+            empty_poor_slow_us: 150_000,
             mine_hit_us: 16_000,
         },
     }
@@ -267,8 +267,16 @@ mod tests {
         assert_eq!(window.good_us, 150_000);
         assert_eq!(window.bad_fast_us, 280_000);
         assert_eq!(window.bad_slow_us, 220_000);
-        assert_eq!(window.empty_poor_fast_us, 150_000);
-        assert_eq!(window.empty_poor_slow_us, 500_000);
+        assert_eq!(window.empty_poor_fast_us, 500_000);
+        assert_eq!(window.empty_poor_slow_us, 150_000);
+    }
+
+    #[test]
+    fn beatoraja_other_keymodes_use_7k_empty_poor_window() {
+        let seven = beatoraja_note_judge_window_for_keymode(KeyMode::K7);
+        assert_eq!(beatoraja_note_judge_window_for_keymode(KeyMode::K4), seven);
+        assert_eq!(beatoraja_note_judge_window_for_keymode(KeyMode::K6), seven);
+        assert_eq!(beatoraja_note_judge_window_for_keymode(KeyMode::K8), seven);
     }
 
     #[test]

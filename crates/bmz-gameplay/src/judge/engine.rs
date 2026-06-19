@@ -548,6 +548,22 @@ mod tests {
     }
 
     #[test]
+    fn beatoraja_7k_double_press_after_slow_empty_poor_window_is_unjudged() {
+        let chart = chart_with_tap(TimeUs(1_000_000));
+        let mut engine =
+            JudgeEngine::new(crate::judge::window::beatoraja_note_judge_window_for_keymode(
+                bmz_core::lane::KeyMode::K7,
+            ));
+
+        let first = engine.process_input(&chart, press_at(TimeUs(1_000_000)));
+        let second = engine.process_input(&chart, press_at(TimeUs(1_151_000)));
+
+        assert_eq!(first.events[0].judge, Judge::PGreat);
+        assert!(second.events.is_empty());
+        assert!(!second.consumed_input);
+    }
+
+    #[test]
     fn lr2oraja_suppresses_late_bad_on_long_note_start() {
         let chart = chart_with_long_start(TimeUs(1_000_000), TimeUs(2_000_000));
         let input = press_at(TimeUs(1_100_000));

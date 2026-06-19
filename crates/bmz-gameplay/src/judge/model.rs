@@ -4,7 +4,7 @@ use bmz_core::judge::{Judge, TimingSide};
 use bmz_core::lane::Lane;
 use bmz_core::time::{ChartTick, TimeUs};
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct JudgeWindow {
     pub pgreat_us: i64,
     pub great_us: i64,
