@@ -934,6 +934,7 @@ enum ResultRetryMode {
 }
 
 const SELECT_EXIT_HOLD_DURATION: Duration = Duration::from_millis(1_200);
+const FALLBACK_RESULT_SCENE_DURATION: Duration = Duration::from_secs(10);
 /// プレイ中の Start ボタンを「2回連続押し」と判定する間隔上限。
 const PLAY_START_DOUBLE_PRESS_WINDOW: Duration = Duration::from_millis(400);
 /// リザルト退出時にプレイ残響(draining_audio)を絞り切るまでの上限時間。
@@ -7309,11 +7310,11 @@ impl WinitApp {
     }
 
     fn result_input_duration(&self) -> Duration {
-        skin_duration_ms(self.renderer.result_skin_document().map(|d| d.input).unwrap_or(0))
+        result_input_duration_for_document(self.renderer.result_skin_document())
     }
 
     fn result_scene_duration(&self) -> Duration {
-        skin_duration_ms(self.renderer.result_skin_document().map(|d| d.scene).unwrap_or(0))
+        result_scene_duration_for_document(self.renderer.result_skin_document())
     }
 
     fn reload_select_items(&mut self) {
@@ -12406,6 +12407,16 @@ fn skin_duration_ms(ms: i32) -> Duration {
     Duration::from_millis(ms.max(0) as u64)
 }
 
+fn result_input_duration_for_document(document: Option<&SkinDocument>) -> Duration {
+    document.map(|document| skin_duration_ms(document.input)).unwrap_or_default()
+}
+
+fn result_scene_duration_for_document(document: Option<&SkinDocument>) -> Duration {
+    document
+        .map(|document| skin_duration_ms(document.scene))
+        .unwrap_or(FALLBACK_RESULT_SCENE_DURATION)
+}
+
 fn decide_fadeout_scene_elapsed(
     fadeout_started_elapsed: Duration,
     fadeout_elapsed: Duration,
@@ -13503,6 +13514,27 @@ mod tests {
     use crate::storage::score_db::BestScoreSummary;
 
     use super::*;
+
+    #[test]
+    fn fallback_result_scene_uses_nonzero_duration() {
+        assert_eq!(result_input_duration_for_document(None), Duration::ZERO);
+        assert_eq!(result_scene_duration_for_document(None), FALLBACK_RESULT_SCENE_DURATION);
+    }
+
+    #[test]
+    fn result_scene_duration_respects_skin_document() {
+        let document: SkinDocument =
+            serde_json::from_str(r#"{ "type": 7, "input": 1500, "scene": 2345 }"#).unwrap();
+
+        assert_eq!(
+            result_input_duration_for_document(Some(&document)),
+            Duration::from_millis(1500)
+        );
+        assert_eq!(
+            result_scene_duration_for_document(Some(&document)),
+            Duration::from_millis(2345)
+        );
+    }
 
     #[test]
     fn initial_folder_stack_starts_at_select_root_even_with_single_enabled_root() {
