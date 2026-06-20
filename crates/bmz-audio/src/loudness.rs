@@ -248,6 +248,7 @@ mod tests {
                 genre: String::new(),
                 difficulty_name: String::new(),
                 judge_rank: None,
+                judge_rank_spec: None,
                 play_level: String::new(),
                 initial_bpm: 120.0,
                 total: None,
