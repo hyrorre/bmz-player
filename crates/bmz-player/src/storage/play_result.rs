@@ -1,4 +1,5 @@
 use anyhow::Result;
+use bmz_core::clear::ClearType;
 use bmz_core::input::{InputDeviceKind, InputKind};
 use bmz_core::replay::ReplayEvent;
 use bmz_gameplay::result::PlayResult;
@@ -9,7 +10,9 @@ use crate::paths::ProfilePaths;
 use crate::select_options::{ArrangeOption, DoubleOptionScoreBucket};
 
 use super::replay::{ReplayFile, replay_file_name, replay_slot_file_name, save_replay};
-use super::score_db::{ReplaySlotRecord, ScoreDatabase, ScoreRecord, ScoreRecordMetadata};
+use super::score_db::{
+    ReplaySlotRecord, ScoreDatabase, ScoreInsertMode, ScoreRecord, ScoreRecordMetadata,
+};
 
 #[derive(Debug, Clone)]
 pub struct StoredPlayResult {
@@ -35,6 +38,43 @@ pub struct StorePlayResultRequest {
     pub arrange_2p: ArrangeOption,
     pub arrange_seed: Option<i64>,
     pub arrange_pattern: Option<Vec<u8>>,
+    pub mode: StorePlayResultMode,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StorePlayResultMode {
+    Normal,
+    CourseStage,
+}
+
+impl StorePlayResultMode {
+    fn score_insert_mode(self) -> ScoreInsertMode {
+        match self {
+            Self::Normal => ScoreInsertMode::Full,
+            Self::CourseStage => ScoreInsertMode::HistoryOnly,
+        }
+    }
+
+    fn save_replay_slots(self) -> bool {
+        match self {
+            Self::Normal => true,
+            Self::CourseStage => false,
+        }
+    }
+
+    fn stored_clear_type(self, clear_type: ClearType) -> ClearType {
+        match self {
+            Self::Normal => clear_type,
+            Self::CourseStage => course_stage_clear_type(clear_type),
+        }
+    }
+}
+
+pub fn course_stage_clear_type(clear_type: ClearType) -> ClearType {
+    match clear_type {
+        ClearType::FullCombo | ClearType::Perfect | ClearType::Max => clear_type,
+        _ => ClearType::NoPlay,
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -83,7 +123,7 @@ pub fn store_play_result(
         String::new()
     };
 
-    let record = ScoreRecord::from_play_result(
+    let mut record = ScoreRecord::from_play_result(
         result,
         ScoreRecordMetadata::new(
             request.ln_policy,
@@ -99,10 +139,12 @@ pub fn store_play_result(
         )
         .with_playtime_seconds(request.playtime_seconds),
     );
-    let score_history_id = score_db.insert_score(&record)?;
+    record.clear_type = request.mode.stored_clear_type(result.clear_type);
+    let score_history_id =
+        score_db.insert_score_with_mode(&record, request.mode.score_insert_mode())?;
 
     let mut slot_paths: [Option<String>; 4] = [None, None, None, None];
-    if should_save_replay(replay_config, result) {
+    if request.mode.save_replay_slots() && should_save_replay(replay_config, result) {
         let candidate = candidate_metrics(result);
         for (slot_index, &rule) in replay_config.slot_rules.iter().enumerate() {
             let slot = slot_index as u8;
@@ -331,6 +373,7 @@ mod tests {
                 arrange_2p: ArrangeOption::Normal,
                 arrange_seed: None,
                 arrange_pattern: None,
+                mode: StorePlayResultMode::Normal,
             },
         )
         .unwrap();
@@ -390,6 +433,7 @@ mod tests {
                 arrange_2p: ArrangeOption::Normal,
                 arrange_seed: None,
                 arrange_pattern: None,
+                mode: StorePlayResultMode::Normal,
             },
         )
         .unwrap();
@@ -443,6 +487,7 @@ mod tests {
                 arrange_2p: ArrangeOption::Normal,
                 arrange_seed: None,
                 arrange_pattern: None,
+                mode: StorePlayResultMode::Normal,
             },
         )
         .unwrap();
@@ -511,6 +556,7 @@ mod tests {
                 arrange_2p: ArrangeOption::Normal,
                 arrange_seed: None,
                 arrange_pattern: None,
+                mode: StorePlayResultMode::Normal,
             },
         )
         .unwrap();
@@ -519,6 +565,91 @@ mod tests {
         assert!(root.join(&stored.replay_path).exists());
 
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn store_play_result_course_stage_writes_history_without_single_best_updates() {
+        let root = make_temp_dir("store-course-stage-result");
+        let paths = ProfilePaths {
+            root_dir: root.clone(),
+            profile_toml: root.join("profile.toml"),
+            score_db: root.join("score.db"),
+            replay_dir: root.join("replay"),
+        };
+        let mut conn = Connection::open_in_memory().unwrap();
+        configure_connection(&conn).unwrap();
+        run_migrations(&mut conn, SCORE_MIGRATIONS).unwrap();
+        let mut score_db = ScoreDatabase::from_connection(conn);
+        let config = ReplayConfig {
+            auto_save: true,
+            compress: false,
+            slot_rules: crate::config::profile_config::default_slot_rules(),
+        };
+        let mut result = play_result(false);
+        result.clear_type = ClearType::Failed;
+
+        let stored = store_play_result(
+            &mut score_db,
+            &paths,
+            &config,
+            &result,
+            StorePlayResultRequest {
+                ln_policy: LnScorePolicy::ForceLn,
+                double_option: DoubleOptionScoreBucket::Off,
+                played_at: 1_700_000_063,
+                playtime_seconds: 0,
+                random_seed: None,
+                gauge_option: String::new(),
+                rule_mode: String::new(),
+                assist_mask: 0,
+                replay_events: Vec::new(),
+                arrange: ArrangeOption::Normal,
+                arrange_2p: ArrangeOption::Normal,
+                arrange_seed: None,
+                arrange_pattern: None,
+                mode: StorePlayResultMode::CourseStage,
+            },
+        )
+        .unwrap();
+
+        assert!(stored.score_history_id > 0);
+        assert!(!stored.replay_path.is_empty());
+        assert!(stored.slot_paths.iter().all(Option::is_none));
+
+        let history = score_db.recent_history(10, 0).unwrap();
+        assert_eq!(history.len(), 1);
+        assert_eq!(history[0].clear_type, "NoPlay");
+        assert_eq!(history[0].bp, result.total_notes);
+        assert!(
+            score_db
+                .best_scores_for_charts(&[super::super::score_db::ScoreKey::new(
+                    [4; 32],
+                    LnScorePolicy::ForceLn,
+                )])
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            score_db
+                .replay_slot(
+                    super::super::score_db::ScoreKey::new([4; 32], LnScorePolicy::ForceLn),
+                    0,
+                )
+                .unwrap()
+                .is_none()
+        );
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn course_stage_clear_type_keeps_only_combo_lamps() {
+        assert_eq!(course_stage_clear_type(ClearType::NoPlay), ClearType::NoPlay);
+        assert_eq!(course_stage_clear_type(ClearType::Failed), ClearType::NoPlay);
+        assert_eq!(course_stage_clear_type(ClearType::Normal), ClearType::NoPlay);
+        assert_eq!(course_stage_clear_type(ClearType::FullCombo), ClearType::FullCombo);
+        assert_eq!(course_stage_clear_type(ClearType::Perfect), ClearType::Perfect);
+        assert_eq!(course_stage_clear_type(ClearType::Max), ClearType::Max);
     }
 
     #[test]
@@ -560,6 +691,7 @@ mod tests {
                 arrange_2p: ArrangeOption::Normal,
                 arrange_seed: None,
                 arrange_pattern: None,
+                mode: StorePlayResultMode::Normal,
             },
         )
         .unwrap();
@@ -591,6 +723,7 @@ mod tests {
                 arrange_2p: ArrangeOption::Normal,
                 arrange_seed: None,
                 arrange_pattern: None,
+                mode: StorePlayResultMode::Normal,
             },
         )
         .unwrap();
@@ -644,6 +777,7 @@ mod tests {
                 arrange_2p: ArrangeOption::Normal,
                 arrange_seed: None,
                 arrange_pattern: None,
+                mode: StorePlayResultMode::Normal,
             },
         )
         .unwrap();

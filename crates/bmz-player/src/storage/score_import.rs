@@ -258,6 +258,7 @@ fn imported_score_record(
         total_notes,
         playtime_seconds: 0,
         score,
+        count_unprocessed_notes: clear_type == ClearType::Failed,
         random_seed,
         arrange: "Normal".to_string(),
         gauge_option: String::new(),

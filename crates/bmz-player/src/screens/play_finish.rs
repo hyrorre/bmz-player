@@ -12,7 +12,10 @@ use crate::ir::payload::{IrSubmissionContext, build_score_submission};
 use crate::paths::ProfilePaths;
 use crate::screens::play_session::AppliedArrange;
 use crate::screens::result_model::ResultSummary;
-use crate::storage::play_result::{StorePlayResultRequest, StoredPlayResult, store_play_result};
+use crate::storage::play_result::{
+    StorePlayResultMode, StorePlayResultRequest, StoredPlayResult, course_stage_clear_type,
+    store_play_result,
+};
 use crate::storage::score_db::NewIrScoreJob;
 use crate::storage::score_db::{ScoreDatabase, ScoreKey};
 
@@ -30,6 +33,35 @@ pub struct FinishedPlaySession {
     pub ln_policy: crate::ln_policy::LnScorePolicy,
     pub double_option: crate::select_options::DoubleOptionScoreBucket,
     pub rule_mode: bmz_gameplay::rule::RuleMode,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FinishResultMode {
+    Normal,
+    CourseStage,
+}
+
+impl FinishResultMode {
+    fn store_mode(self) -> StorePlayResultMode {
+        match self {
+            Self::Normal => StorePlayResultMode::Normal,
+            Self::CourseStage => StorePlayResultMode::CourseStage,
+        }
+    }
+
+    fn summary_clear_type(self, clear_type: ClearType) -> ClearType {
+        match self {
+            Self::Normal => clear_type,
+            Self::CourseStage => course_stage_clear_type(clear_type),
+        }
+    }
+
+    fn enqueue_score_ir(self) -> bool {
+        match self {
+            Self::Normal => true,
+            Self::CourseStage => false,
+        }
+    }
 }
 
 pub fn play_result_from_session(session: &GameSession) -> PlayResult {
@@ -64,6 +96,7 @@ pub fn store_session_result(
         None,
         score_key,
         practice_mode,
+        FinishResultMode::Normal,
     )?
     .stored)
 }
@@ -79,6 +112,7 @@ pub fn finish_session_result(
     target_ex_score: Option<u32>,
     score_key: ScoreKey,
     practice_mode: bool,
+    finish_mode: FinishResultMode,
 ) -> Result<FinishedPlaySession> {
     ensure_storable_state(session.state)?;
     let result = play_result_from_session(session);
@@ -119,10 +153,12 @@ pub fn finish_session_result(
                 arrange_2p: applied_arrange.arrange_2p,
                 arrange_seed,
                 arrange_pattern,
+                mode: finish_mode.store_mode(),
             },
         )?
     };
     let mut summary = ResultSummary::from_play_result(&result, &stored, &session.chart);
+    summary.clear_type = finish_mode.summary_clear_type(result.clear_type);
     summary.arrange = applied_arrange.arrange.as_str().to_string();
     summary.lane_shuffle_pattern = applied_arrange.pattern.clone().unwrap_or_default();
     summary.target_ex_score = target_ex_score;
@@ -152,19 +188,21 @@ pub fn finish_session_result(
             }
         }
     }
-    enqueue_ir_jobs(
-        score_db,
-        profile_paths,
-        ir_config,
-        session,
-        &result,
-        &stored,
-        played_at,
-        score_key,
-        applied_arrange,
-        &mut summary,
-        previous_best.as_ref(),
-    );
+    if finish_mode.enqueue_score_ir() {
+        enqueue_ir_jobs(
+            score_db,
+            profile_paths,
+            ir_config,
+            session,
+            &result,
+            &stored,
+            played_at,
+            score_key,
+            applied_arrange,
+            &mut summary,
+            previous_best.as_ref(),
+        );
+    }
 
     Ok(FinishedPlaySession {
         result,
@@ -355,6 +393,7 @@ pub fn finish_session_result_once(
         request.target_ex_score,
         request.score_key,
         request.practice_mode,
+        request.finish_mode,
     )?;
     *cached = Some(finished.clone());
     Ok(finished)
@@ -370,6 +409,7 @@ pub struct FinishSessionResultOnceRequest<'a> {
     pub target_ex_score: Option<u32>,
     pub score_key: ScoreKey,
     pub practice_mode: bool,
+    pub finish_mode: FinishResultMode,
 }
 
 fn ensure_storable_state(state: PlayState) -> Result<()> {
@@ -547,6 +587,7 @@ mod tests {
             Some(1600),
             score_key(&session),
             false,
+            FinishResultMode::Normal,
         )
         .unwrap();
 
@@ -557,6 +598,53 @@ mod tests {
         assert_eq!(finished.summary.target_ex_score, Some(1600));
         assert_eq!(finished.summary.saved_replay_slots, [true, true, true, false]);
         assert_eq!(finished.summary.replay_slots, [true, true, true, false]);
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn finish_session_result_course_stage_rounds_summary_clear_type() {
+        let root = make_temp_dir("finish-course-stage");
+        let paths = ProfilePaths {
+            root_dir: root.clone(),
+            profile_toml: root.join("profile.toml"),
+            score_db: root.join("score.db"),
+            replay_dir: root.join("replay"),
+        };
+        let mut conn = Connection::open_in_memory().unwrap();
+        configure_connection(&conn).unwrap();
+        run_migrations(&mut conn, SCORE_MIGRATIONS).unwrap();
+        let mut score_db = ScoreDatabase::from_connection(conn);
+        let replay_config = ReplayConfig {
+            auto_save: true,
+            compress: false,
+            slot_rules: crate::config::profile_config::default_slot_rules(),
+        };
+        let session = session();
+
+        let finished = finish_session_result(
+            &mut score_db,
+            &paths,
+            &replay_config,
+            &crate::config::profile_config::IrConfig::default(),
+            &session,
+            1_700_000_109,
+            &AppliedArrange::default(),
+            None,
+            score_key(&session),
+            false,
+            FinishResultMode::CourseStage,
+        )
+        .unwrap();
+
+        assert_eq!(finished.result.clear_type, ClearType::Failed);
+        assert_eq!(finished.summary.clear_type, ClearType::NoPlay);
+        assert_eq!(finished.summary.saved_replay_slots, [false; 4]);
+        assert!(score_db.best_scores_for_charts(&[score_key(&session)]).unwrap().is_empty());
+        let history = score_db.recent_history(10, 0).unwrap();
+        assert_eq!(history.len(), 1);
+        assert_eq!(history[0].clear_type, "NoPlay");
+        assert_eq!(history[0].bp, session.chart.total_notes);
 
         std::fs::remove_dir_all(root).unwrap();
     }
@@ -608,6 +696,7 @@ mod tests {
             None,
             score_key(&session),
             false,
+            FinishResultMode::Normal,
         )
         .unwrap();
 
@@ -651,6 +740,7 @@ mod tests {
                 target_ex_score: None,
                 score_key: score_key(&session),
                 practice_mode: false,
+                finish_mode: FinishResultMode::Normal,
             },
         )
         .unwrap();
@@ -667,6 +757,7 @@ mod tests {
                 target_ex_score: None,
                 score_key: score_key(&session),
                 practice_mode: false,
+                finish_mode: FinishResultMode::Normal,
             },
         )
         .unwrap();
@@ -709,6 +800,7 @@ mod tests {
             None,
             score_key(&session),
             false,
+            FinishResultMode::Normal,
         )
         .unwrap();
 
@@ -753,6 +845,7 @@ mod tests {
             None,
             score_key(&session),
             false,
+            FinishResultMode::Normal,
         )
         .unwrap();
 

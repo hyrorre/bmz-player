@@ -7190,6 +7190,11 @@ impl WinitApp {
                         target_ex_score: started.running.target_ex_score,
                         score_key: started.running.score_key,
                         practice_mode: started.running.practice_mode,
+                        finish_mode: if self.active_course.is_some() {
+                            crate::screens::play_finish::FinishResultMode::CourseStage
+                        } else {
+                            crate::screens::play_finish::FinishResultMode::Normal
+                        },
                     },
                 ) {
                     Ok(mut finished) => {

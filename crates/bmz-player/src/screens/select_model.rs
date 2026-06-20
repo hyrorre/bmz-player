@@ -2109,6 +2109,7 @@ mod tests {
             total_notes: 1,
             playtime_seconds: 0,
             score,
+            count_unprocessed_notes: false,
             random_seed: None,
             arrange: "Normal".to_string(),
             gauge_option: String::new(),

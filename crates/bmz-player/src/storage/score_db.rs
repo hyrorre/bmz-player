@@ -105,6 +105,7 @@ pub struct ScoreRecord {
     pub total_notes: u32,
     pub playtime_seconds: u32,
     pub score: ScoreState,
+    pub count_unprocessed_notes: bool,
     pub random_seed: Option<i64>,
     pub arrange: String,
     pub gauge_option: String,
@@ -113,6 +114,12 @@ pub struct ScoreRecord {
     pub autoplay: bool,
     pub device_type: InputDeviceKind,
     pub replay_path: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScoreInsertMode {
+    Full,
+    HistoryOnly,
 }
 
 #[derive(Debug, Clone)]
@@ -157,6 +164,7 @@ impl ScoreRecord {
             total_notes: result.total_notes,
             playtime_seconds,
             score: result.score.clone(),
+            count_unprocessed_notes: result.clear_type == ClearType::Failed,
             random_seed,
             arrange,
             gauge_option,
@@ -397,6 +405,14 @@ impl ScoreDatabase {
     }
 
     pub fn insert_score(&mut self, record: &ScoreRecord) -> Result<i64> {
+        self.insert_score_with_mode(record, ScoreInsertMode::Full)
+    }
+
+    pub fn insert_score_with_mode(
+        &mut self,
+        record: &ScoreRecord,
+        mode: ScoreInsertMode,
+    ) -> Result<i64> {
         let tx = self.conn.transaction()?;
         let previous_best = previous_best_snapshot(
             &tx,
@@ -409,8 +425,10 @@ impl ScoreDatabase {
         )?;
         insert_score_history(&tx, record, previous_best.as_ref())?;
         let history_id = tx.last_insert_rowid();
-        upsert_score_best(&tx, record)?;
-        update_player_stats(&tx, record)?;
+        if mode == ScoreInsertMode::Full {
+            upsert_score_best(&tx, record)?;
+            update_player_stats(&tx, record)?;
+        }
         tx.commit()?;
         Ok(history_id)
     }
@@ -1502,7 +1520,7 @@ fn score_best_should_update(record: &ScoreRecord, current: ScoreBestRank) -> boo
 }
 
 fn score_record_bp(record: &ScoreRecord) -> u32 {
-    if record.clear_type == ClearType::Failed {
+    if record.count_unprocessed_notes {
         record.score.bp_with_unprocessed_notes(record.total_notes)
     } else {
         record.score.bp()
@@ -1510,7 +1528,7 @@ fn score_record_bp(record: &ScoreRecord) -> u32 {
 }
 
 fn score_record_cb(record: &ScoreRecord) -> u32 {
-    if record.clear_type == ClearType::Failed {
+    if record.count_unprocessed_notes {
         record.score.cb_with_unprocessed_notes(record.total_notes)
     } else {
         record.score.cb()
@@ -1605,6 +1623,7 @@ mod tests {
             total_notes: ex_score / 2,
             playtime_seconds: 0,
             score: score_with_ex_score(ex_score),
+            count_unprocessed_notes: clear_type == ClearType::Failed,
             random_seed: None,
             arrange: "Normal".to_string(),
             gauge_option: String::new(),
