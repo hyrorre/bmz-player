@@ -92,9 +92,11 @@ use crate::screens::practice::{
 };
 use crate::screens::result_model::{ResultFastSlowJudgeCounts, ResultSummary};
 use crate::screens::select_model::{
-    COURSE_ROOT_PATH, MAX_SEARCH_HISTORY, SEARCH_PATH_PREFIX, SelectFolderSummary, SelectItem,
-    TABLE_ROOT_PATH, TablePath, course_root_item, load_select_items_for_courses,
-    load_select_items_for_search_for_rule_mode, load_select_items_in_folder_for_rule_mode,
+    COURSE_ROOT_PATH, DifficultyTableText, MAX_SEARCH_HISTORY, SEARCH_PATH_PREFIX,
+    SelectFolderSummary, SelectItem, TABLE_ROOT_PATH, TablePath, course_root_item,
+    difficulty_table_text_for_chart, load_select_items_for_courses,
+    load_select_items_for_search_for_rule_mode_with_table_order,
+    load_select_items_in_folder_for_rule_mode_with_table_order,
     load_select_items_in_table_level_for_rule_mode, parse_search_query, parse_table_path,
     root_folder_items, search_history_folder_items, select_folder_summary_for_rule_mode,
     song_scan_path_from_context, table_folder_items, table_level_folder_items,
@@ -112,6 +114,7 @@ use crate::skin_loader::{
     set_decoded_skin_context, upload_decoded_skin,
 };
 use crate::songs_cmd::scan_songs_with_progress;
+use crate::storage::difficulty_table_db::DifficultyTableRecord;
 use crate::storage::library_db::{ChartDistributionSecond, LibraryDatabase};
 use crate::storage::migration::{migrate_library_db, migrate_score_db};
 use crate::storage::play_result::StoredPlayResult;
@@ -859,6 +862,10 @@ struct SelectFolderSummaryResult {
 struct TableBreadcrumb {
     name: String,
     symbol: String,
+}
+
+fn table_breadcrumb_from_record(table: &DifficultyTableRecord) -> TableBreadcrumb {
+    TableBreadcrumb { name: table.name.clone(), symbol: table.symbol.clone() }
 }
 
 struct DecideTransition {
@@ -2036,6 +2043,9 @@ impl WinitApp {
                 genre: summary.genre.clone(),
                 difficulty_name: summary.difficulty_name.clone(),
                 play_level: summary.play_level.clone(),
+                table_text_primary: self.play_table_text_primary.clone(),
+                table_text_secondary: self.play_table_text_secondary.clone(),
+                table_text_fallback: self.play_table_text_fallback.clone(),
                 course_titles: self
                     .finished_course
                     .as_ref()
@@ -2138,13 +2148,7 @@ impl WinitApp {
         let mut cache = self.table_breadcrumb_cache.borrow_mut();
         if let Ok(tables) = self.boot.library_db.list_difficulty_tables() {
             for table in tables {
-                cache.insert(
-                    table.source_url,
-                    TableBreadcrumb {
-                        name: format!("[{}] {}", table.symbol, table.name),
-                        symbol: table.symbol,
-                    },
-                );
+                cache.insert(table.source_url.clone(), table_breadcrumb_from_record(&table));
             }
         }
 
@@ -2154,37 +2158,69 @@ impl WinitApp {
             .clone()
     }
 
-    /// 難易度表のパンくず表示名。テーブルが既知なら `[symbol] name`、
+    /// 難易度表のパンくず表示名。テーブルが既知なら表名、
     /// 不明なら URL のファイル名部分にフォールバックする。
     fn table_breadcrumb_name(&self, source_url: &str) -> String {
         self.table_breadcrumb(source_url).name
     }
 
-    fn table_text_context_for_chart(&self, chart_id: i64) -> (String, String, String) {
-        let table_level = self
+    fn table_text_context_for_chart(&self, chart_id: i64) -> DifficultyTableText {
+        if let Some(table_text) = self.select_items.iter().find_map(|item| match item {
+            SelectItem::Chart(row)
+                if row.chart.as_ref().is_some_and(|chart| chart.chart_id == chart_id) =>
+            {
+                row.table_text.is_table_song().then(|| row.table_text.clone())
+            }
+            _ => None,
+        }) {
+            return table_text;
+        }
+        let selected = self.select_items.get(self.selected_index);
+        let source_hint = table_source_url_from_context(&self.folder_stack, selected);
+        let source_order = table_source_order(&self.boot.app_config);
+
+        let chart = self
             .select_items
             .iter()
             .find_map(|item| match item {
                 SelectItem::Chart(row)
                     if row.chart.as_ref().is_some_and(|chart| chart.chart_id == chart_id) =>
                 {
-                    Some(row.table_level.clone())
+                    row.chart.clone()
                 }
                 _ => None,
             })
-            .unwrap_or_default();
+            .or_else(|| {
+                self.boot
+                    .library_db
+                    .list_charts_by_ids(&[chart_id])
+                    .map_err(|error| {
+                        tracing::warn!(%error, chart_id, "failed to load chart for table skin text");
+                        error
+                    })
+                    .ok()
+                    .and_then(|mut charts| charts.pop())
+            });
 
-        let selected = self.select_items.get(self.selected_index);
-        let source_url = table_source_url_from_context(&self.folder_stack, selected);
-        let primary =
-            source_url.as_ref().map(|url| self.table_breadcrumb_name(url)).unwrap_or_default();
-        let secondary = table_level;
-        let fallback = primary.clone();
-        (primary, secondary, fallback)
+        let Some(chart) = chart else {
+            return DifficultyTableText::default();
+        };
+
+        difficulty_table_text_for_chart(
+            &self.boot.library_db,
+            &chart,
+            &source_order,
+            source_hint.as_deref(),
+        )
+        .map_err(|error| {
+            tracing::warn!(%error, chart_id, "failed to resolve difficulty table skin text");
+            error
+        })
+        .unwrap_or_default()
     }
 
     fn capture_play_table_text_for_chart(&mut self, chart_id: i64) {
-        let (primary, secondary, fallback) = self.table_text_context_for_chart(chart_id);
+        let (primary, secondary, fallback) = self.table_text_context_for_chart(chart_id).as_tuple();
         self.play_table_text_primary = primary;
         self.play_table_text_secondary = secondary;
         self.play_table_text_fallback = fallback;
@@ -6259,6 +6295,10 @@ impl WinitApp {
             snapshot.best_ex_score = row.best_score.as_ref().map(|best| best.ex_score);
             snapshot.projected_best_ex_score = snapshot.best_ex_score.map(|_| 0);
         }
+        let (primary, secondary, fallback) = self.table_text_context_for_chart(chart_id).as_tuple();
+        snapshot.table_text_primary = primary;
+        snapshot.table_text_secondary = secondary;
+        snapshot.table_text_fallback = fallback;
         snapshot
     }
 
@@ -9908,6 +9948,7 @@ fn play_skin_video_draw_state(snapshot: &RenderSnapshot) -> bmz_render::skin::Sk
         hidden_enabled: snapshot.hidden_enabled,
         hidden_cover: snapshot.hidden_cover,
         play_level: skin_video_play_level_number(&snapshot.play_level),
+        table_song: !snapshot.table_text_primary.is_empty(),
         difficulty: skin_video_difficulty_code(&snapshot.difficulty_name),
         judge_rank: snapshot.judge_rank,
         now_bpm: snapshot.now_bpm,
@@ -11015,12 +11056,13 @@ fn build_select_items_for_stack(
         }
         Some(path) if path.starts_with(SEARCH_PATH_PREFIX) => match parse_search_query(path) {
             Some(query) => {
-                match load_select_items_for_search_for_rule_mode(
+                match load_select_items_for_search_for_rule_mode_with_table_order(
                     &boot.library_db,
                     &boot.score_db,
                     query,
                     boot.profile_config.play.ln_mode_policy,
                     boot.profile_config.play.rule_mode,
+                    &table_source_order(&boot.app_config),
                 ) {
                     Ok(items) => items,
                     Err(error) => {
@@ -11069,12 +11111,13 @@ fn build_select_items_for_stack(
             None => Vec::new(),
         },
         Some(folder) => {
-            match load_select_items_in_folder_for_rule_mode(
+            match load_select_items_in_folder_for_rule_mode_with_table_order(
                 &boot.library_db,
                 &boot.score_db,
                 folder,
                 boot.profile_config.play.ln_mode_policy,
                 boot.profile_config.play.rule_mode,
+                &table_source_order(&boot.app_config),
             ) {
                 Ok(items) => items,
                 Err(error) => {
@@ -11848,6 +11891,9 @@ fn select_snapshot_rows(
                     difficulty_name: String::new(),
                     play_level: String::new(),
                     table_level: String::new(),
+                    table_text_primary: String::new(),
+                    table_text_secondary: String::new(),
+                    table_text_fallback: String::new(),
                     judge_rank: None,
                     total_notes: 0,
                     initial_bpm: 0.0,
@@ -11920,6 +11966,9 @@ fn select_snapshot_rows(
                             .map(|chart| chart.play_level.clone())
                             .unwrap_or_default(),
                         table_level: row.table_level.clone(),
+                        table_text_primary: row.table_text.table_name.clone(),
+                        table_text_secondary: row.table_text.table_level.clone(),
+                        table_text_fallback: row.table_text.table_full.clone(),
                         judge_rank: row.chart.as_ref().and_then(|chart| chart.judge_rank),
                         total_notes: row.chart.as_ref().map(|chart| chart.total_notes).unwrap_or(0),
                         initial_bpm: row
@@ -12068,6 +12117,9 @@ fn select_snapshot_rows(
                     // Show "N stages" in the play_level slot.
                     play_level: format!("{} stages", row.entry_count),
                     table_level: String::new(),
+                    table_text_primary: String::new(),
+                    table_text_secondary: String::new(),
+                    table_text_fallback: String::new(),
                     judge_rank: None,
                     total_notes: row.total_notes,
                     initial_bpm: row.min_bpm,
@@ -12129,6 +12181,9 @@ fn select_snapshot_rows(
                         difficulty_name: String::new(),
                         play_level: value,
                         table_level: String::new(),
+                        table_text_primary: String::new(),
+                        table_text_secondary: String::new(),
+                        table_text_fallback: String::new(),
                         judge_rank: None,
                         total_notes: 0,
                         initial_bpm: 0.0,
@@ -12186,6 +12241,9 @@ fn select_snapshot_rows(
                         difficulty_name: String::new(),
                         play_level: value,
                         table_level: String::new(),
+                        table_text_primary: String::new(),
+                        table_text_secondary: String::new(),
+                        table_text_fallback: String::new(),
                         judge_rank: None,
                         total_notes: 0,
                         initial_bpm: 0.0,
@@ -12236,6 +12294,9 @@ fn select_snapshot_rows(
                     difficulty_name: String::new(),
                     play_level: String::new(),
                     table_level: String::new(),
+                    table_text_primary: String::new(),
+                    table_text_secondary: String::new(),
+                    table_text_fallback: String::new(),
                     judge_rank: None,
                     total_notes: 0,
                     initial_bpm: 0.0,
@@ -12285,6 +12346,9 @@ fn select_snapshot_rows(
                     difficulty_name: String::new(),
                     play_level: String::new(),
                     table_level: String::new(),
+                    table_text_primary: String::new(),
+                    table_text_secondary: String::new(),
+                    table_text_fallback: String::new(),
                     judge_rank: None,
                     total_notes: 0,
                     initial_bpm: 0.0,
@@ -14039,6 +14103,21 @@ mod tests {
     use crate::storage::score_db::BestScoreSummary;
 
     use super::*;
+
+    #[test]
+    fn table_breadcrumb_uses_table_name_without_symbol_prefix() {
+        let breadcrumb = table_breadcrumb_from_record(&DifficultyTableRecord {
+            id: 1,
+            source_url: "https://example.com/insane/".to_string(),
+            name: "通常難易度表".to_string(),
+            symbol: "★".to_string(),
+            level_order: vec!["1".to_string()],
+            fetched_at: 0,
+        });
+
+        assert_eq!(breadcrumb.name, "通常難易度表");
+        assert_eq!(breadcrumb.symbol, "★");
+    }
 
     #[test]
     fn fallback_result_scene_uses_nonzero_duration() {
@@ -16190,6 +16269,9 @@ mod tests {
                     best_score.max_combo = 345;
                     row.best_score = Some(best_score);
                     row.replay_slots = [true, false, false, false];
+                    row.table_text =
+                        DifficultyTableText::from_parts("Test Table".to_string(), "T", "5");
+                    row.table_level = row.table_text.table_level.clone();
                 }
                 SelectItem::Chart(row)
             })
@@ -16230,6 +16312,9 @@ mod tests {
         assert_eq!(snapshot_rows[3].chart_bpm_graph_segments[0].end_ratio, 0.5);
         assert_eq!(snapshot_rows[3].chart_bpm_graph_segments[1].start_ratio, 0.5);
         assert_eq!(snapshot_rows[3].chart_bpm_graph_segments[1].end_ratio, 1.0);
+        assert_eq!(snapshot_rows[3].table_text_primary, "Test Table");
+        assert_eq!(snapshot_rows[3].table_text_secondary, "T5");
+        assert_eq!(snapshot_rows[3].table_text_fallback, "T5Test Table");
     }
 
     #[test]
@@ -16619,6 +16704,7 @@ mod tests {
             best_score: None,
             replay_slots: [false; 4],
             table_level: String::new(),
+            table_text: DifficultyTableText::default(),
         }
     }
 

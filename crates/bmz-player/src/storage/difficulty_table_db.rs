@@ -15,6 +15,7 @@ pub struct DifficultyTableRecord {
 
 #[derive(Debug, Clone)]
 pub struct DifficultyTableEntryRecord {
+    pub source_url: String,
     pub table_name: String,
     pub table_symbol: String,
     pub level: String,
@@ -175,7 +176,7 @@ fn list_entries_by_hash_column(
         return Ok(Vec::new());
     }
     let sql = format!(
-        "SELECT dt.name, dt.symbol, dte.level, dte.md5, dte.sha256
+        "SELECT dt.source_url, dt.name, dt.symbol, dte.level, dte.md5, dte.sha256
          FROM difficulty_table_entries dte
          JOIN difficulty_tables dt ON dt.id = dte.table_id
          WHERE dte.{column} = ?1"
@@ -185,11 +186,12 @@ fn list_entries_by_hash_column(
     for hash in hashes {
         let rows = stmt.query_map(params![hash], |row| {
             Ok(DifficultyTableEntryRecord {
-                table_name: row.get(0)?,
-                table_symbol: row.get(1)?,
-                level: row.get(2)?,
-                md5: row.get(3)?,
-                sha256: row.get(4)?,
+                source_url: row.get(0)?,
+                table_name: row.get(1)?,
+                table_symbol: row.get(2)?,
+                level: row.get(3)?,
+                md5: row.get(4)?,
+                sha256: row.get(5)?,
             })
         })?;
         for row in rows {

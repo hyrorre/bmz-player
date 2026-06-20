@@ -9,7 +9,8 @@ use crate::ln_policy::{LnPolicySetting, LnScorePolicy, score_ln_policy};
 use crate::screens::settings_model::{ConfigSelectRow, KeyBindingSelectRow};
 use crate::storage::common::hash_to_hex;
 use crate::storage::library_db::{
-    ChartAnalysisSummary, ChartListItem, LibraryDatabase, TableEntryListItem,
+    ChartAnalysisSummary, ChartListItem, DifficultyTableEntryRecord, LibraryDatabase,
+    TableEntryListItem,
 };
 use crate::storage::score_db::ScoreKey;
 use crate::storage::score_db::{BestScoreSummary, ReplaySlotSummary, ScoreDatabase};
@@ -129,13 +130,112 @@ pub fn song_scan_path_from_context(
 }
 
 fn insert_table_level(map: &mut HashMap<String, String>, key: String, symbol: &str, level: &str) {
-    let entry = format!("{symbol}{level}");
+    let entry = table_level_label(symbol, level);
     map.entry(key)
         .and_modify(|v| {
             v.push('/');
             v.push_str(&entry);
         })
         .or_insert(entry);
+}
+
+fn table_level_label(symbol: &str, level: &str) -> String {
+    format!("{symbol}{level}")
+}
+
+fn insert_table_level_and_text(
+    level_map: &mut HashMap<String, String>,
+    text_map: &mut HashMap<String, DifficultyTableText>,
+    key: String,
+    entry: &DifficultyTableEntryRecord,
+) {
+    insert_table_level(level_map, key.clone(), &entry.table_symbol, &entry.level);
+    text_map.entry(key).or_insert_with(|| DifficultyTableText::from_entry(entry));
+}
+
+fn table_source_rank(source_url: &str, source_order: &[String]) -> usize {
+    source_order.iter().position(|url| url == source_url).unwrap_or(usize::MAX)
+}
+
+fn sort_difficulty_table_entries(
+    entries: &mut [DifficultyTableEntryRecord],
+    source_order: &[String],
+) {
+    entries.sort_by(|a, b| {
+        table_source_rank(&a.source_url, source_order)
+            .cmp(&table_source_rank(&b.source_url, source_order))
+            .then_with(|| a.source_url.cmp(&b.source_url))
+            .then_with(|| a.table_name.cmp(&b.table_name))
+            .then_with(|| a.table_symbol.cmp(&b.table_symbol))
+            .then_with(|| a.level.cmp(&b.level))
+    });
+}
+
+fn choose_difficulty_table_text(
+    mut entries: Vec<DifficultyTableEntryRecord>,
+    source_order: &[String],
+    source_hint: Option<&str>,
+) -> DifficultyTableText {
+    if entries.is_empty() {
+        return DifficultyTableText::default();
+    }
+    sort_difficulty_table_entries(&mut entries, source_order);
+    if let Some(source_hint) = source_hint
+        && let Some(entry) = entries.iter().find(|entry| entry.source_url == source_hint)
+    {
+        return DifficultyTableText::from_entry(entry);
+    }
+    entries.first().map(DifficultyTableText::from_entry).unwrap_or_default()
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct DifficultyTableText {
+    pub table_name: String,
+    pub table_level: String,
+    pub table_full: String,
+}
+
+impl DifficultyTableText {
+    pub fn from_parts(table_name: String, table_symbol: &str, level: &str) -> Self {
+        let table_level = table_level_label(table_symbol, level);
+        let table_full = format!("{table_level}{table_name}");
+        Self { table_name, table_level, table_full }
+    }
+
+    pub fn from_entry(entry: &DifficultyTableEntryRecord) -> Self {
+        Self::from_parts(entry.table_name.clone(), &entry.table_symbol, &entry.level)
+    }
+
+    pub fn is_table_song(&self) -> bool {
+        !self.table_name.is_empty()
+    }
+
+    pub fn as_tuple(&self) -> (String, String, String) {
+        (self.table_name.clone(), self.table_level.clone(), self.table_full.clone())
+    }
+}
+
+/// Resolves beatoraja TEXT_TABLE1/2/3 information for a chart.
+///
+/// TEXT_TABLE1 is the table name, TEXT_TABLE2 is symbol+level, and TEXT_TABLE3
+/// is TEXT_TABLE2 + TEXT_TABLE1, matching PlayerResource#getTableFullname().
+/// MD5 has priority; SHA-256 is used only when no MD5 table row is found.
+pub fn difficulty_table_text_for_chart(
+    library_db: &LibraryDatabase,
+    chart: &ChartListItem,
+    source_order: &[String],
+    source_hint: Option<&str>,
+) -> Result<DifficultyTableText> {
+    let md5_hex = hash_to_hex(&chart.md5);
+    let md5_entries = library_db.list_difficulty_table_entries_by_md5s(&[md5_hex.as_str()])?;
+    if !md5_entries.is_empty() {
+        return Ok(choose_difficulty_table_text(md5_entries, source_order, source_hint));
+    }
+
+    let sha256_hex = hash_to_hex(&chart.sha256);
+    let sha256_entries =
+        library_db.list_difficulty_table_entries_by_sha256s(&[sha256_hex.as_str()])?;
+    Ok(choose_difficulty_table_text(sha256_entries, source_order, source_hint))
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -148,6 +248,7 @@ pub struct SelectChartRow {
     pub best_score: Option<BestScoreSummary>,
     pub replay_slots: [bool; 4],
     pub table_level: String,
+    pub table_text: DifficultyTableText,
 }
 
 impl SelectChartRow {
@@ -353,7 +454,7 @@ pub fn table_folder_items(
         .into_iter()
         .map(|t| SelectItem::Folder {
             path: format!("{TABLE_ROOT_PATH}{}", t.source_url),
-            name: format!("[{}] {}", t.symbol, t.name),
+            name: t.name,
             kind: SelectRowKind::TableFolder,
             summary: None,
         })
@@ -589,11 +690,11 @@ fn load_select_items_in_table_filtered(
     rule_mode: RuleMode,
 ) -> Result<Vec<SelectItem>> {
     // Fetch table metadata for symbol and level ordering.
-    let (symbol, level_order) = library_db
+    let (table_name, symbol, level_order) = library_db
         .list_difficulty_tables()?
         .into_iter()
         .find(|t| t.source_url == source_url)
-        .map(|t| (t.symbol, t.level_order))
+        .map(|t| (t.name, t.symbol, t.level_order))
         .unwrap_or_default();
 
     let mut entries = library_db.list_table_entries_with_chart(source_url)?;
@@ -634,7 +735,8 @@ fn load_select_items_in_table_filtered(
     Ok(entries
         .into_iter()
         .map(|entry| {
-            let table_level = format!("{symbol}{}", entry.level);
+            let table_text =
+                DifficultyTableText::from_parts(table_name.clone(), &symbol, &entry.level);
             let score_key = entry_score_key(&entry, ln_policy_setting, rule_mode);
             let best_score = score_key.and_then(|key| score_map.remove(&key));
             let replay_slots =
@@ -646,7 +748,7 @@ fn load_select_items_in_table_filtered(
                 chart_analysis,
                 best_score,
                 replay_slots,
-                table_level,
+                table_text,
             ))
         })
         .collect())
@@ -774,9 +876,10 @@ fn select_chart_row_from_table_entry(
     chart_analysis: Option<ChartAnalysisSummary>,
     best_score: Option<BestScoreSummary>,
     replay_slots: [bool; 4],
-    table_level: String,
+    table_text: DifficultyTableText,
 ) -> SelectChartRow {
     let entry_sha256 = entry_score_sha256(&entry);
+    let table_level = table_text.table_level.clone();
     SelectChartRow {
         chart: entry.chart,
         chart_analysis,
@@ -786,6 +889,7 @@ fn select_chart_row_from_table_entry(
         best_score,
         replay_slots,
         table_level,
+        table_text,
     }
 }
 
@@ -818,6 +922,24 @@ pub fn load_select_items_in_folder_for_rule_mode(
     folder_path: &str,
     ln_policy_setting: LnPolicySetting,
     rule_mode: RuleMode,
+) -> Result<Vec<SelectItem>> {
+    load_select_items_in_folder_for_rule_mode_with_table_order(
+        library_db,
+        score_db,
+        folder_path,
+        ln_policy_setting,
+        rule_mode,
+        &[],
+    )
+}
+
+pub fn load_select_items_in_folder_for_rule_mode_with_table_order(
+    library_db: &LibraryDatabase,
+    score_db: &ScoreDatabase,
+    folder_path: &str,
+    ln_policy_setting: LnPolicySetting,
+    rule_mode: RuleMode,
+    table_source_order: &[String],
 ) -> Result<Vec<SelectItem>> {
     // 子孫 folder_path を 1 回だけ引き、直下の子と各子が leaf かどうかを
     // Rust 側で集計する。`/` 区切り後の最初のセグメントが「直下の子の名前」、
@@ -871,6 +993,7 @@ pub fn load_select_items_in_folder_for_rule_mode(
         all_charts,
         ln_policy_setting,
         rule_mode,
+        table_source_order,
     )?;
 
     let mut items = Vec::with_capacity(non_leaf_folders.len() + chart_items.len());
@@ -907,8 +1030,33 @@ pub fn load_select_items_for_search_for_rule_mode(
     ln_policy_setting: LnPolicySetting,
     rule_mode: RuleMode,
 ) -> Result<Vec<SelectItem>> {
+    load_select_items_for_search_for_rule_mode_with_table_order(
+        library_db,
+        score_db,
+        query,
+        ln_policy_setting,
+        rule_mode,
+        &[],
+    )
+}
+
+pub fn load_select_items_for_search_for_rule_mode_with_table_order(
+    library_db: &LibraryDatabase,
+    score_db: &ScoreDatabase,
+    query: &str,
+    ln_policy_setting: LnPolicySetting,
+    rule_mode: RuleMode,
+    table_source_order: &[String],
+) -> Result<Vec<SelectItem>> {
     let charts = library_db.search_charts(query)?;
-    chart_items_with_enrichment(library_db, score_db, charts, ln_policy_setting, rule_mode)
+    chart_items_with_enrichment(
+        library_db,
+        score_db,
+        charts,
+        ln_policy_setting,
+        rule_mode,
+        table_source_order,
+    )
 }
 
 /// Wraps a `ChartListItem` set into `SelectItem::Chart` entries with best-score,
@@ -919,6 +1067,7 @@ fn chart_items_with_enrichment(
     all_charts: Vec<ChartListItem>,
     ln_policy_setting: LnPolicySetting,
     rule_mode: RuleMode,
+    table_source_order: &[String],
 ) -> Result<Vec<SelectItem>> {
     let keys: Vec<ScoreKey> =
         all_charts.iter().map(|c| score_key_for_chart(c, ln_policy_setting, rule_mode)).collect();
@@ -937,8 +1086,11 @@ fn chart_items_with_enrichment(
     let md5_hexes: Vec<String> = all_charts.iter().map(|c| hash_to_hex(&c.md5)).collect();
     let md5_refs: Vec<&str> = md5_hexes.iter().map(|s| s.as_str()).collect();
     let mut md5_level_map: HashMap<String, String> = HashMap::new();
-    for e in library_db.list_difficulty_table_entries_by_md5s(&md5_refs)? {
-        insert_table_level(&mut md5_level_map, e.md5, &e.table_symbol, &e.level);
+    let mut md5_text_map: HashMap<String, DifficultyTableText> = HashMap::new();
+    let mut md5_entries = library_db.list_difficulty_table_entries_by_md5s(&md5_refs)?;
+    sort_difficulty_table_entries(&mut md5_entries, table_source_order);
+    for e in md5_entries {
+        insert_table_level_and_text(&mut md5_level_map, &mut md5_text_map, e.md5.clone(), &e);
     }
 
     // SHA256 fallback for charts not matched by MD5
@@ -948,10 +1100,19 @@ fn chart_items_with_enrichment(
         .map(|c| hash_to_hex(&c.sha256))
         .collect();
     let mut sha256_level_map: HashMap<String, String> = HashMap::new();
+    let mut sha256_text_map: HashMap<String, DifficultyTableText> = HashMap::new();
     if !missing_sha256_hexes.is_empty() {
         let sha256_refs: Vec<&str> = missing_sha256_hexes.iter().map(|s| s.as_str()).collect();
-        for e in library_db.list_difficulty_table_entries_by_sha256s(&sha256_refs)? {
-            insert_table_level(&mut sha256_level_map, e.sha256, &e.table_symbol, &e.level);
+        let mut sha256_entries =
+            library_db.list_difficulty_table_entries_by_sha256s(&sha256_refs)?;
+        sort_difficulty_table_entries(&mut sha256_entries, table_source_order);
+        for e in sha256_entries {
+            insert_table_level_and_text(
+                &mut sha256_level_map,
+                &mut sha256_text_map,
+                e.sha256.clone(),
+                &e,
+            );
         }
     }
 
@@ -960,10 +1121,14 @@ fn chart_items_with_enrichment(
         let score_key = score_key_for_chart(&chart, ln_policy_setting, rule_mode);
         let best_score = score_map.remove(&score_key);
         let replay_slots = replay_slot_map.remove(&score_key).unwrap_or([false; 4]);
+        let md5_hex = hash_to_hex(&chart.md5);
+        let sha256_hex = hash_to_hex(&chart.sha256);
         let table_level = md5_level_map
-            .remove(&hash_to_hex(&chart.md5))
-            .or_else(|| sha256_level_map.remove(&hash_to_hex(&chart.sha256)))
+            .remove(&md5_hex)
+            .or_else(|| sha256_level_map.remove(&sha256_hex))
             .unwrap_or_default();
+        let table_text =
+            md5_text_map.remove(&md5_hex).or_else(|| sha256_text_map.remove(&sha256_hex));
         items.push(SelectItem::Chart(SelectChartRow {
             chart_analysis: analysis_map.remove(&chart.chart_id),
             chart: Some(chart),
@@ -973,6 +1138,7 @@ fn chart_items_with_enrichment(
             best_score,
             replay_slots,
             table_level,
+            table_text: table_text.unwrap_or_default(),
         }));
     }
 
@@ -1458,6 +1624,9 @@ mod tests {
             .find_map(|i| if let SelectItem::Chart(r) = i { Some(r) } else { None })
             .unwrap();
         assert_eq!(row.table_level, "★3");
+        assert_eq!(row.table_text.table_name, "Table");
+        assert_eq!(row.table_text.table_level, "★3");
+        assert_eq!(row.table_text.table_full, "★3Table");
     }
 
     #[test]
@@ -1515,7 +1684,7 @@ mod tests {
         FetchedDifficultyTable {
             source_url: format!("https://example.com/{symbol}/"),
             head_url: format!("https://example.com/{symbol}/header.json"),
-            name: format!("Table {symbol}"),
+            name: "Table".to_string(),
             symbol: symbol.to_string(),
             level_order: vec![level.to_string()],
             entries: vec![FetchedTableEntry {
@@ -1540,7 +1709,7 @@ mod tests {
         FetchedDifficultyTable {
             source_url: format!("https://example.com/{symbol}-sha/"),
             head_url: format!("https://example.com/{symbol}-sha/header.json"),
-            name: format!("Table {symbol} SHA"),
+            name: "Table SHA".to_string(),
             symbol: symbol.to_string(),
             level_order: vec![level.to_string()],
             entries: vec![FetchedTableEntry {
@@ -1570,7 +1739,7 @@ mod tests {
         assert!(matches!(
             &items[0],
             SelectItem::Folder { path, name, kind, .. }
-            if path.starts_with(TABLE_ROOT_PATH) && name.contains("★") && *kind == SelectRowKind::TableFolder
+            if path.starts_with(TABLE_ROOT_PATH) && name == "Table" && *kind == SelectRowKind::TableFolder
         ));
     }
 
@@ -1589,13 +1758,23 @@ mod tests {
         )
         .unwrap();
 
-        let names: Vec<_> = items
+        let folders: Vec<_> = items
             .iter()
             .filter_map(|item| {
-                if let SelectItem::Folder { name, .. } = item { Some(name.as_str()) } else { None }
+                if let SelectItem::Folder { path, name, .. } = item {
+                    Some((path.as_str(), name.as_str()))
+                } else {
+                    None
+                }
             })
             .collect();
-        assert_eq!(names, vec!["[B] Table B", "[A] Table A"]);
+        assert_eq!(
+            folders,
+            vec![
+                ("bmz-table:https://example.com/B/", "Table"),
+                ("bmz-table:https://example.com/A/", "Table"),
+            ]
+        );
     }
 
     #[test]
@@ -1736,6 +1915,7 @@ mod tests {
             best_score: None,
             replay_slots: [false; 4],
             table_level: String::new(),
+            table_text: DifficultyTableText::default(),
         });
         assert_eq!(
             song_scan_path_from_context(&[], Some(&chart)),

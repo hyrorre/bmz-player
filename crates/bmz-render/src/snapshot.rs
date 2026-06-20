@@ -232,7 +232,7 @@ pub struct RenderSnapshot {
     pub course_stage: Option<CourseStageMarker>,
     /// beatoraja STRING_COURSE1_TITLE..10_TITLE (150..159) 用。
     pub course_titles: [String; 10],
-    /// beatoraja `TEXT_TABLE1` (1001): 難易度表名 (例: `[★] Insane`)。
+    /// beatoraja `TEXT_TABLE1` (1001): 難易度表名 (例: `Insane`)。
     pub table_text_primary: String,
     /// beatoraja `TEXT_TABLE2` (1002): 表内レベル (例: `★12`)。
     pub table_text_secondary: String,

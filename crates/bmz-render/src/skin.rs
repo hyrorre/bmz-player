@@ -2024,6 +2024,8 @@ pub struct SkinDrawState {
     pub select_play_level: i64,
     /// 現在の曲のレベル表記から取り出した数値 (NUMBER_PLAYLEVEL=96)。
     pub play_level: i64,
+    /// beatoraja OPTION_TABLE_SONG (1008).
+    pub table_song: bool,
     /// 現在の曲の #DIFFICULTY code。0=OTHER, 1=BEGINNER, 2=NORMAL, 3=HYPER, 4=ANOTHER, 5=INSANE。
     pub difficulty: i64,
     /// 現在の曲の #RANK / 判定ランク。0..4 は VERYHARD..VERYEASY、10 以上は直接倍率。
@@ -2253,6 +2255,7 @@ impl Default for SkinDrawState {
             select_has_banner: false,
             select_play_level: 0,
             play_level: 0,
+            table_song: false,
             difficulty: 0,
             judge_rank: None,
             select_ex_score: None,
@@ -3707,7 +3710,24 @@ impl SkinDocument {
             play_level: selected_row.map(|row| row.play_level.as_str()).unwrap_or_default(),
             target: if snapshot.in_settings { "" } else { &snapshot.target },
             current_folder: &snapshot.current_folder,
-            table_level: selected_row.map(|row| row.table_level.as_str()).unwrap_or_default(),
+            table_level: selected_row
+                .map(|row| {
+                    if row.table_text_secondary.is_empty() {
+                        row.table_level.as_str()
+                    } else {
+                        row.table_text_secondary.as_str()
+                    }
+                })
+                .unwrap_or_default(),
+            table_text_primary: selected_row
+                .map(|row| row.table_text_primary.as_str())
+                .unwrap_or_default(),
+            table_text_secondary: selected_row
+                .map(|row| row.table_text_secondary.as_str())
+                .unwrap_or_default(),
+            table_text_fallback: selected_row
+                .map(|row| row.table_text_fallback.as_str())
+                .unwrap_or_default(),
             course_titles: selected_row
                 .map(|row| string_array_refs(&row.course_titles))
                 .unwrap_or_default(),
@@ -3873,6 +3893,7 @@ impl SkinDocument {
             select_screen: true,
             select_play_level: selected_row.map(select_row_level_number).unwrap_or(0),
             play_level: selected_row.map(select_row_level_number).unwrap_or(0),
+            table_song: selected_row.is_some_and(|row| !row.table_text_primary.is_empty()),
             min_bpm: selected_row.map(|row| row.min_bpm).unwrap_or(0.0),
             max_bpm: selected_row.map(|row| row.max_bpm).unwrap_or(0.0),
             has_bpm_stop: selected_row
@@ -4086,6 +4107,7 @@ impl SkinDocument {
     fn apply_select_songlist_render_row_state(state: &mut SkinDrawState, row: &SelectRowSnapshot) {
         state.select_play_level = select_row_level_number(row);
         state.play_level = select_row_level_number(row);
+        state.table_song = !row.table_text_primary.is_empty();
         state.difficulty = select_row_difficulty_code(row);
         state.judge_rank = row.judge_rank;
         state.select_ex_score = row.ex_score;
@@ -4581,7 +4603,14 @@ impl SkinDocument {
         let mut items = Vec::new();
         let text_state = SkinTextState {
             bar_text: &row.title,
-            table_level: &row.table_level,
+            table_level: if row.table_text_secondary.is_empty() {
+                &row.table_level
+            } else {
+                &row.table_text_secondary
+            },
+            table_text_primary: &row.table_text_primary,
+            table_text_secondary: &row.table_text_secondary,
+            table_text_fallback: &row.table_text_fallback,
             ..SkinTextState::default()
         };
         let destinations = destination_entries(&songlist.text, enabled_options);
@@ -7178,6 +7207,7 @@ fn test_skin_op(op: i32, enabled_options: &[i32], state: &SkinDrawState) -> bool
         ),
         2 => select_song_detail_row(state),
         3 => state.select_row_kind == SelectRowKind::Course,
+        1008 => state.table_song,
         1002..=1017 => gradebar_constraint_op_matches(op, state),
         5 => {
             !state.in_settings
@@ -13280,6 +13310,16 @@ mod tests {
         assert!(!test_skin_op(1016, &[], &course));
         assert!(!test_skin_op(1003, &[], &song));
         assert!(test_skin_op(-1003, &[], &song));
+    }
+
+    #[test]
+    fn table_song_op_matches_table_context() {
+        let table_song = SkinDrawState { table_song: true, ..SkinDrawState::default() };
+        let non_table_song = SkinDrawState::default();
+
+        assert!(test_skin_op(1008, &[], &table_song));
+        assert!(test_skin_op(-1008, &[], &non_table_song));
+        assert!(!test_skin_op(1008, &[], &non_table_song));
     }
 
     #[test]
@@ -22087,21 +22127,18 @@ mod tests {
         assert_eq!(
             format_rm_skin_course_table_text(
                 Some(CourseStageMarker::Stage2),
-                "[★] Insane",
+                "Insane",
                 "★12",
-                "[★] Insane"
+                "★12Insane"
             ),
             "COURSE : STAGE 2"
         );
         assert_eq!(
-            format_rm_skin_course_table_text(None, "[★] Insane", "★12", "[★] Insane"),
-            "[★] Insane > ★12"
+            format_rm_skin_course_table_text(None, "Insane", "★12", "★12Insane"),
+            "Insane > ★12"
         );
-        assert_eq!(format_rm_skin_course_table_text(None, "", "★12", "[★] Insane"), " > ★12");
-        assert_eq!(
-            format_rm_skin_course_table_text(None, "[★] Insane", "", "[★] Insane"),
-            "[★] Insane"
-        );
+        assert_eq!(format_rm_skin_course_table_text(None, "", "★12", "★12Insane"), " > ★12");
+        assert_eq!(format_rm_skin_course_table_text(None, "Insane", "", "★12Insane"), "★12Insane");
         assert_eq!(format_rm_skin_course_table_text(None, "", "", ""), "# No-Table");
     }
 
@@ -22111,9 +22148,9 @@ mod tests {
 
         let state = SkinTextState {
             table_level: "★12",
-            table_text_primary: "[★] Insane",
+            table_text_primary: "Insane",
             table_text_secondary: "★12",
-            table_text_fallback: "[★] Insane",
+            table_text_fallback: "★12Insane",
             course_stage: None,
             ..SkinTextState::default()
         };
@@ -22122,17 +22159,19 @@ mod tests {
             value_expr: SKIN_EXPR_COURSE_TABLE_TEXT.to_string(),
             ..SkinTextDef::default()
         };
-        assert_eq!(skin_state_text(&by_expr, &state), "[★] Insane > ★12");
+        assert_eq!(skin_state_text(&by_expr, &state), "Insane > ★12");
 
         let by_id = SkinTextDef { id: "table".to_string(), ..SkinTextDef::default() };
-        assert_eq!(skin_state_text(&by_id, &state), "[★] Insane > ★12");
+        assert_eq!(skin_state_text(&by_id, &state), "Insane > ★12");
 
         let course_state =
             SkinTextState { course_stage: Some(CourseStageMarker::Stage1), ..state.clone() };
         assert_eq!(skin_state_text(&by_id, &course_state), "COURSE : STAGE 1");
 
-        let by_ref = SkinTextDef { ref_id: 1002, ..SkinTextDef::default() };
-        assert_eq!(skin_state_text(&by_ref, &state), "★12");
+        let by_ref = |ref_id| SkinTextDef { ref_id, ..SkinTextDef::default() };
+        assert_eq!(skin_state_text(&by_ref(1001), &state), "Insane");
+        assert_eq!(skin_state_text(&by_ref(1002), &state), "★12");
+        assert_eq!(skin_state_text(&by_ref(1003), &state), "★12Insane");
     }
 
     #[test]
