@@ -75,7 +75,7 @@ mod tests {
     use bmz_core::lane::Lane;
 
     use crate::hash::compute_chart_identity;
-    use crate::model::{BgaEventKind, JudgeRankKind, NoteKind, TimingEventKind};
+    use crate::model::{BgaEventKind, JudgeRankKind, LongNoteStyle, NoteKind, TimingEventKind};
 
     use super::*;
 
@@ -225,9 +225,8 @@ mod tests {
     }
 
     #[test]
-    fn classifies_bms_rs_warning_with_code() {
-        // `#LNOBJ ZZ` を指定しているのに `ZZ` を参照する行が無いため
-        // ParseUndefinedObject 警告が出る。
+    fn lnobj_without_marker_is_handled_outside_bms_rs() {
+        // LNOBJ is stripped before bms-rs parse and resolved during lane normalization.
         let text = "\
 #TITLE Diagnostic
 #BPM 120
@@ -244,7 +243,46 @@ mod tests {
                     if code == "ParseUndefinedObject"
             )
         });
-        assert!(has_undefined, "warnings: {:?}", result.warnings);
+        assert!(!has_undefined, "warnings: {:?}", result.warnings);
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn imports_forward_declared_lnobj_as_long_note() {
+        let text = "\
+#TITLE LNOBJ Song
+#BPM 120
+#TOTAL 200
+#WAV01 key.wav
+#WAVZZ marker.wav
+#LNOBJ ZZ
+#00111:01ZZ
+";
+        let path = write_temp_bms(text);
+        let result = import_bms_chart(&path, None, false).unwrap();
+
+        assert!(
+            result.warnings.iter().all(|w| {
+                !matches!(
+                    w,
+                    crate::import::error::ImportWarning::ParserDiagnostic { code, .. }
+                        if code == "ParseUndefinedObject"
+                )
+            }),
+            "warnings: {:?}",
+            result.warnings
+        );
+
+        let lane = result.chart.notes_for_lane(Lane::Key1);
+        assert_eq!(lane.len(), 2, "lane notes: {lane:?}");
+        assert_eq!(lane[0].kind, NoteKind::LongStart);
+        assert_eq!(lane[1].kind, NoteKind::LongEnd);
+        assert!(lane[0].sound.is_some());
+        assert!(lane[1].sound.is_none());
+        assert_eq!(result.chart.long_notes.len(), 1);
+        assert_eq!(result.chart.long_notes[0].style, LongNoteStyle::LnObj);
+        assert_eq!(result.chart.total_notes, 1);
+
         std::fs::remove_file(&path).unwrap();
     }
 

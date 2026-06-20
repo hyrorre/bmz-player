@@ -18,8 +18,7 @@
 //!   - 3x/4x: Invisible (P1/P2)
 //!   - 5x/6x: Long-channel (P1/P2)
 //!   - Dx/Ex: Landmine (P1/P2)
-//! - `#LNOBJ`: bms-rs 側で対応するノートが `NoteKind::Long` に書き換えられるため、
-//!   こちらでは追加処理せず通常の Long-channel として扱う。
+//! - `#LNOBJ`: bms-rs には渡さず、BMZ 側で marker WAV を通常ノート列から LN ペアへ解決する。
 //! - `.pms`: `KeyLayoutPms` / `KeyLayoutPmsBmeType` による 9K SP (18K は drop + warning)
 //!
 //! 未対応 (warning に流すか drop):
@@ -136,7 +135,9 @@ fn import_with_layout<T: KeyLayoutMapper>(
     let raw_text = decode_bms_text(&bytes, warnings);
     let has_bms_random = source_text_has_bms_random(&raw_text);
     let text = apply_beatoraja_random_control(&raw_text, random_seed, warnings);
-    let (parse_text, sparse_messages) = extract_sparse_bms_message_lines(&text, warnings);
+    let lnobj_parse_text = strip_lnobj_commands(&text);
+    let (parse_text, sparse_messages) =
+        extract_sparse_bms_message_lines(&lnobj_parse_text, warnings);
 
     let BmsOutput { bms, warnings: bms_warnings } = parse_bms::<T, _, _, _>(
         &parse_text,
@@ -154,6 +155,8 @@ fn import_with_layout<T: KeyLayoutMapper>(
     inject_sparse_bms_messages::<T>(&mut bms, &sparse_messages, warnings);
 
     let mut intermediate = build_intermediate_from_bms::<T>(&bms, layout, warnings)?;
+    intermediate.lnobj_wav_key =
+        extract_lnobj_wav_key(&text, bms_uses_base62_obj_ids(&bms), warnings);
     let bms_headers = extract_bms_headers_from_text(&raw_text);
     intermediate.metadata.has_bms_random = has_bms_random;
     intermediate.metadata.bms_headers = bms_headers.clone();
@@ -327,6 +330,54 @@ fn starts_ignore_ascii_case(value: &str, prefix: &str) -> bool {
 
 fn command_args<'a>(body: &'a str, command: &str) -> &'a str {
     body.get(command.len() + 1..).unwrap_or("").trim()
+}
+
+fn strip_lnobj_commands(text: &str) -> String {
+    let mut rewritten = String::with_capacity(text.len());
+    for line in text.lines() {
+        if lnobj_command_args(line).is_none() {
+            rewritten.push_str(line);
+        }
+        rewritten.push('\n');
+    }
+    rewritten
+}
+
+fn extract_lnobj_wav_key(
+    text: &str,
+    base62_obj_ids: bool,
+    warnings: &mut Vec<ImportWarning>,
+) -> Option<u16> {
+    let mut lnobj_wav_key = None;
+    for (line_index, line) in text.lines().enumerate() {
+        let Some(args) = lnobj_command_args(line) else {
+            continue;
+        };
+        let line_number = line_index + 1;
+        let Some(token) = args.split_whitespace().next() else {
+            warnings.push(ImportWarning::ParserDiagnostic {
+                code: "InvalidLnobj".to_string(),
+                message: format!("line {line_number} #LNOBJ has no object id"),
+            });
+            continue;
+        };
+        match ObjId::try_from(token, base62_obj_ids) {
+            Ok(obj_id) => lnobj_wav_key = Some(obj_id.as_u16()),
+            Err(err) => warnings.push(ImportWarning::ParserDiagnostic {
+                code: "InvalidLnobj".to_string(),
+                message: format!(
+                    "line {line_number} #LNOBJ has invalid object id {token:?}: {err}"
+                ),
+            }),
+        }
+    }
+    lnobj_wav_key
+}
+
+fn lnobj_command_args(line: &str) -> Option<&str> {
+    let body = line.trim_start().strip_prefix('#')?.trim_start();
+    let (name, value) = body.split_once(char::is_whitespace).unwrap_or((body, ""));
+    name.eq_ignore_ascii_case("LNOBJ").then_some(value.trim())
 }
 
 fn parse_beatoraja_control_int(
