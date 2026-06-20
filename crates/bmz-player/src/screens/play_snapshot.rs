@@ -241,8 +241,8 @@ pub fn build_render_snapshot_with_target_and_bga_frames_cached(
         judge_rank: session.chart.metadata.judge_rank,
         play_level: session.chart.metadata.play_level.clone(),
         arrange: "NORMAL".to_string(),
-        combo: session.score.combo,
-        max_combo: session.score.max_combo,
+        combo: session.display_combo(),
+        max_combo: session.display_max_combo(),
         ex_score: session.score.ex_score(),
         total_notes: session.chart.total_notes,
         past_notes: session.score.past_notes,
@@ -356,7 +356,7 @@ pub fn build_render_snapshot_with_target_and_bga_frames_cached(
             .collect(),
         recent_judgements: recent_judgements
             .iter()
-            .map(|event| display_judgement(event, session.score.combo))
+            .map(|event| display_judgement(event, session.display_combo()))
             .collect(),
         hit_error_ring: bmz_render::snapshot::HitErrorRingSnapshot {
             values: session.hit_error_ring.values,

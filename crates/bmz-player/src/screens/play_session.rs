@@ -72,6 +72,9 @@ pub struct PlaySessionOptions {
     /// When set, overrides the gauge's starting value.  Used to carry the
     /// gauge between charts during a course.
     pub initial_gauge_value: Option<f32>,
+    /// Course-mode combo carried from the previous chart. Score storage still
+    /// starts from zero; this affects rendered combo/max combo only.
+    pub initial_course_combo: Option<u32>,
     /// Course judge constraint forwarded from CourseJudgeConstraint.
     /// `NoGood` zeroes the good window, `NoGreat` zeroes great and good
     /// windows; the next judge band kicks in immediately.
@@ -134,6 +137,7 @@ impl Default for PlaySessionOptions {
             arrange_seed: None,
             arrange_pattern: None,
             initial_gauge_value: None,
+            initial_course_combo: None,
             judge_constraint: bmz_core::course::CourseJudgeConstraint::Normal,
             ln_mode_override: None,
             ln_policy_setting: LnPolicySetting::AutoLn,
@@ -302,6 +306,7 @@ pub fn build_game_session_with_input_backend(
         bottom_shiftable_gauge_from_config(profile.play.bottom_shiftable_gauge)
     };
     let initial_gauge_value = options.initial_gauge_value;
+    let initial_course_combo = options.initial_course_combo.unwrap_or(0);
     let autoplay_enabled = profile.play.auto_play || options.autoplay;
     let replay_player = options.replay_player;
     let is_replay = replay_player.is_some();
@@ -402,6 +407,9 @@ pub fn build_game_session_with_input_backend(
         timing_map,
         input_system,
         score: ScoreState::for_rule_mode(key_mode, rule_mode),
+        course_combo_carry: initial_course_combo,
+        course_combo_carry_active: initial_course_combo > 0,
+        course_max_combo: initial_course_combo,
         replay_recorder: ReplayRecorder::default(),
         replay_player,
         autoplay,

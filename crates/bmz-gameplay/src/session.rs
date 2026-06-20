@@ -111,6 +111,11 @@ pub struct GameSession {
     pub base_judge_windows: JudgeWindows,
     pub rule_mode: RuleMode,
     pub score: ScoreState,
+    /// Course-mode display combo carry. ScoreState remains per-chart for
+    /// storage; these fields only affect the rendered combo/max combo.
+    pub course_combo_carry: u32,
+    pub course_combo_carry_active: bool,
+    pub course_max_combo: u32,
     pub gauge: GaugeState,
     pub replay_recorder: ReplayRecorder,
     pub replay_player: Option<ReplayPlayer>,
@@ -274,6 +279,7 @@ pub fn apply_judge_outcome(
     for event in outcome.events {
         if event.affects_score {
             session.score.apply(&event);
+            update_course_combo_state(session, &event);
             session.gauge.apply_judge(event.judge, 1.0);
             if let Some(note_id) = event.note_id {
                 session.result_judgements.insert(
@@ -299,6 +305,35 @@ pub fn apply_judge_outcome(
     session.pending_keysound_volumes.extend(outcome.keysound_volumes);
     update_failed_state_from_gauge(session);
     events
+}
+
+impl GameSession {
+    pub fn display_combo(&self) -> u32 {
+        if self.course_combo_carry_active {
+            self.course_combo_carry.saturating_add(self.score.combo)
+        } else {
+            self.score.combo
+        }
+    }
+
+    pub fn display_max_combo(&self) -> u32 {
+        self.course_max_combo.max(self.score.max_combo)
+    }
+}
+
+fn update_course_combo_state(session: &mut GameSession, event: &JudgementEvent) {
+    match event.judge {
+        Judge::PGreat | Judge::Great | Judge::Good => {
+            session.course_max_combo = session.course_max_combo.max(session.display_combo());
+        }
+        Judge::Bad | Judge::Poor => {
+            session.course_combo_carry_active = false;
+        }
+        Judge::EmptyPoor if session.score.empty_poor_breaks_combo => {
+            session.course_combo_carry_active = false;
+        }
+        Judge::EmptyPoor => {}
+    }
 }
 
 fn update_failed_state_from_gauge(session: &mut GameSession) {
@@ -1116,6 +1151,51 @@ mod tests {
     }
 
     #[test]
+    fn course_combo_carry_extends_display_combo_without_changing_score_max() {
+        let mut session = session_with_autoplay(chart_with_keysound());
+        session.course_combo_carry = 100;
+        session.course_combo_carry_active = true;
+        session.course_max_combo = 100;
+
+        apply_judge_outcome(
+            &mut session,
+            JudgeOutcome { events: vec![judgement_event(Judge::PGreat, 0)], ..Default::default() },
+        );
+
+        assert_eq!(session.score.combo, 1);
+        assert_eq!(session.score.max_combo, 1);
+        assert_eq!(session.display_combo(), 101);
+        assert_eq!(session.display_max_combo(), 101);
+    }
+
+    #[test]
+    fn course_combo_carry_resets_on_combo_break() {
+        let mut session = session_with_autoplay(chart_with_keysound());
+        session.course_combo_carry = 100;
+        session.course_combo_carry_active = true;
+        session.course_max_combo = 100;
+
+        apply_judge_outcome(
+            &mut session,
+            JudgeOutcome { events: vec![judgement_event(Judge::PGreat, 0)], ..Default::default() },
+        );
+        apply_judge_outcome(
+            &mut session,
+            JudgeOutcome { events: vec![judgement_event(Judge::Bad, 0)], ..Default::default() },
+        );
+        apply_judge_outcome(
+            &mut session,
+            JudgeOutcome { events: vec![judgement_event(Judge::Great, 0)], ..Default::default() },
+        );
+
+        assert!(!session.course_combo_carry_active);
+        assert_eq!(session.score.combo, 1);
+        assert_eq!(session.score.max_combo, 1);
+        assert_eq!(session.display_combo(), 1);
+        assert_eq!(session.display_max_combo(), 101);
+    }
+
+    #[test]
     fn auto_shift_hard_zero_falls_back_without_failed_state() {
         let mut session = session_with_autoplay(chart_with_keysound());
         session.state = PlayState::Playing;
@@ -1797,6 +1877,9 @@ mod tests {
             )),
             rule_mode: RuleMode::Beatoraja,
             score: ScoreState::default(),
+            course_combo_carry: 0,
+            course_combo_carry_active: false,
+            course_max_combo: 0,
             gauge: GaugeState::new(bmz_core::clear::GaugeType::Normal, 160.0, chart.total_notes),
             replay_recorder: ReplayRecorder::default(),
             replay_player: None,

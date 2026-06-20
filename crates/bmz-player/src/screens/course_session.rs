@@ -41,6 +41,8 @@ pub struct CourseResultSummary {
     pub total_ex_score: u32,
     pub max_ex_score: u32,
     pub total_notes: u32,
+    /// Course-wide max combo with combo carry across chart boundaries.
+    pub course_max_combo: u32,
     pub judge_counts: ResultJudgeCounts,
     pub trophy_results: Vec<TrophyResult>,
     pub course_clear: bool,
@@ -77,6 +79,8 @@ impl ActiveCourseSession {
         let total_ex_score: u32 =
             self.entry_results.iter().map(|r| r.finished.result.score.ex_score()).sum();
         let max_ex_score: u32 = total_notes.saturating_mul(2);
+        let course_max_combo =
+            self.entry_results.iter().map(|r| r.finished.course_max_combo).max().unwrap_or(0);
 
         let judge_counts =
             self.entry_results.iter().fold(ResultJudgeCounts::default(), |acc, r| {
@@ -136,6 +140,7 @@ impl ActiveCourseSession {
             total_ex_score,
             max_ex_score,
             total_notes,
+            course_max_combo,
             judge_counts,
             trophy_results,
             course_clear,
@@ -239,6 +244,8 @@ mod tests {
             .enumerate()
             .map(|(i, (score, total_notes))| {
                 let result = make_play_result(score, total_notes);
+                let course_combo = result.score.combo;
+                let course_max_combo = result.score.max_combo;
                 CourseEntryResult {
                     chart_id: i as i64 + 1,
                     finished: FinishedPlaySession {
@@ -261,6 +268,8 @@ mod tests {
                             },
                             &make_result_chart(total_notes),
                         ),
+                        course_combo,
+                        course_max_combo,
                         replay_playback: false,
                         arrange: crate::select_options::ArrangeOption::Normal,
                         applied_arrange: crate::screens::play_session::AppliedArrange::default(),
@@ -303,11 +312,15 @@ mod tests {
 
     #[test]
     fn into_result_aggregates_scores() {
-        let session = make_session(1, vec![(make_score(100, 0), 100), (make_score(100, 0), 100)]);
+        let mut session =
+            make_session(1, vec![(make_score(100, 0), 100), (make_score(100, 0), 100)]);
+        session.entry_results[0].finished.course_max_combo = 100;
+        session.entry_results[1].finished.course_max_combo = 200;
         let result = session.into_result();
         assert_eq!(result.total_notes, 200);
         assert_eq!(result.max_ex_score, 400);
         assert_eq!(result.total_ex_score, 400);
+        assert_eq!(result.course_max_combo, 200);
         assert_eq!(result.judge_counts.pgreat, 200);
     }
 
@@ -356,6 +369,8 @@ mod tests {
             .enumerate()
             .map(|(i, (score, total_notes, clear_type))| {
                 let result = make_play_result_with(score, total_notes, clear_type);
+                let course_combo = result.score.combo;
+                let course_max_combo = result.score.max_combo;
                 CourseEntryResult {
                     chart_id: i as i64 + 1,
                     finished: FinishedPlaySession {
@@ -378,6 +393,8 @@ mod tests {
                             },
                             &make_result_chart(total_notes),
                         ),
+                        course_combo,
+                        course_max_combo,
                         replay_playback: false,
                         arrange: crate::select_options::ArrangeOption::Normal,
                         applied_arrange: crate::screens::play_session::AppliedArrange::default(),

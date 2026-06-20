@@ -116,7 +116,7 @@ pub fn build_course_submission(
             "trophies": trophies,
             "ex_score": result.total_ex_score,
             "max_ex_score": result.max_ex_score,
-            "max_combo": result.entry_summaries.iter().map(|entry| entry.max_combo).max().unwrap_or(0),
+            "max_combo": result.course_max_combo,
             "bp": bp,
             "judges": {
                 "pgreat": result.judge_counts.pgreat,

@@ -1026,8 +1026,7 @@ fn course_result_summary_for_skin(course: &CourseResultSummary) -> ResultSummary
     } else {
         last.map(|summary| summary.clear_type).unwrap_or(ClearType::NoPlay)
     };
-    let max_combo =
-        course.entry_summaries.iter().map(|summary| summary.max_combo).max().unwrap_or(0);
+    let max_combo = course.course_max_combo;
     let bp = course.entry_summaries.iter().map(|summary| summary.bp).sum();
     let cb = course.entry_summaries.iter().map(|summary| summary.cb).sum();
     let fast_slow_counts =
@@ -1217,6 +1216,7 @@ fn debug_boot_finished_play_session() -> FinishedPlaySession {
         },
         autoplay: false,
     };
+    let course_max_combo = result.score.max_combo;
     FinishedPlaySession {
         result,
         stored: StoredPlayResult {
@@ -1227,6 +1227,8 @@ fn debug_boot_finished_play_session() -> FinishedPlaySession {
             device_type: InputDeviceKind::Keyboard,
         },
         summary,
+        course_combo: 0,
+        course_max_combo,
         replay_playback: false,
         arrange: ArrangeOption::Normal,
         applied_arrange: AppliedArrange::default(),
@@ -5447,9 +5449,11 @@ impl WinitApp {
         // the course (beatoraja keeps the gauge between songs).
         let carried_gauge =
             course.entry_results.last().map(|r| r.finished.result.gauge_value).unwrap_or(0.0);
+        let carried_combo = course.entry_results.last().map(|r| r.finished.course_combo);
         let mut options = self.play_start_options();
         apply_course_constraints(&mut options, &constraints);
         options.initial_gauge_value = Some(carried_gauge);
+        options.initial_course_combo = carried_combo;
         // If the course is being replayed, attach the next queued replay
         // (when it exists and matches the next chart's id).  Mismatches
         // are silently skipped so the chart still plays normally.
@@ -5573,12 +5577,8 @@ impl WinitApp {
             .unwrap_or(bmz_core::clear::GaugeType::Normal);
         let last_gauge_value =
             course.entry_results.last().map(|r| r.finished.result.gauge_value).unwrap_or(0.0);
-        let max_combo: u32 = course
-            .entry_results
-            .iter()
-            .map(|r| r.finished.result.score.max_combo)
-            .max()
-            .unwrap_or(0);
+        let max_combo: u32 =
+            course.entry_results.iter().map(|r| r.finished.course_max_combo).max().unwrap_or(0);
         let course_arrange = course
             .entry_results
             .first()
@@ -6522,6 +6522,7 @@ impl WinitApp {
             arrange_seed: replay_file.arrange_seed,
             arrange_pattern: replay_file.lane_shuffle_pattern.clone(),
             initial_gauge_value: None,
+            initial_course_combo: None,
             judge_constraint: bmz_core::course::CourseJudgeConstraint::Normal,
             ln_mode_override: None,
             course_gauge_override: None,
@@ -6591,6 +6592,7 @@ impl WinitApp {
             arrange_seed: replay_file.arrange_seed,
             arrange_pattern: replay_file.lane_shuffle_pattern.clone(),
             initial_gauge_value: None,
+            initial_course_combo: None,
             judge_constraint: bmz_core::course::CourseJudgeConstraint::Normal,
             ln_mode_override: None,
             course_gauge_override: None,
@@ -6910,8 +6912,7 @@ impl WinitApp {
         }
         let bp =
             course.judge_counts.bad + course.judge_counts.poor + course.judge_counts.empty_poor;
-        let max_combo =
-            course.entry_summaries.iter().map(|entry| entry.max_combo).max().unwrap_or(0);
+        let max_combo = course.course_max_combo;
         let clear_rank = if course.course_clear {
             bmz_core::clear::ClearType::Normal as u8
         } else if course.course_failed {
@@ -12419,6 +12420,8 @@ fn preloaded_matches_start(
         && preloaded.session_options.hs_fix == options.hs_fix
         && preloaded.session_options.arrange_seed == options.arrange_seed
         && preloaded.session_options.arrange_pattern == options.arrange_pattern
+        && preloaded.session_options.initial_gauge_value == options.initial_gauge_value
+        && preloaded.session_options.initial_course_combo == options.initial_course_combo
 }
 
 fn skin_duration_ms(ms: i32) -> Duration {
@@ -13942,6 +13945,7 @@ mod tests {
             total_ex_score: 320,
             max_ex_score: 440,
             total_notes: 220,
+            course_max_combo: 170,
             judge_counts: crate::screens::result_model::ResultJudgeCounts {
                 pgreat: 160,
                 bad: 2,
@@ -13962,7 +13966,7 @@ mod tests {
         assert_eq!(summary.genre, "DAN");
         assert_eq!(summary.ex_score, 320);
         assert_eq!(summary.total_notes, 220);
-        assert_eq!(summary.max_combo, 90);
+        assert_eq!(summary.max_combo, 170);
         assert_eq!(summary.replay_slots, [true, false, true, false]);
         assert_eq!(summary.saved_replay_slots, [false, false, true, false]);
         assert_eq!(summary.judge_counts.pgreat, 160);

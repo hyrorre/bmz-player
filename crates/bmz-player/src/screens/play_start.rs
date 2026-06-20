@@ -48,6 +48,9 @@ pub struct PlayStartOptions {
     /// Override the starting gauge value (used to carry the gauge between
     /// charts in a course).  None means use the gauge's default `init`.
     pub initial_gauge_value: Option<f32>,
+    /// Course-mode combo carried from the previous chart. None means this is
+    /// not a course carry boundary.
+    pub initial_course_combo: Option<u32>,
     /// Course judge constraint (e.g. NoGood / NoGreat).  Forwarded to the
     /// JudgeEngine via PlaySessionOptions::judge_constraint.
     pub judge_constraint: CourseJudgeConstraint,
@@ -118,6 +121,7 @@ pub fn play_session_options_from_start(
         arrange_seed: start_options.arrange_seed,
         arrange_pattern: start_options.arrange_pattern,
         initial_gauge_value: start_options.initial_gauge_value,
+        initial_course_combo: start_options.initial_course_combo,
         judge_constraint: start_options.judge_constraint,
         ln_mode_override: start_options.ln_mode_override,
         ln_policy_setting: Default::default(),
