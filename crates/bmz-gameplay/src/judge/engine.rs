@@ -1,10 +1,10 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use bmz_chart::model::{LongNoteMode, NoteEvent, NoteKind, PlayableChart};
 use bmz_core::ids::NoteId;
 use bmz_core::input::{InputEvent, InputKind};
 use bmz_core::judge::{Judge, TimingSide};
-use bmz_core::lane::{LANE_COUNT, Lane};
+use bmz_core::lane::{KeyMode, LANE_COUNT, Lane};
 use bmz_core::time::TimeUs;
 
 use super::model::{
@@ -21,6 +21,8 @@ pub struct JudgeEngine {
     pub algorithm: JudgeAlgorithm,
     pub lanes: [LaneJudgeState; LANE_COUNT],
     pub judged_notes: HashMap<NoteId, Judge>,
+    bad_attempted_notes: HashSet<NoteId>,
+    bad_judge_vanish: bool,
 }
 
 impl JudgeEngine {
@@ -41,6 +43,20 @@ impl JudgeEngine {
         rule_mode: RuleMode,
         algorithm: JudgeAlgorithm,
     ) -> Self {
+        Self::new_with_window_set_algorithm_and_keymode(
+            window_set,
+            rule_mode,
+            algorithm,
+            KeyMode::K7,
+        )
+    }
+
+    pub fn new_with_window_set_algorithm_and_keymode(
+        window_set: JudgeWindows,
+        rule_mode: RuleMode,
+        algorithm: JudgeAlgorithm,
+        key_mode: KeyMode,
+    ) -> Self {
         Self {
             windows: window_set.note,
             window_set,
@@ -48,6 +64,8 @@ impl JudgeEngine {
             algorithm,
             lanes: [LaneJudgeState::default(); LANE_COUNT],
             judged_notes: HashMap::new(),
+            bad_attempted_notes: HashSet::new(),
+            bad_judge_vanish: bad_judge_vanish_for_keymode_and_rule_mode(key_mode, rule_mode),
         }
     }
 
@@ -81,6 +99,10 @@ impl JudgeEngine {
                 }
 
                 lane_state.next_note_index = idx + 1;
+                if self.bad_attempted_notes.remove(&note.id) {
+                    self.judged_notes.insert(note.id, Judge::Poor);
+                    continue;
+                }
                 self.judged_notes.insert(note.id, Judge::Poor);
                 outcome.events.push(JudgementEvent {
                     note_id: Some(note.id),
@@ -217,6 +239,7 @@ impl JudgeEngine {
             rule_mode,
             self.algorithm,
             &self.judged_notes,
+            &self.bad_attempted_notes,
         );
         let Some(candidate) = candidate else {
             return JudgeOutcome { mine_hits, ..Default::default() };
@@ -225,6 +248,7 @@ impl JudgeEngine {
         if candidate.consumes_note {
             let note_id = candidate.note_id.expect("normal candidate must have note id");
             let note = chart.note_by_id(note_id).expect("candidate note exists");
+            let note_vanishes = candidate.judge != Judge::Bad || self.bad_judge_vanish;
             let multi_bad_candidates = if matches!(rule_mode, RuleMode::Lr2Oraja | RuleMode::Dx) {
                 lr2oraja_multi_bad_candidates(
                     chart,
@@ -244,9 +268,15 @@ impl JudgeEngine {
             for multi_bad in &multi_bad_candidates {
                 self.judged_notes.insert(multi_bad.note_id, Judge::Bad);
             }
-            self.judged_notes.insert(note.id, candidate.judge);
+            if note_vanishes {
+                self.bad_attempted_notes.remove(&note.id);
+                self.judged_notes.insert(note.id, candidate.judge);
+            } else {
+                self.bad_attempted_notes.insert(note.id);
+            }
 
-            if note.kind == NoteKind::LongStart
+            if note_vanishes
+                && note.kind == NoteKind::LongStart
                 && let Some(active) =
                     make_active_long(chart, note.id, candidate.judge, candidate.delta, input.time)
             {
@@ -423,6 +453,7 @@ fn select_press_candidate(
     rule_mode: RuleMode,
     algorithm: JudgeAlgorithm,
     judged_notes: &HashMap<NoteId, Judge>,
+    bad_attempted_notes: &HashSet<NoteId>,
 ) -> Option<PressCandidate> {
     let mut normal: Option<PressCandidate> = None;
     let mut slow_empty_poor: Option<PressCandidate> = None;
@@ -440,11 +471,15 @@ fn select_press_candidate(
 
         let delta = input_time.0 - note.time.0;
         let already_judged = judged_notes.contains_key(&note.id);
+        let bad_attempted = bad_attempted_notes.contains(&note.id);
         if !already_judged
             && let Some(judge) = classify_normal_delta(delta, windows).filter(|judge| {
                 !suppresses_long_start_late_bad(rule_mode, windows, note, delta, *judge)
             })
         {
+            if bad_attempted && judge == Judge::Bad {
+                continue;
+            }
             let candidate = PressCandidate {
                 note_id: Some(note.id),
                 keysound_note_id: Some(note.id),
@@ -458,6 +493,10 @@ fn select_press_candidate(
             }) {
                 normal = Some(candidate);
             }
+            continue;
+        }
+
+        if bad_attempted {
             continue;
         }
 
@@ -696,6 +735,10 @@ fn in_good_range(delta_us: i64, windows: JudgeWindow) -> bool {
 fn in_bad_range(delta_us: i64, windows: JudgeWindow) -> bool {
     (delta_us < 0 && -delta_us <= windows.bad_fast_us)
         || (delta_us >= 0 && delta_us <= windows.bad_slow_us)
+}
+
+fn bad_judge_vanish_for_keymode_and_rule_mode(key_mode: KeyMode, rule_mode: RuleMode) -> bool {
+    !(rule_mode == RuleMode::Beatoraja && key_mode == KeyMode::K9)
 }
 
 fn side_from_delta(delta_us: i64) -> TimingSide {
@@ -1073,6 +1116,57 @@ mod tests {
         assert_eq!(outcome.events[0].judge, Judge::EmptyPoor);
         assert_eq!(outcome.events[0].side, TimingSide::Fast);
         assert_eq!(outcome.events[0].delta, TimeUs(-260_000));
+    }
+
+    #[test]
+    fn beatoraja_pms_bad_does_not_consume_and_can_be_rejudged() {
+        let chart = chart_with_tap(TimeUs(1_000_000));
+        let mut engine = JudgeEngine::new_with_window_set_algorithm_and_keymode(
+            crate::judge::window::beatoraja_judge_windows_for_keymode(KeyMode::K9),
+            RuleMode::Beatoraja,
+            JudgeAlgorithm::Combo,
+            KeyMode::K9,
+        );
+
+        let bad = engine.process_input(&chart, press_at(TimeUs(820_000)));
+
+        assert!(bad.consumed_input);
+        assert_eq!(bad.events[0].judge, Judge::Bad);
+        assert_eq!(bad.events[0].note_id, Some(NoteId(1)));
+        assert!(engine.bad_attempted_notes.contains(&NoteId(1)));
+        assert_eq!(engine.judged_notes.get(&NoteId(1)), None);
+
+        let great = engine.process_input(&chart, press_at(TimeUs(1_050_000)));
+
+        assert!(!engine.bad_attempted_notes.contains(&NoteId(1)));
+        assert_eq!(engine.judged_notes.get(&NoteId(1)), Some(&Judge::Great));
+
+        assert!(great.consumed_input);
+        assert_eq!(great.events[0].judge, Judge::Great);
+        assert_eq!(great.events[0].note_id, Some(NoteId(1)));
+        assert_eq!(engine.lanes[Lane::Key1.index()].next_note_index, 1);
+    }
+
+    #[test]
+    fn beatoraja_pms_bad_attempt_miss_consumes_without_extra_poor_event() {
+        let chart = chart_with_tap(TimeUs(1_000_000));
+        let mut engine = JudgeEngine::new_with_window_set_algorithm_and_keymode(
+            crate::judge::window::beatoraja_judge_windows_for_keymode(KeyMode::K9),
+            RuleMode::Beatoraja,
+            JudgeAlgorithm::Combo,
+            KeyMode::K9,
+        );
+
+        let bad = engine.process_input(&chart, press_at(TimeUs(820_000)));
+        assert_eq!(bad.events[0].judge, Judge::Bad);
+        assert!(engine.bad_attempted_notes.contains(&NoteId(1)));
+
+        let missed = engine.process_misses(&chart, TimeUs(1_184_000));
+
+        assert!(missed.events.is_empty());
+        assert!(!engine.bad_attempted_notes.contains(&NoteId(1)));
+        assert_eq!(engine.judged_notes.get(&NoteId(1)), Some(&Judge::Poor));
+        assert_eq!(engine.lanes[Lane::Key1.index()].next_note_index, 1);
     }
 
     #[test]

@@ -20,7 +20,9 @@ use crate::judge::engine::JudgeEngine;
 use crate::judge::model::{
     JudgeOutcome, JudgeWindow, JudgeWindows, JudgementEvent, KeySoundEvent, MineHitEvent,
 };
-use crate::judge::window::{judge_percent_at_time, judge_windows_for_rule_mode};
+use crate::judge::window::{
+    judge_percent_at_time_for_keymode, judge_windows_for_rule_mode_and_keymode,
+};
 use crate::replay::{ReplayPlayer, ReplayRecorder};
 use crate::rule::RuleMode;
 use crate::score::ScoreState;
@@ -805,16 +807,18 @@ pub fn apply_hcn_gauge(session: &mut GameSession, audio_now: TimeUs) {
 }
 
 pub fn sync_judge_windows(session: &mut GameSession, now: TimeUs) {
-    let percent = judge_percent_at_time(
+    let percent = judge_percent_at_time_for_keymode(
         session.chart.metadata.judge_rank_spec,
         &session.chart.judge_rank_events,
         now,
+        session.chart.metadata.key_mode,
         session.rule_mode,
     );
-    session.judge.set_window_set(judge_windows_for_rule_mode(
+    session.judge.set_window_set(judge_windows_for_rule_mode_and_keymode(
         session.base_judge_windows,
         percent,
         session.rule_mode,
+        session.chart.metadata.key_mode,
     ));
 }
 

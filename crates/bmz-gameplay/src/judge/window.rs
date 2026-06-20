@@ -5,17 +5,27 @@ use crate::rule::RuleMode;
 
 use super::model::{JudgeWindow, JudgeWindows};
 
+const BEATORAJA_NORMAL_JUDGE_RANK: [i32; 5] = [25, 50, 75, 100, 125];
+const BEATORAJA_PMS_JUDGE_RANK: [i32; 5] = [33, 50, 70, 100, 133];
+const BEATORAJA_NORMAL_FIX_JUDGE: [bool; 5] = [false, false, false, false, true];
+const BEATORAJA_PMS_FIX_JUDGE: [bool; 5] = [true, false, false, true, true];
+
 /// BMS `#RANK` 値を beatoraja 準拠の判定窓倍率 (%) に変換する。
 pub fn judge_rank_to_percent(rank: i32) -> i32 {
+    beatoraja_rank_to_percent_for_table(rank, BEATORAJA_NORMAL_JUDGE_RANK)
+}
+
+pub fn beatoraja_judge_rank_to_percent_for_keymode(rank: i32, key_mode: KeyMode) -> i32 {
+    let table = beatoraja_rank_table_for_keymode(key_mode);
+    beatoraja_rank_to_percent_for_table(rank, table)
+}
+
+fn beatoraja_rank_to_percent_for_table(rank: i32, table: [i32; 5]) -> i32 {
     match rank {
-        0 => 25,
-        1 => 50,
-        2 => 75,
-        3 => 100,
-        4 => 125,
+        0..=4 => table[rank as usize],
         r if r >= 10 => r,
-        // beatoraja `BMSPlayerRule.validate`: 範囲外は NORMAL (75%) へフォールバック
-        _ => 75,
+        // beatoraja `BMSPlayerRule.validate`: 範囲外は NORMAL (#RANK 2) へフォールバック
+        _ => table[2],
     }
 }
 
@@ -42,11 +52,32 @@ pub fn judge_rank_spec_to_percent_optional_for_rule_mode(
     spec: Option<JudgeRankSpec>,
     rule_mode: RuleMode,
 ) -> i32 {
+    judge_rank_spec_to_percent_optional_for_keymode_and_rule_mode(spec, KeyMode::K7, rule_mode)
+}
+
+pub fn judge_rank_spec_to_percent_optional_for_keymode_and_rule_mode(
+    spec: Option<JudgeRankSpec>,
+    key_mode: KeyMode,
+    rule_mode: RuleMode,
+) -> i32 {
     match rule_mode {
         RuleMode::Lr2Oraja => lr2oraja_judge_rank_spec_to_percent(spec),
-        RuleMode::Beatoraja | RuleMode::Dx => {
-            judge_rank_to_percent_optional(spec.map(|spec| spec.value))
+        RuleMode::Beatoraja | RuleMode::Dx => beatoraja_judge_rank_spec_to_percent(spec, key_mode),
+    }
+}
+
+fn beatoraja_judge_rank_spec_to_percent(spec: Option<JudgeRankSpec>, key_mode: KeyMode) -> i32 {
+    match spec {
+        None => 100,
+        Some(JudgeRankSpec { value, kind: JudgeRankKind::BmsRank }) => {
+            beatoraja_judge_rank_to_percent_for_keymode(value, key_mode)
         }
+        Some(JudgeRankSpec { value, kind: JudgeRankKind::DefExRank }) => {
+            let normal = beatoraja_judge_rank_to_percent_for_keymode(2, key_mode);
+            if value > 0 { value * normal / 100 } else { normal }
+        }
+        Some(JudgeRankSpec { value, kind: JudgeRankKind::BmsonJudgeRank }) if value > 0 => value,
+        Some(JudgeRankSpec { kind: JudgeRankKind::BmsonJudgeRank, .. }) => 100,
     }
 }
 
@@ -88,16 +119,7 @@ fn lr2oraja_judge_rank_spec_to_percent(spec: Option<JudgeRankSpec>) -> i32 {
 
 /// beatoraja `JudgeWindowRule.NORMAL` に合わせ、PG/GR/GD/BD のみ倍率適用する。
 pub fn judge_window_for_rank(base: JudgeWindow, percent: i32) -> JudgeWindow {
-    JudgeWindow {
-        pgreat_us: scale_window_us(base.pgreat_us, percent),
-        great_us: scale_window_us(base.great_us, percent),
-        good_us: scale_window_us(base.good_us, percent),
-        bad_fast_us: scale_window_us(base.bad_fast_us, percent),
-        bad_slow_us: scale_window_us(base.bad_slow_us, percent),
-        empty_poor_fast_us: base.empty_poor_fast_us,
-        empty_poor_slow_us: base.empty_poor_slow_us,
-        mine_hit_us: base.mine_hit_us,
-    }
+    beatoraja_judge_window_for_rank_and_keymode(base, percent, KeyMode::K7)
 }
 
 pub fn judge_windows_for_rank(base: JudgeWindows, percent: i32) -> JudgeWindows {
@@ -114,8 +136,17 @@ pub fn judge_window_for_rule_mode(
     percent: i32,
     rule_mode: RuleMode,
 ) -> JudgeWindow {
+    judge_window_for_rule_mode_and_keymode(base, percent, rule_mode, KeyMode::K7)
+}
+
+pub fn judge_window_for_rule_mode_and_keymode(
+    base: JudgeWindow,
+    percent: i32,
+    rule_mode: RuleMode,
+    key_mode: KeyMode,
+) -> JudgeWindow {
     match rule_mode {
-        RuleMode::Beatoraja => judge_window_for_rank(base, percent),
+        RuleMode::Beatoraja => beatoraja_judge_window_for_rank_and_keymode(base, percent, key_mode),
         RuleMode::Lr2Oraja => lr2oraja_judge_window_for_rank(base, percent),
         RuleMode::Dx => base,
     }
@@ -126,8 +157,30 @@ pub fn judge_windows_for_rule_mode(
     percent: i32,
     rule_mode: RuleMode,
 ) -> JudgeWindows {
+    judge_windows_for_rule_mode_and_keymode(base, percent, rule_mode, KeyMode::K7)
+}
+
+pub fn judge_windows_for_rule_mode_and_keymode(
+    base: JudgeWindows,
+    percent: i32,
+    rule_mode: RuleMode,
+    key_mode: KeyMode,
+) -> JudgeWindows {
     match rule_mode {
-        RuleMode::Beatoraja => judge_windows_for_rank(base, percent),
+        RuleMode::Beatoraja => JudgeWindows {
+            note: beatoraja_judge_window_for_rank_and_keymode(base.note, percent, key_mode),
+            scratch: beatoraja_judge_window_for_rank_and_keymode(base.scratch, percent, key_mode),
+            long_note_end: beatoraja_judge_window_for_rank_and_keymode(
+                base.long_note_end,
+                percent,
+                key_mode,
+            ),
+            long_scratch_end: beatoraja_judge_window_for_rank_and_keymode(
+                base.long_scratch_end,
+                percent,
+                key_mode,
+            ),
+        },
         RuleMode::Lr2Oraja => JudgeWindows {
             note: lr2oraja_judge_window_for_rank(base.note, percent),
             scratch: lr2oraja_judge_window_for_rank(base.scratch, percent),
@@ -319,6 +372,80 @@ pub const fn beatoraja_judge_windows_for_keymode(key_mode: KeyMode) -> JudgeWind
     }
 }
 
+pub fn beatoraja_judge_window_for_rank_and_keymode(
+    base: JudgeWindow,
+    percent: i32,
+    key_mode: KeyMode,
+) -> JudgeWindow {
+    let fixjudge = beatoraja_fixjudge_for_keymode(key_mode);
+    let fast = beatoraja_create_judge_bands(
+        [base.pgreat_us, base.great_us, base.good_us, base.bad_fast_us],
+        percent,
+        fixjudge,
+    );
+    let slow = beatoraja_create_judge_bands(
+        [base.pgreat_us, base.great_us, base.good_us, base.bad_slow_us],
+        percent,
+        fixjudge,
+    );
+
+    JudgeWindow {
+        pgreat_us: fast[0].max(slow[0]),
+        great_us: fast[1].max(slow[1]),
+        good_us: fast[2].max(slow[2]),
+        bad_fast_us: fast[3],
+        bad_slow_us: slow[3],
+        empty_poor_fast_us: base.empty_poor_fast_us,
+        empty_poor_slow_us: base.empty_poor_slow_us,
+        mine_hit_us: base.mine_hit_us,
+    }
+}
+
+fn beatoraja_create_judge_bands(base: [i64; 4], percent: i32, fixjudge: [bool; 5]) -> [i64; 4] {
+    let mut judge = [0; 4];
+    for i in 0..judge.len() {
+        judge[i] = if fixjudge[i] { base[i] } else { scale_window_us(base[i], percent) };
+    }
+
+    let mut fixmin = None;
+    for i in 0..judge.len() {
+        if fixjudge[i] {
+            fixmin = Some(i);
+            continue;
+        }
+        let fixmax = ((i + 1)..judge.len()).find(|&index| fixjudge[index]);
+        if let Some(min_index) = fixmin
+            && judge[i].abs() < judge[min_index].abs()
+        {
+            judge[i] = judge[min_index];
+        }
+        if let Some(max_index) = fixmax
+            && judge[i].abs() > judge[max_index].abs()
+        {
+            judge[i] = judge[max_index];
+        }
+    }
+
+    for i in 0..3 {
+        if judge[i].abs() > judge[3].abs() {
+            judge[i] = judge[3];
+        }
+        if i > 0 && judge[i].abs() < judge[i - 1].abs() {
+            judge[i] = judge[i - 1];
+        }
+    }
+
+    judge
+}
+
+fn beatoraja_rank_table_for_keymode(key_mode: KeyMode) -> [i32; 5] {
+    if key_mode == KeyMode::K9 { BEATORAJA_PMS_JUDGE_RANK } else { BEATORAJA_NORMAL_JUDGE_RANK }
+}
+
+fn beatoraja_fixjudge_for_keymode(key_mode: KeyMode) -> [bool; 5] {
+    if key_mode == KeyMode::K9 { BEATORAJA_PMS_FIX_JUDGE } else { BEATORAJA_NORMAL_FIX_JUDGE }
+}
+
 /// LR2oraja `JudgeProperty.LR2` NOTE window.
 pub const fn lr2oraja_note_judge_window() -> JudgeWindow {
     JudgeWindow {
@@ -398,7 +525,21 @@ pub fn judge_percent_at_time(
     now: bmz_core::time::TimeUs,
     rule_mode: RuleMode,
 ) -> i32 {
-    let mut percent = judge_rank_spec_to_percent_optional_for_rule_mode(header_rank, rule_mode);
+    judge_percent_at_time_for_keymode(header_rank, events, now, KeyMode::K7, rule_mode)
+}
+
+pub fn judge_percent_at_time_for_keymode(
+    header_rank: Option<JudgeRankSpec>,
+    events: &[JudgeRankEvent],
+    now: bmz_core::time::TimeUs,
+    key_mode: KeyMode,
+    rule_mode: RuleMode,
+) -> i32 {
+    let mut percent = judge_rank_spec_to_percent_optional_for_keymode_and_rule_mode(
+        header_rank,
+        key_mode,
+        rule_mode,
+    );
     if rule_mode == RuleMode::Dx {
         // DX MODE uses JudgeProperty.IIDX with fixed windows; rank headers/events are ignored.
         return 100;
@@ -526,6 +667,61 @@ mod tests {
     }
 
     #[test]
+    fn beatoraja_pms_rank_levels_follow_pms_table() {
+        assert_eq!(beatoraja_judge_rank_to_percent_for_keymode(0, KeyMode::K9), 33);
+        assert_eq!(beatoraja_judge_rank_to_percent_for_keymode(1, KeyMode::K9), 50);
+        assert_eq!(beatoraja_judge_rank_to_percent_for_keymode(2, KeyMode::K9), 70);
+        assert_eq!(beatoraja_judge_rank_to_percent_for_keymode(3, KeyMode::K9), 100);
+        assert_eq!(beatoraja_judge_rank_to_percent_for_keymode(4, KeyMode::K9), 133);
+        assert_eq!(beatoraja_judge_rank_to_percent_for_keymode(120, KeyMode::K9), 120);
+        assert_eq!(beatoraja_judge_rank_to_percent_for_keymode(-1, KeyMode::K9), 70);
+    }
+
+    #[test]
+    fn beatoraja_rank_specs_follow_validate_rules() {
+        assert_eq!(
+            judge_rank_spec_to_percent_optional_for_keymode_and_rule_mode(
+                Some(rank_spec(100, JudgeRankKind::DefExRank)),
+                KeyMode::K7,
+                RuleMode::Beatoraja,
+            ),
+            75
+        );
+        assert_eq!(
+            judge_rank_spec_to_percent_optional_for_keymode_and_rule_mode(
+                Some(rank_spec(100, JudgeRankKind::DefExRank)),
+                KeyMode::K9,
+                RuleMode::Beatoraja,
+            ),
+            70
+        );
+        assert_eq!(
+            judge_rank_spec_to_percent_optional_for_keymode_and_rule_mode(
+                Some(rank_spec(125, JudgeRankKind::DefExRank)),
+                KeyMode::K9,
+                RuleMode::Beatoraja,
+            ),
+            87
+        );
+        assert_eq!(
+            judge_rank_spec_to_percent_optional_for_keymode_and_rule_mode(
+                Some(rank_spec(120, JudgeRankKind::BmsonJudgeRank)),
+                KeyMode::K9,
+                RuleMode::Beatoraja,
+            ),
+            120
+        );
+        assert_eq!(
+            judge_rank_spec_to_percent_optional_for_keymode_and_rule_mode(
+                Some(rank_spec(0, JudgeRankKind::BmsonJudgeRank)),
+                KeyMode::K9,
+                RuleMode::Beatoraja,
+            ),
+            100
+        );
+    }
+
+    #[test]
     fn lr2oraja_rank_levels_follow_lr2_fallbacks() {
         assert_eq!(judge_rank_to_percent_optional_for_rule_mode(None, RuleMode::Lr2Oraja), 75);
         assert_eq!(judge_rank_to_percent_for_rule_mode(0, RuleMode::Lr2Oraja), 25);
@@ -595,6 +791,45 @@ mod tests {
     fn very_hard_rank_halves_pgreat_window() {
         let window = judge_window_from_chart_rank(Some(0), base_window());
         assert_eq!(window.pgreat_us, 4_000);
+    }
+
+    #[test]
+    fn beatoraja_pms_scaling_keeps_fixed_pgreat_and_bad() {
+        let base = beatoraja_note_judge_window_for_keymode(KeyMode::K9);
+        let window =
+            judge_window_for_rule_mode_and_keymode(base, 70, RuleMode::Beatoraja, KeyMode::K9);
+
+        assert_eq!(window.pgreat_us, 20_000);
+        assert_eq!(window.great_us, 35_000);
+        assert_eq!(window.good_us, 81_900);
+        assert_eq!(window.bad_fast_us, 183_000);
+        assert_eq!(window.bad_slow_us, 183_000);
+        assert_eq!(window.empty_poor_fast_us, 500_000);
+        assert_eq!(window.empty_poor_slow_us, 175_000);
+    }
+
+    #[test]
+    fn beatoraja_pms_very_hard_clamps_great_to_fixed_pgreat() {
+        let base = beatoraja_note_judge_window_for_keymode(KeyMode::K9);
+        let window =
+            judge_window_for_rule_mode_and_keymode(base, 33, RuleMode::Beatoraja, KeyMode::K9);
+
+        assert_eq!(window.pgreat_us, 20_000);
+        assert_eq!(window.great_us, 20_000);
+        assert_eq!(window.good_us, 38_610);
+        assert_eq!(window.bad_fast_us, 183_000);
+    }
+
+    #[test]
+    fn beatoraja_normal_rule_keeps_judge_windows_monotonic() {
+        let base = beatoraja_long_scratch_end_judge_window_for_keymode(KeyMode::K5);
+        let window =
+            judge_window_for_rule_mode_and_keymode(base, 100, RuleMode::Beatoraja, KeyMode::K5);
+
+        assert_eq!(window.pgreat_us, 130_000);
+        assert_eq!(window.great_us, 160_000);
+        assert_eq!(window.good_us, 160_000);
+        assert_eq!(window.bad_fast_us, 260_000);
     }
 
     #[test]
@@ -735,6 +970,39 @@ mod tests {
         let header = Some(rank_spec(3, JudgeRankKind::BmsRank));
         assert_eq!(judge_percent_at_time(header, &events, TimeUs(0), RuleMode::Beatoraja), 100);
         assert_eq!(judge_percent_at_time(header, &events, TimeUs(1_500), RuleMode::Beatoraja), 100);
+    }
+
+    #[test]
+    fn beatoraja_pms_percent_at_time_uses_pms_header_and_ignores_events() {
+        use bmz_chart::model::JudgeRankEvent;
+        use bmz_core::time::TimeUs;
+
+        let events = vec![JudgeRankEvent {
+            tick: Default::default(),
+            time: TimeUs(1_000),
+            rank_percent: 25,
+        }];
+        let header = Some(rank_spec(2, JudgeRankKind::BmsRank));
+        assert_eq!(
+            judge_percent_at_time_for_keymode(
+                header,
+                &events,
+                TimeUs(0),
+                KeyMode::K9,
+                RuleMode::Beatoraja,
+            ),
+            70
+        );
+        assert_eq!(
+            judge_percent_at_time_for_keymode(
+                header,
+                &events,
+                TimeUs(1_500),
+                KeyMode::K9,
+                RuleMode::Beatoraja,
+            ),
+            70
+        );
     }
 
     #[test]

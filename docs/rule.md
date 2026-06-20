@@ -24,10 +24,11 @@ score DB / replay slot でも別条件として扱う。
 | 判定 property | key mode 別 `JudgeProperty` | `JudgeProperty.LR2` | `JudgeProperty.IIDX` 固定 |
 | ゲージ property | key mode 別 `GaugeProperty` | `GaugeProperty.LR2` | IIDX 用 gauge 定義へ差し替え |
 | `#RANK` 未指定 | 100% | 75% (`#RANK 2` 相当) | 固定窓のため無視 |
-| `#RANK 4` | 125% | 75% (`#RANK 2` 相当) | 固定窓のため無視 |
+| `#RANK 4` | 125% (`PMS` は 133%) | 75% (`#RANK 2` 相当) | 固定窓のため無視 |
 | `#EXRANKxx` / chA0 | import はするが runtime では無視 | import はするが runtime では無視 | 固定窓のため無視 |
 | MultiBad | 無効 | 有効 | 有効 |
 | LN start late BAD 抑制 | 無効 | 有効 | 有効 |
+| BAD 消費 | 消費 (`PMS` だけ非消費) | 消費 | 消費 |
 | EmptyPoor combo break | 5K / 10K / 9K だけ break | 継続 | 継続 |
 | score / replay 保存 | `rule_mode=Beatoraja` | `rule_mode=Lr2Oraja` | `rule_mode=Dx` |
 
@@ -44,7 +45,10 @@ key mode から beatoraja の player rule に対応する `JudgeProperty` を選
 - 9K: `PMS`
 - 4K / 6K / 8K: beatoraja に対応 mode が無いため `SEVENKEYS` 相当
 
-`#RANK` の倍率は beatoraja `JudgeWindowRule.NORMAL` 相当。
+`#RANK` の倍率は、key mode から選ばれる beatoraja `JudgeWindowRule` に従う。
+5K / 7K / 10K / 14K と BMZ 拡張の 4K / 6K / 8K は `NORMAL`、9K は `PMS`。
+
+`NORMAL`:
 
 | `#RANK` | percent |
 | ---: | ---: |
@@ -54,7 +58,31 @@ key mode から beatoraja の player rule に対応する `JudgeProperty` を選
 | 3 | 100 |
 | 4 | 125 |
 
-未指定は 100%、範囲外は 75% に寄せる。
+`PMS`:
+
+| `#RANK` | percent |
+| ---: | ---: |
+| 0 | 33 |
+| 1 | 50 |
+| 2 | 70 |
+| 3 | 100 |
+| 4 | 133 |
+
+未指定は 100%、範囲外は各 rule の `#RANK 2` (`NORMAL=75%`, `PMS=70%`) に寄せる。
+
+`#DEFEXRANK` は beatoraja `BMSPlayerRule.validate` と同じく、その rule の `#RANK 2`
+を基準にする。たとえば `#DEFEXRANK 100` は `NORMAL=75%`, `PMS=70%`。
+BMSON `judge_rank` は raw percent として扱い、0 以下は 100% にフォールバックする。
+
+判定窓の倍率適用も beatoraja `JudgeWindowRule.create` に合わせる。`PMS` では
+PGREAT / BAD / MISS が固定、GREAT / GOOD だけが rank で変化する。`NORMAL` でも
+PGREAT / GREAT / GOOD が BAD を超えないようにし、狭い上位判定が広い下位判定を
+逆転した場合は単調化する。
+
+`PMS` は beatoraja `judgeVanish[Bad] = false` / `MissCondition.ONE` に従う。
+BAD はスコア/ゲージへ反映するがノーツを消費しないため、同じノーツを後続の
+GOOD 以上で再判定できる。BAD 後に見逃した場合は内部的にノーツを消費するが、
+追加の POOR はスコア/ゲージへ入れない。
 
 `#EXRANKxx` / chA0 は import 結果として `judge_rank_events` に残すが、
 Beatoraja mode の runtime 判定窓には反映しない。互換上、ヘッダ側の判定ランクだけを使う。
