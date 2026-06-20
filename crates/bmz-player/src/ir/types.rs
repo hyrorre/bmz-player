@@ -319,6 +319,60 @@ pub struct IrRankingChartRef {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IrCourseRankingResult {
+    pub course: IrCourseRankingCourseRef,
+    #[serde(default)]
+    pub rule: Option<IrCourseRankingRuleRef>,
+    pub ranking: IrCourseRankingBody,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IrCourseRankingCourseRef {
+    pub course_hash: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IrCourseRankingRuleRef {
+    #[serde(default)]
+    pub gauge: Option<String>,
+    #[serde(default)]
+    pub ln_policy: Option<String>,
+    #[serde(default)]
+    pub scoring: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IrCourseRankingBody {
+    pub scope: IrRankingScope,
+    #[serde(default)]
+    pub entries: Vec<IrCourseRankingEntry>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IrCourseRankingEntry {
+    pub rank: u32,
+    pub player: IrRankingPlayer,
+    pub score: IrCourseRankingScore,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IrCourseRankingScore {
+    pub course_score_id: String,
+    pub clear: String,
+    #[serde(default)]
+    pub course_clear: bool,
+    pub ex_score: u32,
+    pub max_combo: u32,
+    pub bp: u32,
+    #[serde(default)]
+    pub device_type: Option<String>,
+    #[serde(default)]
+    pub played_at: Option<String>,
+    #[serde(default)]
+    pub verification: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IrRankingBody {
     pub scope: IrRankingScope,
     #[serde(default)]

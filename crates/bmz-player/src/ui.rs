@@ -703,6 +703,7 @@ impl EguiLayer {
             }
             if *visible_flag {
                 let ctx = ui.ctx();
+                let result_ir_visible = result_ir.is_some();
                 // IR ランキングも egui 補助ウィンドウなので、他の egui
                 // ウィンドウと同じ F1 メニュー表示中だけ出す。
                 if let Some(state) = result_ir.as_mut() {
@@ -712,7 +713,7 @@ impl EguiLayer {
                 // them behind the same F1 menu visibility gate as the other
                 // egui windows.
                 if let Some(summary) = course_result {
-                    build_course_result_panel(ctx, summary);
+                    build_course_result_panel(ctx, summary, result_ir_visible);
                 }
                 if let Some(preview) = course_preview {
                     build_course_preview_panel(ctx, preview);
@@ -1004,7 +1005,10 @@ fn build_result_ir_panel(
                 if ui.selectable_label(global, "全体").clicked() && !global {
                     selected_tab = Some(ResultRankingTab::Global);
                 }
-                if ui.selectable_label(rivals, "ライバル").clicked() && !rivals {
+                if state.supports_tab(ResultRankingTab::SelfAndRivals)
+                    && ui.selectable_label(rivals, "ライバル").clicked()
+                    && !rivals
+                {
                     selected_tab = Some(ResultRankingTab::SelfAndRivals);
                 }
             });
@@ -1028,7 +1032,7 @@ fn build_result_ir_panel(
                     ui.small(error.clone());
                 }
                 RankingLoadState::Loaded(ranking) => {
-                    if ranking.ranking.entries.is_empty() {
+                    if ranking.entries.is_empty() {
                         ui.label("この条件のスコアはまだありません");
                     } else {
                         egui::Grid::new("result_ir_ranking_grid")
@@ -1041,18 +1045,18 @@ fn build_result_ir_panel(
                                 ui.strong("クリア");
                                 ui.strong("BP");
                                 ui.end_row();
-                                for entry in &ranking.ranking.entries {
+                                for entry in &ranking.entries {
                                     ui.monospace(entry.rank.to_string());
-                                    ui.label(&entry.player.display_name);
-                                    ui.monospace(entry.score.ex_score.to_string());
-                                    ui.label(&entry.score.clear);
-                                    ui.monospace(entry.score.min_bp.to_string());
+                                    ui.label(&entry.player_name);
+                                    ui.monospace(entry.ex_score.to_string());
+                                    ui.label(&entry.clear);
+                                    ui.monospace(entry.bp.to_string());
                                     ui.end_row();
                                 }
                             });
-                        if let Some(own) = &ranking.ranking.self_summary {
+                        if let Some(rank) = ranking.self_rank {
                             ui.separator();
-                            ui.label(format!("自分の順位: {} 位", own.rank));
+                            ui.label(format!("自分の順位: {} 位", rank));
                         }
                     }
                 }
@@ -1060,12 +1064,18 @@ fn build_result_ir_panel(
         });
 }
 
-fn build_course_result_panel(ctx: &egui::Context, summary: &CourseResultSummary) {
+fn build_course_result_panel(
+    ctx: &egui::Context,
+    summary: &CourseResultSummary,
+    result_ir_visible: bool,
+) {
     let content_rect = ctx.content_rect();
     // Panel widened from 360px to 440px so the 6-column per-chart grid
     // (#/title/EX/combo/clear/miss) fits without horizontal scroll.
     let panel_width = 440.0_f32;
-    let pos = egui::pos2(content_rect.right() - panel_width - 16.0, 16.0);
+    let right_margin = if result_ir_visible { 360.0 + 32.0 } else { 16.0 };
+    let pos_x = (content_rect.right() - panel_width - right_margin).max(content_rect.left() + 16.0);
+    let pos = egui::pos2(pos_x, 16.0);
 
     egui::Window::new("コースリザルト")
         .id(egui::Id::new("course_result_overlay"))

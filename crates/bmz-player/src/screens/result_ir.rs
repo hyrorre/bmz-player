@@ -11,9 +11,9 @@ use std::sync::mpsc::{Receiver, Sender, channel};
 use bmz_gameplay::rule::RuleMode;
 
 use crate::config::profile_config::IrConfig;
-use crate::ir::bmz_official::{BmzOfficialIrClient, IrRankingRequest};
+use crate::ir::bmz_official::{BmzOfficialIrClient, IrCourseRankingRequest, IrRankingRequest};
 use crate::ir::sync::{ensure_fresh_credentials, sync_pending_ir_jobs};
-use crate::ir::types::{IrRankingResult, IrRankingScope};
+use crate::ir::types::{IrCourseRankingResult, IrRankingResult, IrRankingScope};
 use crate::ln_policy::LnScorePolicy;
 use crate::select_options::DoubleOptionScoreBucket;
 
@@ -27,7 +27,7 @@ pub enum ResultRankingTab {
 pub enum RankingLoadState {
     NotRequested,
     Loading,
-    Loaded(IrRankingResult),
+    Loaded(ResultIrRanking),
     Failed(String),
 }
 
@@ -40,7 +40,26 @@ pub enum IrSubmitState {
 #[derive(Debug)]
 pub enum ResultIrEvent {
     Submit { submitted: u32, failed: u32, message: Option<String> },
-    Ranking { scope: IrRankingScope, result: Result<IrRankingResult, String> },
+    Ranking { scope: IrRankingScope, result: Result<ResultIrRanking, String> },
+}
+
+#[derive(Debug, Clone)]
+pub struct ResultIrRanking {
+    pub scope: IrRankingScope,
+    pub entries: Vec<ResultIrRankingEntry>,
+    pub clear_rate: Option<u32>,
+    pub self_rank: Option<u32>,
+    pub total: Option<u32>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ResultIrRankingEntry {
+    pub rank: u32,
+    pub player_name: String,
+    pub ex_score: u32,
+    pub clear: String,
+    pub bp: u32,
+    pub max_combo: u32,
 }
 
 /// ランキング照会に必要なクエリ条件。タブ遅延取得でも使い回す。
@@ -55,12 +74,50 @@ pub struct ResultIrQuery {
     pub rule_mode: RuleMode,
 }
 
+#[derive(Debug, Clone)]
+pub enum ResultIrTarget {
+    Chart {
+        chart_sha256_hex: String,
+        ln_policy: LnScorePolicy,
+        double_option: DoubleOptionScoreBucket,
+        rule_mode: RuleMode,
+    },
+    Course {
+        course_hash: String,
+        gauge: String,
+        ln_policy: String,
+    },
+}
+
+impl ResultIrTarget {
+    fn supports_scope(&self, scope: IrRankingScope) -> bool {
+        match self {
+            Self::Chart { .. } => {
+                matches!(scope, IrRankingScope::Global | IrRankingScope::SelfAndRivals)
+            }
+            Self::Course { .. } => matches!(scope, IrRankingScope::Global),
+        }
+    }
+
+    fn is_course(&self) -> bool {
+        matches!(self, Self::Course { .. })
+    }
+}
+
+#[derive(Debug, Clone)]
+struct ResultIrTaskQuery {
+    profile_root: PathBuf,
+    provider: String,
+    base_url: String,
+    target: ResultIrTarget,
+}
+
 pub struct ResultIrState {
     pub submit: IrSubmitState,
     pub global: RankingLoadState,
     pub self_and_rivals: RankingLoadState,
     pub active_tab: ResultRankingTab,
-    query: ResultIrQuery,
+    query: ResultIrTaskQuery,
     sender: Sender<ResultIrEvent>,
     receiver: Receiver<ResultIrEvent>,
 }
@@ -88,6 +145,9 @@ impl ResultIrState {
 
     /// タブ選択を切り替え、未取得ならその scope の取得タスクを起動する。
     pub fn select_tab(&mut self, tab: ResultRankingTab) {
+        if !self.supports_tab(tab) {
+            return;
+        }
         self.active_tab = tab;
         let scope = scope_for_tab(tab);
         if matches!(self.scope_slot(scope), Some(RankingLoadState::NotRequested)) {
@@ -96,10 +156,21 @@ impl ResultIrState {
     }
 
     pub fn request_scope(&mut self, scope: IrRankingScope) {
+        if !self.query.target.supports_scope(scope) {
+            return;
+        }
         if let Some(slot) = self.scope_slot(scope) {
             *slot = RankingLoadState::Loading;
         }
         spawn_ranking_fetch(self.query.clone(), scope, self.sender.clone());
+    }
+
+    pub fn supports_tab(&self, tab: ResultRankingTab) -> bool {
+        self.query.target.supports_scope(scope_for_tab(tab))
+    }
+
+    pub fn is_course(&self) -> bool {
+        self.query.target.is_course()
     }
 
     /// Result スキンの `NUMBER_IR_*` / `OPTION_IR_*` に渡す snapshot を作る。
@@ -114,7 +185,7 @@ impl ResultIrState {
             RankingLoadState::Failed(_) => {
                 ResultIrSnapshot { state: SkinIrState::Failed, ..Default::default() }
             }
-            RankingLoadState::Loaded(ranking) => ranking_to_ir_snapshot(ranking),
+            RankingLoadState::Loaded(ranking) => result_ir_ranking_to_skin_snapshot(ranking),
         }
     }
 
@@ -136,30 +207,75 @@ impl ResultIrState {
 
 /// 取得済みグローバルランキングをスキン用 snapshot に変換する。
 pub fn ranking_to_ir_snapshot(ranking: &IrRankingResult) -> bmz_render::scene::ResultIrSnapshot {
+    result_ir_ranking_to_skin_snapshot(&chart_ranking_to_result_ir_ranking(ranking))
+}
+
+fn result_ir_ranking_to_skin_snapshot(
+    ranking: &ResultIrRanking,
+) -> bmz_render::scene::ResultIrSnapshot {
     use bmz_render::scene::{
         IR_RANKING_ENTRY_SLOTS, ResultIrRankingEntrySnapshot, ResultIrRankingName,
         ResultIrSnapshot, ResultIrState as SkinIrState,
     };
     let mut entries = [ResultIrRankingEntrySnapshot::default(); IR_RANKING_ENTRY_SLOTS];
-    for (slot, entry) in entries.iter_mut().zip(ranking.ranking.entries.iter()) {
+    for (slot, entry) in entries.iter_mut().zip(ranking.entries.iter()) {
         *slot = ResultIrRankingEntrySnapshot {
             rank: Some(i64::from(entry.rank)),
-            ex_score: Some(i64::from(entry.score.ex_score)),
-            player_name: ResultIrRankingName::from_display_name(&entry.player.display_name),
+            ex_score: Some(i64::from(entry.ex_score)),
+            player_name: ResultIrRankingName::from_display_name(&entry.player_name),
         };
     }
     ResultIrSnapshot {
         state: SkinIrState::Loaded,
-        rank: ranking.ranking.self_summary.as_ref().map(|own| i64::from(own.rank)),
-        total_player: ranking
-            .ranking
-            .pagination
-            .and_then(|pagination| pagination.total)
-            .map(i64::from)
-            .or(Some(ranking.ranking.entries.len() as i64)),
-        clear_rate: ranking.ranking.clear_rate.map(i64::from),
+        rank: ranking.self_rank.map(i64::from),
+        total_player: ranking.total.map(i64::from).or(Some(ranking.entries.len() as i64)),
+        clear_rate: ranking.clear_rate.map(i64::from),
         previous_rank: None,
         entries,
+    }
+}
+
+fn chart_ranking_to_result_ir_ranking(ranking: &IrRankingResult) -> ResultIrRanking {
+    ResultIrRanking {
+        scope: ranking.ranking.scope,
+        entries: ranking
+            .ranking
+            .entries
+            .iter()
+            .map(|entry| ResultIrRankingEntry {
+                rank: entry.rank,
+                player_name: entry.player.display_name.clone(),
+                ex_score: entry.score.ex_score,
+                clear: entry.score.clear.clone(),
+                bp: entry.score.min_bp,
+                max_combo: entry.score.max_combo,
+            })
+            .collect(),
+        clear_rate: ranking.ranking.clear_rate,
+        self_rank: ranking.ranking.self_summary.as_ref().map(|own| own.rank),
+        total: ranking.ranking.pagination.and_then(|pagination| pagination.total),
+    }
+}
+
+fn course_ranking_to_result_ir_ranking(ranking: &IrCourseRankingResult) -> ResultIrRanking {
+    ResultIrRanking {
+        scope: ranking.ranking.scope,
+        entries: ranking
+            .ranking
+            .entries
+            .iter()
+            .map(|entry| ResultIrRankingEntry {
+                rank: entry.rank,
+                player_name: entry.player.display_name.clone(),
+                ex_score: entry.score.ex_score,
+                clear: entry.score.clear.clone(),
+                bp: entry.score.bp,
+                max_combo: entry.score.max_combo,
+            })
+            .collect(),
+        clear_rate: None,
+        self_rank: None,
+        total: Some(ranking.ranking.entries.len() as u32),
     }
 }
 
@@ -186,20 +302,47 @@ pub fn spawn_result_ir_task(
     double_option: DoubleOptionScoreBucket,
     rule_mode: RuleMode,
 ) -> Option<ResultIrState> {
+    spawn_result_ir_task_for_target(
+        profile_root,
+        score_db_path,
+        ir_config,
+        ResultIrTarget::Chart { chart_sha256_hex, ln_policy, double_option, rule_mode },
+    )
+}
+
+pub fn spawn_course_result_ir_task(
+    profile_root: PathBuf,
+    score_db_path: PathBuf,
+    ir_config: &IrConfig,
+    course_hash: String,
+    gauge: String,
+    ln_policy: String,
+) -> Option<ResultIrState> {
+    spawn_result_ir_task_for_target(
+        profile_root,
+        score_db_path,
+        ir_config,
+        ResultIrTarget::Course { course_hash, gauge, ln_policy },
+    )
+}
+
+fn spawn_result_ir_task_for_target(
+    profile_root: PathBuf,
+    score_db_path: PathBuf,
+    ir_config: &IrConfig,
+    target: ResultIrTarget,
+) -> Option<ResultIrState> {
     let provider = ir_config.providers.iter().find(|provider| {
         provider.enabled
             && !provider.base_url.is_empty()
             && crate::ir::provider_key::configured_provider_key(provider).is_some()
     })?;
     let provider_key = crate::ir::provider_key::configured_provider_key(provider)?;
-    let query = ResultIrQuery {
+    let query = ResultIrTaskQuery {
         profile_root,
         provider: provider_key.to_string(),
         base_url: provider.base_url.clone(),
-        chart_sha256_hex,
-        ln_policy,
-        double_option,
-        rule_mode,
+        target,
     };
     let (sender, receiver) = channel();
 
@@ -219,7 +362,8 @@ pub fn spawn_result_ir_task(
     // global は Result スキンの NUMBER_IR_RANK / OPTION_IR_* 表示にも使うため、
     // prefetch 設定に関わらず常に取得する。rivals scope のみ設定に従う。
     let prefetch_global = true;
-    let prefetch_rivals = state_prefetch_rivals(&ir_config);
+    let prefetch_rivals = query.target.supports_scope(IrRankingScope::SelfAndRivals)
+        && state_prefetch_rivals(&ir_config);
     tokio::spawn(async move {
         let now = now_unix_seconds();
         let outcome = async {
@@ -264,19 +408,64 @@ fn state_prefetch_rivals(ir_config: &IrConfig) -> bool {
     ir_config.prefetch_rival_ranking_on_score_submit
 }
 
-fn spawn_ranking_fetch(query: ResultIrQuery, scope: IrRankingScope, sender: Sender<ResultIrEvent>) {
+fn spawn_ranking_fetch(
+    query: ResultIrTaskQuery,
+    scope: IrRankingScope,
+    sender: Sender<ResultIrEvent>,
+) {
     tokio::spawn(async move {
         fetch_ranking_and_send(&query, scope, &sender).await;
     });
 }
 
 async fn fetch_ranking_and_send(
-    query: &ResultIrQuery,
+    query: &ResultIrTaskQuery,
     scope: IrRankingScope,
     sender: &Sender<ResultIrEvent>,
 ) {
-    let result = fetch_ranking(query, scope).await.map_err(|error| format!("{error:#}"));
+    let result = fetch_result_ranking(query, scope).await.map_err(|error| format!("{error:#}"));
     let _ = sender.send(ResultIrEvent::Ranking { scope, result });
+}
+
+async fn fetch_result_ranking(
+    query: &ResultIrTaskQuery,
+    scope: IrRankingScope,
+) -> anyhow::Result<ResultIrRanking> {
+    match &query.target {
+        ResultIrTarget::Chart { chart_sha256_hex, ln_policy, double_option, rule_mode } => {
+            let ranking = fetch_ranking(
+                &ResultIrQuery {
+                    profile_root: query.profile_root.clone(),
+                    provider: query.provider.clone(),
+                    base_url: query.base_url.clone(),
+                    chart_sha256_hex: chart_sha256_hex.clone(),
+                    ln_policy: *ln_policy,
+                    double_option: *double_option,
+                    rule_mode: *rule_mode,
+                },
+                scope,
+            )
+            .await?;
+            Ok(chart_ranking_to_result_ir_ranking(&ranking))
+        }
+        ResultIrTarget::Course { course_hash, gauge, ln_policy } => {
+            if scope != IrRankingScope::Global {
+                anyhow::bail!("course IR ranking supports global scope only");
+            }
+            let client = BmzOfficialIrClient::anonymous(&query.base_url)?;
+            let ranking = client
+                .fetch_course_ranking(
+                    course_hash,
+                    &IrCourseRankingRequest {
+                        gauge: gauge.clone(),
+                        ln_policy: ln_policy.clone(),
+                        limit: 20,
+                    },
+                )
+                .await?;
+            Ok(course_ranking_to_result_ir_ranking(&ranking))
+        }
+    }
 }
 
 pub(crate) async fn fetch_ranking(
@@ -317,11 +506,13 @@ fn now_unix_seconds() -> i64 {
 #[cfg(test)]
 mod tests {
     use crate::ir::types::{
-        IrRankingBody, IrRankingChartRef, IrRankingEntry, IrRankingPagination, IrRankingPlayer,
-        IrRankingResult, IrRankingScope, IrRankingScore, IrRankingSelfRef,
+        IrCourseRankingBody, IrCourseRankingCourseRef, IrCourseRankingEntry, IrCourseRankingResult,
+        IrCourseRankingScore, IrRankingBody, IrRankingChartRef, IrRankingEntry,
+        IrRankingPagination, IrRankingPlayer, IrRankingResult, IrRankingScope, IrRankingScore,
+        IrRankingSelfRef,
     };
 
-    use super::ranking_to_ir_snapshot;
+    use super::{course_ranking_to_result_ir_ranking, ranking_to_ir_snapshot};
 
     #[test]
     fn ranking_snapshot_carries_skin_ranking_rows() {
@@ -364,5 +555,42 @@ mod tests {
         assert_eq!(snapshot.entries[0].rank, Some(1));
         assert_eq!(snapshot.entries[0].ex_score, Some(46));
         assert_eq!(snapshot.entries[0].player_name.as_str(), "hyrorre");
+    }
+
+    #[test]
+    fn course_ranking_snapshot_uses_course_score_fields() {
+        let ranking = IrCourseRankingResult {
+            course: IrCourseRankingCourseRef { course_hash: "ab".repeat(32) },
+            rule: None,
+            ranking: IrCourseRankingBody {
+                scope: IrRankingScope::Global,
+                entries: vec![IrCourseRankingEntry {
+                    rank: 2,
+                    player: IrRankingPlayer {
+                        id: "player-2".to_string(),
+                        display_name: "course-player".to_string(),
+                    },
+                    score: IrCourseRankingScore {
+                        course_score_id: "course-score-1".to_string(),
+                        clear: "Normal".to_string(),
+                        course_clear: true,
+                        ex_score: 1234,
+                        max_combo: 456,
+                        bp: 7,
+                        device_type: Some("keyboard".to_string()),
+                        played_at: None,
+                        verification: Some("signed".to_string()),
+                    },
+                }],
+            },
+        };
+
+        let display = course_ranking_to_result_ir_ranking(&ranking);
+
+        assert_eq!(display.total, Some(1));
+        assert_eq!(display.entries[0].rank, 2);
+        assert_eq!(display.entries[0].player_name, "course-player");
+        assert_eq!(display.entries[0].ex_score, 1234);
+        assert_eq!(display.entries[0].bp, 7);
     }
 }

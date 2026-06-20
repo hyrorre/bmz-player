@@ -5811,6 +5811,21 @@ impl WinitApp {
         })
     }
 
+    fn course_result_ir_target(
+        &self,
+        course: &crate::screens::course_session::CourseResultSummary,
+    ) -> Option<(String, String, String)> {
+        let definition = self.ir_course_definition(course.course_id)?;
+        let course_hash = crate::ir::course_payload::compute_course_hash(&definition);
+        let gauge = self
+            .finished_play
+            .as_ref()
+            .map(|finished| finished.result.gauge_type.as_str().to_string())
+            .unwrap_or_else(|| bmz_core::clear::GaugeType::Normal.as_str().to_string());
+        let ln_policy = self.boot.profile_config.play.ln_mode_policy.as_ir_str().to_string();
+        Some((course_hash, gauge, ln_policy))
+    }
+
     /// コーススコアの IR 送信ジョブを enqueue する。IR 未設定 / 定義未解決なら no-op。
     #[allow(clippy::too_many_arguments)]
     fn enqueue_ir_course_job(
@@ -8367,6 +8382,8 @@ impl WinitApp {
                 })
             })
             .flatten();
+        let course_ir_target =
+            self.finished_course.as_ref().and_then(|course| self.course_result_ir_target(course));
         let practice_media_ready = self.practice_media_ready();
         let mut practice_panel_ctx = None;
         if let Some(practice) = &mut self.practice_session
@@ -8380,20 +8397,38 @@ impl WinitApp {
             });
         }
         // リザルト画面に入ったら IR 送信・ランキング取得タスクを起動し、
-        // 離れたら破棄する。コース最終リザルトは対象外 (チャート単位でないため)。
-        if matches!(scene_kind, AppSceneKind::Result) && self.finished_course.is_none() {
-            if self.result_ir.is_none()
-                && let Some(finished) = &self.finished_play
+        // 離れたら破棄する。コース最終リザルトでは course_hash ベースの
+        // course ranking を取得する。
+        if matches!(scene_kind, AppSceneKind::Result) {
+            let course_result_active = self.finished_course.is_some();
+            if self
+                .result_ir
+                .as_ref()
+                .is_some_and(|state| state.is_course() != course_result_active)
             {
-                self.result_ir = crate::screens::result_ir::spawn_result_ir_task(
-                    self.boot.profile_paths.root_dir.clone(),
-                    self.boot.profile_paths.score_db.clone(),
-                    &self.boot.profile_config.ir,
-                    crate::storage::common::hash_to_hex(&finished.result.chart_sha256),
-                    finished.ln_policy,
-                    finished.double_option,
-                    finished.rule_mode,
-                );
+                self.result_ir = None;
+            }
+            if self.result_ir.is_none() {
+                if let Some((course_hash, gauge, ln_policy)) = course_ir_target {
+                    self.result_ir = crate::screens::result_ir::spawn_course_result_ir_task(
+                        self.boot.profile_paths.root_dir.clone(),
+                        self.boot.profile_paths.score_db.clone(),
+                        &self.boot.profile_config.ir,
+                        course_hash,
+                        gauge,
+                        ln_policy,
+                    );
+                } else if !course_result_active && let Some(finished) = &self.finished_play {
+                    self.result_ir = crate::screens::result_ir::spawn_result_ir_task(
+                        self.boot.profile_paths.root_dir.clone(),
+                        self.boot.profile_paths.score_db.clone(),
+                        &self.boot.profile_config.ir,
+                        crate::storage::common::hash_to_hex(&finished.result.chart_sha256),
+                        finished.ln_policy,
+                        finished.double_option,
+                        finished.rule_mode,
+                    );
+                }
             }
             if let Some(state) = &mut self.result_ir {
                 state.poll();

@@ -5,9 +5,9 @@ use reqwest::Url;
 use crate::select_options::DoubleOptionScoreBucket;
 
 use super::types::{
-    IrAuthTokens, IrDeviceKeysResponse, IrMeResponse, IrRankingResult, IrRankingScope,
-    IrReplayDownloadTarget, IrReplayUploadTarget, IrReplayVerifyResult, IrRivalsResponse,
-    IrScoreSubmission, IrSubmitOptions, IrSubmitResponse,
+    IrAuthTokens, IrCourseRankingResult, IrDeviceKeysResponse, IrMeResponse, IrRankingResult,
+    IrRankingScope, IrReplayDownloadTarget, IrReplayUploadTarget, IrReplayVerifyResult,
+    IrRivalsResponse, IrScoreSubmission, IrSubmitOptions, IrSubmitResponse,
 };
 
 #[derive(Debug, Clone)]
@@ -25,6 +25,13 @@ pub struct IrRankingRequest {
     pub rule_mode: RuleMode,
     pub limit: u32,
     pub offset: u32,
+}
+
+#[derive(Debug, Clone)]
+pub struct IrCourseRankingRequest {
+    pub gauge: String,
+    pub ln_policy: String,
+    pub limit: u32,
 }
 
 impl BmzOfficialIrClient {
@@ -208,22 +215,28 @@ impl BmzOfficialIrClient {
         chart_sha256_hex: &str,
         request: &IrRankingRequest,
     ) -> Result<IrRankingResult> {
-        let mut url = self.base_url.join(&format!("/api/v1/charts/{chart_sha256_hex}/ranking"))?;
-        url.query_pairs_mut()
-            .append_pair("scope", scope_query_value(&request.scope))
-            .append_pair("ln_policy", &request.ln_policy)
-            .append_pair("rule_mode", request.rule_mode.as_str())
-            .append_pair("limit", &request.limit.to_string())
-            .append_pair("offset", &request.offset.to_string());
-        if let Some(double_option) = request.double_option.ir_query_value() {
-            url.query_pairs_mut().append_pair("double_option", double_option);
-        }
+        let url = self.chart_ranking_url(chart_sha256_hex, request)?;
         let mut builder = self.http.get(url);
         if let Some(token) = &self.access_token {
             builder = builder.bearer_auth(token);
         }
         let response = builder.send().await.context("failed to send BMZ IR ranking request")?;
         decode_response(response, "BMZ IR ranking fetch").await
+    }
+
+    pub async fn fetch_course_ranking(
+        &self,
+        course_hash: &str,
+        request: &IrCourseRankingRequest,
+    ) -> Result<IrCourseRankingResult> {
+        let url = self.course_ranking_url(course_hash, request)?;
+        let mut builder = self.http.get(url);
+        if let Some(token) = &self.access_token {
+            builder = builder.bearer_auth(token);
+        }
+        let response =
+            builder.send().await.context("failed to send BMZ IR course ranking request")?;
+        decode_response(response, "BMZ IR course ranking fetch").await
     }
 
     /// Ed25519 公開鍵をサーバーへ登録し、device key id を返す。
@@ -323,6 +336,33 @@ impl BmzOfficialIrClient {
         }
         Ok(url)
     }
+
+    fn chart_ranking_url(&self, chart_sha256_hex: &str, request: &IrRankingRequest) -> Result<Url> {
+        let mut url = self.base_url.join(&format!("/api/v1/charts/{chart_sha256_hex}/ranking"))?;
+        url.query_pairs_mut()
+            .append_pair("scope", scope_query_value(&request.scope))
+            .append_pair("ln_policy", &request.ln_policy)
+            .append_pair("rule_mode", request.rule_mode.as_str())
+            .append_pair("limit", &request.limit.to_string())
+            .append_pair("offset", &request.offset.to_string());
+        if let Some(double_option) = request.double_option.ir_query_value() {
+            url.query_pairs_mut().append_pair("double_option", double_option);
+        }
+        Ok(url)
+    }
+
+    fn course_ranking_url(
+        &self,
+        course_hash: &str,
+        request: &IrCourseRankingRequest,
+    ) -> Result<Url> {
+        let mut url = self.base_url.join(&format!("/api/v1/courses/{course_hash}/ranking"))?;
+        url.query_pairs_mut()
+            .append_pair("gauge", &request.gauge)
+            .append_pair("ln_policy", &request.ln_policy)
+            .append_pair("limit", &request.limit.to_string());
+        Ok(url)
+    }
 }
 
 fn parse_base_url(base_url: &str) -> Result<Url> {
@@ -368,6 +408,29 @@ mod tests {
         assert_eq!(
             url.as_str(),
             "https://ir.example.test/api/v1/scores?include=rankings&ranking_scopes=global%2Cself_and_rivals&ranking_limit=50"
+        );
+    }
+
+    #[test]
+    fn course_ranking_url_includes_rule_filters() {
+        let client = BmzOfficialIrClient::anonymous("https://ir.example.test").unwrap();
+        let url = client
+            .course_ranking_url(
+                &"ab".repeat(32),
+                &IrCourseRankingRequest {
+                    gauge: "Class".to_string(),
+                    ln_policy: "AutoLn".to_string(),
+                    limit: 20,
+                },
+            )
+            .unwrap();
+
+        assert_eq!(
+            url.as_str(),
+            format!(
+                "https://ir.example.test/api/v1/courses/{}/ranking?gauge=Class&ln_policy=AutoLn&limit=20",
+                "ab".repeat(32)
+            )
         );
     }
 
