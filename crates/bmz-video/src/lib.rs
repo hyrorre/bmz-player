@@ -49,13 +49,14 @@ impl VideoBgaDecoder {
             }
         }
 
-        // video_offset_us 以下のフレームのうち最新のものを current に設定
-        while let Some(front) = self.pending.front() {
-            if front.pts_us <= video_offset_us {
-                self.current = self.pending.pop_front();
-            } else {
-                break;
-            }
+        // video_offset_us 以下のフレームのうち最新のものだけを current に設定する。
+        // decoder が先行している時に、古い大きな RGBA buffer を current へ何度も
+        // 入れ替えず、表示されない pending frame はその場で捨てる。
+        while self.pending.get(1).is_some_and(|frame| frame.pts_us <= video_offset_us) {
+            self.pending.pop_front();
+        }
+        if self.pending.front().is_some_and(|frame| frame.pts_us <= video_offset_us) {
+            self.current = self.pending.pop_front();
         }
 
         self.current.as_ref()
@@ -223,12 +224,86 @@ fn rgba_frame_from_video_with_scaler(
     let data = rgba_frame.data(0);
     let stride = rgba_frame.stride(0);
     let row_bytes = (w as usize) * 4;
-    let mut rgba = vec![0u8; row_bytes * h as usize];
-    for row in 0..h as usize {
-        let src = &data[row * stride..row * stride + row_bytes];
-        let dst = &mut rgba[row * row_bytes..(row + 1) * row_bytes];
-        dst.copy_from_slice(src);
-    }
+    let rgba = copy_rgba_frame_data(data, stride, row_bytes, h as usize);
 
     Ok(DecodedFrame { pts_us, rgba, width: w, height: h })
+}
+
+fn copy_rgba_frame_data(data: &[u8], stride: usize, row_bytes: usize, rows: usize) -> Vec<u8> {
+    let total_bytes = row_bytes.saturating_mul(rows);
+    if stride == row_bytes
+        && let Some(contiguous) = data.get(..total_bytes)
+    {
+        return contiguous.to_vec();
+    }
+
+    let mut rgba = vec![0u8; total_bytes];
+    for row in 0..rows {
+        let src_start = row.saturating_mul(stride);
+        let dst_start = row * row_bytes;
+        let Some(src) = data.get(src_start..src_start + row_bytes) else {
+            break;
+        };
+        let dst = &mut rgba[dst_start..dst_start + row_bytes];
+        dst.copy_from_slice(src);
+    }
+    rgba
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn frame(pts_us: i64) -> DecodedFrame {
+        DecodedFrame { pts_us, rgba: vec![pts_us as u8], width: 1, height: 1 }
+    }
+
+    fn decoder_with_pending(pending: impl IntoIterator<Item = i64>) -> VideoBgaDecoder {
+        let (_sender, receiver) = sync_channel(1);
+        VideoBgaDecoder {
+            receiver,
+            pending: pending.into_iter().map(frame).collect(),
+            current: Some(frame(0)),
+            finished: false,
+        }
+    }
+
+    #[test]
+    fn poll_frame_skips_overdue_intermediate_frames() {
+        let mut decoder = decoder_with_pending([10, 20, 30]);
+
+        let frame = decoder.poll_frame(25).unwrap();
+
+        assert_eq!(frame.pts_us, 20);
+        assert_eq!(decoder.pending.len(), 1);
+        assert_eq!(decoder.pending.front().unwrap().pts_us, 30);
+    }
+
+    #[test]
+    fn poll_frame_keeps_current_when_next_frame_is_future() {
+        let mut decoder = decoder_with_pending([10, 20]);
+
+        let frame = decoder.poll_frame(5).unwrap();
+
+        assert_eq!(frame.pts_us, 0);
+        assert_eq!(decoder.pending.len(), 2);
+    }
+
+    #[test]
+    fn copy_rgba_frame_data_copies_contiguous_rows_at_once() {
+        let data = [1, 2, 3, 4, 5, 6, 7, 8];
+
+        let copied = copy_rgba_frame_data(&data, 4, 4, 2);
+
+        assert_eq!(copied, data);
+    }
+
+    #[test]
+    fn copy_rgba_frame_data_strips_padded_stride() {
+        let data = [1, 2, 3, 4, 99, 99, 5, 6, 7, 8, 88, 88];
+
+        let copied = copy_rgba_frame_data(&data, 6, 4, 2);
+
+        assert_eq!(copied, vec![1, 2, 3, 4, 5, 6, 7, 8]);
+    }
 }
