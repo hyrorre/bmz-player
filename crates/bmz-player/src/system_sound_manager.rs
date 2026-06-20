@@ -208,6 +208,47 @@ mod tests {
     }
 
     #[test]
+    fn play_se_keeps_existing_se_voice() {
+        use bmz_audio::sample::DecodedSample;
+
+        let engine: SharedAudioEngine = Arc::new(Mutex::new(AudioEngine::default()));
+        let clear_id = SoundId(SYSTEM_SOUND_BASE);
+        let close_id = SoundId(SYSTEM_SOUND_BASE + 1);
+        let mut id_map = HashMap::new();
+        id_map.insert(SoundType::ResultClear, clear_id);
+        id_map.insert(SoundType::ResultClose, close_id);
+        {
+            let mut guard = engine.lock().unwrap();
+            guard.insert_sample(
+                clear_id,
+                DecodedSample { channels: 1, sample_rate: 48_000, frames: vec![1.0; 4] },
+            );
+            guard.insert_sample(
+                close_id,
+                DecodedSample { channels: 1, sample_rate: 48_000, frames: vec![0.25; 4] },
+            );
+        }
+
+        let manager = SystemSoundManager { engine: Arc::clone(&engine), id_map };
+        manager.play(SoundType::ResultClear, 1.0);
+        {
+            let mut guard = engine.lock().unwrap();
+            let mut output = vec![0.0; 2];
+            guard.render_stereo(0, &mut output);
+            assert_eq!(guard.mixer.voices.len(), 1);
+        }
+
+        manager.play(SoundType::ResultClose, 1.0);
+        {
+            let mut guard = engine.lock().unwrap();
+            let mut output = vec![0.0; 2];
+            guard.render_stereo(1, &mut output);
+            assert_eq!(output, vec![1.25, 1.25]);
+            assert_eq!(guard.mixer.voices.len(), 2, "SE voices should overlap");
+        }
+    }
+
+    #[test]
     fn play_decide_does_not_loop() {
         use bmz_audio::sample::DecodedSample;
 

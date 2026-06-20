@@ -7320,9 +7320,8 @@ impl WinitApp {
         self.result_exit = Some(ResultExit { started_at: Instant::now(), action });
         // HeldLanes の遷移判定はフェードアウト終了時に Key5/Key7 の
         // 押下状態を読むため、ここでは held フラグをリセットしない。
-        // ResultClear / ResultFail のループ風長尺音を止めて、close SE を鳴らす。
-        self.stop_system_sound(crate::system_sound::SoundType::ResultClear);
-        self.stop_system_sound(crate::system_sound::SoundType::ResultFail);
+        // Keep the result entry SE alive so the exit master-gain ramp can fade
+        // it together with the close SE. The voices are stopped after fadeout.
         self.play_system_sound(crate::system_sound::SoundType::ResultClose);
     }
 
@@ -7551,6 +7550,7 @@ impl WinitApp {
         };
         // 何らかの理由でリザルトを抜けていたら終了状態を破棄する。
         if self.finished_play.is_none() {
+            self.stop_result_exit_system_sounds();
             self.result_exit = None;
             return;
         }
@@ -7565,6 +7565,7 @@ impl WinitApp {
         if elapsed < fadeout {
             return;
         }
+        self.stop_result_exit_system_sounds();
         self.result_exit = None;
         match action {
             ResultExitAction::Leave => self.leave_result(),
@@ -7587,6 +7588,12 @@ impl WinitApp {
             }
             ResultExitAction::AdvanceCourse => self.advance_to_next_course_chart(),
             ResultExitAction::FinishCourse => self.finish_course_after_intermediate_result(),
+        }
+    }
+
+    fn stop_result_exit_system_sounds(&self) {
+        for sound_type in result_exit_system_sounds() {
+            self.stop_system_sound(*sound_type);
         }
     }
 
@@ -9569,6 +9576,18 @@ fn result_exit_audio_gain(elapsed: Duration, fadeout: Duration) -> f32 {
     } else {
         (1.0 - elapsed.as_secs_f32() / audio_fade.as_secs_f32()).clamp(0.0, 1.0)
     }
+}
+
+fn result_exit_system_sounds() -> &'static [crate::system_sound::SoundType] {
+    use crate::system_sound::SoundType;
+    &[
+        SoundType::ResultClear,
+        SoundType::ResultFail,
+        SoundType::ResultClose,
+        SoundType::CourseClear,
+        SoundType::CourseFail,
+        SoundType::CourseClose,
+    ]
 }
 
 fn should_route_settings_key_event(
@@ -16199,6 +16218,24 @@ mod tests {
     #[test]
     fn result_exit_audio_gain_is_zero_for_zero_fadeout() {
         assert_eq!(result_exit_audio_gain(Duration::ZERO, Duration::ZERO), 0.0);
+    }
+
+    #[test]
+    fn result_exit_cleanup_only_targets_result_sounds() {
+        use crate::system_sound::SoundType;
+
+        let sounds = result_exit_system_sounds();
+
+        assert!(sounds.contains(&SoundType::ResultClear));
+        assert!(sounds.contains(&SoundType::ResultFail));
+        assert!(sounds.contains(&SoundType::ResultClose));
+        assert!(sounds.contains(&SoundType::CourseClear));
+        assert!(sounds.contains(&SoundType::CourseFail));
+        assert!(sounds.contains(&SoundType::CourseClose));
+        assert!(!sounds.contains(&SoundType::Select));
+        assert!(!sounds.contains(&SoundType::Decide));
+        assert!(!sounds.contains(&SoundType::OptionChange));
+        assert!(!sounds.contains(&SoundType::Landmine));
     }
 
     #[test]
