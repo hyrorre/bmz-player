@@ -69,13 +69,10 @@ fn lr2oraja_judge_rank_spec_to_percent(spec: Option<JudgeRankSpec>) -> i32 {
         Some(JudgeRankSpec { value, kind: JudgeRankKind::BmsRank }) => {
             lr2oraja_judge_rank_to_percent(value)
         }
-        Some(JudgeRankSpec { value, kind: JudgeRankKind::DefExRank }) => {
-            if value > 0 {
-                value * 75 / 100
-            } else {
-                75
-            }
+        Some(JudgeRankSpec { value, kind: JudgeRankKind::DefExRank }) if value > 0 => {
+            value * 75 / 100
         }
+        Some(JudgeRankSpec { kind: JudgeRankKind::DefExRank, .. }) => 75,
         Some(JudgeRankSpec { value, kind: JudgeRankKind::BmsonJudgeRank }) => {
             if value > 0 {
                 value
