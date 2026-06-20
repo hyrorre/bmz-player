@@ -2,6 +2,7 @@ use anyhow::{Result, bail};
 use bmz_chart::model::LongNoteMode;
 use bmz_core::clear::ClearType;
 use bmz_core::input::InputDeviceKind;
+use bmz_gameplay::gauge::GaugeCarryValue;
 #[cfg(test)]
 use bmz_gameplay::judge::model::JudgeWindows;
 use bmz_gameplay::result::PlayResult;
@@ -24,6 +25,7 @@ pub struct FinishedPlaySession {
     pub result: PlayResult,
     pub stored: StoredPlayResult,
     pub summary: ResultSummary,
+    pub gauge_carry: Vec<GaugeCarryValue>,
     pub course_combo: u32,
     pub course_max_combo: u32,
     pub replay_playback: bool,
@@ -211,6 +213,7 @@ pub fn finish_session_result(
         result,
         stored,
         summary,
+        gauge_carry: session.gauge.carry_values(),
         course_combo: session.display_combo(),
         course_max_combo: session.display_max_combo(),
         replay_playback,

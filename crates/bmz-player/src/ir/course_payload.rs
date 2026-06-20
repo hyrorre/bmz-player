@@ -76,11 +76,8 @@ pub fn build_course_submission(
         .filter(|trophy| trophy.achieved)
         .map(|trophy| trophy.name.as_str())
         .collect();
-    let final_clear =
-        result.entry_summaries.last().map(|entry| entry.clear_type.as_str()).unwrap_or("Failed");
-    let clear = if result.course_failed { "Failed" } else { final_clear };
-    let gauge_value =
-        result.entry_summaries.last().map(|entry| entry.gauge_value.round() as i64).unwrap_or(0);
+    let clear = if result.course_failed { "Failed" } else { result.final_clear_type.as_str() };
+    let gauge_value = result.final_gauge_value.round() as i64;
     let mut play_options = json!({
         "device_type": context.device_type.as_str(),
         "option": arrange_option_ir_from_persistent(&context.arrange),
@@ -141,10 +138,14 @@ fn arrange_option_ir_from_persistent(value: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    use bmz_core::clear::{ClearType, GaugeType};
     use bmz_core::course::CourseKind;
+    use bmz_core::lane::KeyMode;
 
     use crate::ln_policy::LnPolicySetting;
-    use crate::screens::result_model::ResultJudgeCounts;
+    use crate::screens::result_model::{
+        ResultFastSlowJudgeCounts, ResultJudgeCounts, ResultSummary,
+    };
 
     use super::*;
 
@@ -225,5 +226,111 @@ mod tests {
 
         assert_eq!(payload["rule"]["ln_policy"], "ForceHcn");
         assert_eq!(payload["result"]["max_combo"], json!(123));
+    }
+
+    #[test]
+    fn course_submission_uses_final_course_clear_for_result_lamp() {
+        let definition = IrCourseDefinition {
+            charts: vec!["ab".repeat(32)],
+            constraints: json!({ "gauge": "ExClass" }),
+            title: "Dan 1".to_string(),
+            kind: "dan".to_string(),
+        };
+        let result = CourseResultSummary {
+            course_id: 1,
+            course_score_id: None,
+            course_played_at: None,
+            title: "Dan 1".to_string(),
+            kind: CourseKind::Dan,
+            course_titles: Default::default(),
+            entry_summaries: vec![stage_summary(ClearType::NoPlay, 0.0)],
+            entry_arranges: Vec::new(),
+            total_ex_score: 1234,
+            max_ex_score: 2000,
+            total_notes: 1000,
+            final_clear_type: ClearType::Hard,
+            final_gauge_type: GaugeType::ExClass,
+            final_gauge_value: 66.4,
+            course_max_combo: 456,
+            judge_counts: ResultJudgeCounts::default(),
+            trophy_results: Vec::new(),
+            course_clear: true,
+            course_failed: false,
+            total_entries: 1,
+            played_entries: 1,
+            replay_slots: [false; 4],
+            saved_replay_slots: [false; 4],
+            best_score: None,
+            previous_best_score: None,
+        };
+
+        let payload = build_course_submission(
+            &definition,
+            &result,
+            &IrCourseSubmissionContext {
+                played_at: 1_767_225_600,
+                ln_policy_setting: LnPolicySetting::AutoLn.as_ir_str().to_string(),
+                gauge: "ExClass".to_string(),
+                device_type: InputDeviceKind::Keyboard,
+                arrange: "NORMAL".to_string(),
+                random_seed: None,
+                idempotency_key: "course-final-clear".to_string(),
+            },
+        );
+
+        assert_eq!(payload["result"]["clear"], json!("Hard"));
+        assert_eq!(payload["result"]["gauge_value"], json!(66));
+        assert_eq!(payload["result"]["entries"][0]["clear"], json!("NoPlay"));
+    }
+
+    fn stage_summary(clear_type: ClearType, gauge_value: f32) -> ResultSummary {
+        ResultSummary {
+            clear_type,
+            arrange: "NORMAL".to_string(),
+            lane_shuffle_pattern: Vec::new(),
+            ex_score: 0,
+            max_combo: 0,
+            bp: 0,
+            cb: 0,
+            gauge_value,
+            gauge_type: GaugeType::ExClass,
+            total_notes: 0,
+            duration_ms: 0,
+            initial_bpm: 0.0,
+            min_bpm: 0.0,
+            max_bpm: 0.0,
+            main_bpm: 0.0,
+            total_gauge: 0.0,
+            judge_rank: None,
+            key_mode: KeyMode::K7,
+            judge_counts: ResultJudgeCounts::default(),
+            fast_slow_counts: ResultFastSlowJudgeCounts::default(),
+            replay_path: String::new(),
+            replay_slots: [false; 4],
+            saved_replay_slots: [false; 4],
+            score_history_id: 0,
+            best_ex_score: None,
+            best_clear_type: None,
+            best_max_combo: None,
+            best_bp: None,
+            previous_best_ex_score: None,
+            previous_best_clear_type: None,
+            previous_best_max_combo: None,
+            previous_best_bp: None,
+            target_ex_score: None,
+            target_max_combo: None,
+            target_bp: None,
+            target_clear_type: None,
+            ir_queued_jobs: 0,
+            ir_last_error: None,
+            title: String::new(),
+            subtitle: String::new(),
+            artist: String::new(),
+            subartist: String::new(),
+            genre: String::new(),
+            difficulty_name: String::new(),
+            play_level: String::new(),
+            graph: Default::default(),
+        }
     }
 }

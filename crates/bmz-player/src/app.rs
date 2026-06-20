@@ -1043,12 +1043,9 @@ fn course_result_summary_for_skin(course: &CourseResultSummary) -> ResultSummary
                 slow_empty_poor: acc.slow_empty_poor + summary.fast_slow_counts.slow_empty_poor,
             }
         });
-    let best_clear_type =
-        course.best_score.as_ref().and_then(|best| ClearType::from_label(&best.clear_type));
-    let previous_best_clear_type = course
-        .previous_best_score
-        .as_ref()
-        .and_then(|best| ClearType::from_label(&best.clear_type));
+    let skin_best_score = course.previous_best_score.as_ref();
+    let skin_best_clear_type =
+        skin_best_score.and_then(|best| ClearType::from_label(&best.clear_type));
 
     ResultSummary {
         clear_type: course.final_clear_type,
@@ -1087,14 +1084,14 @@ fn course_result_summary_for_skin(course: &CourseResultSummary) -> ResultSummary
         replay_slots: course.replay_slots,
         saved_replay_slots: course.saved_replay_slots,
         score_history_id: course.best_score.as_ref().map(|best| best.course_score_id).unwrap_or(0),
-        best_ex_score: course.best_score.as_ref().map(|best| best.ex_score),
-        best_clear_type,
-        best_max_combo: course.best_score.as_ref().map(|best| best.max_combo),
-        best_bp: course.best_score.as_ref().map(|best| best.bp),
-        previous_best_ex_score: course.previous_best_score.as_ref().map(|best| best.ex_score),
-        previous_best_clear_type,
-        previous_best_max_combo: course.previous_best_score.as_ref().map(|best| best.max_combo),
-        previous_best_bp: course.previous_best_score.as_ref().map(|best| best.bp),
+        best_ex_score: skin_best_score.map(|best| best.ex_score),
+        best_clear_type: skin_best_clear_type,
+        best_max_combo: skin_best_score.map(|best| best.max_combo),
+        best_bp: skin_best_score.map(|best| best.bp),
+        previous_best_ex_score: skin_best_score.map(|best| best.ex_score),
+        previous_best_clear_type: skin_best_clear_type,
+        previous_best_max_combo: skin_best_score.map(|best| best.max_combo),
+        previous_best_bp: skin_best_score.map(|best| best.bp),
         target_ex_score: None,
         target_max_combo: None,
         target_bp: None,
@@ -1228,6 +1225,7 @@ fn debug_boot_finished_play_session() -> FinishedPlaySession {
             device_type: InputDeviceKind::Keyboard,
         },
         summary,
+        gauge_carry: Vec::new(),
         course_combo: 0,
         course_max_combo,
         replay_playback: false,
@@ -5461,14 +5459,13 @@ impl WinitApp {
             return;
         };
         let constraints = course.definition.constraints.clone();
-        // Carry the gauge value of the previous chart over to the next chart in
-        // the course (beatoraja keeps the gauge between songs).
-        let carried_gauge =
-            course.entry_results.last().map(|r| r.finished.result.gauge_value).unwrap_or(0.0);
+        // Carry each gauge independently so auto-shift gauges that already
+        // reached zero do not recover on the next chart.
+        let carried_gauges = course.entry_results.last().map(|r| r.finished.gauge_carry.clone());
         let carried_combo = course.entry_results.last().map(|r| r.finished.course_combo);
         let mut options = self.play_start_options();
         apply_course_constraints(&mut options, &constraints);
-        options.initial_gauge_value = Some(carried_gauge);
+        options.initial_gauge_values = carried_gauges;
         options.initial_course_combo = carried_combo;
         // If the course is being replayed, attach the next queued replay
         // (when it exists and matches the next chart's id).  Mismatches
@@ -6578,6 +6575,7 @@ impl WinitApp {
             arrange_seed: replay_file.arrange_seed,
             arrange_pattern: replay_file.lane_shuffle_pattern.clone(),
             initial_gauge_value: None,
+            initial_gauge_values: None,
             initial_course_combo: None,
             judge_constraint: bmz_core::course::CourseJudgeConstraint::Normal,
             ln_mode_override: None,
@@ -6648,6 +6646,7 @@ impl WinitApp {
             arrange_seed: replay_file.arrange_seed,
             arrange_pattern: replay_file.lane_shuffle_pattern.clone(),
             initial_gauge_value: None,
+            initial_gauge_values: None,
             initial_course_combo: None,
             judge_constraint: bmz_core::course::CourseJudgeConstraint::Normal,
             ln_mode_override: None,
@@ -12522,6 +12521,7 @@ fn preloaded_matches_start(
         && preloaded.session_options.arrange_seed == options.arrange_seed
         && preloaded.session_options.arrange_pattern == options.arrange_pattern
         && preloaded.session_options.initial_gauge_value == options.initial_gauge_value
+        && preloaded.session_options.initial_gauge_values == options.initial_gauge_values
         && preloaded.session_options.initial_course_combo == options.initial_course_combo
 }
 
@@ -14113,8 +14113,9 @@ mod tests {
         assert_eq!(summary.ex_score, 320);
         assert_eq!(summary.total_notes, 220);
         assert_eq!(summary.max_combo, 170);
-        assert_eq!(summary.best_ex_score, Some(340));
-        assert_eq!(summary.best_clear_type, Some(ClearType::ExHard));
+        assert_eq!(summary.score_history_id, 22);
+        assert_eq!(summary.best_ex_score, Some(300));
+        assert_eq!(summary.best_clear_type, Some(ClearType::Normal));
         assert_eq!(summary.previous_best_ex_score, Some(300));
         assert_eq!(summary.previous_best_clear_type, Some(ClearType::Normal));
         assert_eq!(summary.replay_slots, [true, false, true, false]);

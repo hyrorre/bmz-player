@@ -103,6 +103,12 @@ pub struct SingleGaugeState {
     pub value: f32,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct GaugeCarryValue {
+    pub gauge_type: GaugeType,
+    pub value: f32,
+}
+
 #[derive(Debug, Clone)]
 pub struct GaugeState {
     pub selected: GaugeType,
@@ -241,6 +247,27 @@ impl GaugeState {
         for gauge in &mut self.gauges {
             gauge.value = value.clamp(gauge.definition.min, gauge.definition.max);
         }
+    }
+
+    pub fn carry_values(&self) -> Vec<GaugeCarryValue> {
+        self.gauges
+            .iter()
+            .map(|gauge| GaugeCarryValue {
+                gauge_type: gauge.definition.gauge_type,
+                value: gauge.value,
+            })
+            .collect()
+    }
+
+    pub fn set_initial_values(&mut self, values: &[GaugeCarryValue]) {
+        for value in values {
+            if let Some(gauge) =
+                self.gauges.iter_mut().find(|gauge| gauge.definition.gauge_type == value.gauge_type)
+            {
+                gauge.value = value.value.clamp(gauge.definition.min, gauge.definition.max);
+            }
+        }
+        self.auto_shift_if_needed();
     }
 
     pub fn current(&self) -> &SingleGaugeState {
@@ -1706,6 +1733,27 @@ mod tests {
         gauge.set_initial_value(45.0);
         assert_eq!(gauge.current().value, 45.0);
         assert!(gauge.current().is_qualified());
+    }
+
+    #[test]
+    fn set_initial_values_carries_auto_shift_gauges_independently() {
+        let mut gauge = GaugeState::new_with_auto_shift(
+            GaugeType::ExHardClass,
+            GaugeAutoShiftMode::BestClear,
+            160.0,
+            1000,
+        );
+
+        gauge.set_initial_values(&[
+            GaugeCarryValue { gauge_type: GaugeType::ExHardClass, value: 0.0 },
+            GaugeCarryValue { gauge_type: GaugeType::ExClass, value: 72.0 },
+            GaugeCarryValue { gauge_type: GaugeType::Class, value: 91.0 },
+        ]);
+
+        assert_eq!(gauge.gauge(GaugeType::ExHardClass).map(|gauge| gauge.value), Some(0.0));
+        assert_eq!(gauge.gauge(GaugeType::ExClass).map(|gauge| gauge.value), Some(72.0));
+        assert_eq!(gauge.gauge(GaugeType::Class).map(|gauge| gauge.value), Some(91.0));
+        assert_eq!(gauge.selected, GaugeType::ExClass);
     }
 
     #[test]

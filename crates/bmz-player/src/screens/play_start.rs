@@ -6,7 +6,7 @@ use bmz_core::course::{
     CourseLnConstraint, CourseSpeedConstraint,
 };
 use bmz_core::time::TimeUs;
-use bmz_gameplay::gauge::GaugeProperty;
+use bmz_gameplay::gauge::{GaugeCarryValue, GaugeProperty};
 use bmz_gameplay::input::backend::{InputBackend, NullInputBackend};
 use bmz_gameplay::replay::ReplayPlayer;
 
@@ -48,6 +48,9 @@ pub struct PlayStartOptions {
     /// Override the starting gauge value (used to carry the gauge between
     /// charts in a course).  None means use the gauge's default `init`.
     pub initial_gauge_value: Option<f32>,
+    /// Per-gauge starting values for course carry.  This takes priority over
+    /// `initial_gauge_value` when present.
+    pub initial_gauge_values: Option<Vec<GaugeCarryValue>>,
     /// Course-mode combo carried from the previous chart. None means this is
     /// not a course carry boundary.
     pub initial_course_combo: Option<u32>,
@@ -116,6 +119,7 @@ pub fn play_session_options_from_start(
         arrange_seed: start_options.arrange_seed,
         arrange_pattern: start_options.arrange_pattern,
         initial_gauge_value: start_options.initial_gauge_value,
+        initial_gauge_values: start_options.initial_gauge_values,
         initial_course_combo: start_options.initial_course_combo,
         judge_constraint: start_options.judge_constraint,
         ln_mode_override: start_options.ln_mode_override,

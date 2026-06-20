@@ -12,7 +12,8 @@ use bmz_core::lane::{KeyMode, LANE_COUNT, Lane};
 use bmz_core::time::TimeUs;
 use bmz_gameplay::autoplay::AutoplayController;
 use bmz_gameplay::gauge::{
-    GaugeAutoShiftMode, GaugeProperty, GaugeState, gauge_total_for_chart_and_rule_mode,
+    GaugeAutoShiftMode, GaugeCarryValue, GaugeProperty, GaugeState,
+    gauge_total_for_chart_and_rule_mode,
 };
 use bmz_gameplay::hit_error::HitErrorRing;
 use bmz_gameplay::input::backend::{InputBackend, NullInputBackend};
@@ -73,6 +74,9 @@ pub struct PlaySessionOptions {
     /// When set, overrides the gauge's starting value.  Used to carry the
     /// gauge between charts during a course.
     pub initial_gauge_value: Option<f32>,
+    /// Per-gauge starting values for course carry.  This preserves auto-shift
+    /// gauges independently, so depleted higher gauges stay depleted.
+    pub initial_gauge_values: Option<Vec<GaugeCarryValue>>,
     /// Course-mode combo carried from the previous chart. Score storage still
     /// starts from zero; this affects rendered combo/max combo only.
     pub initial_course_combo: Option<u32>,
@@ -138,6 +142,7 @@ impl Default for PlaySessionOptions {
             arrange_seed: None,
             arrange_pattern: None,
             initial_gauge_value: None,
+            initial_gauge_values: None,
             initial_course_combo: None,
             judge_constraint: bmz_core::course::CourseJudgeConstraint::Normal,
             ln_mode_override: None,
@@ -198,7 +203,9 @@ pub fn apply_placeholder_session_visuals(
         )
     };
     gauge.set_bottom_shiftable_gauge(bottom_shiftable_gauge);
-    if let Some(initial) = options.initial_gauge_value {
+    if let Some(values) = &options.initial_gauge_values {
+        gauge.set_initial_values(values);
+    } else if let Some(initial) = options.initial_gauge_value {
         gauge.set_initial_value(initial);
     }
     let current = gauge.current();
@@ -307,6 +314,7 @@ pub fn build_game_session_with_input_backend(
         bottom_shiftable_gauge_from_config(profile.play.bottom_shiftable_gauge)
     };
     let initial_gauge_value = options.initial_gauge_value;
+    let initial_gauge_values = options.initial_gauge_values.clone();
     let initial_course_combo = options.initial_course_combo.unwrap_or(0);
     let autoplay_enabled = profile.play.auto_play || options.autoplay;
     let replay_player = options.replay_player;
@@ -380,7 +388,9 @@ pub fn build_game_session_with_input_backend(
     };
     // Course play carries the previous chart's gauge value over; this overrides
     // the initial value computed by GaugeState::new* above.
-    if let Some(initial) = initial_gauge_value {
+    if let Some(values) = &initial_gauge_values {
+        gauge.set_initial_values(values);
+    } else if let Some(initial) = initial_gauge_value {
         gauge.set_initial_value(initial);
     }
 
