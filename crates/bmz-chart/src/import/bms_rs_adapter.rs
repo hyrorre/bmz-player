@@ -1138,7 +1138,7 @@ fn push_note_objects<T: KeyLayoutMapper>(
 }
 
 fn push_bgm_objects<T: KeyLayoutMapper>(bms: &Bms, objects: &mut Vec<IntermediateObject>) {
-    for note in bms.notes().bgms::<T>() {
+    for (_, note) in bms.notes().notes_on::<T>(NoteChannelId::bgm()) {
         objects.push(IntermediateObject {
             measure: track_of(note.offset),
             position_num: note.offset.numerator() as u32,

@@ -173,6 +173,28 @@ mod tests {
     }
 
     #[test]
+    fn invisible_notes_do_not_become_bgm_events() {
+        let text = "\
+#TITLE Invisible Song
+#BPM 120
+#TOTAL 200
+#WAV01 bgm.wav
+#WAV02 hidden.wav
+#00001:01
+#00031:02
+";
+        let path = write_temp_bms(text);
+        let result = import_bms_chart(&path, None, false).unwrap();
+
+        assert_eq!(result.chart.bgm_events.len(), 1);
+        let lane = result.chart.notes_for_lane(Lane::Key1);
+        assert_eq!(lane.len(), 1);
+        assert_eq!(lane[0].kind, NoteKind::Invisible);
+
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
     fn ignores_zero_objects_in_legacy_bpm_channel() {
         let text = "\
 #TITLE Legacy BPM Zero Placeholders
