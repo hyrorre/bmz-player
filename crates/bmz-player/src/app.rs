@@ -935,6 +935,8 @@ enum ResultExitAction {
     /// コース曲間の中間リザルトを閉じて、コースの次の曲を開始する。
     /// リトライは発生させず次譜面へ進むだけ (beatoraja の MusicResult コース分岐相当)。
     AdvanceCourse,
+    /// コース途中落ちの単曲リザルトを閉じて、コース最終リザルトへ進む。
+    FinishCourse,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -3439,7 +3441,7 @@ impl WinitApp {
                 && result_action(event.physical_key, event.state, event.repeat).is_some()
             {
                 // R / Enter / Escape いずれも次の曲へ進むだけ (retry/leave 区別なし)。
-                self.begin_result_exit(ResultExitAction::AdvanceCourse);
+                self.begin_result_exit(self.course_intermediate_exit_action());
             }
             return;
         }
@@ -4031,7 +4033,7 @@ impl WinitApp {
                     && self.result_input_ready()
                     && matches!(button, "Button1" | "Start" | "Button2" | "Select")
                 {
-                    self.begin_result_exit(ResultExitAction::AdvanceCourse);
+                    self.begin_result_exit(self.course_intermediate_exit_action());
                 }
             }
             return;
@@ -5277,6 +5279,7 @@ impl WinitApp {
         if let Some(arrange) = arrange_overrides.first() {
             apply_arrange_override(&mut options, arrange);
         }
+        let course_title = definition.title.clone();
         self.active_course = Some(ActiveCourseSession {
             course_id,
             definition,
@@ -5285,7 +5288,7 @@ impl WinitApp {
             queued_replays: Vec::new(),
             arrange_overrides,
         });
-        self.begin_decide_for_chart(first_chart_id, options);
+        self.begin_course_decide_for_chart(first_chart_id, options, &course_title);
     }
 
     /// Start a course in replay mode, replaying the saved per-chart inputs of
@@ -5378,6 +5381,7 @@ impl WinitApp {
         {
             apply_queued_replay(&mut options, first);
         }
+        let course_title = definition.title.clone();
         self.active_course = Some(ActiveCourseSession {
             course_id,
             definition,
@@ -5386,7 +5390,7 @@ impl WinitApp {
             queued_replays: queued,
             arrange_overrides: Vec::new(),
         });
-        self.begin_decide_for_chart(first_chart_id, options);
+        self.begin_course_decide_for_chart(first_chart_id, options, &course_title);
     }
 
     /// コース曲間の中間リザルト状態かどうか。active_course を保持したまま
@@ -5432,6 +5436,14 @@ impl WinitApp {
         self.start_next_course_chart();
     }
 
+    fn finish_course_after_intermediate_result(&mut self) {
+        self.finished_play = None;
+        self.result_exit = None;
+        self.result_key5_held = false;
+        self.result_key7_held = false;
+        self.finish_active_course();
+    }
+
     /// コースの (current_index が指す) 次の曲を開始する。ゲージ持ち越しや
     /// replay / 同配置 arrange の適用は元の advance_course_after_finish と同じ。
     fn start_next_course_chart(&mut self) {
@@ -5468,7 +5480,15 @@ impl WinitApp {
             // Same-arrange course retry: reproduce this chart's arrange.
             apply_arrange_override(&mut options, arrange);
         }
-        self.begin_decide_for_chart(next_chart_id, options);
+        self.start_chart_with_options(next_chart_id, options);
+    }
+
+    fn course_intermediate_exit_action(&self) -> ResultExitAction {
+        let failed =
+            self.active_course.as_ref().and_then(|course| course.entry_results.last()).is_some_and(
+                |entry| entry.finished.result.clear_type == bmz_core::clear::ClearType::Failed,
+            );
+        if failed { ResultExitAction::FinishCourse } else { ResultExitAction::AdvanceCourse }
     }
 
     /// コース中間リザルトのコントロール処理。Key6 はゲージグラフ切替のみ許可し、
@@ -5491,7 +5511,7 @@ impl WinitApp {
             }
             lane if lane_starts_result_exit(lane) => {
                 if pressed && self.result_input_ready() {
-                    self.begin_result_exit(ResultExitAction::AdvanceCourse);
+                    self.begin_result_exit(self.course_intermediate_exit_action());
                 }
                 true
             }
@@ -5513,7 +5533,7 @@ impl WinitApp {
         let next_chart_id =
             course.definition.entries.get(course.current_index).and_then(|e| e.chart_id);
 
-        if !failed && next_chart_id.is_some() {
+        if failed || next_chart_id.is_some() {
             // 次の曲をすぐ始めず、まず直前の曲の単曲リザルト (中間リザルト) を出す。
             // active_course を保持したまま finished_play に直前結果を入れることで、
             // view_state は Result を返し、入力は中間リザルト分岐へ入る。実際の次曲
@@ -5523,9 +5543,13 @@ impl WinitApp {
             return;
         }
 
-        // Course is over either because every entry was played or because the
-        // most recent chart was Failed (skip remaining entries).
-        let course = self.active_course.take().unwrap();
+        self.finish_active_course();
+    }
+
+    fn finish_active_course(&mut self) {
+        let Some(course) = self.active_course.take() else {
+            return;
+        };
         let course_id = course.course_id;
 
         // Extract data needed to persist the course score before `into_result`
@@ -5927,6 +5951,28 @@ impl WinitApp {
     }
 
     fn begin_decide_for_chart(&mut self, chart_id: i64, options: PlayStartOptions) {
+        let snapshot = self.decide_snapshot_for_chart(chart_id);
+        self.begin_decide_for_chart_with_snapshot(chart_id, options, snapshot);
+    }
+
+    fn begin_course_decide_for_chart(
+        &mut self,
+        chart_id: i64,
+        options: PlayStartOptions,
+        course_title: &str,
+    ) {
+        let mut snapshot = self.decide_snapshot_for_chart(chart_id);
+        snapshot.title = course_title.to_string();
+        snapshot.subtitle.clear();
+        self.begin_decide_for_chart_with_snapshot(chart_id, options, snapshot);
+    }
+
+    fn begin_decide_for_chart_with_snapshot(
+        &mut self,
+        chart_id: i64,
+        options: PlayStartOptions,
+        snapshot: RenderSnapshot,
+    ) {
         self.ensure_skin_ready(SkinKind::Decide);
         // Play スキンは裏で decode+upload を進めるが、Decide 入場では待たない。
         // 実際の Play 入場 (`start_chart_with_options`) で `ensure_skin_ready` が保険として残る。
@@ -5939,7 +5985,7 @@ impl WinitApp {
             started_at: now,
             fadeout_started_at: None,
             cancel: false,
-            snapshot: self.decide_snapshot_for_chart(chart_id),
+            snapshot,
         });
     }
 
@@ -7190,7 +7236,7 @@ impl WinitApp {
         {
             // 中間リザルトは scene 時間経過で次の曲へ、それ以外は選曲へ戻る。
             let action = if self.is_course_intermediate_result() {
-                ResultExitAction::AdvanceCourse
+                self.course_intermediate_exit_action()
             } else {
                 ResultExitAction::Leave
             };
@@ -7236,6 +7282,7 @@ impl WinitApp {
                 }
             }
             ResultExitAction::AdvanceCourse => self.advance_to_next_course_chart(),
+            ResultExitAction::FinishCourse => self.finish_course_after_intermediate_result(),
         }
     }
 
