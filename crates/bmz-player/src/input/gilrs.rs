@@ -2,7 +2,9 @@ use std::collections::HashMap;
 use std::time::Instant;
 
 use bmz_core::input::InputKind;
-use bmz_gameplay::input::backend::{DeviceId, DeviceInputEvent, DeviceTimestamp, PhysicalControl};
+use bmz_gameplay::input::backend::{
+    DeviceId, DeviceInputEvent, DeviceTimestamp, PhysicalControl, monotonic_timestamp_ns,
+};
 use gilrs::{Axis, Button, EventType};
 
 pub const GILRS_DEVICE_ID_BASE: u32 = 16;
@@ -260,7 +262,7 @@ pub fn to_device_input_event(event: &GilrsButtonEvent) -> DeviceInputEvent {
         device: event.device_id,
         control: PhysicalControl::GamepadButton(event.name.clone()),
         kind: if event.pressed { InputKind::Press } else { InputKind::Release },
-        timestamp: DeviceTimestamp::Unknown,
+        timestamp: DeviceTimestamp::MonotonicNs(monotonic_timestamp_ns()),
     }
 }
 
@@ -337,5 +339,15 @@ mod tests {
         assert_eq!(gilrs_gamepad_device_id_from_player_index(0), None);
         assert_eq!(gilrs_gamepad_device_id_from_player_index(1), Some(DeviceId(16)));
         assert_eq!(gilrs_gamepad_device_id_from_player_index(2), Some(DeviceId(17)));
+    }
+
+    #[test]
+    fn to_device_input_event_uses_monotonic_timestamp() {
+        let event =
+            GilrsButtonEvent { device_id: DeviceId(16), name: "South".to_string(), pressed: true };
+
+        let input = to_device_input_event(&event);
+
+        assert!(matches!(input.timestamp, DeviceTimestamp::MonotonicNs(_)));
     }
 }

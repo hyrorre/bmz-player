@@ -9912,12 +9912,12 @@ struct TimingJudgeArea {
 fn beatoraja_timing_judge_areas(state: &SkinDrawState) -> [TimingJudgeArea; 5] {
     let base = bmz_gameplay::judge::window::beatoraja_note_judge_window_for_keymode(state.key_mode);
     let percent = beatoraja_judge_rank_percent_for_mode(state.key_mode, state.judge_rank);
-    if state.key_mode == KeyMode::K9 {
-        beatoraja_pms_timing_judge_areas(base, percent)
-    } else {
-        let window = bmz_gameplay::judge::window::judge_window_for_rank(base, percent);
-        timing_judge_areas_from_window(window)
-    }
+    let window = bmz_gameplay::judge::window::beatoraja_judge_window_for_rank_and_keymode(
+        base,
+        percent,
+        state.key_mode,
+    );
+    timing_judge_areas_from_window(window)
 }
 
 fn timing_judge_areas_from_window(
@@ -9941,51 +9941,6 @@ fn timing_judge_areas_from_window(
 fn symmetric_timing_judge_area(us: i64) -> TimingJudgeArea {
     let ms = us as f32 / 1_000.0;
     TimingJudgeArea { late_ms: -ms, early_ms: ms }
-}
-
-fn beatoraja_pms_timing_judge_areas(
-    base: bmz_gameplay::judge::model::JudgeWindow,
-    percent: i32,
-) -> [TimingJudgeArea; 5] {
-    let pgreat = symmetric_timing_judge_area(base.pgreat_us);
-    let bad = TimingJudgeArea {
-        late_ms: -base.bad_fast_us as f32 / 1_000.0,
-        early_ms: base.bad_slow_us as f32 / 1_000.0,
-    };
-    let miss = TimingJudgeArea {
-        late_ms: -base.empty_poor_fast_us as f32 / 1_000.0,
-        early_ms: base.empty_poor_slow_us as f32 / 1_000.0,
-    };
-    let great = clamp_timing_judge_area(
-        symmetric_timing_judge_area(scale_timing_window_us(base.great_us, percent)),
-        pgreat,
-        bad,
-    );
-    let good = clamp_timing_judge_area(
-        symmetric_timing_judge_area(scale_timing_window_us(base.good_us, percent)),
-        pgreat,
-        bad,
-    );
-    [pgreat, great, good, bad, miss]
-}
-
-fn clamp_timing_judge_area(
-    area: TimingJudgeArea,
-    min: TimingJudgeArea,
-    max: TimingJudgeArea,
-) -> TimingJudgeArea {
-    TimingJudgeArea {
-        late_ms: area.late_ms.min(min.late_ms).max(max.late_ms),
-        early_ms: area.early_ms.max(min.early_ms).min(max.early_ms),
-    }
-}
-
-fn scale_timing_window_us(value: i64, percent: i32) -> i64 {
-    ((value as i128) * percent as i128 / 100).try_into().unwrap_or(if value < 0 {
-        i64::MIN
-    } else {
-        i64::MAX
-    })
 }
 
 fn beatoraja_judge_rank_percent_for_mode(key_mode: KeyMode, judge_rank: Option<i32>) -> i32 {

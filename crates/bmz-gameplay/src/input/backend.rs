@@ -1,4 +1,8 @@
 use bmz_core::input::InputKind;
+use std::sync::OnceLock;
+use std::time::Instant;
+
+static MONOTONIC_START: OnceLock<Instant> = OnceLock::new();
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct DeviceId(pub u32);
@@ -23,6 +27,15 @@ pub struct DeviceInputEvent {
     pub control: PhysicalControl,
     pub kind: InputKind,
     pub timestamp: DeviceTimestamp,
+}
+
+/// Returns a process-local monotonic timestamp in nanoseconds.
+///
+/// The value is only meaningful when compared with another timestamp from this
+/// function; it deliberately avoids wall-clock time so input timing is not
+/// affected by system clock changes.
+pub fn monotonic_timestamp_ns() -> u128 {
+    MONOTONIC_START.get_or_init(Instant::now).elapsed().as_nanos()
 }
 
 pub trait InputBackend {

@@ -3,7 +3,7 @@ use std::sync::{Arc, Mutex};
 use bmz_core::input::InputKind;
 use bmz_gameplay::input::backend::{
     BufferedInputBackend, DeviceId, DeviceInputEvent, DeviceTimestamp, InputBackend,
-    InputEventSink, PhysicalControl,
+    InputEventSink, PhysicalControl, monotonic_timestamp_ns,
 };
 use winit::event::{ElementState, KeyEvent};
 use winit::keyboard::{KeyCode, NativeKeyCode, PhysicalKey};
@@ -64,7 +64,7 @@ pub fn physical_key_to_device_input(
         device: W_KEYBOARD_DEVICE_ID,
         control: physical_key_to_control(physical_key)?,
         kind: input_kind_from_element_state(state),
-        timestamp: DeviceTimestamp::Unknown,
+        timestamp: DeviceTimestamp::MonotonicNs(monotonic_timestamp_ns()),
     })
 }
 
@@ -194,7 +194,7 @@ mod tests {
         assert_eq!(press.kind, InputKind::Press);
         assert_eq!(release.kind, InputKind::Release);
         assert_eq!(press.device, W_KEYBOARD_DEVICE_ID);
-        assert_eq!(press.timestamp, DeviceTimestamp::Unknown);
+        assert!(matches!(press.timestamp, DeviceTimestamp::MonotonicNs(_)));
     }
 
     #[test]

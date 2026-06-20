@@ -21,7 +21,8 @@ use bmz_gameplay::input::translator::DefaultInputTranslator;
 use bmz_gameplay::judge::engine::JudgeEngine;
 use bmz_gameplay::judge::model::{JudgeAlgorithm, JudgeWindow, JudgeWindows};
 use bmz_gameplay::judge::window::{
-    judge_percent_at_time, judge_windows_for_keymode_and_rule_mode, judge_windows_for_rule_mode,
+    judge_percent_at_time_for_keymode, judge_windows_for_keymode_and_rule_mode,
+    judge_windows_for_rule_mode_and_keymode,
 };
 use bmz_gameplay::replay::{ReplayPlayer, ReplayRecorder};
 use bmz_gameplay::rule::RuleMode;
@@ -385,19 +386,22 @@ pub fn build_game_session_with_input_backend(
 
     GameSession {
         gauge,
-        judge: JudgeEngine::new_with_window_set_and_algorithm(
-            judge_windows_for_rule_mode(
+        judge: JudgeEngine::new_with_window_set_algorithm_and_keymode(
+            judge_windows_for_rule_mode_and_keymode(
                 base_judge_windows,
-                judge_percent_at_time(
+                judge_percent_at_time_for_keymode(
                     chart.metadata.judge_rank_spec,
                     &chart.judge_rank_events,
                     TimeUs(0),
+                    chart.metadata.key_mode,
                     rule_mode,
                 ),
                 rule_mode,
+                chart.metadata.key_mode,
             ),
             rule_mode,
             judge_algorithm_from_config(profile.judge.judge_algorithm),
+            chart.metadata.key_mode,
         ),
         base_judge_window,
         base_judge_windows,
