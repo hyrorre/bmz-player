@@ -37,9 +37,16 @@ impl VideoBgaDecoder {
 
     /// チャンネルをdrainして `video_offset_us` 以下の最新フレームを返す。
     pub fn poll_frame(&mut self, video_offset_us: i64) -> Option<&DecodedFrame> {
-        // チャンネルから利用可能なフレームをすべて受信
+        // チャンネルから利用可能なフレームをすべて受信する。
+        // 受信時点ですでに表示期限を過ぎている frame は pending に積まず、
+        // 最新候補だけへ畳み込む。decoder 出力は presentation order なので、
+        // 新しく受信した due frame は既存 pending の due frame より新しい。
+        let mut latest_received_due = None;
         loop {
             match self.receiver.try_recv() {
+                Ok(frame) if frame.pts_us <= video_offset_us => {
+                    latest_received_due = Some(frame);
+                }
                 Ok(frame) => self.pending.push_back(frame),
                 Err(std::sync::mpsc::TryRecvError::Empty) => break,
                 Err(std::sync::mpsc::TryRecvError::Disconnected) => {
@@ -49,14 +56,26 @@ impl VideoBgaDecoder {
             }
         }
 
-        // video_offset_us 以下のフレームのうち最新のものだけを current に設定する。
-        // decoder が先行している時に、古い大きな RGBA buffer を current へ何度も
-        // 入れ替えず、表示されない pending frame はその場で捨てる。
-        while self.pending.get(1).is_some_and(|frame| frame.pts_us <= video_offset_us) {
-            self.pending.pop_front();
-        }
-        if self.pending.front().is_some_and(|frame| frame.pts_us <= video_offset_us) {
-            self.current = self.pending.pop_front();
+        let latest_due = if latest_received_due.is_some() {
+            while self.pending.front().is_some_and(|frame| frame.pts_us <= video_offset_us) {
+                self.pending.pop_front();
+            }
+            latest_received_due
+        } else {
+            // video_offset_us 以下のフレームのうち最新のものだけを current に設定する。
+            // decoder が先行している時に、古い大きな RGBA buffer を current へ何度も
+            // 入れ替えず、表示されない pending frame はその場で捨てる。
+            while self.pending.get(1).is_some_and(|frame| frame.pts_us <= video_offset_us) {
+                self.pending.pop_front();
+            }
+            if self.pending.front().is_some_and(|frame| frame.pts_us <= video_offset_us) {
+                self.pending.pop_front()
+            } else {
+                None
+            }
+        };
+        if let Some(frame) = latest_due {
+            self.current = Some(frame);
         }
 
         self.current.as_ref()
@@ -268,6 +287,19 @@ mod tests {
         }
     }
 
+    fn decoder_with_channel(
+        pending: impl IntoIterator<Item = i64>,
+    ) -> (SyncSender<DecodedFrame>, VideoBgaDecoder) {
+        let (sender, receiver) = sync_channel(4);
+        let decoder = VideoBgaDecoder {
+            receiver,
+            pending: pending.into_iter().map(frame).collect(),
+            current: Some(frame(0)),
+            finished: false,
+        };
+        (sender, decoder)
+    }
+
     #[test]
     fn poll_frame_skips_overdue_intermediate_frames() {
         let mut decoder = decoder_with_pending([10, 20, 30]);
@@ -287,6 +319,33 @@ mod tests {
 
         assert_eq!(frame.pts_us, 0);
         assert_eq!(decoder.pending.len(), 2);
+    }
+
+    #[test]
+    fn poll_frame_compacts_received_overdue_frames_before_pending_queue() {
+        let (sender, mut decoder) = decoder_with_channel([]);
+        sender.send(frame(10)).unwrap();
+        sender.send(frame(20)).unwrap();
+        sender.send(frame(30)).unwrap();
+
+        let frame = decoder.poll_frame(25).unwrap();
+
+        assert_eq!(frame.pts_us, 20);
+        assert_eq!(decoder.pending.len(), 1);
+        assert_eq!(decoder.pending.front().unwrap().pts_us, 30);
+    }
+
+    #[test]
+    fn poll_frame_prefers_newer_received_due_frame_over_pending_due_frames() {
+        let (sender, mut decoder) = decoder_with_channel([10, 20, 30]);
+        sender.send(frame(40)).unwrap();
+        sender.send(frame(50)).unwrap();
+
+        let frame = decoder.poll_frame(45).unwrap();
+
+        assert_eq!(frame.pts_us, 40);
+        assert_eq!(decoder.pending.len(), 1);
+        assert_eq!(decoder.pending.front().unwrap().pts_us, 50);
     }
 
     #[test]

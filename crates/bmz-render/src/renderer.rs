@@ -2907,7 +2907,7 @@ impl<'a> CachedTextFrameBuilder<'a> {
             size,
             #[cfg(test)]
             pixels: Vec::new(),
-            dirty_regions: self.atlas.dirty_regions.clone(),
+            dirty_regions: std::mem::take(&mut self.atlas.dirty_regions),
             instances,
             command_quad_counts,
             command_caret_rects,
