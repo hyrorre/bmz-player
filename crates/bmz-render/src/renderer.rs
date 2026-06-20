@@ -600,7 +600,7 @@ impl Renderer {
 
     pub fn upsert_image_asset(&mut self, id: TextureId, asset: &RgbaImageAsset) -> Result<()> {
         asset.validate()?;
-        self.upsert_rgba_texture(id, asset.width, asset.height, asset.pixels.clone())
+        self.upsert_rgba_texture_ref(id, asset.width, asset.height, &asset.pixels)
     }
 
     /// skin upload worker 用に、GPU アップロード機能の clone を取り出す。

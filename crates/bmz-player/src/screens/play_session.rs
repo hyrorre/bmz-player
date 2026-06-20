@@ -5,7 +5,7 @@ use bmz_audio::ffmpeg_loader::FfmpegSampleLoader;
 use bmz_audio::loader::{LoadedSampleReport, SampleLoader, load_chart_samples};
 use bmz_audio::loudness::analyze_chart_loudness;
 use bmz_chart::import::import_bms_chart;
-use bmz_chart::model::{NoteEvent, NoteKind, PlayableChart};
+use bmz_chart::model::{BgaAssetRef, NoteEvent, NoteKind, PlayableChart};
 use bmz_core::clear::GaugeType;
 use bmz_core::ids::NoteId;
 use bmz_core::lane::{KeyMode, LANE_COUNT, Lane};
@@ -715,6 +715,20 @@ pub fn preload_play_session_for_chart(
         applied_arrange,
         score_key,
     })
+}
+
+pub fn load_chart_bga_assets_for_chart(
+    library_db: &LibraryDatabase,
+    chart_id: i64,
+    options: &PlaySessionOptions,
+) -> Result<Vec<BgaAssetRef>> {
+    let Some(path) = library_db.primary_chart_file_path(chart_id)? else {
+        bail!("chart file not found for chart id {chart_id}");
+    };
+    let import =
+        import_bms_chart(std::path::Path::new(&path), random_seed_for_chart(options), true)
+            .with_context(|| format!("failed to import chart file: {path}"))?;
+    Ok(import.chart.bga_assets)
 }
 
 pub fn build_practice_prepared_from_preloaded(

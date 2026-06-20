@@ -11,7 +11,7 @@ use anyhow::{Context, Result};
 use bmz_audio::ffmpeg_loader::FfmpegSampleLoader;
 use bmz_audio::loader::SampleLoader;
 use bmz_audio::sample::DecodedSample;
-use bmz_chart::model::PlayableChart;
+use bmz_chart::model::{BgaAssetId, PlayableChart};
 use bmz_core::clear::{ClearType, GaugeType};
 use bmz_core::input::InputDeviceKind;
 use bmz_core::lane::{KeyMode, Lane};
@@ -25,7 +25,9 @@ use bmz_render::assets::{RgbaImageAsset, load_static_rgba_image};
 use bmz_render::plan::{
     PLAY_BACKBMP_TEXTURE, Rect, SELECT_BANNER_TEXTURE, SELECT_STAGE_TEXTURE, TextureId,
 };
-use bmz_render::renderer::{RenderFrameTimings, RenderSurfaceStatus, Renderer, SurfaceSize};
+use bmz_render::renderer::{
+    PreparedTexture, RenderFrameTimings, RenderSurfaceStatus, Renderer, SurfaceSize,
+};
 use bmz_render::scene::{
     AppSceneSnapshot, PlayerStatsSnapshot, ResultSnapshot, SelectChartDistributionSecond,
     SelectRowSnapshot, SelectSnapshot,
@@ -366,6 +368,10 @@ struct WinitApp {
     skin_upload_rx: Receiver<PendingUploadResult>,
     /// upload worker を spawn 済みか (surface 接続時に一度だけ起動)。
     skin_upload_worker_started: bool,
+    bga_load_generation: u64,
+    bga_load_chart_id: Option<i64>,
+    bga_load_rx: Option<Receiver<PendingBgaImageResult>>,
+    bga_preload_frames: BgaFrameCatalog,
     skin_video_sources: HashMap<SkinKind, Vec<ActiveSkinVideoSource>>,
     pending_select_skin: bool,
     pending_decide_skin: bool,
@@ -980,6 +986,56 @@ struct PendingUploadResult {
     path: PathBuf,
     kind: SkinKind,
     uploaded: Result<UploadedSkin>,
+}
+
+struct PendingBgaImage {
+    generation: u64,
+    asset_id: BgaAssetId,
+    texture_id: TextureId,
+    path: PathBuf,
+    width: u32,
+    height: u32,
+    file_bytes: u64,
+    rgba_bytes: u64,
+    decode_us: u128,
+    upload_us: u128,
+    prepared: PreparedTexture,
+}
+
+#[derive(Debug, Default, Clone, Copy)]
+struct BgaImageLoadStats {
+    chart_bga_assets: u32,
+    static_assets: u32,
+    skipped_non_static: u32,
+    loaded_assets: u32,
+    failed_assets: u32,
+    total_file_bytes: u64,
+    loaded_file_bytes: u64,
+    rgba_bytes: u64,
+    decode_us: u128,
+    upload_us: u128,
+    total_us: u128,
+}
+
+enum PendingBgaImageResult {
+    Loaded(PendingBgaImage),
+    PreloadFailed {
+        generation: u64,
+        chart_id: i64,
+        error: String,
+    },
+    Failed {
+        generation: u64,
+        asset_id: BgaAssetId,
+        path: PathBuf,
+        file_bytes: u64,
+        decode_us: u128,
+        error: String,
+    },
+    Finished {
+        generation: u64,
+        stats: BgaImageLoadStats,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1672,6 +1728,10 @@ impl WinitApp {
             skin_upload_tx,
             skin_upload_rx,
             skin_upload_worker_started: false,
+            bga_load_generation: 0,
+            bga_load_chart_id: None,
+            bga_load_rx: None,
+            bga_preload_frames: BgaFrameCatalog::new(),
             skin_video_sources: initial_skin_video_sources,
             pending_select_skin,
             pending_decide_skin,
@@ -5183,7 +5243,7 @@ impl WinitApp {
         match self.open_prepared_winit_play_session(prepared_winit) {
             Ok(active_play) => {
                 self.pending_play_start = None;
-                self.install_active_play(active_play);
+                self.install_active_play(chart_id, active_play);
                 tracing::info!(chart_id, "practice round started");
             }
             Err(error) => {
@@ -6010,6 +6070,7 @@ impl WinitApp {
         self.play_preload_generation = self.play_preload_generation.wrapping_add(1);
         let generation = self.play_preload_generation;
         self.preloaded_play_session = None;
+        let bga_options = options.clone();
         let (tx, rx) = mpsc::channel();
         let library_db_path = self.boot.app_paths.library_db.clone();
         let app_config = self.play_session_app_config();
@@ -6044,6 +6105,7 @@ impl WinitApp {
             .expect("failed to spawn play preload thread");
         self.pending_play_preload = Some(PendingPlayPreload { generation, chart_id, rx });
         tracing::info!(chart_id, generation, "play preload started");
+        self.start_chart_bga_texture_preload(chart_id, bga_options);
     }
 
     fn invalidate_play_preload(&mut self) {
@@ -6051,6 +6113,7 @@ impl WinitApp {
         self.pending_play_preload = None;
         // 裏で完成して退避していた結果も無効化する (decide キャンセル / 譜面差し替え)。
         self.preloaded_play_session = None;
+        self.invalidate_chart_bga_texture_preload();
     }
 
     /// select_items に持っている `ChartListItem.mode` から KeyMode を引く。
@@ -6245,7 +6308,7 @@ impl WinitApp {
                     options.clone(),
                     self.decide_snapshot_for_chart(chart_id),
                 );
-                self.install_active_play(active_play);
+                self.install_active_play(chart_id, active_play);
             }
             Err(error) => {
                 tracing::error!(chart_id, %error, "failed to start play");
@@ -6316,7 +6379,7 @@ impl WinitApp {
         );
     }
 
-    fn install_active_play(&mut self, mut active_play: StartedWinitPlaySession) {
+    fn install_active_play(&mut self, chart_id: i64, mut active_play: StartedWinitPlaySession) {
         self.last_play_was_autoplay = active_play
             .running
             .session
@@ -6324,8 +6387,14 @@ impl WinitApp {
             .as_ref()
             .is_some_and(|autoplay| autoplay.is_full());
         active_play.running.session.lane_cover_changing = self.play_e1_held;
-        active_play.running.bga_frames =
-            load_chart_bga_textures(&mut self.renderer, &active_play.running.session.chart);
+        active_play.running.bga_frames = if self.bga_load_chart_id == Some(chart_id) {
+            self.bga_preload_frames.clone()
+        } else {
+            self.start_chart_bga_texture_load_for_chart(
+                chart_id,
+                &active_play.running.session.chart,
+            )
+        };
         let chart = &active_play.running.session.chart;
         let folder = chart_asset_folder(chart)
             .map(|path| path.to_string_lossy().into_owned())
@@ -6365,6 +6434,177 @@ impl WinitApp {
         self.last_play_snapshot = Some(snapshot);
         self.active_play = Some(active_play);
         self.update_play_exit_hold_timer();
+    }
+
+    fn start_chart_bga_texture_preload(&mut self, chart_id: i64, options: PlayStartOptions) {
+        self.bga_load_generation = self.bga_load_generation.wrapping_add(1);
+        self.bga_load_chart_id = Some(chart_id);
+        self.bga_load_rx = None;
+        self.bga_preload_frames.clear();
+        let generation = self.bga_load_generation;
+        let Some(uploader) = self.renderer.gpu_uploader() else {
+            tracing::warn!(chart_id, "skipping BGA preload because GPU uploader is unavailable");
+            return;
+        };
+
+        let library_db_path = self.boot.app_paths.library_db.clone();
+        let app_config = self.play_session_app_config();
+        thread::Builder::new()
+            .name(format!("bga-image-load-{chart_id}"))
+            .spawn({
+                let (tx, rx) = mpsc::channel();
+                self.bga_load_rx = Some(rx);
+                move || {
+                    let session_options =
+                        crate::screens::play_start::play_session_options_from_start(
+                            &app_config,
+                            options,
+                        );
+                    let assets = (|| -> Result<Vec<bmz_chart::model::BgaAssetRef>> {
+                        let library_db =
+                            crate::storage::library_db::LibraryDatabase::open(&library_db_path)?;
+                        crate::screens::play_session::load_chart_bga_assets_for_chart(
+                            &library_db,
+                            chart_id,
+                            &session_options,
+                        )
+                    })();
+                    chart_bga_texture_preload_worker(generation, chart_id, assets, tx, uploader);
+                }
+            })
+            .expect("failed to spawn BGA image load thread");
+        tracing::info!(chart_id, generation, "BGA image preload started");
+    }
+
+    fn invalidate_chart_bga_texture_preload(&mut self) {
+        self.bga_load_generation = self.bga_load_generation.wrapping_add(1);
+        self.bga_load_chart_id = None;
+        self.bga_load_rx = None;
+        self.bga_preload_frames.clear();
+    }
+
+    fn start_chart_bga_texture_load_for_chart(
+        &mut self,
+        chart_id: i64,
+        chart: &PlayableChart,
+    ) -> BgaFrameCatalog {
+        self.bga_load_generation = self.bga_load_generation.wrapping_add(1);
+        self.bga_load_chart_id = Some(chart_id);
+        self.bga_load_rx = None;
+        self.bga_preload_frames.clear();
+        let generation = self.bga_load_generation;
+        let Some(uploader) = self.renderer.gpu_uploader() else {
+            tracing::warn!("loading BGA images synchronously because GPU uploader is unavailable");
+            return load_chart_bga_textures(&mut self.renderer, chart);
+        };
+
+        let assets = chart.bga_assets.clone();
+        let (tx, rx) = mpsc::channel();
+        thread::Builder::new()
+            .name("bga-image-load".to_string())
+            .spawn(move || chart_bga_texture_load_worker(generation, assets, tx, uploader))
+            .expect("failed to spawn BGA image load thread");
+        self.bga_load_rx = Some(rx);
+        tracing::info!(chart_id, generation, "BGA image preload started");
+        BgaFrameCatalog::new()
+    }
+
+    fn poll_chart_bga_texture_load(&mut self) {
+        let Some(rx) = self.bga_load_rx.take() else {
+            return;
+        };
+        let mut keep_rx = true;
+        loop {
+            match rx.try_recv() {
+                Ok(PendingBgaImageResult::Loaded(image)) => {
+                    if image.generation != self.bga_load_generation {
+                        continue;
+                    }
+                    self.renderer.insert_prepared_texture(image.texture_id, image.prepared);
+                    self.bga_preload_frames.insert(
+                        image.asset_id,
+                        display_bga_frame(image.asset_id, image.width, image.height),
+                    );
+                    if let Some(active_play) = &mut self.active_play {
+                        active_play.running.bga_frames.insert(
+                            image.asset_id,
+                            display_bga_frame(image.asset_id, image.width, image.height),
+                        );
+                    }
+                    tracing::info!(
+                        asset_id = image.asset_id.0,
+                        texture_id = image.texture_id.0,
+                        width = image.width,
+                        height = image.height,
+                        file_bytes = image.file_bytes,
+                        rgba_bytes = image.rgba_bytes,
+                        decode_us = image.decode_us,
+                        upload_us = image.upload_us,
+                        async_load = true,
+                        path = %image.path.display(),
+                        "loaded BGA image"
+                    );
+                }
+                Ok(PendingBgaImageResult::Failed {
+                    generation,
+                    asset_id,
+                    path,
+                    file_bytes,
+                    decode_us,
+                    error,
+                }) => {
+                    if generation != self.bga_load_generation {
+                        continue;
+                    }
+                    tracing::warn!(
+                        asset_id = asset_id.0,
+                        file_bytes,
+                        decode_us,
+                        async_load = true,
+                        path = %path.display(),
+                        error,
+                        "skipping unreadable BGA image"
+                    );
+                }
+                Ok(PendingBgaImageResult::PreloadFailed { generation, chart_id, error }) => {
+                    if generation != self.bga_load_generation {
+                        continue;
+                    }
+                    tracing::warn!(chart_id, error, "BGA image preload failed");
+                    keep_rx = false;
+                    break;
+                }
+                Ok(PendingBgaImageResult::Finished { generation, stats }) => {
+                    if generation == self.bga_load_generation {
+                        tracing::info!(
+                            chart_bga_assets = stats.chart_bga_assets,
+                            static_assets = stats.static_assets,
+                            skipped_non_static = stats.skipped_non_static,
+                            loaded_assets = stats.loaded_assets,
+                            failed_assets = stats.failed_assets,
+                            total_file_bytes = stats.total_file_bytes,
+                            loaded_file_bytes = stats.loaded_file_bytes,
+                            rgba_bytes = stats.rgba_bytes,
+                            decode_us = stats.decode_us,
+                            upload_us = stats.upload_us,
+                            total_us = stats.total_us,
+                            async_load = true,
+                            "chart BGA image load timing"
+                        );
+                    }
+                    keep_rx = false;
+                    break;
+                }
+                Err(mpsc::TryRecvError::Empty) => break,
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    keep_rx = false;
+                    break;
+                }
+            }
+        }
+        if keep_rx {
+            self.bga_load_rx = Some(rx);
+        }
     }
 
     fn poll_play_preload(&mut self) {
@@ -6455,7 +6695,7 @@ impl WinitApp {
         match opened {
             Ok(active_play) => {
                 tracing::info!(chart_id, "play preload installed");
-                self.install_active_play(active_play);
+                self.install_active_play(chart_id, active_play);
                 // スキン宣言のロード演出時間を既に超えていれば、同一フレーム内で
                 // READY を開始して op 80→81 切り替えと timer 40 発火を揃える
                 // (次フレームの advance_active_play まで待つと 1 フレーム
@@ -10048,10 +10288,25 @@ fn load_chart_meta_texture(
 fn load_chart_bga_textures(renderer: &mut Renderer, chart: &PlayableChart) -> BgaFrameCatalog {
     use bmz_chart::model::BgaAssetKind;
 
+    let total_start = Instant::now();
+    let mut considered_assets = 0u32;
+    let mut static_assets = 0u32;
+    let mut skipped_non_static = 0u32;
+    let mut loaded_assets = 0u32;
+    let mut failed_assets = 0u32;
+    let mut total_file_bytes = 0u64;
+    let mut loaded_file_bytes = 0u64;
+    let mut rgba_bytes = 0u64;
+    let mut decode_us = 0u128;
+    let mut upload_us = 0u128;
     let mut frames = BgaFrameCatalog::new();
     for asset in &chart.bga_assets {
+        considered_assets += 1;
         let path = &asset.path;
+        let file_bytes = std::fs::metadata(path).map(|metadata| metadata.len()).unwrap_or(0);
+        total_file_bytes = total_file_bytes.saturating_add(file_bytes);
         if asset.kind != BgaAssetKind::Static {
+            skipped_non_static += 1;
             tracing::debug!(
                 asset_id = asset.id.0,
                 path = %path.display(),
@@ -10059,25 +10314,47 @@ fn load_chart_bga_textures(renderer: &mut Renderer, chart: &PlayableChart) -> Bg
             );
             continue;
         }
+        static_assets += 1;
 
+        let decode_start = Instant::now();
         match load_static_rgba_image(path) {
             Ok(image) => {
+                let image_decode_us = decode_start.elapsed().as_micros();
+                decode_us += image_decode_us;
                 let texture_id = TextureId(bga_texture_id(asset.id));
                 let frame = display_bga_frame(asset.id, image.width, image.height);
+                let image_rgba_bytes = image.pixels.len() as u64;
+                let upload_start = Instant::now();
                 if let Err(error) = renderer.upsert_image_asset(texture_id, &image) {
+                    let image_upload_us = upload_start.elapsed().as_micros();
+                    upload_us += image_upload_us;
+                    failed_assets += 1;
                     tracing::warn!(
                         asset_id = asset.id.0,
                         texture_id = texture_id.0,
+                        file_bytes,
+                        rgba_bytes = image_rgba_bytes,
+                        decode_us = image_decode_us,
+                        upload_us = image_upload_us,
                         path = %path.display(),
                         %error,
                         "failed to upload BGA image"
                     );
                 } else {
+                    let image_upload_us = upload_start.elapsed().as_micros();
+                    upload_us += image_upload_us;
+                    loaded_assets += 1;
+                    loaded_file_bytes = loaded_file_bytes.saturating_add(file_bytes);
+                    rgba_bytes = rgba_bytes.saturating_add(image_rgba_bytes);
                     tracing::info!(
                         asset_id = asset.id.0,
                         texture_id = texture_id.0,
                         width = image.width,
                         height = image.height,
+                        file_bytes,
+                        rgba_bytes = image_rgba_bytes,
+                        decode_us = image_decode_us,
+                        upload_us = image_upload_us,
                         path = %path.display(),
                         "loaded BGA image"
                     );
@@ -10085,8 +10362,13 @@ fn load_chart_bga_textures(renderer: &mut Renderer, chart: &PlayableChart) -> Bg
                 }
             }
             Err(error) => {
+                let image_decode_us = decode_start.elapsed().as_micros();
+                decode_us += image_decode_us;
+                failed_assets += 1;
                 tracing::warn!(
                     asset_id = asset.id.0,
+                    file_bytes,
+                    decode_us = image_decode_us,
                     path = %path.display(),
                     %error,
                     "skipping unreadable BGA image"
@@ -10094,7 +10376,116 @@ fn load_chart_bga_textures(renderer: &mut Renderer, chart: &PlayableChart) -> Bg
             }
         }
     }
+    tracing::info!(
+        chart_bga_assets = considered_assets,
+        static_assets,
+        skipped_non_static,
+        loaded_assets,
+        failed_assets,
+        total_file_bytes,
+        loaded_file_bytes,
+        rgba_bytes,
+        decode_us,
+        upload_us,
+        total_us = total_start.elapsed().as_micros(),
+        "chart BGA image load timing"
+    );
     frames
+}
+
+fn chart_bga_texture_preload_worker(
+    generation: u64,
+    chart_id: i64,
+    assets: Result<Vec<bmz_chart::model::BgaAssetRef>>,
+    tx: mpsc::Sender<PendingBgaImageResult>,
+    uploader: bmz_render::renderer::GpuUploader,
+) {
+    match assets {
+        Ok(assets) => chart_bga_texture_load_worker(generation, assets, tx, uploader),
+        Err(error) => {
+            let _ = tx.send(PendingBgaImageResult::PreloadFailed {
+                generation,
+                chart_id,
+                error: error.to_string(),
+            });
+        }
+    }
+}
+
+fn chart_bga_texture_load_worker(
+    generation: u64,
+    assets: Vec<bmz_chart::model::BgaAssetRef>,
+    tx: mpsc::Sender<PendingBgaImageResult>,
+    uploader: bmz_render::renderer::GpuUploader,
+) {
+    use bmz_chart::model::BgaAssetKind;
+
+    let total_start = Instant::now();
+    let mut stats = BgaImageLoadStats::default();
+    for asset in assets {
+        stats.chart_bga_assets += 1;
+        let path = asset.path;
+        let file_bytes = std::fs::metadata(&path).map(|metadata| metadata.len()).unwrap_or(0);
+        stats.total_file_bytes = stats.total_file_bytes.saturating_add(file_bytes);
+        if asset.kind != BgaAssetKind::Static {
+            stats.skipped_non_static += 1;
+            continue;
+        }
+        stats.static_assets += 1;
+
+        let decode_start = Instant::now();
+        match load_static_rgba_image(&path) {
+            Ok(image) => {
+                let image_decode_us = decode_start.elapsed().as_micros();
+                stats.decode_us += image_decode_us;
+                let texture_id = TextureId(bga_texture_id(asset.id));
+                let image_rgba_bytes = image.pixels.len() as u64;
+                let upload_start = Instant::now();
+                let prepared = uploader.upload(image.width, image.height, &image.pixels);
+                let image_upload_us = upload_start.elapsed().as_micros();
+                stats.upload_us += image_upload_us;
+                stats.loaded_assets += 1;
+                stats.loaded_file_bytes = stats.loaded_file_bytes.saturating_add(file_bytes);
+                stats.rgba_bytes = stats.rgba_bytes.saturating_add(image_rgba_bytes);
+                let result = PendingBgaImageResult::Loaded(PendingBgaImage {
+                    generation,
+                    asset_id: asset.id,
+                    texture_id,
+                    path,
+                    width: image.width,
+                    height: image.height,
+                    file_bytes,
+                    rgba_bytes: image_rgba_bytes,
+                    decode_us: image_decode_us,
+                    upload_us: image_upload_us,
+                    prepared,
+                });
+                if tx.send(result).is_err() {
+                    return;
+                }
+            }
+            Err(error) => {
+                let image_decode_us = decode_start.elapsed().as_micros();
+                stats.decode_us += image_decode_us;
+                stats.failed_assets += 1;
+                if tx
+                    .send(PendingBgaImageResult::Failed {
+                        generation,
+                        asset_id: asset.id,
+                        path,
+                        file_bytes,
+                        decode_us: image_decode_us,
+                        error: error.to_string(),
+                    })
+                    .is_err()
+                {
+                    return;
+                }
+            }
+        }
+    }
+    stats.total_us = total_start.elapsed().as_micros();
+    let _ = tx.send(PendingBgaImageResult::Finished { generation, stats });
 }
 
 fn format_error_chain(error: &anyhow::Error) -> String {
@@ -10274,6 +10665,7 @@ impl ApplicationHandler for WinitApp {
                 self.advance_select_hold_move();
                 self.advance_select_analog_scroll();
                 self.drain_pending_skins();
+                self.poll_chart_bga_texture_load();
                 self.poll_play_preload();
                 self.poll_pending_table_fetch();
                 self.poll_pending_song_scan();
