@@ -35,11 +35,12 @@ struct CachedChartIr {
     rival: Option<SelectRivalSnapshot>,
     global_ex_scores: Vec<u32>,
     rival_ex_scores: Vec<u32>,
+    completed_at: Instant,
 }
 
 pub struct SelectIrRanking {
     cache: HashMap<[u8; 32], CachedChartIr>,
-    in_flight: Option<(String, [u8; 32])>,
+    in_flight: Option<(String, [u8; 32], Instant)>,
     pending: Option<([u8; 32], Instant)>,
     /// キャッシュが前提とするランキング条件 (rule mode / LN ポリシー設定)。
     /// 変わったらキャッシュごと破棄する。
@@ -82,7 +83,7 @@ impl SelectIrRanking {
             self.clear();
         }
         while let Ok((result_context, sha256, result)) = self.receiver.try_recv() {
-            if self.in_flight.as_ref().is_some_and(|(context, in_flight_sha)| {
+            if self.in_flight.as_ref().is_some_and(|(context, in_flight_sha, _)| {
                 context == &result_context && *in_flight_sha == sha256
             }) {
                 self.in_flight = None;
@@ -98,12 +99,14 @@ impl SelectIrRanking {
             if self.cache.len() >= CACHE_CAPACITY {
                 self.cache.clear();
             }
+            let completed_at = Instant::now();
             let entry = match result {
                 Ok((global, rivals)) => CachedChartIr {
                     ir: ranking_to_ir_snapshot(&global),
                     rival: rivals.as_ref().and_then(top_rival_snapshot),
                     global_ex_scores: ranking_ex_scores(&global),
                     rival_ex_scores: rivals.as_ref().map(ranking_ex_scores).unwrap_or_default(),
+                    completed_at,
                 },
                 Err(error) => {
                     tracing::debug!(%error, "select IR ranking fetch failed");
@@ -112,6 +115,7 @@ impl SelectIrRanking {
                         rival: None,
                         global_ex_scores: Vec::new(),
                         rival_ex_scores: Vec::new(),
+                        completed_at,
                     }
                 }
             };
@@ -126,7 +130,7 @@ impl SelectIrRanking {
             return;
         };
         if self.cache.contains_key(&sha256)
-            || self.in_flight.as_ref().is_some_and(|(_, in_flight_sha)| *in_flight_sha == sha256)
+            || self.in_flight.as_ref().is_some_and(|(_, in_flight_sha, _)| *in_flight_sha == sha256)
         {
             self.pending = None;
             return;
@@ -135,7 +139,7 @@ impl SelectIrRanking {
             Some((pending_sha, since)) if pending_sha == sha256 => {
                 if since.elapsed() >= FETCH_DEBOUNCE && self.in_flight.is_none() {
                     self.pending = None;
-                    self.in_flight = Some((self.context.clone(), sha256));
+                    self.in_flight = Some((self.context.clone(), sha256, Instant::now()));
                     spawn_fetch(
                         ResultIrQuery {
                             profile_root: profile_root.to_path_buf(),
@@ -170,8 +174,31 @@ impl SelectIrRanking {
         };
         self.cache
             .get(&sha256)
-            .map(|entry| entry.ir.clone())
-            .unwrap_or(ResultIrSnapshot { state: SkinIrState::Loading, ..Default::default() })
+            .map(|entry| {
+                let mut snapshot = entry.ir.clone();
+                match snapshot.state {
+                    SkinIrState::Loaded => {
+                        snapshot.connect_success_ms = Some(elapsed_since_ms(entry.completed_at));
+                    }
+                    SkinIrState::Failed => {
+                        snapshot.connect_fail_ms = Some(elapsed_since_ms(entry.completed_at));
+                    }
+                    _ => {}
+                }
+                snapshot
+            })
+            .unwrap_or_else(|| {
+                let begin_ms = self
+                    .in_flight
+                    .as_ref()
+                    .filter(|(_, in_flight_sha, _)| *in_flight_sha == sha256)
+                    .map(|(_, _, started_at)| elapsed_since_ms(*started_at));
+                ResultIrSnapshot {
+                    state: SkinIrState::Loading,
+                    connect_begin_ms: begin_ms,
+                    ..Default::default()
+                }
+            })
     }
 
     /// 選択中譜面のライバルベスト (最上位 1 名)。未取得 / IR 未設定なら None。
@@ -272,6 +299,10 @@ fn ranking_ex_scores(ranking: &IrRankingResult) -> Vec<u32> {
     ranking.ranking.entries.iter().map(|entry| entry.score.ex_score).collect()
 }
 
+fn elapsed_since_ms(started_at: Instant) -> i32 {
+    started_at.elapsed().as_millis().min(i32::MAX as u128) as i32
+}
+
 fn next_ex_score_above(scores_desc: &[u32], current_ex_score: u32) -> Option<u32> {
     if scores_desc.is_empty() {
         return None;
@@ -348,6 +379,7 @@ mod tests {
                 }),
                 global_ex_scores: vec![1800, 1600, 1400],
                 rival_ex_scores: vec![1500, 1200],
+                completed_at: Instant::now(),
             },
         );
 
@@ -427,7 +459,7 @@ mod tests {
         let root = std::env::temp_dir();
 
         select_ir.context = "new".to_string();
-        select_ir.in_flight = Some(("old".to_string(), sha));
+        select_ir.in_flight = Some(("old".to_string(), sha, Instant::now()));
         select_ir.sender.send(("old".to_string(), sha, Err("stale".to_string()))).unwrap();
 
         select_ir.update(

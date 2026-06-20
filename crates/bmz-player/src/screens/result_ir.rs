@@ -7,6 +7,7 @@
 
 use std::path::PathBuf;
 use std::sync::mpsc::{Receiver, Sender, channel};
+use std::time::Instant;
 
 use bmz_gameplay::rule::RuleMode;
 
@@ -117,6 +118,9 @@ pub struct ResultIrState {
     pub global: RankingLoadState,
     pub self_and_rivals: RankingLoadState,
     pub active_tab: ResultRankingTab,
+    ir_connect_begin_at: Option<Instant>,
+    ir_connect_success_at: Option<Instant>,
+    ir_connect_fail_at: Option<Instant>,
     query: ResultIrTaskQuery,
     sender: Sender<ResultIrEvent>,
     receiver: Receiver<ResultIrEvent>,
@@ -129,6 +133,7 @@ impl ResultIrState {
             match event {
                 ResultIrEvent::Submit { submitted, failed, message } => {
                     self.submit = IrSubmitState::Done { submitted, failed, message };
+                    self.update_submit_timer(submitted, failed, self.submit_message_is_error());
                 }
                 ResultIrEvent::Ranking { scope, result } => {
                     let slot = self.scope_slot(scope);
@@ -140,6 +145,30 @@ impl ResultIrState {
                     }
                 }
             }
+        }
+    }
+
+    fn submit_message_is_error(&self) -> bool {
+        matches!(&self.submit, IrSubmitState::Done { submitted: 0, failed: 0, message: Some(_) })
+    }
+
+    fn update_submit_timer(&mut self, submitted: u32, failed: u32, error: bool) {
+        let attempted = submitted > 0 || failed > 0 || error;
+        if !attempted {
+            self.ir_connect_begin_at = None;
+            self.ir_connect_success_at = None;
+            self.ir_connect_fail_at = None;
+            return;
+        }
+
+        let now = Instant::now();
+        self.ir_connect_begin_at.get_or_insert(now);
+        if failed > 0 || error {
+            self.ir_connect_fail_at = Some(now);
+            self.ir_connect_success_at = None;
+        } else {
+            self.ir_connect_success_at = Some(now);
+            self.ir_connect_fail_at = None;
         }
     }
 
@@ -178,7 +207,7 @@ impl ResultIrState {
     /// スキン表示は beatoraja 同様グローバルランキングを基準にする。
     pub fn skin_snapshot(&self) -> bmz_render::scene::ResultIrSnapshot {
         use bmz_render::scene::{ResultIrSnapshot, ResultIrState as SkinIrState};
-        match &self.global {
+        let snapshot = match &self.global {
             RankingLoadState::NotRequested | RankingLoadState::Loading => {
                 ResultIrSnapshot { state: SkinIrState::Loading, ..Default::default() }
             }
@@ -186,7 +215,18 @@ impl ResultIrState {
                 ResultIrSnapshot { state: SkinIrState::Failed, ..Default::default() }
             }
             RankingLoadState::Loaded(ranking) => result_ir_ranking_to_skin_snapshot(ranking),
-        }
+        };
+        self.with_connect_timers(snapshot)
+    }
+
+    fn with_connect_timers(
+        &self,
+        mut snapshot: bmz_render::scene::ResultIrSnapshot,
+    ) -> bmz_render::scene::ResultIrSnapshot {
+        snapshot.connect_begin_ms = self.ir_connect_begin_at.map(elapsed_since_ms);
+        snapshot.connect_success_ms = self.ir_connect_success_at.map(elapsed_since_ms);
+        snapshot.connect_fail_ms = self.ir_connect_fail_at.map(elapsed_since_ms);
+        snapshot
     }
 
     pub fn active_state(&self) -> &RankingLoadState {
@@ -232,6 +272,7 @@ fn result_ir_ranking_to_skin_snapshot(
         clear_rate: ranking.clear_rate.map(i64::from),
         previous_rank: None,
         entries,
+        ..Default::default()
     }
 }
 
@@ -351,6 +392,9 @@ fn spawn_result_ir_task_for_target(
         global: RankingLoadState::NotRequested,
         self_and_rivals: RankingLoadState::NotRequested,
         active_tab: ResultRankingTab::Global,
+        ir_connect_begin_at: Some(Instant::now()),
+        ir_connect_success_at: None,
+        ir_connect_fail_at: None,
         query: query.clone(),
         sender: sender.clone(),
         receiver,
@@ -402,6 +446,10 @@ fn spawn_result_ir_task_for_target(
         state.self_and_rivals = RankingLoadState::Loading;
     }
     Some(state)
+}
+
+fn elapsed_since_ms(started_at: Instant) -> i32 {
+    started_at.elapsed().as_millis().min(i32::MAX as u128) as i32
 }
 
 fn state_prefetch_rivals(ir_config: &IrConfig) -> bool {

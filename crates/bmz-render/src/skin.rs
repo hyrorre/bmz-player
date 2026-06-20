@@ -9182,8 +9182,10 @@ fn skin_timer_elapsed_ms(timer: Option<i32>, state: &SkinDrawState) -> Option<i3
         Some(150) => state.result_graph_begin_ms,
         Some(151) => state.result_graph_end_ms,
         Some(152) => state.result_update_score_ms,
-        // TIMER_IR_CONNECT_BEGIN/SUCCESS/FAIL. BMZ has no IR backend yet.
-        Some(172..=174) => None,
+        // TIMER_IR_CONNECT_BEGIN/SUCCESS/FAIL.
+        Some(172) => state.ir_ranking.connect_begin_ms,
+        Some(173) => state.ir_ranking.connect_success_ms,
+        Some(174) => state.ir_ranking.connect_fail_ms,
         Some(40) => state.ready_timer_ms,
         Some(41) => state.play_timer_ms,
         Some(44 | 45) => skin_gauge_max_timer_elapsed_ms(state),
@@ -19712,11 +19714,20 @@ mod tests {
             result_graph_begin_ms: Some(120),
             result_graph_end_ms: Some(120),
             result_update_score_ms: Some(40),
+            ir_ranking: crate::scene::ResultIrSnapshot {
+                connect_begin_ms: Some(180),
+                connect_success_ms: Some(90),
+                connect_fail_ms: Some(30),
+                ..Default::default()
+            },
             ..SkinDrawState::default()
         };
         assert_eq!(skin_timer_elapsed_ms(Some(150), &active), Some(120));
         assert_eq!(skin_timer_elapsed_ms(Some(151), &active), Some(120));
         assert_eq!(skin_timer_elapsed_ms(Some(152), &active), Some(40));
+        assert_eq!(skin_timer_elapsed_ms(Some(172), &active), Some(180));
+        assert_eq!(skin_timer_elapsed_ms(Some(173), &active), Some(90));
+        assert_eq!(skin_timer_elapsed_ms(Some(174), &active), Some(30));
     }
 
     #[test]
@@ -19786,6 +19797,7 @@ mod tests {
                     crate::scene::ResultIrRankingEntrySnapshot::default(),
                     crate::scene::ResultIrRankingEntrySnapshot::default(),
                 ],
+                ..Default::default()
             },
             ..SkinDrawState::default()
         };

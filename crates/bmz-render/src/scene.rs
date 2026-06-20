@@ -435,6 +435,12 @@ impl ResultIrRankingEntrySnapshot {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ResultIrSnapshot {
     pub state: ResultIrState,
+    /// IR connect/send/access begin timer elapsed ms (TIMER_IR_CONNECT_BEGIN=172).
+    pub connect_begin_ms: Option<i32>,
+    /// IR connect/send/access success timer elapsed ms (TIMER_IR_CONNECT_SUCCESS=173).
+    pub connect_success_ms: Option<i32>,
+    /// IR connect/send/access fail timer elapsed ms (TIMER_IR_CONNECT_FAIL=174).
+    pub connect_fail_ms: Option<i32>,
     /// 全体ランキングでの自分の順位 (NUMBER_IR_RANK=179)。
     pub rank: Option<i64>,
     /// ランキング対象の総プレイヤー数 (NUMBER_IR_TOTALPLAYER=180/200)。
@@ -450,6 +456,9 @@ pub struct ResultIrSnapshot {
 impl ResultIrSnapshot {
     pub const EMPTY: Self = Self {
         state: ResultIrState::Offline,
+        connect_begin_ms: None,
+        connect_success_ms: None,
+        connect_fail_ms: None,
         rank: None,
         total_player: None,
         clear_rate: None,
