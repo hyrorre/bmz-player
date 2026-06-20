@@ -1,3 +1,4 @@
+use bmz_core::clear::{ClearType, GaugeType};
 use bmz_core::course::{CourseDefinition, CourseEntry, CourseKind};
 
 use crate::screens::play_finish::FinishedPlaySession;
@@ -42,6 +43,9 @@ pub struct CourseResultSummary {
     pub total_ex_score: u32,
     pub max_ex_score: u32,
     pub total_notes: u32,
+    pub final_clear_type: ClearType,
+    pub final_gauge_type: GaugeType,
+    pub final_gauge_value: f32,
     /// Course-wide max combo with combo carry across chart boundaries.
     pub course_max_combo: u32,
     pub judge_counts: ResultJudgeCounts,
@@ -61,6 +65,9 @@ pub struct CourseResultSummary {
     /// record).  `None` if persistence is unavailable (autoplay, etc.) or
     /// the lookup failed.
     pub best_score: Option<crate::storage::library_db::CourseBestScore>,
+    /// Best persisted course score before the current attempt was inserted.
+    /// Result skins use this as MYBEST / diff baseline.
+    pub previous_best_score: Option<crate::storage::library_db::CourseBestScore>,
 }
 
 #[derive(Debug, Clone)]
@@ -96,10 +103,16 @@ impl ActiveCourseSession {
                 }
             });
 
-        let course_failed = self
-            .entry_results
-            .iter()
-            .any(|r| r.finished.result.clear_type == bmz_core::clear::ClearType::Failed);
+        let course_failed =
+            self.entry_results.iter().any(|r| r.finished.result.clear_type == ClearType::Failed);
+        let last_result = self.entry_results.last().map(|r| &r.finished.result);
+        let final_clear_type = if course_failed {
+            ClearType::Failed
+        } else {
+            last_result.map(|r| r.clear_type).unwrap_or(ClearType::NoPlay)
+        };
+        let final_gauge_type = last_result.map(|r| r.gauge_type).unwrap_or(GaugeType::Normal);
+        let final_gauge_value = last_result.map(|r| r.gauge_value).unwrap_or(0.0);
         let total_entries = self.definition.entries.len();
         let played_entries = self.entry_results.len();
 
@@ -128,7 +141,8 @@ impl ActiveCourseSession {
 
         let entry_arranges: Vec<AppliedArrange> =
             self.entry_results.iter().map(|r| r.finished.applied_arrange.clone()).collect();
-        let course_titles = course_titles_from_entries(&self.definition.entries);
+        let course_titles =
+            course_titles_from_results(&self.definition.entries, &self.entry_results);
         let entry_summaries = self.entry_results.into_iter().map(|r| r.finished.summary).collect();
 
         CourseResultSummary {
@@ -143,6 +157,9 @@ impl ActiveCourseSession {
             total_ex_score,
             max_ex_score,
             total_notes,
+            final_clear_type,
+            final_gauge_type,
+            final_gauge_value,
             course_max_combo,
             judge_counts,
             trophy_results,
@@ -156,6 +173,7 @@ impl ActiveCourseSession {
             // after persisting this attempt, so the lookup includes the row
             // we just inserted.
             best_score: None,
+            previous_best_score: None,
         }
     }
 }
@@ -166,6 +184,20 @@ fn course_titles_from_entries(entries: &[CourseEntry]) -> [String; 10] {
         let title = if entry.title_hint.is_empty() { "----" } else { entry.title_hint.as_str() };
         titles[index] =
             if entry.chart_id.is_some() { title.to_string() } else { format!("(no song) {title}") };
+    }
+    titles
+}
+
+fn course_titles_from_results(
+    entries: &[CourseEntry],
+    results: &[CourseEntryResult],
+) -> [String; 10] {
+    let mut titles = course_titles_from_entries(entries);
+    for (index, result) in results.iter().take(10).enumerate() {
+        let title = result.finished.summary.title.trim();
+        if !title.is_empty() {
+            titles[index] = title.to_string();
+        }
     }
     titles
 }
@@ -454,6 +486,7 @@ mod tests {
         );
         let result = session.into_result();
         assert!(result.course_failed);
+        assert_eq!(result.final_clear_type, ClearType::Failed);
         assert!(!result.course_clear);
         assert_eq!(result.played_entries, 2);
         assert_eq!(result.total_entries, 4);
@@ -462,7 +495,7 @@ mod tests {
     }
 
     #[test]
-    fn into_result_keeps_course_titles_from_definition() {
+    fn into_result_prefers_played_chart_titles_for_course_titles() {
         use bmz_core::clear::ClearType;
 
         let mut session = make_partial_session(
@@ -477,11 +510,13 @@ mod tests {
         session.definition.entries[2].title_hint = "Missing Stage".to_string();
         session.definition.entries[2].chart_id = None;
         session.definition.entries[3].title_hint.clear();
+        session.entry_results[0].finished.summary.title = "Resolved One".to_string();
+        session.entry_results[1].finished.summary.title = "Resolved Two".to_string();
 
         let result = session.into_result();
 
-        assert_eq!(result.course_titles[0], "Stage One");
-        assert_eq!(result.course_titles[1], "Stage Two");
+        assert_eq!(result.course_titles[0], "Resolved One");
+        assert_eq!(result.course_titles[1], "Resolved Two");
         assert_eq!(result.course_titles[2], "(no song) Missing Stage");
         assert_eq!(result.course_titles[3], "----");
         assert_eq!(result.course_titles[4], "");

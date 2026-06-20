@@ -1023,11 +1023,6 @@ enum AppSceneKind {
 
 fn course_result_summary_for_skin(course: &CourseResultSummary) -> ResultSummary {
     let last = course.entry_summaries.last();
-    let clear_type = if course.course_failed {
-        ClearType::Failed
-    } else {
-        last.map(|summary| summary.clear_type).unwrap_or(ClearType::NoPlay)
-    };
     let max_combo = course.course_max_combo;
     let bp = course.entry_summaries.iter().map(|summary| summary.bp).sum();
     let cb = course.entry_summaries.iter().map(|summary| summary.cb).sum();
@@ -1050,17 +1045,21 @@ fn course_result_summary_for_skin(course: &CourseResultSummary) -> ResultSummary
         });
     let best_clear_type =
         course.best_score.as_ref().and_then(|best| ClearType::from_label(&best.clear_type));
+    let previous_best_clear_type = course
+        .previous_best_score
+        .as_ref()
+        .and_then(|best| ClearType::from_label(&best.clear_type));
 
     ResultSummary {
-        clear_type,
+        clear_type: course.final_clear_type,
         arrange: "NORMAL".to_string(),
         lane_shuffle_pattern: Vec::new(),
         ex_score: course.total_ex_score,
         max_combo,
         bp,
         cb,
-        gauge_value: last.map(|summary| summary.gauge_value).unwrap_or(0.0),
-        gauge_type: last.map(|summary| summary.gauge_type).unwrap_or(GaugeType::Normal),
+        gauge_value: course.final_gauge_value,
+        gauge_type: course.final_gauge_type,
         total_notes: course.total_notes,
         duration_ms: last.map(|summary| summary.duration_ms).unwrap_or(0),
         initial_bpm: last.map(|summary| summary.initial_bpm).unwrap_or(0.0),
@@ -1092,10 +1091,10 @@ fn course_result_summary_for_skin(course: &CourseResultSummary) -> ResultSummary
         best_clear_type,
         best_max_combo: course.best_score.as_ref().map(|best| best.max_combo),
         best_bp: course.best_score.as_ref().map(|best| best.bp),
-        previous_best_ex_score: None,
-        previous_best_clear_type: None,
-        previous_best_max_combo: None,
-        previous_best_bp: None,
+        previous_best_ex_score: course.previous_best_score.as_ref().map(|best| best.ex_score),
+        previous_best_clear_type,
+        previous_best_max_combo: course.previous_best_score.as_ref().map(|best| best.max_combo),
+        previous_best_bp: course.previous_best_score.as_ref().map(|best| best.bp),
         target_ex_score: None,
         target_max_combo: None,
         target_bp: None,
@@ -5603,18 +5602,6 @@ impl WinitApp {
             .filter(|id| *id > 0)
             .collect();
         let last_finished = course.entry_results.last().map(|r| r.finished.clone());
-        let last_clear_type = course
-            .entry_results
-            .last()
-            .map(|r| r.finished.result.clear_type)
-            .unwrap_or(bmz_core::clear::ClearType::NoPlay);
-        let last_gauge_type = course
-            .entry_results
-            .last()
-            .map(|r| r.finished.result.gauge_type)
-            .unwrap_or(bmz_core::clear::GaugeType::Normal);
-        let last_gauge_value =
-            course.entry_results.last().map(|r| r.finished.result.gauge_value).unwrap_or(0.0);
         let max_combo: u32 =
             course.entry_results.iter().map(|r| r.finished.course_max_combo).max().unwrap_or(0);
         let course_arrange = course
@@ -5653,11 +5640,12 @@ impl WinitApp {
         //   from the select screen is out of scope for this change; only the
         //   save path is wired up.
         if !any_autoplay && !any_replay_playback {
-            let final_clear_type = if course_result.course_failed {
-                bmz_core::clear::ClearType::Failed
-            } else {
-                last_clear_type
-            };
+            course_result.previous_best_score =
+                self.boot.library_db.best_course_score(course_id).unwrap_or_else(|error| {
+                    tracing::warn!(%error, course_id, "failed to read previous best course score");
+                    None
+                });
+            let final_clear_type = course_result.final_clear_type;
             let bp = course_result.judge_counts.bad
                 + course_result.judge_counts.poor
                 + course_result.judge_counts.empty_poor;
@@ -5683,8 +5671,8 @@ impl WinitApp {
                 ex_score: course_result.total_ex_score,
                 max_ex_score: course_result.max_ex_score,
                 clear_type: final_clear_type.as_str().to_string(),
-                gauge_type: last_gauge_type.as_str().to_string(),
-                gauge_value: last_gauge_value,
+                gauge_type: course_result.final_gauge_type.as_str().to_string(),
+                gauge_value: course_result.final_gauge_value,
                 max_combo,
                 bp,
                 course_failed: course_result.course_failed,
@@ -5826,11 +5814,7 @@ impl WinitApp {
     ) -> Option<(String, String, String)> {
         let definition = self.ir_course_definition(course.course_id)?;
         let course_hash = crate::ir::course_payload::compute_course_hash(&definition);
-        let gauge = self
-            .finished_play
-            .as_ref()
-            .map(|finished| finished.result.gauge_type.as_str().to_string())
-            .unwrap_or_else(|| bmz_core::clear::GaugeType::Normal.as_str().to_string());
+        let gauge = course.final_gauge_type.as_str().to_string();
         let ln_policy = self.boot.profile_config.play.ln_mode_policy.as_ir_str().to_string();
         Some((course_hash, gauge, ln_policy))
     }
@@ -13972,7 +13956,7 @@ mod tests {
             duration_ms: i32,
         ) -> ResultSummary {
             ResultSummary {
-                clear_type: ClearType::Normal,
+                clear_type: ClearType::NoPlay,
                 arrange: "NORMAL".to_string(),
                 lane_shuffle_pattern: Vec::new(),
                 ex_score,
@@ -14074,6 +14058,9 @@ mod tests {
             total_ex_score: 320,
             max_ex_score: 440,
             total_notes: 220,
+            final_clear_type: ClearType::Hard,
+            final_gauge_type: GaugeType::ExClass,
+            final_gauge_value: 42.5,
             course_max_combo: 170,
             judge_counts: crate::screens::result_model::ResultJudgeCounts {
                 pgreat: 160,
@@ -14087,15 +14074,49 @@ mod tests {
             played_entries: 2,
             replay_slots: [true, false, true, false],
             saved_replay_slots: [false, false, true, false],
-            best_score: None,
+            best_score: Some(crate::storage::library_db::CourseBestScore {
+                course_score_id: 22,
+                course_id: 1,
+                ex_score: 340,
+                max_ex_score: 440,
+                clear_type: "ExHard".to_string(),
+                gauge_type: "ExHardClass".to_string(),
+                gauge_value: 64.0,
+                max_combo: 180,
+                bp: 4,
+                course_failed: false,
+                course_clear: true,
+                played_at: 2,
+            }),
+            previous_best_score: Some(crate::storage::library_db::CourseBestScore {
+                course_score_id: 21,
+                course_id: 1,
+                ex_score: 300,
+                max_ex_score: 440,
+                clear_type: "Normal".to_string(),
+                gauge_type: "Class".to_string(),
+                gauge_value: 60.0,
+                max_combo: 150,
+                bp: 12,
+                course_failed: false,
+                course_clear: true,
+                played_at: 1,
+            }),
         };
 
         let summary = course_result_summary_for_skin(&course);
         assert_eq!(summary.title, "Course Title");
         assert_eq!(summary.genre, "DAN");
+        assert_eq!(summary.clear_type, ClearType::Hard);
+        assert_eq!(summary.gauge_type, GaugeType::ExClass);
+        assert_eq!(summary.gauge_value, 42.5);
         assert_eq!(summary.ex_score, 320);
         assert_eq!(summary.total_notes, 220);
         assert_eq!(summary.max_combo, 170);
+        assert_eq!(summary.best_ex_score, Some(340));
+        assert_eq!(summary.best_clear_type, Some(ClearType::ExHard));
+        assert_eq!(summary.previous_best_ex_score, Some(300));
+        assert_eq!(summary.previous_best_clear_type, Some(ClearType::Normal));
         assert_eq!(summary.replay_slots, [true, false, true, false]);
         assert_eq!(summary.saved_replay_slots, [false, false, true, false]);
         assert_eq!(summary.judge_counts.pgreat, 160);

@@ -194,6 +194,9 @@ mod tests {
             total_ex_score: 0,
             max_ex_score: 0,
             total_notes: 0,
+            final_clear_type: bmz_core::clear::ClearType::NoPlay,
+            final_gauge_type: bmz_core::clear::GaugeType::Class,
+            final_gauge_value: 0.0,
             course_max_combo: 123,
             judge_counts: ResultJudgeCounts::default(),
             trophy_results: Vec::new(),
@@ -204,6 +207,7 @@ mod tests {
             replay_slots: [false; 4],
             saved_replay_slots: [false; 4],
             best_score: None,
+            previous_best_score: None,
         };
         let payload = build_course_submission(
             &definition,
