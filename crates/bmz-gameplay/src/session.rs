@@ -14,6 +14,7 @@ use bmz_core::time::TimeUs;
 use crate::autoplay::AutoplayController;
 use crate::gauge::GaugeState;
 use crate::hit_error::HitErrorRing;
+use crate::input::backend::monotonic_timestamp_ns;
 use crate::input::system::InputSystem;
 use crate::input::translator::{InputTimestampAnchor, InputTimingContext};
 use crate::judge::engine::JudgeEngine;
@@ -822,6 +823,14 @@ pub fn sync_judge_windows(session: &mut GameSession, now: TimeUs) {
     ));
 }
 
+fn sync_input_timestamp_anchor(session: &mut GameSession, audio_now: TimeUs) {
+    session.input_timestamp_anchor = if session.audio_clock.running {
+        Some(InputTimestampAnchor { monotonic_ns: monotonic_timestamp_ns(), audio_time: audio_now })
+    } else {
+        None
+    };
+}
+
 pub fn advance_session_frame(
     session: &mut GameSession,
     audio: &mut dyn AudioScheduler,
@@ -831,6 +840,7 @@ pub fn advance_session_frame(
     }
 
     let times = compute_frame_times(session);
+    sync_input_timestamp_anchor(session, times.audio_now);
     clear_stale_wall_clock_lane_key_states(session, times.render_now);
     update_scratch_angle_phase(session, times.render_now);
     let mut judgements = Vec::new();
@@ -1634,6 +1644,65 @@ mod tests {
         assert_eq!(session.lane_keyon_started_at[Lane::Key1.index()], None);
         assert_eq!(session.lane_keyoff_started_at[Lane::Key2.index()], None);
         assert_eq!(session.lane_keyon_started_at[Lane::Key3.index()], Some(TimeUs(-250_000)));
+    }
+
+    #[test]
+    fn sync_input_timestamp_anchor_tracks_running_audio_clock() {
+        let mut session = session_with_autoplay(chart_with_keysound());
+        session.input_timestamp_anchor =
+            Some(InputTimestampAnchor { monotonic_ns: 123, audio_time: TimeUs(456) });
+
+        sync_input_timestamp_anchor(&mut session, TimeUs(1_234_567));
+
+        assert!(session.input_timestamp_anchor.is_none());
+
+        session.audio_clock.running = true;
+        sync_input_timestamp_anchor(&mut session, TimeUs(1_234_567));
+
+        let anchor = session.input_timestamp_anchor.unwrap();
+        assert_eq!(anchor.audio_time, TimeUs(1_234_567));
+        assert!(anchor.monotonic_ns <= monotonic_timestamp_ns());
+    }
+
+    #[test]
+    fn process_human_inputs_uses_monotonic_event_time() {
+        use crate::input::backend::{
+            BufferedInputBackend, DeviceId, DeviceInputEvent, DeviceTimestamp, PhysicalControl,
+        };
+        use crate::input::binding::{BindingEntry, LaneBinding};
+
+        let mut session = session_with_autoplay(chart_with_bgm());
+        session.autoplay = None;
+        session.audio_clock.running = true;
+        session.audio_clock.current_frame = Arc::new(AtomicU64::new(48_000));
+        session.input_timestamp_anchor =
+            Some(InputTimestampAnchor { monotonic_ns: 2_000_000, audio_time: TimeUs(1_000_000) });
+        let mut backend = BufferedInputBackend::default();
+        backend.push(DeviceInputEvent {
+            device: DeviceId(1),
+            control: PhysicalControl::KeyboardKey("Z".to_string()),
+            kind: InputKind::Press,
+            timestamp: DeviceTimestamp::MonotonicNs(1_500_000),
+        });
+        session.input_system = InputSystem {
+            backend: Box::new(backend),
+            translator: Box::new(DefaultInputTranslator {
+                binding: LaneBinding {
+                    entries: vec![BindingEntry {
+                        device: None,
+                        control: PhysicalControl::KeyboardKey("Z".to_string()),
+                        lane: Lane::Key1,
+                        scratch_direction: None,
+                    }],
+                },
+            }),
+        };
+
+        let judgements = process_human_inputs(&mut session);
+
+        assert!(judgements.is_empty());
+        assert_eq!(session.replay_recorder.events[0].time, TimeUs(999_500));
+        assert_eq!(session.lane_keyon_started_at[Lane::Key1.index()], Some(TimeUs(999_500)));
     }
 
     #[test]
