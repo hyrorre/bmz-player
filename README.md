@@ -123,7 +123,6 @@ cargo run
 - [x] ランキングのテーブルの上に自己ベストスコア表示と自己スコア全履歴を表示するボタンを追加
 - [x] song searchのカーソル移動機能
 - [x] profile機能拡充
-- [x] リザルト画面のSEフェードアウト
 - [x] 同梱スキン準備作業 (git submodule化)
 - [x] ライセンス周りの整備
 - [x] 同梱スキンに4K / 6K / 8Kを追加
@@ -132,6 +131,36 @@ cargo run
 - [x] 8K / 9K のキーコンフィグ項目が2P KEY1 / 2P KEY2になっているのでKEY8 / KEY9に変更
 - [x] /入力で検索モードに入る条件の調整
 - [x] クイックリトライの操作方法検討と実装
+- [x] defaultの result / course result が機能しておらず、シーンがスキップされ select 画面に戻ってしまう
+- [x] course mode でコンボ数を引き継ぐよう変更 (単曲スコアとして保存されるMAX COMBOは単曲のものを使う)
+- [x] course modeでdecide画面がスキップされている
+- [x] 曲開始前に終了させると、READYまでFAILED演出が出ない
+- [x] course mode ir送信エラー rule.ln_policy is invalid
+- [x] course mode 途中落ちでも単曲リザルトを表示させたい
+- [x] course mode 時に単曲のクリアランプがCLEARになるが、NO PLAYにしたい (beatorajaと同様)
+- [x] 毎曲ごとにdecide画面が表示されるが、course選択時のみにしたい
+- [x] decide画面では曲名の代わりにcourse名を表示させる
+- [x] course mode時、play skinに曲名が表示されるのが遅い
+- [x] course result skinに各曲の情報、IR情報が表示されていない
+- [x] course result時にF1を押した時、コースリザルト情報は出てくるが、IR情報が出てこない
+- [x] course mode の単曲リザルトでIR送信対象が無しになっている
+- [x] course mode の単曲リザルトでMYBEST表示、MYBESTとの差分表示が無い
+- [x] course mode の最後の曲の単曲リザルトも表示する
+- [x] course result skinのMYBEST表示が今回のスコア表示になっている
+- [x] course result skinの各曲の情報表示窓に表示されるのがcourse 1-4という仮のテキスト？になっている
+- [x] 単曲リザルトだけでなくcourse resultもNoPlayに丸められている (CLEAR, HARD, EXHなどになるべき)
+- [x] course mode の Gauge Auto Shift 対応
+
+- [x] アナログスクラッチの停止判定が緩すぎて、連続で同じ方向に回すと全然反応しない (beatorajaと同じアルゴリズムを目指す)
+- [x] Calamity Fortune[F]のLN終端が普通のノーツになっている (G:\BMS\INSANE\[ZUN remixed by LeaF] Calamity Fortune)
+- [x] 設定フォルダ内で[編集中]にスクラッチを回して選択項目を上下させる操作に対応させる
+- [x] 画像形式のBGAの読み込みが同期になっており遅い
+- [ ] play skin turntableの回転方向が逆？
+- [x] 低解像度BGAのピクセル補間について確認
+- [x] IRの送信完了タイマーとrefへの対応
+- [x] decide skin, result skinへ難易度表情報を連携 (その譜面がどの難易度表のどの難易度に含まれているか)
+- [x] beatorajaにselect skinへ難易度表情報を連携するインターフェースがあるか確認
+- [x] リザルト画面のSEフェードアウト
 - [ ] /deletescoreコマンドの実装
 - [ ] 難易度表のデフォルトを追加
 - [ ] ln_policyをAUTO/FORCEとLN/CN/HCNに分けることでselect skinのLN変更機能を有効化
@@ -140,6 +169,7 @@ cargo run
 - [ ] アシストオプション、詳細オプション実装
 - [ ] Select画面の操作変更とスキン側の不一致について考える
 - [ ] Select画面の操作が一部profile.tomlに設定されており複雑なので整理
+
 
 ## Roadmap
 
