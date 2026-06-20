@@ -3422,7 +3422,7 @@ impl SkinDocument {
                 state,
                 has_half_grade_f_diff_rank_destination,
             )?;
-            let signed = value_is_signed_for_state(value, state);
+            let signed_render = signed_number_render_for_value(value, state);
             return Some(self.value_number_render_items(
                 &value.id,
                 number,
@@ -3432,7 +3432,7 @@ impl SkinDocument {
                 sources,
                 false,
                 None,
-                signed,
+                signed_render,
             ));
         }
 
@@ -3556,7 +3556,7 @@ impl SkinDocument {
                 state,
                 has_half_grade_f_diff_rank_destination,
             )?;
-            let signed = value_is_signed_for_state(value, state);
+            let signed_render = signed_number_render_for_value(value, state);
             return Some(self.value_number_render_items(
                 &value.id,
                 number,
@@ -3566,7 +3566,7 @@ impl SkinDocument {
                 sources,
                 false,
                 None,
-                signed,
+                signed_render,
             ));
         }
 
@@ -5230,6 +5230,14 @@ impl SkinDocument {
             if let Some(value) = self.value.iter().find(|value| value.id == number_destination.id) {
                 Self::apply_beatoraja_judge_number_dst_x(&mut number_frame, value.digit);
             }
+            let signed_render =
+                if self.value.iter().find(|value| value.id == number_destination.id).is_some_and(
+                    |value| ref_id_is_signed(value.ref_id) || value_layout_is_signed(value),
+                ) {
+                    SignedNumberRender::Signed(SignedNumberRowOrder::PositiveFirst)
+                } else {
+                    SignedNumberRender::Unsigned
+                };
             items.extend(self.value_number_render_items(
                 &number_destination.id,
                 combo as i64,
@@ -5239,9 +5247,7 @@ impl SkinDocument {
                 sources,
                 false,
                 Some(2),
-                self.value.iter().find(|value| value.id == number_destination.id).is_some_and(
-                    |value| ref_id_is_signed(value.ref_id) || value_layout_is_signed(value),
-                ),
+                signed_render,
             ));
         }
         Some(items)
@@ -5294,7 +5300,7 @@ impl SkinDocument {
         sources: &HashMap<String, SkinDocumentTexture>,
         compact_digits: bool,
         align_override: Option<i32>,
-        signed: bool,
+        signed_render: SignedNumberRender,
     ) -> Vec<SkinRenderItem> {
         let Some(value) = self.value.iter().find(|value| value.id == value_id) else {
             return Vec::new();
@@ -5315,15 +5321,15 @@ impl SkinDocument {
         }
         let padding = number_padding(value);
         let max_digits = value.digit.max(0) as usize;
-        let digits = if signed {
-            display_signed_number_digits(
+        let digits = match signed_render {
+            SignedNumberRender::Signed(row_order) => display_signed_number_digits_with_row_order(
                 number,
                 max_digits,
                 signed_value_zero_pad(value, padding),
                 divx as u32,
-            )
-        } else {
-            display_number_digits(number, max_digits, padding)
+                row_order,
+            ),
+            SignedNumberRender::Unsigned => display_number_digits(number, max_digits, padding),
         };
         // 桁間スペース (space フィールド、px 単位)
         let digit_step = frame.w + value.space;
@@ -7667,6 +7673,18 @@ impl NumberPadding {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SignedNumberRowOrder {
+    PositiveFirst,
+    NegativeFirst,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SignedNumberRender {
+    Unsigned,
+    Signed(SignedNumberRowOrder),
+}
+
 fn number_padding(value: &SkinValueDef) -> NumberPadding {
     if value.zeropadding == 2 || value.padding == 2 {
         return NumberPadding::Blank;
@@ -7723,10 +7741,34 @@ fn display_signed_number_digits(
     zero_pad: bool,
     divx: u32,
 ) -> Vec<u8> {
+    display_signed_number_digits_with_row_order(
+        value,
+        max_digits,
+        zero_pad,
+        divx,
+        SignedNumberRowOrder::PositiveFirst,
+    )
+}
+
+fn display_signed_number_digits_with_row_order(
+    value: i64,
+    max_digits: usize,
+    zero_pad: bool,
+    divx: u32,
+    row_order: SignedNumberRowOrder,
+) -> Vec<u8> {
     if max_digits == 0 {
         return Vec::new();
     }
-    let row_offset = if value < 0 { divx as u8 } else { 0 };
+    let negative_row = match row_order {
+        SignedNumberRowOrder::PositiveFirst => divx as u8,
+        SignedNumberRowOrder::NegativeFirst => 0,
+    };
+    let positive_row = match row_order {
+        SignedNumberRowOrder::PositiveFirst => 0,
+        SignedNumberRowOrder::NegativeFirst => divx as u8,
+    };
+    let row_offset = if value < 0 { negative_row } else { positive_row };
     let inner_width = max_digits;
     let abs = value.unsigned_abs();
     let abs_text = if zero_pad && inner_width > 0 {
@@ -7771,6 +7813,33 @@ fn value_layout_is_signed(value: &SkinValueDef) -> bool {
 
 fn value_is_signed_for_state(value: &SkinValueDef, state: &SkinDrawState) -> bool {
     value_ref_is_signed_for_state(value.ref_id, state) || value_layout_is_signed(value)
+}
+
+fn signed_number_render_for_value(
+    value: &SkinValueDef,
+    state: &SkinDrawState,
+) -> SignedNumberRender {
+    if value_is_signed_for_state(value, state) {
+        SignedNumberRender::Signed(signed_number_row_order_for_value(value, state))
+    } else {
+        SignedNumberRender::Unsigned
+    }
+}
+
+fn signed_number_row_order_for_value(
+    value: &SkinValueDef,
+    state: &SkinDrawState,
+) -> SignedNumberRowOrder {
+    if state.select_screen
+        && value.ref_id == 154
+        && value.id == "RANK_Diff_Exscore"
+        && value.divx >= 12
+        && value.divy >= 2
+    {
+        SignedNumberRowOrder::NegativeFirst
+    } else {
+        SignedNumberRowOrder::PositiveFirst
+    }
 }
 
 fn lookup_text(values: &[(TextSlot, String)], slot: TextSlot) -> String {
@@ -13965,7 +14034,7 @@ mod tests {
             _ => None,
         });
 
-        assert_eq!(first_digit_uv.map(|uv| uv.y), Some(0.5));
+        assert_eq!(first_digit_uv.map(|uv| uv.y), Some(0.0));
         assert!(
             items.iter().any(|item| matches!(
                 item,
@@ -14057,7 +14126,7 @@ mod tests {
 
         let (state, _) = document.select_draw_state(&snapshot, None);
         assert_eq!(skin_state_number(154, &state), Some(-501));
-        assert_eq!(first_digit_uv.map(|uv| uv.y), Some(0.5));
+        assert_eq!(first_digit_uv.map(|uv| uv.y), Some(0.0));
         assert!(
             items.iter().any(|item| matches!(
                 item,
@@ -14104,6 +14173,70 @@ mod tests {
             item,
             SkinRenderItem::Image { texture: SkinTextureId(7) | SkinTextureId(42), .. }
         )));
+    }
+
+    #[test]
+    fn select_diff_number_renders_max_zero_as_positive_row() {
+        let document: SkinDocument = serde_json::from_str(
+            r#"
+            {
+                "type": 5,
+                "w": 100,
+                "h": 100,
+                "value": [
+                    {
+                        "id": "RANK_Diff_Exscore",
+                        "src": "num",
+                        "x": 0,
+                        "y": 0,
+                        "w": 120,
+                        "h": 40,
+                        "divx": 12,
+                        "divy": 2,
+                        "digit": 4,
+                        "ref": 154,
+                        "zeropadding": 2
+                    }
+                ],
+                "destination": [
+                    {
+                        "id": "RANK_Diff_Exscore",
+                        "dst": [{"x": 10, "y": 20, "w": 10, "h": 10}]
+                    }
+                ]
+            }
+            "#,
+        )
+        .unwrap();
+        let sources = HashMap::from([(
+            "num".to_string(),
+            SkinDocumentTexture {
+                source_id: "num".to_string(),
+                texture: SkinTextureId(42),
+                source_size: SkinImageSize { width: 120.0, height: 40.0 },
+            },
+        )]);
+        let snapshot = SelectSnapshot {
+            rows: vec![SelectRowSnapshot {
+                index: 0,
+                ex_score: Some(2000),
+                total_notes: 1000,
+                in_library: true,
+                ..SelectRowSnapshot::default()
+            }],
+            chart_count: 1,
+            ..SelectSnapshot::default()
+        };
+
+        let items = document.select_render_items(&sources, &snapshot);
+        let first_digit_uv = items.iter().find_map(|item| match item {
+            SkinRenderItem::Image { texture: SkinTextureId(42), uv, .. } => Some(*uv),
+            _ => None,
+        });
+
+        let (state, _) = document.select_draw_state(&snapshot, None);
+        assert_eq!(skin_state_number(154, &state), Some(0));
+        assert_eq!(first_digit_uv.map(|uv| uv.y), Some(0.5));
     }
 
     #[test]
@@ -19199,6 +19332,26 @@ mod tests {
         assert!(ref_id_is_signed(154));
         assert_eq!(display_signed_number_digits(34, 4, false, 12), vec![11, 3, 4]);
         assert_eq!(display_signed_number_digits(0, 4, false, 12), vec![11, 0]);
+        assert_eq!(
+            display_signed_number_digits_with_row_order(
+                -34,
+                4,
+                false,
+                12,
+                SignedNumberRowOrder::NegativeFirst
+            ),
+            vec![11, 3, 4]
+        );
+        assert_eq!(
+            display_signed_number_digits_with_row_order(
+                0,
+                4,
+                false,
+                12,
+                SignedNumberRowOrder::NegativeFirst
+            ),
+            vec![23, 12]
+        );
 
         let score_diff_value = SkinValueDef {
             id: "score_diff_mybest".to_string(),
