@@ -900,6 +900,16 @@ struct PlayEndingTransition {
     full_combo_elapsed_at_finish_ms: Option<i32>,
 }
 
+fn failed_play_ending(started_at: Instant) -> PlayEndingTransition {
+    PlayEndingTransition {
+        started_at,
+        fadeout_started_at: None,
+        finished: None,
+        failed: true,
+        full_combo_elapsed_at_finish_ms: None,
+    }
+}
+
 /// リザルト画面終了フェードアウトの進行状態。
 /// フェードアウト時間が経過したら `action` を実行して画面を切り替える。
 struct ResultExit {
@@ -7878,6 +7888,9 @@ impl WinitApp {
         }
         if self.stop_play_if_exit_hold_elapsed() {
             self.clear_play_control_holds();
+            if self.play_ending.is_some() {
+                return;
+            }
         }
         self.maybe_start_ready_phase();
         if self.play_ready_sound_started_at.is_none() {
@@ -8079,6 +8092,11 @@ impl WinitApp {
         };
         self.clear_play_control_holds();
         self.play_system_sound(crate::system_sound::SoundType::PlayStop);
+        if self.play_ready_sound_started_at.is_none() && self.play_ending.is_none() {
+            self.pending_play_start = None;
+            self.play_ending = Some(failed_play_ending(Instant::now()));
+            self.update_play_ending_snapshot();
+        }
         stopped
     }
 
@@ -13534,6 +13552,18 @@ mod tests {
             result_scene_duration_for_document(Some(&document)),
             Duration::from_millis(2345)
         );
+    }
+
+    #[test]
+    fn failed_play_ending_starts_failed_timer_without_finish_result() {
+        let started_at = Instant::now();
+        let ending = failed_play_ending(started_at);
+
+        assert_eq!(ending.started_at, started_at);
+        assert!(ending.failed);
+        assert!(ending.finished.is_none());
+        assert!(ending.fadeout_started_at.is_none());
+        assert!(ending.full_combo_elapsed_at_finish_ms.is_none());
     }
 
     #[test]
