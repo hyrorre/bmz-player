@@ -3864,9 +3864,8 @@ impl WinitApp {
             || self.active_play.is_some()
             || self.pending_decide.is_some()
             || self.pending_play_start.is_some()
-            || self.select_option_panel > 1
             || self.key_config_edit.is_some()
-            || self.settings_edit.is_some()
+            || (self.select_option_panel > 1 && self.settings_edit.is_none())
         {
             return;
         }
@@ -3913,16 +3912,24 @@ impl WinitApp {
             self.reset_select_analog_scroll();
             return;
         }
-        if self.select_option_panel > 1
-            || self.key_config_edit.is_some()
-            || self.settings_edit.is_some()
-        {
+        if self.key_config_edit.is_some() {
             self.reset_select_analog_scroll();
             return;
         }
         let ticks_per_scroll = self.boot.profile_config.input.analog_ticks_per_scroll.max(1) as i32;
         let mov = take_analog_scroll_steps(&mut self.select_analog_scroll_buffer, ticks_per_scroll);
         if mov == 0 {
+            return;
+        }
+        if self.settings_edit.is_some() {
+            let direction = settings_edit_direction_from_analog_scroll(mov);
+            for _ in 0..mov.abs() {
+                self.adjust_settings_edit(direction);
+            }
+            return;
+        }
+        if self.select_option_panel > 1 {
+            self.reset_select_analog_scroll();
             return;
         }
         if self.select_option_panel == 1 {
@@ -9300,6 +9307,10 @@ fn settings_browse_move_control(control: &str, bindings: &SettingsBindings) -> O
         _ if bindings.is_decrease(control) => Some(SelectMove::Previous),
         _ => None,
     }
+}
+
+fn settings_edit_direction_from_analog_scroll(mov: i32) -> i32 {
+    mov.signum()
 }
 
 fn system_sound_manager_from_boot(
@@ -14869,6 +14880,13 @@ mod tests {
         assert_eq!(select_analog_scroll_delta("Axis2", -4, &gamepad_keys), None);
         assert_eq!(select_analog_scroll_delta("Axis1", 0, &gamepad_keys), None);
         assert_eq!(select_analog_scroll_delta("Axis3", 4, &gamepad_keys), None);
+    }
+
+    #[test]
+    fn settings_edit_analog_scroll_uses_scratch_direction() {
+        assert_eq!(settings_edit_direction_from_analog_scroll(3), 1);
+        assert_eq!(settings_edit_direction_from_analog_scroll(-2), -1);
+        assert_eq!(settings_edit_direction_from_analog_scroll(0), 0);
     }
 
     #[test]
