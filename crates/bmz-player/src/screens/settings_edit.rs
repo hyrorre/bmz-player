@@ -338,8 +338,8 @@ impl SettingsEditSession {
             SettingsEntryId::AnalogScratchSensitivity => {
                 SettingsBaseline::F32(profile.input.analog_scratch_sensitivity)
             }
-            SettingsEntryId::AnalogScratchTimeoutMs => {
-                SettingsBaseline::U32(profile.input.analog_scratch_timeout_ms)
+            SettingsEntryId::AnalogScratchThreshold => {
+                SettingsBaseline::U32(profile.input.analog_scratch_threshold)
             }
             SettingsEntryId::AnalogTicksPerScroll => {
                 SettingsBaseline::U32(profile.input.analog_ticks_per_scroll)
@@ -480,8 +480,8 @@ impl SettingsEditSession {
             (SettingsEntryId::AnalogScratchSensitivity, SettingsBaseline::F32(value)) => {
                 profile.input.analog_scratch_sensitivity = *value;
             }
-            (SettingsEntryId::AnalogScratchTimeoutMs, SettingsBaseline::U32(value)) => {
-                profile.input.analog_scratch_timeout_ms = *value;
+            (SettingsEntryId::AnalogScratchThreshold, SettingsBaseline::U32(value)) => {
+                profile.input.analog_scratch_threshold = *value;
             }
             (SettingsEntryId::AnalogTicksPerScroll, SettingsBaseline::U32(value)) => {
                 profile.input.analog_ticks_per_scroll = *value;

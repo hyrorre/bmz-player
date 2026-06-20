@@ -50,7 +50,7 @@ pub enum SettingsEntryId {
     SelectInputMode,
     ScratchInputMode,
     AnalogScratchSensitivity,
-    AnalogScratchTimeoutMs,
+    AnalogScratchThreshold,
     AnalogTicksPerScroll,
     ReplayAutoSave,
     ReplaySlot1Rule,
@@ -111,7 +111,7 @@ impl SettingsEntryId {
         Self::SelectInputMode,
         Self::ScratchInputMode,
         Self::AnalogScratchSensitivity,
-        Self::AnalogScratchTimeoutMs,
+        Self::AnalogScratchThreshold,
         Self::AnalogTicksPerScroll,
     ];
 
@@ -163,7 +163,7 @@ impl SettingsEntryId {
             Self::SelectInputMode => "SELECT INPUT",
             Self::ScratchInputMode => "SCRATCH",
             Self::AnalogScratchSensitivity => "ANALOG SENS",
-            Self::AnalogScratchTimeoutMs => "ANALOG TIME",
+            Self::AnalogScratchThreshold => "ANALOG STOP",
             Self::AnalogTicksPerScroll => "ANALOG SCROLL",
             Self::ReplayAutoSave => "REPLAY SAVE",
             Self::ReplaySlot1Rule => "REPLAY 1",
@@ -180,7 +180,8 @@ pub fn settings_adjust_step(id: SettingsEntryId) -> i32 {
         SettingsEntryId::InputOffsetMs | SettingsEntryId::VisualOffsetMs => 1,
         SettingsEntryId::Sudden | SettingsEntryId::Lift | SettingsEntryId::Hidden => 25,
         SettingsEntryId::TargetGreenNumber => 10,
-        SettingsEntryId::AnalogScratchTimeoutMs | SettingsEntryId::MisslayerDurationMs => 50,
+        SettingsEntryId::MisslayerDurationMs => 50,
+        SettingsEntryId::AnalogScratchThreshold => 10,
         _ => 1,
     }
 }
@@ -243,8 +244,8 @@ pub fn format_settings_value(profile: &ProfileConfig, id: SettingsEntryId) -> St
         SettingsEntryId::AnalogScratchSensitivity => {
             format!("{:.1}", profile.input.analog_scratch_sensitivity)
         }
-        SettingsEntryId::AnalogScratchTimeoutMs => {
-            format!("{} ms", profile.input.analog_scratch_timeout_ms)
+        SettingsEntryId::AnalogScratchThreshold => {
+            format!("{} ticks", profile.input.analog_scratch_threshold)
         }
         SettingsEntryId::AnalogTicksPerScroll => {
             format!("{} ticks", profile.input.analog_ticks_per_scroll)
@@ -397,8 +398,8 @@ pub fn adjust_settings_value(profile: &mut ProfileConfig, id: SettingsEntryId, d
         SettingsEntryId::AnalogScratchSensitivity => {
             adjust_f32_tenths(&mut profile.input.analog_scratch_sensitivity, delta, 0.1, 5.0)
         }
-        SettingsEntryId::AnalogScratchTimeoutMs => {
-            adjust_u32(&mut profile.input.analog_scratch_timeout_ms, delta, 0, 5000)
+        SettingsEntryId::AnalogScratchThreshold => {
+            adjust_u32(&mut profile.input.analog_scratch_threshold, delta, 1, 1000)
         }
         SettingsEntryId::AnalogTicksPerScroll => {
             adjust_u32(&mut profile.input.analog_ticks_per_scroll, delta, 1, 100)
@@ -948,6 +949,14 @@ mod tests {
 
         assert!(adjust_settings_value(&mut profile, SettingsEntryId::AnalogScratchSensitivity, 1));
         assert!((profile.input.analog_scratch_sensitivity - 1.1).abs() < f32::EPSILON);
+
+        profile.input.analog_scratch_threshold = 995;
+        assert!(adjust_settings_value(&mut profile, SettingsEntryId::AnalogScratchThreshold, 10));
+        assert_eq!(profile.input.analog_scratch_threshold, 1_000);
+        assert_eq!(
+            format_settings_value(&profile, SettingsEntryId::AnalogScratchThreshold),
+            "1000 ticks"
+        );
     }
 
     #[test]

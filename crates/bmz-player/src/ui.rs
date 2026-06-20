@@ -2647,8 +2647,8 @@ fn build_profile_settings_panel(
                             .text("アナログ感度"),
                     );
                     ui.add(
-                        egui::Slider::new(&mut profile.input.analog_scratch_timeout_ms, 0..=5000)
-                            .text("アナログタイムアウト (ms)"),
+                        egui::Slider::new(&mut profile.input.analog_scratch_threshold, 1..=1000)
+                            .text("アナログ停止閾値"),
                     );
                     ui.label("キー割り当ては選曲画面の設定ツリーで編集できます。");
                 });

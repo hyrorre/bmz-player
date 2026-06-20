@@ -1554,8 +1554,8 @@ impl WinitApp {
 
         let gilrs = if boot.app_config.input.gamepad_enabled {
             let sensitivity = boot.profile_config.input.analog_scratch_sensitivity;
-            let timeout_ms = boot.profile_config.input.analog_scratch_timeout_ms;
-            match crate::input::gilrs::GilrsBackend::new(sensitivity, timeout_ms) {
+            let threshold = boot.profile_config.input.analog_scratch_threshold;
+            match crate::input::gilrs::GilrsBackend::new(sensitivity, threshold) {
                 Ok(g) => {
                     tracing::info!("gilrs initialized");
                     Some(g)

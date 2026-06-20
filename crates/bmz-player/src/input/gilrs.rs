@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use bmz_core::input::InputKind;
 use bmz_gameplay::input::backend::{
@@ -10,6 +10,9 @@ use gilrs::{Axis, Button, EventType};
 pub const GILRS_DEVICE_ID_BASE: u32 = 16;
 // beatoraja 実機値 (INFINITAS / DAO / YuanCon / arcin board の実測値)
 const BASE_TICK_MAX_SIZE: f32 = 0.009;
+const ANALOG_SCRATCH_THRESHOLD_MIN: u32 = 1;
+const ANALOG_SCRATCH_THRESHOLD_MAX: u32 = 1_000;
+const ANALOG_SCRATCH_CALLS_PER_AXIS_POLL: u32 = 2;
 
 pub struct GilrsButtonEvent {
     pub name: String,
@@ -70,12 +73,14 @@ struct ScratchState {
     active: bool,
     positive_direction: bool,
     control_name: Option<String>,
-    last_movement: Option<Instant>,
+    counter: u32,
+    tick_counter: u32,
+    last_counter_update: Option<Instant>,
 }
 
 struct GilrsConfig {
     tick_max_size: f32,
-    scratch_timeout_ms: u64,
+    scratch_threshold: u32,
 }
 
 pub struct GilrsBackend {
@@ -86,7 +91,7 @@ pub struct GilrsBackend {
 }
 
 impl GilrsBackend {
-    pub fn new(sensitivity: f32, scratch_timeout_ms: u32) -> Result<Self, Box<gilrs::Error>> {
+    pub fn new(sensitivity: f32, scratch_threshold: u32) -> Result<Self, Box<gilrs::Error>> {
         let gilrs =
             gilrs::GilrsBuilder::new().with_default_filters(false).build().map_err(Box::new)?;
         Ok(Self {
@@ -95,13 +100,14 @@ impl GilrsBackend {
             scratch_state: HashMap::new(),
             config: GilrsConfig {
                 tick_max_size: BASE_TICK_MAX_SIZE / sensitivity.max(0.01),
-                scratch_timeout_ms: scratch_timeout_ms as u64,
+                scratch_threshold: clamp_analog_scratch_threshold(scratch_threshold),
             },
         })
     }
 
     pub fn poll(&mut self) -> GilrsPollOutput {
         let mut output = GilrsPollOutput::default();
+        self.check_scratch_timeouts(Instant::now(), &mut output.buttons);
         while let Some(gilrs::Event { id, event, .. }) = self.gilrs.next_event() {
             match event {
                 EventType::ButtonPressed(button, code) => {
@@ -122,7 +128,7 @@ impl GilrsBackend {
                 _ => {}
             }
         }
-        self.check_scratch_timeouts(&mut output.buttons);
+        self.check_scratch_timeouts(Instant::now(), &mut output.buttons);
         output
     }
 
@@ -145,7 +151,7 @@ impl GilrsBackend {
             return;
         }
 
-        let positive = ticks > 0;
+        let now = Instant::now();
         let device_id = gilrs_gamepad_device_id(id);
         output.raw_events.push(GilrsRawEvent {
             device_id,
@@ -159,51 +165,108 @@ impl GilrsBackend {
         });
         output.axis_ticks.push(GilrsAxisTickEvent { name: axis_name.clone(), device_id, ticks });
         let state = self.scratch_state.entry((id, axis_key)).or_default();
-
-        if !state.active {
-            let name = format!("{}{}", axis_name, if positive { "+" } else { "-" });
-            output.buttons.push(GilrsButtonEvent { name, device_id, pressed: true });
-            state.active = true;
-            state.positive_direction = positive;
-            state.control_name = Some(axis_name);
-        } else if state.positive_direction != positive {
-            let axis_name = state.control_name.as_deref().unwrap_or(&axis_name);
-            let old_name =
-                format!("{}{}", axis_name, if state.positive_direction { "+" } else { "-" });
-            output.buttons.push(GilrsButtonEvent { name: old_name, device_id, pressed: false });
-            let new_name = format!("{}{}", axis_name, if positive { "+" } else { "-" });
-            output.buttons.push(GilrsButtonEvent { name: new_name, device_id, pressed: true });
-            state.positive_direction = positive;
-        }
-        state.last_movement = Some(Instant::now());
+        state.advance_to(now, self.config.scratch_threshold, device_id, &mut output.buttons);
+        state.apply_movement(
+            ticks,
+            &axis_name,
+            device_id,
+            self.config.scratch_threshold,
+            &mut output.buttons,
+        );
     }
 
-    fn check_scratch_timeouts(&mut self, events: &mut Vec<GilrsButtonEvent>) {
-        let timeout_ms = self.config.scratch_timeout_ms;
+    fn check_scratch_timeouts(&mut self, now: Instant, events: &mut Vec<GilrsButtonEvent>) {
+        let threshold = self.config.scratch_threshold;
         for ((id, _axis), state) in &mut self.scratch_state {
-            if !state.active {
-                continue;
-            }
-            let timed_out =
-                state.last_movement.is_none_or(|t| t.elapsed().as_millis() as u64 > timeout_ms);
-            if timed_out {
-                if let Some(axis_name) = state.control_name.as_deref() {
-                    let name = format!(
-                        "{}{}",
-                        axis_name,
-                        if state.positive_direction { "+" } else { "-" }
-                    );
-                    events.push(GilrsButtonEvent {
-                        name,
-                        device_id: gilrs_gamepad_device_id(*id),
-                        pressed: false,
-                    });
-                }
-                state.active = false;
-                state.control_name = None;
-            }
+            state.advance_to(now, threshold, gilrs_gamepad_device_id(*id), events);
         }
     }
+}
+
+impl ScratchState {
+    fn advance_to(
+        &mut self,
+        now: Instant,
+        threshold: u32,
+        device_id: DeviceId,
+        events: &mut Vec<GilrsButtonEvent>,
+    ) {
+        let elapsed = self
+            .last_counter_update
+            .map(|last| now.saturating_duration_since(last))
+            .unwrap_or_default();
+        self.last_counter_update = Some(now);
+
+        // beatoraja evaluates each analog axis once for AXIS+ and once for AXIS- on
+        // its ~1ms polling thread, so its counter advances in calls rather than ms.
+        let elapsed_ticks =
+            duration_millis_u32(elapsed).saturating_mul(ANALOG_SCRATCH_CALLS_PER_AXIS_POLL);
+        if elapsed_ticks > 0 {
+            self.counter = self.counter.saturating_add(elapsed_ticks);
+        }
+
+        if self.counter > threshold.saturating_mul(2) {
+            self.release_if_active(device_id, events);
+            self.tick_counter = 0;
+            self.counter = 0;
+        }
+    }
+
+    fn apply_movement(
+        &mut self,
+        ticks: i32,
+        axis_name: &str,
+        device_id: DeviceId,
+        threshold: u32,
+        events: &mut Vec<GilrsButtonEvent>,
+    ) {
+        let positive = ticks > 0;
+        self.control_name.get_or_insert_with(|| axis_name.to_string());
+
+        if self.active && self.positive_direction != positive {
+            self.release_if_active(device_id, events);
+            self.positive_direction = positive;
+            self.tick_counter = 0;
+        } else if !self.active {
+            if self.tick_counter == 0 || self.counter <= threshold {
+                self.tick_counter = self.tick_counter.saturating_add(ticks.unsigned_abs());
+            }
+            if self.tick_counter >= 2 {
+                self.active = true;
+                self.positive_direction = positive;
+                self.push_button_event(device_id, true, events);
+            }
+        }
+
+        self.counter = 0;
+    }
+
+    fn release_if_active(&mut self, device_id: DeviceId, events: &mut Vec<GilrsButtonEvent>) {
+        if self.active {
+            self.push_button_event(device_id, false, events);
+            self.active = false;
+        }
+    }
+
+    fn push_button_event(
+        &self,
+        device_id: DeviceId,
+        pressed: bool,
+        events: &mut Vec<GilrsButtonEvent>,
+    ) {
+        if let Some(axis_name) = self.control_name.as_deref() {
+            let name = format!("{}{}", axis_name, if self.positive_direction { "+" } else { "-" });
+            events.push(GilrsButtonEvent { name, device_id, pressed });
+        }
+    }
+}
+
+fn clamp_analog_scratch_threshold(value: u32) -> u32 {
+    value.clamp(ANALOG_SCRATCH_THRESHOLD_MIN, ANALOG_SCRATCH_THRESHOLD_MAX)
+}
+
+fn duration_millis_u32(duration: Duration) -> u32 {
+    duration.as_millis().min(u128::from(u32::MAX)) as u32
 }
 
 fn process_button_event(
@@ -291,6 +354,10 @@ pub fn gilrs_gamepad_device_id_from_player_index(index: u32) -> Option<DeviceId>
 mod tests {
     use super::*;
 
+    fn button_events(events: &[GilrsButtonEvent]) -> Vec<(String, bool)> {
+        events.iter().map(|event| (event.name.clone(), event.pressed)).collect()
+    }
+
     #[test]
     fn compute_analog_diff_basic_movement() {
         let tick = BASE_TICK_MAX_SIZE;
@@ -311,6 +378,87 @@ mod tests {
     #[test]
     fn compute_analog_diff_no_movement() {
         assert_eq!(compute_analog_diff(0.5, 0.5, BASE_TICK_MAX_SIZE), 0);
+    }
+
+    #[test]
+    fn scratch_v2_requires_two_ticks_to_press() {
+        let mut state = ScratchState::default();
+        let mut events = Vec::new();
+        let device_id = DeviceId(16);
+        let now = Instant::now();
+
+        state.advance_to(now, 100, device_id, &mut events);
+        state.apply_movement(1, "Axis1", device_id, 100, &mut events);
+        assert!(events.is_empty());
+
+        state.apply_movement(1, "Axis1", device_id, 100, &mut events);
+        assert_eq!(button_events(&events), vec![("Axis1+".to_string(), true)]);
+    }
+
+    #[test]
+    fn scratch_v2_releases_after_beatoraja_dual_axis_calls_and_represses_same_direction() {
+        let mut state = ScratchState::default();
+        let mut events = Vec::new();
+        let device_id = DeviceId(16);
+        let now = Instant::now();
+
+        state.advance_to(now, 100, device_id, &mut events);
+        state.apply_movement(2, "Axis1", device_id, 100, &mut events);
+        assert_eq!(button_events(&events), vec![("Axis1+".to_string(), true)]);
+
+        events.clear();
+        state.advance_to(now + Duration::from_millis(101), 100, device_id, &mut events);
+        assert_eq!(button_events(&events), vec![("Axis1+".to_string(), false)]);
+
+        events.clear();
+        state.advance_to(now + Duration::from_millis(102), 100, device_id, &mut events);
+        state.apply_movement(2, "Axis1", device_id, 100, &mut events);
+        assert_eq!(button_events(&events), vec![("Axis1+".to_string(), true)]);
+    }
+
+    #[test]
+    fn scratch_v2_does_not_accumulate_partial_tick_after_beatoraja_threshold_window() {
+        let mut state = ScratchState::default();
+        let mut events = Vec::new();
+        let device_id = DeviceId(16);
+        let now = Instant::now();
+
+        state.advance_to(now, 100, device_id, &mut events);
+        state.apply_movement(1, "Axis1", device_id, 100, &mut events);
+        assert!(events.is_empty());
+
+        state.advance_to(now + Duration::from_millis(51), 100, device_id, &mut events);
+        state.apply_movement(1, "Axis1", device_id, 100, &mut events);
+        assert!(events.is_empty());
+
+        state.apply_movement(1, "Axis1", device_id, 100, &mut events);
+        assert_eq!(button_events(&events), vec![("Axis1+".to_string(), true)]);
+    }
+
+    #[test]
+    fn scratch_v2_direction_change_releases_before_opposite_press() {
+        let mut state = ScratchState::default();
+        let mut events = Vec::new();
+        let device_id = DeviceId(16);
+        let now = Instant::now();
+
+        state.advance_to(now, 100, device_id, &mut events);
+        state.apply_movement(2, "Axis1", device_id, 100, &mut events);
+        events.clear();
+
+        state.apply_movement(-2, "Axis1", device_id, 100, &mut events);
+        assert_eq!(button_events(&events), vec![("Axis1+".to_string(), false)]);
+
+        events.clear();
+        state.apply_movement(-2, "Axis1", device_id, 100, &mut events);
+        assert_eq!(button_events(&events), vec![("Axis1-".to_string(), true)]);
+    }
+
+    #[test]
+    fn scratch_threshold_is_clamped_to_beatoraja_range() {
+        assert_eq!(clamp_analog_scratch_threshold(0), 1);
+        assert_eq!(clamp_analog_scratch_threshold(100), 100);
+        assert_eq!(clamp_analog_scratch_threshold(5_000), 1_000);
     }
 
     #[test]

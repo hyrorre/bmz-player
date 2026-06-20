@@ -407,8 +407,12 @@ pub struct ProfileInputConfig {
     pub legacy_bindings: Vec<BindingConfigEntry>,
     #[serde(default = "default_analog_scratch_sensitivity")]
     pub analog_scratch_sensitivity: f32,
-    #[serde(default = "default_analog_scratch_timeout_ms")]
+    /// 旧アナログ皿の壁時計タイムアウト。読込互換だけに残し、保存時は出力しない。
+    #[serde(default = "default_analog_scratch_timeout_ms", skip_serializing)]
     pub analog_scratch_timeout_ms: u32,
+    /// beatoraja の analogScratchThreshold 相当。既定は Version2 向けの 100。
+    #[serde(default = "default_analog_scratch_threshold")]
+    pub analog_scratch_threshold: u32,
     /// 選曲画面でアナログスクラッチ何 tick ごとにカーソルを 1 つ動かすか (beatoraja の analogTicksPerScroll)。
     #[serde(default = "default_analog_ticks_per_scroll")]
     pub analog_ticks_per_scroll: u32,
@@ -420,6 +424,10 @@ fn default_analog_scratch_sensitivity() -> f32 {
 
 fn default_analog_scratch_timeout_ms() -> u32 {
     500
+}
+
+pub fn default_analog_scratch_threshold() -> u32 {
+    100
 }
 
 fn default_analog_ticks_per_scroll() -> u32 {
@@ -1428,6 +1436,8 @@ mod tests {
 
         assert_eq!(input.start_key.as_deref(), Some("E"));
         assert_eq!(input.legacy_bindings[0].lane, Some(LaneConfig::Key1));
+        assert_eq!(input.analog_scratch_timeout_ms, 500);
+        assert_eq!(input.analog_scratch_threshold, default_analog_scratch_threshold());
     }
 
     #[test]
@@ -1437,6 +1447,8 @@ mod tests {
         let toml = toml::to_string(&profile.input).unwrap();
 
         assert!(!toml.contains("start_key"));
+        assert!(!toml.contains("analog_scratch_timeout_ms"));
+        assert!(toml.contains("analog_scratch_threshold = 100"));
         assert!(toml.contains("action = \"E1\""));
         assert!(toml.contains("action = \"E2\""));
         assert!(toml.contains("action = \"E3\""));
