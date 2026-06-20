@@ -5273,7 +5273,7 @@ impl WinitApp {
             queued_replays: Vec::new(),
             arrange_overrides,
         });
-        self.start_chart_with_options(first_chart_id, options);
+        self.begin_decide_for_chart(first_chart_id, options);
     }
 
     /// Start a course in replay mode, replaying the saved per-chart inputs of
@@ -5374,7 +5374,7 @@ impl WinitApp {
             queued_replays: queued,
             arrange_overrides: Vec::new(),
         });
-        self.start_chart_with_options(first_chart_id, options);
+        self.begin_decide_for_chart(first_chart_id, options);
     }
 
     /// コース曲間の中間リザルト状態かどうか。active_course を保持したまま
@@ -5454,7 +5454,7 @@ impl WinitApp {
             // Same-arrange course retry: reproduce this chart's arrange.
             apply_arrange_override(&mut options, arrange);
         }
-        self.start_chart_with_options(next_chart_id, options);
+        self.begin_decide_for_chart(next_chart_id, options);
     }
 
     /// コース中間リザルトのコントロール処理。Key6 はゲージグラフ切替のみ許可し、
