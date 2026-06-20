@@ -141,6 +141,11 @@ fn arrange_option_ir_from_persistent(value: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    use bmz_core::course::CourseKind;
+
+    use crate::ln_policy::LnPolicySetting;
+    use crate::screens::result_model::ResultJudgeCounts;
+
     use super::*;
 
     #[test]
@@ -167,5 +172,53 @@ mod tests {
         let mut renamed = base.clone();
         renamed.title = "Renamed".to_string();
         assert_eq!(same, compute_course_hash(&renamed));
+    }
+
+    #[test]
+    fn course_submission_uses_canonical_ln_policy_and_course_max_combo() {
+        let definition = IrCourseDefinition {
+            charts: vec!["ab".repeat(32)],
+            constraints: json!({ "gauge": "Class" }),
+            title: "Dan 1".to_string(),
+            kind: "dan".to_string(),
+        };
+        let result = CourseResultSummary {
+            course_id: 1,
+            course_score_id: None,
+            course_played_at: None,
+            title: "Dan 1".to_string(),
+            kind: CourseKind::Dan,
+            entry_summaries: Vec::new(),
+            entry_arranges: Vec::new(),
+            total_ex_score: 0,
+            max_ex_score: 0,
+            total_notes: 0,
+            course_max_combo: 123,
+            judge_counts: ResultJudgeCounts::default(),
+            trophy_results: Vec::new(),
+            course_clear: false,
+            course_failed: false,
+            total_entries: 0,
+            played_entries: 0,
+            replay_slots: [false; 4],
+            saved_replay_slots: [false; 4],
+            best_score: None,
+        };
+        let payload = build_course_submission(
+            &definition,
+            &result,
+            &IrCourseSubmissionContext {
+                played_at: 1_767_225_600,
+                ln_policy_setting: LnPolicySetting::ForceHcn.as_ir_str().to_string(),
+                gauge: "Class".to_string(),
+                device_type: InputDeviceKind::Keyboard,
+                arrange: "NORMAL".to_string(),
+                random_seed: None,
+                idempotency_key: "course-test".to_string(),
+            },
+        );
+
+        assert_eq!(payload["rule"]["ln_policy"], "ForceHcn");
+        assert_eq!(payload["result"]["max_combo"], json!(123));
     }
 }

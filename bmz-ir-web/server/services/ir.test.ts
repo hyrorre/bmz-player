@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import { isUniqueConstraintError } from '../utils/db_errors'
+import { computeCourseHash, validateCourseScoreSubmission } from './course_ir'
 import { __test, stableStringify } from './ir'
 
 describe('stableStringify', () => {
@@ -120,6 +121,30 @@ describe('database error classification', () => {
   })
 })
 
+describe('course score validation', () => {
+  test('normalizes legacy snake_case ln policy settings', () => {
+    const payload = baseCourseSubmission({ lnPolicy: 'auto_hcn' })
+
+    const validated = validateCourseScoreSubmission(payload)
+
+    expect(validated.rule.ln_policy).toBe('AutoHcn')
+  })
+
+  test('keeps canonical ln policy settings', () => {
+    const payload = baseCourseSubmission({ lnPolicy: 'ForceCn' })
+
+    const validated = validateCourseScoreSubmission(payload)
+
+    expect(validated.rule.ln_policy).toBe('ForceCn')
+  })
+
+  test('rejects invalid course ln policy settings', () => {
+    const payload = baseCourseSubmission({ lnPolicy: 'auto' })
+
+    expect(() => validateCourseScoreSubmission(payload)).toThrow('rule.ln_policy is invalid')
+  })
+})
+
 function rankingRow(overrides: Partial<ReturnType<typeof baseRankingRow>> = {}) {
   const scoreId = overrides.score_id ?? 'score-1'
   return {
@@ -159,5 +184,65 @@ function baseRankingRow() {
     device_type: 'keyboard' as const,
     played_at: '2026-01-01T00:00:00.000Z',
     verification: 'unverified' as const,
+  }
+}
+
+function baseCourseSubmission({ lnPolicy = 'AutoLn' }: { lnPolicy?: string } = {}) {
+  const charts = ['a'.repeat(64), 'b'.repeat(64)]
+  const constraints = { gauge: 'Class', ln: 'Off' }
+  return {
+    client: { name: 'BMZ', version: '0.1.0', platform: 'windows' },
+    course: {
+      course_hash: computeCourseHash(charts, constraints),
+      title: 'Dan 1',
+      kind: 'dan' as const,
+      charts,
+      constraints,
+    },
+    rule: {
+      gauge: 'Class',
+      ln_policy: lnPolicy,
+      scoring: 'bms_ex_score_v1' as const,
+    },
+    result: {
+      clear: 'Normal',
+      course_clear: true,
+      course_failed: false,
+      played_entries: 2,
+      ex_score: 320,
+      max_ex_score: 400,
+      max_combo: 200,
+      bp: 4,
+      judges: {
+        pgreat: 150,
+        great: 20,
+        good: 0,
+        bad: 2,
+        poor: 2,
+        empty_poor: 0,
+      },
+      gauge_value: 78,
+      entries: [
+        {
+          sha256: charts[0],
+          ex_score: 160,
+          max_combo: 100,
+          bp: 2,
+          clear: 'Normal',
+          gauge_end: 62,
+        },
+        {
+          sha256: charts[1],
+          ex_score: 160,
+          max_combo: 100,
+          bp: 2,
+          clear: 'Normal',
+          gauge_end: 78,
+        },
+      ],
+      played_at: 1_767_225_600,
+    },
+    play_options: { device_type: 'keyboard' },
+    idempotency_key: 'course-test',
   }
 }

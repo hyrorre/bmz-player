@@ -14,7 +14,20 @@ import {
   type IrRequestUser,
 } from './ir'
 
-const LN_POLICIES = new Set(['AutoLn', 'AutoCn', 'AutoHcn', 'ForceLn', 'ForceCn', 'ForceHcn'])
+const LN_POLICY_ALIASES = new Map([
+  ['AutoLn', 'AutoLn'],
+  ['AutoCn', 'AutoCn'],
+  ['AutoHcn', 'AutoHcn'],
+  ['ForceLn', 'ForceLn'],
+  ['ForceCn', 'ForceCn'],
+  ['ForceHcn', 'ForceHcn'],
+  ['auto_ln', 'AutoLn'],
+  ['auto_cn', 'AutoCn'],
+  ['auto_hcn', 'AutoHcn'],
+  ['force_ln', 'ForceLn'],
+  ['force_cn', 'ForceCn'],
+  ['force_hcn', 'ForceHcn'],
+])
 const DEVICE_TYPES = new Set(['keyboard', 'controller'])
 type CourseDeviceType = 'keyboard' | 'controller'
 
@@ -90,9 +103,7 @@ export function validateCourseScoreSubmission(value: unknown): CourseScoreSubmis
   if (expected !== payload.course.course_hash) {
     throw new Error('course.course_hash does not match the course definition')
   }
-  if (!LN_POLICIES.has(payload.rule.ln_policy)) {
-    throw new Error('rule.ln_policy is invalid')
-  }
+  payload.rule.ln_policy = normalizeCourseLnPolicy(payload.rule.ln_policy)
   if (payload.rule.scoring !== 'bms_ex_score_v1') {
     throw new Error('rule.scoring is unsupported')
   }
@@ -122,6 +133,17 @@ export function validateCourseScoreSubmission(value: unknown): CourseScoreSubmis
     throw new Error('play_options.device_type is invalid')
   }
   return payload
+}
+
+function normalizeCourseLnPolicy(value: unknown): string {
+  if (typeof value !== 'string') {
+    throw new Error('rule.ln_policy is invalid')
+  }
+  const normalized = LN_POLICY_ALIASES.get(value.trim())
+  if (!normalized) {
+    throw new Error('rule.ln_policy is invalid')
+  }
+  return normalized
 }
 
 export async function submitCourseScore(

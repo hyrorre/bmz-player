@@ -5811,10 +5811,7 @@ impl WinitApp {
             tracing::info!(course_id, "course has unresolved charts; skipping IR submission");
             return;
         };
-        let ln_setting = serde_json::to_value(self.boot.profile_config.play.ln_mode_policy)
-            .ok()
-            .and_then(|value| value.as_str().map(str::to_string))
-            .unwrap_or_else(|| "AutoLn".to_string());
+        let ln_setting = self.boot.profile_config.play.ln_mode_policy.as_ir_str().to_string();
         let payload = crate::ir::course_payload::build_course_submission(
             &definition,
             course_result,

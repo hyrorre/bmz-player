@@ -98,6 +98,17 @@ impl LnPolicySetting {
             Self::ForceHcn => "FORCE(HCN)",
         }
     }
+
+    pub const fn as_ir_str(self) -> &'static str {
+        match self {
+            Self::AutoLn => "AutoLn",
+            Self::AutoCn => "AutoCn",
+            Self::AutoHcn => "AutoHcn",
+            Self::ForceLn => "ForceLn",
+            Self::ForceCn => "ForceCn",
+            Self::ForceHcn => "ForceHcn",
+        }
+    }
 }
 
 fn cycle_ln_policy_setting(current: LnPolicySetting, direction: i32) -> LnPolicySetting {
@@ -227,6 +238,16 @@ mod tests {
         ChartLnProfile { has_defined_ln: true, has_defined_cn: true, ..NONE };
     const UNDEFINED_AND_DEFINED: ChartLnProfile =
         ChartLnProfile { has_undefined_ln: true, has_defined_cn: true, ..NONE };
+
+    #[test]
+    fn policy_setting_ir_strings_use_score_policy_casing() {
+        assert_eq!(LnPolicySetting::AutoLn.as_ir_str(), "AutoLn");
+        assert_eq!(LnPolicySetting::AutoCn.as_ir_str(), "AutoCn");
+        assert_eq!(LnPolicySetting::AutoHcn.as_ir_str(), "AutoHcn");
+        assert_eq!(LnPolicySetting::ForceLn.as_ir_str(), "ForceLn");
+        assert_eq!(LnPolicySetting::ForceCn.as_ir_str(), "ForceCn");
+        assert_eq!(LnPolicySetting::ForceHcn.as_ir_str(), "ForceHcn");
+    }
 
     #[test]
     fn score_policy_canonicalizes_no_ln() {
