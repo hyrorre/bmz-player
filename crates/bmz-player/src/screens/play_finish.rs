@@ -101,6 +101,7 @@ pub fn store_session_result(
     .stored)
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn finish_session_result(
     score_db: &mut ScoreDatabase,
     profile_paths: &ProfilePaths,
