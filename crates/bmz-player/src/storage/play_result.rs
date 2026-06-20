@@ -51,7 +51,7 @@ impl StorePlayResultMode {
     fn score_insert_mode(self) -> ScoreInsertMode {
         match self {
             Self::Normal => ScoreInsertMode::Full,
-            Self::CourseStage => ScoreInsertMode::HistoryOnly,
+            Self::CourseStage => ScoreInsertMode::Full,
         }
     }
 
@@ -568,7 +568,7 @@ mod tests {
     }
 
     #[test]
-    fn store_play_result_course_stage_writes_history_without_single_best_updates() {
+    fn store_play_result_course_stage_updates_single_best_with_rounded_clear() {
         let root = make_temp_dir("store-course-stage-result");
         let paths = ProfilePaths {
             root_dir: root.clone(),
@@ -620,15 +620,17 @@ mod tests {
         assert_eq!(history.len(), 1);
         assert_eq!(history[0].clear_type, "NoPlay");
         assert_eq!(history[0].bp, result.total_notes);
-        assert!(
-            score_db
-                .best_scores_for_charts(&[super::super::score_db::ScoreKey::new(
-                    [4; 32],
-                    LnScorePolicy::ForceLn,
-                )])
-                .unwrap()
-                .is_empty()
-        );
+        let bests = score_db
+            .best_scores_for_charts(&[super::super::score_db::ScoreKey::new(
+                [4; 32],
+                LnScorePolicy::ForceLn,
+            )])
+            .unwrap();
+        assert_eq!(bests.len(), 1);
+        assert_eq!(bests[0].clear_type, "NoPlay");
+        assert_eq!(bests[0].ex_score, result.score.ex_score());
+        assert_eq!(bests[0].max_combo, result.score.max_combo);
+        assert_eq!(bests[0].bp, result.total_notes);
         assert!(
             score_db
                 .replay_slot(

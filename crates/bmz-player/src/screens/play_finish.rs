@@ -58,8 +58,7 @@ impl FinishResultMode {
 
     fn enqueue_score_ir(self) -> bool {
         match self {
-            Self::Normal => true,
-            Self::CourseStage => false,
+            Self::Normal | Self::CourseStage => true,
         }
     }
 }
@@ -117,6 +116,7 @@ pub fn finish_session_result(
 ) -> Result<FinishedPlaySession> {
     ensure_storable_state(session.state)?;
     let result = play_result_from_session(session);
+    let summary_clear_type = finish_mode.summary_clear_type(result.clear_type);
     let replay_playback = session.replay_player.is_some();
     let previous_best =
         score_db.best_scores_for_charts(&[score_key]).ok().and_then(|mut bests| bests.pop());
@@ -159,7 +159,7 @@ pub fn finish_session_result(
         )?
     };
     let mut summary = ResultSummary::from_play_result(&result, &stored, &session.chart);
-    summary.clear_type = finish_mode.summary_clear_type(result.clear_type);
+    summary.clear_type = summary_clear_type;
     summary.arrange = applied_arrange.arrange.as_str().to_string();
     summary.lane_shuffle_pattern = applied_arrange.pattern.clone().unwrap_or_default();
     summary.target_ex_score = target_ex_score;
@@ -190,12 +190,14 @@ pub fn finish_session_result(
         }
     }
     if finish_mode.enqueue_score_ir() {
+        let mut ir_result = result.clone();
+        ir_result.clear_type = summary_clear_type;
         enqueue_ir_jobs(
             score_db,
             profile_paths,
             ir_config,
             session,
-            &result,
+            &ir_result,
             &stored,
             played_at,
             score_key,
@@ -641,11 +643,75 @@ mod tests {
         assert_eq!(finished.result.clear_type, ClearType::Failed);
         assert_eq!(finished.summary.clear_type, ClearType::NoPlay);
         assert_eq!(finished.summary.saved_replay_slots, [false; 4]);
-        assert!(score_db.best_scores_for_charts(&[score_key(&session)]).unwrap().is_empty());
+        let bests = score_db.best_scores_for_charts(&[score_key(&session)]).unwrap();
+        assert_eq!(bests.len(), 1);
+        assert_eq!(bests[0].clear_type, "NoPlay");
+        assert_eq!(finished.summary.best_ex_score, Some(bests[0].ex_score));
+        assert_eq!(finished.summary.best_clear_type, Some(ClearType::NoPlay));
         let history = score_db.recent_history(10, 0).unwrap();
         assert_eq!(history.len(), 1);
         assert_eq!(history[0].clear_type, "NoPlay");
         assert_eq!(history[0].bp, session.chart.total_notes);
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn finish_session_result_course_stage_enqueues_ir_with_rounded_clear_type() {
+        let root = make_temp_dir("finish-course-stage-ir");
+        let paths = ProfilePaths {
+            root_dir: root.clone(),
+            profile_toml: root.join("profile.toml"),
+            score_db: root.join("score.db"),
+            replay_dir: root.join("replay"),
+        };
+        let mut conn = Connection::open_in_memory().unwrap();
+        configure_connection(&conn).unwrap();
+        run_migrations(&mut conn, SCORE_MIGRATIONS).unwrap();
+        let mut score_db = ScoreDatabase::from_connection(conn);
+        let replay_config = ReplayConfig {
+            auto_save: false,
+            compress: false,
+            slot_rules: crate::config::profile_config::default_slot_rules(),
+        };
+        let ir_config = IrConfig {
+            primary_provider: "bmz-official".to_string(),
+            providers: vec![IrProviderConfig {
+                provider: "bmz-official".to_string(),
+                provider_key: "bmz-official".to_string(),
+                base_url: String::new(),
+                enabled: true,
+                account_display_name: "Player".to_string(),
+                account_id: "account-1".to_string(),
+                send_policy: Default::default(),
+                role: Default::default(),
+                last_login_at: None,
+                last_success_at: None,
+            }],
+            ..IrConfig::default()
+        };
+        let session = session();
+
+        let finished = finish_session_result(
+            &mut score_db,
+            &paths,
+            &replay_config,
+            &ir_config,
+            &session,
+            1_700_000_110,
+            &AppliedArrange::default(),
+            None,
+            score_key(&session),
+            false,
+            FinishResultMode::CourseStage,
+        )
+        .unwrap();
+
+        assert_eq!(finished.summary.ir_queued_jobs, 1);
+        let jobs = score_db.pending_ir_score_jobs(1_700_000_110, 10).unwrap();
+        assert_eq!(jobs.len(), 1);
+        let payload: serde_json::Value = serde_json::from_str(&jobs[0].payload_json).unwrap();
+        assert_eq!(payload["result"]["clear"], "NoPlay");
 
         std::fs::remove_dir_all(root).unwrap();
     }
