@@ -188,6 +188,7 @@ mod tests {
             course_played_at: None,
             title: "Dan 1".to_string(),
             kind: CourseKind::Dan,
+            course_titles: Default::default(),
             entry_summaries: Vec::new(),
             entry_arranges: Vec::new(),
             total_ex_score: 0,

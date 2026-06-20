@@ -1979,6 +1979,11 @@ impl WinitApp {
                 genre: summary.genre.clone(),
                 difficulty_name: summary.difficulty_name.clone(),
                 play_level: summary.play_level.clone(),
+                course_titles: self
+                    .finished_course
+                    .as_ref()
+                    .map(|course| course.course_titles.clone())
+                    .unwrap_or_default(),
                 graph: summary.graph.clone(),
                 overlay: OverlaySnapshot::default(),
                 ir: self.result_ir.as_ref().map(|state| state.skin_snapshot()).unwrap_or_default(),
@@ -13986,6 +13991,18 @@ mod tests {
             course_played_at: None,
             title: "Course Title".to_string(),
             kind: bmz_core::course::CourseKind::Dan,
+            course_titles: [
+                "Stage 1".to_string(),
+                "Stage 2".to_string(),
+                String::new(),
+                String::new(),
+                String::new(),
+                String::new(),
+                String::new(),
+                String::new(),
+                String::new(),
+                String::new(),
+            ],
             entry_summaries: vec![
                 entry_summary(120, 100, 80, 1_000),
                 entry_summary(200, 120, 90, 2_000),

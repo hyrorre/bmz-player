@@ -1416,6 +1416,7 @@ fn plan_result(
             grade_diff: grade_diff.as_str(),
             table_level: snapshot.play_level.as_str(),
             ir_ranking: &snapshot.ir,
+            course_titles: string_array_refs(&snapshot.course_titles),
             ..SkinTextState::default()
         };
         let items =
@@ -2974,6 +2975,7 @@ mod tests {
                 genre: String::new(),
                 difficulty_name: String::new(),
                 play_level: String::new(),
+                course_titles: Default::default(),
                 graph: crate::snapshot::ResultGraphSnapshot::default(),
                 overlay: crate::snapshot::OverlaySnapshot::default(),
                 ir: crate::scene::ResultIrSnapshot::default(),
@@ -2991,6 +2993,42 @@ mod tests {
                 DrawCommand::Image { texture, .. } if *texture == TextureId(99)
             )));
         }
+    }
+
+    #[test]
+    fn course_result_plan_supplies_course_titles_to_skin_document() {
+        let document: SkinDocument = serde_json::from_str(
+            r#"{
+                "type": 15,
+                "name": "test",
+                "w": 100,
+                "h": 100,
+                "text": [{"id": "course1", "size": 10, "ref": 150}],
+                "destination": [
+                    {"id": "course1", "dst": [{"x": 0, "y": 0, "w": 100, "h": 10}]}
+                ]
+            }"#,
+        )
+        .unwrap();
+        let skin = SkinContext::from_manifest_and_document(
+            toml::from_str("").unwrap(),
+            document,
+            std::iter::empty(),
+        );
+        let AppSceneSnapshot::Result(mut snapshot) = crate::sample::sample_result_scene() else {
+            panic!("sample result scene");
+        };
+        snapshot.course_titles[0] = "Stage One".to_string();
+
+        let plan = DrawPlan::from_scene_with_skin(
+            &AppSceneSnapshot::Result(snapshot),
+            &skin,
+            &mut crate::skin::DynamicTimerRuntime::default(),
+        );
+
+        assert!(plan.commands.iter().any(
+            |command| matches!(command, DrawCommand::Text { text, .. } if text == "Stage One")
+        ));
     }
 
     #[test]
@@ -3066,6 +3104,7 @@ mod tests {
             genre: String::new(),
             difficulty_name: String::new(),
             play_level: String::new(),
+            course_titles: Default::default(),
             graph: ResultGraphSnapshot {
                 judge_graph_density: vec![1, 3, 2],
                 judge_graph_buckets: vec![ResultJudgeGraphBucket { values: [0, 0, 1, 0, 0, 0] }],
@@ -3245,6 +3284,7 @@ mod tests {
             genre: String::new(),
             difficulty_name: String::new(),
             play_level: String::new(),
+            course_titles: Default::default(),
             graph: ResultGraphSnapshot {
                 gauge_points: vec![
                     ResultGaugeGraphPoint {
@@ -3369,6 +3409,7 @@ mod tests {
             genre: String::new(),
             difficulty_name: String::new(),
             play_level: String::new(),
+            course_titles: Default::default(),
             graph: ResultGraphSnapshot {
                 timing_distribution,
                 timing_points: vec![

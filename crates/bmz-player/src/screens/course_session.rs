@@ -34,6 +34,7 @@ pub struct CourseResultSummary {
     pub course_played_at: Option<i64>,
     pub title: String,
     pub kind: CourseKind,
+    pub course_titles: [String; 10],
     pub entry_summaries: Vec<ResultSummary>,
     /// Per-entry applied arrange (seed/pattern) of this attempt, in play order.
     /// Used to retry the whole course with the same arrangement.
@@ -127,6 +128,7 @@ impl ActiveCourseSession {
 
         let entry_arranges: Vec<AppliedArrange> =
             self.entry_results.iter().map(|r| r.finished.applied_arrange.clone()).collect();
+        let course_titles = course_titles_from_entries(&self.definition.entries);
         let entry_summaries = self.entry_results.into_iter().map(|r| r.finished.summary).collect();
 
         CourseResultSummary {
@@ -135,6 +137,7 @@ impl ActiveCourseSession {
             course_played_at: None,
             title: self.definition.title,
             kind: self.definition.kind,
+            course_titles,
             entry_summaries,
             entry_arranges,
             total_ex_score,
@@ -155,6 +158,16 @@ impl ActiveCourseSession {
             best_score: None,
         }
     }
+}
+
+fn course_titles_from_entries(entries: &[CourseEntry]) -> [String; 10] {
+    let mut titles: [String; 10] = Default::default();
+    for (index, entry) in entries.iter().take(10).enumerate() {
+        let title = if entry.title_hint.is_empty() { "----" } else { entry.title_hint.as_str() };
+        titles[index] =
+            if entry.chart_id.is_some() { title.to_string() } else { format!("(no song) {title}") };
+    }
+    titles
 }
 
 #[cfg(test)]
@@ -446,5 +459,31 @@ mod tests {
         assert_eq!(result.total_entries, 4);
         // Trophies are blocked when course_failed even if numeric thresholds pass.
         assert!(!result.trophy_results[0].achieved);
+    }
+
+    #[test]
+    fn into_result_keeps_course_titles_from_definition() {
+        use bmz_core::clear::ClearType;
+
+        let mut session = make_partial_session(
+            4,
+            vec![
+                (make_score(100, 0), 100, ClearType::Normal),
+                (make_score(0, 100), 100, ClearType::Failed),
+            ],
+        );
+        session.definition.entries[0].title_hint = "Stage One".to_string();
+        session.definition.entries[1].title_hint = "Stage Two".to_string();
+        session.definition.entries[2].title_hint = "Missing Stage".to_string();
+        session.definition.entries[2].chart_id = None;
+        session.definition.entries[3].title_hint.clear();
+
+        let result = session.into_result();
+
+        assert_eq!(result.course_titles[0], "Stage One");
+        assert_eq!(result.course_titles[1], "Stage Two");
+        assert_eq!(result.course_titles[2], "(no song) Missing Stage");
+        assert_eq!(result.course_titles[3], "----");
+        assert_eq!(result.course_titles[4], "");
     }
 }

@@ -527,6 +527,8 @@ pub struct ResultSnapshot {
     pub genre: String,
     pub difficulty_name: String,
     pub play_level: String,
+    /// beatoraja STRING_COURSE1_TITLE..10_TITLE (150..159) for course results.
+    pub course_titles: [String; 10],
     /// Result 画面の graph 系 skin object に渡すプレイ中の推移データ。
     pub graph: crate::snapshot::ResultGraphSnapshot,
     /// 右下に常時表示するオーバーレイ文字列。
@@ -599,6 +601,7 @@ mod tests {
             genre: String::new(),
             difficulty_name: String::new(),
             play_level: String::new(),
+            course_titles: Default::default(),
             graph: crate::snapshot::ResultGraphSnapshot::default(),
             overlay: OverlaySnapshot::default(),
             ir: ResultIrSnapshot::default(),
@@ -659,6 +662,7 @@ mod tests {
             genre: String::new(),
             difficulty_name: String::new(),
             play_level: String::new(),
+            course_titles: Default::default(),
             graph: crate::snapshot::ResultGraphSnapshot::default(),
             overlay: OverlaySnapshot::default(),
             ir: ResultIrSnapshot::default(),
