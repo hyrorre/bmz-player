@@ -210,7 +210,13 @@ impl GaugeState {
         rule_mode: RuleMode,
     ) -> Self {
         let start = match mode {
-            GaugeAutoShiftMode::BestClear => GaugeType::Hazard,
+            GaugeAutoShiftMode::BestClear => {
+                if is_course_gauge(selected) {
+                    GaugeType::ExHardClass
+                } else {
+                    GaugeType::Hazard
+                }
+            }
             GaugeAutoShiftMode::Off
             | GaugeAutoShiftMode::Continue
             | GaugeAutoShiftMode::HardToGroove
@@ -295,9 +301,10 @@ impl GaugeState {
     }
 
     fn best_auto_shift_clear_gauge(&self) -> Option<&SingleGaugeState> {
+        let order = auto_shift_result_order(self.original);
         let bottom_rank = auto_shift_result_rank(self.original)
             .min(auto_shift_result_rank(self.bottom_shiftable_gauge));
-        AUTO_SHIFT_RESULT_ORDER.iter().find_map(|gauge_type| {
+        order.iter().find_map(|gauge_type| {
             if auto_shift_result_rank(*gauge_type) < bottom_rank {
                 return None;
             }
@@ -316,6 +323,7 @@ impl GaugeState {
             GaugeAutoShiftMode::HardToGroove => {
                 if self.current().value <= self.current().definition.min
                     && gauge_closes_play_on_zero(self.selected)
+                    && !is_course_gauge(self.selected)
                 {
                     self.selected = GaugeType::Normal;
                 }
@@ -328,7 +336,13 @@ impl GaugeState {
 
     fn best_current_auto_shift_gauge(&self) -> GaugeType {
         let top_rank = match self.auto_shift_mode {
-            GaugeAutoShiftMode::BestClear => auto_shift_result_rank(GaugeType::Hazard),
+            GaugeAutoShiftMode::BestClear => {
+                if is_course_gauge(self.original) {
+                    auto_shift_result_rank(GaugeType::ExHardClass)
+                } else {
+                    auto_shift_result_rank(GaugeType::Hazard)
+                }
+            }
             GaugeAutoShiftMode::SelectToUnder => auto_shift_result_rank(self.original),
             GaugeAutoShiftMode::Off
             | GaugeAutoShiftMode::Continue
@@ -337,8 +351,9 @@ impl GaugeState {
         let current_rank = auto_shift_result_rank(self.selected);
         let bottom_rank = auto_shift_result_rank(self.bottom_shiftable_gauge);
         let start_rank = current_rank.min(bottom_rank);
+        let order = auto_shift_result_order(self.original);
 
-        AUTO_SHIFT_RESULT_ORDER
+        order
             .iter()
             .copied()
             .filter(|gauge_type| {
@@ -349,7 +364,7 @@ impl GaugeState {
                 self.gauge(*gauge_type)
                     .is_some_and(|gauge| gauge.value > gauge.definition.min && gauge.is_qualified())
             })
-            .unwrap_or_else(|| auto_shift_gauge_for_rank(start_rank))
+            .unwrap_or_else(|| lowest_auto_shift_gauge(order, start_rank, top_rank))
     }
 
     fn gauge(&self, gauge_type: GaugeType) -> Option<&SingleGaugeState> {
@@ -366,6 +381,13 @@ const AUTO_SHIFT_RESULT_ORDER: &[GaugeType] = &[
     GaugeType::AssistEasy,
 ];
 
+const COURSE_AUTO_SHIFT_RESULT_ORDER: &[GaugeType] =
+    &[GaugeType::ExHardClass, GaugeType::ExClass, GaugeType::Class];
+
+fn auto_shift_result_order(original: GaugeType) -> &'static [GaugeType] {
+    if is_course_gauge(original) { COURSE_AUTO_SHIFT_RESULT_ORDER } else { AUTO_SHIFT_RESULT_ORDER }
+}
+
 fn auto_shift_result_rank(gauge_type: GaugeType) -> u8 {
     match gauge_type {
         GaugeType::AssistEasy => 0,
@@ -380,6 +402,10 @@ fn auto_shift_result_rank(gauge_type: GaugeType) -> u8 {
     }
 }
 
+fn is_course_gauge(gauge_type: GaugeType) -> bool {
+    matches!(gauge_type, GaugeType::Class | GaugeType::ExClass | GaugeType::ExHardClass)
+}
+
 fn normalize_bottom_shiftable_gauge(gauge_type: GaugeType) -> GaugeType {
     match gauge_type {
         GaugeType::AssistEasy | GaugeType::Easy | GaugeType::Normal => gauge_type,
@@ -391,8 +417,25 @@ fn auto_shift_gauge_for_rank(rank: u8) -> GaugeType {
     match rank {
         0 => GaugeType::AssistEasy,
         1 => GaugeType::Easy,
-        _ => GaugeType::Normal,
+        2 => GaugeType::Normal,
+        3 => GaugeType::Hard,
+        4 => GaugeType::ExHard,
+        5 => GaugeType::Hazard,
+        6 => GaugeType::Class,
+        7 => GaugeType::ExClass,
+        _ => GaugeType::ExHardClass,
     }
+}
+
+fn lowest_auto_shift_gauge(order: &[GaugeType], start_rank: u8, top_rank: u8) -> GaugeType {
+    order
+        .iter()
+        .copied()
+        .rfind(|gauge_type| {
+            let rank = auto_shift_result_rank(*gauge_type);
+            rank >= start_rank && rank <= top_rank
+        })
+        .unwrap_or_else(|| auto_shift_gauge_for_rank(start_rank))
 }
 
 fn gauge_closes_play_on_zero(gauge_type: GaugeType) -> bool {
@@ -1440,6 +1483,21 @@ mod tests {
         assert_eq!(gauge.selected, GaugeType::Normal);
     }
 
+    #[test]
+    fn hard_to_groove_keeps_course_gauge_at_zero() {
+        let mut gauge = GaugeState::new_with_auto_shift(
+            GaugeType::ExHardClass,
+            GaugeAutoShiftMode::HardToGroove,
+            160.0,
+            1000,
+        );
+
+        gauge.apply_judge(Judge::Poor, 200.0);
+
+        assert_eq!(gauge.selected, GaugeType::ExHardClass);
+        assert_eq!(gauge.current().value, 0.0);
+    }
+
     fn definition_for(gauge_type: GaugeType) -> GaugeDefinition {
         default_gauge_definitions()
             .into_iter()
@@ -1674,6 +1732,60 @@ mod tests {
         let result_gauge = gauge.result_gauge();
 
         assert_eq!(result_gauge.definition.gauge_type, GaugeType::Hard);
+    }
+
+    #[test]
+    fn best_clear_uses_course_gauge_order_for_class_gauges() {
+        let mut gauge = GaugeState::new_with_auto_shift(
+            GaugeType::ExHardClass,
+            GaugeAutoShiftMode::BestClear,
+            160.0,
+            1000,
+        );
+        assert_eq!(gauge.selected, GaugeType::ExHardClass);
+        gauge
+            .gauges
+            .iter_mut()
+            .find(|gauge| gauge.definition.gauge_type == GaugeType::ExHardClass)
+            .unwrap()
+            .value = 0.0;
+        gauge
+            .gauges
+            .iter_mut()
+            .find(|gauge| gauge.definition.gauge_type == GaugeType::ExClass)
+            .unwrap()
+            .value = 100.0;
+
+        gauge.apply_judge(Judge::PGreat, 0.0);
+
+        assert_eq!(gauge.selected, GaugeType::ExClass);
+        assert_eq!(gauge.result_gauge().definition.gauge_type, GaugeType::ExClass);
+    }
+
+    #[test]
+    fn select_to_under_result_does_not_exceed_original_course_gauge() {
+        let mut gauge = GaugeState::new_with_auto_shift(
+            GaugeType::ExClass,
+            GaugeAutoShiftMode::SelectToUnder,
+            160.0,
+            1000,
+        );
+        gauge
+            .gauges
+            .iter_mut()
+            .find(|gauge| gauge.definition.gauge_type == GaugeType::ExHardClass)
+            .unwrap()
+            .value = 100.0;
+        gauge
+            .gauges
+            .iter_mut()
+            .find(|gauge| gauge.definition.gauge_type == GaugeType::ExClass)
+            .unwrap()
+            .value = 90.0;
+
+        let result_gauge = gauge.result_gauge();
+
+        assert_eq!(result_gauge.definition.gauge_type, GaugeType::ExClass);
     }
 
     #[test]

@@ -6,7 +6,7 @@ use bmz_core::course::{
     CourseLnConstraint, CourseSpeedConstraint,
 };
 use bmz_core::time::TimeUs;
-use bmz_gameplay::gauge::{GaugeAutoShiftMode, GaugeProperty};
+use bmz_gameplay::gauge::GaugeProperty;
 use bmz_gameplay::input::backend::{InputBackend, NullInputBackend};
 use bmz_gameplay::replay::ReplayPlayer;
 
@@ -60,7 +60,7 @@ pub struct PlayStartOptions {
     /// Course-forced gauge override (CLASS / EXCLASS / EXHARDCLASS).
     /// `apply_course_constraints` populates this for course play so the user's
     /// selected gauge translates into a course-only class gauge; takes priority
-    /// over `gauge` and disables auto-shift in `play_session_options_from_start`.
+    /// over `gauge`.
     pub course_gauge_override: Option<GaugeType>,
     /// 段位ゲージの `GaugeProperty` 上書き。`apply_course_constraints` で
     /// `CourseGaugeConstraint::Lr2/Keys5/Keys7/Keys9/Keys24` を解釈して設定。
@@ -92,15 +92,10 @@ pub fn play_session_options_from_start(
     let gauge_override = start_options
         .course_gauge_override
         .or_else(|| start_options.gauge.map(gauge_type_from_config));
-    let gauge_auto_shift = if start_options.course_gauge_override.is_some() {
-        // 段位ゲージは自動シフトしない（beatoraja 準拠）。
-        GaugeAutoShiftMode::Off
-    } else {
-        start_options
-            .gauge
-            .map(|gauge| gauge_auto_shift_from_config(gauge, start_options.gauge_auto_shift))
-            .unwrap_or_default()
-    };
+    let gauge_auto_shift = start_options
+        .gauge
+        .map(|gauge| gauge_auto_shift_from_config(gauge, start_options.gauge_auto_shift))
+        .unwrap_or_default();
 
     PlaySessionOptions {
         autoplay: start_options.autoplay,
@@ -393,6 +388,7 @@ mod tests {
     use super::*;
     use crate::config::app_config::AppConfig;
     use bmz_core::course::CourseGaugeConstraint;
+    use bmz_gameplay::gauge::GaugeAutoShiftMode;
     use winit::event::ElementState;
     use winit::keyboard::{KeyCode, PhysicalKey};
 
@@ -468,7 +464,7 @@ mod tests {
     }
 
     #[test]
-    fn course_gauge_override_disables_auto_shift_in_session_options() {
+    fn course_gauge_override_keeps_auto_shift_in_session_options() {
         let app_config = AppConfig::default();
         let mut options =
             PlayStartOptions { gauge: Some(GaugeTypeConfig::AutoShift), ..Default::default() };
@@ -477,7 +473,7 @@ mod tests {
         let session = play_session_options_from_start(&app_config, options);
 
         assert_eq!(session.gauge_override, Some(GaugeType::ExHardClass));
-        assert_eq!(session.gauge_auto_shift, GaugeAutoShiftMode::Off);
+        assert_eq!(session.gauge_auto_shift, GaugeAutoShiftMode::BestClear);
     }
 
     #[test]
