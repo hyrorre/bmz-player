@@ -5489,11 +5489,19 @@ impl WinitApp {
     }
 
     fn course_intermediate_exit_action(&self) -> ResultExitAction {
-        let failed =
-            self.active_course.as_ref().and_then(|course| course.entry_results.last()).is_some_and(
-                |entry| entry.finished.result.clear_type == bmz_core::clear::ClearType::Failed,
-            );
-        if failed { ResultExitAction::FinishCourse } else { ResultExitAction::AdvanceCourse }
+        let Some(course) = self.active_course.as_ref() else {
+            return ResultExitAction::FinishCourse;
+        };
+        let failed = course.entry_results.last().is_some_and(|entry| {
+            entry.finished.result.clear_type == bmz_core::clear::ClearType::Failed
+        });
+        let has_next_chart = course
+            .definition
+            .entries
+            .get(course.current_index)
+            .and_then(|entry| entry.chart_id)
+            .is_some();
+        course_intermediate_exit_action_for_state(failed, has_next_chart)
     }
 
     /// コース中間リザルトのコントロール処理。Key6 はゲージグラフ切替のみ許可し、
@@ -5537,8 +5545,9 @@ impl WinitApp {
 
         let next_chart_id =
             course.definition.entries.get(course.current_index).and_then(|e| e.chart_id);
+        let has_next_entry = course.definition.entries.get(course.current_index).is_some();
 
-        if failed || next_chart_id.is_some() {
+        if should_show_course_stage_result(failed, has_next_entry, next_chart_id.is_some()) {
             // 次の曲をすぐ始めず、まず直前の曲の単曲リザルト (中間リザルト) を出す。
             // active_course を保持したまま finished_play に直前結果を入れることで、
             // view_state は Result を返し、入力は中間リザルト分岐へ入る。実際の次曲
@@ -11053,6 +11062,25 @@ fn is_course_intermediate_result(
     active_course && finished_play && !finished_course
 }
 
+fn course_intermediate_exit_action_for_state(
+    failed: bool,
+    has_next_chart: bool,
+) -> ResultExitAction {
+    if failed || !has_next_chart {
+        ResultExitAction::FinishCourse
+    } else {
+        ResultExitAction::AdvanceCourse
+    }
+}
+
+fn should_show_course_stage_result(
+    failed: bool,
+    has_next_entry: bool,
+    has_next_chart: bool,
+) -> bool {
+    failed || has_next_chart || !has_next_entry
+}
+
 fn result_skin_signature_for_config(
     skin: &crate::config::profile_config::SkinConfig,
     slot: ResultSkinSlot,
@@ -15235,6 +15263,30 @@ mod tests {
         assert!(!is_course_intermediate_result(false, false, true));
         // 結果未表示なら中間リザルトではない。
         assert!(!is_course_intermediate_result(true, false, false));
+    }
+
+    #[test]
+    fn course_intermediate_exit_action_finishes_failed_or_final_stage() {
+        assert_eq!(
+            course_intermediate_exit_action_for_state(false, true),
+            ResultExitAction::AdvanceCourse
+        );
+        assert_eq!(
+            course_intermediate_exit_action_for_state(true, true),
+            ResultExitAction::FinishCourse
+        );
+        assert_eq!(
+            course_intermediate_exit_action_for_state(false, false),
+            ResultExitAction::FinishCourse
+        );
+    }
+
+    #[test]
+    fn course_stage_result_is_shown_for_next_failed_or_final_stage() {
+        assert!(should_show_course_stage_result(false, true, true));
+        assert!(should_show_course_stage_result(true, true, false));
+        assert!(should_show_course_stage_result(false, false, false));
+        assert!(!should_show_course_stage_result(false, true, false));
     }
 
     #[test]
