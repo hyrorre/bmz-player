@@ -150,18 +150,17 @@ cargo run
 - [x] course result skinの各曲の情報表示窓に表示されるのがcourse 1-4という仮のテキスト？になっている
 - [x] 単曲リザルトだけでなくcourse resultもNoPlayに丸められている (CLEAR, HARD, EXHなどになるべき)
 - [x] course mode の Gauge Auto Shift 対応
-
 - [x] アナログスクラッチの停止判定が緩すぎて、連続で同じ方向に回すと全然反応しない (beatorajaと同じアルゴリズムを目指す)
 - [x] Calamity Fortune[F]のLN終端が普通のノーツになっている (G:\BMS\INSANE\[ZUN remixed by LeaF] Calamity Fortune)
 - [x] 設定フォルダ内で[編集中]にスクラッチを回して選択項目を上下させる操作に対応させる
 - [x] 画像形式のBGAの読み込みが同期になっており遅い
-- [ ] play skin turntableの回転方向が逆？
 - [x] 低解像度BGAのピクセル補間について確認
 - [x] IRの送信完了タイマーとrefへの対応
 - [x] decide skin, result skinへ難易度表情報を連携 (その譜面がどの難易度表のどの難易度に含まれているか)
 - [x] beatorajaにselect skinへ難易度表情報を連携するインターフェースがあるか確認
 - [x] リザルト画面のSEフェードアウト
-- [ ] /deletescoreコマンドの実装
+- [x] IRの送信開始を早める
+- [ ] play skin turntableの回転方向が逆？
 - [ ] 難易度表のデフォルトを追加
 - [ ] ln_policyをAUTO/FORCEとLN/CN/HCNに分けることでselect skinのLN変更機能を有効化
 - [ ] IR側でln_policyが見やすくなるよう表示を調整
