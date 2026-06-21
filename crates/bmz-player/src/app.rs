@@ -10856,6 +10856,10 @@ impl ApplicationHandler for WinitApp {
         self.active_play = None;
         self.system_audio = None;
         self.audio_runtime = None;
+        // Linux の winit/wgpu backend では Window より後に Surface を drop すると
+        // native 側で落ちることがあるため、Window を保持したまま GPU 資源を解放する。
+        self.egui = None;
+        self.renderer.detach_surface();
     }
 }
 

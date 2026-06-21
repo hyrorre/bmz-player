@@ -294,7 +294,6 @@ fn validate_rgba_texture(width: u32, height: u32, rgba: &[u8]) -> Result<()> {
 }
 
 struct WgpuRenderer {
-    surface: wgpu::Surface<'static>,
     device: wgpu::Device,
     queue: wgpu::Queue,
     config: wgpu::SurfaceConfiguration,
@@ -330,6 +329,9 @@ struct WgpuRenderer {
     egui: EguiPainter,
     pending_screenshot_readbacks: Vec<ScreenshotReadback>,
     screenshot_save_jobs: Vec<ScreenshotSaveJob>,
+    // Drop the surface after GPU resources so Linux native contexts are
+    // released before the window/display teardown.
+    surface: wgpu::Surface<'static>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -571,6 +573,16 @@ impl Renderer {
         }
         self.gpu = Some(gpu);
         Ok(())
+    }
+
+    /// Drop GPU resources that depend on the window surface while the app still
+    /// owns the native window.
+    pub fn detach_surface(&mut self) {
+        self.pending_egui = None;
+        let Some(gpu) = self.gpu.take() else {
+            return;
+        };
+        gpu.wait_idle_before_drop();
     }
 
     pub fn upsert_rgba_texture(
@@ -1064,7 +1076,6 @@ impl WgpuRenderer {
         let egui = EguiPainter::new(&device, config.format);
 
         Ok(Self {
-            surface,
             device,
             queue,
             config,
@@ -1100,6 +1111,7 @@ impl WgpuRenderer {
             egui,
             pending_screenshot_readbacks: Vec::new(),
             screenshot_save_jobs: Vec::new(),
+            surface,
         })
     }
 
@@ -1217,6 +1229,12 @@ impl WgpuRenderer {
             finish_screenshot_save_job(job);
         }
         Ok(())
+    }
+
+    fn wait_idle_before_drop(&self) {
+        if let Err(error) = self.device.poll(wgpu::PollType::wait_indefinitely()) {
+            tracing::warn!(%error, "failed to wait for renderer device before surface drop");
+        }
     }
 
     fn render_plan(
