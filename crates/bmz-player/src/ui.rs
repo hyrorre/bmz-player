@@ -1771,6 +1771,11 @@ fn build_settings_panel(
                                 AudioBackend::Pulse,
                                 "PulseAudio",
                             );
+                            ui.selectable_value(
+                                &mut config.audio.backend,
+                                AudioBackend::PipeWire,
+                                "PipeWire",
+                            );
                         });
                     let sample_rate_text =
                         if config.audio.sample_rate_mode == AudioSampleRateMode::Auto {
@@ -2202,6 +2207,7 @@ fn audio_backend_label(backend: &AudioBackend) -> &'static str {
         AudioBackend::CoreAudio => "Core Audio",
         AudioBackend::Alsa => "ALSA",
         AudioBackend::Pulse => "PulseAudio",
+        AudioBackend::PipeWire => "PipeWire",
     }
 }
 

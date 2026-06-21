@@ -228,6 +228,7 @@ fn cpal_host_for_backend(backend: &AudioBackend) -> Result<Option<CpalHostId>> {
         AudioBackend::CoreAudio => cpal_host_for_platform(CpalHostId::CoreAudio, "Core Audio"),
         AudioBackend::Alsa => cpal_host_for_platform(CpalHostId::Alsa, "ALSA"),
         AudioBackend::Pulse => cpal_host_for_platform(CpalHostId::Pulse, "PulseAudio"),
+        AudioBackend::PipeWire => cpal_host_for_platform(CpalHostId::PipeWire, "PipeWire"),
     }
 }
 

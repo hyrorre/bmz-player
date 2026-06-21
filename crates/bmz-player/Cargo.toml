@@ -10,6 +10,8 @@ license.workspace = true
 # ASIO SDK / LLVM を用意できない環境では `--no-default-features` で除外できる。
 # PulseAudio は Linux / BSD 系の cpal host を有効化する。ALSA default PCM が
 # 使えない環境では PulseAudio を選択して回避できる。
+# PipeWire は Linux / BSD 系の cpal host を有効化する。環境の system
+# PipeWire / SPA headers に依存するため、必要な環境で `--features pipewire` を使う。
 [features]
 default = ["asio", "pulseaudio"]
 asio = ["bmz-audio/asio"]

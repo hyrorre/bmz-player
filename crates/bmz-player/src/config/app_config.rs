@@ -67,6 +67,7 @@ pub enum AudioBackend {
     CoreAudio,
     Alsa,
     Pulse,
+    PipeWire,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

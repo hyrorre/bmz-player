@@ -39,6 +39,7 @@ pub enum CpalHostId {
     CoreAudio,
     Alsa,
     Pulse,
+    PipeWire,
 }
 
 pub struct CpalOutput {
@@ -252,6 +253,27 @@ fn cpal_host_id(host: CpalHostId) -> Option<::cpal::HostId> {
             feature = "pulseaudio"
         )))]
         CpalHostId::Pulse => None,
+
+        #[cfg(all(
+            any(
+                target_os = "linux",
+                target_os = "dragonfly",
+                target_os = "freebsd",
+                target_os = "netbsd"
+            ),
+            feature = "pipewire"
+        ))]
+        CpalHostId::PipeWire => Some(::cpal::HostId::PipeWire),
+        #[cfg(not(all(
+            any(
+                target_os = "linux",
+                target_os = "dragonfly",
+                target_os = "freebsd",
+                target_os = "netbsd"
+            ),
+            feature = "pipewire"
+        )))]
+        CpalHostId::PipeWire => None,
     }
 }
 
