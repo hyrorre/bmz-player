@@ -234,9 +234,9 @@ fn cpal_host_id(host: CpalHostId) -> Option<::cpal::HostId> {
         #[cfg(not(target_os = "linux"))]
         CpalHostId::Alsa => None,
 
-        #[cfg(target_os = "linux")]
-        CpalHostId::Pulse => Some(::cpal::HostId::Pulse),
-        #[cfg(not(target_os = "linux"))]
+        // cpal 0.15 exposes ALSA (and optional JACK) as Linux dynamic hosts,
+        // but not PulseAudio. Keep the BMZ config value available and report
+        // it as unsupported until a Pulse-capable cpal backend is introduced.
         CpalHostId::Pulse => None,
     }
 }
