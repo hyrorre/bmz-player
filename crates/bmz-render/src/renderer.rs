@@ -50,12 +50,48 @@ pub enum WgpuPresentMode {
 impl WgpuBackend {
     pub fn to_wgpu(self) -> wgpu::Backends {
         match self {
-            Self::Auto => wgpu::Backends::all(),
+            Self::Auto => auto_wgpu_backends(),
             Self::Vulkan => wgpu::Backends::VULKAN,
             Self::Metal => wgpu::Backends::METAL,
             Self::Dx12 => wgpu::Backends::DX12,
             Self::Gl => wgpu::Backends::GL,
         }
+    }
+}
+
+fn auto_wgpu_backends() -> wgpu::Backends {
+    #[cfg(target_os = "linux")]
+    {
+        // Prefer Vulkan on Linux. GL/GLES remains available only as an
+        // explicit fallback when Vulkan surface/device creation fails.
+        wgpu::Backends::VULKAN
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        // Prefer DirectX 12 on Windows. Vulkan and GL remain available only as
+        // explicit fallbacks when DirectX 12 surface/device creation fails.
+        wgpu::Backends::DX12
+    }
+
+    #[cfg(not(any(target_os = "linux", target_os = "windows")))]
+    {
+        wgpu::Backends::all()
+    }
+}
+
+fn fallback_wgpu_backends(backend: WgpuBackend) -> &'static [WgpuBackend] {
+    match backend {
+        #[cfg(target_os = "linux")]
+        WgpuBackend::Auto => &[WgpuBackend::Vulkan, WgpuBackend::Gl],
+        #[cfg(target_os = "windows")]
+        WgpuBackend::Auto => &[WgpuBackend::Dx12, WgpuBackend::Vulkan, WgpuBackend::Gl],
+        #[cfg(not(any(target_os = "linux", target_os = "windows")))]
+        WgpuBackend::Auto => &[WgpuBackend::Auto],
+        WgpuBackend::Vulkan => &[WgpuBackend::Vulkan],
+        WgpuBackend::Metal => &[WgpuBackend::Metal],
+        WgpuBackend::Dx12 => &[WgpuBackend::Dx12],
+        WgpuBackend::Gl => &[WgpuBackend::Gl],
     }
 }
 
@@ -560,14 +596,15 @@ pub struct PreparedTexture {
 impl Renderer {
     pub fn attach_surface<T>(&mut self, window: T, size: SurfaceSize) -> Result<()>
     where
-        T: Into<wgpu::SurfaceTarget<'static>>,
+        T: Into<wgpu::SurfaceTarget<'static>> + Clone,
     {
         if !size.is_drawable() {
             self.gpu = None;
             return Ok(());
         }
 
-        let mut gpu = WgpuRenderer::new(window, size, self.present_mode, self.backend)?;
+        let mut gpu =
+            WgpuRenderer::new_with_fallbacks(window, size, self.present_mode, self.backend)?;
         for texture in self.pending_textures.drain(..) {
             gpu.upsert_rgba_texture(texture.id, texture.width, texture.height, &texture.rgba);
         }
@@ -996,6 +1033,40 @@ impl fmt::Debug for Renderer {
 }
 
 impl WgpuRenderer {
+    fn new_with_fallbacks<T>(
+        window: T,
+        size: SurfaceSize,
+        present_mode: WgpuPresentMode,
+        backend: WgpuBackend,
+    ) -> Result<Self>
+    where
+        T: Into<wgpu::SurfaceTarget<'static>> + Clone,
+    {
+        let candidates = fallback_wgpu_backends(backend);
+        let mut last_error = None;
+        for candidate in candidates {
+            match Self::new(window.clone(), size, present_mode, *candidate) {
+                Ok(renderer) => {
+                    if backend == WgpuBackend::Auto && *candidate != WgpuBackend::Auto {
+                        tracing::info!(backend = ?candidate, "selected auto renderer backend");
+                    }
+                    return Ok(renderer);
+                }
+                Err(error) => {
+                    tracing::warn!(
+                        requested = ?backend,
+                        candidate = ?candidate,
+                        %error,
+                        "failed to initialize renderer backend candidate"
+                    );
+                    last_error = Some(error);
+                }
+            }
+        }
+
+        Err(last_error.unwrap_or_else(|| anyhow!("no renderer backend candidates available")))
+    }
+
     fn new<T>(
         window: T,
         size: SurfaceSize,
@@ -4239,6 +4310,33 @@ mod tests {
 
     fn font_supports_japanese<F: Font>(font: &F) -> bool {
         font.glyph_id('あ').0 != 0 && font.glyph_id('日').0 != 0
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn auto_renderer_backend_prefers_vulkan_on_linux() {
+        assert_eq!(auto_wgpu_backends(), wgpu::Backends::VULKAN);
+        assert_eq!(
+            fallback_wgpu_backends(WgpuBackend::Auto),
+            &[WgpuBackend::Vulkan, WgpuBackend::Gl]
+        );
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn auto_renderer_backend_prefers_dx12_on_windows() {
+        assert_eq!(auto_wgpu_backends(), wgpu::Backends::DX12);
+        assert_eq!(
+            fallback_wgpu_backends(WgpuBackend::Auto),
+            &[WgpuBackend::Dx12, WgpuBackend::Vulkan, WgpuBackend::Gl]
+        );
+    }
+
+    #[cfg(not(any(target_os = "linux", target_os = "windows")))]
+    #[test]
+    fn auto_renderer_backend_keeps_default_candidates_on_other_platforms() {
+        assert_eq!(auto_wgpu_backends(), wgpu::Backends::all());
+        assert_eq!(fallback_wgpu_backends(WgpuBackend::Auto), &[WgpuBackend::Auto]);
     }
 
     #[test]
