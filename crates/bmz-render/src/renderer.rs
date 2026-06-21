@@ -203,6 +203,9 @@ impl CanvasViewport {
         if !surface_aspect.is_finite() || !canvas_aspect.is_finite() {
             return full;
         }
+        if (surface_aspect - canvas_aspect).abs() <= f32::EPSILON {
+            return full;
+        }
 
         let rect = if surface_aspect > canvas_aspect {
             let width = canvas_aspect / surface_aspect;
@@ -216,6 +219,10 @@ impl CanvasViewport {
 
     fn content_size(self) -> SurfaceSize {
         self.content_size
+    }
+
+    fn is_identity(self) -> bool {
+        self.rect == Rect { x: 0.0, y: 0.0, width: 1.0, height: 1.0 }
     }
 
     fn transform_rect(self, rect: Rect) -> Rect {
@@ -1241,8 +1248,10 @@ impl WgpuRenderer {
         let text_start = Instant::now();
         let mut text_frame =
             self.build_text_frame(plan, fonts, bitmap_fonts, canvas_viewport.content_size());
-        canvas_viewport.transform_text_instances(&mut text_frame.instances);
-        canvas_viewport.transform_text_caret_rects(&mut text_frame.command_caret_rects);
+        if !canvas_viewport.is_identity() {
+            canvas_viewport.transform_text_instances(&mut text_frame.instances);
+            canvas_viewport.transform_text_caret_rects(&mut text_frame.command_caret_rects);
+        }
         timings.text_us = text_start.elapsed().as_micros();
         let geometry_start = Instant::now();
         let mut geometry = std::mem::take(&mut self.geometry_scratch);
@@ -4317,7 +4326,22 @@ mod tests {
         );
 
         assert_eq!(viewport.rect, Rect { x: 0.0, y: 0.0, width: 1.0, height: 1.0 });
+        assert!(viewport.is_identity());
         assert_eq!(viewport.content_size(), SurfaceSize { width: 320, height: 240 });
+    }
+
+    #[test]
+    fn canvas_viewport_contain_same_aspect_uses_identity_transform() {
+        let viewport = CanvasViewport::from_policy(
+            SurfaceSize { width: 2560, height: 1440 },
+            CanvasRenderPolicy {
+                fit_mode: CanvasFitMode::Contain,
+                canvas_size: Some(CanvasSize { width: 1920, height: 1080 }),
+            },
+        );
+
+        assert!(viewport.is_identity());
+        assert_eq!(viewport.content_size(), SurfaceSize { width: 2560, height: 1440 });
     }
 
     #[test]
@@ -4334,6 +4358,7 @@ mod tests {
         assert_approx(viewport.rect.y, 0.21875);
         assert_approx(viewport.rect.width, 1.0);
         assert_approx(viewport.rect.height, 0.5625);
+        assert!(!viewport.is_identity());
         assert_eq!(viewport.content_size(), SurfaceSize { width: 1000, height: 563 });
     }
 

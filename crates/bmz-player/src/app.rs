@@ -9092,9 +9092,15 @@ impl WinitApp {
         let Some((kind, elapsed_us)) = self.current_skin_video_context() else {
             return profile;
         };
+        let needs_runtime_state = self
+            .skin_video_sources
+            .get(&kind)
+            .is_some_and(|sources| skin_video_sources_need_runtime_state(sources));
         // 実行時 op 条件 (例: リザルトのランク別 BG) で実際に表示されるソースだけを
-        // デコードする。state を作れないシーンでは静的な `active` 判定に従う。
-        let runtime_state = self.current_skin_video_draw_state_for_scene(kind, scene);
+        // デコードする。実行時 op を持つソースが無い場合は state 構築自体を避ける。
+        let runtime_state = needs_runtime_state
+            .then(|| self.current_skin_video_draw_state_for_scene(kind, scene))
+            .flatten();
         let Some(sources) = self.skin_video_sources.get_mut(&kind) else {
             return profile;
         };
@@ -9930,6 +9936,12 @@ fn skin_video_sources_from_decoded(decoded: &DecodedSkin) -> Vec<ActiveSkinVideo
         .collect()
 }
 
+fn skin_video_sources_need_runtime_state(sources: &[ActiveSkinVideoSource]) -> bool {
+    sources
+        .iter()
+        .any(|source| source.active && !source.failed && !source.gating_op_sets.is_empty())
+}
+
 fn play_skin_video_draw_state(snapshot: &RenderSnapshot) -> bmz_render::skin::SkinDrawState {
     let play_elapsed_ms = time_us_to_skin_ms(snapshot.play_elapsed_time);
     bmz_render::skin::SkinDrawState {
@@ -10021,16 +10033,26 @@ fn play_skin_video_timeleft_ms(snapshot: &RenderSnapshot) -> i32 {
 }
 
 fn skin_video_play_level_number(label: &str) -> i64 {
-    label.chars().filter(|ch| ch.is_ascii_digit()).collect::<String>().parse().unwrap_or(0)
+    let mut value = 0_i64;
+    for digit in label.bytes().filter(u8::is_ascii_digit) {
+        value = value.saturating_mul(10).saturating_add((digit - b'0') as i64);
+    }
+    value
 }
 
 fn skin_video_difficulty_code(label: &str) -> i64 {
-    match label.trim().to_ascii_uppercase().as_str() {
-        "1" | "BEGINNER" => 1,
-        "2" | "NORMAL" => 2,
-        "3" | "HYPER" => 3,
-        "4" | "ANOTHER" => 4,
-        "5" | "INSANE" => 5,
+    let label = label.trim();
+    match label {
+        "1" => 1,
+        "2" => 2,
+        "3" => 3,
+        "4" => 4,
+        "5" => 5,
+        _ if label.eq_ignore_ascii_case("BEGINNER") => 1,
+        _ if label.eq_ignore_ascii_case("NORMAL") => 2,
+        _ if label.eq_ignore_ascii_case("HYPER") => 3,
+        _ if label.eq_ignore_ascii_case("ANOTHER") => 4,
+        _ if label.eq_ignore_ascii_case("INSANE") => 5,
         _ => 0,
     }
 }
@@ -14124,6 +14146,21 @@ mod tests {
     use super::*;
 
     #[test]
+    fn skin_video_play_level_number_extracts_digits_without_allocating_label_shapes() {
+        assert_eq!(skin_video_play_level_number("12"), 12);
+        assert_eq!(skin_video_play_level_number("LV 10+"), 10);
+        assert_eq!(skin_video_play_level_number("no level"), 0);
+    }
+
+    #[test]
+    fn skin_video_difficulty_code_matches_numeric_and_case_insensitive_names() {
+        assert_eq!(skin_video_difficulty_code("1"), 1);
+        assert_eq!(skin_video_difficulty_code(" normal "), 2);
+        assert_eq!(skin_video_difficulty_code("INSANE"), 5);
+        assert_eq!(skin_video_difficulty_code("unknown"), 0);
+    }
+
+    #[test]
     fn table_breadcrumb_uses_table_name_without_symbol_prefix() {
         let breadcrumb = table_breadcrumb_from_record(&DifficultyTableRecord {
             id: 1,
@@ -14954,6 +14991,31 @@ mod tests {
         };
         assert!(skin_video_source_runtime_visible(&bg_a, &a_state));
         assert!(!skin_video_source_runtime_visible(&bg_aaa, &a_state));
+    }
+
+    #[test]
+    fn skin_video_sources_need_runtime_state_only_for_active_gated_sources() {
+        let make_source =
+            |active: bool, failed: bool, gating_op_sets: Vec<Vec<i32>>| ActiveSkinVideoSource {
+                texture: SkinTextureId(0),
+                path: PathBuf::new(),
+                decoder: None,
+                last_pts: None,
+                loop_start_us: 0,
+                active,
+                gating_op_sets,
+                enabled_options: Vec::new(),
+                result_ranktime_ms: 0,
+                failed,
+            };
+
+        assert!(!skin_video_sources_need_runtime_state(&[
+            make_source(true, false, Vec::new()),
+            make_source(false, false, vec![vec![90]]),
+            make_source(true, true, vec![vec![90]]),
+        ]));
+        let gated_source = make_source(true, false, vec![vec![90]]);
+        assert!(skin_video_sources_need_runtime_state(&[gated_source]));
     }
 
     #[test]

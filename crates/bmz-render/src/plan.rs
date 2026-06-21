@@ -781,16 +781,26 @@ fn difficulty_level_label(difficulty_name: &str, play_level: &str, table_level: 
 }
 
 fn skin_level_number(label: &str) -> i64 {
-    label.chars().filter(|ch| ch.is_ascii_digit()).collect::<String>().parse().unwrap_or(0)
+    let mut value = 0_i64;
+    for digit in label.bytes().filter(u8::is_ascii_digit) {
+        value = value.saturating_mul(10).saturating_add((digit - b'0') as i64);
+    }
+    value
 }
 
 fn skin_difficulty_code(label: &str) -> i64 {
-    match label.trim().to_ascii_uppercase().as_str() {
-        "1" | "BEGINNER" => 1,
-        "2" | "NORMAL" => 2,
-        "3" | "HYPER" => 3,
-        "4" | "ANOTHER" => 4,
-        "5" | "INSANE" => 5,
+    let label = label.trim();
+    match label {
+        "1" => 1,
+        "2" => 2,
+        "3" => 3,
+        "4" => 4,
+        "5" => 5,
+        _ if label.eq_ignore_ascii_case("BEGINNER") => 1,
+        _ if label.eq_ignore_ascii_case("NORMAL") => 2,
+        _ if label.eq_ignore_ascii_case("HYPER") => 3,
+        _ if label.eq_ignore_ascii_case("ANOTHER") => 4,
+        _ if label.eq_ignore_ascii_case("INSANE") => 5,
         _ => 0,
     }
 }
@@ -816,13 +826,13 @@ fn plan_play(
     skin: &SkinContext,
     dynamic_timers: &mut crate::skin::DynamicTimerRuntime,
 ) -> DrawPlan {
-    let mut commands = Vec::new();
-    if snapshot.backbmp_background {
-        push_fullscreen_image(&mut commands, PLAY_BACKBMP_TEXTURE);
-    }
     let text = TextRenderer;
     let skin_manifest = skin.manifest();
     let has_document = skin.document().is_some();
+    let mut commands = Vec::with_capacity(play_command_capacity(snapshot, has_document));
+    if snapshot.backbmp_background {
+        push_fullscreen_image(&mut commands, PLAY_BACKBMP_TEXTURE);
+    }
     if !has_document {
         push_fallback_bga_background(&mut commands, snapshot);
     }
@@ -1287,6 +1297,18 @@ fn plan_play(
     push_scene_overlays(&mut commands, &snapshot.overlay);
 
     DrawPlan { clear: Color::rgb(0.0, 0.0, 0.0), commands }
+}
+
+fn play_command_capacity(snapshot: &RenderSnapshot, has_document: bool) -> usize {
+    let visible_note_count: usize = snapshot.visible_notes.iter().map(Vec::len).sum();
+    let visible_mine_count: usize = snapshot.visible_mines.iter().map(Vec::len).sum();
+    let long_note_command_count = snapshot.visible_long_notes.len().saturating_mul(3);
+    let skin_command_floor: usize = if has_document { 192 } else { 96 };
+    skin_command_floor
+        .saturating_add(snapshot.bar_lines.len())
+        .saturating_add(visible_note_count)
+        .saturating_add(visible_mine_count)
+        .saturating_add(long_note_command_count)
 }
 
 fn push_chart_text(
@@ -2790,6 +2812,21 @@ mod tests {
     };
 
     use super::*;
+
+    #[test]
+    fn skin_level_number_extracts_digits_without_requiring_numeric_label() {
+        assert_eq!(skin_level_number("12"), 12);
+        assert_eq!(skin_level_number("LV 10+"), 10);
+        assert_eq!(skin_level_number("no level"), 0);
+    }
+
+    #[test]
+    fn skin_difficulty_code_matches_numeric_and_case_insensitive_names() {
+        assert_eq!(skin_difficulty_code("1"), 1);
+        assert_eq!(skin_difficulty_code(" hyper "), 3);
+        assert_eq!(skin_difficulty_code("ANOTHER"), 4);
+        assert_eq!(skin_difficulty_code("unknown"), 0);
+    }
 
     #[test]
     fn play_plan_renders_long_note_body() {
