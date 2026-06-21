@@ -3,7 +3,8 @@ use std::sync::Arc;
 
 use bmz_chart::model::LongNoteMode;
 use bmz_chart::model::{
-    BarLine, BgaAssetId, BgaEventKind, NoteEvent, NoteKind, PlayableChart, TimingEventKind,
+    BarLine, BgaArgbEvent, BgaAssetId, BgaEvent, BgaEventKind, BgaOpacityEvent, NoteEvent,
+    NoteKind, PlayableChart, TimingEventKind,
 };
 use bmz_chart::timing::{TICKS_PER_BEAT, TimingMap};
 use bmz_core::judge::{Judge, TimingSide};
@@ -28,6 +29,7 @@ const SCRATCH_ANGLE_OFFSET_1P: i32 = 1;
 const SCRATCH_ANGLE_OFFSET_2P: i32 = 2;
 const SCRATCH_ANGLE_PERIOD_MS: i64 = 2_160;
 const SCRATCH_ANGLE_DEGREES_DIVISOR: i64 = 6;
+const BGA_EVENT_KIND_COUNT: usize = 4;
 pub type BgaFrameCatalog = HashMap<BgaAssetId, DisplayBgaFrame>;
 
 #[derive(Debug, Clone)]
@@ -39,6 +41,14 @@ pub struct PlayRenderSnapshotCache {
     has_bpm_stop: bool,
     scroll_segments: Arc<[(f64, f64)]>,
     speed_segments: Arc<[(f64, f64)]>,
+    bga_events: BgaEventCache,
+}
+
+#[derive(Debug, Clone)]
+struct BgaEventCache {
+    events_by_kind: [Arc<[BgaEvent]>; BGA_EVENT_KIND_COUNT],
+    opacity_by_kind: [Arc<[BgaOpacityEvent]>; BGA_EVENT_KIND_COUNT],
+    argb_by_kind: [Arc<[BgaArgbEvent]>; BGA_EVENT_KIND_COUNT],
 }
 
 impl PlayRenderSnapshotCache {
@@ -67,6 +77,7 @@ impl PlayRenderSnapshotCache {
                 .collect::<Vec<_>>()
                 .into_boxed_slice(),
         );
+        let bga_events = BgaEventCache::from_chart(chart);
         Self {
             judge_graph_density,
             bpm_graph_segments,
@@ -75,7 +86,54 @@ impl PlayRenderSnapshotCache {
             has_bpm_stop,
             scroll_segments,
             speed_segments,
+            bga_events,
         }
+    }
+}
+
+impl BgaEventCache {
+    fn from_chart(chart: &PlayableChart) -> Self {
+        let mut events_by_kind: [Vec<BgaEvent>; BGA_EVENT_KIND_COUNT] =
+            std::array::from_fn(|_| Vec::new());
+        for event in &chart.bga_events {
+            events_by_kind[bga_event_kind_index(event.kind)].push(event.clone());
+        }
+        let mut opacity_by_kind: [Vec<BgaOpacityEvent>; BGA_EVENT_KIND_COUNT] =
+            std::array::from_fn(|_| Vec::new());
+        for event in &chart.bga_opacity_events {
+            opacity_by_kind[bga_event_kind_index(event.layer)].push(*event);
+        }
+        let mut argb_by_kind: [Vec<BgaArgbEvent>; BGA_EVENT_KIND_COUNT] =
+            std::array::from_fn(|_| Vec::new());
+        for event in &chart.bga_argb_events {
+            argb_by_kind[bga_event_kind_index(event.layer)].push(*event);
+        }
+        Self {
+            events_by_kind: events_by_kind.map(|events| Arc::from(events.into_boxed_slice())),
+            opacity_by_kind: opacity_by_kind.map(|events| Arc::from(events.into_boxed_slice())),
+            argb_by_kind: argb_by_kind.map(|events| Arc::from(events.into_boxed_slice())),
+        }
+    }
+
+    fn events(&self, kind: BgaEventKind) -> &[BgaEvent] {
+        &self.events_by_kind[bga_event_kind_index(kind)]
+    }
+
+    fn opacity_events(&self, kind: BgaEventKind) -> &[BgaOpacityEvent] {
+        &self.opacity_by_kind[bga_event_kind_index(kind)]
+    }
+
+    fn argb_events(&self, kind: BgaEventKind) -> &[BgaArgbEvent] {
+        &self.argb_by_kind[bga_event_kind_index(kind)]
+    }
+}
+
+fn bga_event_kind_index(kind: BgaEventKind) -> usize {
+    match kind {
+        BgaEventKind::Base => 0,
+        BgaEventKind::Poor => 1,
+        BgaEventKind::Layer => 2,
+        BgaEventKind::Layer2 => 3,
     }
 }
 
@@ -213,6 +271,25 @@ pub fn build_render_snapshot_with_target_and_bga_frames_cached(
     let play_elapsed_time = if render_now.0 < 0 { TimeUs(0) } else { render_now };
     let gauge_graph_time_ms = (render_now.0.max(0) / 1_000).clamp(0, i32::MAX as i64) as i32;
     let now_bpm = session.timing_map.bpm_at_time(render_now) as f32;
+    let note_display_duration_ms = note_display_duration_ms(session, now_bpm);
+    let lane_cover = if session.lane_cover_visible { session.lane_cover } else { 0.0 };
+    let adjusted_cover_progress = compute_adjusted_cover_progress(
+        session.hidden_enabled,
+        lane_cover,
+        session.lift,
+        session.hsfix_index,
+        now_bpm,
+        cache.max_bpm,
+        session.chart.metadata.initial_bpm as f32,
+    );
+    let adjusted_rate = compute_adjusted_rate(
+        session.hidden_enabled,
+        session.lanecover_enabled,
+        session.hsfix_index,
+        now_bpm,
+        cache.max_bpm,
+        session.chart.metadata.initial_bpm as f32,
+    );
     let gauge_graph_points = session
         .gauge
         .gauges
@@ -256,12 +333,12 @@ pub fn build_render_snapshot_with_target_and_bga_frames_cached(
         gauge_border: session.gauge.current().definition.border,
         hispeed: session.hispeed,
         lift: session.lift,
-        lane_cover: if session.lane_cover_visible { session.lane_cover } else { 0.0 },
+        lane_cover,
         lane_cover_changing: session.lane_cover_changing,
         lanecover_enabled: session.lanecover_enabled,
         lift_enabled: session.lift_enabled,
         hidden_enabled: session.hidden_enabled,
-        note_display_duration_ms: note_display_duration_ms(session, render_now),
+        note_display_duration_ms,
         hidden_cover: session.hidden_cover,
         skin_offsets: skin_offsets_from_session(session, render_now, play_elapsed_time),
         now_bpm,
@@ -272,27 +349,25 @@ pub fn build_render_snapshot_with_target_and_bga_frames_cached(
         bga_enabled: session.bga_enabled,
         bga_base: session
             .bga_enabled
-            .then(|| current_bga_frame(&session.chart, render_now, BgaEventKind::Base, bga_frames))
+            .then(|| current_bga_frame(cache, render_now, BgaEventKind::Base, bga_frames))
             .flatten(),
         bga_layer: session
             .bga_enabled
             .then(|| {
-                current_keybound_bga_frame(session, render_now, bga_frames).or_else(|| {
-                    current_bga_frame(&session.chart, render_now, BgaEventKind::Layer, bga_frames)
+                current_keybound_bga_frame(session, cache, render_now, bga_frames).or_else(|| {
+                    current_bga_frame(cache, render_now, BgaEventKind::Layer, bga_frames)
                 })
             })
             .flatten(),
         bga_layer2: session
             .bga_enabled
-            .then(|| {
-                current_bga_frame(&session.chart, render_now, BgaEventKind::Layer2, bga_frames)
-            })
+            .then(|| current_bga_frame(cache, render_now, BgaEventKind::Layer2, bga_frames))
             .flatten(),
         bga_poor: session
             .bga_enabled
             .then(|| {
                 current_poor_bga_frame(
-                    &session.chart,
+                    cache,
                     render_now,
                     recent_judgements,
                     bga_frames,
@@ -312,32 +387,9 @@ pub fn build_render_snapshot_with_target_and_bga_frames_cached(
             session.chart.metadata.judge_rank,
             session.chart.metadata.key_mode,
         ),
-        adjusted_cover_progress: compute_adjusted_cover_progress(
-            session.hidden_enabled,
-            if session.lane_cover_visible { session.lane_cover } else { 0.0 },
-            session.lift,
-            session.hsfix_index,
-            now_bpm,
-            cache.max_bpm,
-            session.chart.metadata.initial_bpm as f32,
-        ),
-        adjusted_rate: compute_adjusted_rate(
-            session.hidden_enabled,
-            session.lanecover_enabled,
-            session.hsfix_index,
-            now_bpm,
-            cache.max_bpm,
-            session.chart.metadata.initial_bpm as f32,
-        ),
-        adjusted_rate_adot: compute_adjusted_rate(
-            session.hidden_enabled,
-            session.lanecover_enabled,
-            session.hsfix_index,
-            now_bpm,
-            cache.max_bpm,
-            session.chart.metadata.initial_bpm as f32,
-        )
-        .map(|rate| (rate * 100.0).floor() as i32),
+        adjusted_cover_progress,
+        adjusted_rate,
+        adjusted_rate_adot: adjusted_rate.map(|rate| (rate * 100.0).floor() as i32),
         judge_graph_density: Arc::clone(&cache.judge_graph_density),
         bpm_graph_segments: Arc::clone(&cache.bpm_graph_segments),
         autoplay: session.autoplay.as_ref().is_some_and(|autoplay| autoplay.is_full()),
@@ -508,12 +560,13 @@ pub fn update_render_snapshot_play_options(
     snapshot.lanecover_enabled = session.lanecover_enabled;
     snapshot.lift_enabled = session.lift_enabled;
     snapshot.hidden_enabled = session.hidden_enabled;
-    snapshot.note_display_duration_ms = note_display_duration_ms(session, render_now);
+    snapshot.note_display_duration_ms =
+        note_display_duration_ms(session, session.timing_map.bpm_at_time(render_now) as f32);
     snapshot.hidden_cover = session.hidden_cover;
 }
 
 fn current_poor_bga_frame(
-    chart: &PlayableChart,
+    cache: &PlayRenderSnapshotCache,
     render_now: TimeUs,
     recent_judgements: &[JudgementEvent],
     bga_frames: &BgaFrameCatalog,
@@ -528,18 +581,18 @@ fn current_poor_bga_frame(
             && render_now.0 >= event.time.0
             && render_now.0 < event.time.0 + duration_us
     })?;
-    current_bga_frame(chart, judgement.time, BgaEventKind::Poor, bga_frames)
+    current_bga_frame(cache, judgement.time, BgaEventKind::Poor, bga_frames)
 }
 
-fn note_display_duration_ms(session: &GameSession, render_now: TimeUs) -> i32 {
+fn note_display_duration_ms(session: &GameSession, now_bpm: f32) -> i32 {
     let hispeed = session.hispeed.max(0.01);
     let lane_cover = if session.lane_cover_visible { session.lane_cover } else { 0.0 };
     let visible_max = (1.0 - lane_cover).clamp(0.0, 1.0);
     // BPM スクロールでは可視時間が現在 BPM に反比例する。譜面の基準 BPM (initial_bpm)
     // 比で補正することで、緑数字が今の流速に追従する。
     let initial_bpm = session.chart.metadata.initial_bpm.max(1.0);
-    let now_bpm = current_bpm(&session.chart, render_now).max(1.0);
-    let bpm_ratio = (initial_bpm / now_bpm) as f32;
+    let now_bpm = now_bpm.max(1.0);
+    let bpm_ratio = initial_bpm as f32 / now_bpm;
     ((DEFAULT_LOOKAHEAD_US as f32 / hispeed * visible_max * bpm_ratio) / 1_000.0)
         .round()
         .clamp(0.0, i32::MAX as f32) as i32
@@ -547,6 +600,7 @@ fn note_display_duration_ms(session: &GameSession, render_now: TimeUs) -> i32 {
 
 fn current_keybound_bga_frame(
     session: &GameSession,
+    cache: &PlayRenderSnapshotCache,
     render_now: TimeUs,
     bga_frames: &BgaFrameCatalog,
 ) -> Option<DisplayBgaFrame> {
@@ -556,12 +610,7 @@ fn current_keybound_bga_frame(
         session.lane_keyon_started_at,
     )?;
     let mut frame = bga_frames.get(&asset).copied()?;
-    let tint = bmz_chart::bga::bga_tint_at_time(
-        &session.chart.bga_opacity_events,
-        &session.chart.bga_argb_events,
-        BgaEventKind::Layer,
-        render_now,
-    );
+    let tint = bga_tint_at_time(cache, BgaEventKind::Layer, render_now);
     frame.tint_r = tint.r;
     frame.tint_g = tint.g;
     frame.tint_b = tint.b;
@@ -570,28 +619,58 @@ fn current_keybound_bga_frame(
 }
 
 fn current_bga_frame(
-    chart: &PlayableChart,
+    cache: &PlayRenderSnapshotCache,
     render_now: TimeUs,
     kind: BgaEventKind,
     bga_frames: &BgaFrameCatalog,
 ) -> Option<DisplayBgaFrame> {
-    let event = chart
-        .bga_events
-        .iter()
-        .rev()
-        .find(|event| event.time <= render_now && event.kind == kind)?;
+    let events = cache.bga_events.events(kind);
+    let end = events.partition_point(|event| event.time <= render_now);
+    let event = events[..end].last()?;
     let mut frame = bga_frames.get(&event.asset).copied()?;
-    let tint = bmz_chart::bga::bga_tint_at_time(
-        &chart.bga_opacity_events,
-        &chart.bga_argb_events,
-        kind,
-        render_now,
-    );
+    let tint = bga_tint_at_time(cache, kind, render_now);
     frame.tint_r = tint.r;
     frame.tint_g = tint.g;
     frame.tint_b = tint.b;
     frame.tint_a = tint.a;
     Some(frame)
+}
+
+fn bga_tint_at_time(
+    cache: &PlayRenderSnapshotCache,
+    kind: BgaEventKind,
+    render_now: TimeUs,
+) -> bmz_chart::bga::BgaTint {
+    let opacity = bga_opacity_at_time(cache, kind, render_now);
+    let (alpha, red, green, blue) = bga_argb_at_time(cache, kind, render_now);
+    bmz_chart::bga::BgaTint {
+        r: red as f32 / 255.0,
+        g: green as f32 / 255.0,
+        b: blue as f32 / 255.0,
+        a: (opacity as f32 / 255.0) * (alpha as f32 / 255.0),
+    }
+}
+
+fn bga_opacity_at_time(
+    cache: &PlayRenderSnapshotCache,
+    kind: BgaEventKind,
+    render_now: TimeUs,
+) -> u8 {
+    let events = cache.bga_events.opacity_events(kind);
+    let end = events.partition_point(|event| event.time <= render_now);
+    events[..end].last().map_or(0xFF, |event| event.opacity)
+}
+
+fn bga_argb_at_time(
+    cache: &PlayRenderSnapshotCache,
+    kind: BgaEventKind,
+    render_now: TimeUs,
+) -> (u8, u8, u8, u8) {
+    let events = cache.bga_events.argb_events(kind);
+    let end = events.partition_point(|event| event.time <= render_now);
+    events[..end]
+        .last()
+        .map_or((0xFF, 0xFF, 0xFF, 0xFF), |event| (event.alpha, event.red, event.green, event.blue))
 }
 
 pub fn display_bga_frame(id: BgaAssetId, width: u32, height: u32) -> DisplayBgaFrame {
@@ -1776,7 +1855,9 @@ mod tests {
 
     #[test]
     fn build_render_snapshot_selects_current_bga_frames() {
-        use bmz_chart::model::{BgaAssetKind, BgaAssetRef, BgaEvent};
+        use bmz_chart::model::{
+            BgaArgbEvent, BgaAssetKind, BgaAssetRef, BgaEvent, BgaOpacityEvent,
+        };
 
         let profile = ProfileConfig::new_default("default", "Default", 1);
         let mut chart = chart();
@@ -1821,6 +1902,21 @@ mod tests {
                 kind: BgaEventKind::Poor,
             },
         ];
+        chart.bga_opacity_events = vec![BgaOpacityEvent {
+            tick: ChartTick(0),
+            time: TimeUs(200_000),
+            layer: BgaEventKind::Layer,
+            opacity: 128,
+        }];
+        chart.bga_argb_events = vec![BgaArgbEvent {
+            tick: ChartTick(0),
+            time: TimeUs(200_000),
+            layer: BgaEventKind::Layer,
+            alpha: 255,
+            red: 255,
+            green: 32,
+            blue: 16,
+        }];
         let mut session =
             build_game_session(Arc::new(chart), &profile, PlaySessionOptions::default());
         session.poor_bga_duration_us = 250_000;
@@ -1872,7 +1968,12 @@ mod tests {
         assert_eq!(early.bga_base.unwrap().texture_id, bga_texture_id(BgaAssetId(0)));
         assert!(early.bga_layer.is_none());
         assert_eq!(late.bga_base.unwrap(), display_bga_frame(BgaAssetId(1), 640, 480));
-        assert_eq!(late.bga_layer.unwrap().texture_id, bga_texture_id(BgaAssetId(2)));
+        let late_layer = late.bga_layer.unwrap();
+        assert_eq!(late_layer.texture_id, bga_texture_id(BgaAssetId(2)));
+        assert!((late_layer.tint_r - 1.0).abs() < 0.01);
+        assert!((late_layer.tint_g - 32.0 / 255.0).abs() < 0.01);
+        assert!((late_layer.tint_b - 16.0 / 255.0).abs() < 0.01);
+        assert!((late_layer.tint_a - 128.0 / 255.0).abs() < 0.01);
         assert_eq!(poor_active.bga_poor.unwrap(), display_bga_frame(BgaAssetId(3), 320, 240));
         assert!(poor_expired.bga_poor.is_none());
     }
