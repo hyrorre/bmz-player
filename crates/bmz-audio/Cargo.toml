@@ -18,3 +18,5 @@ bmz-ffmpeg = { path = "../bmz-ffmpeg" }
 [features]
 default = []
 asio = ["cpal/asio"]
+pulseaudio = ["cpal/pulseaudio"]
+pipewire = ["cpal/pipewire"]

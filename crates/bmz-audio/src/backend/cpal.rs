@@ -84,22 +84,19 @@ pub enum CpalBackendError {
     UnsupportedHost(CpalHostId),
 
     #[error("requested cpal host is unavailable")]
-    HostUnavailable(#[from] ::cpal::HostUnavailable),
+    HostUnavailable(::cpal::Error),
 
     #[error("failed to enumerate output devices")]
-    OutputDevices(#[from] ::cpal::DevicesError),
-
-    #[error("failed to query output device name")]
-    OutputDeviceName(#[from] ::cpal::DeviceNameError),
+    OutputDevices(::cpal::Error),
 
     #[error("failed to query default output config")]
-    DefaultOutputConfig(#[from] ::cpal::DefaultStreamConfigError),
+    DefaultOutputConfig(::cpal::Error),
 
     #[error("failed to build output stream")]
-    BuildStream(#[from] ::cpal::BuildStreamError),
+    BuildStream(::cpal::Error),
 
     #[error("failed to play output stream")]
-    PlayStream(#[from] ::cpal::PlayStreamError),
+    PlayStream(::cpal::Error),
 }
 
 impl CpalBackend {
@@ -120,7 +117,7 @@ impl CpalBackend {
                 let Some(cpal_host_id) = cpal_host_id(host_id) else {
                     return Err(CpalBackendError::UnsupportedHost(host_id));
                 };
-                ::cpal::host_from_id(cpal_host_id)?
+                ::cpal::host_from_id(cpal_host_id).map_err(CpalBackendError::HostUnavailable)?
             }
             None => ::cpal::default_host(),
         };
@@ -128,14 +125,15 @@ impl CpalBackend {
         let requested_sample_rate = config.sample_rate;
         let requested_buffer_size = config.buffer_size;
         let requested_channel_offset = config.channel_offset;
-        let supported_config = device.default_output_config()?;
+        let supported_config =
+            device.default_output_config().map_err(CpalBackendError::DefaultOutputConfig)?;
         let sample_format = supported_config.sample_format();
-        let default_sample_rate = supported_config.sample_rate().0;
+        let default_sample_rate = supported_config.sample_rate();
         let supported_buffer_size = *supported_config.buffer_size();
         let mut config = supported_config.config();
         let sample_rate =
             resolve_sample_rate(&device, requested_sample_rate, default_sample_rate, sample_format);
-        config.sample_rate = ::cpal::SampleRate(sample_rate);
+        config.sample_rate = sample_rate;
         config.buffer_size = resolve_buffer_size(requested_buffer_size, &supported_buffer_size);
         let channel_offset =
             resolve_channel_offset(requested_channel_offset, config.channels as usize);
@@ -143,7 +141,7 @@ impl CpalBackend {
         // ASIO のバッファ問い合わせ結果を可視化する。ドライバが報告する
         // サポート範囲(`supported_buffer_size`)と、要求値・実際にストリームへ
         // 渡す値をログに残し、RME / ASIO4ALL などのレイテンシ調整を切り分けやすくする。
-        let device_name = device.name().unwrap_or_else(|_| "<unknown>".to_string());
+        let device_name = device_name(&device);
         tracing::info!(
             host = ?host.id(),
             device = %device_name,
@@ -234,9 +232,25 @@ fn cpal_host_id(host: CpalHostId) -> Option<::cpal::HostId> {
         #[cfg(not(target_os = "linux"))]
         CpalHostId::Alsa => None,
 
-        // cpal 0.15 exposes ALSA (and optional JACK) as Linux dynamic hosts,
-        // but not PulseAudio. Keep the BMZ config value available and report
-        // it as unsupported until a Pulse-capable cpal backend is introduced.
+        #[cfg(all(
+            any(
+                target_os = "linux",
+                target_os = "dragonfly",
+                target_os = "freebsd",
+                target_os = "netbsd"
+            ),
+            feature = "pulseaudio"
+        ))]
+        CpalHostId::Pulse => Some(::cpal::HostId::PulseAudio),
+        #[cfg(not(all(
+            any(
+                target_os = "linux",
+                target_os = "dragonfly",
+                target_os = "freebsd",
+                target_os = "netbsd"
+            ),
+            feature = "pulseaudio"
+        )))]
         CpalHostId::Pulse => None,
     }
 }
@@ -264,7 +278,7 @@ pub fn list_output_device_names(host: Option<CpalHostId>) -> Vec<String> {
     let Ok(devices) = host.output_devices() else {
         return Vec::new();
     };
-    devices.filter_map(|device| device.name().ok()).collect()
+    devices.map(|device| device_name(&device)).collect()
 }
 
 /// 要求サンプルレートがデバイスでサポートされていれば採用し、そうでなければ
@@ -285,8 +299,8 @@ fn resolve_sample_rate(
     let supported = match device.supported_output_configs() {
         Ok(configs) => configs.into_iter().any(|range| {
             range.sample_format() == sample_format
-                && range.min_sample_rate().0 <= requested
-                && requested <= range.max_sample_rate().0
+                && range.min_sample_rate() <= requested
+                && requested <= range.max_sample_rate()
         }),
         Err(error) => {
             tracing::warn!(%error, "failed to query supported output configs for sample rate");
@@ -344,8 +358,8 @@ fn output_device(
         return host.default_output_device().ok_or(CpalBackendError::MissingDefaultOutputDevice);
     };
 
-    for device in host.output_devices()? {
-        if device.name()? == requested_name {
+    for device in host.output_devices().map_err(CpalBackendError::OutputDevices)? {
+        if device_name(&device) == requested_name {
             return Ok(device);
         }
     }
@@ -359,7 +373,7 @@ impl CpalOutput {
         Ok(())
     }
 
-    pub fn pause(&mut self) -> Result<(), ::cpal::PauseStreamError> {
+    pub fn pause(&mut self) -> Result<(), ::cpal::Error> {
         self.source.pause();
         Ok(())
     }
@@ -371,7 +385,7 @@ impl CpalOutput {
 
 impl CpalSharedOutput {
     pub fn play(&self) -> Result<(), CpalBackendError> {
-        self.inner.stream.play()?;
+        self.inner.stream.play().map_err(CpalBackendError::PlayStream)?;
         Ok(())
     }
 
@@ -435,7 +449,7 @@ fn build_output_stream<T>(
     channel_offset: usize,
     sources: SharedAudioSources,
     current_frame: Arc<AtomicU64>,
-) -> Result<::cpal::Stream, ::cpal::BuildStreamError>
+) -> Result<::cpal::Stream, CpalBackendError>
 where
     T: ::cpal::SizedSample + OutputSample,
 {
@@ -443,32 +457,41 @@ where
     let mut mix = Vec::new();
     let mut source_scratch = Vec::new();
     let mut source_engines = Vec::new();
-    device.build_output_stream(
-        config,
-        move |data: &mut [T], _| {
-            if channels == 0 {
-                data.fill(T::from_f32(0.0));
-                return;
-            }
+    device
+        .build_output_stream(
+            *config,
+            move |data: &mut [T], _| {
+                if channels == 0 {
+                    data.fill(T::from_f32(0.0));
+                    return;
+                }
 
-            let start_frame = current_frame.load(Ordering::Relaxed);
-            render_output(
-                data,
-                channels,
-                channel_offset,
-                start_frame,
-                &sources,
-                &mut mix,
-                &mut source_scratch,
-                &mut source_engines,
-            );
-            current_frame.fetch_add((data.len() / channels) as u64, Ordering::Relaxed);
-        },
-        move |error| {
-            tracing::warn!(%error, "cpal output stream error");
-        },
-        None,
-    )
+                let start_frame = current_frame.load(Ordering::Relaxed);
+                render_output(
+                    data,
+                    channels,
+                    channel_offset,
+                    start_frame,
+                    &sources,
+                    &mut mix,
+                    &mut source_scratch,
+                    &mut source_engines,
+                );
+                current_frame.fetch_add((data.len() / channels) as u64, Ordering::Relaxed);
+            },
+            move |error| {
+                tracing::warn!(%error, "cpal output stream error");
+            },
+            None,
+        )
+        .map_err(CpalBackendError::BuildStream)
+}
+
+fn device_name(device: &::cpal::Device) -> String {
+    device
+        .description()
+        .map(|description| description.name().to_string())
+        .unwrap_or_else(|_| device.to_string())
 }
 
 fn render_output<T: OutputSample>(

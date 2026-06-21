@@ -8,9 +8,13 @@ license.workspace = true
 # default で有効化しておくと Windows ビルドは追加フラグ無しで ASIO 対応、
 # macOS / Linux では cpal 側が no-op になるため実質無効。
 # ASIO SDK / LLVM を用意できない環境では `--no-default-features` で除外できる。
+# PulseAudio は Linux / BSD 系の cpal host を有効化する。ALSA default PCM が
+# 使えない環境では PulseAudio を選択して回避できる。
 [features]
-default = ["asio"]
+default = ["asio", "pulseaudio"]
 asio = ["bmz-audio/asio"]
+pulseaudio = ["bmz-audio/pulseaudio"]
+pipewire = ["bmz-audio/pipewire"]
 
 [dependencies]
 anyhow.workspace = true

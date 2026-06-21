@@ -45,7 +45,7 @@ keyring = { version = "3", features = ["apple-native", "windows-native", "sync-s
 getrandom = "0.2"
 encoding_rs = "0.8"
 
-cpal = "0.15"
+cpal = "0.18"
 ctrlc = "3"
 ffmpeg-next = "8"
 wgpu = "29"
