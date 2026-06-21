@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::ln_policy::LnScorePolicy;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum IrRankingScope {
     Global,
@@ -189,6 +189,17 @@ pub struct IrSubmitResponse {
     pub best_updated: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub previous_best: Option<IrPreviousBest>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub rankings: BTreeMap<IrRankingScope, IrScopedRankingResponse>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IrScopedRankingResponse {
+    pub succeeded: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub data: Option<IrRankingResult>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -432,4 +443,46 @@ pub struct IrRankingScore {
     pub device_type: Option<String>,
     #[serde(default)]
     pub played_at: Option<String>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn submit_response_decodes_included_global_ranking() {
+        let response: IrSubmitResponse = serde_json::from_value(serde_json::json!({
+            "accepted": true,
+            "score_id": "score-1",
+            "best_updated": true,
+            "rankings": {
+                "global": {
+                    "succeeded": true,
+                    "data": {
+                        "chart": { "sha256": "abc" },
+                        "ranking": {
+                            "scope": "global",
+                            "entries": [],
+                            "clear_rate": 100,
+                            "pagination": {
+                                "limit": 20,
+                                "offset": 0,
+                                "total": 1,
+                                "has_more": false
+                            }
+                        }
+                    }
+                }
+            }
+        }))
+        .unwrap();
+
+        let global = response.rankings.get(&IrRankingScope::Global).unwrap();
+        assert!(global.succeeded);
+        assert_eq!(global.data.as_ref().unwrap().chart.sha256, "abc");
+        assert_eq!(
+            global.data.as_ref().unwrap().ranking.pagination.as_ref().unwrap().total,
+            Some(1)
+        );
+    }
 }

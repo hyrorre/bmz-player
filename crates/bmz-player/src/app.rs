@@ -277,7 +277,8 @@ struct WinitApp {
     /// 正常終了させ、cpal/ASIO ストリームの Drop(停止・後処理)を確実に走らせる。
     shutdown_requested: Arc<AtomicBool>,
     finished_play: Option<FinishedPlaySession>,
-    /// リザルト画面の IR 送信・ランキング表示状態。リザルト以外では None。
+    /// リザルト画面の IR 送信・ランキング表示状態。
+    /// 通常プレイでは play ending 中に早期起動し、Result 画面まで保持する。
     result_ir: Option<crate::screens::result_ir::ResultIrState>,
     /// 選曲カーソル譜面の IR ランキングキャッシュ。
     select_ir: crate::screens::select_ir::SelectIrRanking,
@@ -5919,6 +5920,21 @@ impl WinitApp {
         Some((course_hash, gauge, ln_policy))
     }
 
+    fn start_result_ir_for_finished_play(&mut self, finished: &FinishedPlaySession) {
+        if self.result_ir.is_some() || finished.stored.score_history_id <= 0 {
+            return;
+        }
+        self.result_ir = crate::screens::result_ir::spawn_result_ir_task(
+            self.boot.profile_paths.root_dir.clone(),
+            self.boot.profile_paths.score_db.clone(),
+            &self.boot.profile_config.ir,
+            crate::storage::common::hash_to_hex(&finished.result.chart_sha256),
+            finished.ln_policy,
+            finished.double_option,
+            finished.rule_mode,
+        );
+    }
+
     /// コーススコアの IR 送信ジョブを enqueue する。IR 未設定 / 定義未解決なら no-op。
     #[allow(clippy::too_many_arguments)]
     fn enqueue_ir_course_job(
@@ -8312,34 +8328,67 @@ impl WinitApp {
                     self.finish_practice_round();
                     return;
                 }
-                let hispeed =
-                    self.active_play.as_ref().map(|active| active.running.session.hispeed);
+                let finish_mode = if self.active_course.is_some() {
+                    crate::screens::play_finish::FinishResultMode::CourseStage
+                } else {
+                    crate::screens::play_finish::FinishResultMode::Normal
+                };
+                let early_finished = match crate::screens::play_finish::finish_session_result_once(
+                    &mut active_play.running.finished,
+                    &mut self.boot.score_db,
+                    crate::screens::play_finish::FinishSessionResultOnceRequest {
+                        profile_paths: &self.boot.profile_paths,
+                        replay_config: &self.boot.profile_config.replay,
+                        ir_config: &self.boot.profile_config.ir,
+                        session: &active_play.running.session,
+                        played_at: now_unix_seconds(),
+                        applied_arrange: &active_play.running.applied_arrange,
+                        target_ex_score: active_play.running.target_ex_score,
+                        score_key: active_play.running.score_key,
+                        practice_mode: active_play.running.practice_mode,
+                        finish_mode,
+                    },
+                ) {
+                    Ok(mut finished) => {
+                        finished.summary.graph = active_play
+                            .running
+                            .result_graph
+                            .snapshot_for_session(&active_play.running.session);
+                        Some(finished)
+                    }
+                    Err(error) => {
+                        tracing::error!(%error, "failed to finish play session at play end");
+                        None
+                    }
+                };
+                let hispeed = Some(active_play.running.session.hispeed);
                 let mine_hits = frame.mine_hits.len();
                 let mut snapshot = frame.render_snapshot;
-                self.apply_profile_fast_slow_filter(&mut snapshot);
                 snapshot.play_elapsed_time = play_elapsed_time;
                 snapshot.ready_elapsed_time = ready_elapsed_time;
                 snapshot.backbmp_background = backbmp_background;
                 snapshot.course_stage = course_stage;
                 snapshot.course_titles = course_titles.clone();
-                self.apply_play_table_text(&mut snapshot);
                 let full_combo_elapsed_at_finish_ms = snapshot.full_combo_elapsed_ms;
-                if let Some(active_play) = &self.active_play {
-                    crate::screens::play_snapshot::refresh_play_skin_visuals(
-                        &mut snapshot,
-                        &active_play.running.session,
-                    );
-                }
+                crate::screens::play_snapshot::refresh_play_skin_visuals(
+                    &mut snapshot,
+                    &active_play.running.session,
+                );
+                self.apply_profile_fast_slow_filter(&mut snapshot);
+                self.apply_play_table_text(&mut snapshot);
                 self.last_play_snapshot = Some(snapshot);
                 self.play_landmine_se(mine_hits);
                 // active_play がまだ残っている内に hispeed/lane_cover/lift を profile に保存する。
                 self.save_current_play_options(hispeed, "play finished");
+                if let Some(finished) = &early_finished {
+                    self.start_result_ir_for_finished_play(finished);
+                }
                 self.play_ending = Some(PlayEndingTransition {
                     started_at: Instant::now(),
                     fadeout_started_at: None,
                     failed: frame.state == bmz_gameplay::session::PlayState::Failed,
                     full_combo_elapsed_at_finish_ms,
-                    finished: None,
+                    finished: early_finished,
                 });
                 self.update_play_ending_snapshot();
             }
@@ -8682,9 +8731,9 @@ impl WinitApp {
                 max_end_time_ms: practice.max_end_time_ms,
             });
         }
-        // リザルト画面に入ったら IR 送信・ランキング取得タスクを起動し、
-        // 離れたら破棄する。コース最終リザルトでは course_hash ベースの
-        // course ranking を取得する。
+        // 通常プレイは play ending に入った時点で IR 送信を早期起動し、Result
+        // 画面まで状態を保持する。コース最終リザルトでは course_hash ベースの
+        // course ranking を取得するため、単曲用 state は Result 突入時に差し替える。
         if matches!(scene_kind, AppSceneKind::Result) {
             let course_result_active = self.finished_course.is_some();
             if self
@@ -8716,6 +8765,10 @@ impl WinitApp {
                     );
                 }
             }
+            if let Some(state) = &mut self.result_ir {
+                state.poll();
+            }
+        } else if self.play_ending.is_some() {
             if let Some(state) = &mut self.result_ir {
                 state.poll();
             }

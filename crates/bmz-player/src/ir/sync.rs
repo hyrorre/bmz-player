@@ -8,7 +8,7 @@ use crate::storage::score_db::{IrScoreJobStatus, NewIrScoreSubmission, ScoreData
 
 use super::bmz_official::BmzOfficialIrClient;
 use super::credentials::{IrStoredCredentials, load_credentials, save_credentials};
-use super::types::{IrScoreSubmission, IrSubmitOptions};
+use super::types::{IrRankingResult, IrRankingScope, IrScoreSubmission, IrSubmitOptions};
 
 static CREDENTIAL_REFRESH_LOCK: Mutex<()> = Mutex::const_new(());
 
@@ -17,6 +17,7 @@ pub struct IrSyncReport {
     pub submitted: u32,
     pub failed: u32,
     pub messages: Vec<String>,
+    pub included_rankings: Vec<IrRankingResult>,
 }
 
 /// 保存済み credentials を読み、失効が近ければ refresh して保存し直す。
@@ -85,14 +86,23 @@ pub async fn sync_pending_ir_jobs(
         };
         match submit_result {
             Ok(response_json) => {
-                let remote_score_id = serde_json::from_str::<serde_json::Value>(&response_json)
-                    .ok()
-                    .and_then(|value| {
-                        value
-                            .get("score_id")
-                            .or_else(|| value.get("course_score_id"))?
-                            .as_str()
-                            .map(str::to_string)
+                let parsed_response =
+                    serde_json::from_str::<super::types::IrSubmitResponse>(&response_json).ok();
+                if let Some(ranking) = parsed_response
+                    .as_ref()
+                    .and_then(|response| response.rankings.get(&IrRankingScope::Global))
+                    .filter(|ranking| ranking.succeeded)
+                    .and_then(|ranking| ranking.data.clone())
+                {
+                    report.included_rankings.push(ranking);
+                }
+                let remote_score_id = parsed_response
+                    .as_ref()
+                    .and_then(|response| response.score_id.clone())
+                    .or_else(|| {
+                        serde_json::from_str::<serde_json::Value>(&response_json).ok().and_then(
+                            |value| value.get("course_score_id")?.as_str().map(str::to_string),
+                        )
                     })
                     .unwrap_or_default();
                 score_db.mark_ir_score_job_status(job.id, IrScoreJobStatus::Succeeded, now, "")?;
@@ -214,7 +224,8 @@ async fn submit_job_payload(
         ensure_fresh_credentials(profile_root, provider_key, &provider.base_url, now).await?;
     let client = BmzOfficialIrClient::new(&provider.base_url, credentials.access_token)?;
     attach_evidence(profile_root, provider, &client, &mut payload).await;
-    let options = IrSubmitOptions { ranking_scopes: Vec::new(), ranking_limit: 0 };
+    let options =
+        IrSubmitOptions { ranking_scopes: vec![IrRankingScope::Global], ranking_limit: 20 };
     let response = client.submit_score(&payload, &options).await?;
     Ok(serde_json::to_string(&response)?)
 }

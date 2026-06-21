@@ -1,7 +1,8 @@
 //! リザルト画面用の IR 送信・ランキング表示状態。
 //!
-//! リザルト遷移時に [`spawn_result_ir_task`] でバックグラウンドタスクを起動し、
-//! pending スコアジョブの即時送信と、設定に応じたランキング prefetch を行う。
+//! 通常プレイ終了時またはリザルト遷移時に [`spawn_result_ir_task`] で
+//! バックグラウンドタスクを起動し、pending スコアジョブの即時送信と、
+//! 設定に応じたランキング prefetch を行う。
 //! タブ切り替えで未取得 scope を選んだ場合は [`ResultIrState::request_scope`]
 //! で遅延取得する。スレッド間は mpsc channel で結果だけ受け渡す。
 
@@ -13,7 +14,7 @@ use bmz_gameplay::rule::RuleMode;
 
 use crate::config::profile_config::IrConfig;
 use crate::ir::bmz_official::{BmzOfficialIrClient, IrCourseRankingRequest, IrRankingRequest};
-use crate::ir::sync::{ensure_fresh_credentials, sync_pending_ir_jobs};
+use crate::ir::sync::{IrSyncReport, ensure_fresh_credentials, sync_pending_ir_jobs};
 use crate::ir::types::{IrCourseRankingResult, IrRankingResult, IrRankingScope};
 use crate::ln_policy::LnScorePolicy;
 use crate::select_options::DoubleOptionScoreBucket;
@@ -416,12 +417,16 @@ fn spawn_result_ir_task_for_target(
                 .await
         }
         .await;
+        let mut included_global_ranking = None;
         let event = match outcome {
-            Ok(report) => ResultIrEvent::Submit {
-                submitted: report.submitted,
-                failed: report.failed,
-                message: report.messages.first().cloned(),
-            },
+            Ok(report) => {
+                included_global_ranking = included_global_ranking_for_query(&submit_query, &report);
+                ResultIrEvent::Submit {
+                    submitted: report.submitted,
+                    failed: report.failed,
+                    message: report.messages.first().cloned(),
+                }
+            }
             Err(error) => ResultIrEvent::Submit {
                 submitted: 0,
                 failed: 0,
@@ -429,8 +434,15 @@ fn spawn_result_ir_task_for_target(
             },
         };
         let _ = submit_sender.send(event);
+        let included_global_loaded = included_global_ranking.is_some();
+        if let Some(ranking) = included_global_ranking {
+            let _ = submit_sender.send(ResultIrEvent::Ranking {
+                scope: IrRankingScope::Global,
+                result: Ok(ranking),
+            });
+        }
         // 送信完了後に prefetch する。best 更新前のランキングを返さないため。
-        if prefetch_global {
+        if prefetch_global && !included_global_loaded {
             fetch_ranking_and_send(&submit_query, IrRankingScope::Global, &submit_sender).await;
         }
         if prefetch_rivals {
@@ -454,6 +466,23 @@ fn elapsed_since_ms(started_at: Instant) -> i32 {
 
 fn state_prefetch_rivals(ir_config: &IrConfig) -> bool {
     ir_config.prefetch_rival_ranking_on_score_submit
+}
+
+fn included_global_ranking_for_query(
+    query: &ResultIrTaskQuery,
+    report: &IrSyncReport,
+) -> Option<ResultIrRanking> {
+    let ResultIrTarget::Chart { chart_sha256_hex, .. } = &query.target else {
+        return None;
+    };
+    report
+        .included_rankings
+        .iter()
+        .find(|ranking| {
+            ranking.chart.sha256 == *chart_sha256_hex
+                && ranking.ranking.scope == IrRankingScope::Global
+        })
+        .map(chart_ranking_to_result_ir_ranking)
 }
 
 fn spawn_ranking_fetch(
@@ -553,14 +582,24 @@ fn now_unix_seconds() -> i64 {
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
+
+    use bmz_gameplay::rule::RuleMode;
+
+    use crate::ir::sync::IrSyncReport;
     use crate::ir::types::{
         IrCourseRankingBody, IrCourseRankingCourseRef, IrCourseRankingEntry, IrCourseRankingResult,
         IrCourseRankingScore, IrRankingBody, IrRankingChartRef, IrRankingEntry,
         IrRankingPagination, IrRankingPlayer, IrRankingResult, IrRankingScope, IrRankingScore,
         IrRankingSelfRef,
     };
+    use crate::ln_policy::LnScorePolicy;
+    use crate::select_options::DoubleOptionScoreBucket;
 
-    use super::{course_ranking_to_result_ir_ranking, ranking_to_ir_snapshot};
+    use super::{
+        ResultIrTarget, ResultIrTaskQuery, course_ranking_to_result_ir_ranking,
+        included_global_ranking_for_query, ranking_to_ir_snapshot,
+    };
 
     #[test]
     fn ranking_snapshot_carries_skin_ranking_rows() {
@@ -640,5 +679,58 @@ mod tests {
         assert_eq!(display.entries[0].player_name, "course-player");
         assert_eq!(display.entries[0].ex_score, 1234);
         assert_eq!(display.entries[0].bp, 7);
+    }
+
+    #[test]
+    fn included_global_ranking_uses_only_current_chart() {
+        let query = ResultIrTaskQuery {
+            profile_root: PathBuf::new(),
+            provider: "bmz-official".to_string(),
+            base_url: "https://ir.example.test".to_string(),
+            target: ResultIrTarget::Chart {
+                chart_sha256_hex: "current".to_string(),
+                ln_policy: LnScorePolicy::AutoLn,
+                double_option: DoubleOptionScoreBucket::Off,
+                rule_mode: RuleMode::Beatoraja,
+            },
+        };
+        let report = IrSyncReport {
+            submitted: 1,
+            failed: 0,
+            messages: Vec::new(),
+            included_rankings: vec![
+                IrRankingResult {
+                    chart: IrRankingChartRef { sha256: "other".to_string() },
+                    ranking: IrRankingBody {
+                        scope: IrRankingScope::Global,
+                        entries: Vec::new(),
+                        clear_rate: None,
+                        self_summary: None,
+                        pagination: None,
+                    },
+                },
+                IrRankingResult {
+                    chart: IrRankingChartRef { sha256: "current".to_string() },
+                    ranking: IrRankingBody {
+                        scope: IrRankingScope::Global,
+                        entries: Vec::new(),
+                        clear_rate: Some(75),
+                        self_summary: None,
+                        pagination: Some(IrRankingPagination {
+                            limit: 20,
+                            offset: 0,
+                            total: Some(2),
+                            has_more: false,
+                        }),
+                    },
+                },
+            ],
+        };
+
+        let ranking = included_global_ranking_for_query(&query, &report).unwrap();
+
+        assert_eq!(ranking.scope, IrRankingScope::Global);
+        assert_eq!(ranking.clear_rate, Some(75));
+        assert_eq!(ranking.total, Some(2));
     }
 }
