@@ -10713,29 +10713,16 @@ fn config_renderer_backend(
 fn config_present_mode(
     video: &crate::config::app_config::VideoConfig,
 ) -> bmz_render::WgpuPresentMode {
-    match video.present_mode {
-        crate::config::app_config::PresentModeConfig::Auto => {
-            if video.vsync {
-                bmz_render::WgpuPresentMode::AutoVsync
-            } else {
-                bmz_render::WgpuPresentMode::AutoNoVsync
-            }
+    match video.vsync_mode {
+        crate::config::app_config::VsyncModeConfig::Vsync => bmz_render::WgpuPresentMode::Fifo,
+        crate::config::app_config::VsyncModeConfig::AdaptiveVsync => {
+            bmz_render::WgpuPresentMode::FifoRelaxed
         }
-        crate::config::app_config::PresentModeConfig::AutoVsync => {
-            bmz_render::WgpuPresentMode::AutoVsync
-        }
-        crate::config::app_config::PresentModeConfig::AutoNoVsync => {
-            bmz_render::WgpuPresentMode::AutoNoVsync
-        }
-        crate::config::app_config::PresentModeConfig::Immediate => {
+        crate::config::app_config::VsyncModeConfig::VsyncOff => {
             bmz_render::WgpuPresentMode::Immediate
         }
-        crate::config::app_config::PresentModeConfig::Mailbox => {
+        crate::config::app_config::VsyncModeConfig::FastVsync => {
             bmz_render::WgpuPresentMode::Mailbox
-        }
-        crate::config::app_config::PresentModeConfig::Fifo => bmz_render::WgpuPresentMode::Fifo,
-        crate::config::app_config::PresentModeConfig::FifoRelaxed => {
-            bmz_render::WgpuPresentMode::FifoRelaxed
         }
     }
 }
@@ -14295,7 +14282,7 @@ mod tests {
     use bmz_render::skin::SkinManifest;
 
     use crate::config::app_config::{
-        AppConfig, DifficultyTableSource, DifficultyTablesConfig, PathEntry, PresentModeConfig,
+        AppConfig, DifficultyTableSource, DifficultyTablesConfig, PathEntry, VsyncModeConfig,
     };
     use crate::config::profile_config::ProfileConfig;
     use crate::screens::select_model::{SelectChartRow, SelectCourseRow};
@@ -14440,24 +14427,20 @@ mod tests {
     }
 
     #[test]
-    fn config_present_mode_auto_follows_vsync() {
+    fn config_present_mode_maps_vsync_modes() {
         let mut config = AppConfig::default().video;
-        config.present_mode = PresentModeConfig::Auto;
 
-        config.vsync = true;
-        assert_eq!(config_present_mode(&config), bmz_render::WgpuPresentMode::AutoVsync);
+        config.vsync_mode = VsyncModeConfig::Vsync;
+        assert_eq!(config_present_mode(&config), bmz_render::WgpuPresentMode::Fifo);
 
-        config.vsync = false;
-        assert_eq!(config_present_mode(&config), bmz_render::WgpuPresentMode::AutoNoVsync);
-    }
+        config.vsync_mode = VsyncModeConfig::AdaptiveVsync;
+        assert_eq!(config_present_mode(&config), bmz_render::WgpuPresentMode::FifoRelaxed);
 
-    #[test]
-    fn config_present_mode_explicit_overrides_vsync() {
-        let mut config = AppConfig::default().video;
-        config.vsync = true;
-        config.present_mode = PresentModeConfig::Immediate;
-
+        config.vsync_mode = VsyncModeConfig::VsyncOff;
         assert_eq!(config_present_mode(&config), bmz_render::WgpuPresentMode::Immediate);
+
+        config.vsync_mode = VsyncModeConfig::FastVsync;
+        assert_eq!(config_present_mode(&config), bmz_render::WgpuPresentMode::Mailbox);
     }
 
     #[test]

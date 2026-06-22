@@ -93,9 +93,7 @@ pub struct VideoConfig {
     pub mode: WindowMode,
     pub width: u32,
     pub height: u32,
-    pub vsync: bool,
-    #[serde(default)]
-    pub present_mode: PresentModeConfig,
+    pub vsync_mode: VsyncModeConfig,
     pub target_fps: u32,
     pub frame_limit_in_background: u32,
     pub renderer: RendererBackend,
@@ -164,16 +162,12 @@ pub enum RendererBackend {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "PascalCase")]
-pub enum PresentModeConfig {
-    /// `vsync` の値から従来通り AutoVsync / AutoNoVsync を選ぶ。
+pub enum VsyncModeConfig {
     #[default]
-    Auto,
-    AutoVsync,
-    AutoNoVsync,
-    Immediate,
-    Mailbox,
-    Fifo,
-    FifoRelaxed,
+    Vsync,
+    AdaptiveVsync,
+    VsyncOff,
+    FastVsync,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -300,8 +294,7 @@ impl Default for AppConfig {
                 mode: WindowMode::Windowed,
                 width: 1280,
                 height: 720,
-                vsync: true,
-                present_mode: PresentModeConfig::Auto,
+                vsync_mode: VsyncModeConfig::Vsync,
                 target_fps: 240,
                 frame_limit_in_background: 60,
                 renderer: RendererBackend::Auto,
@@ -338,7 +331,17 @@ mod tests {
 
         assert!(config.scan.follow_symlinks);
         assert!(!config.scan.auto_rescan_on_startup);
+        assert_eq!(config.video.vsync_mode, VsyncModeConfig::Vsync);
         assert_eq!(config.video.frame_limit_in_background, 60);
+    }
+
+    #[test]
+    fn app_config_serializes_vsync_mode_without_legacy_keys() {
+        let toml = toml::to_string(&AppConfig::default()).unwrap();
+
+        assert!(toml.contains("vsync_mode = \"Vsync\""));
+        assert!(!toml.contains("vsync ="));
+        assert!(!toml.contains("present_mode"));
     }
 
     #[test]

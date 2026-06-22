@@ -18,7 +18,7 @@ use winit::window::Window;
 
 use crate::config::app_config::{
     AppConfig, AudioBackend, AudioBufferSizeMode, AudioSampleRateMode, DifficultyTableSource,
-    InputBackendKind, LogLevel, PathEntry, PresentModeConfig, RendererBackend, WindowMode,
+    InputBackendKind, LogLevel, PathEntry, RendererBackend, VsyncModeConfig, WindowMode,
 };
 use crate::config::profile_config::{
     AssistOptionConfig, BgaExpandConfig, BgaModeConfig, BottomShiftableGaugeConfig,
@@ -2024,44 +2024,28 @@ fn build_settings_panel(
                     ui.add(
                         egui::Slider::new(&mut config.video.height, 480..=2160).text("高さ (px)"),
                     );
-                    ui.checkbox(&mut config.video.vsync, "垂直同期 (VSync)");
-                    egui::ComboBox::from_label("Present Mode")
-                        .selected_text(present_mode_label(&config.video.present_mode))
+                    egui::ComboBox::from_label("同期モード")
+                        .selected_text(vsync_mode_label(&config.video.vsync_mode))
                         .show_ui(ui, |ui| {
                             ui.selectable_value(
-                                &mut config.video.present_mode,
-                                PresentModeConfig::Auto,
-                                "自動 (VSync設定に従う)",
+                                &mut config.video.vsync_mode,
+                                VsyncModeConfig::Vsync,
+                                vsync_mode_label(&VsyncModeConfig::Vsync),
                             );
                             ui.selectable_value(
-                                &mut config.video.present_mode,
-                                PresentModeConfig::AutoVsync,
-                                "Auto VSync",
+                                &mut config.video.vsync_mode,
+                                VsyncModeConfig::AdaptiveVsync,
+                                vsync_mode_label(&VsyncModeConfig::AdaptiveVsync),
                             );
                             ui.selectable_value(
-                                &mut config.video.present_mode,
-                                PresentModeConfig::AutoNoVsync,
-                                "Auto No VSync",
+                                &mut config.video.vsync_mode,
+                                VsyncModeConfig::VsyncOff,
+                                vsync_mode_label(&VsyncModeConfig::VsyncOff),
                             );
                             ui.selectable_value(
-                                &mut config.video.present_mode,
-                                PresentModeConfig::Immediate,
-                                "Immediate",
-                            );
-                            ui.selectable_value(
-                                &mut config.video.present_mode,
-                                PresentModeConfig::Mailbox,
-                                "Mailbox",
-                            );
-                            ui.selectable_value(
-                                &mut config.video.present_mode,
-                                PresentModeConfig::Fifo,
-                                "Fifo",
-                            );
-                            ui.selectable_value(
-                                &mut config.video.present_mode,
-                                PresentModeConfig::FifoRelaxed,
-                                "Fifo Relaxed",
+                                &mut config.video.vsync_mode,
+                                VsyncModeConfig::FastVsync,
+                                vsync_mode_label(&VsyncModeConfig::FastVsync),
                             );
                         });
                     ui.add(
@@ -2330,15 +2314,12 @@ fn renderer_backend_label(backend: &RendererBackend) -> &'static str {
     }
 }
 
-fn present_mode_label(mode: &PresentModeConfig) -> &'static str {
+fn vsync_mode_label(mode: &VsyncModeConfig) -> &'static str {
     match mode {
-        PresentModeConfig::Auto => "自動 (VSync設定に従う)",
-        PresentModeConfig::AutoVsync => "Auto VSync",
-        PresentModeConfig::AutoNoVsync => "Auto No VSync",
-        PresentModeConfig::Immediate => "Immediate",
-        PresentModeConfig::Mailbox => "Mailbox",
-        PresentModeConfig::Fifo => "Fifo",
-        PresentModeConfig::FifoRelaxed => "Fifo Relaxed",
+        VsyncModeConfig::Vsync => "Vsync (Fifo)",
+        VsyncModeConfig::AdaptiveVsync => "Adaptive Vsync (Fifo Relaxed)",
+        VsyncModeConfig::VsyncOff => "Vsync Off (Immediate)",
+        VsyncModeConfig::FastVsync => "Fast Vsync (Mailbox)",
     }
 }
 

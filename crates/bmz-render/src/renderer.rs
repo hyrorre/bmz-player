@@ -39,12 +39,10 @@ pub enum WgpuBackend {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum WgpuPresentMode {
     #[default]
-    AutoVsync,
-    AutoNoVsync,
-    Immediate,
-    Mailbox,
     Fifo,
     FifoRelaxed,
+    Immediate,
+    Mailbox,
 }
 
 impl WgpuBackend {
@@ -884,18 +882,6 @@ impl Renderer {
     /// `render_scene_status` / `render_last_plan` の呼び出しで消費される。
     pub fn set_egui_frame(&mut self, frame: EguiFrame) {
         self.pending_egui = Some(frame);
-    }
-
-    /// VSync の有効/無効を設定する。
-    ///
-    /// サーフェス生成済みなら present mode を即座に再構成する (要再起動なし)。
-    /// 値が変わらない場合は何もしないため、毎フレーム呼んでも安全。
-    pub fn set_vsync(&mut self, vsync: bool) {
-        self.set_present_mode(if vsync {
-            WgpuPresentMode::AutoVsync
-        } else {
-            WgpuPresentMode::AutoNoVsync
-        });
     }
 
     pub fn set_present_mode(&mut self, present_mode: WgpuPresentMode) {
@@ -4210,14 +4196,17 @@ fn resolve_wgpu_present_mode(
     available: &[wgpu::PresentMode],
 ) -> wgpu::PresentMode {
     let preferred: &[wgpu::PresentMode] = match requested {
-        WgpuPresentMode::AutoVsync => &[wgpu::PresentMode::FifoRelaxed, wgpu::PresentMode::Fifo],
-        WgpuPresentMode::AutoNoVsync => {
-            &[wgpu::PresentMode::Immediate, wgpu::PresentMode::Mailbox, wgpu::PresentMode::Fifo]
-        }
-        WgpuPresentMode::Immediate => &[wgpu::PresentMode::Immediate],
-        WgpuPresentMode::Mailbox => &[wgpu::PresentMode::Mailbox],
         WgpuPresentMode::Fifo => &[wgpu::PresentMode::Fifo],
-        WgpuPresentMode::FifoRelaxed => &[wgpu::PresentMode::FifoRelaxed],
+        WgpuPresentMode::FifoRelaxed => &[wgpu::PresentMode::FifoRelaxed, wgpu::PresentMode::Fifo],
+        WgpuPresentMode::Immediate => &[
+            wgpu::PresentMode::Immediate,
+            wgpu::PresentMode::Mailbox,
+            wgpu::PresentMode::FifoRelaxed,
+            wgpu::PresentMode::Fifo,
+        ],
+        WgpuPresentMode::Mailbox => {
+            &[wgpu::PresentMode::Mailbox, wgpu::PresentMode::FifoRelaxed, wgpu::PresentMode::Fifo]
+        }
     };
     if let Some(mode) = preferred.iter().copied().find(|mode| available.contains(mode)) {
         return mode;
@@ -4388,6 +4377,27 @@ mod tests {
     fn auto_renderer_backend_keeps_default_candidates_on_other_platforms() {
         assert_eq!(auto_wgpu_backends(), wgpu::Backends::all());
         assert_eq!(fallback_wgpu_backends(WgpuBackend::Auto), &[WgpuBackend::Auto]);
+    }
+
+    #[test]
+    fn present_mode_fallbacks_follow_vsync_mode_semantics() {
+        use wgpu::PresentMode::{Fifo, FifoRelaxed, Mailbox};
+
+        assert_eq!(resolve_wgpu_present_mode(WgpuPresentMode::Fifo, &[Fifo]), Fifo);
+        assert_eq!(resolve_wgpu_present_mode(WgpuPresentMode::FifoRelaxed, &[Fifo]), Fifo);
+        assert_eq!(
+            resolve_wgpu_present_mode(WgpuPresentMode::Immediate, &[Mailbox, Fifo]),
+            Mailbox
+        );
+        assert_eq!(
+            resolve_wgpu_present_mode(WgpuPresentMode::Immediate, &[FifoRelaxed, Fifo]),
+            FifoRelaxed
+        );
+        assert_eq!(
+            resolve_wgpu_present_mode(WgpuPresentMode::Mailbox, &[FifoRelaxed, Fifo]),
+            FifoRelaxed
+        );
+        assert_eq!(resolve_wgpu_present_mode(WgpuPresentMode::Mailbox, &[Fifo]), Fifo);
     }
 
     #[test]
