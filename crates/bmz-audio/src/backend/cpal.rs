@@ -414,11 +414,27 @@ impl CpalSharedOutput {
     }
 
     pub fn uses_pulseaudio_host(&self) -> bool {
-        #[cfg(feature = "pulseaudio")]
+        #[cfg(all(
+            any(
+                target_os = "linux",
+                target_os = "dragonfly",
+                target_os = "freebsd",
+                target_os = "netbsd"
+            ),
+            feature = "pulseaudio"
+        ))]
         {
             matches!(self.inner.host_id, ::cpal::HostId::PulseAudio)
         }
-        #[cfg(not(feature = "pulseaudio"))]
+        #[cfg(not(all(
+            any(
+                target_os = "linux",
+                target_os = "dragonfly",
+                target_os = "freebsd",
+                target_os = "netbsd"
+            ),
+            feature = "pulseaudio"
+        )))]
         {
             let _ = self.inner.host_id;
             false
