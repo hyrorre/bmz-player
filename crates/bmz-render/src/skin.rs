@@ -227,7 +227,7 @@ struct DestinationResolveContext<'a, 'text> {
     text_state: &'a SkinTextState<'text>,
     sources: &'a HashMap<String, SkinDocumentTexture>,
     runtime_graphs: SkinRuntimeGraphs<'a>,
-    has_half_grade_f_diff_rank_destination: bool,
+    has_nearest_f_diff_rank_destination: bool,
     cache: Option<&'a mut ResultRenderCache>,
 }
 
@@ -1294,14 +1294,14 @@ impl ResultRenderCache {
                 }
             }
         }
-        let has_half_grade_f_diff_rank_destination = destinations
+        let has_nearest_f_diff_rank_destination = destinations
             .iter()
             .filter_map(|destination| destination.resolve(document))
             .any(|destination| destination.id == "RANK_s_F");
         let planning = ResultPlanningCache {
             enabled_options,
             destinations: Arc::from(destinations),
-            has_half_grade_f_diff_rank_destination,
+            has_nearest_f_diff_rank_destination,
         };
         self.planning = Some(planning.clone());
         planning
@@ -1328,7 +1328,7 @@ impl ResultRenderCache {
 struct ResultPlanningCache {
     enabled_options: Arc<[i32]>,
     destinations: Arc<[ResultDestinationRef]>,
-    has_half_grade_f_diff_rank_destination: bool,
+    has_nearest_f_diff_rank_destination: bool,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -2880,12 +2880,11 @@ impl SkinDocument {
             if planning.is_none() { self.all_destinations(enabled_options) } else { Vec::new() };
         let destination_count =
             planning.as_ref().map_or(destinations.len(), |planning| planning.destinations.len());
-        let has_half_grade_f_diff_rank_destination = planning.as_ref().map_or_else(
-            || half_grade_f_diff_rank_destination_available(&destinations),
-            |planning| planning.has_half_grade_f_diff_rank_destination,
+        let has_nearest_f_diff_rank_destination = planning.as_ref().map_or_else(
+            || nearest_f_diff_rank_destination_available(&destinations),
+            |planning| planning.has_nearest_f_diff_rank_destination,
         );
-        let state =
-            apply_half_grade_f_diff_rank_fallback(state, has_half_grade_f_diff_rank_destination);
+        let state = apply_nearest_f_diff_rank_fallback(state, has_nearest_f_diff_rank_destination);
         let state = state.as_ref();
         for index in 0..destination_count {
             let Some(destination) = planning
@@ -2906,7 +2905,7 @@ impl SkinDocument {
                     destination,
                     enabled_options,
                     state,
-                    has_half_grade_f_diff_rank_destination,
+                    has_nearest_f_diff_rank_destination,
                 )
             {
                 continue;
@@ -2962,7 +2961,7 @@ impl SkinDocument {
                     text_state,
                     sources,
                     runtime_graphs,
-                    has_half_grade_f_diff_rank_destination,
+                    has_nearest_f_diff_rank_destination,
                     cache: cache.as_deref_mut(),
                 },
             ) {
@@ -3139,11 +3138,10 @@ impl SkinDocument {
             text_state,
             sources,
             runtime_graphs,
-            has_half_grade_f_diff_rank_destination,
+            has_nearest_f_diff_rank_destination,
             cache,
         } = context;
-        let state =
-            apply_half_grade_f_diff_rank_fallback(state, has_half_grade_f_diff_rank_destination);
+        let state = apply_nearest_f_diff_rank_fallback(state, has_nearest_f_diff_rank_destination);
         let state = state.as_ref();
         if let Some(judge_def) = self.judge.iter().find(|judge| judge.id == destination.id) {
             let region = judge_def.index.clamp(0, MAX_JUDGE_REGIONS as i32 - 1) as usize;
@@ -3423,7 +3421,7 @@ impl SkinDocument {
             let number = skin_value_number_for_destination(
                 value,
                 state,
-                has_half_grade_f_diff_rank_destination,
+                has_nearest_f_diff_rank_destination,
             )?;
             let signed_render = signed_number_render_for_value(value, state);
             return Some(self.value_number_render_items(
@@ -3484,16 +3482,15 @@ impl SkinDocument {
         sources: &HashMap<String, SkinDocumentTexture>,
     ) -> Option<Vec<SkinRenderItem>> {
         let destinations = self.all_destinations(enabled_options);
-        let has_half_grade_f_diff_rank_destination =
-            half_grade_f_diff_rank_destination_available(&destinations);
-        let state =
-            apply_half_grade_f_diff_rank_fallback(state, has_half_grade_f_diff_rank_destination);
+        let has_nearest_f_diff_rank_destination =
+            nearest_f_diff_rank_destination_available(&destinations);
+        let state = apply_nearest_f_diff_rank_fallback(state, has_nearest_f_diff_rank_destination);
         let state = state.as_ref();
         if !destination_ops_match(
             destination,
             enabled_options,
             state,
-            has_half_grade_f_diff_rank_destination,
+            has_nearest_f_diff_rank_destination,
         ) || !eval_skin_draw_condition(&destination.draw, state)
         {
             return None;
@@ -3557,7 +3554,7 @@ impl SkinDocument {
             let number = skin_value_number_for_destination(
                 value,
                 state,
-                has_half_grade_f_diff_rank_destination,
+                has_nearest_f_diff_rank_destination,
             )?;
             let signed_render = signed_number_render_for_value(value, state);
             return Some(self.value_number_render_items(
@@ -3744,8 +3741,8 @@ impl SkinDocument {
             self.value.iter().map(|value| (value.id.as_str(), value)).collect();
         let enabled_options = self.enabled_options();
         let destinations = self.all_destinations(&enabled_options);
-        let has_half_grade_f_diff_rank_destination =
-            half_grade_f_diff_rank_destination_available(&destinations);
+        let has_nearest_f_diff_rank_destination =
+            nearest_f_diff_rank_destination_available(&destinations);
         let mut items = Vec::new();
         for (destination_index, destination) in destinations.into_iter().enumerate() {
             if destination.id == self.songlist.as_ref().map(|list| list.id.as_str()).unwrap_or("") {
@@ -3772,7 +3769,7 @@ impl SkinDocument {
                             destination,
                             enabled_options,
                             state,
-                            has_half_grade_f_diff_rank_destination,
+                            has_nearest_f_diff_rank_destination,
                         )
                     } else {
                         test_skin_ops(ops, enabled_options, state)
@@ -3831,7 +3828,7 @@ impl SkinDocument {
                     text_state: &text,
                     sources,
                     runtime_graphs: SkinRuntimeGraphs::from_document(self),
-                    has_half_grade_f_diff_rank_destination,
+                    has_nearest_f_diff_rank_destination,
                     cache: None,
                 },
             ) {
@@ -7144,7 +7141,7 @@ fn destination_ops_match(
     destination: &SkinDestinationDef,
     enabled_options: &[i32],
     state: &SkinDrawState,
-    has_half_grade_f_diff_rank_destination: bool,
+    has_nearest_f_diff_rank_destination: bool,
 ) -> bool {
     if is_grade_diff_rank_destination(destination, state) {
         return destination.op.iter().all(|&op| {
@@ -7153,7 +7150,7 @@ fn destination_ops_match(
                 op,
                 enabled_options,
                 state,
-                has_half_grade_f_diff_rank_destination,
+                has_nearest_f_diff_rank_destination,
             )
         });
     }
@@ -7165,7 +7162,7 @@ fn test_grade_diff_rank_op(
     op: i32,
     enabled_options: &[i32],
     state: &SkinDrawState,
-    has_half_grade_f_diff_rank_destination: bool,
+    has_nearest_f_diff_rank_destination: bool,
 ) -> bool {
     if op < 0 {
         return op.checked_neg().is_some_and(|positive| {
@@ -7174,7 +7171,7 @@ fn test_grade_diff_rank_op(
                 positive,
                 enabled_options,
                 state,
-                has_half_grade_f_diff_rank_destination,
+                has_nearest_f_diff_rank_destination,
             )
         });
     }
@@ -7183,7 +7180,7 @@ fn test_grade_diff_rank_op(
             destination,
             op,
             state,
-            has_half_grade_f_diff_rank_destination,
+            has_nearest_f_diff_rank_destination,
         ),
         _ => test_skin_op(op, enabled_options, state),
     }
@@ -8050,15 +8047,15 @@ fn skin_value_number(value: &SkinValueDef, state: &SkinDrawState) -> Option<i64>
 fn skin_value_number_for_destination(
     value: &SkinValueDef,
     state: &SkinDrawState,
-    has_half_grade_f_diff_rank_destination: bool,
+    has_nearest_f_diff_rank_destination: bool,
 ) -> Option<i64> {
     if value.ref_id == 154
         && value.expr.trim().is_empty()
         && value.value_expr.trim().is_empty()
-        && state.result_grade_diff_display == ResultGradeDiffDisplay::HalfGrade
-        && !has_half_grade_f_diff_rank_destination
+        && state.result_grade_diff_display == ResultGradeDiffDisplay::Nearest
+        && !has_nearest_f_diff_rank_destination
     {
-        return half_grade_diff_for_destination(state, false).map(|diff| diff.value);
+        return nearest_grade_diff_for_destination(state, false).map(|diff| diff.value);
     }
     if value.ref_id == 0 && value.expr.trim().is_empty() {
         return Some(if state.play_level != 0 {
@@ -8539,9 +8536,9 @@ fn result_grade_diff_number(state: &SkinDrawState) -> Option<i64> {
         return None;
     }
     match state.result_grade_diff_display {
-        ResultGradeDiffDisplay::Beatoraja => beatoraja_next_rank_diff(state),
-        ResultGradeDiffDisplay::HalfGrade => {
-            half_grade_diff_for_state(state).map(|diff| diff.value)
+        ResultGradeDiffDisplay::Next => next_rank_diff(state),
+        ResultGradeDiffDisplay::Nearest => {
+            nearest_grade_diff_for_state(state).map(|diff| diff.value)
         }
     }
 }
@@ -8551,10 +8548,8 @@ pub(crate) fn result_grade_diff_label(state: &SkinDrawState) -> Option<String> {
         return None;
     }
     match state.result_grade_diff_display {
-        ResultGradeDiffDisplay::Beatoraja => {
-            beatoraja_next_rank_diff(state).map(|value| format!("{value:+}"))
-        }
-        ResultGradeDiffDisplay::HalfGrade => half_grade_diff(state).map(|diff| diff.label()),
+        ResultGradeDiffDisplay::Next => next_rank_diff(state).map(|value| format!("{value:+}")),
+        ResultGradeDiffDisplay::Nearest => nearest_grade_diff(state).map(|diff| diff.label()),
     }
 }
 
@@ -8564,7 +8559,7 @@ fn grade_diff_score_available(state: &SkinDrawState) -> bool {
         || state.select_ex_score.is_some_and(|score| score > 0)
 }
 
-fn beatoraja_next_rank_diff(state: &SkinDrawState) -> Option<i64> {
+fn next_rank_diff(state: &SkinDrawState) -> Option<i64> {
     let ex_score = state.select_ex_score.unwrap_or(state.ex_score) as i64;
     let total_notes = state.select_total_notes.max(state.total_notes) as i64;
     let max_score = total_notes.checked_mul(2)?;
@@ -8581,7 +8576,7 @@ fn beatoraja_next_rank_diff(state: &SkinDrawState) -> Option<i64> {
     Some(ex_score - max_score)
 }
 
-fn beatoraja_next_rank_grade(state: &SkinDrawState) -> Option<&'static str> {
+fn next_rank_grade(state: &SkinDrawState) -> Option<&'static str> {
     let ex_score = state.select_ex_score.unwrap_or(state.ex_score) as i64;
     let total_notes = state.select_total_notes.max(state.total_notes) as i64;
     let max_score = total_notes.checked_mul(2)?;
@@ -8592,13 +8587,13 @@ fn beatoraja_next_rank_grade(state: &SkinDrawState) -> Option<&'static str> {
     for rank_step in (3..=24).step_by(3) {
         let threshold = div_ceil(rank_step as i64 * max_score, 27);
         if ex_score < threshold {
-            return beatoraja_next_rank_grade_for_step(rank_step);
+            return next_rank_grade_for_step(rank_step);
         }
     }
     Some("MAX")
 }
 
-fn beatoraja_next_rank_grade_for_step(rank_step: i32) -> Option<&'static str> {
+fn next_rank_grade_for_step(rank_step: i32) -> Option<&'static str> {
     match rank_step {
         3 => Some("E"),
         6 => Some("D"),
@@ -8613,18 +8608,18 @@ fn beatoraja_next_rank_grade_for_step(rank_step: i32) -> Option<&'static str> {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct HalfGradeDiff {
+struct NearestGradeDiff {
     grade: &'static str,
     value: i64,
 }
 
-impl HalfGradeDiff {
+impl NearestGradeDiff {
     fn label(self) -> String {
         format!("{}{:+}", self.grade, self.value)
     }
 }
 
-fn half_grade_diff(state: &SkinDrawState) -> Option<HalfGradeDiff> {
+fn nearest_grade_diff(state: &SkinDrawState) -> Option<NearestGradeDiff> {
     let score = state.select_ex_score.unwrap_or(state.ex_score) as i64;
     let total_notes = state.select_total_notes.max(state.total_notes) as i64;
     let max = total_notes.checked_mul(2)?;
@@ -8634,9 +8629,9 @@ fn half_grade_diff(state: &SkinDrawState) -> Option<HalfGradeDiff> {
     let score = score.clamp(0, max);
     if score * 9 < max * 2 {
         return Some(if score * 18 < max * 2 {
-            HalfGradeDiff { grade: "F", value: score }
+            NearestGradeDiff { grade: "F", value: score }
         } else {
-            HalfGradeDiff { grade: "E", value: -div_ceil(max * 2 - score * 9, 9) }
+            NearestGradeDiff { grade: "E", value: -div_ceil(max * 2 - score * 9, 9) }
         });
     }
     for (lower_step, plus_grade, minus_grade, half_step, upper_step) in [
@@ -8649,12 +8644,12 @@ fn half_grade_diff(state: &SkinDrawState) -> Option<HalfGradeDiff> {
     ] {
         if score * 9 < max * upper_step {
             return Some(if score * 18 < max * half_step {
-                HalfGradeDiff {
+                NearestGradeDiff {
                     grade: plus_grade,
                     value: div_ceil(score * 9 - max * lower_step, 9),
                 }
             } else {
-                HalfGradeDiff {
+                NearestGradeDiff {
                     grade: minus_grade,
                     value: -div_ceil(max * upper_step - score * 9, 9),
                 }
@@ -8662,19 +8657,19 @@ fn half_grade_diff(state: &SkinDrawState) -> Option<HalfGradeDiff> {
         }
     }
     if score * 18 < max * 17 {
-        Some(HalfGradeDiff { grade: "AAA", value: div_ceil(score * 9 - max * 8, 9) })
+        Some(NearestGradeDiff { grade: "AAA", value: div_ceil(score * 9 - max * 8, 9) })
     } else if score < max {
-        Some(HalfGradeDiff { grade: "MAX", value: -(max - score) })
+        Some(NearestGradeDiff { grade: "MAX", value: -(max - score) })
     } else {
-        Some(HalfGradeDiff { grade: "MAX", value: 0 })
+        Some(NearestGradeDiff { grade: "MAX", value: 0 })
     }
 }
 
-fn half_grade_diff_for_state(state: &SkinDrawState) -> Option<HalfGradeDiff> {
+fn nearest_grade_diff_for_state(state: &SkinDrawState) -> Option<NearestGradeDiff> {
     if state.result_grade_diff_f_fallback_to_e {
-        return half_grade_diff_for_destination(state, false);
+        return nearest_grade_diff_for_destination(state, false);
     }
-    half_grade_diff(state)
+    nearest_grade_diff(state)
 }
 
 fn projected_score_at_progress(final_score: u32, state: &SkinDrawState) -> u32 {
@@ -10592,35 +10587,35 @@ fn grade_diff_rank_destination_matches(
     destination: &SkinDestinationDef,
     op: i32,
     state: &SkinDrawState,
-    has_half_grade_f_diff_rank_destination: bool,
+    has_nearest_f_diff_rank_destination: bool,
 ) -> bool {
-    let Some(grade) = grade_diff_rank_target_grade(state, has_half_grade_f_diff_rank_destination)
+    let Some(grade) = grade_diff_rank_target_grade(state, has_nearest_f_diff_rank_destination)
     else {
         return false;
     };
-    if half_grade_diff_rank_destination_grade(&destination.id) != Some(grade) {
+    if nearest_grade_diff_rank_destination_grade(&destination.id) != Some(grade) {
         return false;
     }
-    half_grade_diff_rank_op(grade).is_some_and(|rank_op| op == rank_op)
+    nearest_grade_diff_rank_op(grade).is_some_and(|rank_op| op == rank_op)
 }
 
 fn grade_diff_rank_target_grade(
     state: &SkinDrawState,
-    has_half_grade_f_diff_rank_destination: bool,
+    has_nearest_f_diff_rank_destination: bool,
 ) -> Option<&'static str> {
     if !grade_diff_score_available(state) {
         return None;
     }
     match state.result_grade_diff_display {
-        ResultGradeDiffDisplay::Beatoraja => beatoraja_next_rank_grade(state),
-        ResultGradeDiffDisplay::HalfGrade => {
-            half_grade_diff_for_destination(state, has_half_grade_f_diff_rank_destination)
+        ResultGradeDiffDisplay::Next => next_rank_grade(state),
+        ResultGradeDiffDisplay::Nearest => {
+            nearest_grade_diff_for_destination(state, has_nearest_f_diff_rank_destination)
                 .map(|diff| diff.grade)
         }
     }
 }
 
-fn half_grade_diff_rank_op(grade: &str) -> Option<i32> {
+fn nearest_grade_diff_rank_op(grade: &str) -> Option<i32> {
     match grade {
         "MAX" => Some(300),
         "AAA" => Some(301),
@@ -10634,7 +10629,7 @@ fn half_grade_diff_rank_op(grade: &str) -> Option<i32> {
     }
 }
 
-fn half_grade_diff_rank_destination_grade(id: &str) -> Option<&'static str> {
+fn nearest_grade_diff_rank_destination_grade(id: &str) -> Option<&'static str> {
     match id {
         "RANK_s_MAX" => Some("MAX"),
         "RANK_s_AAA" => Some("AAA"),
@@ -10649,16 +10644,16 @@ fn half_grade_diff_rank_destination_grade(id: &str) -> Option<&'static str> {
     }
 }
 
-fn half_grade_f_diff_rank_destination_available(destinations: &[&SkinDestinationDef]) -> bool {
+fn nearest_f_diff_rank_destination_available(destinations: &[&SkinDestinationDef]) -> bool {
     destinations.iter().any(|destination| destination.id == "RANK_s_F")
 }
 
-fn apply_half_grade_f_diff_rank_fallback<'a>(
+fn apply_nearest_f_diff_rank_fallback<'a>(
     state: &'a SkinDrawState,
-    has_half_grade_f_diff_rank_destination: bool,
+    has_nearest_f_diff_rank_destination: bool,
 ) -> Cow<'a, SkinDrawState> {
-    let fallback_to_e = state.result_grade_diff_display == ResultGradeDiffDisplay::HalfGrade
-        && !has_half_grade_f_diff_rank_destination;
+    let fallback_to_e = state.result_grade_diff_display == ResultGradeDiffDisplay::Nearest
+        && !has_nearest_f_diff_rank_destination;
     if state.result_grade_diff_f_fallback_to_e == fallback_to_e {
         Cow::Borrowed(state)
     } else {
@@ -10668,18 +10663,18 @@ fn apply_half_grade_f_diff_rank_fallback<'a>(
     }
 }
 
-fn half_grade_diff_for_destination(
+fn nearest_grade_diff_for_destination(
     state: &SkinDrawState,
-    has_half_grade_f_diff_rank_destination: bool,
-) -> Option<HalfGradeDiff> {
-    let diff = half_grade_diff(state)?;
-    if diff.grade == "F" && !has_half_grade_f_diff_rank_destination {
-        return half_grade_e_minus_diff(state);
+    has_nearest_f_diff_rank_destination: bool,
+) -> Option<NearestGradeDiff> {
+    let diff = nearest_grade_diff(state)?;
+    if diff.grade == "F" && !has_nearest_f_diff_rank_destination {
+        return nearest_e_minus_diff(state);
     }
     Some(diff)
 }
 
-fn half_grade_e_minus_diff(state: &SkinDrawState) -> Option<HalfGradeDiff> {
+fn nearest_e_minus_diff(state: &SkinDrawState) -> Option<NearestGradeDiff> {
     let score = state.select_ex_score.unwrap_or(state.ex_score) as i64;
     let total_notes = state.select_total_notes.max(state.total_notes) as i64;
     let max = total_notes.checked_mul(2)?;
@@ -10687,7 +10682,7 @@ fn half_grade_e_minus_diff(state: &SkinDrawState) -> Option<HalfGradeDiff> {
         return None;
     }
     let score = score.clamp(0, max);
-    Some(HalfGradeDiff { grade: "E", value: -div_ceil(max * 2 - score * 9, 9) })
+    Some(NearestGradeDiff { grade: "E", value: -div_ceil(max * 2 - score * 9, 9) })
 }
 
 fn current_datetime_number(ref_id: i32) -> Option<i64> {
@@ -13691,16 +13686,19 @@ mod tests {
     #[test]
     fn skin_state_number_maps_next_rank_diff() {
         let a_state = SkinDrawState {
+            result_grade_diff_display: ResultGradeDiffDisplay::Next,
             select_ex_score: Some(1300),
             select_total_notes: 1000,
             ..SkinDrawState::default()
         };
         let aaa_state = SkinDrawState {
+            result_grade_diff_display: ResultGradeDiffDisplay::Next,
             select_ex_score: Some(1800),
             select_total_notes: 1000,
             ..SkinDrawState::default()
         };
         let max_state = SkinDrawState {
+            result_grade_diff_display: ResultGradeDiffDisplay::Next,
             select_ex_score: Some(2000),
             select_total_notes: 1000,
             ..SkinDrawState::default()
@@ -13710,9 +13708,10 @@ mod tests {
         assert_eq!(skin_state_number(154, &aaa_state), Some(-200));
         assert_eq!(skin_state_number(154, &max_state), Some(0));
         assert_eq!(skin_state_number(154, &SkinDrawState::default()), None);
-        assert_eq!(beatoraja_next_rank_grade(&a_state), Some("AA"));
-        assert_eq!(beatoraja_next_rank_grade(&aaa_state), Some("MAX"));
+        assert_eq!(next_rank_grade(&a_state), Some("AA"));
+        assert_eq!(next_rank_grade(&aaa_state), Some("MAX"));
         let near_aaa_state = SkinDrawState {
+            result_grade_diff_display: ResultGradeDiffDisplay::Next,
             select_ex_score: Some(1774),
             select_total_notes: 1000,
             select_play_count: 1,
@@ -13721,10 +13720,10 @@ mod tests {
         };
         assert_eq!(skin_state_number(154, &near_aaa_state), Some(-4));
         assert_eq!(result_grade_diff_label(&near_aaa_state), Some("-4".to_string()));
-        assert_eq!(beatoraja_next_rank_grade(&near_aaa_state), Some("AAA"));
+        assert_eq!(next_rank_grade(&near_aaa_state), Some("AAA"));
         assert_eq!(grade_diff_rank_target_grade(&near_aaa_state, true), Some("AAA"));
         assert_eq!(
-            beatoraja_next_rank_grade(&SkinDrawState {
+            next_rank_grade(&SkinDrawState {
                 select_ex_score: Some(0),
                 select_total_notes: 2253,
                 ..SkinDrawState::default()
@@ -13732,55 +13731,55 @@ mod tests {
             Some("E")
         );
 
-        let half_grade = SkinDrawState {
-            result_grade_diff_display: ResultGradeDiffDisplay::HalfGrade,
+        let nearest = SkinDrawState {
+            result_grade_diff_display: ResultGradeDiffDisplay::Nearest,
             select_total_notes: 1000,
             ..SkinDrawState::default()
         };
         assert_eq!(
             result_grade_diff_label(&SkinDrawState {
                 select_ex_score: Some(100),
-                ..half_grade.clone()
+                ..nearest.clone()
             }),
             Some("F+100".to_string())
         );
         assert_eq!(
             result_grade_diff_label(&SkinDrawState {
                 select_ex_score: Some(300),
-                ..half_grade.clone()
+                ..nearest.clone()
             }),
             Some("E-145".to_string())
         );
         assert_eq!(
             skin_state_number(
                 154,
-                &SkinDrawState { select_ex_score: Some(300), ..half_grade.clone() }
+                &SkinDrawState { select_ex_score: Some(300), ..nearest.clone() }
             ),
             Some(-145)
         );
         assert_eq!(
             result_grade_diff_label(&SkinDrawState {
                 select_ex_score: Some(500),
-                ..half_grade.clone()
+                ..nearest.clone()
             }),
             Some("E+56".to_string())
         );
         assert_eq!(
             result_grade_diff_label(&SkinDrawState {
                 select_ex_score: Some(1900),
-                ..half_grade.clone()
+                ..nearest.clone()
             }),
             Some("MAX-100".to_string())
         );
         assert_eq!(
             result_grade_diff_label(&SkinDrawState {
                 select_ex_score: Some(2000),
-                ..half_grade.clone()
+                ..nearest.clone()
             }),
             Some("MAX+0".to_string())
         );
         let screenshot_score = SkinDrawState {
-            result_grade_diff_display: ResultGradeDiffDisplay::HalfGrade,
+            result_grade_diff_display: ResultGradeDiffDisplay::Nearest,
             ex_score: 1100,
             total_notes: 594,
             result_failed: Some(false),
@@ -13789,17 +13788,17 @@ mod tests {
         assert_eq!(result_grade_diff_label(&screenshot_score), Some("AAA+44".to_string()));
         assert_eq!(skin_state_number(154, &screenshot_score), Some(44));
         assert_eq!(grade_diff_rank_target_grade(&screenshot_score, true), Some("AAA"));
-        let beatoraja_screenshot_score = SkinDrawState {
-            result_grade_diff_display: ResultGradeDiffDisplay::Beatoraja,
+        let next_screenshot_score = SkinDrawState {
+            result_grade_diff_display: ResultGradeDiffDisplay::Next,
             ..screenshot_score
         };
-        assert_eq!(result_grade_diff_label(&beatoraja_screenshot_score), Some("-88".to_string()));
-        assert_eq!(skin_state_number(154, &beatoraja_screenshot_score), Some(-88));
-        assert_eq!(grade_diff_rank_target_grade(&beatoraja_screenshot_score, true), Some("MAX"));
+        assert_eq!(result_grade_diff_label(&next_screenshot_score), Some("-88".to_string()));
+        assert_eq!(skin_state_number(154, &next_screenshot_score), Some(-88));
+        assert_eq!(grade_diff_rank_target_grade(&next_screenshot_score, true), Some("MAX"));
     }
 
     #[test]
-    fn half_grade_result_diff_rank_destinations_use_target_grade() {
+    fn nearest_result_diff_rank_destinations_use_target_grade() {
         fn destination(id: &str, op: i32) -> SkinDestinationDef {
             SkinDestinationDef {
                 id: id.to_string(),
@@ -13845,7 +13844,7 @@ mod tests {
             ex_score: 1900,
             total_notes: 1000,
             result_failed: Some(false),
-            result_grade_diff_display: ResultGradeDiffDisplay::HalfGrade,
+            result_grade_diff_display: ResultGradeDiffDisplay::Nearest,
             ..SkinDrawState::default()
         };
         assert!(destination_ops_match(&destination("RANK_s_MAX", 300), &[], &max_minus, false));
@@ -13856,33 +13855,28 @@ mod tests {
             ex_score: 1100,
             total_notes: 594,
             result_failed: Some(false),
-            result_grade_diff_display: ResultGradeDiffDisplay::HalfGrade,
+            result_grade_diff_display: ResultGradeDiffDisplay::Nearest,
             ..SkinDrawState::default()
         };
         assert!(destination_ops_match(&destination("RANK_s_AAA", 301), &[], &aaa_plus, false));
         assert!(!destination_ops_match(&destination("RANK_s_MAX", 300), &[], &aaa_plus, false));
 
-        let beatoraja_e_minus = SkinDrawState {
+        let nearest_e_minus = SkinDrawState {
             select_ex_score: Some(0),
             select_total_notes: 2253,
             select_play_count: 1,
             select_screen: true,
             ..SkinDrawState::default()
         };
-        assert!(destination_ops_match(
-            &destination("RANK_s_E", 307),
-            &[],
-            &beatoraja_e_minus,
-            false
-        ));
+        assert!(destination_ops_match(&destination("RANK_s_E", 307), &[], &nearest_e_minus, false));
         assert!(!destination_ops_match(
             &destination("RANK_s_D", 306),
             &[],
-            &beatoraja_e_minus,
+            &nearest_e_minus,
             false
         ));
 
-        let beatoraja_aaa_minus = SkinDrawState {
+        let nearest_aaa_minus = SkinDrawState {
             select_ex_score: Some(1774),
             select_total_notes: 1000,
             select_play_count: 1,
@@ -13892,13 +13886,13 @@ mod tests {
         assert!(destination_ops_match(
             &destination("RANK_s_AAA", 301),
             &[],
-            &beatoraja_aaa_minus,
+            &nearest_aaa_minus,
             false
         ));
         assert!(!destination_ops_match(
             &destination("RANK_s_MAX", 300),
             &[],
-            &beatoraja_aaa_minus,
+            &nearest_aaa_minus,
             false
         ));
 
@@ -13906,7 +13900,7 @@ mod tests {
             ex_score: 100,
             total_notes: 1000,
             result_failed: Some(false),
-            result_grade_diff_display: ResultGradeDiffDisplay::HalfGrade,
+            result_grade_diff_display: ResultGradeDiffDisplay::Nearest,
             ..SkinDrawState::default()
         };
         assert!(destination_ops_match(&destination("RANK_s_E", 307), &[], &f_plus, false));
@@ -13933,7 +13927,7 @@ mod tests {
     }
 
     #[test]
-    fn half_grade_result_diff_number_renders_negative_when_f_rank_destination_is_missing() {
+    fn nearest_result_diff_number_renders_negative_when_f_rank_destination_is_missing() {
         let document: SkinDocument = serde_json::from_str(
             r#"
             {
@@ -13982,7 +13976,7 @@ mod tests {
             ex_score: 100,
             total_notes: 1000,
             result_failed: Some(false),
-            result_grade_diff_display: ResultGradeDiffDisplay::HalfGrade,
+            result_grade_diff_display: ResultGradeDiffDisplay::Nearest,
             ..SkinDrawState::default()
         };
 
@@ -13996,7 +13990,7 @@ mod tests {
     }
 
     #[test]
-    fn half_grade_select_diff_number_renders_e_minus_when_f_rank_destination_is_missing() {
+    fn nearest_select_diff_number_renders_e_minus_when_f_rank_destination_is_missing() {
         let document: SkinDocument = serde_json::from_str(
             r#"
             {
@@ -14066,7 +14060,7 @@ mod tests {
                 ..SelectRowSnapshot::default()
             }],
             chart_count: 1,
-            grade_diff_display: ResultGradeDiffDisplay::HalfGrade,
+            grade_diff_display: ResultGradeDiffDisplay::Nearest,
             ..SelectSnapshot::default()
         };
 
@@ -14086,7 +14080,7 @@ mod tests {
     }
 
     #[test]
-    fn beatoraja_select_diff_number_renders_next_rank_label() {
+    fn next_select_diff_number_renders_next_rank_label() {
         let document: SkinDocument = serde_json::from_str(
             r#"
             {
@@ -14157,6 +14151,7 @@ mod tests {
                 ..SelectRowSnapshot::default()
             }],
             chart_count: 1,
+            grade_diff_display: ResultGradeDiffDisplay::Next,
             ..SelectSnapshot::default()
         };
 
@@ -14186,6 +14181,7 @@ mod tests {
                 ..SelectRowSnapshot::default()
             }],
             chart_count: 1,
+            grade_diff_display: ResultGradeDiffDisplay::Next,
             ..SelectSnapshot::default()
         };
         let no_play_items = document.select_render_items(&sources, &no_play_snapshot);

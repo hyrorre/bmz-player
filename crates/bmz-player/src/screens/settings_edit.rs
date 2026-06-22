@@ -586,9 +586,9 @@ mod tests {
 
         let normalize_session =
             SettingsEditSession::capture(&profile, SettingsEntryId::NormalizeChartVolume);
-        profile.audio_mix.normalize_chart_volume = true;
+        profile.audio_mix.normalize_chart_volume = false;
         normalize_session.restore(&mut profile);
-        assert!(!profile.audio_mix.normalize_chart_volume);
+        assert!(profile.audio_mix.normalize_chart_volume);
     }
 
     #[test]

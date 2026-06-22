@@ -561,8 +561,8 @@ fn format_target(value: TargetOptionConfig) -> String {
 
 fn format_grade_diff_display(value: ResultGradeDiffDisplay) -> String {
     match value {
-        ResultGradeDiffDisplay::Beatoraja => "NEXT".to_string(),
-        ResultGradeDiffDisplay::HalfGrade => "NEAREST".to_string(),
+        ResultGradeDiffDisplay::Next => "NEXT".to_string(),
+        ResultGradeDiffDisplay::Nearest => "NEAREST".to_string(),
     }
 }
 
@@ -756,7 +756,7 @@ fn cycle_grade_diff_display(
     forward: bool,
 ) -> ResultGradeDiffDisplay {
     const VALUES: [ResultGradeDiffDisplay; 2] =
-        [ResultGradeDiffDisplay::Beatoraja, ResultGradeDiffDisplay::HalfGrade];
+        [ResultGradeDiffDisplay::Nearest, ResultGradeDiffDisplay::Next];
     cycle_in_slice(&VALUES, current, forward)
 }
 
@@ -833,9 +833,10 @@ mod tests {
     #[test]
     fn adjust_volume_clamps_to_range() {
         let mut profile = ProfileConfig::new_default("default", "Default", 0);
-        assert!(adjust_settings_value(&mut profile, SettingsEntryId::NormalizeChartVolume, 1));
         assert!(profile.audio_mix.normalize_chart_volume);
-        assert_eq!(format_settings_value(&profile, SettingsEntryId::NormalizeChartVolume), "ON");
+        assert!(adjust_settings_value(&mut profile, SettingsEntryId::NormalizeChartVolume, 1));
+        assert!(!profile.audio_mix.normalize_chart_volume);
+        assert_eq!(format_settings_value(&profile, SettingsEntryId::NormalizeChartVolume), "OFF");
         profile.audio_mix.master_volume = 98;
         assert!(adjust_settings_value(&mut profile, SettingsEntryId::MasterVolume, 5));
         assert_eq!(profile.audio_mix.master_volume, 100);
@@ -893,10 +894,10 @@ mod tests {
     fn cycle_grade_diff_display_wraps() {
         let mut profile = ProfileConfig::new_default("default", "Default", 0);
         assert!(SettingsEntryId::PLAY_ENTRIES.contains(&SettingsEntryId::GradeDiffDisplay));
-        assert_eq!(format_settings_value(&profile, SettingsEntryId::GradeDiffDisplay), "NEXT");
-        assert!(adjust_settings_value(&mut profile, SettingsEntryId::GradeDiffDisplay, 1));
-        assert_eq!(profile.play.grade_diff_display, ResultGradeDiffDisplay::HalfGrade);
         assert_eq!(format_settings_value(&profile, SettingsEntryId::GradeDiffDisplay), "NEAREST");
+        assert!(adjust_settings_value(&mut profile, SettingsEntryId::GradeDiffDisplay, 1));
+        assert_eq!(profile.play.grade_diff_display, ResultGradeDiffDisplay::Next);
+        assert_eq!(format_settings_value(&profile, SettingsEntryId::GradeDiffDisplay), "NEXT");
     }
 
     #[test]

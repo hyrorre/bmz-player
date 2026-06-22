@@ -2627,13 +2627,13 @@ fn build_profile_settings_panel(
                         .show_ui(ui, |ui| {
                             ui.selectable_value(
                                 &mut profile.play.grade_diff_display,
-                                ResultGradeDiffDisplay::Beatoraja,
-                                grade_diff_display_label(ResultGradeDiffDisplay::Beatoraja),
+                                ResultGradeDiffDisplay::Next,
+                                grade_diff_display_label(ResultGradeDiffDisplay::Next),
                             );
                             ui.selectable_value(
                                 &mut profile.play.grade_diff_display,
-                                ResultGradeDiffDisplay::HalfGrade,
-                                grade_diff_display_label(ResultGradeDiffDisplay::HalfGrade),
+                                ResultGradeDiffDisplay::Nearest,
+                                grade_diff_display_label(ResultGradeDiffDisplay::Nearest),
                             );
                         });
                     egui::ComboBox::from_label("レーンエフェクト")
@@ -3367,8 +3367,8 @@ fn target_label(value: TargetOptionConfig) -> String {
 
 fn grade_diff_display_label(value: ResultGradeDiffDisplay) -> &'static str {
     match value {
-        ResultGradeDiffDisplay::Beatoraja => "NEXT",
-        ResultGradeDiffDisplay::HalfGrade => "NEAREST",
+        ResultGradeDiffDisplay::Next => "NEXT",
+        ResultGradeDiffDisplay::Nearest => "NEAREST",
     }
 }
 

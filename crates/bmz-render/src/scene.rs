@@ -9,10 +9,8 @@ use crate::snapshot::{DisplayJudgeCounts, FastSlowJudgeCounts, OverlaySnapshot, 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub enum ResultGradeDiffDisplay {
     #[default]
-    #[serde(rename = "Next", alias = "Beatoraja")]
-    Beatoraja,
-    #[serde(rename = "Nearest", alias = "HalfGrade")]
-    HalfGrade,
+    Nearest,
+    Next,
 }
 
 #[derive(Debug, Clone, PartialEq)]

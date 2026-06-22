@@ -971,10 +971,10 @@ impl ProfileConfig {
                 language: "ja".to_string(),
                 theme: "default".to_string(),
                 show_fps: false,
-                confirm_on_exit: true,
+                confirm_on_exit: false,
             },
             audio_mix: AudioMixConfig {
-                normalize_chart_volume: false,
+                normalize_chart_volume: true,
                 master_volume: 50,
                 key_volume: 50,
                 bgm_volume: 50,
@@ -1128,7 +1128,7 @@ mod tests {
         .unwrap();
 
         assert_eq!(play.target, TargetOptionConfig::None);
-        assert_eq!(play.grade_diff_display, ResultGradeDiffDisplay::Beatoraja);
+        assert_eq!(play.grade_diff_display, ResultGradeDiffDisplay::Nearest);
         assert_eq!(play.rule_mode, RuleMode::Beatoraja);
         assert_eq!(play.ln_mode_policy, LnPolicySetting::AutoLn);
         assert_eq!(play.bga, BgaModeConfig::On);
@@ -1139,7 +1139,7 @@ mod tests {
     }
 
     #[test]
-    fn grade_diff_display_uses_next_nearest_keys_with_legacy_aliases() {
+    fn grade_diff_display_uses_next_nearest_keys() {
         fn parse_grade_diff_display(value: &str) -> ResultGradeDiffDisplay {
             let toml = format!(
                 r#"
@@ -1155,19 +1155,17 @@ mod tests {
             toml::from_str::<PlayDefaultsConfig>(&toml).unwrap().grade_diff_display
         }
 
-        assert_eq!(parse_grade_diff_display("Next"), ResultGradeDiffDisplay::Beatoraja);
-        assert_eq!(parse_grade_diff_display("Nearest"), ResultGradeDiffDisplay::HalfGrade);
-        assert_eq!(parse_grade_diff_display("Beatoraja"), ResultGradeDiffDisplay::Beatoraja);
-        assert_eq!(parse_grade_diff_display("HalfGrade"), ResultGradeDiffDisplay::HalfGrade);
+        assert_eq!(parse_grade_diff_display("Next"), ResultGradeDiffDisplay::Next);
+        assert_eq!(parse_grade_diff_display("Nearest"), ResultGradeDiffDisplay::Nearest);
 
         let mut play = PlayDefaultsConfig {
-            grade_diff_display: ResultGradeDiffDisplay::Beatoraja,
+            grade_diff_display: ResultGradeDiffDisplay::Next,
             ..ProfileConfig::new_default("default", "Default", 0).play
         };
         let serialized = toml::to_string(&play).unwrap();
         assert!(serialized.contains(r#"grade_diff_display = "Next""#));
 
-        play.grade_diff_display = ResultGradeDiffDisplay::HalfGrade;
+        play.grade_diff_display = ResultGradeDiffDisplay::Nearest;
         let serialized = toml::to_string(&play).unwrap();
         assert!(serialized.contains(r#"grade_diff_display = "Nearest""#));
     }
@@ -1272,11 +1270,11 @@ mod tests {
     }
 
     #[test]
-    fn default_profile_uses_quieter_audio_and_prefetches_ir_rankings() {
+    fn default_profile_uses_normalized_quieter_audio_and_prefetches_ir_rankings() {
         let profile = ProfileConfig::new_default("default", "Default", 1);
 
         assert_eq!(profile.audio_mix.master_volume, 50);
-        assert!(!profile.audio_mix.normalize_chart_volume);
+        assert!(profile.audio_mix.normalize_chart_volume);
         assert_eq!(profile.audio_mix.key_volume, 50);
         assert_eq!(profile.audio_mix.bgm_volume, 50);
         assert_eq!(profile.audio_mix.preview_volume, 50);
@@ -1369,10 +1367,10 @@ mod tests {
             language = "ja"
             theme = "default"
             show_fps = false
-            confirm_on_exit = true
+            confirm_on_exit = false
 
             [audio_mix]
-            normalize_chart_volume = false
+            normalize_chart_volume = true
             master_volume = 50
             key_volume = 50
             bgm_volume = 50
