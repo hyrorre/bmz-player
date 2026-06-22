@@ -693,7 +693,7 @@ impl Renderer {
             .with_context(|| format!("failed to read font: {}", path.display()))?;
         let font = FontArc::try_from_vec(bytes)
             .map_err(|error| anyhow!("failed to parse font {}: {error}", path.display()))?;
-        self.fonts.insert(id, font);
+        self.insert_vector_font(id, font);
         if let Some(gpu) = &mut self.gpu {
             gpu.reset_text_atlas();
         }
@@ -706,7 +706,7 @@ impl Renderer {
         path: &std::path::Path,
     ) -> Result<()> {
         let font = load_bitmap_font(path)?;
-        self.bitmap_fonts.insert(id.into(), font);
+        self.insert_bitmap_font_entry(id.into(), font);
         if let Some(gpu) = &mut self.gpu {
             gpu.reset_text_atlas();
         }
@@ -718,7 +718,7 @@ impl Renderer {
     pub fn install_font_bytes(&mut self, id: impl Into<String>, bytes: Vec<u8>) -> Result<()> {
         let font = FontArc::try_from_vec(bytes)
             .map_err(|error| anyhow!("failed to parse font bytes: {error}"))?;
-        self.fonts.insert(id.into(), font);
+        self.insert_vector_font(id.into(), font);
         if let Some(gpu) = &mut self.gpu {
             gpu.reset_text_atlas();
         }
@@ -727,10 +727,20 @@ impl Renderer {
 
     /// 事前にパース済みの bitmap font を登録する。
     pub fn install_bitmap_font(&mut self, id: impl Into<String>, font: BitmapFont) {
-        self.bitmap_fonts.insert(id.into(), font);
+        self.insert_bitmap_font_entry(id.into(), font);
         if let Some(gpu) = &mut self.gpu {
             gpu.reset_text_atlas();
         }
+    }
+
+    fn insert_vector_font(&mut self, id: String, font: FontArc) {
+        self.bitmap_fonts.remove(&id);
+        self.fonts.insert(id, font);
+    }
+
+    fn insert_bitmap_font_entry(&mut self, id: String, font: BitmapFont) {
+        self.fonts.remove(&id);
+        self.bitmap_fonts.insert(id, font);
     }
 
     pub fn set_skin_context(&mut self, skin_context: SkinContext) {
@@ -4304,6 +4314,47 @@ mod tests {
         SurfaceSize { width: 16, height: 9 }
     }
 
+    fn test_bitmap_font() -> BitmapFont {
+        let mut pages = HashMap::new();
+        pages.insert(
+            0,
+            crate::bitmap_font::BitmapFontPage {
+                id: 0,
+                path: std::path::PathBuf::from("page.png"),
+                image: crate::assets::RgbaImageAsset {
+                    width: 1,
+                    height: 1,
+                    pixels: vec![255, 255, 255, 255],
+                },
+            },
+        );
+        let mut glyphs = HashMap::new();
+        glyphs.insert(
+            'A',
+            crate::bitmap_font::BitmapFontGlyph {
+                id: 'A',
+                x: 0,
+                y: 0,
+                width: 1,
+                height: 1,
+                xoffset: 0,
+                yoffset: 0,
+                xadvance: 1,
+                page: 0,
+            },
+        );
+        BitmapFont {
+            size: 10,
+            line_height: 10,
+            base: 8,
+            ascent: 7.0,
+            scale_width: 1,
+            scale_height: 1,
+            pages,
+            glyphs,
+        }
+    }
+
     fn assert_approx(actual: f32, expected: f32) {
         assert!((actual - expected).abs() < 0.0001, "expected {expected}, got {actual}");
     }
@@ -5486,5 +5537,29 @@ mod tests {
 
         assert_eq!(renderer.pending_textures.len(), 1);
         assert_eq!(renderer.pending_textures[0].id, crate::plan::TextureId(9));
+    }
+
+    #[test]
+    fn installing_vector_font_replaces_stale_bitmap_font_with_same_id() {
+        let Some(font) = load_default_font() else { return };
+        let mut renderer = Renderer::default();
+
+        renderer.insert_bitmap_font_entry("play:0".to_string(), test_bitmap_font());
+        renderer.insert_vector_font("play:0".to_string(), font);
+
+        assert!(renderer.fonts.contains_key("play:0"));
+        assert!(!renderer.bitmap_fonts.contains_key("play:0"));
+    }
+
+    #[test]
+    fn installing_bitmap_font_replaces_stale_vector_font_with_same_id() {
+        let Some(font) = load_default_font() else { return };
+        let mut renderer = Renderer::default();
+
+        renderer.insert_vector_font("play:0".to_string(), font);
+        renderer.insert_bitmap_font_entry("play:0".to_string(), test_bitmap_font());
+
+        assert!(renderer.bitmap_fonts.contains_key("play:0"));
+        assert!(!renderer.fonts.contains_key("play:0"));
     }
 }
