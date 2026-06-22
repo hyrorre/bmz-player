@@ -111,6 +111,33 @@ impl SkinKind {
     }
 }
 
+pub fn default_skin_document_path_from_paths(app_paths: &AppPaths, kind: SkinKind) -> PathBuf {
+    let file_name = match kind {
+        SkinKind::Play => "play7.json",
+        SkinKind::Select => "select.json",
+        SkinKind::Decide => "decide.json",
+        SkinKind::Result => "result.json",
+    };
+    default_skin_root_from_paths(app_paths).join(file_name)
+}
+
+pub fn default_play_skin_document_path_from_paths(
+    app_paths: &AppPaths,
+    key_mode: KeyMode,
+) -> PathBuf {
+    let file_name = match key_mode {
+        KeyMode::K4 => "play4.json",
+        KeyMode::K5 => "play5.json",
+        KeyMode::K6 => "play6.json",
+        KeyMode::K7 => "play7.json",
+        KeyMode::K8 => "play8.json",
+        KeyMode::K9 => "play9.json",
+        KeyMode::K10 => "play10.json",
+        KeyMode::K14 => "play14.json",
+    };
+    default_skin_root_from_paths(app_paths).join(file_name)
+}
+
 /// バックグラウンドスレッドでデコード可能な 1 スキンぶんの中間データ。
 /// Renderer に触らず Send-safe な値だけを保持する。
 pub struct DecodedSkin {
@@ -1197,6 +1224,48 @@ mod tests {
     #[test]
     fn default_skin_root_contains_manifest() {
         assert!(default_skin_root().join("skin.toml").is_file());
+    }
+
+    #[test]
+    fn bundled_default_json_skin_documents_decode() {
+        let app_paths = test_app_paths();
+        for (kind, expected_type) in
+            [(SkinKind::Select, 5), (SkinKind::Decide, 6), (SkinKind::Result, 7)]
+        {
+            let path = default_skin_document_path_from_paths(&app_paths, kind);
+            let decoded = decode_beatoraja_skin(&path, kind)
+                .unwrap_or_else(|error| panic!("failed to decode {}: {error:#}", path.display()));
+            assert_eq!(decoded.document.skin_type, expected_type);
+            assert!(!decoded.sources.is_empty(), "{} has no image sources", path.display());
+        }
+
+        for (key_mode, expected_type) in [
+            (KeyMode::K4, 22),
+            (KeyMode::K5, 1),
+            (KeyMode::K6, 23),
+            (KeyMode::K7, 0),
+            (KeyMode::K8, 24),
+            (KeyMode::K9, 4),
+            (KeyMode::K10, 3),
+            (KeyMode::K14, 2),
+        ] {
+            let path = default_play_skin_document_path_from_paths(&app_paths, key_mode);
+            let decoded = decode_beatoraja_skin(&path, SkinKind::Play)
+                .unwrap_or_else(|error| panic!("failed to decode {}: {error:#}", path.display()));
+            assert_eq!(decoded.document.skin_type, expected_type);
+            assert!(decoded.document.note.is_some(), "{} has no note definition", path.display());
+            assert!(
+                decoded.document.note.as_ref().is_some_and(|note| !note.group.is_empty()),
+                "{} has no bar line group",
+                path.display()
+            );
+            assert!(
+                destination_ids(&decoded.document).contains("keybeam_img"),
+                "{} has no keybeam destination",
+                path.display()
+            );
+            assert!(!decoded.sources.is_empty(), "{} has no image sources", path.display());
+        }
     }
 
     fn filepath_def(name: &str, path: &str, def: &str) -> SkinFilepathDef {

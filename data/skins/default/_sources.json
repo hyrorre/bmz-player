@@ -1,0 +1,14 @@
+[
+  { "id": "panel", "path": "combo-panel.png" },
+  { "id": "panel_inactive", "path": "combo-panel-inactive.png" },
+  { "id": "gauge_fill", "path": "gauge-fill.png" },
+  { "id": "gauge_frame", "path": "gauge-frame.png" },
+  { "id": "judge_line", "path": "judge-line.png" },
+  { "id": "note", "path": "note.png" },
+  { "id": "note_blue", "path": "note-blue.png" },
+  { "id": "note_red", "path": "note-red.png" },
+  { "id": "note_mine", "path": "note-mine.png" },
+  { "id": "receptor", "path": "receptor.png" },
+  { "id": "receptor_blue", "path": "receptor-blue.png" },
+  { "id": "receptor_red", "path": "receptor-red.png" }
+]

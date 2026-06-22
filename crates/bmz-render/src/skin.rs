@@ -448,6 +448,28 @@ pub struct SkinTextDef {
     pub ref_id: i32,
     #[serde(default, rename = "constantText", deserialize_with = "deserialize_skin_string")]
     pub constant_text: String,
+    /// BMZ extension: render a numeric skin ref with the text renderer.
+    /// beatoraja-compatible value sprites remain supported; this is used by the bundled
+    /// default JSON skin to avoid shipping a separate digit atlas.
+    #[serde(default, rename = "numberRef")]
+    pub number_ref: Option<i32>,
+    /// BMZ extension: render the latest judgement text for a judge region.
+    /// Region 0 corresponds to the normal 1P judgement area.
+    #[serde(default, rename = "judgeRegion")]
+    pub judge_region: Option<usize>,
+    /// BMZ extension: color `judgeRegion` text by judgement category.
+    #[serde(default, rename = "judgeColor")]
+    pub judge_color: bool,
+    /// BMZ extension: render FAST/SLOW text for a judge region.
+    #[serde(default, rename = "judgeTimingRegion")]
+    pub judge_timing_region: Option<usize>,
+    /// BMZ extension: color `judgeTimingRegion` text by FAST/SLOW side.
+    #[serde(default, rename = "judgeTimingColor")]
+    pub judge_timing_color: bool,
+    #[serde(default)]
+    pub prefix: String,
+    #[serde(default)]
+    pub suffix: String,
     #[serde(default)]
     pub wrapping: bool,
     #[serde(default)]
@@ -2383,6 +2405,16 @@ pub struct SkinTextState<'a> {
     pub play_level: &'a str,
     pub grade_diff: &'a str,
     pub target: &'a str,
+    pub select_arrange: &'a str,
+    pub select_arrange_2p: &'a str,
+    pub select_gauge: &'a str,
+    pub select_gauge_auto_shift: &'a str,
+    pub select_bottom_shiftable_gauge: &'a str,
+    pub select_double_option: &'a str,
+    pub select_hs_fix: &'a str,
+    pub select_assist: &'a str,
+    pub select_bga: &'a str,
+    pub select_judge_timing_auto_adjust: &'a str,
     pub current_folder: &'a str,
     pub bar_text: &'a str,
     pub table_level: &'a str,
@@ -2415,6 +2447,16 @@ impl<'a> Default for SkinTextState<'a> {
             play_level: "",
             grade_diff: "",
             target: "",
+            select_arrange: "",
+            select_arrange_2p: "",
+            select_gauge: "",
+            select_gauge_auto_shift: "",
+            select_bottom_shiftable_gauge: "",
+            select_double_option: "",
+            select_hs_fix: "",
+            select_assist: "",
+            select_bga: "",
+            select_judge_timing_auto_adjust: "",
             current_folder: "",
             bar_text: "",
             table_level: "",
@@ -3442,7 +3484,8 @@ impl SkinDocument {
         }
 
         if let Some(text) = self.text.iter().find(|text| text.id == destination.id)
-            && let Some(item) = self.text_render_item(text, frame, text_state)
+            && let Some(item) =
+                self.text_render_item_with_draw_state(text, frame, Some(state), text_state)
         {
             return Some(vec![item]);
         }
@@ -3577,7 +3620,8 @@ impl SkinDocument {
         }
 
         if let Some(text) = self.text.iter().find(|text| text.id == destination.id)
-            && let Some(item) = self.text_render_item(text, frame, text_state)
+            && let Some(item) =
+                self.text_render_item_with_draw_state(text, frame, Some(state), text_state)
         {
             return Some(vec![item]);
         }
@@ -3706,6 +3750,20 @@ impl SkinDocument {
             },
             play_level: selected_row.map(|row| row.play_level.as_str()).unwrap_or_default(),
             target: if snapshot.in_settings { "" } else { &snapshot.target },
+            select_arrange: &snapshot.arrange,
+            select_arrange_2p: &snapshot.arrange_2p,
+            select_gauge: &snapshot.gauge,
+            select_gauge_auto_shift: &snapshot.gauge_auto_shift,
+            select_bottom_shiftable_gauge: &snapshot.bottom_shiftable_gauge,
+            select_double_option: &snapshot.double_option,
+            select_hs_fix: &snapshot.hs_fix,
+            select_assist: &snapshot.assist,
+            select_bga: &snapshot.bga,
+            select_judge_timing_auto_adjust: if snapshot.judge_timing_auto_adjust {
+                "ON"
+            } else {
+                "OFF"
+            },
             current_folder: &snapshot.current_folder,
             table_level: selected_row
                 .map(|row| {
@@ -5474,13 +5532,24 @@ impl SkinDocument {
         })
     }
 
+    #[cfg(test)]
     fn text_render_item(
         &self,
         text: &SkinTextDef,
         frame: ResolvedSkinFrame,
         state: &SkinTextState<'_>,
     ) -> Option<SkinRenderItem> {
-        let content = skin_state_text(text, state);
+        self.text_render_item_with_draw_state(text, frame, None, state)
+    }
+
+    fn text_render_item_with_draw_state(
+        &self,
+        text: &SkinTextDef,
+        frame: ResolvedSkinFrame,
+        draw_state: Option<&SkinDrawState>,
+        state: &SkinTextState<'_>,
+    ) -> Option<SkinRenderItem> {
+        let content = skin_state_text_with_draw_state(text, draw_state, state);
         let rect = normalize_skin_frame_rect(frame, self.w, self.h);
         // beatoraja は dst.x を align 基準点として扱う（align=1=center なら
         // dst.x がテキストの中央, align=2=right なら dst.x がテキストの右端）。
@@ -5498,12 +5567,26 @@ impl SkinDocument {
         if text.ref_id == 30 {
             alpha *= state.search_word_alpha.clamp(0.0, 1.0);
         }
-        let color = Color::rgba(
+        let mut color = Color::rgba(
             frame.r as f32 / 255.0,
             frame.g as f32 / 255.0,
             frame.b as f32 / 255.0,
             alpha,
         );
+        if text.judge_color
+            && let Some(draw_state) = draw_state
+            && let Some(region) = text.judge_region
+            && let Some(judge_color) = skin_judge_region_color(draw_state, region, alpha)
+        {
+            color = judge_color;
+        }
+        if text.judge_timing_color
+            && let Some(draw_state) = draw_state
+            && let Some(region) = text.judge_timing_region
+            && let Some(judge_color) = skin_judge_timing_color(draw_state, region, alpha)
+        {
+            color = judge_color;
+        }
         let caret = if text.ref_id == 30 {
             state.search_caret_byte_index.map(|byte_index| TextCaret { byte_index, color })
         } else {
@@ -10085,9 +10168,42 @@ pub fn format_rm_skin_course_table_text(
     if primary.is_empty() { format!(" > {secondary}") } else { format!("{primary} > {secondary}") }
 }
 
+#[cfg(test)]
 fn skin_state_text(text: &SkinTextDef, state: &SkinTextState<'_>) -> String {
+    skin_state_text_with_draw_state(text, None, state)
+}
+
+fn skin_state_text_with_draw_state(
+    text: &SkinTextDef,
+    draw_state: Option<&SkinDrawState>,
+    state: &SkinTextState<'_>,
+) -> String {
     if !text.constant_text.is_empty() {
         return text.constant_text.clone();
+    }
+    if let Some(ref_id) = text.number_ref {
+        let Some(value) = draw_state.and_then(|state| skin_state_number(ref_id, state)) else {
+            return String::new();
+        };
+        return format!("{}{}{}", text.prefix, value, text.suffix);
+    }
+    if let Some(region) = text.judge_region {
+        let Some(state) = draw_state else {
+            return String::new();
+        };
+        let Some(value) = skin_judge_region_text(state, region) else {
+            return String::new();
+        };
+        return format!("{}{}{}", text.prefix, value, text.suffix);
+    }
+    if let Some(region) = text.judge_timing_region {
+        let Some(state) = draw_state else {
+            return String::new();
+        };
+        let Some(value) = skin_judge_timing_text(state, region) else {
+            return String::new();
+        };
+        return format!("{}{}{}", text.prefix, value, text.suffix);
     }
     if text.value_expr.trim() == SKIN_EXPR_COURSE_TABLE_TEXT {
         return format_rm_skin_course_table_text(
@@ -10119,6 +10235,24 @@ fn skin_state_text(text: &SkinTextDef, state: &SkinTextState<'_>) -> String {
     }
     if matches!(text.id.as_str(), "grade_diff" | "gradediff" | "dj_level_diff") {
         return state.grade_diff.to_string();
+    }
+    match text.id.as_str() {
+        "bmz_select_arrange" => return state.select_arrange.to_string(),
+        "bmz_select_arrange_2p" => return state.select_arrange_2p.to_string(),
+        "bmz_select_target" => return select_target_name(state.target),
+        "bmz_select_gauge" => return state.select_gauge.to_string(),
+        "bmz_select_gauge_auto_shift" => return state.select_gauge_auto_shift.to_string(),
+        "bmz_select_bottom_shiftable_gauge" => {
+            return state.select_bottom_shiftable_gauge.to_string();
+        }
+        "bmz_select_double_option" => return state.select_double_option.to_string(),
+        "bmz_select_hs_fix" => return state.select_hs_fix.to_string(),
+        "bmz_select_assist" => return state.select_assist.to_string(),
+        "bmz_select_bga" => return state.select_bga.to_string(),
+        "bmz_select_judge_timing_auto_adjust" => {
+            return state.select_judge_timing_auto_adjust.to_string();
+        }
+        _ => {}
     }
     match text.ref_id {
         1 => state.rival.to_string(),
@@ -10699,6 +10833,59 @@ fn current_datetime_number(ref_id: i32) -> Option<i64> {
         26 => Some(date.second as i64),
         _ => None,
     }
+}
+
+fn skin_judge_region_text(state: &SkinDrawState, region: usize) -> Option<String> {
+    if region >= MAX_JUDGE_REGIONS || state.judge_ms[region].is_none() {
+        return None;
+    }
+    judge_index_text(state.judge_index[region]?).map(str::to_string)
+}
+
+fn skin_judge_timing_text(state: &SkinDrawState, region: usize) -> Option<&'static str> {
+    if region >= MAX_JUDGE_REGIONS || state.judge_ms[region].is_none() {
+        return None;
+    }
+    match state.judge_timing_sign[region] {
+        Some(1) => Some("FAST"),
+        Some(-1) => Some("SLOW"),
+        _ => None,
+    }
+}
+
+fn judge_index_text(index: usize) -> Option<&'static str> {
+    Some(match index {
+        0 => "PGREAT",
+        1 => "GREAT",
+        2 => "GOOD",
+        3 => "BAD",
+        4 => "POOR",
+        5 => "EMPTY POOR",
+        _ => return None,
+    })
+}
+
+fn skin_judge_region_color(state: &SkinDrawState, region: usize, alpha: f32) -> Option<Color> {
+    if region >= MAX_JUDGE_REGIONS || state.judge_ms[region].is_none() {
+        return None;
+    }
+    Some(match state.judge_index[region]? {
+        0 => Color::rgba(112.0 / 255.0, 224.0 / 255.0, 1.0, alpha),
+        1 | 2 => Color::rgba(1.0, 224.0 / 255.0, 80.0 / 255.0, alpha),
+        3..=5 => Color::rgba(1.0, 88.0 / 255.0, 82.0 / 255.0, alpha),
+        _ => return None,
+    })
+}
+
+fn skin_judge_timing_color(state: &SkinDrawState, region: usize, alpha: f32) -> Option<Color> {
+    if region >= MAX_JUDGE_REGIONS || state.judge_ms[region].is_none() {
+        return None;
+    }
+    Some(match state.judge_timing_sign[region]? {
+        1 => Color::rgba(72.0 / 255.0, 176.0 / 255.0, 1.0, alpha),
+        -1 => Color::rgba(1.0, 88.0 / 255.0, 82.0 / 255.0, alpha),
+        _ => return None,
+    })
 }
 
 #[cfg(unix)]
@@ -17398,6 +17585,49 @@ mod tests {
     }
 
     #[test]
+    fn select_option_panel_text_uses_snapshot_option_strings() {
+        let document: SkinDocument = serde_json::from_str(
+            r#"
+            {
+                "type": 5,
+                "w": 100,
+                "h": 100,
+                "text": [
+                    { "id": "bmz_select_gauge", "size": 10 },
+                    { "id": "bmz_select_target", "size": 10 },
+                    { "id": "bmz_select_judge_timing_auto_adjust", "size": 10 }
+                ],
+                "destination": [
+                    { "id": "bmz_select_gauge", "op": [23], "dst": [{ "x": 0, "y": 0, "w": 50, "h": 10 }] },
+                    { "id": "bmz_select_target", "op": [23], "dst": [{ "x": 0, "y": 10, "w": 50, "h": 10 }] },
+                    { "id": "bmz_select_judge_timing_auto_adjust", "op": [23], "dst": [{ "x": 0, "y": 20, "w": 50, "h": 10 }] }
+                ]
+            }
+            "#,
+        )
+        .unwrap();
+        let snapshot = SelectSnapshot {
+            option_panel: 3,
+            gauge: "HARD".to_string(),
+            target: "AAA".to_string(),
+            judge_timing_auto_adjust: true,
+            ..SelectSnapshot::default()
+        };
+
+        let items = document.select_render_items(&HashMap::new(), &snapshot);
+
+        assert!(items.iter().any(|item| matches!(item, SkinRenderItem::Text {
+            text, ..
+        } if text == "HARD")));
+        assert!(items.iter().any(|item| matches!(item, SkinRenderItem::Text {
+            text, ..
+        } if text == "RANK AAA")));
+        assert!(items.iter().any(|item| matches!(item, SkinRenderItem::Text {
+            text, ..
+        } if text == "ON")));
+    }
+
+    #[test]
     fn judge_timing_value_digit_counts_numeric_digits_after_sign() {
         let document: SkinDocument = serde_json::from_str(
             r#"
@@ -21985,6 +22215,238 @@ mod tests {
             ),
             "Song Title"
         );
+    }
+
+    #[test]
+    fn skin_state_text_formats_bmz_number_ref_extension() {
+        let text = SkinTextDef {
+            id: "gauge_text".to_string(),
+            number_ref: Some(107),
+            prefix: "GAUGE ".to_string(),
+            suffix: "%".to_string(),
+            ..SkinTextDef::default()
+        };
+        let draw_state = SkinDrawState { gauge: 78.6, ..SkinDrawState::default() };
+
+        assert_eq!(
+            skin_state_text_with_draw_state(&text, Some(&draw_state), &SkinTextState::default()),
+            "GAUGE 78%"
+        );
+        assert_eq!(skin_state_text(&text, &SkinTextState::default()), "");
+    }
+
+    #[test]
+    fn skin_state_text_formats_select_option_fields() {
+        let state = SkinTextState {
+            target: "AAA",
+            select_arrange: "RANDOM",
+            select_arrange_2p: "MIRROR",
+            select_gauge: "HARD",
+            select_gauge_auto_shift: "BEST CLEAR",
+            select_bottom_shiftable_gauge: "NORMAL",
+            select_double_option: "FLIP",
+            select_hs_fix: "MAIN BPM",
+            select_assist: "AUTOPLAY",
+            select_bga: "AUTO",
+            select_judge_timing_auto_adjust: "ON",
+            ..SkinTextState::default()
+        };
+        let make_text = |id: &str| SkinTextDef { id: id.to_string(), ..SkinTextDef::default() };
+
+        assert_eq!(skin_state_text(&make_text("bmz_select_target"), &state), "RANK AAA");
+        assert_eq!(skin_state_text(&make_text("bmz_select_arrange"), &state), "RANDOM");
+        assert_eq!(skin_state_text(&make_text("bmz_select_arrange_2p"), &state), "MIRROR");
+        assert_eq!(skin_state_text(&make_text("bmz_select_gauge"), &state), "HARD");
+        assert_eq!(
+            skin_state_text(&make_text("bmz_select_gauge_auto_shift"), &state),
+            "BEST CLEAR"
+        );
+        assert_eq!(
+            skin_state_text(&make_text("bmz_select_bottom_shiftable_gauge"), &state),
+            "NORMAL"
+        );
+        assert_eq!(skin_state_text(&make_text("bmz_select_double_option"), &state), "FLIP");
+        assert_eq!(skin_state_text(&make_text("bmz_select_hs_fix"), &state), "MAIN BPM");
+        assert_eq!(skin_state_text(&make_text("bmz_select_assist"), &state), "AUTOPLAY");
+        assert_eq!(skin_state_text(&make_text("bmz_select_bga"), &state), "AUTO");
+        assert_eq!(
+            skin_state_text(&make_text("bmz_select_judge_timing_auto_adjust"), &state),
+            "ON"
+        );
+    }
+
+    #[test]
+    fn skin_state_text_formats_bmz_judge_region_extension() {
+        let text = SkinTextDef {
+            id: "judge_text".to_string(),
+            judge_region: Some(0),
+            ..SkinTextDef::default()
+        };
+        let state = SkinDrawState {
+            judge_ms: [Some(120), None, None],
+            judge_index: [Some(0), None, None],
+            judge_timing_sign: [Some(1), None, None],
+            ..SkinDrawState::default()
+        };
+
+        assert_eq!(
+            skin_state_text_with_draw_state(&text, Some(&state), &SkinTextState::default()),
+            "PGREAT"
+        );
+
+        let expired = SkinDrawState {
+            judge_ms: [None, None, None],
+            judge_index: [Some(1), None, None],
+            ..SkinDrawState::default()
+        };
+        assert_eq!(
+            skin_state_text_with_draw_state(&text, Some(&expired), &SkinTextState::default()),
+            ""
+        );
+    }
+
+    #[test]
+    fn skin_state_text_formats_bmz_judge_timing_region_extension() {
+        let text = SkinTextDef {
+            id: "judge_timing".to_string(),
+            judge_timing_region: Some(0),
+            ..SkinTextDef::default()
+        };
+        let fast = SkinDrawState {
+            judge_ms: [Some(120), None, None],
+            judge_timing_sign: [Some(1), None, None],
+            ..SkinDrawState::default()
+        };
+        let slow = SkinDrawState {
+            judge_ms: [Some(120), None, None],
+            judge_timing_sign: [Some(-1), None, None],
+            ..SkinDrawState::default()
+        };
+        let just = SkinDrawState {
+            judge_ms: [Some(120), None, None],
+            judge_timing_sign: [None, None, None],
+            ..SkinDrawState::default()
+        };
+
+        assert_eq!(
+            skin_state_text_with_draw_state(&text, Some(&fast), &SkinTextState::default()),
+            "FAST"
+        );
+        assert_eq!(
+            skin_state_text_with_draw_state(&text, Some(&slow), &SkinTextState::default()),
+            "SLOW"
+        );
+        assert_eq!(
+            skin_state_text_with_draw_state(&text, Some(&just), &SkinTextState::default()),
+            ""
+        );
+    }
+
+    #[test]
+    fn text_render_item_colors_bmz_judge_region_by_category() {
+        let document: SkinDocument =
+            serde_json::from_value(serde_json::json!({ "w": 1920, "h": 1080 })).unwrap();
+        let text = SkinTextDef {
+            id: "judge".to_string(),
+            judge_region: Some(0),
+            judge_color: true,
+            ..SkinTextDef::default()
+        };
+        let frame = ResolvedSkinFrame {
+            w: 100,
+            h: 24,
+            a: 128,
+            r: 255,
+            g: 255,
+            b: 255,
+            ..ResolvedSkinFrame::default()
+        };
+        let color_for = |index| {
+            let draw_state = SkinDrawState {
+                judge_ms: [Some(100), None, None],
+                judge_index: [Some(index), None, None],
+                ..SkinDrawState::default()
+            };
+            match document
+                .text_render_item_with_draw_state(
+                    &text,
+                    frame,
+                    Some(&draw_state),
+                    &SkinTextState::default(),
+                )
+                .unwrap()
+            {
+                SkinRenderItem::Text { style, .. } => style.color,
+                other => panic!("expected SkinRenderItem::Text, got {other:?}"),
+            }
+        };
+
+        let pgreat = color_for(0);
+        assert!(approx_eq(pgreat.r, 112.0 / 255.0));
+        assert!(approx_eq(pgreat.g, 224.0 / 255.0));
+        assert!(approx_eq(pgreat.b, 1.0));
+        assert!(approx_eq(pgreat.a, 128.0 / 255.0));
+
+        let good = color_for(2);
+        assert!(approx_eq(good.r, 1.0));
+        assert!(approx_eq(good.g, 224.0 / 255.0));
+        assert!(approx_eq(good.b, 80.0 / 255.0));
+
+        let poor = color_for(4);
+        assert!(approx_eq(poor.r, 1.0));
+        assert!(approx_eq(poor.g, 88.0 / 255.0));
+        assert!(approx_eq(poor.b, 82.0 / 255.0));
+    }
+
+    #[test]
+    fn text_render_item_colors_bmz_judge_timing_region_by_side() {
+        let document: SkinDocument =
+            serde_json::from_value(serde_json::json!({ "w": 1920, "h": 1080 })).unwrap();
+        let text = SkinTextDef {
+            id: "judge_timing".to_string(),
+            judge_timing_region: Some(0),
+            judge_timing_color: true,
+            ..SkinTextDef::default()
+        };
+        let frame = ResolvedSkinFrame {
+            w: 100,
+            h: 24,
+            a: 128,
+            r: 255,
+            g: 255,
+            b: 255,
+            ..ResolvedSkinFrame::default()
+        };
+        let color_for = |sign| {
+            let draw_state = SkinDrawState {
+                judge_ms: [Some(100), None, None],
+                judge_timing_sign: [Some(sign), None, None],
+                ..SkinDrawState::default()
+            };
+            match document
+                .text_render_item_with_draw_state(
+                    &text,
+                    frame,
+                    Some(&draw_state),
+                    &SkinTextState::default(),
+                )
+                .unwrap()
+            {
+                SkinRenderItem::Text { style, .. } => style.color,
+                other => panic!("expected SkinRenderItem::Text, got {other:?}"),
+            }
+        };
+
+        let fast = color_for(1);
+        assert!(approx_eq(fast.r, 72.0 / 255.0));
+        assert!(approx_eq(fast.g, 176.0 / 255.0));
+        assert!(approx_eq(fast.b, 1.0));
+        assert!(approx_eq(fast.a, 128.0 / 255.0));
+
+        let slow = color_for(-1);
+        assert!(approx_eq(slow.r, 1.0));
+        assert!(approx_eq(slow.g, 88.0 / 255.0));
+        assert!(approx_eq(slow.b, 82.0 / 255.0));
     }
 
     #[test]

@@ -109,7 +109,8 @@ use crate::screens::settings_model::{
 use crate::select_options::{ArrangeOption, AssistOption, DoubleOption, HsFixOption, TargetOption};
 use crate::skin_loader::{
     DecodedSkin, PreparedSource, SkinKind, UploadedSkin, apply_skin_from_config,
-    decode_beatoraja_skin_with_options, install_decoded_font, install_decoded_skin,
+    decode_beatoraja_skin_with_options, default_play_skin_document_path_from_paths,
+    default_skin_document_path_from_paths, install_decoded_font, install_decoded_skin,
     is_decodable_skin_path, load_default_skin_into_renderer_from_paths, play_skin_selection_for,
     set_decoded_skin_context, upload_decoded_skin,
 };
@@ -1917,7 +1918,11 @@ impl WinitApp {
                 match self.boot.library_db.latest_course_score_id(course_id) {
                     Ok(Some(course_score_id)) => {
                         tracing::info!(course_id, course_score_id, "booting into course replay");
-                        self.start_course_replay(course_id, course_score_id);
+                        self.start_course_replay_with_auto_advance(
+                            course_id,
+                            course_score_id,
+                            true,
+                        );
                     }
                     Ok(None) => {
                         tracing::warn!(
@@ -1936,7 +1941,7 @@ impl WinitApp {
             }
             DeferredBoot::Course { course_id } => {
                 tracing::info!(course_id, "booting into fresh course");
-                self.start_course(course_id);
+                self.start_course_with_arrange(course_id, Vec::new(), true);
             }
         }
     }
@@ -5346,7 +5351,7 @@ impl WinitApp {
     }
 
     fn start_course(&mut self, course_id: i64) {
-        self.start_course_with_arrange(course_id, Vec::new());
+        self.start_course_with_arrange(course_id, Vec::new(), false);
     }
 
     /// Start a course in PLAY mode.  When `arrange_overrides` is non-empty, the
@@ -5358,6 +5363,7 @@ impl WinitApp {
         &mut self,
         course_id: i64,
         arrange_overrides: Vec<AppliedArrange>,
+        auto_advance_intermediate_results: bool,
     ) {
         let stored = match self.boot.library_db.list_courses() {
             Ok(courses) => courses.into_iter().find(|c| c.id == course_id),
@@ -5410,6 +5416,7 @@ impl WinitApp {
             entry_results: Vec::new(),
             queued_replays: Vec::new(),
             arrange_overrides,
+            auto_advance_intermediate_results,
         });
         self.begin_course_decide_for_chart(first_chart_id, options, &course_title);
     }
@@ -5427,6 +5434,15 @@ impl WinitApp {
     /// Errors during replay load (missing file, chart re-imported with
     /// different bytes) abort with a logged warning rather than crashing.
     pub fn start_course_replay(&mut self, course_id: i64, course_score_id: i64) {
+        self.start_course_replay_with_auto_advance(course_id, course_score_id, false);
+    }
+
+    fn start_course_replay_with_auto_advance(
+        &mut self,
+        course_id: i64,
+        course_score_id: i64,
+        auto_advance_intermediate_results: bool,
+    ) {
         let stored = match self.boot.library_db.list_courses() {
             Ok(courses) => courses.into_iter().find(|c| c.id == course_id),
             Err(error) => {
@@ -5512,6 +5528,7 @@ impl WinitApp {
             entry_results: Vec::new(),
             queued_replays: queued,
             arrange_overrides: Vec::new(),
+            auto_advance_intermediate_results,
         });
         self.begin_course_decide_for_chart(first_chart_id, options, &course_title);
     }
@@ -5524,6 +5541,10 @@ impl WinitApp {
             self.finished_course.is_some(),
             self.finished_play.is_some(),
         )
+    }
+
+    fn course_intermediate_auto_advance_enabled(&self) -> bool {
+        self.active_course.as_ref().is_some_and(|course| course.auto_advance_intermediate_results)
     }
 
     /// コース曲間の中間リザルト画面を表示する。直前に終わった曲の結果を
@@ -7092,7 +7113,7 @@ impl WinitApp {
         self.result_exit = None;
         self.result_key5_held = false;
         self.result_key7_held = false;
-        self.start_course_with_arrange(course_id, arrange_overrides);
+        self.start_course_with_arrange(course_id, arrange_overrides, false);
     }
 
     fn result_retry_same_arrange_options(&self) -> PlayStartOptions {
@@ -7576,7 +7597,8 @@ impl WinitApp {
     fn advance_result_exit(&mut self) {
         if self.finished_play.is_some()
             && self.result_exit.is_none()
-            && self.result_scene_started_at.elapsed() >= self.result_scene_duration()
+            && let Some(auto_exit_duration) = self.result_auto_exit_duration()
+            && self.result_scene_started_at.elapsed() >= auto_exit_duration
         {
             // 中間リザルトは scene 時間経過で次の曲へ、それ以外は選曲へ戻る。
             let action = if self.is_course_intermediate_result() {
@@ -7720,8 +7742,12 @@ impl WinitApp {
         result_input_duration_for_document(self.renderer.result_skin_document())
     }
 
-    fn result_scene_duration(&self) -> Duration {
-        result_scene_duration_for_document(self.renderer.result_skin_document())
+    fn result_auto_exit_duration(&self) -> Option<Duration> {
+        result_auto_exit_duration_for_document(
+            self.renderer.result_skin_document(),
+            self.is_course_intermediate_result(),
+            self.course_intermediate_auto_advance_enabled(),
+        )
     }
 
     fn reload_select_items(&mut self) {
@@ -8153,23 +8179,28 @@ impl WinitApp {
         self.pending_result_skin = false;
         let generation = self.skin_reload_generations.bump(SkinKind::Result);
 
-        if trimmed.is_empty() {
-            self.set_empty_result_skin_context();
-            tracing::debug!(?slot, "result skin path empty; using fallback result drawing");
-            return;
-        }
-        let path = match self.boot.app_paths.resolve_path_ref(&trimmed) {
-            Ok(path) => path,
-            Err(error) => {
-                self.set_empty_result_skin_context();
-                tracing::warn!(
-                    ?slot,
-                    path = %trimmed,
-                    error = %format_error_chain(&error),
-                    "failed to resolve result skin path; using fallback result drawing"
-                );
-                return;
-            }
+        let (path, path_label, options, files) = if trimmed.is_empty() {
+            (
+                default_skin_document_path_from_paths(&self.boot.app_paths, SkinKind::Result),
+                "default result skin".to_string(),
+                BTreeMap::new(),
+                BTreeMap::new(),
+            )
+        } else {
+            let path = match self.boot.app_paths.resolve_path_ref(&trimmed) {
+                Ok(path) => path,
+                Err(error) => {
+                    self.set_empty_result_skin_context();
+                    tracing::warn!(
+                        ?slot,
+                        path = %trimmed,
+                        error = %format_error_chain(&error),
+                        "failed to resolve result skin path; using fallback result drawing"
+                    );
+                    return;
+                }
+            };
+            (path, trimmed.clone(), options, files)
         };
         if !is_decodable_skin_path(&path) {
             self.set_empty_result_skin_context();
@@ -8190,7 +8221,7 @@ impl WinitApp {
             files,
         );
         self.pending_result_skin = true;
-        tracing::info!(?slot, path = trimmed, generation, "result skin decode queued");
+        tracing::info!(?slot, path = %path_label, generation, "result skin decode queued");
     }
 
     fn set_empty_result_skin_context(&mut self) {
@@ -9151,21 +9182,27 @@ impl WinitApp {
         self.pending_play_skin = false;
         let generation = self.skin_reload_generations.bump(SkinKind::Play);
 
-        if trimmed.is_empty() {
-            tracing::debug!(?key_mode, "play skin path empty; using default skin only");
-            return;
-        }
-        let path = match self.boot.app_paths.resolve_path_ref(trimmed) {
-            Ok(path) => path,
-            Err(error) => {
-                tracing::warn!(
-                    ?key_mode,
-                    path = trimmed,
-                    error = %format_error_chain(&error),
-                    "failed to resolve play skin path; using existing textures"
-                );
-                return;
-            }
+        let (path, path_label, options, files) = if trimmed.is_empty() {
+            (
+                default_play_skin_document_path_from_paths(&self.boot.app_paths, key_mode),
+                format!("default play skin for {key_mode:?}"),
+                BTreeMap::new(),
+                BTreeMap::new(),
+            )
+        } else {
+            let path = match self.boot.app_paths.resolve_path_ref(trimmed) {
+                Ok(path) => path,
+                Err(error) => {
+                    tracing::warn!(
+                        ?key_mode,
+                        path = trimmed,
+                        error = %format_error_chain(&error),
+                        "failed to resolve play skin path; using existing textures"
+                    );
+                    return;
+                }
+            };
+            (path, trimmed.to_string(), selection.options.clone(), selection.files.clone())
         };
         if !is_decodable_skin_path(&path) {
             // TOML directory スキンは同期ロード。デフォルトスキンを下敷きに renderer 直差し替え。
@@ -9187,11 +9224,11 @@ impl WinitApp {
             generation,
             path,
             SkinKind::Play,
-            selection.options.clone(),
-            selection.files.clone(),
+            options,
+            files,
         );
         self.pending_play_skin = true;
-        tracing::info!(?key_mode, path = trimmed, generation, "play skin decode queued");
+        tracing::info!(?key_mode, path = %path_label, generation, "play skin decode queued");
     }
 
     fn invalidate_skin_defs_cache_for_request(&mut self, request: SkinReloadRequest) {
@@ -9882,16 +9919,20 @@ fn load_initial_skin_textures(
     let decide_trimmed = decide_skin_path.trim().to_string();
     let result_trimmed = result_skin_path.trim().to_string();
 
-    if !decide_trimmed.is_empty() {
-        let decide_path = match app_paths.resolve_path_ref(&decide_trimmed) {
-            Ok(path) => path,
-            Err(error) => {
-                tracing::warn!(
-                    path = %decide_trimmed,
-                    error = %format_error_chain(&error),
-                    "failed to resolve decide skin path; ignoring"
-                );
-                PathBuf::new()
+    {
+        let decide_path = if decide_trimmed.is_empty() {
+            default_skin_document_path_from_paths(app_paths, SkinKind::Decide)
+        } else {
+            match app_paths.resolve_path_ref(&decide_trimmed) {
+                Ok(path) => path,
+                Err(error) => {
+                    tracing::warn!(
+                        path = %decide_trimmed,
+                        error = %format_error_chain(&error),
+                        "failed to resolve decide skin path; ignoring"
+                    );
+                    PathBuf::new()
+                }
             }
         };
         if !decide_path.as_os_str().is_empty() && is_decodable_skin_path(&decide_path) {
@@ -9900,22 +9941,26 @@ fn load_initial_skin_textures(
                 generation,
                 decide_path,
                 SkinKind::Decide,
-                decide_options.clone(),
-                decide_files.clone(),
+                if decide_trimmed.is_empty() { BTreeMap::new() } else { decide_options.clone() },
+                if decide_trimmed.is_empty() { BTreeMap::new() } else { decide_files.clone() },
             );
             pending_decide = true;
         }
     }
-    if !result_trimmed.is_empty() {
-        let result_path = match app_paths.resolve_path_ref(&result_trimmed) {
-            Ok(path) => path,
-            Err(error) => {
-                tracing::warn!(
-                    path = %result_trimmed,
-                    error = %format_error_chain(&error),
-                    "failed to resolve result skin path; ignoring"
-                );
-                PathBuf::new()
+    {
+        let result_path = if result_trimmed.is_empty() {
+            default_skin_document_path_from_paths(app_paths, SkinKind::Result)
+        } else {
+            match app_paths.resolve_path_ref(&result_trimmed) {
+                Ok(path) => path,
+                Err(error) => {
+                    tracing::warn!(
+                        path = %result_trimmed,
+                        error = %format_error_chain(&error),
+                        "failed to resolve result skin path; ignoring"
+                    );
+                    PathBuf::new()
+                }
             }
         };
         if !result_path.as_os_str().is_empty() && is_decodable_skin_path(&result_path) {
@@ -9924,8 +9969,8 @@ fn load_initial_skin_textures(
                 generation,
                 result_path,
                 SkinKind::Result,
-                result_options.clone(),
-                result_files.clone(),
+                if result_trimmed.is_empty() { BTreeMap::new() } else { result_options.clone() },
+                if result_trimmed.is_empty() { BTreeMap::new() } else { result_files.clone() },
             );
             pending_result = true;
         }
@@ -9944,16 +9989,27 @@ fn load_initial_skin_textures(
 
     // Select skin (クリティカルパス: 起動直後に表示される)
     let select_trimmed = select_skin_path.trim();
-    if !select_trimmed.is_empty() {
-        match app_paths.resolve_path_ref(select_trimmed) {
+    {
+        let select_path = if select_trimmed.is_empty() {
+            Ok(default_skin_document_path_from_paths(app_paths, SkinKind::Select))
+        } else {
+            app_paths.resolve_path_ref(select_trimmed)
+        };
+        let empty_options = BTreeMap::new();
+        let empty_files = BTreeMap::new();
+        let active_select_options =
+            if select_trimmed.is_empty() { &empty_options } else { select_options };
+        let active_select_files =
+            if select_trimmed.is_empty() { &empty_files } else { select_files };
+        match select_path {
             Ok(path) if is_decodable_skin_path(&path) => {
                 let video_sources = apply_json_skin_sync(
                     renderer,
                     &path,
                     SkinKind::Select,
                     default_manifest.as_ref(),
-                    select_options,
-                    select_files,
+                    active_select_options,
+                    active_select_files,
                 );
                 if !video_sources.is_empty() {
                     skin_video_sources.insert(SkinKind::Select, video_sources);
@@ -10033,19 +10089,20 @@ fn reload_skin_textures(
         }
         let generation = generations.bump(kind);
         let trimmed = path_text.trim();
-        if trimmed.is_empty() {
-            continue;
-        }
-        let path = match app_paths.resolve_path_ref(trimmed) {
-            Ok(path) => path,
-            Err(error) => {
-                tracing::warn!(
-                    path = %trimmed,
-                    kind = ?kind,
-                    error = %format_error_chain(&error),
-                    "failed to resolve skin path; ignoring"
-                );
-                continue;
+        let path = if trimmed.is_empty() {
+            default_skin_document_path_from_paths(app_paths, kind)
+        } else {
+            match app_paths.resolve_path_ref(trimmed) {
+                Ok(path) => path,
+                Err(error) => {
+                    tracing::warn!(
+                        path = %trimmed,
+                        kind = ?kind,
+                        error = %format_error_chain(&error),
+                        "failed to resolve skin path; ignoring"
+                    );
+                    continue;
+                }
             }
         };
         if is_decodable_skin_path(&path) {
@@ -10054,8 +10111,8 @@ fn reload_skin_textures(
                 generation,
                 path.clone(),
                 kind,
-                options.clone(),
-                files.clone(),
+                if trimmed.is_empty() { BTreeMap::new() } else { options.clone() },
+                if trimmed.is_empty() { BTreeMap::new() } else { files.clone() },
             );
             match kind {
                 SkinKind::Select => pending_select = true,
@@ -13311,10 +13368,34 @@ fn result_input_duration_for_document(document: Option<&SkinDocument>) -> Durati
     document.map(|document| skin_duration_ms(document.input)).unwrap_or_default()
 }
 
+#[cfg(test)]
 fn result_scene_duration_for_document(document: Option<&SkinDocument>) -> Duration {
     document
         .map(|document| skin_duration_ms(document.scene))
         .unwrap_or(FALLBACK_RESULT_SCENE_DURATION)
+}
+
+fn result_auto_exit_duration_for_document(
+    document: Option<&SkinDocument>,
+    is_course_intermediate: bool,
+    course_intermediate_auto_advance: bool,
+) -> Option<Duration> {
+    if is_course_intermediate {
+        if !course_intermediate_auto_advance {
+            return None;
+        }
+        return Some(
+            document
+                .and_then(|document| (document.scene > 0).then(|| skin_duration_ms(document.scene)))
+                .unwrap_or(FALLBACK_RESULT_SCENE_DURATION),
+        );
+    }
+
+    match document {
+        Some(document) if document.scene > 0 => Some(skin_duration_ms(document.scene)),
+        Some(_) => None,
+        None => Some(FALLBACK_RESULT_SCENE_DURATION),
+    }
 }
 
 fn decide_fadeout_scene_elapsed(
@@ -14528,6 +14609,43 @@ mod tests {
         assert_eq!(
             result_scene_duration_for_document(Some(&document)),
             Duration::from_millis(2345)
+        );
+    }
+
+    #[test]
+    fn normal_result_scene_zero_disables_auto_leave() {
+        let document: SkinDocument =
+            serde_json::from_str(r#"{ "type": 7, "input": 1500, "scene": 0 }"#).unwrap();
+
+        assert_eq!(result_auto_exit_duration_for_document(Some(&document), false, false), None);
+    }
+
+    #[test]
+    fn result_auto_exit_uses_scene_when_positive() {
+        let document: SkinDocument =
+            serde_json::from_str(r#"{ "type": 7, "scene": 2345 }"#).unwrap();
+
+        assert_eq!(
+            result_auto_exit_duration_for_document(Some(&document), false, false),
+            Some(Duration::from_millis(2345))
+        );
+    }
+
+    #[test]
+    fn course_intermediate_result_waits_for_input_without_auto_advance() {
+        let document: SkinDocument =
+            serde_json::from_str(r#"{ "type": 7, "scene": 2345 }"#).unwrap();
+
+        assert_eq!(result_auto_exit_duration_for_document(Some(&document), true, false), None);
+    }
+
+    #[test]
+    fn boot_course_intermediate_result_falls_back_when_scene_is_zero() {
+        let document: SkinDocument = serde_json::from_str(r#"{ "type": 7, "scene": 0 }"#).unwrap();
+
+        assert_eq!(
+            result_auto_exit_duration_for_document(Some(&document), true, true),
+            Some(FALLBACK_RESULT_SCENE_DURATION)
         );
     }
 

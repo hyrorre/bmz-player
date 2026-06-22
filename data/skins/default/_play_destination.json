@@ -1,0 +1,5 @@
+[
+  { "include": "_play_destination_before_notes.json" },
+  { "id": "notes" },
+  { "include": "_play_destination_after_notes.json" }
+]

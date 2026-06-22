@@ -1,0 +1,19 @@
+{
+  "type": 3,
+  "name": "BMZ Default Play 10K",
+  "author": "BMZ Player",
+  "w": 1280,
+  "h": 720,
+  "source": { "include": "_sources.json" },
+  "image": { "include": "_images.json" },
+  "text": { "include": "_play_text.json" },
+  "bga": { "id": "bga" },
+  "gauges": [{ "id": "play_gauge", "nodes": ["gauge_fill_img"], "parts": 50, "type": 2, "range": 0 }],
+  "note": { "include": "_play10_note.json" },
+  "destination": [
+    { "include": "_play_destination_before_notes.json" },
+    { "include": "_play10_keybeam_destination.json" },
+    { "id": "notes" },
+    { "include": "_play_destination_after_notes.json" }
+  ]
+}

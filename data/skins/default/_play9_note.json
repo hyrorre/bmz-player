@@ -1,0 +1,25 @@
+{
+  "note": ["note_img", "note_blue_img", "note_img", "note_blue_img", "note_img", "note_blue_img", "note_img", "note_blue_img", "note_img"],
+  "lnstart": ["note_img", "note_blue_img", "note_img", "note_blue_img", "note_img", "note_blue_img", "note_img", "note_blue_img", "note_img"],
+  "lnend": ["note_img", "note_blue_img", "note_img", "note_blue_img", "note_img", "note_blue_img", "note_img", "note_blue_img", "note_img"],
+  "lnbody": ["gauge_fill_img", "gauge_fill_img", "gauge_fill_img", "gauge_fill_img", "gauge_fill_img", "gauge_fill_img", "gauge_fill_img", "gauge_fill_img", "gauge_fill_img"],
+  "mine": ["note_mine_img", "note_mine_img", "note_mine_img", "note_mine_img", "note_mine_img", "note_mine_img", "note_mine_img", "note_mine_img", "note_mine_img"],
+  "size": [12, 12, 12, 12, 12, 12, 12, 12, 12],
+  "dst": [
+    { "x": 286, "y": 56, "w": 48, "h": 580 },
+    { "x": 338, "y": 56, "w": 48, "h": 580 },
+    { "x": 390, "y": 56, "w": 48, "h": 580 },
+    { "x": 442, "y": 56, "w": 48, "h": 580 },
+    { "x": 494, "y": 56, "w": 48, "h": 580 },
+    { "x": 546, "y": 56, "w": 48, "h": 580 },
+    { "x": 598, "y": 56, "w": 48, "h": 580 },
+    { "x": 650, "y": 56, "w": 48, "h": 580 },
+    { "x": 702, "y": 56, "w": 48, "h": 580 }
+  ],
+  "group": [
+    {
+      "id": "judge_line_img",
+      "dst": [{ "x": 286, "y": 56, "w": 464, "h": 4, "a": 190, "r": 210, "g": 224, "b": 226 }]
+    }
+  ]
+}

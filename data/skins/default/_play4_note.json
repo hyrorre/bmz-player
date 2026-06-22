@@ -1,0 +1,20 @@
+{
+  "note": ["note_img", "note_blue_img", "note_img", "note_blue_img"],
+  "lnstart": ["note_img", "note_blue_img", "note_img", "note_blue_img"],
+  "lnend": ["note_img", "note_blue_img", "note_img", "note_blue_img"],
+  "lnbody": ["gauge_fill_img", "gauge_fill_img", "gauge_fill_img", "gauge_fill_img"],
+  "mine": ["note_mine_img", "note_mine_img", "note_mine_img", "note_mine_img"],
+  "size": [12, 12, 12, 12],
+  "dst": [
+    { "x": 420, "y": 56, "w": 76, "h": 580 },
+    { "x": 500, "y": 56, "w": 76, "h": 580 },
+    { "x": 580, "y": 56, "w": 76, "h": 580 },
+    { "x": 660, "y": 56, "w": 76, "h": 580 }
+  ],
+  "group": [
+    {
+      "id": "judge_line_img",
+      "dst": [{ "x": 420, "y": 56, "w": 316, "h": 4, "a": 190, "r": 210, "g": 224, "b": 226 }]
+    }
+  ]
+}
