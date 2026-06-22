@@ -282,6 +282,8 @@ pub struct EguiOutput {
     pub debug_panel_visible: bool,
     /// 有効な曲ルートをライブラリ DB へ再スキャンする要求。
     pub trigger_song_rescan: bool,
+    /// 難易度表の取得要求。空なら取得しない。
+    pub table_fetch_urls: Vec<String>,
     pub score_import_request: Option<ScoreImportRequest>,
     /// 現在の設定で音声出力(cpal ストリーム)を開き直す要求。
     pub apply_audio_output: bool,
@@ -689,6 +691,7 @@ impl EguiLayer {
         let mut reset_skin_config = false;
         let mut skin_reload_request = SkinReloadRequest::default();
         let mut trigger_song_rescan = false;
+        let mut table_fetch_urls = Vec::new();
         let mut score_import_request = None;
         let mut apply_audio_output = false;
         let mut practice_start = false;
@@ -745,6 +748,7 @@ impl EguiLayer {
                 );
                 save_app_config |= settings_actions.save;
                 trigger_song_rescan |= settings_actions.rescan;
+                table_fetch_urls.extend(settings_actions.table_fetch_urls);
                 apply_audio_output |= settings_actions.apply_audio;
                 score_import_request = settings_actions.score_import_request;
                 let profile_settings_actions = build_profile_settings_panel(
@@ -786,6 +790,7 @@ impl EguiLayer {
             skin_reload_request,
             debug_panel_visible: *show_debug,
             trigger_song_rescan,
+            table_fetch_urls,
             score_import_request,
             apply_audio_output,
             practice_start,
@@ -1325,6 +1330,7 @@ fn build_debug_panel(ctx: &egui::Context, open: &mut bool, info: &DebugInfo) {
 struct SettingsPanelActions {
     save: bool,
     rescan: bool,
+    table_fetch_urls: Vec<String>,
     score_import_request: Option<ScoreImportRequest>,
     /// 音声出力(cpal ストリーム)を現在の設定で開き直す要求。
     apply_audio: bool,
@@ -1363,6 +1369,7 @@ struct SettingsDragPayload {
 }
 
 const SETTINGS_LIST_BUTTONS_WIDTH: f32 = 176.0;
+const SETTINGS_TABLE_LIST_BUTTONS_WIDTH: f32 = 224.0;
 const SETTINGS_LIST_DRAG_HANDLE_WIDTH: f32 = 28.0;
 const SETTINGS_LIST_MIN_LABEL_WIDTH: f32 = 96.0;
 
@@ -1449,6 +1456,7 @@ fn build_settings_panel(
 ) -> SettingsPanelActions {
     let mut save_clicked = false;
     let mut rescan_clicked = false;
+    let mut table_fetch_urls = Vec::new();
     let mut score_import_request = None;
     let mut apply_audio = false;
     sized_panel_window("本体設定", ctx, open, 440.0, 520.0, egui::pos2(16.0, 320.0)).show(
@@ -1625,7 +1633,8 @@ fn build_settings_panel(
                     let table_len = config.tables.sources.len();
                     for (index, source) in config.tables.sources.iter_mut().enumerate() {
                         ui.push_id(("table_source", index), |ui| {
-                            let label_width = (settings_list_label_width(ui)
+                            let label_width = (ui.available_width()
+                                - SETTINGS_TABLE_LIST_BUTTONS_WIDTH
                                 - ui.spacing().interact_size.x
                                 - SETTINGS_LIST_DRAG_HANDLE_WIDTH)
                                 .max(64.0);
@@ -1646,6 +1655,9 @@ fn build_settings_panel(
                                                 if ui.button("削除").clicked() {
                                                     table_action =
                                                         Some(SettingsListAction::Remove(index));
+                                                }
+                                                if ui.button("取得").clicked() {
+                                                    table_fetch_urls.push(source.url.clone());
                                                 }
                                                 if ui
                                                     .add_enabled(
@@ -1702,6 +1714,22 @@ fn build_settings_panel(
                     if config.tables.sources.is_empty() {
                         ui.label("登録された難易度表はありません。");
                     }
+                    let enabled_table_urls: Vec<String> = config
+                        .tables
+                        .sources
+                        .iter()
+                        .filter(|source| source.enabled)
+                        .map(|source| source.url.clone())
+                        .collect();
+                    if ui
+                        .add_enabled(
+                            !enabled_table_urls.is_empty(),
+                            egui::Button::new("有効な表を全件取得"),
+                        )
+                        .clicked()
+                    {
+                        table_fetch_urls.extend(enabled_table_urls);
+                    }
                     ui.horizontal(|ui| {
                         ui.label("URL");
                         ui.add(
@@ -1711,11 +1739,14 @@ fn build_settings_panel(
                         );
                     });
                     if ui.button("追加").clicked() {
+                        let url = state.new_table_url.trim().to_string();
                         match add_difficulty_table_source(
                             &mut config.tables.sources,
-                            state.new_table_url.trim(),
+                            &url,
                         ) {
                             Ok(()) => {
+                                table_fetch_urls.push(url);
+                                save_clicked = true;
                                 state.new_table_url.clear();
                                 state.add_table_error.clear();
                             }
@@ -1725,7 +1756,7 @@ fn build_settings_panel(
                     if !state.add_table_error.is_empty() {
                         ui.colored_label(egui::Color32::RED, state.add_table_error.as_str());
                     }
-                    ui.label("取得は保存後に table fetch または F5 の文脈 reload で実行します。");
+                    ui.label("追加した表は自動で取得します。手動取得は各行または全件取得を使います。");
                 });
 
                 build_score_import_section(
@@ -2131,6 +2162,7 @@ fn build_settings_panel(
     SettingsPanelActions {
         save: save_clicked || apply_audio,
         rescan: rescan_clicked,
+        table_fetch_urls,
         score_import_request,
         apply_audio,
     }

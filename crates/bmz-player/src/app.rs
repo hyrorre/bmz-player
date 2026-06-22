@@ -7880,13 +7880,20 @@ impl WinitApp {
     }
 
     fn spawn_table_fetch(&mut self, url: String) {
+        self.spawn_table_fetches(vec![url], "table fetch".to_string());
+    }
+
+    fn spawn_table_fetches(&mut self, urls: Vec<String>, label: String) {
+        if urls.is_empty() {
+            return;
+        }
         if self.pending_table_fetch.is_some() {
-            tracing::debug!(%url, "table fetch already in progress");
+            tracing::debug!(count = urls.len(), %label, "table fetch already in progress");
             return;
         }
         let library_db_path = self.boot.app_paths.library_db.clone();
         let (tx, rx) = mpsc::channel();
-        let fetch_url = url.clone();
+        let fetch_urls = urls.clone();
         thread::Builder::new()
             .name("table-fetch".to_string())
             .spawn(move || {
@@ -7895,13 +7902,29 @@ impl WinitApp {
                     let mut library_db = LibraryDatabase::open(&library_db_path)?;
                     let rt =
                         tokio::runtime::Runtime::new().context("failed to create tokio runtime")?;
-                    rt.block_on(crate::table_cmd::fetch_table_url(&fetch_url, &mut library_db))
+                    let mut failures = Vec::new();
+                    for url in &fetch_urls {
+                        if let Err(error) =
+                            rt.block_on(crate::table_cmd::fetch_table_url(url, &mut library_db))
+                        {
+                            failures.push(format!("{url}: {error:#}"));
+                        }
+                    }
+                    if !failures.is_empty() {
+                        anyhow::bail!(
+                            "{} of {} table fetches failed: {}",
+                            failures.len(),
+                            fetch_urls.len(),
+                            failures.join("; ")
+                        );
+                    }
+                    Ok(())
                 })();
                 let _ = tx.send(result);
             })
             .expect("failed to spawn table fetch thread");
         self.pending_table_fetch = Some(rx);
-        tracing::info!(%url, "started table fetch");
+        tracing::info!(count = urls.len(), %label, "started table fetch");
     }
 
     fn poll_pending_table_fetch(&mut self) {
@@ -8874,6 +8897,9 @@ impl WinitApp {
         }
         if output.apply_audio_output {
             self.reopen_audio_output();
+        }
+        if !output.table_fetch_urls.is_empty() {
+            self.spawn_table_fetches(output.table_fetch_urls, "egui table fetch".to_string());
         }
         if output.trigger_song_rescan {
             self.load_songs_and_reload();
