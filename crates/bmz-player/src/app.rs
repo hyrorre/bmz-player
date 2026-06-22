@@ -124,7 +124,7 @@ use crate::storage::score_db::{PlayerStats, ScoreDatabase};
 use crate::storage::score_import::{ScoreImportRequest, import_scores};
 use crate::ui::{
     DebugInfo, EguiLayer, EguiRunContext, SceneSkinDefs, SkinCandidate, SkinCatalog,
-    SkinConfigMeta, SkinReloadRequest,
+    SkinConfigMeta, SkinReloadRequest, SongScanRequest,
 };
 use bmz_render::skin::{
     DestinationListEntry, SkinAnimationDef, SkinClickHit, SkinClickTarget, SkinContext,
@@ -7798,6 +7798,10 @@ impl WinitApp {
         tracing::debug!("F5 reload: no applicable target in select context");
     }
 
+    fn spawn_song_scan_request(&mut self, request: SongScanRequest) {
+        self.spawn_song_scan(request.roots, request.force, request.label);
+    }
+
     fn spawn_song_scan(&mut self, roots: Vec<PathEntry>, force: bool, label: String) {
         if self.pending_song_scan.is_some() {
             tracing::debug!(%label, "song scan already in progress");
@@ -8900,6 +8904,9 @@ impl WinitApp {
         }
         if !output.table_fetch_urls.is_empty() {
             self.spawn_table_fetches(output.table_fetch_urls, "egui table fetch".to_string());
+        }
+        for request in output.song_scan_requests {
+            self.spawn_song_scan_request(request);
         }
         if output.trigger_song_rescan {
             self.load_songs_and_reload();

@@ -18,7 +18,7 @@ use winit::window::Window;
 
 use crate::config::app_config::{
     AppConfig, AudioBackend, AudioBufferSizeMode, AudioSampleRateMode, DifficultyTableSource,
-    InputBackendKind, LogLevel, PresentModeConfig, RendererBackend, WindowMode,
+    InputBackendKind, LogLevel, PathEntry, PresentModeConfig, RendererBackend, WindowMode,
 };
 use crate::config::profile_config::{
     AssistOptionConfig, BgaExpandConfig, BgaModeConfig, BottomShiftableGaugeConfig,
@@ -282,6 +282,8 @@ pub struct EguiOutput {
     pub debug_panel_visible: bool,
     /// 有効な曲ルートをライブラリ DB へ再スキャンする要求。
     pub trigger_song_rescan: bool,
+    /// 曲フォルダのスキャン要求。
+    pub song_scan_requests: Vec<SongScanRequest>,
     /// 難易度表の取得要求。空なら取得しない。
     pub table_fetch_urls: Vec<String>,
     pub score_import_request: Option<ScoreImportRequest>,
@@ -289,6 +291,13 @@ pub struct EguiOutput {
     pub apply_audio_output: bool,
     pub practice_start: bool,
     pub practice_leave: bool,
+}
+
+#[derive(Clone, Debug)]
+pub struct SongScanRequest {
+    pub roots: Vec<PathEntry>,
+    pub force: bool,
+    pub label: String,
 }
 
 /// egui の状態管理とフレーム構築を担うレイヤ。
@@ -691,6 +700,7 @@ impl EguiLayer {
         let mut reset_skin_config = false;
         let mut skin_reload_request = SkinReloadRequest::default();
         let mut trigger_song_rescan = false;
+        let mut song_scan_requests = Vec::new();
         let mut table_fetch_urls = Vec::new();
         let mut score_import_request = None;
         let mut apply_audio_output = false;
@@ -748,6 +758,7 @@ impl EguiLayer {
                 );
                 save_app_config |= settings_actions.save;
                 trigger_song_rescan |= settings_actions.rescan;
+                song_scan_requests.extend(settings_actions.song_scan_requests);
                 table_fetch_urls.extend(settings_actions.table_fetch_urls);
                 apply_audio_output |= settings_actions.apply_audio;
                 score_import_request = settings_actions.score_import_request;
@@ -790,6 +801,7 @@ impl EguiLayer {
             skin_reload_request,
             debug_panel_visible: *show_debug,
             trigger_song_rescan,
+            song_scan_requests,
             table_fetch_urls,
             score_import_request,
             apply_audio_output,
@@ -1330,6 +1342,7 @@ fn build_debug_panel(ctx: &egui::Context, open: &mut bool, info: &DebugInfo) {
 struct SettingsPanelActions {
     save: bool,
     rescan: bool,
+    song_scan_requests: Vec<SongScanRequest>,
     table_fetch_urls: Vec<String>,
     score_import_request: Option<ScoreImportRequest>,
     /// 音声出力(cpal ストリーム)を現在の設定で開き直す要求。
@@ -1368,7 +1381,7 @@ struct SettingsDragPayload {
     index: usize,
 }
 
-const SETTINGS_LIST_BUTTONS_WIDTH: f32 = 176.0;
+const SETTINGS_LIST_BUTTONS_WIDTH: f32 = 224.0;
 const SETTINGS_TABLE_LIST_BUTTONS_WIDTH: f32 = 224.0;
 const SETTINGS_LIST_DRAG_HANDLE_WIDTH: f32 = 28.0;
 const SETTINGS_LIST_MIN_LABEL_WIDTH: f32 = 96.0;
@@ -1456,6 +1469,7 @@ fn build_settings_panel(
 ) -> SettingsPanelActions {
     let mut save_clicked = false;
     let mut rescan_clicked = false;
+    let mut song_scan_requests = Vec::new();
     let mut table_fetch_urls = Vec::new();
     let mut score_import_request = None;
     let mut apply_audio = false;
@@ -1489,6 +1503,19 @@ fn build_settings_panel(
                                                     if ui.button("削除").clicked() {
                                                         root_action =
                                                             Some(SettingsListAction::Remove(index));
+                                                    }
+                                                    if ui
+                                                        .add_enabled(
+                                                            root.enabled,
+                                                            egui::Button::new("再読込"),
+                                                        )
+                                                        .clicked()
+                                                    {
+                                                        song_scan_requests.push(SongScanRequest {
+                                                            roots: vec![root.clone()],
+                                                            force: true,
+                                                            label: "egui song reload".to_string(),
+                                                        });
                                                     }
                                                     if ui
                                                         .add_enabled(
@@ -1567,18 +1594,28 @@ fn build_settings_panel(
                                 state.add_root_error.clear();
                             }
                             if ui.button("追加").clicked() {
-                                let path = state.new_root_path.trim();
+                                let path = state.new_root_path.trim().to_string();
                                 if path.is_empty() {
                                     *state.add_root_error =
                                         "パスを入力するかフォルダを選択してください。".to_string();
                                 } else {
                                     match add_song_root_entry(
                                         &mut config.songs.roots,
-                                        path,
+                                        &path,
                                         true,
                                         true,
                                     ) {
                                         Ok(()) => {
+                                            song_scan_requests.push(SongScanRequest {
+                                                roots: vec![PathEntry {
+                                                    path,
+                                                    enabled: true,
+                                                    recursive: true,
+                                                }],
+                                                force: false,
+                                                label: "egui song load".to_string(),
+                                            });
+                                            save_clicked = true;
                                             state.new_root_path.clear();
                                             state.add_root_error.clear();
                                         }
@@ -1593,7 +1630,9 @@ fn build_settings_panel(
                         if ui.button("ライブラリを再スキャン").clicked() {
                             rescan_clicked = true;
                         }
-                        ui.label("再スキャンは有効なルートを対象に library.db を更新します。");
+                        ui.label(
+                            "追加したフォルダは自動でスキャンします。再スキャンは有効なルート全体を対象にします。",
+                        );
                     });
 
                 egui::CollapsingHeader::new("スキャン").show(ui, |ui| {
@@ -2162,6 +2201,7 @@ fn build_settings_panel(
     SettingsPanelActions {
         save: save_clicked || apply_audio,
         rescan: rescan_clicked,
+        song_scan_requests,
         table_fetch_urls,
         score_import_request,
         apply_audio,
