@@ -827,12 +827,27 @@ pub fn generate_arrange_seed() -> i64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_nanos() as i64).unwrap_or(12345)
 }
 
+fn normal_applied_arrange() -> AppliedArrange {
+    AppliedArrange {
+        arrange: ArrangeOption::Normal,
+        arrange_2p: ArrangeOption::Normal,
+        double_option: DoubleOption::Off,
+        seed: None,
+        pattern: None,
+    }
+}
+
 pub fn apply_arrange(
     chart: &mut PlayableChart,
     arrange: ArrangeOption,
     seed: Option<i64>,
     pattern: Option<&[u8]>,
 ) -> AppliedArrange {
+    let key_mode = chart.metadata.key_mode;
+    if arrange_requires_scratch(arrange) && !key_mode_has_scratch(key_mode) {
+        return normal_applied_arrange();
+    }
+
     if let Some(perm) = pattern {
         let perm_usize: Vec<usize> = perm.iter().map(|&i| i as usize).collect();
         apply_lane_permutation(chart, &perm_usize);
@@ -845,15 +860,8 @@ pub fn apply_arrange(
         };
     }
 
-    let key_mode = chart.metadata.key_mode;
     match arrange {
-        ArrangeOption::Normal => AppliedArrange {
-            arrange: ArrangeOption::Normal,
-            arrange_2p: ArrangeOption::Normal,
-            double_option: DoubleOption::Off,
-            seed: None,
-            pattern: None,
-        },
+        ArrangeOption::Normal => normal_applied_arrange(),
         ArrangeOption::Mirror => {
             let perm = mirror_permutation(key_mode);
             apply_lane_permutation(chart, &perm);
@@ -917,6 +925,17 @@ pub fn apply_arrange(
             }
         }
     }
+}
+
+fn arrange_requires_scratch(arrange: ArrangeOption) -> bool {
+    matches!(
+        arrange,
+        ArrangeOption::AllScratch | ArrangeOption::RandomEx | ArrangeOption::SRandomEx
+    )
+}
+
+fn key_mode_has_scratch(key_mode: KeyMode) -> bool {
+    key_mode.active_lanes().iter().any(|&lane| matches!(lane, Lane::Scratch | Lane::Scratch2))
 }
 
 pub fn apply_arrange_pair(
@@ -1854,6 +1873,35 @@ mod tests {
     }
 
     #[test]
+    fn arrange_lane_groups_cover_no_scratch_keymodes() {
+        for key_mode in [KeyMode::K4, KeyMode::K6, KeyMode::K8, KeyMode::K9] {
+            let expected: Vec<usize> =
+                key_mode.active_lanes().iter().map(|&lane| lane.index()).collect();
+
+            assert_eq!(arrange_lane_groups(key_mode, false), vec![expected.clone()]);
+            assert_eq!(arrange_lane_groups(key_mode, true), vec![expected]);
+        }
+    }
+
+    #[test]
+    fn mirror_permutation_reverses_no_scratch_keymodes() {
+        for key_mode in [KeyMode::K4, KeyMode::K6, KeyMode::K8, KeyMode::K9] {
+            let perm = mirror_permutation(key_mode);
+            let active = key_mode.active_lanes();
+
+            for (source, dest) in active.iter().zip(active.iter().rev()) {
+                assert_eq!(
+                    perm[source.index()],
+                    dest.index(),
+                    "mirror should reverse {} lane {:?}",
+                    key_mode.as_str(),
+                    source
+                );
+            }
+        }
+    }
+
+    #[test]
     fn random_lane_permutation_k9_preserves_active_lanes() {
         let perm = random_lane_permutation(42, KeyMode::K9, false);
         let active: HashSet<_> =
@@ -1861,6 +1909,102 @@ mod tests {
         let mapped: HashSet<_> =
             KeyMode::K9.active_lanes().iter().map(|&lane| perm[lane as usize]).collect();
         assert_eq!(active, mapped);
+    }
+
+    #[test]
+    fn random_permutations_preserve_no_scratch_active_lanes() {
+        for key_mode in [KeyMode::K4, KeyMode::K6, KeyMode::K8, KeyMode::K9] {
+            let active: HashSet<_> =
+                key_mode.active_lanes().iter().map(|&lane| lane.index()).collect();
+            for perm in [
+                random_lane_permutation(42, key_mode, false),
+                random_lane_permutation(42, key_mode, true),
+                rotate_lane_permutation(42, key_mode, false),
+                rotate_lane_permutation(42, key_mode, true),
+            ] {
+                let mapped: HashSet<_> =
+                    key_mode.active_lanes().iter().map(|&lane| perm[lane.index()]).collect();
+                assert_eq!(
+                    active,
+                    mapped,
+                    "random permutation should stay inside {} active lanes",
+                    key_mode.as_str()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn scratch_required_arrange_falls_back_to_normal_without_scratch_lane() {
+        for key_mode in [KeyMode::K4, KeyMode::K6, KeyMode::K8, KeyMode::K9] {
+            for arrange in
+                [ArrangeOption::AllScratch, ArrangeOption::RandomEx, ArrangeOption::SRandomEx]
+            {
+                let mut chart = chart();
+                chart.metadata.key_mode = key_mode;
+                chart.lane_notes[Lane::Key1.index()].push(note(1, Lane::Key1, 1_000_000));
+                let before = lanes_for_notes(&chart);
+
+                let applied = apply_arrange(&mut chart, arrange, Some(7), None);
+
+                assert_eq!(applied.arrange, ArrangeOption::Normal);
+                assert_eq!(applied.seed, None);
+                assert_eq!(applied.pattern, None);
+                assert_eq!(lanes_for_notes(&chart), before);
+            }
+        }
+    }
+
+    #[test]
+    fn scratch_required_arrange_ignores_replay_pattern_without_scratch_lane() {
+        for key_mode in [KeyMode::K4, KeyMode::K6, KeyMode::K8, KeyMode::K9] {
+            let mut chart = chart();
+            chart.metadata.key_mode = key_mode;
+            chart.lane_notes[Lane::Key1.index()].push(note(1, Lane::Key1, 1_000_000));
+            let before = lanes_for_notes(&chart);
+
+            let mut pattern: Vec<u8> = (0u8..LANE_COUNT as u8).collect();
+            pattern[Lane::Key1.index()] = Lane::Key2.index() as u8;
+            pattern[Lane::Key2.index()] = Lane::Key1.index() as u8;
+
+            let applied =
+                apply_arrange(&mut chart, ArrangeOption::RandomEx, Some(7), Some(&pattern));
+
+            assert_eq!(applied.arrange, ArrangeOption::Normal);
+            assert_eq!(applied.seed, None);
+            assert_eq!(applied.pattern, None);
+            assert_eq!(lanes_for_notes(&chart), before);
+        }
+    }
+
+    #[test]
+    fn note_arrange_keeps_no_scratch_modes_inside_active_lanes() {
+        for key_mode in [KeyMode::K4, KeyMode::K6, KeyMode::K8, KeyMode::K9] {
+            for arrange in [ArrangeOption::SRandom, ArrangeOption::Spiral, ArrangeOption::HRandom] {
+                let mut chart = chart();
+                chart.metadata.key_mode = key_mode;
+                for (index, &lane) in key_mode.active_lanes().iter().enumerate() {
+                    chart.lane_notes[lane.index()].push(note(
+                        (index + 1) as u32,
+                        lane,
+                        1_000_000 + index as i64 * 1_000,
+                    ));
+                }
+
+                apply_arrange(&mut chart, arrange, Some(7), None);
+
+                let active: HashSet<_> =
+                    key_mode.active_lanes().iter().map(|&lane| lane.index()).collect();
+                for note in chart.lane_notes.iter().flatten() {
+                    assert!(
+                        active.contains(&note.lane.index()),
+                        "{arrange:?} should keep {} note {:?} inside active lanes",
+                        key_mode.as_str(),
+                        note.id
+                    );
+                }
+            }
+        }
     }
 
     #[test]
