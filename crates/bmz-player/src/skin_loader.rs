@@ -934,9 +934,6 @@ fn resolve_wildcard_path(
 }
 
 fn resolve_case_insensitive_path(path: &Path) -> PathBuf {
-    if path.exists() {
-        return path.to_path_buf();
-    }
     let Some(file_name) = path.file_name().and_then(|name| name.to_str()) else {
         return path.to_path_buf();
     };
