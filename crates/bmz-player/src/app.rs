@@ -140,9 +140,7 @@ pub async fn run() -> Result<()> {
 pub async fn run_with_options(options: AppOptions) -> Result<()> {
     let mut boot = bootstrap::bootstrap()?;
 
-    if boot.app_config.tables.auto_fetch_on_startup {
-        fetch_configured_difficulty_tables(&mut boot).await;
-    }
+    fetch_startup_difficulty_tables(&mut boot).await;
 
     let event_loop = EventLoop::new().context("failed to create event loop")?;
     event_loop.set_control_flow(ControlFlow::Poll);
@@ -214,18 +212,18 @@ fn spawn_ir_sync_worker(boot: &bootstrap::BootstrappedApp) {
     });
 }
 
-async fn fetch_configured_difficulty_tables(boot: &mut bootstrap::BootstrappedApp) {
+async fn fetch_startup_difficulty_tables(boot: &mut bootstrap::BootstrappedApp) {
     use std::time::{SystemTime, UNIX_EPOCH};
     let now = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0);
 
-    let sources: Vec<_> = boot
-        .app_config
-        .tables
-        .sources
-        .iter()
-        .filter(|s| s.enabled)
-        .map(|s| s.url.clone())
-        .collect();
+    let fetched_source_urls: HashSet<String> = match boot.library_db.list_difficulty_tables() {
+        Ok(tables) => tables.into_iter().map(|table| table.source_url).collect(),
+        Err(error) => {
+            tracing::warn!(%error, "failed to list fetched difficulty tables");
+            HashSet::new()
+        }
+    };
+    let sources = startup_difficulty_table_fetch_urls(&boot.app_config, &fetched_source_urls);
 
     for url in sources {
         tracing::info!(%url, "fetching difficulty table");
@@ -257,6 +255,22 @@ async fn fetch_configured_difficulty_tables(boot: &mut bootstrap::BootstrappedAp
             }
         }
     }
+}
+
+fn startup_difficulty_table_fetch_urls(
+    app_config: &AppConfig,
+    fetched_source_urls: &HashSet<String>,
+) -> Vec<String> {
+    app_config
+        .tables
+        .sources
+        .iter()
+        .filter(|source| source.enabled)
+        .filter(|source| {
+            app_config.tables.auto_fetch_on_startup || !fetched_source_urls.contains(&source.url)
+        })
+        .map(|source| source.url.clone())
+        .collect()
 }
 
 struct WinitApp {
@@ -14280,7 +14294,9 @@ mod tests {
     use bmz_render::scene::SelectRowKind;
     use bmz_render::skin::SkinManifest;
 
-    use crate::config::app_config::{AppConfig, PathEntry, PresentModeConfig};
+    use crate::config::app_config::{
+        AppConfig, DifficultyTableSource, DifficultyTablesConfig, PathEntry, PresentModeConfig,
+    };
     use crate::config::profile_config::ProfileConfig;
     use crate::screens::select_model::{SelectChartRow, SelectCourseRow};
     use crate::skin_loader::default_skin_root;
@@ -14317,6 +14333,69 @@ mod tests {
 
         assert_eq!(breadcrumb.name, "通常難易度表");
         assert_eq!(breadcrumb.symbol, "★");
+    }
+
+    #[test]
+    fn startup_table_fetch_urls_include_unfetched_enabled_sources() {
+        let config = AppConfig {
+            tables: DifficultyTablesConfig {
+                sources: vec![
+                    DifficultyTableSource {
+                        url: "https://example.com/fetched".to_string(),
+                        enabled: true,
+                    },
+                    DifficultyTableSource {
+                        url: "https://example.com/missing".to_string(),
+                        enabled: true,
+                    },
+                    DifficultyTableSource {
+                        url: "https://example.com/disabled".to_string(),
+                        enabled: false,
+                    },
+                ],
+                auto_fetch_on_startup: false,
+            },
+            ..AppConfig::default()
+        };
+        let fetched = HashSet::from(["https://example.com/fetched".to_string()]);
+
+        assert_eq!(
+            startup_difficulty_table_fetch_urls(&config, &fetched),
+            vec!["https://example.com/missing".to_string()]
+        );
+    }
+
+    #[test]
+    fn startup_table_fetch_urls_include_all_enabled_sources_when_auto_fetch_is_on() {
+        let config = AppConfig {
+            tables: DifficultyTablesConfig {
+                sources: vec![
+                    DifficultyTableSource {
+                        url: "https://example.com/fetched".to_string(),
+                        enabled: true,
+                    },
+                    DifficultyTableSource {
+                        url: "https://example.com/missing".to_string(),
+                        enabled: true,
+                    },
+                    DifficultyTableSource {
+                        url: "https://example.com/disabled".to_string(),
+                        enabled: false,
+                    },
+                ],
+                auto_fetch_on_startup: true,
+            },
+            ..AppConfig::default()
+        };
+        let fetched = HashSet::from(["https://example.com/fetched".to_string()]);
+
+        assert_eq!(
+            startup_difficulty_table_fetch_urls(&config, &fetched),
+            vec![
+                "https://example.com/fetched".to_string(),
+                "https://example.com/missing".to_string(),
+            ]
+        );
     }
 
     #[test]
