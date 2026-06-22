@@ -6,6 +6,7 @@
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 
 use bmz_gameplay::rule::RuleMode;
 use bmz_render::scene::ResultGradeDiffDisplay;
@@ -341,6 +342,21 @@ pub struct EguiLayer {
     ir_device_key: IrDeviceKeyUiState,
     /// プロファイル設定パネル: profile 作成 / 複製フォームの状態。
     profile_manager: ProfileManagerUiState,
+    /// BMZ メニュー: OS のファイルマネージャでディレクトリを開いた直近結果。
+    directory_open_status: Option<DirectoryOpenStatus>,
+}
+
+#[derive(Debug, Clone)]
+struct DirectoryOpenStatus {
+    label: &'static str,
+    path: PathBuf,
+    error: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct DirectoryOpenTarget<'a> {
+    label: &'static str,
+    path: &'a Path,
 }
 
 /// プロファイル設定パネルの IR ログインフォーム状態。
@@ -644,6 +660,7 @@ impl EguiLayer {
             ir_login: IrLoginUiState::default(),
             ir_device_key: IrDeviceKeyUiState::default(),
             profile_manager: ProfileManagerUiState::default(),
+            directory_open_status: None,
         }
     }
 
@@ -718,6 +735,7 @@ impl EguiLayer {
         let mut practice_leave = false;
         let visible_flag = &mut self.visible;
         let ir_login = &mut self.ir_login;
+        let directory_open_status = &mut self.directory_open_status;
         let full_output = ctx.run_ui(raw_input, |ui| {
             if let Some(practice_ctx) = practice.as_mut() {
                 let panel = build_practice_panel(ui.ctx(), practice_ctx);
@@ -748,6 +766,8 @@ impl EguiLayer {
                     show_settings,
                     show_profile_settings,
                     show_skin,
+                    app_paths,
+                    directory_open_status,
                 );
                 build_debug_panel(ctx, show_debug, info);
                 let settings_actions = build_settings_panel(
@@ -853,6 +873,8 @@ fn build_menu(
     show_settings: &mut bool,
     show_profile_settings: &mut bool,
     show_skin: &mut bool,
+    app_paths: &AppPaths,
+    directory_open_status: &mut Option<DirectoryOpenStatus>,
 ) {
     egui::Window::new("BMZ メニュー")
         .open(visible)
@@ -865,7 +887,89 @@ fn build_menu(
             ui.checkbox(show_settings, "本体設定");
             ui.checkbox(show_profile_settings, "プロファイル設定");
             ui.checkbox(show_skin, "スキン設定");
+            ui.separator();
+            ui.label("ディレクトリを開く");
+            ui.horizontal_wrapped(|ui| {
+                for target in directory_open_targets(app_paths) {
+                    if ui
+                        .button(target.label)
+                        .on_hover_text(target.path.display().to_string())
+                        .clicked()
+                    {
+                        *directory_open_status = Some(open_directory_target(target));
+                    }
+                }
+            });
+            if let Some(status) = directory_open_status.as_ref() {
+                match status.error.as_deref() {
+                    Some(error) => {
+                        ui.colored_label(
+                            egui::Color32::LIGHT_RED,
+                            format!("{} を開けません: {error}", status.label),
+                        )
+                        .on_hover_text(status.path.display().to_string());
+                    }
+                    None => {
+                        ui.small(format!("{} を開きました", status.label))
+                            .on_hover_text(status.path.display().to_string());
+                    }
+                }
+            }
         });
+}
+
+fn directory_open_targets(app_paths: &AppPaths) -> [DirectoryOpenTarget<'_>; 4] {
+    [
+        DirectoryOpenTarget { label: "resource_dir", path: &app_paths.resource_dir },
+        DirectoryOpenTarget { label: "data_dir", path: &app_paths.data_dir },
+        DirectoryOpenTarget { label: "cache_dir", path: &app_paths.cache_dir },
+        DirectoryOpenTarget { label: "logs_dir", path: &app_paths.logs_dir },
+    ]
+}
+
+fn open_directory_target(target: DirectoryOpenTarget<'_>) -> DirectoryOpenStatus {
+    let error = open_directory(target.path).err();
+    DirectoryOpenStatus { label: target.label, path: target.path.to_path_buf(), error }
+}
+
+fn open_directory(path: &Path) -> Result<(), String> {
+    if !path.is_dir() {
+        return Err(format!("ディレクトリが存在しません: {}", path.display()));
+    }
+    spawn_directory_opener(path).map_err(|error| format!("{} ({})", error, path.display()))
+}
+
+#[cfg(target_os = "macos")]
+fn spawn_directory_opener(path: &Path) -> std::io::Result<()> {
+    run_directory_opener("open", path)
+}
+
+#[cfg(target_os = "windows")]
+fn spawn_directory_opener(path: &Path) -> std::io::Result<()> {
+    run_directory_opener("explorer", path)
+}
+
+#[cfg(all(unix, not(target_os = "macos")))]
+fn spawn_directory_opener(path: &Path) -> std::io::Result<()> {
+    run_directory_opener("xdg-open", path)
+}
+
+#[cfg(any(target_os = "macos", target_os = "windows", unix))]
+fn run_directory_opener(program: &str, path: &Path) -> std::io::Result<()> {
+    let status = Command::new(program).arg(path).status()?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(std::io::Error::other(format!("{program} exited with {status}")))
+    }
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "windows", unix)))]
+fn spawn_directory_opener(_path: &Path) -> std::io::Result<()> {
+    Err(std::io::Error::new(
+        std::io::ErrorKind::Unsupported,
+        "opening directories is not supported on this platform",
+    ))
 }
 
 /// Window 内コンテンツを全体スクロール可能にする。
@@ -4449,6 +4553,32 @@ mod tests {
         apply_settings_list_action(&mut items, SettingsListAction::Remove(2));
 
         assert_eq!(items, vec!["a", "b"]);
+    }
+
+    #[test]
+    fn directory_open_targets_expose_only_app_path_roots() {
+        let root = unique_test_dir("bmz-ui-directory-targets");
+        let app_paths = AppPaths::from_dirs(
+            root.join("resources"),
+            root.join("data"),
+            root.join("cache"),
+            root.join("logs"),
+        );
+
+        let targets = directory_open_targets(&app_paths);
+        let labels = targets.iter().map(|target| target.label).collect::<Vec<_>>();
+        let paths = targets.iter().map(|target| target.path).collect::<Vec<_>>();
+
+        assert_eq!(labels, vec!["resource_dir", "data_dir", "cache_dir", "logs_dir"]);
+        assert_eq!(
+            paths,
+            vec![
+                app_paths.resource_dir.as_path(),
+                app_paths.data_dir.as_path(),
+                app_paths.cache_dir.as_path(),
+                app_paths.logs_dir.as_path(),
+            ]
+        );
     }
 
     #[test]
