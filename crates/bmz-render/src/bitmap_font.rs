@@ -70,7 +70,8 @@ fn parse_bitmap_font(text: &str, base_dir: &Path) -> Result<BitmapFont> {
             let id = parse_i32(&fields, "id")?;
             let file =
                 fields.get("file").ok_or_else(|| anyhow!("bitmap font page missing file"))?;
-            page_paths.insert(id, base_dir.join(file.replace('\\', "/")));
+            page_paths
+                .insert(id, resolve_case_insensitive_path(&base_dir.join(file.replace('\\', "/"))));
         } else if line.starts_with("char ") {
             let id = parse_i32(&fields, "id")?;
             let Some(ch) = char::from_u32(id as u32) else {
@@ -108,6 +109,32 @@ fn parse_bitmap_font(text: &str, base_dir: &Path) -> Result<BitmapFont> {
     }
 
     Ok(BitmapFont { size, line_height, base, ascent, scale_width, scale_height, pages, glyphs })
+}
+
+fn resolve_case_insensitive_path(path: &Path) -> PathBuf {
+    if path.exists() {
+        return path.to_path_buf();
+    }
+    let Some(file_name) = path.file_name().and_then(|name| name.to_str()) else {
+        return path.to_path_buf();
+    };
+    let Some(parent) = path.parent() else {
+        return path.to_path_buf();
+    };
+    let parent = resolve_case_insensitive_path(parent);
+    let Ok(entries) = std::fs::read_dir(&parent) else {
+        return parent.join(file_name);
+    };
+    entries
+        .filter_map(|entry| entry.ok())
+        .find(|entry| {
+            entry
+                .file_name()
+                .to_str()
+                .is_some_and(|candidate| candidate.eq_ignore_ascii_case(file_name))
+        })
+        .map(|entry| entry.path())
+        .unwrap_or_else(|| parent.join(file_name))
 }
 
 fn parse_fields(line: &str) -> HashMap<String, String> {
@@ -213,6 +240,28 @@ char id=65 x=0 y=0 width=1 height=1 xoffset=1 yoffset=2 xadvance=9 page=0 chnl=0
         assert_eq!(font.ascent, 14.0);
         assert_eq!(font.pages[&0].image.width, 2);
         assert_eq!(font.glyphs[&'A'].xadvance, 9);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn bitmap_font_page_paths_resolve_case_insensitively() {
+        let root = temp_dir();
+        std::fs::create_dir_all(&root).unwrap();
+        write_test_png(&root.join("Artist1.png"));
+        std::fs::write(
+            root.join("artist.fnt"),
+            r#"info face="test" size=16 padding=0,0,0,0
+common lineHeight=20 base=15 scaleW=2 scaleH=2 pages=1 packed=0
+page id=0 file="artist1.png"
+chars count=1
+char id=65 x=0 y=0 width=1 height=1 xoffset=1 yoffset=2 xadvance=9 page=0 chnl=0
+"#,
+        )
+        .unwrap();
+
+        let font = load_bitmap_font(&root.join("artist.fnt")).unwrap();
+
+        assert_eq!(font.pages[&0].path, root.join("Artist1.png"));
         std::fs::remove_dir_all(root).unwrap();
     }
 

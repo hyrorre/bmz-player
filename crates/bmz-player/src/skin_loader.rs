@@ -777,7 +777,7 @@ fn resolve_json_skin_asset_path(
 ) -> Option<PathBuf> {
     let normalized = asset_path.replace('\\', "/");
     if !normalized.contains('*') {
-        return Some(skin_root.join(normalized));
+        return Some(resolve_case_insensitive_path(&skin_root.join(normalized)));
     }
 
     let filepath =
@@ -805,7 +805,7 @@ fn resolve_json_skin_asset_path(
     //    (例: 定義 `custom/laser/*` で選択 `custom/laser/veryshort` のとき、
     //         ソース `custom/laser/*/main.png` を `custom/laser/veryshort/main.png` へ)。
     if let Some(substituted) = substitute_filepath_choice(&normalized, &document.filepath, files) {
-        let candidate = skin_root.join(&substituted);
+        let candidate = resolve_case_insensitive_path(&skin_root.join(&substituted));
         if candidate.is_file() {
             return Some(candidate);
         }
@@ -871,7 +871,7 @@ fn resolve_selected_skin_file(skin_root: &Path, selected: &str) -> Option<PathBu
     {
         return None;
     }
-    let candidate = skin_root.join(relative);
+    let candidate = resolve_case_insensitive_path(&skin_root.join(relative));
     candidate.is_file().then_some(candidate)
 }
 
@@ -916,20 +916,57 @@ fn resolve_wildcard_path(
             let Some(file_name) = path.file_name().and_then(|name| name.to_str()) else {
                 return false;
             };
-            file_name.starts_with(filename_prefix) && file_name.ends_with(suffix)
+            starts_with_ignore_ascii_case(file_name, filename_prefix)
+                && ends_with_ignore_ascii_case(file_name, suffix)
         })
         .collect::<Vec<_>>();
     if let Some(preferred) = preferred
         && let Some(candidate) = candidates.iter().find(|path| {
             let file_name = path.file_name().and_then(|name| name.to_str()).unwrap_or_default();
             let stem = path.file_stem().and_then(|name| name.to_str()).unwrap_or_default();
-            file_name == preferred || stem == preferred
+            file_name.eq_ignore_ascii_case(preferred) || stem.eq_ignore_ascii_case(preferred)
         })
     {
         return Some(candidate.clone());
     }
 
     choose_wildcard_candidate(candidates)
+}
+
+fn resolve_case_insensitive_path(path: &Path) -> PathBuf {
+    if path.exists() {
+        return path.to_path_buf();
+    }
+    let Some(file_name) = path.file_name().and_then(|name| name.to_str()) else {
+        return path.to_path_buf();
+    };
+    let Some(parent) = path.parent() else {
+        return path.to_path_buf();
+    };
+    let parent = resolve_case_insensitive_path(parent);
+    let Ok(entries) = std::fs::read_dir(&parent) else {
+        return parent.join(file_name);
+    };
+    entries
+        .filter_map(|entry| entry.ok())
+        .find(|entry| {
+            entry
+                .file_name()
+                .to_str()
+                .is_some_and(|candidate| candidate.eq_ignore_ascii_case(file_name))
+        })
+        .map(|entry| entry.path())
+        .unwrap_or_else(|| parent.join(file_name))
+}
+
+fn starts_with_ignore_ascii_case(value: &str, prefix: &str) -> bool {
+    value.get(..prefix.len()).is_some_and(|head| head.eq_ignore_ascii_case(prefix))
+}
+
+fn ends_with_ignore_ascii_case(value: &str, suffix: &str) -> bool {
+    value
+        .get(value.len().saturating_sub(suffix.len())..)
+        .is_some_and(|tail| tail.eq_ignore_ascii_case(suffix))
 }
 
 fn strip_beatoraja_asset_filter(pattern: &str) -> &str {
@@ -2825,6 +2862,20 @@ mod tests {
                 .unwrap();
 
         assert_eq!(resolved.strip_prefix(&root).unwrap(), Path::new("frame/SP/Default/song.fnt"));
+    }
+
+    #[test]
+    fn skin_asset_path_resolves_case_insensitive_file_names() {
+        let root = unique_test_dir("bmz-json-font-case");
+        std::fs::create_dir_all(root.join("_font")).unwrap();
+        std::fs::write(root.join("_font/Artist.fnt"), []).unwrap();
+        let document: SkinDocument = serde_json::from_str("{}").unwrap();
+
+        let resolved =
+            resolve_json_skin_asset_path(&root, "_font/artist.fnt", &document, &BTreeMap::new())
+                .unwrap();
+
+        assert_eq!(resolved.strip_prefix(&root).unwrap(), Path::new("_font/Artist.fnt"));
     }
 
     #[test]
