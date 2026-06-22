@@ -2,13 +2,15 @@ use std::path::Path;
 
 use anyhow::Result;
 
-use super::app_config::AppConfig;
+use super::app_config::{AppConfig, ensure_default_difficulty_table_sources};
 use super::play_input::{normalize_profile_input, validate_play_inherit_config};
 use super::profile_config::ProfileConfig;
 
 pub fn load_app_config(path: &Path) -> Result<AppConfig> {
     let text = std::fs::read_to_string(path)?;
-    Ok(toml::from_str(&text)?)
+    let mut config: AppConfig = toml::from_str(&text)?;
+    ensure_default_difficulty_table_sources(&mut config);
+    Ok(config)
 }
 
 pub fn load_profile_config(path: &Path) -> Result<ProfileConfig> {

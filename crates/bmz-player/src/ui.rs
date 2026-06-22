@@ -1383,6 +1383,7 @@ struct SettingsDragPayload {
 
 const SETTINGS_LIST_BUTTONS_WIDTH: f32 = 224.0;
 const SETTINGS_TABLE_LIST_BUTTONS_WIDTH: f32 = 224.0;
+const SETTINGS_TABLE_ENABLED_WIDTH: f32 = 56.0;
 const SETTINGS_LIST_DRAG_HANDLE_WIDTH: f32 = 28.0;
 const SETTINGS_LIST_MIN_LABEL_WIDTH: f32 = 96.0;
 
@@ -1674,7 +1675,7 @@ fn build_settings_panel(
                         ui.push_id(("table_source", index), |ui| {
                             let label_width = (ui.available_width()
                                 - SETTINGS_TABLE_LIST_BUTTONS_WIDTH
-                                - ui.spacing().interact_size.x
+                                - SETTINGS_TABLE_ENABLED_WIDTH
                                 - SETTINGS_LIST_DRAG_HANDLE_WIDTH)
                                 .max(64.0);
                             let (_, dropped) = ui.dnd_drop_zone::<SettingsDragPayload, _>(
@@ -1685,7 +1686,13 @@ fn build_settings_panel(
                                         index,
                                     };
                                     ui.horizontal(|ui| {
-                                        ui.checkbox(&mut source.enabled, "");
+                                        ui.add_sized(
+                                            [
+                                                SETTINGS_TABLE_ENABLED_WIDTH,
+                                                ui.spacing().interact_size.y,
+                                            ],
+                                            egui::Checkbox::new(&mut source.enabled, "有効"),
+                                        );
                                         settings_drag_handle(ui, payload);
                                         settings_list_label(ui, &source.url, label_width);
                                         ui.with_layout(

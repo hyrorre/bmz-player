@@ -200,7 +200,28 @@ pub struct LoggingConfig {
     pub file_logging: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub const DEFAULT_DIFFICULTY_TABLE_SOURCE_URLS: &[&str] = &[
+    "https://darksabun.club/table/archive/normal1/",
+    "https://darksabun.club/table/archive/insane1/",
+    "https://rattoto10.jounin.jp/table.html",
+    "https://rattoto10.jounin.jp/table_insane.html",
+    "https://rattoto10.jounin.jp/table_overjoy.html",
+    "https://stellabms.xyz/st/table.html",
+    "https://stellabms.xyz/sl/table.html",
+    "https://stellabms.xyz/so/table.html",
+    "https://stellabms.xyz/sn/table.html",
+    "https://mplwtch.github.io/Solomon/",
+    "https://mocha-repository.info/table/ln_header.json",
+    "https://ladymade-star.github.io/luminous/",
+    "http://minddnim.web.fc2.com/sara/3rd_hard/bms_sara_3rd_hard.html",
+    "https://egret9.github.io/Scramble/",
+    "https://classmaterma.github.io/4UE/table.html",
+    "https://classmaterma.github.io/UE/table.html",
+    "https://classmaterma.github.io/8UE/table.html",
+    "https://hibyethere.github.io/table/",
+];
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DifficultyTablesConfig {
     #[serde(default)]
     pub sources: Vec<DifficultyTableSource>,
@@ -213,6 +234,29 @@ pub struct DifficultyTableSource {
     pub url: String,
     #[serde(default = "default_true")]
     pub enabled: bool,
+}
+
+impl Default for DifficultyTablesConfig {
+    fn default() -> Self {
+        Self {
+            sources: DEFAULT_DIFFICULTY_TABLE_SOURCE_URLS
+                .iter()
+                .map(|url| DifficultyTableSource { url: (*url).to_string(), enabled: true })
+                .collect(),
+            auto_fetch_on_startup: false,
+        }
+    }
+}
+
+pub fn ensure_default_difficulty_table_sources(config: &mut AppConfig) {
+    for &url in DEFAULT_DIFFICULTY_TABLE_SOURCE_URLS {
+        if !config.tables.sources.iter().any(|source| source.url == url) {
+            config
+                .tables
+                .sources
+                .push(DifficultyTableSource { url: url.to_string(), enabled: true });
+        }
+    }
 }
 
 fn default_true() -> bool {
@@ -295,6 +339,34 @@ mod tests {
         assert!(config.scan.follow_symlinks);
         assert!(!config.scan.auto_rescan_on_startup);
         assert_eq!(config.video.frame_limit_in_background, 60);
+    }
+
+    #[test]
+    fn app_config_defaults_include_builtin_difficulty_tables() {
+        let config = AppConfig::default();
+
+        assert_eq!(config.tables.sources.len(), DEFAULT_DIFFICULTY_TABLE_SOURCE_URLS.len());
+        assert!(config.tables.sources.iter().all(|source| source.enabled));
+        assert_eq!(config.tables.sources[0].url, DEFAULT_DIFFICULTY_TABLE_SOURCE_URLS[0]);
+    }
+
+    #[test]
+    fn ensure_default_difficulty_tables_adds_missing_without_reenabling_existing() {
+        let disabled_url = DEFAULT_DIFFICULTY_TABLE_SOURCE_URLS[0].to_string();
+        let mut config = AppConfig {
+            tables: DifficultyTablesConfig {
+                sources: vec![DifficultyTableSource { url: disabled_url.clone(), enabled: false }],
+                auto_fetch_on_startup: true,
+            },
+            ..AppConfig::default()
+        };
+
+        ensure_default_difficulty_table_sources(&mut config);
+
+        assert_eq!(config.tables.sources.len(), DEFAULT_DIFFICULTY_TABLE_SOURCE_URLS.len());
+        assert!(!config.tables.sources[0].enabled);
+        assert_eq!(config.tables.sources[0].url, disabled_url);
+        assert!(config.tables.auto_fetch_on_startup);
     }
 
     #[test]
