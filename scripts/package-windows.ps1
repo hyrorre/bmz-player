@@ -211,9 +211,11 @@ $version = Get-CargoVersion $repoRoot
 $defaultSkin = Join-Path $repoRoot "data\skins\default\skin.toml"
 $rmzSkin = Join-Path $repoRoot "data\skins\Rmz-skin\play7main.luaskin"
 $sampleSong = Join-Path $repoRoot "data\songs\sample-playable\sample-playable.bms"
+$appIcon = Join-Path $repoRoot "assets\app-icon\bmz-player.ico"
 Require-File $defaultSkin
 Require-File $rmzSkin
 Require-File $sampleSong
+Require-File $appIcon
 
 $stageDir = Join-Path $OutDir $StageName
 $resourcesDir = Join-Path $stageDir "resources"
@@ -234,6 +236,7 @@ Copy-DirectoryMirror (Join-Path $repoRoot "data\skins\Rmz-skin") (Join-Path $res
 Copy-DirectoryMirror (Join-Path $repoRoot "data\songs\sample-playable") (Join-Path $resourcesDir "songs\sample-playable")
 Copy-RequiredFile (Join-Path $repoRoot "LICENSE") (Join-Path $licensesDir "BMZ-GPL-3.0-only.txt")
 Copy-RequiredFile (Join-Path $repoRoot "docs\licenses.md") (Join-Path $licensesDir "license-notes.md")
+Copy-RequiredFile $appIcon (Join-Path $resourcesDir "bmz-player.ico")
 
 if ($CopySiblingDlls) {
     Write-Host "==> Copying DLLs from binary directory"
@@ -276,6 +279,7 @@ if ($Installer) {
         "/DAppVersion=$version",
         "/DSourceDir=$stageDir",
         "/DOutputDir=$installerOutDir",
+        "/DIconFile=$appIcon",
         "/DAppArch=$arch",
         $issPath
     )

@@ -128,9 +128,10 @@ bundle_dylib_dependencies() {
 write_info_plist() {
   local plist="$1"
   local executable="$2"
-  local app_name="$3"
-  local bundle_id="$4"
-  local version="$5"
+  local icon_file="$3"
+  local app_name="$4"
+  local bundle_id="$5"
+  local version="$6"
 
   cat > "${plist}" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
@@ -143,6 +144,8 @@ write_info_plist() {
   <string>${app_name}</string>
   <key>CFBundleExecutable</key>
   <string>${executable}</string>
+  <key>CFBundleIconFile</key>
+  <string>${icon_file}</string>
   <key>CFBundleIdentifier</key>
   <string>${bundle_id}</string>
   <key>CFBundleInfoDictionaryVersion</key>
@@ -285,6 +288,7 @@ main() {
     die "missing Rmz-skin contents; run: git submodule update --init --recursive data/skins/Rmz-skin"
   [[ -f "${root}/data/songs/sample-playable/sample-playable.bms" ]] || \
     die "missing bundled sample song"
+  [[ -f "${root}/assets/app-icon/bmz-player.icns" ]] || die "missing macOS app icon"
 
   local app_dir="${out_dir}/${app_name}.app"
   local contents_dir="${app_dir}/Contents"
@@ -304,8 +308,9 @@ main() {
   copy_dir "${root}/data/songs/sample-playable" "${resources_dir}/songs/sample-playable"
   copy_file "${root}/LICENSE" "${resources_dir}/licenses/BMZ-GPL-3.0-only.txt"
   copy_file "${root}/docs/licenses.md" "${resources_dir}/licenses/license-notes.md"
+  copy_file "${root}/assets/app-icon/bmz-player.icns" "${resources_dir}/bmz-player.icns"
 
-  write_info_plist "${contents_dir}/Info.plist" "bmz-player" "${app_name}" "${bundle_id}" "${version}"
+  write_info_plist "${contents_dir}/Info.plist" "bmz-player" "bmz-player.icns" "${app_name}" "${bundle_id}" "${version}"
   printf 'APPL????' > "${contents_dir}/PkgInfo"
   plutil -lint "${contents_dir}/Info.plist" >/dev/null
 

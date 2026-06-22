@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="utf-8"?>
+<svg
+  xmlns="http://www.w3.org/2000/svg"
+  width="1024"
+  height="1024"
+  viewBox="0 0 1024 1024"
+  role="img"
+  aria-label="BMZ Player icon"
+>
+  <rect width="1024" height="1024" fill="#fff"/>
+
+  <!-- outer thin black ring -->
+  <circle cx="512" cy="512" r="386" fill="#000"/>
+  <circle cx="512" cy="512" r="361" fill="#fff"/>
+
+  <!-- center turntable disc -->
+  <circle cx="512" cy="512" r="337" fill="#000"/>
+
+  <!-- lightning Z -->
+  <path
+    fill="#fff"
+    d="
+      M217 505
+      L397 423
+      L474 388
+      L558 367
+      L756 317
+      L651 418
+      L546 519
+      L460 602
+      L642 557
+      L803 518
+      L623 601
+      L546 635
+      L463 656
+      L262 704
+      L358 613
+      L459 517
+      L556 424
+      L309 484
+      Z
+    "
+  />
+</svg>

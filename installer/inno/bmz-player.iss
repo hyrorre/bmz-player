@@ -19,6 +19,10 @@
 #define OutputDir "..\..\dist\windows\installer"
 #endif
 
+#ifndef IconFile
+#define IconFile "..\..\assets\app-icon\bmz-player.ico"
+#endif
+
 [Setup]
 AppId={#AppId}
 AppName={#AppName}
@@ -33,7 +37,8 @@ OutputBaseFilename=bmz-player-{#AppVersion}-windows-{#AppArch}-setup
 Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern
-UninstallDisplayIcon={app}\{#AppExeName}
+UninstallDisplayIcon={app}\resources\bmz-player.ico
+SetupIconFile={#IconFile}
 CloseApplications=yes
 RestartApplications=no
 SetupLogging=yes
@@ -48,8 +53,8 @@ Source: "{#SourceDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs 
 Type: filesandordirs; Name: "{app}\resources"
 
 [Icons]
-Name: "{group}\{#AppName}"; Filename: "{app}\{#AppExeName}"; WorkingDir: "{app}"
-Name: "{userdesktop}\{#AppName}"; Filename: "{app}\{#AppExeName}"; WorkingDir: "{app}"; Tasks: desktopicon
+Name: "{group}\{#AppName}"; Filename: "{app}\{#AppExeName}"; WorkingDir: "{app}"; IconFilename: "{app}\resources\bmz-player.ico"
+Name: "{userdesktop}\{#AppName}"; Filename: "{app}\{#AppExeName}"; WorkingDir: "{app}"; IconFilename: "{app}\resources\bmz-player.ico"; Tasks: desktopicon
 
 [Run]
 Filename: "{app}\{#AppExeName}"; Description: "{cm:LaunchProgram,{#AppName}}"; WorkingDir: "{app}"; Flags: nowait postinstall skipifsilent

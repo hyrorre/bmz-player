@@ -43,7 +43,7 @@ use winit::event::{ElementState, MouseButton, MouseScrollDelta, StartCause, Wind
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::{KeyCode, PhysicalKey};
 use winit::monitor::{MonitorHandle, VideoModeHandle};
-use winit::window::{Fullscreen, Window, WindowAttributes, WindowId};
+use winit::window::{Fullscreen, Icon, Window, WindowAttributes, WindowId};
 
 use crate::audio::{AppAudioOutput, AudioRuntime};
 use crate::bootstrap::{self, BootstrappedApp};
@@ -9816,7 +9816,15 @@ fn window_attributes_from_config(
 ) -> WindowAttributes {
     WindowAttributes::default()
         .with_title("bmz-player")
+        .with_window_icon(app_window_icon())
         .with_inner_size(PhysicalSize::new(video.width.max(1), video.height.max(1)))
+}
+
+fn app_window_icon() -> Option<Icon> {
+    const ICON_PNG: &[u8] = include_bytes!("../../../assets/app-icon/bmz-player-window.png");
+    let image = image::load_from_memory(ICON_PNG).ok()?.into_rgba8();
+    let (width, height) = image.dimensions();
+    Icon::from_rgba(image.into_raw(), width, height).ok()
 }
 
 /// 設定のウィンドウモードに対応する winit の `Fullscreen` を返す。
@@ -16680,6 +16688,7 @@ mod tests {
         let attributes = window_attributes_from_config(&config);
 
         assert_eq!(attributes.inner_size, Some(PhysicalSize::new(1920, 1080).into()));
+        assert!(attributes.window_icon.is_some());
     }
 
     #[test]
