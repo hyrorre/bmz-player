@@ -318,6 +318,7 @@ struct WinitApp {
     pending_table_fetch: Option<Receiver<Result<()>>>,
     pending_song_scan: Option<Receiver<SongScanEvent>>,
     song_scan_progress: Option<ScanProgress>,
+    exit_configs_saved: bool,
     last_scene_kind: Option<AppSceneKind>,
     start_held: bool,
     select_held: bool,
@@ -1689,6 +1690,7 @@ impl WinitApp {
             pending_table_fetch: None,
             pending_song_scan: None,
             song_scan_progress: None,
+            exit_configs_saved: false,
             last_scene_kind: None,
             start_held: false,
             select_held: false,
@@ -9409,7 +9411,7 @@ impl WinitApp {
         if self.smoke_exit_on_result && self.finished_play.is_some() {
             self.smoke_exit_on_result = false;
             tracing::info!("smoke result reached; leaving event loop");
-            self.save_current_play_options(None, "game exit");
+            self.save_configs_for_exit(None, "game exit");
             self.flush_pending_screenshots("smoke result exit");
             event_loop.exit();
             return;
@@ -9425,7 +9427,7 @@ impl WinitApp {
                     frames = self.rendered_result_frames,
                     "smoke result frame count reached; leaving event loop"
                 );
-                self.save_current_play_options(None, "game exit");
+                self.save_configs_for_exit(None, "game exit");
                 self.flush_pending_screenshots("smoke result frame exit");
                 event_loop.exit();
                 return;
@@ -9443,7 +9445,7 @@ impl WinitApp {
                 frames = self.rendered_frames,
                 "smoke exit frame count reached; leaving event loop"
             );
-            self.save_current_play_options(self.active_hispeed(), "game exit");
+            self.save_configs_for_exit(self.active_hispeed(), "game exit");
             self.flush_pending_screenshots("smoke frame exit");
             event_loop.exit();
         }
@@ -9508,6 +9510,20 @@ impl WinitApp {
         } else {
             tracing::info!(reason, "saved profile play options");
         }
+    }
+
+    fn save_configs_for_exit(&mut self, hispeed: Option<f32>, reason: &'static str) {
+        if self.exit_configs_saved {
+            return;
+        }
+        self.save_current_play_options(hispeed, reason);
+        if let Err(error) = save_app_config(&self.boot.app_paths.config_toml, &self.boot.app_config)
+        {
+            tracing::error!(%error, reason, "failed to save app config on exit");
+        } else {
+            tracing::info!(reason, "saved app config on exit");
+        }
+        self.exit_configs_saved = true;
     }
 
     fn update_window_title_for_scene(&mut self, scene_kind: AppSceneKind) {
@@ -10713,7 +10729,7 @@ impl ApplicationHandler for WinitApp {
 
         match event {
             WindowEvent::CloseRequested => {
-                self.save_current_play_options(self.active_hispeed(), "game exit");
+                self.save_configs_for_exit(self.active_hispeed(), "game exit");
                 event_loop.exit();
             }
             WindowEvent::KeyboardInput { event, .. } => {
@@ -10839,7 +10855,7 @@ impl ApplicationHandler for WinitApp {
                 }
                 if self.should_exit_via_select_hold() {
                     tracing::info!("escape held for 2s on select screen; exiting app");
-                    self.save_current_play_options(self.active_hispeed(), "select exit hold");
+                    self.save_configs_for_exit(self.active_hispeed(), "select exit hold");
                     event_loop.exit();
                     return;
                 }
@@ -10858,7 +10874,7 @@ impl ApplicationHandler for WinitApp {
 
     fn exiting(&mut self, _event_loop: &ActiveEventLoop) {
         self.flush_pending_screenshots("app exit");
-        self.save_current_play_options(self.active_hispeed(), "game exit");
+        self.save_configs_for_exit(self.active_hispeed(), "game exit");
         if self.release_audio_for_process_exit() {
             std::process::exit(0);
         }
