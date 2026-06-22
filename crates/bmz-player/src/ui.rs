@@ -29,7 +29,7 @@ use crate::config::profile_config::{
     SkinHistoryEntryConfig, SkinOffsetConfig, TargetOptionConfig,
 };
 use crate::ln_policy::LnPolicySetting;
-use crate::paths::resolve_app_paths;
+use crate::paths::{AppPaths, resolve_app_paths};
 use crate::practice_ui::{PracticePanelContext, build_practice_panel};
 use crate::profile_cmd;
 use crate::screens::course_session::CourseResultSummary;
@@ -239,6 +239,14 @@ pub struct SkinCatalog {
 pub struct SkinCandidate {
     pub name: String,
     pub path: String,
+    pub origin: SkinCandidateOrigin,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SkinCandidateOrigin {
+    Bundled,
+    User,
+    External,
 }
 
 /// デバッグ表示パネルへ毎フレーム渡すアプリ側の情報。
@@ -263,6 +271,7 @@ pub struct EguiRunContext<'a, 'practice> {
     pub practice: Option<&'a mut PracticePanelContext<'practice>>,
     pub result_ir: Option<&'a mut crate::screens::result_ir::ResultIrState>,
     pub profile_root: &'a Path,
+    pub app_paths: &'a AppPaths,
 }
 
 /// `EguiLayer::run` の 1 フレーム出力。
@@ -688,6 +697,7 @@ impl EguiLayer {
             mut practice,
             mut result_ir,
             profile_root,
+            app_paths,
         } = context;
         let raw_input = self.state.take_egui_input(window);
         let ctx = self.ctx.clone();
@@ -781,6 +791,7 @@ impl EguiLayer {
                     &mut profile_config.skin,
                     skin_meta,
                     skin_catalog,
+                    app_paths,
                 );
                 save_profile_config |= skin_actions.save;
                 reset_skin_config |= skin_actions.reset;
@@ -3592,11 +3603,24 @@ fn skin_path_combo(
         .show_ui(ui, |ui| {
             ui.selectable_value(&mut selected, String::new(), "(デフォルト)");
             for candidate in candidates {
-                ui.selectable_value(
+                let response = ui.selectable_value(
                     &mut selected,
                     candidate.path.clone(),
                     skin_candidate_display(candidate),
                 );
+                match candidate.origin {
+                    SkinCandidateOrigin::Bundled => {
+                        response.on_hover_text(
+                            "同梱スキンです。編集する場合は data_dir/skins にコピーしてユーザースキンとして選択してください。",
+                        );
+                    }
+                    SkinCandidateOrigin::User => {
+                        response.on_hover_text("data_dir/skins 配下のユーザースキンです。");
+                    }
+                    SkinCandidateOrigin::External => {
+                        response.on_hover_text("BMZ の data_dir 外にある外部スキンです。");
+                    }
+                }
             }
         });
     let combo_changed = selected != current;
@@ -3627,10 +3651,19 @@ fn skin_candidate_label(candidates: &[SkinCandidate], current: &str) -> String {
 }
 
 fn skin_candidate_display(candidate: &SkinCandidate) -> String {
+    let prefix = skin_candidate_origin_label(candidate.origin);
     if candidate.name.is_empty() {
-        candidate.path.clone()
+        format!("{prefix} {}", candidate.path)
     } else {
-        format!("{} ({})", candidate.name, candidate.path)
+        format!("{prefix} {} ({})", candidate.name, candidate.path)
+    }
+}
+
+fn skin_candidate_origin_label(origin: SkinCandidateOrigin) -> &'static str {
+    match origin {
+        SkinCandidateOrigin::Bundled => "[同梱]",
+        SkinCandidateOrigin::User => "[ユーザー]",
+        SkinCandidateOrigin::External => "[外部]",
     }
 }
 
@@ -3733,6 +3766,7 @@ fn build_skin_panel(
     skin: &mut SkinConfig,
     skin_meta: &SkinConfigMeta,
     skin_catalog: &SkinCatalog,
+    app_paths: &AppPaths,
 ) -> SkinPanelActions {
     let mut save_clicked = false;
     let mut reset_clicked = false;
@@ -3798,18 +3832,18 @@ fn build_skin_panel(
             });
             ui.separator();
             ui.label("読み込み済みスキンが宣言する設定可能項目:");
-            let select_root = skin_root_path(&skin.select);
-            let decide_root = skin_root_path(&skin.decide);
-            let play4_root = skin_root_path(&skin.play4);
-            let play5_root = skin_root_path(&skin.play5);
-            let play6_root = skin_root_path(&skin.play6);
-            let play7_root = skin_root_path(&skin.play7);
-            let play8_root = skin_root_path(&skin.play8);
-            let play9_root = skin_root_path(&skin.play9);
-            let play10_root = skin_root_path(&skin.play10);
-            let play14_root = skin_root_path(&skin.play14);
-            let result_root = skin_root_path(&skin.result);
-            let course_result_root = skin_root_path(&skin.course_result);
+            let select_root = skin_root_path(app_paths, &skin.select);
+            let decide_root = skin_root_path(app_paths, &skin.decide);
+            let play4_root = skin_root_path(app_paths, &skin.play4);
+            let play5_root = skin_root_path(app_paths, &skin.play5);
+            let play6_root = skin_root_path(app_paths, &skin.play6);
+            let play7_root = skin_root_path(app_paths, &skin.play7);
+            let play8_root = skin_root_path(app_paths, &skin.play8);
+            let play9_root = skin_root_path(app_paths, &skin.play9);
+            let play10_root = skin_root_path(app_paths, &skin.play10);
+            let play14_root = skin_root_path(app_paths, &skin.play14);
+            let result_root = skin_root_path(app_paths, &skin.result);
+            let course_result_root = skin_root_path(app_paths, &skin.course_result);
             changed |= build_scene_skin_defs(
                 ui,
                 "選曲スキン",
@@ -4159,12 +4193,13 @@ fn add_offset_drag_values(
 }
 
 /// スキンパス文字列からスキンルートディレクトリ (親ディレクトリ) を得る。
-fn skin_root_path(skin_path: &str) -> Option<PathBuf> {
+fn skin_root_path(app_paths: &AppPaths, skin_path: &str) -> Option<PathBuf> {
     let trimmed = skin_path.trim();
     if trimmed.is_empty() {
         return None;
     }
-    Path::new(trimmed).parent().map(Path::to_path_buf)
+    let path = app_paths.resolve_path_ref(trimmed).ok()?;
+    if path.is_dir() { Some(path) } else { path.parent().map(Path::to_path_buf) }
 }
 
 /// `pattern` (スキンルート相対、末尾要素にワイルドカード `*` を 1 個まで) に

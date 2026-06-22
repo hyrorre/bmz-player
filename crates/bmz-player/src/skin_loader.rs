@@ -15,6 +15,7 @@ use bmz_skin::SkinKind as DecodeSkinKind;
 use rayon::prelude::*;
 
 use crate::config::profile_config::SkinConfig;
+use crate::paths::{AppPaths, resolve_app_paths};
 
 /// `SkinConfig` から key_mode に対応するプレイスキン path / options / files を借用する。
 pub struct PlaySkinSelection<'a> {
@@ -211,25 +212,39 @@ pub fn apply_skin_from_dir(renderer: &mut Renderer, skin_root: &Path) -> Result<
 }
 
 pub fn default_skin_root() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../data/skins/default")
+    resolve_app_paths()
+        .map(|paths| paths.default_skin_root())
+        .unwrap_or_else(|_| Path::new(env!("CARGO_MANIFEST_DIR")).join("../../data/skins/default"))
+}
+
+pub fn default_skin_root_from_paths(app_paths: &AppPaths) -> PathBuf {
+    app_paths.default_skin_root()
 }
 
 pub fn apply_default_skin(renderer: &mut Renderer) -> Result<()> {
     apply_skin_from_dir(renderer, &default_skin_root())
 }
 
+pub fn apply_default_skin_from_paths(renderer: &mut Renderer, app_paths: &AppPaths) -> Result<()> {
+    apply_skin_from_dir(renderer, &default_skin_root_from_paths(app_paths))
+}
+
 /// `profile.toml` の `[skin] play` 設定からスキンをロードする。
 /// 空文字列 → デフォルトスキン、`.json`/`.luaskin`/`.lua`/`.lr2skin` 拡張子 → beatoraja スキン、
 /// それ以外 → `skin.toml` を含む bmz スキンディレクトリとして扱う。
-pub fn apply_skin_from_config(renderer: &mut Renderer, play_skin_path: &str) -> Result<()> {
+pub fn apply_skin_from_config(
+    renderer: &mut Renderer,
+    app_paths: &AppPaths,
+    play_skin_path: &str,
+) -> Result<()> {
     if play_skin_path.is_empty() {
-        return apply_default_skin(renderer);
+        return apply_default_skin_from_paths(renderer, app_paths);
     }
-    let path = Path::new(play_skin_path);
-    if is_decodable_skin_path(path) {
-        apply_beatoraja_json_skin(renderer, path)
+    let path = app_paths.resolve_path_ref(play_skin_path)?;
+    if is_decodable_skin_path(&path) {
+        apply_beatoraja_json_skin(renderer, &path)
     } else {
-        apply_skin_from_dir(renderer, path)
+        apply_skin_from_dir(renderer, &path)
     }
 }
 
@@ -263,12 +278,27 @@ fn apply_beatoraja_json_skin_for_kind(
 /// 起動時に 1 回だけ呼ばれることを想定 (同じテクスチャを複数回 upsert しても害は無いが無駄)。
 pub fn load_default_skin_into_renderer(renderer: &mut Renderer) -> Result<SkinManifest> {
     let default_root = default_skin_root();
+    load_default_skin_root_into_renderer(renderer, &default_root)
+}
+
+pub fn load_default_skin_into_renderer_from_paths(
+    renderer: &mut Renderer,
+    app_paths: &AppPaths,
+) -> Result<SkinManifest> {
+    let default_root = default_skin_root_from_paths(app_paths);
+    load_default_skin_root_into_renderer(renderer, &default_root)
+}
+
+fn load_default_skin_root_into_renderer(
+    renderer: &mut Renderer,
+    default_root: &Path,
+) -> Result<SkinManifest> {
     let manifest_path = default_root.join("skin.toml");
     let manifest = SkinManifest::load(&manifest_path)
         .with_context(|| format!("failed to load skin manifest: {}", manifest_path.display()))?
-        .with_texture_source_sizes(&default_root);
+        .with_texture_source_sizes(default_root);
 
-    for texture in manifest.resolve_textures(&default_root) {
+    for texture in manifest.resolve_textures(default_root) {
         renderer.load_png_texture(texture.id, &texture.path).with_context(|| {
             format!(
                 "failed to load default skin texture {}: {}",
@@ -1158,6 +1188,11 @@ mod tests {
     use bmz_render::renderer::Renderer;
     use bmz_render::scene::{AppSceneSnapshot, SelectRowSnapshot, SelectSnapshot};
     use bmz_render::skin::{DynamicTimerRuntime, SkinContext, SkinDocumentTexture, SkinImageSize};
+
+    fn test_app_paths() -> AppPaths {
+        let data = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../data");
+        AppPaths::from_dirs(data.clone(), data.clone(), data.join("cache"), data.join("logs"))
+    }
 
     #[test]
     fn default_skin_root_contains_manifest() {
@@ -2146,8 +2181,9 @@ mod tests {
     #[test]
     fn apply_skin_from_config_empty_path_uses_default_skin() {
         let mut renderer = Renderer::default();
+        let app_paths = test_app_paths();
 
-        apply_skin_from_config(&mut renderer, "").unwrap();
+        apply_skin_from_config(&mut renderer, &app_paths, "").unwrap();
     }
 
     #[test]
@@ -2158,8 +2194,9 @@ mod tests {
             return;
         }
         let mut renderer = Renderer::default();
+        let app_paths = test_app_paths();
 
-        apply_skin_from_config(&mut renderer, skin_path.to_str().unwrap()).unwrap();
+        apply_skin_from_config(&mut renderer, &app_paths, skin_path.to_str().unwrap()).unwrap();
     }
 
     #[test]
@@ -2170,8 +2207,9 @@ mod tests {
             return;
         }
         let mut renderer = Renderer::default();
+        let app_paths = test_app_paths();
 
-        apply_skin_from_config(&mut renderer, skin_path.to_str().unwrap()).unwrap();
+        apply_skin_from_config(&mut renderer, &app_paths, skin_path.to_str().unwrap()).unwrap();
     }
 
     #[test]

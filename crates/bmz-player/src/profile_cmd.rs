@@ -207,14 +207,12 @@ mod tests {
         let root = std::env::temp_dir()
             .join(format!("bmz-player-profile-cmd-{name}-{}", std::process::id()));
         let _ = fs::remove_dir_all(&root);
-        AppPaths {
-            config_toml: root.join("config.toml"),
-            library_db: root.join("library.db"),
-            profiles_dir: root.join("profiles"),
-            cache_dir: root.join("cache"),
-            logs_dir: root.join("logs"),
-            data_dir: root,
-        }
+        AppPaths::from_dirs(
+            root.join("resources"),
+            root.clone(),
+            root.join("cache"),
+            root.join("logs"),
+        )
     }
 
     #[test]

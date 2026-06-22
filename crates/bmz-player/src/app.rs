@@ -110,7 +110,7 @@ use crate::select_options::{ArrangeOption, AssistOption, DoubleOption, HsFixOpti
 use crate::skin_loader::{
     DecodedSkin, PreparedSource, SkinKind, UploadedSkin, apply_skin_from_config,
     decode_beatoraja_skin_with_options, install_decoded_font, install_decoded_skin,
-    is_decodable_skin_path, load_default_skin_into_renderer, play_skin_selection_for,
+    is_decodable_skin_path, load_default_skin_into_renderer_from_paths, play_skin_selection_for,
     set_decoded_skin_context, upload_decoded_skin,
 };
 use crate::songs_cmd::scan_songs_with_progress;
@@ -123,8 +123,8 @@ use crate::storage::scan::{ScanProgress, ScanReport};
 use crate::storage::score_db::{PlayerStats, ScoreDatabase};
 use crate::storage::score_import::{ScoreImportRequest, import_scores};
 use crate::ui::{
-    DebugInfo, EguiLayer, EguiRunContext, SceneSkinDefs, SkinCandidate, SkinCatalog,
-    SkinConfigMeta, SkinReloadRequest, SongScanRequest,
+    DebugInfo, EguiLayer, EguiRunContext, SceneSkinDefs, SkinCandidate, SkinCandidateOrigin,
+    SkinCatalog, SkinConfigMeta, SkinReloadRequest, SongScanRequest,
 };
 use bmz_render::skin::{
     DestinationListEntry, SkinAnimationDef, SkinClickHit, SkinClickTarget, SkinContext,
@@ -1600,7 +1600,7 @@ impl WinitApp {
         let target_option = target_option_from_profile(boot.profile_config.play.target);
         let select_keys = SelectKeyBindings::from_profile(&boot.profile_config.input);
         let mut renderer = Renderer::default();
-        let skin_catalog = scan_skin_catalog();
+        let skin_catalog = scan_skin_catalog(&boot.app_paths);
         let (skin_decode_tx, skin_decode_rx) = mpsc::channel::<PendingSkinResult>();
         let (skin_upload_tx, skin_upload_rx) = mpsc::channel::<PendingUploadResult>();
         let (select_meta_image_tx, select_meta_image_rx) = mpsc::channel::<SelectMetaImageResult>();
@@ -1615,6 +1615,7 @@ impl WinitApp {
             pending_result_skin,
         ) = load_initial_skin_textures(
             &mut renderer,
+            &boot.app_paths,
             &skin_decode_tx,
             0,
             &boot.profile_config.skin.select,
@@ -8157,8 +8158,20 @@ impl WinitApp {
             tracing::debug!(?slot, "result skin path empty; using fallback result drawing");
             return;
         }
-        let path = Path::new(&trimmed);
-        if !is_decodable_skin_path(path) {
+        let path = match self.boot.app_paths.resolve_path_ref(&trimmed) {
+            Ok(path) => path,
+            Err(error) => {
+                self.set_empty_result_skin_context();
+                tracing::warn!(
+                    ?slot,
+                    path = %trimmed,
+                    error = %format_error_chain(&error),
+                    "failed to resolve result skin path; using fallback result drawing"
+                );
+                return;
+            }
+        };
+        if !is_decodable_skin_path(&path) {
             self.set_empty_result_skin_context();
             tracing::warn!(
                 ?slot,
@@ -8171,7 +8184,7 @@ impl WinitApp {
         spawn_skin_decode(
             self.skin_decode_tx.clone(),
             generation,
-            path.to_path_buf(),
+            path,
             SkinKind::Result,
             options,
             files,
@@ -8884,6 +8897,7 @@ impl WinitApp {
                 practice: practice_panel_ctx.as_mut(),
                 result_ir: result_ir_panel,
                 profile_root: &self.boot.profile_paths.root_dir,
+                app_paths: &self.boot.app_paths,
             },
         );
         self.renderer.set_egui_frame(output.frame);
@@ -9007,7 +9021,7 @@ impl WinitApp {
         if let Some(defs) = self.skin_defs_cache.get(&key) {
             return defs.clone();
         }
-        let defs = play_skin_defs_from_path(&key);
+        let defs = play_skin_defs_from_path(&self.boot.app_paths, &key);
         self.skin_defs_cache.insert(key, defs.clone());
         defs
     }
@@ -9077,6 +9091,7 @@ impl WinitApp {
         let texture_request = SkinReloadRequest { result: false, course_result: false, ..request };
         let (pending_select, pending_decide, _pending_result) = reload_skin_textures(
             &mut self.renderer,
+            &self.boot.app_paths,
             &self.skin_decode_tx,
             &mut self.skin_reload_generations,
             texture_request,
@@ -9140,10 +9155,23 @@ impl WinitApp {
             tracing::debug!(?key_mode, "play skin path empty; using default skin only");
             return;
         }
-        let path = Path::new(trimmed);
-        if !is_decodable_skin_path(path) {
+        let path = match self.boot.app_paths.resolve_path_ref(trimmed) {
+            Ok(path) => path,
+            Err(error) => {
+                tracing::warn!(
+                    ?key_mode,
+                    path = trimmed,
+                    error = %format_error_chain(&error),
+                    "failed to resolve play skin path; using existing textures"
+                );
+                return;
+            }
+        };
+        if !is_decodable_skin_path(&path) {
             // TOML directory スキンは同期ロード。デフォルトスキンを下敷きに renderer 直差し替え。
-            if let Err(error) = apply_skin_from_config(&mut self.renderer, trimmed) {
+            if let Err(error) =
+                apply_skin_from_config(&mut self.renderer, &self.boot.app_paths, trimmed)
+            {
                 tracing::warn!(
                     ?key_mode,
                     path = trimmed,
@@ -9157,7 +9185,7 @@ impl WinitApp {
         spawn_skin_decode(
             self.skin_decode_tx.clone(),
             generation,
-            path.to_path_buf(),
+            path,
             SkinKind::Play,
             selection.options.clone(),
             selection.files.clone(),
@@ -9831,6 +9859,7 @@ fn pick_exclusive_video_mode(monitor: &MonitorHandle) -> Option<VideoModeHandle>
 #[allow(clippy::too_many_arguments)]
 fn load_initial_skin_textures(
     renderer: &mut Renderer,
+    app_paths: &crate::paths::AppPaths,
     skin_decode_tx: &mpsc::Sender<PendingSkinResult>,
     generation: u64,
     select_skin_path: &str,
@@ -9854,12 +9883,22 @@ fn load_initial_skin_textures(
     let result_trimmed = result_skin_path.trim().to_string();
 
     if !decide_trimmed.is_empty() {
-        let decide_path = Path::new(&decide_trimmed);
-        if is_decodable_skin_path(decide_path) {
+        let decide_path = match app_paths.resolve_path_ref(&decide_trimmed) {
+            Ok(path) => path,
+            Err(error) => {
+                tracing::warn!(
+                    path = %decide_trimmed,
+                    error = %format_error_chain(&error),
+                    "failed to resolve decide skin path; ignoring"
+                );
+                PathBuf::new()
+            }
+        };
+        if !decide_path.as_os_str().is_empty() && is_decodable_skin_path(&decide_path) {
             spawn_skin_decode(
                 skin_decode_tx.clone(),
                 generation,
-                decide_path.to_path_buf(),
+                decide_path,
                 SkinKind::Decide,
                 decide_options.clone(),
                 decide_files.clone(),
@@ -9868,12 +9907,22 @@ fn load_initial_skin_textures(
         }
     }
     if !result_trimmed.is_empty() {
-        let result_path = Path::new(&result_trimmed);
-        if is_decodable_skin_path(result_path) {
+        let result_path = match app_paths.resolve_path_ref(&result_trimmed) {
+            Ok(path) => path,
+            Err(error) => {
+                tracing::warn!(
+                    path = %result_trimmed,
+                    error = %format_error_chain(&error),
+                    "failed to resolve result skin path; ignoring"
+                );
+                PathBuf::new()
+            }
+        };
+        if !result_path.as_os_str().is_empty() && is_decodable_skin_path(&result_path) {
             spawn_skin_decode(
                 skin_decode_tx.clone(),
                 generation,
-                result_path.to_path_buf(),
+                result_path,
                 SkinKind::Result,
                 result_options.clone(),
                 result_files.clone(),
@@ -9882,7 +9931,7 @@ fn load_initial_skin_textures(
         }
     }
 
-    let default_manifest = match load_default_skin_into_renderer(renderer) {
+    let default_manifest = match load_default_skin_into_renderer_from_paths(renderer, app_paths) {
         Ok(manifest) => Some(manifest),
         Err(error) => {
             tracing::warn!(
@@ -9896,39 +9945,58 @@ fn load_initial_skin_textures(
     // Select skin (クリティカルパス: 起動直後に表示される)
     let select_trimmed = select_skin_path.trim();
     if !select_trimmed.is_empty() {
-        let path = Path::new(select_trimmed);
-        if is_decodable_skin_path(path) {
-            let video_sources = apply_json_skin_sync(
-                renderer,
-                path,
-                SkinKind::Select,
-                default_manifest.as_ref(),
-                select_options,
-                select_files,
-            );
-            if !video_sources.is_empty() {
-                skin_video_sources.insert(SkinKind::Select, video_sources);
+        match app_paths.resolve_path_ref(select_trimmed) {
+            Ok(path) if is_decodable_skin_path(&path) => {
+                let video_sources = apply_json_skin_sync(
+                    renderer,
+                    &path,
+                    SkinKind::Select,
+                    default_manifest.as_ref(),
+                    select_options,
+                    select_files,
+                );
+                if !video_sources.is_empty() {
+                    skin_video_sources.insert(SkinKind::Select, video_sources);
+                }
             }
-        } else {
-            tracing::warn!(
-                path = %path.display(),
-                "select skin path is not a supported beatoraja skin file; ignoring"
-            );
+            Ok(path) => {
+                tracing::warn!(
+                    path = %path.display(),
+                    "select skin path is not a supported beatoraja skin file; ignoring"
+                );
+            }
+            Err(error) => {
+                tracing::warn!(
+                    path = %select_trimmed,
+                    error = %format_error_chain(&error),
+                    "failed to resolve select skin path; ignoring"
+                );
+            }
         }
     }
 
-    if !result_trimmed.is_empty() && !is_decodable_skin_path(Path::new(&result_trimmed)) {
-        tracing::warn!(
-            path = %result_trimmed,
-            "result skin path is not a supported beatoraja skin file; ignoring"
-        );
+    if !result_trimmed.is_empty() {
+        match app_paths.resolve_path_ref(&result_trimmed) {
+            Ok(path) if !is_decodable_skin_path(&path) => {
+                tracing::warn!(
+                    path = %path.display(),
+                    "result skin path is not a supported beatoraja skin file; ignoring"
+                );
+            }
+            _ => {}
+        }
     }
 
-    if !decide_trimmed.is_empty() && !is_decodable_skin_path(Path::new(&decide_trimmed)) {
-        tracing::warn!(
-            path = %decide_trimmed,
-            "decide skin path is not a supported beatoraja skin file; ignoring"
-        );
+    if !decide_trimmed.is_empty() {
+        match app_paths.resolve_path_ref(&decide_trimmed) {
+            Ok(path) if !is_decodable_skin_path(&path) => {
+                tracing::warn!(
+                    path = %path.display(),
+                    "decide skin path is not a supported beatoraja skin file; ignoring"
+                );
+            }
+            _ => {}
+        }
     }
 
     (default_manifest, skin_video_sources, pending_select, pending_decide, pending_result)
@@ -9937,6 +10005,7 @@ fn load_initial_skin_textures(
 #[allow(clippy::too_many_arguments)]
 fn reload_skin_textures(
     _renderer: &mut Renderer,
+    app_paths: &crate::paths::AppPaths,
     skin_decode_tx: &mpsc::Sender<PendingSkinResult>,
     generations: &mut SkinReloadGenerations,
     request: SkinReloadRequest,
@@ -9967,12 +10036,23 @@ fn reload_skin_textures(
         if trimmed.is_empty() {
             continue;
         }
-        let path = Path::new(trimmed);
-        if is_decodable_skin_path(path) {
+        let path = match app_paths.resolve_path_ref(trimmed) {
+            Ok(path) => path,
+            Err(error) => {
+                tracing::warn!(
+                    path = %trimmed,
+                    kind = ?kind,
+                    error = %format_error_chain(&error),
+                    "failed to resolve skin path; ignoring"
+                );
+                continue;
+            }
+        };
+        if is_decodable_skin_path(&path) {
             spawn_skin_decode(
                 skin_decode_tx.clone(),
                 generation,
-                path.to_path_buf(),
+                path.clone(),
                 kind,
                 options.clone(),
                 files.clone(),
@@ -10320,29 +10400,47 @@ fn skin_upload_worker(
     }
 }
 
-fn scan_skin_catalog() -> SkinCatalog {
-    let repo_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let root = repo_root.join("data/skins");
+fn scan_skin_catalog(app_paths: &crate::paths::AppPaths) -> SkinCatalog {
     let mut catalog = SkinCatalog::default();
-    scan_skin_catalog_dir(&repo_root, &root, &mut catalog);
+    let resource_skin_root = app_paths.resource_dir.join("skins");
+    let data_skin_root = app_paths.data_dir.join("skins");
+    scan_skin_catalog_dir(
+        &resource_skin_root,
+        &resource_skin_root,
+        SkinCandidateOrigin::Bundled,
+        &mut catalog,
+    );
+    if !same_path(&resource_skin_root, &data_skin_root) {
+        scan_skin_catalog_dir(
+            &data_skin_root,
+            &data_skin_root,
+            SkinCandidateOrigin::User,
+            &mut catalog,
+        );
+    }
     sort_skin_catalog(&mut catalog);
     catalog
 }
 
-fn scan_skin_catalog_dir(repo_root: &Path, dir: &Path, catalog: &mut SkinCatalog) {
+fn scan_skin_catalog_dir(
+    root: &Path,
+    dir: &Path,
+    origin: SkinCandidateOrigin,
+    catalog: &mut SkinCatalog,
+) {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return;
     };
     for entry in entries.flatten() {
         let path = entry.path();
         if path.is_dir() {
-            scan_skin_catalog_dir(repo_root, &path, catalog);
+            scan_skin_catalog_dir(root, &path, origin, catalog);
             continue;
         }
         if !is_skin_candidate_file(&path) {
             continue;
         }
-        match load_skin_candidate(repo_root, &path) {
+        match load_skin_candidate(root, &path, origin) {
             Some((skin_type, candidate)) => push_skin_candidate(catalog, skin_type, candidate),
             None => {
                 tracing::debug!(path = %path.display(), "skipping skin candidate without readable header")
@@ -10351,12 +10449,13 @@ fn scan_skin_catalog_dir(repo_root: &Path, dir: &Path, catalog: &mut SkinCatalog
     }
 }
 
-fn play_skin_defs_from_path(path: &str) -> SceneSkinDefs {
+fn play_skin_defs_from_path(app_paths: &crate::paths::AppPaths, path: &str) -> SceneSkinDefs {
     let trimmed = path.trim();
     if trimmed.is_empty() {
         return SceneSkinDefs::from_play_document(None);
     }
-    let document = load_skin_header_document(Path::new(trimmed));
+    let document =
+        app_paths.resolve_path_ref(trimmed).ok().and_then(|path| load_skin_header_document(&path));
     SceneSkinDefs::from_play_document(document.as_ref())
 }
 
@@ -10394,18 +10493,44 @@ fn load_skin_header_document(path: &Path) -> Option<SkinDocument> {
     }
 }
 
-fn load_skin_candidate(repo_root: &Path, path: &Path) -> Option<(i32, SkinCandidate)> {
+fn load_skin_candidate(
+    root: &Path,
+    path: &Path,
+    origin: SkinCandidateOrigin,
+) -> Option<(i32, SkinCandidate)> {
     let document = load_skin_header_document(path)?;
-    let relative = path.strip_prefix(repo_root).unwrap_or(path);
+    let relative = path.strip_prefix(root).unwrap_or(path);
     let name = if document.name.trim().is_empty() {
         relative.file_stem().and_then(|name| name.to_str()).unwrap_or("").to_string()
     } else {
         document.name
     };
-    Some((
-        document.skin_type,
-        SkinCandidate { name, path: relative.to_string_lossy().replace('\\', "/") },
-    ))
+    let stable_path = match origin {
+        SkinCandidateOrigin::Bundled => format!("resource:skins/{}", path_to_slash(relative)),
+        SkinCandidateOrigin::User => format!("data:skins/{}", path_to_slash(relative)),
+        SkinCandidateOrigin::External => path.to_string_lossy().replace('\\', "/"),
+    };
+    Some((document.skin_type, SkinCandidate { name, path: stable_path, origin }))
+}
+
+fn same_path(a: &Path, b: &Path) -> bool {
+    if a == b {
+        return true;
+    }
+    match (a.canonicalize(), b.canonicalize()) {
+        (Ok(a), Ok(b)) => a == b,
+        _ => false,
+    }
+}
+
+fn path_to_slash(path: &Path) -> String {
+    path.components()
+        .filter_map(|component| match component {
+            std::path::Component::Normal(part) => Some(part.to_string_lossy().into_owned()),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join("/")
 }
 
 const BMZ_SKIN_TYPE_PLAY_2KEYS: i32 = 21;
@@ -14569,7 +14694,8 @@ mod tests {
     #[test]
     fn skin_catalog_loads_rm_skin_lua_headers_when_available() {
         let repo_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-        let root = repo_root.join("data/skins/Rmz-skin");
+        let skin_root = repo_root.join("data/skins");
+        let root = skin_root.join("Rmz-skin");
         let cases = [
             ("play4main.luaskin", BMZ_SKIN_TYPE_PLAY_4KEYS),
             ("play5main.luaskin", 1),
@@ -14586,10 +14712,12 @@ mod tests {
             }
 
             let (skin_type, candidate) =
-                load_skin_candidate(&repo_root, &path).expect("load Rm-skin catalog candidate");
+                load_skin_candidate(&skin_root, &path, SkinCandidateOrigin::Bundled)
+                    .expect("load Rm-skin catalog candidate");
 
             assert_eq!(skin_type, expected_type, "{}", path.display());
-            assert_eq!(candidate.path, format!("data/skins/Rmz-skin/{file_name}"));
+            assert_eq!(candidate.path, format!("resource:skins/Rmz-skin/{file_name}"));
+            assert_eq!(candidate.origin, SkinCandidateOrigin::Bundled);
             assert!(candidate.name.contains("Rm-skin"), "candidate name: {}", candidate.name);
         }
     }
@@ -14603,6 +14731,7 @@ mod tests {
             SkinCandidate {
                 name: "Seven".to_string(),
                 path: "data/skins/example/play7.luaskin".to_string(),
+                origin: SkinCandidateOrigin::User,
             },
         );
         push_skin_candidate(
@@ -14611,6 +14740,7 @@ mod tests {
             SkinCandidate {
                 name: "Five".to_string(),
                 path: "data/skins/example/play5.luaskin".to_string(),
+                origin: SkinCandidateOrigin::User,
             },
         );
         push_skin_candidate(
@@ -14619,6 +14749,7 @@ mod tests {
             SkinCandidate {
                 name: "Four".to_string(),
                 path: "data/skins/example/play4.luaskin".to_string(),
+                origin: SkinCandidateOrigin::User,
             },
         );
         push_skin_candidate(
@@ -14627,6 +14758,7 @@ mod tests {
             SkinCandidate {
                 name: "Six".to_string(),
                 path: "data/skins/example/play6.luaskin".to_string(),
+                origin: SkinCandidateOrigin::User,
             },
         );
         push_skin_candidate(
@@ -14635,6 +14767,7 @@ mod tests {
             SkinCandidate {
                 name: "Eight".to_string(),
                 path: "data/skins/example/play8.luaskin".to_string(),
+                origin: SkinCandidateOrigin::User,
             },
         );
         push_skin_candidate(
@@ -14643,6 +14776,7 @@ mod tests {
             SkinCandidate {
                 name: "Fourteen".to_string(),
                 path: "data/skins/example/play14.luaskin".to_string(),
+                origin: SkinCandidateOrigin::User,
             },
         );
         push_skin_candidate(
@@ -14651,6 +14785,7 @@ mod tests {
             SkinCandidate {
                 name: "Ten".to_string(),
                 path: "data/skins/example/play10.luaskin".to_string(),
+                origin: SkinCandidateOrigin::User,
             },
         );
         push_skin_candidate(
@@ -14659,6 +14794,7 @@ mod tests {
             SkinCandidate {
                 name: "Nine".to_string(),
                 path: "data/skins/example/play9.luaskin".to_string(),
+                origin: SkinCandidateOrigin::User,
             },
         );
         push_skin_candidate(
@@ -14667,6 +14803,7 @@ mod tests {
             SkinCandidate {
                 name: "Course Result".to_string(),
                 path: "data/skins/example/course-result.luaskin".to_string(),
+                origin: SkinCandidateOrigin::User,
             },
         );
 
@@ -14889,7 +15026,13 @@ mod tests {
             return;
         }
 
-        let defs = play_skin_defs_from_path(&path.to_string_lossy());
+        let app_paths = crate::paths::AppPaths::from_dirs(
+            repo.join("data"),
+            repo.join("data"),
+            repo.join("data/cache"),
+            repo.join("data/logs"),
+        );
+        let defs = play_skin_defs_from_path(&app_paths, &path.to_string_lossy());
 
         assert!(!defs.property.is_empty());
         assert!(!defs.filepath.is_empty());

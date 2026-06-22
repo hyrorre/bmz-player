@@ -82,7 +82,7 @@ pub fn bootstrap() -> Result<BootstrappedApp> {
     app_paths.ensure_dirs()?;
 
     let mut app_config = load_or_create_app_config(&app_paths)?;
-    if let Some(sample_root) = bundled_sample_song_root() {
+    if let Some(sample_root) = bundled_sample_song_root(&app_paths) {
         let sample_root_str = sample_root.to_string_lossy().into_owned();
         if !app_config.songs.roots.iter().any(|r| r.path == sample_root_str) {
             app_config.songs.roots.push(PathEntry {
@@ -102,7 +102,8 @@ pub fn bootstrap() -> Result<BootstrappedApp> {
     crate::storage::migration::migrate_score_db(&profile_paths.score_db)?;
 
     let mut library_db = LibraryDatabase::open(&app_paths.library_db)?;
-    let scan_roots = startup_scan_roots(&app_config, bundled_sample_song_root().as_deref());
+    let bundled_sample_root = bundled_sample_song_root(&app_paths);
+    let scan_roots = startup_scan_roots(&app_config, bundled_sample_root.as_deref());
     let startup_scan = if scan_roots.is_empty() {
         None
     } else {
@@ -154,11 +155,8 @@ fn startup_scan_roots(app_config: &AppConfig, sample_root: Option<&Path>) -> Vec
     roots
 }
 
-fn bundled_sample_song_root() -> Option<PathBuf> {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../data/songs/sample-playable")
-        .canonicalize()
-        .ok()?;
+fn bundled_sample_song_root(app_paths: &AppPaths) -> Option<PathBuf> {
+    let root = app_paths.resource_dir.join("songs/sample-playable").canonicalize().ok()?;
     root.is_dir().then_some(root)
 }
 
@@ -188,6 +186,11 @@ mod tests {
     use super::*;
     use crate::storage::common::configure_connection;
     use crate::storage::migration::{LIBRARY_MIGRATIONS, run_migrations};
+
+    fn test_app_paths() -> AppPaths {
+        let data = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../data");
+        AppPaths::from_dirs(data.clone(), data.clone(), data.join("cache"), data.join("logs"))
+    }
 
     #[test]
     fn startup_scan_roots_includes_sample_root_when_auto_scan_is_disabled() {
@@ -236,7 +239,9 @@ mod tests {
 
     #[test]
     fn bundled_sample_root_imports_playable_chart() {
-        let sample_root = bundled_sample_song_root().expect("sample song root should exist");
+        let app_paths = test_app_paths();
+        let sample_root =
+            bundled_sample_song_root(&app_paths).expect("sample song root should exist");
         let sample_chart = sample_root.join("sample-playable.bms");
         let import = import_bms_chart(&sample_chart, None, true).unwrap();
         assert!(import.warnings.is_empty());
