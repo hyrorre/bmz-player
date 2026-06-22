@@ -54,6 +54,7 @@ pub struct CpalSharedOutput {
 
 struct CpalSharedOutputInner {
     stream: ::cpal::Stream,
+    host_id: ::cpal::HostId,
     sample_rate: u32,
     current_frame: Arc<AtomicU64>,
     sources: SharedAudioSources,
@@ -202,6 +203,7 @@ impl CpalBackend {
         Ok(CpalSharedOutput {
             inner: Rc::new(CpalSharedOutputInner {
                 stream,
+                host_id: host.id(),
                 sample_rate,
                 current_frame,
                 sources,
@@ -409,6 +411,18 @@ impl CpalSharedOutput {
     pub fn play(&self) -> Result<(), CpalBackendError> {
         self.inner.stream.play().map_err(CpalBackendError::PlayStream)?;
         Ok(())
+    }
+
+    pub fn uses_pulseaudio_host(&self) -> bool {
+        #[cfg(feature = "pulseaudio")]
+        {
+            matches!(self.inner.host_id, ::cpal::HostId::PulseAudio)
+        }
+        #[cfg(not(feature = "pulseaudio"))]
+        {
+            let _ = self.inner.host_id;
+            false
+        }
     }
 
     pub fn sample_rate(&self) -> u32 {

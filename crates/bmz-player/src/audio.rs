@@ -104,6 +104,10 @@ impl AudioRuntime {
         self.output.sample_rate()
     }
 
+    pub fn uses_pulseaudio_host(&self) -> bool {
+        self.output.uses_pulseaudio_host()
+    }
+
     fn add_source(&self, engine: SharedAudioEngine) -> CpalOutputSource {
         self.output.add_source(engine)
     }

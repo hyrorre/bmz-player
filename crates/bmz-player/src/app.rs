@@ -10859,15 +10859,45 @@ impl ApplicationHandler for WinitApp {
     fn exiting(&mut self, _event_loop: &ActiveEventLoop) {
         self.flush_pending_screenshots("app exit");
         self.save_current_play_options(self.active_hispeed(), "game exit");
+        if self.release_audio_for_process_exit() {
+            std::process::exit(0);
+        }
+        // Linux の winit/wgpu backend では Window より後に Surface を drop すると
+        // native 側で落ちることがあるため、Window を保持したまま GPU 資源を解放する。
+        self.egui = None;
+        self.renderer.detach_surface();
+    }
+}
+
+impl WinitApp {
+    fn release_audio_for_process_exit(&mut self) -> bool {
+        if self.audio_runtime.as_ref().is_some_and(AudioRuntime::uses_pulseaudio_host) {
+            // cpal 0.18 の PulseAudio backend は stream Drop 時に pulseaudio crate の
+            // reactor 切断と stream delete が重なり、終了時に native 側で abort する
+            // 環境がある。プロセス終了直前だけ handle を残し、通常の drop cascade
+            // に戻らずプロセスを終了する。
+            if let Some(audio) = self.draining_audio.take() {
+                std::mem::forget(audio);
+            }
+            if let Some(active_play) = self.active_play.take() {
+                std::mem::forget(active_play);
+            }
+            if let Some(system_audio) = self.system_audio.take() {
+                std::mem::forget(system_audio);
+            }
+            if let Some(runtime) = self.audio_runtime.take() {
+                std::mem::forget(runtime);
+            }
+            tracing::debug!("exiting process directly after PulseAudio output workaround");
+            return true;
+        }
+
         // プロセス終了前に音声出力を確実に Drop し、ASIO の停止・後処理を走らせる。
         self.draining_audio = None;
         self.active_play = None;
         self.system_audio = None;
         self.audio_runtime = None;
-        // Linux の winit/wgpu backend では Window より後に Surface を drop すると
-        // native 側で落ちることがあるため、Window を保持したまま GPU 資源を解放する。
-        self.egui = None;
-        self.renderer.detach_surface();
+        false
     }
 }
 
