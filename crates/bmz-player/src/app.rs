@@ -6210,6 +6210,8 @@ impl WinitApp {
 
     /// ウィンドウと renderer surface の準備後に、初めて共有 cpal ストリームを開く。
     /// 起動ロード中に音声デバイスを start して、デバイス側の初期化音が先に鳴るのを避ける。
+    /// 初回描画後は stream も開始し、PulseAudio backend で corked stream の内部
+    /// worker だけが動き続ける状態を避ける。
     fn ensure_audio_output(&mut self) {
         if self.audio_runtime.is_some() || self.audio_output_open_attempted {
             return;
@@ -6219,6 +6221,9 @@ impl WinitApp {
         match AudioRuntime::open(&self.boot.app_config.audio) {
             Ok(runtime) => {
                 self.install_system_audio(&runtime, None);
+                if let Err(error) = runtime.play() {
+                    tracing::warn!(%error, "failed to start shared audio output stream");
+                }
                 self.audio_runtime = Some(runtime);
                 tracing::info!("audio output opened after window initialization");
             }
@@ -6268,6 +6273,9 @@ impl WinitApp {
         match AudioRuntime::open(&self.boot.app_config.audio) {
             Ok(runtime) => {
                 self.install_system_audio(&runtime, system_engine);
+                if let Err(error) = runtime.play() {
+                    tracing::warn!(%error, "failed to start shared audio output stream");
+                }
                 self.audio_runtime = Some(runtime);
                 tracing::info!("audio output reopened with current settings");
             }
