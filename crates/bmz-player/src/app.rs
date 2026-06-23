@@ -94,12 +94,12 @@ use crate::screens::result_model::{ResultFastSlowJudgeCounts, ResultSummary};
 use crate::screens::select_model::{
     COURSE_ROOT_PATH, DifficultyTableText, MAX_SEARCH_HISTORY, SEARCH_PATH_PREFIX,
     SelectFolderSummary, SelectItem, TABLE_ROOT_PATH, TablePath, course_root_item,
-    difficulty_table_text_for_chart, load_select_items_for_courses,
-    load_select_items_for_search_for_rule_mode_with_table_order,
-    load_select_items_in_folder_for_rule_mode_with_table_order,
+    difficulty_table_text_for_chart_with_active_sources, load_select_items_for_courses,
+    load_select_items_for_search_for_rule_mode_with_filters,
+    load_select_items_in_folder_for_rule_mode_with_filters,
     load_select_items_in_table_level_for_rule_mode, parse_search_query, parse_table_path,
     root_folder_items, search_history_folder_items, select_folder_summary_for_rule_mode,
-    song_scan_path_from_context, table_folder_items, table_level_folder_items,
+    song_scan_path_from_context, table_folder_items_for_active_sources, table_level_folder_items,
     table_source_url_from_context,
 };
 use crate::screens::settings_edit::{SettingsBindings, SettingsEditSession, adjust_settings_draft};
@@ -2229,11 +2229,12 @@ impl WinitApp {
             return DifficultyTableText::default();
         };
 
-        difficulty_table_text_for_chart(
+        difficulty_table_text_for_chart_with_active_sources(
             &self.boot.library_db,
             &chart,
             &source_order,
             source_hint.as_deref(),
+            Some(&source_order),
         )
         .map_err(|error| {
             tracing::warn!(%error, chart_id, "failed to resolve difficulty table skin text");
@@ -11383,7 +11384,13 @@ fn enabled_root_paths(app_config: &crate::config::app_config::AppConfig) -> Vec<
 }
 
 fn table_source_order(app_config: &crate::config::app_config::AppConfig) -> Vec<String> {
-    app_config.tables.sources.iter().map(|source| source.url.clone()).collect()
+    app_config
+        .tables
+        .sources
+        .iter()
+        .filter(|source| source.enabled)
+        .map(|source| source.url.clone())
+        .collect()
 }
 
 /// 選曲リストを構築し、mode filter / sort を適用して返す。
@@ -11411,6 +11418,8 @@ fn build_select_items_for_stack(
     stack: &[String],
     search_history: &[String],
 ) -> Vec<SelectItem> {
+    let active_song_roots = enabled_root_paths(&boot.app_config);
+    let active_table_sources = table_source_order(&boot.app_config);
     match stack.last() {
         Some(path) if path.starts_with(crate::screens::settings_model::CONFIG_ROOT_PATH) => {
             load_settings_items(path)
@@ -11426,13 +11435,15 @@ fn build_select_items_for_stack(
         }
         Some(path) if path.starts_with(SEARCH_PATH_PREFIX) => match parse_search_query(path) {
             Some(query) => {
-                match load_select_items_for_search_for_rule_mode_with_table_order(
+                match load_select_items_for_search_for_rule_mode_with_filters(
                     &boot.library_db,
                     &boot.score_db,
                     query,
                     boot.profile_config.play.ln_mode_policy,
                     boot.profile_config.play.rule_mode,
-                    &table_source_order(&boot.app_config),
+                    &active_table_sources,
+                    Some(&active_song_roots),
+                    Some(&active_table_sources),
                 ) {
                     Ok(items) => items,
                     Err(error) => {
@@ -11445,7 +11456,11 @@ fn build_select_items_for_stack(
         },
         Some(path) if path.starts_with(TABLE_ROOT_PATH) => match parse_table_path(path) {
             Some(TablePath::Root) => {
-                match table_folder_items(&boot.library_db, &table_source_order(&boot.app_config)) {
+                match table_folder_items_for_active_sources(
+                    &boot.library_db,
+                    &active_table_sources,
+                    Some(&active_table_sources),
+                ) {
                     Ok(items) => items,
                     Err(error) => {
                         tracing::error!(%error, "failed to load difficulty table list");
@@ -11454,6 +11469,9 @@ fn build_select_items_for_stack(
                 }
             }
             Some(TablePath::Table { source_url }) => {
+                if !active_table_sources.iter().any(|url| url == source_url) {
+                    return Vec::new();
+                }
                 match table_level_folder_items(&boot.library_db, source_url) {
                     Ok(items) => items,
                     Err(error) => {
@@ -11463,6 +11481,9 @@ fn build_select_items_for_stack(
                 }
             }
             Some(TablePath::Level { source_url, level }) => {
+                if !active_table_sources.iter().any(|url| url == source_url) {
+                    return Vec::new();
+                }
                 match load_select_items_in_table_level_for_rule_mode(
                     &boot.library_db,
                     &boot.score_db,
@@ -11481,13 +11502,15 @@ fn build_select_items_for_stack(
             None => Vec::new(),
         },
         Some(folder) => {
-            match load_select_items_in_folder_for_rule_mode_with_table_order(
+            match load_select_items_in_folder_for_rule_mode_with_filters(
                 &boot.library_db,
                 &boot.score_db,
                 folder,
                 boot.profile_config.play.ln_mode_policy,
                 boot.profile_config.play.rule_mode,
-                &table_source_order(&boot.app_config),
+                &active_table_sources,
+                Some(&active_song_roots),
+                Some(&active_table_sources),
             ) {
                 Ok(items) => items,
                 Err(error) => {
@@ -11500,7 +11523,7 @@ fn build_select_items_for_stack(
             // ルートには曲フォルダに続けて、コースフォルダ・各難易度表フォルダを並べる。
             // 難易度表由来のコースは各テーブルフォルダ内に表示されるため、
             // 手動インポート分（source が "table:..." でないもの）がある場合のみ COURSE フォルダを表示する。
-            let mut items = root_folder_items(&enabled_root_paths(&boot.app_config));
+            let mut items = root_folder_items(&active_song_roots);
             match boot.library_db.list_courses() {
                 Ok(courses) if courses.iter().any(|c| !c.source.starts_with("table:")) => {
                     items.push(course_root_item());
@@ -11510,7 +11533,11 @@ fn build_select_items_for_stack(
                     tracing::error!(%error, "failed to check course list for root");
                 }
             }
-            match table_folder_items(&boot.library_db, &table_source_order(&boot.app_config)) {
+            match table_folder_items_for_active_sources(
+                &boot.library_db,
+                &active_table_sources,
+                Some(&active_table_sources),
+            ) {
                 Ok(tables) => items.extend(tables),
                 Err(error) => {
                     tracing::error!(%error, "failed to load difficulty table folders");

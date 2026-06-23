@@ -188,6 +188,43 @@ fn choose_difficulty_table_text(
     entries.first().map(DifficultyTableText::from_entry).unwrap_or_default()
 }
 
+fn retain_active_table_entries(
+    entries: &mut Vec<DifficultyTableEntryRecord>,
+    active_source_urls: Option<&[String]>,
+) {
+    let Some(active_source_urls) = active_source_urls else { return };
+    let active: HashSet<&str> = active_source_urls.iter().map(String::as_str).collect();
+    entries.retain(|entry| active.contains(entry.source_url.as_str()));
+}
+
+fn path_is_under_or_equal(path: &str, root: &str) -> bool {
+    let path = path.replace('\\', "/").trim_end_matches('/').to_string();
+    let root = root.replace('\\', "/").trim_end_matches('/').to_string();
+    path == root || path.starts_with(&format!("{root}/"))
+}
+
+fn chart_is_in_active_song_roots(
+    chart: &ChartListItem,
+    active_song_roots: Option<&[String]>,
+) -> bool {
+    let Some(active_song_roots) = active_song_roots else { return true };
+    active_song_roots.iter().any(|root| path_is_under_or_equal(&chart.folder_path, root))
+}
+
+fn folder_intersects_active_song_roots(path: &str, active_song_roots: Option<&[String]>) -> bool {
+    let Some(active_song_roots) = active_song_roots else { return true };
+    active_song_roots
+        .iter()
+        .any(|root| path_is_under_or_equal(path, root) || path_is_under_or_equal(root, path))
+}
+
+fn retain_active_charts(charts: &mut Vec<ChartListItem>, active_song_roots: Option<&[String]>) {
+    if active_song_roots.is_none() {
+        return;
+    }
+    charts.retain(|chart| chart_is_in_active_song_roots(chart, active_song_roots));
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct DifficultyTableText {
     pub table_name: String,
@@ -226,15 +263,33 @@ pub fn difficulty_table_text_for_chart(
     source_order: &[String],
     source_hint: Option<&str>,
 ) -> Result<DifficultyTableText> {
+    difficulty_table_text_for_chart_with_active_sources(
+        library_db,
+        chart,
+        source_order,
+        source_hint,
+        None,
+    )
+}
+
+pub fn difficulty_table_text_for_chart_with_active_sources(
+    library_db: &LibraryDatabase,
+    chart: &ChartListItem,
+    source_order: &[String],
+    source_hint: Option<&str>,
+    active_source_urls: Option<&[String]>,
+) -> Result<DifficultyTableText> {
     let md5_hex = hash_to_hex(&chart.md5);
-    let md5_entries = library_db.list_difficulty_table_entries_by_md5s(&[md5_hex.as_str()])?;
+    let mut md5_entries = library_db.list_difficulty_table_entries_by_md5s(&[md5_hex.as_str()])?;
+    retain_active_table_entries(&mut md5_entries, active_source_urls);
     if !md5_entries.is_empty() {
         return Ok(choose_difficulty_table_text(md5_entries, source_order, source_hint));
     }
 
     let sha256_hex = hash_to_hex(&chart.sha256);
-    let sha256_entries =
+    let mut sha256_entries =
         library_db.list_difficulty_table_entries_by_sha256s(&[sha256_hex.as_str()])?;
+    retain_active_table_entries(&mut sha256_entries, active_source_urls);
     Ok(choose_difficulty_table_text(sha256_entries, source_order, source_hint))
 }
 
@@ -439,7 +494,19 @@ pub fn table_folder_items(
     library_db: &LibraryDatabase,
     source_order: &[String],
 ) -> Result<Vec<SelectItem>> {
+    table_folder_items_for_active_sources(library_db, source_order, None)
+}
+
+pub fn table_folder_items_for_active_sources(
+    library_db: &LibraryDatabase,
+    source_order: &[String],
+    active_source_urls: Option<&[String]>,
+) -> Result<Vec<SelectItem>> {
     let mut tables = library_db.list_difficulty_tables()?;
+    if let Some(active_source_urls) = active_source_urls {
+        let active: HashSet<&str> = active_source_urls.iter().map(String::as_str).collect();
+        tables.retain(|table| active.contains(table.source_url.as_str()));
+    }
     if !source_order.is_empty() {
         let order: HashMap<&str, usize> = source_order
             .iter()
@@ -941,6 +1008,28 @@ pub fn load_select_items_in_folder_for_rule_mode_with_table_order(
     rule_mode: RuleMode,
     table_source_order: &[String],
 ) -> Result<Vec<SelectItem>> {
+    load_select_items_in_folder_for_rule_mode_with_filters(
+        library_db,
+        score_db,
+        folder_path,
+        ln_policy_setting,
+        rule_mode,
+        table_source_order,
+        None,
+        None,
+    )
+}
+
+pub fn load_select_items_in_folder_for_rule_mode_with_filters(
+    library_db: &LibraryDatabase,
+    score_db: &ScoreDatabase,
+    folder_path: &str,
+    ln_policy_setting: LnPolicySetting,
+    rule_mode: RuleMode,
+    table_source_order: &[String],
+    active_song_roots: Option<&[String]>,
+    active_table_sources: Option<&[String]>,
+) -> Result<Vec<SelectItem>> {
     // 子孫 folder_path を 1 回だけ引き、直下の子と各子が leaf かどうかを
     // Rust 側で集計する。`/` 区切り後の最初のセグメントが「直下の子の名前」、
     // それより深いセグメントが残っていれば leaf でない。
@@ -985,7 +1074,8 @@ pub fn load_select_items_in_folder_for_rule_mode_with_table_order(
     let mut fetch_paths: Vec<&str> = Vec::with_capacity(1 + leaf_folder_paths.len());
     fetch_paths.push(folder_key.as_str());
     fetch_paths.extend(leaf_folder_paths.iter().map(String::as_str));
-    let all_charts = library_db.list_charts_in_folders(&fetch_paths)?;
+    let mut all_charts = library_db.list_charts_in_folders(&fetch_paths)?;
+    retain_active_charts(&mut all_charts, active_song_roots);
 
     let chart_items = chart_items_with_enrichment(
         library_db,
@@ -994,10 +1084,14 @@ pub fn load_select_items_in_folder_for_rule_mode_with_table_order(
         ln_policy_setting,
         rule_mode,
         table_source_order,
+        active_table_sources,
     )?;
 
     let mut items = Vec::with_capacity(non_leaf_folders.len() + chart_items.len());
     for (path, name) in non_leaf_folders {
+        if !folder_intersects_active_song_roots(&path, active_song_roots) {
+            continue;
+        }
         items.push(SelectItem::Folder { path, name, kind: SelectRowKind::Folder, summary: None });
     }
     items.extend(chart_items);
@@ -1048,7 +1142,30 @@ pub fn load_select_items_for_search_for_rule_mode_with_table_order(
     rule_mode: RuleMode,
     table_source_order: &[String],
 ) -> Result<Vec<SelectItem>> {
-    let charts = library_db.search_charts(query)?;
+    load_select_items_for_search_for_rule_mode_with_filters(
+        library_db,
+        score_db,
+        query,
+        ln_policy_setting,
+        rule_mode,
+        table_source_order,
+        None,
+        None,
+    )
+}
+
+pub fn load_select_items_for_search_for_rule_mode_with_filters(
+    library_db: &LibraryDatabase,
+    score_db: &ScoreDatabase,
+    query: &str,
+    ln_policy_setting: LnPolicySetting,
+    rule_mode: RuleMode,
+    table_source_order: &[String],
+    active_song_roots: Option<&[String]>,
+    active_table_sources: Option<&[String]>,
+) -> Result<Vec<SelectItem>> {
+    let mut charts = library_db.search_charts(query)?;
+    retain_active_charts(&mut charts, active_song_roots);
     chart_items_with_enrichment(
         library_db,
         score_db,
@@ -1056,6 +1173,7 @@ pub fn load_select_items_for_search_for_rule_mode_with_table_order(
         ln_policy_setting,
         rule_mode,
         table_source_order,
+        active_table_sources,
     )
 }
 
@@ -1068,6 +1186,7 @@ fn chart_items_with_enrichment(
     ln_policy_setting: LnPolicySetting,
     rule_mode: RuleMode,
     table_source_order: &[String],
+    active_table_sources: Option<&[String]>,
 ) -> Result<Vec<SelectItem>> {
     let keys: Vec<ScoreKey> =
         all_charts.iter().map(|c| score_key_for_chart(c, ln_policy_setting, rule_mode)).collect();
@@ -1088,6 +1207,7 @@ fn chart_items_with_enrichment(
     let mut md5_level_map: HashMap<String, String> = HashMap::new();
     let mut md5_text_map: HashMap<String, DifficultyTableText> = HashMap::new();
     let mut md5_entries = library_db.list_difficulty_table_entries_by_md5s(&md5_refs)?;
+    retain_active_table_entries(&mut md5_entries, active_table_sources);
     sort_difficulty_table_entries(&mut md5_entries, table_source_order);
     for e in md5_entries {
         insert_table_level_and_text(&mut md5_level_map, &mut md5_text_map, e.md5.clone(), &e);
@@ -1105,6 +1225,7 @@ fn chart_items_with_enrichment(
         let sha256_refs: Vec<&str> = missing_sha256_hexes.iter().map(|s| s.as_str()).collect();
         let mut sha256_entries =
             library_db.list_difficulty_table_entries_by_sha256s(&sha256_refs)?;
+        retain_active_table_entries(&mut sha256_entries, active_table_sources);
         sort_difficulty_table_entries(&mut sha256_entries, table_source_order);
         for e in sha256_entries {
             insert_table_level_and_text(
@@ -1486,6 +1607,40 @@ mod tests {
     }
 
     #[test]
+    fn load_select_items_in_folder_with_filters_hides_charts_outside_active_roots() {
+        let (mut library_db, score_db) = open_in_memory_dbs();
+        let active = chart("Active Song");
+        let stale = chart("Stale Song");
+        library_db
+            .upsert_chart_import(&record_for_chart("/songs/enabled/active.bms", &active))
+            .unwrap();
+        library_db
+            .upsert_chart_import(&record_for_chart("/songs/removed/stale.bms", &stale))
+            .unwrap();
+
+        let active_roots = vec!["/songs/enabled".to_string()];
+        let items = load_select_items_in_folder_for_rule_mode_with_filters(
+            &library_db,
+            &score_db,
+            "/songs",
+            LnPolicySetting::AutoLn,
+            RuleMode::Beatoraja,
+            &[],
+            Some(&active_roots),
+            None,
+        )
+        .unwrap();
+
+        let titles: Vec<_> = items
+            .iter()
+            .filter_map(|item| {
+                if let SelectItem::Chart(row) = item { Some(row.display_title()) } else { None }
+            })
+            .collect();
+        assert_eq!(titles, vec!["Active Song"]);
+    }
+
+    #[test]
     fn select_folder_summary_counts_recursive_folder_lamps() {
         let (mut library_db, mut score_db) = open_in_memory_dbs();
         let normal = chart("Normal");
@@ -1775,6 +1930,64 @@ mod tests {
                 ("bmz-table:https://example.com/A/", "Table"),
             ]
         );
+    }
+
+    #[test]
+    fn table_folder_items_with_active_sources_hides_removed_tables() {
+        let (mut library_db, _) = open_in_memory_dbs();
+        let chart = chart("Table Song");
+        let table_a = difficulty_table_for_md5(&chart.identity.file_md5, "A", "1");
+        let table_b = difficulty_table_for_md5(&chart.identity.file_md5, "B", "1");
+        library_db.upsert_difficulty_table(&table_a).unwrap();
+        library_db.upsert_difficulty_table(&table_b).unwrap();
+
+        let active_sources = vec!["https://example.com/B/".to_string()];
+        let items = table_folder_items_for_active_sources(
+            &library_db,
+            &active_sources,
+            Some(&active_sources),
+        )
+        .unwrap();
+
+        assert_eq!(items.len(), 1);
+        assert!(matches!(
+            &items[0],
+            SelectItem::Folder { path, .. } if path == "bmz-table:https://example.com/B/"
+        ));
+    }
+
+    #[test]
+    fn chart_enrichment_with_filters_hides_removed_table_levels() {
+        let (mut library_db, score_db) = open_in_memory_dbs();
+        let chart = chart("Table Song");
+        library_db.upsert_chart_import(&record_for_chart("/songs/table.bms", &chart)).unwrap();
+        library_db
+            .upsert_difficulty_table(&difficulty_table_for_md5(&chart.identity.file_md5, "A", "1"))
+            .unwrap();
+        library_db
+            .upsert_difficulty_table(&difficulty_table_for_md5(&chart.identity.file_md5, "B", "2"))
+            .unwrap();
+
+        let active_roots = vec!["/songs".to_string()];
+        let active_sources = vec!["https://example.com/B/".to_string()];
+        let items = load_select_items_in_folder_for_rule_mode_with_filters(
+            &library_db,
+            &score_db,
+            "/songs",
+            LnPolicySetting::AutoLn,
+            RuleMode::Beatoraja,
+            &active_sources,
+            Some(&active_roots),
+            Some(&active_sources),
+        )
+        .unwrap();
+
+        let row = items
+            .iter()
+            .find_map(|item| if let SelectItem::Chart(row) = item { Some(row) } else { None })
+            .unwrap();
+        assert_eq!(row.table_level, "B2");
+        assert_eq!(row.table_text.table_level, "B2");
     }
 
     #[test]
@@ -2351,5 +2564,36 @@ mod tests {
         };
         assert_eq!(row.display_title(), "Blue Sky");
         assert!(row.best_score.is_some());
+    }
+
+    #[test]
+    fn load_select_items_for_search_with_filters_hides_removed_song_roots() {
+        let (mut library_db, score_db) = open_in_memory_dbs();
+        let active = chart("Blue Active");
+        let stale = chart("Blue Stale");
+        library_db
+            .upsert_chart_import(&record_for_chart("/songs/enabled/active.bms", &active))
+            .unwrap();
+        library_db
+            .upsert_chart_import(&record_for_chart("/songs/removed/stale.bms", &stale))
+            .unwrap();
+
+        let active_roots = vec!["/songs/enabled".to_string()];
+        let items = load_select_items_for_search_for_rule_mode_with_filters(
+            &library_db,
+            &score_db,
+            "blue",
+            LnPolicySetting::AutoLn,
+            RuleMode::Beatoraja,
+            &[],
+            Some(&active_roots),
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(items.len(), 1);
+        assert!(
+            matches!(&items[0], SelectItem::Chart(row) if row.display_title() == "Blue Active")
+        );
     }
 }
