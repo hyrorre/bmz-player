@@ -946,7 +946,9 @@ fn spawn_directory_opener(path: &Path) -> std::io::Result<()> {
 
 #[cfg(target_os = "windows")]
 fn spawn_directory_opener(path: &Path) -> std::io::Result<()> {
-    run_directory_opener("explorer", path)
+    // explorer.exe may hand the request to the existing shell process and
+    // return a non-zero status even though the directory was opened.
+    Command::new("explorer").arg(path).spawn().map(|_| ())
 }
 
 #[cfg(all(unix, not(target_os = "macos")))]
@@ -954,7 +956,7 @@ fn spawn_directory_opener(path: &Path) -> std::io::Result<()> {
     run_directory_opener("xdg-open", path)
 }
 
-#[cfg(any(target_os = "macos", target_os = "windows", unix))]
+#[cfg(unix)]
 fn run_directory_opener(program: &str, path: &Path) -> std::io::Result<()> {
     let status = Command::new(program).arg(path).status()?;
     if status.success() {
