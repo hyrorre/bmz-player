@@ -1,3 +1,23 @@
+pub mod stdio;
+
+macro_rules! println {
+    () => {
+        $crate::stdio::stdout_line(format_args!(""))
+    };
+    ($($arg:tt)*) => {
+        $crate::stdio::stdout_line(format_args!($($arg)*))
+    };
+}
+
+macro_rules! eprintln {
+    () => {
+        $crate::stdio::stderr_line(format_args!(""))
+    };
+    ($($arg:tt)*) => {
+        $crate::stdio::stderr_line(format_args!($($arg)*))
+    };
+}
+
 pub mod app;
 pub mod audio;
 pub mod bootstrap;
