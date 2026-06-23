@@ -16,6 +16,7 @@ Options:
   --app-name NAME         App bundle name (default: BMZ Player).
   --bundle-id ID          CFBundleIdentifier (default: dev.hyrorre.bmz-player).
   --bundle-dylibs         Copy non-system dylib dependencies into Contents/Frameworks.
+                          Automatically ad-hoc signs unless --sign/--ad-hoc-sign is set.
   --sign IDENTITY         codesign with the given identity.
   --ad-hoc-sign           codesign with ad-hoc identity (-).
   --smoke                 Run a short packaged smoke launch after bundling.
@@ -32,6 +33,8 @@ Environment:
 Notes:
   --bundle-dylibs can copy FFmpeg and codec libraries. Check docs/licenses.md
   before publishing any redistributable artifact created with that option.
+  Bundling dylibs rewrites Mach-O load commands, so the bundle must be re-signed
+  before Finder/Dock launch on macOS.
 USAGE
 }
 
@@ -178,15 +181,20 @@ sign_bundle() {
   need_command codesign
   need_command file
 
+  local codesign_args=(--force --timestamp=none --sign "${identity}")
+  if [[ "${identity}" != "-" ]]; then
+    codesign_args=(--force --options runtime --timestamp=none --sign "${identity}")
+  fi
+
   if [[ -d "${app_dir}/Contents/Frameworks" ]]; then
     while IFS= read -r -d '' file_path; do
       if file "${file_path}" | grep -q 'Mach-O'; then
-        codesign --force --options runtime --timestamp=none --sign "${identity}" "${file_path}"
+        codesign "${codesign_args[@]}" "${file_path}"
       fi
     done < <(find "${app_dir}/Contents/Frameworks" -type f -print0)
   fi
 
-  codesign --force --options runtime --timestamp=none --sign "${identity}" "${app_dir}"
+  codesign "${codesign_args[@]}" "${app_dir}"
   codesign --verify --deep --strict --verbose=4 "${app_dir}"
 }
 
@@ -264,6 +272,11 @@ main() {
     esac
     shift
   done
+
+  if [[ "${bundle_dylibs}" == "1" && -z "${sign_identity}" ]]; then
+    sign_identity="-"
+    echo "==> --bundle-dylibs rewrites Mach-O signatures; enabling ad-hoc signing"
+  fi
 
   local cargo_args=(-p bmz-player)
   if [[ "${profile}" == "release" ]]; then

@@ -231,6 +231,11 @@ scripts/package-macos-app.sh --smoke
 
 `--bundle-dylibs` を付けると、`otool` で見える非 system dylib 依存を
 `Contents/Frameworks` へコピーし、`install_name_tool` で参照を書き換える。
+`install_name_tool` は Mach-O の既存署名を無効化するため、署名指定が無い場合でも
+script は ad-hoc 署名を自動で行う。これを行わないと Finder / Dock 起動時に
+`Code Signature Invalid` / `Invalid Page` で dyld が落ちることがある。
+ad-hoc 署名では bundled dylib が hardened runtime の library validation に弾かれるため、
+script は Developer ID 署名時だけ hardened runtime option を付ける。
 
 ```sh
 scripts/package-macos-app.sh --bundle-dylibs --ad-hoc-sign
