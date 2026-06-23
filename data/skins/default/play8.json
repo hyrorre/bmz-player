@@ -8,7 +8,9 @@
   "image": { "include": "_images.json" },
   "text": { "include": "_play_text.json" },
   "bga": { "id": "bga" },
-  "gauges": [{ "id": "play_gauge", "nodes": ["gauge_fill_img"], "parts": 50, "type": 2, "range": 0 }],
+  "gauges": [
+    { "id": "play_gauge", "nodes": ["gauge_fill_img"], "parts": 50, "type": 2, "range": 0 }
+  ],
   "note": { "include": "_play8_note.json" },
   "destination": [
     { "include": "_play_destination_before_notes.json" },

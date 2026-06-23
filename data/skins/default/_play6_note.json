@@ -1,9 +1,30 @@
 {
   "note": ["note_img", "note_blue_img", "note_img", "note_blue_img", "note_img", "note_blue_img"],
-  "lnstart": ["note_img", "note_blue_img", "note_img", "note_blue_img", "note_img", "note_blue_img"],
+  "lnstart": [
+    "note_img",
+    "note_blue_img",
+    "note_img",
+    "note_blue_img",
+    "note_img",
+    "note_blue_img"
+  ],
   "lnend": ["note_img", "note_blue_img", "note_img", "note_blue_img", "note_img", "note_blue_img"],
-  "lnbody": ["gauge_fill_img", "gauge_fill_img", "gauge_fill_img", "gauge_fill_img", "gauge_fill_img", "gauge_fill_img"],
-  "mine": ["note_mine_img", "note_mine_img", "note_mine_img", "note_mine_img", "note_mine_img", "note_mine_img"],
+  "lnbody": [
+    "gauge_fill_img",
+    "gauge_fill_img",
+    "gauge_fill_img",
+    "gauge_fill_img",
+    "gauge_fill_img",
+    "gauge_fill_img"
+  ],
+  "mine": [
+    "note_mine_img",
+    "note_mine_img",
+    "note_mine_img",
+    "note_mine_img",
+    "note_mine_img",
+    "note_mine_img"
+  ],
   "size": [12, 12, 12, 12, 12, 12],
   "dst": [
     { "x": 374, "y": 56, "w": 62, "h": 580 },
