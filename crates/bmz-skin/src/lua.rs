@@ -28,6 +28,18 @@ const TIMER_OFF_VALUE: i32 = i32::MIN;
 const FAST_SLOW_FAST_REFS: [i32; 6] = [410, 412, 414, 416, 418, 421];
 const FAST_SLOW_SLOW_REFS: [i32; 6] = [411, 413, 415, 417, 419, 422];
 
+fn main_state_judge_ref(index: i32) -> Option<i32> {
+    match index {
+        0 => Some(110),
+        1 => Some(111),
+        2 => Some(112),
+        3 => Some(113),
+        4 => Some(114),
+        5 => Some(420),
+        _ => None,
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConvertReport {
     pub warnings: Vec<String>,
@@ -167,6 +179,8 @@ fn execute_lua_skin(
     )?;
 
     if let JsonValue::Object(ref mut root) = json {
+        postprocess_lua_skin_json(root);
+
         let timers = main_state_probe
             .lock()
             .ok()
@@ -184,6 +198,10 @@ fn execute_lua_skin(
     }
 
     Ok((json, warnings, skin_named_files))
+}
+
+fn postprocess_lua_skin_json(root: &mut JsonMap<String, JsonValue>) {
+    repair_keybeam_destination_draws(root);
 }
 
 fn install_instruction_limit(lua: &Lua) {
@@ -364,6 +382,7 @@ struct MainStateProbe {
     float_number_calls: Vec<i32>,
     float_number_values: BTreeMap<i32, f64>,
     text_calls: Vec<i32>,
+    time_value_us: i32,
     next_dynamic_timer_id: i32,
     dynamic_timers: Vec<(i32, String)>,
 }
@@ -385,6 +404,7 @@ impl Default for MainStateProbe {
             float_number_calls: Vec::new(),
             float_number_values: BTreeMap::new(),
             text_calls: Vec::new(),
+            time_value_us: 1_000_000,
             next_dynamic_timer_id: SKIN_DYNAMIC_TIMER_BASE,
             dynamic_timers: Vec::new(),
         }
@@ -529,6 +549,46 @@ impl MainStateProbe {
         self.timer_values.insert(i32::MIN, i32::MIN);
     }
 
+    fn begin_timer_call_recording(&mut self, default_value: i32) {
+        self.mode = MainStateProbeMode::RecordNumbers { default_value: 0 };
+        self.number_calls.clear();
+        self.number_values.clear();
+        self.option_calls.clear();
+        self.option_values.clear();
+        self.timer_calls.clear();
+        self.timer_values.clear();
+        self.event_index_calls.clear();
+        self.event_index_values.clear();
+        self.gauge_type_calls = 0;
+        self.gauge_type_value = 0;
+        self.timer_values.insert(i32::MIN, default_value);
+    }
+
+    fn begin_timer_recording_with_values(&mut self, mut timer_values: BTreeMap<i32, i32>) {
+        self.mode = MainStateProbeMode::RecordNumbers { default_value: 0 };
+        self.number_calls.clear();
+        self.number_values.clear();
+        self.option_calls.clear();
+        self.option_values.clear();
+        self.timer_calls.clear();
+        self.event_index_calls.clear();
+        self.event_index_values.clear();
+        self.gauge_type_calls = 0;
+        self.gauge_type_value = 0;
+        timer_values.entry(i32::MIN).or_insert(i32::MIN);
+        self.timer_values = timer_values;
+    }
+
+    fn begin_timer_event_recording_with_values(
+        &mut self,
+        timer_values: BTreeMap<i32, i32>,
+        event_id: i32,
+        event_value: i32,
+    ) {
+        self.begin_timer_recording_with_values(timer_values);
+        self.event_index_values.insert(event_id, event_value);
+    }
+
     fn begin_timer_option_recording_with_values(
         &mut self,
         timer_id: i32,
@@ -614,6 +674,10 @@ impl MainStateProbe {
         }
     }
 
+    fn judge(&mut self, index: i32) -> i32 {
+        main_state_judge_ref(index).map(|ref_id| self.number(ref_id)).unwrap_or(0)
+    }
+
     fn option(&mut self, option_id: i32) -> bool {
         if matches!(self.mode, MainStateProbeMode::RuntimeStub) {
             return false;
@@ -686,6 +750,15 @@ impl MainStateProbe {
         }
     }
 
+    fn time(&mut self) -> i32 {
+        if matches!(self.mode, MainStateProbeMode::RuntimeStub) {
+            return lua_load_now_micros();
+        }
+        let value = self.time_value_us;
+        self.time_value_us = self.time_value_us.saturating_add(1_000);
+        value
+    }
+
     fn begin_draw_probe(&mut self, numbers: BTreeMap<i32, i32>, floats: BTreeMap<i32, f64>) {
         self.begin_number_recording_with_values(numbers);
         self.float_number_values = floats;
@@ -714,6 +787,16 @@ fn create_main_state_stub(lua: &Lua, probe: Arc<Mutex<MainStateProbe>>) -> mlua:
                 .lock()
                 .map_err(|_| mlua::Error::external("main_state probe lock poisoned"))?
                 .number(ref_id))
+        })?,
+    )?;
+    let probe_for_judge = probe.clone();
+    table.set(
+        "judge",
+        lua.create_function(move |_, index: i32| {
+            Ok(probe_for_judge
+                .lock()
+                .map_err(|_| mlua::Error::external("main_state probe lock poisoned"))?
+                .judge(index))
         })?,
     )?;
     let probe_for_option = probe.clone();
@@ -764,6 +847,16 @@ fn create_main_state_stub(lua: &Lua, probe: Arc<Mutex<MainStateProbe>>) -> mlua:
                 .lock()
                 .map_err(|_| mlua::Error::external("main_state probe lock poisoned"))?
                 .timer(timer_id))
+        })?,
+    )?;
+    let probe_for_time = probe.clone();
+    table.set(
+        "time",
+        lua.create_function(move |_, ()| {
+            Ok(probe_for_time
+                .lock()
+                .map_err(|_| mlua::Error::external("main_state probe lock poisoned"))?
+                .time())
         })?,
     )?;
     let probe_for_gauge_type = probe.clone();
@@ -2137,6 +2230,10 @@ fn lua_table_to_json(
                     object.insert(key.clone(), JsonValue::Number(JsonNumber::from(timer_id)));
                     continue;
                 }
+                if let Some(timer_id) = infer_timer_function_ref(function, main_state_probe) {
+                    object.insert(key.clone(), JsonValue::Number(JsonNumber::from(timer_id)));
+                    continue;
+                }
             }
         }
         if is_unsupported_json_field_value(&value) {
@@ -2541,6 +2638,168 @@ fn infer_main_state_timer_option_draw_condition(
         .find_map(|(condition, expected)| (observed == expected).then_some(condition))
 }
 
+fn collect_timer_refs(
+    function: &Function,
+    main_state_probe: &Arc<Mutex<MainStateProbe>>,
+) -> Option<Vec<i32>> {
+    {
+        main_state_probe.lock().ok()?.begin_timer_call_recording(i32::MIN);
+    }
+    let _ = function.call::<Value>(()).ok();
+    let calls = {
+        let mut probe = main_state_probe.lock().ok()?;
+        let calls = probe.timer_calls.clone();
+        probe.end_recording();
+        calls
+    };
+    let mut timers = calls;
+    timers.sort_unstable();
+    timers.dedup();
+    Some(timers)
+}
+
+fn call_timer_function_with_values(
+    function: &Function,
+    main_state_probe: &Arc<Mutex<MainStateProbe>>,
+    timer_values: BTreeMap<i32, i32>,
+) -> Option<i32> {
+    {
+        main_state_probe.lock().ok()?.begin_timer_recording_with_values(timer_values);
+    }
+    let result = function.call::<Value>(()).ok();
+    main_state_probe.lock().ok()?.end_recording();
+    match result? {
+        Value::Integer(value) => i32::try_from(value).ok(),
+        Value::Number(value) if value.is_finite() && value.fract() == 0.0 => {
+            i32::try_from(value as i64).ok()
+        }
+        _ => None,
+    }
+}
+
+fn event_index_calls_with_timer_values(
+    function: &Function,
+    main_state_probe: &Arc<Mutex<MainStateProbe>>,
+    timer_values: BTreeMap<i32, i32>,
+) -> Option<Vec<i32>> {
+    {
+        main_state_probe.lock().ok()?.begin_timer_recording_with_values(timer_values);
+    }
+    let _ = function.call::<Value>(()).ok();
+    let calls = {
+        let mut probe = main_state_probe.lock().ok()?;
+        let calls = probe.event_index_calls.clone();
+        probe.end_recording();
+        calls
+    };
+    Some(calls)
+}
+
+fn call_draw_with_timer_event(
+    function: &Function,
+    main_state_probe: &Arc<Mutex<MainStateProbe>>,
+    timer_values: BTreeMap<i32, i32>,
+    event_id: i32,
+    event_value: i32,
+) -> Option<bool> {
+    {
+        main_state_probe.lock().ok()?.begin_timer_event_recording_with_values(
+            timer_values,
+            event_id,
+            event_value,
+        );
+    }
+    let result = function.call::<Value>(()).ok();
+    main_state_probe.lock().ok()?.end_recording();
+    match result? {
+        Value::Boolean(value) => Some(value),
+        _ => None,
+    }
+}
+
+fn keybeam_hold_timer_for_keyon_timer(timer_id: i32) -> Option<i32> {
+    match timer_id {
+        100..=109 => Some(timer_id - 30),
+        110..=117 => Some(timer_id - 30),
+        _ => None,
+    }
+}
+
+fn is_keybeam_keyoff_timer(timer_id: i32) -> bool {
+    matches!(timer_id, 120..=137)
+}
+
+fn infer_keybeam_timer_event_draw_condition(
+    function: &Function,
+    main_state_probe: &Arc<Mutex<MainStateProbe>>,
+) -> Option<String> {
+    let timers = collect_timer_refs(function, main_state_probe)?;
+    for keyon_timer in timers.iter().copied() {
+        let Some(hold_timer) = keybeam_hold_timer_for_keyon_timer(keyon_timer) else {
+            continue;
+        };
+        if !timers.contains(&hold_timer) {
+            continue;
+        }
+
+        let active_timers = BTreeMap::from([(keyon_timer, 1)]);
+        let event_calls =
+            event_index_calls_with_timer_values(function, main_state_probe, active_timers.clone())?;
+        let event_id = single_number_call(&event_calls)?;
+        let samples = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9];
+        let observed = samples
+            .iter()
+            .map(|sample| {
+                call_draw_with_timer_event(
+                    function,
+                    main_state_probe,
+                    active_timers.clone(),
+                    event_id,
+                    *sample,
+                )
+            })
+            .collect::<Option<Vec<_>>>()?;
+        let enabled = samples
+            .iter()
+            .zip(observed)
+            .filter_map(|(value, enabled)| enabled.then_some(*value))
+            .collect::<Vec<_>>();
+        if enabled.is_empty() || enabled.len() == samples.len() {
+            continue;
+        }
+
+        let prefix =
+            format!("timer({keyon_timer}) != timer_off and timer({hold_timer}) == timer_off and ");
+        return Some(
+            enabled
+                .into_iter()
+                .map(|value| format!("{prefix}event_index({event_id}) == {value}"))
+                .collect::<Vec<_>>()
+                .join(" or "),
+        );
+    }
+    None
+}
+
+fn infer_timer_function_ref(
+    function: &Function,
+    main_state_probe: &Arc<Mutex<MainStateProbe>>,
+) -> Option<i32> {
+    let timers = collect_timer_refs(function, main_state_probe)?;
+    for timer_id in timers.into_iter().filter(|timer_id| is_keybeam_keyoff_timer(*timer_id)) {
+        let sample = main_state_probe.lock().ok()?.time_value_us.saturating_sub(1);
+        if call_timer_function_with_values(
+            function,
+            main_state_probe,
+            BTreeMap::from([(timer_id, sample)]),
+        ) == Some(sample)
+        {
+            return Some(timer_id);
+        }
+    }
+    None
+}
+
 fn call_draw_with_timer_option(
     function: &Function,
     main_state_probe: &Arc<Mutex<MainStateProbe>>,
@@ -2743,6 +3002,7 @@ fn infer_boolean_predicate(
         .or_else(|| infer_main_state_event_index_draw_condition(function, main_state_probe))
         .or_else(|| infer_main_state_option_draw_condition(function, main_state_probe))
         .or_else(|| infer_main_state_gauge_type_draw_condition(function, main_state_probe))
+        .or_else(|| infer_keybeam_timer_event_draw_condition(function, main_state_probe))
         .or_else(|| infer_main_state_timer_option_draw_condition(function, main_state_probe))
         .or_else(|| infer_judge_fast_slow_draw_condition(function, main_state_probe, object_id))
         .or_else(|| infer_or_of_number_gt_zero(function, main_state_probe))
@@ -2770,6 +3030,83 @@ fn infer_constant_text_at_load(function: &Function) -> Option<String> {
         Value::Boolean(value) => Some(value.to_string()),
         _ => None,
     }
+}
+
+fn repair_keybeam_destination_draws(root: &mut JsonMap<String, JsonValue>) {
+    let Some(destinations) = root.get_mut("destination").and_then(JsonValue::as_array_mut) else {
+        return;
+    };
+    for index in 0..destinations.len().saturating_sub(1) {
+        let Some(draw) =
+            keybeam_hold_draw_replacement(&destinations[index], &destinations[index + 1])
+        else {
+            continue;
+        };
+        if let JsonValue::Object(destination) = &mut destinations[index] {
+            destination.insert("draw".to_string(), JsonValue::String(draw));
+        }
+    }
+}
+
+fn keybeam_hold_draw_replacement(hold: &JsonValue, fade: &JsonValue) -> Option<String> {
+    let hold = hold.as_object()?;
+    let fade = fade.as_object()?;
+    let hold_id = json_string_field(hold, "id")?;
+    if !hold_id.starts_with("key-beam-") || hold_id != json_string_field(fade, "id")? {
+        return None;
+    }
+    if json_i32_field(hold, "timer").is_some() || json_i32_field(hold, "loop") == Some(-1) {
+        return None;
+    }
+    if !needs_keybeam_hold_draw_repair(json_string_field(hold, "draw")) {
+        return None;
+    }
+
+    let fade_timer = json_i32_field(fade, "timer")?;
+    if json_i32_field(fade, "loop") != Some(-1) || !is_keybeam_keyoff_timer(fade_timer) {
+        return None;
+    }
+    let keyon_timer = keybeam_keyon_timer_for_keyoff_timer(fade_timer)?;
+    let hold_timer = keybeam_hold_timer_for_keyon_timer(keyon_timer)?;
+    keybeam_hold_draw_from_fade_draw(json_string_field(fade, "draw")?, keyon_timer, hold_timer)
+}
+
+fn json_string_field<'a>(object: &'a JsonMap<String, JsonValue>, key: &str) -> Option<&'a str> {
+    object.get(key)?.as_str()
+}
+
+fn json_i32_field(object: &JsonMap<String, JsonValue>, key: &str) -> Option<i32> {
+    i32::try_from(object.get(key)?.as_i64()?).ok()
+}
+
+fn needs_keybeam_hold_draw_repair(draw: Option<&str>) -> bool {
+    match draw.map(str::trim) {
+        None | Some("") | Some("number(0) < 0") => true,
+        Some(draw) => !draw.contains("timer("),
+    }
+}
+
+fn keybeam_keyon_timer_for_keyoff_timer(timer_id: i32) -> Option<i32> {
+    match timer_id {
+        120..=137 => Some(timer_id - 20),
+        _ => None,
+    }
+}
+
+fn keybeam_hold_draw_from_fade_draw(
+    fade_draw: &str,
+    keyon_timer: i32,
+    hold_timer: i32,
+) -> Option<String> {
+    let prefix =
+        format!("timer({keyon_timer}) != timer_off and timer({hold_timer}) == timer_off and ");
+    let branches = fade_draw
+        .split(" or ")
+        .map(str::trim)
+        .filter(|branch| branch.contains("event_index("))
+        .map(|branch| format!("{prefix}{branch}"))
+        .collect::<Vec<_>>();
+    (!branches.is_empty()).then(|| branches.join(" or "))
 }
 
 fn infer_constant_number_at_load(function: &Function) -> Option<String> {
@@ -3345,6 +3682,7 @@ fn infer_value_float_expr(
     infer_remain_rate_scaled(function, main_state_probe)
         .or_else(|| infer_number_scalar_multiply(function, main_state_probe))
         .or_else(|| infer_option_weighted_number_sum(function, main_state_probe))
+        .or_else(|| infer_weighted_number_ratio_scaled(function, main_state_probe))
         .or_else(|| infer_division_of_number_sums(function, main_state_probe))
 }
 
@@ -3516,6 +3854,119 @@ fn evaluate_option_weighted_number_terms(
         }
     }
     Some(total)
+}
+
+fn infer_weighted_number_ratio_scaled(
+    function: &Function,
+    main_state_probe: &Arc<Mutex<MainStateProbe>>,
+) -> Option<String> {
+    let refs = collect_number_refs(function, main_state_probe)?;
+    if refs.len() < 2 || refs.len() > 16 {
+        return None;
+    }
+    refs.iter().find_map(|denominator_ref| {
+        infer_weighted_number_ratio_scaled_with_denominator(
+            function,
+            main_state_probe,
+            &refs,
+            *denominator_ref,
+        )
+    })
+}
+
+fn infer_weighted_number_ratio_scaled_with_denominator(
+    function: &Function,
+    main_state_probe: &Arc<Mutex<MainStateProbe>>,
+    refs: &[i32],
+    denominator_ref: i32,
+) -> Option<String> {
+    const PROBE_DENOMINATOR: i32 = 1000;
+    let mut base_values =
+        refs.iter().copied().map(|ref_id| (ref_id, 0)).collect::<BTreeMap<_, _>>();
+    base_values.insert(denominator_ref, PROBE_DENOMINATOR);
+    let baseline = call_number_float_with_values(function, main_state_probe, base_values.clone())?;
+    if !approx_float_eq(baseline, 0.0) {
+        return None;
+    }
+
+    let mut terms = Vec::new();
+    for ref_id in refs.iter().copied().filter(|ref_id| *ref_id != denominator_ref) {
+        let mut values = base_values.clone();
+        values.insert(ref_id, 1);
+        let at_one = call_number_float_with_values(function, main_state_probe, values)?;
+        if at_one - baseline < 1.0 {
+            continue;
+        }
+        let coefficient = ((at_one - baseline) * f64::from(PROBE_DENOMINATOR)).round() as i64;
+        if coefficient <= 0 {
+            continue;
+        }
+        terms.push((ref_id, coefficient));
+    }
+    if terms.is_empty() {
+        return None;
+    }
+
+    let test_cases = [
+        refs.iter().copied().map(|ref_id| (ref_id, 0)).collect::<BTreeMap<_, _>>(),
+        terms
+            .iter()
+            .map(|(ref_id, _)| (*ref_id, 1))
+            .chain(std::iter::once((denominator_ref, PROBE_DENOMINATOR)))
+            .collect::<BTreeMap<_, _>>(),
+        terms
+            .iter()
+            .map(|(ref_id, _)| (*ref_id, 3))
+            .chain(std::iter::once((denominator_ref, PROBE_DENOMINATOR)))
+            .collect::<BTreeMap<_, _>>(),
+        terms
+            .iter()
+            .map(|(ref_id, _)| (*ref_id, 1))
+            .chain(std::iter::once((denominator_ref, 74)))
+            .collect::<BTreeMap<_, _>>(),
+    ];
+    for values in test_cases {
+        let expected = weighted_ratio_floor(&terms, denominator_ref, &values) as f64;
+        let actual = match call_number_float_with_values(function, main_state_probe, values) {
+            Some(value) if value.is_finite() => value,
+            _ if expected.abs() < f64::EPSILON => 0.0,
+            _ => return None,
+        };
+        if !approx_float_eq(actual, expected) {
+            return None;
+        }
+    }
+
+    let numerator = terms
+        .iter()
+        .map(|(ref_id, coefficient)| {
+            if *coefficient == 1 {
+                format!("number({ref_id})")
+            } else {
+                format!("{coefficient}*number({ref_id})")
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("+");
+    Some(format!("floor(({numerator})/number({denominator_ref}))"))
+}
+
+fn weighted_ratio_floor(
+    terms: &[(i32, i64)],
+    denominator_ref: i32,
+    values: &BTreeMap<i32, i32>,
+) -> i64 {
+    let denominator = values.get(&denominator_ref).copied().unwrap_or(0);
+    if denominator <= 0 {
+        return 0;
+    }
+    let numerator = terms
+        .iter()
+        .map(|(ref_id, coefficient)| {
+            coefficient.saturating_mul(i64::from(values.get(ref_id).copied().unwrap_or(0)))
+        })
+        .sum::<i64>();
+    numerator / i64::from(denominator)
 }
 
 fn fast_slow_ref_set() -> BTreeMap<i32, ()> {
@@ -3717,6 +4168,282 @@ mod tests {
         assert_eq!(
             infer_main_state_event_index_draw_condition(&function, &probe),
             Some("event_index(42) == 2 or event_index(42) == 3".to_string())
+        );
+    }
+
+    #[test]
+    fn infers_keybeam_hold_draw_condition() {
+        let lua = Lua::new();
+        let probe = Arc::new(Mutex::new(MainStateProbe::default()));
+        let main_state = create_main_state_stub(&lua, probe.clone()).unwrap();
+        lua.globals().set("main_state", main_state).unwrap();
+        let function = lua
+            .load(
+                r#"
+                local off = main_state.timer_off_value
+                local last_update_time = off
+                local last_key_on_timer = {}
+                local last_key_off_timer = {}
+                local active = {}
+                local fade_start_time = {}
+                local suppress_until_key_off = {}
+                local lanes = {
+                    { display_lane = 1, key_on_timer = 101, key_off_timer = 121, hold_timer = 71 },
+                    { display_lane = 2, key_on_timer = 102, key_off_timer = 122, hold_timer = 72 },
+                }
+                local function update()
+                    local now = main_state.time()
+                    if now == last_update_time then
+                        return
+                    end
+                    last_update_time = now
+                    for _, lane_info in ipairs(lanes) do
+                        local lane = lane_info.display_lane
+                        local key_on_time = main_state.timer(lane_info.key_on_timer)
+                        local key_off_time = main_state.timer(lane_info.key_off_timer)
+                        local hold_time = main_state.timer(lane_info.hold_timer)
+                        local key_on_changed = key_on_time ~= off and key_on_time ~= last_key_on_timer[lane]
+                        local key_off_changed = key_off_time ~= off and key_off_time ~= last_key_off_timer[lane]
+                        if key_on_changed then
+                            active[lane] = true
+                            fade_start_time[lane] = nil
+                            suppress_until_key_off[lane] = false
+                        end
+                        if hold_time ~= off and (active[lane] or key_off_changed) then
+                            suppress_until_key_off[lane] = true
+                            fade_start_time[lane] = nil
+                        end
+                        if key_off_changed then
+                            active[lane] = true
+                            fade_start_time[lane] = key_off_time
+                        end
+                        last_key_on_timer[lane] = key_on_time
+                        last_key_off_timer[lane] = key_off_time
+                    end
+                end
+                return function()
+                    update()
+                    if not active[1] then
+                        return false
+                    end
+                    if suppress_until_key_off[1] then
+                        return false
+                    end
+                    if fade_start_time[1] ~= nil and main_state.time() >= fade_start_time[1] then
+                        return false
+                    end
+                    return main_state.event_index(501) == 2 or main_state.event_index(501) == 3
+                end
+                "#,
+            )
+            .eval::<Function>()
+            .unwrap();
+
+        assert_eq!(
+            infer_boolean_predicate(&function, &probe, None),
+            Some(
+                "timer(101) != timer_off and timer(71) == timer_off and event_index(501) == 2 or timer(101) != timer_off and timer(71) == timer_off and event_index(501) == 3"
+                    .to_string()
+            )
+        );
+    }
+
+    #[test]
+    fn repairs_keybeam_hold_destination_draws_from_fade_pairs() {
+        let mut root = JsonMap::from_iter([(
+            "destination".to_string(),
+            JsonValue::Array(vec![
+                JsonValue::Object(JsonMap::from_iter([
+                    ("id".to_string(), JsonValue::String("key-beam-thick-pgreat".to_string())),
+                    ("draw".to_string(), JsonValue::String("number(0) < 0".to_string())),
+                ])),
+                JsonValue::Object(JsonMap::from_iter([
+                    ("id".to_string(), JsonValue::String("key-beam-thick-pgreat".to_string())),
+                    ("timer".to_string(), JsonValue::Number(JsonNumber::from(122))),
+                    ("loop".to_string(), JsonValue::Number(JsonNumber::from(-1))),
+                    ("draw".to_string(), JsonValue::String("event_index(502) == 1".to_string())),
+                ])),
+                JsonValue::Object(JsonMap::from_iter([
+                    ("id".to_string(), JsonValue::String("key-beam-thick-great".to_string())),
+                    (
+                        "draw".to_string(),
+                        JsonValue::String(
+                            "event_index(503) == 2 or event_index(503) == 3".to_string(),
+                        ),
+                    ),
+                ])),
+                JsonValue::Object(JsonMap::from_iter([
+                    ("id".to_string(), JsonValue::String("key-beam-thick-great".to_string())),
+                    ("timer".to_string(), JsonValue::Number(JsonNumber::from(123))),
+                    ("loop".to_string(), JsonValue::Number(JsonNumber::from(-1))),
+                    (
+                        "draw".to_string(),
+                        JsonValue::String(
+                            "event_index(503) == 2 or event_index(503) == 3".to_string(),
+                        ),
+                    ),
+                ])),
+            ]),
+        )]);
+
+        postprocess_lua_skin_json(&mut root);
+
+        let destinations = root.get("destination").and_then(JsonValue::as_array).unwrap();
+        let draw = |index: usize| {
+            destinations[index]
+                .as_object()
+                .and_then(|destination| destination.get("draw"))
+                .and_then(JsonValue::as_str)
+                .unwrap()
+        };
+        assert_eq!(
+            draw(0),
+            "timer(102) != timer_off and timer(72) == timer_off and event_index(502) == 1"
+        );
+        assert_eq!(
+            draw(2),
+            "timer(103) != timer_off and timer(73) == timer_off and event_index(503) == 2 or timer(103) != timer_off and timer(73) == timer_off and event_index(503) == 3"
+        );
+    }
+
+    #[test]
+    fn infers_keybeam_keyoff_timer_function() {
+        let lua = Lua::new();
+        let probe = Arc::new(Mutex::new(MainStateProbe::default()));
+        let main_state = create_main_state_stub(&lua, probe.clone()).unwrap();
+        lua.globals().set("main_state", main_state).unwrap();
+        let function = lua
+            .load(
+                r#"
+                local off = main_state.timer_off_value
+                local fade_us = 50000
+                local last_update_time = off
+                local last_key_on_timer = {}
+                local last_key_off_timer = {}
+                local active = {}
+                local fade_start_time = {}
+                local lanes = {
+                    { display_lane = 1, key_on_timer = 101, key_off_timer = 121, hold_timer = 71 },
+                    { display_lane = 2, key_on_timer = 102, key_off_timer = 122, hold_timer = 72 },
+                }
+                local function update()
+                    local now = main_state.time()
+                    if now == last_update_time then
+                        return
+                    end
+                    last_update_time = now
+                    for _, lane_info in ipairs(lanes) do
+                        local lane = lane_info.display_lane
+                        local key_on_time = main_state.timer(lane_info.key_on_timer)
+                        local key_off_time = main_state.timer(lane_info.key_off_timer)
+                        local key_off_changed = key_off_time ~= off and key_off_time ~= last_key_off_timer[lane]
+                        if key_on_time ~= off and key_on_time ~= last_key_on_timer[lane] then
+                            active[lane] = true
+                            fade_start_time[lane] = nil
+                        end
+                        if key_off_changed then
+                            active[lane] = true
+                            fade_start_time[lane] = key_off_time
+                        end
+                        if fade_start_time[lane] and now >= fade_start_time[lane] + fade_us then
+                            active[lane] = false
+                        end
+                        last_key_on_timer[lane] = key_on_time
+                        last_key_off_timer[lane] = key_off_time
+                    end
+                end
+                return function()
+                    update()
+                    local fade_start = fade_start_time[1]
+                    if active[1] and fade_start and main_state.time() >= fade_start then
+                        return fade_start
+                    end
+                    return off
+                end
+                "#,
+            )
+            .eval::<Function>()
+            .unwrap();
+
+        assert_eq!(infer_timer_function_ref(&function, &probe), Some(121));
+    }
+
+    #[test]
+    fn infers_main_state_judge_as_beatoraja_number_ref() {
+        let lua = Lua::new();
+        let probe = Arc::new(Mutex::new(MainStateProbe::default()));
+        let main_state = create_main_state_stub(&lua, probe.clone()).unwrap();
+        lua.globals().set("main_state", main_state).unwrap();
+        let value = lua
+            .load(
+                r#"
+                return function()
+                    return main_state.judge(1) or 0
+                end
+                "#,
+            )
+            .eval::<Function>()
+            .unwrap();
+        let draw = lua
+            .load(
+                r#"
+                return function()
+                    return (main_state.judge(2) or 0) > 0
+                end
+                "#,
+            )
+            .eval::<Function>()
+            .unwrap();
+
+        assert_eq!(infer_main_state_number_ref(&value, &probe), Some(111));
+        assert_eq!(
+            infer_boolean_predicate(&draw, &probe, None),
+            Some("number(112) > 0".to_string())
+        );
+    }
+
+    #[test]
+    fn infers_weighted_pscore_value_expr_from_judge_counts() {
+        let lua = Lua::new();
+        let probe = Arc::new(Mutex::new(MainStateProbe::default()));
+        let main_state = create_main_state_stub(&lua, probe.clone()).unwrap();
+        lua.globals().set("main_state", main_state).unwrap();
+        let function = lua
+            .load(
+                r#"
+                local function clamp(value, min_value, max_value)
+                    if value < min_value then
+                        return min_value
+                    end
+                    if value > max_value then
+                        return max_value
+                    end
+                    return value
+                end
+
+                return function()
+                    local total_notes = main_state.number(74)
+                    if not total_notes or total_notes <= 0 then
+                        return 0
+                    end
+
+                    local cool = main_state.judge(0)
+                    local great = main_state.judge(1)
+                    local good = main_state.judge(2)
+                    local raw = 100000 * ((cool * 1.0) + (great * 0.7) + (good * 0.4)) / total_notes
+                    return clamp(math.floor(raw), 0, 100000)
+                end
+                "#,
+            )
+            .eval::<Function>()
+            .unwrap();
+
+        assert_eq!(
+            infer_value_float_expr(&function, &probe),
+            Some(
+                "floor((100000*number(110)+70000*number(111)+40000*number(112))/number(74))"
+                    .to_string()
+            )
         );
     }
 

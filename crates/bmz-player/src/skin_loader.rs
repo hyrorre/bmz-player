@@ -1491,7 +1491,8 @@ mod tests {
         .unwrap();
         let mv = decoded.sources.iter().find(|source| source.source_id == "mv").unwrap();
 
-        assert!(mv.path.to_string_lossy().ends_with("mv/default.mp4"));
+        let mv_path = mv.path.to_string_lossy().replace('\\', "/");
+        assert!(mv_path.ends_with("mv/default.mp4"));
         assert!(mv.asset.width > 0);
         assert!(mv.asset.height > 0);
         assert_eq!(mv.asset.pixels.len(), mv.asset.width as usize * mv.asset.height as usize * 4);

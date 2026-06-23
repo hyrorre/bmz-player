@@ -2108,7 +2108,9 @@ fn push_play_bar_line(
     let start = commands.len();
     let items = skin.document_bar_line_items(bar.y, key_mode, skin_state);
     if items.is_empty() {
-        push_bar_line_rect_geometry(commands, board, lift, bar.y, skin_offsets);
+        if skin.document().is_none() {
+            push_bar_line_rect_geometry(commands, board, lift, bar.y, skin_offsets);
+        }
     } else {
         let items = skin.apply_play_skin_global_offset(items, skin_state);
         append_skin_render_items(commands, &items);
@@ -3776,7 +3778,7 @@ mod tests {
     }
 
     #[test]
-    fn play_skin_document_without_group_falls_back_to_bar_line_offset_rect() {
+    fn play_skin_document_without_group_does_not_fallback_to_bar_line_rect() {
         let document: crate::skin::SkinDocument = serde_json::from_str(
             r#"
             {
@@ -3805,12 +3807,10 @@ mod tests {
             &mut crate::skin::DynamicTimerRuntime::default(),
         );
 
-        assert!(plan.commands.iter().any(|command| matches!(
-            command,
-            DrawCommand::Rect { rect, color }
-                if approx_eq(rect.height, 0.004 + 4.0 / 1080.0)
-                    && approx_eq(color.a, 127.0 / 255.0)
-        )));
+        assert!(
+            !plan.commands.iter().any(|command| matches!(command, DrawCommand::Rect { .. })),
+            "skin documents without note.group should not receive default bar line fallback"
+        );
     }
 
     #[test]

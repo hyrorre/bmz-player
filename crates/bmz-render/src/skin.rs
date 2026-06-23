@@ -8162,8 +8162,34 @@ fn skin_state_event_index(event_id: i32, state: &SkinDrawState) -> i32 {
         75 => i32::from(state.judge_timing_auto_adjust),
         340 => state.select_judge_algorithm_index as i32,
         SKIN_EVENT_HSFIX => state.hsfix_index,
-        _ => 0,
+        _ => skin_state_lane_judge_event_index(event_id, state).unwrap_or(0),
     }
+}
+
+fn skin_state_lane_judge_event_index(event_id: i32, state: &SkinDrawState) -> Option<i32> {
+    let lane = match event_id {
+        500 => Lane::Scratch,
+        501..=509 => Lane::from_pms_key((event_id - 500) as u8)?,
+        510 => Lane::Scratch2,
+        511 => Lane::Key8,
+        512 => Lane::Key9,
+        513 => Lane::Key10,
+        514 => Lane::Key11,
+        515 => Lane::Key12,
+        516 => Lane::Key13,
+        517 => Lane::Key14,
+        _ => return None,
+    };
+    Some(match state.lane_judge[lane.index()] {
+        None => 0,
+        Some(0) => 1,
+        Some(1) => 2,
+        Some(2) => 4,
+        Some(3) => 6,
+        Some(4) => 7,
+        Some(5) => 8,
+        Some(_) => 0,
+    })
 }
 
 /// beatoraja `main_state.float_number(ref)`。BARGRAPH / SLIDER 系の比率 0.0-1.0。
@@ -8297,22 +8323,59 @@ fn skin_state_number_expr_term(term: &str, state: &SkinDrawState) -> Option<i64>
 }
 
 fn skin_state_float_expr(expr: &str, state: &SkinDrawState) -> Option<f32> {
-    let expr = expr.trim();
+    let expr = strip_wrapping_parentheses(expr.trim());
     if expr.is_empty() {
         return None;
+    }
+    if let Some(inner) = expr.strip_prefix("floor(").and_then(|value| value.strip_suffix(')')) {
+        return skin_state_float_expr(inner.trim(), state).map(f32::floor);
     }
     if let Some(inner) = expr.strip_prefix("max(0,").and_then(|value| value.strip_suffix(')')) {
         return skin_state_float_expr(inner.trim(), state).map(|value| value.max(0.0));
     }
     if let Some((numerator, denominator)) = expr.split_once('/') {
-        let numerator = skin_state_additive_float_expr(numerator.trim(), state)?;
-        let denominator = skin_state_additive_float_expr(denominator.trim(), state)?;
+        let numerator = skin_state_float_expr(numerator.trim(), state)?;
+        let denominator = skin_state_float_expr(denominator.trim(), state)?;
         if denominator.abs() < f32::EPSILON {
             return Some(0.0);
         }
         return Some(numerator / denominator);
     }
     skin_state_additive_float_expr(expr, state)
+}
+
+fn strip_wrapping_parentheses(mut expr: &str) -> &str {
+    loop {
+        let trimmed = expr.trim();
+        if !outer_parentheses_wrap_expression(trimmed) {
+            return trimmed;
+        }
+        expr = &trimmed[1..trimmed.len() - 1];
+    }
+}
+
+fn outer_parentheses_wrap_expression(expr: &str) -> bool {
+    if !expr.starts_with('(') || !expr.ends_with(')') {
+        return false;
+    }
+    let mut depth = 0_i32;
+    let last_index = expr.len() - 1;
+    for (index, ch) in expr.char_indices() {
+        match ch {
+            '(' => depth += 1,
+            ')' => {
+                depth -= 1;
+                if depth == 0 && index < last_index {
+                    return false;
+                }
+            }
+            _ => {}
+        }
+        if depth < 0 {
+            return false;
+        }
+    }
+    depth == 0
 }
 
 fn skin_state_additive_float_expr(expr: &str, state: &SkinDrawState) -> Option<f32> {
@@ -14410,6 +14473,7 @@ mod tests {
                 ..SelectRowSnapshot::default()
             }],
             chart_count: 1,
+            grade_diff_display: ResultGradeDiffDisplay::Next,
             ..SelectSnapshot::default()
         };
         let no_play_zero_items = document.select_render_items(&sources, &no_play_zero_snapshot);
@@ -20389,6 +20453,28 @@ mod tests {
     }
 
     #[test]
+    fn skin_state_event_index_maps_lane_judge_values() {
+        let mut lane_judge = [None; LANE_COUNT];
+        lane_judge[Lane::Key1.index()] = Some(0);
+        lane_judge[Lane::Key2.index()] = Some(1);
+        lane_judge[Lane::Key3.index()] = Some(2);
+        lane_judge[Lane::Key4.index()] = Some(3);
+        lane_judge[Lane::Key5.index()] = Some(4);
+        lane_judge[Lane::Key6.index()] = Some(5);
+        lane_judge[Lane::Key8.index()] = Some(0);
+        let state = SkinDrawState { lane_judge, ..SkinDrawState::default() };
+
+        assert_eq!(skin_state_event_index(501, &state), 1);
+        assert_eq!(skin_state_event_index(502, &state), 2);
+        assert_eq!(skin_state_event_index(503, &state), 4);
+        assert_eq!(skin_state_event_index(504, &state), 6);
+        assert_eq!(skin_state_event_index(505, &state), 7);
+        assert_eq!(skin_state_event_index(506, &state), 8);
+        assert_eq!(skin_state_event_index(507, &state), 0);
+        assert_eq!(skin_state_event_index(511, &state), 1);
+    }
+
+    #[test]
     fn skin_image_act_uses_event_index_for_button_frame_row() {
         let image = SkinImageDef {
             id: "auto-judge".to_string(),
@@ -21943,6 +22029,25 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(skin_value_number(&value, &state), Some(109_800));
+    }
+
+    #[test]
+    fn skin_value_number_evaluates_floor_division_value_expr() {
+        let state = SkinDrawState {
+            total_notes: 74,
+            judge_counts: DisplayJudgeCounts { pgreat: 1, great: 1, good: 1, ..Default::default() },
+            ..SkinDrawState::default()
+        };
+        let value = SkinValueDef {
+            id: "pscore".to_string(),
+            src: String::new(),
+            value_expr:
+                "floor((100000*number(110)+70000*number(111)+40000*number(112))/number(74))"
+                    .to_string(),
+            ..Default::default()
+        };
+
+        assert_eq!(skin_value_number(&value, &state), Some(2837));
     }
 
     #[test]
