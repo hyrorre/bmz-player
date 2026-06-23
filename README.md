@@ -26,6 +26,14 @@ Features
 
 **Don't use this application for playing copyrighted contents.**
 
+## Recommended Skins
+
+- m-select (bundled)
+- Rm-skin (bundled)
+- EC:FN / Starseeker ([https://kaidou0912.hatenablog.com/entry/2025/03/01/151604](https://kaidou0912.hatenablog.com/entry/2025/03/01/151604))
+
+data_dir の skins フォルダに配置してください。
+
 ## Clone
 
 Bundled skin assets are managed as Git submodules. Clone with submodules, or initialize them after cloning.
@@ -41,7 +49,7 @@ git submodule update --init --recursive
 Currently bundled submodules:
 
 - `data/skins/Rmz-skin` — BMZ bundled fork of Rm-skin. See the skin repository's README and `_license/` directory for license details.
-- `data/skins/mz-select` — BMZ bundled copy of mz-select / m-select. See the skin repository's `readme.txt` and `license/` directory for license details.
+- `data/skins/mz-select` — BMZ bundled copy of m-select. See the skin repository's `readme.txt` and `license/` directory for license details.
 
 ## System Requirements
 
