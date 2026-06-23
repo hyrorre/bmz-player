@@ -41,6 +41,7 @@ git submodule update --init --recursive
 Currently bundled submodules:
 
 - `data/skins/Rmz-skin` — BMZ bundled fork of Rm-skin. See the skin repository's README and `_license/` directory for license details.
+- `data/skins/mz-select` — BMZ bundled copy of mz-select / m-select. See the skin repository's `readme.txt` and `license/` directory for license details.
 
 ## System Requirements
 

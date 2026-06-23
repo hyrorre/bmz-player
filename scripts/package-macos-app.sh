@@ -283,9 +283,11 @@ main() {
   local version
   version="$(cargo_version)"
   [[ -n "${version}" ]] || die "failed to read workspace version"
-  [[ -f "${root}/data/skins/default/skin.toml" ]] || die "missing bundled default skin"
+  [[ -f "${root}/data/skins/default/select.json" ]] || die "missing bundled default skin"
   [[ -f "${root}/data/skins/Rmz-skin/play7main.luaskin" ]] || \
     die "missing Rmz-skin contents; run: git submodule update --init --recursive data/skins/Rmz-skin"
+  [[ -f "${root}/data/skins/mz-select/music_select.luaskin" ]] || \
+    die "missing mz-select contents; run: git submodule update --init --recursive data/skins/mz-select"
   [[ -f "${root}/data/songs/sample-playable/sample-playable.bms" ]] || \
     die "missing bundled sample song"
   [[ -f "${root}/assets/app-icon/bmz-player.icns" ]] || die "missing macOS app icon"
@@ -305,6 +307,7 @@ main() {
 
   copy_dir "${root}/data/skins/default" "${resources_dir}/skins/default"
   copy_dir "${root}/data/skins/Rmz-skin" "${resources_dir}/skins/Rmz-skin"
+  copy_dir "${root}/data/skins/mz-select" "${resources_dir}/skins/mz-select"
   copy_dir "${root}/data/songs/sample-playable" "${resources_dir}/songs/sample-playable"
   copy_file "${root}/LICENSE" "${resources_dir}/licenses/BMZ-GPL-3.0-only.txt"
   copy_file "${root}/docs/licenses.md" "${resources_dir}/licenses/license-notes.md"

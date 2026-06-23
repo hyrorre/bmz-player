@@ -90,7 +90,7 @@ function Copy-DirectoryMirror {
     }
     New-Item -ItemType Directory -Force -Path $Destination | Out-Null
 
-    & robocopy $Source $Destination /MIR /XD .git /XF .DS_Store
+    & robocopy $Source $Destination /MIR /XD .git /XF .git .DS_Store
     if ($LASTEXITCODE -gt 7) {
         throw "robocopy failed with exit code $LASTEXITCODE"
     }
@@ -208,12 +208,14 @@ $binary = Join-Path (Join-Path $targetBase $profileDir) "bmz-player.exe"
 Require-File $binary
 
 $version = Get-CargoVersion $repoRoot
-$defaultSkin = Join-Path $repoRoot "data\skins\default\skin.toml"
+$defaultSkin = Join-Path $repoRoot "data\skins\default\select.json"
 $rmzSkin = Join-Path $repoRoot "data\skins\Rmz-skin\play7main.luaskin"
+$mzSelectSkin = Join-Path $repoRoot "data\skins\mz-select\music_select.luaskin"
 $sampleSong = Join-Path $repoRoot "data\songs\sample-playable\sample-playable.bms"
 $appIcon = Join-Path $repoRoot "assets\app-icon\bmz-player.ico"
 Require-File $defaultSkin
 Require-File $rmzSkin
+Require-File $mzSelectSkin
 Require-File $sampleSong
 Require-File $appIcon
 
@@ -233,6 +235,7 @@ New-Item -ItemType Directory -Force -Path $licensesDir | Out-Null
 Copy-RequiredFile $binary (Join-Path $stageDir "bmz-player.exe")
 Copy-DirectoryMirror (Join-Path $repoRoot "data\skins\default") (Join-Path $resourcesDir "skins\default")
 Copy-DirectoryMirror (Join-Path $repoRoot "data\skins\Rmz-skin") (Join-Path $resourcesDir "skins\Rmz-skin")
+Copy-DirectoryMirror (Join-Path $repoRoot "data\skins\mz-select") (Join-Path $resourcesDir "skins\mz-select")
 Copy-DirectoryMirror (Join-Path $repoRoot "data\songs\sample-playable") (Join-Path $resourcesDir "songs\sample-playable")
 Copy-RequiredFile (Join-Path $repoRoot "LICENSE") (Join-Path $licensesDir "BMZ-GPL-3.0-only.txt")
 Copy-RequiredFile (Join-Path $repoRoot "docs\licenses.md") (Join-Path $licensesDir "license-notes.md")

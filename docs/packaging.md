@@ -50,6 +50,7 @@ BMZ Player/
     skins/
       default/
       Rmz-skin/
+      mz-select/
     songs/
       sample-playable/
     licenses/
@@ -130,6 +131,13 @@ $env:BMZ_WINDOWS_DLL_DIRS = "C:\vcpkg\installed\x64-windows\bin;C:\extra\dlls"
 .\scripts\package-windows.ps1 -Smoke
 ```
 
+開発者の Windows PC では、このコマンドで生成
+
+```powershell
+.\scripts\package-windows.ps1 -DllDir C:\vcpkg\installed\x64-windows\bin -Installer -Iscc "C:\Users\hyrorre\AppData\Local\Programs\Inno Setup 6\ISCC.exe"
+```
+
+
 ### Windows FFmpeg / DLL bundling
 
 Windows で FFmpeg を dynamic link する build では、実行環境に必要な DLL が存在する
@@ -166,6 +174,7 @@ BMZ Player.app/
       skins/
         default/
         Rmz-skin/
+        mz-select/
       songs/
         sample-playable/
       licenses/
