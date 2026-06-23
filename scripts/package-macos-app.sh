@@ -174,15 +174,20 @@ EOF
 sign_bundle() {
   local app_dir="$1"
   local identity="$2"
+
   need_command codesign
+  need_command file
 
   if [[ -d "${app_dir}/Contents/Frameworks" ]]; then
-    while IFS= read -r file; do
-      codesign --force --options runtime --sign "${identity}" "${file}"
-    done < <(find "${app_dir}/Contents/Frameworks" -type f -perm -111)
+    while IFS= read -r -d '' file_path; do
+      if file "${file_path}" | grep -q 'Mach-O'; then
+        codesign --force --options runtime --timestamp=none --sign "${identity}" "${file_path}"
+      fi
+    done < <(find "${app_dir}/Contents/Frameworks" -type f -print0)
   fi
 
-  codesign --force --options runtime --sign "${identity}" "${app_dir}"
+  codesign --force --options runtime --timestamp=none --sign "${identity}" "${app_dir}"
+  codesign --verify --deep --strict --verbose=4 "${app_dir}"
 }
 
 main() {
