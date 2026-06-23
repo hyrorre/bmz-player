@@ -1,0 +1,220 @@
+{
+  "type": 7,
+  "name": "BMZ Default Result",
+  "author": "BMZ Player",
+  "w": 1280,
+  "h": 720,
+  "ranktime": 700,
+  "scene": 0,
+  "source": { "include": "_sources.json" },
+  "image": { "include": "_images.json" },
+  "text": [
+    { "id": "result_label", "constantText": "RESULT", "size": 24 },
+    { "id": "result_title", "ref": 12, "size": 30, "overflow": 1 },
+    { "id": "result_artist", "ref": 16, "size": 18, "overflow": 1 },
+    { "id": "difficulty_name", "size": 18, "overflow": 1 },
+    { "id": "result_table", "ref": 1003, "size": 16, "overflow": 1 },
+    { "id": "result_level_label", "constantText": "LEVEL", "size": 12 },
+    { "id": "result_level", "numberRef": 96, "size": 28 },
+    { "id": "result_ex_label", "constantText": "EX SCORE", "size": 13 },
+    { "id": "result_ex", "numberRef": 71, "size": 36 },
+    { "id": "result_rate_label", "constantText": "RATE", "size": 13 },
+    { "id": "result_rate_int", "numberRef": 102, "suffix": ".", "size": 26 },
+    { "id": "result_rate_frac", "numberRef": 103, "suffix": "%", "size": 26 },
+    { "id": "result_combo_label", "constantText": "MAX COMBO", "size": 13 },
+    { "id": "result_combo", "numberRef": 75, "size": 28 },
+    { "id": "result_bp_label", "constantText": "BP", "size": 13 },
+    { "id": "result_bp", "numberRef": 76, "size": 28 },
+    { "id": "result_gauge_label", "constantText": "GAUGE", "size": 13 },
+    { "id": "result_gauge", "numberRef": 107, "suffix": "%", "size": 28 },
+    { "id": "result_compare_label", "constantText": "BEST / TARGET / DIFF", "size": 13 },
+    { "id": "result_best", "numberRef": 150, "size": 22 },
+    { "id": "result_target", "numberRef": 121, "size": 22 },
+    { "id": "result_diff", "numberRef": 152, "size": 22 },
+    {
+      "id": "result_judge_label",
+      "constantText": "PGREAT / GREAT / GOOD / BAD / POOR / EMPTY",
+      "size": 13
+    },
+    { "id": "result_pgreat", "numberRef": 80, "size": 22 },
+    { "id": "result_great", "numberRef": 81, "size": 22 },
+    { "id": "result_good", "numberRef": 82, "size": 22 },
+    { "id": "result_bad", "numberRef": 83, "size": 22 },
+    { "id": "result_poor", "numberRef": 84, "size": 22 },
+    { "id": "result_empty", "numberRef": 420, "size": 22 },
+    { "id": "result_fs_label", "constantText": "FAST / SLOW / TIMING AVG", "size": 13 },
+    { "id": "result_fast", "numberRef": 410, "size": 22 },
+    { "id": "result_slow", "numberRef": 411, "size": 22 },
+    { "id": "result_timing", "numberRef": 525, "suffix": "ms", "size": 22 },
+    { "id": "result_notes_label", "constantText": "NOTES / DURATION", "size": 13 },
+    { "id": "result_notes", "numberRef": 74, "size": 22 },
+    { "id": "result_minutes", "numberRef": 1163, "suffix": "m", "size": 22 },
+    { "id": "result_seconds", "numberRef": 1164, "suffix": "s", "size": 22 }
+  ],
+  "destination": [
+    {
+      "id": "panel_inactive_img",
+      "dst": [{ "x": 54, "y": 42, "w": 1172, "h": 612, "a": 225, "r": 28, "g": 34, "b": 36 }]
+    },
+    {
+      "id": "panel_img",
+      "dst": [{ "x": 54, "y": 42, "w": 1172, "h": 5, "a": 255, "r": 94, "g": 206, "b": 184 }]
+    },
+    {
+      "id": "panel_inactive_img",
+      "dst": [{ "x": 78, "y": 184, "w": 516, "h": 336, "a": 170, "r": 42, "g": 48, "b": 52 }]
+    },
+    {
+      "id": "panel_inactive_img",
+      "dst": [{ "x": 628, "y": 184, "w": 550, "h": 336, "a": 170, "r": 42, "g": 48, "b": 52 }]
+    },
+    {
+      "id": "result_label",
+      "dst": [{ "x": 86, "y": 70, "w": 160, "h": 28, "a": 240, "r": 176, "g": 204, "b": 206 }]
+    },
+    {
+      "id": "result_title",
+      "dst": [{ "x": 86, "y": 108, "w": 850, "h": 34, "a": 255, "r": 242, "g": 246, "b": 240 }]
+    },
+    {
+      "id": "result_artist",
+      "dst": [{ "x": 86, "y": 146, "w": 760, "h": 20, "a": 225, "r": 180, "g": 206, "b": 204 }]
+    },
+    {
+      "id": "difficulty_name",
+      "dst": [{ "x": 970, "y": 106, "w": 150, "h": 22, "a": 255, "r": 238, "g": 242, "b": 236 }]
+    },
+    {
+      "id": "result_table",
+      "dst": [{ "x": 970, "y": 138, "w": 210, "h": 18, "a": 230, "r": 246, "g": 208, "b": 126 }]
+    },
+    {
+      "id": "result_level_label",
+      "dst": [{ "x": 1128, "y": 84, "w": 60, "h": 12, "a": 210, "r": 160, "g": 180, "b": 184 }]
+    },
+    {
+      "id": "result_level",
+      "dst": [{ "x": 1128, "y": 106, "w": 70, "h": 30, "a": 255, "r": 246, "g": 208, "b": 126 }]
+    },
+    {
+      "id": "result_ex_label",
+      "dst": [{ "x": 108, "y": 214, "w": 120, "h": 14, "a": 210, "r": 160, "g": 180, "b": 184 }]
+    },
+    {
+      "id": "result_ex",
+      "dst": [{ "x": 108, "y": 238, "w": 180, "h": 40, "a": 255, "r": 242, "g": 246, "b": 240 }]
+    },
+    {
+      "id": "result_rate_label",
+      "dst": [{ "x": 348, "y": 214, "w": 80, "h": 14, "a": 210, "r": 160, "g": 180, "b": 184 }]
+    },
+    {
+      "id": "result_rate_int",
+      "dst": [{ "x": 348, "y": 244, "w": 70, "h": 28, "a": 255, "r": 246, "g": 208, "b": 126 }]
+    },
+    {
+      "id": "result_rate_frac",
+      "dst": [{ "x": 410, "y": 244, "w": 100, "h": 28, "a": 255, "r": 246, "g": 208, "b": 126 }]
+    },
+    {
+      "id": "result_combo_label",
+      "dst": [{ "x": 108, "y": 314, "w": 120, "h": 14, "a": 210, "r": 160, "g": 180, "b": 184 }]
+    },
+    {
+      "id": "result_combo",
+      "dst": [{ "x": 108, "y": 340, "w": 130, "h": 30, "a": 255, "r": 218, "g": 230, "b": 232 }]
+    },
+    {
+      "id": "result_bp_label",
+      "dst": [{ "x": 300, "y": 314, "w": 60, "h": 14, "a": 210, "r": 160, "g": 180, "b": 184 }]
+    },
+    {
+      "id": "result_bp",
+      "dst": [{ "x": 300, "y": 340, "w": 90, "h": 30, "a": 255, "r": 238, "g": 132, "b": 112 }]
+    },
+    {
+      "id": "result_gauge_label",
+      "dst": [{ "x": 438, "y": 314, "w": 80, "h": 14, "a": 210, "r": 160, "g": 180, "b": 184 }]
+    },
+    {
+      "id": "result_gauge",
+      "dst": [{ "x": 438, "y": 340, "w": 100, "h": 30, "a": 255, "r": 120, "g": 226, "b": 188 }]
+    },
+    {
+      "id": "result_compare_label",
+      "dst": [{ "x": 108, "y": 410, "w": 200, "h": 14, "a": 210, "r": 160, "g": 180, "b": 184 }]
+    },
+    {
+      "id": "result_best",
+      "dst": [{ "x": 108, "y": 436, "w": 105, "h": 24, "a": 245, "r": 218, "g": 230, "b": 232 }]
+    },
+    {
+      "id": "result_target",
+      "dst": [{ "x": 240, "y": 436, "w": 105, "h": 24, "a": 245, "r": 218, "g": 230, "b": 232 }]
+    },
+    {
+      "id": "result_diff",
+      "dst": [{ "x": 372, "y": 436, "w": 105, "h": 24, "a": 245, "r": 246, "g": 208, "b": 126 }]
+    },
+    {
+      "id": "result_judge_label",
+      "dst": [{ "x": 654, "y": 214, "w": 360, "h": 14, "a": 210, "r": 160, "g": 180, "b": 184 }]
+    },
+    {
+      "id": "result_pgreat",
+      "dst": [{ "x": 654, "y": 244, "w": 72, "h": 24, "a": 245, "r": 220, "g": 238, "b": 248 }]
+    },
+    {
+      "id": "result_great",
+      "dst": [{ "x": 738, "y": 244, "w": 72, "h": 24, "a": 245, "r": 186, "g": 226, "b": 216 }]
+    },
+    {
+      "id": "result_good",
+      "dst": [{ "x": 822, "y": 244, "w": 72, "h": 24, "a": 245, "r": 246, "g": 208, "b": 126 }]
+    },
+    {
+      "id": "result_bad",
+      "dst": [{ "x": 906, "y": 244, "w": 72, "h": 24, "a": 245, "r": 238, "g": 150, "b": 112 }]
+    },
+    {
+      "id": "result_poor",
+      "dst": [{ "x": 990, "y": 244, "w": 72, "h": 24, "a": 245, "r": 238, "g": 120, "b": 120 }]
+    },
+    {
+      "id": "result_empty",
+      "dst": [{ "x": 1074, "y": 244, "w": 72, "h": 24, "a": 245, "r": 206, "g": 170, "b": 226 }]
+    },
+    {
+      "id": "result_fs_label",
+      "dst": [{ "x": 654, "y": 314, "w": 250, "h": 14, "a": 210, "r": 160, "g": 180, "b": 184 }]
+    },
+    {
+      "id": "result_fast",
+      "dst": [{ "x": 654, "y": 340, "w": 92, "h": 24, "a": 245, "r": 112, "g": 190, "b": 240 }]
+    },
+    {
+      "id": "result_slow",
+      "dst": [{ "x": 764, "y": 340, "w": 92, "h": 24, "a": 245, "r": 238, "g": 156, "b": 112 }]
+    },
+    {
+      "id": "result_timing",
+      "dst": [{ "x": 874, "y": 340, "w": 120, "h": 24, "a": 245, "r": 218, "g": 230, "b": 232 }]
+    },
+    {
+      "id": "result_notes_label",
+      "dst": [{ "x": 654, "y": 410, "w": 160, "h": 14, "a": 210, "r": 160, "g": 180, "b": 184 }]
+    },
+    {
+      "id": "result_notes",
+      "dst": [{ "x": 654, "y": 436, "w": 90, "h": 24, "a": 245, "r": 218, "g": 230, "b": 232 }]
+    },
+    {
+      "id": "result_minutes",
+      "dst": [{ "x": 776, "y": 436, "w": 64, "h": 24, "a": 245, "r": 218, "g": 230, "b": 232 }]
+    },
+    {
+      "id": "result_seconds",
+      "dst": [{ "x": 838, "y": 436, "w": 64, "h": 24, "a": 245, "r": 218, "g": 230, "b": 232 }]
+    }
+  ]
+}

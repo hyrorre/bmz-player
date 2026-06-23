@@ -1,0 +1,43 @@
+{
+  "note": ["note_img", "note_blue_img", "note_img", "note_blue_img", "note_img", "note_blue_img"],
+  "lnstart": [
+    "note_img",
+    "note_blue_img",
+    "note_img",
+    "note_blue_img",
+    "note_img",
+    "note_blue_img"
+  ],
+  "lnend": ["note_img", "note_blue_img", "note_img", "note_blue_img", "note_img", "note_blue_img"],
+  "lnbody": [
+    "gauge_fill_img",
+    "gauge_fill_img",
+    "gauge_fill_img",
+    "gauge_fill_img",
+    "gauge_fill_img",
+    "gauge_fill_img"
+  ],
+  "mine": [
+    "note_mine_img",
+    "note_mine_img",
+    "note_mine_img",
+    "note_mine_img",
+    "note_mine_img",
+    "note_mine_img"
+  ],
+  "size": [12, 12, 12, 12, 12, 12],
+  "dst": [
+    { "x": 374, "y": 56, "w": 62, "h": 580 },
+    { "x": 440, "y": 56, "w": 62, "h": 580 },
+    { "x": 506, "y": 56, "w": 62, "h": 580 },
+    { "x": 572, "y": 56, "w": 62, "h": 580 },
+    { "x": 638, "y": 56, "w": 62, "h": 580 },
+    { "x": 704, "y": 56, "w": 62, "h": 580 }
+  ],
+  "group": [
+    {
+      "id": "judge_line_img",
+      "dst": [{ "x": 374, "y": 56, "w": 392, "h": 4, "a": 190, "r": 210, "g": 224, "b": 226 }]
+    }
+  ]
+}

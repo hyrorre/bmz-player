@@ -1,0 +1,15 @@
+[
+  { "id": "panel_img", "src": "panel", "x": 0, "y": 0, "w": 48, "h": 16 },
+  { "id": "panel_inactive_img", "src": "panel_inactive", "x": 0, "y": 0, "w": 48, "h": 16 },
+  { "id": "gauge_fill_img", "src": "gauge_fill", "x": 0, "y": 0, "w": 8, "h": 48 },
+  { "id": "gauge_frame_img", "src": "gauge_frame", "x": 0, "y": 0, "w": 12, "h": 48 },
+  { "id": "judge_line_img", "src": "judge_line", "x": 0, "y": 0, "w": 32, "h": 8 },
+  { "id": "keybeam_img", "src": "judge_line", "x": 0, "y": 0, "w": 32, "h": 8 },
+  { "id": "note_img", "src": "note", "x": 0, "y": 0, "w": 32, "h": 8 },
+  { "id": "note_blue_img", "src": "note_blue", "x": 0, "y": 0, "w": 32, "h": 8 },
+  { "id": "note_red_img", "src": "note_red", "x": 0, "y": 0, "w": 32, "h": 8 },
+  { "id": "note_mine_img", "src": "note_mine", "x": 0, "y": 0, "w": 32, "h": 8 },
+  { "id": "receptor_img", "src": "receptor", "x": 0, "y": 0, "w": 32, "h": 10 },
+  { "id": "receptor_blue_img", "src": "receptor_blue", "x": 0, "y": 0, "w": 32, "h": 10 },
+  { "id": "receptor_red_img", "src": "receptor_red", "x": 0, "y": 0, "w": 32, "h": 10 }
+]

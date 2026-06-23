@@ -21,6 +21,10 @@ pub struct ActiveCourseSession {
     /// that chart gets a fresh arrange (e.g. a chart never reached because the
     /// previous attempt failed early).  Empty for a fresh course play.
     pub arrange_overrides: Vec<AppliedArrange>,
+    /// CLI/smoke boot course playback should progress through intermediate
+    /// results without manual input.  Normal select-launched courses wait for
+    /// the player on each intermediate result.
+    pub auto_advance_intermediate_results: bool,
 }
 
 pub struct CourseEntryResult {
@@ -353,6 +357,7 @@ mod tests {
             entry_results,
             queued_replays: Vec::new(),
             arrange_overrides: Vec::new(),
+            auto_advance_intermediate_results: false,
         }
     }
 
@@ -472,6 +477,7 @@ mod tests {
             entry_results,
             queued_replays: Vec::new(),
             arrange_overrides: Vec::new(),
+            auto_advance_intermediate_results: false,
         }
     }
 

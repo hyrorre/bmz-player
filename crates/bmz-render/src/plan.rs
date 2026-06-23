@@ -2965,7 +2965,7 @@ mod tests {
             }"#
             .replace("__TYPE__", &skin_type.to_string());
             let document: crate::skin::SkinDocument = serde_json::from_str(&json).unwrap();
-            let manifest: SkinManifest = toml::from_str("").unwrap();
+            let manifest: SkinManifest = SkinManifest::default();
             let source_texture = crate::skin::SkinDocumentTexture {
                 source_id: "1".to_string(),
                 texture: SkinTextureId(99),
@@ -3061,7 +3061,7 @@ mod tests {
         )
         .unwrap();
         let skin = SkinContext::from_manifest_and_document(
-            toml::from_str("").unwrap(),
+            SkinManifest::default(),
             document,
             std::iter::empty(),
         );
@@ -3101,7 +3101,7 @@ mod tests {
         )
         .unwrap();
         let skin = SkinContext::from_manifest_and_document(
-            toml::from_str("").unwrap(),
+            SkinManifest::default(),
             document,
             std::iter::empty(),
         );
@@ -3284,7 +3284,7 @@ mod tests {
         )
         .unwrap();
         let skin = SkinContext::from_manifest_and_document(
-            toml::from_str("").unwrap(),
+            SkinManifest::default(),
             document,
             std::iter::empty(),
         );
@@ -3409,7 +3409,7 @@ mod tests {
         )
         .unwrap();
         let skin = SkinContext::from_manifest_and_document(
-            toml::from_str("").unwrap(),
+            SkinManifest::default(),
             document,
             std::iter::empty(),
         );
@@ -3497,13 +3497,21 @@ mod tests {
 
     #[test]
     fn play_plan_uses_supplied_skin_context() {
-        let manifest: SkinManifest = toml::from_str(
-            r#"
-            [play.note]
-            texture = 42
-            "#,
-        )
-        .unwrap();
+        let manifest = SkinManifest {
+            play: crate::skin::SkinPlayManifest {
+                note: Some(crate::skin::SkinImageManifest {
+                    texture: 42,
+                    key_even_texture: None,
+                    scratch_texture: None,
+                    source_size: None,
+                    uv: crate::skin::TextureRegion::default(),
+                    scale: crate::skin::SkinImageScale::Stretch,
+                    border: None,
+                }),
+                ..crate::skin::SkinPlayManifest::default()
+            },
+            ..SkinManifest::default()
+        };
         let skin = SkinContext::from_manifest(manifest);
         let mut snapshot = RenderSnapshot::default();
         snapshot.visible_notes[Lane::Key1.index()].push(VisibleNote {
@@ -3560,7 +3568,7 @@ mod tests {
             "#,
         )
         .unwrap();
-        let manifest: SkinManifest = toml::from_str("").unwrap();
+        let manifest: SkinManifest = SkinManifest::default();
         let source_texture = crate::skin::SkinDocumentTexture {
             source_id: "1".to_string(),
             texture: SkinTextureId(77),
@@ -3617,7 +3625,7 @@ mod tests {
             "#,
         )
         .unwrap();
-        let manifest: SkinManifest = toml::from_str("").unwrap();
+        let manifest: SkinManifest = SkinManifest::default();
         let source_texture = crate::skin::SkinDocumentTexture {
             source_id: "1".to_string(),
             texture: SkinTextureId(77),
@@ -3665,7 +3673,7 @@ mod tests {
             "#,
         )
         .unwrap();
-        let manifest: SkinManifest = toml::from_str("").unwrap();
+        let manifest: SkinManifest = SkinManifest::default();
         let source_texture = crate::skin::SkinDocumentTexture {
             source_id: "1".to_string(),
             texture: SkinTextureId(77),
@@ -3735,7 +3743,7 @@ mod tests {
             "#,
         )
         .unwrap();
-        let manifest: SkinManifest = toml::from_str("").unwrap();
+        let manifest: SkinManifest = SkinManifest::default();
         let source_texture = crate::skin::SkinDocumentTexture {
             source_id: "1".to_string(),
             texture: SkinTextureId(77),
@@ -3782,7 +3790,7 @@ mod tests {
             "#,
         )
         .unwrap();
-        let manifest: SkinManifest = toml::from_str("").unwrap();
+        let manifest: SkinManifest = SkinManifest::default();
         let skin = SkinContext::from_manifest_and_document(manifest, document, []);
         let mut snapshot = RenderSnapshot::default();
         snapshot.skin_offsets.set(
@@ -3826,7 +3834,7 @@ mod tests {
             "#,
         )
         .unwrap();
-        let manifest: SkinManifest = toml::from_str("").unwrap();
+        let manifest: SkinManifest = SkinManifest::default();
         let source_texture = crate::skin::SkinDocumentTexture {
             source_id: "1".to_string(),
             texture: SkinTextureId(77),
@@ -3876,7 +3884,7 @@ mod tests {
             "#,
         )
         .unwrap();
-        let manifest: SkinManifest = toml::from_str("").unwrap();
+        let manifest: SkinManifest = SkinManifest::default();
         let source_texture = crate::skin::SkinDocumentTexture {
             source_id: "1".to_string(),
             texture: SkinTextureId(78),
@@ -3931,7 +3939,7 @@ mod tests {
             "#,
         )
         .unwrap();
-        let manifest: SkinManifest = toml::from_str("").unwrap();
+        let manifest: SkinManifest = SkinManifest::default();
         let skin = SkinContext::from_manifest_and_document(manifest, document, []);
 
         assert!(approx_eq(skin_lane_height_px(&skin, KeyMode::K7, 1080.0), 723.0));
@@ -3969,7 +3977,7 @@ mod tests {
             }"#,
         )
         .unwrap();
-        let manifest: SkinManifest = toml::from_str("").unwrap();
+        let manifest: SkinManifest = SkinManifest::default();
         let source_texture = crate::skin::SkinDocumentTexture {
             source_id: "1".to_string(),
             texture: SkinTextureId(99),
@@ -4038,7 +4046,7 @@ mod tests {
             }"#,
         )
         .unwrap();
-        let manifest: SkinManifest = toml::from_str("").unwrap();
+        let manifest: SkinManifest = SkinManifest::default();
         let source_texture = crate::skin::SkinDocumentTexture {
             source_id: "1".to_string(),
             texture: SkinTextureId(99),
@@ -4084,7 +4092,7 @@ mod tests {
             }"#,
         )
         .unwrap();
-        let manifest: SkinManifest = toml::from_str("").unwrap();
+        let manifest: SkinManifest = SkinManifest::default();
         let source_texture = crate::skin::SkinDocumentTexture {
             source_id: "1".to_string(),
             texture: SkinTextureId(99),
@@ -4140,7 +4148,7 @@ mod tests {
             }"#,
         )
         .unwrap();
-        let manifest: SkinManifest = toml::from_str("").unwrap();
+        let manifest: SkinManifest = SkinManifest::default();
         let source_texture = crate::skin::SkinDocumentTexture {
             source_id: "1".to_string(),
             texture: SkinTextureId(99),
@@ -4283,7 +4291,7 @@ mod tests {
             "#,
         )
         .unwrap();
-        let manifest: SkinManifest = toml::from_str("").unwrap();
+        let manifest: SkinManifest = SkinManifest::default();
         let skin = SkinContext::from_manifest_and_document(manifest, document, Vec::new());
         let mut dynamic_timers = crate::skin::DynamicTimerRuntime::default();
 
@@ -4358,7 +4366,7 @@ mod tests {
             "#,
         )
         .unwrap();
-        let manifest: SkinManifest = toml::from_str("").unwrap();
+        let manifest: SkinManifest = SkinManifest::default();
         let skin = SkinContext::from_manifest_and_document(
             manifest,
             document,
@@ -4675,7 +4683,7 @@ mod tests {
             "#,
         )
         .unwrap();
-        let manifest: SkinManifest = toml::from_str("").unwrap();
+        let manifest: SkinManifest = SkinManifest::default();
         let source_texture = crate::skin::SkinDocumentTexture {
             source_id: "1".to_string(),
             texture: crate::skin::SkinTextureId(77),
@@ -4716,7 +4724,7 @@ mod tests {
             "#,
         )
         .unwrap();
-        let manifest: SkinManifest = toml::from_str("").unwrap();
+        let manifest: SkinManifest = SkinManifest::default();
         let source_texture = crate::skin::SkinDocumentTexture {
             source_id: "1".to_string(),
             texture: crate::skin::SkinTextureId(77),

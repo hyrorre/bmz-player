@@ -1,0 +1,536 @@
+{
+  "type": 5,
+  "name": "BMZ Default Select",
+  "author": "BMZ Player",
+  "w": 1280,
+  "h": 720,
+  "source": { "include": "_sources.json" },
+  "image": { "include": "_images.json" },
+  "imageset": [
+    {
+      "id": "song_bar",
+      "images": [
+        "panel_inactive_img",
+        "panel_inactive_img",
+        "panel_inactive_img",
+        "panel_inactive_img",
+        "panel_inactive_img",
+        "panel_inactive_img",
+        "panel_inactive_img",
+        "panel_inactive_img"
+      ]
+    }
+  ],
+  "text": [
+    { "id": "select_title_label", "constantText": "SELECT", "size": 24 },
+    { "id": "select_folder", "ref": 1000, "size": 16, "overflow": 1 },
+    { "id": "select_search_label", "constantText": "SEARCH", "size": 12 },
+    { "id": "select_search", "ref": 30, "size": 18, "overflow": 1 },
+    { "id": "default_songlist_bartext", "size": 17, "overflow": 1 },
+    { "id": "detail_label", "constantText": "DETAIL", "size": 16 },
+    { "id": "detail_title", "ref": 12, "size": 26, "overflow": 1 },
+    { "id": "detail_artist", "ref": 16, "size": 17, "overflow": 1 },
+    { "id": "detail_table", "ref": 1003, "size": 16, "overflow": 1 },
+    { "id": "detail_difficulty", "constantText": "DIFFICULTY", "size": 12 },
+    { "id": "difficulty_name", "size": 18, "overflow": 1 },
+    { "id": "detail_level_label", "constantText": "LEVEL", "size": 12 },
+    { "id": "detail_level", "numberRef": 96, "size": 30 },
+    { "id": "detail_bpm_label", "constantText": "BPM MIN / MAX / MAIN", "size": 12 },
+    { "id": "detail_min_bpm", "numberRef": 91, "size": 20 },
+    { "id": "detail_max_bpm", "numberRef": 90, "size": 20 },
+    { "id": "detail_main_bpm", "numberRef": 92, "size": 20 },
+    { "id": "detail_notes_label", "constantText": "NOTES N / LN / SCR / MINE", "size": 12 },
+    { "id": "detail_notes", "numberRef": 350, "size": 20 },
+    { "id": "detail_ln", "numberRef": 351, "size": 20 },
+    { "id": "detail_scratch", "numberRef": 352, "size": 20 },
+    { "id": "detail_mine", "numberRef": 354, "size": 20 },
+    { "id": "detail_density_label", "constantText": "DENSITY PEAK / END / AVG", "size": 12 },
+    { "id": "detail_peak_density", "numberRef": 360, "size": 20 },
+    { "id": "detail_end_density", "numberRef": 362, "size": 20 },
+    { "id": "detail_avg_density", "numberRef": 364, "size": 20 },
+    { "id": "detail_score_label", "constantText": "EX / BP / PLAY / CLEAR", "size": 12 },
+    { "id": "detail_ex", "numberRef": 71, "size": 20 },
+    { "id": "detail_bp", "numberRef": 76, "size": 20 },
+    { "id": "detail_play", "numberRef": 77, "size": 20 },
+    { "id": "detail_clear", "numberRef": 78, "size": 20 },
+    { "id": "detail_total_label", "constantText": "TOTAL / CHARTS / HS", "size": 12 },
+    { "id": "detail_total", "numberRef": 368, "size": 20 },
+    { "id": "detail_count", "numberRef": 300, "size": 20 },
+    { "id": "detail_hs_int", "numberRef": 310, "suffix": ".", "size": 20 },
+    { "id": "detail_hs_frac", "numberRef": 311, "size": 20 },
+    { "id": "option_e1_title", "constantText": "OPTION E1", "size": 20 },
+    { "id": "option_e2_title", "constantText": "OPTION E2", "size": 20 },
+    { "id": "option_e12_title", "constantText": "OPTION E1 + E2", "size": 20 },
+    { "id": "option_p1_label", "constantText": "P1 RANDOM", "size": 12 },
+    { "id": "option_p2_label", "constantText": "2P RANDOM", "size": 12 },
+    { "id": "option_gauge_label", "constantText": "GAUGE", "size": 12 },
+    { "id": "option_target_label", "constantText": "TARGET", "size": 12 },
+    { "id": "option_hsfix_label", "constantText": "HS-FIX", "size": 12 },
+    { "id": "option_dp_label", "constantText": "DP OPTION", "size": 12 },
+    { "id": "option_assist_label", "constantText": "ASSIST", "size": 12 },
+    { "id": "option_bga_label", "constantText": "BGA", "size": 12 },
+    { "id": "option_gauge_auto_label", "constantText": "GAUGE AUTO SHIFT", "size": 12 },
+    { "id": "option_bottom_gauge_label", "constantText": "BOTTOM GAUGE", "size": 12 },
+    { "id": "option_judge_auto_label", "constantText": "JUDGE AUTO ADJUST", "size": 12 },
+    { "id": "option_visual_offset_label", "constantText": "VISUAL OFFSET", "size": 12 },
+    {
+      "id": "option_e1_hint",
+      "constantText": "KEY1/2 RANDOM  KEY3/4 GAUGE  SCR TARGET",
+      "size": 11,
+      "overflow": 1
+    },
+    { "id": "option_e2_hint", "constantText": "KEY5 ASSIST", "size": 11, "overflow": 1 },
+    {
+      "id": "option_e12_hint",
+      "constantText": "KEY1/2 BGA/AUTO  KEY3 JUDGE  KEY5/7 OFFSET",
+      "size": 11,
+      "overflow": 1
+    },
+    { "id": "bmz_select_arrange", "size": 17, "overflow": 1 },
+    { "id": "bmz_select_arrange_2p", "size": 17, "overflow": 1 },
+    { "id": "bmz_select_gauge", "size": 17, "overflow": 1 },
+    { "id": "bmz_select_target", "size": 17, "overflow": 1 },
+    { "id": "bmz_select_hs_fix", "size": 17, "overflow": 1 },
+    { "id": "bmz_select_double_option", "size": 17, "overflow": 1 },
+    { "id": "bmz_select_assist", "size": 17, "overflow": 1 },
+    { "id": "bmz_select_bga", "size": 17, "overflow": 1 },
+    { "id": "bmz_select_gauge_auto_shift", "size": 17, "overflow": 1 },
+    { "id": "bmz_select_bottom_shiftable_gauge", "size": 17, "overflow": 1 },
+    { "id": "bmz_select_judge_timing_auto_adjust", "size": 17, "overflow": 1 },
+    { "id": "option_judge_offset", "numberRef": 12, "suffix": " ms", "size": 17 }
+  ],
+  "songlist": {
+    "id": "songlist",
+    "center": 4,
+    "listoff": [
+      {
+        "id": "song_bar",
+        "dst": [{ "x": 64, "y": 564, "w": 670, "h": 42, "a": 190, "r": 44, "g": 52, "b": 56 }]
+      },
+      {
+        "id": "song_bar",
+        "dst": [{ "x": 64, "y": 514, "w": 670, "h": 42, "a": 190, "r": 44, "g": 52, "b": 56 }]
+      },
+      {
+        "id": "song_bar",
+        "dst": [{ "x": 64, "y": 464, "w": 670, "h": 42, "a": 190, "r": 44, "g": 52, "b": 56 }]
+      },
+      {
+        "id": "song_bar",
+        "dst": [{ "x": 64, "y": 414, "w": 670, "h": 42, "a": 190, "r": 44, "g": 52, "b": 56 }]
+      },
+      {
+        "id": "song_bar",
+        "dst": [{ "x": 64, "y": 364, "w": 670, "h": 42, "a": 190, "r": 44, "g": 52, "b": 56 }]
+      },
+      {
+        "id": "song_bar",
+        "dst": [{ "x": 64, "y": 314, "w": 670, "h": 42, "a": 190, "r": 44, "g": 52, "b": 56 }]
+      },
+      {
+        "id": "song_bar",
+        "dst": [{ "x": 64, "y": 264, "w": 670, "h": 42, "a": 190, "r": 44, "g": 52, "b": 56 }]
+      },
+      {
+        "id": "song_bar",
+        "dst": [{ "x": 64, "y": 214, "w": 670, "h": 42, "a": 190, "r": 44, "g": 52, "b": 56 }]
+      },
+      {
+        "id": "song_bar",
+        "dst": [{ "x": 64, "y": 164, "w": 670, "h": 42, "a": 190, "r": 44, "g": 52, "b": 56 }]
+      }
+    ],
+    "liston": [
+      {
+        "id": "song_bar",
+        "dst": [{ "x": 54, "y": 558, "w": 690, "h": 52, "a": 255, "r": 88, "g": 162, "b": 156 }]
+      },
+      {
+        "id": "song_bar",
+        "dst": [{ "x": 54, "y": 508, "w": 690, "h": 52, "a": 255, "r": 88, "g": 162, "b": 156 }]
+      },
+      {
+        "id": "song_bar",
+        "dst": [{ "x": 54, "y": 458, "w": 690, "h": 52, "a": 255, "r": 88, "g": 162, "b": 156 }]
+      },
+      {
+        "id": "song_bar",
+        "dst": [{ "x": 54, "y": 408, "w": 690, "h": 52, "a": 255, "r": 88, "g": 162, "b": 156 }]
+      },
+      {
+        "id": "song_bar",
+        "dst": [{ "x": 54, "y": 358, "w": 690, "h": 52, "a": 255, "r": 88, "g": 162, "b": 156 }]
+      },
+      {
+        "id": "song_bar",
+        "dst": [{ "x": 54, "y": 308, "w": 690, "h": 52, "a": 255, "r": 88, "g": 162, "b": 156 }]
+      },
+      {
+        "id": "song_bar",
+        "dst": [{ "x": 54, "y": 258, "w": 690, "h": 52, "a": 255, "r": 88, "g": 162, "b": 156 }]
+      },
+      {
+        "id": "song_bar",
+        "dst": [{ "x": 54, "y": 208, "w": 690, "h": 52, "a": 255, "r": 88, "g": 162, "b": 156 }]
+      },
+      {
+        "id": "song_bar",
+        "dst": [{ "x": 54, "y": 158, "w": 690, "h": 52, "a": 255, "r": 88, "g": 162, "b": 156 }]
+      }
+    ],
+    "text": [
+      {
+        "id": "default_songlist_bartext",
+        "dst": [{ "x": 18, "y": 12, "w": 620, "h": 18, "a": 255, "r": 238, "g": 242, "b": 236 }]
+      }
+    ]
+  },
+  "destination": [
+    {
+      "id": "panel_inactive_img",
+      "dst": [{ "x": 40, "y": 30, "w": 1200, "h": 76, "a": 220, "r": 36, "g": 44, "b": 48 }]
+    },
+    {
+      "id": "panel_img",
+      "dst": [{ "x": 40, "y": 30, "w": 1200, "h": 4, "a": 255, "r": 94, "g": 206, "b": 184 }]
+    },
+    {
+      "id": "panel_inactive_img",
+      "dst": [{ "x": 760, "y": 160, "w": 460, "h": 448, "a": 220, "r": 28, "g": 34, "b": 36 }]
+    },
+    { "id": "songlist" },
+    {
+      "id": "select_title_label",
+      "dst": [{ "x": 64, "y": 54, "w": 140, "h": 28, "a": 255, "r": 238, "g": 242, "b": 236 }]
+    },
+    {
+      "id": "select_folder",
+      "dst": [{ "x": 190, "y": 58, "w": 620, "h": 18, "a": 220, "r": 176, "g": 204, "b": 206 }]
+    },
+    {
+      "id": "select_search_label",
+      "dst": [{ "x": 858, "y": 50, "w": 80, "h": 12, "a": 205, "r": 150, "g": 170, "b": 174 }]
+    },
+    {
+      "id": "select_search",
+      "dst": [{ "x": 858, "y": 66, "w": 330, "h": 20, "a": 255, "r": 226, "g": 236, "b": 232 }]
+    },
+    {
+      "id": "detail_label",
+      "dst": [{ "x": 784, "y": 184, "w": 100, "h": 18, "a": 230, "r": 176, "g": 204, "b": 206 }]
+    },
+    {
+      "id": "detail_title",
+      "dst": [{ "x": 784, "y": 214, "w": 400, "h": 30, "a": 255, "r": 242, "g": 246, "b": 240 }]
+    },
+    {
+      "id": "detail_artist",
+      "dst": [{ "x": 784, "y": 246, "w": 400, "h": 19, "a": 225, "r": 180, "g": 206, "b": 204 }]
+    },
+    {
+      "id": "detail_table",
+      "dst": [{ "x": 784, "y": 274, "w": 400, "h": 18, "a": 220, "r": 246, "g": 208, "b": 126 }]
+    },
+    {
+      "id": "detail_difficulty",
+      "dst": [{ "x": 784, "y": 314, "w": 110, "h": 12, "a": 205, "r": 150, "g": 170, "b": 174 }]
+    },
+    {
+      "id": "difficulty_name",
+      "dst": [{ "x": 906, "y": 306, "w": 150, "h": 22, "a": 255, "r": 238, "g": 242, "b": 236 }]
+    },
+    {
+      "id": "detail_level_label",
+      "dst": [{ "x": 1084, "y": 314, "w": 54, "h": 12, "a": 205, "r": 150, "g": 170, "b": 174 }]
+    },
+    {
+      "id": "detail_level",
+      "dst": [{ "x": 1134, "y": 298, "w": 70, "h": 32, "a": 255, "r": 246, "g": 208, "b": 126 }]
+    },
+    {
+      "id": "detail_bpm_label",
+      "dst": [{ "x": 784, "y": 350, "w": 180, "h": 12, "a": 205, "r": 150, "g": 170, "b": 174 }]
+    },
+    {
+      "id": "detail_min_bpm",
+      "dst": [{ "x": 784, "y": 372, "w": 60, "h": 20, "a": 240, "r": 218, "g": 230, "b": 232 }]
+    },
+    {
+      "id": "detail_max_bpm",
+      "dst": [{ "x": 856, "y": 372, "w": 60, "h": 20, "a": 240, "r": 218, "g": 230, "b": 232 }]
+    },
+    {
+      "id": "detail_main_bpm",
+      "dst": [{ "x": 928, "y": 372, "w": 60, "h": 20, "a": 240, "r": 246, "g": 208, "b": 126 }]
+    },
+    {
+      "id": "detail_notes_label",
+      "dst": [{ "x": 784, "y": 410, "w": 220, "h": 12, "a": 205, "r": 150, "g": 170, "b": 174 }]
+    },
+    {
+      "id": "detail_notes",
+      "dst": [{ "x": 784, "y": 432, "w": 66, "h": 20, "a": 240, "r": 218, "g": 230, "b": 232 }]
+    },
+    {
+      "id": "detail_ln",
+      "dst": [{ "x": 862, "y": 432, "w": 66, "h": 20, "a": 240, "r": 120, "g": 226, "b": 188 }]
+    },
+    {
+      "id": "detail_scratch",
+      "dst": [{ "x": 940, "y": 432, "w": 66, "h": 20, "a": 240, "r": 238, "g": 150, "b": 112 }]
+    },
+    {
+      "id": "detail_mine",
+      "dst": [{ "x": 1018, "y": 432, "w": 66, "h": 20, "a": 240, "r": 238, "g": 120, "b": 120 }]
+    },
+    {
+      "id": "detail_density_label",
+      "dst": [{ "x": 784, "y": 470, "w": 220, "h": 12, "a": 205, "r": 150, "g": 170, "b": 174 }]
+    },
+    {
+      "id": "detail_peak_density",
+      "dst": [{ "x": 784, "y": 492, "w": 66, "h": 20, "a": 240, "r": 218, "g": 230, "b": 232 }]
+    },
+    {
+      "id": "detail_end_density",
+      "dst": [{ "x": 862, "y": 492, "w": 66, "h": 20, "a": 240, "r": 218, "g": 230, "b": 232 }]
+    },
+    {
+      "id": "detail_avg_density",
+      "dst": [{ "x": 940, "y": 492, "w": 66, "h": 20, "a": 240, "r": 218, "g": 230, "b": 232 }]
+    },
+    {
+      "id": "detail_score_label",
+      "dst": [{ "x": 784, "y": 530, "w": 200, "h": 12, "a": 205, "r": 150, "g": 170, "b": 174 }]
+    },
+    {
+      "id": "detail_ex",
+      "dst": [{ "x": 784, "y": 552, "w": 78, "h": 20, "a": 240, "r": 218, "g": 230, "b": 232 }]
+    },
+    {
+      "id": "detail_bp",
+      "dst": [{ "x": 874, "y": 552, "w": 62, "h": 20, "a": 240, "r": 238, "g": 132, "b": 112 }]
+    },
+    {
+      "id": "detail_play",
+      "dst": [{ "x": 948, "y": 552, "w": 62, "h": 20, "a": 240, "r": 218, "g": 230, "b": 232 }]
+    },
+    {
+      "id": "detail_clear",
+      "dst": [{ "x": 1022, "y": 552, "w": 62, "h": 20, "a": 240, "r": 218, "g": 230, "b": 232 }]
+    },
+    {
+      "id": "detail_total_label",
+      "dst": [{ "x": 784, "y": 590, "w": 170, "h": 12, "a": 205, "r": 150, "g": 170, "b": 174 }]
+    },
+    {
+      "id": "detail_total",
+      "dst": [{ "x": 784, "y": 612, "w": 70, "h": 20, "a": 240, "r": 218, "g": 230, "b": 232 }]
+    },
+    {
+      "id": "detail_count",
+      "dst": [{ "x": 866, "y": 612, "w": 70, "h": 20, "a": 240, "r": 218, "g": 230, "b": 232 }]
+    },
+    {
+      "id": "detail_hs_int",
+      "dst": [{ "x": 948, "y": 612, "w": 38, "h": 20, "a": 240, "r": 218, "g": 230, "b": 232 }]
+    },
+    {
+      "id": "detail_hs_frac",
+      "dst": [{ "x": 982, "y": 612, "w": 42, "h": 20, "a": 240, "r": 218, "g": 230, "b": 232 }]
+    },
+    {
+      "id": "panel_inactive_img",
+      "op": [21],
+      "dst": [{ "x": 760, "y": 160, "w": 460, "h": 448, "a": 245, "r": 18, "g": 24, "b": 26 }]
+    },
+    {
+      "id": "panel_img",
+      "op": [21],
+      "timer": 21,
+      "dst": [{ "x": 760, "y": 160, "w": 460, "h": 4, "a": 255, "r": 94, "g": 206, "b": 184 }]
+    },
+    {
+      "id": "option_e1_title",
+      "op": [21],
+      "dst": [{ "x": 784, "y": 184, "w": 180, "h": 24, "a": 255, "r": 238, "g": 242, "b": 236 }]
+    },
+    {
+      "id": "option_p1_label",
+      "op": [21],
+      "dst": [{ "x": 790, "y": 232, "w": 130, "h": 14, "a": 205, "r": 150, "g": 170, "b": 174 }]
+    },
+    {
+      "id": "bmz_select_arrange",
+      "op": [21],
+      "dst": [{ "x": 1012, "y": 226, "w": 180, "h": 22, "a": 255, "r": 246, "g": 208, "b": 126 }]
+    },
+    {
+      "id": "option_p2_label",
+      "op": [21],
+      "dst": [{ "x": 790, "y": 272, "w": 130, "h": 14, "a": 205, "r": 150, "g": 170, "b": 174 }]
+    },
+    {
+      "id": "bmz_select_arrange_2p",
+      "op": [21],
+      "dst": [{ "x": 1012, "y": 266, "w": 180, "h": 22, "a": 255, "r": 246, "g": 208, "b": 126 }]
+    },
+    {
+      "id": "option_gauge_label",
+      "op": [21],
+      "dst": [{ "x": 790, "y": 312, "w": 130, "h": 14, "a": 205, "r": 150, "g": 170, "b": 174 }]
+    },
+    {
+      "id": "bmz_select_gauge",
+      "op": [21],
+      "dst": [{ "x": 1012, "y": 306, "w": 180, "h": 22, "a": 255, "r": 246, "g": 208, "b": 126 }]
+    },
+    {
+      "id": "option_target_label",
+      "op": [21],
+      "dst": [{ "x": 790, "y": 352, "w": 130, "h": 14, "a": 205, "r": 150, "g": 170, "b": 174 }]
+    },
+    {
+      "id": "bmz_select_target",
+      "op": [21],
+      "dst": [{ "x": 1012, "y": 346, "w": 180, "h": 22, "a": 255, "r": 246, "g": 208, "b": 126 }]
+    },
+    {
+      "id": "option_hsfix_label",
+      "op": [21],
+      "dst": [{ "x": 790, "y": 392, "w": 130, "h": 14, "a": 205, "r": 150, "g": 170, "b": 174 }]
+    },
+    {
+      "id": "bmz_select_hs_fix",
+      "op": [21],
+      "dst": [{ "x": 1012, "y": 386, "w": 180, "h": 22, "a": 255, "r": 246, "g": 208, "b": 126 }]
+    },
+    {
+      "id": "option_dp_label",
+      "op": [21],
+      "dst": [{ "x": 790, "y": 432, "w": 130, "h": 14, "a": 205, "r": 150, "g": 170, "b": 174 }]
+    },
+    {
+      "id": "bmz_select_double_option",
+      "op": [21],
+      "dst": [{ "x": 1012, "y": 426, "w": 180, "h": 22, "a": 255, "r": 246, "g": 208, "b": 126 }]
+    },
+    {
+      "id": "option_assist_label",
+      "op": [21],
+      "dst": [{ "x": 790, "y": 472, "w": 130, "h": 14, "a": 205, "r": 150, "g": 170, "b": 174 }]
+    },
+    {
+      "id": "bmz_select_assist",
+      "op": [21],
+      "dst": [{ "x": 1012, "y": 466, "w": 180, "h": 22, "a": 255, "r": 246, "g": 208, "b": 126 }]
+    },
+    {
+      "id": "option_e1_hint",
+      "op": [21],
+      "dst": [{ "x": 784, "y": 564, "w": 400, "h": 14, "a": 210, "r": 176, "g": 204, "b": 206 }]
+    },
+    {
+      "id": "panel_inactive_img",
+      "op": [22],
+      "dst": [{ "x": 760, "y": 160, "w": 460, "h": 448, "a": 245, "r": 18, "g": 24, "b": 26 }]
+    },
+    {
+      "id": "panel_img",
+      "op": [22],
+      "timer": 22,
+      "dst": [{ "x": 760, "y": 160, "w": 460, "h": 4, "a": 255, "r": 94, "g": 206, "b": 184 }]
+    },
+    {
+      "id": "option_e2_title",
+      "op": [22],
+      "dst": [{ "x": 784, "y": 184, "w": 180, "h": 24, "a": 255, "r": 238, "g": 242, "b": 236 }]
+    },
+    {
+      "id": "option_assist_label",
+      "op": [22],
+      "dst": [{ "x": 790, "y": 232, "w": 130, "h": 14, "a": 205, "r": 150, "g": 170, "b": 174 }]
+    },
+    {
+      "id": "bmz_select_assist",
+      "op": [22],
+      "dst": [{ "x": 1012, "y": 226, "w": 180, "h": 22, "a": 255, "r": 246, "g": 208, "b": 126 }]
+    },
+    {
+      "id": "option_e2_hint",
+      "op": [22],
+      "dst": [{ "x": 784, "y": 564, "w": 400, "h": 14, "a": 210, "r": 176, "g": 204, "b": 206 }]
+    },
+    {
+      "id": "panel_inactive_img",
+      "op": [23],
+      "dst": [{ "x": 760, "y": 160, "w": 460, "h": 448, "a": 245, "r": 18, "g": 24, "b": 26 }]
+    },
+    {
+      "id": "panel_img",
+      "op": [23],
+      "timer": 23,
+      "dst": [{ "x": 760, "y": 160, "w": 460, "h": 4, "a": 255, "r": 94, "g": 206, "b": 184 }]
+    },
+    {
+      "id": "option_e12_title",
+      "op": [23],
+      "dst": [{ "x": 784, "y": 184, "w": 220, "h": 24, "a": 255, "r": 238, "g": 242, "b": 236 }]
+    },
+    {
+      "id": "option_bga_label",
+      "op": [23],
+      "dst": [{ "x": 790, "y": 232, "w": 170, "h": 14, "a": 205, "r": 150, "g": 170, "b": 174 }]
+    },
+    {
+      "id": "bmz_select_bga",
+      "op": [23],
+      "dst": [{ "x": 1012, "y": 226, "w": 180, "h": 22, "a": 255, "r": 246, "g": 208, "b": 126 }]
+    },
+    {
+      "id": "option_gauge_auto_label",
+      "op": [23],
+      "dst": [{ "x": 790, "y": 272, "w": 170, "h": 14, "a": 205, "r": 150, "g": 170, "b": 174 }]
+    },
+    {
+      "id": "bmz_select_gauge_auto_shift",
+      "op": [23],
+      "dst": [{ "x": 1012, "y": 266, "w": 180, "h": 22, "a": 255, "r": 246, "g": 208, "b": 126 }]
+    },
+    {
+      "id": "option_bottom_gauge_label",
+      "op": [23],
+      "dst": [{ "x": 790, "y": 312, "w": 170, "h": 14, "a": 205, "r": 150, "g": 170, "b": 174 }]
+    },
+    {
+      "id": "bmz_select_bottom_shiftable_gauge",
+      "op": [23],
+      "dst": [{ "x": 1012, "y": 306, "w": 180, "h": 22, "a": 255, "r": 246, "g": 208, "b": 126 }]
+    },
+    {
+      "id": "option_judge_auto_label",
+      "op": [23],
+      "dst": [{ "x": 790, "y": 352, "w": 170, "h": 14, "a": 205, "r": 150, "g": 170, "b": 174 }]
+    },
+    {
+      "id": "bmz_select_judge_timing_auto_adjust",
+      "op": [23],
+      "dst": [{ "x": 1012, "y": 346, "w": 180, "h": 22, "a": 255, "r": 246, "g": 208, "b": 126 }]
+    },
+    {
+      "id": "option_visual_offset_label",
+      "op": [23],
+      "dst": [{ "x": 790, "y": 392, "w": 170, "h": 14, "a": 205, "r": 150, "g": 170, "b": 174 }]
+    },
+    {
+      "id": "option_judge_offset",
+      "op": [23],
+      "dst": [{ "x": 1012, "y": 386, "w": 180, "h": 22, "a": 255, "r": 246, "g": 208, "b": 126 }]
+    },
+    {
+      "id": "option_e12_hint",
+      "op": [23],
+      "dst": [{ "x": 784, "y": 564, "w": 400, "h": 14, "a": 210, "r": 176, "g": 204, "b": 206 }]
+    }
+  ]
+}

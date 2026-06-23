@@ -1,0 +1,86 @@
+{
+  "type": 6,
+  "name": "BMZ Default Decide",
+  "author": "BMZ Player",
+  "w": 1280,
+  "h": 720,
+  "source": { "include": "_sources.json" },
+  "image": { "include": "_images.json" },
+  "text": [
+    { "id": "decide_label", "constantText": "DECIDE", "size": 20 },
+    { "id": "decide_ready", "constantText": "GET READY", "size": 42 },
+    { "id": "decide_title", "ref": 12, "size": 34, "overflow": 1 },
+    { "id": "decide_artist", "ref": 16, "size": 20, "overflow": 1 },
+    { "id": "difficulty_name", "size": 22, "overflow": 1 },
+    { "id": "decide_level_label", "constantText": "LEVEL", "size": 13 },
+    { "id": "decide_level", "numberRef": 96, "size": 34 },
+    { "id": "decide_bpm_label", "constantText": "BPM MIN / MAX", "size": 13 },
+    { "id": "decide_min_bpm", "numberRef": 91, "size": 24 },
+    { "id": "decide_max_bpm", "numberRef": 90, "size": 24 },
+    { "id": "decide_notes_label", "constantText": "NOTES", "size": 13 },
+    { "id": "decide_notes", "numberRef": 74, "size": 24 },
+    { "id": "decide_table", "ref": 1003, "size": 18, "overflow": 1 }
+  ],
+  "destination": [
+    {
+      "id": "panel_inactive_img",
+      "dst": [{ "x": 150, "y": 92, "w": 980, "h": 500, "a": 225, "r": 30, "g": 36, "b": 38 }]
+    },
+    {
+      "id": "panel_img",
+      "dst": [{ "x": 150, "y": 92, "w": 980, "h": 5, "a": 255, "r": 94, "g": 206, "b": 184 }]
+    },
+    {
+      "id": "decide_label",
+      "dst": [{ "x": 184, "y": 122, "w": 140, "h": 22, "a": 230, "r": 176, "g": 204, "b": 206 }]
+    },
+    {
+      "id": "decide_ready",
+      "dst": [{ "x": 184, "y": 164, "w": 420, "h": 46, "a": 255, "r": 246, "g": 208, "b": 126 }]
+    },
+    {
+      "id": "decide_title",
+      "dst": [{ "x": 184, "y": 250, "w": 860, "h": 38, "a": 255, "r": 242, "g": 246, "b": 240 }]
+    },
+    {
+      "id": "decide_artist",
+      "dst": [{ "x": 184, "y": 294, "w": 820, "h": 24, "a": 230, "r": 180, "g": 206, "b": 204 }]
+    },
+    {
+      "id": "difficulty_name",
+      "dst": [{ "x": 184, "y": 340, "w": 240, "h": 26, "a": 255, "r": 238, "g": 242, "b": 236 }]
+    },
+    {
+      "id": "decide_table",
+      "dst": [{ "x": 184, "y": 376, "w": 520, "h": 22, "a": 230, "r": 246, "g": 208, "b": 126 }]
+    },
+    {
+      "id": "decide_level_label",
+      "dst": [{ "x": 760, "y": 164, "w": 84, "h": 14, "a": 210, "r": 160, "g": 180, "b": 184 }]
+    },
+    {
+      "id": "decide_level",
+      "dst": [{ "x": 760, "y": 188, "w": 96, "h": 38, "a": 255, "r": 246, "g": 208, "b": 126 }]
+    },
+    {
+      "id": "decide_bpm_label",
+      "dst": [{ "x": 760, "y": 258, "w": 150, "h": 14, "a": 210, "r": 160, "g": 180, "b": 184 }]
+    },
+    {
+      "id": "decide_min_bpm",
+      "dst": [{ "x": 760, "y": 282, "w": 80, "h": 26, "a": 240, "r": 218, "g": 230, "b": 232 }]
+    },
+    {
+      "id": "decide_max_bpm",
+      "dst": [{ "x": 860, "y": 282, "w": 80, "h": 26, "a": 240, "r": 218, "g": 230, "b": 232 }]
+    },
+    {
+      "id": "decide_notes_label",
+      "dst": [{ "x": 760, "y": 340, "w": 86, "h": 14, "a": 210, "r": 160, "g": 180, "b": 184 }]
+    },
+    {
+      "id": "decide_notes",
+      "dst": [{ "x": 760, "y": 364, "w": 120, "h": 26, "a": 240, "r": 218, "g": 230, "b": 232 }]
+    }
+  ]
+}

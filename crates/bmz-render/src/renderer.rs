@@ -4450,7 +4450,7 @@ mod tests {
             id: SKIN_DYNAMIC_TIMER_BASE,
             observe: "number(0) >= 0".to_string(),
         });
-        let manifest: SkinManifest = toml::from_str("").unwrap();
+        let manifest: SkinManifest = SkinManifest::default();
         let context =
             SkinContext::from_manifest_and_document(manifest, document.clone(), Vec::new());
         renderer.set_play_skin_context(context, false);
@@ -4478,7 +4478,7 @@ mod tests {
 
         let document: SkinDocument =
             serde_json::from_str(r#"{ "type": 7, "w": 100, "h": 100, "fadeout": 300 }"#).unwrap();
-        let manifest: SkinManifest = toml::from_str("").unwrap();
+        let manifest: SkinManifest = SkinManifest::default();
         renderer.set_result_skin_context(SkinContext::from_manifest_and_document(
             manifest,
             document,

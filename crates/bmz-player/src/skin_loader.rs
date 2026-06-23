@@ -9,7 +9,7 @@ use bmz_render::plan::TextureId;
 use bmz_render::renderer::{GpuUploader, PreparedTexture, Renderer};
 use bmz_render::skin::{
     DestinationListEntry, SkinContext, SkinDocument, SkinDocumentTexture, SkinFilepathDef,
-    SkinImageSize, SkinManifest, SkinTextureId,
+    SkinImageSize, SkinManifest, SkinTextureId, default_skin_manifest_for_root,
 };
 use bmz_skin::SkinKind as DecodeSkinKind;
 use rayon::prelude::*;
@@ -111,6 +111,33 @@ impl SkinKind {
     }
 }
 
+pub fn default_skin_document_path_from_paths(app_paths: &AppPaths, kind: SkinKind) -> PathBuf {
+    let file_name = match kind {
+        SkinKind::Play => "play7.json",
+        SkinKind::Select => "select.json",
+        SkinKind::Decide => "decide.json",
+        SkinKind::Result => "result.json",
+    };
+    default_skin_root_from_paths(app_paths).join(file_name)
+}
+
+pub fn default_play_skin_document_path_from_paths(
+    app_paths: &AppPaths,
+    key_mode: KeyMode,
+) -> PathBuf {
+    let file_name = match key_mode {
+        KeyMode::K4 => "play4.json",
+        KeyMode::K5 => "play5.json",
+        KeyMode::K6 => "play6.json",
+        KeyMode::K7 => "play7.json",
+        KeyMode::K8 => "play8.json",
+        KeyMode::K9 => "play9.json",
+        KeyMode::K10 => "play10.json",
+        KeyMode::K14 => "play14.json",
+    };
+    default_skin_root_from_paths(app_paths).join(file_name)
+}
+
 /// バックグラウンドスレッドでデコード可能な 1 スキンぶんの中間データ。
 /// Renderer に触らず Send-safe な値だけを保持する。
 pub struct DecodedSkin {
@@ -190,27 +217,6 @@ pub fn upload_decoded_skin(uploader: &GpuUploader, decoded: DecodedSkin) -> Uplo
     UploadedSkin { kind, document, fonts, prepared }
 }
 
-pub fn apply_skin_from_dir(renderer: &mut Renderer, skin_root: &Path) -> Result<()> {
-    let manifest_path = skin_root.join("skin.toml");
-    let manifest = SkinManifest::load(&manifest_path)
-        .with_context(|| format!("failed to load skin manifest: {}", manifest_path.display()))?
-        .with_texture_source_sizes(skin_root);
-
-    for texture in manifest.resolve_textures(skin_root) {
-        renderer.load_png_texture(texture.id, &texture.path).with_context(|| {
-            format!("failed to load skin texture {}: {}", texture.id.0, texture.path.display())
-        })?;
-        tracing::info!(
-            texture_id = texture.id.0,
-            path = %texture.path.display(),
-            "loaded skin texture"
-        );
-    }
-    renderer.set_play_skin_context(SkinContext::from_manifest(manifest), false);
-
-    Ok(())
-}
-
 pub fn default_skin_root() -> PathBuf {
     resolve_app_paths()
         .map(|paths| paths.default_skin_root())
@@ -222,16 +228,20 @@ pub fn default_skin_root_from_paths(app_paths: &AppPaths) -> PathBuf {
 }
 
 pub fn apply_default_skin(renderer: &mut Renderer) -> Result<()> {
-    apply_skin_from_dir(renderer, &default_skin_root())
+    let app_paths = resolve_app_paths()?;
+    apply_default_skin_from_paths(renderer, &app_paths)
 }
 
 pub fn apply_default_skin_from_paths(renderer: &mut Renderer, app_paths: &AppPaths) -> Result<()> {
-    apply_skin_from_dir(renderer, &default_skin_root_from_paths(app_paths))
+    let manifest = load_default_skin_into_renderer_from_paths(renderer, app_paths)?;
+    let skin_path = default_play_skin_document_path_from_paths(app_paths, KeyMode::K7);
+    let decoded = decode_beatoraja_skin(&skin_path, SkinKind::Play)?;
+    install_decoded_skin(renderer, decoded, manifest)
 }
 
 /// `profile.toml` の `[skin] play` 設定からスキンをロードする。
-/// 空文字列 → デフォルトスキン、`.json`/`.luaskin`/`.lua`/`.lr2skin` 拡張子 → beatoraja スキン、
-/// それ以外 → `skin.toml` を含む bmz スキンディレクトリとして扱う。
+/// 空文字列 → デフォルト JSON スキン、`.json`/`.luaskin`/`.lua`/`.lr2skin`
+/// 拡張子 → beatoraja スキンとして扱う。BMZ TOML skin directory は非対応。
 pub fn apply_skin_from_config(
     renderer: &mut Renderer,
     app_paths: &AppPaths,
@@ -244,7 +254,10 @@ pub fn apply_skin_from_config(
     if is_decodable_skin_path(&path) {
         apply_beatoraja_json_skin(renderer, &path)
     } else {
-        apply_skin_from_dir(renderer, &path)
+        anyhow::bail!(
+            "unsupported skin path (BMZ TOML skin directories are no longer supported): {}",
+            path.display()
+        )
     }
 }
 
@@ -293,10 +306,7 @@ fn load_default_skin_root_into_renderer(
     renderer: &mut Renderer,
     default_root: &Path,
 ) -> Result<SkinManifest> {
-    let manifest_path = default_root.join("skin.toml");
-    let manifest = SkinManifest::load(&manifest_path)
-        .with_context(|| format!("failed to load skin manifest: {}", manifest_path.display()))?
-        .with_texture_source_sizes(default_root);
+    let manifest = default_skin_manifest_for_root(default_root);
 
     for texture in manifest.resolve_textures(default_root) {
         renderer.load_png_texture(texture.id, &texture.path).with_context(|| {
@@ -1195,8 +1205,53 @@ mod tests {
     }
 
     #[test]
-    fn default_skin_root_contains_manifest() {
-        assert!(default_skin_root().join("skin.toml").is_file());
+    fn default_skin_root_contains_json_documents() {
+        let root = default_skin_root();
+        for file_name in ["select.json", "decide.json", "result.json", "play7.json"] {
+            assert!(root.join(file_name).is_file(), "missing bundled default {file_name}");
+        }
+    }
+
+    #[test]
+    fn bundled_default_json_skin_documents_decode() {
+        let app_paths = test_app_paths();
+        for (kind, expected_type) in
+            [(SkinKind::Select, 5), (SkinKind::Decide, 6), (SkinKind::Result, 7)]
+        {
+            let path = default_skin_document_path_from_paths(&app_paths, kind);
+            let decoded = decode_beatoraja_skin(&path, kind)
+                .unwrap_or_else(|error| panic!("failed to decode {}: {error:#}", path.display()));
+            assert_eq!(decoded.document.skin_type, expected_type);
+            assert!(!decoded.sources.is_empty(), "{} has no image sources", path.display());
+        }
+
+        for (key_mode, expected_type) in [
+            (KeyMode::K4, 22),
+            (KeyMode::K5, 1),
+            (KeyMode::K6, 23),
+            (KeyMode::K7, 0),
+            (KeyMode::K8, 24),
+            (KeyMode::K9, 4),
+            (KeyMode::K10, 3),
+            (KeyMode::K14, 2),
+        ] {
+            let path = default_play_skin_document_path_from_paths(&app_paths, key_mode);
+            let decoded = decode_beatoraja_skin(&path, SkinKind::Play)
+                .unwrap_or_else(|error| panic!("failed to decode {}: {error:#}", path.display()));
+            assert_eq!(decoded.document.skin_type, expected_type);
+            assert!(decoded.document.note.is_some(), "{} has no note definition", path.display());
+            assert!(
+                decoded.document.note.as_ref().is_some_and(|note| !note.group.is_empty()),
+                "{} has no bar line group",
+                path.display()
+            );
+            assert!(
+                destination_ids(&decoded.document).contains("keybeam_img"),
+                "{} has no keybeam destination",
+                path.display()
+            );
+            assert!(!decoded.sources.is_empty(), "{} has no image sources", path.display());
+        }
     }
 
     fn filepath_def(name: &str, path: &str, def: &str) -> SkinFilepathDef {
@@ -2184,6 +2239,19 @@ mod tests {
         let app_paths = test_app_paths();
 
         apply_skin_from_config(&mut renderer, &app_paths, "").unwrap();
+    }
+
+    #[test]
+    fn apply_skin_from_config_rejects_toml_skin_directory() {
+        let mut renderer = Renderer::default();
+        let app_paths = test_app_paths();
+        let path = default_skin_root();
+
+        let error = apply_skin_from_config(&mut renderer, &app_paths, path.to_str().unwrap())
+            .unwrap_err()
+            .to_string();
+
+        assert!(error.contains("BMZ TOML skin directories are no longer supported"), "{error}");
     }
 
     #[test]
