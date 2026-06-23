@@ -1,3 +1,6 @@
 [submodule "data/skins/Rmz-skin"]
 	path = data/skins/Rmz-skin
 	url = https://github.com/hyrorre/Rmz-skin
+[submodule "data/skins/mz-select"]
+	path = data/skins/mz-select
+	url = https://github.com/hyrorre/mz-select
