@@ -16,6 +16,8 @@ pub struct AppConfig {
     pub logging: LoggingConfig,
     #[serde(default)]
     pub tables: DifficultyTablesConfig,
+    #[serde(default)]
+    pub updates: UpdatesConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -230,6 +232,37 @@ pub struct DifficultyTableSource {
     pub enabled: bool,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UpdatesConfig {
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    #[serde(default)]
+    pub channel: UpdateChannelConfig,
+    #[serde(default = "default_update_check_on_startup")]
+    pub check_on_startup: bool,
+    #[serde(default)]
+    pub skipped_version: String,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub enum UpdateChannelConfig {
+    #[default]
+    Stable,
+    Prerelease,
+}
+
+impl Default for UpdatesConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            channel: UpdateChannelConfig::Stable,
+            check_on_startup: default_update_check_on_startup(),
+            skipped_version: String::new(),
+        }
+    }
+}
+
 impl Default for DifficultyTablesConfig {
     fn default() -> Self {
         Self {
@@ -255,6 +288,10 @@ pub fn ensure_default_difficulty_table_sources(config: &mut AppConfig) {
 
 fn default_true() -> bool {
     true
+}
+
+fn default_update_check_on_startup() -> bool {
+    !cfg!(debug_assertions)
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -309,6 +346,7 @@ impl Default for AppConfig {
             },
             logging: LoggingConfig { level: LogLevel::Info, file_logging: true },
             tables: DifficultyTablesConfig::default(),
+            updates: UpdatesConfig::default(),
         }
     }
 }
@@ -354,6 +392,16 @@ mod tests {
     }
 
     #[test]
+    fn app_config_defaults_update_settings() {
+        let config = AppConfig::default();
+
+        assert!(config.updates.enabled);
+        assert_eq!(config.updates.channel, UpdateChannelConfig::Stable);
+        assert_eq!(config.updates.check_on_startup, !cfg!(debug_assertions));
+        assert!(config.updates.skipped_version.is_empty());
+    }
+
+    #[test]
     fn ensure_default_difficulty_tables_adds_missing_without_reenabling_existing() {
         let disabled_url = DEFAULT_DIFFICULTY_TABLE_SOURCE_URLS[0].to_string();
         let mut config = AppConfig {
@@ -384,5 +432,19 @@ mod tests {
 
         assert_eq!(config.screenshot.dir, "data/screenshots");
         assert!(config.screenshot.copy_to_clipboard);
+    }
+
+    #[test]
+    fn app_config_loads_missing_updates_section() {
+        let mut toml = toml::to_string(&AppConfig::default()).unwrap();
+        let start = toml.find("[updates]").unwrap();
+        let end =
+            toml[start + 1..].find("\n[").map(|offset| start + 1 + offset).unwrap_or(toml.len());
+        toml.replace_range(start..end, "");
+
+        let config: AppConfig = toml::from_str(&toml).unwrap();
+
+        assert!(config.updates.enabled);
+        assert_eq!(config.updates.channel, UpdateChannelConfig::Stable);
     }
 }

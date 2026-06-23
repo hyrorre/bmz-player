@@ -19,7 +19,8 @@ use winit::window::Window;
 
 use crate::config::app_config::{
     AppConfig, AudioBackend, AudioBufferSizeMode, AudioSampleRateMode, DifficultyTableSource,
-    InputBackendKind, LogLevel, PathEntry, RendererBackend, VsyncModeConfig, WindowMode,
+    InputBackendKind, LogLevel, PathEntry, RendererBackend, UpdateChannelConfig, VsyncModeConfig,
+    WindowMode,
 };
 use crate::config::profile_config::{
     AssistOptionConfig, BgaExpandConfig, BgaModeConfig, BottomShiftableGaugeConfig,
@@ -38,6 +39,7 @@ use crate::screens::select_model::SelectCourseRow;
 use crate::skin_loader::RANDOM_FILE_SELECTION;
 use crate::songs_cmd::add_song_root_entry;
 use crate::storage::score_import::{ScoreImportKind, ScoreImportRequest};
+use crate::update::{UpdateAssetKind, UpdateCandidate, current_version};
 
 /// スキンが宣言する設定可能項目の定義 (1 シーン分)。
 ///
@@ -273,6 +275,7 @@ pub struct EguiRunContext<'a, 'practice> {
     pub result_ir: Option<&'a mut crate::screens::result_ir::ResultIrState>,
     pub profile_root: &'a Path,
     pub app_paths: &'a AppPaths,
+    pub update_dialog: Option<UpdateDialog<'a>>,
 }
 
 /// `EguiLayer::run` の 1 フレーム出力。
@@ -299,8 +302,26 @@ pub struct EguiOutput {
     pub score_import_request: Option<ScoreImportRequest>,
     /// 現在の設定で音声出力(cpal ストリーム)を開き直す要求。
     pub apply_audio_output: bool,
+    pub check_for_update: bool,
+    pub update_dialog_action: Option<UpdateDialogAction>,
     pub practice_start: bool,
     pub practice_leave: bool,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum UpdateDialog<'a> {
+    Available(&'a UpdateCandidate),
+    Downloading(&'a UpdateCandidate),
+    Error { message: &'a str, candidate: Option<&'a UpdateCandidate> },
+    UpToDate,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UpdateDialogAction {
+    Update,
+    NotNow,
+    SkipRelease,
+    OpenReleasePage,
 }
 
 #[derive(Clone, Debug)]
@@ -324,6 +345,7 @@ pub struct EguiLayer {
     show_profile_settings: bool,
     /// スキン設定パネルの開閉状態。
     show_skin: bool,
+    update_dialog_active: bool,
     /// 本体設定パネル: 曲フォルダ追加用の入力欄。
     settings_new_root_path: String,
     /// 本体設定パネル: 曲フォルダ追加の直近エラー。
@@ -648,6 +670,7 @@ impl EguiLayer {
             show_settings: false,
             show_profile_settings: false,
             show_skin: false,
+            update_dialog_active: false,
             settings_new_root_path: String::new(),
             settings_add_root_error: String::new(),
             settings_new_table_url: String::new(),
@@ -698,7 +721,7 @@ impl EguiLayer {
         practice_overlay: bool,
     ) -> bool {
         let response = self.state.on_window_event(window, event);
-        (self.visible || practice_overlay) && response.consumed
+        (self.visible || practice_overlay || self.update_dialog_active) && response.consumed
     }
 
     /// 1 フレーム分の UI を構築し、描画データと要求されたアクションを返す。
@@ -715,6 +738,7 @@ impl EguiLayer {
             mut result_ir,
             profile_root,
             app_paths,
+            update_dialog,
         } = context;
         let raw_input = self.state.take_egui_input(window);
         let ctx = self.ctx.clone();
@@ -731,12 +755,20 @@ impl EguiLayer {
         let mut table_fetch_urls = Vec::new();
         let mut score_import_request = None;
         let mut apply_audio_output = false;
+        let mut check_for_update = false;
+        let mut update_dialog_action = None;
         let mut practice_start = false;
         let mut practice_leave = false;
         let visible_flag = &mut self.visible;
         let ir_login = &mut self.ir_login;
         let directory_open_status = &mut self.directory_open_status;
+        let update_dialog_allowed =
+            update_dialog.is_some() && (info.scene == "Select" || *show_settings);
+        self.update_dialog_active = update_dialog_allowed;
         let full_output = ctx.run_ui(raw_input, |ui| {
+            if update_dialog_allowed && let Some(dialog) = update_dialog {
+                update_dialog_action = build_update_dialog(ui.ctx(), dialog);
+            }
             if let Some(practice_ctx) = practice.as_mut() {
                 let panel = build_practice_panel(ui.ctx(), practice_ctx);
                 practice_start |= panel.start_play;
@@ -787,6 +819,7 @@ impl EguiLayer {
                     },
                 );
                 save_app_config |= settings_actions.save;
+                check_for_update |= settings_actions.check_update;
                 trigger_song_rescan |= settings_actions.rescan;
                 song_scan_requests.extend(settings_actions.song_scan_requests);
                 table_fetch_urls.extend(settings_actions.table_fetch_urls);
@@ -836,6 +869,8 @@ impl EguiLayer {
             table_fetch_urls,
             score_import_request,
             apply_audio_output,
+            check_for_update,
+            update_dialog_action,
             practice_start,
             practice_leave,
         }
@@ -1455,9 +1490,117 @@ fn build_debug_panel(ctx: &egui::Context, open: &mut bool, info: &DebugInfo) {
     );
 }
 
+fn build_update_dialog(
+    ctx: &egui::Context,
+    dialog: UpdateDialog<'_>,
+) -> Option<UpdateDialogAction> {
+    let mut action = None;
+    egui::Window::new("アップデート")
+        .id(egui::Id::new("update_dialog"))
+        .collapsible(false)
+        .resizable(false)
+        .default_width(440.0)
+        .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
+        .show(ctx, |ui| match dialog {
+            UpdateDialog::Available(candidate) => {
+                ui.heading(format!("BMZ Player {} が利用できます", candidate.version));
+                ui.label(format!("現在のバージョン: {}", current_version()));
+                if let Some(published_at) = candidate.published_at.as_deref() {
+                    ui.label(format!("公開日: {published_at}"));
+                }
+                if let Some(asset) = candidate.asset.as_ref() {
+                    ui.label(format!("更新ファイル: {}", asset.name));
+                    ui.label(update_asset_kind_label(asset.kind));
+                } else {
+                    ui.label("この環境向けの自動更新ファイルはまだありません。");
+                }
+                if let Some(body) = release_body_excerpt(&candidate.body) {
+                    ui.separator();
+                    ui.label(body);
+                }
+                ui.separator();
+                ui.horizontal(|ui| {
+                    let can_update = candidate.asset.is_some();
+                    if ui.add_enabled(can_update, egui::Button::new("アップデート")).clicked()
+                    {
+                        action = Some(UpdateDialogAction::Update);
+                    }
+                    if ui.button("今回はアップデートしない").clicked() {
+                        action = Some(UpdateDialogAction::NotNow);
+                    }
+                    if ui.button("このリリースをスキップ").clicked() {
+                        action = Some(UpdateDialogAction::SkipRelease);
+                    }
+                });
+                if ui.button("リリースページを開く").clicked() {
+                    action = Some(UpdateDialogAction::OpenReleasePage);
+                }
+            }
+            UpdateDialog::Downloading(candidate) => {
+                ui.heading(format!("BMZ Player {} をダウンロード中", candidate.version));
+                ui.horizontal(|ui| {
+                    ui.spinner();
+                    ui.label("更新ファイルを取得しています。");
+                });
+                if let Some(asset) = candidate.asset.as_ref() {
+                    ui.label(format!("更新ファイル: {}", asset.name));
+                }
+            }
+            UpdateDialog::Error { message, candidate } => {
+                ui.heading("アップデート確認に失敗しました");
+                ui.colored_label(egui::Color32::LIGHT_RED, message);
+                ui.separator();
+                ui.horizontal(|ui| {
+                    if ui.button("閉じる").clicked() {
+                        action = Some(UpdateDialogAction::NotNow);
+                    }
+                    if candidate.is_some() && ui.button("リリースページを開く").clicked()
+                    {
+                        action = Some(UpdateDialogAction::OpenReleasePage);
+                    }
+                });
+            }
+            UpdateDialog::UpToDate => {
+                ui.heading("BMZ Player は最新です");
+                ui.label(format!("現在のバージョン: {}", current_version()));
+                if ui.button("閉じる").clicked() {
+                    action = Some(UpdateDialogAction::NotNow);
+                }
+            }
+        });
+    action
+}
+
+fn release_body_excerpt(body: &str) -> Option<String> {
+    let mut lines =
+        body.lines().map(str::trim).filter(|line| !line.is_empty()).take(6).collect::<Vec<_>>();
+    if lines.is_empty() {
+        return None;
+    }
+    let mut text = lines.join("\n");
+    const MAX_LEN: usize = 480;
+    if text.len() > MAX_LEN {
+        text = text.chars().take(MAX_LEN).collect();
+        text.push_str("...");
+    } else if body.lines().filter(|line| !line.trim().is_empty()).count() > lines.len() {
+        text.push_str("\n...");
+    }
+    lines.clear();
+    Some(text)
+}
+
+fn update_asset_kind_label(kind: UpdateAssetKind) -> &'static str {
+    match kind {
+        UpdateAssetKind::WindowsInstaller => "インストーラーを起動して更新します。",
+        UpdateAssetKind::MacosAppZip => "macOS 版はリリースページから手動で更新します。",
+        UpdateAssetKind::Other => "リリースページから手動で更新します。",
+    }
+}
+
 /// 本体設定パネルからのアクション要求。
 struct SettingsPanelActions {
     save: bool,
+    check_update: bool,
     rescan: bool,
     song_scan_requests: Vec<SongScanRequest>,
     table_fetch_urls: Vec<String>,
@@ -1587,6 +1730,7 @@ fn build_settings_panel(
 ) -> SettingsPanelActions {
     let mut save_clicked = false;
     let mut rescan_clicked = false;
+    let mut check_update_clicked = false;
     let mut song_scan_requests = Vec::new();
     let mut table_fetch_urls = Vec::new();
     let mut score_import_request = None;
@@ -2228,6 +2372,42 @@ fn build_settings_panel(
                     });
                 });
 
+                egui::CollapsingHeader::new("アップデート").show(ui, |ui| {
+                    ui.checkbox(&mut config.updates.enabled, "アップデート通知");
+                    ui.checkbox(&mut config.updates.check_on_startup, "起動時に確認");
+                    egui::ComboBox::from_label("チャンネル")
+                        .selected_text(update_channel_label(config.updates.channel))
+                        .show_ui(ui, |ui| {
+                            ui.selectable_value(
+                                &mut config.updates.channel,
+                                UpdateChannelConfig::Stable,
+                                update_channel_label(UpdateChannelConfig::Stable),
+                            );
+                            ui.selectable_value(
+                                &mut config.updates.channel,
+                                UpdateChannelConfig::Prerelease,
+                                update_channel_label(UpdateChannelConfig::Prerelease),
+                            );
+                        });
+                    if config.updates.skipped_version.is_empty() {
+                        ui.label("スキップ中のリリースはありません。");
+                    } else {
+                        ui.horizontal(|ui| {
+                            ui.label(format!(
+                                "スキップ中: BMZ Player {}",
+                                config.updates.skipped_version
+                            ));
+                            if ui.button("解除").clicked() {
+                                config.updates.skipped_version.clear();
+                                save_clicked = true;
+                            }
+                        });
+                    }
+                    if ui.button("更新を確認").clicked() {
+                        check_update_clicked = true;
+                    }
+                });
+
                 egui::CollapsingHeader::new("入力デバイス").show(ui, |ui| {
                     egui::ComboBox::from_label("バックエンド")
                         .selected_text(input_backend_label(&config.input.backend))
@@ -2308,6 +2488,7 @@ fn build_settings_panel(
         });
     SettingsPanelActions {
         save: save_clicked || apply_audio,
+        check_update: check_update_clicked,
         rescan: rescan_clicked,
         song_scan_requests,
         table_fetch_urls,
@@ -2410,6 +2591,13 @@ fn audio_sample_rate_label(hz: u32) -> String {
         format!("{}kHz", hz / 1000)
     } else {
         format!("{:.1}kHz", hz as f64 / 1000.0)
+    }
+}
+
+fn update_channel_label(channel: UpdateChannelConfig) -> &'static str {
+    match channel {
+        UpdateChannelConfig::Stable => "Stable",
+        UpdateChannelConfig::Prerelease => "Prerelease",
     }
 }
 

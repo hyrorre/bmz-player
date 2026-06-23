@@ -44,4 +44,5 @@ pub mod system_sound;
 pub mod system_sound_manager;
 pub mod table_cmd;
 pub mod ui;
+pub mod update;
 pub mod video_bga;

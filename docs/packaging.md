@@ -274,6 +274,39 @@ bmz-player-v<version>-macos-<arch>-ffmpeg-version.txt
 SHA256SUMS.txt
 ```
 
+## App update checks
+
+BMZ Player は GitHub Releases を更新確認先として使う。Stable channel は
+GitHub API の `releases/latest` を参照するため、draft / prerelease は対象外。
+Prerelease channel は releases 一覧から最新の非 draft release を対象にする。
+
+アプリ側の設定は `data/config.toml` の `[updates]` に保存する。
+
+```toml
+[updates]
+enabled = true
+channel = "Stable"
+check_on_startup = true
+skipped_version = ""
+```
+
+起動時チェックは release build の既定では有効、debug build の既定では無効。設定画面の
+「アップデート」から手動確認できる。
+
+更新が見つかった場合は Select 画面または設定画面で dialog を出し、ユーザーが
+`アップデート` / `今回はアップデートしない` / `このリリースをスキップ` を選ぶ。
+`今回はアップデートしない` はその起動中だけ抑止し、`このリリースをスキップ` は
+`skipped_version` に保存して次の別 version まで通知しない。
+
+自動適用 v1 は Windows installer artifact のみを対象にする。対象 asset は
+`bmz-player-v<version>-windows-x64-setup.exe` を優先し、download 後に GitHub asset
+`digest` または `SHA256SUMS.txt` の SHA256 と照合する。検証後に installer を起動し、
+BMZ Player は通常の終了処理へ進む。
+
+macOS `.app.zip` と Windows portable zip は、現時点では release page を開く手動更新に
+留める。macOS の自動置換は Developer ID 署名 / notarization / helper の方針が固まってから
+追加する。
+
 release tag は `v0.1.0` のように `v` prefix 付きでもよいが、数値部分は
 `Cargo.toml` の workspace version と一致する必要がある。手動実行では `tag` input
 を指定する。`upload_to_release=false` なら Actions artifact の生成だけを行い、

@@ -1,6 +1,7 @@
 use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver};
@@ -125,8 +126,10 @@ use crate::storage::score_db::{PlayerStats, ScoreDatabase};
 use crate::storage::score_import::{ScoreImportRequest, import_scores};
 use crate::ui::{
     DebugInfo, EguiLayer, EguiRunContext, SceneSkinDefs, SkinCandidate, SkinCandidateOrigin,
-    SkinCatalog, SkinConfigMeta, SkinReloadRequest, SongScanRequest,
+    SkinCatalog, SkinConfigMeta, SkinReloadRequest, SongScanRequest, UpdateDialog,
+    UpdateDialogAction,
 };
+use crate::update::{DownloadedUpdate, UpdateAssetKind, UpdateCandidate};
 use bmz_render::skin::{
     DestinationListEntry, SkinAnimationDef, SkinClickHit, SkinClickTarget, SkinContext,
     SkinDestinationDef, SkinDocument, SkinDocumentTexture, SkinDstEntry, SkinManifest,
@@ -274,6 +277,39 @@ fn startup_difficulty_table_fetch_urls(
         .collect()
 }
 
+#[derive(Debug, Clone)]
+enum UpdatePrompt {
+    Available(UpdateCandidate),
+    Downloading(UpdateCandidate),
+    Error { message: String, candidate: Option<UpdateCandidate> },
+    UpToDate,
+}
+
+impl UpdatePrompt {
+    fn candidate(&self) -> Option<&UpdateCandidate> {
+        match self {
+            Self::Available(candidate) | Self::Downloading(candidate) => Some(candidate),
+            Self::Error { candidate, .. } => candidate.as_ref(),
+            Self::UpToDate => None,
+        }
+    }
+
+    fn candidate_version(&self) -> Option<&str> {
+        self.candidate().map(|candidate| candidate.version.as_str())
+    }
+
+    fn as_dialog(&self) -> UpdateDialog<'_> {
+        match self {
+            Self::Available(candidate) => UpdateDialog::Available(candidate),
+            Self::Downloading(candidate) => UpdateDialog::Downloading(candidate),
+            Self::Error { message, candidate } => {
+                UpdateDialog::Error { message, candidate: candidate.as_ref() }
+            }
+            Self::UpToDate => UpdateDialog::UpToDate,
+        }
+    }
+}
+
 struct WinitApp {
     boot: BootstrappedApp,
     window: Option<Arc<Window>>,
@@ -333,6 +369,11 @@ struct WinitApp {
     pending_table_fetch: Option<Receiver<Result<()>>>,
     pending_song_scan: Option<Receiver<SongScanEvent>>,
     song_scan_progress: Option<ScanProgress>,
+    pending_update_check: Option<Receiver<Result<Option<UpdateCandidate>>>>,
+    pending_update_check_reports_up_to_date: bool,
+    pending_update_download: Option<Receiver<Result<DownloadedUpdate>>>,
+    update_prompt: Option<UpdatePrompt>,
+    update_dismissed_session_version: Option<String>,
     exit_configs_saved: bool,
     last_scene_kind: Option<AppSceneKind>,
     start_held: bool,
@@ -1706,6 +1747,11 @@ impl WinitApp {
             pending_table_fetch: None,
             pending_song_scan: None,
             song_scan_progress: None,
+            pending_update_check: None,
+            pending_update_check_reports_up_to_date: false,
+            pending_update_download: None,
+            update_prompt: None,
+            update_dismissed_session_version: None,
             exit_configs_saved: false,
             last_scene_kind: None,
             start_held: false,
@@ -1839,12 +1885,21 @@ impl WinitApp {
             app.result_key7_held = false;
             app.result_scene_started_at = Instant::now();
         }
+        if app.boot.app_config.updates.enabled && app.boot.app_config.updates.check_on_startup {
+            app.spawn_update_check("startup update check", false);
+        }
 
         Ok(app)
     }
 
     fn refresh_player_stats_snapshot(&mut self) {
         self.player_stats = player_stats_snapshot(&self.boot.score_db);
+    }
+
+    fn request_redraw(&self) {
+        if let Some(window) = &self.window {
+            window.request_redraw();
+        }
     }
 
     fn ensure_window(&mut self, event_loop: &ActiveEventLoop) {
@@ -7996,6 +8051,219 @@ impl WinitApp {
         }
     }
 
+    fn spawn_update_check(&mut self, label: &'static str, report_up_to_date: bool) {
+        if self.pending_update_check.is_some() {
+            tracing::debug!(label, "update check already in progress");
+            return;
+        }
+        let channel = self.boot.app_config.updates.channel;
+        let (tx, rx) = mpsc::channel();
+        thread::Builder::new()
+            .name("update-check".to_string())
+            .spawn(move || {
+                let result = (|| -> Result<Option<UpdateCandidate>> {
+                    let rt =
+                        tokio::runtime::Runtime::new().context("failed to create tokio runtime")?;
+                    rt.block_on(crate::update::check_for_update(channel))
+                })();
+                let _ = tx.send(result);
+            })
+            .expect("failed to spawn update check thread");
+        self.pending_update_check = Some(rx);
+        self.pending_update_check_reports_up_to_date = report_up_to_date;
+        tracing::info!(?channel, label, "started update check");
+    }
+
+    fn poll_pending_update_check(&mut self) {
+        let Some(rx) = &self.pending_update_check else {
+            return;
+        };
+        match rx.try_recv() {
+            Ok(Ok(Some(candidate))) => {
+                tracing::info!(version = %candidate.version, "update available");
+                self.pending_update_check = None;
+                self.pending_update_check_reports_up_to_date = false;
+                if self.update_candidate_is_suppressed(&candidate) {
+                    return;
+                }
+                self.update_prompt = Some(UpdatePrompt::Available(candidate));
+                self.request_redraw();
+            }
+            Ok(Ok(None)) => {
+                tracing::info!("no update available");
+                self.pending_update_check = None;
+                if self.pending_update_check_reports_up_to_date {
+                    self.update_prompt = Some(UpdatePrompt::UpToDate);
+                    self.request_redraw();
+                }
+                self.pending_update_check_reports_up_to_date = false;
+            }
+            Ok(Err(error)) => {
+                tracing::warn!(%error, "update check failed");
+                let report_error = self.pending_update_check_reports_up_to_date;
+                self.pending_update_check = None;
+                self.pending_update_check_reports_up_to_date = false;
+                if report_error {
+                    self.update_prompt = Some(UpdatePrompt::Error {
+                        message: format!("{error:#}"),
+                        candidate: None,
+                    });
+                    self.request_redraw();
+                }
+            }
+            Err(mpsc::TryRecvError::Empty) => {}
+            Err(mpsc::TryRecvError::Disconnected) => {
+                tracing::warn!("update check worker disconnected");
+                self.pending_update_check = None;
+                self.pending_update_check_reports_up_to_date = false;
+            }
+        }
+    }
+
+    fn spawn_update_download(&mut self, candidate: UpdateCandidate) {
+        if self.pending_update_download.is_some() {
+            tracing::debug!("update download already in progress");
+            return;
+        }
+        let cache_dir = self.boot.app_paths.cache_dir.clone();
+        let (tx, rx) = mpsc::channel();
+        self.update_prompt = Some(UpdatePrompt::Downloading(candidate.clone()));
+        thread::Builder::new()
+            .name("update-download".to_string())
+            .spawn(move || {
+                let result = (|| -> Result<DownloadedUpdate> {
+                    let rt =
+                        tokio::runtime::Runtime::new().context("failed to create tokio runtime")?;
+                    rt.block_on(crate::update::download_update(candidate, &cache_dir))
+                })();
+                let _ = tx.send(result);
+            })
+            .expect("failed to spawn update download thread");
+        self.pending_update_download = Some(rx);
+        tracing::info!("started update download");
+        self.request_redraw();
+    }
+
+    fn poll_pending_update_download(&mut self) {
+        let Some(rx) = &self.pending_update_download else {
+            return;
+        };
+        match rx.try_recv() {
+            Ok(Ok(downloaded)) => {
+                tracing::info!(path = %downloaded.path.display(), "update downloaded");
+                self.pending_update_download = None;
+                if let Err(error) = self.apply_downloaded_update(downloaded) {
+                    tracing::warn!(%error, "failed to apply downloaded update");
+                    self.update_prompt = Some(UpdatePrompt::Error {
+                        message: format!("{error:#}"),
+                        candidate: None,
+                    });
+                    self.request_redraw();
+                }
+            }
+            Ok(Err(error)) => {
+                tracing::warn!(%error, "update download failed");
+                let candidate =
+                    self.update_prompt.as_ref().and_then(|prompt| prompt.candidate().cloned());
+                self.pending_update_download = None;
+                self.update_prompt =
+                    Some(UpdatePrompt::Error { message: format!("{error:#}"), candidate });
+                self.request_redraw();
+            }
+            Err(mpsc::TryRecvError::Empty) => {}
+            Err(mpsc::TryRecvError::Disconnected) => {
+                tracing::warn!("update download worker disconnected");
+                self.pending_update_download = None;
+            }
+        }
+    }
+
+    fn update_candidate_is_suppressed(&self, candidate: &UpdateCandidate) -> bool {
+        self.boot.app_config.updates.skipped_version == candidate.version
+            || self.update_dismissed_session_version.as_deref() == Some(candidate.version.as_str())
+    }
+
+    fn handle_update_dialog_action(&mut self, action: UpdateDialogAction) {
+        match action {
+            UpdateDialogAction::Update => {
+                let Some(candidate) =
+                    self.update_prompt.as_ref().and_then(UpdatePrompt::candidate).cloned()
+                else {
+                    return;
+                };
+                match candidate.asset.as_ref().map(|asset| asset.kind) {
+                    Some(UpdateAssetKind::WindowsInstaller) => {
+                        self.spawn_update_download(candidate)
+                    }
+                    _ => {
+                        if let Err(error) = open_external_url(&candidate.html_url) {
+                            tracing::warn!(%error, "failed to open release page");
+                            self.update_prompt = Some(UpdatePrompt::Error {
+                                message: format!("リリースページを開けませんでした: {error:#}"),
+                                candidate: Some(candidate),
+                            });
+                        } else {
+                            self.update_dismissed_session_version = Some(candidate.version.clone());
+                            self.update_prompt = None;
+                        }
+                    }
+                }
+            }
+            UpdateDialogAction::NotNow => {
+                if let Some(version) =
+                    self.update_prompt.as_ref().and_then(UpdatePrompt::candidate_version)
+                {
+                    self.update_dismissed_session_version = Some(version.to_string());
+                }
+                self.update_prompt = None;
+            }
+            UpdateDialogAction::SkipRelease => {
+                let Some(version) = self
+                    .update_prompt
+                    .as_ref()
+                    .and_then(UpdatePrompt::candidate_version)
+                    .map(str::to_string)
+                else {
+                    self.update_prompt = None;
+                    return;
+                };
+                self.boot.app_config.updates.skipped_version = version;
+                match save_app_config(&self.boot.app_paths.config_toml, &self.boot.app_config) {
+                    Ok(()) => tracing::info!("skipped update version saved"),
+                    Err(error) => tracing::warn!(%error, "failed to save skipped update version"),
+                }
+                self.update_prompt = None;
+            }
+            UpdateDialogAction::OpenReleasePage => {
+                let url = self
+                    .update_prompt
+                    .as_ref()
+                    .and_then(UpdatePrompt::candidate)
+                    .map(|candidate| candidate.html_url.as_str())
+                    .unwrap_or(crate::update::RELEASES_PAGE_URL);
+                if let Err(error) = open_external_url(url) {
+                    tracing::warn!(%error, "failed to open release page");
+                }
+            }
+        }
+    }
+
+    fn apply_downloaded_update(&mut self, downloaded: DownloadedUpdate) -> Result<()> {
+        match downloaded.candidate.asset.as_ref().map(|asset| asset.kind) {
+            Some(UpdateAssetKind::WindowsInstaller) => {
+                launch_update_installer(&downloaded.path)?;
+                self.update_prompt = None;
+                self.shutdown_requested.store(true, Ordering::SeqCst);
+                Ok(())
+            }
+            _ => {
+                open_external_url(&downloaded.candidate.html_url)?;
+                self.update_prompt = None;
+                Ok(())
+            }
+        }
+    }
+
     fn refresh_visible_select_folder_summaries(&mut self) {
         self.poll_select_folder_summary_loads();
         self.request_visible_select_folder_summaries(25);
@@ -8913,6 +9181,7 @@ impl WinitApp {
             );
         }
         let result_ir_panel = self.result_ir.as_mut();
+        let update_dialog = self.update_prompt.as_ref().map(UpdatePrompt::as_dialog);
         let Some(egui) = self.egui.as_mut() else {
             return;
         };
@@ -8930,6 +9199,7 @@ impl WinitApp {
                 result_ir: result_ir_panel,
                 profile_root: &self.boot.profile_paths.root_dir,
                 app_paths: &self.boot.app_paths,
+                update_dialog,
             },
         );
         self.renderer.set_egui_frame(output.frame);
@@ -8958,6 +9228,12 @@ impl WinitApp {
                 Ok(()) => tracing::info!("app config saved from egui settings panel"),
                 Err(error) => tracing::error!(%error, "failed to save app config"),
             }
+        }
+        if output.check_for_update {
+            self.spawn_update_check("manual update check", true);
+        }
+        if let Some(action) = output.update_dialog_action {
+            self.handle_update_dialog_action(action);
         }
         if output.apply_audio_output {
             self.reopen_audio_output();
@@ -10883,6 +11159,47 @@ fn format_error_chain(error: &anyhow::Error) -> String {
     error.chain().map(ToString::to_string).collect::<Vec<_>>().join(": ")
 }
 
+fn open_external_url(url: &str) -> Result<()> {
+    #[cfg(target_os = "windows")]
+    {
+        Command::new("cmd")
+            .args(["/C", "start", "", url])
+            .spawn()
+            .context("failed to open URL with cmd /C start")?;
+    }
+    #[cfg(target_os = "macos")]
+    {
+        Command::new("open").arg(url).spawn().context("failed to open URL with open")?;
+    }
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        Command::new("xdg-open").arg(url).spawn().context("failed to open URL with xdg-open")?;
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "macos", unix)))]
+    {
+        anyhow::bail!("opening URLs is not supported on this platform: {url}");
+    }
+    Ok(())
+}
+
+fn launch_update_installer(path: &Path) -> Result<()> {
+    #[cfg(target_os = "windows")]
+    {
+        Command::new(path)
+            .arg("/SP-")
+            .spawn()
+            .with_context(|| format!("failed to launch update installer: {}", path.display()))?;
+        return Ok(());
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        anyhow::bail!(
+            "automatic installer launch is only supported on Windows: {}",
+            path.display()
+        );
+    }
+}
+
 fn config_renderer_backend(
     backend: crate::config::app_config::RendererBackend,
 ) -> bmz_render::WgpuBackend {
@@ -11047,6 +11364,8 @@ impl ApplicationHandler for WinitApp {
                 self.poll_play_preload();
                 self.poll_pending_table_fetch();
                 self.poll_pending_song_scan();
+                self.poll_pending_update_check();
+                self.poll_pending_update_download();
                 self.advance_decide_transition();
                 self.advance_play_ending();
                 self.advance_result_exit();
