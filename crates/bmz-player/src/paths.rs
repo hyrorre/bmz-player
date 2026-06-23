@@ -105,6 +105,7 @@ impl AppPaths {
 
     pub fn ensure_dirs(&self) -> Result<()> {
         std::fs::create_dir_all(&self.data_dir)?;
+        std::fs::create_dir_all(self.data_dir.join("skins"))?;
         std::fs::create_dir_all(&self.profiles_dir)?;
         std::fs::create_dir_all(&self.cache_dir)?;
         std::fs::create_dir_all(&self.logs_dir)?;
@@ -382,6 +383,27 @@ mod tests {
         assert!(validate_profile_id("profile/name").is_err());
         assert!(validate_profile_id("").is_err());
         assert!(validate_profile_id("default_1-2").is_ok());
+    }
+
+    #[test]
+    fn ensure_dirs_creates_user_skin_root() {
+        let stamp =
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+        let root = env::temp_dir()
+            .join(format!("bmz-player-paths-ensure-dirs-{}-{stamp}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let app = AppPaths::from_dirs(
+            root.join("resources"),
+            root.join("data"),
+            root.join("cache"),
+            root.join("logs"),
+        );
+
+        app.ensure_dirs().unwrap();
+
+        assert!(root.join("data/skins").is_dir());
+
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
