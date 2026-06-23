@@ -250,3 +250,38 @@ BMZ_DATA_DIR=/tmp/bmz-player-package-data \
   --boot-play-sample \
   --smoke-exit-after-frames 3
 ```
+
+## GitHub Actions release build
+
+`.github/workflows/release-apps.yml` は GitHub Release が `published` になったときに
+release artifact を自動生成する。手動 dry run には `workflow_dispatch` を使う。
+
+生成物:
+
+```text
+bmz-player-v<version>-windows-x64-setup.exe
+bmz-player-v<version>-windows-x64-portable.zip
+bmz-player-v<version>-windows-x64-provenance.txt
+bmz-player-v<version>-macos-arm64.app.zip
+bmz-player-v<version>-macos-x64.app.zip
+bmz-player-v<version>-macos-<arch>-brew-ffmpeg.json
+bmz-player-v<version>-macos-<arch>-ffmpeg-version.txt
+SHA256SUMS.txt
+```
+
+release tag は `v0.1.0` のように `v` prefix 付きでもよいが、数値部分は
+`Cargo.toml` の workspace version と一致する必要がある。手動実行では `tag` input
+を指定する。`upload_to_release=false` なら Actions artifact の生成だけを行い、
+GitHub Release には添付しない。
+
+Windows job は public runner に ASIO SDK を用意しないため、既定で
+`scripts/package-windows.ps1 -NoDefaultFeatures` を使う。自動 release build で
+`asio` feature を有効化する場合は、SDK の取得・配置方法を別途用意してから拡張する。
+
+macOS job は arm64 / x64 の app zip を別々に作る。現状は `--ad-hoc-sign` のため、
+署名済み release を公開する前に Developer ID 署名と notarization 用の protected
+GitHub secrets を追加する。
+
+workflow は FFmpeg の package/version provenance を artifact と一緒に残し、
+`ffmpeg -version` に `--enable-nonfree` が含まれる場合は失敗する。FFmpeg library を
+bundle した artifact を公開する前に `docs/licenses.md` を確認する。
