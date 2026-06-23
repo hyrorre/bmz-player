@@ -684,8 +684,7 @@ pub struct SkinConfig {
     pub decide: String,
     /// 5K プレイ画面スキンのパス。
     /// 空文字列なら内蔵デフォルトスキンを使用。
-    /// `.json` / `.lr2skin` で終わるパスは beatoraja スキン、それ以外は
-    /// `skin.toml` を含む bmz スキンディレクトリとして扱う。
+    /// `.json` / `.luaskin` / `.lua` / `.lr2skin` で終わるパスは beatoraja スキンとして扱う。
     #[serde(default)]
     pub play5: String,
     /// 4K プレイ画面スキンのパス。フォーマットは [`play5`] と同じ。

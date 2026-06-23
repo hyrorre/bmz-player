@@ -108,11 +108,11 @@ use crate::screens::settings_model::{
 };
 use crate::select_options::{ArrangeOption, AssistOption, DoubleOption, HsFixOption, TargetOption};
 use crate::skin_loader::{
-    DecodedSkin, PreparedSource, SkinKind, UploadedSkin, apply_skin_from_config,
-    decode_beatoraja_skin_with_options, default_play_skin_document_path_from_paths,
-    default_skin_document_path_from_paths, install_decoded_font, install_decoded_skin,
-    is_decodable_skin_path, load_default_skin_into_renderer_from_paths, play_skin_selection_for,
-    set_decoded_skin_context, upload_decoded_skin,
+    DecodedSkin, PreparedSource, SkinKind, UploadedSkin, decode_beatoraja_skin_with_options,
+    default_play_skin_document_path_from_paths, default_skin_document_path_from_paths,
+    install_decoded_font, install_decoded_skin, is_decodable_skin_path,
+    load_default_skin_into_renderer_from_paths, play_skin_selection_for, set_decoded_skin_context,
+    upload_decoded_skin,
 };
 use crate::songs_cmd::scan_songs_with_progress;
 use crate::storage::difficulty_table_db::DifficultyTableRecord;
@@ -9205,17 +9205,11 @@ impl WinitApp {
             (path, trimmed.to_string(), selection.options.clone(), selection.files.clone())
         };
         if !is_decodable_skin_path(&path) {
-            // TOML directory スキンは同期ロード。デフォルトスキンを下敷きに renderer 直差し替え。
-            if let Err(error) =
-                apply_skin_from_config(&mut self.renderer, &self.boot.app_paths, trimmed)
-            {
-                tracing::warn!(
-                    ?key_mode,
-                    path = trimmed,
-                    error = %format_error_chain(&error),
-                    "failed to apply play skin from directory; using existing textures"
-                );
-            }
+            tracing::warn!(
+                ?key_mode,
+                path = %path.display(),
+                "play skin path is not a supported beatoraja skin file; using existing textures"
+            );
             return;
         }
 
@@ -14485,7 +14479,7 @@ fn clamp_search_cursor(query: &str, cursor: usize) -> usize {
 #[cfg(test)]
 mod tests {
     use bmz_render::scene::SelectRowKind;
-    use bmz_render::skin::SkinManifest;
+    use bmz_render::skin::default_skin_manifest;
 
     use crate::config::app_config::{
         AppConfig, DifficultyTableSource, DifficultyTablesConfig, PathEntry, VsyncModeConfig,
@@ -14717,9 +14711,8 @@ mod tests {
     }
 
     #[test]
-    fn default_skin_manifest_exists() {
-        let manifest_path = default_skin_root().join("skin.toml");
-        let manifest = SkinManifest::load(&manifest_path).unwrap();
+    fn default_skin_texture_catalog_defines_expected_assets() {
+        let manifest = default_skin_manifest();
 
         assert!(
             manifest.textures.iter().any(|texture| texture.id == 1 && texture.path == "note.png")
@@ -14783,6 +14776,12 @@ mod tests {
                 .textures
                 .iter()
                 .any(|texture| texture.id == 11 && texture.path == "combo-panel-inactive.png")
+        );
+        assert!(
+            manifest
+                .textures
+                .iter()
+                .any(|texture| texture.id == 12 && texture.path == "note-mine.png")
         );
     }
 

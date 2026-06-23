@@ -2474,7 +2474,7 @@ impl<'a> Default for SkinTextState<'a> {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Deserialize)]
 pub struct SkinManifest {
     #[serde(default)]
     pub textures: Vec<SkinTextureManifest>,
@@ -6708,11 +6708,108 @@ pub(crate) fn judge_image_index_for_judge(judge: Judge) -> usize {
 }
 
 impl SkinManifest {
-    pub fn load(path: &Path) -> Result<Self> {
-        let text = std::fs::read_to_string(path)
-            .with_context(|| format!("failed to read skin manifest: {}", path.display()))?;
-        toml::from_str(&text)
-            .with_context(|| format!("failed to parse skin manifest: {}", path.display()))
+    pub fn bundled_default() -> Self {
+        Self {
+            textures: vec![
+                skin_texture_manifest(1, "note.png"),
+                skin_texture_manifest(2, "note-blue.png"),
+                skin_texture_manifest(3, "note-red.png"),
+                skin_texture_manifest(4, "receptor.png"),
+                skin_texture_manifest(5, "receptor-blue.png"),
+                skin_texture_manifest(6, "receptor-red.png"),
+                skin_texture_manifest(7, "judge-line.png"),
+                skin_texture_manifest(8, "gauge-frame.png"),
+                skin_texture_manifest(9, "gauge-fill.png"),
+                skin_texture_manifest(10, "combo-panel.png"),
+                skin_texture_manifest(11, "combo-panel-inactive.png"),
+                skin_texture_manifest(12, "note-mine.png"),
+            ],
+            play: SkinPlayManifest {
+                note: Some(SkinImageManifest {
+                    texture: 1,
+                    key_even_texture: Some(2),
+                    scratch_texture: Some(3),
+                    source_size: None,
+                    uv: TextureRegion::default(),
+                    scale: SkinImageScale::Stretch,
+                    border: None,
+                }),
+                ln_start: None,
+                ln_end: None,
+                receptor: Some(SkinImageManifest {
+                    texture: 4,
+                    key_even_texture: Some(5),
+                    scratch_texture: Some(6),
+                    source_size: None,
+                    uv: TextureRegion::default(),
+                    scale: SkinImageScale::Stretch,
+                    border: None,
+                }),
+                judge_line: Some(SkinImageManifest {
+                    texture: 7,
+                    key_even_texture: None,
+                    scratch_texture: None,
+                    source_size: None,
+                    uv: TextureRegion::default(),
+                    scale: SkinImageScale::Stretch,
+                    border: None,
+                }),
+                gauge_frame: Some(SkinImageManifest {
+                    texture: 8,
+                    key_even_texture: None,
+                    scratch_texture: None,
+                    source_size: None,
+                    uv: TextureRegion::default(),
+                    scale: SkinImageScale::NineSlice,
+                    border: Some(SkinImageBorder {
+                        left: 2.0,
+                        right: 2.0,
+                        top: 3.0,
+                        bottom: 3.0,
+                        unit: SkinImageBorderUnit::Pixels,
+                    }),
+                }),
+                gauge_fill: Some(SkinImageManifest {
+                    texture: 9,
+                    key_even_texture: None,
+                    scratch_texture: None,
+                    source_size: None,
+                    uv: TextureRegion::default(),
+                    scale: SkinImageScale::Stretch,
+                    border: None,
+                }),
+                combo_panel: Some(SkinImageManifest {
+                    texture: 10,
+                    key_even_texture: None,
+                    scratch_texture: None,
+                    source_size: None,
+                    uv: TextureRegion::default(),
+                    scale: SkinImageScale::NineSlice,
+                    border: Some(SkinImageBorder {
+                        left: 4.0,
+                        right: 4.0,
+                        top: 3.0,
+                        bottom: 3.0,
+                        unit: SkinImageBorderUnit::Pixels,
+                    }),
+                }),
+                combo_panel_inactive: Some(SkinImageManifest {
+                    texture: 11,
+                    key_even_texture: None,
+                    scratch_texture: None,
+                    source_size: None,
+                    uv: TextureRegion::default(),
+                    scale: SkinImageScale::NineSlice,
+                    border: Some(SkinImageBorder {
+                        left: 4.0,
+                        right: 4.0,
+                        top: 3.0,
+                        bottom: 3.0,
+                        unit: SkinImageBorderUnit::Pixels,
+                    }),
+                }),
+            },
+        }
     }
 
     pub fn resolve_textures(&self, base_dir: &Path) -> Vec<ResolvedSkinTexture> {
@@ -6839,6 +6936,10 @@ impl SkinManifest {
             },
         )
     }
+}
+
+fn skin_texture_manifest(id: u32, path: &str) -> SkinTextureManifest {
+    SkinTextureManifest { id, path: path.to_string() }
 }
 
 fn load_json_value(path: &Path) -> Result<JsonValue> {
@@ -7476,13 +7577,12 @@ fn default_property_option(property: &JsonValue) -> Option<i32> {
 pub fn default_skin_manifest() -> SkinManifest {
     static DEFAULT_SKIN_MANIFEST: OnceLock<SkinManifest> = OnceLock::new();
     DEFAULT_SKIN_MANIFEST
-        .get_or_init(|| {
-            let manifest: SkinManifest =
-                toml::from_str(include_str!("../../../data/skins/default/skin.toml"))
-                    .expect("bundled default skin manifest must parse");
-            manifest.with_texture_source_sizes(&default_skin_root())
-        })
+        .get_or_init(|| default_skin_manifest_for_root(&default_skin_root()))
         .clone()
+}
+
+pub fn default_skin_manifest_for_root(default_root: &Path) -> SkinManifest {
+    SkinManifest::bundled_default().with_texture_source_sizes(default_root)
 }
 
 fn default_skin_root() -> PathBuf {
@@ -13038,90 +13138,9 @@ mod tests {
     }
 
     #[test]
-    fn skin_manifest_resolves_relative_texture_paths() {
-        let manifest: SkinManifest = toml::from_str(
-            r#"
-            [[textures]]
-            id = 1
-            path = "note.png"
-
-            [[textures]]
-            id = 2
-            path = "note-blue.png"
-
-            [[textures]]
-            id = 3
-            path = "note-red.png"
-
-            [[textures]]
-            id = 4
-            path = "receptor.png"
-
-            [[textures]]
-            id = 5
-            path = "receptor-blue.png"
-
-            [[textures]]
-            id = 6
-            path = "receptor-red.png"
-
-            [[textures]]
-            id = 7
-            path = "judge-line.png"
-
-            [[textures]]
-            id = 8
-            path = "gauge-frame.png"
-
-            [[textures]]
-            id = 9
-            path = "gauge-fill.png"
-
-            [[textures]]
-            id = 10
-            path = "combo-panel.png"
-
-            [[textures]]
-            id = 11
-            path = "combo-panel-inactive.png"
-
-            [play.note]
-            texture = 1
-            key_even_texture = 2
-            scratch_texture = 3
-
-            [play.receptor]
-            texture = 4
-            key_even_texture = 5
-            scratch_texture = 6
-
-            [play.judge_line]
-            texture = 7
-            scale = "stretch"
-
-            [play.gauge_frame]
-            texture = 8
-            source_size = { width = 12.0, height = 48.0 }
-            scale = "nine_slice"
-            border = { left = 2.0, right = 2.0, top = 3.0, bottom = 3.0, unit = "pixels" }
-
-            [play.gauge_fill]
-            texture = 9
-            source_size = { width = 8.0, height = 48.0 }
-            scale = "stretch"
-
-            [play.combo_panel]
-            texture = 10
-            source_size = { width = 48.0, height = 16.0 }
-            scale = "nine_slice"
-
-            [play.combo_panel_inactive]
-            texture = 11
-            source_size = { width = 48.0, height = 16.0 }
-            scale = "stretch"
-            "#,
-        )
-        .unwrap();
+    fn bundled_default_skin_manifest_resolves_relative_texture_paths() {
+        let manifest =
+            SkinManifest::bundled_default().with_texture_source_sizes(&default_skin_root());
 
         let textures = manifest.resolve_textures(Path::new("/skin/default"));
 
@@ -13147,6 +13166,8 @@ mod tests {
         assert_eq!(textures[9].path, PathBuf::from("/skin/default/combo-panel.png"));
         assert_eq!(textures[10].id, TextureId(11));
         assert_eq!(textures[10].path, PathBuf::from("/skin/default/combo-panel-inactive.png"));
+        assert_eq!(textures[11].id, TextureId(12));
+        assert_eq!(textures[11].path, PathBuf::from("/skin/default/note-mine.png"));
         assert_eq!(manifest.play_note_image().texture_for_lane(Lane::Key2), 2);
         assert_eq!(manifest.play_note_image().texture_for_lane(Lane::Scratch), 3);
         assert_eq!(manifest.play_receptor_image().texture_for_lane(Lane::Key2), 5);
