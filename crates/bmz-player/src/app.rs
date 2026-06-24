@@ -16307,9 +16307,9 @@ mod tests {
         let gamepad_keys = SelectKeyBindings::from_profile(
             &ProfileConfig::new_default("default", "Default", 1).input,
         );
-        // Axis1- = scratch up (Previous = 負), Axis1+ = scratch down (Next = 正)
-        assert_eq!(select_analog_scroll_delta("Axis1", -4, &gamepad_keys), Some(-4));
-        assert_eq!(select_analog_scroll_delta("Axis1", 4, &gamepad_keys), Some(4));
+        // Axis1+ = scratch up (Previous = 負), Axis1- = scratch down (Next = 正)
+        assert_eq!(select_analog_scroll_delta("Axis1", 4, &gamepad_keys), Some(-4));
+        assert_eq!(select_analog_scroll_delta("Axis1", -4, &gamepad_keys), Some(4));
         assert_eq!(select_analog_scroll_delta("Axis2", -4, &gamepad_keys), None);
         assert_eq!(select_analog_scroll_delta("Axis1", 0, &gamepad_keys), None);
         assert_eq!(select_analog_scroll_delta("Axis3", 4, &gamepad_keys), None);
@@ -16328,8 +16328,8 @@ mod tests {
             &ProfileConfig::new_default("default", "Default", 1).input,
         );
 
-        assert_eq!(play_analog_lane_cover_delta("Axis1", -4, &gamepad_keys), Some(-4));
-        assert_eq!(play_analog_lane_cover_delta("Axis1", 4, &gamepad_keys), Some(4));
+        assert_eq!(play_analog_lane_cover_delta("Axis1", 4, &gamepad_keys), Some(-4));
+        assert_eq!(play_analog_lane_cover_delta("Axis1", -4, &gamepad_keys), Some(4));
         assert_eq!(play_analog_lane_cover_delta("Axis2", -4, &gamepad_keys), None);
         assert_eq!(play_analog_lane_cover_delta("Axis1", 0, &gamepad_keys), None);
     }
@@ -16385,8 +16385,8 @@ mod tests {
         );
         assert_eq!(target_cycle_from_control("ScratchUp", &keys), Some(TargetCycle::Next));
         assert_eq!(target_cycle_from_control("ScratchDown", &keys), Some(TargetCycle::Previous));
-        assert_eq!(target_cycle_from_control("Axis1-", &gamepad_keys), Some(TargetCycle::Next));
-        assert_eq!(target_cycle_from_control("Axis1+", &gamepad_keys), Some(TargetCycle::Previous));
+        assert_eq!(target_cycle_from_control("Axis1+", &gamepad_keys), Some(TargetCycle::Next));
+        assert_eq!(target_cycle_from_control("Axis1-", &gamepad_keys), Some(TargetCycle::Previous));
         assert_eq!(target_cycle_from_control("Axis2-", &gamepad_keys), None);
         assert_eq!(target_cycle_from_control("Axis2+", &gamepad_keys), None);
     }
@@ -16852,11 +16852,11 @@ mod tests {
             Some(PlayOptionControl::Hispeed(HispeedChange::Up))
         );
         assert_eq!(
-            play_option_control("Axis1-", &keys),
+            play_option_control("Axis1+", &keys),
             Some(PlayOptionControl::LaneCover(LaneCoverChange::Up))
         );
         assert_eq!(
-            play_option_control("Axis1+", &keys),
+            play_option_control("Axis1-", &keys),
             Some(PlayOptionControl::LaneCover(LaneCoverChange::Down))
         );
         assert_eq!(play_option_control("Axis2-", &keys), None);

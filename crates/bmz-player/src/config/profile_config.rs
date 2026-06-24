@@ -1038,8 +1038,8 @@ pub fn default_keyboard_bindings() -> Vec<BindingConfigEntry> {
 
 pub fn default_gamepad_bindings() -> Vec<BindingConfigEntry> {
     vec![
-        gamepad_binding("Axis1+", LaneConfig::Scratch),
-        gamepad_binding("Axis1-", LaneConfig::Scratch),
+        gamepad_scratch_binding("Axis1+", LaneConfig::Scratch, ScratchDirectionConfig::Up),
+        gamepad_scratch_binding("Axis1-", LaneConfig::Scratch, ScratchDirectionConfig::Down),
         gamepad_binding("Button1", LaneConfig::Key1),
         gamepad_binding("Button2", LaneConfig::Key2),
         gamepad_binding("Button3", LaneConfig::Key3),
@@ -1087,6 +1087,16 @@ fn gamepad_binding(control: &str, lane: LaneConfig) -> BindingConfigEntry {
         action: None,
         scratch: None,
     }
+}
+
+fn gamepad_scratch_binding(
+    control: &str,
+    lane: LaneConfig,
+    scratch: ScratchDirectionConfig,
+) -> BindingConfigEntry {
+    let mut entry = gamepad_binding(control, lane);
+    entry.scratch = Some(scratch);
+    entry
 }
 
 fn action_binding(control: &str, action: InputActionConfig) -> BindingConfigEntry {
@@ -1450,5 +1460,7 @@ mod tests {
         assert!(toml.contains("action = \"E2\""));
         assert!(toml.contains("action = \"E3\""));
         assert!(toml.contains("action = \"E4\""));
+        assert!(toml.contains("control = \"Axis1+\"\nlane = \"Scratch\"\nscratch = \"up\""));
+        assert!(toml.contains("control = \"Axis1-\"\nlane = \"Scratch\"\nscratch = \"down\""));
     }
 }

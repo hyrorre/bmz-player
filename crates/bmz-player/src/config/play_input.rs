@@ -370,8 +370,18 @@ pub fn default_play_7k_keyboard_bindings() -> Vec<BindingConfigEntry> {
 
 pub fn default_play_7k_gamepad_bindings() -> Vec<BindingConfigEntry> {
     vec![
-        gamepad_play_binding("Axis1+", LaneConfig::Scratch),
-        gamepad_play_binding("Axis1-", LaneConfig::Scratch),
+        gamepad_scratch_play_binding_for_device(
+            "gamepad",
+            "Axis1+",
+            LaneConfig::Scratch,
+            ScratchDirectionConfig::Up,
+        ),
+        gamepad_scratch_play_binding_for_device(
+            "gamepad",
+            "Axis1-",
+            LaneConfig::Scratch,
+            ScratchDirectionConfig::Down,
+        ),
         gamepad_play_binding("Button1", LaneConfig::Key1),
         gamepad_play_binding("Button2", LaneConfig::Key2),
         gamepad_play_binding("Button3", LaneConfig::Key3),
@@ -406,13 +416,13 @@ pub fn default_play_14k_bindings() -> Vec<BindingConfigEntry> {
     bindings.extend([
         gamepad_scratch_play_binding_for_device(
             "gamepad1",
-            "Axis1-",
+            "Axis1+",
             LaneConfig::Scratch,
             ScratchDirectionConfig::Up,
         ),
         gamepad_scratch_play_binding_for_device(
             "gamepad1",
-            "Axis1+",
+            "Axis1-",
             LaneConfig::Scratch,
             ScratchDirectionConfig::Down,
         ),
@@ -429,13 +439,13 @@ pub fn default_play_14k_bindings() -> Vec<BindingConfigEntry> {
             "gamepad2",
             "Axis1-",
             LaneConfig::Scratch2,
-            ScratchDirectionConfig::Down,
+            ScratchDirectionConfig::Up,
         ),
         gamepad_scratch_play_binding_for_device(
             "gamepad2",
             "Axis1+",
             LaneConfig::Scratch2,
-            ScratchDirectionConfig::Up,
+            ScratchDirectionConfig::Down,
         ),
         gamepad_play_binding_for_device("gamepad2", "Button1", LaneConfig::Key8),
         gamepad_play_binding_for_device("gamepad2", "Button2", LaneConfig::Key9),
@@ -847,13 +857,13 @@ mod tests {
         }));
         assert!(bindings.iter().any(|entry| {
             entry.device == "gamepad1"
-                && entry.control == "Axis1-"
+                && entry.control == "Axis1+"
                 && entry.lane == Some(LaneConfig::Scratch)
                 && entry.scratch == Some(ScratchDirectionConfig::Up)
         }));
         assert!(bindings.iter().any(|entry| {
             entry.device == "gamepad1"
-                && entry.control == "Axis1+"
+                && entry.control == "Axis1-"
                 && entry.lane == Some(LaneConfig::Scratch)
                 && entry.scratch == Some(ScratchDirectionConfig::Down)
         }));
@@ -866,13 +876,13 @@ mod tests {
             entry.device == "gamepad2"
                 && entry.control == "Axis1-"
                 && entry.lane == Some(LaneConfig::Scratch2)
-                && entry.scratch == Some(ScratchDirectionConfig::Down)
+                && entry.scratch == Some(ScratchDirectionConfig::Up)
         }));
         assert!(bindings.iter().any(|entry| {
             entry.device == "gamepad2"
                 && entry.control == "Axis1+"
                 && entry.lane == Some(LaneConfig::Scratch2)
-                && entry.scratch == Some(ScratchDirectionConfig::Up)
+                && entry.scratch == Some(ScratchDirectionConfig::Down)
         }));
         assert!(
             !bindings
