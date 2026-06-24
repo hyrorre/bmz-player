@@ -3261,7 +3261,9 @@ impl WinitApp {
             self.exit_folder();
             return true;
         }
-        if let Some(select_move) = settings_browse_move_control(control, &bindings) {
+        if let Some(select_move) =
+            settings_browse_move_control(control, &bindings, &self.select_keys)
+        {
             self.move_selection(select_move);
             self.start_select_hold_move(select_move, control.to_string());
             return true;
@@ -10064,10 +10066,16 @@ fn should_route_settings_key_event(
     state == ElementState::Pressed && (settings_editing || !repeat)
 }
 
-fn settings_browse_move_control(control: &str, bindings: &SettingsBindings) -> Option<SelectMove> {
+fn settings_browse_move_control(
+    control: &str,
+    bindings: &SettingsBindings,
+    select_bindings: &SelectKeyBindings,
+) -> Option<SelectMove> {
     match control {
         "ArrowUp" | "DPadUp" | "ScratchUp" => Some(SelectMove::Previous),
         "ArrowDown" | "DPadDown" | "ScratchDown" => Some(SelectMove::Next),
+        _ if select_bindings.is_select_scratch_up(control) => Some(SelectMove::Previous),
+        _ if select_bindings.is_select_scratch_down(control) => Some(SelectMove::Next),
         _ if bindings.is_increase(control) => Some(SelectMove::Next),
         _ if bindings.is_decrease(control) => Some(SelectMove::Previous),
         _ => None,
@@ -13271,6 +13279,10 @@ fn select_action(
         Some(SelectAction::EnterOrPlay)
     } else if bindings.is_back(&control) {
         Some(SelectAction::ExitFolder)
+    } else if bindings.is_select_scratch_down(&control) {
+        Some(SelectAction::Move(SelectMove::Next))
+    } else if bindings.is_select_scratch_up(&control) {
+        Some(SelectAction::Move(SelectMove::Previous))
     } else if bindings.is_select_previous(&control) {
         if bindings.is_select_next(&control) {
             Some(SelectAction::Move(SelectMove::Next))
@@ -14003,17 +14015,17 @@ enum TargetCycle {
 
 fn target_cycle_from_key(physical_key: PhysicalKey) -> Option<TargetCycle> {
     match physical_key {
-        PhysicalKey::Code(KeyCode::ArrowUp) => Some(TargetCycle::Previous),
-        PhysicalKey::Code(KeyCode::ArrowDown) => Some(TargetCycle::Next),
+        PhysicalKey::Code(KeyCode::ArrowUp) => Some(TargetCycle::Next),
+        PhysicalKey::Code(KeyCode::ArrowDown) => Some(TargetCycle::Previous),
         _ => None,
     }
 }
 
 fn target_cycle_from_control(control: &str, bindings: &SelectKeyBindings) -> Option<TargetCycle> {
     if control == "ScratchUp" || bindings.is_target_previous(control) {
-        Some(TargetCycle::Previous)
-    } else if control == "ScratchDown" || bindings.is_target_next(control) {
         Some(TargetCycle::Next)
+    } else if control == "ScratchDown" || bindings.is_target_next(control) {
+        Some(TargetCycle::Previous)
     } else {
         None
     }
@@ -16125,8 +16137,8 @@ mod tests {
             select_action(PhysicalKey::Code(KeyCode::KeyX), ElementState::Pressed, false, &keys),
             Some(SelectAction::ExitFolder)
         );
-        assert_eq!(target_cycle_from_control("G", &keys), Some(TargetCycle::Previous));
-        assert_eq!(target_cycle_from_control("B", &keys), Some(TargetCycle::Next));
+        assert_eq!(target_cycle_from_control("G", &keys), Some(TargetCycle::Next));
+        assert_eq!(target_cycle_from_control("B", &keys), Some(TargetCycle::Previous));
     }
 
     #[test]
@@ -16168,11 +16180,32 @@ mod tests {
     fn settings_browse_keeps_cursor_navigation_direction() {
         let profile = ProfileConfig::new_default("default", "Default", 0);
         let bindings = SettingsBindings::from_profile(&profile.input);
+        let select_bindings = SelectKeyBindings::from_profile(&profile.input);
 
-        assert_eq!(settings_browse_move_control("ArrowUp", &bindings), Some(SelectMove::Previous));
-        assert_eq!(settings_browse_move_control("ArrowDown", &bindings), Some(SelectMove::Next));
-        assert_eq!(settings_browse_move_control("DPadUp", &bindings), Some(SelectMove::Previous));
-        assert_eq!(settings_browse_move_control("DPadDown", &bindings), Some(SelectMove::Next));
+        assert_eq!(
+            settings_browse_move_control("ArrowUp", &bindings, &select_bindings),
+            Some(SelectMove::Previous)
+        );
+        assert_eq!(
+            settings_browse_move_control("ArrowDown", &bindings, &select_bindings),
+            Some(SelectMove::Next)
+        );
+        assert_eq!(
+            settings_browse_move_control("DPadUp", &bindings, &select_bindings),
+            Some(SelectMove::Previous)
+        );
+        assert_eq!(
+            settings_browse_move_control("DPadDown", &bindings, &select_bindings),
+            Some(SelectMove::Next)
+        );
+        assert_eq!(
+            settings_browse_move_control("LShift", &bindings, &select_bindings),
+            Some(SelectMove::Previous)
+        );
+        assert_eq!(
+            settings_browse_move_control("LControl", &bindings, &select_bindings),
+            Some(SelectMove::Next)
+        );
     }
 
     #[test]
@@ -16344,16 +16377,16 @@ mod tests {
 
         assert_eq!(
             target_cycle_from_key(PhysicalKey::Code(KeyCode::ArrowUp)),
-            Some(TargetCycle::Previous)
+            Some(TargetCycle::Next)
         );
         assert_eq!(
             target_cycle_from_key(PhysicalKey::Code(KeyCode::ArrowDown)),
-            Some(TargetCycle::Next)
+            Some(TargetCycle::Previous)
         );
-        assert_eq!(target_cycle_from_control("ScratchUp", &keys), Some(TargetCycle::Previous));
-        assert_eq!(target_cycle_from_control("ScratchDown", &keys), Some(TargetCycle::Next));
-        assert_eq!(target_cycle_from_control("Axis1-", &gamepad_keys), Some(TargetCycle::Previous));
-        assert_eq!(target_cycle_from_control("Axis1+", &gamepad_keys), Some(TargetCycle::Next));
+        assert_eq!(target_cycle_from_control("ScratchUp", &keys), Some(TargetCycle::Next));
+        assert_eq!(target_cycle_from_control("ScratchDown", &keys), Some(TargetCycle::Previous));
+        assert_eq!(target_cycle_from_control("Axis1-", &gamepad_keys), Some(TargetCycle::Next));
+        assert_eq!(target_cycle_from_control("Axis1+", &gamepad_keys), Some(TargetCycle::Previous));
         assert_eq!(target_cycle_from_control("Axis2-", &gamepad_keys), None);
         assert_eq!(target_cycle_from_control("Axis2+", &gamepad_keys), None);
     }
