@@ -118,6 +118,11 @@ DLL を追加で staging root へコピーする:
 .\scripts\package-windows.ps1 -DllDir C:\vcpkg\installed\x64-windows\bin
 ```
 
+`-DllDir` と `BMZ_WINDOWS_DLL_DIRS` を省略した場合は、`repo\vcpkg_installed`,
+`VCPKG_ROOT`, PATH 上の `vcpkg`, Scoop の `~/scoop/apps/vcpkg/current`,
+`C:\vcpkg` の順で vcpkg の `installed\<triplet>\bin` を探し、見つかった DLL を
+staging root へコピーする。Scoop で入れた vcpkg も通常は自動検出される。
+
 複数指定する場合:
 
 ```powershell
@@ -136,13 +141,6 @@ $env:BMZ_WINDOWS_DLL_DIRS = "C:\vcpkg\installed\x64-windows\bin;C:\extra\dlls"
 ```powershell
 .\scripts\package-windows.ps1 -Smoke
 ```
-
-開発者の Windows PC では、このコマンドで生成
-
-```powershell
-.\scripts\package-windows.ps1 -DllDir C:\vcpkg\installed\x64-windows\bin -Installer -Iscc "C:\Users\hyrorre\AppData\Local\Programs\Inno Setup 6\ISCC.exe"
-```
-
 
 ### Windows FFmpeg / DLL bundling
 

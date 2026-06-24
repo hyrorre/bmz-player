@@ -121,6 +121,53 @@ function Copy-DllDirectory {
     }
 }
 
+function Add-UniquePath {
+    param(
+        [Parameter(Mandatory = $true)]$Paths,
+        [string]$Path
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Path)) {
+        return
+    }
+
+    $fullPath = [System.IO.Path]::GetFullPath($Path)
+    foreach ($existing in $Paths) {
+        if ([StringComparer]::OrdinalIgnoreCase.Equals($existing, $fullPath)) {
+            return
+        }
+    }
+    $Paths.Add($fullPath) | Out-Null
+}
+
+function Add-VcpkgRootBinCandidate {
+    param(
+        [Parameter(Mandatory = $true)]$Paths,
+        [string]$Root,
+        [Parameter(Mandatory = $true)][string]$Triplet
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Root)) {
+        return
+    }
+
+    Add-UniquePath $Paths (Join-Path (Join-Path (Join-Path $Root "installed") $Triplet) "bin")
+}
+
+function Add-VcpkgInstalledBinCandidate {
+    param(
+        [Parameter(Mandatory = $true)]$Paths,
+        [string]$InstalledRoot,
+        [Parameter(Mandatory = $true)][string]$Triplet
+    )
+
+    if ([string]::IsNullOrWhiteSpace($InstalledRoot)) {
+        return
+    }
+
+    Add-UniquePath $Paths (Join-Path (Join-Path $InstalledRoot $Triplet) "bin")
+}
+
 function Find-Iscc {
     param([string]$ExplicitPath)
 
@@ -163,6 +210,69 @@ function Resolve-InstallerArch {
         return "arm64"
     }
     return "x64"
+}
+
+function Resolve-VcpkgTriplet {
+    param([string]$Target)
+
+    if ($Target -match "i686|i586|x86-pc-windows") {
+        return "x86-windows"
+    }
+    if ($Target -match "aarch64|arm64") {
+        return "arm64-windows"
+    }
+    return "x64-windows"
+}
+
+function Find-DefaultVcpkgDllDirectory {
+    param(
+        [Parameter(Mandatory = $true)][string]$RepoRoot,
+        [string]$Target
+    )
+
+    $triplet = Resolve-VcpkgTriplet $Target
+    $candidates = [System.Collections.Generic.List[string]]::new()
+
+    Add-VcpkgInstalledBinCandidate $candidates (Join-Path $RepoRoot "vcpkg_installed") $triplet
+    Add-VcpkgRootBinCandidate $candidates $env:VCPKG_ROOT $triplet
+
+    $command = Get-Command "vcpkg" -ErrorAction SilentlyContinue
+    if ($command -and $command.Source) {
+        $source = [System.IO.Path]::GetFullPath($command.Source)
+        $commandRoot = Split-Path -Parent $source
+        Add-VcpkgRootBinCandidate $candidates $commandRoot $triplet
+
+        if ($source -match "\\scoop\\shims\\vcpkg(?:\.exe)?$") {
+            if ($env:USERPROFILE) {
+                Add-VcpkgRootBinCandidate $candidates (Join-Path $env:USERPROFILE "scoop\apps\vcpkg\current") $triplet
+            }
+        } elseif ($source -match "\\scoop\\apps\\vcpkg\\[^\\]+\\vcpkg(?:\.exe)?$") {
+            Add-VcpkgRootBinCandidate $candidates $commandRoot $triplet
+        }
+    }
+
+    if ($env:USERPROFILE) {
+        Add-VcpkgRootBinCandidate $candidates (Join-Path $env:USERPROFILE "scoop\apps\vcpkg\current") $triplet
+    }
+    if ($env:SCOOP) {
+        Add-VcpkgRootBinCandidate $candidates (Join-Path $env:SCOOP "apps\vcpkg\current") $triplet
+    }
+    if ($env:SCOOP_GLOBAL) {
+        Add-VcpkgRootBinCandidate $candidates (Join-Path $env:SCOOP_GLOBAL "apps\vcpkg\current") $triplet
+    }
+    Add-VcpkgRootBinCandidate $candidates "C:\vcpkg" $triplet
+
+    foreach ($candidate in $candidates) {
+        if (-not (Test-Path -LiteralPath $candidate -PathType Container)) {
+            continue
+        }
+        $dll = Get-ChildItem -LiteralPath $candidate -Filter "*.dll" -File -ErrorAction SilentlyContinue | Select-Object -First 1
+        if ($dll) {
+            return $candidate
+        }
+    }
+
+    return $null
 }
 
 $repoRoot = Resolve-RepoRoot
@@ -250,7 +360,15 @@ $envDllDirs = @()
 if ($env:BMZ_WINDOWS_DLL_DIRS) {
     $envDllDirs = $env:BMZ_WINDOWS_DLL_DIRS -split ";"
 }
-foreach ($dir in ($DllDir + $envDllDirs)) {
+$dllDirs = $DllDir + $envDllDirs
+if ($dllDirs.Count -eq 0) {
+    $defaultDllDir = Find-DefaultVcpkgDllDirectory $repoRoot $Target
+    if ($defaultDllDir) {
+        Write-Host "==> Auto-detected vcpkg DLL directory: $defaultDllDir"
+        $dllDirs = @($defaultDllDir)
+    }
+}
+foreach ($dir in $dllDirs) {
     if (-not [string]::IsNullOrWhiteSpace($dir)) {
         Write-Host "==> Copying DLLs from $dir"
         Copy-DllDirectory (Resolve-FullPath $dir) $stageDir
