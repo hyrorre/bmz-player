@@ -518,6 +518,11 @@ pub fn drain_human_inputs(session: &mut GameSession) {
 /// READY 開始前の play 導入中に、判定へは渡さず keybeam / lazer 用の lane key 状態だけ更新する。
 /// 入力時刻は壁時計ベースの `visual_now` に揃える。
 pub fn drain_pre_ready_visual_inputs(session: &mut GameSession, visual_now: TimeUs) {
+    if session.autoplay.as_ref().is_some_and(AutoplayController::is_full) {
+        discard_human_inputs(session);
+        return;
+    }
+
     let ctx = InputTimingContext {
         audio_clock: &session.audio_clock,
         offsets: session.offsets,
@@ -1793,6 +1798,7 @@ mod tests {
         use crate::input::binding::{BindingEntry, LaneBinding};
 
         let mut session = session_with_autoplay(chart_with_keysound());
+        session.autoplay = None;
         let mut backend = BufferedInputBackend::default();
         backend.push(DeviceInputEvent {
             device: DeviceId(1),
@@ -1819,6 +1825,43 @@ mod tests {
         assert_eq!(session.lane_keyon_started_at[Lane::Key1.index()], Some(TimeUs(2_000_000)));
         assert_eq!(session.recent_inputs.len(), 1);
         assert_eq!(session.score.past_notes, 0);
+    }
+
+    #[test]
+    fn drain_pre_ready_visual_inputs_discards_human_inputs_during_full_autoplay() {
+        use crate::input::backend::{
+            BufferedInputBackend, DeviceId, DeviceInputEvent, DeviceTimestamp, PhysicalControl,
+        };
+        use crate::input::binding::{BindingEntry, LaneBinding};
+
+        let mut session = session_with_autoplay(chart_with_keysound());
+        let mut backend = BufferedInputBackend::default();
+        backend.push(DeviceInputEvent {
+            device: DeviceId(1),
+            control: PhysicalControl::KeyboardKey("Z".to_string()),
+            kind: InputKind::Press,
+            timestamp: DeviceTimestamp::Unknown,
+        });
+        session.input_system = InputSystem {
+            backend: Box::new(backend),
+            translator: Box::new(DefaultInputTranslator {
+                binding: LaneBinding {
+                    entries: vec![BindingEntry {
+                        device: None,
+                        control: PhysicalControl::KeyboardKey("Z".to_string()),
+                        lane: Lane::Key1,
+                        scratch_direction: None,
+                    }],
+                },
+            }),
+        };
+
+        drain_pre_ready_visual_inputs(&mut session, TimeUs(2_000_000));
+
+        assert_eq!(session.lane_keyon_started_at[Lane::Key1.index()], None);
+        assert!(session.recent_inputs.is_empty());
+        assert_eq!(session.score.past_notes, 0);
+        assert!(session.replay_recorder.events.is_empty());
     }
 
     #[test]
