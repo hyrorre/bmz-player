@@ -36,6 +36,11 @@ pub struct LoadedLuaSkinValue {
     pub files: BTreeMap<String, String>,
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct LuaLoadRuntimeState {
+    pub option_values: BTreeMap<i32, bool>,
+}
+
 pub fn load_beatoraja_json_skin(path: &Path, enabled_options: &[i32]) -> Result<SkinDocument> {
     SkinDocument::load_beatoraja_json_with_options(path, enabled_options)
 }
@@ -50,7 +55,16 @@ pub fn load_lua_skin(
     options: &BTreeMap<String, String>,
     files: &BTreeMap<String, String>,
 ) -> Result<LoadedSkinDocument> {
-    let loaded = load_lua_skin_value(path, options, files)?;
+    load_lua_skin_with_runtime_state(path, options, files, &LuaLoadRuntimeState::default())
+}
+
+pub fn load_lua_skin_with_runtime_state(
+    path: &Path,
+    options: &BTreeMap<String, String>,
+    files: &BTreeMap<String, String>,
+    runtime_state: &LuaLoadRuntimeState,
+) -> Result<LoadedSkinDocument> {
+    let loaded = load_lua_skin_value_with_runtime_state(path, options, files, runtime_state)?;
     let value = normalize_lua_skin_document(loaded.value);
     let document = serde_path_to_error::deserialize(value)
         .with_context(|| format!("failed to parse lua skin as document: {}", path.display()))?;
@@ -75,7 +89,16 @@ pub fn load_lua_skin_value(
     options: &BTreeMap<String, String>,
     files: &BTreeMap<String, String>,
 ) -> Result<LoadedLuaSkinValue> {
-    lua::load_lua_skin_value(path, options, files)
+    load_lua_skin_value_with_runtime_state(path, options, files, &LuaLoadRuntimeState::default())
+}
+
+pub fn load_lua_skin_value_with_runtime_state(
+    path: &Path,
+    options: &BTreeMap<String, String>,
+    files: &BTreeMap<String, String>,
+    runtime_state: &LuaLoadRuntimeState,
+) -> Result<LoadedLuaSkinValue> {
+    lua::load_lua_skin_value(path, options, files, runtime_state)
 }
 
 pub fn load_lua_skin_header_value(path: &Path) -> Result<LoadedLuaSkinValue> {
@@ -418,6 +441,47 @@ mod tests {
             panic!("destination should be single");
         };
         assert_eq!(destination.draw, "option(1)");
+    }
+
+    #[test]
+    fn lua_skin_runtime_option_is_available_during_load() {
+        let root = unique_test_dir("bmz-skin-lua-runtime-option");
+        fs::create_dir_all(&root).unwrap();
+        fs::write(
+            root.join("result.luaskin"),
+            r#"
+            local main_state = require("main_state")
+            local y = 18
+            if main_state.option(1008) then
+                y = 45
+            end
+            return {
+                type = 7,
+                destination = {
+                    { id = "panel", dst = {{ x = 1, y = y, w = 3, h = 4 }} }
+                }
+            }
+            "#,
+        )
+        .unwrap();
+
+        let loaded = load_lua_skin_with_runtime_state(
+            &root.join("result.luaskin"),
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            &LuaLoadRuntimeState { option_values: BTreeMap::from([(1008, true)]) },
+        )
+        .unwrap();
+
+        let bmz_render::skin::DestinationListEntry::Single(destination) =
+            &loaded.document.destination[0]
+        else {
+            panic!("destination should be single");
+        };
+        let bmz_render::skin::SkinDstEntry::Frame(frame) = &destination.dst[0] else {
+            panic!("destination frame should be static");
+        };
+        assert_eq!(frame.y, Some(45));
     }
 
     #[test]

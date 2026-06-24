@@ -16,7 +16,7 @@ use bmz_render::skin::{
     SKIN_EXPR_FAST_SLOW_BREAKDOWN_HEIGHT, SKIN_EXPR_FS_THRESHOLD, SKIN_REF_PLAY_GAUGE_TYPE,
 };
 
-use crate::{LoadedLuaSkinValue, SkinLoadWarning};
+use crate::{LoadedLuaSkinValue, LuaLoadRuntimeState, SkinLoadWarning};
 
 const LUA_INSTRUCTION_LIMIT: i64 = 2_000_000;
 const LUA_HOOK_INTERVAL: u32 = 1_000;
@@ -49,8 +49,9 @@ pub fn load_lua_skin_value(
     input: &Path,
     options: &BTreeMap<String, String>,
     files: &BTreeMap<String, String>,
+    runtime_state: &LuaLoadRuntimeState,
 ) -> Result<LoadedLuaSkinValue> {
-    let (value, warnings, files) = execute_lua_skin(input, options, files)?;
+    let (value, warnings, files) = execute_lua_skin(input, options, files, runtime_state)?;
     Ok(LoadedLuaSkinValue {
         value,
         warnings: warnings.into_iter().map(|message| SkinLoadWarning { message }).collect(),
@@ -73,7 +74,8 @@ pub fn convert_lua_skin_to_json(
     options: &BTreeMap<String, String>,
     files: &BTreeMap<String, String>,
 ) -> Result<ConvertReport> {
-    let (json, warnings, _) = execute_lua_skin(input, options, files)?;
+    let (json, warnings, _) =
+        execute_lua_skin(input, options, files, &LuaLoadRuntimeState::default())?;
     if let Some(parent) = output.parent() {
         fs::create_dir_all(parent)
             .with_context(|| format!("failed to create output dir: {}", parent.display()))?;
@@ -99,8 +101,15 @@ fn execute_lua_skin_header(input: &Path) -> Result<(JsonValue, Vec<String>)> {
 
     let lua = Lua::new();
     install_instruction_limit(&lua);
-    let probe =
-        install_sandbox(&lua, &root, &BTreeMap::new(), None, &BTreeMap::new(), &BTreeMap::new())?;
+    let probe = install_sandbox(
+        &lua,
+        &root,
+        &BTreeMap::new(),
+        None,
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+        &LuaLoadRuntimeState::default(),
+    )?;
     let header = lua
         .load(&source)
         .set_name(input.to_string_lossy().as_ref())
@@ -116,6 +125,7 @@ fn execute_lua_skin(
     input: &Path,
     options: &BTreeMap<String, String>,
     files: &BTreeMap<String, String>,
+    runtime_state: &LuaLoadRuntimeState,
 ) -> Result<(JsonValue, Vec<String>, BTreeMap<String, String>)> {
     let input = canonicalize_skin_path(input)
         .with_context(|| format!("failed to canonicalize input: {}", input.display()))?;
@@ -131,8 +141,15 @@ fn execute_lua_skin(
 
     let header_lua = Lua::new();
     install_instruction_limit(&header_lua);
-    let header_probe =
-        install_sandbox(&header_lua, &root, options, None, &BTreeMap::new(), &BTreeMap::new())?;
+    let header_probe = install_sandbox(
+        &header_lua,
+        &root,
+        options,
+        None,
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+        &LuaLoadRuntimeState::default(),
+    )?;
     let header = header_lua
         .load(&source)
         .set_name(input.to_string_lossy().as_ref())
@@ -161,8 +178,15 @@ fn execute_lua_skin(
 
     let lua = Lua::new();
     install_instruction_limit(&lua);
-    let main_state_probe =
-        install_sandbox(&lua, &root, options, Some(&skin_options), &skin_files, &skin_offsets)?;
+    let main_state_probe = install_sandbox(
+        &lua,
+        &root,
+        options,
+        Some(&skin_options),
+        &skin_files,
+        &skin_offsets,
+        runtime_state,
+    )?;
     let value = lua
         .load(&source)
         .set_name(input.to_string_lossy().as_ref())
@@ -245,8 +269,14 @@ fn install_sandbox(
     skin_config_options: Option<&BTreeMap<String, i64>>,
     skin_files: &BTreeMap<String, String>,
     skin_offsets: &BTreeMap<String, LuaSkinOffsetValue>,
+    runtime_state: &LuaLoadRuntimeState,
 ) -> Result<Arc<Mutex<MainStateProbe>>> {
     let main_state_probe = Arc::new(Mutex::new(MainStateProbe::default()));
+    if !runtime_state.option_values.is_empty() {
+        let mut probe =
+            main_state_probe.lock().map_err(|_| anyhow!("main_state probe lock poisoned"))?;
+        probe.option_values = runtime_state.option_values.clone();
+    }
     let globals = lua.globals();
     if let Some(skin_config_options) = skin_config_options {
         let skin_config = lua.create_table()?;
@@ -680,7 +710,7 @@ impl MainStateProbe {
 
     fn option(&mut self, option_id: i32) -> bool {
         if matches!(self.mode, MainStateProbeMode::RuntimeStub) {
-            return false;
+            return self.option_values.get(&option_id).copied().unwrap_or(false);
         }
         self.option_calls.push(option_id);
         self.option_values

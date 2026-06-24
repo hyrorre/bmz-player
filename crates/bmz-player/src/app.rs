@@ -110,6 +110,7 @@ use crate::screens::settings_model::{
 use crate::select_options::{ArrangeOption, AssistOption, DoubleOption, HsFixOption, TargetOption};
 use crate::skin_loader::{
     DecodedSkin, PreparedSource, SkinKind, UploadedSkin, decode_beatoraja_skin_with_options,
+    decode_beatoraja_skin_with_options_and_runtime_state,
     default_play_skin_document_path_from_paths, default_skin_document_path_from_paths,
     install_decoded_font, install_decoded_skin, is_decodable_skin_path,
     load_default_skin_into_renderer_from_paths, play_skin_selection_for, set_decoded_skin_context,
@@ -822,7 +823,7 @@ fn fmt_profile_ms(total_us: u128, frames: u128) -> String {
 
 type PlaySkinSignature = (KeyMode, String, BTreeMap<String, String>, BTreeMap<String, String>);
 type ResultSkinSignature =
-    (ResultSkinSlot, String, BTreeMap<String, String>, BTreeMap<String, String>);
+    (ResultSkinSlot, String, BTreeMap<String, String>, BTreeMap<String, String>, bool);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ResultSkinSlot {
@@ -1702,8 +1703,11 @@ impl WinitApp {
             system_audio.as_ref().map(|audio| SelectChartPreview::new(audio.engine()));
         let audio_output_open_attempted = audio_runtime.is_some();
         let player_stats = player_stats_snapshot(&boot.score_db);
-        let initial_result_skin_signature =
-            result_skin_signature_for_config(&boot.profile_config.skin, ResultSkinSlot::Normal);
+        let initial_result_skin_signature = result_skin_signature_for_config(
+            &boot.profile_config.skin,
+            ResultSkinSlot::Normal,
+            false,
+        );
 
         let mut app = Self {
             boot,
@@ -8438,14 +8442,15 @@ impl WinitApp {
 
     fn spawn_result_skin_decode_for(&mut self, slot: ResultSkinSlot) {
         let skin = &self.boot.profile_config.skin;
-        let signature = result_skin_signature_for_config(skin, slot);
+        let table_song = !self.play_table_text_primary.is_empty();
+        let signature = result_skin_signature_for_config(skin, slot, table_song);
         if !self.pending_result_skin && self.last_result_skin_signature.as_ref() == Some(&signature)
         {
             tracing::debug!(?slot, "result skin reuse (signature unchanged)");
             return;
         }
 
-        let (_, trimmed, options, files) = signature.clone();
+        let (_, trimmed, options, files, table_song) = signature.clone();
         self.last_result_skin_signature = Some(signature);
         self.pending_result_skin = false;
         let generation = self.skin_reload_generations.bump(SkinKind::Result);
@@ -8490,6 +8495,7 @@ impl WinitApp {
             SkinKind::Result,
             options,
             files,
+            lua_runtime_state_for_result_table_song(table_song),
         );
         self.pending_result_skin = true;
         tracing::info!(?slot, path = %path_label, generation, "result skin decode queued");
@@ -9499,6 +9505,7 @@ impl WinitApp {
             SkinKind::Play,
             options,
             files,
+            bmz_skin::LuaLoadRuntimeState::default(),
         );
         self.pending_play_skin = true;
         tracing::info!(?key_mode, path = %path_label, generation, "play skin decode queued");
@@ -10239,6 +10246,7 @@ fn load_initial_skin_textures(
                 SkinKind::Decide,
                 if decide_trimmed.is_empty() { BTreeMap::new() } else { decide_options.clone() },
                 if decide_trimmed.is_empty() { BTreeMap::new() } else { decide_files.clone() },
+                bmz_skin::LuaLoadRuntimeState::default(),
             );
             pending_decide = true;
         }
@@ -10267,6 +10275,7 @@ fn load_initial_skin_textures(
                 SkinKind::Result,
                 if result_trimmed.is_empty() { BTreeMap::new() } else { result_options.clone() },
                 if result_trimmed.is_empty() { BTreeMap::new() } else { result_files.clone() },
+                lua_runtime_state_for_result_table_song(false),
             );
             pending_result = true;
         }
@@ -10409,6 +10418,7 @@ fn reload_skin_textures(
                 kind,
                 if trimmed.is_empty() { BTreeMap::new() } else { options.clone() },
                 if trimmed.is_empty() { BTreeMap::new() } else { files.clone() },
+                bmz_skin::LuaLoadRuntimeState::default(),
             );
             match kind {
                 SkinKind::Select => pending_select = true,
@@ -10726,12 +10736,19 @@ fn spawn_skin_decode(
     kind: SkinKind,
     options: BTreeMap<String, String>,
     files: BTreeMap<String, String>,
+    runtime_state: bmz_skin::LuaLoadRuntimeState,
 ) {
     let send_path = path.clone();
     thread::Builder::new()
         .name(format!("skin-decode-{:?}", kind))
         .spawn(move || {
-            let result = decode_beatoraja_skin_with_options(&path, kind, &options, &files);
+            let result = decode_beatoraja_skin_with_options_and_runtime_state(
+                &path,
+                kind,
+                &options,
+                &files,
+                &runtime_state,
+            );
             let _ = tx.send(PendingSkinResult { generation, path: send_path, kind, result });
         })
         .expect("failed to spawn skin decode thread");
@@ -12246,6 +12263,7 @@ fn should_show_course_stage_result(
 fn result_skin_signature_for_config(
     skin: &crate::config::profile_config::SkinConfig,
     slot: ResultSkinSlot,
+    table_song: bool,
 ) -> ResultSkinSignature {
     match slot {
         ResultSkinSlot::Normal => (
@@ -12253,14 +12271,22 @@ fn result_skin_signature_for_config(
             skin.result.trim().to_string(),
             skin.result_options.clone(),
             skin.result_files.clone(),
+            table_song,
         ),
         ResultSkinSlot::Course => (
             slot,
             skin.course_result.trim().to_string(),
             skin.course_result_options.clone(),
             skin.course_result_files.clone(),
+            table_song,
         ),
     }
+}
+
+fn lua_runtime_state_for_result_table_song(table_song: bool) -> bmz_skin::LuaLoadRuntimeState {
+    let mut option_values = BTreeMap::new();
+    option_values.insert(1008, table_song);
+    bmz_skin::LuaLoadRuntimeState { option_values }
 }
 
 /// リザルト画面で押すと終了アニメーションを開始するレーン。
