@@ -7,7 +7,9 @@
   role="img"
   aria-label="BMZ Player Windows icon"
 >
-  <g transform="translate(512 512) scale(1.1139896373) translate(-512 -512)">
+  <circle cx="512" cy="512" r="512" fill="#fff"/>
+
+  <g transform="translate(512 512) scale(1.0621761658) translate(-512 -512)">
     <!-- outer thin black ring -->
     <circle cx="512" cy="512" r="386" fill="#000"/>
     <circle cx="512" cy="512" r="361" fill="#fff"/>
