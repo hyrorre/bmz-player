@@ -1956,10 +1956,13 @@ fn canonicalize_skin_child(root: &Path, relative: &str) -> Option<PathBuf> {
     if !path.is_file() {
         return None;
     }
+    let Ok(root) = canonicalize_skin_path(root) else {
+        return None;
+    };
     let Ok(canonical) = canonicalize_skin_path(&path) else {
         return None;
     };
-    canonical.starts_with(root).then_some(canonical)
+    canonical.starts_with(&root).then_some(canonical)
 }
 
 fn lua_value_to_log_string(value: &Value) -> String {

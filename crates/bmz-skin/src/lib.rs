@@ -678,11 +678,22 @@ mod tests {
     }
 
     #[test]
-    fn lua_skin_io_stub_reads_skin_alias_and_ignores_writes() {
+    fn lua_skin_io_stub_reads_skin_alias_from_renamed_root_and_ignores_writes() {
         let parent = unique_test_dir("bmz-skin-lua");
-        let root = parent.join("m_select");
+        let root = parent.join("mz-select");
         fs::create_dir_all(root.join("customize/advanced")).unwrap();
-        fs::write(root.join("customize/advanced/enable.txt"), "first.lua\nsecond.lua\n").unwrap();
+        fs::write(root.join("customize/advanced/enable.txt"), "parts.lua\n").unwrap();
+        fs::write(
+            root.join("customize/advanced/parts.lua"),
+            r#"
+            return {
+                load = function()
+                    return "loaded"
+                end
+            }
+            "#,
+        )
+        .unwrap();
         fs::write(
             root.join("music_select.luaskin"),
             r#"
@@ -692,6 +703,10 @@ mod tests {
             for line in f:lines() do
                 count = count + 1
                 out:write(line)
+                local parts = dofile("skin/m_select/customize/advanced/" .. line)
+                if parts.load() == "loaded" then
+                    count = count + 1
+                end
             end
             for _ in io.lines("skin/m_select/customize/advanced/enable.txt") do
                 count = count + 1
@@ -715,7 +730,7 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(loaded.value["text"][0]["constantText"], "4");
+        assert_eq!(loaded.value["text"][0]["constantText"], "3");
         assert!(!root.join("customize/advanced/load_log.txt").exists());
     }
 
@@ -1901,7 +1916,7 @@ mod tests {
     #[test]
     fn m_select_lua_select_skin_loads_when_available() {
         let skin_path = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../data/skins/m_select/music_select.luaskin");
+            .join("../../data/skins/mz-select/music_select.luaskin");
         if !skin_path.is_file() {
             return;
         }
