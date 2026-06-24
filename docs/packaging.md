@@ -2,8 +2,10 @@
 
 ## App icons
 
-BMZ Player の desktop app icon は `bmz-ir-web/public/icon.svg` を source とし、
-platform 用 asset は `scripts/generate-app-icons.sh` で生成する。
+BMZ Player の desktop app icon は `scripts/generate-app-icons.sh` で生成する。
+web 用の元 icon は `bmz-ir-web/public/icon.svg` に置き、desktop 配布用は
+Apple / Windows それぞれの template に合わせた source SVG を `assets/app-icon/`
+配下に置く。
 
 ```sh
 scripts/generate-app-icons.sh
@@ -13,14 +15,18 @@ scripts/generate-app-icons.sh
 
 ```text
 assets/app-icon/
+  bmz-player-apple.svg
+  bmz-player-windows.svg
   bmz-player.png
   bmz-player-window.png
+  bmz-player-window-windows.png
   bmz-player.ico
   bmz-player.icns
 ```
 
 `bmz-player-window.png` は winit の実行時ウィンドウ icon として `bmz-player`
-binary に埋め込む。`bmz-player.ico` は Windows installer / shortcut 用、
+binary に埋め込む。Windows build では `bmz-player-window-windows.png` を
+埋め込む。`bmz-player.ico` は Windows installer / shortcut 用、
 `bmz-player.icns` は macOS `.app` bundle 用。
 
 ## Windows installer (Inno Setup)

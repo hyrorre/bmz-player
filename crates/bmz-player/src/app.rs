@@ -10129,10 +10129,19 @@ fn window_attributes_from_config(
 }
 
 fn app_window_icon() -> Option<Icon> {
-    const ICON_PNG: &[u8] = include_bytes!("../../../assets/app-icon/bmz-player-window.png");
-    let image = image::load_from_memory(ICON_PNG).ok()?.into_rgba8();
+    let image = image::load_from_memory(app_window_icon_png()).ok()?.into_rgba8();
     let (width, height) = image.dimensions();
     Icon::from_rgba(image.into_raw(), width, height).ok()
+}
+
+#[cfg(target_os = "windows")]
+fn app_window_icon_png() -> &'static [u8] {
+    include_bytes!("../../../assets/app-icon/bmz-player-window-windows.png")
+}
+
+#[cfg(not(target_os = "windows"))]
+fn app_window_icon_png() -> &'static [u8] {
+    include_bytes!("../../../assets/app-icon/bmz-player-window.png")
 }
 
 /// 設定のウィンドウモードに対応する winit の `Fullscreen` を返す。
