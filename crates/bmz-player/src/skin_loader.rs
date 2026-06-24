@@ -1626,7 +1626,7 @@ mod tests {
     #[test]
     fn m_select_lua_select_skin_renders_items_when_available() {
         let skin_path = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../data/skins/m_select/music_select.luaskin");
+            .join("../../data/skins/mz-select/music_select.luaskin");
         if !skin_path.is_file() {
             return;
         }

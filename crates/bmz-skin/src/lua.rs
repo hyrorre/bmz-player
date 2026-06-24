@@ -1937,22 +1937,29 @@ fn resolve_skin_io_path(root: &Path, requested: &str) -> Result<PathBuf> {
 fn resolve_beatoraja_skin_alias(root: &Path, relative: &str) -> Option<PathBuf> {
     let rest = relative.strip_prefix("skin/")?;
     let (skin_name, skin_relative) = rest.split_once('/')?;
+    if let Some(canonical) = canonicalize_skin_child(root, skin_relative) {
+        return Some(canonical);
+    }
     for ancestor in root.ancestors() {
         if ancestor.file_name().and_then(|name| name.to_str()) != Some(skin_name) {
             continue;
         }
-        let path = ancestor.join(skin_relative);
-        if !path.is_file() {
-            continue;
-        }
-        let Ok(canonical) = canonicalize_skin_path(&path) else {
-            continue;
-        };
-        if canonical.starts_with(ancestor) {
+        if let Some(canonical) = canonicalize_skin_child(ancestor, skin_relative) {
             return Some(canonical);
         }
     }
     None
+}
+
+fn canonicalize_skin_child(root: &Path, relative: &str) -> Option<PathBuf> {
+    let path = root.join(relative);
+    if !path.is_file() {
+        return None;
+    }
+    let Ok(canonical) = canonicalize_skin_path(&path) else {
+        return None;
+    };
+    canonical.starts_with(root).then_some(canonical)
 }
 
 fn lua_value_to_log_string(value: &Value) -> String {
@@ -4458,6 +4465,21 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("bmz-lua-{tag}-{nanos}-{n}"));
         fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    #[test]
+    fn beatoraja_skin_alias_accepts_renamed_skin_root() {
+        let root = unique_skin_test_dir("renamed-root").join("mz-select");
+        fs::create_dir_all(root.join("customize/advanced")).unwrap();
+        fs::write(root.join("customize/advanced/enable.txt"), "parts.lua\n").unwrap();
+
+        let resolved =
+            resolve_skin_io_path(&root, "skin/m_select/customize/advanced/enable.txt").unwrap();
+
+        assert_eq!(
+            resolved,
+            canonicalize_skin_path(&root.join("customize/advanced/enable.txt")).unwrap()
+        );
     }
 
     #[test]

@@ -11198,7 +11198,7 @@ fn launch_update_installer(path: &Path) -> Result<()> {
             .arg("/SP-")
             .spawn()
             .with_context(|| format!("failed to launch update installer: {}", path.display()))?;
-        return Ok(());
+        Ok(())
     }
     #[cfg(not(target_os = "windows"))]
     {
@@ -15200,6 +15200,25 @@ mod tests {
             assert_eq!(candidate.origin, SkinCandidateOrigin::Bundled);
             assert!(candidate.name.contains("Rm-skin"), "candidate name: {}", candidate.name);
         }
+    }
+
+    #[test]
+    fn skin_catalog_loads_mz_select_lua_header_when_available() {
+        let repo_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let skin_root = repo_root.join("data/skins");
+        let path = skin_root.join("mz-select/music_select.luaskin");
+        if !path.is_file() {
+            return;
+        }
+
+        let (skin_type, candidate) =
+            load_skin_candidate(&skin_root, &path, SkinCandidateOrigin::Bundled)
+                .expect("load mz-select catalog candidate");
+
+        assert_eq!(skin_type, 5);
+        assert_eq!(candidate.path, "resource:skins/mz-select/music_select.luaskin");
+        assert_eq!(candidate.origin, SkinCandidateOrigin::Bundled);
+        assert!(candidate.name.contains("m-select"), "candidate name: {}", candidate.name);
     }
 
     #[test]
