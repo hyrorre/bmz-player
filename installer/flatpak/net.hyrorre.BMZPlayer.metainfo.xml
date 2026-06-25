@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>net.hyrorre.BMZPlayer</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>GPL-3.0-only</project_license>
+  <name>BMZ Player</name>
+  <summary>BMS player for LunaticRave2 and beatoraja style charts</summary>
+  <description>
+    <p>
+      BMZ Player is a BMS player aiming for compatibility with LunaticRave2
+      and beatoraja style play, skins, scoring, and replay workflows.
+    </p>
+    <p>
+      The Flatpak package includes the default BMZ skin, bundled compatible
+      skins, and a sample playable chart for smoke testing.
+    </p>
+  </description>
+  <launchable type="desktop-id">net.hyrorre.BMZPlayer.desktop</launchable>
+  <categories>
+    <category>Game</category>
+    <category>AudioVideo</category>
+    <category>Music</category>
+  </categories>
+  <url type="homepage">https://hyrorre.net/</url>
+  <developer id="net.hyrorre">
+    <name>hyrorre</name>
+  </developer>
+  <provides>
+    <binary>bmz-player</binary>
+  </provides>
+  <releases>
+    <release version="0.1.1" date="2026-06-25" />
+  </releases>
+  <content_rating type="oars-1.1" />
+</component>

@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=BMZ Player
+Comment=BMS player for LunaticRave2 and beatoraja style charts
+Exec=bmz-player-flatpak
+Icon=net.hyrorre.BMZPlayer
+Terminal=false
+Categories=Game;
+Keywords=BMS;rhythm game;beatoraja;LR2;

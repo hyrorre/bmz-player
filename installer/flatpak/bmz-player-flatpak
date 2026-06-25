@@ -1,0 +1,6 @@
+#!/bin/sh
+set -eu
+
+export BMZ_RESOURCE_DIR=/app/share/bmz-player
+
+exec /app/bin/bmz-player "$@"

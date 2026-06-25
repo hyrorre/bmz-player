@@ -260,6 +260,88 @@ BMZ_DATA_DIR=/tmp/bmz-player-package-data \
   --smoke-exit-after-frames 3
 ```
 
+## Linux Flatpak
+
+Linux の Flatpak manifest と desktop integration file は `installer/flatpak/` に置く。
+Flatpak app id は、所有ドメイン `hyrorre.net` に合わせて
+`net.hyrorre.BMZPlayer` とする。macOS の bundle id は別途変更するまで現状維持。
+
+必要な runtime / SDK:
+
+```sh
+flatpak remote-add --if-not-exists --user flathub https://dl.flathub.org/repo/flathub.flatpakrepo
+flatpak install --user flathub org.freedesktop.Platform//25.08 org.freedesktop.Sdk//25.08 org.freedesktop.Sdk.Extension.rust-stable//25.08 org.freedesktop.Sdk.Extension.llvm22//25.08
+```
+
+submodule skin が空の場合は先に初期化する:
+
+```sh
+git submodule update --init --recursive data/skins/Rmz-skin data/skins/mz-select
+```
+
+Flatpak bundle を作る:
+
+```sh
+scripts/package-flatpak.sh
+```
+
+既定の出力先:
+
+```text
+dist/flatpak/bmz-player-<version>-linux.flatpak
+```
+
+インストールと smoke test まで行う:
+
+```sh
+scripts/package-flatpak.sh --install --smoke
+```
+
+手動で実行する:
+
+```sh
+flatpak run net.hyrorre.BMZPlayer
+flatpak run net.hyrorre.BMZPlayer --boot-play-sample --smoke-exit-after-frames 3
+```
+
+Flatpak layout:
+
+```text
+/app/bin/
+  bmz-player
+  bmz-player-flatpak
+/app/share/bmz-player/
+  skins/
+    default/
+    Rmz-skin/
+    mz-select/
+  songs/
+    sample-playable/
+  licenses/
+    BMZ-GPL-3.0-only.txt
+    license-notes.md
+/app/share/applications/net.hyrorre.BMZPlayer.desktop
+/app/share/metainfo/net.hyrorre.BMZPlayer.metainfo.xml
+/app/share/icons/hicolor/256x256/apps/net.hyrorre.BMZPlayer.png
+```
+
+`bmz-player-flatpak` wrapper が `BMZ_RESOURCE_DIR=/app/share/bmz-player` を設定する。
+`config.toml`, `library.db`, `profiles`, `score.db`, `replay` などのユーザー状態は
+Flatpak sandbox の XDG path に作られる。通常は host 側の
+`~/.var/app/net.hyrorre.BMZPlayer/` 配下になる。
+`finish-args` は Wayland / fallback X11 / DRI / PulseAudio / network / input device を
+許可する。`--device=input` はゲームパッド入力用。
+
+現在の manifest はローカル配布 bundle を作りやすくするため、build 時に Cargo が
+crate を取得できるよう `build-args: --share=network` を使う。Flathub へ提出する場合は
+`flatpak-cargo-generator.py` などで `Cargo.lock` から cargo source manifest を生成し、
+network build を外す。
+
+FFmpeg は `ffmpeg-next` 経由で音声/動画 decode に使う。Flatpak artifact を公開する前に
+実際に含まれる FFmpeg library の version / configure flags / license を確認し、
+`docs/licenses.md` の release checklist に従う。`--enable-nonfree` を含む FFmpeg build は
+配布物に含めない。
+
 ## GitHub Actions release build
 
 `.github/workflows/release-apps.yml` は GitHub Release が `published` になったときに

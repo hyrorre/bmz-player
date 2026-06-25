@@ -1,0 +1,57 @@
+id: net.hyrorre.BMZPlayer
+runtime: org.freedesktop.Platform
+runtime-version: '25.08'
+sdk: org.freedesktop.Sdk
+sdk-extensions:
+  - org.freedesktop.Sdk.Extension.rust-stable
+  - org.freedesktop.Sdk.Extension.llvm22
+command: bmz-player-flatpak
+
+finish-args:
+  - --share=ipc
+  - --socket=wayland
+  - --socket=fallback-x11
+  - --socket=pulseaudio
+  - --device=dri
+  - --device=input
+  - --share=network
+
+modules:
+  - name: bmz-player
+    buildsystem: simple
+    build-options:
+      env:
+        PATH: /usr/lib/sdk/rust-stable/bin:/usr/lib/sdk/llvm22/bin:/app/bin:/usr/bin
+        LIBCLANG_PATH: /usr/lib/sdk/llvm22/lib
+      build-args:
+        - --share=network
+    build-commands:
+      - cargo build --release -p bmz-player --no-default-features --features pulseaudio
+      - install -Dm755 target/release/bmz-player /app/bin/bmz-player
+      - install -Dm755 installer/flatpak/bmz-player-flatpak /app/bin/bmz-player-flatpak
+      - install -Dm644 installer/flatpak/net.hyrorre.BMZPlayer.desktop /app/share/applications/net.hyrorre.BMZPlayer.desktop
+      - install -Dm644 installer/flatpak/net.hyrorre.BMZPlayer.metainfo.xml /app/share/metainfo/net.hyrorre.BMZPlayer.metainfo.xml
+      - install -Dm644 assets/app-icon/bmz-player-window-windows.png /app/share/icons/hicolor/256x256/apps/net.hyrorre.BMZPlayer.png
+      - mkdir -p /app/share/bmz-player/skins /app/share/bmz-player/songs /app/share/bmz-player/licenses
+      - cp -a data/skins/default /app/share/bmz-player/skins/default
+      - cp -a data/skins/Rmz-skin /app/share/bmz-player/skins/Rmz-skin
+      - cp -a data/skins/mz-select /app/share/bmz-player/skins/mz-select
+      - cp -a data/songs/sample-playable /app/share/bmz-player/songs/sample-playable
+      - find /app/share/bmz-player -name .git -prune -exec rm -rf '{}' +
+      - install -Dm644 LICENSE /app/share/bmz-player/licenses/BMZ-GPL-3.0-only.txt
+      - install -Dm644 docs/licenses.md /app/share/bmz-player/licenses/license-notes.md
+    sources:
+      - type: dir
+        path: ../..
+        skip:
+          - .git
+          - .flatpak-builder
+          - target
+          - dist
+          - data/cache
+          - data/logs
+          - data/profiles
+          - data/config.toml
+          - data/library.db
+          - data/library.db-shm
+          - data/library.db-wal
