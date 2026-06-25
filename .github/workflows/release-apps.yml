@@ -210,6 +210,13 @@ jobs:
     env:
       BMZ_VERSION: ${{ needs.metadata.outputs.version }}
       BMZ_MACOS_ARCH: ${{ matrix.arch }}
+      BMZ_MACOS_CODESIGN_IDENTITY: ${{ secrets.BMZ_MACOS_CODESIGN_IDENTITY }}
+      BMZ_MACOS_CERTIFICATE_P12_BASE64: ${{ secrets.BMZ_MACOS_CERTIFICATE_P12_BASE64 }}
+      BMZ_MACOS_CERTIFICATE_PASSWORD: ${{ secrets.BMZ_MACOS_CERTIFICATE_PASSWORD }}
+      BMZ_MACOS_KEYCHAIN_PASSWORD: ${{ secrets.BMZ_MACOS_KEYCHAIN_PASSWORD }}
+      BMZ_MACOS_NOTARY_APPLE_ID: ${{ secrets.BMZ_MACOS_NOTARY_APPLE_ID }}
+      BMZ_MACOS_NOTARY_PASSWORD: ${{ secrets.BMZ_MACOS_NOTARY_PASSWORD }}
+      BMZ_MACOS_NOTARY_TEAM_ID: ${{ secrets.BMZ_MACOS_NOTARY_TEAM_ID }}
     steps:
       - name: Checkout release ref
         uses: actions/checkout@v7
@@ -246,6 +253,49 @@ jobs:
           rustup target add "${{ matrix.target }}"
           cargo clean -p ffmpeg-sys-next --target "${{ matrix.target }}"
 
+      - name: Import macOS signing certificate
+        run: |
+          {
+            echo "BMZ_MACOS_SIGNING_READY=0"
+            echo "BMZ_MACOS_NOTARIZATION_READY=0"
+          } >> "${GITHUB_ENV}"
+
+          if [[ -z "${BMZ_MACOS_CODESIGN_IDENTITY}" || -z "${BMZ_MACOS_CERTIFICATE_P12_BASE64}" || -z "${BMZ_MACOS_CERTIFICATE_PASSWORD}" || -z "${BMZ_MACOS_KEYCHAIN_PASSWORD}" ]]; then
+            echo "Developer ID signing secrets are not configured; using ad-hoc signing."
+            exit 0
+          fi
+
+          certificate_path="${RUNNER_TEMP}/bmz-macos-codesign.p12"
+          keychain_path="${RUNNER_TEMP}/bmz-macos-codesign.keychain-db"
+          printf '%s' "${BMZ_MACOS_CERTIFICATE_P12_BASE64}" | base64 -D > "${certificate_path}"
+
+          security create-keychain -p "${BMZ_MACOS_KEYCHAIN_PASSWORD}" "${keychain_path}"
+          security set-keychain-settings -lut 21600 "${keychain_path}"
+          security unlock-keychain -p "${BMZ_MACOS_KEYCHAIN_PASSWORD}" "${keychain_path}"
+          security import "${certificate_path}" \
+            -P "${BMZ_MACOS_CERTIFICATE_PASSWORD}" \
+            -A \
+            -t cert \
+            -f pkcs12 \
+            -k "${keychain_path}"
+          security set-key-partition-list \
+            -S apple-tool:,apple: \
+            -s \
+            -k "${BMZ_MACOS_KEYCHAIN_PASSWORD}" \
+            "${keychain_path}"
+          security list-keychains -d user -s "${keychain_path}" $(security list-keychains -d user | tr -d '"')
+
+          {
+            echo "BMZ_MACOS_SIGNING_READY=1"
+            echo "BMZ_MACOS_KEYCHAIN_PATH=${keychain_path}"
+          } >> "${GITHUB_ENV}"
+
+          if [[ -n "${BMZ_MACOS_NOTARY_APPLE_ID}" && -n "${BMZ_MACOS_NOTARY_PASSWORD}" && -n "${BMZ_MACOS_NOTARY_TEAM_ID}" ]]; then
+            echo "BMZ_MACOS_NOTARIZATION_READY=1" >> "${GITHUB_ENV}"
+          else
+            echo "Notarization secrets are not configured; the app will be signed but not notarized."
+          fi
+
       - name: Record macOS dependency provenance
         run: |
           mkdir -p dist/release
@@ -259,14 +309,37 @@ jobs:
 
       - name: Package macOS app
         run: |
+          sign_args=(--ad-hoc-sign)
+          if [[ "${BMZ_MACOS_SIGNING_READY}" == "1" ]]; then
+            sign_args=(--sign "${BMZ_MACOS_CODESIGN_IDENTITY}")
+          fi
+
           scripts/package-macos-app.sh \
             --target "${{ matrix.target }}" \
             --bundle-dylibs \
-            --ad-hoc-sign
+            "${sign_args[@]}"
 
       - name: Verify packaged executable
         run: |
           "dist/macos/BMZ Player.app/Contents/MacOS/bmz-player" --help
+
+      - name: Notarize macOS app
+        run: |
+          if [[ "${BMZ_MACOS_NOTARIZATION_READY}" != "1" ]]; then
+            echo "Notarization secrets are not configured; skipping notarization."
+            exit 0
+          fi
+
+          notary_zip="${RUNNER_TEMP}/bmz-player-${BMZ_VERSION}-macos-${BMZ_MACOS_ARCH}-notary.zip"
+          ditto -c -k --keepParent "dist/macos/BMZ Player.app" "${notary_zip}"
+          xcrun notarytool submit "${notary_zip}" \
+            --apple-id "${BMZ_MACOS_NOTARY_APPLE_ID}" \
+            --password "${BMZ_MACOS_NOTARY_PASSWORD}" \
+            --team-id "${BMZ_MACOS_NOTARY_TEAM_ID}" \
+            --wait
+          xcrun stapler staple "dist/macos/BMZ Player.app"
+          xcrun stapler validate "dist/macos/BMZ Player.app"
+          spctl --assess --type execute --verbose=4 "dist/macos/BMZ Player.app"
 
       - name: Create macOS release files
         run: |
@@ -283,6 +356,13 @@ jobs:
           path: dist/release/*
           if-no-files-found: error
           retention-days: 14
+
+      - name: Delete macOS signing keychain
+        if: always()
+        run: |
+          if [[ -n "${BMZ_MACOS_KEYCHAIN_PATH:-}" && -f "${BMZ_MACOS_KEYCHAIN_PATH}" ]]; then
+            security delete-keychain "${BMZ_MACOS_KEYCHAIN_PATH}"
+          fi
 
   build-flatpak:
     name: Build Linux Flatpak x64

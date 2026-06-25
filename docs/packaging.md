@@ -227,6 +227,12 @@ Developer ID で署名する:
 scripts/package-macos-app.sh --sign "Developer ID Application: ..."
 ```
 
+Developer ID 署名時は hardened runtime と secure timestamp を付ける。GitHub
+Actions などで作った `.app.zip` はダウンロード時に quarantine が付くため、ad-hoc
+署名だけの `.app` は Gatekeeper により「壊れている」と表示されることがある。
+通常のダブルクリック起動で配布する release artifact は Developer ID 署名後に
+notarization と stapling を行う。
+
 短い packaged smoke を実行する:
 
 ```sh
@@ -409,8 +415,21 @@ Windows job は public runner に ASIO SDK を用意しないため、既定で
 `asio` feature を有効化する場合は、SDK の取得・配置方法を別途用意してから拡張する。
 
 macOS job は arm64 / x64 の app zip を別々に作る。現状は `--ad-hoc-sign` のため、
-署名済み release を公開する前に Developer ID 署名と notarization 用の protected
-GitHub secrets を追加する。
+Developer ID 署名と notarization 用の protected GitHub secrets が無い場合、Actions
+artifact は quarantine 付き環境で通常起動できないことがある。署名済み release を
+公開する場合は次の secrets を設定する。
+
+- `BMZ_MACOS_CODESIGN_IDENTITY`
+- `BMZ_MACOS_CERTIFICATE_P12_BASE64`
+- `BMZ_MACOS_CERTIFICATE_PASSWORD`
+- `BMZ_MACOS_KEYCHAIN_PASSWORD`
+- `BMZ_MACOS_NOTARY_APPLE_ID`
+- `BMZ_MACOS_NOTARY_PASSWORD`
+- `BMZ_MACOS_NOTARY_TEAM_ID`
+
+secrets が揃っている場合、macOS job は Developer ID 署名、notarization、stapling、
+`spctl` 検証を行ってから `.app.zip` を作る。無い場合は従来通り ad-hoc 署名で
+artifact を作る。
 
 Linux job は `scripts/package-flatpak.sh` で Flatpak bundle を作り、
 `net.hyrorre.BMZPlayer` として `flatpak run ... --help` まで確認する。現状の

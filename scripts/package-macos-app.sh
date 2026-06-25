@@ -119,13 +119,53 @@ bundle_dylib_dependencies() {
       if [[ ! -f "${copied}" ]]; then
         cp -L "${dep}" "${copied}"
         chmod u+w "${copied}"
-        install_name_tool -id "@executable_path/../Frameworks/${dep_name}" "${copied}" || true
+        install_name_tool -id "@executable_path/../Frameworks/${dep_name}" "${copied}"
         queue+=("${copied}")
       fi
 
-      install_name_tool -change "${dep}" "@executable_path/../Frameworks/${dep_name}" "${item}" || true
+      install_name_tool -change "${dep}" "@executable_path/../Frameworks/${dep_name}" "${item}"
     done < <(dylib_deps "${item}")
   done
+}
+
+verify_bundled_dylib_dependencies() {
+  local executable="$1"
+  local frameworks_dir="$2"
+  need_command otool
+  need_command file
+
+  local check_items=("${executable}")
+  if [[ -d "${frameworks_dir}" ]]; then
+    while IFS= read -r -d '' file_path; do
+      if file "${file_path}" | grep -q 'Mach-O'; then
+        check_items+=("${file_path}")
+      fi
+    done < <(find "${frameworks_dir}" -type f -print0)
+  fi
+
+  local item dep relative_dep missing=0
+  for item in "${check_items[@]}"; do
+    while IFS= read -r dep; do
+      [[ -n "${dep}" ]] || continue
+      if [[ "${dep}" == /* ]] && ! is_system_dylib "${dep}"; then
+        echo "error: ${item} still references non-system dylib outside the app: ${dep}" >&2
+        missing=1
+        continue
+      fi
+
+      case "${dep}" in
+        @executable_path/../Frameworks/*)
+          relative_dep="${dep#@executable_path/../Frameworks/}"
+          if [[ ! -f "${frameworks_dir}/${relative_dep}" ]]; then
+            echo "error: ${item} references missing bundled dylib: ${dep}" >&2
+            missing=1
+          fi
+          ;;
+      esac
+    done < <(dylib_deps "${item}")
+  done
+
+  [[ "${missing}" -eq 0 ]] || die "bundled dylib dependency verification failed"
 }
 
 write_info_plist() {
@@ -183,7 +223,7 @@ sign_bundle() {
 
   local codesign_args=(--force --timestamp=none --sign "${identity}")
   if [[ "${identity}" != "-" ]]; then
-    codesign_args=(--force --options runtime --timestamp=none --sign "${identity}")
+    codesign_args=(--force --options runtime --timestamp --sign "${identity}")
   fi
 
   if [[ -d "${app_dir}/Contents/Frameworks" ]]; then
@@ -338,6 +378,8 @@ main() {
   if [[ "${bundle_dylibs}" == "1" ]]; then
     echo "==> Bundling non-system dylib dependencies"
     bundle_dylib_dependencies "${macos_dir}/bmz-player" "${frameworks_dir}"
+    echo "==> Verifying bundled dylib dependencies"
+    verify_bundled_dylib_dependencies "${macos_dir}/bmz-player" "${frameworks_dir}"
   fi
 
   if [[ -n "${sign_identity}" ]]; then
