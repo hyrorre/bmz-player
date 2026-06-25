@@ -819,7 +819,7 @@ mod tests {
                     value = {{ id = "lanecover-value", src = 1, x = 0, y = 0, w = 10, h = 1, divx = 10, digit = 3, ref = 14 }},
                     destination = {{
                         id = "lanecover-value",
-                        draw = after_and_op(1800, 270),
+                        draw = after_and_op(1800, 270, 177),
                         dst = {{ x = 0, y = 0, w = 1, h = 1 }}
                     }}
                 }
@@ -833,7 +833,10 @@ mod tests {
             load_lua_skin_value(&root.join("play7.luaskin"), &BTreeMap::new(), &BTreeMap::new())
                 .unwrap();
 
-        assert_eq!(loaded.value["destination"][0]["draw"], "timer(0) >= 1800 and option(270)");
+        assert_eq!(
+            loaded.value["destination"][0]["draw"],
+            "timer(0) >= 1800 and option(270) and option(177)"
+        );
     }
 
     #[test]

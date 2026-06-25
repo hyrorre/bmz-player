@@ -49,6 +49,8 @@ pub struct RunningPlaySession {
     pub best_ghost: Option<Vec<u8>>,
     /// プレイ開始時のターゲット設定を譜面ノーツ数で解決した EX スコア。
     pub target_ex_score: Option<u32>,
+    /// プレイ開始時のターゲット設定 ID。play skin の STRING_TARGET 系に渡す。
+    pub target: String,
     pub applied_arrange: AppliedArrange,
     pub practice_mode: bool,
     pub bga_frames: BgaFrameCatalog,
@@ -178,6 +180,7 @@ pub fn open_prepared_play_audio(
         best_ex_score: None,
         best_ghost: None,
         target_ex_score: prepared.target_ex_score,
+        target: prepared.target,
         applied_arrange: prepared.applied_arrange,
         practice_mode: prepared.practice_mode,
         bga_frames: BgaFrameCatalog::new(),

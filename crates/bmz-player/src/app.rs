@@ -6586,6 +6586,7 @@ impl WinitApp {
         );
         self.apply_profile_fast_slow_filter(&mut snapshot);
         snapshot.arrange = active_play.running.applied_arrange.arrange.as_str().to_string();
+        snapshot.target = active_play.running.target.clone();
         snapshot.backbmp_background = self.play_backbmp_loaded;
         snapshot.play_elapsed_time = self.play_elapsed_time();
         snapshot.ready_elapsed_time = self.play_ready_sound_started_at.map(elapsed_since);

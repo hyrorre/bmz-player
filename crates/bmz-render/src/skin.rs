@@ -8638,6 +8638,7 @@ fn skin_state_number(ref_id: i32, state: &SkinDrawState) -> Option<i64> {
             }
             Some(((state.total_duration_ms as i64) * 3 + 2) / 5)
         }
+        1312..=1327 => lane_cover_duration_number(ref_id, state),
         308 if state.select_screen => Some(state.select_ln_mode_index as i64),
         340 if state.select_screen => Some(state.select_judge_algorithm_index as i64),
         // BPM 系: NUMBER_MAXBPM=90, NUMBER_MINBPM=91, NUMBER_NOWBPM=160
@@ -8759,6 +8760,41 @@ fn skin_state_number(ref_id: i32, state: &SkinDrawState) -> Option<i64> {
             skin_random_lane_ref_number(ref_id, state)
         }
         _ => None,
+    }
+}
+
+fn lane_cover_duration_number(ref_id: i32, state: &SkinDrawState) -> Option<i64> {
+    if state.select_screen && state.total_duration_ms <= 0 {
+        return None;
+    }
+    let offset = ref_id.checked_sub(1312)?;
+    let green = offset % 2 == 1;
+    let cover = offset % 4 < 2;
+    let mode = offset / 4;
+    let target_bpm = match mode {
+        0 => bpm_value_or_select(state.now_bpm, state.select_bpm),
+        1 => bpm_value_or_select(state.main_bpm, state.select_bpm),
+        2 => bpm_value_or_select(state.min_bpm, state.select_min_bpm),
+        3 => bpm_value_or_select(state.max_bpm, state.select_max_bpm),
+        _ => return None,
+    }?;
+    let current_bpm = bpm_value_or_select(state.now_bpm, state.select_bpm).unwrap_or(target_bpm);
+    let visible = (1.0 - state.lane_cover.clamp(0.0, 1.0)).max(0.01);
+    let mut duration = state.total_duration_ms as f64 * (current_bpm as f64 / target_bpm as f64);
+    if !cover {
+        duration /= visible as f64;
+    }
+    let duration = duration.round().max(0.0) as i64;
+    if green { Some((duration * 3 + 2) / 5) } else { Some(duration) }
+}
+
+fn bpm_value_or_select(value: f32, fallback: f32) -> Option<f32> {
+    if value > 0.0 {
+        Some(value)
+    } else if fallback > 0.0 {
+        Some(fallback)
+    } else {
+        None
     }
 }
 
@@ -9008,13 +9044,14 @@ fn pre_ready_lane_cover_value_destination(
 }
 
 fn skin_value_is_lane_cover_number(value: &SkinValueDef) -> bool {
-    matches!(value.ref_id, 14 | 312 | 313)
+    matches!(value.ref_id, 14 | 312 | 313 | 1312..=1327)
         || skin_expr_references_lane_cover_number(&value.expr)
         || skin_expr_references_lane_cover_number(&value.value_expr)
 }
 
 fn skin_expr_references_lane_cover_number(expr: &str) -> bool {
     ["number(14)", "number(312)", "number(313)"].iter().any(|needle| expr.contains(needle))
+        || (1312..=1327).any(|ref_id| expr.contains(&format!("number({ref_id})")))
 }
 
 /// Starseeker 閉店の `src = 0, x = 0, y = 0` sentinel は `system` の黒 1px
@@ -10419,7 +10456,13 @@ fn skin_state_text_with_draw_state(
         _ => {}
     }
     match text.ref_id {
-        1 => state.rival.to_string(),
+        1 => {
+            if state.rival.is_empty() {
+                select_play_target_name(state.target)
+            } else {
+                state.rival.to_string()
+            }
+        }
         3 => select_target_name(state.target),
         10 => state.title.to_string(),
         11 => state.subtitle.to_string(),
@@ -10493,6 +10536,10 @@ fn select_target_name(target: &str) -> String {
         return SELECT_TARGET_NAMES[index].to_string();
     }
     String::new()
+}
+
+fn select_play_target_name(target: &str) -> String {
+    if target.is_empty() || target == "NONE" { String::new() } else { select_target_name(target) }
 }
 
 fn select_target_name_by_offset(target: &str, offset: i32) -> String {
@@ -21989,6 +22036,24 @@ mod tests {
             skin_state_number(313, &SkinDrawState { total_duration_ms: 183_001, ..state.clone() }),
             Some(109_801)
         );
+        let duration_state = SkinDrawState {
+            now_bpm: 100.0,
+            main_bpm: 100.0,
+            min_bpm: 50.0,
+            max_bpm: 200.0,
+            lane_cover: 0.25,
+            total_duration_ms: 1_200,
+            ..SkinDrawState::default()
+        };
+        // 1312..=1327 are beatoraja lane-cover duration variants:
+        // current/main/min/max BPM x cover on/off x normal/green.
+        assert_eq!(skin_state_number(1312, &duration_state), Some(1_200));
+        assert_eq!(skin_state_number(1313, &duration_state), Some(720));
+        assert_eq!(skin_state_number(1314, &duration_state), Some(1_600));
+        assert_eq!(skin_state_number(1315, &duration_state), Some(960));
+        assert_eq!(skin_state_number(1317, &duration_state), Some(720));
+        assert_eq!(skin_state_number(1321, &duration_state), Some(1_440));
+        assert_eq!(skin_state_number(1325, &duration_state), Some(360));
         // VALUE_JUDGE_1P_DURATION (525) = -(-3) = 3 (FAST 3ms は beatoraja 規約で正)
         assert_eq!(skin_state_number(525, &state), Some(3));
         // VALUE_JUDGE_2P_DURATION (526): SLOW 7ms (delta=+7) は beatoraja 規約で負
@@ -22328,6 +22393,12 @@ mod tests {
         assert_eq!(skin_state_text(&make_text(15), &state), "Feat. X");
         // STRING_FULLARTIST (16) = artist + " " + subartist
         assert_eq!(skin_state_text(&make_text(16), &state), "Artist Name Feat. X");
+        // STRING_RIVAL (1) is also target score player name during play in beatoraja.
+        assert_eq!(skin_state_text(&make_text(1), &state), "RANK AAA");
+        assert_eq!(
+            skin_state_text(&make_text(1), &SkinTextState { rival: "Rival A", ..state.clone() }),
+            "Rival A"
+        );
         // STRING_TARGET (3)
         assert_eq!(skin_state_text(&make_text(3), &state), "RANK AAA");
         // STRING_TARGETNAME_P1/N1 (209/210)

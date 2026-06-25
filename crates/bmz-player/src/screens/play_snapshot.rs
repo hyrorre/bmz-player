@@ -318,6 +318,7 @@ pub fn build_render_snapshot_with_target_and_bga_frames_cached(
         judge_rank: session.chart.metadata.judge_rank,
         play_level: session.chart.metadata.play_level.clone(),
         arrange: "NORMAL".to_string(),
+        target: String::new(),
         combo: session.display_combo(),
         max_combo: session.display_max_combo(),
         ex_score: session.score.ex_score(),

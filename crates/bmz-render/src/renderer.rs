@@ -2798,13 +2798,8 @@ impl<'a> CachedTextFrameBuilder<'a> {
             std::borrow::Cow::Borrowed(text)
         };
         text_width = bitmap_text_width_px(&text, font, scale);
-        let align_offset = match style.align {
-            TextAlign::Left => 0.0,
-            TextAlign::Center if max_width > 0.0 => (max_width - text_width) / 2.0,
-            TextAlign::Right if max_width > 0.0 => max_width - text_width,
-            _ => 0.0,
-        };
-        let mut cursor_x = origin.x * surface.width as f32 + align_offset.max(0.0);
+        let align_offset = text_align_offset_px(style.align, max_width, text_width);
+        let mut cursor_x = origin.x * surface.width as f32 + align_offset;
         let shrink_offset_y =
             if matches!(style.overflow, TextOverflow::Shrink) && scale < original_scale {
                 (design_size as f32 * (original_scale - scale)) / 2.0
@@ -2963,13 +2958,8 @@ impl<'a> CachedTextFrameBuilder<'a> {
     ) {
         let scaled_font = font.as_scaled(scale);
         let max_width = style.max_width.max(0.0) * surface.width as f32;
-        let align_offset = match style.align {
-            TextAlign::Left => 0.0,
-            TextAlign::Center if max_width > 0.0 => (max_width - text_width) / 2.0,
-            TextAlign::Right if max_width > 0.0 => max_width - text_width,
-            _ => 0.0,
-        };
-        let mut cursor_x = origin_x + align_offset.max(0.0);
+        let align_offset = text_align_offset_px(style.align, max_width, text_width);
+        let mut cursor_x = origin_x + align_offset;
 
         for ch in text.chars() {
             let glyph_id = font.glyph_id(ch);
@@ -3096,13 +3086,8 @@ impl TextAtlasBuilder {
             std::borrow::Cow::Borrowed(text)
         };
         text_width = bitmap_text_width_px(&text, font, scale);
-        let align_offset = match style.align {
-            TextAlign::Left => 0.0,
-            TextAlign::Center if max_width > 0.0 => (max_width - text_width) / 2.0,
-            TextAlign::Right if max_width > 0.0 => max_width - text_width,
-            _ => 0.0,
-        };
-        let mut cursor_x = origin.x * surface.width as f32 + align_offset.max(0.0);
+        let align_offset = text_align_offset_px(style.align, max_width, text_width);
+        let mut cursor_x = origin.x * surface.width as f32 + align_offset;
         let shrink_offset_y =
             if matches!(style.overflow, TextOverflow::Shrink) && scale < original_scale {
                 (design_size as f32 * (original_scale - scale)) / 2.0
@@ -3297,13 +3282,8 @@ impl TextAtlasBuilder {
     ) {
         let scaled_font = font.as_scaled(scale);
         let max_width = style.max_width.max(0.0) * surface.width as f32;
-        let align_offset = match style.align {
-            TextAlign::Left => 0.0,
-            TextAlign::Center if max_width > 0.0 => (max_width - text_width) / 2.0,
-            TextAlign::Right if max_width > 0.0 => max_width - text_width,
-            _ => 0.0,
-        };
-        let mut cursor_x = origin_x + align_offset.max(0.0);
+        let align_offset = text_align_offset_px(style.align, max_width, text_width);
+        let mut cursor_x = origin_x + align_offset;
 
         for ch in text.chars() {
             let glyph_id = font.glyph_id(ch);
@@ -3401,6 +3381,16 @@ fn bitmap_text_width_px(text: &str, font: &BitmapFont, scale: f32) -> f32 {
         .sum()
 }
 
+fn text_align_offset_px(align: TextAlign, max_width: f32, text_width: f32) -> f32 {
+    match align {
+        TextAlign::Left => 0.0,
+        TextAlign::Center if max_width > 0.0 => (max_width - text_width) / 2.0,
+        TextAlign::Center => -text_width / 2.0,
+        TextAlign::Right if max_width > 0.0 => max_width - text_width,
+        TextAlign::Right => -text_width,
+    }
+}
+
 fn vector_text_caret_rect(
     origin: &Point,
     text: &str,
@@ -3435,12 +3425,7 @@ fn vector_text_caret_rect(
             }
         }
     }
-    let align_offset = match style.align {
-        TextAlign::Left => 0.0,
-        TextAlign::Center if max_width > 0.0 => (max_width - text_width) / 2.0,
-        TextAlign::Right if max_width > 0.0 => max_width - text_width,
-        _ => 0.0,
-    };
+    let align_offset = text_align_offset_px(style.align, max_width, text_width);
     let cursor = clamp_text_byte_index(&visible, caret.byte_index);
     let prefix_width = text_width_px(&visible[..cursor], font, &scaled_font);
     let shrink_offset_y =
@@ -3449,8 +3434,7 @@ fn vector_text_caret_rect(
         } else {
             0.0
         };
-    let x = (origin.x * surface.width as f32 + align_offset.max(0.0) + prefix_width)
-        / surface.width as f32;
+    let x = (origin.x * surface.width as f32 + align_offset + prefix_width) / surface.width as f32;
     let y = (origin.y * surface.height as f32 + shrink_offset_y) / surface.height as f32;
     Some(RectCommand {
         rect: Rect {
@@ -3495,12 +3479,7 @@ fn bitmap_text_caret_rect(
         Cow::Borrowed(text)
     };
     text_width = bitmap_text_width_px(&visible, font, scale);
-    let align_offset = match style.align {
-        TextAlign::Left => 0.0,
-        TextAlign::Center if max_width > 0.0 => (max_width - text_width) / 2.0,
-        TextAlign::Right if max_width > 0.0 => max_width - text_width,
-        _ => 0.0,
-    };
+    let align_offset = text_align_offset_px(style.align, max_width, text_width);
     let cursor = clamp_text_byte_index(&visible, caret.byte_index);
     let prefix_width = bitmap_text_width_px(&visible[..cursor], font, scale);
     let shrink_offset_y =
@@ -3510,8 +3489,7 @@ fn bitmap_text_caret_rect(
             0.0
         };
     let caret_height = design_size as f32 * scale;
-    let x = (origin.x * surface.width as f32 + align_offset.max(0.0) + prefix_width)
-        / surface.width as f32;
+    let x = (origin.x * surface.width as f32 + align_offset + prefix_width) / surface.width as f32;
     let y = (origin.y * surface.height as f32 + shrink_offset_y) / surface.height as f32;
     Some(RectCommand {
         rect: Rect {
@@ -4301,6 +4279,19 @@ mod tests {
 
     fn test_surface_size() -> SurfaceSize {
         SurfaceSize { width: 16, height: 9 }
+    }
+
+    #[test]
+    fn text_align_offset_anchors_zero_width_text_like_beatoraja() {
+        assert_eq!(text_align_offset_px(TextAlign::Left, 0.0, 80.0), 0.0);
+        assert_eq!(text_align_offset_px(TextAlign::Center, 0.0, 80.0), -40.0);
+        assert_eq!(text_align_offset_px(TextAlign::Right, 0.0, 80.0), -80.0);
+    }
+
+    #[test]
+    fn text_align_offset_uses_box_width_when_present() {
+        assert_eq!(text_align_offset_px(TextAlign::Center, 120.0, 80.0), 20.0);
+        assert_eq!(text_align_offset_px(TextAlign::Right, 120.0, 80.0), 40.0);
     }
 
     fn test_bitmap_font() -> BitmapFont {

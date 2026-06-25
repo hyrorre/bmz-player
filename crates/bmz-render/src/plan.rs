@@ -983,6 +983,7 @@ fn plan_play(
         genre: &snapshot.genre,
         difficulty_name: &snapshot.difficulty_name,
         play_level: &snapshot.play_level,
+        target: &snapshot.target,
         table_level: &snapshot.table_text_secondary,
         table_text_primary: &snapshot.table_text_primary,
         table_text_secondary: &snapshot.table_text_secondary,
@@ -3533,6 +3534,37 @@ mod tests {
         assert!(plan.commands.iter().any(|command| matches!(
             command,
             DrawCommand::Image { texture, .. } if *texture == TextureId(42)
+        )));
+    }
+
+    #[test]
+    fn play_skin_document_receives_target_text() {
+        let document: SkinDocument = serde_json::from_str(
+            r#"
+            {
+                "type": 0,
+                "w": 100,
+                "h": 100,
+                "text": [{ "id": "target", "size": 12, "ref": 1 }],
+                "destination": [
+                    { "id": "target", "dst": [{ "x": 10, "y": 20, "w": 60, "h": 12 }] }
+                ]
+            }
+            "#,
+        )
+        .unwrap();
+        let skin = SkinContext::from_manifest_and_document(SkinManifest::default(), document, []);
+        let snapshot = RenderSnapshot { target: "IR_TOP".to_string(), ..RenderSnapshot::default() };
+
+        let plan = DrawPlan::from_scene_with_skin(
+            &AppSceneSnapshot::Play(snapshot),
+            &skin,
+            &mut crate::skin::DynamicTimerRuntime::default(),
+        );
+
+        assert!(plan.commands.iter().any(|command| matches!(
+            command,
+            DrawCommand::Text { text, .. } if text == "IR TOP"
         )));
     }
 

@@ -164,6 +164,8 @@ pub struct RenderSnapshot {
     pub play_level: String,
     /// Play option arrange label for skin ref 42/43.
     pub arrange: String,
+    /// Play target option id for skin string refs 1 / 3 / 200..=219.
+    pub target: String,
     pub combo: u32,
     pub max_combo: u32,
     pub ex_score: u32,

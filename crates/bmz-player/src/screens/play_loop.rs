@@ -263,6 +263,7 @@ pub fn advance_running_play_session(
         &running.render_snapshot_cache,
     );
     apply_play_arrange_to_snapshot(&mut output.render_snapshot, running.applied_arrange.arrange);
+    apply_running_play_target_to_snapshot(&mut output.render_snapshot, running);
     Ok(output)
 }
 
@@ -287,6 +288,7 @@ pub fn advance_running_play_session_until_result(
         &running.render_snapshot_cache,
     );
     apply_play_arrange_to_snapshot(&mut frame.render_snapshot, running.applied_arrange.arrange);
+    apply_running_play_target_to_snapshot(&mut frame.render_snapshot, running);
     running.result_graph.record_frame(&frame);
     if matches!(frame.state, PlayState::Finished | PlayState::Failed) {
         let mut finished = finish_session_result_once(
@@ -316,6 +318,13 @@ pub fn advance_running_play_session_until_result(
     Ok(PlayAdvanceOutcome::Playing(frame))
 }
 
+fn apply_running_play_target_to_snapshot(
+    snapshot: &mut RenderSnapshot,
+    running: &RunningPlaySession,
+) {
+    snapshot.target = running.target.clone();
+}
+
 /// `play_ending` 中に skin 側へ渡す壁時計ベースの timer 値。
 #[derive(Debug, Clone, Copy)]
 pub struct PlayEndingSkinTimers {
@@ -343,6 +352,7 @@ pub fn refresh_play_ending_snapshot(
         &running.render_snapshot_cache,
     );
     apply_play_arrange_to_snapshot(&mut snapshot, running.applied_arrange.arrange);
+    apply_running_play_target_to_snapshot(&mut snapshot, running);
     snapshot
 }
 
