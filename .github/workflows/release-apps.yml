@@ -238,7 +238,13 @@ jobs:
       - name: Install macOS dependencies
         run: |
           brew install ffmpeg pkg-config
+          FFMPEG_PREFIX="$(brew --prefix ffmpeg)"
+          {
+            echo "FFMPEG_DIR=${FFMPEG_PREFIX}"
+            echo "PKG_CONFIG_PATH=${FFMPEG_PREFIX}/lib/pkgconfig:${PKG_CONFIG_PATH:-}"
+          } >> "${GITHUB_ENV}"
           rustup target add "${{ matrix.target }}"
+          cargo clean -p ffmpeg-sys-next --target "${{ matrix.target }}"
 
       - name: Record macOS dependency provenance
         run: |
