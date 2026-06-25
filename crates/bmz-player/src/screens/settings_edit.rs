@@ -532,7 +532,7 @@ mod tests {
         assert!(bindings.is_confirm("C"));
         assert!(bindings.is_back("S"));
         assert!(bindings.is_back("D"));
-        assert!(bindings.is_increase("Axis1+") || bindings.is_increase("LShift"));
+        assert!(bindings.is_increase("Axis1-") || bindings.is_increase("LControl"));
     }
 
     #[test]

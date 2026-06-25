@@ -211,12 +211,12 @@ mod tests {
         assert!(binding.entries.iter().any(|entry| {
             entry.lane == Lane::Scratch
                 && entry.control == PhysicalControl::GamepadButton("Axis1+".to_string())
-                && entry.scratch_direction == Some(bmz_core::input::ScratchDirection::Down)
+                && entry.scratch_direction == Some(bmz_core::input::ScratchDirection::Up)
         }));
         assert!(binding.entries.iter().any(|entry| {
             entry.lane == Lane::Scratch
                 && entry.control == PhysicalControl::GamepadButton("Axis1-".to_string())
-                && entry.scratch_direction == Some(bmz_core::input::ScratchDirection::Up)
+                && entry.scratch_direction == Some(bmz_core::input::ScratchDirection::Down)
         }));
     }
 }

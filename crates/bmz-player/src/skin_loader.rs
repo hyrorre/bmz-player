@@ -11,7 +11,7 @@ use bmz_render::skin::{
     DestinationListEntry, SkinContext, SkinDocument, SkinDocumentTexture, SkinFilepathDef,
     SkinImageSize, SkinManifest, SkinTextureId, default_skin_manifest_for_root,
 };
-use bmz_skin::SkinKind as DecodeSkinKind;
+use bmz_skin::{LuaLoadRuntimeState, SkinKind as DecodeSkinKind};
 use rayon::prelude::*;
 
 use crate::config::profile_config::SkinConfig;
@@ -340,8 +340,24 @@ pub fn decode_beatoraja_skin_with_options(
     options: &BTreeMap<String, String>,
     files: &BTreeMap<String, String>,
 ) -> Result<DecodedSkin> {
+    decode_beatoraja_skin_with_options_and_runtime_state(
+        skin_path,
+        kind,
+        options,
+        files,
+        &LuaLoadRuntimeState::default(),
+    )
+}
+
+pub fn decode_beatoraja_skin_with_options_and_runtime_state(
+    skin_path: &Path,
+    kind: SkinKind,
+    options: &BTreeMap<String, String>,
+    files: &BTreeMap<String, String>,
+    runtime_state: &LuaLoadRuntimeState,
+) -> Result<DecodedSkin> {
     let LoadedSkinDocumentForDecode { mut document, files: resolved_files } =
-        load_skin_document(skin_path, kind, options, files)?;
+        load_skin_document(skin_path, kind, options, files, runtime_state)?;
     // フォント ID は scene 横断的に Renderer のグローバルマップに登録されるので、
     // play / select / result で同じ "0" 等が衝突する。namespace を付与して隔離する。
     // text 定義の font 参照側も同じ namespace を付ける。
@@ -543,12 +559,14 @@ fn load_skin_document(
     kind: SkinKind,
     options: &BTreeMap<String, String>,
     files: &BTreeMap<String, String>,
+    runtime_state: &LuaLoadRuntimeState,
 ) -> Result<LoadedSkinDocumentForDecode> {
     let (mut document, mut resolved_files) = if is_lua_skin_path(skin_path) {
         // Lua スキンはオプション選択 (名前 -> 選択肢名) とファイル選択
         // (filepath 定義名 -> 相対パス) をそのまま渡す。
-        let loaded = bmz_skin::load_lua_skin(skin_path, decode_skin_kind(kind), options, files)
-            .with_context(|| format!("failed to load lua skin: {}", skin_path.display()))?;
+        let loaded =
+            bmz_skin::load_lua_skin_with_runtime_state(skin_path, options, files, runtime_state)
+                .with_context(|| format!("failed to load lua skin: {}", skin_path.display()))?;
         for warning in loaded.warnings {
             tracing::warn!(
                 path = %skin_path.display(),
@@ -1355,8 +1373,14 @@ mod tests {
         let mut selections = BTreeMap::new();
         selections.insert("スコアグラフ".to_string(), "On".to_string());
 
-        let loaded = load_skin_document(&skin_path, SkinKind::Play, &selections, &BTreeMap::new())
-            .expect("load skin document");
+        let loaded = load_skin_document(
+            &skin_path,
+            SkinKind::Play,
+            &selections,
+            &BTreeMap::new(),
+            &LuaLoadRuntimeState::default(),
+        )
+        .expect("load skin document");
         let ops = enabled_options_from_selections(&loaded.document, &selections);
         assert!(ops.contains(&901), "expected 901 in ops, got {ops:?}");
         assert!(ops.contains(&920), "expected 920 (1P default) in ops, got {ops:?}");
@@ -2394,9 +2418,15 @@ mod tests {
         }
 
         let options = BTreeMap::from([("Displayjudge".to_string(), "ON".to_string())]);
-        let decoded = load_skin_document(&skin_path, SkinKind::Play, &options, &BTreeMap::new())
-            .unwrap()
-            .document;
+        let decoded = load_skin_document(
+            &skin_path,
+            SkinKind::Play,
+            &options,
+            &BTreeMap::new(),
+            &LuaLoadRuntimeState::default(),
+        )
+        .unwrap()
+        .document;
         let candidates = decoded
             .image
             .iter()
