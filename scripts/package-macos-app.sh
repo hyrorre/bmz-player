@@ -14,7 +14,7 @@ Options:
   --skip-build            Do not run cargo build; use an existing binary.
   --out-dir DIR           Output directory (default: dist/macos).
   --app-name NAME         App bundle name (default: BMZ Player).
-  --bundle-id ID          CFBundleIdentifier (default: dev.hyrorre.bmz-player).
+  --bundle-id ID          CFBundleIdentifier (default: net.hyrorre.bmz-player).
   --bundle-dylibs         Copy non-system dylib dependencies into Contents/Frameworks.
                           Automatically ad-hoc signs unless --sign/--ad-hoc-sign is set.
   --sign IDENTITY         codesign with the given identity.
@@ -212,7 +212,7 @@ main() {
   local target_triple=""
   local out_dir="${BMZ_MACOS_OUT_DIR:-${root}/dist/macos}"
   local app_name="${BMZ_MACOS_APP_NAME:-BMZ Player}"
-  local bundle_id="${BMZ_MACOS_BUNDLE_ID:-dev.hyrorre.bmz-player}"
+  local bundle_id="${BMZ_MACOS_BUNDLE_ID:-net.hyrorre.bmz-player}"
   local bundle_dylibs="${BMZ_BUNDLE_DYLIBS:-0}"
   local sign_identity="${BMZ_CODESIGN_IDENTITY:-}"
   local smoke="${BMZ_PACKAGE_SMOKE:-0}"

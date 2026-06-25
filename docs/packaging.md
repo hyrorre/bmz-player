@@ -159,6 +159,10 @@ BMZ Player の macOS app bundle は `scripts/package-macos-app.sh` で作る。
 scripts/package-macos-app.sh
 ```
 
+既定の `CFBundleIdentifier` は、所有ドメイン `hyrorre.net` に合わせて
+`net.hyrorre.bmz-player` とする。必要な場合は `--bundle-id` または
+`BMZ_MACOS_BUNDLE_ID` で上書きする。
+
 既定の出力先:
 
 ```text
@@ -264,7 +268,7 @@ BMZ_DATA_DIR=/tmp/bmz-player-package-data \
 
 Linux の Flatpak manifest と desktop integration file は `installer/flatpak/` に置く。
 Flatpak app id は、所有ドメイン `hyrorre.net` に合わせて
-`net.hyrorre.BMZPlayer` とする。macOS の bundle id は別途変更するまで現状維持。
+`net.hyrorre.BMZPlayer` とする。
 
 必要な runtime / SDK:
 
