@@ -74,6 +74,10 @@ Inno Setup installer まで作る:
 .\scripts\package-windows.ps1 -Installer
 ```
 
+package script は `Cargo.toml` の workspace version を読み取り、
+`installer/inno/bmz-player.iss` の `AppVersion` fallback と Inno Setup へ渡す
+`/DAppVersion` を同期する。
+
 Inno Setup の script は `installer/inno/bmz-player.iss`。既定では将来の自動更新を
 入れやすいよう、per-user install として
 `%LOCALAPPDATA%\Programs\BMZ Player` へインストールする。`Program Files` へ入れる
@@ -299,6 +303,14 @@ Flatpak bundle を作る:
 scripts/package-flatpak.sh
 ```
 
+package script は `Cargo.toml` の workspace version を読み取り、
+`installer/flatpak/net.hyrorre.BMZPlayer.metainfo.xml` の先頭 `<release>` version を
+ビルド前に同期する。同期だけを行う場合は次を使う:
+
+```sh
+scripts/package-flatpak.sh --sync-metadata-only
+```
+
 既定の出力先:
 
 ```text
@@ -459,7 +471,8 @@ Linux job は Flatpak 用 container
 AppStream / commit 履歴を混ぜないため、package script は build dir と repo dir を
 ビルド前に作り直す。
 
-CI では `Cargo.toml` / release tag / `BMZ_VERSION` と
+CI では package script で Flatpak metainfo version を同期してから、
+`Cargo.toml` / release tag / `BMZ_VERSION` と
 `installer/flatpak/net.hyrorre.BMZPlayer.metainfo.xml` の先頭 `<release>` version が
 一致することも検証する。現状の manifest は build 時 network access を使うため、
 Flathub 提出前に `flatpak-cargo-generator.py` などで Cargo source を固定する。

@@ -78,6 +78,28 @@ function Get-CargoVersion {
     throw "failed to read workspace version from $cargoToml"
 }
 
+function Sync-InnoAppVersion {
+    param(
+        [Parameter(Mandatory = $true)][string]$IssPath,
+        [Parameter(Mandatory = $true)][string]$Version
+    )
+
+    Require-File $IssPath
+    if ($Version -notmatch '^[0-9A-Za-z][0-9A-Za-z.+_-]*$') {
+        throw "invalid package version: $Version"
+    }
+
+    $content = Get-Content -LiteralPath $IssPath -Raw
+    $pattern = '(?m)^#define\s+AppVersion\s+"[^"]+"'
+    if ($content -notmatch $pattern) {
+        throw "failed to find AppVersion define in $IssPath"
+    }
+    $updated = [regex]::Replace($content, $pattern, "#define AppVersion `"$Version`"", 1)
+    if ($updated -ne $content) {
+        Set-Content -LiteralPath $IssPath -Value $updated -NoNewline
+    }
+}
+
 function Copy-DirectoryMirror {
     param(
         [Parameter(Mandatory = $true)][string]$Source,
@@ -318,6 +340,8 @@ $binary = Join-Path (Join-Path $targetBase $profileDir) "bmz-player.exe"
 Require-File $binary
 
 $version = Get-CargoVersion $repoRoot
+$issPath = Join-Path $repoRoot "installer\inno\bmz-player.iss"
+Sync-InnoAppVersion $issPath $version
 $defaultSkin = Join-Path $repoRoot "data\skins\default\select.json"
 $rmzSkin = Join-Path $repoRoot "data\skins\Rmz-skin\play7main.luaskin"
 $mzSelectSkin = Join-Path $repoRoot "data\skins\mz-select\music_select.luaskin"
@@ -391,7 +415,6 @@ if ($Installer) {
     $iscc = Find-Iscc $IsccPath
     $installerOutDir = Join-Path $OutDir "installer"
     New-Item -ItemType Directory -Force -Path $installerOutDir | Out-Null
-    $issPath = Join-Path $repoRoot "installer\inno\bmz-player.iss"
     Require-File $issPath
     $arch = Resolve-InstallerArch $Target
 

@@ -423,6 +423,10 @@ jobs:
           restore-keys: |
             release-flatpak-x64-
 
+      - name: Sync Flatpak package metadata version
+        run: |
+          scripts/package-flatpak.sh --sync-metadata-only
+
       - name: Validate Flatpak metadata
         run: |
           cargo_version="$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n 1)"

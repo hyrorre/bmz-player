@@ -13,6 +13,8 @@ Options:
   --no-bundle     Skip single-file bundle creation.
   --smoke         Run a short Flatpak smoke launch after building.
   --out-dir DIR   Output directory (default: dist/flatpak).
+  --sync-metadata-only
+                 Update packaging metadata versions and exit.
   -h, --help      Show this help.
 
 Environment:
@@ -47,6 +49,19 @@ cargo_version() {
   sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n 1
 }
 
+sync_flatpak_metainfo_version() {
+  local metainfo="$1"
+  local version="$2"
+
+  [[ "${version}" =~ ^[0-9A-Za-z][0-9A-Za-z.+_-]*$ ]] || die "invalid package version: ${version}"
+  [[ -f "${metainfo}" ]] || die "missing metainfo: ${metainfo}"
+  grep -q '<release version="' "${metainfo}" || die "metainfo has no release entry: ${metainfo}"
+
+  sed -i -E "0,/<release version=\"[^\"]+\"/s//<release version=\"${version}\"/" "${metainfo}"
+  grep -q "<release version=\"${version}\"" "${metainfo}" || \
+    die "failed to sync metainfo release version to ${version}"
+}
+
 cleanup_existing_user_install() {
   local app_id="$1"
   local old_origin=""
@@ -74,6 +89,7 @@ main() {
   local install_app="${BMZ_FLATPAK_INSTALL:-0}"
   local build_bundle="${BMZ_FLATPAK_BUNDLE:-1}"
   local smoke="${BMZ_FLATPAK_SMOKE:-0}"
+  local sync_metadata_only=0
 
   while (($# > 0)); do
     case "$1" in
@@ -94,6 +110,9 @@ main() {
         [[ $# -gt 0 ]] || die "--out-dir requires a value"
         out_dir="$1"
         ;;
+      --sync-metadata-only)
+        sync_metadata_only=1
+        ;;
       -h|--help)
         usage
         return 0
@@ -104,6 +123,15 @@ main() {
     esac
     shift
   done
+
+  local version
+  version="$(cargo_version)"
+  [[ -n "${version}" ]] || die "failed to read workspace version"
+
+  sync_flatpak_metainfo_version "${root}/installer/flatpak/${app_id}.metainfo.xml" "${version}"
+  if [[ "${sync_metadata_only}" == "1" ]]; then
+    return 0
+  fi
 
   need_command flatpak
   need_command flatpak-builder
@@ -117,10 +145,6 @@ main() {
   [[ -f "${root}/data/songs/sample-playable/sample-playable.bms" ]] || \
     die "missing bundled sample song"
   [[ -f "${root}/assets/app-icon/bmz-player-window-windows.png" ]] || die "missing Flatpak app icon"
-
-  local version
-  version="$(cargo_version)"
-  [[ -n "${version}" ]] || die "failed to read workspace version"
 
   local build_dir="${out_dir}/build"
   local repo_dir="${out_dir}/repo"
