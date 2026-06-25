@@ -76,6 +76,17 @@ copy_file() {
   cp -p "${src}" "${dst}"
 }
 
+prune_macos_resource_markers() {
+  local resources_dir="$1"
+  local marker_root="${resources_dir}/skins/mz-select/customize/advanced"
+  [[ -d "${marker_root}" ]] || return 0
+
+  # These empty mz-select marker files are only human-readable descriptions.
+  # GitHub artifact zip extraction can change Unicode normalization of their
+  # Japanese filenames after signing, which breaks the bundle resource seal.
+  find "${marker_root}" -type f -size 0 ! -name '*.*' -delete
+}
+
 is_system_dylib() {
   local dep="$1"
   [[ "${dep}" == /usr/lib/* || "${dep}" == /System/Library/* ]]
@@ -370,6 +381,7 @@ main() {
   copy_file "${root}/LICENSE" "${resources_dir}/licenses/BMZ-GPL-3.0-only.txt"
   copy_file "${root}/docs/licenses.md" "${resources_dir}/licenses/license-notes.md"
   copy_file "${root}/assets/app-icon/bmz-player.icns" "${resources_dir}/bmz-player.icns"
+  prune_macos_resource_markers "${resources_dir}"
 
   write_info_plist "${contents_dir}/Info.plist" "bmz-player" "bmz-player.icns" "${app_name}" "${bundle_id}" "${version}"
   printf 'APPL????' > "${contents_dir}/PkgInfo"

@@ -232,6 +232,10 @@ Actions などで作った `.app.zip` はダウンロード時に quarantine が
 署名だけの `.app` は Gatekeeper により「壊れている」と表示されることがある。
 通常のダブルクリック起動で配布する release artifact は Developer ID 署名後に
 notarization と stapling を行う。
+また、macOS の code signing は resource file path も sealed resource として記録する。
+`mz-select/customize/advanced` には説明用の 0 byte 日本語名ファイルが含まれるが、
+zip / artifact 展開時の Unicode 正規化差分で resource seal が壊れることがあるため、
+app bundle へコピーした後、署名前にこれらの空マーカーファイルを除外する。
 
 短い packaged smoke を実行する:
 
