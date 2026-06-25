@@ -302,6 +302,16 @@ jobs:
           fetch-depth: 0
           submodules: recursive
 
+      - name: Prepare Flatpak container
+        run: |
+          if command -v dbus-uuidgen >/dev/null 2>&1; then
+            dbus-uuidgen --ensure=/etc/machine-id
+          elif [ ! -s /etc/machine-id ]; then
+            tr -d '-' </proc/sys/kernel/random/uuid >/etc/machine-id
+          fi
+          mkdir -p /var/lib/dbus
+          cp /etc/machine-id /var/lib/dbus/machine-id
+
       - name: Configure Flathub remote
         run: |
           flatpak remote-add --if-not-exists --user flathub https://dl.flathub.org/repo/flathub.flatpakrepo
