@@ -47,6 +47,22 @@ cargo_version() {
   sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n 1
 }
 
+cleanup_existing_user_install() {
+  local app_id="$1"
+  local old_origin=""
+
+  old_origin="$(flatpak info --user --show-origin "${app_id}" 2>/dev/null || true)"
+  flatpak uninstall --user -y "${app_id}" >/dev/null 2>&1 || true
+
+  case "${old_origin}" in
+    ""|flathub)
+      ;;
+    *-origin|debug-origin)
+      flatpak remote-delete --user "${old_origin}" >/dev/null 2>&1 || true
+      ;;
+  esac
+}
+
 main() {
   local root
   root="$(repo_root)"
@@ -111,6 +127,7 @@ main() {
   local bundle_path="${out_dir}/bmz-player-${version}-linux.flatpak"
 
   mkdir -p "${out_dir}"
+  rm -rf "${build_dir}" "${repo_dir}"
 
   local builder_args=(
     --force-clean
@@ -120,6 +137,7 @@ main() {
     "--repo=${repo_dir}"
   )
   if [[ "${install_app}" == "1" || "${smoke}" == "1" ]]; then
+    cleanup_existing_user_install "${app_id}"
     builder_args+=(--install)
   fi
 

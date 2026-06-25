@@ -311,6 +311,22 @@ dist/flatpak/bmz-player-<version>-linux.flatpak
 scripts/package-flatpak.sh --install --smoke
 ```
 
+.flatpak bundle を入れ直す:
+
+```sh
+flatpak install --user --reinstall ./bmz-player-v0.1.3-linux-x64.flatpak
+```
+
+古いローカル origin remote が残り、GUI で古い version への更新通知が出る場合は、
+app と bundle 由来 remote を消してから入れ直す:
+
+```sh
+flatpak uninstall --user -y net.hyrorre.BMZPlayer
+flatpak remote-delete --user bmzplayer1-origin 2>/dev/null || true
+flatpak remote-delete --user debug-origin 2>/dev/null || true
+flatpak install --user -y ./bmz-player-v0.1.3-linux-x64.flatpak
+```
+
 手動で実行する:
 
 ```sh
@@ -435,12 +451,18 @@ secrets が揃っている場合、macOS job は Developer ID 署名、notarizat
 `spctl` 検証を行ってから `.app.zip` を作る。無い場合は従来通り ad-hoc 署名で
 artifact を作る。
 
-Linux job は `scripts/package-flatpak.sh` で Flatpak bundle を作り、
-`net.hyrorre.BMZPlayer` として `flatpak run ... --help` まで確認する。現状の
-manifest は build 時 network access を使うため、Flathub 提出前に
-`flatpak-cargo-generator.py` などで Cargo source を固定する。
-GitHub runner では `flatpak-builder` が debug symbol を strip するときに
-`eu-strip` / `eu-elfcompress` を使うため、`elfutils` も install する。
+Linux job は Flatpak 用 container
+`ghcr.io/flathub-infra/flatpak-github-actions:freedesktop-25.08` で
+`scripts/package-flatpak.sh` を実行し、`net.hyrorre.BMZPlayer` として
+`flatpak run ... --help` まで確認する。Actions cache は `.flatpak-builder` のみに
+限定し、`dist/flatpak/repo` は cache しない。release bundle へ古い Flatpak repo /
+AppStream / commit 履歴を混ぜないため、package script は build dir と repo dir を
+ビルド前に作り直す。
+
+CI では `Cargo.toml` / release tag / `BMZ_VERSION` と
+`installer/flatpak/net.hyrorre.BMZPlayer.metainfo.xml` の先頭 `<release>` version が
+一致することも検証する。現状の manifest は build 時 network access を使うため、
+Flathub 提出前に `flatpak-cargo-generator.py` などで Cargo source を固定する。
 
 workflow は FFmpeg の package/version provenance を artifact と一緒に残し、
 `ffmpeg -version` に `--enable-nonfree` が含まれる場合は失敗する。FFmpeg library を

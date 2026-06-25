@@ -373,6 +373,7 @@ jobs:
     needs: metadata
     env:
       BMZ_VERSION: ${{ needs.metadata.outputs.version }}
+      BMZ_RELEASE_TAG: ${{ needs.metadata.outputs.tag }}
       FLATPAK_APP_ID: net.hyrorre.BMZPlayer
     defaults:
       run:
@@ -387,13 +388,20 @@ jobs:
 
       - name: Prepare Flatpak container
         run: |
-          if command -v dbus-uuidgen >/dev/null 2>&1; then
+          if [ ! -s /etc/machine-id ]; then
+            rm -f /etc/machine-id
             dbus-uuidgen --ensure=/etc/machine-id
-          elif [ ! -s /etc/machine-id ]; then
-            tr -d '-' </proc/sys/kernel/random/uuid >/etc/machine-id
           fi
+
           mkdir -p /var/lib/dbus
-          cp /etc/machine-id /var/lib/dbus/machine-id
+
+          if [ ! -s /var/lib/dbus/machine-id ]; then
+            rm -f /var/lib/dbus/machine-id
+            ln -s /etc/machine-id /var/lib/dbus/machine-id
+          fi
+
+          test -s /etc/machine-id
+          test -s /var/lib/dbus/machine-id
 
       - name: Configure Flathub remote
         run: |
@@ -410,15 +418,31 @@ jobs:
       - name: Cache Flatpak builder state
         uses: actions/cache@v5
         with:
-          path: |
-            .flatpak-builder
-            dist/flatpak/repo
-          key: release-flatpak-x64-${{ hashFiles('Cargo.lock', 'installer/flatpak/net.hyrorre.BMZPlayer.yml') }}
+          path: .flatpak-builder
+          key: release-flatpak-x64-${{ hashFiles('Cargo.lock', 'installer/flatpak/net.hyrorre.BMZPlayer.yml', 'installer/flatpak/net.hyrorre.BMZPlayer.metainfo.xml') }}
           restore-keys: |
             release-flatpak-x64-
 
       - name: Validate Flatpak metadata
         run: |
+          cargo_version="$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n 1)"
+          if [[ "${cargo_version}" != "${BMZ_VERSION}" ]]; then
+            echo "Cargo.toml version ${cargo_version} does not match BMZ_VERSION ${BMZ_VERSION}" >&2
+            exit 1
+          fi
+          if [[ "${BMZ_RELEASE_TAG}" != "v${BMZ_VERSION}" ]]; then
+            echo "release tag ${BMZ_RELEASE_TAG} does not match BMZ_VERSION ${BMZ_VERSION}" >&2
+            exit 1
+          fi
+          if ! grep -q "<release version=\"${BMZ_VERSION}\"" installer/flatpak/net.hyrorre.BMZPlayer.metainfo.xml; then
+            echo "metainfo.xml does not contain release version ${BMZ_VERSION}" >&2
+            exit 1
+          fi
+          first_release="$(sed -n 's/.*<release version="\([^"]*\)".*/\1/p' installer/flatpak/net.hyrorre.BMZPlayer.metainfo.xml | head -n 1)"
+          if [[ "${first_release}" != "${BMZ_VERSION}" ]]; then
+            echo "latest metainfo release ${first_release} does not match BMZ_VERSION ${BMZ_VERSION}" >&2
+            exit 1
+          fi
           desktop-file-validate installer/flatpak/net.hyrorre.BMZPlayer.desktop
           appstreamcli validate --no-net installer/flatpak/net.hyrorre.BMZPlayer.metainfo.xml
           flatpak-builder --show-deps installer/flatpak/net.hyrorre.BMZPlayer.yml
