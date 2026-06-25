@@ -115,6 +115,7 @@ main() {
   local builder_args=(
     --force-clean
     --user
+    --disable-rofiles-fuse
     --install-deps-from=flathub
     "--repo=${repo_dir}"
   )
