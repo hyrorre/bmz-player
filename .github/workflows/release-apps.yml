@@ -300,7 +300,8 @@ jobs:
             flatpak \
             flatpak-builder \
             appstream \
-            desktop-file-utils
+            desktop-file-utils \
+            elfutils
 
       - name: Configure Flathub remote
         run: |

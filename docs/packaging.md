@@ -416,6 +416,8 @@ Linux job は `scripts/package-flatpak.sh` で Flatpak bundle を作り、
 `net.hyrorre.BMZPlayer` として `flatpak run ... --help` まで確認する。現状の
 manifest は build 時 network access を使うため、Flathub 提出前に
 `flatpak-cargo-generator.py` などで Cargo source を固定する。
+GitHub runner では `flatpak-builder` が debug symbol を strip するときに
+`eu-strip` / `eu-elfcompress` を使うため、`elfutils` も install する。
 
 workflow は FFmpeg の package/version provenance を artifact と一緒に残し、
 `ffmpeg -version` に `--enable-nonfree` が含まれる場合は失敗する。FFmpeg library を
