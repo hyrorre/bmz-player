@@ -262,6 +262,30 @@ char id=65 x=0 y=0 width=1 height=1 xoffset=1 yoffset=2 xadvance=9 page=0 chnl=0
         std::fs::remove_dir_all(root).unwrap();
     }
 
+    #[test]
+    fn bitmap_font_loads_tga_pages() {
+        let root = temp_dir();
+        std::fs::create_dir_all(&root).unwrap();
+        write_test_tga(&root.join("font_00.tga"));
+        std::fs::write(
+            root.join("font.fnt"),
+            r#"info face="test" size=16 padding=0,0,0,0
+common lineHeight=20 base=15 scaleW=2 scaleH=2 pages=1 packed=0
+page id=0 file="font_00.tga"
+chars count=1
+char id=65 x=0 y=0 width=1 height=1 xoffset=1 yoffset=2 xadvance=9 page=0 chnl=0
+"#,
+        )
+        .unwrap();
+
+        let font = load_bitmap_font(&root.join("font.fnt")).unwrap();
+
+        assert_eq!(font.pages[&0].image.width, 2);
+        assert_eq!(font.pages[&0].image.height, 2);
+        assert_eq!(font.glyphs[&'A'].xadvance, 9);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
     fn temp_dir() -> PathBuf {
         let stamp =
             std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
@@ -276,5 +300,15 @@ char id=65 x=0 y=0 width=1 height=1 xoffset=1 yoffset=2 xadvance=9 page=0 chnl=0
         )
         .expect("rgba buffer dimensions match pixels");
         buffer.save_with_format(path, image::ImageFormat::Png).unwrap();
+    }
+
+    fn write_test_tga(path: &Path) {
+        let buffer = image::RgbaImage::from_raw(
+            2,
+            2,
+            vec![255, 255, 255, 255, 0, 0, 0, 0, 0, 0, 0, 0, 255, 255, 255, 128],
+        )
+        .expect("rgba buffer dimensions match pixels");
+        buffer.save_with_format(path, image::ImageFormat::Tga).unwrap();
     }
 }

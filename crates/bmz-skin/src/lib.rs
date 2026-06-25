@@ -679,6 +679,199 @@ mod tests {
     }
 
     #[test]
+    fn lua_skin_main_state_offset_exposes_zero_defaults_by_id() {
+        let root = unique_test_dir("bmz-skin-lua");
+        fs::create_dir_all(&root).unwrap();
+        fs::write(
+            root.join("play7.luaskin"),
+            r#"
+            local main_state = require("main_state")
+            if skin_config then
+                local offset = main_state.offset(4)
+                return {
+                    type = 0,
+                    destination = {
+                        { id = -110, dst = {{
+                            x = offset.x,
+                            y = 1080 + offset.y,
+                            w = offset.w,
+                            h = offset.h,
+                            r = offset.r,
+                            a = offset.a
+                        }} }
+                    }
+                }
+            end
+            return { type = 0 }
+            "#,
+        )
+        .unwrap();
+
+        let loaded =
+            load_lua_skin_value(&root.join("play7.luaskin"), &BTreeMap::new(), &BTreeMap::new())
+                .unwrap();
+
+        assert_eq!(loaded.value["destination"][0]["dst"][0]["x"], 0);
+        assert_eq!(loaded.value["destination"][0]["dst"][0]["y"], 1080);
+        assert_eq!(loaded.value["destination"][0]["dst"][0]["w"], 0);
+        assert_eq!(loaded.value["destination"][0]["dst"][0]["h"], 0);
+        assert_eq!(loaded.value["destination"][0]["dst"][0]["r"], 0);
+        assert_eq!(loaded.value["destination"][0]["dst"][0]["a"], 0);
+    }
+
+    #[test]
+    fn lua_skin_runtime_stub_treats_normal_play_as_autoplay_off() {
+        let root = unique_test_dir("bmz-skin-lua");
+        fs::create_dir_all(&root).unwrap();
+        fs::write(
+            root.join("play7.luaskin"),
+            r#"
+            local main_state = require("main_state")
+            if skin_config then
+                local graph = {}
+                if main_state.option(32) then
+                    table.insert(graph, { id = "score", src = 1, x = 0, y = 0, w = 1, h = 10, type = 110 })
+                end
+                return {
+                    type = 0,
+                    graph = graph,
+                    image = main_state.option(33) and {{ id = "autoplay", src = 1, x = 0, y = 0, w = 1, h = 1 }} or {}
+                }
+            end
+            return { type = 0 }
+            "#,
+        )
+        .unwrap();
+
+        let loaded =
+            load_lua_skin_value(&root.join("play7.luaskin"), &BTreeMap::new(), &BTreeMap::new())
+                .unwrap();
+
+        assert_eq!(loaded.value["graph"][0]["id"], "score");
+        assert_eq!(loaded.value["image"].as_array().map(Vec::len), Some(0));
+    }
+
+    #[test]
+    fn lua_skin_os_clock_after_draw_becomes_elapsed_timer_condition() {
+        let root = unique_test_dir("bmz-skin-lua");
+        fs::create_dir_all(&root).unwrap();
+        fs::write(
+            root.join("play7.luaskin"),
+            r#"
+            local function after(ms)
+                local start_time = nil
+                return function()
+                    start_time = start_time or os.clock()
+                    return (os.clock() - start_time) * 1000 >= ms
+                end
+            end
+            if skin_config then
+                return {
+                    type = 0,
+                    image = {{ id = "keyflash", src = 1, x = 0, y = 0, w = 1, h = 1 }},
+                    destination = {{
+                        id = "keyflash",
+                        timer = 101,
+                        draw = after(1800),
+                        dst = {{ x = 0, y = 0, w = 1, h = 1 }}
+                    }}
+                }
+            end
+            return { type = 0 }
+            "#,
+        )
+        .unwrap();
+
+        let loaded =
+            load_lua_skin_value(&root.join("play7.luaskin"), &BTreeMap::new(), &BTreeMap::new())
+                .unwrap();
+
+        assert_eq!(loaded.value["destination"][0]["draw"], "timer(0) >= 1800");
+    }
+
+    #[test]
+    fn lua_skin_os_clock_after_and_option_draw_becomes_elapsed_timer_and_option_condition() {
+        let root = unique_test_dir("bmz-skin-lua");
+        fs::create_dir_all(&root).unwrap();
+        fs::write(
+            root.join("play7.luaskin"),
+            r#"
+            local main_state = require("main_state")
+            local function after_and_op(ms, ...)
+                local start_time = nil
+                local ops = {...}
+                return function()
+                    start_time = start_time or os.clock()
+                    if (os.clock() - start_time) * 1000 < ms then
+                        return false
+                    end
+                    for _, op in ipairs(ops) do
+                        if not main_state.option(op) then
+                            return false
+                        end
+                    end
+                    return true
+                end
+            end
+            if skin_config then
+                return {
+                    type = 0,
+                    value = {{ id = "lanecover-value", src = 1, x = 0, y = 0, w = 10, h = 1, divx = 10, digit = 3, ref = 14 }},
+                    destination = {{
+                        id = "lanecover-value",
+                        draw = after_and_op(1800, 270),
+                        dst = {{ x = 0, y = 0, w = 1, h = 1 }}
+                    }}
+                }
+            end
+            return { type = 0 }
+            "#,
+        )
+        .unwrap();
+
+        let loaded =
+            load_lua_skin_value(&root.join("play7.luaskin"), &BTreeMap::new(), &BTreeMap::new())
+                .unwrap();
+
+        assert_eq!(loaded.value["destination"][0]["draw"], "timer(0) >= 1800 and option(270)");
+    }
+
+    #[test]
+    fn lua_skin_load_time_table_level_text_ref_is_preserved() {
+        let root = unique_test_dir("bmz-skin-lua");
+        fs::create_dir_all(&root).unwrap();
+        fs::write(
+            root.join("play7.luaskin"),
+            r#"
+            local main_state = require("main_state")
+            local table_text = main_state.text(1002)
+            if skin_config then
+                return {
+                    type = 0,
+                    text = {{
+                        id = "tableLevel",
+                        font = 3,
+                        size = 18,
+                        value = function()
+                            return table_text
+                        end
+                    }}
+                }
+            end
+            return { type = 0 }
+            "#,
+        )
+        .unwrap();
+
+        let loaded =
+            load_lua_skin_value(&root.join("play7.luaskin"), &BTreeMap::new(), &BTreeMap::new())
+                .unwrap();
+
+        assert_eq!(loaded.value["text"][0]["ref"], 1002);
+        assert!(loaded.value["text"][0].get("constantText").is_none());
+    }
+
+    #[test]
     fn lua_skin_event_util_module_loads_custom_event_helpers() {
         let root = unique_test_dir("bmz-skin-lua");
         fs::create_dir_all(&root).unwrap();

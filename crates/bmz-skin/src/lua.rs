@@ -307,7 +307,7 @@ fn install_sandbox(
         skin_config.set("get_path", get_path)?;
         globals.set("skin_config", skin_config)?;
     }
-    globals.set("os", create_os_stub(lua)?)?;
+    globals.set("os", create_os_stub(lua, main_state_probe.clone())?)?;
     globals.set("io", create_io_stub(lua, root)?)?;
     globals.set("debug", Value::Nil)?;
     if let Ok(package) = globals.get::<Table>("package") {
@@ -412,6 +412,8 @@ struct MainStateProbe {
     float_number_calls: Vec<i32>,
     float_number_values: BTreeMap<i32, f64>,
     text_calls: Vec<i32>,
+    os_clock_calls: usize,
+    os_clock_value: Option<f64>,
     time_value_us: i32,
     next_dynamic_timer_id: i32,
     dynamic_timers: Vec<(i32, String)>,
@@ -434,6 +436,8 @@ impl Default for MainStateProbe {
             float_number_calls: Vec::new(),
             float_number_values: BTreeMap::new(),
             text_calls: Vec::new(),
+            os_clock_calls: 0,
+            os_clock_value: None,
             time_value_us: 1_000_000,
             next_dynamic_timer_id: SKIN_DYNAMIC_TIMER_BASE,
             dynamic_timers: Vec::new(),
@@ -458,6 +462,8 @@ impl MainStateProbe {
         self.float_number_calls.clear();
         self.float_number_values.clear();
         self.text_calls.clear();
+        self.os_clock_calls = 0;
+        self.os_clock_value = None;
         self.event_index_calls.clear();
         self.event_index_values.clear();
     }
@@ -679,6 +685,38 @@ impl MainStateProbe {
         self.event_index_values.insert(event_id, value);
     }
 
+    fn begin_os_clock_recording(&mut self, value: f64) {
+        self.mode = MainStateProbeMode::RecordNumbers { default_value: 0 };
+        self.number_calls.clear();
+        self.number_values.clear();
+        self.option_calls.clear();
+        self.option_values.clear();
+        self.timer_calls.clear();
+        self.timer_values.clear();
+        self.event_index_calls.clear();
+        self.event_index_values.clear();
+        self.gauge_type_calls = 0;
+        self.gauge_type_value = 0;
+        self.float_number_calls.clear();
+        self.float_number_values.clear();
+        self.text_calls.clear();
+        self.os_clock_calls = 0;
+        self.os_clock_value = Some(value);
+    }
+
+    fn begin_os_clock_options_recording(
+        &mut self,
+        value: f64,
+        option_values: &[(i32, bool)],
+        default_option_value: bool,
+    ) {
+        self.begin_os_clock_recording(value);
+        self.option_values.insert(i32::MIN, default_option_value);
+        for &(option_id, option_value) in option_values {
+            self.option_values.insert(option_id, option_value);
+        }
+    }
+
     fn end_recording(&mut self) {
         self.mode = MainStateProbeMode::RuntimeStub;
         self.number_values.clear();
@@ -688,6 +726,7 @@ impl MainStateProbe {
         self.event_index_calls.clear();
         self.gauge_type_calls = 0;
         self.gauge_type_value = 0;
+        self.os_clock_value = None;
     }
 
     fn number(&mut self, ref_id: i32) -> i32 {
@@ -710,7 +749,11 @@ impl MainStateProbe {
 
     fn option(&mut self, option_id: i32) -> bool {
         if matches!(self.mode, MainStateProbeMode::RuntimeStub) {
-            return self.option_values.get(&option_id).copied().unwrap_or(false);
+            return self
+                .option_values
+                .get(&option_id)
+                .copied()
+                .unwrap_or_else(|| lua_runtime_stub_option(option_id));
         }
         self.option_calls.push(option_id);
         self.option_values
@@ -760,6 +803,11 @@ impl MainStateProbe {
             return "BMZ Player 0.1.0".to_string();
         }
         if matches!(self.mode, MainStateProbeMode::RuntimeStub) {
+            if (1001..=1003).contains(&ref_id) {
+                return format!(
+                    "{LUA_TEXT_REF_SENTINEL_PREFIX}{ref_id}{LUA_TEXT_REF_SENTINEL_SUFFIX}"
+                );
+            }
             return String::new();
         }
         self.text_calls.push(ref_id);
@@ -793,7 +841,22 @@ impl MainStateProbe {
         self.begin_number_recording_with_values(numbers);
         self.float_number_values = floats;
     }
+
+    fn os_clock(&mut self) -> f64 {
+        if let Some(value) = self.os_clock_value {
+            self.os_clock_calls += 1;
+            return value;
+        }
+        if !matches!(self.mode, MainStateProbeMode::RuntimeStub) {
+            self.os_clock_calls += 1;
+            return 0.0;
+        }
+        lua_os_clock_seconds()
+    }
 }
+
+const LUA_TEXT_REF_SENTINEL_PREFIX: &str = "__BMZ_TEXT_REF_";
+const LUA_TEXT_REF_SENTINEL_SUFFIX: &str = "__";
 
 fn lua_runtime_stub_number(ref_id: i32) -> i32 {
     let now = unix_seconds_to_utc_datetime(lua_os_now_seconds());
@@ -803,6 +866,14 @@ fn lua_runtime_stub_number(ref_id: i32) -> i32 {
         22 => now.month as i32,
         23 => now.day as i32,
         _ => 0,
+    }
+}
+
+fn lua_runtime_stub_option(option_id: i32) -> bool {
+    match option_id {
+        // OPTION_AUTOPLAYOFF. Some Lua play skins build their score graph only for normal play.
+        32 => true,
+        _ => false,
     }
 }
 
@@ -849,6 +920,10 @@ fn create_main_state_stub(lua: &Lua, probe: Arc<Mutex<MainStateProbe>>) -> mlua:
                 .map_err(|_| mlua::Error::external("main_state probe lock poisoned"))?
                 .text(ref_id))
         })?,
+    )?;
+    table.set(
+        "offset",
+        lua.create_function(move |lua, _offset_id: i32| create_main_state_offset_table(lua))?,
     )?;
     let probe_for_float_number = probe.clone();
     table.set(
@@ -940,6 +1015,17 @@ fn create_main_state_stub(lua: &Lua, probe: Arc<Mutex<MainStateProbe>>) -> mlua:
     Ok(Value::Table(table))
 }
 
+fn create_main_state_offset_table(lua: &Lua) -> mlua::Result<Value> {
+    let table = lua.create_table()?;
+    table.set("x", 0)?;
+    table.set("y", 0)?;
+    table.set("w", 0)?;
+    table.set("h", 0)?;
+    table.set("r", 0)?;
+    table.set("a", 0)?;
+    Ok(Value::Table(table))
+}
+
 #[derive(Debug)]
 struct TimerObserveState {
     timer_value: i32,
@@ -957,14 +1043,16 @@ fn lua_load_now_ms() -> i32 {
     origin.elapsed().as_millis().min(i32::MAX as u128) as i32
 }
 
-fn create_os_stub(lua: &Lua) -> mlua::Result<Value> {
+fn create_os_stub(lua: &Lua, probe: Arc<Mutex<MainStateProbe>>) -> mlua::Result<Value> {
     let table = lua.create_table()?;
+    let probe_for_clock = probe.clone();
     table.set(
         "clock",
-        lua.create_function(|_, ()| {
-            static ORIGIN: OnceLock<Instant> = OnceLock::new();
-            let origin = ORIGIN.get_or_init(Instant::now);
-            Ok(origin.elapsed().as_secs_f64())
+        lua.create_function(move |_, ()| {
+            Ok(probe_for_clock
+                .lock()
+                .map_err(|_| mlua::Error::external("main_state probe lock poisoned"))?
+                .os_clock())
         })?,
     )?;
     table.set(
@@ -1041,6 +1129,12 @@ fn create_io_stub(lua: &Lua, root: &Path) -> mlua::Result<Value> {
     )?;
     table.set("close", lua.create_function(|_, _file: Value| Ok(true))?)?;
     Ok(Value::Table(table))
+}
+
+fn lua_os_clock_seconds() -> f64 {
+    static ORIGIN: OnceLock<Instant> = OnceLock::new();
+    let origin = ORIGIN.get_or_init(Instant::now);
+    origin.elapsed().as_secs_f64()
 }
 
 fn create_read_file_stub(lua: &Lua, source: String) -> mlua::Result<Value> {
@@ -2238,6 +2332,10 @@ fn lua_table_to_json(
                 {
                     object.insert("value_expr".to_string(), JsonValue::String(value_expr));
                 } else if path.contains(".text[")
+                    && let Some(ref_id) = infer_constant_text_ref_at_load(function)
+                {
+                    object.insert("ref".to_string(), JsonValue::Number(JsonNumber::from(ref_id)));
+                } else if path.contains(".text[")
                     && let Some(text) = infer_constant_text_at_load(function)
                 {
                     object.insert("constantText".to_string(), JsonValue::String(text));
@@ -2678,6 +2776,132 @@ fn infer_main_state_timer_option_draw_condition(
         .find_map(|(condition, expected)| (observed == expected).then_some(condition))
 }
 
+fn infer_os_clock_after_draw_condition(
+    function: &Function,
+    main_state_probe: &Arc<Mutex<MainStateProbe>>,
+) -> Option<String> {
+    let mut first_true_ms = None;
+    let mut saw_clock = false;
+    let mut saw_false = false;
+    for elapsed_ms in (0..=10_000).step_by(100) {
+        {
+            main_state_probe.lock().ok()?.begin_os_clock_recording(elapsed_ms as f64 / 1000.0);
+        }
+        let result = function.call::<Value>(()).ok();
+        let (clock_calls, value) = {
+            let mut probe = main_state_probe.lock().ok()?;
+            let clock_calls = probe.os_clock_calls;
+            probe.end_recording();
+            let value = match result? {
+                Value::Boolean(value) => value,
+                _ => return None,
+            };
+            (clock_calls, value)
+        };
+        saw_clock |= clock_calls > 0;
+        if value {
+            first_true_ms = Some(elapsed_ms);
+            break;
+        }
+        saw_false = true;
+    }
+    let first_true_ms = first_true_ms?;
+    (saw_clock && saw_false).then(|| format!("timer(0) >= {first_true_ms}"))
+}
+
+fn infer_os_clock_after_option_draw_condition(
+    function: &Function,
+    main_state_probe: &Arc<Mutex<MainStateProbe>>,
+) -> Option<String> {
+    let mut first_option_call_ms = None;
+    let mut saw_clock = false;
+    let mut saw_false_before_option = false;
+    for elapsed_ms in (0..=10_000).step_by(100) {
+        {
+            main_state_probe.lock().ok()?.begin_os_clock_recording(elapsed_ms as f64 / 1000.0);
+        }
+        let result = function.call::<Value>(()).ok();
+        let (clock_calls, option_calls, value) = {
+            let mut probe = main_state_probe.lock().ok()?;
+            let clock_calls = probe.os_clock_calls;
+            let option_calls = probe.option_calls.clone();
+            probe.end_recording();
+            let value = match result? {
+                Value::Boolean(value) => value,
+                _ => return None,
+            };
+            (clock_calls, option_calls, value)
+        };
+        saw_clock |= clock_calls > 0;
+        if option_calls.is_empty() {
+            if !value {
+                saw_false_before_option = true;
+            }
+            continue;
+        }
+        first_option_call_ms = Some(elapsed_ms);
+        break;
+    }
+    let first_option_ms = first_option_call_ms?;
+    if !saw_clock || !saw_false_before_option {
+        return None;
+    }
+
+    let mut option_ids = Vec::<i32>::new();
+    for _ in 0..16 {
+        let known_true = option_ids.iter().map(|&option_id| (option_id, true)).collect::<Vec<_>>();
+        let (calls, value) = call_draw_with_os_clock_options(
+            function,
+            main_state_probe,
+            first_option_ms,
+            &known_true,
+            false,
+        )?;
+        let next_option_id = calls.into_iter().find(|call| !option_ids.contains(call));
+        if let Some(option_id) = next_option_id {
+            option_ids.push(option_id);
+            continue;
+        }
+        if value && !option_ids.is_empty() {
+            let mut condition = format!("timer(0) >= {first_option_ms}");
+            for option_id in option_ids {
+                condition.push_str(&format!(" and option({option_id})"));
+            }
+            return Some(condition);
+        }
+        return None;
+    }
+    None
+}
+
+fn call_draw_with_os_clock_options(
+    function: &Function,
+    main_state_probe: &Arc<Mutex<MainStateProbe>>,
+    elapsed_ms: i32,
+    option_values: &[(i32, bool)],
+    default_option_value: bool,
+) -> Option<(Vec<i32>, bool)> {
+    {
+        main_state_probe.lock().ok()?.begin_os_clock_options_recording(
+            elapsed_ms as f64 / 1000.0,
+            option_values,
+            default_option_value,
+        );
+    }
+    let result = function.call::<Value>(()).ok();
+    let (calls, value) = {
+        let mut probe = main_state_probe.lock().ok()?;
+        let calls = probe.option_calls.clone();
+        probe.end_recording();
+        let value = match result? {
+            Value::Boolean(value) => value,
+            _ => return None,
+        };
+        (calls, value)
+    };
+    Some((calls, value))
+}
+
 fn collect_timer_refs(
     function: &Function,
     main_state_probe: &Arc<Mutex<MainStateProbe>>,
@@ -3044,6 +3268,8 @@ fn infer_boolean_predicate(
         .or_else(|| infer_main_state_gauge_type_draw_condition(function, main_state_probe))
         .or_else(|| infer_keybeam_timer_event_draw_condition(function, main_state_probe))
         .or_else(|| infer_main_state_timer_option_draw_condition(function, main_state_probe))
+        .or_else(|| infer_os_clock_after_draw_condition(function, main_state_probe))
+        .or_else(|| infer_os_clock_after_option_draw_condition(function, main_state_probe))
         .or_else(|| infer_judge_fast_slow_draw_condition(function, main_state_probe, object_id))
         .or_else(|| infer_or_of_number_gt_zero(function, main_state_probe))
         .or_else(|| infer_or_of_number_eq_zero(function, main_state_probe))
@@ -3070,6 +3296,16 @@ fn infer_constant_text_at_load(function: &Function) -> Option<String> {
         Value::Boolean(value) => Some(value.to_string()),
         _ => None,
     }
+}
+
+fn infer_constant_text_ref_at_load(function: &Function) -> Option<i32> {
+    let text = infer_constant_text_at_load(function)?;
+    let ref_id = text
+        .strip_prefix(LUA_TEXT_REF_SENTINEL_PREFIX)?
+        .strip_suffix(LUA_TEXT_REF_SENTINEL_SUFFIX)?
+        .parse::<i32>()
+        .ok()?;
+    (1001..=1003).contains(&ref_id).then_some(ref_id)
 }
 
 fn repair_keybeam_destination_draws(root: &mut JsonMap<String, JsonValue>) {

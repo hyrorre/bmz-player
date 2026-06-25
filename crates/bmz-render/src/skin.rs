@@ -9436,7 +9436,7 @@ fn skin_slider_progress(slider: &SkinSliderDef, state: &SkinDrawState) -> Option
 fn skin_slider_progress_by_type(slider_type: i32, state: &SkinDrawState) -> Option<f32> {
     match slider_type {
         1 => Some(state.select_scroll_progress.clamp(0.0, 1.0)),
-        4 => (state.lane_cover > 0.0).then_some(state.lane_cover.clamp(0.0, 1.0)),
+        4 | 5 => (state.lane_cover > 0.0).then_some(state.lane_cover.clamp(0.0, 1.0)),
         6 => Some(state.play_progress.clamp(0.0, 1.0)),
         17 => Some(state.select_master_volume.clamp(0.0, 1.0)),
         18 => Some(state.select_key_volume.clamp(0.0, 1.0)),
@@ -9448,6 +9448,7 @@ fn skin_slider_progress_by_type(slider_type: i32, state: &SkinDrawState) -> Opti
 fn skin_timer_elapsed_ms(timer: Option<i32>, state: &SkinDrawState) -> Option<i32> {
     match timer {
         None => Some(state.elapsed_ms),
+        Some(0) => Some(state.elapsed_ms),
         Some(2) => state.fadeout_ms,
         Some(3) => state.failed_ms,
         Some(150) => state.result_graph_begin_ms,
@@ -18664,6 +18665,7 @@ mod tests {
                 "slider": [
                     { "id": "progress", "src": 1, "x": 10, "y": 20, "w": 5, "h": 6, "angle": 2, "range": 40, "type": 6 },
                     { "id": "lane-cover", "src": 1, "x": 0, "y": 0, "w": 10, "h": 10, "angle": 2, "range": 20, "type": 4 },
+                    { "id": "lane-cover-modern", "src": 1, "x": 0, "y": 0, "w": 10, "h": 10, "angle": 2, "range": 20, "type": 5 },
                     { "id": "song-scroll", "src": 1, "x": 20, "y": 20, "w": 5, "h": 6, "angle": 2, "range": 40, "type": 1 },
                     { "id": "master", "src": 1, "x": 30, "y": 20, "w": 5, "h": 6, "angle": 1, "range": 40, "type": 17 },
                     { "id": "unknown", "src": 1, "x": 10, "y": 20, "w": 5, "h": 6, "angle": 0, "range": 40, "type": 999 }
@@ -18671,6 +18673,7 @@ mod tests {
                 "destination": [
                     { "id": "progress", "blend": 2, "dst": [{ "x": 30, "y": 80, "w": 5, "h": 6 }] },
                     { "id": "lane-cover", "dst": [{ "x": 10, "y": 50, "w": 10, "h": 10 }] },
+                    { "id": "lane-cover-modern", "dst": [{ "x": 20, "y": 50, "w": 10, "h": 10 }] },
                     { "id": "song-scroll", "dst": [{ "x": 30, "y": 80, "w": 5, "h": 6 }] },
                     { "id": "master", "dst": [{ "x": 30, "y": 80, "w": 5, "h": 6 }] },
                     { "id": "unknown", "dst": [{ "x": 30, "y": 80, "w": 5, "h": 6 }] }
@@ -18734,11 +18737,16 @@ mod tests {
             &sources,
             &SkinDrawState { lane_cover: 0.5, ..SkinDrawState::default() },
         );
-        assert_eq!(lane_cover.len(), 4);
+        assert_eq!(lane_cover.len(), 5);
         assert!(matches!(
             lane_cover[1],
             SkinRenderItem::Image { rect: Rect { x, y, .. }, .. }
                 if approx_eq(x, 0.1) && approx_eq(y, 0.5)
+        ));
+        assert!(matches!(
+            lane_cover[2],
+            SkinRenderItem::Image { rect: Rect { x, y, .. }, .. }
+                if approx_eq(x, 0.2) && approx_eq(y, 0.5)
         ));
     }
 
@@ -20096,6 +20104,13 @@ mod tests {
         };
         assert_eq!(skin_timer_elapsed_ms(Some(143), &active), Some(250));
         assert_eq!(skin_timer_elapsed_ms(Some(144), &active), Some(250));
+    }
+
+    #[test]
+    fn timer_zero_uses_scene_elapsed_time() {
+        let state = SkinDrawState { elapsed_ms: 1_800, ..SkinDrawState::default() };
+
+        assert_eq!(skin_timer_elapsed_ms(Some(0), &state), Some(1_800));
     }
 
     #[test]
