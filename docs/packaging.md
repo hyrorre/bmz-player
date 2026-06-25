@@ -357,6 +357,8 @@ bmz-player-v<version>-macos-arm64.app.zip
 bmz-player-v<version>-macos-x64.app.zip
 bmz-player-v<version>-macos-<arch>-brew-ffmpeg.json
 bmz-player-v<version>-macos-<arch>-ffmpeg-version.txt
+bmz-player-v<version>-linux-x64.flatpak
+bmz-player-v<version>-linux-x64-flatpak-provenance.txt
 SHA256SUMS.txt
 ```
 
@@ -405,6 +407,11 @@ Windows job は public runner に ASIO SDK を用意しないため、既定で
 macOS job は arm64 / x64 の app zip を別々に作る。現状は `--ad-hoc-sign` のため、
 署名済み release を公開する前に Developer ID 署名と notarization 用の protected
 GitHub secrets を追加する。
+
+Linux job は `scripts/package-flatpak.sh` で Flatpak bundle を作り、
+`net.hyrorre.BMZPlayer` として `flatpak run ... --help` まで確認する。現状の
+manifest は build 時 network access を使うため、Flathub 提出前に
+`flatpak-cargo-generator.py` などで Cargo source を固定する。
 
 workflow は FFmpeg の package/version provenance を artifact と一緒に残し、
 `ffmpeg -version` に `--enable-nonfree` が含まれる場合は失敗する。FFmpeg library を
