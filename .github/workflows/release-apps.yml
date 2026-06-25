@@ -294,6 +294,9 @@ jobs:
     env:
       BMZ_VERSION: ${{ needs.metadata.outputs.version }}
       FLATPAK_APP_ID: net.hyrorre.BMZPlayer
+    defaults:
+      run:
+        shell: bash
     steps:
       - name: Checkout release ref
         uses: actions/checkout@v7
@@ -322,6 +325,7 @@ jobs:
           flatpak-builder --version
           appstreamcli --version
           command -v desktop-file-validate
+          command -v dbus-run-session
 
       - name: Cache Flatpak builder state
         uses: actions/cache@v5
@@ -356,12 +360,14 @@ jobs:
 
       - name: Package Flatpak app
         run: |
-          scripts/package-flatpak.sh
+          dbus-run-session -- scripts/package-flatpak.sh
 
       - name: Verify Flatpak bundle
         run: |
-          flatpak install --user -y "dist/flatpak/bmz-player-${BMZ_VERSION}-linux.flatpak"
-          flatpak run "${FLATPAK_APP_ID}" --help
+          dbus-run-session -- bash -c '
+            flatpak install --user -y "dist/flatpak/bmz-player-${BMZ_VERSION}-linux.flatpak"
+            flatpak run "${FLATPAK_APP_ID}" --help
+          '
 
       - name: Create Flatpak release files
         run: |
@@ -377,10 +383,10 @@ jobs:
           {
             echo
             echo "Flatpak installed refs after build:"
-            flatpak list --user
+            dbus-run-session -- flatpak list --user
             echo
             echo "Installed app info:"
-            flatpak info --user "${FLATPAK_APP_ID}"
+            dbus-run-session -- flatpak info --user "${FLATPAK_APP_ID}"
           } >> "dist/release/bmz-player-v${BMZ_VERSION}-linux-x64-flatpak-provenance.txt"
 
           ls -la dist/release
