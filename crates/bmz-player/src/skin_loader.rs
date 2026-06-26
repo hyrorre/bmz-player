@@ -170,6 +170,7 @@ pub struct DecodedSource {
 }
 
 pub type SharedSkinSourceAssetCache = Arc<Mutex<SkinSourceAssetCache>>;
+pub type SharedSkinGpuTextureCache = Arc<Mutex<SkinGpuTextureCache>>;
 
 const SKIN_SOURCE_ASSET_CACHE_LIMIT_BYTES: usize = 256 * 1024 * 1024;
 
@@ -180,7 +181,7 @@ pub struct SkinSourceAssetCache {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-struct SkinSourceAssetCacheKey {
+pub struct SkinSourceAssetCacheKey {
     path: PathBuf,
     modified: Option<SystemTime>,
     len: u64,
@@ -209,6 +210,45 @@ impl SkinSourceAssetCache {
     }
 }
 
+#[derive(Default)]
+pub struct SkinGpuTextureCache {
+    entries: HashMap<SkinSourceAssetCacheKey, CachedSkinGpuTexture>,
+    next_texture_ids: HashMap<SkinKind, u32>,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct CachedSkinGpuTexture {
+    pub texture: SkinTextureId,
+    pub size: SkinImageSize,
+}
+
+impl SkinGpuTextureCache {
+    pub fn get(&self, key: &SkinSourceAssetCacheKey) -> Option<CachedSkinGpuTexture> {
+        self.entries.get(key).copied()
+    }
+
+    pub fn insert(
+        &mut self,
+        key: SkinSourceAssetCacheKey,
+        texture: SkinTextureId,
+        size: SkinImageSize,
+    ) {
+        self.entries.insert(key, CachedSkinGpuTexture { texture, size });
+    }
+
+    fn allocate_texture_id(&mut self, kind: SkinKind) -> SkinTextureId {
+        let next = self.next_texture_ids.entry(kind).or_insert_with(|| kind.first_texture_id());
+        let texture = SkinTextureId(*next);
+        *next = next.saturating_add(1);
+        texture
+    }
+
+    pub fn clear(&mut self) {
+        self.entries.clear();
+        self.next_texture_ids.clear();
+    }
+}
+
 enum SourceDecodeTask {
     File { index: usize, source_id: String, path: PathBuf },
     Video { index: usize, source_id: String, path: PathBuf },
@@ -220,9 +260,10 @@ pub struct PreparedSource {
     pub source_id: String,
     pub path: PathBuf,
     pub texture: SkinTextureId,
-    pub prepared: PreparedTexture,
+    pub prepared: Option<PreparedTexture>,
     pub size: SkinImageSize,
     pub is_video: bool,
+    pub cache_key: Option<SkinSourceAssetCacheKey>,
 }
 
 /// decode + GPU アップロードまで終わった 1 スキンぶん。upload worker → main で渡す。
@@ -237,6 +278,14 @@ pub struct UploadedSkin {
 /// `DecodedSkin` の全ソースを GPU へアップロードして `UploadedSkin` を返す。
 /// upload worker スレッドから呼ぶ (`uploader` は `Renderer::gpu_uploader` の clone)。
 pub fn upload_decoded_skin(uploader: &GpuUploader, decoded: DecodedSkin) -> UploadedSkin {
+    upload_decoded_skin_with_texture_cache(uploader, decoded, None)
+}
+
+pub fn upload_decoded_skin_with_texture_cache(
+    uploader: &GpuUploader,
+    decoded: DecodedSkin,
+    texture_cache: Option<&SharedSkinGpuTextureCache>,
+) -> UploadedSkin {
     let DecodedSkin { kind, document, fonts, sources } = decoded;
     let prepared = sources
         .into_iter()
@@ -245,7 +294,6 @@ pub fn upload_decoded_skin(uploader: &GpuUploader, decoded: DecodedSkin) -> Uplo
             if let Err(error) = asset.validate() {
                 tracing::warn!(
                     source_id = %source_id,
-                    texture_id = texture.0,
                     path = %path.display(),
                     %error,
                     "skipping invalid beatoraja skin source"
@@ -253,8 +301,37 @@ pub fn upload_decoded_skin(uploader: &GpuUploader, decoded: DecodedSkin) -> Uplo
                 return None;
             }
             let size = SkinImageSize { width: asset.width as f32, height: asset.height as f32 };
+            let cache_key =
+                (!is_video).then(|| skin_source_asset_cache_key(&path, false)).flatten();
+            if let (Some(texture_cache), Some(cache_key)) = (texture_cache, cache_key.as_ref())
+                && let Ok(cache) = texture_cache.lock()
+                && let Some(cached) = cache.get(cache_key)
+            {
+                return Some(PreparedSource {
+                    source_id,
+                    path,
+                    texture: cached.texture,
+                    prepared: None,
+                    size: cached.size,
+                    is_video,
+                    cache_key: None,
+                });
+            }
+            let texture = texture_cache
+                .and_then(|cache| {
+                    cache.lock().ok().map(|mut cache| cache.allocate_texture_id(kind))
+                })
+                .unwrap_or(texture);
             let prepared = uploader.upload(asset.width, asset.height, &asset.pixels);
-            Some(PreparedSource { source_id, path, texture, prepared, size, is_video })
+            Some(PreparedSource {
+                source_id,
+                path,
+                texture,
+                prepared: Some(prepared),
+                size,
+                is_video,
+                cache_key,
+            })
         })
         .collect();
     UploadedSkin { kind, document, fonts, prepared }
@@ -4121,6 +4198,30 @@ mod tests {
             load_source_asset_with_cache(&path, false, Some(&cache), || Ok(fresh.clone())).unwrap();
 
         assert_eq!(actual, fresh);
+    }
+
+    #[test]
+    fn skin_gpu_texture_cache_reuses_inserted_source_textures() {
+        let root = unique_test_dir("bmz-gpu-texture-cache");
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("source.png");
+        std::fs::write(&path, b"cached").unwrap();
+        let key = skin_source_asset_cache_key(&path, false).unwrap();
+        let size = SkinImageSize { width: 64.0, height: 32.0 };
+        let mut cache = SkinGpuTextureCache::default();
+
+        let allocated = cache.allocate_texture_id(SkinKind::Play);
+        cache.insert(key.clone(), allocated, size);
+
+        let cached = cache.get(&key).unwrap();
+        assert_eq!(cached.texture, allocated);
+        assert_eq!(cached.size, size);
+        assert_ne!(cache.allocate_texture_id(SkinKind::Play), allocated);
+
+        cache.clear();
+
+        assert!(cache.get(&key).is_none());
+        assert_eq!(cache.allocate_texture_id(SkinKind::Play), SkinTextureId(10_000));
     }
 
     fn unique_test_dir(name: &str) -> PathBuf {

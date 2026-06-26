@@ -109,14 +109,15 @@ use crate::screens::settings_model::{
 };
 use crate::select_options::{ArrangeOption, AssistOption, DoubleOption, HsFixOption, TargetOption};
 use crate::skin_loader::{
-    DecodedSkin, PreparedSource, SharedSkinSourceAssetCache, SkinKind, SkinSourceAssetCache,
-    UploadedSkin, decode_beatoraja_skin_with_options,
+    DecodedSkin, PreparedSource, SharedSkinGpuTextureCache, SharedSkinSourceAssetCache,
+    SkinGpuTextureCache, SkinKind, SkinSourceAssetCache, UploadedSkin,
+    decode_beatoraja_skin_with_options,
     decode_beatoraja_skin_with_options_and_runtime_state_and_source_cache,
     default_play_skin_document_path_from_paths, default_skin_document_path_from_paths,
     enabled_options_from_selections, install_decoded_font, install_decoded_skin,
     is_decodable_skin_path, is_json_skin_path, is_lr2_skin_path, is_lua_skin_path,
     load_default_skin_into_renderer_from_paths, play_skin_selection_for, set_decoded_skin_context,
-    upload_decoded_skin,
+    upload_decoded_skin_with_texture_cache,
 };
 use crate::songs_cmd::scan_songs_with_progress;
 use crate::storage::difficulty_table_db::DifficultyTableRecord;
@@ -434,6 +435,8 @@ struct WinitApp {
     skin_upload_worker_started: bool,
     /// スキン reload 時に同一 source PNG / 動画 first frame の再デコードを避ける cache。
     skin_source_asset_cache: SharedSkinSourceAssetCache,
+    /// GPU に挿入済みの同一 skin static image texture を reload 間で再利用する cache。
+    skin_gpu_texture_cache: SharedSkinGpuTextureCache,
     bga_load_generation: u64,
     bga_load_chart_id: Option<i64>,
     bga_load_rx: Option<Receiver<PendingBgaImageResult>>,
@@ -1648,6 +1651,7 @@ impl WinitApp {
         let (skin_decode_tx, skin_decode_rx) = mpsc::channel::<PendingSkinResult>();
         let (skin_upload_tx, skin_upload_rx) = mpsc::channel::<PendingUploadResult>();
         let skin_source_asset_cache = Arc::new(Mutex::new(SkinSourceAssetCache::default()));
+        let skin_gpu_texture_cache = Arc::new(Mutex::new(SkinGpuTextureCache::default()));
         let (select_meta_image_tx, select_meta_image_rx) = mpsc::channel::<SelectMetaImageResult>();
         let (select_preview_tx, select_preview_rx) = mpsc::channel::<SelectPreviewResult>();
         let (select_folder_summary_tx, select_folder_summary_rx) =
@@ -1808,6 +1812,7 @@ impl WinitApp {
             skin_upload_rx,
             skin_upload_worker_started: false,
             skin_source_asset_cache,
+            skin_gpu_texture_cache,
             bga_load_generation: 0,
             bga_load_chart_id: None,
             bga_load_rx: None,
@@ -8416,9 +8421,10 @@ impl WinitApp {
             return;
         };
         let upload_tx = self.skin_upload_tx.clone();
+        let texture_cache = self.skin_gpu_texture_cache.clone();
         thread::Builder::new()
             .name("skin-upload".to_string())
-            .spawn(move || skin_upload_worker(decode_rx, upload_tx, uploader))
+            .spawn(move || skin_upload_worker(decode_rx, upload_tx, uploader, texture_cache))
             .expect("failed to spawn skin upload thread");
         self.skin_upload_worker_started = true;
     }
@@ -8586,8 +8592,16 @@ impl WinitApp {
         let mut document_textures = Vec::with_capacity(prepared.len());
         let mut video_sources = Vec::new();
         for source in prepared {
-            let PreparedSource { source_id, path, texture, prepared, size, is_video } = source;
-            self.renderer.insert_prepared_texture(TextureId(texture.0), prepared);
+            let PreparedSource { source_id, path, texture, prepared, size, is_video, cache_key } =
+                source;
+            if let Some(prepared) = prepared {
+                self.renderer.insert_prepared_texture(TextureId(texture.0), prepared);
+                if let Some(cache_key) = cache_key
+                    && let Ok(mut cache) = self.skin_gpu_texture_cache.lock()
+                {
+                    cache.insert(cache_key, texture, size);
+                }
+            }
             if is_video {
                 let gating = skin_video_source_gating(&document, &source_id);
                 video_sources.push(ActiveSkinVideoSource {
@@ -11077,9 +11091,12 @@ fn skin_upload_worker(
     decode_rx: Receiver<PendingSkinResult>,
     upload_tx: mpsc::Sender<PendingUploadResult>,
     uploader: bmz_render::renderer::GpuUploader,
+    texture_cache: SharedSkinGpuTextureCache,
 ) {
     while let Ok(PendingSkinResult { generation, path, kind, result }) = decode_rx.recv() {
-        let uploaded = result.map(|decoded| upload_decoded_skin(&uploader, decoded));
+        let uploaded = result.map(|decoded| {
+            upload_decoded_skin_with_texture_cache(&uploader, decoded, Some(&texture_cache))
+        });
         if upload_tx.send(PendingUploadResult { generation, path, kind, uploaded }).is_err() {
             // main 側受信端が drop された (アプリ終了)。
             break;
@@ -11770,6 +11787,9 @@ impl ApplicationHandler for WinitApp {
         // Linux の winit/wgpu backend では Window より後に Surface を drop すると
         // native 側で落ちることがあるため、Window を保持したまま GPU 資源を解放する。
         self.egui = None;
+        if let Ok(mut cache) = self.skin_gpu_texture_cache.lock() {
+            cache.clear();
+        }
         self.renderer.detach_surface();
     }
 }
