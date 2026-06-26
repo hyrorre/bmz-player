@@ -114,8 +114,9 @@ use crate::skin_loader::{
     decode_beatoraja_skin_with_options_and_runtime_state_and_source_cache,
     default_play_skin_document_path_from_paths, default_skin_document_path_from_paths,
     enabled_options_from_selections, install_decoded_font, install_decoded_skin,
-    is_decodable_skin_path, load_default_skin_into_renderer_from_paths, play_skin_selection_for,
-    set_decoded_skin_context, upload_decoded_skin,
+    is_decodable_skin_path, is_json_skin_path, is_lr2_skin_path, is_lua_skin_path,
+    load_default_skin_into_renderer_from_paths, play_skin_selection_for, set_decoded_skin_context,
+    upload_decoded_skin,
 };
 use crate::songs_cmd::scan_songs_with_progress;
 use crate::storage::difficulty_table_db::DifficultyTableRecord;
@@ -9531,6 +9532,20 @@ impl WinitApp {
                 && old_options != *selection.options;
             if play_options_only {
                 self.apply_active_play_skin_options_fast_path(key_mode, selection.options);
+                if !self.play_skin_options_need_full_reload(key_mode, selection.path.trim()) {
+                    self.last_play_skin_signature = Some((
+                        key_mode,
+                        selection.path.trim().to_string(),
+                        selection.options.clone(),
+                        selection.files.clone(),
+                    ));
+                    tracing::debug!(
+                        ?key_mode,
+                        "play skin option change applied without background reload"
+                    );
+                    tracing::info!(?request, "skin reload queued from egui skin panel");
+                    return;
+                }
             }
             self.last_play_skin_signature = None;
             self.spawn_play_skin_decode_for(key_mode);
@@ -9559,6 +9574,37 @@ impl WinitApp {
                 apply_skin_video_source_enabled_options(sources, &applied_options, &property_ops);
             }
             tracing::debug!(?key_mode, "applied play skin option change before background reload");
+        }
+    }
+
+    fn play_skin_options_need_full_reload(&self, key_mode: KeyMode, trimmed_path: &str) -> bool {
+        let path = if trimmed_path.is_empty() {
+            default_play_skin_document_path_from_paths(&self.boot.app_paths, key_mode)
+        } else {
+            match self.boot.app_paths.resolve_path_ref(trimmed_path) {
+                Ok(path) => path,
+                Err(error) => {
+                    tracing::warn!(
+                        ?key_mode,
+                        path = %trimmed_path,
+                        error = %format_error_chain(&error),
+                        "keeping play skin background reload because skin path could not be resolved"
+                    );
+                    return true;
+                }
+            }
+        };
+        match skin_path_options_need_full_reload(&path) {
+            Ok(needed) => needed,
+            Err(error) => {
+                tracing::warn!(
+                    ?key_mode,
+                    path = %path.display(),
+                    error = %format_error_chain(&error),
+                    "keeping play skin background reload because skin option dependencies could not be inspected"
+                );
+                true
+            }
         }
     }
 
@@ -10903,6 +10949,99 @@ fn destination_property_ops_allow(
         }
         if *op >= 0 { enabled_options.contains(op) } else { !enabled_options.contains(&abs_op) }
     })
+}
+
+fn skin_path_options_need_full_reload(path: &Path) -> Result<bool> {
+    if is_lua_skin_path(path) || is_lr2_skin_path(path) {
+        return Ok(true);
+    }
+    if !is_json_skin_path(path) {
+        return Ok(true);
+    }
+    json_skin_has_load_time_option_expansion(path)
+}
+
+fn json_skin_has_load_time_option_expansion(path: &Path) -> Result<bool> {
+    let root = path.parent().unwrap_or_else(|| Path::new("."));
+    let root = root
+        .canonicalize()
+        .with_context(|| format!("failed to canonicalize skin root: {}", root.display()))?;
+    let mut visited = HashSet::new();
+    json_skin_file_has_load_time_option_expansion(path, &root, &mut visited)
+}
+
+fn json_skin_file_has_load_time_option_expansion(
+    path: &Path,
+    root: &Path,
+    visited: &mut HashSet<PathBuf>,
+) -> Result<bool> {
+    let path = path
+        .canonicalize()
+        .with_context(|| format!("failed to canonicalize skin json: {}", path.display()))?;
+    if !visited.insert(path.clone()) {
+        return Ok(false);
+    }
+    let text = std::fs::read_to_string(&path)
+        .with_context(|| format!("failed to read skin json: {}", path.display()))?;
+    let value: serde_json::Value = serde_json::from_str(&text)
+        .with_context(|| format!("failed to parse skin json: {}", path.display()))?;
+    let current_dir = path.parent().unwrap_or(root);
+    json_skin_value_has_load_time_option_expansion(&value, current_dir, root, visited)
+}
+
+fn json_skin_value_has_load_time_option_expansion(
+    value: &serde_json::Value,
+    current_dir: &Path,
+    root: &Path,
+    visited: &mut HashSet<PathBuf>,
+) -> Result<bool> {
+    match value {
+        serde_json::Value::Array(items) => {
+            for item in items {
+                if json_skin_value_has_load_time_option_expansion(item, current_dir, root, visited)?
+                {
+                    return Ok(true);
+                }
+            }
+            Ok(false)
+        }
+        serde_json::Value::Object(object) => {
+            if let Some(include) = object.get("include") {
+                let include = include.as_str().with_context(|| {
+                    format!("skin json include must be a string in {}", current_dir.display())
+                })?;
+                let included = current_dir
+                    .join(include)
+                    .canonicalize()
+                    .with_context(|| format!("failed to canonicalize skin include: {include}"))?;
+                anyhow::ensure!(
+                    included.starts_with(root),
+                    "skin include escapes skin root: {}",
+                    included.display()
+                );
+                if json_skin_file_has_load_time_option_expansion(&included, root, visited)? {
+                    return Ok(true);
+                }
+            }
+            if object.contains_key("if")
+                && (object.contains_key("value") || object.contains_key("values"))
+            {
+                return Ok(true);
+            }
+            for child in object.values() {
+                if json_skin_value_has_load_time_option_expansion(
+                    child,
+                    current_dir,
+                    root,
+                    visited,
+                )? {
+                    return Ok(true);
+                }
+            }
+            Ok(false)
+        }
+        _ => Ok(false),
+    }
 }
 
 fn spawn_skin_decode(
@@ -16094,6 +16233,79 @@ mod tests {
 
         assert_eq!(sources[0].enabled_options, vec![921]);
         assert!(!sources[0].active);
+    }
+
+    #[test]
+    fn json_skin_option_reload_detection_allows_op_only_skins() {
+        let unique = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+        let root = std::env::temp_dir()
+            .join(format!("bmz-player-json-skin-reload-{}-{unique}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let op_only = root.join("op-only.json");
+        std::fs::write(
+            &op_only,
+            r#"
+            {
+                "type": 5,
+                "property": [
+                    {
+                        "name": "Option",
+                        "def": "ON",
+                        "item": [
+                            { "name": "ON", "op": 920 },
+                            { "name": "OFF", "op": 921 }
+                        ]
+                    }
+                ],
+                "destination": [
+                    { "id": "panel", "op": [920], "dst": [{ "x": 0, "y": 0, "w": 1, "h": 1 }] }
+                ]
+            }
+            "#,
+        )
+        .unwrap();
+        let load_time = root.join("load-time.json");
+        std::fs::write(
+            &load_time,
+            r#"
+            {
+                "type": 5,
+                "destination": [
+                    { "if": 920, "values": [
+                        { "id": "panel", "dst": [{ "x": 0, "y": 0, "w": 1, "h": 1 }] }
+                    ] }
+                ]
+            }
+            "#,
+        )
+        .unwrap();
+        let include = root.join("include.json");
+        std::fs::write(
+            &include,
+            r#"
+            [
+                { "if": 920, "value": { "id": "included", "src": "1", "x": 0, "y": 0, "w": 1, "h": 1 } }
+            ]
+            "#,
+        )
+        .unwrap();
+        let includes_load_time = root.join("includes-load-time.json");
+        std::fs::write(
+            &includes_load_time,
+            r#"
+            {
+                "type": 5,
+                "image": [{ "include": "include.json" }]
+            }
+            "#,
+        )
+        .unwrap();
+
+        assert!(!skin_path_options_need_full_reload(&op_only).unwrap());
+        assert!(skin_path_options_need_full_reload(&load_time).unwrap());
+        assert!(skin_path_options_need_full_reload(&includes_load_time).unwrap());
+
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]
