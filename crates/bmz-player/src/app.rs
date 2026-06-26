@@ -9543,14 +9543,21 @@ impl WinitApp {
         key_mode: KeyMode,
         options: &BTreeMap<String, String>,
     ) {
-        let Some(enabled_options) = self
-            .renderer
-            .play_skin_document()
-            .map(|document| enabled_options_from_selections(document, options))
+        let Some((enabled_options, property_ops)) =
+            self.renderer.play_skin_document().map(|document| {
+                (
+                    enabled_options_from_selections(document, options),
+                    skin_document_property_ops(document),
+                )
+            })
         else {
             return;
         };
+        let applied_options = enabled_options.clone();
         if self.renderer.set_play_skin_user_selected_options(enabled_options) {
+            if let Some(sources) = self.skin_video_sources.get_mut(&SkinKind::Play) {
+                apply_skin_video_source_enabled_options(sources, &applied_options, &property_ops);
+            }
             tracing::debug!(?key_mode, "applied play skin option change before background reload");
         }
     }
@@ -10787,11 +10794,7 @@ fn skin_video_source_gating(document: &SkinDocument, source_id: &str) -> SkinVid
         }
     }
 
-    let property_ops: HashSet<i32> = document
-        .property
-        .iter()
-        .flat_map(|property| property.item.iter().filter_map(|item| item.op.checked_abs()))
-        .collect();
+    let property_ops = skin_document_property_ops(document);
     let enabled_options = document.enabled_options();
     let mut referenced = false;
     let mut active = false;
@@ -10810,6 +10813,43 @@ fn skin_video_source_gating(document: &SkinDocument, source_id: &str) -> SkinVid
         return SkinVideoSourceGating { active: true, op_sets: Vec::new() };
     }
     SkinVideoSourceGating { active, op_sets }
+}
+
+fn skin_document_property_ops(document: &SkinDocument) -> HashSet<i32> {
+    document
+        .property
+        .iter()
+        .flat_map(|property| property.item.iter().filter_map(|item| item.op.checked_abs()))
+        .collect()
+}
+
+fn apply_skin_video_source_enabled_options(
+    sources: &mut [ActiveSkinVideoSource],
+    enabled_options: &[i32],
+    property_ops: &HashSet<i32>,
+) {
+    for source in sources {
+        let was_active = source.active;
+        source.enabled_options.clear();
+        source.enabled_options.extend_from_slice(enabled_options);
+        source.active =
+            skin_video_source_static_active(&source.gating_op_sets, enabled_options, property_ops);
+        if was_active && !source.active {
+            source.decoder = None;
+            source.last_pts = None;
+        }
+    }
+}
+
+fn skin_video_source_static_active(
+    op_sets: &[Vec<i32>],
+    enabled_options: &[i32],
+    property_ops: &HashSet<i32>,
+) -> bool {
+    op_sets.is_empty()
+        || op_sets
+            .iter()
+            .any(|ops| destination_property_ops_allow(ops, enabled_options, property_ops))
 }
 
 /// 実行時 state に対して、動画ソースが現在のシーン状態で表示されるかどうかを判定する。
@@ -16007,6 +16047,53 @@ mod tests {
         document.user_selected_options = Some(vec![921]);
         assert!(!skin_video_source_gating(&document, "mv").active);
         assert!(skin_video_source_gating(&document, "unknown-source").active);
+    }
+
+    #[test]
+    fn skin_video_source_fast_path_updates_selected_options() {
+        let document: SkinDocument = serde_json::from_str(
+            r#"
+            {
+                "type": 5,
+                "property": [
+                    {
+                        "name": "動画を使用する",
+                        "def": "ON",
+                        "item": [
+                            { "name": "ON", "op": 920 },
+                            { "name": "OFF", "op": 921 }
+                        ]
+                    }
+                ],
+                "source": [{ "id": "mv", "path": "mv/default.mp4" }],
+                "image": [{ "id": "mv", "src": "mv", "x": 0, "y": 0, "w": 10, "h": 10 }],
+                "destination": [{ "id": "mv", "op": [920], "dst": [{ "x": 0, "y": 0, "w": 10, "h": 10 }] }]
+            }
+            "#,
+        )
+        .unwrap();
+        let gating = skin_video_source_gating(&document, "mv");
+        let mut sources = vec![ActiveSkinVideoSource {
+            texture: SkinTextureId(0),
+            path: PathBuf::new(),
+            decoder: None,
+            last_pts: None,
+            loop_start_us: 0,
+            active: gating.active,
+            gating_op_sets: gating.op_sets,
+            enabled_options: document.enabled_options(),
+            result_ranktime_ms: document.ranktime,
+            failed: false,
+        }];
+
+        apply_skin_video_source_enabled_options(
+            &mut sources,
+            &[921],
+            &skin_document_property_ops(&document),
+        );
+
+        assert_eq!(sources[0].enabled_options, vec![921]);
+        assert!(!sources[0].active);
     }
 
     #[test]
