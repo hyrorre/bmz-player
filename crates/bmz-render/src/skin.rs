@@ -10882,7 +10882,7 @@ fn select_banner_option_matches(want_banner: bool, state: &SkinDrawState) -> boo
 }
 
 fn select_key_mode_option_matches(op: i32, state: &SkinDrawState) -> bool {
-    if state.result_failed.is_some() {
+    if state.result_failed.is_some() || !state.select_screen {
         return key_mode_option_matches(op, state.key_mode);
     }
     if state.in_settings || state.select_row_kind != SelectRowKind::Song {
@@ -13998,6 +13998,14 @@ mod tests {
 
         let result_14k = SkinDrawState { key_mode: KeyMode::K14, ..result_5k };
         assert!(test_skin_op(162, &[], &result_14k));
+    }
+
+    #[test]
+    fn play_key_mode_ops_use_play_key_mode() {
+        let play_14k = SkinDrawState { key_mode: KeyMode::K14, ..SkinDrawState::default() };
+
+        assert!(test_skin_op(162, &[], &play_14k));
+        assert!(!test_skin_op(160, &[], &play_14k));
     }
 
     #[test]
@@ -21065,6 +21073,47 @@ mod tests {
         };
         let items_active = document.static_image_render_items(&sources, &active_state);
         assert_eq!(items_active.len(), 1, "should have one item when Key1 bomb timer is active");
+    }
+
+    #[test]
+    fn lr2_2p_bomb_destination_uses_play_key_mode_op() {
+        let document: SkinDocument = serde_json::from_str(
+            r#"
+            {
+                "type": 0,
+                "w": 100,
+                "h": 100,
+                "source": [{ "id": 1, "path": "bomb.png" }],
+                "image": [{ "id": "bomb-img", "src": 1, "x": 0, "y": 0, "w": 10, "h": 10, "divx": 16, "cycle": 251 }],
+                "destination": [
+                    { "id": "bomb-img", "timer": 61, "op": [162], "loop": -1, "dst": [
+                        { "time": 0, "x": 10, "y": 10, "w": 10, "h": 10 },
+                        { "time": 250, "x": 10, "y": 10, "w": 10, "h": 10 }
+                    ]}
+                ]
+            }
+            "#,
+        )
+        .unwrap();
+        let sources = HashMap::from([(
+            "1".to_string(),
+            SkinDocumentTexture {
+                source_id: "1".to_string(),
+                texture: SkinTextureId(9),
+                source_size: SkinImageSize { width: 160.0, height: 10.0 },
+            },
+        )]);
+        let bomb_ms = {
+            let mut a = [None; LANE_COUNT];
+            a[Lane::Key8.index()] = Some(0);
+            a
+        };
+
+        let active_14k = SkinDrawState { key_mode: KeyMode::K14, bomb_ms, ..Default::default() };
+        let inactive_7k = SkinDrawState { key_mode: KeyMode::K7, bomb_ms, ..Default::default() };
+
+        assert_eq!(document.static_image_render_items(&sources, &active_14k).len(), 1);
+        assert!(document.static_image_render_items(&sources, &inactive_7k).is_empty());
     }
 
     #[test]
