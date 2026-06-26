@@ -113,9 +113,9 @@ use crate::skin_loader::{
     UploadedSkin, decode_beatoraja_skin_with_options,
     decode_beatoraja_skin_with_options_and_runtime_state_and_source_cache,
     default_play_skin_document_path_from_paths, default_skin_document_path_from_paths,
-    install_decoded_font, install_decoded_skin, is_decodable_skin_path,
-    load_default_skin_into_renderer_from_paths, play_skin_selection_for, set_decoded_skin_context,
-    upload_decoded_skin,
+    enabled_options_from_selections, install_decoded_font, install_decoded_skin,
+    is_decodable_skin_path, load_default_skin_into_renderer_from_paths, play_skin_selection_for,
+    set_decoded_skin_context, upload_decoded_skin,
 };
 use crate::songs_cmd::scan_songs_with_progress;
 use crate::storage::difficulty_table_db::DifficultyTableRecord;
@@ -9520,13 +9520,39 @@ impl WinitApp {
         self.invalidate_skin_defs_cache_for_request(request);
         // 旧 generation 分の upload 結果は apply_uploaded_skin の generation
         // チェックで破棄されるため、ここでの明示的なキュー破棄は不要。
-        if let Some(key_mode) = self.last_play_skin_signature.as_ref().map(|sig| sig.0)
+        if let Some((key_mode, old_path, old_options, old_files)) =
+            self.last_play_skin_signature.clone()
             && skin_reload_request_includes_key_mode(request, key_mode)
         {
+            let selection = play_skin_selection_for(&skin, key_mode);
+            let play_options_only = self.active_play.is_some()
+                && old_path == selection.path.trim()
+                && old_files == *selection.files
+                && old_options != *selection.options;
+            if play_options_only {
+                self.apply_active_play_skin_options_fast_path(key_mode, selection.options);
+            }
             self.last_play_skin_signature = None;
             self.spawn_play_skin_decode_for(key_mode);
         }
         tracing::info!(?request, "skin reload queued from egui skin panel");
+    }
+
+    fn apply_active_play_skin_options_fast_path(
+        &mut self,
+        key_mode: KeyMode,
+        options: &BTreeMap<String, String>,
+    ) {
+        let Some(enabled_options) = self
+            .renderer
+            .play_skin_document()
+            .map(|document| enabled_options_from_selections(document, options))
+        else {
+            return;
+        };
+        if self.renderer.set_play_skin_user_selected_options(enabled_options) {
+            tracing::debug!(?key_mode, "applied play skin option change before background reload");
+        }
     }
 
     /// 決定対象チャートの key_mode に対応するプレイスキンを background decode に投入する。

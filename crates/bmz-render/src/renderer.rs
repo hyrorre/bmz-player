@@ -809,6 +809,10 @@ impl Renderer {
         self.play_skin_context.document()
     }
 
+    pub fn set_play_skin_user_selected_options(&mut self, enabled_options: Vec<i32>) -> bool {
+        self.play_skin_context.set_user_selected_options(enabled_options)
+    }
+
     pub fn play_skin_timer_animation_duration_ms(&self, timer: i32) -> i32 {
         self.play_skin_context.timer_animation_duration_ms(timer)
     }

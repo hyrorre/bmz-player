@@ -1453,6 +1453,14 @@ impl SkinContext {
         self.document.as_ref()
     }
 
+    pub fn set_user_selected_options(&mut self, enabled_options: Vec<i32>) -> bool {
+        let Some(document) = &mut self.document else {
+            return false;
+        };
+        document.user_selected_options = Some(enabled_options);
+        true
+    }
+
     pub fn with_play_graphs(
         &self,
         judge_graph_density: Vec<u8>,
@@ -15657,6 +15665,32 @@ mod tests {
         assert!(
             matches!(items[0], SkinRenderItem::Image { rect: Rect { x, .. }, .. } if approx_eq(x, 0.0))
         );
+    }
+
+    #[test]
+    fn skin_context_updates_user_selected_options() {
+        let document: SkinDocument = serde_json::from_str(
+            r#"
+            {
+                "type": 0,
+                "w": 100,
+                "h": 100,
+                "property": [
+                    { "name": "Side", "def": "1P", "item": [
+                        { "name": "1P", "op": 920 },
+                        { "name": "2P", "op": 921 }
+                    ]}
+                ]
+            }
+            "#,
+        )
+        .unwrap();
+        let mut context =
+            SkinContext::from_manifest_and_document(default_skin_manifest(), document, []);
+
+        assert_eq!(context.document().unwrap().enabled_options(), [920]);
+        assert!(context.set_user_selected_options(vec![921]));
+        assert_eq!(context.document().unwrap().enabled_options(), [921]);
     }
 
     #[test]

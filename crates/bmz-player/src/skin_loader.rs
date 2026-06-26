@@ -728,7 +728,7 @@ fn load_skin_document(
 /// 有効オプション (op コード列) を組み立てる。
 ///
 /// 選択が無い property は `def` (空なら先頭 item) の op を使う。
-fn enabled_options_from_selections(
+pub(crate) fn enabled_options_from_selections(
     document: &SkinDocument,
     selections: &BTreeMap<String, String>,
 ) -> Vec<i32> {
