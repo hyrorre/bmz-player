@@ -2,9 +2,9 @@ use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver};
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -109,8 +109,9 @@ use crate::screens::settings_model::{
 };
 use crate::select_options::{ArrangeOption, AssistOption, DoubleOption, HsFixOption, TargetOption};
 use crate::skin_loader::{
-    DecodedSkin, PreparedSource, SkinKind, UploadedSkin, decode_beatoraja_skin_with_options,
-    decode_beatoraja_skin_with_options_and_runtime_state,
+    DecodedSkin, PreparedSource, SharedSkinSourceAssetCache, SkinKind, SkinSourceAssetCache,
+    UploadedSkin, decode_beatoraja_skin_with_options,
+    decode_beatoraja_skin_with_options_and_runtime_state_and_source_cache,
     default_play_skin_document_path_from_paths, default_skin_document_path_from_paths,
     install_decoded_font, install_decoded_skin, is_decodable_skin_path,
     load_default_skin_into_renderer_from_paths, play_skin_selection_for, set_decoded_skin_context,
@@ -430,6 +431,8 @@ struct WinitApp {
     skin_upload_rx: Receiver<PendingUploadResult>,
     /// upload worker を spawn 済みか (surface 接続時に一度だけ起動)。
     skin_upload_worker_started: bool,
+    /// スキン reload 時に同一 source PNG / 動画 first frame の再デコードを避ける cache。
+    skin_source_asset_cache: SharedSkinSourceAssetCache,
     bga_load_generation: u64,
     bga_load_chart_id: Option<i64>,
     bga_load_rx: Option<Receiver<PendingBgaImageResult>>,
@@ -1643,6 +1646,7 @@ impl WinitApp {
         let skin_catalog = scan_skin_catalog(&boot.app_paths);
         let (skin_decode_tx, skin_decode_rx) = mpsc::channel::<PendingSkinResult>();
         let (skin_upload_tx, skin_upload_rx) = mpsc::channel::<PendingUploadResult>();
+        let skin_source_asset_cache = Arc::new(Mutex::new(SkinSourceAssetCache::default()));
         let (select_meta_image_tx, select_meta_image_rx) = mpsc::channel::<SelectMetaImageResult>();
         let (select_preview_tx, select_preview_rx) = mpsc::channel::<SelectPreviewResult>();
         let (select_folder_summary_tx, select_folder_summary_rx) =
@@ -1657,6 +1661,7 @@ impl WinitApp {
             &mut renderer,
             &boot.app_paths,
             &skin_decode_tx,
+            &skin_source_asset_cache,
             0,
             &boot.profile_config.skin.select,
             &boot.profile_config.skin.decide,
@@ -1801,6 +1806,7 @@ impl WinitApp {
             skin_upload_tx,
             skin_upload_rx,
             skin_upload_worker_started: false,
+            skin_source_asset_cache,
             bga_load_generation: 0,
             bga_load_chart_id: None,
             bga_load_rx: None,
@@ -8500,6 +8506,7 @@ impl WinitApp {
 
         spawn_skin_decode(
             self.skin_decode_tx.clone(),
+            self.skin_source_asset_cache.clone(),
             generation,
             path,
             SkinKind::Result,
@@ -9479,6 +9486,7 @@ impl WinitApp {
             &mut self.renderer,
             &self.boot.app_paths,
             &self.skin_decode_tx,
+            &self.skin_source_asset_cache,
             &mut self.skin_reload_generations,
             texture_request,
             &skin.select,
@@ -9570,6 +9578,7 @@ impl WinitApp {
 
         spawn_skin_decode(
             self.skin_decode_tx.clone(),
+            self.skin_source_asset_cache.clone(),
             generation,
             path,
             SkinKind::Play,
@@ -10276,6 +10285,7 @@ fn load_initial_skin_textures(
     renderer: &mut Renderer,
     app_paths: &crate::paths::AppPaths,
     skin_decode_tx: &mpsc::Sender<PendingSkinResult>,
+    skin_source_asset_cache: &SharedSkinSourceAssetCache,
     generation: u64,
     select_skin_path: &str,
     decide_skin_path: &str,
@@ -10316,6 +10326,7 @@ fn load_initial_skin_textures(
         if !decide_path.as_os_str().is_empty() && is_decodable_skin_path(&decide_path) {
             spawn_skin_decode(
                 skin_decode_tx.clone(),
+                skin_source_asset_cache.clone(),
                 generation,
                 decide_path,
                 SkinKind::Decide,
@@ -10345,6 +10356,7 @@ fn load_initial_skin_textures(
         if !result_path.as_os_str().is_empty() && is_decodable_skin_path(&result_path) {
             spawn_skin_decode(
                 skin_decode_tx.clone(),
+                skin_source_asset_cache.clone(),
                 generation,
                 result_path,
                 SkinKind::Result,
@@ -10443,6 +10455,7 @@ fn reload_skin_textures(
     _renderer: &mut Renderer,
     app_paths: &crate::paths::AppPaths,
     skin_decode_tx: &mpsc::Sender<PendingSkinResult>,
+    skin_source_asset_cache: &SharedSkinSourceAssetCache,
     generations: &mut SkinReloadGenerations,
     request: SkinReloadRequest,
     select_skin_path: &str,
@@ -10488,6 +10501,7 @@ fn reload_skin_textures(
         if is_decodable_skin_path(&path) {
             spawn_skin_decode(
                 skin_decode_tx.clone(),
+                skin_source_asset_cache.clone(),
                 generation,
                 path.clone(),
                 kind,
@@ -10827,6 +10841,7 @@ fn destination_property_ops_allow(
 
 fn spawn_skin_decode(
     tx: mpsc::Sender<PendingSkinResult>,
+    source_cache: SharedSkinSourceAssetCache,
     generation: u64,
     path: PathBuf,
     kind: SkinKind,
@@ -10838,12 +10853,13 @@ fn spawn_skin_decode(
     thread::Builder::new()
         .name(format!("skin-decode-{:?}", kind))
         .spawn(move || {
-            let result = decode_beatoraja_skin_with_options_and_runtime_state(
+            let result = decode_beatoraja_skin_with_options_and_runtime_state_and_source_cache(
                 &path,
                 kind,
                 &options,
                 &files,
                 &runtime_state,
+                Some(source_cache),
             );
             let _ = tx.send(PendingSkinResult { generation, path: send_path, kind, result });
         })

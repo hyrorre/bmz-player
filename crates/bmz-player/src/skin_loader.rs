@@ -1,5 +1,8 @@
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
+use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
+use std::time::SystemTime;
 
 use anyhow::{Context, Result};
 use bmz_core::lane::KeyMode;
@@ -164,6 +167,46 @@ pub struct DecodedSource {
     pub texture: SkinTextureId,
     pub asset: RgbaImageAsset,
     pub is_video: bool,
+}
+
+pub type SharedSkinSourceAssetCache = Arc<Mutex<SkinSourceAssetCache>>;
+
+const SKIN_SOURCE_ASSET_CACHE_LIMIT_BYTES: usize = 256 * 1024 * 1024;
+
+#[derive(Default)]
+pub struct SkinSourceAssetCache {
+    entries: HashMap<SkinSourceAssetCacheKey, RgbaImageAsset>,
+    total_bytes: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct SkinSourceAssetCacheKey {
+    path: PathBuf,
+    modified: Option<SystemTime>,
+    len: u64,
+    is_video: bool,
+}
+
+impl SkinSourceAssetCache {
+    fn get(&self, key: &SkinSourceAssetCacheKey) -> Option<RgbaImageAsset> {
+        self.entries.get(key).cloned()
+    }
+
+    fn insert(&mut self, key: SkinSourceAssetCacheKey, asset: RgbaImageAsset) {
+        let bytes = asset.pixels.len();
+        if let Some(old) = self.entries.remove(&key) {
+            self.total_bytes = self.total_bytes.saturating_sub(old.pixels.len());
+        }
+        if bytes > SKIN_SOURCE_ASSET_CACHE_LIMIT_BYTES {
+            return;
+        }
+        if self.total_bytes.saturating_add(bytes) > SKIN_SOURCE_ASSET_CACHE_LIMIT_BYTES {
+            self.entries.clear();
+            self.total_bytes = 0;
+        }
+        self.total_bytes += bytes;
+        self.entries.insert(key, asset);
+    }
 }
 
 enum SourceDecodeTask {
@@ -356,6 +399,24 @@ pub fn decode_beatoraja_skin_with_options_and_runtime_state(
     files: &BTreeMap<String, String>,
     runtime_state: &LuaLoadRuntimeState,
 ) -> Result<DecodedSkin> {
+    decode_beatoraja_skin_with_options_and_runtime_state_and_source_cache(
+        skin_path,
+        kind,
+        options,
+        files,
+        runtime_state,
+        None,
+    )
+}
+
+pub fn decode_beatoraja_skin_with_options_and_runtime_state_and_source_cache(
+    skin_path: &Path,
+    kind: SkinKind,
+    options: &BTreeMap<String, String>,
+    files: &BTreeMap<String, String>,
+    runtime_state: &LuaLoadRuntimeState,
+    source_cache: Option<SharedSkinSourceAssetCache>,
+) -> Result<DecodedSkin> {
     let LoadedSkinDocumentForDecode { mut document, files: resolved_files } =
         load_skin_document(skin_path, kind, options, files, runtime_state)?;
     // フォント ID は scene 横断的に Renderer のグローバルマップに登録されるので、
@@ -469,7 +530,12 @@ pub fn decode_beatoraja_skin_with_options_and_runtime_state(
                 Some((index, source_id, path, asset, false))
             }
             SourceDecodeTask::File { index, source_id, path: source_path } => {
-                match load_png_rgba(&source_path) {
+                match load_source_asset_with_cache(
+                    &source_path,
+                    false,
+                    source_cache.as_ref(),
+                    || load_png_rgba(&source_path),
+                ) {
                     Ok(asset) => Some((index, source_id, source_path, asset, false)),
                     Err(error) => {
                         if warn_missing_required && required_sources.contains(&source_id) {
@@ -492,7 +558,12 @@ pub fn decode_beatoraja_skin_with_options_and_runtime_state(
                 }
             }
             SourceDecodeTask::Video { index, source_id, path: source_path } => {
-                match load_skin_video_first_frame_rgba(&source_path) {
+                match load_source_asset_with_cache(
+                    &source_path,
+                    true,
+                    source_cache.as_ref(),
+                    || load_skin_video_first_frame_rgba(&source_path),
+                ) {
                     Ok(asset) => Some((index, source_id, source_path, asset, true)),
                     Err(error) => {
                         tracing::warn!(
@@ -537,6 +608,44 @@ fn lr2_builtin_source_asset(path: &str) -> Option<RgbaImageAsset> {
 
 fn is_skin_video_source_extension(extension: &str) -> bool {
     matches!(extension, "mp4" | "wmv" | "m4v" | "webm" | "mpg" | "mpeg" | "m1v" | "m2v" | "avi")
+}
+
+fn load_source_asset_with_cache<F>(
+    path: &Path,
+    is_video: bool,
+    source_cache: Option<&SharedSkinSourceAssetCache>,
+    load: F,
+) -> Result<RgbaImageAsset>
+where
+    F: FnOnce() -> Result<RgbaImageAsset>,
+{
+    let Some(source_cache) = source_cache else {
+        return load();
+    };
+    let Some(key) = skin_source_asset_cache_key(path, is_video) else {
+        return load();
+    };
+    if let Ok(cache) = source_cache.lock()
+        && let Some(asset) = cache.get(&key)
+    {
+        return Ok(asset);
+    }
+    let asset = load()?;
+    if let Ok(mut cache) = source_cache.lock() {
+        cache.insert(key, asset.clone());
+    }
+    Ok(asset)
+}
+
+fn skin_source_asset_cache_key(path: &Path, is_video: bool) -> Option<SkinSourceAssetCacheKey> {
+    let metadata = fs::metadata(path).ok()?;
+    let path = fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    Some(SkinSourceAssetCacheKey {
+        path,
+        modified: metadata.modified().ok(),
+        len: metadata.len(),
+        is_video,
+    })
 }
 
 fn load_skin_video_first_frame_rgba(path: &Path) -> Result<RgbaImageAsset> {
@@ -3974,6 +4083,44 @@ mod tests {
         assert!(!is_supported_font_path(Path::new("font.png")));
         assert!(is_bitmap_font_path(Path::new("font.fnt")));
         assert!(!is_bitmap_font_path(Path::new("font.ttf")));
+    }
+
+    #[test]
+    fn skin_source_asset_cache_hit_skips_loader() {
+        let root = unique_test_dir("bmz-source-cache-hit");
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("source.png");
+        std::fs::write(&path, b"cached").unwrap();
+        let key = skin_source_asset_cache_key(&path, false).unwrap();
+        let expected = RgbaImageAsset { width: 1, height: 1, pixels: vec![1, 2, 3, 4] };
+        let cache = Arc::new(Mutex::new(SkinSourceAssetCache::default()));
+        cache.lock().unwrap().insert(key, expected.clone());
+
+        let actual = load_source_asset_with_cache(&path, false, Some(&cache), || {
+            panic!("cache hit must not call source loader")
+        })
+        .unwrap();
+
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn skin_source_asset_cache_misses_after_metadata_change() {
+        let root = unique_test_dir("bmz-source-cache-metadata");
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("source.png");
+        std::fs::write(&path, b"old").unwrap();
+        let key = skin_source_asset_cache_key(&path, false).unwrap();
+        let stale = RgbaImageAsset { width: 1, height: 1, pixels: vec![1, 2, 3, 4] };
+        let fresh = RgbaImageAsset { width: 1, height: 1, pixels: vec![5, 6, 7, 8] };
+        let cache = Arc::new(Mutex::new(SkinSourceAssetCache::default()));
+        cache.lock().unwrap().insert(key, stale);
+
+        std::fs::write(&path, b"new and longer").unwrap();
+        let actual =
+            load_source_asset_with_cache(&path, false, Some(&cache), || Ok(fresh.clone())).unwrap();
+
+        assert_eq!(actual, fresh);
     }
 
     fn unique_test_dir(name: &str) -> PathBuf {
