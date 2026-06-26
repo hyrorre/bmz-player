@@ -615,6 +615,16 @@ pub(crate) fn display_duration_ms_for_bpm_hispeed(
         * visible_max
 }
 
+pub(crate) fn hispeed_for_green_number_values(
+    target_green: f32,
+    visible_max: f32,
+    now_bpm: f64,
+    scroll_multiplier: f32,
+) -> f32 {
+    BEATORAJA_DURATION_BPM_FACTOR_MS * visible_max.clamp(0.0, 1.0) * 0.6
+        / (target_green.max(1.0) * now_bpm.max(1.0) as f32 * scroll_multiplier.max(0.01))
+}
+
 fn current_keybound_bga_frame(
     session: &GameSession,
     cache: &PlayRenderSnapshotCache,

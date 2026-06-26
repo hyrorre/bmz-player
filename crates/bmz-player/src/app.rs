@@ -3489,9 +3489,13 @@ impl WinitApp {
                     tracing::debug!("hispeed change ignored: course NoSpeed constraint");
                     return;
                 }
-                active_play.running.session.hispeed =
-                    adjusted_hispeed(active_play.running.session.hispeed, change);
-                tracing::info!(hispeed = active_play.running.session.hispeed, "adjusted hispeed");
+                apply_hispeed_change_to_session(&mut active_play.running.session, change);
+                tracing::info!(
+                    hispeed = active_play.running.session.hispeed,
+                    hispeed_mode = ?active_play.running.session.hispeed_mode,
+                    target_green_number = active_play.running.session.target_green_number,
+                    "adjusted hispeed"
+                );
                 update_pre_ready_play_snapshot_options_for_session(
                     self.play_ready_sound_started_at,
                     &mut self.last_play_snapshot,
@@ -3598,6 +3602,10 @@ impl WinitApp {
         }
 
         if self.pending_play_start.is_some() {
+            if let Some(change) = hispeed_action(event.physical_key, event.state, event.repeat) {
+                self.apply_pending_play_hispeed_change(change);
+                return;
+            }
             return;
         }
 
@@ -4210,6 +4218,10 @@ impl WinitApp {
         }
 
         if self.pending_play_start.is_some() {
+            if pressed && let Some(action) = play_option_control(button, &self.select_keys) {
+                self.apply_pending_play_option_control(action, button.starts_with("Axis"));
+                return;
+            }
             return;
         }
 
@@ -8848,6 +8860,78 @@ impl WinitApp {
             &mut self.last_play_snapshot,
             &active_play.running.session,
             active_play.running.applied_arrange.arrange,
+        );
+    }
+
+    fn apply_pending_play_hispeed_change(&mut self, change: HispeedChange) {
+        if self.active_course.as_ref().is_some_and(|c| {
+            c.definition.constraints.speed == bmz_core::course::CourseSpeedConstraint::NoSpeed
+        }) {
+            tracing::debug!("pending play hispeed change ignored: course NoSpeed constraint");
+            return;
+        }
+        apply_pending_hispeed_change_to_profile(
+            &mut self.boot.profile_config,
+            self.last_play_snapshot.as_ref(),
+            change,
+        );
+        self.refresh_pending_play_lane_snapshot_from_profile();
+        tracing::info!(
+            hispeed = self.boot.profile_config.lane.hispeed,
+            target_green_number = self.boot.profile_config.lane.target_green_number,
+            "adjusted pending play hispeed"
+        );
+    }
+
+    fn apply_pending_play_option_control(&mut self, action: PlayOptionControl, is_axis: bool) {
+        match action {
+            PlayOptionControl::ToggleHispeedMode => {
+                let next = match self.boot.profile_config.lane.hispeed_mode {
+                    HispeedModeConfig::Normal => {
+                        if let Some(green) = pending_play_green_number_for_profile_hispeed(
+                            &self.boot.profile_config,
+                            self.last_play_snapshot.as_ref(),
+                        ) {
+                            self.boot.profile_config.lane.target_green_number = green;
+                        }
+                        HispeedModeConfig::Floating
+                    }
+                    HispeedModeConfig::Floating => HispeedModeConfig::Normal,
+                };
+                self.boot.profile_config.lane.hispeed_mode = next;
+            }
+            PlayOptionControl::Hispeed(change) => self.apply_pending_play_hispeed_change(change),
+            PlayOptionControl::LaneCover(_) if is_axis => return,
+            PlayOptionControl::LaneCover(change) => {
+                let delta = lane_cover_change_step(change);
+                let current =
+                    crate::config::play::lane_unit_to_f32(self.boot.profile_config.lane.sudden);
+                self.boot.profile_config.lane.sudden =
+                    crate::config::play::lane_f32_to_unit((current - delta).clamp(0.0, 1.0));
+            }
+        }
+        self.refresh_pending_play_lane_snapshot_from_profile();
+    }
+
+    fn refresh_pending_play_lane_snapshot_from_profile(&mut self) {
+        let Some((chart_id, options)) = self
+            .pending_play_start
+            .as_ref()
+            .map(|play_start| (play_start.chart_id, play_start.options.clone()))
+        else {
+            return;
+        };
+        let key_mode = self.play_skin_key_mode_for_chart(chart_id, &options);
+        let session_options =
+            play_session_options_from_start(&self.play_session_app_config(), options);
+        let Some(snapshot) = &mut self.last_play_snapshot else {
+            return;
+        };
+        crate::screens::play_session::apply_placeholder_session_visuals(
+            snapshot,
+            &self.boot.profile_config,
+            key_mode,
+            &session_options,
         );
     }
 
@@ -13607,6 +13691,46 @@ fn adjusted_hispeed(current: f32, change: HispeedChange) -> f32 {
     ((current + delta) * 4.0).round().clamp(2.0, 40.0) / 4.0
 }
 
+fn apply_pending_hispeed_change_to_profile(
+    profile: &mut ProfileConfig,
+    snapshot: Option<&RenderSnapshot>,
+    change: HispeedChange,
+) {
+    profile.lane.hispeed = adjusted_hispeed(profile.lane.hispeed, change);
+    if profile.lane.hispeed_mode == HispeedModeConfig::Floating
+        && let Some(green) = pending_play_green_number_for_profile_hispeed(profile, snapshot)
+    {
+        profile.lane.target_green_number = green;
+    }
+}
+
+fn pending_play_green_number_for_profile_hispeed(
+    profile: &ProfileConfig,
+    snapshot: Option<&RenderSnapshot>,
+) -> Option<u32> {
+    let snapshot = snapshot?;
+    let lane_cover = crate::config::play::lane_unit_to_f32(profile.lane.sudden);
+    let duration = crate::screens::play_snapshot::display_duration_ms_for_bpm_hispeed(
+        snapshot.now_bpm,
+        profile.lane.hispeed,
+        lane_cover,
+        1.0,
+    )
+    .round()
+    .clamp(0.0, i32::MAX as f32) as i32;
+    Some(green_number_from_snapshot_duration(duration))
+}
+
+fn apply_hispeed_change_to_session(
+    session: &mut bmz_gameplay::session::GameSession,
+    change: HispeedChange,
+) {
+    session.hispeed = adjusted_hispeed(session.hispeed, change);
+    if session.hispeed_mode == HispeedMode::Floating {
+        session.target_green_number = current_green_number(session, session.audio_clock.now());
+    }
+}
+
 fn apply_play_option_control_to_session(
     session: &mut bmz_gameplay::session::GameSession,
     action: PlayOptionControl,
@@ -13631,7 +13755,7 @@ fn apply_play_option_control_to_session(
             if speed_locked {
                 return false;
             }
-            session.hispeed = adjusted_hispeed(session.hispeed, change);
+            apply_hispeed_change_to_session(session, change);
             true
         }
         PlayOptionControl::LaneCover(change) => {
@@ -13675,7 +13799,15 @@ fn current_green_number(session: &bmz_gameplay::session::GameSession, now: TimeU
         if session.lane_cover_visible { session.lane_cover } else { 0.0 },
         now,
     );
-    ((total * 0.6).round().clamp(1.0, u32::MAX as f32)) as u32
+    green_number_from_duration(total)
+}
+
+fn green_number_from_duration(duration_ms: f32) -> u32 {
+    ((duration_ms * 0.6).round().clamp(1.0, u32::MAX as f32)) as u32
+}
+
+fn green_number_from_snapshot_duration(duration_ms: i32) -> u32 {
+    green_number_from_duration(duration_ms.max(0) as f32)
 }
 
 fn note_display_duration_ms_for_hispeed(
@@ -13722,10 +13854,12 @@ fn hispeed_for_green_number_values(
     now_bpm: f64,
     scroll_multiplier: f32,
 ) -> f32 {
-    crate::screens::play_snapshot::BEATORAJA_DURATION_BPM_FACTOR_MS
-        * visible_max.clamp(0.0, 1.0)
-        * 0.6
-        / (target_green.max(1.0) * now_bpm.max(1.0) as f32 * scroll_multiplier.max(0.01))
+    crate::screens::play_snapshot::hispeed_for_green_number_values(
+        target_green,
+        visible_max,
+        now_bpm,
+        scroll_multiplier,
+    )
 }
 
 fn result_action(
@@ -16903,6 +17037,34 @@ mod tests {
         assert_eq!(adjusted_hispeed(2.0, HispeedChange::Down), 1.75);
         assert_eq!(adjusted_hispeed(10.0, HispeedChange::Up), 10.0);
         assert_eq!(adjusted_hispeed(0.5, HispeedChange::Down), 0.5);
+    }
+
+    #[test]
+    fn pending_hispeed_change_updates_profile_before_ready() {
+        let mut profile = ProfileConfig::new_default("default", "Default", 1);
+        profile.lane.hispeed = 2.0;
+        profile.lane.hispeed_mode = HispeedModeConfig::Normal;
+        profile.lane.target_green_number = 300;
+        let snapshot = RenderSnapshot { now_bpm: 120.0, ..Default::default() };
+
+        apply_pending_hispeed_change_to_profile(&mut profile, Some(&snapshot), HispeedChange::Up);
+
+        assert_eq!(profile.lane.hispeed, 2.25);
+        assert_eq!(profile.lane.target_green_number, 300);
+    }
+
+    #[test]
+    fn pending_floating_hispeed_change_updates_fixed_green_before_ready() {
+        let mut profile = ProfileConfig::new_default("default", "Default", 1);
+        profile.lane.hispeed = 2.0;
+        profile.lane.hispeed_mode = HispeedModeConfig::Floating;
+        profile.lane.target_green_number = 300;
+        let snapshot = RenderSnapshot { now_bpm: 120.0, ..Default::default() };
+
+        apply_pending_hispeed_change_to_profile(&mut profile, Some(&snapshot), HispeedChange::Up);
+
+        assert_eq!(profile.lane.hispeed, 2.25);
+        assert_eq!(profile.lane.target_green_number, 533);
     }
 
     #[test]

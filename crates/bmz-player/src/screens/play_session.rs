@@ -216,9 +216,16 @@ pub fn apply_placeholder_session_visuals(
     snapshot.gauge_max = current.definition.max;
     snapshot.gauge_border = current.definition.border;
 
-    snapshot.hispeed = clamp_hispeed(profile.lane.hispeed);
     snapshot.lift = lane_unit_to_f32(profile.lane.lift);
     snapshot.lane_cover = lane_unit_to_f32(profile.lane.sudden);
+    let hispeed_mode = hispeed_mode_from_profile(profile.lane.hispeed_mode);
+    snapshot.hispeed = placeholder_hispeed_for_mode(
+        profile,
+        hispeed_mode,
+        profile.lane.target_green_number.max(1),
+        snapshot.lane_cover,
+        snapshot.now_bpm,
+    );
     snapshot.lanecover_enabled = lanecover_enabled_from_profile(profile);
     snapshot.lift_enabled = lift_enabled_from_profile(profile);
     snapshot.hidden_enabled = hidden_enabled_from_profile(profile);
@@ -349,6 +356,17 @@ pub fn build_game_session_with_input_backend(
         chart.metadata.initial_bpm,
         &chart.timing_events,
     );
+    let hispeed_mode = hispeed_mode_from_profile(profile.lane.hispeed_mode);
+    let target_green_number = profile.lane.target_green_number.max(1);
+    let lane_cover = lane_unit_to_f32(profile.lane.sudden);
+    let hispeed = initial_hispeed_for_mode(
+        profile,
+        hispeed_mode,
+        target_green_number,
+        lane_cover,
+        &chart,
+        &timing_map,
+    );
 
     // Course judge constraints narrow the judge window so the corresponding
     // judge band is unreachable: NoGood zeroes good_us, NoGreat zeroes both
@@ -446,11 +464,11 @@ pub fn build_game_session_with_input_backend(
         bgm_scheduler: BgmScheduler::default(),
         offsets: play_offsets_from_profile(profile),
         audio_mix: audio_mix_from_profile(profile),
-        hispeed: clamp_hispeed(profile.lane.hispeed),
-        hispeed_mode: hispeed_mode_from_profile(profile.lane.hispeed_mode),
-        target_green_number: profile.lane.target_green_number.max(1),
+        hispeed,
+        hispeed_mode,
+        target_green_number,
         lift: lane_unit_to_f32(profile.lane.lift),
-        lane_cover: lane_unit_to_f32(profile.lane.sudden),
+        lane_cover,
         lane_cover_visible: true,
         lane_cover_changing: false,
         lanecover_enabled: lanecover_enabled_from_profile(profile),
@@ -512,6 +530,52 @@ fn hispeed_mode_from_profile(mode: HispeedModeConfig) -> HispeedMode {
         HispeedModeConfig::Normal => HispeedMode::Normal,
         HispeedModeConfig::Floating => HispeedMode::Floating,
     }
+}
+
+fn initial_hispeed_for_mode(
+    profile: &ProfileConfig,
+    hispeed_mode: HispeedMode,
+    target_green_number: u32,
+    lane_cover: f32,
+    chart: &PlayableChart,
+    timing_map: &bmz_chart::timing::TimingMap,
+) -> f32 {
+    if hispeed_mode == HispeedMode::Normal {
+        return clamp_hispeed(profile.lane.hispeed);
+    }
+
+    let now_bpm = timing_map.bpm_at_time(TimeUs(0));
+    let scroll_multiplier =
+        crate::screens::play_snapshot::current_scroll_multiplier(chart, timing_map, TimeUs(0));
+    let visible_max = (1.0 - lane_cover).clamp(0.0, 1.0);
+    crate::screens::play_snapshot::hispeed_for_green_number_values(
+        target_green_number as f32,
+        visible_max,
+        now_bpm,
+        scroll_multiplier,
+    )
+    .clamp(0.5, 10.0)
+}
+
+fn placeholder_hispeed_for_mode(
+    profile: &ProfileConfig,
+    hispeed_mode: HispeedMode,
+    target_green_number: u32,
+    lane_cover: f32,
+    now_bpm: f32,
+) -> f32 {
+    if hispeed_mode == HispeedMode::Normal {
+        return clamp_hispeed(profile.lane.hispeed);
+    }
+
+    let visible_max = (1.0 - lane_cover).clamp(0.0, 1.0);
+    crate::screens::play_snapshot::hispeed_for_green_number_values(
+        target_green_number as f32,
+        visible_max,
+        now_bpm.max(1.0) as f64,
+        1.0,
+    )
+    .clamp(0.5, 10.0)
 }
 
 fn judge_algorithm_from_config(value: JudgeAlgorithmConfig) -> JudgeAlgorithm {
@@ -1775,6 +1839,23 @@ mod tests {
         assert!(snapshot.judge_timing_auto_adjust);
     }
 
+    #[test]
+    fn placeholder_session_visuals_initialize_floating_hispeed_for_ready_display() {
+        let mut profile = ProfileConfig::new_default("default", "Default", 1);
+        profile.lane.hispeed_mode = HispeedModeConfig::Floating;
+        profile.lane.target_green_number = 300;
+        // Stale value from a different BPM should not leak into READY display.
+        profile.lane.hispeed = 4.0;
+        let options = PlaySessionOptions::default();
+        let mut snapshot =
+            bmz_render::snapshot::RenderSnapshot { now_bpm: 240.0, ..Default::default() };
+
+        apply_placeholder_session_visuals(&mut snapshot, &profile, KeyMode::K7, &options);
+
+        assert!((snapshot.hispeed - 2.0).abs() < f32::EPSILON);
+        assert_eq!(snapshot.note_display_duration_ms, 500);
+    }
+
     fn class_gauge_values(session: &GameSession) -> [f32; 6] {
         session
             .gauge
@@ -2379,6 +2460,24 @@ mod tests {
 
         assert_eq!(high.hispeed, 10.0);
         assert_eq!(low.hispeed, 0.5);
+    }
+
+    #[test]
+    fn build_game_session_initializes_floating_hispeed_for_chart_bpm() {
+        let mut profile = ProfileConfig::new_default("default", "Default", 1);
+        profile.lane.hispeed_mode = HispeedModeConfig::Floating;
+        profile.lane.target_green_number = 300;
+        // Stale value from a 120 BPM chart with green number 300.
+        profile.lane.hispeed = 4.0;
+        let mut fast_chart = chart();
+        fast_chart.metadata.initial_bpm = 240.0;
+
+        let session =
+            build_game_session(Arc::new(fast_chart), &profile, PlaySessionOptions::default());
+
+        assert_eq!(session.hispeed_mode, HispeedMode::Floating);
+        assert_eq!(session.target_green_number, 300);
+        assert!((session.hispeed - 2.0).abs() < f32::EPSILON);
     }
 
     #[test]
