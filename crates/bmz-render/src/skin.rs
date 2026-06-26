@@ -8784,8 +8784,9 @@ fn skin_state_number(ref_id: i32, state: &SkinDrawState) -> Option<i64> {
         424 => state.fast_slow_counts.map(|c| c.slow_total() as i64),
         425 | 427 if state.select_screen => state.select_cb.map(|count| count as i64).or(Some(0)),
         425 | 427 if state.result_failed.is_some() => Some(current_cb(state) as i64),
-        425 | 427 => Some((state.judge_counts.bad + state.judge_counts.poor) as i64),
-        426 => Some(state.judge_counts.poor as i64),
+        425 => Some((state.judge_counts.bad + state.judge_counts.poor) as i64),
+        426 => Some(poor_plus_miss(state.judge_counts) as i64),
+        427 => Some(bad_plus_poor_plus_miss(state.judge_counts) as i64),
         ref_id if random_lane_ref_slot(ref_id).is_some() => {
             skin_random_lane_ref_number(ref_id, state)
         }
@@ -9069,6 +9070,14 @@ fn judge_rate_int(count: u32, total_notes: u32) -> Option<i64> {
         return None;
     }
     Some(count as i64 * 100 / total_notes as i64)
+}
+
+fn poor_plus_miss(counts: DisplayJudgeCounts) -> u32 {
+    counts.poor.saturating_add(counts.empty_poor)
+}
+
+fn bad_plus_poor_plus_miss(counts: DisplayJudgeCounts) -> u32 {
+    counts.bad.saturating_add(poor_plus_miss(counts))
 }
 
 fn score_rate_parts(ex_score: u32, total_notes: u32) -> (u32, u32) {
@@ -19691,8 +19700,8 @@ mod tests {
         assert_eq!(skin_state_number(423, &state), Some(60));
         assert_eq!(skin_state_number(424, &state), Some(64));
         assert_eq!(skin_state_number(425, &state), Some(7));
-        assert_eq!(skin_state_number(426, &state), Some(3));
-        assert_eq!(skin_state_number(427, &state), Some(7));
+        assert_eq!(skin_state_number(426, &state), Some(5));
+        assert_eq!(skin_state_number(427, &state), Some(9));
         assert!(test_skin_op(181, &[], &state));
         assert!(!test_skin_op(182, &[], &state));
     }
@@ -22429,7 +22438,7 @@ mod tests {
         assert_eq!(skin_state_number(111, &state), Some(30));
         assert_eq!(skin_state_number(112, &state), Some(10));
         assert_eq!(skin_state_number(113, &state), Some(5));
-        assert_eq!(skin_state_number(426, &state), Some(2));
+        assert_eq!(skin_state_number(426, &state), Some(3));
         assert_eq!(skin_state_number(412, &state), Some(7));
         assert_eq!(skin_state_number(422, &state), Some(2));
         assert!((graph_value(140, &state) - 0.2).abs() < 1e-5);

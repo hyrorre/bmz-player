@@ -2016,6 +2016,22 @@ mod tests {
     }
 
     #[test]
+    fn lr2_number_ref_preserves_poor_plus_miss() {
+        let files = BTreeMap::new();
+        let skin_path = unique_test_dir("bmz-lr2-number-ref").join("play.lr2skin");
+        let mut builder = CsvBuilder::new(&skin_path, Header::default(), &files);
+        builder.add_source("numbers.png");
+        builder
+            .execute(
+                &parse_csv_line("#SRC_NUMBER,0,0,0,0,10,20,1,10,0,0,426,0,4,0,1")
+                    .expect("valid SRC_NUMBER"),
+            )
+            .unwrap();
+
+        assert_eq!(builder.values.first().unwrap()["ref"], json!(426));
+    }
+
+    #[test]
     fn lr2_customfile_default_replaces_wildcard_once() {
         assert_eq!(
             substitute_wildcard_default("parts/note/*.png", "parts/note/*.png", "photon"),
