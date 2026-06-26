@@ -440,8 +440,6 @@ struct WinitApp {
     pending_play_skin: bool,
     pending_result_skin: bool,
     skin_reload_generations: SkinReloadGenerations,
-    pending_skin_reload_at: Option<Instant>,
-    pending_skin_reload_request: SkinReloadRequest,
     /// 直近 install をリクエストしたプレイスキンの key_mode と設定 fingerprint。
     /// 同じ mode かつ同じ path/options/files なら再 decode をスキップする。
     last_play_skin_signature: Option<PlaySkinSignature>,
@@ -1032,7 +1030,6 @@ const SELECT_PREVIEW_START_DELAY: Duration = Duration::from_millis(400);
 /// レーンカバー / LIFT を上下キーで動かす際のステップ幅。
 const LANE_COVER_STEP: f32 = 0.001;
 const LANE_COVER_REPEAT_STEP: f32 = 0.01;
-const SKIN_RELOAD_DEBOUNCE: Duration = Duration::from_millis(300);
 /// アナログスクラッチの tick が途切れたとみなし、端数バッファを捨てるまでの時間 (ms)。
 /// beatoraja の `getAnalogDiffAndReset(i, 200)` の tolerance に相当。
 const SELECT_ANALOG_SCROLL_TOLERANCE_MS: u64 = 200;
@@ -1816,8 +1813,6 @@ impl WinitApp {
             last_play_skin_signature: None,
             last_result_skin_signature: Some(initial_result_skin_signature),
             skin_reload_generations: SkinReloadGenerations::default(),
-            pending_skin_reload_at: None,
-            pending_skin_reload_request: SkinReloadRequest::default(),
             system_audio,
             system_sound,
             select_exit_hold_started_at: None,
@@ -9355,24 +9350,14 @@ impl WinitApp {
             }
         }
         if output.reset_skin_config {
-            self.pending_skin_reload_at = None;
-            self.pending_skin_reload_request = SkinReloadRequest::default();
             self.reset_profile_config_from_disk();
         } else if output.skin_reload_request.any() {
             if output.skin_reload_request.offsets {
                 self.apply_profile_skin_offsets_to_active_play();
             }
             if output.skin_reload_request.any_reload() {
-                self.pending_skin_reload_request.union(output.skin_reload_request);
-                self.pending_skin_reload_at = Some(Instant::now() + SKIN_RELOAD_DEBOUNCE);
+                self.reload_skins(output.skin_reload_request);
             }
-        }
-        if let Some(reload_at) = self.pending_skin_reload_at
-            && Instant::now() >= reload_at
-        {
-            self.pending_skin_reload_at = None;
-            let request = std::mem::take(&mut self.pending_skin_reload_request);
-            self.reload_skins(request);
         }
     }
 
@@ -9433,8 +9418,6 @@ impl WinitApp {
         match load_profile_config(&self.boot.profile_paths.profile_toml) {
             Ok(profile) => {
                 self.boot.profile_config = profile;
-                self.pending_skin_reload_at = None;
-                self.pending_skin_reload_request = SkinReloadRequest::default();
                 self.apply_profile_skin_offsets_to_active_play();
                 self.reload_skins(SkinReloadRequest {
                     select: true,
