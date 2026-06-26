@@ -9684,12 +9684,8 @@ impl WinitApp {
     }
 
     fn invalidate_skin_defs_cache_for_request(&mut self, request: SkinReloadRequest) {
-        if request.select || request.decide || request.result || request.course_result {
+        if request.any_reload() {
             self.skin_defs_cache.clear();
-            return;
-        }
-        for key_mode in skin_reload_request_key_modes(request) {
-            self.skin_defs_cache.remove(key_mode.play_map_key());
         }
     }
 
@@ -12752,21 +12748,6 @@ fn play_skin_key_mode_for_options(chart_key_mode: KeyMode, double_option: Double
         },
         DoubleOption::Off | DoubleOption::Flip => chart_key_mode,
     }
-}
-
-fn skin_reload_request_key_modes(request: SkinReloadRequest) -> impl Iterator<Item = KeyMode> {
-    [
-        (request.play4, KeyMode::K4),
-        (request.play5, KeyMode::K5),
-        (request.play6, KeyMode::K6),
-        (request.play7, KeyMode::K7),
-        (request.play8, KeyMode::K8),
-        (request.play9, KeyMode::K9),
-        (request.play10, KeyMode::K10),
-        (request.play14, KeyMode::K14),
-    ]
-    .into_iter()
-    .filter_map(|(enabled, key_mode)| enabled.then_some(key_mode))
 }
 
 fn skin_reload_request_includes_key_mode(request: SkinReloadRequest, key_mode: KeyMode) -> bool {
