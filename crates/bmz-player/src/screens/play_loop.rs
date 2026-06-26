@@ -747,7 +747,7 @@ mod tests {
             sounds: Vec::new(),
             bga_assets: Vec::new(),
             total_notes: 0,
-            end_time: TimeUs(-1_000_000),
+            end_time: TimeUs(-6_000_000),
         }
     }
 

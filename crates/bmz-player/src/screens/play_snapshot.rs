@@ -25,6 +25,7 @@ use bmz_render::snapshot::{
 };
 
 pub const DEFAULT_LOOKAHEAD_US: i64 = 2_000_000;
+pub(crate) const BEATORAJA_DURATION_BPM_FACTOR_MS: f32 = 240_000.0;
 const SCRATCH_ANGLE_OFFSET_1P: i32 = 1;
 const SCRATCH_ANGLE_OFFSET_2P: i32 = 2;
 const SCRATCH_ANGLE_PERIOD_MS: i64 = 2_160;
@@ -586,17 +587,19 @@ fn current_poor_bga_frame(
 }
 
 fn note_display_duration_ms(session: &GameSession, now_bpm: f32) -> i32 {
-    let hispeed = session.hispeed.max(0.01);
     let lane_cover = if session.lane_cover_visible { session.lane_cover } else { 0.0 };
-    let visible_max = (1.0 - lane_cover).clamp(0.0, 1.0);
-    // BPM スクロールでは可視時間が現在 BPM に反比例する。譜面の基準 BPM (initial_bpm)
-    // 比で補正することで、緑数字が今の流速に追従する。
-    let initial_bpm = session.chart.metadata.initial_bpm.max(1.0);
-    let now_bpm = now_bpm.max(1.0);
-    let bpm_ratio = initial_bpm as f32 / now_bpm;
-    ((DEFAULT_LOOKAHEAD_US as f32 / hispeed * visible_max * bpm_ratio) / 1_000.0)
+    display_duration_ms_for_bpm_hispeed(now_bpm, session.hispeed, lane_cover)
         .round()
         .clamp(0.0, i32::MAX as f32) as i32
+}
+
+pub(crate) fn display_duration_ms_for_bpm_hispeed(
+    now_bpm: f32,
+    hispeed: f32,
+    lane_cover: f32,
+) -> f32 {
+    let visible_max = (1.0 - lane_cover).clamp(0.0, 1.0);
+    BEATORAJA_DURATION_BPM_FACTOR_MS / now_bpm.max(1.0) / hispeed.max(0.01) * visible_max
 }
 
 fn current_keybound_bga_frame(
@@ -1136,6 +1139,14 @@ mod tests {
         assert!(CHART_BGA_TEXTURE_BASE >= RESULT_SKIN_BASE + MAX_RESULT_SKIN_TEXTURES);
         assert!(CHART_BGA_TEXTURE_BASE > SELECT_SKIN_BASE);
         assert_eq!(bga_texture_id(BgaAssetId(0)), CHART_BGA_TEXTURE_BASE);
+    }
+
+    #[test]
+    fn display_duration_uses_current_bpm_like_beatoraja() {
+        assert_eq!(display_duration_ms_for_bpm_hispeed(120.0, 1.0, 0.0).round() as i32, 2000);
+        assert_eq!(display_duration_ms_for_bpm_hispeed(240.0, 1.0, 0.0).round() as i32, 1000);
+        assert_eq!(display_duration_ms_for_bpm_hispeed(88.0, 2.75, 0.0).round() as i32, 992);
+        assert_eq!(display_duration_ms_for_bpm_hispeed(88.0, 2.75, 0.59).round() as i32, 407);
     }
 
     #[test]

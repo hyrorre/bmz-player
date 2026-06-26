@@ -917,7 +917,11 @@ fn plan_play(
         judge_combo: judge_region_state.judge_combo,
         judge_timing_sign: judge_region_state.judge_timing_sign,
         offset_lift_px: skin_lift_offset_px(snapshot.lift, skin_lane_h),
-        offset_lanecover_px: skin_lanecover_offset_px(snapshot.lane_cover, skin_lane_h),
+        offset_lanecover_px: skin_lanecover_offset_px(
+            snapshot.lane_cover,
+            snapshot.lift,
+            skin_lane_h,
+        ),
         offset_hidden_cover_px: skin_hidden_cover_offset_px(
             snapshot.lift,
             snapshot.hidden_cover,
@@ -1411,8 +1415,8 @@ fn skin_lift_offset_px(lift: f32, lane_h: f32) -> i32 {
     (lift * lane_h).round() as i32
 }
 
-fn skin_lanecover_offset_px(lane_cover: f32, lane_h: f32) -> i32 {
-    (-lane_h * lane_cover).round() as i32
+fn skin_lanecover_offset_px(lane_cover: f32, lift: f32, lane_h: f32) -> i32 {
+    (-(1.0 - lift.clamp(0.0, 1.0)) * lane_h * lane_cover.clamp(0.0, 1.0)).round() as i32
 }
 
 fn skin_hidden_cover_offset_px(lift: f32, hidden_cover: f32, lane_h: f32) -> i32 {
@@ -3982,7 +3986,8 @@ mod tests {
         let lane_h = 723.0;
 
         assert_eq!(skin_lift_offset_px(0.3, lane_h), 217);
-        assert_eq!(skin_lanecover_offset_px(0.5, lane_h), -362);
+        assert_eq!(skin_lanecover_offset_px(0.5, 0.0, lane_h), -362);
+        assert_eq!(skin_lanecover_offset_px(0.5, 0.25, lane_h), -271);
         assert_eq!(skin_hidden_cover_offset_px(0.3, 0.25, lane_h), 127);
     }
 

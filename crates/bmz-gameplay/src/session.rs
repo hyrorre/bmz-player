@@ -29,7 +29,7 @@ use crate::rule::RuleMode;
 use crate::score::ScoreState;
 
 pub const AUDIO_SCHEDULE_AHEAD_US: i64 = 100_000;
-pub const SESSION_END_MARGIN_US: i64 = 500_000;
+pub const SESSION_END_MARGIN_US: i64 = 5_000_000;
 pub const JUDGEMENT_DISPLAY_US: i64 = 800_000;
 pub const INPUT_DISPLAY_US: i64 = 160_000;
 /// オートプレイ時のキー押下を「離す」までの時間。beatoraja の `auto_minduration` (80ms) と揃える。

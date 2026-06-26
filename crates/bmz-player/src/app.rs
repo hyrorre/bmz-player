@@ -9674,7 +9674,12 @@ impl WinitApp {
                 let AppSceneSnapshot::Play(snapshot) = scene else {
                     return None;
                 };
-                Some(play_skin_video_draw_state(snapshot))
+                let play_skin_document = self.renderer.play_skin_document();
+                Some(play_skin_video_draw_state(
+                    snapshot,
+                    play_skin_document.map(|document| document.h),
+                    play_skin_document.and_then(|document| document.primary_note_lane_height_px()),
+                ))
             }
             SkinKind::Result => {
                 let AppSceneSnapshot::Result(snapshot) = scene else {
@@ -10510,8 +10515,23 @@ fn skin_video_sources_need_runtime_state(sources: &[ActiveSkinVideoSource]) -> b
         .any(|source| source.active && !source.failed && !source.gating_op_sets.is_empty())
 }
 
-fn play_skin_video_draw_state(snapshot: &RenderSnapshot) -> bmz_render::skin::SkinDrawState {
+fn play_skin_video_draw_state(
+    snapshot: &RenderSnapshot,
+    skin_height: Option<u32>,
+    note_lane_height_px: Option<i32>,
+) -> bmz_render::skin::SkinDrawState {
     let play_elapsed_ms = time_us_to_skin_ms(snapshot.play_elapsed_time);
+    let skin_height = skin_height.unwrap_or(1080).max(1) as f32;
+    let note_lane_height = note_lane_height_px
+        .filter(|height| *height > 0)
+        .map_or(skin_height, |height| height as f32);
+    let lift = snapshot.lift.clamp(0.0, 1.0);
+    let lane_cover = snapshot.lane_cover.clamp(0.0, 1.0);
+    let offset_lift_px = (lift * note_lane_height).round() as i32;
+    let visible_lane_height = note_lane_height * (1.0 - lift);
+    let offset_lanecover_px = (-(visible_lane_height * lane_cover)).round() as i32;
+    let offset_hidden_cover_px =
+        (snapshot.hidden_cover.clamp(0.0, 1.0) * visible_lane_height).round() as i32;
     bmz_render::skin::SkinDrawState {
         elapsed_ms: play_elapsed_ms,
         ready_timer_ms: snapshot.ready_elapsed_time.map(time_us_to_skin_ms),
@@ -10541,6 +10561,9 @@ fn play_skin_video_draw_state(snapshot: &RenderSnapshot) -> bmz_render::skin::Sk
         total_duration_ms: snapshot.note_display_duration_ms,
         lane_cover: snapshot.lane_cover,
         lift: snapshot.lift,
+        offset_lift_px,
+        offset_lanecover_px,
+        offset_hidden_cover_px,
         lane_cover_changing: snapshot.lane_cover_changing,
         lanecover_enabled: snapshot.lanecover_enabled,
         lift_enabled: snapshot.lift_enabled,
@@ -13656,14 +13679,12 @@ fn note_display_duration_ms_for_hispeed(
     lane_cover: f32,
     now: TimeUs,
 ) -> f32 {
-    let visible_max = (1.0 - lane_cover).clamp(0.0, 1.0);
-    let initial_bpm = session.chart.metadata.initial_bpm.max(1.0);
     let now_bpm = crate::screens::play_snapshot::current_bpm(&session.chart, now).max(1.0);
-    let bpm_ratio = (initial_bpm / now_bpm) as f32;
-    crate::screens::play_snapshot::DEFAULT_LOOKAHEAD_US as f32 / hispeed.max(0.01)
-        * visible_max
-        * bpm_ratio
-        / 1_000.0
+    crate::screens::play_snapshot::display_duration_ms_for_bpm_hispeed(
+        now_bpm as f32,
+        hispeed,
+        lane_cover,
+    )
 }
 
 fn hispeed_for_green_number(
@@ -13673,24 +13694,16 @@ fn hispeed_for_green_number(
 ) -> f32 {
     let target_green = session.target_green_number.max(1) as f32;
     let visible_max = (1.0 - lane_cover).clamp(0.0, 1.0);
-    let initial_bpm = session.chart.metadata.initial_bpm.max(1.0);
     let now_bpm = crate::screens::play_snapshot::current_bpm(&session.chart, now).max(1.0);
-    let hispeed = hispeed_for_green_number_values(target_green, visible_max, initial_bpm, now_bpm);
+    let hispeed = hispeed_for_green_number_values(target_green, visible_max, now_bpm);
     hispeed.clamp(0.5, 10.0)
 }
 
-fn hispeed_for_green_number_values(
-    target_green: f32,
-    visible_max: f32,
-    initial_bpm: f64,
-    now_bpm: f64,
-) -> f32 {
-    let bpm_ratio = (initial_bpm.max(1.0) / now_bpm.max(1.0)) as f32;
-    crate::screens::play_snapshot::DEFAULT_LOOKAHEAD_US as f32
+fn hispeed_for_green_number_values(target_green: f32, visible_max: f32, now_bpm: f64) -> f32 {
+    crate::screens::play_snapshot::BEATORAJA_DURATION_BPM_FACTOR_MS
         * visible_max.clamp(0.0, 1.0)
-        * bpm_ratio
         * 0.6
-        / (target_green.max(1.0) * 1_000.0)
+        / (target_green.max(1.0) * now_bpm.max(1.0) as f32)
 }
 
 fn result_action(
@@ -15949,37 +15962,71 @@ mod tests {
             failed: false,
         };
 
-        let visible_state = play_skin_video_draw_state(&RenderSnapshot {
-            has_bga: false,
-            bga_enabled: true,
-            resources_loaded: true,
-            ..RenderSnapshot::default()
-        });
+        let visible_state = play_skin_video_draw_state(
+            &RenderSnapshot {
+                has_bga: false,
+                bga_enabled: true,
+                resources_loaded: true,
+                ..RenderSnapshot::default()
+            },
+            None,
+            None,
+        );
         assert!(skin_video_source_runtime_visible(&source, &visible_state));
 
-        let song_bga_state = play_skin_video_draw_state(&RenderSnapshot {
-            has_bga: true,
-            bga_enabled: true,
-            resources_loaded: true,
-            ..RenderSnapshot::default()
-        });
+        let song_bga_state = play_skin_video_draw_state(
+            &RenderSnapshot {
+                has_bga: true,
+                bga_enabled: true,
+                resources_loaded: true,
+                ..RenderSnapshot::default()
+            },
+            None,
+            None,
+        );
         assert!(!skin_video_source_runtime_visible(&source, &song_bga_state));
 
-        let bga_off_state = play_skin_video_draw_state(&RenderSnapshot {
-            has_bga: false,
-            bga_enabled: false,
-            resources_loaded: true,
-            ..RenderSnapshot::default()
-        });
+        let bga_off_state = play_skin_video_draw_state(
+            &RenderSnapshot {
+                has_bga: false,
+                bga_enabled: false,
+                resources_loaded: true,
+                ..RenderSnapshot::default()
+            },
+            None,
+            None,
+        );
         assert!(!skin_video_source_runtime_visible(&source, &bga_off_state));
 
-        let song_bga_off_state = play_skin_video_draw_state(&RenderSnapshot {
-            has_bga: true,
-            bga_enabled: false,
-            resources_loaded: true,
-            ..RenderSnapshot::default()
-        });
+        let song_bga_off_state = play_skin_video_draw_state(
+            &RenderSnapshot {
+                has_bga: true,
+                bga_enabled: false,
+                resources_loaded: true,
+                ..RenderSnapshot::default()
+            },
+            None,
+            None,
+        );
         assert!(!skin_video_source_runtime_visible(&source, &song_bga_off_state));
+    }
+
+    #[test]
+    fn play_skin_draw_state_maps_lane_cover_and_lift_offsets_to_skin_pixels() {
+        let state = play_skin_video_draw_state(
+            &RenderSnapshot {
+                lane_cover: 0.5,
+                lift: 0.25,
+                hidden_cover: 0.1,
+                ..RenderSnapshot::default()
+            },
+            Some(1080),
+            Some(720),
+        );
+
+        assert_eq!(state.offset_lift_px, 180);
+        assert_eq!(state.offset_lanecover_px, -270);
+        assert_eq!(state.offset_hidden_cover_px, 54);
     }
 
     #[test]
@@ -16903,13 +16950,10 @@ mod tests {
 
     #[test]
     fn floating_hispeed_formula_uses_green_number_and_lane_cover() {
-        assert_eq!(hispeed_for_green_number_values(300.0, 1.0, 120.0, 120.0), 4.0);
-        assert_eq!(hispeed_for_green_number_values(300.0, 0.5, 120.0, 120.0), 2.0);
-        assert_eq!(hispeed_for_green_number_values(300.0, 1.0, 120.0, 240.0), 2.0);
-        assert!(
-            (hispeed_for_green_number_values(295.0, 0.93, 120.0, 120.0) - 3.783_051).abs()
-                < 0.000_01
-        );
+        assert_eq!(hispeed_for_green_number_values(300.0, 1.0, 120.0), 4.0);
+        assert_eq!(hispeed_for_green_number_values(300.0, 0.5, 120.0), 2.0);
+        assert_eq!(hispeed_for_green_number_values(300.0, 1.0, 240.0), 2.0);
+        assert!((hispeed_for_green_number_values(295.0, 0.93, 120.0) - 3.783_051).abs() < 0.000_01);
     }
 
     #[test]

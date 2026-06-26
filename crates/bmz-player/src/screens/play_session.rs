@@ -220,7 +220,7 @@ pub fn apply_placeholder_session_visuals(
     snapshot.lift = lane_unit_to_f32(profile.lane.lift);
     snapshot.lane_cover = lane_unit_to_f32(profile.lane.sudden);
     snapshot.lanecover_enabled = lanecover_enabled_from_profile(profile);
-    snapshot.lift_enabled = true;
+    snapshot.lift_enabled = lift_enabled_from_profile(profile);
     snapshot.hidden_enabled = hidden_enabled_from_profile(profile);
     snapshot.hidden_cover = hidden_cover_from_profile(profile);
 
@@ -238,14 +238,14 @@ pub fn apply_placeholder_session_visuals(
         .target_ex_score_with_override(snapshot.total_notes, options.target_ex_score_override);
     snapshot.target = options.target.as_string();
 
-    // 緑数字: READY 前は current_bpm == initial_bpm なので bpm_ratio = 1。
-    let hispeed = snapshot.hispeed.max(0.01);
-    let visible_max = (1.0 - snapshot.lane_cover).clamp(0.0, 1.0);
     snapshot.note_display_duration_ms =
-        ((crate::screens::play_snapshot::DEFAULT_LOOKAHEAD_US as f32 / hispeed * visible_max)
-            / 1_000.0)
-            .round()
-            .clamp(0.0, i32::MAX as f32) as i32;
+        crate::screens::play_snapshot::display_duration_ms_for_bpm_hispeed(
+            snapshot.now_bpm,
+            snapshot.hispeed,
+            snapshot.lane_cover,
+        )
+        .round()
+        .clamp(0.0, i32::MAX as f32) as i32;
 
     let initial_bpm = snapshot.now_bpm.max(1.0);
     let max_bpm = snapshot.max_bpm.max(initial_bpm);
@@ -453,7 +453,7 @@ pub fn build_game_session_with_input_backend(
         lane_cover_visible: true,
         lane_cover_changing: false,
         lanecover_enabled: lanecover_enabled_from_profile(profile),
-        lift_enabled: true,
+        lift_enabled: lift_enabled_from_profile(profile),
         hidden_enabled: hidden_enabled_from_profile(profile),
         hidden_cover: hidden_cover_from_profile(profile),
         skin_offsets: skin_offsets_from_profile(profile),
@@ -533,6 +533,11 @@ fn hidden_cover_from_profile(profile: &ProfileConfig) -> f32 {
 
 fn lanecover_enabled_from_profile(profile: &ProfileConfig) -> bool {
     matches!(profile.play.lane_effect, LaneEffectConfig::Sudden | LaneEffectConfig::HiddenSudden)
+        || profile.lane.sudden > 0
+}
+
+fn lift_enabled_from_profile(_profile: &ProfileConfig) -> bool {
+    true
 }
 
 fn hidden_enabled_from_profile(profile: &ProfileConfig) -> bool {
@@ -2254,6 +2259,34 @@ mod tests {
 
         assert_eq!(off.hidden_cover, 0.0);
         assert_eq!(hidden.hidden_cover, 0.4);
+    }
+
+    #[test]
+    fn build_game_session_maps_lane_cover_and_lift_skin_options_from_values() {
+        let mut profile = ProfileConfig::new_default("default", "Default", 1);
+        profile.play.lane_effect = LaneEffectConfig::Off;
+        profile.lane.sudden = 290;
+        profile.lane.lift = 222;
+
+        let session =
+            build_game_session(Arc::new(chart()), &profile, PlaySessionOptions::default());
+
+        assert!(session.lanecover_enabled);
+        assert!(session.lift_enabled);
+
+        profile.lane.sudden = 0;
+        profile.lane.lift = 0;
+        let disabled =
+            build_game_session(Arc::new(chart()), &profile, PlaySessionOptions::default());
+
+        assert!(!disabled.lanecover_enabled);
+        assert!(disabled.lift_enabled);
+
+        profile.play.lane_effect = LaneEffectConfig::Sudden;
+        let sudden_option =
+            build_game_session(Arc::new(chart()), &profile, PlaySessionOptions::default());
+
+        assert!(sudden_option.lanecover_enabled);
     }
 
     #[test]

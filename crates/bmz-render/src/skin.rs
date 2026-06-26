@@ -3046,8 +3046,10 @@ impl SkinDocument {
         let elapsed = skin_timer_elapsed_ms(destination.timer, state)?;
         let mut frame = resolve_destination_frame(destination, elapsed, enabled_options, state)?;
         let image = skin_image_for_destination_id(destination.id.as_str(), images)?;
-        let is_hidden_cover_destination =
-            self.hidden_cover.iter().any(|cover| cover.id == destination.id);
+        let is_hidden_cover_destination = self
+            .hidden_cover
+            .iter()
+            .any(|cover| cover.id == destination.id && !is_lift_lane_cover_id(&cover.id));
         apply_skin_offset_to_frame(destination, &mut frame, state, is_hidden_cover_destination);
         if !destination_mouse_rect_contains(destination, frame, state) {
             return None;
@@ -3206,8 +3208,10 @@ impl SkinDocument {
                 .map(|_| 0)
         })?;
         let mut frame = resolve_destination_frame(destination, elapsed, enabled_options, state)?;
-        let is_hidden_cover_destination =
-            self.hidden_cover.iter().any(|cover| cover.id == destination.id);
+        let is_hidden_cover_destination = self
+            .hidden_cover
+            .iter()
+            .any(|cover| cover.id == destination.id && !is_lift_lane_cover_id(&cover.id));
         apply_skin_offset_to_frame(destination, &mut frame, state, is_hidden_cover_destination);
         if !destination_mouse_rect_contains(destination, frame, state) {
             return None;
@@ -5055,6 +5059,14 @@ impl SkinDocument {
         }
     }
 
+    pub fn primary_note_lane_height_px(&self) -> Option<i32> {
+        let enabled_options = self.enabled_options();
+        self.note_lane_area(Lane::Scratch, KeyMode::K7, &enabled_options)
+            .or_else(|| self.note_lane_area(Lane::Key1, KeyMode::K7, &enabled_options))
+            .map(|area| (area.height * self.h.max(1) as f32).round() as i32)
+            .filter(|height| *height > 0)
+    }
+
     fn apply_notes_offset_to_rect(&self, rect: Rect, state: &SkinDrawState) -> Rect {
         let Some(offset) = state.skin_offsets.get(OFFSET_NOTES_1P) else {
             return rect;
@@ -5601,7 +5613,7 @@ impl SkinDocument {
             style: TextStyle {
                 font_id: (!text.font.is_empty()).then(|| text.font.clone()),
                 size: frame.h.abs().max(text.size).max(1) as f32 / self.h.max(1) as f32,
-                bitmap_size: skin_text_bitmap_size(text, &self.font, self.h),
+                bitmap_size: skin_text_bitmap_size(text, &self.font, self.h, frame.h),
                 color,
                 layer: TextLayer::Ui,
                 align: skin_text_align(text.align),
@@ -6416,7 +6428,13 @@ impl SkinDocument {
         state: &SkinDrawState,
         sources: &HashMap<String, SkinDocumentTexture>,
     ) -> Option<SkinRenderItem> {
-        if state.hidden_cover <= 0.0 {
+        let is_lift_cover =
+            is_lift_lane_cover_id(&cover.id) || is_lift_lane_cover_id(&destination.id);
+        if is_lift_cover {
+            if state.offset_lift_px <= 0 {
+                return None;
+            }
+        } else if state.hidden_cover <= 0.0 {
             return None;
         }
         let source = sources.get(&cover.src)?;
@@ -9576,14 +9594,19 @@ fn skin_text_bitmap_size(
     text: &SkinTextDef,
     fonts: &[SkinFontDef],
     skin_height: u32,
+    frame_h: i32,
 ) -> Option<f32> {
-    if text.size <= 0 || text.font.is_empty() {
+    if text.font.is_empty() {
         return None;
     }
     let font_id = text.font.rsplit_once(':').map_or(text.font.as_str(), |(_, id)| id);
     let font = fonts.iter().find(|font| font.id == text.font || font.id == font_id)?;
     let extension = Path::new(&font.path).extension()?.to_str()?;
-    extension.eq_ignore_ascii_case("fnt").then_some(text.size as f32 / skin_height.max(1) as f32)
+    if !extension.eq_ignore_ascii_case("fnt") {
+        return None;
+    }
+    let bitmap_size = if text.size > 0 { text.size } else { frame_h.abs().max(1) };
+    Some(bitmap_size as f32 / skin_height.max(1) as f32)
 }
 
 fn skin_text_overflow(overflow: i32) -> TextOverflow {
@@ -19348,7 +19371,7 @@ mod tests {
     }
 
     #[test]
-    fn lift_cover_skipped_at_minimum_lift() {
+    fn lift_cover_hides_at_minimum_lift() {
         let document: SkinDocument = serde_json::from_str(
             r#"
             {
@@ -19462,13 +19485,57 @@ mod tests {
             &sources,
             &SkinDrawState { offset_lift_px: 200, ..SkinDrawState::default() },
         );
-        let SkinRenderItem::Image { rect: clipped_rect, uv: clipped_uv, .. } = &clipped[0] else {
-            panic!("expected image");
+        let SkinRenderItem::Image { rect, uv, .. } = &clipped[0] else {
+            panic!("expected clipped lift cover image");
         };
-        // offset 3 で 200px 上げた分、判定線より下を切り、上側 200px だけ残す
-        assert!(approx_eq(clipped_rect.y, 163.0 / 720.0));
-        assert!(approx_eq(clipped_rect.height, 200.0 / 720.0));
-        assert!(approx_eq(clipped_uv.height, 200.0 / 723.0));
+        assert!(approx_eq(rect.height, 200.0 / 720.0));
+        assert!(approx_eq(uv.height, 200.0 / 723.0));
+    }
+
+    #[test]
+    fn lift_hidden_cover_clips_with_its_own_disappear_line() {
+        let document: SkinDocument = serde_json::from_str(
+            r#"
+            {
+                "type": 0,
+                "w": 720,
+                "h": 720,
+                "source": [{ "id": 12, "path": "lift.png" }],
+                "hiddenCover": [
+                    { "id": "lr2-liftcover", "src": 12, "x": 0, "y": 0, "w": 431, "h": 723, "disapearLine": 357, "isDisapearLineLinkLift": false }
+                ],
+                "destination": [
+                    { "id": "lr2-liftcover", "offset": 3, "dst": [{ "x": 20, "y": -366, "w": 431, "h": 723 }] }
+                ]
+            }
+            "#,
+        )
+        .unwrap();
+        let sources = HashMap::from([(
+            "12".to_string(),
+            SkinDocumentTexture {
+                source_id: "12".to_string(),
+                texture: SkinTextureId(42),
+                source_size: SkinImageSize { width: 431.0, height: 723.0 },
+            },
+        )]);
+
+        let no_lift = document.static_image_render_items(
+            &sources,
+            &SkinDrawState { offset_lift_px: 0, ..SkinDrawState::default() },
+        );
+        assert!(no_lift.is_empty());
+
+        let lifted = document.static_image_render_items(
+            &sources,
+            &SkinDrawState { offset_lift_px: 200, ..SkinDrawState::default() },
+        );
+        let SkinRenderItem::Image { rect, uv, tint, .. } = &lifted[0] else {
+            panic!("expected clipped lift hidden cover image");
+        };
+        assert!(approx_eq(rect.height, 200.0 / 720.0));
+        assert!(approx_eq(uv.height, 200.0 / 723.0));
+        assert!(tint.a > 0.5);
     }
 
     #[test]
