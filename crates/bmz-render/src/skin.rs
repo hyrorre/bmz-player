@@ -8808,19 +8808,10 @@ fn lane_cover_duration_number(ref_id: i32, state: &SkinDrawState) -> Option<i64>
         3 => bpm_value_or_select(state.max_bpm, state.select_max_bpm),
         _ => return None,
     }?;
-    let current_bpm = bpm_value_or_select(state.now_bpm, state.select_bpm).unwrap_or(target_bpm);
-    let visible = (1.0 - state.lane_cover.clamp(0.0, 1.0)).max(0.01);
-    let mut base_duration = state_base_duration_for_lane_cover(state)?;
-    base_duration.value *= current_bpm as f64 / target_bpm as f64;
-    if !cover {
-        base_duration.value /= visible as f64;
-    }
-    let duration = match (base_duration.kind, green) {
-        (DurationBaseKind::Green, true) => base_duration.value,
-        (DurationBaseKind::Green, false) => base_duration.value * 5.0 / 3.0,
-        (DurationBaseKind::Normal, true) => base_duration.value * 3.0 / 5.0,
-        (DurationBaseKind::Normal, false) => base_duration.value,
-    };
+    let lane_cover = if cover { (1.0 - state.lane_cover.clamp(0.0, 1.0)) as f64 } else { 1.0 };
+    let green_factor = if green { 0.6 } else { 1.0 };
+    let duration =
+        240_000.0 / target_bpm as f64 / state.hispeed.max(0.01) as f64 * lane_cover * green_factor;
     Some(duration.round().max(0.0) as i64)
 }
 
@@ -8840,28 +8831,6 @@ fn state_duration_green_number_ms(state: &SkinDrawState) -> i64 {
         .duration_green_ms
         .map(|value| value.max(0) as i64)
         .unwrap_or_else(|| duration_to_green_number_ms(state.total_duration_ms) as i64)
-}
-
-#[derive(Clone, Copy)]
-enum DurationBaseKind {
-    Normal,
-    Green,
-}
-
-#[derive(Clone, Copy)]
-struct DurationBase {
-    kind: DurationBaseKind,
-    value: f64,
-}
-
-fn state_base_duration_for_lane_cover(state: &SkinDrawState) -> Option<DurationBase> {
-    if let Some(green) = state.duration_green_ms {
-        return Some(DurationBase { kind: DurationBaseKind::Green, value: green.max(0) as f64 });
-    }
-    (state.total_duration_ms > 0).then_some(DurationBase {
-        kind: DurationBaseKind::Normal,
-        value: state.total_duration_ms as f64,
-    })
 }
 
 fn green_duration_to_duration(green_duration_ms: i32) -> i64 {
@@ -22191,6 +22160,7 @@ mod tests {
             main_bpm: 100.0,
             min_bpm: 50.0,
             max_bpm: 200.0,
+            hispeed: 2.0,
             lane_cover: 0.25,
             total_duration_ms: 2_000,
             duration_green_ms: Some(1_200),
@@ -22198,13 +22168,29 @@ mod tests {
         };
         // 1312..=1327 are beatoraja lane-cover duration variants:
         // current/main/min/max BPM x cover on/off x normal/green.
-        assert_eq!(skin_state_number(1312, &duration_state), Some(2_000));
-        assert_eq!(skin_state_number(1313, &duration_state), Some(1_200));
-        assert_eq!(skin_state_number(1314, &duration_state), Some(2_667));
-        assert_eq!(skin_state_number(1315, &duration_state), Some(1_600));
-        assert_eq!(skin_state_number(1317, &duration_state), Some(1_200));
-        assert_eq!(skin_state_number(1321, &duration_state), Some(2_400));
-        assert_eq!(skin_state_number(1325, &duration_state), Some(600));
+        assert_eq!(skin_state_number(1312, &duration_state), Some(900));
+        assert_eq!(skin_state_number(1313, &duration_state), Some(540));
+        assert_eq!(skin_state_number(1314, &duration_state), Some(1_200));
+        assert_eq!(skin_state_number(1315, &duration_state), Some(720));
+        assert_eq!(skin_state_number(1317, &duration_state), Some(540));
+        assert_eq!(skin_state_number(1321, &duration_state), Some(1_080));
+        assert_eq!(skin_state_number(1325, &duration_state), Some(270));
+        let changed_now_bpm = SkinDrawState {
+            now_bpm: 150.0,
+            duration_green_ms: Some(777),
+            total_duration_ms: 1_295,
+            ..duration_state.clone()
+        };
+        // WMII uses the main/min/max variants.  They should stay stable across
+        // BPM changes and current-duration rounding; only the current-BPM variant changes.
+        assert_eq!(skin_state_number(1313, &changed_now_bpm), Some(360));
+        assert_eq!(skin_state_number(1317, &changed_now_bpm), Some(540));
+        assert_eq!(skin_state_number(1321, &changed_now_bpm), Some(1_080));
+        assert_eq!(skin_state_number(1325, &changed_now_bpm), Some(270));
+        let faster = SkinDrawState { hispeed: 3.0, ..duration_state.clone() };
+        assert_eq!(skin_state_number(1317, &faster), Some(360));
+        let lower_cover = SkinDrawState { lane_cover: 0.5, ..duration_state.clone() };
+        assert_eq!(skin_state_number(1317, &lower_cover), Some(360));
         // VALUE_JUDGE_1P_DURATION (525) = -(-3) = 3 (FAST 3ms は beatoraja 規約で正)
         assert_eq!(skin_state_number(525, &state), Some(3));
         // VALUE_JUDGE_2P_DURATION (526): SLOW 7ms (delta=+7) は beatoraja 規約で負
