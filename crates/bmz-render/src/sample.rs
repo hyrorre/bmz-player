@@ -172,6 +172,7 @@ pub fn sample_result_scene() -> AppSceneSnapshot {
         total_notes: 1000,
         grade_diff_display: crate::scene::ResultGradeDiffDisplay::default(),
         duration_ms: 120_000,
+        note_display_duration_ms: None,
         initial_bpm: 150.0,
         min_bpm: 150.0,
         max_bpm: 180.0,

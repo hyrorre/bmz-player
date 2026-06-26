@@ -1972,8 +1972,13 @@ pub struct SkinDrawState {
     pub hispeed: f32,
     /// 曲残り時間 ms (NUMBER_TIMELEFT_MINUTE=163, NUMBER_TIMELEFT_SECOND=164 に使用)。
     pub timeleft_ms: i32,
-    /// ノーツ表示時間 ms (NUMBER_DURATION=312 / NUMBER_DURATION_GREEN=313 に使用)。
+    /// ノーツ表示時間 ms (NUMBER_DURATION=312 に使用)。
     pub total_duration_ms: i32,
+    /// 緑数字 ms (NUMBER_DURATION_GREEN=313 に使用)。
+    /// 指定されている場合は NUMBER_DURATION=312 をこの値の 5/3 倍として返す。
+    pub duration_green_ms: Option<i32>,
+    /// Result の曲長 ms (NUMBER_PLAYTIME_MINUTE/SECOND=1163/1164 に使用)。
+    pub result_duration_ms: i32,
     /// レーンカバー割合 0.0-1.0 (NUMBER_LANECOVER1=14 は 0..=1000 で返す)。
     pub lane_cover: f32,
     /// リフト量 0.0-1.0 (NUMBER_LIFT1=314 に使用)。
@@ -2241,6 +2246,8 @@ impl Default for SkinDrawState {
             hispeed: 0.0,
             timeleft_ms: 0,
             total_duration_ms: 0,
+            duration_green_ms: None,
+            result_duration_ms: 0,
             lane_cover: 0.0,
             lift: 0.0,
             hidden_cover: 0.0,
@@ -3909,6 +3916,7 @@ impl SkinDocument {
         let mouse_position = snapshot.mouse_position.map(|(x, y)| {
             (x.clamp(0.0, 1.0) * self.w as f32, (1.0 - y.clamp(0.0, 1.0)) * self.h as f32)
         });
+        let duration_green_ms = snapshot.note_display_duration_ms;
         let mut state = SkinDrawState {
             elapsed_ms: (snapshot.time.0 / 1_000).clamp(i32::MIN as i64, i32::MAX as i64) as i32,
             select_bar_elapsed_ms: (snapshot.selection_time.0 / 1_000)
@@ -3939,7 +3947,11 @@ impl SkinDocument {
             select_ln_mode_index: select_ln_mode_index(&snapshot.select_ln_mode),
             select_judge_algorithm_index: select_judge_algorithm_index(&snapshot.judge_algorithm),
             hispeed: snapshot.hispeed,
-            total_duration_ms: snapshot.note_display_duration_ms.unwrap_or(0),
+            total_duration_ms: duration_green_ms
+                .map(green_duration_to_duration)
+                .unwrap_or(0)
+                .min(i32::MAX as i64) as i32,
+            duration_green_ms,
             result_grade_diff_display: snapshot.grade_diff_display,
             select_scroll_progress: select_scroll_progress(snapshot),
             select_master_volume: snapshot.master_volume,
@@ -8645,16 +8657,16 @@ fn skin_state_number(ref_id: i32, state: &SkinDrawState) -> Option<i64> {
         310 => Some(state.hispeed.floor() as i64),
         311 => Some(((state.hispeed * 100.0) as i64) % 100),
         312 => {
-            if state.select_screen && state.total_duration_ms <= 0 {
+            if state.select_screen && !duration_refs_available(state) {
                 return None;
             }
-            Some(state.total_duration_ms as i64)
+            Some(state_duration_number_ms(state))
         }
         313 => {
-            if state.select_screen && state.total_duration_ms <= 0 {
+            if state.select_screen && !duration_refs_available(state) {
                 return None;
             }
-            Some(((state.total_duration_ms as i64) * 3 + 2) / 5)
+            Some(state_duration_green_number_ms(state))
         }
         1312..=1327 => lane_cover_duration_number(ref_id, state),
         308 if state.select_screen => Some(state.select_ln_mode_index as i64),
@@ -8782,7 +8794,7 @@ fn skin_state_number(ref_id: i32, state: &SkinDrawState) -> Option<i64> {
 }
 
 fn lane_cover_duration_number(ref_id: i32, state: &SkinDrawState) -> Option<i64> {
-    if state.select_screen && state.total_duration_ms <= 0 {
+    if state.select_screen && !duration_refs_available(state) {
         return None;
     }
     let offset = ref_id.checked_sub(1312)?;
@@ -8798,12 +8810,72 @@ fn lane_cover_duration_number(ref_id: i32, state: &SkinDrawState) -> Option<i64>
     }?;
     let current_bpm = bpm_value_or_select(state.now_bpm, state.select_bpm).unwrap_or(target_bpm);
     let visible = (1.0 - state.lane_cover.clamp(0.0, 1.0)).max(0.01);
-    let mut duration = state.total_duration_ms as f64 * (current_bpm as f64 / target_bpm as f64);
+    let mut base_duration = state_base_duration_for_lane_cover(state)?;
+    base_duration.value *= current_bpm as f64 / target_bpm as f64;
     if !cover {
-        duration /= visible as f64;
+        base_duration.value /= visible as f64;
     }
-    let duration = duration.round().max(0.0) as i64;
-    if green { Some((duration * 3 + 2) / 5) } else { Some(duration) }
+    let duration = match (base_duration.kind, green) {
+        (DurationBaseKind::Green, true) => base_duration.value,
+        (DurationBaseKind::Green, false) => base_duration.value * 5.0 / 3.0,
+        (DurationBaseKind::Normal, true) => base_duration.value * 3.0 / 5.0,
+        (DurationBaseKind::Normal, false) => base_duration.value,
+    };
+    Some(duration.round().max(0.0) as i64)
+}
+
+fn duration_refs_available(state: &SkinDrawState) -> bool {
+    state.duration_green_ms.is_some_and(|value| value > 0) || state.total_duration_ms > 0
+}
+
+fn state_duration_number_ms(state: &SkinDrawState) -> i64 {
+    state
+        .duration_green_ms
+        .map(green_duration_to_duration)
+        .unwrap_or_else(|| state.total_duration_ms.max(0) as i64)
+}
+
+fn state_duration_green_number_ms(state: &SkinDrawState) -> i64 {
+    state
+        .duration_green_ms
+        .map(|value| value.max(0) as i64)
+        .unwrap_or_else(|| duration_to_green_number_ms(state.total_duration_ms) as i64)
+}
+
+#[derive(Clone, Copy)]
+enum DurationBaseKind {
+    Normal,
+    Green,
+}
+
+#[derive(Clone, Copy)]
+struct DurationBase {
+    kind: DurationBaseKind,
+    value: f64,
+}
+
+fn state_base_duration_for_lane_cover(state: &SkinDrawState) -> Option<DurationBase> {
+    if let Some(green) = state.duration_green_ms {
+        return Some(DurationBase { kind: DurationBaseKind::Green, value: green.max(0) as f64 });
+    }
+    (state.total_duration_ms > 0).then_some(DurationBase {
+        kind: DurationBaseKind::Normal,
+        value: state.total_duration_ms as f64,
+    })
+}
+
+fn green_duration_to_duration(green_duration_ms: i32) -> i64 {
+    let green = green_duration_ms.max(0) as i64;
+    (green.saturating_mul(5).saturating_add(1)) / 3
+}
+
+pub fn green_duration_to_duration_i32(green_duration_ms: i32) -> i32 {
+    green_duration_to_duration(green_duration_ms).min(i32::MAX as i64) as i32
+}
+
+pub fn duration_to_green_number_ms(duration_ms: i32) -> i32 {
+    let duration = duration_ms.max(0) as i64;
+    ((duration.saturating_mul(3).saturating_add(2)) / 5).min(i32::MAX as i64) as i32
 }
 
 fn bpm_value_or_select(value: f32, fallback: f32) -> Option<f32> {
@@ -8982,7 +9054,11 @@ fn projected_score_at_progress(final_score: u32, state: &SkinDrawState) -> u32 {
 
 fn result_or_select_length_ms(state: &SkinDrawState) -> i64 {
     if state.result_failed.is_some() {
-        state.total_duration_ms.max(0) as i64
+        if state.result_duration_ms > 0 {
+            state.result_duration_ms as i64
+        } else {
+            state.total_duration_ms.max(0) as i64
+        }
     } else {
         state.select_length_ms.max(0)
     }
@@ -17834,7 +17910,7 @@ mod tests {
         let document: SkinDocument = serde_json::from_str(r#"{ "type": 5 }"#).unwrap();
         let snapshot = SelectSnapshot {
             hispeed: 3.25,
-            note_display_duration_ms: Some(467),
+            note_display_duration_ms: Some(280),
             selected_index: 0,
             rows: vec![SelectRowSnapshot {
                 index: 0,
@@ -20060,7 +20136,8 @@ mod tests {
             min_bpm: 100.0,
             max_bpm: 180.0,
             main_bpm: 150.0,
-            total_duration_ms: 120_000,
+            total_duration_ms: 200_000,
+            duration_green_ms: Some(120_000),
             select_chart_total_gauge: 200.0,
             judge_rank: Some(2),
             ..SkinDrawState::default()
@@ -20070,8 +20147,8 @@ mod tests {
         assert_eq!(skin_state_number(91, &state), Some(100));
         assert_eq!(skin_state_number(90, &state), Some(180));
         assert_eq!(skin_state_number(92, &state), Some(150));
-        assert_eq!(skin_state_number(312, &state), Some(120_000));
-        assert_eq!(skin_state_number(313, &state), Some(72_000));
+        assert_eq!(skin_state_number(312, &state), Some(200_000));
+        assert_eq!(skin_state_number(313, &state), Some(120_000));
         assert_eq!(skin_state_number(368, &state), Some(200));
         assert_eq!(skin_state_number(400, &state), Some(2));
     }
@@ -20387,6 +20464,7 @@ mod tests {
             select_length_ms: 183_000,
             hispeed: 2.75,
             total_duration_ms: 500,
+            duration_green_ms: Some(300),
             select_master_volume: 0.575,
             select_key_volume: 0.59,
             select_bgm_volume: 0.28,
@@ -20483,6 +20561,7 @@ mod tests {
             select_max_bpm: 0.0,
             judge_rank: None,
             total_duration_ms: 500,
+            duration_green_ms: Some(300),
             ..SkinDrawState::default()
         };
 
@@ -22068,7 +22147,8 @@ mod tests {
             min_bpm: 80.0,
             max_bpm: 200.3,
             lane_cover: 0.25,
-            total_duration_ms: 183_000,
+            total_duration_ms: 305_000,
+            duration_green_ms: Some(183_000),
             judge_timing_ms: [Some(-3), Some(7), None],
             ..SkinDrawState::default()
         };
@@ -22095,13 +22175,16 @@ mod tests {
             "float_number(113) == 0",
             &SkinDrawState { total_notes: 100, best_ex_score: Some(0), ..SkinDrawState::default() }
         ));
-        // NUMBER_DURATION (312) = current note display duration in ms.
-        assert_eq!(skin_state_number(312, &state), Some(183_000));
-        // NUMBER_DURATION_GREEN (313) = duration * 3 / 5.
-        assert_eq!(skin_state_number(313, &state), Some(109_800));
+        // BMZ keeps the green number in SkinDrawState and exposes beatoraja's duration as green*5/3.
+        assert_eq!(skin_state_number(312, &state), Some(305_000));
+        // NUMBER_DURATION_GREEN (313) = green number.
+        assert_eq!(skin_state_number(313, &state), Some(183_000));
         assert_eq!(
-            skin_state_number(313, &SkinDrawState { total_duration_ms: 183_001, ..state.clone() }),
-            Some(109_801)
+            skin_state_number(
+                313,
+                &SkinDrawState { duration_green_ms: Some(183_001), ..state.clone() }
+            ),
+            Some(183_001)
         );
         let duration_state = SkinDrawState {
             now_bpm: 100.0,
@@ -22109,18 +22192,19 @@ mod tests {
             min_bpm: 50.0,
             max_bpm: 200.0,
             lane_cover: 0.25,
-            total_duration_ms: 1_200,
+            total_duration_ms: 2_000,
+            duration_green_ms: Some(1_200),
             ..SkinDrawState::default()
         };
         // 1312..=1327 are beatoraja lane-cover duration variants:
         // current/main/min/max BPM x cover on/off x normal/green.
-        assert_eq!(skin_state_number(1312, &duration_state), Some(1_200));
-        assert_eq!(skin_state_number(1313, &duration_state), Some(720));
-        assert_eq!(skin_state_number(1314, &duration_state), Some(1_600));
-        assert_eq!(skin_state_number(1315, &duration_state), Some(960));
-        assert_eq!(skin_state_number(1317, &duration_state), Some(720));
-        assert_eq!(skin_state_number(1321, &duration_state), Some(1_440));
-        assert_eq!(skin_state_number(1325, &duration_state), Some(360));
+        assert_eq!(skin_state_number(1312, &duration_state), Some(2_000));
+        assert_eq!(skin_state_number(1313, &duration_state), Some(1_200));
+        assert_eq!(skin_state_number(1314, &duration_state), Some(2_667));
+        assert_eq!(skin_state_number(1315, &duration_state), Some(1_600));
+        assert_eq!(skin_state_number(1317, &duration_state), Some(1_200));
+        assert_eq!(skin_state_number(1321, &duration_state), Some(2_400));
+        assert_eq!(skin_state_number(1325, &duration_state), Some(600));
         // VALUE_JUDGE_1P_DURATION (525) = -(-3) = 3 (FAST 3ms は beatoraja 規約で正)
         assert_eq!(skin_state_number(525, &state), Some(3));
         // VALUE_JUDGE_2P_DURATION (526): SLOW 7ms (delta=+7) は beatoraja 規約で負
@@ -22168,14 +22252,18 @@ mod tests {
 
     #[test]
     fn skin_value_number_evaluates_value_expr() {
-        let state = SkinDrawState { total_duration_ms: 183_000, ..SkinDrawState::default() };
+        let state = SkinDrawState {
+            total_duration_ms: 305_000,
+            duration_green_ms: Some(183_000),
+            ..SkinDrawState::default()
+        };
         let value = SkinValueDef {
             id: "lanecover-green".to_string(),
             src: String::new(),
             value_expr: "0.6*number(312)".to_string(),
             ..Default::default()
         };
-        assert_eq!(skin_value_number(&value, &state), Some(109_800));
+        assert_eq!(skin_value_number(&value, &state), Some(183_000));
     }
 
     #[test]

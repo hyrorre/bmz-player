@@ -6,7 +6,7 @@ use bmz_chart::model::{
     BarLine, BgaArgbEvent, BgaAssetId, BgaEvent, BgaEventKind, BgaOpacityEvent, NoteEvent,
     NoteKind, PlayableChart, TimingEventKind,
 };
-use bmz_chart::timing::{TICKS_PER_BEAT, TimingMap};
+use bmz_chart::timing::{TICKS_PER_MEASURE, TimingMap};
 use bmz_core::judge::{Judge, TimingSide};
 use bmz_core::lane::{LANE_COUNT, Lane};
 use bmz_core::time::TimeUs;
@@ -24,7 +24,6 @@ use bmz_render::snapshot::{
     VisibleLongNote, VisibleMine, VisibleNote,
 };
 
-pub const DEFAULT_LOOKAHEAD_US: i64 = 2_000_000;
 pub(crate) const BEATORAJA_DURATION_BPM_FACTOR_MS: f32 = 240_000.0;
 const SCRATCH_ANGLE_OFFSET_1P: i32 = 1;
 const SCRATCH_ANGLE_OFFSET_2P: i32 = 2;
@@ -272,7 +271,13 @@ pub fn build_render_snapshot_with_target_and_bga_frames_cached(
     let play_elapsed_time = if render_now.0 < 0 { TimeUs(0) } else { render_now };
     let gauge_graph_time_ms = (render_now.0.max(0) / 1_000).clamp(0, i32::MAX as i64) as i32;
     let now_bpm = session.timing_map.bpm_at_time(render_now) as f32;
-    let note_display_duration_ms = note_display_duration_ms(session, now_bpm);
+    let cursor_tick = session.timing_map.time_to_tick_f64(scroll_render_time(render_now));
+    let scroll_multiplier = current_scroll_multiplier_from_segments(
+        &cache.scroll_segments,
+        &cache.speed_segments,
+        cursor_tick,
+    );
+    let note_display_duration_ms = note_display_duration_ms(session, now_bpm, scroll_multiplier);
     let lane_cover = if session.lane_cover_visible { session.lane_cover } else { 0.0 };
     let adjusted_cover_progress = compute_adjusted_cover_progress(
         session.hidden_enabled,
@@ -562,8 +567,11 @@ pub fn update_render_snapshot_play_options(
     snapshot.lanecover_enabled = session.lanecover_enabled;
     snapshot.lift_enabled = session.lift_enabled;
     snapshot.hidden_enabled = session.hidden_enabled;
-    snapshot.note_display_duration_ms =
-        note_display_duration_ms(session, session.timing_map.bpm_at_time(render_now) as f32);
+    snapshot.note_display_duration_ms = note_display_duration_ms(
+        session,
+        session.timing_map.bpm_at_time(render_now) as f32,
+        current_scroll_multiplier(&session.chart, &session.timing_map, render_now),
+    );
     snapshot.hidden_cover = session.hidden_cover;
 }
 
@@ -586,9 +594,9 @@ fn current_poor_bga_frame(
     current_bga_frame(cache, judgement.time, BgaEventKind::Poor, bga_frames)
 }
 
-fn note_display_duration_ms(session: &GameSession, now_bpm: f32) -> i32 {
+fn note_display_duration_ms(session: &GameSession, now_bpm: f32, scroll_multiplier: f32) -> i32 {
     let lane_cover = if session.lane_cover_visible { session.lane_cover } else { 0.0 };
-    display_duration_ms_for_bpm_hispeed(now_bpm, session.hispeed, lane_cover)
+    display_duration_ms_for_bpm_hispeed(now_bpm, session.hispeed, lane_cover, scroll_multiplier)
         .round()
         .clamp(0.0, i32::MAX as f32) as i32
 }
@@ -597,9 +605,14 @@ pub(crate) fn display_duration_ms_for_bpm_hispeed(
     now_bpm: f32,
     hispeed: f32,
     lane_cover: f32,
+    scroll_multiplier: f32,
 ) -> f32 {
     let visible_max = (1.0 - lane_cover).clamp(0.0, 1.0);
-    BEATORAJA_DURATION_BPM_FACTOR_MS / now_bpm.max(1.0) / hispeed.max(0.01) * visible_max
+    if scroll_multiplier <= 0.0 {
+        return 0.0;
+    }
+    BEATORAJA_DURATION_BPM_FACTOR_MS / now_bpm.max(1.0) / hispeed.max(0.01) / scroll_multiplier
+        * visible_max
 }
 
 fn current_keybound_bga_frame(
@@ -769,9 +782,9 @@ fn scroll_render_time(render_now: TimeUs) -> TimeUs {
 
 /// BPM 変化と STOP に追従した tick ベースのスクロール計算ヘルパ。
 ///
-/// 「lookahead = `DEFAULT_LOOKAHEAD_US` を譜面の `initial_bpm` で換算した tick 数」を
-/// 基準にし、現在カーソル tick との差分でノートの y を出す。これにより BPM が
-/// 上がれば見かけのスクロール速度も上がり、STOP 中はカーソル tick が停止する。
+/// beatoraja の LaneRenderer と同じく 4 拍ぶんの tick 幅を基準にし、現在カーソル
+/// tick との差分でノートの y を出す。これにより BPM が上がれば見かけのスクロール
+/// 速度も上がり、STOP 中はカーソル tick が停止する。
 struct ScrollContext<'a> {
     timing_map: &'a TimingMap,
     hispeed: f32,
@@ -786,13 +799,10 @@ struct ScrollContext<'a> {
 
 impl<'a> ScrollContext<'a> {
     fn new(session: &'a GameSession, cache: &'a PlayRenderSnapshotCache) -> Self {
-        let initial_bpm = session.chart.metadata.initial_bpm.max(1.0);
-        let lookahead_ticks =
-            initial_bpm * DEFAULT_LOOKAHEAD_US as f64 * TICKS_PER_BEAT as f64 / 60_000_000.0;
         Self {
             timing_map: &session.timing_map,
             hispeed: session.hispeed,
-            lookahead_ticks,
+            lookahead_ticks: TICKS_PER_MEASURE as f64,
             scroll_segments: &cache.scroll_segments,
             speed_segments: &cache.speed_segments,
         }
@@ -880,6 +890,34 @@ fn accumulate_scroll(segments: &[(f64, f64)], from_tick: f64, to_tick: f64) -> f
     acc * sign
 }
 
+pub(crate) fn current_scroll_multiplier(
+    chart: &PlayableChart,
+    timing_map: &TimingMap,
+    render_now: TimeUs,
+) -> f32 {
+    let cursor_tick = timing_map.time_to_tick_f64(scroll_render_time(render_now));
+    current_scroll_multiplier_for_tick(chart, cursor_tick)
+}
+
+fn current_scroll_multiplier_for_tick(chart: &PlayableChart, cursor_tick: f64) -> f32 {
+    let scroll = chart
+        .scroll_events
+        .iter()
+        .take_while(|event| event.tick.0 as f64 <= cursor_tick)
+        .last()
+        .map_or(1.0, |event| event.factor);
+    let speed = current_speed_factor_for_tick(&chart.speed_events, cursor_tick);
+    (scroll * speed) as f32
+}
+
+fn current_scroll_multiplier_from_segments(
+    scroll_segments: &[(f64, f64)],
+    speed_segments: &[(f64, f64)],
+    cursor_tick: f64,
+) -> f32 {
+    (factor_before(scroll_segments, cursor_tick) * speed_at(speed_segments, cursor_tick)) as f32
+}
+
 /// 指定 tick 直前(同時刻も含む)の factor 値を返す(イベント未定義なら 1.0)。
 fn factor_before(segments: &[(f64, f64)], tick: f64) -> f64 {
     let mut current = 1.0;
@@ -890,6 +928,25 @@ fn factor_before(segments: &[(f64, f64)], tick: f64) -> f64 {
         current = f;
     }
     current
+}
+
+fn current_speed_factor_for_tick(events: &[bmz_chart::model::SpeedEvent], tick: f64) -> f64 {
+    if events.is_empty() {
+        return 1.0;
+    }
+
+    let mut prev: Option<(f64, f64)> = None;
+    let mut next: Option<(f64, f64)> = None;
+    for event in events {
+        let event_tick = event.tick.0 as f64;
+        if event_tick <= tick {
+            prev = Some((event_tick, event.factor));
+        } else {
+            next = Some((event_tick, event.factor));
+            break;
+        }
+    }
+    interpolate_speed(prev, next, tick)
 }
 
 /// 指定 tick における SPEED の現在値を返す。beatoraja 仕様に合わせ、隣接イベント間は
@@ -909,6 +966,10 @@ fn speed_at(segments: &[(f64, f64)], tick: f64) -> f64 {
             break;
         }
     }
+    interpolate_speed(prev, next, tick)
+}
+
+fn interpolate_speed(prev: Option<(f64, f64)>, next: Option<(f64, f64)>, tick: f64) -> f64 {
     match (prev, next) {
         (None, _) => 1.0,
         (Some((_, f)), None) => f,
@@ -1013,7 +1074,8 @@ pub fn apply_fast_slow_display_filter(
 }
 
 /// `render_now` の時点で有効な BPM を返す。
-pub(crate) fn current_bpm(chart: &bmz_chart::model::PlayableChart, render_now: TimeUs) -> f64 {
+#[cfg(test)]
+fn current_bpm(chart: &bmz_chart::model::PlayableChart, render_now: TimeUs) -> f64 {
     let mut bpm = chart.metadata.initial_bpm;
     for event in &chart.timing_events {
         if event.time > render_now {
@@ -1143,10 +1205,11 @@ mod tests {
 
     #[test]
     fn display_duration_uses_current_bpm_like_beatoraja() {
-        assert_eq!(display_duration_ms_for_bpm_hispeed(120.0, 1.0, 0.0).round() as i32, 2000);
-        assert_eq!(display_duration_ms_for_bpm_hispeed(240.0, 1.0, 0.0).round() as i32, 1000);
-        assert_eq!(display_duration_ms_for_bpm_hispeed(88.0, 2.75, 0.0).round() as i32, 992);
-        assert_eq!(display_duration_ms_for_bpm_hispeed(88.0, 2.75, 0.59).round() as i32, 407);
+        assert_eq!(display_duration_ms_for_bpm_hispeed(120.0, 1.0, 0.0, 1.0).round() as i32, 2000);
+        assert_eq!(display_duration_ms_for_bpm_hispeed(240.0, 1.0, 0.0, 1.0).round() as i32, 1000);
+        assert_eq!(display_duration_ms_for_bpm_hispeed(88.0, 2.75, 0.0, 1.0).round() as i32, 992);
+        assert_eq!(display_duration_ms_for_bpm_hispeed(88.0, 2.75, 0.59, 1.0).round() as i32, 407);
+        assert_eq!(display_duration_ms_for_bpm_hispeed(120.0, 1.0, 0.0, 2.0).round() as i32, 1000);
     }
 
     #[test]
@@ -1259,6 +1322,22 @@ mod tests {
 
         assert_eq!(early.visible_notes[Lane::Key1.index()][0].y, 0.5);
         assert_eq!(later.visible_notes[Lane::Key1.index()][0].y, 0.125);
+    }
+
+    #[test]
+    fn build_render_snapshot_uses_four_beats_for_note_speed() {
+        let profile = ProfileConfig::new_default("default", "Default", 1);
+        let mut chart = chart();
+        chart.metadata.initial_bpm = 240.0;
+        chart.lane_notes[Lane::Key1.index()][0].time = TimeUs(500_000);
+        let mut session =
+            build_game_session(Arc::new(chart), &profile, PlaySessionOptions::default());
+        session.hispeed = 1.0;
+
+        let snapshot = build_render_snapshot(&session, TimeUs(0), &[], None);
+
+        assert_eq!(snapshot.note_display_duration_ms, 1000);
+        assert_eq!(snapshot.visible_notes[Lane::Key1.index()][0].y, 0.5);
     }
 
     #[test]
@@ -1398,6 +1477,7 @@ mod tests {
         let snapshot = build_render_snapshot(&session, TimeUs(0), &[], None);
         let y = snapshot.visible_notes[Lane::Key1.index()][0].y;
         assert!((y - 1.0).abs() < 1e-3, "expected ~1.0 with SCROLL 2.0, got {y}");
+        assert_eq!(snapshot.note_display_duration_ms, 1000);
     }
 
     #[test]
@@ -1435,6 +1515,7 @@ mod tests {
         let snapshot = build_render_snapshot(&session, TimeUs(0), &[], None);
         let y = snapshot.visible_notes[Lane::Key1.index()][0].y;
         assert!((y - 1.0).abs() < 1e-3, "expected ~1.0 with SPEED 2.0, got {y}");
+        assert_eq!(snapshot.note_display_duration_ms, 1000);
     }
 
     #[test]

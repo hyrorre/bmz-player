@@ -2064,6 +2064,9 @@ impl WinitApp {
                 total_notes: summary.total_notes,
                 grade_diff_display: self.boot.profile_config.play.grade_diff_display,
                 duration_ms: summary.duration_ms,
+                note_display_duration_ms: Some(Self::select_note_display_duration_ms_for_skin(
+                    &self.boot.profile_config,
+                )),
                 initial_bpm: summary.initial_bpm,
                 min_bpm: result_min_bpm(&summary),
                 max_bpm: result_max_bpm(&summary),
@@ -2443,8 +2446,7 @@ impl WinitApp {
     }
 
     fn select_note_display_duration_ms_for_skin(profile: &ProfileConfig) -> i32 {
-        let green = profile.lane.target_green_number.max(1);
-        ((green.saturating_mul(5)).saturating_add(2) / 3).min(i32::MAX as u32) as i32
+        profile.lane.target_green_number.max(1).min(i32::MAX as u32) as i32
     }
 
     fn ensure_visible_select_chart_distributions(&self, visible_limit: usize) {
@@ -10559,6 +10561,9 @@ fn play_skin_video_draw_state(
         hispeed: snapshot.hispeed,
         timeleft_ms: play_skin_video_timeleft_ms(snapshot),
         total_duration_ms: snapshot.note_display_duration_ms,
+        duration_green_ms: Some(bmz_render::skin::duration_to_green_number_ms(
+            snapshot.note_display_duration_ms,
+        )),
         lane_cover: snapshot.lane_cover,
         lift: snapshot.lift,
         offset_lift_px,
@@ -13679,11 +13684,17 @@ fn note_display_duration_ms_for_hispeed(
     lane_cover: f32,
     now: TimeUs,
 ) -> f32 {
-    let now_bpm = crate::screens::play_snapshot::current_bpm(&session.chart, now).max(1.0);
+    let now_bpm = session.timing_map.bpm_at_time(now).max(1.0);
+    let scroll_multiplier = crate::screens::play_snapshot::current_scroll_multiplier(
+        &session.chart,
+        &session.timing_map,
+        now,
+    );
     crate::screens::play_snapshot::display_duration_ms_for_bpm_hispeed(
         now_bpm as f32,
         hispeed,
         lane_cover,
+        scroll_multiplier,
     )
 }
 
@@ -13694,16 +13705,27 @@ fn hispeed_for_green_number(
 ) -> f32 {
     let target_green = session.target_green_number.max(1) as f32;
     let visible_max = (1.0 - lane_cover).clamp(0.0, 1.0);
-    let now_bpm = crate::screens::play_snapshot::current_bpm(&session.chart, now).max(1.0);
-    let hispeed = hispeed_for_green_number_values(target_green, visible_max, now_bpm);
+    let now_bpm = session.timing_map.bpm_at_time(now).max(1.0);
+    let scroll_multiplier = crate::screens::play_snapshot::current_scroll_multiplier(
+        &session.chart,
+        &session.timing_map,
+        now,
+    );
+    let hispeed =
+        hispeed_for_green_number_values(target_green, visible_max, now_bpm, scroll_multiplier);
     hispeed.clamp(0.5, 10.0)
 }
 
-fn hispeed_for_green_number_values(target_green: f32, visible_max: f32, now_bpm: f64) -> f32 {
+fn hispeed_for_green_number_values(
+    target_green: f32,
+    visible_max: f32,
+    now_bpm: f64,
+    scroll_multiplier: f32,
+) -> f32 {
     crate::screens::play_snapshot::BEATORAJA_DURATION_BPM_FACTOR_MS
         * visible_max.clamp(0.0, 1.0)
         * 0.6
-        / (target_green.max(1.0) * now_bpm.max(1.0) as f32)
+        / (target_green.max(1.0) * now_bpm.max(1.0) as f32 * scroll_multiplier.max(0.01))
 }
 
 fn result_action(
@@ -16950,10 +16972,13 @@ mod tests {
 
     #[test]
     fn floating_hispeed_formula_uses_green_number_and_lane_cover() {
-        assert_eq!(hispeed_for_green_number_values(300.0, 1.0, 120.0), 4.0);
-        assert_eq!(hispeed_for_green_number_values(300.0, 0.5, 120.0), 2.0);
-        assert_eq!(hispeed_for_green_number_values(300.0, 1.0, 240.0), 2.0);
-        assert!((hispeed_for_green_number_values(295.0, 0.93, 120.0) - 3.783_051).abs() < 0.000_01);
+        assert_eq!(hispeed_for_green_number_values(300.0, 1.0, 120.0, 1.0), 4.0);
+        assert_eq!(hispeed_for_green_number_values(300.0, 0.5, 120.0, 1.0), 2.0);
+        assert_eq!(hispeed_for_green_number_values(300.0, 1.0, 240.0, 1.0), 2.0);
+        assert_eq!(hispeed_for_green_number_values(300.0, 1.0, 120.0, 2.0), 2.0);
+        assert!(
+            (hispeed_for_green_number_values(295.0, 0.93, 120.0, 1.0) - 3.783_051).abs() < 0.000_01
+        );
     }
 
     #[test]
@@ -16963,7 +16988,7 @@ mod tests {
         profile.lane.hispeed_mode = HispeedModeConfig::Normal;
         profile.lane.target_green_number = 300;
 
-        assert_eq!(WinitApp::select_note_display_duration_ms_for_skin(&profile), 500);
+        assert_eq!(WinitApp::select_note_display_duration_ms_for_skin(&profile), 300);
     }
 
     #[test]
@@ -16972,7 +16997,7 @@ mod tests {
         profile.lane.hispeed_mode = HispeedModeConfig::Floating;
         profile.lane.target_green_number = 280;
 
-        assert_eq!(WinitApp::select_note_display_duration_ms_for_skin(&profile), 467);
+        assert_eq!(WinitApp::select_note_display_duration_ms_for_skin(&profile), 280);
     }
 
     #[test]

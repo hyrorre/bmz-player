@@ -933,6 +933,9 @@ fn plan_play(
             .saturating_add(1_000)
             .clamp(0, i32::MAX as i64) as i32,
         total_duration_ms: snapshot.note_display_duration_ms,
+        duration_green_ms: Some(crate::skin::duration_to_green_number_ms(
+            snapshot.note_display_duration_ms,
+        )),
         lane_cover: snapshot.lane_cover,
         lift: snapshot.lift,
         lane_cover_changing: snapshot.lane_cover_changing,
@@ -1369,6 +1372,9 @@ fn plan_decide(
             skin_offsets: snapshot.skin_offsets,
             hispeed: snapshot.hispeed,
             total_duration_ms: snapshot.note_display_duration_ms,
+            duration_green_ms: Some(crate::skin::duration_to_green_number_ms(
+                snapshot.note_display_duration_ms,
+            )),
             lane_cover: snapshot.lane_cover,
             hidden_cover: snapshot.hidden_cover,
             fadeout_ms: snapshot.fadeout_elapsed_ms,
@@ -1584,7 +1590,12 @@ fn build_result_skin_draw_state(
         total_notes: snapshot.total_notes,
         past_notes: snapshot.total_notes,
         result_grade_diff_display: snapshot.grade_diff_display,
-        total_duration_ms: snapshot.duration_ms,
+        total_duration_ms: snapshot
+            .note_display_duration_ms
+            .map(crate::skin::green_duration_to_duration_i32)
+            .unwrap_or(snapshot.duration_ms),
+        duration_green_ms: snapshot.note_display_duration_ms,
+        result_duration_ms: snapshot.duration_ms,
         max_combo: snapshot.max_combo,
         judge_counts: snapshot.judge_counts,
         player_stats: snapshot.player_stats,
@@ -2994,6 +3005,7 @@ mod tests {
                 total_notes: 100,
                 grade_diff_display: crate::scene::ResultGradeDiffDisplay::default(),
                 duration_ms: 0,
+                note_display_duration_ms: None,
                 initial_bpm: 0.0,
                 min_bpm: 0.0,
                 max_bpm: 0.0,
@@ -3126,6 +3138,7 @@ mod tests {
             total_notes: 100,
             grade_diff_display: crate::scene::ResultGradeDiffDisplay::default(),
             duration_ms: 0,
+            note_display_duration_ms: None,
             initial_bpm: 0.0,
             min_bpm: 0.0,
             max_bpm: 0.0,
@@ -3309,6 +3322,7 @@ mod tests {
             total_notes: 100,
             grade_diff_display: crate::scene::ResultGradeDiffDisplay::default(),
             duration_ms: 0,
+            note_display_duration_ms: None,
             initial_bpm: 0.0,
             min_bpm: 0.0,
             max_bpm: 0.0,
@@ -3437,6 +3451,7 @@ mod tests {
             total_notes: 100,
             grade_diff_display: crate::scene::ResultGradeDiffDisplay::default(),
             duration_ms: 0,
+            note_display_duration_ms: None,
             initial_bpm: 0.0,
             min_bpm: 0.0,
             max_bpm: 0.0,

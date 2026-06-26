@@ -243,6 +243,7 @@ pub fn apply_placeholder_session_visuals(
             snapshot.now_bpm,
             snapshot.hispeed,
             snapshot.lane_cover,
+            1.0,
         )
         .round()
         .clamp(0.0, i32::MAX as f32) as i32;
