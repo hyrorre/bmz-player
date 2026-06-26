@@ -1907,6 +1907,7 @@ const TEXT_INSTANCE_FLOATS: usize = 12;
 const TEXT_INSTANCE_BYTES: usize = TEXT_INSTANCE_FLOATS * std::mem::size_of::<f32>();
 const TEXT_ATLAS_WIDTH: u32 = 1024;
 const TEXT_ATLAS_PADDING: u32 = 1;
+const VECTOR_TEXT_SUPERSAMPLE_SCALE: f32 = 2.0;
 /// グリフは永続キャッシュされるため、選曲画面のスクロールなどで文字種が増え続けると
 /// アトラス高さが単調増加する。wgpu の `max_texture_dimension_2d` (一般に 16384) を
 /// 超えると `create_texture` がパニックするので、上限に達したらフレーム境界でキャッシュを
@@ -2498,6 +2499,8 @@ struct CachedGlyph {
     atlas_origin: (u32, u32),
     width: u32,
     height: u32,
+    display_width: f32,
+    display_height: f32,
     offset_x: f32,
     offset_y: f32,
 }
@@ -2575,9 +2578,14 @@ impl TextAtlasCache {
             return Some(glyph.clone());
         }
 
-        let scaled_font = font.as_scaled(scale);
+        let raster_scale = PxScale {
+            x: scale.x * VECTOR_TEXT_SUPERSAMPLE_SCALE,
+            y: scale.y * VECTOR_TEXT_SUPERSAMPLE_SCALE,
+        };
+        let scaled_font = font.as_scaled(raster_scale);
         let baseline_y = scaled_font.ascent();
-        let glyph = Glyph { id: font.glyph_id(ch), scale, position: point(0.0, baseline_y) };
+        let glyph =
+            Glyph { id: font.glyph_id(ch), scale: raster_scale, position: point(0.0, baseline_y) };
         let outlined = font.outline_glyph(glyph)?;
         let bounds = outlined.px_bounds();
         let width = bounds.width().ceil().max(0.0) as u32;
@@ -2604,8 +2612,10 @@ impl TextAtlasCache {
             key,
             width,
             height,
-            bounds.min.x,
-            bounds.min.y - baseline_y,
+            width as f32 / VECTOR_TEXT_SUPERSAMPLE_SCALE,
+            height as f32 / VECTOR_TEXT_SUPERSAMPLE_SCALE,
+            bounds.min.x / VECTOR_TEXT_SUPERSAMPLE_SCALE,
+            (bounds.min.y - baseline_y) / VECTOR_TEXT_SUPERSAMPLE_SCALE,
             pixels,
         ))
     }
@@ -2631,30 +2641,14 @@ impl TextAtlasCache {
 
         let width = (glyph.width as f32 * scale).ceil().max(1.0) as u32;
         let height = (glyph.height as f32 * scale).ceil().max(1.0) as u32;
-        let mut pixels = vec![0; (width * height * 4) as usize];
-        for dst_y in 0..height {
-            for dst_x in 0..width {
-                let src_x = glyph.x + (dst_x as f32 / scale).floor() as u32;
-                let src_y = glyph.y + (dst_y as f32 / scale).floor() as u32;
-                if src_x >= page.image.width || src_y >= page.image.height {
-                    continue;
-                }
-                let src_index = ((src_y * page.image.width + src_x) * 4) as usize;
-                let dst_index = ((dst_y * width + dst_x) * 4) as usize;
-                if let (Some(src), Some(dst)) = (
-                    page.image.pixels.get(src_index..src_index + 4),
-                    pixels.get_mut(dst_index..dst_index + 4),
-                ) && src[3] >= dst[3]
-                {
-                    dst.copy_from_slice(src);
-                }
-            }
-        }
+        let pixels = rasterized_bitmap_glyph_pixels(glyph, page, scale, width, height);
 
         self.insert_glyph_pixels(
             key,
             width,
             height,
+            width as f32,
+            height as f32,
             glyph.xoffset as f32 * scale,
             (glyph.yoffset as f32 - font.ascent) * scale,
             pixels,
@@ -2666,6 +2660,8 @@ impl TextAtlasCache {
         key: TextGlyphKey,
         width: u32,
         height: u32,
+        display_width: f32,
+        display_height: f32,
         offset_x: f32,
         offset_y: f32,
         pixels: Vec<u8>,
@@ -2677,7 +2673,15 @@ impl TextAtlasCache {
             size: AtlasSize { width, height },
             pixels,
         });
-        let cached = CachedGlyph { atlas_origin, width, height, offset_x, offset_y };
+        let cached = CachedGlyph {
+            atlas_origin,
+            width,
+            height,
+            display_width,
+            display_height,
+            offset_x,
+            offset_y,
+        };
         self.glyphs.insert(key, cached.clone());
         cached
     }
@@ -2820,8 +2824,8 @@ impl<'a> CachedTextFrameBuilder<'a> {
                 self.quads.push(TextQuad {
                     x: (cursor_x + cached.offset_x) / surface.width as f32,
                     y: (text_top_y + cached.offset_y) / surface.height as f32,
-                    width: cached.width as f32 / surface.width as f32,
-                    height: cached.height as f32 / surface.height as f32,
+                    width: cached.display_width / surface.width as f32,
+                    height: cached.display_height / surface.height as f32,
                     atlas_origin: cached.atlas_origin,
                     glyph_width: cached.width,
                     glyph_height: cached.height,
@@ -2968,8 +2972,8 @@ impl<'a> CachedTextFrameBuilder<'a> {
                 self.quads.push(TextQuad {
                     x: (cursor_x + cached.offset_x) / surface.width as f32,
                     y: (baseline_y + cached.offset_y) / surface.height as f32,
-                    width: cached.width as f32 / surface.width as f32,
-                    height: cached.height as f32 / surface.height as f32,
+                    width: cached.display_width / surface.width as f32,
+                    height: cached.display_height / surface.height as f32,
                     atlas_origin: cached.atlas_origin,
                     glyph_width: cached.width,
                     glyph_height: cached.height,
@@ -3143,15 +3147,11 @@ impl TextAtlasBuilder {
         page: &crate::bitmap_font::BitmapFontPage,
         scale: f32,
     ) {
+        let pixels = rasterized_bitmap_glyph_pixels(glyph, page, scale, glyph_width, glyph_height);
         for dst_y in 0..glyph_height {
             for dst_x in 0..glyph_width {
-                let src_x = glyph.x + (dst_x as f32 / scale).floor() as u32;
-                let src_y = glyph.y + (dst_y as f32 / scale).floor() as u32;
-                if src_x >= page.image.width || src_y >= page.image.height {
-                    continue;
-                }
-                let src_index = ((src_y * page.image.width + src_x) * 4) as usize;
-                let Some(src) = page.image.pixels.get(src_index..src_index + 4) else {
+                let src_index = ((dst_y * glyph_width + dst_x) * 4) as usize;
+                let Some(src) = pixels.get(src_index..src_index + 4) else {
                     continue;
                 };
                 let dst_index =
@@ -3379,6 +3379,124 @@ fn bitmap_text_width_px(text: &str, font: &BitmapFont, scale: f32) -> f32 {
         .filter_map(|ch| font.glyphs.get(&ch))
         .map(|glyph| glyph.xadvance as f32 * scale)
         .sum()
+}
+
+fn rasterized_bitmap_glyph_pixels(
+    glyph: crate::bitmap_font::BitmapFontGlyph,
+    page: &crate::bitmap_font::BitmapFontPage,
+    scale: f32,
+    width: u32,
+    height: u32,
+) -> Vec<u8> {
+    let mut pixels = vec![0; (width * height * 4) as usize];
+    let nearest = is_integer_scale(scale);
+    for dst_y in 0..height {
+        for dst_x in 0..width {
+            let color = if nearest {
+                sample_bitmap_glyph_nearest(glyph, page, dst_x, dst_y, scale)
+            } else {
+                sample_bitmap_glyph_bilinear(glyph, page, dst_x, dst_y, scale)
+            };
+            let dst_index = ((dst_y * width + dst_x) * 4) as usize;
+            if let Some(dst) = pixels.get_mut(dst_index..dst_index + 4)
+                && color[3] >= dst[3]
+            {
+                dst.copy_from_slice(&color);
+            }
+        }
+    }
+    pixels
+}
+
+fn is_integer_scale(scale: f32) -> bool {
+    (scale - scale.round()).abs() <= 0.001
+}
+
+fn sample_bitmap_glyph_nearest(
+    glyph: crate::bitmap_font::BitmapFontGlyph,
+    page: &crate::bitmap_font::BitmapFontPage,
+    dst_x: u32,
+    dst_y: u32,
+    scale: f32,
+) -> [u8; 4] {
+    let local_x = (dst_x as f32 / scale).floor() as i32;
+    let local_y = (dst_y as f32 / scale).floor() as i32;
+    bitmap_glyph_pixel(glyph, page, local_x, local_y)
+}
+
+fn sample_bitmap_glyph_bilinear(
+    glyph: crate::bitmap_font::BitmapFontGlyph,
+    page: &crate::bitmap_font::BitmapFontPage,
+    dst_x: u32,
+    dst_y: u32,
+    scale: f32,
+) -> [u8; 4] {
+    let max_x = glyph.width.saturating_sub(1) as f32;
+    let max_y = glyph.height.saturating_sub(1) as f32;
+    let src_x = ((dst_x as f32 + 0.5) / scale - 0.5).clamp(0.0, max_x);
+    let src_y = ((dst_y as f32 + 0.5) / scale - 0.5).clamp(0.0, max_y);
+    let x0 = src_x.floor() as i32;
+    let y0 = src_y.floor() as i32;
+    let x1 = (x0 + 1).min(max_x as i32);
+    let y1 = (y0 + 1).min(max_y as i32);
+    let tx = src_x - x0 as f32;
+    let ty = src_y - y0 as f32;
+
+    let p00 = bitmap_glyph_pixel(glyph, page, x0, y0);
+    let p10 = bitmap_glyph_pixel(glyph, page, x1, y0);
+    let p01 = bitmap_glyph_pixel(glyph, page, x0, y1);
+    let p11 = bitmap_glyph_pixel(glyph, page, x1, y1);
+    blend_bitmap_pixels([
+        (p00, (1.0 - tx) * (1.0 - ty)),
+        (p10, tx * (1.0 - ty)),
+        (p01, (1.0 - tx) * ty),
+        (p11, tx * ty),
+    ])
+}
+
+fn bitmap_glyph_pixel(
+    glyph: crate::bitmap_font::BitmapFontGlyph,
+    page: &crate::bitmap_font::BitmapFontPage,
+    local_x: i32,
+    local_y: i32,
+) -> [u8; 4] {
+    if glyph.width == 0 || glyph.height == 0 {
+        return [0, 0, 0, 0];
+    }
+    let local_x = local_x.clamp(0, glyph.width.saturating_sub(1) as i32) as u32;
+    let local_y = local_y.clamp(0, glyph.height.saturating_sub(1) as i32) as u32;
+    let src_x = glyph.x + local_x;
+    let src_y = glyph.y + local_y;
+    if src_x >= page.image.width || src_y >= page.image.height {
+        return [0, 0, 0, 0];
+    }
+    let src_index = ((src_y * page.image.width + src_x) * 4) as usize;
+    page.image
+        .pixels
+        .get(src_index..src_index + 4)
+        .map(|src| [src[0], src[1], src[2], src[3]])
+        .unwrap_or([0, 0, 0, 0])
+}
+
+fn blend_bitmap_pixels(samples: [([u8; 4], f32); 4]) -> [u8; 4] {
+    let mut alpha = 0.0;
+    let mut premul = [0.0; 3];
+    for (pixel, weight) in samples {
+        let a = pixel[3] as f32 / 255.0;
+        alpha += a * weight;
+        for channel in 0..3 {
+            premul[channel] += (pixel[channel] as f32 / 255.0) * a * weight;
+        }
+    }
+    if alpha <= f32::EPSILON {
+        return [0, 0, 0, 0];
+    }
+    [
+        ((premul[0] / alpha) * 255.0).round().clamp(0.0, 255.0) as u8,
+        ((premul[1] / alpha) * 255.0).round().clamp(0.0, 255.0) as u8,
+        ((premul[2] / alpha) * 255.0).round().clamp(0.0, 255.0) as u8,
+        (alpha * 255.0).round().clamp(0.0, 255.0) as u8,
+    ]
 }
 
 fn text_align_offset_px(align: TextAlign, max_width: f32, text_width: f32) -> f32 {
@@ -4750,6 +4868,20 @@ mod tests {
     }
 
     #[test]
+    fn cached_vector_glyph_uses_supersampled_atlas_pixels() {
+        let Some(font) = load_default_font() else { return };
+        let mut atlas = TextAtlasCache::new(TEXT_ATLAS_WIDTH);
+        let Some(glyph) =
+            atlas.cached_vector_glyph(DEFAULT_TEXT_FONT_ID, 'A', PxScale::from(24.0), &font)
+        else {
+            return;
+        };
+
+        assert!(glyph.width as f32 > glyph.display_width);
+        assert!(glyph.height as f32 > glyph.display_height);
+    }
+
+    #[test]
     fn text_atlas_resets_when_height_reaches_limit() {
         let mut atlas = TextAtlasCache::new(TEXT_ATLAS_WIDTH);
         // 上限を超える行を積み、アトラス高さを限界まで成長させる。
@@ -4918,6 +5050,35 @@ mod tests {
 
         assert_eq!(frame.instances.len(), TEXT_INSTANCE_BYTES);
         assert!(frame.pixels.contains(&255));
+    }
+
+    #[test]
+    fn bitmap_glyph_non_integer_scale_uses_interpolated_alpha() {
+        let page = crate::bitmap_font::BitmapFontPage {
+            id: 0,
+            path: std::path::PathBuf::from("page.png"),
+            image: crate::assets::RgbaImageAsset {
+                width: 2,
+                height: 1,
+                pixels: vec![255, 255, 255, 0, 255, 255, 255, 255],
+            },
+        };
+        let glyph = crate::bitmap_font::BitmapFontGlyph {
+            id: 'A',
+            x: 0,
+            y: 0,
+            width: 2,
+            height: 1,
+            xoffset: 0,
+            yoffset: 0,
+            xadvance: 2,
+            page: 0,
+        };
+
+        let pixels = rasterized_bitmap_glyph_pixels(glyph, &page, 1.5, 3, 1);
+        let middle_alpha = pixels[7];
+
+        assert!(middle_alpha > 0 && middle_alpha < 255);
     }
 
     #[test]
