@@ -165,6 +165,10 @@ pub struct SkinDecodeStats {
     pub source_cache_misses: usize,
     pub source_cache_uncacheable: usize,
     pub source_cache_disabled: usize,
+    pub video_source_cache_hits: usize,
+    pub video_source_cache_misses: usize,
+    pub video_source_cache_uncacheable: usize,
+    pub video_source_cache_disabled: usize,
     pub decoded_source_count: usize,
     pub decoded_source_bytes: usize,
 }
@@ -312,8 +316,14 @@ pub struct SkinUploadStats {
     pub texture_cache_misses: usize,
     pub texture_cache_uncacheable: usize,
     pub texture_cache_disabled: usize,
+    pub video_texture_cache_hits: usize,
+    pub video_texture_cache_misses: usize,
+    pub video_texture_cache_uncacheable: usize,
+    pub video_texture_cache_disabled: usize,
     pub uploaded_source_count: usize,
     pub uploaded_source_bytes: usize,
+    pub uploaded_video_source_count: usize,
+    pub uploaded_video_source_bytes: usize,
 }
 
 /// `DecodedSkin` の全ソースを GPU へアップロードして `UploadedSkin` を返す。
@@ -345,14 +355,16 @@ pub fn upload_decoded_skin_with_texture_cache(
                 return None;
             }
             let size = SkinImageSize { width: asset.width as f32, height: asset.height as f32 };
-            let cache_key =
-                (!is_video).then(|| skin_source_asset_cache_key(&path, false)).flatten();
+            let cache_key = skin_source_asset_cache_key(&path, is_video);
             match (texture_cache, cache_key.as_ref()) {
                 (Some(texture_cache), Some(cache_key)) => {
                     if let Ok(cache) = texture_cache.lock()
                         && let Some(cached) = cache.get(cache_key)
                     {
                         upload_stats.texture_cache_hits += 1;
+                        if is_video {
+                            upload_stats.video_texture_cache_hits += 1;
+                        }
                         return Some(PreparedSource {
                             source_id,
                             path,
@@ -364,9 +376,22 @@ pub fn upload_decoded_skin_with_texture_cache(
                         });
                     }
                     upload_stats.texture_cache_misses += 1;
+                    if is_video {
+                        upload_stats.video_texture_cache_misses += 1;
+                    }
                 }
-                (Some(_), None) => upload_stats.texture_cache_uncacheable += 1,
-                (None, _) => upload_stats.texture_cache_disabled += 1,
+                (Some(_), None) => {
+                    upload_stats.texture_cache_uncacheable += 1;
+                    if is_video {
+                        upload_stats.video_texture_cache_uncacheable += 1;
+                    }
+                }
+                (None, _) => {
+                    upload_stats.texture_cache_disabled += 1;
+                    if is_video {
+                        upload_stats.video_texture_cache_disabled += 1;
+                    }
+                }
             }
             let texture = texture_cache
                 .and_then(|cache| {
@@ -376,6 +401,11 @@ pub fn upload_decoded_skin_with_texture_cache(
             upload_stats.uploaded_source_count += 1;
             upload_stats.uploaded_source_bytes =
                 upload_stats.uploaded_source_bytes.saturating_add(asset.pixels.len());
+            if is_video {
+                upload_stats.uploaded_video_source_count += 1;
+                upload_stats.uploaded_video_source_bytes =
+                    upload_stats.uploaded_video_source_bytes.saturating_add(asset.pixels.len());
+            }
             let prepared = uploader.upload(asset.width, asset.height, &asset.pixels);
             Some(PreparedSource {
                 source_id,
@@ -748,10 +778,30 @@ pub fn decode_beatoraja_skin_with_options_and_runtime_state_and_source_cache(
             (false, Some(_)) => stats.image_source_count += 1,
         }
         match status {
-            Some(SourceCacheStatus::Hit) => stats.source_cache_hits += 1,
-            Some(SourceCacheStatus::Miss) => stats.source_cache_misses += 1,
-            Some(SourceCacheStatus::Uncacheable) => stats.source_cache_uncacheable += 1,
-            Some(SourceCacheStatus::Disabled) => stats.source_cache_disabled += 1,
+            Some(SourceCacheStatus::Hit) => {
+                stats.source_cache_hits += 1;
+                if *is_video {
+                    stats.video_source_cache_hits += 1;
+                }
+            }
+            Some(SourceCacheStatus::Miss) => {
+                stats.source_cache_misses += 1;
+                if *is_video {
+                    stats.video_source_cache_misses += 1;
+                }
+            }
+            Some(SourceCacheStatus::Uncacheable) => {
+                stats.source_cache_uncacheable += 1;
+                if *is_video {
+                    stats.video_source_cache_uncacheable += 1;
+                }
+            }
+            Some(SourceCacheStatus::Disabled) => {
+                stats.source_cache_disabled += 1;
+                if *is_video {
+                    stats.video_source_cache_disabled += 1;
+                }
+            }
             None => {}
         }
     }
@@ -4327,6 +4377,27 @@ mod tests {
 
         assert!(cache.get(&key).is_none());
         assert_eq!(cache.allocate_texture_id(SkinKind::Play), SkinTextureId(10_000));
+    }
+
+    #[test]
+    fn skin_gpu_texture_cache_reuses_inserted_video_textures_separately() {
+        let root = unique_test_dir("bmz-gpu-video-texture-cache");
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("source.mp4");
+        std::fs::write(&path, b"cached-video").unwrap();
+        let image_key = skin_source_asset_cache_key(&path, false).unwrap();
+        let video_key = skin_source_asset_cache_key(&path, true).unwrap();
+        assert_ne!(image_key, video_key);
+
+        let size = SkinImageSize { width: 320.0, height: 180.0 };
+        let mut cache = SkinGpuTextureCache::default();
+        let allocated = cache.allocate_texture_id(SkinKind::Play);
+        cache.insert(video_key.clone(), allocated, size);
+
+        assert!(cache.get(&image_key).is_none());
+        let cached = cache.get(&video_key).unwrap();
+        assert_eq!(cached.texture, allocated);
+        assert_eq!(cached.size, size);
     }
 
     fn unique_test_dir(name: &str) -> PathBuf {
