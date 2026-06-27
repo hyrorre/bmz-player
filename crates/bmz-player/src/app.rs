@@ -988,6 +988,7 @@ fn failed_play_ending(started_at: Instant) -> PlayEndingTransition {
 struct ResultExit {
     started_at: Instant,
     action: ResultExitAction,
+    skip_requested: bool,
 }
 
 /// リザルト画面を抜けたあとに実行する遷移。
@@ -3615,9 +3616,18 @@ impl WinitApp {
         // リザルト分岐より先に評価し、R/Key5/Key7 等での誤 retry を防ぐ。
         if self.is_course_intermediate_result() {
             let pressed = event.state == ElementState::Pressed;
+            if self.request_result_exit_skip_for_key(event.physical_key, event.state, event.repeat)
+            {
+                return;
+            }
             if self.result_exit.is_none()
                 && let Some(control) = physical_key_to_control(event.physical_key)
                 && self.handle_course_intermediate_control(&control, pressed, event.repeat)
+            {
+                return;
+            }
+            if let Some(control) = physical_key_to_control(event.physical_key)
+                && self.request_result_exit_skip_for_control(&control, pressed, event.repeat)
             {
                 return;
             }
@@ -3646,6 +3656,14 @@ impl WinitApp {
                 // フェードアウト中でも Key5/Key7 の押下状態は追跡し、
                 // アニメーション終了時の retry arrange 判定に使う。
                 self.track_result_lane_hold(&control, pressed);
+                if self.request_result_exit_skip_for_key(
+                    event.physical_key,
+                    event.state,
+                    event.repeat,
+                ) || self.request_result_exit_skip_for_control(&control, pressed, event.repeat)
+                {
+                    return;
+                }
                 // 終了アニメーション中 (result_exit=Some) は held 追跡のみで、
                 // 新しいアクションは受け付けない。
                 if self.result_exit.is_none()
@@ -3682,6 +3700,14 @@ impl WinitApp {
             let pressed = event.state == ElementState::Pressed;
             if let Some(control) = physical_key_to_control(event.physical_key) {
                 self.track_result_lane_hold(&control, pressed);
+                if self.request_result_exit_skip_for_key(
+                    event.physical_key,
+                    event.state,
+                    event.repeat,
+                ) || self.request_result_exit_skip_for_control(&control, pressed, event.repeat)
+                {
+                    return;
+                }
                 if self.result_exit.is_none()
                     && self.handle_course_result_control(&control, pressed, event.repeat)
                 {
@@ -4229,8 +4255,11 @@ impl WinitApp {
         // コース曲間の中間リザルト: リトライ無効、次の曲へ進むだけ。
         // retry を持つ単曲リザルト分岐より先に評価する。
         if self.is_course_intermediate_result() {
+            let control = PhysicalControl::GamepadButton(button.to_string());
+            if self.request_result_exit_skip_for_control(&control, pressed, false) {
+                return;
+            }
             if self.result_exit.is_none() {
-                let control = PhysicalControl::GamepadButton(button.to_string());
                 if self.handle_course_intermediate_control(&control, pressed, false) {
                     return;
                 }
@@ -4249,6 +4278,9 @@ impl WinitApp {
             let control = PhysicalControl::GamepadButton(button.to_string());
             // フェードアウト中でも Key5/Key7 の押下状態は追跡する。
             self.track_result_lane_hold(&control, pressed);
+            if self.request_result_exit_skip_for_control(&control, pressed, false) {
+                return;
+            }
             // 終了アニメーション中 (result_exit=Some) は held 追跡のみ行う。
             if self.result_exit.is_none() {
                 if self.handle_result_control(&control, pressed, false) {
@@ -4274,6 +4306,9 @@ impl WinitApp {
         if self.finished_course.is_some() {
             let control = PhysicalControl::GamepadButton(button.to_string());
             self.track_result_lane_hold(&control, pressed);
+            if self.request_result_exit_skip_for_control(&control, pressed, false) {
+                return;
+            }
             if self.result_exit.is_none() {
                 if self.handle_course_result_control(&control, pressed, false) {
                     return;
@@ -7470,12 +7505,52 @@ impl WinitApp {
             return;
         }
         tracing::info!(?action, "result screen exit animation started");
-        self.result_exit = Some(ResultExit { started_at: Instant::now(), action });
+        self.result_exit =
+            Some(ResultExit { started_at: Instant::now(), action, skip_requested: false });
         // HeldLanes の遷移判定はフェードアウト終了時に Key5/Key7 の
         // 押下状態を読むため、ここでは held フラグをリセットしない。
         // Keep the result entry SE alive so the exit master-gain ramp can fade
         // it together with the close SE. The voices are stopped after fadeout.
         self.play_system_sound(crate::system_sound::SoundType::ResultClose);
+    }
+
+    fn request_result_exit_skip_for_key(
+        &mut self,
+        physical_key: PhysicalKey,
+        state: ElementState,
+        repeat: bool,
+    ) -> bool {
+        if result_exit_skip_key(physical_key, state, repeat) {
+            return self.request_result_exit_skip();
+        }
+        false
+    }
+
+    fn request_result_exit_skip_for_control(
+        &mut self,
+        control: &PhysicalControl,
+        pressed: bool,
+        repeat: bool,
+    ) -> bool {
+        if pressed && !repeat && self.result_exit_skip_control(control) {
+            return self.request_result_exit_skip();
+        }
+        false
+    }
+
+    fn result_exit_skip_control(&self, control: &PhysicalControl) -> bool {
+        self.result_lane_for_control(control).is_some_and(lane_skips_result_exit)
+    }
+
+    fn request_result_exit_skip(&mut self) -> bool {
+        let Some(exit) = self.result_exit.as_mut() else {
+            return false;
+        };
+        if !exit.skip_requested {
+            tracing::info!("result screen exit animation skipped");
+        }
+        exit.skip_requested = true;
+        true
     }
 
     fn begin_decide_fadeout(&mut self, cancel: bool) {
@@ -7710,13 +7785,14 @@ impl WinitApp {
         }
         let started_at = exit.started_at;
         let action = exit.action.clone();
+        let skip_requested = exit.skip_requested;
         let fadeout = Duration::from_millis(self.renderer.result_skin_fadeout_ms().max(0) as u64);
         let elapsed = started_at.elapsed();
         // スキンの終了アニメーション時間に合わせて、プレイ残響(draining_audio)と
         // リザルトSEを 1.0 → 0.0 へ絞る。遷移時に音量が 0 付近まで落ちているので、
         // 音声を破棄しても唐突な音切れにならない。
         self.fade_audio_for_result_exit(elapsed, fadeout);
-        if elapsed < fadeout {
+        if elapsed < fadeout && !skip_requested {
             return;
         }
         self.stop_result_exit_system_sounds();
@@ -12447,6 +12523,22 @@ fn lane_starts_result_exit(lane: Lane) -> bool {
     matches!(lane, Lane::Key1 | Lane::Key2 | Lane::Key3 | Lane::Key4 | Lane::Key5 | Lane::Key7)
 }
 
+fn lane_skips_result_exit(lane: Lane) -> bool {
+    matches!(
+        lane,
+        Lane::Key1
+            | Lane::Key2
+            | Lane::Key3
+            | Lane::Key5
+            | Lane::Key7
+            | Lane::Key8
+            | Lane::Key9
+            | Lane::Key10
+            | Lane::Key12
+            | Lane::Key14
+    )
+}
+
 /// フェードアウト終了時の Key5/Key7 押下状態から遷移を決める。
 /// beatoraja 準拠: Key5=別配置 (REPLAY_DIFFERENT)、Key7=同配置 (REPLAY_SAME)。
 /// - Key7 押下 (両押し含む) → 同配置 (SameArrange)
@@ -13922,6 +14014,13 @@ fn result_action(
         PhysicalKey::Code(KeyCode::Enter | KeyCode::Escape) => Some(ResultAction::Leave),
         _ => None,
     }
+}
+
+fn result_exit_skip_key(physical_key: PhysicalKey, state: ElementState, repeat: bool) -> bool {
+    if state != ElementState::Pressed || repeat {
+        return false;
+    }
+    matches!(physical_key, PhysicalKey::Code(KeyCode::Enter | KeyCode::Escape))
 }
 
 fn decide_action(
@@ -17003,6 +17102,58 @@ mod tests {
             result_action(PhysicalKey::Code(KeyCode::Space), ElementState::Pressed, false),
             None
         );
+    }
+
+    #[test]
+    fn result_exit_skip_key_accepts_enter_and_escape_only_on_pressed() {
+        assert!(result_exit_skip_key(
+            PhysicalKey::Code(KeyCode::Enter),
+            ElementState::Pressed,
+            false
+        ));
+        assert!(result_exit_skip_key(
+            PhysicalKey::Code(KeyCode::Escape),
+            ElementState::Pressed,
+            false
+        ));
+        assert!(!result_exit_skip_key(
+            PhysicalKey::Code(KeyCode::Enter),
+            ElementState::Released,
+            false
+        ));
+        assert!(!result_exit_skip_key(
+            PhysicalKey::Code(KeyCode::Escape),
+            ElementState::Pressed,
+            true
+        ));
+        assert!(!result_exit_skip_key(
+            PhysicalKey::Code(KeyCode::Space),
+            ElementState::Pressed,
+            false
+        ));
+    }
+
+    #[test]
+    fn lane_skips_result_exit_matches_1p_and_2p_requested_keys() {
+        for lane in [
+            Lane::Key1,
+            Lane::Key2,
+            Lane::Key3,
+            Lane::Key5,
+            Lane::Key7,
+            Lane::Key8,
+            Lane::Key9,
+            Lane::Key10,
+            Lane::Key12,
+            Lane::Key14,
+        ] {
+            assert!(lane_skips_result_exit(lane), "{lane:?} should skip");
+        }
+        for lane in
+            [Lane::Scratch, Lane::Key4, Lane::Key6, Lane::Key11, Lane::Key13, Lane::Scratch2]
+        {
+            assert!(!lane_skips_result_exit(lane), "{lane:?} should not skip");
+        }
     }
 
     #[test]
