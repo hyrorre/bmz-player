@@ -144,7 +144,7 @@ const SAMPLE_PLAYABLE_TITLE: &str = "BMZ Sample Playable";
 
 #[derive(Debug, Clone, Copy)]
 enum AppUserEvent {
-    SkinUploadReady,
+    SkinUploadReady { sent_at: Instant },
 }
 
 pub async fn run() -> Result<()> {
@@ -1069,6 +1069,7 @@ const LANE_COVER_REPEAT_STEP: f32 = 0.01;
 /// アナログスクラッチの tick が途切れたとみなし、端数バッファを捨てるまでの時間 (ms)。
 /// beatoraja の `getAnalogDiffAndReset(i, 200)` の tolerance に相当。
 const SELECT_ANALOG_SCROLL_TOLERANCE_MS: u64 = 200;
+const SKIN_RELOAD_REDRAW_PROFILE_THRESHOLD: Duration = Duration::from_millis(8);
 
 struct PendingSkinResult {
     generation: u64,
@@ -1093,6 +1094,13 @@ struct PendingUploadResult {
     upload_started_at: Instant,
     upload_finished_at: Instant,
     uploaded: Result<UploadedSkin>,
+}
+
+#[derive(Debug, Default, Clone, Copy)]
+struct SkinDrainStats {
+    received_count: usize,
+    applied_count: usize,
+    max_upload_wait_us: u64,
 }
 
 struct PendingBgaImage {
@@ -8571,19 +8579,24 @@ impl WinitApp {
 
     /// upload worker が GPU アップロードまで終えたスキンを非ブロッキングで取り込む。
     /// 毎フレーム呼ぶ。テクスチャ挿入 + フォント登録 + SkinContext 構築のみで軽量。
-    fn drain_pending_skins(&mut self) -> bool {
-        let mut applied = false;
+    fn drain_pending_skins(&mut self) -> SkinDrainStats {
+        let mut stats = SkinDrainStats::default();
         loop {
             match self.skin_upload_rx.try_recv() {
                 Ok(result) => {
-                    self.apply_uploaded_skin(result);
-                    applied = true;
+                    stats.received_count += 1;
+                    stats.max_upload_wait_us = stats
+                        .max_upload_wait_us
+                        .max(instant_elapsed_us_u64(result.upload_finished_at));
+                    if self.apply_uploaded_skin(result) {
+                        stats.applied_count += 1;
+                    }
                 }
                 Err(mpsc::TryRecvError::Empty) => break,
                 Err(mpsc::TryRecvError::Disconnected) => break,
             }
         }
-        applied
+        stats
     }
 
     /// 指定された kind のスキンがアップロードされ取り込まれるまでブロックして待つ。
@@ -8593,7 +8606,9 @@ impl WinitApp {
     fn ensure_skin_ready(&mut self, kind: SkinKind) {
         while self.is_kind_pending_decode(kind) {
             match self.skin_upload_rx.recv() {
-                Ok(result) => self.apply_uploaded_skin(result),
+                Ok(result) => {
+                    let _ = self.apply_uploaded_skin(result);
+                }
                 Err(_) => break,
             }
         }
@@ -8700,7 +8715,7 @@ impl WinitApp {
     /// upload worker から届いた `UploadedSkin` を Renderer へ取り込む。
     /// stale generation は破棄。GPU アップロードは worker で完了済みなので、
     /// ここではハンドル挿入・フォント登録・SkinContext 構築のみ (軽量)。
-    fn apply_uploaded_skin(&mut self, pending: PendingUploadResult) {
+    fn apply_uploaded_skin(&mut self, pending: PendingUploadResult) -> bool {
         let PendingUploadResult {
             generation,
             path,
@@ -8725,7 +8740,7 @@ impl WinitApp {
                 upload_us = instant_duration_us_u64(upload_started_at, upload_finished_at),
                 "discarding stale uploaded skin"
             );
-            return;
+            return false;
         }
         match kind {
             SkinKind::Select => self.pending_select_skin = false,
@@ -8745,7 +8760,7 @@ impl WinitApp {
                     error = %format_error_chain(&error),
                     "failed to decode/upload beatoraja skin in background"
                 );
-                return;
+                return false;
             }
         };
         let Some(manifest) = self.default_skin_manifest.clone() else {
@@ -8754,7 +8769,7 @@ impl WinitApp {
                 kind = ?kind,
                 "skipping uploaded skin because default skin manifest is unavailable"
             );
-            return;
+            return false;
         };
         let UploadedSkin { kind, document, fonts, prepared, decode_stats, upload_stats } = uploaded;
         let font_count = fonts.len();
@@ -8834,7 +8849,7 @@ impl WinitApp {
         self.pending_skin_render_probe =
             Some(PendingSkinRenderProbe { kind, generation, applied_at: Instant::now() });
         self.skip_next_frame_pace = true;
-        tracing::info!(
+        tracing::debug!(
             path = %path.display(),
             kind = ?kind,
             generation,
@@ -8899,6 +8914,7 @@ impl WinitApp {
         if kind == SkinKind::Select && matches!(self.view_state(), AppViewState::Select) {
             self.restart_select_scene_timers();
         }
+        true
     }
 
     fn restart_select_scene_timers(&mut self) {
@@ -9797,7 +9813,6 @@ impl WinitApp {
                 }
             }
         }
-        self.invalidate_skin_defs_cache_for_request(request);
         // 旧 generation 分の upload 結果は apply_uploaded_skin の generation
         // チェックで破棄されるため、ここでの明示的なキュー破棄は不要。
         if let Some((key_mode, old_path, old_options, old_files)) =
@@ -9958,12 +9973,6 @@ impl WinitApp {
         );
         self.pending_play_skin = true;
         tracing::info!(?key_mode, path = %path_label, generation, "play skin decode queued");
-    }
-
-    fn invalidate_skin_defs_cache_for_request(&mut self, request: SkinReloadRequest) {
-        if request.any_reload() {
-            self.skin_defs_cache.clear();
-        }
     }
 
     /// リザルト遷移後も鳴らし続けている音声出力を監視し、スケジュール済みの
@@ -10190,7 +10199,7 @@ impl WinitApp {
             };
             if expected_scene == scene_kind {
                 let timings = frame_timings.unwrap_or_default();
-                tracing::info!(
+                tracing::debug!(
                     kind = ?probe.kind,
                     generation = probe.generation,
                     scene = ?scene_kind,
@@ -11481,7 +11490,7 @@ fn skin_upload_worker(
             // main 側受信端が drop された (アプリ終了)。
             break;
         }
-        let _ = event_proxy.send_event(AppUserEvent::SkinUploadReady);
+        let _ = event_proxy.send_event(AppUserEvent::SkinUploadReady { sent_at: Instant::now() });
     }
 }
 
@@ -12096,6 +12105,11 @@ impl ApplicationHandler<AppUserEvent> for WinitApp {
                 self.focused = focused;
             }
             WindowEvent::RedrawRequested => {
+                let redraw_started_at = Instant::now();
+                let scene_before = self.current_scene_kind();
+                let pending_skin_before = self.has_pending_skin_reload();
+                let render_probe_before = self.pending_skin_render_probe.is_some();
+                let cursor_start = Instant::now();
                 if self.cursor_visible
                     && self.last_cursor_action_at.elapsed() >= Duration::from_secs(2)
                 {
@@ -12104,24 +12118,40 @@ impl ApplicationHandler<AppUserEvent> for WinitApp {
                     }
                     self.cursor_visible = false;
                 }
+                let cursor_us = instant_elapsed_us_u64(cursor_start);
                 // Worker completion should be applied before intentional frame pacing sleep;
                 // otherwise reload latency includes the frame limiter wait.
-                let _ = self.drain_pending_skins();
+                let drain_start = Instant::now();
+                let skin_drain_stats = self.drain_pending_skins();
+                let drain_us = instant_elapsed_us_u64(drain_start);
+                let limit_start = Instant::now();
                 self.limit_frame_rate();
+                let limit_us = instant_elapsed_us_u64(limit_start);
+                let input_start = Instant::now();
                 self.poll_gamepad_events();
                 self.advance_select_hold_move();
                 self.advance_select_analog_scroll();
+                let input_us = instant_elapsed_us_u64(input_start);
+                let background_start = Instant::now();
                 self.poll_chart_bga_texture_load();
                 self.poll_play_preload();
                 self.poll_pending_table_fetch();
                 self.poll_pending_song_scan();
                 self.poll_pending_update_check();
                 self.poll_pending_update_download();
+                let background_us = instant_elapsed_us_u64(background_start);
+                let transition_start = Instant::now();
                 self.advance_decide_transition();
                 self.advance_play_ending();
                 self.advance_result_exit();
+                let transition_us = instant_elapsed_us_u64(transition_start);
+                let egui_start = Instant::now();
                 self.run_egui_frame();
+                let egui_us = instant_elapsed_us_u64(egui_start);
+                let scene_start = Instant::now();
                 self.render_current_scene();
+                let scene_us = instant_elapsed_us_u64(scene_start);
+                let post_scene_start = Instant::now();
                 if !self.first_frame_startup_completed {
                     self.first_frame_startup_completed = true;
                     self.ensure_audio_output();
@@ -12142,6 +12172,36 @@ impl ApplicationHandler<AppUserEvent> for WinitApp {
                 if let Some(window) = &self.window {
                     window.request_redraw();
                 }
+                let post_scene_us = instant_elapsed_us_u64(post_scene_start);
+                let total_us = instant_elapsed_us_u64(redraw_started_at);
+                let pending_skin_after = self.has_pending_skin_reload();
+                if skin_drain_stats.received_count > 0
+                    || render_probe_before
+                    || (pending_skin_before
+                        && total_us >= duration_us_u64(SKIN_RELOAD_REDRAW_PROFILE_THRESHOLD))
+                {
+                    tracing::debug!(
+                        scene_before = ?scene_before,
+                        scene_after = ?self.current_scene_kind(),
+                        pending_before = pending_skin_before,
+                        pending_after = pending_skin_after,
+                        render_probe_before,
+                        received_uploads = skin_drain_stats.received_count,
+                        applied_uploads = skin_drain_stats.applied_count,
+                        max_upload_wait_us = skin_drain_stats.max_upload_wait_us,
+                        total_us,
+                        cursor_us,
+                        drain_us,
+                        limit_us,
+                        input_us,
+                        background_us,
+                        transition_us,
+                        egui_us,
+                        scene_us,
+                        post_scene_us,
+                        "skin reload redraw timings"
+                    );
+                }
                 if self.should_exit_via_select_hold() {
                     tracing::info!("escape held for 2s on select screen; exiting app");
                     self.save_configs_for_exit(self.active_hispeed(), "select exit hold");
@@ -12156,16 +12216,49 @@ impl ApplicationHandler<AppUserEvent> for WinitApp {
 
     fn user_event(&mut self, _event_loop: &ActiveEventLoop, event: AppUserEvent) {
         match event {
-            AppUserEvent::SkinUploadReady => {
-                let _ = self.drain_pending_skins();
+            AppUserEvent::SkinUploadReady { sent_at } => {
+                let event_received_at = Instant::now();
+                let pending_before = self.has_pending_skin_reload();
+                let drain_start = Instant::now();
+                let skin_drain_stats = self.drain_pending_skins();
+                let drain_us = instant_elapsed_us_u64(drain_start);
                 self.request_redraw();
+                tracing::debug!(
+                    event_delay_us = instant_duration_us_u64(sent_at, event_received_at),
+                    pending_before,
+                    pending_after = self.has_pending_skin_reload(),
+                    received_uploads = skin_drain_stats.received_count,
+                    applied_uploads = skin_drain_stats.applied_count,
+                    max_upload_wait_us = skin_drain_stats.max_upload_wait_us,
+                    drain_us,
+                    "skin upload ready event timings"
+                );
             }
         }
     }
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
-        if self.has_pending_skin_reload() && self.drain_pending_skins() {
-            self.request_redraw();
+        let pending_before = self.has_pending_skin_reload();
+        if pending_before {
+            let drain_start = Instant::now();
+            let skin_drain_stats = self.drain_pending_skins();
+            let drain_us = instant_elapsed_us_u64(drain_start);
+            if skin_drain_stats.received_count > 0 {
+                self.request_redraw();
+            }
+            if skin_drain_stats.received_count > 0
+                || drain_us >= duration_us_u64(SKIN_RELOAD_REDRAW_PROFILE_THRESHOLD)
+            {
+                tracing::debug!(
+                    pending_before,
+                    pending_after = self.has_pending_skin_reload(),
+                    received_uploads = skin_drain_stats.received_count,
+                    applied_uploads = skin_drain_stats.applied_count,
+                    max_upload_wait_us = skin_drain_stats.max_upload_wait_us,
+                    drain_us,
+                    "skin reload about_to_wait timings"
+                );
+            }
         }
         if self.shutdown_requested.load(Ordering::SeqCst) {
             tracing::info!("Ctrl-C received; exiting cleanly");
@@ -14436,6 +14529,10 @@ fn instant_elapsed_us_u64(start: Instant) -> u64 {
 
 fn instant_duration_us_u64(start: Instant, end: Instant) -> u64 {
     end.saturating_duration_since(start).as_micros().min(u64::MAX as u128) as u64
+}
+
+fn duration_us_u64(duration: Duration) -> u64 {
+    duration.as_micros().min(u64::MAX as u128) as u64
 }
 
 fn note_display_duration_ms_for_hispeed(
