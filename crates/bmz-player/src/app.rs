@@ -1680,6 +1680,7 @@ impl WinitApp {
             &boot.app_paths,
             &skin_decode_tx,
             &skin_source_asset_cache,
+            &skin_gpu_texture_cache,
             &skin_font_cache,
             0,
             &boot.profile_config.skin.select,
@@ -8530,6 +8531,7 @@ impl WinitApp {
         spawn_skin_decode(
             self.skin_decode_tx.clone(),
             self.skin_source_asset_cache.clone(),
+            self.skin_gpu_texture_cache.clone(),
             self.skin_font_cache.clone(),
             self.skin_installed_font_cache.clone(),
             generation,
@@ -8730,6 +8732,11 @@ impl WinitApp {
             video_source_cache_misses = decode_stats.video_source_cache_misses,
             video_source_cache_uncacheable = decode_stats.video_source_cache_uncacheable,
             video_source_cache_disabled = decode_stats.video_source_cache_disabled,
+            source_texture_cache_hits = decode_stats.source_texture_cache_hits,
+            source_texture_cache_hit_bytes = decode_stats.source_texture_cache_hit_bytes,
+            video_source_texture_cache_hits = decode_stats.video_source_texture_cache_hits,
+            video_source_texture_cache_hit_bytes =
+                decode_stats.video_source_texture_cache_hit_bytes,
             uploaded_sources = upload_stats.uploaded_source_count,
             uploaded_source_bytes = upload_stats.uploaded_source_bytes,
             uploaded_video_sources = upload_stats.uploaded_video_source_count,
@@ -9608,6 +9615,7 @@ impl WinitApp {
             &self.boot.app_paths,
             &self.skin_decode_tx,
             &self.skin_source_asset_cache,
+            &self.skin_gpu_texture_cache,
             &self.skin_font_cache,
             &mut self.skin_reload_generations,
             texture_request,
@@ -9779,6 +9787,7 @@ impl WinitApp {
         spawn_skin_decode(
             self.skin_decode_tx.clone(),
             self.skin_source_asset_cache.clone(),
+            self.skin_gpu_texture_cache.clone(),
             self.skin_font_cache.clone(),
             self.skin_installed_font_cache.clone(),
             generation,
@@ -10484,6 +10493,7 @@ fn load_initial_skin_textures(
     app_paths: &crate::paths::AppPaths,
     skin_decode_tx: &mpsc::Sender<PendingSkinResult>,
     skin_source_asset_cache: &SharedSkinSourceAssetCache,
+    skin_gpu_texture_cache: &SharedSkinGpuTextureCache,
     skin_font_cache: &SharedSkinFontCache,
     generation: u64,
     select_skin_path: &str,
@@ -10526,6 +10536,7 @@ fn load_initial_skin_textures(
             spawn_skin_decode(
                 skin_decode_tx.clone(),
                 skin_source_asset_cache.clone(),
+                skin_gpu_texture_cache.clone(),
                 skin_font_cache.clone(),
                 HashMap::new(),
                 generation,
@@ -10558,6 +10569,7 @@ fn load_initial_skin_textures(
             spawn_skin_decode(
                 skin_decode_tx.clone(),
                 skin_source_asset_cache.clone(),
+                skin_gpu_texture_cache.clone(),
                 skin_font_cache.clone(),
                 HashMap::new(),
                 generation,
@@ -10659,6 +10671,7 @@ fn reload_skin_textures(
     app_paths: &crate::paths::AppPaths,
     skin_decode_tx: &mpsc::Sender<PendingSkinResult>,
     skin_source_asset_cache: &SharedSkinSourceAssetCache,
+    skin_gpu_texture_cache: &SharedSkinGpuTextureCache,
     skin_font_cache: &SharedSkinFontCache,
     generations: &mut SkinReloadGenerations,
     request: SkinReloadRequest,
@@ -10706,6 +10719,7 @@ fn reload_skin_textures(
             spawn_skin_decode(
                 skin_decode_tx.clone(),
                 skin_source_asset_cache.clone(),
+                skin_gpu_texture_cache.clone(),
                 skin_font_cache.clone(),
                 HashMap::new(),
                 generation,
@@ -11171,9 +11185,11 @@ fn json_skin_value_has_load_time_option_expansion(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn spawn_skin_decode(
     tx: mpsc::Sender<PendingSkinResult>,
     source_cache: SharedSkinSourceAssetCache,
+    texture_cache: SharedSkinGpuTextureCache,
     font_cache: SharedSkinFontCache,
     installed_font_cache: HashMap<String, SkinFontCacheKey>,
     generation: u64,
@@ -11196,6 +11212,7 @@ fn spawn_skin_decode(
                 &files,
                 &runtime_state,
                 Some(source_cache),
+                Some(texture_cache),
                 Some(font_cache),
                 Some(installed_font_cache),
             );
