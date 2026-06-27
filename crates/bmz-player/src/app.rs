@@ -22,7 +22,7 @@ use bmz_gameplay::result::PlayResult;
 use bmz_gameplay::score::{JudgeCounts, ScoreState};
 use bmz_gameplay::session::compute_frame_times;
 use bmz_gameplay::session::{HispeedMode, PlaySkinOffset};
-use bmz_render::assets::{RgbaImageAsset, load_static_rgba_image};
+use bmz_render::assets::{RgbaImageAsset, load_chart_bga_image, load_static_rgba_image};
 use bmz_render::plan::{
     PLAY_BACKBMP_TEXTURE, Rect, SELECT_BANNER_TEXTURE, SELECT_STAGE_TEXTURE, TextureId,
 };
@@ -11633,7 +11633,7 @@ fn load_chart_bga_textures(renderer: &mut Renderer, chart: &PlayableChart) -> Bg
         static_assets += 1;
 
         let decode_start = Instant::now();
-        match load_static_rgba_image(path) {
+        match load_chart_bga_image(path) {
             Ok(image) => {
                 let image_decode_us = decode_start.elapsed().as_micros();
                 decode_us += image_decode_us;
@@ -11750,7 +11750,7 @@ fn chart_bga_texture_load_worker(
         stats.static_assets += 1;
 
         let decode_start = Instant::now();
-        match load_static_rgba_image(&path) {
+        match load_chart_bga_image(&path) {
             Ok(image) => {
                 let image_decode_us = decode_start.elapsed().as_micros();
                 stats.decode_us += image_decode_us;

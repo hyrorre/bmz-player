@@ -42,6 +42,10 @@ pub fn load_static_rgba_image(path: &Path) -> Result<RgbaImageAsset> {
     }
 }
 
+pub fn load_chart_bga_image(path: &Path) -> Result<RgbaImageAsset> {
+    load_static_rgba_image(path).map(pad_small_bga_like_beatoraja)
+}
+
 fn load_image_rgba(path: &Path) -> Result<RgbaImageAsset> {
     let reader = ImageReader::open(path)
         .with_context(|| format!("failed to open image: {}", path.display()))?
@@ -55,6 +59,25 @@ fn load_image_rgba(path: &Path) -> Result<RgbaImageAsset> {
     let asset = RgbaImageAsset { width, height, pixels: rgba.into_raw() };
     asset.validate()?;
     Ok(asset)
+}
+
+fn pad_small_bga_like_beatoraja(asset: RgbaImageAsset) -> RgbaImageAsset {
+    let source_width = asset.width as usize;
+    let source_height = asset.height as usize;
+    if source_width.max(source_height) > 256 {
+        return asset;
+    }
+
+    let mut pixels = vec![0; 256 * 256 * 4];
+    let offset_x = (256usize.saturating_sub(source_width)) / 2;
+    let row_bytes = source_width * 4;
+    for row in 0..source_height {
+        let src_start = row * row_bytes;
+        let dst_start = (row * 256 + offset_x) * 4;
+        pixels[dst_start..dst_start + row_bytes]
+            .copy_from_slice(&asset.pixels[src_start..src_start + row_bytes]);
+    }
+    RgbaImageAsset { width: 256, height: 256, pixels }
 }
 
 #[cfg(test)]
@@ -131,6 +154,42 @@ mod tests {
         let asset = RgbaImageAsset { width: 1, height: 1, pixels: vec![255] };
 
         assert!(asset.validate().is_err());
+    }
+
+    #[test]
+    fn load_chart_bga_image_pads_small_images_like_beatoraja() {
+        let path = temp_image_path("png");
+        let image = image::RgbaImage::from_raw(
+            2,
+            2,
+            vec![255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255, 255, 255, 255, 255],
+        )
+        .unwrap();
+        image.save_with_format(&path, image::ImageFormat::Png).unwrap();
+
+        let asset = load_chart_bga_image(&path).unwrap();
+
+        assert_eq!(asset.width, 256);
+        assert_eq!(asset.height, 256);
+        let left_black = ((0 * 256 + 126) * 4)..((0 * 256 + 127) * 4);
+        assert_eq!(&asset.pixels[left_black], &[0, 0, 0, 0]);
+        let first_source_pixel = ((0 * 256 + 127) * 4)..((0 * 256 + 128) * 4);
+        assert_eq!(&asset.pixels[first_source_pixel], &[255, 0, 0, 255]);
+        let second_row_pixel = ((1 * 256 + 128) * 4)..((1 * 256 + 129) * 4);
+        assert_eq!(&asset.pixels[second_row_pixel], &[255, 255, 255, 255]);
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn load_chart_bga_image_keeps_large_images_unpadded() {
+        let asset = pad_small_bga_like_beatoraja(RgbaImageAsset {
+            width: 257,
+            height: 1,
+            pixels: vec![255; 257 * 4],
+        });
+
+        assert_eq!(asset.width, 257);
+        assert_eq!(asset.height, 1);
     }
 
     fn temp_image_path(extension: &str) -> PathBuf {
