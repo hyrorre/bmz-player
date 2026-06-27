@@ -1482,6 +1482,7 @@ fn destination_def_with_default_offsets(
     let frame = destination_frame(values, canvas_h);
     let mut op = conditional_ops.to_vec();
     op.extend(values[18..=20].iter().copied().filter(|value| *value != 0));
+    normalize_lr2_destination_ops(&mut op);
     let mut destination = json!({
         "id": id,
         "blend": values[12],
@@ -1497,6 +1498,12 @@ fn destination_def_with_default_offsets(
         destination["offsets"] = json!(default_offsets);
     }
     destination
+}
+
+fn normalize_lr2_destination_ops(op: &mut Vec<i32>) {
+    if op.contains(&39) {
+        op.retain(|value| !matches!(*value, 32 | -33));
+    }
 }
 
 fn gauge_destination_def(
@@ -2190,6 +2197,27 @@ mod tests {
 
         let op = builder.destinations[0]["op"].as_array().unwrap();
         assert_eq!(op, &[json!(33)]);
+    }
+
+    #[test]
+    fn processor_drops_autoplay_off_from_score_graph_destinations() {
+        let path = Path::new("skin/play/test.lr2skin");
+        let files = BTreeMap::new();
+        let mut builder = CsvBuilder::new(path, Header::default(), &files);
+        let lines = [
+            parse_csv_line("#IMAGE,parts/frame.png").unwrap(),
+            parse_csv_line("#SRC_IMAGE,0,0,0,0,10,10,1,1,0,0").unwrap(),
+            parse_csv_line("#IF,32").unwrap(),
+            parse_csv_line("#DST_IMAGE,0,0,0,10,20,30,40,0,255,255,255,255,0,0,0,0,0,0,39,0,0")
+                .unwrap(),
+            parse_csv_line("#ENDIF").unwrap(),
+        ];
+        let mut processor = Processor::new(HashMap::new());
+
+        processor.process_lines(&lines, path, &mut builder).unwrap();
+
+        let op = builder.destinations[0]["op"].as_array().unwrap();
+        assert_eq!(op, &[json!(39)]);
     }
 
     #[test]

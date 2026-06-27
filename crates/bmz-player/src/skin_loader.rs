@@ -3042,7 +3042,7 @@ mod tests {
     }
 
     #[test]
-    fn wmii_fhd_lr2skin_hides_score_graph_and_extends_bga_on_autoplay_when_available() {
+    fn wmii_fhd_lr2skin_keeps_score_graph_and_extends_bga_on_autoplay_when_available() {
         let skin_path = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../data/skins/WMII_FHD/play/FHDPLAY_AC.lr2skin");
         if !skin_path.is_file() {
@@ -3117,7 +3117,7 @@ mod tests {
             "expected WMII autoplay extended BGA frame to render; got {items:?}"
         );
         assert!(
-            !items.iter().any(|item| matches!(
+            items.iter().any(|item| matches!(
                 item,
                 bmz_render::skin::SkinRenderItem::Image { rect, tint, .. }
                     if (rect.x - 546.0 / 1920.0).abs() < 0.01
@@ -3125,17 +3125,17 @@ mod tests {
                         && (rect.height - 798.0 / 1080.0).abs() < 0.01
                         && tint.a > 0.5
             )),
-            "expected WMII score graph frame to be hidden during autoplay"
+            "expected WMII score graph frame to render during autoplay"
         );
         assert!(
-            !items.iter().any(|item| matches!(
+            items.iter().any(|item| matches!(
                 item,
                 bmz_render::skin::SkinRenderItem::Image { rect, tint, .. }
                     if (rect.x - 551.0 / 1920.0).abs() < 0.01
                         && (rect.width - 267.0 / 1920.0).abs() < 0.01
                         && tint.a > 0.5
             )),
-            "expected WMII score graph target labels to be hidden during autoplay"
+            "expected WMII score graph target labels to render during autoplay"
         );
     }
 
