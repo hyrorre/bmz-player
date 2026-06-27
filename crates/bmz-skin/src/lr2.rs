@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -6,7 +6,7 @@ use anyhow::{Context, Result};
 use encoding_rs::SHIFT_JIS;
 use serde_json::{Value as JsonValue, json};
 
-use crate::{LoadedLuaSkinValue, SkinLoadWarning};
+use crate::{LoadedLuaSkinValue, SkinLoadDependencies, SkinLoadWarning};
 
 const LR2_OFFSET_LIFT: i32 = 3;
 const LR2_OFFSET_JUDGE_1P: i32 = 32;
@@ -55,6 +55,11 @@ struct Header {
     files: Vec<CustomFile>,
     offsets: Vec<CustomOffset>,
     selected_ops: HashMap<i32, bool>,
+}
+
+struct LoadedHeader {
+    header: Header,
+    dependencies: SkinLoadDependencies,
 }
 
 impl Default for Header {
@@ -151,6 +156,7 @@ struct CsvBuilder<'a> {
     note_marker_inserted: bool,
     next_id: usize,
     remap_single_play_2p_lanes: bool,
+    file_dependencies: BTreeSet<String>,
 }
 
 #[derive(Default)]
@@ -185,17 +191,40 @@ pub fn load_lr2_csv_skin_value(
     options: &BTreeMap<String, String>,
     files: &BTreeMap<String, String>,
 ) -> Result<LoadedLuaSkinValue> {
-    let mut header = load_header(path, options)?;
+    let LoadedHeader { mut header, mut dependencies } = load_header(path, options)?;
     apply_default_play_header_items(&mut header);
     let mut builder = CsvBuilder::new(path, header, files);
     let lines = read_csv_lines(path)?;
     let mut processor = Processor::new(builder.header.selected_ops.clone());
     processor.process_lines(&lines, path, &mut builder)?;
+    dependencies.option_values.extend(processor.option_dependencies);
+    dependencies.files.extend(builder.file_dependencies.iter().cloned());
     let warnings = builder.warnings.clone();
-    Ok(LoadedLuaSkinValue { value: builder.finish(), warnings, files: BTreeMap::new() })
+    Ok(LoadedLuaSkinValue {
+        value: builder.finish(),
+        warnings,
+        files: BTreeMap::new(),
+        dependencies,
+    })
 }
 
-fn load_header(path: &Path, options: &BTreeMap<String, String>) -> Result<Header> {
+pub fn load_lr2_csv_skin_dependency_option_values(
+    path: &Path,
+    options: &BTreeMap<String, String>,
+    option_ids: impl IntoIterator<Item = i32>,
+) -> Result<BTreeMap<i32, bool>> {
+    let LoadedHeader { mut header, .. } = load_header(path, options)?;
+    apply_default_play_header_items(&mut header);
+    Ok(option_ids
+        .into_iter()
+        .map(|option_id| {
+            let option_id = option_id.abs();
+            (option_id, header.selected_ops.get(&option_id).copied().unwrap_or(false))
+        })
+        .collect())
+}
+
+fn load_header(path: &Path, options: &BTreeMap<String, String>) -> Result<LoadedHeader> {
     let mut header = Header::default();
     let lines = read_csv_lines(path)?;
     let mut processor = Processor::new(HashMap::new());
@@ -288,7 +317,13 @@ fn load_header(path: &Path, options: &BTreeMap<String, String>) -> Result<Header
         }
     }
     apply_derived_play_options(&mut header);
-    Ok(header)
+    let dependencies = SkinLoadDependencies {
+        option_values: processor.option_dependencies,
+        files: BTreeSet::new(),
+        loaded_files: BTreeMap::new(),
+        opaque: false,
+    };
+    Ok(LoadedHeader { header, dependencies })
 }
 
 fn apply_default_play_header_items(header: &mut Header) {
@@ -400,6 +435,7 @@ impl<'a> CsvBuilder<'a> {
             note_marker_inserted: false,
             next_id: 0,
             remap_single_play_2p_lanes,
+            file_dependencies: BTreeSet::new(),
         }
     }
 
@@ -1047,35 +1083,43 @@ impl<'a> CsvBuilder<'a> {
         })
     }
 
-    fn resolve_source_path(&self, raw_path: &str) -> String {
+    fn resolve_source_path(&mut self, raw_path: &str) -> String {
         let normalized = self.relative_source_path(&normalize_lr2_asset_path(raw_path));
-        if let Some(file) = self.header.files.iter().find(|file| file.path == normalized)
-            && let Some(selected) =
-                self.files.get(&file.name).filter(|selected| !selected.is_empty())
-            && let Some(selected_path) =
-                self.selected_skin_file_for_definition(&file.path, selected)
-        {
-            return selected_path;
+        if let Some(file) = self.header.files.iter().find(|file| file.path == normalized) {
+            let file_name = file.name.clone();
+            let file_path = file.path.clone();
+            self.file_dependencies.insert(file_name.clone());
+            if let Some(selected) =
+                self.files.get(&file_name).filter(|selected| !selected.is_empty())
+                && let Some(selected_path) =
+                    self.selected_skin_file_for_definition(&file_path, selected)
+            {
+                return selected_path;
+            }
         }
         if let Some(file) =
             self.header.files.iter().find(|file| same_wildcard_prefix(&file.path, &normalized))
         {
+            let file_name = file.name.clone();
+            let file_path = file.path.clone();
+            let file_default = file.default.clone();
+            self.file_dependencies.insert(file_name.clone());
             if let Some(selected) =
-                self.files.get(&file.name).filter(|selected| !selected.is_empty())
+                self.files.get(&file_name).filter(|selected| !selected.is_empty())
                 && let Some(selected_path) =
-                    self.selected_skin_file_for_definition(&file.path, selected)
-                && selected_wildcard_value(&file.path, &selected_path).is_some()
+                    self.selected_skin_file_for_definition(&file_path, selected)
+                && selected_wildcard_value(&file_path, &selected_path).is_some()
             {
-                return substitute_wildcard(&normalized, &file.path, &selected_path);
+                return substitute_wildcard(&normalized, &file_path, &selected_path);
             }
-            if !file.default.is_empty() {
-                return substitute_wildcard_default(&normalized, &file.path, &file.default);
+            if !file_default.is_empty() {
+                return substitute_wildcard_default(&normalized, &file_path, &file_default);
             }
         }
         normalized
     }
 
-    fn resolve_lr2_font_path(&self, raw_path: &str) -> String {
+    fn resolve_lr2_font_path(&mut self, raw_path: &str) -> String {
         let path = self.resolve_source_path(raw_path);
         if !path.to_ascii_lowercase().ends_with(".lr2font") {
             return path;
@@ -1296,6 +1340,7 @@ impl<'a> CsvBuilder<'a> {
 struct Processor {
     ops: HashMap<i32, bool>,
     stack: Vec<IfState>,
+    option_dependencies: BTreeMap<i32, bool>,
 }
 
 #[derive(Debug, Clone)]
@@ -1308,7 +1353,7 @@ struct IfState {
 
 impl Processor {
     fn new(ops: HashMap<i32, bool>) -> Self {
-        Self { ops, stack: Vec::new() }
+        Self { ops, stack: Vec::new(), option_dependencies: BTreeMap::new() }
     }
 
     fn process_lines(
@@ -1408,8 +1453,10 @@ impl Processor {
         self.stack.iter().all(|state| state.active)
     }
 
-    fn eval_if(&self, line: &CsvLine) -> IfEval {
+    fn eval_if(&mut self, line: &CsvLine) -> IfEval {
         let mut runtime_ops = Vec::new();
+        let ops = self.ops.clone();
+        let dependencies = &mut self.option_dependencies;
         let matches =
             line.fields.iter().skip(1).filter(|field| !field.trim().is_empty()).all(|field| {
                 let option = parse_option_token(field);
@@ -1417,9 +1464,11 @@ impl Processor {
                 if is_runtime_lr2_option(option_id) {
                     runtime_ops.push(option);
                     true
-                } else if let Some(enabled) = self.ops.get(&option_id).copied() {
+                } else if let Some(enabled) = ops.get(&option_id).copied() {
+                    dependencies.insert(option_id, enabled);
                     if option >= 0 { enabled } else { !enabled }
                 } else {
+                    dependencies.insert(option_id, false);
                     option < 0
                 }
             });
@@ -2083,7 +2132,7 @@ mod tests {
         });
         let files =
             BTreeMap::from([("GAUGE COLOR".to_string(), "parts/gauge/blue.png".to_string())]);
-        let builder = CsvBuilder::new(&skin_path, header, &files);
+        let mut builder = CsvBuilder::new(&skin_path, header, &files);
 
         assert_eq!(
             builder.resolve_source_path(r".\LR2files\Theme\WMII_FHD\play\parts\gauge\*.png"),
@@ -2107,7 +2156,7 @@ mod tests {
             default: "default".to_string(),
         });
         let files = BTreeMap::from([("GAUGE COLOR".to_string(), "blue.png".to_string())]);
-        let builder = CsvBuilder::new(&skin_path, header, &files);
+        let mut builder = CsvBuilder::new(&skin_path, header, &files);
 
         assert_eq!(
             builder.resolve_source_path(r".\LR2files\Theme\WMII_FHD\play\parts\gauge\*.png"),
@@ -2131,7 +2180,7 @@ mod tests {
         });
         let files =
             BTreeMap::from([("GAUGE COLOR".to_string(), "parts/gauge/missing.png".to_string())]);
-        let builder = CsvBuilder::new(&skin_path, header, &files);
+        let mut builder = CsvBuilder::new(&skin_path, header, &files);
 
         assert_eq!(
             builder.resolve_source_path(r".\LR2files\Theme\WMII_FHD\play\parts\gauge\*.png"),

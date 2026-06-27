@@ -41,7 +41,7 @@ use bmz_video::VideoBgaDecoder;
 use winit::application::ApplicationHandler;
 use winit::dpi::{PhysicalPosition, PhysicalSize};
 use winit::event::{ElementState, MouseButton, MouseScrollDelta, StartCause, WindowEvent};
-use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
+use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy};
 use winit::keyboard::{KeyCode, PhysicalKey};
 use winit::monitor::{MonitorHandle, VideoModeHandle};
 use winit::window::{Fullscreen, Icon, Window, WindowAttributes, WindowId};
@@ -109,9 +109,10 @@ use crate::screens::settings_model::{
 };
 use crate::select_options::{ArrangeOption, AssistOption, DoubleOption, HsFixOption, TargetOption};
 use crate::skin_loader::{
-    DecodedSkin, PreparedSource, SharedSkinFontCache, SharedSkinGpuTextureCache,
-    SharedSkinSourceAssetCache, SkinFontCache, SkinFontCacheKey, SkinGpuTextureCache, SkinKind,
-    SkinSourceAssetCache, UploadedSkin, decode_beatoraja_skin_with_options,
+    DecodedSkin, PreparedSource, SharedSkinDocumentCache, SharedSkinFontCache,
+    SharedSkinGpuTextureCache, SharedSkinSourceAssetCache, SkinDocumentCache, SkinFontCache,
+    SkinFontCacheKey, SkinGpuTextureCache, SkinKind, SkinSourceAssetCache, UploadedSkin,
+    decode_beatoraja_skin_with_options,
     decode_beatoraja_skin_with_options_and_runtime_state_and_caches,
     default_play_skin_document_path_from_paths, default_skin_document_path_from_paths,
     enabled_options_from_selections, install_decoded_font, install_decoded_skin,
@@ -141,6 +142,11 @@ use bmz_render::skin::{
 };
 const SAMPLE_PLAYABLE_TITLE: &str = "BMZ Sample Playable";
 
+#[derive(Debug, Clone, Copy)]
+enum AppUserEvent {
+    SkinUploadReady,
+}
+
 pub async fn run() -> Result<()> {
     run_with_options(AppOptions::default()).await
 }
@@ -150,8 +156,11 @@ pub async fn run_with_options(options: AppOptions) -> Result<()> {
 
     fetch_startup_difficulty_tables(&mut boot).await;
 
-    let event_loop = EventLoop::new().context("failed to create event loop")?;
+    let event_loop = EventLoop::<AppUserEvent>::with_user_event()
+        .build()
+        .context("failed to create event loop")?;
     event_loop.set_control_flow(ControlFlow::Poll);
+    let event_proxy = event_loop.create_proxy();
 
     // Ctrl-C(SIGINT)で event loop を正常終了させ、cpal/ASIO ストリームの Drop を
     // 走らせる。捕捉しないと既定ハンドラがプロセスを即殺し、ASIO の停止処理が走らず
@@ -168,7 +177,7 @@ pub async fn run_with_options(options: AppOptions) -> Result<()> {
 
     spawn_ir_sync_worker(&boot);
 
-    let mut app = WinitApp::new(boot, options, None, None, shutdown_requested)?;
+    let mut app = WinitApp::new(boot, options, None, None, shutdown_requested, event_proxy)?;
     tracing::info!("starting winit event loop");
     event_loop.run_app(&mut app).context("winit event loop failed")
 }
@@ -435,12 +444,16 @@ struct WinitApp {
     skin_upload_worker_started: bool,
     /// スキン reload 時に同一 source PNG / 動画 first frame の再デコードを避ける cache。
     skin_source_asset_cache: SharedSkinSourceAssetCache,
+    /// LR2/Lua document 再構築を避けるための cache。
+    skin_document_cache: SharedSkinDocumentCache,
     /// スキン reload 時に同一 font の再デコードを避ける cache。
     skin_font_cache: SharedSkinFontCache,
     /// Renderer に登録済みの font key。reload 時に同一 font の install と text atlas reset を避ける。
     skin_installed_font_cache: HashMap<String, SkinFontCacheKey>,
     /// GPU に挿入済みの同一 skin source texture を reload 間で再利用する cache。
     skin_gpu_texture_cache: SharedSkinGpuTextureCache,
+    /// worker 完了時に main thread の redraw を起こすための winit user event proxy。
+    event_proxy: EventLoopProxy<AppUserEvent>,
     bga_load_generation: u64,
     bga_load_chart_id: Option<i64>,
     bga_load_rx: Option<Receiver<PendingBgaImageResult>>,
@@ -450,6 +463,7 @@ struct WinitApp {
     pending_decide_skin: bool,
     pending_play_skin: bool,
     pending_result_skin: bool,
+    pending_skin_render_probe: Option<PendingSkinRenderProbe>,
     skin_reload_generations: SkinReloadGenerations,
     /// 直近 install をリクエストしたプレイスキンの key_mode と設定 fingerprint。
     /// 同じ mode かつ同じ path/options/files なら再 decode をスキップする。
@@ -515,6 +529,12 @@ struct WinitApp {
     focused: bool,
     /// 直近フレームの開始時刻。フレームレート制限のスリープ量算出に使う。
     last_frame_at: Option<Instant>,
+    /// Worker から取り込んだスキンを次の redraw で即表示するため、
+    /// 1 フレーム分だけ frame pacing sleep をスキップする。
+    skip_next_frame_pace: bool,
+    /// egui からの skin reload が走っている間は重い scene render/present を
+    /// いったん譲り、upload 完了イベントを先に処理する。
+    defer_scene_render_for_skin_reload: bool,
     /// RedrawRequested 間隔から平滑化した wgpu 描画 FPS。
     wgpu_fps: f32,
     /// 設定画面で編集中の項目。`None` なら一覧操作モード。
@@ -590,6 +610,13 @@ struct SkinVideoFrameProfile {
     active_sources: u32,
     visible_sources: u32,
     uploaded_frames: u32,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct PendingSkinRenderProbe {
+    kind: SkinKind,
+    generation: u64,
+    applied_at: Instant,
 }
 
 #[derive(Debug, Default)]
@@ -1619,6 +1646,7 @@ impl WinitApp {
         audio_runtime: Option<AudioRuntime>,
         system_audio: Option<crate::audio::SystemAudio>,
         shutdown_requested: Arc<AtomicBool>,
+        event_proxy: EventLoopProxy<AppUserEvent>,
     ) -> Result<Self> {
         let mut boot = boot;
         if let Some(cli_renderer) = options.renderer.clone() {
@@ -1664,6 +1692,7 @@ impl WinitApp {
         let (skin_decode_tx, skin_decode_rx) = mpsc::channel::<PendingSkinResult>();
         let (skin_upload_tx, skin_upload_rx) = mpsc::channel::<PendingUploadResult>();
         let skin_source_asset_cache = Arc::new(Mutex::new(SkinSourceAssetCache::default()));
+        let skin_document_cache = Arc::new(Mutex::new(SkinDocumentCache::default()));
         let skin_font_cache = Arc::new(Mutex::new(SkinFontCache::default()));
         let skin_gpu_texture_cache = Arc::new(Mutex::new(SkinGpuTextureCache::default()));
         let (select_meta_image_tx, select_meta_image_rx) = mpsc::channel::<SelectMetaImageResult>();
@@ -1681,6 +1710,7 @@ impl WinitApp {
             &boot.app_paths,
             &skin_decode_tx,
             &skin_source_asset_cache,
+            &skin_document_cache,
             &skin_gpu_texture_cache,
             &skin_font_cache,
             0,
@@ -1828,9 +1858,11 @@ impl WinitApp {
             skin_upload_rx,
             skin_upload_worker_started: false,
             skin_source_asset_cache,
+            skin_document_cache,
             skin_font_cache,
             skin_installed_font_cache: HashMap::new(),
             skin_gpu_texture_cache,
+            event_proxy,
             bga_load_generation: 0,
             bga_load_chart_id: None,
             bga_load_rx: None,
@@ -1840,6 +1872,7 @@ impl WinitApp {
             pending_decide_skin,
             pending_play_skin,
             pending_result_skin,
+            pending_skin_render_probe: None,
             last_play_skin_signature: None,
             last_result_skin_signature: Some(initial_result_skin_signature),
             skin_reload_generations: SkinReloadGenerations::default(),
@@ -1877,6 +1910,8 @@ impl WinitApp {
             applied_window_mode: initial_window_mode,
             focused: true,
             last_frame_at: None,
+            skip_next_frame_pace: false,
+            defer_scene_render_for_skin_reload: false,
             wgpu_fps: 0.0,
             settings_edit: None,
             key_config_edit: None,
@@ -8528,9 +8563,12 @@ impl WinitApp {
         };
         let upload_tx = self.skin_upload_tx.clone();
         let texture_cache = self.skin_gpu_texture_cache.clone();
+        let event_proxy = self.event_proxy.clone();
         thread::Builder::new()
             .name("skin-upload".to_string())
-            .spawn(move || skin_upload_worker(decode_rx, upload_tx, uploader, texture_cache))
+            .spawn(move || {
+                skin_upload_worker(decode_rx, upload_tx, uploader, texture_cache, event_proxy)
+            })
             .expect("failed to spawn skin upload thread");
         self.skin_upload_worker_started = true;
     }
@@ -8544,6 +8582,9 @@ impl WinitApp {
                 Err(mpsc::TryRecvError::Empty) => break,
                 Err(mpsc::TryRecvError::Disconnected) => break,
             }
+        }
+        if !self.has_pending_skin_reload() {
+            self.defer_scene_render_for_skin_reload = false;
         }
     }
 
@@ -8620,6 +8661,7 @@ impl WinitApp {
         spawn_skin_decode(
             self.skin_decode_tx.clone(),
             self.skin_source_asset_cache.clone(),
+            self.skin_document_cache.clone(),
             self.skin_gpu_texture_cache.clone(),
             self.skin_font_cache.clone(),
             self.skin_installed_font_cache.clone(),
@@ -8648,6 +8690,13 @@ impl WinitApp {
             SkinKind::Play => self.pending_play_skin,
             SkinKind::Result => self.pending_result_skin,
         }
+    }
+
+    fn has_pending_skin_reload(&self) -> bool {
+        self.pending_select_skin
+            || self.pending_decide_skin
+            || self.pending_play_skin
+            || self.pending_result_skin
     }
 
     /// upload worker から届いた `UploadedSkin` を Renderer へ取り込む。
@@ -8784,6 +8833,9 @@ impl WinitApp {
             document_textures,
             preserve_play_dynamic_timers,
         );
+        self.pending_skin_render_probe =
+            Some(PendingSkinRenderProbe { kind, generation, applied_at: Instant::now() });
+        self.skip_next_frame_pace = true;
         tracing::info!(
             path = %path.display(),
             kind = ?kind,
@@ -8793,8 +8845,13 @@ impl WinitApp {
             decode_thread_us = instant_duration_us_u64(decode_started_at, decode_finished_at),
             upload_queue_us = instant_duration_us_u64(decode_finished_at, upload_started_at),
             upload_thread_us = instant_duration_us_u64(upload_started_at, upload_finished_at),
+            apply_queue_us = instant_duration_us_u64(upload_finished_at, apply_started_at),
             apply_us = instant_elapsed_us_u64(apply_started_at),
             document_us = decode_stats.document_us,
+            document_cache_hits = decode_stats.document_cache_hits,
+            document_cache_misses = decode_stats.document_cache_misses,
+            document_cache_uncacheable = decode_stats.document_cache_uncacheable,
+            document_cache_disabled = decode_stats.document_cache_disabled,
             font_count,
             font_decode_us = decode_stats.font_decode_us,
             font_payload_skipped = decode_stats.font_payload_skipped,
@@ -9322,6 +9379,11 @@ impl WinitApp {
         } else {
             self.boot.app_config.video.frame_limit_in_background
         };
+        if self.skip_next_frame_pace || self.has_pending_skin_reload() {
+            self.skip_next_frame_pace = false;
+            self.last_frame_at = Some(frame_started);
+            return;
+        }
         if fps > 0
             && let Some(last) = self.last_frame_at
         {
@@ -9704,6 +9766,7 @@ impl WinitApp {
             &self.boot.app_paths,
             &self.skin_decode_tx,
             &self.skin_source_asset_cache,
+            &self.skin_document_cache,
             &self.skin_gpu_texture_cache,
             &self.skin_font_cache,
             &mut self.skin_reload_generations,
@@ -9748,34 +9811,41 @@ impl WinitApp {
                 && old_path == selection.path.trim()
                 && old_files == *selection.files
                 && old_options != *selection.options;
-            if play_options_only {
-                self.apply_active_play_skin_options_fast_path(key_mode, selection.options);
-                if !self.play_skin_options_need_full_reload(key_mode, selection.path.trim()) {
-                    self.last_play_skin_signature = Some((
-                        key_mode,
-                        selection.path.trim().to_string(),
-                        selection.options.clone(),
-                        selection.files.clone(),
-                    ));
-                    tracing::debug!(
-                        ?key_mode,
-                        "play skin option change applied without background reload"
-                    );
-                    tracing::info!(?request, "skin reload queued from egui skin panel");
-                    return;
-                }
+            if play_options_only
+                && self.apply_active_play_skin_options_fast_path(key_mode, selection.options)
+                && !self.play_skin_options_need_full_reload(key_mode, selection.path.trim())
+            {
+                self.last_play_skin_signature = Some((
+                    key_mode,
+                    selection.path.trim().to_string(),
+                    selection.options.clone(),
+                    selection.files.clone(),
+                ));
+                tracing::debug!(
+                    ?key_mode,
+                    "play skin option change applied without background reload"
+                );
+                tracing::info!(?request, "skin reload queued from egui skin panel");
+                return;
             }
             self.last_play_skin_signature = None;
             self.spawn_play_skin_decode_for(key_mode);
         }
+        let pending_after_reload = self.has_pending_skin_reload();
         tracing::info!(?request, "skin reload queued from egui skin panel");
+        if pending_after_reload {
+            self.defer_scene_render_for_skin_reload = true;
+            self.skip_next_frame_pace = true;
+            self.drain_pending_skins();
+            self.request_redraw();
+        }
     }
 
     fn apply_active_play_skin_options_fast_path(
         &mut self,
         key_mode: KeyMode,
         options: &BTreeMap<String, String>,
-    ) {
+    ) -> bool {
         let Some((enabled_options, property_ops)) =
             self.renderer.play_skin_document().map(|document| {
                 (
@@ -9784,7 +9854,7 @@ impl WinitApp {
                 )
             })
         else {
-            return;
+            return false;
         };
         let applied_options = enabled_options.clone();
         if self.renderer.set_play_skin_user_selected_options(enabled_options) {
@@ -9792,7 +9862,9 @@ impl WinitApp {
                 apply_skin_video_source_enabled_options(sources, &applied_options, &property_ops);
             }
             tracing::debug!(?key_mode, "applied play skin option change before background reload");
+            return true;
         }
+        false
     }
 
     fn play_skin_options_need_full_reload(&self, key_mode: KeyMode, trimmed_path: &str) -> bool {
@@ -9876,6 +9948,7 @@ impl WinitApp {
         spawn_skin_decode(
             self.skin_decode_tx.clone(),
             self.skin_source_asset_cache.clone(),
+            self.skin_document_cache.clone(),
             self.skin_gpu_texture_cache.clone(),
             self.skin_font_cache.clone(),
             self.skin_installed_font_cache.clone(),
@@ -10110,6 +10183,50 @@ impl WinitApp {
         let render_start = Instant::now();
         let render_status = self.renderer.render_scene_status(scene);
         let render_us = render_start.elapsed().as_micros();
+        let frame_timings = self.renderer.last_frame_timings();
+        if let Some(probe) = self.pending_skin_render_probe.take() {
+            let expected_scene = match probe.kind {
+                SkinKind::Select => AppSceneKind::Select,
+                SkinKind::Decide => AppSceneKind::Decide,
+                SkinKind::Play => AppSceneKind::Play,
+                SkinKind::Result => AppSceneKind::Result,
+            };
+            if expected_scene == scene_kind {
+                let timings = frame_timings.unwrap_or_default();
+                tracing::info!(
+                    kind = ?probe.kind,
+                    generation = probe.generation,
+                    scene = ?scene_kind,
+                    status = ?render_status.as_ref().ok().copied(),
+                    since_apply_us = instant_elapsed_us_u64(probe.applied_at),
+                    snapshot_us,
+                    video_us,
+                    render_us,
+                    plan_us = timings.plan_us,
+                    draw_us = timings.draw_us,
+                    text_us = timings.text_us,
+                    geometry_us = timings.geometry_us,
+                    upload_us = timings.upload_us,
+                    submit_us = timings.submit_us,
+                    surface_us = timings.surface_us,
+                    bind_us = timings.bind_us,
+                    encode_us = timings.encode_us,
+                    queue_us = timings.queue_us,
+                    present_us = timings.present_us,
+                    commands = timings.commands,
+                    steps = timings.steps,
+                    rect_steps = timings.rect_steps,
+                    image_steps = timings.image_steps,
+                    text_steps = timings.text_steps,
+                    rect_instances = timings.rect_instances,
+                    image_instances = timings.image_instances,
+                    text_instances = timings.text_instances,
+                    "skin reload first render timings"
+                );
+            } else {
+                self.pending_skin_render_probe = Some(probe);
+            }
+        }
         if profiling_select {
             self.select_frame_profiler.record(
                 FrameProfileKind::Select,
@@ -10117,7 +10234,7 @@ impl WinitApp {
                 video_profile,
                 snapshot_us,
                 render_us,
-                self.renderer.last_frame_timings(),
+                frame_timings,
             );
         }
         if profiling_play {
@@ -10127,7 +10244,7 @@ impl WinitApp {
                 video_profile,
                 snapshot_us,
                 render_us,
-                self.renderer.last_frame_timings(),
+                frame_timings,
             );
         }
         if profiling_result {
@@ -10137,7 +10254,7 @@ impl WinitApp {
                 video_profile,
                 snapshot_us,
                 render_us,
-                self.renderer.last_frame_timings(),
+                frame_timings,
             );
         }
         match render_status {
@@ -10582,6 +10699,7 @@ fn load_initial_skin_textures(
     app_paths: &crate::paths::AppPaths,
     skin_decode_tx: &mpsc::Sender<PendingSkinResult>,
     skin_source_asset_cache: &SharedSkinSourceAssetCache,
+    skin_document_cache: &SharedSkinDocumentCache,
     skin_gpu_texture_cache: &SharedSkinGpuTextureCache,
     skin_font_cache: &SharedSkinFontCache,
     generation: u64,
@@ -10625,6 +10743,7 @@ fn load_initial_skin_textures(
             spawn_skin_decode(
                 skin_decode_tx.clone(),
                 skin_source_asset_cache.clone(),
+                skin_document_cache.clone(),
                 skin_gpu_texture_cache.clone(),
                 skin_font_cache.clone(),
                 HashMap::new(),
@@ -10658,6 +10777,7 @@ fn load_initial_skin_textures(
             spawn_skin_decode(
                 skin_decode_tx.clone(),
                 skin_source_asset_cache.clone(),
+                skin_document_cache.clone(),
                 skin_gpu_texture_cache.clone(),
                 skin_font_cache.clone(),
                 HashMap::new(),
@@ -10760,6 +10880,7 @@ fn reload_skin_textures(
     app_paths: &crate::paths::AppPaths,
     skin_decode_tx: &mpsc::Sender<PendingSkinResult>,
     skin_source_asset_cache: &SharedSkinSourceAssetCache,
+    skin_document_cache: &SharedSkinDocumentCache,
     skin_gpu_texture_cache: &SharedSkinGpuTextureCache,
     skin_font_cache: &SharedSkinFontCache,
     generations: &mut SkinReloadGenerations,
@@ -10808,6 +10929,7 @@ fn reload_skin_textures(
             spawn_skin_decode(
                 skin_decode_tx.clone(),
                 skin_source_asset_cache.clone(),
+                skin_document_cache.clone(),
                 skin_gpu_texture_cache.clone(),
                 skin_font_cache.clone(),
                 HashMap::new(),
@@ -11278,6 +11400,7 @@ fn json_skin_value_has_load_time_option_expansion(
 fn spawn_skin_decode(
     tx: mpsc::Sender<PendingSkinResult>,
     source_cache: SharedSkinSourceAssetCache,
+    document_cache: SharedSkinDocumentCache,
     texture_cache: SharedSkinGpuTextureCache,
     font_cache: SharedSkinFontCache,
     installed_font_cache: HashMap<String, SkinFontCacheKey>,
@@ -11300,6 +11423,7 @@ fn spawn_skin_decode(
                 &options,
                 &files,
                 &runtime_state,
+                Some(document_cache),
                 Some(source_cache),
                 Some(texture_cache),
                 Some(font_cache),
@@ -11326,6 +11450,7 @@ fn skin_upload_worker(
     upload_tx: mpsc::Sender<PendingUploadResult>,
     uploader: bmz_render::renderer::GpuUploader,
     texture_cache: SharedSkinGpuTextureCache,
+    event_proxy: EventLoopProxy<AppUserEvent>,
 ) {
     while let Ok(PendingSkinResult {
         generation,
@@ -11359,6 +11484,7 @@ fn skin_upload_worker(
             // main 側受信端が drop された (アプリ終了)。
             break;
         }
+        let _ = event_proxy.send_event(AppUserEvent::SkinUploadReady);
     }
 }
 
@@ -11855,7 +11981,7 @@ fn config_present_mode(
     }
 }
 
-impl ApplicationHandler for WinitApp {
+impl ApplicationHandler<AppUserEvent> for WinitApp {
     fn new_events(&mut self, event_loop: &ActiveEventLoop, cause: StartCause) {
         if cause == StartCause::Init {
             tracing::info!("winit app init");
@@ -11981,11 +12107,13 @@ impl ApplicationHandler for WinitApp {
                     }
                     self.cursor_visible = false;
                 }
+                // Worker completion should be applied before intentional frame pacing sleep;
+                // otherwise reload latency includes the frame limiter wait.
+                self.drain_pending_skins();
                 self.limit_frame_rate();
                 self.poll_gamepad_events();
                 self.advance_select_hold_move();
                 self.advance_select_analog_scroll();
-                self.drain_pending_skins();
                 self.poll_chart_bga_texture_load();
                 self.poll_play_preload();
                 self.poll_pending_table_fetch();
@@ -11996,6 +12124,10 @@ impl ApplicationHandler for WinitApp {
                 self.advance_play_ending();
                 self.advance_result_exit();
                 self.run_egui_frame();
+                if self.defer_scene_render_for_skin_reload && self.has_pending_skin_reload() {
+                    self.request_redraw();
+                    return;
+                }
                 self.render_current_scene();
                 if !self.first_frame_startup_completed {
                     self.first_frame_startup_completed = true;
@@ -12029,7 +12161,20 @@ impl ApplicationHandler for WinitApp {
         }
     }
 
+    fn user_event(&mut self, _event_loop: &ActiveEventLoop, event: AppUserEvent) {
+        match event {
+            AppUserEvent::SkinUploadReady => {
+                self.drain_pending_skins();
+                self.request_redraw();
+            }
+        }
+    }
+
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        if self.has_pending_skin_reload() {
+            self.drain_pending_skins();
+            self.request_redraw();
+        }
         if self.shutdown_requested.load(Ordering::SeqCst) {
             tracing::info!("Ctrl-C received; exiting cleanly");
             event_loop.exit();

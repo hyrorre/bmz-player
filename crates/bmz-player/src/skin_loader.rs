@@ -14,7 +14,9 @@ use bmz_render::skin::{
     DestinationListEntry, SkinContext, SkinDocument, SkinDocumentTexture, SkinFilepathDef,
     SkinImageSize, SkinManifest, SkinTextureId, default_skin_manifest_for_root,
 };
-use bmz_skin::{LuaLoadRuntimeState, SkinKind as DecodeSkinKind};
+use bmz_skin::{
+    LuaLoadRuntimeState, SkinKind as DecodeSkinKind, SkinLoadDependencies, SkinLoadedFileDependency,
+};
 use rayon::prelude::*;
 
 use crate::config::profile_config::SkinConfig;
@@ -154,6 +156,10 @@ pub struct DecodedSkin {
 #[derive(Debug, Clone, Default)]
 pub struct SkinDecodeStats {
     pub document_us: u64,
+    pub document_cache_hits: usize,
+    pub document_cache_misses: usize,
+    pub document_cache_uncacheable: usize,
+    pub document_cache_disabled: usize,
     pub font_count: usize,
     pub font_decode_us: u64,
     pub font_payload_skipped: usize,
@@ -206,11 +212,141 @@ pub struct DecodedSource {
 }
 
 pub type SharedSkinSourceAssetCache = Arc<Mutex<SkinSourceAssetCache>>;
+pub type SharedSkinDocumentCache = Arc<Mutex<SkinDocumentCache>>;
 pub type SharedSkinFontCache = Arc<Mutex<SkinFontCache>>;
 pub type SharedSkinGpuTextureCache = Arc<Mutex<SkinGpuTextureCache>>;
 
+const SKIN_DOCUMENT_CACHE_LIMIT_ENTRIES: usize = 16;
 const SKIN_SOURCE_ASSET_CACHE_LIMIT_BYTES: usize = 256 * 1024 * 1024;
 const SKIN_FONT_CACHE_LIMIT_BYTES: usize = 512 * 1024 * 1024;
+
+#[derive(Default)]
+pub struct SkinDocumentCache {
+    entries: Vec<SkinDocumentCacheEntry>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct SkinDocumentCacheKey {
+    path: PathBuf,
+    kind: SkinKind,
+    modified: Option<SystemTime>,
+    len: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SkinDocumentDependencyFingerprint {
+    option_values: BTreeMap<i32, bool>,
+    file_values: BTreeMap<String, String>,
+    loaded_files: BTreeMap<PathBuf, SkinLoadedFileDependency>,
+}
+
+#[derive(Clone)]
+struct SkinDocumentCacheEntry {
+    key: SkinDocumentCacheKey,
+    fingerprint: SkinDocumentDependencyFingerprint,
+    document: SkinDocument,
+    files: BTreeMap<String, String>,
+    dependencies: SkinLoadDependencies,
+}
+
+impl SkinDocumentCache {
+    fn get_lr2(
+        &mut self,
+        key: &SkinDocumentCacheKey,
+        skin_path: &Path,
+        options: &BTreeMap<String, String>,
+        files: &BTreeMap<String, String>,
+    ) -> Option<(SkinDocument, BTreeMap<String, String>)> {
+        let entry_index = self.entries.iter().position(|entry| {
+            entry.key == *key
+                && !entry.dependencies.opaque
+                && lr2_document_dependency_fingerprint(
+                    skin_path,
+                    options,
+                    files,
+                    &entry.dependencies,
+                )
+                .is_ok_and(|fingerprint| fingerprint == entry.fingerprint)
+        })?;
+        let entry = self.entries.remove(entry_index);
+        let document = entry.document.clone();
+        let files = entry.files.clone();
+        self.entries.push(entry);
+        Some((document, files))
+    }
+
+    fn get_lua(
+        &mut self,
+        key: &SkinDocumentCacheKey,
+        options: &BTreeMap<String, String>,
+        files: &BTreeMap<String, String>,
+        runtime_state: &LuaLoadRuntimeState,
+    ) -> Option<(SkinDocument, BTreeMap<String, String>)> {
+        let entry_index = self.entries.iter().position(|entry| {
+            entry.key == *key
+                && !entry.dependencies.opaque
+                && document_dependency_fingerprint(
+                    &entry.document,
+                    options,
+                    files,
+                    runtime_state,
+                    &entry.dependencies,
+                )
+                .is_some_and(|fingerprint| fingerprint == entry.fingerprint)
+        })?;
+        let entry = self.entries.remove(entry_index);
+        let document = entry.document.clone();
+        let files = entry.files.clone();
+        self.entries.push(entry);
+        Some((document, files))
+    }
+
+    fn insert_lr2(
+        &mut self,
+        key: SkinDocumentCacheKey,
+        fingerprint: SkinDocumentDependencyFingerprint,
+        document: SkinDocument,
+        files: BTreeMap<String, String>,
+        dependencies: SkinLoadDependencies,
+    ) {
+        self.insert(key, fingerprint, document, files, dependencies);
+    }
+
+    fn insert_lua(
+        &mut self,
+        key: SkinDocumentCacheKey,
+        fingerprint: SkinDocumentDependencyFingerprint,
+        document: SkinDocument,
+        files: BTreeMap<String, String>,
+        dependencies: SkinLoadDependencies,
+    ) {
+        self.insert(key, fingerprint, document, files, dependencies);
+    }
+
+    fn insert(
+        &mut self,
+        key: SkinDocumentCacheKey,
+        fingerprint: SkinDocumentDependencyFingerprint,
+        document: SkinDocument,
+        files: BTreeMap<String, String>,
+        dependencies: SkinLoadDependencies,
+    ) {
+        if dependencies.opaque {
+            return;
+        }
+        self.entries.retain(|entry| entry.key != key || entry.fingerprint != fingerprint);
+        self.entries.push(SkinDocumentCacheEntry {
+            key,
+            fingerprint,
+            document,
+            files,
+            dependencies,
+        });
+        while self.entries.len() > SKIN_DOCUMENT_CACHE_LIMIT_ENTRIES {
+            self.entries.remove(0);
+        }
+    }
+}
 
 #[derive(Default)]
 pub struct SkinSourceAssetCache {
@@ -727,6 +863,7 @@ pub fn decode_beatoraja_skin_with_options_and_runtime_state_and_source_cache(
         options,
         files,
         runtime_state,
+        None,
         source_cache,
         None,
         font_cache,
@@ -740,14 +877,15 @@ pub fn decode_beatoraja_skin_with_options_and_runtime_state_and_caches(
     options: &BTreeMap<String, String>,
     files: &BTreeMap<String, String>,
     runtime_state: &LuaLoadRuntimeState,
+    document_cache: Option<SharedSkinDocumentCache>,
     source_cache: Option<SharedSkinSourceAssetCache>,
     texture_cache: Option<SharedSkinGpuTextureCache>,
     font_cache: Option<SharedSkinFontCache>,
     installed_fonts: Option<HashMap<String, SkinFontCacheKey>>,
 ) -> Result<DecodedSkin> {
     let document_start = Instant::now();
-    let LoadedSkinDocumentForDecode { mut document, files: resolved_files } =
-        load_skin_document(skin_path, kind, options, files, runtime_state)?;
+    let LoadedSkinDocumentForDecode { mut document, files: resolved_files, cache_status } =
+        load_skin_document(skin_path, kind, options, files, runtime_state, document_cache)?;
     let document_us = elapsed_us(document_start);
     // フォント ID は scene 横断的に Renderer のグローバルマップに登録されるので、
     // play / select / result で同じ "0" 等が衝突する。namespace を付与して隔離する。
@@ -1031,6 +1169,10 @@ pub fn decode_beatoraja_skin_with_options_and_runtime_state_and_caches(
 
     let mut stats = SkinDecodeStats {
         document_us,
+        document_cache_hits: usize::from(cache_status == DocumentCacheStatus::Hit),
+        document_cache_misses: usize::from(cache_status == DocumentCacheStatus::Miss),
+        document_cache_uncacheable: usize::from(cache_status == DocumentCacheStatus::Uncacheable),
+        document_cache_disabled: usize::from(cache_status == DocumentCacheStatus::Disabled),
         font_count,
         font_decode_us,
         font_payload_skipped,
@@ -1201,6 +1343,88 @@ fn skin_source_asset_cache_key(path: &Path, is_video: bool) -> Option<SkinSource
     })
 }
 
+fn skin_document_cache_key(path: &Path, kind: SkinKind) -> Option<SkinDocumentCacheKey> {
+    let metadata = fs::metadata(path).ok()?;
+    let path = fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    Some(SkinDocumentCacheKey {
+        path,
+        kind,
+        modified: metadata.modified().ok(),
+        len: metadata.len(),
+    })
+}
+
+fn lr2_document_dependency_fingerprint(
+    skin_path: &Path,
+    options: &BTreeMap<String, String>,
+    files: &BTreeMap<String, String>,
+    dependencies: &SkinLoadDependencies,
+) -> Result<SkinDocumentDependencyFingerprint> {
+    let option_values = bmz_skin::load_lr2_csv_skin_dependency_option_values(
+        skin_path,
+        options,
+        dependencies.option_values.keys().copied(),
+    )?;
+    let file_values = dependencies
+        .files
+        .iter()
+        .map(|name| (name.clone(), files.get(name).cloned().unwrap_or_default()))
+        .collect();
+    let loaded_files = current_loaded_file_dependencies(&dependencies.loaded_files)
+        .context("failed to inspect lr2 skin loaded file dependencies")?;
+    Ok(SkinDocumentDependencyFingerprint { option_values, file_values, loaded_files })
+}
+
+fn document_dependency_fingerprint(
+    document: &SkinDocument,
+    options: &BTreeMap<String, String>,
+    files: &BTreeMap<String, String>,
+    runtime_state: &LuaLoadRuntimeState,
+    dependencies: &SkinLoadDependencies,
+) -> Option<SkinDocumentDependencyFingerprint> {
+    let enabled_options = enabled_options_from_selections(document, options);
+    let property_ops = document_property_ops(document);
+    let option_values = dependencies
+        .option_values
+        .keys()
+        .map(|option_id| {
+            let value = if property_ops.contains(option_id) {
+                enabled_options.contains(option_id)
+            } else {
+                runtime_state.option_values.get(option_id).copied().unwrap_or(false)
+            };
+            (*option_id, value)
+        })
+        .collect();
+    let file_values = dependencies
+        .files
+        .iter()
+        .map(|name| (name.clone(), files.get(name).cloned().unwrap_or_default()))
+        .collect();
+    let loaded_files = current_loaded_file_dependencies(&dependencies.loaded_files).ok()?;
+    Some(SkinDocumentDependencyFingerprint { option_values, file_values, loaded_files })
+}
+
+fn document_property_ops(document: &SkinDocument) -> HashSet<i32> {
+    document.property.iter().flat_map(|property| property.item.iter().map(|item| item.op)).collect()
+}
+
+fn current_loaded_file_dependencies(
+    loaded_files: &BTreeMap<PathBuf, SkinLoadedFileDependency>,
+) -> Result<BTreeMap<PathBuf, SkinLoadedFileDependency>> {
+    let mut result = BTreeMap::new();
+    for path in loaded_files.keys() {
+        let metadata = fs::metadata(path)
+            .with_context(|| format!("failed to read loaded lua skin file: {}", path.display()))?;
+        let path = fs::canonicalize(path).unwrap_or_else(|_| path.clone());
+        result.insert(
+            path,
+            SkinLoadedFileDependency { modified: metadata.modified().ok(), len: metadata.len() },
+        );
+    }
+    Ok(result)
+}
+
 fn load_skin_video_first_frame_rgba(path: &Path) -> Result<RgbaImageAsset> {
     let frame = bmz_video::decode_first_frame(path)
         .with_context(|| format!("failed to decode first video frame: {}", path.display()))?;
@@ -1210,6 +1434,15 @@ fn load_skin_video_first_frame_rgba(path: &Path) -> Result<RgbaImageAsset> {
 struct LoadedSkinDocumentForDecode {
     document: SkinDocument,
     files: BTreeMap<String, String>,
+    cache_status: DocumentCacheStatus,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DocumentCacheStatus {
+    Hit,
+    Miss,
+    Uncacheable,
+    Disabled,
 }
 
 fn load_skin_document(
@@ -1218,8 +1451,123 @@ fn load_skin_document(
     options: &BTreeMap<String, String>,
     files: &BTreeMap<String, String>,
     runtime_state: &LuaLoadRuntimeState,
+    document_cache: Option<SharedSkinDocumentCache>,
 ) -> Result<LoadedSkinDocumentForDecode> {
-    let (mut document, mut resolved_files) = if is_lua_skin_path(skin_path) {
+    if is_lr2_skin_path(skin_path)
+        && let Some(document_cache) = document_cache.as_ref()
+        && let Some(key) = skin_document_cache_key(skin_path, kind)
+    {
+        if let Ok(mut cache) = document_cache.lock()
+            && let Some((mut document, mut resolved_files)) =
+                cache.get_lr2(&key, skin_path, options, files)
+        {
+            for (name, selected) in files {
+                resolved_files.insert(name.clone(), selected.clone());
+            }
+            document.user_selected_options =
+                Some(enabled_options_from_selections(&document, options));
+            return Ok(LoadedSkinDocumentForDecode {
+                document,
+                files: resolved_files,
+                cache_status: DocumentCacheStatus::Hit,
+            });
+        }
+        let mut loaded =
+            load_skin_document_uncached(skin_path, kind, options, files, runtime_state)?;
+        loaded.cache_status = DocumentCacheStatus::Miss;
+        if let Ok(mut cache) = document_cache.lock()
+            && let Ok(fingerprint) =
+                lr2_document_dependency_fingerprint(skin_path, options, files, &loaded.dependencies)
+        {
+            cache.insert_lr2(
+                key,
+                fingerprint,
+                loaded.document.clone(),
+                loaded.files.clone(),
+                loaded.dependencies,
+            );
+        }
+        return Ok(LoadedSkinDocumentForDecode {
+            document: loaded.document,
+            files: loaded.files,
+            cache_status: loaded.cache_status,
+        });
+    }
+    if is_lua_skin_path(skin_path)
+        && let Some(document_cache) = document_cache.as_ref()
+        && let Some(key) = skin_document_cache_key(skin_path, kind)
+    {
+        if let Ok(mut cache) = document_cache.lock()
+            && let Some((mut document, mut resolved_files)) =
+                cache.get_lua(&key, options, files, runtime_state)
+        {
+            for (name, selected) in files {
+                resolved_files.insert(name.clone(), selected.clone());
+            }
+            document.user_selected_options =
+                Some(enabled_options_from_selections(&document, options));
+            return Ok(LoadedSkinDocumentForDecode {
+                document,
+                files: resolved_files,
+                cache_status: DocumentCacheStatus::Hit,
+            });
+        }
+        let mut loaded =
+            load_skin_document_uncached(skin_path, kind, options, files, runtime_state)?;
+        loaded.cache_status = DocumentCacheStatus::Miss;
+        if let Ok(mut cache) = document_cache.lock()
+            && let Some(fingerprint) = document_dependency_fingerprint(
+                &loaded.document,
+                options,
+                files,
+                runtime_state,
+                &loaded.dependencies,
+            )
+        {
+            cache.insert_lua(
+                key,
+                fingerprint,
+                loaded.document.clone(),
+                loaded.files.clone(),
+                loaded.dependencies,
+            );
+        }
+        return Ok(LoadedSkinDocumentForDecode {
+            document: loaded.document,
+            files: loaded.files,
+            cache_status: loaded.cache_status,
+        });
+    }
+
+    let cache_status = if document_cache.is_some() {
+        DocumentCacheStatus::Uncacheable
+    } else {
+        DocumentCacheStatus::Disabled
+    };
+    let mut loaded = load_skin_document_uncached(skin_path, kind, options, files, runtime_state)?;
+    loaded.cache_status = cache_status;
+    Ok(LoadedSkinDocumentForDecode {
+        document: loaded.document,
+        files: loaded.files,
+        cache_status: loaded.cache_status,
+    })
+}
+
+struct LoadedSkinDocumentWithDependencies {
+    document: SkinDocument,
+    files: BTreeMap<String, String>,
+    dependencies: SkinLoadDependencies,
+    cache_status: DocumentCacheStatus,
+}
+
+fn load_skin_document_uncached(
+    skin_path: &Path,
+    kind: SkinKind,
+    options: &BTreeMap<String, String>,
+    files: &BTreeMap<String, String>,
+    runtime_state: &LuaLoadRuntimeState,
+) -> Result<LoadedSkinDocumentWithDependencies> {
+    let (mut document, mut resolved_files, dependencies) = if is_lua_skin_path(skin_path) {
         // Lua スキンはオプション選択 (名前 -> 選択肢名) とファイル選択
         // (filepath 定義名 -> 相対パス) をそのまま渡す。
         let loaded =
@@ -1233,7 +1581,7 @@ fn load_skin_document(
                 "lua skin load warning"
             );
         }
-        (loaded.document, loaded.files)
+        (loaded.document, loaded.files, loaded.dependencies)
     } else if is_lr2_skin_path(skin_path) {
         let loaded = bmz_skin::load_lr2_csv_skin(skin_path, decode_skin_kind(kind), options, files)
             .with_context(|| format!("failed to load lr2 csv skin: {}", skin_path.display()))?;
@@ -1245,14 +1593,14 @@ fn load_skin_document(
                 "lr2 csv skin load warning"
             );
         }
-        (loaded.document, BTreeMap::new())
+        (loaded.document, BTreeMap::new(), loaded.dependencies)
     } else {
         let document =
             bmz_skin::load_beatoraja_json_skin_with_defaults(skin_path).with_context(|| {
                 format!("failed to load beatoraja json skin: {}", skin_path.display())
             })?;
         if options.is_empty() {
-            (document, BTreeMap::new())
+            (document, BTreeMap::new(), SkinLoadDependencies::default())
         } else {
             // JSON スキンは property 定義から選択肢の op コード列を組み立て、
             // それを有効オプションとして再デコードする。
@@ -1264,7 +1612,7 @@ fn load_skin_document(
                         skin_path.display()
                     )
                 })?;
-            (document, BTreeMap::new())
+            (document, BTreeMap::new(), SkinLoadDependencies::default())
         }
     };
     for (name, selected) in files {
@@ -1274,7 +1622,12 @@ fn load_skin_document(
     // 選択値から算出した op コード列を document に格納する。
     // (選択が空でもデフォルト計算結果と同じになるため、常に設定して問題ない)
     document.user_selected_options = Some(enabled_options_from_selections(&document, options));
-    Ok(LoadedSkinDocumentForDecode { document, files: resolved_files })
+    Ok(LoadedSkinDocumentWithDependencies {
+        document,
+        files: resolved_files,
+        dependencies,
+        cache_status: DocumentCacheStatus::Disabled,
+    })
 }
 
 /// property 定義とユーザ選択 (オプション名 -> 選択肢名) から、JSON スキンの
@@ -2109,6 +2462,7 @@ mod tests {
             &selections,
             &BTreeMap::new(),
             &LuaLoadRuntimeState::default(),
+            None,
         )
         .expect("load skin document");
         let ops = enabled_options_from_selections(&loaded.document, &selections);
@@ -3212,6 +3566,7 @@ mod tests {
             &options,
             &BTreeMap::new(),
             &LuaLoadRuntimeState::default(),
+            None,
         )
         .unwrap()
         .document;
@@ -4668,6 +5023,238 @@ mod tests {
     }
 
     #[test]
+    fn lr2_document_cache_reuses_when_unused_option_changes() {
+        let root = unique_test_dir("bmz-lr2-document-cache-option");
+        std::fs::create_dir_all(&root).unwrap();
+        let skin_path = root.join("play.lr2skin");
+        std::fs::write(
+            &skin_path,
+            r#"
+#INFORMATION,0,Cache Test,Author
+#CUSTOMOPTION,Unused,900,Off,On
+#CUSTOMOPTION,Branch,910,Off,On
+#IF,911
+#IMAGE,on.png
+#ELSE
+#IMAGE,off.png
+#ENDIF
+"#,
+        )
+        .unwrap();
+        let cache = Arc::new(Mutex::new(SkinDocumentCache::default()));
+
+        let first = load_skin_document(
+            &skin_path,
+            SkinKind::Play,
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            &LuaLoadRuntimeState::default(),
+            Some(cache.clone()),
+        )
+        .unwrap();
+        assert_eq!(first.cache_status, DocumentCacheStatus::Miss);
+        assert_eq!(first.document.source[0].path, "off.png");
+
+        let unused_changed = BTreeMap::from([("Unused".to_string(), "On".to_string())]);
+        let second = load_skin_document(
+            &skin_path,
+            SkinKind::Play,
+            &unused_changed,
+            &BTreeMap::new(),
+            &LuaLoadRuntimeState::default(),
+            Some(cache.clone()),
+        )
+        .unwrap();
+        assert_eq!(second.cache_status, DocumentCacheStatus::Hit);
+        assert_eq!(second.document.source[0].path, "off.png");
+        assert!(second.document.enabled_options().contains(&901));
+
+        let branch_changed = BTreeMap::from([("Branch".to_string(), "On".to_string())]);
+        let third = load_skin_document(
+            &skin_path,
+            SkinKind::Play,
+            &branch_changed,
+            &BTreeMap::new(),
+            &LuaLoadRuntimeState::default(),
+            Some(cache.clone()),
+        )
+        .unwrap();
+        assert_eq!(third.cache_status, DocumentCacheStatus::Miss);
+        assert_eq!(third.document.source[0].path, "on.png");
+    }
+
+    #[test]
+    fn lr2_document_cache_misses_when_used_file_selection_changes() {
+        let root = unique_test_dir("bmz-lr2-document-cache-file");
+        std::fs::create_dir_all(root.join("parts")).unwrap();
+        std::fs::write(root.join("parts/blue.png"), []).unwrap();
+        std::fs::write(root.join("parts/red.png"), []).unwrap();
+        let skin_path = root.join("play.lr2skin");
+        std::fs::write(
+            &skin_path,
+            r#"
+#INFORMATION,0,Cache Test,Author
+#CUSTOMFILE,Parts,parts/*.png,blue
+#IMAGE,parts/*.png
+"#,
+        )
+        .unwrap();
+        let cache = Arc::new(Mutex::new(SkinDocumentCache::default()));
+
+        let first = load_skin_document(
+            &skin_path,
+            SkinKind::Play,
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            &LuaLoadRuntimeState::default(),
+            Some(cache.clone()),
+        )
+        .unwrap();
+        assert_eq!(first.cache_status, DocumentCacheStatus::Miss);
+        assert_eq!(first.document.source[0].path, "parts/blue.png");
+
+        let selected = BTreeMap::from([("Parts".to_string(), "red.png".to_string())]);
+        let second = load_skin_document(
+            &skin_path,
+            SkinKind::Play,
+            &BTreeMap::new(),
+            &selected,
+            &LuaLoadRuntimeState::default(),
+            Some(cache),
+        )
+        .unwrap();
+        assert_eq!(second.cache_status, DocumentCacheStatus::Miss);
+        assert_eq!(second.document.source[0].path, "parts/red.png");
+    }
+
+    #[test]
+    fn lua_document_cache_reuses_when_unused_option_changes() {
+        let root = unique_test_dir("bmz-lua-document-cache-option");
+        std::fs::create_dir_all(&root).unwrap();
+        let skin_path = root.join("play.luaskin");
+        std::fs::write(
+            &skin_path,
+            r#"
+local branch = 910
+if skin_config and skin_config.option then
+    branch = skin_config.option["Branch"] or 910
+end
+return {
+    type = 0,
+    property = {
+        { name = "Unused", item = {{ name = "Off", op = 900 }, { name = "On", op = 901 }}, def = "Off" },
+        { name = "Branch", item = {{ name = "Off", op = 910 }, { name = "On", op = 911 }}, def = "Off" },
+    },
+    source = {
+        { id = "bg", path = branch == 911 and "on.png" or "off.png" },
+    },
+}
+"#,
+        )
+        .unwrap();
+        let cache = Arc::new(Mutex::new(SkinDocumentCache::default()));
+
+        let first = load_skin_document(
+            &skin_path,
+            SkinKind::Play,
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            &LuaLoadRuntimeState::default(),
+            Some(cache.clone()),
+        )
+        .unwrap();
+        assert_eq!(first.cache_status, DocumentCacheStatus::Miss);
+        assert_eq!(first.document.source[0].path, "off.png");
+
+        let unused_changed = BTreeMap::from([("Unused".to_string(), "On".to_string())]);
+        let second = load_skin_document(
+            &skin_path,
+            SkinKind::Play,
+            &unused_changed,
+            &BTreeMap::new(),
+            &LuaLoadRuntimeState::default(),
+            Some(cache.clone()),
+        )
+        .unwrap();
+        assert_eq!(second.cache_status, DocumentCacheStatus::Hit);
+        assert_eq!(second.document.source[0].path, "off.png");
+        assert!(second.document.enabled_options().contains(&901));
+
+        let branch_changed = BTreeMap::from([("Branch".to_string(), "On".to_string())]);
+        let third = load_skin_document(
+            &skin_path,
+            SkinKind::Play,
+            &branch_changed,
+            &BTreeMap::new(),
+            &LuaLoadRuntimeState::default(),
+            Some(cache),
+        )
+        .unwrap();
+        assert_eq!(third.cache_status, DocumentCacheStatus::Miss);
+        assert_eq!(third.document.source[0].path, "on.png");
+    }
+
+    #[test]
+    fn lua_document_cache_misses_when_used_file_selection_changes() {
+        let root = unique_test_dir("bmz-lua-document-cache-file");
+        std::fs::create_dir_all(root.join("parts")).unwrap();
+        std::fs::write(root.join("parts/blue.png"), []).unwrap();
+        std::fs::write(root.join("parts/red.png"), []).unwrap();
+        let skin_path = root.join("play.luaskin");
+        std::fs::write(
+            &skin_path,
+            r#"
+local path = "parts/blue.png"
+if skin_config and skin_config.get_path then
+    path = skin_config.get_path("parts/*.png")
+end
+return {
+    type = 0,
+    filepath = {
+        { name = "Parts", path = "parts/*.png", def = "blue" },
+    },
+    source = {
+        { id = "bg", path = path },
+    },
+}
+"#,
+        )
+        .unwrap();
+        let cache = Arc::new(Mutex::new(SkinDocumentCache::default()));
+
+        let first = load_skin_document(
+            &skin_path,
+            SkinKind::Play,
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            &LuaLoadRuntimeState::default(),
+            Some(cache.clone()),
+        )
+        .unwrap();
+        assert_eq!(first.cache_status, DocumentCacheStatus::Miss);
+        assert_eq!(
+            first.document.source[0].path,
+            root.join("parts/blue.png").to_string_lossy().to_string()
+        );
+
+        let selected = BTreeMap::from([("Parts".to_string(), "red.png".to_string())]);
+        let second = load_skin_document(
+            &skin_path,
+            SkinKind::Play,
+            &BTreeMap::new(),
+            &selected,
+            &LuaLoadRuntimeState::default(),
+            Some(cache),
+        )
+        .unwrap();
+        assert_eq!(second.cache_status, DocumentCacheStatus::Miss);
+        assert_eq!(
+            second.document.source[0].path,
+            root.join("parts/red.png").to_string_lossy().to_string()
+        );
+    }
+
+    #[test]
     fn required_skin_sources_excludes_unused_images() {
         let document: SkinDocument = serde_json::from_str(
             r#"
@@ -4782,6 +5369,7 @@ mod tests {
             &BTreeMap::new(),
             &BTreeMap::new(),
             &LuaLoadRuntimeState::default(),
+            None,
             None,
             None,
             None,
@@ -4900,6 +5488,7 @@ mod tests {
             &BTreeMap::new(),
             &BTreeMap::new(),
             &LuaLoadRuntimeState::default(),
+            None,
             None,
             Some(texture_cache),
             None,
