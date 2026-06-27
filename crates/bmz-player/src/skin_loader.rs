@@ -156,6 +156,7 @@ pub struct SkinDecodeStats {
     pub document_us: u64,
     pub font_count: usize,
     pub font_decode_us: u64,
+    pub font_payload_skipped: usize,
     pub font_cache_hits: usize,
     pub font_cache_misses: usize,
     pub font_cache_uncacheable: usize,
@@ -180,7 +181,7 @@ pub struct SkinDecodeStats {
 pub struct DecodedFont {
     pub stored_id: String,
     pub path: PathBuf,
-    pub data: DecodedFontData,
+    pub data: Option<DecodedFontData>,
     pub cache_key: Option<SkinFontCacheKey>,
 }
 
@@ -203,7 +204,7 @@ pub type SharedSkinFontCache = Arc<Mutex<SkinFontCache>>;
 pub type SharedSkinGpuTextureCache = Arc<Mutex<SkinGpuTextureCache>>;
 
 const SKIN_SOURCE_ASSET_CACHE_LIMIT_BYTES: usize = 256 * 1024 * 1024;
-const SKIN_FONT_CACHE_LIMIT_BYTES: usize = 128 * 1024 * 1024;
+const SKIN_FONT_CACHE_LIMIT_BYTES: usize = 512 * 1024 * 1024;
 
 #[derive(Default)]
 pub struct SkinSourceAssetCache {
@@ -241,10 +242,17 @@ impl SkinSourceAssetCache {
     }
 }
 
-#[derive(Default)]
 pub struct SkinFontCache {
-    entries: HashMap<SkinFontCacheKey, DecodedFontData>,
+    entries: HashMap<SkinFontCacheKey, CachedSkinFontEntry>,
     total_bytes: usize,
+    limit_bytes: usize,
+    access_clock: u64,
+}
+
+struct CachedSkinFontEntry {
+    data: DecodedFontData,
+    bytes: usize,
+    last_used: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -256,24 +264,62 @@ pub struct SkinFontCacheKey {
 }
 
 impl SkinFontCache {
-    fn get(&self, key: &SkinFontCacheKey) -> Option<DecodedFontData> {
-        self.entries.get(key).cloned()
+    fn get(&mut self, key: &SkinFontCacheKey) -> Option<DecodedFontData> {
+        let access = self.next_access();
+        let entry = self.entries.get_mut(key)?;
+        entry.last_used = access;
+        Some(entry.data.clone())
     }
 
     fn insert(&mut self, key: SkinFontCacheKey, data: DecodedFontData) {
         let bytes = font_data_cache_bytes(&data);
         if let Some(old) = self.entries.remove(&key) {
-            self.total_bytes = self.total_bytes.saturating_sub(font_data_cache_bytes(&old));
+            self.total_bytes = self.total_bytes.saturating_sub(old.bytes);
         }
-        if bytes > SKIN_FONT_CACHE_LIMIT_BYTES {
+        if bytes > self.limit_bytes {
             return;
         }
-        if self.total_bytes.saturating_add(bytes) > SKIN_FONT_CACHE_LIMIT_BYTES {
-            self.entries.clear();
-            self.total_bytes = 0;
-        }
+        self.evict_until_fits(bytes);
+        let access = self.next_access();
         self.total_bytes += bytes;
-        self.entries.insert(key, data);
+        self.entries.insert(key, CachedSkinFontEntry { data, bytes, last_used: access });
+    }
+
+    fn evict_until_fits(&mut self, incoming_bytes: usize) {
+        while self.total_bytes.saturating_add(incoming_bytes) > self.limit_bytes {
+            let Some(key) = self
+                .entries
+                .iter()
+                .min_by_key(|(_, entry)| entry.last_used)
+                .map(|(key, _)| key.clone())
+            else {
+                break;
+            };
+            if let Some(old) = self.entries.remove(&key) {
+                self.total_bytes = self.total_bytes.saturating_sub(old.bytes);
+            }
+        }
+    }
+
+    fn next_access(&mut self) -> u64 {
+        self.access_clock = self.access_clock.wrapping_add(1);
+        self.access_clock
+    }
+
+    #[cfg(test)]
+    fn with_limit_bytes(limit_bytes: usize) -> Self {
+        Self { limit_bytes, ..Self::default() }
+    }
+}
+
+impl Default for SkinFontCache {
+    fn default() -> Self {
+        Self {
+            entries: HashMap::new(),
+            total_bytes: 0,
+            limit_bytes: SKIN_FONT_CACHE_LIMIT_BYTES,
+            access_clock: 0,
+        }
     }
 }
 
@@ -334,6 +380,7 @@ enum SourceCacheStatus {
 enum FontCacheStatus {
     Hit,
     Miss,
+    SkippedInstalled,
     Uncacheable,
     Disabled,
 }
@@ -633,6 +680,28 @@ pub fn decode_beatoraja_skin_with_options_and_runtime_state_and_source_cache(
     source_cache: Option<SharedSkinSourceAssetCache>,
     font_cache: Option<SharedSkinFontCache>,
 ) -> Result<DecodedSkin> {
+    decode_beatoraja_skin_with_options_and_runtime_state_and_caches(
+        skin_path,
+        kind,
+        options,
+        files,
+        runtime_state,
+        source_cache,
+        font_cache,
+        None,
+    )
+}
+
+pub fn decode_beatoraja_skin_with_options_and_runtime_state_and_caches(
+    skin_path: &Path,
+    kind: SkinKind,
+    options: &BTreeMap<String, String>,
+    files: &BTreeMap<String, String>,
+    runtime_state: &LuaLoadRuntimeState,
+    source_cache: Option<SharedSkinSourceAssetCache>,
+    font_cache: Option<SharedSkinFontCache>,
+    installed_fonts: Option<HashMap<String, SkinFontCacheKey>>,
+) -> Result<DecodedSkin> {
     let document_start = Instant::now();
     let LoadedSkinDocumentForDecode { mut document, files: resolved_files } =
         load_skin_document(skin_path, kind, options, files, runtime_state)?;
@@ -679,10 +748,26 @@ pub fn decode_beatoraja_skin_with_options_and_runtime_state_and_source_cache(
     let decoded_fonts: Vec<(DecodedFont, FontCacheStatus)> = font_tasks
         .into_par_iter()
         .filter_map(|(stored_id, font_path)| {
-            match decode_font_with_cache(&font_path, font_cache.as_ref()) {
-                Ok((data, status, cache_key)) => {
-                    Some((DecodedFont { stored_id, path: font_path, data, cache_key }, status))
-                }
+            let cache_key = skin_font_cache_key(&font_path);
+            if let (Some(installed_fonts), Some(cache_key)) =
+                (installed_fonts.as_ref(), cache_key.as_ref())
+                && installed_fonts.get(&stored_id) == Some(cache_key)
+            {
+                return Some((
+                    DecodedFont {
+                        stored_id,
+                        path: font_path,
+                        data: None,
+                        cache_key: Some(cache_key.clone()),
+                    },
+                    FontCacheStatus::SkippedInstalled,
+                ));
+            }
+            match decode_font_with_cache_key(&font_path, font_cache.as_ref(), cache_key) {
+                Ok((data, status, cache_key)) => Some((
+                    DecodedFont { stored_id, path: font_path, data: Some(data), cache_key },
+                    status,
+                )),
                 Err(error) => {
                     tracing::warn!(
                         font_id = %stored_id,
@@ -696,6 +781,7 @@ pub fn decode_beatoraja_skin_with_options_and_runtime_state_and_source_cache(
         })
         .collect();
     let font_decode_us = elapsed_us(font_decode_start);
+    let mut font_payload_skipped = 0;
     let mut font_cache_hits = 0;
     let mut font_cache_misses = 0;
     let mut font_cache_uncacheable = 0;
@@ -704,6 +790,7 @@ pub fn decode_beatoraja_skin_with_options_and_runtime_state_and_source_cache(
         match status {
             FontCacheStatus::Hit => font_cache_hits += 1,
             FontCacheStatus::Miss => font_cache_misses += 1,
+            FontCacheStatus::SkippedInstalled => font_payload_skipped += 1,
             FontCacheStatus::Uncacheable => font_cache_uncacheable += 1,
             FontCacheStatus::Disabled => font_cache_disabled += 1,
         }
@@ -836,6 +923,7 @@ pub fn decode_beatoraja_skin_with_options_and_runtime_state_and_source_cache(
         document_us,
         font_count,
         font_decode_us,
+        font_payload_skipped,
         font_cache_hits,
         font_cache_misses,
         font_cache_uncacheable,
@@ -1110,17 +1198,26 @@ fn decode_font(path: &Path) -> Result<DecodedFontData> {
     }
 }
 
+#[cfg(test)]
 fn decode_font_with_cache(
     path: &Path,
     font_cache: Option<&SharedSkinFontCache>,
 ) -> Result<(DecodedFontData, FontCacheStatus, Option<SkinFontCacheKey>)> {
+    decode_font_with_cache_key(path, font_cache, skin_font_cache_key(path))
+}
+
+fn decode_font_with_cache_key(
+    path: &Path,
+    font_cache: Option<&SharedSkinFontCache>,
+    key: Option<SkinFontCacheKey>,
+) -> Result<(DecodedFontData, FontCacheStatus, Option<SkinFontCacheKey>)> {
     let Some(font_cache) = font_cache else {
         return decode_font(path).map(|data| (data, FontCacheStatus::Disabled, None));
     };
-    let Some(key) = skin_font_cache_key(path) else {
+    let Some(key) = key else {
         return decode_font(path).map(|data| (data, FontCacheStatus::Uncacheable, None));
     };
-    if let Ok(cache) = font_cache.lock()
+    if let Ok(mut cache) = font_cache.lock()
         && let Some(data) = cache.get(&key)
     {
         return Ok((data, FontCacheStatus::Hit, Some(key)));
@@ -1179,6 +1276,14 @@ pub fn install_decoded_skin(
 /// 1 個のフォントを renderer に登録する。フレーム分散インストールから呼ばれる。
 pub fn install_decoded_font(renderer: &mut Renderer, font: DecodedFont) -> bool {
     let DecodedFont { stored_id, path, data, cache_key: _ } = font;
+    let Some(data) = data else {
+        tracing::debug!(
+            font_id = %stored_id,
+            path = %path.display(),
+            "skipping beatoraja skin font install because payload is already installed"
+        );
+        return false;
+    };
     let result: Result<()> = match data {
         DecodedFontData::Vector(bytes) => renderer.install_font_bytes(stored_id.clone(), bytes),
         DecodedFontData::Bitmap(bitmap) => {
@@ -3921,7 +4026,7 @@ mod tests {
         assert!(
             decoded.fonts.iter().any(|font| {
                 font.stored_id.starts_with("play:lr2font-")
-                    && matches!(&font.data, DecodedFontData::Bitmap(_))
+                    && matches!(font.data.as_ref(), Some(DecodedFontData::Bitmap(_)))
             }),
             "expected decoded LR2 bitmap font to be loaded"
         );
@@ -4458,6 +4563,78 @@ mod tests {
     }
 
     #[test]
+    fn skin_font_cache_evicts_least_recently_used_entry() {
+        let mut cache = SkinFontCache::with_limit_bytes(8);
+        let a = test_font_cache_key("a.ttf");
+        let b = test_font_cache_key("b.ttf");
+        let c = test_font_cache_key("c.ttf");
+
+        cache.insert(a.clone(), DecodedFontData::Vector(vec![1, 1, 1, 1]));
+        cache.insert(b.clone(), DecodedFontData::Vector(vec![2, 2, 2, 2]));
+        assert!(cache.get(&a).is_some());
+        cache.insert(c.clone(), DecodedFontData::Vector(vec![3, 3, 3, 3]));
+
+        assert!(cache.get(&a).is_some());
+        assert!(cache.get(&b).is_none());
+        assert!(cache.get(&c).is_some());
+    }
+
+    #[test]
+    fn skin_font_cache_skips_entries_larger_than_limit() {
+        let mut cache = SkinFontCache::with_limit_bytes(4);
+        let key = test_font_cache_key("too-large.ttf");
+
+        cache.insert(key.clone(), DecodedFontData::Vector(vec![1, 2, 3, 4, 5]));
+
+        assert!(cache.get(&key).is_none());
+        assert_eq!(cache.total_bytes, 0);
+    }
+
+    #[test]
+    fn installed_font_snapshot_skips_font_payload_decode() {
+        let root = unique_test_dir("bmz-installed-font-skip");
+        std::fs::create_dir_all(&root).unwrap();
+        let skin_path = root.join("skin.json");
+        let font_path = root.join("font.ttf");
+        std::fs::write(&font_path, b"not a real font").unwrap();
+        std::fs::write(
+            &skin_path,
+            r#"
+            {
+                "type": 0,
+                "font": [
+                    { "id": "font1", "path": "font.ttf" }
+                ]
+            }
+            "#,
+        )
+        .unwrap();
+        let key = skin_font_cache_key(&font_path).unwrap();
+        let installed = HashMap::from([("play:font1".to_string(), key.clone())]);
+
+        let decoded = decode_beatoraja_skin_with_options_and_runtime_state_and_caches(
+            &skin_path,
+            SkinKind::Play,
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            &LuaLoadRuntimeState::default(),
+            None,
+            None,
+            Some(installed),
+        )
+        .unwrap();
+
+        assert_eq!(decoded.stats.font_count, 1);
+        assert_eq!(decoded.stats.font_payload_skipped, 1);
+        assert_eq!(decoded.stats.font_cache_hits, 0);
+        assert_eq!(decoded.stats.font_cache_misses, 0);
+        assert_eq!(decoded.fonts.len(), 1);
+        assert_eq!(decoded.fonts[0].stored_id, "play:font1");
+        assert_eq!(decoded.fonts[0].cache_key.as_ref(), Some(&key));
+        assert!(decoded.fonts[0].data.is_none());
+    }
+
+    #[test]
     fn skin_source_asset_cache_hit_skips_loader() {
         let root = unique_test_dir("bmz-source-cache-hit");
         std::fs::create_dir_all(&root).unwrap();
@@ -4540,6 +4717,10 @@ mod tests {
         let cached = cache.get(&video_key).unwrap();
         assert_eq!(cached.texture, allocated);
         assert_eq!(cached.size, size);
+    }
+
+    fn test_font_cache_key(path: &str) -> SkinFontCacheKey {
+        SkinFontCacheKey { path: PathBuf::from(path), modified: None, len: 0, is_bitmap: false }
     }
 
     fn unique_test_dir(name: &str) -> PathBuf {

@@ -112,7 +112,7 @@ use crate::skin_loader::{
     DecodedSkin, PreparedSource, SharedSkinFontCache, SharedSkinGpuTextureCache,
     SharedSkinSourceAssetCache, SkinFontCache, SkinFontCacheKey, SkinGpuTextureCache, SkinKind,
     SkinSourceAssetCache, UploadedSkin, decode_beatoraja_skin_with_options,
-    decode_beatoraja_skin_with_options_and_runtime_state_and_source_cache,
+    decode_beatoraja_skin_with_options_and_runtime_state_and_caches,
     default_play_skin_document_path_from_paths, default_skin_document_path_from_paths,
     enabled_options_from_selections, install_decoded_font, install_decoded_skin,
     is_decodable_skin_path, is_json_skin_path, is_lr2_skin_path, is_lua_skin_path,
@@ -8531,6 +8531,7 @@ impl WinitApp {
             self.skin_decode_tx.clone(),
             self.skin_source_asset_cache.clone(),
             self.skin_font_cache.clone(),
+            self.skin_installed_font_cache.clone(),
             generation,
             path,
             SkinKind::Result,
@@ -8705,6 +8706,7 @@ impl WinitApp {
             document_us = decode_stats.document_us,
             font_count,
             font_decode_us = decode_stats.font_decode_us,
+            font_payload_skipped = decode_stats.font_payload_skipped,
             font_cache_hits = decode_stats.font_cache_hits,
             font_cache_misses = decode_stats.font_cache_misses,
             font_cache_uncacheable = decode_stats.font_cache_uncacheable,
@@ -9778,6 +9780,7 @@ impl WinitApp {
             self.skin_decode_tx.clone(),
             self.skin_source_asset_cache.clone(),
             self.skin_font_cache.clone(),
+            self.skin_installed_font_cache.clone(),
             generation,
             path,
             SkinKind::Play,
@@ -10524,6 +10527,7 @@ fn load_initial_skin_textures(
                 skin_decode_tx.clone(),
                 skin_source_asset_cache.clone(),
                 skin_font_cache.clone(),
+                HashMap::new(),
                 generation,
                 decide_path,
                 SkinKind::Decide,
@@ -10555,6 +10559,7 @@ fn load_initial_skin_textures(
                 skin_decode_tx.clone(),
                 skin_source_asset_cache.clone(),
                 skin_font_cache.clone(),
+                HashMap::new(),
                 generation,
                 result_path,
                 SkinKind::Result,
@@ -10702,6 +10707,7 @@ fn reload_skin_textures(
                 skin_decode_tx.clone(),
                 skin_source_asset_cache.clone(),
                 skin_font_cache.clone(),
+                HashMap::new(),
                 generation,
                 path.clone(),
                 kind,
@@ -11169,6 +11175,7 @@ fn spawn_skin_decode(
     tx: mpsc::Sender<PendingSkinResult>,
     source_cache: SharedSkinSourceAssetCache,
     font_cache: SharedSkinFontCache,
+    installed_font_cache: HashMap<String, SkinFontCacheKey>,
     generation: u64,
     path: PathBuf,
     kind: SkinKind,
@@ -11182,7 +11189,7 @@ fn spawn_skin_decode(
         .name(format!("skin-decode-{:?}", kind))
         .spawn(move || {
             let decode_started_at = Instant::now();
-            let result = decode_beatoraja_skin_with_options_and_runtime_state_and_source_cache(
+            let result = decode_beatoraja_skin_with_options_and_runtime_state_and_caches(
                 &path,
                 kind,
                 &options,
@@ -11190,6 +11197,7 @@ fn spawn_skin_decode(
                 &runtime_state,
                 Some(source_cache),
                 Some(font_cache),
+                Some(installed_font_cache),
             );
             let decode_finished_at = Instant::now();
             let _ = tx.send(PendingSkinResult {
