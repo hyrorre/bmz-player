@@ -383,6 +383,7 @@ struct WinitApp {
     start_held: bool,
     select_held: bool,
     select_e_action_holds: HashSet<InputActionConfig>,
+    pressed_controls: HashSet<String>,
     arrange_option: ArrangeOption,
     arrange_option_2p: ArrangeOption,
     target_option: TargetOption,
@@ -1784,6 +1785,7 @@ impl WinitApp {
             start_held: false,
             select_held: false,
             select_e_action_holds: HashSet::new(),
+            pressed_controls: HashSet::new(),
             arrange_option,
             arrange_option_2p,
             target_option,
@@ -3030,6 +3032,22 @@ impl WinitApp {
         }
     }
 
+    fn update_pressed_control(&mut self, control: &str, pressed: bool) {
+        if pressed {
+            self.pressed_controls.insert(control.to_string());
+        } else {
+            self.pressed_controls.remove(control);
+        }
+    }
+
+    fn sync_select_holds_from_pressed_controls(&mut self) {
+        let (start_held, select_held, e_action_holds) =
+            select_hold_state_from_pressed_controls(&self.pressed_controls, &self.select_keys);
+        self.select_e_action_holds = e_action_holds;
+        self.set_start_held(start_held);
+        self.set_select_held(select_held);
+    }
+
     fn update_select_e_action_hold(&mut self, control: &str, held: bool) {
         let Some(action) = self.select_keys.e_action_for_control(control) else {
             return;
@@ -3451,6 +3469,9 @@ impl WinitApp {
 
     fn route_keyboard_input(&mut self, event: &winit::event::KeyEvent) {
         let play_control = (!event.repeat).then(|| physical_key_name(event.physical_key)).flatten();
+        if let Some(control) = play_control.as_deref() {
+            self.update_pressed_control(control, event.state == ElementState::Pressed);
+        }
         let has_play_control_context =
             self.active_play.is_some() || self.pending_play_start.is_some();
         if event.state == ElementState::Pressed
@@ -4190,6 +4211,7 @@ impl WinitApp {
     }
 
     fn route_gamepad_button(&mut self, button: &str, pressed: bool) {
+        self.update_pressed_control(button, pressed);
         let has_play_control_context =
             self.active_play.is_some() || self.pending_play_start.is_some();
         if pressed && self.handle_quick_retry_control(button) {
@@ -7882,6 +7904,7 @@ impl WinitApp {
         self.draining_audio = None;
         self.last_play_snapshot = None;
         self.reload_select_items();
+        self.sync_select_holds_from_pressed_controls();
         let now = Instant::now();
         self.select_scene_started_at = now;
         self.restart_select_bar_timer_without_scroll(now);
@@ -11971,6 +11994,11 @@ impl ApplicationHandler for WinitApp {
             }
             WindowEvent::Focused(focused) => {
                 self.focused = focused;
+                if !focused {
+                    self.pressed_controls.clear();
+                    self.sync_select_holds_from_pressed_controls();
+                    self.clear_play_control_holds();
+                }
             }
             WindowEvent::RedrawRequested => {
                 if self.cursor_visible
@@ -12940,6 +12968,21 @@ fn select_option_panel_for_holds(start_held: bool, select_held: bool) -> u8 {
         (false, true) => 2,
         (false, false) => 0,
     }
+}
+
+fn select_hold_state_from_pressed_controls(
+    pressed_controls: &HashSet<String>,
+    bindings: &SelectKeyBindings,
+) -> (bool, bool, HashSet<InputActionConfig>) {
+    let start_held = pressed_controls.iter().any(|control| bindings.is_start(control));
+    let select_held = pressed_controls
+        .iter()
+        .any(|control| control == "Select" || bindings.is_e2_action(control));
+    let e_action_holds = pressed_controls
+        .iter()
+        .filter_map(|control| bindings.e_action_for_control(control))
+        .collect();
+    (start_held, select_held, e_action_holds)
 }
 
 fn is_select_start_key(physical_key: PhysicalKey, bindings: &SelectKeyBindings) -> bool {
@@ -17188,6 +17231,29 @@ mod tests {
         assert_eq!(select_option_panel_for_holds(true, false), 1);
         assert_eq!(select_option_panel_for_holds(false, true), 2);
         assert_eq!(select_option_panel_for_holds(true, true), 3);
+    }
+
+    #[test]
+    fn select_hold_state_rebuilds_from_pressed_controls() {
+        let keys = default_select_keys();
+        let pressed = HashSet::from(["Q".to_string(), "W".to_string()]);
+
+        let (start_held, select_held, e_action_holds) =
+            select_hold_state_from_pressed_controls(&pressed, &keys);
+
+        assert!(start_held);
+        assert!(select_held);
+        assert!(e_action_holds.contains(&InputActionConfig::E1));
+        assert!(e_action_holds.contains(&InputActionConfig::E2));
+
+        let pressed = HashSet::from(["W".to_string()]);
+        let (start_held, select_held, e_action_holds) =
+            select_hold_state_from_pressed_controls(&pressed, &keys);
+
+        assert!(!start_held);
+        assert!(select_held);
+        assert!(!e_action_holds.contains(&InputActionConfig::E1));
+        assert!(e_action_holds.contains(&InputActionConfig::E2));
     }
 
     #[test]
