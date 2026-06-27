@@ -1045,6 +1045,9 @@ struct PendingSkinResult {
     generation: u64,
     path: PathBuf,
     kind: SkinKind,
+    queued_at: Instant,
+    decode_started_at: Instant,
+    decode_finished_at: Instant,
     result: Result<DecodedSkin>,
 }
 
@@ -1055,6 +1058,11 @@ struct PendingUploadResult {
     generation: u64,
     path: PathBuf,
     kind: SkinKind,
+    queued_at: Instant,
+    decode_started_at: Instant,
+    decode_finished_at: Instant,
+    upload_started_at: Instant,
+    upload_finished_at: Instant,
     uploaded: Result<UploadedSkin>,
 }
 
@@ -8545,7 +8553,18 @@ impl WinitApp {
     /// stale generation は破棄。GPU アップロードは worker で完了済みなので、
     /// ここではハンドル挿入・フォント登録・SkinContext 構築のみ (軽量)。
     fn apply_uploaded_skin(&mut self, pending: PendingUploadResult) {
-        let PendingUploadResult { generation, path, kind, uploaded } = pending;
+        let PendingUploadResult {
+            generation,
+            path,
+            kind,
+            queued_at,
+            decode_started_at,
+            decode_finished_at,
+            upload_started_at,
+            upload_finished_at,
+            uploaded,
+        } = pending;
+        let apply_started_at = Instant::now();
         let current_generation = self.skin_reload_generations.current(kind);
         if generation != current_generation {
             tracing::debug!(
@@ -8553,6 +8572,9 @@ impl WinitApp {
                 kind = ?kind,
                 generation,
                 current = current_generation,
+                total_us = instant_elapsed_us_u64(queued_at),
+                decode_us = instant_duration_us_u64(decode_started_at, decode_finished_at),
+                upload_us = instant_duration_us_u64(upload_started_at, upload_finished_at),
                 "discarding stale uploaded skin"
             );
             return;
@@ -8569,6 +8591,9 @@ impl WinitApp {
                 tracing::warn!(
                     path = %path.display(),
                     kind = ?kind,
+                    total_us = instant_elapsed_us_u64(queued_at),
+                    decode_us = instant_duration_us_u64(decode_started_at, decode_finished_at),
+                    upload_us = instant_duration_us_u64(upload_started_at, upload_finished_at),
                     error = %format_error_chain(&error),
                     "failed to decode/upload beatoraja skin in background"
                 );
@@ -8583,7 +8608,8 @@ impl WinitApp {
             );
             return;
         };
-        let UploadedSkin { kind, document, fonts, prepared } = uploaded;
+        let UploadedSkin { kind, document, fonts, prepared, decode_stats, upload_stats } = uploaded;
+        let font_count = fonts.len();
         // フォント登録 (ab_glyph パース。軽量なので main で実施)。
         for font in fonts {
             install_decoded_font(&mut self.renderer, font);
@@ -8619,18 +8645,13 @@ impl WinitApp {
             }
             document_textures.push(SkinDocumentTexture { source_id, texture, source_size: size });
         }
-        tracing::info!(
-            path = %path.display(),
-            kind = ?kind,
-            sources = document_textures.len(),
-            "beatoraja skin fully installed"
-        );
         if video_sources.is_empty() {
             self.skin_video_sources.remove(&kind);
         } else {
             self.skin_video_sources.insert(kind, video_sources);
         }
         let preserve_play_dynamic_timers = kind == SkinKind::Play && self.active_play.is_some();
+        let installed_sources = document_textures.len();
         set_decoded_skin_context(
             &mut self.renderer,
             kind,
@@ -8638,6 +8659,39 @@ impl WinitApp {
             document,
             document_textures,
             preserve_play_dynamic_timers,
+        );
+        tracing::info!(
+            path = %path.display(),
+            kind = ?kind,
+            generation,
+            total_us = instant_elapsed_us_u64(queued_at),
+            decode_queue_us = instant_duration_us_u64(queued_at, decode_started_at),
+            decode_thread_us = instant_duration_us_u64(decode_started_at, decode_finished_at),
+            upload_queue_us = instant_duration_us_u64(decode_finished_at, upload_started_at),
+            upload_thread_us = instant_duration_us_u64(upload_started_at, upload_finished_at),
+            apply_us = instant_elapsed_us_u64(apply_started_at),
+            document_us = decode_stats.document_us,
+            font_count,
+            font_decode_us = decode_stats.font_decode_us,
+            source_task_count = decode_stats.source_task_count,
+            source_decode_us = decode_stats.source_decode_us,
+            decoded_sources = decode_stats.decoded_source_count,
+            decoded_source_bytes = decode_stats.decoded_source_bytes,
+            builtin_sources = decode_stats.builtin_source_count,
+            image_sources = decode_stats.image_source_count,
+            video_sources = decode_stats.video_source_count,
+            source_cache_hits = decode_stats.source_cache_hits,
+            source_cache_misses = decode_stats.source_cache_misses,
+            source_cache_uncacheable = decode_stats.source_cache_uncacheable,
+            source_cache_disabled = decode_stats.source_cache_disabled,
+            uploaded_sources = upload_stats.uploaded_source_count,
+            uploaded_source_bytes = upload_stats.uploaded_source_bytes,
+            texture_cache_hits = upload_stats.texture_cache_hits,
+            texture_cache_misses = upload_stats.texture_cache_misses,
+            texture_cache_uncacheable = upload_stats.texture_cache_uncacheable,
+            texture_cache_disabled = upload_stats.texture_cache_disabled,
+            installed_sources,
+            "beatoraja skin reload timings"
         );
         if kind == SkinKind::Select && matches!(self.view_state(), AppViewState::Select) {
             self.restart_select_scene_timers();
@@ -11065,9 +11119,11 @@ fn spawn_skin_decode(
     runtime_state: bmz_skin::LuaLoadRuntimeState,
 ) {
     let send_path = path.clone();
+    let queued_at = Instant::now();
     thread::Builder::new()
         .name(format!("skin-decode-{:?}", kind))
         .spawn(move || {
+            let decode_started_at = Instant::now();
             let result = decode_beatoraja_skin_with_options_and_runtime_state_and_source_cache(
                 &path,
                 kind,
@@ -11076,7 +11132,16 @@ fn spawn_skin_decode(
                 &runtime_state,
                 Some(source_cache),
             );
-            let _ = tx.send(PendingSkinResult { generation, path: send_path, kind, result });
+            let decode_finished_at = Instant::now();
+            let _ = tx.send(PendingSkinResult {
+                generation,
+                path: send_path,
+                kind,
+                queued_at,
+                decode_started_at,
+                decode_finished_at,
+                result,
+            });
         })
         .expect("failed to spawn skin decode thread");
 }
@@ -11089,11 +11154,35 @@ fn skin_upload_worker(
     uploader: bmz_render::renderer::GpuUploader,
     texture_cache: SharedSkinGpuTextureCache,
 ) {
-    while let Ok(PendingSkinResult { generation, path, kind, result }) = decode_rx.recv() {
+    while let Ok(PendingSkinResult {
+        generation,
+        path,
+        kind,
+        queued_at,
+        decode_started_at,
+        decode_finished_at,
+        result,
+    }) = decode_rx.recv()
+    {
+        let upload_started_at = Instant::now();
         let uploaded = result.map(|decoded| {
             upload_decoded_skin_with_texture_cache(&uploader, decoded, Some(&texture_cache))
         });
-        if upload_tx.send(PendingUploadResult { generation, path, kind, uploaded }).is_err() {
+        let upload_finished_at = Instant::now();
+        if upload_tx
+            .send(PendingUploadResult {
+                generation,
+                path,
+                kind,
+                queued_at,
+                decode_started_at,
+                decode_finished_at,
+                upload_started_at,
+                upload_finished_at,
+                uploaded,
+            })
+            .is_err()
+        {
             // main 側受信端が drop された (アプリ終了)。
             break;
         }
@@ -14013,6 +14102,14 @@ fn green_number_from_duration(duration_ms: f32) -> u32 {
 
 fn green_number_from_snapshot_duration(duration_ms: i32) -> u32 {
     green_number_from_duration(duration_ms.max(0) as f32)
+}
+
+fn instant_elapsed_us_u64(start: Instant) -> u64 {
+    start.elapsed().as_micros().min(u64::MAX as u128) as u64
+}
+
+fn instant_duration_us_u64(start: Instant, end: Instant) -> u64 {
+    end.saturating_duration_since(start).as_micros().min(u64::MAX as u128) as u64
 }
 
 fn note_display_duration_ms_for_hispeed(

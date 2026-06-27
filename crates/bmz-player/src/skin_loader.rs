@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
-use std::time::SystemTime;
+use std::time::{Instant, SystemTime};
 
 use anyhow::{Context, Result};
 use bmz_core::lane::KeyMode;
@@ -148,6 +148,25 @@ pub struct DecodedSkin {
     pub document: SkinDocument,
     pub fonts: Vec<DecodedFont>,
     pub sources: Vec<DecodedSource>,
+    pub stats: SkinDecodeStats,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct SkinDecodeStats {
+    pub document_us: u64,
+    pub font_count: usize,
+    pub font_decode_us: u64,
+    pub source_task_count: usize,
+    pub source_decode_us: u64,
+    pub builtin_source_count: usize,
+    pub image_source_count: usize,
+    pub video_source_count: usize,
+    pub source_cache_hits: usize,
+    pub source_cache_misses: usize,
+    pub source_cache_uncacheable: usize,
+    pub source_cache_disabled: usize,
+    pub decoded_source_count: usize,
+    pub decoded_source_bytes: usize,
 }
 
 pub struct DecodedFont {
@@ -255,6 +274,14 @@ enum SourceDecodeTask {
     Builtin { index: usize, source_id: String, path: PathBuf, asset: RgbaImageAsset },
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SourceCacheStatus {
+    Hit,
+    Miss,
+    Uncacheable,
+    Disabled,
+}
+
 /// GPU アップロード済みの 1 ソース。upload worker が `DecodedSource` から生成する。
 pub struct PreparedSource {
     pub source_id: String,
@@ -273,6 +300,20 @@ pub struct UploadedSkin {
     pub document: SkinDocument,
     pub fonts: Vec<DecodedFont>,
     pub prepared: Vec<PreparedSource>,
+    pub decode_stats: SkinDecodeStats,
+    pub upload_stats: SkinUploadStats,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct SkinUploadStats {
+    pub upload_us: u64,
+    pub source_count: usize,
+    pub texture_cache_hits: usize,
+    pub texture_cache_misses: usize,
+    pub texture_cache_uncacheable: usize,
+    pub texture_cache_disabled: usize,
+    pub uploaded_source_count: usize,
+    pub uploaded_source_bytes: usize,
 }
 
 /// `DecodedSkin` の全ソースを GPU へアップロードして `UploadedSkin` を返す。
@@ -286,10 +327,13 @@ pub fn upload_decoded_skin_with_texture_cache(
     decoded: DecodedSkin,
     texture_cache: Option<&SharedSkinGpuTextureCache>,
 ) -> UploadedSkin {
-    let DecodedSkin { kind, document, fonts, sources } = decoded;
+    let upload_start = Instant::now();
+    let DecodedSkin { kind, document, fonts, sources, stats: decode_stats } = decoded;
+    let mut upload_stats = SkinUploadStats::default();
     let prepared = sources
         .into_iter()
         .filter_map(|source| {
+            upload_stats.source_count += 1;
             let DecodedSource { source_id, path, texture, asset, is_video } = source;
             if let Err(error) = asset.validate() {
                 tracing::warn!(
@@ -303,25 +347,35 @@ pub fn upload_decoded_skin_with_texture_cache(
             let size = SkinImageSize { width: asset.width as f32, height: asset.height as f32 };
             let cache_key =
                 (!is_video).then(|| skin_source_asset_cache_key(&path, false)).flatten();
-            if let (Some(texture_cache), Some(cache_key)) = (texture_cache, cache_key.as_ref())
-                && let Ok(cache) = texture_cache.lock()
-                && let Some(cached) = cache.get(cache_key)
-            {
-                return Some(PreparedSource {
-                    source_id,
-                    path,
-                    texture: cached.texture,
-                    prepared: None,
-                    size: cached.size,
-                    is_video,
-                    cache_key: None,
-                });
+            match (texture_cache, cache_key.as_ref()) {
+                (Some(texture_cache), Some(cache_key)) => {
+                    if let Ok(cache) = texture_cache.lock()
+                        && let Some(cached) = cache.get(cache_key)
+                    {
+                        upload_stats.texture_cache_hits += 1;
+                        return Some(PreparedSource {
+                            source_id,
+                            path,
+                            texture: cached.texture,
+                            prepared: None,
+                            size: cached.size,
+                            is_video,
+                            cache_key: None,
+                        });
+                    }
+                    upload_stats.texture_cache_misses += 1;
+                }
+                (Some(_), None) => upload_stats.texture_cache_uncacheable += 1,
+                (None, _) => upload_stats.texture_cache_disabled += 1,
             }
             let texture = texture_cache
                 .and_then(|cache| {
                     cache.lock().ok().map(|mut cache| cache.allocate_texture_id(kind))
                 })
                 .unwrap_or(texture);
+            upload_stats.uploaded_source_count += 1;
+            upload_stats.uploaded_source_bytes =
+                upload_stats.uploaded_source_bytes.saturating_add(asset.pixels.len());
             let prepared = uploader.upload(asset.width, asset.height, &asset.pixels);
             Some(PreparedSource {
                 source_id,
@@ -334,7 +388,8 @@ pub fn upload_decoded_skin_with_texture_cache(
             })
         })
         .collect();
-    UploadedSkin { kind, document, fonts, prepared }
+    upload_stats.upload_us = elapsed_us(upload_start);
+    UploadedSkin { kind, document, fonts, prepared, decode_stats, upload_stats }
 }
 
 pub fn default_skin_root() -> PathBuf {
@@ -494,8 +549,10 @@ pub fn decode_beatoraja_skin_with_options_and_runtime_state_and_source_cache(
     runtime_state: &LuaLoadRuntimeState,
     source_cache: Option<SharedSkinSourceAssetCache>,
 ) -> Result<DecodedSkin> {
+    let document_start = Instant::now();
     let LoadedSkinDocumentForDecode { mut document, files: resolved_files } =
         load_skin_document(skin_path, kind, options, files, runtime_state)?;
+    let document_us = elapsed_us(document_start);
     // フォント ID は scene 横断的に Renderer のグローバルマップに登録されるので、
     // play / select / result で同じ "0" 等が衝突する。namespace を付与して隔離する。
     // text 定義の font 参照側も同じ namespace を付ける。
@@ -533,6 +590,8 @@ pub fn decode_beatoraja_skin_with_options_and_runtime_state_and_source_cache(
         })
         .collect();
 
+    let font_count = font_tasks.len();
+    let font_decode_start = Instant::now();
     let fonts: Vec<DecodedFont> = font_tasks
         .into_par_iter()
         .filter_map(|(stored_id, font_path)| match decode_font(&font_path) {
@@ -548,6 +607,7 @@ pub fn decode_beatoraja_skin_with_options_and_runtime_state_and_source_cache(
             }
         })
         .collect();
+    let font_decode_us = elapsed_us(font_decode_start);
 
     // ソースは ID 順を保つため、まず resolved path リストを順次組み立て、
     // PNG/動画先頭フレームのデコード本体だけを並列実行する。
@@ -600,11 +660,20 @@ pub fn decode_beatoraja_skin_with_options_and_runtime_state_and_source_cache(
         })
         .collect();
 
-    let mut decoded_pairs: Vec<(usize, String, PathBuf, RgbaImageAsset, bool)> = source_tasks
+    let source_task_count = source_tasks.len();
+    let source_decode_start = Instant::now();
+    let mut decoded_pairs: Vec<(
+        usize,
+        String,
+        PathBuf,
+        RgbaImageAsset,
+        bool,
+        Option<SourceCacheStatus>,
+    )> = source_tasks
         .into_par_iter()
         .filter_map(|task| match task {
             SourceDecodeTask::Builtin { index, source_id, path, asset } => {
-                Some((index, source_id, path, asset, false))
+                Some((index, source_id, path, asset, false, None))
             }
             SourceDecodeTask::File { index, source_id, path: source_path } => {
                 match load_source_asset_with_cache(
@@ -613,7 +682,9 @@ pub fn decode_beatoraja_skin_with_options_and_runtime_state_and_source_cache(
                     source_cache.as_ref(),
                     || load_png_rgba(&source_path),
                 ) {
-                    Ok(asset) => Some((index, source_id, source_path, asset, false)),
+                    Ok((asset, status)) => {
+                        Some((index, source_id, source_path, asset, false, Some(status)))
+                    }
                     Err(error) => {
                         if warn_missing_required && required_sources.contains(&source_id) {
                             tracing::warn!(
@@ -641,7 +712,9 @@ pub fn decode_beatoraja_skin_with_options_and_runtime_state_and_source_cache(
                     source_cache.as_ref(),
                     || load_skin_video_first_frame_rgba(&source_path),
                 ) {
-                    Ok(asset) => Some((index, source_id, source_path, asset, true)),
+                    Ok((asset, status)) => {
+                        Some((index, source_id, source_path, asset, true, Some(status)))
+                    }
                     Err(error) => {
                         tracing::warn!(
                             source_id = %source_id,
@@ -655,19 +728,45 @@ pub fn decode_beatoraja_skin_with_options_and_runtime_state_and_source_cache(
             }
         })
         .collect();
-    decoded_pairs.sort_by_key(|(index, _, _, _, _)| *index);
+    let source_decode_us = elapsed_us(source_decode_start);
+    decoded_pairs.sort_by_key(|(index, _, _, _, _, _)| *index);
+
+    let mut stats = SkinDecodeStats {
+        document_us,
+        font_count,
+        font_decode_us,
+        source_task_count,
+        source_decode_us,
+        ..Default::default()
+    };
+    for (_, _, _, asset, is_video, status) in &decoded_pairs {
+        stats.decoded_source_count += 1;
+        stats.decoded_source_bytes = stats.decoded_source_bytes.saturating_add(asset.pixels.len());
+        match (is_video, status) {
+            (_, None) => stats.builtin_source_count += 1,
+            (true, Some(_)) => stats.video_source_count += 1,
+            (false, Some(_)) => stats.image_source_count += 1,
+        }
+        match status {
+            Some(SourceCacheStatus::Hit) => stats.source_cache_hits += 1,
+            Some(SourceCacheStatus::Miss) => stats.source_cache_misses += 1,
+            Some(SourceCacheStatus::Uncacheable) => stats.source_cache_uncacheable += 1,
+            Some(SourceCacheStatus::Disabled) => stats.source_cache_disabled += 1,
+            None => {}
+        }
+    }
 
     let mut next_texture_id = kind.first_texture_id();
     let sources: Vec<DecodedSource> = decoded_pairs
         .into_iter()
-        .map(|(_, source_id, path, asset, is_video)| {
+        .map(|(_, source_id, path, asset, is_video, _)| {
             let texture = SkinTextureId(next_texture_id);
             next_texture_id += 1;
             DecodedSource { source_id, path, texture, asset, is_video }
         })
         .collect();
 
-    Ok(DecodedSkin { kind, document, fonts, sources })
+    Ok(DecodedSkin { kind, document, fonts, sources, stats })
 }
 
 fn lr2_builtin_source_asset(path: &str) -> Option<RgbaImageAsset> {
@@ -692,26 +791,30 @@ fn load_source_asset_with_cache<F>(
     is_video: bool,
     source_cache: Option<&SharedSkinSourceAssetCache>,
     load: F,
-) -> Result<RgbaImageAsset>
+) -> Result<(RgbaImageAsset, SourceCacheStatus)>
 where
     F: FnOnce() -> Result<RgbaImageAsset>,
 {
     let Some(source_cache) = source_cache else {
-        return load();
+        return load().map(|asset| (asset, SourceCacheStatus::Disabled));
     };
     let Some(key) = skin_source_asset_cache_key(path, is_video) else {
-        return load();
+        return load().map(|asset| (asset, SourceCacheStatus::Uncacheable));
     };
     if let Ok(cache) = source_cache.lock()
         && let Some(asset) = cache.get(&key)
     {
-        return Ok(asset);
+        return Ok((asset, SourceCacheStatus::Hit));
     }
     let asset = load()?;
     if let Ok(mut cache) = source_cache.lock() {
         cache.insert(key, asset.clone());
     }
-    Ok(asset)
+    Ok((asset, SourceCacheStatus::Miss))
+}
+
+fn elapsed_us(start: Instant) -> u64 {
+    start.elapsed().as_micros().min(u64::MAX as u128) as u64
 }
 
 fn skin_source_asset_cache_key(path: &Path, is_video: bool) -> Option<SkinSourceAssetCacheKey> {
@@ -891,7 +994,7 @@ pub fn install_decoded_skin(
     decoded: DecodedSkin,
     default_manifest: SkinManifest,
 ) -> Result<()> {
-    let DecodedSkin { kind, document, fonts, sources } = decoded;
+    let DecodedSkin { kind, document, fonts, sources, stats: _ } = decoded;
 
     for font in fonts {
         install_decoded_font(renderer, font);
@@ -4173,12 +4276,13 @@ mod tests {
         let cache = Arc::new(Mutex::new(SkinSourceAssetCache::default()));
         cache.lock().unwrap().insert(key, expected.clone());
 
-        let actual = load_source_asset_with_cache(&path, false, Some(&cache), || {
+        let (actual, status) = load_source_asset_with_cache(&path, false, Some(&cache), || {
             panic!("cache hit must not call source loader")
         })
         .unwrap();
 
         assert_eq!(actual, expected);
+        assert_eq!(status, SourceCacheStatus::Hit);
     }
 
     #[test]
@@ -4194,10 +4298,11 @@ mod tests {
         cache.lock().unwrap().insert(key, stale);
 
         std::fs::write(&path, b"new and longer").unwrap();
-        let actual =
+        let (actual, status) =
             load_source_asset_with_cache(&path, false, Some(&cache), || Ok(fresh.clone())).unwrap();
 
         assert_eq!(actual, fresh);
+        assert_eq!(status, SourceCacheStatus::Miss);
     }
 
     #[test]
