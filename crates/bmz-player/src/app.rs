@@ -12885,22 +12885,21 @@ fn lua_runtime_state_for_result_table_song(table_song: bool) -> bmz_skin::LuaLoa
 }
 
 /// リザルト画面で押すと終了アニメーションを開始するレーン。
-/// beatoraja の OK (Key1-4) / REPLAY_DIFFERENT (Key5) / REPLAY_SAME (Key7) に相当。
+/// BMZ では Key1/3/5/7 を「次へ進む」、Key2/4/6 を「戻る/変更」系に寄せるため、
+/// beatoraja と異なり Key2 は終了開始に使わない。
 /// Key6 は CHANGE_GRAPH、scratch は無割り当てなので開始しない。
 fn lane_starts_result_exit(lane: Lane) -> bool {
-    matches!(lane, Lane::Key1 | Lane::Key2 | Lane::Key3 | Lane::Key4 | Lane::Key5 | Lane::Key7)
+    matches!(lane, Lane::Key1 | Lane::Key3 | Lane::Key4 | Lane::Key5 | Lane::Key7)
 }
 
 fn lane_skips_result_exit(lane: Lane) -> bool {
     matches!(
         lane,
         Lane::Key1
-            | Lane::Key2
             | Lane::Key3
             | Lane::Key5
             | Lane::Key7
             | Lane::Key8
-            | Lane::Key9
             | Lane::Key10
             | Lane::Key12
             | Lane::Key14
@@ -17618,33 +17617,38 @@ mod tests {
     fn lane_skips_result_exit_matches_1p_and_2p_requested_keys() {
         for lane in [
             Lane::Key1,
-            Lane::Key2,
             Lane::Key3,
             Lane::Key5,
             Lane::Key7,
             Lane::Key8,
-            Lane::Key9,
             Lane::Key10,
             Lane::Key12,
             Lane::Key14,
         ] {
             assert!(lane_skips_result_exit(lane), "{lane:?} should skip");
         }
-        for lane in
-            [Lane::Scratch, Lane::Key4, Lane::Key6, Lane::Key11, Lane::Key13, Lane::Scratch2]
-        {
+        for lane in [
+            Lane::Scratch,
+            Lane::Key2,
+            Lane::Key4,
+            Lane::Key6,
+            Lane::Key9,
+            Lane::Key11,
+            Lane::Key13,
+            Lane::Scratch2,
+        ] {
             assert!(!lane_skips_result_exit(lane), "{lane:?} should not skip");
         }
     }
 
     #[test]
     fn result_exit_lanes_match_requested_mapping() {
-        // beatoraja の OK (Key1-4) / REPLAY (Key5, Key7) が開始する。
-        for lane in [Lane::Key1, Lane::Key2, Lane::Key3, Lane::Key4, Lane::Key5, Lane::Key7] {
+        // BMZ では Key2 を「戻る」系に寄せるため、終了開始から外す。
+        for lane in [Lane::Key1, Lane::Key3, Lane::Key4, Lane::Key5, Lane::Key7] {
             assert!(lane_starts_result_exit(lane), "{lane:?} should start result exit");
         }
         // Key6 は CHANGE_GRAPH、scratch は無割り当て。
-        for lane in [Lane::Scratch, Lane::Key6] {
+        for lane in [Lane::Scratch, Lane::Key2, Lane::Key6] {
             assert!(!lane_starts_result_exit(lane), "{lane:?} should not start result exit");
         }
     }
