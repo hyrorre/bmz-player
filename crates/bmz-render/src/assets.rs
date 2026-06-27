@@ -192,10 +192,27 @@ mod tests {
         assert_eq!(asset.height, 1);
     }
 
+    #[test]
+    fn load_chart_bga_image_decodes_data_song_fixture_images() {
+        let root = repo_root().join("data/songs/bga-compat");
+
+        for file_name in ["small.png", "still.gif", "tga_only.tga"] {
+            let asset = load_chart_bga_image(&root.join(file_name))
+                .unwrap_or_else(|error| panic!("failed to decode {file_name}: {error}"));
+
+            assert_eq!(asset.width, 256, "{file_name}");
+            assert_eq!(asset.height, 256, "{file_name}");
+        }
+    }
+
     fn temp_image_path(extension: &str) -> PathBuf {
         let stamp =
             std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
         std::env::temp_dir().join(format!("bmz-render-test-{stamp}.{extension}"))
+    }
+
+    fn repo_root() -> PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
     }
 
     fn test_bmp_24_bytes(width: i32, height: i32, pixels: &[[u8; 3]]) -> Vec<u8> {
