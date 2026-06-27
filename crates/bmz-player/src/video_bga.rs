@@ -23,12 +23,14 @@ pub fn update_video_bga_frames(
     render_now: TimeUs,
 ) {
     if !running.session.bga_enabled || !running.session.chart.metadata.has_bga {
+        running.video_bga_decoders.clear();
         return;
     }
 
     let RunningPlaySession { session, video_bga_decoders, failed_video_bga, bga_frames, .. } =
         running;
     let chart = &session.chart;
+    let mut active_video_assets = HashSet::new();
 
     // Base と Layer は BGA イベント時刻をビデオ開始時刻とする
     for kind in [BgaEventKind::Base, BgaEventKind::Layer, BgaEventKind::Layer2] {
@@ -44,6 +46,7 @@ pub fn update_video_bga_frames(
         if asset.kind != BgaAssetKind::Video {
             continue;
         }
+        active_video_assets.insert(asset.id);
 
         let video_offset_us = render_now.0 - event.time.0;
         update_single_video(
@@ -80,6 +83,7 @@ pub fn update_video_bga_frames(
                     return;
                 };
                 if asset.kind == BgaAssetKind::Video {
+                    active_video_assets.insert(asset.id);
                     let video_offset_us = render_now.0 - judge_time.0;
                     update_single_video(
                         renderer,
@@ -95,6 +99,8 @@ pub fn update_video_bga_frames(
             }
         }
     }
+
+    video_bga_decoders.retain(|asset_id, _| active_video_assets.contains(asset_id));
 }
 
 fn update_single_video(
