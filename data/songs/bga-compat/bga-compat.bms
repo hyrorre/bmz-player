@@ -6,6 +6,9 @@
 #PLAYLEVEL 1
 #RANK 2
 #TOTAL 160
+#STAGEFILE stage.bmp
+#BANNER banner.jpg
+#BACKBMP back.bmp
 #WAV01 ../sample-playable/key.wav
 #BMP01 small.bmp
 #BMP02 movie.mpg

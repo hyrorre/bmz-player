@@ -156,6 +156,9 @@ mod tests {
 
         assert!(result.warnings.is_empty(), "warnings: {:?}", result.warnings);
         assert_eq!(result.chart.metadata.title, "BMZ BGA Compatibility");
+        assert_eq!(result.chart.metadata.stage_file, "stage.bmp");
+        assert_eq!(result.chart.metadata.banner_file, "banner.jpg");
+        assert_eq!(result.chart.metadata.backbmp_file, "back.bmp");
         assert_eq!(result.chart.sounds.len(), 1);
         assert_eq!(result.chart.bga_assets.len(), 4);
         assert_eq!(result.chart.bga_events.len(), 4);

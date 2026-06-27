@@ -1,5 +1,6 @@
 use std::path::{Path, PathBuf};
 
+const CHART_IMAGE_EXTENSIONS: &[&str] = &["jpg", "jpeg", "gif", "bmp", "png", "tga"];
 const PREVIEW_AUDIO_EXTENSIONS: &[&str] = &["wav", "ogg", "mp3", "flac"];
 
 /// BMS ヘッダで指定された相対パスを曲フォルダ基準で解決する。
@@ -11,7 +12,10 @@ pub fn resolve_chart_asset_path(folder_path: &str, relative: &str) -> Option<Pat
     let path = Path::new(relative);
     let resolved =
         if path.is_absolute() { path.to_path_buf() } else { Path::new(folder_path).join(path) };
-    resolved.is_file().then_some(resolved)
+    if resolved.is_file() {
+        return Some(resolved);
+    }
+    resolve_same_stem_image_file(Path::new(folder_path), path)
 }
 
 pub fn normalize_preview_file(chart_path: &Path, preview_file: &str) -> String {
@@ -43,6 +47,23 @@ fn resolve_same_stem_audio_file(folder: &Path, relative: &Path) -> Option<PathBu
     let stem = base.file_stem()?.to_str()?;
     let parent = base.parent().unwrap_or(folder);
     for extension in PREVIEW_AUDIO_EXTENSIONS {
+        let candidate = parent.join(format!("{stem}.{extension}"));
+        if candidate.is_file() {
+            return Some(candidate);
+        }
+        let candidate = parent.join(format!("{stem}.{}", extension.to_ascii_uppercase()));
+        if candidate.is_file() {
+            return Some(candidate);
+        }
+    }
+    None
+}
+
+fn resolve_same_stem_image_file(folder: &Path, relative: &Path) -> Option<PathBuf> {
+    let base = if relative.is_absolute() { relative.to_path_buf() } else { folder.join(relative) };
+    let stem = base.file_stem()?.to_str()?;
+    let parent = base.parent().unwrap_or(folder);
+    for extension in CHART_IMAGE_EXTENSIONS {
         let candidate = parent.join(format!("{stem}.{extension}"));
         if candidate.is_file() {
             return Some(candidate);
@@ -132,6 +153,36 @@ mod tests {
     }
 
     #[test]
+    fn resolves_chart_meta_image_by_same_stem_extension() {
+        let dir = temp_dir("meta-image-extension");
+        let stage = dir.join("stage.png");
+        fs::write(&stage, b"png").unwrap();
+
+        let got = resolve_chart_asset_path(dir.to_str().unwrap(), "stage.bmp");
+
+        assert_eq!(got.as_deref(), Some(stage.as_path()));
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn resolves_chart_meta_images_from_bga_compat_fixture() {
+        let root = repo_root().join("data/songs/bga-compat");
+
+        assert_eq!(
+            fixture_relative(resolve_chart_asset_path(root.to_str().unwrap(), "stage.bmp")),
+            Some("stage.png".to_string())
+        );
+        assert_eq!(
+            fixture_relative(resolve_chart_asset_path(root.to_str().unwrap(), "banner.jpg")),
+            Some("banner.gif".to_string())
+        );
+        assert_eq!(
+            fixture_relative(resolve_chart_asset_path(root.to_str().unwrap(), "back.bmp")),
+            Some("back.tga".to_string())
+        );
+    }
+
+    #[test]
     fn normalizes_preview_to_existing_audio_extension() {
         let dir = temp_dir("preview-extension");
         fs::write(dir.join("_Preview.ogg"), b"ogg").unwrap();
@@ -171,5 +222,17 @@ mod tests {
         ));
         fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    fn repo_root() -> PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
+    }
+
+    fn fixture_relative(path: Option<PathBuf>) -> Option<String> {
+        path.and_then(|path| {
+            path.strip_prefix(repo_root().join("data/songs/bga-compat"))
+                .ok()
+                .map(|relative| relative.to_string_lossy().replace('\\', "/"))
+        })
     }
 }
