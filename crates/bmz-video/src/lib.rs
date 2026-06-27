@@ -19,6 +19,13 @@ pub struct VideoBgaDecoder {
     finished: bool,
 }
 
+struct SelectedVideoStream {
+    index: usize,
+    time_base_num: i64,
+    time_base_den: i64,
+    codec_params: ffmpeg_next::codec::Parameters,
+}
+
 impl VideoBgaDecoder {
     pub fn open(path: &Path) -> Result<Self> {
         bmz_ffmpeg::ensure_init().map_err(|e| anyhow::anyhow!(e))?;
@@ -90,25 +97,24 @@ pub fn decode_first_frame(path: &Path) -> Result<DecodedFrame> {
     bmz_ffmpeg::ensure_init().map_err(|e| anyhow::anyhow!(e))?;
 
     let mut ictx = ffmpeg_next::format::input(path)?;
-    let stream = ictx
-        .streams()
-        .best(ffmpeg_next::media::Type::Video)
-        .ok_or_else(|| anyhow::anyhow!("no video stream found"))?;
-
-    let stream_index = stream.index();
-    let time_base_num = stream.time_base().numerator() as i64;
-    let time_base_den = stream.time_base().denominator() as i64;
-    let context = ffmpeg_next::codec::context::Context::from_parameters(stream.parameters())?;
+    let selected = select_video_stream(&ictx)?;
+    let context = ffmpeg_next::codec::context::Context::from_parameters(selected.codec_params)?;
     let mut decoder = context.decoder().video()?;
     let mut decoded = ffmpeg_next::frame::Video::empty();
 
     for (stream, packet) in ictx.packets() {
-        if stream.index() != stream_index {
+        if stream.index() != selected.index {
             continue;
         }
         decoder.send_packet(&packet)?;
         match decoder.receive_frame(&mut decoded) {
-            Ok(()) => return rgba_frame_from_video(&decoded, time_base_num, time_base_den),
+            Ok(()) => {
+                return rgba_frame_from_video(
+                    &decoded,
+                    selected.time_base_num,
+                    selected.time_base_den,
+                );
+            }
             Err(ffmpeg_next::Error::Other { errno: ffmpeg_next::error::EAGAIN }) => {}
             Err(ffmpeg_next::Error::Eof) => {
                 return Err(anyhow::anyhow!("video ended before first frame"));
@@ -119,7 +125,7 @@ pub fn decode_first_frame(path: &Path) -> Result<DecodedFrame> {
 
     decoder.send_eof()?;
     match decoder.receive_frame(&mut decoded) {
-        Ok(()) => rgba_frame_from_video(&decoded, time_base_num, time_base_den),
+        Ok(()) => rgba_frame_from_video(&decoded, selected.time_base_num, selected.time_base_den),
         Err(e) => Err(e.into()),
     }
 }
@@ -127,26 +133,8 @@ pub fn decode_first_frame(path: &Path) -> Result<DecodedFrame> {
 fn decode_video(path: &Path, sender: SyncSender<DecodedFrame>) -> Result<()> {
     let mut ictx = ffmpeg_next::format::input(path)?;
 
-    // ベストビデオストリームを見つける
-    let stream_index;
-    let time_base_num;
-    let time_base_den;
-    let codec_params;
-
-    {
-        let stream = ictx
-            .streams()
-            .best(ffmpeg_next::media::Type::Video)
-            .ok_or_else(|| anyhow::anyhow!("no video stream found"))?;
-
-        stream_index = stream.index();
-        let tb = stream.time_base();
-        time_base_num = tb.numerator() as i64;
-        time_base_den = tb.denominator() as i64;
-        codec_params = stream.parameters();
-    }
-
-    let context = ffmpeg_next::codec::context::Context::from_parameters(codec_params)?;
+    let selected = select_video_stream(&ictx)?;
+    let context = ffmpeg_next::codec::context::Context::from_parameters(selected.codec_params)?;
     let mut decoder = context.decoder().video()?;
 
     // スケーラは最初のフレーム受信後に lazily 作成
@@ -155,7 +143,7 @@ fn decode_video(path: &Path, sender: SyncSender<DecodedFrame>) -> Result<()> {
     let mut decoded = ffmpeg_next::frame::Video::empty();
 
     for (stream, packet) in ictx.packets() {
-        if stream.index() != stream_index {
+        if stream.index() != selected.index {
             continue;
         }
 
@@ -171,8 +159,8 @@ fn decode_video(path: &Path, sender: SyncSender<DecodedFrame>) -> Result<()> {
 
             let frame = rgba_frame_from_video_with_scaler(
                 &decoded,
-                time_base_num,
-                time_base_den,
+                selected.time_base_num,
+                selected.time_base_den,
                 &mut scaler,
             )?;
 
@@ -193,14 +181,86 @@ fn decode_video(path: &Path, sender: SyncSender<DecodedFrame>) -> Result<()> {
             Err(e) => return Err(e.into()),
         }
 
-        let frame =
-            rgba_frame_from_video_with_scaler(&decoded, time_base_num, time_base_den, &mut scaler)?;
+        let frame = rgba_frame_from_video_with_scaler(
+            &decoded,
+            selected.time_base_num,
+            selected.time_base_den,
+            &mut scaler,
+        )?;
         if sender.send(frame).is_err() {
             return Ok(());
         }
     }
 
     Ok(())
+}
+
+fn select_video_stream(ictx: &ffmpeg_next::format::context::Input) -> Result<SelectedVideoStream> {
+    let best = ictx
+        .streams()
+        .best(ffmpeg_next::media::Type::Video)
+        .ok_or_else(|| anyhow::anyhow!("no video stream found"))?;
+    let best_index = best.index();
+    let mut candidates = Vec::new();
+    for stream in ictx.streams() {
+        let params = stream.parameters();
+        if params.medium() != ffmpeg_next::media::Type::Video {
+            continue;
+        }
+        candidates.push((stream.index(), video_stream_bit_rate(&params), params));
+    }
+    let selected_index = choose_beatoraja_video_stream(
+        best_index,
+        candidates.iter().map(|(index, bitrate, _)| (*index, *bitrate)),
+    );
+    let (stream_index, codec_params) = candidates
+        .into_iter()
+        .find_map(|(index, _, params)| (index == selected_index).then_some((index, params)))
+        .ok_or_else(|| anyhow::anyhow!("selected video stream not found"))?;
+    let stream = ictx
+        .stream(stream_index)
+        .ok_or_else(|| anyhow::anyhow!("selected video stream not available"))?;
+    let tb = stream.time_base();
+    tracing::debug!(stream_index, best_index, "selected video stream for BGA decode");
+    Ok(SelectedVideoStream {
+        index: stream_index,
+        time_base_num: tb.numerator() as i64,
+        time_base_den: tb.denominator() as i64,
+        codec_params,
+    })
+}
+
+fn video_stream_bit_rate(params: &ffmpeg_next::codec::Parameters) -> usize {
+    ffmpeg_next::codec::context::Context::from_parameters(params.clone())
+        .and_then(|context| context.decoder().video())
+        .map(|decoder| decoder.bit_rate())
+        .unwrap_or(0)
+}
+
+fn choose_beatoraja_video_stream(
+    best_index: usize,
+    candidates: impl IntoIterator<Item = (usize, usize)>,
+) -> usize {
+    let mut candidates = candidates.into_iter().collect::<Vec<_>>();
+    candidates.sort_by_key(|(index, _)| *index);
+    let best_bitrate = candidates
+        .iter()
+        .find_map(|(index, bitrate)| (*index == best_index).then_some(*bitrate))
+        .unwrap_or(0);
+    if best_bitrate >= 10 {
+        return best_index;
+    }
+    candidates
+        .iter()
+        .find_map(|(index, bitrate)| {
+            (*index > best_index && *index <= 5 && *bitrate >= 10).then_some(*index)
+        })
+        .or_else(|| {
+            candidates
+                .iter()
+                .find_map(|(index, bitrate)| (*index <= 5 && *bitrate >= 10).then_some(*index))
+        })
+        .unwrap_or(best_index)
 }
 
 fn rgba_frame_from_video(
@@ -285,6 +345,27 @@ mod tests {
             current: Some(frame(0)),
             finished: false,
         }
+    }
+
+    #[test]
+    fn choose_beatoraja_video_stream_keeps_best_when_bitrate_is_valid() {
+        let selected = choose_beatoraja_video_stream(1, [(0, 100), (1, 10), (2, 100), (6, 100)]);
+
+        assert_eq!(selected, 1);
+    }
+
+    #[test]
+    fn choose_beatoraja_video_stream_advances_from_low_bitrate_best() {
+        let selected = choose_beatoraja_video_stream(0, [(0, 0), (1, 0), (2, 100), (6, 100)]);
+
+        assert_eq!(selected, 2);
+    }
+
+    #[test]
+    fn choose_beatoraja_video_stream_falls_back_to_best_when_no_valid_retry_exists() {
+        let selected = choose_beatoraja_video_stream(0, [(0, 0), (1, 0), (6, 100)]);
+
+        assert_eq!(selected, 0);
     }
 
     fn decoder_with_channel(
