@@ -75,7 +75,9 @@ mod tests {
     use bmz_core::lane::Lane;
 
     use crate::hash::compute_chart_identity;
-    use crate::model::{BgaEventKind, JudgeRankKind, LongNoteStyle, NoteKind, TimingEventKind};
+    use crate::model::{
+        BgaAssetKind, BgaEventKind, JudgeRankKind, LongNoteStyle, NoteKind, TimingEventKind,
+    };
 
     use super::*;
 
@@ -144,6 +146,32 @@ mod tests {
         std::fs::remove_file(base_dir.join("key.wav")).unwrap();
         std::fs::remove_file(base_dir.join("bgm.wav")).unwrap();
         std::fs::remove_file(base_dir.join("bga.png")).unwrap();
+    }
+
+    #[test]
+    fn imports_data_song_bga_compat_fixture() {
+        let path = repo_root().join("data/songs/bga-compat/bga-compat.bms");
+
+        let result = import_bms_chart(&path, None, true).unwrap();
+
+        assert!(result.warnings.is_empty(), "warnings: {:?}", result.warnings);
+        assert_eq!(result.chart.metadata.title, "BMZ BGA Compatibility");
+        assert_eq!(result.chart.sounds.len(), 1);
+        assert_eq!(result.chart.bga_assets.len(), 4);
+        assert_eq!(result.chart.bga_events.len(), 4);
+
+        assert_eq!(
+            [1, 2, 3, 4]
+                .into_iter()
+                .map(|key| bga_asset_path_for_key(&result.chart, key))
+                .collect::<Vec<_>>(),
+            vec![
+                (BgaAssetKind::Static, "data/songs/bga-compat/small.png".to_string()),
+                (BgaAssetKind::Video, "data/songs/bga-compat/movie.webm".to_string()),
+                (BgaAssetKind::Static, "data/songs/bga-compat/still.gif".to_string()),
+                (BgaAssetKind::Static, "data/songs/bga-compat/tga_only.tga".to_string()),
+            ]
+        );
     }
 
     #[test]
@@ -777,5 +805,18 @@ mod tests {
         let mut file = std::fs::File::create(path).unwrap();
         file.write_all(b"").unwrap();
         file.sync_all().unwrap();
+    }
+
+    fn repo_root() -> std::path::PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
+    }
+
+    fn bga_asset_path_for_key(chart: &PlayableChart, key: u16) -> (BgaAssetKind, String) {
+        let asset_id = chart.bga_asset_by_bmp_key[&key];
+        let asset = chart.bga_assets.iter().find(|asset| asset.id == asset_id).unwrap();
+        (
+            asset.kind,
+            asset.path.strip_prefix(repo_root()).unwrap().to_string_lossy().replace('\\', "/"),
+        )
     }
 }

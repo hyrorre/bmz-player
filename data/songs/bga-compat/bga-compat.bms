@@ -1,0 +1,16 @@
+#PLAYER 1
+#GENRE BMZ
+#TITLE BMZ BGA Compatibility
+#ARTIST bmz-player
+#BPM 120
+#PLAYLEVEL 1
+#RANK 2
+#TOTAL 160
+#WAV01 ../sample-playable/key.wav
+#BMP01 small.bmp
+#BMP02 movie.mpg
+#BMP03 still.gif
+#BMP04 tga_only.tga
+
+#00004:01020304
+#00011:01
