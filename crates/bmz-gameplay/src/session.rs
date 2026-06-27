@@ -154,6 +154,8 @@ pub struct GameSession {
     pub hispeed: f32,
     pub hispeed_mode: HispeedMode,
     pub target_green_number: u32,
+    /// Floating hispeed の曲開始前基準 BPM。曲開始後は現在 BPM で再計算する。
+    pub hsfix_base_bpm: f64,
     pub lift: f32,
     pub lane_cover: f32,
     /// レーンカバー(SUDDEN+)の表示有無。
@@ -2024,6 +2026,7 @@ mod tests {
             hispeed: 2.0,
             hispeed_mode: HispeedMode::Normal,
             target_green_number: 300,
+            hsfix_base_bpm: 120.0,
             lift: 0.0,
             lane_cover: 0.0,
             lane_cover_visible: true,

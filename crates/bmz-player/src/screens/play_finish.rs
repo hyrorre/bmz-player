@@ -1022,6 +1022,7 @@ mod tests {
             hispeed: 2.0,
             hispeed_mode: bmz_gameplay::session::HispeedMode::Normal,
             target_green_number: 300,
+            hsfix_base_bpm: 120.0,
             lift: 0.0,
             lane_cover: 0.0,
             lane_cover_visible: true,

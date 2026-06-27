@@ -13841,7 +13841,7 @@ fn note_display_duration_ms_for_hispeed(
     lane_cover: f32,
     now: TimeUs,
 ) -> f32 {
-    let now_bpm = session.timing_map.bpm_at_time(now).max(1.0);
+    let now_bpm = floating_hispeed_target_bpm(session, now);
     let scroll_multiplier = crate::screens::play_snapshot::current_scroll_multiplier(
         &session.chart,
         &session.timing_map,
@@ -13862,7 +13862,7 @@ fn hispeed_for_green_number(
 ) -> f32 {
     let target_green = session.target_green_number.max(1) as f32;
     let visible_max = (1.0 - lane_cover).clamp(0.0, 1.0);
-    let now_bpm = session.timing_map.bpm_at_time(now).max(1.0);
+    let now_bpm = floating_hispeed_target_bpm(session, now);
     let scroll_multiplier = crate::screens::play_snapshot::current_scroll_multiplier(
         &session.chart,
         &session.timing_map,
@@ -13871,6 +13871,14 @@ fn hispeed_for_green_number(
     let hispeed =
         hispeed_for_green_number_values(target_green, visible_max, now_bpm, scroll_multiplier);
     hispeed.clamp(0.5, 10.0)
+}
+
+fn floating_hispeed_target_bpm(session: &bmz_gameplay::session::GameSession, now: TimeUs) -> f64 {
+    if session.audio_clock.running && now.0 >= 0 {
+        session.timing_map.bpm_at_time(now).max(1.0)
+    } else {
+        session.hsfix_base_bpm.max(1.0)
+    }
 }
 
 fn hispeed_for_green_number_values(
@@ -15087,6 +15095,39 @@ mod tests {
     use crate::storage::score_db::BestScoreSummary;
 
     use super::*;
+
+    fn app_test_chart() -> bmz_chart::model::PlayableChart {
+        bmz_chart::model::PlayableChart {
+            identity: bmz_core::chart::ChartIdentity { file_md5: [0; 16], file_sha256: [0; 32] },
+            metadata: bmz_chart::model::ChartMetadata {
+                title: "app test".to_string(),
+                initial_bpm: 120.0,
+                total: Some(160.0),
+                ..Default::default()
+            },
+            lane_notes: std::array::from_fn(|_| Vec::new()),
+            long_notes: Vec::new(),
+            bgm_events: Vec::new(),
+            bga_events: Vec::new(),
+            timing_events: Vec::new(),
+            scroll_events: Vec::new(),
+            speed_events: Vec::new(),
+            judge_rank_events: Vec::new(),
+            bgm_volume_events: Vec::new(),
+            key_volume_events: Vec::new(),
+            text_events: Vec::new(),
+            bga_opacity_events: Vec::new(),
+            bga_argb_events: Vec::new(),
+            swbga_definitions: Vec::new(),
+            bga_keybound_events: Vec::new(),
+            bga_asset_by_bmp_key: std::collections::HashMap::new(),
+            bar_lines: Vec::new(),
+            sounds: Vec::new(),
+            bga_assets: Vec::new(),
+            total_notes: 0,
+            end_time: TimeUs(0),
+        }
+    }
 
     #[test]
     fn skin_video_play_level_number_extracts_digits_without_allocating_label_shapes() {
@@ -17090,6 +17131,65 @@ mod tests {
 
         assert_eq!(profile.lane.hispeed, 2.25);
         assert_eq!(profile.lane.target_green_number, 533);
+    }
+
+    #[test]
+    fn floating_hispeed_recalculation_uses_hsfix_base_before_chart_start() {
+        let mut profile = ProfileConfig::new_default("default", "Default", 1);
+        profile.lane.hispeed_mode = HispeedModeConfig::Floating;
+        profile.lane.target_green_number = 300;
+        let mut chart = app_test_chart();
+        chart.metadata.initial_bpm = 120.0;
+        chart.timing_events.push(bmz_chart::model::TimingEvent {
+            tick: bmz_core::time::ChartTick(48),
+            time: TimeUs(1_000_000),
+            kind: bmz_chart::model::TimingEventKind::BpmChange { bpm: 240.0 },
+        });
+        let mut session = crate::screens::play_session::build_game_session(
+            std::sync::Arc::new(chart),
+            &profile,
+            crate::screens::play_session::PlaySessionOptions {
+                hs_fix: HsFixOption::MaxBpm,
+                ..Default::default()
+            },
+        );
+        session.lane_cover = 0.25;
+
+        reset_floating_hispeed_if_enabled(&mut session, false);
+
+        assert_eq!(session.hsfix_base_bpm, 240.0);
+        assert!((session.hispeed - 1.5).abs() < 0.000_1, "hispeed={}", session.hispeed);
+    }
+
+    #[test]
+    fn floating_hispeed_recalculation_uses_current_bpm_after_chart_start() {
+        let mut profile = ProfileConfig::new_default("default", "Default", 1);
+        profile.lane.hispeed_mode = HispeedModeConfig::Floating;
+        profile.lane.target_green_number = 300;
+        let mut chart = app_test_chart();
+        chart.metadata.initial_bpm = 120.0;
+        chart.timing_events.push(bmz_chart::model::TimingEvent {
+            tick: bmz_core::time::ChartTick(48),
+            time: TimeUs(1_000_000),
+            kind: bmz_chart::model::TimingEventKind::BpmChange { bpm: 240.0 },
+        });
+        let frame = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let mut session = crate::screens::play_session::build_game_session(
+            std::sync::Arc::new(chart),
+            &profile,
+            crate::screens::play_session::PlaySessionOptions {
+                hs_fix: HsFixOption::MaxBpm,
+                ..Default::default()
+            },
+        );
+        session.audio_clock =
+            bmz_audio::clock::AudioClock::with_position(48_000, 0, 0, frame, true);
+        session.lane_cover = 0.25;
+
+        reset_floating_hispeed_if_enabled(&mut session, false);
+
+        assert_eq!(session.hsfix_base_bpm, 240.0);
+        assert!((session.hispeed - 3.0).abs() < 0.000_1, "hispeed={}", session.hispeed);
     }
 
     #[test]

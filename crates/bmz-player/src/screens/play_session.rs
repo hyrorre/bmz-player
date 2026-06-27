@@ -5,7 +5,7 @@ use bmz_audio::ffmpeg_loader::FfmpegSampleLoader;
 use bmz_audio::loader::{LoadedSampleReport, SampleLoader, load_chart_samples};
 use bmz_audio::loudness::analyze_chart_loudness;
 use bmz_chart::import::import_bms_chart;
-use bmz_chart::model::{BgaAssetRef, NoteEvent, NoteKind, PlayableChart};
+use bmz_chart::model::{BgaAssetRef, NoteEvent, NoteKind, PlayableChart, TimingEventKind};
 use bmz_core::clear::GaugeType;
 use bmz_core::ids::NoteId;
 use bmz_core::lane::{KeyMode, LANE_COUNT, Lane};
@@ -359,6 +359,7 @@ pub fn build_game_session_with_input_backend(
     let hispeed_mode = hispeed_mode_from_profile(profile.lane.hispeed_mode);
     let target_green_number = profile.lane.target_green_number.max(1);
     let lane_cover = lane_unit_to_f32(profile.lane.sudden);
+    let hsfix_base_bpm = hsfix_base_bpm_for_chart(&chart, &timing_map, options.hs_fix);
     let hispeed = initial_hispeed_for_mode(
         profile,
         hispeed_mode,
@@ -366,6 +367,7 @@ pub fn build_game_session_with_input_backend(
         lane_cover,
         &chart,
         &timing_map,
+        options.hs_fix,
     );
 
     // Course judge constraints narrow the judge window so the corresponding
@@ -467,6 +469,7 @@ pub fn build_game_session_with_input_backend(
         hispeed,
         hispeed_mode,
         target_green_number,
+        hsfix_base_bpm,
         lift: lane_unit_to_f32(profile.lane.lift),
         lane_cover,
         lane_cover_visible: true,
@@ -484,7 +487,7 @@ pub fn build_game_session_with_input_backend(
         lane_hcn_keysound_muted: [None; bmz_core::lane::LANE_COUNT],
         pending_keysounds: Vec::new(),
         pending_keysound_volumes: Vec::new(),
-        hsfix_index: 0,
+        hsfix_index: hsfix_index_from_option(options.hs_fix),
         input_timestamp_anchor: None,
         pending_mine_hits: Vec::new(),
         state: PlayState::Ready,
@@ -494,6 +497,16 @@ pub fn build_game_session_with_input_backend(
 
 fn clamp_hispeed(hispeed: f32) -> f32 {
     hispeed.clamp(0.5, 10.0)
+}
+
+fn hsfix_index_from_option(option: HsFixOption) -> i32 {
+    match option {
+        HsFixOption::Off => 0,
+        HsFixOption::StartBpm => 1,
+        HsFixOption::MaxBpm => 2,
+        HsFixOption::MainBpm => 3,
+        HsFixOption::MinBpm => 4,
+    }
 }
 
 fn apply_judge_constraint_to_windows(
@@ -539,12 +552,13 @@ fn initial_hispeed_for_mode(
     lane_cover: f32,
     chart: &PlayableChart,
     timing_map: &bmz_chart::timing::TimingMap,
+    hs_fix: HsFixOption,
 ) -> f32 {
     if hispeed_mode == HispeedMode::Normal {
         return clamp_hispeed(profile.lane.hispeed);
     }
 
-    let now_bpm = timing_map.bpm_at_time(TimeUs(0));
+    let now_bpm = hsfix_base_bpm_for_chart(chart, timing_map, hs_fix);
     let scroll_multiplier =
         crate::screens::play_snapshot::current_scroll_multiplier(chart, timing_map, TimeUs(0));
     let visible_max = (1.0 - lane_cover).clamp(0.0, 1.0);
@@ -555,6 +569,71 @@ fn initial_hispeed_for_mode(
         scroll_multiplier,
     )
     .clamp(0.5, 10.0)
+}
+
+fn hsfix_base_bpm_for_chart(
+    chart: &PlayableChart,
+    timing_map: &bmz_chart::timing::TimingMap,
+    hs_fix: HsFixOption,
+) -> f64 {
+    match hs_fix {
+        HsFixOption::Off | HsFixOption::StartBpm => chart.metadata.initial_bpm,
+        HsFixOption::MinBpm => chart
+            .timing_events
+            .iter()
+            .filter_map(|event| match event.kind {
+                TimingEventKind::BpmChange { bpm } => Some(bpm),
+                TimingEventKind::Stop { .. } => None,
+            })
+            .fold(chart.metadata.initial_bpm, f64::min),
+        HsFixOption::MaxBpm => chart
+            .timing_events
+            .iter()
+            .filter_map(|event| match event.kind {
+                TimingEventKind::BpmChange { bpm } => Some(bpm),
+                TimingEventKind::Stop { .. } => None,
+            })
+            .fold(chart.metadata.initial_bpm, f64::max),
+        HsFixOption::MainBpm => main_bpm_for_chart(chart, timing_map),
+    }
+    .max(1.0)
+}
+
+fn main_bpm_for_chart(chart: &PlayableChart, timing_map: &bmz_chart::timing::TimingMap) -> f64 {
+    let mut counted = std::collections::HashSet::new();
+    let mut counts: Vec<(f64, u32)> = Vec::new();
+    for note in chart.lane_notes.iter().flatten() {
+        if note.kind == NoteKind::Mine {
+            continue;
+        }
+        counted.insert(note.id);
+        let bpm = timing_map.bpm_at_time(note.time);
+        if let Some((_, count)) =
+            counts.iter_mut().find(|(value, _)| value.to_bits() == bpm.to_bits())
+        {
+            *count = count.saturating_add(1);
+        } else {
+            counts.push((bpm, 1));
+        }
+    }
+    for long in &chart.long_notes {
+        if !counted.insert(long.start_note_id) {
+            continue;
+        }
+        let bpm = timing_map.bpm_at_time(long.start_time);
+        if let Some((_, count)) =
+            counts.iter_mut().find(|(value, _)| value.to_bits() == bpm.to_bits())
+        {
+            *count = count.saturating_add(1);
+        } else {
+            counts.push((bpm, 1));
+        }
+    }
+    counts
+        .into_iter()
+        .max_by_key(|(_, count)| *count)
+        .map(|(bpm, _)| bpm)
+        .unwrap_or(chart.metadata.initial_bpm)
 }
 
 fn placeholder_hispeed_for_mode(
@@ -2478,6 +2557,49 @@ mod tests {
         assert_eq!(session.hispeed_mode, HispeedMode::Floating);
         assert_eq!(session.target_green_number, 300);
         assert!((session.hispeed - 2.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn build_game_session_initializes_floating_hispeed_for_hsfix_base_bpm() {
+        let mut profile = ProfileConfig::new_default("default", "Default", 1);
+        profile.lane.hispeed_mode = HispeedModeConfig::Floating;
+        profile.lane.target_green_number = 300;
+        let mut bpm_chart = chart();
+        bpm_chart.metadata.initial_bpm = 120.0;
+        bpm_chart.timing_events.push(bmz_chart::model::TimingEvent {
+            tick: bmz_core::time::ChartTick(48),
+            time: TimeUs(1_000_000),
+            kind: TimingEventKind::BpmChange { bpm: 240.0 },
+        });
+
+        let session = build_game_session(
+            Arc::new(bpm_chart),
+            &profile,
+            PlaySessionOptions { hs_fix: HsFixOption::MaxBpm, ..PlaySessionOptions::default() },
+        );
+
+        assert_eq!(session.hsfix_base_bpm, 240.0);
+        assert_eq!(session.hsfix_index, 2);
+        assert!((session.hispeed - 2.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn main_bpm_uses_bpm_with_most_notes() {
+        let mut bpm_chart = chart();
+        bpm_chart.timing_events.push(bmz_chart::model::TimingEvent {
+            tick: bmz_core::time::ChartTick(48),
+            time: TimeUs(1_000_000),
+            kind: TimingEventKind::BpmChange { bpm: 180.0 },
+        });
+        bpm_chart.lane_notes[Lane::Key1.index()].push(note(1, Lane::Key1, 0));
+        bpm_chart.lane_notes[Lane::Key2.index()].push(note(2, Lane::Key2, 1_100_000));
+        bpm_chart.lane_notes[Lane::Key3.index()].push(note(3, Lane::Key3, 1_200_000));
+        let timing_map = bmz_chart::timing::TimingMap::from_chart_timing_events(
+            bpm_chart.metadata.initial_bpm,
+            &bpm_chart.timing_events,
+        );
+
+        assert_eq!(hsfix_base_bpm_for_chart(&bpm_chart, &timing_map, HsFixOption::MainBpm), 180.0);
     }
 
     #[test]
