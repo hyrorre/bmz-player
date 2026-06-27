@@ -13,6 +13,8 @@
 !/data/songs/sample-playable/**
 !/data/songs/sample-playable-9k/
 !/data/songs/sample-playable-9k/**
+!/data/songs/bga-compat/
+!/data/songs/bga-compat/**
 /.local/
 /.claude/settings.local.json
 
