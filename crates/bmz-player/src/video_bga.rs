@@ -4,7 +4,7 @@ use bmz_chart::model::{BgaAssetId, BgaAssetKind, BgaEventKind};
 use bmz_core::judge::Judge;
 use bmz_core::time::TimeUs;
 use bmz_render::plan::TextureId;
-use bmz_video::VideoBgaDecoder;
+use bmz_video::{DecodedFrame, VideoBgaDecoder, decode_first_frame};
 
 use crate::audio::RunningPlaySession;
 use crate::screens::play_snapshot::{BgaFrameCatalog, bga_texture_id, display_video_bga_frame};
@@ -118,6 +118,18 @@ fn update_single_video(
     };
 
     if needs_new {
+        let initial_frame = match decode_first_frame(path) {
+            Ok(frame) => Some(frame),
+            Err(error) => {
+                tracing::debug!(
+                    asset_id = asset_id.0,
+                    path = %path.display(),
+                    %error,
+                    "failed to decode first video BGA frame before async playback"
+                );
+                None
+            }
+        };
         match VideoBgaDecoder::open(path) {
             Ok(decoder) => {
                 video_bga_decoders.insert(
@@ -125,6 +137,12 @@ fn update_single_video(
                     ActiveVideoBgaDecoder { event_start_time, decoder, last_pts: None },
                 );
                 tracing::info!(asset_id = asset_id.0, path = %path.display(), "opened video BGA decoder");
+                if let Some(frame) = initial_frame
+                    && upload_video_bga_frame(renderer, bga_frames, asset_id, &frame)
+                    && let Some(active) = video_bga_decoders.get_mut(&asset_id)
+                {
+                    active.last_pts = Some(frame.pts_us);
+                }
             }
             Err(e) => {
                 tracing::warn!(asset_id = asset_id.0, %e, "failed to open video BGA; skipping");
@@ -139,17 +157,32 @@ fn update_single_video(
         && active.last_pts != Some(frame.pts_us)
     {
         let pts = frame.pts_us;
-        let texture_id = TextureId(bga_texture_id(asset_id));
-        let width = frame.width;
-        let height = frame.height;
-        match renderer.upsert_rgba_texture_ref(texture_id, width, height, &frame.rgba) {
-            Ok(()) => {
-                active.last_pts = Some(pts);
-                bga_frames.insert(asset_id, display_video_bga_frame(asset_id, width, height));
-            }
-            Err(e) => {
-                tracing::warn!(asset_id = asset_id.0, %e, "failed to upload video BGA frame");
-            }
+        if upload_video_bga_frame(renderer, bga_frames, asset_id, frame) {
+            active.last_pts = Some(pts);
+        }
+    }
+}
+
+fn upload_video_bga_frame(
+    renderer: &mut bmz_render::renderer::Renderer,
+    bga_frames: &mut BgaFrameCatalog,
+    asset_id: BgaAssetId,
+    frame: &DecodedFrame,
+) -> bool {
+    let texture_id = TextureId(bga_texture_id(asset_id));
+    match renderer.upsert_rgba_texture_ref(texture_id, frame.width, frame.height, &frame.rgba) {
+        Ok(()) => {
+            bga_frames
+                .insert(asset_id, display_video_bga_frame(asset_id, frame.width, frame.height));
+            true
+        }
+        Err(error) => {
+            tracing::warn!(
+                asset_id = asset_id.0,
+                %error,
+                "failed to upload video BGA frame"
+            );
+            false
         }
     }
 }
