@@ -368,6 +368,16 @@ mod tests {
         assert_eq!(selected, 0);
     }
 
+    #[test]
+    fn decode_first_frame_reads_data_song_video_fixture() {
+        let frame = decode_first_frame(&repo_root().join("data/songs/bga-compat/movie.webm"))
+            .expect("fixture movie must decode");
+
+        assert_eq!(frame.width, 2);
+        assert_eq!(frame.height, 2);
+        assert_eq!(frame.rgba.len(), 2 * 2 * 4);
+    }
+
     fn decoder_with_channel(
         pending: impl IntoIterator<Item = i64>,
     ) -> (SyncSender<DecodedFrame>, VideoBgaDecoder) {
@@ -445,5 +455,9 @@ mod tests {
         let copied = copy_rgba_frame_data(&data, 6, 4, 2);
 
         assert_eq!(copied, vec![1, 2, 3, 4, 5, 6, 7, 8]);
+    }
+
+    fn repo_root() -> std::path::PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
     }
 }
