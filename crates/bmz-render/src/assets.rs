@@ -37,7 +37,7 @@ pub fn load_static_rgba_image(path: &Path) -> Result<RgbaImageAsset> {
         .unwrap_or_default()
         .to_ascii_lowercase();
     match extension.as_str() {
-        "png" | "bmp" | "jpg" | "jpeg" => load_image_rgba(path),
+        "png" | "bmp" | "jpg" | "jpeg" | "gif" | "tga" => load_image_rgba(path),
         _ => bail!("unsupported image format: {}", path.display()),
     }
 }
@@ -96,6 +96,25 @@ mod tests {
         assert_eq!(asset.width, 2);
         assert_eq!(asset.height, 2);
         std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn load_static_rgba_image_decodes_beatoraja_image_extensions() {
+        for (extension, format) in
+            [("gif", image::ImageFormat::Gif), ("tga", image::ImageFormat::Tga)]
+        {
+            let path = temp_image_path(extension);
+            let buffer = image::RgbaImage::from_raw(1, 1, vec![12, 34, 56, 255]).unwrap();
+            buffer.save_with_format(&path, format).unwrap();
+
+            let asset = load_static_rgba_image(&path)
+                .unwrap_or_else(|error| panic!("failed to decode {extension}: {error}"));
+
+            assert_eq!(asset.width, 1);
+            assert_eq!(asset.height, 1);
+            assert_eq!(asset.pixels, vec![12, 34, 56, 255]);
+            std::fs::remove_file(path).unwrap();
+        }
     }
 
     #[test]
