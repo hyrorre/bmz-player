@@ -109,9 +109,9 @@ use crate::screens::settings_model::{
 };
 use crate::select_options::{ArrangeOption, AssistOption, DoubleOption, HsFixOption, TargetOption};
 use crate::skin_loader::{
-    DecodedSkin, PreparedSource, SharedSkinGpuTextureCache, SharedSkinSourceAssetCache,
-    SkinGpuTextureCache, SkinKind, SkinSourceAssetCache, UploadedSkin,
-    decode_beatoraja_skin_with_options,
+    DecodedSkin, PreparedSource, SharedSkinFontCache, SharedSkinGpuTextureCache,
+    SharedSkinSourceAssetCache, SkinFontCache, SkinFontCacheKey, SkinGpuTextureCache, SkinKind,
+    SkinSourceAssetCache, UploadedSkin, decode_beatoraja_skin_with_options,
     decode_beatoraja_skin_with_options_and_runtime_state_and_source_cache,
     default_play_skin_document_path_from_paths, default_skin_document_path_from_paths,
     enabled_options_from_selections, install_decoded_font, install_decoded_skin,
@@ -435,7 +435,11 @@ struct WinitApp {
     skin_upload_worker_started: bool,
     /// スキン reload 時に同一 source PNG / 動画 first frame の再デコードを避ける cache。
     skin_source_asset_cache: SharedSkinSourceAssetCache,
-    /// GPU に挿入済みの同一 skin static image texture を reload 間で再利用する cache。
+    /// スキン reload 時に同一 font の再デコードを避ける cache。
+    skin_font_cache: SharedSkinFontCache,
+    /// Renderer に登録済みの font key。reload 時に同一 font の install と text atlas reset を避ける。
+    skin_installed_font_cache: HashMap<String, SkinFontCacheKey>,
+    /// GPU に挿入済みの同一 skin source texture を reload 間で再利用する cache。
     skin_gpu_texture_cache: SharedSkinGpuTextureCache,
     bga_load_generation: u64,
     bga_load_chart_id: Option<i64>,
@@ -1659,6 +1663,7 @@ impl WinitApp {
         let (skin_decode_tx, skin_decode_rx) = mpsc::channel::<PendingSkinResult>();
         let (skin_upload_tx, skin_upload_rx) = mpsc::channel::<PendingUploadResult>();
         let skin_source_asset_cache = Arc::new(Mutex::new(SkinSourceAssetCache::default()));
+        let skin_font_cache = Arc::new(Mutex::new(SkinFontCache::default()));
         let skin_gpu_texture_cache = Arc::new(Mutex::new(SkinGpuTextureCache::default()));
         let (select_meta_image_tx, select_meta_image_rx) = mpsc::channel::<SelectMetaImageResult>();
         let (select_preview_tx, select_preview_rx) = mpsc::channel::<SelectPreviewResult>();
@@ -1675,6 +1680,7 @@ impl WinitApp {
             &boot.app_paths,
             &skin_decode_tx,
             &skin_source_asset_cache,
+            &skin_font_cache,
             0,
             &boot.profile_config.skin.select,
             &boot.profile_config.skin.decide,
@@ -1820,6 +1826,8 @@ impl WinitApp {
             skin_upload_rx,
             skin_upload_worker_started: false,
             skin_source_asset_cache,
+            skin_font_cache,
+            skin_installed_font_cache: HashMap::new(),
             skin_gpu_texture_cache,
             bga_load_generation: 0,
             bga_load_chart_id: None,
@@ -8522,6 +8530,7 @@ impl WinitApp {
         spawn_skin_decode(
             self.skin_decode_tx.clone(),
             self.skin_source_asset_cache.clone(),
+            self.skin_font_cache.clone(),
             generation,
             path,
             SkinKind::Result,
@@ -8610,10 +8619,33 @@ impl WinitApp {
         };
         let UploadedSkin { kind, document, fonts, prepared, decode_stats, upload_stats } = uploaded;
         let font_count = fonts.len();
-        // フォント登録 (ab_glyph パース。軽量なので main で実施)。
+        let font_install_start = Instant::now();
+        let mut font_install_count = 0usize;
+        let mut font_install_skip_count = 0usize;
+        let mut font_install_failed_count = 0usize;
+        // フォント登録。reload 間で同一 font key の場合は text atlas reset ごと避ける。
         for font in fonts {
-            install_decoded_font(&mut self.renderer, font);
+            let stored_id = font.stored_id.clone();
+            let cache_key = font.cache_key.clone();
+            if let Some(cache_key) = cache_key.as_ref()
+                && self.skin_installed_font_cache.get(&stored_id) == Some(cache_key)
+            {
+                font_install_skip_count += 1;
+                continue;
+            }
+            if install_decoded_font(&mut self.renderer, font) {
+                font_install_count += 1;
+                if let Some(cache_key) = cache_key {
+                    self.skin_installed_font_cache.insert(stored_id, cache_key);
+                } else {
+                    self.skin_installed_font_cache.remove(&stored_id);
+                }
+            } else {
+                font_install_failed_count += 1;
+                self.skin_installed_font_cache.remove(&stored_id);
+            }
         }
+        let font_install_us = instant_elapsed_us_u64(font_install_start);
         // アップロード済みテクスチャを差し込み、SkinDocumentTexture を組む。
         let mut document_textures = Vec::with_capacity(prepared.len());
         let mut video_sources = Vec::new();
@@ -8673,6 +8705,14 @@ impl WinitApp {
             document_us = decode_stats.document_us,
             font_count,
             font_decode_us = decode_stats.font_decode_us,
+            font_cache_hits = decode_stats.font_cache_hits,
+            font_cache_misses = decode_stats.font_cache_misses,
+            font_cache_uncacheable = decode_stats.font_cache_uncacheable,
+            font_cache_disabled = decode_stats.font_cache_disabled,
+            font_install_us,
+            font_installed = font_install_count,
+            font_install_skipped = font_install_skip_count,
+            font_install_failed = font_install_failed_count,
             source_task_count = decode_stats.source_task_count,
             source_decode_us = decode_stats.source_decode_us,
             decoded_sources = decode_stats.decoded_source_count,
@@ -9566,6 +9606,7 @@ impl WinitApp {
             &self.boot.app_paths,
             &self.skin_decode_tx,
             &self.skin_source_asset_cache,
+            &self.skin_font_cache,
             &mut self.skin_reload_generations,
             texture_request,
             &skin.select,
@@ -9736,6 +9777,7 @@ impl WinitApp {
         spawn_skin_decode(
             self.skin_decode_tx.clone(),
             self.skin_source_asset_cache.clone(),
+            self.skin_font_cache.clone(),
             generation,
             path,
             SkinKind::Play,
@@ -10439,6 +10481,7 @@ fn load_initial_skin_textures(
     app_paths: &crate::paths::AppPaths,
     skin_decode_tx: &mpsc::Sender<PendingSkinResult>,
     skin_source_asset_cache: &SharedSkinSourceAssetCache,
+    skin_font_cache: &SharedSkinFontCache,
     generation: u64,
     select_skin_path: &str,
     decide_skin_path: &str,
@@ -10480,6 +10523,7 @@ fn load_initial_skin_textures(
             spawn_skin_decode(
                 skin_decode_tx.clone(),
                 skin_source_asset_cache.clone(),
+                skin_font_cache.clone(),
                 generation,
                 decide_path,
                 SkinKind::Decide,
@@ -10510,6 +10554,7 @@ fn load_initial_skin_textures(
             spawn_skin_decode(
                 skin_decode_tx.clone(),
                 skin_source_asset_cache.clone(),
+                skin_font_cache.clone(),
                 generation,
                 result_path,
                 SkinKind::Result,
@@ -10609,6 +10654,7 @@ fn reload_skin_textures(
     app_paths: &crate::paths::AppPaths,
     skin_decode_tx: &mpsc::Sender<PendingSkinResult>,
     skin_source_asset_cache: &SharedSkinSourceAssetCache,
+    skin_font_cache: &SharedSkinFontCache,
     generations: &mut SkinReloadGenerations,
     request: SkinReloadRequest,
     select_skin_path: &str,
@@ -10655,6 +10701,7 @@ fn reload_skin_textures(
             spawn_skin_decode(
                 skin_decode_tx.clone(),
                 skin_source_asset_cache.clone(),
+                skin_font_cache.clone(),
                 generation,
                 path.clone(),
                 kind,
@@ -11121,6 +11168,7 @@ fn json_skin_value_has_load_time_option_expansion(
 fn spawn_skin_decode(
     tx: mpsc::Sender<PendingSkinResult>,
     source_cache: SharedSkinSourceAssetCache,
+    font_cache: SharedSkinFontCache,
     generation: u64,
     path: PathBuf,
     kind: SkinKind,
@@ -11141,6 +11189,7 @@ fn spawn_skin_decode(
                 &files,
                 &runtime_state,
                 Some(source_cache),
+                Some(font_cache),
             );
             let decode_finished_at = Instant::now();
             let _ = tx.send(PendingSkinResult {

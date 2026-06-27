@@ -156,6 +156,10 @@ pub struct SkinDecodeStats {
     pub document_us: u64,
     pub font_count: usize,
     pub font_decode_us: u64,
+    pub font_cache_hits: usize,
+    pub font_cache_misses: usize,
+    pub font_cache_uncacheable: usize,
+    pub font_cache_disabled: usize,
     pub source_task_count: usize,
     pub source_decode_us: u64,
     pub builtin_source_count: usize,
@@ -177,8 +181,10 @@ pub struct DecodedFont {
     pub stored_id: String,
     pub path: PathBuf,
     pub data: DecodedFontData,
+    pub cache_key: Option<SkinFontCacheKey>,
 }
 
+#[derive(Clone)]
 pub enum DecodedFontData {
     Vector(Vec<u8>),
     Bitmap(BitmapFont),
@@ -193,9 +199,11 @@ pub struct DecodedSource {
 }
 
 pub type SharedSkinSourceAssetCache = Arc<Mutex<SkinSourceAssetCache>>;
+pub type SharedSkinFontCache = Arc<Mutex<SkinFontCache>>;
 pub type SharedSkinGpuTextureCache = Arc<Mutex<SkinGpuTextureCache>>;
 
 const SKIN_SOURCE_ASSET_CACHE_LIMIT_BYTES: usize = 256 * 1024 * 1024;
+const SKIN_FONT_CACHE_LIMIT_BYTES: usize = 128 * 1024 * 1024;
 
 #[derive(Default)]
 pub struct SkinSourceAssetCache {
@@ -230,6 +238,42 @@ impl SkinSourceAssetCache {
         }
         self.total_bytes += bytes;
         self.entries.insert(key, asset);
+    }
+}
+
+#[derive(Default)]
+pub struct SkinFontCache {
+    entries: HashMap<SkinFontCacheKey, DecodedFontData>,
+    total_bytes: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct SkinFontCacheKey {
+    path: PathBuf,
+    modified: Option<SystemTime>,
+    len: u64,
+    is_bitmap: bool,
+}
+
+impl SkinFontCache {
+    fn get(&self, key: &SkinFontCacheKey) -> Option<DecodedFontData> {
+        self.entries.get(key).cloned()
+    }
+
+    fn insert(&mut self, key: SkinFontCacheKey, data: DecodedFontData) {
+        let bytes = font_data_cache_bytes(&data);
+        if let Some(old) = self.entries.remove(&key) {
+            self.total_bytes = self.total_bytes.saturating_sub(font_data_cache_bytes(&old));
+        }
+        if bytes > SKIN_FONT_CACHE_LIMIT_BYTES {
+            return;
+        }
+        if self.total_bytes.saturating_add(bytes) > SKIN_FONT_CACHE_LIMIT_BYTES {
+            self.entries.clear();
+            self.total_bytes = 0;
+        }
+        self.total_bytes += bytes;
+        self.entries.insert(key, data);
     }
 }
 
@@ -280,6 +324,14 @@ enum SourceDecodeTask {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SourceCacheStatus {
+    Hit,
+    Miss,
+    Uncacheable,
+    Disabled,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FontCacheStatus {
     Hit,
     Miss,
     Uncacheable,
@@ -568,6 +620,7 @@ pub fn decode_beatoraja_skin_with_options_and_runtime_state(
         files,
         runtime_state,
         None,
+        None,
     )
 }
 
@@ -578,6 +631,7 @@ pub fn decode_beatoraja_skin_with_options_and_runtime_state_and_source_cache(
     files: &BTreeMap<String, String>,
     runtime_state: &LuaLoadRuntimeState,
     source_cache: Option<SharedSkinSourceAssetCache>,
+    font_cache: Option<SharedSkinFontCache>,
 ) -> Result<DecodedSkin> {
     let document_start = Instant::now();
     let LoadedSkinDocumentForDecode { mut document, files: resolved_files } =
@@ -622,22 +676,39 @@ pub fn decode_beatoraja_skin_with_options_and_runtime_state_and_source_cache(
 
     let font_count = font_tasks.len();
     let font_decode_start = Instant::now();
-    let fonts: Vec<DecodedFont> = font_tasks
+    let decoded_fonts: Vec<(DecodedFont, FontCacheStatus)> = font_tasks
         .into_par_iter()
-        .filter_map(|(stored_id, font_path)| match decode_font(&font_path) {
-            Ok(data) => Some(DecodedFont { stored_id, path: font_path, data }),
-            Err(error) => {
-                tracing::warn!(
-                    font_id = %stored_id,
-                    path = %font_path.display(),
-                    %error,
-                    "failed to load beatoraja skin font"
-                );
-                None
+        .filter_map(|(stored_id, font_path)| {
+            match decode_font_with_cache(&font_path, font_cache.as_ref()) {
+                Ok((data, status, cache_key)) => {
+                    Some((DecodedFont { stored_id, path: font_path, data, cache_key }, status))
+                }
+                Err(error) => {
+                    tracing::warn!(
+                        font_id = %stored_id,
+                        path = %font_path.display(),
+                        %error,
+                        "failed to load beatoraja skin font"
+                    );
+                    None
+                }
             }
         })
         .collect();
     let font_decode_us = elapsed_us(font_decode_start);
+    let mut font_cache_hits = 0;
+    let mut font_cache_misses = 0;
+    let mut font_cache_uncacheable = 0;
+    let mut font_cache_disabled = 0;
+    for (_, status) in &decoded_fonts {
+        match status {
+            FontCacheStatus::Hit => font_cache_hits += 1,
+            FontCacheStatus::Miss => font_cache_misses += 1,
+            FontCacheStatus::Uncacheable => font_cache_uncacheable += 1,
+            FontCacheStatus::Disabled => font_cache_disabled += 1,
+        }
+    }
+    let fonts: Vec<DecodedFont> = decoded_fonts.into_iter().map(|(font, _)| font).collect();
 
     // ソースは ID 順を保つため、まず resolved path リストを順次組み立て、
     // PNG/動画先頭フレームのデコード本体だけを並列実行する。
@@ -765,6 +836,10 @@ pub fn decode_beatoraja_skin_with_options_and_runtime_state_and_source_cache(
         document_us,
         font_count,
         font_decode_us,
+        font_cache_hits,
+        font_cache_misses,
+        font_cache_uncacheable,
+        font_cache_disabled,
         source_task_count,
         source_decode_us,
         ..Default::default()
@@ -1035,6 +1110,50 @@ fn decode_font(path: &Path) -> Result<DecodedFontData> {
     }
 }
 
+fn decode_font_with_cache(
+    path: &Path,
+    font_cache: Option<&SharedSkinFontCache>,
+) -> Result<(DecodedFontData, FontCacheStatus, Option<SkinFontCacheKey>)> {
+    let Some(font_cache) = font_cache else {
+        return decode_font(path).map(|data| (data, FontCacheStatus::Disabled, None));
+    };
+    let Some(key) = skin_font_cache_key(path) else {
+        return decode_font(path).map(|data| (data, FontCacheStatus::Uncacheable, None));
+    };
+    if let Ok(cache) = font_cache.lock()
+        && let Some(data) = cache.get(&key)
+    {
+        return Ok((data, FontCacheStatus::Hit, Some(key)));
+    }
+    let data = decode_font(path)?;
+    if let Ok(mut cache) = font_cache.lock() {
+        cache.insert(key.clone(), data.clone());
+    }
+    Ok((data, FontCacheStatus::Miss, Some(key)))
+}
+
+fn skin_font_cache_key(path: &Path) -> Option<SkinFontCacheKey> {
+    let metadata = fs::metadata(path).ok()?;
+    let path = fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    Some(SkinFontCacheKey {
+        is_bitmap: is_bitmap_font_path(&path),
+        path,
+        modified: metadata.modified().ok(),
+        len: metadata.len(),
+    })
+}
+
+fn font_data_cache_bytes(data: &DecodedFontData) -> usize {
+    match data {
+        DecodedFontData::Vector(bytes) => bytes.len(),
+        DecodedFontData::Bitmap(font) => font
+            .pages
+            .values()
+            .map(|page| page.image.pixels.len())
+            .fold(font.glyphs.len().saturating_mul(64), usize::saturating_add),
+    }
+}
+
 /// Phase A でデコードした成果物を Renderer に取り込み、scene context を更新する。
 /// `default_manifest` は `load_default_skin_into_renderer` で取得した値を渡す。
 /// 一括 install するので、PNG/フォント数が多いと 1 フレーム分のコストになる。
@@ -1058,8 +1177,8 @@ pub fn install_decoded_skin(
 }
 
 /// 1 個のフォントを renderer に登録する。フレーム分散インストールから呼ばれる。
-pub fn install_decoded_font(renderer: &mut Renderer, font: DecodedFont) {
-    let DecodedFont { stored_id, path, data } = font;
+pub fn install_decoded_font(renderer: &mut Renderer, font: DecodedFont) -> bool {
+    let DecodedFont { stored_id, path, data, cache_key: _ } = font;
     let result: Result<()> = match data {
         DecodedFontData::Vector(bytes) => renderer.install_font_bytes(stored_id.clone(), bytes),
         DecodedFontData::Bitmap(bitmap) => {
@@ -1067,6 +1186,7 @@ pub fn install_decoded_font(renderer: &mut Renderer, font: DecodedFont) {
             Ok(())
         }
     };
+    let success = result.is_ok();
     match result {
         Ok(()) => tracing::info!(
             font_id = %stored_id,
@@ -1080,6 +1200,7 @@ pub fn install_decoded_font(renderer: &mut Renderer, font: DecodedFont) {
             "failed to install beatoraja skin font"
         ),
     }
+    success
 }
 
 /// 1 個の PNG ソースを renderer にアップロードし、対応する SkinDocumentTexture を返す。
@@ -4313,6 +4434,27 @@ mod tests {
         assert!(!is_supported_font_path(Path::new("font.png")));
         assert!(is_bitmap_font_path(Path::new("font.fnt")));
         assert!(!is_bitmap_font_path(Path::new("font.ttf")));
+    }
+
+    #[test]
+    fn skin_font_cache_hit_skips_loader() {
+        let root = unique_test_dir("bmz-font-cache-hit");
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("font.ttf");
+        std::fs::write(&path, b"not a real font").unwrap();
+        let key = skin_font_cache_key(&path).unwrap();
+        let expected = vec![1, 2, 3, 4];
+        let cache = Arc::new(Mutex::new(SkinFontCache::default()));
+        cache.lock().unwrap().insert(key.clone(), DecodedFontData::Vector(expected.clone()));
+
+        let (actual, status, actual_key) = decode_font_with_cache(&path, Some(&cache)).unwrap();
+
+        assert_eq!(status, FontCacheStatus::Hit);
+        assert_eq!(actual_key, Some(key));
+        match actual {
+            DecodedFontData::Vector(bytes) => assert_eq!(bytes, expected),
+            DecodedFontData::Bitmap(_) => panic!("expected cached vector font bytes"),
+        }
     }
 
     #[test]
