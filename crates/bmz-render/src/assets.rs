@@ -196,13 +196,23 @@ mod tests {
     fn load_chart_bga_image_decodes_data_song_fixture_images() {
         let root = repo_root().join("data/songs/bga-compat");
 
-        for file_name in ["small.png", "still.gif", "tga_only.tga"] {
+        for file_name in ["small.png", "still.gif", "tga_only.tga", "animated.gif"] {
             let asset = load_chart_bga_image(&root.join(file_name))
                 .unwrap_or_else(|error| panic!("failed to decode {file_name}: {error}"));
 
             assert_eq!(asset.width, 256, "{file_name}");
             assert_eq!(asset.height, 256, "{file_name}");
         }
+    }
+
+    #[test]
+    fn load_chart_bga_image_uses_first_frame_for_animated_gif_like_beatoraja() {
+        let root = repo_root().join("data/songs/bga-compat");
+
+        let asset = load_chart_bga_image(&root.join("animated.gif")).unwrap();
+
+        let first_source_pixel = ((127usize) * 4)..((128usize) * 4);
+        assert_eq!(&asset.pixels[first_source_pixel], &[255, 0, 0, 255]);
     }
 
     fn temp_image_path(extension: &str) -> PathBuf {

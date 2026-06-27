@@ -14,6 +14,7 @@
 #BMP02 movie.mpg
 #BMP03 still.gif
 #BMP04 tga_only.tga
+#BMP05 animated.gif
 
-#00004:01020304
+#00004:0102030405
 #00011:01

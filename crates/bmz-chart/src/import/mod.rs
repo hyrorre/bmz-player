@@ -160,11 +160,11 @@ mod tests {
         assert_eq!(result.chart.metadata.banner_file, "banner.jpg");
         assert_eq!(result.chart.metadata.backbmp_file, "back.bmp");
         assert_eq!(result.chart.sounds.len(), 1);
-        assert_eq!(result.chart.bga_assets.len(), 4);
-        assert_eq!(result.chart.bga_events.len(), 4);
+        assert_eq!(result.chart.bga_assets.len(), 5);
+        assert_eq!(result.chart.bga_events.len(), 5);
 
         assert_eq!(
-            [1, 2, 3, 4]
+            [1, 2, 3, 4, 5]
                 .into_iter()
                 .map(|key| bga_asset_path_for_key(&result.chart, key))
                 .collect::<Vec<_>>(),
@@ -173,6 +173,7 @@ mod tests {
                 (BgaAssetKind::Video, "data/songs/bga-compat/movie.webm".to_string()),
                 (BgaAssetKind::Static, "data/songs/bga-compat/still.gif".to_string()),
                 (BgaAssetKind::Static, "data/songs/bga-compat/tga_only.tga".to_string()),
+                (BgaAssetKind::Static, "data/songs/bga-compat/animated.gif".to_string()),
             ]
         );
     }
