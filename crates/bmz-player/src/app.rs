@@ -532,9 +532,6 @@ struct WinitApp {
     /// Worker から取り込んだスキンを次の redraw で即表示するため、
     /// 1 フレーム分だけ frame pacing sleep をスキップする。
     skip_next_frame_pace: bool,
-    /// egui からの skin reload が走っている間は重い scene render/present を
-    /// いったん譲り、upload 完了イベントを先に処理する。
-    defer_scene_render_for_skin_reload: bool,
     /// RedrawRequested 間隔から平滑化した wgpu 描画 FPS。
     wgpu_fps: f32,
     /// 設定画面で編集中の項目。`None` なら一覧操作モード。
@@ -1911,7 +1908,6 @@ impl WinitApp {
             focused: true,
             last_frame_at: None,
             skip_next_frame_pace: false,
-            defer_scene_render_for_skin_reload: false,
             wgpu_fps: 0.0,
             settings_edit: None,
             key_config_edit: None,
@@ -8575,17 +8571,19 @@ impl WinitApp {
 
     /// upload worker が GPU アップロードまで終えたスキンを非ブロッキングで取り込む。
     /// 毎フレーム呼ぶ。テクスチャ挿入 + フォント登録 + SkinContext 構築のみで軽量。
-    fn drain_pending_skins(&mut self) {
+    fn drain_pending_skins(&mut self) -> bool {
+        let mut applied = false;
         loop {
             match self.skin_upload_rx.try_recv() {
-                Ok(result) => self.apply_uploaded_skin(result),
+                Ok(result) => {
+                    self.apply_uploaded_skin(result);
+                    applied = true;
+                }
                 Err(mpsc::TryRecvError::Empty) => break,
                 Err(mpsc::TryRecvError::Disconnected) => break,
             }
         }
-        if !self.has_pending_skin_reload() {
-            self.defer_scene_render_for_skin_reload = false;
-        }
+        applied
     }
 
     /// 指定された kind のスキンがアップロードされ取り込まれるまでブロックして待つ。
@@ -9379,7 +9377,7 @@ impl WinitApp {
         } else {
             self.boot.app_config.video.frame_limit_in_background
         };
-        if self.skip_next_frame_pace || self.has_pending_skin_reload() {
+        if self.skip_next_frame_pace {
             self.skip_next_frame_pace = false;
             self.last_frame_at = Some(frame_started);
             return;
@@ -9834,9 +9832,8 @@ impl WinitApp {
         let pending_after_reload = self.has_pending_skin_reload();
         tracing::info!(?request, "skin reload queued from egui skin panel");
         if pending_after_reload {
-            self.defer_scene_render_for_skin_reload = true;
             self.skip_next_frame_pace = true;
-            self.drain_pending_skins();
+            let _ = self.drain_pending_skins();
             self.request_redraw();
         }
     }
@@ -12109,7 +12106,7 @@ impl ApplicationHandler<AppUserEvent> for WinitApp {
                 }
                 // Worker completion should be applied before intentional frame pacing sleep;
                 // otherwise reload latency includes the frame limiter wait.
-                self.drain_pending_skins();
+                let _ = self.drain_pending_skins();
                 self.limit_frame_rate();
                 self.poll_gamepad_events();
                 self.advance_select_hold_move();
@@ -12124,10 +12121,6 @@ impl ApplicationHandler<AppUserEvent> for WinitApp {
                 self.advance_play_ending();
                 self.advance_result_exit();
                 self.run_egui_frame();
-                if self.defer_scene_render_for_skin_reload && self.has_pending_skin_reload() {
-                    self.request_redraw();
-                    return;
-                }
                 self.render_current_scene();
                 if !self.first_frame_startup_completed {
                     self.first_frame_startup_completed = true;
@@ -12164,15 +12157,14 @@ impl ApplicationHandler<AppUserEvent> for WinitApp {
     fn user_event(&mut self, _event_loop: &ActiveEventLoop, event: AppUserEvent) {
         match event {
             AppUserEvent::SkinUploadReady => {
-                self.drain_pending_skins();
+                let _ = self.drain_pending_skins();
                 self.request_redraw();
             }
         }
     }
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
-        if self.has_pending_skin_reload() {
-            self.drain_pending_skins();
+        if self.has_pending_skin_reload() && self.drain_pending_skins() {
             self.request_redraw();
         }
         if self.shutdown_requested.load(Ordering::SeqCst) {
