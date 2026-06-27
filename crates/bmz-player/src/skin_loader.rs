@@ -5031,7 +5031,7 @@ mod tests {
             &skin_path,
             r#"
 #INFORMATION,0,Cache Test,Author
-#CUSTOMOPTION,Unused,900,Off,On
+#CUSTOMOPTION,Unused,930,Off,On
 #CUSTOMOPTION,Branch,910,Off,On
 #IF,911
 #IMAGE,on.png
@@ -5067,7 +5067,7 @@ mod tests {
         .unwrap();
         assert_eq!(second.cache_status, DocumentCacheStatus::Hit);
         assert_eq!(second.document.source[0].path, "off.png");
-        assert!(second.document.enabled_options().contains(&901));
+        assert!(second.document.enabled_options().contains(&931));
 
         let branch_changed = BTreeMap::from([("Branch".to_string(), "On".to_string())]);
         let third = load_skin_document(
@@ -5081,6 +5081,91 @@ mod tests {
         .unwrap();
         assert_eq!(third.cache_status, DocumentCacheStatus::Miss);
         assert_eq!(third.document.source[0].path, "on.png");
+    }
+
+    #[test]
+    fn lr2_document_cache_misses_when_play_side_remap_changes() {
+        let root = unique_test_dir("bmz-lr2-document-cache-play-side");
+        std::fs::create_dir_all(&root).unwrap();
+        let skin_path = root.join("play.lr2skin");
+        std::fs::write(
+            &skin_path,
+            r#"
+#INFORMATION,0,Cache Test,Author
+#CUSTOMOPTION,PLAY SIDE,900,1P,2P
+#IMAGE,base.png
+"#,
+        )
+        .unwrap();
+        let cache = Arc::new(Mutex::new(SkinDocumentCache::default()));
+
+        let first = load_skin_document(
+            &skin_path,
+            SkinKind::Play,
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            &LuaLoadRuntimeState::default(),
+            Some(cache.clone()),
+        )
+        .unwrap();
+        assert_eq!(first.cache_status, DocumentCacheStatus::Miss);
+        assert_eq!(first.document.source[0].path, "base.png");
+
+        let play_side_2p = BTreeMap::from([("PLAY SIDE".to_string(), "2P".to_string())]);
+        let second = load_skin_document(
+            &skin_path,
+            SkinKind::Play,
+            &play_side_2p,
+            &BTreeMap::new(),
+            &LuaLoadRuntimeState::default(),
+            Some(cache),
+        )
+        .unwrap();
+        assert_eq!(second.cache_status, DocumentCacheStatus::Miss);
+        assert_eq!(second.document.source[0].path, "base.png");
+    }
+
+    #[test]
+    fn lr2_document_cache_misses_when_included_file_changes() {
+        let root = unique_test_dir("bmz-lr2-document-cache-include");
+        std::fs::create_dir_all(&root).unwrap();
+        let skin_path = root.join("play.lr2skin");
+        let include_path = root.join("parts.csv");
+        std::fs::write(
+            &skin_path,
+            r#"
+#INFORMATION,0,Cache Test,Author
+#INCLUDE,parts.csv
+"#,
+        )
+        .unwrap();
+        std::fs::write(&include_path, "#IMAGE,off.png\n").unwrap();
+        let cache = Arc::new(Mutex::new(SkinDocumentCache::default()));
+
+        let first = load_skin_document(
+            &skin_path,
+            SkinKind::Play,
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            &LuaLoadRuntimeState::default(),
+            Some(cache.clone()),
+        )
+        .unwrap();
+        assert_eq!(first.cache_status, DocumentCacheStatus::Miss);
+        assert_eq!(first.document.source[0].path, "off.png");
+
+        std::fs::write(&include_path, "#IMAGE,on-longer-name.png\n").unwrap();
+        let second = load_skin_document(
+            &skin_path,
+            SkinKind::Play,
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            &LuaLoadRuntimeState::default(),
+            Some(cache),
+        )
+        .unwrap();
+        assert_eq!(second.cache_status, DocumentCacheStatus::Miss);
+        assert_eq!(second.document.source[0].path, "on-longer-name.png");
     }
 
     #[test]

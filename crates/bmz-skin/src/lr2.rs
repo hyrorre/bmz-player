@@ -6,7 +6,7 @@ use anyhow::{Context, Result};
 use encoding_rs::SHIFT_JIS;
 use serde_json::{Value as JsonValue, json};
 
-use crate::{LoadedLuaSkinValue, SkinLoadDependencies, SkinLoadWarning};
+use crate::{LoadedLuaSkinValue, SkinLoadDependencies, SkinLoadWarning, SkinLoadedFileDependency};
 
 const LR2_OFFSET_LIFT: i32 = 3;
 const LR2_OFFSET_JUDGE_1P: i32 = 32;
@@ -157,6 +157,7 @@ struct CsvBuilder<'a> {
     next_id: usize,
     remap_single_play_2p_lanes: bool,
     file_dependencies: BTreeSet<String>,
+    loaded_file_dependencies: BTreeMap<PathBuf, SkinLoadedFileDependency>,
 }
 
 #[derive(Default)]
@@ -198,7 +199,9 @@ pub fn load_lr2_csv_skin_value(
     let mut processor = Processor::new(builder.header.selected_ops.clone());
     processor.process_lines(&lines, path, &mut builder)?;
     dependencies.option_values.extend(processor.option_dependencies);
+    dependencies.option_values.extend(builder.load_time_option_dependencies());
     dependencies.files.extend(builder.file_dependencies.iter().cloned());
+    dependencies.loaded_files.extend(builder.loaded_file_dependencies.clone());
     let warnings = builder.warnings.clone();
     Ok(LoadedLuaSkinValue {
         value: builder.finish(),
@@ -436,7 +439,27 @@ impl<'a> CsvBuilder<'a> {
             next_id: 0,
             remap_single_play_2p_lanes,
             file_dependencies: BTreeSet::new(),
+            loaded_file_dependencies: BTreeMap::new(),
         }
+    }
+
+    fn load_time_option_dependencies(&self) -> BTreeMap<i32, bool> {
+        let mut dependencies = BTreeMap::new();
+        if matches!(self.header.skin_type, 0 | 1 | 3 | 4 | 12 | 13) {
+            dependencies.insert(901, self.header.selected_ops.get(&901).copied().unwrap_or(false));
+        }
+        dependencies
+    }
+
+    fn record_loaded_file_dependency(&mut self, path: &Path) {
+        let Ok(metadata) = fs::metadata(path) else {
+            return;
+        };
+        let path = fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+        self.loaded_file_dependencies.insert(
+            path,
+            SkinLoadedFileDependency { modified: metadata.modified().ok(), len: metadata.len() },
+        );
     }
 
     fn execute(&mut self, line: &CsvLine) -> Result<()> {
@@ -1383,6 +1406,7 @@ impl Processor {
             if line.command == "INCLUDE" {
                 let include = resolve_include_path(builder, current_path, field(line, 1));
                 if include.is_file() {
+                    builder.record_loaded_file_dependency(&include);
                     let include_lines = read_csv_lines(&include)?;
                     self.process_lines(&include_lines, &include, builder)?;
                 } else {
