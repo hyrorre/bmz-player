@@ -109,13 +109,15 @@ use crate::screens::settings_model::{
 };
 use crate::select_options::{ArrangeOption, AssistOption, DoubleOption, HsFixOption, TargetOption};
 use crate::skin_loader::{
-    DecodedSkin, PreparedSource, SharedSkinSourceAssetCache, SkinKind, SkinSourceAssetCache,
-    UploadedSkin, decode_beatoraja_skin_with_options,
-    decode_beatoraja_skin_with_options_and_runtime_state_and_source_cache,
+    DecodedSkin, PreparedSource, SharedSkinFontCache, SharedSkinGpuTextureCache,
+    SharedSkinSourceAssetCache, SkinFontCache, SkinFontCacheKey, SkinGpuTextureCache, SkinKind,
+    SkinSourceAssetCache, UploadedSkin, decode_beatoraja_skin_with_options,
+    decode_beatoraja_skin_with_options_and_runtime_state_and_caches,
     default_play_skin_document_path_from_paths, default_skin_document_path_from_paths,
     enabled_options_from_selections, install_decoded_font, install_decoded_skin,
-    is_decodable_skin_path, load_default_skin_into_renderer_from_paths, play_skin_selection_for,
-    set_decoded_skin_context, upload_decoded_skin,
+    is_decodable_skin_path, is_json_skin_path, is_lr2_skin_path, is_lua_skin_path,
+    load_default_skin_into_renderer_from_paths, play_skin_selection_for, set_decoded_skin_context,
+    upload_decoded_skin_with_texture_cache,
 };
 use crate::songs_cmd::scan_songs_with_progress;
 use crate::storage::difficulty_table_db::DifficultyTableRecord;
@@ -433,6 +435,12 @@ struct WinitApp {
     skin_upload_worker_started: bool,
     /// スキン reload 時に同一 source PNG / 動画 first frame の再デコードを避ける cache。
     skin_source_asset_cache: SharedSkinSourceAssetCache,
+    /// スキン reload 時に同一 font の再デコードを避ける cache。
+    skin_font_cache: SharedSkinFontCache,
+    /// Renderer に登録済みの font key。reload 時に同一 font の install と text atlas reset を避ける。
+    skin_installed_font_cache: HashMap<String, SkinFontCacheKey>,
+    /// GPU に挿入済みの同一 skin source texture を reload 間で再利用する cache。
+    skin_gpu_texture_cache: SharedSkinGpuTextureCache,
     bga_load_generation: u64,
     bga_load_chart_id: Option<i64>,
     bga_load_rx: Option<Receiver<PendingBgaImageResult>>,
@@ -1042,6 +1050,9 @@ struct PendingSkinResult {
     generation: u64,
     path: PathBuf,
     kind: SkinKind,
+    queued_at: Instant,
+    decode_started_at: Instant,
+    decode_finished_at: Instant,
     result: Result<DecodedSkin>,
 }
 
@@ -1052,6 +1063,11 @@ struct PendingUploadResult {
     generation: u64,
     path: PathBuf,
     kind: SkinKind,
+    queued_at: Instant,
+    decode_started_at: Instant,
+    decode_finished_at: Instant,
+    upload_started_at: Instant,
+    upload_finished_at: Instant,
     uploaded: Result<UploadedSkin>,
 }
 
@@ -1648,6 +1664,8 @@ impl WinitApp {
         let (skin_decode_tx, skin_decode_rx) = mpsc::channel::<PendingSkinResult>();
         let (skin_upload_tx, skin_upload_rx) = mpsc::channel::<PendingUploadResult>();
         let skin_source_asset_cache = Arc::new(Mutex::new(SkinSourceAssetCache::default()));
+        let skin_font_cache = Arc::new(Mutex::new(SkinFontCache::default()));
+        let skin_gpu_texture_cache = Arc::new(Mutex::new(SkinGpuTextureCache::default()));
         let (select_meta_image_tx, select_meta_image_rx) = mpsc::channel::<SelectMetaImageResult>();
         let (select_preview_tx, select_preview_rx) = mpsc::channel::<SelectPreviewResult>();
         let (select_folder_summary_tx, select_folder_summary_rx) =
@@ -1663,6 +1681,8 @@ impl WinitApp {
             &boot.app_paths,
             &skin_decode_tx,
             &skin_source_asset_cache,
+            &skin_gpu_texture_cache,
+            &skin_font_cache,
             0,
             &boot.profile_config.skin.select,
             &boot.profile_config.skin.decide,
@@ -1808,6 +1828,9 @@ impl WinitApp {
             skin_upload_rx,
             skin_upload_worker_started: false,
             skin_source_asset_cache,
+            skin_font_cache,
+            skin_installed_font_cache: HashMap::new(),
+            skin_gpu_texture_cache,
             bga_load_generation: 0,
             bga_load_chart_id: None,
             bga_load_rx: None,
@@ -8504,9 +8527,10 @@ impl WinitApp {
             return;
         };
         let upload_tx = self.skin_upload_tx.clone();
+        let texture_cache = self.skin_gpu_texture_cache.clone();
         thread::Builder::new()
             .name("skin-upload".to_string())
-            .spawn(move || skin_upload_worker(decode_rx, upload_tx, uploader))
+            .spawn(move || skin_upload_worker(decode_rx, upload_tx, uploader, texture_cache))
             .expect("failed to spawn skin upload thread");
         self.skin_upload_worker_started = true;
     }
@@ -8596,6 +8620,9 @@ impl WinitApp {
         spawn_skin_decode(
             self.skin_decode_tx.clone(),
             self.skin_source_asset_cache.clone(),
+            self.skin_gpu_texture_cache.clone(),
+            self.skin_font_cache.clone(),
+            self.skin_installed_font_cache.clone(),
             generation,
             path,
             SkinKind::Result,
@@ -8627,7 +8654,18 @@ impl WinitApp {
     /// stale generation は破棄。GPU アップロードは worker で完了済みなので、
     /// ここではハンドル挿入・フォント登録・SkinContext 構築のみ (軽量)。
     fn apply_uploaded_skin(&mut self, pending: PendingUploadResult) {
-        let PendingUploadResult { generation, path, kind, uploaded } = pending;
+        let PendingUploadResult {
+            generation,
+            path,
+            kind,
+            queued_at,
+            decode_started_at,
+            decode_finished_at,
+            upload_started_at,
+            upload_finished_at,
+            uploaded,
+        } = pending;
+        let apply_started_at = Instant::now();
         let current_generation = self.skin_reload_generations.current(kind);
         if generation != current_generation {
             tracing::debug!(
@@ -8635,6 +8673,9 @@ impl WinitApp {
                 kind = ?kind,
                 generation,
                 current = current_generation,
+                total_us = instant_elapsed_us_u64(queued_at),
+                decode_us = instant_duration_us_u64(decode_started_at, decode_finished_at),
+                upload_us = instant_duration_us_u64(upload_started_at, upload_finished_at),
                 "discarding stale uploaded skin"
             );
             return;
@@ -8651,6 +8692,9 @@ impl WinitApp {
                 tracing::warn!(
                     path = %path.display(),
                     kind = ?kind,
+                    total_us = instant_elapsed_us_u64(queued_at),
+                    decode_us = instant_duration_us_u64(decode_started_at, decode_finished_at),
+                    upload_us = instant_duration_us_u64(upload_started_at, upload_finished_at),
                     error = %format_error_chain(&error),
                     "failed to decode/upload beatoraja skin in background"
                 );
@@ -8665,17 +8709,49 @@ impl WinitApp {
             );
             return;
         };
-        let UploadedSkin { kind, document, fonts, prepared } = uploaded;
-        // フォント登録 (ab_glyph パース。軽量なので main で実施)。
+        let UploadedSkin { kind, document, fonts, prepared, decode_stats, upload_stats } = uploaded;
+        let font_count = fonts.len();
+        let font_install_start = Instant::now();
+        let mut font_install_count = 0usize;
+        let mut font_install_skip_count = 0usize;
+        let mut font_install_failed_count = 0usize;
+        // フォント登録。reload 間で同一 font key の場合は text atlas reset ごと避ける。
         for font in fonts {
-            install_decoded_font(&mut self.renderer, font);
+            let stored_id = font.stored_id.clone();
+            let cache_key = font.cache_key.clone();
+            if let Some(cache_key) = cache_key.as_ref()
+                && self.skin_installed_font_cache.get(&stored_id) == Some(cache_key)
+            {
+                font_install_skip_count += 1;
+                continue;
+            }
+            if install_decoded_font(&mut self.renderer, font) {
+                font_install_count += 1;
+                if let Some(cache_key) = cache_key {
+                    self.skin_installed_font_cache.insert(stored_id, cache_key);
+                } else {
+                    self.skin_installed_font_cache.remove(&stored_id);
+                }
+            } else {
+                font_install_failed_count += 1;
+                self.skin_installed_font_cache.remove(&stored_id);
+            }
         }
+        let font_install_us = instant_elapsed_us_u64(font_install_start);
         // アップロード済みテクスチャを差し込み、SkinDocumentTexture を組む。
         let mut document_textures = Vec::with_capacity(prepared.len());
         let mut video_sources = Vec::new();
         for source in prepared {
-            let PreparedSource { source_id, path, texture, prepared, size, is_video } = source;
-            self.renderer.insert_prepared_texture(TextureId(texture.0), prepared);
+            let PreparedSource { source_id, path, texture, prepared, size, is_video, cache_key } =
+                source;
+            if let Some(prepared) = prepared {
+                self.renderer.insert_prepared_texture(TextureId(texture.0), prepared);
+                if let Some(cache_key) = cache_key
+                    && let Ok(mut cache) = self.skin_gpu_texture_cache.lock()
+                {
+                    cache.insert(cache_key, texture, size);
+                }
+            }
             if is_video {
                 let gating = skin_video_source_gating(&document, &source_id);
                 video_sources.push(ActiveSkinVideoSource {
@@ -8693,18 +8769,13 @@ impl WinitApp {
             }
             document_textures.push(SkinDocumentTexture { source_id, texture, source_size: size });
         }
-        tracing::info!(
-            path = %path.display(),
-            kind = ?kind,
-            sources = document_textures.len(),
-            "beatoraja skin fully installed"
-        );
         if video_sources.is_empty() {
             self.skin_video_sources.remove(&kind);
         } else {
             self.skin_video_sources.insert(kind, video_sources);
         }
         let preserve_play_dynamic_timers = kind == SkinKind::Play && self.active_play.is_some();
+        let installed_sources = document_textures.len();
         set_decoded_skin_context(
             &mut self.renderer,
             kind,
@@ -8712,6 +8783,63 @@ impl WinitApp {
             document,
             document_textures,
             preserve_play_dynamic_timers,
+        );
+        tracing::info!(
+            path = %path.display(),
+            kind = ?kind,
+            generation,
+            total_us = instant_elapsed_us_u64(queued_at),
+            decode_queue_us = instant_duration_us_u64(queued_at, decode_started_at),
+            decode_thread_us = instant_duration_us_u64(decode_started_at, decode_finished_at),
+            upload_queue_us = instant_duration_us_u64(decode_finished_at, upload_started_at),
+            upload_thread_us = instant_duration_us_u64(upload_started_at, upload_finished_at),
+            apply_us = instant_elapsed_us_u64(apply_started_at),
+            document_us = decode_stats.document_us,
+            font_count,
+            font_decode_us = decode_stats.font_decode_us,
+            font_payload_skipped = decode_stats.font_payload_skipped,
+            font_cache_hits = decode_stats.font_cache_hits,
+            font_cache_misses = decode_stats.font_cache_misses,
+            font_cache_uncacheable = decode_stats.font_cache_uncacheable,
+            font_cache_disabled = decode_stats.font_cache_disabled,
+            font_install_us,
+            font_installed = font_install_count,
+            font_install_skipped = font_install_skip_count,
+            font_install_failed = font_install_failed_count,
+            source_task_count = decode_stats.source_task_count,
+            source_decode_us = decode_stats.source_decode_us,
+            decoded_sources = decode_stats.decoded_source_count,
+            decoded_source_bytes = decode_stats.decoded_source_bytes,
+            builtin_sources = decode_stats.builtin_source_count,
+            image_sources = decode_stats.image_source_count,
+            video_sources = decode_stats.video_source_count,
+            source_cache_hits = decode_stats.source_cache_hits,
+            source_cache_misses = decode_stats.source_cache_misses,
+            source_cache_uncacheable = decode_stats.source_cache_uncacheable,
+            source_cache_disabled = decode_stats.source_cache_disabled,
+            video_source_cache_hits = decode_stats.video_source_cache_hits,
+            video_source_cache_misses = decode_stats.video_source_cache_misses,
+            video_source_cache_uncacheable = decode_stats.video_source_cache_uncacheable,
+            video_source_cache_disabled = decode_stats.video_source_cache_disabled,
+            source_texture_cache_hits = decode_stats.source_texture_cache_hits,
+            source_texture_cache_hit_bytes = decode_stats.source_texture_cache_hit_bytes,
+            video_source_texture_cache_hits = decode_stats.video_source_texture_cache_hits,
+            video_source_texture_cache_hit_bytes =
+                decode_stats.video_source_texture_cache_hit_bytes,
+            uploaded_sources = upload_stats.uploaded_source_count,
+            uploaded_source_bytes = upload_stats.uploaded_source_bytes,
+            uploaded_video_sources = upload_stats.uploaded_video_source_count,
+            uploaded_video_source_bytes = upload_stats.uploaded_video_source_bytes,
+            texture_cache_hits = upload_stats.texture_cache_hits,
+            texture_cache_misses = upload_stats.texture_cache_misses,
+            texture_cache_uncacheable = upload_stats.texture_cache_uncacheable,
+            texture_cache_disabled = upload_stats.texture_cache_disabled,
+            video_texture_cache_hits = upload_stats.video_texture_cache_hits,
+            video_texture_cache_misses = upload_stats.video_texture_cache_misses,
+            video_texture_cache_uncacheable = upload_stats.video_texture_cache_uncacheable,
+            video_texture_cache_disabled = upload_stats.video_texture_cache_disabled,
+            installed_sources,
+            "beatoraja skin reload timings"
         );
         if kind == SkinKind::Select && matches!(self.view_state(), AppViewState::Select) {
             self.restart_select_scene_timers();
@@ -9576,6 +9704,8 @@ impl WinitApp {
             &self.boot.app_paths,
             &self.skin_decode_tx,
             &self.skin_source_asset_cache,
+            &self.skin_gpu_texture_cache,
+            &self.skin_font_cache,
             &mut self.skin_reload_generations,
             texture_request,
             &skin.select,
@@ -9620,6 +9750,20 @@ impl WinitApp {
                 && old_options != *selection.options;
             if play_options_only {
                 self.apply_active_play_skin_options_fast_path(key_mode, selection.options);
+                if !self.play_skin_options_need_full_reload(key_mode, selection.path.trim()) {
+                    self.last_play_skin_signature = Some((
+                        key_mode,
+                        selection.path.trim().to_string(),
+                        selection.options.clone(),
+                        selection.files.clone(),
+                    ));
+                    tracing::debug!(
+                        ?key_mode,
+                        "play skin option change applied without background reload"
+                    );
+                    tracing::info!(?request, "skin reload queued from egui skin panel");
+                    return;
+                }
             }
             self.last_play_skin_signature = None;
             self.spawn_play_skin_decode_for(key_mode);
@@ -9632,15 +9776,53 @@ impl WinitApp {
         key_mode: KeyMode,
         options: &BTreeMap<String, String>,
     ) {
-        let Some(enabled_options) = self
-            .renderer
-            .play_skin_document()
-            .map(|document| enabled_options_from_selections(document, options))
+        let Some((enabled_options, property_ops)) =
+            self.renderer.play_skin_document().map(|document| {
+                (
+                    enabled_options_from_selections(document, options),
+                    skin_document_property_ops(document),
+                )
+            })
         else {
             return;
         };
+        let applied_options = enabled_options.clone();
         if self.renderer.set_play_skin_user_selected_options(enabled_options) {
+            if let Some(sources) = self.skin_video_sources.get_mut(&SkinKind::Play) {
+                apply_skin_video_source_enabled_options(sources, &applied_options, &property_ops);
+            }
             tracing::debug!(?key_mode, "applied play skin option change before background reload");
+        }
+    }
+
+    fn play_skin_options_need_full_reload(&self, key_mode: KeyMode, trimmed_path: &str) -> bool {
+        let path = if trimmed_path.is_empty() {
+            default_play_skin_document_path_from_paths(&self.boot.app_paths, key_mode)
+        } else {
+            match self.boot.app_paths.resolve_path_ref(trimmed_path) {
+                Ok(path) => path,
+                Err(error) => {
+                    tracing::warn!(
+                        ?key_mode,
+                        path = %trimmed_path,
+                        error = %format_error_chain(&error),
+                        "keeping play skin background reload because skin path could not be resolved"
+                    );
+                    return true;
+                }
+            }
+        };
+        match skin_path_options_need_full_reload(&path) {
+            Ok(needed) => needed,
+            Err(error) => {
+                tracing::warn!(
+                    ?key_mode,
+                    path = %path.display(),
+                    error = %format_error_chain(&error),
+                    "keeping play skin background reload because skin option dependencies could not be inspected"
+                );
+                true
+            }
         }
     }
 
@@ -9694,6 +9876,9 @@ impl WinitApp {
         spawn_skin_decode(
             self.skin_decode_tx.clone(),
             self.skin_source_asset_cache.clone(),
+            self.skin_gpu_texture_cache.clone(),
+            self.skin_font_cache.clone(),
+            self.skin_installed_font_cache.clone(),
             generation,
             path,
             SkinKind::Play,
@@ -9706,12 +9891,8 @@ impl WinitApp {
     }
 
     fn invalidate_skin_defs_cache_for_request(&mut self, request: SkinReloadRequest) {
-        if request.select || request.decide || request.result || request.course_result {
+        if request.any_reload() {
             self.skin_defs_cache.clear();
-            return;
-        }
-        for key_mode in skin_reload_request_key_modes(request) {
-            self.skin_defs_cache.remove(key_mode.play_map_key());
         }
     }
 
@@ -10401,6 +10582,8 @@ fn load_initial_skin_textures(
     app_paths: &crate::paths::AppPaths,
     skin_decode_tx: &mpsc::Sender<PendingSkinResult>,
     skin_source_asset_cache: &SharedSkinSourceAssetCache,
+    skin_gpu_texture_cache: &SharedSkinGpuTextureCache,
+    skin_font_cache: &SharedSkinFontCache,
     generation: u64,
     select_skin_path: &str,
     decide_skin_path: &str,
@@ -10442,6 +10625,9 @@ fn load_initial_skin_textures(
             spawn_skin_decode(
                 skin_decode_tx.clone(),
                 skin_source_asset_cache.clone(),
+                skin_gpu_texture_cache.clone(),
+                skin_font_cache.clone(),
+                HashMap::new(),
                 generation,
                 decide_path,
                 SkinKind::Decide,
@@ -10472,6 +10658,9 @@ fn load_initial_skin_textures(
             spawn_skin_decode(
                 skin_decode_tx.clone(),
                 skin_source_asset_cache.clone(),
+                skin_gpu_texture_cache.clone(),
+                skin_font_cache.clone(),
+                HashMap::new(),
                 generation,
                 result_path,
                 SkinKind::Result,
@@ -10571,6 +10760,8 @@ fn reload_skin_textures(
     app_paths: &crate::paths::AppPaths,
     skin_decode_tx: &mpsc::Sender<PendingSkinResult>,
     skin_source_asset_cache: &SharedSkinSourceAssetCache,
+    skin_gpu_texture_cache: &SharedSkinGpuTextureCache,
+    skin_font_cache: &SharedSkinFontCache,
     generations: &mut SkinReloadGenerations,
     request: SkinReloadRequest,
     select_skin_path: &str,
@@ -10617,6 +10808,9 @@ fn reload_skin_textures(
             spawn_skin_decode(
                 skin_decode_tx.clone(),
                 skin_source_asset_cache.clone(),
+                skin_gpu_texture_cache.clone(),
+                skin_font_cache.clone(),
+                HashMap::new(),
                 generation,
                 path.clone(),
                 kind,
@@ -10876,11 +11070,7 @@ fn skin_video_source_gating(document: &SkinDocument, source_id: &str) -> SkinVid
         }
     }
 
-    let property_ops: HashSet<i32> = document
-        .property
-        .iter()
-        .flat_map(|property| property.item.iter().filter_map(|item| item.op.checked_abs()))
-        .collect();
+    let property_ops = skin_document_property_ops(document);
     let enabled_options = document.enabled_options();
     let mut referenced = false;
     let mut active = false;
@@ -10899,6 +11089,43 @@ fn skin_video_source_gating(document: &SkinDocument, source_id: &str) -> SkinVid
         return SkinVideoSourceGating { active: true, op_sets: Vec::new() };
     }
     SkinVideoSourceGating { active, op_sets }
+}
+
+fn skin_document_property_ops(document: &SkinDocument) -> HashSet<i32> {
+    document
+        .property
+        .iter()
+        .flat_map(|property| property.item.iter().filter_map(|item| item.op.checked_abs()))
+        .collect()
+}
+
+fn apply_skin_video_source_enabled_options(
+    sources: &mut [ActiveSkinVideoSource],
+    enabled_options: &[i32],
+    property_ops: &HashSet<i32>,
+) {
+    for source in sources {
+        let was_active = source.active;
+        source.enabled_options.clear();
+        source.enabled_options.extend_from_slice(enabled_options);
+        source.active =
+            skin_video_source_static_active(&source.gating_op_sets, enabled_options, property_ops);
+        if was_active && !source.active {
+            source.decoder = None;
+            source.last_pts = None;
+        }
+    }
+}
+
+fn skin_video_source_static_active(
+    op_sets: &[Vec<i32>],
+    enabled_options: &[i32],
+    property_ops: &HashSet<i32>,
+) -> bool {
+    op_sets.is_empty()
+        || op_sets
+            .iter()
+            .any(|ops| destination_property_ops_allow(ops, enabled_options, property_ops))
 }
 
 /// 実行時 state に対して、動画ソースが現在のシーン状態で表示されるかどうかを判定する。
@@ -10954,9 +11181,106 @@ fn destination_property_ops_allow(
     })
 }
 
+fn skin_path_options_need_full_reload(path: &Path) -> Result<bool> {
+    if is_lua_skin_path(path) || is_lr2_skin_path(path) {
+        return Ok(true);
+    }
+    if !is_json_skin_path(path) {
+        return Ok(true);
+    }
+    json_skin_has_load_time_option_expansion(path)
+}
+
+fn json_skin_has_load_time_option_expansion(path: &Path) -> Result<bool> {
+    let root = path.parent().unwrap_or_else(|| Path::new("."));
+    let root = root
+        .canonicalize()
+        .with_context(|| format!("failed to canonicalize skin root: {}", root.display()))?;
+    let mut visited = HashSet::new();
+    json_skin_file_has_load_time_option_expansion(path, &root, &mut visited)
+}
+
+fn json_skin_file_has_load_time_option_expansion(
+    path: &Path,
+    root: &Path,
+    visited: &mut HashSet<PathBuf>,
+) -> Result<bool> {
+    let path = path
+        .canonicalize()
+        .with_context(|| format!("failed to canonicalize skin json: {}", path.display()))?;
+    if !visited.insert(path.clone()) {
+        return Ok(false);
+    }
+    let text = std::fs::read_to_string(&path)
+        .with_context(|| format!("failed to read skin json: {}", path.display()))?;
+    let value: serde_json::Value = serde_json::from_str(&text)
+        .with_context(|| format!("failed to parse skin json: {}", path.display()))?;
+    let current_dir = path.parent().unwrap_or(root);
+    json_skin_value_has_load_time_option_expansion(&value, current_dir, root, visited)
+}
+
+fn json_skin_value_has_load_time_option_expansion(
+    value: &serde_json::Value,
+    current_dir: &Path,
+    root: &Path,
+    visited: &mut HashSet<PathBuf>,
+) -> Result<bool> {
+    match value {
+        serde_json::Value::Array(items) => {
+            for item in items {
+                if json_skin_value_has_load_time_option_expansion(item, current_dir, root, visited)?
+                {
+                    return Ok(true);
+                }
+            }
+            Ok(false)
+        }
+        serde_json::Value::Object(object) => {
+            if let Some(include) = object.get("include") {
+                let include = include.as_str().with_context(|| {
+                    format!("skin json include must be a string in {}", current_dir.display())
+                })?;
+                let included = current_dir
+                    .join(include)
+                    .canonicalize()
+                    .with_context(|| format!("failed to canonicalize skin include: {include}"))?;
+                anyhow::ensure!(
+                    included.starts_with(root),
+                    "skin include escapes skin root: {}",
+                    included.display()
+                );
+                if json_skin_file_has_load_time_option_expansion(&included, root, visited)? {
+                    return Ok(true);
+                }
+            }
+            if object.contains_key("if")
+                && (object.contains_key("value") || object.contains_key("values"))
+            {
+                return Ok(true);
+            }
+            for child in object.values() {
+                if json_skin_value_has_load_time_option_expansion(
+                    child,
+                    current_dir,
+                    root,
+                    visited,
+                )? {
+                    return Ok(true);
+                }
+            }
+            Ok(false)
+        }
+        _ => Ok(false),
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
 fn spawn_skin_decode(
     tx: mpsc::Sender<PendingSkinResult>,
     source_cache: SharedSkinSourceAssetCache,
+    texture_cache: SharedSkinGpuTextureCache,
+    font_cache: SharedSkinFontCache,
+    installed_font_cache: HashMap<String, SkinFontCacheKey>,
     generation: u64,
     path: PathBuf,
     kind: SkinKind,
@@ -10965,18 +11289,32 @@ fn spawn_skin_decode(
     runtime_state: bmz_skin::LuaLoadRuntimeState,
 ) {
     let send_path = path.clone();
+    let queued_at = Instant::now();
     thread::Builder::new()
         .name(format!("skin-decode-{:?}", kind))
         .spawn(move || {
-            let result = decode_beatoraja_skin_with_options_and_runtime_state_and_source_cache(
+            let decode_started_at = Instant::now();
+            let result = decode_beatoraja_skin_with_options_and_runtime_state_and_caches(
                 &path,
                 kind,
                 &options,
                 &files,
                 &runtime_state,
                 Some(source_cache),
+                Some(texture_cache),
+                Some(font_cache),
+                Some(installed_font_cache),
             );
-            let _ = tx.send(PendingSkinResult { generation, path: send_path, kind, result });
+            let decode_finished_at = Instant::now();
+            let _ = tx.send(PendingSkinResult {
+                generation,
+                path: send_path,
+                kind,
+                queued_at,
+                decode_started_at,
+                decode_finished_at,
+                result,
+            });
         })
         .expect("failed to spawn skin decode thread");
 }
@@ -10987,10 +11325,37 @@ fn skin_upload_worker(
     decode_rx: Receiver<PendingSkinResult>,
     upload_tx: mpsc::Sender<PendingUploadResult>,
     uploader: bmz_render::renderer::GpuUploader,
+    texture_cache: SharedSkinGpuTextureCache,
 ) {
-    while let Ok(PendingSkinResult { generation, path, kind, result }) = decode_rx.recv() {
-        let uploaded = result.map(|decoded| upload_decoded_skin(&uploader, decoded));
-        if upload_tx.send(PendingUploadResult { generation, path, kind, uploaded }).is_err() {
+    while let Ok(PendingSkinResult {
+        generation,
+        path,
+        kind,
+        queued_at,
+        decode_started_at,
+        decode_finished_at,
+        result,
+    }) = decode_rx.recv()
+    {
+        let upload_started_at = Instant::now();
+        let uploaded = result.map(|decoded| {
+            upload_decoded_skin_with_texture_cache(&uploader, decoded, Some(&texture_cache))
+        });
+        let upload_finished_at = Instant::now();
+        if upload_tx
+            .send(PendingUploadResult {
+                generation,
+                path,
+                kind,
+                queued_at,
+                decode_started_at,
+                decode_finished_at,
+                upload_started_at,
+                upload_finished_at,
+                uploaded,
+            })
+            .is_err()
+        {
             // main 側受信端が drop された (アプリ終了)。
             break;
         }
@@ -11680,6 +12045,9 @@ impl ApplicationHandler for WinitApp {
         // Linux の winit/wgpu backend では Window より後に Surface を drop すると
         // native 側で落ちることがあるため、Window を保持したまま GPU 資源を解放する。
         self.egui = None;
+        if let Ok(mut cache) = self.skin_gpu_texture_cache.lock() {
+            cache.clear();
+        }
         self.renderer.detach_surface();
     }
 }
@@ -12658,21 +13026,6 @@ fn play_skin_key_mode_for_options(chart_key_mode: KeyMode, double_option: Double
         },
         DoubleOption::Off | DoubleOption::Flip => chart_key_mode,
     }
-}
-
-fn skin_reload_request_key_modes(request: SkinReloadRequest) -> impl Iterator<Item = KeyMode> {
-    [
-        (request.play4, KeyMode::K4),
-        (request.play5, KeyMode::K5),
-        (request.play6, KeyMode::K6),
-        (request.play7, KeyMode::K7),
-        (request.play8, KeyMode::K8),
-        (request.play9, KeyMode::K9),
-        (request.play10, KeyMode::K10),
-        (request.play14, KeyMode::K14),
-    ]
-    .into_iter()
-    .filter_map(|(enabled, key_mode)| enabled.then_some(key_mode))
 }
 
 fn skin_reload_request_includes_key_mode(request: SkinReloadRequest, key_mode: KeyMode) -> bool {
@@ -13938,6 +14291,14 @@ fn green_number_from_duration(duration_ms: f32) -> u32 {
 
 fn green_number_from_snapshot_duration(duration_ms: i32) -> u32 {
     green_number_from_duration(duration_ms.max(0) as f32)
+}
+
+fn instant_elapsed_us_u64(start: Instant) -> u64 {
+    start.elapsed().as_micros().min(u64::MAX as u128) as u64
+}
+
+fn instant_duration_us_u64(start: Instant, end: Instant) -> u64 {
+    end.saturating_duration_since(start).as_micros().min(u64::MAX as u128) as u64
 }
 
 fn note_display_duration_ms_for_hispeed(
@@ -16160,6 +16521,126 @@ mod tests {
         document.user_selected_options = Some(vec![921]);
         assert!(!skin_video_source_gating(&document, "mv").active);
         assert!(skin_video_source_gating(&document, "unknown-source").active);
+    }
+
+    #[test]
+    fn skin_video_source_fast_path_updates_selected_options() {
+        let document: SkinDocument = serde_json::from_str(
+            r#"
+            {
+                "type": 5,
+                "property": [
+                    {
+                        "name": "動画を使用する",
+                        "def": "ON",
+                        "item": [
+                            { "name": "ON", "op": 920 },
+                            { "name": "OFF", "op": 921 }
+                        ]
+                    }
+                ],
+                "source": [{ "id": "mv", "path": "mv/default.mp4" }],
+                "image": [{ "id": "mv", "src": "mv", "x": 0, "y": 0, "w": 10, "h": 10 }],
+                "destination": [{ "id": "mv", "op": [920], "dst": [{ "x": 0, "y": 0, "w": 10, "h": 10 }] }]
+            }
+            "#,
+        )
+        .unwrap();
+        let gating = skin_video_source_gating(&document, "mv");
+        let mut sources = vec![ActiveSkinVideoSource {
+            texture: SkinTextureId(0),
+            path: PathBuf::new(),
+            decoder: None,
+            last_pts: None,
+            loop_start_us: 0,
+            active: gating.active,
+            gating_op_sets: gating.op_sets,
+            enabled_options: document.enabled_options(),
+            result_ranktime_ms: document.ranktime,
+            failed: false,
+        }];
+
+        apply_skin_video_source_enabled_options(
+            &mut sources,
+            &[921],
+            &skin_document_property_ops(&document),
+        );
+
+        assert_eq!(sources[0].enabled_options, vec![921]);
+        assert!(!sources[0].active);
+    }
+
+    #[test]
+    fn json_skin_option_reload_detection_allows_op_only_skins() {
+        let unique = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+        let root = std::env::temp_dir()
+            .join(format!("bmz-player-json-skin-reload-{}-{unique}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let op_only = root.join("op-only.json");
+        std::fs::write(
+            &op_only,
+            r#"
+            {
+                "type": 5,
+                "property": [
+                    {
+                        "name": "Option",
+                        "def": "ON",
+                        "item": [
+                            { "name": "ON", "op": 920 },
+                            { "name": "OFF", "op": 921 }
+                        ]
+                    }
+                ],
+                "destination": [
+                    { "id": "panel", "op": [920], "dst": [{ "x": 0, "y": 0, "w": 1, "h": 1 }] }
+                ]
+            }
+            "#,
+        )
+        .unwrap();
+        let load_time = root.join("load-time.json");
+        std::fs::write(
+            &load_time,
+            r#"
+            {
+                "type": 5,
+                "destination": [
+                    { "if": 920, "values": [
+                        { "id": "panel", "dst": [{ "x": 0, "y": 0, "w": 1, "h": 1 }] }
+                    ] }
+                ]
+            }
+            "#,
+        )
+        .unwrap();
+        let include = root.join("include.json");
+        std::fs::write(
+            &include,
+            r#"
+            [
+                { "if": 920, "value": { "id": "included", "src": "1", "x": 0, "y": 0, "w": 1, "h": 1 } }
+            ]
+            "#,
+        )
+        .unwrap();
+        let includes_load_time = root.join("includes-load-time.json");
+        std::fs::write(
+            &includes_load_time,
+            r#"
+            {
+                "type": 5,
+                "image": [{ "include": "include.json" }]
+            }
+            "#,
+        )
+        .unwrap();
+
+        assert!(!skin_path_options_need_full_reload(&op_only).unwrap());
+        assert!(skin_path_options_need_full_reload(&load_time).unwrap());
+        assert!(skin_path_options_need_full_reload(&includes_load_time).unwrap());
+
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]

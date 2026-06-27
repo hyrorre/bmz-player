@@ -4325,7 +4325,7 @@ fn build_scene_skin_defs(
                     } else if selected == RANDOM_FILE_SELECTION {
                         "ランダム"
                     } else {
-                        selected.as_str()
+                        filepath_selection_label(&selected)
                     };
                     egui::ComboBox::from_label(&filepath.name).selected_text(display).show_ui(
                         ui,
@@ -4342,11 +4342,17 @@ fn build_scene_skin_defs(
                                 Some(root) => glob_candidates(root, &filepath.path),
                                 None => Vec::new(),
                             };
+                            if let Some(normalized) =
+                                normalize_filepath_selection(&selected, &candidates)
+                            {
+                                selected = normalized;
+                            }
                             if candidates.is_empty() {
                                 ui.label("候補なし");
                             }
                             for candidate in candidates {
-                                ui.selectable_value(&mut selected, candidate.clone(), &candidate);
+                                let label = filepath_selection_label(&candidate);
+                                ui.selectable_value(&mut selected, candidate.clone(), label);
                             }
                         },
                     );
@@ -4521,12 +4527,39 @@ fn glob_candidates(root: &Path, pattern: &str) -> Vec<String> {
                 && name.starts_with(prefix)
                 && name.ends_with(suffix)
             {
-                candidates.push(name);
+                candidates.push(format!("{dir_part}{name}"));
             }
         }
     }
     candidates.sort();
     candidates
+}
+
+fn normalize_filepath_selection(selected: &str, candidates: &[String]) -> Option<String> {
+    if selected.is_empty() || selected == RANDOM_FILE_SELECTION {
+        return None;
+    }
+    let normalized = selected.replace('\\', "/");
+    if candidates.iter().any(|candidate| candidate == &normalized) {
+        return (normalized != selected).then_some(normalized);
+    }
+    if normalized.contains('/') {
+        return None;
+    }
+    candidates
+        .iter()
+        .find(|candidate| {
+            filepath_selection_label(candidate).eq_ignore_ascii_case(normalized.as_str())
+        })
+        .cloned()
+}
+
+fn filepath_selection_label(value: &str) -> &str {
+    let slash = value.rfind('/').into_iter().chain(value.rfind('\\')).max();
+    match slash {
+        Some(index) if index + 1 < value.len() => &value[index + 1..],
+        _ => value,
+    }
 }
 
 /// property の既定選択肢名。beatoraja と同じく `def` が item name と一致する
@@ -4782,8 +4815,8 @@ mod tests {
         let candidates = glob_candidates(&root, "parts/*.png");
 
         assert_eq!(candidates.len(), 2);
-        assert!(candidates.contains(&"a.png".to_string()));
-        assert!(candidates.contains(&"b.png".to_string()));
+        assert!(candidates.contains(&"parts/a.png".to_string()));
+        assert!(candidates.contains(&"parts/b.png".to_string()));
     }
 
     #[test]
@@ -4796,8 +4829,20 @@ mod tests {
         let candidates = glob_candidates(&root, "parts/lanecover_lift/*.png|lanecover|");
 
         assert_eq!(candidates.len(), 2);
-        assert!(candidates.contains(&"TYPE-M.png".to_string()));
-        assert!(candidates.contains(&"default.png".to_string()));
+        assert!(candidates.contains(&"parts/lanecover_lift/TYPE-M.png".to_string()));
+        assert!(candidates.contains(&"parts/lanecover_lift/default.png".to_string()));
+    }
+
+    #[test]
+    fn normalize_filepath_selection_maps_legacy_basename_to_relative_candidate() {
+        let candidates =
+            vec!["parts/gauge/default.png".to_string(), "parts/gauge/blue.png".to_string()];
+
+        assert_eq!(
+            normalize_filepath_selection("blue.png", &candidates).as_deref(),
+            Some("parts/gauge/blue.png")
+        );
+        assert_eq!(normalize_filepath_selection("old/blue.png", &candidates), None);
     }
 
     #[test]
@@ -4904,7 +4949,7 @@ mod tests {
 
         assert_eq!(options.get("Lane").map(String::as_str), Some("On"));
         assert_eq!(options.get("Saved").map(String::as_str), Some("B"));
-        assert_eq!(files.get("Notes").map(String::as_str), Some("default.png"));
+        assert_eq!(files.get("Notes").map(String::as_str), Some("notes/default.png"));
     }
 
     #[test]
@@ -5060,7 +5105,7 @@ mod tests {
         ));
 
         assert_eq!(options.get("Lane").map(String::as_str), Some("On"));
-        assert_eq!(files.get("Notes").map(String::as_str), Some("default.png"));
+        assert_eq!(files.get("Notes").map(String::as_str), Some("notes/default.png"));
         assert!(offsets.is_empty());
     }
 

@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
-use std::time::SystemTime;
+use std::time::{Instant, SystemTime};
 
 use anyhow::{Context, Result};
 use bmz_core::lane::KeyMode;
@@ -148,14 +148,48 @@ pub struct DecodedSkin {
     pub document: SkinDocument,
     pub fonts: Vec<DecodedFont>,
     pub sources: Vec<DecodedSource>,
+    pub stats: SkinDecodeStats,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct SkinDecodeStats {
+    pub document_us: u64,
+    pub font_count: usize,
+    pub font_decode_us: u64,
+    pub font_payload_skipped: usize,
+    pub font_cache_hits: usize,
+    pub font_cache_misses: usize,
+    pub font_cache_uncacheable: usize,
+    pub font_cache_disabled: usize,
+    pub source_task_count: usize,
+    pub source_decode_us: u64,
+    pub builtin_source_count: usize,
+    pub image_source_count: usize,
+    pub video_source_count: usize,
+    pub source_cache_hits: usize,
+    pub source_cache_misses: usize,
+    pub source_cache_uncacheable: usize,
+    pub source_cache_disabled: usize,
+    pub video_source_cache_hits: usize,
+    pub video_source_cache_misses: usize,
+    pub video_source_cache_uncacheable: usize,
+    pub video_source_cache_disabled: usize,
+    pub source_texture_cache_hits: usize,
+    pub video_source_texture_cache_hits: usize,
+    pub source_texture_cache_hit_bytes: usize,
+    pub video_source_texture_cache_hit_bytes: usize,
+    pub decoded_source_count: usize,
+    pub decoded_source_bytes: usize,
 }
 
 pub struct DecodedFont {
     pub stored_id: String,
     pub path: PathBuf,
-    pub data: DecodedFontData,
+    pub data: Option<DecodedFontData>,
+    pub cache_key: Option<SkinFontCacheKey>,
 }
 
+#[derive(Clone)]
 pub enum DecodedFontData {
     Vector(Vec<u8>),
     Bitmap(BitmapFont),
@@ -165,13 +199,18 @@ pub struct DecodedSource {
     pub source_id: String,
     pub path: PathBuf,
     pub texture: SkinTextureId,
-    pub asset: RgbaImageAsset,
+    pub asset: Option<RgbaImageAsset>,
+    pub size: SkinImageSize,
+    pub cache_key: Option<SkinSourceAssetCacheKey>,
     pub is_video: bool,
 }
 
 pub type SharedSkinSourceAssetCache = Arc<Mutex<SkinSourceAssetCache>>;
+pub type SharedSkinFontCache = Arc<Mutex<SkinFontCache>>;
+pub type SharedSkinGpuTextureCache = Arc<Mutex<SkinGpuTextureCache>>;
 
 const SKIN_SOURCE_ASSET_CACHE_LIMIT_BYTES: usize = 256 * 1024 * 1024;
+const SKIN_FONT_CACHE_LIMIT_BYTES: usize = 512 * 1024 * 1024;
 
 #[derive(Default)]
 pub struct SkinSourceAssetCache {
@@ -180,7 +219,7 @@ pub struct SkinSourceAssetCache {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-struct SkinSourceAssetCacheKey {
+pub struct SkinSourceAssetCacheKey {
     path: PathBuf,
     modified: Option<SystemTime>,
     len: u64,
@@ -209,10 +248,168 @@ impl SkinSourceAssetCache {
     }
 }
 
+pub struct SkinFontCache {
+    entries: HashMap<SkinFontCacheKey, CachedSkinFontEntry>,
+    total_bytes: usize,
+    limit_bytes: usize,
+    access_clock: u64,
+}
+
+struct CachedSkinFontEntry {
+    data: DecodedFontData,
+    bytes: usize,
+    last_used: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct SkinFontCacheKey {
+    path: PathBuf,
+    modified: Option<SystemTime>,
+    len: u64,
+    is_bitmap: bool,
+}
+
+impl SkinFontCache {
+    fn get(&mut self, key: &SkinFontCacheKey) -> Option<DecodedFontData> {
+        let access = self.next_access();
+        let entry = self.entries.get_mut(key)?;
+        entry.last_used = access;
+        Some(entry.data.clone())
+    }
+
+    fn insert(&mut self, key: SkinFontCacheKey, data: DecodedFontData) {
+        let bytes = font_data_cache_bytes(&data);
+        if let Some(old) = self.entries.remove(&key) {
+            self.total_bytes = self.total_bytes.saturating_sub(old.bytes);
+        }
+        if bytes > self.limit_bytes {
+            return;
+        }
+        self.evict_until_fits(bytes);
+        let access = self.next_access();
+        self.total_bytes += bytes;
+        self.entries.insert(key, CachedSkinFontEntry { data, bytes, last_used: access });
+    }
+
+    fn evict_until_fits(&mut self, incoming_bytes: usize) {
+        while self.total_bytes.saturating_add(incoming_bytes) > self.limit_bytes {
+            let Some(key) = self
+                .entries
+                .iter()
+                .min_by_key(|(_, entry)| entry.last_used)
+                .map(|(key, _)| key.clone())
+            else {
+                break;
+            };
+            if let Some(old) = self.entries.remove(&key) {
+                self.total_bytes = self.total_bytes.saturating_sub(old.bytes);
+            }
+        }
+    }
+
+    fn next_access(&mut self) -> u64 {
+        self.access_clock = self.access_clock.wrapping_add(1);
+        self.access_clock
+    }
+
+    #[cfg(test)]
+    fn with_limit_bytes(limit_bytes: usize) -> Self {
+        Self { limit_bytes, ..Self::default() }
+    }
+}
+
+impl Default for SkinFontCache {
+    fn default() -> Self {
+        Self {
+            entries: HashMap::new(),
+            total_bytes: 0,
+            limit_bytes: SKIN_FONT_CACHE_LIMIT_BYTES,
+            access_clock: 0,
+        }
+    }
+}
+
+#[derive(Default)]
+pub struct SkinGpuTextureCache {
+    entries: HashMap<SkinSourceAssetCacheKey, CachedSkinGpuTexture>,
+    next_texture_ids: HashMap<SkinKind, u32>,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct CachedSkinGpuTexture {
+    pub texture: SkinTextureId,
+    pub size: SkinImageSize,
+}
+
+impl SkinGpuTextureCache {
+    pub fn get(&self, key: &SkinSourceAssetCacheKey) -> Option<CachedSkinGpuTexture> {
+        self.entries.get(key).copied()
+    }
+
+    pub fn insert(
+        &mut self,
+        key: SkinSourceAssetCacheKey,
+        texture: SkinTextureId,
+        size: SkinImageSize,
+    ) {
+        self.entries.insert(key, CachedSkinGpuTexture { texture, size });
+    }
+
+    fn allocate_texture_id(&mut self, kind: SkinKind) -> SkinTextureId {
+        let next = self.next_texture_ids.entry(kind).or_insert_with(|| kind.first_texture_id());
+        let texture = SkinTextureId(*next);
+        *next = next.saturating_add(1);
+        texture
+    }
+
+    pub fn clear(&mut self) {
+        self.entries.clear();
+        self.next_texture_ids.clear();
+    }
+}
+
 enum SourceDecodeTask {
     File { index: usize, source_id: String, path: PathBuf },
     Video { index: usize, source_id: String, path: PathBuf },
     Builtin { index: usize, source_id: String, path: PathBuf, asset: RgbaImageAsset },
+}
+
+struct DecodedSourceResult {
+    index: usize,
+    source_id: String,
+    path: PathBuf,
+    asset: Option<RgbaImageAsset>,
+    size: SkinImageSize,
+    is_video: bool,
+    cached_texture: Option<SkinTextureId>,
+    cache_key: Option<SkinSourceAssetCacheKey>,
+    source_status: Option<SourceCacheStatus>,
+    texture_status: Option<TextureCacheStatus>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SourceCacheStatus {
+    Hit,
+    Miss,
+    Uncacheable,
+    Disabled,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TextureCacheStatus {
+    Hit,
+    Miss,
+    Uncacheable,
+    Disabled,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FontCacheStatus {
+    Hit,
+    Miss,
+    SkippedInstalled,
+    Uncacheable,
+    Disabled,
 }
 
 /// GPU アップロード済みの 1 ソース。upload worker が `DecodedSource` から生成する。
@@ -220,9 +417,10 @@ pub struct PreparedSource {
     pub source_id: String,
     pub path: PathBuf,
     pub texture: SkinTextureId,
-    pub prepared: PreparedTexture,
+    pub prepared: Option<PreparedTexture>,
     pub size: SkinImageSize,
     pub is_video: bool,
+    pub cache_key: Option<SkinSourceAssetCacheKey>,
 }
 
 /// decode + GPU アップロードまで終わった 1 スキンぶん。upload worker → main で渡す。
@@ -232,32 +430,136 @@ pub struct UploadedSkin {
     pub document: SkinDocument,
     pub fonts: Vec<DecodedFont>,
     pub prepared: Vec<PreparedSource>,
+    pub decode_stats: SkinDecodeStats,
+    pub upload_stats: SkinUploadStats,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct SkinUploadStats {
+    pub upload_us: u64,
+    pub source_count: usize,
+    pub texture_cache_hits: usize,
+    pub texture_cache_misses: usize,
+    pub texture_cache_uncacheable: usize,
+    pub texture_cache_disabled: usize,
+    pub video_texture_cache_hits: usize,
+    pub video_texture_cache_misses: usize,
+    pub video_texture_cache_uncacheable: usize,
+    pub video_texture_cache_disabled: usize,
+    pub uploaded_source_count: usize,
+    pub uploaded_source_bytes: usize,
+    pub uploaded_video_source_count: usize,
+    pub uploaded_video_source_bytes: usize,
 }
 
 /// `DecodedSkin` の全ソースを GPU へアップロードして `UploadedSkin` を返す。
 /// upload worker スレッドから呼ぶ (`uploader` は `Renderer::gpu_uploader` の clone)。
 pub fn upload_decoded_skin(uploader: &GpuUploader, decoded: DecodedSkin) -> UploadedSkin {
-    let DecodedSkin { kind, document, fonts, sources } = decoded;
+    upload_decoded_skin_with_texture_cache(uploader, decoded, None)
+}
+
+pub fn upload_decoded_skin_with_texture_cache(
+    uploader: &GpuUploader,
+    decoded: DecodedSkin,
+    texture_cache: Option<&SharedSkinGpuTextureCache>,
+) -> UploadedSkin {
+    let upload_start = Instant::now();
+    let DecodedSkin { kind, document, fonts, sources, stats: decode_stats } = decoded;
+    let mut upload_stats = SkinUploadStats::default();
     let prepared = sources
         .into_iter()
         .filter_map(|source| {
-            let DecodedSource { source_id, path, texture, asset, is_video } = source;
+            upload_stats.source_count += 1;
+            let DecodedSource { source_id, path, texture, asset, size, cache_key, is_video } =
+                source;
+            let Some(asset) = asset else {
+                upload_stats.texture_cache_hits += 1;
+                if is_video {
+                    upload_stats.video_texture_cache_hits += 1;
+                }
+                return Some(PreparedSource {
+                    source_id,
+                    path,
+                    texture,
+                    prepared: None,
+                    size,
+                    is_video,
+                    cache_key: None,
+                });
+            };
             if let Err(error) = asset.validate() {
                 tracing::warn!(
                     source_id = %source_id,
-                    texture_id = texture.0,
                     path = %path.display(),
                     %error,
                     "skipping invalid beatoraja skin source"
                 );
                 return None;
             }
-            let size = SkinImageSize { width: asset.width as f32, height: asset.height as f32 };
+            match (texture_cache, cache_key.as_ref()) {
+                (Some(texture_cache), Some(cache_key)) => {
+                    if let Ok(cache) = texture_cache.lock()
+                        && let Some(cached) = cache.get(cache_key)
+                    {
+                        upload_stats.texture_cache_hits += 1;
+                        if is_video {
+                            upload_stats.video_texture_cache_hits += 1;
+                        }
+                        return Some(PreparedSource {
+                            source_id,
+                            path,
+                            texture: cached.texture,
+                            prepared: None,
+                            size: cached.size,
+                            is_video,
+                            cache_key: None,
+                        });
+                    }
+                    upload_stats.texture_cache_misses += 1;
+                    if is_video {
+                        upload_stats.video_texture_cache_misses += 1;
+                    }
+                }
+                (Some(_), None) => {
+                    upload_stats.texture_cache_uncacheable += 1;
+                    if is_video {
+                        upload_stats.video_texture_cache_uncacheable += 1;
+                    }
+                }
+                (None, _) => {
+                    upload_stats.texture_cache_disabled += 1;
+                    if is_video {
+                        upload_stats.video_texture_cache_disabled += 1;
+                    }
+                }
+            }
+            let texture = texture_cache
+                .and_then(|cache| {
+                    cache.lock().ok().map(|mut cache| cache.allocate_texture_id(kind))
+                })
+                .unwrap_or(texture);
+            upload_stats.uploaded_source_count += 1;
+            upload_stats.uploaded_source_bytes =
+                upload_stats.uploaded_source_bytes.saturating_add(asset.pixels.len());
+            if is_video {
+                upload_stats.uploaded_video_source_count += 1;
+                upload_stats.uploaded_video_source_bytes =
+                    upload_stats.uploaded_video_source_bytes.saturating_add(asset.pixels.len());
+            }
             let prepared = uploader.upload(asset.width, asset.height, &asset.pixels);
-            Some(PreparedSource { source_id, path, texture, prepared, size, is_video })
+            Some(PreparedSource {
+                source_id,
+                path,
+                texture,
+                prepared: Some(prepared),
+                size,
+                is_video,
+                cache_key,
+            })
         })
         .collect();
-    UploadedSkin { kind, document, fonts, prepared }
+    upload_stats.upload_us = elapsed_us(upload_start);
+    UploadedSkin { kind, document, fonts, prepared, decode_stats, upload_stats }
 }
 
 pub fn default_skin_root() -> PathBuf {
@@ -406,6 +708,7 @@ pub fn decode_beatoraja_skin_with_options_and_runtime_state(
         files,
         runtime_state,
         None,
+        None,
     )
 }
 
@@ -416,9 +719,36 @@ pub fn decode_beatoraja_skin_with_options_and_runtime_state_and_source_cache(
     files: &BTreeMap<String, String>,
     runtime_state: &LuaLoadRuntimeState,
     source_cache: Option<SharedSkinSourceAssetCache>,
+    font_cache: Option<SharedSkinFontCache>,
 ) -> Result<DecodedSkin> {
+    decode_beatoraja_skin_with_options_and_runtime_state_and_caches(
+        skin_path,
+        kind,
+        options,
+        files,
+        runtime_state,
+        source_cache,
+        None,
+        font_cache,
+        None,
+    )
+}
+
+pub fn decode_beatoraja_skin_with_options_and_runtime_state_and_caches(
+    skin_path: &Path,
+    kind: SkinKind,
+    options: &BTreeMap<String, String>,
+    files: &BTreeMap<String, String>,
+    runtime_state: &LuaLoadRuntimeState,
+    source_cache: Option<SharedSkinSourceAssetCache>,
+    texture_cache: Option<SharedSkinGpuTextureCache>,
+    font_cache: Option<SharedSkinFontCache>,
+    installed_fonts: Option<HashMap<String, SkinFontCacheKey>>,
+) -> Result<DecodedSkin> {
+    let document_start = Instant::now();
     let LoadedSkinDocumentForDecode { mut document, files: resolved_files } =
         load_skin_document(skin_path, kind, options, files, runtime_state)?;
+    let document_us = elapsed_us(document_start);
     // フォント ID は scene 横断的に Renderer のグローバルマップに登録されるので、
     // play / select / result で同じ "0" 等が衝突する。namespace を付与して隔離する。
     // text 定義の font 参照側も同じ namespace を付ける。
@@ -456,21 +786,59 @@ pub fn decode_beatoraja_skin_with_options_and_runtime_state_and_source_cache(
         })
         .collect();
 
-    let fonts: Vec<DecodedFont> = font_tasks
+    let font_count = font_tasks.len();
+    let font_decode_start = Instant::now();
+    let decoded_fonts: Vec<(DecodedFont, FontCacheStatus)> = font_tasks
         .into_par_iter()
-        .filter_map(|(stored_id, font_path)| match decode_font(&font_path) {
-            Ok(data) => Some(DecodedFont { stored_id, path: font_path, data }),
-            Err(error) => {
-                tracing::warn!(
-                    font_id = %stored_id,
-                    path = %font_path.display(),
-                    %error,
-                    "failed to load beatoraja skin font"
-                );
-                None
+        .filter_map(|(stored_id, font_path)| {
+            let cache_key = skin_font_cache_key(&font_path);
+            if let (Some(installed_fonts), Some(cache_key)) =
+                (installed_fonts.as_ref(), cache_key.as_ref())
+                && installed_fonts.get(&stored_id) == Some(cache_key)
+            {
+                return Some((
+                    DecodedFont {
+                        stored_id,
+                        path: font_path,
+                        data: None,
+                        cache_key: Some(cache_key.clone()),
+                    },
+                    FontCacheStatus::SkippedInstalled,
+                ));
+            }
+            match decode_font_with_cache_key(&font_path, font_cache.as_ref(), cache_key) {
+                Ok((data, status, cache_key)) => Some((
+                    DecodedFont { stored_id, path: font_path, data: Some(data), cache_key },
+                    status,
+                )),
+                Err(error) => {
+                    tracing::warn!(
+                        font_id = %stored_id,
+                        path = %font_path.display(),
+                        %error,
+                        "failed to load beatoraja skin font"
+                    );
+                    None
+                }
             }
         })
         .collect();
+    let font_decode_us = elapsed_us(font_decode_start);
+    let mut font_payload_skipped = 0;
+    let mut font_cache_hits = 0;
+    let mut font_cache_misses = 0;
+    let mut font_cache_uncacheable = 0;
+    let mut font_cache_disabled = 0;
+    for (_, status) in &decoded_fonts {
+        match status {
+            FontCacheStatus::Hit => font_cache_hits += 1,
+            FontCacheStatus::Miss => font_cache_misses += 1,
+            FontCacheStatus::SkippedInstalled => font_payload_skipped += 1,
+            FontCacheStatus::Uncacheable => font_cache_uncacheable += 1,
+            FontCacheStatus::Disabled => font_cache_disabled += 1,
+        }
+    }
+    let fonts: Vec<DecodedFont> = decoded_fonts.into_iter().map(|(font, _)| font).collect();
 
     // ソースは ID 順を保つため、まず resolved path リストを順次組み立て、
     // PNG/動画先頭フレームのデコード本体だけを並列実行する。
@@ -523,20 +891,67 @@ pub fn decode_beatoraja_skin_with_options_and_runtime_state_and_source_cache(
         })
         .collect();
 
-    let mut decoded_pairs: Vec<(usize, String, PathBuf, RgbaImageAsset, bool)> = source_tasks
+    let source_task_count = source_tasks.len();
+    let source_decode_start = Instant::now();
+    let mut decoded_pairs: Vec<DecodedSourceResult> = source_tasks
         .into_par_iter()
         .filter_map(|task| match task {
             SourceDecodeTask::Builtin { index, source_id, path, asset } => {
-                Some((index, source_id, path, asset, false))
+                let size = SkinImageSize { width: asset.width as f32, height: asset.height as f32 };
+                Some(DecodedSourceResult {
+                    index,
+                    source_id,
+                    path,
+                    asset: Some(asset),
+                    size,
+                    is_video: false,
+                    cached_texture: None,
+                    cache_key: None,
+                    source_status: None,
+                    texture_status: None,
+                })
             }
             SourceDecodeTask::File { index, source_id, path: source_path } => {
+                let (cached_texture, cache_key, texture_status) =
+                    lookup_source_texture_cache(texture_cache.as_ref(), &source_path, false);
+                if let Some(cached_texture) = cached_texture {
+                    return Some(DecodedSourceResult {
+                        index,
+                        source_id,
+                        path: source_path,
+                        asset: None,
+                        size: cached_texture.size,
+                        is_video: false,
+                        cached_texture: Some(cached_texture.texture),
+                        cache_key,
+                        source_status: None,
+                        texture_status: Some(texture_status),
+                    });
+                }
                 match load_source_asset_with_cache(
                     &source_path,
                     false,
                     source_cache.as_ref(),
                     || load_png_rgba(&source_path),
                 ) {
-                    Ok(asset) => Some((index, source_id, source_path, asset, false)),
+                    Ok((asset, status)) => {
+                        let size = SkinImageSize {
+                            width: asset.width as f32,
+                            height: asset.height as f32,
+                        };
+                        Some(DecodedSourceResult {
+                            index,
+                            source_id,
+                            path: source_path,
+                            asset: Some(asset),
+                            size,
+                            is_video: false,
+                            cached_texture: None,
+                            cache_key,
+                            source_status: Some(status),
+                            texture_status: Some(texture_status),
+                        })
+                    }
                     Err(error) => {
                         if warn_missing_required && required_sources.contains(&source_id) {
                             tracing::warn!(
@@ -558,13 +973,46 @@ pub fn decode_beatoraja_skin_with_options_and_runtime_state_and_source_cache(
                 }
             }
             SourceDecodeTask::Video { index, source_id, path: source_path } => {
+                let (cached_texture, cache_key, texture_status) =
+                    lookup_source_texture_cache(texture_cache.as_ref(), &source_path, true);
+                if let Some(cached_texture) = cached_texture {
+                    return Some(DecodedSourceResult {
+                        index,
+                        source_id,
+                        path: source_path,
+                        asset: None,
+                        size: cached_texture.size,
+                        is_video: true,
+                        cached_texture: Some(cached_texture.texture),
+                        cache_key,
+                        source_status: None,
+                        texture_status: Some(texture_status),
+                    });
+                }
                 match load_source_asset_with_cache(
                     &source_path,
                     true,
                     source_cache.as_ref(),
                     || load_skin_video_first_frame_rgba(&source_path),
                 ) {
-                    Ok(asset) => Some((index, source_id, source_path, asset, true)),
+                    Ok((asset, status)) => {
+                        let size = SkinImageSize {
+                            width: asset.width as f32,
+                            height: asset.height as f32,
+                        };
+                        Some(DecodedSourceResult {
+                            index,
+                            source_id,
+                            path: source_path,
+                            asset: Some(asset),
+                            size,
+                            is_video: true,
+                            cached_texture: None,
+                            cache_key,
+                            source_status: Some(status),
+                            texture_status: Some(texture_status),
+                        })
+                    }
                     Err(error) => {
                         tracing::warn!(
                             source_id = %source_id,
@@ -578,19 +1026,100 @@ pub fn decode_beatoraja_skin_with_options_and_runtime_state_and_source_cache(
             }
         })
         .collect();
-    decoded_pairs.sort_by_key(|(index, _, _, _, _)| *index);
+    let source_decode_us = elapsed_us(source_decode_start);
+    decoded_pairs.sort_by_key(|decoded| decoded.index);
+
+    let mut stats = SkinDecodeStats {
+        document_us,
+        font_count,
+        font_decode_us,
+        font_payload_skipped,
+        font_cache_hits,
+        font_cache_misses,
+        font_cache_uncacheable,
+        font_cache_disabled,
+        source_task_count,
+        source_decode_us,
+        ..Default::default()
+    };
+    for decoded in &decoded_pairs {
+        stats.decoded_source_count += 1;
+        if let Some(asset) = &decoded.asset {
+            stats.decoded_source_bytes =
+                stats.decoded_source_bytes.saturating_add(asset.pixels.len());
+        }
+        if matches!(decoded.texture_status, Some(TextureCacheStatus::Hit)) {
+            stats.source_texture_cache_hits += 1;
+            let bytes = (decoded.size.width.max(0.0) as usize)
+                .saturating_mul(decoded.size.height.max(0.0) as usize)
+                .saturating_mul(4);
+            stats.source_texture_cache_hit_bytes =
+                stats.source_texture_cache_hit_bytes.saturating_add(bytes);
+            if decoded.is_video {
+                stats.video_source_texture_cache_hits += 1;
+                stats.video_source_texture_cache_hit_bytes =
+                    stats.video_source_texture_cache_hit_bytes.saturating_add(bytes);
+            }
+        }
+        match (decoded.is_video, &decoded.source_status, &decoded.texture_status) {
+            (_, None, None) => stats.builtin_source_count += 1,
+            (true, None, Some(TextureCacheStatus::Hit)) => stats.video_source_count += 1,
+            (false, None, Some(TextureCacheStatus::Hit)) => stats.image_source_count += 1,
+            (true, Some(_), _) => stats.video_source_count += 1,
+            (false, Some(_), _) => stats.image_source_count += 1,
+            (_, None, Some(_)) => {}
+        }
+        match decoded.source_status {
+            Some(SourceCacheStatus::Hit) => {
+                stats.source_cache_hits += 1;
+                if decoded.is_video {
+                    stats.video_source_cache_hits += 1;
+                }
+            }
+            Some(SourceCacheStatus::Miss) => {
+                stats.source_cache_misses += 1;
+                if decoded.is_video {
+                    stats.video_source_cache_misses += 1;
+                }
+            }
+            Some(SourceCacheStatus::Uncacheable) => {
+                stats.source_cache_uncacheable += 1;
+                if decoded.is_video {
+                    stats.video_source_cache_uncacheable += 1;
+                }
+            }
+            Some(SourceCacheStatus::Disabled) => {
+                stats.source_cache_disabled += 1;
+                if decoded.is_video {
+                    stats.video_source_cache_disabled += 1;
+                }
+            }
+            None => {}
+        }
+    }
 
     let mut next_texture_id = kind.first_texture_id();
     let sources: Vec<DecodedSource> = decoded_pairs
         .into_iter()
-        .map(|(_, source_id, path, asset, is_video)| {
-            let texture = SkinTextureId(next_texture_id);
-            next_texture_id += 1;
-            DecodedSource { source_id, path, texture, asset, is_video }
+        .map(|decoded| {
+            let texture = decoded.cached_texture.unwrap_or_else(|| {
+                let texture = SkinTextureId(next_texture_id);
+                next_texture_id += 1;
+                texture
+            });
+            DecodedSource {
+                source_id: decoded.source_id,
+                path: decoded.path,
+                texture,
+                asset: decoded.asset,
+                size: decoded.size,
+                cache_key: decoded.cache_key,
+                is_video: decoded.is_video,
+            }
         })
         .collect();
 
-    Ok(DecodedSkin { kind, document, fonts, sources })
+    Ok(DecodedSkin { kind, document, fonts, sources, stats })
 }
 
 fn lr2_builtin_source_asset(path: &str) -> Option<RgbaImageAsset> {
@@ -615,26 +1144,50 @@ fn load_source_asset_with_cache<F>(
     is_video: bool,
     source_cache: Option<&SharedSkinSourceAssetCache>,
     load: F,
-) -> Result<RgbaImageAsset>
+) -> Result<(RgbaImageAsset, SourceCacheStatus)>
 where
     F: FnOnce() -> Result<RgbaImageAsset>,
 {
     let Some(source_cache) = source_cache else {
-        return load();
+        return load().map(|asset| (asset, SourceCacheStatus::Disabled));
     };
     let Some(key) = skin_source_asset_cache_key(path, is_video) else {
-        return load();
+        return load().map(|asset| (asset, SourceCacheStatus::Uncacheable));
     };
     if let Ok(cache) = source_cache.lock()
         && let Some(asset) = cache.get(&key)
     {
-        return Ok(asset);
+        return Ok((asset, SourceCacheStatus::Hit));
     }
     let asset = load()?;
     if let Ok(mut cache) = source_cache.lock() {
         cache.insert(key, asset.clone());
     }
-    Ok(asset)
+    Ok((asset, SourceCacheStatus::Miss))
+}
+
+fn lookup_source_texture_cache(
+    texture_cache: Option<&SharedSkinGpuTextureCache>,
+    path: &Path,
+    is_video: bool,
+) -> (Option<CachedSkinGpuTexture>, Option<SkinSourceAssetCacheKey>, TextureCacheStatus) {
+    let key = skin_source_asset_cache_key(path, is_video);
+    match (texture_cache, key.as_ref()) {
+        (Some(texture_cache), Some(key)) => {
+            if let Ok(cache) = texture_cache.lock()
+                && let Some(texture) = cache.get(key)
+            {
+                return (Some(texture), Some(key.clone()), TextureCacheStatus::Hit);
+            }
+            (None, Some(key.clone()), TextureCacheStatus::Miss)
+        }
+        (Some(_), None) => (None, None, TextureCacheStatus::Uncacheable),
+        (None, _) => (None, key, TextureCacheStatus::Disabled),
+    }
+}
+
+fn elapsed_us(start: Instant) -> u64 {
+    start.elapsed().as_micros().min(u64::MAX as u128) as u64
 }
 
 fn skin_source_asset_cache_key(path: &Path, is_video: bool) -> Option<SkinSourceAssetCacheKey> {
@@ -805,6 +1358,59 @@ fn decode_font(path: &Path) -> Result<DecodedFontData> {
     }
 }
 
+#[cfg(test)]
+fn decode_font_with_cache(
+    path: &Path,
+    font_cache: Option<&SharedSkinFontCache>,
+) -> Result<(DecodedFontData, FontCacheStatus, Option<SkinFontCacheKey>)> {
+    decode_font_with_cache_key(path, font_cache, skin_font_cache_key(path))
+}
+
+fn decode_font_with_cache_key(
+    path: &Path,
+    font_cache: Option<&SharedSkinFontCache>,
+    key: Option<SkinFontCacheKey>,
+) -> Result<(DecodedFontData, FontCacheStatus, Option<SkinFontCacheKey>)> {
+    let Some(font_cache) = font_cache else {
+        return decode_font(path).map(|data| (data, FontCacheStatus::Disabled, None));
+    };
+    let Some(key) = key else {
+        return decode_font(path).map(|data| (data, FontCacheStatus::Uncacheable, None));
+    };
+    if let Ok(mut cache) = font_cache.lock()
+        && let Some(data) = cache.get(&key)
+    {
+        return Ok((data, FontCacheStatus::Hit, Some(key)));
+    }
+    let data = decode_font(path)?;
+    if let Ok(mut cache) = font_cache.lock() {
+        cache.insert(key.clone(), data.clone());
+    }
+    Ok((data, FontCacheStatus::Miss, Some(key)))
+}
+
+fn skin_font_cache_key(path: &Path) -> Option<SkinFontCacheKey> {
+    let metadata = fs::metadata(path).ok()?;
+    let path = fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    Some(SkinFontCacheKey {
+        is_bitmap: is_bitmap_font_path(&path),
+        path,
+        modified: metadata.modified().ok(),
+        len: metadata.len(),
+    })
+}
+
+fn font_data_cache_bytes(data: &DecodedFontData) -> usize {
+    match data {
+        DecodedFontData::Vector(bytes) => bytes.len(),
+        DecodedFontData::Bitmap(font) => font
+            .pages
+            .values()
+            .map(|page| page.image.pixels.len())
+            .fold(font.glyphs.len().saturating_mul(64), usize::saturating_add),
+    }
+}
+
 /// Phase A でデコードした成果物を Renderer に取り込み、scene context を更新する。
 /// `default_manifest` は `load_default_skin_into_renderer` で取得した値を渡す。
 /// 一括 install するので、PNG/フォント数が多いと 1 フレーム分のコストになる。
@@ -814,7 +1420,7 @@ pub fn install_decoded_skin(
     decoded: DecodedSkin,
     default_manifest: SkinManifest,
 ) -> Result<()> {
-    let DecodedSkin { kind, document, fonts, sources } = decoded;
+    let DecodedSkin { kind, document, fonts, sources, stats: _ } = decoded;
 
     for font in fonts {
         install_decoded_font(renderer, font);
@@ -828,8 +1434,16 @@ pub fn install_decoded_skin(
 }
 
 /// 1 個のフォントを renderer に登録する。フレーム分散インストールから呼ばれる。
-pub fn install_decoded_font(renderer: &mut Renderer, font: DecodedFont) {
-    let DecodedFont { stored_id, path, data } = font;
+pub fn install_decoded_font(renderer: &mut Renderer, font: DecodedFont) -> bool {
+    let DecodedFont { stored_id, path, data, cache_key: _ } = font;
+    let Some(data) = data else {
+        tracing::debug!(
+            font_id = %stored_id,
+            path = %path.display(),
+            "skipping beatoraja skin font install because payload is already installed"
+        );
+        return false;
+    };
     let result: Result<()> = match data {
         DecodedFontData::Vector(bytes) => renderer.install_font_bytes(stored_id.clone(), bytes),
         DecodedFontData::Bitmap(bitmap) => {
@@ -837,6 +1451,7 @@ pub fn install_decoded_font(renderer: &mut Renderer, font: DecodedFont) {
             Ok(())
         }
     };
+    let success = result.is_ok();
     match result {
         Ok(()) => tracing::info!(
             font_id = %stored_id,
@@ -850,6 +1465,7 @@ pub fn install_decoded_font(renderer: &mut Renderer, font: DecodedFont) {
             "failed to install beatoraja skin font"
         ),
     }
+    success
 }
 
 /// 1 個の PNG ソースを renderer にアップロードし、対応する SkinDocumentTexture を返す。
@@ -858,7 +1474,16 @@ pub fn install_decoded_source(
     renderer: &mut Renderer,
     source: DecodedSource,
 ) -> Option<SkinDocumentTexture> {
-    let DecodedSource { source_id, path, texture, asset, is_video: _ } = source;
+    let DecodedSource { source_id, path, texture, asset, size, cache_key: _, is_video: _ } = source;
+    let Some(asset) = asset else {
+        tracing::debug!(
+            source_id = %source_id,
+            texture_id = texture.0,
+            path = %path.display(),
+            "reusing beatoraja skin source texture"
+        );
+        return Some(SkinDocumentTexture { source_id, texture, source_size: size });
+    };
     let source_size = SkinImageSize { width: asset.width as f32, height: asset.height as f32 };
     if let Err(error) = renderer.upsert_image_asset(TextureId(texture.0), &asset) {
         tracing::warn!(
@@ -1622,9 +2247,10 @@ mod tests {
 
         let mv_path = mv.path.to_string_lossy().replace('\\', "/");
         assert!(mv_path.ends_with("mv/default.mp4"));
-        assert!(mv.asset.width > 0);
-        assert!(mv.asset.height > 0);
-        assert_eq!(mv.asset.pixels.len(), mv.asset.width as usize * mv.asset.height as usize * 4);
+        let asset = mv.asset.as_ref().expect("movie first frame should decode");
+        assert!(asset.width > 0);
+        assert!(asset.height > 0);
+        assert_eq!(asset.pixels.len(), asset.width as usize * asset.height as usize * 4);
     }
 
     #[test]
@@ -1647,10 +2273,7 @@ mod tests {
         let document_textures = decoded.sources.iter().map(|source| SkinDocumentTexture {
             source_id: source.source_id.clone(),
             texture: source.texture,
-            source_size: SkinImageSize {
-                width: source.asset.width as f32,
-                height: source.asset.height as f32,
-            },
+            source_size: SkinImageSize { width: source.size.width, height: source.size.height },
         });
         let skin = SkinContext::from_manifest_and_document(
             bmz_render::skin::default_skin_manifest(),
@@ -1771,8 +2394,8 @@ mod tests {
                 source_id: source.source_id.clone(),
                 texture: source.texture,
                 source_size: bmz_render::skin::SkinImageSize {
-                    width: source.asset.width as f32,
-                    height: source.asset.height as f32,
+                    width: source.size.width,
+                    height: source.size.height,
                 },
             });
         let context = bmz_render::skin::SkinContext::from_manifest_and_document(
@@ -1956,10 +2579,7 @@ mod tests {
             .sources
             .iter()
             .find(|source| source.source_id == "0")
-            .map(|source| SkinImageSize {
-                width: source.asset.width as f32,
-                height: source.asset.height as f32,
-            })
+            .map(|source| SkinImageSize { width: source.size.width, height: source.size.height })
             .expect("ECFN source 0 should decode");
         let sources: HashMap<String, SkinDocumentTexture> = decoded
             .sources
@@ -1971,8 +2591,8 @@ mod tests {
                         source_id: source.source_id.clone(),
                         texture: source.texture,
                         source_size: SkinImageSize {
-                            width: source.asset.width as f32,
-                            height: source.asset.height as f32,
+                            width: source.size.width,
+                            height: source.size.height,
                         },
                     },
                 )
@@ -2239,8 +2859,8 @@ mod tests {
                 source_id: source.source_id.clone(),
                 texture: source.texture,
                 source_size: bmz_render::skin::SkinImageSize {
-                    width: source.asset.width as f32,
-                    height: source.asset.height as f32,
+                    width: source.size.width,
+                    height: source.size.height,
                 },
             });
         let context = bmz_render::skin::SkinContext::from_manifest_and_document(
@@ -2457,8 +3077,8 @@ mod tests {
         );
         let black = decoded.sources.iter().find(|source| source.source_id == "110").unwrap();
         let white = decoded.sources.iter().find(|source| source.source_id == "111").unwrap();
-        assert_eq!(black.asset.pixels, vec![0, 0, 0, 255]);
-        assert_eq!(white.asset.pixels, vec![255, 255, 255, 255]);
+        assert_eq!(black.asset.as_ref().unwrap().pixels, vec![0, 0, 0, 255]);
+        assert_eq!(white.asset.as_ref().unwrap().pixels, vec![255, 255, 255, 255]);
     }
 
     #[test]
@@ -2502,8 +3122,8 @@ mod tests {
                         source_id: source.source_id.clone(),
                         texture: source.texture,
                         source_size: SkinImageSize {
-                            width: source.asset.width as f32,
-                            height: source.asset.height as f32,
+                            width: source.size.width,
+                            height: source.size.height,
                         },
                     },
                 )
@@ -2549,8 +3169,8 @@ mod tests {
                         source_id: source.source_id.clone(),
                         texture: source.texture,
                         source_size: SkinImageSize {
-                            width: source.asset.width as f32,
-                            height: source.asset.height as f32,
+                            width: source.size.width,
+                            height: source.size.height,
                         },
                     },
                 )
@@ -2691,8 +3311,8 @@ mod tests {
                         source_id: source.source_id.clone(),
                         texture: source.texture,
                         source_size: SkinImageSize {
-                            width: source.asset.width as f32,
-                            height: source.asset.height as f32,
+                            width: source.size.width,
+                            height: source.size.height,
                         },
                     },
                 )
@@ -2816,8 +3436,8 @@ mod tests {
                         source_id: source.source_id.clone(),
                         texture: source.texture,
                         source_size: SkinImageSize {
-                            width: source.asset.width as f32,
-                            height: source.asset.height as f32,
+                            width: source.size.width,
+                            height: source.size.height,
                         },
                     },
                 )
@@ -2882,8 +3502,8 @@ mod tests {
                         source_id: source.source_id.clone(),
                         texture: source.texture,
                         source_size: SkinImageSize {
-                            width: source.asset.width as f32,
-                            height: source.asset.height as f32,
+                            width: source.size.width,
+                            height: source.size.height,
                         },
                     },
                 )
@@ -2993,8 +3613,8 @@ mod tests {
                         source_id: source.source_id.clone(),
                         texture: source.texture,
                         source_size: SkinImageSize {
-                            width: source.asset.width as f32,
-                            height: source.asset.height as f32,
+                            width: source.size.width,
+                            height: source.size.height,
                         },
                     },
                 )
@@ -3076,8 +3696,8 @@ mod tests {
                         source_id: source.source_id.clone(),
                         texture: source.texture,
                         source_size: SkinImageSize {
-                            width: source.asset.width as f32,
-                            height: source.asset.height as f32,
+                            width: source.size.width,
+                            height: source.size.height,
                         },
                     },
                 )
@@ -3153,8 +3773,8 @@ mod tests {
             .iter()
             .find(|source| source.source_id == "1")
             .expect("WMII number source should decode");
-        let number_uv_y = 883.0 / source1.asset.height as f32;
-        let number_uv_h = 20.0 / source1.asset.height as f32;
+        let number_uv_y = 883.0 / source1.size.height;
+        let number_uv_h = 20.0 / source1.size.height;
         let sources = decoded
             .sources
             .iter()
@@ -3165,8 +3785,8 @@ mod tests {
                         source_id: source.source_id.clone(),
                         texture: source.texture,
                         source_size: SkinImageSize {
-                            width: source.asset.width as f32,
-                            height: source.asset.height as f32,
+                            width: source.size.width,
+                            height: source.size.height,
                         },
                     },
                 )
@@ -3358,8 +3978,8 @@ mod tests {
                         source_id: source.source_id.clone(),
                         texture: source.texture,
                         source_size: SkinImageSize {
-                            width: source.asset.width as f32,
-                            height: source.asset.height as f32,
+                            width: source.size.width,
+                            height: source.size.height,
                         },
                     },
                 )
@@ -3422,8 +4042,8 @@ mod tests {
                         source_id: source.source_id.clone(),
                         texture: source.texture,
                         source_size: SkinImageSize {
-                            width: source.asset.width as f32,
-                            height: source.asset.height as f32,
+                            width: source.size.width,
+                            height: source.size.height,
                         },
                     },
                 )
@@ -3570,7 +4190,7 @@ mod tests {
         assert!(
             decoded.fonts.iter().any(|font| {
                 font.stored_id.starts_with("play:lr2font-")
-                    && matches!(&font.data, DecodedFontData::Bitmap(_))
+                    && matches!(font.data.as_ref(), Some(DecodedFontData::Bitmap(_)))
             }),
             "expected decoded LR2 bitmap font to be loaded"
         );
@@ -4086,6 +4706,100 @@ mod tests {
     }
 
     #[test]
+    fn skin_font_cache_hit_skips_loader() {
+        let root = unique_test_dir("bmz-font-cache-hit");
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("font.ttf");
+        std::fs::write(&path, b"not a real font").unwrap();
+        let key = skin_font_cache_key(&path).unwrap();
+        let expected = vec![1, 2, 3, 4];
+        let cache = Arc::new(Mutex::new(SkinFontCache::default()));
+        cache.lock().unwrap().insert(key.clone(), DecodedFontData::Vector(expected.clone()));
+
+        let (actual, status, actual_key) = decode_font_with_cache(&path, Some(&cache)).unwrap();
+
+        assert_eq!(status, FontCacheStatus::Hit);
+        assert_eq!(actual_key, Some(key));
+        match actual {
+            DecodedFontData::Vector(bytes) => assert_eq!(bytes, expected),
+            DecodedFontData::Bitmap(_) => panic!("expected cached vector font bytes"),
+        }
+    }
+
+    #[test]
+    fn skin_font_cache_evicts_least_recently_used_entry() {
+        let mut cache = SkinFontCache::with_limit_bytes(8);
+        let a = test_font_cache_key("a.ttf");
+        let b = test_font_cache_key("b.ttf");
+        let c = test_font_cache_key("c.ttf");
+
+        cache.insert(a.clone(), DecodedFontData::Vector(vec![1, 1, 1, 1]));
+        cache.insert(b.clone(), DecodedFontData::Vector(vec![2, 2, 2, 2]));
+        assert!(cache.get(&a).is_some());
+        cache.insert(c.clone(), DecodedFontData::Vector(vec![3, 3, 3, 3]));
+
+        assert!(cache.get(&a).is_some());
+        assert!(cache.get(&b).is_none());
+        assert!(cache.get(&c).is_some());
+    }
+
+    #[test]
+    fn skin_font_cache_skips_entries_larger_than_limit() {
+        let mut cache = SkinFontCache::with_limit_bytes(4);
+        let key = test_font_cache_key("too-large.ttf");
+
+        cache.insert(key.clone(), DecodedFontData::Vector(vec![1, 2, 3, 4, 5]));
+
+        assert!(cache.get(&key).is_none());
+        assert_eq!(cache.total_bytes, 0);
+    }
+
+    #[test]
+    fn installed_font_snapshot_skips_font_payload_decode() {
+        let root = unique_test_dir("bmz-installed-font-skip");
+        std::fs::create_dir_all(&root).unwrap();
+        let skin_path = root.join("skin.json");
+        let font_path = root.join("font.ttf");
+        std::fs::write(&font_path, b"not a real font").unwrap();
+        std::fs::write(
+            &skin_path,
+            r#"
+            {
+                "type": 0,
+                "font": [
+                    { "id": "font1", "path": "font.ttf" }
+                ]
+            }
+            "#,
+        )
+        .unwrap();
+        let key = skin_font_cache_key(&font_path).unwrap();
+        let installed = HashMap::from([("play:font1".to_string(), key.clone())]);
+
+        let decoded = decode_beatoraja_skin_with_options_and_runtime_state_and_caches(
+            &skin_path,
+            SkinKind::Play,
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            &LuaLoadRuntimeState::default(),
+            None,
+            None,
+            None,
+            Some(installed),
+        )
+        .unwrap();
+
+        assert_eq!(decoded.stats.font_count, 1);
+        assert_eq!(decoded.stats.font_payload_skipped, 1);
+        assert_eq!(decoded.stats.font_cache_hits, 0);
+        assert_eq!(decoded.stats.font_cache_misses, 0);
+        assert_eq!(decoded.fonts.len(), 1);
+        assert_eq!(decoded.fonts[0].stored_id, "play:font1");
+        assert_eq!(decoded.fonts[0].cache_key.as_ref(), Some(&key));
+        assert!(decoded.fonts[0].data.is_none());
+    }
+
+    #[test]
     fn skin_source_asset_cache_hit_skips_loader() {
         let root = unique_test_dir("bmz-source-cache-hit");
         std::fs::create_dir_all(&root).unwrap();
@@ -4096,12 +4810,13 @@ mod tests {
         let cache = Arc::new(Mutex::new(SkinSourceAssetCache::default()));
         cache.lock().unwrap().insert(key, expected.clone());
 
-        let actual = load_source_asset_with_cache(&path, false, Some(&cache), || {
+        let (actual, status) = load_source_asset_with_cache(&path, false, Some(&cache), || {
             panic!("cache hit must not call source loader")
         })
         .unwrap();
 
         assert_eq!(actual, expected);
+        assert_eq!(status, SourceCacheStatus::Hit);
     }
 
     #[test]
@@ -4117,10 +4832,116 @@ mod tests {
         cache.lock().unwrap().insert(key, stale);
 
         std::fs::write(&path, b"new and longer").unwrap();
-        let actual =
+        let (actual, status) =
             load_source_asset_with_cache(&path, false, Some(&cache), || Ok(fresh.clone())).unwrap();
 
         assert_eq!(actual, fresh);
+        assert_eq!(status, SourceCacheStatus::Miss);
+    }
+
+    #[test]
+    fn skin_gpu_texture_cache_reuses_inserted_source_textures() {
+        let root = unique_test_dir("bmz-gpu-texture-cache");
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("source.png");
+        std::fs::write(&path, b"cached").unwrap();
+        let key = skin_source_asset_cache_key(&path, false).unwrap();
+        let size = SkinImageSize { width: 64.0, height: 32.0 };
+        let mut cache = SkinGpuTextureCache::default();
+
+        let allocated = cache.allocate_texture_id(SkinKind::Play);
+        cache.insert(key.clone(), allocated, size);
+
+        let cached = cache.get(&key).unwrap();
+        assert_eq!(cached.texture, allocated);
+        assert_eq!(cached.size, size);
+        assert_ne!(cache.allocate_texture_id(SkinKind::Play), allocated);
+
+        cache.clear();
+
+        assert!(cache.get(&key).is_none());
+        assert_eq!(cache.allocate_texture_id(SkinKind::Play), SkinTextureId(10_000));
+    }
+
+    #[test]
+    fn decode_uses_gpu_texture_cache_to_skip_source_decode() {
+        let root = unique_test_dir("bmz-source-texture-cache-hit");
+        std::fs::create_dir_all(&root).unwrap();
+        let skin_path = root.join("skin.json");
+        let source_path = root.join("source.png");
+        std::fs::write(&source_path, b"not a png").unwrap();
+        std::fs::write(
+            &skin_path,
+            r#"
+            {
+                "type": 0,
+                "source": [
+                    { "id": 1, "path": "source.png" }
+                ],
+                "image": [
+                    { "id": "img", "src": 1, "x": 0, "y": 0, "w": 64, "h": 32 }
+                ],
+                "destination": [
+                    { "id": "img", "dst": [{ "x": 0, "y": 0, "w": 64, "h": 32 }] }
+                ]
+            }
+            "#,
+        )
+        .unwrap();
+        let key = skin_source_asset_cache_key(&source_path, false).unwrap();
+        let texture = SkinTextureId(12_345);
+        let size = SkinImageSize { width: 64.0, height: 32.0 };
+        let texture_cache = Arc::new(Mutex::new(SkinGpuTextureCache::default()));
+        texture_cache.lock().unwrap().insert(key.clone(), texture, size);
+
+        let decoded = decode_beatoraja_skin_with_options_and_runtime_state_and_caches(
+            &skin_path,
+            SkinKind::Play,
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            &LuaLoadRuntimeState::default(),
+            None,
+            Some(texture_cache),
+            None,
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(decoded.stats.source_texture_cache_hits, 1);
+        assert_eq!(decoded.stats.source_texture_cache_hit_bytes, 64 * 32 * 4);
+        assert_eq!(decoded.stats.source_cache_hits, 0);
+        assert_eq!(decoded.stats.source_cache_misses, 0);
+        assert_eq!(decoded.stats.decoded_source_bytes, 0);
+        assert_eq!(decoded.sources.len(), 1);
+        assert_eq!(decoded.sources[0].texture, texture);
+        assert_eq!(decoded.sources[0].size, size);
+        assert_eq!(decoded.sources[0].cache_key.as_ref(), Some(&key));
+        assert!(decoded.sources[0].asset.is_none());
+    }
+
+    #[test]
+    fn skin_gpu_texture_cache_reuses_inserted_video_textures_separately() {
+        let root = unique_test_dir("bmz-gpu-video-texture-cache");
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("source.mp4");
+        std::fs::write(&path, b"cached-video").unwrap();
+        let image_key = skin_source_asset_cache_key(&path, false).unwrap();
+        let video_key = skin_source_asset_cache_key(&path, true).unwrap();
+        assert_ne!(image_key, video_key);
+
+        let size = SkinImageSize { width: 320.0, height: 180.0 };
+        let mut cache = SkinGpuTextureCache::default();
+        let allocated = cache.allocate_texture_id(SkinKind::Play);
+        cache.insert(video_key.clone(), allocated, size);
+
+        assert!(cache.get(&image_key).is_none());
+        let cached = cache.get(&video_key).unwrap();
+        assert_eq!(cached.texture, allocated);
+        assert_eq!(cached.size, size);
+    }
+
+    fn test_font_cache_key(path: &str) -> SkinFontCacheKey {
+        SkinFontCacheKey { path: PathBuf::from(path), modified: None, len: 0, is_bitmap: false }
     }
 
     fn unique_test_dir(name: &str) -> PathBuf {
