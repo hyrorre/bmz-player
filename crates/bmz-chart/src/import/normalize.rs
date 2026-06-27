@@ -7,10 +7,10 @@ use bmz_core::time::{ChartTick, TimeUs};
 
 use crate::bga_keybound::parse_swbga_pattern;
 use crate::model::{
-    BarLine, BgaArgbEvent, BgaAssetId, BgaAssetKind, BgaAssetRef, BgaEvent, BgaEventKind,
-    BgaKeyboundEvent, BgaOpacityEvent, ChartMetadata, ChartTextEvent, ChartVolumeEvent,
-    JudgeRankEvent, LongNotePair, NoteEvent, NoteKind, PlayableChart, ScrollEvent, SoundAssetRef,
-    SoundEvent, SpeedEvent, SwBgaDefinition, TimingEvent, TimingEventKind,
+    BarLine, BgaArgbEvent, BgaAssetId, BgaAssetRef, BgaEvent, BgaEventKind, BgaKeyboundEvent,
+    BgaOpacityEvent, ChartMetadata, ChartTextEvent, ChartVolumeEvent, JudgeRankEvent, LongNotePair,
+    NoteEvent, NoteKind, PlayableChart, ScrollEvent, SoundAssetRef, SoundEvent, SpeedEvent,
+    SwBgaDefinition, TimingEvent, TimingEventKind,
 };
 use crate::timing::{TickTimingEvent, TickTimingEventKind, TimingMap, build_timing_map};
 
@@ -208,12 +208,15 @@ fn build_bga_table(
 
     for bmp in &intermediate.resources.bmps {
         let id = BgaAssetId(assets.len() as u32);
-        let path = if bmp.path.is_absolute() { bmp.path.clone() } else { base_dir.join(&bmp.path) };
+        let unresolved =
+            if bmp.path.is_absolute() { bmp.path.clone() } else { base_dir.join(&bmp.path) };
+        let path = crate::bga_asset::resolve_bga_asset_path(base_dir, &bmp.path)
+            .unwrap_or_else(|| unresolved.clone());
         if check_resource_existence && !path.exists() {
             warnings.push(ImportWarning::MissingBmpFile { path: path.clone() });
         }
         by_bmp_key.insert(bmp.key, id);
-        assets.push(BgaAssetRef { id, path, kind: bga_asset_kind(&bmp.path) });
+        assets.push(BgaAssetRef { id, kind: crate::bga_asset::bga_asset_kind(&path), path });
     }
 
     BgaTable { by_bmp_key, assets }
@@ -287,16 +290,6 @@ fn bga_event_kind(kind: super::intermediate::IntermediateBgaKind) -> BgaEventKin
         super::intermediate::IntermediateBgaKind::Poor => BgaEventKind::Poor,
         super::intermediate::IntermediateBgaKind::Layer => BgaEventKind::Layer,
         super::intermediate::IntermediateBgaKind::Layer2 => BgaEventKind::Layer2,
-    }
-}
-
-fn bga_asset_kind(path: &Path) -> BgaAssetKind {
-    match path.extension().and_then(|e| e.to_str()) {
-        Some(ext) => match ext.to_ascii_lowercase().as_str() {
-            "mp4" | "avi" | "wmv" | "mpg" | "mpeg" | "mkv" | "mov" => BgaAssetKind::Video,
-            _ => BgaAssetKind::Static,
-        },
-        None => BgaAssetKind::Static,
     }
 }
 
