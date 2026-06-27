@@ -1956,7 +1956,7 @@ impl WinitApp {
             DeferredBoot::Chart { chart_id, replay_slot } => {
                 tracing::info!(chart_id, "booting directly into chart");
                 if let Some(slot) = replay_slot {
-                    if !self.try_start_replay_for_chart(chart_id, slot) {
+                    if !self.try_start_replay_for_chart(chart_id, slot, false) {
                         tracing::warn!(slot, "boot replay slot empty; falling back to normal play");
                         self.start_chart(chart_id);
                     }
@@ -7014,7 +7014,20 @@ impl WinitApp {
         true
     }
 
-    fn try_start_replay_for_chart(&mut self, chart_id: i64, slot: u8) -> bool {
+    fn start_replay_chart_with_options(
+        &mut self,
+        chart_id: i64,
+        options: PlayStartOptions,
+        show_decide: bool,
+    ) {
+        if show_decide {
+            self.begin_decide_for_chart(chart_id, options);
+        } else {
+            self.start_chart_with_options(chart_id, options);
+        }
+    }
+
+    fn try_start_replay_for_chart(&mut self, chart_id: i64, slot: u8, show_decide: bool) -> bool {
         let Some(chart) = self
             .boot
             .library_db
@@ -7081,14 +7094,14 @@ impl WinitApp {
             course_gauge_property_override: None,
             target_ex_score_override: None,
         };
-        self.start_chart_with_options(chart_id, options);
+        self.start_replay_chart_with_options(chart_id, options, show_decide);
         true
     }
 
     fn start_replay_for_selected(&mut self, slot: u8) -> bool {
         // Prefer the chart path when the cursor is on a chart row.
         if let Some(chart_id) = self.currently_selected_chart_id() {
-            return self.try_start_replay_for_chart(chart_id, slot);
+            return self.try_start_replay_for_chart(chart_id, slot, true);
         }
         // Otherwise, if the cursor is on a course row, try to launch the
         // course replay stored in the requested slot.
