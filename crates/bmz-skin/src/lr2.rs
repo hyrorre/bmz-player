@@ -1052,19 +1052,21 @@ impl<'a> CsvBuilder<'a> {
         if let Some(file) = self.header.files.iter().find(|file| file.path == normalized)
             && let Some(selected) =
                 self.files.get(&file.name).filter(|selected| !selected.is_empty())
-            && self.selected_skin_file_exists(selected)
+            && let Some(selected_path) =
+                self.selected_skin_file_for_definition(&file.path, selected)
         {
-            return selected.replace('\\', "/");
+            return selected_path;
         }
         if let Some(file) =
             self.header.files.iter().find(|file| same_wildcard_prefix(&file.path, &normalized))
         {
             if let Some(selected) =
                 self.files.get(&file.name).filter(|selected| !selected.is_empty())
-                && selected_wildcard_value(&file.path, selected).is_some()
-                && self.selected_skin_file_exists(selected)
+                && let Some(selected_path) =
+                    self.selected_skin_file_for_definition(&file.path, selected)
+                && selected_wildcard_value(&file.path, &selected_path).is_some()
             {
-                return substitute_wildcard(&normalized, &file.path, selected);
+                return substitute_wildcard(&normalized, &file.path, &selected_path);
             }
             if !file.default.is_empty() {
                 return substitute_wildcard_default(&normalized, &file.path, &file.default);
@@ -1117,23 +1119,25 @@ impl<'a> CsvBuilder<'a> {
             .unwrap_or(48)
     }
 
-    fn selected_skin_file_exists(&self, selected: &str) -> bool {
-        use std::path::Component;
-
-        let selected = selected.replace('\\', "/");
-        let relative = Path::new(&selected);
-        if relative.as_os_str().is_empty()
-            || relative.is_absolute()
-            || relative.components().any(|component| {
-                matches!(
-                    component,
-                    Component::ParentDir | Component::RootDir | Component::Prefix(_)
-                )
-            })
-        {
-            return false;
+    fn selected_skin_file_for_definition(
+        &self,
+        definition: &str,
+        selected: &str,
+    ) -> Option<String> {
+        let selected = normalize_selected_skin_file(selected)?;
+        if self.skin_file_dir.join(&selected).is_file() {
+            return Some(selected);
         }
-        self.skin_file_dir.join(relative).is_file()
+        if selected.contains('/') {
+            return None;
+        }
+        let definition = definition.replace('\\', "/");
+        let star = definition.find('*')?;
+        let prefix = &definition[..star];
+        let slash = prefix.rfind('/').map(|index| index + 1).unwrap_or(0);
+        let candidate = format!("{}{selected}", &prefix[..slash]);
+        let candidate = normalize_selected_skin_file(&candidate)?;
+        self.skin_file_dir.join(&candidate).is_file().then_some(candidate)
     }
 
     fn relative_source_path(&self, normalized: &str) -> String {
@@ -1822,6 +1826,22 @@ fn relative_to_skin_file_parent(skin_path: &Path, normalized: &str) -> String {
     normalized.to_string()
 }
 
+fn normalize_selected_skin_file(selected: &str) -> Option<String> {
+    use std::path::Component;
+
+    let selected = selected.replace('\\', "/");
+    let relative = Path::new(&selected);
+    if relative.as_os_str().is_empty()
+        || relative.is_absolute()
+        || relative.components().any(|component| {
+            matches!(component, Component::ParentDir | Component::RootDir | Component::Prefix(_))
+        })
+    {
+        return None;
+    }
+    Some(selected)
+}
+
 fn same_wildcard_prefix(a: &str, b: &str) -> bool {
     let Some((a_prefix, _)) = a.split_once('*') else {
         return false;
@@ -2056,6 +2076,30 @@ mod tests {
         });
         let files =
             BTreeMap::from([("GAUGE COLOR".to_string(), "parts/gauge/blue.png".to_string())]);
+        let builder = CsvBuilder::new(&skin_path, header, &files);
+
+        assert_eq!(
+            builder.resolve_source_path(r".\LR2files\Theme\WMII_FHD\play\parts\gauge\*.png"),
+            "parts/gauge/blue.png"
+        );
+    }
+
+    #[test]
+    fn lr2_customfile_selection_accepts_legacy_basename_selection() {
+        let root = unique_test_dir("bmz-lr2-customfile-basename");
+        let play_dir = root.join("play");
+        std::fs::create_dir_all(play_dir.join("parts/gauge")).unwrap();
+        std::fs::write(play_dir.join("parts/gauge/default.png"), []).unwrap();
+        std::fs::write(play_dir.join("parts/gauge/blue.png"), []).unwrap();
+        let skin_path = play_dir.join("FHDPLAY_AC.lr2skin");
+        std::fs::write(&skin_path, []).unwrap();
+        let mut header = Header::default();
+        header.files.push(CustomFile {
+            name: "GAUGE COLOR".to_string(),
+            path: "parts/gauge/*.png".to_string(),
+            default: "default".to_string(),
+        });
+        let files = BTreeMap::from([("GAUGE COLOR".to_string(), "blue.png".to_string())]);
         let builder = CsvBuilder::new(&skin_path, header, &files);
 
         assert_eq!(
