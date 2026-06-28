@@ -2,8 +2,8 @@
 
 Next-Generation BMS Player (WIP)
 
-beatoraja の後継を目指しています。 (LR2ではなく)  
-多くの機能はまだ未実装ですが、まずは開発者自身が快適にプレイできることを目指して開発しています。
+beatoraja の後継を目指しています。
+多くの機能は未実装ですが、まずは開発者自身が快適にプレイできることを目指して開発しています。
 
 Supported OS
 - Windows
@@ -13,7 +13,9 @@ Supported OS
 Supported Format
 - BMS (5K / 7K / 10K / 14K)
 - PMS (9K)
-- UE (4K / 6K / 8K)
+- Qwilight/UE-style BMS (4K / 6K / 8K)
+- Base 62 BMS (62進数BMS)
+- BMSON
 
 Supported Skin
 - beatoraja json skin
@@ -21,8 +23,10 @@ Supported Skin
 - beatoraja csv skin
 
 Features
-- ASIO support
-- import LR2/beatoraja scores
+- score database migration from LR2 / beatoraja
+- auto-adjust (自動判定調整)
+- normalizing volume per-chart (自動音量調整)
+- internet ranking (BMZ IR)
 
 **Don't use this application for playing copyrighted contents.**
 
@@ -119,79 +123,44 @@ cargo run
 
 ## TODO
 
-- [x] 各設定項目のデフォルト調整
-- [x] rule modeごとにランプをまとめるor区別するかの設定項目追加
-- [x] songs.rootとtablesの並び替え機能
-- [x] player statistics
-- [x] ランプソートで曲プレイ後カーソルがズレる
-- [x] 選曲画面でプレイスキンを変えると選曲スキンも再読込される
-- [x] WAV定義などもIRに送信されている
-- [x] スキンオプションのデフォルト解決をbeatoraja準拠にする
-- [x] リザルトスキンとコースリザルトスキンが分かれていない
-- [x] ランキングのユーザー重複を排除し、ベストスコアのみ表示する
-- [x] ランキングのテーブルの上に自己ベストスコア表示と自己スコア全履歴を表示するボタンを追加
-- [x] song searchのカーソル移動機能
-- [x] profile機能拡充
-- [x] 同梱スキン準備作業 (git submodule化)
-- [x] ライセンス周りの整備
-- [x] 同梱スキンに4K / 6K / 8Kを追加
-- [x] 判定調整に応じて小節線の位置も調整
-- [x] スクリーンショットの非同期化
-- [x] 8K / 9K のキーコンフィグ項目が2P KEY1 / 2P KEY2になっているのでKEY8 / KEY9に変更
-- [x] /入力で検索モードに入る条件の調整
-- [x] クイックリトライの操作方法検討と実装
-- [x] defaultの result / course result が機能しておらず、シーンがスキップされ select 画面に戻ってしまう
-- [x] course mode でコンボ数を引き継ぐよう変更 (単曲スコアとして保存されるMAX COMBOは単曲のものを使う)
-- [x] course modeでdecide画面がスキップされている
-- [x] 曲開始前に終了させると、READYまでFAILED演出が出ない
-- [x] course mode ir送信エラー rule.ln_policy is invalid
-- [x] course mode 途中落ちでも単曲リザルトを表示させたい
-- [x] course mode 時に単曲のクリアランプがCLEARになるが、NO PLAYにしたい (beatorajaと同様)
-- [x] 毎曲ごとにdecide画面が表示されるが、course選択時のみにしたい
-- [x] decide画面では曲名の代わりにcourse名を表示させる
-- [x] course mode時、play skinに曲名が表示されるのが遅い
-- [x] course result skinに各曲の情報、IR情報が表示されていない
-- [x] course result時にF1を押した時、コースリザルト情報は出てくるが、IR情報が出てこない
-- [x] course mode の単曲リザルトでIR送信対象が無しになっている
-- [x] course mode の単曲リザルトでMYBEST表示、MYBESTとの差分表示が無い
-- [x] course mode の最後の曲の単曲リザルトも表示する
-- [x] course result skinのMYBEST表示が今回のスコア表示になっている
-- [x] course result skinの各曲の情報表示窓に表示されるのがcourse 1-4という仮のテキスト？になっている
-- [x] 単曲リザルトだけでなくcourse resultもNoPlayに丸められている (CLEAR, HARD, EXHなどになるべき)
-- [x] course mode の Gauge Auto Shift 対応
-- [x] アナログスクラッチの停止判定が緩すぎて、連続で同じ方向に回すと全然反応しない (beatorajaと同じアルゴリズムを目指す)
-- [x] Calamity Fortune[F]のLN終端が普通のノーツになっている (G:\BMS\INSANE\[ZUN remixed by LeaF] Calamity Fortune)
-- [x] 設定フォルダ内で[編集中]にスクラッチを回して選択項目を上下させる操作に対応させる
-- [x] 画像形式のBGAの読み込みが同期になっており遅い
-- [x] 低解像度BGAのピクセル補間について確認
-- [x] IRの送信完了タイマーとrefへの対応
-- [x] decide skin, result skinへ難易度表情報を連携 (その譜面がどの難易度表のどの難易度に含まれているか)
-- [x] beatorajaにselect skinへ難易度表情報を連携するインターフェースがあるか確認
-- [x] リザルト画面のSEフェードアウト
-- [x] IRの送信開始を早める
-- [ ] play skin turntableの回転方向が逆？
-- [ ] 難易度表のデフォルトを追加
+- [ ] score.dbのクリアランプが更新されないことがある
+- [ ] 表示できない画像BGAが多い
+- [ ] BGA/WAVの拡張子探索順の確認
+- [ ] 画像形式のBGAの読み込み処理改善 (現状読み込み終わるまでplay画面に入らないようになっている)
+- [ ] LN終了時にキー音が鳴るバグ
+- [ ] 同じWAV定義のノーツが複数置かれているときのキー音の鳴らし方調整
+- [ ] portableと開発ビルドでskinがすべて同梱扱いになっている (同梱ラベルを削除)
+- [ ] インストーラー版のスクリーンショットのデフォルト保存先がdata/screenshotsになっている (OSのdata_dirに変更が必要)
+- [ ] GitHub Actionsで自動ビルドされたバイナリがASIO非対応になっている？
+- [ ] Starseeker result skin の MISS COUNT 差分の色が逆？(-が白、+が赤な気がする)
+- [ ] クイックリトライの挙動改善 (ロードのスキップ、画面が固まる部分の処理改善)
+- [ ] result skin の背景動画が固まることがある
+- [ ] 初プレイの曲のresult skinで、MYBEST枠に今回のプレイ結果が表示される (NOPLAY, score=0で表示されるべき)
+- [ ] beatoraja風の緑数字変更機能を実装 (E2+KeyN, E2+Scr)
+- [ ] E1/E2 hold 中はREADY状態にならないようガード
+- [ ] E1 hold状態でプレイ画面遷移時に、緑数字などが表示されるようにする
+- [ ] 最終ノーツ処理後にE1/E2を押すとfadeout開始 (このときクイックリトライ判定にならないよう注意)
+- [ ] 設定画面でE2が戻る機能になっている
+- [ ] play skin turntable の回転方向が逆
+- [ ] decide/resultのfadeoutスキップボタンをKey1/3/5/7からE1/E2に変更検討
+- [ ] 難易度表のデフォルトを追加 (DP/PMS)
 - [ ] ln_policyをAUTO/FORCEとLN/CN/HCNに分けることでselect skinのLN変更機能を有効化
 - [ ] IR側でln_policyが見やすくなるよう表示を調整
-- [ ] `Noto Sans CJK JP` or `Noto Sans JP` 同梱
 - [ ] アシストオプション、詳細オプション実装
 - [ ] Select画面の操作変更とスキン側の不一致について考える
 - [ ] Select画面の操作が一部profile.tomlに設定されており複雑なので整理
+- [ ] egui設定ウィンドウを整理
+- [ ] skin 独自拡張(ref/timer) 仕様検討
+  - [ ] NHS / FHS
+  - [ ] Ranking 切り替え (Ranking / Rival / Self-only)
+  - [ ] WMII result skin 対応
+  - [ ] select skin の option panel系
 
 
 ## Roadmap
 
-- [x] Base 62 BMS (62進数BMS)
-- [x] course
-- [x] BMSON
-- [x] PMS (9K)
-- [x] csv skin (beatoraja compliant)
-- [x] score database migration from LR2 / beatoraja
-- [x] auto-adjust (自動判定調整)
-- [x] normalizing volume per-chart
-- [x] UE-style BMS (4K / 6K / 8K)
-- [x] new IR (bmz-ir)
-- [ ] IR score import (IRからスコアをダウンロードしてscore.dbに保存する機能)
+- [ ] IR score.db import (IRからスコアをダウンロードしてscore.dbに保存する機能)
+- [ ] IR score.db upload (ローカルのscore.dbをIRにアップロードする機能)
 - [ ] random select
 - [ ] battle mode
 - [ ] rec mode (譜面動画作成モード)
@@ -200,10 +169,12 @@ cargo run
 - [ ] OBS WebSocket control integration
 - [ ] Discord Rich Presence
 - [ ] Arena Mode
-- [ ] i18n
+- [ ] i18n (en / ko / zh-CN / zh-TW / zh-HK)
 - [ ] RawInput / GameInput / 8000Hz Input
 - [ ] WASAPI exclusive
 - [ ] ギミック系BMSへの対応
+- [ ] auto generate preview
+- [ ] non stop mode
 
 ## Out of Scope (but welcome your contributions)
 
