@@ -230,6 +230,8 @@ pub struct RenderSnapshot {
     pub bpm_graph_segments: Arc<[BpmGraphSegment]>,
     /// OPTION_AUTOPLAYON (33) / OPTION_AUTOPLAYOFF (32) 用。
     pub autoplay: bool,
+    /// リプレイ再生中かどうか。プレイ中 FAST/SLOW 表示など、入力由来の表示制御に使う。
+    pub replay_playback: bool,
     /// OPTION_MODE_COURSE (290) とステージ別 op (280..283 / 289) 用。未対応時は None。
     pub course_stage: Option<CourseStageMarker>,
     /// beatoraja STRING_COURSE1_TITLE..10_TITLE (150..159) 用。
@@ -259,6 +261,10 @@ pub struct RenderSnapshot {
     pub failed_elapsed_ms: Option<i32>,
     /// Music end timer elapsed ms (skin timer 908). None while inactive.
     pub music_end_elapsed_ms: Option<i32>,
+    /// Gauge increase timer elapsed ms (skin timer 42/43). None while inactive.
+    pub gauge_increase_elapsed_ms: Option<i32>,
+    /// Gauge max timer elapsed ms (skin timer 44/45). None while inactive.
+    pub gauge_max_elapsed_ms: Option<i32>,
     pub bar_lines: Vec<VisibleBarLine>,
     /// 各レーンのキー押下開始からの経過 ms(押下中のみ Some)。skin timer 100..=107 に渡る。
     pub keyon_ms: [Option<i32>; LANE_COUNT],

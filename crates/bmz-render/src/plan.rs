@@ -913,6 +913,8 @@ fn plan_play(
         fadeout_ms: snapshot.fadeout_elapsed_ms,
         failed_ms: snapshot.failed_elapsed_ms,
         music_end_ms: snapshot.music_end_elapsed_ms,
+        gauge_increase_ms: snapshot.gauge_increase_elapsed_ms,
+        gauge_max_ms: snapshot.gauge_max_elapsed_ms,
         judge_index: judge_region_state.judge_index,
         judge_combo: judge_region_state.judge_combo,
         judge_timing_sign: judge_region_state.judge_timing_sign,
@@ -1153,8 +1155,11 @@ fn plan_play(
         // レーン背景が暗いグレーなので、カバーは判別しやすいように明確に黒で塗り、
         // 下端に視認用のハイライト帯を付ける。
         if snapshot.lane_cover > 0.0 {
-            let cover_bottom =
-                play_object_y(board, snapshot.lift, (1.0 - snapshot.lane_cover).clamp(0.0, 1.0));
+            let cover_bottom = play_object_y(
+                board,
+                snapshot.lift,
+                lane_cover_bottom_progress(snapshot.lane_cover, snapshot.lift),
+            );
             let cover_height = (cover_bottom - board.y).max(0.0);
             commands.push(DrawCommand::Rect {
                 rect: Rect { x: board.x, y: board.y, width: board.width, height: cover_height },
@@ -1378,6 +1383,8 @@ fn plan_decide(
             lane_cover: snapshot.lane_cover,
             hidden_cover: snapshot.hidden_cover,
             fadeout_ms: snapshot.fadeout_elapsed_ms,
+            gauge_increase_ms: snapshot.gauge_increase_elapsed_ms,
+            gauge_max_ms: snapshot.gauge_max_elapsed_ms,
             ..crate::skin::SkinDrawState::default()
         };
         advance_skin_dynamic_timers(skin, dynamic_timers, &mut state, play_elapsed_ms);
@@ -1421,8 +1428,14 @@ fn skin_lift_offset_px(lift: f32, lane_h: f32) -> i32 {
     (lift * lane_h).round() as i32
 }
 
-fn skin_lanecover_offset_px(lane_cover: f32, lift: f32, lane_h: f32) -> i32 {
-    (-(1.0 - lift.clamp(0.0, 1.0)) * lane_h * lane_cover.clamp(0.0, 1.0)).round() as i32
+fn skin_lanecover_offset_px(lane_cover: f32, _lift: f32, lane_h: f32) -> i32 {
+    (-(lane_h * lane_cover.clamp(0.0, 1.0))).round() as i32
+}
+
+fn lane_cover_bottom_progress(lane_cover: f32, lift: f32) -> f32 {
+    let lift = lift.clamp(0.0, 1.0);
+    let visible = (1.0 - lift).max(f32::EPSILON);
+    ((visible - lane_cover.clamp(0.0, visible)) / visible).clamp(0.0, 1.0)
 }
 
 fn skin_hidden_cover_offset_px(lift: f32, hidden_cover: f32, lane_h: f32) -> i32 {
@@ -4002,7 +4015,10 @@ mod tests {
 
         assert_eq!(skin_lift_offset_px(0.3, lane_h), 217);
         assert_eq!(skin_lanecover_offset_px(0.5, 0.0, lane_h), -362);
-        assert_eq!(skin_lanecover_offset_px(0.5, 0.25, lane_h), -271);
+        assert_eq!(skin_lanecover_offset_px(0.5, 0.25, lane_h), -362);
+        assert!(approx_eq(lane_cover_bottom_progress(0.25, 0.0), 0.75));
+        assert!(approx_eq(lane_cover_bottom_progress(0.25, 0.2), 0.6875));
+        assert!(approx_eq(lane_cover_bottom_progress(0.9, 0.2), 0.0));
         assert_eq!(skin_hidden_cover_offset_px(0.3, 0.25, lane_h), 127);
     }
 

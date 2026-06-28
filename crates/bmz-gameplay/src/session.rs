@@ -143,6 +143,10 @@ pub struct GameSession {
     pub result_judgements: HashMap<NoteId, ResultJudgementDetail>,
     /// HitErrorVisualizer 用の直近判定タイミング (ms)。beatoraja `recentJudges` 相当。
     pub hit_error_ring: HitErrorRing,
+    /// Gauge increase animation start time. Skin timer 42/43 uses elapsed time from here.
+    pub gauge_increase_started_at: Option<TimeUs>,
+    /// Gauge max animation start time. Skin timer 44/45 is active while the current gauge is maxed.
+    pub gauge_max_started_at: Option<TimeUs>,
     /// Full combo animation start time. Set once when all notes have been judged
     /// and the combo still matches the total note count.
     pub full_combo_started_at: Option<TimeUs>,
@@ -285,7 +289,9 @@ pub fn apply_judge_outcome(
         if event.affects_score {
             session.score.apply(&event);
             update_course_combo_state(session, &event);
+            let previous_gauge = session.gauge.current().value;
             session.gauge.apply_judge(event.judge, 1.0);
+            update_gauge_increase_timer(session, previous_gauge, event.time);
             if let Some(note_id) = event.note_id {
                 session.result_judgements.insert(
                     note_id,
@@ -344,6 +350,23 @@ fn update_course_combo_state(session: &mut GameSession, event: &JudgementEvent) 
 fn update_failed_state_from_gauge(session: &mut GameSession) {
     if session.state == PlayState::Playing && session.gauge.current_closes_play_on_zero() {
         session.state = PlayState::Failed;
+    }
+}
+
+fn update_gauge_increase_timer(session: &mut GameSession, previous_value: f32, now: TimeUs) {
+    let current_value = session.gauge.current().value;
+    if current_value > previous_value + f32::EPSILON {
+        session.gauge_increase_started_at = Some(TimeUs(now.0.max(0)));
+    }
+}
+
+fn update_gauge_max_timer(session: &mut GameSession, now: TimeUs) {
+    let current = session.gauge.current();
+    let is_max = current.value >= current.definition.max.max(1.0);
+    match (is_max, session.gauge_max_started_at) {
+        (true, None) => session.gauge_max_started_at = Some(TimeUs(now.0.max(0))),
+        (false, Some(_)) => session.gauge_max_started_at = None,
+        _ => {}
     }
 }
 
@@ -835,7 +858,9 @@ pub fn apply_hcn_gauge(session: &mut GameSession, audio_now: TimeUs) {
         if timer.inclease {
             timer.passing_count_us += delta_us;
             while timer.passing_count_us > HCN_UPDATE_US {
+                let previous_gauge = session.gauge.current().value;
                 session.gauge.apply_hcn_hold();
+                update_gauge_increase_timer(session, previous_gauge, audio_now);
                 timer.passing_count_us -= HCN_UPDATE_US;
             }
         } else {
@@ -930,6 +955,7 @@ pub fn advance_session_frame(
             session.state = PlayState::Finished;
         }
     }
+    update_gauge_max_timer(session, times.audio_now);
 
     let mine_hits = std::mem::take(&mut session.pending_mine_hits);
     let keysound_volumes = std::mem::take(&mut session.pending_keysound_volumes);
@@ -1169,6 +1195,45 @@ mod tests {
         update_failed_state_from_gauge(&mut session);
 
         assert_eq!(session.state, PlayState::Failed);
+    }
+
+    #[test]
+    fn gauge_increase_timer_starts_when_judge_raises_gauge() {
+        let mut session = session_with_autoplay(chart_with_keysound());
+        session.gauge.set_initial_value(50.0);
+
+        apply_judge_outcome(
+            &mut session,
+            JudgeOutcome {
+                events: vec![JudgementEvent {
+                    time: TimeUs(123_000),
+                    ..judgement_event(Judge::PGreat, 0)
+                }],
+                ..Default::default()
+            },
+        );
+
+        assert_eq!(session.gauge_increase_started_at, Some(TimeUs(123_000)));
+    }
+
+    #[test]
+    fn gauge_max_timer_tracks_current_max_state() {
+        let mut session = session_with_autoplay(chart_with_keysound());
+        session.gauge.set_initial_value(99.0);
+
+        update_gauge_max_timer(&mut session, TimeUs(25_000));
+        assert_eq!(session.gauge_max_started_at, None);
+
+        session.gauge.set_initial_value(100.0);
+        update_gauge_max_timer(&mut session, TimeUs(50_000));
+        assert_eq!(session.gauge_max_started_at, Some(TimeUs(50_000)));
+
+        update_gauge_max_timer(&mut session, TimeUs(75_000));
+        assert_eq!(session.gauge_max_started_at, Some(TimeUs(50_000)));
+
+        session.gauge.set_initial_value(99.0);
+        update_gauge_max_timer(&mut session, TimeUs(100_000));
+        assert_eq!(session.gauge_max_started_at, None);
     }
 
     #[test]
@@ -2012,6 +2077,8 @@ mod tests {
             recent_judgements: Vec::new(),
             result_judgements: Default::default(),
             hit_error_ring: HitErrorRing::default(),
+            gauge_increase_started_at: None,
+            gauge_max_started_at: None,
             full_combo_started_at: None,
             bgm_scheduler: BgmScheduler::default(),
             offsets: PlayOffsets { input_offset_us: 0, visual_offset_us: 0 },

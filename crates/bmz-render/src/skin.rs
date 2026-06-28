@@ -143,6 +143,9 @@ pub struct SkinDocument {
     /// 計算する。
     #[serde(skip)]
     pub user_selected_options: Option<Vec<i32>>,
+    /// LR2 `#SETOPTION` など、設定 UI に出さず内部的に有効化する op。
+    #[serde(skip, default)]
+    pub internal_enabled_options: Vec<i32>,
     /// プレイ描画時のみ plan 側が設定する judgegraph 密度。
     #[serde(skip, default)]
     pub play_judge_graph_density: Vec<u8>,
@@ -1962,6 +1965,10 @@ pub struct SkinDrawState {
     /// Full combo timer elapsed ms (TIMER_FULLCOMBO_1P/2P=48/49)。Noneなら非アクティブ。
     pub full_combo_ms: Option<i32>,
     pub music_end_ms: Option<i32>,
+    /// Gauge increase timer elapsed ms (TIMER_GAUGE_INCLEASE_1P/2P=42/43)。
+    pub gauge_increase_ms: Option<i32>,
+    /// Gauge max timer elapsed ms (TIMER_GAUGE_MAX_1P/2P=44/45)。
+    pub gauge_max_ms: Option<i32>,
     /// 領域別の判定画像インデックス (0=PGREAT,1=GREAT,2=GOOD,3=BAD,4=POOR,5=MISS)。
     pub judge_index: [Option<usize>; MAX_JUDGE_REGIONS],
     /// 領域別の判定表示用 combo。beatoraja `JudgeManager.judgecombo` 相当。
@@ -2244,6 +2251,8 @@ impl Default for SkinDrawState {
             judge_ms: [None; MAX_JUDGE_REGIONS],
             full_combo_ms: None,
             music_end_ms: None,
+            gauge_increase_ms: None,
+            gauge_max_ms: None,
             judge_index: [None; MAX_JUDGE_REGIONS],
             judge_combo: [0; MAX_JUDGE_REGIONS],
             judge_timing_sign: [None; MAX_JUDGE_REGIONS],
@@ -3649,20 +3658,31 @@ impl SkinDocument {
     }
 
     pub fn enabled_options(&self) -> Vec<i32> {
-        if let Some(ops) = &self.user_selected_options {
-            return ops.clone();
+        let options = if let Some(ops) = &self.user_selected_options {
+            ops.clone()
+        } else {
+            self.property
+                .iter()
+                .filter_map(|property| {
+                    let selected = if property.def.is_empty() {
+                        property.item.first()
+                    } else {
+                        property.item.iter().find(|item| item.name == property.def)
+                    };
+                    selected.map(|item| item.op)
+                })
+                .collect()
+        };
+        self.with_internal_enabled_options(options)
+    }
+
+    pub fn with_internal_enabled_options(&self, mut enabled_options: Vec<i32>) -> Vec<i32> {
+        for &op in &self.internal_enabled_options {
+            if !enabled_options.contains(&op) {
+                enabled_options.push(op);
+            }
         }
-        self.property
-            .iter()
-            .filter_map(|property| {
-                let selected = if property.def.is_empty() {
-                    property.item.first()
-                } else {
-                    property.item.iter().find(|item| item.name == property.def)
-                };
-                selected.map(|item| item.op)
-            })
-            .collect()
+        enabled_options
     }
 
     /// 有効なオプション条件に基づいて `destination` エントリを展開し、
@@ -5153,6 +5173,7 @@ impl SkinDocument {
         let elapsed_ms = skin_timer_elapsed_ms(destination.timer, state)?;
         let mut frame = resolve_destination_frame(destination, elapsed_ms, enabled_options, state)?;
         apply_skin_offset_to_frame(destination, &mut frame, state, false);
+        let reverse_parts = skin_gauge_reverse_parts(frame);
         let rect = normalize_skin_frame_rect(frame, self.w, self.h);
         let parts = gauge_def.parts.max(1);
         let max = state.gauge_max.max(1.0);
@@ -5177,7 +5198,7 @@ impl SkinDocument {
                 anim_type,
             );
             let node_id = gauge_def.nodes.get(node_index)?;
-            let part_rect = skin_gauge_part_rect(rect, parts, part);
+            let part_rect = skin_gauge_part_rect(rect, parts, part, reverse_parts);
             if let Some(item) = self.gauge_image_render_item(
                 node_id,
                 part_rect,
@@ -8233,7 +8254,7 @@ fn skin_state_lane_judge_event_index(event_id: i32, state: &SkinDrawState) -> Op
 /// beatoraja `main_state.float_number(ref)`。BARGRAPH / SLIDER 系の比率 0.0-1.0。
 fn skin_state_float_number(ref_id: i32, state: &SkinDrawState) -> Option<f32> {
     Some(match ref_id {
-        14 => state.lane_cover.clamp(0.0, 1.0),
+        14 => bmz_lane_cover_for_lift(state.lane_cover, state.lift),
         _ => graph_value(ref_id, state),
     })
 }
@@ -8701,7 +8722,7 @@ fn skin_state_number(ref_id: i32, state: &SkinDrawState) -> Option<i64> {
             Some(if state.now_bpm > 0.0 { state.now_bpm } else { state.select_bpm }.round() as i64)
         }
         // レーンカバー: NUMBER_LANECOVER1=14 (0-1000)
-        14 => Some((state.lane_cover.clamp(0.0, 1.0) * 1000.0).round() as i64),
+        14 => Some((bmz_lane_cover_for_lift(state.lane_cover, state.lift) * 1000.0).round() as i64),
         // リフト: NUMBER_LIFT1=314 (0-1000)
         314 => Some((state.lift.clamp(0.0, 1.0) * 1000.0).round() as i64),
         // 選曲画面の音量表示: MASTER/KEY/BGM volume (0-100)
@@ -8810,6 +8831,42 @@ fn lane_cover_duration_number(ref_id: i32, state: &SkinDrawState) -> Option<i64>
     let green = offset % 2 == 1;
     let cover = offset % 4 < 2;
     let mode = offset / 4;
+    let duration = if mode == 0 {
+        current_lane_cover_duration_number_ms(cover, state)
+            .or_else(|| lane_cover_duration_number_ms_for_bpm(cover, mode, state))?
+    } else {
+        lane_cover_duration_number_ms_for_bpm(cover, mode, state)?
+    };
+    Some(if green { duration_to_green_number_ms_i64(duration) } else { duration })
+}
+
+fn current_lane_cover_duration_number_ms(cover: bool, state: &SkinDrawState) -> Option<i64> {
+    if !duration_refs_available(state) {
+        return None;
+    }
+    let cover_on_visible = bmz_visible_lane_fraction(state.lane_cover, state.lift);
+    let target_visible =
+        if cover { cover_on_visible } else { bmz_visible_lane_fraction(0.0, state.lift) };
+    let duration = state.total_duration_ms.max(0) as i64;
+    let duration = if duration > 0 { duration } else { state_duration_number_ms(state) };
+    if cover {
+        return Some(duration);
+    }
+    if cover_on_visible > f32::EPSILON {
+        return Some(
+            (duration.max(0) as f64 * target_visible as f64 / cover_on_visible as f64)
+                .round()
+                .max(0.0) as i64,
+        );
+    }
+    None
+}
+
+fn lane_cover_duration_number_ms_for_bpm(
+    cover: bool,
+    mode: i32,
+    state: &SkinDrawState,
+) -> Option<i64> {
     let target_bpm = match mode {
         0 => bpm_value_or_select(state.now_bpm, state.select_bpm),
         1 => bpm_value_or_select(state.main_bpm, state.select_bpm),
@@ -8817,11 +8874,21 @@ fn lane_cover_duration_number(ref_id: i32, state: &SkinDrawState) -> Option<i64>
         3 => bpm_value_or_select(state.max_bpm, state.select_max_bpm),
         _ => return None,
     }?;
-    let lane_cover = if cover { (1.0 - state.lane_cover.clamp(0.0, 1.0)) as f64 } else { 1.0 };
-    let green_factor = if green { 0.6 } else { 1.0 };
-    let duration =
-        240_000.0 / target_bpm as f64 / state.hispeed.max(0.01) as f64 * lane_cover * green_factor;
+    let visible = if cover {
+        bmz_visible_lane_fraction(state.lane_cover, state.lift)
+    } else {
+        bmz_visible_lane_fraction(0.0, state.lift)
+    };
+    let duration = 240_000.0 / target_bpm as f64 / state.hispeed.max(0.01) as f64 * visible as f64;
     Some(duration.round().max(0.0) as i64)
+}
+
+fn bmz_lane_cover_for_lift(lane_cover: f32, lift: f32) -> f32 {
+    lane_cover.clamp(0.0, (1.0 - lift.clamp(0.0, 1.0)).clamp(0.0, 1.0))
+}
+
+fn bmz_visible_lane_fraction(lane_cover: f32, lift: f32) -> f32 {
+    (1.0 - bmz_lane_cover_for_lift(lane_cover, lift) - lift.clamp(0.0, 1.0)).clamp(0.0, 1.0)
 }
 
 fn duration_refs_available(state: &SkinDrawState) -> bool {
@@ -8853,7 +8920,11 @@ pub fn green_duration_to_duration_i32(green_duration_ms: i32) -> i32 {
 
 pub fn duration_to_green_number_ms(duration_ms: i32) -> i32 {
     let duration = duration_ms.max(0) as i64;
-    ((duration.saturating_mul(3).saturating_add(2)) / 5).min(i32::MAX as i64) as i32
+    duration_to_green_number_ms_i64(duration) as i32
+}
+
+fn duration_to_green_number_ms_i64(duration_ms: i64) -> i64 {
+    duration_ms.max(0).saturating_mul(3).saturating_add(2).saturating_div(5).min(i32::MAX as i64)
 }
 
 fn bpm_value_or_select(value: f32, fallback: f32) -> Option<f32> {
@@ -9553,7 +9624,10 @@ fn skin_slider_progress(slider: &SkinSliderDef, state: &SkinDrawState) -> Option
 fn skin_slider_progress_by_type(slider_type: i32, state: &SkinDrawState) -> Option<f32> {
     match slider_type {
         1 => Some(state.select_scroll_progress.clamp(0.0, 1.0)),
-        4 | 5 => (state.lane_cover > 0.0).then_some(state.lane_cover.clamp(0.0, 1.0)),
+        4 | 5 => {
+            let lane_cover = bmz_lane_cover_for_lift(state.lane_cover, state.lift);
+            (lane_cover > 0.0).then_some(lane_cover)
+        }
         6 => Some(state.play_progress.clamp(0.0, 1.0)),
         17 => Some(state.select_master_volume.clamp(0.0, 1.0)),
         18 => Some(state.select_key_volume.clamp(0.0, 1.0)),
@@ -9577,7 +9651,8 @@ fn skin_timer_elapsed_ms(timer: Option<i32>, state: &SkinDrawState) -> Option<i3
         Some(174) => state.ir_ranking.connect_fail_ms,
         Some(40) => state.ready_timer_ms,
         Some(41) => state.play_timer_ms,
-        Some(44 | 45) => skin_gauge_max_timer_elapsed_ms(state),
+        Some(42 | 43) => state.gauge_increase_ms,
+        Some(44 | 45) => state.gauge_max_ms,
         Some(11) => Some(state.select_bar_elapsed_ms),
         Some(21..=23) => Some(state.select_option_panel_elapsed_ms),
         Some(348..=352) => score_target_timer_elapsed_ms(timer.unwrap(), state),
@@ -9638,10 +9713,6 @@ fn skin_timer_elapsed_ms(timer: Option<i32>, state: &SkinDrawState) -> Option<i3
         }
         _ => None,
     }
-}
-
-fn skin_gauge_max_timer_elapsed_ms(state: &SkinDrawState) -> Option<i32> {
-    (state.gauge >= state.gauge_max.max(1.0)).then_some(state.elapsed_ms)
 }
 
 fn skin_text_align(align: i32) -> TextAlign {
@@ -12818,23 +12889,27 @@ fn skin_gauge_flicker_alpha(animation: i32, duration: i32) -> f32 {
     }
 }
 
-fn skin_gauge_part_rect(rect: Rect, parts: i32, part: i32) -> Rect {
+fn skin_gauge_reverse_parts(frame: ResolvedSkinFrame) -> bool {
+    if frame.w.abs() >= frame.h.abs() { frame.w < 0 } else { frame.h < 0 }
+}
+
+fn skin_gauge_part_rect(rect: Rect, parts: i32, part: i32, reverse: bool) -> Rect {
     if rect.width.abs() >= rect.height.abs() {
         let part_width = rect.width / parts as f32;
-        Rect {
-            x: rect.x + part_width * (part - 1) as f32,
-            y: rect.y,
-            width: part_width,
-            height: rect.height,
-        }
+        let x = if reverse {
+            rect.x + rect.width - part_width * part as f32
+        } else {
+            rect.x + part_width * (part - 1) as f32
+        };
+        Rect { x, y: rect.y, width: part_width, height: rect.height }
     } else {
         let part_height = rect.height / parts as f32;
-        Rect {
-            x: rect.x,
-            y: rect.y + rect.height - part_height * part as f32,
-            width: rect.width,
-            height: part_height,
-        }
+        let y = if reverse {
+            rect.y + part_height * (part - 1) as f32
+        } else {
+            rect.y + rect.height - part_height * part as f32
+        };
+        Rect { x: rect.x, y, width: rect.width, height: part_height }
     }
 }
 
@@ -16114,7 +16189,7 @@ mod tests {
         assert!(matches!(items[0], SkinRenderItem::Image {
                 rect: Rect { x, y, width, height },
                 ..
-            } if approx_eq(x, 0.4)
+            } if approx_eq(x, 0.7)
                 && approx_eq(y, 0.8)
                 && approx_eq(width, 0.1)
                 && approx_eq(height, 0.1)));
@@ -18979,6 +19054,36 @@ mod tests {
     }
 
     #[test]
+    fn sudden_slider_progress_is_capped_by_lift() {
+        let document: SkinDocument = serde_json::from_str(
+            r#"
+            {
+                "type": 0,
+                "w": 100,
+                "h": 100,
+                "source": [{ "id": 1, "path": "cover.png" }],
+                "slider": [
+                    { "id": "lanecover", "src": 1, "x": 0, "y": 0, "w": 10, "h": 10, "angle": 2, "range": 100, "type": 4 }
+                ],
+                "destination": [
+                    { "id": "lanecover", "dst": [{ "x": 0, "y": 100, "w": 10, "h": 10 }] }
+                ]
+            }
+            "#,
+        )
+        .unwrap();
+        let sources = mock_source("1", 100.0, 100.0);
+
+        let items = document.static_image_render_items(
+            &sources,
+            &SkinDrawState { lane_cover: 0.9, lift: 0.2, ..SkinDrawState::default() },
+        );
+
+        let SkinRenderItem::Image { rect, .. } = &items[0] else { panic!() };
+        assert!(approx_eq(rect.y, 0.7), "expected capped SUDDEN slider y, got {}", rect.y);
+    }
+
+    #[test]
     fn skin_document_resolves_end_of_note_timer_destinations() {
         let document: SkinDocument = serde_json::from_str(
             r#"
@@ -20325,24 +20430,22 @@ mod tests {
     }
 
     #[test]
-    fn gauge_max_timers_are_active_at_max_gauge() {
-        let below = SkinDrawState {
-            elapsed_ms: 1_700,
-            gauge: 99.9,
-            gauge_max: 100.0,
-            ..SkinDrawState::default()
-        };
-        assert_eq!(skin_timer_elapsed_ms(Some(44), &below), None);
-        assert_eq!(skin_timer_elapsed_ms(Some(45), &below), None);
+    fn gauge_timers_use_state_elapsed_values() {
+        let inactive = SkinDrawState::default();
+        assert_eq!(skin_timer_elapsed_ms(Some(42), &inactive), None);
+        assert_eq!(skin_timer_elapsed_ms(Some(43), &inactive), None);
+        assert_eq!(skin_timer_elapsed_ms(Some(44), &inactive), None);
+        assert_eq!(skin_timer_elapsed_ms(Some(45), &inactive), None);
 
-        let max = SkinDrawState {
-            elapsed_ms: 1_700,
-            gauge: 100.0,
-            gauge_max: 100.0,
+        let active = SkinDrawState {
+            gauge_increase_ms: Some(75),
+            gauge_max_ms: Some(1_700),
             ..SkinDrawState::default()
         };
-        assert_eq!(skin_timer_elapsed_ms(Some(44), &max), Some(1_700));
-        assert_eq!(skin_timer_elapsed_ms(Some(45), &max), Some(1_700));
+        assert_eq!(skin_timer_elapsed_ms(Some(42), &active), Some(75));
+        assert_eq!(skin_timer_elapsed_ms(Some(43), &active), Some(75));
+        assert_eq!(skin_timer_elapsed_ms(Some(44), &active), Some(1_700));
+        assert_eq!(skin_timer_elapsed_ms(Some(45), &active), Some(1_700));
     }
 
     #[test]
@@ -22224,6 +22327,8 @@ mod tests {
         // NUMBER_LIFT1 (314) = round(0.42 * 1000) = 420
         let lifted = SkinDrawState { lift: 0.42, ..state.clone() };
         assert_eq!(skin_state_number(314, &lifted), Some(420));
+        let capped_cover = SkinDrawState { lane_cover: 0.9, lift: 0.2, ..state.clone() };
+        assert_eq!(skin_state_number(14, &capped_cover), Some(800));
         // float_number(113) tracks BARGRAPH_BESTSCORERATE
         let best_rate = SkinDrawState {
             total_notes: 100,
@@ -22254,12 +22359,14 @@ mod tests {
             max_bpm: 200.0,
             hispeed: 2.0,
             lane_cover: 0.25,
-            total_duration_ms: 2_000,
-            duration_green_ms: Some(1_200),
+            total_duration_ms: 900,
+            duration_green_ms: Some(540),
             ..SkinDrawState::default()
         };
-        // 1312..=1327 are beatoraja lane-cover duration variants:
+        // 1312..=1327 are lane-cover duration variants:
         // current/main/min/max BPM x cover on/off x normal/green.
+        // Current-BPM variants use SkinDrawState's real note display duration; main/min/max variants
+        // are theoretical values derived from their BPM.
         assert_eq!(skin_state_number(1312, &duration_state), Some(900));
         assert_eq!(skin_state_number(1313, &duration_state), Some(540));
         assert_eq!(skin_state_number(1314, &duration_state), Some(1_200));
@@ -22273,9 +22380,10 @@ mod tests {
             total_duration_ms: 1_295,
             ..duration_state.clone()
         };
-        // WMII uses the main/min/max variants.  They should stay stable across
-        // BPM changes and current-duration rounding; only the current-BPM variant changes.
-        assert_eq!(skin_state_number(1313, &changed_now_bpm), Some(360));
+        // WMII uses the main/min/max variants.  They should stay stable across BPM changes and
+        // current-duration rounding; current-BPM variants follow the runtime display duration.
+        assert_eq!(skin_state_number(1312, &changed_now_bpm), Some(1_295));
+        assert_eq!(skin_state_number(1313, &changed_now_bpm), Some(777));
         assert_eq!(skin_state_number(1317, &changed_now_bpm), Some(540));
         assert_eq!(skin_state_number(1321, &changed_now_bpm), Some(1_080));
         assert_eq!(skin_state_number(1325, &changed_now_bpm), Some(270));
@@ -22283,6 +22391,15 @@ mod tests {
         assert_eq!(skin_state_number(1317, &faster), Some(360));
         let lower_cover = SkinDrawState { lane_cover: 0.5, ..duration_state.clone() };
         assert_eq!(skin_state_number(1317, &lower_cover), Some(360));
+        let lifted_cover = SkinDrawState {
+            lift: 0.2,
+            total_duration_ms: 660,
+            duration_green_ms: Some(396),
+            ..duration_state.clone()
+        };
+        assert_eq!(skin_state_number(1312, &lifted_cover), Some(660));
+        assert_eq!(skin_state_number(1313, &lifted_cover), Some(396));
+        assert_eq!(skin_state_number(1314, &lifted_cover), Some(960));
         // VALUE_JUDGE_1P_DURATION (525) = -(-3) = 3 (FAST 3ms は beatoraja 規約で正)
         assert_eq!(skin_state_number(525, &state), Some(3));
         // VALUE_JUDGE_2P_DURATION (526): SLOW 7ms (delta=+7) は beatoraja 規約で負

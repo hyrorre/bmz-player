@@ -163,6 +163,10 @@ fn skin_timer_elapsed_ms(now: TimeUs, started_at: TimeUs) -> i32 {
     ((now.0 - started_at.0) / 1_000).clamp(0, i32::MAX as i64) as i32
 }
 
+fn optional_skin_timer_elapsed_ms(now: TimeUs, started_at: Option<TimeUs>) -> Option<i32> {
+    started_at.map(|started_at| skin_timer_elapsed_ms(now, started_at))
+}
+
 fn lane_key_timer_ms(
     started_at: Option<TimeUs>,
     chart_time: TimeUs,
@@ -199,6 +203,10 @@ pub fn refresh_play_skin_visuals(snapshot: &mut RenderSnapshot, session: &GameSe
         skin_offsets_from_session(session, snapshot.time, snapshot.play_elapsed_time);
     snapshot.keyon_ms = lane_keyon_ms(session, snapshot.time, snapshot.play_elapsed_time);
     snapshot.keyoff_ms = lane_keyoff_ms(session, snapshot.time, snapshot.play_elapsed_time);
+    snapshot.gauge_increase_elapsed_ms =
+        optional_skin_timer_elapsed_ms(snapshot.time, session.gauge_increase_started_at);
+    snapshot.gauge_max_elapsed_ms =
+        optional_skin_timer_elapsed_ms(snapshot.time, session.gauge_max_started_at);
 }
 
 pub fn build_render_snapshot(
@@ -278,7 +286,11 @@ pub fn build_render_snapshot_with_target_and_bga_frames_cached(
         cursor_tick,
     );
     let note_display_duration_ms = note_display_duration_ms(session, now_bpm, scroll_multiplier);
-    let lane_cover = if session.lane_cover_visible { session.lane_cover } else { 0.0 };
+    let lane_cover = if session.lane_cover_visible {
+        crate::config::play::clamp_lane_cover_for_lift(session.lane_cover, session.lift)
+    } else {
+        0.0
+    };
     let adjusted_cover_progress = compute_adjusted_cover_progress(
         session.hidden_enabled,
         lane_cover,
@@ -400,6 +412,7 @@ pub fn build_render_snapshot_with_target_and_bga_frames_cached(
         judge_graph_density: Arc::clone(&cache.judge_graph_density),
         bpm_graph_segments: Arc::clone(&cache.bpm_graph_segments),
         autoplay: session.autoplay.as_ref().is_some_and(|autoplay| autoplay.is_full()),
+        replay_playback: session.replay_player.is_some(),
         course_stage: None,
         course_titles: Default::default(),
         table_text_primary: String::new(),
@@ -429,6 +442,14 @@ pub fn build_render_snapshot_with_target_and_bga_frames_cached(
         fadeout_elapsed_ms: None,
         failed_elapsed_ms: None,
         music_end_elapsed_ms: None,
+        gauge_increase_elapsed_ms: optional_skin_timer_elapsed_ms(
+            render_now,
+            session.gauge_increase_started_at,
+        ),
+        gauge_max_elapsed_ms: optional_skin_timer_elapsed_ms(
+            render_now,
+            session.gauge_max_started_at,
+        ),
         bar_lines: Vec::new(),
         visible_long_notes: Vec::new(),
         keyon_ms: lane_keyon_ms(session, render_now, play_elapsed_time),
@@ -562,7 +583,11 @@ pub fn update_render_snapshot_play_options(
 ) {
     snapshot.hispeed = session.hispeed;
     snapshot.lift = session.lift;
-    snapshot.lane_cover = if session.lane_cover_visible { session.lane_cover } else { 0.0 };
+    snapshot.lane_cover = if session.lane_cover_visible {
+        crate::config::play::clamp_lane_cover_for_lift(session.lane_cover, session.lift)
+    } else {
+        0.0
+    };
     snapshot.lane_cover_changing = session.lane_cover_changing;
     snapshot.lanecover_enabled = session.lanecover_enabled;
     snapshot.lift_enabled = session.lift_enabled;
@@ -595,19 +620,30 @@ fn current_poor_bga_frame(
 }
 
 fn note_display_duration_ms(session: &GameSession, now_bpm: f32, scroll_multiplier: f32) -> i32 {
-    let lane_cover = if session.lane_cover_visible { session.lane_cover } else { 0.0 };
-    display_duration_ms_for_bpm_hispeed(now_bpm, session.hispeed, lane_cover, scroll_multiplier)
-        .round()
-        .clamp(0.0, i32::MAX as f32) as i32
+    let lane_cover = if session.lane_cover_visible {
+        crate::config::play::clamp_lane_cover_for_lift(session.lane_cover, session.lift)
+    } else {
+        0.0
+    };
+    display_duration_ms_for_bpm_hispeed(
+        now_bpm,
+        session.hispeed,
+        lane_cover,
+        session.lift,
+        scroll_multiplier,
+    )
+    .round()
+    .clamp(0.0, i32::MAX as f32) as i32
 }
 
 pub(crate) fn display_duration_ms_for_bpm_hispeed(
     now_bpm: f32,
     hispeed: f32,
     lane_cover: f32,
+    lift: f32,
     scroll_multiplier: f32,
 ) -> f32 {
-    let visible_max = (1.0 - lane_cover).clamp(0.0, 1.0);
+    let visible_max = crate::config::play::visible_lane_fraction(lane_cover, lift);
     if scroll_multiplier <= 0.0 {
         return 0.0;
     }
@@ -798,6 +834,7 @@ fn scroll_render_time(render_now: TimeUs) -> TimeUs {
 struct ScrollContext<'a> {
     timing_map: &'a TimingMap,
     hispeed: f32,
+    visible_lane_fraction: f32,
     lookahead_ticks: f64,
     /// SCROLL イベント (tick 昇順)。`(tick, factor)`。
     /// 区間ごとに factor を掛けて scroll 位置を畳む。空なら factor 1.0 固定。
@@ -812,6 +849,7 @@ impl<'a> ScrollContext<'a> {
         Self {
             timing_map: &session.timing_map,
             hispeed: session.hispeed,
+            visible_lane_fraction: crate::config::play::visible_lane_fraction(0.0, session.lift),
             lookahead_ticks: TICKS_PER_MEASURE as f64,
             scroll_segments: &cache.scroll_segments,
             speed_segments: &cache.speed_segments,
@@ -827,7 +865,8 @@ impl<'a> ScrollContext<'a> {
             return None;
         }
         let hispeed = self.hispeed.max(0.01) as f64;
-        Some(cursor_tick + self.lookahead_ticks / hispeed + f64::EPSILON)
+        let visible = self.visible_lane_fraction.max(f32::EPSILON) as f64;
+        Some(cursor_tick + self.lookahead_ticks * visible / hispeed + f64::EPSILON)
     }
 
     /// ノートの正規化進捗（0.0=判定ライン, 1.0=画面上端）。判定ラインより手前 (delta<0)
@@ -838,7 +877,7 @@ impl<'a> ScrollContext<'a> {
         if delta < 0.0 {
             return None;
         }
-        let progress = (delta / self.lookahead_ticks) as f32 * self.hispeed;
+        let progress = self.progress_from_delta(delta);
         (progress <= 1.0).then_some(progress)
     }
 
@@ -846,7 +885,12 @@ impl<'a> ScrollContext<'a> {
     fn note_progress(&self, note_time: TimeUs, cursor_tick: f64) -> f32 {
         let note_tick = self.timing_map.time_to_tick_f64(note_time);
         let delta = self.scroll_delta(cursor_tick, note_tick);
-        (delta / self.lookahead_ticks) as f32 * self.hispeed
+        self.progress_from_delta(delta)
+    }
+
+    fn progress_from_delta(&self, delta: f64) -> f32 {
+        let visible = self.visible_lane_fraction.max(f32::EPSILON) as f64;
+        (delta / (self.lookahead_ticks * visible)) as f32 * self.hispeed
     }
 
     /// `from..to` の tick 区間にわたって SCROLL の factor を畳み込み、note 位置の
@@ -1190,7 +1234,7 @@ mod tests {
         assert_eq!(snapshot.recent_judgements[0].side, Some(TimingSide::Fast));
         assert!(!snapshot.recent_judgements[0].timing_ms_suppressed);
 
-        // Auto: PGREAT は side を隠すが ±ms 表示は beatoraja 準拠で隠さない。
+        // Auto: 通常プレイの PGREAT は side を隠すが ±ms 表示は beatoraja 準拠で隠さない。
         let mut snapshot = RenderSnapshot {
             recent_judgements: vec![judgement(Judge::PGreat, -2_000)],
             ..RenderSnapshot::default()
@@ -1198,6 +1242,30 @@ mod tests {
         apply_fast_slow_display_filter(&mut snapshot, 5, FastSlowDisplayScope::Auto);
         assert_eq!(snapshot.recent_judgements[0].side, None);
         assert!(!snapshot.recent_judgements[0].timing_ms_suppressed);
+
+        // Replay でも Auto は GREAT 以下表示として扱い、PGREAT side は隠す。
+        let mut replay_snapshot = RenderSnapshot {
+            replay_playback: true,
+            recent_judgements: vec![judgement(Judge::PGreat, -2_000)],
+            ..RenderSnapshot::default()
+        };
+        apply_fast_slow_display_filter(&mut replay_snapshot, 5, FastSlowDisplayScope::Auto);
+        assert_eq!(replay_snapshot.recent_judgements[0].side, None);
+        assert!(!replay_snapshot.recent_judgements[0].timing_ms_suppressed);
+
+        // ThresholdMs + 0ms は全判定表示なので、リプレイ PGREAT の FAST/SLOW も保持する。
+        let mut replay_all_snapshot = RenderSnapshot {
+            replay_playback: true,
+            recent_judgements: vec![judgement(Judge::PGreat, -2_000)],
+            ..RenderSnapshot::default()
+        };
+        apply_fast_slow_display_filter(
+            &mut replay_all_snapshot,
+            0,
+            FastSlowDisplayScope::ThresholdMs,
+        );
+        assert_eq!(replay_all_snapshot.recent_judgements[0].side, Some(TimingSide::Fast));
+        assert!(!replay_all_snapshot.recent_judgements[0].timing_ms_suppressed);
     }
 
     #[test]
@@ -1214,12 +1282,31 @@ mod tests {
     }
 
     #[test]
-    fn display_duration_uses_current_bpm_like_beatoraja() {
-        assert_eq!(display_duration_ms_for_bpm_hispeed(120.0, 1.0, 0.0, 1.0).round() as i32, 2000);
-        assert_eq!(display_duration_ms_for_bpm_hispeed(240.0, 1.0, 0.0, 1.0).round() as i32, 1000);
-        assert_eq!(display_duration_ms_for_bpm_hispeed(88.0, 2.75, 0.0, 1.0).round() as i32, 992);
-        assert_eq!(display_duration_ms_for_bpm_hispeed(88.0, 2.75, 0.59, 1.0).round() as i32, 407);
-        assert_eq!(display_duration_ms_for_bpm_hispeed(120.0, 1.0, 0.0, 2.0).round() as i32, 1000);
+    fn display_duration_uses_current_bpm_and_absolute_lane_range() {
+        assert_eq!(
+            display_duration_ms_for_bpm_hispeed(120.0, 1.0, 0.0, 0.0, 1.0).round() as i32,
+            2000
+        );
+        assert_eq!(
+            display_duration_ms_for_bpm_hispeed(240.0, 1.0, 0.0, 0.0, 1.0).round() as i32,
+            1000
+        );
+        assert_eq!(
+            display_duration_ms_for_bpm_hispeed(88.0, 2.75, 0.0, 0.0, 1.0).round() as i32,
+            992
+        );
+        assert_eq!(
+            display_duration_ms_for_bpm_hispeed(88.0, 2.75, 0.59, 0.0, 1.0).round() as i32,
+            407
+        );
+        assert_eq!(
+            display_duration_ms_for_bpm_hispeed(120.0, 1.0, 0.25, 0.2, 1.0).round() as i32,
+            1100
+        );
+        assert_eq!(
+            display_duration_ms_for_bpm_hispeed(120.0, 1.0, 0.0, 0.0, 2.0).round() as i32,
+            1000
+        );
     }
 
     #[test]
@@ -1391,6 +1478,51 @@ mod tests {
         let covered = build_render_snapshot(&session, TimeUs(0), &[], None);
         assert_eq!(covered.visible_notes[Lane::Key1.index()].len(), 1);
         assert_eq!(covered.visible_notes[Lane::Key1.index()][0].y, 0.5);
+    }
+
+    #[test]
+    fn build_render_snapshot_lift_shortens_note_travel_range() {
+        use bmz_chart::timing::TICKS_PER_BEAT;
+
+        let profile = ProfileConfig::new_default("default", "Default", 1);
+        let mut c = chart();
+        c.lane_notes[Lane::Key1.index()][0].time = TimeUs(1_600_000);
+        c.lane_notes[Lane::Key1.index()][0].tick =
+            ChartTick((TICKS_PER_BEAT as f64 * 3.2).round() as u64);
+        let mut session = build_game_session(Arc::new(c), &profile, PlaySessionOptions::default());
+        session.hispeed = 1.0;
+        session.lift = 0.2;
+
+        let snapshot = build_render_snapshot(&session, TimeUs(0), &[], None);
+
+        assert_eq!(snapshot.note_display_duration_ms, 1600);
+        assert!((snapshot.visible_notes[Lane::Key1.index()][0].y - 1.0).abs() < 1e-3);
+    }
+
+    #[test]
+    fn build_render_snapshot_lifted_lane_cover_duration_matches_note_position() {
+        use bmz_chart::timing::TICKS_PER_BEAT;
+
+        let profile = ProfileConfig::new_default("default", "Default", 1);
+        let mut c = chart();
+        c.lane_notes[Lane::Key1.index()][0].time = TimeUs(1_100_000);
+        c.lane_notes[Lane::Key1.index()][0].tick =
+            ChartTick((TICKS_PER_BEAT as f64 * 2.2).round() as u64);
+        let mut session = build_game_session(Arc::new(c), &profile, PlaySessionOptions::default());
+        session.hispeed = 1.0;
+        session.lift = 0.2;
+        session.lane_cover = 0.25;
+
+        let snapshot = build_render_snapshot(&session, TimeUs(0), &[], None);
+
+        assert_eq!(snapshot.note_display_duration_ms, 1100);
+        let expected_cover_bottom_progress =
+            (1.0 - session.lift - session.lane_cover) / (1.0 - session.lift);
+        let y = snapshot.visible_notes[Lane::Key1.index()][0].y;
+        assert!(
+            (y - expected_cover_bottom_progress).abs() < 1e-3,
+            "expected {expected_cover_bottom_progress}, got {y}"
+        );
     }
 
     #[test]
@@ -1601,6 +1733,20 @@ mod tests {
     }
 
     #[test]
+    fn build_render_snapshot_reports_gauge_skin_timer_elapsed() {
+        let profile = ProfileConfig::new_default("default", "Default", 1);
+        let mut session =
+            build_game_session(Arc::new(chart()), &profile, PlaySessionOptions::default());
+        session.gauge_increase_started_at = Some(TimeUs(100_000));
+        session.gauge_max_started_at = Some(TimeUs(250_000));
+
+        let snapshot = build_render_snapshot(&session, TimeUs(400_000), &[], None);
+
+        assert_eq!(snapshot.gauge_increase_elapsed_ms, Some(300));
+        assert_eq!(snapshot.gauge_max_elapsed_ms, Some(150));
+    }
+
+    #[test]
     fn update_render_snapshot_play_options_refreshes_ready_snapshot_values() {
         let profile = ProfileConfig::new_default("default", "Default", 1);
         let mut session =
@@ -1720,6 +1866,42 @@ mod tests {
         assert_eq!(snapshot.judge_counts.empty_poor, 1);
         assert_eq!(snapshot.fast_slow_counts.fast_pgreat, 1);
         assert_eq!(snapshot.fast_slow_counts.slow_empty_poor, 1);
+    }
+
+    #[test]
+    fn build_render_snapshot_marks_replay_playback() {
+        let profile = ProfileConfig::new_default("default", "Default", 1);
+        let normal = build_game_session(Arc::new(chart()), &profile, PlaySessionOptions::default());
+        let replay = build_game_session(
+            Arc::new(chart()),
+            &profile,
+            PlaySessionOptions {
+                replay_player: Some(bmz_gameplay::replay::ReplayPlayer::default()),
+                ..PlaySessionOptions::default()
+            },
+        );
+
+        assert!(!build_render_snapshot(&normal, TimeUs(0), &[], None).replay_playback);
+        assert!(build_render_snapshot(&replay, TimeUs(0), &[], None).replay_playback);
+    }
+
+    #[test]
+    fn build_render_snapshot_treats_replay_as_autoplay_off_for_skin_ops() {
+        let mut profile = ProfileConfig::new_default("default", "Default", 1);
+        profile.play.auto_play = true;
+        let replay = build_game_session(
+            Arc::new(chart()),
+            &profile,
+            PlaySessionOptions {
+                replay_player: Some(bmz_gameplay::replay::ReplayPlayer::default()),
+                ..PlaySessionOptions::default()
+            },
+        );
+
+        assert!(replay.autoplay.is_none());
+        let snapshot = build_render_snapshot(&replay, TimeUs(0), &[], None);
+        assert!(snapshot.replay_playback);
+        assert!(!snapshot.autoplay);
     }
 
     #[test]

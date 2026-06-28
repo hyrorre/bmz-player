@@ -16,7 +16,10 @@ use bmz_render::skin::{
     SKIN_EXPR_FAST_SLOW_BREAKDOWN_HEIGHT, SKIN_EXPR_FS_THRESHOLD, SKIN_REF_PLAY_GAUGE_TYPE,
 };
 
-use crate::{LoadedLuaSkinValue, LuaLoadRuntimeState, SkinLoadWarning};
+use crate::{
+    LoadedLuaSkinValue, LuaLoadRuntimeState, SkinLoadDependencies, SkinLoadWarning,
+    SkinLoadedFileDependency,
+};
 
 const LUA_INSTRUCTION_LIMIT: i64 = 2_000_000;
 const LUA_HOOK_INTERVAL: u32 = 1_000;
@@ -51,11 +54,14 @@ pub fn load_lua_skin_value(
     files: &BTreeMap<String, String>,
     runtime_state: &LuaLoadRuntimeState,
 ) -> Result<LoadedLuaSkinValue> {
-    let (value, warnings, files) = execute_lua_skin(input, options, files, runtime_state)?;
+    let (value, warnings, files, dependencies) =
+        execute_lua_skin(input, options, files, runtime_state)?;
     Ok(LoadedLuaSkinValue {
         value,
         warnings: warnings.into_iter().map(|message| SkinLoadWarning { message }).collect(),
         files,
+        dependencies,
+        internal_enabled_options: Vec::new(),
     })
 }
 
@@ -65,6 +71,8 @@ pub fn load_lua_skin_header_value(input: &Path) -> Result<LoadedLuaSkinValue> {
         value,
         warnings: warnings.into_iter().map(|message| SkinLoadWarning { message }).collect(),
         files: BTreeMap::new(),
+        dependencies: SkinLoadDependencies::default(),
+        internal_enabled_options: Vec::new(),
     })
 }
 
@@ -74,7 +82,7 @@ pub fn convert_lua_skin_to_json(
     options: &BTreeMap<String, String>,
     files: &BTreeMap<String, String>,
 ) -> Result<ConvertReport> {
-    let (json, warnings, _) =
+    let (json, warnings, _, _) =
         execute_lua_skin(input, options, files, &LuaLoadRuntimeState::default())?;
     if let Some(parent) = output.parent() {
         fs::create_dir_all(parent)
@@ -108,7 +116,9 @@ fn execute_lua_skin_header(input: &Path) -> Result<(JsonValue, Vec<String>)> {
         None,
         &BTreeMap::new(),
         &BTreeMap::new(),
+        &BTreeMap::new(),
         &LuaLoadRuntimeState::default(),
+        None,
     )?;
     let header = lua
         .load(&source)
@@ -126,7 +136,7 @@ fn execute_lua_skin(
     options: &BTreeMap<String, String>,
     files: &BTreeMap<String, String>,
     runtime_state: &LuaLoadRuntimeState,
-) -> Result<(JsonValue, Vec<String>, BTreeMap<String, String>)> {
+) -> Result<(JsonValue, Vec<String>, BTreeMap<String, String>, SkinLoadDependencies)> {
     let input = canonicalize_skin_path(input)
         .with_context(|| format!("failed to canonicalize input: {}", input.display()))?;
     let parent =
@@ -148,7 +158,9 @@ fn execute_lua_skin(
         None,
         &BTreeMap::new(),
         &BTreeMap::new(),
+        &BTreeMap::new(),
         &LuaLoadRuntimeState::default(),
+        None,
     )?;
     let header = header_lua
         .load(&source)
@@ -178,14 +190,17 @@ fn execute_lua_skin(
 
     let lua = Lua::new();
     install_instruction_limit(&lua);
+    let dependencies = Arc::new(Mutex::new(SkinLoadDependencies::default()));
     let main_state_probe = install_sandbox(
         &lua,
         &root,
         options,
         Some(&skin_options),
         &skin_files,
+        &skin_file_dependency_names_from_header(&header_json),
         &skin_offsets,
         runtime_state,
+        Some(dependencies.clone()),
     )?;
     let value = lua
         .load(&source)
@@ -201,6 +216,7 @@ fn execute_lua_skin(
         &main_state_probe,
         &mut table_budget,
     )?;
+    record_static_skin_config_option_dependencies(&source, &skin_options, &dependencies);
 
     if let JsonValue::Object(ref mut root) = json {
         postprocess_lua_skin_json(root);
@@ -221,7 +237,9 @@ fn execute_lua_skin(
         }
     }
 
-    Ok((json, warnings, skin_named_files))
+    let dependencies =
+        dependencies.lock().map_err(|_| anyhow!("lua dependency tracker lock poisoned"))?.clone();
+    Ok((json, warnings, skin_named_files, dependencies))
 }
 
 fn postprocess_lua_skin_json(root: &mut JsonMap<String, JsonValue>) {
@@ -262,16 +280,150 @@ impl TableBudget {
     }
 }
 
+fn create_skin_config_option_table(
+    lua: &Lua,
+    skin_config_options: &BTreeMap<String, i64>,
+    load_dependencies: Option<Arc<Mutex<SkinLoadDependencies>>>,
+) -> Result<Table> {
+    let option = lua.create_table()?;
+    for (key, value) in skin_config_options {
+        option.set(key.as_str(), *value)?;
+    }
+    let option_values = skin_config_options.clone();
+    let dependencies_for_index = load_dependencies;
+    let index = lua.create_function(move |_, key: Value| {
+        let Value::String(key) = key else {
+            return Ok(Value::Nil);
+        };
+        let key = key.to_str()?;
+        let Some(value) = option_values.get(key.as_ref()) else {
+            return Ok(Value::Nil);
+        };
+        if let Ok(option_id) = i32::try_from(*value) {
+            record_load_dependency_option(dependencies_for_index.as_ref(), option_id, true);
+        }
+        Ok(Value::Integer(*value))
+    })?;
+    let metatable = lua.create_table()?;
+    metatable.set("__index", index)?;
+    option.set_metatable(Some(metatable));
+    Ok(option)
+}
+
+fn record_load_dependency_option(
+    dependencies: Option<&Arc<Mutex<SkinLoadDependencies>>>,
+    option_id: i32,
+    value: bool,
+) {
+    if let Some(dependencies) = dependencies
+        && let Ok(mut dependencies) = dependencies.lock()
+    {
+        dependencies.option_values.insert(option_id, value);
+    }
+}
+
+fn record_skin_config_file_dependency(
+    requested: &str,
+    skin_file_dependency_names: &BTreeMap<String, String>,
+    dependencies: Option<&Arc<Mutex<SkinLoadDependencies>>>,
+) {
+    let requested = requested.replace('\\', "/");
+    let Some(name) = skin_config_file_dependency_name(&requested, skin_file_dependency_names)
+    else {
+        return;
+    };
+    if let Some(dependencies) = dependencies
+        && let Ok(mut dependencies) = dependencies.lock()
+    {
+        dependencies.files.insert(name);
+    }
+}
+
+fn skin_config_file_dependency_name(
+    requested: &str,
+    skin_file_dependency_names: &BTreeMap<String, String>,
+) -> Option<String> {
+    if let Some(name) = skin_file_dependency_names.get(requested) {
+        return Some(name.clone());
+    }
+    let (requested_prefix, _) = requested.split_once('*')?;
+    skin_file_dependency_names.iter().find_map(|(configured, name)| {
+        let (configured_prefix, _) = configured.split_once('*')?;
+        (requested_prefix == configured_prefix).then(|| name.clone())
+    })
+}
+
+fn record_lua_loaded_file_dependency(
+    path: &Path,
+    dependencies: Option<&Arc<Mutex<SkinLoadDependencies>>>,
+) {
+    let Some(dependencies) = dependencies else {
+        return;
+    };
+    let Ok(metadata) = fs::metadata(path) else {
+        return;
+    };
+    let path = fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    let dependency =
+        SkinLoadedFileDependency { modified: metadata.modified().ok(), len: metadata.len() };
+    if let Ok(mut dependencies) = dependencies.lock() {
+        dependencies.loaded_files.insert(path, dependency);
+    }
+}
+
+fn record_static_skin_config_option_dependencies(
+    source: &str,
+    skin_config_options: &BTreeMap<String, i64>,
+    dependencies: &Arc<Mutex<SkinLoadDependencies>>,
+) {
+    if !source.contains("skin_config.option") {
+        return;
+    }
+    let mut matched_literal = false;
+    for quote in ['"', '\''] {
+        let pattern = format!("skin_config.option[{quote}");
+        let mut rest = source;
+        while let Some(start) = rest.find(&pattern) {
+            let value_start = start + pattern.len();
+            let after_start = &rest[value_start..];
+            let Some(end) = after_start.find(quote) else {
+                break;
+            };
+            let name = &after_start[..end];
+            if let Some(option_id) =
+                skin_config_options.get(name).and_then(|value| i32::try_from(*value).ok())
+            {
+                record_load_dependency_option(Some(dependencies), option_id, true);
+                matched_literal = true;
+            }
+            rest = &after_start[end + quote.len_utf8()..];
+        }
+    }
+    if !matched_literal {
+        for option_id in skin_config_options.values().filter_map(|value| i32::try_from(*value).ok())
+        {
+            record_load_dependency_option(Some(dependencies), option_id, true);
+        }
+    }
+}
+
 fn install_sandbox(
     lua: &Lua,
     root: &Path,
     options: &BTreeMap<String, String>,
     skin_config_options: Option<&BTreeMap<String, i64>>,
     skin_files: &BTreeMap<String, String>,
+    skin_file_dependency_names: &BTreeMap<String, String>,
     skin_offsets: &BTreeMap<String, LuaSkinOffsetValue>,
     runtime_state: &LuaLoadRuntimeState,
+    load_dependencies: Option<Arc<Mutex<SkinLoadDependencies>>>,
 ) -> Result<Arc<Mutex<MainStateProbe>>> {
     let main_state_probe = Arc::new(Mutex::new(MainStateProbe::default()));
+    if let Some(load_dependencies) = load_dependencies.clone() {
+        let mut probe =
+            main_state_probe.lock().map_err(|_| anyhow!("main_state probe lock poisoned"))?;
+        probe.load_dependencies = Some(load_dependencies);
+    }
     if !runtime_state.option_values.is_empty() {
         let mut probe =
             main_state_probe.lock().map_err(|_| anyhow!("main_state probe lock poisoned"))?;
@@ -280,10 +432,8 @@ fn install_sandbox(
     let globals = lua.globals();
     if let Some(skin_config_options) = skin_config_options {
         let skin_config = lua.create_table()?;
-        let option = lua.create_table()?;
-        for (key, value) in skin_config_options {
-            option.set(key.as_str(), *value)?;
-        }
+        let option =
+            create_skin_config_option_table(lua, skin_config_options, load_dependencies.clone())?;
         skin_config.set("option", option)?;
         let offset = lua.create_table()?;
         for (name, value) in skin_offsets {
@@ -299,7 +449,14 @@ fn install_sandbox(
         skin_config.set("offset", offset)?;
         let root_for_get_path = root.to_path_buf();
         let skin_files_for_get_path = skin_files.clone();
+        let skin_file_dependency_names_for_get_path = skin_file_dependency_names.clone();
+        let dependencies_for_get_path = load_dependencies.clone();
         let get_path = lua.create_function(move |_, requested: String| {
+            record_skin_config_file_dependency(
+                &requested,
+                &skin_file_dependency_names_for_get_path,
+                dependencies_for_get_path.as_ref(),
+            );
             skin_config_get_path(&root_for_get_path, &requested, &skin_files_for_get_path)
                 .map(|path| path.to_string_lossy().to_string())
                 .map_err(mlua::Error::external)
@@ -337,18 +494,22 @@ fn install_sandbox(
 
     let sandbox_root = root.to_path_buf();
     let root_for_dofile = sandbox_root.clone();
+    let dependencies_for_dofile = load_dependencies.clone();
     let dofile = lua.create_function(move |lua, path: String| {
         let path =
             resolve_lua_path(&root_for_dofile, &path, false).map_err(mlua::Error::external)?;
+        record_lua_loaded_file_dependency(&path, dependencies_for_dofile.as_ref());
         let source = fs::read_to_string(&path).map_err(mlua::Error::external)?;
         lua.load(&source).set_name(path.to_string_lossy().as_ref()).eval::<Value>()
     })?;
     globals.set("dofile", dofile)?;
 
     let root_for_loadfile = sandbox_root.clone();
+    let dependencies_for_loadfile = load_dependencies.clone();
     let loadfile = lua.create_function(move |lua, path: String| {
         let path =
             resolve_lua_path(&root_for_loadfile, &path, false).map_err(mlua::Error::external)?;
+        record_lua_loaded_file_dependency(&path, dependencies_for_loadfile.as_ref());
         let source = fs::read_to_string(&path).map_err(mlua::Error::external)?;
         lua.load(&source).set_name(path.to_string_lossy().as_ref()).into_function()
     })?;
@@ -356,6 +517,7 @@ fn install_sandbox(
 
     let root = sandbox_root;
     let probe_for_require = main_state_probe.clone();
+    let dependencies_for_require = load_dependencies.clone();
     let require = lua.create_function(move |lua, module: String| {
         if module == "main_state" {
             return create_main_state_stub(lua, probe_for_require.clone());
@@ -379,6 +541,7 @@ fn install_sandbox(
         }
 
         let path = resolve_lua_path(&root, &module, true).map_err(mlua::Error::external)?;
+        record_lua_loaded_file_dependency(&path, dependencies_for_require.as_ref());
         let source = fs::read_to_string(&path).map_err(mlua::Error::external)?;
         let value = lua.load(&source).set_name(path.to_string_lossy().as_ref()).eval::<Value>()?;
         let value = if matches!(value, Value::Nil) { Value::Boolean(true) } else { value };
@@ -417,6 +580,7 @@ struct MainStateProbe {
     time_value_us: i32,
     next_dynamic_timer_id: i32,
     dynamic_timers: Vec<(i32, String)>,
+    load_dependencies: Option<Arc<Mutex<SkinLoadDependencies>>>,
 }
 
 impl Default for MainStateProbe {
@@ -441,6 +605,7 @@ impl Default for MainStateProbe {
             time_value_us: 1_000_000,
             next_dynamic_timer_id: SKIN_DYNAMIC_TIMER_BASE,
             dynamic_timers: Vec::new(),
+            load_dependencies: None,
         }
     }
 }
@@ -749,11 +914,13 @@ impl MainStateProbe {
 
     fn option(&mut self, option_id: i32) -> bool {
         if matches!(self.mode, MainStateProbeMode::RuntimeStub) {
-            return self
+            let value = self
                 .option_values
                 .get(&option_id)
                 .copied()
                 .unwrap_or_else(|| lua_runtime_stub_option(option_id));
+            self.record_load_time_option_dependency(option_id, value);
+            return value;
         }
         self.option_calls.push(option_id);
         self.option_values
@@ -761,6 +928,14 @@ impl MainStateProbe {
             .copied()
             .or_else(|| self.option_values.get(&i32::MIN).copied())
             .unwrap_or(false)
+    }
+
+    fn record_load_time_option_dependency(&self, option_id: i32, value: bool) {
+        if let Some(dependencies) = &self.load_dependencies
+            && let Ok(mut dependencies) = dependencies.lock()
+        {
+            dependencies.option_values.insert(option_id, value);
+        }
     }
 
     fn timer(&mut self, timer_id: i32) -> i32 {
@@ -1699,6 +1874,23 @@ fn skin_named_files_from_header(
         if let Some(choice) = choice {
             result.insert(name.to_string(), choice);
         }
+    }
+    result
+}
+
+fn skin_file_dependency_names_from_header(header: &JsonValue) -> BTreeMap<String, String> {
+    let mut result = BTreeMap::new();
+    let Some(filepaths) = header.get("filepath").and_then(JsonValue::as_array) else {
+        return result;
+    };
+    for filepath in filepaths {
+        let Some(name) = filepath.get("name").and_then(JsonValue::as_str) else {
+            continue;
+        };
+        let Some(path) = filepath.get("path").and_then(JsonValue::as_str) else {
+            continue;
+        };
+        result.insert(path.replace('\\', "/"), name.to_string());
     }
     result
 }

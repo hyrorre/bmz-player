@@ -53,6 +53,23 @@ pub fn lane_f32_to_unit(value: f32) -> u32 {
     (value.clamp(0.0, 1.0) * 1000.0).round() as u32
 }
 
+/// BMZ では SUDDEN+ と LIFT を lift=0 の判定ラインまでの絶対量として扱う。
+pub fn visible_lane_fraction(lane_cover: f32, lift: f32) -> f32 {
+    (1.0 - lane_cover.clamp(0.0, 1.0) - lift.clamp(0.0, 1.0)).clamp(0.0, 1.0)
+}
+
+pub fn lane_cover_max_for_lift(lift: f32) -> f32 {
+    (1.0 - lift.clamp(0.0, 1.0)).clamp(0.0, 1.0)
+}
+
+pub fn clamp_lane_cover_for_lift(lane_cover: f32, lift: f32) -> f32 {
+    lane_cover.clamp(0.0, lane_cover_max_for_lift(lift))
+}
+
+pub fn lane_unit_max_for_other(other: u32) -> u32 {
+    1000_u32.saturating_sub(other.min(1000))
+}
+
 pub fn gauge_type_from_config(config: GaugeTypeConfig) -> GaugeType {
     match config {
         GaugeTypeConfig::AssistEasy => GaugeType::AssistEasy,
@@ -173,6 +190,15 @@ mod tests {
         assert!((mix.normalization_gain - 1.0).abs() < 1e-6);
         assert!((mix.key_volume - 0.7).abs() < 1e-6);
         assert!((mix.bgm_volume - 0.6).abs() < 1e-6);
+    }
+
+    #[test]
+    fn lane_cover_and_lift_share_absolute_lane_range() {
+        assert!((visible_lane_fraction(0.3, 0.2) - 0.5).abs() < f32::EPSILON);
+        assert!((lane_cover_max_for_lift(0.2) - 0.8).abs() < f32::EPSILON);
+        assert!((clamp_lane_cover_for_lift(0.9, 0.2) - 0.8).abs() < f32::EPSILON);
+        assert_eq!(lane_unit_max_for_other(200), 800);
+        assert_eq!(lane_unit_max_for_other(1_500), 0);
     }
 
     #[test]

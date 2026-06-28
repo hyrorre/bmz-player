@@ -1,5 +1,6 @@
-use std::collections::BTreeMap;
-use std::path::Path;
+use std::collections::{BTreeMap, BTreeSet};
+use std::path::{Path, PathBuf};
+use std::time::SystemTime;
 
 use anyhow::{Context, Result};
 use bmz_render::skin::SkinDocument;
@@ -27,6 +28,7 @@ pub struct LoadedSkinDocument {
     pub document: SkinDocument,
     pub warnings: Vec<SkinLoadWarning>,
     pub files: BTreeMap<String, String>,
+    pub dependencies: SkinLoadDependencies,
 }
 
 #[derive(Debug, Clone)]
@@ -34,6 +36,22 @@ pub struct LoadedLuaSkinValue {
     pub value: JsonValue,
     pub warnings: Vec<SkinLoadWarning>,
     pub files: BTreeMap<String, String>,
+    pub dependencies: SkinLoadDependencies,
+    pub internal_enabled_options: Vec<i32>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SkinLoadDependencies {
+    pub option_values: BTreeMap<i32, bool>,
+    pub files: BTreeSet<String>,
+    pub loaded_files: BTreeMap<PathBuf, SkinLoadedFileDependency>,
+    pub opaque: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SkinLoadedFileDependency {
+    pub modified: Option<SystemTime>,
+    pub len: u64,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -66,9 +84,15 @@ pub fn load_lua_skin_with_runtime_state(
 ) -> Result<LoadedSkinDocument> {
     let loaded = load_lua_skin_value_with_runtime_state(path, options, files, runtime_state)?;
     let value = normalize_lua_skin_document(loaded.value);
-    let document = serde_path_to_error::deserialize(value)
+    let mut document: SkinDocument = serde_path_to_error::deserialize(value)
         .with_context(|| format!("failed to parse lua skin as document: {}", path.display()))?;
-    Ok(LoadedSkinDocument { document, warnings: loaded.warnings, files: loaded.files })
+    document.internal_enabled_options = loaded.internal_enabled_options;
+    Ok(LoadedSkinDocument {
+        document,
+        warnings: loaded.warnings,
+        files: loaded.files,
+        dependencies: loaded.dependencies,
+    })
 }
 
 pub fn load_lr2_csv_skin(
@@ -79,9 +103,23 @@ pub fn load_lr2_csv_skin(
 ) -> Result<LoadedSkinDocument> {
     let loaded = lr2::load_lr2_csv_skin_value(path, options, files)?;
     let value = normalize_json_skin_integer_numbers(loaded.value);
-    let document = serde_path_to_error::deserialize(value)
+    let mut document: SkinDocument = serde_path_to_error::deserialize(value)
         .with_context(|| format!("failed to parse lr2 csv skin as document: {}", path.display()))?;
-    Ok(LoadedSkinDocument { document, warnings: loaded.warnings, files: BTreeMap::new() })
+    document.internal_enabled_options = loaded.internal_enabled_options;
+    Ok(LoadedSkinDocument {
+        document,
+        warnings: loaded.warnings,
+        files: BTreeMap::new(),
+        dependencies: loaded.dependencies,
+    })
+}
+
+pub fn load_lr2_csv_skin_dependency_option_values(
+    path: &Path,
+    options: &BTreeMap<String, String>,
+    option_ids: impl IntoIterator<Item = i32>,
+) -> Result<BTreeMap<i32, bool>> {
+    lr2::load_lr2_csv_skin_dependency_option_values(path, options, option_ids)
 }
 
 pub fn load_lua_skin_value(

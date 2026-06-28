@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -6,7 +6,7 @@ use anyhow::{Context, Result};
 use encoding_rs::SHIFT_JIS;
 use serde_json::{Value as JsonValue, json};
 
-use crate::{LoadedLuaSkinValue, SkinLoadWarning};
+use crate::{LoadedLuaSkinValue, SkinLoadDependencies, SkinLoadWarning, SkinLoadedFileDependency};
 
 const LR2_OFFSET_LIFT: i32 = 3;
 const LR2_OFFSET_JUDGE_1P: i32 = 32;
@@ -55,6 +55,11 @@ struct Header {
     files: Vec<CustomFile>,
     offsets: Vec<CustomOffset>,
     selected_ops: HashMap<i32, bool>,
+}
+
+struct LoadedHeader {
+    header: Header,
+    dependencies: SkinLoadDependencies,
 }
 
 impl Default for Header {
@@ -151,6 +156,8 @@ struct CsvBuilder<'a> {
     note_marker_inserted: bool,
     next_id: usize,
     remap_single_play_2p_lanes: bool,
+    file_dependencies: BTreeSet<String>,
+    loaded_file_dependencies: BTreeMap<PathBuf, SkinLoadedFileDependency>,
 }
 
 #[derive(Default)]
@@ -185,17 +192,44 @@ pub fn load_lr2_csv_skin_value(
     options: &BTreeMap<String, String>,
     files: &BTreeMap<String, String>,
 ) -> Result<LoadedLuaSkinValue> {
-    let mut header = load_header(path, options)?;
+    let LoadedHeader { mut header, mut dependencies } = load_header(path, options)?;
     apply_default_play_header_items(&mut header);
     let mut builder = CsvBuilder::new(path, header, files);
     let lines = read_csv_lines(path)?;
     let mut processor = Processor::new(builder.header.selected_ops.clone());
     processor.process_lines(&lines, path, &mut builder)?;
+    dependencies.option_values.extend(processor.option_dependencies);
+    dependencies.option_values.extend(builder.load_time_option_dependencies());
+    dependencies.files.extend(builder.file_dependencies.iter().cloned());
+    dependencies.loaded_files.extend(builder.loaded_file_dependencies.clone());
     let warnings = builder.warnings.clone();
-    Ok(LoadedLuaSkinValue { value: builder.finish(), warnings, files: BTreeMap::new() })
+    let internal_enabled_options = builder.internal_enabled_options();
+    Ok(LoadedLuaSkinValue {
+        value: builder.finish(),
+        warnings,
+        files: BTreeMap::new(),
+        dependencies,
+        internal_enabled_options,
+    })
 }
 
-fn load_header(path: &Path, options: &BTreeMap<String, String>) -> Result<Header> {
+pub fn load_lr2_csv_skin_dependency_option_values(
+    path: &Path,
+    options: &BTreeMap<String, String>,
+    option_ids: impl IntoIterator<Item = i32>,
+) -> Result<BTreeMap<i32, bool>> {
+    let LoadedHeader { mut header, .. } = load_header(path, options)?;
+    apply_default_play_header_items(&mut header);
+    Ok(option_ids
+        .into_iter()
+        .map(|option_id| {
+            let option_id = option_id.abs();
+            (option_id, header.selected_ops.get(&option_id).copied().unwrap_or(false))
+        })
+        .collect())
+}
+
+fn load_header(path: &Path, options: &BTreeMap<String, String>) -> Result<LoadedHeader> {
     let mut header = Header::default();
     let lines = read_csv_lines(path)?;
     let mut processor = Processor::new(HashMap::new());
@@ -288,7 +322,13 @@ fn load_header(path: &Path, options: &BTreeMap<String, String>) -> Result<Header
         }
     }
     apply_derived_play_options(&mut header);
-    Ok(header)
+    let dependencies = SkinLoadDependencies {
+        option_values: processor.option_dependencies,
+        files: BTreeSet::new(),
+        loaded_files: BTreeMap::new(),
+        opaque: false,
+    };
+    Ok(LoadedHeader { header, dependencies })
 }
 
 fn apply_default_play_header_items(header: &mut Header) {
@@ -400,7 +440,50 @@ impl<'a> CsvBuilder<'a> {
             note_marker_inserted: false,
             next_id: 0,
             remap_single_play_2p_lanes,
+            file_dependencies: BTreeSet::new(),
+            loaded_file_dependencies: BTreeMap::new(),
         }
+    }
+
+    fn load_time_option_dependencies(&self) -> BTreeMap<i32, bool> {
+        let mut dependencies = BTreeMap::new();
+        if matches!(self.header.skin_type, 0 | 1 | 3 | 4 | 12 | 13) {
+            dependencies.insert(901, self.header.selected_ops.get(&901).copied().unwrap_or(false));
+        }
+        if self.header.selected_ops.contains_key(&981) {
+            dependencies.insert(981, self.header.selected_ops.get(&981).copied().unwrap_or(false));
+        }
+        dependencies
+    }
+
+    fn internal_enabled_options(&self) -> Vec<i32> {
+        let property_options = self
+            .header
+            .options
+            .iter()
+            .flat_map(|option| (0..option.items.len()).map(move |index| option.base + index as i32))
+            .collect::<BTreeSet<_>>();
+        let mut options = self
+            .header
+            .selected_ops
+            .iter()
+            .filter_map(|(&op, &enabled)| {
+                (enabled && !property_options.contains(&op)).then_some(op)
+            })
+            .collect::<Vec<_>>();
+        options.sort_unstable();
+        options
+    }
+
+    fn record_loaded_file_dependency(&mut self, path: &Path) {
+        let Ok(metadata) = fs::metadata(path) else {
+            return;
+        };
+        let path = fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+        self.loaded_file_dependencies.insert(
+            path,
+            SkinLoadedFileDependency { modified: metadata.modified().ok(), len: metadata.len() },
+        );
     }
 
     fn execute(&mut self, line: &CsvLine) -> Result<()> {
@@ -584,6 +667,7 @@ impl<'a> CsvBuilder<'a> {
             "font": font,
             "ref": values[3],
             "align": values[4],
+            "overflow": 1,
             "size": self.lr2_text_size(values[2]),
         }));
         self.set_current(id);
@@ -676,17 +760,29 @@ impl<'a> CsvBuilder<'a> {
                 image_id
             })
             .collect::<Vec<_>>();
-        let nodes = lr2_gauge_nodes(&cell_ids, values[14], line.command == "SRC_GROOVEGAUGE_EX");
+        let default_gauge = values[13] == 0;
+        let gauge_type = if default_gauge { 0 } else { values[14] };
+        let range = if default_gauge {
+            if matches!(self.header.skin_type, 4 | 14) { 0 } else { 3 }
+        } else {
+            values[15]
+        };
+        let cycle = if default_gauge { 33 } else { values[16] };
+        let nodes = lr2_gauge_nodes(&cell_ids, gauge_type, line.command == "SRC_GROOVEGAUGE_EX");
         self.lr2_gauge_id = Some(id.clone());
         self.lr2_gauge_add_x = values[11];
         self.lr2_gauge_add_y = values[12];
         let gauge = json!({
             "id": id,
             "nodes": nodes,
-            "parts": if values[13] == 0 { 50 } else { values[13] },
-            "type": values[14],
-            "range": values[15],
-            "cycle": values[16],
+            "parts": if default_gauge {
+                if matches!(self.header.skin_type, 4 | 14) { 24 } else { 50 }
+            } else {
+                values[13]
+            },
+            "type": gauge_type,
+            "range": range,
+            "cycle": cycle,
             "starttime": values[17],
             "endtime": values[18],
         });
@@ -1047,35 +1143,43 @@ impl<'a> CsvBuilder<'a> {
         })
     }
 
-    fn resolve_source_path(&self, raw_path: &str) -> String {
+    fn resolve_source_path(&mut self, raw_path: &str) -> String {
         let normalized = self.relative_source_path(&normalize_lr2_asset_path(raw_path));
-        if let Some(file) = self.header.files.iter().find(|file| file.path == normalized)
-            && let Some(selected) =
-                self.files.get(&file.name).filter(|selected| !selected.is_empty())
-            && let Some(selected_path) =
-                self.selected_skin_file_for_definition(&file.path, selected)
-        {
-            return selected_path;
+        if let Some(file) = self.header.files.iter().find(|file| file.path == normalized) {
+            let file_name = file.name.clone();
+            let file_path = file.path.clone();
+            self.file_dependencies.insert(file_name.clone());
+            if let Some(selected) =
+                self.files.get(&file_name).filter(|selected| !selected.is_empty())
+                && let Some(selected_path) =
+                    self.selected_skin_file_for_definition(&file_path, selected)
+            {
+                return selected_path;
+            }
         }
         if let Some(file) =
             self.header.files.iter().find(|file| same_wildcard_prefix(&file.path, &normalized))
         {
+            let file_name = file.name.clone();
+            let file_path = file.path.clone();
+            let file_default = file.default.clone();
+            self.file_dependencies.insert(file_name.clone());
             if let Some(selected) =
-                self.files.get(&file.name).filter(|selected| !selected.is_empty())
+                self.files.get(&file_name).filter(|selected| !selected.is_empty())
                 && let Some(selected_path) =
-                    self.selected_skin_file_for_definition(&file.path, selected)
-                && selected_wildcard_value(&file.path, &selected_path).is_some()
+                    self.selected_skin_file_for_definition(&file_path, selected)
+                && selected_wildcard_value(&file_path, &selected_path).is_some()
             {
-                return substitute_wildcard(&normalized, &file.path, &selected_path);
+                return substitute_wildcard(&normalized, &file_path, &selected_path);
             }
-            if !file.default.is_empty() {
-                return substitute_wildcard_default(&normalized, &file.path, &file.default);
+            if !file_default.is_empty() {
+                return substitute_wildcard_default(&normalized, &file_path, &file_default);
             }
         }
         normalized
     }
 
-    fn resolve_lr2_font_path(&self, raw_path: &str) -> String {
+    fn resolve_lr2_font_path(&mut self, raw_path: &str) -> String {
         let path = self.resolve_source_path(raw_path);
         if !path.to_ascii_lowercase().ends_with(".lr2font") {
             return path;
@@ -1296,6 +1400,7 @@ impl<'a> CsvBuilder<'a> {
 struct Processor {
     ops: HashMap<i32, bool>,
     stack: Vec<IfState>,
+    option_dependencies: BTreeMap<i32, bool>,
 }
 
 #[derive(Debug, Clone)]
@@ -1308,7 +1413,7 @@ struct IfState {
 
 impl Processor {
     fn new(ops: HashMap<i32, bool>) -> Self {
-        Self { ops, stack: Vec::new() }
+        Self { ops, stack: Vec::new(), option_dependencies: BTreeMap::new() }
     }
 
     fn process_lines(
@@ -1338,6 +1443,7 @@ impl Processor {
             if line.command == "INCLUDE" {
                 let include = resolve_include_path(builder, current_path, field(line, 1));
                 if include.is_file() {
+                    builder.record_loaded_file_dependency(&include);
                     let include_lines = read_csv_lines(&include)?;
                     self.process_lines(&include_lines, &include, builder)?;
                 } else {
@@ -1408,8 +1514,10 @@ impl Processor {
         self.stack.iter().all(|state| state.active)
     }
 
-    fn eval_if(&self, line: &CsvLine) -> IfEval {
+    fn eval_if(&mut self, line: &CsvLine) -> IfEval {
         let mut runtime_ops = Vec::new();
+        let ops = self.ops.clone();
+        let dependencies = &mut self.option_dependencies;
         let matches =
             line.fields.iter().skip(1).filter(|field| !field.trim().is_empty()).all(|field| {
                 let option = parse_option_token(field);
@@ -1417,9 +1525,11 @@ impl Processor {
                 if is_runtime_lr2_option(option_id) {
                     runtime_ops.push(option);
                     true
-                } else if let Some(enabled) = self.ops.get(&option_id).copied() {
+                } else if let Some(enabled) = ops.get(&option_id).copied() {
+                    dependencies.insert(option_id, enabled);
                     if option >= 0 { enabled } else { !enabled }
                 } else {
+                    dependencies.insert(option_id, false);
                     option < 0
                 }
             });
@@ -1467,15 +1577,6 @@ fn set_judge_slot(slots: &mut Vec<JsonValue>, index: usize, value: JsonValue) {
     slots[index] = value;
 }
 
-fn destination_def_with_ops(
-    id: &str,
-    values: &[i32; 22],
-    canvas_h: i32,
-    conditional_ops: &[i32],
-) -> JsonValue {
-    destination_def_with_default_offsets(id, values, canvas_h, conditional_ops, &[])
-}
-
 fn destination_def_with_default_offsets(
     id: &str,
     values: &[i32; 22],
@@ -1521,11 +1622,44 @@ fn gauge_destination_def(
     let mut values = *values;
     if add_x.abs() >= 1 {
         values[5] = add_x * 50;
+        if add_x < 0 {
+            values[3] -= add_x;
+        }
     }
     if add_y.abs() >= 1 {
         values[6] = add_y * 50;
     }
-    destination_def_with_ops(id, &values, canvas_h, conditional_ops)
+    let frame = gauge_destination_frame(&values, canvas_h);
+    let mut op = conditional_ops.to_vec();
+    op.extend(values[18..=20].iter().copied().filter(|value| *value != 0));
+    normalize_lr2_destination_ops(&mut op);
+    json!({
+        "id": id,
+        "blend": values[12],
+        "filter": values[13],
+        "timer": if values[17] != 0 { json!(values[17]) } else { JsonValue::Null },
+        "loop": values[16],
+        "center": values[15],
+        "offset": values[21],
+        "op": op,
+        "dst": [frame],
+    })
+}
+
+fn gauge_destination_frame(values: &[i32; 22], canvas_h: i32) -> JsonValue {
+    json!({
+        "time": values[2],
+        "x": values[3],
+        "y": canvas_h - (values[4] + values[6]),
+        "w": values[5],
+        "h": values[6],
+        "acc": values[7],
+        "a": values[8],
+        "r": values[9],
+        "g": values[10],
+        "b": values[11],
+        "angle": values[14],
+    })
 }
 
 fn judge_combo_destination_def(
@@ -2004,7 +2138,7 @@ mod tests {
         let mut values = [0; 22];
         values[21] = 32;
 
-        let destination = destination_def_with_ops("image", &values, 1080, &[]);
+        let destination = destination_def_with_default_offsets("image", &values, 1080, &[], &[]);
 
         assert_eq!(destination["offset"], 32);
     }
@@ -2059,6 +2193,29 @@ mod tests {
     }
 
     #[test]
+    fn lr2_text_defaults_to_shrink_overflow() {
+        let files = BTreeMap::new();
+        let skin_path = unique_test_dir("bmz-lr2-text-shrink").join("play.lr2skin");
+        let mut builder = CsvBuilder::new(&skin_path, Header::default(), &files);
+        builder.execute(&parse_csv_line("#SRC_TEXT,0,0,10,1,0").expect("valid SRC_TEXT")).unwrap();
+        builder
+            .execute(
+                &parse_csv_line("#DST_TEXT,0,0,10,20,120,30,0,255,255,255,255,0,0,0,0,0,0,0,0,0,0")
+                    .expect("valid DST_TEXT"),
+            )
+            .unwrap();
+
+        let text = builder.texts.first().expect("SRC_TEXT should produce text");
+        assert_eq!(text["overflow"], json!(1));
+
+        let destination =
+            builder.destinations.first().expect("DST_TEXT should produce destination");
+        let frame = destination["dst"].as_array().unwrap().first().unwrap();
+        assert_eq!(frame["w"], json!(120));
+        assert_eq!(frame["h"], json!(30));
+    }
+
+    #[test]
     fn lr2_customfile_default_replaces_wildcard_once() {
         assert_eq!(
             substitute_wildcard_default("parts/note/*.png", "parts/note/*.png", "photon"),
@@ -2083,7 +2240,7 @@ mod tests {
         });
         let files =
             BTreeMap::from([("GAUGE COLOR".to_string(), "parts/gauge/blue.png".to_string())]);
-        let builder = CsvBuilder::new(&skin_path, header, &files);
+        let mut builder = CsvBuilder::new(&skin_path, header, &files);
 
         assert_eq!(
             builder.resolve_source_path(r".\LR2files\Theme\WMII_FHD\play\parts\gauge\*.png"),
@@ -2107,7 +2264,7 @@ mod tests {
             default: "default".to_string(),
         });
         let files = BTreeMap::from([("GAUGE COLOR".to_string(), "blue.png".to_string())]);
-        let builder = CsvBuilder::new(&skin_path, header, &files);
+        let mut builder = CsvBuilder::new(&skin_path, header, &files);
 
         assert_eq!(
             builder.resolve_source_path(r".\LR2files\Theme\WMII_FHD\play\parts\gauge\*.png"),
@@ -2131,7 +2288,7 @@ mod tests {
         });
         let files =
             BTreeMap::from([("GAUGE COLOR".to_string(), "parts/gauge/missing.png".to_string())]);
-        let builder = CsvBuilder::new(&skin_path, header, &files);
+        let mut builder = CsvBuilder::new(&skin_path, header, &files);
 
         assert_eq!(
             builder.resolve_source_path(r".\LR2files\Theme\WMII_FHD\play\parts\gauge\*.png"),
@@ -2388,6 +2545,48 @@ mod tests {
     }
 
     #[test]
+    fn lr2_gauge_destination_preserves_negative_additive_direction() {
+        let mut values = [0; 22];
+        values[2] = 1400;
+        values[3] = 54;
+        values[4] = 897;
+        values[5] = 8;
+        values[6] = 28;
+        values[8] = 255;
+
+        let destination = gauge_destination_def("gauge", &values, 1080, -9, 0, &[]);
+        let frame = destination["dst"].as_array().unwrap().first().unwrap();
+
+        assert_eq!(frame["x"], 63);
+        assert_eq!(frame["y"], 155);
+        assert_eq!(frame["w"], -450);
+        assert_eq!(frame["h"], 28);
+    }
+
+    #[test]
+    fn lr2_gauge_omitted_parts_uses_beatoraja_animation_defaults() {
+        let files = BTreeMap::new();
+        let skin_path = unique_test_dir("bmz-lr2-gauge-defaults").join("play.lr2skin");
+        let header = Header { skin_type: 2, ..Header::default() };
+        let mut builder = CsvBuilder::new(&skin_path, header, &files);
+        builder
+            .execute(&parse_csv_line("#IMAGE,gauge.png").expect("valid IMAGE"))
+            .expect("IMAGE should load");
+        builder
+            .execute(
+                &parse_csv_line("#SRC_GROOVEGAUGE,0,0,0,0,32,28,4,1,0,0,9,0,,,,,,,,")
+                    .expect("valid SRC_GROOVEGAUGE"),
+            )
+            .expect("SRC_GROOVEGAUGE should load");
+
+        let gauge = builder.gauges.first().expect("gauge should be created");
+        assert_eq!(gauge["parts"], json!(50));
+        assert_eq!(gauge["type"], json!(0));
+        assert_eq!(gauge["range"], json!(3));
+        assert_eq!(gauge["cycle"], json!(33));
+    }
+
+    #[test]
     fn lr2_gauge_nodes_expand_standard_cells_to_beatoraja_slots() {
         let cells =
             ["red", "green", "back-red", "back-green"].map(|cell| cell.to_string()).to_vec();
@@ -2434,6 +2633,50 @@ mod tests {
         assert_eq!(loaded.value["name"], "WMII FHD play AC");
         assert!(loaded.value["destination"].as_array().unwrap().len() > 100);
         assert!(!loaded.value["note"]["group"].as_array().unwrap().is_empty());
+    }
+
+    #[test]
+    fn wmii_fhd_lr2skin_dp_keeps_internal_setoption_ops_when_available() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../data/skins/WMII_FHD/play/FHDPLAY_AC_DP.lr2skin");
+        if !path.is_file() {
+            return;
+        }
+
+        let options = BTreeMap::from([
+            ("Displayjudge".to_string(), "ON".to_string()),
+            ("GRAPH SIDE".to_string(), "RIGHT".to_string()),
+            ("Score Graph".to_string(), "On".to_string()),
+        ]);
+        let loaded = load_lr2_csv_skin_value(&path, &options, &BTreeMap::new()).unwrap();
+
+        assert!(
+            loaded.internal_enabled_options.contains(&983),
+            "expected WMII DP judge detail right-side op983 to be kept internally"
+        );
+        assert!(
+            !loaded.internal_enabled_options.contains(&980),
+            "custom property option 980 should remain user-selectable instead of internal"
+        );
+    }
+
+    #[test]
+    fn wmii_fhd_lr2skin_dp_uses_default_gauge_animation_when_available() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../data/skins/WMII_FHD/play/FHDPLAY_AC_DP.lr2skin");
+        if !path.is_file() {
+            return;
+        }
+
+        let loaded = load_lr2_csv_skin_value(&path, &BTreeMap::new(), &BTreeMap::new()).unwrap();
+        let gauges = loaded.value["gauges"].as_array().expect("gauges array");
+
+        assert!(!gauges.is_empty(), "expected WMII DP gauge objects");
+        for gauge in gauges {
+            assert_eq!(gauge["type"], json!(0));
+            assert_eq!(gauge["range"], json!(3));
+            assert_eq!(gauge["cycle"], json!(33));
+        }
     }
 
     #[test]

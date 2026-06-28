@@ -379,8 +379,18 @@ pub fn adjust_settings_value(profile: &mut ProfileConfig, id: SettingsEntryId, d
                 .map(|next| profile.lane.hispeed_mode = next)
                 .is_some()
         }
-        SettingsEntryId::Sudden => adjust_u32(&mut profile.lane.sudden, delta, 0, 1000),
-        SettingsEntryId::Lift => adjust_u32(&mut profile.lane.lift, delta, 0, 1000),
+        SettingsEntryId::Sudden => adjust_u32(
+            &mut profile.lane.sudden,
+            delta,
+            0,
+            crate::config::play::lane_unit_max_for_other(profile.lane.lift),
+        ),
+        SettingsEntryId::Lift => adjust_u32(
+            &mut profile.lane.lift,
+            delta,
+            0,
+            crate::config::play::lane_unit_max_for_other(profile.lane.sudden),
+        ),
         SettingsEntryId::Hidden => adjust_u32(&mut profile.lane.hidden, delta, 0, 1000),
         SettingsEntryId::TargetGreenNumber => {
             adjust_u32(&mut profile.lane.target_green_number, delta, 1, 999)
@@ -880,6 +890,21 @@ mod tests {
         let mut profile = ProfileConfig::new_default("default", "Default", 0);
         assert!(adjust_settings_value(&mut profile, SettingsEntryId::Hispeed, 1));
         assert!((profile.lane.hispeed - 2.25).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn adjust_lane_cover_and_lift_keep_combined_range() {
+        let mut profile = ProfileConfig::new_default("default", "Default", 0);
+        profile.lane.sudden = 900;
+        profile.lane.lift = 200;
+
+        assert!(adjust_settings_value(&mut profile, SettingsEntryId::Sudden, 1));
+        assert_eq!(profile.lane.sudden, 800);
+
+        profile.lane.sudden = 300;
+        profile.lane.lift = 700;
+        assert!(!adjust_settings_value(&mut profile, SettingsEntryId::Lift, 1));
+        assert_eq!(profile.lane.lift, 700);
     }
 
     #[test]
