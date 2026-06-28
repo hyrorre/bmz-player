@@ -14,6 +14,26 @@ use crate::engine::AudioEngine;
 pub type SharedAudioEngine = Arc<Mutex<AudioEngine>>;
 type SharedAudioSources = Arc<Mutex<Vec<AudioSource>>>;
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum CpalOutputSourceKind {
+    #[default]
+    Other,
+    System,
+    Play,
+    Draining,
+}
+
+impl CpalOutputSourceKind {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Other => "other",
+            Self::System => "system",
+            Self::Play => "play",
+            Self::Draining => "draining",
+        }
+    }
+}
+
 #[derive(Debug, Default)]
 pub struct CpalBackend;
 
@@ -60,6 +80,10 @@ pub struct CpalOutputDiagnostics {
     pub source_lock_miss_count: u64,
     pub engine_lock_miss_count: u64,
     pub engine_lock_miss_callback_count: u64,
+    pub system_engine_lock_miss_count: u64,
+    pub play_engine_lock_miss_count: u64,
+    pub draining_engine_lock_miss_count: u64,
+    pub other_engine_lock_miss_count: u64,
     pub clipped_sample_count: u64,
     pub peak_abs: f32,
     pub max_callback_ns: u64,
@@ -73,6 +97,10 @@ struct CpalOutputDiagnosticsCounters {
     source_lock_miss_count: AtomicU64,
     engine_lock_miss_count: AtomicU64,
     engine_lock_miss_callback_count: AtomicU64,
+    system_engine_lock_miss_count: AtomicU64,
+    play_engine_lock_miss_count: AtomicU64,
+    draining_engine_lock_miss_count: AtomicU64,
+    other_engine_lock_miss_count: AtomicU64,
     clipped_sample_count: AtomicU64,
     peak_abs_bits: AtomicU32,
     max_callback_ns: AtomicU64,
@@ -96,6 +124,7 @@ struct CpalSharedOutputInner {
 pub struct CpalOutputSource {
     id: u64,
     inner: RcWeak<CpalSharedOutputInner>,
+    kind: CpalOutputSourceKind,
     pub engine: SharedAudioEngine,
     pub clock: AudioClock,
 }
@@ -103,6 +132,7 @@ pub struct CpalOutputSource {
 #[derive(Clone)]
 struct AudioSource {
     id: u64,
+    kind: CpalOutputSourceKind,
     engine: SharedAudioEngine,
 }
 
@@ -489,6 +519,14 @@ impl CpalSharedOutput {
     }
 
     pub fn add_source(&self, engine: SharedAudioEngine) -> CpalOutputSource {
+        self.add_source_with_kind(engine, CpalOutputSourceKind::Other)
+    }
+
+    pub fn add_source_with_kind(
+        &self,
+        engine: SharedAudioEngine,
+        kind: CpalOutputSourceKind,
+    ) -> CpalOutputSource {
         if let Ok(mut engine) = engine.lock() {
             // 実ストリームレートへ揃える。既に読込済みのサンプルもここで再変換され、
             // ミキサーは等倍(補間なし)で再生できる。
@@ -497,7 +535,7 @@ impl CpalSharedOutput {
 
         let id = self.inner.next_source_id.fetch_add(1, Ordering::Relaxed);
         if let Ok(mut sources) = self.inner.sources.lock() {
-            sources.push(AudioSource { id, engine: Arc::clone(&engine) });
+            sources.push(AudioSource { id, kind, engine: Arc::clone(&engine) });
         }
 
         let clock = AudioClock::with_position(
@@ -507,11 +545,27 @@ impl CpalSharedOutput {
             Arc::clone(&self.inner.current_frame),
             false,
         );
-        CpalOutputSource { id, inner: Rc::downgrade(&self.inner), engine, clock }
+        CpalOutputSource { id, inner: Rc::downgrade(&self.inner), kind, engine, clock }
     }
 }
 
 impl CpalOutputSource {
+    pub fn kind(&self) -> CpalOutputSourceKind {
+        self.kind
+    }
+
+    pub fn set_kind(&mut self, kind: CpalOutputSourceKind) {
+        self.kind = kind;
+        let Some(inner) = self.inner.upgrade() else {
+            return;
+        };
+        if let Ok(mut sources) = inner.sources.lock()
+            && let Some(source) = sources.iter_mut().find(|source| source.id == self.id)
+        {
+            source.kind = kind;
+        }
+    }
+
     pub fn play(&mut self, chart_zero_time: TimeUs) {
         self.clock.chart_zero_time_us = chart_zero_time.0;
         self.clock.start_output_frame = self.clock.current_frame.load(Ordering::Relaxed);
@@ -607,7 +661,7 @@ fn render_output<T: OutputSample>(
     sources: &SharedAudioSources,
     mix: &mut Vec<f32>,
     source_scratch: &mut Vec<f32>,
-    source_engines: &mut Vec<SharedAudioEngine>,
+    source_engines: &mut Vec<AudioSource>,
     diagnostics: &CpalOutputDiagnosticsCounters,
 ) {
     if channels == 0 {
@@ -634,7 +688,7 @@ fn mix_sources_stereo(
     sources: &SharedAudioSources,
     mix: &mut Vec<f32>,
     source_scratch: &mut Vec<f32>,
-    source_engines: &mut Vec<SharedAudioEngine>,
+    source_engines: &mut Vec<AudioSource>,
     diagnostics: &CpalOutputDiagnosticsCounters,
 ) {
     mix.resize(frames * 2, 0.0);
@@ -647,7 +701,7 @@ fn mix_sources_stereo(
     source_engines.clear();
     match sources.try_lock() {
         Ok(sources) => {
-            source_engines.extend(sources.iter().map(|source| Arc::clone(&source.engine)));
+            source_engines.extend(sources.iter().cloned());
         }
         Err(_) => {
             diagnostics.source_lock_miss_count.fetch_add(1, Ordering::Relaxed);
@@ -656,15 +710,15 @@ fn mix_sources_stereo(
 
     source_scratch.resize(frames * 2, 0.0);
     let mut missed_engine_lock = false;
-    for engine in source_engines.iter() {
-        if let Ok(mut engine) = engine.try_lock() {
+    for source in source_engines.iter() {
+        if let Ok(mut engine) = source.engine.try_lock() {
             engine.render_stereo(output_start_frame, source_scratch);
             for (dst, src) in mix.iter_mut().zip(source_scratch.iter()) {
                 *dst += *src;
             }
         } else {
             missed_engine_lock = true;
-            diagnostics.engine_lock_miss_count.fetch_add(1, Ordering::Relaxed);
+            diagnostics.record_engine_lock_miss(source.kind);
         }
     }
     if missed_engine_lock {
@@ -736,6 +790,14 @@ impl CpalOutputDiagnosticsCounters {
             engine_lock_miss_callback_count: self
                 .engine_lock_miss_callback_count
                 .load(Ordering::Relaxed),
+            system_engine_lock_miss_count: self
+                .system_engine_lock_miss_count
+                .load(Ordering::Relaxed),
+            play_engine_lock_miss_count: self.play_engine_lock_miss_count.load(Ordering::Relaxed),
+            draining_engine_lock_miss_count: self
+                .draining_engine_lock_miss_count
+                .load(Ordering::Relaxed),
+            other_engine_lock_miss_count: self.other_engine_lock_miss_count.load(Ordering::Relaxed),
             clipped_sample_count: self.clipped_sample_count.load(Ordering::Relaxed),
             peak_abs: f32::from_bits(self.peak_abs_bits.swap(0, Ordering::Relaxed)),
             max_callback_ns: self.max_callback_ns.swap(0, Ordering::Relaxed),
@@ -752,6 +814,24 @@ impl CpalOutputDiagnosticsCounters {
             return;
         }
         update_atomic_max(&self.peak_abs_bits, u64::from(peak_abs.to_bits()));
+    }
+
+    fn record_engine_lock_miss(&self, source_kind: CpalOutputSourceKind) {
+        self.engine_lock_miss_count.fetch_add(1, Ordering::Relaxed);
+        match source_kind {
+            CpalOutputSourceKind::Other => {
+                self.other_engine_lock_miss_count.fetch_add(1, Ordering::Relaxed);
+            }
+            CpalOutputSourceKind::System => {
+                self.system_engine_lock_miss_count.fetch_add(1, Ordering::Relaxed);
+            }
+            CpalOutputSourceKind::Play => {
+                self.play_engine_lock_miss_count.fetch_add(1, Ordering::Relaxed);
+            }
+            CpalOutputSourceKind::Draining => {
+                self.draining_engine_lock_miss_count.fetch_add(1, Ordering::Relaxed);
+            }
+        }
     }
 }
 
@@ -897,7 +977,11 @@ mod tests {
     #[test]
     fn render_output_reuses_scratch_buffer() {
         let engine = Arc::new(Mutex::new(AudioEngine::default()));
-        let sources = Arc::new(Mutex::new(vec![AudioSource { id: 1, engine }]));
+        let sources = Arc::new(Mutex::new(vec![AudioSource {
+            id: 1,
+            kind: CpalOutputSourceKind::Play,
+            engine,
+        }]));
         let mut output = vec![1.0_f32; 4];
         let mut mix = Vec::with_capacity(16);
         let mut source_scratch = Vec::new();
@@ -952,8 +1036,8 @@ mod tests {
             second.play_now(SoundId(1), 1.0, false);
         }
         let sources = Arc::new(Mutex::new(vec![
-            AudioSource { id: 1, engine: first },
-            AudioSource { id: 2, engine: second },
+            AudioSource { id: 1, kind: CpalOutputSourceKind::System, engine: first },
+            AudioSource { id: 2, kind: CpalOutputSourceKind::Play, engine: second },
         ]));
         let mut mix = Vec::new();
         let mut scratch = Vec::new();
@@ -963,6 +1047,31 @@ mod tests {
         mix_sources_stereo(0, 1, &sources, &mut mix, &mut scratch, &mut engines, &diagnostics);
 
         assert_eq!(mix, vec![0.75, 0.75]);
+    }
+
+    #[test]
+    fn mix_sources_stereo_records_engine_lock_miss_by_source_kind() {
+        let engine = Arc::new(Mutex::new(AudioEngine::default()));
+        let _held = engine.lock().unwrap();
+        let sources = Arc::new(Mutex::new(vec![AudioSource {
+            id: 1,
+            kind: CpalOutputSourceKind::System,
+            engine: Arc::clone(&engine),
+        }]));
+        let mut mix = Vec::new();
+        let mut scratch = Vec::new();
+        let mut engines = Vec::new();
+        let diagnostics = CpalOutputDiagnosticsCounters::default();
+
+        mix_sources_stereo(0, 1, &sources, &mut mix, &mut scratch, &mut engines, &diagnostics);
+
+        let snapshot = diagnostics.take_snapshot();
+        assert_eq!(snapshot.engine_lock_miss_count, 1);
+        assert_eq!(snapshot.engine_lock_miss_callback_count, 1);
+        assert_eq!(snapshot.system_engine_lock_miss_count, 1);
+        assert_eq!(snapshot.play_engine_lock_miss_count, 0);
+        assert_eq!(snapshot.draining_engine_lock_miss_count, 0);
+        assert_eq!(snapshot.other_engine_lock_miss_count, 0);
     }
 
     #[test]

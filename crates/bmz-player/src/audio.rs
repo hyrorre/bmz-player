@@ -4,7 +4,7 @@ use std::sync::{Arc, Mutex};
 use anyhow::{Context, Result, bail};
 use bmz_audio::backend::cpal::{
     CpalBackend, CpalHostId, CpalOutputConfig, CpalOutputDiagnostics, CpalOutputSource,
-    CpalSharedOutput, SharedAudioEngine,
+    CpalOutputSourceKind, CpalSharedOutput, SharedAudioEngine,
 };
 use bmz_audio::clock::AudioClock;
 use bmz_audio::engine::AudioEngine;
@@ -76,6 +76,10 @@ impl AppAudioOutput {
         self.runtime.play().context("failed to start shared audio output stream")?;
         Ok(())
     }
+
+    pub fn mark_draining(&mut self) {
+        self.source.set_kind(CpalOutputSourceKind::Draining);
+    }
 }
 
 impl RunningPlaySession {
@@ -116,14 +120,18 @@ impl AudioRuntime {
         self.output.take_diagnostics()
     }
 
-    fn add_source(&self, engine: SharedAudioEngine) -> CpalOutputSource {
-        self.output.add_source(engine)
+    fn add_source(
+        &self,
+        engine: SharedAudioEngine,
+        kind: CpalOutputSourceKind,
+    ) -> CpalOutputSource {
+        self.output.add_source_with_kind(engine, kind)
     }
 }
 
 pub fn open_app_audio_output(runtime: &AudioRuntime, engine: AudioEngine) -> AppAudioOutput {
     let engine = Arc::new(Mutex::new(engine));
-    let source = runtime.add_source(Arc::clone(&engine));
+    let source = runtime.add_source(Arc::clone(&engine), CpalOutputSourceKind::Play);
     AppAudioOutput { engine, runtime: runtime.clone(), source }
 }
 
@@ -155,7 +163,7 @@ impl SystemAudio {
     }
 
     fn with_engine(runtime: &AudioRuntime, engine: SharedAudioEngine) -> Self {
-        let mut source = runtime.add_source(Arc::clone(&engine));
+        let mut source = runtime.add_source(Arc::clone(&engine), CpalOutputSourceKind::System);
         source.play(TimeUs(0));
         Self { engine, _runtime: runtime.clone(), _source: source }
     }

@@ -5529,7 +5529,9 @@ impl WinitApp {
             tracing::warn!(%error, "failed to save practice property after round");
         }
         if let Some(started) = self.active_play.take() {
-            self.draining_audio = Some(started.running.audio);
+            let mut audio = started.running.audio;
+            audio.mark_draining();
+            self.draining_audio = Some(audio);
         }
         self.play_ending = None;
         self.finished_play = None;
@@ -6501,6 +6503,14 @@ impl WinitApp {
         let engine_lock_misses = snapshot.engine_lock_miss_count - previous.engine_lock_miss_count;
         let engine_lock_miss_callbacks =
             snapshot.engine_lock_miss_callback_count - previous.engine_lock_miss_callback_count;
+        let system_engine_lock_misses =
+            snapshot.system_engine_lock_miss_count - previous.system_engine_lock_miss_count;
+        let play_engine_lock_misses =
+            snapshot.play_engine_lock_miss_count - previous.play_engine_lock_miss_count;
+        let draining_engine_lock_misses =
+            snapshot.draining_engine_lock_miss_count - previous.draining_engine_lock_miss_count;
+        let other_engine_lock_misses =
+            snapshot.other_engine_lock_miss_count - previous.other_engine_lock_miss_count;
         let clipped_samples = snapshot.clipped_sample_count - previous.clipped_sample_count;
 
         let sample_rate = runtime.sample_rate().max(1);
@@ -6528,6 +6538,10 @@ impl WinitApp {
             source_lock_misses,
             engine_lock_misses,
             engine_lock_miss_callbacks,
+            system_engine_lock_misses,
+            play_engine_lock_misses,
+            draining_engine_lock_misses,
+            other_engine_lock_misses,
             clipped_samples,
             peak_abs = snapshot.peak_abs,
             max_callback_us = snapshot.max_callback_ns / 1_000,
@@ -7885,7 +7899,9 @@ impl WinitApp {
                     }
                     Err(error) => {
                         tracing::error!(%error, "failed to finish play session");
-                        self.draining_audio = Some(started.running.audio);
+                        let mut audio = started.running.audio;
+                        audio.mark_draining();
+                        self.draining_audio = Some(audio);
                         self.refresh_player_stats_snapshot();
                         self.leave_result();
                         return;
@@ -7893,7 +7909,9 @@ impl WinitApp {
                 }
             }
         };
-        self.draining_audio = Some(started.running.audio);
+        let mut audio = started.running.audio;
+        audio.mark_draining();
+        self.draining_audio = Some(audio);
         self.refresh_player_stats_snapshot();
         if self.active_course.is_some() {
             self.advance_course_after_finish(finished);
