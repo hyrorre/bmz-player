@@ -1153,8 +1153,11 @@ fn plan_play(
         // レーン背景が暗いグレーなので、カバーは判別しやすいように明確に黒で塗り、
         // 下端に視認用のハイライト帯を付ける。
         if snapshot.lane_cover > 0.0 {
-            let cover_bottom =
-                play_object_y(board, snapshot.lift, (1.0 - snapshot.lane_cover).clamp(0.0, 1.0));
+            let cover_bottom = play_object_y(
+                board,
+                snapshot.lift,
+                lane_cover_bottom_progress(snapshot.lane_cover, snapshot.lift),
+            );
             let cover_height = (cover_bottom - board.y).max(0.0);
             commands.push(DrawCommand::Rect {
                 rect: Rect { x: board.x, y: board.y, width: board.width, height: cover_height },
@@ -1421,8 +1424,14 @@ fn skin_lift_offset_px(lift: f32, lane_h: f32) -> i32 {
     (lift * lane_h).round() as i32
 }
 
-fn skin_lanecover_offset_px(lane_cover: f32, lift: f32, lane_h: f32) -> i32 {
-    (-(1.0 - lift.clamp(0.0, 1.0)) * lane_h * lane_cover.clamp(0.0, 1.0)).round() as i32
+fn skin_lanecover_offset_px(lane_cover: f32, _lift: f32, lane_h: f32) -> i32 {
+    (-(lane_h * lane_cover.clamp(0.0, 1.0))).round() as i32
+}
+
+fn lane_cover_bottom_progress(lane_cover: f32, lift: f32) -> f32 {
+    let lift = lift.clamp(0.0, 1.0);
+    let visible = (1.0 - lift).max(f32::EPSILON);
+    ((visible - lane_cover.clamp(0.0, visible)) / visible).clamp(0.0, 1.0)
 }
 
 fn skin_hidden_cover_offset_px(lift: f32, hidden_cover: f32, lane_h: f32) -> i32 {
@@ -4002,7 +4011,10 @@ mod tests {
 
         assert_eq!(skin_lift_offset_px(0.3, lane_h), 217);
         assert_eq!(skin_lanecover_offset_px(0.5, 0.0, lane_h), -362);
-        assert_eq!(skin_lanecover_offset_px(0.5, 0.25, lane_h), -271);
+        assert_eq!(skin_lanecover_offset_px(0.5, 0.25, lane_h), -362);
+        assert!(approx_eq(lane_cover_bottom_progress(0.25, 0.0), 0.75));
+        assert!(approx_eq(lane_cover_bottom_progress(0.25, 0.2), 0.6875));
+        assert!(approx_eq(lane_cover_bottom_progress(0.9, 0.2), 0.0));
         assert_eq!(skin_hidden_cover_offset_px(0.3, 0.25, lane_h), 127);
     }
 

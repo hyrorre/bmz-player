@@ -217,13 +217,17 @@ pub fn apply_placeholder_session_visuals(
     snapshot.gauge_border = current.definition.border;
 
     snapshot.lift = lane_unit_to_f32(profile.lane.lift);
-    snapshot.lane_cover = lane_unit_to_f32(profile.lane.sudden);
+    snapshot.lane_cover = crate::config::play::clamp_lane_cover_for_lift(
+        lane_unit_to_f32(profile.lane.sudden),
+        snapshot.lift,
+    );
     let hispeed_mode = hispeed_mode_from_profile(profile.lane.hispeed_mode);
     snapshot.hispeed = placeholder_hispeed_for_mode(
         profile,
         hispeed_mode,
         profile.lane.target_green_number.max(1),
         snapshot.lane_cover,
+        snapshot.lift,
         snapshot.now_bpm,
     );
     snapshot.lanecover_enabled = lanecover_enabled_from_profile(profile);
@@ -250,6 +254,7 @@ pub fn apply_placeholder_session_visuals(
             snapshot.now_bpm,
             snapshot.hispeed,
             snapshot.lane_cover,
+            snapshot.lift,
             1.0,
         )
         .round()
@@ -358,13 +363,16 @@ pub fn build_game_session_with_input_backend(
     );
     let hispeed_mode = hispeed_mode_from_profile(profile.lane.hispeed_mode);
     let target_green_number = profile.lane.target_green_number.max(1);
-    let lane_cover = lane_unit_to_f32(profile.lane.sudden);
+    let lift = lane_unit_to_f32(profile.lane.lift);
+    let lane_cover =
+        crate::config::play::clamp_lane_cover_for_lift(lane_unit_to_f32(profile.lane.sudden), lift);
     let hsfix_base_bpm = hsfix_base_bpm_for_chart(&chart, &timing_map, options.hs_fix);
     let hispeed = initial_hispeed_for_mode(
         profile,
         hispeed_mode,
         target_green_number,
         lane_cover,
+        lift,
         &chart,
         &timing_map,
         options.hs_fix,
@@ -470,7 +478,7 @@ pub fn build_game_session_with_input_backend(
         hispeed_mode,
         target_green_number,
         hsfix_base_bpm,
-        lift: lane_unit_to_f32(profile.lane.lift),
+        lift,
         lane_cover,
         lane_cover_visible: true,
         lane_cover_changing: false,
@@ -550,6 +558,7 @@ fn initial_hispeed_for_mode(
     hispeed_mode: HispeedMode,
     target_green_number: u32,
     lane_cover: f32,
+    lift: f32,
     chart: &PlayableChart,
     timing_map: &bmz_chart::timing::TimingMap,
     hs_fix: HsFixOption,
@@ -561,7 +570,7 @@ fn initial_hispeed_for_mode(
     let now_bpm = hsfix_base_bpm_for_chart(chart, timing_map, hs_fix);
     let scroll_multiplier =
         crate::screens::play_snapshot::current_scroll_multiplier(chart, timing_map, TimeUs(0));
-    let visible_max = (1.0 - lane_cover).clamp(0.0, 1.0);
+    let visible_max = crate::config::play::visible_lane_fraction(lane_cover, lift);
     crate::screens::play_snapshot::hispeed_for_green_number_values(
         target_green_number as f32,
         visible_max,
@@ -641,13 +650,14 @@ fn placeholder_hispeed_for_mode(
     hispeed_mode: HispeedMode,
     target_green_number: u32,
     lane_cover: f32,
+    lift: f32,
     now_bpm: f32,
 ) -> f32 {
     if hispeed_mode == HispeedMode::Normal {
         return clamp_hispeed(profile.lane.hispeed);
     }
 
-    let visible_max = (1.0 - lane_cover).clamp(0.0, 1.0);
+    let visible_max = crate::config::play::visible_lane_fraction(lane_cover, lift);
     crate::screens::play_snapshot::hispeed_for_green_number_values(
         target_green_number as f32,
         visible_max,
@@ -676,8 +686,11 @@ fn hidden_cover_from_profile(profile: &ProfileConfig) -> f32 {
 }
 
 fn lanecover_enabled_from_profile(profile: &ProfileConfig) -> bool {
+    let lift = lane_unit_to_f32(profile.lane.lift);
+    let lane_cover =
+        crate::config::play::clamp_lane_cover_for_lift(lane_unit_to_f32(profile.lane.sudden), lift);
     matches!(profile.play.lane_effect, LaneEffectConfig::Sudden | LaneEffectConfig::HiddenSudden)
-        || profile.lane.sudden > 0
+        || lane_cover > 0.0
 }
 
 fn lift_enabled_from_profile(_profile: &ProfileConfig) -> bool {
@@ -2448,6 +2461,20 @@ mod tests {
             build_game_session(Arc::new(chart()), &profile, PlaySessionOptions::default());
 
         assert!(sudden_option.lanecover_enabled);
+    }
+
+    #[test]
+    fn build_game_session_clamps_lane_cover_to_remaining_lift_range() {
+        let mut profile = ProfileConfig::new_default("default", "Default", 1);
+        profile.lane.sudden = 900;
+        profile.lane.lift = 200;
+
+        let session =
+            build_game_session(Arc::new(chart()), &profile, PlaySessionOptions::default());
+
+        assert!((session.lane_cover - 0.8).abs() < 0.000_01);
+        assert!((session.lift - 0.2).abs() < 0.000_01);
+        assert!(session.lanecover_enabled);
     }
 
     #[test]

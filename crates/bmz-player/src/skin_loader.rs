@@ -4155,7 +4155,7 @@ mod tests {
             lift: 0.222,
             total_duration_ms: 517,
             offset_lift_px: (0.222_f32 * 723.0).round() as i32,
-            offset_lanecover_px: (-(1.0_f32 - 0.222) * 723.0 * 0.290).round() as i32,
+            offset_lanecover_px: -(723.0_f32 * 0.290).round() as i32,
             lane_cover_changing: true,
             lanecover_enabled: true,
             lift_enabled: true,
@@ -4214,7 +4214,7 @@ mod tests {
                             && tint.g > 0.75
                             && tint.b < 0.5
                             && tint.a > 0.5
-                            && (rect.y * 1080.0 - 118.0).abs() < 2.0
+                            && (rect.y * 1080.0 - 165.0).abs() < 2.0
                 )
             })
             .count();
@@ -4232,6 +4232,21 @@ mod tests {
                 )
             })
             .count();
+        let green_digit_ys = number_digits
+            .iter()
+            .filter_map(|item| {
+                if let bmz_render::skin::SkinRenderItem::Image { tint, rect, .. } = item
+                    && tint.r < 0.4
+                    && tint.g > 0.75
+                    && tint.b < 0.5
+                    && tint.a > 0.5
+                {
+                    Some((rect.y * 1080.0).round() as i32)
+                } else {
+                    None
+                }
+            })
+            .collect::<Vec<_>>();
 
         assert!(
             white_digits >= 6,
@@ -4243,7 +4258,7 @@ mod tests {
         );
         assert!(
             green_bpm_cover_digits >= 9,
-            "expected WMII BPM green digits to use lanecover-on layout; got {green_bpm_cover_digits}"
+            "expected WMII BPM green digits to use lanecover-on layout; got {green_bpm_cover_digits}; green ys {green_digit_ys:?}"
         );
         assert_eq!(
             green_bpm_no_cover_digits, 0,
@@ -4257,7 +4272,7 @@ mod tests {
             lift: 0.0,
             total_duration_ms: 517,
             offset_lift_px: 0,
-            offset_lanecover_px: (-(1.0_f32 - 0.0) * 723.0 * 0.290).round() as i32,
+            offset_lanecover_px: -(723.0_f32 * 0.290).round() as i32,
             lane_cover_changing: true,
             lanecover_enabled: true,
             lift_enabled: true,

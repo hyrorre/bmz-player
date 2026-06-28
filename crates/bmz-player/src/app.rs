@@ -11046,10 +11046,10 @@ fn play_skin_video_draw_state(
         .filter(|height| *height > 0)
         .map_or(skin_height, |height| height as f32);
     let lift = snapshot.lift.clamp(0.0, 1.0);
-    let lane_cover = snapshot.lane_cover.clamp(0.0, 1.0);
+    let lane_cover = crate::config::play::clamp_lane_cover_for_lift(snapshot.lane_cover, lift);
     let offset_lift_px = (lift * note_lane_height).round() as i32;
     let visible_lane_height = note_lane_height * (1.0 - lift);
-    let offset_lanecover_px = (-(visible_lane_height * lane_cover)).round() as i32;
+    let offset_lanecover_px = (-(note_lane_height * lane_cover)).round() as i32;
     let offset_hidden_cover_px =
         (snapshot.hidden_cover.clamp(0.0, 1.0) * visible_lane_height).round() as i32;
     bmz_render::skin::SkinDrawState {
@@ -14422,11 +14422,16 @@ fn pending_play_green_number_for_profile_hispeed(
     snapshot: Option<&RenderSnapshot>,
 ) -> Option<u32> {
     let snapshot = snapshot?;
-    let lane_cover = crate::config::play::lane_unit_to_f32(profile.lane.sudden);
+    let lift = crate::config::play::lane_unit_to_f32(profile.lane.lift);
+    let lane_cover = crate::config::play::clamp_lane_cover_for_lift(
+        crate::config::play::lane_unit_to_f32(profile.lane.sudden),
+        lift,
+    );
     let duration = crate::screens::play_snapshot::display_duration_ms_for_bpm_hispeed(
         snapshot.now_bpm,
         profile.lane.hispeed,
         lane_cover,
+        lift,
         1.0,
     )
     .round()
@@ -14483,13 +14488,19 @@ fn apply_lane_cover_step_to_session(
     speed_locked: bool,
 ) -> bool {
     if session.lane_cover_visible {
-        session.lane_cover = (session.lane_cover - delta).clamp(0.0, 1.0);
+        session.lane_cover = (session.lane_cover - delta)
+            .clamp(0.0, crate::config::play::lane_cover_max_for_lift(session.lift));
         if session.hispeed_mode == HispeedMode::Floating && !speed_locked {
             let now = session.audio_clock.now();
             session.hispeed = hispeed_for_green_number(session, session.lane_cover, now);
         }
     } else {
-        session.lift = (session.lift + delta).clamp(0.0, 1.0);
+        session.lift =
+            (session.lift + delta).clamp(0.0, (1.0 - session.lane_cover).clamp(0.0, 1.0));
+        if session.hispeed_mode == HispeedMode::Floating && !speed_locked {
+            let now = session.audio_clock.now();
+            session.hispeed = hispeed_for_green_number(session, 0.0, now);
+        }
     }
     true
 }
@@ -14500,7 +14511,11 @@ fn reset_floating_hispeed_if_enabled(
 ) {
     if session.hispeed_mode == HispeedMode::Floating && !speed_locked {
         let now = session.audio_clock.now();
-        let lane_cover = if session.lane_cover_visible { session.lane_cover } else { 0.0 };
+        let lane_cover = if session.lane_cover_visible {
+            crate::config::play::clamp_lane_cover_for_lift(session.lane_cover, session.lift)
+        } else {
+            0.0
+        };
         session.hispeed = hispeed_for_green_number(session, lane_cover, now);
     }
 }
@@ -14509,7 +14524,11 @@ fn current_green_number(session: &bmz_gameplay::session::GameSession, now: TimeU
     let total = note_display_duration_ms_for_hispeed(
         session,
         session.hispeed,
-        if session.lane_cover_visible { session.lane_cover } else { 0.0 },
+        if session.lane_cover_visible {
+            crate::config::play::clamp_lane_cover_for_lift(session.lane_cover, session.lift)
+        } else {
+            0.0
+        },
         now,
     );
     green_number_from_duration(total)
@@ -14551,6 +14570,7 @@ fn note_display_duration_ms_for_hispeed(
         now_bpm as f32,
         hispeed,
         lane_cover,
+        session.lift,
         scroll_multiplier,
     )
 }
@@ -14561,7 +14581,7 @@ fn hispeed_for_green_number(
     now: TimeUs,
 ) -> f32 {
     let target_green = session.target_green_number.max(1) as f32;
-    let visible_max = (1.0 - lane_cover).clamp(0.0, 1.0);
+    let visible_max = crate::config::play::visible_lane_fraction(lane_cover, session.lift);
     let now_bpm = floating_hispeed_target_bpm(session, now);
     let scroll_multiplier = crate::screens::play_snapshot::current_scroll_multiplier(
         &session.chart,
@@ -17074,7 +17094,7 @@ mod tests {
         );
 
         assert_eq!(state.offset_lift_px, 180);
-        assert_eq!(state.offset_lanecover_px, -270);
+        assert_eq!(state.offset_lanecover_px, -360);
         assert_eq!(state.offset_hidden_cover_px, 54);
     }
 
@@ -18090,6 +18110,28 @@ mod tests {
             lane_cover_step(PhysicalKey::Code(KeyCode::ArrowDown), ElementState::Pressed, true),
             Some(-0.01)
         );
+    }
+
+    #[test]
+    fn lane_cover_step_clamps_sudden_and_lift_to_combined_range() {
+        let profile = ProfileConfig::new_default("default", "Default", 1);
+        let mut session = crate::screens::play_session::build_game_session(
+            std::sync::Arc::new(app_test_chart()),
+            &profile,
+            crate::screens::play_session::PlaySessionOptions::default(),
+        );
+
+        session.lift = 0.2;
+        session.lane_cover = 0.79;
+        session.lane_cover_visible = true;
+        assert!(apply_lane_cover_step_to_session(&mut session, -0.02, false));
+        assert!((session.lane_cover - 0.8).abs() < 0.000_01);
+
+        session.lane_cover = 0.3;
+        session.lift = 0.69;
+        session.lane_cover_visible = false;
+        assert!(apply_lane_cover_step_to_session(&mut session, 0.02, false));
+        assert!((session.lift - 0.7).abs() < 0.000_01);
     }
 
     #[test]

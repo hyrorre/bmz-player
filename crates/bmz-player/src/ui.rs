@@ -2999,8 +2999,12 @@ fn build_profile_settings_panel(
                                 hispeed_mode_label(HispeedModeConfig::Floating),
                             );
                         });
-                    lane_unit_slider(ui, &mut profile.lane.sudden, "SUDDEN+");
-                    lane_unit_slider(ui, &mut profile.lane.lift, "LIFT");
+                    let sudden_max =
+                        crate::config::play::lane_unit_max_for_other(profile.lane.lift);
+                    lane_unit_slider_with_max(ui, &mut profile.lane.sudden, "SUDDEN+", sudden_max);
+                    let lift_max =
+                        crate::config::play::lane_unit_max_for_other(profile.lane.sudden);
+                    lane_unit_slider_with_max(ui, &mut profile.lane.lift, "LIFT", lift_max);
                     lane_unit_slider(ui, &mut profile.lane.hidden, "HIDDEN");
                     ui.add(
                         egui::Slider::new(&mut profile.lane.target_green_number, 1..=999)
@@ -3518,7 +3522,12 @@ fn volume_slider(ui: &mut egui::Ui, value: &mut u32, label: &str) {
 }
 
 fn lane_unit_slider(ui: &mut egui::Ui, value: &mut u32, label: &str) {
-    ui.add(egui::Slider::new(value, 0..=1000).text(label));
+    lane_unit_slider_with_max(ui, value, label, 1000);
+}
+
+fn lane_unit_slider_with_max(ui: &mut egui::Ui, value: &mut u32, label: &str, max: u32) {
+    *value = (*value).min(max);
+    ui.add(egui::Slider::new(value, 0..=max).text(label));
 }
 
 fn offset_ms_slider(ui: &mut egui::Ui, value_us: &mut i64, label: &str) {

@@ -8247,7 +8247,7 @@ fn skin_state_lane_judge_event_index(event_id: i32, state: &SkinDrawState) -> Op
 /// beatoraja `main_state.float_number(ref)`。BARGRAPH / SLIDER 系の比率 0.0-1.0。
 fn skin_state_float_number(ref_id: i32, state: &SkinDrawState) -> Option<f32> {
     Some(match ref_id {
-        14 => state.lane_cover.clamp(0.0, 1.0),
+        14 => bmz_lane_cover_for_lift(state.lane_cover, state.lift),
         _ => graph_value(ref_id, state),
     })
 }
@@ -8715,7 +8715,7 @@ fn skin_state_number(ref_id: i32, state: &SkinDrawState) -> Option<i64> {
             Some(if state.now_bpm > 0.0 { state.now_bpm } else { state.select_bpm }.round() as i64)
         }
         // レーンカバー: NUMBER_LANECOVER1=14 (0-1000)
-        14 => Some((state.lane_cover.clamp(0.0, 1.0) * 1000.0).round() as i64),
+        14 => Some((bmz_lane_cover_for_lift(state.lane_cover, state.lift) * 1000.0).round() as i64),
         // リフト: NUMBER_LIFT1=314 (0-1000)
         314 => Some((state.lift.clamp(0.0, 1.0) * 1000.0).round() as i64),
         // 選曲画面の音量表示: MASTER/KEY/BGM volume (0-100)
@@ -8824,6 +8824,42 @@ fn lane_cover_duration_number(ref_id: i32, state: &SkinDrawState) -> Option<i64>
     let green = offset % 2 == 1;
     let cover = offset % 4 < 2;
     let mode = offset / 4;
+    let duration = if mode == 0 {
+        current_lane_cover_duration_number_ms(cover, state)
+            .or_else(|| lane_cover_duration_number_ms_for_bpm(cover, mode, state))?
+    } else {
+        lane_cover_duration_number_ms_for_bpm(cover, mode, state)?
+    };
+    Some(if green { duration_to_green_number_ms_i64(duration) } else { duration })
+}
+
+fn current_lane_cover_duration_number_ms(cover: bool, state: &SkinDrawState) -> Option<i64> {
+    if !duration_refs_available(state) {
+        return None;
+    }
+    let cover_on_visible = bmz_visible_lane_fraction(state.lane_cover, state.lift);
+    let target_visible =
+        if cover { cover_on_visible } else { bmz_visible_lane_fraction(0.0, state.lift) };
+    let duration = state.total_duration_ms.max(0) as i64;
+    let duration = if duration > 0 { duration } else { state_duration_number_ms(state) };
+    if cover {
+        return Some(duration);
+    }
+    if cover_on_visible > f32::EPSILON {
+        return Some(
+            (duration.max(0) as f64 * target_visible as f64 / cover_on_visible as f64)
+                .round()
+                .max(0.0) as i64,
+        );
+    }
+    None
+}
+
+fn lane_cover_duration_number_ms_for_bpm(
+    cover: bool,
+    mode: i32,
+    state: &SkinDrawState,
+) -> Option<i64> {
     let target_bpm = match mode {
         0 => bpm_value_or_select(state.now_bpm, state.select_bpm),
         1 => bpm_value_or_select(state.main_bpm, state.select_bpm),
@@ -8836,14 +8872,16 @@ fn lane_cover_duration_number(ref_id: i32, state: &SkinDrawState) -> Option<i64>
     } else {
         bmz_visible_lane_fraction(0.0, state.lift)
     };
-    let green_factor = if green { 0.6 } else { 1.0 };
-    let duration =
-        240_000.0 / target_bpm as f64 / state.hispeed.max(0.01) as f64 * visible as f64 * green_factor;
+    let duration = 240_000.0 / target_bpm as f64 / state.hispeed.max(0.01) as f64 * visible as f64;
     Some(duration.round().max(0.0) as i64)
 }
 
+fn bmz_lane_cover_for_lift(lane_cover: f32, lift: f32) -> f32 {
+    lane_cover.clamp(0.0, (1.0 - lift.clamp(0.0, 1.0)).clamp(0.0, 1.0))
+}
+
 fn bmz_visible_lane_fraction(lane_cover: f32, lift: f32) -> f32 {
-    (1.0 - lane_cover.clamp(0.0, 1.0) - lift.clamp(0.0, 1.0)).clamp(0.0, 1.0)
+    (1.0 - bmz_lane_cover_for_lift(lane_cover, lift) - lift.clamp(0.0, 1.0)).clamp(0.0, 1.0)
 }
 
 fn duration_refs_available(state: &SkinDrawState) -> bool {
@@ -8875,7 +8913,11 @@ pub fn green_duration_to_duration_i32(green_duration_ms: i32) -> i32 {
 
 pub fn duration_to_green_number_ms(duration_ms: i32) -> i32 {
     let duration = duration_ms.max(0) as i64;
-    ((duration.saturating_mul(3).saturating_add(2)) / 5).min(i32::MAX as i64) as i32
+    duration_to_green_number_ms_i64(duration) as i32
+}
+
+fn duration_to_green_number_ms_i64(duration_ms: i64) -> i64 {
+    duration_ms.max(0).saturating_mul(3).saturating_add(2).saturating_div(5).min(i32::MAX as i64)
 }
 
 fn bpm_value_or_select(value: f32, fallback: f32) -> Option<f32> {
@@ -9575,7 +9617,10 @@ fn skin_slider_progress(slider: &SkinSliderDef, state: &SkinDrawState) -> Option
 fn skin_slider_progress_by_type(slider_type: i32, state: &SkinDrawState) -> Option<f32> {
     match slider_type {
         1 => Some(state.select_scroll_progress.clamp(0.0, 1.0)),
-        4 | 5 => (state.lane_cover > 0.0).then_some(state.lane_cover.clamp(0.0, 1.0)),
+        4 | 5 => {
+            let lane_cover = bmz_lane_cover_for_lift(state.lane_cover, state.lift);
+            (lane_cover > 0.0).then_some(lane_cover)
+        }
         6 => Some(state.play_progress.clamp(0.0, 1.0)),
         17 => Some(state.select_master_volume.clamp(0.0, 1.0)),
         18 => Some(state.select_key_volume.clamp(0.0, 1.0)),
@@ -19001,6 +19046,36 @@ mod tests {
     }
 
     #[test]
+    fn sudden_slider_progress_is_capped_by_lift() {
+        let document: SkinDocument = serde_json::from_str(
+            r#"
+            {
+                "type": 0,
+                "w": 100,
+                "h": 100,
+                "source": [{ "id": 1, "path": "cover.png" }],
+                "slider": [
+                    { "id": "lanecover", "src": 1, "x": 0, "y": 0, "w": 10, "h": 10, "angle": 2, "range": 100, "type": 4 }
+                ],
+                "destination": [
+                    { "id": "lanecover", "dst": [{ "x": 0, "y": 100, "w": 10, "h": 10 }] }
+                ]
+            }
+            "#,
+        )
+        .unwrap();
+        let sources = mock_source("1", 100.0, 100.0);
+
+        let items = document.static_image_render_items(
+            &sources,
+            &SkinDrawState { lane_cover: 0.9, lift: 0.2, ..SkinDrawState::default() },
+        );
+
+        let SkinRenderItem::Image { rect, .. } = &items[0] else { panic!() };
+        assert!(approx_eq(rect.y, 0.7), "expected capped SUDDEN slider y, got {}", rect.y);
+    }
+
+    #[test]
     fn skin_document_resolves_end_of_note_timer_destinations() {
         let document: SkinDocument = serde_json::from_str(
             r#"
@@ -22246,6 +22321,8 @@ mod tests {
         // NUMBER_LIFT1 (314) = round(0.42 * 1000) = 420
         let lifted = SkinDrawState { lift: 0.42, ..state.clone() };
         assert_eq!(skin_state_number(314, &lifted), Some(420));
+        let capped_cover = SkinDrawState { lane_cover: 0.9, lift: 0.2, ..state.clone() };
+        assert_eq!(skin_state_number(14, &capped_cover), Some(800));
         // float_number(113) tracks BARGRAPH_BESTSCORERATE
         let best_rate = SkinDrawState {
             total_notes: 100,
@@ -22276,12 +22353,14 @@ mod tests {
             max_bpm: 200.0,
             hispeed: 2.0,
             lane_cover: 0.25,
-            total_duration_ms: 2_000,
-            duration_green_ms: Some(1_200),
+            total_duration_ms: 900,
+            duration_green_ms: Some(540),
             ..SkinDrawState::default()
         };
-        // 1312..=1327 are beatoraja lane-cover duration variants:
+        // 1312..=1327 are lane-cover duration variants:
         // current/main/min/max BPM x cover on/off x normal/green.
+        // Current-BPM variants use SkinDrawState's real note display duration; main/min/max variants
+        // are theoretical values derived from their BPM.
         assert_eq!(skin_state_number(1312, &duration_state), Some(900));
         assert_eq!(skin_state_number(1313, &duration_state), Some(540));
         assert_eq!(skin_state_number(1314, &duration_state), Some(1_200));
@@ -22295,9 +22374,10 @@ mod tests {
             total_duration_ms: 1_295,
             ..duration_state.clone()
         };
-        // WMII uses the main/min/max variants.  They should stay stable across
-        // BPM changes and current-duration rounding; only the current-BPM variant changes.
-        assert_eq!(skin_state_number(1313, &changed_now_bpm), Some(360));
+        // WMII uses the main/min/max variants.  They should stay stable across BPM changes and
+        // current-duration rounding; current-BPM variants follow the runtime display duration.
+        assert_eq!(skin_state_number(1312, &changed_now_bpm), Some(1_295));
+        assert_eq!(skin_state_number(1313, &changed_now_bpm), Some(777));
         assert_eq!(skin_state_number(1317, &changed_now_bpm), Some(540));
         assert_eq!(skin_state_number(1321, &changed_now_bpm), Some(1_080));
         assert_eq!(skin_state_number(1325, &changed_now_bpm), Some(270));
@@ -22305,7 +22385,12 @@ mod tests {
         assert_eq!(skin_state_number(1317, &faster), Some(360));
         let lower_cover = SkinDrawState { lane_cover: 0.5, ..duration_state.clone() };
         assert_eq!(skin_state_number(1317, &lower_cover), Some(360));
-        let lifted_cover = SkinDrawState { lift: 0.2, ..duration_state.clone() };
+        let lifted_cover = SkinDrawState {
+            lift: 0.2,
+            total_duration_ms: 660,
+            duration_green_ms: Some(396),
+            ..duration_state.clone()
+        };
         assert_eq!(skin_state_number(1312, &lifted_cover), Some(660));
         assert_eq!(skin_state_number(1313, &lifted_cover), Some(396));
         assert_eq!(skin_state_number(1314, &lifted_cover), Some(960));
