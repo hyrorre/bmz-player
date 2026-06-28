@@ -643,6 +643,7 @@ impl<'a> CsvBuilder<'a> {
             "font": font,
             "ref": values[3],
             "align": values[4],
+            "overflow": 1,
             "size": self.lr2_text_size(values[2]),
         }));
         self.set_current(id);
@@ -2129,6 +2130,29 @@ mod tests {
             .unwrap();
 
         assert_eq!(builder.values.first().unwrap()["ref"], json!(426));
+    }
+
+    #[test]
+    fn lr2_text_defaults_to_shrink_overflow() {
+        let files = BTreeMap::new();
+        let skin_path = unique_test_dir("bmz-lr2-text-shrink").join("play.lr2skin");
+        let mut builder = CsvBuilder::new(&skin_path, Header::default(), &files);
+        builder.execute(&parse_csv_line("#SRC_TEXT,0,0,10,1,0").expect("valid SRC_TEXT")).unwrap();
+        builder
+            .execute(
+                &parse_csv_line("#DST_TEXT,0,0,10,20,120,30,0,255,255,255,255,0,0,0,0,0,0,0,0,0,0")
+                    .expect("valid DST_TEXT"),
+            )
+            .unwrap();
+
+        let text = builder.texts.first().expect("SRC_TEXT should produce text");
+        assert_eq!(text["overflow"], json!(1));
+
+        let destination =
+            builder.destinations.first().expect("DST_TEXT should produce destination");
+        let frame = destination["dst"].as_array().unwrap().first().unwrap();
+        assert_eq!(frame["w"], json!(120));
+        assert_eq!(frame["h"], json!(30));
     }
 
     #[test]
