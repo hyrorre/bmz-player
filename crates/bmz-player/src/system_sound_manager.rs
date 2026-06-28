@@ -11,6 +11,7 @@
 //! - 再生は [`bmz_audio::engine::AudioEngine::play_now`] を経由し、`is_bgm()` の音は
 //!   そのままループ再生になる。
 
+use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 
 use bmz_audio::backend::cpal::SharedAudioEngine;
@@ -25,10 +26,13 @@ use crate::system_sound::{SoundSetSelection, SoundType};
 /// 大きすぎる値を使うと巨大な resize が走り OOM kill される。
 /// BMS の `#WAVxx` は base-36 で最大 1296 個なので、100_000 オフセットなら衝突しない。
 const SYSTEM_SOUND_BASE: u32 = 100_000;
+const VOLUME_EPSILON: f32 = 0.000_1;
 
 pub struct SystemSoundManager {
     engine: SharedAudioEngine,
     id_map: HashMap<SoundType, SoundId>,
+    last_volumes: RefCell<HashMap<SoundType, f32>>,
+    master_gain: Cell<f32>,
 }
 
 impl SystemSoundManager {
@@ -82,31 +86,68 @@ impl SystemSoundManager {
             }
         }
 
-        Self { engine, id_map }
+        Self::with_id_map(engine, id_map)
+    }
+
+    fn with_id_map(engine: SharedAudioEngine, id_map: HashMap<SoundType, SoundId>) -> Self {
+        Self {
+            engine,
+            id_map,
+            last_volumes: RefCell::new(HashMap::new()),
+            master_gain: Cell::new(1.0),
+        }
     }
 
     /// 引数で指定した SoundType を再生する。BGM はループ、SE は 1 ショット。
     /// 対応サンプルが登録されていない場合は何もしない。
     pub fn play(&self, sound_type: SoundType, master_volume: f32) {
+        self.play_with_master_gain(sound_type, master_volume, self.master_gain.get());
+    }
+
+    /// マスターゲイン復帰と再生を 1 回の AudioEngine lock にまとめる。
+    pub fn play_with_master_gain(&self, sound_type: SoundType, master_volume: f32, gain: f32) {
         let Some(&id) = self.id_map.get(&sound_type) else {
             return;
         };
+        let master_volume = normalize_volume(master_volume);
+        let gain = normalize_volume(gain);
         let loop_playback = sound_type.loops();
         if let Ok(mut engine) = self.engine.lock() {
+            engine.set_master_gain(gain);
             if sound_type.is_bgm() {
                 engine.stop_sound(id);
             }
             engine.play_now(id, master_volume, loop_playback);
+            self.master_gain.set(gain);
+            self.last_volumes.borrow_mut().insert(sound_type, master_volume);
         }
     }
 
     /// 登録済み sound の再生待ち/再生中音量を、SoundType ごとの最新設定で更新する。
     pub fn refresh_volumes(&self, mut volume_for: impl FnMut(SoundType) -> f32) {
+        let mut updates = Vec::new();
+        {
+            let last_volumes = self.last_volumes.borrow();
+            for (&sound_type, &id) in &self.id_map {
+                let volume = normalize_volume(volume_for(sound_type));
+                if last_volumes.get(&sound_type).is_none_or(|&last| !volume_matches(last, volume)) {
+                    updates.push((sound_type, id, volume));
+                }
+            }
+        }
+        if updates.is_empty() {
+            return;
+        }
+
         let Ok(mut engine) = self.engine.lock() else {
             return;
         };
-        for (&sound_type, &id) in &self.id_map {
-            engine.set_sound_volume(id, volume_for(sound_type));
+        for &(_, id, volume) in &updates {
+            engine.set_sound_volume(id, volume);
+        }
+        let mut last_volumes = self.last_volumes.borrow_mut();
+        for (sound_type, _, volume) in updates {
+            last_volumes.insert(sound_type, volume);
         }
     }
 
@@ -115,8 +156,18 @@ impl SystemSoundManager {
         let Some(&id) = self.id_map.get(&sound_type) else {
             return;
         };
+        let volume = normalize_volume(volume);
+        if self
+            .last_volumes
+            .borrow()
+            .get(&sound_type)
+            .is_some_and(|&last| volume_matches(last, volume))
+        {
+            return;
+        }
         if let Ok(mut engine) = self.engine.lock() {
             engine.set_sound_volume(id, volume);
+            self.last_volumes.borrow_mut().insert(sound_type, volume);
         }
     }
 
@@ -124,8 +175,13 @@ impl SystemSoundManager {
     /// リザルト退出時の `ResultClose` など、複数のシステム音をまとめて
     /// フェードアウトさせる用途で使う。
     pub fn set_master_gain(&self, gain: f32) {
+        let gain = normalize_volume(gain);
+        if volume_matches(self.master_gain.get(), gain) {
+            return;
+        }
         if let Ok(mut engine) = self.engine.lock() {
             engine.set_master_gain(gain);
+            self.master_gain.set(gain);
         }
     }
 
@@ -150,6 +206,14 @@ impl SystemSoundManager {
             }
         }
     }
+}
+
+fn normalize_volume(volume: f32) -> f32 {
+    if volume.is_finite() { volume.clamp(0.0, 1.0) } else { 0.0 }
+}
+
+fn volume_matches(left: f32, right: f32) -> bool {
+    (left - right).abs() <= VOLUME_EPSILON
 }
 
 #[cfg(test)]
@@ -190,7 +254,7 @@ mod tests {
             );
         }
 
-        let manager = SystemSoundManager { engine: Arc::clone(&engine), id_map };
+        let manager = SystemSoundManager::with_id_map(Arc::clone(&engine), id_map);
         manager.play(SoundType::Select, 1.0);
         {
             let mut guard = engine.lock().unwrap();
@@ -229,7 +293,7 @@ mod tests {
             );
         }
 
-        let manager = SystemSoundManager { engine: Arc::clone(&engine), id_map };
+        let manager = SystemSoundManager::with_id_map(Arc::clone(&engine), id_map);
         manager.play(SoundType::ResultClear, 1.0);
         {
             let mut guard = engine.lock().unwrap();
@@ -263,7 +327,7 @@ mod tests {
             );
         }
 
-        let manager = SystemSoundManager { engine: Arc::clone(&engine), id_map };
+        let manager = SystemSoundManager::with_id_map(Arc::clone(&engine), id_map);
         manager.play(SoundType::Decide, 1.0);
         {
             let mut guard = engine.lock().unwrap();
@@ -288,7 +352,7 @@ mod tests {
                 DecodedSample { channels: 1, sample_rate: 48_000, frames: vec![1.0, 1.0] },
             );
         }
-        let manager = SystemSoundManager { engine: Arc::clone(&engine), id_map };
+        let manager = SystemSoundManager::with_id_map(Arc::clone(&engine), id_map);
         manager.play(SoundType::Select, 1.0);
         {
             let mut guard = engine.lock().unwrap();
@@ -317,7 +381,7 @@ mod tests {
                 DecodedSample { channels: 1, sample_rate: 48_000, frames: vec![1.0, 1.0] },
             );
         }
-        let manager = SystemSoundManager { engine: Arc::clone(&engine), id_map };
+        let manager = SystemSoundManager::with_id_map(Arc::clone(&engine), id_map);
         manager.play(SoundType::Select, 1.0);
         {
             let mut guard = engine.lock().unwrap();
@@ -346,7 +410,7 @@ mod tests {
                 DecodedSample { channels: 1, sample_rate: 48_000, frames: vec![1.0, 1.0] },
             );
         }
-        let manager = SystemSoundManager { engine: Arc::clone(&engine), id_map };
+        let manager = SystemSoundManager::with_id_map(Arc::clone(&engine), id_map);
 
         manager.set_master_gain(0.25);
         manager.play(SoundType::ResultClose, 1.0);

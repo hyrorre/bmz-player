@@ -10583,10 +10583,10 @@ impl WinitApp {
     /// ボリュームは AudioEngine 側で 0.0..=1.0 にクランプされる。
     fn play_system_sound(&self, sound_type: crate::system_sound::SoundType) {
         if let Some(manager) = &self.system_sound {
-            manager.set_master_gain(1.0);
-            manager.play(
+            manager.play_with_master_gain(
                 sound_type,
                 system_sound_volume_from_mix(&self.boot.profile_config.audio_mix, sound_type),
+                1.0,
             );
             self.start_audio_output_stream();
         }
