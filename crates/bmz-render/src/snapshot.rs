@@ -259,6 +259,10 @@ pub struct RenderSnapshot {
     pub failed_elapsed_ms: Option<i32>,
     /// Music end timer elapsed ms (skin timer 908). None while inactive.
     pub music_end_elapsed_ms: Option<i32>,
+    /// Gauge increase timer elapsed ms (skin timer 42/43). None while inactive.
+    pub gauge_increase_elapsed_ms: Option<i32>,
+    /// Gauge max timer elapsed ms (skin timer 44/45). None while inactive.
+    pub gauge_max_elapsed_ms: Option<i32>,
     pub bar_lines: Vec<VisibleBarLine>,
     /// 各レーンのキー押下開始からの経過 ms(押下中のみ Some)。skin timer 100..=107 に渡る。
     pub keyon_ms: [Option<i32>; LANE_COUNT],

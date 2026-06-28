@@ -470,6 +470,8 @@ pub fn build_game_session_with_input_backend(
         hit_error_ring: HitErrorRing::default(),
         input_offset_auto_adjust_enabled,
         input_offset_auto_adjust,
+        gauge_increase_started_at: None,
+        gauge_max_started_at: None,
         full_combo_started_at: None,
         bgm_scheduler: BgmScheduler::default(),
         offsets: play_offsets_from_profile(profile),

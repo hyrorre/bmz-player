@@ -1965,6 +1965,10 @@ pub struct SkinDrawState {
     /// Full combo timer elapsed ms (TIMER_FULLCOMBO_1P/2P=48/49)。Noneなら非アクティブ。
     pub full_combo_ms: Option<i32>,
     pub music_end_ms: Option<i32>,
+    /// Gauge increase timer elapsed ms (TIMER_GAUGE_INCLEASE_1P/2P=42/43)。
+    pub gauge_increase_ms: Option<i32>,
+    /// Gauge max timer elapsed ms (TIMER_GAUGE_MAX_1P/2P=44/45)。
+    pub gauge_max_ms: Option<i32>,
     /// 領域別の判定画像インデックス (0=PGREAT,1=GREAT,2=GOOD,3=BAD,4=POOR,5=MISS)。
     pub judge_index: [Option<usize>; MAX_JUDGE_REGIONS],
     /// 領域別の判定表示用 combo。beatoraja `JudgeManager.judgecombo` 相当。
@@ -2247,6 +2251,8 @@ impl Default for SkinDrawState {
             judge_ms: [None; MAX_JUDGE_REGIONS],
             full_combo_ms: None,
             music_end_ms: None,
+            gauge_increase_ms: None,
+            gauge_max_ms: None,
             judge_index: [None; MAX_JUDGE_REGIONS],
             judge_combo: [0; MAX_JUDGE_REGIONS],
             judge_timing_sign: [None; MAX_JUDGE_REGIONS],
@@ -5167,6 +5173,7 @@ impl SkinDocument {
         let elapsed_ms = skin_timer_elapsed_ms(destination.timer, state)?;
         let mut frame = resolve_destination_frame(destination, elapsed_ms, enabled_options, state)?;
         apply_skin_offset_to_frame(destination, &mut frame, state, false);
+        let reverse_parts = skin_gauge_reverse_parts(frame);
         let rect = normalize_skin_frame_rect(frame, self.w, self.h);
         let parts = gauge_def.parts.max(1);
         let max = state.gauge_max.max(1.0);
@@ -5191,7 +5198,7 @@ impl SkinDocument {
                 anim_type,
             );
             let node_id = gauge_def.nodes.get(node_index)?;
-            let part_rect = skin_gauge_part_rect(rect, parts, part);
+            let part_rect = skin_gauge_part_rect(rect, parts, part, reverse_parts);
             if let Some(item) = self.gauge_image_render_item(
                 node_id,
                 part_rect,
@@ -9644,7 +9651,8 @@ fn skin_timer_elapsed_ms(timer: Option<i32>, state: &SkinDrawState) -> Option<i3
         Some(174) => state.ir_ranking.connect_fail_ms,
         Some(40) => state.ready_timer_ms,
         Some(41) => state.play_timer_ms,
-        Some(44 | 45) => skin_gauge_max_timer_elapsed_ms(state),
+        Some(42 | 43) => state.gauge_increase_ms,
+        Some(44 | 45) => state.gauge_max_ms,
         Some(11) => Some(state.select_bar_elapsed_ms),
         Some(21..=23) => Some(state.select_option_panel_elapsed_ms),
         Some(348..=352) => score_target_timer_elapsed_ms(timer.unwrap(), state),
@@ -9705,10 +9713,6 @@ fn skin_timer_elapsed_ms(timer: Option<i32>, state: &SkinDrawState) -> Option<i3
         }
         _ => None,
     }
-}
-
-fn skin_gauge_max_timer_elapsed_ms(state: &SkinDrawState) -> Option<i32> {
-    (state.gauge >= state.gauge_max.max(1.0)).then_some(state.elapsed_ms)
 }
 
 fn skin_text_align(align: i32) -> TextAlign {
@@ -12885,23 +12889,27 @@ fn skin_gauge_flicker_alpha(animation: i32, duration: i32) -> f32 {
     }
 }
 
-fn skin_gauge_part_rect(rect: Rect, parts: i32, part: i32) -> Rect {
+fn skin_gauge_reverse_parts(frame: ResolvedSkinFrame) -> bool {
+    if frame.w.abs() >= frame.h.abs() { frame.w < 0 } else { frame.h < 0 }
+}
+
+fn skin_gauge_part_rect(rect: Rect, parts: i32, part: i32, reverse: bool) -> Rect {
     if rect.width.abs() >= rect.height.abs() {
         let part_width = rect.width / parts as f32;
-        Rect {
-            x: rect.x + part_width * (part - 1) as f32,
-            y: rect.y,
-            width: part_width,
-            height: rect.height,
-        }
+        let x = if reverse {
+            rect.x + rect.width - part_width * part as f32
+        } else {
+            rect.x + part_width * (part - 1) as f32
+        };
+        Rect { x, y: rect.y, width: part_width, height: rect.height }
     } else {
         let part_height = rect.height / parts as f32;
-        Rect {
-            x: rect.x,
-            y: rect.y + rect.height - part_height * part as f32,
-            width: rect.width,
-            height: part_height,
-        }
+        let y = if reverse {
+            rect.y + part_height * (part - 1) as f32
+        } else {
+            rect.y + rect.height - part_height * part as f32
+        };
+        Rect { x: rect.x, y, width: rect.width, height: part_height }
     }
 }
 
@@ -16181,7 +16189,7 @@ mod tests {
         assert!(matches!(items[0], SkinRenderItem::Image {
                 rect: Rect { x, y, width, height },
                 ..
-            } if approx_eq(x, 0.4)
+            } if approx_eq(x, 0.7)
                 && approx_eq(y, 0.8)
                 && approx_eq(width, 0.1)
                 && approx_eq(height, 0.1)));
@@ -20422,24 +20430,22 @@ mod tests {
     }
 
     #[test]
-    fn gauge_max_timers_are_active_at_max_gauge() {
-        let below = SkinDrawState {
-            elapsed_ms: 1_700,
-            gauge: 99.9,
-            gauge_max: 100.0,
-            ..SkinDrawState::default()
-        };
-        assert_eq!(skin_timer_elapsed_ms(Some(44), &below), None);
-        assert_eq!(skin_timer_elapsed_ms(Some(45), &below), None);
+    fn gauge_timers_use_state_elapsed_values() {
+        let inactive = SkinDrawState::default();
+        assert_eq!(skin_timer_elapsed_ms(Some(42), &inactive), None);
+        assert_eq!(skin_timer_elapsed_ms(Some(43), &inactive), None);
+        assert_eq!(skin_timer_elapsed_ms(Some(44), &inactive), None);
+        assert_eq!(skin_timer_elapsed_ms(Some(45), &inactive), None);
 
-        let max = SkinDrawState {
-            elapsed_ms: 1_700,
-            gauge: 100.0,
-            gauge_max: 100.0,
+        let active = SkinDrawState {
+            gauge_increase_ms: Some(75),
+            gauge_max_ms: Some(1_700),
             ..SkinDrawState::default()
         };
-        assert_eq!(skin_timer_elapsed_ms(Some(44), &max), Some(1_700));
-        assert_eq!(skin_timer_elapsed_ms(Some(45), &max), Some(1_700));
+        assert_eq!(skin_timer_elapsed_ms(Some(42), &active), Some(75));
+        assert_eq!(skin_timer_elapsed_ms(Some(43), &active), Some(75));
+        assert_eq!(skin_timer_elapsed_ms(Some(44), &active), Some(1_700));
+        assert_eq!(skin_timer_elapsed_ms(Some(45), &active), Some(1_700));
     }
 
     #[test]

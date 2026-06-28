@@ -760,17 +760,29 @@ impl<'a> CsvBuilder<'a> {
                 image_id
             })
             .collect::<Vec<_>>();
-        let nodes = lr2_gauge_nodes(&cell_ids, values[14], line.command == "SRC_GROOVEGAUGE_EX");
+        let default_gauge = values[13] == 0;
+        let gauge_type = if default_gauge { 0 } else { values[14] };
+        let range = if default_gauge {
+            if matches!(self.header.skin_type, 4 | 14) { 0 } else { 3 }
+        } else {
+            values[15]
+        };
+        let cycle = if default_gauge { 33 } else { values[16] };
+        let nodes = lr2_gauge_nodes(&cell_ids, gauge_type, line.command == "SRC_GROOVEGAUGE_EX");
         self.lr2_gauge_id = Some(id.clone());
         self.lr2_gauge_add_x = values[11];
         self.lr2_gauge_add_y = values[12];
         let gauge = json!({
             "id": id,
             "nodes": nodes,
-            "parts": if values[13] == 0 { 50 } else { values[13] },
-            "type": values[14],
-            "range": values[15],
-            "cycle": values[16],
+            "parts": if default_gauge {
+                if matches!(self.header.skin_type, 4 | 14) { 24 } else { 50 }
+            } else {
+                values[13]
+            },
+            "type": gauge_type,
+            "range": range,
+            "cycle": cycle,
             "starttime": values[17],
             "endtime": values[18],
         });
@@ -1565,15 +1577,6 @@ fn set_judge_slot(slots: &mut Vec<JsonValue>, index: usize, value: JsonValue) {
     slots[index] = value;
 }
 
-fn destination_def_with_ops(
-    id: &str,
-    values: &[i32; 22],
-    canvas_h: i32,
-    conditional_ops: &[i32],
-) -> JsonValue {
-    destination_def_with_default_offsets(id, values, canvas_h, conditional_ops, &[])
-}
-
 fn destination_def_with_default_offsets(
     id: &str,
     values: &[i32; 22],
@@ -1619,11 +1622,44 @@ fn gauge_destination_def(
     let mut values = *values;
     if add_x.abs() >= 1 {
         values[5] = add_x * 50;
+        if add_x < 0 {
+            values[3] -= add_x;
+        }
     }
     if add_y.abs() >= 1 {
         values[6] = add_y * 50;
     }
-    destination_def_with_ops(id, &values, canvas_h, conditional_ops)
+    let frame = gauge_destination_frame(&values, canvas_h);
+    let mut op = conditional_ops.to_vec();
+    op.extend(values[18..=20].iter().copied().filter(|value| *value != 0));
+    normalize_lr2_destination_ops(&mut op);
+    json!({
+        "id": id,
+        "blend": values[12],
+        "filter": values[13],
+        "timer": if values[17] != 0 { json!(values[17]) } else { JsonValue::Null },
+        "loop": values[16],
+        "center": values[15],
+        "offset": values[21],
+        "op": op,
+        "dst": [frame],
+    })
+}
+
+fn gauge_destination_frame(values: &[i32; 22], canvas_h: i32) -> JsonValue {
+    json!({
+        "time": values[2],
+        "x": values[3],
+        "y": canvas_h - (values[4] + values[6]),
+        "w": values[5],
+        "h": values[6],
+        "acc": values[7],
+        "a": values[8],
+        "r": values[9],
+        "g": values[10],
+        "b": values[11],
+        "angle": values[14],
+    })
 }
 
 fn judge_combo_destination_def(
@@ -2102,7 +2138,7 @@ mod tests {
         let mut values = [0; 22];
         values[21] = 32;
 
-        let destination = destination_def_with_ops("image", &values, 1080, &[]);
+        let destination = destination_def_with_default_offsets("image", &values, 1080, &[], &[]);
 
         assert_eq!(destination["offset"], 32);
     }
@@ -2509,6 +2545,48 @@ mod tests {
     }
 
     #[test]
+    fn lr2_gauge_destination_preserves_negative_additive_direction() {
+        let mut values = [0; 22];
+        values[2] = 1400;
+        values[3] = 54;
+        values[4] = 897;
+        values[5] = 8;
+        values[6] = 28;
+        values[8] = 255;
+
+        let destination = gauge_destination_def("gauge", &values, 1080, -9, 0, &[]);
+        let frame = destination["dst"].as_array().unwrap().first().unwrap();
+
+        assert_eq!(frame["x"], 63);
+        assert_eq!(frame["y"], 155);
+        assert_eq!(frame["w"], -450);
+        assert_eq!(frame["h"], 28);
+    }
+
+    #[test]
+    fn lr2_gauge_omitted_parts_uses_beatoraja_animation_defaults() {
+        let files = BTreeMap::new();
+        let skin_path = unique_test_dir("bmz-lr2-gauge-defaults").join("play.lr2skin");
+        let header = Header { skin_type: 2, ..Header::default() };
+        let mut builder = CsvBuilder::new(&skin_path, header, &files);
+        builder
+            .execute(&parse_csv_line("#IMAGE,gauge.png").expect("valid IMAGE"))
+            .expect("IMAGE should load");
+        builder
+            .execute(
+                &parse_csv_line("#SRC_GROOVEGAUGE,0,0,0,0,32,28,4,1,0,0,9,0,,,,,,,,")
+                    .expect("valid SRC_GROOVEGAUGE"),
+            )
+            .expect("SRC_GROOVEGAUGE should load");
+
+        let gauge = builder.gauges.first().expect("gauge should be created");
+        assert_eq!(gauge["parts"], json!(50));
+        assert_eq!(gauge["type"], json!(0));
+        assert_eq!(gauge["range"], json!(3));
+        assert_eq!(gauge["cycle"], json!(33));
+    }
+
+    #[test]
     fn lr2_gauge_nodes_expand_standard_cells_to_beatoraja_slots() {
         let cells =
             ["red", "green", "back-red", "back-green"].map(|cell| cell.to_string()).to_vec();
@@ -2580,6 +2658,25 @@ mod tests {
             !loaded.internal_enabled_options.contains(&980),
             "custom property option 980 should remain user-selectable instead of internal"
         );
+    }
+
+    #[test]
+    fn wmii_fhd_lr2skin_dp_uses_default_gauge_animation_when_available() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../data/skins/WMII_FHD/play/FHDPLAY_AC_DP.lr2skin");
+        if !path.is_file() {
+            return;
+        }
+
+        let loaded = load_lr2_csv_skin_value(&path, &BTreeMap::new(), &BTreeMap::new()).unwrap();
+        let gauges = loaded.value["gauges"].as_array().expect("gauges array");
+
+        assert!(!gauges.is_empty(), "expected WMII DP gauge objects");
+        for gauge in gauges {
+            assert_eq!(gauge["type"], json!(0));
+            assert_eq!(gauge["range"], json!(3));
+            assert_eq!(gauge["cycle"], json!(33));
+        }
     }
 
     #[test]

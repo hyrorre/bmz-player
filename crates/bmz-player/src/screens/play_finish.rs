@@ -1008,6 +1008,8 @@ mod tests {
             recent_judgements: Vec::new(),
             result_judgements: Default::default(),
             hit_error_ring: bmz_gameplay::hit_error::HitErrorRing::default(),
+            gauge_increase_started_at: None,
+            gauge_max_started_at: None,
             full_combo_started_at: None,
             bgm_scheduler: BgmScheduler::default(),
             offsets: PlayOffsets { input_offset_us: 0, visual_offset_us: 0 },

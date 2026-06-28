@@ -163,6 +163,10 @@ fn skin_timer_elapsed_ms(now: TimeUs, started_at: TimeUs) -> i32 {
     ((now.0 - started_at.0) / 1_000).clamp(0, i32::MAX as i64) as i32
 }
 
+fn optional_skin_timer_elapsed_ms(now: TimeUs, started_at: Option<TimeUs>) -> Option<i32> {
+    started_at.map(|started_at| skin_timer_elapsed_ms(now, started_at))
+}
+
 fn lane_key_timer_ms(
     started_at: Option<TimeUs>,
     chart_time: TimeUs,
@@ -199,6 +203,10 @@ pub fn refresh_play_skin_visuals(snapshot: &mut RenderSnapshot, session: &GameSe
         skin_offsets_from_session(session, snapshot.time, snapshot.play_elapsed_time);
     snapshot.keyon_ms = lane_keyon_ms(session, snapshot.time, snapshot.play_elapsed_time);
     snapshot.keyoff_ms = lane_keyoff_ms(session, snapshot.time, snapshot.play_elapsed_time);
+    snapshot.gauge_increase_elapsed_ms =
+        optional_skin_timer_elapsed_ms(snapshot.time, session.gauge_increase_started_at);
+    snapshot.gauge_max_elapsed_ms =
+        optional_skin_timer_elapsed_ms(snapshot.time, session.gauge_max_started_at);
 }
 
 pub fn build_render_snapshot(
@@ -433,6 +441,14 @@ pub fn build_render_snapshot_with_target_and_bga_frames_cached(
         fadeout_elapsed_ms: None,
         failed_elapsed_ms: None,
         music_end_elapsed_ms: None,
+        gauge_increase_elapsed_ms: optional_skin_timer_elapsed_ms(
+            render_now,
+            session.gauge_increase_started_at,
+        ),
+        gauge_max_elapsed_ms: optional_skin_timer_elapsed_ms(
+            render_now,
+            session.gauge_max_started_at,
+        ),
         bar_lines: Vec::new(),
         visible_long_notes: Vec::new(),
         keyon_ms: lane_keyon_ms(session, render_now, play_elapsed_time),
@@ -1689,6 +1705,20 @@ mod tests {
 
         assert!(snapshot.lane_cover_changing);
         assert_eq!(snapshot.note_display_duration_ms, 750);
+    }
+
+    #[test]
+    fn build_render_snapshot_reports_gauge_skin_timer_elapsed() {
+        let profile = ProfileConfig::new_default("default", "Default", 1);
+        let mut session =
+            build_game_session(Arc::new(chart()), &profile, PlaySessionOptions::default());
+        session.gauge_increase_started_at = Some(TimeUs(100_000));
+        session.gauge_max_started_at = Some(TimeUs(250_000));
+
+        let snapshot = build_render_snapshot(&session, TimeUs(400_000), &[], None);
+
+        assert_eq!(snapshot.gauge_increase_elapsed_ms, Some(300));
+        assert_eq!(snapshot.gauge_max_elapsed_ms, Some(150));
     }
 
     #[test]

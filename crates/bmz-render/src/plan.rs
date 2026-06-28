@@ -913,6 +913,8 @@ fn plan_play(
         fadeout_ms: snapshot.fadeout_elapsed_ms,
         failed_ms: snapshot.failed_elapsed_ms,
         music_end_ms: snapshot.music_end_elapsed_ms,
+        gauge_increase_ms: snapshot.gauge_increase_elapsed_ms,
+        gauge_max_ms: snapshot.gauge_max_elapsed_ms,
         judge_index: judge_region_state.judge_index,
         judge_combo: judge_region_state.judge_combo,
         judge_timing_sign: judge_region_state.judge_timing_sign,
@@ -1381,6 +1383,8 @@ fn plan_decide(
             lane_cover: snapshot.lane_cover,
             hidden_cover: snapshot.hidden_cover,
             fadeout_ms: snapshot.fadeout_elapsed_ms,
+            gauge_increase_ms: snapshot.gauge_increase_elapsed_ms,
+            gauge_max_ms: snapshot.gauge_max_elapsed_ms,
             ..crate::skin::SkinDrawState::default()
         };
         advance_skin_dynamic_timers(skin, dynamic_timers, &mut state, play_elapsed_ms);
