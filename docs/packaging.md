@@ -389,7 +389,7 @@ FFmpeg は `ffmpeg-next` 経由で音声/動画 decode に使う。Flatpak artif
 `.github/workflows/release-apps.yml` は GitHub Release が `published` になったときに
 release artifact を自動生成する。手動 dry run には `workflow_dispatch` を使う。
 
-生成物:
+CI 内で生成される package / provenance artifact:
 
 ```text
 bmz-player-v<version>-windows-x64-setup.exe
@@ -403,6 +403,10 @@ bmz-player-v<version>-linux-x64.flatpak
 bmz-player-v<version>-linux-x64-flatpak-provenance.txt
 SHA256SUMS.txt
 ```
+
+GitHub Release に添付するのは、ユーザーが選ぶ配布物と `SHA256SUMS.txt` のみ。
+`*-provenance.txt` / `*-ffmpeg-version.txt` / `*-brew-ffmpeg.json` は Actions
+artifact 側に残し、Release asset には登録しない。
 
 ## App update checks
 
