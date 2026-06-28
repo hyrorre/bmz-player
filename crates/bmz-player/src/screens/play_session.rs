@@ -243,7 +243,9 @@ pub fn apply_placeholder_session_visuals(
     snapshot.judge_timing_offset_ms =
         (play_offsets_from_profile(profile).visual_offset_us / 1_000) as i32;
     snapshot.judge_timing_auto_adjust = profile.judge.visual_offset_auto_adjust;
-    snapshot.autoplay = profile.play.auto_play || options.autoplay;
+    let replay_playback = options.replay_player.is_some();
+    snapshot.autoplay = !replay_playback && (profile.play.auto_play || options.autoplay);
+    snapshot.replay_playback = replay_playback;
     snapshot.target_ex_score = options
         .target
         .target_ex_score_with_override(snapshot.total_notes, options.target_ex_score_override);
@@ -331,9 +333,9 @@ pub fn build_game_session_with_input_backend(
     let initial_gauge_value = options.initial_gauge_value;
     let initial_gauge_values = options.initial_gauge_values.clone();
     let initial_course_combo = options.initial_course_combo.unwrap_or(0);
-    let autoplay_enabled = profile.play.auto_play || options.autoplay;
     let replay_player = options.replay_player;
     let is_replay = replay_player.is_some();
+    let autoplay_enabled = !is_replay && (profile.play.auto_play || options.autoplay);
     let autoplay = if autoplay_enabled {
         Some(AutoplayController::default())
     } else if options.double_option == DoubleOption::BattleAutoScratch {

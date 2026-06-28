@@ -2296,10 +2296,12 @@ mod tests {
     use std::time::Instant;
 
     use bmz_core::time::TimeUs;
-    use bmz_render::plan::DrawPlan;
+    use bmz_render::plan::{DrawCommand, DrawPlan};
     use bmz_render::renderer::Renderer;
     use bmz_render::scene::{AppSceneSnapshot, SelectRowSnapshot, SelectSnapshot};
-    use bmz_render::skin::{DynamicTimerRuntime, SkinContext, SkinDocumentTexture, SkinImageSize};
+    use bmz_render::skin::{
+        DynamicTimerRuntime, SkinContext, SkinDocumentTexture, SkinImageSize, SkinManifest,
+    };
 
     fn test_app_paths() -> AppPaths {
         let data = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../data");
@@ -4575,6 +4577,102 @@ mod tests {
                         && tint.a > 0.1
             )),
             "expected WMII DP judge detail panel body to render; got {items:?}"
+        );
+    }
+
+    #[test]
+    fn wmii_fhd_lr2skin_renders_fast_slow_during_replay_when_available() {
+        let skin_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../data/skins/WMII_FHD/play/FHDPLAY_AC.lr2skin");
+        if !skin_path.is_file() {
+            return;
+        }
+
+        let options = BTreeMap::from([("Display FAST/SLOW".to_string(), "ON-A".to_string())]);
+        let decoded = decode_beatoraja_skin_with_options(
+            &skin_path,
+            SkinKind::Play,
+            &options,
+            &BTreeMap::new(),
+        )
+        .unwrap();
+        let sources = decoded.sources.iter().map(|source| SkinDocumentTexture {
+            source_id: source.source_id.clone(),
+            texture: source.texture,
+            source_size: SkinImageSize { width: source.size.width, height: source.size.height },
+        });
+        let skin = SkinContext::from_manifest_and_document(
+            SkinManifest::default(),
+            decoded.document.clone(),
+            sources,
+        );
+        let replay_snapshot = bmz_render::snapshot::RenderSnapshot {
+            time: TimeUs(100_000),
+            play_elapsed_time: TimeUs(100_000),
+            replay_playback: true,
+            key_mode: bmz_core::lane::KeyMode::K7,
+            recent_judgements: vec![bmz_render::snapshot::DisplayJudgement {
+                lane: bmz_core::lane::Lane::Key1,
+                judge: bmz_core::judge::Judge::PGreat,
+                side: Some(bmz_core::judge::TimingSide::Fast),
+                text: "PGREAT FAST".to_string(),
+                combo: 1,
+                delta_us: -2_000,
+                time: TimeUs(0),
+                is_miss: false,
+                timing_ms_suppressed: false,
+            }],
+            ..Default::default()
+        };
+        let has_wmii_fast_slow_image = |plan: &DrawPlan| {
+            plan.commands.iter().any(|command| {
+                matches!(
+                    command,
+                    DrawCommand::Image { rect, tint, .. }
+                        if ((rect.x - 292.0 / 1920.0).abs() < 0.01
+                            || (rect.x - 246.0 / 1920.0).abs() < 0.01)
+                            && (rect.y - 502.0 / 1080.0).abs() < 0.01
+                            && (rect.width - 82.0 / 1920.0).abs() < 0.01
+                            && tint.a > 0.5
+                )
+            })
+        };
+
+        let mut snapshot = replay_snapshot.clone();
+        crate::screens::play_snapshot::apply_fast_slow_display_filter(
+            &mut snapshot,
+            0,
+            crate::config::profile_config::FastSlowDisplayScope::ThresholdMs,
+        );
+
+        let plan = DrawPlan::from_scene_with_skin(
+            &AppSceneSnapshot::Play(snapshot),
+            &skin,
+            &mut DynamicTimerRuntime::default(),
+        );
+
+        assert!(
+            has_wmii_fast_slow_image(&plan),
+            "expected WMII replay PGREAT FAST/SLOW image to render; got {:?}",
+            plan.commands
+        );
+
+        let mut auto_snapshot = replay_snapshot;
+        crate::screens::play_snapshot::apply_fast_slow_display_filter(
+            &mut auto_snapshot,
+            0,
+            crate::config::profile_config::FastSlowDisplayScope::Auto,
+        );
+        let auto_plan = DrawPlan::from_scene_with_skin(
+            &AppSceneSnapshot::Play(auto_snapshot),
+            &skin,
+            &mut DynamicTimerRuntime::default(),
+        );
+
+        assert!(
+            !has_wmii_fast_slow_image(&auto_plan),
+            "expected WMII Auto scope to hide replay PGREAT FAST/SLOW; got {:?}",
+            auto_plan.commands
         );
     }
 

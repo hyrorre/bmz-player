@@ -412,6 +412,7 @@ pub fn build_render_snapshot_with_target_and_bga_frames_cached(
         judge_graph_density: Arc::clone(&cache.judge_graph_density),
         bpm_graph_segments: Arc::clone(&cache.bpm_graph_segments),
         autoplay: session.autoplay.as_ref().is_some_and(|autoplay| autoplay.is_full()),
+        replay_playback: session.replay_player.is_some(),
         course_stage: None,
         course_titles: Default::default(),
         table_text_primary: String::new(),
@@ -1233,7 +1234,7 @@ mod tests {
         assert_eq!(snapshot.recent_judgements[0].side, Some(TimingSide::Fast));
         assert!(!snapshot.recent_judgements[0].timing_ms_suppressed);
 
-        // Auto: PGREAT は side を隠すが ±ms 表示は beatoraja 準拠で隠さない。
+        // Auto: 通常プレイの PGREAT は side を隠すが ±ms 表示は beatoraja 準拠で隠さない。
         let mut snapshot = RenderSnapshot {
             recent_judgements: vec![judgement(Judge::PGreat, -2_000)],
             ..RenderSnapshot::default()
@@ -1241,6 +1242,30 @@ mod tests {
         apply_fast_slow_display_filter(&mut snapshot, 5, FastSlowDisplayScope::Auto);
         assert_eq!(snapshot.recent_judgements[0].side, None);
         assert!(!snapshot.recent_judgements[0].timing_ms_suppressed);
+
+        // Replay でも Auto は GREAT 以下表示として扱い、PGREAT side は隠す。
+        let mut replay_snapshot = RenderSnapshot {
+            replay_playback: true,
+            recent_judgements: vec![judgement(Judge::PGreat, -2_000)],
+            ..RenderSnapshot::default()
+        };
+        apply_fast_slow_display_filter(&mut replay_snapshot, 5, FastSlowDisplayScope::Auto);
+        assert_eq!(replay_snapshot.recent_judgements[0].side, None);
+        assert!(!replay_snapshot.recent_judgements[0].timing_ms_suppressed);
+
+        // ThresholdMs + 0ms は全判定表示なので、リプレイ PGREAT の FAST/SLOW も保持する。
+        let mut replay_all_snapshot = RenderSnapshot {
+            replay_playback: true,
+            recent_judgements: vec![judgement(Judge::PGreat, -2_000)],
+            ..RenderSnapshot::default()
+        };
+        apply_fast_slow_display_filter(
+            &mut replay_all_snapshot,
+            0,
+            FastSlowDisplayScope::ThresholdMs,
+        );
+        assert_eq!(replay_all_snapshot.recent_judgements[0].side, Some(TimingSide::Fast));
+        assert!(!replay_all_snapshot.recent_judgements[0].timing_ms_suppressed);
     }
 
     #[test]
@@ -1841,6 +1866,42 @@ mod tests {
         assert_eq!(snapshot.judge_counts.empty_poor, 1);
         assert_eq!(snapshot.fast_slow_counts.fast_pgreat, 1);
         assert_eq!(snapshot.fast_slow_counts.slow_empty_poor, 1);
+    }
+
+    #[test]
+    fn build_render_snapshot_marks_replay_playback() {
+        let profile = ProfileConfig::new_default("default", "Default", 1);
+        let normal = build_game_session(Arc::new(chart()), &profile, PlaySessionOptions::default());
+        let replay = build_game_session(
+            Arc::new(chart()),
+            &profile,
+            PlaySessionOptions {
+                replay_player: Some(bmz_gameplay::replay::ReplayPlayer::default()),
+                ..PlaySessionOptions::default()
+            },
+        );
+
+        assert!(!build_render_snapshot(&normal, TimeUs(0), &[], None).replay_playback);
+        assert!(build_render_snapshot(&replay, TimeUs(0), &[], None).replay_playback);
+    }
+
+    #[test]
+    fn build_render_snapshot_treats_replay_as_autoplay_off_for_skin_ops() {
+        let mut profile = ProfileConfig::new_default("default", "Default", 1);
+        profile.play.auto_play = true;
+        let replay = build_game_session(
+            Arc::new(chart()),
+            &profile,
+            PlaySessionOptions {
+                replay_player: Some(bmz_gameplay::replay::ReplayPlayer::default()),
+                ..PlaySessionOptions::default()
+            },
+        );
+
+        assert!(replay.autoplay.is_none());
+        let snapshot = build_render_snapshot(&replay, TimeUs(0), &[], None);
+        assert!(snapshot.replay_playback);
+        assert!(!snapshot.autoplay);
     }
 
     #[test]
