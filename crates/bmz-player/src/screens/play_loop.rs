@@ -3,7 +3,7 @@ use std::sync::TryLockError;
 use anyhow::{Result, anyhow};
 use bmz_audio::backend::cpal::SharedAudioEngine;
 use bmz_audio::queue::{AudioScheduler, ScheduledSoundQueue};
-use bmz_core::time::TimeUs;
+use bmz_core::{ids::SoundId, time::TimeUs};
 use bmz_gameplay::session::{
     FrameOutput, GameSession, PlayState, SessionFrame, advance_session_frame,
     apply_auto_key_release, compute_frame_times, update_recent_inputs, update_recent_judgements,
@@ -231,20 +231,37 @@ fn flush_scheduled_audio_nonblocking(
     }
 }
 
+fn queue_keysound_volumes(pending: &mut Vec<(SoundId, f32)>, volumes: &[(SoundId, f32)]) {
+    for &(sound_id, volume) in volumes {
+        if let Some((_, pending_volume)) =
+            pending.iter_mut().find(|(pending_sound_id, _)| *pending_sound_id == sound_id)
+        {
+            *pending_volume = volume;
+        } else {
+            pending.push((sound_id, volume));
+        }
+    }
+}
+
 /// HCN 早離し時のミュート/復帰など、フレームで発生したキー音音量変更を
-/// audio engine に反映する。発生頻度が低いイベントなのでブロッキングロックで良い。
-fn apply_keysound_volumes(
+/// audio engine に反映する。audio callback との競合時は次フレームへ retry する。
+fn flush_keysound_volumes_nonblocking(
     audio: &SharedAudioEngine,
-    volumes: &[(bmz_core::ids::SoundId, f32)],
+    pending: &mut Vec<(SoundId, f32)>,
 ) -> Result<()> {
-    if volumes.is_empty() {
+    if pending.is_empty() {
         return Ok(());
     }
-    let mut audio = audio.lock().map_err(|_| anyhow!("audio engine lock poisoned"))?;
-    for &(sound_id, volume) in volumes {
-        audio.set_sound_volume(sound_id, volume);
+    match audio.try_lock() {
+        Ok(mut audio) => {
+            for (sound_id, volume) in pending.drain(..) {
+                audio.set_sound_volume(sound_id, volume);
+            }
+            Ok(())
+        }
+        Err(TryLockError::WouldBlock) => Ok(()),
+        Err(TryLockError::Poisoned(_)) => Err(anyhow!("audio engine lock poisoned")),
     }
-    Ok(())
 }
 
 pub fn advance_running_play_session(
@@ -252,7 +269,11 @@ pub fn advance_running_play_session(
 ) -> Result<FrameOutput<RenderSnapshot>> {
     let frame = advance_session_frame(&mut running.session, &mut running.pending_audio);
     flush_scheduled_audio_nonblocking(&running.audio.engine, &mut running.pending_audio)?;
-    apply_keysound_volumes(&running.audio.engine, &frame.keysound_volumes)?;
+    queue_keysound_volumes(&mut running.pending_keysound_volumes, &frame.keysound_volumes);
+    flush_keysound_volumes_nonblocking(
+        &running.audio.engine,
+        &mut running.pending_keysound_volumes,
+    )?;
     let mut output = frame_output_from_session_frame_cached(
         &running.session,
         frame,
@@ -277,7 +298,11 @@ pub fn advance_running_play_session_until_result(
 ) -> Result<PlayAdvanceOutcome> {
     let session_frame = advance_session_frame(&mut running.session, &mut running.pending_audio);
     flush_scheduled_audio_nonblocking(&running.audio.engine, &mut running.pending_audio)?;
-    apply_keysound_volumes(&running.audio.engine, &session_frame.keysound_volumes)?;
+    queue_keysound_volumes(&mut running.pending_keysound_volumes, &session_frame.keysound_volumes);
+    flush_keysound_volumes_nonblocking(
+        &running.audio.engine,
+        &mut running.pending_keysound_volumes,
+    )?;
     let mut frame = frame_output_from_session_frame_cached(
         &running.session,
         session_frame,
@@ -342,6 +367,10 @@ pub fn refresh_play_ending_snapshot(
     timers: PlayEndingSkinTimers,
 ) -> RenderSnapshot {
     let _ = flush_scheduled_audio_nonblocking(&running.audio.engine, &mut running.pending_audio);
+    let _ = flush_keysound_volumes_nonblocking(
+        &running.audio.engine,
+        &mut running.pending_keysound_volumes,
+    );
     let mut snapshot = refresh_play_ending_snapshot_with_session_cached(
         &mut running.session,
         running.best_ex_score,
@@ -521,6 +550,30 @@ mod tests {
         assert!(scheduled.is_empty());
         let mut guard = audio.lock().unwrap();
         assert_eq!(guard.queue.drain_until_frame(0)[0].sound_id, SoundId(3));
+    }
+
+    #[test]
+    fn queue_keysound_volumes_keeps_latest_volume_per_sound() {
+        let mut pending = Vec::new();
+
+        queue_keysound_volumes(&mut pending, &[(SoundId(1), 0.5), (SoundId(1), 0.25)]);
+        queue_keysound_volumes(&mut pending, &[(SoundId(2), 0.75)]);
+
+        assert_eq!(pending, vec![(SoundId(1), 0.25), (SoundId(2), 0.75)]);
+    }
+
+    #[test]
+    fn nonblocking_keysound_volume_flush_retries_when_engine_is_busy() {
+        let audio: SharedAudioEngine = Arc::new(Mutex::new(AudioEngine::default()));
+        let held = audio.lock().unwrap();
+        let mut pending = vec![(SoundId(1), 0.25)];
+
+        flush_keysound_volumes_nonblocking(&audio, &mut pending).unwrap();
+
+        assert_eq!(pending, vec![(SoundId(1), 0.25)]);
+        drop(held);
+        flush_keysound_volumes_nonblocking(&audio, &mut pending).unwrap();
+        assert!(pending.is_empty());
     }
 
     #[test]
