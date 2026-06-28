@@ -61,6 +61,7 @@ pub fn load_lua_skin_value(
         warnings: warnings.into_iter().map(|message| SkinLoadWarning { message }).collect(),
         files,
         dependencies,
+        internal_enabled_options: Vec::new(),
     })
 }
 
@@ -71,6 +72,7 @@ pub fn load_lua_skin_header_value(input: &Path) -> Result<LoadedLuaSkinValue> {
         warnings: warnings.into_iter().map(|message| SkinLoadWarning { message }).collect(),
         files: BTreeMap::new(),
         dependencies: SkinLoadDependencies::default(),
+        internal_enabled_options: Vec::new(),
     })
 }
 

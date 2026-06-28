@@ -1638,7 +1638,7 @@ pub(crate) fn enabled_options_from_selections(
     document: &SkinDocument,
     selections: &BTreeMap<String, String>,
 ) -> Vec<i32> {
-    document
+    let options = document
         .property
         .iter()
         .filter_map(|property| {
@@ -1646,7 +1646,8 @@ pub(crate) fn enabled_options_from_selections(
                 .or_else(|| default_property_item(property));
             selected.map(|item| item.op)
         })
-        .collect()
+        .collect();
+    document.with_internal_enabled_options(options)
 }
 
 fn selected_property_item<'a>(
@@ -4484,6 +4485,82 @@ mod tests {
                 "expected WMII {label} judge image to render; got {items:?}"
             );
         }
+    }
+
+    #[test]
+    fn wmii_fhd_lr2skin_dp_renders_judge_detail_panel_when_available() {
+        let skin_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../data/skins/WMII_FHD/play/FHDPLAY_AC_DP.lr2skin");
+        if !skin_path.is_file() {
+            return;
+        }
+
+        let options = BTreeMap::from([
+            ("Displayjudge".to_string(), "ON".to_string()),
+            ("GRAPH SIDE".to_string(), "RIGHT".to_string()),
+            ("Score Graph".to_string(), "On".to_string()),
+        ]);
+        let decoded = decode_beatoraja_skin_with_options(
+            &skin_path,
+            SkinKind::Play,
+            &options,
+            &BTreeMap::new(),
+        )
+        .unwrap();
+
+        assert!(
+            decoded.document.enabled_options().contains(&983),
+            "expected WMII DP judge detail panel op983 to stay enabled"
+        );
+
+        let frame_texture = decoded
+            .sources
+            .iter()
+            .find(|source| source.source_id == "1")
+            .expect("WMII frame source should load")
+            .texture;
+        let sources = decoded
+            .sources
+            .iter()
+            .map(|source| {
+                (
+                    source.source_id.clone(),
+                    SkinDocumentTexture {
+                        source_id: source.source_id.clone(),
+                        texture: source.texture,
+                        source_size: SkinImageSize {
+                            width: source.size.width,
+                            height: source.size.height,
+                        },
+                    },
+                )
+            })
+            .collect::<std::collections::HashMap<_, _>>();
+        let state = bmz_render::skin::SkinDrawState {
+            elapsed_ms: 2_000,
+            play_timer_ms: Some(2_000),
+            key_mode: bmz_core::lane::KeyMode::K14,
+            ..Default::default()
+        };
+
+        let items = decoded.document.static_render_items(
+            &sources,
+            &state,
+            &bmz_render::skin::SkinTextState::default(),
+        );
+
+        assert!(
+            items.iter().any(|item| matches!(
+                item,
+                bmz_render::skin::SkinRenderItem::Image { texture, rect, tint, .. }
+                    if *texture == frame_texture
+                        && (rect.x - 71.0 / 1920.0).abs() < 0.01
+                        && (rect.width - 247.0 / 1920.0).abs() < 0.02
+                        && rect.height > 0.1
+                        && tint.a > 0.1
+            )),
+            "expected WMII DP judge detail panel body to render; got {items:?}"
+        );
     }
 
     #[test]

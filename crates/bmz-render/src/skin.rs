@@ -143,6 +143,9 @@ pub struct SkinDocument {
     /// 計算する。
     #[serde(skip)]
     pub user_selected_options: Option<Vec<i32>>,
+    /// LR2 `#SETOPTION` など、設定 UI に出さず内部的に有効化する op。
+    #[serde(skip, default)]
+    pub internal_enabled_options: Vec<i32>,
     /// プレイ描画時のみ plan 側が設定する judgegraph 密度。
     #[serde(skip, default)]
     pub play_judge_graph_density: Vec<u8>,
@@ -3649,20 +3652,31 @@ impl SkinDocument {
     }
 
     pub fn enabled_options(&self) -> Vec<i32> {
-        if let Some(ops) = &self.user_selected_options {
-            return ops.clone();
+        let options = if let Some(ops) = &self.user_selected_options {
+            ops.clone()
+        } else {
+            self.property
+                .iter()
+                .filter_map(|property| {
+                    let selected = if property.def.is_empty() {
+                        property.item.first()
+                    } else {
+                        property.item.iter().find(|item| item.name == property.def)
+                    };
+                    selected.map(|item| item.op)
+                })
+                .collect()
+        };
+        self.with_internal_enabled_options(options)
+    }
+
+    pub fn with_internal_enabled_options(&self, mut enabled_options: Vec<i32>) -> Vec<i32> {
+        for &op in &self.internal_enabled_options {
+            if !enabled_options.contains(&op) {
+                enabled_options.push(op);
+            }
         }
-        self.property
-            .iter()
-            .filter_map(|property| {
-                let selected = if property.def.is_empty() {
-                    property.item.first()
-                } else {
-                    property.item.iter().find(|item| item.name == property.def)
-                };
-                selected.map(|item| item.op)
-            })
-            .collect()
+        enabled_options
     }
 
     /// 有効なオプション条件に基づいて `destination` エントリを展開し、
@@ -8817,11 +8831,19 @@ fn lane_cover_duration_number(ref_id: i32, state: &SkinDrawState) -> Option<i64>
         3 => bpm_value_or_select(state.max_bpm, state.select_max_bpm),
         _ => return None,
     }?;
-    let lane_cover = if cover { (1.0 - state.lane_cover.clamp(0.0, 1.0)) as f64 } else { 1.0 };
+    let visible = if cover {
+        bmz_visible_lane_fraction(state.lane_cover, state.lift)
+    } else {
+        bmz_visible_lane_fraction(0.0, state.lift)
+    };
     let green_factor = if green { 0.6 } else { 1.0 };
     let duration =
-        240_000.0 / target_bpm as f64 / state.hispeed.max(0.01) as f64 * lane_cover * green_factor;
+        240_000.0 / target_bpm as f64 / state.hispeed.max(0.01) as f64 * visible as f64 * green_factor;
     Some(duration.round().max(0.0) as i64)
+}
+
+fn bmz_visible_lane_fraction(lane_cover: f32, lift: f32) -> f32 {
+    (1.0 - lane_cover.clamp(0.0, 1.0) - lift.clamp(0.0, 1.0)).clamp(0.0, 1.0)
 }
 
 fn duration_refs_available(state: &SkinDrawState) -> bool {
@@ -22283,6 +22305,10 @@ mod tests {
         assert_eq!(skin_state_number(1317, &faster), Some(360));
         let lower_cover = SkinDrawState { lane_cover: 0.5, ..duration_state.clone() };
         assert_eq!(skin_state_number(1317, &lower_cover), Some(360));
+        let lifted_cover = SkinDrawState { lift: 0.2, ..duration_state.clone() };
+        assert_eq!(skin_state_number(1312, &lifted_cover), Some(660));
+        assert_eq!(skin_state_number(1313, &lifted_cover), Some(396));
+        assert_eq!(skin_state_number(1314, &lifted_cover), Some(960));
         // VALUE_JUDGE_1P_DURATION (525) = -(-3) = 3 (FAST 3ms は beatoraja 規約で正)
         assert_eq!(skin_state_number(525, &state), Some(3));
         // VALUE_JUDGE_2P_DURATION (526): SLOW 7ms (delta=+7) は beatoraja 規約で負

@@ -203,11 +203,13 @@ pub fn load_lr2_csv_skin_value(
     dependencies.files.extend(builder.file_dependencies.iter().cloned());
     dependencies.loaded_files.extend(builder.loaded_file_dependencies.clone());
     let warnings = builder.warnings.clone();
+    let internal_enabled_options = builder.internal_enabled_options();
     Ok(LoadedLuaSkinValue {
         value: builder.finish(),
         warnings,
         files: BTreeMap::new(),
         dependencies,
+        internal_enabled_options,
     })
 }
 
@@ -448,7 +450,29 @@ impl<'a> CsvBuilder<'a> {
         if matches!(self.header.skin_type, 0 | 1 | 3 | 4 | 12 | 13) {
             dependencies.insert(901, self.header.selected_ops.get(&901).copied().unwrap_or(false));
         }
+        if self.header.selected_ops.contains_key(&981) {
+            dependencies.insert(981, self.header.selected_ops.get(&981).copied().unwrap_or(false));
+        }
         dependencies
+    }
+
+    fn internal_enabled_options(&self) -> Vec<i32> {
+        let property_options = self
+            .header
+            .options
+            .iter()
+            .flat_map(|option| (0..option.items.len()).map(move |index| option.base + index as i32))
+            .collect::<BTreeSet<_>>();
+        let mut options = self
+            .header
+            .selected_ops
+            .iter()
+            .filter_map(|(&op, &enabled)| {
+                (enabled && !property_options.contains(&op)).then_some(op)
+            })
+            .collect::<Vec<_>>();
+        options.sort_unstable();
+        options
     }
 
     fn record_loaded_file_dependency(&mut self, path: &Path) {
@@ -2531,6 +2555,31 @@ mod tests {
         assert_eq!(loaded.value["name"], "WMII FHD play AC");
         assert!(loaded.value["destination"].as_array().unwrap().len() > 100);
         assert!(!loaded.value["note"]["group"].as_array().unwrap().is_empty());
+    }
+
+    #[test]
+    fn wmii_fhd_lr2skin_dp_keeps_internal_setoption_ops_when_available() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../data/skins/WMII_FHD/play/FHDPLAY_AC_DP.lr2skin");
+        if !path.is_file() {
+            return;
+        }
+
+        let options = BTreeMap::from([
+            ("Displayjudge".to_string(), "ON".to_string()),
+            ("GRAPH SIDE".to_string(), "RIGHT".to_string()),
+            ("Score Graph".to_string(), "On".to_string()),
+        ]);
+        let loaded = load_lr2_csv_skin_value(&path, &options, &BTreeMap::new()).unwrap();
+
+        assert!(
+            loaded.internal_enabled_options.contains(&983),
+            "expected WMII DP judge detail right-side op983 to be kept internally"
+        );
+        assert!(
+            !loaded.internal_enabled_options.contains(&980),
+            "custom property option 980 should remain user-selectable instead of internal"
+        );
     }
 
     #[test]
