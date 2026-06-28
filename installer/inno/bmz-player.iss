@@ -4,7 +4,7 @@
 #define AppId "D519C28F-4D6B-4E80-B38A-83DFBD0E7C15"
 
 #ifndef AppVersion
-#define AppVersion "0.1.4"
+#define AppVersion "0.1.5"
 #endif
 
 #ifndef AppArch
