@@ -1,6 +1,7 @@
 use std::rc::{Rc, Weak as RcWeak};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::Instant;
 
 use ::cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use ::cpal::{SampleFormat, StreamConfig};
@@ -47,6 +48,36 @@ pub struct CpalOutput {
     source: CpalOutputSource,
 }
 
+/// Snapshot of the shared output stream diagnostics.
+///
+/// Counts are cumulative since stream creation. `peak_abs` and `max_callback_ns`
+/// are interval maxima since the previous snapshot.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct CpalOutputDiagnostics {
+    pub callback_count: u64,
+    pub rendered_frames: u64,
+    pub stream_error_count: u64,
+    pub source_lock_miss_count: u64,
+    pub engine_lock_miss_count: u64,
+    pub engine_lock_miss_callback_count: u64,
+    pub clipped_sample_count: u64,
+    pub peak_abs: f32,
+    pub max_callback_ns: u64,
+}
+
+#[derive(Debug, Default)]
+struct CpalOutputDiagnosticsCounters {
+    callback_count: AtomicU64,
+    rendered_frames: AtomicU64,
+    stream_error_count: AtomicU64,
+    source_lock_miss_count: AtomicU64,
+    engine_lock_miss_count: AtomicU64,
+    engine_lock_miss_callback_count: AtomicU64,
+    clipped_sample_count: AtomicU64,
+    peak_abs_bits: AtomicU32,
+    max_callback_ns: AtomicU64,
+}
+
 #[derive(Clone)]
 pub struct CpalSharedOutput {
     inner: Rc<CpalSharedOutputInner>,
@@ -58,6 +89,7 @@ struct CpalSharedOutputInner {
     sample_rate: u32,
     current_frame: Arc<AtomicU64>,
     sources: SharedAudioSources,
+    diagnostics: Arc<CpalOutputDiagnosticsCounters>,
     next_source_id: AtomicU64,
 }
 
@@ -161,6 +193,7 @@ impl CpalBackend {
 
         let current_frame = Arc::new(AtomicU64::new(0));
         let sources = Arc::new(Mutex::new(Vec::new()));
+        let diagnostics = Arc::new(CpalOutputDiagnosticsCounters::default());
 
         let stream = match sample_format {
             SampleFormat::F32 => build_output_stream::<f32>(
@@ -169,6 +202,7 @@ impl CpalBackend {
                 channel_offset,
                 Arc::clone(&sources),
                 Arc::clone(&current_frame),
+                Arc::clone(&diagnostics),
             )?,
             SampleFormat::I16 => build_output_stream::<i16>(
                 &device,
@@ -176,6 +210,7 @@ impl CpalBackend {
                 channel_offset,
                 Arc::clone(&sources),
                 Arc::clone(&current_frame),
+                Arc::clone(&diagnostics),
             )?,
             SampleFormat::U16 => build_output_stream::<u16>(
                 &device,
@@ -183,6 +218,7 @@ impl CpalBackend {
                 channel_offset,
                 Arc::clone(&sources),
                 Arc::clone(&current_frame),
+                Arc::clone(&diagnostics),
             )?,
             SampleFormat::I32 => build_output_stream::<i32>(
                 &device,
@@ -190,6 +226,7 @@ impl CpalBackend {
                 channel_offset,
                 Arc::clone(&sources),
                 Arc::clone(&current_frame),
+                Arc::clone(&diagnostics),
             )?,
             _ => build_output_stream::<f32>(
                 &device,
@@ -197,6 +234,7 @@ impl CpalBackend {
                 channel_offset,
                 Arc::clone(&sources),
                 Arc::clone(&current_frame),
+                Arc::clone(&diagnostics),
             )?,
         };
 
@@ -207,6 +245,7 @@ impl CpalBackend {
                 sample_rate,
                 current_frame,
                 sources,
+                diagnostics,
                 next_source_id: AtomicU64::new(1),
             }),
         })
@@ -445,6 +484,10 @@ impl CpalSharedOutput {
         self.inner.sample_rate
     }
 
+    pub fn take_diagnostics(&self) -> CpalOutputDiagnostics {
+        self.inner.diagnostics.take_snapshot()
+    }
+
     pub fn add_source(&self, engine: SharedAudioEngine) -> CpalOutputSource {
         if let Ok(mut engine) = engine.lock() {
             // 実ストリームレートへ揃える。既に読込済みのサンプルもここで再変換され、
@@ -501,6 +544,7 @@ fn build_output_stream<T>(
     channel_offset: usize,
     sources: SharedAudioSources,
     current_frame: Arc<AtomicU64>,
+    diagnostics: Arc<CpalOutputDiagnosticsCounters>,
 ) -> Result<::cpal::Stream, CpalBackendError>
 where
     T: ::cpal::SizedSample + OutputSample,
@@ -509,16 +553,21 @@ where
     let mut mix = Vec::new();
     let mut source_scratch = Vec::new();
     let mut source_engines = Vec::new();
+    let error_diagnostics = Arc::clone(&diagnostics);
     device
         .build_output_stream(
             *config,
             move |data: &mut [T], _| {
+                let callback_start = Instant::now();
+                diagnostics.callback_count.fetch_add(1, Ordering::Relaxed);
                 if channels == 0 {
                     data.fill(T::from_f32(0.0));
+                    diagnostics.observe_callback_duration(callback_start);
                     return;
                 }
 
                 let start_frame = current_frame.load(Ordering::Relaxed);
+                let frames = data.len() / channels;
                 render_output(
                     data,
                     channels,
@@ -528,10 +577,14 @@ where
                     &mut mix,
                     &mut source_scratch,
                     &mut source_engines,
+                    &diagnostics,
                 );
-                current_frame.fetch_add((data.len() / channels) as u64, Ordering::Relaxed);
+                diagnostics.rendered_frames.fetch_add(frames as u64, Ordering::Relaxed);
+                current_frame.fetch_add(frames as u64, Ordering::Relaxed);
+                diagnostics.observe_callback_duration(callback_start);
             },
             move |error| {
+                error_diagnostics.stream_error_count.fetch_add(1, Ordering::Relaxed);
                 tracing::warn!(%error, "cpal output stream error");
             },
             None,
@@ -555,15 +608,24 @@ fn render_output<T: OutputSample>(
     mix: &mut Vec<f32>,
     source_scratch: &mut Vec<f32>,
     source_engines: &mut Vec<SharedAudioEngine>,
+    diagnostics: &CpalOutputDiagnosticsCounters,
 ) {
     if channels == 0 {
         return;
     }
 
     let frames = data.len() / channels;
-    mix_sources_stereo(output_start_frame, frames, sources, mix, source_scratch, source_engines);
+    mix_sources_stereo(
+        output_start_frame,
+        frames,
+        sources,
+        mix,
+        source_scratch,
+        source_engines,
+        diagnostics,
+    );
 
-    write_interleaved_output(data, channels, channel_offset, mix);
+    write_interleaved_output(data, channels, channel_offset, mix, diagnostics);
 }
 
 fn mix_sources_stereo(
@@ -573,6 +635,7 @@ fn mix_sources_stereo(
     mix: &mut Vec<f32>,
     source_scratch: &mut Vec<f32>,
     source_engines: &mut Vec<SharedAudioEngine>,
+    diagnostics: &CpalOutputDiagnosticsCounters,
 ) {
     mix.resize(frames * 2, 0.0);
     mix.fill(0.0);
@@ -582,18 +645,30 @@ fn mix_sources_stereo(
     // xrun(全体のプツプツ)を起こす。`try_lock` で「決してブロックしない」を保証し、
     // 競合したバッファだけスキップ(その音源は 1 バッファ無音)に留める。
     source_engines.clear();
-    if let Ok(sources) = sources.try_lock() {
-        source_engines.extend(sources.iter().map(|source| Arc::clone(&source.engine)));
+    match sources.try_lock() {
+        Ok(sources) => {
+            source_engines.extend(sources.iter().map(|source| Arc::clone(&source.engine)));
+        }
+        Err(_) => {
+            diagnostics.source_lock_miss_count.fetch_add(1, Ordering::Relaxed);
+        }
     }
 
     source_scratch.resize(frames * 2, 0.0);
+    let mut missed_engine_lock = false;
     for engine in source_engines.iter() {
         if let Ok(mut engine) = engine.try_lock() {
             engine.render_stereo(output_start_frame, source_scratch);
             for (dst, src) in mix.iter_mut().zip(source_scratch.iter()) {
                 *dst += *src;
             }
+        } else {
+            missed_engine_lock = true;
+            diagnostics.engine_lock_miss_count.fetch_add(1, Ordering::Relaxed);
         }
+    }
+    if missed_engine_lock {
+        diagnostics.engine_lock_miss_callback_count.fetch_add(1, Ordering::Relaxed);
     }
 }
 
@@ -602,6 +677,7 @@ fn write_interleaved_output<T: OutputSample>(
     channels: usize,
     channel_offset: usize,
     stereo: &[f32],
+    diagnostics: &CpalOutputDiagnosticsCounters,
 ) {
     if channels == 0 {
         return;
@@ -611,20 +687,113 @@ fn write_interleaved_output<T: OutputSample>(
     let left_channel =
         if channels >= 2 && channel_offset + 1 < channels { channel_offset } else { 0 };
     let silence = T::from_f32(0.0);
+    let mut clipped = 0u64;
+    let mut peak_abs = 0.0f32;
 
     for (frame_index, frame) in data.chunks_mut(channels).enumerate() {
         let left = stereo.get(frame_index * 2).copied().unwrap_or(0.0);
         let right = stereo.get(frame_index * 2 + 1).copied().unwrap_or(0.0);
         if channels == 1 {
-            frame[0] = T::from_f32((left + right) * 0.5);
+            let mono = (left + right) * 0.5;
+            observe_output_sample(mono, &mut clipped, &mut peak_abs);
+            frame[0] = T::from_f32(mono);
             continue;
         }
         // 対象ペア以外は無音にして、選択チャンネルへ L/R を書く。
         for sample in frame.iter_mut() {
             *sample = silence;
         }
+        observe_output_sample(left, &mut clipped, &mut peak_abs);
+        observe_output_sample(right, &mut clipped, &mut peak_abs);
         frame[left_channel] = T::from_f32(left);
         frame[left_channel + 1] = T::from_f32(right);
+    }
+    diagnostics.observe_output_peak(peak_abs);
+    if clipped != 0 {
+        diagnostics.clipped_sample_count.fetch_add(clipped, Ordering::Relaxed);
+    }
+}
+
+fn observe_output_sample(value: f32, clipped: &mut u64, peak_abs: &mut f32) {
+    if !value.is_finite() {
+        return;
+    }
+    let abs = value.abs();
+    *peak_abs = (*peak_abs).max(abs);
+    if abs > 1.0 {
+        *clipped = clipped.saturating_add(1);
+    }
+}
+
+impl CpalOutputDiagnosticsCounters {
+    fn take_snapshot(&self) -> CpalOutputDiagnostics {
+        CpalOutputDiagnostics {
+            callback_count: self.callback_count.load(Ordering::Relaxed),
+            rendered_frames: self.rendered_frames.load(Ordering::Relaxed),
+            stream_error_count: self.stream_error_count.load(Ordering::Relaxed),
+            source_lock_miss_count: self.source_lock_miss_count.load(Ordering::Relaxed),
+            engine_lock_miss_count: self.engine_lock_miss_count.load(Ordering::Relaxed),
+            engine_lock_miss_callback_count: self
+                .engine_lock_miss_callback_count
+                .load(Ordering::Relaxed),
+            clipped_sample_count: self.clipped_sample_count.load(Ordering::Relaxed),
+            peak_abs: f32::from_bits(self.peak_abs_bits.swap(0, Ordering::Relaxed)),
+            max_callback_ns: self.max_callback_ns.swap(0, Ordering::Relaxed),
+        }
+    }
+
+    fn observe_callback_duration(&self, callback_start: Instant) {
+        let elapsed_ns = callback_start.elapsed().as_nanos().min(u128::from(u64::MAX)) as u64;
+        update_atomic_max(&self.max_callback_ns, elapsed_ns);
+    }
+
+    fn observe_output_peak(&self, peak_abs: f32) {
+        if peak_abs <= 0.0 || !peak_abs.is_finite() {
+            return;
+        }
+        update_atomic_max(&self.peak_abs_bits, u64::from(peak_abs.to_bits()));
+    }
+}
+
+fn update_atomic_max<T>(atomic: &T, value: u64)
+where
+    T: AtomicMaxU64,
+{
+    let mut current = atomic.load_relaxed();
+    while value > current {
+        match atomic.compare_exchange_relaxed(current, value) {
+            Ok(_) => break,
+            Err(next) => current = next,
+        }
+    }
+}
+
+trait AtomicMaxU64 {
+    fn load_relaxed(&self) -> u64;
+    fn compare_exchange_relaxed(&self, current: u64, value: u64) -> Result<u64, u64>;
+}
+
+impl AtomicMaxU64 for AtomicU64 {
+    fn load_relaxed(&self) -> u64 {
+        self.load(Ordering::Relaxed)
+    }
+
+    fn compare_exchange_relaxed(&self, current: u64, value: u64) -> Result<u64, u64> {
+        self.compare_exchange(current, value, Ordering::Relaxed, Ordering::Relaxed)
+    }
+}
+
+impl AtomicMaxU64 for AtomicU32 {
+    fn load_relaxed(&self) -> u64 {
+        u64::from(self.load(Ordering::Relaxed))
+    }
+
+    fn compare_exchange_relaxed(&self, current: u64, value: u64) -> Result<u64, u64> {
+        let current = current as u32;
+        let value = value as u32;
+        self.compare_exchange(current, value, Ordering::Relaxed, Ordering::Relaxed)
+            .map(u64::from)
+            .map_err(u64::from)
     }
 }
 
@@ -663,8 +832,9 @@ mod tests {
     #[test]
     fn write_interleaved_output_downmixes_mono() {
         let mut output = vec![0.0_f32; 2];
+        let diagnostics = CpalOutputDiagnosticsCounters::default();
 
-        write_interleaved_output(&mut output, 1, 0, &[0.25, 0.75, -0.5, 0.25]);
+        write_interleaved_output(&mut output, 1, 0, &[0.25, 0.75, -0.5, 0.25], &diagnostics);
 
         assert_eq!(output, vec![0.5, -0.125]);
     }
@@ -672,8 +842,9 @@ mod tests {
     #[test]
     fn write_interleaved_output_fills_extra_channels_with_silence() {
         let mut output = vec![1.0_f32; 6];
+        let diagnostics = CpalOutputDiagnosticsCounters::default();
 
-        write_interleaved_output(&mut output, 3, 0, &[0.25, 0.75, -0.5, 0.25]);
+        write_interleaved_output(&mut output, 3, 0, &[0.25, 0.75, -0.5, 0.25], &diagnostics);
 
         assert_eq!(output, vec![0.25, 0.75, 0.0, -0.5, 0.25, 0.0]);
     }
@@ -682,8 +853,9 @@ mod tests {
     fn write_interleaved_output_routes_to_selected_channel_pair() {
         // 4ch 出力で 3-4ch(offset 2)へルーティングする。
         let mut output = vec![1.0_f32; 8];
+        let diagnostics = CpalOutputDiagnosticsCounters::default();
 
-        write_interleaved_output(&mut output, 4, 2, &[0.25, 0.75, -0.5, 0.25]);
+        write_interleaved_output(&mut output, 4, 2, &[0.25, 0.75, -0.5, 0.25], &diagnostics);
 
         assert_eq!(output, vec![0.0, 0.0, 0.25, 0.75, 0.0, 0.0, -0.5, 0.25]);
     }
@@ -692,10 +864,23 @@ mod tests {
     fn write_interleaved_output_falls_back_when_pair_does_not_fit() {
         // offset がデバイスチャンネル数に収まらない場合は先頭ペアへ。
         let mut output = vec![1.0_f32; 4];
+        let diagnostics = CpalOutputDiagnosticsCounters::default();
 
-        write_interleaved_output(&mut output, 2, 5, &[0.25, 0.75, -0.5, 0.25]);
+        write_interleaved_output(&mut output, 2, 5, &[0.25, 0.75, -0.5, 0.25], &diagnostics);
 
         assert_eq!(output, vec![0.25, 0.75, -0.5, 0.25]);
+    }
+
+    #[test]
+    fn write_interleaved_output_records_peak_and_clipping() {
+        let mut output = vec![0.0_f32; 4];
+        let diagnostics = CpalOutputDiagnosticsCounters::default();
+
+        write_interleaved_output(&mut output, 2, 0, &[1.25, -0.5, 0.25, -1.5], &diagnostics);
+
+        let snapshot = diagnostics.take_snapshot();
+        assert_eq!(snapshot.clipped_sample_count, 2);
+        assert_eq!(snapshot.peak_abs, 1.5);
     }
 
     #[test]
@@ -717,6 +902,7 @@ mod tests {
         let mut mix = Vec::with_capacity(16);
         let mut source_scratch = Vec::new();
         let mut source_engines = Vec::new();
+        let diagnostics = CpalOutputDiagnosticsCounters::default();
 
         render_output(
             &mut output,
@@ -727,6 +913,7 @@ mod tests {
             &mut mix,
             &mut source_scratch,
             &mut source_engines,
+            &diagnostics,
         );
 
         assert_eq!(output, vec![0.0, 0.0, 0.0, 0.0]);
@@ -771,8 +958,9 @@ mod tests {
         let mut mix = Vec::new();
         let mut scratch = Vec::new();
         let mut engines = Vec::new();
+        let diagnostics = CpalOutputDiagnosticsCounters::default();
 
-        mix_sources_stereo(0, 1, &sources, &mut mix, &mut scratch, &mut engines);
+        mix_sources_stereo(0, 1, &sources, &mut mix, &mut scratch, &mut engines, &diagnostics);
 
         assert_eq!(mix, vec![0.75, 0.75]);
     }

@@ -46,7 +46,7 @@ use winit::keyboard::{KeyCode, PhysicalKey};
 use winit::monitor::{MonitorHandle, VideoModeHandle};
 use winit::window::{Fullscreen, Icon, Window, WindowAttributes, WindowId};
 
-use crate::audio::{AppAudioOutput, AudioRuntime};
+use crate::audio::{AppAudioOutput, AudioOutputDiagnostics, AudioRuntime};
 use crate::bootstrap::{self, BootstrappedApp};
 use crate::chart_preview::SelectChartPreview;
 use crate::cli::{
@@ -336,6 +336,8 @@ struct WinitApp {
     draining_audio: Option<AppAudioOutput>,
     audio_runtime: Option<AudioRuntime>,
     audio_output_open_attempted: bool,
+    audio_diagnostics_last_log_at: Instant,
+    audio_diagnostics_last: Option<AudioOutputDiagnostics>,
     first_frame_startup_completed: bool,
     /// Ctrl-C(SIGINT)受信フラグ。セットされたら `about_to_wait` で event loop を
     /// 正常終了させ、cpal/ASIO ストリームの Drop(停止・後処理)を確実に走らせる。
@@ -1060,6 +1062,7 @@ const PLAY_START_DOUBLE_PRESS_WINDOW: Duration = Duration::from_millis(400);
 /// スキンの終了アニメーション (`fadeout`) が長くても (例: Starseeker は 3000ms)、
 /// 音声はこの時間内でフェードし切る。スキンの fadeout がこれより短ければそちらを優先。
 const RESULT_EXIT_AUDIO_FADE: Duration = Duration::from_millis(1_500);
+const AUDIO_DIAGNOSTICS_LOG_INTERVAL: Duration = Duration::from_secs(1);
 /// beatoraja PreviewMusicProcessor fades select BGM over 10 * 15ms steps.
 const SELECT_PREVIEW_FADE_DURATION: Duration = Duration::from_millis(150);
 /// beatoraja MusicSelector waits this long after a song-bar change before preview starts.
@@ -1777,6 +1780,8 @@ impl WinitApp {
             draining_audio: None,
             audio_runtime,
             audio_output_open_attempted,
+            audio_diagnostics_last_log_at: now,
+            audio_diagnostics_last: None,
             first_frame_startup_completed: false,
             shutdown_requested,
             finished_play: None,
@@ -6465,6 +6470,70 @@ impl WinitApp {
                 tracing::warn!(%error, "failed to open shared audio output; running without audio");
             }
         }
+    }
+
+    fn log_audio_diagnostics(&mut self) {
+        let now = Instant::now();
+        if now.duration_since(self.audio_diagnostics_last_log_at) < AUDIO_DIAGNOSTICS_LOG_INTERVAL {
+            return;
+        }
+        self.audio_diagnostics_last_log_at = now;
+
+        let Some(runtime) = &self.audio_runtime else {
+            self.audio_diagnostics_last = None;
+            return;
+        };
+        let snapshot = runtime.take_diagnostics();
+        let Some(previous) = self.audio_diagnostics_last.replace(snapshot) else {
+            return;
+        };
+        if snapshot.callback_count < previous.callback_count {
+            return;
+        }
+
+        let callbacks = snapshot.callback_count - previous.callback_count;
+        if callbacks == 0 {
+            return;
+        }
+        let rendered_frames = snapshot.rendered_frames - previous.rendered_frames;
+        let stream_errors = snapshot.stream_error_count - previous.stream_error_count;
+        let source_lock_misses = snapshot.source_lock_miss_count - previous.source_lock_miss_count;
+        let engine_lock_misses = snapshot.engine_lock_miss_count - previous.engine_lock_miss_count;
+        let engine_lock_miss_callbacks =
+            snapshot.engine_lock_miss_callback_count - previous.engine_lock_miss_callback_count;
+        let clipped_samples = snapshot.clipped_sample_count - previous.clipped_sample_count;
+
+        let sample_rate = runtime.sample_rate().max(1);
+        let avg_callback_frames = rendered_frames as f64 / callbacks as f64;
+        let callback_budget_ns =
+            ((avg_callback_frames / f64::from(sample_rate)) * 1_000_000_000.0).round() as u64;
+        let callback_over_budget =
+            callback_budget_ns > 0 && snapshot.max_callback_ns > callback_budget_ns;
+
+        if stream_errors == 0
+            && source_lock_misses == 0
+            && engine_lock_misses == 0
+            && clipped_samples == 0
+            && !callback_over_budget
+        {
+            return;
+        }
+
+        tracing::warn!(
+            callbacks,
+            rendered_frames,
+            avg_callback_frames,
+            sample_rate,
+            stream_errors,
+            source_lock_misses,
+            engine_lock_misses,
+            engine_lock_miss_callbacks,
+            clipped_samples,
+            peak_abs = snapshot.peak_abs,
+            max_callback_us = snapshot.max_callback_ns / 1_000,
+            callback_budget_us = callback_budget_ns / 1_000,
+            "audio output diagnostics reported possible dropout or clipping",
+        );
     }
 
     fn install_system_audio(
@@ -12191,6 +12260,7 @@ impl ApplicationHandler<AppUserEvent> for WinitApp {
                 }
                 self.advance_active_play();
                 self.advance_draining_audio();
+                self.log_audio_diagnostics();
                 // 次フレームの再描画をここで要求して描画ループを自走させる。
                 // about_to_wait から要求すると、Windows のウィンドウ移動/リサイズ中に
                 // 発生するモーダルループ (WM_ENTERSIZEMOVE..WM_EXITSIZEMOVE) では

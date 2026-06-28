@@ -3,8 +3,8 @@ use std::sync::{Arc, Mutex};
 
 use anyhow::{Context, Result, bail};
 use bmz_audio::backend::cpal::{
-    CpalBackend, CpalHostId, CpalOutputConfig, CpalOutputSource, CpalSharedOutput,
-    SharedAudioEngine,
+    CpalBackend, CpalHostId, CpalOutputConfig, CpalOutputDiagnostics, CpalOutputSource,
+    CpalSharedOutput, SharedAudioEngine,
 };
 use bmz_audio::clock::AudioClock;
 use bmz_audio::engine::AudioEngine;
@@ -23,6 +23,8 @@ use crate::screens::play_snapshot::{BgaFrameCatalog, PlayRenderSnapshotCache};
 use crate::screens::result_model::ResultGraphCollector;
 use crate::storage::score_db::ScoreKey;
 use crate::video_bga::ActiveVideoBgaDecoder;
+
+pub type AudioOutputDiagnostics = CpalOutputDiagnostics;
 
 pub struct AppAudioOutput {
     pub engine: SharedAudioEngine,
@@ -108,6 +110,10 @@ impl AudioRuntime {
 
     pub fn uses_pulseaudio_host(&self) -> bool {
         self.output.uses_pulseaudio_host()
+    }
+
+    pub fn take_diagnostics(&self) -> AudioOutputDiagnostics {
+        self.output.take_diagnostics()
     }
 
     fn add_source(&self, engine: SharedAudioEngine) -> CpalOutputSource {
