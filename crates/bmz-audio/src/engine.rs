@@ -18,6 +18,15 @@ impl AudioEngine {
         }
     }
 
+    pub fn with_sample_bank(output_sample_rate: u32, mut samples: SampleBank) -> Self {
+        samples.resample_all_to(output_sample_rate);
+        Self {
+            queue: ScheduledSoundQueue::new(),
+            mixer: MixerState::new(output_sample_rate),
+            samples,
+        }
+    }
+
     pub fn insert_sample(&mut self, id: bmz_core::ids::SoundId, sample: DecodedSample) {
         // 読込時に出力レートへ揃えておき、ミキサーでの逐次リサンプルを避ける。
         let sample = sample.resampled_to(self.mixer.output_sample_rate);
@@ -241,6 +250,30 @@ mod tests {
         let sample = engine.samples.get(SoundId(1)).unwrap();
         assert_eq!(sample.sample_rate, 48_000);
         assert_eq!(sample.frames, vec![0.0, 0.5, 1.0, 1.0]);
+    }
+
+    #[test]
+    fn with_sample_bank_reuses_samples_without_playback_state() {
+        let mut source = AudioEngine::new(48_000);
+        source.insert_sample(
+            SoundId(1),
+            DecodedSample { channels: 1, sample_rate: 48_000, frames: vec![0.5, 0.25] },
+        );
+        source.schedule(ScheduledSound {
+            start_frame: 0,
+            sound_id: SoundId(1),
+            volume: 1.0,
+            pan: 0.0,
+            loop_playback: false,
+            fade_in_frames: 0,
+            catch_up: false,
+        });
+
+        let reused =
+            AudioEngine::with_sample_bank(source.output_sample_rate(), source.samples.clone());
+
+        assert!(reused.is_idle());
+        assert_eq!(reused.samples.get(SoundId(1)).unwrap().frame_count(), 2);
     }
 
     #[test]
