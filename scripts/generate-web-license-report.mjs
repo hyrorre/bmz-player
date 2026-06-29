@@ -7,14 +7,14 @@ const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..'
 
 function usage() {
   console.error(`Usage:
-  node scripts/generate-web-license-report.mjs --metafile PATH --output PATH [--policy PATH]
-  node scripts/generate-web-license-report.mjs --all-installed --output PATH [--policy PATH]
+  node scripts/generate-web-license-report.mjs --metafile PATH --output PATH [--output PATH ...] [--policy PATH]
+  node scripts/generate-web-license-report.mjs --all-installed --output PATH [--output PATH ...] [--policy PATH]
 
 Options:
   --metafile PATH     Wrangler/esbuild metafile used to find bundled npm packages.
   --sourcemap-root    Directory used to resolve bundled Nuxt/Nitro .map files.
   --all-installed     Scan all installed node_modules packages instead of a metafile.
-  --output PATH       Report output path.
+  --output PATH       Report output path. May be passed more than once.
   --policy PATH       Policy JSON path (default: web-license-policy.json).
 `)
 }
@@ -23,6 +23,7 @@ function parseArgs(argv) {
   const args = {
     policy: 'web-license-policy.json',
     allInstalled: false,
+    outputs: [],
   }
 
   for (let i = 0; i < argv.length; i += 1) {
@@ -34,7 +35,7 @@ function parseArgs(argv) {
         break
       case '--output':
         i += 1
-        args.output = argv[i]
+        args.outputs.push(argv[i])
         break
       case '--sourcemap-root':
         i += 1
@@ -63,7 +64,7 @@ function parseArgs(argv) {
   if (!args.metafile && !args.allInstalled) {
     throw new Error('pass --metafile or --all-installed')
   }
-  if (!args.output) {
+  if (args.outputs.length === 0) {
     throw new Error('missing --output')
   }
   return args
@@ -458,12 +459,15 @@ function main() {
       return
     }
 
-    const outputPath = path.resolve(repoRoot, args.output)
-    fs.mkdirSync(path.dirname(outputPath), { recursive: true })
-    fs.writeFileSync(outputPath, renderReport({ ...details, source, policyPath }))
-    console.log(
-      `wrote ${path.relative(repoRoot, outputPath)} (${details.packages.length} packages)`,
-    )
+    const report = renderReport({ ...details, source, policyPath })
+    for (const output of args.outputs) {
+      const outputPath = path.resolve(repoRoot, output)
+      fs.mkdirSync(path.dirname(outputPath), { recursive: true })
+      fs.writeFileSync(outputPath, report)
+      console.log(
+        `wrote ${path.relative(repoRoot, outputPath)} (${details.packages.length} packages)`,
+      )
+    }
   } catch (error) {
     console.error(`error: ${error.message}`)
     usage()

@@ -25,6 +25,7 @@
 .nitro
 .cache
 dist
+/bmz-ir-web/public/licenses/web-dependency-licenses.txt
 
 # Wrangler / Miniflare local state
 .wrangler

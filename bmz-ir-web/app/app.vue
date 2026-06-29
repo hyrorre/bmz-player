@@ -6,5 +6,6 @@
       <AppSidebar />
       <NuxtPage class="grow" />
     </UContainer>
+    <AppFooter />
   </UApp>
 </template>

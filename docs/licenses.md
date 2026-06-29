@@ -143,13 +143,13 @@ This avoids treating dev-only or optional native packages as deployed code.
 
 ```sh
 bun install --frozen-lockfile
-bun run cf:build
-bun run license:web:bundle
+bun run build
 ```
 
 The generated report is written to:
 
 - `.output/public/licenses/web-dependency-licenses.txt`
+- `bmz-ir-web/public/licenses/web-dependency-licenses.txt` (local dev copy, gitignored)
 
 `scripts/generate-web-license-report.mjs` reads the Wrangler `--metafile`
 inputs and the matching Nuxt/Nitro sourcemaps under `.output/server`, maps
@@ -158,6 +158,10 @@ and fails when a bundled package has an unaccepted or review-required license.
 The policy currently chooses the BSD side of
 `node-forge`'s `(BSD-3-Clause OR GPL-2.0)` expression and does not accept GPL /
 LGPL / AGPL-only packages without review.
+
+The deployed BMZ IR site exposes the raw report at
+`/licenses/web-dependency-licenses.txt` and renders it inside the application at
+`/licenses`.
 
 ## Release Checklist
 
@@ -175,6 +179,5 @@ Before publishing a binary release:
 Before deploying BMZ IR web:
 
 1. Run `bun install --frozen-lockfile`.
-2. Run `bun run cf:build`.
-3. Run `bun run license:web:bundle`.
-4. Include `.output/public/licenses/web-dependency-licenses.txt` in the deployed static assets.
+2. Run `bun run build`.
+3. Confirm `/licenses` can display `/licenses/web-dependency-licenses.txt`.

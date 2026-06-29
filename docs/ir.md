@@ -122,8 +122,7 @@ GET    /api/v1/courses/{course_hash}/ranking   # global のみ
 bun install
 bun run db:migrate
 bunx prettier . --check
-bun run cf:build
-bun run license:web:bundle
+bun run build
 bun run cf:types
 bun run dev                            # http://localhost:3000
 bmz ir login --email <EMAIL> --base-url http://localhost:3000
@@ -2437,8 +2436,9 @@ bun install
 # Apply local SQLite migrations
 bun run db:migrate
 
+# Build Cloudflare Worker output and web dependency notices
+bun run build
+
 # Generate Cloudflare Worker bindings/types
-bun run cf:build
-bun run license:web:bundle
 bun run cf:types
 ```
