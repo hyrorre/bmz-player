@@ -8768,9 +8768,10 @@ fn skin_state_number(ref_id: i32, state: &SkinDrawState) -> Option<i64> {
                 |parts| (if matches!(ref_id, 122 | 135 | 157) { parts.0 } else { parts.1 }) as i64,
             )
         }
-        183 | 184 => result_mybest_ex_score(state)
-            .map(|best| score_rate_parts(best, state.total_notes))
-            .map(|parts| if ref_id == 183 { parts.0 } else { parts.1 } as i64),
+        183 | 184 => result_mybest_ex_score_display(state).map(|best| {
+            let parts = score_rate_parts(best, state.total_notes);
+            (if ref_id == 183 { parts.0 } else { parts.1 }) as i64
+        }),
         400 => state.judge_rank.map(|rank| rank as i64),
         154 => result_grade_diff_number(state),
         // NUMBER_DIFF_HIGHSCORE=152, NUMBER_DIFF_HIGHSCORE2=172 (符号付き、ex_score - best)
@@ -8786,12 +8787,13 @@ fn skin_state_number(ref_id: i32, state: &SkinDrawState) -> Option<i64> {
         // NUMBER_DIFF_MAXCOMBO=175 (符号付き、max_combo - target_max_combo)
         175 => state.target_max_combo.map(|target| state.max_combo as i64 - target as i64),
         // NUMBER_TARGET_BPCOUNT=176 (Result では old/mybest BP)
-        176 => result_mybest_bp(state).map(|c| c as i64),
+        176 => result_mybest_bp_display(state).map(|c| c as i64),
         // NUMBER_BPCOUNT2=177 (Result では今回の BP)
         177 => Some(current_bp(state) as i64),
         // NUMBER_DIFF_BPCOUNT=178 (符号付き、現在 bp - old/mybest BP)
-        178 => result_mybest_bp(state).map(|best| current_bp(state) as i64 - best as i64),
+        178 => result_mybest_bp_display(state).map(|best| current_bp(state) as i64 - best as i64),
         // NUMBER_TARGET_CLEAR=371
+        371 if state.result_failed.is_some() => result_mybest_clear_index_display(state),
         371 => result_mybest_clear_index(state).or(state.target_clear_index),
         // Fast/Slow split (PGREAT/GREAT/GOOD/BAD/POOR)
         410 | 411 if state.autoplay => Some(0),
@@ -9115,7 +9117,9 @@ fn result_or_select_length_ms(state: &SkinDrawState) -> i64 {
 
 fn projected_best_score_at_progress(state: &SkinDrawState) -> Option<u32> {
     state.projected_best_ex_score.or_else(|| {
-        result_mybest_ex_score(state).map(|score| projected_score_at_progress(score, state))
+        result_mybest_ex_score(state)
+            .map(|score| projected_score_at_progress(score, state))
+            .or_else(|| state.result_failed.is_some().then_some(0))
     })
 }
 
@@ -9382,27 +9386,32 @@ fn current_cb(state: &SkinDrawState) -> u32 {
 }
 
 fn result_mybest_bp(state: &SkinDrawState) -> Option<u32> {
-    if state.result_failed.is_some() {
-        state.previous_best_bp.or(state.best_bp)
-    } else {
-        state.best_bp
-    }
+    if state.result_failed.is_some() { state.previous_best_bp } else { state.best_bp }
 }
 
 fn result_mybest_ex_score(state: &SkinDrawState) -> Option<u32> {
-    if state.result_failed.is_some() {
-        state.previous_best_ex_score.or(state.best_ex_score)
-    } else {
-        state.best_ex_score
-    }
+    if state.result_failed.is_some() { state.previous_best_ex_score } else { state.best_ex_score }
 }
 
 fn result_mybest_clear_index(state: &SkinDrawState) -> Option<i64> {
     if state.result_failed.is_some() {
-        state.previous_best_clear_index.or(state.best_clear_index)
+        state.previous_best_clear_index
     } else {
         state.best_clear_index
     }
+}
+
+/// Result 画面の MYBEST 表示用。過去ベストが無い初プレイは 0 (NOPLAY) を返す。
+fn result_mybest_ex_score_display(state: &SkinDrawState) -> Option<u32> {
+    result_mybest_ex_score(state).or_else(|| state.result_failed.is_some().then_some(0))
+}
+
+fn result_mybest_bp_display(state: &SkinDrawState) -> Option<u32> {
+    result_mybest_bp(state).or_else(|| state.result_failed.is_some().then_some(0))
+}
+
+fn result_mybest_clear_index_display(state: &SkinDrawState) -> Option<i64> {
+    result_mybest_clear_index(state).or_else(|| state.result_failed.is_some().then_some(0))
 }
 
 fn skin_point_score(state: &SkinDrawState) -> u32 {
@@ -20211,6 +20220,32 @@ mod tests {
         assert!(test_skin_op(321, &[], &updated_result_state));
         assert!(!test_skin_op(320, &[], &updated_result_state));
         assert!((graph_value(113, &updated_result_state) - 0.85).abs() < 1e-5);
+
+        let first_play_result_state = SkinDrawState {
+            ex_score: 1888,
+            max_combo: 777,
+            total_notes: 1000,
+            past_notes: 1000,
+            judge_counts: DisplayJudgeCounts { bad: 3, poor: 5, ..DisplayJudgeCounts::default() },
+            best_ex_score: Some(1888),
+            best_clear_index: Some(6),
+            best_bp: Some(8),
+            previous_best_ex_score: None,
+            previous_best_clear_index: None,
+            previous_best_bp: None,
+            result_failed: Some(false),
+            ..SkinDrawState::default()
+        };
+        assert_eq!(skin_state_number(150, &first_play_result_state), Some(0));
+        assert_eq!(skin_state_number(170, &first_play_result_state), Some(0));
+        assert_eq!(skin_state_number(152, &first_play_result_state), Some(1888));
+        assert_eq!(skin_state_number(176, &first_play_result_state), Some(0));
+        assert_eq!(skin_state_number(178, &first_play_result_state), Some(8));
+        assert_eq!(skin_state_number(183, &first_play_result_state), Some(0));
+        assert_eq!(skin_state_number(184, &first_play_result_state), Some(0));
+        assert_eq!(skin_state_number(371, &first_play_result_state), Some(0));
+        assert_eq!(graph_value(113, &first_play_result_state), 0.0);
+        assert!(!test_skin_op(320, &[], &first_play_result_state));
 
         let zero_rank_state = SkinDrawState {
             ex_score: 0,
