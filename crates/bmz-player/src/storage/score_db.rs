@@ -1407,7 +1407,9 @@ fn upsert_score_best(conn: &Connection, record: &ScoreRecord) -> Result<()> {
             })
         },
     )?;
-    if !score_best_should_update(record, current) {
+    let should_update_score = score_best_should_update_score(record, current);
+    let should_update_clear = score_best_should_update_clear(record, current);
+    if !should_update_score {
         conn.execute(
             "UPDATE score_best SET
                 bp = min(bp, ?2),
@@ -1425,66 +1427,79 @@ fn upsert_score_best(conn: &Connection, record: &ScoreRecord) -> Result<()> {
                 rule_mode.as_str(),
             ],
         )?;
-        return Ok(());
+    } else {
+        conn.execute(
+            "UPDATE score_best SET
+                ex_score = ?2,
+                bp = ?3,
+                cb = ?4,
+                max_combo = ?5,
+                fast_pgreat = ?6,
+                slow_pgreat = ?7,
+                fast_great = ?8,
+                slow_great = ?9,
+                fast_good = ?10,
+                slow_good = ?11,
+                fast_bad = ?12,
+                slow_bad = ?13,
+                fast_poor = ?14,
+                slow_poor = ?15,
+                fast_empty_poor = ?16,
+                slow_empty_poor = ?17,
+                played_at = ?18,
+                replay_path = ?19,
+                ghost = ?20,
+                device_type = ?21
+             WHERE chart_sha256 = ?1 AND ln_policy = ?22 AND double_option = ?23
+               AND rule_mode = ?24",
+            params![
+                hash_to_hex(&record.chart_sha256),
+                record.score.ex_score(),
+                bp,
+                cb,
+                record.score.max_combo,
+                judges.fast_pgreat,
+                judges.slow_pgreat,
+                judges.fast_great,
+                judges.slow_great,
+                judges.fast_good,
+                judges.slow_good,
+                judges.fast_bad,
+                judges.slow_bad,
+                judges.fast_poor,
+                judges.slow_poor,
+                judges.fast_empty_poor,
+                judges.slow_empty_poor,
+                record.played_at,
+                record.replay_path.as_str(),
+                ghost,
+                record.device_type.as_str(),
+                record.ln_policy.as_str(),
+                record.double_option.as_str(),
+                rule_mode.as_str(),
+            ],
+        )?;
     }
 
-    conn.execute(
-        "UPDATE score_best SET
-            clear_type = ?2,
-            gauge_type = ?3,
-            gauge_value = ?4,
-            ex_score = ?5,
-            bp = ?6,
-            cb = ?7,
-            max_combo = ?8,
-            fast_pgreat = ?9,
-            slow_pgreat = ?10,
-            fast_great = ?11,
-            slow_great = ?12,
-            fast_good = ?13,
-            slow_good = ?14,
-            fast_bad = ?15,
-            slow_bad = ?16,
-            fast_poor = ?17,
-            slow_poor = ?18,
-            fast_empty_poor = ?19,
-            slow_empty_poor = ?20,
-            played_at = ?21,
-            replay_path = ?22,
-            ghost = ?23,
-            device_type = ?24
-         WHERE chart_sha256 = ?1 AND ln_policy = ?25 AND double_option = ?26
-           AND rule_mode = ?27",
-        params![
-            hash_to_hex(&record.chart_sha256),
-            record.clear_type.as_str(),
-            gauge_type_str(record.gauge_type),
-            record.gauge_value,
-            record.score.ex_score(),
-            bp,
-            cb,
-            record.score.max_combo,
-            judges.fast_pgreat,
-            judges.slow_pgreat,
-            judges.fast_great,
-            judges.slow_great,
-            judges.fast_good,
-            judges.slow_good,
-            judges.fast_bad,
-            judges.slow_bad,
-            judges.fast_poor,
-            judges.slow_poor,
-            judges.fast_empty_poor,
-            judges.slow_empty_poor,
-            record.played_at,
-            record.replay_path.as_str(),
-            ghost,
-            record.device_type.as_str(),
-            record.ln_policy.as_str(),
-            record.double_option.as_str(),
-            rule_mode.as_str(),
-        ],
-    )?;
+    if should_update_clear {
+        conn.execute(
+            "UPDATE score_best SET
+                clear_type = ?2,
+                gauge_type = ?3,
+                gauge_value = ?4
+             WHERE chart_sha256 = ?1 AND ln_policy = ?5 AND double_option = ?6
+               AND rule_mode = ?7",
+            params![
+                hash_to_hex(&record.chart_sha256),
+                record.clear_type.as_str(),
+                gauge_type_str(record.gauge_type),
+                record.gauge_value,
+                record.ln_policy.as_str(),
+                record.double_option.as_str(),
+                rule_mode.as_str(),
+            ],
+        )?;
+    }
     Ok(())
 }
 
@@ -1496,7 +1511,7 @@ fn is_counted_clear(clear_type: ClearType) -> bool {
     !matches!(clear_type, ClearType::NoPlay | ClearType::Failed)
 }
 
-fn score_best_should_update(record: &ScoreRecord, current: ScoreBestRank) -> bool {
+fn score_best_should_update_score(record: &ScoreRecord, current: ScoreBestRank) -> bool {
     let next = ScoreBestRank {
         ex_score: record.score.ex_score(),
         clear_rank: record.clear_type as u8,
@@ -1504,19 +1519,17 @@ fn score_best_should_update(record: &ScoreRecord, current: ScoreBestRank) -> boo
         cb: score_record_cb(record),
         max_combo: record.score.max_combo,
     };
-    (
-        next.ex_score,
-        next.clear_rank,
-        std::cmp::Reverse(next.bp),
-        std::cmp::Reverse(next.cb),
-        next.max_combo,
-    ) > (
-        current.ex_score,
-        current.clear_rank,
-        std::cmp::Reverse(current.bp),
-        std::cmp::Reverse(current.cb),
-        current.max_combo,
-    )
+    (next.ex_score, std::cmp::Reverse(next.bp), std::cmp::Reverse(next.cb), next.max_combo)
+        > (
+            current.ex_score,
+            std::cmp::Reverse(current.bp),
+            std::cmp::Reverse(current.cb),
+            current.max_combo,
+        )
+}
+
+fn score_best_should_update_clear(record: &ScoreRecord, current: ScoreBestRank) -> bool {
+    record.clear_type as u8 > current.clear_rank
 }
 
 fn score_record_bp(record: &ScoreRecord) -> u32 {
@@ -1693,6 +1706,134 @@ mod tests {
         db.insert_score(&record(30, ClearType::Easy)).unwrap();
 
         assert_eq!(db.best_ex_score(key([7; 32])).unwrap(), Some(30));
+    }
+
+    #[test]
+    fn score_best_updates_clear_lamp_independently_from_ex_score() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        configure_connection(&conn).unwrap();
+        run_migrations(&mut conn, SCORE_MIGRATIONS).unwrap();
+        let mut db = ScoreDatabase { conn };
+
+        db.insert_score(&record(40, ClearType::Normal)).unwrap();
+        let mut hard = record(20, ClearType::Hard);
+        hard.gauge_type = Some(GaugeType::Hard);
+        hard.gauge_value = 12.0;
+        db.insert_score(&hard).unwrap();
+
+        let best = db.best_scores_for_charts(&[key([7; 32])]).unwrap().pop().unwrap();
+        assert_eq!(best.ex_score, 40);
+        assert_eq!(best.clear_type, "Hard");
+        assert_eq!(best.gauge_type, "Hard");
+        assert_eq!(best.gauge_value, 12.0);
+    }
+
+    #[test]
+    fn score_best_does_not_downgrade_clear_lamp_on_higher_ex_score() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        configure_connection(&conn).unwrap();
+        run_migrations(&mut conn, SCORE_MIGRATIONS).unwrap();
+        let mut db = ScoreDatabase { conn };
+
+        let mut hard = record(20, ClearType::Hard);
+        hard.gauge_type = Some(GaugeType::Hard);
+        hard.gauge_value = 12.0;
+        db.insert_score(&hard).unwrap();
+        let mut normal = record(40, ClearType::Normal);
+        normal.gauge_type = Some(GaugeType::Normal);
+        normal.gauge_value = 82.0;
+        db.insert_score(&normal).unwrap();
+
+        let best = db.best_scores_for_charts(&[key([7; 32])]).unwrap().pop().unwrap();
+        assert_eq!(best.ex_score, 40);
+        assert_eq!(best.clear_type, "Hard");
+        assert_eq!(best.gauge_type, "Hard");
+        assert_eq!(best.gauge_value, 12.0);
+    }
+
+    #[test]
+    fn score_best_updates_only_max_combo_when_lower_ex_score_improves_combo() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        configure_connection(&conn).unwrap();
+        run_migrations(&mut conn, SCORE_MIGRATIONS).unwrap();
+        let mut db = ScoreDatabase { conn };
+
+        let mut initial = record(40, ClearType::Normal);
+        initial.score.judges.fast_bad = 3;
+        initial.score.judges.fast_empty_poor = 2;
+        db.insert_score(&initial).unwrap();
+
+        let mut combo = record(20, ClearType::Easy);
+        combo.score.max_combo = 50;
+        combo.score.judges.fast_bad = 4;
+        combo.score.judges.fast_empty_poor = 2;
+        db.insert_score(&combo).unwrap();
+
+        let best = db.best_scores_for_charts(&[key([7; 32])]).unwrap().pop().unwrap();
+        assert_eq!(best.ex_score, 40);
+        assert_eq!(best.clear_type, "Normal");
+        assert_eq!(best.bp, 5);
+        assert_eq!(best.cb, 3);
+        assert_eq!(best.max_combo, 50);
+        assert_eq!(best.judge_counts.pgreat, 20);
+        assert_eq!(best.judge_counts.bad, 3);
+        assert_eq!(best.judge_counts.empty_poor, 2);
+    }
+
+    #[test]
+    fn score_best_updates_only_bp_when_lower_ex_score_improves_bp() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        configure_connection(&conn).unwrap();
+        run_migrations(&mut conn, SCORE_MIGRATIONS).unwrap();
+        let mut db = ScoreDatabase { conn };
+
+        let mut initial = record(40, ClearType::Normal);
+        initial.score.judges.fast_bad = 3;
+        initial.score.judges.fast_empty_poor = 3;
+        db.insert_score(&initial).unwrap();
+
+        let mut lower_bp = record(20, ClearType::Easy);
+        lower_bp.score.judges.fast_bad = 3;
+        lower_bp.score.judges.fast_empty_poor = 1;
+        db.insert_score(&lower_bp).unwrap();
+
+        let best = db.best_scores_for_charts(&[key([7; 32])]).unwrap().pop().unwrap();
+        assert_eq!(best.ex_score, 40);
+        assert_eq!(best.clear_type, "Normal");
+        assert_eq!(best.bp, 4);
+        assert_eq!(best.cb, 3);
+        assert_eq!(best.max_combo, 20);
+        assert_eq!(best.judge_counts.pgreat, 20);
+        assert_eq!(best.judge_counts.bad, 3);
+        assert_eq!(best.judge_counts.empty_poor, 3);
+    }
+
+    #[test]
+    fn score_best_updates_only_cb_when_lower_ex_score_improves_cb() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        configure_connection(&conn).unwrap();
+        run_migrations(&mut conn, SCORE_MIGRATIONS).unwrap();
+        let mut db = ScoreDatabase { conn };
+
+        let mut initial = record(40, ClearType::Normal);
+        initial.score.judges.fast_bad = 4;
+        initial.score.judges.fast_empty_poor = 1;
+        db.insert_score(&initial).unwrap();
+
+        let mut lower_cb = record(20, ClearType::Easy);
+        lower_cb.score.judges.fast_bad = 2;
+        lower_cb.score.judges.fast_empty_poor = 3;
+        db.insert_score(&lower_cb).unwrap();
+
+        let best = db.best_scores_for_charts(&[key([7; 32])]).unwrap().pop().unwrap();
+        assert_eq!(best.ex_score, 40);
+        assert_eq!(best.clear_type, "Normal");
+        assert_eq!(best.bp, 5);
+        assert_eq!(best.cb, 2);
+        assert_eq!(best.max_combo, 20);
+        assert_eq!(best.judge_counts.pgreat, 20);
+        assert_eq!(best.judge_counts.bad, 4);
+        assert_eq!(best.judge_counts.empty_poor, 1);
     }
 
     #[test]
