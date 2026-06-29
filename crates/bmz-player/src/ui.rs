@@ -2356,7 +2356,7 @@ fn build_settings_panel(
                         ui.add(
                             egui::TextEdit::singleline(&mut config.screenshot.dir)
                                 .desired_width(300.0)
-                                .hint_text("data/screenshots"),
+                                .hint_text("screenshots"),
                         );
                     });
                     ui.horizontal(|ui| {

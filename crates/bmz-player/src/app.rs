@@ -10390,7 +10390,10 @@ impl WinitApp {
     }
 
     fn request_manual_screenshot(&mut self) {
-        let path = next_screenshot_path(&self.boot.app_config.screenshot.dir);
+        let path = next_screenshot_path(
+            &self.boot.app_config.screenshot.dir,
+            &self.boot.app_paths.data_dir,
+        );
         if self.boot.app_config.screenshot.copy_to_clipboard {
             self.renderer.request_screenshot_with_clipboard(path.clone());
             tracing::info!(
@@ -12446,8 +12449,8 @@ fn now_unix_millis() -> u128 {
     SystemTime::now().duration_since(UNIX_EPOCH).map(|duration| duration.as_millis()).unwrap_or(0)
 }
 
-fn next_screenshot_path(config_dir: &str) -> PathBuf {
-    let dir = screenshot_dir(config_dir);
+fn next_screenshot_path(config_dir: &str, data_dir: &Path) -> PathBuf {
+    let dir = screenshot_dir(config_dir, data_dir);
     let stamp = now_unix_millis();
     for index in 0..1000 {
         let file_name = if index == 0 {
@@ -12463,12 +12466,30 @@ fn next_screenshot_path(config_dir: &str) -> PathBuf {
     dir.join(format!("bmz-screenshot-{stamp}-overflow.png"))
 }
 
-fn screenshot_dir(config_dir: &str) -> PathBuf {
+fn screenshot_dir(config_dir: &str, data_dir: &Path) -> PathBuf {
     let trimmed = config_dir.trim();
-    if trimmed.is_empty() {
+    let path = if trimmed.is_empty() {
         PathBuf::from(crate::config::app_config::default_screenshot_dir())
     } else {
         PathBuf::from(trimmed)
+    };
+    if path.is_absolute() {
+        return path;
+    }
+    if let Some(relative) = screenshot_dir_legacy_data_relative(&path) {
+        data_dir.join(relative)
+    } else {
+        data_dir.join(path)
+    }
+}
+
+fn screenshot_dir_legacy_data_relative(path: &Path) -> Option<PathBuf> {
+    let mut components = path.components();
+    match components.next()? {
+        std::path::Component::Normal(part) if part == std::ffi::OsStr::new("data") => {
+            Some(components.as_path().to_path_buf())
+        }
+        _ => None,
     }
 }
 
@@ -18679,13 +18700,35 @@ mod tests {
 
     #[test]
     fn screenshot_dir_defaults_when_empty() {
-        assert_eq!(screenshot_dir(""), PathBuf::from("data/screenshots"));
-        assert_eq!(screenshot_dir("   "), PathBuf::from("data/screenshots"));
+        let data_dir = Path::new("user-data");
+
+        assert_eq!(screenshot_dir("", data_dir), PathBuf::from("user-data/screenshots"));
+        assert_eq!(screenshot_dir("   ", data_dir), PathBuf::from("user-data/screenshots"));
     }
 
     #[test]
     fn screenshot_dir_uses_configured_path() {
-        assert_eq!(screenshot_dir("captures"), PathBuf::from("captures"));
+        let data_dir = Path::new("user-data");
+
+        assert_eq!(screenshot_dir("captures", data_dir), PathBuf::from("user-data/captures"));
+    }
+
+    #[test]
+    fn screenshot_dir_maps_legacy_data_default_to_data_dir() {
+        let data_dir = Path::new("user-data");
+
+        assert_eq!(
+            screenshot_dir("data/screenshots", data_dir),
+            PathBuf::from("user-data/screenshots")
+        );
+    }
+
+    #[test]
+    fn screenshot_dir_keeps_absolute_configured_path() {
+        let data_dir = Path::new("user-data");
+        let absolute_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("captures");
+
+        assert_eq!(screenshot_dir(&absolute_dir.to_string_lossy(), data_dir), absolute_dir);
     }
 
     #[test]
