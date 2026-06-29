@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use bmz_audio::clock::AudioClock;
-use bmz_audio::queue::{AudioScheduler, ScheduledSound};
+use bmz_audio::queue::{AudioScheduler, RestartPolicy, ScheduledSound};
 use bmz_chart::model::{LongNoteMode, NoteEvent, NoteKind, PlayableChart};
 use bmz_chart::timing::TimingMap;
 use bmz_core::ids::{NoteId, SoundId};
@@ -262,6 +262,7 @@ impl BgmScheduler {
                 loop_playback: false,
                 fade_in_frames: 0,
                 catch_up: true,
+                restart_policy: RestartPolicy::StopSameSound,
             });
 
             self.next_index += 1;
@@ -392,6 +393,7 @@ pub fn schedule_keysounds(session: &mut GameSession, audio: &mut dyn AudioSchedu
             loop_playback: false,
             fade_in_frames: 0,
             catch_up: true,
+            restart_policy: RestartPolicy::StopSameSound,
         });
     }
 }
@@ -1031,6 +1033,7 @@ mod tests {
         assert_eq!(audio.scheduled[0].sound_id, SoundId(7));
         assert_eq!(audio.scheduled[0].start_frame, 0);
         assert_eq!(audio.scheduled[0].volume, 0.0625);
+        assert_eq!(audio.scheduled[0].restart_policy, RestartPolicy::StopSameSound);
         assert_eq!(session.recent_judgements.len(), 1);
     }
 
@@ -1547,6 +1550,7 @@ mod tests {
         assert_eq!(audio.scheduled.len(), 1);
         assert_eq!(audio.scheduled[0].sound_id, SoundId(3));
         assert_eq!(audio.scheduled[0].volume, 0.1875);
+        assert_eq!(audio.scheduled[0].restart_policy, RestartPolicy::StopSameSound);
     }
 
     #[test]

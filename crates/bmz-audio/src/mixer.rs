@@ -1,4 +1,4 @@
-use crate::queue::ScheduledSound;
+use crate::queue::{RestartPolicy, ScheduledSound};
 use crate::sample::SampleBank;
 
 #[derive(Debug, Clone)]
@@ -8,6 +8,7 @@ pub struct ActiveVoice {
     pub played_output_frames: u64,
     pub next_output_frame: u64,
     pub started: bool,
+    pub stop_at_frame: Option<u64>,
 }
 
 #[derive(Debug)]
@@ -31,13 +32,19 @@ impl MixerState {
     }
 
     pub fn push_scheduled(&mut self, sounds: impl IntoIterator<Item = ScheduledSound>) {
-        self.voices.extend(sounds.into_iter().map(|sound| ActiveVoice {
-            next_output_frame: sound.start_frame,
-            sound,
-            sample_position: 0.0,
-            played_output_frames: 0,
-            started: false,
-        }));
+        for sound in sounds {
+            if sound.restart_policy == RestartPolicy::StopSameSound {
+                stop_same_sound_at(&mut self.voices, sound.sound_id, sound.start_frame);
+            }
+            self.voices.push(ActiveVoice {
+                next_output_frame: sound.start_frame,
+                sound,
+                sample_position: 0.0,
+                played_output_frames: 0,
+                started: false,
+                stop_at_frame: None,
+            });
+        }
     }
 
     pub fn set_volume_for_sound(&mut self, id: bmz_core::ids::SoundId, volume: f32) {
@@ -66,6 +73,9 @@ impl MixerState {
             let Some(sample) = sample_bank.get(voice.sound.sound_id) else {
                 return false;
             };
+            if voice.stop_at_frame.is_some_and(|stop_frame| output_start_frame >= stop_frame) {
+                return false;
+            }
 
             let mut alive = true;
             let sample_frames = sample.frame_count();
@@ -93,6 +103,10 @@ impl MixerState {
 
             for out_frame in 0..frame_count {
                 let absolute_frame = output_start_frame + out_frame as u64;
+                if voice.stop_at_frame.is_some_and(|stop_frame| absolute_frame >= stop_frame) {
+                    alive = false;
+                    break;
+                }
                 if !voice.started && absolute_frame < voice.sound.start_frame {
                     continue;
                 }
@@ -142,6 +156,19 @@ impl MixerState {
             for sample in output.iter_mut() {
                 *sample *= self.master_gain;
             }
+        }
+    }
+}
+
+fn stop_same_sound_at(
+    voices: &mut [ActiveVoice],
+    sound_id: bmz_core::ids::SoundId,
+    stop_frame: u64,
+) {
+    for voice in voices {
+        if voice.sound.sound_id == sound_id {
+            voice.stop_at_frame =
+                Some(voice.stop_at_frame.map_or(stop_frame, |existing| existing.min(stop_frame)));
         }
     }
 }
@@ -209,6 +236,7 @@ mod tests {
             loop_playback: false,
             fade_in_frames: 0,
             catch_up: true,
+            restart_policy: RestartPolicy::Overlap,
         }]);
         let mut output = vec![0.0; 6];
 
@@ -235,6 +263,7 @@ mod tests {
             loop_playback: false,
             fade_in_frames: 0,
             catch_up: false,
+            restart_policy: RestartPolicy::Overlap,
         }]);
         let mut output = vec![0.0; 4];
 
@@ -260,6 +289,7 @@ mod tests {
             loop_playback: true,
             fade_in_frames: 0,
             catch_up: false,
+            restart_policy: RestartPolicy::Overlap,
         }]);
         let mut output = vec![0.0; 12]; // 6 frames, 3 ループ分
 
@@ -287,6 +317,7 @@ mod tests {
             loop_playback: true,
             fade_in_frames: 2,
             catch_up: false,
+            restart_policy: RestartPolicy::Overlap,
         }]);
         let mut output = vec![0.0; 12];
 
@@ -311,6 +342,7 @@ mod tests {
             loop_playback: false,
             fade_in_frames: 0,
             catch_up: true,
+            restart_policy: RestartPolicy::Overlap,
         }]);
         let mut output = vec![0.0; 8];
 
@@ -336,6 +368,7 @@ mod tests {
             loop_playback: false,
             fade_in_frames: 0,
             catch_up: true,
+            restart_policy: RestartPolicy::Overlap,
         }]);
         let mut output = vec![0.0; 4];
 
@@ -361,6 +394,7 @@ mod tests {
             loop_playback: false,
             fade_in_frames: 0,
             catch_up: false,
+            restart_policy: RestartPolicy::Overlap,
         }]);
         let mut output = vec![0.0; 4];
 
@@ -390,6 +424,7 @@ mod tests {
             loop_playback: false,
             fade_in_frames: 0,
             catch_up: false,
+            restart_policy: RestartPolicy::Overlap,
         }]);
 
         let mut first = vec![0.0; 4];
@@ -400,5 +435,107 @@ mod tests {
         assert_eq!(first, vec![0.0, 0.0, 0.1, 0.1]);
         assert_eq!(after_skip, vec![0.4, 0.4, 0.5, 0.5]);
         assert!(mixer.voices.is_empty());
+    }
+
+    #[test]
+    fn overlap_policy_keeps_same_sound_voices_mixed() {
+        let mut bank = SampleBank::default();
+        bank.insert(
+            SoundId(1),
+            DecodedSample { channels: 1, sample_rate: 48_000, frames: vec![1.0, 1.0, 1.0] },
+        );
+        let mut mixer = MixerState::default();
+        mixer.push_scheduled([
+            scheduled_sound(0, 1, 1.0, RestartPolicy::Overlap),
+            scheduled_sound(1, 1, 1.0, RestartPolicy::Overlap),
+        ]);
+        let mut output = vec![0.0; 8];
+
+        mixer.mix_stereo(&bank, 0, &mut output);
+
+        assert_eq!(output, vec![1.0, 1.0, 2.0, 2.0, 2.0, 2.0, 1.0, 1.0]);
+        assert!(mixer.voices.is_empty());
+    }
+
+    #[test]
+    fn stop_same_sound_policy_restarts_at_later_frame() {
+        let mut bank = SampleBank::default();
+        bank.insert(
+            SoundId(1),
+            DecodedSample { channels: 1, sample_rate: 48_000, frames: vec![1.0, 0.5, 0.25, 0.125] },
+        );
+        let mut mixer = MixerState::default();
+        mixer.push_scheduled([
+            scheduled_sound(0, 1, 1.0, RestartPolicy::StopSameSound),
+            scheduled_sound(2, 1, 1.0, RestartPolicy::StopSameSound),
+        ]);
+        let mut output = vec![0.0; 12];
+
+        mixer.mix_stereo(&bank, 0, &mut output);
+
+        assert_eq!(output, vec![1.0, 1.0, 0.5, 0.5, 1.0, 1.0, 0.5, 0.5, 0.25, 0.25, 0.125, 0.125]);
+        assert!(mixer.voices.is_empty());
+    }
+
+    #[test]
+    fn stop_same_sound_policy_keeps_last_same_frame_sound() {
+        let mut bank = SampleBank::default();
+        bank.insert(
+            SoundId(1),
+            DecodedSample { channels: 1, sample_rate: 48_000, frames: vec![1.0, 1.0] },
+        );
+        let mut mixer = MixerState::default();
+        mixer.push_scheduled([
+            scheduled_sound(0, 1, 0.25, RestartPolicy::StopSameSound),
+            scheduled_sound(0, 1, 1.0, RestartPolicy::StopSameSound),
+        ]);
+        let mut output = vec![0.0; 4];
+
+        mixer.mix_stereo(&bank, 0, &mut output);
+
+        assert_eq!(output, vec![1.0, 1.0, 1.0, 1.0]);
+        assert!(mixer.voices.is_empty());
+    }
+
+    #[test]
+    fn stop_same_sound_policy_keeps_different_sounds_mixed() {
+        let mut bank = SampleBank::default();
+        bank.insert(
+            SoundId(1),
+            DecodedSample { channels: 1, sample_rate: 48_000, frames: vec![1.0, 1.0, 1.0] },
+        );
+        bank.insert(
+            SoundId(2),
+            DecodedSample { channels: 1, sample_rate: 48_000, frames: vec![0.25, 0.25, 0.25] },
+        );
+        let mut mixer = MixerState::default();
+        mixer.push_scheduled([
+            scheduled_sound(0, 1, 1.0, RestartPolicy::StopSameSound),
+            scheduled_sound(1, 2, 1.0, RestartPolicy::StopSameSound),
+        ]);
+        let mut output = vec![0.0; 8];
+
+        mixer.mix_stereo(&bank, 0, &mut output);
+
+        assert_eq!(output, vec![1.0, 1.0, 1.25, 1.25, 1.25, 1.25, 0.25, 0.25]);
+        assert!(mixer.voices.is_empty());
+    }
+
+    fn scheduled_sound(
+        start_frame: u64,
+        sound_id: u32,
+        volume: f32,
+        restart_policy: RestartPolicy,
+    ) -> ScheduledSound {
+        ScheduledSound {
+            start_frame,
+            sound_id: SoundId(sound_id),
+            volume,
+            pan: 0.0,
+            loop_playback: false,
+            fade_in_frames: 0,
+            catch_up: false,
+            restart_policy,
+        }
     }
 }

@@ -1,5 +1,12 @@
 use bmz_core::ids::SoundId;
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum RestartPolicy {
+    #[default]
+    Overlap,
+    StopSameSound,
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct ScheduledSound {
     pub start_frame: u64,
@@ -16,6 +23,7 @@ pub struct ScheduledSound {
     /// audio clock; immediate UI sounds keep it false so their first audible
     /// buffer starts from the sample head.
     pub catch_up: bool,
+    pub restart_policy: RestartPolicy,
 }
 
 impl ScheduledSound {
@@ -29,6 +37,7 @@ impl ScheduledSound {
             loop_playback: false,
             fade_in_frames: 0,
             catch_up: true,
+            restart_policy: RestartPolicy::Overlap,
         }
     }
 }
@@ -125,6 +134,7 @@ mod tests {
             loop_playback: false,
             fade_in_frames: 0,
             catch_up: true,
+            restart_policy: RestartPolicy::Overlap,
         }
     }
 }

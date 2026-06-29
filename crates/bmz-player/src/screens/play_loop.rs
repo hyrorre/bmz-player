@@ -455,7 +455,7 @@ mod tests {
     use bmz_audio::backend::cpal::SharedAudioEngine;
     use bmz_audio::clock::AudioClock;
     use bmz_audio::engine::AudioEngine;
-    use bmz_audio::queue::{AudioScheduler, ScheduledSound, ScheduledSoundQueue};
+    use bmz_audio::queue::{AudioScheduler, RestartPolicy, ScheduledSound, ScheduledSoundQueue};
     use bmz_chart::hash::compute_chart_identity;
     use bmz_chart::model::{ChartMetadata, NoteEvent, NoteKind, PlayableChart, SoundEvent};
     use bmz_core::ids::{NoteId, SoundId};
@@ -823,6 +823,7 @@ mod tests {
             loop_playback: false,
             fade_in_frames: 0,
             catch_up: true,
+            restart_policy: RestartPolicy::Overlap,
         }
     }
 

@@ -1,5 +1,5 @@
 use crate::mixer::MixerState;
-use crate::queue::{AudioScheduler, ScheduledSound, ScheduledSoundQueue};
+use crate::queue::{AudioScheduler, RestartPolicy, ScheduledSound, ScheduledSoundQueue};
 use crate::sample::{DecodedSample, SampleBank};
 
 #[derive(Debug, Default)]
@@ -92,6 +92,7 @@ impl AudioEngine {
             loop_playback,
             fade_in_frames,
             catch_up: false,
+            restart_policy: RestartPolicy::Overlap,
         });
     }
 
@@ -144,12 +145,48 @@ mod tests {
             loop_playback: false,
             fade_in_frames: 0,
             catch_up: true,
+            restart_policy: RestartPolicy::Overlap,
         });
         let mut output = vec![1.0; 8];
 
         engine.render_stereo(0, &mut output);
 
         assert_eq!(output, vec![0.0, 0.0, 0.0, 0.0, 0.5, 0.5, 0.25, 0.25]);
+    }
+
+    #[test]
+    fn restart_policy_applies_within_render_buffer() {
+        let mut engine = AudioEngine::default();
+        engine.insert_sample(
+            SoundId(1),
+            DecodedSample { channels: 1, sample_rate: 48_000, frames: vec![1.0, 0.5, 0.25, 0.125] },
+        );
+        engine.schedule(ScheduledSound {
+            start_frame: 0,
+            sound_id: SoundId(1),
+            volume: 1.0,
+            pan: 0.0,
+            loop_playback: false,
+            fade_in_frames: 0,
+            catch_up: true,
+            restart_policy: RestartPolicy::StopSameSound,
+        });
+        engine.schedule(ScheduledSound {
+            start_frame: 2,
+            sound_id: SoundId(1),
+            volume: 1.0,
+            pan: 0.0,
+            loop_playback: false,
+            fade_in_frames: 0,
+            catch_up: true,
+            restart_policy: RestartPolicy::StopSameSound,
+        });
+        let mut output = vec![0.0; 12];
+
+        engine.render_stereo(0, &mut output);
+
+        assert_eq!(output, vec![1.0, 1.0, 0.5, 0.5, 1.0, 1.0, 0.5, 0.5, 0.25, 0.25, 0.125, 0.125]);
+        assert!(engine.is_idle());
     }
 
     #[test]
@@ -204,6 +241,7 @@ mod tests {
                 loop_playback: false,
                 fade_in_frames: 0,
                 catch_up: true,
+                restart_policy: RestartPolicy::Overlap,
             },
             ScheduledSound {
                 start_frame: 10,
@@ -213,6 +251,7 @@ mod tests {
                 loop_playback: false,
                 fade_in_frames: 0,
                 catch_up: true,
+                restart_policy: RestartPolicy::Overlap,
             },
         ]);
 
@@ -277,6 +316,7 @@ mod tests {
             loop_playback: false,
             fade_in_frames: 0,
             catch_up: true,
+            restart_policy: RestartPolicy::Overlap,
         });
         engine.set_sound_volume(SoundId(1), 0.25);
 
@@ -312,6 +352,7 @@ mod tests {
             loop_playback: false,
             fade_in_frames: 0,
             catch_up: true,
+            restart_policy: RestartPolicy::Overlap,
         });
         // スケジュール済みの音が残っている間はアイドルではない。
         assert!(!engine.is_idle());
