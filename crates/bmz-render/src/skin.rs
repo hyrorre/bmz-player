@@ -2121,7 +2121,7 @@ pub struct SkinDrawState {
     pub best_max_combo: Option<u32>,
     /// ターゲット max combo (ref 173, 175 で使用)。
     pub target_max_combo: Option<u32>,
-    /// 過去ベスト bp (ref 178 で使用)。
+    /// 過去ベスト min_bp (ref 176, 178 で使用)。
     pub best_bp: Option<u32>,
     /// Result 画面で表示する今回 BP/CB。Failed では未処理ノーツを含む記録用値。
     pub result_bp: Option<u32>,
@@ -2139,7 +2139,7 @@ pub struct SkinDrawState {
     pub previous_best_clear_index: Option<i64>,
     pub previous_best_max_combo: Option<u32>,
     pub previous_best_bp: Option<u32>,
-    /// ターゲット bp (ref 176, 178 で使用)。
+    /// ターゲット min_bp (ref 176, 178 で使用)。
     pub target_bp: Option<u32>,
     /// ターゲットクリアタイプの index (ref 371)。
     pub target_clear_index: Option<i64>,
@@ -8786,12 +8786,12 @@ fn skin_state_number(ref_id: i32, state: &SkinDrawState) -> Option<i64> {
         173 => state.target_max_combo.map(|c| c as i64),
         // NUMBER_DIFF_MAXCOMBO=175 (符号付き、max_combo - target_max_combo)
         175 => state.target_max_combo.map(|target| state.max_combo as i64 - target as i64),
-        // NUMBER_TARGET_BPCOUNT=176 (Result では old/mybest BP)
-        176 => result_mybest_bp_display(state).map(|c| c as i64),
-        // NUMBER_BPCOUNT2=177 (Result では今回の BP)
+        // NUMBER_TARGET_MISSCOUNT=176 (Result では old/mybest min_bp)
+        176 => result_mybest_bp(state).map(|c| c as i64),
+        // NUMBER_MISSCOUNT2=177 (Result では今回の min_bp)
         177 => Some(current_bp(state) as i64),
-        // NUMBER_DIFF_BPCOUNT=178 (符号付き、現在 bp - old/mybest BP)
-        178 => result_mybest_bp_display(state).map(|best| current_bp(state) as i64 - best as i64),
+        // NUMBER_DIFF_MISSCOUNT=178 (符号付き、今回 min_bp - old/mybest min_bp)
+        178 => result_diff_misscount(state).map(|diff| diff as i64),
         // NUMBER_TARGET_CLEAR=371
         371 if state.result_failed.is_some() => result_mybest_clear_index_display(state),
         371 => result_mybest_clear_index(state).or(state.target_clear_index),
@@ -9389,6 +9389,14 @@ fn result_mybest_bp(state: &SkinDrawState) -> Option<u32> {
     if state.result_failed.is_some() { state.previous_best_bp } else { state.best_bp }
 }
 
+fn result_diff_misscount(state: &SkinDrawState) -> Option<i64> {
+    if state.result_failed.is_none() {
+        return None;
+    }
+    let previous = result_mybest_bp(state)?;
+    Some(i64::from(current_bp(state)) - i64::from(previous))
+}
+
 fn result_mybest_ex_score(state: &SkinDrawState) -> Option<u32> {
     if state.result_failed.is_some() { state.previous_best_ex_score } else { state.best_ex_score }
 }
@@ -9404,10 +9412,6 @@ fn result_mybest_clear_index(state: &SkinDrawState) -> Option<i64> {
 /// Result 画面の MYBEST 表示用。過去ベストが無い初プレイは 0 (NOPLAY) を返す。
 fn result_mybest_ex_score_display(state: &SkinDrawState) -> Option<u32> {
     result_mybest_ex_score(state).or_else(|| state.result_failed.is_some().then_some(0))
-}
-
-fn result_mybest_bp_display(state: &SkinDrawState) -> Option<u32> {
-    result_mybest_bp(state).or_else(|| state.result_failed.is_some().then_some(0))
 }
 
 fn result_mybest_clear_index_display(state: &SkinDrawState) -> Option<i64> {
@@ -20239,8 +20243,10 @@ mod tests {
         assert_eq!(skin_state_number(150, &first_play_result_state), Some(0));
         assert_eq!(skin_state_number(170, &first_play_result_state), Some(0));
         assert_eq!(skin_state_number(152, &first_play_result_state), Some(1888));
-        assert_eq!(skin_state_number(176, &first_play_result_state), Some(0));
-        assert_eq!(skin_state_number(178, &first_play_result_state), Some(8));
+        assert_eq!(skin_state_number(176, &first_play_result_state), None);
+        assert_eq!(skin_state_number(178, &first_play_result_state), None);
+        assert!(!test_skin_op(332, &[], &first_play_result_state));
+        assert!(!test_skin_op(1332, &[], &first_play_result_state));
         assert_eq!(skin_state_number(183, &first_play_result_state), Some(0));
         assert_eq!(skin_state_number(184, &first_play_result_state), Some(0));
         assert_eq!(skin_state_number(371, &first_play_result_state), Some(0));
