@@ -859,8 +859,14 @@ fn fmt_profile_ms(total_us: u128, frames: u128) -> String {
 }
 
 type PlaySkinSignature = (KeyMode, String, BTreeMap<String, String>, BTreeMap<String, String>);
-type ResultSkinSignature =
-    (ResultSkinSlot, String, BTreeMap<String, String>, BTreeMap<String, String>, bool);
+type ResultSkinSignature = (
+    ResultSkinSlot,
+    String,
+    BTreeMap<String, String>,
+    BTreeMap<String, String>,
+    bool,
+    BTreeMap<i32, i32>,
+);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ResultSkinSlot {
@@ -1820,6 +1826,7 @@ impl WinitApp {
             &boot.profile_config.skin,
             ResultSkinSlot::Normal,
             false,
+            BTreeMap::new(),
         );
 
         let mut app = Self {
@@ -8811,14 +8818,15 @@ impl WinitApp {
     fn spawn_result_skin_decode_for(&mut self, slot: ResultSkinSlot) {
         let skin = &self.boot.profile_config.skin;
         let table_song = !self.play_table_text_primary.is_empty();
-        let signature = result_skin_signature_for_config(skin, slot, table_song);
+        let runtime_numbers = self.result_lua_runtime_number_values(slot);
+        let signature = result_skin_signature_for_config(skin, slot, table_song, runtime_numbers);
         if !self.pending_result_skin && self.last_result_skin_signature.as_ref() == Some(&signature)
         {
             tracing::debug!(?slot, "result skin reuse (signature unchanged)");
             return;
         }
 
-        let (_, trimmed, options, files, table_song) = signature.clone();
+        let (_, trimmed, options, files, table_song, runtime_numbers) = signature.clone();
         self.last_result_skin_signature = Some(signature);
         self.pending_result_skin = false;
         let generation = self.skin_reload_generations.bump(SkinKind::Result);
@@ -8868,10 +8876,25 @@ impl WinitApp {
             SkinKind::Result,
             options,
             files,
-            lua_runtime_state_for_result_table_song(table_song),
+            lua_runtime_state_for_result(table_song, runtime_numbers),
         );
         self.pending_result_skin = true;
         tracing::info!(?slot, path = %path_label, generation, "result skin decode queued");
+    }
+
+    fn result_lua_runtime_number_values(&self, slot: ResultSkinSlot) -> BTreeMap<i32, i32> {
+        let summary = match slot {
+            ResultSkinSlot::Course => {
+                self.finished_course.as_ref().map(course_result_summary_for_skin)
+            }
+            ResultSkinSlot::Normal => {
+                self.finished_play.as_ref().map(|finished| finished.summary.clone())
+            }
+        };
+        let Some(summary) = summary else {
+            return BTreeMap::new();
+        };
+        result_lua_runtime_number_values_for_summary(&summary)
     }
 
     fn set_empty_result_skin_context(&mut self) {
@@ -10993,7 +11016,7 @@ fn load_initial_skin_textures(
                 SkinKind::Result,
                 if result_trimmed.is_empty() { BTreeMap::new() } else { result_options.clone() },
                 if result_trimmed.is_empty() { BTreeMap::new() } else { result_files.clone() },
-                lua_runtime_state_for_result_table_song(false),
+                lua_runtime_state_for_result(false, BTreeMap::new()),
             );
             pending_result = true;
         }
@@ -13296,6 +13319,7 @@ fn result_skin_signature_for_config(
     skin: &crate::config::profile_config::SkinConfig,
     slot: ResultSkinSlot,
     table_song: bool,
+    runtime_numbers: BTreeMap<i32, i32>,
 ) -> ResultSkinSignature {
     match slot {
         ResultSkinSlot::Normal => (
@@ -13304,6 +13328,7 @@ fn result_skin_signature_for_config(
             skin.result_options.clone(),
             skin.result_files.clone(),
             table_song,
+            runtime_numbers,
         ),
         ResultSkinSlot::Course => (
             slot,
@@ -13311,14 +13336,29 @@ fn result_skin_signature_for_config(
             skin.course_result_options.clone(),
             skin.course_result_files.clone(),
             table_song,
+            runtime_numbers,
         ),
     }
 }
 
-fn lua_runtime_state_for_result_table_song(table_song: bool) -> bmz_skin::LuaLoadRuntimeState {
+fn result_lua_runtime_number_values_for_summary(summary: &ResultSummary) -> BTreeMap<i32, i32> {
+    let mut number_values = BTreeMap::new();
+    if let Some(previous_best_bp) = summary.previous_best_bp
+        && let (Ok(current), Ok(previous)) =
+            (i32::try_from(summary.bp), i32::try_from(previous_best_bp))
+    {
+        number_values.insert(178, current.saturating_sub(previous));
+    }
+    number_values
+}
+
+fn lua_runtime_state_for_result(
+    table_song: bool,
+    number_values: BTreeMap<i32, i32>,
+) -> bmz_skin::LuaLoadRuntimeState {
     let mut option_values = BTreeMap::new();
     option_values.insert(1008, table_song);
-    bmz_skin::LuaLoadRuntimeState { option_values }
+    bmz_skin::LuaLoadRuntimeState { number_values, option_values }
 }
 
 /// リザルト画面で押すと終了アニメーションを開始するレーン。
@@ -16791,6 +16831,8 @@ mod tests {
         assert_eq!(summary.best_clear_type, Some(ClearType::Normal));
         assert_eq!(summary.previous_best_ex_score, Some(300));
         assert_eq!(summary.previous_best_clear_type, Some(ClearType::Normal));
+        assert_eq!(summary.previous_best_bp, Some(12));
+        assert_eq!(result_lua_runtime_number_values_for_summary(&summary).get(&178), Some(&-12));
         assert_eq!(summary.replay_slots, [true, false, true, false]);
         assert_eq!(summary.saved_replay_slots, [false, false, true, false]);
         assert_eq!(summary.judge_counts.pgreat, 160);

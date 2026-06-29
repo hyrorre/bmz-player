@@ -235,6 +235,7 @@ struct SkinDocumentCacheKey {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct SkinDocumentDependencyFingerprint {
+    number_values: BTreeMap<i32, i32>,
     option_values: BTreeMap<i32, bool>,
     file_values: BTreeMap<String, String>,
     loaded_files: BTreeMap<PathBuf, SkinLoadedFileDependency>,
@@ -1372,7 +1373,12 @@ fn lr2_document_dependency_fingerprint(
         .collect();
     let loaded_files = current_loaded_file_dependencies(&dependencies.loaded_files)
         .context("failed to inspect lr2 skin loaded file dependencies")?;
-    Ok(SkinDocumentDependencyFingerprint { option_values, file_values, loaded_files })
+    Ok(SkinDocumentDependencyFingerprint {
+        number_values: BTreeMap::new(),
+        option_values,
+        file_values,
+        loaded_files,
+    })
 }
 
 fn document_dependency_fingerprint(
@@ -1384,6 +1390,14 @@ fn document_dependency_fingerprint(
 ) -> Option<SkinDocumentDependencyFingerprint> {
     let enabled_options = enabled_options_from_selections(document, options);
     let property_ops = document_property_ops(document);
+    let number_values = dependencies
+        .number_values
+        .keys()
+        .map(|ref_id| {
+            let value = runtime_state.number_values.get(ref_id).copied().unwrap_or_default();
+            (*ref_id, value)
+        })
+        .collect();
     let option_values = dependencies
         .option_values
         .keys()
@@ -1402,7 +1416,12 @@ fn document_dependency_fingerprint(
         .map(|name| (name.clone(), files.get(name).cloned().unwrap_or_default()))
         .collect();
     let loaded_files = current_loaded_file_dependencies(&dependencies.loaded_files).ok()?;
-    Some(SkinDocumentDependencyFingerprint { option_values, file_values, loaded_files })
+    Some(SkinDocumentDependencyFingerprint {
+        number_values,
+        option_values,
+        file_values,
+        loaded_files,
+    })
 }
 
 fn document_property_ops(document: &SkinDocument) -> HashSet<i32> {
@@ -3283,6 +3302,48 @@ mod tests {
             bmz_render::plan::DrawCommand::Rect { rect, .. }
                 if rect.x > 0.70 && rect.y > 0.20 && rect.y < 0.55
         )));
+    }
+
+    #[test]
+    fn starseeker_result_misscount_diff_uses_runtime_number_color_block() {
+        let skin_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../data/skins/Starseeker/result/result.luaskin");
+        if !skin_path.is_file() {
+            return;
+        }
+
+        let options = BTreeMap::from([
+            ("F/Sリスト".to_string(), "Default".to_string()),
+            ("逆サイド詳細フレーム".to_string(), "ON".to_string()),
+            ("プレーサイド".to_string(), "1P".to_string()),
+        ]);
+        let files = BTreeMap::from([
+            ("使用テーマ".to_string(), "Theme/starseeker".to_string()),
+            ("フォント".to_string(), "_font/TYPE-M".to_string()),
+            ("シャッター".to_string(), "Shutter/TYPE-M".to_string()),
+        ]);
+        let runtime_state = LuaLoadRuntimeState {
+            number_values: BTreeMap::from([(178, -1)]),
+            option_values: BTreeMap::new(),
+        };
+        let decoded = decode_beatoraja_skin_with_options_and_runtime_state(
+            &skin_path,
+            SkinKind::Result,
+            &options,
+            &files,
+            &runtime_state,
+        )
+        .expect("decode starseeker result skin with misscount diff");
+
+        let diff_misscount = decoded
+            .document
+            .value
+            .iter()
+            .find(|value| value.id == "Diff_Misscount")
+            .expect("starseeker result should define Diff_Misscount");
+
+        assert_eq!(diff_misscount.ref_id, 178);
+        assert_eq!(diff_misscount.y, 345);
     }
 
     #[test]
@@ -5470,6 +5531,60 @@ return {
     }
 
     #[test]
+    fn lua_document_cache_misses_when_runtime_number_changes() {
+        let root = unique_test_dir("bmz-lua-document-cache-number");
+        std::fs::create_dir_all(&root).unwrap();
+        let skin_path = root.join("result.luaskin");
+        std::fs::write(
+            &skin_path,
+            r#"
+local main_state = require("main_state")
+local diff = main_state.number(178)
+return {
+    type = 7,
+    source = {
+        { id = "bg", path = diff == 0 and "zero.png" or "nonzero.png" },
+    },
+}
+"#,
+        )
+        .unwrap();
+        let cache = Arc::new(Mutex::new(SkinDocumentCache::default()));
+
+        let zero_state = LuaLoadRuntimeState {
+            number_values: BTreeMap::from([(178, 0)]),
+            option_values: BTreeMap::new(),
+        };
+        let first = load_skin_document(
+            &skin_path,
+            SkinKind::Result,
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            &zero_state,
+            Some(cache.clone()),
+        )
+        .unwrap();
+        assert_eq!(first.cache_status, DocumentCacheStatus::Miss);
+        assert_eq!(first.document.source[0].path, "zero.png");
+
+        let nonzero_state = LuaLoadRuntimeState {
+            number_values: BTreeMap::from([(178, -1)]),
+            option_values: BTreeMap::new(),
+        };
+        let second = load_skin_document(
+            &skin_path,
+            SkinKind::Result,
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            &nonzero_state,
+            Some(cache),
+        )
+        .unwrap();
+        assert_eq!(second.cache_status, DocumentCacheStatus::Miss);
+        assert_eq!(second.document.source[0].path, "nonzero.png");
+    }
+
+    #[test]
     fn lua_document_cache_misses_when_used_file_selection_changes() {
         let root = unique_test_dir("bmz-lua-document-cache-file");
         std::fs::create_dir_all(root.join("parts")).unwrap();
@@ -5509,7 +5624,10 @@ return {
         assert_eq!(first.cache_status, DocumentCacheStatus::Miss);
         assert_eq!(
             first.document.source[0].path,
-            root.join("parts/blue.png").to_string_lossy().to_string()
+            std::fs::canonicalize(root.join("parts/blue.png"))
+                .unwrap()
+                .to_string_lossy()
+                .to_string()
         );
 
         let selected = BTreeMap::from([("Parts".to_string(), "red.png".to_string())]);
@@ -5525,7 +5643,10 @@ return {
         assert_eq!(second.cache_status, DocumentCacheStatus::Miss);
         assert_eq!(
             second.document.source[0].path,
-            root.join("parts/red.png").to_string_lossy().to_string()
+            std::fs::canonicalize(root.join("parts/red.png"))
+                .unwrap()
+                .to_string_lossy()
+                .to_string()
         );
     }
 

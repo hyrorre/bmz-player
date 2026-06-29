@@ -424,6 +424,11 @@ fn install_sandbox(
             main_state_probe.lock().map_err(|_| anyhow!("main_state probe lock poisoned"))?;
         probe.load_dependencies = Some(load_dependencies);
     }
+    if !runtime_state.number_values.is_empty() {
+        let mut probe =
+            main_state_probe.lock().map_err(|_| anyhow!("main_state probe lock poisoned"))?;
+        probe.number_values = runtime_state.number_values.clone();
+    }
     if !runtime_state.option_values.is_empty() {
         let mut probe =
             main_state_probe.lock().map_err(|_| anyhow!("main_state probe lock poisoned"))?;
@@ -896,7 +901,15 @@ impl MainStateProbe {
 
     fn number(&mut self, ref_id: i32) -> i32 {
         match self.mode {
-            MainStateProbeMode::RuntimeStub => lua_runtime_stub_number(ref_id),
+            MainStateProbeMode::RuntimeStub => {
+                let value = self
+                    .number_values
+                    .get(&ref_id)
+                    .copied()
+                    .unwrap_or_else(|| lua_runtime_stub_number(ref_id));
+                self.record_load_time_number_dependency(ref_id, value);
+                value
+            }
             MainStateProbeMode::SymbolicNumbers { base_value } => {
                 self.number_calls.push(ref_id);
                 self.number_values.get(&ref_id).copied().unwrap_or(base_value + ref_id)
@@ -928,6 +941,14 @@ impl MainStateProbe {
             .copied()
             .or_else(|| self.option_values.get(&i32::MIN).copied())
             .unwrap_or(false)
+    }
+
+    fn record_load_time_number_dependency(&self, ref_id: i32, value: i32) {
+        if let Some(dependencies) = &self.load_dependencies
+            && let Ok(mut dependencies) = dependencies.lock()
+        {
+            dependencies.number_values.insert(ref_id, value);
+        }
     }
 
     fn record_load_time_option_dependency(&self, option_id: i32, value: bool) {

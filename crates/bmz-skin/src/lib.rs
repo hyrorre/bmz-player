@@ -42,6 +42,7 @@ pub struct LoadedLuaSkinValue {
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct SkinLoadDependencies {
+    pub number_values: BTreeMap<i32, i32>,
     pub option_values: BTreeMap<i32, bool>,
     pub files: BTreeSet<String>,
     pub loaded_files: BTreeMap<PathBuf, SkinLoadedFileDependency>,
@@ -56,6 +57,7 @@ pub struct SkinLoadedFileDependency {
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct LuaLoadRuntimeState {
+    pub number_values: BTreeMap<i32, i32>,
     pub option_values: BTreeMap<i32, bool>,
 }
 
@@ -507,7 +509,10 @@ mod tests {
             &root.join("result.luaskin"),
             &BTreeMap::new(),
             &BTreeMap::new(),
-            &LuaLoadRuntimeState { option_values: BTreeMap::from([(1008, true)]) },
+            &LuaLoadRuntimeState {
+                number_values: BTreeMap::new(),
+                option_values: BTreeMap::from([(1008, true)]),
+            },
         )
         .unwrap();
 
