@@ -12,6 +12,7 @@ use crate::model::{
     NoteEvent, NoteKind, PlayableChart, ScrollEvent, SoundAssetRef, SoundEvent, SpeedEvent,
     SwBgaDefinition, TimingEvent, TimingEventKind,
 };
+use crate::sound_asset::sound_asset_exists;
 use crate::timing::{TickTimingEvent, TickTimingEventKind, TimingMap, build_timing_map};
 
 use super::error::{ImportError, ImportWarning};
@@ -186,7 +187,7 @@ fn build_sound_table(
     for wav in &intermediate.resources.wavs {
         let id = SoundId(assets.len() as u32);
         let path = if wav.path.is_absolute() { wav.path.clone() } else { base_dir.join(&wav.path) };
-        if check_resource_existence && !path.exists() {
+        if check_resource_existence && !sound_asset_exists(&path) {
             warnings.push(ImportWarning::MissingSoundFile { path: path.clone() });
         }
         by_wav_key.insert(wav.key, id);

@@ -5,6 +5,7 @@ pub mod hash;
 pub mod import;
 pub mod model;
 pub mod practice;
+pub mod sound_asset;
 pub mod text;
 pub mod timing;
 pub mod volume;

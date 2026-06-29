@@ -179,6 +179,27 @@ mod tests {
     }
 
     #[test]
+    fn import_sound_existence_check_uses_beatoraja_extension_candidates() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("sound-fallback.bms");
+        let text = "\
+#TITLE Sound Fallback
+#BPM 120
+#TOTAL 200
+#WAV01 key.wav
+#00111:01
+";
+        std::fs::write(&path, text).unwrap();
+        write_temp_file(&dir.path().join("key.flac"));
+
+        let result = import_bms_chart(&path, None, true).unwrap();
+
+        assert!(result.warnings.is_empty(), "warnings: {:?}", result.warnings);
+        assert_eq!(result.chart.sounds.len(), 1);
+        assert_eq!(result.chart.sounds[0].path, dir.path().join("key.wav"));
+    }
+
+    #[test]
     fn imports_simultaneous_base_and_poor_bga_events() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("simultaneous-bga.bms");

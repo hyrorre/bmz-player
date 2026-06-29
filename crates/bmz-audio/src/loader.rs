@@ -1,6 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use bmz_chart::model::{PlayableChart, SoundAssetRef};
+use bmz_chart::sound_asset::sound_asset_candidates;
 use bmz_chart::volume::volwav_factor;
 use thiserror::Error;
 
@@ -62,46 +63,40 @@ fn load_asset(
     loader: &mut dyn SampleLoader,
     volwav: f32,
 ) -> LoadedSampleReport {
-    let resolved = resolve_sample_path(&asset.path);
-    let path = resolved.as_deref().unwrap_or(&asset.path);
-    match loader.load(path) {
-        Ok(mut sample) => {
-            sample.apply_gain(volwav);
-            engine.insert_sample(asset.id, sample);
-            LoadedSampleReport { path: path.to_path_buf(), status: LoadedSampleStatus::Loaded }
-        }
-        Err(error) => LoadedSampleReport {
-            path: path.to_path_buf(),
+    let candidates = sound_asset_candidates(&asset.path);
+    if candidates.is_empty() {
+        let error = SampleLoadError::Io {
+            path: asset.path.clone(),
+            source: std::io::Error::new(std::io::ErrorKind::NotFound, "sample file not found"),
+        };
+        return LoadedSampleReport {
+            path: asset.path.clone(),
             status: LoadedSampleStatus::Failed(error.to_string()),
-        },
-    }
-}
-
-/// `#WAV` で指定された音声ファイルの拡張子フォールバック候補。
-/// BMS では `#WAV01 foo.wav` と書かれていても実体が `foo.ogg` 等のことがあるため、
-/// 指定ファイルが見つからない場合はこの順で同名ファイルを探す。
-const SAMPLE_EXTENSION_CANDIDATES: [&str; 4] = ["wav", "ogg", "flac", "mp3"];
-
-/// `#WAV` 指定パスが存在しない場合に、同じ stem で拡張子違いのファイルを探す。
-/// 元のパスがそのまま使えるなら `None` を返す。
-fn resolve_sample_path(path: &Path) -> Option<PathBuf> {
-    if path.exists() {
-        return None;
+        };
     }
 
-    let original_ext = path.extension().and_then(|ext| ext.to_str()).map(str::to_ascii_lowercase);
-    for candidate_ext in SAMPLE_EXTENSION_CANDIDATES {
-        // 元の拡張子と同じものは存在しないと確定済みなのでスキップ。
-        if original_ext.as_deref() == Some(candidate_ext) {
-            continue;
-        }
-        let candidate = path.with_extension(candidate_ext);
-        if candidate.exists() {
-            return Some(candidate);
+    let mut last_error = None;
+    let mut last_path = asset.path.clone();
+    for path in candidates {
+        last_path = path.clone();
+        match loader.load(&path) {
+            Ok(mut sample) => {
+                sample.apply_gain(volwav);
+                engine.insert_sample(asset.id, sample);
+                return LoadedSampleReport { path, status: LoadedSampleStatus::Loaded };
+            }
+            Err(error) => last_error = Some(error),
         }
     }
 
-    None
+    LoadedSampleReport {
+        path: last_path,
+        status: LoadedSampleStatus::Failed(
+            last_error
+                .map(|error| error.to_string())
+                .unwrap_or_else(|| "sample file not found".to_string()),
+        ),
+    }
 }
 
 fn decode_wav(path: &Path, bytes: &[u8]) -> Result<DecodedSample, SampleLoadError> {
@@ -224,10 +219,19 @@ mod tests {
     #[derive(Default)]
     struct TestLoader {
         samples: HashMap<PathBuf, DecodedSample>,
+        failures: HashMap<PathBuf, String>,
+        attempts: Vec<PathBuf>,
     }
 
     impl SampleLoader for TestLoader {
         fn load(&mut self, path: &Path) -> Result<DecodedSample, SampleLoadError> {
+            self.attempts.push(path.to_path_buf());
+            if let Some(message) = self.failures.get(path) {
+                return Err(SampleLoadError::Decode {
+                    path: path.to_path_buf(),
+                    message: message.clone(),
+                });
+            }
             self.samples.get(path).cloned().ok_or_else(|| SampleLoadError::Decode {
                 path: path.to_path_buf(),
                 message: "missing test sample".to_string(),
@@ -238,12 +242,18 @@ mod tests {
     #[test]
     fn load_chart_samples_inserts_loaded_samples_and_reports_failures() {
         let mut engine = AudioEngine::default();
-        let chart = chart();
+        let dir = temp_dir("load-samples");
+        let ok_path = dir.join("ok.wav");
+        let missing_path = dir.join("missing.wav");
+        std::fs::write(&ok_path, b"dummy").unwrap();
+        let chart = chart_with_sounds(vec![
+            SoundAssetRef { id: SoundId(1), path: ok_path.clone() },
+            SoundAssetRef { id: SoundId(2), path: missing_path.clone() },
+        ]);
         let mut loader = TestLoader::default();
-        loader.samples.insert(
-            PathBuf::from("ok.wav"),
-            DecodedSample { channels: 1, sample_rate: 48_000, frames: vec![1.0] },
-        );
+        loader
+            .samples
+            .insert(ok_path, DecodedSample { channels: 1, sample_rate: 48_000, frames: vec![1.0] });
 
         let report = load_chart_samples(&mut engine, &chart, &mut loader);
 
@@ -252,16 +262,21 @@ mod tests {
         assert!(matches!(report[1].status, LoadedSampleStatus::Failed(_)));
         assert!(engine.samples.get(SoundId(1)).is_some());
         assert!(engine.samples.get(SoundId(2)).is_none());
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
     fn load_chart_samples_applies_volwav_gain() {
         let mut engine = AudioEngine::default();
-        let mut chart = chart();
+        let dir = temp_dir("volwav");
+        let ok_path = dir.join("ok.wav");
+        std::fs::write(&ok_path, b"dummy").unwrap();
+        let mut chart =
+            chart_with_sounds(vec![SoundAssetRef { id: SoundId(1), path: ok_path.clone() }]);
         chart.metadata.volwav_percent = 50;
         let mut loader = TestLoader::default();
         loader.samples.insert(
-            PathBuf::from("ok.wav"),
+            ok_path,
             DecodedSample { channels: 1, sample_rate: 48_000, frames: vec![1.0, -1.0] },
         );
 
@@ -270,6 +285,7 @@ mod tests {
         let sample = engine.samples.get(SoundId(1)).unwrap();
         assert_eq!(sample.frames[0], 0.5);
         assert_eq!(sample.frames[1], -0.5);
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
@@ -309,33 +325,64 @@ mod tests {
     }
 
     #[test]
-    fn resolve_sample_path_falls_back_to_other_extensions() {
-        let dir = std::env::temp_dir().join(format!(
-            "bmz-audio-resolve-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
-        ));
-        std::fs::create_dir_all(&dir).unwrap();
+    fn sound_asset_candidates_follow_beatoraja_audio_order() {
+        let dir = temp_dir("audio-order");
 
-        // #WAV では foo.wav を指定するが、実体は foo.ogg。
+        // #WAV では foo.wav を指定するが、実体は複数候補。
         let requested = dir.join("foo.wav");
-        let actual = dir.join("foo.ogg");
-        std::fs::write(&actual, b"dummy").unwrap();
+        let flac = dir.join("foo.flac");
+        let ogg = dir.join("foo.ogg");
+        let mp3 = dir.join("foo.mp3");
+        std::fs::write(&ogg, b"dummy").unwrap();
+        std::fs::write(&flac, b"dummy").unwrap();
+        std::fs::write(&mp3, b"dummy").unwrap();
 
-        assert_eq!(resolve_sample_path(&requested), Some(actual));
+        assert_eq!(sound_asset_candidates(&requested), vec![flac, ogg, mp3]);
 
-        // 指定ファイルが存在するならフォールバックしない。
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn sound_asset_candidates_keep_declared_file_first() {
+        let dir = temp_dir("declared-first");
+
+        let requested = dir.join("foo.ogg");
+        let wav = dir.join("foo.wav");
         std::fs::write(&requested, b"dummy").unwrap();
-        assert_eq!(resolve_sample_path(&requested), None);
+        std::fs::write(&wav, b"dummy").unwrap();
 
-        // 候補が一つも無ければ None。
-        let missing = dir.join("bar.wav");
-        assert_eq!(resolve_sample_path(&missing), None);
+        assert_eq!(sound_asset_candidates(&requested), vec![requested, wav]);
 
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
-    fn chart() -> PlayableChart {
+    #[test]
+    fn load_chart_samples_retries_decoding_candidates_in_order() {
+        let mut engine = AudioEngine::default();
+        let dir = temp_dir("decode-retry");
+        let requested = dir.join("foo.wav");
+        let fallback = dir.join("foo.flac");
+        std::fs::write(&requested, b"invalid").unwrap();
+        std::fs::write(&fallback, b"valid").unwrap();
+        let chart =
+            chart_with_sounds(vec![SoundAssetRef { id: SoundId(1), path: requested.clone() }]);
+        let mut loader = TestLoader::default();
+        loader.failures.insert(requested.clone(), "decode failed".to_string());
+        loader.samples.insert(
+            fallback.clone(),
+            DecodedSample { channels: 1, sample_rate: 48_000, frames: vec![0.5] },
+        );
+
+        let report = load_chart_samples(&mut engine, &chart, &mut loader);
+
+        assert_eq!(loader.attempts, vec![requested, fallback.clone()]);
+        assert_eq!(report[0].path, fallback);
+        assert!(matches!(report[0].status, LoadedSampleStatus::Loaded));
+        assert!(engine.samples.get(SoundId(1)).is_some());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    fn chart_with_sounds(sounds: Vec<SoundAssetRef>) -> PlayableChart {
         PlayableChart {
             identity: compute_chart_identity(b"samples"),
             metadata: ChartMetadata {
@@ -360,14 +407,21 @@ mod tests {
             bga_keybound_events: Vec::new(),
             bga_asset_by_bmp_key: std::collections::HashMap::new(),
             bar_lines: Vec::new(),
-            sounds: vec![
-                SoundAssetRef { id: SoundId(1), path: PathBuf::from("ok.wav") },
-                SoundAssetRef { id: SoundId(2), path: PathBuf::from("missing.wav") },
-            ],
+            sounds,
             bga_assets: Vec::new(),
             total_notes: 0,
             end_time: TimeUs(0),
         }
+    }
+
+    fn temp_dir(label: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "bmz-audio-{label}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
     }
 
     fn wav_header(

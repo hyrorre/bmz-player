@@ -97,10 +97,34 @@ mod tests {
     }
 
     #[test]
+    fn resolves_existing_declared_image_by_beatoraja_order() {
+        let dir = temp_dir("existing-image-order");
+        std::fs::write(dir.join("bga.bmp"), b"bmp").unwrap();
+        std::fs::write(dir.join("bga.jpg"), b"jpg").unwrap();
+
+        let resolved = resolve_bga_asset_path(&dir, Path::new("bga.bmp"));
+
+        assert_eq!(resolved.as_deref(), Some(dir.join("bga.jpg").as_path()));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
     fn resolves_declared_video_to_same_stem_video_by_beatoraja_order() {
         let dir = temp_dir("video-order");
         std::fs::write(dir.join("movie.mp4"), b"mp4").unwrap();
         std::fs::write(dir.join("movie.avi"), b"avi").unwrap();
+
+        let resolved = resolve_bga_asset_path(&dir, Path::new("movie.mpg"));
+
+        assert_eq!(resolved.as_deref(), Some(dir.join("movie.mp4").as_path()));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn resolves_existing_declared_video_by_beatoraja_order() {
+        let dir = temp_dir("existing-video-order");
+        std::fs::write(dir.join("movie.mpg"), b"mpg").unwrap();
+        std::fs::write(dir.join("movie.mp4"), b"mp4").unwrap();
 
         let resolved = resolve_bga_asset_path(&dir, Path::new("movie.mpg"));
 
