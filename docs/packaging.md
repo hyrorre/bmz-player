@@ -94,6 +94,9 @@ Rust crate の license report は `cargo-about` で
 cargo install --locked --features cli cargo-about
 ```
 
+egui のライセンス表記は `resources/licenses/third-party-notices.txt` と
+`resources/licenses/rust-dependency-licenses.txt` を連結して表示する。
+
 既定の installer 出力先:
 
 ```text
@@ -229,6 +232,9 @@ artifact を作る環境では先に入れておく:
 ```sh
 cargo install --locked --features cli cargo-about
 ```
+
+egui のライセンス表記は `Contents/Resources/licenses/third-party-notices.txt` と
+`Contents/Resources/licenses/rust-dependency-licenses.txt` を連結して表示する。
 
 ### Options
 
@@ -394,6 +400,7 @@ Flatpak layout:
     BMZ-GPL-3.0-only.txt
     license-notes.md
     third-party-notices.txt
+    rust-dependency-licenses.txt  # pre-generated when available
 /app/share/applications/net.hyrorre.BMZPlayer.desktop
 /app/share/metainfo/net.hyrorre.BMZPlayer.metainfo.xml
 /app/share/icons/hicolor/256x256/apps/net.hyrorre.BMZPlayer.png

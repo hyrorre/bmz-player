@@ -41,6 +41,7 @@ modules:
       - install -Dm644 LICENSE /app/share/bmz-player/licenses/BMZ-GPL-3.0-only.txt
       - install -Dm644 docs/licenses.md /app/share/bmz-player/licenses/license-notes.md
       - install -Dm644 THIRD-PARTY-NOTICES.txt /app/share/bmz-player/licenses/third-party-notices.txt
+      - if [ -f rust-dependency-licenses.txt ]; then install -Dm644 rust-dependency-licenses.txt /app/share/bmz-player/licenses/rust-dependency-licenses.txt; fi
     sources:
       - type: dir
         path: ../..

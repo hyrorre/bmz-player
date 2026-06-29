@@ -5,6 +5,7 @@
 //! プリミティブをゲーム / スキン描画の上にペイントするだけにする。
 
 use std::collections::BTreeMap;
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -42,7 +43,10 @@ use crate::songs_cmd::add_song_root_entry;
 use crate::storage::score_import::{ScoreImportKind, ScoreImportRequest};
 use crate::update::{UpdateAssetKind, UpdateCandidate, current_version};
 
-const THIRD_PARTY_NOTICES: &str = include_str!("../../../THIRD-PARTY-NOTICES.txt");
+const BUNDLED_THIRD_PARTY_NOTICES: &str = include_str!("../../../THIRD-PARTY-NOTICES.txt");
+const THIRD_PARTY_NOTICE_PATH: &str = "licenses/third-party-notices.txt";
+const RUST_DEPENDENCY_LICENSE_PATH: &str = "licenses/rust-dependency-licenses.txt";
+const LOCAL_RUST_DEPENDENCY_LICENSE_FILE: &str = "rust-dependency-licenses.txt";
 
 /// スキンが宣言する設定可能項目の定義 (1 シーン分)。
 ///
@@ -350,6 +354,8 @@ pub struct EguiLayer {
     show_skin: bool,
     /// ライセンス / third-party notice 表示パネルの開閉状態。
     show_license_notice: bool,
+    /// ライセンス表示パネルに出す結合済み notice text。
+    license_notice_text: Option<String>,
     update_dialog_active: bool,
     /// 本体設定パネル: 曲フォルダ追加用の入力欄。
     settings_new_root_path: String,
@@ -676,6 +682,7 @@ impl EguiLayer {
             show_profile_settings: false,
             show_skin: false,
             show_license_notice: false,
+            license_notice_text: None,
             update_dialog_active: false,
             settings_new_root_path: String::new(),
             settings_add_root_error: String::new(),
@@ -753,6 +760,7 @@ impl EguiLayer {
         let show_profile_settings = &mut self.show_profile_settings;
         let show_skin = &mut self.show_skin;
         let show_license_notice = &mut self.show_license_notice;
+        let license_notice_text = &mut self.license_notice_text;
         let mut save_app_config = false;
         let mut save_profile_config = false;
         let mut reset_skin_config = false;
@@ -809,7 +817,12 @@ impl EguiLayer {
                     app_paths,
                     directory_open_status,
                 );
-                build_third_party_notice_panel(ctx, show_license_notice);
+                build_third_party_notice_panel(
+                    ctx,
+                    show_license_notice,
+                    app_paths,
+                    license_notice_text,
+                );
                 build_debug_panel(ctx, show_debug, info);
                 let settings_actions = build_settings_panel(
                     ctx,
@@ -964,11 +977,17 @@ fn build_menu(
         });
 }
 
-fn build_third_party_notice_panel(ctx: &egui::Context, open: &mut bool) {
+fn build_third_party_notice_panel(
+    ctx: &egui::Context,
+    open: &mut bool,
+    app_paths: &AppPaths,
+    notice_text: &mut Option<String>,
+) {
     if !*open {
         return;
     }
-    let mut notice = THIRD_PARTY_NOTICES;
+    let notice = notice_text.get_or_insert_with(|| combined_license_notice_text(app_paths));
+    let mut notice = notice.as_str();
     sized_panel_window("ライセンス表記", ctx, open, 620.0, 560.0, egui::pos2(936.0, 320.0)).show(
         ctx,
         |ui| {
@@ -982,6 +1001,54 @@ fn build_third_party_notice_panel(ctx: &egui::Context, open: &mut bool) {
             });
         },
     );
+}
+
+fn combined_license_notice_text(app_paths: &AppPaths) -> String {
+    combined_license_notice_text_with_repo_root(app_paths, &repo_root())
+}
+
+fn combined_license_notice_text_with_repo_root(app_paths: &AppPaths, repo_root: &Path) -> String {
+    let third_party = third_party_notice_text(app_paths);
+    let rust_dependencies = rust_dependency_license_text(app_paths, repo_root);
+
+    format!(
+        "{third_party}\n\n\n================================================================\nGenerated Rust Dependency License Report\n================================================================\n\n{rust_dependencies}"
+    )
+}
+
+fn third_party_notice_text(app_paths: &AppPaths) -> String {
+    let packaged = app_paths.resource_dir.join(THIRD_PARTY_NOTICE_PATH);
+    read_non_empty_text(&packaged).unwrap_or_else(|| BUNDLED_THIRD_PARTY_NOTICES.to_string())
+}
+
+fn rust_dependency_license_text(app_paths: &AppPaths, repo_root: &Path) -> String {
+    let packaged = app_paths.resource_dir.join(RUST_DEPENDENCY_LICENSE_PATH);
+    if let Some(text) = read_non_empty_text(&packaged) {
+        return text;
+    }
+
+    let local = repo_root.join(LOCAL_RUST_DEPENDENCY_LICENSE_FILE);
+    if let Some(text) = read_non_empty_text(&local) {
+        return text;
+    }
+
+    missing_rust_dependency_license_text(&packaged, &local)
+}
+
+fn read_non_empty_text(path: &Path) -> Option<String> {
+    fs::read_to_string(path).ok().filter(|text| !text.trim().is_empty())
+}
+
+fn missing_rust_dependency_license_text(packaged: &Path, local: &Path) -> String {
+    format!(
+        "BMZ Player Rust Dependency Licenses\n===================================\n\nThe generated Rust dependency license report was not found.\n\nExpected packaged path:\n  {}\n\nLocal development fallback:\n  {}\n\nGenerate it from the repository root with:\n\n  cargo-about generate --workspace --locked --fail \\\n    --output-file rust-dependency-licenses.txt \\\n    about.hbs\n",
+        packaged.display(),
+        local.display()
+    )
+}
+
+fn repo_root() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
 }
 
 fn directory_open_targets(app_paths: &AppPaths) -> [DirectoryOpenTarget<'_>; 4] {
@@ -5034,6 +5101,68 @@ mod tests {
                 app_paths.logs_dir.as_path(),
             ]
         );
+    }
+
+    #[test]
+    fn combined_license_notice_uses_packaged_notice_files() {
+        let root = unique_test_dir("bmz-ui-license-packaged");
+        let resource_dir = root.join("resources");
+        let license_dir = resource_dir.join("licenses");
+        fs::create_dir_all(&license_dir).unwrap();
+        fs::write(license_dir.join("third-party-notices.txt"), "packaged third party").unwrap();
+        fs::write(license_dir.join("rust-dependency-licenses.txt"), "packaged rust report")
+            .unwrap();
+        let app_paths = AppPaths::from_dirs(
+            resource_dir,
+            root.join("data"),
+            root.join("cache"),
+            root.join("logs"),
+        );
+
+        let notice = combined_license_notice_text_with_repo_root(&app_paths, &root);
+
+        assert!(notice.contains("packaged third party"));
+        assert!(notice.contains("packaged rust report"));
+        assert!(!notice.contains("The generated Rust dependency license report was not found."));
+    }
+
+    #[test]
+    fn combined_license_notice_uses_local_rust_report_for_development() {
+        let root = unique_test_dir("bmz-ui-license-local");
+        let resource_dir = root.join("resources");
+        let license_dir = resource_dir.join("licenses");
+        fs::create_dir_all(&license_dir).unwrap();
+        fs::write(license_dir.join("third-party-notices.txt"), "packaged third party").unwrap();
+        fs::write(root.join("rust-dependency-licenses.txt"), "local rust report").unwrap();
+        let app_paths = AppPaths::from_dirs(
+            resource_dir,
+            root.join("data"),
+            root.join("cache"),
+            root.join("logs"),
+        );
+
+        let notice = combined_license_notice_text_with_repo_root(&app_paths, &root);
+
+        assert!(notice.contains("packaged third party"));
+        assert!(notice.contains("local rust report"));
+        assert!(!notice.contains("The generated Rust dependency license report was not found."));
+    }
+
+    #[test]
+    fn combined_license_notice_explains_missing_rust_report() {
+        let root = unique_test_dir("bmz-ui-license-missing");
+        let app_paths = AppPaths::from_dirs(
+            root.join("resources"),
+            root.join("data"),
+            root.join("cache"),
+            root.join("logs"),
+        );
+
+        let notice = combined_license_notice_text_with_repo_root(&app_paths, &root);
+
+        assert!(notice.contains("BMZ Player Third-Party Notices"));
+        assert!(notice.contains("The generated Rust dependency license report was not found."));
+        assert!(notice.contains("cargo-about generate --workspace --locked --fail"));
     }
 
     #[test]

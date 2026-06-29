@@ -97,27 +97,30 @@ Third-party skins copied under `data/skins/` for manual compatibility testing re
 
 ## Third-party Notices
 
-Release artifacts include a human-readable notice entrypoint:
+Release artifacts include human-readable license notice files:
 
-- Repository source: `THIRD-PARTY-NOTICES.txt`
-- Packaged path on Windows portable / installer staging:
+- Non-Cargo notice source: `THIRD-PARTY-NOTICES.txt`
+- Non-Cargo notice path on Windows portable / installer staging:
   `resources/licenses/third-party-notices.txt`
-- Packaged path inside macOS app bundles:
+- Non-Cargo notice path inside macOS app bundles:
   `Contents/Resources/licenses/third-party-notices.txt`
 - Generated Rust dependency report on Windows portable / installer staging:
   `resources/licenses/rust-dependency-licenses.txt`
 - Generated Rust dependency report inside macOS app bundles:
   `Contents/Resources/licenses/rust-dependency-licenses.txt`
 
-The application may also show the same notice text in egui. In-app display is
-useful, but it should not replace shipping a readable text file in the release
+The egui license panel reads the packaged `third-party-notices.txt` and
+`rust-dependency-licenses.txt` from `resource_dir/licenses/` and displays them
+together. Local development can use a repository-root
+`rust-dependency-licenses.txt` generated with the command below. In-app display
+is useful, but it should not replace shipping readable text files in the release
 artifact because users must be able to inspect notices outside the running app.
 
-`THIRD-PARTY-NOTICES.txt` is the hand-maintained top-level notice for major
-bundled components such as BMZ Player, FFmpeg, ASIO SDK, bundled skins, and
-notable bridge crates. Before a public binary release, also generate a complete
-Rust dependency license report from the exact release lockfile and include it in
-the package as `rust-dependency-licenses.txt`.
+`THIRD-PARTY-NOTICES.txt` is the hand-maintained notice for bundled components
+that are not covered by Cargo crate metadata, such as FFmpeg, the ASIO SDK, and
+bundled skins. Before a public binary release, also generate a complete Rust
+dependency license report from the exact release lockfile and include it in the
+package as `rust-dependency-licenses.txt`.
 
 BMZ Player uses `cargo-about` for the Rust dependency report:
 

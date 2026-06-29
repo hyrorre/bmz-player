@@ -1,23 +1,20 @@
 BMZ Player Third-Party Notices
 ==============================
 
-This file is the human-readable notice entrypoint for BMZ Player binary
-distributions. It is not legal advice.
+This file covers third-party notices that are not generated from Cargo crate
+metadata, such as FFmpeg, the ASIO SDK, and bundled skin assets. It is not legal
+advice.
 
-Public releases include a complete Rust dependency license report generated from
-the exact Cargo.lock used for the build:
+Rust crate license texts are generated separately with cargo-about and are
+packaged next to this file:
 
+  resources/licenses/third-party-notices.txt
   resources/licenses/rust-dependency-licenses.txt
+  Contents/Resources/licenses/third-party-notices.txt
   Contents/Resources/licenses/rust-dependency-licenses.txt
 
-
-BMZ Player
-----------
-
-BMZ Player source code is licensed under GPL-3.0-only.
-
-Full license text:
-  LICENSE
+The BMZ Player in-app license panel displays this file together with the
+generated Rust dependency license report when that report is present.
 
 
 FFmpeg
@@ -43,7 +40,8 @@ Legal information:
 ASIO SDK
 --------
 
-BMZ Player's Windows ASIO support is built through cpal/asio and asio-sys.
+BMZ Player's Windows ASIO support uses the Steinberg ASIO SDK through Rust
+audio integration crates.
 
 Steinberg's public ASIO open-source license page states that ASIO technology is
 available under GPLv3. The ASIO name and logo are Steinberg trademarks; use of
@@ -56,26 +54,6 @@ BMZ Player uses "ASIO" only descriptively, for example "ASIO support" or
 Project:
   https://www.steinberg.net/developers/asiosdk-open/
   https://www.steinberg.net/asiosdk
-
-
-asio-sys
---------
-
-asio-sys provides low-level bindings and build integration for the Steinberg
-ASIO SDK. asio-sys is licensed under Apache-2.0.
-
-Project:
-  https://docs.rs/crate/asio-sys/
-
-
-cpal
-----
-
-cpal provides cross-platform audio I/O and the ASIO feature used by BMZ Player
-on Windows. cpal is licensed under Apache-2.0.
-
-Project:
-  https://github.com/RustAudio/cpal
 
 
 Bundled Skins
@@ -95,22 +73,3 @@ data/skins/mz-select:
   Bundled Git submodule for the BMZ Player distribution. Preserve readme.txt and
   the license/ directory in release packages. Bundled fonts and VOICEVOX audio
   have separate terms documented there.
-
-
-Rust Dependencies
------------------
-
-BMZ Player depends on third-party Rust crates from crates.io and other sources.
-Binary release packages include a complete dependency license report generated
-from the release Cargo.lock.
-
-Generation tool:
-  cargo-about
-
-Repository configuration:
-  about.toml
-  about.hbs
-
-Packaged report:
-  resources/licenses/rust-dependency-licenses.txt
-  Contents/Resources/licenses/rust-dependency-licenses.txt
