@@ -179,6 +179,35 @@ mod tests {
     }
 
     #[test]
+    fn imports_simultaneous_base_and_poor_bga_events() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("simultaneous-bga.bms");
+        let text = "\
+#TITLE Simultaneous BGA
+#BPM 120
+#TOTAL 200
+#WAV01 key.wav
+#BMP01 base.bmp
+#BMP02 poor.bmp
+#00004:01
+#00006:02
+#00111:01
+";
+        std::fs::write(&path, text).unwrap();
+        write_temp_file(&dir.path().join("key.wav"));
+        write_temp_file(&dir.path().join("base.bmp"));
+        write_temp_file(&dir.path().join("poor.bmp"));
+
+        let result = import_bms_chart(&path, None, true).unwrap();
+
+        assert!(result.warnings.is_empty(), "warnings: {:?}", result.warnings);
+        assert_eq!(result.chart.bga_events.len(), 2);
+        assert!(result.chart.bga_events.iter().any(|event| event.kind == BgaEventKind::Base));
+        assert!(result.chart.bga_events.iter().any(|event| event.kind == BgaEventKind::Poor));
+        assert!(result.chart.bga_events.iter().all(|event| event.tick.0 == 0 && event.time.0 == 0));
+    }
+
+    #[test]
     fn imports_mine_notes_with_damage() {
         let text = "\
 #TITLE Mine Song

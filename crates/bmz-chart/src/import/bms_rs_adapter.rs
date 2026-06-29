@@ -82,6 +82,15 @@ struct SparseBmsObject {
     id: String,
 }
 
+#[derive(Debug, Clone)]
+struct BgaMessage {
+    line_number: usize,
+    measure: u64,
+    kind: IntermediateBgaKind,
+    object_count: u64,
+    objects: Vec<SparseBmsObject>,
+}
+
 pub fn import_bms_to_intermediate(
     source_path: &Path,
     random_seed: Option<u64>,
@@ -136,6 +145,7 @@ fn import_with_layout<T: KeyLayoutMapper>(
     let has_bms_random = source_text_has_bms_random(&raw_text);
     let text = apply_beatoraja_random_control(&raw_text, random_seed, warnings);
     let lnobj_parse_text = strip_lnobj_commands(&text);
+    let bga_messages = extract_bga_message_lines(&lnobj_parse_text);
     let (parse_text, sparse_messages) =
         extract_sparse_bms_message_lines(&lnobj_parse_text, warnings);
 
@@ -153,8 +163,21 @@ fn import_with_layout<T: KeyLayoutMapper>(
         message: format!("{err:?}"),
     })?;
     inject_sparse_bms_messages::<T>(&mut bms, &sparse_messages, warnings);
+    let bga_objects = bga_messages_to_intermediate_objects(
+        &bga_messages,
+        bms_uses_base62_obj_ids(&bms),
+        warnings,
+    );
+    // bms-rs stores BGA changes in a single map keyed only by time, so simultaneous
+    // Base/Poor/Layer changes overwrite each other. Use the source-derived events instead.
+    bms.bmp.bga_changes.clear();
 
-    let mut intermediate = build_intermediate_from_bms::<T>(&bms, layout, warnings)?;
+    let mut intermediate = build_intermediate_from_bms_with_extra_bga_objects::<T>(
+        &bms,
+        layout,
+        &bga_objects,
+        warnings,
+    )?;
     intermediate.lnobj_wav_key =
         extract_lnobj_wav_key(&text, bms_uses_base62_obj_ids(&bms), warnings);
     let bms_headers = extract_bms_headers_from_text(&raw_text);
@@ -405,6 +428,15 @@ pub(crate) fn build_intermediate_from_bms<T: KeyLayoutMapper>(
     layout: ChartKeyLayout,
     warnings: &mut Vec<ImportWarning>,
 ) -> Result<IntermediateChart, ImportError> {
+    build_intermediate_from_bms_with_extra_bga_objects::<T>(bms, layout, &[], warnings)
+}
+
+fn build_intermediate_from_bms_with_extra_bga_objects<T: KeyLayoutMapper>(
+    bms: &Bms,
+    layout: ChartKeyLayout,
+    extra_bga_objects: &[IntermediateObject],
+    warnings: &mut Vec<ImportWarning>,
+) -> Result<IntermediateChart, ImportError> {
     let metadata = build_metadata(bms);
     let mut resources = build_resources(bms);
     let mut objects = Vec::new();
@@ -412,6 +444,7 @@ pub(crate) fn build_intermediate_from_bms<T: KeyLayoutMapper>(
     push_note_objects::<T>(bms, layout, &mut objects, warnings);
     push_bgm_objects::<T>(bms, &mut objects);
     push_bga_objects(bms, &mut objects);
+    objects.extend_from_slice(extra_bga_objects);
     push_bpm_change_objects(bms, &mut objects);
     push_stop_objects(bms, &mut objects, &mut resources);
     push_scroll_objects(bms, &mut objects);
@@ -629,6 +662,89 @@ fn extract_sparse_bms_message_line(
         object_count: object_count as u64,
         objects,
     })
+}
+
+fn extract_bga_message_lines(text: &str) -> Vec<BgaMessage> {
+    text.lines()
+        .enumerate()
+        .filter_map(|(line_index, line)| extract_bga_message_line(line, line_index + 1))
+        .collect()
+}
+
+fn extract_bga_message_line(line: &str, line_number: usize) -> Option<BgaMessage> {
+    let trimmed = line.trim();
+    let body = trimmed.strip_prefix('#')?;
+    let colon = body.find(':')?;
+    let head = &body[..colon];
+    if head.len() < 5 || !head.is_ascii() {
+        return None;
+    }
+    let measure_text = &head[..head.len() - 2];
+    let channel = &head[head.len() - 2..];
+    let kind = bga_kind_from_channel(channel)?;
+    let payload = body[colon + 1..].trim();
+    if payload.len() % 2 != 0 {
+        return None;
+    }
+    let object_count = payload.len() / 2;
+    if object_count == 0 {
+        return None;
+    }
+    let measure = measure_text.parse::<u64>().ok()?;
+    let mut objects = Vec::new();
+    for (index, chunk) in payload.as_bytes().chunks_exact(2).enumerate() {
+        if chunk != b"00" {
+            let id = std::str::from_utf8(chunk).ok()?.to_string();
+            objects.push(SparseBmsObject { index: index as u64, id });
+        }
+    }
+    Some(BgaMessage { line_number, measure, kind, object_count: object_count as u64, objects })
+}
+
+fn bga_kind_from_channel(channel: &str) -> Option<IntermediateBgaKind> {
+    match read_channel(&channel.to_ascii_uppercase())? {
+        Channel::BgaBase => Some(IntermediateBgaKind::Base),
+        Channel::BgaPoor => Some(IntermediateBgaKind::Poor),
+        Channel::BgaLayer => Some(IntermediateBgaKind::Layer),
+        Channel::BgaLayer2 => Some(IntermediateBgaKind::Layer2),
+        _ => None,
+    }
+}
+
+fn bga_messages_to_intermediate_objects(
+    messages: &[BgaMessage],
+    base62_obj_ids: bool,
+    warnings: &mut Vec<ImportWarning>,
+) -> Vec<IntermediateObject> {
+    let mut objects = Vec::new();
+    for message in messages {
+        for object in &message.objects {
+            let Some(time) = ObjTime::new(message.measure, object.index, message.object_count)
+            else {
+                continue;
+            };
+            let Ok(obj_id) = ObjId::try_from(&object.id, base62_obj_ids) else {
+                warnings.push(ImportWarning::ParserDiagnostic {
+                    code: "InvalidBgaObjectId".to_string(),
+                    message: format!(
+                        "line {} BGA channel has invalid object id {:?}",
+                        message.line_number, object.id
+                    ),
+                });
+                continue;
+            };
+            if obj_id.as_u16() == 0 {
+                continue;
+            }
+            objects.push(IntermediateObject {
+                measure: track_of(time),
+                position_num: time.numerator() as u32,
+                position_den: time.denominator().get() as u32,
+                kind: IntermediateObjectKind::Bga { bmp_key: obj_id.as_u16(), kind: message.kind },
+            });
+        }
+    }
+    objects
 }
 
 fn inject_sparse_bms_messages<T: KeyLayoutMapper>(
@@ -1448,6 +1564,10 @@ fn map_bms_warning(w: &BmsWarning) -> Option<ImportWarning> {
                 ParseWarning::UndefinedObject(_) => "ParseUndefinedObject",
                 ParseWarning::DuplicatingDef(_) => "ParseDuplicatingDef",
                 ParseWarning::DuplicatingTrackObj(_, _) => "ParseDuplicatingTrackObj",
+                ParseWarning::DuplicatingChannelObj(
+                    _,
+                    Channel::BgaBase | Channel::BgaPoor | Channel::BgaLayer | Channel::BgaLayer2,
+                ) => return None,
                 ParseWarning::DuplicatingChannelObj(_, _) => "ParseDuplicatingChannelObj",
                 ParseWarning::OutOfBase62 => "ParseOutOfBase62",
             };
