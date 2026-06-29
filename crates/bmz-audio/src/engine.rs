@@ -306,6 +306,7 @@ mod tests {
             loop_playback: false,
             fade_in_frames: 0,
             catch_up: false,
+            restart_policy: RestartPolicy::Overlap,
         });
 
         let reused =

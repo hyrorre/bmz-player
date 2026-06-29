@@ -3465,6 +3465,101 @@ mod tests {
     }
 
     #[test]
+    fn rmz_play7_lanecover_green_renders_green_number_when_available() {
+        let skin_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../data/skins/Rmz-skin/play7main.luaskin");
+        if !skin_path.is_file() {
+            return;
+        }
+
+        let decoded = decode_beatoraja_skin(&skin_path, SkinKind::Play).unwrap();
+        let lanecover_green_value = decoded
+            .document
+            .value
+            .iter()
+            .find(|value| value.id == "lanecover-green")
+            .expect("Rmz lanecover green value should decode");
+        assert_eq!(
+            lanecover_green_value.value_expr, "0.6*number(312)",
+            "decoded value: {lanecover_green_value:?}"
+        );
+        let source = decoded
+            .sources
+            .iter()
+            .find(|source| source.source_id == "play_system_src")
+            .expect("Rmz play system source should decode");
+        let sources = decoded
+            .sources
+            .iter()
+            .map(|source| {
+                (
+                    source.source_id.clone(),
+                    SkinDocumentTexture {
+                        source_id: source.source_id.clone(),
+                        texture: source.texture,
+                        source_size: SkinImageSize {
+                            width: source.size.width,
+                            height: source.size.height,
+                        },
+                    },
+                )
+            })
+            .collect::<std::collections::HashMap<_, _>>();
+        let state = bmz_render::skin::SkinDrawState {
+            elapsed_ms: 2_000,
+            play_timer_ms: Some(2_000),
+            total_duration_ms: 500,
+            duration_green_ms: Some(300),
+            lane_cover_changing: true,
+            lanecover_enabled: true,
+            ..Default::default()
+        };
+
+        let items = decoded.document.static_render_items(
+            &sources,
+            &state,
+            &bmz_render::skin::SkinTextState::default(),
+        );
+        let digit_width = 20.0;
+        let source_candidates = items
+            .iter()
+            .filter_map(|item| {
+                if let bmz_render::skin::SkinRenderItem::Image { texture, rect, uv, .. } = item
+                    && *texture == source.texture
+                {
+                    Some((
+                        (rect.x * 1920.0).round() as i32,
+                        (rect.y * 1080.0).round() as i32,
+                        (uv.x * source.size.width / digit_width).round() as i32,
+                        (uv.y * source.size.height).round() as i32,
+                    ))
+                } else {
+                    None
+                }
+            })
+            .collect::<Vec<_>>();
+        let mut digits = items
+            .iter()
+            .filter_map(|item| {
+                if let bmz_render::skin::SkinRenderItem::Image { texture, rect, uv, .. } = item
+                    && *texture == source.texture
+                    && (rect.y * 1080.0 - 10.0).abs() < 2.0
+                    && (rect.x * 1920.0 - 849.0).abs() < 80.0
+                {
+                    let digit = (uv.x * source.size.width / digit_width).round() as i32;
+                    Some(((rect.x * 1920.0).round() as i32, digit))
+                } else {
+                    None
+                }
+            })
+            .collect::<Vec<_>>();
+        digits.sort_by_key(|(x, _)| *x);
+        let digits = digits.into_iter().map(|(_, digit)| digit).collect::<Vec<_>>();
+
+        assert_eq!(digits, vec![3, 0, 0], "source candidates: {source_candidates:?}");
+    }
+
+    #[test]
     fn wmii_fhd_lr2skin_decodes_play_document_when_available() {
         let skin_path = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../data/skins/WMII_FHD/play/FHDPLAY_AC.lr2skin");
@@ -5531,6 +5626,85 @@ return {
     }
 
     #[test]
+    fn lua_document_cache_misses_when_required_module_option_changes() {
+        let root = unique_test_dir("bmz-lua-document-cache-required-option");
+        std::fs::create_dir_all(&root).unwrap();
+        let skin_path = root.join("play.luaskin");
+        let module_path = root.join("parts.lua");
+        std::fs::write(
+            &skin_path,
+            r#"
+local parts = require("parts")
+return parts.build()
+"#,
+        )
+        .unwrap();
+        std::fs::write(
+            &module_path,
+            r#"
+local M = {}
+function M.build()
+    local branch = 910
+    if skin_config and skin_config.option then
+        branch = skin_config.option["Branch"] or 910
+    end
+    return {
+        type = 0,
+        property = {
+            { name = "Unused", item = {{ name = "Off", op = 900 }, { name = "On", op = 901 }}, def = "Off" },
+            { name = "Branch", item = {{ name = "Off", op = 910 }, { name = "On", op = 911 }}, def = "Off" },
+        },
+        source = {
+            { id = "bg", path = branch == 911 and "on.png" or "off.png" },
+        },
+    }
+end
+return M
+"#,
+        )
+        .unwrap();
+        let cache = Arc::new(Mutex::new(SkinDocumentCache::default()));
+
+        let first = load_skin_document(
+            &skin_path,
+            SkinKind::Play,
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            &LuaLoadRuntimeState::default(),
+            Some(cache.clone()),
+        )
+        .unwrap();
+        assert_eq!(first.cache_status, DocumentCacheStatus::Miss);
+        assert_eq!(first.document.source[0].path, "off.png");
+
+        let unused_changed = BTreeMap::from([("Unused".to_string(), "On".to_string())]);
+        let second = load_skin_document(
+            &skin_path,
+            SkinKind::Play,
+            &unused_changed,
+            &BTreeMap::new(),
+            &LuaLoadRuntimeState::default(),
+            Some(cache.clone()),
+        )
+        .unwrap();
+        assert_eq!(second.cache_status, DocumentCacheStatus::Hit);
+        assert_eq!(second.document.source[0].path, "off.png");
+
+        let branch_changed = BTreeMap::from([("Branch".to_string(), "On".to_string())]);
+        let third = load_skin_document(
+            &skin_path,
+            SkinKind::Play,
+            &branch_changed,
+            &BTreeMap::new(),
+            &LuaLoadRuntimeState::default(),
+            Some(cache),
+        )
+        .unwrap();
+        assert_eq!(third.cache_status, DocumentCacheStatus::Miss);
+        assert_eq!(third.document.source[0].path, "on.png");
+    }
+
+    #[test]
     fn lua_document_cache_misses_when_runtime_number_changes() {
         let root = unique_test_dir("bmz-lua-document-cache-number");
         std::fs::create_dir_all(&root).unwrap();
@@ -5623,11 +5797,8 @@ return {
         .unwrap();
         assert_eq!(first.cache_status, DocumentCacheStatus::Miss);
         assert_eq!(
-            first.document.source[0].path,
-            std::fs::canonicalize(root.join("parts/blue.png"))
-                .unwrap()
-                .to_string_lossy()
-                .to_string()
+            Path::new(&first.document.source[0].path).canonicalize().unwrap(),
+            std::fs::canonicalize(root.join("parts/blue.png")).unwrap()
         );
 
         let selected = BTreeMap::from([("Parts".to_string(), "red.png".to_string())]);
@@ -5642,11 +5813,8 @@ return {
         .unwrap();
         assert_eq!(second.cache_status, DocumentCacheStatus::Miss);
         assert_eq!(
-            second.document.source[0].path,
-            std::fs::canonicalize(root.join("parts/red.png"))
-                .unwrap()
-                .to_string_lossy()
-                .to_string()
+            Path::new(&second.document.source[0].path).canonicalize().unwrap(),
+            std::fs::canonicalize(root.join("parts/red.png")).unwrap()
         );
     }
 

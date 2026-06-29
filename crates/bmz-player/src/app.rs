@@ -1081,6 +1081,8 @@ const AUDIO_DIAGNOSTICS_LOG_INTERVAL: Duration = Duration::from_secs(1);
 const SELECT_PREVIEW_FADE_DURATION: Duration = Duration::from_millis(150);
 /// beatoraja MusicSelector waits this long after a song-bar change before preview starts.
 const SELECT_PREVIEW_START_DELAY: Duration = Duration::from_millis(400);
+const QUICK_RETRY_REUSE_LOCK_ATTEMPTS: usize = 4;
+const QUICK_RETRY_REUSE_LOCK_RETRY_SLEEP: Duration = Duration::from_micros(250);
 /// レーンカバー / LIFT を上下キーで動かす際のステップ幅。
 const LANE_COVER_STEP: f32 = 0.001;
 const LANE_COVER_REPEAT_STEP: f32 = 0.01;
@@ -3591,6 +3593,13 @@ impl WinitApp {
         {
             return;
         }
+        if event.state == ElementState::Pressed
+            && !event.repeat
+            && let Some(control) = play_control.as_deref()
+            && self.begin_play_fadeout_after_final_notes_control(control)
+        {
+            return;
+        }
         if has_play_control_context && let Some(control) = play_control.as_deref() {
             self.update_play_e1_control_state(control, event.state == ElementState::Pressed);
         }
@@ -4368,6 +4377,9 @@ impl WinitApp {
         let has_play_control_context =
             self.active_play.is_some() || self.pending_play_start.is_some();
         if pressed && self.handle_quick_retry_control(button) {
+            return;
+        }
+        if pressed && self.begin_play_fadeout_after_final_notes_control(button) {
             return;
         }
         if has_play_control_context {
@@ -6607,11 +6619,11 @@ impl WinitApp {
         }
         self.audio_diagnostics_last_log_at = now;
 
-        let Some(runtime) = &self.audio_runtime else {
+        if self.audio_runtime.is_none() {
             self.audio_diagnostics_last = None;
             return;
         };
-        let snapshot = runtime.take_diagnostics();
+        let snapshot = self.collect_audio_diagnostics();
         let Some(previous) = self.audio_diagnostics_last.replace(snapshot) else {
             return;
         };
@@ -6623,23 +6635,44 @@ impl WinitApp {
         if callbacks == 0 {
             return;
         }
-        let rendered_frames = snapshot.rendered_frames - previous.rendered_frames;
-        let stream_errors = snapshot.stream_error_count - previous.stream_error_count;
-        let source_lock_misses = snapshot.source_lock_miss_count - previous.source_lock_miss_count;
-        let engine_lock_misses = snapshot.engine_lock_miss_count - previous.engine_lock_miss_count;
-        let engine_lock_miss_callbacks =
-            snapshot.engine_lock_miss_callback_count - previous.engine_lock_miss_callback_count;
-        let system_engine_lock_misses =
-            snapshot.system_engine_lock_miss_count - previous.system_engine_lock_miss_count;
-        let play_engine_lock_misses =
-            snapshot.play_engine_lock_miss_count - previous.play_engine_lock_miss_count;
-        let draining_engine_lock_misses =
-            snapshot.draining_engine_lock_miss_count - previous.draining_engine_lock_miss_count;
-        let other_engine_lock_misses =
-            snapshot.other_engine_lock_miss_count - previous.other_engine_lock_miss_count;
-        let clipped_samples = snapshot.clipped_sample_count - previous.clipped_sample_count;
+        let rendered_frames = snapshot.rendered_frames.saturating_sub(previous.rendered_frames);
+        let stream_errors = snapshot.stream_error_count.saturating_sub(previous.stream_error_count);
+        let source_lock_misses =
+            snapshot.source_lock_miss_count.saturating_sub(previous.source_lock_miss_count);
+        let engine_lock_misses =
+            snapshot.engine_lock_miss_count.saturating_sub(previous.engine_lock_miss_count);
+        let engine_lock_miss_callbacks = snapshot
+            .engine_lock_miss_callback_count
+            .saturating_sub(previous.engine_lock_miss_callback_count);
+        let system_engine_lock_misses = snapshot
+            .system_engine_lock_miss_count
+            .saturating_sub(previous.system_engine_lock_miss_count);
+        let play_engine_lock_misses = snapshot
+            .play_engine_lock_miss_count
+            .saturating_sub(previous.play_engine_lock_miss_count);
+        let draining_engine_lock_misses = snapshot
+            .draining_engine_lock_miss_count
+            .saturating_sub(previous.draining_engine_lock_miss_count);
+        let other_engine_lock_misses = snapshot
+            .other_engine_lock_miss_count
+            .saturating_sub(previous.other_engine_lock_miss_count);
+        let clipped_samples =
+            snapshot.clipped_sample_count.saturating_sub(previous.clipped_sample_count);
+        let command_drops =
+            snapshot.command_dropped_count.saturating_sub(previous.command_dropped_count);
+        let command_drain_lock_misses = snapshot
+            .command_drain_lock_miss_count
+            .saturating_sub(previous.command_drain_lock_miss_count);
+        let command_engine_lock_misses = snapshot
+            .command_engine_lock_miss_count
+            .saturating_sub(previous.command_engine_lock_miss_count);
+        let commands_submitted =
+            snapshot.command_submitted_count.saturating_sub(previous.command_submitted_count);
+        let commands_drained =
+            snapshot.command_drained_count.saturating_sub(previous.command_drained_count);
 
-        let sample_rate = runtime.sample_rate().max(1);
+        let sample_rate =
+            self.audio_runtime.as_ref().map(AudioRuntime::sample_rate).unwrap_or(1).max(1);
         let avg_callback_frames = rendered_frames as f64 / callbacks as f64;
         let callback_budget_ns =
             ((avg_callback_frames / f64::from(sample_rate)) * 1_000_000_000.0).round() as u64;
@@ -6649,6 +6682,9 @@ impl WinitApp {
         if stream_errors == 0
             && source_lock_misses == 0
             && engine_lock_misses == 0
+            && command_drops == 0
+            && command_drain_lock_misses == 0
+            && command_engine_lock_misses == 0
             && clipped_samples == 0
             && !callback_over_budget
         {
@@ -6668,6 +6704,12 @@ impl WinitApp {
             play_engine_lock_misses,
             draining_engine_lock_misses,
             other_engine_lock_misses,
+            commands_submitted,
+            commands_drained,
+            command_drops,
+            command_drain_lock_misses,
+            command_engine_lock_misses,
+            command_queue_max_depth = snapshot.command_queue_max_depth,
             clipped_samples,
             peak_abs = snapshot.peak_abs,
             max_callback_us = snapshot.max_callback_ns / 1_000,
@@ -6676,10 +6718,25 @@ impl WinitApp {
         );
     }
 
+    fn collect_audio_diagnostics(&self) -> AudioOutputDiagnostics {
+        let mut snapshot =
+            self.audio_runtime.as_ref().map(AudioRuntime::take_diagnostics).unwrap_or_default();
+        if let Some(system_audio) = &self.system_audio {
+            snapshot.add_command_queue(system_audio.command_diagnostics());
+        }
+        if let Some(active_play) = &self.active_play {
+            snapshot.add_command_queue(active_play.running.audio.command_diagnostics());
+        }
+        if let Some(draining_audio) = &self.draining_audio {
+            snapshot.add_command_queue(draining_audio.command_diagnostics());
+        }
+        snapshot
+    }
+
     fn install_system_audio(
         &mut self,
         runtime: &AudioRuntime,
-        system_engine: Option<bmz_audio::backend::cpal::SharedAudioEngine>,
+        system_engine: Option<bmz_audio::command::AudioEngineHandle>,
     ) {
         let system_audio = match system_engine {
             Some(engine) => crate::audio::SystemAudio::reattach(runtime, engine),
@@ -7152,6 +7209,16 @@ impl WinitApp {
                             current_generation = self.play_preload_generation,
                             "discarding stale play preload result"
                         );
+                        if self.pending_play_start.is_some() {
+                            tracing::warn!(
+                                chart_id = result.chart_id,
+                                generation = result.generation,
+                                current_generation = self.play_preload_generation,
+                                "aborting pending play start after stale preload result"
+                            );
+                            self.abort_pending_play_start();
+                            return;
+                        }
                     } else {
                         match result.result {
                             Ok(prepared) => {
@@ -7188,6 +7255,10 @@ impl WinitApp {
                         "play preload worker disconnected"
                     );
                     self.pending_play_preload = None;
+                    if self.pending_play_start.is_some() {
+                        self.abort_pending_play_start();
+                        return;
+                    }
                 }
             }
         }
@@ -7612,13 +7683,25 @@ impl WinitApp {
             return None;
         }
         let active = self.active_play.as_ref()?;
-        let Ok(engine) = active.running.audio.engine.try_lock() else {
-            tracing::debug!(chart_id, "quick retry asset reuse skipped because audio is busy");
+        let mut sample_bank = None;
+        for attempt in 0..QUICK_RETRY_REUSE_LOCK_ATTEMPTS {
+            sample_bank = active.running.audio.engine.clone_sample_bank();
+            if sample_bank.is_some() {
+                break;
+            }
+            if attempt + 1 < QUICK_RETRY_REUSE_LOCK_ATTEMPTS {
+                thread::sleep(QUICK_RETRY_REUSE_LOCK_RETRY_SLEEP);
+            }
+        }
+        let Some((output_sample_rate, samples)) = sample_bank else {
+            tracing::debug!(
+                chart_id,
+                attempts = QUICK_RETRY_REUSE_LOCK_ATTEMPTS,
+                "quick retry asset reuse skipped because audio is busy"
+            );
             return None;
         };
-        let audio =
-            AudioEngine::with_sample_bank(engine.output_sample_rate(), engine.samples.clone());
-        drop(engine);
+        let audio = AudioEngine::with_sample_bank(output_sample_rate, samples);
 
         let mut session_options =
             play_session_options_from_start(&self.play_session_app_config(), options.clone());
@@ -7679,6 +7762,98 @@ impl WinitApp {
             return false;
         };
         self.quick_retry_active_play(mode);
+        true
+    }
+
+    fn begin_play_fadeout_after_final_notes_control(&mut self, control: &str) -> bool {
+        if !play_fadeout_after_final_notes_control(control, &self.select_keys) {
+            return false;
+        }
+        if let Some(ending) = &mut self.play_ending {
+            if ending.failed {
+                return false;
+            }
+            if ending.fadeout_started_at.is_none() {
+                ending.fadeout_started_at = Some(Instant::now());
+                self.update_play_ending_snapshot();
+                tracing::info!(control, "started pending play fadeout");
+            }
+            return true;
+        }
+
+        let Some(active_play) = &self.active_play else {
+            return false;
+        };
+        let should_begin = should_begin_play_fadeout_after_final_notes(
+            control,
+            &self.select_keys,
+            self.play_ready_sound_started_at.is_some(),
+            self.play_ending.is_some(),
+            active_play.running.session.state,
+            active_play.running.session.judge.is_exhausted(&active_play.running.session.chart),
+        );
+        if !should_begin {
+            return false;
+        }
+
+        let finish_mode = if self.active_course.is_some() {
+            crate::screens::play_finish::FinishResultMode::CourseStage
+        } else {
+            crate::screens::play_finish::FinishResultMode::Normal
+        };
+        let now = Instant::now();
+        let full_combo_elapsed_at_finish_ms =
+            self.last_play_snapshot.as_ref().and_then(|snapshot| snapshot.full_combo_elapsed_ms);
+        let early_finished = {
+            let Some(active_play) = &mut self.active_play else {
+                return false;
+            };
+            active_play.running.session.state = bmz_gameplay::session::PlayState::Finished;
+            match crate::screens::play_finish::finish_session_result_once(
+                &mut active_play.running.finished,
+                &mut self.boot.score_db,
+                crate::screens::play_finish::FinishSessionResultOnceRequest {
+                    profile_paths: &self.boot.profile_paths,
+                    replay_config: &self.boot.profile_config.replay,
+                    ir_config: &self.boot.profile_config.ir,
+                    session: &active_play.running.session,
+                    played_at: now_unix_seconds(),
+                    applied_arrange: &active_play.running.applied_arrange,
+                    target_ex_score: active_play.running.target_ex_score,
+                    score_key: active_play.running.score_key,
+                    practice_mode: active_play.running.practice_mode,
+                    finish_mode,
+                },
+            ) {
+                Ok(mut finished) => {
+                    finished.summary.graph = active_play
+                        .running
+                        .result_graph
+                        .snapshot_for_session(&active_play.running.session);
+                    Some(finished)
+                }
+                Err(error) => {
+                    tracing::error!(%error, "failed to finish play session on requested fadeout");
+                    None
+                }
+            }
+        };
+        self.save_current_play_options(
+            self.active_play.as_ref().map(|active| active.running.session.hispeed),
+            "play fadeout requested",
+        );
+        if let Some(finished) = &early_finished {
+            self.start_result_ir_for_finished_play(finished);
+        }
+        self.play_ending = Some(PlayEndingTransition {
+            started_at: now,
+            fadeout_started_at: Some(now),
+            failed: false,
+            full_combo_elapsed_at_finish_ms,
+            finished: early_finished,
+        });
+        self.update_play_ending_snapshot();
+        tracing::info!(control, "started play fadeout after final notes");
         true
     }
 
@@ -8220,10 +8395,8 @@ impl WinitApp {
     /// 見た目の遷移タイミング自体は `fadeout` のまま変えない。
     fn fade_audio_for_result_exit(&mut self, elapsed: Duration, fadeout: Duration) {
         let gain = result_exit_audio_gain(elapsed, fadeout);
-        if let Some(audio) = &self.draining_audio
-            && let Ok(mut engine) = audio.engine.lock()
-        {
-            engine.set_master_gain(gain);
+        if let Some(audio) = &self.draining_audio {
+            audio.engine.set_master_gain(gain);
         }
         self.set_system_sound_master_gain(gain);
     }
@@ -10242,9 +10415,11 @@ impl WinitApp {
                 && old_path == selection.path.trim()
                 && old_files == *selection.files
                 && old_options != *selection.options;
+            let play_options_need_full_reload = play_options_only
+                && self.play_skin_options_need_full_reload(key_mode, selection.path.trim());
             if play_options_only
+                && !play_options_need_full_reload
                 && self.apply_active_play_skin_options_fast_path(key_mode, selection.options)
-                && !self.play_skin_options_need_full_reload(key_mode, selection.path.trim())
             {
                 self.last_play_skin_signature = Some((
                     key_mode,
@@ -10399,12 +10574,7 @@ impl WinitApp {
         let Some(audio) = &self.draining_audio else {
             return;
         };
-        let drained = match audio.engine.lock() {
-            Ok(engine) => engine.is_idle(),
-            // ロック中断時は安全側に倒して出力を解放する。
-            Err(_) => true,
-        };
-        if drained {
+        if audio.engine.is_idle() {
             tracing::info!("play audio drained after result; releasing output");
             self.draining_audio = None;
         }
@@ -13661,6 +13831,25 @@ fn play_control_hold_state_from_pressed_controls(
 
 fn play_ready_blocked_by_control_holds(e1_held: bool, e2_held: bool) -> bool {
     e1_held || e2_held
+}
+
+fn should_begin_play_fadeout_after_final_notes(
+    control: &str,
+    bindings: &SelectKeyBindings,
+    ready_started: bool,
+    play_ending_active: bool,
+    play_state: bmz_gameplay::session::PlayState,
+    final_notes_processed: bool,
+) -> bool {
+    ready_started
+        && !play_ending_active
+        && play_state == bmz_gameplay::session::PlayState::Playing
+        && final_notes_processed
+        && play_fadeout_after_final_notes_control(control, bindings)
+}
+
+fn play_fadeout_after_final_notes_control(control: &str, bindings: &SelectKeyBindings) -> bool {
+    bindings.is_start(control) || bindings.is_e2_action(control)
 }
 
 fn is_select_start_key(physical_key: PhysicalKey, bindings: &SelectKeyBindings) -> bool {
@@ -17564,10 +17753,16 @@ mod tests {
             "#,
         )
         .unwrap();
+        let lua_skin = root.join("load-time.luaskin");
+        std::fs::write(&lua_skin, "return { type = 5 }").unwrap();
+        let lr2_skin = root.join("load-time.lr2skin");
+        std::fs::write(&lr2_skin, "#LR2SKIN").unwrap();
 
         assert!(!skin_path_options_need_full_reload(&op_only).unwrap());
         assert!(skin_path_options_need_full_reload(&load_time).unwrap());
         assert!(skin_path_options_need_full_reload(&includes_load_time).unwrap());
+        assert!(skin_path_options_need_full_reload(&lua_skin).unwrap());
+        assert!(skin_path_options_need_full_reload(&lr2_skin).unwrap());
 
         let _ = std::fs::remove_dir_all(root);
     }
@@ -18172,6 +18367,61 @@ mod tests {
         assert!(play_ready_blocked_by_control_holds(true, false));
         assert!(play_ready_blocked_by_control_holds(false, true));
         assert!(play_ready_blocked_by_control_holds(true, true));
+    }
+
+    #[test]
+    fn final_notes_fadeout_accepts_e1_and_e2_controls() {
+        let keys = default_select_keys();
+
+        assert!(play_fadeout_after_final_notes_control("Q", &keys));
+        assert!(play_fadeout_after_final_notes_control("W", &keys));
+        assert!(!play_fadeout_after_final_notes_control("Z", &keys));
+    }
+
+    #[test]
+    fn final_notes_fadeout_requires_active_finished_note_state() {
+        let keys = default_select_keys();
+
+        assert!(should_begin_play_fadeout_after_final_notes(
+            "Q",
+            &keys,
+            true,
+            false,
+            bmz_gameplay::session::PlayState::Playing,
+            true,
+        ));
+        assert!(!should_begin_play_fadeout_after_final_notes(
+            "Q",
+            &keys,
+            false,
+            false,
+            bmz_gameplay::session::PlayState::Playing,
+            true,
+        ));
+        assert!(!should_begin_play_fadeout_after_final_notes(
+            "Q",
+            &keys,
+            true,
+            false,
+            bmz_gameplay::session::PlayState::Playing,
+            false,
+        ));
+        assert!(!should_begin_play_fadeout_after_final_notes(
+            "Q",
+            &keys,
+            true,
+            true,
+            bmz_gameplay::session::PlayState::Playing,
+            true,
+        ));
+        assert!(!should_begin_play_fadeout_after_final_notes(
+            "Q",
+            &keys,
+            true,
+            false,
+            bmz_gameplay::session::PlayState::Failed,
+            true,
+        ));
     }
 
     #[test]

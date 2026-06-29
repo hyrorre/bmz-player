@@ -286,12 +286,9 @@ fn create_skin_config_option_table(
     load_dependencies: Option<Arc<Mutex<SkinLoadDependencies>>>,
 ) -> Result<Table> {
     let option = lua.create_table()?;
-    for (key, value) in skin_config_options {
-        option.set(key.as_str(), *value)?;
-    }
     let option_values = skin_config_options.clone();
-    let dependencies_for_index = load_dependencies;
-    let index = lua.create_function(move |_, key: Value| {
+    let dependencies_for_index = load_dependencies.clone();
+    let index = lua.create_function(move |_, (_table, key): (Table, Value)| {
         let Value::String(key) = key else {
             return Ok(Value::Nil);
         };
@@ -304,8 +301,22 @@ fn create_skin_config_option_table(
         }
         Ok(Value::Integer(*value))
     })?;
+    let option_values_for_pairs = skin_config_options.clone();
+    let dependencies_for_pairs = load_dependencies;
+    let pairs = lua.create_function(move |lua, _: Table| {
+        let pairs_table = lua.create_table()?;
+        for (key, value) in &option_values_for_pairs {
+            pairs_table.set(key.as_str(), *value)?;
+            if let Ok(option_id) = i32::try_from(*value) {
+                record_load_dependency_option(dependencies_for_pairs.as_ref(), option_id, true);
+            }
+        }
+        let next = lua.globals().get::<Function>("next")?;
+        Ok((next, pairs_table, Value::Nil))
+    })?;
     let metatable = lua.create_table()?;
     metatable.set("__index", index)?;
+    metatable.set("__pairs", pairs)?;
     option.set_metatable(Some(metatable));
     Ok(option)
 }
@@ -668,9 +679,14 @@ impl MainStateProbe {
         self.clear_aux_calls();
     }
 
-    fn begin_number_call_recording_with_option(&mut self, default_value: i32, option_id: i32) {
+    fn begin_number_call_recording_with_option_value(
+        &mut self,
+        default_value: i32,
+        option_id: i32,
+        option_value: bool,
+    ) {
         self.begin_number_call_recording(default_value);
-        self.option_values.insert(option_id, true);
+        self.option_values.insert(option_id, option_value);
     }
 
     fn begin_number_recording_with_value(&mut self, ref_id: i32, value: i32) {
@@ -2912,6 +2928,49 @@ fn infer_main_state_option_draw_condition(
     }
 }
 
+fn infer_main_state_option_number_draw_condition(
+    function: &Function,
+    main_state_probe: &Arc<Mutex<MainStateProbe>>,
+) -> Option<String> {
+    let option_id = single_number_call(&collect_option_calls(function, main_state_probe)?)?;
+    let mut number_refs =
+        collect_number_refs_with_option_value(function, main_state_probe, option_id, true)?;
+    number_refs.extend(collect_number_refs_with_option_value(
+        function,
+        main_state_probe,
+        option_id,
+        false,
+    )?);
+    number_refs.sort_unstable();
+    number_refs.dedup();
+    let number_ref = single_number_call(&number_refs)?;
+
+    let false_zero =
+        call_draw_with_number_option(function, main_state_probe, number_ref, 0, option_id, false)?;
+    let false_nonzero =
+        call_draw_with_number_option(function, main_state_probe, number_ref, 5, option_id, false)?;
+    let true_zero =
+        call_draw_with_number_option(function, main_state_probe, number_ref, 0, option_id, true)?;
+    let true_nonzero =
+        call_draw_with_number_option(function, main_state_probe, number_ref, 5, option_id, true)?;
+
+    match (false_zero, false_nonzero, true_zero, true_nonzero) {
+        (false, false, false, true) => {
+            Some(format!("option({option_id}) && number({number_ref}) != 0"))
+        }
+        (false, false, true, false) => {
+            Some(format!("option({option_id}) && number({number_ref}) == 0"))
+        }
+        (false, true, false, false) => {
+            Some(format!("!option({option_id}) && number({number_ref}) != 0"))
+        }
+        (true, false, false, false) => {
+            Some(format!("!option({option_id}) && number({number_ref}) == 0"))
+        }
+        _ => None,
+    }
+}
+
 fn call_draw_with_option(
     function: &Function,
     main_state_probe: &Arc<Mutex<MainStateProbe>>,
@@ -3475,6 +3534,7 @@ fn infer_boolean_predicate(
             }
         })
         .or_else(|| infer_float_number_and_number_and_draw(function, main_state_probe))
+        .or_else(|| infer_main_state_option_number_draw_condition(function, main_state_probe))
         .or_else(|| infer_main_state_draw_condition(function, main_state_probe))
         .or_else(|| infer_main_state_event_index_draw_condition(function, main_state_probe))
         .or_else(|| infer_main_state_option_draw_condition(function, main_state_probe))
@@ -3642,13 +3702,23 @@ fn collect_number_refs_with_option(
     main_state_probe: &Arc<Mutex<MainStateProbe>>,
     option_id: i32,
 ) -> Option<Vec<i32>> {
+    collect_number_refs_with_option_value(function, main_state_probe, option_id, true)
+}
+
+fn collect_number_refs_with_option_value(
+    function: &Function,
+    main_state_probe: &Arc<Mutex<MainStateProbe>>,
+    option_id: i32,
+    option_value: bool,
+) -> Option<Vec<i32>> {
     let mut calls = Vec::new();
     for default_value in [5, 0, -1] {
         {
-            main_state_probe
-                .lock()
-                .ok()?
-                .begin_number_call_recording_with_option(default_value, option_id);
+            main_state_probe.lock().ok()?.begin_number_call_recording_with_option_value(
+                default_value,
+                option_id,
+                option_value,
+            );
         }
         let _ = function.call::<Value>(()).ok();
         {
@@ -3669,6 +3739,28 @@ fn call_draw_with_numbers(
 ) -> Option<bool> {
     {
         main_state_probe.lock().ok()?.begin_number_recording_with_values(values);
+    }
+    let result = function.call::<Value>(()).ok();
+    main_state_probe.lock().ok()?.end_recording();
+    match result? {
+        Value::Boolean(value) => Some(value),
+        _ => None,
+    }
+}
+
+fn call_draw_with_number_option(
+    function: &Function,
+    main_state_probe: &Arc<Mutex<MainStateProbe>>,
+    number_ref: i32,
+    number_value: i32,
+    option_id: i32,
+    option_value: bool,
+) -> Option<bool> {
+    {
+        main_state_probe.lock().ok()?.begin_number_recording_with_values_and_options(
+            BTreeMap::from([(number_ref, number_value)]),
+            BTreeMap::from([(option_id, option_value)]),
+        );
     }
     let result = function.call::<Value>(()).ok();
     main_state_probe.lock().ok()?.end_recording();

@@ -528,6 +528,97 @@ mod tests {
     }
 
     #[test]
+    fn lua_skin_infers_option_and_number_draw_conditions() {
+        let root = unique_test_dir("bmz-skin-lua-option-number-draw");
+        fs::create_dir_all(&root).unwrap();
+        fs::write(
+            root.join("play.luaskin"),
+            r#"
+            local main_state = require("main_state")
+            local function nonzero(ref)
+                return main_state.number(ref) ~= 0
+            end
+            return {
+                type = 0,
+                destination = {
+                    { id = "fast", draw = function()
+                        return main_state.option(1242) and nonzero(525)
+                    end, dst = {{ x = 1, y = 2, w = 3, h = 4 }} },
+                    { id = "ms", draw = function()
+                        return not main_state.option(241) and nonzero(525)
+                    end, dst = {{ x = 1, y = 2, w = 3, h = 4 }} },
+                }
+            }
+            "#,
+        )
+        .unwrap();
+
+        let loaded = load_lua_skin(
+            &root.join("play.luaskin"),
+            SkinKind::Play,
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+        )
+        .unwrap();
+
+        let bmz_render::skin::DestinationListEntry::Single(fast) = &loaded.document.destination[0]
+        else {
+            panic!("expected fast destination");
+        };
+        let bmz_render::skin::DestinationListEntry::Single(ms) = &loaded.document.destination[1]
+        else {
+            panic!("expected ms destination");
+        };
+        assert_eq!(fast.draw, "option(1242) && number(525) != 0");
+        assert_eq!(ms.draw, "!option(241) && number(525) != 0");
+    }
+
+    #[test]
+    fn lua_skin_records_required_module_skin_config_option_dependency() {
+        let root = unique_test_dir("bmz-skin-lua-required-option-dependency");
+        fs::create_dir_all(&root).unwrap();
+        fs::write(
+            root.join("play.luaskin"),
+            "local parts = require('parts')\nreturn parts.build()",
+        )
+        .unwrap();
+        fs::write(
+            root.join("parts.lua"),
+            r#"
+            local M = {}
+            function M.build()
+                local branch = 910
+                if skin_config and skin_config.option then
+                    branch = skin_config.option["Branch"] or 910
+                end
+                return {
+                    type = 0,
+                    property = {
+                        { name = "Branch", item = {{ name = "Off", op = 910 }, { name = "On", op = 911 }}, def = "Off" },
+                    },
+                    source = {
+                        { id = "bg", path = branch == 911 and "on.png" or "off.png" },
+                    },
+                }
+            end
+            return M
+            "#,
+        )
+        .unwrap();
+
+        let loaded = load_lua_skin_with_runtime_state(
+            &root.join("play.luaskin"),
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            &LuaLoadRuntimeState::default(),
+        )
+        .unwrap();
+
+        assert_eq!(loaded.document.source[0].path, "off.png");
+        assert!(loaded.dependencies.option_values.contains_key(&910));
+    }
+
+    #[test]
     fn lua_skin_rejects_paths_outside_root() {
         let root = unique_test_dir("bmz-skin-lua");
         fs::create_dir_all(&root).unwrap();
@@ -2424,6 +2515,27 @@ mod tests {
             .expect("Rmz-skin play6 should decode");
         assert_eq!(loaded.document.skin_type, 23);
         assert!(!loaded.document.destination.is_empty());
+        let fast_slow_draws = loaded
+            .document
+            .destination
+            .iter()
+            .filter_map(|entry| match entry {
+                bmz_render::skin::DestinationListEntry::Single(destination)
+                    if destination.id == "fast" || destination.id == "slow" =>
+                {
+                    Some((destination.id.as_str(), destination.draw.as_str()))
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert!(
+            fast_slow_draws.contains(&("fast", "option(1242) && number(525) != 0")),
+            "Rmz play6 FAST draw should remain runtime-gated: {fast_slow_draws:?}"
+        );
+        assert!(
+            fast_slow_draws.contains(&("slow", "option(1243) && number(525) != 0")),
+            "Rmz play6 SLOW draw should remain runtime-gated: {fast_slow_draws:?}"
+        );
         let note = loaded.document.note.expect("play6 note definition");
         assert_eq!(note.note.len(), 6);
         assert_eq!(note.dst.len(), 6);
