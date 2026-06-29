@@ -59,6 +59,7 @@ use crate::config::key_config::{
     is_scratch_down_control, is_scratch_up_control,
 };
 use crate::config::load::load_profile_config;
+use crate::config::play::{TARGET_GREEN_NUMBER_MAX, TARGET_GREEN_NUMBER_MIN};
 use crate::config::profile_config::{
     AssistOptionConfig, BgaExpandConfig, BgaModeConfig, BottomShiftableGaugeConfig,
     DoubleOptionConfig, GaugeAutoShiftConfig, GaugeTypeConfig, HispeedModeConfig, HsFixConfig,
@@ -3539,7 +3540,12 @@ impl WinitApp {
                 && !event.repeat
                 && active_play.running.session.lane_cover_changing
                 && let Some(control) = physical_key_name(event.physical_key)
-                && let Some(action) = play_option_control(&control, &self.select_keys)
+                && let Some(action) = play_option_control_for_holds(
+                    &control,
+                    self.play_e1_held,
+                    self.play_e2_held,
+                    &self.select_keys,
+                )
             {
                 let speed_locked = self.active_course.as_ref().is_some_and(|c| {
                     c.definition.constraints.speed
@@ -3694,6 +3700,19 @@ impl WinitApp {
         if self.pending_play_start.is_some() {
             if let Some(change) = hispeed_action(event.physical_key, event.state, event.repeat) {
                 self.apply_pending_play_hispeed_change(change);
+                return;
+            }
+            if event.state == ElementState::Pressed
+                && !event.repeat
+                && let Some(control) = play_control.as_deref()
+                && let Some(action) = play_option_control_for_holds(
+                    control,
+                    self.play_e1_held,
+                    self.play_e2_held,
+                    &self.select_keys,
+                )
+            {
+                self.apply_pending_play_option_control(action, control.starts_with("Axis"));
                 return;
             }
             return;
@@ -4120,6 +4139,14 @@ impl WinitApp {
         let Some(delta) = play_analog_lane_cover_delta(axis, ticks, &self.select_keys) else {
             return false;
         };
+        let mode = match (self.play_e1_held, self.play_e2_held) {
+            (true, false) => PlayAnalogOptionMode::LaneCover,
+            (false, true) => PlayAnalogOptionMode::GreenNumber,
+            _ => {
+                self.reset_play_analog_scroll();
+                return false;
+            }
+        };
         if !self
             .active_play
             .as_ref()
@@ -4149,16 +4176,33 @@ impl WinitApp {
             c.definition.constraints.speed == bmz_core::course::CourseSpeedConstraint::NoSpeed
         });
         let change = if steps > 0 { LaneCoverChange::Down } else { LaneCoverChange::Up };
-        let delta = lane_cover_change_step(change) * steps.abs() as f32;
         if let Some(active_play) = &mut self.active_play {
             let session = &mut active_play.running.session;
-            apply_lane_cover_step_to_session(session, delta, speed_locked);
-            tracing::info!(
-                lane_cover = session.lane_cover,
-                lift = session.lift,
-                hispeed = session.hispeed,
-                "adjusted lane cover from analog scratch"
-            );
+            match mode {
+                PlayAnalogOptionMode::LaneCover => {
+                    let delta = lane_cover_change_step(change) * steps.abs() as f32;
+                    apply_lane_cover_step_to_session(session, delta, speed_locked);
+                    tracing::info!(
+                        lane_cover = session.lane_cover,
+                        lift = session.lift,
+                        hispeed = session.hispeed,
+                        "adjusted lane cover from analog scratch"
+                    );
+                }
+                PlayAnalogOptionMode::GreenNumber => {
+                    let delta = green_number_change_step(green_number_change_from_lane(change))
+                        * steps.abs();
+                    if apply_green_number_step_to_session(session, delta, speed_locked) {
+                        tracing::info!(
+                            hispeed = session.hispeed,
+                            target_green_number = session.target_green_number,
+                            "adjusted green number from analog scratch"
+                        );
+                    } else {
+                        tracing::debug!("green number change ignored: course NoSpeed constraint");
+                    }
+                }
+            }
         }
         self.update_pre_ready_play_snapshot_options();
         true
@@ -4273,9 +4317,19 @@ impl WinitApp {
             });
             if let Some(active_play) = &mut self.active_play
                 && active_play.running.session.lane_cover_changing
-                && let Some(action) = play_option_control(button, &self.select_keys)
+                && let Some(action) = play_option_control_for_holds(
+                    button,
+                    self.play_e1_held,
+                    self.play_e2_held,
+                    &self.select_keys,
+                )
             {
-                if button.starts_with("Axis") && matches!(action, PlayOptionControl::LaneCover(_)) {
+                if button.starts_with("Axis")
+                    && matches!(
+                        action,
+                        PlayOptionControl::LaneCover(_) | PlayOptionControl::GreenNumber(_)
+                    )
+                {
                     return;
                 }
                 if apply_play_option_control_to_session(
@@ -4334,7 +4388,14 @@ impl WinitApp {
         }
 
         if self.pending_play_start.is_some() {
-            if pressed && let Some(action) = play_option_control(button, &self.select_keys) {
+            if pressed
+                && let Some(action) = play_option_control_for_holds(
+                    button,
+                    self.play_e1_held,
+                    self.play_e2_held,
+                    &self.select_keys,
+                )
+            {
                 self.apply_pending_play_option_control(action, button.starts_with("Axis"));
                 return;
             }
@@ -6767,7 +6828,7 @@ impl WinitApp {
             .autoplay
             .as_ref()
             .is_some_and(|autoplay| autoplay.is_full());
-        active_play.running.session.lane_cover_changing = self.play_e1_held;
+        active_play.running.session.lane_cover_changing = self.play_lane_value_changing();
         active_play.running.bga_frames = if self.bga_load_chart_id == Some(chart_id) {
             self.bga_preload_frames.clone()
         } else {
@@ -9309,6 +9370,28 @@ impl WinitApp {
                 self.boot.profile_config.lane.sudden =
                     crate::config::play::lane_f32_to_unit((current - delta).clamp(0.0, 1.0));
             }
+            PlayOptionControl::GreenNumber(_) if is_axis => return,
+            PlayOptionControl::GreenNumber(change) => {
+                if self.active_course.as_ref().is_some_and(|c| {
+                    c.definition.constraints.speed
+                        == bmz_core::course::CourseSpeedConstraint::NoSpeed
+                }) {
+                    tracing::debug!(
+                        "pending play green number change ignored: course NoSpeed constraint"
+                    );
+                    return;
+                }
+                apply_pending_green_number_step_to_profile(
+                    &mut self.boot.profile_config,
+                    self.last_play_snapshot.as_ref(),
+                    green_number_change_step(change),
+                );
+                tracing::info!(
+                    hispeed_mode = ?self.boot.profile_config.lane.hispeed_mode,
+                    target_green_number = self.boot.profile_config.lane.target_green_number,
+                    "adjusted pending play green number"
+                );
+            }
         }
         self.refresh_pending_play_lane_snapshot_from_profile();
     }
@@ -9382,16 +9465,14 @@ impl WinitApp {
         self.play_exit_hold_started_at = None;
     }
 
-    fn update_play_e1_control_state(&mut self, control: &str, pressed: bool) -> bool {
-        if !self.select_keys.is_start(control) {
-            return false;
-        }
-        if self.play_e1_held != pressed {
-            self.reset_play_analog_scroll();
-        }
-        self.play_e1_held = pressed;
+    fn play_lane_value_changing(&self) -> bool {
+        self.play_e1_held || self.play_e2_held
+    }
+
+    fn refresh_play_lane_value_changing(&mut self) {
+        let changing = self.play_lane_value_changing();
         if let Some(active_play) = &mut self.active_play {
-            active_play.running.session.lane_cover_changing = pressed;
+            active_play.running.session.lane_cover_changing = changing;
             update_pre_ready_play_snapshot_options_for_session(
                 self.play_ready_sound_started_at,
                 &mut self.last_play_snapshot,
@@ -9402,8 +9483,19 @@ impl WinitApp {
             && self.play_ready_sound_started_at.is_none()
             && let Some(snapshot) = &mut self.last_play_snapshot
         {
-            snapshot.lane_cover_changing = pressed;
+            snapshot.lane_cover_changing = changing;
         }
+    }
+
+    fn update_play_e1_control_state(&mut self, control: &str, pressed: bool) -> bool {
+        if !self.select_keys.is_start(control) {
+            return false;
+        }
+        if self.play_e1_held != pressed {
+            self.reset_play_analog_scroll();
+        }
+        self.play_e1_held = pressed;
+        self.refresh_play_lane_value_changing();
         self.update_play_exit_hold_timer();
         true
     }
@@ -9411,6 +9503,9 @@ impl WinitApp {
     fn update_play_exit_control_state(&mut self, control: &str, pressed: bool) -> bool {
         let mut changed = false;
         if self.select_keys.is_e2_action(control) {
+            if self.play_e2_held != pressed {
+                self.reset_play_analog_scroll();
+            }
             self.play_e2_held = pressed;
             changed = true;
         }
@@ -9421,6 +9516,7 @@ impl WinitApp {
         if !changed {
             return false;
         }
+        self.refresh_play_lane_value_changing();
         self.update_play_exit_hold_timer();
         if self.play_e2_held && self.play_e3_held {
             return self.stop_active_play_like_escape("E2+E3 pressed during play");
@@ -14474,10 +14570,23 @@ enum PlayOptionControl {
     ToggleHispeedMode,
     Hispeed(HispeedChange),
     LaneCover(LaneCoverChange),
+    GreenNumber(GreenNumberChange),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PlayAnalogOptionMode {
+    LaneCover,
+    GreenNumber,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum LaneCoverChange {
+    Up,
+    Down,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum GreenNumberChange {
     Up,
     Down,
 }
@@ -14498,10 +14607,28 @@ fn hispeed_action(
     }
 }
 
-fn play_option_control(control: &str, bindings: &SelectKeyBindings) -> Option<PlayOptionControl> {
-    if bindings.is_e2_action(control) {
+fn play_option_control_for_holds(
+    control: &str,
+    e1_held: bool,
+    e2_held: bool,
+    bindings: &SelectKeyBindings,
+) -> Option<PlayOptionControl> {
+    if e1_held && bindings.is_e2_action(control) {
         return Some(PlayOptionControl::ToggleHispeedMode);
     }
+    if e1_held && !e2_held {
+        return e1_play_option_control(control, bindings);
+    }
+    if e2_held && !e1_held {
+        return e2_play_option_control(control, bindings);
+    }
+    None
+}
+
+fn e1_play_option_control(
+    control: &str,
+    bindings: &SelectKeyBindings,
+) -> Option<PlayOptionControl> {
     if bindings.is_hispeed_down_key(control) {
         return Some(PlayOptionControl::Hispeed(HispeedChange::Down));
     }
@@ -14513,6 +14640,25 @@ fn play_option_control(control: &str, bindings: &SelectKeyBindings) -> Option<Pl
     }
     if bindings.is_scratch_down(control) {
         return Some(PlayOptionControl::LaneCover(LaneCoverChange::Down));
+    }
+    None
+}
+
+fn e2_play_option_control(
+    control: &str,
+    bindings: &SelectKeyBindings,
+) -> Option<PlayOptionControl> {
+    if bindings.is_hispeed_down_key(control) {
+        return Some(PlayOptionControl::GreenNumber(GreenNumberChange::Down));
+    }
+    if bindings.is_hispeed_up_key(control) {
+        return Some(PlayOptionControl::GreenNumber(GreenNumberChange::Up));
+    }
+    if bindings.is_scratch_up(control) {
+        return Some(PlayOptionControl::GreenNumber(GreenNumberChange::Up));
+    }
+    if bindings.is_scratch_down(control) {
+        return Some(PlayOptionControl::GreenNumber(GreenNumberChange::Down));
     }
     None
 }
@@ -14544,6 +14690,20 @@ fn lane_cover_change_step(change: LaneCoverChange) -> f32 {
     match change {
         LaneCoverChange::Up => LANE_COVER_STEP,
         LaneCoverChange::Down => -LANE_COVER_STEP,
+    }
+}
+
+fn green_number_change_from_lane(change: LaneCoverChange) -> GreenNumberChange {
+    match change {
+        LaneCoverChange::Up => GreenNumberChange::Up,
+        LaneCoverChange::Down => GreenNumberChange::Down,
+    }
+}
+
+fn green_number_change_step(change: GreenNumberChange) -> i32 {
+    match change {
+        GreenNumberChange::Up => 1,
+        GreenNumberChange::Down => -1,
     }
 }
 
@@ -14590,6 +14750,22 @@ fn pending_play_green_number_for_profile_hispeed(
     Some(green_number_from_snapshot_duration(duration))
 }
 
+fn apply_pending_green_number_step_to_profile(
+    profile: &mut ProfileConfig,
+    snapshot: Option<&RenderSnapshot>,
+    delta: i32,
+) {
+    let current = if profile.lane.hispeed_mode == HispeedModeConfig::Floating {
+        profile.lane.target_green_number.max(TARGET_GREEN_NUMBER_MIN)
+    } else {
+        pending_play_green_number_for_profile_hispeed(profile, snapshot)
+            .unwrap_or(profile.lane.target_green_number)
+            .max(TARGET_GREEN_NUMBER_MIN)
+    };
+    profile.lane.target_green_number = adjusted_green_number(current, delta);
+    profile.lane.hispeed_mode = HispeedModeConfig::Floating;
+}
+
 fn apply_hispeed_change_to_session(
     session: &mut bmz_gameplay::session::GameSession,
     change: HispeedChange,
@@ -14630,7 +14806,32 @@ fn apply_play_option_control_to_session(
         PlayOptionControl::LaneCover(change) => {
             apply_lane_cover_step_to_session(session, lane_cover_change_step(change), speed_locked)
         }
+        PlayOptionControl::GreenNumber(change) => apply_green_number_step_to_session(
+            session,
+            green_number_change_step(change),
+            speed_locked,
+        ),
     }
+}
+
+fn apply_green_number_step_to_session(
+    session: &mut bmz_gameplay::session::GameSession,
+    delta: i32,
+    speed_locked: bool,
+) -> bool {
+    if speed_locked {
+        return false;
+    }
+    let current = match session.hispeed_mode {
+        HispeedMode::Normal => current_green_number(session, session.audio_clock.now()),
+        HispeedMode::Floating => session.target_green_number,
+    };
+    session.target_green_number = adjusted_green_number(current, delta);
+    session.hispeed_mode = HispeedMode::Floating;
+    let now = session.audio_clock.now();
+    session.hispeed =
+        hispeed_for_green_number(session, active_lane_cover_for_hispeed(session), now);
+    true
 }
 
 fn apply_lane_cover_step_to_session(
@@ -14662,12 +14863,16 @@ fn reset_floating_hispeed_if_enabled(
 ) {
     if session.hispeed_mode == HispeedMode::Floating && !speed_locked {
         let now = session.audio_clock.now();
-        let lane_cover = if session.lane_cover_visible {
-            crate::config::play::clamp_lane_cover_for_lift(session.lane_cover, session.lift)
-        } else {
-            0.0
-        };
-        session.hispeed = hispeed_for_green_number(session, lane_cover, now);
+        session.hispeed =
+            hispeed_for_green_number(session, active_lane_cover_for_hispeed(session), now);
+    }
+}
+
+fn active_lane_cover_for_hispeed(session: &bmz_gameplay::session::GameSession) -> f32 {
+    if session.lane_cover_visible {
+        crate::config::play::clamp_lane_cover_for_lift(session.lane_cover, session.lift)
+    } else {
+        0.0
     }
 }
 
@@ -14675,18 +14880,21 @@ fn current_green_number(session: &bmz_gameplay::session::GameSession, now: TimeU
     let total = note_display_duration_ms_for_hispeed(
         session,
         session.hispeed,
-        if session.lane_cover_visible {
-            crate::config::play::clamp_lane_cover_for_lift(session.lane_cover, session.lift)
-        } else {
-            0.0
-        },
+        active_lane_cover_for_hispeed(session),
         now,
     );
     green_number_from_duration(total)
 }
 
+fn adjusted_green_number(current: u32, delta: i32) -> u32 {
+    let next = current as i64 + delta as i64;
+    next.clamp(TARGET_GREEN_NUMBER_MIN as i64, TARGET_GREEN_NUMBER_MAX as i64) as u32
+}
+
 fn green_number_from_duration(duration_ms: f32) -> u32 {
-    ((duration_ms * 0.6).round().clamp(1.0, u32::MAX as f32)) as u32
+    ((duration_ms * 0.6)
+        .round()
+        .clamp(TARGET_GREEN_NUMBER_MIN as f32, TARGET_GREEN_NUMBER_MAX as f32)) as u32
 }
 
 fn green_number_from_snapshot_duration(duration_ms: i32) -> u32 {
@@ -18212,6 +18420,20 @@ mod tests {
     }
 
     #[test]
+    fn pending_green_number_change_switches_to_floating_before_ready() {
+        let mut profile = ProfileConfig::new_default("default", "Default", 1);
+        profile.lane.hispeed = 2.0;
+        profile.lane.hispeed_mode = HispeedModeConfig::Normal;
+        profile.lane.target_green_number = 300;
+        let snapshot = RenderSnapshot { now_bpm: 120.0, ..Default::default() };
+
+        apply_pending_green_number_step_to_profile(&mut profile, Some(&snapshot), 1);
+
+        assert_eq!(profile.lane.hispeed_mode, HispeedModeConfig::Floating);
+        assert_eq!(profile.lane.target_green_number, 601);
+    }
+
+    #[test]
     fn floating_hispeed_recalculation_uses_hsfix_base_before_chart_start() {
         let mut profile = ProfileConfig::new_default("default", "Default", 1);
         profile.lane.hispeed_mode = HispeedModeConfig::Floating;
@@ -18314,36 +18536,129 @@ mod tests {
     }
 
     #[test]
+    fn green_number_step_switches_normal_hispeed_to_floating() {
+        let profile = ProfileConfig::new_default("default", "Default", 1);
+        let mut session = crate::screens::play_session::build_game_session(
+            std::sync::Arc::new(app_test_chart()),
+            &profile,
+            crate::screens::play_session::PlaySessionOptions::default(),
+        );
+
+        assert!(apply_green_number_step_to_session(&mut session, 1, false));
+
+        assert_eq!(session.hispeed_mode, HispeedMode::Floating);
+        assert_eq!(session.target_green_number, 601);
+        assert!(session.hispeed < 2.0);
+    }
+
+    #[test]
+    fn green_number_step_respects_no_speed_constraint() {
+        let profile = ProfileConfig::new_default("default", "Default", 1);
+        let mut session = crate::screens::play_session::build_game_session(
+            std::sync::Arc::new(app_test_chart()),
+            &profile,
+            crate::screens::play_session::PlaySessionOptions::default(),
+        );
+
+        assert!(!apply_green_number_step_to_session(&mut session, 1, true));
+
+        assert_eq!(session.hispeed_mode, HispeedMode::Normal);
+        assert_eq!(session.target_green_number, 300);
+        assert_eq!(session.hispeed, 2.0);
+    }
+
+    #[test]
     fn play_option_control_maps_e1_combo_targets() {
         let keys = default_select_keys();
 
-        assert_eq!(play_option_control("W", &keys), Some(PlayOptionControl::ToggleHispeedMode));
         assert_eq!(
-            play_option_control("Z", &keys),
+            play_option_control_for_holds("W", true, true, &keys),
+            Some(PlayOptionControl::ToggleHispeedMode)
+        );
+        assert_eq!(
+            play_option_control_for_holds("Z", true, false, &keys),
             Some(PlayOptionControl::Hispeed(HispeedChange::Down))
         );
         assert_eq!(
-            play_option_control("V", &keys),
+            play_option_control_for_holds("V", true, false, &keys),
             Some(PlayOptionControl::Hispeed(HispeedChange::Down))
         );
         assert_eq!(
-            play_option_control("S", &keys),
+            play_option_control_for_holds("S", true, false, &keys),
             Some(PlayOptionControl::Hispeed(HispeedChange::Up))
         );
         assert_eq!(
-            play_option_control("F", &keys),
+            play_option_control_for_holds("F", true, false, &keys),
             Some(PlayOptionControl::Hispeed(HispeedChange::Up))
         );
         assert_eq!(
-            play_option_control("Axis1+", &keys),
+            play_option_control_for_holds("Axis1+", true, false, &keys),
             Some(PlayOptionControl::LaneCover(LaneCoverChange::Up))
         );
         assert_eq!(
-            play_option_control("Axis1-", &keys),
+            play_option_control_for_holds("Axis1-", true, false, &keys),
             Some(PlayOptionControl::LaneCover(LaneCoverChange::Down))
         );
-        assert_eq!(play_option_control("Axis2-", &keys), None);
-        assert_eq!(play_option_control("Axis2+", &keys), None);
+        assert_eq!(play_option_control_for_holds("Axis2-", true, false, &keys), None);
+        assert_eq!(play_option_control_for_holds("Axis2+", true, false, &keys), None);
+    }
+
+    #[test]
+    fn play_option_control_maps_e2_combo_targets_to_green_number() {
+        let keys = default_select_keys();
+
+        assert_eq!(
+            play_option_control_for_holds("Z", false, true, &keys),
+            Some(PlayOptionControl::GreenNumber(GreenNumberChange::Down))
+        );
+        assert_eq!(
+            play_option_control_for_holds("V", false, true, &keys),
+            Some(PlayOptionControl::GreenNumber(GreenNumberChange::Down))
+        );
+        assert_eq!(
+            play_option_control_for_holds("S", false, true, &keys),
+            Some(PlayOptionControl::GreenNumber(GreenNumberChange::Up))
+        );
+        assert_eq!(
+            play_option_control_for_holds("F", false, true, &keys),
+            Some(PlayOptionControl::GreenNumber(GreenNumberChange::Up))
+        );
+        assert_eq!(
+            play_option_control_for_holds("Axis1+", false, true, &keys),
+            Some(PlayOptionControl::GreenNumber(GreenNumberChange::Up))
+        );
+        assert_eq!(
+            play_option_control_for_holds("Axis1-", false, true, &keys),
+            Some(PlayOptionControl::GreenNumber(GreenNumberChange::Down))
+        );
+        assert_eq!(
+            play_option_control_for_holds("W", true, true, &keys),
+            Some(PlayOptionControl::ToggleHispeedMode)
+        );
+        assert_eq!(play_option_control_for_holds("Z", true, true, &keys), None);
+    }
+
+    #[test]
+    fn play_option_control_maps_9k_e2_keys_to_green_number() {
+        let keys = select_keys_9k();
+
+        assert_eq!(
+            play_option_control_for_holds("Z", false, true, &keys),
+            Some(PlayOptionControl::GreenNumber(GreenNumberChange::Down))
+        );
+        assert_eq!(
+            play_option_control_for_holds("C", false, true, &keys),
+            Some(PlayOptionControl::GreenNumber(GreenNumberChange::Down))
+        );
+        assert_eq!(
+            play_option_control_for_holds("S", false, true, &keys),
+            Some(PlayOptionControl::GreenNumber(GreenNumberChange::Up))
+        );
+        assert_eq!(
+            play_option_control_for_holds("F", false, true, &keys),
+            Some(PlayOptionControl::GreenNumber(GreenNumberChange::Up))
+        );
+        assert_eq!(play_option_control_for_holds("V", false, true, &keys), None);
     }
 
     #[test]

@@ -22,6 +22,9 @@ pub const DEFAULT_JUDGE_WINDOW: JudgeWindow = JudgeWindow {
     mine_hit_us: 16_000,
 };
 
+pub const TARGET_GREEN_NUMBER_MIN: u32 = 1;
+pub const TARGET_GREEN_NUMBER_MAX: u32 = 999;
+
 pub fn play_offsets_from_profile(profile: &ProfileConfig) -> PlayOffsets {
     PlayOffsets {
         input_offset_us: profile.judge.input_offset_us,

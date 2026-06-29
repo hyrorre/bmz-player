@@ -22,6 +22,7 @@ use crate::config::app_config::{
     InputBackendKind, LogLevel, PathEntry, RendererBackend, UpdateChannelConfig, VsyncModeConfig,
     WindowMode,
 };
+use crate::config::play::{TARGET_GREEN_NUMBER_MAX, TARGET_GREEN_NUMBER_MIN};
 use crate::config::profile_config::{
     AssistOptionConfig, BgaExpandConfig, BgaModeConfig, BottomShiftableGaugeConfig,
     DoubleOptionConfig, FastSlowDisplayScope, GaugeAutoShiftConfig, GaugeTypeConfig,
@@ -3007,8 +3008,11 @@ fn build_profile_settings_panel(
                     lane_unit_slider_with_max(ui, &mut profile.lane.lift, "LIFT", lift_max);
                     lane_unit_slider(ui, &mut profile.lane.hidden, "HIDDEN");
                     ui.add(
-                        egui::Slider::new(&mut profile.lane.target_green_number, 1..=999)
-                            .text("緑数字ターゲット"),
+                        egui::Slider::new(
+                            &mut profile.lane.target_green_number,
+                            TARGET_GREEN_NUMBER_MIN..=TARGET_GREEN_NUMBER_MAX,
+                        )
+                        .text("緑数字ターゲット"),
                     );
                 });
 
