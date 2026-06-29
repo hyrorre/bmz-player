@@ -10344,9 +10344,11 @@ impl WinitApp {
                 && old_path == selection.path.trim()
                 && old_files == *selection.files
                 && old_options != *selection.options;
+            let play_options_need_full_reload = play_options_only
+                && self.play_skin_options_need_full_reload(key_mode, selection.path.trim());
             if play_options_only
+                && !play_options_need_full_reload
                 && self.apply_active_play_skin_options_fast_path(key_mode, selection.options)
-                && !self.play_skin_options_need_full_reload(key_mode, selection.path.trim())
             {
                 self.last_play_skin_signature = Some((
                     key_mode,
@@ -17685,10 +17687,16 @@ mod tests {
             "#,
         )
         .unwrap();
+        let lua_skin = root.join("load-time.luaskin");
+        std::fs::write(&lua_skin, "return { type = 5 }").unwrap();
+        let lr2_skin = root.join("load-time.lr2skin");
+        std::fs::write(&lr2_skin, "#LR2SKIN").unwrap();
 
         assert!(!skin_path_options_need_full_reload(&op_only).unwrap());
         assert!(skin_path_options_need_full_reload(&load_time).unwrap());
         assert!(skin_path_options_need_full_reload(&includes_load_time).unwrap());
+        assert!(skin_path_options_need_full_reload(&lua_skin).unwrap());
+        assert!(skin_path_options_need_full_reload(&lr2_skin).unwrap());
 
         let _ = std::fs::remove_dir_all(root);
     }

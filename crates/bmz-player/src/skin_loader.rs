@@ -5626,6 +5626,85 @@ return {
     }
 
     #[test]
+    fn lua_document_cache_misses_when_required_module_option_changes() {
+        let root = unique_test_dir("bmz-lua-document-cache-required-option");
+        std::fs::create_dir_all(&root).unwrap();
+        let skin_path = root.join("play.luaskin");
+        let module_path = root.join("parts.lua");
+        std::fs::write(
+            &skin_path,
+            r#"
+local parts = require("parts")
+return parts.build()
+"#,
+        )
+        .unwrap();
+        std::fs::write(
+            &module_path,
+            r#"
+local M = {}
+function M.build()
+    local branch = 910
+    if skin_config and skin_config.option then
+        branch = skin_config.option["Branch"] or 910
+    end
+    return {
+        type = 0,
+        property = {
+            { name = "Unused", item = {{ name = "Off", op = 900 }, { name = "On", op = 901 }}, def = "Off" },
+            { name = "Branch", item = {{ name = "Off", op = 910 }, { name = "On", op = 911 }}, def = "Off" },
+        },
+        source = {
+            { id = "bg", path = branch == 911 and "on.png" or "off.png" },
+        },
+    }
+end
+return M
+"#,
+        )
+        .unwrap();
+        let cache = Arc::new(Mutex::new(SkinDocumentCache::default()));
+
+        let first = load_skin_document(
+            &skin_path,
+            SkinKind::Play,
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            &LuaLoadRuntimeState::default(),
+            Some(cache.clone()),
+        )
+        .unwrap();
+        assert_eq!(first.cache_status, DocumentCacheStatus::Miss);
+        assert_eq!(first.document.source[0].path, "off.png");
+
+        let unused_changed = BTreeMap::from([("Unused".to_string(), "On".to_string())]);
+        let second = load_skin_document(
+            &skin_path,
+            SkinKind::Play,
+            &unused_changed,
+            &BTreeMap::new(),
+            &LuaLoadRuntimeState::default(),
+            Some(cache.clone()),
+        )
+        .unwrap();
+        assert_eq!(second.cache_status, DocumentCacheStatus::Hit);
+        assert_eq!(second.document.source[0].path, "off.png");
+
+        let branch_changed = BTreeMap::from([("Branch".to_string(), "On".to_string())]);
+        let third = load_skin_document(
+            &skin_path,
+            SkinKind::Play,
+            &branch_changed,
+            &BTreeMap::new(),
+            &LuaLoadRuntimeState::default(),
+            Some(cache),
+        )
+        .unwrap();
+        assert_eq!(third.cache_status, DocumentCacheStatus::Miss);
+        assert_eq!(third.document.source[0].path, "on.png");
+    }
+
+    #[test]
     fn lua_document_cache_misses_when_runtime_number_changes() {
         let root = unique_test_dir("bmz-lua-document-cache-number");
         std::fs::create_dir_all(&root).unwrap();
