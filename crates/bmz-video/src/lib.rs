@@ -257,13 +257,13 @@ fn decode_video_following_playback_time(
     playback_target_us: Arc<AtomicI64>,
     stop_decode: Arc<AtomicBool>,
 ) -> Result<()> {
+    let mut ictx = ffmpeg_next::format::input(path)?;
+    let selected = select_video_stream(&ictx)?;
+    let mut decoder = open_video_decoder(&selected)?;
+    let mut scaler: Option<ffmpeg_next::software::scaling::context::Context> = None;
+    let mut decoded = ffmpeg_next::frame::Video::empty();
     let mut loop_base_us = 0;
     while !stop_decode.load(Ordering::Acquire) {
-        let mut ictx = ffmpeg_next::format::input(path)?;
-        let selected = select_video_stream(&ictx)?;
-        let mut decoder = open_video_decoder(&selected)?;
-        let mut scaler: Option<ffmpeg_next::software::scaling::context::Context> = None;
-        let mut decoded = ffmpeg_next::frame::Video::empty();
         let mut decoded_any = false;
         let mut last_pts_us = None;
         let mut stopped = false;
@@ -318,6 +318,7 @@ fn decode_video_following_playback_time(
         }
         let target_us = playback_target_us.load(Ordering::Acquire);
         loop_base_us = last_pts_us.unwrap_or(loop_base_us).saturating_add(1).max(target_us);
+        rewind_video_decoder(&mut ictx, &mut decoder)?;
     }
     mark_clocked_frames_finished(&clocked_frames);
     Ok(())
@@ -545,6 +546,15 @@ fn open_video_decoder(selected: &SelectedVideoStream) -> Result<ffmpeg_next::dec
         ffmpeg_next::codec::threading::Type::Frame,
     ));
     Ok(context.decoder().video()?)
+}
+
+fn rewind_video_decoder(
+    ictx: &mut ffmpeg_next::format::context::Input,
+    decoder: &mut ffmpeg_next::decoder::Video,
+) -> Result<()> {
+    ictx.seek(0, ..)?;
+    decoder.flush();
+    Ok(())
 }
 
 fn video_stream_bit_rate(params: &ffmpeg_next::codec::Parameters) -> usize {
