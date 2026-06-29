@@ -94,6 +94,7 @@ jobs:
       VCPKG_DEFAULT_TRIPLET: x64-windows
       VCPKG_ROOT: C:\vcpkg
       VCPKGRS_DYNAMIC: 1
+      LIBCLANG_PATH: C:\Program Files\LLVM\bin
     steps:
       - name: Checkout release ref
         uses: actions/checkout@v7
@@ -161,7 +162,6 @@ jobs:
         run: |
           .\scripts\package-windows.ps1 `
             -Installer `
-            -NoDefaultFeatures `
             -DllDir (Join-Path $env:VCPKG_ROOT "installed\x64-windows\bin")
 
       - name: Verify packaged executable

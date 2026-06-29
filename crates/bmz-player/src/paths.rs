@@ -116,6 +116,11 @@ impl AppPaths {
         self.resource_dir.join("skins/default")
     }
 
+    pub fn hides_bundled_skin_label(&self) -> bool {
+        same_path(&self.resource_dir.join("skins"), &self.data_dir.join("skins"))
+            || sibling_named_dirs(&self.resource_dir, "resources", &self.data_dir, "data")
+    }
+
     pub fn resolve_path_ref(&self, path_ref: &str) -> Result<PathBuf> {
         let trimmed = path_ref.trim();
         if let Some(relative) = trimmed.strip_prefix(RESOURCE_PATH_PREFIX) {
@@ -247,6 +252,30 @@ fn is_portable_data_dir(current_dir: &Path, exe_dir: Option<&Path>, data_dir: &P
         return true;
     }
     exe_dir.map(|dir| dir.join("data")).is_some_and(|path| path == data_dir)
+}
+
+fn same_path(a: &Path, b: &Path) -> bool {
+    if a == b {
+        return true;
+    }
+    match (a.canonicalize(), b.canonicalize()) {
+        (Ok(a), Ok(b)) => a == b,
+        _ => false,
+    }
+}
+
+fn sibling_named_dirs(a: &Path, a_name: &str, b: &Path, b_name: &str) -> bool {
+    path_file_name_eq(a, a_name)
+        && path_file_name_eq(b, b_name)
+        && a.parent()
+            .zip(b.parent())
+            .is_some_and(|(a_parent, b_parent)| same_path(a_parent, b_parent))
+}
+
+fn path_file_name_eq(path: &Path, expected: &str) -> bool {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name.eq_ignore_ascii_case(expected))
 }
 
 fn macos_app_resource_dir(exe_path: Option<&Path>) -> Option<PathBuf> {
@@ -422,6 +451,44 @@ mod tests {
             app.resolve_path_ref("data/skins/legacy/play7.luaskin").unwrap(),
             PathBuf::from("data/skins/legacy/play7.luaskin")
         );
+    }
+
+    #[test]
+    fn bundled_skin_label_is_hidden_for_shared_development_skin_root() {
+        let app = AppPaths::from_dirs(
+            PathBuf::from("data"),
+            PathBuf::from("data"),
+            PathBuf::from("data/cache"),
+            PathBuf::from("data/logs"),
+        );
+
+        assert!(app.hides_bundled_skin_label());
+    }
+
+    #[test]
+    fn bundled_skin_label_is_hidden_for_portable_sibling_data_layout() {
+        let root = PathBuf::from("portable");
+        let app = AppPaths::from_dirs(
+            root.join("resources"),
+            root.join("data"),
+            root.join("data/cache"),
+            root.join("data/logs"),
+        );
+
+        assert!(app.hides_bundled_skin_label());
+    }
+
+    #[test]
+    fn bundled_skin_label_is_kept_for_separate_user_data_layout() {
+        let root = PathBuf::from("installed");
+        let app = AppPaths::from_dirs(
+            root.join("resources"),
+            PathBuf::from("profile-data"),
+            PathBuf::from("profile-data/cache"),
+            PathBuf::from("profile-data/logs"),
+        );
+
+        assert!(!app.hides_bundled_skin_label());
     }
 
     #[test]

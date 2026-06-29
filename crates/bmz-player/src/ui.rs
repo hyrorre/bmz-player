@@ -22,6 +22,7 @@ use crate::config::app_config::{
     InputBackendKind, LogLevel, PathEntry, RendererBackend, UpdateChannelConfig, VsyncModeConfig,
     WindowMode,
 };
+use crate::config::play::{TARGET_GREEN_NUMBER_MAX, TARGET_GREEN_NUMBER_MIN};
 use crate::config::profile_config::{
     AssistOptionConfig, BgaExpandConfig, BgaModeConfig, BottomShiftableGaugeConfig,
     DoubleOptionConfig, FastSlowDisplayScope, GaugeAutoShiftConfig, GaugeTypeConfig,
@@ -2356,7 +2357,7 @@ fn build_settings_panel(
                         ui.add(
                             egui::TextEdit::singleline(&mut config.screenshot.dir)
                                 .desired_width(300.0)
-                                .hint_text("data/screenshots"),
+                                .hint_text("screenshots"),
                         );
                     });
                     ui.horizontal(|ui| {
@@ -3007,8 +3008,11 @@ fn build_profile_settings_panel(
                     lane_unit_slider_with_max(ui, &mut profile.lane.lift, "LIFT", lift_max);
                     lane_unit_slider(ui, &mut profile.lane.hidden, "HIDDEN");
                     ui.add(
-                        egui::Slider::new(&mut profile.lane.target_green_number, 1..=999)
-                            .text("緑数字ターゲット"),
+                        egui::Slider::new(
+                            &mut profile.lane.target_green_number,
+                            TARGET_GREEN_NUMBER_MIN..=TARGET_GREEN_NUMBER_MAX,
+                        )
+                        .text("緑数字ターゲット"),
                     );
                 });
 
@@ -3895,11 +3899,12 @@ fn skin_path_combo(
     slot: SkinSlot,
     label: &str,
     candidates: &[SkinCandidate],
+    show_bundled_origin: bool,
 ) -> bool {
     ui.label(label);
     let current = skin_slot_path(skin, slot).to_string();
     let mut selected = current.clone();
-    let selected_text = skin_candidate_label(candidates, &current);
+    let selected_text = skin_candidate_label(candidates, &current, show_bundled_origin);
     egui::ComboBox::from_id_salt(("skin_path_combo", label))
         .selected_text(selected_text)
         .width(320.0)
@@ -3909,14 +3914,15 @@ fn skin_path_combo(
                 let response = ui.selectable_value(
                     &mut selected,
                     candidate.path.clone(),
-                    skin_candidate_display(candidate),
+                    skin_candidate_display(candidate, show_bundled_origin),
                 );
                 match candidate.origin {
-                    SkinCandidateOrigin::Bundled => {
+                    SkinCandidateOrigin::Bundled if show_bundled_origin => {
                         response.on_hover_text(
                             "同梱スキンです。編集する場合は data_dir/skins にコピーしてユーザースキンとして選択してください。",
                         );
                     }
+                    SkinCandidateOrigin::Bundled => {}
                     SkinCandidateOrigin::User => {
                         response.on_hover_text("data_dir/skins 配下のユーザースキンです。");
                     }
@@ -3942,32 +3948,65 @@ fn skin_path_combo(
     combo_changed || text_changed
 }
 
-fn skin_candidate_label(candidates: &[SkinCandidate], current: &str) -> String {
+fn skin_candidate_label(
+    candidates: &[SkinCandidate],
+    current: &str,
+    show_bundled_origin: bool,
+) -> String {
     if current.is_empty() {
         return "(デフォルト)".to_string();
     }
     candidates
         .iter()
         .find(|candidate| candidate.path == current)
-        .map(skin_candidate_display)
+        .map(|candidate| skin_candidate_display(candidate, show_bundled_origin))
         .unwrap_or_else(|| current.to_string())
 }
 
-fn skin_candidate_display(candidate: &SkinCandidate) -> String {
-    let prefix = skin_candidate_origin_label(candidate.origin);
-    if candidate.name.is_empty() {
-        format!("{prefix} {}", candidate.path)
+fn skin_candidate_display(candidate: &SkinCandidate, show_bundled_origin: bool) -> String {
+    let label = skin_candidate_origin_label(candidate.origin, show_bundled_origin);
+    let text = if candidate.name.is_empty() {
+        candidate.path.clone()
     } else {
-        format!("{prefix} {} ({})", candidate.name, candidate.path)
+        format!("{} ({})", candidate.name, candidate.path)
+    };
+    if let Some(label) = label { format!("{label} {text}") } else { text }
+}
+
+fn skin_candidate_origin_label(
+    origin: SkinCandidateOrigin,
+    show_bundled_origin: bool,
+) -> Option<&'static str> {
+    match origin {
+        SkinCandidateOrigin::Bundled if show_bundled_origin => Some("[同梱]"),
+        SkinCandidateOrigin::Bundled => None,
+        SkinCandidateOrigin::User => Some("[ユーザー]"),
+        SkinCandidateOrigin::External => Some("[外部]"),
     }
 }
 
-fn skin_candidate_origin_label(origin: SkinCandidateOrigin) -> &'static str {
-    match origin {
-        SkinCandidateOrigin::Bundled => "[同梱]",
-        SkinCandidateOrigin::User => "[ユーザー]",
-        SkinCandidateOrigin::External => "[外部]",
-    }
+fn show_bundled_skin_origin(app_paths: &AppPaths, skin_catalog: &SkinCatalog) -> bool {
+    !app_paths.hides_bundled_skin_label() && skin_catalog_has_non_bundled_candidate(skin_catalog)
+}
+
+fn skin_catalog_has_non_bundled_candidate(skin_catalog: &SkinCatalog) -> bool {
+    let groups: [&[SkinCandidate]; 12] = [
+        &skin_catalog.select,
+        &skin_catalog.decide,
+        &skin_catalog.play4,
+        &skin_catalog.play5,
+        &skin_catalog.play6,
+        &skin_catalog.play7,
+        &skin_catalog.play8,
+        &skin_catalog.play9,
+        &skin_catalog.play10,
+        &skin_catalog.play14,
+        &skin_catalog.result,
+        &skin_catalog.course_result,
+    ];
+    groups.iter().any(|candidates| {
+        candidates.iter().any(|candidate| candidate.origin != SkinCandidateOrigin::Bundled)
+    })
 }
 
 fn skin_slot_path(skin: &SkinConfig, slot: SkinSlot) -> &str {
@@ -4075,35 +4114,84 @@ fn build_skin_panel(
     let mut reset_clicked = false;
     let mut changed = false;
     let before_skin = skin.clone();
+    let show_bundled_origin = show_bundled_skin_origin(app_paths, skin_catalog);
     sized_panel_window("スキン設定", ctx, open, 440.0, 560.0, egui::pos2(16.0, 480.0)).show(
         ctx,
         |ui| {
             scrollable_window_content(ui, |ui| {
             ui.label("各画面のスキン。空欄なら内蔵描画 / デフォルトスキンを使用します。");
             egui::Grid::new("skin_grid").num_columns(2).show(ui, |ui| {
-                changed |=
-                    skin_path_combo(ui, skin, SkinSlot::Select, "選曲", &skin_catalog.select);
+                changed |= skin_path_combo(
+                    ui,
+                    skin,
+                    SkinSlot::Select,
+                    "選曲",
+                    &skin_catalog.select,
+                    show_bundled_origin,
+                );
                 ui.end_row();
-                changed |=
-                    skin_path_combo(ui, skin, SkinSlot::Decide, "決定", &skin_catalog.decide);
+                changed |= skin_path_combo(
+                    ui,
+                    skin,
+                    SkinSlot::Decide,
+                    "決定",
+                    &skin_catalog.decide,
+                    show_bundled_origin,
+                );
                 ui.end_row();
-                changed |=
-                    skin_path_combo(ui, skin, SkinSlot::Play4, "プレイ (4K)", &skin_catalog.play4);
+                changed |= skin_path_combo(
+                    ui,
+                    skin,
+                    SkinSlot::Play4,
+                    "プレイ (4K)",
+                    &skin_catalog.play4,
+                    show_bundled_origin,
+                );
                 ui.end_row();
-                changed |=
-                    skin_path_combo(ui, skin, SkinSlot::Play5, "プレイ (5K)", &skin_catalog.play5);
+                changed |= skin_path_combo(
+                    ui,
+                    skin,
+                    SkinSlot::Play5,
+                    "プレイ (5K)",
+                    &skin_catalog.play5,
+                    show_bundled_origin,
+                );
                 ui.end_row();
-                changed |=
-                    skin_path_combo(ui, skin, SkinSlot::Play6, "プレイ (6K)", &skin_catalog.play6);
+                changed |= skin_path_combo(
+                    ui,
+                    skin,
+                    SkinSlot::Play6,
+                    "プレイ (6K)",
+                    &skin_catalog.play6,
+                    show_bundled_origin,
+                );
                 ui.end_row();
-                changed |=
-                    skin_path_combo(ui, skin, SkinSlot::Play7, "プレイ (7K)", &skin_catalog.play7);
+                changed |= skin_path_combo(
+                    ui,
+                    skin,
+                    SkinSlot::Play7,
+                    "プレイ (7K)",
+                    &skin_catalog.play7,
+                    show_bundled_origin,
+                );
                 ui.end_row();
-                changed |=
-                    skin_path_combo(ui, skin, SkinSlot::Play8, "プレイ (8K)", &skin_catalog.play8);
+                changed |= skin_path_combo(
+                    ui,
+                    skin,
+                    SkinSlot::Play8,
+                    "プレイ (8K)",
+                    &skin_catalog.play8,
+                    show_bundled_origin,
+                );
                 ui.end_row();
-                changed |=
-                    skin_path_combo(ui, skin, SkinSlot::Play9, "プレイ (9K)", &skin_catalog.play9);
+                changed |= skin_path_combo(
+                    ui,
+                    skin,
+                    SkinSlot::Play9,
+                    "プレイ (9K)",
+                    &skin_catalog.play9,
+                    show_bundled_origin,
+                );
                 ui.end_row();
                 changed |= skin_path_combo(
                     ui,
@@ -4111,6 +4199,7 @@ fn build_skin_panel(
                     SkinSlot::Play10,
                     "プレイ (10K)",
                     &skin_catalog.play10,
+                    show_bundled_origin,
                 );
                 ui.end_row();
                 changed |= skin_path_combo(
@@ -4119,10 +4208,17 @@ fn build_skin_panel(
                     SkinSlot::Play14,
                     "プレイ (14K)",
                     &skin_catalog.play14,
+                    show_bundled_origin,
                 );
                 ui.end_row();
-                changed |=
-                    skin_path_combo(ui, skin, SkinSlot::Result, "リザルト", &skin_catalog.result);
+                changed |= skin_path_combo(
+                    ui,
+                    skin,
+                    SkinSlot::Result,
+                    "リザルト",
+                    &skin_catalog.result,
+                    show_bundled_origin,
+                );
                 ui.end_row();
                 changed |= skin_path_combo(
                     ui,
@@ -4130,6 +4226,7 @@ fn build_skin_panel(
                     SkinSlot::CourseResult,
                     "コースリザルト",
                     &skin_catalog.course_result,
+                    show_bundled_origin,
                 );
                 ui.end_row();
             });
@@ -4671,6 +4768,102 @@ mod tests {
         sanitize_profile_id_input(&mut value);
 
         assert_eq!(value.len(), 64);
+    }
+
+    #[test]
+    fn skin_candidate_display_hides_bundled_origin_label_when_requested() {
+        let candidate = SkinCandidate {
+            name: "Default".to_string(),
+            path: "resource:skins/default/select.json".to_string(),
+            origin: SkinCandidateOrigin::Bundled,
+        };
+
+        assert_eq!(
+            skin_candidate_display(&candidate, true),
+            "[同梱] Default (resource:skins/default/select.json)"
+        );
+        assert_eq!(
+            skin_candidate_display(&candidate, false),
+            "Default (resource:skins/default/select.json)"
+        );
+    }
+
+    #[test]
+    fn skin_candidate_display_keeps_user_origin_label() {
+        let candidate = SkinCandidate {
+            name: "Custom".to_string(),
+            path: "data:skins/custom/play7.luaskin".to_string(),
+            origin: SkinCandidateOrigin::User,
+        };
+
+        assert_eq!(
+            skin_candidate_display(&candidate, false),
+            "[ユーザー] Custom (data:skins/custom/play7.luaskin)"
+        );
+    }
+
+    #[test]
+    fn bundled_skin_origin_is_hidden_for_development_or_portable_layout() {
+        let app_paths = AppPaths::from_dirs(
+            PathBuf::from("data"),
+            PathBuf::from("data"),
+            PathBuf::from("data/cache"),
+            PathBuf::from("data/logs"),
+        );
+        let mut catalog = SkinCatalog::default();
+        catalog.select.push(SkinCandidate {
+            name: "Default".to_string(),
+            path: "resource:skins/default/select.json".to_string(),
+            origin: SkinCandidateOrigin::Bundled,
+        });
+        catalog.select.push(SkinCandidate {
+            name: "Custom".to_string(),
+            path: "data:skins/custom/select.luaskin".to_string(),
+            origin: SkinCandidateOrigin::User,
+        });
+
+        assert!(!show_bundled_skin_origin(&app_paths, &catalog));
+    }
+
+    #[test]
+    fn bundled_skin_origin_is_shown_when_user_candidates_share_a_regular_layout() {
+        let app_paths = AppPaths::from_dirs(
+            PathBuf::from("resources"),
+            PathBuf::from("profile-data"),
+            PathBuf::from("profile-data/cache"),
+            PathBuf::from("profile-data/logs"),
+        );
+        let mut catalog = SkinCatalog::default();
+        catalog.select.push(SkinCandidate {
+            name: "Default".to_string(),
+            path: "resource:skins/default/select.json".to_string(),
+            origin: SkinCandidateOrigin::Bundled,
+        });
+        catalog.select.push(SkinCandidate {
+            name: "Custom".to_string(),
+            path: "data:skins/custom/select.luaskin".to_string(),
+            origin: SkinCandidateOrigin::User,
+        });
+
+        assert!(show_bundled_skin_origin(&app_paths, &catalog));
+    }
+
+    #[test]
+    fn bundled_skin_origin_is_hidden_when_catalog_has_no_user_candidates() {
+        let app_paths = AppPaths::from_dirs(
+            PathBuf::from("resources"),
+            PathBuf::from("profile-data"),
+            PathBuf::from("profile-data/cache"),
+            PathBuf::from("profile-data/logs"),
+        );
+        let mut catalog = SkinCatalog::default();
+        catalog.select.push(SkinCandidate {
+            name: "Default".to_string(),
+            path: "resource:skins/default/select.json".to_string(),
+            origin: SkinCandidateOrigin::Bundled,
+        });
+
+        assert!(!show_bundled_skin_origin(&app_paths, &catalog));
     }
 
     #[test]

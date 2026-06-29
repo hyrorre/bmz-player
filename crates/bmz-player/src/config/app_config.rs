@@ -124,7 +124,7 @@ impl Default for ScreenshotConfig {
 }
 
 pub fn default_screenshot_dir() -> String {
-    "data/screenshots".to_string()
+    "screenshots".to_string()
 }
 
 impl Default for MusicSelectConfig {
@@ -359,7 +359,7 @@ mod tests {
     fn app_config_defaults_screenshot_settings() {
         let config = AppConfig::default();
 
-        assert_eq!(config.screenshot.dir, "data/screenshots");
+        assert_eq!(config.screenshot.dir, "screenshots");
         assert!(config.screenshot.copy_to_clipboard);
     }
 
@@ -430,7 +430,7 @@ mod tests {
 
         let config: AppConfig = toml::from_str(&toml).unwrap();
 
-        assert_eq!(config.screenshot.dir, "data/screenshots");
+        assert_eq!(config.screenshot.dir, "screenshots");
         assert!(config.screenshot.copy_to_clipboard);
     }
 

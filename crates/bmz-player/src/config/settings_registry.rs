@@ -1,3 +1,4 @@
+use super::play::{TARGET_GREEN_NUMBER_MAX, TARGET_GREEN_NUMBER_MIN};
 use super::profile_config::{
     AssistOptionConfig, BgaExpandConfig, BgaModeConfig, BottomShiftableGaugeConfig,
     DoubleOptionConfig, GaugeAutoShiftConfig, GaugeTypeConfig, HispeedModeConfig, HsFixConfig,
@@ -392,9 +393,12 @@ pub fn adjust_settings_value(profile: &mut ProfileConfig, id: SettingsEntryId, d
             crate::config::play::lane_unit_max_for_other(profile.lane.sudden),
         ),
         SettingsEntryId::Hidden => adjust_u32(&mut profile.lane.hidden, delta, 0, 1000),
-        SettingsEntryId::TargetGreenNumber => {
-            adjust_u32(&mut profile.lane.target_green_number, delta, 1, 999)
-        }
+        SettingsEntryId::TargetGreenNumber => adjust_u32(
+            &mut profile.lane.target_green_number,
+            delta,
+            TARGET_GREEN_NUMBER_MIN,
+            TARGET_GREEN_NUMBER_MAX,
+        ),
         SettingsEntryId::SelectInputMode => {
             cycle_enum(delta, profile.input.select_input_mode, cycle_select_input_mode)
                 .map(|next| profile.input.select_input_mode = next)
