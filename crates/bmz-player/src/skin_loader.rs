@@ -5623,11 +5623,8 @@ return {
         .unwrap();
         assert_eq!(first.cache_status, DocumentCacheStatus::Miss);
         assert_eq!(
-            first.document.source[0].path,
-            std::fs::canonicalize(root.join("parts/blue.png"))
-                .unwrap()
-                .to_string_lossy()
-                .to_string()
+            Path::new(&first.document.source[0].path).canonicalize().unwrap(),
+            std::fs::canonicalize(root.join("parts/blue.png")).unwrap()
         );
 
         let selected = BTreeMap::from([("Parts".to_string(), "red.png".to_string())]);
@@ -5642,11 +5639,8 @@ return {
         .unwrap();
         assert_eq!(second.cache_status, DocumentCacheStatus::Miss);
         assert_eq!(
-            second.document.source[0].path,
-            std::fs::canonicalize(root.join("parts/red.png"))
-                .unwrap()
-                .to_string_lossy()
-                .to_string()
+            Path::new(&second.document.source[0].path).canonicalize().unwrap(),
+            std::fs::canonicalize(root.join("parts/red.png")).unwrap()
         );
     }
 

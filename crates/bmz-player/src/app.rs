@@ -3591,6 +3591,13 @@ impl WinitApp {
         {
             return;
         }
+        if event.state == ElementState::Pressed
+            && !event.repeat
+            && let Some(control) = play_control.as_deref()
+            && self.begin_play_fadeout_after_final_notes_control(control)
+        {
+            return;
+        }
         if has_play_control_context && let Some(control) = play_control.as_deref() {
             self.update_play_e1_control_state(control, event.state == ElementState::Pressed);
         }
@@ -4368,6 +4375,9 @@ impl WinitApp {
         let has_play_control_context =
             self.active_play.is_some() || self.pending_play_start.is_some();
         if pressed && self.handle_quick_retry_control(button) {
+            return;
+        }
+        if pressed && self.begin_play_fadeout_after_final_notes_control(button) {
             return;
         }
         if has_play_control_context {
@@ -7679,6 +7689,98 @@ impl WinitApp {
             return false;
         };
         self.quick_retry_active_play(mode);
+        true
+    }
+
+    fn begin_play_fadeout_after_final_notes_control(&mut self, control: &str) -> bool {
+        if !play_fadeout_after_final_notes_control(control, &self.select_keys) {
+            return false;
+        }
+        if let Some(ending) = &mut self.play_ending {
+            if ending.failed {
+                return false;
+            }
+            if ending.fadeout_started_at.is_none() {
+                ending.fadeout_started_at = Some(Instant::now());
+                self.update_play_ending_snapshot();
+                tracing::info!(control, "started pending play fadeout");
+            }
+            return true;
+        }
+
+        let Some(active_play) = &self.active_play else {
+            return false;
+        };
+        let should_begin = should_begin_play_fadeout_after_final_notes(
+            control,
+            &self.select_keys,
+            self.play_ready_sound_started_at.is_some(),
+            self.play_ending.is_some(),
+            active_play.running.session.state,
+            active_play.running.session.judge.is_exhausted(&active_play.running.session.chart),
+        );
+        if !should_begin {
+            return false;
+        }
+
+        let finish_mode = if self.active_course.is_some() {
+            crate::screens::play_finish::FinishResultMode::CourseStage
+        } else {
+            crate::screens::play_finish::FinishResultMode::Normal
+        };
+        let now = Instant::now();
+        let full_combo_elapsed_at_finish_ms =
+            self.last_play_snapshot.as_ref().and_then(|snapshot| snapshot.full_combo_elapsed_ms);
+        let early_finished = {
+            let Some(active_play) = &mut self.active_play else {
+                return false;
+            };
+            active_play.running.session.state = bmz_gameplay::session::PlayState::Finished;
+            match crate::screens::play_finish::finish_session_result_once(
+                &mut active_play.running.finished,
+                &mut self.boot.score_db,
+                crate::screens::play_finish::FinishSessionResultOnceRequest {
+                    profile_paths: &self.boot.profile_paths,
+                    replay_config: &self.boot.profile_config.replay,
+                    ir_config: &self.boot.profile_config.ir,
+                    session: &active_play.running.session,
+                    played_at: now_unix_seconds(),
+                    applied_arrange: &active_play.running.applied_arrange,
+                    target_ex_score: active_play.running.target_ex_score,
+                    score_key: active_play.running.score_key,
+                    practice_mode: active_play.running.practice_mode,
+                    finish_mode,
+                },
+            ) {
+                Ok(mut finished) => {
+                    finished.summary.graph = active_play
+                        .running
+                        .result_graph
+                        .snapshot_for_session(&active_play.running.session);
+                    Some(finished)
+                }
+                Err(error) => {
+                    tracing::error!(%error, "failed to finish play session on requested fadeout");
+                    None
+                }
+            }
+        };
+        self.save_current_play_options(
+            self.active_play.as_ref().map(|active| active.running.session.hispeed),
+            "play fadeout requested",
+        );
+        if let Some(finished) = &early_finished {
+            self.start_result_ir_for_finished_play(finished);
+        }
+        self.play_ending = Some(PlayEndingTransition {
+            started_at: now,
+            fadeout_started_at: Some(now),
+            failed: false,
+            full_combo_elapsed_at_finish_ms,
+            finished: early_finished,
+        });
+        self.update_play_ending_snapshot();
+        tracing::info!(control, "started play fadeout after final notes");
         true
     }
 
@@ -13663,6 +13765,25 @@ fn play_ready_blocked_by_control_holds(e1_held: bool, e2_held: bool) -> bool {
     e1_held || e2_held
 }
 
+fn should_begin_play_fadeout_after_final_notes(
+    control: &str,
+    bindings: &SelectKeyBindings,
+    ready_started: bool,
+    play_ending_active: bool,
+    play_state: bmz_gameplay::session::PlayState,
+    final_notes_processed: bool,
+) -> bool {
+    ready_started
+        && !play_ending_active
+        && play_state == bmz_gameplay::session::PlayState::Playing
+        && final_notes_processed
+        && play_fadeout_after_final_notes_control(control, bindings)
+}
+
+fn play_fadeout_after_final_notes_control(control: &str, bindings: &SelectKeyBindings) -> bool {
+    bindings.is_start(control) || bindings.is_e2_action(control)
+}
+
 fn is_select_start_key(physical_key: PhysicalKey, bindings: &SelectKeyBindings) -> bool {
     physical_key_name(physical_key).is_some_and(|control| bindings.is_start(&control))
 }
@@ -18172,6 +18293,61 @@ mod tests {
         assert!(play_ready_blocked_by_control_holds(true, false));
         assert!(play_ready_blocked_by_control_holds(false, true));
         assert!(play_ready_blocked_by_control_holds(true, true));
+    }
+
+    #[test]
+    fn final_notes_fadeout_accepts_e1_and_e2_controls() {
+        let keys = default_select_keys();
+
+        assert!(play_fadeout_after_final_notes_control("Q", &keys));
+        assert!(play_fadeout_after_final_notes_control("W", &keys));
+        assert!(!play_fadeout_after_final_notes_control("Z", &keys));
+    }
+
+    #[test]
+    fn final_notes_fadeout_requires_active_finished_note_state() {
+        let keys = default_select_keys();
+
+        assert!(should_begin_play_fadeout_after_final_notes(
+            "Q",
+            &keys,
+            true,
+            false,
+            bmz_gameplay::session::PlayState::Playing,
+            true,
+        ));
+        assert!(!should_begin_play_fadeout_after_final_notes(
+            "Q",
+            &keys,
+            false,
+            false,
+            bmz_gameplay::session::PlayState::Playing,
+            true,
+        ));
+        assert!(!should_begin_play_fadeout_after_final_notes(
+            "Q",
+            &keys,
+            true,
+            false,
+            bmz_gameplay::session::PlayState::Playing,
+            false,
+        ));
+        assert!(!should_begin_play_fadeout_after_final_notes(
+            "Q",
+            &keys,
+            true,
+            true,
+            bmz_gameplay::session::PlayState::Playing,
+            true,
+        ));
+        assert!(!should_begin_play_fadeout_after_final_notes(
+            "Q",
+            &keys,
+            true,
+            false,
+            bmz_gameplay::session::PlayState::Failed,
+            true,
+        ));
     }
 
     #[test]
