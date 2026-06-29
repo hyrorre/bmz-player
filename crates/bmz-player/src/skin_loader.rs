@@ -3465,6 +3465,101 @@ mod tests {
     }
 
     #[test]
+    fn rmz_play7_lanecover_green_renders_green_number_when_available() {
+        let skin_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../data/skins/Rmz-skin/play7main.luaskin");
+        if !skin_path.is_file() {
+            return;
+        }
+
+        let decoded = decode_beatoraja_skin(&skin_path, SkinKind::Play).unwrap();
+        let lanecover_green_value = decoded
+            .document
+            .value
+            .iter()
+            .find(|value| value.id == "lanecover-green")
+            .expect("Rmz lanecover green value should decode");
+        assert_eq!(
+            lanecover_green_value.value_expr, "0.6*number(312)",
+            "decoded value: {lanecover_green_value:?}"
+        );
+        let source = decoded
+            .sources
+            .iter()
+            .find(|source| source.source_id == "play_system_src")
+            .expect("Rmz play system source should decode");
+        let sources = decoded
+            .sources
+            .iter()
+            .map(|source| {
+                (
+                    source.source_id.clone(),
+                    SkinDocumentTexture {
+                        source_id: source.source_id.clone(),
+                        texture: source.texture,
+                        source_size: SkinImageSize {
+                            width: source.size.width,
+                            height: source.size.height,
+                        },
+                    },
+                )
+            })
+            .collect::<std::collections::HashMap<_, _>>();
+        let state = bmz_render::skin::SkinDrawState {
+            elapsed_ms: 2_000,
+            play_timer_ms: Some(2_000),
+            total_duration_ms: 500,
+            duration_green_ms: Some(300),
+            lane_cover_changing: true,
+            lanecover_enabled: true,
+            ..Default::default()
+        };
+
+        let items = decoded.document.static_render_items(
+            &sources,
+            &state,
+            &bmz_render::skin::SkinTextState::default(),
+        );
+        let digit_width = 20.0;
+        let source_candidates = items
+            .iter()
+            .filter_map(|item| {
+                if let bmz_render::skin::SkinRenderItem::Image { texture, rect, uv, .. } = item
+                    && *texture == source.texture
+                {
+                    Some((
+                        (rect.x * 1920.0).round() as i32,
+                        (rect.y * 1080.0).round() as i32,
+                        (uv.x * source.size.width / digit_width).round() as i32,
+                        (uv.y * source.size.height).round() as i32,
+                    ))
+                } else {
+                    None
+                }
+            })
+            .collect::<Vec<_>>();
+        let mut digits = items
+            .iter()
+            .filter_map(|item| {
+                if let bmz_render::skin::SkinRenderItem::Image { texture, rect, uv, .. } = item
+                    && *texture == source.texture
+                    && (rect.y * 1080.0 - 10.0).abs() < 2.0
+                    && (rect.x * 1920.0 - 849.0).abs() < 80.0
+                {
+                    let digit = (uv.x * source.size.width / digit_width).round() as i32;
+                    Some(((rect.x * 1920.0).round() as i32, digit))
+                } else {
+                    None
+                }
+            })
+            .collect::<Vec<_>>();
+        digits.sort_by_key(|(x, _)| *x);
+        let digits = digits.into_iter().map(|(_, digit)| digit).collect::<Vec<_>>();
+
+        assert_eq!(digits, vec![3, 0, 0], "source candidates: {source_candidates:?}");
+    }
+
+    #[test]
     fn wmii_fhd_lr2skin_decodes_play_document_when_available() {
         let skin_path = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../data/skins/WMII_FHD/play/FHDPLAY_AC.lr2skin");

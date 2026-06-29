@@ -8325,7 +8325,7 @@ fn skin_value_number_for_destination(
     {
         return nearest_grade_diff_for_destination(state, false).map(|diff| diff.value);
     }
-    if value.ref_id == 0 && value.expr.trim().is_empty() {
+    if value.ref_id == 0 && value.expr.trim().is_empty() && value.value_expr.trim().is_empty() {
         return Some(if state.play_level != 0 {
             state.play_level
         } else {
@@ -22494,6 +22494,23 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(skin_value_number(&value, &state), Some(183_000));
+    }
+
+    #[test]
+    fn skin_value_number_for_destination_prefers_value_expr_over_ref_zero_fallback() {
+        let state = SkinDrawState {
+            play_level: 12,
+            total_duration_ms: 500,
+            duration_green_ms: Some(300),
+            ..SkinDrawState::default()
+        };
+        let value = SkinValueDef {
+            id: "lanecover-green".to_string(),
+            src: String::new(),
+            value_expr: "0.6*number(312)".to_string(),
+            ..Default::default()
+        };
+        assert_eq!(skin_value_number_for_destination(&value, &state, false), Some(300));
     }
 
     #[test]
