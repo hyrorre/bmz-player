@@ -1073,6 +1073,8 @@ const AUDIO_DIAGNOSTICS_LOG_INTERVAL: Duration = Duration::from_secs(1);
 const SELECT_PREVIEW_FADE_DURATION: Duration = Duration::from_millis(150);
 /// beatoraja MusicSelector waits this long after a song-bar change before preview starts.
 const SELECT_PREVIEW_START_DELAY: Duration = Duration::from_millis(400);
+const QUICK_RETRY_REUSE_LOCK_ATTEMPTS: usize = 4;
+const QUICK_RETRY_REUSE_LOCK_RETRY_SLEEP: Duration = Duration::from_micros(250);
 /// レーンカバー / LIFT を上下キーで動かす際のステップ幅。
 const LANE_COVER_STEP: f32 = 0.001;
 const LANE_COVER_REPEAT_STEP: f32 = 0.01;
@@ -7008,6 +7010,16 @@ impl WinitApp {
                             current_generation = self.play_preload_generation,
                             "discarding stale play preload result"
                         );
+                        if self.pending_play_start.is_some() {
+                            tracing::warn!(
+                                chart_id = result.chart_id,
+                                generation = result.generation,
+                                current_generation = self.play_preload_generation,
+                                "aborting pending play start after stale preload result"
+                            );
+                            self.abort_pending_play_start();
+                            return;
+                        }
                     } else {
                         match result.result {
                             Ok(prepared) => {
@@ -7044,6 +7056,10 @@ impl WinitApp {
                         "play preload worker disconnected"
                     );
                     self.pending_play_preload = None;
+                    if self.pending_play_start.is_some() {
+                        self.abort_pending_play_start();
+                        return;
+                    }
                 }
             }
         }
@@ -7468,13 +7484,30 @@ impl WinitApp {
             return None;
         }
         let active = self.active_play.as_ref()?;
-        let Ok(engine) = active.running.audio.engine.try_lock() else {
-            tracing::debug!(chart_id, "quick retry asset reuse skipped because audio is busy");
+        let mut audio = None;
+        for attempt in 0..QUICK_RETRY_REUSE_LOCK_ATTEMPTS {
+            match active.running.audio.engine.try_lock() {
+                Ok(engine) => {
+                    audio = Some(AudioEngine::with_sample_bank(
+                        engine.output_sample_rate(),
+                        engine.samples.clone(),
+                    ));
+                    break;
+                }
+                Err(_) if attempt + 1 < QUICK_RETRY_REUSE_LOCK_ATTEMPTS => {
+                    thread::sleep(QUICK_RETRY_REUSE_LOCK_RETRY_SLEEP);
+                }
+                Err(_) => {}
+            }
+        }
+        let Some(audio) = audio else {
+            tracing::debug!(
+                chart_id,
+                attempts = QUICK_RETRY_REUSE_LOCK_ATTEMPTS,
+                "quick retry asset reuse skipped because audio is busy"
+            );
             return None;
         };
-        let audio =
-            AudioEngine::with_sample_bank(engine.output_sample_rate(), engine.samples.clone());
-        drop(engine);
 
         let mut session_options =
             play_session_options_from_start(&self.play_session_app_config(), options.clone());
