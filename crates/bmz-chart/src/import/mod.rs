@@ -391,6 +391,31 @@ mod tests {
     }
 
     #[test]
+    fn imports_long_channel_pair_with_matching_end_wav_as_silent_end() {
+        let text = "\
+#TITLE Long End Marker
+#BPM 120
+#TOTAL 200
+#WAV01 key.wav
+#00151:0101
+";
+        let path = write_temp_bms(text);
+        let result = import_bms_chart(&path, None, false).unwrap();
+
+        let lane = result.chart.notes_for_lane(Lane::Key1);
+        assert_eq!(lane.len(), 2, "lane notes: {lane:?}");
+        assert_eq!(lane[0].kind, NoteKind::LongStart);
+        assert_eq!(lane[1].kind, NoteKind::LongEnd);
+        assert!(lane[0].sound.is_some());
+        assert_eq!(lane[1].sound, None);
+        assert_eq!(result.chart.long_notes.len(), 1);
+        assert_eq!(result.chart.long_notes[0].style, LongNoteStyle::ChannelPair);
+        assert_eq!(result.chart.total_notes, 1);
+
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
     fn imports_scroll_and_speed_events() {
         // SCROLL チャネル (SC) と SPEED チャネル (SP) を含む BMS。
         // bms-rs は `#SCROLLxx` / `#SPEEDxx` 定義と `#xxxSC` / `#xxxSP` 行を
