@@ -1,8 +1,15 @@
 use std::collections::VecDeque;
 use std::path::Path;
-use std::sync::mpsc::{SyncSender, sync_channel};
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, AtomicI64, Ordering},
+    mpsc::{SyncSender, TrySendError, sync_channel},
+};
+use std::time::Duration;
 
 use anyhow::Result;
+
+const CLOCKED_CATCH_UP_PUBLISH_INTERVAL_US: i64 = 33_000;
 
 #[derive(Debug, Clone)]
 pub struct DecodedFrame {
@@ -17,6 +24,8 @@ pub struct VideoBgaDecoder {
     pending: VecDeque<DecodedFrame>,
     current: Option<DecodedFrame>,
     finished: bool,
+    playback_target_us: Option<Arc<AtomicI64>>,
+    stop_decode: Arc<AtomicBool>,
 }
 
 struct SelectedVideoStream {
@@ -28,22 +37,60 @@ struct SelectedVideoStream {
 
 impl VideoBgaDecoder {
     pub fn open(path: &Path) -> Result<Self> {
+        Self::open_inner(path, false)
+    }
+
+    /// Open a decoder that follows the playback clock reported by `poll_frame`.
+    ///
+    /// This is intended for skin movie sources: the decode thread coalesces overdue
+    /// frames instead of queueing every decoded frame, closer to beatoraja's
+    /// SkinSourceMovie behavior.
+    pub fn open_following_playback_time(path: &Path) -> Result<Self> {
+        Self::open_inner(path, true)
+    }
+
+    fn open_inner(path: &Path, follow_playback_time: bool) -> Result<Self> {
         bmz_ffmpeg::ensure_init().map_err(|e| anyhow::anyhow!(e))?;
 
         let path = path.to_path_buf();
-        let (sender, receiver) = sync_channel(4);
+        let (sender, receiver) = sync_channel(if follow_playback_time { 1 } else { 4 });
+        let playback_target_us = follow_playback_time.then(|| Arc::new(AtomicI64::new(0)));
+        let stop_decode = Arc::new(AtomicBool::new(false));
+        let thread_playback_target_us = playback_target_us.clone();
+        let thread_stop_decode = Arc::clone(&stop_decode);
 
         std::thread::Builder::new().name("bmz-video-decode".to_string()).spawn(move || {
-            if let Err(e) = decode_video(&path, sender) {
+            let result = if let Some(target_us) = thread_playback_target_us {
+                decode_video_following_playback_time(&path, sender, target_us, thread_stop_decode)
+            } else {
+                decode_video(&path, sender)
+            };
+            if let Err(e) = result {
                 tracing::warn!(path = %path.display(), error = %e, "video decode thread error");
             }
         })?;
 
-        Ok(Self { receiver, pending: VecDeque::new(), current: None, finished: false })
+        Ok(Self {
+            receiver,
+            pending: VecDeque::new(),
+            current: None,
+            finished: false,
+            playback_target_us,
+            stop_decode,
+        })
     }
 
     /// チャンネルをdrainして `video_offset_us` 以下の最新フレームを返す。
     pub fn poll_frame(&mut self, video_offset_us: i64) -> Option<&DecodedFrame> {
+        let follows_playback_time = self.playback_target_us.is_some();
+        if let Some(target) = &self.playback_target_us {
+            target.store(video_offset_us, Ordering::Release);
+        }
+
+        if follows_playback_time {
+            return self.poll_clocked_frame();
+        }
+
         // チャンネルから利用可能なフレームをすべて受信する。
         // 受信時点ですでに表示期限を過ぎている frame は pending に積まず、
         // 最新候補だけへ畳み込む。decoder 出力は presentation order なので、
@@ -88,8 +135,35 @@ impl VideoBgaDecoder {
         self.current.as_ref()
     }
 
+    fn poll_clocked_frame(&mut self) -> Option<&DecodedFrame> {
+        let mut latest_received = None;
+        loop {
+            match self.receiver.try_recv() {
+                Ok(frame) => latest_received = Some(frame),
+                Err(std::sync::mpsc::TryRecvError::Empty) => break,
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    self.finished = true;
+                    break;
+                }
+            }
+        }
+        while let Some(frame) = self.pending.pop_front() {
+            latest_received = Some(frame);
+        }
+        if let Some(frame) = latest_received {
+            self.current = Some(frame);
+        }
+        self.current.as_ref()
+    }
+
     pub fn is_finished(&self) -> bool {
         self.finished && self.pending.is_empty()
+    }
+}
+
+impl Drop for VideoBgaDecoder {
+    fn drop(&mut self) {
+        self.stop_decode.store(true, Ordering::Release);
     }
 }
 
@@ -131,6 +205,56 @@ pub fn decode_first_frame(path: &Path) -> Result<DecodedFrame> {
 }
 
 fn decode_video(path: &Path, sender: SyncSender<DecodedFrame>) -> Result<()> {
+    decode_video_frames(path, |frame| {
+        if sender.send(frame).is_err() {
+            // receiver が drop された
+            return Ok(DecodeFrameControl::Stop);
+        }
+        Ok(DecodeFrameControl::Continue)
+    })
+}
+
+fn decode_video_following_playback_time(
+    path: &Path,
+    sender: SyncSender<DecodedFrame>,
+    playback_target_us: Arc<AtomicI64>,
+    stop_decode: Arc<AtomicBool>,
+) -> Result<()> {
+    let mut sent_any = false;
+    let mut last_publish_pts_us = None;
+    decode_video_frames(path, |frame| {
+        if stop_decode.load(Ordering::Acquire) {
+            return Ok(DecodeFrameControl::Stop);
+        }
+        let pts_us = frame.pts_us;
+        let target_us = playback_target_us.load(Ordering::Acquire);
+        let should_publish =
+            should_publish_clocked_frame(pts_us, target_us, sent_any, last_publish_pts_us);
+        if should_publish {
+            if !try_send_clocked_frame(&sender, frame) {
+                return Ok(DecodeFrameControl::Stop);
+            }
+            sent_any = true;
+            last_publish_pts_us = Some(pts_us);
+            if pts_us >= target_us
+                && !wait_until_playback_reaches_frame(&playback_target_us, &stop_decode, pts_us)
+            {
+                return Ok(DecodeFrameControl::Stop);
+            }
+        }
+        Ok(DecodeFrameControl::Continue)
+    })
+}
+
+enum DecodeFrameControl {
+    Continue,
+    Stop,
+}
+
+fn decode_video_frames<F>(path: &Path, mut on_frame: F) -> Result<()>
+where
+    F: FnMut(DecodedFrame) -> Result<DecodeFrameControl>,
+{
     let mut ictx = ffmpeg_next::format::input(path)?;
 
     let selected = select_video_stream(&ictx)?;
@@ -164,8 +288,7 @@ fn decode_video(path: &Path, sender: SyncSender<DecodedFrame>) -> Result<()> {
                 &mut scaler,
             )?;
 
-            if sender.send(frame).is_err() {
-                // receiver が drop された
+            if matches!(on_frame(frame)?, DecodeFrameControl::Stop) {
                 return Ok(());
             }
         }
@@ -187,12 +310,50 @@ fn decode_video(path: &Path, sender: SyncSender<DecodedFrame>) -> Result<()> {
             selected.time_base_den,
             &mut scaler,
         )?;
-        if sender.send(frame).is_err() {
+        if matches!(on_frame(frame)?, DecodeFrameControl::Stop) {
             return Ok(());
         }
     }
 
     Ok(())
+}
+
+fn try_send_clocked_frame(sender: &SyncSender<DecodedFrame>, frame: DecodedFrame) -> bool {
+    match sender.try_send(frame) {
+        Ok(()) | Err(TrySendError::Full(_)) => true,
+        Err(TrySendError::Disconnected(_)) => false,
+    }
+}
+
+fn should_publish_clocked_frame(
+    frame_pts_us: i64,
+    playback_target_us: i64,
+    sent_any: bool,
+    last_publish_pts_us: Option<i64>,
+) -> bool {
+    !sent_any
+        || frame_pts_us >= playback_target_us
+        || last_publish_pts_us.is_some_and(|last| {
+            frame_pts_us.saturating_sub(last) >= CLOCKED_CATCH_UP_PUBLISH_INTERVAL_US
+        })
+}
+
+fn wait_until_playback_reaches_frame(
+    playback_target_us: &AtomicI64,
+    stop_decode: &AtomicBool,
+    frame_pts_us: i64,
+) -> bool {
+    loop {
+        if stop_decode.load(Ordering::Acquire) {
+            return false;
+        }
+        let target_us = playback_target_us.load(Ordering::Acquire);
+        if target_us >= frame_pts_us {
+            return true;
+        }
+        let sleep_us = (frame_pts_us - target_us).clamp(1_000, 16_000);
+        std::thread::sleep(Duration::from_micros(sleep_us as u64));
+    }
 }
 
 fn select_video_stream(ictx: &ffmpeg_next::format::context::Input) -> Result<SelectedVideoStream> {
@@ -344,6 +505,8 @@ mod tests {
             pending: pending.into_iter().map(frame).collect(),
             current: Some(frame(0)),
             finished: false,
+            playback_target_us: None,
+            stop_decode: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -387,6 +550,8 @@ mod tests {
             pending: pending.into_iter().map(frame).collect(),
             current: Some(frame(0)),
             finished: false,
+            playback_target_us: None,
+            stop_decode: Arc::new(AtomicBool::new(false)),
         };
         (sender, decoder)
     }
@@ -437,6 +602,63 @@ mod tests {
         assert_eq!(frame.pts_us, 40);
         assert_eq!(decoder.pending.len(), 1);
         assert_eq!(decoder.pending.front().unwrap().pts_us, 50);
+    }
+
+    #[test]
+    fn poll_frame_updates_playback_target_for_clocked_decoder() {
+        let (_sender, receiver) = sync_channel(1);
+        let target = Arc::new(AtomicI64::new(0));
+        let mut decoder = VideoBgaDecoder {
+            receiver,
+            pending: VecDeque::new(),
+            current: None,
+            finished: false,
+            playback_target_us: Some(Arc::clone(&target)),
+            stop_decode: Arc::new(AtomicBool::new(false)),
+        };
+
+        assert!(decoder.poll_frame(123_456).is_none());
+
+        assert_eq!(target.load(Ordering::Acquire), 123_456);
+    }
+
+    #[test]
+    fn clocked_poll_accepts_received_frame_without_pts_gate() {
+        let (sender, receiver) = sync_channel(1);
+        let target = Arc::new(AtomicI64::new(0));
+        let mut decoder = VideoBgaDecoder {
+            receiver,
+            pending: VecDeque::new(),
+            current: None,
+            finished: false,
+            playback_target_us: Some(Arc::clone(&target)),
+            stop_decode: Arc::new(AtomicBool::new(false)),
+        };
+        sender.send(frame(50_000)).unwrap();
+
+        let frame = decoder.poll_frame(10_000).unwrap();
+
+        assert_eq!(frame.pts_us, 50_000);
+        assert_eq!(target.load(Ordering::Acquire), 10_000);
+    }
+
+    #[test]
+    fn clocked_frame_send_does_not_block_when_consumer_lags() {
+        let (sender, receiver) = sync_channel(1);
+
+        assert!(try_send_clocked_frame(&sender, frame(10)));
+        assert!(try_send_clocked_frame(&sender, frame(20)));
+
+        assert_eq!(receiver.try_recv().unwrap().pts_us, 10);
+        assert!(receiver.try_recv().is_err());
+    }
+
+    #[test]
+    fn clocked_publish_keeps_initial_and_catch_up_frames() {
+        assert!(should_publish_clocked_frame(0, 500_000, false, None));
+        assert!(!should_publish_clocked_frame(10_000, 500_000, true, Some(0)));
+        assert!(should_publish_clocked_frame(33_000, 500_000, true, Some(0)));
+        assert!(should_publish_clocked_frame(500_000, 500_000, true, Some(480_000)));
     }
 
     #[test]

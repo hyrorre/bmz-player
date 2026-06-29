@@ -10334,7 +10334,7 @@ impl WinitApp {
             }
             profile.visible_sources += 1;
             if source.decoder.is_none() {
-                match VideoBgaDecoder::open(&source.path) {
+                match VideoBgaDecoder::open_following_playback_time(&source.path) {
                     Ok(decoder) => {
                         tracing::info!(
                             kind = ?kind,
