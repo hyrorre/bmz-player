@@ -11,6 +11,7 @@ param(
     [string]$IsccPath = "",
     [switch]$NoDefaultFeatures,
     [string]$Features = "",
+    [switch]$SkipRustLicenseReport,
     [switch]$Smoke
 )
 
@@ -76,6 +77,37 @@ function Get-CargoVersion {
         }
     }
     throw "failed to read workspace version from $cargoToml"
+}
+
+function New-RustLicenseReport {
+    param(
+        [Parameter(Mandatory = $true)][string]$RepoRoot,
+        [Parameter(Mandatory = $true)][string]$Output,
+        [string]$Target = "",
+        [switch]$NoDefaultFeatures,
+        [string]$Features = ""
+    )
+
+    Require-Command "cargo-about"
+
+    $arguments = @("generate", "--workspace", "--locked", "--fail", "--output-file", $Output)
+    if ($Target) {
+        $arguments += @("--target", $Target)
+    }
+    if ($NoDefaultFeatures) {
+        $arguments += "--no-default-features"
+    }
+    if ($Features) {
+        $arguments += @("--features", $Features)
+    }
+    $arguments += "about.hbs"
+
+    Push-Location $RepoRoot
+    try {
+        Invoke-Native "cargo-about" $arguments
+    } finally {
+        Pop-Location
+    }
 }
 
 function Sync-InnoAppVersion {
@@ -374,6 +406,17 @@ Copy-DirectoryMirror (Join-Path $repoRoot "data\songs\sample-playable") (Join-Pa
 Copy-RequiredFile (Join-Path $repoRoot "LICENSE") (Join-Path $licensesDir "BMZ-GPL-3.0-only.txt")
 Copy-RequiredFile (Join-Path $repoRoot "docs\licenses.md") (Join-Path $licensesDir "license-notes.md")
 Copy-RequiredFile (Join-Path $repoRoot "THIRD-PARTY-NOTICES.txt") (Join-Path $licensesDir "third-party-notices.txt")
+if (-not $SkipRustLicenseReport -and $env:BMZ_SKIP_RUST_LICENSE_REPORT -ne "1") {
+    Write-Host "==> Generating Rust dependency license report"
+    New-RustLicenseReport `
+        -RepoRoot $repoRoot `
+        -Output (Join-Path $licensesDir "rust-dependency-licenses.txt") `
+        -Target $Target `
+        -NoDefaultFeatures:$NoDefaultFeatures `
+        -Features $Features
+} else {
+    Write-Host "==> Skipping Rust dependency license report"
+}
 Copy-RequiredFile $appIcon (Join-Path $resourcesDir "bmz-player.ico")
 
 if ($CopySiblingDlls) {

@@ -121,6 +121,10 @@ jobs:
           restore-keys: |
             release-windows-x64-
 
+      - name: Install cargo-about
+        shell: pwsh
+        run: cargo install --locked --features cli cargo-about
+
       - name: Install Windows packaging dependencies
         shell: pwsh
         run: |
@@ -241,6 +245,9 @@ jobs:
           key: release-macos-${{ matrix.target }}-${{ hashFiles('Cargo.lock') }}
           restore-keys: |
             release-macos-${{ matrix.target }}-
+
+      - name: Install cargo-about
+        run: cargo install --locked --features cli cargo-about
 
       - name: Install macOS dependencies
         run: |

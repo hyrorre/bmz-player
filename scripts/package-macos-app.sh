@@ -17,6 +17,8 @@ Options:
   --bundle-id ID          CFBundleIdentifier (default: net.hyrorre.bmz-player).
   --bundle-dylibs         Copy non-system dylib dependencies into Contents/Frameworks.
                           Automatically ad-hoc signs unless --sign/--ad-hoc-sign is set.
+  --skip-rust-license-report
+                          Do not run cargo-about for rust-dependency-licenses.txt.
   --sign IDENTITY         codesign with the given identity.
   --ad-hoc-sign           codesign with ad-hoc identity (-).
   --smoke                 Run a short packaged smoke launch after bundling.
@@ -29,10 +31,14 @@ Environment:
   BMZ_CODESIGN_IDENTITY   Default signing identity override.
   BMZ_BUNDLE_DYLIBS=1     Same as --bundle-dylibs.
   BMZ_PACKAGE_SMOKE=1     Same as --smoke.
+  BMZ_SKIP_RUST_LICENSE_REPORT=1
+                          Same as --skip-rust-license-report.
 
 Notes:
   --bundle-dylibs can copy FFmpeg and codec libraries. Check docs/licenses.md
   before publishing any redistributable artifact created with that option.
+  cargo-about is required to generate rust-dependency-licenses.txt unless
+  --skip-rust-license-report is passed.
   Bundling dylibs rewrites Mach-O load commands, so the bundle must be re-signed
   before Finder/Dock launch on macOS.
 USAGE
@@ -74,6 +80,27 @@ copy_file() {
   [[ -f "${src}" ]] || die "missing file: ${src}"
   mkdir -p "$(dirname "${dst}")"
   cp -p "${src}" "${dst}"
+}
+
+generate_rust_license_report() {
+  local output="$1"
+  local target_triple="$2"
+
+  need_command cargo-about
+
+  local args=(
+    generate
+    --workspace
+    --locked
+    --fail
+    --output-file "${output}"
+  )
+  if [[ -n "${target_triple}" ]]; then
+    args+=(--target "${target_triple}")
+  fi
+  args+=(about.hbs)
+
+  cargo-about "${args[@]}"
 }
 
 prune_macos_resource_markers() {
@@ -267,6 +294,7 @@ main() {
   local bundle_dylibs="${BMZ_BUNDLE_DYLIBS:-0}"
   local sign_identity="${BMZ_CODESIGN_IDENTITY:-}"
   local smoke="${BMZ_PACKAGE_SMOKE:-0}"
+  local skip_rust_license_report="${BMZ_SKIP_RUST_LICENSE_REPORT:-0}"
 
   while (($# > 0)); do
     case "$1" in
@@ -301,6 +329,9 @@ main() {
         ;;
       --bundle-dylibs)
         bundle_dylibs=1
+        ;;
+      --skip-rust-license-report)
+        skip_rust_license_report=1
         ;;
       --sign)
         shift
@@ -381,6 +412,14 @@ main() {
   copy_file "${root}/LICENSE" "${resources_dir}/licenses/BMZ-GPL-3.0-only.txt"
   copy_file "${root}/docs/licenses.md" "${resources_dir}/licenses/license-notes.md"
   copy_file "${root}/THIRD-PARTY-NOTICES.txt" "${resources_dir}/licenses/third-party-notices.txt"
+  if [[ "${skip_rust_license_report}" == "1" ]]; then
+    echo "==> Skipping Rust dependency license report"
+  else
+    echo "==> Generating Rust dependency license report"
+    generate_rust_license_report \
+      "${resources_dir}/licenses/rust-dependency-licenses.txt" \
+      "${target_triple}"
+  fi
   copy_file "${root}/assets/app-icon/bmz-player.icns" "${resources_dir}/bmz-player.icns"
   prune_macos_resource_markers "${resources_dir}"
 

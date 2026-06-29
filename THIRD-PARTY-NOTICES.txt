@@ -4,9 +4,11 @@ BMZ Player Third-Party Notices
 This file is the human-readable notice entrypoint for BMZ Player binary
 distributions. It is not legal advice.
 
-For public releases, generate a complete Rust dependency license report from the
-exact Cargo.lock used for the build and include it with this file or append it to
-this file before publishing the artifact.
+Public releases include a complete Rust dependency license report generated from
+the exact Cargo.lock used for the build:
+
+  resources/licenses/rust-dependency-licenses.txt
+  Contents/Resources/licenses/rust-dependency-licenses.txt
 
 
 BMZ Player
@@ -99,11 +101,16 @@ Rust Dependencies
 -----------------
 
 BMZ Player depends on third-party Rust crates from crates.io and other sources.
-Before publishing a binary release, generate a complete dependency license report
-from the release Cargo.lock and include it in the release package.
+Binary release packages include a complete dependency license report generated
+from the release Cargo.lock.
 
-Recommended release check:
-  cargo metadata --format-version 1 --locked
+Generation tool:
+  cargo-about
 
-If a dedicated license-reporting tool is used, keep its configuration in the
-repository and archive the generated report with the release artifact.
+Repository configuration:
+  about.toml
+  about.hbs
+
+Packaged report:
+  resources/licenses/rust-dependency-licenses.txt
+  Contents/Resources/licenses/rust-dependency-licenses.txt

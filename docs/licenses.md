@@ -104,6 +104,10 @@ Release artifacts include a human-readable notice entrypoint:
   `resources/licenses/third-party-notices.txt`
 - Packaged path inside macOS app bundles:
   `Contents/Resources/licenses/third-party-notices.txt`
+- Generated Rust dependency report on Windows portable / installer staging:
+  `resources/licenses/rust-dependency-licenses.txt`
+- Generated Rust dependency report inside macOS app bundles:
+  `Contents/Resources/licenses/rust-dependency-licenses.txt`
 
 The application may also show the same notice text in egui. In-app display is
 useful, but it should not replace shipping a readable text file in the release
@@ -113,17 +117,29 @@ artifact because users must be able to inspect notices outside the running app.
 bundled components such as BMZ Player, FFmpeg, ASIO SDK, bundled skins, and
 notable bridge crates. Before a public binary release, also generate a complete
 Rust dependency license report from the exact release lockfile and include it in
-the package or append it to the notice file.
+the package as `rust-dependency-licenses.txt`.
+
+BMZ Player uses `cargo-about` for the Rust dependency report:
+
+```sh
+cargo install --locked --features cli cargo-about
+cargo-about generate --workspace --locked --fail \
+  --output-file rust-dependency-licenses.txt \
+  about.hbs
+```
+
+The package scripts pass the relevant target/features when they create release
+artifacts. Review `about.toml` before accepting newly introduced license IDs.
 
 ## Release Checklist
 
 Before publishing a binary release:
 
 1. Confirm `Cargo.toml` still declares the intended BMZ Player license.
-2. Generate a third-party Rust dependency license report.
+2. Generate a third-party Rust dependency license report with `cargo-about --fail`.
 3. Record the FFmpeg version, configure flags, source URL, and binary source/provenance.
 4. Confirm no bundled FFmpeg build uses `--enable-nonfree`.
-5. Include `THIRD-PARTY-NOTICES.txt`, FFmpeg, ASIO SDK, and bundled-skin notices in the release package.
+5. Include `THIRD-PARTY-NOTICES.txt`, `rust-dependency-licenses.txt`, FFmpeg, ASIO SDK, and bundled-skin notices in the release package.
 6. Confirm bundled skin submodules such as `data/skins/Rmz-skin` and `data/skins/mz-select` point at the intended commits.
 7. Confirm Windows release artifacts built with default features are intended to include ASIO support.
 8. Confirm no gitignored third-party skins, songs, databases, profiles, credentials, or `.env` files are included.

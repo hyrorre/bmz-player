@@ -40,6 +40,7 @@ modules:
       - find /app/share/bmz-player -name .git -prune -exec rm -rf '{}' +
       - install -Dm644 LICENSE /app/share/bmz-player/licenses/BMZ-GPL-3.0-only.txt
       - install -Dm644 docs/licenses.md /app/share/bmz-player/licenses/license-notes.md
+      - install -Dm644 THIRD-PARTY-NOTICES.txt /app/share/bmz-player/licenses/third-party-notices.txt
     sources:
       - type: dir
         path: ../..

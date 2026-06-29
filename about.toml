@@ -1,0 +1,31 @@
+# cargo-about configuration for BMZ Player release license reports.
+#
+# Release package scripts run cargo-about with --fail so new or changed license
+# requirements stop the packaging flow until this file is reviewed.
+accepted = [
+    "Apache-2.0",
+    "MIT",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-1-Clause",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "BSL-1.0",
+    "CC0-1.0",
+    "GPL-3.0-only",
+    "ISC",
+    "MPL-2.0",
+    "OFL-1.1",
+    "Ubuntu-font-1.0",
+    "Unicode-3.0",
+    "Unlicense",
+    "WTFPL",
+    "Zlib",
+    "0BSD",
+]
+
+ignore-dev-dependencies = true
+
+workarounds = [
+    "ring",
+    "rustix",
+]
