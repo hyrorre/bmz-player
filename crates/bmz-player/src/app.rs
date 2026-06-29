@@ -6617,11 +6617,11 @@ impl WinitApp {
         }
         self.audio_diagnostics_last_log_at = now;
 
-        let Some(runtime) = &self.audio_runtime else {
+        if self.audio_runtime.is_none() {
             self.audio_diagnostics_last = None;
             return;
         };
-        let snapshot = runtime.take_diagnostics();
+        let snapshot = self.collect_audio_diagnostics();
         let Some(previous) = self.audio_diagnostics_last.replace(snapshot) else {
             return;
         };
@@ -6633,23 +6633,44 @@ impl WinitApp {
         if callbacks == 0 {
             return;
         }
-        let rendered_frames = snapshot.rendered_frames - previous.rendered_frames;
-        let stream_errors = snapshot.stream_error_count - previous.stream_error_count;
-        let source_lock_misses = snapshot.source_lock_miss_count - previous.source_lock_miss_count;
-        let engine_lock_misses = snapshot.engine_lock_miss_count - previous.engine_lock_miss_count;
-        let engine_lock_miss_callbacks =
-            snapshot.engine_lock_miss_callback_count - previous.engine_lock_miss_callback_count;
-        let system_engine_lock_misses =
-            snapshot.system_engine_lock_miss_count - previous.system_engine_lock_miss_count;
-        let play_engine_lock_misses =
-            snapshot.play_engine_lock_miss_count - previous.play_engine_lock_miss_count;
-        let draining_engine_lock_misses =
-            snapshot.draining_engine_lock_miss_count - previous.draining_engine_lock_miss_count;
-        let other_engine_lock_misses =
-            snapshot.other_engine_lock_miss_count - previous.other_engine_lock_miss_count;
-        let clipped_samples = snapshot.clipped_sample_count - previous.clipped_sample_count;
+        let rendered_frames = snapshot.rendered_frames.saturating_sub(previous.rendered_frames);
+        let stream_errors = snapshot.stream_error_count.saturating_sub(previous.stream_error_count);
+        let source_lock_misses =
+            snapshot.source_lock_miss_count.saturating_sub(previous.source_lock_miss_count);
+        let engine_lock_misses =
+            snapshot.engine_lock_miss_count.saturating_sub(previous.engine_lock_miss_count);
+        let engine_lock_miss_callbacks = snapshot
+            .engine_lock_miss_callback_count
+            .saturating_sub(previous.engine_lock_miss_callback_count);
+        let system_engine_lock_misses = snapshot
+            .system_engine_lock_miss_count
+            .saturating_sub(previous.system_engine_lock_miss_count);
+        let play_engine_lock_misses = snapshot
+            .play_engine_lock_miss_count
+            .saturating_sub(previous.play_engine_lock_miss_count);
+        let draining_engine_lock_misses = snapshot
+            .draining_engine_lock_miss_count
+            .saturating_sub(previous.draining_engine_lock_miss_count);
+        let other_engine_lock_misses = snapshot
+            .other_engine_lock_miss_count
+            .saturating_sub(previous.other_engine_lock_miss_count);
+        let clipped_samples =
+            snapshot.clipped_sample_count.saturating_sub(previous.clipped_sample_count);
+        let command_drops =
+            snapshot.command_dropped_count.saturating_sub(previous.command_dropped_count);
+        let command_drain_lock_misses = snapshot
+            .command_drain_lock_miss_count
+            .saturating_sub(previous.command_drain_lock_miss_count);
+        let command_engine_lock_misses = snapshot
+            .command_engine_lock_miss_count
+            .saturating_sub(previous.command_engine_lock_miss_count);
+        let commands_submitted =
+            snapshot.command_submitted_count.saturating_sub(previous.command_submitted_count);
+        let commands_drained =
+            snapshot.command_drained_count.saturating_sub(previous.command_drained_count);
 
-        let sample_rate = runtime.sample_rate().max(1);
+        let sample_rate =
+            self.audio_runtime.as_ref().map(AudioRuntime::sample_rate).unwrap_or(1).max(1);
         let avg_callback_frames = rendered_frames as f64 / callbacks as f64;
         let callback_budget_ns =
             ((avg_callback_frames / f64::from(sample_rate)) * 1_000_000_000.0).round() as u64;
@@ -6659,6 +6680,9 @@ impl WinitApp {
         if stream_errors == 0
             && source_lock_misses == 0
             && engine_lock_misses == 0
+            && command_drops == 0
+            && command_drain_lock_misses == 0
+            && command_engine_lock_misses == 0
             && clipped_samples == 0
             && !callback_over_budget
         {
@@ -6678,12 +6702,33 @@ impl WinitApp {
             play_engine_lock_misses,
             draining_engine_lock_misses,
             other_engine_lock_misses,
+            commands_submitted,
+            commands_drained,
+            command_drops,
+            command_drain_lock_misses,
+            command_engine_lock_misses,
+            command_queue_max_depth = snapshot.command_queue_max_depth,
             clipped_samples,
             peak_abs = snapshot.peak_abs,
             max_callback_us = snapshot.max_callback_ns / 1_000,
             callback_budget_us = callback_budget_ns / 1_000,
             "audio output diagnostics reported possible dropout or clipping",
         );
+    }
+
+    fn collect_audio_diagnostics(&self) -> AudioOutputDiagnostics {
+        let mut snapshot =
+            self.audio_runtime.as_ref().map(AudioRuntime::take_diagnostics).unwrap_or_default();
+        if let Some(system_audio) = &self.system_audio {
+            snapshot.add_command_queue(system_audio.command_diagnostics());
+        }
+        if let Some(active_play) = &self.active_play {
+            snapshot.add_command_queue(active_play.running.audio.command_diagnostics());
+        }
+        if let Some(draining_audio) = &self.draining_audio {
+            snapshot.add_command_queue(draining_audio.command_diagnostics());
+        }
+        snapshot
     }
 
     fn install_system_audio(

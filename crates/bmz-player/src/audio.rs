@@ -4,7 +4,7 @@ use bmz_audio::backend::cpal::{
     CpalOutputSourceKind, CpalSharedOutput,
 };
 use bmz_audio::clock::AudioClock;
-use bmz_audio::command::AudioEngineHandle;
+use bmz_audio::command::{AudioCommandQueueDiagnostics, AudioEngineHandle};
 use bmz_audio::engine::AudioEngine;
 use bmz_audio::loader::LoadedSampleReport;
 use bmz_audio::queue::ScheduledSoundQueue;
@@ -23,7 +23,61 @@ use crate::screens::result_model::ResultGraphCollector;
 use crate::storage::score_db::ScoreKey;
 use crate::video_bga::ActiveVideoBgaDecoder;
 
-pub type AudioOutputDiagnostics = CpalOutputDiagnostics;
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct AudioOutputDiagnostics {
+    pub callback_count: u64,
+    pub rendered_frames: u64,
+    pub stream_error_count: u64,
+    pub source_lock_miss_count: u64,
+    pub engine_lock_miss_count: u64,
+    pub engine_lock_miss_callback_count: u64,
+    pub system_engine_lock_miss_count: u64,
+    pub play_engine_lock_miss_count: u64,
+    pub draining_engine_lock_miss_count: u64,
+    pub other_engine_lock_miss_count: u64,
+    pub clipped_sample_count: u64,
+    pub peak_abs: f32,
+    pub max_callback_ns: u64,
+    pub command_submitted_count: u64,
+    pub command_dropped_count: u64,
+    pub command_drained_count: u64,
+    pub command_drain_lock_miss_count: u64,
+    pub command_engine_lock_miss_count: u64,
+    pub command_queue_max_depth: u64,
+}
+
+impl AudioOutputDiagnostics {
+    pub fn from_cpal(snapshot: CpalOutputDiagnostics) -> Self {
+        Self {
+            callback_count: snapshot.callback_count,
+            rendered_frames: snapshot.rendered_frames,
+            stream_error_count: snapshot.stream_error_count,
+            source_lock_miss_count: snapshot.source_lock_miss_count,
+            engine_lock_miss_count: snapshot.engine_lock_miss_count,
+            engine_lock_miss_callback_count: snapshot.engine_lock_miss_callback_count,
+            system_engine_lock_miss_count: snapshot.system_engine_lock_miss_count,
+            play_engine_lock_miss_count: snapshot.play_engine_lock_miss_count,
+            draining_engine_lock_miss_count: snapshot.draining_engine_lock_miss_count,
+            other_engine_lock_miss_count: snapshot.other_engine_lock_miss_count,
+            clipped_sample_count: snapshot.clipped_sample_count,
+            peak_abs: snapshot.peak_abs,
+            max_callback_ns: snapshot.max_callback_ns,
+            ..Default::default()
+        }
+    }
+
+    pub fn add_command_queue(&mut self, diagnostics: AudioCommandQueueDiagnostics) {
+        self.command_submitted_count =
+            self.command_submitted_count.saturating_add(diagnostics.submitted);
+        self.command_dropped_count = self.command_dropped_count.saturating_add(diagnostics.dropped);
+        self.command_drained_count = self.command_drained_count.saturating_add(diagnostics.drained);
+        self.command_drain_lock_miss_count =
+            self.command_drain_lock_miss_count.saturating_add(diagnostics.drain_lock_misses);
+        self.command_engine_lock_miss_count =
+            self.command_engine_lock_miss_count.saturating_add(diagnostics.engine_lock_misses);
+        self.command_queue_max_depth = self.command_queue_max_depth.max(diagnostics.max_depth);
+    }
+}
 
 pub struct AppAudioOutput {
     pub engine: AudioEngineHandle,
@@ -62,6 +116,10 @@ pub struct RunningPlaySession {
 }
 
 impl AppAudioOutput {
+    pub fn command_diagnostics(&self) -> AudioCommandQueueDiagnostics {
+        self.engine.diagnostics()
+    }
+
     pub fn clock(&self) -> AudioClock {
         self.source.clock()
     }
@@ -117,7 +175,7 @@ impl AudioRuntime {
     }
 
     pub fn take_diagnostics(&self) -> AudioOutputDiagnostics {
-        self.output.take_diagnostics()
+        AudioOutputDiagnostics::from_cpal(self.output.take_diagnostics())
     }
 
     fn add_commanded_source(
@@ -147,6 +205,10 @@ pub struct SystemAudio {
 }
 
 impl SystemAudio {
+    pub fn command_diagnostics(&self) -> AudioCommandQueueDiagnostics {
+        self.engine.diagnostics()
+    }
+
     /// クロックを開始してストリームを走らせ、`play_now` / `stop_sound` を即座に
     /// 反映できる状態にする。`chart_zero_time` 引数はシステム音のスケジューリング
     /// (`start_frame = 0`)には影響しないため `TimeUs(0)` 固定で良い。
