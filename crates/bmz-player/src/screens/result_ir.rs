@@ -64,6 +64,12 @@ pub struct ResultIrRankingEntry {
     pub max_combo: u32,
 }
 
+#[derive(Debug, Clone)]
+pub struct ResultIrLoadedChartRanking {
+    pub chart_sha256_hex: String,
+    pub ranking: ResultIrRanking,
+}
+
 /// ランキング照会に必要なクエリ条件。タブ遅延取得でも使い回す。
 #[derive(Debug, Clone)]
 pub struct ResultIrQuery {
@@ -129,24 +135,32 @@ pub struct ResultIrState {
 
 impl ResultIrState {
     /// 受信済みイベントを状態へ反映する。毎フレーム呼ぶ。
-    pub fn poll(&mut self) {
+    pub fn poll(&mut self) -> Vec<ResultIrLoadedChartRanking> {
+        let mut loaded_chart_rankings = Vec::new();
         while let Ok(event) = self.receiver.try_recv() {
             match event {
                 ResultIrEvent::Submit { submitted, failed, message } => {
                     self.submit = IrSubmitState::Done { submitted, failed, message };
                     self.update_submit_timer(submitted, failed, self.submit_message_is_error());
                 }
-                ResultIrEvent::Ranking { scope, result } => {
-                    let slot = self.scope_slot(scope);
-                    if let Some(slot) = slot {
-                        *slot = match result {
-                            Ok(ranking) => RankingLoadState::Loaded(ranking),
-                            Err(error) => RankingLoadState::Failed(error),
-                        };
+                ResultIrEvent::Ranking { scope, result } => match result {
+                    Ok(ranking) => {
+                        if let Some(loaded) = self.loaded_chart_ranking(&ranking) {
+                            loaded_chart_rankings.push(loaded);
+                        }
+                        if let Some(slot) = self.scope_slot(scope) {
+                            *slot = RankingLoadState::Loaded(ranking);
+                        }
                     }
-                }
+                    Err(error) => {
+                        if let Some(slot) = self.scope_slot(scope) {
+                            *slot = RankingLoadState::Failed(error);
+                        }
+                    }
+                },
             }
         }
+        loaded_chart_rankings
     }
 
     fn submit_message_is_error(&self) -> bool {
@@ -244,6 +258,19 @@ impl ResultIrState {
             _ => None,
         }
     }
+
+    fn loaded_chart_ranking(
+        &self,
+        ranking: &ResultIrRanking,
+    ) -> Option<ResultIrLoadedChartRanking> {
+        let ResultIrTarget::Chart { chart_sha256_hex, .. } = &self.query.target else {
+            return None;
+        };
+        Some(ResultIrLoadedChartRanking {
+            chart_sha256_hex: chart_sha256_hex.clone(),
+            ranking: ranking.clone(),
+        })
+    }
 }
 
 /// 取得済みグローバルランキングをスキン用 snapshot に変換する。
@@ -251,7 +278,7 @@ pub fn ranking_to_ir_snapshot(ranking: &IrRankingResult) -> bmz_render::scene::R
     result_ir_ranking_to_skin_snapshot(&chart_ranking_to_result_ir_ranking(ranking))
 }
 
-fn result_ir_ranking_to_skin_snapshot(
+pub(crate) fn result_ir_ranking_to_skin_snapshot(
     ranking: &ResultIrRanking,
 ) -> bmz_render::scene::ResultIrSnapshot {
     use bmz_render::scene::{

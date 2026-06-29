@@ -15,10 +15,12 @@ use bmz_render::scene::{ResultIrSnapshot, ResultIrState as SkinIrState, SelectRi
 use crate::config::profile_config::IrConfig;
 use crate::ir::types::{IrRankingResult, IrRankingScope};
 use crate::ln_policy::LnScorePolicy;
-use crate::screens::result_ir::{ResultIrQuery, ranking_to_ir_snapshot};
+use crate::screens::result_ir::{
+    ResultIrQuery, ResultIrRanking, ranking_to_ir_snapshot, result_ir_ranking_to_skin_snapshot,
+};
 use crate::select_options::DoubleOptionScoreBucket;
 use crate::select_options::TargetOption;
-use crate::storage::common::hash_to_hex;
+use crate::storage::common::{hash_to_hex, hex_to_hash};
 
 /// カーソルがとどまってから取得を始めるまでの待ち時間。
 /// 連打スクロールで全行を取得しに行かないためのデバウンス。
@@ -26,7 +28,8 @@ const FETCH_DEBOUNCE: Duration = Duration::from_millis(400);
 /// キャッシュ上限。超えたら全クリアして作り直す (LRU は持たない)。
 const CACHE_CAPACITY: usize = 256;
 
-type FetchResult = (String, [u8; 32], Result<(IrRankingResult, Option<IrRankingResult>), String>);
+type FetchResult =
+    (String, [u8; 32], Instant, Result<(IrRankingResult, Option<IrRankingResult>), String>);
 
 /// カーソル譜面ごとのキャッシュ済み IR 表示データ。
 #[derive(Debug, Clone)]
@@ -82,7 +85,7 @@ impl SelectIrRanking {
             self.context = context.to_string();
             self.clear();
         }
-        while let Ok((result_context, sha256, result)) = self.receiver.try_recv() {
+        while let Ok((result_context, sha256, requested_at, result)) = self.receiver.try_recv() {
             if self.in_flight.as_ref().is_some_and(|(context, in_flight_sha, _)| {
                 context == &result_context && *in_flight_sha == sha256
             }) {
@@ -96,8 +99,9 @@ impl SelectIrRanking {
                 );
                 continue;
             }
-            if self.cache.len() >= CACHE_CAPACITY {
-                self.cache.clear();
+            if self.cache.get(&sha256).is_some_and(|entry| entry.completed_at >= requested_at) {
+                tracing::debug!("discarding stale select IR ranking fetch");
+                continue;
             }
             let completed_at = Instant::now();
             let entry = match result {
@@ -119,7 +123,7 @@ impl SelectIrRanking {
                     }
                 }
             };
-            self.cache.insert(sha256, entry);
+            self.insert_entry(sha256, entry);
         }
 
         let Some(provider) = enabled_provider(ir_config) else {
@@ -139,7 +143,8 @@ impl SelectIrRanking {
             Some((pending_sha, since)) if pending_sha == sha256 => {
                 if since.elapsed() >= FETCH_DEBOUNCE && self.in_flight.is_none() {
                     self.pending = None;
-                    self.in_flight = Some((self.context.clone(), sha256, Instant::now()));
+                    let requested_at = Instant::now();
+                    self.in_flight = Some((self.context.clone(), sha256, requested_at));
                     spawn_fetch(
                         ResultIrQuery {
                             profile_root: profile_root.to_path_buf(),
@@ -152,12 +157,46 @@ impl SelectIrRanking {
                         },
                         self.context.clone(),
                         sha256,
+                        requested_at,
                         self.sender.clone(),
                     );
                 }
             }
             _ => self.pending = Some((sha256, Instant::now())),
         }
+    }
+
+    /// Result 画面でスコア送信と同時に取得した Global ranking を選曲キャッシュへ反映する。
+    pub fn cache_result_global_ranking(
+        &mut self,
+        chart_sha256_hex: &str,
+        ranking: &ResultIrRanking,
+    ) {
+        if ranking.scope != IrRankingScope::Global {
+            return;
+        }
+        let Ok(sha256) = hex_to_hash::<32>(chart_sha256_hex) else {
+            tracing::warn!(
+                chart = chart_sha256_hex,
+                "discarding IR ranking for invalid chart hash"
+            );
+            return;
+        };
+        let (rival, rival_ex_scores) = self
+            .cache
+            .get(&sha256)
+            .map(|entry| (entry.rival.clone(), entry.rival_ex_scores.clone()))
+            .unwrap_or_default();
+        self.insert_entry(
+            sha256,
+            CachedChartIr {
+                ir: result_ir_ranking_to_skin_snapshot(ranking),
+                rival,
+                global_ex_scores: result_ranking_ex_scores(ranking),
+                rival_ex_scores,
+                completed_at: Instant::now(),
+            },
+        );
     }
 
     /// 選択中譜面のスキン用 snapshot。IR 未設定なら Offline。
@@ -242,6 +281,19 @@ impl SelectIrRanking {
         self.in_flight = None;
         self.pending = None;
     }
+
+    fn insert_entry(&mut self, sha256: [u8; 32], entry: CachedChartIr) {
+        if self.cache.len() >= CACHE_CAPACITY && !self.cache.contains_key(&sha256) {
+            self.cache.clear();
+        }
+        self.cache.insert(sha256, entry);
+        if self.in_flight.as_ref().is_some_and(|(_, in_flight_sha, _)| *in_flight_sha == sha256) {
+            self.in_flight = None;
+        }
+        if self.pending.as_ref().is_some_and(|(pending_sha, _)| *pending_sha == sha256) {
+            self.pending = None;
+        }
+    }
 }
 
 fn enabled_provider(ir_config: &IrConfig) -> Option<(String, String)> {
@@ -265,6 +317,7 @@ fn spawn_fetch(
     query: ResultIrQuery,
     context: String,
     sha256: [u8; 32],
+    requested_at: Instant,
     sender: Sender<FetchResult>,
 ) {
     tracing::debug!(chart = %query.chart_sha256_hex, "fetching select IR ranking");
@@ -280,7 +333,7 @@ fn spawn_fetch(
         }
         .await
         .map_err(|error| format!("{error:#}"));
-        let _ = sender.send((context, sha256, result));
+        let _ = sender.send((context, sha256, requested_at, result));
     });
 }
 
@@ -297,6 +350,10 @@ fn top_rival_snapshot(rivals: &IrRankingResult) -> Option<SelectRivalSnapshot> {
 
 fn ranking_ex_scores(ranking: &IrRankingResult) -> Vec<u32> {
     ranking.ranking.entries.iter().map(|entry| entry.score.ex_score).collect()
+}
+
+fn result_ranking_ex_scores(ranking: &ResultIrRanking) -> Vec<u32> {
+    ranking.entries.iter().map(|entry| entry.ex_score).collect()
 }
 
 fn elapsed_since_ms(started_at: Instant) -> i32 {
@@ -321,6 +378,11 @@ mod tests {
     use crate::config::profile_config::{
         IrProviderConfig, IrProviderRoleConfig, IrSendPolicyConfig,
     };
+    use crate::ir::types::{
+        IrRankingBody, IrRankingChartRef, IrRankingEntry, IrRankingPagination, IrRankingPlayer,
+        IrRankingScore, IrRankingSelfRef,
+    };
+    use crate::screens::result_ir::ResultIrRankingEntry;
 
     fn ir_config(enabled: bool) -> IrConfig {
         IrConfig {
@@ -338,6 +400,62 @@ mod tests {
                 last_success_at: None,
             }],
             ..IrConfig::default()
+        }
+    }
+
+    fn result_global_ranking(rank: u32, ex_score: u32, total: u32) -> ResultIrRanking {
+        ResultIrRanking {
+            scope: IrRankingScope::Global,
+            entries: vec![ResultIrRankingEntry {
+                rank,
+                player_name: "player".to_string(),
+                ex_score,
+                clear: "Hard".to_string(),
+                bp: 2,
+                max_combo: 300,
+            }],
+            clear_rate: Some(80),
+            self_rank: Some(rank),
+            total: Some(total),
+        }
+    }
+
+    fn raw_global_ranking(
+        sha256: [u8; 32],
+        rank: u32,
+        ex_score: u32,
+        total: u32,
+    ) -> IrRankingResult {
+        IrRankingResult {
+            chart: IrRankingChartRef { sha256: hash_to_hex(&sha256) },
+            ranking: IrRankingBody {
+                scope: IrRankingScope::Global,
+                entries: vec![IrRankingEntry {
+                    rank,
+                    scope_rank: None,
+                    player: IrRankingPlayer {
+                        id: "player".to_string(),
+                        display_name: "player".to_string(),
+                    },
+                    score: IrRankingScore {
+                        clear: "Hard".to_string(),
+                        ex_score,
+                        max_combo: 300,
+                        min_bp: 2,
+                        min_cb: 2,
+                        device_type: None,
+                        played_at: None,
+                    },
+                }],
+                clear_rate: Some(80),
+                self_summary: Some(IrRankingSelfRef { rank, score_id: None }),
+                pagination: Some(IrRankingPagination {
+                    limit: 20,
+                    offset: 0,
+                    total: Some(total),
+                    has_more: false,
+                }),
+            },
         }
     }
 
@@ -419,6 +537,47 @@ mod tests {
     }
 
     #[test]
+    fn result_global_ranking_updates_cached_snapshot() {
+        let mut select_ir = SelectIrRanking::default();
+        let sha = [7u8; 32];
+        select_ir.cache.insert(
+            sha,
+            CachedChartIr {
+                ir: ResultIrSnapshot {
+                    state: SkinIrState::Loaded,
+                    rank: Some(9),
+                    total_player: Some(10),
+                    previous_rank: None,
+                    ..Default::default()
+                },
+                rival: Some(SelectRivalSnapshot {
+                    display_name: "RivalOne".to_string(),
+                    ex_score: 1500,
+                    max_combo: 700,
+                    bp: 12,
+                }),
+                global_ex_scores: vec![1200],
+                rival_ex_scores: vec![1500],
+                completed_at: Instant::now(),
+            },
+        );
+
+        select_ir
+            .cache_result_global_ranking(&hash_to_hex(&sha), &result_global_ranking(1, 2000, 3));
+
+        let snapshot = select_ir.snapshot_for(&ir_config(true), Some(sha));
+        assert_eq!(snapshot.state, SkinIrState::Loaded);
+        assert_eq!(snapshot.rank, Some(1));
+        assert_eq!(snapshot.total_player, Some(3));
+        assert_eq!(
+            select_ir.target_ex_score_for(&ir_config(true), Some(sha), TargetOption::IrTop, None),
+            Some(2000)
+        );
+        let rival = select_ir.rival_for(&ir_config(true), Some(sha)).unwrap();
+        assert_eq!(rival.display_name, "RivalOne");
+    }
+
+    #[test]
     fn update_debounces_before_fetching() {
         let mut select_ir = SelectIrRanking::default();
         let sha = [7u8; 32];
@@ -460,7 +619,10 @@ mod tests {
 
         select_ir.context = "new".to_string();
         select_ir.in_flight = Some(("old".to_string(), sha, Instant::now()));
-        select_ir.sender.send(("old".to_string(), sha, Err("stale".to_string()))).unwrap();
+        select_ir
+            .sender
+            .send(("old".to_string(), sha, Instant::now(), Err("stale".to_string())))
+            .unwrap();
 
         select_ir.update(
             &config,
@@ -472,6 +634,47 @@ mod tests {
             Some(sha),
         );
         assert!(!select_ir.cache.contains_key(&sha));
+        assert!(select_ir.in_flight.is_none());
+    }
+
+    #[test]
+    fn stale_fetch_result_does_not_override_newer_result_cache() {
+        let mut select_ir = SelectIrRanking::default();
+        let sha = [7u8; 32];
+        let config = ir_config(false);
+        let root = std::env::temp_dir();
+        let requested_at = Instant::now();
+
+        select_ir.context = "ctx".to_string();
+        select_ir.in_flight = Some(("ctx".to_string(), sha, requested_at));
+        select_ir
+            .cache_result_global_ranking(&hash_to_hex(&sha), &result_global_ranking(1, 2000, 3));
+        select_ir
+            .sender
+            .send((
+                "ctx".to_string(),
+                sha,
+                requested_at,
+                Ok((raw_global_ranking(sha, 9, 1200, 10), None)),
+            ))
+            .unwrap();
+
+        select_ir.update(
+            &config,
+            &root,
+            "ctx",
+            LnScorePolicy::ForceLn,
+            DoubleOptionScoreBucket::Off,
+            RuleMode::Beatoraja,
+            Some(sha),
+        );
+
+        let snapshot = select_ir.snapshot_for(&ir_config(true), Some(sha));
+        assert_eq!(snapshot.rank, Some(1));
+        assert_eq!(
+            select_ir.target_ex_score_for(&ir_config(true), Some(sha), TargetOption::IrTop, None),
+            Some(2000)
+        );
         assert!(select_ir.in_flight.is_none());
     }
 }

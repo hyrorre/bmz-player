@@ -10110,12 +10110,18 @@ impl WinitApp {
                     );
                 }
             }
-            if let Some(state) = &mut self.result_ir {
-                state.poll();
+            let loaded_rankings =
+                self.result_ir.as_mut().map(|state| state.poll()).unwrap_or_default();
+            for ranking in loaded_rankings {
+                self.select_ir
+                    .cache_result_global_ranking(&ranking.chart_sha256_hex, &ranking.ranking);
             }
         } else if self.play_ending.is_some() {
-            if let Some(state) = &mut self.result_ir {
-                state.poll();
+            let loaded_rankings =
+                self.result_ir.as_mut().map(|state| state.poll()).unwrap_or_default();
+            for ranking in loaded_rankings {
+                self.select_ir
+                    .cache_result_global_ranking(&ranking.chart_sha256_hex, &ranking.ranking);
             }
         } else {
             self.result_ir = None;
