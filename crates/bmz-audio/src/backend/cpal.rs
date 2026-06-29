@@ -1,6 +1,7 @@
+use std::collections::VecDeque;
 use std::rc::{Rc, Weak as RcWeak};
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, TryLockError};
 use std::time::Instant;
 
 use ::cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
@@ -9,10 +10,12 @@ use bmz_core::time::TimeUs;
 use thiserror::Error;
 
 use crate::clock::AudioClock;
+use crate::command::{AudioEngineHandle, CommandedAudioEngine};
 use crate::engine::AudioEngine;
 
 pub type SharedAudioEngine = Arc<Mutex<AudioEngine>>;
-type SharedAudioSources = Arc<Mutex<Vec<AudioSource>>>;
+type SharedOutputCommands = Arc<Mutex<VecDeque<CpalOutputCommand>>>;
+const OUTPUT_COMMAND_QUEUE_CAPACITY: usize = 256;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum CpalOutputSourceKind {
@@ -116,7 +119,7 @@ struct CpalSharedOutputInner {
     host_id: ::cpal::HostId,
     sample_rate: u32,
     current_frame: Arc<AtomicU64>,
-    sources: SharedAudioSources,
+    output_commands: SharedOutputCommands,
     diagnostics: Arc<CpalOutputDiagnosticsCounters>,
     next_source_id: AtomicU64,
 }
@@ -129,11 +132,30 @@ pub struct CpalOutputSource {
     pub clock: AudioClock,
 }
 
-#[derive(Clone)]
-struct AudioSource {
+pub struct CpalCommandedOutputSource {
+    id: u64,
+    inner: RcWeak<CpalSharedOutputInner>,
+    kind: CpalOutputSourceKind,
+    handle: AudioEngineHandle,
+    pub clock: AudioClock,
+}
+
+struct RenderAudioSource {
     id: u64,
     kind: CpalOutputSourceKind,
-    engine: SharedAudioEngine,
+    engine: RenderAudioEngine,
+}
+
+enum RenderAudioEngine {
+    Legacy(SharedAudioEngine),
+    Commanded(CommandedAudioEngine),
+}
+
+enum CpalOutputCommand {
+    AddLegacySource { id: u64, kind: CpalOutputSourceKind, engine: SharedAudioEngine },
+    AddCommandedSource { id: u64, kind: CpalOutputSourceKind, engine: CommandedAudioEngine },
+    RemoveSource { id: u64 },
+    SetSourceKind { id: u64, kind: CpalOutputSourceKind },
 }
 
 #[derive(Debug, Error)]
@@ -222,7 +244,7 @@ impl CpalBackend {
         );
 
         let current_frame = Arc::new(AtomicU64::new(0));
-        let sources = Arc::new(Mutex::new(Vec::new()));
+        let output_commands = Arc::new(Mutex::new(VecDeque::new()));
         let diagnostics = Arc::new(CpalOutputDiagnosticsCounters::default());
 
         let stream = match sample_format {
@@ -230,7 +252,7 @@ impl CpalBackend {
                 &device,
                 &config,
                 channel_offset,
-                Arc::clone(&sources),
+                Arc::clone(&output_commands),
                 Arc::clone(&current_frame),
                 Arc::clone(&diagnostics),
             )?,
@@ -238,7 +260,7 @@ impl CpalBackend {
                 &device,
                 &config,
                 channel_offset,
-                Arc::clone(&sources),
+                Arc::clone(&output_commands),
                 Arc::clone(&current_frame),
                 Arc::clone(&diagnostics),
             )?,
@@ -246,7 +268,7 @@ impl CpalBackend {
                 &device,
                 &config,
                 channel_offset,
-                Arc::clone(&sources),
+                Arc::clone(&output_commands),
                 Arc::clone(&current_frame),
                 Arc::clone(&diagnostics),
             )?,
@@ -254,7 +276,7 @@ impl CpalBackend {
                 &device,
                 &config,
                 channel_offset,
-                Arc::clone(&sources),
+                Arc::clone(&output_commands),
                 Arc::clone(&current_frame),
                 Arc::clone(&diagnostics),
             )?,
@@ -262,7 +284,7 @@ impl CpalBackend {
                 &device,
                 &config,
                 channel_offset,
-                Arc::clone(&sources),
+                Arc::clone(&output_commands),
                 Arc::clone(&current_frame),
                 Arc::clone(&diagnostics),
             )?,
@@ -274,7 +296,7 @@ impl CpalBackend {
                 host_id: host.id(),
                 sample_rate,
                 current_frame,
-                sources,
+                output_commands,
                 diagnostics,
                 next_source_id: AtomicU64::new(1),
             }),
@@ -534,9 +556,10 @@ impl CpalSharedOutput {
         }
 
         let id = self.inner.next_source_id.fetch_add(1, Ordering::Relaxed);
-        if let Ok(mut sources) = self.inner.sources.lock() {
-            sources.push(AudioSource { id, kind, engine: Arc::clone(&engine) });
-        }
+        push_output_command(
+            &self.inner.output_commands,
+            CpalOutputCommand::AddLegacySource { id, kind, engine: Arc::clone(&engine) },
+        );
 
         let clock = AudioClock::with_position(
             self.inner.sample_rate,
@@ -546,6 +569,28 @@ impl CpalSharedOutput {
             false,
         );
         CpalOutputSource { id, inner: Rc::downgrade(&self.inner), kind, engine, clock }
+    }
+
+    pub fn add_commanded_source_with_kind(
+        &self,
+        handle: AudioEngineHandle,
+        kind: CpalOutputSourceKind,
+    ) -> CpalCommandedOutputSource {
+        handle.set_output_sample_rate(self.inner.sample_rate);
+        let id = self.inner.next_source_id.fetch_add(1, Ordering::Relaxed);
+        push_output_command(
+            &self.inner.output_commands,
+            CpalOutputCommand::AddCommandedSource { id, kind, engine: handle.processor() },
+        );
+
+        let clock = AudioClock::with_position(
+            self.inner.sample_rate,
+            0,
+            0,
+            Arc::clone(&self.inner.current_frame),
+            false,
+        );
+        CpalCommandedOutputSource { id, inner: Rc::downgrade(&self.inner), kind, handle, clock }
     }
 }
 
@@ -559,11 +604,10 @@ impl CpalOutputSource {
         let Some(inner) = self.inner.upgrade() else {
             return;
         };
-        if let Ok(mut sources) = inner.sources.lock()
-            && let Some(source) = sources.iter_mut().find(|source| source.id == self.id)
-        {
-            source.kind = kind;
-        }
+        push_output_command(
+            &inner.output_commands,
+            CpalOutputCommand::SetSourceKind { id: self.id, kind },
+        );
     }
 
     pub fn play(&mut self, chart_zero_time: TimeUs) {
@@ -586,17 +630,78 @@ impl Drop for CpalOutputSource {
         let Some(inner) = self.inner.upgrade() else {
             return;
         };
-        if let Ok(mut sources) = inner.sources.lock() {
-            sources.retain(|source| source.id != self.id);
-        }
+        push_output_command(
+            &inner.output_commands,
+            CpalOutputCommand::RemoveSource { id: self.id },
+        );
     }
+}
+
+impl CpalCommandedOutputSource {
+    pub fn kind(&self) -> CpalOutputSourceKind {
+        self.kind
+    }
+
+    pub fn handle(&self) -> AudioEngineHandle {
+        self.handle.clone()
+    }
+
+    pub fn set_kind(&mut self, kind: CpalOutputSourceKind) {
+        self.kind = kind;
+        let Some(inner) = self.inner.upgrade() else {
+            return;
+        };
+        push_output_command(
+            &inner.output_commands,
+            CpalOutputCommand::SetSourceKind { id: self.id, kind },
+        );
+    }
+
+    pub fn play(&mut self, chart_zero_time: TimeUs) {
+        self.clock.chart_zero_time_us = chart_zero_time.0;
+        self.clock.start_output_frame = self.clock.current_frame.load(Ordering::Relaxed);
+        self.clock.running = true;
+    }
+
+    pub fn pause(&mut self) {
+        self.clock.running = false;
+    }
+
+    pub fn clock(&self) -> AudioClock {
+        self.clock.clone()
+    }
+}
+
+impl Drop for CpalCommandedOutputSource {
+    fn drop(&mut self) {
+        let Some(inner) = self.inner.upgrade() else {
+            return;
+        };
+        push_output_command(
+            &inner.output_commands,
+            CpalOutputCommand::RemoveSource { id: self.id },
+        );
+    }
+}
+
+fn push_output_command(queue: &SharedOutputCommands, command: CpalOutputCommand) -> bool {
+    let Ok(mut queue) = queue.lock() else {
+        tracing::warn!("failed to lock cpal output command queue");
+        return false;
+    };
+    if queue.len() >= OUTPUT_COMMAND_QUEUE_CAPACITY {
+        tracing::warn!("cpal output command queue is full; dropping source command");
+        return false;
+    }
+    queue.push_back(command);
+    true
 }
 
 fn build_output_stream<T>(
     device: &::cpal::Device,
     config: &StreamConfig,
     channel_offset: usize,
-    sources: SharedAudioSources,
+    output_commands: SharedOutputCommands,
     current_frame: Arc<AtomicU64>,
     diagnostics: Arc<CpalOutputDiagnosticsCounters>,
 ) -> Result<::cpal::Stream, CpalBackendError>
@@ -606,7 +711,8 @@ where
     let channels = config.channels as usize;
     let mut mix = Vec::new();
     let mut source_scratch = Vec::new();
-    let mut source_engines = Vec::new();
+    let mut render_sources = Vec::new();
+    let mut source_command_scratch = Vec::new();
     let error_diagnostics = Arc::clone(&diagnostics);
     device
         .build_output_stream(
@@ -627,10 +733,11 @@ where
                     channels,
                     channel_offset,
                     start_frame,
-                    &sources,
+                    &output_commands,
                     &mut mix,
                     &mut source_scratch,
-                    &mut source_engines,
+                    &mut render_sources,
+                    &mut source_command_scratch,
                     &diagnostics,
                 );
                 diagnostics.rendered_frames.fetch_add(frames as u64, Ordering::Relaxed);
@@ -658,10 +765,11 @@ fn render_output<T: OutputSample>(
     channels: usize,
     channel_offset: usize,
     output_start_frame: u64,
-    sources: &SharedAudioSources,
+    output_commands: &SharedOutputCommands,
     mix: &mut Vec<f32>,
     source_scratch: &mut Vec<f32>,
-    source_engines: &mut Vec<AudioSource>,
+    render_sources: &mut Vec<RenderAudioSource>,
+    source_command_scratch: &mut Vec<CpalOutputCommand>,
     diagnostics: &CpalOutputDiagnosticsCounters,
 ) {
     if channels == 0 {
@@ -672,10 +780,11 @@ fn render_output<T: OutputSample>(
     mix_sources_stereo(
         output_start_frame,
         frames,
-        sources,
+        output_commands,
         mix,
         source_scratch,
-        source_engines,
+        render_sources,
+        source_command_scratch,
         diagnostics,
     );
 
@@ -685,34 +794,34 @@ fn render_output<T: OutputSample>(
 fn mix_sources_stereo(
     output_start_frame: u64,
     frames: usize,
-    sources: &SharedAudioSources,
+    output_commands: &SharedOutputCommands,
     mix: &mut Vec<f32>,
     source_scratch: &mut Vec<f32>,
-    source_engines: &mut Vec<AudioSource>,
+    render_sources: &mut Vec<RenderAudioSource>,
+    source_command_scratch: &mut Vec<CpalOutputCommand>,
     diagnostics: &CpalOutputDiagnosticsCounters,
 ) {
     mix.resize(frames * 2, 0.0);
     mix.fill(0.0);
 
-    // オーディオ(ASIO)コールバックはハードリアルタイム。ここで `lock()` すると
-    // ゲームスレッドがロックを保持している間ブロックし、小バッファでは締切を超えて
-    // xrun(全体のプツプツ)を起こす。`try_lock` で「決してブロックしない」を保証し、
-    // 競合したバッファだけスキップ(その音源は 1 バッファ無音)に留める。
-    source_engines.clear();
-    match sources.try_lock() {
-        Ok(sources) => {
-            source_engines.extend(sources.iter().cloned());
-        }
-        Err(_) => {
-            diagnostics.source_lock_miss_count.fetch_add(1, Ordering::Relaxed);
-        }
-    }
+    drain_output_commands(output_commands, render_sources, source_command_scratch, diagnostics);
 
     source_scratch.resize(frames * 2, 0.0);
     let mut missed_engine_lock = false;
-    for source in source_engines.iter() {
-        if let Ok(mut engine) = source.engine.try_lock() {
-            engine.render_stereo(output_start_frame, source_scratch);
+    for source in render_sources.iter_mut() {
+        let rendered = match &mut source.engine {
+            RenderAudioEngine::Legacy(engine) => match engine.try_lock() {
+                Ok(mut engine) => {
+                    engine.render_stereo(output_start_frame, source_scratch);
+                    true
+                }
+                Err(_) => false,
+            },
+            RenderAudioEngine::Commanded(engine) => {
+                engine.render_stereo(output_start_frame, source_scratch)
+            }
+        };
+        if rendered {
             for (dst, src) in mix.iter_mut().zip(source_scratch.iter()) {
                 *dst += *src;
             }
@@ -723,6 +832,58 @@ fn mix_sources_stereo(
     }
     if missed_engine_lock {
         diagnostics.engine_lock_miss_callback_count.fetch_add(1, Ordering::Relaxed);
+    }
+}
+
+fn drain_output_commands(
+    output_commands: &SharedOutputCommands,
+    render_sources: &mut Vec<RenderAudioSource>,
+    scratch: &mut Vec<CpalOutputCommand>,
+    diagnostics: &CpalOutputDiagnosticsCounters,
+) {
+    scratch.clear();
+    match output_commands.try_lock() {
+        Ok(mut commands) => {
+            scratch.reserve(commands.len());
+            while let Some(command) = commands.pop_front() {
+                scratch.push(command);
+            }
+        }
+        Err(TryLockError::WouldBlock) => {
+            diagnostics.source_lock_miss_count.fetch_add(1, Ordering::Relaxed);
+            return;
+        }
+        Err(TryLockError::Poisoned(_)) => {
+            diagnostics.source_lock_miss_count.fetch_add(1, Ordering::Relaxed);
+            return;
+        }
+    }
+
+    for command in scratch.drain(..) {
+        match command {
+            CpalOutputCommand::AddLegacySource { id, kind, engine } => {
+                render_sources.push(RenderAudioSource {
+                    id,
+                    kind,
+                    engine: RenderAudioEngine::Legacy(engine),
+                });
+            }
+            CpalOutputCommand::AddCommandedSource { id, kind, engine } => {
+                render_sources.push(RenderAudioSource {
+                    id,
+                    kind,
+                    engine: RenderAudioEngine::Commanded(engine),
+                });
+            }
+            CpalOutputCommand::RemoveSource { id } => {
+                render_sources.retain(|source| source.id != id);
+            }
+            CpalOutputCommand::SetSourceKind { id, kind } => {
+                if let Some(source) = render_sources.iter_mut().find(|source| source.id == id) {
+                    source.kind = kind;
+                }
+            }
+        }
     }
 }
 
@@ -977,15 +1138,16 @@ mod tests {
     #[test]
     fn render_output_reuses_scratch_buffer() {
         let engine = Arc::new(Mutex::new(AudioEngine::default()));
-        let sources = Arc::new(Mutex::new(vec![AudioSource {
+        let output_commands = test_output_commands([CpalOutputCommand::AddLegacySource {
             id: 1,
             kind: CpalOutputSourceKind::Play,
             engine,
-        }]));
+        }]);
         let mut output = vec![1.0_f32; 4];
         let mut mix = Vec::with_capacity(16);
         let mut source_scratch = Vec::new();
-        let mut source_engines = Vec::new();
+        let mut render_sources = Vec::new();
+        let mut command_scratch = Vec::new();
         let diagnostics = CpalOutputDiagnosticsCounters::default();
 
         render_output(
@@ -993,10 +1155,11 @@ mod tests {
             2,
             0,
             0,
-            &sources,
+            &output_commands,
             &mut mix,
             &mut source_scratch,
-            &mut source_engines,
+            &mut render_sources,
+            &mut command_scratch,
             &diagnostics,
         );
 
@@ -1035,16 +1198,34 @@ mod tests {
             );
             second.play_now(SoundId(1), 1.0, false);
         }
-        let sources = Arc::new(Mutex::new(vec![
-            AudioSource { id: 1, kind: CpalOutputSourceKind::System, engine: first },
-            AudioSource { id: 2, kind: CpalOutputSourceKind::Play, engine: second },
-        ]));
+        let output_commands = test_output_commands([
+            CpalOutputCommand::AddLegacySource {
+                id: 1,
+                kind: CpalOutputSourceKind::System,
+                engine: first,
+            },
+            CpalOutputCommand::AddLegacySource {
+                id: 2,
+                kind: CpalOutputSourceKind::Play,
+                engine: second,
+            },
+        ]);
         let mut mix = Vec::new();
         let mut scratch = Vec::new();
-        let mut engines = Vec::new();
+        let mut sources = Vec::new();
+        let mut commands = Vec::new();
         let diagnostics = CpalOutputDiagnosticsCounters::default();
 
-        mix_sources_stereo(0, 1, &sources, &mut mix, &mut scratch, &mut engines, &diagnostics);
+        mix_sources_stereo(
+            0,
+            1,
+            &output_commands,
+            &mut mix,
+            &mut scratch,
+            &mut sources,
+            &mut commands,
+            &diagnostics,
+        );
 
         assert_eq!(mix, vec![0.75, 0.75]);
     }
@@ -1053,17 +1234,27 @@ mod tests {
     fn mix_sources_stereo_records_engine_lock_miss_by_source_kind() {
         let engine = Arc::new(Mutex::new(AudioEngine::default()));
         let _held = engine.lock().unwrap();
-        let sources = Arc::new(Mutex::new(vec![AudioSource {
+        let output_commands = test_output_commands([CpalOutputCommand::AddLegacySource {
             id: 1,
             kind: CpalOutputSourceKind::System,
             engine: Arc::clone(&engine),
-        }]));
+        }]);
         let mut mix = Vec::new();
         let mut scratch = Vec::new();
-        let mut engines = Vec::new();
+        let mut sources = Vec::new();
+        let mut commands = Vec::new();
         let diagnostics = CpalOutputDiagnosticsCounters::default();
 
-        mix_sources_stereo(0, 1, &sources, &mut mix, &mut scratch, &mut engines, &diagnostics);
+        mix_sources_stereo(
+            0,
+            1,
+            &output_commands,
+            &mut mix,
+            &mut scratch,
+            &mut sources,
+            &mut commands,
+            &diagnostics,
+        );
 
         let snapshot = diagnostics.take_snapshot();
         assert_eq!(snapshot.engine_lock_miss_count, 1);
@@ -1072,6 +1263,17 @@ mod tests {
         assert_eq!(snapshot.play_engine_lock_miss_count, 0);
         assert_eq!(snapshot.draining_engine_lock_miss_count, 0);
         assert_eq!(snapshot.other_engine_lock_miss_count, 0);
+    }
+
+    fn test_output_commands(
+        commands: impl IntoIterator<Item = CpalOutputCommand>,
+    ) -> SharedOutputCommands {
+        let queue = Arc::new(Mutex::new(VecDeque::new()));
+        {
+            let mut queue_guard = queue.lock().unwrap();
+            queue_guard.extend(commands);
+        }
+        queue
     }
 
     #[test]

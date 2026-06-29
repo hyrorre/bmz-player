@@ -1,0 +1,375 @@
+use std::collections::VecDeque;
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, TryLockError};
+
+use bmz_core::ids::SoundId;
+
+use crate::engine::AudioEngine;
+use crate::queue::{AudioScheduler, ScheduledSound};
+use crate::sample::{DecodedSample, SampleBank};
+
+pub const DEFAULT_AUDIO_COMMAND_QUEUE_CAPACITY: usize = 8_192;
+
+#[derive(Debug)]
+pub enum AudioEngineCommand {
+    InsertSample { id: SoundId, sample: DecodedSample },
+    ReserveSampleSlot { id: SoundId },
+    InsertPreparedSample { id: SoundId, sample: DecodedSample },
+    Schedule(ScheduledSound),
+    ScheduleAll(Vec<ScheduledSound>),
+    StopSound { id: SoundId },
+    SetMasterGain { gain: f32 },
+    SetSoundVolume { id: SoundId, volume: f32 },
+    PlayNow { sound_id: SoundId, volume: f32, loop_playback: bool },
+    PlayNowWithFadeIn { sound_id: SoundId, volume: f32, loop_playback: bool, fade_in_frames: u32 },
+}
+
+impl AudioEngineCommand {
+    pub fn apply(self, engine: &mut AudioEngine) {
+        match self {
+            Self::InsertSample { id, sample } => engine.insert_sample(id, sample),
+            Self::ReserveSampleSlot { id } => engine.reserve_sample_slot(id),
+            Self::InsertPreparedSample { id, sample } => engine.insert_prepared_sample(id, sample),
+            Self::Schedule(sound) => engine.schedule(sound),
+            Self::ScheduleAll(sounds) => engine.schedule_all(sounds),
+            Self::StopSound { id } => engine.stop_sound(id),
+            Self::SetMasterGain { gain } => engine.set_master_gain(gain),
+            Self::SetSoundVolume { id, volume } => engine.set_sound_volume(id, volume),
+            Self::PlayNow { sound_id, volume, loop_playback } => {
+                engine.play_now(sound_id, volume, loop_playback);
+            }
+            Self::PlayNowWithFadeIn { sound_id, volume, loop_playback, fade_in_frames } => {
+                engine.play_now_with_fade_in(sound_id, volume, loop_playback, fade_in_frames);
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct AudioCommandQueueDiagnostics {
+    pub submitted: u64,
+    pub dropped: u64,
+    pub drained: u64,
+    pub drain_lock_misses: u64,
+    pub engine_lock_misses: u64,
+    pub max_depth: u64,
+}
+
+#[derive(Debug)]
+struct AudioCommandQueueCounters {
+    submitted: AtomicU64,
+    dropped: AtomicU64,
+    drained: AtomicU64,
+    drain_lock_misses: AtomicU64,
+    engine_lock_misses: AtomicU64,
+    max_depth: AtomicU64,
+}
+
+impl Default for AudioCommandQueueCounters {
+    fn default() -> Self {
+        Self {
+            submitted: AtomicU64::new(0),
+            dropped: AtomicU64::new(0),
+            drained: AtomicU64::new(0),
+            drain_lock_misses: AtomicU64::new(0),
+            engine_lock_misses: AtomicU64::new(0),
+            max_depth: AtomicU64::new(0),
+        }
+    }
+}
+
+#[derive(Debug)]
+struct AudioCommandQueueInner {
+    queue: Mutex<VecDeque<AudioEngineCommand>>,
+    capacity: usize,
+    counters: AudioCommandQueueCounters,
+    output_sample_rate: AtomicU32,
+    idle: AtomicBool,
+}
+
+#[derive(Debug, Clone)]
+pub struct AudioEngineHandle {
+    engine: Arc<Mutex<AudioEngine>>,
+    inner: Arc<AudioCommandQueueInner>,
+}
+
+#[derive(Debug)]
+pub struct CommandedAudioEngine {
+    engine: Arc<Mutex<AudioEngine>>,
+    inner: Arc<AudioCommandQueueInner>,
+    command_scratch: Vec<AudioEngineCommand>,
+}
+
+impl AudioEngineHandle {
+    pub fn new(engine: AudioEngine) -> Self {
+        Self::with_capacity(engine, DEFAULT_AUDIO_COMMAND_QUEUE_CAPACITY)
+    }
+
+    pub fn with_capacity(engine: AudioEngine, capacity: usize) -> Self {
+        let output_sample_rate = engine.output_sample_rate();
+        let idle = engine.is_idle();
+        Self {
+            engine: Arc::new(Mutex::new(engine)),
+            inner: Arc::new(AudioCommandQueueInner {
+                queue: Mutex::new(VecDeque::new()),
+                capacity: capacity.max(1),
+                counters: AudioCommandQueueCounters::default(),
+                output_sample_rate: AtomicU32::new(output_sample_rate),
+                idle: AtomicBool::new(idle),
+            }),
+        }
+    }
+
+    pub fn processor(&self) -> CommandedAudioEngine {
+        CommandedAudioEngine {
+            engine: Arc::clone(&self.engine),
+            inner: Arc::clone(&self.inner),
+            command_scratch: Vec::new(),
+        }
+    }
+
+    pub fn output_sample_rate(&self) -> u32 {
+        self.inner.output_sample_rate.load(Ordering::Relaxed)
+    }
+
+    pub fn is_idle(&self) -> bool {
+        self.inner.idle.load(Ordering::Relaxed)
+    }
+
+    pub fn diagnostics(&self) -> AudioCommandQueueDiagnostics {
+        self.inner.diagnostics()
+    }
+
+    pub fn set_output_sample_rate(&self, rate: u32) {
+        let Ok(mut engine) = self.engine.lock() else {
+            return;
+        };
+        engine.set_output_sample_rate(rate);
+        self.inner.output_sample_rate.store(engine.output_sample_rate(), Ordering::Relaxed);
+        self.inner.idle.store(engine.is_idle(), Ordering::Relaxed);
+    }
+
+    pub fn clone_sample_bank(&self) -> Option<(u32, SampleBank)> {
+        let Ok(engine) = self.engine.try_lock() else {
+            return None;
+        };
+        Some((engine.output_sample_rate(), engine.samples.clone()))
+    }
+
+    pub fn push_command(&self, command: AudioEngineCommand) -> bool {
+        match self.inner.queue.lock() {
+            Ok(mut queue) => {
+                if queue.len() >= self.inner.capacity {
+                    self.inner.counters.dropped.fetch_add(1, Ordering::Relaxed);
+                    return false;
+                }
+                queue.push_back(command);
+                self.inner.counters.submitted.fetch_add(1, Ordering::Relaxed);
+                update_atomic_max(&self.inner.counters.max_depth, queue.len() as u64);
+                true
+            }
+            Err(_) => {
+                self.inner.counters.dropped.fetch_add(1, Ordering::Relaxed);
+                false
+            }
+        }
+    }
+
+    pub fn insert_sample(&self, id: SoundId, sample: DecodedSample) -> bool {
+        self.push_command(AudioEngineCommand::InsertSample { id, sample })
+    }
+
+    pub fn reserve_sample_slot(&self, id: SoundId) -> bool {
+        self.push_command(AudioEngineCommand::ReserveSampleSlot { id })
+    }
+
+    pub fn insert_prepared_sample(&self, id: SoundId, sample: DecodedSample) -> bool {
+        self.push_command(AudioEngineCommand::InsertPreparedSample { id, sample })
+    }
+
+    pub fn schedule_sound(&self, sound: ScheduledSound) -> bool {
+        self.push_command(AudioEngineCommand::Schedule(sound))
+    }
+
+    pub fn schedule_all(&self, sounds: Vec<ScheduledSound>) -> bool {
+        if sounds.is_empty() {
+            return true;
+        }
+        self.push_command(AudioEngineCommand::ScheduleAll(sounds))
+    }
+
+    pub fn stop_sound(&self, id: SoundId) -> bool {
+        self.push_command(AudioEngineCommand::StopSound { id })
+    }
+
+    pub fn set_master_gain(&self, gain: f32) -> bool {
+        self.push_command(AudioEngineCommand::SetMasterGain { gain })
+    }
+
+    pub fn set_sound_volume(&self, id: SoundId, volume: f32) -> bool {
+        self.push_command(AudioEngineCommand::SetSoundVolume { id, volume })
+    }
+
+    pub fn play_now(&self, sound_id: SoundId, volume: f32, loop_playback: bool) -> bool {
+        self.push_command(AudioEngineCommand::PlayNow { sound_id, volume, loop_playback })
+    }
+
+    pub fn play_now_with_fade_in(
+        &self,
+        sound_id: SoundId,
+        volume: f32,
+        loop_playback: bool,
+        fade_in_frames: u32,
+    ) -> bool {
+        self.push_command(AudioEngineCommand::PlayNowWithFadeIn {
+            sound_id,
+            volume,
+            loop_playback,
+            fade_in_frames,
+        })
+    }
+}
+
+impl AudioScheduler for AudioEngineHandle {
+    fn schedule(&mut self, sound: ScheduledSound) {
+        self.schedule_sound(sound);
+    }
+}
+
+impl CommandedAudioEngine {
+    pub fn render_stereo(&mut self, output_start_frame: u64, output: &mut [f32]) -> bool {
+        let engine = Arc::clone(&self.engine);
+        let mut engine = match engine.try_lock() {
+            Ok(engine) => engine,
+            Err(TryLockError::WouldBlock) => {
+                self.inner.counters.engine_lock_misses.fetch_add(1, Ordering::Relaxed);
+                output.fill(0.0);
+                return false;
+            }
+            Err(TryLockError::Poisoned(_)) => {
+                self.inner.counters.engine_lock_misses.fetch_add(1, Ordering::Relaxed);
+                output.fill(0.0);
+                return false;
+            }
+        };
+        self.apply_pending_commands(&mut engine);
+        engine.render_stereo(output_start_frame, output);
+        self.inner.output_sample_rate.store(engine.output_sample_rate(), Ordering::Relaxed);
+        self.inner.idle.store(engine.is_idle(), Ordering::Relaxed);
+        true
+    }
+
+    pub fn apply_pending_commands_for_tests(&mut self) {
+        let engine = Arc::clone(&self.engine);
+        let Ok(mut engine) = engine.lock() else {
+            return;
+        };
+        self.apply_pending_commands(&mut engine);
+        self.inner.output_sample_rate.store(engine.output_sample_rate(), Ordering::Relaxed);
+        self.inner.idle.store(engine.is_idle(), Ordering::Relaxed);
+    }
+
+    fn apply_pending_commands(&mut self, engine: &mut AudioEngine) {
+        self.command_scratch.clear();
+        match self.inner.queue.try_lock() {
+            Ok(mut queue) => {
+                self.command_scratch.reserve(queue.len());
+                while let Some(command) = queue.pop_front() {
+                    self.command_scratch.push(command);
+                }
+            }
+            Err(TryLockError::WouldBlock) => {
+                self.inner.counters.drain_lock_misses.fetch_add(1, Ordering::Relaxed);
+                return;
+            }
+            Err(TryLockError::Poisoned(_)) => {
+                self.inner.counters.drain_lock_misses.fetch_add(1, Ordering::Relaxed);
+                return;
+            }
+        }
+
+        let drained = self.command_scratch.len() as u64;
+        for command in self.command_scratch.drain(..) {
+            command.apply(engine);
+        }
+        if drained != 0 {
+            self.inner.counters.drained.fetch_add(drained, Ordering::Relaxed);
+        }
+    }
+}
+
+impl AudioCommandQueueInner {
+    fn diagnostics(&self) -> AudioCommandQueueDiagnostics {
+        AudioCommandQueueDiagnostics {
+            submitted: self.counters.submitted.load(Ordering::Relaxed),
+            dropped: self.counters.dropped.load(Ordering::Relaxed),
+            drained: self.counters.drained.load(Ordering::Relaxed),
+            drain_lock_misses: self.counters.drain_lock_misses.load(Ordering::Relaxed),
+            engine_lock_misses: self.counters.engine_lock_misses.load(Ordering::Relaxed),
+            max_depth: self.counters.max_depth.load(Ordering::Relaxed),
+        }
+    }
+}
+
+fn update_atomic_max(atomic: &AtomicU64, value: u64) {
+    let mut current = atomic.load(Ordering::Relaxed);
+    while value > current {
+        match atomic.compare_exchange(current, value, Ordering::Relaxed, Ordering::Relaxed) {
+            Ok(_) => break,
+            Err(next) => current = next,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::sample::DecodedSample;
+
+    #[test]
+    fn command_queue_applies_commands_before_rendering() {
+        let handle = AudioEngineHandle::with_capacity(AudioEngine::default(), 8);
+        let mut processor = handle.processor();
+        handle.insert_sample(
+            SoundId(1),
+            DecodedSample { channels: 1, sample_rate: 48_000, frames: vec![1.0, 1.0] },
+        );
+        handle.play_now(SoundId(1), 0.25, false);
+
+        let mut output = vec![0.0; 4];
+        assert!(processor.render_stereo(0, &mut output));
+
+        assert_eq!(output, vec![0.25, 0.25, 0.25, 0.25]);
+        assert_eq!(handle.diagnostics().submitted, 2);
+        assert_eq!(handle.diagnostics().drained, 2);
+    }
+
+    #[test]
+    fn command_queue_drops_when_capacity_is_full() {
+        let handle = AudioEngineHandle::with_capacity(AudioEngine::default(), 1);
+
+        assert!(handle.set_master_gain(0.5));
+        assert!(!handle.set_master_gain(0.25));
+
+        let diagnostics = handle.diagnostics();
+        assert_eq!(diagnostics.submitted, 1);
+        assert_eq!(diagnostics.dropped, 1);
+        assert_eq!(diagnostics.max_depth, 1);
+    }
+
+    #[test]
+    fn command_queue_updates_idle_snapshot_after_render() {
+        let handle = AudioEngineHandle::with_capacity(AudioEngine::default(), 8);
+        let mut processor = handle.processor();
+        handle.insert_sample(
+            SoundId(1),
+            DecodedSample { channels: 1, sample_rate: 48_000, frames: vec![1.0] },
+        );
+        handle.play_now(SoundId(1), 1.0, true);
+
+        let mut output = vec![0.0; 2];
+        processor.render_stereo(0, &mut output);
+
+        assert!(!handle.is_idle());
+    }
+}

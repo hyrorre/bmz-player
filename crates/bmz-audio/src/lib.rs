@@ -1,5 +1,6 @@
 pub mod backend;
 pub mod clock;
+pub mod command;
 pub mod engine;
 pub mod ffmpeg_loader;
 pub mod loader;
