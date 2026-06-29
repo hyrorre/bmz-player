@@ -270,8 +270,12 @@ impl ResultGraphCollector {
                 .iter()
                 .rfind(|candidate| candidate.gauge_type == point.gauge_type)
                 .copied();
-            if previous.is_none_or(|previous| same_gauge_graph_state(previous, last)) {
-                self.graph.gauge_points[last_index] = point;
+            if let Some(previous) = previous {
+                if same_gauge_graph_state(previous, last) {
+                    self.graph.gauge_points[last_index] = point;
+                } else {
+                    self.graph.gauge_points.push(point);
+                }
             } else {
                 self.graph.gauge_points.push(point);
             }
@@ -606,7 +610,7 @@ mod tests {
         let graph = collector.snapshot();
         assert_eq!(
             graph.gauge_points.iter().map(|point| (point.time_ms, point.value)).collect::<Vec<_>>(),
-            vec![(16, 20.0), (32, 35.0), (64, 35.0), (80, 42.0)]
+            vec![(0, 20.0), (16, 20.0), (32, 35.0), (64, 35.0), (80, 42.0)]
         );
     }
 
