@@ -62,6 +62,7 @@ BMZ Player/
     licenses/
       BMZ-GPL-3.0-only.txt
       license-notes.md
+      third-party-notices.txt
 ```
 
 `bmz-player.exe` の隣の `resources` が runtime の `resource_dir` になる。
@@ -192,6 +193,7 @@ BMZ Player.app/
       licenses/
         BMZ-GPL-3.0-only.txt
         license-notes.md
+        third-party-notices.txt
     Frameworks/
       ...
 ```
@@ -362,6 +364,7 @@ Flatpak layout:
   licenses/
     BMZ-GPL-3.0-only.txt
     license-notes.md
+    third-party-notices.txt
 /app/share/applications/net.hyrorre.BMZPlayer.desktop
 /app/share/metainfo/net.hyrorre.BMZPlayer.metainfo.xml
 /app/share/icons/hicolor/256x256/apps/net.hyrorre.BMZPlayer.png

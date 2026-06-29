@@ -43,6 +43,37 @@ Development installs are not redistributable artifacts by themselves:
 
 Before publishing an installer, archive, app bundle, or container image, check the concrete FFmpeg binaries included in that artifact.
 
+## ASIO SDK
+
+BMZ Player enables ASIO support on Windows through `cpal/asio`, which depends on
+the Rust `asio-sys` crate. ASIO support is Windows-only in this project.
+
+Current use sites:
+
+- `crates/bmz-player/Cargo.toml` enables the `asio` feature by default.
+- `crates/bmz-audio/Cargo.toml` maps that feature to `cpal/asio`.
+- `docs/packaging.md` documents the Windows release job as an ASIO-enabled build.
+
+Steinberg's current public ASIO open-source license page states that ASIO
+technology is available under `GPLv3`, and that the ASIO name and logo are
+Steinberg trademarks whose use is separate from the GPL terms:
+
+- https://www.steinberg.net/developers/asiosdk-open/
+- https://www.steinberg.net/asiosdk
+
+BMZ Player is already `GPL-3.0-only`, so the ASIO SDK's GPLv3 open-source
+variant is compatible with the application license direction. For release
+artifacts that include ASIO support:
+
+- Preserve ASIO SDK and Steinberg notices in the third-party notice file.
+- Do not bundle or alter the ASIO logo unless the release follows Steinberg's
+  ASIO usage guidelines.
+- Do not use `ASIO` as part of the BMZ Player product name, company name, or
+  release artifact name. Descriptive phrases such as "ASIO support" are safer.
+- Record the `asio-sys` and `cpal` versions used by each release.
+- If the ASIO SDK license files are copied into the build cache or artifact,
+  keep them unmodified and include them alongside the other license texts.
+
 ## Bundled Skins
 
 `data/skins/default` is BMZ Player's first-party minimal skin.
@@ -64,6 +95,26 @@ mz-select's readme permits use, modification, and redistribution of the skin and
 
 Third-party skins copied under `data/skins/` for manual compatibility testing remain gitignored and must not be committed unless they are intentionally added as a documented bundled asset.
 
+## Third-party Notices
+
+Release artifacts include a human-readable notice entrypoint:
+
+- Repository source: `THIRD-PARTY-NOTICES.txt`
+- Packaged path on Windows portable / installer staging:
+  `resources/licenses/third-party-notices.txt`
+- Packaged path inside macOS app bundles:
+  `Contents/Resources/licenses/third-party-notices.txt`
+
+The application may also show the same notice text in egui. In-app display is
+useful, but it should not replace shipping a readable text file in the release
+artifact because users must be able to inspect notices outside the running app.
+
+`THIRD-PARTY-NOTICES.txt` is the hand-maintained top-level notice for major
+bundled components such as BMZ Player, FFmpeg, ASIO SDK, bundled skins, and
+notable bridge crates. Before a public binary release, also generate a complete
+Rust dependency license report from the exact release lockfile and include it in
+the package or append it to the notice file.
+
 ## Release Checklist
 
 Before publishing a binary release:
@@ -72,6 +123,7 @@ Before publishing a binary release:
 2. Generate a third-party Rust dependency license report.
 3. Record the FFmpeg version, configure flags, source URL, and binary source/provenance.
 4. Confirm no bundled FFmpeg build uses `--enable-nonfree`.
-5. Include FFmpeg and bundled-skin notices in the release package.
+5. Include `THIRD-PARTY-NOTICES.txt`, FFmpeg, ASIO SDK, and bundled-skin notices in the release package.
 6. Confirm bundled skin submodules such as `data/skins/Rmz-skin` and `data/skins/mz-select` point at the intended commits.
-7. Confirm no gitignored third-party skins, songs, databases, profiles, credentials, or `.env` files are included.
+7. Confirm Windows release artifacts built with default features are intended to include ASIO support.
+8. Confirm no gitignored third-party skins, songs, databases, profiles, credentials, or `.env` files are included.

@@ -373,6 +373,7 @@ Copy-DirectoryMirror (Join-Path $repoRoot "data\skins\mz-select") (Join-Path $re
 Copy-DirectoryMirror (Join-Path $repoRoot "data\songs\sample-playable") (Join-Path $resourcesDir "songs\sample-playable")
 Copy-RequiredFile (Join-Path $repoRoot "LICENSE") (Join-Path $licensesDir "BMZ-GPL-3.0-only.txt")
 Copy-RequiredFile (Join-Path $repoRoot "docs\licenses.md") (Join-Path $licensesDir "license-notes.md")
+Copy-RequiredFile (Join-Path $repoRoot "THIRD-PARTY-NOTICES.txt") (Join-Path $licensesDir "third-party-notices.txt")
 Copy-RequiredFile $appIcon (Join-Path $resourcesDir "bmz-player.ico")
 
 if ($CopySiblingDlls) {

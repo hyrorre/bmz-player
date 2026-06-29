@@ -380,6 +380,7 @@ main() {
   copy_dir "${root}/data/songs/sample-playable" "${resources_dir}/songs/sample-playable"
   copy_file "${root}/LICENSE" "${resources_dir}/licenses/BMZ-GPL-3.0-only.txt"
   copy_file "${root}/docs/licenses.md" "${resources_dir}/licenses/license-notes.md"
+  copy_file "${root}/THIRD-PARTY-NOTICES.txt" "${resources_dir}/licenses/third-party-notices.txt"
   copy_file "${root}/assets/app-icon/bmz-player.icns" "${resources_dir}/bmz-player.icns"
   prune_macos_resource_markers "${resources_dir}"
 

@@ -42,6 +42,8 @@ use crate::songs_cmd::add_song_root_entry;
 use crate::storage::score_import::{ScoreImportKind, ScoreImportRequest};
 use crate::update::{UpdateAssetKind, UpdateCandidate, current_version};
 
+const THIRD_PARTY_NOTICES: &str = include_str!("../../../THIRD-PARTY-NOTICES.txt");
+
 /// スキンが宣言する設定可能項目の定義 (1 シーン分)。
 ///
 /// renderer が保持する `SkinDocument` から複製して egui パネルへ渡す。
@@ -346,6 +348,8 @@ pub struct EguiLayer {
     show_profile_settings: bool,
     /// スキン設定パネルの開閉状態。
     show_skin: bool,
+    /// ライセンス / third-party notice 表示パネルの開閉状態。
+    show_license_notice: bool,
     update_dialog_active: bool,
     /// 本体設定パネル: 曲フォルダ追加用の入力欄。
     settings_new_root_path: String,
@@ -671,6 +675,7 @@ impl EguiLayer {
             show_settings: false,
             show_profile_settings: false,
             show_skin: false,
+            show_license_notice: false,
             update_dialog_active: false,
             settings_new_root_path: String::new(),
             settings_add_root_error: String::new(),
@@ -747,6 +752,7 @@ impl EguiLayer {
         let show_settings = &mut self.show_settings;
         let show_profile_settings = &mut self.show_profile_settings;
         let show_skin = &mut self.show_skin;
+        let show_license_notice = &mut self.show_license_notice;
         let mut save_app_config = false;
         let mut save_profile_config = false;
         let mut reset_skin_config = false;
@@ -799,9 +805,11 @@ impl EguiLayer {
                     show_settings,
                     show_profile_settings,
                     show_skin,
+                    show_license_notice,
                     app_paths,
                     directory_open_status,
                 );
+                build_third_party_notice_panel(ctx, show_license_notice);
                 build_debug_panel(ctx, show_debug, info);
                 let settings_actions = build_settings_panel(
                     ctx,
@@ -909,6 +917,7 @@ fn build_menu(
     show_settings: &mut bool,
     show_profile_settings: &mut bool,
     show_skin: &mut bool,
+    show_license_notice: &mut bool,
     app_paths: &AppPaths,
     directory_open_status: &mut Option<DirectoryOpenStatus>,
 ) {
@@ -923,6 +932,7 @@ fn build_menu(
             ui.checkbox(show_settings, "本体設定");
             ui.checkbox(show_profile_settings, "プロファイル設定");
             ui.checkbox(show_skin, "スキン設定");
+            ui.checkbox(show_license_notice, "ライセンス表記");
             ui.separator();
             ui.label("ディレクトリを開く");
             ui.horizontal_wrapped(|ui| {
@@ -952,6 +962,26 @@ fn build_menu(
                 }
             }
         });
+}
+
+fn build_third_party_notice_panel(ctx: &egui::Context, open: &mut bool) {
+    if !*open {
+        return;
+    }
+    let mut notice = THIRD_PARTY_NOTICES;
+    sized_panel_window("ライセンス表記", ctx, open, 620.0, 560.0, egui::pos2(936.0, 320.0)).show(
+        ctx,
+        |ui| {
+            scrollable_window_content(ui, |ui| {
+                ui.add(
+                    egui::TextEdit::multiline(&mut notice)
+                        .font(egui::TextStyle::Monospace)
+                        .desired_width(f32::INFINITY)
+                        .interactive(false),
+                );
+            });
+        },
+    );
 }
 
 fn directory_open_targets(app_paths: &AppPaths) -> [DirectoryOpenTarget<'_>; 4] {
