@@ -1,0 +1,28 @@
+{
+  "accepted": [
+    "0BSD",
+    "Apache-2.0",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "BlueOak-1.0.0",
+    "CC-BY-3.0",
+    "CC-BY-4.0",
+    "CC0-1.0",
+    "ISC",
+    "MIT",
+    "MPL-2.0",
+    "Python-2.0"
+  ],
+  "licenseOverrides": {
+    "@nuxthub/blob": "Apache-2.0",
+    "@nuxthub/db": "Apache-2.0",
+    "vaul-vue": "MIT",
+    "node-forge": "BSD-3-Clause"
+  },
+  "licenseNotes": {
+    "@nuxthub/blob": "Generated stub package from @nuxthub/core; @nuxthub/core@0.10.7 declares Apache-2.0 in the npm registry.",
+    "@nuxthub/db": "Generated stub package from @nuxthub/core; @nuxthub/core@0.10.7 declares Apache-2.0 in the npm registry.",
+    "vaul-vue": "npm package metadata omits license; GitHub repository license API reports MIT for unovue/vaul-vue."
+  },
+  "reviewLicenses": ["AGPL", "BUSL", "Commons Clause", "Elastic", "GPL", "LGPL", "PolyForm", "SSPL"]
+}

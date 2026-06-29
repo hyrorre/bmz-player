@@ -131,6 +131,34 @@ cargo-about generate --workspace --locked --fail \
 The package scripts pass the relevant target/features when they create release
 artifacts. Review `about.toml` before accepting newly introduced license IDs.
 
+## BMZ IR Web
+
+The BMZ IR web application is built from the repository root `package.json` and
+`bun.lock`. The package is private, but it declares `GPL-3.0-only` so generated
+dependency reports have an explicit first-party license.
+
+For Cloudflare Worker releases, generate the web dependency report from the
+Wrangler dry-run bundle metafile instead of from all installed `node_modules`.
+This avoids treating dev-only or optional native packages as deployed code.
+
+```sh
+bun install --frozen-lockfile
+bun run cf:build
+bun run license:web:bundle
+```
+
+The generated report is written to:
+
+- `.output/public/licenses/web-dependency-licenses.txt`
+
+`scripts/generate-web-license-report.mjs` reads the Wrangler `--metafile`
+inputs and the matching Nuxt/Nitro sourcemaps under `.output/server`, maps
+bundled files back to installed npm packages, applies `web-license-policy.json`,
+and fails when a bundled package has an unaccepted or review-required license.
+The policy currently chooses the BSD side of
+`node-forge`'s `(BSD-3-Clause OR GPL-2.0)` expression and does not accept GPL /
+LGPL / AGPL-only packages without review.
+
 ## Release Checklist
 
 Before publishing a binary release:
@@ -143,3 +171,10 @@ Before publishing a binary release:
 6. Confirm bundled skin submodules such as `data/skins/Rmz-skin` and `data/skins/mz-select` point at the intended commits.
 7. Confirm Windows release artifacts built with default features are intended to include ASIO support.
 8. Confirm no gitignored third-party skins, songs, databases, profiles, credentials, or `.env` files are included.
+
+Before deploying BMZ IR web:
+
+1. Run `bun install --frozen-lockfile`.
+2. Run `bun run cf:build`.
+3. Run `bun run license:web:bundle`.
+4. Include `.output/public/licenses/web-dependency-licenses.txt` in the deployed static assets.

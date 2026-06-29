@@ -123,6 +123,7 @@ bun install
 bun run db:migrate
 bunx prettier . --check
 bun run cf:build
+bun run license:web:bundle
 bun run cf:types
 bun run dev                            # http://localhost:3000
 bmz ir login --email <EMAIL> --base-url http://localhost:3000
@@ -2438,5 +2439,6 @@ bun run db:migrate
 
 # Generate Cloudflare Worker bindings/types
 bun run cf:build
+bun run license:web:bundle
 bun run cf:types
 ```
