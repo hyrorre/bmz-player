@@ -6808,6 +6808,7 @@ impl WinitApp {
         self.apply_play_table_text(&mut snapshot);
         self.last_play_snapshot = Some(snapshot.clone());
         self.pending_play_start = Some(PendingPlayStart { chart_id, options });
+        self.sync_play_control_holds_from_pressed_controls();
         self.last_started_chart_id = Some(chart_id);
     }
 
@@ -9256,6 +9257,11 @@ impl WinitApp {
         if self.play_elapsed_time().0 < self.play_skin_ready_delay().as_micros() as i64 {
             return;
         }
+        self.sync_play_control_holds_from_pressed_controls();
+        if play_ready_blocked_by_control_holds(self.play_e1_held, self.play_e2_held) {
+            self.update_pending_play_snapshot_timers();
+            return;
+        }
         let chart_zero_time = self
             .practice_chart_zero_time
             .take()
@@ -9463,6 +9469,27 @@ impl WinitApp {
         self.play_e2_held = false;
         self.play_e3_held = false;
         self.play_exit_hold_started_at = None;
+    }
+
+    fn sync_play_control_holds_from_pressed_controls(&mut self) {
+        let (e1_held, e2_held, e3_held) = play_control_hold_state_from_pressed_controls(
+            &self.pressed_controls,
+            &self.select_keys,
+        );
+        if self.play_e1_held == e1_held
+            && self.play_e2_held == e2_held
+            && self.play_e3_held == e3_held
+        {
+            return;
+        }
+        if self.play_e1_held != e1_held || self.play_e2_held != e2_held {
+            self.reset_play_analog_scroll();
+        }
+        self.play_e1_held = e1_held;
+        self.play_e2_held = e2_held;
+        self.play_e3_held = e3_held;
+        self.refresh_play_lane_value_changing();
+        self.update_play_exit_hold_timer();
     }
 
     fn play_lane_value_changing(&self) -> bool {
@@ -13418,6 +13445,20 @@ fn select_hold_state_from_pressed_controls(
         .filter_map(|control| bindings.e_action_for_control(control))
         .collect();
     (start_held, select_held, e_action_holds)
+}
+
+fn play_control_hold_state_from_pressed_controls(
+    pressed_controls: &HashSet<String>,
+    bindings: &SelectKeyBindings,
+) -> (bool, bool, bool) {
+    let e1_held = pressed_controls.iter().any(|control| bindings.is_start(control));
+    let e2_held = pressed_controls.iter().any(|control| bindings.is_e2_action(control));
+    let e3_held = pressed_controls.iter().any(|control| bindings.is_e3_action(control));
+    (e1_held, e2_held, e3_held)
+}
+
+fn play_ready_blocked_by_control_holds(e1_held: bool, e2_held: bool) -> bool {
+    e1_held || e2_held
 }
 
 fn is_select_start_key(physical_key: PhysicalKey, bindings: &SelectKeyBindings) -> bool {
@@ -17825,6 +17866,37 @@ mod tests {
         assert!(select_held);
         assert!(!e_action_holds.contains(&InputActionConfig::E1));
         assert!(e_action_holds.contains(&InputActionConfig::E2));
+    }
+
+    #[test]
+    fn play_control_hold_state_rebuilds_from_pressed_controls() {
+        let keys = default_select_keys();
+        let pressed = HashSet::from(["Q".to_string(), "W".to_string(), "E".to_string()]);
+
+        assert_eq!(
+            play_control_hold_state_from_pressed_controls(&pressed, &keys),
+            (true, true, true)
+        );
+
+        let pressed = HashSet::from(["Q".to_string()]);
+        assert_eq!(
+            play_control_hold_state_from_pressed_controls(&pressed, &keys),
+            (true, false, false)
+        );
+
+        let pressed = HashSet::from(["W".to_string()]);
+        assert_eq!(
+            play_control_hold_state_from_pressed_controls(&pressed, &keys),
+            (false, true, false)
+        );
+    }
+
+    #[test]
+    fn play_ready_is_blocked_while_e1_or_e2_is_held() {
+        assert!(!play_ready_blocked_by_control_holds(false, false));
+        assert!(play_ready_blocked_by_control_holds(true, false));
+        assert!(play_ready_blocked_by_control_holds(false, true));
+        assert!(play_ready_blocked_by_control_holds(true, true));
     }
 
     #[test]
