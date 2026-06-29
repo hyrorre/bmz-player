@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use bmz_core::ids::SoundId;
 
 #[derive(Debug, Clone)]
@@ -7,9 +9,9 @@ pub struct DecodedSample {
     pub frames: Vec<f32>,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Clone, Default)]
 pub struct SampleBank {
-    samples: Vec<Option<DecodedSample>>,
+    samples: Vec<Option<Arc<DecodedSample>>>,
 }
 
 impl SampleBank {
@@ -23,11 +25,11 @@ impl SampleBank {
     pub fn insert(&mut self, id: SoundId, sample: DecodedSample) {
         let index = id.0 as usize;
         self.reserve_slot(id);
-        self.samples[index] = Some(sample);
+        self.samples[index] = Some(Arc::new(sample));
     }
 
     pub fn get(&self, id: SoundId) -> Option<&DecodedSample> {
-        self.samples.get(id.0 as usize)?.as_ref()
+        self.samples.get(id.0 as usize)?.as_deref()
     }
 
     /// 保持中の全サンプルを `target_rate` へリサンプルする。出力レート変更時に
@@ -35,7 +37,7 @@ impl SampleBank {
     pub fn resample_all_to(&mut self, target_rate: u32) {
         for slot in self.samples.iter_mut().flatten() {
             if slot.sample_rate != target_rate {
-                *slot = slot.resampled_to(target_rate);
+                *slot = Arc::new(slot.resampled_to(target_rate));
             }
         }
     }

@@ -9,6 +9,7 @@ use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result};
+use bmz_audio::engine::AudioEngine;
 use bmz_audio::ffmpeg_loader::FfmpegSampleLoader;
 use bmz_audio::loader::SampleLoader;
 use bmz_audio::sample::DecodedSample;
@@ -75,8 +76,8 @@ use crate::screens::play_finish::FinishedPlaySession;
 use crate::screens::play_loop::{
     PlayEndingSkinTimers, advance_running_play_session, refresh_play_ending_snapshot,
 };
-use crate::screens::play_session::AppliedArrange;
 use crate::screens::play_session::build_practice_prepared_from_preloaded;
+use crate::screens::play_session::{AppliedArrange, PreloadedPlaySession};
 use crate::screens::play_snapshot::{
     BgaFrameCatalog, apply_fast_slow_display_filter, bga_texture_id,
     build_render_snapshot_with_target_and_bga_frames_cached, display_bga_frame,
@@ -987,6 +988,11 @@ struct PlayPreloadResult {
     generation: u64,
     chart_id: i64,
     result: std::result::Result<PreloadedWinitPlaySession, String>,
+}
+
+struct QuickRetryReuse {
+    preloaded: PreloadedWinitPlaySession,
+    bga_frames: BgaFrameCatalog,
 }
 
 enum SongScanEvent {
@@ -7452,6 +7458,61 @@ impl WinitApp {
         options
     }
 
+    fn quick_retry_reuse_active_assets(
+        &self,
+        chart_id: i64,
+        options: &PlayStartOptions,
+        mode: ResultRetryMode,
+    ) -> Option<QuickRetryReuse> {
+        if mode != ResultRetryMode::SameArrange {
+            return None;
+        }
+        let active = self.active_play.as_ref()?;
+        let Ok(engine) = active.running.audio.engine.try_lock() else {
+            tracing::debug!(chart_id, "quick retry asset reuse skipped because audio is busy");
+            return None;
+        };
+        let audio =
+            AudioEngine::with_sample_bank(engine.output_sample_rate(), engine.samples.clone());
+        drop(engine);
+
+        let mut session_options =
+            play_session_options_from_start(&self.play_session_app_config(), options.clone());
+        session_options.ln_policy_setting = self.boot.profile_config.play.ln_mode_policy;
+        session_options.rule_mode = self.boot.profile_config.play.rule_mode;
+
+        Some(QuickRetryReuse {
+            preloaded: PreloadedWinitPlaySession {
+                chart_id,
+                preloaded: PreloadedPlaySession {
+                    chart: Arc::clone(&active.running.session.chart),
+                    audio,
+                    sample_report: active.running.sample_report.clone(),
+                    normalization_gain: active.running.session.audio_mix.normalization_gain,
+                    applied_arrange: active.running.applied_arrange.clone(),
+                    score_key: active.running.score_key,
+                },
+                input: crate::input::winit::WinitInputBackend::default(),
+                session_options,
+            },
+            bga_frames: active.running.bga_frames.clone(),
+        })
+    }
+
+    fn queue_quick_retry_reuse(&mut self, chart_id: i64, reuse: QuickRetryReuse) {
+        self.play_preload_generation = self.play_preload_generation.wrapping_add(1);
+        let play_generation = self.play_preload_generation;
+        self.pending_play_preload = None;
+        self.preloaded_play_session = Some(reuse.preloaded);
+
+        self.bga_load_generation = self.bga_load_generation.wrapping_add(1);
+        self.bga_load_chart_id = Some(chart_id);
+        self.bga_load_rx = None;
+        let bga_frames = reuse.bga_frames.len();
+        self.bga_preload_frames = reuse.bga_frames;
+        tracing::info!(chart_id, play_generation, bga_frames, "quick retry assets reused");
+    }
+
     fn handle_quick_retry_control(&mut self, control: &str) -> bool {
         let Some(ending) = &self.play_ending else {
             return false;
@@ -7482,7 +7543,11 @@ impl WinitApp {
             tracing::warn!("quick retry ignored without previous chart id");
             return;
         };
-        let options = self.active_play_retry_options(mode);
+        let mut options = self.active_play_retry_options(mode);
+        if options.chart_zero_time == TimeUs(0) {
+            options.chart_zero_time = self.play_skin_playstart_offset();
+        }
+        let reuse = self.quick_retry_reuse_active_assets(chart_id, &options, mode);
         tracing::info!(chart_id, ?mode, "quick retrying chart");
         self.save_current_play_options(
             self.active_play.as_ref().map(|active| active.running.session.hispeed),
@@ -7493,7 +7558,13 @@ impl WinitApp {
         self.finished_play = None;
         self.draining_audio = None;
         self.clear_play_control_holds();
-        self.start_chart_with_options(chart_id, options);
+        if let Some(reuse) = reuse {
+            self.queue_quick_retry_reuse(chart_id, reuse);
+        } else {
+            self.start_play_preload(chart_id, options.clone());
+        }
+        self.enter_play_scene(chart_id, options, self.decide_snapshot_for_chart(chart_id));
+        self.poll_play_preload();
     }
 
     /// Key5/Key7 の現在の押下状態を記録する。フェードアウト中も含めて
