@@ -8392,14 +8392,6 @@ fn skin_state_float_expr(expr: &str, state: &SkinDrawState) -> Option<f32> {
     if let Some(inner) = expr.strip_prefix("max(0,").and_then(|value| value.strip_suffix(')')) {
         return skin_state_float_expr(inner.trim(), state).map(|value| value.max(0.0));
     }
-    if let Some((numerator, denominator)) = expr.split_once('/') {
-        let numerator = skin_state_float_expr(numerator.trim(), state)?;
-        let denominator = skin_state_float_expr(denominator.trim(), state)?;
-        if denominator.abs() < f32::EPSILON {
-            return Some(0.0);
-        }
-        return Some(numerator / denominator);
-    }
     skin_state_additive_float_expr(expr, state)
 }
 
@@ -8438,40 +8430,92 @@ fn outer_parentheses_wrap_expression(expr: &str) -> bool {
 }
 
 fn skin_state_additive_float_expr(expr: &str, state: &SkinDrawState) -> Option<f32> {
-    let normalized = expr.replace('+', " + ").replace('-', " - ");
+    let mut depth = 0_i32;
     let mut sign = 1.0_f32;
+    let mut start = 0_usize;
     let mut total = 0.0_f32;
-    let mut expecting_value = true;
-    for token in normalized.split_whitespace() {
-        match token {
-            "+" if expecting_value => sign = 1.0,
-            "-" if expecting_value => sign = -1.0,
-            "+" if !expecting_value => {
-                sign = 1.0;
-                expecting_value = true;
-            }
-            "-" if !expecting_value => {
-                sign = -1.0;
-                expecting_value = true;
-            }
-            value => {
-                if !expecting_value {
-                    return None;
+
+    for (index, ch) in expr.char_indices() {
+        match ch {
+            '(' => depth += 1,
+            ')' => depth -= 1,
+            '+' | '-' if depth == 0 => {
+                let term = expr[start..index].trim();
+                if term.is_empty() {
+                    sign = if ch == '-' { -1.0 } else { 1.0 };
+                    start = index + ch.len_utf8();
+                    continue;
                 }
-                let term = skin_state_float_expr_term(value, state)?;
-                total += sign * term;
-                sign = 1.0;
-                expecting_value = false;
+                total += sign * skin_state_float_mul_div_expr(term, state)?;
+                sign = if ch == '-' { -1.0 } else { 1.0 };
+                start = index + ch.len_utf8();
             }
+            _ => {}
+        }
+        if depth < 0 {
+            return None;
         }
     }
-    if expecting_value {
+    if depth != 0 {
         return None;
     }
+    let term = expr[start..].trim();
+    if term.is_empty() {
+        return None;
+    }
+    total += sign * skin_state_float_mul_div_expr(term, state)?;
     Some(total)
 }
 
+fn skin_state_float_mul_div_expr(expr: &str, state: &SkinDrawState) -> Option<f32> {
+    let mut depth = 0_i32;
+    let mut start = 0_usize;
+    let mut value: Option<f32> = None;
+    let mut operator = '*';
+
+    for (index, ch) in expr.char_indices() {
+        match ch {
+            '(' => depth += 1,
+            ')' => depth -= 1,
+            '*' | '/' if depth == 0 => {
+                let factor = skin_state_float_expr_term(expr[start..index].trim(), state)?;
+                value = Some(apply_float_mul_div(value, factor, operator));
+                operator = ch;
+                start = index + ch.len_utf8();
+            }
+            _ => {}
+        }
+        if depth < 0 {
+            return None;
+        }
+    }
+    if depth != 0 {
+        return None;
+    }
+
+    let factor = skin_state_float_expr_term(expr[start..].trim(), state)?;
+    Some(apply_float_mul_div(value, factor, operator))
+}
+
+fn apply_float_mul_div(current: Option<f32>, factor: f32, operator: char) -> f32 {
+    let Some(current) = current else { return factor };
+    match operator {
+        '*' => current * factor,
+        '/' if factor.abs() < f32::EPSILON => 0.0,
+        '/' => current / factor,
+        _ => current,
+    }
+}
+
 fn skin_state_float_expr_term(term: &str, state: &SkinDrawState) -> Option<f32> {
+    let term = term.trim();
+    let stripped = strip_wrapping_parentheses(term);
+    if stripped.len() != term.len() {
+        return skin_state_float_expr(stripped, state);
+    }
+    if term.starts_with("floor(") || term.starts_with("max(0,") {
+        return skin_state_float_expr(term, state);
+    }
     if let Some(ref_id) = parse_skin_float_number_operand(term) {
         return skin_state_float_number(ref_id, state);
     }
@@ -8481,27 +8525,10 @@ fn skin_state_float_expr_term(term: &str, state: &SkinDrawState) -> Option<f32> 
     if let Some(ref_id) = parse_skin_number_operand(term) {
         return skin_state_number(ref_id, state).map(|value| value as f32);
     }
-    if term.contains('*') {
-        return skin_state_float_product_expr_term(term, state);
+    if let Some(option_id) = parse_skin_option_operand(term) {
+        return Some(if test_skin_op(option_id, &[], state) { 1.0 } else { 0.0 });
     }
     term.parse::<f32>().ok()
-}
-
-fn skin_state_float_product_expr_term(term: &str, state: &SkinDrawState) -> Option<f32> {
-    let mut product = 1.0_f32;
-    for factor in term.split('*') {
-        let factor = factor.trim();
-        if let Some(ref_id) = parse_skin_float_number_operand(factor) {
-            product *= skin_state_float_number(ref_id, state)?;
-        } else if let Some(ref_id) = parse_skin_number_operand(factor) {
-            product *= skin_state_number(ref_id, state)? as f32;
-        } else if let Some(option_id) = parse_skin_option_operand(factor) {
-            product *= if test_skin_op(option_id, &[], state) { 1.0 } else { 0.0 };
-        } else {
-            product *= factor.parse::<f32>().ok()?;
-        }
-    }
-    Some(product)
 }
 
 /// 設定フォルダ内で曲メタデータ用 number を出さない ref。
@@ -8674,8 +8701,10 @@ fn skin_state_number(ref_id: i32, state: &SkinDrawState) -> Option<i64> {
         87 => judge_rate_int(state.judge_counts.good, state.total_notes),
         88 => judge_rate_int(state.judge_counts.bad, state.total_notes),
         89 => judge_rate_int(state.judge_counts.poor, state.total_notes),
-        102 | 115 | 155 => Some(score_rate_parts(state.ex_score, state.total_notes).0 as i64),
-        103 | 116 | 156 => Some(score_rate_parts(state.ex_score, state.total_notes).1 as i64),
+        102 => Some(current_score_rate_parts(state).0 as i64),
+        103 => Some(current_score_rate_parts(state).1 as i64),
+        115 | 155 => Some(score_rate_parts(state.ex_score, state.total_notes).0 as i64),
+        116 | 156 => Some(score_rate_parts(state.ex_score, state.total_notes).1 as i64),
         104 => Some(state.combo as i64),
         107 => Some(state.gauge.floor() as i64),
         407 => Some(gauge_after_dot(state.gauge) as i64),
@@ -9172,6 +9201,32 @@ fn score_rate_parts(ex_score: u32, total_notes: u32) -> (u32, u32) {
     (rate_scaled / 100, rate_scaled % 100)
 }
 
+fn current_score_rate_notes(state: &SkinDrawState) -> Option<u32> {
+    if state.past_notes > 0 {
+        Some(state.past_notes)
+    } else if state.total_notes > 0 || state.select_total_notes > 0 {
+        Some(0)
+    } else {
+        None
+    }
+}
+
+fn current_score_rate_value(state: &SkinDrawState) -> f32 {
+    match current_score_rate_notes(state) {
+        Some(0) => 1.0,
+        Some(notes) => state.ex_score as f32 / notes.saturating_mul(2).max(1) as f32,
+        None => 0.0,
+    }
+}
+
+fn current_score_rate_parts(state: &SkinDrawState) -> (u32, u32) {
+    match current_score_rate_notes(state) {
+        Some(0) => (100, 0),
+        Some(notes) => score_rate_parts(state.ex_score, notes),
+        None => (0, 0),
+    }
+}
+
 fn skin_image_texture_region(
     image: &SkinImageDef,
     source_size: SkinImageSize,
@@ -9450,11 +9505,12 @@ fn graph_value(graph_type: i32, state: &SkinDrawState) -> f32 {
     match graph_type {
         101 => state.play_progress, // BARGRAPH_MUSIC_PROGRESS: elapsed / total playtime
         102 => 1.0,                 // BARGRAPH_LOAD_PROGRESS: always complete during play
-        110 | 111 => {
-            // BARGRAPH_SCORERATE / SCORERATE_FINAL: ex_score / max_ex_score
+        110 => {
+            // BARGRAPH_SCORERATE: ex_score / max_ex_score
             let max = (state.total_notes * 2) as f32;
             if max > 0.0 { state.ex_score as f32 / max } else { 0.0 }
         }
+        111 => current_score_rate_value(state),
         // BARGRAPH_RATE_PGREAT..RATE_EXSCORE: judge count / past_notes (or total_notes)
         140 => judge_rate(state.judge_counts.pgreat, state.past_notes),
         141 => judge_rate(state.judge_counts.great, state.past_notes),
@@ -19802,6 +19858,7 @@ mod tests {
             max_combo: 45,
             ex_score: 167,
             total_notes: 100,
+            past_notes: 100,
             judge_counts: DisplayJudgeCounts {
                 pgreat: 30,
                 great: 20,
@@ -22067,6 +22124,42 @@ mod tests {
     }
 
     #[test]
+    fn graph_renders_current_score_rate_against_past_notes() {
+        // BARGRAPH_SCORERATE_FINAL (111): ex_score / (past_notes * 2)
+        // total_notes=1000, past_notes=9, ex_score=18 → current rate is 100%.
+        let document: SkinDocument = serde_json::from_str(
+            r#"
+            {
+                "w": 1280, "h": 720,
+                "source": [{ "id": "bar-src", "path": "bar.png" }],
+                "graph": [{ "id": "score-bar", "src": "bar-src", "x": 0, "y": 0, "w": 100, "h": 200, "type": 111 }],
+                "destination": [
+                    { "id": "score-bar", "dst": [{ "time": 0, "x": 0, "y": 0, "w": 100, "h": 480 }] }
+                ]
+            }
+            "#,
+        )
+        .unwrap();
+
+        let sources = mock_source("bar-src", 100.0, 200.0);
+        let state = SkinDrawState {
+            ex_score: 18,
+            total_notes: 1000,
+            past_notes: 9,
+            ..SkinDrawState::default()
+        };
+        let items = document.static_image_render_items(&sources, &state);
+
+        assert_eq!(items.len(), 1, "expected one graph bar");
+        let SkinRenderItem::Image { rect, uv, .. } = &items[0] else { panic!() };
+        let dst_h = 480.0 / 720.0;
+        assert!(approx_eq(rect.height, dst_h), "bar height should be full: got {}", rect.height);
+        assert!(approx_eq(rect.y, 1.0 - dst_h), "bar y should start at top: got {}", rect.y);
+        assert!(approx_eq(uv.height, 1.0), "uv height should be full, got {}", uv.height);
+        assert!(approx_eq(uv.y, 0.0), "uv y should start at top, got {}", uv.y);
+    }
+
+    #[test]
     fn graph_renders_horizontal_bar_for_load_progress() {
         // BARGRAPH_LOAD_PROGRESS (102): always 1.0
         let document: SkinDocument = serde_json::from_str(
@@ -22533,6 +22626,41 @@ mod tests {
     }
 
     #[test]
+    fn skin_value_number_evaluates_remain_rate_scaled_after_division() {
+        let state = SkinDrawState {
+            total_notes: 100,
+            judge_counts: DisplayJudgeCounts {
+                pgreat: 30,
+                great: 20,
+                good: 5,
+                bad: 3,
+                poor: 2,
+                ..Default::default()
+            },
+            ..SkinDrawState::default()
+        };
+        let value = SkinValueDef {
+            id: "remain-rate-num".to_string(),
+            src: String::new(),
+            value_expr:
+                "(number(106)-number(110)-number(111)-number(112)-number(113)-number(114))/number(106)*100"
+                    .to_string(),
+            ..Default::default()
+        };
+        let afterdot = SkinValueDef {
+            id: "remain-rate-adot-num".to_string(),
+            src: String::new(),
+            value_expr:
+                "(number(106)-number(110)-number(111)-number(112)-number(113)-number(114))/number(106)*10000"
+                    .to_string(),
+            ..Default::default()
+        };
+
+        assert_eq!(skin_value_number(&value, &state), Some(40));
+        assert_eq!(skin_value_number(&afterdot, &state), Some(4000));
+    }
+
+    #[test]
     fn skin_state_float_expr_evaluates_option_weighted_terms() {
         let expr = "0.102*option(180)*number(350)+0.09*option(181)*number(350)";
         let very_hard = SkinDrawState {
@@ -22557,6 +22685,30 @@ mod tests {
         let (integer, afterdot) = score_rate_parts(3948, 2006);
         assert_eq!(integer, 98);
         assert_eq!(afterdot, 40);
+    }
+
+    #[test]
+    fn current_score_rate_refs_use_past_notes() {
+        let state = SkinDrawState {
+            ex_score: 18,
+            total_notes: 1000,
+            past_notes: 9,
+            ..SkinDrawState::default()
+        };
+
+        assert_eq!(skin_state_number(102, &state), Some(100));
+        assert_eq!(skin_state_number(103, &state), Some(0));
+        assert_eq!(skin_state_number(115, &state), Some(0));
+        assert_eq!(skin_state_number(116, &state), Some(90));
+    }
+
+    #[test]
+    fn current_score_rate_starts_at_full_rate_before_first_note() {
+        let state = SkinDrawState { total_notes: 1000, ..SkinDrawState::default() };
+
+        assert_eq!(skin_state_number(102, &state), Some(100));
+        assert_eq!(skin_state_number(103, &state), Some(0));
+        assert!((graph_value(111, &state) - 1.0).abs() < 1e-5);
     }
 
     #[test]
