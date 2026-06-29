@@ -8820,7 +8820,7 @@ fn skin_state_number(ref_id: i32, state: &SkinDrawState) -> Option<i64> {
         // NUMBER_MISSCOUNT2=177 (Result では今回の min_bp)
         177 => Some(current_bp(state) as i64),
         // NUMBER_DIFF_MISSCOUNT=178 (符号付き、今回 min_bp - old/mybest min_bp)
-        178 => result_diff_misscount(state).map(|diff| diff as i64),
+        178 => result_diff_misscount(state),
         // NUMBER_TARGET_CLEAR=371
         371 if state.result_failed.is_some() => result_mybest_clear_index_display(state),
         371 => result_mybest_clear_index(state).or(state.target_clear_index),
@@ -9445,9 +9445,7 @@ fn result_mybest_bp(state: &SkinDrawState) -> Option<u32> {
 }
 
 fn result_diff_misscount(state: &SkinDrawState) -> Option<i64> {
-    if state.result_failed.is_none() {
-        return None;
-    }
+    state.result_failed?;
     let previous = result_mybest_bp(state)?;
     Some(i64::from(current_bp(state)) - i64::from(previous))
 }
