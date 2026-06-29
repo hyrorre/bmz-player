@@ -553,7 +553,7 @@ fn build_bga_events(
         .iter()
         .filter_map(|object| match object.kind {
             TickObjectKind::Bga { bmp_key, kind } => {
-                let asset = resolve_bga_asset_id(bmp_key, bga_table, warnings)?;
+                let asset = resolve_bga_asset_id(bmp_key, bga_table, warnings);
                 Some(BgaEvent {
                     tick: object.tick,
                     time: timing_map.tick_to_time(object.tick),

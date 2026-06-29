@@ -690,7 +690,8 @@ fn current_bga_frame(
     let events = cache.bga_events.events(kind);
     let end = events.partition_point(|event| event.time <= render_now);
     let event = events[..end].last()?;
-    let mut frame = bga_frames.get(&event.asset).copied()?;
+    let asset = event.asset?;
+    let mut frame = bga_frames.get(&asset).copied()?;
     let tint = bga_tint_at_time(cache, kind, render_now);
     frame.tint_r = tint.r;
     frame.tint_g = tint.g;
@@ -2165,25 +2166,31 @@ mod tests {
             BgaEvent {
                 tick: ChartTick(0),
                 time: TimeUs(0),
-                asset: BgaAssetId(0),
+                asset: Some(BgaAssetId(0)),
                 kind: BgaEventKind::Base,
             },
             BgaEvent {
                 tick: ChartTick(0),
                 time: TimeUs(500_000),
-                asset: BgaAssetId(1),
+                asset: Some(BgaAssetId(1)),
                 kind: BgaEventKind::Base,
             },
             BgaEvent {
                 tick: ChartTick(0),
                 time: TimeUs(250_000),
-                asset: BgaAssetId(2),
+                asset: Some(BgaAssetId(2)),
+                kind: BgaEventKind::Layer,
+            },
+            BgaEvent {
+                tick: ChartTick(0),
+                time: TimeUs(700_000),
+                asset: None,
                 kind: BgaEventKind::Layer,
             },
             BgaEvent {
                 tick: ChartTick(0),
                 time: TimeUs(300_000),
-                asset: BgaAssetId(3),
+                asset: Some(BgaAssetId(3)),
                 kind: BgaEventKind::Poor,
             },
         ];
@@ -2249,6 +2256,13 @@ mod tests {
             None,
             &bga_frames,
         );
+        let layer_cleared = build_render_snapshot_with_bga_frames(
+            &session,
+            TimeUs(800_000),
+            &[],
+            None,
+            &bga_frames,
+        );
 
         assert_eq!(early.bga_base.unwrap().texture_id, bga_texture_id(BgaAssetId(0)));
         assert!(early.bga_layer.is_none());
@@ -2261,6 +2275,8 @@ mod tests {
         assert!((late_layer.tint_a - 128.0 / 255.0).abs() < 0.01);
         assert_eq!(poor_active.bga_poor.unwrap(), display_bga_frame(BgaAssetId(3), 320, 240));
         assert!(poor_expired.bga_poor.is_none());
+        assert_eq!(layer_cleared.bga_base.unwrap(), display_bga_frame(BgaAssetId(1), 640, 480));
+        assert!(layer_cleared.bga_layer.is_none());
     }
 
     #[test]

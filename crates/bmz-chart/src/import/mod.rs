@@ -229,6 +229,36 @@ mod tests {
     }
 
     #[test]
+    fn imports_missing_bmp_bga_as_clear_event() {
+        let text = "\
+#TITLE BGA Clear Song
+#BPM 120
+#TOTAL 200
+#BMP01 layer.png
+#00007:01
+#00107:02
+#00011:01
+";
+        let path = write_temp_bms(text);
+
+        let result = import_bms_chart(&path, None, false).unwrap();
+
+        assert_eq!(result.chart.bga_assets.len(), 1);
+        assert_eq!(result.chart.bga_events.len(), 2);
+        assert_eq!(result.chart.bga_events[0].kind, BgaEventKind::Layer);
+        assert_eq!(result.chart.bga_events[0].asset, Some(result.chart.bga_assets[0].id));
+        assert_eq!(result.chart.bga_events[1].kind, BgaEventKind::Layer);
+        assert_eq!(result.chart.bga_events[1].asset, None);
+        assert!(
+            result
+                .warnings
+                .iter()
+                .any(|warning| matches!(warning, ImportWarning::MissingBmpDefinition { key: 2 }))
+        );
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
     fn imports_mine_notes_with_damage() {
         let text = "\
 #TITLE Mine Song

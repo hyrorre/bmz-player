@@ -311,7 +311,8 @@ pub enum BgaEventKind {
 pub struct BgaEvent {
     pub tick: ChartTick,
     pub time: TimeUs,
-    pub asset: BgaAssetId,
+    /// `None` は未定義 BMP 指定による、そのレイヤーの clear を表す。
+    pub asset: Option<BgaAssetId>,
     pub kind: BgaEventKind,
 }
 

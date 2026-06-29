@@ -40,13 +40,16 @@ pub fn update_video_bga_frames(
             continue;
         };
 
-        let Some(asset) = chart.bga_assets.iter().find(|a| a.id == event.asset) else {
+        let Some(asset_id) = event.asset else {
+            continue;
+        };
+        let Some(asset) = chart.bga_assets.iter().find(|a| a.id == asset_id) else {
             continue;
         };
         if asset.kind != BgaAssetKind::Video {
             continue;
         }
-        active_video_assets.insert(asset.id);
+        active_video_assets.insert(asset_id);
 
         let video_offset_us = render_now.0 - event.time.0;
         update_single_video(
@@ -54,7 +57,7 @@ pub fn update_video_bga_frames(
             video_bga_decoders,
             failed_video_bga,
             bga_frames,
-            asset.id,
+            asset_id,
             &asset.path,
             event.time,
             video_offset_us,
@@ -78,24 +81,23 @@ pub fn update_video_bga_frames(
                 .rev()
                 .find(|e| e.time <= judge_time && e.kind == BgaEventKind::Poor);
 
-            if let Some(event) = poor_event {
-                let Some(asset) = chart.bga_assets.iter().find(|a| a.id == event.asset) else {
-                    return;
-                };
-                if asset.kind == BgaAssetKind::Video {
-                    active_video_assets.insert(asset.id);
-                    let video_offset_us = render_now.0 - judge_time.0;
-                    update_single_video(
-                        renderer,
-                        video_bga_decoders,
-                        failed_video_bga,
-                        bga_frames,
-                        asset.id,
-                        &asset.path,
-                        judge_time,
-                        video_offset_us,
-                    );
-                }
+            if let Some(event) = poor_event
+                && let Some(asset_id) = event.asset
+                && let Some(asset) = chart.bga_assets.iter().find(|a| a.id == asset_id)
+                && asset.kind == BgaAssetKind::Video
+            {
+                active_video_assets.insert(asset_id);
+                let video_offset_us = render_now.0 - judge_time.0;
+                update_single_video(
+                    renderer,
+                    video_bga_decoders,
+                    failed_video_bga,
+                    bga_frames,
+                    asset_id,
+                    &asset.path,
+                    judge_time,
+                    video_offset_us,
+                );
             }
         }
     }
