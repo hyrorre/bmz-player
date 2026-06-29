@@ -7622,13 +7622,12 @@ impl WinitApp {
             return None;
         }
         let active = self.active_play.as_ref()?;
-        let Ok(engine) = active.running.audio.engine.try_lock() else {
+        let Some((output_sample_rate, samples)) = active.running.audio.engine.clone_sample_bank()
+        else {
             tracing::debug!(chart_id, "quick retry asset reuse skipped because audio is busy");
             return None;
         };
-        let audio =
-            AudioEngine::with_sample_bank(engine.output_sample_rate(), engine.samples.clone());
-        drop(engine);
+        let audio = AudioEngine::with_sample_bank(output_sample_rate, samples);
 
         let mut session_options =
             play_session_options_from_start(&self.play_session_app_config(), options.clone());
@@ -8322,10 +8321,8 @@ impl WinitApp {
     /// 見た目の遷移タイミング自体は `fadeout` のまま変えない。
     fn fade_audio_for_result_exit(&mut self, elapsed: Duration, fadeout: Duration) {
         let gain = result_exit_audio_gain(elapsed, fadeout);
-        if let Some(audio) = &self.draining_audio
-            && let Ok(mut engine) = audio.engine.lock()
-        {
-            engine.set_master_gain(gain);
+        if let Some(audio) = &self.draining_audio {
+            audio.engine.set_master_gain(gain);
         }
         self.set_system_sound_master_gain(gain);
     }
@@ -10503,12 +10500,7 @@ impl WinitApp {
         let Some(audio) = &self.draining_audio else {
             return;
         };
-        let drained = match audio.engine.lock() {
-            Ok(engine) => engine.is_idle(),
-            // ロック中断時は安全側に倒して出力を解放する。
-            Err(_) => true,
-        };
-        if drained {
+        if audio.engine.is_idle() {
             tracing::info!("play audio drained after result; releasing output");
             self.draining_audio = None;
         }

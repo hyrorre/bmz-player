@@ -1,10 +1,7 @@
-use std::collections::{HashMap, HashSet};
-use std::sync::{Arc, Mutex};
-
 use anyhow::{Context, Result, bail};
 use bmz_audio::backend::cpal::{
     CpalBackend, CpalCommandedOutputSource, CpalHostId, CpalOutputConfig, CpalOutputDiagnostics,
-    CpalOutputSource, CpalOutputSourceKind, CpalSharedOutput, SharedAudioEngine,
+    CpalOutputSourceKind, CpalSharedOutput,
 };
 use bmz_audio::clock::AudioClock;
 use bmz_audio::command::AudioEngineHandle;
@@ -14,6 +11,7 @@ use bmz_audio::queue::ScheduledSoundQueue;
 use bmz_chart::model::BgaAssetId;
 use bmz_core::time::TimeUs;
 use bmz_gameplay::session::GameSession;
+use std::collections::{HashMap, HashSet};
 
 use crate::config::app_config::{
     AudioBackend, AudioBufferSizeMode, AudioConfig, AudioSampleRateMode,
@@ -28,9 +26,9 @@ use crate::video_bga::ActiveVideoBgaDecoder;
 pub type AudioOutputDiagnostics = CpalOutputDiagnostics;
 
 pub struct AppAudioOutput {
-    pub engine: SharedAudioEngine,
+    pub engine: AudioEngineHandle,
     runtime: AudioRuntime,
-    source: CpalOutputSource,
+    source: CpalCommandedOutputSource,
 }
 
 #[derive(Clone)]
@@ -122,14 +120,6 @@ impl AudioRuntime {
         self.output.take_diagnostics()
     }
 
-    fn add_source(
-        &self,
-        engine: SharedAudioEngine,
-        kind: CpalOutputSourceKind,
-    ) -> CpalOutputSource {
-        self.output.add_source_with_kind(engine, kind)
-    }
-
     fn add_commanded_source(
         &self,
         handle: AudioEngineHandle,
@@ -140,8 +130,8 @@ impl AudioRuntime {
 }
 
 pub fn open_app_audio_output(runtime: &AudioRuntime, engine: AudioEngine) -> AppAudioOutput {
-    let engine = Arc::new(Mutex::new(engine));
-    let source = runtime.add_source(Arc::clone(&engine), CpalOutputSourceKind::Play);
+    let engine = AudioEngineHandle::new(engine);
+    let source = runtime.add_commanded_source(engine.clone(), CpalOutputSourceKind::Play);
     AppAudioOutput { engine, runtime: runtime.clone(), source }
 }
 

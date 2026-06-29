@@ -206,6 +206,17 @@ impl AudioEngineHandle {
         self.push_command(AudioEngineCommand::ScheduleAll(sounds))
     }
 
+    pub fn try_schedule_all(&self, sounds: Vec<ScheduledSound>) -> Result<(), Vec<ScheduledSound>> {
+        if sounds.is_empty() {
+            return Ok(());
+        }
+        match self.push_command_or_return(AudioEngineCommand::ScheduleAll(sounds)) {
+            Ok(()) => Ok(()),
+            Err(AudioEngineCommand::ScheduleAll(sounds)) => Err(sounds),
+            Err(_) => unreachable!("schedule_all command returned a different command"),
+        }
+    }
+
     pub fn stop_sound(&self, id: SoundId) -> bool {
         self.push_command(AudioEngineCommand::StopSound { id })
     }
@@ -235,6 +246,28 @@ impl AudioEngineHandle {
             loop_playback,
             fade_in_frames,
         })
+    }
+
+    fn push_command_or_return(
+        &self,
+        command: AudioEngineCommand,
+    ) -> Result<(), AudioEngineCommand> {
+        match self.inner.queue.lock() {
+            Ok(mut queue) => {
+                if queue.len() >= self.inner.capacity {
+                    self.inner.counters.dropped.fetch_add(1, Ordering::Relaxed);
+                    return Err(command);
+                }
+                queue.push_back(command);
+                self.inner.counters.submitted.fetch_add(1, Ordering::Relaxed);
+                update_atomic_max(&self.inner.counters.max_depth, queue.len() as u64);
+                Ok(())
+            }
+            Err(_) => {
+                self.inner.counters.dropped.fetch_add(1, Ordering::Relaxed);
+                Err(command)
+            }
+        }
     }
 }
 
