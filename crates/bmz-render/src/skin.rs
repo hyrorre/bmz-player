@@ -11414,13 +11414,15 @@ fn best_rank_op_matches(op: i32, state: &SkinDrawState) -> bool {
     op == 320 + rank as i32
 }
 
-/// 現在のランク判定の基準値 (ex_score, total_notes)。
-/// Result 画面なら結果値、それ以外は select の選択中曲のベスト値を使う。
+/// 現在のランク判定の基準値 (ex_score, notes)。
+/// Play 画面では beatoraja の `qualifyNowRank` と同じく past notes を分母にする。
 fn current_rank_inputs(state: &SkinDrawState) -> (Option<u32>, u32) {
     if state.result_failed.is_some() {
         (Some(state.ex_score), state.total_notes)
     } else if state.select_screen {
         (state.select_ex_score, state.select_total_notes)
+    } else if let Some(notes) = current_score_rate_notes(state) {
+        (Some(state.ex_score), notes)
     } else {
         (Some(state.ex_score), state.total_notes)
     }
@@ -11428,6 +11430,13 @@ fn current_rank_inputs(state: &SkinDrawState) -> (Option<u32>, u32) {
 
 fn current_rank_index(state: &SkinDrawState) -> Option<usize> {
     let (ex_score, total_notes) = current_rank_inputs(state);
+    if !state.select_screen
+        && state.result_failed.is_none()
+        && total_notes == 0
+        && current_score_rate_notes(state) == Some(0)
+    {
+        return rank_index(Some(2), 1);
+    }
     rank_index(ex_score, total_notes)
 }
 
@@ -14225,14 +14234,32 @@ mod tests {
 
     #[test]
     fn play_rank_ops_reflect_current_ex_score() {
-        let aa_state =
-            SkinDrawState { ex_score: 1556, total_notes: 1000, ..SkinDrawState::default() };
-        let aaa_state =
-            SkinDrawState { ex_score: 1800, total_notes: 1000, ..SkinDrawState::default() };
+        let aa_state = SkinDrawState {
+            ex_score: 1556,
+            total_notes: 1000,
+            past_notes: 1000,
+            ..SkinDrawState::default()
+        };
+        let aaa_state = SkinDrawState {
+            ex_score: 1800,
+            total_notes: 1000,
+            past_notes: 1000,
+            ..SkinDrawState::default()
+        };
+        let current_aaa_state = SkinDrawState {
+            ex_score: 90,
+            total_notes: 1000,
+            past_notes: 50,
+            ..SkinDrawState::default()
+        };
+        let before_first_note_state =
+            SkinDrawState { total_notes: 1000, ..SkinDrawState::default() };
 
         assert!(test_skin_op(201, &[], &aa_state));
         assert!(!test_skin_op(200, &[], &aa_state));
         assert!(test_skin_op(200, &[], &aaa_state));
+        assert!(test_skin_op(200, &[], &current_aaa_state));
+        assert!(test_skin_op(200, &[], &before_first_note_state));
     }
 
     #[test]
