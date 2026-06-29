@@ -6689,7 +6689,7 @@ impl WinitApp {
     fn install_system_audio(
         &mut self,
         runtime: &AudioRuntime,
-        system_engine: Option<bmz_audio::backend::cpal::SharedAudioEngine>,
+        system_engine: Option<bmz_audio::command::AudioEngineHandle>,
     ) {
         let system_audio = match system_engine {
             Some(engine) => crate::audio::SystemAudio::reattach(runtime, engine),

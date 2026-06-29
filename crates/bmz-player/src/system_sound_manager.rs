@@ -1,5 +1,5 @@
 //! [`SystemSoundManager`] は [`crate::system_sound`] が決定したサウンドセットを
-//! デコードして `SharedAudioEngine` に登録し、各 [`SoundType`] を SE / BGM として
+//! デコードして system audio command handle に登録し、各 [`SoundType`] を SE / BGM として
 //! 再生・停止する beatoraja の `SystemSoundManager` 相当 facade。
 //!
 //! - 構築時に 22 種すべてを `FfmpegSampleLoader` でデコードし、サンプル個別の失敗は
@@ -8,13 +8,13 @@
 //!   [`SYSTEM_SOUND_BASE`] (= 100_000) からの 22 連番を予約する。`SampleBank` は
 //!   `Vec<Option<DecodedSample>>` で `SoundId.0` を index に取るため、`u32::MAX` 付近の
 //!   巨大 ID を使うと resize が数十 GB の allocation を試みて OOM kill される。
-//! - 再生は [`bmz_audio::engine::AudioEngine::play_now`] を経由し、`is_bgm()` の音は
+//! - 再生は [`bmz_audio::engine::AudioEngine::play_now`] 相当の command を経由し、`is_bgm()` の音は
 //!   そのままループ再生になる。
 
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 
-use bmz_audio::backend::cpal::SharedAudioEngine;
+use bmz_audio::command::{AudioEngineCommand, AudioEngineHandle};
 use bmz_audio::ffmpeg_loader::FfmpegSampleLoader;
 use bmz_audio::loader::SampleLoader;
 use bmz_core::ids::SoundId;
@@ -29,7 +29,7 @@ const SYSTEM_SOUND_BASE: u32 = 100_000;
 const VOLUME_EPSILON: f32 = 0.000_1;
 
 pub struct SystemSoundManager {
-    engine: SharedAudioEngine,
+    engine: AudioEngineHandle,
     id_map: HashMap<SoundType, SoundId>,
     last_volumes: RefCell<HashMap<SoundType, f32>>,
     master_gain: Cell<f32>,
@@ -38,10 +38,10 @@ pub struct SystemSoundManager {
 impl SystemSoundManager {
     /// `selection` から各 [`SoundType`] のパスを解決し、デコードして engine へ登録する。
     /// 解決失敗は info、デコード失敗は warn をサウンド単位で出してスキップする。
-    pub fn new(engine: SharedAudioEngine, selection: &SoundSetSelection) -> Self {
+    pub fn new(engine: AudioEngineHandle, selection: &SoundSetSelection) -> Self {
         let mut id_map = HashMap::new();
         let mut loader = FfmpegSampleLoader;
-        let mut decoded: Vec<(SoundId, bmz_audio::sample::DecodedSample)> = Vec::new();
+        let mut commands = Vec::new();
 
         for (i, sound_type) in SoundType::ALL.iter().enumerate() {
             let id = SoundId(SYSTEM_SOUND_BASE + i as u32);
@@ -55,7 +55,7 @@ impl SystemSoundManager {
             };
             match loader.load(&path) {
                 Ok(sample) => {
-                    decoded.push((id, sample));
+                    commands.push(AudioEngineCommand::InsertSample { id, sample });
                     id_map.insert(*sound_type, id);
                 }
                 Err(error) => {
@@ -69,27 +69,14 @@ impl SystemSoundManager {
             }
         }
 
-        // ロックは1回に集約してロード結果をまとめて挿入する。
-        if !decoded.is_empty() {
-            match engine.lock() {
-                Ok(mut guard) => {
-                    for (id, sample) in decoded {
-                        guard.insert_sample(id, sample);
-                    }
-                }
-                Err(poisoned) => {
-                    let mut guard = poisoned.into_inner();
-                    for (id, sample) in decoded {
-                        guard.insert_sample(id, sample);
-                    }
-                }
-            }
+        if !commands.is_empty() && !engine.push_commands(commands) {
+            tracing::warn!("failed to enqueue decoded system sounds");
         }
 
         Self::with_id_map(engine, id_map)
     }
 
-    fn with_id_map(engine: SharedAudioEngine, id_map: HashMap<SoundType, SoundId>) -> Self {
+    fn with_id_map(engine: AudioEngineHandle, id_map: HashMap<SoundType, SoundId>) -> Self {
         Self {
             engine,
             id_map,
@@ -112,12 +99,16 @@ impl SystemSoundManager {
         let master_volume = normalize_volume(master_volume);
         let gain = normalize_volume(gain);
         let loop_playback = sound_type.loops();
-        if let Ok(mut engine) = self.engine.lock() {
-            engine.set_master_gain(gain);
-            if sound_type.is_bgm() {
-                engine.stop_sound(id);
-            }
-            engine.play_now(id, master_volume, loop_playback);
+        let mut commands = vec![AudioEngineCommand::SetMasterGain { gain }];
+        if sound_type.is_bgm() {
+            commands.push(AudioEngineCommand::StopSound { id });
+        }
+        commands.push(AudioEngineCommand::PlayNow {
+            sound_id: id,
+            volume: master_volume,
+            loop_playback,
+        });
+        if self.engine.push_commands(commands) {
             self.master_gain.set(gain);
             self.last_volumes.borrow_mut().insert(sound_type, master_volume);
         }
@@ -139,11 +130,12 @@ impl SystemSoundManager {
             return;
         }
 
-        let Ok(mut engine) = self.engine.lock() else {
+        let commands = updates
+            .iter()
+            .map(|&(_, id, volume)| AudioEngineCommand::SetSoundVolume { id, volume })
+            .collect::<Vec<_>>();
+        if !self.engine.push_commands(commands) {
             return;
-        };
-        for &(_, id, volume) in &updates {
-            engine.set_sound_volume(id, volume);
         }
         let mut last_volumes = self.last_volumes.borrow_mut();
         for (sound_type, _, volume) in updates {
@@ -165,8 +157,7 @@ impl SystemSoundManager {
         {
             return;
         }
-        if let Ok(mut engine) = self.engine.lock() {
-            engine.set_sound_volume(id, volume);
+        if self.engine.set_sound_volume(id, volume) {
             self.last_volumes.borrow_mut().insert(sound_type, volume);
         }
     }
@@ -179,8 +170,7 @@ impl SystemSoundManager {
         if volume_matches(self.master_gain.get(), gain) {
             return;
         }
-        if let Ok(mut engine) = self.engine.lock() {
-            engine.set_master_gain(gain);
+        if self.engine.set_master_gain(gain) {
             self.master_gain.set(gain);
         }
     }
@@ -190,21 +180,18 @@ impl SystemSoundManager {
         let Some(&id) = self.id_map.get(&sound_type) else {
             return;
         };
-        if let Ok(mut engine) = self.engine.lock() {
-            engine.stop_sound(id);
-        }
+        self.engine.stop_sound(id);
     }
 
     /// 登録済みかつ `is_bgm()` の SoundType をすべて停止する。
     pub fn stop_all_bgm(&self) {
-        let Ok(mut engine) = self.engine.lock() else {
-            return;
-        };
-        for sound_type in SoundType::ALL.iter().filter(|t| t.is_bgm()) {
-            if let Some(&id) = self.id_map.get(sound_type) {
-                engine.stop_sound(id);
-            }
-        }
+        let commands = SoundType::ALL
+            .iter()
+            .filter(|t| t.is_bgm())
+            .filter_map(|sound_type| self.id_map.get(sound_type).copied())
+            .map(|id| AudioEngineCommand::StopSound { id })
+            .collect::<Vec<_>>();
+        self.engine.push_commands(commands);
     }
 }
 
@@ -218,19 +205,19 @@ fn volume_matches(left: f32, right: f32) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::{Arc, Mutex};
-
+    use bmz_audio::command::CommandedAudioEngine;
     use bmz_audio::engine::AudioEngine;
+    use bmz_audio::sample::DecodedSample;
 
     use super::*;
 
     #[test]
     fn new_succeeds_with_empty_selection_and_registers_no_samples() {
         // どのファイルも resolve できない Selection を渡してもパニックせず空 manager を返すこと。
-        let engine: SharedAudioEngine = Arc::new(Mutex::new(AudioEngine::default()));
+        let (engine, _processor) = test_engine();
         let selection = SoundSetSelection::default();
 
-        let manager = SystemSoundManager::new(Arc::clone(&engine), &selection);
+        let manager = SystemSoundManager::new(engine, &selection);
 
         assert!(manager.id_map.is_empty());
         // 未登録の SoundType の play / stop は no-op で問題ないこと。
@@ -241,183 +228,128 @@ mod tests {
 
     #[test]
     fn play_bgm_stops_existing_voice_before_restart() {
-        use bmz_audio::sample::DecodedSample;
-
-        let engine: SharedAudioEngine = Arc::new(Mutex::new(AudioEngine::default()));
+        let (engine, mut processor) = test_engine();
         let mut id_map = HashMap::new();
         id_map.insert(SoundType::Select, SoundId(SYSTEM_SOUND_BASE));
-        {
-            let mut guard = engine.lock().unwrap();
-            guard.insert_sample(
-                SoundId(SYSTEM_SOUND_BASE),
-                DecodedSample { channels: 1, sample_rate: 48_000, frames: vec![0.5; 48_000] },
-            );
-        }
+        insert_sample(
+            &engine,
+            &mut processor,
+            SoundId(SYSTEM_SOUND_BASE),
+            DecodedSample { channels: 1, sample_rate: 48_000, frames: vec![0.5; 48_000] },
+        );
 
-        let manager = SystemSoundManager::with_id_map(Arc::clone(&engine), id_map);
+        let manager = SystemSoundManager::with_id_map(engine, id_map);
         manager.play(SoundType::Select, 1.0);
-        {
-            let mut guard = engine.lock().unwrap();
-            let mut output = vec![0.0; 8];
-            guard.render_stereo(0, &mut output);
-            assert_eq!(guard.mixer.voices.len(), 1);
-        }
+        assert_eq!(render(&mut processor, 0, 4), vec![0.5; 8]);
         manager.play(SoundType::Select, 1.0);
-        {
-            let mut guard = engine.lock().unwrap();
-            let mut output = vec![0.0; 8];
-            guard.render_stereo(8, &mut output);
-            assert_eq!(guard.mixer.voices.len(), 1, "duplicate BGM play should not stack voices");
-        }
+        assert_eq!(
+            render(&mut processor, 8, 4),
+            vec![0.5; 8],
+            "duplicate BGM play should not stack voices"
+        );
     }
 
     #[test]
     fn play_se_keeps_existing_se_voice() {
-        use bmz_audio::sample::DecodedSample;
-
-        let engine: SharedAudioEngine = Arc::new(Mutex::new(AudioEngine::default()));
+        let (engine, mut processor) = test_engine();
         let clear_id = SoundId(SYSTEM_SOUND_BASE);
         let close_id = SoundId(SYSTEM_SOUND_BASE + 1);
         let mut id_map = HashMap::new();
         id_map.insert(SoundType::ResultClear, clear_id);
         id_map.insert(SoundType::ResultClose, close_id);
-        {
-            let mut guard = engine.lock().unwrap();
-            guard.insert_sample(
-                clear_id,
-                DecodedSample { channels: 1, sample_rate: 48_000, frames: vec![1.0; 4] },
-            );
-            guard.insert_sample(
-                close_id,
-                DecodedSample { channels: 1, sample_rate: 48_000, frames: vec![0.25; 4] },
-            );
-        }
+        insert_sample(
+            &engine,
+            &mut processor,
+            clear_id,
+            DecodedSample { channels: 1, sample_rate: 48_000, frames: vec![1.0; 4] },
+        );
+        insert_sample(
+            &engine,
+            &mut processor,
+            close_id,
+            DecodedSample { channels: 1, sample_rate: 48_000, frames: vec![0.25; 4] },
+        );
 
-        let manager = SystemSoundManager::with_id_map(Arc::clone(&engine), id_map);
+        let manager = SystemSoundManager::with_id_map(engine, id_map);
         manager.play(SoundType::ResultClear, 1.0);
-        {
-            let mut guard = engine.lock().unwrap();
-            let mut output = vec![0.0; 2];
-            guard.render_stereo(0, &mut output);
-            assert_eq!(guard.mixer.voices.len(), 1);
-        }
+        assert_eq!(render(&mut processor, 0, 1), vec![1.0, 1.0]);
 
         manager.play(SoundType::ResultClose, 1.0);
-        {
-            let mut guard = engine.lock().unwrap();
-            let mut output = vec![0.0; 2];
-            guard.render_stereo(1, &mut output);
-            assert_eq!(output, vec![1.25, 1.25]);
-            assert_eq!(guard.mixer.voices.len(), 2, "SE voices should overlap");
-        }
+        assert_eq!(render(&mut processor, 1, 1), vec![1.25, 1.25]);
     }
 
     #[test]
     fn play_decide_does_not_loop() {
-        use bmz_audio::sample::DecodedSample;
-
-        let engine: SharedAudioEngine = Arc::new(Mutex::new(AudioEngine::default()));
+        let (engine, mut processor) = test_engine();
         let mut id_map = HashMap::new();
         id_map.insert(SoundType::Decide, SoundId(SYSTEM_SOUND_BASE));
-        {
-            let mut guard = engine.lock().unwrap();
-            guard.insert_sample(
-                SoundId(SYSTEM_SOUND_BASE),
-                DecodedSample { channels: 1, sample_rate: 48_000, frames: vec![0.5, 0.25] },
-            );
-        }
+        insert_sample(
+            &engine,
+            &mut processor,
+            SoundId(SYSTEM_SOUND_BASE),
+            DecodedSample { channels: 1, sample_rate: 48_000, frames: vec![0.5, 0.25] },
+        );
 
-        let manager = SystemSoundManager::with_id_map(Arc::clone(&engine), id_map);
+        let manager = SystemSoundManager::with_id_map(engine.clone(), id_map);
         manager.play(SoundType::Decide, 1.0);
-        {
-            let mut guard = engine.lock().unwrap();
-            let mut output = vec![0.0; 4];
-            guard.render_stereo(0, &mut output);
-            assert_eq!(output, vec![0.5, 0.5, 0.25, 0.25]);
-            assert!(guard.mixer.voices.is_empty());
-        }
+        assert_eq!(render(&mut processor, 0, 2), vec![0.5, 0.5, 0.25, 0.25]);
+        assert!(engine.is_idle());
     }
 
     #[test]
     fn refresh_volumes_updates_active_bgm_voice() {
-        use bmz_audio::sample::DecodedSample;
-
-        let engine: SharedAudioEngine = Arc::new(Mutex::new(AudioEngine::default()));
+        let (engine, mut processor) = test_engine();
         let mut id_map = HashMap::new();
         id_map.insert(SoundType::Select, SoundId(SYSTEM_SOUND_BASE));
-        {
-            let mut guard = engine.lock().unwrap();
-            guard.insert_sample(
-                SoundId(SYSTEM_SOUND_BASE),
-                DecodedSample { channels: 1, sample_rate: 48_000, frames: vec![1.0, 1.0] },
-            );
-        }
-        let manager = SystemSoundManager::with_id_map(Arc::clone(&engine), id_map);
+        insert_sample(
+            &engine,
+            &mut processor,
+            SoundId(SYSTEM_SOUND_BASE),
+            DecodedSample { channels: 1, sample_rate: 48_000, frames: vec![1.0, 1.0] },
+        );
+        let manager = SystemSoundManager::with_id_map(engine, id_map);
         manager.play(SoundType::Select, 1.0);
-        {
-            let mut guard = engine.lock().unwrap();
-            let mut output = vec![0.0; 2];
-            guard.render_stereo(0, &mut output);
-        }
+        render(&mut processor, 0, 1);
 
         manager.refresh_volumes(|sound_type| if sound_type.is_bgm() { 0.25 } else { 1.0 });
-        let mut output = vec![0.0; 2];
-        engine.lock().unwrap().render_stereo(1, &mut output);
-
-        assert_eq!(output, vec![0.25, 0.25]);
+        assert_eq!(render(&mut processor, 1, 1), vec![0.25, 0.25]);
     }
 
     #[test]
     fn set_volume_updates_single_active_bgm_voice() {
-        use bmz_audio::sample::DecodedSample;
-
-        let engine: SharedAudioEngine = Arc::new(Mutex::new(AudioEngine::default()));
+        let (engine, mut processor) = test_engine();
         let mut id_map = HashMap::new();
         id_map.insert(SoundType::Select, SoundId(SYSTEM_SOUND_BASE));
-        {
-            let mut guard = engine.lock().unwrap();
-            guard.insert_sample(
-                SoundId(SYSTEM_SOUND_BASE),
-                DecodedSample { channels: 1, sample_rate: 48_000, frames: vec![1.0, 1.0] },
-            );
-        }
-        let manager = SystemSoundManager::with_id_map(Arc::clone(&engine), id_map);
+        insert_sample(
+            &engine,
+            &mut processor,
+            SoundId(SYSTEM_SOUND_BASE),
+            DecodedSample { channels: 1, sample_rate: 48_000, frames: vec![1.0, 1.0] },
+        );
+        let manager = SystemSoundManager::with_id_map(engine, id_map);
         manager.play(SoundType::Select, 1.0);
-        {
-            let mut guard = engine.lock().unwrap();
-            let mut output = vec![0.0; 2];
-            guard.render_stereo(0, &mut output);
-        }
+        render(&mut processor, 0, 1);
 
         manager.set_volume(SoundType::Select, 0.4);
-        let mut output = vec![0.0; 2];
-        engine.lock().unwrap().render_stereo(1, &mut output);
-
-        assert_eq!(output, vec![0.4, 0.4]);
+        assert_eq!(render(&mut processor, 1, 1), vec![0.4, 0.4]);
     }
 
     #[test]
     fn set_master_gain_scales_all_system_sound_output() {
-        use bmz_audio::sample::DecodedSample;
-
-        let engine: SharedAudioEngine = Arc::new(Mutex::new(AudioEngine::default()));
+        let (engine, mut processor) = test_engine();
         let mut id_map = HashMap::new();
         id_map.insert(SoundType::ResultClose, SoundId(SYSTEM_SOUND_BASE));
-        {
-            let mut guard = engine.lock().unwrap();
-            guard.insert_sample(
-                SoundId(SYSTEM_SOUND_BASE),
-                DecodedSample { channels: 1, sample_rate: 48_000, frames: vec![1.0, 1.0] },
-            );
-        }
-        let manager = SystemSoundManager::with_id_map(Arc::clone(&engine), id_map);
+        insert_sample(
+            &engine,
+            &mut processor,
+            SoundId(SYSTEM_SOUND_BASE),
+            DecodedSample { channels: 1, sample_rate: 48_000, frames: vec![1.0, 1.0] },
+        );
+        let manager = SystemSoundManager::with_id_map(engine, id_map);
 
         manager.set_master_gain(0.25);
         manager.play(SoundType::ResultClose, 1.0);
-        let mut output = vec![0.0; 2];
-        engine.lock().unwrap().render_stereo(0, &mut output);
-
-        assert_eq!(output, vec![0.25, 0.25]);
+        assert_eq!(render(&mut processor, 0, 1), vec![0.25, 0.25]);
     }
 
     #[test]
@@ -427,5 +359,27 @@ mod tests {
         // (= u32::MAX のような巨大 index を使うと数十 GB の allocation で OOM kill される) こと。
         const { assert!(SYSTEM_SOUND_BASE >= 10_000) };
         const { assert!(SYSTEM_SOUND_BASE as usize + SoundType::ALL.len() < 10_000_000) };
+    }
+
+    fn test_engine() -> (AudioEngineHandle, CommandedAudioEngine) {
+        let engine = AudioEngineHandle::new(AudioEngine::default());
+        let processor = engine.processor();
+        (engine, processor)
+    }
+
+    fn insert_sample(
+        engine: &AudioEngineHandle,
+        processor: &mut CommandedAudioEngine,
+        id: SoundId,
+        sample: DecodedSample,
+    ) {
+        assert!(engine.insert_sample(id, sample));
+        processor.apply_pending_commands_for_tests();
+    }
+
+    fn render(processor: &mut CommandedAudioEngine, start_frame: u64, frames: usize) -> Vec<f32> {
+        let mut output = vec![0.0; frames * 2];
+        assert!(processor.render_stereo(start_frame, &mut output));
+        output
     }
 }

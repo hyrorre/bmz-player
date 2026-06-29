@@ -3,10 +3,11 @@ use std::sync::{Arc, Mutex};
 
 use anyhow::{Context, Result, bail};
 use bmz_audio::backend::cpal::{
-    CpalBackend, CpalHostId, CpalOutputConfig, CpalOutputDiagnostics, CpalOutputSource,
-    CpalOutputSourceKind, CpalSharedOutput, SharedAudioEngine,
+    CpalBackend, CpalCommandedOutputSource, CpalHostId, CpalOutputConfig, CpalOutputDiagnostics,
+    CpalOutputSource, CpalOutputSourceKind, CpalSharedOutput, SharedAudioEngine,
 };
 use bmz_audio::clock::AudioClock;
+use bmz_audio::command::AudioEngineHandle;
 use bmz_audio::engine::AudioEngine;
 use bmz_audio::loader::LoadedSampleReport;
 use bmz_audio::queue::ScheduledSoundQueue;
@@ -128,6 +129,14 @@ impl AudioRuntime {
     ) -> CpalOutputSource {
         self.output.add_source_with_kind(engine, kind)
     }
+
+    fn add_commanded_source(
+        &self,
+        handle: AudioEngineHandle,
+        kind: CpalOutputSourceKind,
+    ) -> CpalCommandedOutputSource {
+        self.output.add_commanded_source_with_kind(handle, kind)
+    }
 }
 
 pub fn open_app_audio_output(runtime: &AudioRuntime, engine: AudioEngine) -> AppAudioOutput {
@@ -142,9 +151,9 @@ pub fn open_app_audio_output(runtime: &AudioRuntime, engine: AudioEngine) -> App
 /// として登録される。ASIO のようにデバイス側で複数 stream を開けない環境でも、
 /// BMZ 側で system / preview / play 音を 1 本に mix する。
 pub struct SystemAudio {
-    pub engine: SharedAudioEngine,
+    engine: AudioEngineHandle,
     _runtime: AudioRuntime,
-    _source: CpalOutputSource,
+    _source: CpalCommandedOutputSource,
 }
 
 impl SystemAudio {
@@ -152,25 +161,25 @@ impl SystemAudio {
     /// 反映できる状態にする。`chart_zero_time` 引数はシステム音のスケジューリング
     /// (`start_frame = 0`)には影響しないため `TimeUs(0)` 固定で良い。
     pub fn open(runtime: &AudioRuntime) -> Self {
-        let engine = Arc::new(Mutex::new(AudioEngine::default()));
+        let engine = AudioEngineHandle::new(AudioEngine::default());
         Self::with_engine(runtime, engine)
     }
 
     /// 既存のシステムエンジンを別の `AudioRuntime`(新しい cpal ストリーム)へ
-    /// 載せ替える。設定変更時に音声出力を開き直しても、`SystemSoundManager` や
-    /// `SelectChartPreview` が共有しているエンジン Arc をそのまま使い続けられる。
-    pub fn reattach(runtime: &AudioRuntime, engine: SharedAudioEngine) -> Self {
+    /// 載せ替える。設定変更時に音声出力を開き直しても、`SystemSoundManager`
+    /// や `SelectChartPreview` が共有している command handle をそのまま使い続けられる。
+    pub fn reattach(runtime: &AudioRuntime, engine: AudioEngineHandle) -> Self {
         Self::with_engine(runtime, engine)
     }
 
-    fn with_engine(runtime: &AudioRuntime, engine: SharedAudioEngine) -> Self {
-        let mut source = runtime.add_source(Arc::clone(&engine), CpalOutputSourceKind::System);
+    fn with_engine(runtime: &AudioRuntime, engine: AudioEngineHandle) -> Self {
+        let mut source = runtime.add_commanded_source(engine.clone(), CpalOutputSourceKind::System);
         source.play(TimeUs(0));
         Self { engine, _runtime: runtime.clone(), _source: source }
     }
 
-    pub fn engine(&self) -> SharedAudioEngine {
-        Arc::clone(&self.engine)
+    pub fn engine(&self) -> AudioEngineHandle {
+        self.engine.clone()
     }
 }
 

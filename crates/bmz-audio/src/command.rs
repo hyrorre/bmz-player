@@ -157,19 +157,27 @@ impl AudioEngineHandle {
     }
 
     pub fn push_command(&self, command: AudioEngineCommand) -> bool {
+        self.push_commands(vec![command])
+    }
+
+    pub fn push_commands(&self, commands: Vec<AudioEngineCommand>) -> bool {
+        if commands.is_empty() {
+            return true;
+        }
         match self.inner.queue.lock() {
             Ok(mut queue) => {
-                if queue.len() >= self.inner.capacity {
-                    self.inner.counters.dropped.fetch_add(1, Ordering::Relaxed);
+                if queue.len().saturating_add(commands.len()) > self.inner.capacity {
+                    self.inner.counters.dropped.fetch_add(commands.len() as u64, Ordering::Relaxed);
                     return false;
                 }
-                queue.push_back(command);
-                self.inner.counters.submitted.fetch_add(1, Ordering::Relaxed);
+                let command_count = commands.len() as u64;
+                queue.extend(commands);
+                self.inner.counters.submitted.fetch_add(command_count, Ordering::Relaxed);
                 update_atomic_max(&self.inner.counters.max_depth, queue.len() as u64);
                 true
             }
             Err(_) => {
-                self.inner.counters.dropped.fetch_add(1, Ordering::Relaxed);
+                self.inner.counters.dropped.fetch_add(commands.len() as u64, Ordering::Relaxed);
                 false
             }
         }
