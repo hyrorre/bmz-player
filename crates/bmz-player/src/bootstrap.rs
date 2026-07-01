@@ -13,6 +13,7 @@ use crate::screens::play_start::{
     start_running_play_session_for_chart_with_input_backend,
     start_running_play_session_for_chart_with_winit_input,
 };
+use crate::storage::collection_db::CollectionDatabase;
 use crate::storage::library_db::LibraryDatabase;
 use crate::storage::scan::{ScanReport, scan_song_roots};
 use crate::storage::score_db::ScoreDatabase;
@@ -24,6 +25,7 @@ pub struct BootstrappedApp {
     pub app_paths: AppPaths,
     pub profile_paths: ProfilePaths,
     pub library_db: LibraryDatabase,
+    pub collection_db: CollectionDatabase,
     pub score_db: ScoreDatabase,
     pub startup_scan: Option<ScanReport>,
 }
@@ -99,6 +101,7 @@ pub fn bootstrap() -> Result<BootstrappedApp> {
     crate::ir::secret_store::set_store_mode(profile_config.ir.credential_store);
 
     crate::storage::migration::migrate_library_db(&app_paths.library_db)?;
+    crate::storage::migration::migrate_collection_db(&profile_paths.collection_db)?;
     crate::storage::migration::migrate_score_db(&profile_paths.score_db)?;
 
     let mut library_db = LibraryDatabase::open(&app_paths.library_db)?;
@@ -115,6 +118,7 @@ pub fn bootstrap() -> Result<BootstrappedApp> {
             false,
         )?)
     };
+    let collection_db = CollectionDatabase::open(&profile_paths.collection_db)?;
     let score_db = ScoreDatabase::open(&profile_paths.score_db)?;
 
     Ok(BootstrappedApp {
@@ -123,6 +127,7 @@ pub fn bootstrap() -> Result<BootstrappedApp> {
         app_paths,
         profile_paths,
         library_db,
+        collection_db,
         score_db,
         startup_scan,
     })

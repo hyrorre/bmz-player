@@ -651,6 +651,7 @@ mod tests {
         let paths = crate::paths::ProfilePaths {
             root_dir: root.clone(),
             profile_toml: root.join("profile.toml"),
+            collection_db: root.join("collection.db"),
             score_db: root.join("score.db"),
             replay_dir: root.join("replay"),
         };

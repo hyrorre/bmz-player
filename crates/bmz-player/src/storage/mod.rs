@@ -1,3 +1,4 @@
+pub mod collection_db;
 pub mod common;
 pub mod course_db;
 pub mod difficulty_table_db;

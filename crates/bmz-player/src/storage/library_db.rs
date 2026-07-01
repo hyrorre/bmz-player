@@ -259,6 +259,21 @@ impl LibraryDatabase {
             .map_err(Into::into)
     }
 
+    /// Returns every chart row with the given file SHA-256.
+    ///
+    /// BMS collections often contain the same file in multiple folders; callers
+    /// that resolve user collection state should keep those folder contexts.
+    pub fn list_charts_by_sha256(&self, sha256: [u8; 32]) -> Result<Vec<ChartListItem>> {
+        let mut stmt = self.conn.prepare(&format!(
+            "SELECT {CHART_LIST_ITEM_COLUMNS}
+             FROM charts
+             WHERE sha256 = ?1
+             ORDER BY folder_path COLLATE NOCASE, title COLLATE NOCASE, play_level COLLATE NOCASE"
+        ))?;
+        let rows = stmt.query_map(params![hash_to_hex(&sha256)], chart_list_item_from_row)?;
+        rows.collect::<std::result::Result<Vec<_>, _>>().map_err(Into::into)
+    }
+
     pub fn chart_sha256_by_md5(&self, md5: [u8; 16]) -> Result<Option<[u8; 32]>> {
         let result: Option<String> = self
             .conn
