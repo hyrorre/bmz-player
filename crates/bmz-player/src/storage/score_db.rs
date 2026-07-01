@@ -16,6 +16,10 @@ use flate2::write::GzEncoder;
 use rusqlite::{Connection, OptionalExtension, params};
 
 use super::common::{configure_connection, hash_to_hex, hex_to_hash};
+pub use super::course_score_db::{
+    CourseBestScore, CourseReplayRecord, CourseReplaySlotRecord, CourseScoreChartRecord,
+    CourseScoreEntry, CourseScoreInsert,
+};
 use crate::config::profile_config::ReplaySlotRule;
 use crate::ln_policy::LnScorePolicy;
 use crate::select_options::DoubleOptionScoreBucket;
@@ -294,10 +298,8 @@ pub struct ScoreHistoryEntry {
     pub autoplay: bool,
     pub device_type: InputDeviceKind,
     pub replay_path: String,
-    /// `library.db`'s `course_scores.id` if this chart play happened as part
-    /// of a course attempt, otherwise `None`.  No cross-database FK is
-    /// enforced — callers can join against `library.db.course_scores` if
-    /// they need the attempt details.
+    /// `score.db`'s `course_scores.id` if this chart play happened as part
+    /// of a course attempt, otherwise `None`.
     pub course_score_id: Option<i64>,
     pub previous_best: Option<PreviousBestSnapshot>,
 }
@@ -717,6 +719,87 @@ impl ScoreDatabase {
         Ok(())
     }
 
+    pub fn insert_course_score(&mut self, record: &CourseScoreInsert) -> Result<i64> {
+        super::course_score_db::insert_course_score(&mut self.conn, record)
+    }
+
+    pub fn best_course_score(&self, course_hash: &str) -> Result<Option<CourseBestScore>> {
+        super::course_score_db::best_course_score(&self.conn, course_hash)
+    }
+
+    pub fn best_course_clear(
+        &self,
+        course_hash: &str,
+    ) -> Result<Option<bmz_core::clear::ClearType>> {
+        super::course_score_db::best_course_clear(&self.conn, course_hash)
+    }
+
+    pub fn list_course_score_charts(
+        &self,
+        course_score_id: i64,
+    ) -> Result<Vec<CourseScoreChartRecord>> {
+        super::course_score_db::list_course_score_charts(&self.conn, course_score_id)
+    }
+
+    pub fn list_course_replays(&self, course_score_id: i64) -> Result<Vec<CourseReplayRecord>> {
+        super::course_score_db::list_course_replays(&self.conn, course_score_id)
+    }
+
+    pub fn latest_course_score_id(&self, course_hash: &str) -> Result<Option<i64>> {
+        super::course_score_db::latest_course_score_id(&self.conn, course_hash)
+    }
+
+    pub fn list_recent_course_scores(
+        &self,
+        course_hash: &str,
+        limit: u32,
+        offset: u32,
+    ) -> Result<Vec<CourseScoreEntry>> {
+        super::course_score_db::list_recent_course_scores(&self.conn, course_hash, limit, offset)
+    }
+
+    pub fn course_score_entry_by_id(
+        &self,
+        course_score_id: i64,
+    ) -> Result<Option<CourseScoreEntry>> {
+        super::course_score_db::course_score_entry_by_id(&self.conn, course_score_id)
+    }
+
+    pub fn upsert_course_replay_slot(&mut self, record: &CourseReplaySlotRecord) -> Result<()> {
+        super::course_score_db::upsert_course_replay_slot(&mut self.conn, record)
+    }
+
+    pub fn course_replay_slot(
+        &self,
+        course_hash: &str,
+        slot: u8,
+    ) -> Result<Option<CourseReplaySlotRecord>> {
+        super::course_score_db::course_replay_slot(&self.conn, course_hash, slot)
+    }
+
+    pub fn course_replay_slots_for_course(
+        &self,
+        course_hash: &str,
+    ) -> Result<[Option<CourseReplaySlotRecord>; 4]> {
+        super::course_score_db::course_replay_slots_for_course(&self.conn, course_hash)
+    }
+
+    pub fn course_replay_slot_presence(&self, course_hash: &str) -> Result<[bool; 4]> {
+        super::course_score_db::course_replay_slot_presence(&self.conn, course_hash)
+    }
+
+    pub fn achieved_trophy_names_for_course(&self, course_hash: &str) -> Result<Vec<String>> {
+        super::course_score_db::achieved_trophy_names_for_course(&self.conn, course_hash)
+    }
+
+    pub fn best_course_score_for_trophy(
+        &self,
+        course_hash: &str,
+        trophy_name: &str,
+    ) -> Result<Option<CourseBestScore>> {
+        super::course_score_db::best_course_score_for_trophy(&self.conn, course_hash, trophy_name)
+    }
+
     pub fn enqueue_ir_score_job(&mut self, job: &NewIrScoreJob) -> Result<i64> {
         self.conn.execute(
             "INSERT INTO ir_score_jobs (
@@ -821,9 +904,7 @@ impl ScoreDatabase {
 
     /// Tag the given `score_history` rows with a course attempt id.
     ///
-    /// `course_score_id` references `library.db`'s `course_scores.id`.  No FK
-    /// is enforced because the two databases are separate; the caller is
-    /// responsible for passing a real id.
+    /// `course_score_id` references this score DB's `course_scores.id`.
     pub fn tag_score_history_with_course(
         &mut self,
         score_history_ids: &[i64],

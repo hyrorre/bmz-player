@@ -3,9 +3,13 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, bail};
 
 use crate::cli::CourseCommand;
-use crate::paths::resolve_app_paths;
+use crate::config::app_config::AppConfig;
+use crate::config::load::load_app_config;
+use crate::paths::{AppPaths, resolve_app_paths, resolve_profile_paths};
+use crate::storage::common::hash_to_hex;
 use crate::storage::library_db::LibraryDatabase;
-use crate::storage::migration::migrate_library_db;
+use crate::storage::migration::{migrate_library_db, migrate_score_db};
+use crate::storage::score_db::ScoreDatabase;
 
 pub fn run_course_command(cmd: CourseCommand) -> Result<()> {
     match cmd {
@@ -90,14 +94,17 @@ fn course_history(course_id: i64, limit: u32) -> Result<()> {
     let app_paths = resolve_app_paths()?;
     migrate_library_db(&app_paths.library_db)?;
     let library_db = LibraryDatabase::open(&app_paths.library_db)?;
+    let score_db = open_active_score_db(&app_paths)?;
 
     let course = library_db
         .list_courses()?
         .into_iter()
         .find(|c| c.id == course_id)
         .ok_or_else(|| anyhow::anyhow!("course id {course_id} not found"))?;
+    let identity = crate::ir::course_payload::course_identity_from_stored(&library_db, &course)
+        .ok_or_else(|| anyhow::anyhow!("course id {course_id} has unresolved chart sha256"))?;
 
-    let entries = library_db.list_recent_course_scores(course_id, limit, 0)?;
+    let entries = score_db.list_recent_course_scores(&identity.course_hash, limit, 0)?;
     if entries.is_empty() {
         println!(
             "No attempts stored for course [{}] {} (id {}).",
@@ -142,28 +149,18 @@ fn course_history(course_id: i64, limit: u32) -> Result<()> {
 
 fn course_attempt(score_id: i64) -> Result<()> {
     let app_paths = resolve_app_paths()?;
-    migrate_library_db(&app_paths.library_db)?;
-    let library_db = LibraryDatabase::open(&app_paths.library_db)?;
+    let score_db = open_active_score_db(&app_paths)?;
 
-    let entry = library_db
+    let entry = score_db
         .course_score_entry_by_id(score_id)?
         .ok_or_else(|| anyhow::anyhow!("course attempt id {score_id} not found"))?;
-    let course =
-        library_db.list_courses()?.into_iter().find(|c| c.id == entry.course_id).ok_or_else(
-            || anyhow::anyhow!("course id {} not found for attempt", entry.course_id),
-        )?;
 
     let trophies = if entry.achieved_trophies.is_empty() {
         "-".to_string()
     } else {
         entry.achieved_trophies.join(",")
     };
-    println!(
-        "[{}] {} — attempt {}",
-        kind_label(course.definition.kind),
-        course.definition.title,
-        entry.course_score_id,
-    );
+    println!("[{}] {} — attempt {}", entry.kind, entry.title, entry.course_score_id,);
     println!("  Played:     {}", format_unix_utc(entry.played_at));
     println!(
         "  EX score:   {}/{}  (clear={}, max combo={}, miss={})",
@@ -183,8 +180,8 @@ fn course_attempt(score_id: i64) -> Result<()> {
     println!("  Trophies:   {}", trophies);
 
     // Per-chart breakdown.
-    let charts = library_db.list_course_score_charts(score_id)?;
-    let replays = library_db.list_course_replays(score_id)?;
+    let charts = score_db.list_course_score_charts(score_id)?;
+    let replays = score_db.list_course_replays(score_id)?;
     let mut replay_by_position: std::collections::HashMap<i64, &str> =
         std::collections::HashMap::new();
     for r in &replays {
@@ -198,7 +195,7 @@ fn course_attempt(score_id: i64) -> Result<()> {
     println!();
     println!(
         "  {:<4}  {:<10}  {:>7}  {:>8}  {:<10}  {:>6}  REPLAY",
-        "POS", "CHART_ID", "EX", "MAXCOMBO", "CLEAR", "GAUGE",
+        "POS", "SHA256", "EX", "MAXCOMBO", "CLEAR", "GAUGE",
     );
     for chart in charts {
         let replay = replay_by_position
@@ -206,10 +203,11 @@ fn course_attempt(score_id: i64) -> Result<()> {
             .copied()
             .filter(|p| !p.is_empty())
             .unwrap_or("-");
+        let chart_sha256 = hash_to_hex(&chart.chart_sha256);
         println!(
             "  {:<4}  {:<10}  {:>7}  {:>8}  {:<10}  {:>5.1}%  {}",
             chart.position,
-            chart.chart_id,
+            &chart_sha256[..12],
             chart.ex_score,
             chart.max_combo,
             chart.clear_type,
@@ -218,6 +216,19 @@ fn course_attempt(score_id: i64) -> Result<()> {
         );
     }
     Ok(())
+}
+
+fn open_active_score_db(app_paths: &AppPaths) -> Result<ScoreDatabase> {
+    let app_config = if app_paths.config_toml.exists() {
+        load_app_config(&app_paths.config_toml)
+            .with_context(|| format!("failed to load {}", app_paths.config_toml.display()))?
+    } else {
+        AppConfig::default()
+    };
+    let profile_paths = resolve_profile_paths(app_paths, &app_config.active_profile)?;
+    profile_paths.ensure_dirs()?;
+    migrate_score_db(&profile_paths.score_db)?;
+    ScoreDatabase::open(&profile_paths.score_db)
 }
 
 fn kind_label(kind: bmz_core::course::CourseKind) -> &'static str {

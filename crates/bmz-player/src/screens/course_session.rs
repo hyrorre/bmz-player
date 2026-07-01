@@ -68,10 +68,10 @@ pub struct CourseResultSummary {
     /// inserted, so this reflects the new attempt when it improved the
     /// record).  `None` if persistence is unavailable (autoplay, etc.) or
     /// the lookup failed.
-    pub best_score: Option<crate::storage::library_db::CourseBestScore>,
+    pub best_score: Option<crate::storage::score_db::CourseBestScore>,
     /// Best persisted course score before the current attempt was inserted.
     /// Result skins use this as MYBEST / diff baseline.
-    pub previous_best_score: Option<crate::storage::library_db::CourseBestScore>,
+    pub previous_best_score: Option<crate::storage::score_db::CourseBestScore>,
 }
 
 #[derive(Debug, Clone)]

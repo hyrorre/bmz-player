@@ -537,14 +537,14 @@ pub const SCORE_MIGRATIONS: &[Migration] = &[
     },
     Migration {
         version: 4,
-        // Per-chart score history rows can be tagged with the library.db
+        // Per-chart score history rows can be tagged with the score.db
         // `course_scores.id` of the course attempt they belong to, so a chart
         // play can be traced back to its course context.  NULL means "solo
         // play" or "course history written before this migration".
         //
-        // No FK is added because `score.db` and `library.db` are separate
-        // SQLite databases and FKs cannot span them.  `course_score_id` is
-        // a plain INTEGER index into `library.db`'s `course_scores.id`.
+        // No FK was added when the column was introduced, because course_scores
+        // lived in library.db at the time.  Keep it as a plain nullable integer
+        // for existing DB compatibility.
         statements: &[
             "ALTER TABLE score_history ADD COLUMN course_score_id INTEGER;",
             "CREATE INDEX idx_score_history_course_score_id
@@ -1024,6 +1024,84 @@ pub const SCORE_MIGRATIONS: &[Migration] = &[
             "DROP INDEX IF EXISTS idx_replay_slots_chart;",
             "CREATE INDEX idx_replay_slots_chart
                 ON replay_slots(chart_sha256, ln_policy, double_option, rule_mode);",
+        ],
+    },
+    Migration {
+        version: 16,
+        statements: &[
+            "CREATE TABLE course_scores (
+                id INTEGER PRIMARY KEY,
+                course_hash TEXT NOT NULL,
+                source TEXT NOT NULL DEFAULT '',
+                course_key TEXT NOT NULL DEFAULT '',
+                title TEXT NOT NULL DEFAULT '',
+                kind TEXT NOT NULL DEFAULT '',
+                constraints_json TEXT NOT NULL DEFAULT '{}',
+                chart_sha256s_json TEXT NOT NULL DEFAULT '[]',
+                ex_score INTEGER NOT NULL,
+                max_ex_score INTEGER NOT NULL,
+                clear_type TEXT NOT NULL,
+                gauge_type TEXT NOT NULL,
+                gauge_value REAL NOT NULL,
+                max_combo INTEGER NOT NULL,
+                bp INTEGER NOT NULL,
+                course_failed INTEGER NOT NULL,
+                course_clear INTEGER NOT NULL,
+                arrange TEXT NOT NULL DEFAULT 'Normal',
+                trophies_json TEXT NOT NULL,
+                played_at INTEGER NOT NULL
+            );",
+            "CREATE INDEX idx_score_course_scores_hash_played
+                ON course_scores(course_hash, played_at);",
+            "CREATE INDEX idx_score_course_scores_hash_ex_score
+                ON course_scores(course_hash, ex_score DESC);",
+            "CREATE INDEX idx_score_course_scores_source_key
+                ON course_scores(source, course_key);",
+            "CREATE TABLE course_score_charts (
+                course_score_id INTEGER NOT NULL
+                    REFERENCES course_scores(id) ON DELETE CASCADE,
+                position INTEGER NOT NULL,
+                chart_sha256 TEXT NOT NULL,
+                ex_score INTEGER NOT NULL,
+                max_combo INTEGER NOT NULL,
+                clear_type TEXT NOT NULL,
+                gauge_value REAL NOT NULL,
+                PRIMARY KEY(course_score_id, position)
+            );",
+            "CREATE INDEX idx_score_course_score_charts_chart
+                ON course_score_charts(chart_sha256);",
+            "CREATE TABLE course_replays (
+                course_score_id INTEGER NOT NULL
+                    REFERENCES course_scores(id) ON DELETE CASCADE,
+                position INTEGER NOT NULL,
+                chart_sha256 TEXT NOT NULL,
+                replay_path TEXT NOT NULL,
+                PRIMARY KEY(course_score_id, position)
+            );",
+            "CREATE TABLE course_replay_slots (
+                course_hash TEXT NOT NULL,
+                slot INTEGER NOT NULL CHECK (slot BETWEEN 0 AND 3),
+                rule TEXT NOT NULL,
+                course_score_id INTEGER NOT NULL
+                    REFERENCES course_scores(id) ON DELETE CASCADE,
+                played_at INTEGER NOT NULL,
+                ex_score INTEGER NOT NULL,
+                bp INTEGER NOT NULL,
+                max_combo INTEGER NOT NULL,
+                clear_rank INTEGER NOT NULL,
+                PRIMARY KEY(course_hash, slot)
+            );",
+            "CREATE INDEX idx_score_course_replay_slots_hash
+                ON course_replay_slots(course_hash);",
+            "CREATE TABLE course_trophy_achievements (
+                course_score_id INTEGER NOT NULL
+                    REFERENCES course_scores(id) ON DELETE CASCADE,
+                course_hash TEXT NOT NULL,
+                trophy_name TEXT NOT NULL,
+                PRIMARY KEY(course_score_id, trophy_name)
+            );",
+            "CREATE INDEX idx_score_course_trophy_achievements_hash_name
+                ON course_trophy_achievements(course_hash, trophy_name);",
         ],
     },
 ];

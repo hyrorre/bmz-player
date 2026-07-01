@@ -175,12 +175,16 @@ pub fn canonical_submission_json(payload: &super::types::IrScoreSubmission) -> R
     canonical_value_json(&serde_json::to_value(payload)?)
 }
 
+pub(crate) fn canonical_json_value(value: &Value) -> Result<String> {
+    canonical_json(value)
+}
+
 fn canonical_value_json(payload: &Value) -> Result<String> {
     let mut value = payload.clone();
     if let Some(object) = value.as_object_mut() {
         object.remove("evidence");
     }
-    canonical_json(&value)
+    canonical_json_value(&value)
 }
 
 fn canonical_json(value: &Value) -> Result<String> {

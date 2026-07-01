@@ -1,4 +1,5 @@
 use anyhow::Result;
+#[cfg(test)]
 use bmz_core::clear::ClearType;
 use bmz_core::course::{CourseConstraints, CourseDefinition, CourseEntry, CourseTrophy};
 use rusqlite::{Connection, OptionalExtension, params};
@@ -16,6 +17,7 @@ pub struct StoredCourse {
     pub definition: CourseDefinition,
 }
 
+#[cfg(test)]
 #[derive(Debug, Clone, PartialEq)]
 pub struct CourseScoreChartRecord {
     pub position: i64,
@@ -26,6 +28,7 @@ pub struct CourseScoreChartRecord {
     pub gauge_value: f32,
 }
 
+#[cfg(test)]
 #[derive(Debug, Clone, PartialEq)]
 pub struct CourseReplayRecord {
     pub position: i64,
@@ -33,6 +36,7 @@ pub struct CourseReplayRecord {
     pub replay_path: String,
 }
 
+#[cfg(test)]
 #[derive(Debug, Clone, PartialEq)]
 pub struct CourseScoreInsert {
     pub course_id: i64,
@@ -60,6 +64,7 @@ pub struct CourseScoreInsert {
     pub achieved_trophies: Vec<String>,
 }
 
+#[cfg(test)]
 #[derive(Debug, Clone, PartialEq)]
 pub struct CourseReplaySlotRecord {
     pub course_id: i64,
@@ -73,6 +78,7 @@ pub struct CourseReplaySlotRecord {
     pub clear_rank: u8,
 }
 
+#[cfg(test)]
 #[derive(Debug, Clone, PartialEq)]
 pub struct CourseBestScore {
     pub course_score_id: i64,
@@ -293,6 +299,7 @@ fn resolve_entry_chart_id(conn: &Connection, entry: &CourseEntry) -> Result<Opti
     Ok(None)
 }
 
+#[cfg(test)]
 pub(super) fn insert_course_score(
     conn: &mut Connection,
     record: &CourseScoreInsert,
@@ -372,6 +379,7 @@ pub(super) fn insert_course_score(
     Ok(course_score_id)
 }
 
+#[cfg(test)]
 pub(super) fn best_course_score(
     conn: &Connection,
     course_id: i64,
@@ -411,6 +419,7 @@ pub(super) fn best_course_score(
     Ok(row)
 }
 
+#[cfg(test)]
 pub(super) fn best_course_clear(conn: &Connection, course_id: i64) -> Result<Option<ClearType>> {
     let value: Option<String> = conn
         .query_row(
@@ -439,6 +448,8 @@ pub(super) fn best_course_clear(conn: &Connection, course_id: i64) -> Result<Opt
     Ok(value.and_then(|s| clear_type_from_name(&s)))
 }
 
+#[cfg(test)]
+#[allow(dead_code)]
 pub(super) fn list_course_score_charts(
     conn: &Connection,
     course_score_id: i64,
@@ -466,6 +477,7 @@ pub(super) fn list_course_score_charts(
     Ok(out)
 }
 
+#[cfg(test)]
 pub(super) fn achieved_trophy_names_for_course(
     conn: &Connection,
     course_id: i64,
@@ -487,6 +499,7 @@ pub(super) fn achieved_trophy_names_for_course(
     Ok(out)
 }
 
+#[cfg(test)]
 pub(super) fn best_course_score_for_trophy(
     conn: &Connection,
     course_id: i64,
@@ -532,6 +545,7 @@ pub(super) fn best_course_score_for_trophy(
 /// One stored attempt for a course, including the list of achieved trophy
 /// names (sorted alphabetically).  Used by the CLI history view and any
 /// future UI that needs to list past attempts.
+#[cfg(test)]
 #[derive(Debug, Clone, PartialEq)]
 pub struct CourseScoreEntry {
     pub course_score_id: i64,
@@ -549,6 +563,7 @@ pub struct CourseScoreEntry {
     pub achieved_trophies: Vec<String>,
 }
 
+#[cfg(test)]
 pub(super) fn list_recent_course_scores(
     conn: &Connection,
     course_id: i64,
@@ -600,6 +615,7 @@ pub(super) fn list_recent_course_scores(
     Ok(out)
 }
 
+#[cfg(test)]
 pub(super) fn course_score_entry_by_id(
     conn: &Connection,
     course_score_id: i64,
@@ -644,6 +660,7 @@ pub(super) fn course_score_entry_by_id(
     }))
 }
 
+#[cfg(test)]
 pub(super) fn latest_course_score_id(conn: &Connection, course_id: i64) -> Result<Option<i64>> {
     let row: Option<i64> = conn
         .query_row(
@@ -658,6 +675,7 @@ pub(super) fn latest_course_score_id(conn: &Connection, course_id: i64) -> Resul
     Ok(row)
 }
 
+#[cfg(test)]
 pub(super) fn list_course_replays(
     conn: &Connection,
     course_score_id: i64,
@@ -682,6 +700,7 @@ pub(super) fn list_course_replays(
     Ok(out)
 }
 
+#[cfg(test)]
 pub(super) fn upsert_course_replay_slot(
     conn: &mut Connection,
     record: &CourseReplaySlotRecord,
@@ -717,6 +736,7 @@ pub(super) fn upsert_course_replay_slot(
     Ok(())
 }
 
+#[cfg(test)]
 pub(super) fn course_replay_slot(
     conn: &Connection,
     course_id: i64,
@@ -734,6 +754,7 @@ pub(super) fn course_replay_slot(
     .map_err(Into::into)
 }
 
+#[cfg(test)]
 pub(super) fn course_replay_slots_for_course(
     conn: &Connection,
     course_id: i64,
@@ -757,6 +778,7 @@ pub(super) fn course_replay_slots_for_course(
     Ok(out)
 }
 
+#[cfg(test)]
 pub(super) fn course_replay_slot_presence(conn: &Connection, course_id: i64) -> Result<[bool; 4]> {
     let mut stmt = conn.prepare("SELECT slot FROM course_replay_slots WHERE course_id = ?1")?;
     let mut out = [false; 4];
@@ -770,6 +792,7 @@ pub(super) fn course_replay_slot_presence(conn: &Connection, course_id: i64) -> 
     Ok(out)
 }
 
+#[cfg(test)]
 fn course_replay_slot_from_row(
     row: &rusqlite::Row<'_>,
 ) -> rusqlite::Result<CourseReplaySlotRecord> {
@@ -786,6 +809,7 @@ fn course_replay_slot_from_row(
     })
 }
 
+#[cfg(test)]
 fn course_best_score_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<CourseBestScore> {
     Ok(CourseBestScore {
         course_score_id: row.get(0)?,
@@ -803,6 +827,7 @@ fn course_best_score_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Cours
     })
 }
 
+#[cfg(test)]
 fn clear_type_from_name(name: &str) -> Option<ClearType> {
     match name {
         "NoPlay" => Some(ClearType::NoPlay),

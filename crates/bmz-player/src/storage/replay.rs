@@ -183,7 +183,7 @@ pub fn replay_file_name(chart_sha256: [u8; 32], played_at: i64) -> String {
     format!("{}-{played_at}.toml", hex_encode(&chart_sha256))
 }
 
-/// One queued replay inside a course attempt: keeps the chart id, the
+/// One queued replay inside a course attempt: keeps the current chart id, the
 /// per-chart replay file (events + arrange info), and the chart sha256 the
 /// replay was recorded against so callers can verify before launch.
 #[derive(Debug, Clone)]
@@ -196,33 +196,27 @@ pub struct QueuedCourseReplay {
 
 /// Load every replay file referenced by a `course_scores` row.
 ///
-/// `entries` is the list of `(position, chart_id, replay_path)` rows from
-/// `course_replays` (already ordered by position).  `lookup_sha256` resolves a
-/// chart_id to its sha256 — typically a closure over `LibraryDatabase`.
+/// `entries` is the list of `(position, chart_sha256, replay_path)` rows from
+/// `course_replays` (already ordered by position).  `lookup_chart_id` resolves
+/// a chart sha256 to the current library row id.
 /// `replay_root` is the directory that relative replay paths are joined onto
 /// (matches `ProfilePaths.root_dir`).
 ///
 /// Returns the queued replays in order.  Returns an error if any file is
-/// missing, malformed, or refers to a chart whose hash no longer matches
-/// (e.g. the chart was re-imported with different bytes).
+/// missing, malformed, or refers to a chart that is no longer in the library.
 pub fn load_course_replays(
-    entries: &[(i64, i64, String)],
+    entries: &[(i64, [u8; 32], String)],
     replay_root: &Path,
-    lookup_sha256: impl Fn(i64) -> Result<Option<[u8; 32]>>,
+    lookup_chart_id: impl Fn([u8; 32]) -> Result<Option<i64>>,
 ) -> Result<Vec<QueuedCourseReplay>> {
     let mut out = Vec::with_capacity(entries.len());
-    for (position, chart_id, rel_path) in entries {
-        let Some(sha) = lookup_sha256(*chart_id)? else {
-            bail!("chart id {chart_id} is no longer in the library");
+    for (position, sha, rel_path) in entries {
+        let Some(chart_id) = lookup_chart_id(*sha)? else {
+            bail!("chart {} is no longer in the library", hex_encode(sha));
         };
         let abs = replay_root.join(rel_path);
-        let replay = load_replay_for_chart(&abs, sha)?;
-        out.push(QueuedCourseReplay {
-            position: *position,
-            chart_id: *chart_id,
-            chart_sha256: sha,
-            replay,
-        });
+        let replay = load_replay_for_chart(&abs, *sha)?;
+        out.push(QueuedCourseReplay { position: *position, chart_id, chart_sha256: *sha, replay });
     }
     Ok(out)
 }
@@ -575,14 +569,16 @@ events = []
         save_replay(&p1, &r1).unwrap();
 
         let entries = vec![
-            (0_i64, 1_i64, "replay/c0.toml".to_string()),
-            (1_i64, 2_i64, "replay/c1.toml".to_string()),
+            (0_i64, [1; 32], "replay/c0.toml".to_string()),
+            (1_i64, [2; 32], "replay/c1.toml".to_string()),
         ];
-        let queued = load_course_replays(&entries, &dir, |chart_id| {
-            Ok(match chart_id {
-                1 => Some([1; 32]),
-                2 => Some([2; 32]),
-                _ => None,
+        let queued = load_course_replays(&entries, &dir, |chart_sha256| {
+            Ok(if chart_sha256 == [1; 32] {
+                Some(1)
+            } else if chart_sha256 == [2; 32] {
+                Some(2)
+            } else {
+                None
             })
         })
         .unwrap();
@@ -613,11 +609,12 @@ events = []
         save_replay(&p, &replay).unwrap();
 
         // Chart was re-imported and now hashes as [9;32]; verification must fail.
-        let entries = vec![(0_i64, 1_i64, "replay/c0.toml".to_string())];
-        let err = load_course_replays(&entries, &dir, |_| Ok(Some([9; 32]))).unwrap_err();
+        let entries = vec![(0_i64, [9; 32], "replay/c0.toml".to_string())];
+        let err = load_course_replays(&entries, &dir, |_| Ok(Some(9))).unwrap_err();
         assert!(err.to_string().contains("replay chart hash"));
 
         // And missing chart bails out with a clear error.
+        let entries = vec![(0_i64, [1; 32], "replay/c0.toml".to_string())];
         let err = load_course_replays(&entries, &dir, |_| Ok(None)).unwrap_err();
         assert!(err.to_string().contains("no longer in the library"));
 

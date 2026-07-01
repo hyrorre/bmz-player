@@ -11,9 +11,8 @@ use bmz_gameplay::score::{JudgeCounts, ScoreState};
 use rusqlite::{Connection, OpenFlags, Row};
 
 use super::common::hex_to_hash;
-use super::course_db::CourseScoreInsert;
 use super::library_db::LibraryDatabase;
-use super::score_db::{ScoreDatabase, ScoreRecord, decode_beatoraja_ghost};
+use super::score_db::{CourseScoreInsert, ScoreDatabase, ScoreRecord, decode_beatoraja_ghost};
 use crate::ln_policy::LnScorePolicy;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -103,9 +102,9 @@ fn import_lr2_scores(
     imported_at: i64,
 ) -> Result<ScoreImportReport> {
     ensure_table(source, "score")?;
-    // Owned index of canonical LR2-dan courses (md5 stage sequence -> course ids),
-    // built once before the row loop so the immutable borrow of `library_db` is
-    // released before we start inserting course scores into it.
+    // Owned index of canonical LR2-dan courses (md5 stage sequence -> score-db
+    // course identity snapshot), built once before the row loop so the immutable
+    // borrow of `library_db` is released before we start inserting course scores.
     let course_index = build_lr2_course_index(library_db)?;
     let mut report = ScoreImportReport::default();
     let mut stmt = source.prepare(
@@ -129,7 +128,7 @@ fn import_lr2_scores(
         // 160-char key for a 4-song course).  Resolve these to bmz courses and
         // import a course score for each canonical match (see import_lr2_course).
         if is_course_hash(&row.md5, 32) {
-            import_lr2_course(&row, &course_index, library_db, imported_at, &mut report)?;
+            import_lr2_course(&row, &course_index, score_db, imported_at, &mut report)?;
             continue;
         }
         let md5 = match hex_to_hash::<16>(&row.md5) {
@@ -281,8 +280,8 @@ fn imported_score_record(
 /// not available from LR2's aggregate course row, so `charts`/`replays` are empty.
 fn import_lr2_course(
     row: &Lr2ScoreRow,
-    course_index: &HashMap<Vec<[u8; 16]>, Vec<i64>>,
-    library_db: &mut LibraryDatabase,
+    course_index: &HashMap<Vec<[u8; 16]>, Vec<CourseImportTarget>>,
+    score_db: &mut ScoreDatabase,
     imported_at: i64,
     report: &mut ScoreImportReport,
 ) -> Result<()> {
@@ -291,16 +290,14 @@ fn import_lr2_course(
         tracing::debug!(len = row.md5.len(), "LR2 course key not splittable into stage md5s");
         return Ok(());
     };
-    let Some(course_ids) = course_index.get(&stages) else {
+    let Some(targets) = course_index.get(&stages) else {
         report.skipped += 1;
         tracing::debug!(stages = stages.len(), "LR2 course has no matching bmz course");
         return Ok(());
     };
-    let record = lr2_course_score_insert(row, imported_at);
-    for &course_id in course_ids {
-        let mut insert = record.clone();
-        insert.course_id = course_id;
-        library_db.insert_course_score(&insert)?;
+    for target in targets {
+        let insert = lr2_course_score_insert(row, target, imported_at);
+        score_db.insert_course_score(&insert)?;
         report.imported += 1;
     }
     report.matched += 1;
@@ -323,13 +320,34 @@ fn lr2_course_stage_md5s(hash: &str) -> Option<Vec<[u8; 16]>> {
     Some(stages)
 }
 
-/// Builds a course score from an LR2 aggregate course row.  `course_id` is left as
-/// 0 and filled in per matching course by the caller.
-fn lr2_course_score_insert(row: &Lr2ScoreRow, imported_at: i64) -> CourseScoreInsert {
+#[derive(Debug, Clone)]
+struct CourseImportTarget {
+    course_hash: String,
+    source: String,
+    course_key: String,
+    title: String,
+    kind: String,
+    constraints_json: String,
+    chart_sha256s_json: String,
+}
+
+/// Builds a course score from an LR2 aggregate course row and the matched bmz
+/// course identity snapshot. Per-chart breakdown is not available from LR2.
+fn lr2_course_score_insert(
+    row: &Lr2ScoreRow,
+    target: &CourseImportTarget,
+    imported_at: i64,
+) -> CourseScoreInsert {
     let clear_type = lr2_clear_type(row.clear);
     let course_failed = matches!(clear_type, ClearType::NoPlay | ClearType::Failed);
     CourseScoreInsert {
-        course_id: 0,
+        course_hash: target.course_hash.clone(),
+        source: target.source.clone(),
+        course_key: target.course_key.clone(),
+        title: target.title.clone(),
+        kind: target.kind.clone(),
+        constraints_json: target.constraints_json.clone(),
+        chart_sha256s_json: target.chart_sha256s_json.clone(),
         ex_score: row.perfect * 2 + row.great,
         max_ex_score: row.total_notes * 2,
         clear_type: clear_type.as_str().to_string(),
@@ -355,8 +373,8 @@ fn lr2_course_score_insert(row: &Lr2ScoreRow, imported_at: i64) -> CourseScoreIn
 /// with any entry lacking an md5 are skipped (they cannot be matched by md5).
 fn build_lr2_course_index(
     library_db: &LibraryDatabase,
-) -> Result<HashMap<Vec<[u8; 16]>, Vec<i64>>> {
-    let mut index: HashMap<Vec<[u8; 16]>, Vec<i64>> = HashMap::new();
+) -> Result<HashMap<Vec<[u8; 16]>, Vec<CourseImportTarget>>> {
+    let mut index: HashMap<Vec<[u8; 16]>, Vec<CourseImportTarget>> = HashMap::new();
     for course in library_db.list_courses()? {
         let constraints = &course.definition.constraints;
         if constraints.class != CourseClassConstraint::GradeMirrorAllowed
@@ -378,7 +396,20 @@ fn build_lr2_course_index(
             }
         }
         if complete && !key.is_empty() {
-            index.entry(key).or_default().push(course.id);
+            let Some(identity) =
+                crate::ir::course_payload::course_identity_from_stored(library_db, &course)
+            else {
+                continue;
+            };
+            index.entry(key).or_default().push(CourseImportTarget {
+                course_hash: identity.course_hash,
+                source: course.source.clone(),
+                course_key: course.definition.key.clone(),
+                title: course.definition.title.clone(),
+                kind: identity.definition.kind,
+                constraints_json: identity.constraints_json,
+                chart_sha256s_json: identity.chart_sha256s_json,
+            });
         }
     }
     Ok(index)
@@ -949,13 +980,14 @@ mod tests {
             "33333333333333333333333333333333",
             "44444444444444444444444444444444",
         ];
+        let stage_sha256s = ["11".repeat(32), "22".repeat(32), "33".repeat(32), "44".repeat(32)];
         let entries: Vec<CourseEntry> = stage_md5s
             .iter()
             .enumerate()
             .map(|(i, m)| CourseEntry {
                 title_hint: format!("stage{i}"),
                 md5: Some(m.to_string()),
-                sha256: None,
+                sha256: Some(stage_sha256s[i].clone()),
                 chart_id: None,
             })
             .collect();
@@ -1021,14 +1053,19 @@ mod tests {
         assert_eq!(report.matched, 1);
         // Fanned out into the two canonical LN variants, not the no_good course.
         assert_eq!(report.imported, 2);
-        let count: i64 = library_db
+        let count: i64 = score_db
             .conn()
             .query_row("SELECT COUNT(*) FROM course_scores", [], |r| r.get(0))
             .unwrap();
         assert_eq!(count, 2);
+        let distinct_hashes: i64 = score_db
+            .conn()
+            .query_row("SELECT COUNT(DISTINCT course_hash) FROM course_scores", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(distinct_hashes, 2);
         // The imported course score reflects the LR2 aggregate row (clear=4 -> Hard,
         // ex = perfect*2 + great = 221).
-        let (clear, ex): (String, u32) = library_db
+        let (clear, ex): (String, u32) = score_db
             .conn()
             .query_row("SELECT clear_type, ex_score FROM course_scores LIMIT 1", [], |r| {
                 Ok((r.get(0)?, r.get(1)?))

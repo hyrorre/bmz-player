@@ -391,7 +391,7 @@ pub struct SelectCourseRow {
     /// Best persisted course score, if any.  Populated from the
     /// `course_scores` table; `None` when the course has never been played
     /// successfully or when the lookup failed.
-    pub best_score: Option<crate::storage::library_db::CourseBestScore>,
+    pub best_score: Option<crate::storage::score_db::CourseBestScore>,
     /// Which of the four course replay slots have a saved attempt.  Used by
     /// the select skin to render slot indicators on course rows.
     pub replay_slots: [bool; 4],
@@ -635,18 +635,22 @@ pub fn course_root_item() -> SelectItem {
 
 /// Loads manually-imported courses (not from a difficulty table) as `SelectItem::Course` entries.
 /// Table-sourced courses appear inside each table's folder via `table_level_folder_items`.
-pub fn load_select_items_for_courses(library_db: &LibraryDatabase) -> Result<Vec<SelectItem>> {
+pub fn load_select_items_for_courses(
+    library_db: &LibraryDatabase,
+    score_db: &ScoreDatabase,
+) -> Result<Vec<SelectItem>> {
     let courses = library_db.list_courses()?;
     Ok(courses
         .into_iter()
         .filter(|stored| !stored.source.starts_with("table:"))
-        .map(|stored| build_select_course_row(library_db, stored))
+        .map(|stored| build_select_course_row(library_db, score_db, stored))
         .collect())
 }
 
 /// Aggregates per-entry chart stats into a `SelectCourseRow`.
 fn build_select_course_row(
     library_db: &LibraryDatabase,
+    score_db: &ScoreDatabase,
     stored: crate::storage::library_db::StoredCourse,
 ) -> SelectItem {
     let entry_count = stored.definition.entries.len();
@@ -695,27 +699,48 @@ fn build_select_course_row(
     let trophy_names: Vec<String> =
         stored.definition.trophies.iter().map(|t| t.name.clone()).collect();
 
-    let best_score = library_db.best_course_score(stored.id).unwrap_or_else(|error| {
-        tracing::warn!(%error, course_id = stored.id, "failed to load best course score");
-        None
-    });
-    let replay_slots = library_db.course_replay_slot_presence(stored.id).unwrap_or_else(|error| {
-        tracing::warn!(
-            %error,
-            course_id = stored.id,
-            "failed to load course_replay_slot_presence"
-        );
-        [false; 4]
-    });
-    let achieved_trophy_names =
-        library_db.achieved_trophy_names_for_course(stored.id).unwrap_or_else(|error| {
+    let identity = crate::ir::course_payload::course_identity_from_stored(library_db, &stored);
+    let best_score = identity.as_ref().and_then(|identity| {
+        score_db.best_course_score(&identity.course_hash).unwrap_or_else(|error| {
             tracing::warn!(
                 %error,
                 course_id = stored.id,
-                "failed to load achieved_trophy_names_for_course"
+                course_hash = %identity.course_hash,
+                "failed to load best course score"
             );
-            Vec::new()
-        });
+            None
+        })
+    });
+    let replay_slots = identity
+        .as_ref()
+        .map(|identity| {
+            score_db.course_replay_slot_presence(&identity.course_hash).unwrap_or_else(|error| {
+                tracing::warn!(
+                    %error,
+                    course_id = stored.id,
+                    course_hash = %identity.course_hash,
+                    "failed to load course_replay_slot_presence"
+                );
+                [false; 4]
+            })
+        })
+        .unwrap_or([false; 4]);
+    let achieved_trophy_names = identity
+        .as_ref()
+        .map(|identity| {
+            score_db.achieved_trophy_names_for_course(&identity.course_hash).unwrap_or_else(
+                |error| {
+                    tracing::warn!(
+                        %error,
+                        course_id = stored.id,
+                        course_hash = %identity.course_hash,
+                        "failed to load achieved_trophy_names_for_course"
+                    );
+                    Vec::new()
+                },
+            )
+        })
+        .unwrap_or_default();
 
     SelectItem::Course(SelectCourseRow {
         course_id: stored.id,
@@ -741,6 +766,7 @@ fn build_select_course_row(
 /// table's `level_order`, followed by any courses imported from that table.
 pub fn table_level_folder_items(
     library_db: &LibraryDatabase,
+    score_db: &ScoreDatabase,
     source_url: &str,
 ) -> Result<Vec<SelectItem>> {
     let Some(table) =
@@ -765,7 +791,7 @@ pub fn table_level_folder_items(
     if let Ok(courses) = library_db.list_courses_by_source(&table_source) {
         tracing::info!(source = %table_source, count = courses.len(), "courses found for table");
         for stored in courses {
-            items.push(build_select_course_row(library_db, stored));
+            items.push(build_select_course_row(library_db, score_db, stored));
         }
     }
 
@@ -2561,7 +2587,7 @@ mod tests {
 
     #[test]
     fn table_level_folder_items_returns_folder_per_level() {
-        let (mut library_db, _) = open_in_memory_dbs();
+        let (mut library_db, score_db) = open_in_memory_dbs();
         let chart_a = chart("A");
         use crate::difficulty_table::{FetchedDifficultyTable, FetchedTableEntry};
         let table = FetchedDifficultyTable {
@@ -2583,7 +2609,8 @@ mod tests {
         };
         library_db.upsert_difficulty_table(&table).unwrap();
 
-        let items = table_level_folder_items(&library_db, "https://example.com/insane/").unwrap();
+        let items = table_level_folder_items(&library_db, &score_db, "https://example.com/insane/")
+            .unwrap();
 
         assert_eq!(items.len(), 3);
         assert!(matches!(

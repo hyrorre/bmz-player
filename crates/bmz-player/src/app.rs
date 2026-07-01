@@ -2118,7 +2118,14 @@ impl WinitApp {
                 }
             }
             DeferredBoot::CourseReplay { course_id } => {
-                match self.boot.library_db.latest_course_score_id(course_id) {
+                let Some(identity) = self.ir_course_identity(course_id) else {
+                    tracing::warn!(
+                        course_id,
+                        "course identity unavailable; --boot-course-replay has nothing to replay"
+                    );
+                    return;
+                };
+                match self.boot.score_db.latest_course_score_id(&identity.course_hash) {
                     Ok(Some(course_score_id)) => {
                         tracing::info!(course_id, course_score_id, "booting into course replay");
                         self.start_course_replay_with_auto_advance(
@@ -5920,7 +5927,7 @@ impl WinitApp {
             return;
         };
 
-        let entries = match self.boot.library_db.list_course_replays(course_score_id) {
+        let entries = match self.boot.score_db.list_course_replays(course_score_id) {
             Ok(rows) => rows,
             Err(error) => {
                 tracing::error!(
@@ -5937,11 +5944,11 @@ impl WinitApp {
             return;
         }
 
-        let entry_tuples: Vec<(i64, i64, String)> =
-            entries.iter().map(|r| (r.position, r.chart_id, r.replay_path.clone())).collect();
+        let entry_tuples: Vec<(i64, [u8; 32], String)> =
+            entries.iter().map(|r| (r.position, r.chart_sha256, r.replay_path.clone())).collect();
         let replay_root = self.boot.profile_paths.root_dir.clone();
-        let lookup = |chart_id: i64| -> anyhow::Result<Option<[u8; 32]>> {
-            self.boot.library_db.chart_sha256_by_chart_id(chart_id)
+        let lookup = |chart_sha256: [u8; 32]| -> anyhow::Result<Option<i64>> {
+            self.boot.library_db.chart_id_by_sha256(chart_sha256)
         };
         let queued = match crate::storage::replay::load_course_replays(
             &entry_tuples,
@@ -6164,30 +6171,37 @@ impl WinitApp {
             return;
         };
         let course_id = course.course_id;
+        let course_identity = self.course_identity_with_stored(course_id);
 
         // Extract data needed to persist the course score before `into_result`
         // consumes `entry_results`.
-        let chart_records: Vec<crate::storage::library_db::CourseScoreChartRecord> = course
+        let chart_records: Vec<crate::storage::score_db::CourseScoreChartRecord> = course
             .entry_results
             .iter()
             .enumerate()
-            .map(|(i, r)| crate::storage::library_db::CourseScoreChartRecord {
-                position: i as i64,
-                chart_id: r.chart_id,
-                ex_score: r.finished.result.score.ex_score(),
-                max_combo: r.finished.result.score.max_combo,
-                clear_type: r.finished.result.clear_type.as_str().to_string(),
-                gauge_value: r.finished.result.gauge_value,
+            .filter_map(|(i, r)| {
+                let chart_sha256 = course_identity.as_ref()?.1.chart_sha256s.get(i).copied()?;
+                Some(crate::storage::score_db::CourseScoreChartRecord {
+                    position: i as i64,
+                    chart_sha256,
+                    ex_score: r.finished.result.score.ex_score(),
+                    max_combo: r.finished.result.score.max_combo,
+                    clear_type: r.finished.result.clear_type.as_str().to_string(),
+                    gauge_value: r.finished.result.gauge_value,
+                })
             })
             .collect();
-        let replay_records: Vec<crate::storage::library_db::CourseReplayRecord> = course
+        let replay_records: Vec<crate::storage::score_db::CourseReplayRecord> = course
             .entry_results
             .iter()
             .enumerate()
-            .map(|(i, r)| crate::storage::library_db::CourseReplayRecord {
-                position: i as i64,
-                chart_id: r.chart_id,
-                replay_path: r.finished.stored.replay_path.clone(),
+            .filter_map(|(i, r)| {
+                let chart_sha256 = course_identity.as_ref()?.1.chart_sha256s.get(i).copied()?;
+                Some(crate::storage::score_db::CourseReplayRecord {
+                    position: i as i64,
+                    chart_sha256,
+                    replay_path: r.finished.stored.replay_path.clone(),
+                })
             })
             .collect();
         let any_autoplay = course.entry_results.iter().any(|r| r.finished.result.autoplay);
@@ -6240,11 +6254,34 @@ impl WinitApp {
         //   from the select screen is out of scope for this change; only the
         //   save path is wired up.
         if !any_autoplay && !any_replay_playback {
+            let Some((stored_course, identity)) = &course_identity else {
+                tracing::warn!(
+                    course_id,
+                    "course identity unavailable; skipping course score save"
+                );
+                self.finished_course = Some(course_result);
+                if let Some(last) = last_finished {
+                    self.result_gauge_graph_type = last.summary.gauge_type as i32;
+                    self.finished_play = Some(last);
+                    self.result_key5_held = false;
+                    self.result_key7_held = false;
+                    self.result_scene_started_at = Instant::now();
+                    self.ensure_result_skin_ready(ResultSkinSlot::Course);
+                }
+                return;
+            };
             course_result.previous_best_score =
-                self.boot.library_db.best_course_score(course_id).unwrap_or_else(|error| {
-                    tracing::warn!(%error, course_id, "failed to read previous best course score");
-                    None
-                });
+                self.boot.score_db.best_course_score(&identity.course_hash).unwrap_or_else(
+                    |error| {
+                        tracing::warn!(
+                            %error,
+                            course_id,
+                            course_hash = %identity.course_hash,
+                            "failed to read previous best course score"
+                        );
+                        None
+                    },
+                );
             let final_clear_type = course_result.final_clear_type;
             let bp = course_result.judge_counts.bad
                 + course_result.judge_counts.poor
@@ -6266,8 +6303,14 @@ impl WinitApp {
                 .collect();
             let trophies_json =
                 serde_json::to_string(&achieved_trophies).unwrap_or_else(|_| "[]".to_string());
-            let insert = crate::storage::library_db::CourseScoreInsert {
-                course_id,
+            let insert = crate::storage::score_db::CourseScoreInsert {
+                course_hash: identity.course_hash.clone(),
+                source: stored_course.source.clone(),
+                course_key: stored_course.definition.key.clone(),
+                title: stored_course.definition.title.clone(),
+                kind: identity.definition.kind.clone(),
+                constraints_json: identity.constraints_json.clone(),
+                chart_sha256s_json: identity.chart_sha256s_json.clone(),
                 ex_score: course_result.total_ex_score,
                 max_ex_score: course_result.max_ex_score,
                 clear_type: final_clear_type.as_str().to_string(),
@@ -6284,7 +6327,7 @@ impl WinitApp {
                 replays: replay_records,
                 achieved_trophies,
             };
-            match self.boot.library_db.insert_course_score(&insert) {
+            match self.boot.score_db.insert_course_score(&insert) {
                 Ok(course_score_id) => {
                     // Backfill the per-chart `score_history` rows with the
                     // course attempt id so they can be filtered as part of
@@ -6322,7 +6365,7 @@ impl WinitApp {
                     // unconditionally; Score / Bp / MaxCombo / Clear
                     // require strict improvement; empty slot always wins).
                     course_result.saved_replay_slots = self.update_course_replay_slots(
-                        course_id,
+                        &identity.course_hash,
                         course_score_id,
                         played_at,
                         course_result.total_ex_score,
@@ -6330,17 +6373,19 @@ impl WinitApp {
                         max_combo,
                         final_clear_type as u8,
                     );
-                    course_result.replay_slots =
-                        self.boot.library_db.course_replay_slot_presence(course_id).unwrap_or_else(
-                            |error| {
-                                tracing::warn!(
-                                    %error,
-                                    course_id,
-                                    "failed to read course replay slot presence"
-                                );
-                                [false; 4]
-                            },
-                        );
+                    course_result.replay_slots = self
+                        .boot
+                        .score_db
+                        .course_replay_slot_presence(&identity.course_hash)
+                        .unwrap_or_else(|error| {
+                            tracing::warn!(
+                                %error,
+                                course_id,
+                                course_hash = %identity.course_hash,
+                                "failed to read course replay slot presence"
+                            );
+                            [false; 4]
+                        });
                     for (index, saved) in course_result.saved_replay_slots.iter().enumerate() {
                         if *saved {
                             course_result.replay_slots[index] = true;
@@ -6356,10 +6401,17 @@ impl WinitApp {
             // saved attempt is reflected when it improved the record.  The
             // result overlay reads this to show a "BEST" section.
             course_result.best_score =
-                self.boot.library_db.best_course_score(course_id).unwrap_or_else(|error| {
-                    tracing::warn!(%error, course_id, "failed to read best course score");
-                    None
-                });
+                self.boot.score_db.best_course_score(&identity.course_hash).unwrap_or_else(
+                    |error| {
+                        tracing::warn!(
+                            %error,
+                            course_id,
+                            course_hash = %identity.course_hash,
+                            "failed to read best course score"
+                        );
+                        None
+                    },
+                );
         }
 
         self.finished_course = Some(course_result);
@@ -6374,12 +6426,16 @@ impl WinitApp {
         }
     }
 
-    /// コース定義から IR 用の identity (charts sha256 + constraints) を解決する。
-    /// 未解決の譜面 (sha256 不明) があるコースは IR 送信対象外。
-    fn ir_course_definition(
+    /// コース定義から IR / score.db 用の identity (course_hash + charts sha256 +
+    /// canonical constraints) を解決する。未解決の譜面 (sha256 不明) がある
+    /// コースは score 保存 / IR 送信対象外。
+    fn course_identity_with_stored(
         &self,
         course_id: i64,
-    ) -> Option<crate::ir::course_payload::IrCourseDefinition> {
+    ) -> Option<(
+        crate::storage::library_db::StoredCourse,
+        crate::ir::course_payload::IrCourseIdentity,
+    )> {
         let stored = self
             .boot
             .library_db
@@ -6387,36 +6443,33 @@ impl WinitApp {
             .ok()?
             .into_iter()
             .find(|course| course.id == course_id)?;
-        let mut charts = Vec::with_capacity(stored.definition.entries.len());
-        for entry in &stored.definition.entries {
-            let sha = entry.sha256.clone().or_else(|| {
-                let md5 = entry.md5.as_ref()?;
-                let md5 = crate::storage::common::hex_to_hash::<16>(md5).ok()?;
-                let sha = self.boot.library_db.chart_sha256_by_md5(md5).ok().flatten()?;
-                Some(crate::storage::common::hash_to_hex(&sha))
-            })?;
-            charts.push(sha);
-        }
-        Some(crate::ir::course_payload::IrCourseDefinition {
-            charts,
-            constraints: serde_json::to_value(&stored.definition.constraints).ok()?,
-            title: stored.definition.title.clone(),
-            kind: match stored.definition.kind {
-                bmz_core::course::CourseKind::Dan => "dan".to_string(),
-                bmz_core::course::CourseKind::Course => "course".to_string(),
-            },
-        })
+        let identity =
+            crate::ir::course_payload::course_identity_from_stored(&self.boot.library_db, &stored)?;
+        Some((stored, identity))
+    }
+
+    fn ir_course_identity(
+        &self,
+        course_id: i64,
+    ) -> Option<crate::ir::course_payload::IrCourseIdentity> {
+        self.course_identity_with_stored(course_id).map(|(_, identity)| identity)
+    }
+
+    fn ir_course_definition(
+        &self,
+        course_id: i64,
+    ) -> Option<crate::ir::course_payload::IrCourseDefinition> {
+        self.ir_course_identity(course_id).map(|identity| identity.definition)
     }
 
     fn course_result_ir_target(
         &self,
         course: &crate::screens::course_session::CourseResultSummary,
     ) -> Option<(String, String, String)> {
-        let definition = self.ir_course_definition(course.course_id)?;
-        let course_hash = crate::ir::course_payload::compute_course_hash(&definition);
+        let identity = self.ir_course_identity(course.course_id)?;
         let gauge = course.final_gauge_type.as_str().to_string();
         let ln_policy = self.boot.profile_config.play.ln_mode_policy.as_ir_str().to_string();
-        Some((course_hash, gauge, ln_policy))
+        Some((identity.course_hash, gauge, ln_policy))
     }
 
     fn start_result_ir_for_finished_play(&mut self, finished: &FinishedPlaySession) {
@@ -6517,7 +6570,7 @@ impl WinitApp {
 
     fn update_course_replay_slots(
         &mut self,
-        course_id: i64,
+        course_hash: &str,
         course_score_id: i64,
         played_at: i64,
         ex_score: u32,
@@ -6536,12 +6589,12 @@ impl WinitApp {
         let mut saved_slots = [false; 4];
         for (slot_index, &rule) in slot_rules.iter().enumerate() {
             let slot = slot_index as u8;
-            let prev = match self.boot.library_db.course_replay_slot(course_id, slot) {
+            let prev = match self.boot.score_db.course_replay_slot(course_hash, slot) {
                 Ok(record) => record,
                 Err(error) => {
                     tracing::warn!(
                         %error,
-                        course_id,
+                        course_hash,
                         slot,
                         "failed to read course_replay_slot; skipping rule eval"
                     );
@@ -6552,8 +6605,8 @@ impl WinitApp {
             if !crate::storage::play_result::slot_rule_passes(rule, prev_metrics, &candidate) {
                 continue;
             }
-            let record = crate::storage::library_db::CourseReplaySlotRecord {
-                course_id,
+            let record = crate::storage::score_db::CourseReplaySlotRecord {
+                course_hash: course_hash.to_string(),
                 slot,
                 rule: rule.as_str().to_string(),
                 course_score_id,
@@ -6563,12 +6616,12 @@ impl WinitApp {
                 max_combo,
                 clear_rank,
             };
-            match self.boot.library_db.upsert_course_replay_slot(&record) {
+            match self.boot.score_db.upsert_course_replay_slot(&record) {
                 Ok(()) => saved_slots[slot_index] = true,
                 Err(error) => {
                     tracing::warn!(
                         %error,
-                        course_id,
+                        course_hash,
                         slot,
                         "failed to upsert course_replay_slot"
                     );
@@ -7682,10 +7735,15 @@ impl WinitApp {
     }
 
     fn try_start_course_replay_for_slot(&mut self, course_id: i64, slot: u8) -> bool {
-        match self.boot.library_db.course_replay_slot(course_id, slot) {
+        let Some(identity) = self.ir_course_identity(course_id) else {
+            tracing::warn!(course_id, slot, "course identity unavailable for replay slot");
+            return false;
+        };
+        match self.boot.score_db.course_replay_slot(&identity.course_hash, slot) {
             Ok(Some(record)) => {
                 tracing::info!(
                     course_id,
+                    course_hash = %identity.course_hash,
                     course_score_id = record.course_score_id,
                     slot,
                     "starting course replay from select"
@@ -7694,13 +7752,19 @@ impl WinitApp {
                 true
             }
             Ok(None) => {
-                tracing::info!(course_id, slot, "no saved course attempt in this replay slot");
+                tracing::info!(
+                    course_id,
+                    course_hash = %identity.course_hash,
+                    slot,
+                    "no saved course attempt in this replay slot"
+                );
                 false
             }
             Err(error) => {
                 tracing::error!(
                     %error,
                     course_id,
+                    course_hash = %identity.course_hash,
                     slot,
                     "failed to look up course_replay_slot"
                 );
@@ -8110,6 +8174,13 @@ impl WinitApp {
     }
 
     fn save_finished_course_replay_slot(&mut self, slot: u8) -> bool {
+        let Some(course_id) = self.finished_course.as_ref().map(|course| course.course_id) else {
+            return false;
+        };
+        let Some(identity) = self.ir_course_identity(course_id) else {
+            tracing::warn!(course_id, slot, "course identity unavailable for replay slot save");
+            return false;
+        };
         let Some(course) = self.finished_course.as_mut() else {
             return false;
         };
@@ -8131,8 +8202,8 @@ impl WinitApp {
             bmz_core::clear::ClearType::NoPlay as u8
         };
         let played_at = course.course_played_at.unwrap_or(0);
-        let record = crate::storage::library_db::CourseReplaySlotRecord {
-            course_id: course.course_id,
+        let record = crate::storage::score_db::CourseReplaySlotRecord {
+            course_hash: identity.course_hash.clone(),
             slot,
             rule: crate::config::profile_config::ReplaySlotRule::Always.as_str().to_string(),
             course_score_id,
@@ -8142,16 +8213,27 @@ impl WinitApp {
             max_combo,
             clear_rank,
         };
-        match self.boot.library_db.upsert_course_replay_slot(&record) {
+        match self.boot.score_db.upsert_course_replay_slot(&record) {
             Ok(()) => {
                 course.saved_replay_slots[slot as usize] = true;
                 course.replay_slots[slot as usize] = true;
                 self.play_system_sound(crate::system_sound::SoundType::OptionChange);
-                tracing::info!(slot, "saved course replay slot");
+                tracing::info!(
+                    course_id,
+                    course_hash = %identity.course_hash,
+                    slot,
+                    "saved course replay slot"
+                );
                 true
             }
             Err(error) => {
-                tracing::warn!(%error, slot, "failed to save course replay slot from result");
+                tracing::warn!(
+                    %error,
+                    course_id,
+                    course_hash = %identity.course_hash,
+                    slot,
+                    "failed to save course replay slot from result"
+                );
                 false
             }
         }
@@ -13355,7 +13437,7 @@ fn build_select_items_for_stack(
             load_settings_items(path)
         }
         Some(path) if path == COURSE_ROOT_PATH => {
-            match load_select_items_for_courses(&boot.library_db) {
+            match load_select_items_for_courses(&boot.library_db, &boot.score_db) {
                 Ok(items) => items,
                 Err(error) => {
                     tracing::error!(%error, "failed to load course list");
@@ -13477,7 +13559,7 @@ fn build_select_items_for_stack(
                 if !active_table_sources.iter().any(|url| url == source_url) {
                     return Vec::new();
                 }
-                match table_level_folder_items(&boot.library_db, source_url) {
+                match table_level_folder_items(&boot.library_db, &boot.score_db, source_url) {
                     Ok(items) => items,
                     Err(error) => {
                         tracing::error!(%error, "failed to load difficulty table levels");
@@ -17623,9 +17705,9 @@ mod tests {
             played_entries: 2,
             replay_slots: [true, false, true, false],
             saved_replay_slots: [false, false, true, false],
-            best_score: Some(crate::storage::library_db::CourseBestScore {
+            best_score: Some(crate::storage::score_db::CourseBestScore {
                 course_score_id: 22,
-                course_id: 1,
+                course_hash: "course-hash".to_string(),
                 ex_score: 340,
                 max_ex_score: 440,
                 clear_type: "ExHard".to_string(),
@@ -17637,9 +17719,9 @@ mod tests {
                 course_clear: true,
                 played_at: 2,
             }),
-            previous_best_score: Some(crate::storage::library_db::CourseBestScore {
+            previous_best_score: Some(crate::storage::score_db::CourseBestScore {
                 course_score_id: 21,
-                course_id: 1,
+                course_hash: "course-hash".to_string(),
                 ex_score: 300,
                 max_ex_score: 440,
                 clear_type: "Normal".to_string(),

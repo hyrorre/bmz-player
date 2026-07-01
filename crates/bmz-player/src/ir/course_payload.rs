@@ -10,7 +10,7 @@ use sha2::{Digest, Sha256};
 
 use crate::screens::course_session::CourseResultSummary;
 use crate::select_options::ArrangeOption;
-use crate::storage::common::hash_to_hex;
+use crate::storage::common::{hash_to_hex, hex_to_hash};
 
 /// コース定義のうち identity / registry に必要な部分。
 #[derive(Debug, Clone)]
@@ -22,6 +22,15 @@ pub struct IrCourseDefinition {
     pub title: String,
     /// "dan" | "course"
     pub kind: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct IrCourseIdentity {
+    pub definition: IrCourseDefinition,
+    pub course_hash: String,
+    pub constraints_json: String,
+    pub chart_sha256s_json: String,
+    pub chart_sha256s: Vec<[u8; 32]>,
 }
 
 #[derive(Debug, Clone)]
@@ -37,12 +46,51 @@ pub struct IrCourseSubmissionContext {
 }
 
 pub fn compute_course_hash(definition: &IrCourseDefinition) -> String {
-    let canonical = serde_json::to_string(&json!({
+    let canonical = super::device_key::canonical_json_value(&json!({
         "charts": definition.charts,
         "constraints": definition.constraints,
     }))
     .unwrap_or_default();
     hash_to_hex(&Sha256::digest(canonical.as_bytes()))
+}
+
+pub fn course_identity_from_stored(
+    library_db: &crate::storage::library_db::LibraryDatabase,
+    stored: &crate::storage::library_db::StoredCourse,
+) -> Option<IrCourseIdentity> {
+    let mut charts = Vec::with_capacity(stored.definition.entries.len());
+    let mut chart_sha256s = Vec::with_capacity(stored.definition.entries.len());
+    for entry in &stored.definition.entries {
+        let sha = entry.sha256.clone().or_else(|| {
+            let md5 = entry.md5.as_ref()?;
+            let md5 = crate::storage::common::hex_to_hash::<16>(md5).ok()?;
+            let sha = library_db.chart_sha256_by_md5(md5).ok().flatten()?;
+            Some(hash_to_hex(&sha))
+        })?;
+        let parsed = hex_to_hash::<32>(&sha).ok()?;
+        charts.push(sha);
+        chart_sha256s.push(parsed);
+    }
+    let definition = IrCourseDefinition {
+        charts,
+        constraints: serde_json::to_value(&stored.definition.constraints).ok()?,
+        title: stored.definition.title.clone(),
+        kind: match stored.definition.kind {
+            bmz_core::course::CourseKind::Dan => "dan".to_string(),
+            bmz_core::course::CourseKind::Course => "course".to_string(),
+        },
+    };
+    let course_hash = compute_course_hash(&definition);
+    let constraints_json = super::device_key::canonical_json_value(&definition.constraints).ok()?;
+    let chart_sha256s_json =
+        super::device_key::canonical_json_value(&json!(definition.charts)).ok()?;
+    Some(IrCourseIdentity {
+        definition,
+        course_hash,
+        constraints_json,
+        chart_sha256s_json,
+        chart_sha256s,
+    })
 }
 
 /// サーバーの `POST /api/v1/course-scores` payload を組み立てる。
@@ -173,6 +221,37 @@ mod tests {
         let mut renamed = base.clone();
         renamed.title = "Renamed".to_string();
         assert_eq!(same, compute_course_hash(&renamed));
+    }
+
+    #[test]
+    fn course_hash_uses_canonical_json_number_formatting() {
+        let definition = IrCourseDefinition {
+            charts: vec!["ab".repeat(32)],
+            constraints: json!({
+                "total": 160.0,
+                "fraction": 4.50,
+                "small": 1e-6,
+            }),
+            title: "Dan 1".to_string(),
+            kind: "dan".to_string(),
+        };
+        let canonical = crate::ir::device_key::canonical_json_value(&json!({
+            "charts": definition.charts.clone(),
+            "constraints": definition.constraints.clone(),
+        }))
+        .unwrap();
+
+        assert_eq!(
+            canonical,
+            format!(
+                "{{\"charts\":[\"{}\"],\"constraints\":{{\"fraction\":4.5,\"small\":0.000001,\"total\":160}}}}",
+                "ab".repeat(32)
+            )
+        );
+        assert_eq!(
+            compute_course_hash(&definition),
+            crate::storage::common::hash_to_hex(&Sha256::digest(canonical.as_bytes()))
+        );
     }
 
     #[test]
