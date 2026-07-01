@@ -7,6 +7,7 @@ use bmz_render::scene::SelectRowKind;
 
 use crate::ln_policy::{LnPolicySetting, LnScorePolicy, score_ln_policy};
 use crate::screens::settings_model::{ConfigSelectRow, KeyBindingSelectRow};
+use crate::storage::collection_db::{CollectionDatabase, FavoriteChartRecord, FavoriteSongRecord};
 use crate::storage::common::hash_to_hex;
 use crate::storage::library_db::{
     ChartAnalysisSummary, ChartListItem, DifficultyTableEntryRecord, LibraryDatabase,
@@ -28,6 +29,15 @@ pub const COURSE_ROOT_PATH: &str = "bmz-course:";
 /// `"bmz-search:<query>"` resolves to the list of charts matching `<query>`.
 pub const SEARCH_PATH_PREFIX: &str = "bmz-search:";
 
+/// Virtual path for user collection/favorite navigation.
+pub const FAVORITE_ROOT_PATH: &str = "bmz-favorite:";
+pub const FAVORITE_CHART_PATH: &str = "bmz-favorite:chart";
+pub const FAVORITE_SONG_PATH: &str = "bmz-favorite:song";
+pub const FAVORITE_SONG_DETAIL_PREFIX: &str = "bmz-favorite:song:";
+
+/// Virtual path prefix for the same-folder view.
+pub const SAME_FOLDER_PATH_PREFIX: &str = "bmz-same-folder:";
+
 /// Maximum entries kept in the in-memory search history (FIFO eviction).
 pub const MAX_SEARCH_HISTORY: usize = 8;
 
@@ -36,6 +46,27 @@ pub const MAX_SEARCH_HISTORY: usize = 8;
 pub fn parse_search_query(path: &str) -> Option<&str> {
     let rest = path.strip_prefix(SEARCH_PATH_PREFIX)?;
     if rest.is_empty() { None } else { Some(rest) }
+}
+
+pub fn same_folder_path(folder_path: &str) -> String {
+    format!("{SAME_FOLDER_PATH_PREFIX}{folder_path}")
+}
+
+pub fn parse_same_folder_path(path: &str) -> Option<&str> {
+    let rest = path.strip_prefix(SAME_FOLDER_PATH_PREFIX)?;
+    if rest.is_empty() { None } else { Some(rest) }
+}
+
+pub fn favorite_song_detail_path(representative_sha256: [u8; 32]) -> String {
+    format!("{FAVORITE_SONG_DETAIL_PREFIX}{}", hash_to_hex(&representative_sha256))
+}
+
+pub fn parse_favorite_song_detail_path(path: &str) -> Option<[u8; 32]> {
+    let rest = path.strip_prefix(FAVORITE_SONG_DETAIL_PREFIX)?;
+    if rest.is_empty() || rest == "chart" {
+        return None;
+    }
+    hex_to_hash::<32>(rest).ok()
 }
 
 /// Returns one folder item per entry in the search history, newest last
@@ -302,6 +333,8 @@ pub struct SelectChartRow {
     pub entry_sha256: Option<[u8; 32]>,
     pub best_score: Option<BestScoreSummary>,
     pub replay_slots: [bool; 4],
+    pub favorite_chart: bool,
+    pub favorite_song: bool,
     pub table_level: String,
     pub table_text: DifficultyTableText,
 }
@@ -436,6 +469,18 @@ fn clear_type_name_for_folder_lamp(index: usize) -> &'static str {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SelectExecutableKind {
+    RandomSelect,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SelectExecutableRow {
+    pub title: String,
+    pub kind: SelectExecutableKind,
+    pub chart_ids: Vec<i64>,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 #[allow(clippy::large_enum_variant)]
 pub enum SelectItem {
@@ -447,6 +492,7 @@ pub enum SelectItem {
     },
     Chart(SelectChartRow),
     Course(SelectCourseRow),
+    Executable(SelectExecutableRow),
     Config(ConfigSelectRow),
     KeyBinding(KeyBindingSelectRow),
     /// 現在のフォルダから 1 階層戻るアクション行。
@@ -461,6 +507,7 @@ impl SelectItem {
             Self::Folder { name, .. } => name.clone(),
             Self::Chart(row) => row.display_title().to_string(),
             Self::Course(row) => row.title.clone(),
+            Self::Executable(row) => row.title.clone(),
             Self::Config(row) => row.label().to_string(),
             Self::KeyBinding(row) => row.label(),
             Self::Back => "戻る".to_string(),
@@ -487,6 +534,54 @@ pub fn root_folder_items(root_paths: &[String]) -> Vec<SelectItem> {
             }
         })
         .collect()
+}
+
+pub fn favorite_root_item() -> SelectItem {
+    SelectItem::Folder {
+        path: FAVORITE_ROOT_PATH.to_string(),
+        name: "FAVORITE".to_string(),
+        kind: SelectRowKind::TableFolder,
+        summary: None,
+    }
+}
+
+pub fn favorite_root_items(collection_db: &CollectionDatabase) -> Result<Vec<SelectItem>> {
+    let mut items = Vec::new();
+    if !collection_db.favorite_chart_records()?.is_empty() {
+        items.push(SelectItem::Folder {
+            path: FAVORITE_CHART_PATH.to_string(),
+            name: "FAVORITE CHART".to_string(),
+            kind: SelectRowKind::TableFolder,
+            summary: None,
+        });
+    }
+    if !collection_db.favorite_song_records()?.is_empty() {
+        items.push(SelectItem::Folder {
+            path: FAVORITE_SONG_PATH.to_string(),
+            name: "FAVORITE SONG".to_string(),
+            kind: SelectRowKind::TableFolder,
+            summary: None,
+        });
+    }
+    Ok(items)
+}
+
+pub fn random_select_item_from_items(items: &[SelectItem]) -> Option<SelectItem> {
+    let mut chart_ids = Vec::new();
+    for item in items {
+        if let SelectItem::Chart(row) = item
+            && let Some(chart) = &row.chart
+        {
+            chart_ids.push(chart.chart_id);
+        }
+    }
+    (!chart_ids.is_empty()).then(|| {
+        SelectItem::Executable(SelectExecutableRow {
+            title: "RANDOM SELECT".to_string(),
+            kind: SelectExecutableKind::RandomSelect,
+            chart_ids,
+        })
+    })
 }
 
 /// Returns one folder item per registered difficulty table.
@@ -955,6 +1050,8 @@ fn select_chart_row_from_table_entry(
         entry_sha256,
         best_score,
         replay_slots,
+        favorite_chart: false,
+        favorite_song: false,
         table_level,
         table_text,
     }
@@ -1177,6 +1274,238 @@ pub fn load_select_items_for_search_for_rule_mode_with_filters(
     )
 }
 
+pub fn load_select_items_for_favorite_charts(
+    library_db: &LibraryDatabase,
+    score_db: &ScoreDatabase,
+    collection_db: &CollectionDatabase,
+    ln_policy_setting: LnPolicySetting,
+    rule_mode: RuleMode,
+    table_source_order: &[String],
+    active_song_roots: Option<&[String]>,
+    active_table_sources: Option<&[String]>,
+) -> Result<Vec<SelectItem>> {
+    let records = collection_db.favorite_chart_records()?;
+    let mut found_charts = Vec::new();
+    let mut missing_records = Vec::new();
+    let mut seen_chart_ids = HashSet::new();
+    for record in records {
+        let mut charts = library_db.list_charts_by_sha256(record.chart_sha256)?;
+        retain_active_charts(&mut charts, active_song_roots);
+        if charts.is_empty() {
+            missing_records.push(record);
+            continue;
+        }
+        for chart in charts {
+            if seen_chart_ids.insert(chart.chart_id) {
+                found_charts.push(chart);
+            }
+        }
+    }
+
+    let mut items = chart_items_with_enrichment(
+        library_db,
+        score_db,
+        found_charts,
+        ln_policy_setting,
+        rule_mode,
+        table_source_order,
+        active_table_sources,
+    )?;
+    for record in missing_records {
+        items.push(missing_favorite_chart_item(score_db, record, rule_mode)?);
+    }
+    apply_collection_flags(library_db, collection_db, &mut items)?;
+    Ok(items)
+}
+
+pub fn load_select_items_for_favorite_songs(
+    collection_db: &CollectionDatabase,
+) -> Result<Vec<SelectItem>> {
+    Ok(collection_db
+        .favorite_song_records()?
+        .into_iter()
+        .map(|record| SelectItem::Folder {
+            path: favorite_song_detail_path(record.representative_sha256),
+            name: if record.title_hint.is_empty() {
+                short_sha_title(record.representative_sha256)
+            } else {
+                record.title_hint
+            },
+            kind: SelectRowKind::TableFolder,
+            summary: None,
+        })
+        .collect())
+}
+
+pub fn load_select_items_for_favorite_song(
+    library_db: &LibraryDatabase,
+    score_db: &ScoreDatabase,
+    collection_db: &CollectionDatabase,
+    representative_sha256: [u8; 32],
+    ln_policy_setting: LnPolicySetting,
+    rule_mode: RuleMode,
+    table_source_order: &[String],
+    active_song_roots: Option<&[String]>,
+    active_table_sources: Option<&[String]>,
+) -> Result<Vec<SelectItem>> {
+    let Some(record) = collection_db
+        .favorite_song_records()?
+        .into_iter()
+        .find(|record| record.representative_sha256 == representative_sha256)
+    else {
+        return Ok(Vec::new());
+    };
+    let folder_paths = resolved_favorite_song_folders(library_db, &record)?;
+    let folder_refs: Vec<&str> = folder_paths.iter().map(String::as_str).collect();
+    let mut charts = library_db.list_charts_in_folders(&folder_refs)?;
+    retain_active_charts(&mut charts, active_song_roots);
+    let mut items = chart_items_with_enrichment(
+        library_db,
+        score_db,
+        charts,
+        ln_policy_setting,
+        rule_mode,
+        table_source_order,
+        active_table_sources,
+    )?;
+    if items.is_empty() {
+        items.push(missing_favorite_song_item(score_db, record, rule_mode)?);
+    }
+    apply_collection_flags(library_db, collection_db, &mut items)?;
+    Ok(items)
+}
+
+pub fn favorite_song_representatives_for_folder(
+    library_db: &LibraryDatabase,
+    collection_db: &CollectionDatabase,
+    folder_path: &str,
+) -> Result<Vec<[u8; 32]>> {
+    let folder_key = folder_path.replace('\\', "/");
+    let mut representatives = Vec::new();
+    for record in collection_db.favorite_song_records()? {
+        let folders = resolved_favorite_song_folders(library_db, &record)?;
+        if folders.iter().any(|folder| folder == &folder_key) {
+            representatives.push(record.representative_sha256);
+        }
+    }
+    Ok(representatives)
+}
+
+pub fn apply_collection_flags(
+    library_db: &LibraryDatabase,
+    collection_db: &CollectionDatabase,
+    items: &mut [SelectItem],
+) -> Result<()> {
+    let favorite_charts = collection_db.favorite_chart_set()?;
+    let favorite_song_folders = favorite_song_folder_set(library_db, collection_db)?;
+    for item in items {
+        let SelectItem::Chart(row) = item else { continue };
+        if let Some(sha256) = row.score_sha256() {
+            row.favorite_chart = favorite_charts.contains(&sha256);
+        }
+        row.favorite_song = row
+            .chart
+            .as_ref()
+            .is_some_and(|chart| favorite_song_folders.contains(&chart.folder_path));
+    }
+    Ok(())
+}
+
+fn missing_favorite_chart_item(
+    score_db: &ScoreDatabase,
+    record: FavoriteChartRecord,
+    rule_mode: RuleMode,
+) -> Result<SelectItem> {
+    let (best_score, replay_slots) =
+        score_and_replays_for_missing_favorite(score_db, record.chart_sha256, rule_mode)?;
+    Ok(SelectItem::Chart(SelectChartRow {
+        chart: None,
+        chart_analysis: None,
+        fallback_title: fallback_favorite_title(&record.title_hint, record.chart_sha256),
+        fallback_artist: record.artist_hint,
+        entry_sha256: Some(record.chart_sha256),
+        best_score,
+        replay_slots,
+        favorite_chart: true,
+        favorite_song: false,
+        table_level: String::new(),
+        table_text: DifficultyTableText::default(),
+    }))
+}
+
+fn missing_favorite_song_item(
+    score_db: &ScoreDatabase,
+    record: FavoriteSongRecord,
+    rule_mode: RuleMode,
+) -> Result<SelectItem> {
+    let (best_score, replay_slots) =
+        score_and_replays_for_missing_favorite(score_db, record.representative_sha256, rule_mode)?;
+    Ok(SelectItem::Chart(SelectChartRow {
+        chart: None,
+        chart_analysis: None,
+        fallback_title: fallback_favorite_title(&record.title_hint, record.representative_sha256),
+        fallback_artist: record.artist_hint,
+        entry_sha256: Some(record.representative_sha256),
+        best_score,
+        replay_slots,
+        favorite_chart: false,
+        favorite_song: true,
+        table_level: String::new(),
+        table_text: DifficultyTableText::default(),
+    }))
+}
+
+fn score_and_replays_for_missing_favorite(
+    score_db: &ScoreDatabase,
+    sha256: [u8; 32],
+    rule_mode: RuleMode,
+) -> Result<(Option<BestScoreSummary>, [bool; 4])> {
+    let key = ScoreKey::new(sha256, LnScorePolicy::ForceLn).with_rule_mode(rule_mode);
+    let best_score = score_db.best_scores_for_charts(&[key])?.into_iter().next();
+    let mut replay_slots_map = replay_slot_map(score_db, &[key])?;
+    let replay_slots = replay_slots_map.remove(&key).unwrap_or([false; 4]);
+    Ok((best_score, replay_slots))
+}
+
+fn fallback_favorite_title(title_hint: &str, sha256: [u8; 32]) -> String {
+    if title_hint.is_empty() { short_sha_title(sha256) } else { title_hint.to_string() }
+}
+
+fn short_sha_title(sha256: [u8; 32]) -> String {
+    let hex = hash_to_hex(&sha256);
+    format!("sha256:{}", &hex[..12])
+}
+
+fn resolved_favorite_song_folders(
+    library_db: &LibraryDatabase,
+    record: &FavoriteSongRecord,
+) -> Result<Vec<String>> {
+    let mut folders = Vec::new();
+    let mut seen = HashSet::new();
+    for chart in library_db.list_charts_by_sha256(record.representative_sha256)? {
+        let folder = chart.folder_path;
+        if seen.insert(folder.clone()) {
+            folders.push(folder);
+        }
+    }
+    if folders.is_empty() && !record.origin_folder_hint.is_empty() {
+        let folder = record.origin_folder_hint.replace('\\', "/");
+        folders.push(folder);
+    }
+    Ok(folders)
+}
+
+fn favorite_song_folder_set(
+    library_db: &LibraryDatabase,
+    collection_db: &CollectionDatabase,
+) -> Result<HashSet<String>> {
+    let mut folders = HashSet::new();
+    for record in collection_db.favorite_song_records()? {
+        folders.extend(resolved_favorite_song_folders(library_db, &record)?);
+    }
+    Ok(folders)
+}
+
 /// Wraps a `ChartListItem` set into `SelectItem::Chart` entries with best-score,
 /// replay-slot, and difficulty-table-level metadata resolved.
 fn chart_items_with_enrichment(
@@ -1258,6 +1587,8 @@ fn chart_items_with_enrichment(
             entry_sha256: None,
             best_score,
             replay_slots,
+            favorite_chart: false,
+            favorite_song: false,
             table_level,
             table_text: table_text.unwrap_or_default(),
         }));
@@ -1468,7 +1799,9 @@ mod tests {
     use super::*;
     use crate::storage::common::configure_connection;
     use crate::storage::library_db::{ChartImportRecord, LibraryDatabase};
-    use crate::storage::migration::{LIBRARY_MIGRATIONS, SCORE_MIGRATIONS, run_migrations};
+    use crate::storage::migration::{
+        COLLECTION_MIGRATIONS, LIBRARY_MIGRATIONS, SCORE_MIGRATIONS, run_migrations,
+    };
     use crate::storage::score_db::{ScoreDatabase, ScoreRecord};
 
     #[test]
@@ -1705,6 +2038,13 @@ mod tests {
         (LibraryDatabase::from_connection(library_conn), ScoreDatabase::from_connection(score_conn))
     }
 
+    fn open_in_memory_collection_db() -> CollectionDatabase {
+        let mut collection_conn = Connection::open_in_memory().unwrap();
+        configure_connection(&collection_conn).unwrap();
+        run_migrations(&mut collection_conn, COLLECTION_MIGRATIONS).unwrap();
+        CollectionDatabase::from_connection(collection_conn)
+    }
+
     fn chart(title: &str) -> PlayableChart {
         PlayableChart {
             identity: compute_chart_identity(title.as_bytes()),
@@ -1749,6 +2089,68 @@ mod tests {
             scanned_at: 1,
             chart,
         }
+    }
+
+    #[test]
+    fn favorite_song_resolves_all_duplicate_sha256_folders() {
+        let (mut library_db, score_db) = open_in_memory_dbs();
+        let mut collection_db = open_in_memory_collection_db();
+        let shared = chart("Shared");
+        library_db
+            .upsert_chart_import(&record_for_chart("/pack-a/song/shared.bms", &shared))
+            .unwrap();
+        library_db
+            .upsert_chart_import(&record_for_chart("/pack-b/song/shared.bms", &shared))
+            .unwrap();
+        collection_db
+            .upsert_favorite_song(
+                shared.identity.file_sha256,
+                &crate::storage::collection_db::FavoriteHints::new(
+                    "Shared",
+                    "artist",
+                    "/pack-a/song",
+                ),
+                10,
+            )
+            .unwrap();
+
+        assert_eq!(
+            favorite_song_representatives_for_folder(&library_db, &collection_db, "/pack-a/song")
+                .unwrap(),
+            vec![shared.identity.file_sha256]
+        );
+        assert_eq!(
+            favorite_song_representatives_for_folder(&library_db, &collection_db, "/pack-b/song")
+                .unwrap(),
+            vec![shared.identity.file_sha256]
+        );
+
+        let items = load_select_items_for_favorite_song(
+            &library_db,
+            &score_db,
+            &collection_db,
+            shared.identity.file_sha256,
+            LnPolicySetting::AutoLn,
+            RuleMode::Beatoraja,
+            &[],
+            None,
+            None,
+        )
+        .unwrap();
+        let folders: HashSet<String> = items
+            .iter()
+            .filter_map(|item| match item {
+                SelectItem::Chart(row) => row.chart.as_ref().map(|chart| chart.folder_path.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(folders.len(), 2);
+        assert!(folders.contains("/pack-a/song"));
+        assert!(folders.contains("/pack-b/song"));
+        assert!(items.iter().all(|item| match item {
+            SelectItem::Chart(row) => row.favorite_song,
+            _ => true,
+        }));
     }
 
     fn undefined_ln_pair() -> LongNotePair {
@@ -2132,6 +2534,8 @@ mod tests {
             entry_sha256: None,
             best_score: None,
             replay_slots: [false; 4],
+            favorite_chart: false,
+            favorite_song: false,
             table_level: String::new(),
             table_text: DifficultyTableText::default(),
         });

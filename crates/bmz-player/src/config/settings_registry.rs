@@ -53,6 +53,7 @@ pub enum SettingsEntryId {
     AnalogScratchSensitivity,
     AnalogScratchThreshold,
     AnalogTicksPerScroll,
+    SelectRandomSelect,
     ReplayAutoSave,
     ReplaySlot1Rule,
     ReplaySlot2Rule,
@@ -116,6 +117,8 @@ impl SettingsEntryId {
         Self::AnalogTicksPerScroll,
     ];
 
+    pub const SELECT_ENTRIES: &'static [Self] = &[Self::SelectRandomSelect];
+
     pub const REPLAY_ENTRIES: &'static [Self] = &[
         Self::ReplayAutoSave,
         Self::ReplaySlot1Rule,
@@ -166,6 +169,7 @@ impl SettingsEntryId {
             Self::AnalogScratchSensitivity => "ANALOG SENS",
             Self::AnalogScratchThreshold => "ANALOG STOP",
             Self::AnalogTicksPerScroll => "ANALOG SCROLL",
+            Self::SelectRandomSelect => "RANDOM SELECT",
             Self::ReplayAutoSave => "REPLAY SAVE",
             Self::ReplaySlot1Rule => "REPLAY 1",
             Self::ReplaySlot2Rule => "REPLAY 2",
@@ -251,6 +255,7 @@ pub fn format_settings_value(profile: &ProfileConfig, id: SettingsEntryId) -> St
         SettingsEntryId::AnalogTicksPerScroll => {
             format!("{} ticks", profile.input.analog_ticks_per_scroll)
         }
+        SettingsEntryId::SelectRandomSelect => format_bool_on_off(profile.select.random_select),
         SettingsEntryId::ReplayAutoSave => format_bool_on_off(profile.replay.auto_save),
         SettingsEntryId::ReplaySlot1Rule => format_replay_slot_rule(profile.replay.slot_rules[0]),
         SettingsEntryId::ReplaySlot2Rule => format_replay_slot_rule(profile.replay.slot_rules[1]),
@@ -417,6 +422,14 @@ pub fn adjust_settings_value(profile: &mut ProfileConfig, id: SettingsEntryId, d
         }
         SettingsEntryId::AnalogTicksPerScroll => {
             adjust_u32(&mut profile.input.analog_ticks_per_scroll, delta, 1, 100)
+        }
+        SettingsEntryId::SelectRandomSelect => {
+            if delta == 0 {
+                false
+            } else {
+                profile.select.random_select = !profile.select.random_select;
+                true
+            }
         }
         SettingsEntryId::ReplayAutoSave => {
             if delta == 0 {

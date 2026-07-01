@@ -95,15 +95,19 @@ use crate::screens::practice::{
 };
 use crate::screens::result_model::{ResultFastSlowJudgeCounts, ResultSummary};
 use crate::screens::select_model::{
-    COURSE_ROOT_PATH, DifficultyTableText, MAX_SEARCH_HISTORY, SEARCH_PATH_PREFIX,
-    SelectFolderSummary, SelectItem, TABLE_ROOT_PATH, TablePath, course_root_item,
-    difficulty_table_text_for_chart_with_active_sources, load_select_items_for_courses,
-    load_select_items_for_search_for_rule_mode_with_filters,
+    COURSE_ROOT_PATH, DifficultyTableText, FAVORITE_CHART_PATH, FAVORITE_ROOT_PATH,
+    FAVORITE_SONG_PATH, MAX_SEARCH_HISTORY, SEARCH_PATH_PREFIX, SelectExecutableKind,
+    SelectFolderSummary, SelectItem, TABLE_ROOT_PATH, TablePath, apply_collection_flags,
+    course_root_item, difficulty_table_text_for_chart_with_active_sources, favorite_root_item,
+    favorite_root_items, favorite_song_representatives_for_folder, load_select_items_for_courses,
+    load_select_items_for_favorite_charts, load_select_items_for_favorite_song,
+    load_select_items_for_favorite_songs, load_select_items_for_search_for_rule_mode_with_filters,
     load_select_items_in_folder_for_rule_mode_with_filters,
-    load_select_items_in_table_level_for_rule_mode, parse_search_query, parse_table_path,
-    root_folder_items, search_history_folder_items, select_folder_summary_for_rule_mode,
-    song_scan_path_from_context, table_folder_items_for_active_sources, table_level_folder_items,
-    table_source_url_from_context,
+    load_select_items_in_table_level_for_rule_mode, parse_favorite_song_detail_path,
+    parse_same_folder_path, parse_search_query, parse_table_path, random_select_item_from_items,
+    root_folder_items, same_folder_path, search_history_folder_items,
+    select_folder_summary_for_rule_mode, song_scan_path_from_context,
+    table_folder_items_for_active_sources, table_level_folder_items, table_source_url_from_context,
 };
 use crate::screens::settings_edit::{SettingsBindings, SettingsEditSession, adjust_settings_draft};
 use crate::screens::settings_model::{
@@ -123,6 +127,7 @@ use crate::skin_loader::{
     upload_decoded_skin_with_texture_cache,
 };
 use crate::songs_cmd::scan_songs_with_progress;
+use crate::storage::collection_db::FavoriteHints;
 use crate::storage::difficulty_table_db::DifficultyTableRecord;
 use crate::storage::library_db::{ChartDistributionSecond, LibraryDatabase};
 use crate::storage::migration::{migrate_library_db, migrate_score_db};
@@ -2461,6 +2466,19 @@ impl WinitApp {
         let selected = self.select_items.get(self.selected_index);
         let current_folder = match self.folder_stack.last() {
             None => String::new(),
+            Some(path) if path == FAVORITE_ROOT_PATH => "FAVORITE".to_string(),
+            Some(path) if path == FAVORITE_CHART_PATH => "FAVORITE CHART".to_string(),
+            Some(path) if path == FAVORITE_SONG_PATH => "FAVORITE SONG".to_string(),
+            Some(path) if parse_favorite_song_detail_path(path).is_some() => {
+                "FAVORITE SONG".to_string()
+            }
+            Some(path) if let Some(folder) = parse_same_folder_path(path) => {
+                std::path::Path::new(folder)
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("")
+                    .to_string()
+            }
             Some(path) if path.starts_with(TABLE_ROOT_PATH) => match parse_table_path(path) {
                 Some(TablePath::Root) | None => "難易度表".to_string(),
                 Some(TablePath::Table { source_url }) => self.table_breadcrumb_name(source_url),
@@ -4144,6 +4162,9 @@ impl WinitApp {
                     match action {
                         SelectAction::EnterOrPlay => self.enter_or_play_selected(),
                         SelectAction::ExitFolder => self.exit_folder(),
+                        SelectAction::FavoriteSong => self.toggle_favorite_song_selected(),
+                        SelectAction::FavoriteChart => self.toggle_favorite_chart_selected(),
+                        SelectAction::SameFolder => self.open_same_folder_for_selected(),
                         SelectAction::Move(select_move) => {
                             self.move_selection(select_move);
                             if matches!(
@@ -4640,6 +4661,9 @@ impl WinitApp {
                     match action {
                         SelectAction::EnterOrPlay => self.enter_or_play_selected(),
                         SelectAction::ExitFolder => self.exit_folder(),
+                        SelectAction::FavoriteSong => self.toggle_favorite_song_selected(),
+                        SelectAction::FavoriteChart => self.toggle_favorite_chart_selected(),
+                        SelectAction::SameFolder => self.open_same_folder_for_selected(),
                         SelectAction::Move(select_move) => {
                             self.move_selection(select_move);
                             if matches!(
@@ -4902,6 +4926,8 @@ impl WinitApp {
             }
             77 => self.cycle_select_target(arg),
             78 => self.cycle_select_gauge_auto_shift(arg),
+            89 => self.toggle_favorite_song_selected(),
+            90 => self.toggle_favorite_chart_selected(),
             341 => self.cycle_select_bottom_shiftable_gauge(arg),
             340 => self.cycle_select_judge_algorithm(arg),
             308 => self.cycle_select_ln_mode(arg),
@@ -5124,6 +5150,97 @@ impl WinitApp {
         tracing::info!("opened egui advanced settings from select");
     }
 
+    fn selected_chart_row(&self) -> Option<&crate::screens::select_model::SelectChartRow> {
+        match self.select_items.get(self.selected_index) {
+            Some(SelectItem::Chart(row)) => Some(row),
+            _ => None,
+        }
+    }
+
+    fn toggle_favorite_chart_selected(&mut self) {
+        let Some(row) = self.selected_chart_row().cloned() else {
+            return;
+        };
+        let Some(sha256) = row.score_sha256() else {
+            return;
+        };
+        let hints = favorite_hints_for_row(&row);
+        match self.boot.collection_db.toggle_favorite_chart(sha256, &hints, now_unix_seconds()) {
+            Ok(enabled) => {
+                self.reload_select_items();
+                self.restart_select_bar_timer_without_scroll(Instant::now());
+                self.play_system_sound(crate::system_sound::SoundType::OptionChange);
+                tracing::info!(enabled, title = row.display_title(), "favorite chart toggled");
+            }
+            Err(error) => tracing::error!(%error, "failed to toggle favorite chart"),
+        }
+    }
+
+    fn toggle_favorite_song_selected(&mut self) {
+        let Some(row) = self.selected_chart_row().cloned() else {
+            return;
+        };
+        let Some(sha256) = row.score_sha256() else {
+            return;
+        };
+        let representatives = match row.chart.as_ref() {
+            Some(chart) => favorite_song_representatives_for_folder(
+                &self.boot.library_db,
+                &self.boot.collection_db,
+                &chart.folder_path,
+            )
+            .unwrap_or_else(|error| {
+                tracing::error!(%error, "failed to resolve favorite song folders");
+                Vec::new()
+            }),
+            None => Vec::new(),
+        };
+        let hints = favorite_hints_for_row(&row);
+        let result = if representatives.is_empty() {
+            self.boot.collection_db.toggle_favorite_song(sha256, &hints, now_unix_seconds())
+        } else {
+            self.boot.collection_db.remove_favorite_songs(&representatives).map(|_| false)
+        };
+        match result {
+            Ok(enabled) => {
+                self.reload_select_items();
+                self.restart_select_bar_timer_without_scroll(Instant::now());
+                self.play_system_sound(crate::system_sound::SoundType::OptionChange);
+                tracing::info!(enabled, title = row.display_title(), "favorite song toggled");
+            }
+            Err(error) => tracing::error!(%error, "failed to toggle favorite song"),
+        }
+    }
+
+    fn open_same_folder_for_selected(&mut self) {
+        let Some(row) = self.selected_chart_row() else {
+            return;
+        };
+        let Some(chart) = &row.chart else {
+            return;
+        };
+        let folder_path = chart.folder_path.clone();
+        self.selected_index_stack.push(self.selected_index);
+        self.folder_stack.push(same_folder_path(&folder_path));
+        self.reload_select_items();
+        self.selected_index = 0;
+        self.restart_select_bar_timer_without_scroll(Instant::now());
+        self.play_system_sound(crate::system_sound::SoundType::FolderOpen);
+        tracing::info!(folder = %folder_path, "entered same-folder view");
+    }
+
+    fn start_random_select(&mut self, chart_ids: &[i64]) {
+        if chart_ids.is_empty() {
+            return;
+        }
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let index = (nanos % chart_ids.len() as u128) as usize;
+        self.start_chart(chart_ids[index]);
+    }
+
     fn enter_or_play_selected(&mut self) {
         if self.select_items.is_empty() {
             self.reload_select_items();
@@ -5164,6 +5281,9 @@ impl WinitApp {
                     );
                 }
             }
+            Some(SelectItem::Executable(row)) => match row.kind {
+                SelectExecutableKind::RandomSelect => self.start_random_select(&row.chart_ids),
+            },
             Some(SelectItem::Config(_)) => {}
             Some(SelectItem::KeyBinding(row)) => {
                 self.begin_key_config_edit(row.key_mode, row.target);
@@ -6796,6 +6916,7 @@ impl WinitApp {
             }
             SelectItem::Folder { .. }
             | SelectItem::Course(_)
+            | SelectItem::Executable(_)
             | SelectItem::Config(_)
             | SelectItem::KeyBinding(_)
             | SelectItem::Back
@@ -7539,6 +7660,7 @@ impl WinitApp {
             SelectItem::Chart(row) => row.chart.as_ref().map(|chart| chart.chart_id),
             SelectItem::Folder { .. }
             | SelectItem::Course(_)
+            | SelectItem::Executable(_)
             | SelectItem::Config(_)
             | SelectItem::KeyBinding(_)
             | SelectItem::Back
@@ -7551,6 +7673,7 @@ impl WinitApp {
             SelectItem::Course(row) => Some(row.course_id),
             SelectItem::Chart(_)
             | SelectItem::Folder { .. }
+            | SelectItem::Executable(_)
             | SelectItem::Config(_)
             | SelectItem::KeyBinding(_)
             | SelectItem::Back
@@ -13209,6 +13332,14 @@ fn load_items_for_stack(
     let resolved = resolve_non_empty_mode_filter(&items, mode_filter);
     apply_select_mode_filter(&mut items, resolved);
     apply_select_sort(&mut items, sort);
+    if let Err(error) = apply_collection_flags(&boot.library_db, &boot.collection_db, &mut items) {
+        tracing::error!(%error, "failed to apply collection flags to select items");
+    }
+    if boot.profile_config.select.random_select
+        && let Some(random_item) = random_select_item_from_items(&items)
+    {
+        items.insert(0, random_item);
+    }
     (items, resolved)
 }
 
@@ -13228,6 +13359,62 @@ fn build_select_items_for_stack(
                 Ok(items) => items,
                 Err(error) => {
                     tracing::error!(%error, "failed to load course list");
+                    Vec::new()
+                }
+            }
+        }
+        Some(path) if path == FAVORITE_ROOT_PATH => {
+            match favorite_root_items(&boot.collection_db) {
+                Ok(items) => items,
+                Err(error) => {
+                    tracing::error!(%error, "failed to load favorite root items");
+                    Vec::new()
+                }
+            }
+        }
+        Some(path) if path == FAVORITE_CHART_PATH => {
+            match load_select_items_for_favorite_charts(
+                &boot.library_db,
+                &boot.score_db,
+                &boot.collection_db,
+                boot.profile_config.play.ln_mode_policy,
+                boot.profile_config.play.rule_mode,
+                &active_table_sources,
+                Some(&active_song_roots),
+                Some(&active_table_sources),
+            ) {
+                Ok(items) => items,
+                Err(error) => {
+                    tracing::error!(%error, "failed to load favorite chart items");
+                    Vec::new()
+                }
+            }
+        }
+        Some(path) if path == FAVORITE_SONG_PATH => {
+            match load_select_items_for_favorite_songs(&boot.collection_db) {
+                Ok(items) => items,
+                Err(error) => {
+                    tracing::error!(%error, "failed to load favorite song folders");
+                    Vec::new()
+                }
+            }
+        }
+        Some(path) if parse_favorite_song_detail_path(path).is_some() => {
+            let representative_sha256 = parse_favorite_song_detail_path(path).unwrap();
+            match load_select_items_for_favorite_song(
+                &boot.library_db,
+                &boot.score_db,
+                &boot.collection_db,
+                representative_sha256,
+                boot.profile_config.play.ln_mode_policy,
+                boot.profile_config.play.rule_mode,
+                &active_table_sources,
+                Some(&active_song_roots),
+                Some(&active_table_sources),
+            ) {
+                Ok(items) => items,
+                Err(error) => {
+                    tracing::error!(%error, "failed to load favorite song items");
                     Vec::new()
                 }
             }
@@ -13253,6 +13440,25 @@ fn build_select_items_for_stack(
             }
             None => Vec::new(),
         },
+        Some(path) if parse_same_folder_path(path).is_some() => {
+            let folder = parse_same_folder_path(path).unwrap();
+            match load_select_items_in_folder_for_rule_mode_with_filters(
+                &boot.library_db,
+                &boot.score_db,
+                folder,
+                boot.profile_config.play.ln_mode_policy,
+                boot.profile_config.play.rule_mode,
+                &active_table_sources,
+                Some(&active_song_roots),
+                Some(&active_table_sources),
+            ) {
+                Ok(items) => items,
+                Err(error) => {
+                    tracing::error!(%error, "failed to load same-folder items");
+                    Vec::new()
+                }
+            }
+        }
         Some(path) if path.starts_with(TABLE_ROOT_PATH) => match parse_table_path(path) {
             Some(TablePath::Root) => {
                 match table_folder_items_for_active_sources(
@@ -13323,6 +13529,11 @@ fn build_select_items_for_stack(
             // 難易度表由来のコースは各テーブルフォルダ内に表示されるため、
             // 手動インポート分（source が "table:..." でないもの）がある場合のみ COURSE フォルダを表示する。
             let mut items = root_folder_items(&active_song_roots);
+            match favorite_root_items(&boot.collection_db) {
+                Ok(favorites) if !favorites.is_empty() => items.push(favorite_root_item()),
+                Ok(_) => {}
+                Err(error) => tracing::error!(%error, "failed to check favorite root"),
+            }
             match boot.library_db.list_courses() {
                 Ok(courses) if courses.iter().any(|c| !c.source.starts_with("table:")) => {
                     items.push(course_root_item());
@@ -13421,6 +13632,7 @@ enum SelectItemKey {
     ChartId(i64),
     ChartSha256([u8; 32]),
     Course(i64),
+    Executable(String),
     Config(String),
     KeyBinding(String),
     Back,
@@ -13437,10 +13649,21 @@ fn select_item_key(item: &SelectItem) -> SelectItemKey {
             .or_else(|| row.score_sha256().map(SelectItemKey::ChartSha256))
             .unwrap_or_else(|| SelectItemKey::Config(row.display_title().to_string())),
         SelectItem::Course(row) => SelectItemKey::Course(row.course_id),
+        SelectItem::Executable(row) => SelectItemKey::Executable(row.title.clone()),
         SelectItem::Config(row) => SelectItemKey::Config(row.label().to_string()),
         SelectItem::KeyBinding(row) => SelectItemKey::KeyBinding(row.label()),
         SelectItem::Back => SelectItemKey::Back,
         SelectItem::AdvancedSettings => SelectItemKey::AdvancedSettings,
+    }
+}
+
+fn favorite_hints_for_row(row: &crate::screens::select_model::SelectChartRow) -> FavoriteHints {
+    let folder = row.chart.as_ref().map(|chart| chart.folder_path.clone()).unwrap_or_default();
+    FavoriteHints {
+        title: row.display_title().to_string(),
+        artist: row.display_artist().to_string(),
+        folder,
+        chart_path: String::new(),
     }
 }
 
@@ -14184,6 +14407,8 @@ fn select_snapshot_rows(
                     play_count: 0,
                     clear_count: 0,
                     replay_slots: [false; 4],
+                    favorite_chart: false,
+                    favorite_song: false,
                     has_long_notes: false,
                     has_mines: false,
                     has_random: false,
@@ -14279,6 +14504,8 @@ fn select_snapshot_rows(
                         play_count,
                         clear_count,
                         replay_slots: row.replay_slots,
+                        favorite_chart: row.favorite_chart,
+                        favorite_song: row.favorite_song,
                         has_long_notes: row
                             .chart
                             .as_ref()
@@ -14413,6 +14640,8 @@ fn select_snapshot_rows(
                         !best.clear_type.is_empty() && best.clear_type != "Failed"
                     })),
                     replay_slots: row.replay_slots,
+                    favorite_chart: false,
+                    favorite_song: false,
                     has_long_notes: false,
                     has_mines: false,
                     has_random: false,
@@ -14440,6 +14669,13 @@ fn select_snapshot_rows(
                     ),
                     course_constraints: course_constraint_flags(&row.constraints),
                     chart_key_mode: None,
+                },
+                SelectItem::Executable(row) => SelectRowSnapshot {
+                    index: index as u32,
+                    title: row.title.clone(),
+                    kind: bmz_render::scene::SelectRowKind::Executable,
+                    in_library: !row.chart_ids.is_empty(),
+                    ..SelectRowSnapshot::default()
                 },
                 SelectItem::Config(row) => {
                     let value = row.value_text(profile);
@@ -14471,6 +14707,8 @@ fn select_snapshot_rows(
                         play_count: 0,
                         clear_count: 0,
                         replay_slots: [false; 4],
+                        favorite_chart: false,
+                        favorite_song: false,
                         has_long_notes: false,
                         has_mines: false,
                         has_random: false,
@@ -14531,6 +14769,8 @@ fn select_snapshot_rows(
                         play_count: 0,
                         clear_count: 0,
                         replay_slots: [false; 4],
+                        favorite_chart: false,
+                        favorite_song: false,
                         has_long_notes: false,
                         has_mines: false,
                         has_random: false,
@@ -14584,6 +14824,8 @@ fn select_snapshot_rows(
                     play_count: 0,
                     clear_count: 0,
                     replay_slots: [false; 4],
+                    favorite_chart: false,
+                    favorite_song: false,
                     has_long_notes: false,
                     has_mines: false,
                     has_random: false,
@@ -14636,6 +14878,8 @@ fn select_snapshot_rows(
                     play_count: 0,
                     clear_count: 0,
                     replay_slots: [false; 4],
+                    favorite_chart: false,
+                    favorite_song: false,
                     has_long_notes: false,
                     has_mines: false,
                     has_random: false,
@@ -14669,6 +14913,9 @@ fn select_snapshot_rows(
 enum SelectAction {
     EnterOrPlay,
     ExitFolder,
+    FavoriteSong,
+    FavoriteChart,
+    SameFolder,
     Move(SelectMove),
 }
 
@@ -14770,6 +15017,12 @@ fn select_control_action(control: &str, bindings: &SelectKeyBindings) -> Option<
                 Some(SelectAction::EnterOrPlay)
             } else if bindings.is_back(control) {
                 Some(SelectAction::ExitFolder)
+            } else if bindings.is_favorite_song(control) {
+                Some(SelectAction::FavoriteSong)
+            } else if bindings.is_favorite_chart(control) {
+                Some(SelectAction::FavoriteChart)
+            } else if bindings.is_same_folder(control) {
+                Some(SelectAction::SameFolder)
             } else {
                 None
             }
@@ -14816,6 +15069,12 @@ fn select_action(
         Some(SelectAction::EnterOrPlay)
     } else if bindings.is_back(&control) {
         Some(SelectAction::ExitFolder)
+    } else if bindings.is_favorite_song(&control) {
+        Some(SelectAction::FavoriteSong)
+    } else if bindings.is_favorite_chart(&control) {
+        Some(SelectAction::FavoriteChart)
+    } else if bindings.is_same_folder(&control) {
+        Some(SelectAction::SameFolder)
     } else if bindings.is_select_scratch_down(&control) {
         Some(SelectAction::Move(SelectMove::Next))
     } else if bindings.is_select_scratch_up(&control) {
@@ -15830,6 +16089,9 @@ struct SelectKeyBindings {
     select_next_controls: Vec<String>,
     target_previous_controls: Vec<String>,
     target_next_controls: Vec<String>,
+    favorite_song_controls: Vec<String>,
+    favorite_chart_controls: Vec<String>,
+    same_folder_controls: Vec<String>,
     cycle_assist: Option<String>,
     cycle_bga: Option<String>,
     key_hint: String,
@@ -15938,6 +16200,14 @@ impl SelectKeyBindings {
         .collect();
         let e2_action_controls = actions_for(InputActionConfig::E2);
         let e3_action_controls = actions_for(InputActionConfig::E3);
+        let favorite_song_controls =
+            select_controls_with_default(actions_for(InputActionConfig::SelectFavoriteSong), "F8");
+        let favorite_chart_controls =
+            select_controls_with_default(actions_for(InputActionConfig::SelectFavoriteChart), "F9");
+        let same_folder_controls = select_controls_with_default(
+            actions_for(InputActionConfig::SelectSameFolder),
+            "Numpad8",
+        );
         let hispeed_down_controls: Vec<String> =
             [LaneConfig::Key1, LaneConfig::Key3, LaneConfig::Key5, LaneConfig::Key7]
                 .iter()
@@ -16067,6 +16337,9 @@ impl SelectKeyBindings {
             select_next_controls: Vec::new(),
             target_previous_controls: Vec::new(),
             target_next_controls: Vec::new(),
+            favorite_song_controls,
+            favorite_chart_controls,
+            same_folder_controls,
             cycle_assist,
             cycle_bga,
             key_hint,
@@ -16141,6 +16414,14 @@ impl SelectKeyBindings {
         .collect();
         let e2_action_controls = actions_for(InputActionConfig::E2);
         let e3_action_controls = actions_for(InputActionConfig::E3);
+        let favorite_song_controls =
+            select_controls_with_default(actions_for(InputActionConfig::SelectFavoriteSong), "F8");
+        let favorite_chart_controls =
+            select_controls_with_default(actions_for(InputActionConfig::SelectFavoriteChart), "F9");
+        let same_folder_controls = select_controls_with_default(
+            actions_for(InputActionConfig::SelectSameFolder),
+            "Numpad8",
+        );
         let cycle_assist = select_control_with_lane_fallback(
             actions_for(InputActionConfig::SelectOptionAssist),
             key3_controls.clone(),
@@ -16238,6 +16519,9 @@ impl SelectKeyBindings {
             select_next_controls,
             target_previous_controls,
             target_next_controls,
+            favorite_song_controls,
+            favorite_chart_controls,
+            same_folder_controls,
             cycle_assist,
             cycle_bga,
             key_hint,
@@ -16416,6 +16700,18 @@ impl SelectKeyBindings {
         self.target_next_controls.iter().any(|k| k == control)
             || self.is_select_scratch_down(control)
     }
+
+    fn is_favorite_song(&self, control: &str) -> bool {
+        self.favorite_song_controls.iter().any(|k| k == control)
+    }
+
+    fn is_favorite_chart(&self, control: &str) -> bool {
+        self.favorite_chart_controls.iter().any(|k| k == control)
+    }
+
+    fn is_same_folder(&self, control: &str) -> bool {
+        self.same_folder_controls.iter().any(|k| k == control)
+    }
 }
 
 /// アナログ tick の選曲スクロール寄与を返す。Next 方向を正とする。
@@ -16528,6 +16824,10 @@ fn merge_select_controls(configured: Vec<String>, lane_controls: Vec<String>) ->
         }
     }
     merged
+}
+
+fn select_controls_with_default(configured: Vec<String>, default_control: &str) -> Vec<String> {
+    if configured.is_empty() { vec![default_control.to_string()] } else { configured }
 }
 
 fn select_control_with_lane_fallback(
@@ -18103,6 +18403,23 @@ mod tests {
         assert_eq!(
             select_action(PhysicalKey::Code(KeyCode::KeyW), ElementState::Pressed, false, &keys),
             Some(SelectAction::ExitFolder)
+        );
+    }
+
+    #[test]
+    fn select_action_maps_collection_keys() {
+        let keys = default_select_keys();
+        assert_eq!(
+            select_action(PhysicalKey::Code(KeyCode::F8), ElementState::Pressed, false, &keys),
+            Some(SelectAction::FavoriteSong)
+        );
+        assert_eq!(
+            select_action(PhysicalKey::Code(KeyCode::F9), ElementState::Pressed, false, &keys),
+            Some(SelectAction::FavoriteChart)
+        );
+        assert_eq!(
+            select_action(PhysicalKey::Code(KeyCode::Numpad8), ElementState::Pressed, false, &keys),
+            Some(SelectAction::SameFolder)
         );
     }
 
@@ -20107,6 +20424,8 @@ mod tests {
             entry_sha256: None,
             best_score: None,
             replay_slots: [false; 4],
+            favorite_chart: false,
+            favorite_song: false,
             table_level: String::new(),
             table_text: DifficultyTableText::default(),
         }

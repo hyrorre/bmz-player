@@ -85,8 +85,15 @@ impl KeyBindingTarget {
     }
 }
 
-pub const COMMON_ACTIONS: &[InputActionConfig] =
-    &[InputActionConfig::E1, InputActionConfig::E2, InputActionConfig::E3, InputActionConfig::E4];
+pub const COMMON_ACTIONS: &[InputActionConfig] = &[
+    InputActionConfig::E1,
+    InputActionConfig::E2,
+    InputActionConfig::E3,
+    InputActionConfig::E4,
+    InputActionConfig::SelectFavoriteSong,
+    InputActionConfig::SelectFavoriteChart,
+    InputActionConfig::SelectSameFolder,
+];
 
 pub fn key_mode_settings_path(keys_root: &str, key_mode: KeyMode) -> String {
     format!("{keys_root}:{}", key_mode.play_map_key())
@@ -166,6 +173,9 @@ pub fn action_label(action: InputActionConfig) -> &'static str {
         InputActionConfig::SelectOptionGauge => "OPTION GAUGE",
         InputActionConfig::SelectOptionAssist => "OPTION ASSIST",
         InputActionConfig::SelectOptionBga => "OPTION BGA",
+        InputActionConfig::SelectFavoriteSong => "FAVORITE SONG",
+        InputActionConfig::SelectFavoriteChart => "FAVORITE CHART",
+        InputActionConfig::SelectSameFolder => "SAME FOLDER",
     }
 }
 

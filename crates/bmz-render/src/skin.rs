@@ -2080,6 +2080,9 @@ pub struct SkinDrawState {
     pub select_replay_index: Option<usize>,
     /// 選択中曲のクリアランプ番号。
     pub select_clear_index: i64,
+    /// beatoraja favorite_song(89) / favorite_chart(90)。BMZ は invisible を持たず 0/1。
+    pub select_favorite_song: bool,
+    pub select_favorite_chart: bool,
     /// 選択中バー種別。OPTION_FOLDERBAR / SONGBAR / GRADEBAR の判定に使う。
     pub select_row_kind: SelectRowKind,
     /// 選択中 GradeBar の制約。OPTION_GRADEBAR_* (1002..1017) の判定に使う。
@@ -2309,6 +2312,8 @@ impl Default for SkinDrawState {
             select_replay_slots: [false; 4],
             select_replay_index: None,
             select_clear_index: 0,
+            select_favorite_song: false,
+            select_favorite_chart: false,
             select_row_kind: SelectRowKind::Song,
             select_course_constraints: CourseConstraintFlags::default(),
             select_is_folder: false,
@@ -4006,6 +4011,8 @@ impl SkinDocument {
             select_replay_slots: selected_row.map(|row| row.replay_slots).unwrap_or([false; 4]),
             select_replay_index: selected_row.and_then(select_row_replay_index),
             select_clear_index: selected_row.map(select_row_clear_index).unwrap_or(0) as i64,
+            select_favorite_song: selected_row.is_some_and(|row| row.favorite_song),
+            select_favorite_chart: selected_row.is_some_and(|row| row.favorite_chart),
             select_row_kind: selected_row.map(|row| row.kind).unwrap_or(SelectRowKind::Song),
             select_course_constraints: selected_row
                 .map(|row| row.course_constraints)
@@ -4214,6 +4221,8 @@ impl SkinDocument {
         state.select_replay_slots = row.replay_slots;
         state.select_replay_index = select_row_replay_index(row);
         state.select_clear_index = select_row_clear_index(row) as i64;
+        state.select_favorite_song = row.favorite_song;
+        state.select_favorite_chart = row.favorite_chart;
         state.select_row_kind = row.kind;
         state.select_course_constraints = row.course_constraints;
         state.select_is_folder = row.is_folder;
@@ -8621,6 +8630,14 @@ fn player_total_play_notes(stats: &PlayerStatsSnapshot) -> u64 {
 }
 
 fn skin_state_number(ref_id: i32, state: &SkinDrawState) -> Option<i64> {
+    if state.select_screen {
+        match ref_id {
+            89 => return Some(i64::from(state.select_favorite_song)),
+            90 => return Some(i64::from(state.select_favorite_chart)),
+            _ => {}
+        }
+    }
+
     if state.select_screen
         && select_chart_score_number_requires_song(ref_id)
         && !select_chart_metadata_available(state)
@@ -22686,6 +22703,22 @@ mod tests {
         let no_judge =
             SkinDrawState { judge_timing_ms: [None; MAX_JUDGE_REGIONS], ..state.clone() };
         assert_eq!(skin_state_number(525, &no_judge), None);
+    }
+
+    #[test]
+    fn skin_state_number_select_favorite_refs() {
+        let state = SkinDrawState {
+            select_screen: true,
+            select_favorite_song: true,
+            select_favorite_chart: false,
+            max_bpm: 200.0,
+            ..SkinDrawState::default()
+        };
+        assert_eq!(skin_state_number(89, &state), Some(1));
+        assert_eq!(skin_state_number(90, &state), Some(0));
+
+        let chart_favorite = SkinDrawState { select_favorite_chart: true, ..state };
+        assert_eq!(skin_state_number(90, &chart_favorite), Some(1));
     }
 
     #[test]

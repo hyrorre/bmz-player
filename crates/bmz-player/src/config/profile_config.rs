@@ -40,6 +40,8 @@ pub struct SelectStateConfig {
     pub mode_filter: String,
     #[serde(default = "default_select_sort")]
     pub sort: String,
+    #[serde(default)]
+    pub random_select: bool,
 }
 
 pub fn default_select_mode_filter() -> String {
@@ -52,7 +54,11 @@ pub fn default_select_sort() -> String {
 
 impl Default for SelectStateConfig {
     fn default() -> Self {
-        Self { mode_filter: default_select_mode_filter(), sort: default_select_sort() }
+        Self {
+            mode_filter: default_select_mode_filter(),
+            sort: default_select_sort(),
+            random_select: false,
+        }
     }
 }
 
@@ -473,6 +479,12 @@ pub enum InputActionConfig {
     SelectOptionAssist,
     #[serde(rename = "OptionBga")]
     SelectOptionBga,
+    #[serde(rename = "FavoriteSong")]
+    SelectFavoriteSong,
+    #[serde(rename = "FavoriteChart")]
+    SelectFavoriteChart,
+    #[serde(rename = "SameFolder")]
+    SelectSameFolder,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -1033,6 +1045,9 @@ pub fn default_keyboard_bindings() -> Vec<BindingConfigEntry> {
         action_binding("X", InputActionConfig::SelectOptionGauge),
         action_binding("C", InputActionConfig::SelectOptionAssist),
         action_binding("Z", InputActionConfig::SelectOptionBga),
+        action_binding("F8", InputActionConfig::SelectFavoriteSong),
+        action_binding("F9", InputActionConfig::SelectFavoriteChart),
+        action_binding("Numpad8", InputActionConfig::SelectSameFolder),
     ]
 }
 
@@ -1221,17 +1236,23 @@ mod tests {
 
         assert_eq!(select.mode_filter, "ALL");
         assert_eq!(select.sort, "TITLE");
+        assert!(!select.random_select);
     }
 
     #[test]
     fn select_state_roundtrips_through_toml() {
-        let select = SelectStateConfig { mode_filter: "7K".to_string(), sort: "LEVEL".to_string() };
+        let select = SelectStateConfig {
+            mode_filter: "7K".to_string(),
+            sort: "LEVEL".to_string(),
+            random_select: true,
+        };
 
         let toml = toml::to_string(&select).unwrap();
         let parsed: SelectStateConfig = toml::from_str(&toml).unwrap();
 
         assert_eq!(parsed.mode_filter, "7K");
         assert_eq!(parsed.sort, "LEVEL");
+        assert!(parsed.random_select);
     }
 
     #[test]

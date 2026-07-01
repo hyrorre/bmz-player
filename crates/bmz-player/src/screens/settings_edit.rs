@@ -332,6 +332,9 @@ impl SettingsEditSession {
             SettingsEntryId::SelectInputMode => {
                 SettingsBaseline::SelectInputMode(profile.input.select_input_mode)
             }
+            SettingsEntryId::SelectRandomSelect => {
+                SettingsBaseline::Bool(profile.select.random_select)
+            }
             SettingsEntryId::ScratchInputMode => {
                 SettingsBaseline::ScratchInputMode(profile.input.scratch_mode)
             }
@@ -473,6 +476,9 @@ impl SettingsEditSession {
             }
             (SettingsEntryId::SelectInputMode, SettingsBaseline::SelectInputMode(value)) => {
                 profile.input.select_input_mode = *value;
+            }
+            (SettingsEntryId::SelectRandomSelect, SettingsBaseline::Bool(value)) => {
+                profile.select.random_select = *value;
             }
             (SettingsEntryId::ScratchInputMode, SettingsBaseline::ScratchInputMode(value)) => {
                 profile.input.scratch_mode = *value;
