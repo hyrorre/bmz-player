@@ -2086,7 +2086,8 @@ pub struct SkinDrawState {
     pub select_course_constraints: CourseConstraintFlags,
     /// 選択中バーがフォルダかどうか。
     pub select_is_folder: bool,
-    /// 選択中曲が library.db に登録済みかどうか (OPTION_PLAYABLEBAR=5)。
+    /// 選択中 SongBar / GradeBar 相当が library.db に登録済みかどうか。
+    /// OPTION_PLAYABLEBAR=5 と no-songs SkinBar 表示に使う。
     pub select_in_library: bool,
     /// 選択中曲のノーツ数。
     pub select_total_notes: u32,
@@ -7443,17 +7444,27 @@ fn test_skin_op(op: i32, enabled_options: &[i32], state: &SkinDrawState) -> bool
             SelectRowKind::Folder
                 | SelectRowKind::TableFolder
                 | SelectRowKind::SearchFolder
+                | SelectRowKind::Command
+                | SelectRowKind::Container
                 | SelectRowKind::SettingsFolder
         ),
         2 => select_song_detail_row(state),
         3 => state.select_row_kind == SelectRowKind::Course,
+        1030 => state.select_row_kind == SelectRowKind::Executable,
+        1031 => state.select_row_kind == SelectRowKind::RandomCourse,
         1008 => state.table_song,
         1002..=1017 => gradebar_constraint_op_matches(op, state),
         5 => {
             !state.in_settings
-                && !state.select_is_folder
-                && state.select_in_library
-                && state.select_row_kind == SelectRowKind::Song
+                && (matches!(state.select_row_kind, SelectRowKind::Executable)
+                    || (state.select_in_library
+                        && !state.select_is_folder
+                        && matches!(
+                            state.select_row_kind,
+                            SelectRowKind::Song
+                                | SelectRowKind::Course
+                                | SelectRowKind::RandomCourse
+                        )))
         }
         // BMZ currently has no IR backend, matching beatoraja's offline state.
         50 => true,
@@ -10835,11 +10846,14 @@ fn score_target_timer_elapsed_ms(timer_id: i32, state: &SkinDrawState) -> Option
 fn select_row_bar_image_index(row: &SelectRowSnapshot) -> usize {
     match row.kind {
         SelectRowKind::Song if !row.in_library => 4,
+        SelectRowKind::Course | SelectRowKind::RandomCourse if !row.in_library => 4,
+        SelectRowKind::NoSong => 4,
         SelectRowKind::Song => 0,
         SelectRowKind::Folder => 1,
-        SelectRowKind::TableFolder => 2,
+        SelectRowKind::TableFolder | SelectRowKind::Executable | SelectRowKind::RandomCourse => 2,
         SelectRowKind::SearchFolder => 6,
         SelectRowKind::Course => 3,
+        SelectRowKind::Command | SelectRowKind::Container => 5,
         SelectRowKind::SettingsFolder => 1,
         SelectRowKind::Config => 0,
     }
@@ -10855,13 +10869,14 @@ fn select_row_bar_image_fallback_index(row: &SelectRowSnapshot) -> Option<usize>
 fn select_row_bar_text_index(row: &SelectRowSnapshot) -> usize {
     match row.kind {
         SelectRowKind::Song if !row.in_library => 8,
+        SelectRowKind::Course | SelectRowKind::RandomCourse if !row.in_library => 8,
+        SelectRowKind::NoSong => 8,
         SelectRowKind::Song => 2,
         SelectRowKind::Folder => 4,
-        SelectRowKind::TableFolder => 6,
+        SelectRowKind::TableFolder | SelectRowKind::Executable | SelectRowKind::RandomCourse => 6,
         SelectRowKind::SearchFolder => 10,
-        // Course rows display the course title in the same slot as a song title
-        // (text index 2), not the folder slot (6).
-        SelectRowKind::Course => 2,
+        SelectRowKind::Course => 7,
+        SelectRowKind::Command | SelectRowKind::Container => 9,
         SelectRowKind::SettingsFolder => 4,
         SelectRowKind::Config => 2,
     }
@@ -11006,10 +11021,7 @@ fn result_arrange_op_matches(op: i32, state: &SkinDrawState) -> bool {
 }
 
 fn select_song_detail_row(state: &SkinDrawState) -> bool {
-    matches!(
-        state.select_row_kind,
-        SelectRowKind::Song if !state.select_is_folder && state.select_in_library
-    )
+    matches!(state.select_row_kind, SelectRowKind::Song) && !state.select_is_folder
 }
 
 fn select_banner_option_matches(want_banner: bool, state: &SkinDrawState) -> bool {
@@ -11075,11 +11087,21 @@ fn select_detail_subtitle<'a>(
 fn select_row_shows_score_decorations(row: &SelectRowSnapshot) -> bool {
     !row.is_folder
         && row.in_library
-        && !matches!(row.kind, SelectRowKind::Config | SelectRowKind::SettingsFolder)
+        && matches!(row.kind, SelectRowKind::Song | SelectRowKind::Course)
 }
 
 fn select_row_shows_lamp(row: &SelectRowSnapshot) -> bool {
-    row.in_library && !matches!(row.kind, SelectRowKind::Config | SelectRowKind::SettingsFolder)
+    row.in_library
+        && matches!(
+            row.kind,
+            SelectRowKind::Song
+                | SelectRowKind::Course
+                | SelectRowKind::Folder
+                | SelectRowKind::TableFolder
+                | SelectRowKind::SearchFolder
+                | SelectRowKind::Command
+                | SelectRowKind::Container
+        )
 }
 
 fn select_row_shows_course_trophy(row: &SelectRowSnapshot) -> bool {
@@ -11090,7 +11112,11 @@ fn select_row_shows_folder_distribution(row: &SelectRowSnapshot) -> bool {
     row.is_folder
         && matches!(
             row.kind,
-            SelectRowKind::Folder | SelectRowKind::TableFolder | SelectRowKind::SearchFolder
+            SelectRowKind::Folder
+                | SelectRowKind::TableFolder
+                | SelectRowKind::SearchFolder
+                | SelectRowKind::Command
+                | SelectRowKind::Container
         )
 }
 
@@ -13748,19 +13774,43 @@ mod tests {
     }
 
     #[test]
-    fn select_row_bar_image_index_unowned_song_uses_nograde() {
-        let owned = SelectRowSnapshot { in_library: true, ..SelectRowSnapshot::default() };
-        let unowned = SelectRowSnapshot { in_library: false, ..SelectRowSnapshot::default() };
-        assert_eq!(select_row_bar_image_index(&owned), 0);
-        assert_eq!(select_row_bar_image_index(&unowned), 4);
-    }
+    fn select_row_bar_slots_follow_beatoraja_bar_types() {
+        let cases = [
+            (SelectRowKind::Song, true, 0, 2),
+            (SelectRowKind::Song, false, 4, 8),
+            (SelectRowKind::Folder, true, 1, 4),
+            (SelectRowKind::TableFolder, true, 2, 6),
+            (SelectRowKind::SearchFolder, true, 6, 10),
+            (SelectRowKind::Course, true, 3, 7),
+            (SelectRowKind::Course, false, 4, 8),
+            (SelectRowKind::Executable, true, 2, 6),
+            (SelectRowKind::RandomCourse, true, 2, 6),
+            (SelectRowKind::RandomCourse, false, 4, 8),
+            (SelectRowKind::Command, true, 5, 9),
+            (SelectRowKind::Container, true, 5, 9),
+            (SelectRowKind::NoSong, false, 4, 8),
+            (SelectRowKind::SettingsFolder, true, 1, 4),
+            (SelectRowKind::Config, true, 0, 2),
+        ];
 
-    #[test]
-    fn select_row_bar_text_index_unowned_song_uses_no_songs_text() {
-        let owned = SelectRowSnapshot { in_library: true, ..SelectRowSnapshot::default() };
-        let unowned = SelectRowSnapshot { in_library: false, ..SelectRowSnapshot::default() };
-        assert_eq!(select_row_bar_text_index(&owned), 2);
-        assert_eq!(select_row_bar_text_index(&unowned), 8);
+        for (kind, in_library, image_index, text_index) in cases {
+            let row = SelectRowSnapshot {
+                kind,
+                in_library,
+                is_folder: matches!(
+                    kind,
+                    SelectRowKind::Folder
+                        | SelectRowKind::TableFolder
+                        | SelectRowKind::SearchFolder
+                        | SelectRowKind::Command
+                        | SelectRowKind::Container
+                        | SelectRowKind::SettingsFolder
+                ),
+                ..SelectRowSnapshot::default()
+            };
+            assert_eq!(select_row_bar_image_index(&row), image_index, "image index for {kind:?}");
+            assert_eq!(select_row_bar_text_index(&row), text_index, "text index for {kind:?}");
+        }
     }
 
     #[test]
@@ -13813,22 +13863,55 @@ mod tests {
             select_is_folder: true,
             ..SkinDrawState::default()
         };
+        let command = SkinDrawState {
+            select_row_kind: SelectRowKind::Command,
+            select_is_folder: true,
+            ..SkinDrawState::default()
+        };
+        let container = SkinDrawState {
+            select_row_kind: SelectRowKind::Container,
+            select_is_folder: true,
+            ..SkinDrawState::default()
+        };
+        let executable = SkinDrawState {
+            select_row_kind: SelectRowKind::Executable,
+            select_is_folder: false,
+            ..SkinDrawState::default()
+        };
+        let random_course = SkinDrawState {
+            select_row_kind: SelectRowKind::RandomCourse,
+            select_is_folder: false,
+            ..SkinDrawState::default()
+        };
         let course = SkinDrawState {
             select_row_kind: SelectRowKind::Course,
             select_is_folder: false,
             ..SkinDrawState::default()
         };
+        let unowned_song = SkinDrawState {
+            select_row_kind: SelectRowKind::Song,
+            select_is_folder: false,
+            select_in_library: false,
+            ..SkinDrawState::default()
+        };
 
         assert!(test_skin_op(2, &[], &song));
+        assert!(test_skin_op(2, &[], &unowned_song));
         assert!(!test_skin_op(1, &[], &song));
         assert!(!test_skin_op(3, &[], &song));
         assert!(test_skin_op(1, &[], &folder));
         assert!(test_skin_op(1, &[], &table_folder));
         assert!(test_skin_op(1, &[], &search_folder));
         assert!(test_skin_op(1, &[], &settings_folder));
+        assert!(test_skin_op(1, &[], &command));
+        assert!(test_skin_op(1, &[], &container));
         assert!(!test_skin_op(2, &[], &folder));
         assert!(test_skin_op(3, &[], &course));
         assert!(!test_skin_op(2, &[], &course));
+        assert!(test_skin_op(1030, &[], &executable));
+        assert!(!test_skin_op(1030, &[], &random_course));
+        assert!(test_skin_op(1031, &[], &random_course));
+        assert!(!test_skin_op(1031, &[], &course));
     }
 
     #[test]
@@ -13894,16 +13977,43 @@ mod tests {
     #[test]
     fn playable_bar_op_matches_library_presence() {
         let owned_song = SkinDrawState {
+            select_row_kind: SelectRowKind::Song,
             select_is_folder: false,
             select_in_library: true,
             ..SkinDrawState::default()
         };
         let unowned_song = SkinDrawState {
+            select_row_kind: SelectRowKind::Song,
+            select_is_folder: false,
+            select_in_library: false,
+            ..SkinDrawState::default()
+        };
+        let owned_course = SkinDrawState {
+            select_row_kind: SelectRowKind::Course,
+            select_is_folder: false,
+            select_in_library: true,
+            ..SkinDrawState::default()
+        };
+        let unowned_course = SkinDrawState {
+            select_row_kind: SelectRowKind::Course,
+            select_is_folder: false,
+            select_in_library: false,
+            ..SkinDrawState::default()
+        };
+        let owned_random_course = SkinDrawState {
+            select_row_kind: SelectRowKind::RandomCourse,
+            select_is_folder: false,
+            select_in_library: true,
+            ..SkinDrawState::default()
+        };
+        let executable = SkinDrawState {
+            select_row_kind: SelectRowKind::Executable,
             select_is_folder: false,
             select_in_library: false,
             ..SkinDrawState::default()
         };
         let folder = SkinDrawState {
+            select_row_kind: SelectRowKind::Folder,
             select_is_folder: true,
             select_in_library: true,
             ..SkinDrawState::default()
@@ -13911,6 +14021,10 @@ mod tests {
 
         assert!(test_skin_op(5, &[], &owned_song));
         assert!(!test_skin_op(5, &[], &unowned_song));
+        assert!(test_skin_op(5, &[], &owned_course));
+        assert!(!test_skin_op(5, &[], &unowned_course));
+        assert!(test_skin_op(5, &[], &owned_random_course));
+        assert!(test_skin_op(5, &[], &executable));
         assert!(!test_skin_op(5, &[], &folder));
         assert!(!test_skin_op(-5, &[], &owned_song));
         assert!(test_skin_op(-5, &[], &unowned_song));

@@ -383,6 +383,11 @@ pub enum SelectRowKind {
     TableFolder,
     SearchFolder,
     Course,
+    Executable,
+    RandomCourse,
+    Command,
+    Container,
+    NoSong,
     SettingsFolder,
     Config,
 }

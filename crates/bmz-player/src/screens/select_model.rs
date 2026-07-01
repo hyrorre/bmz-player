@@ -1331,6 +1331,11 @@ pub fn select_folder_summary_for_rule_mode(
         },
         SelectRowKind::Song
         | SelectRowKind::Course
+        | SelectRowKind::Executable
+        | SelectRowKind::RandomCourse
+        | SelectRowKind::Command
+        | SelectRowKind::Container
+        | SelectRowKind::NoSong
         | SelectRowKind::SettingsFolder
         | SelectRowKind::Config => Ok(None),
     }
