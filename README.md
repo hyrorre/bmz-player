@@ -121,29 +121,9 @@ cargo build
 cargo run
 ```
 
-## TODO
-
-- [ ] BGAが重なって表示されている
-- [ ] IR送信後、選曲画面のランキングが更新されない
-- [ ] play skin turntable の回転方向が逆
-- [ ] decide/resultのfadeoutスキップボタンをKey1/3/5/7からE1/E2に変更検討
-- [ ] E1+E2 でも decide のキャンセル操作を行えるよう変更
-- [ ] 難易度表のデフォルトを追加 (DP/PMS)
-- [ ] ln_policyをAUTO/FORCEとLN/CN/HCNに分けることでselect skinのLN変更機能を有効化
-- [ ] IR側でln_policyが見やすくなるよう表示を調整
-- [ ] アシストオプション、詳細オプション実装
-- [ ] Select画面の操作変更とスキン側の不一致について考える
-- [ ] Select画面の操作が一部profile.tomlに設定されており複雑なので整理
-- [ ] egui設定ウィンドウを整理
-- [ ] skin 独自拡張(ref/timer) 仕様検討
-  - [ ] NHS / FHS
-  - [ ] Ranking 切り替え (Ranking / Rival / Self-only)
-  - [ ] WMII result skin 対応
-  - [ ] select skin の option panel系
-
-
 ## Roadmap
 
+- [ ] more beatoraja-compatible features 
 - [ ] IR score.db import (IRからスコアをダウンロードしてscore.dbに保存する機能)
 - [ ] IR score.db upload (ローカルのscore.dbをIRにアップロードする機能)
 - [ ] random select
@@ -155,7 +135,7 @@ cargo run
 - [ ] Discord Rich Presence
 - [ ] Arena Mode
 - [ ] i18n (en / ko / zh-CN / zh-TW / zh-HK)
-- [ ] RawInput / GameInput / 8000Hz Input
+- [ ] low-latency input (keyboard / controller)
 - [ ] WASAPI exclusive
 - [ ] ギミック系BMSへの対応
 - [ ] auto generate preview
