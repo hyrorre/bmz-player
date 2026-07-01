@@ -28,6 +28,7 @@ pub struct ProfilePaths {
     pub profile_toml: PathBuf,
     pub collection_db: PathBuf,
     pub score_db: PathBuf,
+    pub network_db: PathBuf,
     pub replay_dir: PathBuf,
 }
 
@@ -65,6 +66,7 @@ pub fn resolve_profile_paths(app: &AppPaths, profile_id: &str) -> Result<Profile
         profile_toml: root_dir.join("profile.toml"),
         collection_db: root_dir.join("collection.db"),
         score_db: root_dir.join("score.db"),
+        network_db: root_dir.join("network.db"),
         replay_dir: root_dir.join("replay"),
         root_dir,
     })
@@ -407,6 +409,7 @@ mod tests {
         assert_eq!(paths.root_dir, PathBuf::from("data/profiles/default-1"));
         assert_eq!(paths.collection_db, PathBuf::from("data/profiles/default-1/collection.db"));
         assert_eq!(paths.score_db, PathBuf::from("data/profiles/default-1/score.db"));
+        assert_eq!(paths.network_db, PathBuf::from("data/profiles/default-1/network.db"));
     }
 
     #[test]

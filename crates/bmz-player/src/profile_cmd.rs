@@ -9,7 +9,7 @@ use crate::config::load::{load_app_config, load_profile_config};
 use crate::config::profile_config::ProfileConfig;
 use crate::config::save::{save_app_config, save_profile_config};
 use crate::paths::{AppPaths, ProfilePaths, resolve_app_paths, resolve_profile_paths};
-use crate::storage::migration::{migrate_collection_db, migrate_score_db};
+use crate::storage::migration::{migrate_collection_db, migrate_network_db, migrate_score_db};
 
 pub fn run_profile_command(cmd: ProfileCommand) -> Result<()> {
     let app_paths = resolve_app_paths()?;
@@ -90,6 +90,7 @@ pub fn create_profile(
     save_profile_config(&profile_paths.profile_toml, &profile)?;
     migrate_collection_db(&profile_paths.collection_db)?;
     migrate_score_db(&profile_paths.score_db)?;
+    migrate_network_db(&profile_paths.network_db)?;
 
     if activate {
         set_active_profile(app_paths, id)?;
@@ -232,6 +233,7 @@ mod tests {
         assert_eq!(app_config.active_profile, "alt");
         assert!(profile_paths.collection_db.exists());
         assert!(profile_paths.score_db.exists());
+        assert!(profile_paths.network_db.exists());
         assert!(profile_paths.replay_dir.exists());
 
         let _ = fs::remove_dir_all(&app_paths.data_dir);
@@ -261,6 +263,7 @@ mod tests {
         assert!(!target_paths.replay_dir.exists());
         assert!(!target_paths.collection_db.exists());
         assert!(!target_paths.score_db.exists());
+        assert!(!target_paths.network_db.exists());
 
         let _ = fs::remove_dir_all(&app_paths.data_dir);
     }

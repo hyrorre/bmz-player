@@ -15,7 +15,7 @@ use crate::ir::credentials::{
 use crate::ir::sync::{ensure_fresh_credentials, sync_pending_ir_jobs};
 use crate::ir::types::IrRankingScope;
 use crate::paths::{ProfilePaths, resolve_app_paths, resolve_profile_paths};
-use crate::storage::score_db::ScoreDatabase;
+use crate::storage::network_db::NetworkDatabase;
 
 pub async fn run_ir_command(cmd: IrCommand) -> Result<()> {
     let (profile_paths, mut profile) = load_active_profile()?;
@@ -485,11 +485,15 @@ async fn ranking(
 }
 
 async fn sync(profile_paths: &ProfilePaths, profile: &ProfileConfig) -> Result<()> {
+    let app_paths = resolve_app_paths()?;
     crate::storage::migration::migrate_score_db(&profile_paths.score_db)?;
-    let mut score_db = ScoreDatabase::open(&profile_paths.score_db)?;
+    crate::storage::migration::migrate_network_db(&profile_paths.network_db)?;
+    let mut network_db = NetworkDatabase::open(&profile_paths.network_db)?;
     let report = sync_pending_ir_jobs(
-        &mut score_db,
+        &mut network_db,
+        &profile_paths.score_db,
         profile_paths.root_dir.as_path(),
+        app_paths.logs_dir.as_path(),
         &profile.ir,
         now_unix_seconds(),
         50,

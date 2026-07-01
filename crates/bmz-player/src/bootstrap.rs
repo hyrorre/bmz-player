@@ -15,6 +15,7 @@ use crate::screens::play_start::{
 };
 use crate::storage::collection_db::CollectionDatabase;
 use crate::storage::library_db::LibraryDatabase;
+use crate::storage::network_db::NetworkDatabase;
 use crate::storage::scan::{ScanReport, scan_song_roots};
 use crate::storage::score_db::ScoreDatabase;
 use bmz_gameplay::input::backend::InputBackend;
@@ -27,6 +28,7 @@ pub struct BootstrappedApp {
     pub library_db: LibraryDatabase,
     pub collection_db: CollectionDatabase,
     pub score_db: ScoreDatabase,
+    pub network_db: NetworkDatabase,
     pub startup_scan: Option<ScanReport>,
 }
 
@@ -103,6 +105,7 @@ pub fn bootstrap() -> Result<BootstrappedApp> {
     crate::storage::migration::migrate_library_db(&app_paths.library_db)?;
     crate::storage::migration::migrate_collection_db(&profile_paths.collection_db)?;
     crate::storage::migration::migrate_score_db(&profile_paths.score_db)?;
+    crate::storage::migration::migrate_network_db(&profile_paths.network_db)?;
 
     let mut library_db = LibraryDatabase::open(&app_paths.library_db)?;
     let bundled_sample_root = bundled_sample_song_root(&app_paths);
@@ -120,6 +123,7 @@ pub fn bootstrap() -> Result<BootstrappedApp> {
     };
     let collection_db = CollectionDatabase::open(&profile_paths.collection_db)?;
     let score_db = ScoreDatabase::open(&profile_paths.score_db)?;
+    let network_db = NetworkDatabase::open(&profile_paths.network_db)?;
 
     Ok(BootstrappedApp {
         app_config,
@@ -129,6 +133,7 @@ pub fn bootstrap() -> Result<BootstrappedApp> {
         library_db,
         collection_db,
         score_db,
+        network_db,
         startup_scan,
     })
 }

@@ -365,6 +365,8 @@ fn scope_for_tab(tab: ResultRankingTab) -> IrRankingScope {
 pub fn spawn_result_ir_task(
     profile_root: PathBuf,
     score_db_path: PathBuf,
+    network_db_path: PathBuf,
+    logs_dir: PathBuf,
     ir_config: &IrConfig,
     chart_sha256_hex: String,
     ln_policy: LnScorePolicy,
@@ -374,6 +376,8 @@ pub fn spawn_result_ir_task(
     spawn_result_ir_task_for_target(
         profile_root,
         score_db_path,
+        network_db_path,
+        logs_dir,
         ir_config,
         ResultIrTarget::Chart { chart_sha256_hex, ln_policy, double_option, rule_mode },
     )
@@ -382,6 +386,8 @@ pub fn spawn_result_ir_task(
 pub fn spawn_course_result_ir_task(
     profile_root: PathBuf,
     score_db_path: PathBuf,
+    network_db_path: PathBuf,
+    logs_dir: PathBuf,
     ir_config: &IrConfig,
     course_hash: String,
     gauge: String,
@@ -390,6 +396,8 @@ pub fn spawn_course_result_ir_task(
     spawn_result_ir_task_for_target(
         profile_root,
         score_db_path,
+        network_db_path,
+        logs_dir,
         ir_config,
         ResultIrTarget::Course { course_hash, gauge, ln_policy },
     )
@@ -398,6 +406,8 @@ pub fn spawn_course_result_ir_task(
 fn spawn_result_ir_task_for_target(
     profile_root: PathBuf,
     score_db_path: PathBuf,
+    network_db_path: PathBuf,
+    logs_dir: PathBuf,
     ir_config: &IrConfig,
     target: ResultIrTarget,
 ) -> Option<ResultIrState> {
@@ -439,9 +449,19 @@ fn spawn_result_ir_task_for_target(
     tokio::spawn(async move {
         let now = now_unix_seconds();
         let outcome = async {
-            let mut score_db = crate::storage::score_db::ScoreDatabase::open(&score_db_path)?;
-            sync_pending_ir_jobs(&mut score_db, &submit_query.profile_root, &ir_config, now, 20)
-                .await
+            crate::storage::migration::migrate_network_db(&network_db_path)?;
+            let mut network_db =
+                crate::storage::network_db::NetworkDatabase::open(&network_db_path)?;
+            sync_pending_ir_jobs(
+                &mut network_db,
+                &score_db_path,
+                &submit_query.profile_root,
+                &logs_dir,
+                &ir_config,
+                now,
+                20,
+            )
+            .await
         }
         .await;
         let mut included_global_ranking = None;

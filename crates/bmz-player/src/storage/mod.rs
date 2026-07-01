@@ -6,6 +6,7 @@ pub mod difficulty_table_db;
 pub mod import;
 pub mod library_db;
 pub mod migration;
+pub mod network_db;
 pub mod play_result;
 pub mod profile;
 pub mod replay;

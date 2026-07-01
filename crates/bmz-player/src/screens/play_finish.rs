@@ -13,11 +13,11 @@ use crate::ir::payload::{IrSubmissionContext, build_score_submission};
 use crate::paths::ProfilePaths;
 use crate::screens::play_session::AppliedArrange;
 use crate::screens::result_model::ResultSummary;
+use crate::storage::network_db::{IrJobKind, NetworkDatabase, NewIrScoreJob};
 use crate::storage::play_result::{
     StorePlayResultMode, StorePlayResultRequest, StoredPlayResult, course_stage_clear_type,
     store_play_result,
 };
-use crate::storage::score_db::NewIrScoreJob;
 use crate::storage::score_db::{ScoreDatabase, ScoreKey};
 
 #[derive(Debug, Clone)]
@@ -77,6 +77,7 @@ pub fn play_result_from_session(session: &GameSession) -> PlayResult {
 
 pub fn store_session_result(
     score_db: &mut ScoreDatabase,
+    network_db: &mut NetworkDatabase,
     profile_paths: &ProfilePaths,
     replay_config: &ReplayConfig,
     ir_config: &IrConfig,
@@ -88,6 +89,7 @@ pub fn store_session_result(
 ) -> Result<StoredPlayResult> {
     Ok(finish_session_result(
         score_db,
+        network_db,
         profile_paths,
         replay_config,
         ir_config,
@@ -105,6 +107,7 @@ pub fn store_session_result(
 #[allow(clippy::too_many_arguments)]
 pub fn finish_session_result(
     score_db: &mut ScoreDatabase,
+    network_db: &mut NetworkDatabase,
     profile_paths: &ProfilePaths,
     replay_config: &ReplayConfig,
     ir_config: &IrConfig,
@@ -195,7 +198,7 @@ pub fn finish_session_result(
         let mut ir_result = result.clone();
         ir_result.clear_type = summary_clear_type;
         enqueue_ir_jobs(
-            score_db,
+            network_db,
             profile_paths,
             ir_config,
             session,
@@ -248,7 +251,7 @@ fn clear_type_from_name(name: &str) -> Option<ClearType> {
 
 #[allow(clippy::too_many_arguments)]
 fn enqueue_ir_jobs(
-    score_db: &mut ScoreDatabase,
+    network_db: &mut NetworkDatabase,
     profile_paths: &ProfilePaths,
     ir_config: &IrConfig,
     session: &GameSession,
@@ -303,10 +306,10 @@ fn enqueue_ir_jobs(
             ));
             continue;
         };
-        match score_db.enqueue_ir_score_job(&NewIrScoreJob {
+        match network_db.enqueue_ir_score_job(&NewIrScoreJob {
             provider: provider_key.to_string(),
             account_id: provider.account_id.clone(),
-            kind: crate::storage::score_db::IrJobKind::Score,
+            kind: IrJobKind::Score,
             local_score_id: stored.score_history_id,
             chart_sha256: result.chart_sha256,
             ln_policy: score_key.ln_policy,
@@ -382,6 +385,7 @@ fn effective_ln_mode_from_score_policy(policy: crate::ln_policy::LnScorePolicy) 
 pub fn finish_session_result_once(
     cached: &mut Option<FinishedPlaySession>,
     score_db: &mut ScoreDatabase,
+    network_db: &mut NetworkDatabase,
     request: FinishSessionResultOnceRequest<'_>,
 ) -> Result<FinishedPlaySession> {
     if let Some(finished) = cached.clone() {
@@ -390,6 +394,7 @@ pub fn finish_session_result_once(
 
     let finished = finish_session_result(
         score_db,
+        network_db,
         request.profile_paths,
         request.replay_config,
         request.ir_config,
@@ -449,7 +454,7 @@ mod tests {
     use crate::config::play::DEFAULT_JUDGE_WINDOW;
     use crate::config::profile_config::{IrConfig, IrProviderConfig, ReplayConfig};
     use crate::storage::common::configure_connection;
-    use crate::storage::migration::{SCORE_MIGRATIONS, run_migrations};
+    use crate::storage::migration::{NETWORK_MIGRATIONS, SCORE_MIGRATIONS, run_migrations};
 
     #[test]
     fn should_send_ir_score_follows_policy() {
@@ -495,6 +500,13 @@ mod tests {
         assert!(should_send_ir_score(IrSendPolicyConfig::UpdateScore, &improved, Some(&best)));
     }
 
+    fn open_network_db() -> NetworkDatabase {
+        let mut conn = Connection::open_in_memory().unwrap();
+        configure_connection(&conn).unwrap();
+        run_migrations(&mut conn, NETWORK_MIGRATIONS).unwrap();
+        NetworkDatabase::from_connection(conn)
+    }
+
     #[test]
     fn play_result_from_session_uses_session_state() {
         let session = session();
@@ -514,12 +526,14 @@ mod tests {
             profile_toml: root.join("profile.toml"),
             collection_db: root.join("collection.db"),
             score_db: root.join("score.db"),
+            network_db: root.join("network.db"),
             replay_dir: root.join("replay"),
         };
         let mut conn = Connection::open_in_memory().unwrap();
         configure_connection(&conn).unwrap();
         run_migrations(&mut conn, SCORE_MIGRATIONS).unwrap();
         let mut score_db = ScoreDatabase::from_connection(conn);
+        let mut network_db = open_network_db();
         let replay_config = ReplayConfig {
             auto_save: true,
             compress: false,
@@ -537,6 +551,7 @@ mod tests {
 
         let stored = store_session_result(
             &mut score_db,
+            &mut network_db,
             &paths,
             &replay_config,
             &crate::config::profile_config::IrConfig::default(),
@@ -563,12 +578,14 @@ mod tests {
             profile_toml: root.join("profile.toml"),
             collection_db: root.join("collection.db"),
             score_db: root.join("score.db"),
+            network_db: root.join("network.db"),
             replay_dir: root.join("replay"),
         };
         let mut conn = Connection::open_in_memory().unwrap();
         configure_connection(&conn).unwrap();
         run_migrations(&mut conn, SCORE_MIGRATIONS).unwrap();
         let mut score_db = ScoreDatabase::from_connection(conn);
+        let mut network_db = open_network_db();
         let replay_config = ReplayConfig {
             auto_save: true,
             compress: false,
@@ -586,6 +603,7 @@ mod tests {
 
         let finished = finish_session_result(
             &mut score_db,
+            &mut network_db,
             &paths,
             &replay_config,
             &crate::config::profile_config::IrConfig::default(),
@@ -618,12 +636,14 @@ mod tests {
             profile_toml: root.join("profile.toml"),
             collection_db: root.join("collection.db"),
             score_db: root.join("score.db"),
+            network_db: root.join("network.db"),
             replay_dir: root.join("replay"),
         };
         let mut conn = Connection::open_in_memory().unwrap();
         configure_connection(&conn).unwrap();
         run_migrations(&mut conn, SCORE_MIGRATIONS).unwrap();
         let mut score_db = ScoreDatabase::from_connection(conn);
+        let mut network_db = open_network_db();
         let replay_config = ReplayConfig {
             auto_save: true,
             compress: false,
@@ -633,6 +653,7 @@ mod tests {
 
         let finished = finish_session_result(
             &mut score_db,
+            &mut network_db,
             &paths,
             &replay_config,
             &crate::config::profile_config::IrConfig::default(),
@@ -670,12 +691,14 @@ mod tests {
             profile_toml: root.join("profile.toml"),
             collection_db: root.join("collection.db"),
             score_db: root.join("score.db"),
+            network_db: root.join("network.db"),
             replay_dir: root.join("replay"),
         };
         let mut conn = Connection::open_in_memory().unwrap();
         configure_connection(&conn).unwrap();
         run_migrations(&mut conn, SCORE_MIGRATIONS).unwrap();
         let mut score_db = ScoreDatabase::from_connection(conn);
+        let mut network_db = open_network_db();
         let replay_config = ReplayConfig {
             auto_save: false,
             compress: false,
@@ -701,6 +724,7 @@ mod tests {
 
         let finished = finish_session_result(
             &mut score_db,
+            &mut network_db,
             &paths,
             &replay_config,
             &ir_config,
@@ -715,7 +739,7 @@ mod tests {
         .unwrap();
 
         assert_eq!(finished.summary.ir_queued_jobs, 1);
-        let jobs = score_db.pending_ir_score_jobs(1_700_000_110, 10).unwrap();
+        let jobs = network_db.pending_ir_score_jobs(1_700_000_110, 10).unwrap();
         assert_eq!(jobs.len(), 1);
         let payload: serde_json::Value = serde_json::from_str(&jobs[0].payload_json).unwrap();
         assert_eq!(payload["result"]["clear"], "NoPlay");
@@ -731,12 +755,14 @@ mod tests {
             profile_toml: root.join("profile.toml"),
             collection_db: root.join("collection.db"),
             score_db: root.join("score.db"),
+            network_db: root.join("network.db"),
             replay_dir: root.join("replay"),
         };
         let mut conn = Connection::open_in_memory().unwrap();
         configure_connection(&conn).unwrap();
         run_migrations(&mut conn, SCORE_MIGRATIONS).unwrap();
         let mut score_db = ScoreDatabase::from_connection(conn);
+        let mut network_db = open_network_db();
         let replay_config = ReplayConfig {
             auto_save: false,
             compress: false,
@@ -762,6 +788,7 @@ mod tests {
 
         let finished = finish_session_result(
             &mut score_db,
+            &mut network_db,
             &paths,
             &replay_config,
             &ir_config,
@@ -776,7 +803,7 @@ mod tests {
         .unwrap();
 
         assert_eq!(finished.summary.ir_queued_jobs, 1);
-        assert_eq!(score_db.pending_ir_score_jobs(1_700_000_108, 10).unwrap().len(), 1);
+        assert_eq!(network_db.pending_ir_score_jobs(1_700_000_108, 10).unwrap().len(), 1);
 
         std::fs::remove_dir_all(root).unwrap();
     }
@@ -789,12 +816,14 @@ mod tests {
             profile_toml: root.join("profile.toml"),
             collection_db: root.join("collection.db"),
             score_db: root.join("score.db"),
+            network_db: root.join("network.db"),
             replay_dir: root.join("replay"),
         };
         let mut conn = Connection::open_in_memory().unwrap();
         configure_connection(&conn).unwrap();
         run_migrations(&mut conn, SCORE_MIGRATIONS).unwrap();
         let mut score_db = ScoreDatabase::from_connection(conn);
+        let mut network_db = open_network_db();
         let replay_config = ReplayConfig {
             auto_save: true,
             compress: false,
@@ -806,6 +835,7 @@ mod tests {
         let first = finish_session_result_once(
             &mut cached,
             &mut score_db,
+            &mut network_db,
             FinishSessionResultOnceRequest {
                 profile_paths: &paths,
                 replay_config: &replay_config,
@@ -823,6 +853,7 @@ mod tests {
         let second = finish_session_result_once(
             &mut cached,
             &mut score_db,
+            &mut network_db,
             FinishSessionResultOnceRequest {
                 profile_paths: &paths,
                 replay_config: &replay_config,
@@ -852,12 +883,14 @@ mod tests {
             profile_toml: root.join("profile.toml"),
             collection_db: root.join("collection.db"),
             score_db: root.join("score.db"),
+            network_db: root.join("network.db"),
             replay_dir: root.join("replay"),
         };
         let mut conn = Connection::open_in_memory().unwrap();
         configure_connection(&conn).unwrap();
         run_migrations(&mut conn, SCORE_MIGRATIONS).unwrap();
         let mut score_db = ScoreDatabase::from_connection(conn);
+        let mut network_db = open_network_db();
         let replay_config = ReplayConfig {
             auto_save: true,
             compress: false,
@@ -868,6 +901,7 @@ mod tests {
 
         let finished = finish_session_result(
             &mut score_db,
+            &mut network_db,
             &paths,
             &replay_config,
             &crate::config::profile_config::IrConfig::default(),
@@ -898,12 +932,14 @@ mod tests {
             profile_toml: root.join("profile.toml"),
             collection_db: root.join("collection.db"),
             score_db: root.join("score.db"),
+            network_db: root.join("network.db"),
             replay_dir: root.join("replay"),
         };
         let mut conn = Connection::open_in_memory().unwrap();
         configure_connection(&conn).unwrap();
         run_migrations(&mut conn, SCORE_MIGRATIONS).unwrap();
         let mut score_db = ScoreDatabase::from_connection(conn);
+        let mut network_db = open_network_db();
         let replay_config = ReplayConfig {
             auto_save: true,
             compress: false,
@@ -914,6 +950,7 @@ mod tests {
 
         let finished = finish_session_result(
             &mut score_db,
+            &mut network_db,
             &paths,
             &replay_config,
             &crate::config::profile_config::IrConfig::default(),
@@ -944,12 +981,14 @@ mod tests {
             profile_toml: root.join("profile.toml"),
             collection_db: root.join("collection.db"),
             score_db: root.join("score.db"),
+            network_db: root.join("network.db"),
             replay_dir: root.join("replay"),
         };
         let mut conn = Connection::open_in_memory().unwrap();
         configure_connection(&conn).unwrap();
         run_migrations(&mut conn, SCORE_MIGRATIONS).unwrap();
         let mut score_db = ScoreDatabase::from_connection(conn);
+        let mut network_db = open_network_db();
         let replay_config = ReplayConfig {
             auto_save: true,
             compress: false,
@@ -960,6 +999,7 @@ mod tests {
 
         let result = store_session_result(
             &mut score_db,
+            &mut network_db,
             &paths,
             &replay_config,
             &crate::config::profile_config::IrConfig::default(),

@@ -1,10 +1,16 @@
+use std::collections::HashMap;
+use std::fs::OpenOptions;
+use std::io::Write;
 use std::path::Path;
 
 use anyhow::{Context, Result, bail};
 use tokio::sync::Mutex;
 
 use crate::config::profile_config::{IrConfig, IrProviderConfig};
-use crate::storage::score_db::{IrScoreJobStatus, NewIrScoreSubmission, ScoreDatabase};
+use crate::storage::network_db::{
+    IrJobKind, IrScoreJobRecord, IrScoreJobStatus, NetworkDatabase, NewIrScoreSubmission,
+};
+use crate::storage::score_db::ScoreDatabase;
 
 use super::bmz_official::BmzOfficialIrClient;
 use super::credentials::{IrStoredCredentials, load_credentials, save_credentials};
@@ -53,17 +59,20 @@ pub async fn ensure_fresh_credentials(
 
 /// pending / failed (retry時刻到達済み) の IR スコアジョブを送信する。
 pub async fn sync_pending_ir_jobs(
-    score_db: &mut ScoreDatabase,
+    network_db: &mut NetworkDatabase,
+    score_db_path: &Path,
     profile_root: &Path,
+    logs_dir: &Path,
     ir_config: &IrConfig,
     now: i64,
     limit: u32,
 ) -> Result<IrSyncReport> {
     let mut report = IrSyncReport::default();
-    let jobs = score_db.pending_ir_score_jobs(now, limit)?;
+    let jobs = network_db.pending_ir_score_jobs(now, limit)?;
+    let replay_paths = replay_paths_for_jobs(score_db_path, &jobs)?;
     for job in jobs {
         let Some(provider) = provider_config(ir_config, &job.provider) else {
-            score_db.mark_ir_score_job_status(
+            network_db.mark_ir_score_job_status(
                 job.id,
                 IrScoreJobStatus::Failed,
                 now,
@@ -75,17 +84,17 @@ pub async fn sync_pending_ir_jobs(
                 .push(format!("job {}: provider '{}' not configured", job.id, job.provider));
             continue;
         };
-        score_db.mark_ir_score_job_status(job.id, IrScoreJobStatus::Sending, now, "")?;
+        network_db.mark_ir_score_job_status(job.id, IrScoreJobStatus::Sending, now, "")?;
         let submit_result = match job.kind {
-            crate::storage::score_db::IrJobKind::Score => {
+            IrJobKind::Score => {
                 submit_job_payload(profile_root, provider, &job.payload_json, now).await
             }
-            crate::storage::score_db::IrJobKind::Course => {
+            IrJobKind::Course => {
                 submit_course_job_payload(profile_root, provider, &job.payload_json, now).await
             }
         };
         match submit_result {
-            Ok(response_json) => {
+            Ok((request_json, response_json)) => {
                 let parsed_response =
                     serde_json::from_str::<super::types::IrSubmitResponse>(&response_json).ok();
                 if let Some(ranking) = parsed_response
@@ -105,16 +114,26 @@ pub async fn sync_pending_ir_jobs(
                         )
                     })
                     .unwrap_or_default();
-                score_db.mark_ir_score_job_status(job.id, IrScoreJobStatus::Succeeded, now, "")?;
-                score_db.insert_ir_score_submission(&NewIrScoreSubmission {
+                let log_path = write_ir_submission_log(
+                    logs_dir,
+                    &job,
+                    "succeeded",
+                    &remote_score_id,
+                    now,
+                    &request_json,
+                    &response_json,
+                    "",
+                );
+                network_db.insert_ir_score_submission(&NewIrScoreSubmission {
                     job_id: job.id,
                     provider: job.provider.clone(),
                     account_id: job.account_id.clone(),
+                    kind: job.kind,
                     local_score_id: job.local_score_id,
                     remote_score_id: remote_score_id.clone(),
                     status: "succeeded".to_string(),
                     submitted_at: now,
-                    response_json,
+                    log_path,
                     error: String::new(),
                 })?;
                 report.submitted += 1;
@@ -122,19 +141,35 @@ pub async fn sync_pending_ir_jobs(
                 // succeeded のまま (リプレイは best 更新に影響しない)。
                 // コースジョブにはリプレイ申告がないため no-op になる。
                 upload_replay_if_declared(
-                    score_db,
                     profile_root,
                     provider,
                     &job.payload_json,
+                    replay_paths.get(&job.id).and_then(Option::as_deref),
                     job.local_score_id,
                     &remote_score_id,
                     now,
                 )
                 .await;
+                network_db.mark_ir_score_job_status(
+                    job.id,
+                    IrScoreJobStatus::Succeeded,
+                    now,
+                    "",
+                )?;
             }
             Err(error) => {
                 let message = format!("{error:#}");
-                score_db.mark_ir_score_job_status(
+                let _ = write_ir_submission_log(
+                    logs_dir,
+                    &job,
+                    "failed",
+                    "",
+                    now,
+                    &job.payload_json,
+                    "",
+                    &message,
+                );
+                network_db.mark_ir_score_job_status(
                     job.id,
                     IrScoreJobStatus::Failed,
                     now,
@@ -149,13 +184,100 @@ pub async fn sync_pending_ir_jobs(
     Ok(report)
 }
 
+fn replay_paths_for_jobs(
+    score_db_path: &Path,
+    jobs: &[IrScoreJobRecord],
+) -> Result<HashMap<i64, Option<String>>> {
+    if !jobs.iter().any(|job| job.kind == IrJobKind::Score) {
+        return Ok(HashMap::new());
+    }
+    let score_db = ScoreDatabase::open(score_db_path)?;
+    Ok(jobs
+        .iter()
+        .filter(|job| job.kind == IrJobKind::Score)
+        .map(|job| {
+            let replay_path = match score_db.replay_path_for_history(job.local_score_id) {
+                Ok(path) => path,
+                Err(error) => {
+                    tracing::warn!(
+                        job_id = job.id,
+                        local_score_id = job.local_score_id,
+                        %error,
+                        "failed to look up replay path for IR job"
+                    );
+                    None
+                }
+            };
+            (job.id, replay_path)
+        })
+        .collect())
+}
+
+fn write_ir_submission_log(
+    logs_dir: &Path,
+    job: &IrScoreJobRecord,
+    status: &str,
+    remote_score_id: &str,
+    submitted_at: i64,
+    payload_json: &str,
+    response_json: &str,
+    error: &str,
+) -> String {
+    const LOG_FILE: &str = "ir-submissions.jsonl";
+    if let Err(write_error) = std::fs::create_dir_all(logs_dir) {
+        tracing::warn!(%write_error, "failed to create IR submission log directory");
+        return String::new();
+    }
+    let payload = serde_json::from_str::<serde_json::Value>(payload_json)
+        .unwrap_or_else(|_| serde_json::Value::String(payload_json.to_string()));
+    let response = if response_json.is_empty() {
+        serde_json::Value::Null
+    } else {
+        serde_json::from_str::<serde_json::Value>(response_json)
+            .unwrap_or_else(|_| serde_json::Value::String(response_json.to_string()))
+    };
+    let entry = serde_json::json!({
+        "submitted_at": submitted_at,
+        "provider": &job.provider,
+        "account_id": &job.account_id,
+        "kind": job.kind.as_str(),
+        "job_id": job.id,
+        "local_score_id": job.local_score_id,
+        "remote_score_id": remote_score_id,
+        "status": status,
+        "payload": payload,
+        "response": response,
+        "error": error,
+    });
+    let path = logs_dir.join(LOG_FILE);
+    let line = match serde_json::to_string(&entry) {
+        Ok(line) => line,
+        Err(write_error) => {
+            tracing::warn!(%write_error, "failed to serialize IR submission log entry");
+            return String::new();
+        }
+    };
+    let mut file = match OpenOptions::new().create(true).append(true).open(&path) {
+        Ok(file) => file,
+        Err(write_error) => {
+            tracing::warn!(path = %path.display(), %write_error, "failed to open IR submission log");
+            return String::new();
+        }
+    };
+    if let Err(write_error) = writeln!(file, "{line}") {
+        tracing::warn!(path = %path.display(), %write_error, "failed to write IR submission log");
+        return String::new();
+    }
+    LOG_FILE.to_string()
+}
+
 /// payload に replay hash を申告済みなら、保存済みリプレイファイルを
 /// 署名付き URL でアップロードし、サーバー側 hash 検証まで行う。
 async fn upload_replay_if_declared(
-    score_db: &mut ScoreDatabase,
     profile_root: &Path,
     provider: &IrProviderConfig,
     payload_json: &str,
+    replay_path: Option<&str>,
     local_score_id: i64,
     remote_score_id: &str,
     now: i64,
@@ -167,18 +289,23 @@ async fn upload_replay_if_declared(
     if !declared || remote_score_id.is_empty() {
         return;
     }
-    // rusqlite Connection は Sync でないため、DB 参照は await を跨ぐ前に済ませる。
-    let replay_path = match score_db.replay_path_for_history(local_score_id) {
-        Ok(Some(path)) => path,
-        Ok(None) => {
-            tracing::warn!(remote_score_id, "replay declared but local file path is missing");
-            return;
-        }
-        Err(error) => {
-            tracing::warn!(remote_score_id, %error, "failed to look up replay path");
-            return;
-        }
+    let Some(replay_path) = replay_path else {
+        tracing::warn!(
+            remote_score_id,
+            local_score_id,
+            "replay declared but local file path is missing"
+        );
+        return;
     };
+    if replay_path.is_empty() {
+        tracing::warn!(
+            remote_score_id,
+            local_score_id,
+            "replay declared but local file path is empty"
+        );
+        return;
+    }
+    let replay_path = replay_path.to_string();
     let result = async {
         let bytes =
             std::fs::read(profile_root.join(&replay_path)).context("failed to read replay file")?;
@@ -215,7 +342,7 @@ async fn submit_job_payload(
     provider: &IrProviderConfig,
     payload_json: &str,
     now: i64,
-) -> Result<String> {
+) -> Result<(String, String)> {
     let mut payload: IrScoreSubmission =
         serde_json::from_str(payload_json).context("failed to parse stored IR payload")?;
     let provider_key = crate::ir::provider_key::configured_provider_key(provider)
@@ -224,10 +351,11 @@ async fn submit_job_payload(
         ensure_fresh_credentials(profile_root, provider_key, &provider.base_url, now).await?;
     let client = BmzOfficialIrClient::new(&provider.base_url, credentials.access_token)?;
     attach_evidence(profile_root, provider, &client, &mut payload).await;
+    let request_json = serde_json::to_string(&payload)?;
     let options =
         IrSubmitOptions { ranking_scopes: vec![IrRankingScope::Global], ranking_limit: 20 };
     let response = client.submit_score(&payload, &options).await?;
-    Ok(serde_json::to_string(&response)?)
+    Ok((request_json, serde_json::to_string(&response)?))
 }
 
 /// コーススコアジョブの送信。署名 evidence を付けて
@@ -237,7 +365,7 @@ async fn submit_course_job_payload(
     provider: &IrProviderConfig,
     payload_json: &str,
     now: i64,
-) -> Result<String> {
+) -> Result<(String, String)> {
     let mut payload: serde_json::Value =
         serde_json::from_str(payload_json).context("failed to parse stored IR course payload")?;
     let provider_key = crate::ir::provider_key::configured_provider_key(provider)
@@ -262,8 +390,9 @@ async fn submit_course_job_payload(
             tracing::warn!(provider = provider.provider, %error, "failed to attach IR course evidence; sending unsigned");
         }
     }
+    let request_json = serde_json::to_string(&payload)?;
     let response = client.submit_course_score(&payload).await?;
-    Ok(serde_json::to_string(&response)?)
+    Ok((request_json, serde_json::to_string(&response)?))
 }
 
 /// device key で payload に署名 evidence を付ける。
@@ -290,5 +419,56 @@ async fn attach_evidence(
         Err(error) => {
             tracing::warn!(provider = provider.provider, %error, "failed to attach IR evidence; sending unsigned");
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ln_policy::LnScorePolicy;
+
+    #[test]
+    fn ir_submission_log_is_jsonl_under_logs_dir() {
+        let stamp =
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+        let logs_dir = std::env::temp_dir()
+            .join(format!("bmz-player-ir-submission-log-{}-{stamp}", std::process::id()));
+        let job = IrScoreJobRecord {
+            id: 7,
+            provider: "bmz-official".to_string(),
+            account_id: "account-1".to_string(),
+            kind: IrJobKind::Score,
+            local_score_id: 42,
+            chart_sha256: [1; 32],
+            ln_policy: LnScorePolicy::ForceLn,
+            payload_json: String::new(),
+            status: "sending".to_string(),
+            attempt_count: 0,
+            next_attempt_at: 0,
+            last_error: String::new(),
+            created_at: 100,
+            updated_at: 100,
+        };
+
+        let log_path = write_ir_submission_log(
+            &logs_dir,
+            &job,
+            "succeeded",
+            "remote-1",
+            123,
+            "{\"score\":1}",
+            "{\"accepted\":true}",
+            "",
+        );
+
+        assert_eq!(log_path, "ir-submissions.jsonl");
+        let line = std::fs::read_to_string(logs_dir.join(&log_path)).unwrap();
+        let value: serde_json::Value = serde_json::from_str(line.trim_end()).unwrap();
+        assert_eq!(value["provider"], "bmz-official");
+        assert_eq!(value["kind"], "score");
+        assert_eq!(value["payload"]["score"], 1);
+        assert_eq!(value["response"]["accepted"], true);
+
+        let _ = std::fs::remove_dir_all(logs_dir);
     }
 }

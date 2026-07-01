@@ -130,7 +130,7 @@ use crate::songs_cmd::scan_songs_with_progress;
 use crate::storage::collection_db::FavoriteHints;
 use crate::storage::difficulty_table_db::DifficultyTableRecord;
 use crate::storage::library_db::{ChartDistributionSecond, LibraryDatabase};
-use crate::storage::migration::{migrate_library_db, migrate_score_db};
+use crate::storage::migration::{migrate_library_db, migrate_network_db, migrate_score_db};
 use crate::storage::play_result::StoredPlayResult;
 use crate::storage::replay::load_replay_for_chart_policy_and_double_option;
 use crate::storage::scan::{ScanProgress, ScanReport};
@@ -191,7 +191,7 @@ pub async fn run_with_options(options: AppOptions) -> Result<()> {
 
 /// IR スコアジョブをバックグラウンドで定期送信する。
 ///
-/// メインスレッドの `ScoreDatabase` とは別 connection を開く (score.db は WAL)。
+/// メインスレッドの DB connection とは別 connection を開く (DB は WAL)。
 /// IR が未設定なら何もしない。
 fn spawn_ir_sync_worker(boot: &bootstrap::BootstrappedApp) {
     let ir_config = boot.profile_config.ir.clone();
@@ -200,18 +200,27 @@ fn spawn_ir_sync_worker(boot: &bootstrap::BootstrappedApp) {
         return;
     }
     let profile_root = boot.profile_paths.root_dir.clone();
+    let logs_dir = boot.app_paths.logs_dir.clone();
     let score_db_path = boot.profile_paths.score_db.clone();
+    let network_db_path = boot.profile_paths.network_db.clone();
     tokio::spawn(async move {
         loop {
             let now = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .map(|d| d.as_secs() as i64)
                 .unwrap_or(0);
-            match crate::storage::score_db::ScoreDatabase::open(&score_db_path) {
-                Ok(mut score_db) => {
+            if let Err(error) = migrate_network_db(&network_db_path) {
+                tracing::warn!(%error, "failed to migrate network db for IR sync");
+                tokio::time::sleep(std::time::Duration::from_secs(30)).await;
+                continue;
+            }
+            match crate::storage::network_db::NetworkDatabase::open(&network_db_path) {
+                Ok(mut network_db) => {
                     match crate::ir::sync::sync_pending_ir_jobs(
-                        &mut score_db,
+                        &mut network_db,
+                        &score_db_path,
                         &profile_root,
+                        &logs_dir,
                         &ir_config,
                         now,
                         20,
@@ -229,7 +238,7 @@ fn spawn_ir_sync_worker(boot: &bootstrap::BootstrappedApp) {
                         Err(error) => tracing::warn!(%error, "IR score sync failed"),
                     }
                 }
-                Err(error) => tracing::warn!(%error, "failed to open score db for IR sync"),
+                Err(error) => tracing::warn!(%error, "failed to open network db for IR sync"),
             }
             tokio::time::sleep(std::time::Duration::from_secs(30)).await;
         }
@@ -6479,6 +6488,8 @@ impl WinitApp {
         self.result_ir = crate::screens::result_ir::spawn_result_ir_task(
             self.boot.profile_paths.root_dir.clone(),
             self.boot.profile_paths.score_db.clone(),
+            self.boot.profile_paths.network_db.clone(),
+            self.boot.app_paths.logs_dir.clone(),
             &self.boot.profile_config.ir,
             crate::storage::common::hash_to_hex(&finished.result.chart_sha256),
             finished.ln_policy,
@@ -6551,18 +6562,18 @@ impl WinitApp {
                 );
                 continue;
             };
-            if let Err(error) =
-                self.boot.score_db.enqueue_ir_score_job(&crate::storage::score_db::NewIrScoreJob {
+            if let Err(error) = self.boot.network_db.enqueue_ir_score_job(
+                &crate::storage::network_db::NewIrScoreJob {
                     provider: provider_key.to_string(),
                     account_id: provider.account_id.clone(),
-                    kind: crate::storage::score_db::IrJobKind::Course,
+                    kind: crate::storage::network_db::IrJobKind::Course,
                     local_score_id: course_score_id,
                     chart_sha256: first_chart,
                     ln_policy,
                     payload_json: payload_json.clone(),
                     now: played_at,
-                })
-            {
+                },
+            ) {
                 tracing::warn!(provider = provider.provider, provider_key, %error, "failed to enqueue IR course job");
             }
         }
@@ -7999,6 +8010,7 @@ impl WinitApp {
             match crate::screens::play_finish::finish_session_result_once(
                 &mut active_play.running.finished,
                 &mut self.boot.score_db,
+                &mut self.boot.network_db,
                 crate::screens::play_finish::FinishSessionResultOnceRequest {
                     profile_paths: &self.boot.profile_paths,
                     replay_config: &self.boot.profile_config.replay,
@@ -8468,6 +8480,7 @@ impl WinitApp {
                 match crate::screens::play_finish::finish_session_result_once(
                     &mut started.running.finished,
                     &mut self.boot.score_db,
+                    &mut self.boot.network_db,
                     crate::screens::play_finish::FinishSessionResultOnceRequest {
                         profile_paths: &self.boot.profile_paths,
                         replay_config: &self.boot.profile_config.replay,
@@ -9732,6 +9745,7 @@ impl WinitApp {
                 let early_finished = match crate::screens::play_finish::finish_session_result_once(
                     &mut active_play.running.finished,
                     &mut self.boot.score_db,
+                    &mut self.boot.network_db,
                     crate::screens::play_finish::FinishSessionResultOnceRequest {
                         profile_paths: &self.boot.profile_paths,
                         replay_config: &self.boot.profile_config.replay,
@@ -10298,6 +10312,8 @@ impl WinitApp {
                     self.result_ir = crate::screens::result_ir::spawn_course_result_ir_task(
                         self.boot.profile_paths.root_dir.clone(),
                         self.boot.profile_paths.score_db.clone(),
+                        self.boot.profile_paths.network_db.clone(),
+                        self.boot.app_paths.logs_dir.clone(),
                         &self.boot.profile_config.ir,
                         course_hash,
                         gauge,
@@ -10307,6 +10323,8 @@ impl WinitApp {
                     self.result_ir = crate::screens::result_ir::spawn_result_ir_task(
                         self.boot.profile_paths.root_dir.clone(),
                         self.boot.profile_paths.score_db.clone(),
+                        self.boot.profile_paths.network_db.clone(),
+                        self.boot.app_paths.logs_dir.clone(),
                         &self.boot.profile_config.ir,
                         crate::storage::common::hash_to_hex(&finished.result.chart_sha256),
                         finished.ln_policy,

@@ -24,6 +24,7 @@ use crate::screens::play_snapshot::{
     BgaFrameCatalog, PlayRenderSnapshotCache, build_render_snapshot_with_target_and_bga_frames,
     build_render_snapshot_with_target_and_bga_frames_cached,
 };
+use crate::storage::network_db::NetworkDatabase;
 use crate::storage::score_db::ScoreDatabase;
 
 #[derive(Debug, Clone)]
@@ -98,6 +99,7 @@ pub fn advance_play_screen_until_result(
     session: &mut GameSession,
     audio: &mut dyn AudioScheduler,
     score_db: &mut ScoreDatabase,
+    network_db: &mut NetworkDatabase,
     profile_paths: &ProfilePaths,
     replay_config: &ReplayConfig,
     ir_config: &IrConfig,
@@ -108,6 +110,7 @@ pub fn advance_play_screen_until_result(
     if matches!(frame.state, PlayState::Finished | PlayState::Failed) {
         let mut finished = finish_session_result(
             score_db,
+            network_db,
             profile_paths,
             replay_config,
             ir_config,
@@ -328,6 +331,7 @@ pub fn advance_running_play_session(
 pub fn advance_running_play_session_until_result(
     running: &mut RunningPlaySession,
     score_db: &mut ScoreDatabase,
+    network_db: &mut NetworkDatabase,
     profile_paths: &ProfilePaths,
     replay_config: &ReplayConfig,
     ir_config: &IrConfig,
@@ -353,6 +357,7 @@ pub fn advance_running_play_session_until_result(
         let mut finished = finish_session_result_once(
             &mut running.finished,
             score_db,
+            network_db,
             FinishSessionResultOnceRequest {
                 profile_paths,
                 replay_config,
@@ -503,7 +508,7 @@ mod tests {
     use crate::screens::play_session::{PlaySessionOptions, build_game_session};
     use crate::select_options::ArrangeOption;
     use crate::storage::common::configure_connection;
-    use crate::storage::migration::{SCORE_MIGRATIONS, run_migrations};
+    use crate::storage::migration::{NETWORK_MIGRATIONS, SCORE_MIGRATIONS, run_migrations};
     use crate::storage::score_db::ScoreDatabase;
 
     use super::*;
@@ -653,12 +658,17 @@ mod tests {
             profile_toml: root.join("profile.toml"),
             collection_db: root.join("collection.db"),
             score_db: root.join("score.db"),
+            network_db: root.join("network.db"),
             replay_dir: root.join("replay"),
         };
         let mut conn = rusqlite::Connection::open_in_memory().unwrap();
         configure_connection(&conn).unwrap();
         run_migrations(&mut conn, SCORE_MIGRATIONS).unwrap();
         let mut score_db = ScoreDatabase::from_connection(conn);
+        let mut network_conn = rusqlite::Connection::open_in_memory().unwrap();
+        configure_connection(&network_conn).unwrap();
+        run_migrations(&mut network_conn, NETWORK_MIGRATIONS).unwrap();
+        let mut network_db = NetworkDatabase::from_connection(network_conn);
         let replay_config = ReplayConfig {
             auto_save: false,
             compress: false,
@@ -669,6 +679,7 @@ mod tests {
             &mut session,
             &mut audio,
             &mut score_db,
+            &mut network_db,
             &paths,
             &replay_config,
             &crate::config::profile_config::IrConfig::default(),

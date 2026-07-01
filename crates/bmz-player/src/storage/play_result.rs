@@ -337,6 +337,7 @@ mod tests {
             profile_toml: root.join("profile.toml"),
             collection_db: root.join("collection.db"),
             score_db: root.join("score.db"),
+            network_db: root.join("network.db"),
             replay_dir: root.join("replay"),
         };
         let mut conn = Connection::open_in_memory().unwrap();
@@ -403,6 +404,7 @@ mod tests {
             profile_toml: root.join("profile.toml"),
             collection_db: root.join("collection.db"),
             score_db: root.join("score.db"),
+            network_db: root.join("network.db"),
             replay_dir: root.join("replay"),
         };
         let mut conn = Connection::open_in_memory().unwrap();
@@ -454,6 +456,7 @@ mod tests {
             profile_toml: root.join("profile.toml"),
             collection_db: root.join("collection.db"),
             score_db: root.join("score.db"),
+            network_db: root.join("network.db"),
             replay_dir: root.join("replay"),
         };
         let mut conn = Connection::open_in_memory().unwrap();
@@ -527,6 +530,7 @@ mod tests {
             profile_toml: root.join("profile.toml"),
             collection_db: root.join("collection.db"),
             score_db: root.join("score.db"),
+            network_db: root.join("network.db"),
             replay_dir: root.join("replay"),
         };
         let mut conn = Connection::open_in_memory().unwrap();
@@ -579,6 +583,7 @@ mod tests {
             profile_toml: root.join("profile.toml"),
             collection_db: root.join("collection.db"),
             score_db: root.join("score.db"),
+            network_db: root.join("network.db"),
             replay_dir: root.join("replay"),
         };
         let mut conn = Connection::open_in_memory().unwrap();
@@ -667,6 +672,7 @@ mod tests {
             profile_toml: root.join("profile.toml"),
             collection_db: root.join("collection.db"),
             score_db: root.join("score.db"),
+            network_db: root.join("network.db"),
             replay_dir: root.join("replay"),
         };
         let mut conn = Connection::open_in_memory().unwrap();
@@ -754,6 +760,7 @@ mod tests {
             profile_toml: root.join("profile.toml"),
             collection_db: root.join("collection.db"),
             score_db: root.join("score.db"),
+            network_db: root.join("network.db"),
             replay_dir: root.join("replay"),
         };
         let mut conn = Connection::open_in_memory().unwrap();
