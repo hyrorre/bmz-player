@@ -271,10 +271,12 @@ impl GaugeState {
     }
 
     pub fn current(&self) -> &SingleGaugeState {
-        self.gauges
-            .iter()
-            .find(|gauge| gauge.definition.gauge_type == self.selected)
-            .expect("selected gauge must exist")
+        let selected =
+            self.gauges.iter().find(|gauge| gauge.definition.gauge_type == self.selected);
+        debug_assert!(selected.is_some(), "selected gauge {:?} must exist", self.selected);
+        // rule mode の定義列に selected が無くてもプレイ中に panic せず、
+        // 先頭定義へフォールバックする。定義列は常に非空。
+        selected.or_else(|| self.gauges.first()).expect("gauge definitions must not be empty")
     }
 
     pub fn current_clear_type(&self) -> Option<ClearType> {

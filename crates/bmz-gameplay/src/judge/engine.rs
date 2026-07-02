@@ -246,8 +246,16 @@ impl JudgeEngine {
         };
 
         if candidate.consumes_note {
-            let note_id = candidate.note_id.expect("normal candidate must have note id");
-            let note = chart.note_by_id(note_id).expect("candidate note exists");
+            // candidate 生成側の不変条件が崩れてもプレイ中に panic せず、
+            // その入力の判定だけを捨てる (debug build では検知する)。
+            let Some(note_id) = candidate.note_id else {
+                debug_assert!(false, "normal candidate must have note id");
+                return JudgeOutcome { mine_hits, ..Default::default() };
+            };
+            let Some(note) = chart.note_by_id(note_id) else {
+                debug_assert!(false, "candidate note {note_id:?} must exist in chart");
+                return JudgeOutcome { mine_hits, ..Default::default() };
+            };
             let note_vanishes = candidate.judge != Judge::Bad || self.bad_judge_vanish;
             let multi_bad_candidates = if matches!(rule_mode, RuleMode::Lr2Oraja | RuleMode::Dx) {
                 lr2oraja_multi_bad_candidates(
@@ -319,8 +327,10 @@ impl JudgeEngine {
             };
         }
 
-        let keysound_note_id =
-            candidate.keysound_note_id.expect("empty poor candidate must have key sound note id");
+        let Some(keysound_note_id) = candidate.keysound_note_id else {
+            debug_assert!(false, "empty poor candidate must have key sound note id");
+            return JudgeOutcome { mine_hits, ..Default::default() };
+        };
         let mut outcome =
             empty_poor(input.lane, candidate.side, candidate.delta, input.time, keysound_note_id);
         outcome.mine_hits = mine_hits;
