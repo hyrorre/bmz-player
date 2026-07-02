@@ -1476,6 +1476,7 @@ fn debug_boot_finished_play_session() -> FinishedPlaySession {
             score_history_id: 0,
             played_at: 0,
             replay_path: String::new(),
+            replay_sha256: None,
             slot_paths: [None, None, None, None],
             device_type: InputDeviceKind::Keyboard,
         },

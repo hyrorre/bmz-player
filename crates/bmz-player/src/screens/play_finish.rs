@@ -133,6 +133,7 @@ pub fn finish_session_result(
             score_history_id: 0,
             played_at,
             replay_path: String::new(),
+            replay_sha256: None,
             slot_paths: [None, None, None, None],
             device_type: InputDeviceKind::Keyboard,
         }
@@ -199,7 +200,6 @@ pub fn finish_session_result(
         ir_result.clear_type = summary_clear_type;
         enqueue_ir_jobs(
             network_db,
-            profile_paths,
             ir_config,
             session,
             &ir_result,
@@ -252,7 +252,6 @@ fn clear_type_from_name(name: &str) -> Option<ClearType> {
 #[allow(clippy::too_many_arguments)]
 fn enqueue_ir_jobs(
     network_db: &mut NetworkDatabase,
-    profile_paths: &ProfilePaths,
     ir_config: &IrConfig,
     session: &GameSession,
     result: &PlayResult,
@@ -291,7 +290,9 @@ fn enqueue_ir_jobs(
             arrange_seed: applied_arrange.seed,
             random_seed: applied_arrange.seed,
             rule_mode: session.rule_mode.as_str().to_string(),
-            replay_hash: replay_file_hash(profile_paths, &stored.replay_path),
+            // 保存時に serialize 済みバイト列から計算した hash。プレイ終了
+            // 直後のフレームでリプレイファイルを読み直さない。
+            replay_hash: stored.replay_sha256.clone(),
         },
     );
     let Ok(payload_json) = serde_json::to_string(&payload) else {
@@ -356,16 +357,6 @@ fn should_send_ir_score(
                 || result.record_cb() < best.cb
         }
     }
-}
-
-/// 保存済みリプレイファイルの SHA256 (hex)。ファイルが無ければ None。
-fn replay_file_hash(profile_paths: &ProfilePaths, replay_path: &str) -> Option<String> {
-    use sha2::{Digest, Sha256};
-    if replay_path.is_empty() {
-        return None;
-    }
-    let bytes = std::fs::read(profile_paths.root_dir.join(replay_path)).ok()?;
-    Some(crate::storage::common::hash_to_hex(&Sha256::digest(&bytes)))
 }
 
 fn effective_ln_mode_from_score_policy(policy: crate::ln_policy::LnScorePolicy) -> LongNoteMode {

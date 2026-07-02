@@ -115,6 +115,19 @@ impl ReplayFile {
 }
 
 pub fn save_replay(path: &Path, replay: &ReplayFile) -> Result<()> {
+    save_replay_with_hash(path, replay)?;
+    Ok(())
+}
+
+/// リプレイを保存し、書き込んだバイト列の SHA256 (hex) を返す。
+/// 保存直後にファイルを読み直して hash を取るのを避けるため、
+/// serialize したテキストから直接計算する。
+pub fn save_replay_with_hash(path: &Path, replay: &ReplayFile) -> Result<String> {
+    use sha2::{Digest, Sha256};
+
+    let text = toml::to_string_pretty(replay)?;
+    let hash = super::common::hash_to_hex(&Sha256::digest(text.as_bytes()));
+
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
@@ -122,11 +135,11 @@ pub fn save_replay(path: &Path, replay: &ReplayFile) -> Result<()> {
     let tmp_path = path.with_extension("tmp");
     {
         let mut file = std::fs::File::create(&tmp_path)?;
-        file.write_all(toml::to_string_pretty(replay)?.as_bytes())?;
+        file.write_all(text.as_bytes())?;
         file.sync_all()?;
     }
     std::fs::rename(tmp_path, path)?;
-    Ok(())
+    Ok(hash)
 }
 
 pub fn load_replay(path: &Path) -> Result<ReplayFile> {

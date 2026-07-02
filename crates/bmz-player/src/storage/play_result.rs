@@ -9,7 +9,9 @@ use crate::ln_policy::LnScorePolicy;
 use crate::paths::ProfilePaths;
 use crate::select_options::{ArrangeOption, DoubleOptionScoreBucket};
 
-use super::replay::{ReplayFile, replay_file_name, replay_slot_file_name, save_replay};
+use super::replay::{
+    ReplayFile, replay_file_name, replay_slot_file_name, save_replay, save_replay_with_hash,
+};
 use super::score_db::{
     ReplaySlotRecord, ScoreDatabase, ScoreInsertMode, ScoreRecord, ScoreRecordMetadata,
 };
@@ -19,6 +21,9 @@ pub struct StoredPlayResult {
     pub score_history_id: i64,
     pub played_at: i64,
     pub replay_path: String,
+    /// 保存したリプレイファイル内容の SHA256 (hex)。保存時に serialize 済み
+    /// バイト列から計算するので、IR 送信時にファイルを読み直す必要がない。
+    pub replay_sha256: Option<String>,
     pub slot_paths: [Option<String>; 4],
     pub device_type: InputDeviceKind,
 }
@@ -102,7 +107,7 @@ pub fn store_play_result(
         .unwrap_or(bmz_gameplay::rule::RuleMode::Beatoraja);
     let device_type = classify_replay_device_type(&replay_events);
 
-    let replay_path = if should_save_replay(replay_config, result) {
+    let (replay_path, replay_sha256) = if should_save_replay(replay_config, result) {
         let file_name = replay_file_name(result.chart_sha256, request.played_at);
         let path = profile_paths.replay_dir.join(&file_name);
         let replay = ReplayFile::new_with_policy(
@@ -117,10 +122,10 @@ pub fn store_play_result(
             arrange_pattern.clone(),
             replay_events.clone(),
         );
-        save_replay(&path, &replay)?;
-        format!("replay/{file_name}")
+        let hash = save_replay_with_hash(&path, &replay)?;
+        (format!("replay/{file_name}"), Some(hash))
     } else {
-        String::new()
+        (String::new(), None)
     };
 
     let mut record = ScoreRecord::from_play_result(
@@ -203,6 +208,7 @@ pub fn store_play_result(
         score_history_id,
         played_at: request.played_at,
         replay_path,
+        replay_sha256,
         slot_paths,
         device_type,
     })

@@ -485,6 +485,7 @@ mod tests {
             score_history_id: 9,
             played_at: 0,
             replay_path: "replay/test.toml".to_string(),
+            replay_sha256: None,
             slot_paths: [None, None, None, None],
             device_type: bmz_core::input::InputDeviceKind::Keyboard,
         }
