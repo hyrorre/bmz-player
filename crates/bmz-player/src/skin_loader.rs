@@ -2319,7 +2319,8 @@ mod tests {
     use bmz_render::renderer::Renderer;
     use bmz_render::scene::{AppSceneSnapshot, SelectRowSnapshot, SelectSnapshot};
     use bmz_render::skin::{
-        DynamicTimerRuntime, SkinContext, SkinDocumentTexture, SkinImageSize, SkinManifest,
+        DynamicTimerRuntime, SkinContext, SkinDocumentRenderExt, SkinDocumentTexture,
+        SkinImageSize, SkinManifest,
     };
 
     fn test_app_paths() -> AppPaths {

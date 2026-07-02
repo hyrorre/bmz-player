@@ -144,8 +144,8 @@ use crate::ui::{
 use crate::update::{DownloadedUpdate, UpdateAssetKind, UpdateCandidate};
 use bmz_render::skin::{
     DestinationListEntry, SkinAnimationDef, SkinClickHit, SkinClickTarget, SkinContext,
-    SkinDestinationDef, SkinDocument, SkinDocumentTexture, SkinDstEntry, SkinManifest,
-    SkinSliderHit,
+    SkinDestinationDef, SkinDocument, SkinDocumentRenderExt, SkinDocumentTexture, SkinDstEntry,
+    SkinManifest, SkinSliderHit,
 };
 const SAMPLE_PLAYABLE_TITLE: &str = "BMZ Sample Playable";
 

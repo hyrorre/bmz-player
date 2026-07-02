@@ -6,12 +6,9 @@ use std::sync::OnceLock;
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use anyhow::{Context, Result};
 use bmz_core::judge::{Judge, TimingSide};
 use bmz_core::lane::{KeyMode, LANE_COUNT, Lane};
-use serde::de::{Error as DeError, Visitor};
-use serde::{Deserialize, Deserializer};
-use serde_json::{Map as JsonMap, Value as JsonValue};
+use serde::Deserialize;
 
 use crate::assets::load_png_rgba;
 use crate::plan::{
@@ -27,6 +24,8 @@ use crate::skin_offset::{SKIN_OFFSET_BAR_LINE, SkinOffsetValues};
 use crate::snapshot::{CourseStageMarker, DisplayJudgeCounts, LongBodyState};
 use bmz_chart::model::LongNoteMode;
 
+pub use bmz_skin_document::*;
+
 const OFFSET_ALL: i32 = 10;
 const OFFSET_NOTES_1P: i32 = 30;
 /// beatoraja の `SkinProperty.OFFSET_JUDGE_1P`。判定文字とコンボ数の destination が
@@ -35,12 +34,6 @@ const OFFSET_NOTES_1P: i32 = 30;
 #[allow(dead_code)]
 const OFFSET_JUDGE_1P: i32 = 32;
 const OFFSET_JUDGEDETAIL_1P: i32 = 33;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct SkinObjectId(pub u32);
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct SkinTextureId(pub u32);
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct SkinObject {
@@ -52,121 +45,6 @@ pub struct SkinObject {
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct SkinDefinition {
     pub objects: Vec<SkinObject>,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-pub struct SkinDocument {
-    #[serde(default, rename = "type")]
-    pub skin_type: i32,
-    #[serde(default)]
-    pub name: String,
-    #[serde(default)]
-    pub author: String,
-    #[serde(default = "default_skin_canvas_width")]
-    pub w: u32,
-    #[serde(default = "default_skin_canvas_height")]
-    pub h: u32,
-    #[serde(default)]
-    pub fadeout: i32,
-    #[serde(default)]
-    pub input: i32,
-    #[serde(default)]
-    pub ranktime: i32,
-    #[serde(default)]
-    pub scene: i32,
-    #[serde(default)]
-    pub close: i32,
-    #[serde(default)]
-    pub loadstart: i32,
-    #[serde(default)]
-    pub loadend: i32,
-    #[serde(default)]
-    pub playstart: i32,
-    #[serde(default = "default_judgetimer")]
-    pub judgetimer: i32,
-    #[serde(default)]
-    pub finishmargin: i32,
-    #[serde(default)]
-    pub category: Vec<SkinCategoryDef>,
-    #[serde(default)]
-    pub property: Vec<SkinPropertyDef>,
-    #[serde(default)]
-    pub filepath: Vec<SkinFilepathDef>,
-    #[serde(default)]
-    pub offset: Vec<SkinOffsetDef>,
-    #[serde(default)]
-    pub source: Vec<SkinSourceDef>,
-    #[serde(default)]
-    pub font: Vec<SkinFontDef>,
-    #[serde(default)]
-    pub image: Vec<SkinImageDef>,
-    #[serde(default)]
-    pub imageset: Vec<SkinImageSetDef>,
-    #[serde(default)]
-    pub value: Vec<SkinValueDef>,
-    #[serde(default)]
-    pub text: Vec<SkinTextDef>,
-    #[serde(default)]
-    pub slider: Vec<SkinSliderDef>,
-    #[serde(default)]
-    pub graph: Vec<SkinGraphDef>,
-    #[serde(default, rename = "hiddenCover")]
-    pub hidden_cover: Vec<SkinHiddenCoverDef>,
-    #[serde(default, rename = "hiterrorvisualizer")]
-    pub hiterror_visualizer: Vec<SkinHitErrorVisualizerDef>,
-    #[serde(default)]
-    pub timingvisualizer: Vec<SkinTimingVisualizerDef>,
-    #[serde(default)]
-    pub timingdistributiongraph: Vec<SkinTimingDistributionGraphDef>,
-    #[serde(default)]
-    pub gaugegraph: Vec<SkinGaugeGraphDef>,
-    #[serde(default)]
-    pub judgegraph: Vec<SkinJudgeGraphDef>,
-    #[serde(default)]
-    pub bpmgraph: Vec<SkinBpmGraphDef>,
-    pub note: Option<SkinNoteSetDef>,
-    pub gauge: Option<SkinGaugeDef>,
-    #[serde(default)]
-    pub gauges: Vec<SkinGaugeDef>,
-    #[serde(default)]
-    pub judge: Vec<SkinJudgeDef>,
-    pub bga: Option<SkinBgaDef>,
-    pub songlist: Option<SkinSongListDef>,
-    #[serde(default)]
-    pub destination: Vec<DestinationListEntry>,
-    /// Lua `timer_util.timer_observe_boolean` から変換された動的タイマー定義。
-    #[serde(default, rename = "dynamicTimer")]
-    pub dynamic_timers: Vec<SkinDynamicTimerDef>,
-    /// ユーザがスキン設定パネルで選んだオプションから算出した有効 op コード列。
-    /// `Some` のときレンダー時の `enabled_options()` はこれを返し、`None` の
-    /// ときは従来通り `property.def` (または各 property の先頭 item) を既定として
-    /// 計算する。
-    #[serde(skip)]
-    pub user_selected_options: Option<Vec<i32>>,
-    /// LR2 `#SETOPTION` など、設定 UI に出さず内部的に有効化する op。
-    #[serde(skip, default)]
-    pub internal_enabled_options: Vec<i32>,
-    /// プレイ描画時のみ plan 側が設定する judgegraph 密度。
-    #[serde(skip, default)]
-    pub play_judge_graph_density: Vec<u8>,
-    /// プレイ描画時のみ plan 側が設定する bpmgraph 線分。
-    #[serde(skip, default)]
-    pub play_bpm_graph_segments: Vec<crate::chart_graph::BpmGraphSegment>,
-    /// リザルト描画時のみ plan 側が設定する gaugegraph 推移。
-    #[serde(skip, default)]
-    pub result_gauge_graph_points: Vec<crate::snapshot::ResultGaugeGraphPoint>,
-    /// リザルト描画時のみ plan 側が設定する timing graph 推移。
-    #[serde(skip, default)]
-    pub result_timing_points: Vec<crate::snapshot::ResultTimingPoint>,
-    /// リザルト描画時のみ plan 側が設定する judgegraph(type=1) 用の秒別 state 集計。
-    #[serde(skip, default)]
-    pub result_judge_graph_buckets: Vec<crate::snapshot::ResultJudgeGraphBucket>,
-    /// リザルト描画時のみ plan 側が設定する judgegraph(type=2) 用の FAST/SLOW 秒別集計。
-    #[serde(skip, default)]
-    pub result_early_late_graph_buckets: Vec<crate::snapshot::ResultEarlyLateGraphBucket>,
-    /// リザルト描画時のみ plan 側が設定する timingdistributiongraph 用の固定分布。
-    #[serde(skip, default)]
-    pub result_timing_distribution: crate::snapshot::ResultTimingDistribution,
 }
 
 #[derive(Clone, Copy)]
@@ -234,803 +112,6 @@ struct DestinationResolveContext<'a, 'text> {
     cache: Option<&'a mut ResultRenderCache>,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Deserialize)]
-pub struct SkinSongListDef {
-    #[serde(default, deserialize_with = "deserialize_skin_id")]
-    pub id: String,
-    #[serde(default)]
-    pub center: i32,
-    #[serde(default)]
-    pub clickable: Vec<i32>,
-    #[serde(default)]
-    pub listoff: Vec<DestinationListEntry>,
-    #[serde(default)]
-    pub liston: Vec<DestinationListEntry>,
-    #[serde(default)]
-    pub text: Vec<DestinationListEntry>,
-    #[serde(default)]
-    pub level: Vec<DestinationListEntry>,
-    #[serde(default)]
-    pub lamp: Vec<DestinationListEntry>,
-    #[serde(default)]
-    pub playerlamp: Vec<DestinationListEntry>,
-    #[serde(default)]
-    pub rivallamp: Vec<DestinationListEntry>,
-    #[serde(default, deserialize_with = "deserialize_destination_entries")]
-    pub trophy: Vec<DestinationListEntry>,
-    #[serde(default, deserialize_with = "deserialize_destination_entries")]
-    pub graph: Vec<DestinationListEntry>,
-    #[serde(default, deserialize_with = "deserialize_destination_entries")]
-    pub label: Vec<DestinationListEntry>,
-    #[serde(default)]
-    pub judgegraph: Vec<DestinationListEntry>,
-    #[serde(default)]
-    pub bpmgraph: Vec<DestinationListEntry>,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-pub struct SkinCategoryDef {
-    #[serde(default)]
-    pub name: String,
-    #[serde(default)]
-    pub item: Vec<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-pub struct SkinPropertyDef {
-    #[serde(default)]
-    pub category: String,
-    #[serde(default)]
-    pub name: String,
-    #[serde(default)]
-    pub item: Vec<SkinPropertyItemDef>,
-    #[serde(default)]
-    pub def: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-pub struct SkinPropertyItemDef {
-    #[serde(default)]
-    pub name: String,
-    #[serde(default)]
-    pub op: i32,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-pub struct SkinFilepathDef {
-    #[serde(default)]
-    pub category: String,
-    #[serde(default)]
-    pub name: String,
-    #[serde(default)]
-    pub path: String,
-    #[serde(default)]
-    pub def: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-pub struct SkinOffsetDef {
-    #[serde(default)]
-    pub category: String,
-    #[serde(default)]
-    pub name: String,
-    #[serde(default)]
-    pub id: i32,
-    #[serde(default)]
-    pub x: bool,
-    #[serde(default)]
-    pub y: bool,
-    #[serde(default)]
-    pub w: bool,
-    #[serde(default)]
-    pub h: bool,
-    #[serde(default)]
-    pub r: bool,
-    #[serde(default)]
-    pub a: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-pub struct SkinSourceDef {
-    #[serde(default, deserialize_with = "deserialize_skin_id")]
-    pub id: String,
-    #[serde(default)]
-    pub path: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-pub struct SkinFontDef {
-    #[serde(default, deserialize_with = "deserialize_skin_id")]
-    pub id: String,
-    #[serde(default)]
-    pub path: String,
-    #[serde(default, rename = "type")]
-    pub font_type: i32,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-pub struct SkinImageDef {
-    #[serde(default, deserialize_with = "deserialize_skin_id")]
-    pub id: String,
-    #[serde(default, deserialize_with = "deserialize_skin_id")]
-    pub src: String,
-    #[serde(default)]
-    pub x: i32,
-    #[serde(default)]
-    pub y: i32,
-    #[serde(default)]
-    pub w: i32,
-    #[serde(default)]
-    pub h: i32,
-    #[serde(default = "default_grid_division")]
-    pub divx: i32,
-    #[serde(default = "default_grid_division")]
-    pub divy: i32,
-    #[serde(default)]
-    pub timer: Option<i32>,
-    #[serde(default)]
-    pub cycle: i32,
-    #[serde(default)]
-    pub len: i32,
-    #[serde(default, rename = "ref")]
-    pub ref_id: i32,
-    #[serde(default)]
-    pub click: i32,
-    #[serde(default)]
-    pub act: Option<i32>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-pub struct SkinImageSetDef {
-    #[serde(default, deserialize_with = "deserialize_skin_id")]
-    pub id: String,
-    #[serde(default, rename = "ref")]
-    pub ref_id: i32,
-    #[serde(default, deserialize_with = "deserialize_skin_id_vec")]
-    pub images: Vec<String>,
-    #[serde(default)]
-    pub click: i32,
-    #[serde(default)]
-    pub act: Option<i32>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Default)]
-pub struct SkinValueDef {
-    #[serde(default, deserialize_with = "deserialize_skin_id")]
-    pub id: String,
-    #[serde(default, deserialize_with = "deserialize_skin_id")]
-    pub src: String,
-    #[serde(default)]
-    pub x: i32,
-    #[serde(default)]
-    pub y: i32,
-    #[serde(default)]
-    pub w: i32,
-    #[serde(default)]
-    pub h: i32,
-    #[serde(default = "default_grid_division")]
-    pub divx: i32,
-    #[serde(default = "default_grid_division")]
-    pub divy: i32,
-    #[serde(default)]
-    pub timer: Option<i32>,
-    #[serde(default)]
-    pub cycle: i32,
-    #[serde(default)]
-    pub align: i32,
-    #[serde(default)]
-    pub digit: i32,
-    #[serde(default)]
-    pub padding: i32,
-    #[serde(default)]
-    pub zeropadding: i32,
-    #[serde(default)]
-    pub space: i32,
-    #[serde(default, rename = "ref")]
-    pub ref_id: i32,
-    #[serde(default)]
-    pub expr: String,
-    /// Lua `value = function()` から変換した浮動小数 digit 式。空なら `expr` / `ref` を使う。
-    #[serde(default)]
-    pub value_expr: String,
-    #[serde(default)]
-    pub offset: Vec<SkinValueDef>,
-}
-
-#[derive(Debug, Clone, PartialEq, Default, Deserialize)]
-pub struct SkinTextDef {
-    #[serde(default, deserialize_with = "deserialize_skin_id")]
-    pub id: String,
-    #[serde(default, deserialize_with = "deserialize_skin_id")]
-    pub font: String,
-    #[serde(default)]
-    pub size: i32,
-    #[serde(default)]
-    pub align: i32,
-    #[serde(default, rename = "ref")]
-    pub ref_id: i32,
-    #[serde(default, rename = "constantText", deserialize_with = "deserialize_skin_string")]
-    pub constant_text: String,
-    /// BMZ extension: render a numeric skin ref with the text renderer.
-    /// beatoraja-compatible value sprites remain supported; this is used by the bundled
-    /// default JSON skin to avoid shipping a separate digit atlas.
-    #[serde(default, rename = "numberRef")]
-    pub number_ref: Option<i32>,
-    /// BMZ extension: render the latest judgement text for a judge region.
-    /// Region 0 corresponds to the normal 1P judgement area.
-    #[serde(default, rename = "judgeRegion")]
-    pub judge_region: Option<usize>,
-    /// BMZ extension: color `judgeRegion` text by judgement category.
-    #[serde(default, rename = "judgeColor")]
-    pub judge_color: bool,
-    /// BMZ extension: render FAST/SLOW text for a judge region.
-    #[serde(default, rename = "judgeTimingRegion")]
-    pub judge_timing_region: Option<usize>,
-    /// BMZ extension: color `judgeTimingRegion` text by FAST/SLOW side.
-    #[serde(default, rename = "judgeTimingColor")]
-    pub judge_timing_color: bool,
-    #[serde(default)]
-    pub prefix: String,
-    #[serde(default)]
-    pub suffix: String,
-    #[serde(default)]
-    pub wrapping: bool,
-    #[serde(default)]
-    pub overflow: i32,
-    #[serde(default, rename = "outlineColor")]
-    pub outline_color: String,
-    #[serde(default, rename = "outlineWidth")]
-    pub outline_width: f32,
-    #[serde(default, rename = "shadowColor")]
-    pub shadow_color: String,
-    #[serde(default, rename = "shadowOffsetX")]
-    pub shadow_offset_x: f32,
-    #[serde(default, rename = "shadowOffsetY")]
-    pub shadow_offset_y: f32,
-    #[serde(default, rename = "shadowSmoothness")]
-    pub shadow_smoothness: f32,
-    /// Lua `value = function()` から変換したコース表テキスト式。空なら `ref` を使う。
-    #[serde(default)]
-    pub value_expr: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-pub struct SkinSliderDef {
-    #[serde(default, deserialize_with = "deserialize_skin_id")]
-    pub id: String,
-    #[serde(default, deserialize_with = "deserialize_skin_id")]
-    pub src: String,
-    #[serde(default)]
-    pub x: i32,
-    #[serde(default)]
-    pub y: i32,
-    #[serde(default)]
-    pub w: i32,
-    #[serde(default)]
-    pub h: i32,
-    #[serde(default = "default_grid_division")]
-    pub divx: i32,
-    #[serde(default = "default_grid_division")]
-    pub divy: i32,
-    #[serde(default)]
-    pub timer: Option<i32>,
-    #[serde(default)]
-    pub cycle: i32,
-    #[serde(default)]
-    pub angle: i32,
-    #[serde(default)]
-    pub range: i32,
-    #[serde(default, rename = "type")]
-    pub slider_type: i32,
-    #[serde(default = "default_true")]
-    pub changeable: bool,
-    #[serde(default, rename = "isRefNum")]
-    pub is_ref_num: bool,
-    #[serde(default)]
-    pub min: i32,
-    #[serde(default)]
-    pub max: i32,
-    /// Lua `value = function()` から変換した slider 進捗式 (0.0–1.0)。空なら `type` を使う。
-    #[serde(default)]
-    pub value_expr: String,
-}
-
-/// beatoraja `judgegraph[]` 要素。
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-pub struct SkinJudgeGraphDef {
-    #[serde(default, deserialize_with = "deserialize_skin_id")]
-    pub id: String,
-    #[serde(default)]
-    pub graph_type: i32,
-    #[serde(default, rename = "type")]
-    pub type_alias: i32,
-    #[serde(default, rename = "backTexOff")]
-    pub back_tex_off: i32,
-    #[serde(default)]
-    pub delay: i32,
-    #[serde(default, rename = "orderReverse")]
-    pub order_reverse: i32,
-    #[serde(default, rename = "noGap")]
-    pub no_gap: i32,
-    #[serde(default, rename = "noGapX")]
-    pub no_gap_x: i32,
-}
-
-impl SkinJudgeGraphDef {
-    pub fn graph_type(&self) -> i32 {
-        if self.graph_type != 0 { self.graph_type } else { self.type_alias }
-    }
-}
-
-/// beatoraja `gaugegraph[]` 要素。
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-pub struct SkinGaugeGraphDef {
-    #[serde(default, deserialize_with = "deserialize_skin_id")]
-    pub id: String,
-    #[serde(default)]
-    pub color: Vec<String>,
-    #[serde(default = "default_gaugegraph_assist_clear_bg_color", rename = "assistClearBGColor")]
-    pub assist_clear_bg_color: String,
-    #[serde(
-        default = "default_gaugegraph_assist_easy_fail_bg_color",
-        rename = "assistAndEasyFailBGColor"
-    )]
-    pub assist_and_easy_fail_bg_color: String,
-    #[serde(default = "default_gaugegraph_groove_fail_bg_color", rename = "grooveFailBGColor")]
-    pub groove_fail_bg_color: String,
-    #[serde(
-        default = "default_gaugegraph_groove_clear_hard_bg_color",
-        rename = "grooveClearAndHardBGColor"
-    )]
-    pub groove_clear_and_hard_bg_color: String,
-    #[serde(default = "default_gaugegraph_exhard_bg_color", rename = "exHardBGColor")]
-    pub ex_hard_bg_color: String,
-    #[serde(default = "default_gaugegraph_hazard_bg_color", rename = "hazardBGColor")]
-    pub hazard_bg_color: String,
-    #[serde(
-        default = "default_gaugegraph_assist_clear_line_color",
-        rename = "assistClearLineColor"
-    )]
-    pub assist_clear_line_color: String,
-    #[serde(
-        default = "default_gaugegraph_assist_easy_fail_line_color",
-        rename = "assistAndEasyFailLineColor"
-    )]
-    pub assist_and_easy_fail_line_color: String,
-    #[serde(default = "default_gaugegraph_groove_fail_line_color", rename = "grooveFailLineColor")]
-    pub groove_fail_line_color: String,
-    #[serde(
-        default = "default_gaugegraph_groove_clear_hard_line_color",
-        rename = "grooveClearAndHardLineColor"
-    )]
-    pub groove_clear_and_hard_line_color: String,
-    #[serde(default = "default_gaugegraph_exhard_line_color", rename = "exHardLineColor")]
-    pub ex_hard_line_color: String,
-    #[serde(default = "default_gaugegraph_hazard_line_color", rename = "hazardLineColor")]
-    pub hazard_line_color: String,
-    #[serde(default = "default_gaugegraph_borderline_color", rename = "borderlineColor")]
-    pub borderline_color: String,
-    #[serde(default = "default_gaugegraph_border_color", rename = "borderColor")]
-    pub border_color: String,
-}
-
-/// beatoraja `bpmgraph[]` 要素。
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-pub struct SkinBpmGraphDef {
-    #[serde(default, deserialize_with = "deserialize_skin_id")]
-    pub id: String,
-    #[serde(default)]
-    pub delay: i32,
-    #[serde(default, rename = "lineWidth")]
-    pub line_width: i32,
-    #[serde(default, rename = "mainBPMColor")]
-    pub main_bpm_color: String,
-    #[serde(default, rename = "minBPMColor")]
-    pub min_bpm_color: String,
-    #[serde(default, rename = "maxBPMColor")]
-    pub max_bpm_color: String,
-    #[serde(default, rename = "otherBPMColor")]
-    pub other_bpm_color: String,
-    #[serde(default, rename = "stopLineColor")]
-    pub stop_line_color: String,
-    #[serde(default, rename = "transitionLineColor")]
-    pub transition_line_color: String,
-}
-
-/// Skin value / slider 用の BMZ 組み込み式キー。
-pub const SKIN_EXPR_ADJUSTED_COVER: &str = "bmz:adjusted_cover";
-pub const SKIN_EXPR_ADJUSTED_RATE: &str = "bmz:adjusted_rate";
-pub const SKIN_EXPR_ADJUSTED_RATE_ADOT: &str = "bmz:adjusted_rate_adot";
-pub const SKIN_EXPR_FS_THRESHOLD: &str = "bmz:fs_threshold";
-pub const SKIN_EXPR_COURSE_TABLE_TEXT: &str = "bmz:course_table_text";
-pub const SKIN_EXPR_FAST_SLOW_BREAKDOWN_HEIGHT: &str = "bmz:fast_slow_breakdown_height";
-pub const SKIN_EXPR_DEFAULT_CHART_TOTAL_COUNT: &str = "bmz:default_chart_total_count";
-pub const SKIN_EXPR_DEFAULT_CHART_GAUGE: &str = "bmz:default_chart_gauge";
-
-/// beatoraja 予約 ID と衝突しない動的タイマー ID 範囲の先頭。
-pub const SKIN_DYNAMIC_TIMER_BASE: i32 = 9000;
-/// Play 中 imageset が `main_state.gauge_type()` で選ぶ ref (beatoraja 非予約)。
-pub const SKIN_REF_PLAY_GAUGE_TYPE: i32 = 44;
-/// beatoraja `BUTTON_HSFIX` (`event_index(55)`)。
-pub const SKIN_EVENT_HSFIX: i32 = 55;
-/// beatoraja `NUMBER_RANDOM_1P_1KEY..NUMBER_RANDOM_2P_SCR` (450..469).
-pub const SKIN_RANDOM_LANE_REF_BASE: i32 = 450;
-pub const SKIN_RANDOM_LANE_REF_COUNT: usize = 20;
-/// `SkinDrawState::dynamic_timer_ms` のスロット数。
-pub const SKIN_DYNAMIC_TIMER_COUNT: usize = 64;
-
-fn string_array_refs(values: &[String; 10]) -> [&str; 10] {
-    std::array::from_fn(|index| values[index].as_str())
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-pub struct SkinDynamicTimerDef {
-    pub id: i32,
-    pub observe: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-pub struct SkinGraphDef {
-    #[serde(default, deserialize_with = "deserialize_skin_id")]
-    pub id: String,
-    #[serde(default, deserialize_with = "deserialize_skin_id")]
-    pub src: String,
-    #[serde(default)]
-    pub x: i32,
-    #[serde(default)]
-    pub y: i32,
-    #[serde(default)]
-    pub w: i32,
-    #[serde(default)]
-    pub h: i32,
-    #[serde(default = "default_grid_division")]
-    pub divx: i32,
-    #[serde(default = "default_grid_division")]
-    pub divy: i32,
-    #[serde(default)]
-    pub timer: Option<i32>,
-    #[serde(default)]
-    pub cycle: i32,
-    #[serde(default = "default_graph_angle")]
-    pub angle: i32,
-    #[serde(default, rename = "type")]
-    pub graph_type: i32,
-    /// Lua `value = function()` から変換した fill 比率式 (0.0–1.0)。空なら `graph_type` を使う。
-    #[serde(default)]
-    pub value_expr: String,
-    #[serde(default, rename = "isRefNum")]
-    pub is_ref_num: bool,
-    #[serde(default)]
-    pub min: i32,
-    #[serde(default)]
-    pub max: i32,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-pub struct SkinHiddenCoverDef {
-    #[serde(default, deserialize_with = "deserialize_skin_id")]
-    pub id: String,
-    #[serde(default, deserialize_with = "deserialize_skin_id")]
-    pub src: String,
-    #[serde(default)]
-    pub x: i32,
-    #[serde(default)]
-    pub y: i32,
-    #[serde(default)]
-    pub w: i32,
-    #[serde(default)]
-    pub h: i32,
-    #[serde(default = "default_grid_division")]
-    pub divx: i32,
-    #[serde(default = "default_grid_division")]
-    pub divy: i32,
-    #[serde(default)]
-    pub timer: Option<i32>,
-    #[serde(default)]
-    pub cycle: i32,
-    #[serde(default, rename = "disapearLine")]
-    pub disappear_line: i32,
-    #[serde(default = "default_true", rename = "isDisapearLineLinkLift")]
-    pub is_disappear_line_link_lift: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-pub struct SkinHitErrorVisualizerDef {
-    #[serde(default, deserialize_with = "deserialize_skin_id")]
-    pub id: String,
-    #[serde(default = "default_hiterror_width")]
-    pub width: i32,
-    #[serde(default = "default_hiterror_judge_width_millis", rename = "judgeWidthMillis")]
-    pub judge_width_millis: i32,
-    #[serde(default = "default_hiterror_line_width", rename = "lineWidth")]
-    pub line_width: i32,
-    #[serde(default, rename = "colorMode")]
-    pub color_mode: i32,
-    #[serde(default = "default_true_int", rename = "hiterrorMode")]
-    pub hiterror_mode: i32,
-    #[serde(default = "default_true_int", rename = "emaMode")]
-    pub ema_mode: i32,
-    #[serde(default = "default_hiterror_line_color", rename = "lineColor")]
-    pub line_color: String,
-    #[serde(default = "default_hiterror_center_color", rename = "centerColor")]
-    pub center_color: String,
-    #[serde(default = "default_hiterror_judge_color", rename = "PGColor")]
-    pub pg_color: String,
-    #[serde(default = "default_hiterror_judge_color", rename = "GRColor")]
-    pub gr_color: String,
-    #[serde(default = "default_hiterror_judge_color", rename = "GDColor")]
-    pub gd_color: String,
-    #[serde(default = "default_hiterror_judge_color", rename = "BDColor")]
-    pub bd_color: String,
-    #[serde(default = "default_hiterror_judge_color", rename = "PRColor")]
-    pub pr_color: String,
-    #[serde(default = "default_hiterror_ema_color", rename = "emaColor")]
-    pub ema_color: String,
-    #[serde(default = "default_hiterror_alpha")]
-    pub alpha: f32,
-    #[serde(default = "default_hiterror_window_length", rename = "windowLength")]
-    pub window_length: i32,
-    #[serde(default)]
-    pub transparent: i32,
-    #[serde(default = "default_true_int", rename = "drawDecay")]
-    pub draw_decay: i32,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-pub struct SkinTimingVisualizerDef {
-    #[serde(default, deserialize_with = "deserialize_skin_id")]
-    pub id: String,
-    #[serde(default = "default_timing_width")]
-    pub width: i32,
-    #[serde(default = "default_timing_judge_width_millis", rename = "judgeWidthMillis")]
-    pub judge_width_millis: i32,
-    #[serde(default = "default_true_int", rename = "lineWidth")]
-    pub line_width: i32,
-    #[serde(default = "default_timing_line_color", rename = "lineColor")]
-    pub line_color: String,
-    #[serde(default = "default_timing_center_color", rename = "centerColor")]
-    pub center_color: String,
-    #[serde(default = "default_timing_pg_color", rename = "PGColor")]
-    pub pg_color: String,
-    #[serde(default = "default_timing_gr_color", rename = "GRColor")]
-    pub gr_color: String,
-    #[serde(default = "default_timing_gd_color", rename = "GDColor")]
-    pub gd_color: String,
-    #[serde(default = "default_timing_bd_color", rename = "BDColor")]
-    pub bd_color: String,
-    #[serde(default = "default_timing_pr_color", rename = "PRColor")]
-    pub pr_color: String,
-    #[serde(default)]
-    pub transparent: i32,
-    #[serde(default = "default_true_int", rename = "drawDecay")]
-    pub draw_decay: i32,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-pub struct SkinTimingDistributionGraphDef {
-    #[serde(default, deserialize_with = "deserialize_skin_id")]
-    pub id: String,
-    #[serde(default = "default_timing_width")]
-    pub width: i32,
-    #[serde(default = "default_true_int", rename = "lineWidth")]
-    pub line_width: i32,
-    #[serde(default = "default_timing_line_color", rename = "graphColor")]
-    pub graph_color: String,
-    #[serde(default = "default_timing_center_color", rename = "averageColor")]
-    pub average_color: String,
-    #[serde(default = "default_timing_center_color", rename = "devColor")]
-    pub dev_color: String,
-    #[serde(default = "default_timing_pg_color", rename = "PGColor")]
-    pub pg_color: String,
-    #[serde(default = "default_timing_gr_color", rename = "GRColor")]
-    pub gr_color: String,
-    #[serde(default = "default_timing_gd_color", rename = "GDColor")]
-    pub gd_color: String,
-    #[serde(default = "default_timing_bd_color", rename = "BDColor")]
-    pub bd_color: String,
-    #[serde(default = "default_timing_pr_color", rename = "PRColor")]
-    pub pr_color: String,
-    #[serde(default = "default_true_int", rename = "drawAverage")]
-    pub draw_average: i32,
-    #[serde(default = "default_true_int", rename = "drawDev")]
-    pub draw_dev: i32,
-}
-
-fn default_hiterror_width() -> i32 {
-    301
-}
-fn default_hiterror_judge_width_millis() -> i32 {
-    150
-}
-fn default_hiterror_line_width() -> i32 {
-    1
-}
-fn default_true_int() -> i32 {
-    1
-}
-fn default_hiterror_line_color() -> String {
-    "99CCFF80".to_string()
-}
-fn default_hiterror_center_color() -> String {
-    "FFFFFFFF".to_string()
-}
-fn default_hiterror_judge_color() -> String {
-    "99CCFF80".to_string()
-}
-fn default_hiterror_ema_color() -> String {
-    "FF0000FF".to_string()
-}
-fn default_hiterror_alpha() -> f32 {
-    0.1
-}
-fn default_hiterror_window_length() -> i32 {
-    30
-}
-
-fn default_timing_width() -> i32 {
-    301
-}
-fn default_timing_judge_width_millis() -> i32 {
-    150
-}
-fn default_timing_line_color() -> String {
-    "00FF00FF".to_string()
-}
-fn default_timing_center_color() -> String {
-    "FFFFFFFF".to_string()
-}
-fn default_timing_pg_color() -> String {
-    "000088FF".to_string()
-}
-fn default_timing_gr_color() -> String {
-    "008800FF".to_string()
-}
-fn default_timing_gd_color() -> String {
-    "888800FF".to_string()
-}
-fn default_timing_bd_color() -> String {
-    "880000FF".to_string()
-}
-fn default_timing_pr_color() -> String {
-    "000000FF".to_string()
-}
-
-fn default_gaugegraph_assist_clear_bg_color() -> String {
-    "440044".to_string()
-}
-fn default_gaugegraph_assist_easy_fail_bg_color() -> String {
-    "004444".to_string()
-}
-fn default_gaugegraph_groove_fail_bg_color() -> String {
-    "004400".to_string()
-}
-fn default_gaugegraph_groove_clear_hard_bg_color() -> String {
-    "440000".to_string()
-}
-fn default_gaugegraph_exhard_bg_color() -> String {
-    "444400".to_string()
-}
-fn default_gaugegraph_hazard_bg_color() -> String {
-    "444444".to_string()
-}
-fn default_gaugegraph_assist_clear_line_color() -> String {
-    "ff00ff".to_string()
-}
-fn default_gaugegraph_assist_easy_fail_line_color() -> String {
-    "00ffff".to_string()
-}
-fn default_gaugegraph_groove_fail_line_color() -> String {
-    "00ff00".to_string()
-}
-fn default_gaugegraph_groove_clear_hard_line_color() -> String {
-    "ff0000".to_string()
-}
-fn default_gaugegraph_exhard_line_color() -> String {
-    "ffff00".to_string()
-}
-fn default_gaugegraph_hazard_line_color() -> String {
-    "cccccc".to_string()
-}
-fn default_gaugegraph_borderline_color() -> String {
-    "ff0000".to_string()
-}
-fn default_gaugegraph_border_color() -> String {
-    "440000".to_string()
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-pub struct SkinNoteSetDef {
-    #[serde(default, deserialize_with = "deserialize_skin_id")]
-    pub id: String,
-    #[serde(default, deserialize_with = "deserialize_skin_id_vec")]
-    pub note: Vec<String>,
-    #[serde(default, deserialize_with = "deserialize_skin_id_vec")]
-    pub lnstart: Vec<String>,
-    #[serde(default, deserialize_with = "deserialize_skin_id_vec")]
-    pub lnend: Vec<String>,
-    #[serde(default, deserialize_with = "deserialize_skin_id_vec")]
-    pub lnbody: Vec<String>,
-    /// 新形式: 押下中の LN 胴体。定義時は lnbody=非押下 / lnbodyActive=押下中。
-    #[serde(default, rename = "lnbodyActive", deserialize_with = "deserialize_skin_id_vec")]
-    pub lnbody_active: Vec<String>,
-    #[serde(default, deserialize_with = "deserialize_skin_id_vec")]
-    pub lnactive: Vec<String>,
-    #[serde(default, deserialize_with = "deserialize_skin_id_vec")]
-    pub hcnstart: Vec<String>,
-    #[serde(default, deserialize_with = "deserialize_skin_id_vec")]
-    pub hcnend: Vec<String>,
-    #[serde(default, deserialize_with = "deserialize_skin_id_vec")]
-    pub hcnbody: Vec<String>,
-    /// 新形式: processing(正しく押下)中の HCN 胴体。
-    #[serde(default, rename = "hcnbodyActive", deserialize_with = "deserialize_skin_id_vec")]
-    pub hcnbody_active: Vec<String>,
-    /// 新形式: passing 中で inclease(回復中)の HCN 胴体。
-    #[serde(default, rename = "hcnbodyReactive", deserialize_with = "deserialize_skin_id_vec")]
-    pub hcnbody_reactive: Vec<String>,
-    /// 新形式: passing 中で離している(減衰中)の HCN 胴体。
-    #[serde(default, rename = "hcnbodyMiss", deserialize_with = "deserialize_skin_id_vec")]
-    pub hcnbody_miss: Vec<String>,
-    #[serde(default, deserialize_with = "deserialize_skin_id_vec")]
-    pub hcnactive: Vec<String>,
-    #[serde(default, deserialize_with = "deserialize_skin_id_vec")]
-    pub hcndamage: Vec<String>,
-    #[serde(default, deserialize_with = "deserialize_skin_id_vec")]
-    pub hcnreactive: Vec<String>,
-    #[serde(default, deserialize_with = "deserialize_skin_id_vec")]
-    pub mine: Vec<String>,
-    #[serde(default, deserialize_with = "deserialize_skin_id_vec")]
-    pub hidden: Vec<String>,
-    #[serde(default, deserialize_with = "deserialize_skin_id_vec")]
-    pub processed: Vec<String>,
-    #[serde(default)]
-    pub size: Vec<i32>,
-    #[serde(default)]
-    pub dst: Vec<SkinDstEntry>,
-    #[serde(default)]
-    pub group: Vec<SkinDestinationDef>,
-    #[serde(default)]
-    pub bpm: Vec<SkinDestinationDef>,
-    #[serde(default)]
-    pub stop: Vec<SkinDestinationDef>,
-    #[serde(default)]
-    pub time: Vec<SkinDestinationDef>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-pub struct SkinGaugeDef {
-    #[serde(default, deserialize_with = "deserialize_skin_id")]
-    pub id: String,
-    #[serde(default, deserialize_with = "deserialize_skin_id_vec")]
-    pub nodes: Vec<String>,
-    #[serde(default = "default_gauge_parts")]
-    pub parts: i32,
-    /// beatoraja `SkinGauge` のアニメ種別 (`ANIMATION_*`)。JSON で省略時は 0 (RANDOM)。
-    #[serde(default = "default_skin_gauge_animation_type", rename = "type")]
-    pub gauge_type: i32,
-    #[serde(default = "default_gauge_range")]
-    pub range: i32,
-    #[serde(default = "default_gauge_cycle")]
-    pub cycle: i32,
-    #[serde(default)]
-    pub starttime: i32,
-    #[serde(default = "default_gauge_endtime")]
-    pub endtime: i32,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-pub struct SkinJudgeDef {
-    #[serde(default, deserialize_with = "deserialize_skin_id")]
-    pub id: String,
-    #[serde(default)]
-    pub index: i32,
-    #[serde(default)]
-    pub images: Vec<SkinDestinationDef>,
-    #[serde(default)]
-    pub numbers: Vec<SkinDestinationDef>,
-    #[serde(default)]
-    pub shift: bool,
-}
-
 /// beatoraja `PlaySkin.judgeregion` 上限 (TIMER_JUDGE_1P/2P/3P = 46/47/247)。
 pub const MAX_JUDGE_REGIONS: usize = 3;
 
@@ -1089,56 +170,6 @@ pub fn build_judge_region_state(
     JudgeRegionState { judge_ms, judge_index, judge_combo, judge_timing_sign, judge_timing_ms }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-pub struct SkinBgaDef {
-    #[serde(default, deserialize_with = "deserialize_skin_id")]
-    pub id: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-pub struct SkinDestinationDef {
-    #[serde(default, deserialize_with = "deserialize_skin_id")]
-    pub id: String,
-    #[serde(default)]
-    pub blend: i32,
-    #[serde(default)]
-    pub filter: i32,
-    #[serde(default)]
-    pub timer: Option<i32>,
-    /// `loop` フィールド。未指定(None)＝ループなし(1回再生して最終フレーム保持)。
-    /// `Some(n>=0)`＝終端到達後 n 時刻へループバック。`Some(n<0)`＝終端後に非表示。
-    #[serde(default, rename = "loop")]
-    pub loop_time: Option<i32>,
-    #[serde(default)]
-    pub center: i32,
-    #[serde(default)]
-    pub offset: i32,
-    #[serde(default)]
-    pub offsets: Vec<i32>,
-    #[serde(default = "default_stretch")]
-    pub stretch: i32,
-    #[serde(default, deserialize_with = "deserialize_op_codes")]
-    pub op: Vec<i32>,
-    #[serde(default)]
-    pub draw: String,
-    #[serde(default)]
-    pub dst: Vec<SkinDstEntry>,
-    #[serde(rename = "mouseRect")]
-    pub mouse_rect: Option<SkinRectDef>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
-pub struct SkinRectDef {
-    #[serde(default)]
-    pub x: i32,
-    #[serde(default)]
-    pub y: i32,
-    #[serde(default)]
-    pub w: i32,
-    #[serde(default)]
-    pub h: i32,
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SkinClickTarget {
     Event { event_id: i32, click: i32 },
@@ -1155,118 +186,6 @@ pub struct SkinClickHit {
 pub struct SkinSliderHit {
     pub slider_type: i32,
     pub value: f32,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
-pub struct SkinAnimationDef {
-    pub time: Option<i32>,
-    pub x: Option<i32>,
-    pub y: Option<i32>,
-    pub w: Option<i32>,
-    pub h: Option<i32>,
-    #[serde(default, deserialize_with = "deserialize_skin_frame_expr_opt")]
-    pub h_expr: Option<SkinFrameExpr>,
-    pub acc: Option<i32>,
-    pub a: Option<i32>,
-    pub r: Option<i32>,
-    pub g: Option<i32>,
-    pub b: Option<i32>,
-    pub angle: Option<i32>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SkinFrameExpr {
-    FastSlowBreakdownHeight(i32),
-}
-
-/// A single entry in a destination `dst` array — either a plain animation frame or a
-/// conditional frame that is only included when all listed option IDs are enabled.
-#[derive(Debug, Clone, PartialEq)]
-pub enum SkinDstEntry {
-    Frame(SkinAnimationDef),
-    /// `{"if": [...], "value": {...}}` or `{"if": [...], "values": [...]}`
-    Conditional {
-        if_ops: Vec<i32>,
-        frames: Vec<SkinAnimationDef>,
-    },
-}
-
-impl<'de> Deserialize<'de> for SkinDstEntry {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let value = JsonValue::deserialize(deserializer)?;
-        if value.get("if").is_some() {
-            let if_ops = parse_skin_dst_if_ops(value.get("if").unwrap());
-            let frames = if let Some(values_field) = value.get("values") {
-                serde_json::from_value::<Vec<SkinAnimationDef>>(values_field.clone())
-                    .unwrap_or_default()
-            } else if let Some(value_field) = value.get("value") {
-                serde_json::from_value::<SkinAnimationDef>(value_field.clone())
-                    .ok()
-                    .into_iter()
-                    .collect()
-            } else {
-                vec![]
-            };
-            Ok(SkinDstEntry::Conditional { if_ops, frames })
-        } else {
-            serde_json::from_value(value).map(SkinDstEntry::Frame).map_err(serde::de::Error::custom)
-        }
-    }
-}
-
-/// `destination` 配列の1エントリ。通常の `SkinDestinationDef` か、
-/// `{"if": [...], "values": [...]}` 形式の条件付きグループ。
-#[derive(Debug, Clone, PartialEq)]
-pub enum DestinationListEntry {
-    Single(SkinDestinationDef),
-    /// `{"if": [...], "values": [...]}` 形式。条件が満たされた場合のみ内部エントリを展開する。
-    Conditional {
-        if_ops: Vec<i32>,
-        destinations: Vec<SkinDestinationDef>,
-    },
-}
-
-impl<'de> Deserialize<'de> for DestinationListEntry {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let value = JsonValue::deserialize(deserializer)?;
-        if value.get("if").is_some() {
-            let if_ops = parse_skin_dst_if_ops(value.get("if").unwrap());
-            let destinations = if let Some(values_field) = value.get("values") {
-                serde_json::from_value::<Vec<SkinDestinationDef>>(values_field.clone())
-                    .unwrap_or_default()
-            } else {
-                vec![]
-            };
-            Ok(DestinationListEntry::Conditional { if_ops, destinations })
-        } else {
-            serde_json::from_value(value)
-                .map(DestinationListEntry::Single)
-                .map_err(serde::de::Error::custom)
-        }
-    }
-}
-
-fn deserialize_destination_entries<'de, D>(
-    deserializer: D,
-) -> std::result::Result<Vec<DestinationListEntry>, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    let value = JsonValue::deserialize(deserializer)?;
-    if value.is_null() {
-        return Ok(Vec::new());
-    }
-    if value.is_array() {
-        serde_json::from_value(value).map_err(serde::de::Error::custom)
-    } else {
-        serde_json::from_value(value).map(|entry| vec![entry]).map_err(serde::de::Error::custom)
-    }
 }
 
 #[derive(Debug, Clone)]
@@ -2820,38 +1739,602 @@ impl SkinDefinition {
     }
 }
 
-impl SkinDocument {
-    pub fn load_beatoraja_json(path: &Path) -> Result<Self> {
-        let raw = load_json_value(path)?;
-        let options = default_enabled_options(&raw);
-        Self::load_beatoraja_json_with_options(path, &options)
-    }
+/// `SkinDocument` (bmz-skin-document) に対する描画評価の拡張 trait。
+///
+/// document スキーマ本体は `bmz-skin-document` crate へ移動したため、
+/// `SkinDrawState` / `SkinRenderItem` 等の描画型に依存する評価メソッドは
+/// foreign type への inherent impl ができず、この拡張 trait で提供する。
+/// 実装は `impl SkinDocumentRenderExt for SkinDocument` の 1 つだけを想定する。
+///
+/// 旧 inherent impl の private ヘルパーメソッドも trait へ機械的に移した
+/// ため、`SkinRuntimeGraphs` 等の crate 内 private 型がシグネチャに現れる。
+/// これらは外部から呼べない (引数型を名指しできない) ので lint を許可する。
+#[allow(private_interfaces)]
+pub trait SkinDocumentRenderExt {
+    fn static_image_render_items(
+        &self,
+        sources: &HashMap<String, SkinDocumentTexture>,
+        state: &SkinDrawState,
+    ) -> Vec<SkinRenderItem>;
 
-    pub fn load_beatoraja_json_with_options(path: &Path, enabled_options: &[i32]) -> Result<Self> {
-        let raw = load_json_value(path)?;
-        let root = path.parent().unwrap_or_else(|| Path::new("."));
-        let expanded = expand_json_skin_value(raw, root, root, enabled_options)
-            .with_context(|| format!("failed to expand skin json: {}", path.display()))?;
-        let expanded = normalize_json_skin_integer_numbers(expanded);
-        serde_json::from_value(expanded)
-            .with_context(|| format!("failed to parse skin json: {}", path.display()))
-    }
+    fn static_render_items(
+        &self,
+        sources: &HashMap<String, SkinDocumentTexture>,
+        state: &SkinDrawState,
+        text_state: &SkinTextState<'_>,
+    ) -> Vec<SkinRenderItem>;
 
-    pub fn source_map(&self) -> HashMap<&str, &SkinSourceDef> {
-        self.source.iter().map(|source| (source.id.as_str(), source)).collect()
-    }
+    fn static_render_items_with_graphs(
+        &self,
+        sources: &HashMap<String, SkinDocumentTexture>,
+        state: &SkinDrawState,
+        text_state: &SkinTextState<'_>,
+        runtime_graphs: SkinRuntimeGraphs<'_>,
+    ) -> Vec<SkinRenderItem>;
 
-    pub fn image_map(&self) -> HashMap<&str, &SkinImageDef> {
-        self.image.iter().map(|image| (image.id.as_str(), image)).collect()
-    }
+    fn static_render_items_with_graphs_cached(
+        &self,
+        sources: &HashMap<String, SkinDocumentTexture>,
+        state: &SkinDrawState,
+        text_state: &SkinTextState<'_>,
+        runtime_graphs: SkinRuntimeGraphs<'_>,
+        cache: Option<&mut ResultRenderCache>,
+    ) -> Vec<SkinRenderItem>;
 
-    /// beatoraja `PlaySkin.judgeregion` 相当 (`max(judge.index) + 1`、最低 1)。
-    pub fn judge_region_count(&self) -> usize {
-        let max_index = self.judge.iter().map(|judge| judge.index).max().unwrap_or(-1);
-        (max_index.max(0) as usize + 1).max(1)
-    }
+    fn static_render_items_split(
+        &self,
+        sources: &HashMap<String, SkinDocumentTexture>,
+        state: &SkinDrawState,
+        text_state: &SkinTextState<'_>,
+    ) -> (Vec<SkinRenderItem>, Vec<SkinRenderItem>, Vec<SkinRenderItem>);
 
-    pub fn static_image_render_items(
+    fn static_render_items_split_with_graphs(
+        &self,
+        sources: &HashMap<String, SkinDocumentTexture>,
+        state: &SkinDrawState,
+        text_state: &SkinTextState<'_>,
+        runtime_graphs: SkinRuntimeGraphs<'_>,
+        cache: Option<&mut ResultRenderCache>,
+    ) -> (Vec<SkinRenderItem>, Vec<SkinRenderItem>, Vec<SkinRenderItem>);
+
+    fn result_judge_pie_destination_item(
+        &self,
+        destination: &SkinDestinationDef,
+        images: &HashMap<&str, &SkinImageDef>,
+        enabled_options: &[i32],
+        state: &SkinDrawState,
+        sources: &HashMap<String, SkinDocumentTexture>,
+    ) -> Option<SkinRenderItem>;
+
+    fn destination_looks_like_pre_notes_judge_line(
+        &self,
+        destination: &SkinDestinationDef,
+        images: &HashMap<&str, &SkinImageDef>,
+        enabled_options: &[i32],
+        state: &SkinDrawState,
+        next_destination: Option<&SkinDestinationDef>,
+    ) -> bool;
+
+    fn disappear_line_for_lane_cover_clip(&self) -> Option<(i32, bool)>;
+
+    fn should_clip_image_at_disappear_line(
+        &self,
+        destination: &SkinDestinationDef,
+        image: &SkinImageDef,
+    ) -> bool;
+
+    fn should_skip_lift_lane_cover_render(
+        &self,
+        destination: &SkinDestinationDef,
+        image: &SkinImageDef,
+    ) -> bool;
+
+    fn link_lift_for_lane_cover_clip(
+        &self,
+        destination: &SkinDestinationDef,
+        image: &SkinImageDef,
+        link_lift: bool,
+    ) -> bool;
+
+    fn resolve_destination_items(
+        &self,
+        destination_index: usize,
+        destination: &SkinDestinationDef,
+        context: DestinationResolveContext<'_, '_>,
+    ) -> Option<Vec<SkinRenderItem>>;
+
+    fn resolve_offset_destination_items(
+        &self,
+        destination: &SkinDestinationDef,
+        offset: (i32, i32),
+        images: &HashMap<&str, &SkinImageDef>,
+        enabled_options: &[i32],
+        state: &SkinDrawState,
+        text_state: &SkinTextState<'_>,
+        sources: &HashMap<String, SkinDocumentTexture>,
+    ) -> Option<Vec<SkinRenderItem>>;
+
+    fn select_render_items(
+        &self,
+        sources: &HashMap<String, SkinDocumentTexture>,
+        snapshot: &SelectSnapshot,
+    ) -> Vec<SkinRenderItem>;
+
+    fn select_render_items_with_dynamic_timers(
+        &self,
+        sources: &HashMap<String, SkinDocumentTexture>,
+        snapshot: &SelectSnapshot,
+        dynamic_timers: Option<&mut DynamicTimerRuntime>,
+        settings_dest_index: &crate::select_settings_dest::SelectSettingsDestIndex,
+    ) -> Vec<SkinRenderItem>;
+
+    fn select_draw_state<'a>(
+        &self,
+        snapshot: &'a SelectSnapshot,
+        dynamic_timers: Option<&mut DynamicTimerRuntime>,
+    ) -> (SkinDrawState, Option<&'a SelectRowSnapshot>);
+
+    fn select_click_hit(
+        &self,
+        sources: &HashMap<String, SkinDocumentTexture>,
+        snapshot: &SelectSnapshot,
+        settings_dest_index: &crate::select_settings_dest::SelectSettingsDestIndex,
+        x: f32,
+        y: f32,
+    ) -> Option<SkinClickHit>;
+
+    fn select_slider_hit(
+        &self,
+        snapshot: &SelectSnapshot,
+        settings_dest_index: &crate::select_settings_dest::SelectSettingsDestIndex,
+        x: f32,
+        y: f32,
+    ) -> Option<SkinSliderHit>;
+
+    fn select_click_hits(
+        &self,
+        _sources: &HashMap<String, SkinDocumentTexture>,
+        snapshot: &SelectSnapshot,
+        settings_dest_index: &crate::select_settings_dest::SelectSettingsDestIndex,
+    ) -> Vec<SkinClickHit>;
+
+    fn select_songlist_click_hits(
+        &self,
+        snapshot: &SelectSnapshot,
+        enabled_options: &[i32],
+        state: &SkinDrawState,
+    ) -> Vec<SkinClickHit>;
+
+    fn apply_select_songlist_render_row_state(state: &mut SkinDrawState, row: &SelectRowSnapshot);
+
+    fn apply_select_songlist_click_row_state(state: &mut SkinDrawState, row: &SelectRowSnapshot);
+
+    fn click_target_for_destination(
+        &self,
+        destination: &SkinDestinationDef,
+        images: &HashMap<&str, &SkinImageDef>,
+    ) -> Option<SkinClickTarget>;
+
+    fn destination_click_rect(
+        &self,
+        destination: &SkinDestinationDef,
+        enabled_options: &[i32],
+        state: &SkinDrawState,
+    ) -> Option<Rect>;
+
+    fn destination_slider_hit(
+        &self,
+        slider: &SkinSliderDef,
+        destination: &SkinDestinationDef,
+        enabled_options: &[i32],
+        state: &SkinDrawState,
+        x: f32,
+        y: f32,
+    ) -> Option<SkinSliderHit>;
+
+    fn select_songlist_items(
+        &self,
+        sources: &HashMap<String, SkinDocumentTexture>,
+        snapshot: &SelectSnapshot,
+        images: &HashMap<&str, &SkinImageDef>,
+        enabled_options: &[i32],
+        state: &SkinDrawState,
+    ) -> Vec<SkinRenderItem>;
+
+    fn apply_select_songlist_scroll_to_frame(
+        &self,
+        frame: &mut ResolvedSkinFrame,
+        songlist: &SkinSongListDef,
+        slot: i32,
+        enabled_options: &[i32],
+        state: &SkinDrawState,
+        direction: i32,
+        progress: f32,
+    );
+
+    fn select_songlist_all_child_items(
+        &self,
+        entries: &[DestinationListEntry],
+        row: &SelectRowSnapshot,
+        row_origin: (i32, i32),
+        images: &HashMap<&str, &SkinImageDef>,
+        enabled_options: &[i32],
+        state: &SkinDrawState,
+        sources: &HashMap<String, SkinDocumentTexture>,
+    ) -> Vec<SkinRenderItem>;
+
+    fn select_folder_distribution_graph_render_items(
+        &self,
+        row: &SelectRowSnapshot,
+        graph: &SkinGraphDef,
+        destination: &SkinDestinationDef,
+        row_origin: (i32, i32),
+        enabled_options: &[i32],
+        state: &SkinDrawState,
+        sources: &HashMap<String, SkinDocumentTexture>,
+    ) -> Vec<SkinRenderItem>;
+
+    fn select_songlist_level_items(
+        &self,
+        entries: &[DestinationListEntry],
+        row: &SelectRowSnapshot,
+        row_origin: (i32, i32),
+        images: &HashMap<&str, &SkinImageDef>,
+        enabled_options: &[i32],
+        state: &SkinDrawState,
+        sources: &HashMap<String, SkinDocumentTexture>,
+    ) -> Vec<SkinRenderItem>;
+
+    fn select_songlist_child_items_by_index(
+        &self,
+        entries: &[DestinationListEntry],
+        index: usize,
+        row_origin: (i32, i32),
+        images: &HashMap<&str, &SkinImageDef>,
+        enabled_options: &[i32],
+        state: &SkinDrawState,
+        sources: &HashMap<String, SkinDocumentTexture>,
+    ) -> Vec<SkinRenderItem>;
+
+    fn select_songlist_text_items(
+        &self,
+        row: &SelectRowSnapshot,
+        row_origin: (i32, i32),
+        images: &HashMap<&str, &SkinImageDef>,
+        enabled_options: &[i32],
+        state: &SkinDrawState,
+        sources: &HashMap<String, SkinDocumentTexture>,
+    ) -> Vec<SkinRenderItem>;
+
+    fn select_bar_item(
+        &self,
+        row: &SelectRowSnapshot,
+        destination: &SkinDestinationDef,
+        frame: ResolvedSkinFrame,
+        sources: &HashMap<String, SkinDocumentTexture>,
+    ) -> Option<SkinRenderItem>;
+
+    fn note_image_render_item(
+        &self,
+        lane: Lane,
+        key_mode: KeyMode,
+        rect: Rect,
+        sources: &HashMap<String, SkinDocumentTexture>,
+    ) -> Option<SkinRenderItem>;
+
+    fn note_ln_start_render_item(
+        &self,
+        lane: Lane,
+        key_mode: KeyMode,
+        rect: Rect,
+        mode: LongNoteMode,
+        sources: &HashMap<String, SkinDocumentTexture>,
+    ) -> Option<SkinRenderItem>;
+
+    fn note_ln_end_render_item(
+        &self,
+        lane: Lane,
+        key_mode: KeyMode,
+        rect: Rect,
+        mode: LongNoteMode,
+        sources: &HashMap<String, SkinDocumentTexture>,
+    ) -> Option<SkinRenderItem>;
+
+    fn ln_body_image_id<'a>(
+        &self,
+        note: &'a SkinNoteSetDef,
+        index: usize,
+        pressing: bool,
+    ) -> Option<&'a String>;
+
+    fn hcn_body_image_id<'a>(
+        &self,
+        note: &'a SkinNoteSetDef,
+        index: usize,
+        state: LongBodyState,
+    ) -> Option<&'a String>;
+
+    fn note_long_body_render_item(
+        &self,
+        lane: Lane,
+        key_mode: KeyMode,
+        rect: Rect,
+        mode: LongNoteMode,
+        state: LongBodyState,
+        sources: &HashMap<String, SkinDocumentTexture>,
+    ) -> Option<SkinRenderItem>;
+
+    fn note_mine_render_item(
+        &self,
+        lane: Lane,
+        key_mode: KeyMode,
+        rect: Rect,
+        sources: &HashMap<String, SkinDocumentTexture>,
+    ) -> Option<SkinRenderItem>;
+
+    fn note_height_for_lane(&self, lane: Lane, key_mode: KeyMode) -> Option<f32>;
+
+    fn note_part_render_item(
+        &self,
+        image_id: &str,
+        rect: Rect,
+        sources: &HashMap<String, SkinDocumentTexture>,
+    ) -> Option<SkinRenderItem>;
+
+    fn note_group_render_items(
+        &self,
+        note_y: f32,
+        key_mode: KeyMode,
+        state: &SkinDrawState,
+        sources: &HashMap<String, SkinDocumentTexture>,
+    ) -> Vec<SkinRenderItem>;
+
+    fn note_lane_area(
+        &self,
+        lane: Lane,
+        key_mode: KeyMode,
+        enabled_options: &[i32],
+    ) -> Option<Rect>;
+
+    fn primary_note_lane_height_px(&self) -> Option<i32>;
+
+    fn apply_notes_offset_to_rect(&self, rect: Rect, state: &SkinDrawState) -> Rect;
+
+    fn gauge_render_items(
+        &self,
+        gauge: f32,
+        elapsed_ms: i32,
+        sources: &HashMap<String, SkinDocumentTexture>,
+    ) -> Option<Vec<SkinRenderItem>>;
+
+    fn destination_uses_skin_gauge_bar_render(&self, destination: &SkinDestinationDef) -> bool;
+
+    fn destination_uses_skin_gauge_overlay_render(&self, destination: &SkinDestinationDef) -> bool;
+
+    fn skin_gauge_for_destination(&self, destination: &SkinDestinationDef)
+    -> Option<&SkinGaugeDef>;
+
+    fn resolve_gauge_destination_items(
+        &self,
+        destination: &SkinDestinationDef,
+        enabled_options: &[i32],
+        state: &SkinDrawState,
+        sources: &HashMap<String, SkinDocumentTexture>,
+    ) -> Option<Vec<SkinRenderItem>>;
+
+    fn judge_render_items(
+        &self,
+        judge: &str,
+        combo: u32,
+        elapsed_ms: i32,
+        sources: &HashMap<String, SkinDocumentTexture>,
+    ) -> Option<Vec<SkinRenderItem>>;
+
+    fn judge_render_items_with_offsets(
+        &self,
+        judge: &str,
+        combo: u32,
+        elapsed_ms: i32,
+        skin_offsets: &SkinOffsetValues,
+        sources: &HashMap<String, SkinDocumentTexture>,
+    ) -> Option<Vec<SkinRenderItem>>;
+
+    fn judge_render_items_for_def(
+        &self,
+        judge: &SkinJudgeDef,
+        judge_index: usize,
+        combo: u32,
+        elapsed_ms: i32,
+        sources: &HashMap<String, SkinDocumentTexture>,
+        state: &SkinDrawState,
+    ) -> Option<Vec<SkinRenderItem>>;
+
+    fn beatoraja_judge_number_dst_x(dst_w: i32, digit: i32) -> i32;
+
+    fn apply_beatoraja_judge_number_dst_x(frame: &mut ResolvedSkinFrame, digit: i32);
+
+    fn value_number_length(&self, value_id: &str, number: i64, frame: ResolvedSkinFrame) -> i32;
+
+    fn judge_image_render_item(
+        &self,
+        judge: &str,
+        elapsed_ms: i32,
+        sources: &HashMap<String, SkinDocumentTexture>,
+    ) -> Option<SkinRenderItem>;
+
+    fn value_number_render_items(
+        &self,
+        value_id: &str,
+        number: i64,
+        base_frame: ResolvedSkinFrame,
+        frame: ResolvedSkinFrame,
+        elapsed_ms: i32,
+        sources: &HashMap<String, SkinDocumentTexture>,
+        compact_digits: bool,
+        align_override: Option<i32>,
+        signed_render: SignedNumberRender,
+    ) -> Vec<SkinRenderItem>;
+
+    fn value_digit_texture_region(
+        value: &SkinValueDef,
+        digit: u32,
+        elapsed_ms: i32,
+        source_size: SkinImageSize,
+        cell_width_px: f32,
+        cell_height_px: f32,
+        divx: i32,
+        divy: i32,
+    ) -> TextureRegion;
+
+    fn gauge_image_render_item(
+        &self,
+        image_id: &str,
+        rect: Rect,
+        elapsed_ms: i32,
+        sources: &HashMap<String, SkinDocumentTexture>,
+        tint: Color,
+        blend: BlendMode,
+        linear_filter: bool,
+    ) -> Option<SkinRenderItem>;
+
+    #[cfg(test)]
+    fn text_render_item(
+        &self,
+        text: &SkinTextDef,
+        frame: ResolvedSkinFrame,
+        state: &SkinTextState<'_>,
+    ) -> Option<SkinRenderItem>;
+
+    fn text_render_item_with_draw_state(
+        &self,
+        text: &SkinTextDef,
+        frame: ResolvedSkinFrame,
+        draw_state: Option<&SkinDrawState>,
+        state: &SkinTextState<'_>,
+    ) -> Option<SkinRenderItem>;
+
+    fn hiterror_visualizer_render_items(
+        &self,
+        visualizer: &SkinHitErrorVisualizerDef,
+        destination: &SkinDestinationDef,
+        frame: ResolvedSkinFrame,
+        state: &SkinDrawState,
+    ) -> Vec<SkinRenderItem>;
+
+    fn gaugegraph_render_items(
+        &self,
+        graph: &SkinGaugeGraphDef,
+        destination: &SkinDestinationDef,
+        frame: ResolvedSkinFrame,
+        state: &SkinDrawState,
+        points: &[crate::snapshot::ResultGaugeGraphPoint],
+    ) -> Vec<SkinRenderItem>;
+
+    fn timing_visualizer_render_items(
+        &self,
+        visualizer: &SkinTimingVisualizerDef,
+        destination: &SkinDestinationDef,
+        frame: ResolvedSkinFrame,
+        state: &SkinDrawState,
+        timing_points: &[crate::snapshot::ResultTimingPoint],
+    ) -> Vec<SkinRenderItem>;
+
+    fn timing_distribution_graph_render_items(
+        &self,
+        graph: &SkinTimingDistributionGraphDef,
+        destination: &SkinDestinationDef,
+        frame: ResolvedSkinFrame,
+        state: &SkinDrawState,
+        timing_points: &[crate::snapshot::ResultTimingPoint],
+        timing_distribution: &crate::snapshot::ResultTimingDistribution,
+    ) -> Vec<SkinRenderItem>;
+
+    fn judgegraph_render_items(
+        &self,
+        destination_index: usize,
+        graph: &SkinJudgeGraphDef,
+        destination: &SkinDestinationDef,
+        frame: ResolvedSkinFrame,
+        elapsed_ms: i32,
+        state: &SkinDrawState,
+        runtime_graphs: SkinRuntimeGraphs<'_>,
+        cache: Option<&mut ResultRenderCache>,
+    ) -> Vec<SkinRenderItem>;
+
+    fn density_judgegraph_render_items(
+        &self,
+        graph: &SkinJudgeGraphDef,
+        destination: &SkinDestinationDef,
+        frame: ResolvedSkinFrame,
+        density: &[u8],
+    ) -> Vec<SkinRenderItem>;
+
+    fn select_note_distribution_graph_render_items(
+        &self,
+        row: &SelectRowSnapshot,
+        graph: &SkinJudgeGraphDef,
+        destination: &SkinDestinationDef,
+        row_origin: (i32, i32),
+        enabled_options: &[i32],
+        state: &SkinDrawState,
+    ) -> Vec<SkinRenderItem>;
+
+    fn select_bpmgraph_row_render_items(
+        &self,
+        row: &SelectRowSnapshot,
+        graph: &SkinBpmGraphDef,
+        destination: &SkinDestinationDef,
+        row_origin: (i32, i32),
+        enabled_options: &[i32],
+        state: &SkinDrawState,
+    ) -> Vec<SkinRenderItem>;
+
+    fn bpmgraph_render_items_with_segments(
+        &self,
+        graph: &SkinBpmGraphDef,
+        destination: &SkinDestinationDef,
+        frame: ResolvedSkinFrame,
+        state: &SkinDrawState,
+        segments: &[crate::chart_graph::BpmGraphSegment],
+    ) -> Vec<SkinRenderItem>;
+
+    fn direct_source_image_render_item(
+        &self,
+        destination: &SkinDestinationDef,
+        frame: ResolvedSkinFrame,
+        sources: &HashMap<String, SkinDocumentTexture>,
+    ) -> Option<SkinRenderItem>;
+
+    fn slider_render_item(
+        &self,
+        slider: &SkinSliderDef,
+        destination: &SkinDestinationDef,
+        frame: ResolvedSkinFrame,
+        state: &SkinDrawState,
+        sources: &HashMap<String, SkinDocumentTexture>,
+    ) -> Option<SkinRenderItem>;
+
+    fn hidden_cover_render_item(
+        &self,
+        cover: &SkinHiddenCoverDef,
+        destination: &SkinDestinationDef,
+        frame: ResolvedSkinFrame,
+        state: &SkinDrawState,
+        sources: &HashMap<String, SkinDocumentTexture>,
+    ) -> Option<SkinRenderItem>;
+
+    fn graph_render_item(
+        &self,
+        graph: &SkinGraphDef,
+        frame: ResolvedSkinFrame,
+        state: &SkinDrawState,
+        sources: &HashMap<String, SkinDocumentTexture>,
+    ) -> Option<SkinRenderItem>;
+}
+
+#[allow(private_interfaces)]
+impl SkinDocumentRenderExt for SkinDocument {
+    fn static_image_render_items(
         &self,
         sources: &HashMap<String, SkinDocumentTexture>,
         state: &SkinDrawState,
@@ -2859,7 +2342,7 @@ impl SkinDocument {
         self.static_render_items(sources, state, &SkinTextState::default())
     }
 
-    pub fn static_render_items(
+    fn static_render_items(
         &self,
         sources: &HashMap<String, SkinDocumentTexture>,
         state: &SkinDrawState,
@@ -2911,7 +2394,7 @@ impl SkinDocument {
 
     /// 静的 destination を `{"id":"notes"}` マーカーと `timer: 3` で3分割して描画アイテムを返す。
     /// 戻り値 `.0` はノーツより背面、`.1` はノーツより前面、`.2` は FAILED オーバーレイ。
-    pub fn static_render_items_split(
+    fn static_render_items_split(
         &self,
         sources: &HashMap<String, SkinDocumentTexture>,
         state: &SkinDrawState,
@@ -3663,106 +3146,7 @@ impl SkinDocument {
         None
     }
 
-    pub fn enabled_options(&self) -> Vec<i32> {
-        let options = if let Some(ops) = &self.user_selected_options {
-            ops.clone()
-        } else {
-            self.property
-                .iter()
-                .filter_map(|property| {
-                    let selected = if property.def.is_empty() {
-                        property.item.first()
-                    } else {
-                        property.item.iter().find(|item| item.name == property.def)
-                    };
-                    selected.map(|item| item.op)
-                })
-                .collect()
-        };
-        self.with_internal_enabled_options(options)
-    }
-
-    pub fn with_internal_enabled_options(&self, mut enabled_options: Vec<i32>) -> Vec<i32> {
-        for &op in &self.internal_enabled_options {
-            if !enabled_options.contains(&op) {
-                enabled_options.push(op);
-            }
-        }
-        enabled_options
-    }
-
-    /// 有効なオプション条件に基づいて `destination` エントリを展開し、
-    /// 描画対象の `SkinDestinationDef` の参照リストを返す。
-    /// Returns the first dst frame of any text element whose `ref_id` equals
-    /// `ref_id`, normalized into the `0.0..=1.0` rendered viewport coordinate
-    /// space (top-left origin). Used by bmz-player to position the IME candidate
-    /// window over the search input region without touching the skin.
-    ///
-    /// Beatoraja skin sources use top-down y growing from the canvas top, but
-    /// `normalize_skin_frame_rect` flips that to a bottom-up rect before paint,
-    /// so directly using skin y here would land the IME cursor mirrored across
-    /// the canvas. Apply the same flip so the returned rect matches the on-
-    /// screen rendered position.
-    pub fn text_destination_rect_for_ref(&self, ref_id: i32) -> Option<(f32, f32, f32, f32)> {
-        let text_id = self.text.iter().find(|t| t.ref_id == ref_id)?.id.as_str();
-        let canvas_w = self.w.max(1) as f32;
-        let canvas_h = self.h.max(1) as f32;
-        // top-level destinations only — the search word region sits there
-        // in beatoraja m-select skins.
-        for entry in &self.destination {
-            let candidates: Vec<&SkinDestinationDef> = match entry {
-                DestinationListEntry::Single(d) => vec![d],
-                DestinationListEntry::Conditional { destinations, .. } => {
-                    destinations.iter().collect()
-                }
-            };
-            for dest in candidates {
-                if dest.id != text_id {
-                    continue;
-                }
-                for dst in &dest.dst {
-                    let frame_opt = match dst {
-                        SkinDstEntry::Frame(f) => Some(f),
-                        SkinDstEntry::Conditional { frames, .. } => frames.first(),
-                    };
-                    if let Some(frame) = frame_opt {
-                        let raw_x = frame.x.unwrap_or(0) as f32;
-                        let raw_y = frame.y.unwrap_or(0) as f32;
-                        let raw_w = frame.w.unwrap_or(0).max(0) as f32;
-                        let raw_h = frame.h.unwrap_or(0).max(0) as f32;
-                        if raw_w <= 0.0 || raw_h <= 0.0 {
-                            continue;
-                        }
-                        // Match `normalize_skin_frame_rect`: bottom-up render
-                        // origin → top-left coordinate the IME backend wants.
-                        let x = raw_x / canvas_w;
-                        let y = (canvas_h - (raw_y + raw_h)) / canvas_h;
-                        let w = raw_w / canvas_w;
-                        let h = raw_h / canvas_h;
-                        return Some((x, y, w, h));
-                    }
-                }
-            }
-        }
-        None
-    }
-
-    pub fn all_destinations<'a>(&'a self, enabled_options: &[i32]) -> Vec<&'a SkinDestinationDef> {
-        let mut result = Vec::new();
-        for entry in &self.destination {
-            match entry {
-                DestinationListEntry::Single(d) => result.push(d),
-                DestinationListEntry::Conditional { if_ops, destinations } => {
-                    if test_skin_dst_if(if_ops, enabled_options) {
-                        result.extend(destinations.iter());
-                    }
-                }
-            }
-        }
-        result
-    }
-
-    pub fn select_render_items(
+    fn select_render_items(
         &self,
         sources: &HashMap<String, SkinDocumentTexture>,
         snapshot: &SelectSnapshot,
@@ -3775,7 +3159,7 @@ impl SkinDocument {
         )
     }
 
-    pub fn select_render_items_with_dynamic_timers(
+    fn select_render_items_with_dynamic_timers(
         &self,
         sources: &HashMap<String, SkinDocumentTexture>,
         snapshot: &SelectSnapshot,
@@ -4070,7 +3454,7 @@ impl SkinDocument {
         (state, selected_row)
     }
 
-    pub fn select_click_hit(
+    fn select_click_hit(
         &self,
         sources: &HashMap<String, SkinDocumentTexture>,
         snapshot: &SelectSnapshot,
@@ -4084,7 +3468,7 @@ impl SkinDocument {
             .find(|hit| rect_contains(hit.rect, x, y))
     }
 
-    pub fn select_slider_hit(
+    fn select_slider_hit(
         &self,
         snapshot: &SelectSnapshot,
         settings_dest_index: &crate::select_settings_dest::SelectSettingsDestIndex,
@@ -4790,7 +4174,7 @@ impl SkinDocument {
         ))
     }
 
-    pub fn note_image_render_item(
+    fn note_image_render_item(
         &self,
         lane: Lane,
         key_mode: KeyMode,
@@ -4805,7 +4189,7 @@ impl SkinDocument {
     /// LN START（ヘッドキャップ）画像を描画する。
     /// HCN モードでは `hcnstart`（beatoraja: `longImage[5]`）を優先し、
     /// `lnstart` → `note` の順にフォールバックする。
-    pub fn note_ln_start_render_item(
+    fn note_ln_start_render_item(
         &self,
         lane: Lane,
         key_mode: KeyMode,
@@ -4823,7 +4207,7 @@ impl SkinDocument {
     /// LN END（テールキャップ）画像を描画する。
     /// HCN モードでは `hcnend`（beatoraja: `longImage[4]`）を優先し、
     /// `lnend` → `note` の順にフォールバックする。
-    pub fn note_ln_end_render_item(
+    fn note_ln_end_render_item(
         &self,
         lane: Lane,
         key_mode: KeyMode,
@@ -4923,7 +4307,7 @@ impl SkinDocument {
     /// ロングノート胴体画像を描画する。`mode` と `state` の組み合わせで
     /// beatoraja `drawLongNote` の longImage 選択を再現する。
     /// 該当画像が無ければ LN 胴体 → `note` の順にフォールバックする。
-    pub fn note_long_body_render_item(
+    fn note_long_body_render_item(
         &self,
         lane: Lane,
         key_mode: KeyMode,
@@ -4946,7 +4330,7 @@ impl SkinDocument {
     /// Mine ノート画像（`note.mine`）を描画する。スキンが `mine` を定義していない、
     /// または該当レーンの index が空なら `None` を返し、呼び出し側でフォールバックを
     /// 使う想定。
-    pub fn note_mine_render_item(
+    fn note_mine_render_item(
         &self,
         lane: Lane,
         key_mode: KeyMode,
@@ -4958,7 +4342,7 @@ impl SkinDocument {
         self.note_part_render_item(image_id, rect, sources)
     }
 
-    pub fn note_height_for_lane(&self, lane: Lane, key_mode: KeyMode) -> Option<f32> {
+    fn note_height_for_lane(&self, lane: Lane, key_mode: KeyMode) -> Option<f32> {
         let note = self.note.as_ref()?;
         let index = beatoraja_note_index(lane, key_mode);
         if let Some(size) = note.size.get(index).copied().filter(|size| *size > 0) {
@@ -4991,7 +4375,7 @@ impl SkinDocument {
         })
     }
 
-    pub fn note_group_render_items(
+    fn note_group_render_items(
         &self,
         note_y: f32,
         key_mode: KeyMode,
@@ -5073,7 +4457,7 @@ impl SkinDocument {
     ///    → 全 Frame をフラット配列として `lane_idx` 番目を使う。
     /// 2. 直接 JSON パースした場合: Conditional エントリの frames 配列がレーン対応を持つ。
     ///    → 条件を満たす Conditional を探し、その frames[lane_idx] を使う。
-    pub fn note_lane_area(
+    fn note_lane_area(
         &self,
         lane: Lane,
         key_mode: KeyMode,
@@ -5109,7 +4493,7 @@ impl SkinDocument {
         }
     }
 
-    pub fn primary_note_lane_height_px(&self) -> Option<i32> {
+    fn primary_note_lane_height_px(&self) -> Option<i32> {
         let enabled_options = self.enabled_options();
         self.note_lane_area(Lane::Scratch, KeyMode::K7, &enabled_options)
             .or_else(|| self.note_lane_area(Lane::Key1, KeyMode::K7, &enabled_options))
@@ -5133,7 +4517,7 @@ impl SkinDocument {
         }
     }
 
-    pub fn gauge_render_items(
+    fn gauge_render_items(
         &self,
         gauge: f32,
         elapsed_ms: i32,
@@ -5254,7 +4638,7 @@ impl SkinDocument {
         Some(items)
     }
 
-    pub fn judge_render_items(
+    fn judge_render_items(
         &self,
         judge: &str,
         combo: u32,
@@ -5270,7 +4654,7 @@ impl SkinDocument {
         )
     }
 
-    pub fn judge_render_items_with_offsets(
+    fn judge_render_items_with_offsets(
         &self,
         judge: &str,
         combo: u32,
@@ -5291,7 +4675,7 @@ impl SkinDocument {
         )
     }
 
-    pub fn judge_render_items_for_def(
+    fn judge_render_items_for_def(
         &self,
         judge: &SkinJudgeDef,
         judge_index: usize,
@@ -5428,7 +4812,7 @@ impl SkinDocument {
         if digits.is_empty() { 0 } else { digits.len() as i32 * (frame.w + value.space) }
     }
 
-    pub fn judge_image_render_item(
+    fn judge_image_render_item(
         &self,
         judge: &str,
         elapsed_ms: i32,
@@ -7011,381 +6395,6 @@ fn skin_texture_manifest(id: u32, path: &str) -> SkinTextureManifest {
     SkinTextureManifest { id, path: path.to_string() }
 }
 
-fn load_json_value(path: &Path) -> Result<JsonValue> {
-    let text = std::fs::read_to_string(path)
-        .with_context(|| format!("failed to read skin json: {}", path.display()))?;
-    let text = strip_json_trailing_commas(&text);
-    let text = insert_missing_commas_between_json_values(&text);
-    serde_json::from_str(&text)
-        .with_context(|| format!("failed to parse skin json: {}", path.display()))
-}
-
-fn strip_json_trailing_commas(input: &str) -> String {
-    let mut output = String::with_capacity(input.len());
-    let mut chars = input.chars().peekable();
-    let mut in_string = false;
-    let mut escaped = false;
-
-    while let Some(ch) = chars.next() {
-        if in_string {
-            output.push(ch);
-            if escaped {
-                escaped = false;
-            } else if ch == '\\' {
-                escaped = true;
-            } else if ch == '"' {
-                in_string = false;
-            }
-            continue;
-        }
-
-        if ch == '"' {
-            in_string = true;
-            output.push(ch);
-            continue;
-        }
-
-        if ch == ',' {
-            let mut lookahead = chars.clone();
-            while matches!(lookahead.peek(), Some(next) if next.is_whitespace()) {
-                lookahead.next();
-            }
-            if matches!(lookahead.peek(), Some(']' | '}')) {
-                continue;
-            }
-        }
-
-        output.push(ch);
-    }
-
-    output
-}
-
-fn insert_missing_commas_between_json_values(input: &str) -> String {
-    let mut output = String::with_capacity(input.len());
-    let mut chars = input.chars().peekable();
-    let mut in_string = false;
-    let mut escaped = false;
-
-    while let Some(ch) = chars.next() {
-        output.push(ch);
-        if in_string {
-            if escaped {
-                escaped = false;
-            } else if ch == '\\' {
-                escaped = true;
-            } else if ch == '"' {
-                in_string = false;
-            }
-            continue;
-        }
-        if ch == '"' {
-            in_string = true;
-            continue;
-        }
-        if ch != '}' && ch != ']' {
-            continue;
-        }
-
-        let mut lookahead = chars.clone();
-        let mut whitespace = String::new();
-        while let Some(next) = lookahead.peek().copied() {
-            if next.is_whitespace() {
-                whitespace.push(next);
-                lookahead.next();
-            } else {
-                break;
-            }
-        }
-        if matches!(lookahead.peek(), Some('{') | Some('[')) {
-            output.push(',');
-        }
-    }
-
-    output
-}
-
-fn normalize_json_skin_integer_numbers(value: JsonValue) -> JsonValue {
-    normalize_json_skin_integer_numbers_for_key(None, value)
-}
-
-fn normalize_json_skin_integer_numbers_for_key(key: Option<&str>, value: JsonValue) -> JsonValue {
-    match value {
-        JsonValue::Array(values) => JsonValue::Array(
-            values
-                .into_iter()
-                .map(|value| {
-                    if is_json_skin_integer_key(key) {
-                        normalize_json_skin_integer_value(value)
-                    } else {
-                        normalize_json_skin_integer_numbers_for_key(key, value)
-                    }
-                })
-                .collect(),
-        ),
-        JsonValue::Object(map) => JsonValue::Object(
-            map.into_iter()
-                .map(|(key, value)| {
-                    let value = if is_json_skin_integer_key(Some(&key)) {
-                        normalize_json_skin_integer_value(value)
-                    } else {
-                        normalize_json_skin_integer_numbers_for_key(Some(&key), value)
-                    };
-                    (key, value)
-                })
-                .collect::<JsonMap<_, _>>(),
-        ),
-        JsonValue::Number(number) if is_json_skin_integer_key(key) => {
-            json_number_to_rounded_i64(&number)
-                .and_then(serde_json::Number::from_i128)
-                .map(JsonValue::Number)
-                .unwrap_or(JsonValue::Number(number))
-        }
-        value => value,
-    }
-}
-
-fn normalize_json_skin_integer_value(value: JsonValue) -> JsonValue {
-    match value {
-        JsonValue::Number(number) => json_number_to_rounded_i64(&number)
-            .and_then(serde_json::Number::from_i128)
-            .map(JsonValue::Number)
-            .unwrap_or(JsonValue::Number(number)),
-        JsonValue::Array(values) => {
-            JsonValue::Array(values.into_iter().map(normalize_json_skin_integer_value).collect())
-        }
-        JsonValue::Object(map) => JsonValue::Object(
-            map.into_iter()
-                .map(|(key, value)| {
-                    let value = if is_json_skin_integer_key(Some(&key)) {
-                        normalize_json_skin_integer_value(value)
-                    } else {
-                        normalize_json_skin_integer_numbers_for_key(Some(&key), value)
-                    };
-                    (key, value)
-                })
-                .collect::<JsonMap<_, _>>(),
-        ),
-        value => value,
-    }
-}
-
-fn json_number_to_rounded_i64(number: &serde_json::Number) -> Option<i128> {
-    if let Some(value) = number.as_i64() {
-        return Some(value as i128);
-    }
-    if let Some(value) = number.as_u64() {
-        return Some(value as i128);
-    }
-    let value = number.as_f64()?;
-    if !value.is_finite() || value < i64::MIN as f64 || value > i64::MAX as f64 {
-        return None;
-    }
-    Some(value.round() as i128)
-}
-
-fn is_json_skin_integer_key(key: Option<&str>) -> bool {
-    matches!(
-        key,
-        Some(
-            "a" | "acc"
-                | "align"
-                | "angle"
-                | "b"
-                | "blend"
-                | "center"
-                | "click"
-                | "cycle"
-                | "digit"
-                | "disapearLine"
-                | "divx"
-                | "divy"
-                | "endtime"
-                | "filter"
-                | "g"
-                | "h"
-                | "index"
-                | "len"
-                | "loop"
-                | "max"
-                | "min"
-                | "offset"
-                | "offsets"
-                | "op"
-                | "padding"
-                | "parts"
-                | "r"
-                | "range"
-                | "ref"
-                | "size"
-                | "space"
-                | "starttime"
-                | "stretch"
-                | "time"
-                | "timer"
-                | "type"
-                | "w"
-                | "x"
-                | "y"
-                | "zeropadding"
-        )
-    )
-}
-
-fn expand_json_skin_value(
-    value: JsonValue,
-    current_dir: &Path,
-    root_dir: &Path,
-    enabled_options: &[i32],
-) -> Result<JsonValue> {
-    match value {
-        JsonValue::Array(items) => {
-            let mut expanded = Vec::new();
-            for item in items {
-                if let JsonValue::Object(object) = &item {
-                    if let Some(include) = object.get("include") {
-                        let included = load_included_json(include, current_dir, root_dir)?;
-                        let included_dir = included.parent().unwrap_or(current_dir);
-                        let included_value = expand_json_skin_value(
-                            load_json_value(&included)?,
-                            included_dir,
-                            root_dir,
-                            enabled_options,
-                        )?;
-                        match included_value {
-                            JsonValue::Array(values) => expanded.extend(values),
-                            other => expanded.push(other),
-                        }
-                        continue;
-                    }
-                    if object.contains_key("if")
-                        && (object.contains_key("value") || object.contains_key("values"))
-                    {
-                        if test_json_option(object.get("if"), enabled_options) {
-                            if let Some(value) = object.get("value") {
-                                expanded.push(expand_json_skin_value(
-                                    value.clone(),
-                                    current_dir,
-                                    root_dir,
-                                    enabled_options,
-                                )?);
-                            }
-                            if let Some(values) = object.get("values") {
-                                let values = expand_json_skin_value(
-                                    values.clone(),
-                                    current_dir,
-                                    root_dir,
-                                    enabled_options,
-                                )?;
-                                match values {
-                                    JsonValue::Array(values) => expanded.extend(values),
-                                    other => expanded.push(other),
-                                }
-                            }
-                        }
-                        continue;
-                    }
-                }
-                expanded.push(expand_json_skin_value(
-                    item,
-                    current_dir,
-                    root_dir,
-                    enabled_options,
-                )?);
-            }
-            Ok(JsonValue::Array(expanded))
-        }
-        JsonValue::Object(mut object) => {
-            if let Some(include) = object.get("include") {
-                let included = load_included_json(include, current_dir, root_dir)?;
-                let included_dir = included.parent().unwrap_or(current_dir);
-                return expand_json_skin_value(
-                    load_json_value(&included)?,
-                    included_dir,
-                    root_dir,
-                    enabled_options,
-                );
-            }
-            if object.contains_key("if") && object.contains_key("value") {
-                return if test_json_option(object.get("if"), enabled_options) {
-                    expand_json_skin_value(
-                        object.remove("value").unwrap_or(JsonValue::Null),
-                        current_dir,
-                        root_dir,
-                        enabled_options,
-                    )
-                } else {
-                    Ok(JsonValue::Null)
-                };
-            }
-            let mut expanded = JsonMap::new();
-            for (key, value) in object {
-                expanded.insert(
-                    key,
-                    expand_json_skin_value(value, current_dir, root_dir, enabled_options)?,
-                );
-            }
-            Ok(JsonValue::Object(expanded))
-        }
-        other => Ok(other),
-    }
-}
-
-fn load_included_json(include: &JsonValue, current_dir: &Path, root_dir: &Path) -> Result<PathBuf> {
-    let include =
-        include.as_str().ok_or_else(|| anyhow::anyhow!("skin json include must be a string"))?;
-    let path = current_dir.join(include);
-    let canonical_root = root_dir
-        .canonicalize()
-        .with_context(|| format!("failed to canonicalize skin root: {}", root_dir.display()))?;
-    let canonical_path = path
-        .canonicalize()
-        .with_context(|| format!("failed to canonicalize skin include: {}", path.display()))?;
-    anyhow::ensure!(
-        canonical_path.starts_with(&canonical_root),
-        "skin include escapes skin root: {}",
-        path.display()
-    );
-    Ok(canonical_path)
-}
-
-fn test_json_option(option: Option<&JsonValue>, enabled_options: &[i32]) -> bool {
-    let Some(option) = option else {
-        return true;
-    };
-    match option {
-        JsonValue::Number(number) => number.as_i64().is_some_and(|value| {
-            test_json_option_number(i32::try_from(value).unwrap_or(i32::MIN), enabled_options)
-        }),
-        JsonValue::Array(values) => values.iter().all(|value| match value {
-            JsonValue::Number(number) => number.as_i64().is_some_and(|value| {
-                test_json_option_number(i32::try_from(value).unwrap_or(i32::MIN), enabled_options)
-            }),
-            JsonValue::Array(or_values) => or_values.iter().any(|or_value| {
-                let JsonValue::Number(number) = or_value else {
-                    return false;
-                };
-                number.as_i64().is_some_and(|value| {
-                    test_json_option_number(
-                        i32::try_from(value).unwrap_or(i32::MIN),
-                        enabled_options,
-                    )
-                })
-            }),
-            _ => false,
-        }),
-        _ => false,
-    }
-}
-
-fn test_json_option_number(option: i32, enabled_options: &[i32]) -> bool {
-    if option >= 0 {
-        enabled_options.contains(&option)
-    } else {
-        !enabled_options.contains(&-option)
-    }
-}
-
 pub fn test_skin_ops(ops: &[i32], enabled_options: &[i32], state: &SkinDrawState) -> bool {
     ops.iter().all(|op| test_skin_op(*op, enabled_options, state))
 }
@@ -7625,32 +6634,6 @@ fn gradebar_constraint_op_matches(op: i32, state: &SkinDrawState) -> bool {
         1017 => constraints.hcn,
         _ => false,
     }
-}
-
-fn default_enabled_options(value: &JsonValue) -> Vec<i32> {
-    let Some(properties) = value.get("property").and_then(JsonValue::as_array) else {
-        return Vec::new();
-    };
-    properties.iter().filter_map(default_property_option).collect()
-}
-
-fn default_property_option(property: &JsonValue) -> Option<i32> {
-    let items = property.get("item")?.as_array()?;
-    let default_name = property.get("def").and_then(JsonValue::as_str).unwrap_or_default();
-    if let Some(default_item) = items.iter().find(|item| {
-        !default_name.is_empty()
-            && item.get("name").and_then(JsonValue::as_str).is_some_and(|name| name == default_name)
-    }) {
-        return default_item
-            .get("op")
-            .and_then(JsonValue::as_i64)
-            .and_then(|op| i32::try_from(op).ok());
-    }
-    items
-        .first()
-        .and_then(|item| item.get("op"))
-        .and_then(JsonValue::as_i64)
-        .and_then(|op| i32::try_from(op).ok())
 }
 
 pub fn default_skin_manifest() -> SkinManifest {
@@ -11805,32 +10788,6 @@ fn destination_entries<'a>(
     result
 }
 
-/// Parses the `if` field of a conditional dst entry into a flat list of required option IDs.
-/// Each ID is positive (must be enabled) or negative (must be disabled).
-/// Nested arrays (OR groups) are flattened to their first element for simplicity.
-fn parse_skin_dst_if_ops(value: &JsonValue) -> Vec<i32> {
-    match value {
-        JsonValue::Number(n) => n.as_i64().map(|n| vec![n as i32]).unwrap_or_default(),
-        JsonValue::Array(arr) => arr
-            .iter()
-            .flat_map(|v| match v {
-                JsonValue::Number(n) => n.as_i64().map(|n| vec![n as i32]).unwrap_or_default(),
-                JsonValue::Array(inner) => inner
-                    .iter()
-                    .find_map(|v2| v2.as_i64())
-                    .map(|n| vec![n as i32])
-                    .unwrap_or_default(),
-                _ => vec![],
-            })
-            .collect(),
-        _ => vec![],
-    }
-}
-
-fn test_skin_dst_if(if_ops: &[i32], enabled_options: &[i32]) -> bool {
-    if_ops.iter().all(|&op| test_json_option_number(op, enabled_options))
-}
-
 /// Expands a dst entry list into animation frames, filtering conditional entries by `enabled_options`.
 fn flatten_dst_entries(dst: &[SkinDstEntry], enabled_options: &[i32]) -> Vec<SkinAnimationDef> {
     let mut result = Vec::new();
@@ -12865,30 +11822,6 @@ impl Default for ResolvedSkinFrame {
     }
 }
 
-fn default_skin_canvas_width() -> u32 {
-    1280
-}
-
-fn default_skin_canvas_height() -> u32 {
-    720
-}
-
-fn default_judgetimer() -> i32 {
-    1
-}
-
-fn default_grid_division() -> i32 {
-    1
-}
-
-fn default_true() -> bool {
-    true
-}
-
-fn default_graph_angle() -> i32 {
-    1
-}
-
 /// beatoraja `SkinGauge.ANIMATION_*` (JSON `gauge.type` フィールド)。
 const SKIN_GAUGE_ANIM_RANDOM: i32 = 0;
 const SKIN_GAUGE_ANIM_DECREASE: i32 = 2;
@@ -13032,30 +11965,6 @@ fn skin_gauge_part_rect(rect: Rect, parts: i32, part: i32, reverse: bool) -> Rec
     }
 }
 
-fn default_skin_gauge_animation_type() -> i32 {
-    0
-}
-
-fn default_gauge_parts() -> i32 {
-    50
-}
-
-fn default_gauge_range() -> i32 {
-    3
-}
-
-fn default_gauge_cycle() -> i32 {
-    33
-}
-
-fn default_gauge_endtime() -> i32 {
-    500
-}
-
-fn default_stretch() -> i32 {
-    -1
-}
-
 /// Starseeker 等の閉店 Lua は `src = "bg"` / `src = 0` と書くが、実体は `system.png`。
 fn resolve_document_source<'a>(
     sources: &'a HashMap<String, SkinDocumentTexture>,
@@ -13083,154 +11992,6 @@ fn destination_render_layer<'a>(
         front
     } else {
         behind
-    }
-}
-
-fn deserialize_skin_id<'de, D>(deserializer: D) -> std::result::Result<String, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    deserializer.deserialize_any(SkinIdVisitor)
-}
-
-fn deserialize_skin_string<'de, D>(deserializer: D) -> std::result::Result<String, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    deserializer.deserialize_any(SkinIdVisitor)
-}
-
-fn deserialize_skin_frame_expr_opt<'de, D>(
-    deserializer: D,
-) -> std::result::Result<Option<SkinFrameExpr>, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    let Some(expr) = Option::<String>::deserialize(deserializer)? else {
-        return Ok(None);
-    };
-    parse_skin_frame_expr(&expr).map(Some).map_err(D::Error::custom)
-}
-
-fn parse_skin_frame_expr(expr: &str) -> std::result::Result<SkinFrameExpr, String> {
-    let expr = expr.trim();
-    let prefix = format!("{SKIN_EXPR_FAST_SLOW_BREAKDOWN_HEIGHT}(");
-    let Some(arg) = expr.strip_prefix(&prefix).and_then(|rest| rest.strip_suffix(')')) else {
-        return Err(format!("unsupported skin frame expression `{expr}`"));
-    };
-    let ref_id = arg
-        .trim()
-        .parse::<i32>()
-        .map_err(|_| format!("invalid fast/slow breakdown ref `{arg}`"))?;
-    Ok(SkinFrameExpr::FastSlowBreakdownHeight(ref_id))
-}
-
-/// `op` フィールドは beatoraja Lua スキンで単一整数または整数配列のどちらでも
-/// 書ける。`Vec<i32>` への直接デシリアライズは整数を拒否してしまうため、
-/// スカラーは長さ 1 の配列として受け入れる。
-fn deserialize_op_codes<'de, D>(deserializer: D) -> std::result::Result<Vec<i32>, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    #[derive(serde::Deserialize)]
-    #[serde(untagged)]
-    enum OneOrMany {
-        Many(Vec<i32>),
-        One(i32),
-    }
-    Ok(match OneOrMany::deserialize(deserializer)? {
-        OneOrMany::Many(values) => values,
-        OneOrMany::One(value) => vec![value],
-    })
-}
-
-fn deserialize_skin_id_vec<'de, D>(deserializer: D) -> std::result::Result<Vec<String>, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    struct SkinIdVecVisitor;
-
-    impl<'de> Visitor<'de> for SkinIdVecVisitor {
-        type Value = Vec<String>;
-
-        fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-            formatter.write_str("a list of skin ids")
-        }
-
-        fn visit_seq<A>(self, mut seq: A) -> std::result::Result<Self::Value, A::Error>
-        where
-            A: serde::de::SeqAccess<'de>,
-        {
-            let mut ids = Vec::new();
-            while let Some(id) = seq.next_element_seed(SkinIdSeed)? {
-                ids.push(id);
-            }
-            Ok(ids)
-        }
-    }
-
-    deserializer.deserialize_seq(SkinIdVecVisitor)
-}
-
-struct SkinIdSeed;
-
-impl<'de> serde::de::DeserializeSeed<'de> for SkinIdSeed {
-    type Value = String;
-
-    fn deserialize<D>(self, deserializer: D) -> std::result::Result<Self::Value, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        deserialize_skin_id(deserializer)
-    }
-}
-
-struct SkinIdVisitor;
-
-impl<'de> Visitor<'de> for SkinIdVisitor {
-    type Value = String;
-
-    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str("a string or numeric skin id")
-    }
-
-    fn visit_str<E>(self, value: &str) -> std::result::Result<Self::Value, E>
-    where
-        E: DeError,
-    {
-        Ok(value.to_string())
-    }
-
-    fn visit_string<E>(self, value: String) -> std::result::Result<Self::Value, E>
-    where
-        E: DeError,
-    {
-        Ok(value)
-    }
-
-    fn visit_i64<E>(self, value: i64) -> std::result::Result<Self::Value, E>
-    where
-        E: DeError,
-    {
-        Ok(value.to_string())
-    }
-
-    fn visit_u64<E>(self, value: u64) -> std::result::Result<Self::Value, E>
-    where
-        E: DeError,
-    {
-        Ok(value.to_string())
-    }
-
-    fn visit_f64<E>(self, value: f64) -> std::result::Result<Self::Value, E>
-    where
-        E: DeError,
-    {
-        if value.fract() == 0.0 {
-            Ok(format!("{value:.0}"))
-        } else {
-            Err(E::custom("skin id numbers must be integers"))
-        }
     }
 }
 
@@ -13638,43 +12399,6 @@ mod tests {
             combo_panel_inactive.border,
             Some(SkinImageBorder { unit: SkinImageBorderUnit::Pixels, .. })
         ));
-    }
-
-    #[test]
-    fn skin_document_normalizes_numeric_and_string_ids() {
-        let document: SkinDocument = serde_json::from_str(
-            r#"
-            {
-                "type": 0,
-                "source": [
-                    { "id": 100, "path": "a.png" },
-                    { "id": "100", "path": "b.png" }
-                ],
-                "image": [
-                    { "id": 200, "src": 100, "x": 0, "y": 0, "w": 8, "h": 8 },
-                    { "id": "300", "src": "100", "x": 8, "y": 0, "w": 8, "h": 8 }
-                ],
-                "imageset": [
-                    { "id": "set", "images": [200, "300"] }
-                ],
-                "destination": [
-                    { "id": 200, "dst": [{ "x": 0, "y": 0, "w": 8, "h": 8 }] }
-                ]
-            }
-            "#,
-        )
-        .unwrap();
-
-        assert_eq!(document.source[0].id, "100");
-        assert_eq!(document.source[1].id, "100");
-        assert_eq!(document.image[0].id, "200");
-        assert_eq!(document.image[0].src, "100");
-        assert_eq!(document.image[1].src, "100");
-        assert_eq!(document.imageset[0].images, ["200", "300"]);
-        let DestinationListEntry::Single(dst0) = &document.destination[0] else {
-            panic!("expected Single destination");
-        };
-        assert_eq!(dst0.id, "200");
     }
 
     #[test]
@@ -15350,58 +14074,6 @@ mod tests {
             bga_items.as_slice(),
             [SkinRenderItem::Image { rect: Rect { x, .. }, .. }] if approx_eq(*x, 0.2)
         ));
-    }
-
-    #[test]
-    fn skin_document_expands_conditions_and_includes() {
-        let root = unique_test_dir("bmz-skin-json");
-        std::fs::create_dir_all(&root).unwrap();
-        std::fs::write(
-            root.join("included.json"),
-            r#"
-            [
-                { "id": "included", "src": "1", "x": 0, "y": 0, "w": 8, "h": 8, },
-                { "if": -901, "value": { "id": "disabled", "src": "1" } }
-            ]
-            "#,
-        )
-        .unwrap();
-        std::fs::write(
-            root.join("skin.json"),
-            r#"
-            {
-                "type": 0,
-                "property": [
-                    { "name": "Graph", "def": "On", "item": [
-                        { "name": "Off", "op": 900 },
-                        { "name": "On", "op": 901 }
-                    ]}
-                ],
-                "source": [{ "id": 1, "path": "system.png" }],
-                "image": { "include": "included.json" },
-                "destination": [
-                    { "if": 901, "value": { "id": "included", "dst": [{ "x": 1, "y": 2, "w": 3, "h": 4 }] } },
-                    { "if": -901, "value": { "id": "disabled", "dst": [{ "x": 0, "y": 0, "w": 1, "h": 1 }] } }
-                ],
-            }
-            "#,
-        )
-        .unwrap();
-
-        let document = SkinDocument::load_beatoraja_json(&root.join("skin.json")).unwrap();
-
-        assert_eq!(document.source[0].id, "1");
-        assert_eq!(document.image.len(), 1);
-        assert_eq!(document.image[0].id, "included");
-        assert_eq!(document.destination.len(), 1);
-        let DestinationListEntry::Single(dst0) = &document.destination[0] else {
-            panic!("expected Single destination");
-        };
-        assert_eq!(dst0.id, "included");
-        let SkinDstEntry::Frame(frame) = &dst0.dst[0] else {
-            panic!("expected Frame entry");
-        };
-        assert_eq!(frame.x, Some(1));
     }
 
     #[test]

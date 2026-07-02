@@ -1,13 +1,7 @@
 use bmz_chart::model::{PlayableChart, TimingEventKind};
 use bmz_core::lane::KeyMode;
 
-#[derive(Debug, Clone, PartialEq)]
-pub struct BpmGraphSegment {
-    pub start_ratio: f32,
-    pub end_ratio: f32,
-    pub bpm: f32,
-    pub is_stop: bool,
-}
+pub use bmz_skin_document::BpmGraphSegment;
 
 pub fn build_judge_graph_density(chart: &PlayableChart) -> Vec<u8> {
     let seconds = (chart.end_time.0 / 1_000_000).max(0) as usize + 1;

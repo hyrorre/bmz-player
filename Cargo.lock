@@ -636,6 +636,7 @@ dependencies = [
  "bmz-core",
  "bmz-font",
  "bmz-gameplay",
+ "bmz-skin-document",
  "bytemuck",
  "egui",
  "egui-wgpu",
@@ -666,6 +667,16 @@ version = "0.1.5"
 dependencies = [
  "anyhow",
  "bmz-skin",
+ "serde_json",
+]
+
+[[package]]
+name = "bmz-skin-document"
+version = "0.1.5"
+dependencies = [
+ "anyhow",
+ "bmz-core",
+ "serde",
  "serde_json",
 ]
 

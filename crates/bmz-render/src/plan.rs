@@ -6,10 +6,10 @@ use bmz_core::time::TimeUs;
 
 use crate::scene::{AppSceneSnapshot, SelectRowKind, SelectRowSnapshot, SelectSnapshot};
 use crate::skin::{
-    Animation, BlendMode, NumberSlot, SkinContext, SkinDefinition, SkinImageManifest,
-    SkinImageSize, SkinManifest, SkinObject, SkinObjectId, SkinPhase, SkinPlacement,
-    SkinRenderContext, SkinRenderItem, SkinSource, SkinTextState, SkinTextureId, TextSlot,
-    append_skin_render_item, append_skin_render_items, judge_image_index,
+    Animation, BlendMode, NumberSlot, SkinContext, SkinDefinition, SkinDocumentRenderExt,
+    SkinImageManifest, SkinImageSize, SkinManifest, SkinObject, SkinObjectId, SkinPhase,
+    SkinPlacement, SkinRenderContext, SkinRenderItem, SkinSource, SkinTextState, SkinTextureId,
+    TextSlot, append_skin_render_item, append_skin_render_items, judge_image_index,
 };
 use crate::skin_offset::{SKIN_OFFSET_BAR_LINE, SkinOffsetValues};
 use crate::snapshot::{
