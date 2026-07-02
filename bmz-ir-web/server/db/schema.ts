@@ -55,8 +55,11 @@ export const sessions = sqliteTable(
 export const authRateLimits = sqliteTable(
   'auth_rate_limits',
   {
-    action: text('action', { enum: ['login', 'register'] }).notNull(),
-    scope: text('scope', { enum: ['email', 'ip'] }).notNull(),
+    // enum は Drizzle の型レベル制約のみ (SQLite に CHECK は生成されない)。
+    action: text('action', {
+      enum: ['login', 'register', 'score_submit', 'refresh', 'replay_upload'],
+    }).notNull(),
+    scope: text('scope', { enum: ['email', 'ip', 'user'] }).notNull(),
     scopeHash: text('scope_hash').notNull(),
     windowStart: integer('window_start', { mode: 'timestamp_ms' }).notNull(),
     attempts: integer('attempts').notNull().default(0),

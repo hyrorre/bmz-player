@@ -3,6 +3,7 @@ import { and, eq } from 'drizzle-orm'
 import { blob } from 'hub:blob'
 import { db, schema } from 'hub:db'
 import { requireIrUser } from '../../../../../utils/auth'
+import { checkUserRateLimit } from '../../../../../utils/rate_limit'
 
 /**
  * アップロード済みリプレイの hash を検証する。
@@ -12,6 +13,8 @@ import { requireIrUser } from '../../../../../utils/auth'
  */
 export default defineEventHandler(async (event) => {
   const user = await requireIrUser(event)
+  // blob 全体の読み出し + hash 計算を伴うため upload と同じ枠で数える。
+  await checkUserRateLimit(event, 'replay_upload', user.id, { user: 120, ip: 240 })
   const scoreId = getRouterParam(event, 'id')
   if (!scoreId) {
     throw createError({ statusCode: 400, statusMessage: 'score id is required' })

@@ -1,10 +1,13 @@
 import { getQuery, readBody } from 'h3'
 import { parseRankingScope, submitScore, validateScoreSubmission } from '../../services/ir'
 import { requireIrUser } from '../../utils/auth'
+import { checkUserRateLimit } from '../../utils/rate_limit'
 import type { IrRankingScope } from '../../../shared/types/ir'
 
 export default defineEventHandler(async (event) => {
   const user = await requireIrUser(event)
+  // オフライン分の一括 sync (数十件程度) は許容しつつ書き込み spam を抑える。
+  await checkUserRateLimit(event, 'score_submit', user.id, { user: 300, ip: 600 })
 
   const body = await readBody(event)
   const payload = validateScoreSubmission(body)
