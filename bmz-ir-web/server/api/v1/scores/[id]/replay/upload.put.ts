@@ -2,6 +2,7 @@ import { and, eq } from 'drizzle-orm'
 import { blob } from 'hub:blob'
 import { db, schema } from 'hub:db'
 import { requireIrUser } from '../../../../../utils/auth'
+import { MAX_REPLAY_BYTES } from '../../../../../../shared/constants/ir'
 
 /**
  * リプレイ本体のアップロード。
@@ -16,6 +17,12 @@ export default defineEventHandler(async (event) => {
   const scoreId = getRouterParam(event, 'id')
   if (!scoreId) {
     throw createError({ statusCode: 400, statusMessage: 'score id is required' })
+  }
+
+  // body をメモリへ読む前に Content-Length で先に拒否する。
+  const declaredLength = Number(getHeader(event, 'content-length') ?? 0)
+  if (declaredLength > MAX_REPLAY_BYTES) {
+    throw createError({ statusCode: 413, statusMessage: 'Replay body is too large' })
   }
 
   const replay = await db.query.replayObjects.findFirst({
@@ -33,6 +40,9 @@ export default defineEventHandler(async (event) => {
   const body = await readRawBody(event, false)
   if (!body || body.length === 0) {
     throw createError({ statusCode: 400, statusMessage: 'Replay body is required' })
+  }
+  if (body.length > MAX_REPLAY_BYTES) {
+    throw createError({ statusCode: 413, statusMessage: 'Replay body is too large' })
   }
 
   await blob.put(replay.objectPath, body, {
