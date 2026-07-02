@@ -1116,6 +1116,14 @@ pub const SCORE_MIGRATIONS: &[Migration] = &[
         // history.  Fresh score.db files briefly create these legacy tables via
         // older migrations, then this migration removes them; existing rows are
         // intentionally not migrated.
+        //
+        // NOTE: v17 より前の score.db に未送信の IR ジョブ
+        // (ir_score_jobs / ir_score_submissions) が残っていた場合、それらは
+        // network.db へコピーされず、この DROP で失われる。現時点で旧バージョン
+        // からの移行対象ユーザーがほぼ存在しないため、データ移行は意図的に
+        // 実装しないと判断した (2026-07)。もし将来この判断を変える場合は、
+        // この migration より前に score.db → network.db へのコピー処理を挟む
+        // 新しい移行手順が必要になる。
         statements: &[
             "DROP TABLE IF EXISTS ir_score_submissions;",
             "DROP TABLE IF EXISTS ir_score_jobs;",
