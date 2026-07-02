@@ -32,7 +32,7 @@ GET    /api/v1/device-keys                     # 自分の署名鍵一覧
 POST   /api/v1/device-keys                     # 公開鍵登録 (同一鍵は再利用)
 DELETE /api/v1/device-keys/{id}                # 失効 (revoked_at)
 POST   /api/v1/scores/{id}/replay/upload-url   # replay upload endpoint URL
-PUT    /api/v1/scores/{id}/replay/upload       # replay body upload
+PUT    /api/v1/scores/{id}/replay/upload       # replay body upload (要 Bearer 認証 + 所有者一致)
 POST   /api/v1/scores/{id}/replay/verify       # storage 実体の hash 検証
 GET    /api/v1/scores/{id}/replay              # download URL metadata (公開)
 GET    /api/v1/scores/{id}/replay/raw          # replay body download

@@ -126,11 +126,13 @@ impl BmzOfficialIrClient {
         decode_response(response, "BMZ IR replay upload URL").await
     }
 
-    /// 署名付き URL へ replay 本体を PUT する。
+    /// upload-url で得た endpoint へ replay 本体を PUT する。
+    /// server 側は認証 + 所有者チェックを行うため Bearer トークンを付ける。
     pub async fn upload_replay(&self, upload_url: &str, bytes: Vec<u8>) -> Result<()> {
         let response = self
             .http
             .put(upload_url)
+            .bearer_auth(self.require_token()?)
             .header("content-type", "application/octet-stream")
             .body(bytes)
             .send()
