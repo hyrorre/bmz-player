@@ -29,6 +29,7 @@ pub struct VideoBgaDecoder {
     finished: bool,
     playback_target_us: Option<Arc<AtomicI64>>,
     stop_decode: Arc<AtomicBool>,
+    decode_thread: Option<std::thread::JoinHandle<()>>,
 }
 
 struct SelectedVideoStream {
@@ -71,18 +72,20 @@ impl VideoBgaDecoder {
             let thread_stop_decode = Arc::clone(&stop_decode);
             let thread_clocked_frames = Arc::clone(&clocked_frames);
 
-            std::thread::Builder::new().name("bmz-video-decode".to_string()).spawn(move || {
-                let result = decode_video_following_playback_time(
-                    &path,
-                    Arc::clone(&thread_clocked_frames),
-                    thread_playback_target_us,
-                    thread_stop_decode,
-                );
-                if let Err(e) = result {
-                    mark_clocked_frames_finished(&thread_clocked_frames);
-                    tracing::warn!(path = %path.display(), error = %e, "video decode thread error");
-                }
-            })?;
+            let decode_thread = std::thread::Builder::new()
+                .name("bmz-video-decode".to_string())
+                .spawn(move || {
+                    let result = decode_video_following_playback_time(
+                        &path,
+                        Arc::clone(&thread_clocked_frames),
+                        thread_playback_target_us,
+                        thread_stop_decode,
+                    );
+                    if let Err(e) = result {
+                        mark_clocked_frames_finished(&thread_clocked_frames);
+                        tracing::warn!(path = %path.display(), error = %e, "video decode thread error");
+                    }
+                })?;
 
             return Ok(Self {
                 receiver: None,
@@ -92,18 +95,20 @@ impl VideoBgaDecoder {
                 finished: false,
                 playback_target_us: Some(playback_target_us),
                 stop_decode,
+                decode_thread: Some(decode_thread),
             });
         }
 
         let (sender, receiver) = sync_channel(4);
         let thread_stop_decode = Arc::clone(&stop_decode);
-        std::thread::Builder::new().name("bmz-video-decode".to_string()).spawn(move || {
-            if !thread_stop_decode.load(Ordering::Acquire)
-                && let Err(e) = decode_video(&path, sender)
-            {
-                tracing::warn!(path = %path.display(), error = %e, "video decode thread error");
-            }
-        })?;
+        let decode_thread =
+            std::thread::Builder::new().name("bmz-video-decode".to_string()).spawn(move || {
+                if !thread_stop_decode.load(Ordering::Acquire)
+                    && let Err(e) = decode_video(&path, sender)
+                {
+                    tracing::warn!(path = %path.display(), error = %e, "video decode thread error");
+                }
+            })?;
 
         Ok(Self {
             receiver: Some(receiver),
@@ -113,6 +118,7 @@ impl VideoBgaDecoder {
             finished: false,
             playback_target_us: None,
             stop_decode,
+            decode_thread: Some(decode_thread),
         })
     }
 
@@ -202,6 +208,16 @@ impl VideoBgaDecoder {
 impl Drop for VideoBgaDecoder {
     fn drop(&mut self) {
         self.stop_decode.store(true, Ordering::Release);
+        // channel モードは receiver を先に落とし、sync_channel の send block を
+        // エラーで解いてから join する。clocked モードは stop_decode を数 ms
+        // 間隔で確認するため、どちらも join はすぐ返る。join しないままだと
+        // 譜面切り替えのたびに ffmpeg リソースを持った detached thread が残る。
+        drop(self.receiver.take());
+        if let Some(handle) = self.decode_thread.take()
+            && handle.join().is_err()
+        {
+            tracing::warn!("video decode thread panicked before join");
+        }
     }
 }
 
@@ -696,6 +712,7 @@ mod tests {
             finished: false,
             playback_target_us: None,
             stop_decode: Arc::new(AtomicBool::new(false)),
+            decode_thread: None,
         }
     }
 
@@ -742,6 +759,7 @@ mod tests {
             finished: false,
             playback_target_us: None,
             stop_decode: Arc::new(AtomicBool::new(false)),
+            decode_thread: None,
         };
         (sender, decoder)
     }
@@ -805,6 +823,7 @@ mod tests {
             finished: false,
             playback_target_us: Some(Arc::clone(&target)),
             stop_decode: Arc::new(AtomicBool::new(false)),
+            decode_thread: None,
         };
 
         assert!(decoder.poll_frame(123_456).is_none());
@@ -824,6 +843,7 @@ mod tests {
             finished: false,
             playback_target_us: Some(Arc::clone(&target)),
             stop_decode: Arc::new(AtomicBool::new(false)),
+            decode_thread: None,
         };
         publish_clocked_frame(&frames, frame(50_000)).unwrap();
 
