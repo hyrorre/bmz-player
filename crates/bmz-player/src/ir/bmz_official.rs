@@ -141,7 +141,7 @@ impl BmzOfficialIrClient {
         let status = response.status();
         if !status.is_success() {
             let body = response.text().await.unwrap_or_default();
-            bail!("BMZ IR replay upload failed: {status} {body}");
+            bail!("BMZ IR replay upload failed: {}", response_error_summary(status, &body));
         }
         Ok(())
     }
@@ -378,9 +378,36 @@ async fn decode_response<T: serde::de::DeserializeOwned>(
     let status = response.status();
     if !status.is_success() {
         let body = response.text().await.unwrap_or_default();
-        bail!("{label} failed: {status} {body}");
+        bail!("{label} failed: {}", response_error_summary(status, &body));
     }
     response.json().await.with_context(|| format!("failed to decode {label} response"))
+}
+
+/// エラー本文はトークン等の秘匿情報を含み得るため、そのままログへ流さない。
+/// サーバー制御の短い statusMessage / message だけを抜き出し、それ以外の
+/// 本文は捨てる (h3 の createError は JSON でこれらのキーを返す)。
+fn response_error_summary(status: reqwest::StatusCode, body: &str) -> String {
+    const MAX_MESSAGE_CHARS: usize = 200;
+
+    #[derive(serde::Deserialize)]
+    struct ErrorBody {
+        #[serde(rename = "statusMessage")]
+        status_message: Option<String>,
+        message: Option<String>,
+    }
+
+    let message = serde_json::from_str::<ErrorBody>(body)
+        .ok()
+        .and_then(|body| body.status_message.or(body.message))
+        .map(|message| message.trim().to_string())
+        .filter(|message| !message.is_empty());
+    match message {
+        Some(message) => {
+            let truncated: String = message.chars().take(MAX_MESSAGE_CHARS).collect();
+            format!("{status} {truncated}")
+        }
+        None => format!("{status} (response body omitted, {} bytes)", body.len()),
+    }
 }
 
 fn scope_query_value(scope: &IrRankingScope) -> &'static str {
@@ -440,5 +467,43 @@ mod tests {
     fn anonymous_client_rejects_authenticated_calls() {
         let client = BmzOfficialIrClient::anonymous("https://ir.example.test").unwrap();
         assert!(client.require_token().is_err());
+    }
+
+    #[test]
+    fn error_summary_extracts_server_status_message() {
+        let summary = response_error_summary(
+            reqwest::StatusCode::TOO_MANY_REQUESTS,
+            r#"{"statusCode":429,"statusMessage":"Too many requests","stack":[]}"#,
+        );
+        assert_eq!(summary, "429 Too Many Requests Too many requests");
+    }
+
+    #[test]
+    fn error_summary_falls_back_to_message_field() {
+        let summary = response_error_summary(
+            reqwest::StatusCode::BAD_REQUEST,
+            r#"{"message":"rule.ln_policy is invalid"}"#,
+        );
+        assert_eq!(summary, "400 Bad Request rule.ln_policy is invalid");
+    }
+
+    #[test]
+    fn error_summary_omits_non_json_body() {
+        let summary = response_error_summary(
+            reqwest::StatusCode::INTERNAL_SERVER_ERROR,
+            "secret token leaked in html error page",
+        );
+        assert_eq!(summary, "500 Internal Server Error (response body omitted, 38 bytes)");
+        assert!(!summary.contains("secret"));
+    }
+
+    #[test]
+    fn error_summary_truncates_long_messages() {
+        let long = "a".repeat(500);
+        let summary = response_error_summary(
+            reqwest::StatusCode::BAD_REQUEST,
+            &format!(r#"{{"statusMessage":"{long}"}}"#),
+        );
+        assert_eq!(summary.len(), "400 Bad Request ".len() + 200);
     }
 }
