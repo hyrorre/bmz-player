@@ -653,7 +653,7 @@ name = "bmz-skin"
 version = "0.1.5"
 dependencies = [
  "anyhow",
- "bmz-render",
+ "bmz-skin-document",
  "encoding_rs",
  "mlua",
  "serde_json",

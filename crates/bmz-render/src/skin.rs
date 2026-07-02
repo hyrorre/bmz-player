@@ -22550,14 +22550,4 @@ mod tests {
         assert_eq!(skin_timer_elapsed_ms(Some(258), &state), Some(258));
         assert_eq!(skin_timer_elapsed_ms(Some(278), &state), Some(278));
     }
-
-    fn unique_test_dir(name: &str) -> PathBuf {
-        let mut path = std::env::temp_dir();
-        path.push(format!(
-            "{name}-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
-        ));
-        path
-    }
 }

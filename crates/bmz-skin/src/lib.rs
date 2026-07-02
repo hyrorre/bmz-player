@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
 use anyhow::{Context, Result};
-use bmz_render::skin::SkinDocument;
+use bmz_skin_document::SkinDocument;
 use serde_json::Map as JsonMap;
 use serde_json::Value as JsonValue;
 
@@ -104,7 +104,7 @@ pub fn load_lr2_csv_skin(
     files: &BTreeMap<String, String>,
 ) -> Result<LoadedSkinDocument> {
     let loaded = lr2::load_lr2_csv_skin_value(path, options, files)?;
-    let value = normalize_json_skin_integer_numbers(loaded.value);
+    let value = bmz_skin_document::normalize_lua_json_skin_integer_numbers(loaded.value);
     let mut document: SkinDocument = serde_path_to_error::deserialize(value)
         .with_context(|| format!("failed to parse lr2 csv skin as document: {}", path.display()))?;
     document.internal_enabled_options = loaded.internal_enabled_options;
@@ -148,7 +148,7 @@ pub fn load_lua_skin_header_value(path: &Path) -> Result<LoadedLuaSkinValue> {
 }
 
 fn normalize_lua_skin_document(value: JsonValue) -> JsonValue {
-    let value = normalize_json_skin_integer_numbers(value);
+    let value = bmz_skin_document::normalize_lua_json_skin_integer_numbers(value);
     let value = normalize_lua_skin_category_map(value);
     let value = normalize_lua_end_of_note_shadow_destinations(value);
     normalize_lua_skin_offset_map(value)
@@ -295,134 +295,6 @@ fn normalize_lua_skin_offset_map_for_key(key: Option<&str>, value: JsonValue) ->
     }
 }
 
-fn normalize_json_skin_integer_numbers(value: JsonValue) -> JsonValue {
-    normalize_json_skin_integer_numbers_for_key(None, value)
-}
-
-fn normalize_json_skin_integer_numbers_for_key(key: Option<&str>, value: JsonValue) -> JsonValue {
-    match value {
-        JsonValue::Array(mut values)
-            if is_json_skin_scalar_integer_key(key) && values.len() == 1 =>
-        {
-            normalize_json_skin_integer_value(values.remove(0))
-        }
-        JsonValue::Array(values) => JsonValue::Array(
-            values
-                .into_iter()
-                .map(|value| {
-                    if is_json_skin_integer_key(key) {
-                        normalize_json_skin_integer_value(value)
-                    } else {
-                        normalize_json_skin_integer_numbers_for_key(key, value)
-                    }
-                })
-                .collect(),
-        ),
-        JsonValue::Object(map) => JsonValue::Object(
-            map.into_iter()
-                .map(|(key, value)| {
-                    let value = normalize_json_skin_integer_numbers_for_key(Some(&key), value);
-                    (key, value)
-                })
-                .collect::<JsonMap<_, _>>(),
-        ),
-        JsonValue::Number(number) if is_json_skin_integer_key(key) => {
-            json_number_to_rounded_i64(&number)
-                .and_then(serde_json::Number::from_i128)
-                .map(JsonValue::Number)
-                .unwrap_or(JsonValue::Number(number))
-        }
-        value => value,
-    }
-}
-
-fn is_json_skin_scalar_integer_key(key: Option<&str>) -> bool {
-    is_json_skin_integer_key(key) && !matches!(key, Some("op" | "offsets" | "time"))
-}
-
-fn normalize_json_skin_integer_value(value: JsonValue) -> JsonValue {
-    match value {
-        JsonValue::Number(number) => json_number_to_rounded_i64(&number)
-            .and_then(serde_json::Number::from_i128)
-            .map(JsonValue::Number)
-            .unwrap_or(JsonValue::Number(number)),
-        JsonValue::Array(values) => {
-            JsonValue::Array(values.into_iter().map(normalize_json_skin_integer_value).collect())
-        }
-        JsonValue::Object(map) => JsonValue::Object(
-            map.into_iter()
-                .map(|(key, value)| {
-                    let value = normalize_json_skin_integer_numbers_for_key(Some(&key), value);
-                    (key, value)
-                })
-                .collect::<JsonMap<_, _>>(),
-        ),
-        value => value,
-    }
-}
-
-fn json_number_to_rounded_i64(number: &serde_json::Number) -> Option<i128> {
-    if let Some(value) = number.as_i64() {
-        return Some(value as i128);
-    }
-    if let Some(value) = number.as_u64() {
-        return Some(value as i128);
-    }
-    let value = number.as_f64()?;
-    if !value.is_finite() || value < i64::MIN as f64 || value > i64::MAX as f64 {
-        return None;
-    }
-    Some(value.round() as i128)
-}
-
-fn is_json_skin_integer_key(key: Option<&str>) -> bool {
-    matches!(
-        key,
-        Some(
-            "a" | "acc"
-                | "align"
-                | "angle"
-                | "b"
-                | "blend"
-                | "center"
-                | "click"
-                | "cycle"
-                | "digit"
-                | "disapearLine"
-                | "divx"
-                | "divy"
-                | "endtime"
-                | "filter"
-                | "g"
-                | "h"
-                | "index"
-                | "len"
-                | "loop"
-                | "max"
-                | "min"
-                | "offset"
-                | "offsets"
-                | "op"
-                | "padding"
-                | "parts"
-                | "r"
-                | "range"
-                | "ref"
-                | "size"
-                | "space"
-                | "starttime"
-                | "stretch"
-                | "time"
-                | "timer"
-                | "type"
-                | "w"
-                | "x"
-                | "y"
-                | "zeropadding"
-        )
-    )
-}
-
 pub fn convert_lua_skin_to_json_file(
     input: &Path,
     output: &Path,
@@ -475,7 +347,7 @@ mod tests {
 
         assert!(loaded.warnings.is_empty());
         assert_eq!(loaded.document.value[0].ref_id, 71);
-        let bmz_render::skin::DestinationListEntry::Single(destination) =
+        let bmz_skin_document::DestinationListEntry::Single(destination) =
             &loaded.document.destination[0]
         else {
             panic!("destination should be single");
@@ -516,12 +388,12 @@ mod tests {
         )
         .unwrap();
 
-        let bmz_render::skin::DestinationListEntry::Single(destination) =
+        let bmz_skin_document::DestinationListEntry::Single(destination) =
             &loaded.document.destination[0]
         else {
             panic!("destination should be single");
         };
-        let bmz_render::skin::SkinDstEntry::Frame(frame) = &destination.dst[0] else {
+        let bmz_skin_document::SkinDstEntry::Frame(frame) = &destination.dst[0] else {
             panic!("destination frame should be static");
         };
         assert_eq!(frame.y, Some(45));
@@ -561,11 +433,11 @@ mod tests {
         )
         .unwrap();
 
-        let bmz_render::skin::DestinationListEntry::Single(fast) = &loaded.document.destination[0]
+        let bmz_skin_document::DestinationListEntry::Single(fast) = &loaded.document.destination[0]
         else {
             panic!("expected fast destination");
         };
-        let bmz_render::skin::DestinationListEntry::Single(ms) = &loaded.document.destination[1]
+        let bmz_skin_document::DestinationListEntry::Single(ms) = &loaded.document.destination[1]
         else {
             panic!("expected ms destination");
         };
@@ -1639,13 +1511,13 @@ mod tests {
         .unwrap();
 
         assert_eq!(loaded.document.destination.len(), 1);
-        let bmz_render::skin::DestinationListEntry::Single(destination) =
+        let bmz_skin_document::DestinationListEntry::Single(destination) =
             &loaded.document.destination[0]
         else {
             panic!("destination should be single");
         };
         assert_eq!(destination.id, "frame-panel");
-        assert_eq!(destination.timer, Some(bmz_render::skin::SKIN_DYNAMIC_TIMER_BASE));
+        assert_eq!(destination.timer, Some(bmz_skin_document::SKIN_DYNAMIC_TIMER_BASE));
         assert_eq!(loaded.document.dynamic_timers.len(), 1);
         assert_eq!(loaded.document.dynamic_timers[0].observe, "number(0) >= 0");
     }
@@ -1787,7 +1659,7 @@ mod tests {
         )
         .unwrap();
 
-        let bmz_render::skin::DestinationListEntry::Single(destination) =
+        let bmz_skin_document::DestinationListEntry::Single(destination) =
             &loaded.document.destination[0]
         else {
             panic!("destination should be single");
@@ -1850,7 +1722,7 @@ mod tests {
             loaded.warnings.iter().map(|warning| warning.message.as_str()).collect::<Vec<_>>()
         );
         assert_eq!(loaded.document.graph[0].value_expr, "(number(410))/(number(410)+number(411))");
-        let bmz_render::skin::DestinationListEntry::Single(destination) =
+        let bmz_skin_document::DestinationListEntry::Single(destination) =
             &loaded.document.destination[0]
         else {
             panic!("destination should be single");
@@ -1957,11 +1829,11 @@ mod tests {
             "warnings: {:?}",
             loaded.warnings.iter().map(|w| w.message.as_str()).collect::<Vec<_>>()
         );
-        let bmz_render::skin::DestinationListEntry::Single(miss) = &loaded.document.destination[0]
+        let bmz_skin_document::DestinationListEntry::Single(miss) = &loaded.document.destination[0]
         else {
             panic!("expected single destination");
         };
-        let bmz_render::skin::DestinationListEntry::Single(mask) = &loaded.document.destination[1]
+        let bmz_skin_document::DestinationListEntry::Single(mask) = &loaded.document.destination[1]
         else {
             panic!("expected single destination");
         };
@@ -2018,11 +1890,11 @@ mod tests {
             "warnings: {:?}",
             loaded.warnings.iter().map(|w| w.message.as_str()).collect::<Vec<_>>()
         );
-        let bmz_render::skin::DestinationListEntry::Single(slow) = &loaded.document.destination[0]
+        let bmz_skin_document::DestinationListEntry::Single(slow) = &loaded.document.destination[0]
         else {
             panic!("expected slow destination");
         };
-        let bmz_render::skin::DestinationListEntry::Single(fast) = &loaded.document.destination[1]
+        let bmz_skin_document::DestinationListEntry::Single(fast) = &loaded.document.destination[1]
         else {
             panic!("expected fast destination");
         };
@@ -2075,7 +1947,7 @@ mod tests {
             "warnings: {:?}",
             loaded.warnings.iter().map(|w| w.message.as_str()).collect::<Vec<_>>()
         );
-        let bmz_render::skin::DestinationListEntry::Single(destination) =
+        let bmz_skin_document::DestinationListEntry::Single(destination) =
             &loaded.document.destination[0]
         else {
             panic!("expected single destination");
@@ -2128,7 +2000,7 @@ mod tests {
             "warnings: {:?}",
             loaded.warnings.iter().map(|w| w.message.as_str()).collect::<Vec<_>>()
         );
-        let bmz_render::skin::DestinationListEntry::Single(destination) =
+        let bmz_skin_document::DestinationListEntry::Single(destination) =
             &loaded.document.destination[0]
         else {
             panic!("expected single destination");
@@ -2364,7 +2236,7 @@ mod tests {
             .destination
             .iter()
             .filter_map(|entry| match entry {
-                bmz_render::skin::DestinationListEntry::Single(d) => Some(d.draw.as_str()),
+                bmz_skin_document::DestinationListEntry::Single(d) => Some(d.draw.as_str()),
                 _ => None,
             })
             .collect();
@@ -2416,7 +2288,7 @@ mod tests {
             .destination
             .iter()
             .filter_map(|entry| match entry {
-                bmz_render::skin::DestinationListEntry::Single(destination) => destination.timer,
+                bmz_skin_document::DestinationListEntry::Single(destination) => destination.timer,
                 _ => None,
             })
             .collect();
@@ -2489,7 +2361,7 @@ mod tests {
             .destination
             .iter()
             .filter_map(|entry| match entry {
-                bmz_render::skin::DestinationListEntry::Single(destination)
+                bmz_skin_document::DestinationListEntry::Single(destination)
                     if destination.id == "eon" =>
                 {
                     Some(destination.timer)
@@ -2520,7 +2392,7 @@ mod tests {
             .destination
             .iter()
             .filter_map(|entry| match entry {
-                bmz_render::skin::DestinationListEntry::Single(destination)
+                bmz_skin_document::DestinationListEntry::Single(destination)
                     if destination.id == "fast" || destination.id == "slow" =>
                 {
                     Some((destination.id.as_str(), destination.draw.as_str()))
@@ -2557,7 +2429,7 @@ mod tests {
             .dst
             .iter()
             .filter_map(|entry| match entry {
-                bmz_render::skin::SkinDstEntry::Frame(frame) => frame.w,
+                bmz_skin_document::SkinDstEntry::Frame(frame) => frame.w,
                 _ => None,
             })
             .collect();
@@ -2598,7 +2470,7 @@ mod tests {
             .dst
             .iter()
             .filter_map(|entry| match entry {
-                bmz_render::skin::SkinDstEntry::Frame(frame) => frame.w,
+                bmz_skin_document::SkinDstEntry::Frame(frame) => frame.w,
                 _ => None,
             })
             .collect();

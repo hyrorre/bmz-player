@@ -10,7 +10,7 @@ use anyhow::{Context, Result, anyhow, bail};
 use mlua::{Function, HookTriggers, Lua, Table, Value, Variadic, VmState};
 use serde_json::{Map as JsonMap, Number as JsonNumber, Value as JsonValue};
 
-use bmz_render::skin::{
+use bmz_skin_document::{
     SKIN_DYNAMIC_TIMER_BASE, SKIN_EXPR_ADJUSTED_COVER, SKIN_EXPR_ADJUSTED_RATE,
     SKIN_EXPR_ADJUSTED_RATE_ADOT, SKIN_EXPR_COURSE_TABLE_TEXT,
     SKIN_EXPR_FAST_SLOW_BREAKDOWN_HEIGHT, SKIN_EXPR_FS_THRESHOLD, SKIN_REF_PLAY_GAUGE_TYPE,
