@@ -1,5 +1,6 @@
 import { createHash, createPublicKey, randomUUID, verify as cryptoVerify } from 'node:crypto'
 import { and, desc, eq, inArray, isNull } from 'drizzle-orm'
+import type { BatchItem } from 'drizzle-orm/batch'
 import { db, schema } from 'hub:db'
 import { isUniqueConstraintError } from '../utils/db_errors'
 import type {
@@ -184,6 +185,9 @@ export async function submitScore(
   const deviceType = payload.play_options.device_type
 
   const scoreId = randomUUID()
+  // best 更新と同一 batch で atomic に書くため、DB default に任せず
+  // アプリ側で受信時刻を確定させる。
+  const serverReceivedAt = new Date()
   const scoreInsert = {
     id: scoreId,
     playerId: user.id,
@@ -225,39 +229,56 @@ export async function submitScore(
     evidence: payload.evidence ?? {},
     verification,
     idempotencyKey: payload.idempotency_key,
+    serverReceivedAt,
   }
 
-  let score = await insertScore(scoreInsert)
-  if (!score) {
-    score =
-      (await db.query.scores.findFirst({
-        columns: { id: true, serverReceivedAt: true },
-        where: and(
-          eq(schema.scores.playerId, user.id),
-          eq(schema.scores.idempotencyKey, payload.idempotency_key),
-        ),
-      })) ?? null
-  }
-  if (!score) {
-    throw new Error('failed to insert score')
-  }
+  const previousBest = await fetchPreviousBest(user.id, payload)
 
+  // score insert と best 更新は D1 batch (implicit transaction) で atomic に
+  // 書く。挿入と best 更新の間で Worker が落ちても不整合が残らない。
   const candidate: BestScoreCandidate = {
     ex_score: payload.result.ex_score,
     clear_rank: clearRank,
     max_combo: payload.result.max_combo,
     min_bp: payload.result.min_bp,
     min_cb: payload.result.min_cb,
-    server_received_at: score.serverReceivedAt,
+    server_received_at: serverReceivedAt,
   }
-  const previousBest = await fetchPreviousBest(user.id, payload)
-  const { bestUpdated, updatedFields } = await upsertBestScore(
-    user.id,
-    payload,
-    score.id,
-    verification,
-    candidate,
-  )
+  let score: { id: string; serverReceivedAt: Date } = { id: scoreId, serverReceivedAt }
+  let best = await prepareBestScoreUpsert(user.id, payload, scoreId, verification, candidate)
+  try {
+    const insertStatement = db.insert(schema.scores).values(scoreInsert)
+    if (best.statement) {
+      await db.batch([insertStatement, best.statement])
+    } else {
+      await insertStatement
+    }
+  } catch (error) {
+    if (!isUniqueConstraintError(error)) {
+      throw error
+    }
+    // idempotency 重複。既存 score を採用し、best 更新は従来どおり
+    // 既存 score の受信時刻で再計算して単体実行する。
+    const existing = await db.query.scores.findFirst({
+      columns: { id: true, serverReceivedAt: true },
+      where: and(
+        eq(schema.scores.playerId, user.id),
+        eq(schema.scores.idempotencyKey, payload.idempotency_key),
+      ),
+    })
+    if (!existing) {
+      throw new Error('failed to insert score')
+    }
+    score = existing
+    best = await prepareBestScoreUpsert(user.id, payload, existing.id, verification, {
+      ...candidate,
+      server_received_at: existing.serverReceivedAt,
+    })
+    if (best.statement) {
+      await best.statement
+    }
+  }
+  const { bestUpdated, updatedFields } = best
 
   const rankings: IrSubmitResponse['rankings'] = {}
   for (const scope of rankingScopes) {
@@ -655,13 +676,21 @@ async function fetchPreviousBest(
   }
 }
 
-async function upsertBestScore(
+/**
+ * best_scores 更新の要否を判定し、必要なら未実行の upsert statement を返す。
+ * 呼び出し側が score insert と同じ `db.batch` に載せて atomic に実行する。
+ */
+async function prepareBestScoreUpsert(
   playerId: string,
   payload: IrScoreSubmission,
   scoreId: string,
   verification: string,
   candidate: BestScoreCandidate,
-) {
+): Promise<{
+  bestUpdated: boolean
+  updatedFields: IrSubmitResponse['updated_fields']
+  statement: BatchItem<'sqlite'> | null
+}> {
   const current = await db.query.bestScores.findFirst({
     columns: {
       scoreId: true,
@@ -718,7 +747,7 @@ async function upsertBestScore(
     updatedFields.min_bp ||
     updatedFields.min_cb
   if (!shouldUpdate) {
-    return { bestUpdated: false, updatedFields }
+    return { bestUpdated: false, updatedFields, statement: null }
   }
 
   const verificationStatus = verification as 'unverified' | 'signed' | 'invalid' | 'trusted'
@@ -774,7 +803,7 @@ async function upsertBestScore(
       ? verificationStatus
       : (current?.verification ?? verificationStatus),
   }
-  await db
+  const statement = db
     .insert(schema.bestScores)
     .values(values)
     .onConflictDoUpdate({
@@ -807,22 +836,7 @@ async function upsertBestScore(
         updatedAt: new Date(),
       },
     })
-  return { bestUpdated: true, updatedFields }
-}
-
-async function insertScore(values: typeof schema.scores.$inferInsert) {
-  try {
-    const [inserted] = await db
-      .insert(schema.scores)
-      .values(values)
-      .returning({ id: schema.scores.id, serverReceivedAt: schema.scores.serverReceivedAt })
-    return inserted ?? null
-  } catch (error) {
-    if (isUniqueConstraintError(error)) {
-      return null
-    }
-    throw error
-  }
+  return { bestUpdated: true, updatedFields, statement }
 }
 
 function bestCandidateWins(next: BestScoreCandidate, current: BestScoreCandidate): boolean {

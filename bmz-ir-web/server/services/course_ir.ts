@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { and, eq } from 'drizzle-orm'
+import type { BatchItem } from 'drizzle-orm/batch'
 import { db, schema } from 'hub:db'
 import { isUniqueConstraintError } from '../utils/db_errors'
 import {
@@ -156,8 +157,13 @@ export async function submitCourseScore(
   const verification = await resolveVerification(user.id, payload)
 
   const deviceType = payload.play_options.device_type as CourseDeviceType
+  // best 更新と同一 batch で atomic に書くため、DB default に任せず
+  // アプリ側で受信時刻を確定させる。
+  const serverReceivedAt = new Date()
+  const courseScoreId = randomUUID()
   const insert = {
-    id: randomUUID(),
+    id: courseScoreId,
+    serverReceivedAt,
     playerId: user.id,
     courseHash: payload.course.course_hash,
     clientName: payload.client.name,
@@ -186,8 +192,31 @@ export async function submitCourseScore(
     idempotencyKey: payload.idempotency_key,
   }
 
-  const inserted = await insertCourseScore(insert)
-  if (!inserted) {
+  // score insert と best 更新は D1 batch (implicit transaction) で atomic に
+  // 書く。挿入と best 更新の間で Worker が落ちても不整合が残らない。
+  // invalid (署名不正) は単曲と同じく best 更新の対象外。
+  const bestStatement =
+    verification !== 'invalid'
+      ? await prepareBestCourseScoreUpsert(
+          user.id,
+          payload,
+          { id: courseScoreId, serverReceivedAt },
+          clearRank,
+          verification,
+        )
+      : null
+  try {
+    const insertStatement = db.insert(schema.courseScores).values(insert)
+    if (bestStatement) {
+      await db.batch([insertStatement, bestStatement])
+    } else {
+      await insertStatement
+    }
+  } catch (error) {
+    if (!isUniqueConstraintError(error)) {
+      throw error
+    }
+    // idempotency 重複。従来どおり既存 score を返し best は更新しない。
     const existing = await db.query.courseScores.findFirst({
       columns: { id: true, serverReceivedAt: true },
       where: and(
@@ -206,17 +235,11 @@ export async function submitCourseScore(
     }
   }
 
-  // invalid (署名不正) は単曲と同じく best 更新の対象外。
-  let bestUpdated = false
-  if (verification !== 'invalid') {
-    bestUpdated = await upsertBestCourseScore(user.id, payload, inserted, clearRank, verification)
-  }
-
   return {
     accepted: true,
-    course_score_id: inserted.id,
-    best_updated: bestUpdated,
-    server_received_at: inserted.serverReceivedAt.toISOString(),
+    course_score_id: courseScoreId,
+    best_updated: bestStatement !== null,
+    server_received_at: serverReceivedAt.toISOString(),
   }
 }
 
@@ -237,13 +260,17 @@ async function upsertCourse(payload: CourseScoreSubmission) {
     .onConflictDoUpdate({ target: schema.irCourses.courseHash, set: values })
 }
 
-async function upsertBestCourseScore(
+/**
+ * best_course_scores 更新の要否を判定し、必要なら未実行の upsert statement を
+ * 返す。呼び出し側が score insert と同じ `db.batch` に載せて atomic に実行する。
+ */
+async function prepareBestCourseScoreUpsert(
   playerId: string,
   payload: CourseScoreSubmission,
   score: { id: string; serverReceivedAt: Date },
   clearRank: number,
   verification: string,
-): Promise<boolean> {
+): Promise<BatchItem<'sqlite'> | null> {
   const current = await db.query.bestCourseScores.findFirst({
     columns: { exScore: true, clearRank: true, bp: true, maxCombo: true },
     where: and(
@@ -273,7 +300,7 @@ async function upsertBestCourseScore(
       next.bp === current.bp &&
       next.maxCombo > current.maxCombo)
   if (!wins) {
-    return false
+    return null
   }
 
   const values = {
@@ -295,7 +322,7 @@ async function upsertBestCourseScore(
     serverReceivedAt: score.serverReceivedAt,
     verification: verification as 'unverified' | 'signed' | 'invalid' | 'trusted',
   }
-  await db
+  return db
     .insert(schema.bestCourseScores)
     .values(values)
     .onConflictDoUpdate({
@@ -320,22 +347,6 @@ async function upsertBestCourseScore(
         verification: values.verification,
       },
     })
-  return true
-}
-
-async function insertCourseScore(values: typeof schema.courseScores.$inferInsert) {
-  try {
-    const [inserted] = await db.insert(schema.courseScores).values(values).returning({
-      id: schema.courseScores.id,
-      serverReceivedAt: schema.courseScores.serverReceivedAt,
-    })
-    return inserted ?? null
-  } catch (error) {
-    if (isUniqueConstraintError(error)) {
-      return null
-    }
-    throw error
-  }
 }
 
 function playedAtDate(value: unknown): Date | null {
