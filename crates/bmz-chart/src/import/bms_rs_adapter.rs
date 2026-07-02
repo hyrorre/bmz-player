@@ -263,6 +263,11 @@ fn apply_beatoraja_random_control(
                 }
             }
             Some(BeatorajaRandomControl::Else | BeatorajaRandomControl::ElseIf) => {
+                // beatoraja (jbms-parser BMSDecoder) は予約語として RANDOM / IF /
+                // ENDIF / ENDRANDOM しか扱わず、#ELSE / #ELSEIF 行そのものを
+                // 無視する。つまり直前の #IF の skip 状態がそのまま継続する
+                // (#IF 一致時は #ELSE 側のブロックも取り込まれる)。BMZ も同じ
+                // 実行結果になるよう、行を落とすだけで skip 状態は変更しない。
                 warnings.push(ImportWarning::ParserDiagnostic {
                     code: "BeatorajaRandomUnsupportedElse".to_string(),
                     message: format!(
@@ -1977,6 +1982,79 @@ mod tests {
         );
 
         assert_eq!(note_lanes(&chart), vec![Lane::Key2]);
+    }
+
+    #[test]
+    fn bms_random_else_after_matched_if_is_included_like_beatoraja() {
+        // beatoraja (jbms-parser BMSDecoder) は #ELSE を予約語として扱わない。
+        // #IF が一致した場合、#ELSE 以降のブロックもそのまま取り込まれる。
+        let (chart, warnings) = import_bms_text_with_warnings(
+            "\
+#TITLE Else Matched
+#BPM 120
+#WAV01 key.wav
+#RANDOM 1
+#IF 1
+#00111:01
+#ELSE
+#00212:01
+#ENDIF
+",
+        );
+
+        assert_eq!(note_lanes(&chart), vec![Lane::Key1, Lane::Key2]);
+        assert!(warnings.iter().any(|warning| matches!(
+            warning,
+            ImportWarning::ParserDiagnostic { code, .. }
+                if code == "BeatorajaRandomUnsupportedElse"
+        )));
+    }
+
+    #[test]
+    fn bms_random_else_after_unmatched_if_stays_skipped_like_beatoraja() {
+        // #IF が不一致の場合、#ELSE は skip 状態を反転させないため
+        // #ELSE 以降のブロックも beatoraja と同じく skip される。
+        let (chart, _warnings) = import_bms_text_with_warnings(
+            "\
+#TITLE Else Unmatched
+#BPM 120
+#WAV01 key.wav
+#RANDOM 1
+#IF 2
+#00111:01
+#ELSE
+#00212:01
+#ENDIF
+#00313:01
+",
+        );
+
+        assert_eq!(note_lanes(&chart), vec![Lane::Key3]);
+    }
+
+    #[test]
+    fn bms_random_elseif_is_ignored_like_beatoraja() {
+        // #ELSEIF も同様に無視され、直前の #IF の skip 状態が継続する。
+        let (chart, warnings) = import_bms_text_with_warnings(
+            "\
+#TITLE ElseIf Ignored
+#BPM 120
+#WAV01 key.wav
+#RANDOM 1
+#IF 1
+#00111:01
+#ELSEIF 2
+#00212:01
+#ENDIF
+",
+        );
+
+        assert_eq!(note_lanes(&chart), vec![Lane::Key1, Lane::Key2]);
+        assert!(warnings.iter().any(|warning| matches!(
+            warning,
+            ImportWarning::ParserDiagnostic { code, .. }
+                if code == "BeatorajaRandomUnsupportedElse"
+        )));
     }
 
     #[test]
