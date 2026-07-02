@@ -1,6 +1,7 @@
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, TryLockError};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use bmz_core::ids::SoundId;
 
@@ -9,6 +10,10 @@ use crate::queue::{AudioScheduler, ScheduledSound};
 use crate::sample::{DecodedSample, SampleBank};
 
 pub const DEFAULT_AUDIO_COMMAND_QUEUE_CAPACITY: usize = 8_192;
+
+/// コマンド drop 警告の最小間隔。キューが詰まりっぱなしのときに
+/// フレーム毎の warn でログを溢れさせないための rate limit。
+const DROP_WARN_INTERVAL_MS: u64 = 1_000;
 
 #[derive(Debug)]
 pub enum AudioEngineCommand {
@@ -85,6 +90,28 @@ struct AudioCommandQueueInner {
     counters: AudioCommandQueueCounters,
     output_sample_rate: AtomicU32,
     idle: AtomicBool,
+    last_drop_warn_ms: AtomicU64,
+}
+
+impl AudioCommandQueueInner {
+    /// drop カウンタを進めつつ、rate limit 付きで警告ログを出す。
+    /// silent drop のままだとキー音の欠落が診断できないため。
+    fn note_dropped(&self, count: u64, reason: &'static str) {
+        let dropped_total = self.counters.dropped.fetch_add(count, Ordering::Relaxed) + count;
+        let now_ms = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|elapsed| elapsed.as_millis() as u64)
+            .unwrap_or(0);
+        let last = self.last_drop_warn_ms.load(Ordering::Relaxed);
+        if now_ms.saturating_sub(last) >= DROP_WARN_INTERVAL_MS
+            && self
+                .last_drop_warn_ms
+                .compare_exchange(last, now_ms, Ordering::Relaxed, Ordering::Relaxed)
+                .is_ok()
+        {
+            tracing::warn!(dropped = count, dropped_total, reason, "audio engine command dropped");
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -116,6 +143,7 @@ impl AudioEngineHandle {
                 counters: AudioCommandQueueCounters::default(),
                 output_sample_rate: AtomicU32::new(output_sample_rate),
                 idle: AtomicBool::new(idle),
+                last_drop_warn_ms: AtomicU64::new(0),
             }),
         }
     }
@@ -167,7 +195,7 @@ impl AudioEngineHandle {
         match self.inner.queue.lock() {
             Ok(mut queue) => {
                 if queue.len().saturating_add(commands.len()) > self.inner.capacity {
-                    self.inner.counters.dropped.fetch_add(commands.len() as u64, Ordering::Relaxed);
+                    self.inner.note_dropped(commands.len() as u64, "queue full");
                     return false;
                 }
                 let command_count = commands.len() as u64;
@@ -177,7 +205,7 @@ impl AudioEngineHandle {
                 true
             }
             Err(_) => {
-                self.inner.counters.dropped.fetch_add(commands.len() as u64, Ordering::Relaxed);
+                self.inner.note_dropped(commands.len() as u64, "queue lock poisoned");
                 false
             }
         }
@@ -255,7 +283,7 @@ impl AudioEngineHandle {
         match self.inner.queue.lock() {
             Ok(mut queue) => {
                 if queue.len() >= self.inner.capacity {
-                    self.inner.counters.dropped.fetch_add(1, Ordering::Relaxed);
+                    self.inner.note_dropped(1, "queue full");
                     return Err(command);
                 }
                 queue.push_back(command);
@@ -264,7 +292,7 @@ impl AudioEngineHandle {
                 Ok(())
             }
             Err(_) => {
-                self.inner.counters.dropped.fetch_add(1, Ordering::Relaxed);
+                self.inner.note_dropped(1, "queue lock poisoned");
                 Err(command)
             }
         }
