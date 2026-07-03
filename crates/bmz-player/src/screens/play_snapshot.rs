@@ -494,6 +494,9 @@ pub fn build_render_snapshot_with_target_and_bga_frames_cached(
             for note in
                 visible_lane_notes(session.chart.notes_for_lane(lane), simple_tick_upper_bound)
             {
+                if note.time < render_now {
+                    continue;
+                }
                 match note.kind {
                     NoteKind::Invisible => continue,
                     NoteKind::Mine => {
@@ -1588,6 +1591,38 @@ mod tests {
         let mid = build_render_snapshot(&session, TimeUs(2_500_000), &[], None);
         let y_mid = mid.visible_notes[Lane::Key1.index()][0].y;
         assert!((y_mid - 0.25).abs() < 1e-3, "mid stop: expected ~0.25, got {y_mid}");
+    }
+
+    #[test]
+    fn build_render_snapshot_hides_same_tick_note_after_stop_starts() {
+        use bmz_chart::model::{TimingEvent, TimingEventKind};
+        use bmz_chart::timing::TICKS_PER_BEAT;
+
+        // beatoraja は STOP 中のスクロール位置は止めるが、通常ノートの描画可否は
+        // TimeLine の microTime >= 現在時刻で切る。同 tick のノートは STOP 終了まで
+        // 判定ライン上に残さない。
+        let stop_tick = TICKS_PER_BEAT as u64 * 4;
+        let mut c = chart();
+        c.metadata.initial_bpm = 120.0;
+        c.timing_events = vec![TimingEvent {
+            tick: ChartTick(stop_tick),
+            time: TimeUs(0),
+            kind: TimingEventKind::Stop { duration_us: 1_000_000 },
+        }];
+        c.lane_notes[Lane::Key1.index()][0].tick = ChartTick(stop_tick);
+        c.lane_notes[Lane::Key1.index()][0].time = TimeUs(2_000_000);
+        c.end_time = TimeUs(2_000_000);
+
+        let profile = ProfileConfig::new_default("default", "Default", 1);
+        let mut session = build_game_session(Arc::new(c), &profile, PlaySessionOptions::default());
+        session.hispeed = 1.0;
+
+        let at_stop_start = build_render_snapshot(&session, TimeUs(2_000_000), &[], None);
+        assert_eq!(at_stop_start.visible_notes[Lane::Key1.index()].len(), 1);
+        assert_eq!(at_stop_start.visible_notes[Lane::Key1.index()][0].y, 0.0);
+
+        let during_stop = build_render_snapshot(&session, TimeUs(2_000_001), &[], None);
+        assert!(during_stop.visible_notes[Lane::Key1.index()].is_empty());
     }
 
     #[test]
