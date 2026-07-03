@@ -6135,7 +6135,10 @@ fn skin_image_index_number(ref_id: i32, state: &SkinDrawState) -> Option<i64> {
         // extranotedepth / minemode / scrollmode / longnotemode / seventonine / constant 等は
         // profile 連携前のため 0 固定。value ref 350-353/360-361/400 とは衝突しない。
         350..=353 | 360..=361 | 400 | 342 | 343 => Some(0),
-        370 if state.select_screen => Some(state.select_clear_index),
+        370 if state.select_screen || state.result_failed.is_some() => {
+            Some(state.select_clear_index)
+        }
+        371 if state.result_failed.is_some() => result_mybest_clear_index_display(state),
         371 => state.target_clear_index,
         ref_id if random_lane_ref_slot(ref_id).is_some() => {
             skin_random_lane_ref_number(ref_id, state)
@@ -7675,10 +7678,10 @@ fn select_folder_lamp_count(ref_id: i32, counts: &[u32; 11]) -> Option<i64> {
 }
 
 fn skin_state_number(ref_id: i32, state: &SkinDrawState) -> Option<i64> {
-    if select_folder_lamp_counts_available(state) {
-        if let Some(value) = select_folder_lamp_count(ref_id, &state.select_folder_lamp_counts) {
-            return Some(value);
-        }
+    if select_folder_lamp_counts_available(state)
+        && let Some(value) = select_folder_lamp_count(ref_id, &state.select_folder_lamp_counts)
+    {
+        return Some(value);
     }
 
     if state.select_screen
@@ -19057,6 +19060,7 @@ mod tests {
             previous_best_bp: Some(10),
             target_bp: Some(0),
             target_clear_index: Some(8),
+            select_clear_index: 5,
             result_failed: Some(false),
             result_arrange_index: 9,
             average_timing_ms: Some(-12.34),
@@ -19087,7 +19091,10 @@ mod tests {
         assert_eq!(skin_state_number(177, &state), Some(8));
         // 現在 bp = bad+poor = 8、MYBEST = 更新前の 10 → diff = -2
         assert_eq!(skin_state_number(178, &state), Some(-2));
+        assert_eq!(skin_state_number(370, &state), Some(5));
         assert_eq!(skin_state_number(371, &state), Some(4));
+        assert_eq!(skin_image_index_number(370, &state), Some(5));
+        assert_eq!(skin_image_index_number(371, &state), Some(4));
         assert!(test_skin_op(320, &[], &state));
         assert!(!test_skin_op(321, &[], &state));
         assert!(test_skin_op(330, &[], &state));
