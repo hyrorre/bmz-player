@@ -71,8 +71,11 @@ pub struct CourseBestScore {
     pub gauge_value: f32,
     pub max_combo: u32,
     pub bp: u32,
+    pub cb: u32,
     pub course_failed: bool,
     pub course_clear: bool,
+    pub play_count: u32,
+    pub clear_count: u32,
     pub played_at: i64,
 }
 
@@ -192,12 +195,19 @@ pub(super) fn best_course_score(
     course_hash: &str,
 ) -> Result<Option<CourseBestScore>> {
     conn.query_row(
-        "SELECT id, course_hash, ex_score, max_ex_score, clear_type, gauge_type,
-                gauge_value, max_combo, bp, course_failed, course_clear, played_at
-         FROM course_scores
-         WHERE course_hash = ?1
-         ORDER BY ex_score DESC,
-                  CASE clear_type
+        "SELECT cs.id, cs.course_hash, cs.ex_score, cs.max_ex_score, cs.clear_type, cs.gauge_type,
+                cs.gauge_value, cs.max_combo, cs.bp,
+                COALESCE((SELECT SUM(sh.cb) FROM score_history sh WHERE sh.course_score_id = cs.id), 0),
+                cs.course_failed, cs.course_clear,
+                (SELECT COUNT(*) FROM course_scores count_cs WHERE count_cs.course_hash = cs.course_hash),
+                (SELECT COUNT(*) FROM course_scores clear_cs
+                    WHERE clear_cs.course_hash = cs.course_hash
+                      AND clear_cs.clear_type NOT IN ('', 'NoPlay', 'Failed')),
+                cs.played_at
+         FROM course_scores cs
+         WHERE cs.course_hash = ?1
+         ORDER BY cs.ex_score DESC,
+                  CASE cs.clear_type
                       WHEN 'NoPlay' THEN 0
                       WHEN 'Failed' THEN 1
                       WHEN 'AssistEasy' THEN 2
@@ -211,10 +221,10 @@ pub(super) fn best_course_score(
                       WHEN 'Max' THEN 10
                       ELSE 0
                   END DESC,
-                  bp ASC,
-                  max_combo DESC,
-                  played_at DESC,
-                  id DESC
+                  cs.bp ASC,
+                  cs.max_combo DESC,
+                  cs.played_at DESC,
+                  cs.id DESC
          LIMIT 1",
         params![course_hash],
         course_best_score_from_row,
@@ -299,7 +309,13 @@ pub(super) fn best_course_score_for_trophy(
     conn.query_row(
         "SELECT cs.id, cs.course_hash, cs.ex_score, cs.max_ex_score, cs.clear_type,
                 cs.gauge_type, cs.gauge_value, cs.max_combo, cs.bp,
-                cs.course_failed, cs.course_clear, cs.played_at
+                COALESCE((SELECT SUM(sh.cb) FROM score_history sh WHERE sh.course_score_id = cs.id), 0),
+                cs.course_failed, cs.course_clear,
+                (SELECT COUNT(*) FROM course_scores count_cs WHERE count_cs.course_hash = cs.course_hash),
+                (SELECT COUNT(*) FROM course_scores clear_cs
+                    WHERE clear_cs.course_hash = cs.course_hash
+                      AND clear_cs.clear_type NOT IN ('', 'NoPlay', 'Failed')),
+                cs.played_at
          FROM course_scores cs
          JOIN course_trophy_achievements cta
              ON cta.course_score_id = cs.id
@@ -550,9 +566,12 @@ fn course_best_score_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Cours
         gauge_value: row.get(6)?,
         max_combo: row.get(7)?,
         bp: row.get(8)?,
-        course_failed: row.get(9)?,
-        course_clear: row.get(10)?,
-        played_at: row.get(11)?,
+        cb: row.get(9)?,
+        course_failed: row.get(10)?,
+        course_clear: row.get(11)?,
+        play_count: row.get(12)?,
+        clear_count: row.get(13)?,
+        played_at: row.get(14)?,
     })
 }
 
@@ -678,11 +697,52 @@ mod tests {
         let mut conn = open_conn();
         let score_id =
             insert_course_score(&mut conn, &sample_score("course-a", 500, "Normal", 10)).unwrap();
+        conn.execute(
+            "INSERT INTO score_history (
+                chart_sha256, played_at, clear_type, gauge_type, gauge_value,
+                total_notes, ex_score, bp, cb, max_combo,
+                fast_pgreat, slow_pgreat, fast_great, slow_great,
+                fast_good, slow_good, fast_bad, slow_bad,
+                fast_poor, slow_poor, fast_empty_poor, slow_empty_poor,
+                random_seed, gauge_option, assist_mask, autoplay, replay_path, course_score_id
+            ) VALUES (
+                ?1, 10, 'Normal', 'Normal', 82.5,
+                100, 500, 7, 4, 123,
+                0, 0, 0, 0,
+                0, 0, 0, 0,
+                0, 0, 0, 0,
+                NULL, '', 0, 0, '', ?2
+            )",
+            params![hash_to_hex(&[1; 32]), score_id],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO score_history (
+                chart_sha256, played_at, clear_type, gauge_type, gauge_value,
+                total_notes, ex_score, bp, cb, max_combo,
+                fast_pgreat, slow_pgreat, fast_great, slow_great,
+                fast_good, slow_good, fast_bad, slow_bad,
+                fast_poor, slow_poor, fast_empty_poor, slow_empty_poor,
+                random_seed, gauge_option, assist_mask, autoplay, replay_path, course_score_id
+            ) VALUES (
+                ?1, 10, 'Normal', 'Normal', 82.5,
+                100, 500, 7, 6, 123,
+                0, 0, 0, 0,
+                0, 0, 0, 0,
+                0, 0, 0, 0,
+                NULL, '', 0, 0, '', ?2
+            )",
+            params![hash_to_hex(&[2; 32]), score_id],
+        )
+        .unwrap();
 
         let best = best_course_score(&conn, "course-a").unwrap().unwrap();
         assert_eq!(best.course_score_id, score_id);
         assert_eq!(best.course_hash, "course-a");
         assert_eq!(best.ex_score, 500);
+        assert_eq!(best.cb, 10);
+        assert_eq!(best.play_count, 1);
+        assert_eq!(best.clear_count, 1);
 
         let charts = list_course_score_charts(&conn, score_id).unwrap();
         assert_eq!(charts.len(), 1);
@@ -711,6 +771,8 @@ mod tests {
 
         let best = best_course_score(&conn, "course-a").unwrap().unwrap();
         assert_eq!(best.ex_score, 400);
+        assert_eq!(best.play_count, 2);
+        assert_eq!(best.clear_count, 2);
         assert_eq!(latest_course_score_id(&conn, "course-a").unwrap(), Some(newer));
         assert_eq!(best_course_clear(&conn, "course-a").unwrap(), Some(ClearType::Hard));
     }

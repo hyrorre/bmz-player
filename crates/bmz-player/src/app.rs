@@ -14817,13 +14817,11 @@ fn select_snapshot_rows(
                     max_combo: row.best_score.as_ref().map(|best| best.max_combo),
                     gauge_value: row.best_score.as_ref().map(|best| best.gauge_value),
                     bp: row.best_score.as_ref().map(|best| best.bp),
-                    cb: None,
+                    cb: row.best_score.as_ref().map(|best| best.cb),
                     judge_counts: DisplayJudgeCounts::default(),
                     fast_slow_counts: None,
-                    play_count: u32::from(row.best_score.is_some()),
-                    clear_count: u32::from(row.best_score.as_ref().is_some_and(|best| {
-                        !best.clear_type.is_empty() && best.clear_type != "Failed"
-                    })),
+                    play_count: row.best_score.as_ref().map(|best| best.play_count).unwrap_or(0),
+                    clear_count: row.best_score.as_ref().map(|best| best.clear_count).unwrap_or(0),
                     replay_slots: row.replay_slots,
                     favorite_chart: false,
                     favorite_song: false,
@@ -17818,8 +17816,11 @@ mod tests {
                 gauge_value: 64.0,
                 max_combo: 180,
                 bp: 4,
+                cb: 2,
                 course_failed: false,
                 course_clear: true,
+                play_count: 3,
+                clear_count: 2,
                 played_at: 2,
             }),
             previous_best_score: Some(crate::storage::score_db::CourseBestScore {
@@ -17832,8 +17833,11 @@ mod tests {
                 gauge_value: 60.0,
                 max_combo: 150,
                 bp: 12,
+                cb: 8,
                 course_failed: false,
                 course_clear: true,
+                play_count: 2,
+                clear_count: 1,
                 played_at: 1,
             }),
         };
@@ -20242,6 +20246,44 @@ mod tests {
         assert_eq!(snapshot_rows[3].table_text_primary, "Test Table");
         assert_eq!(snapshot_rows[3].table_text_secondary, "T5");
         assert_eq!(snapshot_rows[3].table_text_fallback, "T5Test Table");
+    }
+
+    #[test]
+    fn select_snapshot_rows_copies_course_best_score_summary() {
+        let mut row = select_course_row(2, 2);
+        row.best_score = Some(crate::storage::score_db::CourseBestScore {
+            course_score_id: 99,
+            course_hash: "course-hash".to_string(),
+            ex_score: 1234,
+            max_ex_score: 2000,
+            clear_type: "Hard".to_string(),
+            gauge_type: "Class".to_string(),
+            gauge_value: 80.0,
+            max_combo: 345,
+            bp: 12,
+            cb: 8,
+            course_failed: false,
+            course_clear: true,
+            play_count: 42,
+            clear_count: 31,
+            played_at: 1,
+        });
+        row.replay_slots = [true, false, true, false];
+        let rows = vec![SelectItem::Course(row)];
+
+        let profile = ProfileConfig::new_default("default", "Default", 0);
+        let snapshot_rows = select_snapshot_rows(&rows, 0, 1, &profile, None, &HashMap::new());
+
+        assert_eq!(snapshot_rows.len(), 1);
+        assert_eq!(snapshot_rows[0].kind, bmz_render::scene::SelectRowKind::Course);
+        assert_eq!(snapshot_rows[0].clear_type, "Hard");
+        assert_eq!(snapshot_rows[0].ex_score, Some(1234));
+        assert_eq!(snapshot_rows[0].bp, Some(12));
+        assert_eq!(snapshot_rows[0].cb, Some(8));
+        assert_eq!(snapshot_rows[0].max_combo, Some(345));
+        assert_eq!(snapshot_rows[0].play_count, 42);
+        assert_eq!(snapshot_rows[0].clear_count, 31);
+        assert_eq!(snapshot_rows[0].replay_slots, [true, false, true, false]);
     }
 
     #[test]
