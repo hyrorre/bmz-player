@@ -999,7 +999,8 @@ pub struct SkinDrawState {
     pub select_replay_index: Option<usize>,
     /// 選択中曲のクリアランプ番号。
     pub select_clear_index: i64,
-    /// beatoraja favorite_song(89) / favorite_chart(90)。BMZ は invisible を持たず 0/1。
+    /// 選曲画面のお気に入り状態。beatoraja IndexType favorite_song(89) / favorite_chart(90) 用。
+    /// value ref 89/90 とは別名前空間。BMZ は invisible を持たず 0/1。
     pub select_favorite_song: bool,
     pub select_favorite_chart: bool,
     /// 選択中バー種別。OPTION_FOLDERBAR / SONGBAR / GRADEBAR の判定に使う。
@@ -6087,29 +6088,49 @@ fn imageset_ref_lane(ref_id: i32) -> Option<Lane> {
     }
 }
 
-fn skin_state_imageset_index(ref_id: i32, state: &SkinDrawState) -> Option<usize> {
+/// beatoraja `getImageIndexProperty` (IndexType) 相当。image / imageset の ref 専用で、
+/// value の `skin_state_number` (ValueType) とは ID が重なっても別解決する。
+fn skin_image_index_number(ref_id: i32, state: &SkinDrawState) -> Option<i64> {
     match ref_id {
-        40 => Some(state.select_gauge_index),
-        SKIN_REF_PLAY_GAUGE_TYPE => Some(state.gauge_type.max(0) as usize),
-        41 => Some(state.select_target_index),
-        42 => Some(arrange_ref_index(state)),
-        43 => Some(arrange_2p_ref_index(state)),
-        75 => Some(usize::from(state.judge_timing_auto_adjust)),
-        ref_id if random_lane_ref_slot(ref_id).is_some() => {
-            skin_random_lane_ref_number(ref_id, state).map(|value| value.max(0) as usize)
+        11 if state.select_screen => Some(state.select_mode_index as i64),
+        12 if state.select_screen => Some(state.select_sort_index as i64),
+        40 => Some(state.select_gauge_index as i64),
+        SKIN_REF_PLAY_GAUGE_TYPE => Some(state.gauge_type.max(0) as i64),
+        41 => Some(state.select_target_index as i64),
+        42 => Some(arrange_ref_index(state) as i64),
+        43 => Some(arrange_2p_ref_index(state) as i64),
+        54 => Some(state.select_double_option_index as i64),
+        55 => Some(state.select_hs_fix_index as i64),
+        72 => Some(state.select_bga_index as i64),
+        75 => Some(i64::from(state.judge_timing_auto_adjust)),
+        78 => Some(state.select_gauge_auto_shift_index as i64),
+        89 if state.select_screen && select_chart_metadata_available(state) => {
+            Some(i64::from(state.select_favorite_song))
         }
-        54 => Some(state.select_double_option_index),
-        55 => Some(state.select_hs_fix_index),
-        72 => Some(state.select_bga_index),
-        78 => Some(state.select_gauge_auto_shift_index),
-        341 => Some(state.select_bottom_shiftable_gauge_index),
-        11 => Some(state.select_mode_index),
-        12 => Some(state.select_sort_index),
+        90 if state.select_screen && select_chart_metadata_available(state) => {
+            Some(i64::from(state.select_favorite_chart))
+        }
         301..=307 => Some(0),
-        308 => Some(state.select_ln_mode_index),
-        340 => Some(state.select_judge_algorithm_index),
+        308 => Some(state.select_ln_mode_index as i64),
+        330 => Some(i64::from(state.lanecover_enabled)),
+        331 => Some(i64::from(state.lift_enabled)),
+        332 => Some(i64::from(state.hidden_enabled)),
+        340 => Some(state.select_judge_algorithm_index as i64),
+        341 => Some(state.select_bottom_shiftable_gauge_index as i64),
+        // extranotedepth / minemode / scrollmode / longnotemode / seventonine / constant 等は
+        // profile 連携前のため 0 固定。value ref 350-353/360-361/400 とは衝突しない。
+        350..=353 | 360..=361 | 400 | 321..=324 | 342 | 343 => Some(0),
+        370 if state.select_screen => Some(state.select_clear_index),
+        371 => state.target_clear_index,
+        ref_id if random_lane_ref_slot(ref_id).is_some() => {
+            skin_random_lane_ref_number(ref_id, state)
+        }
         _ => None,
     }
+}
+
+fn skin_state_imageset_index(ref_id: i32, state: &SkinDrawState) -> Option<usize> {
+    skin_image_index_number(ref_id, state).map(|value| value.max(0) as usize)
 }
 
 /// imageset の画像を判定インデックス (0=PGREAT..4=POOR,5=MISS) で選ぶ。
@@ -7613,14 +7634,6 @@ fn player_total_play_notes(stats: &PlayerStatsSnapshot) -> u64 {
 }
 
 fn skin_state_number(ref_id: i32, state: &SkinDrawState) -> Option<i64> {
-    if state.select_screen {
-        match ref_id {
-            89 => return Some(i64::from(state.select_favorite_song)),
-            90 => return Some(i64::from(state.select_favorite_chart)),
-            _ => {}
-        }
-    }
-
     if state.select_screen
         && select_chart_score_number_requires_song(ref_id)
         && !select_chart_metadata_available(state)
@@ -8349,18 +8362,7 @@ fn skin_image_texture_region_for_state(
 }
 
 fn skin_image_ref_number(ref_id: i32, state: &SkinDrawState) -> Option<i64> {
-    match ref_id {
-        42 => Some(arrange_ref_index(state) as i64),
-        43 => Some(arrange_2p_ref_index(state) as i64),
-        54 => Some(state.select_double_option_index as i64),
-        55 => Some(state.select_hs_fix_index as i64),
-        75 => Some(i64::from(state.judge_timing_auto_adjust)),
-        340 => Some(state.select_judge_algorithm_index as i64),
-        ref_id if random_lane_ref_slot(ref_id).is_some() => {
-            skin_random_lane_ref_number(ref_id, state)
-        }
-        _ => skin_state_number(ref_id, state),
-    }
+    skin_image_index_number(ref_id, state)
 }
 
 fn arrange_ref_index(state: &SkinDrawState) -> usize {
@@ -21378,19 +21380,53 @@ mod tests {
     }
 
     #[test]
-    fn skin_state_number_select_favorite_refs() {
+    fn skin_image_index_number_select_favorite_refs() {
         let state = SkinDrawState {
             select_screen: true,
+            select_row_kind: SelectRowKind::Song,
+            select_in_library: true,
             select_favorite_song: true,
             select_favorite_chart: false,
-            max_bpm: 200.0,
+            select_max_bpm: 200.0,
             ..SkinDrawState::default()
         };
-        assert_eq!(skin_state_number(89, &state), Some(1));
-        assert_eq!(skin_state_number(90, &state), Some(0));
+        assert_eq!(skin_image_index_number(89, &state), Some(1));
+        assert_eq!(skin_image_index_number(90, &state), Some(0));
+        assert_eq!(skin_state_number(90, &state), Some(200));
 
         let chart_favorite = SkinDrawState { select_favorite_chart: true, ..state };
-        assert_eq!(skin_state_number(90, &chart_favorite), Some(1));
+        assert_eq!(skin_image_index_number(90, &chart_favorite), Some(1));
+        assert_eq!(skin_state_number(90, &chart_favorite), Some(200));
+    }
+
+    #[test]
+    fn skin_image_index_number_separates_colliding_value_refs() {
+        let state = SkinDrawState {
+            select_screen: true,
+            select_row_kind: SelectRowKind::Song,
+            select_in_library: true,
+            select_clear_count: 99,
+            select_gauge_auto_shift_index: 2,
+            select_sort_index: 5,
+            select_option_panel: 3,
+            judge_timing_offset_ms: 42,
+            select_chart_normal_notes: 900,
+            select_max_bpm: 180.0,
+            judge_rank: Some(3),
+            ..SkinDrawState::default()
+        };
+
+        assert_eq!(skin_image_index_number(78, &state), Some(2));
+        assert_eq!(skin_state_number(78, &state), Some(99));
+
+        assert_eq!(skin_image_index_number(12, &state), Some(5));
+        assert_eq!(skin_state_number(12, &state), Some(42));
+
+        assert_eq!(skin_image_index_number(350, &state), Some(0));
+        assert_eq!(skin_state_number(350, &state), Some(900));
+
+        assert_eq!(skin_image_index_number(400, &state), Some(0));
+        assert_eq!(skin_state_number(400, &state), Some(3));
     }
 
     #[test]
