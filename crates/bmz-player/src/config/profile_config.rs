@@ -595,10 +595,7 @@ impl ReplaySlotRule {
     }
 
     pub fn cycle(self, forward: bool) -> Self {
-        let index = Self::CYCLE_ORDER
-            .iter()
-            .position(|rule| *rule == self)
-            .unwrap_or(0);
+        let index = Self::CYCLE_ORDER.iter().position(|rule| *rule == self).unwrap_or(0);
         if forward {
             Self::CYCLE_ORDER[(index + 1) % Self::CYCLE_ORDER.len()]
         } else {
@@ -640,12 +637,7 @@ pub fn default_slot_rules() -> [ReplaySlotRule; 4] {
 }
 
 pub fn replay_slot_rule_indices(rules: &[ReplaySlotRule; 4]) -> [i64; 4] {
-    [
-        rules[0].image_index(),
-        rules[1].image_index(),
-        rules[2].image_index(),
-        rules[3].image_index(),
-    ]
+    [rules[0].image_index(), rules[1].image_index(), rules[2].image_index(), rules[3].image_index()]
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1395,10 +1387,7 @@ mod tests {
         assert_eq!(ReplaySlotRule::MaxComboUpdate.image_index(), 5);
         assert_eq!(ReplaySlotRule::ClearUpdate.image_index(), 7);
         assert_eq!(ReplaySlotRule::Always.image_index(), 10);
-        assert_eq!(
-            replay_slot_rule_indices(&default_slot_rules()),
-            [10, 1, 3, 0]
-        );
+        assert_eq!(replay_slot_rule_indices(&default_slot_rules()), [10, 1, 3, 0]);
     }
 
     #[test]
