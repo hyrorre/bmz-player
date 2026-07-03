@@ -638,12 +638,13 @@ pub fn course_root_item() -> SelectItem {
 pub fn load_select_items_for_courses(
     library_db: &LibraryDatabase,
     score_db: &ScoreDatabase,
+    rule_mode: RuleMode,
 ) -> Result<Vec<SelectItem>> {
     let courses = library_db.list_courses()?;
     Ok(courses
         .into_iter()
         .filter(|stored| !stored.source.starts_with("table:"))
-        .map(|stored| build_select_course_row(library_db, score_db, stored))
+        .map(|stored| build_select_course_row(library_db, score_db, rule_mode, stored))
         .collect())
 }
 
@@ -651,6 +652,7 @@ pub fn load_select_items_for_courses(
 fn build_select_course_row(
     library_db: &LibraryDatabase,
     score_db: &ScoreDatabase,
+    rule_mode: RuleMode,
     stored: crate::storage::library_db::StoredCourse,
 ) -> SelectItem {
     let entry_count = stored.definition.entries.len();
@@ -701,11 +703,12 @@ fn build_select_course_row(
 
     let identity = crate::ir::course_payload::course_identity_from_stored(library_db, &stored);
     let best_score = identity.as_ref().and_then(|identity| {
-        score_db.best_course_score(&identity.course_hash).unwrap_or_else(|error| {
+        score_db.best_course_score(&identity.course_hash, rule_mode).unwrap_or_else(|error| {
             tracing::warn!(
                 %error,
                 course_id = stored.id,
                 course_hash = %identity.course_hash,
+                rule_mode = rule_mode.as_str(),
                 "failed to load best course score"
             );
             None
@@ -714,31 +717,35 @@ fn build_select_course_row(
     let replay_slots = identity
         .as_ref()
         .map(|identity| {
-            score_db.course_replay_slot_presence(&identity.course_hash).unwrap_or_else(|error| {
-                tracing::warn!(
-                    %error,
-                    course_id = stored.id,
-                    course_hash = %identity.course_hash,
-                    "failed to load course_replay_slot_presence"
-                );
-                [false; 4]
-            })
-        })
-        .unwrap_or([false; 4]);
-    let achieved_trophy_names = identity
-        .as_ref()
-        .map(|identity| {
-            score_db.achieved_trophy_names_for_course(&identity.course_hash).unwrap_or_else(
+            score_db.course_replay_slot_presence(&identity.course_hash, rule_mode).unwrap_or_else(
                 |error| {
                     tracing::warn!(
                         %error,
                         course_id = stored.id,
                         course_hash = %identity.course_hash,
+                        rule_mode = rule_mode.as_str(),
+                        "failed to load course_replay_slot_presence"
+                    );
+                    [false; 4]
+                },
+            )
+        })
+        .unwrap_or([false; 4]);
+    let achieved_trophy_names = identity
+        .as_ref()
+        .map(|identity| {
+            score_db
+                .achieved_trophy_names_for_course(&identity.course_hash, rule_mode)
+                .unwrap_or_else(|error| {
+                    tracing::warn!(
+                        %error,
+                        course_id = stored.id,
+                        course_hash = %identity.course_hash,
+                        rule_mode = rule_mode.as_str(),
                         "failed to load achieved_trophy_names_for_course"
                     );
                     Vec::new()
-                },
-            )
+                })
         })
         .unwrap_or_default();
 
@@ -768,6 +775,7 @@ pub fn table_level_folder_items(
     library_db: &LibraryDatabase,
     score_db: &ScoreDatabase,
     source_url: &str,
+    rule_mode: RuleMode,
 ) -> Result<Vec<SelectItem>> {
     let Some(table) =
         library_db.list_difficulty_tables()?.into_iter().find(|t| t.source_url == source_url)
@@ -791,7 +799,7 @@ pub fn table_level_folder_items(
     if let Ok(courses) = library_db.list_courses_by_source(&table_source) {
         tracing::info!(source = %table_source, count = courses.len(), "courses found for table");
         for stored in courses {
-            items.push(build_select_course_row(library_db, score_db, stored));
+            items.push(build_select_course_row(library_db, score_db, rule_mode, stored));
         }
     }
 
@@ -2609,8 +2617,13 @@ mod tests {
         };
         library_db.upsert_difficulty_table(&table).unwrap();
 
-        let items = table_level_folder_items(&library_db, &score_db, "https://example.com/insane/")
-            .unwrap();
+        let items = table_level_folder_items(
+            &library_db,
+            &score_db,
+            "https://example.com/insane/",
+            RuleMode::Beatoraja,
+        )
+        .unwrap();
 
         assert_eq!(items.len(), 3);
         assert!(matches!(

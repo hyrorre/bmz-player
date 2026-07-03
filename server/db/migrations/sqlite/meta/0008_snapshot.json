@@ -1,8 +1,8 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "466308d3-1465-402d-a8cb-c421153f2637",
-  "prevId": "6b714c5c-bb8c-46dd-9d57-294e8795bf28",
+  "id": "6674c496-4980-4fe7-bc2d-2a5fbf6988a8",
+  "prevId": "466308d3-1465-402d-a8cb-c421153f2637",
   "tables": {
     "auth_rate_limits": {
       "name": "auth_rate_limits",
@@ -170,6 +170,14 @@
           "notNull": true,
           "autoincrement": false
         },
+        "rule_mode": {
+          "name": "rule_mode",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "'Beatoraja'"
+        },
         "scoring": {
           "name": "scoring",
           "type": "text",
@@ -208,6 +216,7 @@
             "course_hash",
             "gauge",
             "ln_policy",
+            "rule_mode",
             "scoring"
           ],
           "isUnique": true
@@ -218,6 +227,7 @@
             "course_hash",
             "gauge",
             "ln_policy",
+            "rule_mode",
             "scoring",
             "ex_score"
           ],
@@ -944,6 +954,14 @@
           "primaryKey": false,
           "notNull": true,
           "autoincrement": false
+        },
+        "rule_mode": {
+          "name": "rule_mode",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "'Beatoraja'"
         },
         "scoring": {
           "name": "scoring",

@@ -2136,7 +2136,8 @@ impl WinitApp {
                     );
                     return;
                 };
-                match self.boot.score_db.latest_course_score_id(&identity.course_hash) {
+                let rule_mode = self.boot.profile_config.play.rule_mode;
+                match self.boot.score_db.latest_course_score_id(&identity.course_hash, rule_mode) {
                     Ok(Some(course_score_id)) => {
                         tracing::info!(course_id, course_score_id, "booting into course replay");
                         self.start_course_replay_with_auto_advance(
@@ -6307,18 +6308,21 @@ impl WinitApp {
                 self.play_course_result_entry_sound(clear_type);
                 return;
             };
-            course_result.previous_best_score =
-                self.boot.score_db.best_course_score(&identity.course_hash).unwrap_or_else(
-                    |error| {
-                        tracing::warn!(
-                            %error,
-                            course_id,
-                            course_hash = %identity.course_hash,
-                            "failed to read previous best course score"
-                        );
-                        None
-                    },
-                );
+            let course_rule_mode = course_result.rule_mode;
+            course_result.previous_best_score = self
+                .boot
+                .score_db
+                .best_course_score(&identity.course_hash, course_rule_mode)
+                .unwrap_or_else(|error| {
+                    tracing::warn!(
+                        %error,
+                        course_id,
+                        course_hash = %identity.course_hash,
+                        rule_mode = course_rule_mode.as_str(),
+                        "failed to read previous best course score"
+                    );
+                    None
+                });
             let final_clear_type = course_result.final_clear_type;
             let bp = course_result.judge_counts.bad
                 + course_result.judge_counts.poor
@@ -6342,6 +6346,7 @@ impl WinitApp {
                 serde_json::to_string(&achieved_trophies).unwrap_or_else(|_| "[]".to_string());
             let insert = crate::storage::score_db::CourseScoreInsert {
                 course_hash: identity.course_hash.clone(),
+                rule_mode: course_rule_mode,
                 source: stored_course.source.clone(),
                 course_key: stored_course.definition.key.clone(),
                 title: stored_course.definition.title.clone(),
@@ -6387,6 +6392,7 @@ impl WinitApp {
                         course_id,
                         course_score_id,
                         &course_result,
+                        course_rule_mode,
                         last_finished.as_ref().map(|f| f.stored.device_type),
                         &insert.gauge_type,
                         played_at,
@@ -6403,6 +6409,7 @@ impl WinitApp {
                     // require strict improvement; empty slot always wins).
                     course_result.saved_replay_slots = self.update_course_replay_slots(
                         &identity.course_hash,
+                        course_rule_mode,
                         course_score_id,
                         played_at,
                         course_result.total_ex_score,
@@ -6413,12 +6420,13 @@ impl WinitApp {
                     course_result.replay_slots = self
                         .boot
                         .score_db
-                        .course_replay_slot_presence(&identity.course_hash)
+                        .course_replay_slot_presence(&identity.course_hash, course_rule_mode)
                         .unwrap_or_else(|error| {
                             tracing::warn!(
                                 %error,
                                 course_id,
                                 course_hash = %identity.course_hash,
+                                rule_mode = course_rule_mode.as_str(),
                                 "failed to read course replay slot presence"
                             );
                             [false; 4]
@@ -6437,18 +6445,20 @@ impl WinitApp {
             // Look up the best score *after* the insert above so the just-
             // saved attempt is reflected when it improved the record.  The
             // result overlay reads this to show a "BEST" section.
-            course_result.best_score =
-                self.boot.score_db.best_course_score(&identity.course_hash).unwrap_or_else(
-                    |error| {
-                        tracing::warn!(
-                            %error,
-                            course_id,
-                            course_hash = %identity.course_hash,
-                            "failed to read best course score"
-                        );
-                        None
-                    },
-                );
+            course_result.best_score = self
+                .boot
+                .score_db
+                .best_course_score(&identity.course_hash, course_rule_mode)
+                .unwrap_or_else(|error| {
+                    tracing::warn!(
+                        %error,
+                        course_id,
+                        course_hash = %identity.course_hash,
+                        rule_mode = course_rule_mode.as_str(),
+                        "failed to read best course score"
+                    );
+                    None
+                });
         }
 
         self.finished_course = Some(course_result);
@@ -6539,6 +6549,7 @@ impl WinitApp {
         course_id: i64,
         course_score_id: i64,
         course_result: &crate::screens::course_session::CourseResultSummary,
+        rule_mode: bmz_gameplay::rule::RuleMode,
         device_type: Option<bmz_core::input::InputDeviceKind>,
         gauge: &str,
         played_at: i64,
@@ -6568,6 +6579,7 @@ impl WinitApp {
             &crate::ir::course_payload::IrCourseSubmissionContext {
                 played_at,
                 ln_policy_setting: ln_setting.clone(),
+                rule_mode: rule_mode.as_str().to_string(),
                 gauge: gauge.to_string(),
                 device_type: device_type.unwrap_or(bmz_core::input::InputDeviceKind::Keyboard),
                 arrange: arrange.to_string(),
@@ -6616,6 +6628,7 @@ impl WinitApp {
     fn update_course_replay_slots(
         &mut self,
         course_hash: &str,
+        rule_mode: bmz_gameplay::rule::RuleMode,
         course_score_id: i64,
         played_at: i64,
         ex_score: u32,
@@ -6634,12 +6647,13 @@ impl WinitApp {
         let mut saved_slots = [false; 4];
         for (slot_index, &rule) in slot_rules.iter().enumerate() {
             let slot = slot_index as u8;
-            let prev = match self.boot.score_db.course_replay_slot(course_hash, slot) {
+            let prev = match self.boot.score_db.course_replay_slot(course_hash, rule_mode, slot) {
                 Ok(record) => record,
                 Err(error) => {
                     tracing::warn!(
                         %error,
                         course_hash,
+                        rule_mode = rule_mode.as_str(),
                         slot,
                         "failed to read course_replay_slot; skipping rule eval"
                     );
@@ -6652,6 +6666,7 @@ impl WinitApp {
             }
             let record = crate::storage::score_db::CourseReplaySlotRecord {
                 course_hash: course_hash.to_string(),
+                rule_mode,
                 slot,
                 rule: rule.as_str().to_string(),
                 course_score_id,
@@ -7811,11 +7826,13 @@ impl WinitApp {
             tracing::warn!(course_id, slot, "course identity unavailable for replay slot");
             return false;
         };
-        match self.boot.score_db.course_replay_slot(&identity.course_hash, slot) {
+        let rule_mode = self.boot.profile_config.play.rule_mode;
+        match self.boot.score_db.course_replay_slot(&identity.course_hash, rule_mode, slot) {
             Ok(Some(record)) => {
                 tracing::info!(
                     course_id,
                     course_hash = %identity.course_hash,
+                    rule_mode = rule_mode.as_str(),
                     course_score_id = record.course_score_id,
                     slot,
                     "starting course replay from select"
@@ -7827,6 +7844,7 @@ impl WinitApp {
                 tracing::info!(
                     course_id,
                     course_hash = %identity.course_hash,
+                    rule_mode = rule_mode.as_str(),
                     slot,
                     "no saved course attempt in this replay slot"
                 );
@@ -7837,6 +7855,7 @@ impl WinitApp {
                     %error,
                     course_id,
                     course_hash = %identity.course_hash,
+                    rule_mode = rule_mode.as_str(),
                     slot,
                     "failed to look up course_replay_slot"
                 );
@@ -8275,8 +8294,10 @@ impl WinitApp {
             bmz_core::clear::ClearType::NoPlay as u8
         };
         let played_at = course.course_played_at.unwrap_or(0);
+        let rule_mode = course.rule_mode;
         let record = crate::storage::score_db::CourseReplaySlotRecord {
             course_hash: identity.course_hash.clone(),
+            rule_mode,
             slot,
             rule: crate::config::profile_config::ReplaySlotRule::Always.as_str().to_string(),
             course_score_id,
@@ -8294,6 +8315,7 @@ impl WinitApp {
                 tracing::info!(
                     course_id,
                     course_hash = %identity.course_hash,
+                    rule_mode = rule_mode.as_str(),
                     slot,
                     "saved course replay slot"
                 );
@@ -13552,7 +13574,11 @@ fn build_select_items_for_stack(
             load_settings_items(path)
         }
         Some(path) if path == COURSE_ROOT_PATH => {
-            match load_select_items_for_courses(&boot.library_db, &boot.score_db) {
+            match load_select_items_for_courses(
+                &boot.library_db,
+                &boot.score_db,
+                boot.profile_config.play.rule_mode,
+            ) {
                 Ok(items) => items,
                 Err(error) => {
                     tracing::error!(%error, "failed to load course list");
@@ -13674,7 +13700,12 @@ fn build_select_items_for_stack(
                 if !active_table_sources.iter().any(|url| url == source_url) {
                     return Vec::new();
                 }
-                match table_level_folder_items(&boot.library_db, &boot.score_db, source_url) {
+                match table_level_folder_items(
+                    &boot.library_db,
+                    &boot.score_db,
+                    source_url,
+                    boot.profile_config.play.rule_mode,
+                ) {
                     Ok(items) => items,
                     Err(error) => {
                         tracing::error!(%error, "failed to load difficulty table levels");
@@ -17800,6 +17831,7 @@ mod tests {
             course_id: 1,
             course_score_id: None,
             course_played_at: None,
+            rule_mode: bmz_gameplay::rule::RuleMode::Beatoraja,
             title: "Course Title".to_string(),
             kind: bmz_core::course::CourseKind::Dan,
             course_titles: [
@@ -17841,6 +17873,7 @@ mod tests {
             best_score: Some(crate::storage::score_db::CourseBestScore {
                 course_score_id: 22,
                 course_hash: "course-hash".to_string(),
+                rule_mode: bmz_gameplay::rule::RuleMode::Beatoraja,
                 ex_score: 340,
                 max_ex_score: 440,
                 clear_type: "ExHard".to_string(),
@@ -17858,6 +17891,7 @@ mod tests {
             previous_best_score: Some(crate::storage::score_db::CourseBestScore {
                 course_score_id: 21,
                 course_hash: "course-hash".to_string(),
+                rule_mode: bmz_gameplay::rule::RuleMode::Beatoraja,
                 ex_score: 300,
                 max_ex_score: 440,
                 clear_type: "Normal".to_string(),
@@ -20334,6 +20368,7 @@ mod tests {
         row.best_score = Some(crate::storage::score_db::CourseBestScore {
             course_score_id: 99,
             course_hash: "course-hash".to_string(),
+            rule_mode: bmz_gameplay::rule::RuleMode::Beatoraja,
             ex_score: 1234,
             max_ex_score: 2000,
             clear_type: "Hard".to_string(),

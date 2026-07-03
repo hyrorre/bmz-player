@@ -1,5 +1,6 @@
 use bmz_core::clear::{ClearType, GaugeType};
 use bmz_core::course::{CourseDefinition, CourseEntry, CourseKind};
+use bmz_gameplay::rule::RuleMode;
 
 use crate::screens::play_finish::FinishedPlaySession;
 use crate::screens::play_session::AppliedArrange;
@@ -37,6 +38,7 @@ pub struct CourseResultSummary {
     pub course_id: i64,
     pub course_score_id: Option<i64>,
     pub course_played_at: Option<i64>,
+    pub rule_mode: RuleMode,
     pub title: String,
     pub kind: CourseKind,
     pub course_titles: [String; 10],
@@ -147,12 +149,15 @@ impl ActiveCourseSession {
             self.entry_results.iter().map(|r| r.finished.applied_arrange.clone()).collect();
         let course_titles =
             course_titles_from_results(&self.definition.entries, &self.entry_results);
+        let rule_mode =
+            self.entry_results.first().map(|r| r.finished.rule_mode).unwrap_or_default();
         let entry_summaries = self.entry_results.into_iter().map(|r| r.finished.summary).collect();
 
         CourseResultSummary {
             course_id: self.course_id,
             course_score_id: None,
             course_played_at: None,
+            rule_mode,
             title: self.definition.title,
             kind: self.definition.kind,
             course_titles,

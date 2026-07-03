@@ -641,15 +641,20 @@ impl ScoreDatabase {
         super::course_score_db::insert_course_score(&mut self.conn, record)
     }
 
-    pub fn best_course_score(&self, course_hash: &str) -> Result<Option<CourseBestScore>> {
-        super::course_score_db::best_course_score(&self.conn, course_hash)
+    pub fn best_course_score(
+        &self,
+        course_hash: &str,
+        rule_mode: RuleMode,
+    ) -> Result<Option<CourseBestScore>> {
+        super::course_score_db::best_course_score(&self.conn, course_hash, rule_mode)
     }
 
     pub fn best_course_clear(
         &self,
         course_hash: &str,
+        rule_mode: RuleMode,
     ) -> Result<Option<bmz_core::clear::ClearType>> {
-        super::course_score_db::best_course_clear(&self.conn, course_hash)
+        super::course_score_db::best_course_clear(&self.conn, course_hash, rule_mode)
     }
 
     pub fn list_course_score_charts(
@@ -663,17 +668,28 @@ impl ScoreDatabase {
         super::course_score_db::list_course_replays(&self.conn, course_score_id)
     }
 
-    pub fn latest_course_score_id(&self, course_hash: &str) -> Result<Option<i64>> {
-        super::course_score_db::latest_course_score_id(&self.conn, course_hash)
+    pub fn latest_course_score_id(
+        &self,
+        course_hash: &str,
+        rule_mode: RuleMode,
+    ) -> Result<Option<i64>> {
+        super::course_score_db::latest_course_score_id(&self.conn, course_hash, rule_mode)
     }
 
     pub fn list_recent_course_scores(
         &self,
         course_hash: &str,
+        rule_mode: RuleMode,
         limit: u32,
         offset: u32,
     ) -> Result<Vec<CourseScoreEntry>> {
-        super::course_score_db::list_recent_course_scores(&self.conn, course_hash, limit, offset)
+        super::course_score_db::list_recent_course_scores(
+            &self.conn,
+            course_hash,
+            rule_mode,
+            limit,
+            offset,
+        )
     }
 
     pub fn course_score_entry_by_id(
@@ -690,32 +706,48 @@ impl ScoreDatabase {
     pub fn course_replay_slot(
         &self,
         course_hash: &str,
+        rule_mode: RuleMode,
         slot: u8,
     ) -> Result<Option<CourseReplaySlotRecord>> {
-        super::course_score_db::course_replay_slot(&self.conn, course_hash, slot)
+        super::course_score_db::course_replay_slot(&self.conn, course_hash, rule_mode, slot)
     }
 
     pub fn course_replay_slots_for_course(
         &self,
         course_hash: &str,
+        rule_mode: RuleMode,
     ) -> Result<[Option<CourseReplaySlotRecord>; 4]> {
-        super::course_score_db::course_replay_slots_for_course(&self.conn, course_hash)
+        super::course_score_db::course_replay_slots_for_course(&self.conn, course_hash, rule_mode)
     }
 
-    pub fn course_replay_slot_presence(&self, course_hash: &str) -> Result<[bool; 4]> {
-        super::course_score_db::course_replay_slot_presence(&self.conn, course_hash)
+    pub fn course_replay_slot_presence(
+        &self,
+        course_hash: &str,
+        rule_mode: RuleMode,
+    ) -> Result<[bool; 4]> {
+        super::course_score_db::course_replay_slot_presence(&self.conn, course_hash, rule_mode)
     }
 
-    pub fn achieved_trophy_names_for_course(&self, course_hash: &str) -> Result<Vec<String>> {
-        super::course_score_db::achieved_trophy_names_for_course(&self.conn, course_hash)
+    pub fn achieved_trophy_names_for_course(
+        &self,
+        course_hash: &str,
+        rule_mode: RuleMode,
+    ) -> Result<Vec<String>> {
+        super::course_score_db::achieved_trophy_names_for_course(&self.conn, course_hash, rule_mode)
     }
 
     pub fn best_course_score_for_trophy(
         &self,
         course_hash: &str,
+        rule_mode: RuleMode,
         trophy_name: &str,
     ) -> Result<Option<CourseBestScore>> {
-        super::course_score_db::best_course_score_for_trophy(&self.conn, course_hash, trophy_name)
+        super::course_score_db::best_course_score_for_trophy(
+            &self.conn,
+            course_hash,
+            rule_mode,
+            trophy_name,
+        )
     }
 
     /// Tag the given `score_history` rows with a course attempt id.

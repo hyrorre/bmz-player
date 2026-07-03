@@ -7,6 +7,7 @@ use bmz_core::course::{
     CourseClassConstraint, CourseGaugeConstraint, CourseJudgeConstraint, CourseSpeedConstraint,
 };
 use bmz_core::input::InputDeviceKind;
+use bmz_gameplay::rule::RuleMode;
 use bmz_gameplay::score::{JudgeCounts, ScoreState};
 use rusqlite::{Connection, OpenFlags, Row};
 
@@ -31,6 +32,14 @@ impl ScoreImportKind {
             Self::Beatoraja => "beatoraja",
             Self::Lr2Oraja => "LR2oraja",
             Self::Lr2OrajaDx => "LR2oraja (DX Mode)",
+        }
+    }
+
+    const fn rule_mode_enum(self) -> RuleMode {
+        match self {
+            Self::Beatoraja => RuleMode::Beatoraja,
+            Self::Lr2 | Self::Lr2Oraja => RuleMode::Lr2Oraja,
+            Self::Lr2OrajaDx => RuleMode::Dx,
         }
     }
 
@@ -128,7 +137,14 @@ fn import_lr2_scores(
         // 160-char key for a 4-song course).  Resolve these to bmz courses and
         // import a course score for each canonical match (see import_lr2_course).
         if is_course_hash(&row.md5, 32) {
-            import_lr2_course(&row, &course_index, score_db, imported_at, &mut report)?;
+            import_lr2_course(
+                &row,
+                &course_index,
+                score_db,
+                kind.rule_mode_enum(),
+                imported_at,
+                &mut report,
+            )?;
             continue;
         }
         let md5 = match hex_to_hash::<16>(&row.md5) {
@@ -282,6 +298,7 @@ fn import_lr2_course(
     row: &Lr2ScoreRow,
     course_index: &HashMap<Vec<[u8; 16]>, Vec<CourseImportTarget>>,
     score_db: &mut ScoreDatabase,
+    rule_mode: RuleMode,
     imported_at: i64,
     report: &mut ScoreImportReport,
 ) -> Result<()> {
@@ -296,7 +313,7 @@ fn import_lr2_course(
         return Ok(());
     };
     for target in targets {
-        let insert = lr2_course_score_insert(row, target, imported_at);
+        let insert = lr2_course_score_insert(row, target, rule_mode, imported_at);
         score_db.insert_course_score(&insert)?;
         report.imported += 1;
     }
@@ -336,12 +353,14 @@ struct CourseImportTarget {
 fn lr2_course_score_insert(
     row: &Lr2ScoreRow,
     target: &CourseImportTarget,
+    rule_mode: RuleMode,
     imported_at: i64,
 ) -> CourseScoreInsert {
     let clear_type = lr2_clear_type(row.clear);
     let course_failed = matches!(clear_type, ClearType::NoPlay | ClearType::Failed);
     CourseScoreInsert {
         course_hash: target.course_hash.clone(),
+        rule_mode,
         source: target.source.clone(),
         course_key: target.course_key.clone(),
         title: target.title.clone(),

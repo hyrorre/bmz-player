@@ -57,6 +57,13 @@
       "when": 1781795429097,
       "tag": "0008_ordinary_captain_cross",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "6",
+      "when": 1783105380461,
+      "tag": "0009_course_rule_mode",
+      "breakpoints": true
     }
   ]
 }

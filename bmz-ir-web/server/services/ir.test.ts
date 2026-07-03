@@ -143,6 +143,13 @@ describe('course score validation', () => {
 
     expect(() => validateCourseScoreSubmission(payload)).toThrow('rule.ln_policy is invalid')
   })
+
+  test('rejects invalid course rule modes', () => {
+    const payload = baseCourseSubmission()
+    payload.rule.rule_mode = 'Unknown' as never
+
+    expect(() => validateCourseScoreSubmission(payload)).toThrow('rule_mode is invalid')
+  })
 })
 
 function rankingRow(overrides: Partial<ReturnType<typeof baseRankingRow>> = {}) {
@@ -202,6 +209,7 @@ function baseCourseSubmission({ lnPolicy = 'AutoLn' }: { lnPolicy?: string } = {
     rule: {
       gauge: 'Class',
       ln_policy: lnPolicy,
+      rule_mode: 'Beatoraja' as const,
       scoring: 'bms_ex_score_v1' as const,
     },
     result: {

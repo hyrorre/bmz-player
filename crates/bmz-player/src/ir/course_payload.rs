@@ -38,6 +38,7 @@ pub struct IrCourseSubmissionContext {
     pub played_at: i64,
     /// LnPolicySetting の文字列表現 (コースは譜面ごとに解決が変わるため設定値)。
     pub ln_policy_setting: String,
+    pub rule_mode: String,
     pub gauge: String,
     pub device_type: InputDeviceKind,
     pub arrange: String,
@@ -151,6 +152,7 @@ pub fn build_course_submission(
         "rule": {
             "gauge": context.gauge,
             "ln_policy": context.ln_policy_setting,
+            "rule_mode": context.rule_mode,
             "scoring": "bms_ex_score_v1",
         },
         "result": {
@@ -266,6 +268,7 @@ mod tests {
             course_id: 1,
             course_score_id: None,
             course_played_at: None,
+            rule_mode: bmz_gameplay::rule::RuleMode::Beatoraja,
             title: "Dan 1".to_string(),
             kind: CourseKind::Dan,
             course_titles: Default::default(),
@@ -295,6 +298,7 @@ mod tests {
             &IrCourseSubmissionContext {
                 played_at: 1_767_225_600,
                 ln_policy_setting: LnPolicySetting::ForceHcn.as_ir_str().to_string(),
+                rule_mode: "Dx".to_string(),
                 gauge: "Class".to_string(),
                 device_type: InputDeviceKind::Keyboard,
                 arrange: "NORMAL".to_string(),
@@ -304,6 +308,7 @@ mod tests {
         );
 
         assert_eq!(payload["rule"]["ln_policy"], "ForceHcn");
+        assert_eq!(payload["rule"]["rule_mode"], "Dx");
         assert_eq!(payload["result"]["max_combo"], json!(123));
     }
 
@@ -319,6 +324,7 @@ mod tests {
             course_id: 1,
             course_score_id: None,
             course_played_at: None,
+            rule_mode: bmz_gameplay::rule::RuleMode::Beatoraja,
             title: "Dan 1".to_string(),
             kind: CourseKind::Dan,
             course_titles: Default::default(),
@@ -349,6 +355,7 @@ mod tests {
             &IrCourseSubmissionContext {
                 played_at: 1_767_225_600,
                 ln_policy_setting: LnPolicySetting::AutoLn.as_ir_str().to_string(),
+                rule_mode: "Beatoraja".to_string(),
                 gauge: "ExClass".to_string(),
                 device_type: InputDeviceKind::Keyboard,
                 arrange: "NORMAL".to_string(),

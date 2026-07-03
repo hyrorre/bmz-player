@@ -4,6 +4,7 @@ import type { BatchItem } from 'drizzle-orm/batch'
 import { db, schema } from 'hub:db'
 import { isUniqueConstraintError } from '../utils/db_errors'
 import {
+  asRuleMode,
   CLEAR_RANK,
   isRecord,
   normalizeGaugeName,
@@ -14,6 +15,7 @@ import {
   stableStringify,
   type IrRequestUser,
 } from './ir'
+import type { IrRuleMode } from '../../shared/types/ir'
 
 const LN_POLICY_ALIASES = new Map([
   ['AutoLn', 'AutoLn'],
@@ -46,6 +48,7 @@ export interface CourseScoreSubmission {
     gauge: string
     /** LnPolicySetting 値 (コースは譜面ごとに解決が変わるため設定値)。 */
     ln_policy: string
+    rule_mode: IrRuleMode
     scoring: 'bms_ex_score_v1'
   }
   result: {
@@ -105,6 +108,7 @@ export function validateCourseScoreSubmission(value: unknown): CourseScoreSubmis
     throw new Error('course.course_hash does not match the course definition')
   }
   payload.rule.ln_policy = normalizeCourseLnPolicy(payload.rule.ln_policy)
+  payload.rule.rule_mode = asRuleMode(payload.rule.rule_mode)
   if (payload.rule.scoring !== 'bms_ex_score_v1') {
     throw new Error('rule.scoring is unsupported')
   }
@@ -171,6 +175,7 @@ export async function submitCourseScore(
     platform: payload.client.platform,
     gauge: payload.rule.gauge,
     lnPolicy: payload.rule.ln_policy,
+    ruleMode: payload.rule.rule_mode,
     scoring: payload.rule.scoring,
     clearType: payload.result.clear,
     clearRank,
@@ -278,6 +283,7 @@ async function prepareBestCourseScoreUpsert(
       eq(schema.bestCourseScores.courseHash, payload.course.course_hash),
       eq(schema.bestCourseScores.gauge, payload.rule.gauge),
       eq(schema.bestCourseScores.lnPolicy, payload.rule.ln_policy),
+      eq(schema.bestCourseScores.ruleMode, payload.rule.rule_mode),
       eq(schema.bestCourseScores.scoring, payload.rule.scoring),
     ),
   })
@@ -317,6 +323,7 @@ async function prepareBestCourseScoreUpsert(
     deviceType: payload.play_options.device_type as CourseDeviceType,
     gauge: payload.rule.gauge,
     lnPolicy: payload.rule.ln_policy,
+    ruleMode: payload.rule.rule_mode,
     scoring: payload.rule.scoring,
     playedAt: playedAtDate(payload.result.played_at),
     serverReceivedAt: score.serverReceivedAt,
@@ -331,6 +338,7 @@ async function prepareBestCourseScoreUpsert(
         schema.bestCourseScores.courseHash,
         schema.bestCourseScores.gauge,
         schema.bestCourseScores.lnPolicy,
+        schema.bestCourseScores.ruleMode,
         schema.bestCourseScores.scoring,
       ],
       set: {

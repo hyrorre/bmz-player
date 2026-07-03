@@ -1935,11 +1935,13 @@ course_hash = SHA256(canonical_json({
 
 - タイトルや出典 URL は identity に含めない (表示 metadata)。
 - score identity (best / ranking の分離キー) は
-  `course_hash + gauge + ln_policy_setting + scoring`。
+  `course_hash + gauge + ln_policy_setting + rule_mode + scoring`。
   - `gauge`: 段位 (class 系 constraint) では constraint で固定されるが、
     通常コースではユーザー選択なので key に含める。
   - `ln_policy_setting`: コースは譜面ごとに LN 解決が変わるため、
     解決後の policy ではなく設定値 (`AutoLn` / `ForceCn` など) を使う。
+  - `rule_mode`: 単曲スコアと同じく `Beatoraja` / `Lr2Oraja` / `Dx` を
+    別ランキングとして扱う。
 
 #### ir_courses (registry)
 
@@ -1978,6 +1980,7 @@ create table public.course_scores (
 
   gauge text not null,                          -- Class / ExClass / Normal ...
   ln_policy text not null,                      -- LnPolicySetting 値
+  rule_mode text not null,                      -- Beatoraja / Lr2Oraja / Dx
   scoring text not null,                        -- 'bms_ex_score_v1'
 
   clear_type text not null,                     -- ClearType::as_str()
@@ -2040,13 +2043,14 @@ create table public.best_course_scores (
 
   gauge text not null,
   ln_policy text not null,
+  rule_mode text not null,
   scoring text not null,
 
   played_at timestamptz,
   server_received_at timestamptz not null,
   verification text not null default 'unverified',
 
-  unique (player_id, course_hash, gauge, ln_policy, scoring)
+  unique (player_id, course_hash, gauge, ln_policy, rule_mode, scoring)
 );
 ```
 
@@ -2066,7 +2070,7 @@ best は再計算せず `best_updated=false` とする。
 
 ```http
 GET /api/v1/courses/{course_hash}                # registry + 集計
-GET /api/v1/courses/{course_hash}/ranking        # scope/gauge/ln_policy
+GET /api/v1/courses/{course_hash}/ranking        # scope/gauge/ln_policy/rule_mode
 ```
 
 - evidence は `bmz-course-score-evidence-v1` schema で、単曲と同じ
@@ -2107,6 +2111,7 @@ Payload:
   "rule": {
     "gauge": "Class",
     "ln_policy": "AutoLn",
+    "rule_mode": "Beatoraja",
     "scoring": "bms_ex_score_v1"
   },
   "result": {

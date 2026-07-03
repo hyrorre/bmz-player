@@ -242,9 +242,12 @@ Hard / Class は 30% 未満でダメージを 0.5 倍にする。
 - `score_best.rule_mode`
 - `replay_slots.rule_mode`
 - replay slot filename suffix
+- `course_scores.rule_mode`
+- `course_replay_slots.rule_mode`
 
 `RuleMode::Beatoraja` は後方互換のため replay slot filename suffix を省略する。
 `RuleMode::Lr2Oraja` / `RuleMode::Dx` は suffix を付ける。
+コースリザルトも同じ course hash で Beatoraja / LR2oraja / DX を別スコアとして保存する。
 
 ## Known Notes
 

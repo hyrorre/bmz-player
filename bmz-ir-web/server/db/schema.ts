@@ -395,6 +395,9 @@ export const courseScores = sqliteTable(
     platform: text('platform').notNull(),
     gauge: text('gauge').notNull(),
     lnPolicy: text('ln_policy').notNull(),
+    ruleMode: text('rule_mode', { enum: ['Beatoraja', 'Lr2Oraja', 'Dx'] })
+      .notNull()
+      .default('Beatoraja'),
     scoring: text('scoring').notNull(),
     clearType: text('clear_type').notNull(),
     clearRank: integer('clear_rank').notNull(),
@@ -449,6 +452,9 @@ export const bestCourseScores = sqliteTable(
     deviceType: text('device_type', { enum: ['keyboard', 'controller'] }).notNull(),
     gauge: text('gauge').notNull(),
     lnPolicy: text('ln_policy').notNull(),
+    ruleMode: text('rule_mode', { enum: ['Beatoraja', 'Lr2Oraja', 'Dx'] })
+      .notNull()
+      .default('Beatoraja'),
     scoring: text('scoring').notNull(),
     playedAt: integer('played_at', { mode: 'timestamp_ms' }),
     serverReceivedAt: integer('server_received_at', { mode: 'timestamp_ms' }).notNull(),
@@ -462,12 +468,14 @@ export const bestCourseScores = sqliteTable(
       table.courseHash,
       table.gauge,
       table.lnPolicy,
+      table.ruleMode,
       table.scoring,
     ),
     index('idx_best_course_scores_ranking').on(
       table.courseHash,
       table.gauge,
       table.lnPolicy,
+      table.ruleMode,
       table.scoring,
       table.exScore,
     ),

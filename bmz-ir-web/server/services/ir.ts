@@ -1100,7 +1100,7 @@ function asLnPolicy(value: string): LnScorePolicy {
   return value as LnScorePolicy
 }
 
-function asRuleMode(value: unknown): IrRuleMode {
+export function asRuleMode(value: unknown): IrRuleMode {
   if (typeof value !== 'string' || !RULE_MODES.has(value)) {
     throw new Error('rule_mode is invalid')
   }

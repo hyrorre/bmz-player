@@ -1,7 +1,7 @@
 import { and, desc, eq, inArray } from 'drizzle-orm'
 import { getQuery } from 'h3'
 import { db, schema } from 'hub:db'
-import { normalizeGaugeName, requireHex } from '../../../../services/ir'
+import { asRuleMode, normalizeGaugeName, requireHex } from '../../../../services/ir'
 
 /** コースランキング (global のみ)。EX score 降順、同点同順位。 */
 export default defineEventHandler(async (event) => {
@@ -17,6 +17,9 @@ export default defineEventHandler(async (event) => {
   )
   const lnPolicy =
     typeof query.ln_policy === 'string' && query.ln_policy ? query.ln_policy : 'AutoLn'
+  const ruleMode = asRuleMode(
+    typeof query.rule_mode === 'string' && query.rule_mode ? query.rule_mode : 'Beatoraja',
+  )
   const limit = Math.max(1, Math.min(200, Number(query.limit ?? 100) || 100))
 
   const rows = await db
@@ -30,6 +33,7 @@ export default defineEventHandler(async (event) => {
       max_combo: schema.bestCourseScores.maxCombo,
       bp: schema.bestCourseScores.bp,
       device_type: schema.bestCourseScores.deviceType,
+      rule_mode: schema.bestCourseScores.ruleMode,
       played_at: schema.bestCourseScores.playedAt,
       server_received_at: schema.bestCourseScores.serverReceivedAt,
       verification: schema.bestCourseScores.verification,
@@ -40,6 +44,7 @@ export default defineEventHandler(async (event) => {
         eq(schema.bestCourseScores.courseHash, courseHash),
         eq(schema.bestCourseScores.gauge, gauge),
         eq(schema.bestCourseScores.lnPolicy, lnPolicy),
+        eq(schema.bestCourseScores.ruleMode, ruleMode),
         eq(schema.bestCourseScores.scoring, 'bms_ex_score_v1'),
       ),
     )
@@ -74,6 +79,7 @@ export default defineEventHandler(async (event) => {
         max_combo: row.max_combo,
         bp: row.bp,
         device_type: row.device_type,
+        rule_mode: row.rule_mode,
         played_at: row.played_at,
         verification: row.verification,
       },
@@ -82,7 +88,7 @@ export default defineEventHandler(async (event) => {
 
   return {
     course: { course_hash: courseHash },
-    rule: { gauge, ln_policy: lnPolicy, scoring: 'bms_ex_score_v1' },
+    rule: { gauge, ln_policy: lnPolicy, rule_mode: ruleMode, scoring: 'bms_ex_score_v1' },
     ranking: { scope: 'global', sort: 'ex_score_desc', entries },
   }
 })

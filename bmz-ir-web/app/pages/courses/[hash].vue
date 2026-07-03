@@ -22,6 +22,7 @@ interface CourseRankingEntry {
     max_combo: number
     bp: number
     device_type: string
+    rule_mode: string
     played_at: string | null
     verification: string
   }
@@ -36,8 +37,10 @@ const courseHash = computed(() => String(route.params.hash ?? ''))
 
 const gauge = ref('Class')
 const lnPolicy = ref('AutoLn')
+const ruleMode = ref('Beatoraja')
 const gauges = ['Class', 'ExClass', 'ExHardClass', 'Normal', 'Hard']
 const lnPolicies = ['AutoLn', 'AutoCn', 'AutoHcn', 'ForceLn', 'ForceCn', 'ForceHcn']
+const ruleModes = ['Beatoraja', 'Lr2Oraja', 'Dx']
 
 const { data: detail, error: detailError } = await useFetch<CourseDetail>(
   () => `/api/v1/courses/${courseHash.value}`,
@@ -47,7 +50,11 @@ const {
   pending: rankingPending,
   error: rankingError,
 } = await useFetch<CourseRanking>(() => `/api/v1/courses/${courseHash.value}/ranking`, {
-  query: computed(() => ({ gauge: gauge.value, ln_policy: lnPolicy.value })),
+  query: computed(() => ({
+    gauge: gauge.value,
+    ln_policy: lnPolicy.value,
+    rule_mode: ruleMode.value,
+  })),
 })
 </script>
 
@@ -87,6 +94,7 @@ const {
         <div class="mb-4 flex flex-wrap gap-3">
           <USelect v-model="gauge" :items="gauges" class="w-44" />
           <USelect v-model="lnPolicy" :items="lnPolicies" class="w-40" />
+          <USelect v-model="ruleMode" :items="ruleModes" class="w-40" />
         </div>
 
         <UAlert v-if="rankingError" color="error" :description="rankingError.message" />
