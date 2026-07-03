@@ -7600,7 +7600,7 @@ fn select_settings_screen_number(ref_id: i32, state: &SkinDrawState) -> Option<i
 
 fn select_chart_metadata_available(state: &SkinDrawState) -> bool {
     !state.select_screen
-        || (state.select_row_kind == SelectRowKind::Song
+        || (matches!(state.select_row_kind, SelectRowKind::Song | SelectRowKind::Course)
             && !state.select_is_folder
             && state.select_in_library)
 }
@@ -18883,6 +18883,33 @@ mod tests {
         }
         assert_eq!(skin_state_number(30, &state), Some(0));
         assert_eq!(skin_state_number(33, &state), Some(0));
+    }
+
+    #[test]
+    fn select_course_exposes_score_numbers() {
+        let state = SkinDrawState {
+            select_screen: true,
+            select_row_kind: SelectRowKind::Course,
+            select_in_library: true,
+            ex_score: 1234,
+            max_combo: 345,
+            total_notes: 1000,
+            select_total_notes: 1000,
+            select_play_count: 42,
+            select_clear_count: 31,
+            select_bp: Some(12),
+            select_cb: Some(8),
+            ..SkinDrawState::default()
+        };
+
+        assert_eq!(skin_state_number(71, &state), Some(1234));
+        assert_eq!(skin_state_number(74, &state), Some(1000));
+        assert_eq!(skin_state_number(75, &state), Some(345));
+        assert_eq!(skin_state_number(76, &state), Some(12));
+        assert_eq!(skin_state_number(77, &state), Some(42));
+        assert_eq!(skin_state_number(78, &state), Some(31));
+        assert_eq!(skin_state_number(425, &state), Some(8));
+        assert_eq!(skin_state_number(427, &state), Some(8));
     }
 
     #[test]

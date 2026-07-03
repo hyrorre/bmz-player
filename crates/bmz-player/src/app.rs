@@ -6055,12 +6055,11 @@ impl WinitApp {
             .as_ref()
             .and_then(|course| course.entry_results.last())
             .map(|entry| entry.finished.clone());
-        let Some(mut last) = last else {
+        let Some(last) = last else {
             // 直前結果が無い異常系では中間リザルトを出さず、次の曲へ進む。
             self.start_next_course_chart();
             return;
         };
-        restore_course_stage_display_clear_type(&mut last);
         self.result_gauge_graph_type = last.summary.gauge_type as i32;
         self.finished_play = Some(last);
         self.result_exit = None;
@@ -14138,10 +14137,6 @@ fn is_course_intermediate_result(
     active_course && finished_play && !finished_course
 }
 
-fn restore_course_stage_display_clear_type(finished: &mut FinishedPlaySession) {
-    finished.summary.clear_type = finished.result.clear_type;
-}
-
 fn course_intermediate_exit_action_for_state(
     failed: bool,
     has_next_chart: bool,
@@ -19544,14 +19539,12 @@ mod tests {
     }
 
     #[test]
-    fn course_intermediate_result_uses_actual_clear_type_for_skin_display() {
+    fn course_intermediate_result_keeps_rounded_clear_type_for_skin_display() {
         let mut finished = debug_boot_finished_play_session();
         finished.result.clear_type = ClearType::Normal;
         finished.summary.clear_type = ClearType::NoPlay;
 
-        restore_course_stage_display_clear_type(&mut finished);
-
-        assert_eq!(finished.summary.clear_type, ClearType::Normal);
+        assert_eq!(finished.summary.clear_type, ClearType::NoPlay);
     }
 
     #[test]
