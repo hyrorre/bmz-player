@@ -1003,6 +1003,10 @@ pub struct SkinDrawState {
     /// value ref 89/90 とは別名前空間。BMZ は invisible を持たず 0/1。
     pub select_favorite_song: bool,
     pub select_favorite_chart: bool,
+    /// beatoraja IndexType autosave_replay1..4 (321..324) image row indices。
+    pub select_replay_slot_rule_indices: [i64; 4],
+    /// beatoraja ValueType folder_noplay..folder_max (320..330) 用のランプ別曲数。
+    pub select_folder_lamp_counts: [u32; 11],
     /// 選択中バー種別。OPTION_FOLDERBAR / SONGBAR / GRADEBAR の判定に使う。
     pub select_row_kind: SelectRowKind,
     /// 選択中 GradeBar の制約。OPTION_GRADEBAR_* (1002..1017) の判定に使う。
@@ -1234,6 +1238,8 @@ impl Default for SkinDrawState {
             select_clear_index: 0,
             select_favorite_song: false,
             select_favorite_chart: false,
+            select_replay_slot_rule_indices: [0; 4],
+            select_folder_lamp_counts: [0; 11],
             select_row_kind: SelectRowKind::Song,
             select_course_constraints: CourseConstraintFlags::default(),
             select_is_folder: false,
@@ -3398,6 +3404,10 @@ impl SkinDocumentRenderExt for SkinDocument {
             select_clear_index: selected_row.map(select_row_clear_index).unwrap_or(0) as i64,
             select_favorite_song: selected_row.is_some_and(|row| row.favorite_song),
             select_favorite_chart: selected_row.is_some_and(|row| row.favorite_chart),
+            select_replay_slot_rule_indices: snapshot.replay_slot_rule_indices,
+            select_folder_lamp_counts: selected_row
+                .map(|row| row.folder_lamp_counts)
+                .unwrap_or([0; 11]),
             select_row_kind: selected_row.map(|row| row.kind).unwrap_or(SelectRowKind::Song),
             select_course_constraints: selected_row
                 .map(|row| row.course_constraints)
@@ -3608,6 +3618,7 @@ impl SkinDocumentRenderExt for SkinDocument {
         state.select_clear_index = select_row_clear_index(row) as i64;
         state.select_favorite_song = row.favorite_song;
         state.select_favorite_chart = row.favorite_chart;
+        state.select_folder_lamp_counts = row.folder_lamp_counts;
         state.select_row_kind = row.kind;
         state.select_course_constraints = row.course_constraints;
         state.select_is_folder = row.is_folder;
@@ -6117,9 +6128,13 @@ fn skin_image_index_number(ref_id: i32, state: &SkinDrawState) -> Option<i64> {
         332 => Some(i64::from(state.hidden_enabled)),
         340 => Some(state.select_judge_algorithm_index as i64),
         341 => Some(state.select_bottom_shiftable_gauge_index as i64),
+        321..=324 => {
+            let slot = (ref_id - 321) as usize;
+            Some(state.select_replay_slot_rule_indices[slot])
+        }
         // extranotedepth / minemode / scrollmode / longnotemode / seventonine / constant 等は
         // profile 連携前のため 0 固定。value ref 350-353/360-361/400 とは衝突しない。
-        350..=353 | 360..=361 | 400 | 321..=324 | 342 | 343 => Some(0),
+        350..=353 | 360..=361 | 400 | 342 | 343 => Some(0),
         370 if state.select_screen => Some(state.select_clear_index),
         371 => state.target_clear_index,
         ref_id if random_lane_ref_slot(ref_id).is_some() => {
@@ -7633,7 +7648,39 @@ fn player_total_play_notes(stats: &PlayerStatsSnapshot) -> u64 {
         .saturating_add(player_total_bad(stats))
 }
 
+fn select_folder_lamp_counts_available(state: &SkinDrawState) -> bool {
+    state.select_screen
+        && matches!(
+            state.select_row_kind,
+            SelectRowKind::Folder | SelectRowKind::SearchFolder | SelectRowKind::TableFolder
+        )
+}
+
+fn select_folder_lamp_count(ref_id: i32, counts: &[u32; 11]) -> Option<i64> {
+    let index = match ref_id {
+        320 => 0,
+        321 => 1,
+        322 => 2,
+        323 => 3,
+        324 => 4,
+        325 => 5,
+        326 => 6,
+        327 => 7,
+        328 => 8,
+        329 => 9,
+        330 => 10,
+        _ => return None,
+    };
+    Some(counts[index] as i64)
+}
+
 fn skin_state_number(ref_id: i32, state: &SkinDrawState) -> Option<i64> {
+    if select_folder_lamp_counts_available(state) {
+        if let Some(value) = select_folder_lamp_count(ref_id, &state.select_folder_lamp_counts) {
+            return Some(value);
+        }
+    }
+
     if state.select_screen
         && select_chart_score_number_requires_song(ref_id)
         && !select_chart_metadata_available(state)
@@ -21377,6 +21424,42 @@ mod tests {
         let no_judge =
             SkinDrawState { judge_timing_ms: [None; MAX_JUDGE_REGIONS], ..state.clone() };
         assert_eq!(skin_state_number(525, &no_judge), None);
+    }
+
+    #[test]
+    fn skin_image_index_number_maps_replay_slot_rules() {
+        let state = SkinDrawState {
+            select_replay_slot_rule_indices: [10, 1, 3, 0],
+            ..SkinDrawState::default()
+        };
+        assert_eq!(skin_image_index_number(321, &state), Some(10));
+        assert_eq!(skin_image_index_number(322, &state), Some(1));
+        assert_eq!(skin_image_index_number(323, &state), Some(3));
+        assert_eq!(skin_image_index_number(324, &state), Some(0));
+    }
+
+    #[test]
+    fn skin_state_number_maps_folder_lamp_counts_on_folder_rows() {
+        let state = SkinDrawState {
+            select_screen: true,
+            select_row_kind: SelectRowKind::Folder,
+            select_is_folder: true,
+            select_folder_lamp_counts: [12, 3, 0, 1, 4, 5, 6, 7, 8, 9, 10],
+            ..SkinDrawState::default()
+        };
+        assert_eq!(skin_state_number(320, &state), Some(12));
+        assert_eq!(skin_state_number(321, &state), Some(3));
+        assert_eq!(skin_state_number(324, &state), Some(4));
+        assert_eq!(skin_state_number(330, &state), Some(10));
+
+        let song = SkinDrawState {
+            select_row_kind: SelectRowKind::Song,
+            select_in_library: true,
+            select_chart_normal_notes: 900,
+            ..state
+        };
+        assert_eq!(skin_state_number(320, &song), None);
+        assert_eq!(skin_state_number(350, &song), Some(900));
     }
 
     #[test]
