@@ -7126,6 +7126,17 @@ impl WinitApp {
         skin_duration_ms(ready_delay_ms)
     }
 
+    fn play_skin_animation_elapsed_time(&self, play_elapsed_time: TimeUs) -> TimeUs {
+        let ready_delay_us = self.play_skin_ready_delay().as_micros().min(i64::MAX as u128) as i64;
+        clamped_play_skin_animation_elapsed_time(
+            play_elapsed_time,
+            ready_delay_us,
+            self.play_ready_sound_started_at.is_some(),
+            self.play_e1_held,
+            self.play_e2_held,
+        )
+    }
+
     fn clear_play_backbmp_state(&mut self) {
         self.play_backbmp_source = None;
         self.play_backbmp_loaded = false;
@@ -7222,13 +7233,15 @@ impl WinitApp {
         snapshot.arrange = active_play.running.applied_arrange.arrange.as_str().to_string();
         snapshot.target = active_play.running.target.clone();
         snapshot.backbmp_background = self.play_backbmp_loaded;
-        snapshot.play_elapsed_time = self.play_elapsed_time();
+        let play_elapsed_time = self.play_elapsed_time();
+        snapshot.play_elapsed_time = self.play_skin_animation_elapsed_time(play_elapsed_time);
         snapshot.ready_elapsed_time = self.play_ready_sound_started_at.map(elapsed_since);
         self.apply_course_skin_context(&mut snapshot);
         self.apply_play_table_text(&mut snapshot);
-        crate::screens::play_snapshot::refresh_play_skin_visuals(
+        crate::screens::play_snapshot::refresh_play_skin_visuals_with_input_elapsed(
             &mut snapshot,
             &active_play.running.session,
+            play_elapsed_time,
         );
         self.last_play_snapshot = Some(snapshot);
         self.active_play = Some(active_play);
@@ -9916,16 +9929,18 @@ impl WinitApp {
 
     fn update_pending_play_snapshot_timers(&mut self) {
         let play_elapsed_time = self.play_elapsed_time();
+        let skin_elapsed_time = self.play_skin_animation_elapsed_time(play_elapsed_time);
         let ready_elapsed_time = self.play_ready_sound_started_at.map(elapsed_since);
         let Some(snapshot) = &mut self.last_play_snapshot else {
             return;
         };
-        snapshot.play_elapsed_time = play_elapsed_time;
+        snapshot.play_elapsed_time = skin_elapsed_time;
         snapshot.ready_elapsed_time = ready_elapsed_time;
     }
 
     fn update_pre_ready_play_state(&mut self) {
         let play_elapsed_time = self.play_elapsed_time();
+        let skin_elapsed_time = self.play_skin_animation_elapsed_time(play_elapsed_time);
         let Some(active_play) = &mut self.active_play else {
             return;
         };
@@ -9936,10 +9951,11 @@ impl WinitApp {
         let Some(snapshot) = &mut self.last_play_snapshot else {
             return;
         };
-        snapshot.play_elapsed_time = play_elapsed_time;
-        crate::screens::play_snapshot::refresh_play_skin_visuals(
+        snapshot.play_elapsed_time = skin_elapsed_time;
+        crate::screens::play_snapshot::refresh_play_skin_visuals_with_input_elapsed(
             snapshot,
             &active_play.running.session,
+            play_elapsed_time,
         );
     }
 
@@ -14245,6 +14261,22 @@ fn play_control_hold_state_from_pressed_controls(
 
 fn play_ready_blocked_by_control_holds(e1_held: bool, e2_held: bool) -> bool {
     e1_held || e2_held
+}
+
+fn clamped_play_skin_animation_elapsed_time(
+    play_elapsed_time: TimeUs,
+    ready_delay_us: i64,
+    ready_started: bool,
+    e1_held: bool,
+    e2_held: bool,
+) -> TimeUs {
+    if !ready_started
+        && play_ready_blocked_by_control_holds(e1_held, e2_held)
+        && play_elapsed_time.0 > ready_delay_us
+    {
+        return TimeUs(ready_delay_us);
+    }
+    play_elapsed_time
 }
 
 fn should_begin_play_fadeout_after_final_notes(
@@ -18879,6 +18911,54 @@ mod tests {
         assert!(play_ready_blocked_by_control_holds(true, false));
         assert!(play_ready_blocked_by_control_holds(false, true));
         assert!(play_ready_blocked_by_control_holds(true, true));
+    }
+
+    #[test]
+    fn play_skin_animation_elapsed_is_clamped_while_ready_is_blocked() {
+        assert_eq!(
+            clamped_play_skin_animation_elapsed_time(
+                TimeUs(4_000_000),
+                3_500_000,
+                false,
+                true,
+                false
+            ),
+            TimeUs(3_500_000)
+        );
+        assert_eq!(
+            clamped_play_skin_animation_elapsed_time(
+                TimeUs(4_000_000),
+                3_500_000,
+                false,
+                false,
+                true
+            ),
+            TimeUs(3_500_000)
+        );
+    }
+
+    #[test]
+    fn play_skin_animation_elapsed_advances_without_ready_block() {
+        assert_eq!(
+            clamped_play_skin_animation_elapsed_time(
+                TimeUs(4_000_000),
+                3_500_000,
+                false,
+                false,
+                false
+            ),
+            TimeUs(4_000_000)
+        );
+        assert_eq!(
+            clamped_play_skin_animation_elapsed_time(
+                TimeUs(4_000_000),
+                3_500_000,
+                true,
+                true,
+                false
+            ),
+            TimeUs(4_000_000)
+        );
     }
 
     #[test]

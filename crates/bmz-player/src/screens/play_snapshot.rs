@@ -199,10 +199,19 @@ fn lane_keyoff_ms(
 
 /// `play_elapsed_time` 更新後に keybeam / turntable 向け snapshot フィールドを再計算する。
 pub fn refresh_play_skin_visuals(snapshot: &mut RenderSnapshot, session: &GameSession) {
-    snapshot.skin_offsets =
-        skin_offsets_from_session(session, snapshot.time, snapshot.play_elapsed_time);
-    snapshot.keyon_ms = lane_keyon_ms(session, snapshot.time, snapshot.play_elapsed_time);
-    snapshot.keyoff_ms = lane_keyoff_ms(session, snapshot.time, snapshot.play_elapsed_time);
+    refresh_play_skin_visuals_with_input_elapsed(snapshot, session, snapshot.play_elapsed_time);
+}
+
+/// 通常アニメーション用の `play_elapsed_time` と、押下エフェクト用の実経過時間が
+/// 異なる pre-READY 待機中に keybeam / turntable 向けフィールドを再計算する。
+pub fn refresh_play_skin_visuals_with_input_elapsed(
+    snapshot: &mut RenderSnapshot,
+    session: &GameSession,
+    input_elapsed: TimeUs,
+) {
+    snapshot.skin_offsets = skin_offsets_from_session(session, snapshot.time, input_elapsed);
+    snapshot.keyon_ms = lane_keyon_ms(session, snapshot.time, input_elapsed);
+    snapshot.keyoff_ms = lane_keyoff_ms(session, snapshot.time, input_elapsed);
     snapshot.gauge_increase_elapsed_ms =
         optional_skin_timer_elapsed_ms(snapshot.time, session.gauge_increase_started_at);
     snapshot.gauge_max_elapsed_ms =
