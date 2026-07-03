@@ -6298,6 +6298,12 @@ impl WinitApp {
                     self.result_scene_started_at = Instant::now();
                     self.ensure_result_skin_ready(ResultSkinSlot::Course);
                 }
+                let clear_type = self
+                    .finished_course
+                    .as_ref()
+                    .map(|course| course.final_clear_type)
+                    .unwrap_or(bmz_core::clear::ClearType::Failed);
+                self.play_course_result_entry_sound(clear_type);
                 return;
             };
             course_result.previous_best_score =
@@ -6454,6 +6460,12 @@ impl WinitApp {
             self.result_scene_started_at = Instant::now();
             self.ensure_result_skin_ready(ResultSkinSlot::Course);
         }
+        let clear_type = self
+            .finished_course
+            .as_ref()
+            .map(|course| course.final_clear_type)
+            .unwrap_or(bmz_core::clear::ClearType::Failed);
+        self.play_course_result_entry_sound(clear_type);
     }
 
     /// コース定義から IR / score.db 用の identity (course_hash + charts sha256 +
@@ -6753,9 +6765,11 @@ impl WinitApp {
     }
 
     /// select_items に持っている `ChartListItem.mode` から KeyMode を引く。
-    /// 未知 / 見つからない場合はデフォルトの 7K を返す (プレイスキン解決のフォールバック)。
+    /// コース行から開始した譜面など select_items に Chart 行が無い場合は DB を参照し、
+    /// 未知 / 見つからない場合だけデフォルトの 7K を返す。
     fn key_mode_for_chart(&self, chart_id: i64) -> KeyMode {
-        self.select_items
+        if let Some(key_mode) = self
+            .select_items
             .iter()
             .find_map(|item| match item {
                 SelectItem::Chart(row) => row.chart.as_ref().and_then(|chart| {
@@ -6764,7 +6778,19 @@ impl WinitApp {
                 _ => None,
             })
             .flatten()
-            .unwrap_or_default()
+        {
+            return key_mode;
+        }
+        match self.boot.library_db.list_charts_by_ids(&[chart_id]) {
+            Ok(mut charts) => charts
+                .pop()
+                .and_then(|chart| KeyMode::from_str_opt(&chart.mode))
+                .unwrap_or_default(),
+            Err(error) => {
+                tracing::warn!(chart_id, %error, "failed to load chart key_mode for play skin");
+                KeyMode::default()
+            }
+        }
     }
 
     fn play_skin_key_mode_for_chart(&self, chart_id: i64, options: &PlayStartOptions) -> KeyMode {
@@ -11294,17 +11320,10 @@ impl WinitApp {
             AppSceneKind::Decide => self.play_system_sound(SoundType::Decide),
             AppSceneKind::Play => {}
             AppSceneKind::Result => {
-                let clear = self
-                    .finished_play
-                    .as_ref()
-                    .map(|finished| finished.summary.clear_type)
-                    .unwrap_or(bmz_core::clear::ClearType::Failed);
-                let sound = if matches!(clear, bmz_core::clear::ClearType::Failed) {
-                    SoundType::ResultFail
-                } else {
-                    SoundType::ResultClear
+                let Some(finished) = self.finished_play.as_ref() else {
+                    return;
                 };
-                self.play_system_sound(sound);
+                self.play_system_sound(result_entry_sound_for_clear(finished.summary.clear_type));
             }
         }
     }
@@ -11321,6 +11340,24 @@ impl WinitApp {
             );
             self.start_audio_output_stream();
         }
+    }
+
+    fn play_course_result_entry_sound(&self, clear_type: bmz_core::clear::ClearType) {
+        use crate::system_sound::SoundType;
+        for sound in [SoundType::ResultClear, SoundType::ResultFail, SoundType::ResultClose] {
+            self.stop_system_sound(sound);
+        }
+        let preferred = course_result_entry_sound_for_clear(clear_type);
+        let sound = if self.system_sound_has(preferred) {
+            preferred
+        } else {
+            result_entry_sound_for_clear(clear_type)
+        };
+        self.play_system_sound(sound);
+    }
+
+    fn system_sound_has(&self, sound_type: crate::system_sound::SoundType) -> bool {
+        self.system_sound.as_ref().is_some_and(|manager| manager.has_sound(sound_type))
     }
 
     fn start_audio_output_stream(&self) {
@@ -11407,6 +11444,28 @@ fn result_exit_system_sounds() -> &'static [crate::system_sound::SoundType] {
         SoundType::CourseFail,
         SoundType::CourseClose,
     ]
+}
+
+fn result_entry_sound_for_clear(
+    clear: bmz_core::clear::ClearType,
+) -> crate::system_sound::SoundType {
+    use crate::system_sound::SoundType;
+    if matches!(clear, bmz_core::clear::ClearType::Failed) {
+        SoundType::ResultFail
+    } else {
+        SoundType::ResultClear
+    }
+}
+
+fn course_result_entry_sound_for_clear(
+    clear: bmz_core::clear::ClearType,
+) -> crate::system_sound::SoundType {
+    use crate::system_sound::SoundType;
+    if matches!(clear, bmz_core::clear::ClearType::Failed) {
+        SoundType::CourseFail
+    } else {
+        SoundType::CourseClear
+    }
 }
 
 fn should_route_settings_key_event(
@@ -20018,6 +20077,16 @@ mod tests {
         assert!(!sounds.contains(&SoundType::Decide));
         assert!(!sounds.contains(&SoundType::OptionChange));
         assert!(!sounds.contains(&SoundType::Landmine));
+    }
+
+    #[test]
+    fn result_entry_sound_uses_fail_for_failed_play() {
+        use crate::system_sound::SoundType;
+
+        assert_eq!(result_entry_sound_for_clear(ClearType::Failed), SoundType::ResultFail);
+        assert_eq!(result_entry_sound_for_clear(ClearType::Normal), SoundType::ResultClear);
+        assert_eq!(course_result_entry_sound_for_clear(ClearType::Failed), SoundType::CourseFail);
+        assert_eq!(course_result_entry_sound_for_clear(ClearType::Normal), SoundType::CourseClear);
     }
 
     #[test]

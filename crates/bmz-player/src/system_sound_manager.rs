@@ -114,6 +114,10 @@ impl SystemSoundManager {
         }
     }
 
+    pub fn has_sound(&self, sound_type: SoundType) -> bool {
+        self.id_map.contains_key(&sound_type)
+    }
+
     /// 登録済み sound の再生待ち/再生中音量を、SoundType ごとの最新設定で更新する。
     pub fn refresh_volumes(&self, mut volume_for: impl FnMut(SoundType) -> f32) {
         let mut updates = Vec::new();
