@@ -90,6 +90,7 @@ pub fn sample_select_scene() -> AppSceneSnapshot {
         mouse_position: None,
         ir: crate::scene::ResultIrSnapshot::default(),
         rival: None,
+        replay_slot_rule_indices: [10, 1, 3, 0],
         player_stats: PlayerStatsSnapshot::default(),
     })
 }

@@ -572,6 +572,40 @@ pub enum ReplaySlotRule {
 }
 
 impl ReplaySlotRule {
+    pub const CYCLE_ORDER: [Self; 6] = [
+        Self::Disabled,
+        Self::Always,
+        Self::ScoreUpdate,
+        Self::BpUpdate,
+        Self::MaxComboUpdate,
+        Self::ClearUpdate,
+    ];
+
+    /// beatoraja `ReplayAutoSaveConstraint` / launcher autosave combo row for
+    /// IndexType `autosave_replay1..4` image refs.
+    pub fn image_index(self) -> i64 {
+        match self {
+            Self::Disabled => 0,
+            Self::ScoreUpdate => 1,
+            Self::BpUpdate => 3,
+            Self::MaxComboUpdate => 5,
+            Self::ClearUpdate => 7,
+            Self::Always => 10,
+        }
+    }
+
+    pub fn cycle(self, forward: bool) -> Self {
+        let index = Self::CYCLE_ORDER
+            .iter()
+            .position(|rule| *rule == self)
+            .unwrap_or(0);
+        if forward {
+            Self::CYCLE_ORDER[(index + 1) % Self::CYCLE_ORDER.len()]
+        } else {
+            Self::CYCLE_ORDER[(index + Self::CYCLE_ORDER.len() - 1) % Self::CYCLE_ORDER.len()]
+        }
+    }
+
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Disabled => "",
@@ -602,6 +636,15 @@ pub fn default_slot_rules() -> [ReplaySlotRule; 4] {
         ReplaySlotRule::ScoreUpdate,
         ReplaySlotRule::BpUpdate,
         ReplaySlotRule::Disabled,
+    ]
+}
+
+pub fn replay_slot_rule_indices(rules: &[ReplaySlotRule; 4]) -> [i64; 4] {
+    [
+        rules[0].image_index(),
+        rules[1].image_index(),
+        rules[2].image_index(),
+        rules[3].image_index(),
     ]
 }
 
@@ -1340,6 +1383,22 @@ mod tests {
 
         assert!(toml.contains("visual_offset_auto_adjust = true"));
         assert!(!toml.contains("input_offset_auto_adjust"));
+    }
+
+    #[test]
+    fn replay_slot_rule_image_index_matches_beatoraja_autosave_rows() {
+        use super::ReplaySlotRule;
+
+        assert_eq!(ReplaySlotRule::Disabled.image_index(), 0);
+        assert_eq!(ReplaySlotRule::ScoreUpdate.image_index(), 1);
+        assert_eq!(ReplaySlotRule::BpUpdate.image_index(), 3);
+        assert_eq!(ReplaySlotRule::MaxComboUpdate.image_index(), 5);
+        assert_eq!(ReplaySlotRule::ClearUpdate.image_index(), 7);
+        assert_eq!(ReplaySlotRule::Always.image_index(), 10);
+        assert_eq!(
+            replay_slot_rule_indices(&default_slot_rules()),
+            [10, 1, 3, 0]
+        );
     }
 
     #[test]

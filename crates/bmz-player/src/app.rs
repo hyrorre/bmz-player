@@ -66,6 +66,7 @@ use crate::config::profile_config::{
     DoubleOptionConfig, GaugeAutoShiftConfig, GaugeTypeConfig, HispeedModeConfig, HsFixConfig,
     InputActionConfig, JudgeAlgorithmConfig, LaneConfig, ProfileConfig, ProfileInputConfig,
     RandomOptionConfig, ScratchDirectionConfig, SelectInputModeConfig, TargetOptionConfig,
+    replay_slot_rule_indices,
 };
 use crate::config::save::{save_app_config, save_profile_config};
 use crate::config::settings_registry::SettingsEntryId;
@@ -2607,6 +2608,9 @@ impl WinitApp {
             rival: self
                 .select_ir
                 .rival_for(&self.boot.profile_config.ir, self.selected_chart_sha256()),
+            replay_slot_rule_indices: replay_slot_rule_indices(
+                &self.boot.profile_config.replay.slot_rules,
+            ),
             player_stats: self.player_stats,
         }
     }
@@ -4952,6 +4956,7 @@ impl WinitApp {
                 // BMZ only exposes beatoraja's default sorter set for now.
                 self.cycle_select_sort(arg);
             }
+            321..=324 => self.cycle_replay_slot_rule(event_id, arg),
             _ => {
                 tracing::debug!(event_id, arg, "unsupported select skin event");
             }
@@ -5092,6 +5097,21 @@ impl WinitApp {
             ln_mode = self.boot.profile_config.play.ln_mode_policy.display_label(),
             "select LN mode policy changed"
         );
+        self.play_system_sound(crate::system_sound::SoundType::OptionChange);
+    }
+
+    fn cycle_replay_slot_rule(&mut self, event_id: i32, arg: i32) {
+        let slot = (event_id - 321) as usize;
+        if slot >= 4 {
+            return;
+        }
+        let rule = &mut self.boot.profile_config.replay.slot_rules[slot];
+        let next = rule.cycle(arg >= 0);
+        if next == *rule {
+            return;
+        }
+        *rule = next;
+        tracing::info!(slot, ?next, "select replay autosave rule changed");
         self.play_system_sound(crate::system_sound::SoundType::OptionChange);
     }
 

@@ -484,7 +484,17 @@ fn adjust_f32_tenths(value: &mut f32, delta: i32, min: f32, max: f32) -> bool {
 }
 
 fn adjust_replay_slot_rule(value: &mut ReplaySlotRule, delta: i32) -> bool {
-    cycle_enum(delta, *value, cycle_replay_slot_rule).map(|next| *value = next).is_some()
+    let forward = delta >= 0;
+    let steps = delta.unsigned_abs().max(1) as usize;
+    let mut next = *value;
+    for _ in 0..steps {
+        next = next.cycle(forward);
+    }
+    if next == *value {
+        return false;
+    }
+    *value = next;
+    true
 }
 
 fn format_lane_unit(value: u32) -> String {
@@ -828,18 +838,6 @@ fn cycle_scratch_input_mode(current: ScratchInputMode, forward: bool) -> Scratch
 fn cycle_select_input_mode(current: SelectInputModeConfig, forward: bool) -> SelectInputModeConfig {
     const VALUES: [SelectInputModeConfig; 2] =
         [SelectInputModeConfig::Key7Key14, SelectInputModeConfig::Key9];
-    cycle_in_slice(&VALUES, current, forward)
-}
-
-fn cycle_replay_slot_rule(current: ReplaySlotRule, forward: bool) -> ReplaySlotRule {
-    const VALUES: [ReplaySlotRule; 6] = [
-        ReplaySlotRule::Disabled,
-        ReplaySlotRule::Always,
-        ReplaySlotRule::ScoreUpdate,
-        ReplaySlotRule::BpUpdate,
-        ReplaySlotRule::MaxComboUpdate,
-        ReplaySlotRule::ClearUpdate,
-    ];
     cycle_in_slice(&VALUES, current, forward)
 }
 

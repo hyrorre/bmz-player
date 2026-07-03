@@ -122,6 +122,8 @@ pub struct SelectSnapshot {
     /// 選曲カーソル譜面の IR ライバルベスト
     /// (STRING_RIVAL=1 / NUMBER_RIVAL_*=271,275,276 / OPTION_COMPARE_RIVAL=624,625)。
     pub rival: Option<SelectRivalSnapshot>,
+    /// beatoraja IndexType autosave_replay1..4 (321..324) image row indices.
+    pub replay_slot_rule_indices: [i64; 4],
     pub player_stats: PlayerStatsSnapshot,
 }
 
@@ -189,6 +191,7 @@ impl Default for SelectSnapshot {
             mouse_position: None,
             ir: ResultIrSnapshot::default(),
             rival: None,
+            replay_slot_rule_indices: [0; 4],
             player_stats: PlayerStatsSnapshot::default(),
         }
     }
