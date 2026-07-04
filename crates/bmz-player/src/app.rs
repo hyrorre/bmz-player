@@ -10934,6 +10934,12 @@ impl WinitApp {
             if source.decoder.is_none() {
                 match VideoBgaDecoder::open_following_playback_time(&source.path) {
                     Ok(decoder) => {
+                        // 非同期 skin decode 完了後など、リザルト開始から時間が経ってから
+                        // decoder を開くと video_offset が大きくなり、clocked decode が
+                        // 1 周デコードして loop_base を追いつかせるまでフレームを出せない。
+                        // 開いた時点の elapsed を loop 原点に合わせ、常に offset ≈ 0 から始める。
+                        source.loop_start_us = elapsed_us;
+                        source.last_pts = None;
                         tracing::info!(
                             kind = ?kind,
                             texture_id = source.texture.0,
@@ -13102,7 +13108,10 @@ impl ApplicationHandler<AppUserEvent> for WinitApp {
                     if self.current_scene_kind() == AppSceneKind::Result {
                         self.ensure_result_skin_ready(self.current_result_skin_slot());
                     }
-                    self.last_scene_kind = None;
+                    // render_current_scene() が既に last_scene_kind を更新済み。
+                    // None に戻すと次フレームの start_scene_timers_before_snapshot が
+                    // result_scene_started_at を再初期化し、動画 decode 時計が巻き戻って
+                    // clocked decode thread が古い loop_base で待ち続けることがある。
                 }
                 self.advance_active_play();
                 self.advance_draining_audio();

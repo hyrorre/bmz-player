@@ -280,6 +280,11 @@ fn decode_video_following_playback_time(
     let mut decoded = ffmpeg_next::frame::Video::empty();
     let mut loop_base_us = 0;
     while !stop_decode.load(Ordering::Acquire) {
+        let mut target_us = playback_target_us.load(Ordering::Acquire);
+        if target_us.saturating_add(CLOCKED_FRAME_CATCH_UP_TOLERANCE_US) < loop_base_us {
+            loop_base_us = target_us;
+            rewind_video_decoder(&mut ictx, &mut decoder)?;
+        }
         let mut decoded_any = false;
         let mut last_pts_us = None;
         let mut stopped = false;
@@ -332,7 +337,7 @@ fn decode_video_following_playback_time(
         if stopped {
             break;
         }
-        let target_us = playback_target_us.load(Ordering::Acquire);
+        target_us = playback_target_us.load(Ordering::Acquire);
         loop_base_us = last_pts_us.unwrap_or(loop_base_us).saturating_add(1).max(target_us);
         rewind_video_decoder(&mut ictx, &mut decoder)?;
     }
@@ -513,6 +518,11 @@ fn wait_until_playback_reaches_frame(
         }
         let target_us = playback_target_us.load(Ordering::Acquire);
         if target_us >= frame_pts_us {
+            return true;
+        }
+        // playback clock が巻き戻ったとき、古い loop_base 基準の frame_pts を
+        // 待ち続けると decode thread が永久に停止する。
+        if target_us.saturating_add(CLOCKED_FRAME_CATCH_UP_TOLERANCE_US) < frame_pts_us {
             return true;
         }
         let sleep_us = (frame_pts_us - target_us).clamp(1_000, CLOCKED_FRAME_WAIT_MAX_SLEEP_US);
