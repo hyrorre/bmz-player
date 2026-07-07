@@ -46,6 +46,20 @@ struct ClockedFrameState {
     recycled_rgba: Vec<Vec<u8>>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ClockedDrainStatus {
+    Continue,
+    Restart,
+    Stop,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ClockedFrameWait {
+    Reached,
+    Rewound,
+    Stopped,
+}
+
 impl VideoBgaDecoder {
     pub fn open(path: &Path) -> Result<Self> {
         Self::open_inner(path, false)
@@ -281,24 +295,24 @@ fn decode_video_following_playback_time(
     let mut loop_base_us = 0;
     while !stop_decode.load(Ordering::Acquire) {
         let mut target_us = playback_target_us.load(Ordering::Acquire);
-        if target_us.saturating_add(CLOCKED_FRAME_CATCH_UP_TOLERANCE_US) < loop_base_us {
+        if clocked_playback_target_rewound(target_us, loop_base_us) {
             loop_base_us = target_us;
             rewind_video_decoder(&mut ictx, &mut decoder)?;
         }
         let mut decoded_any = false;
         let mut last_pts_us = None;
-        let mut stopped = false;
+        let mut drain_status = ClockedDrainStatus::Continue;
 
         for (stream, packet) in ictx.packets() {
             if stop_decode.load(Ordering::Acquire) {
-                stopped = true;
+                drain_status = ClockedDrainStatus::Stop;
                 break;
             }
             if stream.index() != selected.index {
                 continue;
             }
             decoder.send_packet(&packet)?;
-            stopped = drain_clocked_decoder_frames(
+            drain_status = drain_clocked_decoder_frames(
                 &mut decoder,
                 &mut decoded,
                 &selected,
@@ -310,14 +324,14 @@ fn decode_video_following_playback_time(
                 &mut decoded_any,
                 &mut last_pts_us,
             )?;
-            if stopped {
+            if drain_status != ClockedDrainStatus::Continue {
                 break;
             }
         }
 
-        if !stopped {
+        if drain_status == ClockedDrainStatus::Continue {
             decoder.send_eof()?;
-            stopped = drain_clocked_decoder_frames(
+            drain_status = drain_clocked_decoder_frames(
                 &mut decoder,
                 &mut decoded,
                 &selected,
@@ -331,10 +345,16 @@ fn decode_video_following_playback_time(
             )?;
         }
 
+        if drain_status == ClockedDrainStatus::Restart {
+            target_us = playback_target_us.load(Ordering::Acquire);
+            loop_base_us = target_us;
+            rewind_video_decoder(&mut ictx, &mut decoder)?;
+            continue;
+        }
         if !decoded_any {
             break;
         }
-        if stopped {
+        if drain_status == ClockedDrainStatus::Stop {
             break;
         }
         target_us = playback_target_us.load(Ordering::Acquire);
@@ -449,7 +469,7 @@ fn drain_clocked_decoder_frames(
     stop_decode: &AtomicBool,
     decoded_any: &mut bool,
     last_pts_us: &mut Option<i64>,
-) -> Result<bool> {
+) -> Result<ClockedDrainStatus> {
     loop {
         match decoder.receive_frame(decoded) {
             Ok(()) => {}
@@ -459,7 +479,7 @@ fn drain_clocked_decoder_frames(
         }
 
         if stop_decode.load(Ordering::Acquire) {
-            return Ok(true);
+            return Ok(ClockedDrainStatus::Stop);
         }
 
         *decoded_any = true;
@@ -472,10 +492,18 @@ fn drain_clocked_decoder_frames(
         }
 
         let publish_after_us = pts_us.saturating_sub(CLOCKED_FRAME_PUBLISH_LEAD_US);
-        if publish_after_us > playback_target_us.load(Ordering::Acquire)
-            && !wait_until_playback_reaches_frame(playback_target_us, stop_decode, publish_after_us)
-        {
-            return Ok(true);
+        let target_us = playback_target_us.load(Ordering::Acquire);
+        if publish_after_us > target_us {
+            match wait_until_playback_reaches_frame(
+                playback_target_us,
+                stop_decode,
+                publish_after_us,
+                target_us,
+            ) {
+                ClockedFrameWait::Reached => {}
+                ClockedFrameWait::Rewound => return Ok(ClockedDrainStatus::Restart),
+                ClockedFrameWait::Stopped => return Ok(ClockedDrainStatus::Stop),
+            }
         }
 
         let mut frame = rgba_frame_from_video_with_scaler(
@@ -488,7 +516,7 @@ fn drain_clocked_decoder_frames(
         frame.pts_us = pts_us;
         publish_clocked_frame(clocked_frames, frame)?;
     }
-    Ok(false)
+    Ok(ClockedDrainStatus::Continue)
 }
 
 fn take_clocked_recycled_rgba(clocked_frames: &Mutex<ClockedFrameState>) -> Option<Vec<u8>> {
@@ -507,24 +535,32 @@ fn should_skip_clocked_frame_conversion(frame_pts_us: i64, playback_target_us: i
     frame_pts_us.saturating_add(CLOCKED_FRAME_CATCH_UP_TOLERANCE_US) < playback_target_us
 }
 
+fn clocked_playback_target_rewound(target_us: i64, highest_target_us: i64) -> bool {
+    target_us.saturating_add(CLOCKED_FRAME_CATCH_UP_TOLERANCE_US) < highest_target_us
+}
+
 fn wait_until_playback_reaches_frame(
     playback_target_us: &AtomicI64,
     stop_decode: &AtomicBool,
     frame_pts_us: i64,
-) -> bool {
+    observed_target_us: i64,
+) -> ClockedFrameWait {
+    let mut highest_target_us = observed_target_us;
     loop {
         if stop_decode.load(Ordering::Acquire) {
-            return false;
+            return ClockedFrameWait::Stopped;
         }
         let target_us = playback_target_us.load(Ordering::Acquire);
         if target_us >= frame_pts_us {
-            return true;
+            return ClockedFrameWait::Reached;
         }
-        // playback clock が巻き戻ったとき、古い loop_base 基準の frame_pts を
-        // 待ち続けると decode thread が永久に停止する。
-        if target_us.saturating_add(CLOCKED_FRAME_CATCH_UP_TOLERANCE_US) < frame_pts_us {
-            return true;
+        // playback clock が巻き戻ったときだけ現在の decode loop をやり直す。
+        // 未来フレームを待っている通常ケースでは抜けない。ここで抜けると
+        // decoder が先のフレームを publish し続け、skin movie が高速再生に見える。
+        if clocked_playback_target_rewound(target_us, highest_target_us) {
+            return ClockedFrameWait::Rewound;
         }
+        highest_target_us = highest_target_us.max(target_us);
         let sleep_us = (frame_pts_us - target_us).clamp(1_000, CLOCKED_FRAME_WAIT_MAX_SLEEP_US);
         std::thread::sleep(Duration::from_micros(sleep_us as u64));
     }
@@ -892,6 +928,13 @@ mod tests {
         assert!(should_skip_clocked_frame_conversion(10_000, 20_000));
         assert!(!should_skip_clocked_frame_conversion(12_000, 20_000));
         assert!(!should_skip_clocked_frame_conversion(25_000, 20_000));
+    }
+
+    #[test]
+    fn clocked_rewind_detection_ignores_future_frame_waits() {
+        assert!(!clocked_playback_target_rewound(10_000, 10_000));
+        assert!(!clocked_playback_target_rewound(10_000, 18_000));
+        assert!(clocked_playback_target_rewound(10_000, 18_001));
     }
 
     #[test]
