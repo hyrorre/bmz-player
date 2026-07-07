@@ -1369,6 +1369,9 @@ pub struct SkinTextState<'a> {
     pub select_double_option: &'a str,
     pub select_hs_fix: &'a str,
     pub select_assist: &'a str,
+    pub select_mode: &'a str,
+    pub select_sort: &'a str,
+    pub select_ln_mode: &'a str,
     pub select_bga: &'a str,
     pub select_judge_timing_auto_adjust: &'a str,
     pub current_folder: &'a str,
@@ -1411,6 +1414,9 @@ impl<'a> Default for SkinTextState<'a> {
             select_double_option: "",
             select_hs_fix: "",
             select_assist: "",
+            select_mode: "",
+            select_sort: "",
+            select_ln_mode: "",
             select_bga: "",
             select_judge_timing_auto_adjust: "",
             current_folder: "",
@@ -3194,6 +3200,9 @@ impl SkinDocumentRenderExt for SkinDocument {
             select_double_option: &snapshot.double_option,
             select_hs_fix: &snapshot.hs_fix,
             select_assist: &snapshot.assist,
+            select_mode: &snapshot.select_mode,
+            select_sort: &snapshot.select_sort,
+            select_ln_mode: &snapshot.select_ln_mode,
             select_bga: &snapshot.bga,
             select_judge_timing_auto_adjust: if snapshot.judge_timing_auto_adjust {
                 "ON"
@@ -4004,7 +4013,7 @@ impl SkinDocumentRenderExt for SkinDocument {
 
         let mut items = Vec::new();
         let mut filled = 0.0;
-        for lamp_index in (0..row.folder_lamp_counts.len()).rev() {
+        for lamp_index in 0..row.folder_lamp_counts.len() {
             let count = row.folder_lamp_counts[lamp_index];
             if count == 0 {
                 continue;
@@ -7256,12 +7265,19 @@ fn parse_skin_event_index_operand(operand: &str) -> Option<i32> {
 
 fn skin_state_event_index(event_id: i32, state: &SkinDrawState) -> i32 {
     match event_id {
+        40 => state.select_gauge_index as i32,
+        41 => state.select_target_index as i32,
         42 => arrange_ref_index(state) as i32,
         43 => arrange_2p_ref_index(state) as i32,
         54 => state.select_double_option_index as i32,
         55 if state.select_screen => state.select_hs_fix_index as i32,
+        72 => state.select_bga_index as i32,
+        73 => state.select_assist_index as i32,
         75 => i32::from(state.judge_timing_auto_adjust),
+        78 => state.select_gauge_auto_shift_index as i32,
+        308 => state.select_ln_mode_index as i32,
         340 => state.select_judge_algorithm_index as i32,
+        341 => state.select_bottom_shiftable_gauge_index as i32,
         SKIN_EVENT_HSFIX => state.hsfix_index,
         _ => skin_state_lane_judge_event_index(event_id, state).unwrap_or(0),
     }
@@ -9735,6 +9751,9 @@ fn skin_state_text_with_draw_state(
         "bmz_select_double_option" => return state.select_double_option.to_string(),
         "bmz_select_hs_fix" => return state.select_hs_fix.to_string(),
         "bmz_select_assist" => return state.select_assist.to_string(),
+        "bmz_select_mode" => return state.select_mode.to_string(),
+        "bmz_select_sort" => return state.select_sort.to_string(),
+        "bmz_select_ln_mode" => return state.select_ln_mode.to_string(),
         "bmz_select_bga" => return state.select_bga.to_string(),
         "bmz_select_judge_timing_auto_adjust" => {
             return state.select_judge_timing_auto_adjust.to_string();
@@ -16619,6 +16638,22 @@ mod tests {
                 ..
             } if approx_eq(*y, 0.5) && approx_eq(*height, 0.5)
         )));
+        assert!(matches!(
+            graph_items[0],
+            SkinRenderItem::Image {
+                rect: Rect { x, width, .. },
+                uv: TextureRegion { x: uv_x, .. },
+                ..
+            } if approx_eq(*x, 0.10) && approx_eq(*width, 0.22) && approx_eq(*uv_x, 20.0 / 44.0)
+        ));
+        assert!(matches!(
+            graph_items[1],
+            SkinRenderItem::Image {
+                rect: Rect { x, width, .. },
+                uv: TextureRegion { x: uv_x, .. },
+                ..
+            } if approx_eq(*x, 0.32) && approx_eq(*width, 0.22) && approx_eq(*uv_x, 24.0 / 44.0)
+        ));
     }
 
     #[test]
@@ -19766,30 +19801,50 @@ mod tests {
             select_screen: true,
             select_arrange_index: 9,
             select_arrange_2p_index: 6,
+            select_gauge_index: 4,
+            select_target_index: 10,
             select_double_option_index: 2,
             select_hs_fix_index: 3,
+            select_bga_index: 2,
+            select_assist_index: 1,
             judge_timing_auto_adjust: true,
+            select_gauge_auto_shift_index: 3,
+            select_ln_mode_index: 2,
             select_judge_algorithm_index: 3,
+            select_bottom_shiftable_gauge_index: 2,
             ..SkinDrawState::default()
         };
 
+        assert_eq!(skin_image_ref_number(40, &state), Some(4));
+        assert_eq!(skin_image_ref_number(41, &state), Some(10));
         assert_eq!(skin_image_ref_number(42, &state), Some(9));
         assert_eq!(skin_image_ref_number(43, &state), Some(6));
         assert_eq!(skin_image_ref_number(54, &state), Some(2));
         assert_eq!(skin_image_ref_number(55, &state), Some(3));
+        assert_eq!(skin_image_ref_number(72, &state), Some(2));
         assert_eq!(skin_image_ref_number(75, &state), Some(1));
+        assert_eq!(skin_image_ref_number(78, &state), Some(3));
+        assert_eq!(skin_image_ref_number(308, &state), Some(2));
         assert_eq!(skin_image_ref_number(340, &state), Some(3));
+        assert_eq!(skin_image_ref_number(341, &state), Some(2));
         assert_eq!(skin_state_number(42, &state), Some(9));
         assert_eq!(skin_state_number(43, &state), Some(6));
         assert_eq!(skin_state_number(54, &state), Some(2));
         assert_eq!(skin_state_number(55, &state), Some(3));
         assert_eq!(skin_state_number(340, &state), Some(3));
+        assert_eq!(skin_state_event_index(40, &state), 4);
+        assert_eq!(skin_state_event_index(41, &state), 10);
         assert_eq!(skin_state_event_index(42, &state), 9);
         assert_eq!(skin_state_event_index(43, &state), 6);
         assert_eq!(skin_state_event_index(54, &state), 2);
         assert_eq!(skin_state_event_index(55, &state), 3);
+        assert_eq!(skin_state_event_index(72, &state), 2);
+        assert_eq!(skin_state_event_index(73, &state), 1);
         assert_eq!(skin_state_event_index(75, &state), 1);
+        assert_eq!(skin_state_event_index(78, &state), 3);
+        assert_eq!(skin_state_event_index(308, &state), 2);
         assert_eq!(skin_state_event_index(340, &state), 3);
+        assert_eq!(skin_state_event_index(341, &state), 2);
     }
 
     #[test]
@@ -22016,6 +22071,9 @@ mod tests {
             select_double_option: "FLIP",
             select_hs_fix: "MAIN BPM",
             select_assist: "AUTOPLAY",
+            select_mode: "7K",
+            select_sort: "LEVEL",
+            select_ln_mode: "AUTO(LN)",
             select_bga: "AUTO",
             select_judge_timing_auto_adjust: "ON",
             ..SkinTextState::default()
@@ -22037,6 +22095,9 @@ mod tests {
         assert_eq!(skin_state_text(&make_text("bmz_select_double_option"), &state), "FLIP");
         assert_eq!(skin_state_text(&make_text("bmz_select_hs_fix"), &state), "MAIN BPM");
         assert_eq!(skin_state_text(&make_text("bmz_select_assist"), &state), "AUTOPLAY");
+        assert_eq!(skin_state_text(&make_text("bmz_select_mode"), &state), "7K");
+        assert_eq!(skin_state_text(&make_text("bmz_select_sort"), &state), "LEVEL");
+        assert_eq!(skin_state_text(&make_text("bmz_select_ln_mode"), &state), "AUTO(LN)");
         assert_eq!(skin_state_text(&make_text("bmz_select_bga"), &state), "AUTO");
         assert_eq!(
             skin_state_text(&make_text("bmz_select_judge_timing_auto_adjust"), &state),
