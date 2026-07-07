@@ -8,7 +8,7 @@ function hasConstraintMessage(error: unknown, seen: Set<unknown>): boolean {
   }
   seen.add(error)
 
-  if (/unique constraint|constraint failed|SQLITE_CONSTRAINT/i.test(error.message)) {
+  if (/unique constraint failed|SQLITE_CONSTRAINT_UNIQUE/i.test(error.message)) {
     return true
   }
 

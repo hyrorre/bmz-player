@@ -6493,13 +6493,6 @@ impl WinitApp {
         self.course_identity_with_stored(course_id).map(|(_, identity)| identity)
     }
 
-    fn ir_course_definition(
-        &self,
-        course_id: i64,
-    ) -> Option<crate::ir::course_payload::IrCourseDefinition> {
-        self.ir_course_identity(course_id).map(|identity| identity.definition)
-    }
-
     fn course_result_ir_target(
         &self,
         course: &crate::screens::course_session::CourseResultSummary,
@@ -6553,13 +6546,14 @@ impl WinitApp {
         if enabled.is_empty() {
             return;
         }
-        let Some(definition) = self.ir_course_definition(course_id) else {
+        let Some(identity) = self.ir_course_identity(course_id) else {
             tracing::info!(course_id, "course has unresolved charts; skipping IR submission");
             return;
         };
+        let definition = &identity.definition;
         let ln_setting = self.boot.profile_config.play.ln_mode_policy.as_ir_str().to_string();
         let payload = crate::ir::course_payload::build_course_submission(
-            &definition,
+            definition,
             course_result,
             &crate::ir::course_payload::IrCourseSubmissionContext {
                 played_at,
@@ -6569,7 +6563,7 @@ impl WinitApp {
                 device_type: device_type.unwrap_or(bmz_core::input::InputDeviceKind::Keyboard),
                 arrange: arrange.to_string(),
                 random_seed,
-                idempotency_key: format!("bmz-course-{course_score_id}"),
+                idempotency_key: format!("bmz-course-{}-{course_score_id}", identity.course_hash),
             },
         );
         let Ok(payload_json) = serde_json::to_string(&payload) else {
