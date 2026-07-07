@@ -2335,10 +2335,10 @@ impl WinitApp {
     }
 
     fn wgpu_fps_overlay_text(&self) -> String {
-        if self.wgpu_fps <= 0.0 {
+        if !self.boot.profile_config.ui.show_fps || self.wgpu_fps <= 0.0 {
             return String::new();
         }
-        format!("FPS {:.1}", self.wgpu_fps)
+        format!("FPS {:.0}", self.wgpu_fps)
     }
 
     fn is_autoplay_for_overlay(&self) -> bool {
@@ -10488,9 +10488,6 @@ impl WinitApp {
         if output.practice_start {
             self.start_practice_round();
         }
-        // デバッグパネルの開閉状態を profile config へ同期する。
-        // 永続化は終了時 / プレイ後の save_profile_config に任せる。
-        self.boot.profile_config.ui.show_fps = output.debug_panel_visible;
         // 本体設定パネルでの present mode 変更を即座に反映する。
         self.renderer.set_present_mode(config_present_mode(&self.boot.app_config.video));
         // ウィンドウモード変更をライブ反映する (差分があるときのみ適用)。

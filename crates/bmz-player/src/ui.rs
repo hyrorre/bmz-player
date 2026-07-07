@@ -297,9 +297,6 @@ pub struct EguiOutput {
     pub reset_skin_config: bool,
     /// スキン設定値のうち、再読込や即時反映が必要な対象。
     pub skin_reload_request: SkinReloadRequest,
-    /// デバッグ表示パネルの現在の開閉状態。
-    /// profile config の `ui.show_fps` へ同期し、終了時に永続化される。
-    pub debug_panel_visible: bool,
     /// 有効な曲ルートをライブラリ DB へ再スキャンする要求。
     pub trigger_song_rescan: bool,
     /// 曲フォルダのスキャン要求。
@@ -346,6 +343,8 @@ pub struct EguiLayer {
     visible: bool,
     /// デバッグ表示パネルの開閉状態。
     show_debug: bool,
+    /// 右上 FPS オーバーレイの表示状態。
+    show_fps: bool,
     /// 本体設定パネルの開閉状態。
     show_settings: bool,
     /// プロファイル設定パネルの開閉状態。
@@ -660,9 +659,8 @@ struct AudioDevicePickerState {
 }
 
 impl EguiLayer {
-    /// `show_debug` はデバッグ表示パネルの初期開閉状態 (profile config の
-    /// `ui.show_fps` を引き継ぐ)。
-    pub fn new(window: &Window, show_debug: bool) -> Self {
+    /// `show_fps` は右上 FPS オーバーレイの初期表示状態。
+    pub fn new(window: &Window, show_fps: bool) -> Self {
         let ctx = egui::Context::default();
         install_japanese_font(&ctx);
         let state = egui_winit::State::new(
@@ -677,7 +675,8 @@ impl EguiLayer {
             ctx,
             state,
             visible: false,
-            show_debug,
+            show_debug: false,
+            show_fps,
             show_settings: false,
             show_profile_settings: false,
             show_skin: false,
@@ -759,6 +758,7 @@ impl EguiLayer {
         let show_settings = &mut self.show_settings;
         let show_profile_settings = &mut self.show_profile_settings;
         let show_skin = &mut self.show_skin;
+        let show_fps = &mut self.show_fps;
         let show_license_notice = &mut self.show_license_notice;
         let license_notice_text = &mut self.license_notice_text;
         let mut save_app_config = false;
@@ -828,6 +828,8 @@ impl EguiLayer {
                     ctx,
                     show_settings,
                     app_config,
+                    profile_config,
+                    show_fps,
                     SettingsPanelState {
                         new_root_path: &mut self.settings_new_root_path,
                         add_root_error: &mut self.settings_add_root_error,
@@ -841,6 +843,7 @@ impl EguiLayer {
                     },
                 );
                 save_app_config |= settings_actions.save;
+                save_profile_config |= settings_actions.save_profile;
                 check_for_update |= settings_actions.check_update;
                 trigger_song_rescan |= settings_actions.rescan;
                 song_scan_requests.extend(settings_actions.song_scan_requests);
@@ -852,7 +855,7 @@ impl EguiLayer {
                     show_profile_settings,
                     profile_config,
                     app_config,
-                    show_debug,
+                    show_fps,
                     ir_login,
                     &mut self.ir_device_key,
                     &mut self.profile_manager,
@@ -885,7 +888,6 @@ impl EguiLayer {
             save_profile_config,
             reset_skin_config,
             skin_reload_request,
-            debug_panel_visible: *show_debug,
             trigger_song_rescan,
             song_scan_requests,
             table_fetch_urls,
@@ -1698,6 +1700,7 @@ fn update_asset_kind_label(kind: UpdateAssetKind) -> &'static str {
 /// 本体設定パネルからのアクション要求。
 struct SettingsPanelActions {
     save: bool,
+    save_profile: bool,
     check_update: bool,
     rescan: bool,
     song_scan_requests: Vec<SongScanRequest>,
@@ -1824,9 +1827,12 @@ fn build_settings_panel(
     ctx: &egui::Context,
     open: &mut bool,
     config: &mut AppConfig,
+    profile: &mut ProfileConfig,
+    show_fps: &mut bool,
     state: SettingsPanelState<'_>,
 ) -> SettingsPanelActions {
     let mut save_clicked = false;
+    let mut save_profile = false;
     let mut rescan_clicked = false;
     let mut check_update_clicked = false;
     let mut song_scan_requests = Vec::new();
@@ -2410,6 +2416,10 @@ fn build_settings_panel(
                     ui.add(
                         egui::Slider::new(&mut config.video.target_fps, 30..=480).text("目標 FPS"),
                     );
+                    if ui.checkbox(show_fps, "FPS 表示").changed() {
+                        profile.ui.show_fps = *show_fps;
+                        save_profile = true;
+                    }
                     ui.add(
                         egui::Slider::new(&mut config.video.frame_limit_in_background, 1..=120)
                             .text("バックグラウンド FPS 上限"),
@@ -2586,6 +2596,7 @@ fn build_settings_panel(
         });
     SettingsPanelActions {
         save: save_clicked || apply_audio,
+        save_profile,
         check_update: check_update_clicked,
         rescan: rescan_clicked,
         song_scan_requests,
@@ -2770,7 +2781,7 @@ fn build_profile_settings_panel(
     open: &mut bool,
     profile: &mut ProfileConfig,
     app_config: &mut AppConfig,
-    show_debug: &mut bool,
+    show_fps: &mut bool,
     ir_login: &mut IrLoginUiState,
     ir_device_key: &mut IrDeviceKeyUiState,
     profile_manager: &mut ProfileManagerUiState,
@@ -3423,8 +3434,8 @@ fn build_profile_settings_panel(
                         ui.label("テーマ (未実装)");
                         ui.text_edit_singleline(&mut profile.ui.theme);
                     });
-                    if ui.checkbox(show_debug, "FPS 表示").changed() {
-                        profile.ui.show_fps = *show_debug;
+                    if ui.checkbox(show_fps, "FPS 表示").changed() {
+                        profile.ui.show_fps = *show_fps;
                     }
                     ui.checkbox(&mut profile.ui.confirm_on_exit, "終了確認 (未実装)");
                 });
