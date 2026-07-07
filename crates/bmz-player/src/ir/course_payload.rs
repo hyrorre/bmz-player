@@ -125,7 +125,7 @@ pub fn build_course_submission(
         .filter(|trophy| trophy.achieved)
         .map(|trophy| trophy.name.as_str())
         .collect();
-    let clear = if result.course_failed { "Failed" } else { result.final_clear_type.as_str() };
+    let clear = course_result_clear_type(result).as_str();
     let gauge_value = result.final_gauge_value.round() as i64;
     let mut play_options = json!({
         "device_type": context.device_type.as_str(),
@@ -184,6 +184,25 @@ pub fn build_course_submission(
 
 fn arrange_option_ir_from_persistent(value: &str) -> String {
     ArrangeOption::from_persistent_str(value).as_str().to_ascii_lowercase()
+}
+
+fn course_result_clear_type(result: &CourseResultSummary) -> bmz_core::clear::ClearType {
+    use bmz_core::clear::{ClearType, GaugeType};
+
+    if result.course_failed {
+        return ClearType::Failed;
+    }
+    if !result.course_clear {
+        return ClearType::NoPlay;
+    }
+
+    match result.final_gauge_type {
+        GaugeType::AssistEasy => ClearType::AssistEasy,
+        GaugeType::Easy => ClearType::Easy,
+        GaugeType::Normal | GaugeType::Class => ClearType::Normal,
+        GaugeType::Hard | GaugeType::ExClass => ClearType::Hard,
+        GaugeType::ExHard | GaugeType::Hazard | GaugeType::ExHardClass => ClearType::ExHard,
+    }
 }
 
 #[cfg(test)]
@@ -367,6 +386,121 @@ mod tests {
         assert_eq!(payload["result"]["clear"], json!("Hard"));
         assert_eq!(payload["result"]["gauge_value"], json!(66));
         assert_eq!(payload["result"]["entries"][0]["clear"], json!("NoPlay"));
+    }
+
+    #[test]
+    fn course_submission_separates_stage_and_course_clear_lamps() {
+        let definition = IrCourseDefinition {
+            charts: vec!["ab".repeat(32), "cd".repeat(32)],
+            constraints: json!({ "gauge": "Hard" }),
+            title: "Dan 1".to_string(),
+            kind: "dan".to_string(),
+        };
+        let result = CourseResultSummary {
+            course_id: 1,
+            course_score_id: None,
+            course_played_at: None,
+            rule_mode: bmz_gameplay::rule::RuleMode::Beatoraja,
+            title: "Dan 1".to_string(),
+            kind: CourseKind::Dan,
+            course_titles: Default::default(),
+            entry_summaries: vec![
+                stage_summary(ClearType::NoPlay, 80.0),
+                stage_summary(ClearType::FullCombo, 100.0),
+            ],
+            entry_arranges: Vec::new(),
+            total_ex_score: 1234,
+            max_ex_score: 2000,
+            total_notes: 1000,
+            final_clear_type: ClearType::NoPlay,
+            final_gauge_type: GaugeType::Hard,
+            final_gauge_value: 66.4,
+            course_max_combo: 456,
+            judge_counts: ResultJudgeCounts::default(),
+            trophy_results: Vec::new(),
+            course_clear: true,
+            course_failed: false,
+            total_entries: 2,
+            played_entries: 2,
+            replay_slots: [false; 4],
+            saved_replay_slots: [false; 4],
+            best_score: None,
+            previous_best_score: None,
+        };
+
+        let payload = build_course_submission(
+            &definition,
+            &result,
+            &IrCourseSubmissionContext {
+                played_at: 1_767_225_600,
+                ln_policy_setting: LnPolicySetting::AutoLn.as_ir_str().to_string(),
+                rule_mode: "Beatoraja".to_string(),
+                gauge: "Hard".to_string(),
+                device_type: InputDeviceKind::Keyboard,
+                arrange: "NORMAL".to_string(),
+                random_seed: None,
+                idempotency_key: "course-separated-clear".to_string(),
+            },
+        );
+
+        assert_eq!(payload["result"]["clear"], json!("Hard"));
+        assert_eq!(payload["result"]["entries"][0]["clear"], json!("NoPlay"));
+        assert_eq!(payload["result"]["entries"][1]["clear"], json!("FullCombo"));
+    }
+
+    #[test]
+    fn course_submission_marks_failed_course_as_failed() {
+        let definition = IrCourseDefinition {
+            charts: vec!["ab".repeat(32)],
+            constraints: json!({ "gauge": "ExHardClass" }),
+            title: "Dan 1".to_string(),
+            kind: "dan".to_string(),
+        };
+        let result = CourseResultSummary {
+            course_id: 1,
+            course_score_id: None,
+            course_played_at: None,
+            rule_mode: bmz_gameplay::rule::RuleMode::Beatoraja,
+            title: "Dan 1".to_string(),
+            kind: CourseKind::Dan,
+            course_titles: Default::default(),
+            entry_summaries: vec![stage_summary(ClearType::NoPlay, 0.0)],
+            entry_arranges: Vec::new(),
+            total_ex_score: 1234,
+            max_ex_score: 2000,
+            total_notes: 1000,
+            final_clear_type: ClearType::NoPlay,
+            final_gauge_type: GaugeType::ExHardClass,
+            final_gauge_value: 0.0,
+            course_max_combo: 456,
+            judge_counts: ResultJudgeCounts::default(),
+            trophy_results: Vec::new(),
+            course_clear: false,
+            course_failed: true,
+            total_entries: 1,
+            played_entries: 1,
+            replay_slots: [false; 4],
+            saved_replay_slots: [false; 4],
+            best_score: None,
+            previous_best_score: None,
+        };
+
+        let payload = build_course_submission(
+            &definition,
+            &result,
+            &IrCourseSubmissionContext {
+                played_at: 1_767_225_600,
+                ln_policy_setting: LnPolicySetting::AutoLn.as_ir_str().to_string(),
+                rule_mode: "Beatoraja".to_string(),
+                gauge: "ExHardClass".to_string(),
+                device_type: InputDeviceKind::Keyboard,
+                arrange: "NORMAL".to_string(),
+                random_seed: None,
+                idempotency_key: "course-failed".to_string(),
+            },
+        );
+
+        assert_eq!(payload["result"]["clear"], json!("Failed"));
     }
 
     fn stage_summary(clear_type: ClearType, gauge_value: f32) -> ResultSummary {
