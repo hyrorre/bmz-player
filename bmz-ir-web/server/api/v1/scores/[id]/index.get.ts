@@ -1,5 +1,6 @@
 import { eq } from 'drizzle-orm'
 import { db, schema } from 'hub:db'
+import { arrangeOptionsFromPlayOptions } from '../../../../services/ir'
 
 /**
  * スコア詳細。ランキングに公開されている情報の単票ビュー。
@@ -37,6 +38,7 @@ export default defineEventHandler(async (event) => {
       server_received_at: schema.scores.serverReceivedAt,
       verification: schema.scores.verification,
       replay_hash: schema.scores.replayHash,
+      play_options: schema.scores.playOptions,
     })
     .from(schema.scores)
     .where(eq(schema.scores.id, scoreId))
@@ -77,8 +79,13 @@ export default defineEventHandler(async (event) => {
       .limit(1),
   ])
 
+  const { play_options: playOptions, ...scoreFields } = score
+
   return {
-    score,
+    score: {
+      ...scoreFields,
+      ...arrangeOptionsFromPlayOptions(playOptions),
+    },
     player: profiles[0] ?? { id: score.player_id, display_name: 'Player' },
     chart: charts[0] ?? null,
     replay: replays[0] ?? null,

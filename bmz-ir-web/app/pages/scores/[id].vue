@@ -22,6 +22,8 @@ interface ScoreDetail {
     gauge: string
     ln_policy: string
     rule_mode: string
+    arrange_1p?: string | null
+    arrange_2p?: string | null
     judges: { fast: JudgeCounts; slow: JudgeCounts }
     device_type: string
     platform: string
@@ -99,6 +101,15 @@ const verificationBadge = computed(() => {
       return { color: 'neutral' as const, label: '未署名' }
   }
 })
+
+function formatArrange(value: string | null | undefined) {
+  return value ? value.toUpperCase() : '-'
+}
+
+const arrangeLabel = computed(() => {
+  const score = data.value?.score
+  return `ARRANGE 1P ${formatArrange(score?.arrange_1p)} / 2P ${formatArrange(score?.arrange_2p)}`
+})
 </script>
 
 <template>
@@ -121,7 +132,7 @@ const verificationBadge = computed(() => {
           </h1>
           <p class="mt-2 text-sm text-neutral-400">
             {{ data.score.gauge }} / {{ data.score.ln_policy }} / {{ data.score.rule_mode }} ・
-            {{ data.score.device_type }} ・
+            {{ arrangeLabel }} ・ {{ data.score.device_type }} ・
             {{ new Date(data.score.played_at ?? data.score.server_received_at).toLocaleString() }}
             <UBadge :color="verificationBadge.color" size="sm" variant="subtle">
               {{ verificationBadge.label }}

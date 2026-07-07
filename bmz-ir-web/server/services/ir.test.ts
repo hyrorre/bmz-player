@@ -38,6 +38,21 @@ describe('stableStringify', () => {
 })
 
 describe('ranking best row aggregation', () => {
+  test('reads arrange options from new and legacy play options', () => {
+    expect(
+      __test.arrangeOptionsFromPlayOptions({
+        option: 'random',
+        arrange_1p: 'f-random',
+        arrange_2p: 'mf-random',
+      }),
+    ).toEqual({ arrange_1p: 'f-random', arrange_2p: 'mf-random' })
+
+    expect(__test.arrangeOptionsFromPlayOptions({ option: 'random' })).toEqual({
+      arrange_1p: 'random',
+      arrange_2p: undefined,
+    })
+  })
+
   test('deduplicates users and keeps independent display bests', () => {
     const rows = [
       rankingRow({

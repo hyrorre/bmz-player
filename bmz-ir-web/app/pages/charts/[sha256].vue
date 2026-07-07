@@ -175,6 +175,14 @@ const copySha256 = async () => {
 function formatScoreDate(value: string | null) {
   return value ? new Date(value).toLocaleString() : '-'
 }
+
+function formatArrange(value: string | null | undefined) {
+  return value ? value.toUpperCase() : '-'
+}
+
+function formatArrangePair(score: { arrange_1p?: string | null; arrange_2p?: string | null }) {
+  return `ARRANGE 1P ${formatArrange(score.arrange_1p)} / 2P ${formatArrange(score.arrange_2p)}`
+}
 </script>
 
 <template>
@@ -257,6 +265,9 @@ function formatScoreDate(value: string | null) {
               {{ selfBestEntry.score.gauge }} / {{ selfBestEntry.score.ln_policy }} /
               {{ selfBestEntry.score.rule_mode }}
             </p>
+            <p class="mt-1 text-xs text-neutral-500">
+              {{ formatArrangePair(selfBestEntry.score) }}
+            </p>
           </div>
           <p v-else class="text-sm text-neutral-400">この条件の自己ベストはまだありません。</p>
           <UButton
@@ -319,8 +330,13 @@ function formatScoreDate(value: string | null) {
                   </NuxtLink>
                 </td>
                 <td class="px-3 py-2 text-neutral-400">
-                  {{ entry.score.gauge }} / {{ entry.score.ln_policy }} /
-                  {{ entry.score.rule_mode }}
+                  <p>
+                    {{ entry.score.gauge }} / {{ entry.score.ln_policy }} /
+                    {{ entry.score.rule_mode }}
+                  </p>
+                  <p class="text-xs text-neutral-500">
+                    {{ formatArrangePair(entry.score) }}
+                  </p>
                 </td>
                 <td class="px-3 py-2 text-right">{{ entry.score.max_combo }}</td>
                 <td class="px-3 py-2 text-right">{{ entry.score.min_bp }}</td>
@@ -375,7 +391,10 @@ function formatScoreDate(value: string | null) {
                     <td class="px-3 py-2 text-right">{{ score.max_combo }}</td>
                     <td class="px-3 py-2 text-right">{{ score.min_bp }}</td>
                     <td class="px-3 py-2 text-neutral-400">
-                      {{ score.gauge }} / {{ score.ln_policy }} / {{ score.rule_mode }}
+                      <p>{{ score.gauge }} / {{ score.ln_policy }} / {{ score.rule_mode }}</p>
+                      <p class="text-xs text-neutral-500">
+                        {{ formatArrangePair(score) }}
+                      </p>
                     </td>
                   </tr>
                 </tbody>

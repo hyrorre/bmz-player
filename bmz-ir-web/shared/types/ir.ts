@@ -87,6 +87,9 @@ export interface IrScoreSubmission {
   play_options: {
     device_type: IrDeviceType
     double_option?: IrDoubleOption
+    option?: string
+    arrange_1p?: string
+    arrange_2p?: string
   } & Record<string, unknown>
   replay?: {
     hash?: string | null
@@ -189,6 +192,8 @@ export interface IrRankingEntry {
     double_option: IrDoubleOption
     rule_mode: IrRuleMode
     device_type: IrDeviceType
+    arrange_1p?: string
+    arrange_2p?: string
     played_at: string | null
     verification: IrVerificationStatus
     source_score_ids?: {
@@ -242,6 +247,8 @@ export interface IrScoreHistoryEntry {
   double_option: IrDoubleOption
   rule_mode: IrRuleMode
   device_type: IrDeviceType
+  arrange_1p?: string
+  arrange_2p?: string
   played_at: string | null
   server_received_at: string
   verification: IrVerificationStatus

@@ -286,6 +286,7 @@ fn enqueue_ir_jobs(
             device_type: stored.device_type,
             idempotency_key: format!("bmz-score-{}", stored.score_history_id),
             arrange: applied_arrange.arrange,
+            arrange_2p: applied_arrange.arrange_2p,
             double_option: score_key.double_option,
             arrange_seed: applied_arrange.seed,
             random_seed: applied_arrange.seed,

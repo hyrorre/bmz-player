@@ -2,7 +2,11 @@ import { and, desc, eq, sql } from 'drizzle-orm'
 import { getQuery } from 'h3'
 import { db, schema } from 'hub:db'
 import type { IrScoreHistoryResult } from '../../../../../shared/types/ir'
-import { parseRankingQuery, requireHex } from '../../../../services/ir'
+import {
+  arrangeOptionsFromPlayOptions,
+  parseRankingQuery,
+  requireHex,
+} from '../../../../services/ir'
 import { requireIrUser } from '../../../../utils/auth'
 
 export default defineEventHandler(async (event): Promise<IrScoreHistoryResult> => {
@@ -51,6 +55,7 @@ export default defineEventHandler(async (event): Promise<IrScoreHistoryResult> =
         played_at: schema.scores.playedAt,
         server_received_at: schema.scores.serverReceivedAt,
         verification: schema.scores.verification,
+        play_options: schema.scores.playOptions,
       })
       .from(schema.scores)
       .where(and(...conditions))
@@ -68,15 +73,20 @@ export default defineEventHandler(async (event): Promise<IrScoreHistoryResult> =
       double_option: query.doubleOption,
       rule_mode: query.ruleMode,
     },
-    scores: rows.map((row) => ({
-      ...row,
-      ln_policy: row.ln_policy as IrScoreHistoryResult['scores'][number]['ln_policy'],
-      double_option: row.double_option as IrScoreHistoryResult['scores'][number]['double_option'],
-      rule_mode: row.rule_mode as IrScoreHistoryResult['scores'][number]['rule_mode'],
-      device_type: row.device_type as IrScoreHistoryResult['scores'][number]['device_type'],
-      played_at: row.played_at?.toISOString() ?? null,
-      server_received_at: row.server_received_at.toISOString(),
-    })),
+    scores: rows.map((row) => {
+      const { play_options: playOptions, ...score } = row
+      return {
+        ...score,
+        ...arrangeOptionsFromPlayOptions(playOptions),
+        ln_policy: score.ln_policy as IrScoreHistoryResult['scores'][number]['ln_policy'],
+        double_option:
+          score.double_option as IrScoreHistoryResult['scores'][number]['double_option'],
+        rule_mode: score.rule_mode as IrScoreHistoryResult['scores'][number]['rule_mode'],
+        device_type: score.device_type as IrScoreHistoryResult['scores'][number]['device_type'],
+        played_at: score.played_at?.toISOString() ?? null,
+        server_received_at: score.server_received_at.toISOString(),
+      }
+    }),
     pagination: {
       limit: query.limit,
       offset: query.offset,

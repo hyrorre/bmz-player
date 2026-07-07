@@ -23,6 +23,7 @@ pub struct IrSubmissionContext {
     pub device_type: InputDeviceKind,
     pub idempotency_key: String,
     pub arrange: ArrangeOption,
+    pub arrange_2p: ArrangeOption,
     pub double_option: DoubleOptionScoreBucket,
     pub arrange_seed: Option<i64>,
     pub random_seed: Option<i64>,
@@ -38,19 +39,21 @@ pub fn build_score_submission(
 ) -> IrScoreSubmission {
     let judges = &result.score.judges;
     let mut play_options = std::collections::BTreeMap::new();
+    let arrange_1p = arrange_option_ir(context.arrange).to_string();
+    let arrange_2p = arrange_option_ir(context.arrange_2p).to_string();
     play_options.insert(
         "device_type".to_string(),
         serde_json::Value::String(context.device_type.as_str().to_string()),
     );
-    play_options.insert(
-        "option".to_string(),
-        serde_json::Value::String(arrange_option_ir(context.arrange).to_string()),
-    );
+    // "option" is the legacy 1P arrange key used by early BMZ IR payloads.
+    play_options.insert("option".to_string(), serde_json::Value::String(arrange_1p.clone()));
+    play_options.insert("arrange_1p".to_string(), serde_json::Value::String(arrange_1p));
+    play_options.insert("arrange_2p".to_string(), serde_json::Value::String(arrange_2p));
     play_options.insert(
         "double_option".to_string(),
         serde_json::Value::String(context.double_option.ir_value().to_string()),
     );
-    if context.arrange.uses_seed()
+    if (context.arrange.uses_seed() || context.arrange_2p.uses_seed())
         && let Some(seed) = context.arrange_seed
     {
         play_options.insert("seed".to_string(), serde_json::json!(seed));
@@ -313,6 +316,7 @@ mod tests {
                 device_type: InputDeviceKind::Controller,
                 idempotency_key: "score_local_1".to_string(),
                 arrange: ArrangeOption::Random,
+                arrange_2p: ArrangeOption::Mirror,
                 double_option: DoubleOptionScoreBucket::Battle,
                 arrange_seed: Some(42),
                 random_seed: Some(42),
@@ -334,6 +338,14 @@ mod tests {
         assert_eq!(
             payload.play_options.get("option"),
             Some(&serde_json::Value::String("random".to_string()))
+        );
+        assert_eq!(
+            payload.play_options.get("arrange_1p"),
+            Some(&serde_json::Value::String("random".to_string()))
+        );
+        assert_eq!(
+            payload.play_options.get("arrange_2p"),
+            Some(&serde_json::Value::String("mirror".to_string()))
         );
         assert_eq!(
             payload.play_options.get("double_option"),

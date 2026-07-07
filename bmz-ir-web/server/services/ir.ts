@@ -84,6 +84,8 @@ interface BestScoreRow extends BestScoreCandidate {
   rule_mode: IrRuleMode
   scoring: 'bms_ex_score_v1'
   device_type: IrDeviceType
+  arrange_1p?: string
+  arrange_2p?: string
   played_at: string | null
   verification: 'unverified' | 'signed' | 'invalid' | 'trusted'
 }
@@ -112,6 +114,25 @@ export function parseRankingQuery(query: Record<string, unknown>): RankingQuery 
 
 export function parseRankingScope(value: string): IrRankingScope {
   return asScope(value)
+}
+
+export function arrangeOptionsFromPlayOptions(
+  playOptions: Record<string, unknown> | null | undefined,
+): { arrange_1p?: string; arrange_2p?: string } {
+  const legacyOption =
+    typeof playOptions?.option === 'string' && playOptions.option.length > 0
+      ? playOptions.option
+      : undefined
+  return {
+    arrange_1p:
+      typeof playOptions?.arrange_1p === 'string' && playOptions.arrange_1p.length > 0
+        ? playOptions.arrange_1p
+        : legacyOption,
+    arrange_2p:
+      typeof playOptions?.arrange_2p === 'string' && playOptions.arrange_2p.length > 0
+        ? playOptions.arrange_2p
+        : undefined,
+  }
 }
 
 export function validateScoreSubmission(value: unknown): IrScoreSubmission {
@@ -424,9 +445,40 @@ async function fetchRankingBestRows(sha256: string, query: RankingQuery): Promis
 
   const cachedRows = rows.map(rowToBestScoreRow)
   if (cachedRows.length > 0) {
-    return cachedRows
+    return enrichBestRowsWithPlayOptions(cachedRows)
   }
   return fetchRankingBestRowsFromHistory(sha256, query)
+}
+
+async function enrichBestRowsWithPlayOptions(rows: BestScoreRow[]): Promise<BestScoreRow[]> {
+  const scoreIds = [
+    ...new Set(
+      rows.flatMap((row) => [
+        row.score_id,
+        row.best_ex_score_id,
+        row.best_clear_score_id,
+        row.best_max_combo_score_id,
+        row.best_min_bp_score_id,
+        row.best_min_cb_score_id,
+      ]),
+    ),
+  ]
+  if (scoreIds.length === 0) {
+    return rows
+  }
+
+  const scoreRows = await db
+    .select({
+      id: schema.scores.id,
+      play_options: schema.scores.playOptions,
+    })
+    .from(schema.scores)
+    .where(inArray(schema.scores.id, scoreIds))
+  const playOptionsByScoreId = new Map(scoreRows.map((row) => [row.id, row.play_options]))
+  return rows.map((row) => ({
+    ...row,
+    ...arrangeOptionsFromPlayOptions(playOptionsByScoreId.get(row.score_id)),
+  }))
 }
 
 async function fetchRankingBestRowsFromHistory(
@@ -467,6 +519,7 @@ async function fetchRankingBestRowsFromHistory(
       played_at: schema.scores.playedAt,
       server_received_at: schema.scores.serverReceivedAt,
       verification: schema.scores.verification,
+      play_options: schema.scores.playOptions,
     })
     .from(schema.scores)
     .where(and(...conditions))
@@ -501,9 +554,13 @@ function rowToBestScoreRow(row: {
   played_at: Date | null
   server_received_at: Date
   verification: BestScoreRow['verification']
+  play_options?: Record<string, unknown> | null
 }): BestScoreRow {
+  const { play_options: playOptions, ...rowFields } = row
+  const arrangeOptions = arrangeOptionsFromPlayOptions(playOptions)
   return {
-    ...row,
+    ...rowFields,
+    ...arrangeOptions,
     best_ex_score_id: row.best_ex_score_id ?? row.score_id,
     best_clear_score_id: row.best_clear_score_id ?? row.score_id,
     best_max_combo_score_id: row.best_max_combo_score_id ?? row.score_id,
@@ -908,6 +965,8 @@ function rankRows(
         double_option: row.double_option,
         rule_mode: row.rule_mode,
         device_type: row.device_type,
+        arrange_1p: row.arrange_1p,
+        arrange_2p: row.arrange_2p,
         played_at: row.played_at,
         verification: row.verification,
         source_score_ids: {
@@ -1207,6 +1266,7 @@ export function normalizeGaugeName(value: string): string {
 }
 
 export const __test = {
+  arrangeOptionsFromPlayOptions,
   dedupeBestRowsByPlayer,
   bestRowsFromHistory,
 }
