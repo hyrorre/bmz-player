@@ -530,7 +530,7 @@ struct WinitApp {
     play_backbmp_loaded: bool,
     /// プレイ中の Start キー直近の押下時刻。連続押し判定で使用。
     last_play_start_press_at: Option<Instant>,
-    /// Decide 中の E1 押下状態。E1+E2 長押しキャンセルに使う。
+    /// Decide 中の E1 押下状態。E1+E2 キャンセルに使う。
     decide_e1_held: bool,
     /// プレイ開始待ち/プレイ中の E1 押下状態。READY 前の緑数字表示にも使う。
     play_e1_held: bool,
@@ -8485,7 +8485,13 @@ impl WinitApp {
             self.play_e2_held,
             Instant::now(),
         );
-        if pressed && self.play_e2_held && self.play_e3_held {
+        if pressed
+            && decide_cancel_chord_pressed(
+                self.decide_e1_held,
+                self.play_e2_held,
+                self.play_e3_held,
+            )
+        {
             self.begin_decide_fadeout(true);
             return true;
         }
@@ -15947,6 +15953,10 @@ fn decide_control_action(control: &str, bindings: &SelectKeyBindings) -> Option<
     bindings.is_enter(control).then_some(DecideAction::Confirm)
 }
 
+fn decide_cancel_chord_pressed(e1_held: bool, e2_held: bool, e3_held: bool) -> bool {
+    e2_held && (e1_held || e3_held)
+}
+
 fn elapsed_since(started_at: Instant) -> TimeUs {
     TimeUs(started_at.elapsed().as_micros().min(i64::MAX as u128) as i64)
 }
@@ -19249,6 +19259,15 @@ mod tests {
         assert_eq!(decide_control_action("P2K7", &keys), Some(DecideAction::Confirm));
         assert_eq!(decide_control_action("S", &keys), None);
         assert_eq!(decide_control_action("P2K6", &keys), None);
+    }
+
+    #[test]
+    fn decide_cancel_chord_accepts_e1_e2_and_e2_e3() {
+        assert!(decide_cancel_chord_pressed(true, true, false));
+        assert!(decide_cancel_chord_pressed(false, true, true));
+        assert!(decide_cancel_chord_pressed(true, true, true));
+        assert!(!decide_cancel_chord_pressed(true, false, true));
+        assert!(!decide_cancel_chord_pressed(false, true, false));
     }
 
     #[test]
