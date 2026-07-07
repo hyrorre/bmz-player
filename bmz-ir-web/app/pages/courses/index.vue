@@ -7,7 +7,42 @@ interface CourseListItem {
   updated_at: string
 }
 
-const { data, pending, error } = await useFetch<{ courses: CourseListItem[] }>('/api/v1/courses')
+interface CourseListResult {
+  courses: CourseListItem[]
+  pagination: {
+    limit: number
+    offset: number
+    total: number
+    has_more: boolean
+  }
+}
+
+const search = ref('')
+const appliedSearch = ref('')
+const page = ref(1)
+const pageSize = 50
+const offset = computed(() => (page.value - 1) * pageSize)
+const { data, pending, error, refresh } = await useFetch<CourseListResult>('/api/v1/courses', {
+  query: computed(() => ({
+    limit: pageSize,
+    offset: offset.value,
+    ...(appliedSearch.value ? { q: appliedSearch.value } : {}),
+  })),
+  watch: false,
+})
+
+function applySearch() {
+  appliedSearch.value = search.value.trim()
+  if (page.value === 1) {
+    refresh()
+  } else {
+    page.value = 1
+  }
+}
+
+watch(page, () => {
+  refresh()
+})
 </script>
 
 <template>
@@ -19,6 +54,17 @@ const { data, pending, error } = await useFetch<{ courses: CourseListItem[] }>('
         <p class="mt-2 text-sm text-neutral-300">
           スコアが登録されているコースのランキングを確認できます。
         </p>
+      </div>
+
+      <div class="mb-6 flex gap-3">
+        <UInput
+          v-model="search"
+          class="flex-1"
+          icon="i-lucide-search"
+          placeholder="コース名またはIDで検索"
+          @keydown.enter="applySearch"
+        />
+        <UButton color="primary" variant="subtle" @click="applySearch">検索</UButton>
       </div>
 
       <UAlert v-if="error" color="error" :description="error.message" class="mb-6" />
@@ -47,6 +93,14 @@ const { data, pending, error } = await useFetch<{ courses: CourseListItem[] }>('
           </NuxtLink>
         </li>
       </ul>
+
+      <div v-if="data && data.pagination.total > pageSize" class="mt-6 flex justify-end">
+        <UPagination
+          v-model:page="page"
+          :items-per-page="pageSize"
+          :total="data.pagination.total"
+        />
+      </div>
     </section>
   </main>
 </template>

@@ -19,11 +19,13 @@ export default defineEventHandler(async (event): Promise<IrScoreHistoryResult> =
     eq(schema.scores.chartSha256, sha256),
     eq(schema.scores.scoring, query.scoring),
     eq(schema.scores.doubleOption, query.doubleOption),
-    eq(schema.scores.ruleMode, query.ruleMode),
     eq(schema.scores.accepted, true),
   ]
   if (query.lnPolicy) {
     conditions.push(eq(schema.scores.lnPolicy, query.lnPolicy))
+  }
+  if (query.ruleMode) {
+    conditions.push(eq(schema.scores.ruleMode, query.ruleMode))
   }
 
   const [countRows, rows] = await Promise.all([

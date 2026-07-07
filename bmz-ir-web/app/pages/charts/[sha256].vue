@@ -74,6 +74,7 @@ const sha256 = computed(() => (/^[0-9a-f]{64}$/.test(chartParam.value) ? chartPa
 const canLoadChart = computed(() => sha256.value.length === 64)
 
 type LnPolicyFilter = 'ALL' | LnScorePolicy
+type RuleModeFilter = 'ALL' | IrRuleMode
 
 const lnPolicy = ref<LnPolicyFilter>('ALL')
 const lnPolicies: LnPolicyFilter[] = [
@@ -85,8 +86,8 @@ const lnPolicies: LnPolicyFilter[] = [
   'ForceCn',
   'ForceHcn',
 ]
-const ruleMode = ref<IrRuleMode>('Beatoraja')
-const ruleModes: IrRuleMode[] = ['Beatoraja', 'Lr2Oraja', 'Dx']
+const ruleMode = ref<RuleModeFilter>('ALL')
+const ruleModes: RuleModeFilter[] = ['ALL', 'Beatoraja', 'Lr2Oraja', 'Dx']
 
 const { data: detail, error: detailError } = await useFetch<ChartDetail>(
   () => `/api/v1/charts/${sha256.value}`,
@@ -101,8 +102,8 @@ const {
   watch: [sha256, lnPolicy, ruleMode],
   query: computed(() => ({
     scope: 'global',
-    rule_mode: ruleMode.value,
     ...(lnPolicy.value === 'ALL' ? {} : { ln_policy: lnPolicy.value }),
+    ...(ruleMode.value === 'ALL' ? {} : { rule_mode: ruleMode.value }),
   })),
 })
 
@@ -120,8 +121,8 @@ const historyQuery = computed(() => ({
   scope: 'self',
   limit: historyLimit,
   offset: historyOffset.value,
-  rule_mode: ruleMode.value,
   ...(lnPolicy.value === 'ALL' ? {} : { ln_policy: lnPolicy.value }),
+  ...(ruleMode.value === 'ALL' ? {} : { rule_mode: ruleMode.value }),
 }))
 const {
   data: selfHistory,

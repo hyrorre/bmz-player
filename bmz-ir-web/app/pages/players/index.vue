@@ -9,14 +9,42 @@ interface PlayerListItem {
   updated_at: string
 }
 
+interface PlayerListResult {
+  players: PlayerListItem[]
+  pagination: {
+    limit: number
+    offset: number
+    total: number
+    has_more: boolean
+  }
+}
+
 const search = ref('')
-const { data, pending, error, refresh } = await useFetch<{ players: PlayerListItem[] }>(
-  '/api/v1/players',
-  {
-    query: computed(() => (search.value ? { q: search.value } : {})),
-    watch: false,
-  },
-)
+const appliedSearch = ref('')
+const page = ref(1)
+const pageSize = 50
+const offset = computed(() => (page.value - 1) * pageSize)
+const { data, pending, error, refresh } = await useFetch<PlayerListResult>('/api/v1/players', {
+  query: computed(() => ({
+    limit: pageSize,
+    offset: offset.value,
+    ...(appliedSearch.value ? { q: appliedSearch.value } : {}),
+  })),
+  watch: false,
+})
+
+function applySearch() {
+  appliedSearch.value = search.value.trim()
+  if (page.value === 1) {
+    refresh()
+  } else {
+    page.value = 1
+  }
+}
+
+watch(page, () => {
+  refresh()
+})
 
 function formatDate(value: string | null): string {
   if (!value) {
@@ -43,9 +71,9 @@ function formatDate(value: string | null): string {
           class="flex-1"
           icon="i-lucide-search"
           placeholder="ユーザー名またはIDで検索"
-          @keydown.enter="refresh()"
+          @keydown.enter="applySearch"
         />
-        <UButton color="primary" variant="subtle" @click="refresh()">検索</UButton>
+        <UButton color="primary" variant="subtle" @click="applySearch">検索</UButton>
       </div>
 
       <UAlert v-if="error" color="error" :description="error.message" class="mb-6" />
@@ -73,6 +101,14 @@ function formatDate(value: string | null): string {
           </NuxtLink>
         </li>
       </ul>
+
+      <div v-if="data && data.pagination.total > pageSize" class="mt-6 flex justify-end">
+        <UPagination
+          v-model:page="page"
+          :items-per-page="pageSize"
+          :total="data.pagination.total"
+        />
+      </div>
     </section>
   </main>
 </template>

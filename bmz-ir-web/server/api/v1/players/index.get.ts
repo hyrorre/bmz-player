@@ -5,6 +5,7 @@ import { db, schema } from 'hub:db'
 export default defineEventHandler(async (event) => {
   const query = getQuery(event)
   const limit = Math.max(1, Math.min(100, Number(query.limit ?? 50) || 50))
+  const offset = Math.max(0, Number(query.offset ?? 0) || 0)
   const search = typeof query.q === 'string' ? query.q.trim() : ''
 
   let request = db
@@ -17,16 +18,22 @@ export default defineEventHandler(async (event) => {
     .from(schema.profiles)
     .orderBy(desc(schema.profiles.updatedAt))
     .limit(limit)
+    .offset(offset)
+    .$dynamic()
+  let countRequest = db
+    .select({ total: sql<number>`count(*)` })
+    .from(schema.profiles)
     .$dynamic()
 
   if (search) {
     const pattern = `%${escapeLikePattern(search)}%`
-    request = request.where(
-      sql`${schema.profiles.displayName} like ${pattern} escape '\\' or ${schema.profiles.id} like ${pattern} escape '\\'`,
-    )
+    const condition = sql`${schema.profiles.displayName} like ${pattern} escape '\\' or ${schema.profiles.id} like ${pattern} escape '\\'`
+    request = request.where(condition)
+    countRequest = countRequest.where(condition)
   }
 
-  const profiles = await request
+  const [profiles, countRows] = await Promise.all([request, countRequest])
+  const total = Number(countRows[0]?.total ?? 0)
   const playerIds = profiles.map((profile) => profile.id)
 
   const bestScoreRows =
@@ -79,6 +86,12 @@ export default defineEventHandler(async (event) => {
         const bTime = toTimestamp(b.last_score_at ?? b.updated_at)
         return bTime - aTime
       }),
+    pagination: {
+      limit,
+      offset,
+      total,
+      has_more: offset + limit < total,
+    },
   }
 })
 

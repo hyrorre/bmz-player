@@ -2,6 +2,7 @@ import { and, asc, desc, eq, inArray } from 'drizzle-orm'
 import { getQuery } from 'h3'
 import { db, schema } from 'hub:db'
 import { asRuleMode, normalizeGaugeName, requireHex } from '../../../../services/ir'
+import { resolveIrUser } from '../../../../utils/auth'
 
 /** コースランキング (global のみ)。EX score 降順、同点同順位。 */
 export default defineEventHandler(async (event) => {
@@ -10,6 +11,7 @@ export default defineEventHandler(async (event) => {
     throw createError({ statusCode: 400, statusMessage: 'course hash is required' })
   }
   requireHex(courseHash, 64, 'course hash')
+  const user = await resolveIrUser(event)
 
   const query = getQuery(event)
   const gauge =
@@ -94,7 +96,7 @@ export default defineEventHandler(async (event) => {
       rank = index + 1
       previousEx = row.ex_score
     }
-    return {
+    const entry = {
       rank,
       player: { id: row.player_id, display_name: names.get(row.player_id) || 'Player' },
       score: {
@@ -109,12 +111,30 @@ export default defineEventHandler(async (event) => {
         played_at: row.played_at,
         verification: row.verification,
       },
+      relation: {
+        is_self: row.player_id === user?.id,
+        is_rival: false,
+      },
     }
+    return entry
   })
+  const selfEntry = entries.find((entry) => entry.relation.is_self)
 
   return {
     course: { course_hash: courseHash },
     rule: { gauge, ln_policy: lnPolicy, rule_mode: ruleMode, scoring: 'bms_ex_score_v1' },
-    ranking: { scope: 'global', sort: 'ex_score_desc', entries },
+    ranking: {
+      scope: 'global',
+      sort: 'ex_score_desc',
+      entries,
+      self: selfEntry
+        ? {
+            rank: selfEntry.rank,
+            score_id: selfEntry.score.course_score_id,
+            included_in_entries: true,
+            entry: selfEntry,
+          }
+        : undefined,
+    },
   }
 })

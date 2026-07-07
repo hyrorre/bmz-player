@@ -1,13 +1,14 @@
-import { desc, like } from 'drizzle-orm'
+import { desc, sql } from 'drizzle-orm'
 import { getQuery } from 'h3'
 import { db, schema } from 'hub:db'
 
 export default defineEventHandler(async (event) => {
   const query = getQuery(event)
   const limit = Math.max(1, Math.min(100, Number(query.limit ?? 50) || 50))
+  const offset = Math.max(0, Number(query.offset ?? 0) || 0)
   const search = typeof query.q === 'string' ? query.q.trim() : ''
 
-  let request = db
+  let listRequest = db
     .select({
       sha256: schema.charts.sha256,
       title: schema.charts.title,
@@ -23,13 +24,32 @@ export default defineEventHandler(async (event) => {
     .from(schema.charts)
     .orderBy(desc(schema.charts.updatedAt))
     .limit(limit)
+    .offset(offset)
+    .$dynamic()
+  let countRequest = db
+    .select({ total: sql<number>`count(*)` })
+    .from(schema.charts)
     .$dynamic()
 
   if (search) {
-    request = request.where(like(schema.charts.title, `%${escapeLikePattern(search)}%`))
+    const pattern = `%${escapeLikePattern(search)}%`
+    const condition = sql`${schema.charts.title} like ${pattern} escape '\\'`
+    listRequest = listRequest.where(condition)
+    countRequest = countRequest.where(condition)
   }
 
-  return { charts: await request }
+  const [charts, countRows] = await Promise.all([listRequest, countRequest])
+  const total = Number(countRows[0]?.total ?? 0)
+
+  return {
+    charts,
+    pagination: {
+      limit,
+      offset,
+      total,
+      has_more: offset + limit < total,
+    },
+  }
 })
 
 function escapeLikePattern(value: string): string {

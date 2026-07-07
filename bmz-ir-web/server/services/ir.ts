@@ -54,7 +54,7 @@ export interface RankingQuery {
   offset: number
   lnPolicy?: LnScorePolicy
   doubleOption: IrDoubleOption
-  ruleMode: IrRuleMode
+  ruleMode?: IrRuleMode
   scoring: 'bms_ex_score_v1'
 }
 
@@ -99,7 +99,10 @@ export function parseRankingQuery(query: Record<string, unknown>): RankingQuery 
   const lnPolicy =
     typeof query.ln_policy === 'string' && query.ln_policy ? asLnPolicy(query.ln_policy) : undefined
   const doubleOption = normalizeDoubleOption(query.double_option)
-  const ruleMode = asRuleMode(query.rule_mode)
+  const ruleMode =
+    typeof query.rule_mode === 'string' && query.rule_mode && query.rule_mode !== 'ALL'
+      ? asRuleMode(query.rule_mode)
+      : undefined
   const scoring = String(query.scoring ?? 'bms_ex_score_v1')
   if (scoring !== 'bms_ex_score_v1') {
     throw new Error('unsupported scoring')
@@ -380,10 +383,12 @@ async function fetchRankingBestRows(sha256: string, query: RankingQuery): Promis
     eq(schema.bestScores.chartSha256, sha256),
     eq(schema.bestScores.scoring, query.scoring),
     eq(schema.bestScores.doubleOption, query.doubleOption),
-    eq(schema.bestScores.ruleMode, query.ruleMode),
   ]
   if (query.lnPolicy) {
     conditions.push(eq(schema.bestScores.lnPolicy, query.lnPolicy))
+  }
+  if (query.ruleMode) {
+    conditions.push(eq(schema.bestScores.ruleMode, query.ruleMode))
   }
 
   const rows = await db
@@ -432,11 +437,13 @@ async function fetchRankingBestRowsFromHistory(
     eq(schema.scores.chartSha256, sha256),
     eq(schema.scores.scoring, query.scoring),
     eq(schema.scores.doubleOption, query.doubleOption),
-    eq(schema.scores.ruleMode, query.ruleMode),
     eq(schema.scores.accepted, true),
   ]
   if (query.lnPolicy) {
     conditions.push(eq(schema.scores.lnPolicy, query.lnPolicy))
+  }
+  if (query.ruleMode) {
+    conditions.push(eq(schema.scores.ruleMode, query.ruleMode))
   }
 
   const rows = await db
