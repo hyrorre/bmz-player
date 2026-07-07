@@ -54,6 +54,8 @@ GET    /api/v1/courses/{course_hash}/ranking   # global のみ
 - 送信: リザルト確定時に `ir_score_jobs` へ enqueue (send_policy 判定込み) →
   リザルト画面で即時送信 + アプリ常駐ワーカー (30 秒間隔) が残りを処理。
   リトライは 1分 → 5分 → 30分 → 2時間 → 以降24時間。
+  成功済み job は payload を空にし、同期後に 30 日以内または最新 500 件だけを
+  `network.db` に保持する。未送信 / 失敗 / 送信中 job は剪定対象外。
 - ランキング表示: Result / Select スキンの `NUMBER_IR_RANK(179)` /
   `NUMBER_IR_TOTALPLAYER(180/200)` / `NUMBER_IR_CLEARRATE(181)` /
   `OPTION_IR_LOADING/LOADED/NOPLAYER/FAILED(601..604)`、
@@ -1914,8 +1916,8 @@ IR送信:
 
 `scores` / `best_scores` の規約 (clear_rank、verification、idempotency、
 served timestamps) をコースにもそのまま流用する。BMZ local の
-`library.db` 側モデル (`courses` + `course_scores` + `course_score_charts`)
-と対応させる。
+metadata は `library.db` の `courses`、プレイ結果は profile-local
+`score.db` の `course_scores` / `course_score_charts` と対応させる。
 
 #### Course identity
 

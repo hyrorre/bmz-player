@@ -1036,7 +1036,6 @@ fn insert_score_history(
     previous_best: Option<&PreviousBestSnapshot>,
 ) -> Result<()> {
     let judges = &record.score.judges;
-    let ghost = encode_beatoraja_ghost(&record.score.ghost)?;
     let bp = score_record_bp(record);
     let cb = score_record_cb(record);
     conn.execute(
@@ -1073,7 +1072,6 @@ fn insert_score_history(
             autoplay,
             device_type,
             replay_path,
-            ghost,
             old_clear_type,
             old_ex_score,
             old_max_combo,
@@ -1082,7 +1080,7 @@ fn insert_score_history(
         ) VALUES (
             ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13,
             ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30,
-            ?31, ?32, ?33, ?34, ?35, ?36, ?37, ?38
+            ?31, ?32, ?33, ?34, ?35, ?36, ?37
         )",
         params![
             hash_to_hex(&record.chart_sha256),
@@ -1117,7 +1115,6 @@ fn insert_score_history(
             record.autoplay,
             record.device_type.as_str(),
             record.replay_path.as_str(),
-            ghost,
             previous_best.map(|best| best.clear_type.as_str()),
             previous_best.map(|best| best.ex_score),
             previous_best.map(|best| best.max_combo),
@@ -1558,6 +1555,26 @@ mod tests {
 
     fn key(sha: [u8; 32]) -> ScoreKey {
         ScoreKey::new(sha, LnScorePolicy::ForceLn)
+    }
+
+    fn insert_test_course_score(db: &mut ScoreDatabase, course_hash: &str) -> i64 {
+        db.conn_mut()
+            .execute(
+                "INSERT INTO course_scores (
+                    course_hash, source, course_key, title, kind, constraints_json,
+                    chart_sha256s_json, ex_score, max_ex_score, clear_type, gauge_type,
+                    gauge_value, max_combo, bp, course_failed, course_clear, arrange,
+                    trophies_json, played_at, rule_mode
+                 ) VALUES (
+                    ?1, '', '', '', '', '{}',
+                    '[]', 0, 0, 'NoPlay', '',
+                    0.0, 0, 0, 0, 0, 'Normal',
+                    '[]', 0, 'Beatoraja'
+                 )",
+                params![course_hash],
+            )
+            .unwrap();
+        db.conn().last_insert_rowid()
     }
 
     #[test]
@@ -2063,6 +2080,50 @@ mod tests {
     }
 
     #[test]
+    fn score_history_migration_drops_history_ghost_and_sanitizes_course_links() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        configure_connection(&conn).unwrap();
+        run_migrations(&mut conn, &SCORE_MIGRATIONS[..18]).unwrap();
+        conn.execute(
+            "INSERT INTO score_history (
+                chart_sha256, played_at, clear_type, gauge_type, gauge_value,
+                total_notes, ex_score, bp, cb, max_combo,
+                fast_pgreat, slow_pgreat, fast_great, slow_great,
+                fast_good, slow_good, fast_bad, slow_bad,
+                fast_poor, slow_poor, fast_empty_poor, slow_empty_poor,
+                random_seed, gauge_option, assist_mask, autoplay,
+                replay_path, ghost, course_score_id
+            ) VALUES (
+                ?1, 10, 'Normal', 'Normal', 80.0,
+                10, 20, 1, 1, 8,
+                1, 2, 3, 4,
+                5, 6, 7, 8,
+                9, 10, 11, 12,
+                NULL, '', 0, 0,
+                '', 'legacy-ghost', 9999
+            )",
+            params![hash_to_hex(&[1; 32])],
+        )
+        .unwrap();
+
+        run_migrations(&mut conn, SCORE_MIGRATIONS).unwrap();
+
+        let columns: Vec<String> = conn
+            .prepare("PRAGMA table_info(score_history)")
+            .unwrap()
+            .query_map([], |row| row.get(1))
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
+            .unwrap();
+        assert!(!columns.iter().any(|column| column == "ghost"));
+
+        let course_score_id: Option<i64> = conn
+            .query_row("SELECT course_score_id FROM score_history", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(course_score_id, None);
+    }
+
+    #[test]
     fn score_history_records_previous_best_snapshot() {
         let mut conn = Connection::open_in_memory().unwrap();
         configure_connection(&conn).unwrap();
@@ -2399,8 +2460,10 @@ mod tests {
         let id2 = db.insert_score(&r2).unwrap();
         let id3 = db.insert_score(&r3).unwrap();
 
-        // Tag the first two with course_score_id=99, leave r3 untouched.
-        let updated = db.tag_score_history_with_course(&[id1, id2], 99).unwrap();
+        let course_score_id = insert_test_course_score(&mut db, "course-a");
+
+        // Tag the first two with a real course score, leave r3 untouched.
+        let updated = db.tag_score_history_with_course(&[id1, id2], course_score_id).unwrap();
         assert_eq!(updated, 2);
 
         let rows: Vec<(i64, Option<i64>)> = db
@@ -2411,7 +2474,10 @@ mod tests {
             .unwrap()
             .collect::<rusqlite::Result<_>>()
             .unwrap();
-        assert_eq!(rows, vec![(id1, Some(99)), (id2, Some(99)), (id3, None)]);
+        assert_eq!(
+            rows,
+            vec![(id1, Some(course_score_id)), (id2, Some(course_score_id)), (id3, None)]
+        );
     }
 
     #[test]
@@ -2464,14 +2530,44 @@ mod tests {
         course_play.chart_sha256 = [2; 32];
         let course_play_id = db.insert_score(&course_play).unwrap();
 
+        let course_score_id = insert_test_course_score(&mut db, "course-a");
+
         // Tag the course-attempt row only.
-        db.tag_score_history_with_course(&[course_play_id], 77).unwrap();
+        db.tag_score_history_with_course(&[course_play_id], course_score_id).unwrap();
 
         let history = db.recent_history(10, 0).unwrap();
         let by_id: std::collections::HashMap<i64, &ScoreHistoryEntry> =
             history.iter().map(|h| (h.id, h)).collect();
         assert_eq!(by_id.get(&solo_id).unwrap().course_score_id, None);
-        assert_eq!(by_id.get(&course_play_id).unwrap().course_score_id, Some(77));
+        assert_eq!(by_id.get(&course_play_id).unwrap().course_score_id, Some(course_score_id));
+    }
+
+    #[test]
+    fn deleting_course_score_nulls_history_course_link() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        configure_connection(&conn).unwrap();
+        run_migrations(&mut conn, SCORE_MIGRATIONS).unwrap();
+        let mut db = ScoreDatabase::from_connection(conn);
+
+        let mut course_play = record(30, ClearType::Easy);
+        course_play.chart_sha256 = [2; 32];
+        let course_play_id = db.insert_score(&course_play).unwrap();
+        let course_score_id = insert_test_course_score(&mut db, "course-a");
+        db.tag_score_history_with_course(&[course_play_id], course_score_id).unwrap();
+
+        db.conn_mut()
+            .execute("DELETE FROM course_scores WHERE id = ?1", params![course_score_id])
+            .unwrap();
+
+        let course_score_id_after_delete: Option<i64> = db
+            .conn()
+            .query_row(
+                "SELECT course_score_id FROM score_history WHERE id = ?1",
+                params![course_play_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(course_score_id_after_delete, None);
     }
 
     #[test]
@@ -2490,6 +2586,26 @@ mod tests {
             )
             .unwrap();
         assert_eq!(count, 0);
+    }
+
+    #[test]
+    fn score_db_migrations_drop_redundant_prefix_indexes() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        configure_connection(&conn).unwrap();
+        run_migrations(&mut conn, SCORE_MIGRATIONS).unwrap();
+
+        for index in
+            ["idx_score_best_chart", "idx_replay_slots_chart", "idx_score_course_replay_slots_hash"]
+        {
+            let count: i64 = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name = ?1",
+                    params![index],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert_eq!(count, 0, "{index} should be covered by a PRIMARY KEY prefix");
+        }
     }
 
     #[test]

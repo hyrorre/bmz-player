@@ -181,6 +181,10 @@ pub async fn sync_pending_ir_jobs(
             }
         }
     }
+    let pruned = network_db.prune_succeeded_ir_score_jobs(now)?;
+    if pruned > 0 {
+        tracing::debug!(pruned, "pruned succeeded IR score jobs");
+    }
     Ok(report)
 }
 

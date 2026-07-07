@@ -449,6 +449,19 @@ pub const LIBRARY_MIGRATIONS: &[Migration] = &[
                 ADD COLUMN loudness_analysis_version INTEGER NOT NULL DEFAULT 0;",
         ],
     },
+    Migration {
+        version: 20,
+        // Course play results now belong to profile-local score.db.  Keep
+        // library.db focused on chart/course metadata and drop the old
+        // library-owned result tables without row migration.
+        statements: &[
+            "DROP TABLE IF EXISTS course_trophy_achievements;",
+            "DROP TABLE IF EXISTS course_replay_slots;",
+            "DROP TABLE IF EXISTS course_replays;",
+            "DROP TABLE IF EXISTS course_score_charts;",
+            "DROP TABLE IF EXISTS course_scores;",
+        ],
+    },
 ];
 
 pub const SCORE_MIGRATIONS: &[Migration] = &[
@@ -1167,6 +1180,95 @@ pub const SCORE_MIGRATIONS: &[Migration] = &[
             "DROP TABLE course_replay_slots_old;",
             "CREATE INDEX idx_score_course_replay_slots_hash
                 ON course_replay_slots(course_hash, rule_mode);",
+        ],
+    },
+    Migration {
+        version: 19,
+        // Rebuild score_history so course_score_id can reference the
+        // profile-local course_scores table, and stop storing per-history
+        // ghosts.  score_best.ghost remains the source for pacemaker/MyBest
+        // ghost playback.
+        statements: &[
+            "ALTER TABLE score_history RENAME TO score_history_old;",
+            "CREATE TABLE score_history (
+                id INTEGER PRIMARY KEY,
+                chart_sha256 TEXT NOT NULL,
+                ln_policy TEXT NOT NULL DEFAULT 'ForceLn',
+                double_option TEXT NOT NULL DEFAULT 'Off',
+                played_at INTEGER NOT NULL,
+                clear_type TEXT NOT NULL,
+                gauge_type TEXT NOT NULL,
+                gauge_value REAL NOT NULL,
+                total_notes INTEGER NOT NULL,
+                ex_score INTEGER NOT NULL,
+                bp INTEGER NOT NULL,
+                cb INTEGER NOT NULL,
+                max_combo INTEGER NOT NULL,
+                fast_pgreat INTEGER NOT NULL,
+                slow_pgreat INTEGER NOT NULL,
+                fast_great INTEGER NOT NULL,
+                slow_great INTEGER NOT NULL,
+                fast_good INTEGER NOT NULL,
+                slow_good INTEGER NOT NULL,
+                fast_bad INTEGER NOT NULL,
+                slow_bad INTEGER NOT NULL,
+                fast_poor INTEGER NOT NULL,
+                slow_poor INTEGER NOT NULL,
+                fast_empty_poor INTEGER NOT NULL,
+                slow_empty_poor INTEGER NOT NULL,
+                random_seed INTEGER,
+                arrange TEXT NOT NULL DEFAULT 'Normal',
+                gauge_option TEXT NOT NULL,
+                rule_mode TEXT NOT NULL DEFAULT 'Beatoraja',
+                assist_mask INTEGER NOT NULL DEFAULT 0,
+                autoplay INTEGER NOT NULL DEFAULT 0,
+                device_type TEXT NOT NULL DEFAULT 'keyboard',
+                replay_path TEXT NOT NULL,
+                course_score_id INTEGER REFERENCES course_scores(id) ON DELETE SET NULL,
+                old_clear_type TEXT,
+                old_ex_score INTEGER,
+                old_max_combo INTEGER,
+                old_bp INTEGER,
+                old_cb INTEGER
+            );",
+            "INSERT INTO score_history (
+                id, chart_sha256, ln_policy, double_option, played_at,
+                clear_type, gauge_type, gauge_value, total_notes, ex_score,
+                bp, cb, max_combo, fast_pgreat, slow_pgreat, fast_great,
+                slow_great, fast_good, slow_good, fast_bad, slow_bad,
+                fast_poor, slow_poor, fast_empty_poor, slow_empty_poor,
+                random_seed, arrange, gauge_option, rule_mode, assist_mask,
+                autoplay, device_type, replay_path, course_score_id,
+                old_clear_type, old_ex_score, old_max_combo, old_bp, old_cb
+            )
+            SELECT
+                id, chart_sha256, ln_policy, double_option, played_at,
+                clear_type, gauge_type, gauge_value, total_notes, ex_score,
+                bp, cb, max_combo, fast_pgreat, slow_pgreat, fast_great,
+                slow_great, fast_good, slow_good, fast_bad, slow_bad,
+                fast_poor, slow_poor, fast_empty_poor, slow_empty_poor,
+                random_seed, arrange, gauge_option, rule_mode, assist_mask,
+                autoplay, device_type, replay_path,
+                CASE
+                    WHEN course_score_id IS NOT NULL
+                     AND EXISTS (
+                        SELECT 1 FROM course_scores
+                        WHERE course_scores.id = score_history_old.course_score_id
+                     )
+                    THEN course_score_id
+                    ELSE NULL
+                END,
+                old_clear_type, old_ex_score, old_max_combo, old_bp, old_cb
+            FROM score_history_old;",
+            "DROP TABLE score_history_old;",
+            "CREATE INDEX idx_score_history_chart_sha256 ON score_history(chart_sha256);",
+            "CREATE INDEX idx_score_history_played_at ON score_history(played_at DESC);",
+            "CREATE INDEX idx_score_history_course_score_id
+                ON score_history(course_score_id)
+                WHERE course_score_id IS NOT NULL;",
+            "DROP INDEX IF EXISTS idx_score_best_chart;",
+            "DROP INDEX IF EXISTS idx_replay_slots_chart;",
+            "DROP INDEX IF EXISTS idx_score_course_replay_slots_hash;",
         ],
     },
 ];

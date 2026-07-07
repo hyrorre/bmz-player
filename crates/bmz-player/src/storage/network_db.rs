@@ -6,6 +6,9 @@ use rusqlite::{Connection, params};
 use super::common::{configure_connection, hash_to_hex, hex_to_hash};
 use crate::ln_policy::LnScorePolicy;
 
+const SUCCEEDED_IR_SCORE_JOB_RETENTION_SECONDS: i64 = 30 * 24 * 60 * 60;
+const SUCCEEDED_IR_SCORE_JOB_RETAIN_RECENT_COUNT: u32 = 500;
+
 pub struct NetworkDatabase {
     conn: Connection,
 }
@@ -212,6 +215,37 @@ impl NetworkDatabase {
         )?;
         Ok(self.conn.last_insert_rowid())
     }
+
+    pub fn prune_succeeded_ir_score_jobs(&mut self, now: i64) -> Result<usize> {
+        self.prune_succeeded_ir_score_jobs_with_policy(
+            now,
+            SUCCEEDED_IR_SCORE_JOB_RETENTION_SECONDS,
+            SUCCEEDED_IR_SCORE_JOB_RETAIN_RECENT_COUNT,
+        )
+    }
+
+    fn prune_succeeded_ir_score_jobs_with_policy(
+        &mut self,
+        now: i64,
+        retention_seconds: i64,
+        retain_recent_count: u32,
+    ) -> Result<usize> {
+        let cutoff = now.saturating_sub(retention_seconds);
+        let deleted = self.conn.execute(
+            "DELETE FROM ir_score_jobs
+             WHERE status = 'succeeded'
+               AND updated_at < ?1
+               AND id NOT IN (
+                    SELECT id
+                    FROM ir_score_jobs
+                    WHERE status = 'succeeded'
+                    ORDER BY updated_at DESC, id DESC
+                    LIMIT ?2
+               )",
+            params![cutoff, retain_recent_count],
+        )?;
+        Ok(deleted)
+    }
 }
 
 fn ir_score_job_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<IrScoreJobRecord> {
@@ -259,6 +293,20 @@ mod tests {
         configure_connection(&conn).unwrap();
         run_migrations(&mut conn, NETWORK_MIGRATIONS).unwrap();
         NetworkDatabase::from_connection(conn)
+    }
+
+    fn enqueue_test_job(db: &mut NetworkDatabase, local_score_id: i64, now: i64) -> i64 {
+        db.enqueue_ir_score_job(&NewIrScoreJob {
+            provider: "bmz-official".to_string(),
+            account_id: "account-1".to_string(),
+            kind: IrJobKind::Score,
+            local_score_id,
+            chart_sha256: [local_score_id as u8; 32],
+            ln_policy: LnScorePolicy::ForceLn,
+            payload_json: "{}".to_string(),
+            now,
+        })
+        .unwrap()
     }
 
     #[test]
@@ -380,5 +428,60 @@ mod tests {
         assert_eq!(pending.len(), 1);
         assert_eq!(pending[0].id, job_id);
         assert_eq!(pending[0].status, "sending");
+    }
+
+    #[test]
+    fn prune_succeeded_ir_score_jobs_keeps_recent_and_unfinished_jobs() {
+        let mut db = open_network_db();
+        let stale_a = enqueue_test_job(&mut db, 1, 0);
+        let stale_b = enqueue_test_job(&mut db, 2, 0);
+        let retained_by_count = enqueue_test_job(&mut db, 3, 0);
+        let retained_by_age = enqueue_test_job(&mut db, 4, 9_500);
+        let failed = enqueue_test_job(&mut db, 5, 0);
+
+        db.mark_ir_score_job_status(stale_a, IrScoreJobStatus::Succeeded, 100, "").unwrap();
+        db.mark_ir_score_job_status(stale_b, IrScoreJobStatus::Succeeded, 200, "").unwrap();
+        db.mark_ir_score_job_status(retained_by_count, IrScoreJobStatus::Succeeded, 300, "")
+            .unwrap();
+        db.mark_ir_score_job_status(retained_by_age, IrScoreJobStatus::Succeeded, 9_500, "")
+            .unwrap();
+        db.mark_ir_score_job_status(failed, IrScoreJobStatus::Failed, 100, "boom").unwrap();
+
+        db.insert_ir_score_submission(&NewIrScoreSubmission {
+            job_id: stale_a,
+            provider: "bmz-official".to_string(),
+            account_id: "account-1".to_string(),
+            kind: IrJobKind::Score,
+            local_score_id: 1,
+            remote_score_id: "remote-a".to_string(),
+            status: "succeeded".to_string(),
+            submitted_at: 100,
+            log_path: "ir-submissions.jsonl".to_string(),
+            error: String::new(),
+        })
+        .unwrap();
+
+        let deleted = db.prune_succeeded_ir_score_jobs_with_policy(10_000, 1_000, 2).unwrap();
+        assert_eq!(deleted, 2);
+
+        let remaining: Vec<i64> = db
+            .conn()
+            .prepare("SELECT id FROM ir_score_jobs ORDER BY id")
+            .unwrap()
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
+            .unwrap();
+        assert_eq!(remaining, vec![retained_by_count, retained_by_age, failed]);
+
+        let stale_submission_count: i64 = db
+            .conn()
+            .query_row(
+                "SELECT COUNT(*) FROM ir_score_submissions WHERE job_id = ?1",
+                [stale_a],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(stale_submission_count, 0);
     }
 }
