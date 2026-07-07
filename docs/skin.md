@@ -106,3 +106,8 @@ profile の `[skin]` は key mode ごとに play skin path と設定を持つ。
 8K 版はレーンごとのノーツ色を property で選択できる。property 名は
 `8Key Lane 1 Color` から `8Key Lane 8 Color` までで、選択肢は
 `White`, `Blue`, `Yellow`, `Scratch`。既定値は `Yellow, White, Blue, White, White, Blue, White, Yellow`。
+
+5K 版は `Notes 5Key Color` property でノーツ色の並びを選択できる。
+`Default` は従来通り `Scratch, White, Blue, Yellow, Blue, White`
+(scratch left 時の画面左からの並び)。`6Key-like` は scratch side に関わらず、
+画面左から `White, Blue, White, White, Blue, White` になる。

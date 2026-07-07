@@ -2414,6 +2414,61 @@ mod tests {
     }
 
     #[test]
+    fn rmz_skin_play5_keeps_default_lane_colors_when_available() {
+        let skin_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../data/skins/Rmz-skin/play5main.luaskin");
+        if !skin_path.is_file() {
+            return;
+        }
+
+        let loaded = load_lua_skin(&skin_path, SkinKind::Play, &BTreeMap::new(), &BTreeMap::new())
+            .expect("Rmz-skin play5 should decode");
+        assert_eq!(loaded.document.skin_type, 1);
+        assert!(
+            loaded.document.property.iter().any(|property| property.name == "Notes 5Key Color"),
+            "play5 should expose the lane color option"
+        );
+        let note = loaded.document.note.expect("play5 note definition");
+        assert_eq!(
+            note.note,
+            vec!["note-Wh", "note-Bl", "note-Ye", "note-Bl", "note-Wh", "note-Sc"]
+        );
+        assert_eq!(note.dst.len(), 6);
+    }
+
+    #[test]
+    fn rmz_skin_play5_6key_like_colors_when_available() {
+        let skin_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../data/skins/Rmz-skin/play5main.luaskin");
+        if !skin_path.is_file() {
+            return;
+        }
+
+        let options = BTreeMap::from([("Notes 5Key Color".to_string(), "6Key-like".to_string())]);
+        let loaded = load_lua_skin(&skin_path, SkinKind::Play, &options, &BTreeMap::new())
+            .expect("Rmz-skin play5 6Key-like colors should decode");
+        let note = loaded.document.note.expect("play5 note definition");
+        assert_eq!(
+            note.note,
+            vec!["note-Bl", "note-Wh", "note-Wh", "note-Bl", "note-Wh", "note-Wh"]
+        );
+        assert_eq!(note.dst.len(), 6);
+
+        let options = BTreeMap::from([
+            ("Scratch Side".to_string(), "Right".to_string()),
+            ("Notes 5Key Color".to_string(), "6Key-like".to_string()),
+        ]);
+        let loaded = load_lua_skin(&skin_path, SkinKind::Play, &options, &BTreeMap::new())
+            .expect("Rmz-skin play5 6Key-like right scratch colors should decode");
+        let note = loaded.document.note.expect("play5 note definition");
+        assert_eq!(
+            note.note,
+            vec!["note-Wh", "note-Bl", "note-Wh", "note-Wh", "note-Bl", "note-Wh"]
+        );
+        assert_eq!(note.dst.len(), 6);
+    }
+
+    #[test]
     fn rmz_skin_play6_enlarge_uses_wide_note_lanes_when_available() {
         let skin_path = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../data/skins/Rmz-skin/play6main.luaskin");
