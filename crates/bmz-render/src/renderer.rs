@@ -1917,6 +1917,7 @@ const VECTOR_TEXT_SUPERSAMPLE_SCALE: f32 = 2.0;
 /// 超えると `create_texture` がパニックするので、上限に達したらフレーム境界でキャッシュを
 /// 捨てて作り直す。1 フレーム分のグリフは十分この高さに収まるため、リセットしても破綻しない。
 const TEXT_ATLAS_MAX_HEIGHT: u32 = 8192;
+const TEXT_LAYOUT_CACHE_MAX_ENTRIES: usize = 4096;
 
 fn normalized_extent_to_pixels(normalized: f32, surface_extent: u32) -> u32 {
     if normalized <= f32::EPSILON || surface_extent == 0 {
@@ -2498,6 +2499,36 @@ enum TextGlyphKind {
     Bitmap,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct TextLayoutKey {
+    kind: TextGlyphKind,
+    font_id: String,
+    text: String,
+    origin_x_bits: u32,
+    origin_y_bits: u32,
+    surface_width: u32,
+    surface_height: u32,
+    style: TextLayoutStyleKey,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct TextLayoutStyleKey {
+    size_bits: u32,
+    bitmap_size_bits: Option<u32>,
+    color: ColorKey,
+    align: u8,
+    max_width_bits: u32,
+    overflow: u8,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+struct ColorKey {
+    r_bits: u32,
+    g_bits: u32,
+    b_bits: u32,
+    a_bits: u32,
+}
+
 #[derive(Debug, Clone)]
 struct CachedGlyph {
     atlas_origin: (u32, u32),
@@ -2510,6 +2541,37 @@ struct CachedGlyph {
 }
 
 #[derive(Debug)]
+struct TextLayoutCache {
+    entries: HashMap<TextLayoutKey, Vec<TextQuad>>,
+}
+
+impl TextLayoutCache {
+    fn new() -> Self {
+        Self { entries: HashMap::new() }
+    }
+
+    fn clear(&mut self) {
+        self.entries.clear();
+    }
+
+    fn cached(&self, key: &TextLayoutKey) -> Option<Vec<TextQuad>> {
+        self.entries.get(key).cloned()
+    }
+
+    fn insert(&mut self, key: TextLayoutKey, quads: &[TextQuad]) {
+        if self.entries.len() >= TEXT_LAYOUT_CACHE_MAX_ENTRIES {
+            self.entries.clear();
+        }
+        self.entries.insert(key, quads.to_vec());
+    }
+
+    #[cfg(test)]
+    fn len(&self) -> usize {
+        self.entries.len()
+    }
+}
+
+#[derive(Debug)]
 struct TextAtlasCache {
     width: u32,
     pen_x: u32,
@@ -2517,6 +2579,7 @@ struct TextAtlasCache {
     row_height: u32,
     pixels: Vec<u8>,
     glyphs: HashMap<TextGlyphKey, CachedGlyph>,
+    layouts: TextLayoutCache,
     dirty_regions: Vec<TextAtlasDirtyRegion>,
 }
 
@@ -2529,6 +2592,7 @@ impl TextAtlasCache {
             row_height: 0,
             pixels: Vec::new(),
             glyphs: HashMap::new(),
+            layouts: TextLayoutCache::new(),
             dirty_regions: Vec::new(),
         }
     }
@@ -2548,6 +2612,7 @@ impl TextAtlasCache {
         self.row_height = 0;
         self.pixels.clear();
         self.glyphs.clear();
+        self.layouts.clear();
         self.dirty_regions.clear();
     }
 
@@ -2563,6 +2628,14 @@ impl TextAtlasCache {
         let mut pixels = self.pixels.clone();
         pixels.resize((size.width * size.height * 4) as usize, 0);
         pixels
+    }
+
+    fn cached_layout(&self, key: &TextLayoutKey) -> Option<Vec<TextQuad>> {
+        self.layouts.cached(key)
+    }
+
+    fn insert_layout(&mut self, key: TextLayoutKey, quads: &[TextQuad]) {
+        self.layouts.insert(key, quads);
     }
 
     fn cached_vector_glyph(
@@ -2728,6 +2801,57 @@ impl TextAtlasCache {
     }
 }
 
+fn text_layout_key(
+    kind: TextGlyphKind,
+    font_id: &str,
+    origin: &Point,
+    text: &str,
+    style: &TextStyle,
+    surface: SurfaceSize,
+) -> Option<TextLayoutKey> {
+    if style.wrapping || style.outline.is_some() || style.shadow.is_some() {
+        return None;
+    }
+    Some(TextLayoutKey {
+        kind,
+        font_id: font_id.to_string(),
+        text: text.to_string(),
+        origin_x_bits: origin.x.to_bits(),
+        origin_y_bits: origin.y.to_bits(),
+        surface_width: surface.width,
+        surface_height: surface.height,
+        style: TextLayoutStyleKey {
+            size_bits: style.size.to_bits(),
+            bitmap_size_bits: style.bitmap_size.map(f32::to_bits),
+            color: ColorKey {
+                r_bits: style.color.r.to_bits(),
+                g_bits: style.color.g.to_bits(),
+                b_bits: style.color.b.to_bits(),
+                a_bits: style.color.a.to_bits(),
+            },
+            align: text_align_key(style.align),
+            max_width_bits: style.max_width.to_bits(),
+            overflow: text_overflow_key(style.overflow),
+        },
+    })
+}
+
+fn text_align_key(align: TextAlign) -> u8 {
+    match align {
+        TextAlign::Left => 0,
+        TextAlign::Center => 1,
+        TextAlign::Right => 2,
+    }
+}
+
+fn text_overflow_key(overflow: TextOverflow) -> u8 {
+    match overflow {
+        TextOverflow::Overflow => 0,
+        TextOverflow::Shrink => 1,
+        TextOverflow::Truncate => 2,
+    }
+}
+
 struct CachedTextFrameBuilder<'a> {
     atlas: &'a mut TextAtlasCache,
     quads: Vec<TextQuad>,
@@ -2785,6 +2909,14 @@ impl<'a> CachedTextFrameBuilder<'a> {
             }
         }
 
+        let layout_key =
+            text_layout_key(TextGlyphKind::Bitmap, font_id, origin, text, &style, surface);
+        if let Some(cached) = layout_key.as_ref().and_then(|key| self.atlas.cached_layout(key)) {
+            self.quads.extend(cached);
+            return;
+        }
+        let quads_before = self.quads.len();
+
         let design_size = if font.size > 0 { font.size } else { font.line_height.max(1) };
         let bitmap_size = style.bitmap_size.unwrap_or(style.size);
         let mut scale = (bitmap_size * surface.height as f32 / design_size as f32).max(0.01);
@@ -2838,6 +2970,10 @@ impl<'a> CachedTextFrameBuilder<'a> {
             }
             cursor_x += glyph.xadvance as f32 * scale;
         }
+
+        if let Some(key) = layout_key {
+            self.atlas.insert_layout(key, &self.quads[quads_before..]);
+        }
     }
 
     fn push_text(
@@ -2886,6 +3022,14 @@ impl<'a> CachedTextFrameBuilder<'a> {
                 );
             }
         }
+
+        let layout_key =
+            text_layout_key(TextGlyphKind::Vector, font_id, origin, text, &style, surface);
+        if let Some(cached) = layout_key.as_ref().and_then(|key| self.atlas.cached_layout(key)) {
+            self.quads.extend(cached);
+            return;
+        }
+        let quads_before = self.quads.len();
 
         let mut px_size = (style.size * surface.height as f32).max(1.0);
         let original_px_size = px_size;
@@ -2950,6 +3094,10 @@ impl<'a> CachedTextFrameBuilder<'a> {
         self.push_text_line(
             cursor_x, baseline_y, &text, text_width, scale, style, font_id, font, surface,
         );
+
+        if let Some(key) = layout_key {
+            self.atlas.insert_layout(key, &self.quads[quads_before..]);
+        }
     }
 
     fn push_text_line(
@@ -3017,6 +3165,7 @@ struct TextAtlasBuilder {
     quads: Vec<TextQuad>,
 }
 
+#[derive(Debug, Clone)]
 struct TextQuad {
     x: f32,
     y: f32,
@@ -4872,6 +5021,66 @@ mod tests {
     }
 
     #[test]
+    fn cached_text_frame_reuses_static_text_layouts() {
+        let Some(font) = load_default_font() else { return };
+        let surface = SurfaceSize { width: 320, height: 240 };
+        let style = TextStyle {
+            font_id: None,
+            size: 0.1,
+            bitmap_size: None,
+            color: Color::rgb(1.0, 1.0, 1.0),
+            layer: crate::plan::TextLayer::Skin,
+            align: TextAlign::Left,
+            max_width: 0.0,
+            overflow: TextOverflow::Overflow,
+            wrapping: false,
+            outline: None,
+            shadow: None,
+        };
+        let plan = DrawPlan {
+            clear: Color::rgb(0.0, 0.0, 0.0),
+            commands: vec![
+                DrawCommand::Text {
+                    origin: Point { x: 0.1, y: 0.1 },
+                    text: "STATIC".to_string(),
+                    caret: None,
+                    style: style.clone(),
+                },
+                DrawCommand::Text {
+                    origin: Point { x: 0.1, y: 0.1 },
+                    text: "STATIC".to_string(),
+                    caret: None,
+                    style,
+                },
+            ],
+        };
+        let mut atlas = TextAtlasCache::new(TEXT_ATLAS_WIDTH);
+
+        let first = build_text_frame_with_cache(
+            &plan,
+            &font,
+            &HashMap::new(),
+            &HashMap::new(),
+            surface,
+            &mut atlas,
+        );
+        let layout_count = atlas.layouts.len();
+        let second = build_text_frame_with_cache(
+            &plan,
+            &font,
+            &HashMap::new(),
+            &HashMap::new(),
+            surface,
+            &mut atlas,
+        );
+
+        assert!(!first.instances.is_empty());
+        assert_eq!(layout_count, 1);
+        assert_eq!(second.instances, first.instances);
+        assert!(second.dirty_regions.is_empty());
+    }
+
+    #[test]
     fn cached_vector_glyph_uses_supersampled_atlas_pixels() {
         let Some(font) = load_default_font() else { return };
         let mut atlas = TextAtlasCache::new(TEXT_ATLAS_WIDTH);
@@ -4903,6 +5112,7 @@ mod tests {
         assert_eq!(atlas.pen_x, 0);
         assert!(atlas.atlas_height() < TEXT_ATLAS_MAX_HEIGHT);
         assert!(atlas.glyphs.is_empty());
+        assert_eq!(atlas.layouts.len(), 0);
     }
 
     #[test]
