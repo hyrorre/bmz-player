@@ -827,9 +827,12 @@ pub struct SkinDrawState {
     pub select_option_panel: u8,
     pub select_arrange_index: usize,
     pub select_arrange_2p_index: usize,
+    pub select_extended_arrange_index: usize,
+    pub select_extended_arrange_2p_index: usize,
     pub select_double_option_index: usize,
     pub select_hs_fix_index: usize,
     pub result_arrange_index: usize,
+    pub result_extended_arrange_index: usize,
     pub result_random_lane_refs: [u8; SKIN_RANDOM_LANE_REF_COUNT],
     pub select_gauge_index: usize,
     pub select_gauge_auto_shift_index: usize,
@@ -1136,9 +1139,12 @@ impl Default for SkinDrawState {
             select_option_panel: 0,
             select_arrange_index: 0,
             select_arrange_2p_index: 0,
+            select_extended_arrange_index: 0,
+            select_extended_arrange_2p_index: 0,
             select_double_option_index: 0,
             select_hs_fix_index: 0,
             result_arrange_index: 0,
+            result_extended_arrange_index: 0,
             result_random_lane_refs: [0; SKIN_RANDOM_LANE_REF_COUNT],
             select_gauge_index: 2,
             select_gauge_auto_shift_index: 0,
@@ -3361,6 +3367,8 @@ impl SkinDocumentRenderExt for SkinDocument {
             select_option_panel: snapshot.option_panel,
             select_arrange_index: select_arrange_index(&snapshot.arrange),
             select_arrange_2p_index: select_arrange_index(&snapshot.arrange_2p),
+            select_extended_arrange_index: extended_arrange_index(&snapshot.arrange),
+            select_extended_arrange_2p_index: extended_arrange_index(&snapshot.arrange_2p),
             select_double_option_index: select_double_option_index(&snapshot.double_option),
             select_hs_fix_index: select_hs_fix_index(&snapshot.hs_fix),
             select_gauge_index: select_gauge_index(&snapshot.gauge),
@@ -6137,6 +6145,8 @@ fn skin_image_index_number(ref_id: i32, state: &SkinDrawState) -> Option<i64> {
         332 => Some(i64::from(state.hidden_enabled)),
         340 => Some(state.select_judge_algorithm_index as i64),
         341 => Some(state.select_bottom_shiftable_gauge_index as i64),
+        344 => Some(extended_arrange_ref_index(state) as i64),
+        345 => Some(extended_arrange_2p_ref_index(state) as i64),
         321..=324 => {
             let slot = (ref_id - 321) as usize;
             Some(state.select_replay_slot_rule_indices[slot])
@@ -7278,6 +7288,8 @@ fn skin_state_event_index(event_id: i32, state: &SkinDrawState) -> i32 {
         308 => state.select_ln_mode_index as i32,
         340 => state.select_judge_algorithm_index as i32,
         341 => state.select_bottom_shiftable_gauge_index as i32,
+        344 => extended_arrange_ref_index(state) as i32,
+        345 => extended_arrange_2p_ref_index(state) as i32,
         SKIN_EVENT_HSFIX => state.hsfix_index,
         _ => skin_state_lane_judge_event_index(event_id, state).unwrap_or(0),
     }
@@ -7725,6 +7737,12 @@ fn skin_state_number(ref_id: i32, state: &SkinDrawState) -> Option<i64> {
         42 | 43 if state.result_failed.is_some() => Some(state.result_arrange_index as i64),
         42 if state.select_screen => Some(state.select_arrange_index as i64),
         43 if state.select_screen => Some(state.select_arrange_2p_index as i64),
+        344 if state.select_screen || state.result_failed.is_some() => {
+            Some(extended_arrange_ref_index(state) as i64)
+        }
+        345 if state.select_screen || state.result_failed.is_some() => {
+            Some(extended_arrange_2p_ref_index(state) as i64)
+        }
         54 if state.select_screen => Some(state.select_double_option_index as i64),
         55 if state.select_screen => Some(state.select_hs_fix_index as i64),
         11 if state.select_screen => Some(state.select_mode_index as i64),
@@ -8444,6 +8462,22 @@ fn arrange_2p_ref_index(state: &SkinDrawState) -> usize {
         state.result_arrange_index
     } else {
         state.select_arrange_2p_index
+    }
+}
+
+fn extended_arrange_ref_index(state: &SkinDrawState) -> usize {
+    if state.result_failed.is_some() {
+        state.result_extended_arrange_index
+    } else {
+        state.select_extended_arrange_index
+    }
+}
+
+fn extended_arrange_2p_ref_index(state: &SkinDrawState) -> usize {
+    if state.result_failed.is_some() {
+        state.result_extended_arrange_index
+    } else {
+        state.select_extended_arrange_2p_index
     }
 }
 
@@ -10570,7 +10604,7 @@ fn rank_index(ex_score: Option<u32>, total_notes: u32) -> Option<usize> {
 pub(crate) fn select_arrange_index(arrange: &str) -> usize {
     match arrange {
         "MIRROR" => 1,
-        "RANDOM" => 2,
+        "RANDOM" | "F-RANDOM" | "MF-RANDOM" => 2,
         "R-RANDOM" => 3,
         "S-RANDOM" => 4,
         "SPIRAL" => 5,
@@ -10579,6 +10613,14 @@ pub(crate) fn select_arrange_index(arrange: &str) -> usize {
         "RANDOM-EX" => 8,
         "S-RANDOM-EX" => 9,
         _ => 0,
+    }
+}
+
+pub(crate) fn extended_arrange_index(arrange: &str) -> usize {
+    match arrange {
+        "F-RANDOM" => 10,
+        "MF-RANDOM" => 11,
+        _ => select_arrange_index(arrange),
     }
 }
 
@@ -19783,6 +19825,10 @@ mod tests {
         assert_eq!(select_arrange_index("ALL-SCR"), 7);
         assert_eq!(select_arrange_index("RANDOM-EX"), 8);
         assert_eq!(select_arrange_index("S-RANDOM-EX"), 9);
+        assert_eq!(select_arrange_index("F-RANDOM"), 2);
+        assert_eq!(select_arrange_index("MF-RANDOM"), 2);
+        assert_eq!(extended_arrange_index("F-RANDOM"), 10);
+        assert_eq!(extended_arrange_index("MF-RANDOM"), 11);
         assert_eq!(select_arrange_index("unknown"), 0);
     }
 
@@ -19801,6 +19847,8 @@ mod tests {
             select_screen: true,
             select_arrange_index: 9,
             select_arrange_2p_index: 6,
+            select_extended_arrange_index: 11,
+            select_extended_arrange_2p_index: 10,
             select_gauge_index: 4,
             select_target_index: 10,
             select_double_option_index: 2,
@@ -19819,6 +19867,8 @@ mod tests {
         assert_eq!(skin_image_ref_number(41, &state), Some(10));
         assert_eq!(skin_image_ref_number(42, &state), Some(9));
         assert_eq!(skin_image_ref_number(43, &state), Some(6));
+        assert_eq!(skin_image_ref_number(344, &state), Some(11));
+        assert_eq!(skin_image_ref_number(345, &state), Some(10));
         assert_eq!(skin_image_ref_number(54, &state), Some(2));
         assert_eq!(skin_image_ref_number(55, &state), Some(3));
         assert_eq!(skin_image_ref_number(72, &state), Some(2));
@@ -19829,6 +19879,8 @@ mod tests {
         assert_eq!(skin_image_ref_number(341, &state), Some(2));
         assert_eq!(skin_state_number(42, &state), Some(9));
         assert_eq!(skin_state_number(43, &state), Some(6));
+        assert_eq!(skin_state_number(344, &state), Some(11));
+        assert_eq!(skin_state_number(345, &state), Some(10));
         assert_eq!(skin_state_number(54, &state), Some(2));
         assert_eq!(skin_state_number(55, &state), Some(3));
         assert_eq!(skin_state_number(340, &state), Some(3));
@@ -19836,6 +19888,8 @@ mod tests {
         assert_eq!(skin_state_event_index(41, &state), 10);
         assert_eq!(skin_state_event_index(42, &state), 9);
         assert_eq!(skin_state_event_index(43, &state), 6);
+        assert_eq!(skin_state_event_index(344, &state), 11);
+        assert_eq!(skin_state_event_index(345, &state), 10);
         assert_eq!(skin_state_event_index(54, &state), 2);
         assert_eq!(skin_state_event_index(55, &state), 3);
         assert_eq!(skin_state_event_index(72, &state), 2);

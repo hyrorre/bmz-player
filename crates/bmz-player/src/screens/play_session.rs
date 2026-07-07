@@ -1081,6 +1081,18 @@ pub fn apply_arrange(
                 pattern: Some(perm.iter().map(|&i| i as u8).collect()),
             }
         }
+        ArrangeOption::FRandom | ArrangeOption::MFRandom => {
+            let used_seed = seed.unwrap_or_else(generate_arrange_seed);
+            let perm = f_random_lane_permutation(used_seed, key_mode, arrange);
+            apply_lane_permutation(chart, &perm);
+            AppliedArrange {
+                arrange,
+                arrange_2p: ArrangeOption::Normal,
+                double_option: DoubleOption::Off,
+                seed: Some(used_seed),
+                pattern: Some(perm.iter().map(|&i| i as u8).collect()),
+            }
+        }
         ArrangeOption::SRandom
         | ArrangeOption::Spiral
         | ArrangeOption::HRandom
@@ -1339,6 +1351,16 @@ fn apply_arrange_side(
             apply_lane_permutation(chart, &perm);
             Some(perm)
         }
+        ArrangeOption::FRandom | ArrangeOption::MFRandom => {
+            let perm = f_random_lane_permutation_for_side(
+                seed.unwrap_or_else(generate_arrange_seed),
+                chart.metadata.key_mode,
+                arrange,
+                side,
+            );
+            apply_lane_permutation(chart, &perm);
+            Some(perm)
+        }
         ArrangeOption::SRandom
         | ArrangeOption::Spiral
         | ArrangeOption::HRandom
@@ -1380,6 +1402,51 @@ fn random_lane_permutation(seed: i64, key_mode: KeyMode, include_scratch: bool) 
     perm
 }
 
+fn f_random_lane_permutation(seed: i64, key_mode: KeyMode, arrange: ArrangeOption) -> Vec<usize> {
+    let f_random = shuffle_lane_groups(seed, f_random_lane_groups(key_mode));
+    if arrange == ArrangeOption::MFRandom {
+        compose_lane_permutations(&f_random, &mirror_permutation(key_mode))
+    } else {
+        f_random
+    }
+}
+
+fn f_random_lane_permutation_for_side(
+    seed: i64,
+    key_mode: KeyMode,
+    arrange: ArrangeOption,
+    side: ArrangeSide,
+) -> Vec<usize> {
+    let f_random = shuffle_lane_groups(seed, f_random_lane_groups_for_side(key_mode, side));
+    if arrange == ArrangeOption::MFRandom {
+        let mirror = mirror_lane_permutation_for_side(key_mode, side);
+        compose_lane_permutations(&f_random, &mirror)
+    } else {
+        f_random
+    }
+}
+
+fn shuffle_lane_groups(seed: i64, groups: Vec<Vec<usize>>) -> Vec<usize> {
+    let mut perm: Vec<usize> = (0..LANE_COUNT).collect();
+    let mut rng = SplitMix64::new(seed);
+    for group in groups {
+        fisher_yates_shuffle(&mut rng, &group, &mut perm);
+    }
+    perm
+}
+
+fn mirror_lane_permutation_for_side(key_mode: KeyMode, side: ArrangeSide) -> Vec<usize> {
+    let mut perm: Vec<usize> = (0..LANE_COUNT).collect();
+    for group in arrange_lane_groups_for_side(key_mode, false, side) {
+        reverse_lane_group(&mut perm, &group);
+    }
+    perm
+}
+
+fn compose_lane_permutations(first: &[usize], second: &[usize]) -> Vec<usize> {
+    second.iter().map(|&source| first[source]).collect()
+}
+
 fn rotate_lane_permutation(seed: i64, key_mode: KeyMode, include_scratch: bool) -> Vec<usize> {
     let mut perm: Vec<usize> = (0..LANE_COUNT).collect();
     let mut rng = SplitMix64::new(seed);
@@ -1419,6 +1486,37 @@ fn arrange_lane_groups_for_side(
         (_, ArrangeSide::P1) => groups,
         (_, ArrangeSide::P2) => Vec::new(),
     }
+}
+
+fn f_random_lane_groups(key_mode: KeyMode) -> Vec<Vec<usize>> {
+    arrange_lane_groups(key_mode, false).into_iter().flat_map(split_f_random_group).collect()
+}
+
+fn f_random_lane_groups_for_side(key_mode: KeyMode, side: ArrangeSide) -> Vec<Vec<usize>> {
+    arrange_lane_groups_for_side(key_mode, false, side)
+        .into_iter()
+        .flat_map(split_f_random_group)
+        .collect()
+}
+
+fn split_f_random_group(group: Vec<usize>) -> Vec<Vec<usize>> {
+    let len = group.len();
+    if len < 2 {
+        return Vec::new();
+    }
+
+    let mid = len / 2;
+    let mut groups = Vec::with_capacity(2);
+    let left = group[..mid].to_vec();
+    if left.len() >= 2 {
+        groups.push(left);
+    }
+    let right_start = if len.is_multiple_of(2) { mid } else { mid + 1 };
+    let right = group[right_start..].to_vec();
+    if right.len() >= 2 {
+        groups.push(right);
+    }
+    groups
 }
 
 fn arrange_lane_groups(key_mode: KeyMode, include_scratch: bool) -> Vec<Vec<usize>> {
@@ -2121,6 +2219,93 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn f_random_groups_keep_odd_center_lane_fixed() {
+        assert_eq!(
+            f_random_lane_groups(KeyMode::K7),
+            vec![
+                vec![Lane::Key1.index(), Lane::Key2.index(), Lane::Key3.index()],
+                vec![Lane::Key5.index(), Lane::Key6.index(), Lane::Key7.index()],
+            ]
+        );
+        assert_eq!(
+            f_random_lane_groups(KeyMode::K5),
+            vec![
+                vec![Lane::Key1.index(), Lane::Key2.index()],
+                vec![Lane::Key4.index(), Lane::Key5.index()],
+            ]
+        );
+        assert_eq!(
+            f_random_lane_groups(KeyMode::K9),
+            vec![
+                vec![
+                    Lane::Key1.index(),
+                    Lane::Key2.index(),
+                    Lane::Key3.index(),
+                    Lane::Key4.index(),
+                ],
+                vec![
+                    Lane::Key6.index(),
+                    Lane::Key7.index(),
+                    Lane::Key8.index(),
+                    Lane::Key9.index(),
+                ],
+            ]
+        );
+    }
+
+    #[test]
+    fn f_random_groups_split_even_key_modes_into_halves() {
+        assert_eq!(
+            f_random_lane_groups(KeyMode::K4),
+            vec![
+                vec![Lane::Key1.index(), Lane::Key2.index()],
+                vec![Lane::Key3.index(), Lane::Key4.index()],
+            ]
+        );
+        assert_eq!(
+            f_random_lane_groups(KeyMode::K8),
+            vec![
+                vec![
+                    Lane::Key1.index(),
+                    Lane::Key2.index(),
+                    Lane::Key3.index(),
+                    Lane::Key4.index(),
+                ],
+                vec![
+                    Lane::Key5.index(),
+                    Lane::Key6.index(),
+                    Lane::Key7.index(),
+                    Lane::Key8.index(),
+                ],
+            ]
+        );
+    }
+
+    #[test]
+    fn f_random_keeps_7k_center_lane_in_place() {
+        let mut chart = chart();
+        chart.metadata.key_mode = KeyMode::K7;
+        chart.lane_notes[Lane::Key4.index()].push(note(1, Lane::Key4, 1_000_000));
+
+        let applied = apply_arrange(&mut chart, ArrangeOption::FRandom, Some(42), None);
+
+        assert_eq!(applied.arrange, ArrangeOption::FRandom);
+        assert_eq!(applied.seed, Some(42));
+        assert_eq!(chart.lane_notes[Lane::Key4.index()][0].lane, Lane::Key4);
+        assert_eq!(chart.lane_notes[Lane::Key4.index()][0].id, NoteId(1));
+    }
+
+    #[test]
+    fn mf_random_applies_mirror_after_f_random() {
+        let f_random = f_random_lane_permutation(42, KeyMode::K7, ArrangeOption::FRandom);
+        let mf_random = f_random_lane_permutation(42, KeyMode::K7, ArrangeOption::MFRandom);
+        let mirror = mirror_permutation(KeyMode::K7);
+
+        assert_eq!(mf_random, compose_lane_permutations(&f_random, &mirror));
+        assert_eq!(mf_random[Lane::Key4.index()], Lane::Key4.index());
     }
 
     #[test]

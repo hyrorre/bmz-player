@@ -57,6 +57,24 @@ BMZ default JSON では、digit atlas を同梱せずに既存フォントで数
 `judgeTimingRegion` は同じ判定領域の FAST / SLOW だけを文字列化し、`judgeTimingColor` で
 FAST を青、SLOW を赤に切り替える。
 
+### BMZ Arrange Refs
+
+beatoraja 互換の `ref` / `event_index` / `number` `42` (1P RANDOM) と `43` (2P RANDOM)
+は既存スキン互換のため 0..9 の値を返す。BMZ 独自 ARRANGE の `F-RANDOM` と
+`MF-RANDOM` は、非対応 beatoraja skin で option panel が崩れないよう、`42` / `43`
+では `RANDOM` と同じ `2` として扱う。
+
+BMZ 対応 skin で新 ARRANGE を区別したい場合は、BMZ 拡張 ref を使う。
+
+| ref | meaning |
+| ---: | --- |
+| 344 | 1P ARRANGE extended index |
+| 345 | 2P ARRANGE extended index |
+
+extended index は beatoraja 互換値 `0=NORMAL`, `1=MIRROR`, `2=RANDOM`, `3=R-RANDOM`,
+`4=S-RANDOM`, `5=SPIRAL`, `6=H-RANDOM`, `7=ALL-SCR`, `8=RANDOM-EX`,
+`9=S-RANDOM-EX` に加えて、`10=F-RANDOM`, `11=MF-RANDOM` を返す。
+
 ## Profile Slots
 
 profile の `[skin]` は key mode ごとに play skin path と設定を持つ。

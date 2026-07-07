@@ -14,10 +14,12 @@ pub enum ArrangeOption {
     AllScratch,
     RandomEx,
     SRandomEx,
+    FRandom,
+    MFRandom,
 }
 
 impl ArrangeOption {
-    pub const VALUES: [Self; 10] = [
+    pub const VALUES: [Self; 12] = [
         Self::Normal,
         Self::Mirror,
         Self::Random,
@@ -28,6 +30,8 @@ impl ArrangeOption {
         Self::AllScratch,
         Self::RandomEx,
         Self::SRandomEx,
+        Self::FRandom,
+        Self::MFRandom,
     ];
 
     pub fn cycle(self) -> Self {
@@ -52,6 +56,8 @@ impl ArrangeOption {
             Self::AllScratch => "ALL-SCR",
             Self::RandomEx => "RANDOM-EX",
             Self::SRandomEx => "S-RANDOM-EX",
+            Self::FRandom => "F-RANDOM",
+            Self::MFRandom => "MF-RANDOM",
         }
     }
 
@@ -67,6 +73,8 @@ impl ArrangeOption {
             Self::AllScratch => "AllScratch",
             Self::RandomEx => "RandomEx",
             Self::SRandomEx => "SRandomEx",
+            Self::FRandom => "FRandom",
+            Self::MFRandom => "MFRandom",
         }
     }
 
@@ -81,6 +89,8 @@ impl ArrangeOption {
             "AllScratch" => Self::AllScratch,
             "RandomEx" => Self::RandomEx,
             "SRandomEx" => Self::SRandomEx,
+            "FRandom" => Self::FRandom,
+            "MFRandom" => Self::MFRandom,
             _ => Self::Normal,
         }
     }

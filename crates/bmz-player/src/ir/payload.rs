@@ -237,6 +237,8 @@ fn arrange_option_ir(arrange: ArrangeOption) -> &'static str {
         ArrangeOption::AllScratch => "all-scr",
         ArrangeOption::RandomEx => "random-ex",
         ArrangeOption::SRandomEx => "s-random-ex",
+        ArrangeOption::FRandom => "f-random",
+        ArrangeOption::MFRandom => "mf-random",
     }
 }
 

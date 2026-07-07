@@ -3705,10 +3705,12 @@ fn random_label(value: RandomOptionConfig) -> &'static str {
         RandomOptionConfig::AllScratch => "ALL-SCR",
         RandomOptionConfig::RandomEx => "RANDOM-EX",
         RandomOptionConfig::SRandomEx => "S-RANDOM-EX",
+        RandomOptionConfig::FRandom => "F-RANDOM",
+        RandomOptionConfig::MFRandom => "MF-RANDOM",
     }
 }
 
-fn random_options() -> [(RandomOptionConfig, &'static str); 10] {
+fn random_options() -> [(RandomOptionConfig, &'static str); 12] {
     [
         (RandomOptionConfig::Off, "OFF"),
         (RandomOptionConfig::Mirror, "MIRROR"),
@@ -3720,6 +3722,8 @@ fn random_options() -> [(RandomOptionConfig, &'static str); 10] {
         (RandomOptionConfig::AllScratch, "ALL-SCR"),
         (RandomOptionConfig::RandomEx, "RANDOM-EX"),
         (RandomOptionConfig::SRandomEx, "S-RANDOM-EX"),
+        (RandomOptionConfig::FRandom, "F-RANDOM"),
+        (RandomOptionConfig::MFRandom, "MF-RANDOM"),
     ]
 }
 

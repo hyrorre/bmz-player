@@ -555,6 +555,8 @@ fn format_random(value: RandomOptionConfig) -> String {
         RandomOptionConfig::AllScratch => "ALL-SCR".to_string(),
         RandomOptionConfig::RandomEx => "RANDOM-EX".to_string(),
         RandomOptionConfig::SRandomEx => "S-RANDOM-EX".to_string(),
+        RandomOptionConfig::FRandom => "F-RANDOM".to_string(),
+        RandomOptionConfig::MFRandom => "MF-RANDOM".to_string(),
     }
 }
 
@@ -728,7 +730,7 @@ fn cycle_bottom_shiftable_gauge(
 }
 
 fn cycle_random(current: RandomOptionConfig, forward: bool) -> RandomOptionConfig {
-    const VALUES: [RandomOptionConfig; 10] = [
+    const VALUES: [RandomOptionConfig; 12] = [
         RandomOptionConfig::Off,
         RandomOptionConfig::Mirror,
         RandomOptionConfig::Random,
@@ -739,6 +741,8 @@ fn cycle_random(current: RandomOptionConfig, forward: bool) -> RandomOptionConfi
         RandomOptionConfig::AllScratch,
         RandomOptionConfig::RandomEx,
         RandomOptionConfig::SRandomEx,
+        RandomOptionConfig::FRandom,
+        RandomOptionConfig::MFRandom,
     ];
     cycle_in_slice(&VALUES, current, forward)
 }

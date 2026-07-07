@@ -14370,6 +14370,8 @@ fn arrange_option_from_profile(random: RandomOptionConfig) -> ArrangeOption {
         RandomOptionConfig::AllScratch => ArrangeOption::AllScratch,
         RandomOptionConfig::RandomEx => ArrangeOption::RandomEx,
         RandomOptionConfig::SRandomEx => ArrangeOption::SRandomEx,
+        RandomOptionConfig::FRandom => ArrangeOption::FRandom,
+        RandomOptionConfig::MFRandom => ArrangeOption::MFRandom,
         RandomOptionConfig::Off => ArrangeOption::Normal,
     }
 }
@@ -14386,6 +14388,8 @@ fn random_config_from_arrange(arrange: ArrangeOption) -> RandomOptionConfig {
         ArrangeOption::AllScratch => RandomOptionConfig::AllScratch,
         ArrangeOption::RandomEx => RandomOptionConfig::RandomEx,
         ArrangeOption::SRandomEx => RandomOptionConfig::SRandomEx,
+        ArrangeOption::FRandom => RandomOptionConfig::FRandom,
+        ArrangeOption::MFRandom => RandomOptionConfig::MFRandom,
     }
 }
 
@@ -20065,6 +20069,14 @@ mod tests {
             arrange_option_from_profile(RandomOptionConfig::SRandomEx),
             ArrangeOption::SRandomEx
         );
+        assert_eq!(
+            arrange_option_from_profile(RandomOptionConfig::FRandom),
+            ArrangeOption::FRandom
+        );
+        assert_eq!(
+            arrange_option_from_profile(RandomOptionConfig::MFRandom),
+            ArrangeOption::MFRandom
+        );
         assert!(matches!(
             random_config_from_arrange(ArrangeOption::Normal),
             RandomOptionConfig::Off
@@ -20104,6 +20116,14 @@ mod tests {
         assert!(matches!(
             random_config_from_arrange(ArrangeOption::SRandomEx),
             RandomOptionConfig::SRandomEx
+        ));
+        assert!(matches!(
+            random_config_from_arrange(ArrangeOption::FRandom),
+            RandomOptionConfig::FRandom
+        ));
+        assert!(matches!(
+            random_config_from_arrange(ArrangeOption::MFRandom),
+            RandomOptionConfig::MFRandom
         ));
     }
 
@@ -20541,7 +20561,7 @@ mod tests {
         );
         assert_eq!(
             cycle_arrange_option_with_direction(ArrangeOption::Normal, -1),
-            ArrangeOption::SRandomEx
+            ArrangeOption::MFRandom
         );
         assert_eq!(
             cycle_double_option_with_direction(DoubleOption::Off, -1),

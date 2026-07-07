@@ -1595,6 +1595,8 @@ fn build_result_skin_draw_state(
         elapsed_ms,
         select_arrange_index: crate::skin::select_arrange_index(&snapshot.arrange),
         result_arrange_index: crate::skin::select_arrange_index(&snapshot.arrange),
+        select_extended_arrange_index: crate::skin::extended_arrange_index(&snapshot.arrange),
+        result_extended_arrange_index: crate::skin::extended_arrange_index(&snapshot.arrange),
         result_random_lane_refs: crate::skin::result_random_lane_refs(
             &snapshot.lane_shuffle_pattern,
             snapshot.key_mode,

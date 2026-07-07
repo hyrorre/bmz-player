@@ -181,6 +181,8 @@ pub enum RandomOptionConfig {
     AllScratch,
     RandomEx,
     SRandomEx,
+    FRandom,
+    MFRandom,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
