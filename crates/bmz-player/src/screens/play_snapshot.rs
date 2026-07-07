@@ -360,6 +360,8 @@ pub fn build_render_snapshot_with_target_and_bga_frames_cached(
         gauge_max: session.gauge.current().definition.max,
         gauge_border: session.gauge.current().definition.border,
         hispeed: session.hispeed,
+        hispeed_mode_index: hispeed_mode_index(session.hispeed_mode),
+        target_green_number: session.target_green_number,
         lift: session.lift,
         lane_cover,
         lane_cover_changing: session.lane_cover_changing,
@@ -594,6 +596,8 @@ pub fn update_render_snapshot_play_options(
     render_now: TimeUs,
 ) {
     snapshot.hispeed = session.hispeed;
+    snapshot.hispeed_mode_index = hispeed_mode_index(session.hispeed_mode);
+    snapshot.target_green_number = session.target_green_number;
     snapshot.lift = session.lift;
     snapshot.lane_cover = if session.lane_cover_visible {
         crate::config::play::clamp_lane_cover_for_lift(session.lane_cover, session.lift)
@@ -610,6 +614,13 @@ pub fn update_render_snapshot_play_options(
         current_scroll_multiplier(&session.chart, &session.timing_map, render_now),
     );
     snapshot.hidden_cover = session.hidden_cover;
+}
+
+fn hispeed_mode_index(mode: bmz_gameplay::session::HispeedMode) -> i32 {
+    match mode {
+        bmz_gameplay::session::HispeedMode::Normal => 0,
+        bmz_gameplay::session::HispeedMode::Floating => 1,
+    }
 }
 
 fn current_poor_bga_frame(

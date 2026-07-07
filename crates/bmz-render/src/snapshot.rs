@@ -88,6 +88,10 @@ pub struct RenderSnapshot {
     /// 現在ゲージの合格ライン (beatoraja `GaugeElementProperty.border`)。
     pub gauge_border: f32,
     pub hispeed: f32,
+    /// BMZ extension: current hispeed mode for play skin refs. 0=NHS, 1=FHS.
+    pub hispeed_mode_index: i32,
+    /// BMZ extension: target green number used by FHS.
+    pub target_green_number: u32,
     pub lift: f32,
     pub lane_cover: f32,
     pub lane_cover_changing: bool,

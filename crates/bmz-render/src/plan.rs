@@ -931,6 +931,8 @@ fn plan_play(
         ),
         skin_offsets: snapshot.skin_offsets,
         hispeed: snapshot.hispeed,
+        hispeed_mode_index: snapshot.hispeed_mode_index,
+        target_green_number: snapshot.target_green_number,
         timeleft_ms: (snapshot.duration.0.saturating_sub(snapshot.time.0) / 1_000)
             .saturating_add(1_000)
             .clamp(0, i32::MAX as i64) as i32,
@@ -1376,6 +1378,8 @@ fn plan_decide(
             bga_enabled: snapshot.bga_enabled,
             skin_offsets: snapshot.skin_offsets,
             hispeed: snapshot.hispeed,
+            hispeed_mode_index: snapshot.hispeed_mode_index,
+            target_green_number: snapshot.target_green_number,
             total_duration_ms: snapshot.note_display_duration_ms,
             duration_green_ms: Some(crate::skin::duration_to_green_number_ms(
                 snapshot.note_display_duration_ms,

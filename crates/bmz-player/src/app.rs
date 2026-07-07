@@ -12006,6 +12006,8 @@ fn play_skin_video_draw_state(
         music_end_ms: snapshot.music_end_elapsed_ms,
         skin_offsets: snapshot.skin_offsets,
         hispeed: snapshot.hispeed,
+        hispeed_mode_index: snapshot.hispeed_mode_index,
+        target_green_number: snapshot.target_green_number,
         timeleft_ms: play_skin_video_timeleft_ms(snapshot),
         total_duration_ms: snapshot.note_display_duration_ms,
         duration_green_ms: Some(bmz_render::skin::duration_to_green_number_ms(

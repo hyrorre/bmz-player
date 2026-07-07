@@ -75,6 +75,19 @@ extended index は beatoraja 互換値 `0=NORMAL`, `1=MIRROR`, `2=RANDOM`, `3=R-
 `4=S-RANDOM`, `5=SPIRAL`, `6=H-RANDOM`, `7=ALL-SCR`, `8=RANDOM-EX`,
 `9=S-RANDOM-EX` に加えて、`10=F-RANDOM`, `11=MF-RANDOM` を返す。
 
+### BMZ Hispeed Mode Refs
+
+`1900` 台は BMZ play runtime extension として扱う。beatoraja 互換 ref と衝突させないため、
+BMZ 独自のプレイ中状態はこの範囲へ追加する。
+
+| ref | kind | meaning |
+| ---: | --- | --- |
+| 1900 | number / event_index / text | HS mode。number / event_index は `0=NHS`, `1=FHS`、text は `NHS` / `FHS` |
+| 1901 | number / option | FHS active flag。`0=NHS`, `1=FHS` |
+| 1902 | number | target green number。FHS 時は固定 target green、NHS 時は現在 green number |
+
+`op: [1901]` または `draw: "number(1901)==1"` で FHS 時だけ destination を表示できる。
+
 ## Profile Slots
 
 profile の `[skin]` は key mode ごとに play skin path と設定を持つ。

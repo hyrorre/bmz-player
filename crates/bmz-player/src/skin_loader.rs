@@ -3521,6 +3521,12 @@ mod tests {
             &state,
             &bmz_render::skin::SkinTextState::default(),
         );
+        assert!(
+            !items.iter().any(
+                |item| matches!(item, bmz_render::skin::SkinRenderItem::Text { text, .. } if text == "FHS")
+            ),
+            "FHS mark should stay hidden while NHS is active"
+        );
         let digit_width = 20.0;
         let source_candidates = items
             .iter()
@@ -3558,6 +3564,19 @@ mod tests {
         let digits = digits.into_iter().map(|(_, digit)| digit).collect::<Vec<_>>();
 
         assert_eq!(digits, vec![3, 0, 0], "source candidates: {source_candidates:?}");
+
+        let fhs_state = bmz_render::skin::SkinDrawState { hispeed_mode_index: 1, ..state.clone() };
+        let fhs_items = decoded.document.static_render_items(
+            &sources,
+            &fhs_state,
+            &bmz_render::skin::SkinTextState::default(),
+        );
+        assert!(
+            fhs_items.iter().any(
+                |item| matches!(item, bmz_render::skin::SkinRenderItem::Text { text, .. } if text == "FHS")
+            ),
+            "FHS mark should render while FHS is active"
+        );
     }
 
     #[test]

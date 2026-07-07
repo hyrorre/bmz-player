@@ -907,6 +907,10 @@ pub struct SkinDrawState {
     pub skin_offsets: SkinOffsetValues,
     /// 現在のハイスピード倍率 (NUMBER_HISPEED=310, NUMBER_HISPEED_AFTERDOT=311 に使用)。
     pub hispeed: f32,
+    /// BMZ extension: current hispeed mode. 0=NHS, 1=FHS.
+    pub hispeed_mode_index: i32,
+    /// BMZ extension: target green number used by FHS.
+    pub target_green_number: u32,
     /// 曲残り時間 ms (NUMBER_TIMELEFT_MINUTE=163, NUMBER_TIMELEFT_SECOND=164 に使用)。
     pub timeleft_ms: i32,
     /// ノーツ表示時間 ms (NUMBER_DURATION=312 に使用)。
@@ -1195,6 +1199,8 @@ impl Default for SkinDrawState {
             offset_hidden_cover_px: 0,
             skin_offsets: SkinOffsetValues::default(),
             hispeed: 0.0,
+            hispeed_mode_index: 0,
+            target_green_number: 0,
             timeleft_ms: 0,
             total_duration_ms: 0,
             duration_green_ms: None,
@@ -6515,6 +6521,7 @@ fn test_skin_op(op: i32, enabled_options: &[i32], state: &SkinDrawState) -> bool
     match op {
         40 => !state.bga_enabled,
         41 => state.bga_enabled,
+        1901 => skin_hispeed_mode_is_floating(state),
         1 => matches!(
             state.select_row_kind,
             SelectRowKind::Folder
@@ -7290,6 +7297,7 @@ fn skin_state_event_index(event_id: i32, state: &SkinDrawState) -> i32 {
         341 => state.select_bottom_shiftable_gauge_index as i32,
         344 => extended_arrange_ref_index(state) as i32,
         345 => extended_arrange_2p_ref_index(state) as i32,
+        1900 => skin_hispeed_mode_index(state),
         SKIN_EVENT_HSFIX => state.hsfix_index,
         _ => skin_state_lane_judge_event_index(event_id, state).unwrap_or(0),
     }
@@ -7822,6 +7830,9 @@ fn skin_state_number(ref_id: i32, state: &SkinDrawState) -> Option<i64> {
         1164 => Some((result_or_select_length_ms(state) / 1_000) % 60),
         310 => Some(state.hispeed.floor() as i64),
         311 => Some(((state.hispeed * 100.0) as i64) % 100),
+        1900 => Some(skin_hispeed_mode_index(state) as i64),
+        1901 => Some(i64::from(skin_hispeed_mode_is_floating(state))),
+        1902 => Some(skin_target_green_number(state)),
         312 => {
             if state.select_screen && !duration_refs_available(state) {
                 return None;
@@ -7959,6 +7970,22 @@ fn skin_state_number(ref_id: i32, state: &SkinDrawState) -> Option<i64> {
             skin_random_lane_ref_number(ref_id, state)
         }
         _ => None,
+    }
+}
+
+fn skin_hispeed_mode_index(state: &SkinDrawState) -> i32 {
+    state.hispeed_mode_index.clamp(0, 1)
+}
+
+fn skin_hispeed_mode_is_floating(state: &SkinDrawState) -> bool {
+    skin_hispeed_mode_index(state) == 1
+}
+
+fn skin_target_green_number(state: &SkinDrawState) -> i64 {
+    if skin_hispeed_mode_is_floating(state) && state.target_green_number > 0 {
+        i64::from(state.target_green_number)
+    } else {
+        state_duration_green_number_ms(state)
     }
 }
 
@@ -9816,6 +9843,11 @@ fn skin_state_text_with_draw_state(
             .map(|entry| entry.player_name.as_str().to_string())
             .unwrap_or_default(),
         150..=159 => state.course_titles[(text.ref_id - 150) as usize].to_string(),
+        1900 => draw_state
+            .map(|state| {
+                if skin_hispeed_mode_is_floating(state) { "FHS" } else { "NHS" }.to_string()
+            })
+            .unwrap_or_default(),
         // beatoraja StringPropertyFactory: 1001=tablename, 1002=tablelevel,
         // 1003=tablefull.  Rm-skin's combined table label is handled above by
         // id/value_expr, so direct numeric refs follow the beatoraja mapping.
@@ -21456,6 +21488,47 @@ mod tests {
         // Starseeker 系の Result BMS DATA は選曲詳細の曲長 ref を流用する。
         assert_eq!(skin_state_number(1163, &result_state), Some(3));
         assert_eq!(skin_state_number(1164, &result_state), Some(3));
+    }
+
+    #[test]
+    fn skin_state_number_maps_bmz_hispeed_mode_refs() {
+        let normal = SkinDrawState {
+            hispeed_mode_index: 0,
+            total_duration_ms: 500,
+            duration_green_ms: Some(300),
+            ..SkinDrawState::default()
+        };
+        let floating = SkinDrawState {
+            hispeed_mode_index: 1,
+            target_green_number: 280,
+            total_duration_ms: 500,
+            duration_green_ms: Some(300),
+            ..SkinDrawState::default()
+        };
+        let clamped = SkinDrawState { hispeed_mode_index: 9, ..floating.clone() };
+        let mode_text = SkinTextDef { ref_id: 1900, ..SkinTextDef::default() };
+
+        assert_eq!(skin_state_number(1900, &normal), Some(0));
+        assert_eq!(skin_state_number(1901, &normal), Some(0));
+        assert_eq!(skin_state_number(1902, &normal), Some(300));
+        assert_eq!(skin_state_event_index(1900, &normal), 0);
+        assert!(!test_skin_op(1901, &[], &normal));
+        assert_eq!(
+            skin_state_text_with_draw_state(&mode_text, Some(&normal), &SkinTextState::default()),
+            "NHS"
+        );
+
+        assert_eq!(skin_state_number(1900, &floating), Some(1));
+        assert_eq!(skin_state_number(1901, &floating), Some(1));
+        assert_eq!(skin_state_number(1902, &floating), Some(280));
+        assert_eq!(skin_state_event_index(1900, &floating), 1);
+        assert!(test_skin_op(1901, &[], &floating));
+        assert_eq!(
+            skin_state_text_with_draw_state(&mode_text, Some(&floating), &SkinTextState::default()),
+            "FHS"
+        );
+
+        assert_eq!(skin_state_number(1900, &clamped), Some(1));
     }
 
     #[test]
