@@ -6819,9 +6819,11 @@ impl WinitApp {
         app_config
     }
 
-    /// ウィンドウと renderer surface の準備後に、初めて共有 cpal ストリームを開く。
+    /// ウィンドウと renderer surface の準備後、初回シーン描画に合わせて共有
+    /// cpal ストリームを開く。
     /// 起動ロード中に音声デバイスを start して、デバイス側の初期化音が先に鳴るのを避ける。
-    /// 初回描画後は stream も開始し、PulseAudio backend で corked stream の内部
+    /// scene transition sound の発火前に system audio を用意し、PulseAudio backend で
+    /// corked stream の内部
     /// worker だけが動き続ける状態を避ける。
     fn ensure_audio_output(&mut self) {
         if self.audio_runtime.is_some() || self.audio_output_open_attempted {
@@ -13093,13 +13095,15 @@ impl ApplicationHandler<AppUserEvent> for WinitApp {
                 let egui_start = Instant::now();
                 self.run_egui_frame();
                 let egui_us = instant_elapsed_us_u64(egui_start);
+                if !self.first_frame_startup_completed {
+                    self.ensure_audio_output();
+                }
                 let scene_start = Instant::now();
                 self.render_current_scene();
                 let scene_us = instant_elapsed_us_u64(scene_start);
                 let post_scene_start = Instant::now();
                 if !self.first_frame_startup_completed {
                     self.first_frame_startup_completed = true;
-                    self.ensure_audio_output();
                     self.start_deferred_boot();
                     if self.current_scene_kind() == AppSceneKind::Result {
                         self.ensure_result_skin_ready(self.current_result_skin_slot());
