@@ -1,10 +1,20 @@
 <script setup lang="ts">
+import type { IrRuleMode, LnScorePolicy } from '../../../shared/types/ir'
+
 interface CourseDetail {
   course: {
     course_hash: string
     title: string
     kind: string
-    charts: string[]
+    charts: {
+      sha256: string
+      title: string
+      subtitle: string | null
+      artist: string | null
+      mode: string | null
+      level: number | null
+      difficulty: string | null
+    }[]
     chart_count: number
     constraints: Record<string, unknown>
   }
@@ -35,12 +45,24 @@ interface CourseRanking {
 const route = useRoute()
 const courseHash = computed(() => String(route.params.hash ?? ''))
 
-const gauge = ref('Class')
-const lnPolicy = ref('AutoLn')
-const ruleMode = ref('Beatoraja')
-const gauges = ['Class', 'ExClass', 'ExHardClass', 'Normal', 'Hard']
-const lnPolicies = ['AutoLn', 'AutoCn', 'AutoHcn', 'ForceLn', 'ForceCn', 'ForceHcn']
-const ruleModes = ['Beatoraja', 'Lr2Oraja', 'Dx']
+type CourseGaugeFilter = 'ALL' | 'Class' | 'ExClass' | 'ExHardClass' | 'Normal' | 'Hard'
+type CourseLnPolicyFilter = 'ALL' | LnScorePolicy
+type CourseRuleModeFilter = 'ALL' | IrRuleMode
+
+const gauge = ref<CourseGaugeFilter>('ALL')
+const lnPolicy = ref<CourseLnPolicyFilter>('ALL')
+const ruleMode = ref<CourseRuleModeFilter>('ALL')
+const gauges: CourseGaugeFilter[] = ['ALL', 'Class', 'ExClass', 'ExHardClass', 'Normal', 'Hard']
+const lnPolicies: CourseLnPolicyFilter[] = [
+  'ALL',
+  'AutoLn',
+  'AutoCn',
+  'AutoHcn',
+  'ForceLn',
+  'ForceCn',
+  'ForceHcn',
+]
+const ruleModes: CourseRuleModeFilter[] = ['ALL', 'Beatoraja', 'Lr2Oraja', 'Dx']
 
 const { data: detail, error: detailError } = await useFetch<CourseDetail>(
   () => `/api/v1/courses/${courseHash.value}`,
@@ -51,11 +73,26 @@ const {
   error: rankingError,
 } = await useFetch<CourseRanking>(() => `/api/v1/courses/${courseHash.value}/ranking`, {
   query: computed(() => ({
-    gauge: gauge.value,
-    ln_policy: lnPolicy.value,
-    rule_mode: ruleMode.value,
+    ...(gauge.value === 'ALL' ? {} : { gauge: gauge.value }),
+    ...(lnPolicy.value === 'ALL' ? {} : { ln_policy: lnPolicy.value }),
+    ...(ruleMode.value === 'ALL' ? {} : { rule_mode: ruleMode.value }),
   })),
 })
+
+function chartTitle(chart: CourseDetail['course']['charts'][number]): string {
+  return chart.title || chart.sha256.slice(0, 16)
+}
+
+function chartMeta(chart: CourseDetail['course']['charts'][number]): string {
+  return [
+    chart.artist,
+    chart.mode,
+    chart.level == null ? null : `☆${chart.level}`,
+    chart.difficulty,
+  ]
+    .filter(Boolean)
+    .join(' / ')
+}
 </script>
 
 <template>
@@ -84,10 +121,14 @@ const {
 
         <h2 class="mb-2 text-lg font-medium">構成譜面</h2>
         <ol class="mb-8 list-inside list-decimal space-y-1 text-sm">
-          <li v-for="sha in detail.course.charts" :key="sha">
-            <NuxtLink :to="`/charts/${sha}`" class="font-mono hover:underline">
-              {{ sha.slice(0, 16) }}…
+          <li v-for="chart in detail.course.charts" :key="chart.sha256">
+            <NuxtLink :to="`/charts/${chart.sha256}`" class="hover:underline">
+              {{ chartTitle(chart) }}
+              <span v-if="chart.subtitle" class="text-neutral-400">{{ chart.subtitle }}</span>
             </NuxtLink>
+            <span v-if="chartMeta(chart)" class="ml-2 text-neutral-500">
+              {{ chartMeta(chart) }}
+            </span>
           </li>
         </ol>
 

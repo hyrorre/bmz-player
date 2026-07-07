@@ -23,6 +23,7 @@ export function useAppNavigation() {
   const navigationItems: NavigationMenuItem[] = [
     { label: '譜面', icon: 'i-lucide-list-music', to: '/charts' },
     { label: 'コース', icon: 'i-lucide-medal', to: '/courses' },
+    { label: 'ユーザー', icon: 'i-lucide-users', to: '/players' },
   ]
 
   const accountItems = computed<NavigationMenuItem[]>(() =>
