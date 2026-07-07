@@ -3571,16 +3571,6 @@ impl WinitApp {
         self.boot.profile_config.play.auto_play = assist == AssistOption::Autoplay;
     }
 
-    fn apply_assist_option_control(&mut self, control: &str) -> bool {
-        if self.select_keys.cycle_assist.as_deref() == Some(control) {
-            self.set_assist_option(self.assist_option.cycle());
-            tracing::info!(assist = self.assist_option.as_str(), "assist option changed");
-            true
-        } else {
-            false
-        }
-    }
-
     fn apply_target_option_cycle(&mut self, cycle: TargetCycle) {
         self.target_option = match cycle {
             TargetCycle::Previous => self.target_option.cycle_prev(),
@@ -4156,13 +4146,6 @@ impl WinitApp {
                             self.play_system_sound(crate::system_sound::SoundType::OptionChange);
                         }
                     }
-                    2 => {
-                        if let Some(control) = physical_key_name(event.physical_key)
-                            && self.apply_assist_option_control(&control)
-                        {
-                            self.play_system_sound(crate::system_sound::SoundType::OptionChange);
-                        }
-                    }
                     3 => {
                         if let Some(control) = physical_key_name(event.physical_key)
                             && self.apply_detail_option_control(&control)
@@ -4658,7 +4641,6 @@ impl WinitApp {
             }
             let option_changed = match self.select_option_panel {
                 1 => self.apply_play_option_control(button),
-                2 => self.apply_assist_option_control(button),
                 3 => self.apply_detail_option_control(button),
                 _ => false,
             };
@@ -16346,7 +16328,6 @@ struct SelectKeyBindings {
     favorite_song_controls: Vec<String>,
     favorite_chart_controls: Vec<String>,
     same_folder_controls: Vec<String>,
-    cycle_assist: Option<String>,
     cycle_bga: Option<String>,
     key_hint: String,
     option_hint: String,
@@ -16492,10 +16473,6 @@ impl SelectKeyBindings {
                 &mut select_scratch_down_controls,
             );
         }
-        let cycle_assist = select_control_with_lane_fallback(
-            actions_for(InputActionConfig::SelectOptionAssist),
-            keys_for(LaneConfig::Key5),
-        );
         let cycle_bga = select_control_with_lane_fallback(
             actions_for(InputActionConfig::SelectOptionBga),
             keys_for(LaneConfig::Key1),
@@ -16542,21 +16519,16 @@ impl SelectKeyBindings {
         let key_hint =
             format!("UP DOWN  RIGHT{enter_str}:ENTER  LEFT{back_str}:BACK  ENTER {start_str}");
 
-        let kb_assist_str = select_control_with_lane_fallback(
-            kb_actions_for(InputActionConfig::SelectOptionAssist),
-            kb_keys_for(LaneConfig::Key5),
-        );
         let kb_bga_str = select_control_with_lane_fallback(
             kb_actions_for(InputActionConfig::SelectOptionBga),
             kb_keys_for(LaneConfig::Key1),
         );
-        let assist_str = kb_assist_str.as_deref().unwrap_or("?");
         let bga_str = kb_bga_str.as_deref().unwrap_or("?");
         let option_hint = format!(
             "F1 MENU  F5 RELOAD   \
-             {start_str}:PLAY OPT  BACK:ASSIST OPT  {start_str}+BACK:DETAIL OPT  \
+             {start_str}:PLAY OPT  BACK:E2 OPT  {start_str}+BACK:DETAIL OPT  \
              {start_str}+K1/K2:1P ARR  {start_str}+2P K1/K2:2P ARR  {start_str}+K3/K4:GAUGE  \
-             {start_str}+K5:HS-FIX  {start_str}+K6:DP OPT  {start_str}+K7:AUTOPLAY  {start_str}+{assist_str}:ASSIST  \
+             {start_str}+K5:HS-FIX  {start_str}+K6:DP OPT  {start_str}+K7:AUTOPLAY  \
              {start_str}+BACK+{key2_str}:GAS  {start_str}+UP/DOWN:TARGET  {start_str}+{bga_str}:BGA  {start_str}+1..4:REPLAY"
         );
 
@@ -16594,7 +16566,6 @@ impl SelectKeyBindings {
             favorite_song_controls,
             favorite_chart_controls,
             same_folder_controls,
-            cycle_assist,
             cycle_bga,
             key_hint,
             option_hint,
@@ -16676,10 +16647,6 @@ impl SelectKeyBindings {
             actions_for(InputActionConfig::SelectSameFolder),
             "Numpad8",
         );
-        let cycle_assist = select_control_with_lane_fallback(
-            actions_for(InputActionConfig::SelectOptionAssist),
-            key3_controls.clone(),
-        );
         let cycle_bga = select_control_with_lane_fallback(
             actions_for(InputActionConfig::SelectOptionBga),
             key1_controls.clone(),
@@ -16717,11 +16684,6 @@ impl SelectKeyBindings {
         let key_hint = format!(
             "UP {up_str}  DOWN {down_str}  RIGHT{enter_str}:ENTER  LEFT/{back_str}:BACK  ENTER {start_str}"
         );
-        let assist_str = select_control_with_lane_fallback(
-            kb_actions_for(InputActionConfig::SelectOptionAssist),
-            kb_keys_for(LaneConfig::Key3),
-        )
-        .unwrap_or_else(|| "?".to_string());
         let bga_str = select_control_with_lane_fallback(
             kb_actions_for(InputActionConfig::SelectOptionBga),
             kb_keys_for(LaneConfig::Key1),
@@ -16729,9 +16691,9 @@ impl SelectKeyBindings {
         .unwrap_or_else(|| "?".to_string());
         let option_hint = format!(
             "F1 MENU  F5 RELOAD   \
-             {start_str}:PLAY OPT  BACK:ASSIST OPT  {start_str}+BACK:DETAIL OPT  \
+             {start_str}:PLAY OPT  BACK:E2 OPT  {start_str}+BACK:DETAIL OPT  \
              {start_str}+K1/K2:1P ARR  {start_str}+K3:GAUGE  {start_str}+K5:HS-FIX  \
-             {start_str}+K8/K9:TARGET  {start_str}+{assist_str}:ASSIST  {start_str}+{bga_str}:BGA  {start_str}+1..4:REPLAY"
+             {start_str}+K8/K9:TARGET  {start_str}+{bga_str}:BGA  {start_str}+1..4:REPLAY"
         );
         let hispeed_down_controls = merge_select_controls(
             key1_controls.clone(),
@@ -16776,7 +16738,6 @@ impl SelectKeyBindings {
             favorite_song_controls,
             favorite_chart_controls,
             same_folder_controls,
-            cycle_assist,
             cycle_bga,
             key_hint,
             option_hint,
@@ -19181,12 +19142,12 @@ mod tests {
     }
 
     #[test]
-    fn select_key_bindings_map_e1_plus_key5_to_assist_option() {
+    fn select_key_bindings_map_e1_plus_key7_to_autoplay_option() {
         let keys = default_select_keys();
 
         assert!(keys.is_start("Q"));
-        assert_eq!(keys.cycle_assist.as_deref(), Some("C"));
-        assert!(keys.is_enter("C"));
+        assert!(keys.is_ui_key7("V"));
+        assert!(keys.is_enter("V"));
     }
 
     #[test]
