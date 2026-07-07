@@ -1579,8 +1579,6 @@ fn build_result_skin_draw_state(
     snapshot: &crate::scene::ResultSnapshot,
     result_ranktime_ms: i32,
 ) -> crate::skin::SkinDrawState {
-    use bmz_core::clear::ClearType;
-    let result_failed = matches!(snapshot.clear_type, ClearType::Failed | ClearType::NoPlay);
     let timing_stats = snapshot
         .graph
         .timing_distribution
@@ -1642,7 +1640,7 @@ fn build_result_skin_draw_state(
         target_bp: snapshot.target_bp,
         target_clear_index: snapshot.target_clear_type.map(|c| c as i64),
         select_clear_index: snapshot.clear_type as i64,
-        result_failed: Some(result_failed),
+        result_failed: Some(snapshot.result_failed),
         play_level: skin_level_number(&snapshot.play_level),
         table_song: !snapshot.table_text_primary.is_empty(),
         difficulty: skin_difficulty_code(&snapshot.difficulty_name),
@@ -3012,6 +3010,7 @@ mod tests {
                 SkinContext::from_manifest_and_document(manifest, document, [source_texture]);
             let snapshot = ResultSnapshot {
                 clear_type: ClearType::Normal,
+                result_failed: false,
                 arrange: "NORMAL".to_string(),
                 lane_shuffle_pattern: Vec::new(),
                 ex_score: 100,
@@ -3145,6 +3144,7 @@ mod tests {
         );
         let snapshot = ResultSnapshot {
             clear_type: ClearType::Normal,
+            result_failed: false,
             arrange: "NORMAL".to_string(),
             lane_shuffle_pattern: Vec::new(),
             ex_score: 100,
@@ -3270,6 +3270,26 @@ mod tests {
     }
 
     #[test]
+    fn result_skin_state_keeps_clear_failed_flag_separate_from_clear_type() {
+        let AppSceneSnapshot::Result(mut snapshot) = crate::sample::sample_result_scene() else {
+            panic!("sample result scene");
+        };
+        snapshot.clear_type = bmz_core::clear::ClearType::NoPlay;
+        snapshot.result_failed = false;
+
+        let state = build_result_skin_draw_state(&snapshot, 0);
+
+        assert_eq!(state.select_clear_index, bmz_core::clear::ClearType::NoPlay as i64);
+        assert_eq!(state.result_failed, Some(false));
+
+        snapshot.result_failed = true;
+        let failed_state = build_result_skin_draw_state(&snapshot, 0);
+
+        assert_eq!(failed_state.select_clear_index, bmz_core::clear::ClearType::NoPlay as i64);
+        assert_eq!(failed_state.result_failed, Some(true));
+    }
+
+    #[test]
     fn result_skin_state_falls_back_to_timing_points_for_average_timing() {
         let AppSceneSnapshot::Result(mut snapshot) = crate::sample::sample_result_scene() else {
             panic!("sample result scene");
@@ -3329,6 +3349,7 @@ mod tests {
         );
         let snapshot = ResultSnapshot {
             clear_type: ClearType::Normal,
+            result_failed: false,
             arrange: "NORMAL".to_string(),
             lane_shuffle_pattern: Vec::new(),
             ex_score: 100,
@@ -3458,6 +3479,7 @@ mod tests {
         timing_distribution.add(8);
         let snapshot = ResultSnapshot {
             clear_type: ClearType::Normal,
+            result_failed: false,
             arrange: "NORMAL".to_string(),
             lane_shuffle_pattern: Vec::new(),
             ex_score: 100,

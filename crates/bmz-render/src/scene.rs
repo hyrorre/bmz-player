@@ -499,6 +499,11 @@ pub enum ResultIrState {
 #[derive(Debug, Clone, PartialEq)]
 pub struct ResultSnapshot {
     pub clear_type: ClearType,
+    /// OPTION_RESULT_CLEAR/FAILED (90/91) に渡す実際の成否。
+    ///
+    /// コース曲間リザルトでは clear lamp 表示用の `clear_type` を NoPlay に丸める一方、
+    /// 背景や CLEAR/FAILED 演出は実プレイ結果に合わせるため分けて持つ。
+    pub result_failed: bool,
     pub arrange: String,
     pub lane_shuffle_pattern: Vec<u8>,
     pub ex_score: u32,
@@ -584,6 +589,7 @@ mod tests {
     fn result_snapshot_detects_full_combo() {
         let snapshot = ResultSnapshot {
             clear_type: ClearType::Normal,
+            result_failed: false,
             arrange: "NORMAL".to_string(),
             lane_shuffle_pattern: Vec::new(),
             ex_score: 20,
@@ -649,6 +655,7 @@ mod tests {
     fn zero_note_result_is_not_full_combo() {
         let snapshot = ResultSnapshot {
             clear_type: ClearType::Normal,
+            result_failed: false,
             arrange: "NORMAL".to_string(),
             lane_shuffle_pattern: Vec::new(),
             ex_score: 0,

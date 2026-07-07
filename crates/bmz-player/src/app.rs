@@ -2213,97 +2213,110 @@ impl WinitApp {
             AppViewState::Play => {
                 AppSceneSnapshot::Play(self.last_play_snapshot.clone().unwrap_or_default())
             }
-            AppViewState::Result(summary) => AppSceneSnapshot::Result(ResultSnapshot {
-                clear_type: summary.clear_type,
-                arrange: summary.arrange.as_str().to_string(),
-                lane_shuffle_pattern: summary.lane_shuffle_pattern.clone(),
-                ex_score: summary.ex_score,
-                ex_score_rate: summary.ex_score_rate(),
-                max_combo: summary.max_combo,
-                bp: summary.bp,
-                cb: summary.cb,
-                gauge_value: summary.gauge_value,
-                gauge_type: summary.gauge_type as i32,
-                total_notes: summary.total_notes,
-                grade_diff_display: self.boot.profile_config.play.grade_diff_display,
-                duration_ms: summary.duration_ms,
-                note_display_duration_ms: Some(Self::select_note_display_duration_ms_for_skin(
-                    &self.boot.profile_config,
-                )),
-                initial_bpm: summary.initial_bpm,
-                min_bpm: result_min_bpm(&summary),
-                max_bpm: result_max_bpm(&summary),
-                main_bpm: result_main_bpm(&summary),
-                total_gauge: summary.total_gauge,
-                judge_rank: summary.judge_rank,
-                key_mode: summary.key_mode,
-                result_gauge_graph_type: self.result_gauge_graph_type,
-                judge_counts: DisplayJudgeCounts {
-                    pgreat: summary.judge_counts.pgreat,
-                    great: summary.judge_counts.great,
-                    good: summary.judge_counts.good,
-                    bad: summary.judge_counts.bad,
-                    poor: summary.judge_counts.poor,
-                    empty_poor: summary.judge_counts.empty_poor,
-                },
-                fast_slow_counts: FastSlowJudgeCounts {
-                    fast_pgreat: summary.fast_slow_counts.fast_pgreat,
-                    slow_pgreat: summary.fast_slow_counts.slow_pgreat,
-                    fast_great: summary.fast_slow_counts.fast_great,
-                    slow_great: summary.fast_slow_counts.slow_great,
-                    fast_good: summary.fast_slow_counts.fast_good,
-                    slow_good: summary.fast_slow_counts.slow_good,
-                    fast_bad: summary.fast_slow_counts.fast_bad,
-                    slow_bad: summary.fast_slow_counts.slow_bad,
-                    fast_poor: summary.fast_slow_counts.fast_poor,
-                    slow_poor: summary.fast_slow_counts.slow_poor,
-                    fast_empty_poor: summary.fast_slow_counts.fast_empty_poor,
-                    slow_empty_poor: summary.fast_slow_counts.slow_empty_poor,
-                },
-                score_history_id: summary.score_history_id,
-                replay_saved: !summary.replay_path.is_empty(),
-                replay_slots: summary.replay_slots,
-                saved_replay_slots: summary.saved_replay_slots,
-                best_ex_score: summary.best_ex_score,
-                best_clear_type: summary.best_clear_type,
-                target_ex_score: summary.target_ex_score,
-                best_max_combo: summary.best_max_combo,
-                target_max_combo: summary.target_max_combo,
-                best_bp: summary.best_bp,
-                target_bp: summary.target_bp,
-                previous_best_ex_score: summary.previous_best_ex_score,
-                previous_best_clear_type: summary.previous_best_clear_type,
-                previous_best_max_combo: summary.previous_best_max_combo,
-                previous_best_bp: summary.previous_best_bp,
-                target_clear_type: summary.target_clear_type,
-                elapsed_time: bmz_core::time::TimeUs(
-                    self.result_scene_started_at.elapsed().as_micros().min(i64::MAX as u128) as i64,
-                ),
-                fadeout_elapsed: self.result_exit.as_ref().map(|exit| {
-                    bmz_core::time::TimeUs(
-                        exit.started_at.elapsed().as_micros().min(i64::MAX as u128) as i64,
-                    )
-                }),
-                title: summary.title.clone(),
-                subtitle: summary.subtitle.clone(),
-                artist: summary.artist.clone(),
-                subartist: summary.subartist.clone(),
-                genre: summary.genre.clone(),
-                difficulty_name: summary.difficulty_name.clone(),
-                play_level: summary.play_level.clone(),
-                table_text_primary: self.play_table_text_primary.clone(),
-                table_text_secondary: self.play_table_text_secondary.clone(),
-                table_text_fallback: self.play_table_text_fallback.clone(),
-                course_titles: self
-                    .finished_course
-                    .as_ref()
-                    .map(|course| course.course_titles.clone())
-                    .unwrap_or_default(),
-                graph: summary.graph.clone(),
-                overlay: OverlaySnapshot::default(),
-                ir: self.result_ir.as_ref().map(|state| state.skin_snapshot()).unwrap_or_default(),
-                player_stats: self.player_stats,
-            }),
+            AppViewState::Result(summary) => {
+                let raw_clear_type = self
+                    .is_course_intermediate_result()
+                    .then(|| self.finished_play.as_ref().map(|finished| finished.result.clear_type))
+                    .flatten();
+                let result_failed = result_failed_for_skin_ops(summary.clear_type, raw_clear_type);
+                AppSceneSnapshot::Result(ResultSnapshot {
+                    clear_type: summary.clear_type,
+                    result_failed,
+                    arrange: summary.arrange.as_str().to_string(),
+                    lane_shuffle_pattern: summary.lane_shuffle_pattern.clone(),
+                    ex_score: summary.ex_score,
+                    ex_score_rate: summary.ex_score_rate(),
+                    max_combo: summary.max_combo,
+                    bp: summary.bp,
+                    cb: summary.cb,
+                    gauge_value: summary.gauge_value,
+                    gauge_type: summary.gauge_type as i32,
+                    total_notes: summary.total_notes,
+                    grade_diff_display: self.boot.profile_config.play.grade_diff_display,
+                    duration_ms: summary.duration_ms,
+                    note_display_duration_ms: Some(Self::select_note_display_duration_ms_for_skin(
+                        &self.boot.profile_config,
+                    )),
+                    initial_bpm: summary.initial_bpm,
+                    min_bpm: result_min_bpm(&summary),
+                    max_bpm: result_max_bpm(&summary),
+                    main_bpm: result_main_bpm(&summary),
+                    total_gauge: summary.total_gauge,
+                    judge_rank: summary.judge_rank,
+                    key_mode: summary.key_mode,
+                    result_gauge_graph_type: self.result_gauge_graph_type,
+                    judge_counts: DisplayJudgeCounts {
+                        pgreat: summary.judge_counts.pgreat,
+                        great: summary.judge_counts.great,
+                        good: summary.judge_counts.good,
+                        bad: summary.judge_counts.bad,
+                        poor: summary.judge_counts.poor,
+                        empty_poor: summary.judge_counts.empty_poor,
+                    },
+                    fast_slow_counts: FastSlowJudgeCounts {
+                        fast_pgreat: summary.fast_slow_counts.fast_pgreat,
+                        slow_pgreat: summary.fast_slow_counts.slow_pgreat,
+                        fast_great: summary.fast_slow_counts.fast_great,
+                        slow_great: summary.fast_slow_counts.slow_great,
+                        fast_good: summary.fast_slow_counts.fast_good,
+                        slow_good: summary.fast_slow_counts.slow_good,
+                        fast_bad: summary.fast_slow_counts.fast_bad,
+                        slow_bad: summary.fast_slow_counts.slow_bad,
+                        fast_poor: summary.fast_slow_counts.fast_poor,
+                        slow_poor: summary.fast_slow_counts.slow_poor,
+                        fast_empty_poor: summary.fast_slow_counts.fast_empty_poor,
+                        slow_empty_poor: summary.fast_slow_counts.slow_empty_poor,
+                    },
+                    score_history_id: summary.score_history_id,
+                    replay_saved: !summary.replay_path.is_empty(),
+                    replay_slots: summary.replay_slots,
+                    saved_replay_slots: summary.saved_replay_slots,
+                    best_ex_score: summary.best_ex_score,
+                    best_clear_type: summary.best_clear_type,
+                    target_ex_score: summary.target_ex_score,
+                    best_max_combo: summary.best_max_combo,
+                    target_max_combo: summary.target_max_combo,
+                    best_bp: summary.best_bp,
+                    target_bp: summary.target_bp,
+                    previous_best_ex_score: summary.previous_best_ex_score,
+                    previous_best_clear_type: summary.previous_best_clear_type,
+                    previous_best_max_combo: summary.previous_best_max_combo,
+                    previous_best_bp: summary.previous_best_bp,
+                    target_clear_type: summary.target_clear_type,
+                    elapsed_time: bmz_core::time::TimeUs(
+                        self.result_scene_started_at.elapsed().as_micros().min(i64::MAX as u128)
+                            as i64,
+                    ),
+                    fadeout_elapsed: self.result_exit.as_ref().map(|exit| {
+                        bmz_core::time::TimeUs(
+                            exit.started_at.elapsed().as_micros().min(i64::MAX as u128) as i64,
+                        )
+                    }),
+                    title: summary.title.clone(),
+                    subtitle: summary.subtitle.clone(),
+                    artist: summary.artist.clone(),
+                    subartist: summary.subartist.clone(),
+                    genre: summary.genre.clone(),
+                    difficulty_name: summary.difficulty_name.clone(),
+                    play_level: summary.play_level.clone(),
+                    table_text_primary: self.play_table_text_primary.clone(),
+                    table_text_secondary: self.play_table_text_secondary.clone(),
+                    table_text_fallback: self.play_table_text_fallback.clone(),
+                    course_titles: self
+                        .finished_course
+                        .as_ref()
+                        .map(|course| course.course_titles.clone())
+                        .unwrap_or_default(),
+                    graph: summary.graph.clone(),
+                    overlay: OverlaySnapshot::default(),
+                    ir: self
+                        .result_ir
+                        .as_ref()
+                        .map(|state| state.skin_snapshot())
+                        .unwrap_or_default(),
+                    player_stats: self.player_stats,
+                })
+            }
         };
         let overlay = self.build_overlay_snapshot();
         self.apply_overlay_to_scene(&mut scene, overlay);
@@ -11343,7 +11356,8 @@ impl WinitApp {
                 let Some(finished) = self.finished_play.as_ref() else {
                     return;
                 };
-                self.play_system_sound(result_entry_sound_for_clear(finished.summary.clear_type));
+                let clear_type = result_entry_clear_type_for_sound(finished);
+                self.play_system_sound(result_entry_sound_for_clear(clear_type));
             }
         }
     }
@@ -11475,6 +11489,10 @@ fn result_entry_sound_for_clear(
     } else {
         SoundType::ResultClear
     }
+}
+
+fn result_entry_clear_type_for_sound(finished: &FinishedPlaySession) -> bmz_core::clear::ClearType {
+    finished.result.clear_type
 }
 
 fn course_result_entry_sound_for_clear(
@@ -14122,6 +14140,13 @@ fn is_course_intermediate_result(
     finished_play: bool,
 ) -> bool {
     active_course && finished_play && !finished_course
+}
+
+fn result_failed_for_skin_ops(
+    display_clear_type: ClearType,
+    raw_clear_type: Option<ClearType>,
+) -> bool {
+    matches!(raw_clear_type.unwrap_or(display_clear_type), ClearType::Failed | ClearType::NoPlay)
 }
 
 fn course_intermediate_exit_action_for_state(
@@ -19531,6 +19556,13 @@ mod tests {
     }
 
     #[test]
+    fn course_intermediate_result_skin_ops_use_raw_clear_result() {
+        assert!(!result_failed_for_skin_ops(ClearType::NoPlay, Some(ClearType::Normal)));
+        assert!(result_failed_for_skin_ops(ClearType::NoPlay, Some(ClearType::Failed)));
+        assert!(result_failed_for_skin_ops(ClearType::NoPlay, None));
+    }
+
+    #[test]
     fn course_intermediate_exit_action_finishes_failed_or_final_stage() {
         assert_eq!(
             course_intermediate_exit_action_for_state(false, true),
@@ -20213,6 +20245,18 @@ mod tests {
         assert_eq!(result_entry_sound_for_clear(ClearType::Normal), SoundType::ResultClear);
         assert_eq!(course_result_entry_sound_for_clear(ClearType::Failed), SoundType::CourseFail);
         assert_eq!(course_result_entry_sound_for_clear(ClearType::Normal), SoundType::CourseClear);
+    }
+
+    #[test]
+    fn result_entry_sound_clear_type_uses_raw_result_for_course_stage() {
+        let mut finished = debug_boot_finished_play_session();
+        finished.summary.clear_type = ClearType::NoPlay;
+
+        finished.result.clear_type = ClearType::Normal;
+        assert_eq!(result_entry_clear_type_for_sound(&finished), ClearType::Normal);
+
+        finished.result.clear_type = ClearType::Failed;
+        assert_eq!(result_entry_clear_type_for_sound(&finished), ClearType::Failed);
     }
 
     #[test]

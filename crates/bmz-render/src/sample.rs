@@ -161,6 +161,7 @@ pub fn sample_play_scene() -> AppSceneSnapshot {
 pub fn sample_result_scene() -> AppSceneSnapshot {
     AppSceneSnapshot::Result(ResultSnapshot {
         clear_type: bmz_core::clear::ClearType::Normal,
+        result_failed: false,
         arrange: "NORMAL".to_string(),
         lane_shuffle_pattern: Vec::new(),
         ex_score: 1888,
