@@ -16510,7 +16510,7 @@ mod tests {
             } if approx_eq(*x, 0.15)
                 && approx_eq(*y, 0.27)
                 && approx_eq(*width, 0.1)
-                && approx_eq(*u, 24.0 / 44.0)
+                && approx_eq(*u, 20.0 / 44.0)
                 && approx_eq(*u_width, 4.0 / 44.0))));
         assert!(items.iter().any(|item| matches!(item, SkinRenderItem::Image {
                 texture: SkinTextureId(9999),
@@ -16520,7 +16520,7 @@ mod tests {
             } if approx_eq(*x, 0.25)
                 && approx_eq(*y, 0.27)
                 && approx_eq(*width, 0.1)
-                && approx_eq(*u, 20.0 / 44.0)
+                && approx_eq(*u, 24.0 / 44.0)
                 && approx_eq(*u_width, 4.0 / 44.0))));
         assert!(items.iter().any(|item| matches!(item, SkinRenderItem::Image {
                 texture: SkinTextureId(9999),
