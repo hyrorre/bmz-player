@@ -2174,9 +2174,7 @@ impl WinitApp {
         state: ElementState,
     ) -> Option<bool> {
         match state {
-            ElementState::Pressed => {
-                Some(!self.raw_input_pressed_keys.insert(physical_key.clone()))
-            }
+            ElementState::Pressed => Some(!self.raw_input_pressed_keys.insert(*physical_key)),
             ElementState::Released => {
                 self.raw_input_pressed_keys.remove(physical_key).then_some(false)
             }
