@@ -8354,9 +8354,12 @@ impl WinitApp {
             Some(ResultExit { started_at: Instant::now(), action, skip_requested: false });
         // HeldLanes の遷移判定はフェードアウト終了時に Key5/Key7 の
         // 押下状態を読むため、ここでは held フラグをリセットしない。
-        // Keep the result entry SE alive so the exit master-gain ramp can fade
-        // it together with the close SE. The voices are stopped after fadeout.
-        self.play_system_sound(crate::system_sound::SoundType::ResultClose);
+        // Result SE は毎フレームの master-gain command ではなく callback 側で
+        // fade-out させ、ASIO の小さい buffer でも段差が出にくいようにする。
+        let fadeout = Duration::from_millis(self.renderer.result_skin_fadeout_ms().max(0) as u64);
+        let fade_out_frames = self.result_exit_audio_fade_frames(fadeout);
+        self.fade_result_entry_system_sounds(fade_out_frames);
+        self.play_result_close_sound_with_fade_out(fade_out_frames);
     }
 
     fn request_result_exit_skip_for_key(
@@ -8644,9 +8647,9 @@ impl WinitApp {
         let skip_requested = exit.skip_requested;
         let fadeout = Duration::from_millis(self.renderer.result_skin_fadeout_ms().max(0) as u64);
         let elapsed = started_at.elapsed();
-        // スキンの終了アニメーション時間に合わせて、プレイ残響(draining_audio)と
-        // リザルトSEを 1.0 → 0.0 へ絞る。遷移時に音量が 0 付近まで落ちているので、
-        // 音声を破棄しても唐突な音切れにならない。
+        // スキンの終了アニメーション時間に合わせて、プレイ残響(draining_audio)を
+        // 1.0 → 0.0 へ絞る。リザルトSEは begin_result_exit で callback 側の
+        // fade-out を開始済みなので、ここでは毎フレーム command を投げない。
         self.fade_audio_for_result_exit(elapsed, fadeout);
         if elapsed < fadeout && !skip_requested {
             return;
@@ -8683,8 +8686,8 @@ impl WinitApp {
         }
     }
 
-    /// リザルト終了アニメ中、プレイ残響(draining_audio)とシステムSEの
-    /// マスターゲインを 1.0 → 0.0 へランプする。毎フレーム呼ぶ。
+    /// リザルト終了アニメ中、プレイ残響(draining_audio)のマスターゲインを
+    /// 1.0 → 0.0 へランプする。毎フレーム呼ぶ。
     /// フェード時間は `RESULT_EXIT_AUDIO_FADE` を上限とし、スキンの終了アニメ時間
     /// (`fadeout`) がそれより短ければ遷移前に絞り切れるよう短い方を採用する。
     /// 見た目の遷移タイミング自体は `fadeout` のまま変えない。
@@ -8693,13 +8696,46 @@ impl WinitApp {
         if let Some(audio) = &self.draining_audio {
             audio.engine.set_master_gain(gain);
         }
-        self.set_system_sound_master_gain(gain);
     }
 
-    fn set_system_sound_master_gain(&self, gain: f32) {
-        if let Some(manager) = &self.system_sound {
-            manager.set_master_gain(gain);
+    fn result_exit_audio_fade_frames(&self, fadeout: Duration) -> u32 {
+        duration_to_frames(
+            result_exit_audio_fade_duration(fadeout),
+            self.system_audio_sample_rate(),
+        )
+    }
+
+    fn system_audio_sample_rate(&self) -> u32 {
+        self.audio_runtime.as_ref().map(AudioRuntime::sample_rate).unwrap_or(48_000).max(1)
+    }
+
+    fn fade_result_entry_system_sounds(&self, fade_out_frames: u32) {
+        use crate::system_sound::SoundType;
+        let Some(manager) = &self.system_sound else {
+            return;
+        };
+        for sound_type in [
+            SoundType::ResultClear,
+            SoundType::ResultFail,
+            SoundType::CourseClear,
+            SoundType::CourseFail,
+        ] {
+            manager.stop_with_fade_out(sound_type, fade_out_frames);
         }
+    }
+
+    fn play_result_close_sound_with_fade_out(&self, fade_out_frames: u32) {
+        let Some(manager) = &self.system_sound else {
+            return;
+        };
+        let sound_type = crate::system_sound::SoundType::ResultClose;
+        manager.play_with_master_gain_and_fade_out(
+            sound_type,
+            system_sound_volume_from_mix(&self.boot.profile_config.audio_mix, sound_type),
+            1.0,
+            fade_out_frames,
+        );
+        self.start_audio_output_stream();
     }
 
     fn leave_result(&mut self) {
@@ -11472,12 +11508,24 @@ fn fade_progress(started_at: Instant, now: Instant, duration: Duration) -> f32 {
 }
 
 fn result_exit_audio_gain(elapsed: Duration, fadeout: Duration) -> f32 {
-    let audio_fade = fadeout.min(RESULT_EXIT_AUDIO_FADE);
+    let audio_fade = result_exit_audio_fade_duration(fadeout);
     if audio_fade.is_zero() {
         0.0
     } else {
         (1.0 - elapsed.as_secs_f32() / audio_fade.as_secs_f32()).clamp(0.0, 1.0)
     }
+}
+
+fn result_exit_audio_fade_duration(fadeout: Duration) -> Duration {
+    fadeout.min(RESULT_EXIT_AUDIO_FADE)
+}
+
+fn duration_to_frames(duration: Duration, sample_rate: u32) -> u32 {
+    if duration.is_zero() || sample_rate == 0 {
+        return 0;
+    }
+    let frames = duration.as_secs_f64() * f64::from(sample_rate);
+    frames.round().clamp(1.0, f64::from(u32::MAX)) as u32
 }
 
 fn result_exit_system_sounds() -> &'static [crate::system_sound::SoundType] {

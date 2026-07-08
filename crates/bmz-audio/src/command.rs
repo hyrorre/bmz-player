@@ -17,17 +17,51 @@ const DROP_WARN_INTERVAL_MS: u64 = 1_000;
 
 #[derive(Debug)]
 pub enum AudioEngineCommand {
-    InsertSample { id: SoundId, sample: DecodedSample },
-    ReserveSampleSlot { id: SoundId },
-    InsertPreparedSample { id: SoundId, sample: DecodedSample },
+    InsertSample {
+        id: SoundId,
+        sample: DecodedSample,
+    },
+    ReserveSampleSlot {
+        id: SoundId,
+    },
+    InsertPreparedSample {
+        id: SoundId,
+        sample: DecodedSample,
+    },
     Schedule(ScheduledSound),
     ScheduleAll(Vec<ScheduledSound>),
-    StopSound { id: SoundId },
-    StopSoundWithFadeOut { id: SoundId, fade_out_frames: u32 },
-    SetMasterGain { gain: f32 },
-    SetSoundVolume { id: SoundId, volume: f32 },
-    PlayNow { sound_id: SoundId, volume: f32, loop_playback: bool },
-    PlayNowWithFadeIn { sound_id: SoundId, volume: f32, loop_playback: bool, fade_in_frames: u32 },
+    StopSound {
+        id: SoundId,
+    },
+    StopSoundWithFadeOut {
+        id: SoundId,
+        fade_out_frames: u32,
+    },
+    SetMasterGain {
+        gain: f32,
+    },
+    SetSoundVolume {
+        id: SoundId,
+        volume: f32,
+    },
+    PlayNow {
+        sound_id: SoundId,
+        volume: f32,
+        loop_playback: bool,
+    },
+    PlayNowWithFadeIn {
+        sound_id: SoundId,
+        volume: f32,
+        loop_playback: bool,
+        fade_in_frames: u32,
+    },
+    PlayNowWithFadeInAndFadeOut {
+        sound_id: SoundId,
+        volume: f32,
+        loop_playback: bool,
+        fade_in_frames: u32,
+        fade_out_frames: u32,
+    },
 }
 
 impl AudioEngineCommand {
@@ -49,6 +83,21 @@ impl AudioEngineCommand {
             }
             Self::PlayNowWithFadeIn { sound_id, volume, loop_playback, fade_in_frames } => {
                 engine.play_now_with_fade_in(sound_id, volume, loop_playback, fade_in_frames);
+            }
+            Self::PlayNowWithFadeInAndFadeOut {
+                sound_id,
+                volume,
+                loop_playback,
+                fade_in_frames,
+                fade_out_frames,
+            } => {
+                engine.play_now_with_fade_in_and_fade_out(
+                    sound_id,
+                    volume,
+                    loop_playback,
+                    fade_in_frames,
+                    fade_out_frames,
+                );
             }
         }
     }
@@ -294,6 +343,23 @@ impl AudioEngineHandle {
         })
     }
 
+    pub fn play_now_with_fade_in_and_fade_out(
+        &self,
+        sound_id: SoundId,
+        volume: f32,
+        loop_playback: bool,
+        fade_in_frames: u32,
+        fade_out_frames: u32,
+    ) -> bool {
+        self.push_command(AudioEngineCommand::PlayNowWithFadeInAndFadeOut {
+            sound_id,
+            volume,
+            loop_playback,
+            fade_in_frames,
+            fade_out_frames,
+        })
+    }
+
     fn push_command_or_return(
         &self,
         command: AudioEngineCommand,
@@ -518,6 +584,22 @@ mod tests {
 
         assert_eq!(output, vec![0.25, 0.25]);
         assert_eq!(handle.diagnostics().coalesced, 1);
+    }
+
+    #[test]
+    fn command_queue_applies_play_now_with_fade_out() {
+        let handle = AudioEngineHandle::with_capacity(AudioEngine::default(), 8);
+        let mut processor = handle.processor();
+        handle.insert_sample(
+            SoundId(1),
+            DecodedSample { channels: 1, sample_rate: 48_000, frames: vec![1.0, 1.0, 1.0] },
+        );
+        handle.play_now_with_fade_in_and_fade_out(SoundId(1), 1.0, false, 0, 2);
+
+        let mut output = vec![0.0; 6];
+        assert!(processor.render_stereo(0, &mut output));
+
+        assert_eq!(output, vec![1.0, 1.0, 0.5, 0.5, 0.0, 0.0]);
     }
 
     #[test]

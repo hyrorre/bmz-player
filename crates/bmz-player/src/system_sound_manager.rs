@@ -114,6 +114,34 @@ impl SystemSoundManager {
         }
     }
 
+    pub fn play_with_master_gain_and_fade_out(
+        &self,
+        sound_type: SoundType,
+        master_volume: f32,
+        gain: f32,
+        fade_out_frames: u32,
+    ) {
+        let Some(&id) = self.id_map.get(&sound_type) else {
+            return;
+        };
+        let master_volume = normalize_volume(master_volume);
+        let gain = normalize_volume(gain);
+        let commands = vec![
+            AudioEngineCommand::SetMasterGain { gain },
+            AudioEngineCommand::PlayNowWithFadeInAndFadeOut {
+                sound_id: id,
+                volume: master_volume,
+                loop_playback: sound_type.loops(),
+                fade_in_frames: 0,
+                fade_out_frames,
+            },
+        ];
+        if self.engine.push_commands(commands) {
+            self.master_gain.set(gain);
+            self.last_volumes.borrow_mut().insert(sound_type, master_volume);
+        }
+    }
+
     pub fn has_sound(&self, sound_type: SoundType) -> bool {
         self.id_map.contains_key(&sound_type)
     }
@@ -185,6 +213,13 @@ impl SystemSoundManager {
             return;
         };
         self.engine.stop_sound(id);
+    }
+
+    pub fn stop_with_fade_out(&self, sound_type: SoundType, fade_out_frames: u32) {
+        let Some(&id) = self.id_map.get(&sound_type) else {
+            return;
+        };
+        self.engine.stop_sound_with_fade_out(id, fade_out_frames);
     }
 
     /// 登録済みかつ `is_bgm()` の SoundType をすべて停止する。
@@ -354,6 +389,43 @@ mod tests {
         manager.set_master_gain(0.25);
         manager.play(SoundType::ResultClose, 1.0);
         assert_eq!(render(&mut processor, 0, 1), vec![0.25, 0.25]);
+    }
+
+    #[test]
+    fn stop_with_fade_out_ramps_active_system_sound() {
+        let (engine, mut processor) = test_engine();
+        let mut id_map = HashMap::new();
+        id_map.insert(SoundType::ResultClear, SoundId(SYSTEM_SOUND_BASE));
+        insert_sample(
+            &engine,
+            &mut processor,
+            SoundId(SYSTEM_SOUND_BASE),
+            DecodedSample { channels: 1, sample_rate: 48_000, frames: vec![1.0; 4] },
+        );
+        let manager = SystemSoundManager::with_id_map(engine, id_map);
+        manager.play(SoundType::ResultClear, 1.0);
+        render(&mut processor, 0, 1);
+
+        manager.stop_with_fade_out(SoundType::ResultClear, 2);
+        assert_eq!(render(&mut processor, 1, 3), vec![1.0, 1.0, 0.5, 0.5, 0.0, 0.0]);
+    }
+
+    #[test]
+    fn play_with_fade_out_ramps_new_system_sound() {
+        let (engine, mut processor) = test_engine();
+        let mut id_map = HashMap::new();
+        id_map.insert(SoundType::ResultClose, SoundId(SYSTEM_SOUND_BASE));
+        insert_sample(
+            &engine,
+            &mut processor,
+            SoundId(SYSTEM_SOUND_BASE),
+            DecodedSample { channels: 1, sample_rate: 48_000, frames: vec![1.0; 4] },
+        );
+        let manager = SystemSoundManager::with_id_map(engine, id_map);
+
+        manager.play_with_master_gain_and_fade_out(SoundType::ResultClose, 1.0, 1.0, 2);
+
+        assert_eq!(render(&mut processor, 0, 3), vec![1.0, 1.0, 0.5, 0.5, 0.0, 0.0]);
     }
 
     #[test]
