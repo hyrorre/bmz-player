@@ -10683,9 +10683,9 @@ fn select_double_option_index(double_option: &str) -> usize {
 fn select_hs_fix_index(hs_fix: &str) -> usize {
     match hs_fix {
         "START BPM" => 1,
-        "MIN BPM" => 2,
-        "MAX BPM" => 3,
-        "MAIN BPM" => 4,
+        "MAX BPM" => 2,
+        "MAIN BPM" => 3,
+        "MIN BPM" => 4,
         _ => 0,
     }
 }
@@ -17152,7 +17152,7 @@ mod tests {
         assert_eq!(skin_state_number(42, &state), Some(2));
         assert_eq!(skin_state_number(43, &state), Some(5));
         assert_eq!(skin_state_number(54, &state), Some(3));
-        assert_eq!(skin_state_number(55, &state), Some(4));
+        assert_eq!(skin_state_number(55, &state), Some(3));
     }
 
     #[test]
@@ -19925,6 +19925,16 @@ mod tests {
         assert_eq!(select_judge_algorithm_index("Lowest"), 2);
         assert_eq!(select_judge_algorithm_index("Score"), 3);
         assert_eq!(select_judge_algorithm_index("unknown"), 0);
+    }
+
+    #[test]
+    fn select_hs_fix_index_maps_beatoraja_order() {
+        assert_eq!(select_hs_fix_index("OFF"), 0);
+        assert_eq!(select_hs_fix_index("START BPM"), 1);
+        assert_eq!(select_hs_fix_index("MAX BPM"), 2);
+        assert_eq!(select_hs_fix_index("MAIN BPM"), 3);
+        assert_eq!(select_hs_fix_index("MIN BPM"), 4);
+        assert_eq!(select_hs_fix_index("unknown"), 0);
     }
 
     #[test]

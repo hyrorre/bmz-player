@@ -14170,9 +14170,9 @@ fn cycle_hs_fix_option_with_direction(current: HsFixOption, direction: i32) -> H
     const VALUES: [HsFixOption; 5] = [
         HsFixOption::Off,
         HsFixOption::StartBpm,
-        HsFixOption::MinBpm,
         HsFixOption::MaxBpm,
         HsFixOption::MainBpm,
+        HsFixOption::MinBpm,
     ];
     cycle_enum(VALUES, current, direction)
 }
@@ -20644,7 +20644,19 @@ mod tests {
             DoubleOption::BattleAutoScratch
         );
         assert_eq!(cycle_hs_fix_option_with_direction(HsFixOption::Off, 1), HsFixOption::StartBpm);
-        assert_eq!(cycle_hs_fix_option_with_direction(HsFixOption::Off, -1), HsFixOption::MainBpm);
+        assert_eq!(
+            cycle_hs_fix_option_with_direction(HsFixOption::StartBpm, 1),
+            HsFixOption::MaxBpm
+        );
+        assert_eq!(
+            cycle_hs_fix_option_with_direction(HsFixOption::MaxBpm, 1),
+            HsFixOption::MainBpm
+        );
+        assert_eq!(
+            cycle_hs_fix_option_with_direction(HsFixOption::MainBpm, 1),
+            HsFixOption::MinBpm
+        );
+        assert_eq!(cycle_hs_fix_option_with_direction(HsFixOption::Off, -1), HsFixOption::MinBpm);
         assert_eq!(cycle_bga_option_with_direction(BgaModeConfig::On, -1), BgaModeConfig::Off);
         assert_eq!(
             cycle_bga_expand_with_direction(BgaExpandConfig::KeepAspect, 1),

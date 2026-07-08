@@ -370,10 +370,10 @@ impl HsFixOption {
     pub fn cycle(self) -> Self {
         match self {
             Self::Off => Self::StartBpm,
-            Self::StartBpm => Self::MinBpm,
-            Self::MinBpm => Self::MaxBpm,
+            Self::StartBpm => Self::MaxBpm,
             Self::MaxBpm => Self::MainBpm,
-            Self::MainBpm => Self::Off,
+            Self::MainBpm => Self::MinBpm,
+            Self::MinBpm => Self::Off,
         }
     }
 
@@ -465,6 +465,15 @@ mod tests {
             DoubleOption::BattleAutoScratch.score_bucket(),
             DoubleOptionScoreBucket::BattleAutoScratch
         );
+    }
+
+    #[test]
+    fn hs_fix_cycles_in_beatoraja_order() {
+        assert_eq!(HsFixOption::Off.cycle(), HsFixOption::StartBpm);
+        assert_eq!(HsFixOption::StartBpm.cycle(), HsFixOption::MaxBpm);
+        assert_eq!(HsFixOption::MaxBpm.cycle(), HsFixOption::MainBpm);
+        assert_eq!(HsFixOption::MainBpm.cycle(), HsFixOption::MinBpm);
+        assert_eq!(HsFixOption::MinBpm.cycle(), HsFixOption::Off);
     }
 }
 
