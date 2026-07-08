@@ -5539,8 +5539,9 @@ impl SkinDocumentRenderExt for SkinDocument {
         let blend = if destination.blend == 2 { BlendMode::Add } else { BlendMode::Normal };
         let max_density = density.iter().copied().max().unwrap_or(1).max(1) as f32;
         let count = density.len().max(1) as f32;
-        let gap = if graph.no_gap != 0 { 0.0 } else { 1.0 };
-        let bar_w = ((rect.width - gap * (count - 1.0)).max(1.0) / count).max(1.0);
+        let pixel_w = 1.0 / self.w.max(1) as f32;
+        let gap = if graph.no_gap != 0 || graph.no_gap_x != 0 { 0.0 } else { pixel_w };
+        let bar_w = ((rect.width - gap * (count - 1.0)).max(pixel_w) / count).max(pixel_w);
         let color = Color::rgba(0.75, 0.85, 1.0, 0.85 * frame_alpha);
         let mut items = Vec::new();
         for (index, value) in density.iter().enumerate() {
@@ -7377,17 +7378,31 @@ fn skin_builtin_value_f32(expr: &str, state: &SkinDrawState) -> Option<f32> {
     }
 }
 
+fn skin_builtin_value_i64(expr: &str, state: &SkinDrawState) -> Option<i64> {
+    let number = skin_builtin_value_f32(expr, state)?;
+    Some(match expr.trim() {
+        SKIN_EXPR_DEFAULT_CHART_TOTAL_COUNT | SKIN_EXPR_DEFAULT_CHART_GAUGE => {
+            number.round() as i64
+        }
+        _ => integer_property_value(number),
+    })
+}
+
 fn skin_value_number(value: &SkinValueDef, state: &SkinDrawState) -> Option<i64> {
     if !value.expr.trim().is_empty() {
         return skin_state_number_expr(&value.expr, state);
     }
     if !value.value_expr.trim().is_empty() {
-        if let Some(number) = skin_builtin_value_f32(&value.value_expr, state) {
-            return Some(number.round() as i64);
+        if let Some(number) = skin_builtin_value_i64(&value.value_expr, state) {
+            return Some(number);
         }
-        return skin_state_float_expr(&value.value_expr, state).map(|value| value.round() as i64);
+        return skin_state_float_expr(&value.value_expr, state).map(integer_property_value);
     }
     skin_state_number(value.ref_id, state)
+}
+
+fn integer_property_value(value: f32) -> i64 {
+    value as i64
 }
 
 fn skin_value_number_for_destination(
@@ -14318,6 +14333,45 @@ mod tests {
             &SkinTextState::default(),
         );
         assert_eq!(all.len(), 3);
+    }
+
+    #[test]
+    fn play_judgegraph_density_uses_canvas_pixel_gap() {
+        let mut document: SkinDocument = serde_json::from_str(
+            r#"
+            {
+                "type": 0,
+                "w": 100,
+                "h": 100,
+                "judgegraph": [{ "id": "density" }],
+                "destination": [{ "id": "density", "dst": [{ "x": 10, "y": 10, "w": 40, "h": 10 }] }]
+            }
+            "#,
+        )
+        .unwrap();
+        document.play_judge_graph_density = vec![1, 2, 3];
+
+        let items = document.static_render_items(
+            &HashMap::new(),
+            &SkinDrawState::default(),
+            &SkinTextState::default(),
+        );
+        let rects: Vec<Rect> = items
+            .iter()
+            .filter_map(|item| match item {
+                SkinRenderItem::Rect { rect, .. } => Some(*rect),
+                _ => None,
+            })
+            .collect();
+
+        assert_eq!(rects.len(), 3);
+        for rect in rects {
+            assert!(rect.x >= 0.10);
+            assert!(
+                rect.x + rect.width <= 0.50 + 0.0001,
+                "play judgegraph bar should stay inside the destination: {rect:?}",
+            );
+        }
     }
 
     #[test]
@@ -21843,6 +21897,43 @@ mod tests {
 
         assert_eq!(skin_value_number(&value, &state), Some(40));
         assert_eq!(skin_value_number(&afterdot, &state), Some(4000));
+    }
+
+    #[test]
+    fn skin_value_number_truncates_lua_value_expr_like_beatoraja_integer_property() {
+        let state = SkinDrawState {
+            total_notes: 2480,
+            judge_counts: DisplayJudgeCounts { pgreat: 1, ..Default::default() },
+            adjusted_rate: Some(0.6),
+            adjusted_rate_adot: Some(60),
+            ..SkinDrawState::default()
+        };
+        let remain_integer = SkinValueDef {
+            id: "remain-rate-num".to_string(),
+            src: String::new(),
+            value_expr:
+                "(number(106)-number(110)-number(111)-number(112)-number(113)-number(114))/number(106)*100"
+                    .to_string(),
+            ..Default::default()
+        };
+        let remain_afterdot = SkinValueDef {
+            id: "remain-rate-adot-num".to_string(),
+            src: String::new(),
+            value_expr:
+                "(number(106)-number(110)-number(111)-number(112)-number(113)-number(114))/number(106)*10000"
+                    .to_string(),
+            ..Default::default()
+        };
+        let adjusted_integer = SkinValueDef {
+            id: "adjusted-rate-num".to_string(),
+            src: String::new(),
+            value_expr: SKIN_EXPR_ADJUSTED_RATE.to_string(),
+            ..Default::default()
+        };
+
+        assert_eq!(skin_value_number(&remain_integer, &state), Some(99));
+        assert_eq!(skin_value_number(&remain_afterdot, &state), Some(9995));
+        assert_eq!(skin_value_number(&adjusted_integer, &state), Some(0));
     }
 
     #[test]
