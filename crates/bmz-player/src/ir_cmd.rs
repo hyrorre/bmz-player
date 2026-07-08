@@ -8,14 +8,19 @@ use crate::config::profile_config::{
     IrProviderConfig, IrProviderRoleConfig, IrSendPolicyConfig, ProfileConfig,
 };
 use crate::config::save::save_profile_config;
+use crate::ir::backfill::{IrLocalUploadOptions, enqueue_local_score_jobs};
 use crate::ir::bmz_official::{BmzOfficialIrClient, IrRankingRequest};
 use crate::ir::credentials::{
     IrStoredCredentials, delete_credentials, load_credentials, save_credentials,
 };
-use crate::ir::sync::{ensure_fresh_credentials, sync_pending_ir_jobs};
+use crate::ir::sync::{
+    IR_SYNC_BATCH_LIMIT, IrSyncThrottle, ensure_fresh_credentials, sync_pending_ir_jobs,
+};
 use crate::ir::types::IrRankingScope;
 use crate::paths::{ProfilePaths, resolve_app_paths, resolve_profile_paths};
+use crate::storage::library_db::LibraryDatabase;
 use crate::storage::network_db::NetworkDatabase;
+use crate::storage::score_db::ScoreDatabase;
 
 pub async fn run_ir_command(cmd: IrCommand) -> Result<()> {
     let (profile_paths, mut profile) = load_active_profile()?;
@@ -29,6 +34,25 @@ pub async fn run_ir_command(cmd: IrCommand) -> Result<()> {
             ranking(&profile_paths, &profile, &sha256, &ln_policy, &scope, limit).await
         }
         IrCommand::Sync => sync(&profile_paths, &profile).await,
+        IrCommand::UploadLocal {
+            provider,
+            limit,
+            dry_run,
+            sync: sync_after_enqueue,
+            resend,
+            include_course_stages,
+            include_replay,
+        } => {
+            let options = IrLocalUploadOptions {
+                provider,
+                limit,
+                dry_run,
+                resend,
+                include_course_stages,
+                include_replay,
+            };
+            upload_local(&profile_paths, &profile, options, sync_after_enqueue).await
+        }
         IrCommand::Rivals { action } => rivals(&profile_paths, &mut profile, action).await,
         IrCommand::DeviceKey { rotate } => device_key(&profile_paths, &profile, rotate).await,
         IrCommand::Replay { score_id } => replay(&profile_paths, &profile, &score_id).await,
@@ -496,12 +520,90 @@ async fn sync(profile_paths: &ProfilePaths, profile: &ProfileConfig) -> Result<(
         app_paths.logs_dir.as_path(),
         &profile.ir,
         now_unix_seconds(),
-        50,
+        IR_SYNC_BATCH_LIMIT,
         true,
+        IrSyncThrottle::rate_limited(),
     )
     .await?;
     println!("submitted: {}, failed: {}", report.submitted, report.failed);
     for message in &report.messages {
+        println!("  {message}");
+    }
+    Ok(())
+}
+
+async fn upload_local(
+    profile_paths: &ProfilePaths,
+    profile: &ProfileConfig,
+    options: IrLocalUploadOptions,
+    sync_after_enqueue: bool,
+) -> Result<()> {
+    let app_paths = resolve_app_paths()?;
+    crate::storage::migration::migrate_library_db(&app_paths.library_db)?;
+    crate::storage::migration::migrate_score_db(&profile_paths.score_db)?;
+    crate::storage::migration::migrate_network_db(&profile_paths.network_db)?;
+
+    let library_db = LibraryDatabase::open(&app_paths.library_db)?;
+    let score_db = ScoreDatabase::open(&profile_paths.score_db)?;
+    let mut network_db = NetworkDatabase::open(&profile_paths.network_db)?;
+    let report = enqueue_local_score_jobs(
+        profile_paths.root_dir.as_path(),
+        &profile.ir,
+        &score_db,
+        &library_db,
+        &mut network_db,
+        &options,
+        now_unix_seconds(),
+    )?;
+
+    println!("provider: {}", report.provider_key);
+    println!("account: {}", report.account_id);
+    println!("scanned: {}", report.scanned);
+    println!("candidates: {}", report.candidates);
+    if options.dry_run {
+        println!("would enqueue: {}", report.candidates.min(options.limit.max(1)));
+    } else {
+        println!("enqueued: {}", report.enqueued);
+    }
+    println!(
+        "skipped: already_submitted={}, missing_chart={}, course_stage={}, autoplay={}",
+        report.skipped_already_submitted,
+        report.skipped_missing_chart,
+        report.skipped_course_stage,
+        report.skipped_autoplay,
+    );
+    if report.missing_replays > 0 {
+        println!(
+            "replay files missing: {} (scores were queued without replay)",
+            report.missing_replays
+        );
+    }
+    if report.limit_reached {
+        println!("limit reached; rerun `bmz ir upload-local` to enqueue the next batch");
+    }
+
+    if options.dry_run || !sync_after_enqueue || report.enqueued == 0 {
+        return Ok(());
+    }
+
+    let sync_limit = report.enqueued.min(IR_SYNC_BATCH_LIMIT);
+    let sync_report = sync_pending_ir_jobs(
+        &mut network_db,
+        &profile_paths.score_db,
+        profile_paths.root_dir.as_path(),
+        app_paths.logs_dir.as_path(),
+        &profile.ir,
+        now_unix_seconds(),
+        sync_limit,
+        true,
+        IrSyncThrottle::rate_limited(),
+    )
+    .await?;
+    println!("submitted: {}, failed: {}", sync_report.submitted, sync_report.failed);
+    if report.enqueued > sync_limit {
+        println!("pending after this sync: {}", report.enqueued - sync_limit);
+    }
+    for message in &sync_report.messages {
         println!("  {message}");
     }
     Ok(())

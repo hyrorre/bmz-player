@@ -14,7 +14,10 @@ use bmz_gameplay::rule::RuleMode;
 
 use crate::config::profile_config::IrConfig;
 use crate::ir::bmz_official::{BmzOfficialIrClient, IrCourseRankingRequest, IrRankingRequest};
-use crate::ir::sync::{IrSyncReport, ensure_fresh_credentials, sync_pending_ir_jobs};
+use crate::ir::sync::{
+    IR_SYNC_BATCH_LIMIT, IrSyncReport, IrSyncThrottle, ensure_fresh_credentials,
+    sync_pending_ir_jobs,
+};
 use crate::ir::types::{IrCourseRankingResult, IrRankingResult, IrRankingScope};
 use crate::ln_policy::LnScorePolicy;
 use crate::select_options::DoubleOptionScoreBucket;
@@ -459,8 +462,9 @@ fn spawn_result_ir_task_for_target(
                 &logs_dir,
                 &ir_config,
                 now,
-                20,
+                IR_SYNC_BATCH_LIMIT,
                 false,
+                IrSyncThrottle::rate_limited(),
             )
             .await
         }

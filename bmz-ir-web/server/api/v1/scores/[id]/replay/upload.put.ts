@@ -2,7 +2,7 @@ import { and, eq } from 'drizzle-orm'
 import { blob } from 'hub:blob'
 import { db, schema } from 'hub:db'
 import { requireIrUser } from '../../../../../utils/auth'
-import { checkUserRateLimit } from '../../../../../utils/rate_limit'
+import { REPLAY_UPLOAD_RATE_LIMIT, checkUserRateLimit } from '../../../../../utils/rate_limit'
 import { MAX_REPLAY_BYTES } from '../../../../../../shared/constants/ir'
 
 /**
@@ -15,7 +15,7 @@ import { MAX_REPLAY_BYTES } from '../../../../../../shared/constants/ir'
  */
 export default defineEventHandler(async (event) => {
   const user = await requireIrUser(event)
-  await checkUserRateLimit(event, 'replay_upload', user.id, { user: 120, ip: 240 })
+  await checkUserRateLimit(event, 'replay_upload', user.id, REPLAY_UPLOAD_RATE_LIMIT)
   const scoreId = getRouterParam(event, 'id')
   if (!scoreId) {
     throw createError({ statusCode: 400, statusMessage: 'score id is required' })

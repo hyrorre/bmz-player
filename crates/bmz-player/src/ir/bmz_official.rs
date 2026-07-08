@@ -1,6 +1,6 @@
 use anyhow::{Context, Result, bail};
 use bmz_gameplay::rule::RuleMode;
-use reqwest::Url;
+use reqwest::{Url, header};
 
 use crate::select_options::DoubleOptionScoreBucket;
 
@@ -140,8 +140,12 @@ impl BmzOfficialIrClient {
             .context("failed to upload BMZ IR replay")?;
         let status = response.status();
         if !status.is_success() {
+            let retry_after = retry_after_header(&response);
             let body = response.text().await.unwrap_or_default();
-            bail!("BMZ IR replay upload failed: {}", response_error_summary(status, &body));
+            bail!(
+                "BMZ IR replay upload failed: {}",
+                response_error_summary(status, &body, retry_after.as_deref())
+            );
         }
         Ok(())
     }
@@ -377,8 +381,9 @@ async fn decode_response<T: serde::de::DeserializeOwned>(
 ) -> Result<T> {
     let status = response.status();
     if !status.is_success() {
+        let retry_after = retry_after_header(&response);
         let body = response.text().await.unwrap_or_default();
-        bail!("{label} failed: {}", response_error_summary(status, &body));
+        bail!("{label} failed: {}", response_error_summary(status, &body, retry_after.as_deref()));
     }
     response.json().await.with_context(|| format!("failed to decode {label} response"))
 }
@@ -386,7 +391,11 @@ async fn decode_response<T: serde::de::DeserializeOwned>(
 /// エラー本文はトークン等の秘匿情報を含み得るため、そのままログへ流さない。
 /// サーバー制御の短い statusMessage / message だけを抜き出し、それ以外の
 /// 本文は捨てる (h3 の createError は JSON でこれらのキーを返す)。
-fn response_error_summary(status: reqwest::StatusCode, body: &str) -> String {
+fn response_error_summary(
+    status: reqwest::StatusCode,
+    body: &str,
+    retry_after: Option<&str>,
+) -> String {
     const MAX_MESSAGE_CHARS: usize = 200;
 
     #[derive(serde::Deserialize)]
@@ -401,13 +410,30 @@ fn response_error_summary(status: reqwest::StatusCode, body: &str) -> String {
         .and_then(|body| body.status_message.or(body.message))
         .map(|message| message.trim().to_string())
         .filter(|message| !message.is_empty());
-    match message {
+    let mut summary = match message {
         Some(message) => {
             let truncated: String = message.chars().take(MAX_MESSAGE_CHARS).collect();
             format!("{status} {truncated}")
         }
         None => format!("{status} (response body omitted, {} bytes)", body.len()),
+    };
+    if let Some(retry_after) = retry_after.filter(|value| !value.trim().is_empty()) {
+        summary.push_str(" (retry after ");
+        summary.push_str(retry_after.trim());
+        summary.push('s');
+        summary.push(')');
     }
+    summary
+}
+
+fn retry_after_header(response: &reqwest::Response) -> Option<String> {
+    response
+        .headers()
+        .get(header::RETRY_AFTER)
+        .and_then(|value| value.to_str().ok())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
 }
 
 fn scope_query_value(scope: &IrRankingScope) -> &'static str {
@@ -474,8 +500,19 @@ mod tests {
         let summary = response_error_summary(
             reqwest::StatusCode::TOO_MANY_REQUESTS,
             r#"{"statusCode":429,"statusMessage":"Too many requests","stack":[]}"#,
+            None,
         );
         assert_eq!(summary, "429 Too Many Requests Too many requests");
+    }
+
+    #[test]
+    fn error_summary_includes_retry_after_when_present() {
+        let summary = response_error_summary(
+            reqwest::StatusCode::TOO_MANY_REQUESTS,
+            r#"{"statusCode":429,"statusMessage":"Too many requests","stack":[]}"#,
+            Some("42"),
+        );
+        assert_eq!(summary, "429 Too Many Requests Too many requests (retry after 42s)");
     }
 
     #[test]
@@ -483,6 +520,7 @@ mod tests {
         let summary = response_error_summary(
             reqwest::StatusCode::BAD_REQUEST,
             r#"{"message":"rule.ln_policy is invalid"}"#,
+            None,
         );
         assert_eq!(summary, "400 Bad Request rule.ln_policy is invalid");
     }
@@ -492,6 +530,7 @@ mod tests {
         let summary = response_error_summary(
             reqwest::StatusCode::INTERNAL_SERVER_ERROR,
             "secret token leaked in html error page",
+            None,
         );
         assert_eq!(summary, "500 Internal Server Error (response body omitted, 38 bytes)");
         assert!(!summary.contains("secret"));
@@ -503,6 +542,7 @@ mod tests {
         let summary = response_error_summary(
             reqwest::StatusCode::BAD_REQUEST,
             &format!(r#"{{"statusMessage":"{long}"}}"#),
+            None,
         );
         assert_eq!(summary.len(), "400 Bad Request ".len() + 200);
     }

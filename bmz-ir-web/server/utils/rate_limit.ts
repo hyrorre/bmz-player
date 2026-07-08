@@ -1,12 +1,14 @@
 import { createHash } from 'node:crypto'
 import { and, eq, lt } from 'drizzle-orm'
-import { createError, getRequestIP, type H3Event } from 'h3'
+import { createError, getRequestIP, setHeader, type H3Event } from 'h3'
 import { db, schema } from 'hub:db'
 
 export type RateLimitAction = 'login' | 'register' | 'score_submit' | 'refresh' | 'replay_upload'
 export type RateLimitScope = 'email' | 'ip' | 'user'
 
 export const RATE_LIMIT_WINDOW_MS = 15 * 60 * 1000
+export const SCORE_SUBMIT_RATE_LIMIT = { user: 1500, ip: 3000 } as const
+export const REPLAY_UPLOAD_RATE_LIMIT = { user: 900, ip: 1800 } as const
 
 /**
  * 認証済み API 向けのレート制限。user id と IP の両方で数える。
@@ -23,8 +25,8 @@ export async function checkUserRateLimit(
 ) {
   const ip = getRequestIP(event, { xForwardedFor: true }) ?? 'unknown'
   await Promise.all([
-    incrementRateLimit(action, 'user', userId, limits.user, now),
-    incrementRateLimit(action, 'ip', ip, limits.ip, now),
+    incrementRateLimit(action, 'user', userId, limits.user, now, 'Too many requests', event),
+    incrementRateLimit(action, 'ip', ip, limits.ip, now, 'Too many requests', event),
   ])
   await pruneExpiredRateLimits(now)
 }
@@ -37,7 +39,7 @@ export async function checkIpRateLimit(
   now = Date.now(),
 ) {
   const ip = getRequestIP(event, { xForwardedFor: true }) ?? 'unknown'
-  await incrementRateLimit(action, 'ip', ip, limit, now)
+  await incrementRateLimit(action, 'ip', ip, limit, now, 'Too many requests', event)
   await pruneExpiredRateLimits(now)
 }
 
@@ -48,6 +50,7 @@ export async function incrementRateLimit(
   limit: number,
   nowMs: number,
   statusMessage = 'Too many requests',
+  event?: H3Event,
 ) {
   const scopeHash = hashScope(scopeValue)
   const windowStart = new Date(Math.floor(nowMs / RATE_LIMIT_WINDOW_MS) * RATE_LIMIT_WINDOW_MS)
@@ -64,6 +67,11 @@ export async function incrementRateLimit(
   })
   const attempts = (existing?.attempts ?? 0) + 1
   if (attempts > limit) {
+    if (event) {
+      const windowEndMs = windowStart.getTime() + RATE_LIMIT_WINDOW_MS
+      const retryAfterSeconds = Math.max(1, Math.ceil((windowEndMs - nowMs) / 1000))
+      setHeader(event, 'Retry-After', String(retryAfterSeconds))
+    }
     throw createError({ statusCode: 429, statusMessage })
   }
 

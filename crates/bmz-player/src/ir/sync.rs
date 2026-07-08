@@ -26,6 +26,33 @@ pub struct IrSyncReport {
     pub included_rankings: Vec<IrRankingResult>,
 }
 
+pub const IR_SYNC_BATCH_LIMIT: u32 = 20;
+pub const IR_SYNC_JOB_SPACING_MS: u64 = 1_500;
+pub const IR_SYNC_LOOP_INTERVAL_SECS: u64 = 30;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct IrSyncThrottle {
+    pub job_spacing_ms: u64,
+}
+
+impl IrSyncThrottle {
+    pub const fn none() -> Self {
+        Self { job_spacing_ms: 0 }
+    }
+
+    pub const fn rate_limited() -> Self {
+        Self { job_spacing_ms: IR_SYNC_JOB_SPACING_MS }
+    }
+
+    fn job_delay(self) -> Option<std::time::Duration> {
+        if self.job_spacing_ms == 0 {
+            None
+        } else {
+            Some(std::time::Duration::from_millis(self.job_spacing_ms))
+        }
+    }
+}
+
 /// 保存済み credentials を読み、失効が近ければ refresh して保存し直す。
 pub async fn ensure_fresh_credentials(
     profile_root: &Path,
@@ -67,6 +94,7 @@ pub async fn sync_pending_ir_jobs(
     now: i64,
     limit: u32,
     ignore_retry_backoff: bool,
+    throttle: IrSyncThrottle,
 ) -> Result<IrSyncReport> {
     let mut report = IrSyncReport::default();
     let jobs = if ignore_retry_backoff {
@@ -74,8 +102,9 @@ pub async fn sync_pending_ir_jobs(
     } else {
         network_db.pending_ir_score_jobs(now, limit)?
     };
+    let job_count = jobs.len();
     let replay_paths = replay_paths_for_jobs(score_db_path, &jobs)?;
-    for job in jobs {
+    for (index, job) in jobs.into_iter().enumerate() {
         let Some(provider) = provider_config(ir_config, &job.provider) else {
             network_db.mark_ir_score_job_status(
                 job.id,
@@ -184,6 +213,11 @@ pub async fn sync_pending_ir_jobs(
                 report.messages.push(format!("job {}: {message}", job.id));
                 tracing::warn!(job_id = job.id, provider = job.provider, %message, "IR score submission failed");
             }
+        }
+        if index + 1 < job_count
+            && let Some(delay) = throttle.job_delay()
+        {
+            tokio::time::sleep(delay).await;
         }
     }
     let pruned = network_db.prune_succeeded_ir_score_jobs(now)?;
@@ -359,7 +393,9 @@ async fn submit_job_payload(
     let credentials =
         ensure_fresh_credentials(profile_root, provider_key, &provider.base_url, now).await?;
     let client = BmzOfficialIrClient::new(&provider.base_url, credentials.access_token)?;
-    attach_evidence(profile_root, provider, &client, &mut payload).await;
+    if !super::backfill::is_local_backfill_submission(&payload) {
+        attach_evidence(profile_root, provider, &client, &mut payload).await;
+    }
     let request_json = serde_json::to_string(&payload)?;
     let options =
         IrSubmitOptions { ranking_scopes: vec![IrRankingScope::Global], ranking_limit: 20 };
@@ -450,6 +486,18 @@ async fn attach_evidence(
 mod tests {
     use super::*;
     use crate::ln_policy::LnScorePolicy;
+
+    #[test]
+    fn ir_sync_rate_limit_defaults_match_backfill_budget() {
+        assert_eq!(IR_SYNC_BATCH_LIMIT, 20);
+        assert_eq!(IR_SYNC_JOB_SPACING_MS, 1_500);
+        assert_eq!(IR_SYNC_LOOP_INTERVAL_SECS, 30);
+        assert_eq!(
+            IrSyncThrottle::rate_limited().job_delay(),
+            Some(std::time::Duration::from_millis(1_500))
+        );
+        assert_eq!(IrSyncThrottle::none().job_delay(), None);
+    }
 
     #[test]
     fn ir_submission_log_is_jsonl_under_logs_dir() {

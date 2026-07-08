@@ -212,7 +212,10 @@ fn spawn_ir_sync_worker(boot: &bootstrap::BootstrappedApp) {
                 .unwrap_or(0);
             if let Err(error) = migrate_network_db(&network_db_path) {
                 tracing::warn!(%error, "failed to migrate network db for IR sync");
-                tokio::time::sleep(std::time::Duration::from_secs(30)).await;
+                tokio::time::sleep(std::time::Duration::from_secs(
+                    crate::ir::sync::IR_SYNC_LOOP_INTERVAL_SECS,
+                ))
+                .await;
                 continue;
             }
             match crate::storage::network_db::NetworkDatabase::open(&network_db_path) {
@@ -224,8 +227,9 @@ fn spawn_ir_sync_worker(boot: &bootstrap::BootstrappedApp) {
                         &logs_dir,
                         &ir_config,
                         now,
-                        20,
+                        crate::ir::sync::IR_SYNC_BATCH_LIMIT,
                         false,
+                        crate::ir::sync::IrSyncThrottle::rate_limited(),
                     )
                     .await
                     {
@@ -242,7 +246,10 @@ fn spawn_ir_sync_worker(boot: &bootstrap::BootstrappedApp) {
                 }
                 Err(error) => tracing::warn!(%error, "failed to open network db for IR sync"),
             }
-            tokio::time::sleep(std::time::Duration::from_secs(30)).await;
+            tokio::time::sleep(std::time::Duration::from_secs(
+                crate::ir::sync::IR_SYNC_LOOP_INTERVAL_SECS,
+            ))
+            .await;
         }
     });
 }

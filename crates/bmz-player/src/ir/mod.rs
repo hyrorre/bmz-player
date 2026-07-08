@@ -1,3 +1,4 @@
+pub mod backfill;
 pub mod bmz_official;
 pub mod course_payload;
 pub mod credentials;

@@ -1,12 +1,12 @@
 import { createError, readBody } from 'h3'
 import { submitCourseScore, validateCourseScoreSubmission } from '../../services/course_ir'
 import { requireIrUser } from '../../utils/auth'
-import { checkUserRateLimit } from '../../utils/rate_limit'
+import { SCORE_SUBMIT_RATE_LIMIT, checkUserRateLimit } from '../../utils/rate_limit'
 
 export default defineEventHandler(async (event) => {
   const user = await requireIrUser(event)
   // 単曲スコアと同じ score_submit アクションで数える。
-  await checkUserRateLimit(event, 'score_submit', user.id, { user: 300, ip: 600 })
+  await checkUserRateLimit(event, 'score_submit', user.id, SCORE_SUBMIT_RATE_LIMIT)
   let payload
   try {
     payload = validateCourseScoreSubmission(await readBody(event))

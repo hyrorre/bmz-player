@@ -49,13 +49,21 @@ GET    /api/v1/courses/{course_hash}/ranking   # global のみ
 
 ### クライアント (bmz-player)
 
-- CLI: `bmz ir login|logout|status|ranking|sync|rivals|device-key|replay`。
+- CLI: `bmz ir login|logout|status|ranking|sync|upload-local|rivals|device-key|replay`。
   egui プロファイル設定からもログイン可能。
 - 送信: リザルト確定時に `ir_score_jobs` へ enqueue (send_policy 判定込み) →
   リザルト画面で即時送信 + アプリ常駐ワーカー (30 秒間隔) が残りを処理。
+  送信は 1 バッチ 20 件、job 間 1.5 秒待ちで、backfill 時も同じペースに揃える。
   リトライは 1分 → 5分 → 30分 → 2時間 → 以降24時間。
   成功済み job は payload を空にし、同期後に 30 日以内または最新 500 件だけを
   `network.db` に保持する。未送信 / 失敗 / 送信中 job は剪定対象外。
+- local backfill: `bmz ir upload-local [--dry-run] [--limit N] [--sync]` で
+  `score.db` の既存 `score_history` を unverified な score submit として enqueue
+  する。既送信履歴は既定でスキップし、course stage / autoplay は既定で除外。
+  per-history ghost は現在の `score_history` には保持していないため送らない。
+- rate limit: score submit / course score は 15 分あたり user 1500 / IP 3000。
+  replay upload 系は 1 replay あたり upload-url / upload / verify の 3 request を使うため、
+  15 分あたり user 900 / IP 1800。429 では `Retry-After` を返す。
 - ランキング表示: Result / Select スキンの `NUMBER_IR_RANK(179)` /
   `NUMBER_IR_TOTALPLAYER(180/200)` / `NUMBER_IR_CLEARRATE(181)` /
   `OPTION_IR_LOADING/LOADED/NOPLAYER/FAILED(601..604)`、

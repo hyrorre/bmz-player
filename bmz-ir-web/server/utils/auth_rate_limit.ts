@@ -17,8 +17,8 @@ export async function checkAuthRateLimit(
   const message = 'Too many authentication attempts'
   const ip = getRequestIP(event, { xForwardedFor: true }) ?? 'unknown'
   await Promise.all([
-    incrementRateLimit(action, 'email', email, LIMITS[action].email, now, message),
-    incrementRateLimit(action, 'ip', ip, LIMITS[action].ip, now, message),
+    incrementRateLimit(action, 'email', email, LIMITS[action].email, now, message, event),
+    incrementRateLimit(action, 'ip', ip, LIMITS[action].ip, now, message, event),
   ])
   await pruneExpiredRateLimits(now)
 }
