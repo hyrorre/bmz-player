@@ -146,17 +146,40 @@ impl NetworkDatabase {
     }
 
     pub fn pending_ir_score_jobs(&self, now: i64, limit: u32) -> Result<Vec<IrScoreJobRecord>> {
+        self.pending_ir_score_jobs_with_backoff_policy(now, limit, false)
+    }
+
+    pub fn pending_ir_score_jobs_ignoring_backoff(
+        &self,
+        now: i64,
+        limit: u32,
+    ) -> Result<Vec<IrScoreJobRecord>> {
+        self.pending_ir_score_jobs_with_backoff_policy(now, limit, true)
+    }
+
+    fn pending_ir_score_jobs_with_backoff_policy(
+        &self,
+        now: i64,
+        limit: u32,
+        ignore_retry_backoff: bool,
+    ) -> Result<Vec<IrScoreJobRecord>> {
         const SENDING_STALE_AFTER_SECONDS: i64 = 300;
-        let mut stmt = self.conn.prepare(
+        let retry_filter = if ignore_retry_backoff {
+            "status IN ('pending', 'failed')"
+        } else {
+            "status IN ('pending', 'failed') AND next_attempt_at <= ?1"
+        };
+        let sql = format!(
             "SELECT id, provider, account_id, local_score_id, chart_sha256, ln_policy,
                 payload_json, status, attempt_count, next_attempt_at, last_error,
                 created_at, updated_at, kind
              FROM ir_score_jobs
-             WHERE (status IN ('pending', 'failed') AND next_attempt_at <= ?1)
+             WHERE ({retry_filter})
                 OR (status = 'sending' AND updated_at <= ?1 - ?3)
              ORDER BY next_attempt_at ASC, id ASC
-             LIMIT ?2",
-        )?;
+             LIMIT ?2"
+        );
+        let mut stmt = self.conn.prepare(&sql)?;
         stmt.query_map(params![now, limit, SENDING_STALE_AFTER_SECONDS], ir_score_job_from_row)?
             .collect::<std::result::Result<Vec<_>, _>>()
             .map_err(Into::into)
@@ -403,6 +426,31 @@ mod tests {
             assert_eq!(attempt_count, attempt as u32 + 1);
             assert_eq!(next_attempt_at, now + delay, "attempt {attempt}");
         }
+    }
+
+    #[test]
+    fn manual_ir_sync_can_ignore_retry_backoff() {
+        let mut db = open_network_db();
+        let job_id = db
+            .enqueue_ir_score_job(&NewIrScoreJob {
+                provider: "bmz-official".to_string(),
+                account_id: "account-1".to_string(),
+                kind: IrJobKind::Score,
+                local_score_id: 42,
+                chart_sha256: [7; 32],
+                ln_policy: LnScorePolicy::ForceLn,
+                payload_json: "{}".to_string(),
+                now: 100,
+            })
+            .unwrap();
+
+        db.mark_ir_score_job_status(job_id, IrScoreJobStatus::Failed, 200, "boom").unwrap();
+
+        assert!(db.pending_ir_score_jobs(201, 10).unwrap().is_empty());
+        let pending = db.pending_ir_score_jobs_ignoring_backoff(201, 10).unwrap();
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].id, job_id);
+        assert_eq!(pending[0].status, "failed");
     }
 
     #[test]

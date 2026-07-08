@@ -225,6 +225,7 @@ fn spawn_ir_sync_worker(boot: &bootstrap::BootstrappedApp) {
                         &ir_config,
                         now,
                         20,
+                        false,
                     )
                     .await
                     {

@@ -66,9 +66,14 @@ pub async fn sync_pending_ir_jobs(
     ir_config: &IrConfig,
     now: i64,
     limit: u32,
+    ignore_retry_backoff: bool,
 ) -> Result<IrSyncReport> {
     let mut report = IrSyncReport::default();
-    let jobs = network_db.pending_ir_score_jobs(now, limit)?;
+    let jobs = if ignore_retry_backoff {
+        network_db.pending_ir_score_jobs_ignoring_backoff(now, limit)?
+    } else {
+        network_db.pending_ir_score_jobs(now, limit)?
+    };
     let replay_paths = replay_paths_for_jobs(score_db_path, &jobs)?;
     for job in jobs {
         let Some(provider) = provider_config(ir_config, &job.provider) else {
@@ -372,6 +377,7 @@ async fn submit_course_job_payload(
 ) -> Result<(String, String)> {
     let mut payload: serde_json::Value =
         serde_json::from_str(payload_json).context("failed to parse stored IR course payload")?;
+    normalize_legacy_course_payload(&mut payload);
     let provider_key = crate::ir::provider_key::configured_provider_key(provider)
         .context("IR provider key is not set; log in again")?;
     let credentials =
@@ -397,6 +403,20 @@ async fn submit_course_job_payload(
     let request_json = serde_json::to_string(&payload)?;
     let response = client.submit_course_score(&payload).await?;
     Ok((request_json, serde_json::to_string(&response)?))
+}
+
+fn normalize_legacy_course_payload(payload: &mut serde_json::Value) {
+    let Some(rule) = payload.get_mut("rule").and_then(serde_json::Value::as_object_mut) else {
+        return;
+    };
+    let needs_default = match rule.get("rule_mode") {
+        Some(serde_json::Value::String(value)) => value.trim().is_empty(),
+        Some(serde_json::Value::Null) | None => true,
+        Some(_) => false,
+    };
+    if needs_default {
+        rule.insert("rule_mode".to_string(), serde_json::json!("Beatoraja"));
+    }
 }
 
 /// device key で payload に署名 evidence を付ける。
@@ -474,5 +494,33 @@ mod tests {
         assert_eq!(value["response"]["accepted"], true);
 
         let _ = std::fs::remove_dir_all(logs_dir);
+    }
+
+    #[test]
+    fn legacy_course_payload_defaults_missing_rule_mode() {
+        let mut payload = serde_json::json!({
+            "rule": {
+                "gauge": "Class",
+                "ln_policy": "AutoLn",
+                "scoring": "bms_ex_score_v1"
+            }
+        });
+
+        normalize_legacy_course_payload(&mut payload);
+
+        assert_eq!(payload["rule"]["rule_mode"], "Beatoraja");
+    }
+
+    #[test]
+    fn legacy_course_payload_keeps_existing_rule_mode() {
+        let mut payload = serde_json::json!({
+            "rule": {
+                "rule_mode": "Dx"
+            }
+        });
+
+        normalize_legacy_course_payload(&mut payload);
+
+        assert_eq!(payload["rule"]["rule_mode"], "Dx");
     }
 }

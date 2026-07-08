@@ -497,6 +497,7 @@ async fn sync(profile_paths: &ProfilePaths, profile: &ProfileConfig) -> Result<(
         &profile.ir,
         now_unix_seconds(),
         50,
+        true,
     )
     .await?;
     println!("submitted: {}, failed: {}", report.submitted, report.failed);
