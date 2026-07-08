@@ -1,4 +1,4 @@
-use crate::mixer::MixerState;
+use crate::mixer::{ActiveVoiceFadeOut, MixerState};
 use crate::queue::{AudioScheduler, RestartPolicy, ScheduledSound, ScheduledSoundQueue};
 use crate::sample::{DecodedSample, SampleBank};
 
@@ -67,6 +67,13 @@ impl AudioEngine {
         self.mixer.voices.retain(|voice| voice.sound.sound_id != id);
     }
 
+    /// 指定 sound_id の再生待ち音を破棄し、再生中 voice は短い fade-out で停止する。
+    /// プレビュー差し替えのように波形途中の即時停止が pop になりやすい場面で使う。
+    pub fn stop_sound_with_fade_out(&mut self, id: bmz_core::ids::SoundId, fade_out_frames: u32) {
+        self.queue.retain(|sound| sound.sound_id != id);
+        self.mixer.stop_sound_with_fade_out(id, fade_out_frames);
+    }
+
     /// 出力全体に掛かるマスターゲインを設定する。リザルト退出時に残響を
     /// フェードアウトさせる用途で、毎フレーム 1.0 → 0.0 へ更新する。
     pub fn set_master_gain(&mut self, gain: f32) {
@@ -103,6 +110,33 @@ impl AudioEngine {
             catch_up: false,
             restart_policy: RestartPolicy::Overlap,
         });
+    }
+
+    pub fn play_now_with_fade_in_and_fade_out(
+        &mut self,
+        sound_id: bmz_core::ids::SoundId,
+        volume: f32,
+        loop_playback: bool,
+        fade_in_frames: u32,
+        fade_out_frames: u32,
+    ) {
+        let voice_start = self.mixer.voices.len();
+        self.mixer.push_scheduled([ScheduledSound {
+            start_frame: 0,
+            sound_id,
+            volume: volume.clamp(0.0, 1.0),
+            pan: 0.0,
+            loop_playback,
+            fade_in_frames,
+            catch_up: false,
+            restart_policy: RestartPolicy::Overlap,
+        }]);
+        if fade_out_frames != 0 {
+            for voice in &mut self.mixer.voices[voice_start..] {
+                voice.fade_out =
+                    Some(ActiveVoiceFadeOut { started_output_frames: 0, frames: fade_out_frames });
+            }
+        }
     }
 
     /// 再生待ちのスケジュール音も鳴っているボイスも無い、つまり出力を
@@ -332,6 +366,42 @@ mod tests {
         engine.stop_sound(SoundId(1));
 
         // stop 後はキューも voice も空。
+        assert!(engine.is_idle());
+    }
+
+    #[test]
+    fn stop_sound_with_fade_out_keeps_voice_until_ramped_down() {
+        let mut engine = AudioEngine::default();
+        engine.insert_sample(
+            SoundId(1),
+            DecodedSample { channels: 1, sample_rate: 48_000, frames: vec![1.0, 1.0, 1.0, 1.0] },
+        );
+        engine.play_now(SoundId(1), 1.0, true);
+        let mut output = vec![0.0; 2];
+        engine.render_stereo(0, &mut output);
+
+        engine.stop_sound_with_fade_out(SoundId(1), 2);
+        assert!(!engine.is_idle());
+        let mut output = vec![0.0; 6];
+        engine.render_stereo(1, &mut output);
+
+        assert_eq!(output, vec![1.0, 1.0, 0.5, 0.5, 0.0, 0.0]);
+        assert!(engine.is_idle());
+    }
+
+    #[test]
+    fn play_now_with_fade_out_ramps_from_first_rendered_frame() {
+        let mut engine = AudioEngine::default();
+        engine.insert_sample(
+            SoundId(1),
+            DecodedSample { channels: 1, sample_rate: 48_000, frames: vec![1.0, 1.0, 1.0, 1.0] },
+        );
+
+        engine.play_now_with_fade_in_and_fade_out(SoundId(1), 1.0, false, 0, 2);
+        let mut output = vec![0.0; 6];
+        engine.render_stereo(100, &mut output);
+
+        assert_eq!(output, vec![1.0, 1.0, 0.5, 0.5, 0.0, 0.0]);
         assert!(engine.is_idle());
     }
 

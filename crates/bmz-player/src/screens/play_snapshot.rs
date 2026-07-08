@@ -332,6 +332,7 @@ pub fn build_render_snapshot_with_target_and_bga_frames_cached(
     let mut snapshot = RenderSnapshot {
         time: render_now,
         play_elapsed_time,
+        operating_time_ms: 0,
         ready_elapsed_time: None,
         // session が構築できている時点で WAV 等のロードは完了している。
         resources_loaded: true,

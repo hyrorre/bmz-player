@@ -460,6 +460,7 @@ fn spawn_result_ir_task_for_target(
                 &ir_config,
                 now,
                 20,
+                false,
             )
             .await
         }

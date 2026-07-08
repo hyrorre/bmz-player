@@ -134,6 +134,13 @@ describe('database error classification', () => {
 
     expect(isUniqueConstraintError(error)).toBe(false)
   })
+
+  test('ignores foreign key constraint errors', () => {
+    const cause = new Error('D1_ERROR: FOREIGN KEY constraint failed: SQLITE_CONSTRAINT')
+    const error = new Error('Failed query: insert into "best_course_scores" ...', { cause })
+
+    expect(isUniqueConstraintError(error)).toBe(false)
+  })
 })
 
 describe('course score validation', () => {

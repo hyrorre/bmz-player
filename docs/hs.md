@@ -3,7 +3,7 @@
 BMZ のハイスピード周りは、現状では次の 2 軸に分かれる。
 
 - HS MODE: `NHS` / `FHS`
-- HS-FIX: `OFF` / `START BPM` / `MIN BPM` / `MAX BPM` / `MAIN BPM`
+- HS-FIX: `OFF` / `START BPM` / `MAX BPM` / `MAIN BPM` / `MIN BPM`
 
 `HS Auto Adjust` は独立した profile 設定としては持たない。BMZ では FHS 中の
 自動再計算を、beatoraja の `HI-SPEED FIX Auto Adjust` ON 相当として扱う。
@@ -63,9 +63,9 @@ HS-FIX の選択肢は次の通り。
 | --- | --- |
 | `OFF` | 初期 BPM。FHS の曲開始前計算では `START BPM` と同じ扱い |
 | `START BPM` | 初期 BPM |
-| `MIN BPM` | 初期 BPM と BPM 変化イベントの最小 BPM |
 | `MAX BPM` | 初期 BPM と BPM 変化イベントの最大 BPM |
 | `MAIN BPM` | ノート数が最も多い BPM |
+| `MIN BPM` | 初期 BPM と BPM 変化イベントの最小 BPM |
 
 `MAIN BPM` は、地雷を除いた通常ノートとロングノート始点を BPM ごとに数え、
 最も count が大きい BPM を選ぶ。ロングノートの始点が通常ノート一覧と重複する場合は
@@ -74,10 +74,11 @@ HS-FIX の選択肢は次の通り。
 BMZ の設定 UI / 選曲中の巡回順は次の順番。
 
 ```text
-OFF -> START BPM -> MIN BPM -> MAX BPM -> MAIN BPM -> OFF
+OFF -> START BPM -> MAX BPM -> MAIN BPM -> MIN BPM -> OFF
 ```
 
-一方で、play skin へ渡す beatoraja 互換の `event_index(55)` は次の値を使う。
+この順番は beatoraja の `fixhispeed` / `event_index(55)` と同じ内部順に合わせる。
+play skin へ渡す beatoraja 互換の `event_index(55)` は次の値を使う。
 
 | index | meaning |
 | ---: | --- |
@@ -87,8 +88,8 @@ OFF -> START BPM -> MIN BPM -> MAX BPM -> MAIN BPM -> OFF
 | 3 | MAIN BPM |
 | 4 | MIN BPM |
 
-この 2 つの並びは違うので注意する。プレイ中 skin 用の表示 index は
-セッション開始時に profile の HS-FIX 設定から決まり、プレイ中の手動操作では変更しない。
+プレイ中 skin 用の表示 index はセッション開始時に profile の HS-FIX 設定から決まり、
+プレイ中の手動操作では変更しない。
 
 ## FHS Recalculation
 

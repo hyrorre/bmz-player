@@ -819,6 +819,9 @@ impl SkinBgaFrame {
 #[derive(Debug, Clone, PartialEq)]
 pub struct SkinDrawState {
     pub elapsed_ms: i32,
+    /// アプリ起動後の経過時間 ms。
+    /// beatoraja の NUMBER_OPERATING_TIME_HOUR/MINUTE/SECOND (27..29) に使う。
+    pub operating_time_ms: i32,
     pub ready_timer_ms: Option<i32>,
     pub play_timer_ms: Option<i32>,
     pub key_mode: KeyMode,
@@ -1135,6 +1138,7 @@ impl Default for SkinDrawState {
     fn default() -> Self {
         Self {
             elapsed_ms: 0,
+            operating_time_ms: 0,
             ready_timer_ms: None,
             play_timer_ms: None,
             key_mode: KeyMode::default(),
@@ -5554,8 +5558,9 @@ impl SkinDocumentRenderExt for SkinDocument {
         let blend = if destination.blend == 2 { BlendMode::Add } else { BlendMode::Normal };
         let max_density = density.iter().copied().max().unwrap_or(1).max(1) as f32;
         let count = density.len().max(1) as f32;
-        let gap = if graph.no_gap != 0 { 0.0 } else { 1.0 };
-        let bar_w = ((rect.width - gap * (count - 1.0)).max(1.0) / count).max(1.0);
+        let pixel_w = 1.0 / self.w.max(1) as f32;
+        let gap = if graph.no_gap != 0 || graph.no_gap_x != 0 { 0.0 } else { pixel_w };
+        let bar_w = ((rect.width - gap * (count - 1.0)).max(pixel_w) / count).max(pixel_w);
         let color = Color::rgba(0.75, 0.85, 1.0, 0.85 * frame_alpha);
         let mut items = Vec::new();
         for (index, value) in density.iter().enumerate() {
@@ -7428,17 +7433,31 @@ fn skin_builtin_value_f32(expr: &str, state: &SkinDrawState) -> Option<f32> {
     }
 }
 
+fn skin_builtin_value_i64(expr: &str, state: &SkinDrawState) -> Option<i64> {
+    let number = skin_builtin_value_f32(expr, state)?;
+    Some(match expr.trim() {
+        SKIN_EXPR_DEFAULT_CHART_TOTAL_COUNT | SKIN_EXPR_DEFAULT_CHART_GAUGE => {
+            number.round() as i64
+        }
+        _ => integer_property_value(number),
+    })
+}
+
 fn skin_value_number(value: &SkinValueDef, state: &SkinDrawState) -> Option<i64> {
     if !value.expr.trim().is_empty() {
         return skin_state_number_expr(&value.expr, state);
     }
     if !value.value_expr.trim().is_empty() {
-        if let Some(number) = skin_builtin_value_f32(&value.value_expr, state) {
-            return Some(number.round() as i64);
+        if let Some(number) = skin_builtin_value_i64(&value.value_expr, state) {
+            return Some(number);
         }
-        return skin_state_float_expr(&value.value_expr, state).map(|value| value.round() as i64);
+        return skin_state_float_expr(&value.value_expr, state).map(integer_property_value);
     }
     skin_state_number(value.ref_id, state)
+}
+
+fn integer_property_value(value: f32) -> i64 {
+    value as i64
 }
 
 fn skin_value_number_for_destination(
@@ -7738,6 +7757,10 @@ fn player_total_play_notes(stats: &PlayerStatsSnapshot) -> u64 {
         .saturating_add(player_total_bad(stats))
 }
 
+fn operating_time_seconds(state: &SkinDrawState) -> i64 {
+    i64::from(state.operating_time_ms.max(0)) / 1_000
+}
+
 fn select_folder_lamp_counts_available(state: &SkinDrawState) -> bool {
     state.select_screen
         && matches!(
@@ -7793,6 +7816,9 @@ fn skin_state_number(ref_id: i32, state: &SkinDrawState) -> Option<i64> {
         18 => Some(player_stat_u64((state.player_stats.playtime_seconds / 60) % 60)),
         19 => Some(player_stat_u64(state.player_stats.playtime_seconds % 60)),
         21..=26 => current_datetime_number(ref_id),
+        27 => Some(operating_time_seconds(state) / 3_600),
+        28 => Some((operating_time_seconds(state) / 60) % 60),
+        29 => Some(operating_time_seconds(state) % 60),
         42 | 43 if state.result_failed.is_some() => Some(state.result_arrange_index as i64),
         42 if state.select_screen => Some(state.select_arrange_index as i64),
         43 if state.select_screen => Some(state.select_arrange_2p_index as i64),
@@ -10698,9 +10724,9 @@ fn select_double_option_index(double_option: &str) -> usize {
 fn select_hs_fix_index(hs_fix: &str) -> usize {
     match hs_fix {
         "START BPM" => 1,
-        "MIN BPM" => 2,
-        "MAX BPM" => 3,
-        "MAIN BPM" => 4,
+        "MAX BPM" => 2,
+        "MAIN BPM" => 3,
+        "MIN BPM" => 4,
         _ => 0,
     }
 }
@@ -14359,6 +14385,45 @@ mod tests {
     }
 
     #[test]
+    fn play_judgegraph_density_uses_canvas_pixel_gap() {
+        let mut document: SkinDocument = serde_json::from_str(
+            r#"
+            {
+                "type": 0,
+                "w": 100,
+                "h": 100,
+                "judgegraph": [{ "id": "density" }],
+                "destination": [{ "id": "density", "dst": [{ "x": 10, "y": 10, "w": 40, "h": 10 }] }]
+            }
+            "#,
+        )
+        .unwrap();
+        document.play_judge_graph_density = vec![1, 2, 3];
+
+        let items = document.static_render_items(
+            &HashMap::new(),
+            &SkinDrawState::default(),
+            &SkinTextState::default(),
+        );
+        let rects: Vec<Rect> = items
+            .iter()
+            .filter_map(|item| match item {
+                SkinRenderItem::Rect { rect, .. } => Some(*rect),
+                _ => None,
+            })
+            .collect();
+
+        assert_eq!(rects.len(), 3);
+        for rect in rects {
+            assert!(rect.x >= 0.10);
+            assert!(
+                rect.x + rect.width <= 0.50 + 0.0001,
+                "play judgegraph bar should stay inside the destination: {rect:?}",
+            );
+        }
+    }
+
+    #[test]
     fn pre_notes_lift_line_at_note_origin_renders_in_front() {
         let document: SkinDocument = serde_json::from_str(
             r#"
@@ -17167,7 +17232,7 @@ mod tests {
         assert_eq!(skin_state_number(42, &state), Some(2));
         assert_eq!(skin_state_number(43, &state), Some(5));
         assert_eq!(skin_state_number(54, &state), Some(3));
-        assert_eq!(skin_state_number(55, &state), Some(4));
+        assert_eq!(skin_state_number(55, &state), Some(3));
     }
 
     #[test]
@@ -18982,6 +19047,15 @@ mod tests {
     }
 
     #[test]
+    fn skin_state_number_maps_operating_time_refs() {
+        let state = SkinDrawState { operating_time_ms: 90_061_234, ..SkinDrawState::default() };
+
+        assert_eq!(skin_state_number(27, &state), Some(25));
+        assert_eq!(skin_state_number(28, &state), Some(1));
+        assert_eq!(skin_state_number(29, &state), Some(1));
+    }
+
+    #[test]
     fn skin_state_number_maps_player_statistics_refs() {
         let state = SkinDrawState {
             total_notes: 99,
@@ -19940,6 +20014,16 @@ mod tests {
         assert_eq!(select_judge_algorithm_index("Lowest"), 2);
         assert_eq!(select_judge_algorithm_index("Score"), 3);
         assert_eq!(select_judge_algorithm_index("unknown"), 0);
+    }
+
+    #[test]
+    fn select_hs_fix_index_maps_beatoraja_order() {
+        assert_eq!(select_hs_fix_index("OFF"), 0);
+        assert_eq!(select_hs_fix_index("START BPM"), 1);
+        assert_eq!(select_hs_fix_index("MAX BPM"), 2);
+        assert_eq!(select_hs_fix_index("MAIN BPM"), 3);
+        assert_eq!(select_hs_fix_index("MIN BPM"), 4);
+        assert_eq!(select_hs_fix_index("unknown"), 0);
     }
 
     #[test]
@@ -21912,6 +21996,43 @@ mod tests {
 
         assert_eq!(skin_value_number(&value, &state), Some(40));
         assert_eq!(skin_value_number(&afterdot, &state), Some(4000));
+    }
+
+    #[test]
+    fn skin_value_number_truncates_lua_value_expr_like_beatoraja_integer_property() {
+        let state = SkinDrawState {
+            total_notes: 2480,
+            judge_counts: DisplayJudgeCounts { pgreat: 1, ..Default::default() },
+            adjusted_rate: Some(0.6),
+            adjusted_rate_adot: Some(60),
+            ..SkinDrawState::default()
+        };
+        let remain_integer = SkinValueDef {
+            id: "remain-rate-num".to_string(),
+            src: String::new(),
+            value_expr:
+                "(number(106)-number(110)-number(111)-number(112)-number(113)-number(114))/number(106)*100"
+                    .to_string(),
+            ..Default::default()
+        };
+        let remain_afterdot = SkinValueDef {
+            id: "remain-rate-adot-num".to_string(),
+            src: String::new(),
+            value_expr:
+                "(number(106)-number(110)-number(111)-number(112)-number(113)-number(114))/number(106)*10000"
+                    .to_string(),
+            ..Default::default()
+        };
+        let adjusted_integer = SkinValueDef {
+            id: "adjusted-rate-num".to_string(),
+            src: String::new(),
+            value_expr: SKIN_EXPR_ADJUSTED_RATE.to_string(),
+            ..Default::default()
+        };
+
+        assert_eq!(skin_value_number(&remain_integer, &state), Some(99));
+        assert_eq!(skin_value_number(&remain_afterdot, &state), Some(9995));
+        assert_eq!(skin_value_number(&adjusted_integer, &state), Some(0));
     }
 
     #[test]

@@ -225,6 +225,7 @@ fn spawn_ir_sync_worker(boot: &bootstrap::BootstrappedApp) {
                         &ir_config,
                         now,
                         20,
+                        false,
                     )
                     .await
                     {
@@ -442,6 +443,7 @@ struct WinitApp {
     smoke_screenshot_path: Option<PathBuf>,
     rendered_frames: u32,
     rendered_result_frames: u32,
+    app_started_at: Instant,
     select_scene_started_at: Instant,
     select_bar_started_at: Instant,
     play_scene_started_at: Instant,
@@ -1971,6 +1973,7 @@ impl WinitApp {
             smoke_screenshot_path: options.smoke_screenshot_path.as_ref().map(PathBuf::from),
             rendered_frames: 0,
             rendered_result_frames: 0,
+            app_started_at: now,
             select_scene_started_at: now,
             select_bar_started_at: now,
             play_scene_started_at: now,
@@ -2352,9 +2355,24 @@ impl WinitApp {
                 })
             }
         };
+        self.apply_operating_time_to_scene(&mut scene);
         let overlay = self.build_overlay_snapshot();
         self.apply_overlay_to_scene(&mut scene, overlay);
         scene
+    }
+
+    fn operating_time_ms(&self) -> i32 {
+        elapsed_since_ms(self.app_started_at)
+    }
+
+    fn apply_operating_time_to_scene(&self, scene: &mut AppSceneSnapshot) {
+        let operating_time_ms = self.operating_time_ms();
+        match scene {
+            AppSceneSnapshot::Decide(snapshot) | AppSceneSnapshot::Play(snapshot) => {
+                snapshot.operating_time_ms = operating_time_ms;
+            }
+            AppSceneSnapshot::Select(_) | AppSceneSnapshot::Result(_) => {}
+        }
     }
 
     fn build_overlay_snapshot(&self) -> OverlaySnapshot {
@@ -6533,13 +6551,6 @@ impl WinitApp {
         self.course_identity_with_stored(course_id).map(|(_, identity)| identity)
     }
 
-    fn ir_course_definition(
-        &self,
-        course_id: i64,
-    ) -> Option<crate::ir::course_payload::IrCourseDefinition> {
-        self.ir_course_identity(course_id).map(|identity| identity.definition)
-    }
-
     fn course_result_ir_target(
         &self,
         course: &crate::screens::course_session::CourseResultSummary,
@@ -6593,13 +6604,14 @@ impl WinitApp {
         if enabled.is_empty() {
             return;
         }
-        let Some(definition) = self.ir_course_definition(course_id) else {
+        let Some(identity) = self.ir_course_identity(course_id) else {
             tracing::info!(course_id, "course has unresolved charts; skipping IR submission");
             return;
         };
+        let definition = &identity.definition;
         let ln_setting = self.boot.profile_config.play.ln_mode_policy.as_ir_str().to_string();
         let payload = crate::ir::course_payload::build_course_submission(
-            &definition,
+            definition,
             course_result,
             &crate::ir::course_payload::IrCourseSubmissionContext {
                 played_at,
@@ -6609,7 +6621,7 @@ impl WinitApp {
                 device_type: device_type.unwrap_or(bmz_core::input::InputDeviceKind::Keyboard),
                 arrange: arrange.to_string(),
                 random_seed,
-                idempotency_key: format!("bmz-course-{course_score_id}"),
+                idempotency_key: format!("bmz-course-{}-{course_score_id}", identity.course_hash),
             },
         );
         let Ok(payload_json) = serde_json::to_string(&payload) else {
@@ -6944,6 +6956,8 @@ impl WinitApp {
             snapshot.command_submitted_count.saturating_sub(previous.command_submitted_count);
         let commands_drained =
             snapshot.command_drained_count.saturating_sub(previous.command_drained_count);
+        let commands_coalesced =
+            snapshot.command_coalesced_count.saturating_sub(previous.command_coalesced_count);
 
         let sample_rate =
             self.audio_runtime.as_ref().map(AudioRuntime::sample_rate).unwrap_or(1).max(1);
@@ -6980,10 +6994,14 @@ impl WinitApp {
             other_engine_lock_misses,
             commands_submitted,
             commands_drained,
+            commands_coalesced,
             command_drops,
             command_drain_lock_misses,
             command_engine_lock_misses,
             command_queue_max_depth = snapshot.command_queue_max_depth,
+            select_preview_playing = self.select_preview_playing,
+            select_preview_fade = select_preview_fade_name(self.select_preview_fade),
+            select_preview_factor = select_preview_fade_factor(self.select_preview_fade, now),
             clipped_samples,
             peak_abs = snapshot.peak_abs,
             max_callback_us = snapshot.max_callback_ns / 1_000,
@@ -8396,9 +8414,12 @@ impl WinitApp {
             Some(ResultExit { started_at: Instant::now(), action, skip_requested: false });
         // HeldLanes の遷移判定はフェードアウト終了時に Key5/Key7 の
         // 押下状態を読むため、ここでは held フラグをリセットしない。
-        // Keep the result entry SE alive so the exit master-gain ramp can fade
-        // it together with the close SE. The voices are stopped after fadeout.
-        self.play_system_sound(crate::system_sound::SoundType::ResultClose);
+        // Result SE は毎フレームの master-gain command ではなく callback 側で
+        // fade-out させ、ASIO の小さい buffer でも段差が出にくいようにする。
+        let fadeout = Duration::from_millis(self.renderer.result_skin_fadeout_ms().max(0) as u64);
+        let fade_out_frames = self.result_exit_audio_fade_frames(fadeout);
+        self.fade_result_entry_system_sounds(fade_out_frames);
+        self.play_result_close_sound_with_fade_out(fade_out_frames);
     }
 
     fn request_result_exit_skip_for_key(
@@ -8686,9 +8707,9 @@ impl WinitApp {
         let skip_requested = exit.skip_requested;
         let fadeout = Duration::from_millis(self.renderer.result_skin_fadeout_ms().max(0) as u64);
         let elapsed = started_at.elapsed();
-        // スキンの終了アニメーション時間に合わせて、プレイ残響(draining_audio)と
-        // リザルトSEを 1.0 → 0.0 へ絞る。遷移時に音量が 0 付近まで落ちているので、
-        // 音声を破棄しても唐突な音切れにならない。
+        // スキンの終了アニメーション時間に合わせて、プレイ残響(draining_audio)を
+        // 1.0 → 0.0 へ絞る。リザルトSEは begin_result_exit で callback 側の
+        // fade-out を開始済みなので、ここでは毎フレーム command を投げない。
         self.fade_audio_for_result_exit(elapsed, fadeout);
         if elapsed < fadeout && !skip_requested {
             return;
@@ -8725,8 +8746,8 @@ impl WinitApp {
         }
     }
 
-    /// リザルト終了アニメ中、プレイ残響(draining_audio)とシステムSEの
-    /// マスターゲインを 1.0 → 0.0 へランプする。毎フレーム呼ぶ。
+    /// リザルト終了アニメ中、プレイ残響(draining_audio)のマスターゲインを
+    /// 1.0 → 0.0 へランプする。毎フレーム呼ぶ。
     /// フェード時間は `RESULT_EXIT_AUDIO_FADE` を上限とし、スキンの終了アニメ時間
     /// (`fadeout`) がそれより短ければ遷移前に絞り切れるよう短い方を採用する。
     /// 見た目の遷移タイミング自体は `fadeout` のまま変えない。
@@ -8735,13 +8756,46 @@ impl WinitApp {
         if let Some(audio) = &self.draining_audio {
             audio.engine.set_master_gain(gain);
         }
-        self.set_system_sound_master_gain(gain);
     }
 
-    fn set_system_sound_master_gain(&self, gain: f32) {
-        if let Some(manager) = &self.system_sound {
-            manager.set_master_gain(gain);
+    fn result_exit_audio_fade_frames(&self, fadeout: Duration) -> u32 {
+        duration_to_frames(
+            result_exit_audio_fade_duration(fadeout),
+            self.system_audio_sample_rate(),
+        )
+    }
+
+    fn system_audio_sample_rate(&self) -> u32 {
+        self.audio_runtime.as_ref().map(AudioRuntime::sample_rate).unwrap_or(48_000).max(1)
+    }
+
+    fn fade_result_entry_system_sounds(&self, fade_out_frames: u32) {
+        use crate::system_sound::SoundType;
+        let Some(manager) = &self.system_sound else {
+            return;
+        };
+        for sound_type in [
+            SoundType::ResultClear,
+            SoundType::ResultFail,
+            SoundType::CourseClear,
+            SoundType::CourseFail,
+        ] {
+            manager.stop_with_fade_out(sound_type, fade_out_frames);
         }
+    }
+
+    fn play_result_close_sound_with_fade_out(&self, fade_out_frames: u32) {
+        let Some(manager) = &self.system_sound else {
+            return;
+        };
+        let sound_type = crate::system_sound::SoundType::ResultClose;
+        manager.play_with_master_gain_and_fade_out(
+            sound_type,
+            system_sound_volume_from_mix(&self.boot.profile_config.audio_mix, sound_type),
+            1.0,
+            fade_out_frames,
+        );
+        self.start_audio_output_stream();
     }
 
     fn leave_result(&mut self) {
@@ -11523,6 +11577,15 @@ fn select_preview_fade_factor(fade: SelectPreviewFade, now: Instant) -> f32 {
     .clamp(0.0, 1.0)
 }
 
+fn select_preview_fade_name(fade: SelectPreviewFade) -> &'static str {
+    match fade {
+        SelectPreviewFade::Silent => "silent",
+        SelectPreviewFade::FadingIn { .. } => "fading_in",
+        SelectPreviewFade::Playing => "playing",
+        SelectPreviewFade::FadingOut { .. } => "fading_out",
+    }
+}
+
 fn select_preview_key_after_delay(
     key: Option<String>,
     elapsed: Duration,
@@ -11539,12 +11602,24 @@ fn fade_progress(started_at: Instant, now: Instant, duration: Duration) -> f32 {
 }
 
 fn result_exit_audio_gain(elapsed: Duration, fadeout: Duration) -> f32 {
-    let audio_fade = fadeout.min(RESULT_EXIT_AUDIO_FADE);
+    let audio_fade = result_exit_audio_fade_duration(fadeout);
     if audio_fade.is_zero() {
         0.0
     } else {
         (1.0 - elapsed.as_secs_f32() / audio_fade.as_secs_f32()).clamp(0.0, 1.0)
     }
+}
+
+fn result_exit_audio_fade_duration(fadeout: Duration) -> Duration {
+    fadeout.min(RESULT_EXIT_AUDIO_FADE)
+}
+
+fn duration_to_frames(duration: Duration, sample_rate: u32) -> u32 {
+    if duration.is_zero() || sample_rate == 0 {
+        return 0;
+    }
+    let frames = duration.as_secs_f64() * f64::from(sample_rate);
+    frames.round().clamp(1.0, f64::from(u32::MAX)) as u32
 }
 
 fn result_exit_system_sounds() -> &'static [crate::system_sound::SoundType] {
@@ -12071,6 +12146,7 @@ fn play_skin_video_draw_state(
         (snapshot.hidden_cover.clamp(0.0, 1.0) * visible_lane_height).round() as i32;
     bmz_render::skin::SkinDrawState {
         elapsed_ms: play_elapsed_ms,
+        operating_time_ms: snapshot.operating_time_ms,
         ready_timer_ms: snapshot.ready_elapsed_time.map(time_us_to_skin_ms),
         play_timer_ms: (snapshot.time.0 >= 0).then_some(time_us_to_skin_ms(snapshot.time)),
         key_mode: snapshot.key_mode,
@@ -14189,9 +14265,9 @@ fn cycle_hs_fix_option_with_direction(current: HsFixOption, direction: i32) -> H
     const VALUES: [HsFixOption; 5] = [
         HsFixOption::Off,
         HsFixOption::StartBpm,
-        HsFixOption::MinBpm,
         HsFixOption::MaxBpm,
         HsFixOption::MainBpm,
+        HsFixOption::MinBpm,
     ];
     cycle_enum(VALUES, current, direction)
 }
@@ -20742,7 +20818,19 @@ mod tests {
             DoubleOption::BattleAutoScratch
         );
         assert_eq!(cycle_hs_fix_option_with_direction(HsFixOption::Off, 1), HsFixOption::StartBpm);
-        assert_eq!(cycle_hs_fix_option_with_direction(HsFixOption::Off, -1), HsFixOption::MainBpm);
+        assert_eq!(
+            cycle_hs_fix_option_with_direction(HsFixOption::StartBpm, 1),
+            HsFixOption::MaxBpm
+        );
+        assert_eq!(
+            cycle_hs_fix_option_with_direction(HsFixOption::MaxBpm, 1),
+            HsFixOption::MainBpm
+        );
+        assert_eq!(
+            cycle_hs_fix_option_with_direction(HsFixOption::MainBpm, 1),
+            HsFixOption::MinBpm
+        );
+        assert_eq!(cycle_hs_fix_option_with_direction(HsFixOption::Off, -1), HsFixOption::MinBpm);
         assert_eq!(cycle_bga_option_with_direction(BgaModeConfig::On, -1), BgaModeConfig::Off);
         assert_eq!(
             cycle_bga_expand_with_direction(BgaExpandConfig::KeepAspect, 1),

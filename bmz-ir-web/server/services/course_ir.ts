@@ -1,6 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { and, eq } from 'drizzle-orm'
-import type { BatchItem } from 'drizzle-orm/batch'
 import { db, schema } from 'hub:db'
 import { isUniqueConstraintError } from '../utils/db_errors'
 import {
@@ -161,8 +160,8 @@ export async function submitCourseScore(
   const verification = await resolveVerification(user.id, payload)
 
   const deviceType = payload.play_options.device_type as CourseDeviceType
-  // best 更新と同一 batch で atomic に書くため、DB default に任せず
-  // アプリ側で受信時刻を確定させる。
+  // best 更新と同じ値を参照するため、DB default に任せずアプリ側で
+  // 受信時刻を確定させる。
   const serverReceivedAt = new Date()
   const courseScoreId = randomUUID()
   const insert = {
@@ -197,31 +196,14 @@ export async function submitCourseScore(
     idempotencyKey: payload.idempotency_key,
   }
 
-  // score insert と best 更新は D1 batch (implicit transaction) で atomic に
-  // 書く。挿入と best 更新の間で Worker が落ちても不整合が残らない。
-  // invalid (署名不正) は単曲と同じく best 更新の対象外。
-  const bestStatement =
-    verification !== 'invalid'
-      ? await prepareBestCourseScoreUpsert(
-          user.id,
-          payload,
-          { id: courseScoreId, serverReceivedAt },
-          clearRank,
-          verification,
-        )
-      : null
+  let score: { id: string; serverReceivedAt: Date } = { id: courseScoreId, serverReceivedAt }
   try {
-    const insertStatement = db.insert(schema.courseScores).values(insert)
-    if (bestStatement) {
-      await db.batch([insertStatement, bestStatement])
-    } else {
-      await insertStatement
-    }
+    await db.insert(schema.courseScores).values(insert)
   } catch (error) {
     if (!isUniqueConstraintError(error)) {
       throw error
     }
-    // idempotency 重複。従来どおり既存 score を返し best は更新しない。
+    // idempotency 重複。既存 score を採用し、best 更新を再試行する。
     const existing = await db.query.courseScores.findFirst({
       columns: { id: true, serverReceivedAt: true },
       where: and(
@@ -232,11 +214,26 @@ export async function submitCourseScore(
     if (!existing) {
       throw new Error('failed to insert course score')
     }
+    score = existing
+  }
+
+  // D1 batch 内で直前に作った course_score_id を best_course_scores から
+  // 参照すると FK で失敗するため、course score を先に確定保存してから
+  // best を更新する。重複 retry 時もここで best の復旧を試みる。
+  const bestStatement =
+    verification !== 'invalid'
+      ? await prepareBestCourseScoreUpsert(user.id, payload, score, clearRank, verification)
+      : null
+  if (bestStatement) {
+    await bestStatement
+  }
+
+  if (score.id !== courseScoreId) {
     return {
       accepted: true,
-      course_score_id: existing.id,
-      best_updated: false,
-      server_received_at: existing.serverReceivedAt.toISOString(),
+      course_score_id: score.id,
+      best_updated: bestStatement !== null,
+      server_received_at: score.serverReceivedAt.toISOString(),
     }
   }
 
@@ -267,7 +264,7 @@ async function upsertCourse(payload: CourseScoreSubmission) {
 
 /**
  * best_course_scores 更新の要否を判定し、必要なら未実行の upsert statement を
- * 返す。呼び出し側が score insert と同じ `db.batch` に載せて atomic に実行する。
+ * 返す。course score insert の確定後に単体実行する。
  */
 async function prepareBestCourseScoreUpsert(
   playerId: string,
@@ -275,7 +272,7 @@ async function prepareBestCourseScoreUpsert(
   score: { id: string; serverReceivedAt: Date },
   clearRank: number,
   verification: string,
-): Promise<BatchItem<'sqlite'> | null> {
+) {
   const current = await db.query.bestCourseScores.findFirst({
     columns: { exScore: true, clearRank: true, bp: true, maxCombo: true },
     where: and(

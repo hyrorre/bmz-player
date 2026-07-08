@@ -9,6 +9,13 @@ pub struct ActiveVoice {
     pub next_output_frame: u64,
     pub started: bool,
     pub stop_at_frame: Option<u64>,
+    pub fade_out: Option<ActiveVoiceFadeOut>,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct ActiveVoiceFadeOut {
+    pub started_output_frames: u64,
+    pub frames: u32,
 }
 
 #[derive(Debug)]
@@ -43,6 +50,7 @@ impl MixerState {
                 played_output_frames: 0,
                 started: false,
                 stop_at_frame: None,
+                fade_out: None,
             });
         }
     }
@@ -51,6 +59,21 @@ impl MixerState {
         for voice in &mut self.voices {
             if voice.sound.sound_id == id {
                 voice.sound.volume = volume;
+            }
+        }
+    }
+
+    pub fn stop_sound_with_fade_out(&mut self, id: bmz_core::ids::SoundId, fade_out_frames: u32) {
+        if fade_out_frames == 0 {
+            self.voices.retain(|voice| voice.sound.sound_id != id);
+            return;
+        }
+        for voice in &mut self.voices {
+            if voice.sound.sound_id == id && voice.fade_out.is_none() {
+                voice.fade_out = Some(ActiveVoiceFadeOut {
+                    started_output_frames: voice.played_output_frames,
+                    frames: fade_out_frames,
+                });
             }
         }
     }
@@ -114,6 +137,11 @@ impl MixerState {
                     voice.started = true;
                     voice.next_output_frame = absolute_frame;
                 }
+                let Some(fade_out_gain) = fade_out_gain(voice.fade_out, voice.played_output_frames)
+                else {
+                    alive = false;
+                    break;
+                };
 
                 let sample_frame = voice.sample_position.floor() as usize;
                 if sample_frame >= sample_frames {
@@ -135,8 +163,9 @@ impl MixerState {
                 };
                 let fade_gain =
                     fade_in_gain(voice.sound.fade_in_frames, voice.played_output_frames);
-                left *= voice.sound.volume * fade_gain * pan_left(voice.sound.pan);
-                right *= voice.sound.volume * fade_gain * pan_right(voice.sound.pan);
+                let voice_gain = voice.sound.volume * fade_gain * fade_out_gain;
+                left *= voice_gain * pan_left(voice.sound.pan);
+                right *= voice_gain * pan_right(voice.sound.pan);
 
                 output[out_frame * 2] += left;
                 output[out_frame * 2 + 1] += right;
@@ -201,6 +230,20 @@ fn fade_in_gain(fade_in_frames: u32, played_output_frames: u64) -> f32 {
         return 1.0;
     }
     (played_output_frames as f32 / fade_in_frames as f32).clamp(0.0, 1.0)
+}
+
+fn fade_out_gain(fade_out: Option<ActiveVoiceFadeOut>, played_output_frames: u64) -> Option<f32> {
+    let Some(fade_out) = fade_out else {
+        return Some(1.0);
+    };
+    if fade_out.frames == 0 {
+        return None;
+    }
+    let elapsed = played_output_frames.saturating_sub(fade_out.started_output_frames);
+    if elapsed >= u64::from(fade_out.frames) {
+        return None;
+    }
+    Some((1.0 - elapsed as f32 / fade_out.frames as f32).clamp(0.0, 1.0))
 }
 
 fn pan_left(pan: f32) -> f32 {
@@ -324,6 +367,35 @@ mod tests {
         mixer.mix_stereo(&bank, 0, &mut output);
 
         assert_eq!(output, vec![0.0, 0.0, 0.5, 0.5, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]);
+    }
+
+    #[test]
+    fn stop_sound_with_fade_out_ramps_active_voice() {
+        let mut bank = SampleBank::default();
+        bank.insert(
+            SoundId(1),
+            DecodedSample { channels: 1, sample_rate: 48_000, frames: vec![1.0, 1.0, 1.0, 1.0] },
+        );
+        let mut mixer = MixerState::default();
+        mixer.push_scheduled([ScheduledSound {
+            start_frame: 0,
+            sound_id: SoundId(1),
+            volume: 1.0,
+            pan: 0.0,
+            loop_playback: true,
+            fade_in_frames: 0,
+            catch_up: false,
+            restart_policy: RestartPolicy::Overlap,
+        }]);
+        let mut output = vec![0.0; 2];
+        mixer.mix_stereo(&bank, 0, &mut output);
+
+        mixer.stop_sound_with_fade_out(SoundId(1), 2);
+        let mut output = vec![0.0; 6];
+        mixer.mix_stereo(&bank, 1, &mut output);
+
+        assert_eq!(output, vec![1.0, 1.0, 0.5, 0.5, 0.0, 0.0]);
+        assert!(mixer.voices.is_empty());
     }
 
     #[test]

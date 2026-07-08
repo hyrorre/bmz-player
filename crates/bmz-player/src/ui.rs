@@ -2989,9 +2989,9 @@ fn build_profile_settings_panel(
                             for (value, label) in [
                                 (HsFixConfig::Off, "OFF"),
                                 (HsFixConfig::StartBpm, "START BPM"),
-                                (HsFixConfig::MinBpm, "MIN BPM"),
                                 (HsFixConfig::MaxBpm, "MAX BPM"),
                                 (HsFixConfig::MainBpm, "MAIN BPM"),
+                                (HsFixConfig::MinBpm, "MIN BPM"),
                             ] {
                                 ui.selectable_value(&mut profile.play.hs_fix, value, label);
                             }

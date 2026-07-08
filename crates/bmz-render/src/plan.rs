@@ -881,6 +881,7 @@ fn plan_play(
 
     let mut skin_state = crate::skin::SkinDrawState {
         elapsed_ms: play_elapsed_ms,
+        operating_time_ms: snapshot.operating_time_ms,
         ready_timer_ms,
         play_timer_ms: (snapshot.time.0 >= 0)
             .then_some((snapshot.time.0 / 1_000).clamp(i32::MIN as i64, i32::MAX as i64) as i32),
@@ -1355,6 +1356,7 @@ fn plan_decide(
             (snapshot.play_elapsed_time.0 / 1_000).clamp(i32::MIN as i64, i32::MAX as i64) as i32;
         let mut state = crate::skin::SkinDrawState {
             elapsed_ms: play_elapsed_ms,
+            operating_time_ms: snapshot.operating_time_ms,
             ready_timer_ms: Some(play_elapsed_ms),
             total_notes: snapshot.total_notes,
             past_notes: snapshot.past_notes,

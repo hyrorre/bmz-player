@@ -17,16 +17,51 @@ const DROP_WARN_INTERVAL_MS: u64 = 1_000;
 
 #[derive(Debug)]
 pub enum AudioEngineCommand {
-    InsertSample { id: SoundId, sample: DecodedSample },
-    ReserveSampleSlot { id: SoundId },
-    InsertPreparedSample { id: SoundId, sample: DecodedSample },
+    InsertSample {
+        id: SoundId,
+        sample: DecodedSample,
+    },
+    ReserveSampleSlot {
+        id: SoundId,
+    },
+    InsertPreparedSample {
+        id: SoundId,
+        sample: DecodedSample,
+    },
     Schedule(ScheduledSound),
     ScheduleAll(Vec<ScheduledSound>),
-    StopSound { id: SoundId },
-    SetMasterGain { gain: f32 },
-    SetSoundVolume { id: SoundId, volume: f32 },
-    PlayNow { sound_id: SoundId, volume: f32, loop_playback: bool },
-    PlayNowWithFadeIn { sound_id: SoundId, volume: f32, loop_playback: bool, fade_in_frames: u32 },
+    StopSound {
+        id: SoundId,
+    },
+    StopSoundWithFadeOut {
+        id: SoundId,
+        fade_out_frames: u32,
+    },
+    SetMasterGain {
+        gain: f32,
+    },
+    SetSoundVolume {
+        id: SoundId,
+        volume: f32,
+    },
+    PlayNow {
+        sound_id: SoundId,
+        volume: f32,
+        loop_playback: bool,
+    },
+    PlayNowWithFadeIn {
+        sound_id: SoundId,
+        volume: f32,
+        loop_playback: bool,
+        fade_in_frames: u32,
+    },
+    PlayNowWithFadeInAndFadeOut {
+        sound_id: SoundId,
+        volume: f32,
+        loop_playback: bool,
+        fade_in_frames: u32,
+        fade_out_frames: u32,
+    },
 }
 
 impl AudioEngineCommand {
@@ -38,6 +73,9 @@ impl AudioEngineCommand {
             Self::Schedule(sound) => engine.schedule(sound),
             Self::ScheduleAll(sounds) => engine.schedule_all(sounds),
             Self::StopSound { id } => engine.stop_sound(id),
+            Self::StopSoundWithFadeOut { id, fade_out_frames } => {
+                engine.stop_sound_with_fade_out(id, fade_out_frames);
+            }
             Self::SetMasterGain { gain } => engine.set_master_gain(gain),
             Self::SetSoundVolume { id, volume } => engine.set_sound_volume(id, volume),
             Self::PlayNow { sound_id, volume, loop_playback } => {
@@ -45,6 +83,21 @@ impl AudioEngineCommand {
             }
             Self::PlayNowWithFadeIn { sound_id, volume, loop_playback, fade_in_frames } => {
                 engine.play_now_with_fade_in(sound_id, volume, loop_playback, fade_in_frames);
+            }
+            Self::PlayNowWithFadeInAndFadeOut {
+                sound_id,
+                volume,
+                loop_playback,
+                fade_in_frames,
+                fade_out_frames,
+            } => {
+                engine.play_now_with_fade_in_and_fade_out(
+                    sound_id,
+                    volume,
+                    loop_playback,
+                    fade_in_frames,
+                    fade_out_frames,
+                );
             }
         }
     }
@@ -55,6 +108,7 @@ pub struct AudioCommandQueueDiagnostics {
     pub submitted: u64,
     pub dropped: u64,
     pub drained: u64,
+    pub coalesced: u64,
     pub drain_lock_misses: u64,
     pub engine_lock_misses: u64,
     pub max_depth: u64,
@@ -65,6 +119,7 @@ struct AudioCommandQueueCounters {
     submitted: AtomicU64,
     dropped: AtomicU64,
     drained: AtomicU64,
+    coalesced: AtomicU64,
     drain_lock_misses: AtomicU64,
     engine_lock_misses: AtomicU64,
     max_depth: AtomicU64,
@@ -76,6 +131,7 @@ impl Default for AudioCommandQueueCounters {
             submitted: AtomicU64::new(0),
             dropped: AtomicU64::new(0),
             drained: AtomicU64::new(0),
+            coalesced: AtomicU64::new(0),
             drain_lock_misses: AtomicU64::new(0),
             engine_lock_misses: AtomicU64::new(0),
             max_depth: AtomicU64::new(0),
@@ -194,9 +250,16 @@ impl AudioEngineHandle {
         }
         match self.inner.queue.lock() {
             Ok(mut queue) => {
-                if queue.len().saturating_add(commands.len()) > self.inner.capacity {
+                let coalescible = count_coalescible_pending_commands(&queue, &commands);
+                if queue.len().saturating_sub(coalescible).saturating_add(commands.len())
+                    > self.inner.capacity
+                {
                     self.inner.note_dropped(commands.len() as u64, "queue full");
                     return false;
+                }
+                let coalesced = coalesce_pending_commands(&mut queue, &commands);
+                if coalesced != 0 {
+                    self.inner.counters.coalesced.fetch_add(coalesced as u64, Ordering::Relaxed);
                 }
                 let command_count = commands.len() as u64;
                 queue.extend(commands);
@@ -249,6 +312,10 @@ impl AudioEngineHandle {
         self.push_command(AudioEngineCommand::StopSound { id })
     }
 
+    pub fn stop_sound_with_fade_out(&self, id: SoundId, fade_out_frames: u32) -> bool {
+        self.push_command(AudioEngineCommand::StopSoundWithFadeOut { id, fade_out_frames })
+    }
+
     pub fn set_master_gain(&self, gain: f32) -> bool {
         self.push_command(AudioEngineCommand::SetMasterGain { gain })
     }
@@ -276,15 +343,37 @@ impl AudioEngineHandle {
         })
     }
 
+    pub fn play_now_with_fade_in_and_fade_out(
+        &self,
+        sound_id: SoundId,
+        volume: f32,
+        loop_playback: bool,
+        fade_in_frames: u32,
+        fade_out_frames: u32,
+    ) -> bool {
+        self.push_command(AudioEngineCommand::PlayNowWithFadeInAndFadeOut {
+            sound_id,
+            volume,
+            loop_playback,
+            fade_in_frames,
+            fade_out_frames,
+        })
+    }
+
     fn push_command_or_return(
         &self,
         command: AudioEngineCommand,
     ) -> Result<(), AudioEngineCommand> {
         match self.inner.queue.lock() {
             Ok(mut queue) => {
-                if queue.len() >= self.inner.capacity {
+                let coalescible = usize::from(is_pending_command_coalescible(&queue, &command));
+                if queue.len().saturating_sub(coalescible).saturating_add(1) > self.inner.capacity {
                     self.inner.note_dropped(1, "queue full");
                     return Err(command);
+                }
+                let coalesced = coalesce_pending_command(&mut queue, &command);
+                if coalesced != 0 {
+                    self.inner.counters.coalesced.fetch_add(coalesced as u64, Ordering::Relaxed);
                 }
                 queue.push_back(command);
                 self.inner.counters.submitted.fetch_add(1, Ordering::Relaxed);
@@ -373,10 +462,59 @@ impl AudioCommandQueueInner {
             submitted: self.counters.submitted.load(Ordering::Relaxed),
             dropped: self.counters.dropped.load(Ordering::Relaxed),
             drained: self.counters.drained.load(Ordering::Relaxed),
+            coalesced: self.counters.coalesced.load(Ordering::Relaxed),
             drain_lock_misses: self.counters.drain_lock_misses.load(Ordering::Relaxed),
             engine_lock_misses: self.counters.engine_lock_misses.load(Ordering::Relaxed),
             max_depth: self.counters.max_depth.load(Ordering::Relaxed),
         }
+    }
+}
+
+fn count_coalescible_pending_commands(
+    queue: &VecDeque<AudioEngineCommand>,
+    incoming: &[AudioEngineCommand],
+) -> usize {
+    queue
+        .iter()
+        .filter(|pending| incoming.iter().any(|next| command_supersedes(next, pending)))
+        .count()
+}
+
+fn coalesce_pending_commands(
+    queue: &mut VecDeque<AudioEngineCommand>,
+    incoming: &[AudioEngineCommand],
+) -> usize {
+    let before = queue.len();
+    queue.retain(|pending| !incoming.iter().any(|next| command_supersedes(next, pending)));
+    before.saturating_sub(queue.len())
+}
+
+fn is_pending_command_coalescible(
+    queue: &VecDeque<AudioEngineCommand>,
+    incoming: &AudioEngineCommand,
+) -> bool {
+    queue.iter().any(|pending| command_supersedes(incoming, pending))
+}
+
+fn coalesce_pending_command(
+    queue: &mut VecDeque<AudioEngineCommand>,
+    incoming: &AudioEngineCommand,
+) -> usize {
+    let before = queue.len();
+    queue.retain(|pending| !command_supersedes(incoming, pending));
+    before.saturating_sub(queue.len())
+}
+
+fn command_supersedes(incoming: &AudioEngineCommand, pending: &AudioEngineCommand) -> bool {
+    match (incoming, pending) {
+        (AudioEngineCommand::SetMasterGain { .. }, AudioEngineCommand::SetMasterGain { .. }) => {
+            true
+        }
+        (
+            AudioEngineCommand::SetSoundVolume { id: incoming_id, .. },
+            AudioEngineCommand::SetSoundVolume { id: pending_id, .. },
+        ) => incoming_id == pending_id,
+        _ => false,
     }
 }
 
@@ -418,12 +556,50 @@ mod tests {
         let handle = AudioEngineHandle::with_capacity(AudioEngine::default(), 1);
 
         assert!(handle.set_master_gain(0.5));
-        assert!(!handle.set_master_gain(0.25));
+        assert!(!handle.play_now(SoundId(1), 0.25, false));
 
         let diagnostics = handle.diagnostics();
         assert_eq!(diagnostics.submitted, 1);
         assert_eq!(diagnostics.dropped, 1);
         assert_eq!(diagnostics.max_depth, 1);
+    }
+
+    #[test]
+    fn command_queue_coalesces_pending_volume_updates() {
+        let handle = AudioEngineHandle::with_capacity(AudioEngine::default(), 8);
+        let mut processor = handle.processor();
+        handle.insert_sample(
+            SoundId(1),
+            DecodedSample { channels: 1, sample_rate: 48_000, frames: vec![1.0, 1.0] },
+        );
+        processor.apply_pending_commands_for_tests();
+        handle.play_now(SoundId(1), 1.0, true);
+        let mut output = vec![0.0; 2];
+        processor.render_stereo(0, &mut output);
+
+        assert!(handle.set_sound_volume(SoundId(1), 0.5));
+        assert!(handle.set_sound_volume(SoundId(1), 0.25));
+        let mut output = vec![0.0; 2];
+        processor.render_stereo(1, &mut output);
+
+        assert_eq!(output, vec![0.25, 0.25]);
+        assert_eq!(handle.diagnostics().coalesced, 1);
+    }
+
+    #[test]
+    fn command_queue_applies_play_now_with_fade_out() {
+        let handle = AudioEngineHandle::with_capacity(AudioEngine::default(), 8);
+        let mut processor = handle.processor();
+        handle.insert_sample(
+            SoundId(1),
+            DecodedSample { channels: 1, sample_rate: 48_000, frames: vec![1.0, 1.0, 1.0] },
+        );
+        handle.play_now_with_fade_in_and_fade_out(SoundId(1), 1.0, false, 0, 2);
+
+        let mut output = vec![0.0; 6];
+        assert!(processor.render_stereo(0, &mut output));
+
+        assert_eq!(output, vec![1.0, 1.0, 0.5, 0.5, 0.0, 0.0]);
     }
 
     #[test]

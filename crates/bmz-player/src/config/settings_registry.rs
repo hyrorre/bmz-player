@@ -761,9 +761,9 @@ fn cycle_hs_fix(current: HsFixConfig, forward: bool) -> HsFixConfig {
     const VALUES: [HsFixConfig; 5] = [
         HsFixConfig::Off,
         HsFixConfig::StartBpm,
-        HsFixConfig::MinBpm,
         HsFixConfig::MaxBpm,
         HsFixConfig::MainBpm,
+        HsFixConfig::MinBpm,
     ];
     cycle_in_slice(&VALUES, current, forward)
 }
@@ -956,6 +956,25 @@ mod tests {
         assert!(adjust_settings_value(&mut profile, SettingsEntryId::RuleMode, 1));
         assert_eq!(profile.play.rule_mode, RuleMode::Dx);
         assert_eq!(format_settings_value(&profile, SettingsEntryId::RuleMode), "DX");
+    }
+
+    #[test]
+    fn cycle_hs_fix_uses_beatoraja_order() {
+        let mut profile = ProfileConfig::new_default("default", "Default", 0);
+        assert_eq!(format_settings_value(&profile, SettingsEntryId::HsFix), "OFF");
+
+        assert!(adjust_settings_value(&mut profile, SettingsEntryId::HsFix, 1));
+        assert_eq!(profile.play.hs_fix, HsFixConfig::StartBpm);
+        assert!(adjust_settings_value(&mut profile, SettingsEntryId::HsFix, 1));
+        assert_eq!(profile.play.hs_fix, HsFixConfig::MaxBpm);
+        assert!(adjust_settings_value(&mut profile, SettingsEntryId::HsFix, 1));
+        assert_eq!(profile.play.hs_fix, HsFixConfig::MainBpm);
+        assert!(adjust_settings_value(&mut profile, SettingsEntryId::HsFix, 1));
+        assert_eq!(profile.play.hs_fix, HsFixConfig::MinBpm);
+        assert!(adjust_settings_value(&mut profile, SettingsEntryId::HsFix, 1));
+        assert_eq!(profile.play.hs_fix, HsFixConfig::Off);
+        assert!(adjust_settings_value(&mut profile, SettingsEntryId::HsFix, -1));
+        assert_eq!(profile.play.hs_fix, HsFixConfig::MinBpm);
     }
 
     #[test]
