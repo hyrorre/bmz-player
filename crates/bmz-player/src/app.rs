@@ -446,6 +446,7 @@ struct WinitApp {
     select_bar_started_at: Instant,
     play_scene_started_at: Instant,
     play_ready_sound_started_at: Option<Instant>,
+    decide_sound_stopped_for_chart_start: bool,
     result_scene_started_at: Instant,
     option_panel_started_at: Instant,
     select_option_panel: u8,
@@ -1942,6 +1943,7 @@ impl WinitApp {
             select_bar_started_at: now,
             play_scene_started_at: now,
             play_ready_sound_started_at: None,
+            decide_sound_stopped_for_chart_start: false,
             result_scene_started_at: now,
             option_panel_started_at: now,
             select_option_panel: 0,
@@ -7072,6 +7074,7 @@ impl WinitApp {
         self.result_key5_held = false;
         self.result_key7_held = false;
         self.play_ready_sound_started_at = None;
+        self.decide_sound_stopped_for_chart_start = false;
         if options.chart_zero_time == TimeUs(0) {
             options.chart_zero_time = self.play_skin_playstart_offset();
         }
@@ -7153,6 +7156,7 @@ impl WinitApp {
         self.play_ending = None;
         self.result_exit = None;
         self.play_ready_sound_started_at = None;
+        self.decide_sound_stopped_for_chart_start = false;
         self.active_play = None;
         self.clear_play_control_holds();
         self.clear_play_backbmp_state();
@@ -7563,6 +7567,7 @@ impl WinitApp {
     fn abort_pending_play_start(&mut self) {
         self.pending_play_start = None;
         self.active_play = None;
+        self.decide_sound_stopped_for_chart_start = true;
         self.clear_play_backbmp_state();
         self.last_play_snapshot = None;
         // An audio-open / audio-start failure bounces the user back to the
@@ -9750,6 +9755,7 @@ impl WinitApp {
             }
         }
         self.maybe_start_ready_phase();
+        self.stop_decide_system_sound_after_chart_start();
         if self.play_ready_sound_started_at.is_none() {
             self.update_pre_ready_play_state();
             self.update_pending_play_snapshot_timers();
@@ -9940,6 +9946,20 @@ impl WinitApp {
                 );
             }
         }
+    }
+
+    fn stop_decide_system_sound_after_chart_start(&mut self) {
+        if self.decide_sound_stopped_for_chart_start {
+            return;
+        }
+        let Some(active_play) = &self.active_play else {
+            return;
+        };
+        if !chart_started_for_system_sound(&active_play.running.session) {
+            return;
+        }
+        self.stop_system_sound(crate::system_sound::SoundType::Decide);
+        self.decide_sound_stopped_for_chart_start = true;
     }
 
     fn update_pending_play_snapshot_timers(&mut self) {
@@ -11341,10 +11361,12 @@ impl WinitApp {
     }
 
     /// シーン遷移時のシステム SE / BGM を発火する。
-    /// 入る前に進行中の BGM をすべて停止してから、新しい BGM / SE を鳴らす。
+    /// Play 入口では Decide 音を曲開始まで残し、それ以外では進行中の BGM を止める。
     fn fire_scene_transition_sounds(&self, scene_kind: AppSceneKind) {
         use crate::system_sound::SoundType;
-        self.stop_all_system_bgm();
+        for sound_type in system_bgm_stop_targets_on_scene_enter(scene_kind) {
+            self.stop_system_sound(*sound_type);
+        }
         match scene_kind {
             AppSceneKind::Select
                 if should_play_select_bgm_on_enter(self.select_preview_playing) =>
@@ -11420,16 +11442,22 @@ impl WinitApp {
             manager.stop(sound_type);
         }
     }
-
-    fn stop_all_system_bgm(&self) {
-        if let Some(manager) = &self.system_sound {
-            manager.stop_all_bgm();
-        }
-    }
 }
 
 fn should_play_select_bgm_on_enter(select_preview_playing: bool) -> bool {
     !select_preview_playing
+}
+
+fn system_bgm_stop_targets_on_scene_enter(
+    scene_kind: AppSceneKind,
+) -> &'static [crate::system_sound::SoundType] {
+    use crate::system_sound::SoundType;
+    match scene_kind {
+        AppSceneKind::Play => &[SoundType::Select],
+        AppSceneKind::Select | AppSceneKind::Decide | AppSceneKind::Result => {
+            &[SoundType::Select, SoundType::Decide]
+        }
+    }
 }
 
 fn select_preview_fade_factor(fade: SelectPreviewFade, now: Instant) -> f32 {
@@ -15918,6 +15946,10 @@ fn floating_hispeed_target_bpm(session: &bmz_gameplay::session::GameSession, now
     }
 }
 
+fn chart_started_for_system_sound(session: &bmz_gameplay::session::GameSession) -> bool {
+    session.audio_clock.running && session.audio_clock.now().0 >= 0
+}
+
 fn hispeed_for_green_number_values(
     target_green: f32,
     visible_max: f32,
@@ -19739,6 +19771,26 @@ mod tests {
     }
 
     #[test]
+    fn chart_started_for_system_sound_waits_until_running_clock_reaches_zero() {
+        let profile = ProfileConfig::new_default("default", "Default", 1);
+        let frame = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let mut session = crate::screens::play_session::build_game_session(
+            std::sync::Arc::new(app_test_chart()),
+            &profile,
+            crate::screens::play_session::PlaySessionOptions::default(),
+        );
+
+        assert!(!chart_started_for_system_sound(&session));
+
+        session.audio_clock =
+            bmz_audio::clock::AudioClock::with_position(48_000, 0, -1_000_000, frame.clone(), true);
+        assert!(!chart_started_for_system_sound(&session));
+
+        frame.store(48_000, std::sync::atomic::Ordering::Relaxed);
+        assert!(chart_started_for_system_sound(&session));
+    }
+
+    #[test]
     fn lane_cover_step_moves_one_profile_unit() {
         assert!((LANE_COVER_STEP - 0.001).abs() < f32::EPSILON);
     }
@@ -20169,6 +20221,27 @@ mod tests {
     fn select_bgm_is_skipped_when_preview_is_already_playing() {
         assert!(should_play_select_bgm_on_enter(false));
         assert!(!should_play_select_bgm_on_enter(true));
+    }
+
+    #[test]
+    fn play_scene_keeps_decide_bgm_until_chart_start() {
+        use crate::system_sound::SoundType;
+
+        let sounds = system_bgm_stop_targets_on_scene_enter(AppSceneKind::Play);
+
+        assert!(sounds.contains(&SoundType::Select));
+        assert!(!sounds.contains(&SoundType::Decide));
+    }
+
+    #[test]
+    fn non_play_scene_stops_all_transition_bgms() {
+        use crate::system_sound::SoundType;
+
+        for scene in [AppSceneKind::Select, AppSceneKind::Decide, AppSceneKind::Result] {
+            let sounds = system_bgm_stop_targets_on_scene_enter(scene);
+            assert!(sounds.contains(&SoundType::Select), "scene={scene:?}");
+            assert!(sounds.contains(&SoundType::Decide), "scene={scene:?}");
+        }
     }
 
     #[test]
