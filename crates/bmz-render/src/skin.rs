@@ -5213,14 +5213,16 @@ impl SkinDocumentRenderExt for SkinDocument {
                 blend,
             });
         }
-        for pair in points.windows(2) {
+        let sample_count = points.len();
+        for (index, pair) in points.windows(2).enumerate() {
             let from = pair[0];
             let to = pair[1];
-            let x1 = rect.x + point_ratio(points, from.time_ms) * rect.width;
+            let x1 = rect.x + gaugegraph_sample_ratio(index, sample_count) * rect.width;
             if x1 > render_x {
                 break;
             }
-            let x2 = (rect.x + point_ratio(points, to.time_ms) * rect.width).min(render_x);
+            let x2 = (rect.x + gaugegraph_sample_ratio(index + 1, sample_count) * rect.width)
+                .min(render_x);
             let y1 = gaugegraph_y(rect, from.value, max);
             let y2 = gaugegraph_y(rect, to.value, max);
             if (x2 - x1).abs() <= f32::EPSILON {
@@ -5294,6 +5296,17 @@ impl SkinDocumentRenderExt for SkinDocument {
                 color,
                 blend,
             });
+        } else if let Some(last) = points.last().copied() {
+            let x1 = rect.x
+                + gaugegraph_sample_ratio(sample_count.saturating_sub(1), sample_count)
+                    * rect.width;
+            let x2 = render_x;
+            if x2 > x1 {
+                let y = gaugegraph_y(rect, last.value, max);
+                let color =
+                    if last.value < border { colors.graph_line } else { colors.border_line };
+                push_gaugegraph_segment(&mut items, x1, x2, y, y, line_w, line_h, color, blend);
+            }
         }
         items
     }
@@ -9133,15 +9146,8 @@ fn gaugegraph_y(rect: Rect, gauge: f32, max: f32) -> f32 {
     rect.y + rect.height * (1.0 - (gauge / max).clamp(0.0, 1.0))
 }
 
-fn point_ratio(points: &[crate::snapshot::ResultGaugeGraphPoint], time_ms: i32) -> f32 {
-    let Some(first) = points.first() else {
-        return 0.0;
-    };
-    let Some(last) = points.last() else {
-        return 0.0;
-    };
-    let span = (last.time_ms - first.time_ms).max(1) as f32;
-    (time_ms - first.time_ms).max(0) as f32 / span
+fn gaugegraph_sample_ratio(index: usize, sample_count: usize) -> f32 {
+    if sample_count == 0 { 0.0 } else { index as f32 / sample_count as f32 }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -21957,6 +21963,14 @@ mod tests {
         assert_eq!(skin_state_number(102, &state), Some(100));
         assert_eq!(skin_state_number(103, &state), Some(0));
         assert!((graph_value(111, &state) - 1.0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn result_gaugegraph_sample_ratio_matches_beatoraja_history_spacing() {
+        assert_eq!(gaugegraph_sample_ratio(0, 3), 0.0);
+        assert!((gaugegraph_sample_ratio(1, 3) - (1.0 / 3.0)).abs() < 1e-6);
+        assert!((gaugegraph_sample_ratio(2, 3) - (2.0 / 3.0)).abs() < 1e-6);
+        assert_eq!(gaugegraph_sample_ratio(0, 0), 0.0);
     }
 
     #[test]

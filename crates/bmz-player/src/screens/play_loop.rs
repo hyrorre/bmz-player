@@ -188,7 +188,7 @@ fn frame_output_from_session_frame_cached(
     bga_frames: &BgaFrameCatalog,
     cache: &PlayRenderSnapshotCache,
 ) -> FrameOutput<RenderSnapshot> {
-    let render_snapshot = build_render_snapshot_with_target_and_bga_frames_cached(
+    let mut render_snapshot = build_render_snapshot_with_target_and_bga_frames_cached(
         session,
         frame.times.render_now,
         &session.recent_judgements,
@@ -198,6 +198,7 @@ fn frame_output_from_session_frame_cached(
         bga_frames,
         cache,
     );
+    render_snapshot.play_elapsed_time = TimeUs(frame.times.audio_now.0.max(0));
     FrameOutput {
         render_snapshot,
         judgements: frame.judgements,

@@ -14,6 +14,8 @@ use bmz_render::snapshot::{
 
 use crate::storage::play_result::StoredPlayResult;
 
+const RESULT_GAUGE_GRAPH_SAMPLE_MS: i32 = 500;
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct ResultSummary {
     pub clear_type: ClearType,
@@ -67,6 +69,7 @@ pub struct ResultSummary {
 #[derive(Debug, Clone, Default)]
 pub struct ResultGraphCollector {
     graph: ResultGraphSnapshot,
+    next_gauge_sample_ms: i32,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -227,69 +230,67 @@ impl ResultGraphCollector {
 
     pub fn snapshot_for_session(&self, session: &GameSession) -> ResultGraphSnapshot {
         let mut graph = self.graph.clone();
+        if session.state == bmz_gameplay::session::PlayState::Failed {
+            fill_failed_gauge_tail(
+                &mut graph,
+                &session.gauge,
+                self.next_gauge_sample_ms,
+                clamp_us_to_ms(session.chart.end_time.0)
+                    .saturating_add(RESULT_GAUGE_GRAPH_SAMPLE_MS),
+            );
+        }
         populate_result_note_graphs(&mut graph, &session.chart, &session.result_judgements);
         graph
     }
 
     fn record_gauge(&mut self, snapshot: &RenderSnapshot) {
-        let time_ms = clamp_us_to_ms(snapshot.time.0.max(0));
+        let time_ms = clamp_us_to_ms(snapshot.play_elapsed_time.0.max(0));
+        if self.next_gauge_sample_ms > time_ms {
+            return;
+        }
+
+        let sample_time_ms = self.next_gauge_sample_ms;
         if snapshot.gauge_graph_points.is_empty() {
-            self.record_gauge_point(ResultGaugeGraphPoint {
-                time_ms,
+            self.graph.gauge_points.push(ResultGaugeGraphPoint {
+                time_ms: sample_time_ms,
                 value: snapshot.gauge,
                 max: snapshot.gauge_max,
                 border: snapshot.gauge_border,
                 gauge_type: snapshot.gauge_type,
             });
-            return;
+        } else {
+            self.graph.gauge_points.extend(
+                snapshot
+                    .gauge_graph_points
+                    .iter()
+                    .map(|point| ResultGaugeGraphPoint { time_ms: sample_time_ms, ..*point }),
+            );
         }
-
-        for point in &snapshot.gauge_graph_points {
-            self.record_gauge_point(ResultGaugeGraphPoint { time_ms, ..*point });
-        }
-    }
-
-    fn record_gauge_point(&mut self, point: ResultGaugeGraphPoint) {
-        let Some(last_index) = self
-            .graph
-            .gauge_points
-            .iter()
-            .rposition(|candidate| candidate.gauge_type == point.gauge_type)
-        else {
-            self.graph.gauge_points.push(point);
-            return;
-        };
-
-        let last = self.graph.gauge_points[last_index];
-        if last.time_ms == point.time_ms {
-            self.graph.gauge_points[last_index] = point;
-            return;
-        }
-        if same_gauge_graph_state(last, point) {
-            let previous = self.graph.gauge_points[..last_index]
-                .iter()
-                .rfind(|candidate| candidate.gauge_type == point.gauge_type)
-                .copied();
-            if let Some(previous) = previous {
-                if same_gauge_graph_state(previous, last) {
-                    self.graph.gauge_points[last_index] = point;
-                } else {
-                    self.graph.gauge_points.push(point);
-                }
-            } else {
-                self.graph.gauge_points.push(point);
-            }
-            return;
-        }
-        self.graph.gauge_points.push(point);
+        self.next_gauge_sample_ms =
+            self.next_gauge_sample_ms.saturating_add(RESULT_GAUGE_GRAPH_SAMPLE_MS);
     }
 }
 
-fn same_gauge_graph_state(a: ResultGaugeGraphPoint, b: ResultGaugeGraphPoint) -> bool {
-    a.value.to_bits() == b.value.to_bits()
-        && a.max.to_bits() == b.max.to_bits()
-        && a.border.to_bits() == b.border.to_bits()
-        && a.gauge_type == b.gauge_type
+fn fill_failed_gauge_tail(
+    graph: &mut ResultGraphSnapshot,
+    gauge_state: &bmz_gameplay::gauge::GaugeState,
+    mut next_sample_ms: i32,
+    end_ms: i32,
+) {
+    while next_sample_ms < end_ms {
+        graph.gauge_points.extend(gauge_state.gauges.iter().map(|gauge| ResultGaugeGraphPoint {
+            time_ms: next_sample_ms,
+            value: 0.0,
+            max: gauge.definition.max,
+            border: gauge.definition.border,
+            gauge_type: gauge.definition.gauge_type as i32,
+        }));
+        let next = next_sample_ms.saturating_add(RESULT_GAUGE_GRAPH_SAMPLE_MS);
+        if next == next_sample_ms {
+            break;
+        }
+        next_sample_ms = next;
+    }
 }
 
 fn populate_result_note_graphs(
@@ -408,6 +409,7 @@ mod tests {
     use bmz_core::judge::{Judge, TimingSide};
     use bmz_core::lane::Lane;
     use bmz_core::time::TimeUs;
+    use bmz_gameplay::gauge::GaugeState;
     use bmz_gameplay::judge::model::JudgementEvent;
     use bmz_gameplay::score::ScoreState;
     use bmz_gameplay::session::PlayState;
@@ -528,6 +530,7 @@ mod tests {
         let hit_error_ring = HitErrorRingSnapshot { index: 7, ..HitErrorRingSnapshot::default() };
         let mut render_snapshot = RenderSnapshot {
             time: TimeUs(1_234_000),
+            play_elapsed_time: TimeUs(0),
             gauge: 72.5,
             gauge_type: GaugeType::Hard as i32,
             gauge_border: 30.0,
@@ -561,6 +564,7 @@ mod tests {
         collector.record_frame(&frame);
 
         render_snapshot.time = TimeUs(1_234_500);
+        render_snapshot.play_elapsed_time = TimeUs(500_000);
         render_snapshot.gauge = 74.0;
         collector.record_frame(&FrameOutput {
             render_snapshot,
@@ -571,9 +575,10 @@ mod tests {
         });
 
         let graph = collector.snapshot();
-        assert_eq!(graph.gauge_points.len(), 1);
-        assert_eq!(graph.gauge_points[0].time_ms, 1234);
-        assert_eq!(graph.gauge_points[0].value, 74.0);
+        assert_eq!(
+            graph.gauge_points.iter().map(|point| (point.time_ms, point.value)).collect::<Vec<_>>(),
+            vec![(0, 72.5), (500, 74.0)]
+        );
         assert_eq!(graph.timing_points.len(), 1);
         assert_eq!(graph.timing_points[0].delta_us, 12_000);
         assert_eq!(graph.timing_distribution.counts[(150 + 12) as usize], 1);
@@ -583,11 +588,12 @@ mod tests {
     }
 
     #[test]
-    fn result_graph_collector_compresses_unchanged_gauge_points() {
+    fn result_graph_collector_samples_gauge_every_500ms_without_compression() {
         fn record(collector: &mut ResultGraphCollector, time_us: i64, gauge: f32) {
             collector.record_frame(&FrameOutput {
                 render_snapshot: RenderSnapshot {
                     time: TimeUs(time_us),
+                    play_elapsed_time: TimeUs(time_us),
                     gauge,
                     gauge_type: GaugeType::Normal as i32,
                     gauge_border: 80.0,
@@ -602,16 +608,16 @@ mod tests {
 
         let mut collector = ResultGraphCollector::default();
         record(&mut collector, 0, 20.0);
-        record(&mut collector, 16_000, 20.0);
-        record(&mut collector, 32_000, 35.0);
-        record(&mut collector, 48_000, 35.0);
-        record(&mut collector, 64_000, 35.0);
-        record(&mut collector, 80_000, 42.0);
+        record(&mut collector, 500_000, 20.0);
+        record(&mut collector, 1_000_000, 35.0);
+        record(&mut collector, 1_500_000, 35.0);
+        record(&mut collector, 2_000_000, 35.0);
+        record(&mut collector, 2_500_000, 42.0);
 
         let graph = collector.snapshot();
         assert_eq!(
             graph.gauge_points.iter().map(|point| (point.time_ms, point.value)).collect::<Vec<_>>(),
-            vec![(0, 20.0), (16, 20.0), (32, 35.0), (64, 35.0), (80, 42.0)]
+            vec![(0, 20.0), (500, 20.0), (1000, 35.0), (1500, 35.0), (2000, 35.0), (2500, 42.0),]
         );
     }
 
@@ -621,6 +627,7 @@ mod tests {
             collector.record_frame(&FrameOutput {
                 render_snapshot: RenderSnapshot {
                     time: TimeUs(time_us),
+                    play_elapsed_time: TimeUs(time_us),
                     gauge_graph_points: vec![
                         ResultGaugeGraphPoint {
                             time_ms: 0,
@@ -648,7 +655,7 @@ mod tests {
 
         let mut collector = ResultGraphCollector::default();
         record(&mut collector, 0, 20.0, 20.0);
-        record(&mut collector, 1_000_000, 70.0, 90.0);
+        record(&mut collector, 500_000, 70.0, 90.0);
 
         let graph = collector.snapshot();
         let normal = graph
@@ -664,8 +671,32 @@ mod tests {
             .map(|point| (point.time_ms, point.value))
             .collect::<Vec<_>>();
 
-        assert_eq!(normal, vec![(0, 20.0), (1000, 70.0)]);
-        assert_eq!(easy, vec![(0, 20.0), (1000, 90.0)]);
+        assert_eq!(normal, vec![(0, 20.0), (500, 70.0)]);
+        assert_eq!(easy, vec![(0, 20.0), (500, 90.0)]);
+    }
+
+    #[test]
+    fn result_graph_failed_tail_appends_zero_samples_until_chart_end() {
+        let mut graph = ResultGraphSnapshot::default();
+        let gauge = GaugeState::new(GaugeType::Hard, 160.0, 1000);
+
+        fill_failed_gauge_tail(&mut graph, &gauge, 500, 1500);
+
+        let hard = graph
+            .gauge_points
+            .iter()
+            .filter(|point| point.gauge_type == GaugeType::Hard as i32)
+            .map(|point| (point.time_ms, point.value))
+            .collect::<Vec<_>>();
+        let normal = graph
+            .gauge_points
+            .iter()
+            .filter(|point| point.gauge_type == GaugeType::Normal as i32)
+            .map(|point| (point.time_ms, point.value))
+            .collect::<Vec<_>>();
+
+        assert_eq!(hard, vec![(500, 0.0), (1000, 0.0)]);
+        assert_eq!(normal, vec![(500, 0.0), (1000, 0.0)]);
     }
 
     #[test]
