@@ -9817,6 +9817,7 @@ impl WinitApp {
             video_update_time,
         );
 
+        let state_before_advance = active_play.running.session.state;
         let advance_outcome = advance_running_play_session(&mut active_play.running);
         match advance_outcome {
             Ok(frame)
@@ -9846,6 +9847,10 @@ impl WinitApp {
                 self.play_landmine_se(mine_hits);
             }
             Ok(frame) => {
+                let should_play_retire_sound = should_play_retire_sound_for_failed_transition(
+                    state_before_advance,
+                    frame.state,
+                );
                 active_play.running.result_graph.record_frame(&frame);
                 if self
                     .practice_session
@@ -9853,6 +9858,9 @@ impl WinitApp {
                     .is_some_and(|practice| practice.phase == PracticePhase::Playing)
                 {
                     let mine_hits = frame.mine_hits.len();
+                    if should_play_retire_sound {
+                        self.play_system_sound(crate::system_sound::SoundType::PlayStop);
+                    }
                     self.play_landmine_se(mine_hits);
                     self.finish_practice_round();
                     return;
@@ -9907,6 +9915,9 @@ impl WinitApp {
                 self.apply_profile_fast_slow_filter(&mut snapshot);
                 self.apply_play_table_text(&mut snapshot);
                 self.last_play_snapshot = Some(snapshot);
+                if should_play_retire_sound {
+                    self.play_system_sound(crate::system_sound::SoundType::PlayStop);
+                }
                 self.play_landmine_se(mine_hits);
                 // active_play がまだ残っている内に hispeed/lane_cover/lift を profile に保存する。
                 self.save_current_play_options(hispeed, "play finished");
@@ -14400,6 +14411,14 @@ fn should_begin_play_fadeout_after_final_notes(
         && play_state == bmz_gameplay::session::PlayState::Playing
         && final_notes_processed
         && play_fadeout_after_final_notes_control(control, bindings)
+}
+
+fn should_play_retire_sound_for_failed_transition(
+    previous: bmz_gameplay::session::PlayState,
+    current: bmz_gameplay::session::PlayState,
+) -> bool {
+    previous == bmz_gameplay::session::PlayState::Playing
+        && current == bmz_gameplay::session::PlayState::Failed
 }
 
 fn play_fadeout_after_final_notes_control(control: &str, bindings: &SelectKeyBindings) -> bool {
@@ -19118,6 +19137,28 @@ mod tests {
             false,
             bmz_gameplay::session::PlayState::Failed,
             true,
+        ));
+    }
+
+    #[test]
+    fn failed_transition_retire_sound_only_starts_on_new_failure() {
+        use bmz_gameplay::session::PlayState;
+
+        assert!(should_play_retire_sound_for_failed_transition(
+            PlayState::Playing,
+            PlayState::Failed
+        ));
+        assert!(!should_play_retire_sound_for_failed_transition(
+            PlayState::Failed,
+            PlayState::Failed
+        ));
+        assert!(!should_play_retire_sound_for_failed_transition(
+            PlayState::Ready,
+            PlayState::Failed
+        ));
+        assert!(!should_play_retire_sound_for_failed_transition(
+            PlayState::Playing,
+            PlayState::Finished
         ));
     }
 
