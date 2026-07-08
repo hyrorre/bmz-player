@@ -1372,6 +1372,38 @@ fn course_result_summary_for_skin(course: &CourseResultSummary) -> ResultSummary
     }
 }
 
+fn course_total_notes_for_definition(
+    library_db: &LibraryDatabase,
+    definition: &bmz_core::course::CourseDefinition,
+) -> u32 {
+    let chart_ids: Vec<i64> =
+        definition.entries.iter().filter_map(|entry| entry.chart_id).collect();
+    if chart_ids.is_empty() {
+        return 0;
+    }
+    match library_db.list_charts_by_ids(&chart_ids) {
+        Ok(charts) => {
+            if charts.len() != chart_ids.len() {
+                tracing::warn!(
+                    title = %definition.title,
+                    resolved = charts.len(),
+                    total = chart_ids.len(),
+                    "course total notes resolved fewer charts than the course definition"
+                );
+            }
+            charts.iter().map(|chart| chart.total_notes).sum()
+        }
+        Err(error) => {
+            tracing::warn!(
+                %error,
+                title = %definition.title,
+                "failed to resolve course total notes"
+            );
+            0
+        }
+    }
+}
+
 fn aggregate_course_result_graph(
     entries: &[ResultSummary],
 ) -> bmz_render::snapshot::ResultGraphSnapshot {
@@ -5896,9 +5928,12 @@ impl WinitApp {
             apply_arrange_override(&mut options, arrange);
         }
         let course_title = definition.title.clone();
+        let course_total_notes =
+            course_total_notes_for_definition(&self.boot.library_db, &definition);
         self.active_course = Some(ActiveCourseSession {
             course_id,
             definition,
+            course_total_notes,
             current_index: 0,
             entry_results: Vec::new(),
             queued_replays: Vec::new(),
@@ -6008,9 +6043,12 @@ impl WinitApp {
             apply_queued_replay(&mut options, first);
         }
         let course_title = definition.title.clone();
+        let course_total_notes =
+            course_total_notes_for_definition(&self.boot.library_db, &definition);
         self.active_course = Some(ActiveCourseSession {
             course_id,
             definition,
+            course_total_notes,
             current_index: 0,
             entry_results: Vec::new(),
             queued_replays: queued,
@@ -17882,8 +17920,10 @@ mod tests {
             ],
             entry_arranges: Vec::new(),
             total_ex_score: 320,
-            max_ex_score: 440,
-            total_notes: 220,
+            max_ex_score: 800,
+            // Failed course results keep the full course notes as the rank/rate
+            // denominator even when only a subset of entries produced summaries.
+            total_notes: 400,
             final_clear_type: ClearType::Hard,
             final_gauge_type: GaugeType::ExClass,
             final_gauge_value: 42.5,
@@ -17905,7 +17945,7 @@ mod tests {
                 course_hash: "course-hash".to_string(),
                 rule_mode: bmz_gameplay::rule::RuleMode::Beatoraja,
                 ex_score: 340,
-                max_ex_score: 440,
+                max_ex_score: 800,
                 clear_type: "ExHard".to_string(),
                 gauge_type: "ExHardClass".to_string(),
                 gauge_value: 64.0,
@@ -17923,7 +17963,7 @@ mod tests {
                 course_hash: "course-hash".to_string(),
                 rule_mode: bmz_gameplay::rule::RuleMode::Beatoraja,
                 ex_score: 300,
-                max_ex_score: 440,
+                max_ex_score: 800,
                 clear_type: "Normal".to_string(),
                 gauge_type: "Class".to_string(),
                 gauge_value: 60.0,
@@ -17945,7 +17985,8 @@ mod tests {
         assert_eq!(summary.gauge_type, GaugeType::ExClass);
         assert_eq!(summary.gauge_value, 42.5);
         assert_eq!(summary.ex_score, 320);
-        assert_eq!(summary.total_notes, 220);
+        assert_eq!(summary.total_notes, 400);
+        assert!((summary.ex_score_rate() - 0.4).abs() < 0.001);
         assert_eq!(summary.max_combo, 170);
         assert_eq!(summary.score_history_id, 22);
         assert_eq!(summary.best_ex_score, Some(300));

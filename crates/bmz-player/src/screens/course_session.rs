@@ -10,6 +10,9 @@ use crate::storage::replay::QueuedCourseReplay;
 pub struct ActiveCourseSession {
     pub course_id: i64,
     pub definition: CourseDefinition,
+    /// Total notes across every chart in the course definition. This remains
+    /// course-wide even when a Failed chart aborts the course early.
+    pub course_total_notes: u32,
     pub current_index: usize,
     pub entry_results: Vec<CourseEntryResult>,
     /// Pre-loaded replays, one per course entry, when the course is being
@@ -88,8 +91,9 @@ impl ActiveCourseSession {
     }
 
     pub fn into_result(self) -> CourseResultSummary {
-        let total_notes: u32 =
+        let played_total_notes: u32 =
             self.entry_results.iter().map(|r| r.finished.result.total_notes).sum();
+        let total_notes = self.course_total_notes.max(played_total_notes);
         let total_ex_score: u32 =
             self.entry_results.iter().map(|r| r.finished.result.score.ex_score()).sum();
         let max_ex_score: u32 = total_notes.saturating_mul(2);
@@ -284,6 +288,7 @@ mod tests {
         use crate::storage::play_result::StoredPlayResult;
         use bmz_core::course::CourseKind;
 
+        let course_total_notes = entry_scores.iter().map(|(_, total_notes)| *total_notes).sum();
         let entries: Vec<CourseEntry> = (0..entry_scores.len())
             .map(|i| CourseEntry {
                 title_hint: format!("Song {i}"),
@@ -360,6 +365,7 @@ mod tests {
                 ],
                 release: true,
             },
+            course_total_notes,
             current_index: 0,
             entry_results,
             queued_replays: Vec::new(),
@@ -413,6 +419,7 @@ mod tests {
         use crate::screens::result_model::ResultSummary;
         use crate::storage::play_result::StoredPlayResult;
 
+        let course_total_notes = played.iter().map(|(_, total_notes, _)| *total_notes).sum();
         let entries: Vec<CourseEntry> = (0..entry_count)
             .map(|i| CourseEntry {
                 title_hint: format!("Song {i}"),
@@ -482,6 +489,7 @@ mod tests {
                 }],
                 release: true,
             },
+            course_total_notes,
             current_index: 0,
             entry_results,
             queued_replays: Vec::new(),
@@ -509,6 +517,27 @@ mod tests {
         assert_eq!(result.total_entries, 4);
         // Trophies are blocked when course_failed even if numeric thresholds pass.
         assert!(!result.trophy_results[0].achieved);
+    }
+
+    #[test]
+    fn failed_course_keeps_course_total_notes_as_score_rate_denominator() {
+        use bmz_core::clear::ClearType;
+
+        let mut session = make_partial_session(
+            4,
+            vec![
+                (make_score(100, 0), 100, ClearType::Normal),
+                (make_score(50, 50), 100, ClearType::Failed),
+            ],
+        );
+        session.course_total_notes = 400;
+
+        let result = session.into_result();
+
+        assert!(result.course_failed);
+        assert_eq!(result.total_ex_score, 300);
+        assert_eq!(result.total_notes, 400);
+        assert_eq!(result.max_ex_score, 800);
     }
 
     #[test]
