@@ -19,6 +19,7 @@ use bmz_core::input::InputDeviceKind;
 use bmz_core::lane::{KeyMode, Lane};
 use bmz_core::time::TimeUs;
 use bmz_gameplay::input::backend::{DeviceId, PhysicalControl};
+use bmz_gameplay::input::system::last_input_collection_diagnostics;
 use bmz_gameplay::result::PlayResult;
 use bmz_gameplay::score::{JudgeCounts, ScoreState};
 use bmz_gameplay::session::compute_frame_times;
@@ -365,6 +366,7 @@ struct WinitApp {
     audio_output_open_attempted: bool,
     audio_diagnostics_last_log_at: Instant,
     audio_diagnostics_last: Option<AudioOutputDiagnostics>,
+    input_diagnostics_last_sequence: u64,
     first_frame_startup_completed: bool,
     /// Ctrl-C(SIGINT)受信フラグ。セットされたら `about_to_wait` で event loop を
     /// 正常終了させ、cpal/ASIO ストリームの Drop(停止・後処理)を確実に走らせる。
@@ -1910,6 +1912,7 @@ impl WinitApp {
             audio_output_open_attempted,
             audio_diagnostics_last_log_at: now,
             audio_diagnostics_last: None,
+            input_diagnostics_last_sequence: 0,
             first_frame_startup_completed: false,
             shutdown_requested,
             finished_play: None,
@@ -7093,6 +7096,31 @@ impl WinitApp {
             max_callback_us = snapshot.max_callback_ns / 1_000,
             callback_budget_us = callback_budget_ns / 1_000,
             "audio output diagnostics reported possible dropout or clipping",
+        );
+    }
+
+    fn log_input_diagnostics(&mut self) {
+        let diagnostics = last_input_collection_diagnostics();
+        if diagnostics.sequence == 0 || diagnostics.sequence == self.input_diagnostics_last_sequence
+        {
+            return;
+        }
+        self.input_diagnostics_last_sequence = diagnostics.sequence;
+        if diagnostics.drained_events == 0 {
+            return;
+        }
+
+        tracing::debug!(
+            target: "bmz_player::input_profile",
+            sequence = diagnostics.sequence,
+            drained_events = diagnostics.drained_events,
+            translated_events = diagnostics.translated_events,
+            dropped_events = diagnostics.dropped_events,
+            timestamped_events = diagnostics.timestamped_events,
+            min_event_age_us = ?diagnostics.min_event_age_us,
+            max_event_age_us = ?diagnostics.max_event_age_us,
+            max_future_event_us = ?diagnostics.max_future_event_us,
+            "play input collection diagnostics"
         );
     }
 
@@ -13360,6 +13388,7 @@ impl ApplicationHandler<AppUserEvent> for WinitApp {
                     self.ensure_audio_output();
                 }
                 self.advance_active_play();
+                self.log_input_diagnostics();
                 let scene_start = Instant::now();
                 self.render_current_scene();
                 let scene_us = instant_elapsed_us_u64(scene_start);
