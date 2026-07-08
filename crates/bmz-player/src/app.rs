@@ -41,8 +41,10 @@ use bmz_render::snapshot::{
 use bmz_video::VideoBgaDecoder;
 use winit::application::ApplicationHandler;
 use winit::dpi::{PhysicalPosition, PhysicalSize};
-use winit::event::{ElementState, MouseButton, MouseScrollDelta, StartCause, WindowEvent};
-use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy};
+use winit::event::{
+    DeviceEvent, ElementState, MouseButton, MouseScrollDelta, StartCause, WindowEvent,
+};
+use winit::event_loop::{ActiveEventLoop, ControlFlow, DeviceEvents, EventLoop, EventLoopProxy};
 use winit::keyboard::{KeyCode, PhysicalKey};
 use winit::monitor::{MonitorHandle, VideoModeHandle};
 use winit::window::{Fullscreen, Icon, Window, WindowAttributes, WindowId};
@@ -54,7 +56,7 @@ use crate::cli::{
     AUTOPLAY_ON_START_ARG, AppOptions, BOOT_RESULT_SAMPLE_ARG, SMOKE_EXIT_AFTER_FRAMES_ARG,
     SMOKE_EXIT_AFTER_RESULT_FRAMES_ARG, SMOKE_EXIT_ON_RESULT_ARG, SMOKE_SCREENSHOT_ARG,
 };
-use crate::config::app_config::{AppConfig, PathEntry, WindowMode};
+use crate::config::app_config::{AppConfig, InputBackendKind, PathEntry, WindowMode};
 use crate::config::key_config::{
     KeyBindingSlot, KeyBindingTarget, apply_play_binding, clear_play_binding,
     is_scratch_down_control, is_scratch_up_control,
@@ -420,6 +422,7 @@ struct WinitApp {
     select_held: bool,
     select_e_action_holds: HashSet<InputActionConfig>,
     pressed_controls: HashSet<String>,
+    raw_input_pressed_keys: HashSet<PhysicalKey>,
     arrange_option: ArrangeOption,
     arrange_option_2p: ArrangeOption,
     target_option: TargetOption,
@@ -1951,6 +1954,7 @@ impl WinitApp {
             select_held: false,
             select_e_action_holds: HashSet::new(),
             pressed_controls: HashSet::new(),
+            raw_input_pressed_keys: HashSet::new(),
             arrange_option,
             arrange_option_2p,
             target_option,
@@ -2105,6 +2109,77 @@ impl WinitApp {
         }
     }
 
+    fn keyboard_input_backend(&self) -> Option<KeyboardInputBackend> {
+        keyboard_input_backend_for_config(&self.boot.app_config)
+    }
+
+    fn raw_input_keyboard_enabled(&self) -> bool {
+        self.keyboard_input_backend() == Some(KeyboardInputBackend::RawInput)
+    }
+
+    fn window_keyboard_gameplay_enabled(&self) -> bool {
+        self.keyboard_input_backend() == Some(KeyboardInputBackend::Window)
+    }
+
+    fn configure_device_events(&self, event_loop: &ActiveEventLoop) {
+        let device_events = if self.raw_input_keyboard_enabled() {
+            DeviceEvents::WhenFocused
+        } else {
+            DeviceEvents::Never
+        };
+        event_loop.listen_device_events(device_events);
+    }
+
+    fn raw_input_gameplay_blocked(&self) -> bool {
+        let practice_overlay = self
+            .practice_session
+            .as_ref()
+            .is_some_and(|practice| practice.phase == PracticePhase::Config);
+        self.egui.as_ref().is_some_and(|egui| egui.blocks_game_input(practice_overlay))
+    }
+
+    fn route_raw_keyboard_gameplay_input(
+        &mut self,
+        physical_key: PhysicalKey,
+        state: ElementState,
+    ) {
+        if !self.raw_input_keyboard_enabled() {
+            return;
+        }
+        if self.raw_input_gameplay_blocked() {
+            if state == ElementState::Released {
+                self.raw_input_pressed_keys.remove(&physical_key);
+            }
+            return;
+        }
+        let Some(input) = self.active_play.as_ref().map(|active_play| active_play.input.clone())
+        else {
+            if state == ElementState::Released {
+                self.raw_input_pressed_keys.remove(&physical_key);
+            }
+            return;
+        };
+        let Some(repeat) = self.update_raw_input_key_state(&physical_key, state) else {
+            return;
+        };
+        crate::input::winit::handle_key_parts(&input, physical_key, state, repeat);
+    }
+
+    fn update_raw_input_key_state(
+        &mut self,
+        physical_key: &PhysicalKey,
+        state: ElementState,
+    ) -> Option<bool> {
+        match state {
+            ElementState::Pressed => {
+                Some(!self.raw_input_pressed_keys.insert(physical_key.clone()))
+            }
+            ElementState::Released => {
+                self.raw_input_pressed_keys.remove(physical_key).then_some(false)
+            }
+        }
+    }
+
     fn ensure_window(&mut self, event_loop: &ActiveEventLoop) {
         if self.window.is_some() {
             return;
@@ -2135,6 +2210,7 @@ impl WinitApp {
                 // surface 接続後 (= GPU device/queue 利用可能) に upload worker を起動する。
                 // decode 結果はそれまで skin_decode_rx にバッファされ、起動後にドレインされる。
                 self.start_skin_upload_worker();
+                self.configure_device_events(event_loop);
                 window.request_redraw();
                 self.egui = Some(EguiLayer::new(&window, self.boot.profile_config.ui.show_fps));
                 self.window = Some(window);
@@ -3711,6 +3787,7 @@ impl WinitApp {
         {
             return;
         }
+        let window_keyboard_gameplay_enabled = self.window_keyboard_gameplay_enabled();
         if let Some(active_play) = &mut self.active_play {
             if event.state == ElementState::Pressed
                 && !event.repeat
@@ -3836,7 +3913,9 @@ impl WinitApp {
                 }
                 // Start キーはゲームプレイ入力としても通すのでフォールスルー
             }
-            crate::input::winit::handle_key_event(&active_play.input, event);
+            if window_keyboard_gameplay_enabled {
+                crate::input::winit::handle_key_event(&active_play.input, event);
+            }
             return;
         }
 
@@ -13060,6 +13139,27 @@ fn launch_update_installer(path: &Path) -> Result<()> {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum KeyboardInputBackend {
+    Window,
+    RawInput,
+}
+
+fn keyboard_input_backend_for_config(config: &AppConfig) -> Option<KeyboardInputBackend> {
+    if !config.input.keyboard_enabled {
+        return None;
+    }
+    match config.input.backend {
+        InputBackendKind::Auto if cfg!(target_os = "windows") => {
+            Some(KeyboardInputBackend::RawInput)
+        }
+        InputBackendKind::RawInput if cfg!(target_os = "windows") => {
+            Some(KeyboardInputBackend::RawInput)
+        }
+        _ => Some(KeyboardInputBackend::Window),
+    }
+}
+
 fn config_renderer_backend(
     backend: crate::config::app_config::RendererBackend,
 ) -> bmz_render::WgpuBackend {
@@ -13207,6 +13307,7 @@ impl ApplicationHandler<AppUserEvent> for WinitApp {
                 self.focused = focused;
                 if !focused {
                     self.pressed_controls.clear();
+                    self.raw_input_pressed_keys.clear();
                     self.sync_select_holds_from_pressed_controls();
                     self.clear_play_control_holds();
                 }
@@ -13324,6 +13425,17 @@ impl ApplicationHandler<AppUserEvent> for WinitApp {
                 self.handle_smoke_exit_after_redraw(event_loop);
             }
             _ => {}
+        }
+    }
+
+    fn device_event(
+        &mut self,
+        _event_loop: &ActiveEventLoop,
+        _device_id: winit::event::DeviceId,
+        event: DeviceEvent,
+    ) {
+        if let DeviceEvent::Key(raw) = event {
+            self.route_raw_keyboard_gameplay_input(raw.physical_key, raw.state);
         }
     }
 
@@ -17626,6 +17738,24 @@ mod tests {
 
         config.vsync_mode = VsyncModeConfig::FastVsync;
         assert_eq!(config_present_mode(&config), bmz_render::WgpuPresentMode::Mailbox);
+    }
+
+    #[test]
+    fn keyboard_input_backend_uses_raw_input_on_windows_auto() {
+        let mut config = AppConfig::default();
+        config.input.backend = InputBackendKind::Auto;
+        let expected_auto = if cfg!(target_os = "windows") {
+            KeyboardInputBackend::RawInput
+        } else {
+            KeyboardInputBackend::Window
+        };
+        assert_eq!(keyboard_input_backend_for_config(&config), Some(expected_auto));
+
+        config.input.backend = InputBackendKind::Winit;
+        assert_eq!(keyboard_input_backend_for_config(&config), Some(KeyboardInputBackend::Window));
+
+        config.input.keyboard_enabled = false;
+        assert_eq!(keyboard_input_backend_for_config(&config), None);
     }
 
     #[test]

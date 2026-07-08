@@ -733,7 +733,11 @@ impl EguiLayer {
         practice_overlay: bool,
     ) -> bool {
         let response = self.state.on_window_event(window, event);
-        (self.visible || practice_overlay || self.update_dialog_active) && response.consumed
+        self.blocks_game_input(practice_overlay) && response.consumed
+    }
+
+    pub fn blocks_game_input(&self, practice_overlay: bool) -> bool {
+        self.visible || practice_overlay || self.update_dialog_active
     }
 
     /// 1 フレーム分の UI を構築し、描画データと要求されたアクションを返す。
@@ -2550,7 +2554,7 @@ fn build_settings_panel(
                     ui.checkbox(&mut config.input.gamepad_enabled, "ゲームパッド");
                     ui.checkbox(&mut config.input.midi_enabled, "MIDI (未実装)");
                     ui.label(
-                        "入力バックエンド設定は次回起動時に反映されます。RawInput / HID / MIDI は未実装です。",
+                        "入力バックエンド設定は次回起動時に反映されます。HID / MIDI は未実装です。",
                     );
                 });
 
@@ -2741,7 +2745,7 @@ fn input_backend_label(backend: &InputBackendKind) -> &'static str {
     match backend {
         InputBackendKind::Auto => "自動選択",
         InputBackendKind::Winit => "winit",
-        InputBackendKind::RawInput => "Raw Input (未実装)",
+        InputBackendKind::RawInput => "Raw Input",
         InputBackendKind::Hid => "HID (未実装)",
         InputBackendKind::Midi => "MIDI (未実装)",
     }
