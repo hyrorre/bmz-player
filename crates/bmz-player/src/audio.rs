@@ -41,6 +41,7 @@ pub struct AudioOutputDiagnostics {
     pub command_submitted_count: u64,
     pub command_dropped_count: u64,
     pub command_drained_count: u64,
+    pub command_coalesced_count: u64,
     pub command_drain_lock_miss_count: u64,
     pub command_engine_lock_miss_count: u64,
     pub command_queue_max_depth: u64,
@@ -71,6 +72,8 @@ impl AudioOutputDiagnostics {
             self.command_submitted_count.saturating_add(diagnostics.submitted);
         self.command_dropped_count = self.command_dropped_count.saturating_add(diagnostics.dropped);
         self.command_drained_count = self.command_drained_count.saturating_add(diagnostics.drained);
+        self.command_coalesced_count =
+            self.command_coalesced_count.saturating_add(diagnostics.coalesced);
         self.command_drain_lock_miss_count =
             self.command_drain_lock_miss_count.saturating_add(diagnostics.drain_lock_misses);
         self.command_engine_lock_miss_count =

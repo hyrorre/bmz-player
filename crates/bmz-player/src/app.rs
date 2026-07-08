@@ -6899,6 +6899,8 @@ impl WinitApp {
             snapshot.command_submitted_count.saturating_sub(previous.command_submitted_count);
         let commands_drained =
             snapshot.command_drained_count.saturating_sub(previous.command_drained_count);
+        let commands_coalesced =
+            snapshot.command_coalesced_count.saturating_sub(previous.command_coalesced_count);
 
         let sample_rate =
             self.audio_runtime.as_ref().map(AudioRuntime::sample_rate).unwrap_or(1).max(1);
@@ -6935,10 +6937,14 @@ impl WinitApp {
             other_engine_lock_misses,
             commands_submitted,
             commands_drained,
+            commands_coalesced,
             command_drops,
             command_drain_lock_misses,
             command_engine_lock_misses,
             command_queue_max_depth = snapshot.command_queue_max_depth,
+            select_preview_playing = self.select_preview_playing,
+            select_preview_fade = select_preview_fade_name(self.select_preview_fade),
+            select_preview_factor = select_preview_fade_factor(self.select_preview_fade, now),
             clipped_samples,
             peak_abs = snapshot.peak_abs,
             max_callback_us = snapshot.max_callback_ns / 1_000,
@@ -11439,6 +11445,15 @@ fn select_preview_fade_factor(fade: SelectPreviewFade, now: Instant) -> f32 {
         }
     }
     .clamp(0.0, 1.0)
+}
+
+fn select_preview_fade_name(fade: SelectPreviewFade) -> &'static str {
+    match fade {
+        SelectPreviewFade::Silent => "silent",
+        SelectPreviewFade::FadingIn { .. } => "fading_in",
+        SelectPreviewFade::Playing => "playing",
+        SelectPreviewFade::FadingOut { .. } => "fading_out",
+    }
 }
 
 fn select_preview_key_after_delay(
