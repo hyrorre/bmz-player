@@ -13359,6 +13359,7 @@ impl ApplicationHandler<AppUserEvent> for WinitApp {
                 if !self.first_frame_startup_completed {
                     self.ensure_audio_output();
                 }
+                self.advance_active_play();
                 let scene_start = Instant::now();
                 self.render_current_scene();
                 let scene_us = instant_elapsed_us_u64(scene_start);
@@ -13374,7 +13375,6 @@ impl ApplicationHandler<AppUserEvent> for WinitApp {
                     // result_scene_started_at を再初期化し、動画 decode 時計が巻き戻って
                     // clocked decode thread が古い loop_base で待ち続けることがある。
                 }
-                self.advance_active_play();
                 self.advance_draining_audio();
                 self.log_audio_diagnostics();
                 // 次フレームの再描画をここで要求して描画ループを自走させる。
