@@ -2516,6 +2516,36 @@ fn build_settings_panel(
                     }
                 });
 
+                egui::CollapsingHeader::new("Discord").show(ui, |ui| {
+                    ui.checkbox(&mut config.discord.enabled, "Rich Presence");
+                    ui.horizontal(|ui| {
+                        ui.label("Application ID");
+                        ui.add(
+                            egui::TextEdit::singleline(&mut config.discord.application_id)
+                                .desired_width(260.0)
+                                .hint_text("空欄なら BMZ 既定"),
+                        );
+                    });
+                    ui.horizontal(|ui| {
+                        ui.label("Large image key");
+                        ui.add(
+                            egui::TextEdit::singleline(&mut config.discord.large_image_key)
+                                .desired_width(160.0)
+                                .hint_text("bmz"),
+                        );
+                    });
+                    ui.horizontal(|ui| {
+                        ui.label("Large image text");
+                        ui.add(
+                            egui::TextEdit::singleline(&mut config.discord.large_image_text)
+                                .desired_width(220.0)
+                                .hint_text("BMZ Player"),
+                        );
+                    });
+                    ui.checkbox(&mut config.discord.show_song_details, "曲名とアーティストを表示");
+                    ui.label("Application ID が空欄なら BMZ の既定 ID を使います。");
+                });
+
                 egui::CollapsingHeader::new("入力デバイス").show(ui, |ui| {
                     egui::ComboBox::from_label("バックエンド")
                         .selected_text(input_backend_label(&config.input.backend))

@@ -70,6 +70,7 @@ use crate::config::profile_config::{
 };
 use crate::config::save::{save_app_config, save_profile_config};
 use crate::config::settings_registry::SettingsEntryId;
+use crate::discord_presence::{DiscordPresence, DiscordPresenceConfig, DiscordPresenceHandle};
 use crate::input::winit::physical_key_to_control;
 use crate::practice_ui::PracticePanelContext;
 use crate::screens::course_session::{ActiveCourseSession, CourseEntryResult, CourseResultSummary};
@@ -416,6 +417,8 @@ struct WinitApp {
     update_dismissed_session_version: Option<String>,
     exit_configs_saved: bool,
     last_scene_kind: Option<AppSceneKind>,
+    discord_presence: Option<DiscordPresenceHandle>,
+    discord_presence_config: Option<DiscordPresenceConfig>,
     start_held: bool,
     select_held: bool,
     select_e_action_holds: HashSet<InputActionConfig>,
@@ -1947,6 +1950,8 @@ impl WinitApp {
             update_dismissed_session_version: None,
             exit_configs_saved: false,
             last_scene_kind: None,
+            discord_presence: None,
+            discord_presence_config: None,
             start_held: false,
             select_held: false,
             select_e_action_holds: HashSet::new(),
@@ -2088,6 +2093,7 @@ impl WinitApp {
             app.result_key7_held = false;
             app.result_scene_started_at = Instant::now();
         }
+        app.sync_discord_presence_config();
         if app.boot.app_config.updates.enabled && app.boot.app_config.updates.check_on_startup {
             app.spawn_update_check("startup update check", false);
         }
@@ -10623,6 +10629,7 @@ impl WinitApp {
         );
         self.renderer.set_egui_frame(output.frame);
         self.sync_realtime_profile_settings();
+        self.sync_discord_presence_config();
         if output.practice_leave {
             self.leave_practice();
             return;
@@ -11467,7 +11474,77 @@ impl WinitApp {
         if let Some(window) = &self.window {
             window.set_title(window_title_for_scene(scene_kind));
         }
+        self.publish_discord_presence_for_scene(scene_kind);
         tracing::info!(scene = ?scene_kind, title = window_title_for_scene(scene_kind), "app scene active");
+    }
+
+    fn sync_discord_presence_config(&mut self) {
+        let desired = DiscordPresenceConfig::from_app_config(&self.boot.app_config.discord);
+        if self.discord_presence_config == desired {
+            return;
+        }
+
+        if let Some(handle) = self.discord_presence.take() {
+            handle.shutdown();
+        }
+        self.discord_presence_config = desired.clone();
+        if let Some(config) = desired {
+            let handle = DiscordPresenceHandle::start(config);
+            handle.update(self.discord_presence_for_scene(self.current_scene_kind()));
+            self.discord_presence = Some(handle);
+            tracing::info!("Discord Rich Presence enabled");
+        } else {
+            tracing::info!("Discord Rich Presence disabled");
+        }
+    }
+
+    fn publish_discord_presence_for_scene(&self, scene_kind: AppSceneKind) {
+        if let Some(handle) = &self.discord_presence {
+            handle.update(self.discord_presence_for_scene(scene_kind));
+        }
+    }
+
+    fn discord_presence_for_scene(&self, scene_kind: AppSceneKind) -> DiscordPresence {
+        let started_at = now_unix_seconds();
+        match scene_kind {
+            AppSceneKind::Select => DiscordPresence::select(started_at),
+            AppSceneKind::Decide => DiscordPresence::decide(started_at),
+            AppSceneKind::Play => {
+                if let Some(active_play) = &self.active_play {
+                    let metadata = &active_play.running.session.chart.metadata;
+                    let key_mode = discord_key_mode_label(metadata.key_mode);
+                    let title = discord_join_metadata(&metadata.title, &metadata.subtitle, " ");
+                    let artist =
+                        discord_join_metadata(&metadata.artist, &metadata.subartist, " / ");
+                    DiscordPresence::play(
+                        started_at,
+                        Some(&key_mode),
+                        title.as_deref(),
+                        artist.as_deref(),
+                        self.discord_presence_show_song_details(),
+                    )
+                } else {
+                    DiscordPresence::play(
+                        started_at,
+                        None,
+                        None,
+                        None,
+                        self.discord_presence_show_song_details(),
+                    )
+                }
+            }
+            AppSceneKind::Result if self.finished_course.is_some() => {
+                DiscordPresence::course_result(started_at)
+            }
+            AppSceneKind::Result => DiscordPresence::result(started_at),
+        }
+    }
+
+    fn discord_presence_show_song_details(&self) -> bool {
+        self.discord_presence_config
+            .as_ref()
+            .map(DiscordPresenceConfig::show_song_details)
+            .unwrap_or(self.boot.app_config.discord.show_song_details)
     }
 
     /// シーン遷移時のシステム SE / BGM を発火する。
@@ -13380,6 +13457,9 @@ impl ApplicationHandler<AppUserEvent> for WinitApp {
     }
 
     fn exiting(&mut self, _event_loop: &ActiveEventLoop) {
+        if let Some(handle) = self.discord_presence.take() {
+            handle.shutdown();
+        }
         self.flush_pending_screenshots("app exit");
         self.save_configs_for_exit(self.active_hispeed(), "game exit");
         if self.release_audio_for_process_exit() {
@@ -16441,6 +16521,22 @@ fn window_title_for_scene(scene_kind: AppSceneKind) -> &'static str {
         AppSceneKind::Decide => "bmz-player - Decide",
         AppSceneKind::Play => "bmz-player - Play",
         AppSceneKind::Result => "bmz-player - Result",
+    }
+}
+
+fn discord_key_mode_label(key_mode: KeyMode) -> String {
+    let value = key_mode.as_str().strip_suffix('K').unwrap_or(key_mode.as_str());
+    format!("{value}Keys")
+}
+
+fn discord_join_metadata(first: &str, second: &str, separator: &str) -> Option<String> {
+    let first = first.trim();
+    let second = second.trim();
+    match (first.is_empty(), second.is_empty()) {
+        (true, true) => None,
+        (false, true) => Some(first.to_string()),
+        (true, false) => Some(second.to_string()),
+        (false, false) => Some(format!("{first}{separator}{second}")),
     }
 }
 

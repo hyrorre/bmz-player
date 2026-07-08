@@ -1,5 +1,7 @@
 use serde::{Deserialize, Serialize};
 
+pub const DEFAULT_DISCORD_APPLICATION_ID: &str = "1524506927315419448";
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppConfig {
     pub version: u32,
@@ -18,6 +20,8 @@ pub struct AppConfig {
     pub tables: DifficultyTablesConfig,
     #[serde(default)]
     pub updates: UpdatesConfig,
+    #[serde(default)]
+    pub discord: DiscordConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -244,6 +248,20 @@ pub struct UpdatesConfig {
     pub skipped_version: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DiscordConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default, skip_serializing_if = "should_skip_discord_application_id")]
+    pub application_id: String,
+    #[serde(default = "default_discord_large_image_key")]
+    pub large_image_key: String,
+    #[serde(default = "default_discord_large_image_text")]
+    pub large_image_text: String,
+    #[serde(default = "default_true")]
+    pub show_song_details: bool,
+}
+
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 pub enum UpdateChannelConfig {
@@ -259,6 +277,18 @@ impl Default for UpdatesConfig {
             channel: UpdateChannelConfig::Stable,
             check_on_startup: default_update_check_on_startup(),
             skipped_version: String::new(),
+        }
+    }
+}
+
+impl Default for DiscordConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            application_id: String::new(),
+            large_image_key: default_discord_large_image_key(),
+            large_image_text: default_discord_large_image_text(),
+            show_song_details: true,
         }
     }
 }
@@ -292,6 +322,19 @@ fn default_true() -> bool {
 
 fn default_update_check_on_startup() -> bool {
     !cfg!(debug_assertions)
+}
+
+fn default_discord_large_image_key() -> String {
+    "bmz".to_string()
+}
+
+fn default_discord_large_image_text() -> String {
+    "BMZ Player".to_string()
+}
+
+fn should_skip_discord_application_id(value: &str) -> bool {
+    let value = value.trim();
+    value.is_empty() || value == DEFAULT_DISCORD_APPLICATION_ID
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -347,6 +390,7 @@ impl Default for AppConfig {
             logging: LoggingConfig { level: LogLevel::Info, file_logging: true },
             tables: DifficultyTablesConfig::default(),
             updates: UpdatesConfig::default(),
+            discord: DiscordConfig::default(),
         }
     }
 }
@@ -371,6 +415,27 @@ mod tests {
         assert!(!config.scan.auto_rescan_on_startup);
         assert_eq!(config.video.vsync_mode, VsyncModeConfig::Vsync);
         assert_eq!(config.video.frame_limit_in_background, 60);
+    }
+
+    #[test]
+    fn app_config_defaults_discord_presence_disabled() {
+        let config = AppConfig::default();
+
+        assert!(!config.discord.enabled);
+        assert!(config.discord.application_id.is_empty());
+        assert_eq!(config.discord.large_image_key, "bmz");
+        assert_eq!(config.discord.large_image_text, "BMZ Player");
+        assert!(config.discord.show_song_details);
+    }
+
+    #[test]
+    fn app_config_does_not_serialize_builtin_discord_application_id() {
+        let mut config = AppConfig::default();
+        config.discord.application_id = DEFAULT_DISCORD_APPLICATION_ID.to_string();
+
+        let toml = toml::to_string(&config).unwrap();
+
+        assert!(!toml.contains(DEFAULT_DISCORD_APPLICATION_ID));
     }
 
     #[test]
