@@ -2356,7 +2356,8 @@ mod tests {
             .expect("Rm-skin play7 should decode");
         assert!(!loaded.document.destination.is_empty());
         assert_eq!(loaded.document.skin_type, 0);
-        let eon_timers: Vec<_> = loaded
+        let eon_shadow_draw = "timer(143) == timer_off and number(106)-number(110)-number(111)-number(112)-number(113)-number(114) == 0";
+        let eon_destinations: Vec<_> = loaded
             .document
             .destination
             .iter()
@@ -2364,14 +2365,20 @@ mod tests {
                 bmz_skin_document::DestinationListEntry::Single(destination)
                     if destination.id == "eon" =>
                 {
-                    Some(destination.timer)
+                    Some((destination.timer, destination.draw.as_str()))
                 }
                 _ => None,
             })
             .collect();
         assert!(
-            !eon_timers.is_empty() && eon_timers.iter().all(|timer| *timer == Some(143)),
-            "Rm-skin end-of-note layers should all use timer 143: {eon_timers:?}"
+            eon_destinations.iter().any(|(timer, _)| *timer == Some(143)),
+            "Rm-skin end-of-note animation should use timer 143: {eon_destinations:?}"
+        );
+        assert!(
+            eon_destinations
+                .iter()
+                .all(|(timer, draw)| timer.is_some() || *draw == eon_shadow_draw),
+            "Rm-skin end-of-note shadow layers should keep their runtime draw gate: {eon_destinations:?}"
         );
     }
 
@@ -2407,6 +2414,30 @@ mod tests {
         assert!(
             fast_slow_draws.contains(&("slow", "option(1243) && number(525) != 0")),
             "Rmz play6 SLOW draw should remain runtime-gated: {fast_slow_draws:?}"
+        );
+        let eon_shadow_draw = "timer(143) == timer_off and number(106)-number(110)-number(111)-number(112)-number(113)-number(114) == 0";
+        let eon_destinations = loaded
+            .document
+            .destination
+            .iter()
+            .filter_map(|entry| match entry {
+                bmz_skin_document::DestinationListEntry::Single(destination)
+                    if destination.id == "eon" =>
+                {
+                    Some((destination.timer, destination.draw.as_str()))
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert!(
+            eon_destinations.iter().any(|(timer, _)| *timer == Some(143)),
+            "Rmz play6 END_OF_NOTES animation should use timer 143: {eon_destinations:?}"
+        );
+        assert!(
+            eon_destinations
+                .iter()
+                .any(|(timer, draw)| timer.is_none() && *draw == eon_shadow_draw),
+            "Rmz play6 END_OF_NOTES shadow should stay gated by remaining playable notes: {eon_destinations:?}"
         );
         let note = loaded.document.note.expect("play6 note definition");
         assert_eq!(note.note.len(), 6);

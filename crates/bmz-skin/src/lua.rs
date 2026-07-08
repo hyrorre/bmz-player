@@ -727,6 +727,16 @@ impl MainStateProbe {
         self.option_values = options;
     }
 
+    fn begin_number_timer_recording_with_values(
+        &mut self,
+        values: BTreeMap<i32, i32>,
+        mut timer_values: BTreeMap<i32, i32>,
+    ) {
+        self.begin_number_recording_with_values(values);
+        timer_values.entry(i32::MIN).or_insert(i32::MIN);
+        self.timer_values = timer_values;
+    }
+
     fn begin_option_call_recording(&mut self, default_value: bool) {
         self.mode = MainStateProbeMode::RecordNumbers { default_value: 0 };
         self.number_calls.clear();
@@ -3048,6 +3058,44 @@ fn infer_main_state_timer_option_draw_condition(
         .find_map(|(condition, expected)| (observed == expected).then_some(condition))
 }
 
+fn infer_end_of_note_shadow_draw_condition(
+    function: &Function,
+    main_state_probe: &Arc<Mutex<MainStateProbe>>,
+) -> Option<String> {
+    let timers = collect_timer_refs(function, main_state_probe)?;
+    let timer_id = single_number_call(&timers)?;
+    if !matches!(timer_id, 143 | 144) {
+        return None;
+    }
+
+    let refs = collect_number_refs(function, main_state_probe)?;
+    if refs.as_slice() != REMAIN_NOTE_REFS {
+        return None;
+    }
+
+    let samples = [
+        (i32::MIN, BTreeMap::from([(106, 0), (110, 0), (111, 0), (112, 0), (113, 0), (114, 0)])),
+        (i32::MIN, BTreeMap::from([(106, 5), (110, 5), (111, 0), (112, 0), (113, 0), (114, 0)])),
+        (i32::MIN, BTreeMap::from([(106, 5), (110, 2), (111, 1), (112, 1), (113, 0), (114, 0)])),
+        (0, BTreeMap::from([(106, 5), (110, 5), (111, 0), (112, 0), (113, 0), (114, 0)])),
+        (100, BTreeMap::from([(106, 0), (110, 0), (111, 0), (112, 0), (113, 0), (114, 0)])),
+    ];
+    for (timer_value, values) in samples {
+        let expected = timer_value == i32::MIN && remain_notes_value(&values) == 0;
+        let actual = call_draw_with_numbers_and_timers(
+            function,
+            main_state_probe,
+            values,
+            BTreeMap::from([(timer_id, timer_value)]),
+        )?;
+        if actual != expected {
+            return None;
+        }
+    }
+
+    Some(format!("timer({timer_id}) == timer_off and {} == 0", remain_notes_numerator_expr()))
+}
+
 fn infer_os_clock_after_draw_condition(
     function: &Function,
     main_state_probe: &Arc<Mutex<MainStateProbe>>,
@@ -3541,6 +3589,7 @@ fn infer_boolean_predicate(
         .or_else(|| infer_main_state_gauge_type_draw_condition(function, main_state_probe))
         .or_else(|| infer_keybeam_timer_event_draw_condition(function, main_state_probe))
         .or_else(|| infer_main_state_timer_option_draw_condition(function, main_state_probe))
+        .or_else(|| infer_end_of_note_shadow_draw_condition(function, main_state_probe))
         .or_else(|| infer_os_clock_after_draw_condition(function, main_state_probe))
         .or_else(|| infer_os_clock_after_option_draw_condition(function, main_state_probe))
         .or_else(|| infer_judge_fast_slow_draw_condition(function, main_state_probe, object_id))
@@ -3744,6 +3793,24 @@ fn call_draw_with_numbers(
     main_state_probe.lock().ok()?.end_recording();
     match result? {
         Value::Boolean(value) => Some(value),
+        _ => None,
+    }
+}
+
+fn call_draw_with_numbers_and_timers(
+    function: &Function,
+    main_state_probe: &Arc<Mutex<MainStateProbe>>,
+    values: BTreeMap<i32, i32>,
+    timers: BTreeMap<i32, i32>,
+) -> Option<bool> {
+    {
+        main_state_probe.lock().ok()?.begin_number_timer_recording_with_values(values, timers);
+    }
+    let result = function.call::<Value>(()).ok();
+    main_state_probe.lock().ok()?.end_recording();
+    match result? {
+        Value::Boolean(value) => Some(value),
+        Value::Nil => Some(false),
         _ => None,
     }
 }
@@ -4271,6 +4338,16 @@ const REMAIN_NOTE_REFS: [i32; 6] = [106, 110, 111, 112, 113, 114];
 
 fn remain_notes_numerator_expr() -> String {
     "number(106)-number(110)-number(111)-number(112)-number(113)-number(114)".to_string()
+}
+
+fn remain_notes_value(values: &BTreeMap<i32, i32>) -> i32 {
+    REMAIN_NOTE_REFS
+        .iter()
+        .map(|ref_id| {
+            let value = values.get(ref_id).copied().unwrap_or(0);
+            if *ref_id == 106 { value } else { -value }
+        })
+        .sum()
 }
 
 fn infer_remain_rate_scaled(
@@ -4824,6 +4901,44 @@ mod tests {
             infer_boolean_predicate(&function, &probe, None),
             Some(
                 "timer(101) != timer_off and timer(71) == timer_off and event_index(501) == 2 or timer(101) != timer_off and timer(71) == timer_off and event_index(501) == 3"
+                    .to_string()
+            )
+        );
+    }
+
+    #[test]
+    fn infers_end_of_note_shadow_draw_condition() {
+        let lua = Lua::new();
+        let probe = Arc::new(Mutex::new(MainStateProbe::default()));
+        let main_state = create_main_state_stub(&lua, probe.clone()).unwrap();
+        lua.globals().set("main_state", main_state).unwrap();
+        let function = lua
+            .load(
+                r#"
+                local TIMER_OFF = main_state.timer_off_value
+                local function getRemainNotes()
+                    return main_state.number(106)
+                        - main_state.number(110)
+                        - main_state.number(111)
+                        - main_state.number(112)
+                        - main_state.number(113)
+                        - main_state.number(114)
+                end
+
+                return function()
+                    if main_state.timer(143) == TIMER_OFF and getRemainNotes() == 0 then
+                        return true
+                    end
+                end
+                "#,
+            )
+            .eval::<Function>()
+            .unwrap();
+
+        assert_eq!(
+            infer_boolean_predicate(&function, &probe, None),
+            Some(
+                "timer(143) == timer_off and number(106)-number(110)-number(111)-number(112)-number(113)-number(114) == 0"
                     .to_string()
             )
         );

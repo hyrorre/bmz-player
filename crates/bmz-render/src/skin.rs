@@ -7239,6 +7239,42 @@ fn eval_skin_draw_term(term: &str, state: &SkinDrawState) -> Option<bool> {
 }
 
 fn eval_skin_draw_operand(operand: &str, state: &SkinDrawState) -> Option<f32> {
+    eval_skin_draw_atom_operand(operand, state)
+        .or_else(|| eval_skin_draw_sum_operand(operand, state))
+}
+
+fn eval_skin_draw_sum_operand(operand: &str, state: &SkinDrawState) -> Option<f32> {
+    let mut total = 0.0;
+    let mut sign = 1.0;
+    let mut start = 0;
+    let mut saw_operator = false;
+
+    for (index, ch) in operand.char_indices() {
+        if index == 0 || !matches!(ch, '+' | '-') {
+            continue;
+        }
+        let term = operand[start..index].trim();
+        if term.is_empty() {
+            return None;
+        }
+        total += sign * eval_skin_draw_atom_operand(term, state)?;
+        sign = if ch == '-' { -1.0 } else { 1.0 };
+        start = index + ch.len_utf8();
+        saw_operator = true;
+    }
+
+    if !saw_operator {
+        return None;
+    }
+    let term = operand[start..].trim();
+    if term.is_empty() {
+        return None;
+    }
+    total += sign * eval_skin_draw_atom_operand(term, state)?;
+    Some(total)
+}
+
+fn eval_skin_draw_atom_operand(operand: &str, state: &SkinDrawState) -> Option<f32> {
     if let Some(ref_id) = parse_skin_float_number_operand(operand) {
         return skin_state_float_number(ref_id, state);
     }
@@ -14593,6 +14629,24 @@ mod tests {
             &SkinDrawState {
                 judge_ms: judge_region_state(0, 120, 0).judge_ms,
                 select_replay_slots: [true, false, false, false],
+                ..Default::default()
+            }
+        ));
+        let eon_shadow_draw = "timer(143) == timer_off and number(106)-number(110)-number(111)-number(112)-number(113)-number(114) == 0";
+        assert!(eval_skin_draw_condition(
+            eon_shadow_draw,
+            &SkinDrawState {
+                total_notes: 5,
+                judge_counts: DisplayJudgeCounts { pgreat: 5, ..Default::default() },
+                ..Default::default()
+            }
+        ));
+        assert!(!eval_skin_draw_condition(
+            eon_shadow_draw,
+            &SkinDrawState {
+                total_notes: 5,
+                judge_counts: DisplayJudgeCounts { pgreat: 5, ..Default::default() },
+                end_of_note_ms: Some(0),
                 ..Default::default()
             }
         ));

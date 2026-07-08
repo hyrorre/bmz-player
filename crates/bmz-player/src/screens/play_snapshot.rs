@@ -449,7 +449,10 @@ pub fn build_render_snapshot_with_target_and_bga_frames_cached(
             (render_now.0 >= started_at.0)
                 .then_some(((render_now.0 - started_at.0) / 1_000).clamp(0, i32::MAX as i64) as i32)
         }),
-        end_of_note_elapsed_ms: end_of_note_elapsed_ms(render_now, session.chart.end_time),
+        end_of_note_elapsed_ms: end_of_note_elapsed_ms(
+            render_now,
+            end_of_note_time(&session.chart),
+        ),
         fadeout_elapsed_ms: None,
         failed_elapsed_ms: None,
         music_end_elapsed_ms: None,
@@ -835,6 +838,25 @@ fn scratch_angle_degrees(visual_time: TimeUs, scratch_index: i32, input_delta_ms
     };
     let angle_ms = (base_ms + input_delta_ms).rem_euclid(SCRATCH_ANGLE_PERIOD_MS);
     (angle_ms / SCRATCH_ANGLE_DEGREES_DIVISOR) as i32
+}
+
+fn end_of_note_time(chart: &PlayableChart) -> TimeUs {
+    TimeUs(
+        chart
+            .lane_notes
+            .iter()
+            .flat_map(|notes| {
+                notes.iter().filter_map(|note| {
+                    matches!(
+                        note.kind,
+                        NoteKind::Tap | NoteKind::LongStart | NoteKind::LongEnd | NoteKind::Mine
+                    )
+                    .then_some(note.time.0)
+                })
+            })
+            .max()
+            .unwrap_or(0),
+    )
 }
 
 fn end_of_note_elapsed_ms(render_now: TimeUs, end_time: TimeUs) -> Option<i32> {
@@ -1397,7 +1419,7 @@ mod tests {
     }
 
     #[test]
-    fn end_of_note_timer_counts_from_chart_end() {
+    fn end_of_note_timer_counts_from_last_note_time() {
         let profile = ProfileConfig::new_default("default", "Default", 1);
         let session =
             build_game_session(Arc::new(chart()), &profile, PlaySessionOptions::default());
@@ -1409,6 +1431,31 @@ mod tests {
         assert_eq!(before.end_of_note_elapsed_ms, None);
         assert_eq!(at_end.end_of_note_elapsed_ms, Some(0));
         assert_eq!(after.end_of_note_elapsed_ms, Some(250));
+    }
+
+    #[test]
+    fn end_of_note_timer_ignores_invisible_notes_after_last_note() {
+        let profile = ProfileConfig::new_default("default", "Default", 1);
+        let mut chart = chart();
+        chart.lane_notes[Lane::Key2.index()].push(NoteEvent {
+            id: NoteId(2),
+            lane: Lane::Key2,
+            kind: NoteKind::Invisible,
+            tick: ChartTick(0),
+            time: TimeUs(2_000_000),
+            sound: None,
+            damage: None,
+        });
+        chart.end_time = TimeUs(2_000_000);
+        let session = build_game_session(Arc::new(chart), &profile, PlaySessionOptions::default());
+
+        let before_last_note = build_render_snapshot(&session, TimeUs(999_999), &[], None);
+        let at_last_note = build_render_snapshot(&session, TimeUs(1_000_000), &[], None);
+        let after_last_note = build_render_snapshot(&session, TimeUs(1_250_000), &[], None);
+
+        assert_eq!(before_last_note.end_of_note_elapsed_ms, None);
+        assert_eq!(at_last_note.end_of_note_elapsed_ms, Some(0));
+        assert_eq!(after_last_note.end_of_note_elapsed_ms, Some(250));
     }
 
     #[test]
