@@ -819,6 +819,9 @@ impl SkinBgaFrame {
 #[derive(Debug, Clone, PartialEq)]
 pub struct SkinDrawState {
     pub elapsed_ms: i32,
+    /// アプリ起動後の経過時間 ms。
+    /// beatoraja の NUMBER_OPERATING_TIME_HOUR/MINUTE/SECOND (27..29) に使う。
+    pub operating_time_ms: i32,
     pub ready_timer_ms: Option<i32>,
     pub play_timer_ms: Option<i32>,
     pub key_mode: KeyMode,
@@ -1135,6 +1138,7 @@ impl Default for SkinDrawState {
     fn default() -> Self {
         Self {
             elapsed_ms: 0,
+            operating_time_ms: 0,
             ready_timer_ms: None,
             play_timer_ms: None,
             key_mode: KeyMode::default(),
@@ -7702,6 +7706,10 @@ fn player_total_play_notes(stats: &PlayerStatsSnapshot) -> u64 {
         .saturating_add(player_total_bad(stats))
 }
 
+fn operating_time_seconds(state: &SkinDrawState) -> i64 {
+    i64::from(state.operating_time_ms.max(0)) / 1_000
+}
+
 fn select_folder_lamp_counts_available(state: &SkinDrawState) -> bool {
     state.select_screen
         && matches!(
@@ -7757,6 +7765,9 @@ fn skin_state_number(ref_id: i32, state: &SkinDrawState) -> Option<i64> {
         18 => Some(player_stat_u64((state.player_stats.playtime_seconds / 60) % 60)),
         19 => Some(player_stat_u64(state.player_stats.playtime_seconds % 60)),
         21..=26 => current_datetime_number(ref_id),
+        27 => Some(operating_time_seconds(state) / 3_600),
+        28 => Some((operating_time_seconds(state) / 60) % 60),
+        29 => Some(operating_time_seconds(state) % 60),
         42 | 43 if state.result_failed.is_some() => Some(state.result_arrange_index as i64),
         42 if state.select_screen => Some(state.select_arrange_index as i64),
         43 if state.select_screen => Some(state.select_arrange_2p_index as i64),
@@ -18964,6 +18975,15 @@ mod tests {
         assert_eq!(skin_state_number(427, &state), Some(9));
         assert!(test_skin_op(181, &[], &state));
         assert!(!test_skin_op(182, &[], &state));
+    }
+
+    #[test]
+    fn skin_state_number_maps_operating_time_refs() {
+        let state = SkinDrawState { operating_time_ms: 90_061_234, ..SkinDrawState::default() };
+
+        assert_eq!(skin_state_number(27, &state), Some(25));
+        assert_eq!(skin_state_number(28, &state), Some(1));
+        assert_eq!(skin_state_number(29, &state), Some(1));
     }
 
     #[test]

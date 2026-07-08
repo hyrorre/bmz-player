@@ -443,6 +443,7 @@ struct WinitApp {
     smoke_screenshot_path: Option<PathBuf>,
     rendered_frames: u32,
     rendered_result_frames: u32,
+    app_started_at: Instant,
     select_scene_started_at: Instant,
     select_bar_started_at: Instant,
     play_scene_started_at: Instant,
@@ -1939,6 +1940,7 @@ impl WinitApp {
             smoke_screenshot_path: options.smoke_screenshot_path.as_ref().map(PathBuf::from),
             rendered_frames: 0,
             rendered_result_frames: 0,
+            app_started_at: now,
             select_scene_started_at: now,
             select_bar_started_at: now,
             play_scene_started_at: now,
@@ -2319,9 +2321,24 @@ impl WinitApp {
                 })
             }
         };
+        self.apply_operating_time_to_scene(&mut scene);
         let overlay = self.build_overlay_snapshot();
         self.apply_overlay_to_scene(&mut scene, overlay);
         scene
+    }
+
+    fn operating_time_ms(&self) -> i32 {
+        elapsed_since_ms(self.app_started_at)
+    }
+
+    fn apply_operating_time_to_scene(&self, scene: &mut AppSceneSnapshot) {
+        let operating_time_ms = self.operating_time_ms();
+        match scene {
+            AppSceneSnapshot::Decide(snapshot) | AppSceneSnapshot::Play(snapshot) => {
+                snapshot.operating_time_ms = operating_time_ms;
+            }
+            AppSceneSnapshot::Select(_) | AppSceneSnapshot::Result(_) => {}
+        }
     }
 
     fn build_overlay_snapshot(&self) -> OverlaySnapshot {
@@ -12052,6 +12069,7 @@ fn play_skin_video_draw_state(
         (snapshot.hidden_cover.clamp(0.0, 1.0) * visible_lane_height).round() as i32;
     bmz_render::skin::SkinDrawState {
         elapsed_ms: play_elapsed_ms,
+        operating_time_ms: snapshot.operating_time_ms,
         ready_timer_ms: snapshot.ready_elapsed_time.map(time_us_to_skin_ms),
         play_timer_ms: (snapshot.time.0 >= 0).then_some(time_us_to_skin_ms(snapshot.time)),
         key_mode: snapshot.key_mode,

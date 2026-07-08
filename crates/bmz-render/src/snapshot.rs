@@ -51,6 +51,9 @@ pub struct RenderSnapshot {
     /// プレイ画面に遷移してからの経過時間。
     /// timer 未指定 destination の通常アニメーション時刻の基準に使う。
     pub play_elapsed_time: TimeUs,
+    /// アプリ起動後の経過時間 ms。
+    /// beatoraja の NUMBER_OPERATING_TIME_HOUR/MINUTE/SECOND (27..29) に使う。
+    pub operating_time_ms: i32,
     /// READY timer (TIMER_READY=40) elapsed time. None while READY is not active yet.
     pub ready_elapsed_time: Option<TimeUs>,
     /// BMS リソース (WAV 等) のバックグラウンドロードが完了しているか。
