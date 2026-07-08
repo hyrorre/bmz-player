@@ -16,7 +16,7 @@ use crate::config::play::{
     bottom_shiftable_gauge_from_config, gauge_auto_shift_from_config, gauge_type_from_config,
 };
 use crate::config::profile_config::{GaugeAutoShiftConfig, GaugeTypeConfig, ProfileConfig};
-use crate::input::winit::WinitInputBackend;
+use crate::input::shared::SharedInputBackend;
 use crate::screens::play_session::{
     PlaySessionOptions, PreloadedPlaySession, PreparedPlaySession,
     build_prepared_play_session_from_preloaded,
@@ -71,20 +71,20 @@ pub struct PlayStartOptions {
     pub course_gauge_property_override: Option<GaugeProperty>,
 }
 
-pub struct StartedWinitPlaySession {
+pub struct StartedInputPlaySession {
     pub running: RunningPlaySession,
-    pub input: WinitInputBackend,
+    pub input: SharedInputBackend,
 }
 
-pub struct PreparedWinitPlaySession {
+pub struct PreparedInputPlaySession {
     pub prepared: PreparedPlaySession,
-    pub input: WinitInputBackend,
+    pub input: SharedInputBackend,
 }
 
-pub struct PreloadedWinitPlaySession {
+pub struct PreloadedInputPlaySession {
     pub chart_id: i64,
     pub preloaded: PreloadedPlaySession,
-    pub input: WinitInputBackend,
+    pub input: SharedInputBackend,
     pub session_options: PlaySessionOptions,
 }
 
@@ -206,8 +206,8 @@ pub fn prepare_play_session_for_chart_with_winit_input(
     profile: &ProfileConfig,
     chart_id: i64,
     start_options: PlayStartOptions,
-) -> Result<PreparedWinitPlaySession> {
-    let input = WinitInputBackend::default();
+) -> Result<PreparedInputPlaySession> {
+    let input = SharedInputBackend::default();
     let mut session_options = play_session_options_from_start(app_config, start_options);
     session_options.ln_policy_setting = profile.play.ln_mode_policy;
     let prepared = load_prepared_play_session_for_chart_with_input_backend(
@@ -217,33 +217,33 @@ pub fn prepare_play_session_for_chart_with_winit_input(
         session_options,
         Box::new(input.clone()),
     )?;
-    Ok(PreparedWinitPlaySession { prepared, input })
+    Ok(PreparedInputPlaySession { prepared, input })
 }
 
 pub fn prepare_winit_play_session_from_preloaded(
     profile: &ProfileConfig,
-    preloaded: PreloadedWinitPlaySession,
-) -> PreparedWinitPlaySession {
+    preloaded: PreloadedInputPlaySession,
+) -> PreparedInputPlaySession {
     let prepared = build_prepared_play_session_from_preloaded(
         preloaded.preloaded,
         profile,
         preloaded.session_options,
         Box::new(preloaded.input.clone()),
     );
-    PreparedWinitPlaySession { prepared, input: preloaded.input }
+    PreparedInputPlaySession { prepared, input: preloaded.input }
 }
 
 pub fn open_prepared_winit_play_session(
     score_db: &ScoreDatabase,
     runtime: &AudioRuntime,
-    prepared: PreparedWinitPlaySession,
-) -> Result<StartedWinitPlaySession> {
+    prepared: PreparedInputPlaySession,
+) -> Result<StartedInputPlaySession> {
     let score_key = prepared.prepared.score_key;
     let mut running = open_prepared_play_audio(runtime, prepared.prepared, score_key);
     running.best_ex_score = score_db.best_ex_score(score_key).unwrap_or(None);
     running.best_ghost =
         score_db.best_ghost(score_key, running.session.chart.total_notes).unwrap_or(None);
-    Ok(StartedWinitPlaySession { running, input: prepared.input })
+    Ok(StartedInputPlaySession { running, input: prepared.input })
 }
 
 pub fn start_running_play_session_for_chart_with_winit_input(
@@ -253,8 +253,8 @@ pub fn start_running_play_session_for_chart_with_winit_input(
     profile: &ProfileConfig,
     chart_id: i64,
     start_options: PlayStartOptions,
-) -> Result<StartedWinitPlaySession> {
-    let input = WinitInputBackend::default();
+) -> Result<StartedInputPlaySession> {
+    let input = SharedInputBackend::default();
     let runtime = AudioRuntime::open(&app_config.audio)?;
     let running = start_running_play_session_for_chart_with_audio_runtime_and_input_backend(
         library_db,
@@ -266,7 +266,7 @@ pub fn start_running_play_session_for_chart_with_winit_input(
         Box::new(input.clone()),
         &runtime,
     )?;
-    Ok(StartedWinitPlaySession { running, input })
+    Ok(StartedInputPlaySession { running, input })
 }
 
 /// Overrides `options` fields based on the course constraints.
@@ -519,10 +519,11 @@ mod tests {
 
     #[test]
     fn winit_input_clone_can_feed_session_backend() {
-        let event_source = WinitInputBackend::default();
+        let event_source = SharedInputBackend::default();
         let mut session_backend = event_source.clone();
 
-        event_source.handle_key_parts(
+        crate::input::winit::handle_key_parts(
+            &event_source,
             PhysicalKey::Code(KeyCode::KeyZ),
             ElementState::Pressed,
             false,

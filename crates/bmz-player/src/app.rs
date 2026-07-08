@@ -85,7 +85,7 @@ use crate::screens::play_snapshot::{
     build_render_snapshot_with_target_and_bga_frames_cached, display_bga_frame,
 };
 use crate::screens::play_start::{
-    PlayStartOptions, PreloadedWinitPlaySession, PreparedWinitPlaySession, StartedWinitPlaySession,
+    PlayStartOptions, PreloadedInputPlaySession, PreparedInputPlaySession, StartedInputPlaySession,
     apply_arrange_override, apply_course_constraints, apply_queued_replay,
     open_prepared_winit_play_session, play_session_options_from_start,
     prepare_play_session_for_chart_with_winit_input, prepare_winit_play_session_from_preloaded,
@@ -351,7 +351,7 @@ impl UpdatePrompt {
 struct WinitApp {
     boot: BootstrappedApp,
     window: Option<Arc<Window>>,
-    active_play: Option<StartedWinitPlaySession>,
+    active_play: Option<StartedInputPlaySession>,
     /// コースプレイ中のセッション。単曲プレイ時は None。
     active_course: Option<ActiveCourseSession>,
     /// コース全体完了時のリザルト。リザルト画面から抜けるまで保持する。
@@ -384,7 +384,7 @@ struct WinitApp {
     /// Decide 演出中に preload worker から受け取った結果を退避し、
     /// `start_chart_with_options` で再利用するためのバッファ。
     /// 既に裏で完了している譜面/音源ロードを main で再度同期実行するのを避ける。
-    preloaded_play_session: Option<PreloadedWinitPlaySession>,
+    preloaded_play_session: Option<PreloadedInputPlaySession>,
     play_preload_generation: u64,
     play_ending: Option<PlayEndingTransition>,
     last_started_chart_id: Option<i64>,
@@ -1020,11 +1020,11 @@ struct PendingPlayPreload {
 struct PlayPreloadResult {
     generation: u64,
     chart_id: i64,
-    result: std::result::Result<PreloadedWinitPlaySession, String>,
+    result: std::result::Result<PreloadedInputPlaySession, String>,
 }
 
 struct QuickRetryReuse {
-    preloaded: PreloadedWinitPlaySession,
+    preloaded: PreloadedInputPlaySession,
     bga_frames: BgaFrameCatalog,
 }
 
@@ -3836,7 +3836,7 @@ impl WinitApp {
                 }
                 // Start キーはゲームプレイ入力としても通すのでフォールスルー
             }
-            active_play.input.handle_key_event(event);
+            crate::input::winit::handle_key_event(&active_play.input, event);
             return;
         }
 
@@ -5837,7 +5837,7 @@ impl WinitApp {
             session_options,
             Box::new(preloaded.input.clone()),
         );
-        let prepared_winit = crate::screens::play_start::PreparedWinitPlaySession {
+        let prepared_winit = crate::screens::play_start::PreparedInputPlaySession {
             prepared,
             input: preloaded.input,
         };
@@ -6788,10 +6788,10 @@ impl WinitApp {
         thread::Builder::new()
             .name(format!("play-preload-{chart_id}"))
             .spawn(move || {
-                let result = (|| -> Result<PreloadedWinitPlaySession> {
+                let result = (|| -> Result<PreloadedInputPlaySession> {
                     let library_db =
                         crate::storage::library_db::LibraryDatabase::open(&library_db_path)?;
-                    let input = crate::input::winit::WinitInputBackend::default();
+                    let input = crate::input::shared::SharedInputBackend::default();
                     let mut session_options =
                         crate::screens::play_start::play_session_options_from_start(
                             &app_config,
@@ -6805,7 +6805,7 @@ impl WinitApp {
                         session_options.clone(),
                         normalize_chart_volume,
                     )?;
-                    Ok(PreloadedWinitPlaySession { chart_id, preloaded, input, session_options })
+                    Ok(PreloadedInputPlaySession { chart_id, preloaded, input, session_options })
                 })()
                 .map_err(|error| format!("{error:#}"));
                 let _ = tx.send(PlayPreloadResult { generation, chart_id, result });
@@ -6859,8 +6859,8 @@ impl WinitApp {
 
     fn open_prepared_winit_play_session(
         &self,
-        prepared: PreparedWinitPlaySession,
-    ) -> Result<StartedWinitPlaySession> {
+        prepared: PreparedInputPlaySession,
+    ) -> Result<StartedInputPlaySession> {
         let runtime = self.audio_runtime.as_ref().context("audio output is not available")?;
         open_prepared_winit_play_session(&self.boot.score_db, runtime, prepared)
     }
@@ -7257,7 +7257,7 @@ impl WinitApp {
         );
     }
 
-    fn install_active_play(&mut self, chart_id: i64, mut active_play: StartedWinitPlaySession) {
+    fn install_active_play(&mut self, chart_id: i64, mut active_play: StartedInputPlaySession) {
         self.last_play_was_autoplay = active_play
             .running
             .session
@@ -8042,7 +8042,7 @@ impl WinitApp {
         session_options.rule_mode = self.boot.profile_config.play.rule_mode;
 
         Some(QuickRetryReuse {
-            preloaded: PreloadedWinitPlaySession {
+            preloaded: PreloadedInputPlaySession {
                 chart_id,
                 preloaded: PreloadedPlaySession {
                     chart: Arc::clone(&active.running.session.chart),
@@ -8052,7 +8052,7 @@ impl WinitApp {
                     applied_arrange: active.running.applied_arrange.clone(),
                     score_key: active.running.score_key,
                 },
-                input: crate::input::winit::WinitInputBackend::default(),
+                input: crate::input::shared::SharedInputBackend::default(),
                 session_options,
             },
             bga_frames: active.running.bga_frames.clone(),
@@ -16160,7 +16160,7 @@ fn elapsed_since_ms(started_at: Instant) -> i32 {
 }
 
 fn preloaded_matches_start(
-    preloaded: &PreloadedWinitPlaySession,
+    preloaded: &PreloadedInputPlaySession,
     chart_id: i64,
     options: &PlayStartOptions,
 ) -> bool {

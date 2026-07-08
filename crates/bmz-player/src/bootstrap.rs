@@ -9,7 +9,7 @@ use crate::config::profile_config::ProfileConfig;
 use crate::config::save::{save_app_config, save_profile_config};
 use crate::paths::{AppPaths, ProfilePaths, resolve_app_paths, resolve_profile_paths};
 use crate::screens::play_start::{
-    PlayStartOptions, StartedWinitPlaySession, start_running_play_session_for_chart,
+    PlayStartOptions, StartedInputPlaySession, start_running_play_session_for_chart,
     start_running_play_session_for_chart_with_input_backend,
     start_running_play_session_for_chart_with_winit_input,
 };
@@ -69,7 +69,7 @@ impl BootstrappedApp {
         &self,
         chart_id: i64,
         options: PlayStartOptions,
-    ) -> Result<StartedWinitPlaySession> {
+    ) -> Result<StartedInputPlaySession> {
         start_running_play_session_for_chart_with_winit_input(
             &self.library_db,
             &self.score_db,
