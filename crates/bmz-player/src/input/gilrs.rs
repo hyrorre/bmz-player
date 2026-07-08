@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 use bmz_core::input::InputKind;
 use bmz_gameplay::input::backend::{
@@ -18,6 +18,7 @@ pub struct GilrsButtonEvent {
     pub name: String,
     pub device_id: DeviceId,
     pub pressed: bool,
+    pub timestamp: DeviceTimestamp,
 }
 
 #[derive(Debug, Clone)]
@@ -47,6 +48,7 @@ pub struct GilrsRawEvent {
     pub kind: GilrsRawEventKind,
     pub logical: String,
     pub raw_code: GilrsRawCode,
+    pub timestamp: DeviceTimestamp,
     pub mapped_control: Option<String>,
     pub pressed: Option<bool>,
     pub value: Option<f32>,
@@ -58,6 +60,7 @@ pub struct GilrsRawEvent {
 pub struct GilrsAxisTickEvent {
     pub name: String,
     pub device_id: DeviceId,
+    pub timestamp: DeviceTimestamp,
     pub ticks: i32,
 }
 
@@ -108,16 +111,17 @@ impl GilrsBackend {
     pub fn poll(&mut self) -> GilrsPollOutput {
         let mut output = GilrsPollOutput::default();
         self.check_scratch_timeouts(Instant::now(), &mut output.buttons);
-        while let Some(gilrs::Event { id, event, .. }) = self.gilrs.next_event() {
+        while let Some(gilrs::Event { id, event, time }) = self.gilrs.next_event() {
+            let timestamp = device_timestamp_from_system_time(time);
             match event {
                 EventType::ButtonPressed(button, code) => {
-                    process_button_event(id, button, code, true, &mut output);
+                    process_button_event(id, button, code, true, timestamp, &mut output);
                 }
                 EventType::ButtonReleased(button, code) => {
-                    process_button_event(id, button, code, false, &mut output);
+                    process_button_event(id, button, code, false, timestamp, &mut output);
                 }
                 EventType::AxisChanged(axis, value, code) => {
-                    self.process_axis(id, axis, value, code, &mut output);
+                    self.process_axis(id, axis, value, code, timestamp, &mut output);
                 }
                 EventType::Connected => {
                     tracing::info!(gamepad = ?id, "gamepad connected");
@@ -138,6 +142,7 @@ impl GilrsBackend {
         axis: Axis,
         value: f32,
         code: gilrs::ev::Code,
+        timestamp: DeviceTimestamp,
         output: &mut GilrsPollOutput,
     ) {
         let raw_code = raw_code_from_gilrs(code);
@@ -158,18 +163,25 @@ impl GilrsBackend {
             kind: GilrsRawEventKind::Axis,
             logical: format!("{axis:?}"),
             raw_code,
+            timestamp,
             mapped_control: Some(axis_name.to_string()),
             pressed: None,
             value: Some(value),
             ticks: Some(ticks),
         });
-        output.axis_ticks.push(GilrsAxisTickEvent { name: axis_name.clone(), device_id, ticks });
+        output.axis_ticks.push(GilrsAxisTickEvent {
+            name: axis_name.clone(),
+            device_id,
+            timestamp,
+            ticks,
+        });
         let state = self.scratch_state.entry((id, axis_key)).or_default();
         state.advance_to(now, self.config.scratch_threshold, device_id, &mut output.buttons);
         state.apply_movement(
             ticks,
             &axis_name,
             device_id,
+            timestamp,
             self.config.scratch_threshold,
             &mut output.buttons,
         );
@@ -217,6 +229,7 @@ impl ScratchState {
         ticks: i32,
         axis_name: &str,
         device_id: DeviceId,
+        timestamp: DeviceTimestamp,
         threshold: u32,
         events: &mut Vec<GilrsButtonEvent>,
     ) {
@@ -224,7 +237,7 @@ impl ScratchState {
         self.control_name.get_or_insert_with(|| axis_name.to_string());
 
         if self.active && self.positive_direction != positive {
-            self.release_if_active(device_id, events);
+            self.release_if_active_at(device_id, timestamp, events);
             self.positive_direction = positive;
             self.tick_counter = 0;
         } else if !self.active {
@@ -234,7 +247,7 @@ impl ScratchState {
             if self.tick_counter >= 2 {
                 self.active = true;
                 self.positive_direction = positive;
-                self.push_button_event(device_id, true, events);
+                self.push_button_event(device_id, true, timestamp, events);
             }
         }
 
@@ -242,8 +255,17 @@ impl ScratchState {
     }
 
     fn release_if_active(&mut self, device_id: DeviceId, events: &mut Vec<GilrsButtonEvent>) {
+        self.release_if_active_at(device_id, timeout_device_timestamp(), events);
+    }
+
+    fn release_if_active_at(
+        &mut self,
+        device_id: DeviceId,
+        timestamp: DeviceTimestamp,
+        events: &mut Vec<GilrsButtonEvent>,
+    ) {
         if self.active {
-            self.push_button_event(device_id, false, events);
+            self.push_button_event(device_id, false, timestamp, events);
             self.active = false;
         }
     }
@@ -252,11 +274,12 @@ impl ScratchState {
         &self,
         device_id: DeviceId,
         pressed: bool,
+        timestamp: DeviceTimestamp,
         events: &mut Vec<GilrsButtonEvent>,
     ) {
         if let Some(axis_name) = self.control_name.as_deref() {
             let name = format!("{}{}", axis_name, if self.positive_direction { "+" } else { "-" });
-            events.push(GilrsButtonEvent { name, device_id, pressed });
+            events.push(GilrsButtonEvent { name, device_id, pressed, timestamp });
         }
     }
 }
@@ -274,6 +297,7 @@ fn process_button_event(
     button: Button,
     code: gilrs::ev::Code,
     pressed: bool,
+    timestamp: DeviceTimestamp,
     output: &mut GilrsPollOutput,
 ) {
     let device_id = gilrs_gamepad_device_id(id);
@@ -284,13 +308,30 @@ fn process_button_event(
         kind: GilrsRawEventKind::Button,
         logical: format!("{button:?}"),
         raw_code,
+        timestamp,
         mapped_control: Some(mapped_control.clone()),
         pressed: Some(pressed),
         value: None,
         ticks: None,
     });
 
-    output.buttons.push(GilrsButtonEvent { name: mapped_control, device_id, pressed });
+    output.buttons.push(GilrsButtonEvent { name: mapped_control, device_id, pressed, timestamp });
+}
+
+fn device_timestamp_from_system_time(event_time: SystemTime) -> DeviceTimestamp {
+    let now_mono = monotonic_timestamp_ns();
+    let now_system = SystemTime::now();
+    if let Ok(age) = now_system.duration_since(event_time) {
+        DeviceTimestamp::MonotonicNs(now_mono.saturating_sub(age.as_nanos()))
+    } else if let Ok(future) = event_time.duration_since(now_system) {
+        DeviceTimestamp::MonotonicNs(now_mono.saturating_add(future.as_nanos()))
+    } else {
+        timeout_device_timestamp()
+    }
+}
+
+fn timeout_device_timestamp() -> DeviceTimestamp {
+    DeviceTimestamp::MonotonicNs(monotonic_timestamp_ns())
 }
 
 fn raw_code_from_gilrs(code: gilrs::ev::Code) -> GilrsRawCode {
@@ -325,7 +366,7 @@ pub fn to_device_input_event(event: &GilrsButtonEvent) -> DeviceInputEvent {
         device: event.device_id,
         control: PhysicalControl::GamepadButton(event.name.clone()),
         kind: if event.pressed { InputKind::Press } else { InputKind::Release },
-        timestamp: DeviceTimestamp::MonotonicNs(monotonic_timestamp_ns()),
+        timestamp: event.timestamp,
     }
 }
 
@@ -358,6 +399,14 @@ mod tests {
         events.iter().map(|event| (event.name.clone(), event.pressed)).collect()
     }
 
+    fn button_event_timestamps(events: &[GilrsButtonEvent]) -> Vec<DeviceTimestamp> {
+        events.iter().map(|event| event.timestamp).collect()
+    }
+
+    fn test_timestamp(ns: u128) -> DeviceTimestamp {
+        DeviceTimestamp::MonotonicNs(ns)
+    }
+
     #[test]
     fn compute_analog_diff_basic_movement() {
         let tick = BASE_TICK_MAX_SIZE;
@@ -388,10 +437,10 @@ mod tests {
         let now = Instant::now();
 
         state.advance_to(now, 100, device_id, &mut events);
-        state.apply_movement(1, "Axis1", device_id, 100, &mut events);
+        state.apply_movement(1, "Axis1", device_id, test_timestamp(1), 100, &mut events);
         assert!(events.is_empty());
 
-        state.apply_movement(1, "Axis1", device_id, 100, &mut events);
+        state.apply_movement(1, "Axis1", device_id, test_timestamp(2), 100, &mut events);
         assert_eq!(button_events(&events), vec![("Axis1+".to_string(), true)]);
     }
 
@@ -403,7 +452,7 @@ mod tests {
         let now = Instant::now();
 
         state.advance_to(now, 100, device_id, &mut events);
-        state.apply_movement(2, "Axis1", device_id, 100, &mut events);
+        state.apply_movement(2, "Axis1", device_id, test_timestamp(10), 100, &mut events);
         assert_eq!(button_events(&events), vec![("Axis1+".to_string(), true)]);
 
         events.clear();
@@ -412,7 +461,7 @@ mod tests {
 
         events.clear();
         state.advance_to(now + Duration::from_millis(102), 100, device_id, &mut events);
-        state.apply_movement(2, "Axis1", device_id, 100, &mut events);
+        state.apply_movement(2, "Axis1", device_id, test_timestamp(12), 100, &mut events);
         assert_eq!(button_events(&events), vec![("Axis1+".to_string(), true)]);
     }
 
@@ -424,14 +473,14 @@ mod tests {
         let now = Instant::now();
 
         state.advance_to(now, 100, device_id, &mut events);
-        state.apply_movement(1, "Axis1", device_id, 100, &mut events);
+        state.apply_movement(1, "Axis1", device_id, test_timestamp(20), 100, &mut events);
         assert!(events.is_empty());
 
         state.advance_to(now + Duration::from_millis(51), 100, device_id, &mut events);
-        state.apply_movement(1, "Axis1", device_id, 100, &mut events);
+        state.apply_movement(1, "Axis1", device_id, test_timestamp(21), 100, &mut events);
         assert!(events.is_empty());
 
-        state.apply_movement(1, "Axis1", device_id, 100, &mut events);
+        state.apply_movement(1, "Axis1", device_id, test_timestamp(22), 100, &mut events);
         assert_eq!(button_events(&events), vec![("Axis1+".to_string(), true)]);
     }
 
@@ -443,15 +492,17 @@ mod tests {
         let now = Instant::now();
 
         state.advance_to(now, 100, device_id, &mut events);
-        state.apply_movement(2, "Axis1", device_id, 100, &mut events);
+        state.apply_movement(2, "Axis1", device_id, test_timestamp(30), 100, &mut events);
         events.clear();
 
-        state.apply_movement(-2, "Axis1", device_id, 100, &mut events);
+        state.apply_movement(-2, "Axis1", device_id, test_timestamp(31), 100, &mut events);
         assert_eq!(button_events(&events), vec![("Axis1+".to_string(), false)]);
+        assert_eq!(button_event_timestamps(&events), vec![test_timestamp(31)]);
 
         events.clear();
-        state.apply_movement(-2, "Axis1", device_id, 100, &mut events);
+        state.apply_movement(-2, "Axis1", device_id, test_timestamp(32), 100, &mut events);
         assert_eq!(button_events(&events), vec![("Axis1-".to_string(), true)]);
+        assert_eq!(button_event_timestamps(&events), vec![test_timestamp(32)]);
     }
 
     #[test]
@@ -490,12 +541,16 @@ mod tests {
     }
 
     #[test]
-    fn to_device_input_event_uses_monotonic_timestamp() {
-        let event =
-            GilrsButtonEvent { device_id: DeviceId(16), name: "South".to_string(), pressed: true };
+    fn to_device_input_event_preserves_event_timestamp() {
+        let event = GilrsButtonEvent {
+            device_id: DeviceId(16),
+            name: "South".to_string(),
+            pressed: true,
+            timestamp: test_timestamp(123),
+        };
 
         let input = to_device_input_event(&event);
 
-        assert!(matches!(input.timestamp, DeviceTimestamp::MonotonicNs(_)));
+        assert_eq!(input.timestamp, test_timestamp(123));
     }
 }
