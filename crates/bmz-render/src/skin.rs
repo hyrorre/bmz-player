@@ -4027,7 +4027,7 @@ impl SkinDocumentRenderExt for SkinDocument {
 
         let mut items = Vec::new();
         let mut filled = 0.0;
-        for lamp_index in 0..row.folder_lamp_counts.len() {
+        for lamp_index in (0..row.folder_lamp_counts.len()).rev() {
             let count = row.folder_lamp_counts[lamp_index];
             if count == 0 {
                 continue;
@@ -16564,7 +16564,7 @@ mod tests {
             } if approx_eq(*x, 0.15)
                 && approx_eq(*y, 0.27)
                 && approx_eq(*width, 0.1)
-                && approx_eq(*u, 20.0 / 44.0)
+                && approx_eq(*u, 24.0 / 44.0)
                 && approx_eq(*u_width, 4.0 / 44.0))));
         assert!(items.iter().any(|item| matches!(item, SkinRenderItem::Image {
                 texture: SkinTextureId(9999),
@@ -16574,7 +16574,7 @@ mod tests {
             } if approx_eq(*x, 0.25)
                 && approx_eq(*y, 0.27)
                 && approx_eq(*width, 0.1)
-                && approx_eq(*u, 24.0 / 44.0)
+                && approx_eq(*u, 20.0 / 44.0)
                 && approx_eq(*u_width, 4.0 / 44.0))));
         assert!(items.iter().any(|item| matches!(item, SkinRenderItem::Image {
                 texture: SkinTextureId(9999),
@@ -16772,7 +16772,7 @@ mod tests {
                 rect: Rect { x, width, .. },
                 uv: TextureRegion { x: uv_x, .. },
                 ..
-            } if approx_eq(*x, 0.10) && approx_eq(*width, 0.22) && approx_eq(*uv_x, 20.0 / 44.0)
+            } if approx_eq(*x, 0.10) && approx_eq(*width, 0.22) && approx_eq(*uv_x, 24.0 / 44.0)
         ));
         assert!(matches!(
             graph_items[1],
@@ -16780,7 +16780,7 @@ mod tests {
                 rect: Rect { x, width, .. },
                 uv: TextureRegion { x: uv_x, .. },
                 ..
-            } if approx_eq(*x, 0.32) && approx_eq(*width, 0.22) && approx_eq(*uv_x, 24.0 / 44.0)
+            } if approx_eq(*x, 0.32) && approx_eq(*width, 0.22) && approx_eq(*uv_x, 20.0 / 44.0)
         ));
     }
 
