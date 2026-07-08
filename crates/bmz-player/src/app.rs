@@ -14959,8 +14959,8 @@ fn select_snapshot_rows(
                     artist: row.trophy_names.join(" / "),
                     // Beatoraja-style category tag (DAN / COURSE).
                     difficulty_name: row.category_label.clone(),
-                    // Show "N stages" in the play_level slot.
-                    play_level: format!("{} stages", row.entry_count),
+                    // Beatoraja GradeBar rows do not expose a play level.
+                    play_level: String::new(),
                     table_level: String::new(),
                     table_text_primary: String::new(),
                     table_text_secondary: String::new(),
@@ -20586,6 +20586,7 @@ mod tests {
 
         assert_eq!(snapshot_rows.len(), 1);
         assert_eq!(snapshot_rows[0].kind, bmz_render::scene::SelectRowKind::Course);
+        assert!(snapshot_rows[0].play_level.is_empty());
         assert_eq!(snapshot_rows[0].clear_type, "Hard");
         assert_eq!(snapshot_rows[0].ex_score, Some(1234));
         assert_eq!(snapshot_rows[0].bp, Some(12));

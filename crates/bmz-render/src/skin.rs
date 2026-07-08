@@ -3799,15 +3799,17 @@ impl SkinDocumentRenderExt for SkinDocument {
                 ));
             }
             if select_row_shows_score_decorations(row) {
-                items.extend(self.select_songlist_level_items(
-                    &songlist.level,
-                    row,
-                    row_origin,
-                    images,
-                    enabled_options,
-                    &row_state,
-                    sources,
-                ));
+                if select_row_shows_level(row) {
+                    items.extend(self.select_songlist_level_items(
+                        &songlist.level,
+                        row,
+                        row_origin,
+                        images,
+                        enabled_options,
+                        &row_state,
+                        sources,
+                    ));
+                }
                 for label_index in select_row_label_indices(row) {
                     items.extend(self.select_songlist_child_items_by_index(
                         &songlist.label,
@@ -10093,25 +10095,7 @@ fn select_row_trophy_index(row: &SelectRowSnapshot) -> Option<usize> {
         };
         trophy_index = Some(trophy_index.map_or(rank, |current: usize| current.max(rank)));
     }
-    if trophy_index.is_some() {
-        return trophy_index;
-    }
-
-    let ex_score = row.ex_score?;
-    let max_score = row.total_notes.checked_mul(2)?;
-    if max_score == 0 {
-        return None;
-    }
-    let score = ex_score.min(max_score);
-    if score * 9 >= max_score * 8 {
-        Some(2)
-    } else if score * 9 >= max_score * 7 {
-        Some(1)
-    } else if score * 9 >= max_score * 6 {
-        Some(0)
-    } else {
-        None
-    }
+    trophy_index
 }
 
 fn select_row_label_indices(row: &SelectRowSnapshot) -> Vec<usize> {
@@ -10261,6 +10245,10 @@ fn select_row_shows_score_decorations(row: &SelectRowSnapshot) -> bool {
     !row.is_folder
         && row.in_library
         && matches!(row.kind, SelectRowKind::Song | SelectRowKind::Course)
+}
+
+fn select_row_shows_level(row: &SelectRowSnapshot) -> bool {
+    row.kind == SelectRowKind::Song
 }
 
 fn select_row_shows_lamp(row: &SelectRowSnapshot) -> bool {
@@ -12894,6 +12882,14 @@ mod tests {
             ..SelectRowSnapshot::default()
         };
         assert_eq!(select_row_trophy_index(&silver), Some(1));
+
+        let high_score_without_trophy = SelectRowSnapshot {
+            kind: SelectRowKind::Course,
+            total_notes: 100,
+            ex_score: Some(200),
+            ..SelectRowSnapshot::default()
+        };
+        assert_eq!(select_row_trophy_index(&high_score_without_trophy), None);
     }
 
     #[test]
@@ -16533,6 +16529,10 @@ mod tests {
                 index: 4,
                 title: "Course".to_string(),
                 kind: SelectRowKind::Course,
+                difficulty_name: "2".to_string(),
+                play_level: "12".to_string(),
+                total_notes: 100,
+                ex_score: Some(200),
                 achieved_trophy_names: vec!["goldmedal".to_string()],
                 ..SelectRowSnapshot::default()
             }],
@@ -16547,6 +16547,15 @@ mod tests {
             } if approx_eq(*x, 0.47)
                 && approx_eq(*y, 0.45)
                 && approx_eq(*u, 8.0 / 24.0))));
+        assert!(!course_items.iter().any(|item| matches!(item, SkinRenderItem::Image {
+                texture: SkinTextureId(9999),
+                rect: Rect { x, y, .. },
+                uv: TextureRegion { x: u, y: v, .. },
+                ..
+            } if approx_eq(*x, 0.2)
+                && approx_eq(*y, 0.45)
+                && approx_eq(*u, 0.0)
+                && approx_eq(*v, 20.0 / 100.0))));
         assert!(!items.iter().any(|item| matches!(item, SkinRenderItem::Image {
                 texture: SkinTextureId(9999),
                 rect: Rect { x, y, width, .. },
