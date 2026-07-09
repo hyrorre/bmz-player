@@ -19,7 +19,7 @@ pub const GENERATED_PREVIEW_DURATION_MS: i64 = 18_000;
 
 const GENERATED_PREVIEW_KEY_PREFIX: &str = "generated-preview";
 const GENERATED_PREVIEW_DENSITY_WINDOW_SECONDS: usize = 8;
-const GENERATED_PREVIEW_LEAD_SECONDS: usize = 2;
+const GENERATED_PREVIEW_LEAD_MS: i64 = 500;
 const GENERATED_PREVIEW_PREROLL_MS: i64 = 2_000;
 const GENERATED_PREVIEW_FADE_IN_MS: i64 = 500;
 const GENERATED_PREVIEW_FADE_OUT_MS: i64 = 1_000;
@@ -97,7 +97,7 @@ pub fn fallback_preview_start_ms(
     } else {
         fallback_start_second(length_seconds.max(distribution.len()))
     };
-    Some(selected_start.saturating_sub(GENERATED_PREVIEW_LEAD_SECONDS) as i64 * 1_000)
+    Some((selected_start as i64).saturating_mul(1_000).saturating_sub(GENERATED_PREVIEW_LEAD_MS))
 }
 
 pub fn render_generated_preview_for_chart(
@@ -498,7 +498,7 @@ mod tests {
 
         let start_ms = fallback_preview_start_ms(&distribution, 100_000).unwrap();
 
-        assert!((48_000..=56_000).contains(&start_ms));
+        assert_eq!(start_ms, 49_500);
     }
 
     #[test]
@@ -513,7 +513,7 @@ mod tests {
 
         let start_ms = fallback_preview_start_ms(&distribution, 80_000).unwrap();
 
-        assert!((48_000..=56_000).contains(&start_ms));
+        assert_eq!(start_ms, 49_500);
     }
 
     #[test]
