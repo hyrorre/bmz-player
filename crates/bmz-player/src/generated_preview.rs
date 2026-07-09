@@ -149,7 +149,7 @@ pub(crate) fn render_generated_preview_sample(
             if note.time.0 < note_preroll_start_us || note.time.0 > end_us {
                 continue;
             }
-            if note.kind == NoteKind::Mine {
+            if matches!(note.kind, NoteKind::Invisible | NoteKind::Mine) {
                 continue;
             }
             if let Some(sound) = note.sound {
@@ -237,7 +237,7 @@ fn schedule_preview_sounds(
             if note.time.0 < note_preroll_start_us || note.time.0 > end_us {
                 return None;
             }
-            if note.kind == NoteKind::Mine {
+            if matches!(note.kind, NoteKind::Invisible | NoteKind::Mine) {
                 return None;
             }
             let sound_id = note.sound?;
@@ -387,7 +387,8 @@ mod tests {
         ScrollEvent, SoundAssetRef, SoundEvent, SpeedEvent, TimingEvent,
     };
     use bmz_core::chart::ChartIdentity;
-    use bmz_core::ids::SoundId;
+    use bmz_core::ids::{NoteId, SoundId};
+    use bmz_core::lane::Lane;
     use bmz_core::time::{ChartTick, TimeUs};
 
     use super::*;
@@ -476,6 +477,62 @@ mod tests {
         let middle_left = sample.frames[500 * 2];
         assert!(middle_left > 0.5);
 
+        let _ = fs::remove_dir_all(temp_dir);
+    }
+
+    #[test]
+    fn render_generated_preview_skips_invisible_note_sounds() {
+        let temp_dir = std::env::temp_dir()
+            .join(format!("bmz-generated-preview-invisible-test-{}", std::process::id()));
+        fs::create_dir_all(&temp_dir).unwrap();
+        let tap_path = temp_dir.join("tap.wav");
+        let invisible_path = temp_dir.join("invisible.wav");
+        fs::write(&tap_path, b"dummy").unwrap();
+        fs::write(&invisible_path, b"dummy").unwrap();
+
+        let sample_rate = 1_000;
+        let mut chart = test_chart_with_bgm(tap_path.clone());
+        chart.bgm_events.clear();
+        chart.sounds = vec![
+            SoundAssetRef { id: SoundId(1), path: tap_path.clone() },
+            SoundAssetRef { id: SoundId(2), path: invisible_path.clone() },
+        ];
+        chart.lane_notes[Lane::Key1.index()].extend([
+            NoteEvent {
+                id: NoteId(1),
+                lane: Lane::Key1,
+                kind: NoteKind::Tap,
+                tick: ChartTick(0),
+                time: TimeUs(0),
+                sound: Some(SoundId(1)),
+                damage: None,
+            },
+            NoteEvent {
+                id: NoteId(2),
+                lane: Lane::Key1,
+                kind: NoteKind::Invisible,
+                tick: ChartTick(0),
+                time: TimeUs(0),
+                sound: Some(SoundId(2)),
+                damage: None,
+            },
+        ]);
+        let mut loader = TestLoader::default();
+        loader.samples.insert(
+            tap_path.clone(),
+            DecodedSample { channels: 1, sample_rate, frames: vec![0.5; 1_000] },
+        );
+        loader.samples.insert(
+            invisible_path.clone(),
+            DecodedSample { channels: 1, sample_rate, frames: vec![1.0; 1_000] },
+        );
+
+        let sample =
+            render_generated_preview_sample(&chart, 0, 1_000, sample_rate, &mut loader).unwrap();
+
+        assert_eq!(sample.frames[500 * 2], 0.5);
+        assert!(loader.loaded_paths.contains(&tap_path));
+        assert!(!loader.loaded_paths.contains(&invisible_path));
         let _ = fs::remove_dir_all(temp_dir);
     }
 
