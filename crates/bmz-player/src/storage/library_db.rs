@@ -18,7 +18,7 @@ pub use super::difficulty_table_db::{
 
 use super::common::{configure_connection, hash_to_hex, hex_to_hash};
 
-pub const CHART_IMPORT_VERSION: i64 = 4;
+pub const CHART_IMPORT_VERSION: i64 = 5;
 pub const CHART_LOUDNESS_ANALYSIS_VERSION: i64 = 1;
 const MAX_ANALYSIS_DISTRIBUTION_SECONDS: usize = 10 * 60;
 
@@ -1369,7 +1369,7 @@ impl ChartAnalysis {
                 let lane = note.lane;
                 let lane_slot = &mut lane_notes[lane.index()];
                 match note.kind {
-                    NoteKind::Tap | NoteKind::Invisible => {
+                    NoteKind::Tap => {
                         if is_scratch_lane(lane) {
                             slot.scratch_taps = slot.scratch_taps.saturating_add(1);
                             lane_slot.normal_notes = lane_slot.normal_notes.saturating_add(1);
@@ -1398,6 +1398,7 @@ impl ChartAnalysis {
                         add_bpm_note_count(&mut bpm_note_counts, bpm_at(chart, note.time.0), 1);
                     }
                     NoteKind::LongEnd => {}
+                    NoteKind::Invisible => {}
                     NoteKind::Mine => {
                         slot.mines = slot.mines.saturating_add(1);
                         lane_slot.mines = lane_slot.mines.saturating_add(1);
@@ -2320,6 +2321,19 @@ mod tests {
 
         assert_eq!(analysis.distribution.len(), 3);
         assert_eq!(analysis.distribution[2].key_taps, 1);
+    }
+
+    #[test]
+    fn chart_analysis_excludes_invisible_notes_from_density() {
+        let mut chart = chart("invisible analysis");
+        chart.lane_notes[Lane::Key1.index()].push(note(1, Lane::Key1, NoteKind::Tap, 0));
+        chart.lane_notes[Lane::Key1.index()].push(note(2, Lane::Key1, NoteKind::Invisible, 0));
+        chart.total_notes = 1;
+
+        let analysis = ChartAnalysis::from_chart(&chart);
+
+        assert_eq!(analysis.normal_notes, 1);
+        assert_eq!(analysis.distribution[0].key_taps, 1);
     }
 
     #[test]

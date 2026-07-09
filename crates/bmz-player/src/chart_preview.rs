@@ -55,6 +55,10 @@ impl SelectChartPreview {
         }
     }
 
+    pub fn output_sample_rate(&self) -> u32 {
+        self.engine.output_sample_rate()
+    }
+
     pub fn play_sample(&self, sample: DecodedSample, volume: f32) -> bool {
         let output_sample_rate = self.engine.output_sample_rate();
         let sample = sample.resampled_to(output_sample_rate);
