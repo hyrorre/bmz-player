@@ -20,8 +20,8 @@ use winit::window::Window;
 
 use crate::config::app_config::{
     AppConfig, AudioBackend, AudioBufferSizeMode, AudioSampleRateMode, DifficultyTableSource,
-    InputBackendKind, LogLevel, PathEntry, RendererBackend, UpdateChannelConfig, VsyncModeConfig,
-    WindowMode,
+    InputBackendKind, LogLevel, ObsActionConfig, ObsRecordingMode, PathEntry, RendererBackend,
+    UpdateChannelConfig, VsyncModeConfig, WindowMode,
 };
 use crate::config::play::{TARGET_GREEN_NUMBER_MAX, TARGET_GREEN_NUMBER_MIN};
 use crate::config::profile_config::{
@@ -368,6 +368,8 @@ pub struct EguiLayer {
     score_import_error: String,
     /// 本体設定パネル: 出力デバイス選択用の列挙キャッシュ。
     audio_device_picker: AudioDevicePickerState,
+    /// 本体設定パネル: OBS scene list 取得状態。
+    obs_scene_picker: ObsScenePickerState,
     /// プロファイル設定パネル: IR ログインフォームの状態。
     ir_login: IrLoginUiState,
     /// プロファイル設定パネル: IR device key 操作用の状態。
@@ -692,6 +694,7 @@ impl EguiLayer {
             score_import_status: String::new(),
             score_import_error: String::new(),
             audio_device_picker: AudioDevicePickerState::default(),
+            obs_scene_picker: ObsScenePickerState::default(),
             ir_login: IrLoginUiState::default(),
             ir_device_key: IrDeviceKeyUiState::default(),
             profile_manager: ProfileManagerUiState::default(),
@@ -840,6 +843,7 @@ impl EguiLayer {
                         score_import_status: &self.score_import_status,
                         score_import_error: &self.score_import_error,
                         audio_device_picker: &mut self.audio_device_picker,
+                        obs_scene_picker: &mut self.obs_scene_picker,
                     },
                 );
                 save_app_config |= settings_actions.save;
@@ -1720,6 +1724,58 @@ struct SettingsPanelState<'a> {
     score_import_status: &'a str,
     score_import_error: &'a str,
     audio_device_picker: &'a mut AudioDevicePickerState,
+    obs_scene_picker: &'a mut ObsScenePickerState,
+}
+
+#[derive(Default)]
+struct ObsScenePickerState {
+    busy: bool,
+    scenes: Vec<String>,
+    message: String,
+    error: String,
+    receiver: Option<std::sync::mpsc::Receiver<Result<crate::obs::ObsSceneList, String>>>,
+}
+
+impl ObsScenePickerState {
+    fn poll(&mut self) {
+        let Some(receiver) = &self.receiver else {
+            return;
+        };
+        let Ok(result) = receiver.try_recv() else {
+            return;
+        };
+        self.receiver = None;
+        self.busy = false;
+        match result {
+            Ok(list) => {
+                self.scenes = list.scenes;
+                self.error.clear();
+                self.message = format!(
+                    "{} 件のシーンを取得しました ({}, 録画: {})",
+                    self.scenes.len(),
+                    list.version,
+                    if list.recording_active { "ON" } else { "OFF" }
+                );
+            }
+            Err(error) => {
+                self.message.clear();
+                self.error = error;
+            }
+        }
+    }
+
+    fn start_load(&mut self, config: crate::config::app_config::ObsConfig) {
+        let (sender, receiver) = std::sync::mpsc::channel();
+        self.receiver = Some(receiver);
+        self.busy = true;
+        self.message.clear();
+        self.error.clear();
+        tokio::spawn(async move {
+            let result =
+                crate::obs::load_scenes(config).await.map_err(|error| format!("{error:#}"));
+            let _ = sender.send(result);
+        });
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -2480,6 +2536,8 @@ fn build_settings_panel(
                     });
                 });
 
+                build_obs_settings_section(ui, config, state.obs_scene_picker);
+
                 egui::CollapsingHeader::new("アップデート").show(ui, |ui| {
                     ui.checkbox(&mut config.updates.enabled, "アップデート通知");
                     ui.checkbox(&mut config.updates.check_on_startup, "起動時に確認");
@@ -2633,6 +2691,150 @@ fn build_settings_panel(
         table_fetch_urls,
         score_import_request,
         apply_audio,
+    }
+}
+
+fn build_obs_settings_section(
+    ui: &mut egui::Ui,
+    config: &mut AppConfig,
+    state: &mut ObsScenePickerState,
+) {
+    state.poll();
+    egui::CollapsingHeader::new("OBS WebSocket").show(ui, |ui| {
+        ui.checkbox(&mut config.obs.enabled, "OBS WebSocket 連携");
+        ui.horizontal(|ui| {
+            ui.label("ホスト");
+            ui.add(
+                egui::TextEdit::singleline(&mut config.obs.host)
+                    .desired_width(180.0)
+                    .hint_text("localhost"),
+            );
+            ui.label("ポート");
+            ui.add(egui::DragValue::new(&mut config.obs.port).range(0..=65535));
+        });
+        ui.horizontal(|ui| {
+            ui.label("パスワード");
+            ui.add(
+                egui::TextEdit::singleline(&mut config.obs.password)
+                    .desired_width(220.0)
+                    .password(true),
+            );
+        });
+        egui::ComboBox::from_label("録画保存モード")
+            .selected_text(obs_recording_mode_label(config.obs.recording_mode))
+            .show_ui(ui, |ui| {
+                ui.selectable_value(
+                    &mut config.obs.recording_mode,
+                    ObsRecordingMode::KeepAll,
+                    obs_recording_mode_label(ObsRecordingMode::KeepAll),
+                );
+                ui.selectable_value(
+                    &mut config.obs.recording_mode,
+                    ObsRecordingMode::OnScreenshot,
+                    obs_recording_mode_label(ObsRecordingMode::OnScreenshot),
+                );
+                ui.selectable_value(
+                    &mut config.obs.recording_mode,
+                    ObsRecordingMode::OnReplay,
+                    obs_recording_mode_label(ObsRecordingMode::OnReplay),
+                );
+            });
+        ui.add(
+            egui::Slider::new(&mut config.obs.record_stop_wait_ms, 0..=10_000)
+                .text("StopRecord 遅延 (ms)"),
+        );
+
+        ui.horizontal(|ui| {
+            if ui.add_enabled(!state.busy, egui::Button::new("シーン一覧を取得")).clicked()
+            {
+                state.start_load(config.obs.clone());
+            }
+            if state.busy {
+                ui.label("取得中...");
+            }
+        });
+        if !state.message.is_empty() {
+            ui.label(state.message.as_str());
+        }
+        if !state.error.is_empty() {
+            ui.colored_label(egui::Color32::RED, state.error.as_str());
+        }
+
+        ui.separator();
+        ui.strong("状態別設定");
+        egui::Grid::new("obs_state_mapping_grid").striped(true).show(ui, |ui| {
+            ui.label("状態");
+            ui.label("シーン");
+            ui.label("アクション");
+            ui.end_row();
+            for event in crate::obs::ObsEventKey::ALL {
+                let key = event.config_key();
+                ui.label(event.label());
+
+                let mut scene = config.obs.scenes.get(key).cloned().unwrap_or_default();
+                let selected_scene = if scene.is_empty() { "(No Change)" } else { scene.as_str() };
+                egui::ComboBox::from_id_salt(("obs_scene", key))
+                    .selected_text(selected_scene)
+                    .show_ui(ui, |ui| {
+                        ui.selectable_value(&mut scene, String::new(), "(No Change)");
+                        if !scene.is_empty() && !state.scenes.iter().any(|name| name == &scene) {
+                            let current_scene = scene.clone();
+                            ui.selectable_value(&mut scene, current_scene.clone(), current_scene);
+                        }
+                        for candidate in &state.scenes {
+                            ui.selectable_value(&mut scene, candidate.clone(), candidate);
+                        }
+                    });
+                if scene.is_empty() {
+                    config.obs.scenes.remove(key);
+                } else {
+                    config.obs.scenes.insert(key.to_string(), scene);
+                }
+
+                let mut action = config.obs.actions.get(key).copied().unwrap_or_default();
+                egui::ComboBox::from_id_salt(("obs_action", key))
+                    .selected_text(obs_action_label(action))
+                    .show_ui(ui, |ui| {
+                        ui.selectable_value(
+                            &mut action,
+                            ObsActionConfig::None,
+                            obs_action_label(ObsActionConfig::None),
+                        );
+                        ui.selectable_value(
+                            &mut action,
+                            ObsActionConfig::StartRecord,
+                            obs_action_label(ObsActionConfig::StartRecord),
+                        );
+                        ui.selectable_value(
+                            &mut action,
+                            ObsActionConfig::StopRecord,
+                            obs_action_label(ObsActionConfig::StopRecord),
+                        );
+                    });
+                if action == ObsActionConfig::None {
+                    config.obs.actions.remove(key);
+                } else {
+                    config.obs.actions.insert(key.to_string(), action);
+                }
+                ui.end_row();
+            }
+        });
+    });
+}
+
+fn obs_recording_mode_label(mode: ObsRecordingMode) -> &'static str {
+    match mode {
+        ObsRecordingMode::KeepAll => "すべて保持",
+        ObsRecordingMode::OnScreenshot => "スクリーンショット時に保持",
+        ObsRecordingMode::OnReplay => "リプレイ保存時に保持",
+    }
+}
+
+fn obs_action_label(action: ObsActionConfig) -> &'static str {
+    match action {
+        ObsActionConfig::None => "(Do Nothing)",
+        ObsActionConfig::StartRecord => "Start Recording",
+        ObsActionConfig::StopRecord => "Stop Recording",
     }
 }
 

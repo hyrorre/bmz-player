@@ -59,7 +59,7 @@ use crate::cli::{
     AUTOPLAY_ON_START_ARG, AppOptions, BOOT_RESULT_SAMPLE_ARG, SMOKE_EXIT_AFTER_FRAMES_ARG,
     SMOKE_EXIT_AFTER_RESULT_FRAMES_ARG, SMOKE_EXIT_ON_RESULT_ARG, SMOKE_SCREENSHOT_ARG,
 };
-use crate::config::app_config::{AppConfig, PathEntry, WindowMode};
+use crate::config::app_config::{AppConfig, ObsConfig, PathEntry, WindowMode};
 use crate::config::key_config::{
     KeyBindingSlot, KeyBindingTarget, apply_play_binding, clear_play_binding,
     is_scratch_down_control, is_scratch_up_control,
@@ -424,10 +424,13 @@ struct WinitApp {
     pending_update_download: Option<Receiver<Result<DownloadedUpdate>>>,
     update_prompt: Option<UpdatePrompt>,
     update_dismissed_session_version: Option<String>,
+    obs_controller: Option<crate::obs::ObsController>,
+    applied_obs_config: ObsConfig,
     exit_configs_saved: bool,
     last_scene_kind: Option<AppSceneKind>,
     discord_presence: Option<DiscordPresenceHandle>,
     discord_presence_config: Option<DiscordPresenceConfig>,
+    last_obs_event_key: Option<crate::obs::ObsEventKey>,
     start_held: bool,
     select_held: bool,
     select_e_action_holds: HashSet<InputActionConfig>,
@@ -1923,6 +1926,8 @@ impl WinitApp {
         };
 
         let initial_window_mode = boot.app_config.video.mode.clone();
+        let applied_obs_config = boot.app_config.obs.clone();
+        let obs_controller = crate::obs::ObsController::spawn(applied_obs_config.clone());
 
         // システム SE / BGM facade を構築する。
         // - `profile.[system_sound].bgm_dir` / `se_dir` が指定されていれば再帰スキャンして
@@ -1990,10 +1995,13 @@ impl WinitApp {
             pending_update_download: None,
             update_prompt: None,
             update_dismissed_session_version: None,
+            obs_controller,
+            applied_obs_config,
             exit_configs_saved: false,
             last_scene_kind: None,
             discord_presence: None,
             discord_presence_config: None,
+            last_obs_event_key: None,
             start_held: false,
             select_held: false,
             select_e_action_holds: HashSet::new(),
@@ -6662,6 +6670,9 @@ impl WinitApp {
                 });
         }
 
+        if course_result.saved_replay_slots.iter().any(|saved| *saved) {
+            self.notify_obs_save_recording(crate::obs::ObsRecordingSaveReason::OnReplay);
+        }
         self.finished_course = Some(course_result);
         // Use the last chart's result for the standard result skin display.
         if let Some(last) = last_finished {
@@ -8345,6 +8356,7 @@ impl WinitApp {
         if let Some(finished) = &early_finished {
             self.start_result_ir_for_finished_play(finished);
         }
+        self.notify_obs_play_ended();
         self.play_ending = Some(PlayEndingTransition {
             started_at: now,
             fadeout_started_at: Some(now),
@@ -8368,6 +8380,7 @@ impl WinitApp {
         }
         let reuse = self.quick_retry_reuse_active_assets(chart_id, &options, mode);
         tracing::info!(chart_id, ?mode, "quick retrying chart");
+        self.notify_obs_retry_play();
         self.save_current_play_options(
             self.active_play.as_ref().map(|active| active.running.session.hispeed),
             "quick retry",
@@ -8478,6 +8491,7 @@ impl WinitApp {
             }
         };
         if saved {
+            self.notify_obs_save_recording(crate::obs::ObsRecordingSaveReason::OnReplay);
             self.play_system_sound(crate::system_sound::SoundType::OptionChange);
             tracing::info!(slot, "saved result replay slot");
         } else {
@@ -8532,6 +8546,7 @@ impl WinitApp {
             Ok(()) => {
                 course.saved_replay_slots[slot as usize] = true;
                 course.replay_slots[slot as usize] = true;
+                self.notify_obs_save_recording(crate::obs::ObsRecordingSaveReason::OnReplay);
                 self.play_system_sound(crate::system_sound::SoundType::OptionChange);
                 tracing::info!(
                     course_id,
@@ -8837,6 +8852,9 @@ impl WinitApp {
         if self.active_course.is_some() {
             self.advance_course_after_finish(finished);
             return;
+        }
+        if finished.stored.slot_paths.iter().any(Option::is_some) {
+            self.notify_obs_save_recording(crate::obs::ObsRecordingSaveReason::OnReplay);
         }
         self.finished_play = Some(finished);
         self.result_gauge_graph_type = self
@@ -10151,6 +10169,7 @@ impl WinitApp {
                 if let Some(finished) = &early_finished {
                     self.start_result_ir_for_finished_play(finished);
                 }
+                self.notify_obs_play_ended();
                 self.play_ending = Some(PlayEndingTransition {
                     started_at: Instant::now(),
                     fadeout_started_at: None,
@@ -10399,6 +10418,7 @@ impl WinitApp {
         self.play_system_sound(crate::system_sound::SoundType::PlayStop);
         if self.play_ready_sound_started_at.is_none() && self.play_ending.is_none() {
             self.pending_play_start = None;
+            self.notify_obs_play_ended();
             self.play_ending = Some(failed_play_ending(Instant::now()));
             self.update_play_ending_snapshot();
         }
@@ -10808,7 +10828,10 @@ impl WinitApp {
         }
         if output.save_app_config {
             match save_app_config(&self.boot.app_paths.config_toml, &self.boot.app_config) {
-                Ok(()) => tracing::info!("app config saved from egui settings panel"),
+                Ok(()) => {
+                    tracing::info!("app config saved from egui settings panel");
+                    self.sync_obs_controller();
+                }
                 Err(error) => tracing::error!(%error, "failed to save app config"),
             }
         }
@@ -11499,6 +11522,7 @@ impl WinitApp {
             self.renderer.request_screenshot(path.clone());
             tracing::info!(path = %path.display(), "manual screenshot requested");
         }
+        self.notify_obs_save_recording(crate::obs::ObsRecordingSaveReason::OnScreenshot);
         if let Some(window) = &self.window {
             window.request_redraw();
         }
@@ -11630,7 +11654,9 @@ impl WinitApp {
     }
 
     fn update_window_title_for_scene(&mut self, scene_kind: AppSceneKind) {
-        if self.last_scene_kind == Some(scene_kind) {
+        let scene_changed = self.last_scene_kind != Some(scene_kind);
+        self.notify_obs_scene(scene_kind);
+        if !scene_changed {
             return;
         }
 
@@ -11716,6 +11742,57 @@ impl WinitApp {
             .unwrap_or(self.boot.app_config.discord.show_song_details)
     }
 
+    fn sync_obs_controller(&mut self) {
+        if self.applied_obs_config == self.boot.app_config.obs {
+            return;
+        }
+        self.applied_obs_config = self.boot.app_config.obs.clone();
+        self.obs_controller = crate::obs::ObsController::spawn(self.applied_obs_config.clone());
+        self.last_obs_event_key = None;
+        self.notify_obs_scene(self.current_scene_kind());
+        tracing::info!(enabled = self.applied_obs_config.enabled, "OBS WebSocket config applied");
+    }
+
+    fn notify_obs_scene(&mut self, scene_kind: AppSceneKind) {
+        let key = self.obs_event_key_for_scene(scene_kind);
+        if self.last_obs_event_key == Some(key) {
+            return;
+        }
+        self.last_obs_event_key = Some(key);
+        if let Some(obs) = &self.obs_controller {
+            obs.scene(key);
+        }
+    }
+
+    fn notify_obs_play_ended(&self) {
+        if let Some(obs) = &self.obs_controller {
+            obs.play_ended();
+        }
+    }
+
+    fn notify_obs_retry_play(&self) {
+        if let Some(obs) = &self.obs_controller {
+            obs.retry_play();
+        }
+    }
+
+    fn notify_obs_save_recording(&self, reason: crate::obs::ObsRecordingSaveReason) {
+        if let Some(obs) = &self.obs_controller {
+            obs.save_last_recording(reason);
+        }
+    }
+
+    fn obs_event_key_for_scene(&self, scene_kind: AppSceneKind) -> crate::obs::ObsEventKey {
+        match scene_kind {
+            AppSceneKind::Select => crate::obs::ObsEventKey::MusicSelect,
+            AppSceneKind::Decide => crate::obs::ObsEventKey::Decide,
+            AppSceneKind::Play => crate::obs::ObsEventKey::Play,
+            AppSceneKind::Result if self.finished_course.is_some() => {
+                crate::obs::ObsEventKey::CourseResult
+            }
+            AppSceneKind::Result => crate::obs::ObsEventKey::Result,
+        }
+    }
     /// シーン遷移時のシステム SE / BGM を発火する。
     /// Play 入口では Decide 音を曲開始まで残し、それ以外では進行中の BGM を止める。
     fn fire_scene_transition_sounds(&self, scene_kind: AppSceneKind) {

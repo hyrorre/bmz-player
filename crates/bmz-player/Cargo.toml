@@ -38,7 +38,9 @@ rfd.workspace = true
 image.workspace = true
 
 rayon.workspace = true
+futures-util.workspace = true
 tokio.workspace = true
+tokio-tungstenite.workspace = true
 reqwest.workspace = true
 sha2.workspace = true
 ed25519-dalek.workspace = true

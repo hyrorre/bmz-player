@@ -36,6 +36,7 @@ toml = "0.8"
 base64 = "0.22"
 flate2 = "1"
 bytemuck = "1"
+futures-util = "0.3"
 
 rusqlite = { version = "0.31", features = ["bundled"] }
 
@@ -57,6 +58,7 @@ egui-winit = "0.34"
 egui-wgpu = "0.34"
 mlua = { version = "0.10", features = ["lua54", "vendored", "send"] }
 tokio = { version = "1", features = ["full"] }
+tokio-tungstenite = { version = "0.24", features = ["native-tls"] }
 reqwest = { version = "0.12", features = ["json"] }
 rayon = "1"
 font-kit = "0.14"
