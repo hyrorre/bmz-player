@@ -32,6 +32,7 @@ pub mod input;
 pub mod ir;
 pub mod ir_cmd;
 pub mod ln_policy;
+pub mod obs;
 pub mod paths;
 pub mod practice_ui;
 pub mod profile_cmd;

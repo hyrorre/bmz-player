@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -10,6 +12,8 @@ pub struct AppConfig {
     pub video: VideoConfig,
     #[serde(default)]
     pub screenshot: ScreenshotConfig,
+    #[serde(default)]
+    pub obs: ObsConfig,
     #[serde(default)]
     pub select: MusicSelectConfig,
     pub input: GlobalInputConfig,
@@ -115,6 +119,71 @@ pub struct ScreenshotConfig {
     pub dir: String,
     #[serde(default = "default_true")]
     pub copy_to_clipboard: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ObsConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default = "default_obs_host")]
+    pub host: String,
+    #[serde(default = "default_obs_port")]
+    pub port: u16,
+    #[serde(default)]
+    pub password: String,
+    #[serde(default = "default_obs_record_stop_wait_ms")]
+    pub record_stop_wait_ms: u64,
+    #[serde(default)]
+    pub recording_mode: ObsRecordingMode,
+    #[serde(default)]
+    pub scenes: BTreeMap<String, String>,
+    #[serde(default)]
+    pub actions: BTreeMap<String, ObsActionConfig>,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub enum ObsRecordingMode {
+    #[default]
+    KeepAll,
+    OnScreenshot,
+    OnReplay,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub enum ObsActionConfig {
+    #[default]
+    None,
+    StartRecord,
+    StopRecord,
+}
+
+impl Default for ObsConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            host: default_obs_host(),
+            port: default_obs_port(),
+            password: String::new(),
+            record_stop_wait_ms: default_obs_record_stop_wait_ms(),
+            recording_mode: ObsRecordingMode::KeepAll,
+            scenes: BTreeMap::new(),
+            actions: BTreeMap::new(),
+        }
+    }
+}
+
+fn default_obs_host() -> String {
+    "localhost".to_string()
+}
+
+fn default_obs_port() -> u16 {
+    4455
+}
+
+fn default_obs_record_stop_wait_ms() -> u64 {
+    5000
 }
 
 impl Default for ScreenshotConfig {
@@ -337,6 +406,7 @@ impl Default for AppConfig {
                 renderer: RendererBackend::Auto,
             },
             screenshot: ScreenshotConfig::default(),
+            obs: ObsConfig::default(),
             select: MusicSelectConfig::default(),
             input: GlobalInputConfig {
                 backend: InputBackendKind::Auto,
@@ -402,6 +472,19 @@ mod tests {
     }
 
     #[test]
+    fn app_config_defaults_obs_settings() {
+        let config = AppConfig::default();
+
+        assert!(!config.obs.enabled);
+        assert_eq!(config.obs.host, "localhost");
+        assert_eq!(config.obs.port, 4455);
+        assert_eq!(config.obs.record_stop_wait_ms, 5000);
+        assert_eq!(config.obs.recording_mode, ObsRecordingMode::KeepAll);
+        assert!(config.obs.scenes.is_empty());
+        assert!(config.obs.actions.is_empty());
+    }
+
+    #[test]
     fn ensure_default_difficulty_tables_adds_missing_without_reenabling_existing() {
         let disabled_url = DEFAULT_DIFFICULTY_TABLE_SOURCE_URLS[0].to_string();
         let mut config = AppConfig {
@@ -446,5 +529,18 @@ mod tests {
 
         assert!(config.updates.enabled);
         assert_eq!(config.updates.channel, UpdateChannelConfig::Stable);
+    }
+
+    #[test]
+    fn app_config_loads_missing_obs_section() {
+        let mut toml = toml::to_string(&AppConfig::default()).unwrap();
+        let start = toml.find("[obs]").unwrap();
+        let end =
+            toml[start + 1..].find("\n[").map(|offset| start + 1 + offset).unwrap_or(toml.len());
+        toml.replace_range(start..end, "");
+
+        let config: AppConfig = toml::from_str(&toml).unwrap();
+
+        assert_eq!(config.obs, ObsConfig::default());
     }
 }
