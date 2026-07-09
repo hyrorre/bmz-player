@@ -1,3 +1,4 @@
+use std::collections::VecDeque;
 use std::path::PathBuf;
 
 use anyhow::{Context, Result, bail};
@@ -341,14 +342,17 @@ enum ConnectionAction {
 
 pub async fn load_scenes(config: ObsConfig) -> Result<ObsSceneList> {
     let url = obs_ws_url(&config);
-    let (ws, _) = connect_async(&url).await.with_context(|| format!("failed to connect {url}"))?;
+    let timeout = tokio::time::sleep(LOAD_SCENES_TIMEOUT);
+    tokio::pin!(timeout);
+    let (ws, _) = tokio::select! {
+        _ = &mut timeout => bail!("OBS scene load timed out"),
+        result = connect_async(&url) => result.with_context(|| format!("failed to connect {url}"))?,
+    };
     let (mut sink, mut stream) = ws.split();
     let mut state = ObsConnectionState::new(config);
     let mut version = None;
     let mut scenes = None;
     let mut recording_active = None;
-    let timeout = tokio::time::sleep(LOAD_SCENES_TIMEOUT);
-    tokio::pin!(timeout);
 
     loop {
         tokio::select! {
@@ -438,22 +442,29 @@ async fn run_obs_client(
     tx: mpsc::UnboundedSender<ObsCommand>,
 ) {
     let mut reconnect_delay = INITIAL_RECONNECT_DELAY;
+    // Keep recording retention and queued app events across WebSocket reconnects.
+    let mut state = ObsConnectionState::new(config);
+    let mut pending_commands = VecDeque::new();
     loop {
-        let url = obs_ws_url(&config);
-        match connect_async(&url).await {
-            Ok((ws, _)) => {
+        let url = obs_ws_url(&state.config);
+        match connect_with_pending_commands(&url, &mut rx, &mut pending_commands).await {
+            Ok(Some(ws)) => {
                 tracing::info!(url, "OBS WebSocket connected");
                 reconnect_delay = INITIAL_RECONNECT_DELAY;
-                match run_connected(config.clone(), ws, &mut rx, tx.clone()).await {
+                match run_connected(&mut state, ws, &mut rx, tx.clone(), &mut pending_commands)
+                    .await
+                {
                     Ok(ConnectionAction::Shutdown) => break,
                     Ok(ConnectionAction::Reconnect | ConnectionAction::Continue) => {}
                     Err(error) => tracing::warn!(%error, "OBS WebSocket connection ended"),
                 }
             }
+            Ok(None) => break,
             Err(error) => tracing::warn!(url, %error, "OBS WebSocket connect failed"),
         }
 
-        let should_shutdown = wait_for_reconnect_or_shutdown(&mut rx, reconnect_delay).await;
+        let should_shutdown =
+            wait_for_reconnect_or_shutdown(&mut rx, &mut pending_commands, reconnect_delay).await;
         if should_shutdown {
             break;
         }
@@ -461,14 +472,47 @@ async fn run_obs_client(
     }
 }
 
+async fn connect_with_pending_commands(
+    url: &str,
+    rx: &mut mpsc::UnboundedReceiver<ObsCommand>,
+    pending_commands: &mut VecDeque<ObsCommand>,
+) -> Result<Option<ObsWebSocket>> {
+    let connection = connect_async(url);
+    tokio::pin!(connection);
+    loop {
+        tokio::select! {
+            result = &mut connection => {
+                return result.map(|(ws, _)| Some(ws)).map_err(Into::into);
+            }
+            command = rx.recv() => {
+                match command {
+                    Some(ObsCommand::Shutdown) | None => return Ok(None),
+                    Some(command) => pending_commands.push_back(command),
+                }
+            }
+        }
+    }
+}
+
 async fn run_connected(
-    config: ObsConfig,
+    state: &mut ObsConnectionState,
     ws: ObsWebSocket,
     rx: &mut mpsc::UnboundedReceiver<ObsCommand>,
     tx: mpsc::UnboundedSender<ObsCommand>,
+    pending_commands: &mut VecDeque<ObsCommand>,
 ) -> Result<ConnectionAction> {
     let (mut sink, mut stream) = ws.split();
-    let mut state = ObsConnectionState::new(config);
+    match wait_for_identified(state, &mut sink, &mut stream, rx, pending_commands).await? {
+        ConnectionAction::Continue => {}
+        action => return Ok(action),
+    }
+    match flush_pending_commands(state, &mut sink, tx.clone(), pending_commands).await? {
+        ConnectionAction::Continue => {}
+        action => {
+            let _ = sink.send(Message::Close(None)).await;
+            return Ok(action);
+        }
+    }
     loop {
         if let Some(deadline) = state.pending_stop_deadline {
             tokio::select! {
@@ -476,13 +520,13 @@ async fn run_connected(
                     state.flush_pending_stop(&mut sink).await?;
                 }
                 command = rx.recv() => {
-                    if handle_command(&mut state, &mut sink, tx.clone(), command).await? == ConnectionAction::Shutdown {
+                    if handle_command(state, &mut sink, tx.clone(), command).await? == ConnectionAction::Shutdown {
                         let _ = sink.send(Message::Close(None)).await;
                         return Ok(ConnectionAction::Shutdown);
                     }
                 }
                 message = stream.next() => {
-                    match handle_stream_message(&mut state, &mut sink, message).await? {
+                    match handle_stream_message(state, &mut sink, message).await? {
                         ConnectionAction::Continue => {}
                         action => return Ok(action),
                     }
@@ -491,13 +535,13 @@ async fn run_connected(
         } else {
             tokio::select! {
                 command = rx.recv() => {
-                    if handle_command(&mut state, &mut sink, tx.clone(), command).await? == ConnectionAction::Shutdown {
+                    if handle_command(state, &mut sink, tx.clone(), command).await? == ConnectionAction::Shutdown {
                         let _ = sink.send(Message::Close(None)).await;
                         return Ok(ConnectionAction::Shutdown);
                     }
                 }
                 message = stream.next() => {
-                    match handle_stream_message(&mut state, &mut sink, message).await? {
+                    match handle_stream_message(state, &mut sink, message).await? {
                         ConnectionAction::Continue => {}
                         action => return Ok(action),
                     }
@@ -505,6 +549,65 @@ async fn run_connected(
             }
         }
     }
+}
+
+async fn wait_for_identified(
+    state: &mut ObsConnectionState,
+    sink: &mut ObsSink,
+    stream: &mut futures_util::stream::SplitStream<ObsWebSocket>,
+    rx: &mut mpsc::UnboundedReceiver<ObsCommand>,
+    pending_commands: &mut VecDeque<ObsCommand>,
+) -> Result<ConnectionAction> {
+    loop {
+        tokio::select! {
+            command = rx.recv() => {
+                match command {
+                    Some(ObsCommand::Shutdown) | None => return Ok(ConnectionAction::Shutdown),
+                    Some(command) => pending_commands.push_back(command),
+                }
+            }
+            message = stream.next() => {
+                let Some(message) = message else {
+                    return Ok(ConnectionAction::Reconnect);
+                };
+                match message? {
+                    Message::Text(text) => {
+                        let value: Value = serde_json::from_str(text.as_ref())
+                            .context("failed to parse OBS message")?;
+                        let data = value.get("d").unwrap_or(&Value::Null);
+                        match value.get("op").and_then(Value::as_i64).unwrap_or(-1) {
+                            0 => send_json(sink, identify_message(&state.config, data)).await?,
+                            2 => {
+                                state.send_request(sink, "GetVersion", None).await?;
+                                state.send_request(sink, "GetSceneList", None).await?;
+                                state.send_request(sink, "GetRecordStatus", None).await?;
+                                return Ok(ConnectionAction::Continue);
+                            }
+                            _ => {}
+                        }
+                    }
+                    Message::Ping(payload) => sink.send(Message::Pong(payload)).await?,
+                    Message::Close(_) => return Ok(ConnectionAction::Reconnect),
+                    _ => {}
+                }
+            }
+        }
+    }
+}
+
+async fn flush_pending_commands(
+    state: &mut ObsConnectionState,
+    sink: &mut ObsSink,
+    tx: mpsc::UnboundedSender<ObsCommand>,
+    pending_commands: &mut VecDeque<ObsCommand>,
+) -> Result<ConnectionAction> {
+    while let Some(command) = pending_commands.pop_front() {
+        let action = handle_command(state, sink, tx.clone(), Some(command)).await?;
+        if action != ConnectionAction::Continue {
+            return Ok(action);
+        }
+    }
+    Ok(ConnectionAction::Continue)
 }
 
 async fn handle_command(
@@ -573,6 +676,7 @@ async fn handle_text_message(
 
 async fn wait_for_reconnect_or_shutdown(
     rx: &mut mpsc::UnboundedReceiver<ObsCommand>,
+    pending_commands: &mut VecDeque<ObsCommand>,
     delay: Duration,
 ) -> bool {
     let sleep = tokio::time::sleep(delay);
@@ -583,7 +687,7 @@ async fn wait_for_reconnect_or_shutdown(
             command = rx.recv() => {
                 match command {
                     Some(ObsCommand::Shutdown) | None => return true,
-                    _ => {}
+                    Some(command) => pending_commands.push_back(command),
                 }
             }
         }
@@ -692,6 +796,8 @@ fn obs_ws_url(config: &ObsConfig) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tokio::net::TcpListener;
+    use tokio_tungstenite::accept_async;
 
     #[test]
     fn obs_authentication_matches_obs_websocket_v5_algorithm() {
@@ -752,5 +858,84 @@ mod tests {
         assert_eq!(obs_ws_url(&config), "ws://192.0.2.1:4456");
         config.host = "ws://example.test:4455".to_string();
         assert_eq!(obs_ws_url(&config), "ws://example.test:4455");
+    }
+
+    #[tokio::test]
+    async fn pending_events_wait_for_identified_before_sending_requests() -> Result<()> {
+        let listener = TcpListener::bind("127.0.0.1:0").await?;
+        let address = listener.local_addr()?;
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await?;
+            let ws = accept_async(stream).await?;
+            let (mut sink, mut stream) = ws.split();
+
+            sink.send(Message::Text(json!({ "op": 0, "d": {} }).to_string())).await?;
+            let identify = stream.next().await.context("OBS client closed before Identify")??;
+            let Message::Text(identify) = identify else {
+                bail!("expected Identify text message");
+            };
+            let identify: Value = serde_json::from_str(identify.as_ref())?;
+            assert_eq!(identify["op"], 1);
+
+            sink.send(Message::Text(json!({ "op": 2, "d": {} }).to_string())).await?;
+            let mut requests = Vec::new();
+            for _ in 0..4 {
+                let message = stream.next().await.context("OBS client closed before request")??;
+                let Message::Text(message) = message else {
+                    bail!("expected OBS request text message");
+                };
+                let message: Value = serde_json::from_str(message.as_ref())?;
+                requests.push(
+                    message["d"]["requestType"]
+                        .as_str()
+                        .context("OBS request type missing")?
+                        .to_string(),
+                );
+            }
+            assert_eq!(
+                requests,
+                ["GetVersion", "GetSceneList", "GetRecordStatus", "SetCurrentProgramScene"]
+            );
+
+            sink.send(Message::Close(None)).await?;
+            Ok::<(), anyhow::Error>(())
+        });
+
+        let (client, _) = connect_async(format!("ws://{address}")).await?;
+        let mut config = ObsConfig::default();
+        config
+            .scenes
+            .insert(ObsEventKey::MusicSelect.config_key().to_string(), "Select".to_string());
+        let mut state = ObsConnectionState::new(config);
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        tx.send(ObsCommand::ApplyEvent(ObsEventKey::MusicSelect))?;
+        let mut pending_commands = VecDeque::new();
+
+        assert_eq!(
+            run_connected(&mut state, client, &mut rx, tx, &mut pending_commands).await?,
+            ConnectionAction::Reconnect
+        );
+        server.await??;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn reconnect_wait_preserves_pending_commands() {
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        tx.send(ObsCommand::ApplyEvent(ObsEventKey::Play)).unwrap();
+        let mut pending_commands = VecDeque::new();
+
+        let shutdown = wait_for_reconnect_or_shutdown(
+            &mut rx,
+            &mut pending_commands,
+            Duration::from_millis(1),
+        )
+        .await;
+
+        assert!(!shutdown);
+        assert!(matches!(
+            pending_commands.pop_front(),
+            Some(ObsCommand::ApplyEvent(ObsEventKey::Play))
+        ));
     }
 }
