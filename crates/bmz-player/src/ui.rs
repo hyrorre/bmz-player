@@ -2745,7 +2745,7 @@ fn input_backend_label(backend: &InputBackendKind) -> &'static str {
     match backend {
         InputBackendKind::Auto => "自動選択",
         InputBackendKind::Winit => "winit",
-        InputBackendKind::RawInput => "Raw Input",
+        InputBackendKind::RawInput => "Raw Input (Windowsのみ)",
         InputBackendKind::Hid => "HID (未実装)",
         InputBackendKind::Midi => "MIDI (未実装)",
     }

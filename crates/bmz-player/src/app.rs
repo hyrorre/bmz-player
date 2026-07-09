@@ -73,6 +73,7 @@ use crate::config::profile_config::{
 };
 use crate::config::save::{save_app_config, save_profile_config};
 use crate::config::settings_registry::SettingsEntryId;
+use crate::input::shared::SharedInputBackend;
 use crate::input::winit::physical_key_to_control;
 use crate::practice_ui::PracticePanelContext;
 use crate::screens::course_session::{ActiveCourseSession, CourseEntryResult, CourseResultSummary};
@@ -2149,12 +2150,6 @@ impl WinitApp {
         if !self.raw_input_keyboard_enabled() {
             return;
         }
-        if self.raw_input_gameplay_blocked() {
-            if state == ElementState::Released {
-                self.raw_input_pressed_keys.remove(&physical_key);
-            }
-            return;
-        }
         let Some(input) = self.active_play.as_ref().map(|active_play| active_play.input.clone())
         else {
             if state == ElementState::Released {
@@ -2162,23 +2157,25 @@ impl WinitApp {
             }
             return;
         };
-        let Some(repeat) = self.update_raw_input_key_state(&physical_key, state) else {
+        let gameplay_blocked = self.raw_input_gameplay_blocked();
+        let Some(repeat) = raw_input_key_state_transition(
+            &mut self.raw_input_pressed_keys,
+            &physical_key,
+            state,
+            gameplay_blocked,
+        ) else {
             return;
         };
         crate::input::winit::handle_key_parts(&input, physical_key, state, repeat);
     }
 
-    fn update_raw_input_key_state(
-        &mut self,
-        physical_key: &PhysicalKey,
-        state: ElementState,
-    ) -> Option<bool> {
-        match state {
-            ElementState::Pressed => Some(!self.raw_input_pressed_keys.insert(*physical_key)),
-            ElementState::Released => {
-                self.raw_input_pressed_keys.remove(physical_key).then_some(false)
-            }
-        }
+    fn release_raw_input_pressed_keys(&mut self) {
+        let Some(input) = self.active_play.as_ref().map(|active_play| active_play.input.clone())
+        else {
+            self.raw_input_pressed_keys.clear();
+            return;
+        };
+        release_raw_input_pressed_keys(&input, &mut self.raw_input_pressed_keys);
     }
 
     fn ensure_window(&mut self, event_loop: &ActiveEventLoop) {
@@ -13186,6 +13183,29 @@ fn keyboard_input_backend_for_config(config: &AppConfig) -> Option<KeyboardInput
     }
 }
 
+/// UI がゲーム入力をブロックしていても、ゲームへ渡したキーの Release は通す。
+fn raw_input_key_state_transition(
+    pressed_keys: &mut HashSet<PhysicalKey>,
+    physical_key: &PhysicalKey,
+    state: ElementState,
+    gameplay_blocked: bool,
+) -> Option<bool> {
+    match state {
+        ElementState::Pressed if gameplay_blocked => None,
+        ElementState::Pressed => Some(!pressed_keys.insert(*physical_key)),
+        ElementState::Released => pressed_keys.remove(physical_key).then_some(false),
+    }
+}
+
+fn release_raw_input_pressed_keys(
+    input: &SharedInputBackend,
+    pressed_keys: &mut HashSet<PhysicalKey>,
+) {
+    for physical_key in std::mem::take(pressed_keys) {
+        crate::input::winit::handle_key_parts(input, physical_key, ElementState::Released, false);
+    }
+}
+
 fn config_renderer_backend(
     backend: crate::config::app_config::RendererBackend,
 ) -> bmz_render::WgpuBackend {
@@ -13333,7 +13353,7 @@ impl ApplicationHandler<AppUserEvent> for WinitApp {
                 self.focused = focused;
                 if !focused {
                     self.pressed_controls.clear();
-                    self.raw_input_pressed_keys.clear();
+                    self.release_raw_input_pressed_keys();
                     self.sync_select_holds_from_pressed_controls();
                     self.clear_play_control_holds();
                 }
@@ -17783,6 +17803,43 @@ mod tests {
 
         config.input.keyboard_enabled = false;
         assert_eq!(keyboard_input_backend_for_config(&config), None);
+    }
+
+    #[test]
+    fn raw_input_blocking_drops_new_presses_but_keeps_release_for_tracked_keys() {
+        let key = PhysicalKey::Code(KeyCode::KeyZ);
+        let mut pressed_keys = HashSet::new();
+
+        assert_eq!(
+            raw_input_key_state_transition(&mut pressed_keys, &key, ElementState::Pressed, false,),
+            Some(false)
+        );
+        assert_eq!(
+            raw_input_key_state_transition(&mut pressed_keys, &key, ElementState::Pressed, true),
+            None
+        );
+        assert!(pressed_keys.contains(&key));
+        assert_eq!(
+            raw_input_key_state_transition(&mut pressed_keys, &key, ElementState::Released, true),
+            Some(false)
+        );
+        assert!(pressed_keys.is_empty());
+    }
+
+    #[test]
+    fn releasing_raw_input_pressed_keys_enqueues_release_events() {
+        use bmz_core::input::InputKind;
+        use bmz_gameplay::input::backend::InputBackend;
+
+        let input = SharedInputBackend::default();
+        let mut pressed_keys = HashSet::from([PhysicalKey::Code(KeyCode::KeyZ)]);
+
+        release_raw_input_pressed_keys(&input, &mut pressed_keys);
+
+        assert!(pressed_keys.is_empty());
+        let events = input.clone().drain_events();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].kind, InputKind::Release);
     }
 
     #[test]
