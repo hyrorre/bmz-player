@@ -21,6 +21,31 @@ impl SampleLoader for FfmpegSampleLoader {
         }
         decode_audio(path).map_err(|message| decode_error(path, message))
     }
+
+    fn duration_ms_hint(&mut self, path: &Path) -> Option<i64> {
+        bmz_ffmpeg::ensure_init().ok()?;
+        probe_audio_duration_ms(path).ok()
+    }
+}
+
+fn probe_audio_duration_ms(path: &Path) -> Result<i64, String> {
+    let ictx = format::input(path).map_err(|e| format!("failed to open input: {e}"))?;
+    let stream = ictx
+        .streams()
+        .best(media::Type::Audio)
+        .ok_or_else(|| "no audio stream found".to_string())?;
+    let duration = stream.duration();
+    let time_base = stream.time_base();
+    if duration <= 0 || time_base.denominator() <= 0 {
+        return Err("audio stream has no duration".to_string());
+    }
+    let duration_ms = (duration as i128)
+        .saturating_mul(time_base.numerator() as i128)
+        .saturating_mul(1_000)
+        .saturating_div(time_base.denominator() as i128);
+    (duration_ms > 0)
+        .then_some(duration_ms.min(i64::MAX as i128) as i64)
+        .ok_or_else(|| "audio stream has no duration".to_string())
 }
 
 fn decode_audio(path: &Path) -> Result<DecodedSample, String> {
@@ -269,6 +294,17 @@ mod tests {
         assert!((sample.frames[1] - 0.5).abs() < 1e-3);
         assert!((sample.frames[2] + 0.5).abs() < 1e-3);
 
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn ffmpeg_loader_reports_stream_duration_without_decoding_samples() {
+        let path = write_pcm16_wav(&vec![0; 44_100]);
+        let mut loader = FfmpegSampleLoader;
+
+        let duration_ms = loader.duration_ms_hint(&path).unwrap();
+
+        assert!((990..=1_010).contains(&duration_ms), "duration_ms={duration_ms}");
         std::fs::remove_file(path).unwrap();
     }
 }

@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 use anyhow::{Context, Result, bail};
@@ -9,20 +9,23 @@ use bmz_audio::queue::{RestartPolicy, ScheduledSound};
 use bmz_audio::sample::DecodedSample;
 use bmz_chart::import::import_bms_chart;
 use bmz_chart::model::{NoteKind, PlayableChart};
+use bmz_chart::sound_asset::sound_asset_candidates;
 use bmz_chart::volume::{chart_channel_volume_factor, chart_volume_at_time};
 
 use crate::storage::library_db::{ChartDistributionSecond, LibraryDatabase};
 
-pub const GENERATED_PREVIEW_VERSION: u32 = 1;
+pub const GENERATED_PREVIEW_VERSION: u32 = 2;
 pub const GENERATED_PREVIEW_DURATION_MS: i64 = 18_000;
 
 const GENERATED_PREVIEW_KEY_PREFIX: &str = "generated-preview";
 const GENERATED_PREVIEW_DENSITY_WINDOW_SECONDS: usize = 8;
 const GENERATED_PREVIEW_LEAD_SECONDS: usize = 2;
 const GENERATED_PREVIEW_PREROLL_MS: i64 = 2_000;
-const GENERATED_PREVIEW_FADE_MS: i64 = 250;
+const GENERATED_PREVIEW_FADE_IN_MS: i64 = 500;
+const GENERATED_PREVIEW_FADE_OUT_MS: i64 = 1_000;
 const GENERATED_PREVIEW_BGM_LOOKBACK_EVENTS: usize = 8;
 const GENERATED_PREVIEW_BGM_EARLY_GRACE_MS: i64 = 2_000;
+const GENERATED_PREVIEW_BGM_DURATION_PROBE_CANDIDATES: usize = 8;
 const RENDER_CHUNK_FRAMES: usize = 1024;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -139,7 +142,8 @@ pub(crate) fn render_generated_preview_sample(
     let end_us = start_us.saturating_add(duration_ms.saturating_mul(1_000));
     let note_preroll_start_us = start_us.saturating_sub(GENERATED_PREVIEW_PREROLL_MS * 1_000);
     let mut sound_ids = HashSet::new();
-    let bgm_event_indices = preview_bgm_event_indices(chart, note_preroll_start_us, end_us);
+    let bgm_event_indices =
+        preview_bgm_event_indices(chart, start_us, note_preroll_start_us, end_us, loader);
 
     for index in &bgm_event_indices {
         sound_ids.insert(chart.bgm_events[*index].sound);
@@ -262,8 +266,10 @@ fn schedule_preview_sounds(
 
 fn preview_bgm_event_indices(
     chart: &PlayableChart,
+    preview_start_us: i64,
     note_preroll_start_us: i64,
     end_us: i64,
+    loader: &mut dyn SampleLoader,
 ) -> Vec<usize> {
     let mut indices = Vec::new();
     for (index, event) in chart.bgm_events.iter().enumerate() {
@@ -295,6 +301,56 @@ fn preview_bgm_event_indices(
         lookback_count += 1;
         if lookback_count >= GENERATED_PREVIEW_BGM_LOOKBACK_EVENTS {
             break;
+        }
+    }
+
+    // 直前の少数イベントだけでは、途中から鳴り続ける長尺BGMレーンを落とす。
+    // 候補をファイルサイズで絞ってからコンテナのdurationだけを調べ、プレビュー開始時点
+    // まで届く音だけを追加することで、全BGMのデコードは避ける。
+    let sound_paths = chart
+        .sounds
+        .iter()
+        .map(|sound| (sound.id, sound.path.as_path()))
+        .collect::<HashMap<_, _>>();
+    let mut seen_sound_ids = chart
+        .bgm_events
+        .iter()
+        .filter(|event| event.time.0 >= note_preroll_start_us)
+        .map(|event| event.sound)
+        .collect::<HashSet<_>>();
+    let mut duration_candidates = Vec::new();
+    for (index, event) in chart.bgm_events.iter().enumerate().rev() {
+        if event.time.0 >= note_preroll_start_us || !seen_sound_ids.insert(event.sound) {
+            continue;
+        }
+        if indices.contains(&index) {
+            continue;
+        }
+        let Some(path) = sound_paths.get(&event.sound) else {
+            continue;
+        };
+        let Some(resolved_path) = sound_asset_candidates(path).into_iter().next() else {
+            continue;
+        };
+        let file_bytes =
+            std::fs::metadata(&resolved_path).ok().map(|metadata| metadata.len()).unwrap_or(0);
+        duration_candidates.push((file_bytes, index, resolved_path));
+    }
+    duration_candidates.sort_unstable_by(
+        |(left_bytes, left_index, _), (right_bytes, right_index, _)| {
+            right_bytes.cmp(left_bytes).then_with(|| right_index.cmp(left_index))
+        },
+    );
+    for (_, index, path) in
+        duration_candidates.into_iter().take(GENERATED_PREVIEW_BGM_DURATION_PROBE_CANDIDATES)
+    {
+        let event = &chart.bgm_events[index];
+        let Some(duration_ms) = loader.duration_ms_hint(&path) else {
+            continue;
+        };
+        let ends_at_us = event.time.0.saturating_add(duration_ms.saturating_mul(1_000));
+        if ends_at_us > preview_start_us {
+            indices.push(index);
         }
     }
 
@@ -347,17 +403,22 @@ fn apply_preview_envelope_and_limit(frames: &mut [f32], sample_rate: u32) {
     if frames.is_empty() {
         return;
     }
+
     let frame_count = frames.len() / 2;
-    let fade_frames = frames_from_ms(GENERATED_PREVIEW_FADE_MS, sample_rate).min(frame_count / 2);
-    if fade_frames > 0 {
-        for frame_index in 0..fade_frames {
-            let fade_in = frame_index as f32 / fade_frames as f32;
-            let fade_out = (fade_frames - frame_index) as f32 / fade_frames as f32;
-            let tail_frame_index = frame_count - 1 - frame_index;
-            for channel in 0..2 {
-                frames[frame_index * 2 + channel] *= fade_in;
-                frames[tail_frame_index * 2 + channel] *= fade_out;
-            }
+    let fade_in_frames = frames_from_ms(GENERATED_PREVIEW_FADE_IN_MS, sample_rate).min(frame_count);
+    let fade_out_frames =
+        frames_from_ms(GENERATED_PREVIEW_FADE_OUT_MS, sample_rate).min(frame_count);
+    for frame_index in 0..fade_in_frames {
+        let gain = fade_gain(frame_index, fade_in_frames, false);
+        for channel in 0..2 {
+            frames[frame_index * 2 + channel] *= gain;
+        }
+    }
+    for frame_index in 0..fade_out_frames {
+        let gain = fade_gain(frame_index, fade_out_frames, true);
+        let output_frame = frame_count - fade_out_frames + frame_index;
+        for channel in 0..2 {
+            frames[output_frame * 2 + channel] *= gain;
         }
     }
 
@@ -368,6 +429,14 @@ fn apply_preview_envelope_and_limit(frames: &mut [f32], sample_rate: u32) {
             *sample *= scale;
         }
     }
+}
+
+fn fade_gain(frame_index: usize, fade_frames: usize, invert: bool) -> f32 {
+    if fade_frames <= 1 {
+        return 1.0;
+    }
+    let progress = frame_index as f32 / (fade_frames - 1) as f32;
+    if invert { 1.0 - progress } else { progress }
 }
 
 fn peak_abs(frames: &[f32]) -> f32 {
@@ -396,6 +465,7 @@ mod tests {
     #[derive(Default)]
     struct TestLoader {
         samples: HashMap<PathBuf, DecodedSample>,
+        duration_hints_ms: HashMap<PathBuf, i64>,
         loaded_paths: Vec<PathBuf>,
     }
 
@@ -406,6 +476,10 @@ mod tests {
                 path: path.to_path_buf(),
                 message: "missing test sample".to_owned(),
             })
+        }
+
+        fn duration_ms_hint(&mut self, path: &Path) -> Option<i64> {
+            self.duration_hints_ms.get(path).copied()
         }
     }
 
@@ -453,6 +527,20 @@ mod tests {
     }
 
     #[test]
+    fn generated_preview_applies_requested_fade_in_and_out() {
+        let mut frames = vec![0.5; 2_000 * 2];
+
+        apply_preview_envelope_and_limit(&mut frames, 1_000);
+
+        assert_eq!(frames[0], 0.0);
+        assert!((frames[250 * 2] - 0.25).abs() < 0.001);
+        assert_eq!(frames[499 * 2], 0.5);
+        assert_eq!(frames[1_000 * 2], 0.5);
+        assert!((frames[1_500 * 2] - 0.25).abs() < 0.001);
+        assert_eq!(frames[(2_000 - 1) * 2], 0.0);
+    }
+
+    #[test]
     fn render_generated_preview_keeps_bgm_started_before_window() {
         let temp_dir =
             std::env::temp_dir().join(format!("bmz-generated-preview-test-{}", std::process::id()));
@@ -475,7 +563,7 @@ mod tests {
         assert_eq!(sample.channels, 2);
         assert_eq!(sample.sample_rate, sample_rate);
         let middle_left = sample.frames[500 * 2];
-        assert!(middle_left > 0.5);
+        assert!(middle_left > 0.45);
 
         let _ = fs::remove_dir_all(temp_dir);
     }
@@ -530,7 +618,7 @@ mod tests {
         let sample =
             render_generated_preview_sample(&chart, 0, 1_000, sample_rate, &mut loader).unwrap();
 
-        assert_eq!(sample.frames[500 * 2], 0.5);
+        assert!((sample.frames[500 * 2] - 0.25).abs() < 0.001);
         assert!(loader.loaded_paths.contains(&tap_path));
         assert!(!loader.loaded_paths.contains(&invisible_path));
         let _ = fs::remove_dir_all(temp_dir);
@@ -549,23 +637,33 @@ mod tests {
 
         let mut loader = TestLoader::default();
         let mut early_path = None;
+        let mut long_path = None;
         let mut distant_path = None;
         let mut window_path = None;
         for index in 0..64 {
-            let path = temp_dir.join(format!("bgm-{index}.wav"));
-            fs::write(&path, b"dummy").unwrap();
+            let declared_path = temp_dir.join(format!("bgm-{index}.wav"));
+            let path = if index == 10 {
+                temp_dir.join(format!("bgm-{index}.ogg"))
+            } else {
+                declared_path.clone()
+            };
+            let file_bytes = if index == 10 { vec![0; 1_024] } else { b"dummy".to_vec() };
+            fs::write(&path, file_bytes).unwrap();
             let sound_id = SoundId(index as u32 + 1);
-            chart.sounds.push(SoundAssetRef { id: sound_id, path: path.clone() });
+            chart.sounds.push(SoundAssetRef { id: sound_id, path: declared_path });
             chart.bgm_events.push(SoundEvent {
                 tick: ChartTick(index as u64 * 3_840),
                 time: TimeUs(index as i64 * 1_000_000),
                 sound: sound_id,
             });
-            let frames = if index == 0 { vec![1.0; 70_000] } else { vec![0.5; 1_000] };
+            let frames = if matches!(index, 0 | 10) { vec![1.0; 70_000] } else { vec![0.5; 1_000] };
             loader.samples.insert(path.clone(), DecodedSample { channels: 1, sample_rate, frames });
             if index == 0 {
                 early_path = Some(path.clone());
             } else if index == 10 {
+                loader.duration_hints_ms.insert(path.clone(), 70_000);
+                long_path = Some(path.clone());
+            } else if index == 4 {
                 distant_path = Some(path.clone());
             } else if index == 50 {
                 window_path = Some(path.clone());
@@ -579,6 +677,7 @@ mod tests {
         assert!(sample.frames[500 * 2] > 0.5);
         assert!(loader.loaded_paths.len() < 20, "loaded paths: {:?}", loader.loaded_paths);
         assert!(loader.loaded_paths.contains(&early_path.unwrap()));
+        assert!(loader.loaded_paths.contains(&long_path.unwrap()));
         assert!(loader.loaded_paths.contains(&window_path.unwrap()));
         assert!(!loader.loaded_paths.contains(&distant_path.unwrap()));
 

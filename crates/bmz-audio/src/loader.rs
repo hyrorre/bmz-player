@@ -23,6 +23,12 @@ pub enum SampleLoadError {
 
 pub trait SampleLoader {
     fn load(&mut self, path: &Path) -> Result<DecodedSample, SampleLoadError>;
+
+    /// 音声全体をデコードせずに取得できる場合の再生時間ヒント (ms)。
+    /// 時間不明なローダーは `None` を返す。
+    fn duration_ms_hint(&mut self, _path: &Path) -> Option<i64> {
+        None
+    }
 }
 
 #[derive(Debug, Default)]
