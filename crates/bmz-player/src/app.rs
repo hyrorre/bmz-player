@@ -7320,6 +7320,9 @@ impl WinitApp {
         );
         self.last_play_snapshot = Some(snapshot);
         self.active_play = Some(active_play);
+        // preload 経路では Play シーンへの遷移後にここで曲メタデータが確定する。
+        // 曲情報なしで送った Presence を実際の譜面情報で置き換える。
+        self.publish_discord_presence_for_scene(AppSceneKind::Play);
         self.update_play_exit_hold_timer();
     }
 
