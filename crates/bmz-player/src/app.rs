@@ -2880,9 +2880,14 @@ impl WinitApp {
 
     fn selected_chart_needs_generated_preview_distribution(&self) -> bool {
         match self.select_items.get(self.selected_index) {
-            Some(SelectItem::Chart(row)) => {
-                row.chart.as_ref().is_some_and(|chart| chart.preview_file.is_empty())
-            }
+            Some(SelectItem::Chart(row)) => row.chart.as_ref().is_some_and(|chart| {
+                let explicit_key = format!("{}|{}", chart.folder_path, chart.preview_file);
+                let explicit_missing = matches!(
+                    self.select_preview_cache.get(&explicit_key),
+                    Some(SelectPreviewCacheEntry::Missing)
+                );
+                should_use_generated_preview(&chart.preview_file, explicit_missing)
+            }),
             _ => false,
         }
     }
@@ -2891,8 +2896,13 @@ impl WinitApp {
         match self.select_items.get(self.selected_index) {
             Some(SelectItem::Chart(row)) => {
                 let chart = row.chart.as_ref()?;
-                if !chart.preview_file.is_empty() {
-                    return Some(format!("{}|{}", chart.folder_path, chart.preview_file));
+                let explicit_key = format!("{}|{}", chart.folder_path, chart.preview_file);
+                let explicit_missing = matches!(
+                    self.select_preview_cache.get(&explicit_key),
+                    Some(SelectPreviewCacheEntry::Missing)
+                );
+                if !should_use_generated_preview(&chart.preview_file, explicit_missing) {
+                    return Some(explicit_key);
                 }
                 let distributions = self.select_distribution_cache.borrow();
                 let distribution = distributions.get(&chart.chart_id)?;
@@ -11718,6 +11728,10 @@ fn select_preview_key_after_delay(
     delay: Duration,
 ) -> Option<String> {
     if elapsed >= delay { key } else { None }
+}
+
+fn should_use_generated_preview(preview_file: &str, explicit_preview_missing: bool) -> bool {
+    preview_file.is_empty() || explicit_preview_missing
 }
 
 fn fade_progress(started_at: Instant, now: Instant, duration: Duration) -> f32 {
@@ -20652,6 +20666,13 @@ mod tests {
         assert_eq!(queue.finish(), Some("latest".to_string()));
         assert_eq!(queue.finish(), None);
         assert_eq!(queue.request("after-idle".to_string()), Some("after-idle".to_string()));
+    }
+
+    #[test]
+    fn select_preview_uses_generated_fallback_after_explicit_preview_fails() {
+        assert!(should_use_generated_preview("", false));
+        assert!(should_use_generated_preview("missing-preview.ogg", true));
+        assert!(!should_use_generated_preview("preview.ogg", false));
     }
 
     #[test]
