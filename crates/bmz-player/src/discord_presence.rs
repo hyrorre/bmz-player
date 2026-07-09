@@ -4,7 +4,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use serde::Serialize;
-use serde_json::json;
+use serde_json::{Value, json};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::mpsc::{self, UnboundedSender};
 
@@ -13,6 +13,8 @@ use crate::config::app_config::{DEFAULT_DISCORD_APPLICATION_ID, DiscordConfig};
 const OPCODE_HANDSHAKE: u32 = 0;
 const OPCODE_FRAME: u32 = 1;
 const DISCORD_FIELD_MAX_CHARS: usize = 128;
+const DISCORD_PRESENCE_REFRESH_INTERVAL: Duration = Duration::from_secs(5);
+const DISCORD_IPC_RESPONSE_TIMEOUT: Duration = Duration::from_secs(5);
 
 static NEXT_NONCE: AtomicU64 = AtomicU64::new(1);
 
@@ -134,34 +136,109 @@ async fn discord_presence_worker(
     mut rx: mpsc::UnboundedReceiver<DiscordPresenceCommand>,
 ) {
     let mut client = DiscordRpcClient::new(config);
+    let mut desired_presence: Option<DiscordPresence> = None;
     let mut last_sent: Option<DiscordPresence> = None;
-    while let Some(command) = rx.recv().await {
-        match command {
-            DiscordPresenceCommand::Update(presence) => {
-                if last_sent.as_ref() == Some(&presence) {
-                    continue;
-                }
-                match client.update(&presence).await {
-                    Ok(()) => last_sent = Some(presence),
-                    Err(error) => {
-                        tracing::debug!(%error, "failed to update Discord Rich Presence");
+    let mut refresh = tokio::time::interval_at(
+        tokio::time::Instant::now() + DISCORD_PRESENCE_REFRESH_INTERVAL,
+        DISCORD_PRESENCE_REFRESH_INTERVAL,
+    );
+    refresh.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+
+    loop {
+        tokio::select! {
+            command = rx.recv() => match command {
+                Some(DiscordPresenceCommand::Update(presence)) => {
+                    let should_send = last_sent.as_ref() != Some(&presence);
+                    desired_presence = Some(presence);
+                    if should_send {
+                        update_discord_presence(
+                            &mut client,
+                            desired_presence.as_ref().expect("presence was just set"),
+                            &mut last_sent,
+                        )
+                        .await;
                     }
                 }
-            }
-            DiscordPresenceCommand::Clear => {
-                last_sent = None;
-                if let Err(error) = client.clear().await {
-                    tracing::debug!(%error, "failed to clear Discord Rich Presence");
+                Some(DiscordPresenceCommand::Clear) => {
+                    desired_presence = None;
+                    last_sent = None;
+                    if let Err(error) = client.clear().await {
+                        tracing::debug!(%error, "failed to clear Discord Rich Presence");
+                    }
                 }
-            }
-            DiscordPresenceCommand::Shutdown => {
-                if let Err(error) = client.clear().await {
-                    tracing::debug!(%error, "failed to clear Discord Rich Presence on shutdown");
+                Some(DiscordPresenceCommand::Shutdown) | None => {
+                    if let Err(error) = client.clear().await {
+                        tracing::debug!(%error, "failed to clear Discord Rich Presence on shutdown");
+                    }
+                    break;
                 }
-                break;
+            },
+            _ = refresh.tick(), if desired_presence.is_some() => {
+                update_discord_presence(
+                    &mut client,
+                    desired_presence.as_ref().expect("refresh requires a presence"),
+                    &mut last_sent,
+                )
+                .await;
             }
         }
     }
+}
+
+async fn update_discord_presence(
+    client: &mut DiscordRpcClient,
+    presence: &DiscordPresence,
+    last_sent: &mut Option<DiscordPresence>,
+) {
+    match client.update(presence).await {
+        Ok(()) => *last_sent = Some(presence.clone()),
+        Err(error) => {
+            *last_sent = None;
+            tracing::debug!(%error, "failed to update Discord Rich Presence");
+        }
+    }
+}
+
+fn rpc_response(opcode: u32, payload: &[u8]) -> io::Result<Value> {
+    if opcode != OPCODE_FRAME {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("unexpected Discord IPC opcode: {opcode}"),
+        ));
+    }
+
+    let response: Value = serde_json::from_slice(payload).map_err(io::Error::other)?;
+    if response.get("evt").and_then(Value::as_str) == Some("ERROR") {
+        let data = response.get("data");
+        let code = data.and_then(|value| value.get("code")).and_then(Value::as_i64);
+        let message = data
+            .and_then(|value| value.get("message"))
+            .and_then(Value::as_str)
+            .unwrap_or("unknown Discord RPC error");
+        let description = code
+            .map(|code| format!("Discord RPC error {code}: {message}"))
+            .unwrap_or_else(|| format!("Discord RPC error: {message}"));
+        return Err(io::Error::new(io::ErrorKind::PermissionDenied, description));
+    }
+
+    Ok(response)
+}
+
+fn ready_response(opcode: u32, payload: &[u8]) -> io::Result<()> {
+    let response = rpc_response(opcode, payload)?;
+    if response.get("evt").and_then(Value::as_str) != Some("READY") {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "Discord IPC handshake did not return READY",
+        ));
+    }
+    Ok(())
+}
+
+async fn read_rpc_response(stream: &mut DiscordIpcStream) -> io::Result<(u32, Vec<u8>)> {
+    tokio::time::timeout(DISCORD_IPC_RESPONSE_TIMEOUT, stream.read_packet())
+        .await
+        .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "Discord IPC response timed out"))?
 }
 
 struct DiscordRpcClient {
@@ -228,14 +305,16 @@ impl DiscordRpcConnection {
         }))
         .map_err(io::Error::other)?;
         stream.send_packet(OPCODE_HANDSHAKE, &handshake).await?;
-        let _ = stream.read_packet().await?;
+        let (opcode, payload) = read_rpc_response(&mut stream).await?;
+        ready_response(opcode, &payload)?;
         tracing::debug!("Discord RPC connected");
         Ok(Self { stream })
     }
 
     async fn send_command(&mut self, payload: &str) -> io::Result<()> {
         self.stream.send_packet(OPCODE_FRAME, payload).await?;
-        let _ = self.stream.read_packet().await?;
+        let (opcode, response) = read_rpc_response(&mut self.stream).await?;
+        let _ = rpc_response(opcode, &response)?;
         Ok(())
     }
 }
@@ -527,6 +606,30 @@ mod tests {
 
         assert_eq!(value["cmd"], "SET_ACTIVITY");
         assert!(value["args"]["activity"].is_null());
+    }
+
+    #[test]
+    fn rpc_error_response_is_reported_as_failure() {
+        let payload = br#"{
+            "cmd": "SET_ACTIVITY",
+            "evt": "ERROR",
+            "data": { "code": 4006, "message": "Not authenticated" }
+        }"#;
+
+        let error = rpc_response(OPCODE_FRAME, payload).unwrap_err();
+
+        assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+        assert!(error.to_string().contains("4006"));
+        assert!(error.to_string().contains("Not authenticated"));
+    }
+
+    #[test]
+    fn handshake_requires_ready_response() {
+        let payload = br#"{ "cmd": "DISPATCH", "evt": "CURRENT_USER_UPDATE" }"#;
+
+        let error = ready_response(OPCODE_FRAME, payload).unwrap_err();
+
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
     }
 
     #[test]
