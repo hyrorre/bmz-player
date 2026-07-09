@@ -864,7 +864,7 @@ pub fn preload_play_session_for_chart(
     );
     applied_arrange.double_option = applied_double_option;
     let chart = Arc::new(chart);
-    let mut loader = FfmpegSampleLoader;
+    let mut loader = FfmpegSampleLoader::default();
     let (audio, sample_report) =
         build_audio_engine_for_chart(&chart, options.sample_rate, &mut loader);
     let normalization_gain = load_or_compute_normalization_gain(

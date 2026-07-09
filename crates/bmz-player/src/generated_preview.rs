@@ -26,6 +26,8 @@ const GENERATED_PREVIEW_FADE_OUT_MS: i64 = 1_000;
 const GENERATED_PREVIEW_BGM_LOOKBACK_EVENTS: usize = 8;
 const GENERATED_PREVIEW_BGM_EARLY_GRACE_MS: i64 = 2_000;
 const GENERATED_PREVIEW_BGM_DURATION_PROBE_CANDIDATES: usize = 8;
+/// 生成専用 worker は decode 中にも実行権を譲り、短い ASIO バッファを優先する。
+const GENERATED_PREVIEW_DECODE_YIELD_INTERVAL_PACKETS: usize = 8;
 const RENDER_CHUNK_FRAMES: usize = 1024;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -114,7 +116,9 @@ pub fn render_generated_preview_for_chart(
     let chart_path = Path::new(&chart_path);
     let import = import_bms_chart(chart_path, None, true)
         .with_context(|| format!("import chart for generated preview {}", chart_path.display()))?;
-    let mut loader = FfmpegSampleLoader;
+    let mut loader = FfmpegSampleLoader::with_packet_yield_interval(
+        GENERATED_PREVIEW_DECODE_YIELD_INTERVAL_PACKETS,
+    );
     render_generated_preview_sample(
         &import.chart,
         start_ms,

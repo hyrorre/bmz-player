@@ -40,7 +40,7 @@ impl SystemSoundManager {
     /// 解決失敗は info、デコード失敗は warn をサウンド単位で出してスキップする。
     pub fn new(engine: AudioEngineHandle, selection: &SoundSetSelection) -> Self {
         let mut id_map = HashMap::new();
-        let mut loader = FfmpegSampleLoader;
+        let mut loader = FfmpegSampleLoader::default();
         let mut commands = Vec::new();
 
         for (i, sound_type) in SoundType::ALL.iter().enumerate() {

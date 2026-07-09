@@ -52,3 +52,6 @@ bmz-gameplay = { path = "../bmz-gameplay" }
 bmz-render = { path = "../bmz-render" }
 bmz-skin = { path = "../bmz-skin" }
 bmz-video = { path = "../bmz-video" }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_System_Threading"] }

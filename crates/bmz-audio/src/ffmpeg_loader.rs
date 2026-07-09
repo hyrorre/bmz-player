@@ -12,14 +12,27 @@ use crate::sample::DecodedSample;
 /// 出力はインターリーブ済み f32。サンプルレート変換はミキサー側で行うため、
 /// ここではフォーマット変換（整数 PCM / planar → f32 packed）のみ行う。
 #[derive(Debug, Default)]
-pub struct FfmpegSampleLoader;
+pub struct FfmpegSampleLoader {
+    packet_yield_interval: Option<usize>,
+}
+
+impl FfmpegSampleLoader {
+    /// バックグラウンド decode がリアルタイム音声処理を圧迫しないよう、指定した
+    /// 音声 packet 数ごとに OS へ実行権を譲るローダーを作る。0 は yield なし。
+    pub fn with_packet_yield_interval(packet_yield_interval: usize) -> Self {
+        Self {
+            packet_yield_interval: (packet_yield_interval != 0).then_some(packet_yield_interval),
+        }
+    }
+}
 
 impl SampleLoader for FfmpegSampleLoader {
     fn load(&mut self, path: &Path) -> Result<DecodedSample, SampleLoadError> {
         if let Err(message) = bmz_ffmpeg::ensure_init() {
             return Err(decode_error(path, message));
         }
-        decode_audio(path).map_err(|message| decode_error(path, message))
+        decode_audio(path, self.packet_yield_interval)
+            .map_err(|message| decode_error(path, message))
     }
 
     fn duration_ms_hint(&mut self, path: &Path) -> Option<i64> {
@@ -48,7 +61,10 @@ fn probe_audio_duration_ms(path: &Path) -> Result<i64, String> {
         .ok_or_else(|| "audio stream has no duration".to_string())
 }
 
-fn decode_audio(path: &Path) -> Result<DecodedSample, String> {
+fn decode_audio(
+    path: &Path,
+    packet_yield_interval: Option<usize>,
+) -> Result<DecodedSample, String> {
     let mut ictx = format::input(path).map_err(|e| format!("failed to open input: {e}"))?;
 
     let stream = ictx
@@ -87,12 +103,18 @@ fn decode_audio(path: &Path) -> Result<DecodedSample, String> {
         Ok(())
     };
 
+    let mut packets_since_yield = 0usize;
     for (stream, packet) in ictx.packets() {
         if stream.index() != stream_index {
             continue;
         }
         decoder.send_packet(&packet).map_err(|e| format!("send_packet failed: {e}"))?;
         receive_frames(&mut decoder, &mut out_channels, &mut out_rate, &mut frames)?;
+        packets_since_yield = packets_since_yield.saturating_add(1);
+        if packet_yield_interval.is_some_and(|interval| packets_since_yield >= interval) {
+            std::thread::yield_now();
+            packets_since_yield = 0;
+        }
     }
 
     decoder.send_eof().map_err(|e| format!("send_eof failed: {e}"))?;
@@ -283,7 +305,7 @@ mod tests {
     #[test]
     fn ffmpeg_loader_decodes_pcm16_wav() {
         let path = write_pcm16_wav(&[0, 16_384, -16_384, i16::MAX]);
-        let mut loader = FfmpegSampleLoader;
+        let mut loader = FfmpegSampleLoader::default();
 
         let sample = loader.load(&path).unwrap();
 
@@ -300,11 +322,20 @@ mod tests {
     #[test]
     fn ffmpeg_loader_reports_stream_duration_without_decoding_samples() {
         let path = write_pcm16_wav(&vec![0; 44_100]);
-        let mut loader = FfmpegSampleLoader;
+        let mut loader = FfmpegSampleLoader::default();
 
         let duration_ms = loader.duration_ms_hint(&path).unwrap();
 
         assert!((990..=1_010).contains(&duration_ms), "duration_ms={duration_ms}");
         std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn ffmpeg_loader_can_yield_between_background_decode_packets() {
+        assert_eq!(
+            FfmpegSampleLoader::with_packet_yield_interval(8).packet_yield_interval,
+            Some(8)
+        );
+        assert_eq!(FfmpegSampleLoader::with_packet_yield_interval(0).packet_yield_interval, None);
     }
 }

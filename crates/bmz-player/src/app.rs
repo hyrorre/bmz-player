@@ -47,6 +47,11 @@ use winit::keyboard::{KeyCode, PhysicalKey};
 use winit::monitor::{MonitorHandle, VideoModeHandle};
 use winit::window::{Fullscreen, Icon, Window, WindowAttributes, WindowId};
 
+#[cfg(windows)]
+use windows_sys::Win32::System::Threading::{
+    GetCurrentThread, SetThreadPriority, THREAD_PRIORITY_BELOW_NORMAL,
+};
+
 use crate::audio::{AppAudioOutput, AudioOutputDiagnostics, AudioRuntime};
 use crate::bootstrap::{self, BootstrappedApp};
 use crate::chart_preview::SelectChartPreview;
@@ -543,6 +548,8 @@ struct WinitApp {
     select_preview_tx: mpsc::Sender<SelectPreviewResult>,
     select_preview_rx: Receiver<SelectPreviewResult>,
     select_preview_load_queue: SelectPreviewLoadQueue,
+    /// 生成プレビュー worker が CPU を使っている間だけ diagnostics の原因分類に使う。
+    select_generated_preview_loading: bool,
     /// プレイ `#BACKBMP` のロード済みキャッシュキー。
     play_backbmp_source: Option<String>,
     play_backbmp_loaded: bool,
@@ -2079,6 +2086,7 @@ impl WinitApp {
             select_preview_tx,
             select_preview_rx,
             select_preview_load_queue: SelectPreviewLoadQueue::default(),
+            select_generated_preview_loading: false,
             play_backbmp_source: None,
             play_backbmp_loaded: false,
             last_play_start_press_at: None,
@@ -2851,6 +2859,10 @@ impl WinitApp {
         }
 
         while let Ok(result) = self.select_preview_rx.try_recv() {
+            let was_generated_preview = parse_generated_preview_cache_key(&result.key).is_some();
+            if was_generated_preview {
+                self.select_generated_preview_loading = false;
+            }
             let is_current = self.select_preview_source.as_deref() == Some(result.key.as_str());
             match result.result {
                 Ok(sample) => {
@@ -3238,8 +3250,10 @@ impl WinitApp {
     }
 
     fn start_select_preview_load(&mut self, key: String) {
+        self.select_generated_preview_loading = false;
         let tx = self.select_preview_tx.clone();
         if let Some(generated) = parse_generated_preview_cache_key(&key) {
+            self.select_generated_preview_loading = true;
             let library_db_path = self.boot.app_paths.library_db.clone();
             let sample_rate = self
                 .select_preview
@@ -3250,6 +3264,7 @@ impl WinitApp {
             if let Err(error) = thread::Builder::new()
                 .name(format!("select-preview-{}", generated.chart_id))
                 .spawn(move || {
+                    lower_current_thread_priority();
                     let result = render_generated_preview_for_chart(
                         &library_db_path,
                         generated.chart_id,
@@ -3261,6 +3276,7 @@ impl WinitApp {
                 })
             {
                 tracing::warn!(%error, "failed to spawn generated chart preview loader");
+                self.select_generated_preview_loading = false;
                 self.insert_select_preview_cache(key, SelectPreviewCacheEntry::Missing);
                 if let Some(next) = self.select_preview_load_queue.finish() {
                     self.start_select_preview_load(next);
@@ -3274,7 +3290,7 @@ impl WinitApp {
             let path = crate::chart_asset::resolve_preview_file(Path::new(folder), file);
             let result = match path.as_ref() {
                 Some(path) => {
-                    let mut loader = FfmpegSampleLoader;
+                    let mut loader = FfmpegSampleLoader::default();
                     loader.load(path).map_err(|error| error.to_string())
                 }
                 None => Err("chart preview audio file not found".to_string()),
@@ -7108,12 +7124,22 @@ impl WinitApp {
             ((avg_callback_frames / f64::from(sample_rate)) * 1_000_000_000.0).round() as u64;
         let callback_over_budget =
             callback_budget_ns > 0 && snapshot.max_callback_ns > callback_budget_ns;
+        let suspected_cause = classify_audio_output_issue(
+            stream_errors,
+            source_lock_misses,
+            engine_lock_misses,
+            command_drops,
+            command_drain_lock_misses,
+            command_engine_lock_misses,
+            callback_over_budget,
+            clipped_samples,
+            self.select_generated_preview_loading,
+        );
 
         if stream_errors == 0
             && source_lock_misses == 0
             && engine_lock_misses == 0
             && command_drops == 0
-            && command_drain_lock_misses == 0
             && command_engine_lock_misses == 0
             && clipped_samples == 0
             && !callback_over_budget
@@ -7141,6 +7167,8 @@ impl WinitApp {
             command_drain_lock_misses,
             command_engine_lock_misses,
             command_queue_max_depth = snapshot.command_queue_max_depth,
+            suspected_cause = suspected_cause.as_str(),
+            generated_preview_loading = self.select_generated_preview_loading,
             select_preview_playing = self.select_preview_playing,
             select_preview_fade = select_preview_fade_name(self.select_preview_fade),
             select_preview_factor = select_preview_fade_factor(self.select_preview_fade, now),
@@ -10830,7 +10858,16 @@ impl WinitApp {
         self.sync_active_play_realtime_profile_settings();
         if let Some(manager) = &self.system_sound {
             let mix = self.boot.profile_config.audio_mix.clone();
-            manager.refresh_volumes(|sound_type| system_sound_volume_from_mix(&mix, sound_type));
+            let preview_factor =
+                select_preview_fade_factor(self.select_preview_fade, Instant::now());
+            manager.refresh_volumes(|sound_type| {
+                let volume = system_sound_volume_from_mix(&mix, sound_type);
+                if sound_type == crate::system_sound::SoundType::Select {
+                    volume * (1.0 - preview_factor).clamp(0.0, 1.0)
+                } else {
+                    volume
+                }
+            });
         }
         self.apply_select_preview_audio_mix();
     }
@@ -11810,9 +11847,75 @@ fn select_preview_key_after_delay(
     if elapsed >= delay { key } else { None }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AudioOutputIssueCause {
+    StreamError,
+    CallbackLockContention,
+    CommandContention,
+    GeneratedPreviewCpuPressure,
+    CallbackDeadlineExceeded,
+    MixClipping,
+    Unknown,
+}
+
+impl AudioOutputIssueCause {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::StreamError => "stream_error",
+            Self::CallbackLockContention => "callback_lock_contention",
+            Self::CommandContention => "command_contention",
+            Self::GeneratedPreviewCpuPressure => "generated_preview_cpu_pressure",
+            Self::CallbackDeadlineExceeded => "callback_deadline_exceeded",
+            Self::MixClipping => "mix_clipping",
+            Self::Unknown => "unknown",
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn classify_audio_output_issue(
+    stream_errors: u64,
+    source_lock_misses: u64,
+    engine_lock_misses: u64,
+    command_drops: u64,
+    _command_drain_lock_misses: u64,
+    command_engine_lock_misses: u64,
+    callback_over_budget: bool,
+    clipped_samples: u64,
+    generated_preview_loading: bool,
+) -> AudioOutputIssueCause {
+    if stream_errors != 0 {
+        AudioOutputIssueCause::StreamError
+    } else if source_lock_misses != 0 || engine_lock_misses != 0 {
+        AudioOutputIssueCause::CallbackLockContention
+    } else if command_drops != 0 || command_engine_lock_misses != 0 {
+        AudioOutputIssueCause::CommandContention
+    } else if callback_over_budget && generated_preview_loading {
+        AudioOutputIssueCause::GeneratedPreviewCpuPressure
+    } else if callback_over_budget {
+        AudioOutputIssueCause::CallbackDeadlineExceeded
+    } else if clipped_samples != 0 {
+        AudioOutputIssueCause::MixClipping
+    } else {
+        AudioOutputIssueCause::Unknown
+    }
+}
+
 fn should_use_generated_preview(preview_file: &str, explicit_preview_missing: bool) -> bool {
     preview_file.is_empty() || explicit_preview_missing
 }
+
+#[cfg(windows)]
+fn lower_current_thread_priority() {
+    // 生成中の FFmpeg decode が短い ASIO callback の実行期限を奪わないようにする。
+    let updated = unsafe { SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL) };
+    if updated == 0 {
+        tracing::debug!("failed to lower generated preview worker priority");
+    }
+}
+
+#[cfg(not(windows))]
+fn lower_current_thread_priority() {}
 
 fn fade_progress(started_at: Instant, now: Instant, duration: Duration) -> f32 {
     if duration == Duration::ZERO {
@@ -20772,6 +20875,26 @@ mod tests {
         assert!(should_use_generated_preview("", false));
         assert!(should_use_generated_preview("missing-preview.ogg", true));
         assert!(!should_use_generated_preview("preview.ogg", false));
+    }
+
+    #[test]
+    fn audio_diagnostic_marks_generated_preview_callback_pressure() {
+        assert_eq!(
+            classify_audio_output_issue(0, 0, 0, 0, 0, 0, true, 0, true),
+            AudioOutputIssueCause::GeneratedPreviewCpuPressure
+        );
+        assert_eq!(
+            classify_audio_output_issue(0, 0, 1, 0, 0, 0, true, 0, true),
+            AudioOutputIssueCause::CallbackLockContention
+        );
+        assert_eq!(
+            classify_audio_output_issue(0, 0, 0, 0, 0, 0, false, 1, true),
+            AudioOutputIssueCause::MixClipping
+        );
+        assert_eq!(
+            classify_audio_output_issue(0, 0, 0, 0, 1, 0, false, 0, false),
+            AudioOutputIssueCause::Unknown
+        );
     }
 
     #[test]
