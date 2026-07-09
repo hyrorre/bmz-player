@@ -13591,6 +13591,11 @@ impl ApplicationHandler<AppUserEvent> for WinitApp {
                 }
                 self.advance_active_play();
                 self.advance_draining_audio();
+                if let Some(runtime) = &self.audio_runtime {
+                    // chart sample bank を保持する source の破棄は、CPAL callback
+                    // ではなく app thread 側で回収する。
+                    runtime.reap_retired_sources();
+                }
                 self.log_audio_diagnostics();
                 // 次フレームの再描画をここで要求して描画ループを自走させる。
                 // about_to_wait から要求すると、Windows のウィンドウ移動/リサイズ中に

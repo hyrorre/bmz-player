@@ -15,6 +15,7 @@ use crate::engine::AudioEngine;
 
 pub type SharedAudioEngine = Arc<Mutex<AudioEngine>>;
 type SharedOutputCommands = Arc<Mutex<VecDeque<CpalOutputCommand>>>;
+type RetiredOutputSources = Arc<Mutex<Vec<RenderAudioSource>>>;
 const OUTPUT_COMMAND_QUEUE_CAPACITY: usize = 256;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -120,6 +121,7 @@ struct CpalSharedOutputInner {
     sample_rate: u32,
     current_frame: Arc<AtomicU64>,
     output_commands: SharedOutputCommands,
+    retired_sources: RetiredOutputSources,
     diagnostics: Arc<CpalOutputDiagnosticsCounters>,
     next_source_id: AtomicU64,
 }
@@ -143,6 +145,7 @@ pub struct CpalCommandedOutputSource {
 struct RenderAudioSource {
     id: u64,
     kind: CpalOutputSourceKind,
+    active: bool,
     engine: RenderAudioEngine,
 }
 
@@ -245,6 +248,11 @@ impl CpalBackend {
 
         let current_frame = Arc::new(AtomicU64::new(0));
         let output_commands = Arc::new(Mutex::new(VecDeque::new()));
+        // callback 側で source を除去すると最後の Arc になった AudioEngine の
+        // SampleBank を解放し得る。音声 callback でそのような重い drop をしない
+        // よう、容量を先に確保した退避先へ移し、app thread 側で回収する。
+        let retired_sources =
+            Arc::new(Mutex::new(Vec::with_capacity(OUTPUT_COMMAND_QUEUE_CAPACITY)));
         let diagnostics = Arc::new(CpalOutputDiagnosticsCounters::default());
 
         let stream = match sample_format {
@@ -253,6 +261,7 @@ impl CpalBackend {
                 &config,
                 channel_offset,
                 Arc::clone(&output_commands),
+                Arc::clone(&retired_sources),
                 Arc::clone(&current_frame),
                 Arc::clone(&diagnostics),
             )?,
@@ -261,6 +270,7 @@ impl CpalBackend {
                 &config,
                 channel_offset,
                 Arc::clone(&output_commands),
+                Arc::clone(&retired_sources),
                 Arc::clone(&current_frame),
                 Arc::clone(&diagnostics),
             )?,
@@ -269,6 +279,7 @@ impl CpalBackend {
                 &config,
                 channel_offset,
                 Arc::clone(&output_commands),
+                Arc::clone(&retired_sources),
                 Arc::clone(&current_frame),
                 Arc::clone(&diagnostics),
             )?,
@@ -277,6 +288,7 @@ impl CpalBackend {
                 &config,
                 channel_offset,
                 Arc::clone(&output_commands),
+                Arc::clone(&retired_sources),
                 Arc::clone(&current_frame),
                 Arc::clone(&diagnostics),
             )?,
@@ -285,6 +297,7 @@ impl CpalBackend {
                 &config,
                 channel_offset,
                 Arc::clone(&output_commands),
+                Arc::clone(&retired_sources),
                 Arc::clone(&current_frame),
                 Arc::clone(&diagnostics),
             )?,
@@ -297,6 +310,7 @@ impl CpalBackend {
                 sample_rate,
                 current_frame,
                 output_commands,
+                retired_sources,
                 diagnostics,
                 next_source_id: AtomicU64::new(1),
             }),
@@ -540,6 +554,17 @@ impl CpalSharedOutput {
         self.inner.diagnostics.take_snapshot()
     }
 
+    /// callback から退避した source を app thread で破棄する。
+    ///
+    /// source が最後に保持する chart sample bank は大きくなり得るため、callback
+    /// 中での `Drop` を避ける。callback と競合中でも app thread は待機してよい。
+    pub fn reap_retired_sources(&self) {
+        let Ok(mut sources) = self.inner.retired_sources.lock() else {
+            return;
+        };
+        sources.clear();
+    }
+
     pub fn add_source(&self, engine: SharedAudioEngine) -> CpalOutputSource {
         self.add_source_with_kind(engine, CpalOutputSourceKind::Other)
     }
@@ -702,6 +727,7 @@ fn build_output_stream<T>(
     config: &StreamConfig,
     channel_offset: usize,
     output_commands: SharedOutputCommands,
+    retired_sources: RetiredOutputSources,
     current_frame: Arc<AtomicU64>,
     diagnostics: Arc<CpalOutputDiagnosticsCounters>,
 ) -> Result<::cpal::Stream, CpalBackendError>
@@ -734,6 +760,7 @@ where
                     channel_offset,
                     start_frame,
                     &output_commands,
+                    &retired_sources,
                     &mut mix,
                     &mut source_scratch,
                     &mut render_sources,
@@ -760,12 +787,16 @@ fn device_name(device: &::cpal::Device) -> String {
         .unwrap_or_else(|_| device.to_string())
 }
 
+// output callback の scratch を引数で共有するため、RT-safe なままでは引数を
+// まとめる所有構造を作れない。ここだけは低レベル helper として許容する。
+#[allow(clippy::too_many_arguments)]
 fn render_output<T: OutputSample>(
     data: &mut [T],
     channels: usize,
     channel_offset: usize,
     output_start_frame: u64,
     output_commands: &SharedOutputCommands,
+    retired_sources: &RetiredOutputSources,
     mix: &mut Vec<f32>,
     source_scratch: &mut Vec<f32>,
     render_sources: &mut Vec<RenderAudioSource>,
@@ -781,6 +812,7 @@ fn render_output<T: OutputSample>(
         output_start_frame,
         frames,
         output_commands,
+        retired_sources,
         mix,
         source_scratch,
         render_sources,
@@ -795,6 +827,7 @@ fn mix_sources_stereo(
     output_start_frame: u64,
     frames: usize,
     output_commands: &SharedOutputCommands,
+    retired_sources: &RetiredOutputSources,
     mix: &mut Vec<f32>,
     source_scratch: &mut Vec<f32>,
     render_sources: &mut Vec<RenderAudioSource>,
@@ -804,11 +837,17 @@ fn mix_sources_stereo(
     mix.resize(frames * 2, 0.0);
     mix.fill(0.0);
 
-    drain_output_commands(output_commands, render_sources, source_command_scratch, diagnostics);
+    drain_output_commands(
+        output_commands,
+        retired_sources,
+        render_sources,
+        source_command_scratch,
+        diagnostics,
+    );
 
     source_scratch.resize(frames * 2, 0.0);
     let mut missed_engine_lock = false;
-    for source in render_sources.iter_mut() {
+    for source in render_sources.iter_mut().filter(|source| source.active) {
         let rendered = match &mut source.engine {
             RenderAudioEngine::Legacy(engine) => match engine.try_lock() {
                 Ok(mut engine) => {
@@ -837,6 +876,7 @@ fn mix_sources_stereo(
 
 fn drain_output_commands(
     output_commands: &SharedOutputCommands,
+    retired_sources: &RetiredOutputSources,
     render_sources: &mut Vec<RenderAudioSource>,
     scratch: &mut Vec<CpalOutputCommand>,
     diagnostics: &CpalOutputDiagnosticsCounters,
@@ -865,6 +905,7 @@ fn drain_output_commands(
                 render_sources.push(RenderAudioSource {
                     id,
                     kind,
+                    active: true,
                     engine: RenderAudioEngine::Legacy(engine),
                 });
             }
@@ -872,17 +913,50 @@ fn drain_output_commands(
                 render_sources.push(RenderAudioSource {
                     id,
                     kind,
+                    active: true,
                     engine: RenderAudioEngine::Commanded(engine),
                 });
             }
             CpalOutputCommand::RemoveSource { id } => {
-                render_sources.retain(|source| source.id != id);
+                if let Some(source) = render_sources.iter_mut().find(|source| source.id == id) {
+                    // `retain` でここから drop すると、最後の参照になった chart
+                    // sample bank の解放が callback の実行期限を超え得る。無音化だけ
+                    // 先に行い、app thread 側へ移すまでは source を保持する。
+                    source.active = false;
+                }
             }
             CpalOutputCommand::SetSourceKind { id, kind } => {
                 if let Some(source) = render_sources.iter_mut().find(|source| source.id == id) {
                     source.kind = kind;
                 }
             }
+        }
+    }
+
+    retire_inactive_sources(render_sources, retired_sources);
+}
+
+/// callback 中には lock 待ちも追加確保もせず、無音化済み source を退避する。
+/// 退避先が一杯または app thread が回収中なら、次 callback まで source を保持する。
+fn retire_inactive_sources(
+    render_sources: &mut Vec<RenderAudioSource>,
+    retired_sources: &RetiredOutputSources,
+) {
+    let Ok(mut retired_sources) = retired_sources.try_lock() else {
+        return;
+    };
+    if retired_sources.len() >= retired_sources.capacity() {
+        return;
+    }
+
+    let mut index = 0;
+    while index < render_sources.len() && retired_sources.len() < retired_sources.capacity() {
+        if render_sources[index].active {
+            index += 1;
+        } else {
+            // capacity は確認済みなので `push` は allocate しない。`swap_remove` の
+            // 所有権を app thread の回収用 Vec へ move し、callback では drop しない。
+            retired_sources.push(render_sources.swap_remove(index));
         }
     }
 }
@@ -1148,6 +1222,7 @@ mod tests {
         let mut source_scratch = Vec::new();
         let mut render_sources = Vec::new();
         let mut command_scratch = Vec::new();
+        let retired_sources = test_retired_sources(1);
         let diagnostics = CpalOutputDiagnosticsCounters::default();
 
         render_output(
@@ -1156,6 +1231,7 @@ mod tests {
             0,
             0,
             &output_commands,
+            &retired_sources,
             &mut mix,
             &mut source_scratch,
             &mut render_sources,
@@ -1214,12 +1290,14 @@ mod tests {
         let mut scratch = Vec::new();
         let mut sources = Vec::new();
         let mut commands = Vec::new();
+        let retired_sources = test_retired_sources(2);
         let diagnostics = CpalOutputDiagnosticsCounters::default();
 
         mix_sources_stereo(
             0,
             1,
             &output_commands,
+            &retired_sources,
             &mut mix,
             &mut scratch,
             &mut sources,
@@ -1243,12 +1321,14 @@ mod tests {
         let mut scratch = Vec::new();
         let mut sources = Vec::new();
         let mut commands = Vec::new();
+        let retired_sources = test_retired_sources(1);
         let diagnostics = CpalOutputDiagnosticsCounters::default();
 
         mix_sources_stereo(
             0,
             1,
             &output_commands,
+            &retired_sources,
             &mut mix,
             &mut scratch,
             &mut sources,
@@ -1274,6 +1354,67 @@ mod tests {
             queue_guard.extend(commands);
         }
         queue
+    }
+
+    fn test_retired_sources(capacity: usize) -> RetiredOutputSources {
+        Arc::new(Mutex::new(Vec::with_capacity(capacity)))
+    }
+
+    #[test]
+    fn remove_source_defers_drop_to_app_thread_reaper() {
+        let handle = AudioEngineHandle::new(AudioEngine::default());
+        let output_commands = test_output_commands([
+            CpalOutputCommand::AddCommandedSource {
+                id: 1,
+                kind: CpalOutputSourceKind::Play,
+                engine: handle.processor(),
+            },
+            CpalOutputCommand::RemoveSource { id: 1 },
+        ]);
+        let retired_sources = test_retired_sources(1);
+        let mut sources = Vec::new();
+        let mut scratch = Vec::new();
+        let diagnostics = CpalOutputDiagnosticsCounters::default();
+
+        drain_output_commands(
+            &output_commands,
+            &retired_sources,
+            &mut sources,
+            &mut scratch,
+            &diagnostics,
+        );
+
+        assert!(sources.is_empty(), "removed source should not remain in the callback mixer");
+        assert_eq!(retired_sources.lock().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn remove_source_stays_silent_until_reaper_has_capacity() {
+        let handle = AudioEngineHandle::new(AudioEngine::default());
+        let output_commands = test_output_commands([
+            CpalOutputCommand::AddCommandedSource {
+                id: 1,
+                kind: CpalOutputSourceKind::Play,
+                engine: handle.processor(),
+            },
+            CpalOutputCommand::RemoveSource { id: 1 },
+        ]);
+        let retired_sources = test_retired_sources(0);
+        let mut sources = Vec::new();
+        let mut scratch = Vec::new();
+        let diagnostics = CpalOutputDiagnosticsCounters::default();
+
+        drain_output_commands(
+            &output_commands,
+            &retired_sources,
+            &mut sources,
+            &mut scratch,
+            &diagnostics,
+        );
+
+        assert_eq!(sources.len(), 1);
+        assert!(!sources[0].active);
+        assert!(retired_sources.lock().unwrap().is_empty());
     }
 
     #[test]

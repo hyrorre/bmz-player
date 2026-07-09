@@ -181,6 +181,11 @@ impl AudioRuntime {
         AudioOutputDiagnostics::from_cpal(self.output.take_diagnostics())
     }
 
+    /// 音声 callback から退避した source を app thread で破棄する。
+    pub fn reap_retired_sources(&self) {
+        self.output.reap_retired_sources();
+    }
+
     fn add_commanded_source(
         &self,
         handle: AudioEngineHandle,
