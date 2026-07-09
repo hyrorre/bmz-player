@@ -539,6 +539,7 @@ struct WinitApp {
     select_preview_cache: HashMap<String, SelectPreviewCacheEntry>,
     select_preview_tx: mpsc::Sender<SelectPreviewResult>,
     select_preview_rx: Receiver<SelectPreviewResult>,
+    select_preview_load_queue: SelectPreviewLoadQueue,
     /// プレイ `#BACKBMP` のロード済みキャッシュキー。
     play_backbmp_source: Option<String>,
     play_backbmp_loaded: bool,
@@ -978,6 +979,35 @@ struct SelectPreviewResult {
     key: String,
     path: Option<PathBuf>,
     result: std::result::Result<DecodedSample, String>,
+}
+
+/// 選曲プレビューの重いロード処理は一度に1件だけ実行する。
+/// 選択が変わった間の要求は最新の1件だけ残し、古い要求を捨てる。
+#[derive(Debug, Default)]
+struct SelectPreviewLoadQueue {
+    active: bool,
+    pending: Option<String>,
+}
+
+impl SelectPreviewLoadQueue {
+    fn request(&mut self, key: String) -> Option<String> {
+        if self.active {
+            self.pending = Some(key);
+            None
+        } else {
+            self.active = true;
+            Some(key)
+        }
+    }
+
+    fn finish(&mut self) -> Option<String> {
+        if let Some(next) = self.pending.take() {
+            Some(next)
+        } else {
+            self.active = false;
+            None
+        }
+    }
 }
 
 enum SelectFolderSummaryCacheEntry {
@@ -2043,6 +2073,7 @@ impl WinitApp {
             select_preview_cache: HashMap::new(),
             select_preview_tx,
             select_preview_rx,
+            select_preview_load_queue: SelectPreviewLoadQueue::default(),
             play_backbmp_source: None,
             play_backbmp_loaded: false,
             last_play_start_press_at: None,
@@ -2841,6 +2872,9 @@ impl WinitApp {
                     self.insert_select_preview_cache(result.key, SelectPreviewCacheEntry::Missing);
                 }
             }
+            if let Some(next) = self.select_preview_load_queue.finish() {
+                self.start_select_preview_load(next);
+            }
         }
     }
 
@@ -3181,6 +3215,13 @@ impl WinitApp {
 
     fn spawn_select_preview_load(&mut self, key: String) {
         self.insert_select_preview_cache(key.clone(), SelectPreviewCacheEntry::Loading);
+        let Some(key) = self.select_preview_load_queue.request(key) else {
+            return;
+        };
+        self.start_select_preview_load(key);
+    }
+
+    fn start_select_preview_load(&mut self, key: String) {
         let tx = self.select_preview_tx.clone();
         if let Some(generated) = parse_generated_preview_cache_key(&key) {
             let library_db_path = self.boot.app_paths.library_db.clone();
@@ -3205,6 +3246,9 @@ impl WinitApp {
             {
                 tracing::warn!(%error, "failed to spawn generated chart preview loader");
                 self.insert_select_preview_cache(key, SelectPreviewCacheEntry::Missing);
+                if let Some(next) = self.select_preview_load_queue.finish() {
+                    self.start_select_preview_load(next);
+                }
             }
             return;
         }
@@ -20596,6 +20640,18 @@ mod tests {
             ),
             key
         );
+    }
+
+    #[test]
+    fn select_preview_load_queue_keeps_only_latest_pending_request() {
+        let mut queue = SelectPreviewLoadQueue::default();
+
+        assert_eq!(queue.request("first".to_string()), Some("first".to_string()));
+        assert_eq!(queue.request("second".to_string()), None);
+        assert_eq!(queue.request("latest".to_string()), None);
+        assert_eq!(queue.finish(), Some("latest".to_string()));
+        assert_eq!(queue.finish(), None);
+        assert_eq!(queue.request("after-idle".to_string()), Some("after-idle".to_string()));
     }
 
     #[test]
