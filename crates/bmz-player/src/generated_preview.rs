@@ -14,7 +14,7 @@ use bmz_chart::volume::{chart_channel_volume_factor, chart_volume_at_time};
 
 use crate::storage::library_db::{ChartDistributionSecond, LibraryDatabase};
 
-pub const GENERATED_PREVIEW_VERSION: u32 = 2;
+pub const GENERATED_PREVIEW_VERSION: u32 = 3;
 pub const GENERATED_PREVIEW_DURATION_MS: i64 = 18_000;
 
 const GENERATED_PREVIEW_KEY_PREFIX: &str = "generated-preview";
@@ -319,7 +319,7 @@ fn preview_bgm_event_indices(
     let mut seen_sound_ids = chart
         .bgm_events
         .iter()
-        .filter(|event| event.time.0 >= note_preroll_start_us)
+        .filter(|event| event.time.0 >= note_preroll_start_us && event.time.0 <= end_us)
         .map(|event| event.sound)
         .collect::<HashSet<_>>();
     let mut duration_candidates = Vec::new();
@@ -673,6 +673,11 @@ mod tests {
                 window_path = Some(path.clone());
             }
         }
+        chart.bgm_events.push(SoundEvent {
+            tick: ChartTick(64 * 3_840),
+            time: TimeUs(64_000_000),
+            sound: SoundId(11),
+        });
 
         let sample =
             render_generated_preview_sample(&chart, 50_000, 1_000, sample_rate, &mut loader)
