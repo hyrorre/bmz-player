@@ -28,6 +28,7 @@ pub mod config;
 pub mod course;
 pub mod course_cmd;
 pub mod difficulty_table;
+pub mod generated_preview;
 pub mod input;
 pub mod ir;
 pub mod ir_cmd;

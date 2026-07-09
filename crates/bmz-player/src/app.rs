@@ -70,6 +70,10 @@ use crate::config::profile_config::{
 };
 use crate::config::save::{save_app_config, save_profile_config};
 use crate::config::settings_registry::SettingsEntryId;
+use crate::generated_preview::{
+    fallback_preview_start_ms, generated_preview_cache_key, parse_generated_preview_cache_key,
+    render_generated_preview_for_chart,
+};
 use crate::input::winit::physical_key_to_control;
 use crate::practice_ui::PracticePanelContext;
 use crate::screens::course_session::{ActiveCourseSession, CourseEntryResult, CourseResultSummary};
@@ -1106,6 +1110,7 @@ const AUDIO_DIAGNOSTICS_LOG_INTERVAL: Duration = Duration::from_secs(1);
 const SELECT_PREVIEW_FADE_DURATION: Duration = Duration::from_millis(150);
 /// beatoraja MusicSelector waits this long after a song-bar change before preview starts.
 const SELECT_PREVIEW_START_DELAY: Duration = Duration::from_millis(400);
+const SELECT_PREVIEW_CACHE_LIMIT: usize = 8;
 const QUICK_RETRY_REUSE_LOCK_ATTEMPTS: usize = 4;
 const QUICK_RETRY_REUSE_LOCK_RETRY_SLEEP: Duration = Duration::from_micros(250);
 /// レーンカバー / LIFT を上下キーで動かす際のステップ幅。
@@ -2819,8 +2824,10 @@ impl WinitApp {
                             self.begin_select_preview_fade_in();
                         }
                     }
-                    self.select_preview_cache
-                        .insert(result.key, SelectPreviewCacheEntry::Ready(sample));
+                    self.insert_select_preview_cache(
+                        result.key,
+                        SelectPreviewCacheEntry::Ready(sample),
+                    );
                 }
                 Err(error) => {
                     if let Some(path) = result.path {
@@ -2831,20 +2838,42 @@ impl WinitApp {
                     if is_current {
                         self.select_preview_playing = false;
                     }
-                    self.select_preview_cache.insert(result.key, SelectPreviewCacheEntry::Missing);
+                    self.insert_select_preview_cache(result.key, SelectPreviewCacheEntry::Missing);
                 }
             }
         }
     }
 
-    fn sync_select_preview_audio(&mut self) {
-        let selected_cache_key = match self.select_items.get(self.selected_index) {
-            Some(SelectItem::Chart(row)) => row.chart.as_ref().and_then(|chart| {
-                (!chart.preview_file.is_empty())
-                    .then(|| format!("{}|{}", chart.folder_path, chart.preview_file))
-            }),
+    fn selected_chart_needs_generated_preview_distribution(&self) -> bool {
+        match self.select_items.get(self.selected_index) {
+            Some(SelectItem::Chart(row)) => {
+                row.chart.as_ref().is_some_and(|chart| chart.preview_file.is_empty())
+            }
+            _ => false,
+        }
+    }
+
+    fn selected_select_preview_cache_key(&self) -> Option<String> {
+        match self.select_items.get(self.selected_index) {
+            Some(SelectItem::Chart(row)) => {
+                let chart = row.chart.as_ref()?;
+                if !chart.preview_file.is_empty() {
+                    return Some(format!("{}|{}", chart.folder_path, chart.preview_file));
+                }
+                let distributions = self.select_distribution_cache.borrow();
+                let distribution = distributions.get(&chart.chart_id)?;
+                let start_ms = fallback_preview_start_ms(distribution, chart.length_ms)?;
+                Some(generated_preview_cache_key(chart.chart_id, start_ms))
+            }
             _ => None,
-        };
+        }
+    }
+
+    fn sync_select_preview_audio(&mut self) {
+        if self.selected_chart_needs_generated_preview_distribution() {
+            self.ensure_visible_select_chart_distributions(25);
+        }
+        let selected_cache_key = self.selected_select_preview_cache_key();
         let cache_key = select_preview_key_after_delay(
             selected_cache_key,
             self.select_bar_started_at.elapsed(),
@@ -3131,9 +3160,55 @@ impl WinitApp {
         manager.set_volume(crate::system_sound::SoundType::Select, volume);
     }
 
+    fn insert_select_preview_cache(&mut self, key: String, entry: SelectPreviewCacheEntry) {
+        self.select_preview_cache.insert(key, entry);
+        while self.select_preview_cache.len() > SELECT_PREVIEW_CACHE_LIMIT {
+            let current = self.select_preview_source.as_deref();
+            let removable_key = self
+                .select_preview_cache
+                .iter()
+                .find(|(candidate, entry)| {
+                    Some(candidate.as_str()) != current
+                        && !matches!(entry, SelectPreviewCacheEntry::Loading)
+                })
+                .map(|(candidate, _)| candidate.clone());
+            let Some(removable_key) = removable_key else {
+                break;
+            };
+            self.select_preview_cache.remove(&removable_key);
+        }
+    }
+
     fn spawn_select_preview_load(&mut self, key: String) {
-        self.select_preview_cache.insert(key.clone(), SelectPreviewCacheEntry::Loading);
+        self.insert_select_preview_cache(key.clone(), SelectPreviewCacheEntry::Loading);
         let tx = self.select_preview_tx.clone();
+        if let Some(generated) = parse_generated_preview_cache_key(&key) {
+            let library_db_path = self.boot.app_paths.library_db.clone();
+            let sample_rate = self
+                .select_preview
+                .as_ref()
+                .map(SelectChartPreview::output_sample_rate)
+                .unwrap_or(48_000);
+            let result_key = key.clone();
+            if let Err(error) = thread::Builder::new()
+                .name(format!("select-preview-{}", generated.chart_id))
+                .spawn(move || {
+                    let result = render_generated_preview_for_chart(
+                        &library_db_path,
+                        generated.chart_id,
+                        generated.start_ms,
+                        sample_rate,
+                    )
+                    .map_err(|error| format!("{error:#}"));
+                    let _ = tx.send(SelectPreviewResult { key: result_key, path: None, result });
+                })
+            {
+                tracing::warn!(%error, "failed to spawn generated chart preview loader");
+                self.insert_select_preview_cache(key, SelectPreviewCacheEntry::Missing);
+            }
+            return;
+        }
+
         thread::spawn(move || {
             let (folder, file) = key.split_once('|').unwrap_or(("", ""));
             let path = crate::chart_asset::resolve_preview_file(Path::new(folder), file);
