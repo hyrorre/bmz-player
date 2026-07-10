@@ -16,6 +16,7 @@ use crate::config::play::{
     bottom_shiftable_gauge_from_config, gauge_auto_shift_from_config, gauge_type_from_config,
 };
 use crate::config::profile_config::{GaugeAutoShiftConfig, GaugeTypeConfig, ProfileConfig};
+use crate::input::gilrs::GamepadSlotMap;
 use crate::input::shared::SharedInputBackend;
 use crate::screens::play_session::{
     PlaySessionOptions, PreloadedPlaySession, PreparedPlaySession,
@@ -124,6 +125,7 @@ pub fn play_session_options_from_start(
         ln_policy_setting: Default::default(),
         rule_mode: Default::default(),
         gauge_property: start_options.course_gauge_property_override,
+        gamepad_slots: GamepadSlotMap::from_slot_ids(app_config.input.gamepad_slot_gilrs_ids),
     }
 }
 

@@ -14,6 +14,43 @@ const ANALOG_SCRATCH_THRESHOLD_MIN: u32 = 1;
 const ANALOG_SCRATCH_THRESHOLD_MAX: u32 = 1_000;
 const ANALOG_SCRATCH_CALLS_PER_AXIS_POLL: u32 = 2;
 
+/// 接続中ゲームパッドの表示用スナップショット。
+#[derive(Debug, Clone)]
+pub struct ConnectedGamepad {
+    /// gilrs の `GamepadId` (0-based)。
+    pub gilrs_id: u32,
+    pub device_id: DeviceId,
+    pub name: String,
+    pub is_connected: bool,
+}
+
+/// 論理スロット `gamepad1` / `gamepad2` → 物理 gilrs id の対応。
+///
+/// `slot_gilrs_ids[0]` が 1P、`[1]` が 2P。`None` は接続順フォールバック
+/// (`gamepadN` → gilrs id `N-1`) を使う。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct GamepadSlotMap {
+    pub slot_gilrs_ids: [Option<u32>; 2],
+}
+
+impl GamepadSlotMap {
+    pub fn from_slot_ids(slot_gilrs_ids: [Option<u32>; 2]) -> Self {
+        Self { slot_gilrs_ids }
+    }
+
+    /// プレイヤー番号 (1 or 2) に対応する `DeviceId` を返す。
+    pub fn device_id_for_player(self, player_index: u32) -> Option<DeviceId> {
+        let slot = player_index.checked_sub(1)? as usize;
+        if slot >= 2 {
+            return None;
+        }
+        match self.slot_gilrs_ids[slot] {
+            Some(gilrs_id) => Some(DeviceId(GILRS_DEVICE_ID_BASE.saturating_add(gilrs_id))),
+            None => gilrs_gamepad_device_id_from_player_index(player_index),
+        }
+    }
+}
+
 pub struct GilrsButtonEvent {
     pub name: String,
     pub device_id: DeviceId,
@@ -134,6 +171,19 @@ impl GilrsBackend {
         }
         self.check_scratch_timeouts(Instant::now(), &mut output.buttons);
         output
+    }
+
+    /// 接続中 (および gilrs が認識している) ゲームパッド一覧。
+    pub fn connected_gamepads(&self) -> Vec<ConnectedGamepad> {
+        self.gilrs
+            .gamepads()
+            .map(|(id, pad)| ConnectedGamepad {
+                gilrs_id: usize::from(id) as u32,
+                device_id: gilrs_gamepad_device_id(id),
+                name: pad.name().to_string(),
+                is_connected: pad.is_connected(),
+            })
+            .collect()
     }
 
     fn process_axis(

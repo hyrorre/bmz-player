@@ -284,6 +284,8 @@ pub struct EguiRunContext<'a, 'practice> {
     pub app_paths: &'a AppPaths,
     pub update_dialog: Option<UpdateDialog<'a>>,
     pub obs_connection_status: &'a crate::obs::ObsConnectionStatus,
+    /// 接続中ゲームパッド一覧 (gilrs)。未初期化時は空。
+    pub connected_gamepads: &'a [crate::input::gilrs::ConnectedGamepad],
 }
 
 /// `EguiLayer::run` の 1 フレーム出力。
@@ -760,6 +762,7 @@ impl EguiLayer {
             app_paths,
             update_dialog,
             obs_connection_status,
+            connected_gamepads,
         } = context;
         let raw_input = self.state.take_egui_input(window);
         let ctx = self.ctx.clone();
@@ -858,6 +861,7 @@ impl EguiLayer {
                         audio_device_picker: &mut self.audio_device_picker,
                         obs_scene_picker: &mut self.obs_scene_picker,
                         obs_connection_status,
+                        connected_gamepads,
                     },
                 );
                 save_app_config |= settings_actions.save;
@@ -1741,6 +1745,7 @@ struct SettingsPanelState<'a> {
     audio_device_picker: &'a mut AudioDevicePickerState,
     obs_scene_picker: &'a mut ObsScenePickerState,
     obs_connection_status: &'a crate::obs::ObsConnectionStatus,
+    connected_gamepads: &'a [crate::input::gilrs::ConnectedGamepad],
 }
 
 #[derive(Default)]
@@ -2666,6 +2671,73 @@ fn build_settings_panel(
                     ui.checkbox(&mut config.input.midi_enabled, "MIDI (未実装)");
                     ui.label(
                         "入力バックエンド設定は次回起動時に反映されます。HID / MIDI は未実装です。",
+                    );
+                    ui.separator();
+                    ui.label("10K / 14K 用コントローラ割り当て");
+                    ui.label(format!(
+                        "接続中: {} 台",
+                        state.connected_gamepads.iter().filter(|pad| pad.is_connected).count()
+                    ));
+                    if state.connected_gamepads.is_empty() {
+                        ui.label("ゲームパッドが検出されていません。");
+                    } else {
+                        for pad in state.connected_gamepads {
+                            let status = if pad.is_connected { "接続中" } else { "切断" };
+                            ui.label(format!(
+                                "#{} {} ({})",
+                                pad.gilrs_id, pad.name, status
+                            ));
+                        }
+                    }
+                    for (slot_index, label) in [(0usize, "1P コントローラ"), (1usize, "2P コントローラ")]
+                    {
+                        let current = config.input.gamepad_slot_gilrs_ids[slot_index];
+                        let selected_text = match current {
+                            None => "自動 (接続順)".to_string(),
+                            Some(id) => state
+                                .connected_gamepads
+                                .iter()
+                                .find(|pad| pad.gilrs_id == id)
+                                .map(|pad| format!("#{} {}", pad.gilrs_id, pad.name))
+                                .unwrap_or_else(|| format!("#{id} (未接続)")),
+                        };
+                        egui::ComboBox::from_label(label)
+                            .selected_text(selected_text)
+                            .show_ui(ui, |ui| {
+                                ui.selectable_value(
+                                    &mut config.input.gamepad_slot_gilrs_ids[slot_index],
+                                    None,
+                                    "自動 (接続順)",
+                                );
+                                for pad in state.connected_gamepads {
+                                    ui.selectable_value(
+                                        &mut config.input.gamepad_slot_gilrs_ids[slot_index],
+                                        Some(pad.gilrs_id),
+                                        format!("#{} {}", pad.gilrs_id, pad.name),
+                                    );
+                                }
+                            });
+                    }
+                    ui.horizontal(|ui| {
+                        if ui.button("接続順で自動割り当て").clicked() {
+                            let connected: Vec<u32> = state
+                                .connected_gamepads
+                                .iter()
+                                .filter(|pad| pad.is_connected)
+                                .map(|pad| pad.gilrs_id)
+                                .collect();
+                            config.input.gamepad_slot_gilrs_ids[0] = connected.first().copied();
+                            config.input.gamepad_slot_gilrs_ids[1] = connected.get(1).copied();
+                        }
+                        if ui.button("1P / 2P を入れ替え").clicked() {
+                            config.input.gamepad_slot_gilrs_ids.swap(0, 1);
+                        }
+                        if ui.button("割り当て解除").clicked() {
+                            config.input.gamepad_slot_gilrs_ids = [None, None];
+                        }
+                    });
+                    ui.label(
+                        "未割当は接続順フォールバック (1台目=1P, 2台目=2P)。変更は次回プレイ開始から反映されます。",
                     );
                 });
 

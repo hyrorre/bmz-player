@@ -13,7 +13,7 @@ use super::play::lane_from_config;
 use super::profile_config::{
     BindingConfigEntry, LaneConfig, PlayModeInputConfig, ProfileInputConfig, ScratchDirectionConfig,
 };
-use crate::input::gilrs::gilrs_gamepad_device_id_from_player_index;
+use crate::input::gilrs::GamepadSlotMap;
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum InheritError {
@@ -109,6 +109,14 @@ pub fn lane_binding_for_key_mode(
     input: &ProfileInputConfig,
     key_mode: KeyMode,
 ) -> Result<LaneBinding, InheritError> {
+    lane_binding_for_key_mode_with_slots(input, key_mode, GamepadSlotMap::default())
+}
+
+pub fn lane_binding_for_key_mode_with_slots(
+    input: &ProfileInputConfig,
+    key_mode: KeyMode,
+    slots: GamepadSlotMap,
+) -> Result<LaneBinding, InheritError> {
     let bindings = resolve_play_bindings(input, key_mode)?;
     Ok(LaneBinding {
         entries: bindings
@@ -116,7 +124,7 @@ pub fn lane_binding_for_key_mode(
             .filter_map(|entry| {
                 let lane = entry.lane?;
                 Some(BindingEntry {
-                    device: binding_device_from_config(&entry.device),
+                    device: binding_device_from_config(&entry.device, slots),
                     control: control_from_config(&entry.device, &entry.control),
                     lane: lane_from_config(lane),
                     scratch_direction: scratch_direction_from_binding(lane, &entry),
@@ -314,11 +322,11 @@ pub fn is_gamepad_device(device: &str) -> bool {
     gamepad_player_index(device).is_some() || device.trim().eq_ignore_ascii_case("gamepad")
 }
 
-fn binding_device_from_config(device: &str) -> Option<DeviceId> {
-    gamepad_player_index(device).and_then(gilrs_gamepad_device_id_from_player_index)
+fn binding_device_from_config(device: &str, slots: GamepadSlotMap) -> Option<DeviceId> {
+    gamepad_player_index(device).and_then(|index| slots.device_id_for_player(index))
 }
 
-fn gamepad_player_index(device: &str) -> Option<u32> {
+pub fn gamepad_player_index(device: &str) -> Option<u32> {
     let lower = device.trim().to_ascii_lowercase();
     let suffix = lower.strip_prefix("gamepad")?;
     if suffix.is_empty() {
@@ -828,6 +836,34 @@ mod tests {
         assert_eq!(
             binding.resolve(DeviceId(18), &PhysicalControl::GamepadButton("Button1".into())),
             None
+        );
+    }
+
+    #[test]
+    fn gamepad_slot_map_remaps_logical_players_to_assigned_gilrs_ids() {
+        let mut input = sample_7k_input();
+        input.play.insert(
+            "14k".to_string(),
+            PlayModeInputConfig {
+                inherit: None,
+                bindings: vec![
+                    gamepad_play_binding_for_device("gamepad1", "Button1", LaneConfig::Key1),
+                    gamepad_play_binding_for_device("gamepad2", "Button1", LaneConfig::Key8),
+                ],
+            },
+        );
+
+        // Swap: logical 1P → gilrs id 1 (DeviceId 17), logical 2P → gilrs id 0 (DeviceId 16)
+        let slots = GamepadSlotMap::from_slot_ids([Some(1), Some(0)]);
+        let binding = lane_binding_for_key_mode_with_slots(&input, KeyMode::K14, slots).unwrap();
+
+        assert_eq!(
+            binding.resolve(DeviceId(17), &PhysicalControl::GamepadButton("Button1".into())),
+            Some(Lane::Key1)
+        );
+        assert_eq!(
+            binding.resolve(DeviceId(16), &PhysicalControl::GamepadButton("Button1".into())),
+            Some(Lane::Key8)
         );
     }
 

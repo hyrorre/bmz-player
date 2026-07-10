@@ -3683,7 +3683,7 @@ impl WinitApp {
         let Some(session) = self.key_config_edit.as_ref() else {
             return;
         };
-        if !session.listening || session.target.slot() != KeyBindingSlot::Controller {
+        if !session.listening || !session.target.slot().is_controller() {
             return;
         }
         let target = session.target;
@@ -4551,9 +4551,9 @@ impl WinitApp {
     }
 
     fn should_log_gamepad_key_config_raw_input(&self) -> bool {
-        self.key_config_edit.as_ref().is_some_and(|session| {
-            session.listening && session.target.slot() == KeyBindingSlot::Controller
-        })
+        self.key_config_edit
+            .as_ref()
+            .is_some_and(|session| session.listening && session.target.slot().is_controller())
     }
 
     fn route_gamepad_axis_ticks(&mut self, axis: &str, ticks: i32) {
@@ -11033,6 +11033,8 @@ impl WinitApp {
             .as_ref()
             .map(crate::obs::ObsController::status)
             .unwrap_or_else(crate::obs::ObsConnectionStatus::disabled);
+        let connected_gamepads =
+            self.gilrs.as_ref().map(|gilrs| gilrs.connected_gamepads()).unwrap_or_default();
         let Some(egui) = self.egui.as_mut() else {
             return;
         };
@@ -11052,6 +11054,7 @@ impl WinitApp {
                 app_paths: &self.boot.app_paths,
                 update_dialog,
                 obs_connection_status: &obs_connection_status,
+                connected_gamepads: &connected_gamepads,
             },
         );
         self.renderer.set_egui_frame(output.frame);
