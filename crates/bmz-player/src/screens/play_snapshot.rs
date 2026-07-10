@@ -350,7 +350,7 @@ pub fn build_render_snapshot_with_target_and_bga_frames_cached(
         combo: session.display_combo(),
         max_combo: session.display_max_combo(),
         ex_score: session.score.ex_score(),
-        total_notes: session.chart.total_notes,
+        total_notes: session.scored_total_notes,
         past_notes: session.score.past_notes,
         judge_counts: display_judge_counts(session),
         fast_slow_counts: display_fast_slow_counts(session),

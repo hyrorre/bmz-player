@@ -393,6 +393,15 @@ fn build_local_score_submission(
     analysis: Option<&ChartAnalysis>,
     replay_hash: Option<String>,
 ) -> IrScoreSubmission {
+    let double_multiplier = match row.double_option {
+        DoubleOptionScoreBucket::Off => 1,
+        DoubleOptionScoreBucket::Battle | DoubleOptionScoreBucket::BattleAutoScratch => 2,
+    };
+    let expected_total_notes =
+        chart.scored_total_notes(row.ln_policy).saturating_mul(double_multiplier);
+    // Preserve a larger historical count for forward compatibility, while
+    // repairing legacy BMZ CN/HCN rows that stored the base library count.
+    let scored_total_notes = row.total_notes.max(expected_total_notes);
     let mut play_options = BTreeMap::new();
     let arrange_1p = arrange_option_ir(row.arrange);
     play_options
@@ -423,7 +432,7 @@ fn build_local_score_submission(
             version: env!("CARGO_PKG_VERSION").to_string(),
             platform: std::env::consts::OS.to_string(),
         },
-        chart: chart_payload_from_library(chart, analysis, row.total_notes),
+        chart: chart_payload_from_library(chart, analysis, scored_total_notes),
         rule: IrRulePayload {
             play_mode: play_mode_payload(&chart.mode),
             key_mode: chart.mode.clone(),
@@ -461,7 +470,7 @@ fn build_local_score_submission(
             },
             ex_score: row.ex_score,
             max_combo: row.max_combo,
-            notes: row.total_notes,
+            notes: scored_total_notes,
             pass_notes: None,
             min_bp: row.bp,
             min_cb: row.cb,
@@ -489,9 +498,7 @@ fn chart_payload_from_library(
         .unwrap_or_else(|| u32::from(chart.has_mines));
     let (ln, cn, hcn) = split_long_note_counts(chart.ln_profile, long_notes);
     let metadata_total = if chart.bms_total > 0.0 { Some(chart.bms_total) } else { None };
-    let gauge_total = analysis.map(|analysis| analysis.total_gauge).unwrap_or_else(|| {
-        gauge_total_for_chart(metadata_total, score_total_notes.max(chart.total_notes))
-    });
+    let gauge_total = gauge_total_for_chart(metadata_total, score_total_notes);
 
     IrChartPayload {
         sha256: hash_to_hex(&chart.sha256),
@@ -513,13 +520,7 @@ fn chart_payload_from_library(
         total: Some(gauge_total),
         judge: chart.judge_rank,
         bpm: Some(IrChartBpm { min: Some(chart.min_bpm), max: Some(chart.max_bpm) }),
-        notes: IrChartNotes {
-            total: score_total_notes.max(chart.total_notes),
-            ln,
-            cn,
-            hcn,
-            mine: mine_notes,
-        },
+        notes: IrChartNotes { total: score_total_notes, ln, cn, hcn, mine: mine_notes },
         features: IrChartFeatures {
             random: false,
             stop: false,
@@ -664,6 +665,10 @@ mod tests {
                 has_defined_cn: true,
                 has_defined_hcn: false,
             },
+            ln_counts: crate::ln_policy::ChartLnCounts {
+                defined_cn_pairs: 50,
+                ..Default::default()
+            },
         }
     }
 
@@ -725,7 +730,8 @@ mod tests {
 
         assert_eq!(payload.chart.sha256, hash_to_hex(&[2; 32]));
         assert_eq!(payload.chart.level, Some(12));
-        assert_eq!(payload.chart.notes.total, 1000);
+        assert_eq!(payload.chart.notes.total, 2100);
+        assert_eq!(payload.result.notes, 2100);
         assert_eq!(payload.chart.notes.ln, 0);
         assert_eq!(payload.chart.notes.cn, 50);
         assert_eq!(payload.chart.notes.mine, 3);

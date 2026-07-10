@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 
 use anyhow::Result;
-use bmz_core::course::CourseKind;
+use bmz_core::course::{CourseKind, CourseLnConstraint};
 use bmz_gameplay::rule::RuleMode;
 use bmz_render::scene::SelectRowKind;
 
@@ -638,13 +638,16 @@ pub fn course_root_item() -> SelectItem {
 pub fn load_select_items_for_courses(
     library_db: &LibraryDatabase,
     score_db: &ScoreDatabase,
+    ln_policy_setting: LnPolicySetting,
     rule_mode: RuleMode,
 ) -> Result<Vec<SelectItem>> {
     let courses = library_db.list_courses()?;
     Ok(courses
         .into_iter()
         .filter(|stored| !stored.source.starts_with("table:"))
-        .map(|stored| build_select_course_row(library_db, score_db, rule_mode, stored))
+        .map(|stored| {
+            build_select_course_row(library_db, score_db, ln_policy_setting, rule_mode, stored)
+        })
         .collect())
 }
 
@@ -652,6 +655,7 @@ pub fn load_select_items_for_courses(
 fn build_select_course_row(
     library_db: &LibraryDatabase,
     score_db: &ScoreDatabase,
+    ln_policy_setting: LnPolicySetting,
     rule_mode: RuleMode,
     stored: crate::storage::library_db::StoredCourse,
 ) -> SelectItem {
@@ -673,7 +677,11 @@ fn build_select_course_row(
                 artist: chart.artist.clone(),
                 play_level: chart.play_level.clone(),
                 difficulty_name: chart.difficulty_name.clone(),
-                total_notes: chart.total_notes,
+                total_notes: course_chart_total_notes(
+                    chart,
+                    ln_policy_setting,
+                    stored.definition.constraints.ln,
+                ),
                 resolved: true,
             },
             None => CourseEntryPreview {
@@ -687,7 +695,9 @@ fn build_select_course_row(
         })
         .collect();
 
-    let total_notes: u32 = charts.iter().map(|c| c.total_notes).sum();
+    // Sum entries rather than the de-duplicated SQL result so a course that
+    // intentionally contains the same chart more than once counts every stage.
+    let total_notes: u32 = entry_previews.iter().map(|entry| entry.total_notes).sum();
     let total_length_ms: i64 = charts.iter().map(|c| c.length_ms).sum();
     let min_bpm = charts.iter().map(|c| c.min_bpm as f32).fold(f32::INFINITY, f32::min);
     let max_bpm = charts.iter().map(|c| c.max_bpm as f32).fold(f32::NEG_INFINITY, f32::max);
@@ -769,12 +779,27 @@ fn build_select_course_row(
     })
 }
 
+fn course_chart_total_notes(
+    chart: &ChartListItem,
+    setting: LnPolicySetting,
+    constraint: CourseLnConstraint,
+) -> u32 {
+    let policy = match constraint {
+        CourseLnConstraint::Default => return chart.scored_total_notes_for_setting(setting),
+        CourseLnConstraint::Ln => LnScorePolicy::ForceLn,
+        CourseLnConstraint::Cn => LnScorePolicy::ForceCn,
+        CourseLnConstraint::Hcn => LnScorePolicy::ForceHcn,
+    };
+    chart.scored_total_notes(policy)
+}
+
 /// Returns one folder item per level of the difficulty table, ordered by the
 /// table's `level_order`, followed by any courses imported from that table.
 pub fn table_level_folder_items(
     library_db: &LibraryDatabase,
     score_db: &ScoreDatabase,
     source_url: &str,
+    ln_policy_setting: LnPolicySetting,
     rule_mode: RuleMode,
 ) -> Result<Vec<SelectItem>> {
     let Some(table) =
@@ -799,7 +824,13 @@ pub fn table_level_folder_items(
     if let Ok(courses) = library_db.list_courses_by_source(&table_source) {
         tracing::info!(source = %table_source, count = courses.len(), "courses found for table");
         for stored in courses {
-            items.push(build_select_course_row(library_db, score_db, rule_mode, stored));
+            items.push(build_select_course_row(
+                library_db,
+                score_db,
+                ln_policy_setting,
+                rule_mode,
+                stored,
+            ));
         }
     }
 
@@ -2561,6 +2592,7 @@ mod tests {
                 judge_rank: None,
                 bms_total: 0.0,
                 ln_profile: Default::default(),
+                ln_counts: Default::default(),
             }),
             chart_analysis: None,
             fallback_title: String::new(),
@@ -2621,6 +2653,7 @@ mod tests {
             &library_db,
             &score_db,
             "https://example.com/insane/",
+            LnPolicySetting::AutoLn,
             RuleMode::Beatoraja,
         )
         .unwrap();

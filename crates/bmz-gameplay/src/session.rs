@@ -103,6 +103,9 @@ pub struct BgmScheduler {
 
 pub struct GameSession {
     pub chart: Arc<PlayableChart>,
+    /// LN policy / course override 適用後の譜面で実際にスコア対象となるノート数。
+    /// Tap と LongStart に加えて、CN / HCN の LongEnd を数える。
+    pub scored_total_notes: u32,
     /// `chart` の BPM 変化と STOP を取り込んだ tick<->time マップ。
     /// スクロール位置を BPM に追従させるために使う。
     pub timing_map: TimingMap,
@@ -966,9 +969,9 @@ pub fn advance_session_frame(
 
 fn update_full_combo_timer(session: &mut GameSession, judgements: &[JudgementEvent]) {
     if session.full_combo_started_at.is_some()
-        || session.chart.total_notes == 0
-        || session.score.past_notes < session.chart.total_notes
-        || session.score.combo < session.chart.total_notes
+        || session.scored_total_notes == 0
+        || session.score.past_notes < session.scored_total_notes
+        || session.score.combo < session.scored_total_notes
     {
         return;
     }
@@ -1006,6 +1009,7 @@ mod tests {
     use crate::judge::model::JudgeWindow;
 
     use super::*;
+    use crate::score::scored_note_count;
 
     #[derive(Default)]
     struct TestAudio {
@@ -1180,6 +1184,51 @@ mod tests {
         advance_session_frame(&mut session, &mut audio);
 
         assert_eq!(session.full_combo_started_at, Some(TimeUs(0)));
+    }
+
+    #[test]
+    fn scored_note_count_uses_effective_long_note_mode() {
+        let mut chart = chart_with_hcn_long_note();
+        assert_eq!(scored_note_count(&chart), 2);
+
+        chart.long_notes[0].mode = Some(LongNoteMode::Cn);
+        assert_eq!(scored_note_count(&chart), 2);
+
+        chart.long_notes[0].mode = Some(LongNoteMode::Ln);
+        assert_eq!(scored_note_count(&chart), 1);
+
+        chart.long_notes[0].mode = None;
+        chart.metadata.long_note_mode = LongNoteMode::Hcn;
+        assert_eq!(scored_note_count(&chart), 2);
+    }
+
+    #[test]
+    fn full_combo_timer_waits_for_cn_end_judgement() {
+        let mut chart = chart_with_hcn_long_note();
+        chart.long_notes[0].mode = Some(LongNoteMode::Cn);
+        let mut session = session_with_autoplay(chart);
+
+        let start_events = apply_judge_outcome(
+            &mut session,
+            JudgeOutcome { events: vec![judgement_event(Judge::PGreat, 0)], ..Default::default() },
+        );
+        update_full_combo_timer(&mut session, &start_events);
+
+        assert_eq!(session.scored_total_notes, 2);
+        assert_eq!(session.score.past_notes, 1);
+        assert_eq!(session.full_combo_started_at, None);
+
+        let mut end_event = judgement_event(Judge::PGreat, 0);
+        end_event.note_id = Some(NoteId(2));
+        end_event.time = TimeUs(1_000_000);
+        let end_events = apply_judge_outcome(
+            &mut session,
+            JudgeOutcome { events: vec![end_event], ..Default::default() },
+        );
+        update_full_combo_timer(&mut session, &end_events);
+
+        assert_eq!(session.score.past_notes, 2);
+        assert_eq!(session.full_combo_started_at, Some(TimeUs(1_000_000)));
     }
 
     #[test]
@@ -2039,6 +2088,7 @@ mod tests {
             TimingMap::from_chart_timing_events(chart.metadata.initial_bpm, &chart.timing_events);
         GameSession {
             chart: Arc::clone(&chart),
+            scored_total_notes: scored_note_count(&chart),
             timing_map,
             audio_clock: AudioClock {
                 sample_rate: 48_000,

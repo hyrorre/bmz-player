@@ -1448,6 +1448,7 @@ fn course_result_summary_for_skin(course: &CourseResultSummary) -> ResultSummary
 fn course_total_notes_for_definition(
     library_db: &LibraryDatabase,
     definition: &bmz_core::course::CourseDefinition,
+    ln_policy_setting: crate::ln_policy::LnPolicySetting,
 ) -> u32 {
     let chart_ids: Vec<i64> =
         definition.entries.iter().filter_map(|entry| entry.chart_id).collect();
@@ -1456,15 +1457,42 @@ fn course_total_notes_for_definition(
     }
     match library_db.list_charts_by_ids(&chart_ids) {
         Ok(charts) => {
-            if charts.len() != chart_ids.len() {
+            let charts_by_id: HashMap<i64, _> =
+                charts.iter().map(|chart| (chart.chart_id, chart)).collect();
+            let resolved_count = definition
+                .entries
+                .iter()
+                .filter(|entry| {
+                    entry.chart_id.is_some_and(|chart_id| charts_by_id.contains_key(&chart_id))
+                })
+                .count();
+            if resolved_count != definition.entries.len() {
                 tracing::warn!(
                     title = %definition.title,
-                    resolved = charts.len(),
-                    total = chart_ids.len(),
+                    resolved = resolved_count,
+                    total = definition.entries.len(),
                     "course total notes resolved fewer charts than the course definition"
                 );
             }
-            charts.iter().map(|chart| chart.total_notes).sum()
+            definition
+                .entries
+                .iter()
+                .filter_map(|entry| entry.chart_id.and_then(|id| charts_by_id.get(&id).copied()))
+                .map(|chart| match definition.constraints.ln {
+                    bmz_core::course::CourseLnConstraint::Default => {
+                        chart.scored_total_notes_for_setting(ln_policy_setting)
+                    }
+                    bmz_core::course::CourseLnConstraint::Ln => {
+                        chart.scored_total_notes(crate::ln_policy::LnScorePolicy::ForceLn)
+                    }
+                    bmz_core::course::CourseLnConstraint::Cn => {
+                        chart.scored_total_notes(crate::ln_policy::LnScorePolicy::ForceCn)
+                    }
+                    bmz_core::course::CourseLnConstraint::Hcn => {
+                        chart.scored_total_notes(crate::ln_policy::LnScorePolicy::ForceHcn)
+                    }
+                })
+                .sum()
         }
         Err(error) => {
             tracing::warn!(
@@ -6203,8 +6231,11 @@ impl WinitApp {
             apply_arrange_override(&mut options, arrange);
         }
         let course_title = definition.title.clone();
-        let course_total_notes =
-            course_total_notes_for_definition(&self.boot.library_db, &definition);
+        let course_total_notes = course_total_notes_for_definition(
+            &self.boot.library_db,
+            &definition,
+            self.boot.profile_config.play.ln_mode_policy,
+        );
         self.active_course = Some(ActiveCourseSession {
             course_id,
             definition,
@@ -6318,8 +6349,11 @@ impl WinitApp {
             apply_queued_replay(&mut options, first);
         }
         let course_title = definition.title.clone();
-        let course_total_notes =
-            course_total_notes_for_definition(&self.boot.library_db, &definition);
+        let course_total_notes = course_total_notes_for_definition(
+            &self.boot.library_db,
+            &definition,
+            self.boot.profile_config.play.ln_mode_policy,
+        );
         self.active_course = Some(ActiveCourseSession {
             course_id,
             definition,
@@ -7009,8 +7043,38 @@ impl WinitApp {
         &mut self,
         chart_id: i64,
         options: PlayStartOptions,
-        snapshot: RenderSnapshot,
+        mut snapshot: RenderSnapshot,
     ) {
+        // Pre-import placeholder only: account for course LN overrides and
+        // Battle here. The running session replaces this with a count derived
+        // from the imported source chart after preload.
+        if let Ok(charts) = self.boot.library_db.list_charts_by_ids(&[chart_id])
+            && let Some(chart) = charts.first()
+        {
+            let policy = match options.ln_mode_override {
+                Some(bmz_chart::model::LongNoteMode::Ln) => {
+                    crate::ln_policy::LnScorePolicy::ForceLn
+                }
+                Some(bmz_chart::model::LongNoteMode::Cn) => {
+                    crate::ln_policy::LnScorePolicy::ForceCn
+                }
+                Some(bmz_chart::model::LongNoteMode::Hcn) => {
+                    crate::ln_policy::LnScorePolicy::ForceHcn
+                }
+                None => crate::ln_policy::score_ln_policy(
+                    self.boot.profile_config.play.ln_mode_policy,
+                    chart.ln_profile,
+                ),
+            };
+            let multiplier = match options
+                .double_option
+                .normalize_for_key_mode(KeyMode::from_str_opt(&chart.mode).unwrap_or_default())
+            {
+                DoubleOption::Battle | DoubleOption::BattleAutoScratch => 2,
+                DoubleOption::Off | DoubleOption::Flip => 1,
+            };
+            snapshot.total_notes = chart.scored_total_notes(policy).saturating_mul(multiplier);
+        }
         self.ensure_skin_ready(SkinKind::Decide);
         // Play スキンは裏で decode+upload を進めるが、Decide 入場では待たない。
         // 実際の Play 入場 (`start_chart_with_options`) で `ensure_skin_ready` が保険として残る。
@@ -7400,7 +7464,8 @@ impl WinitApp {
             snapshot.difficulty_name = chart.difficulty_name.clone();
             snapshot.play_level = chart.play_level.clone();
             snapshot.judge_rank = chart.judge_rank;
-            snapshot.total_notes = chart.total_notes;
+            snapshot.total_notes =
+                chart.scored_total_notes_for_setting(self.boot.profile_config.play.ln_mode_policy);
             snapshot.duration = TimeUs(chart.length_ms.saturating_mul(1_000));
             snapshot.min_bpm = chart.min_bpm as f32;
             snapshot.max_bpm = chart.max_bpm as f32;
@@ -7976,7 +8041,19 @@ impl WinitApp {
         let (local_best_ex_score, total_notes) = match selected {
             Some(SelectItem::Chart(row)) => (
                 row.best_score.as_ref().map(|best| best.ex_score),
-                row.chart.as_ref().map(|chart| chart.total_notes),
+                row.chart.as_ref().map(|chart| {
+                    let multiplier = match self.double_option.normalize_for_key_mode(
+                        KeyMode::from_str_opt(&chart.mode).unwrap_or_default(),
+                    ) {
+                        DoubleOption::Battle | DoubleOption::BattleAutoScratch => 2,
+                        DoubleOption::Off | DoubleOption::Flip => 1,
+                    };
+                    chart
+                        .scored_total_notes_for_setting(
+                            self.boot.profile_config.play.ln_mode_policy,
+                        )
+                        .saturating_mul(multiplier)
+                }),
             ),
             _ => (None, None),
         };
@@ -14375,6 +14452,7 @@ fn build_select_items_for_stack(
             match load_select_items_for_courses(
                 &boot.library_db,
                 &boot.score_db,
+                boot.profile_config.play.ln_mode_policy,
                 boot.profile_config.play.rule_mode,
             ) {
                 Ok(items) => items,
@@ -14502,6 +14580,7 @@ fn build_select_items_for_stack(
                     &boot.library_db,
                     &boot.score_db,
                     source_url,
+                    boot.profile_config.play.ln_mode_policy,
                     boot.profile_config.play.rule_mode,
                 ) {
                     Ok(items) => items,
@@ -15502,6 +15581,13 @@ fn select_snapshot_rows(
                         row.best_score.as_ref().map(|score| score.play_count).unwrap_or(0);
                     let clear_count =
                         row.best_score.as_ref().map(|score| score.clear_count).unwrap_or(0);
+                    let scored_total_notes = row
+                        .chart
+                        .as_ref()
+                        .map(|chart| {
+                            chart.scored_total_notes_for_setting(profile.play.ln_mode_policy)
+                        })
+                        .unwrap_or(0);
                     SelectRowSnapshot {
                         index: index as u32,
                         title: row.display_title().to_string(),
@@ -15526,7 +15612,7 @@ fn select_snapshot_rows(
                         table_text_secondary: row.table_text.table_level.clone(),
                         table_text_fallback: row.table_text.table_full.clone(),
                         judge_rank: row.chart.as_ref().and_then(|chart| chart.judge_rank),
-                        total_notes: row.chart.as_ref().map(|chart| chart.total_notes).unwrap_or(0),
+                        total_notes: scored_total_notes,
                         initial_bpm: row
                             .chart
                             .as_ref()
@@ -15613,7 +15699,12 @@ fn select_snapshot_rows(
                         chart_total_gauge: row
                             .chart
                             .as_ref()
-                            .map(|chart| chart.bms_total as f32)
+                            .map(|chart| {
+                                bmz_gameplay::gauge::gauge_total_for_chart(
+                                    (chart.bms_total > 0.0).then_some(chart.bms_total),
+                                    scored_total_notes,
+                                ) as f32
+                            })
                             .unwrap_or(0.0),
                         chart_main_bpm: row
                             .chart_analysis
@@ -21461,6 +21552,28 @@ mod tests {
     }
 
     #[test]
+    fn select_snapshot_rows_uses_policy_scored_note_count() {
+        let mut row = select_chart_row(0);
+        let chart = row.chart.as_mut().unwrap();
+        chart.total_notes = 100;
+        chart.bms_total = 0.0;
+        chart.ln_profile =
+            crate::ln_policy::ChartLnProfile { has_defined_cn: true, ..Default::default() };
+        chart.ln_counts =
+            crate::ln_policy::ChartLnCounts { defined_cn_pairs: 2, ..Default::default() };
+        let rows = vec![SelectItem::Chart(row)];
+        let profile = ProfileConfig::new_default("default", "Default", 0);
+
+        let snapshot = select_snapshot_rows(&rows, 0, 1, &profile, None, &HashMap::new());
+
+        assert_eq!(snapshot[0].total_notes, 102);
+        assert_eq!(
+            snapshot[0].chart_total_gauge,
+            bmz_gameplay::gauge::default_gauge_total(102) as f32
+        );
+    }
+
+    #[test]
     fn select_snapshot_rows_copies_course_best_score_summary() {
         let mut row = select_course_row(2, 2);
         row.best_score = Some(crate::storage::score_db::CourseBestScore {
@@ -21880,6 +21993,7 @@ mod tests {
                 judge_rank: Some(1),
                 bms_total: 200.0,
                 ln_profile: Default::default(),
+                ln_counts: Default::default(),
             }),
             chart_analysis: Some(crate::storage::library_db::ChartAnalysisSummary {
                 normal_notes: 40 + index as u32,

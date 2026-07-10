@@ -9,7 +9,7 @@ use bmz_gameplay::gauge::gauge_total_for_chart;
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 
-use crate::ln_policy::ChartLnProfile;
+use crate::ln_policy::{ChartLnCounts, ChartLnProfile, LnPolicySetting, LnScorePolicy};
 
 pub use super::course_db::{StoredCourse, StoredCourseEntry};
 pub use super::difficulty_table_db::{
@@ -18,7 +18,7 @@ pub use super::difficulty_table_db::{
 
 use super::common::{configure_connection, hash_to_hex, hex_to_hash};
 
-pub const CHART_IMPORT_VERSION: i64 = 5;
+pub const CHART_IMPORT_VERSION: i64 = 6;
 pub const CHART_LOUDNESS_ANALYSIS_VERSION: i64 = 1;
 const MAX_ANALYSIS_DISTRIBUTION_SECONDS: usize = 10 * 60;
 
@@ -65,6 +65,17 @@ pub struct ChartListItem {
     /// Raw BMS `#TOTAL` (`model.getTotal()`). Unset charts store `0.0`.
     pub bms_total: f64,
     pub ln_profile: ChartLnProfile,
+    pub ln_counts: ChartLnCounts,
+}
+
+impl ChartListItem {
+    pub const fn scored_total_notes(&self, policy: LnScorePolicy) -> u32 {
+        self.ln_counts.scored_total_notes(self.total_notes, policy)
+    }
+
+    pub fn scored_total_notes_for_setting(&self, setting: LnPolicySetting) -> u32 {
+        self.ln_counts.scored_total_notes_for_setting(self.total_notes, setting)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -975,7 +986,7 @@ impl LibraryDatabase {
         let mut stmt = self.conn.prepare(&sql)?;
         let rows = stmt.query_map(params![source_url], |row| {
             let chart = chart_list_item_from_row(row)?;
-            let level: String = row.get(29)?;
+            let level: String = row.get(33)?;
             Ok((chart, level))
         })?;
         rows.collect::<std::result::Result<Vec<_>, _>>().map_err(Into::into)
@@ -990,7 +1001,8 @@ const CHART_LIST_ITEM_LOOKUP_SQL: &str = "
            stage_file, banner_file, backbmp_file, preview_file,
            has_long_notes, has_mines, judge_rank,
            has_undefined_ln, has_defined_ln, has_defined_cn, has_defined_hcn,
-           subartist, genre, COALESCE(bms_total, 0)
+           subartist, genre, COALESCE(bms_total, 0),
+           undefined_ln_pairs, defined_ln_pairs, defined_cn_pairs, defined_hcn_pairs
     FROM charts
     WHERE {column} = ?1
     ORDER BY id DESC
@@ -1049,7 +1061,11 @@ const CHART_LIST_ITEM_COLUMNS: &str = "
     has_defined_hcn,
     subartist,
     genre,
-    COALESCE(bms_total, 0)";
+    COALESCE(bms_total, 0),
+    undefined_ln_pairs,
+    defined_ln_pairs,
+    defined_cn_pairs,
+    defined_hcn_pairs";
 
 const CHART_LIST_ITEM_COLUMNS_C: &str = "
     c.id,
@@ -1080,7 +1096,11 @@ const CHART_LIST_ITEM_COLUMNS_C: &str = "
     c.has_defined_hcn,
     c.subartist,
     c.genre,
-    COALESCE(c.bms_total, 0)";
+    COALESCE(c.bms_total, 0),
+    c.undefined_ln_pairs,
+    c.defined_ln_pairs,
+    c.defined_cn_pairs,
+    c.defined_hcn_pairs";
 
 fn chart_list_item_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ChartListItem> {
     let md5_hex: String = row.get(1)?;
@@ -1120,6 +1140,12 @@ fn chart_list_item_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ChartLi
         subartist: row.get(26)?,
         genre: row.get(27)?,
         bms_total: row.get(28)?,
+        ln_counts: ChartLnCounts {
+            undefined_ln_pairs: row.get(29)?,
+            defined_ln_pairs: row.get(30)?,
+            defined_cn_pairs: row.get(31)?,
+            defined_hcn_pairs: row.get(32)?,
+        },
     })
 }
 
@@ -1175,11 +1201,12 @@ fn insert_chart(conn: &Connection, record: &ChartImportRecord<'_>) -> Result<i64
             has_mines, folder_path, stage_file, preview_file,
             banner_file, backbmp_file, judge_rank, gauge_total, bms_total,
             has_undefined_ln, has_defined_ln, has_defined_cn, has_defined_hcn,
+            undefined_ln_pairs, defined_ln_pairs, defined_cn_pairs, defined_hcn_pairs,
             has_bms_random, source_url, append_url, headers_json, import_version
         ) VALUES (
             ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14,
             ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27,
-            ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35, ?36
+            ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35, ?36, ?37, ?38, ?39, ?40
         )",
     )?
     .execute(params![
@@ -1208,12 +1235,19 @@ fn insert_chart(conn: &Connection, record: &ChartImportRecord<'_>) -> Result<i64
         chart.metadata.banner_file.as_str(),
         chart.metadata.backbmp_file.as_str(),
         chart.metadata.judge_rank,
-        gauge_total_for_chart(chart.metadata.total, chart.total_notes),
+        gauge_total_for_chart(
+            chart.metadata.total,
+            stats.ln_counts.canonical_total_notes(chart.total_notes),
+        ),
         chart_bms_total(chart.metadata.total),
         stats.ln_profile.has_undefined_ln,
         stats.ln_profile.has_defined_ln,
         stats.ln_profile.has_defined_cn,
         stats.ln_profile.has_defined_hcn,
+        stats.ln_counts.undefined_ln_pairs,
+        stats.ln_counts.defined_ln_pairs,
+        stats.ln_counts.defined_cn_pairs,
+        stats.ln_counts.defined_hcn_pairs,
         chart.metadata.has_bms_random,
         chart.metadata.source_url.as_str(),
         chart.metadata.append_url.as_str(),
@@ -1239,10 +1273,12 @@ fn update_chart(conn: &Connection, chart_id: i64, record: &ChartImportRecord<'_>
             has_mines = ?19, folder_path = ?20, stage_file = ?21, preview_file = ?22,
             banner_file = ?23, backbmp_file = ?24, judge_rank = ?25, gauge_total = ?26,
             bms_total = ?27, has_undefined_ln = ?28, has_defined_ln = ?29,
-            has_defined_cn = ?30, has_defined_hcn = ?31, has_bms_random = ?32,
-            source_url = ?33, append_url = ?34, headers_json = ?35,
-            import_version = ?36
-         WHERE id = ?37",
+            has_defined_cn = ?30, has_defined_hcn = ?31,
+            undefined_ln_pairs = ?32, defined_ln_pairs = ?33,
+            defined_cn_pairs = ?34, defined_hcn_pairs = ?35, has_bms_random = ?36,
+            source_url = ?37, append_url = ?38, headers_json = ?39,
+            import_version = ?40
+         WHERE id = ?41",
     )?
     .execute(params![
         hash_to_hex(&chart.identity.file_sha256),
@@ -1270,12 +1306,19 @@ fn update_chart(conn: &Connection, chart_id: i64, record: &ChartImportRecord<'_>
         chart.metadata.banner_file.as_str(),
         chart.metadata.backbmp_file.as_str(),
         chart.metadata.judge_rank,
-        gauge_total_for_chart(chart.metadata.total, chart.total_notes),
+        gauge_total_for_chart(
+            chart.metadata.total,
+            stats.ln_counts.canonical_total_notes(chart.total_notes),
+        ),
         chart_bms_total(chart.metadata.total),
         stats.ln_profile.has_undefined_ln,
         stats.ln_profile.has_defined_ln,
         stats.ln_profile.has_defined_cn,
         stats.ln_profile.has_defined_hcn,
+        stats.ln_counts.undefined_ln_pairs,
+        stats.ln_counts.defined_ln_pairs,
+        stats.ln_counts.defined_cn_pairs,
+        stats.ln_counts.defined_hcn_pairs,
         chart.metadata.has_bms_random,
         chart.metadata.source_url.as_str(),
         chart.metadata.append_url.as_str(),
@@ -1335,6 +1378,8 @@ fn write_chart_analysis(conn: &Connection, chart_id: i64, chart: &PlayableChart)
 
 impl ChartAnalysis {
     pub fn from_chart(chart: &PlayableChart) -> Self {
+        let canonical_total_notes =
+            ChartLnCounts::from_chart(chart).canonical_total_notes(chart.total_notes);
         let seconds = analysis_distribution_seconds(chart);
         let mut distribution = vec![ChartDistributionSecond::default(); seconds.max(1)];
         let mut lane_notes = Lane::ALL
@@ -1356,8 +1401,8 @@ impl ChartAnalysis {
             .map(|pair| (pair.end_note_id, pair.mode.unwrap_or(chart.metadata.long_note_mode)))
             .collect::<std::collections::HashMap<_, _>>();
         let mut bpm_note_counts: Vec<(f64, u32)> = Vec::new();
-        let mut total_countdown = chart.total_notes as i64
-            - gauge_border_note_count(chart.metadata.total, chart.total_notes);
+        let mut total_countdown = canonical_total_notes as i64
+            - gauge_border_note_count(chart.metadata.total, canonical_total_notes);
         let mut border_sec = 0usize;
 
         for notes in &chart.lane_notes {
@@ -1412,7 +1457,7 @@ impl ChartAnalysis {
 
         let peak_density =
             distribution.iter().map(|second| second.playable_notes()).max().unwrap_or(0) as f64;
-        let threshold = chart.total_notes as usize / distribution.len().max(1) / 4;
+        let threshold = canonical_total_notes as usize / distribution.len().max(1) / 4;
         let mut density_sum = 0u32;
         let mut density_count = 0u32;
         for notes in distribution.iter().map(|second| second.playable_notes()) {
@@ -1473,7 +1518,7 @@ impl ChartAnalysis {
             density,
             peak_density,
             end_density,
-            total_gauge: gauge_total_for_chart(chart.metadata.total, chart.total_notes),
+            total_gauge: gauge_total_for_chart(chart.metadata.total, canonical_total_notes),
             main_bpm,
             distribution,
             speed_changes: chart_speed_changes(chart),
@@ -1741,6 +1786,7 @@ struct ChartStats {
     has_long_notes: bool,
     has_mines: bool,
     ln_profile: ChartLnProfile,
+    ln_counts: ChartLnCounts,
 }
 
 impl ChartStats {
@@ -1759,7 +1805,8 @@ impl ChartStats {
             .iter()
             .flat_map(|notes| notes.iter())
             .any(|note| note.kind == NoteKind::Mine);
-        let ln_profile = ChartLnProfile::from_chart(chart);
+        let ln_counts = ChartLnCounts::from_chart(chart);
+        let ln_profile = ln_counts.profile();
 
         Self {
             min_bpm,
@@ -1778,6 +1825,7 @@ impl ChartStats {
             has_long_notes: !chart.long_notes.is_empty(),
             has_mines,
             ln_profile,
+            ln_counts,
         }
     }
 }
@@ -2082,7 +2130,7 @@ mod tests {
     }
 
     #[test]
-    fn upsert_chart_import_persists_ln_profile_flags() {
+    fn upsert_chart_import_persists_ln_profile_and_pair_counts() {
         let mut conn = Connection::open_in_memory().unwrap();
         configure_connection(&conn).unwrap();
         run_migrations(&mut conn, LIBRARY_MIGRATIONS).unwrap();
@@ -2090,34 +2138,53 @@ mod tests {
         let mut chart = chart("defined cn");
         chart.metadata.long_note_mode = LongNoteMode::Cn;
         chart.metadata.long_note_mode_defined = true;
-        chart.long_notes.push(LongNotePair {
-            lane: Lane::Key1,
-            style: LongNoteStyle::ChannelPair,
-            mode: Some(LongNoteMode::Cn),
-            start_note_id: NoteId(1),
-            end_note_id: NoteId(2),
-            start_tick: ChartTick(0),
-            end_tick: ChartTick(192),
-            start_time: TimeUs(1_000_000),
-            end_time: TimeUs(2_000_000),
-            sound: None,
-        });
-        let record = ChartImportRecord {
-            root_id: None,
-            file_path: Path::new("/songs/defined-cn.bms"),
-            file_size: 123,
-            modified_at: 1_700_000_001,
-            scanned_at: 1_700_000_002,
-            chart: &chart,
-        };
+        for (index, mode) in
+            [None, Some(LongNoteMode::Ln), Some(LongNoteMode::Cn), Some(LongNoteMode::Hcn)]
+                .into_iter()
+                .enumerate()
+        {
+            chart.long_notes.push(LongNotePair {
+                lane: Lane::Key1,
+                style: LongNoteStyle::ChannelPair,
+                mode,
+                start_note_id: NoteId((index * 2 + 1) as u32),
+                end_note_id: NoteId((index * 2 + 2) as u32),
+                start_tick: ChartTick(0),
+                end_tick: ChartTick(192),
+                start_time: TimeUs(1_000_000),
+                end_time: TimeUs(2_000_000),
+                sound: None,
+            });
+        }
 
-        let chart_id = db.upsert_chart_import(&record).unwrap();
+        let chart_id =
+            db.upsert_chart_import(&record_for_chart("/songs/defined-cn.bms", &chart)).unwrap();
         let row = db.list_charts_by_ids(&[chart_id]).unwrap().pop().unwrap();
 
-        assert_eq!(row.ln_profile.has_undefined_ln, false);
-        assert_eq!(row.ln_profile.has_defined_ln, false);
-        assert_eq!(row.ln_profile.has_defined_cn, true);
-        assert_eq!(row.ln_profile.has_defined_hcn, false);
+        assert!(row.ln_profile.has_undefined_ln);
+        assert!(row.ln_profile.has_defined_ln);
+        assert!(row.ln_profile.has_defined_cn);
+        assert!(row.ln_profile.has_defined_hcn);
+        assert_eq!(
+            row.ln_counts,
+            ChartLnCounts {
+                undefined_ln_pairs: 1,
+                defined_ln_pairs: 1,
+                defined_cn_pairs: 1,
+                defined_hcn_pairs: 1,
+            }
+        );
+        assert_eq!(row.scored_total_notes(LnScorePolicy::ForceCn), 4);
+
+        chart.long_notes.truncate(1);
+        let updated_id =
+            db.upsert_chart_import(&record_for_chart("/songs/defined-cn.bms", &chart)).unwrap();
+        assert_eq!(updated_id, chart_id);
+        let updated = db.list_charts_by_ids(&[chart_id]).unwrap().pop().unwrap();
+        assert_eq!(updated.ln_counts.undefined_ln_pairs, 1);
+        assert_eq!(updated.ln_counts.defined_ln_pairs, 0);
+        assert_eq!(updated.ln_counts.defined_cn_pairs, 0);
+        assert_eq!(updated.ln_counts.defined_hcn_pairs, 0);
     }
 
     #[test]
@@ -2253,7 +2320,7 @@ mod tests {
         let mut db = LibraryDatabase { conn };
         let mut chart = chart("mixed analysis");
         chart.metadata.long_note_mode = LongNoteMode::Ln;
-        chart.total_notes = 2;
+        chart.total_notes = 1;
         chart.end_time = TimeUs(2_000_000);
         chart.lane_notes[Lane::Key1.index()].push(note(
             1,
@@ -2287,6 +2354,7 @@ mod tests {
         assert_eq!(analysis.long_notes, 2);
         assert_eq!(analysis.lane_notes[Lane::Key1.index()].long_notes, 2);
         assert_eq!(analysis.distribution[2].key_long_heads, 1);
+        assert_eq!(analysis.total_gauge, gauge_total_for_chart(None, 2));
     }
 
     #[test]

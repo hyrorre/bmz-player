@@ -2,7 +2,7 @@ use bmz_chart::model::PlayableChart;
 use bmz_core::clear::{ClearType, GaugeType};
 
 use crate::gauge::GaugeState;
-use crate::score::{ScoreState, compute_clear_type};
+use crate::score::{ScoreState, compute_clear_type, scored_note_count};
 use crate::session::PlayState;
 
 #[derive(Debug, Clone)]
@@ -24,6 +24,24 @@ impl PlayResult {
         state: PlayState,
         autoplay: bool,
     ) -> Self {
+        Self::from_states_with_total_notes(
+            chart,
+            score,
+            gauge,
+            scored_note_count(chart),
+            state,
+            autoplay,
+        )
+    }
+
+    pub fn from_states_with_total_notes(
+        chart: &PlayableChart,
+        score: &ScoreState,
+        gauge: &GaugeState,
+        scored_total_notes: u32,
+        state: PlayState,
+        autoplay: bool,
+    ) -> Self {
         let failed = state == PlayState::Failed;
         let result_gauge = gauge.result_gauge();
         Self {
@@ -31,7 +49,7 @@ impl PlayResult {
             clear_type: compute_clear_type(failed, score, gauge),
             gauge_type: result_gauge.definition.gauge_type,
             gauge_value: result_gauge.value,
-            total_notes: chart.total_notes,
+            total_notes: scored_total_notes,
             score: score.clone(),
             autoplay,
         }
@@ -57,12 +75,14 @@ impl PlayResult {
 #[cfg(test)]
 mod tests {
     use bmz_chart::hash::compute_chart_identity;
-    use bmz_chart::model::{ChartMetadata, PlayableChart};
+    use bmz_chart::model::{
+        ChartMetadata, LongNoteMode, LongNotePair, LongNoteStyle, PlayableChart,
+    };
     use bmz_core::clear::{ClearType, GaugeType};
     use bmz_core::ids::NoteId;
     use bmz_core::judge::{Judge, TimingSide};
     use bmz_core::lane::Lane;
-    use bmz_core::time::TimeUs;
+    use bmz_core::time::{ChartTick, TimeUs};
 
     use super::*;
     use crate::gauge::{GaugeRuntimeDefinition, SingleGaugeState};
@@ -107,10 +127,35 @@ mod tests {
     }
 
     #[test]
+    fn play_result_counts_cn_end_as_scored_note() {
+        let mut chart = chart();
+        chart.long_notes.push(LongNotePair {
+            lane: Lane::Key1,
+            style: LongNoteStyle::LnObj,
+            mode: Some(LongNoteMode::Cn),
+            start_note_id: NoteId(1),
+            end_note_id: NoteId(2),
+            start_tick: ChartTick(0),
+            end_tick: ChartTick(192),
+            start_time: TimeUs(0),
+            end_time: TimeUs(1_000_000),
+            sound: None,
+        });
+        let score = ScoreState::default();
+        let gauge = gauge(0.0);
+
+        let result = PlayResult::from_states(&chart, &score, &gauge, PlayState::Failed, false);
+
+        assert_eq!(chart.total_notes, 1);
+        assert_eq!(result.total_notes, 2);
+        assert_eq!(result.record_bp(), 2);
+        assert_eq!(result.record_cb(), 2);
+    }
+
+    #[test]
     fn play_result_uses_auto_shift_result_gauge() {
         let chart = chart();
-        let mut score = ScoreState::default();
-        score.past_notes = 1;
+        let score = ScoreState { past_notes: 1, ..Default::default() };
         let mut gauge = GaugeState::new_auto_shift(160.0, 1000);
         gauge
             .gauges

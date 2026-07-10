@@ -195,7 +195,7 @@ pub fn start_running_play_session_for_chart_with_audio_runtime_and_input_backend
     let mut running = open_prepared_play_audio(runtime, prepared, score_key);
     running.best_ex_score = score_db.best_ex_score(score_key).unwrap_or(None);
     running.best_ghost =
-        score_db.best_ghost(score_key, running.session.chart.total_notes).unwrap_or(None);
+        score_db.best_ghost(score_key, running.session.scored_total_notes).unwrap_or(None);
     running.start(chart_zero_time)?;
     Ok(running)
 }
@@ -242,7 +242,7 @@ pub fn open_prepared_winit_play_session(
     let mut running = open_prepared_play_audio(runtime, prepared.prepared, score_key);
     running.best_ex_score = score_db.best_ex_score(score_key).unwrap_or(None);
     running.best_ghost =
-        score_db.best_ghost(score_key, running.session.chart.total_notes).unwrap_or(None);
+        score_db.best_ghost(score_key, running.session.scored_total_notes).unwrap_or(None);
     Ok(StartedInputPlaySession { running, input: prepared.input })
 }
 

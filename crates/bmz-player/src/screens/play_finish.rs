@@ -66,10 +66,11 @@ impl FinishResultMode {
 }
 
 pub fn play_result_from_session(session: &GameSession) -> PlayResult {
-    PlayResult::from_states(
+    PlayResult::from_states_with_total_notes(
         &session.chart,
         &session.score,
         &session.gauge,
+        session.scored_total_notes,
         session.state,
         session.autoplay.as_ref().is_some_and(|autoplay| autoplay.is_full()),
     )
@@ -1015,6 +1016,7 @@ mod tests {
         );
         GameSession {
             chart: Arc::clone(&chart),
+            scored_total_notes: bmz_gameplay::score::scored_note_count(&chart),
             timing_map,
             audio_clock: bmz_audio::clock::AudioClock::stopped(48_000),
             input_system: InputSystem {

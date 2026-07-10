@@ -4,6 +4,7 @@ use bmz_chart::model::{LongNoteMode, NoteEvent, NoteKind, PlayableChart};
 use bmz_core::clear::{ClearType, GaugeType};
 use bmz_core::ids::NoteId;
 use bmz_core::lane::KeyMode;
+use bmz_gameplay::gauge::gauge_total_for_chart;
 use bmz_gameplay::result::PlayResult;
 use bmz_gameplay::score::JudgeCounts;
 use bmz_gameplay::session::{FrameOutput, GameSession, ResultJudgementDetail};
@@ -155,7 +156,7 @@ impl ResultSummary {
             min_bpm: initial_bpm,
             max_bpm: initial_bpm,
             main_bpm: initial_bpm,
-            total_gauge: metadata.total.unwrap_or(0.0) as f32,
+            total_gauge: gauge_total_for_chart(metadata.total, result.total_notes) as f32,
             judge_rank: metadata.judge_rank,
             key_mode: metadata.key_mode,
             judge_counts: ResultJudgeCounts::from_judge_counts(&result.score.judges),

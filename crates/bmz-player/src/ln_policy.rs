@@ -32,18 +32,81 @@ pub struct ChartLnProfile {
     pub has_defined_hcn: bool,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ChartLnCounts {
+    pub undefined_ln_pairs: u32,
+    pub defined_ln_pairs: u32,
+    pub defined_cn_pairs: u32,
+    pub defined_hcn_pairs: u32,
+}
+
+impl ChartLnCounts {
+    pub fn from_chart(chart: &PlayableChart) -> Self {
+        let mut counts = Self::default();
+        for pair in &chart.long_notes {
+            let count = match pair.mode {
+                Some(LongNoteMode::Ln) => &mut counts.defined_ln_pairs,
+                Some(LongNoteMode::Cn) => &mut counts.defined_cn_pairs,
+                Some(LongNoteMode::Hcn) => &mut counts.defined_hcn_pairs,
+                None => &mut counts.undefined_ln_pairs,
+            };
+            *count = count.saturating_add(1);
+        }
+        counts
+    }
+
+    pub const fn profile(self) -> ChartLnProfile {
+        ChartLnProfile {
+            has_undefined_ln: self.undefined_ln_pairs > 0,
+            has_defined_ln: self.defined_ln_pairs > 0,
+            has_defined_cn: self.defined_cn_pairs > 0,
+            has_defined_hcn: self.defined_hcn_pairs > 0,
+        }
+    }
+
+    pub const fn total_pairs(self) -> u32 {
+        self.undefined_ln_pairs
+            .saturating_add(self.defined_ln_pairs)
+            .saturating_add(self.defined_cn_pairs)
+            .saturating_add(self.defined_hcn_pairs)
+    }
+
+    /// Score-target note count for a resolved score policy.
+    ///
+    /// `base_total_notes` is Tap + LongStart. CN/HCN ends add one score target;
+    /// LN ends replace their LongStart target and therefore add nothing here.
+    pub const fn scored_total_notes(self, base_total_notes: u32, policy: LnScorePolicy) -> u32 {
+        let extra_ends = match policy {
+            LnScorePolicy::ForceLn => 0,
+            LnScorePolicy::ForceCn | LnScorePolicy::ForceHcn => self.total_pairs(),
+            LnScorePolicy::AutoLn => self.defined_cn_pairs.saturating_add(self.defined_hcn_pairs),
+            LnScorePolicy::AutoCn | LnScorePolicy::AutoHcn => self
+                .undefined_ln_pairs
+                .saturating_add(self.defined_cn_pairs)
+                .saturating_add(self.defined_hcn_pairs),
+        };
+        base_total_notes.saturating_add(extra_ends)
+    }
+
+    pub fn scored_total_notes_for_setting(
+        self,
+        base_total_notes: u32,
+        setting: LnPolicySetting,
+    ) -> u32 {
+        self.scored_total_notes(base_total_notes, score_ln_policy(setting, self.profile()))
+    }
+
+    /// Score-target count defined by the chart itself, without profile fallback.
+    pub const fn canonical_total_notes(self, base_total_notes: u32) -> u32 {
+        base_total_notes
+            .saturating_add(self.defined_cn_pairs)
+            .saturating_add(self.defined_hcn_pairs)
+    }
+}
+
 impl ChartLnProfile {
     pub fn from_chart(chart: &PlayableChart) -> Self {
-        let mut profile = Self::default();
-        for pair in &chart.long_notes {
-            match pair.mode {
-                Some(LongNoteMode::Ln) => profile.has_defined_ln = true,
-                Some(LongNoteMode::Cn) => profile.has_defined_cn = true,
-                Some(LongNoteMode::Hcn) => profile.has_defined_hcn = true,
-                None => profile.has_undefined_ln = true,
-            }
-        }
-        profile
+        ChartLnCounts::from_chart(chart).profile()
     }
 
     pub fn has_any_ln(self) -> bool {
@@ -220,24 +283,7 @@ pub fn effective_ln_mode(setting: LnPolicySetting, profile: ChartLnProfile) -> L
 /// effective mode is CN/HCN adds one more (the end note also scores). LN pairs
 /// score once at the end, so they do not add beyond the base LongStart.
 pub fn expected_scored_note_count(chart: &PlayableChart, setting: LnPolicySetting) -> u32 {
-    let profile = ChartLnProfile::from_chart(chart);
-    let policy = score_ln_policy(setting, profile);
-    let fallback = match policy {
-        LnScorePolicy::AutoLn | LnScorePolicy::ForceLn => LongNoteMode::Ln,
-        LnScorePolicy::AutoCn | LnScorePolicy::ForceCn => LongNoteMode::Cn,
-        LnScorePolicy::AutoHcn | LnScorePolicy::ForceHcn => LongNoteMode::Hcn,
-    };
-    let force_all =
-        matches!(policy, LnScorePolicy::ForceLn | LnScorePolicy::ForceCn | LnScorePolicy::ForceHcn);
-
-    let mut extra_ends = 0u32;
-    for pair in &chart.long_notes {
-        let mode = if force_all { fallback } else { pair.mode.unwrap_or(fallback) };
-        if matches!(mode, LongNoteMode::Cn | LongNoteMode::Hcn) {
-            extra_ends = extra_ends.saturating_add(1);
-        }
-    }
-    chart.total_notes.saturating_add(extra_ends)
+    ChartLnCounts::from_chart(chart).scored_total_notes_for_setting(chart.total_notes, setting)
 }
 
 /// Expected score-target note count for an already-resolved [`LnScorePolicy`].
@@ -245,22 +291,7 @@ pub fn expected_scored_note_count(chart: &PlayableChart, setting: LnPolicySettin
 /// `Force*` forces every long pair to that mode. `Auto*` keeps defined pair modes
 /// and applies the policy fallback to undefined pairs.
 pub fn expected_scored_note_count_for_policy(chart: &PlayableChart, policy: LnScorePolicy) -> u32 {
-    let (force_all, fallback) = match policy {
-        LnScorePolicy::ForceLn => (true, LongNoteMode::Ln),
-        LnScorePolicy::ForceCn => (true, LongNoteMode::Cn),
-        LnScorePolicy::ForceHcn => (true, LongNoteMode::Hcn),
-        LnScorePolicy::AutoLn => (false, LongNoteMode::Ln),
-        LnScorePolicy::AutoCn => (false, LongNoteMode::Cn),
-        LnScorePolicy::AutoHcn => (false, LongNoteMode::Hcn),
-    };
-    let mut extra_ends = 0u32;
-    for pair in &chart.long_notes {
-        let mode = if force_all { fallback } else { pair.mode.unwrap_or(fallback) };
-        if matches!(mode, LongNoteMode::Cn | LongNoteMode::Hcn) {
-            extra_ends = extra_ends.saturating_add(1);
-        }
-    }
-    chart.total_notes.saturating_add(extra_ends)
+    ChartLnCounts::from_chart(chart).scored_total_notes(chart.total_notes, policy)
 }
 
 #[cfg(test)]
@@ -390,6 +421,36 @@ mod tests {
         // AutoLn on defined CN only collapses to ForceCn => both ends score
         let defined_cn = chart_with_long_modes(&[Some(LongNoteMode::Cn)]);
         assert_eq!(expected_scored_note_count(&defined_cn, LnPolicySetting::AutoLn), 2);
+    }
+
+    #[test]
+    fn chart_ln_counts_classify_pairs_and_compute_policy_totals() {
+        let chart = chart_with_long_modes(&[
+            None,
+            Some(LongNoteMode::Ln),
+            Some(LongNoteMode::Cn),
+            Some(LongNoteMode::Hcn),
+        ]);
+        let counts = ChartLnCounts::from_chart(&chart);
+
+        assert_eq!(
+            counts,
+            ChartLnCounts {
+                undefined_ln_pairs: 1,
+                defined_ln_pairs: 1,
+                defined_cn_pairs: 1,
+                defined_hcn_pairs: 1,
+            }
+        );
+        assert_eq!(counts.canonical_total_notes(chart.total_notes), 6);
+        assert_eq!(counts.scored_total_notes(chart.total_notes, LnScorePolicy::ForceLn), 4);
+        assert_eq!(counts.scored_total_notes(chart.total_notes, LnScorePolicy::ForceCn), 8);
+        assert_eq!(counts.scored_total_notes(chart.total_notes, LnScorePolicy::AutoLn), 6);
+        assert_eq!(counts.scored_total_notes(chart.total_notes, LnScorePolicy::AutoCn), 7);
+        assert_eq!(
+            counts.scored_total_notes_for_setting(chart.total_notes, LnPolicySetting::AutoHcn),
+            7
+        );
     }
 
     #[test]

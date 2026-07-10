@@ -27,7 +27,7 @@ use bmz_gameplay::judge::window::{
 };
 use bmz_gameplay::replay::{ReplayPlayer, ReplayRecorder};
 use bmz_gameplay::rule::RuleMode;
-use bmz_gameplay::score::ScoreState;
+use bmz_gameplay::score::{ScoreState, scored_note_count};
 use bmz_gameplay::session::{
     BgmScheduler, GameSession, HispeedMode, InputOffsetAutoAdjustState, PlaySkinOffset, PlayState,
 };
@@ -351,6 +351,10 @@ pub fn build_game_session_with_input_backend(
             None
         };
     let key_mode = chart.metadata.key_mode;
+    // `chart` is built from the source file and already has the selected LN
+    // policy, course override, and double option applied.  Derive the gameplay
+    // denominator here instead of using the policy-independent library count.
+    let scored_total_notes = scored_note_count(&chart);
     let rule_mode = profile.play.rule_mode;
     let input_system = InputSystem {
         backend: input_backend,
@@ -391,8 +395,11 @@ pub fn build_game_session_with_input_backend(
     let base_judge_window = base_judge_windows.note;
 
     let mut gauge = {
-        let gauge_total =
-            gauge_total_for_chart_and_rule_mode(chart.metadata.total, chart.total_notes, rule_mode);
+        let gauge_total = gauge_total_for_chart_and_rule_mode(
+            chart.metadata.total,
+            scored_total_notes,
+            rule_mode,
+        );
         // 単曲時はチャートのキーモードから GaugeProperty を導出、コース時は
         // `apply_course_constraints` が CourseGaugeConstraint から決めた値を使う。
         let gauge_property = options
@@ -403,7 +410,7 @@ pub fn build_game_session_with_input_backend(
                 gauge_type,
                 gauge_auto_shift,
                 gauge_total,
-                chart.total_notes,
+                scored_total_notes,
                 gauge_property,
                 rule_mode,
             );
@@ -413,7 +420,7 @@ pub fn build_game_session_with_input_backend(
             GaugeState::new_with_property_and_rule_mode(
                 gauge_type,
                 gauge_total,
-                chart.total_notes,
+                scored_total_notes,
                 gauge_property,
                 rule_mode,
             )
@@ -451,6 +458,7 @@ pub fn build_game_session_with_input_backend(
         rule_mode,
         audio_clock: AudioClock::stopped(options.sample_rate),
         chart,
+        scored_total_notes,
         timing_map,
         input_system,
         score: ScoreState::for_rule_mode(key_mode, rule_mode),
@@ -941,7 +949,7 @@ pub fn build_prepared_play_session_from_preloaded(
 ) -> PreparedPlaySession {
     options.double_option = preloaded.applied_arrange.double_option;
     let target_ex_score = options.target.target_ex_score_with_override(
-        preloaded.chart.total_notes,
+        scored_note_count(&preloaded.chart),
         options.target_ex_score_override,
     );
     let target = options.target.as_string();
@@ -2885,6 +2893,54 @@ mod tests {
         .unwrap();
 
         assert_eq!(session.chart.metadata.title, "Linked");
+
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn load_game_session_counts_cn_ends_from_source_chart() {
+        let path = write_temp_bms(
+            "\
+#TITLE Source CN
+#BPM 120
+#LNMODE 2
+#LNOBJ ZZ
+#00011:01ZZ
+",
+        );
+        let imported = import_bms_chart(&path, None, true).unwrap();
+        assert_eq!(imported.chart.total_notes, 1);
+        assert_eq!(imported.chart.long_notes.len(), 1);
+        let mut conn = Connection::open_in_memory().unwrap();
+        configure_connection(&conn).unwrap();
+        run_migrations(&mut conn, LIBRARY_MIGRATIONS).unwrap();
+        let mut library_db = LibraryDatabase::from_connection(conn);
+        let chart_id = library_db
+            .upsert_chart_import(&ChartImportRecord {
+                root_id: None,
+                file_path: &path,
+                file_size: 1,
+                modified_at: 1,
+                scanned_at: 1,
+                chart: &imported.chart,
+            })
+            .unwrap();
+        let stored = library_db.list_charts_by_ids(&[chart_id]).unwrap().remove(0);
+        assert_eq!(stored.total_notes, 1);
+        assert_eq!(stored.ln_counts.defined_cn_pairs, 1);
+        assert_eq!(stored.scored_total_notes_for_setting(LnPolicySetting::AutoLn), 2);
+        let profile = ProfileConfig::new_default("default", "Default", 1);
+
+        let session = load_game_session_for_chart(
+            &library_db,
+            chart_id,
+            &profile,
+            PlaySessionOptions::default(),
+        )
+        .unwrap();
+
+        assert_eq!(session.chart.total_notes, 1);
+        assert_eq!(session.scored_total_notes, 2);
 
         std::fs::remove_file(path).unwrap();
     }

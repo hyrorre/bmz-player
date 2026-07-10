@@ -2,6 +2,7 @@ use bmz_chart::model::{LongNoteMode, NoteKind, PlayableChart, TimingEventKind};
 use bmz_core::input::InputDeviceKind;
 use bmz_gameplay::gauge::gauge_total_for_chart;
 use bmz_gameplay::result::PlayResult;
+use bmz_gameplay::score::scored_note_count;
 
 use crate::ln_policy::{ChartLnProfile, LnScorePolicy};
 use crate::select_options::{ArrangeOption, DoubleOptionScoreBucket};
@@ -128,7 +129,8 @@ pub fn build_score_submission(
 pub fn build_ir_chart_payload(chart: &PlayableChart) -> IrChartPayload {
     let ln_profile = ChartLnProfile::from_chart(chart);
     let (min_bpm, max_bpm) = chart_bpm_range(chart);
-    let gauge_total = gauge_total_for_chart(chart.metadata.total, chart.total_notes);
+    let total_notes = scored_note_count(chart);
+    let gauge_total = gauge_total_for_chart(chart.metadata.total, total_notes);
     let ln_count = chart.long_notes.len() as u32;
     let cn_count =
         chart.long_notes.iter().filter(|pair| pair.mode == Some(LongNoteMode::Cn)).count() as u32;
@@ -159,7 +161,7 @@ pub fn build_ir_chart_payload(chart: &PlayableChart) -> IrChartPayload {
         judge: chart.metadata.judge_rank,
         bpm: Some(IrChartBpm { min: Some(min_bpm), max: Some(max_bpm) }),
         notes: IrChartNotes {
-            total: chart.total_notes,
+            total: total_notes,
             ln: ln_count,
             cn: cn_count,
             hcn: hcn_count,

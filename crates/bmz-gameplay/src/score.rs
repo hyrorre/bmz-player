@@ -1,3 +1,4 @@
+use bmz_chart::model::{LongNoteMode, PlayableChart};
 use bmz_core::clear::ClearType;
 use bmz_core::judge::{Judge, TimingSide};
 use bmz_core::lane::KeyMode;
@@ -5,6 +6,20 @@ use bmz_core::lane::KeyMode;
 use crate::gauge::GaugeState;
 use crate::judge::model::JudgementEvent;
 use crate::rule::RuleMode;
+
+/// Returns the number of judgement events that contribute to score for an
+/// already-resolved chart.
+///
+/// `PlayableChart::total_notes` counts taps and long-note starts. CN/HCN ends
+/// are scored independently, while LN pairs are scored once as a whole, so
+/// each effective CN/HCN pair contributes one additional scored note.
+pub fn scored_note_count(chart: &PlayableChart) -> u32 {
+    let scored_long_ends = chart.long_notes.iter().fold(0u32, |count, pair| {
+        let mode = pair.mode.unwrap_or(chart.metadata.long_note_mode);
+        count.saturating_add(u32::from(matches!(mode, LongNoteMode::Cn | LongNoteMode::Hcn)))
+    });
+    chart.total_notes.saturating_add(scored_long_ends)
+}
 
 #[derive(Debug, Clone, Default)]
 pub struct JudgeCounts {

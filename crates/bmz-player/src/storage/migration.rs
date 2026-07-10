@@ -462,6 +462,17 @@ pub const LIBRARY_MIGRATIONS: &[Migration] = &[
             "DROP TABLE IF EXISTS course_scores;",
         ],
     },
+    Migration {
+        version: 21,
+        // Persist exact long-note pair counts so select/course views can derive
+        // score-target counts for the active LN policy without reparsing BMS.
+        statements: &[
+            "ALTER TABLE charts ADD COLUMN undefined_ln_pairs INTEGER NOT NULL DEFAULT 0;",
+            "ALTER TABLE charts ADD COLUMN defined_ln_pairs INTEGER NOT NULL DEFAULT 0;",
+            "ALTER TABLE charts ADD COLUMN defined_cn_pairs INTEGER NOT NULL DEFAULT 0;",
+            "ALTER TABLE charts ADD COLUMN defined_hcn_pairs INTEGER NOT NULL DEFAULT 0;",
+        ],
+    },
 ];
 
 pub const SCORE_MIGRATIONS: &[Migration] = &[
@@ -1353,3 +1364,29 @@ pub const COLLECTION_MIGRATIONS: &[Migration] = &[Migration {
             ON favorite_songs(origin_folder_hint);",
     ],
 }];
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn library_migration_adds_long_note_pair_counts() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        run_migrations(&mut conn, LIBRARY_MIGRATIONS).unwrap();
+
+        let version: i32 = conn.pragma_query_value(None, "user_version", |row| row.get(0)).unwrap();
+        assert_eq!(version, 21);
+
+        let mut stmt = conn.prepare("PRAGMA table_info(charts)").unwrap();
+        let columns = stmt
+            .query_map([], |row| row.get::<_, String>(1))
+            .unwrap()
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .unwrap();
+        for column in
+            ["undefined_ln_pairs", "defined_ln_pairs", "defined_cn_pairs", "defined_hcn_pairs"]
+        {
+            assert!(columns.iter().any(|candidate| candidate == column));
+        }
+    }
+}
