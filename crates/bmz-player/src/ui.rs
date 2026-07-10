@@ -783,6 +783,8 @@ impl EguiLayer {
         let mut update_dialog_action = None;
         let mut practice_start = false;
         let mut practice_leave = false;
+        let settings_editable = !scene_restricts_settings(info.scene);
+        let mut readonly_app_config = (!settings_editable).then(|| app_config.clone());
         let visible_flag = &mut self.visible;
         let ir_login = &mut self.ir_login;
         let directory_open_status = &mut self.directory_open_status;
@@ -836,9 +838,14 @@ impl EguiLayer {
                 let settings_actions = build_settings_panel(
                     ctx,
                     show_settings,
-                    app_config,
+                    if settings_editable {
+                        app_config
+                    } else {
+                        readonly_app_config.as_mut().expect("read-only config must exist")
+                    },
                     profile_config,
                     show_fps,
+                    settings_editable,
                     SettingsPanelState {
                         new_root_path: &mut self.settings_new_root_path,
                         add_root_error: &mut self.settings_add_root_error,
@@ -871,6 +878,7 @@ impl EguiLayer {
                     &mut self.ir_device_key,
                     &mut self.profile_manager,
                     profile_root,
+                    settings_editable,
                 );
                 save_profile_config |= profile_settings_actions.save;
                 save_app_config |= profile_settings_actions.save_app_config;
@@ -1893,6 +1901,7 @@ fn build_settings_panel(
     config: &mut AppConfig,
     profile: &mut ProfileConfig,
     show_fps: &mut bool,
+    editable: bool,
     state: SettingsPanelState<'_>,
 ) -> SettingsPanelActions {
     let mut save_clicked = false;
@@ -1906,7 +1915,12 @@ fn build_settings_panel(
     sized_panel_window("本体設定", ctx, open, 440.0, 520.0, egui::pos2(16.0, 320.0)).show(
         ctx,
         |ui| {
-            scrollable_window_content(ui, |ui| {
+            if !editable {
+                ui.label("Decide / Play 中は本体設定を変更できません。");
+                ui.separator();
+            }
+            ui.add_enabled_ui(editable, |ui| {
+                scrollable_window_content(ui, |ui| {
                 egui::CollapsingHeader::new("曲フォルダ (BMS)")
                     .default_open(true)
                     .show(ui, |ui| {
@@ -2693,6 +2707,7 @@ fn build_settings_panel(
                 if ui.button("保存").clicked() {
                     save_clicked = true;
                 }
+                });
             });
         });
     SettingsPanelActions {
@@ -3060,6 +3075,18 @@ struct ProfileSettingsPanelActions {
     save_app_config: bool,
 }
 
+fn scene_restricts_settings(scene: &str) -> bool {
+    matches!(scene, "Decide" | "Play")
+}
+
+fn restore_restricted_profile_settings(profile: &mut ProfileConfig, mut readonly: ProfileConfig) {
+    readonly.audio_mix = profile.audio_mix.clone();
+    readonly.judge = profile.judge.clone();
+    readonly.lane = profile.lane.clone();
+    readonly.input = profile.input.clone();
+    *profile = readonly;
+}
+
 fn build_profile_settings_panel(
     ctx: &egui::Context,
     open: &mut bool,
@@ -3070,17 +3097,27 @@ fn build_profile_settings_panel(
     ir_device_key: &mut IrDeviceKeyUiState,
     profile_manager: &mut ProfileManagerUiState,
     profile_root: &std::path::Path,
+    unrestricted: bool,
 ) -> ProfileSettingsPanelActions {
     let mut save_clicked = false;
     let mut save_app_config = false;
     // ログインタスクの完了を反映。provider 設定が更新されたら保存する。
     save_clicked |= ir_login.poll(profile);
     ir_device_key.poll();
+    let readonly_profile = (!unrestricted).then(|| profile.clone());
+    let readonly_app_config = (!unrestricted).then(|| app_config.clone());
     sized_panel_window("プロファイル設定", ctx, open, 460.0, 560.0, egui::pos2(476.0, 320.0)).show(
         ctx,
         |ui| {
             scrollable_window_content(ui, |ui| {
+                if !unrestricted {
+                    ui.label("Decide / Play 中は音量・判定・表示・入力のみ変更できます。");
+                    ui.separator();
+                }
                 egui::CollapsingHeader::new("基本").default_open(true).show(ui, |ui| {
+                    if !unrestricted {
+                        ui.disable();
+                    }
                     ui.horizontal(|ui| {
                         ui.label("表示名");
                         ui.text_edit_singleline(&mut profile.display_name);
@@ -3091,8 +3128,13 @@ fn build_profile_settings_panel(
                     });
                 });
 
-                save_app_config |=
-                    build_profile_manager_section(ui, app_config, profile, profile_manager);
+                save_app_config |= build_profile_manager_section(
+                    ui,
+                    app_config,
+                    profile,
+                    profile_manager,
+                    unrestricted,
+                );
 
                 egui::CollapsingHeader::new("音量").default_open(true).show(ui, |ui| {
                     ui.checkbox(&mut profile.audio_mix.normalize_chart_volume, "譜面音量正規化");
@@ -3162,6 +3204,9 @@ fn build_profile_settings_panel(
                 });
 
                 egui::CollapsingHeader::new("プレイ").show(ui, |ui| {
+                    if !unrestricted {
+                        ui.disable();
+                    }
                     egui::ComboBox::from_label("ルール")
                         .selected_text(rule_mode_label(profile.play.rule_mode))
                         .show_ui(ui, |ui| {
@@ -3435,6 +3480,9 @@ fn build_profile_settings_panel(
                 });
 
                 egui::CollapsingHeader::new("リプレイ").show(ui, |ui| {
+                    if !unrestricted {
+                        ui.disable();
+                    }
                     ui.checkbox(&mut profile.replay.auto_save, "自動保存");
                     ui.checkbox(&mut profile.replay.compress, "圧縮");
                     for (index, rule) in profile.replay.slot_rules.iter_mut().enumerate() {
@@ -3456,6 +3504,9 @@ fn build_profile_settings_panel(
                 });
 
                 egui::CollapsingHeader::new("システム音").show(ui, |ui| {
+                    if !unrestricted {
+                        ui.disable();
+                    }
                     system_sound_path_row(ui, "BGM ルート", &mut profile.system_sound.bgm_dir);
                     system_sound_path_row(ui, "SE ルート", &mut profile.system_sound.se_dir);
                     system_sound_path_row(
@@ -3467,6 +3518,9 @@ fn build_profile_settings_panel(
                 });
 
                 egui::CollapsingHeader::new("IR").show(ui, |ui| {
+                    if !unrestricted {
+                        ui.disable();
+                    }
                     sync_ir_provider_roles(&mut profile.ir);
                     let primary_options: Vec<_> = profile
                         .ir
@@ -3710,6 +3764,9 @@ fn build_profile_settings_panel(
                 });
 
                 egui::CollapsingHeader::new("UI").show(ui, |ui| {
+                    if !unrestricted {
+                        ui.disable();
+                    }
                     ui.horizontal(|ui| {
                         ui.label("言語 (未実装)");
                         ui.text_edit_singleline(&mut profile.ui.language);
@@ -3731,6 +3788,13 @@ fn build_profile_settings_panel(
             });
         },
     );
+    if let Some(readonly) = readonly_profile {
+        restore_restricted_profile_settings(profile, readonly);
+    }
+    if let Some(readonly) = readonly_app_config {
+        *app_config = readonly;
+        save_app_config = false;
+    }
     ProfileSettingsPanelActions { save: save_clicked, save_app_config }
 }
 
@@ -3739,9 +3803,13 @@ fn build_profile_manager_section(
     app_config: &mut AppConfig,
     profile: &ProfileConfig,
     state: &mut ProfileManagerUiState,
+    editable: bool,
 ) -> bool {
     let mut save_app_config = false;
     egui::CollapsingHeader::new("プロファイル管理").default_open(false).show(ui, |ui| {
+        if !editable {
+            ui.disable();
+        }
         let app_paths = match resolve_app_paths() {
             Ok(paths) => paths,
             Err(error) => {
@@ -5136,6 +5204,35 @@ fn filepath_def_acronym(def: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn decide_and_play_restrict_settings_panels() {
+        assert!(!scene_restricts_settings("Select"));
+        assert!(scene_restricts_settings("Decide"));
+        assert!(scene_restricts_settings("Play"));
+        assert!(!scene_restricts_settings("Result"));
+    }
+
+    #[test]
+    fn restricted_profile_settings_keep_only_realtime_categories() {
+        let baseline = ProfileConfig::new_default("default", "Default", 1);
+        let mut edited = baseline.clone();
+        edited.display_name = "Changed".to_string();
+        edited.play.rule_mode = RuleMode::Dx;
+        edited.audio_mix.master_volume = 23;
+        edited.judge.input_offset_us = 4_000;
+        edited.lane.hispeed = 3.25;
+        edited.input.analog_scratch_threshold = 321;
+
+        restore_restricted_profile_settings(&mut edited, baseline.clone());
+
+        assert_eq!(edited.display_name, baseline.display_name);
+        assert_eq!(edited.play.rule_mode, baseline.play.rule_mode);
+        assert_eq!(edited.audio_mix.master_volume, 23);
+        assert_eq!(edited.judge.input_offset_us, 4_000);
+        assert_eq!(edited.lane.hispeed, 3.25);
+        assert_eq!(edited.input.analog_scratch_threshold, 321);
+    }
     use std::fs;
     use std::sync::atomic::{AtomicU64, Ordering};
     use std::time::{SystemTime, UNIX_EPOCH};
