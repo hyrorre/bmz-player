@@ -10889,6 +10889,11 @@ impl WinitApp {
         }
         let result_ir_panel = self.result_ir.as_mut();
         let update_dialog = self.update_prompt.as_ref().map(UpdatePrompt::as_dialog);
+        let obs_connection_status = self
+            .obs_controller
+            .as_ref()
+            .map(crate::obs::ObsController::status)
+            .unwrap_or_else(crate::obs::ObsConnectionStatus::disabled);
         let Some(egui) = self.egui.as_mut() else {
             return;
         };
@@ -10907,6 +10912,7 @@ impl WinitApp {
                 profile_root: &self.boot.profile_paths.root_dir,
                 app_paths: &self.boot.app_paths,
                 update_dialog,
+                obs_connection_status: &obs_connection_status,
             },
         );
         self.renderer.set_egui_frame(output.frame);

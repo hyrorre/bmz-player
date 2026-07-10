@@ -283,6 +283,7 @@ pub struct EguiRunContext<'a, 'practice> {
     pub profile_root: &'a Path,
     pub app_paths: &'a AppPaths,
     pub update_dialog: Option<UpdateDialog<'a>>,
+    pub obs_connection_status: &'a crate::obs::ObsConnectionStatus,
 }
 
 /// `EguiLayer::run` の 1 フレーム出力。
@@ -758,6 +759,7 @@ impl EguiLayer {
             profile_root,
             app_paths,
             update_dialog,
+            obs_connection_status,
         } = context;
         let raw_input = self.state.take_egui_input(window);
         let ctx = self.ctx.clone();
@@ -848,6 +850,7 @@ impl EguiLayer {
                         score_import_error: &self.score_import_error,
                         audio_device_picker: &mut self.audio_device_picker,
                         obs_scene_picker: &mut self.obs_scene_picker,
+                        obs_connection_status,
                     },
                 );
                 save_app_config |= settings_actions.save;
@@ -1729,6 +1732,7 @@ struct SettingsPanelState<'a> {
     score_import_error: &'a str,
     audio_device_picker: &'a mut AudioDevicePickerState,
     obs_scene_picker: &'a mut ObsScenePickerState,
+    obs_connection_status: &'a crate::obs::ObsConnectionStatus,
 }
 
 #[derive(Default)]
@@ -2540,7 +2544,12 @@ fn build_settings_panel(
                     });
                 });
 
-                build_obs_settings_section(ui, config, state.obs_scene_picker);
+                build_obs_settings_section(
+                    ui,
+                    config,
+                    state.obs_scene_picker,
+                    state.obs_connection_status,
+                );
 
                 egui::CollapsingHeader::new("アップデート").show(ui, |ui| {
                     ui.checkbox(&mut config.updates.enabled, "アップデート通知");
@@ -2702,10 +2711,25 @@ fn build_obs_settings_section(
     ui: &mut egui::Ui,
     config: &mut AppConfig,
     state: &mut ObsScenePickerState,
+    connection_status: &crate::obs::ObsConnectionStatus,
 ) {
     state.poll();
     egui::CollapsingHeader::new("OBS WebSocket").show(ui, |ui| {
         ui.checkbox(&mut config.obs.enabled, "OBS WebSocket 連携");
+        let (status_label, status_color) = obs_connection_status_label(connection_status.kind);
+        ui.horizontal(|ui| {
+            ui.label("接続状態");
+            ui.colored_label(status_color, status_label);
+            if let Some(retry_in_ms) = connection_status.retry_in_ms {
+                ui.label(format!("次の再試行: {:.1} 秒", retry_in_ms as f64 / 1000.0));
+            }
+        });
+        if let Some(detail) = &connection_status.detail {
+            ui.label(detail);
+        }
+        if let Some(error) = &connection_status.last_error {
+            ui.colored_label(egui::Color32::RED, error);
+        }
         ui.horizontal(|ui| {
             ui.label("ホスト");
             ui.add(
@@ -2824,6 +2848,30 @@ fn build_obs_settings_section(
             }
         });
     });
+}
+
+fn obs_connection_status_label(
+    kind: crate::obs::ObsConnectionStatusKind,
+) -> (&'static str, egui::Color32) {
+    match kind {
+        crate::obs::ObsConnectionStatusKind::Disabled => ("無効", egui::Color32::GRAY),
+        crate::obs::ObsConnectionStatusKind::Connecting => {
+            ("接続中", egui::Color32::from_rgb(120, 190, 255))
+        }
+        crate::obs::ObsConnectionStatusKind::WaitingForServer => {
+            ("OBS を待機中", egui::Color32::from_rgb(225, 185, 75))
+        }
+        crate::obs::ObsConnectionStatusKind::Connected => ("接続済み", egui::Color32::GREEN),
+        crate::obs::ObsConnectionStatusKind::Reconnecting => {
+            ("再接続待機中", egui::Color32::YELLOW)
+        }
+        crate::obs::ObsConnectionStatusKind::AuthenticationFailed => {
+            ("認証失敗", egui::Color32::RED)
+        }
+        crate::obs::ObsConnectionStatusKind::ConfigurationError => {
+            ("設定エラー", egui::Color32::RED)
+        }
+    }
 }
 
 fn obs_recording_mode_label(mode: ObsRecordingMode) -> &'static str {
