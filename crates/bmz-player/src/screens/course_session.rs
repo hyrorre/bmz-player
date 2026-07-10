@@ -4,27 +4,20 @@ use bmz_gameplay::rule::RuleMode;
 
 use crate::screens::play_finish::FinishedPlaySession;
 use crate::screens::play_session::AppliedArrange;
+use crate::screens::play_start::PlayStartOptions;
 use crate::screens::result_model::{ResultJudgeCounts, ResultSummary};
-use crate::storage::replay::QueuedCourseReplay;
 
 pub struct ActiveCourseSession {
     pub course_id: i64,
     pub definition: CourseDefinition,
-    /// Total notes across every chart in the course definition. This remains
-    /// course-wide even when a Failed chart aborts the course early.
+    /// Total notes imported from every source chart with the entry's actual
+    /// play options. This remains course-wide when a Failed chart aborts early.
     pub course_total_notes: u32,
     pub current_index: usize,
     pub entry_results: Vec<CourseEntryResult>,
-    /// Pre-loaded replays, one per course entry, when the course is being
-    /// played back from a saved attempt.  Empty for a fresh course play.
-    /// Indexed by entry position; absence at the current_index means the
-    /// chart is played normally (e.g. saved replay file is missing).
-    pub queued_replays: Vec<QueuedCourseReplay>,
-    /// Per-entry arrange to reproduce when retrying the whole course with the
-    /// same arrangement.  Indexed by entry position; absence at an index means
-    /// that chart gets a fresh arrange (e.g. a chart never reached because the
-    /// previous attempt failed early).  Empty for a fresh course play.
-    pub arrange_overrides: Vec<AppliedArrange>,
+    /// コース開始時に全エントリ分を確定した開始条件。source chart の事前集計と
+    /// 実プレイで同じ LN / DOUBLE / RANDOM 条件を使うため、曲間で作り直さない。
+    pub entry_start_options: Vec<PlayStartOptions>,
     /// CLI/smoke boot course playback should progress through intermediate
     /// results without manual input.  Normal select-launched courses wait for
     /// the player on each intermediate result.
@@ -368,8 +361,7 @@ mod tests {
             course_total_notes,
             current_index: 0,
             entry_results,
-            queued_replays: Vec::new(),
-            arrange_overrides: Vec::new(),
+            entry_start_options: Vec::new(),
             auto_advance_intermediate_results: false,
         }
     }
@@ -492,8 +484,7 @@ mod tests {
             course_total_notes,
             current_index: 0,
             entry_results,
-            queued_replays: Vec::new(),
-            arrange_overrides: Vec::new(),
+            entry_start_options: Vec::new(),
             auto_advance_intermediate_results: false,
         }
     }

@@ -20,6 +20,7 @@ use crate::screens::play_finish::FinishedPlaySession;
 use crate::screens::play_session::{AppliedArrange, PreparedPlaySession};
 use crate::screens::play_snapshot::{BgaFrameCatalog, PlayRenderSnapshotCache};
 use crate::screens::result_model::ResultGraphCollector;
+use crate::select_options::TargetOption;
 use crate::storage::score_db::ScoreKey;
 use crate::video_bga::ActiveVideoBgaDecoder;
 
@@ -110,6 +111,8 @@ pub struct RunningPlaySession {
     pub target_ex_score: Option<u32>,
     /// プレイ開始時のターゲット設定 ID。play skin の STRING_TARGET 系に渡す。
     pub target: String,
+    /// 実譜面と実スコアキーが確定してから EX 目標値を解決するための設定値。
+    pub target_option: TargetOption,
     pub applied_arrange: AppliedArrange,
     pub practice_mode: bool,
     pub bga_frames: BgaFrameCatalog,
@@ -251,6 +254,7 @@ pub fn open_prepared_play_audio(
     let audio = open_app_audio_output(runtime, prepared.audio);
     let mut session = prepared.session;
     session.audio_clock = audio.clock();
+    let target_ex_score = prepared.target_option.target_ex_score(session.scored_total_notes);
 
     RunningPlaySession {
         render_snapshot_cache: PlayRenderSnapshotCache::from_chart(&session.chart),
@@ -264,8 +268,9 @@ pub fn open_prepared_play_audio(
         score_key,
         best_ex_score: None,
         best_ghost: None,
-        target_ex_score: prepared.target_ex_score,
+        target_ex_score,
         target: prepared.target,
+        target_option: prepared.target_option,
         applied_arrange: prepared.applied_arrange,
         practice_mode: prepared.practice_mode,
         bga_frames: BgaFrameCatalog::new(),

@@ -42,7 +42,6 @@ pub struct PlayStartOptions {
     pub double_option: DoubleOption,
     pub hs_fix: HsFixOption,
     pub target: TargetOption,
-    pub target_ex_score_override: Option<u32>,
     pub arrange_seed: Option<i64>,
     pub arrange_pattern: Option<Vec<u8>>,
     /// Override the starting gauge value (used to carry the gauge between
@@ -115,7 +114,6 @@ pub fn play_session_options_from_start(
         double_option: start_options.double_option,
         hs_fix: start_options.hs_fix,
         target: start_options.target,
-        target_ex_score_override: start_options.target_ex_score_override,
         arrange_seed: start_options.arrange_seed,
         arrange_pattern: start_options.arrange_pattern,
         initial_gauge_value: start_options.initial_gauge_value,
@@ -196,6 +194,7 @@ pub fn start_running_play_session_for_chart_with_audio_runtime_and_input_backend
     running.best_ex_score = score_db.best_ex_score(score_key).unwrap_or(None);
     running.best_ghost =
         score_db.best_ghost(score_key, running.session.scored_total_notes).unwrap_or(None);
+    resolve_local_target_ex_score(&mut running);
     running.start(chart_zero_time)?;
     Ok(running)
 }
@@ -243,7 +242,14 @@ pub fn open_prepared_winit_play_session(
     running.best_ex_score = score_db.best_ex_score(score_key).unwrap_or(None);
     running.best_ghost =
         score_db.best_ghost(score_key, running.session.scored_total_notes).unwrap_or(None);
+    resolve_local_target_ex_score(&mut running);
     Ok(StartedInputPlaySession { running, input: prepared.input })
+}
+
+fn resolve_local_target_ex_score(running: &mut RunningPlaySession) {
+    running.target_ex_score = running
+        .target_option
+        .target_ex_score_with_best(running.session.scored_total_notes, running.best_ex_score);
 }
 
 pub fn start_running_play_session_for_chart_with_winit_input(

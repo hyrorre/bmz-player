@@ -216,6 +216,13 @@ impl TargetOption {
         }
     }
 
+    pub const fn uses_ir_ranking(self) -> bool {
+        matches!(
+            self,
+            Self::IrTop | Self::IrNext | Self::RivalTop | Self::RivalNext | Self::RivalIndex(_)
+        )
+    }
+
     pub fn rank_next_ex_score(total_notes: u32, current_ex_score: u32) -> u32 {
         let max = total_notes.saturating_mul(2);
         for eighteenths in 12..=17 {
@@ -227,18 +234,18 @@ impl TargetOption {
         max
     }
 
-    pub fn target_ex_score_with_override(
+    pub fn target_ex_score_with_best(
         self,
         total_notes: u32,
-        dynamic_target_ex_score: Option<u32>,
+        local_best_ex_score: Option<u32>,
     ) -> Option<u32> {
         match self {
-            Self::RankNext
-            | Self::IrTop
-            | Self::IrNext
-            | Self::RivalTop
-            | Self::RivalNext
-            | Self::RivalIndex(_) => dynamic_target_ex_score,
+            Self::RankNext => {
+                Some(Self::rank_next_ex_score(total_notes, local_best_ex_score.unwrap_or(0)))
+            }
+            Self::IrTop | Self::IrNext | Self::RivalTop | Self::RivalNext | Self::RivalIndex(_) => {
+                None
+            }
             _ => self.target_ex_score(total_notes),
         }
     }
@@ -393,14 +400,13 @@ mod rival_target_tests {
     use super::*;
 
     #[test]
-    fn dynamic_target_uses_resolved_score() {
-        assert_eq!(TargetOption::RivalTop.target_ex_score(1000), None);
+    fn rank_next_target_uses_source_total_and_actual_best() {
         assert_eq!(
-            TargetOption::RivalTop.target_ex_score_with_override(1000, Some(1500)),
-            Some(1500)
+            TargetOption::RankNext.target_ex_score_with_best(1000, Some(1500)),
+            Some(TargetOption::rank_next_ex_score(1000, 1500))
         );
-        assert_eq!(TargetOption::RivalTop.target_ex_score_with_override(1000, None), None);
-        assert_eq!(TargetOption::Max.target_ex_score_with_override(1000, Some(1)), Some(2000));
+        assert_eq!(TargetOption::RivalTop.target_ex_score_with_best(1000, Some(1500)), None);
+        assert_eq!(TargetOption::Max.target_ex_score_with_best(1000, Some(1)), Some(2000));
     }
 
     #[test]

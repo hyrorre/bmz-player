@@ -68,7 +68,6 @@ pub struct PlaySessionOptions {
     pub double_option: DoubleOption,
     pub hs_fix: HsFixOption,
     pub target: TargetOption,
-    pub target_ex_score_override: Option<u32>,
     pub arrange_seed: Option<i64>,
     pub arrange_pattern: Option<Vec<u8>>,
     /// When set, overrides the gauge's starting value.  Used to carry the
@@ -110,7 +109,7 @@ pub struct PreparedPlaySession {
     pub sample_report: Vec<LoadedSampleReport>,
     pub applied_arrange: AppliedArrange,
     pub score_key: ScoreKey,
-    pub target_ex_score: Option<u32>,
+    pub target_option: TargetOption,
     pub target: String,
     pub practice_mode: bool,
 }
@@ -139,7 +138,6 @@ impl Default for PlaySessionOptions {
             double_option: DoubleOption::Off,
             hs_fix: HsFixOption::Off,
             target: TargetOption::None,
-            target_ex_score_override: None,
             arrange_seed: None,
             arrange_pattern: None,
             initial_gauge_value: None,
@@ -246,9 +244,7 @@ pub fn apply_placeholder_session_visuals(
     let replay_playback = options.replay_player.is_some();
     snapshot.autoplay = !replay_playback && (profile.play.auto_play || options.autoplay);
     snapshot.replay_playback = replay_playback;
-    snapshot.target_ex_score = options
-        .target
-        .target_ex_score_with_override(snapshot.total_notes, options.target_ex_score_override);
+    snapshot.target_ex_score = options.target.target_ex_score(snapshot.total_notes);
     snapshot.target = options.target.as_string();
 
     snapshot.note_display_duration_ms =
@@ -841,13 +837,55 @@ pub fn preload_play_session_for_chart(
     options: PlaySessionOptions,
     normalize_chart_volume: bool,
 ) -> Result<PreloadedPlaySession> {
+    let imported = load_transformed_chart_for_play(library_db, chart_id, &options)?;
+    let chart = Arc::new(imported.chart);
+    let mut loader = FfmpegSampleLoader::default();
+    let (audio, sample_report) =
+        build_audio_engine_for_chart(&chart, options.sample_rate, &mut loader);
+    let normalization_gain = load_or_compute_normalization_gain(
+        library_db,
+        chart_id,
+        normalize_chart_volume,
+        &chart,
+        &audio,
+    )?;
+
+    Ok(PreloadedPlaySession {
+        chart,
+        audio,
+        sample_report,
+        normalization_gain,
+        applied_arrange: imported.applied_arrange,
+        score_key: imported.score_key,
+    })
+}
+
+struct TransformedPlayChart {
+    chart: PlayableChart,
+    applied_arrange: AppliedArrange,
+    score_key: ScoreKey,
+}
+
+pub fn load_source_chart_for_chart(
+    library_db: &LibraryDatabase,
+    chart_id: i64,
+    random_seed: Option<u64>,
+) -> Result<PlayableChart> {
     let Some(path) = library_db.primary_chart_file_path(chart_id)? else {
         bail!("chart file not found for chart id {chart_id}");
     };
-    let import =
-        import_bms_chart(std::path::Path::new(&path), random_seed_for_chart(&options), true)
-            .with_context(|| format!("failed to import chart file: {path}"))?;
-    let mut chart = import.chart;
+    Ok(import_bms_chart(std::path::Path::new(&path), random_seed, true)
+        .with_context(|| format!("failed to import chart file: {path}"))?
+        .chart)
+}
+
+fn load_transformed_chart_for_play(
+    library_db: &LibraryDatabase,
+    chart_id: i64,
+    options: &PlaySessionOptions,
+) -> Result<TransformedPlayChart> {
+    let mut chart =
+        load_source_chart_for_chart(library_db, chart_id, random_seed_for_chart(options))?;
     let applied_double_option =
         options.double_option.normalize_for_key_mode(chart.metadata.key_mode);
     let score_key = ScoreKey::with_options(
@@ -871,26 +909,17 @@ pub fn preload_play_session_for_chart(
         options.arrange_pattern.as_deref(),
     );
     applied_arrange.double_option = applied_double_option;
-    let chart = Arc::new(chart);
-    let mut loader = FfmpegSampleLoader::default();
-    let (audio, sample_report) =
-        build_audio_engine_for_chart(&chart, options.sample_rate, &mut loader);
-    let normalization_gain = load_or_compute_normalization_gain(
-        library_db,
-        chart_id,
-        normalize_chart_volume,
-        &chart,
-        &audio,
-    )?;
 
-    Ok(PreloadedPlaySession {
-        chart,
-        audio,
-        sample_report,
-        normalization_gain,
-        applied_arrange,
-        score_key,
-    })
+    Ok(TransformedPlayChart { chart, applied_arrange, score_key })
+}
+
+pub fn scored_note_count_for_chart(
+    library_db: &LibraryDatabase,
+    chart_id: i64,
+    options: &PlaySessionOptions,
+) -> Result<u32> {
+    let imported = load_transformed_chart_for_play(library_db, chart_id, options)?;
+    Ok(scored_note_count(&imported.chart))
 }
 
 pub fn load_chart_bga_assets_for_chart(
@@ -898,13 +927,8 @@ pub fn load_chart_bga_assets_for_chart(
     chart_id: i64,
     options: &PlaySessionOptions,
 ) -> Result<Vec<BgaAssetRef>> {
-    let Some(path) = library_db.primary_chart_file_path(chart_id)? else {
-        bail!("chart file not found for chart id {chart_id}");
-    };
-    let import =
-        import_bms_chart(std::path::Path::new(&path), random_seed_for_chart(options), true)
-            .with_context(|| format!("failed to import chart file: {path}"))?;
-    Ok(import.chart.bga_assets)
+    Ok(load_source_chart_for_chart(library_db, chart_id, random_seed_for_chart(options))?
+        .bga_assets)
 }
 
 pub fn build_practice_prepared_from_preloaded(
@@ -922,7 +946,6 @@ pub fn build_practice_prepared_from_preloaded(
     options.gauge_override = Some(gauge_type_from_config(property.gauge));
     options.gauge_auto_shift = GaugeAutoShiftMode::Off;
     options.arrange = property.arrange;
-    let target_ex_score = None;
     let target = TargetOption::None.as_string();
     let practice_mode = options.practice_mode;
     let mut session =
@@ -935,7 +958,7 @@ pub fn build_practice_prepared_from_preloaded(
         sample_report: preloaded.sample_report,
         applied_arrange,
         score_key: preloaded.score_key,
-        target_ex_score,
+        target_option: TargetOption::None,
         target,
         practice_mode,
     }
@@ -948,10 +971,7 @@ pub fn build_prepared_play_session_from_preloaded(
     input_backend: Box<dyn InputBackend>,
 ) -> PreparedPlaySession {
     options.double_option = preloaded.applied_arrange.double_option;
-    let target_ex_score = options.target.target_ex_score_with_override(
-        scored_note_count(&preloaded.chart),
-        options.target_ex_score_override,
-    );
+    let target_option = options.target;
     let target = options.target.as_string();
     let practice_mode = options.practice_mode;
     let session =
@@ -964,7 +984,7 @@ pub fn build_prepared_play_session_from_preloaded(
         sample_report: preloaded.sample_report,
         applied_arrange: preloaded.applied_arrange,
         score_key: preloaded.score_key,
-        target_ex_score,
+        target_option,
         target,
         practice_mode,
     }
@@ -2929,6 +2949,30 @@ mod tests {
         assert_eq!(stored.total_notes, 1);
         assert_eq!(stored.ln_counts.defined_cn_pairs, 1);
         assert_eq!(stored.scored_total_notes_for_setting(LnPolicySetting::AutoLn), 2);
+        library_db
+            .conn()
+            .execute(
+                "UPDATE charts SET total_notes = 999, mode = '14K' WHERE id = ?1",
+                rusqlite::params![chart_id],
+            )
+            .unwrap();
+        let source_chart = load_source_chart_for_chart(&library_db, chart_id, None).unwrap();
+        assert_eq!(source_chart.metadata.key_mode, KeyMode::K5);
+        assert_eq!(source_chart.identity.file_sha256, imported.chart.identity.file_sha256);
+        assert_eq!(
+            scored_note_count_for_chart(&library_db, chart_id, &PlaySessionOptions::default())
+                .unwrap(),
+            2,
+            "course pre-count must ignore stale library totals"
+        );
+        let force_ln = PlaySessionOptions {
+            ln_mode_override: Some(bmz_chart::model::LongNoteMode::Ln),
+            ..Default::default()
+        };
+        assert_eq!(scored_note_count_for_chart(&library_db, chart_id, &force_ln).unwrap(), 1);
+        let battle =
+            PlaySessionOptions { double_option: DoubleOption::Battle, ..Default::default() };
+        assert_eq!(scored_note_count_for_chart(&library_db, chart_id, &battle).unwrap(), 4);
         let profile = ProfileConfig::new_default("default", "Default", 1);
 
         let session = load_game_session_for_chart(

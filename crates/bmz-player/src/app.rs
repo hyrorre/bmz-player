@@ -1445,64 +1445,55 @@ fn course_result_summary_for_skin(course: &CourseResultSummary) -> ResultSummary
     }
 }
 
+fn select_ir_cache_context(
+    ln_policy_setting: crate::ln_policy::LnPolicySetting,
+    ln_policy: crate::ln_policy::LnScorePolicy,
+    double_option: crate::select_options::DoubleOptionScoreBucket,
+    rule_mode: bmz_gameplay::rule::RuleMode,
+) -> String {
+    format!(
+        "{}:{}:{}:{}",
+        ln_policy_setting.as_ir_str(),
+        ln_policy.as_str(),
+        double_option.as_str(),
+        rule_mode.as_str()
+    )
+}
+
 fn course_total_notes_for_definition(
     library_db: &LibraryDatabase,
     definition: &bmz_core::course::CourseDefinition,
+    app_config: &AppConfig,
     ln_policy_setting: crate::ln_policy::LnPolicySetting,
-) -> u32 {
-    let chart_ids: Vec<i64> =
-        definition.entries.iter().filter_map(|entry| entry.chart_id).collect();
-    if chart_ids.is_empty() {
-        return 0;
+    rule_mode: bmz_gameplay::rule::RuleMode,
+    entry_start_options: &[PlayStartOptions],
+) -> Result<u32> {
+    anyhow::ensure!(
+        definition.entries.len() == entry_start_options.len(),
+        "course entry option count mismatch: entries={}, options={}",
+        definition.entries.len(),
+        entry_start_options.len()
+    );
+    let mut total_notes = 0u32;
+    for (index, (entry, start_options)) in
+        definition.entries.iter().zip(entry_start_options).enumerate()
+    {
+        let chart_id = entry
+            .chart_id
+            .with_context(|| format!("course entry {} is not resolved", index + 1))?;
+        let mut session_options =
+            play_session_options_from_start(app_config, start_options.clone());
+        session_options.ln_policy_setting = ln_policy_setting;
+        session_options.rule_mode = rule_mode;
+        let notes = crate::screens::play_session::scored_note_count_for_chart(
+            library_db,
+            chart_id,
+            &session_options,
+        )
+        .with_context(|| format!("failed to count course entry {} from source", index + 1))?;
+        total_notes = total_notes.saturating_add(notes);
     }
-    match library_db.list_charts_by_ids(&chart_ids) {
-        Ok(charts) => {
-            let charts_by_id: HashMap<i64, _> =
-                charts.iter().map(|chart| (chart.chart_id, chart)).collect();
-            let resolved_count = definition
-                .entries
-                .iter()
-                .filter(|entry| {
-                    entry.chart_id.is_some_and(|chart_id| charts_by_id.contains_key(&chart_id))
-                })
-                .count();
-            if resolved_count != definition.entries.len() {
-                tracing::warn!(
-                    title = %definition.title,
-                    resolved = resolved_count,
-                    total = definition.entries.len(),
-                    "course total notes resolved fewer charts than the course definition"
-                );
-            }
-            definition
-                .entries
-                .iter()
-                .filter_map(|entry| entry.chart_id.and_then(|id| charts_by_id.get(&id).copied()))
-                .map(|chart| match definition.constraints.ln {
-                    bmz_core::course::CourseLnConstraint::Default => {
-                        chart.scored_total_notes_for_setting(ln_policy_setting)
-                    }
-                    bmz_core::course::CourseLnConstraint::Ln => {
-                        chart.scored_total_notes(crate::ln_policy::LnScorePolicy::ForceLn)
-                    }
-                    bmz_core::course::CourseLnConstraint::Cn => {
-                        chart.scored_total_notes(crate::ln_policy::LnScorePolicy::ForceCn)
-                    }
-                    bmz_core::course::CourseLnConstraint::Hcn => {
-                        chart.scored_total_notes(crate::ln_policy::LnScorePolicy::ForceHcn)
-                    }
-                })
-                .sum()
-        }
-        Err(error) => {
-            tracing::warn!(
-                %error,
-                title = %definition.title,
-                "failed to resolve course total notes"
-            );
-            0
-        }
-    }
+    Ok(total_notes)
 }
 
 fn aggregate_course_result_graph(
@@ -6223,27 +6214,41 @@ impl WinitApp {
             same_arrange = !arrange_overrides.is_empty(),
             "starting course"
         );
-        let mut options = self.play_start_options();
-        apply_course_constraints(&mut options, &definition.constraints);
-        // Reapply the first chart's recorded arrange after constraints so the
-        // constraint clamp doesn't overwrite it (same ordering as replay).
-        if let Some(arrange) = arrange_overrides.first() {
-            apply_arrange_override(&mut options, arrange);
+        let mut entry_start_options = Vec::with_capacity(definition.entries.len());
+        for index in 0..definition.entries.len() {
+            let mut options = self.play_start_options();
+            apply_course_constraints(&mut options, &definition.constraints);
+            // Reapply each chart's recorded arrange after constraints so the
+            // constraint clamp doesn't overwrite it (same ordering as replay).
+            if let Some(arrange) = arrange_overrides.get(index) {
+                apply_arrange_override(&mut options, arrange);
+            }
+            entry_start_options.push(options);
         }
+        let options = entry_start_options[0].clone();
         let course_title = definition.title.clone();
-        let course_total_notes = course_total_notes_for_definition(
+        let app_config = self.play_session_app_config();
+        let course_total_notes = match course_total_notes_for_definition(
             &self.boot.library_db,
             &definition,
+            &app_config,
             self.boot.profile_config.play.ln_mode_policy,
-        );
+            self.boot.profile_config.play.rule_mode,
+            &entry_start_options,
+        ) {
+            Ok(total_notes) => total_notes,
+            Err(error) => {
+                tracing::error!(%error, course_id, "failed to count course notes from source");
+                return;
+            }
+        };
         self.active_course = Some(ActiveCourseSession {
             course_id,
             definition,
             course_total_notes,
             current_index: 0,
             entry_results: Vec::new(),
-            queued_replays: Vec::new(),
-            arrange_overrides,
+            entry_start_options,
             auto_advance_intermediate_results,
         });
         self.begin_course_decide_for_chart(first_chart_id, options, &course_title);
@@ -6340,28 +6345,41 @@ impl WinitApp {
             replays = queued.len(),
             "starting course replay"
         );
-        let mut options = self.play_start_options();
-        apply_course_constraints(&mut options, &definition.constraints);
-        // The first chart starts with its queued replay if available.
-        if let Some(first) = queued.first()
-            && first.chart_id == first_chart_id
-        {
-            apply_queued_replay(&mut options, first);
+        let mut entry_start_options = Vec::with_capacity(definition.entries.len());
+        for (index, entry) in definition.entries.iter().enumerate() {
+            let mut options = self.play_start_options();
+            apply_course_constraints(&mut options, &definition.constraints);
+            if let Some(replay) = queued.get(index)
+                && entry.chart_id == Some(replay.chart_id)
+            {
+                apply_queued_replay(&mut options, replay);
+            }
+            entry_start_options.push(options);
         }
+        let options = entry_start_options[0].clone();
         let course_title = definition.title.clone();
-        let course_total_notes = course_total_notes_for_definition(
+        let app_config = self.play_session_app_config();
+        let course_total_notes = match course_total_notes_for_definition(
             &self.boot.library_db,
             &definition,
+            &app_config,
             self.boot.profile_config.play.ln_mode_policy,
-        );
+            self.boot.profile_config.play.rule_mode,
+            &entry_start_options,
+        ) {
+            Ok(total_notes) => total_notes,
+            Err(error) => {
+                tracing::error!(%error, course_id, "failed to count replay course notes from source");
+                return;
+            }
+        };
         self.active_course = Some(ActiveCourseSession {
             course_id,
             definition,
             course_total_notes,
             current_index: 0,
             entry_results: Vec::new(),
-            queued_replays: queued,
-            arrange_overrides: Vec::new(),
+            entry_start_options,
             auto_advance_intermediate_results,
         });
         self.begin_course_decide_for_chart(first_chart_id, options, &course_title);
@@ -6434,29 +6452,16 @@ impl WinitApp {
         else {
             return;
         };
-        let constraints = course.definition.constraints.clone();
         // Carry each gauge independently so auto-shift gauges that already
         // reached zero do not recover on the next chart.
         let carried_gauges = course.entry_results.last().map(|r| r.finished.gauge_carry.clone());
         let carried_combo = course.entry_results.last().map(|r| r.finished.course_combo);
-        let mut options = self.play_start_options();
-        apply_course_constraints(&mut options, &constraints);
+        let Some(mut options) = course.entry_start_options.get(next_index).cloned() else {
+            tracing::error!(next_index, "course entry start options are missing");
+            return;
+        };
         options.initial_gauge_values = carried_gauges;
         options.initial_course_combo = carried_combo;
-        // If the course is being replayed, attach the next queued replay
-        // (when it exists and matches the next chart's id).  Mismatches
-        // are silently skipped so the chart still plays normally.
-        if let Some(course) = &self.active_course
-            && let Some(replay) = course.queued_replays.get(next_index)
-            && replay.chart_id == next_chart_id
-        {
-            apply_queued_replay(&mut options, replay);
-        } else if let Some(course) = &self.active_course
-            && let Some(arrange) = course.arrange_overrides.get(next_index)
-        {
-            // Same-arrange course retry: reproduce this chart's arrange.
-            apply_arrange_override(&mut options, arrange);
-        }
         self.start_chart_with_options(next_chart_id, options);
     }
 
@@ -8030,44 +8035,61 @@ impl WinitApp {
             double_option: self.double_option,
             hs_fix: self.hs_fix_option,
             target: self.target_option,
-            target_ex_score_override: self.select_target_ex_score_override(),
             arrange_seed,
             ..Default::default()
         }
     }
 
-    fn select_target_ex_score_override(&self) -> Option<u32> {
-        let selected = self.select_items.get(self.selected_index);
-        let (local_best_ex_score, total_notes) = match selected {
-            Some(SelectItem::Chart(row)) => (
-                row.best_score.as_ref().map(|best| best.ex_score),
-                row.chart.as_ref().map(|chart| {
-                    let multiplier = match self.double_option.normalize_for_key_mode(
-                        KeyMode::from_str_opt(&chart.mode).unwrap_or_default(),
-                    ) {
-                        DoubleOption::Battle | DoubleOption::BattleAutoScratch => 2,
-                        DoubleOption::Off | DoubleOption::Flip => 1,
-                    };
-                    chart
-                        .scored_total_notes_for_setting(
-                            self.boot.profile_config.play.ln_mode_policy,
-                        )
-                        .saturating_mul(multiplier)
-                }),
-            ),
-            _ => (None, None),
-        };
-        if self.target_option == TargetOption::RankNext {
-            return total_notes.map(|total_notes| {
-                TargetOption::rank_next_ex_score(total_notes, local_best_ex_score.unwrap_or(0))
+    fn refresh_play_target_from_source(&mut self) {
+        let source = self
+            .active_play
+            .as_ref()
+            .map(|active| {
+                (
+                    active.running.score_key,
+                    active.running.target_option,
+                    active.running.best_ex_score,
+                )
+            })
+            .or_else(|| {
+                self.preloaded_play_session.as_ref().map(|preloaded| {
+                    (preloaded.preloaded.score_key, preloaded.session_options.target, None)
+                })
             });
+        let Some((score_key, target, local_best_ex_score)) = source else {
+            return;
+        };
+        if !target.uses_ir_ranking() {
+            return;
         }
-        self.select_ir.target_ex_score_for(
+
+        let context = select_ir_cache_context(
+            self.boot.profile_config.play.ln_mode_policy,
+            score_key.ln_policy,
+            score_key.double_option,
+            score_key.rule_mode,
+        );
+        self.select_ir.update(
             &self.boot.profile_config.ir,
-            self.selected_chart_sha256(),
-            self.target_option,
+            &self.boot.profile_paths.root_dir,
+            &context,
+            score_key.ln_policy,
+            score_key.double_option,
+            score_key.rule_mode,
+            Some(score_key.chart_sha256),
+        );
+        let resolved = self.select_ir.target_ex_score_for(
+            &self.boot.profile_config.ir,
+            Some(score_key.chart_sha256),
+            target,
             local_best_ex_score,
-        )
+        );
+        if let Some(active) = &mut self.active_play
+            && active.running.score_key == score_key
+            && active.running.target_option == target
+        {
+            active.running.target_ex_score = resolved;
+        }
     }
 
     /// リプレイファイル (例: `bmz ir replay` でダウンロードした IR リプレイ) を
@@ -8117,7 +8139,6 @@ impl WinitApp {
             ln_mode_override: None,
             course_gauge_override: None,
             course_gauge_property_override: None,
-            target_ex_score_override: None,
         };
         self.start_chart_with_options(chart_id, options);
         true
@@ -8137,23 +8158,24 @@ impl WinitApp {
     }
 
     fn try_start_replay_for_chart(&mut self, chart_id: i64, slot: u8, show_decide: bool) -> bool {
-        let Some(chart) = self
-            .boot
-            .library_db
-            .list_charts_by_ids(&[chart_id])
-            .ok()
-            .and_then(|mut charts| charts.pop())
-        else {
-            tracing::warn!(chart_id, "replay start failed: chart not found");
-            return false;
+        let chart = match crate::screens::play_session::load_source_chart_for_chart(
+            &self.boot.library_db,
+            chart_id,
+            None,
+        ) {
+            Ok(chart) => chart,
+            Err(error) => {
+                tracing::warn!(chart_id, %error, "replay start failed: source chart load failed");
+                return false;
+            }
         };
-        let sha = chart.sha256;
-        let key_mode = KeyMode::from_str_opt(&chart.mode).unwrap_or_default();
+        let sha = chart.identity.file_sha256;
+        let key_mode = chart.metadata.key_mode;
         let key = crate::storage::score_db::ScoreKey::with_options(
             sha,
-            crate::ln_policy::score_ln_policy(
+            crate::ln_policy::score_ln_policy_for_chart(
                 self.boot.profile_config.play.ln_mode_policy,
-                chart.ln_profile,
+                &chart,
             ),
             self.double_option.normalize_for_key_mode(key_mode).score_bucket(),
             self.boot.profile_config.play.rule_mode,
@@ -8201,7 +8223,6 @@ impl WinitApp {
             ln_mode_override: None,
             course_gauge_override: None,
             course_gauge_property_override: None,
-            target_ex_score_override: None,
         };
         self.start_replay_chart_with_options(chart_id, options, show_decide);
         true
@@ -10988,11 +11009,11 @@ impl WinitApp {
                 ln_profile,
             );
             let double_option = self.double_option.normalize_for_key_mode(key_mode).score_bucket();
-            let context = format!(
-                "{:?}:{}:{}",
+            let context = select_ir_cache_context(
                 self.boot.profile_config.play.ln_mode_policy,
-                double_option.as_str(),
-                self.boot.profile_config.play.rule_mode.as_str()
+                ln_policy,
+                double_option,
+                self.boot.profile_config.play.rule_mode,
             );
             let ir_config = self.boot.profile_config.ir.clone();
             self.select_ir.update(
@@ -13911,6 +13932,7 @@ impl ApplicationHandler<AppUserEvent> for WinitApp {
                 let background_start = Instant::now();
                 self.poll_chart_bga_texture_load();
                 self.poll_play_preload();
+                self.refresh_play_target_from_source();
                 self.poll_pending_table_fetch();
                 self.poll_pending_song_scan();
                 self.poll_pending_update_check();
@@ -21803,6 +21825,24 @@ mod tests {
             play_skin_key_mode_for_options(KeyMode::K14, DoubleOption::Battle),
             KeyMode::K14
         );
+    }
+
+    #[test]
+    fn select_ir_context_separates_source_resolved_score_keys() {
+        let auto_ln = select_ir_cache_context(
+            crate::ln_policy::LnPolicySetting::AutoLn,
+            crate::ln_policy::LnScorePolicy::AutoLn,
+            crate::select_options::DoubleOptionScoreBucket::Off,
+            bmz_gameplay::rule::RuleMode::Beatoraja,
+        );
+        let auto_cn = select_ir_cache_context(
+            crate::ln_policy::LnPolicySetting::AutoLn,
+            crate::ln_policy::LnScorePolicy::AutoCn,
+            crate::select_options::DoubleOptionScoreBucket::Off,
+            bmz_gameplay::rule::RuleMode::Beatoraja,
+        );
+
+        assert_ne!(auto_ln, auto_cn);
     }
 
     #[test]
