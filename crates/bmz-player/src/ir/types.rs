@@ -229,6 +229,14 @@ pub struct IrPagination {
     pub offset: u32,
     pub total: u32,
     pub has_more: bool,
+    #[serde(default)]
+    pub next_cursor: Option<IrOwnScoreHistoryCursor>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct IrOwnScoreHistoryCursor {
+    pub server_received_at_ms: i64,
+    pub score_id: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

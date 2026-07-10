@@ -233,6 +233,11 @@ export interface IrScoreHistoryResult {
   }
 }
 
+export interface IrOwnScoreHistoryCursor {
+  server_received_at_ms: number
+  score_id: string
+}
+
 export interface IrScoreHistoryEntry {
   score_id: string
   clear: string
@@ -261,6 +266,7 @@ export interface IrOwnScoreHistoryResult {
     offset: number
     total: number
     has_more: boolean
+    next_cursor?: IrOwnScoreHistoryCursor
   }
 }
 

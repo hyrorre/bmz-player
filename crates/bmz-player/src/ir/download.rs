@@ -62,12 +62,16 @@ pub async fn download_ir_scores(
         account_id: account_id.to_string(),
         ..IrScoreDownloadReport::default()
     };
-    let mut offset = 0;
+    let mut cursor = None;
 
     while report.action_count() < limit {
         let page_limit = 100;
         let page = client
-            .fetch_own_scores(&IrOwnScoreHistoryRequest { limit: page_limit, offset })
+            .fetch_own_scores(&IrOwnScoreHistoryRequest {
+                limit: page_limit,
+                offset: 0,
+                cursor: cursor.clone(),
+            })
             .await?;
         report.pages += 1;
         if page.scores.is_empty() {
@@ -86,7 +90,6 @@ pub async fn download_ir_scores(
             Some(limit),
         )?;
 
-        offset = offset.saturating_add(consumed as u32);
         if consumed < page.scores.len() {
             report.limit_reached = true;
             break;
@@ -98,6 +101,14 @@ pub async fn download_ir_scores(
             report.limit_reached = true;
             break;
         }
+        let next_cursor = page
+            .pagination
+            .next_cursor
+            .context("IR score history response is missing the next page cursor")?;
+        if cursor.as_ref() == Some(&next_cursor) {
+            bail!("IR score history cursor did not advance");
+        }
+        cursor = Some(next_cursor);
     }
 
     Ok(report)

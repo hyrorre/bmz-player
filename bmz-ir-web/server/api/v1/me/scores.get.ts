@@ -1,4 +1,4 @@
-import { and, desc, eq, sql } from 'drizzle-orm'
+import { and, desc, eq, lt, or, sql } from 'drizzle-orm'
 import { getQuery } from 'h3'
 import { db, schema } from 'hub:db'
 import type {
@@ -16,6 +16,7 @@ export default defineEventHandler(async (event): Promise<IrOwnScoreHistoryResult
   const query = getQuery(event)
   const limit = clampInteger(query.limit, 100, 1, 500)
   const offset = clampInteger(query.offset, 0, 0, 100_000)
+  const cursor = scoreCursorFromQuery(query.cursor_received_at_ms, query.cursor_score_id)
   const scoring = String(query.scoring ?? 'bms_ex_score_v1')
   if (scoring !== 'bms_ex_score_v1') {
     throw createError({ statusCode: 400, statusMessage: 'unsupported scoring' })
@@ -38,6 +39,16 @@ export default defineEventHandler(async (event): Promise<IrOwnScoreHistoryResult
   }
   if (typeof query.rule_mode === 'string' && query.rule_mode && query.rule_mode !== 'ALL') {
     conditions.push(eq(schema.scores.ruleMode, asRuleMode(query.rule_mode)))
+  }
+  const pageConditions = [...conditions]
+  if (cursor) {
+    const receivedAt = new Date(cursor.server_received_at_ms)
+    pageConditions.push(
+      or(
+        lt(schema.scores.serverReceivedAt, receivedAt),
+        and(eq(schema.scores.serverReceivedAt, receivedAt), lt(schema.scores.id, cursor.score_id)),
+      )!,
+    )
   }
 
   const [countRows, rows] = await Promise.all([
@@ -71,15 +82,18 @@ export default defineEventHandler(async (event): Promise<IrOwnScoreHistoryResult
         play_options: schema.scores.playOptions,
       })
       .from(schema.scores)
-      .where(and(...conditions))
-      .orderBy(desc(schema.scores.serverReceivedAt))
-      .limit(limit)
-      .offset(offset),
+      .where(and(...pageConditions))
+      .orderBy(desc(schema.scores.serverReceivedAt), desc(schema.scores.id))
+      .limit(limit + 1)
+      .offset(cursor ? 0 : offset),
   ])
   const total = Number(countRows[0]?.total ?? 0)
+  const hasMore = rows.length > limit
+  const visibleRows = rows.slice(0, limit)
+  const cursorRow = hasMore ? visibleRows.at(-1) : undefined
 
   return {
-    scores: rows.map((row) => {
+    scores: visibleRows.map((row) => {
       const { play_options: playOptions, ...score } = row
       return {
         ...score,
@@ -99,10 +113,35 @@ export default defineEventHandler(async (event): Promise<IrOwnScoreHistoryResult
       limit,
       offset,
       total,
-      has_more: offset + limit < total,
+      has_more: hasMore,
+      next_cursor: cursorRow
+        ? {
+            server_received_at_ms: cursorRow.server_received_at.getTime(),
+            score_id: cursorRow.score_id,
+          }
+        : undefined,
     },
   }
 })
+
+function scoreCursorFromQuery(
+  receivedAtValue: unknown,
+  scoreIdValue: unknown,
+): { server_received_at_ms: number; score_id: string } | null {
+  const hasReceivedAt = receivedAtValue != null
+  const hasScoreId = scoreIdValue != null
+  if (!hasReceivedAt && !hasScoreId) {
+    return null
+  }
+  if (!hasReceivedAt || !hasScoreId || typeof scoreIdValue !== 'string' || !scoreIdValue) {
+    throw createError({ statusCode: 400, statusMessage: 'score cursor is invalid' })
+  }
+  const serverReceivedAtMs = Number(receivedAtValue)
+  if (!Number.isSafeInteger(serverReceivedAtMs) || serverReceivedAtMs < 0) {
+    throw createError({ statusCode: 400, statusMessage: 'score cursor is invalid' })
+  }
+  return { server_received_at_ms: serverReceivedAtMs, score_id: scoreIdValue }
+}
 
 function clampInteger(value: unknown, defaultValue: number, min: number, max: number): number {
   const parsed = Number(value ?? defaultValue)

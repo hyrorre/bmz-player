@@ -8,9 +8,9 @@ use crate::select_options::DoubleOptionScoreBucket;
 
 use super::types::{
     IrAuthTokens, IrCourseRankingResult, IrDeviceKeysResponse, IrMeResponse,
-    IrOwnScoreHistoryResult, IrRankingResult, IrRankingScope, IrReplayDownloadTarget,
-    IrReplayUploadTarget, IrReplayVerifyResult, IrRivalsResponse, IrScoreSubmission,
-    IrSubmitOptions, IrSubmitResponse,
+    IrOwnScoreHistoryCursor, IrOwnScoreHistoryResult, IrRankingResult, IrRankingScope,
+    IrReplayDownloadTarget, IrReplayUploadTarget, IrReplayVerifyResult, IrRivalsResponse,
+    IrScoreSubmission, IrSubmitOptions, IrSubmitResponse,
 };
 
 #[derive(Debug, Clone)]
@@ -61,6 +61,7 @@ pub(crate) fn retry_after_seconds_from_error(error: &anyhow::Error) -> Option<u6
 pub struct IrOwnScoreHistoryRequest {
     pub limit: u32,
     pub offset: u32,
+    pub cursor: Option<IrOwnScoreHistoryCursor>,
 }
 
 impl BmzOfficialIrClient {
@@ -284,6 +285,11 @@ impl BmzOfficialIrClient {
         url.query_pairs_mut()
             .append_pair("limit", &request.limit.to_string())
             .append_pair("offset", &request.offset.to_string());
+        if let Some(cursor) = &request.cursor {
+            url.query_pairs_mut()
+                .append_pair("cursor_received_at_ms", &cursor.server_received_at_ms.to_string())
+                .append_pair("cursor_score_id", &cursor.score_id);
+        }
         let response = self
             .http
             .get(url)
