@@ -51,6 +51,8 @@ pub enum IrCommand {
         include_course_stages: bool,
         include_replay: bool,
     },
+    /// `ir attest-submitted [--provider KEY] [--all]` — 既送信scoreへ後付け署名する。
+    AttestSubmitted { provider: Option<String>, sync: bool, all: bool },
     /// `ir rivals [add <PLAYER_ID> | remove <PLAYER_ID>]`
     Rivals { action: Option<RivalAction> },
     /// `ir device-key [rotate]` — 署名鍵の表示 / ローテーション。
@@ -341,6 +343,7 @@ fn parse_ir_command(rest: &[String]) -> Result<Command> {
         }
         Some("sync") => Ok(Command::Ir(IrCommand::Sync)),
         Some("upload-local") => Ok(Command::Ir(parse_ir_upload_local_flags(&rest[1..])?)),
+        Some("attest-submitted") => Ok(Command::Ir(parse_ir_attest_submitted_flags(&rest[1..])?)),
         Some("rivals") => {
             let action = match rest.get(1).map(|s| s.as_str()) {
                 Some("add") => Some(RivalAction::Add {
@@ -378,12 +381,12 @@ fn parse_ir_command(rest: &[String]) -> Result<Command> {
         }
         Some(sub) => {
             bail!(
-                "unknown ir subcommand: {sub}. Use: login, logout, status, ranking, sync, upload-local, rivals, device-key, replay"
+                "unknown ir subcommand: {sub}. Use: login, logout, status, ranking, sync, upload-local, attest-submitted, rivals, device-key, replay"
             )
         }
         None => {
             bail!(
-                "ir requires a subcommand: login, logout, status, ranking, sync, upload-local, rivals, device-key"
+                "ir requires a subcommand: login, logout, status, ranking, sync, upload-local, attest-submitted, rivals, device-key"
             )
         }
     }
@@ -456,6 +459,38 @@ fn parse_ir_upload_local_flags(flags: &[String]) -> Result<IrCommand> {
         include_course_stages,
         include_replay,
     })
+}
+
+fn parse_ir_attest_submitted_flags(flags: &[String]) -> Result<IrCommand> {
+    let mut provider = None;
+    let mut sync = true;
+    let mut all = false;
+    let mut iter = flags.iter();
+
+    while let Some(flag) = iter.next() {
+        match flag.as_str() {
+            "--sync" => sync = true,
+            "--no-sync" => sync = false,
+            "--all" => all = true,
+            "--provider" => {
+                provider = Some(
+                    iter.next()
+                        .cloned()
+                        .ok_or_else(|| anyhow::anyhow!("--provider requires a value"))?,
+                );
+            }
+            _ if flag.starts_with("--provider=") => {
+                provider = Some(flag["--provider=".len()..].to_string());
+            }
+            other => bail!("unknown flag for ir attest-submitted: {other}"),
+        }
+    }
+
+    if all && !sync {
+        bail!("ir attest-submitted --all cannot be combined with --no-sync");
+    }
+
+    Ok(IrCommand::AttestSubmitted { provider, sync, all })
 }
 
 fn parse_ir_upload_limit(value: &str) -> Result<u32> {
@@ -650,7 +685,7 @@ where
 }
 
 pub fn app_help_text() -> &'static str {
-    "bmz-player\n\nUsage:\n  bmz-player [OPTIONS] [PATH]\n  bmz-player table <SUBCOMMAND>\n  bmz-player songs <SUBCOMMAND>\n  bmz-player course <SUBCOMMAND>\n  bmz-player profile <SUBCOMMAND>\n  bmz-player ir <SUBCOMMAND>\n\nOptions:\n  [PATH]                                 Start the chart at PATH (beatoraja-style alias)\n  -p | --practice                        Start boot chart in practice mode (CLI only)\n  --practice-start-ms <MS>               Initial practice section start (milliseconds)\n  --practice-end-ms <MS>                 Initial practice section end (milliseconds)\n  -a                                     Enable autoplay for the boot chart (alias of --autoplay-on-start)\n  -r1 | -r2 | -r3 | -r4                  Start replay slot 1..4 for the boot chart\n  --boot-play-sample                     Start the bundled sample chart on boot\n  --boot-result-sample                   Start directly on a synthetic result screen (debug)\n  --autoplay-on-start                    Enable autoplay for started charts\n  --boot-replay <1..4>                   Start replay slot N for the boot chart\n  --boot-course <ID>                     Start course ID fresh on boot\n  --boot-course-replay <ID>              Replay the latest attempt of course ID on boot\n  --smoke-exit-after-frames <N>          Exit after N rendered frames, clamped to 1 or more\n  --smoke-exit-after-result-frames <N>   Exit after N rendered result frames, clamped to 1 or more\n  --smoke-exit-on-result                 Exit when the app reaches the result screen\n  --smoke-screenshot <PATH>              Save a PNG screenshot on smoke exit (defaults to 3 frames)\n  --renderer <backend>                   wgpu renderer backend (vulkan, metal, dx12, gl, auto)\n  -h, --help                             Print this help\n\nTable subcommands:\n  table add <URL>       Add a difficulty table source and fetch it\n  table list            List all stored difficulty tables\n  table fetch [URL]     Fetch/update configured tables, or a single URL\n\nSongs subcommands:\n  songs add <PATH> [--no-recursive] [--disabled]   Add a song root directory\n  songs list                                        List configured song roots\n  songs load [PATH|NAME]                            Scan song roots (incremental)\n  songs reload [PATH|NAME]                          Force rescan song roots\n\nCourse subcommands:\n  course import <PATH>             Import beatoraja course JSON from a file or directory\n  course list                      List stored courses\n  course history <ID> [--limit N]  Show recent attempts of course ID (default limit 10)\n  course attempt <SCORE_ID>        Show per-chart breakdown of a single course attempt\n\nProfile subcommands:\n  profile list                                      List profiles under data/profiles\n  profile current                                   Show the active profile id\n  profile use <ID>                                  Set active_profile in data/config.toml\n  profile create <ID> [--name NAME] [--activate]    Create a new empty profile\n  profile copy <SRC> <ID> [--name NAME] [--activate] Copy an existing profile directory\n\nIR subcommands:\n  ir login --email <EMAIL> [--password PASS] [--base-url URL]\n  ir logout [--provider KEY]\n  ir status\n  ir ranking <SHA256> [--ln-policy P] [--scope S] [--limit N]\n  ir sync\n  ir upload-local [--dry-run] [--limit N] [--sync] [--all] [--provider KEY]\n  ir rivals [add <PLAYER_ID> | remove <PLAYER_ID>]\n  ir device-key [rotate]\n  ir replay <SCORE_ID>\n\nExamples:\n  cargo run -p bmz-player -- /path/to/chart.bms\n  cargo run -p bmz-player -- -a /path/to/chart.bms\n  cargo run -p bmz-player -- -r2 /path/to/chart.bms\n  cargo run -p bmz-player -- --boot-play-sample --smoke-exit-after-frames 3\n  cargo run -p bmz-player -- --boot-result-sample --smoke-exit-after-result-frames 3\n  cargo run -p bmz-player -- --boot-play-sample --smoke-screenshot /tmp/bmz-play.png\n  cargo run -p bmz-player -- --boot-play-sample --boot-replay 1 --smoke-exit-on-result\n  cargo run -p bmz-player -- table add https://example.com/table.html\n  cargo run -p bmz-player -- table list\n  cargo run -p bmz-player -- table fetch https://example.com/table.html\n  cargo run -p bmz-player -- songs add /path/to/bms\n  cargo run -p bmz-player -- songs list\n  cargo run -p bmz-player -- songs load\n  cargo run -p bmz-player -- songs reload my-bms-folder\n  cargo run -p bmz-player -- course import /path/to/course.json\n  cargo run -p bmz-player -- course list\n  cargo run -p bmz-player -- profile create alt --name Alt --activate\n  cargo run -p bmz-player -- ir upload-local --dry-run\n  cargo run -p bmz-player -- ir upload-local --limit 20 --sync\n  cargo run -p bmz-player -- ir upload-local --all"
+    "bmz-player\n\nUsage:\n  bmz-player [OPTIONS] [PATH]\n  bmz-player table <SUBCOMMAND>\n  bmz-player songs <SUBCOMMAND>\n  bmz-player course <SUBCOMMAND>\n  bmz-player profile <SUBCOMMAND>\n  bmz-player ir <SUBCOMMAND>\n\nOptions:\n  [PATH]                                 Start the chart at PATH (beatoraja-style alias)\n  -p | --practice                        Start boot chart in practice mode (CLI only)\n  --practice-start-ms <MS>               Initial practice section start (milliseconds)\n  --practice-end-ms <MS>                 Initial practice section end (milliseconds)\n  -a                                     Enable autoplay for the boot chart (alias of --autoplay-on-start)\n  -r1 | -r2 | -r3 | -r4                  Start replay slot 1..4 for the boot chart\n  --boot-play-sample                     Start the bundled sample chart on boot\n  --boot-result-sample                   Start directly on a synthetic result screen (debug)\n  --autoplay-on-start                    Enable autoplay for started charts\n  --boot-replay <1..4>                   Start replay slot N for the boot chart\n  --boot-course <ID>                     Start course ID fresh on boot\n  --boot-course-replay <ID>              Replay the latest attempt of course ID on boot\n  --smoke-exit-after-frames <N>          Exit after N rendered frames, clamped to 1 or more\n  --smoke-exit-after-result-frames <N>   Exit after N rendered result frames, clamped to 1 or more\n  --smoke-exit-on-result                 Exit when the app reaches the result screen\n  --smoke-screenshot <PATH>              Save a PNG screenshot on smoke exit (defaults to 3 frames)\n  --renderer <backend>                   wgpu renderer backend (vulkan, metal, dx12, gl, auto)\n  -h, --help                             Print this help\n\nTable subcommands:\n  table add <URL>       Add a difficulty table source and fetch it\n  table list            List all stored difficulty tables\n  table fetch [URL]     Fetch/update configured tables, or a single URL\n\nSongs subcommands:\n  songs add <PATH> [--no-recursive] [--disabled]   Add a song root directory\n  songs list                                        List configured song roots\n  songs load [PATH|NAME]                            Scan song roots (incremental)\n  songs reload [PATH|NAME]                          Force rescan song roots\n\nCourse subcommands:\n  course import <PATH>             Import beatoraja course JSON from a file or directory\n  course list                      List stored courses\n  course history <ID> [--limit N]  Show recent attempts of course ID (default limit 10)\n  course attempt <SCORE_ID>        Show per-chart breakdown of a single course attempt\n\nProfile subcommands:\n  profile list                                      List profiles under data/profiles\n  profile current                                   Show the active profile id\n  profile use <ID>                                  Set active_profile in data/config.toml\n  profile create <ID> [--name NAME] [--activate]    Create a new empty profile\n  profile copy <SRC> <ID> [--name NAME] [--activate] Copy an existing profile directory\n\nIR subcommands:\n  ir login --email <EMAIL> [--password PASS] [--base-url URL]\n  ir logout [--provider KEY]\n  ir status\n  ir ranking <SHA256> [--ln-policy P] [--scope S] [--limit N]\n  ir sync\n  ir upload-local [--dry-run] [--limit N] [--sync] [--all] [--provider KEY]\n  ir attest-submitted [--provider KEY] [--all]\n  ir rivals [add <PLAYER_ID> | remove <PLAYER_ID>]\n  ir device-key [rotate]\n  ir replay <SCORE_ID>\n\nExamples:\n  cargo run -p bmz-player -- /path/to/chart.bms\n  cargo run -p bmz-player -- -a /path/to/chart.bms\n  cargo run -p bmz-player -- -r2 /path/to/chart.bms\n  cargo run -p bmz-player -- --boot-play-sample --smoke-exit-after-frames 3\n  cargo run -p bmz-player -- --boot-result-sample --smoke-exit-after-result-frames 3\n  cargo run -p bmz-player -- --boot-play-sample --smoke-screenshot /tmp/bmz-play.png\n  cargo run -p bmz-player -- --boot-play-sample --boot-replay 1 --smoke-exit-on-result\n  cargo run -p bmz-player -- table add https://example.com/table.html\n  cargo run -p bmz-player -- table list\n  cargo run -p bmz-player -- table fetch https://example.com/table.html\n  cargo run -p bmz-player -- songs add /path/to/bms\n  cargo run -p bmz-player -- songs list\n  cargo run -p bmz-player -- songs load\n  cargo run -p bmz-player -- songs reload my-bms-folder\n  cargo run -p bmz-player -- course import /path/to/course.json\n  cargo run -p bmz-player -- course list\n  cargo run -p bmz-player -- profile create alt --name Alt --activate\n  cargo run -p bmz-player -- ir upload-local --dry-run\n  cargo run -p bmz-player -- ir upload-local --limit 20 --sync\n  cargo run -p bmz-player -- ir upload-local --all\n  cargo run -p bmz-player -- ir attest-submitted --all"
 }
 
 fn parse_practice_ms(value: &str, arg: &str) -> Result<u32> {
@@ -982,6 +1017,7 @@ mod tests {
         assert!(help.contains("profile copy"));
         assert!(help.contains("ir upload-local"));
         assert!(help.contains("upload-local [--dry-run] [--limit N] [--sync] [--all]"));
+        assert!(help.contains("ir attest-submitted"));
     }
 
     #[test]
@@ -1050,6 +1086,19 @@ mod tests {
         assert!(parse_command(["ir", "upload-local", "--all", "--dry-run"]).is_err());
         assert!(parse_command(["ir", "upload-local", "--all", "--no-sync"]).is_err());
         assert!(parse_command(["ir", "upload-local", "--unknown"]).is_err());
+    }
+
+    #[test]
+    fn parse_command_routes_ir_attest_submitted_flags() {
+        assert_eq!(
+            parse_command(["ir", "attest-submitted", "--provider=bmz", "--all"]).unwrap(),
+            Command::Ir(IrCommand::AttestSubmitted {
+                provider: Some("bmz".to_string()),
+                sync: true,
+                all: true,
+            })
+        );
+        assert!(parse_command(["ir", "attest-submitted", "--all", "--no-sync"]).is_err());
     }
 
     #[test]

@@ -13,6 +13,7 @@ import type {
   IrRuleMode,
   IrScoreSubmission,
   IrSubmitResponse,
+  IrVerificationStatus,
   LnScorePolicy,
 } from '../../shared/types/ir'
 
@@ -21,6 +22,7 @@ const EFFECTIVE_LN_MODES = new Set(['ln', 'cn', 'hcn'])
 const DEVICE_TYPES = new Set(['keyboard', 'controller'])
 const RULE_MODES = new Set(['Beatoraja', 'Lr2Oraja', 'Dx'])
 const RANKING_SCOPES = new Set(['global', 'self_and_rivals', 'rivals', 'self', 'around_self'])
+const LOCAL_BACKFILL_SOURCE = 'local_backfill'
 export const CLEAR_RANK: Record<string, number> = {
   no_play: 0,
   NoPlay: 0,
@@ -87,7 +89,16 @@ interface BestScoreRow extends BestScoreCandidate {
   arrange_1p?: string
   arrange_2p?: string
   played_at: string | null
-  verification: 'unverified' | 'signed' | 'invalid' | 'trusted'
+  verification: IrVerificationStatus
+}
+
+export class IrEvidenceValidationError extends Error {}
+export class IrScoreNotFoundError extends Error {}
+
+interface ScoreAttestationPayload {
+  score_id: string
+  purpose: 'score_attestation'
+  evidence: Record<string, unknown>
 }
 
 interface ScoreHistoryRankingRow extends Omit<BestScoreRow, 'score_id'> {
@@ -192,6 +203,62 @@ export function validateScoreSubmission(value: unknown): IrScoreSubmission {
   return payload
 }
 
+export function validateScoreAttestation(value: unknown): ScoreAttestationPayload {
+  if (!isRecord(value)) {
+    throw new IrEvidenceValidationError('score attestation payload must be an object')
+  }
+  if (typeof value.score_id !== 'string' || value.score_id.length === 0) {
+    throw new IrEvidenceValidationError('score_id is required')
+  }
+  if (value.purpose !== 'score_attestation') {
+    throw new IrEvidenceValidationError('score attestation purpose is invalid')
+  }
+  if (!isRecord(value.evidence)) {
+    throw new IrEvidenceValidationError('score attestation evidence is required')
+  }
+  return {
+    score_id: value.score_id,
+    purpose: value.purpose,
+    evidence: value.evidence,
+  }
+}
+
+export async function attestScore(
+  user: IrRequestUser,
+  scoreId: string,
+  payload: ScoreAttestationPayload,
+): Promise<{ score_id: string; verification: IrVerificationStatus }> {
+  if (payload.score_id !== scoreId) {
+    throw new IrEvidenceValidationError('score_id does not match the request path')
+  }
+  const attestationVerification = await resolveVerification(user.id, payload)
+  if (attestationVerification === 'unverified') {
+    throw new IrEvidenceValidationError('score attestation evidence is required')
+  }
+
+  const score = await db.query.scores.findFirst({
+    columns: { evidence: true, playOptions: true },
+    where: and(eq(schema.scores.id, scoreId), eq(schema.scores.playerId, user.id)),
+  })
+  if (!score) {
+    throw new IrScoreNotFoundError('score not found')
+  }
+
+  const verification = verificationStatusForSignedSubmission({ play_options: score.playOptions })
+  const evidence = { ...score.evidence, attestation: payload.evidence }
+  await db.batch([
+    db
+      .update(schema.scores)
+      .set({ evidence, verification })
+      .where(and(eq(schema.scores.id, scoreId), eq(schema.scores.playerId, user.id))),
+    db
+      .update(schema.bestScores)
+      .set({ verification, updatedAt: new Date() })
+      .where(and(eq(schema.bestScores.scoreId, scoreId), eq(schema.bestScores.playerId, user.id))),
+  ])
+  return { score_id: scoreId, verification }
+}
+
 export async function submitScore(
   user: IrRequestUser,
   payload: IrScoreSubmission,
@@ -199,13 +266,13 @@ export async function submitScore(
   rankingLimit: number,
 ): Promise<IrSubmitResponse> {
   const doubleOption = normalizeDoubleOption(payload.play_options.double_option)
+  const verification = await resolveVerification(user.id, payload)
   await upsertChart(payload, shouldUpdateExistingChart(payload.play_options, doubleOption))
 
   const bp =
     judgeTotal(payload, 'bad') + judgeTotal(payload, 'poor') + judgeTotal(payload, 'empty_poor')
   const cb = judgeTotal(payload, 'bad') + judgeTotal(payload, 'poor')
   const clearRank = CLEAR_RANK[payload.result.clear] ?? 0
-  const verification = await resolveVerification(user.id, payload)
   const deviceType = payload.play_options.device_type
 
   const scoreId = randomUUID()
@@ -821,7 +888,7 @@ async function prepareBestScoreUpsert(
     return { bestUpdated: false, updatedFields, statement: null }
   }
 
-  const verificationStatus = verification as 'unverified' | 'signed' | 'invalid' | 'trusted'
+  const verificationStatus = verification as IrVerificationStatus
   const playedAt = playedAtDate(payload.result.played_at)
   const values = {
     id: randomUUID(),
@@ -1051,21 +1118,26 @@ async function getPlayerNames(playerIds: string[]): Promise<Map<string, string>>
  * tamper evidence の署名を検証する。
  *
  * - evidence なし / 署名なし → unverified
- * - 署名ありで device key 不明・hash 不一致・署名不正 → invalid
- * - 検証成功 → signed
+ * - 署名ありで device key 不明・hash 不一致・署名不正 → reject
+ * - 検証成功 → submission source に応じた verified_play / signed_backfill
  *
  * canonical form は「evidence を除いた payload をキー昇順 compact JSON 化」
  * したもので、BMZ クライアント (serde_json の BTreeMap 出力) と一致させる。
  */
 export async function resolveVerification(
   playerIdOrDb: string | unknown,
-  payloadOrPlayerId: { evidence?: Record<string, unknown> } | string,
-  maybePayload?: { evidence?: Record<string, unknown> },
-): Promise<'unverified' | 'signed' | 'invalid'> {
+  payloadOrPlayerId:
+    | { evidence?: Record<string, unknown>; play_options?: Record<string, unknown> }
+    | string,
+  maybePayload?: { evidence?: Record<string, unknown>; play_options?: Record<string, unknown> },
+): Promise<IrVerificationStatus> {
   const playerId = typeof playerIdOrDb === 'string' ? playerIdOrDb : String(payloadOrPlayerId)
   const payload =
     typeof playerIdOrDb === 'string'
-      ? (payloadOrPlayerId as { evidence?: Record<string, unknown> })
+      ? (payloadOrPlayerId as {
+          evidence?: Record<string, unknown>
+          play_options?: Record<string, unknown>
+        })
       : (maybePayload ?? {})
   const evidence = payload.evidence
   if (!evidence || typeof evidence !== 'object') {
@@ -1082,7 +1154,7 @@ export async function resolveVerification(
     typeof keyId !== 'string' ||
     typeof claimedHash !== 'string'
   ) {
-    return 'invalid'
+    throw new IrEvidenceValidationError('score evidence is invalid')
   }
 
   const key = await db.query.deviceKeys.findFirst({
@@ -1094,12 +1166,12 @@ export async function resolveVerification(
     ),
   })
   if (!key) {
-    return 'invalid'
+    throw new IrEvidenceValidationError('score evidence is invalid')
   }
 
   const hash = createHash('sha256').update(canonicalSubmissionJson(payload)).digest()
   if (hash.toString('hex') !== claimedHash.toLowerCase()) {
-    return 'invalid'
+    throw new IrEvidenceValidationError('score evidence is invalid')
   }
 
   try {
@@ -1110,10 +1182,21 @@ export async function resolveVerification(
     ])
     const publicKey = createPublicKey({ key: der, format: 'der', type: 'spki' })
     const signatureBytes = Buffer.from(signature, 'base64url')
-    return cryptoVerify(null, hash, publicKey, signatureBytes) ? 'signed' : 'invalid'
+    if (!cryptoVerify(null, hash, publicKey, signatureBytes)) {
+      throw new IrEvidenceValidationError('score evidence is invalid')
+    }
+    return verificationStatusForSignedSubmission(payload)
   } catch {
-    return 'invalid'
+    throw new IrEvidenceValidationError('score evidence is invalid')
   }
+}
+
+function verificationStatusForSignedSubmission(payload: {
+  play_options?: Record<string, unknown>
+}): IrVerificationStatus {
+  return payload.play_options?.submission_source === LOCAL_BACKFILL_SOURCE
+    ? 'signed_backfill'
+    : 'verified_play'
 }
 
 function canonicalSubmissionJson(payload: { evidence?: Record<string, unknown> }): string {
@@ -1277,4 +1360,5 @@ export const __test = {
   shouldUpdateExistingChart,
   dedupeBestRowsByPlayer,
   bestRowsFromHistory,
+  verificationStatusForSignedSubmission,
 }

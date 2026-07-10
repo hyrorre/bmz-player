@@ -183,7 +183,7 @@ export const scores = sqliteTable(
     replayFormat: text('replay_format'),
     replayUploadIntent: text('replay_upload_intent'),
     evidence: jsonText<Record<string, unknown>>('evidence', '{}'),
-    verification: text('verification', { enum: ['unverified', 'signed', 'invalid', 'trusted'] })
+    verification: text('verification', { enum: ['unverified', 'signed_backfill', 'verified_play'] })
       .notNull()
       .default('unverified'),
     accepted: integer('accepted', { mode: 'boolean' }).notNull().default(true),
@@ -261,7 +261,7 @@ export const bestScores = sqliteTable(
     scoring: text('scoring').notNull(),
     playedAt: integer('played_at', { mode: 'timestamp_ms' }),
     serverReceivedAt: integer('server_received_at', { mode: 'timestamp_ms' }).notNull(),
-    verification: text('verification', { enum: ['unverified', 'signed', 'invalid', 'trusted'] })
+    verification: text('verification', { enum: ['unverified', 'signed_backfill', 'verified_play'] })
       .notNull()
       .default('unverified'),
     updatedAt: integer('updated_at', { mode: 'timestamp_ms' })
@@ -418,7 +418,7 @@ export const courseScores = sqliteTable(
       .default(sql`(unixepoch('subsec') * 1000)`),
     deviceType: text('device_type', { enum: ['keyboard', 'controller'] }).notNull(),
     evidence: jsonText<Record<string, unknown>>('evidence', '{}'),
-    verification: text('verification', { enum: ['unverified', 'signed', 'invalid', 'trusted'] })
+    verification: text('verification', { enum: ['unverified', 'signed_backfill', 'verified_play'] })
       .notNull()
       .default('unverified'),
     accepted: integer('accepted', { mode: 'boolean' }).notNull().default(true),
@@ -458,7 +458,7 @@ export const bestCourseScores = sqliteTable(
     scoring: text('scoring').notNull(),
     playedAt: integer('played_at', { mode: 'timestamp_ms' }),
     serverReceivedAt: integer('server_received_at', { mode: 'timestamp_ms' }).notNull(),
-    verification: text('verification', { enum: ['unverified', 'signed', 'invalid', 'trusted'] })
+    verification: text('verification', { enum: ['unverified', 'signed_backfill', 'verified_play'] })
       .notNull()
       .default('unverified'),
   },

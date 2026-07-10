@@ -1,5 +1,10 @@
 import { getQuery, readBody } from 'h3'
-import { parseRankingScope, submitScore, validateScoreSubmission } from '../../services/ir'
+import {
+  IrEvidenceValidationError,
+  parseRankingScope,
+  submitScore,
+  validateScoreSubmission,
+} from '../../services/ir'
 import { requireIrUser } from '../../utils/auth'
 import { SCORE_SUBMIT_RATE_LIMIT, checkUserRateLimit } from '../../utils/rate_limit'
 import type { IrRankingScope } from '../../../shared/types/ir'
@@ -18,7 +23,14 @@ export default defineEventHandler(async (event) => {
     ? parseRankingScopes(String(query.ranking_scopes ?? 'global'))
     : []
 
-  return submitScore(user, payload, rankingScopes, rankingLimit)
+  try {
+    return await submitScore(user, payload, rankingScopes, rankingLimit)
+  } catch (error) {
+    if (error instanceof IrEvidenceValidationError) {
+      throw createError({ statusCode: 400, statusMessage: error.message })
+    }
+    throw error
+  }
 })
 
 function parseRankingScopes(value: string): IrRankingScope[] {

@@ -14,7 +14,7 @@ import {
   stableStringify,
   type IrRequestUser,
 } from './ir'
-import type { IrRuleMode } from '../../shared/types/ir'
+import type { IrRuleMode, IrVerificationStatus } from '../../shared/types/ir'
 
 const LN_POLICY_ALIASES = new Map([
   ['AutoLn', 'AutoLn'],
@@ -220,10 +220,13 @@ export async function submitCourseScore(
   // D1 batch 内で直前に作った course_score_id を best_course_scores から
   // 参照すると FK で失敗するため、course score を先に確定保存してから
   // best を更新する。重複 retry 時もここで best の復旧を試みる。
-  const bestStatement =
-    verification !== 'invalid'
-      ? await prepareBestCourseScoreUpsert(user.id, payload, score, clearRank, verification)
-      : null
+  const bestStatement = await prepareBestCourseScoreUpsert(
+    user.id,
+    payload,
+    score,
+    clearRank,
+    verification,
+  )
   if (bestStatement) {
     await bestStatement
   }
@@ -271,7 +274,7 @@ async function prepareBestCourseScoreUpsert(
   payload: CourseScoreSubmission,
   score: { id: string; serverReceivedAt: Date },
   clearRank: number,
-  verification: string,
+  verification: IrVerificationStatus,
 ) {
   const current = await db.query.bestCourseScores.findFirst({
     columns: { exScore: true, clearRank: true, bp: true, maxCombo: true },
@@ -324,7 +327,7 @@ async function prepareBestCourseScoreUpsert(
     scoring: payload.rule.scoring,
     playedAt: playedAtDate(payload.result.played_at),
     serverReceivedAt: score.serverReceivedAt,
-    verification: verification as 'unverified' | 'signed' | 'invalid' | 'trusted',
+    verification,
   }
   return db
     .insert(schema.bestCourseScores)

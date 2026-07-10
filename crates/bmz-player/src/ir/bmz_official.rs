@@ -212,6 +212,24 @@ impl BmzOfficialIrClient {
         decode_response(response, "BMZ IR replay verification").await
     }
 
+    /// 既に受理されたscoreへ device key のattestationを追加する。
+    pub async fn attest_score(
+        &self,
+        score_id: &str,
+        request: &serde_json::Value,
+    ) -> Result<serde_json::Value> {
+        let url = self.base_url.join(&format!("/api/v1/scores/{score_id}/attestations"))?;
+        let response = self
+            .http
+            .post(url)
+            .bearer_auth(self.require_token()?)
+            .json(request)
+            .send()
+            .await
+            .context("failed to submit BMZ IR score attestation")?;
+        decode_response(response, "BMZ IR score attestation").await
+    }
+
     /// 自分の device key を失効させる。
     pub async fn revoke_device_key(&self, key_id: &str) -> Result<()> {
         let url = self.base_url.join(&format!("/api/v1/device-keys/{key_id}"))?;

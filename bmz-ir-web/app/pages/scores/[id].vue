@@ -91,12 +91,10 @@ const judgeRows = [
 
 const verificationBadge = computed(() => {
   switch (data.value?.score.verification) {
-    case 'signed':
-      return { color: 'success' as const, label: '署名済み' }
-    case 'invalid':
-      return { color: 'error' as const, label: '署名不正' }
-    case 'trusted':
-      return { color: 'success' as const, label: '検証済み' }
+    case 'verified_play':
+      return { color: 'success' as const, label: 'プレイ署名済み' }
+    case 'signed_backfill':
+      return { color: 'info' as const, label: '履歴署名済み' }
     default:
       return { color: 'neutral' as const, label: '未署名' }
   }

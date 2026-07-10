@@ -17,8 +17,8 @@ use crate::ir::credentials::{
     IrStoredCredentials, delete_credentials, load_credentials, save_credentials,
 };
 use crate::ir::sync::{
-    IR_SYNC_BATCH_LIMIT, IR_SYNC_JOB_SPACING_MS, IrSyncReport, IrSyncThrottle,
-    ensure_fresh_credentials, sync_pending_ir_jobs,
+    IR_SYNC_BATCH_LIMIT, IR_SYNC_JOB_SPACING_MS, IrSyncJobFilter, IrSyncReport, IrSyncThrottle,
+    ensure_fresh_credentials, sync_pending_ir_jobs, sync_pending_ir_jobs_filtered,
 };
 use crate::ir::types::IrRankingScope;
 use crate::paths::{ProfilePaths, resolve_app_paths, resolve_profile_paths};
@@ -57,6 +57,9 @@ pub async fn run_ir_command(cmd: IrCommand) -> Result<()> {
                 include_replay,
             };
             upload_local(&profile_paths, &profile, options, sync_after_enqueue, all).await
+        }
+        IrCommand::AttestSubmitted { provider, sync, all } => {
+            attest_submitted_scores(&profile_paths, &profile, provider.as_deref(), sync, all).await
         }
         IrCommand::Rivals { action } => rivals(&profile_paths, &mut profile, action).await,
         IrCommand::DeviceKey { rotate } => device_key(&profile_paths, &profile, rotate).await,
@@ -534,6 +537,80 @@ async fn sync(profile_paths: &ProfilePaths, profile: &ProfileConfig) -> Result<(
     Ok(())
 }
 
+async fn attest_submitted_scores(
+    profile_paths: &ProfilePaths,
+    profile: &ProfileConfig,
+    provider: Option<&str>,
+    sync_after_enqueue: bool,
+    all: bool,
+) -> Result<()> {
+    let app_paths = resolve_app_paths()?;
+    crate::storage::migration::migrate_score_db(&profile_paths.score_db)?;
+    crate::storage::migration::migrate_network_db(&profile_paths.network_db)?;
+
+    let (provider_key, account_id) = resolve_local_upload_target(&profile.ir, provider)?;
+    let mut network_db = NetworkDatabase::open(&profile_paths.network_db)?;
+    let enqueued = network_db.enqueue_ir_score_attestation_jobs(
+        &provider_key,
+        &account_id,
+        now_unix_seconds(),
+    )?;
+    println!("provider: {provider_key}");
+    println!("account: {account_id}");
+    println!("queued score attestations: {enqueued}");
+
+    let mut remaining = network_db.unfinished_ir_score_job_count_for_kind(
+        &provider_key,
+        &account_id,
+        IrJobKind::Attestation,
+    )?;
+    if !sync_after_enqueue || remaining == 0 {
+        println!("remaining queued score attestations: {remaining}");
+        return Ok(());
+    }
+
+    let mut submitted = 0_u32;
+    loop {
+        let report = sync_cli_jobs_for_kind(
+            &mut network_db,
+            &profile_paths.score_db,
+            profile_paths.root_dir.as_path(),
+            app_paths.logs_dir.as_path(),
+            &profile.ir,
+            &provider_key,
+            &account_id,
+            IrJobKind::Attestation,
+            IR_SYNC_BATCH_LIMIT,
+        )
+        .await?;
+        submitted = submitted.saturating_add(report.submitted);
+        println!("submitted: {}, failed: {}", report.submitted, report.failed);
+        for message in &report.messages {
+            println!("  {message}");
+        }
+        remaining = network_db.unfinished_ir_score_job_count_for_kind(
+            &provider_key,
+            &account_id,
+            IrJobKind::Attestation,
+        )?;
+        println!("remaining queued score attestations: {remaining}");
+        if report.failed > 0 {
+            bail!(
+                "score attestation stopped after {submitted} submissions because {} jobs failed",
+                report.failed
+            );
+        }
+        if !all || remaining == 0 {
+            return Ok(());
+        }
+        if report.submitted == 0 {
+            bail!(
+                "score attestation is waiting for an existing sending job; rerun after its 5-minute lease expires"
+            );
+        }
+    }
+}
+
 async fn upload_local(
     profile_paths: &ProfilePaths,
     profile: &ProfileConfig,
@@ -812,6 +889,50 @@ async fn sync_cli_jobs(
     ir_config: &IrConfig,
     limit: u32,
 ) -> Result<IrSyncReport> {
+    sync_cli_jobs_with_filter(
+        network_db,
+        score_db_path,
+        profile_root,
+        logs_dir,
+        ir_config,
+        limit,
+        None,
+    )
+    .await
+}
+
+async fn sync_cli_jobs_for_kind(
+    network_db: &mut NetworkDatabase,
+    score_db_path: &Path,
+    profile_root: &Path,
+    logs_dir: &Path,
+    ir_config: &IrConfig,
+    provider_key: &str,
+    account_id: &str,
+    kind: IrJobKind,
+    limit: u32,
+) -> Result<IrSyncReport> {
+    sync_cli_jobs_with_filter(
+        network_db,
+        score_db_path,
+        profile_root,
+        logs_dir,
+        ir_config,
+        limit,
+        Some((provider_key, account_id, kind)),
+    )
+    .await
+}
+
+async fn sync_cli_jobs_with_filter(
+    network_db: &mut NetworkDatabase,
+    score_db_path: &Path,
+    profile_root: &Path,
+    logs_dir: &Path,
+    ir_config: &IrConfig,
+    limit: u32,
+    filter: Option<(&str, &str, IrJobKind)>,
+) -> Result<IrSyncReport> {
     let estimated_seconds =
         u64::from(limit.saturating_sub(1)).saturating_mul(IR_SYNC_JOB_SPACING_MS).div_ceil(1_000);
     println!("syncing up to {limit} queued jobs (about {estimated_seconds}s)");
@@ -821,11 +942,35 @@ async fn sync_cli_jobs(
         let ignore_retry_backoff = total.failed == 0;
         if index > 0 {
             let has_next = if ignore_retry_backoff {
-                !network_db
-                    .pending_ir_score_jobs_ignoring_backoff(now_unix_seconds(), 1)?
-                    .is_empty()
+                match filter {
+                    Some((provider_key, account_id, kind)) => !network_db
+                        .pending_ir_score_jobs_for_kind(
+                            provider_key,
+                            account_id,
+                            kind,
+                            now_unix_seconds(),
+                            1,
+                            true,
+                        )?
+                        .is_empty(),
+                    None => !network_db
+                        .pending_ir_score_jobs_ignoring_backoff(now_unix_seconds(), 1)?
+                        .is_empty(),
+                }
             } else {
-                !network_db.pending_ir_score_jobs(now_unix_seconds(), 1)?.is_empty()
+                match filter {
+                    Some((provider_key, account_id, kind)) => !network_db
+                        .pending_ir_score_jobs_for_kind(
+                            provider_key,
+                            account_id,
+                            kind,
+                            now_unix_seconds(),
+                            1,
+                            false,
+                        )?
+                        .is_empty(),
+                    None => !network_db.pending_ir_score_jobs(now_unix_seconds(), 1)?.is_empty(),
+                }
             };
             if !has_next {
                 break;
@@ -834,19 +979,38 @@ async fn sync_cli_jobs(
         }
         print!("[{}/{}] syncing...", index + 1, limit);
         std::io::stdout().flush()?;
-        let report = match sync_pending_ir_jobs(
-            network_db,
-            score_db_path,
-            profile_root,
-            logs_dir,
-            ir_config,
-            now_unix_seconds(),
-            1,
-            ignore_retry_backoff,
-            IrSyncThrottle::none(),
-        )
-        .await
-        {
+        let sync_result = match filter {
+            Some((provider_key, account_id, kind)) => {
+                sync_pending_ir_jobs_filtered(
+                    network_db,
+                    score_db_path,
+                    profile_root,
+                    logs_dir,
+                    ir_config,
+                    IrSyncJobFilter { provider_key, account_id, kind },
+                    now_unix_seconds(),
+                    1,
+                    ignore_retry_backoff,
+                    IrSyncThrottle::none(),
+                )
+                .await
+            }
+            None => {
+                sync_pending_ir_jobs(
+                    network_db,
+                    score_db_path,
+                    profile_root,
+                    logs_dir,
+                    ir_config,
+                    now_unix_seconds(),
+                    1,
+                    ignore_retry_backoff,
+                    IrSyncThrottle::none(),
+                )
+                .await
+            }
+        };
+        let report = match sync_result {
             Ok(report) => report,
             Err(error) => {
                 println!(" error");

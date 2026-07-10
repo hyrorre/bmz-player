@@ -4,7 +4,7 @@ export type EffectiveLnMode = 'ln' | 'cn' | 'hcn'
 
 export type IrRankingScope = 'global' | 'self_and_rivals' | 'rivals' | 'self' | 'around_self'
 
-export type IrVerificationStatus = 'unverified' | 'signed' | 'invalid' | 'trusted'
+export type IrVerificationStatus = 'unverified' | 'signed_backfill' | 'verified_play'
 
 export type IrDeviceType = 'keyboard' | 'controller'
 

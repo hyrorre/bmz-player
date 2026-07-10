@@ -67,7 +67,7 @@ GET    /api/v1/courses/{course_hash}/ranking   # global のみ
   成功済み job は payload を空にし、同期後に 30 日以内または最新 500 件だけを
   `network.db` に保持する。未送信 / 失敗 / 送信中 job は剪定対象外。
 - local backfill: `bmz ir upload-local [--dry-run] [--limit N] [--sync] [--all]` で
-  `score.db` の既存 `score_history` を unverified な score submit として enqueue
+  `score.db` の既存 `score_history` を `local_backfill` source の score submit として enqueue
   する。既送信履歴と既に queue にある履歴は既定でスキップし、course stage /
   autoplay は既定で除外。local backfill は未登録 chart を作成できるが、既存 chart
   の正規メタデータは上書きしない。`--sync` で既存の未完了score jobがある場合は、
@@ -75,6 +75,12 @@ GET    /api/v1/courses/{course_hash}/ranking   # global のみ
   `--all` は `--sync` を含む完走モードで、既存queueの排出と次の投入batchを候補が
   なくなるまで繰り返す。送信失敗または他プロセスの `sending` job で進捗できない場合は
   非ゼロで終了し、retry/backoff または5分のlease後に再実行する。
+  送信直前にdevice keyで署名し、サーバー側では `signed_backfill` として保存する。
+  既に送信済みで署名のないscoreは `bmz ir attest-submitted --all` で、ローカルの
+  成功履歴に残るremote score IDへ後付けattestationを送る。attestationはscore本文を
+  再送せず、所有者のdevice keyでscore IDを署名してverificationだけを更新する。
+  成功履歴の保持期間外でremote score IDを失ったscoreは対象外で、将来のserver側一括
+  attestation APIが必要になる。
   per-history ghost は現在の `score_history` には保持していないため送らない。
 - rate limit: score submit / course score は 15 分あたり user 1500 / IP 3000。
   replay upload 系は 1 replay あたり upload-url / upload / verify の 3 request を使うため、
@@ -110,11 +116,10 @@ GET    /api/v1/courses/{course_hash}/ranking   # global のみ
    `provider_key` はクライアント側で URL から推測せず、BMZ IR サーバーの
    auth response から取得する。ローカル IR は `bmz-dev`、production IR は
    `bmz` を返す。サーバー側は `NUXT_IR_PROVIDER_KEY` で明示上書き可能。
-4. **verification**: DB は `unverified / signed / invalid / trusted` の 4 値。
+4. **verification**: DB は `unverified / signed_backfill / verified_play` の 3 値。
    `replay_uploaded / verified` はスコアの verification ではなく
    `replay_objects.status` (`metadata_only / pending_upload / uploaded /
-   verified / rejected`) で管理する。署名不正 (`invalid`) のスコアも履歴と
-   best_scores の対象にし、ランキング返却時に `verification` として明示する。
+   verified / rejected`) で管理する。不正な署名はscore submitを400で拒否する。
 5. **tamper evidence**: canonical form は「top-level `evidence` を除いた
    payload を RFC 8785 JSON Canonicalization Scheme (JCS) で compact JSON 化」
    したもの。署名は Ed25519(secret, SHA256(canonical))。
@@ -889,7 +894,7 @@ rival_only=true&include_self=false -> scope=rivals
           "played_at": "2026-06-04T12:34:56Z",
           "option": "random",
           "seed": 123456789,
-          "verification": "signed"
+          "verification": "verified_play"
         },
         "stats": {
           "play_count": 42,
@@ -918,7 +923,7 @@ rival_only=true&include_self=false -> scope=rivals
           "played_at": "2026-06-03T12:00:00Z",
           "option": "mirror",
           "seed": 987654321,
-          "verification": "signed"
+          "verification": "verified_play"
         },
         "stats": {
           "play_count": 12,
@@ -1310,14 +1315,12 @@ canonical hashを保存
 ### Verification status
 
 ```txt
-unverified       replayなし / 署名なし
-signed           BMZ client keyで署名済み
-replay_uploaded  replay hash一致
-verified         replay検証済み
-trusted          将来の追加検証済み
+unverified       署名なし
+signed_backfill  local score.db history を後日device keyで署名
+verified_play    通常プレイ結果をdevice keyで署名
 ```
 
-初期は `signed` まででよい。
+リプレイの検証状態は `replay_objects.status` として別管理する。
 
 ---
 
@@ -2036,7 +2039,7 @@ create table public.course_scores (
   idempotency_key text not null,
 
   constraint course_scores_verification_known check (
-    verification in ('unverified', 'signed', 'invalid', 'trusted')
+    verification in ('unverified', 'signed_backfill', 'verified_play')
   ),
   constraint course_scores_device_known check (device_type in ('keyboard', 'controller')),
   unique (player_id, idempotency_key)
@@ -2083,7 +2086,7 @@ best 更新条件は単曲と同じ
 `ex_score > clear_rank > bp(小) > max_combo` の順。
 段位らしさを優先するなら `clear_rank` (合格段位) を第一キーにする案も
 あるが、IR 全体の「EX score 主軸」を崩さない方を既定にする。
-`verification = 'invalid'` も単曲同様 best 更新対象。
+不正な署名は保存せず拒否する。
 同じ player / `idempotency_key` の重複投稿は既存の `course_score_id` を返し、
 best は再計算せず `best_updated=false` とする。
 

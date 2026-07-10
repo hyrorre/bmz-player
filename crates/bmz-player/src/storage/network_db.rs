@@ -21,12 +21,13 @@ pub enum IrScoreJobStatus {
     Failed,
 }
 
-/// IR ジョブの種別。単曲スコア、コーススコア、または付随するリプレイ送信。
+/// IR ジョブの種別。単曲スコア、コーススコア、リプレイ、または既送信scoreへの署名。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum IrJobKind {
     Score,
     Course,
     Replay,
+    Attestation,
 }
 
 impl IrJobKind {
@@ -35,6 +36,7 @@ impl IrJobKind {
             Self::Score => "score",
             Self::Course => "course",
             Self::Replay => "replay",
+            Self::Attestation => "attestation",
         }
     }
 
@@ -42,6 +44,7 @@ impl IrJobKind {
         match value {
             "course" => Self::Course,
             "replay" => Self::Replay,
+            "attestation" => Self::Attestation,
             _ => Self::Score,
         }
     }
@@ -163,6 +166,43 @@ impl NetworkDatabase {
         self.pending_ir_score_jobs_with_backoff_policy(now, limit, true)
     }
 
+    pub fn pending_ir_score_jobs_for_kind(
+        &self,
+        provider: &str,
+        account_id: &str,
+        kind: IrJobKind,
+        now: i64,
+        limit: u32,
+        ignore_retry_backoff: bool,
+    ) -> Result<Vec<IrScoreJobRecord>> {
+        const SENDING_STALE_AFTER_SECONDS: i64 = 300;
+        let retry_filter = if ignore_retry_backoff {
+            "status IN ('pending', 'failed')"
+        } else {
+            "status IN ('pending', 'failed') AND next_attempt_at <= ?1"
+        };
+        let sql = format!(
+            "SELECT id, provider, account_id, local_score_id, chart_sha256, ln_policy,
+                payload_json, status, attempt_count, next_attempt_at, last_error,
+                created_at, updated_at, kind
+             FROM ir_score_jobs
+             WHERE provider = ?4
+               AND account_id = ?5
+               AND kind = ?6
+               AND (({retry_filter})
+                    OR (status = 'sending' AND updated_at <= ?1 - ?3))
+             ORDER BY next_attempt_at ASC, id ASC
+             LIMIT ?2"
+        );
+        let mut stmt = self.conn.prepare(&sql)?;
+        stmt.query_map(
+            params![now, limit, SENDING_STALE_AFTER_SECONDS, provider, account_id, kind.as_str()],
+            ir_score_job_from_row,
+        )?
+        .collect::<std::result::Result<Vec<_>, _>>()
+        .map_err(Into::into)
+    }
+
     pub fn claim_pending_ir_score_jobs(
         &mut self,
         now: i64,
@@ -190,6 +230,62 @@ impl NetworkDatabase {
             let mut stmt = tx.prepare(&sql)?;
             stmt.query_map(params![now, limit, SENDING_STALE_AFTER_SECONDS], ir_score_job_from_row)?
                 .collect::<std::result::Result<Vec<_>, _>>()?
+        };
+        for job in &jobs {
+            tx.execute(
+                "UPDATE ir_score_jobs
+                 SET status = 'sending', updated_at = ?2
+                 WHERE id = ?1",
+                params![job.id, now],
+            )?;
+        }
+        tx.commit()?;
+        Ok(jobs)
+    }
+
+    pub fn claim_pending_ir_score_jobs_for_kind(
+        &mut self,
+        provider: &str,
+        account_id: &str,
+        kind: IrJobKind,
+        now: i64,
+        limit: u32,
+        ignore_retry_backoff: bool,
+    ) -> Result<Vec<IrScoreJobRecord>> {
+        const SENDING_STALE_AFTER_SECONDS: i64 = 300;
+        let retry_filter = if ignore_retry_backoff {
+            "status IN ('pending', 'failed')"
+        } else {
+            "status IN ('pending', 'failed') AND next_attempt_at <= ?1"
+        };
+        let sql = format!(
+            "SELECT id, provider, account_id, local_score_id, chart_sha256, ln_policy,
+                payload_json, status, attempt_count, next_attempt_at, last_error,
+                created_at, updated_at, kind
+             FROM ir_score_jobs
+             WHERE provider = ?4
+               AND account_id = ?5
+               AND kind = ?6
+               AND (({retry_filter})
+                    OR (status = 'sending' AND updated_at <= ?1 - ?3))
+             ORDER BY next_attempt_at ASC, id ASC
+             LIMIT ?2"
+        );
+        let tx = self.conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let jobs = {
+            let mut stmt = tx.prepare(&sql)?;
+            stmt.query_map(
+                params![
+                    now,
+                    limit,
+                    SENDING_STALE_AFTER_SECONDS,
+                    provider,
+                    account_id,
+                    kind.as_str()
+                ],
+                ir_score_job_from_row,
+            )?
+            .collect::<std::result::Result<Vec<_>, _>>()?
         };
         for job in &jobs {
             tx.execute(
@@ -244,6 +340,59 @@ impl NetworkDatabase {
             |row| row.get(0),
         )?;
         Ok(u32::try_from(count).unwrap_or(u32::MAX))
+    }
+
+    /// 成功済み単曲scoreのremote idから、後付け署名用jobを重複なく投入する。
+    pub fn enqueue_ir_score_attestation_jobs(
+        &mut self,
+        provider: &str,
+        account_id: &str,
+        now: i64,
+    ) -> Result<u32> {
+        let submitted = {
+            let mut statement = self.conn.prepare(
+                "SELECT DISTINCT local_score_id, remote_score_id
+                 FROM ir_score_submissions
+                 WHERE provider = ?1
+                   AND account_id = ?2
+                   AND kind = 'score'
+                   AND status = 'succeeded'
+                   AND remote_score_id != ''
+                 ORDER BY local_score_id ASC",
+            )?;
+            statement
+                .query_map(params![provider, account_id], |row| {
+                    Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+                })?
+                .collect::<std::result::Result<Vec<_>, _>>()?
+        };
+
+        let mut enqueued = 0;
+        for (local_score_id, remote_score_id) in submitted {
+            if self.has_ir_score_job(
+                provider,
+                account_id,
+                IrJobKind::Attestation,
+                local_score_id,
+            )? {
+                continue;
+            }
+            let payload_json = serde_json::to_string(&serde_json::json!({
+                "remote_score_id": remote_score_id,
+            }))?;
+            self.enqueue_ir_score_job(&NewIrScoreJob {
+                provider: provider.to_string(),
+                account_id: account_id.to_string(),
+                kind: IrJobKind::Attestation,
+                local_score_id,
+                chart_sha256: [0; 32],
+                ln_policy: LnScorePolicy::AutoLn,
+                payload_json,
+                now,
+            })?;
+            enqueued += 1;
+        }
+        Ok(enqueued)
     }
 
     fn pending_ir_score_jobs_with_backoff_policy(
@@ -707,6 +856,65 @@ mod tests {
     }
 
     #[test]
+    fn claiming_ir_jobs_for_kind_keeps_other_jobs_pending() {
+        let mut db = open_network_db();
+        let score = enqueue_test_job(&mut db, 1, 100);
+        let attestation = db
+            .enqueue_ir_score_job(&NewIrScoreJob {
+                provider: "bmz-official".to_string(),
+                account_id: "account-1".to_string(),
+                kind: IrJobKind::Attestation,
+                local_score_id: 2,
+                chart_sha256: [0; 32],
+                ln_policy: LnScorePolicy::AutoLn,
+                payload_json: r#"{"remote_score_id":"remote-2"}"#.to_string(),
+                now: 100,
+            })
+            .unwrap();
+        db.enqueue_ir_score_job(&NewIrScoreJob {
+            provider: "bmz-official".to_string(),
+            account_id: "account-2".to_string(),
+            kind: IrJobKind::Attestation,
+            local_score_id: 3,
+            chart_sha256: [0; 32],
+            ln_policy: LnScorePolicy::AutoLn,
+            payload_json: r#"{"remote_score_id":"remote-3"}"#.to_string(),
+            now: 100,
+        })
+        .unwrap();
+
+        let pending = db
+            .pending_ir_score_jobs_for_kind(
+                "bmz-official",
+                "account-1",
+                IrJobKind::Attestation,
+                100,
+                10,
+                true,
+            )
+            .unwrap();
+        assert_eq!(pending.iter().map(|job| job.id).collect::<Vec<_>>(), vec![attestation]);
+
+        let claimed = db
+            .claim_pending_ir_score_jobs_for_kind(
+                "bmz-official",
+                "account-1",
+                IrJobKind::Attestation,
+                100,
+                10,
+                true,
+            )
+            .unwrap();
+        assert_eq!(claimed.iter().map(|job| job.id).collect::<Vec<_>>(), vec![attestation]);
+
+        let score_status: String = db
+            .conn()
+            .query_row("SELECT status FROM ir_score_jobs WHERE id = ?1", [score], |row| row.get(0))
+            .unwrap();
+        assert_eq!(score_status, "pending");
+    }
+
+    #[test]
     fn existing_ir_job_is_detected_before_backfill_reenqueue() {
         let mut db = open_network_db();
         enqueue_test_job(&mut db, 42, 100);
@@ -739,6 +947,40 @@ mod tests {
             .unwrap(),
             0
         );
+    }
+
+    #[test]
+    fn submitted_scores_enqueue_one_attestation_job() {
+        let mut db = open_network_db();
+        let score_job_id = enqueue_test_job(&mut db, 42, 100);
+        db.insert_ir_score_submission(&NewIrScoreSubmission {
+            job_id: score_job_id,
+            provider: "bmz-official".to_string(),
+            account_id: "account-1".to_string(),
+            kind: IrJobKind::Score,
+            local_score_id: 42,
+            remote_score_id: "remote-42".to_string(),
+            status: "succeeded".to_string(),
+            submitted_at: 200,
+            log_path: "ir-submissions.jsonl".to_string(),
+            error: String::new(),
+        })
+        .unwrap();
+
+        assert_eq!(
+            db.enqueue_ir_score_attestation_jobs("bmz-official", "account-1", 300).unwrap(),
+            1
+        );
+        assert_eq!(
+            db.enqueue_ir_score_attestation_jobs("bmz-official", "account-1", 301).unwrap(),
+            0
+        );
+
+        let jobs = db.pending_ir_score_jobs(300, 10).unwrap();
+        let job = jobs.iter().find(|job| job.kind == IrJobKind::Attestation).unwrap();
+        let payload: serde_json::Value = serde_json::from_str(&job.payload_json).unwrap();
+        assert_eq!(job.local_score_id, 42);
+        assert_eq!(payload["remote_score_id"], "remote-42");
     }
 
     #[test]

@@ -1,5 +1,6 @@
 import { createError, readBody } from 'h3'
 import { submitCourseScore, validateCourseScoreSubmission } from '../../services/course_ir'
+import { IrEvidenceValidationError } from '../../services/ir'
 import { requireIrUser } from '../../utils/auth'
 import { SCORE_SUBMIT_RATE_LIMIT, checkUserRateLimit } from '../../utils/rate_limit'
 
@@ -16,5 +17,12 @@ export default defineEventHandler(async (event) => {
       statusMessage: error instanceof Error ? error.message : 'invalid course score payload',
     })
   }
-  return submitCourseScore(user, payload)
+  try {
+    return await submitCourseScore(user, payload)
+  } catch (error) {
+    if (error instanceof IrEvidenceValidationError) {
+      throw createError({ statusCode: 400, statusMessage: error.message })
+    }
+    throw error
+  }
 })

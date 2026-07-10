@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import { isUniqueConstraintError } from '../utils/db_errors'
 import { computeCourseHash, validateCourseScoreSubmission } from './course_ir'
-import { __test, stableStringify } from './ir'
+import { __test, stableStringify, validateScoreAttestation } from './ir'
 
 describe('stableStringify', () => {
   test('matches JCS number formatting used by Rust IR evidence', () => {
@@ -137,6 +137,35 @@ describe('chart update policy', () => {
 
   test('keeps existing chart metadata for double battle submissions', () => {
     expect(__test.shouldUpdateExistingChart({ device_type: 'controller' }, 'battle')).toBe(false)
+  })
+})
+
+describe('verification status', () => {
+  test('classifies signed local history separately from signed gameplay', () => {
+    expect(
+      __test.verificationStatusForSignedSubmission({ play_options: { device_type: 'keyboard' } }),
+    ).toBe('verified_play')
+    expect(
+      __test.verificationStatusForSignedSubmission({
+        play_options: { device_type: 'keyboard', submission_source: 'local_backfill' },
+      }),
+    ).toBe('signed_backfill')
+  })
+})
+
+describe('score attestation validation', () => {
+  test('requires a score id, purpose, and evidence object', () => {
+    expect(() => validateScoreAttestation({})).toThrow('score_id is required')
+    expect(() =>
+      validateScoreAttestation({ score_id: 'score-1', purpose: 'other', evidence: {} }),
+    ).toThrow('purpose is invalid')
+    expect(
+      validateScoreAttestation({
+        score_id: 'score-1',
+        purpose: 'score_attestation',
+        evidence: {},
+      }),
+    ).toMatchObject({ score_id: 'score-1' })
   })
 })
 
