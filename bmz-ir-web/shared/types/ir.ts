@@ -253,3 +253,58 @@ export interface IrScoreHistoryEntry {
   server_received_at: string
   verification: IrVerificationStatus
 }
+
+export interface IrOwnScoreHistoryResult {
+  scores: IrOwnScoreHistoryEntry[]
+  pagination: {
+    limit: number
+    offset: number
+    total: number
+    has_more: boolean
+  }
+}
+
+export interface IrOwnScoreHistoryEntry {
+  score_id: string
+  chart_sha256: string
+  clear: string
+  ex_score: number
+  max_combo: number
+  min_bp: number
+  min_cb: number
+  bp: number
+  cb: number
+  gauge: string
+  ln_policy: LnScorePolicy
+  double_option: IrDoubleOption
+  rule_mode: IrRuleMode
+  judges: {
+    fast: {
+      pgreat: number
+      great: number
+      good: number
+      bad: number
+      poor: number
+      empty_poor: number
+    }
+    slow: {
+      pgreat: number
+      great: number
+      good: number
+      bad: number
+      poor: number
+      empty_poor: number
+    }
+  }
+  notes: number
+  pass_notes: number
+  device_type: IrDeviceType
+  arrange_1p?: string
+  arrange_2p?: string
+  random_seed?: number
+  assist_mask?: number
+  played_at: number | null
+  server_received_at: number
+  verification: IrVerificationStatus
+  replay_hash?: string
+}

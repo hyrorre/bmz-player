@@ -110,7 +110,7 @@ pub fn build_score_submission(
             ex_score: result.score.ex_score(),
             max_combo: result.score.max_combo,
             notes: result.total_notes,
-            pass_notes: None,
+            pass_notes: Some(result.score.past_notes),
             min_bp: result.record_bp(),
             min_cb: result.record_cb(),
             ghost,
@@ -329,7 +329,7 @@ mod tests {
 
         assert_eq!(payload.result.min_bp, 6);
         assert_eq!(payload.result.min_cb, 3);
-        assert_eq!(payload.result.pass_notes, None);
+        assert_eq!(payload.result.pass_notes, Some(0));
         assert_eq!(payload.rule.ln_policy, LnScorePolicy::ForceLn);
         assert_eq!(payload.rule.rule_mode, "Beatoraja");
         assert_eq!(payload.rule.key_mode, "7K");

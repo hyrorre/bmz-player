@@ -7,9 +7,10 @@ use reqwest::{Url, header};
 use crate::select_options::DoubleOptionScoreBucket;
 
 use super::types::{
-    IrAuthTokens, IrCourseRankingResult, IrDeviceKeysResponse, IrMeResponse, IrRankingResult,
-    IrRankingScope, IrReplayDownloadTarget, IrReplayUploadTarget, IrReplayVerifyResult,
-    IrRivalsResponse, IrScoreSubmission, IrSubmitOptions, IrSubmitResponse,
+    IrAuthTokens, IrCourseRankingResult, IrDeviceKeysResponse, IrMeResponse,
+    IrOwnScoreHistoryResult, IrRankingResult, IrRankingScope, IrReplayDownloadTarget,
+    IrReplayUploadTarget, IrReplayVerifyResult, IrRivalsResponse, IrScoreSubmission,
+    IrSubmitOptions, IrSubmitResponse,
 };
 
 #[derive(Debug, Clone)]
@@ -54,6 +55,12 @@ pub(crate) fn retry_after_seconds_from_error(error: &anyhow::Error) -> Option<u6
     error.chain().find_map(|cause| {
         cause.downcast_ref::<IrHttpResponseError>().and_then(|error| error.retry_after_seconds)
     })
+}
+
+#[derive(Debug, Clone)]
+pub struct IrOwnScoreHistoryRequest {
+    pub limit: u32,
+    pub offset: u32,
 }
 
 impl BmzOfficialIrClient {
@@ -267,6 +274,24 @@ impl BmzOfficialIrClient {
         let response =
             builder.send().await.context("failed to send BMZ IR course ranking request")?;
         decode_response(response, "BMZ IR course ranking fetch").await
+    }
+
+    pub async fn fetch_own_scores(
+        &self,
+        request: &IrOwnScoreHistoryRequest,
+    ) -> Result<IrOwnScoreHistoryResult> {
+        let mut url = self.base_url.join("/api/v1/me/scores")?;
+        url.query_pairs_mut()
+            .append_pair("limit", &request.limit.to_string())
+            .append_pair("offset", &request.offset.to_string());
+        let response = self
+            .http
+            .get(url)
+            .bearer_auth(self.require_token()?)
+            .send()
+            .await
+            .context("failed to send BMZ IR own score history request")?;
+        decode_response(response, "BMZ IR own score history fetch").await
     }
 
     /// Ed25519 公開鍵をサーバーへ登録し、device key id を返す。

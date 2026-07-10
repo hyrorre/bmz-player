@@ -1289,6 +1289,26 @@ pub const SCORE_MIGRATIONS: &[Migration] = &[
             "DROP INDEX IF EXISTS idx_score_course_replay_slots_hash;",
         ],
     },
+    Migration {
+        version: 20,
+        statements: &[
+            "CREATE TABLE score_history_sources (
+                id INTEGER PRIMARY KEY,
+                score_history_id INTEGER NOT NULL
+                    REFERENCES score_history(id) ON DELETE CASCADE,
+                source TEXT NOT NULL,
+                provider TEXT NOT NULL,
+                account_id TEXT NOT NULL,
+                remote_score_id TEXT NOT NULL,
+                verification TEXT NOT NULL DEFAULT '',
+                server_received_at INTEGER NOT NULL DEFAULT 0,
+                imported_at INTEGER NOT NULL,
+                UNIQUE(source, provider, account_id, remote_score_id)
+            );",
+            "CREATE INDEX idx_score_history_sources_history
+                ON score_history_sources(score_history_id);",
+        ],
+    },
 ];
 
 pub const NETWORK_MIGRATIONS: &[Migration] = &[Migration {

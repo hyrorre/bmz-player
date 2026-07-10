@@ -215,6 +215,58 @@ pub fn default_ranking_limit() -> u32 {
     100
 }
 
+/// `GET /api/v1/me/scores` のレスポンス。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IrOwnScoreHistoryResult {
+    #[serde(default)]
+    pub scores: Vec<IrOwnScoreHistoryEntry>,
+    pub pagination: IrPagination,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IrPagination {
+    pub limit: u32,
+    pub offset: u32,
+    pub total: u32,
+    pub has_more: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IrOwnScoreHistoryEntry {
+    pub score_id: String,
+    pub chart_sha256: String,
+    pub clear: String,
+    pub ex_score: u32,
+    pub max_combo: u32,
+    pub min_bp: u32,
+    pub min_cb: u32,
+    pub bp: u32,
+    pub cb: u32,
+    pub gauge: String,
+    pub ln_policy: String,
+    pub double_option: String,
+    pub rule_mode: String,
+    pub judges: IrJudgePayload,
+    pub notes: u32,
+    pub pass_notes: u32,
+    #[serde(default)]
+    pub device_type: String,
+    #[serde(default)]
+    pub arrange_1p: Option<String>,
+    #[serde(default)]
+    pub arrange_2p: Option<String>,
+    #[serde(default)]
+    pub random_seed: Option<i64>,
+    #[serde(default)]
+    pub assist_mask: Option<u32>,
+    #[serde(default)]
+    pub played_at: Option<i64>,
+    pub server_received_at: i64,
+    pub verification: String,
+    #[serde(default)]
+    pub replay_hash: Option<String>,
+}
+
 /// `/api/v1/auth/login` / `/api/v1/auth/refresh` のレスポンス。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IrAuthTokens {

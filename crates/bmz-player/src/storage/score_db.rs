@@ -126,6 +126,28 @@ pub enum ScoreInsertMode {
     HistoryOnly,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScoreHistorySourceKey {
+    pub source: String,
+    pub provider: String,
+    pub account_id: String,
+    pub remote_score_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScoreHistorySourceRecord {
+    pub key: ScoreHistorySourceKey,
+    pub verification: String,
+    pub server_received_at: i64,
+    pub imported_at: i64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScoreSourceInsertOutcome {
+    Inserted { history_id: i64 },
+    Duplicate { history_id: i64 },
+}
+
 #[derive(Debug, Clone)]
 pub struct ScoreRecordMetadata {
     pub ln_policy: LnScorePolicy,
@@ -351,6 +373,47 @@ impl ScoreDatabase {
         }
         tx.commit()?;
         Ok(history_id)
+    }
+
+    pub fn score_history_id_for_source(&self, key: &ScoreHistorySourceKey) -> Result<Option<i64>> {
+        score_history_id_for_source(&self.conn, key)
+    }
+
+    pub fn attach_score_history_source(
+        &mut self,
+        score_history_id: i64,
+        source: &ScoreHistorySourceRecord,
+    ) -> Result<bool> {
+        let inserted = insert_score_history_source(&self.conn, score_history_id, source, true)?;
+        Ok(inserted > 0)
+    }
+
+    pub fn insert_score_with_source(
+        &mut self,
+        record: &ScoreRecord,
+        source: &ScoreHistorySourceRecord,
+    ) -> Result<ScoreSourceInsertOutcome> {
+        if let Some(history_id) = self.score_history_id_for_source(&source.key)? {
+            return Ok(ScoreSourceInsertOutcome::Duplicate { history_id });
+        }
+
+        let tx = self.conn.transaction()?;
+        let previous_best = previous_best_snapshot(
+            &tx,
+            ScoreKey::with_options(
+                record.chart_sha256,
+                record.ln_policy,
+                record.double_option,
+                record_rule_mode(record),
+            ),
+        )?;
+        insert_score_history(&tx, record, previous_best.as_ref())?;
+        let history_id = tx.last_insert_rowid();
+        upsert_score_best(&tx, record)?;
+        update_player_stats(&tx, record)?;
+        insert_score_history_source(&tx, history_id, source, false)?;
+        tx.commit()?;
+        Ok(ScoreSourceInsertOutcome::Inserted { history_id })
     }
 
     pub fn player_info(&self) -> Result<PlayerInfo> {
@@ -1123,6 +1186,58 @@ fn insert_score_history(
         ],
     )?;
     Ok(())
+}
+
+fn score_history_id_for_source(
+    conn: &Connection,
+    key: &ScoreHistorySourceKey,
+) -> Result<Option<i64>> {
+    conn.query_row(
+        "SELECT score_history_id
+         FROM score_history_sources
+         WHERE source = ?1
+           AND provider = ?2
+           AND account_id = ?3
+           AND remote_score_id = ?4",
+        params![
+            key.source.as_str(),
+            key.provider.as_str(),
+            key.account_id.as_str(),
+            key.remote_score_id.as_str(),
+        ],
+        |row| row.get(0),
+    )
+    .optional()
+    .map_err(Into::into)
+}
+
+fn insert_score_history_source(
+    conn: &Connection,
+    score_history_id: i64,
+    source: &ScoreHistorySourceRecord,
+    ignore_duplicate: bool,
+) -> Result<usize> {
+    let insert = if ignore_duplicate { "INSERT OR IGNORE" } else { "INSERT" };
+    let sql = format!(
+        "{insert} INTO score_history_sources (
+            score_history_id, source, provider, account_id, remote_score_id,
+            verification, server_received_at, imported_at
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)"
+    );
+    conn.execute(
+        &sql,
+        params![
+            score_history_id,
+            source.key.source.as_str(),
+            source.key.provider.as_str(),
+            source.key.account_id.as_str(),
+            source.key.remote_score_id.as_str(),
+            source.verification.as_str(),
+            source.server_received_at,
+            source.imported_at,
+        ],
+    )
+    .map_err(Into::into)
 }
 
 fn record_rule_mode(record: &ScoreRecord) -> RuleMode {

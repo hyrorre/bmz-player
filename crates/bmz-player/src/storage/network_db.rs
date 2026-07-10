@@ -400,6 +400,30 @@ impl NetworkDatabase {
         Ok(())
     }
 
+    pub fn local_score_id_for_remote_score(
+        &self,
+        provider: &str,
+        account_id: &str,
+        remote_score_id: &str,
+    ) -> Result<Option<i64>> {
+        self.conn
+            .query_row(
+                "SELECT local_score_id
+                 FROM ir_score_submissions
+                 WHERE provider = ?1
+                   AND account_id = ?2
+                   AND kind = 'score'
+                   AND remote_score_id = ?3
+                   AND status = 'succeeded'
+                 ORDER BY submitted_at DESC, id DESC
+                 LIMIT 1",
+                params![provider, account_id, remote_score_id],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(Into::into)
+    }
+
     pub fn prune_succeeded_ir_score_jobs(&mut self, now: i64) -> Result<usize> {
         self.prune_succeeded_ir_score_jobs_with_policy(
             now,
