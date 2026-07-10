@@ -954,6 +954,13 @@ impl Renderer {
             Some(ScreenshotRequest { path: path.into(), copy_to_clipboard: true });
     }
 
+    /// 次の描画フレームでスクリーンショットを撮る予定があるか。
+    ///
+    /// 撮影フレームではトースト等の一時 UI を隠す判定に使う。
+    pub fn has_pending_screenshot(&self) -> bool {
+        self.pending_screenshot.is_some()
+    }
+
     pub fn flush_pending_screenshots(&mut self) -> Result<()> {
         let Some(gpu) = &mut self.gpu else {
             return Ok(());

@@ -362,6 +362,14 @@ impl UpdatePrompt {
     }
 }
 
+/// 手動スクリーンショット後に左上へ短時間表示するトースト。
+struct ScreenshotToast {
+    message: String,
+    shown_at: Instant,
+}
+
+const SCREENSHOT_TOAST_DURATION: Duration = Duration::from_secs(2);
+
 struct WinitApp {
     boot: BootstrappedApp,
     window: Option<Arc<Window>>,
@@ -469,6 +477,8 @@ struct WinitApp {
     smoke_exit_after_result_frames: Option<u32>,
     smoke_exit_on_result: bool,
     smoke_screenshot_path: Option<PathBuf>,
+    /// 手動スクリーンショット後に左上へ出す一時メッセージ。
+    screenshot_toast: Option<ScreenshotToast>,
     rendered_frames: u32,
     rendered_result_frames: u32,
     app_started_at: Instant,
@@ -2041,6 +2051,7 @@ impl WinitApp {
             smoke_exit_after_result_frames: options.smoke_exit_after_result_frames,
             smoke_exit_on_result: options.smoke_exit_on_result,
             smoke_screenshot_path: options.smoke_screenshot_path.as_ref().map(PathBuf::from),
+            screenshot_toast: None,
             rendered_frames: 0,
             rendered_result_frames: 0,
             app_started_at: now,
@@ -2516,10 +2527,20 @@ impl WinitApp {
 
     fn build_overlay_snapshot(&self) -> OverlaySnapshot {
         OverlaySnapshot {
-            left_text: self.song_scan_overlay_text(),
+            left_text: self.left_overlay_text(),
             text: self.always_overlay_text(),
             fps_text: self.wgpu_fps_overlay_text(),
         }
+    }
+
+    fn left_overlay_text(&self) -> String {
+        resolve_left_overlay_text(
+            self.renderer.has_pending_screenshot(),
+            self.screenshot_toast
+                .as_ref()
+                .map(|toast| (toast.message.as_str(), toast.shown_at.elapsed())),
+            &self.song_scan_overlay_text(),
+        )
     }
 
     fn song_scan_overlay_text(&self) -> String {
@@ -11640,16 +11661,21 @@ impl WinitApp {
             &self.boot.app_config.screenshot.dir,
             &self.boot.app_paths.data_dir,
         );
-        if self.boot.app_config.screenshot.copy_to_clipboard {
+        let toast_message = if self.boot.app_config.screenshot.copy_to_clipboard {
             self.renderer.request_screenshot_with_clipboard(path.clone());
             tracing::info!(
                 path = %path.display(),
                 "manual screenshot requested with clipboard copy"
             );
+            "スクリーンショットを保存しました（クリップボード）".to_string()
         } else {
             self.renderer.request_screenshot(path.clone());
             tracing::info!(path = %path.display(), "manual screenshot requested");
-        }
+            "スクリーンショットを保存しました".to_string()
+        };
+        // トーストは次フレーム以降に出す。撮影フレームでは has_pending_screenshot で隠す。
+        self.screenshot_toast =
+            Some(ScreenshotToast { message: toast_message, shown_at: Instant::now() });
         self.notify_obs_save_recording(crate::obs::ObsRecordingSaveReason::OnScreenshot);
         if let Some(window) = &self.window {
             window.request_redraw();
@@ -14044,6 +14070,24 @@ fn next_screenshot_path(config_dir: &str, data_dir: &Path) -> PathBuf {
         }
     }
     dir.join(format!("bmz-screenshot-{stamp}-overflow.png"))
+}
+
+/// 左上オーバーレイ文字列を決める。
+///
+/// 撮影フレーム (`hide_toast`) ではトーストを隠し、連続撮影時の写り込みを防ぐ。
+fn resolve_left_overlay_text(
+    hide_toast: bool,
+    toast: Option<(&str, Duration)>,
+    fallback: &str,
+) -> String {
+    if !hide_toast
+        && let Some((message, age)) = toast
+        && age < SCREENSHOT_TOAST_DURATION
+        && !message.is_empty()
+    {
+        return message.to_string();
+    }
+    fallback.to_string()
 }
 
 fn screenshot_dir(config_dir: &str, data_dir: &Path) -> PathBuf {
@@ -21293,6 +21337,22 @@ mod tests {
 
         assert_eq!(attributes.inner_size, Some(PhysicalSize::new(1920, 1080).into()));
         assert!(attributes.window_icon.is_some());
+    }
+
+    #[test]
+    fn left_overlay_hides_toast_while_screenshot_pending() {
+        let toast = Some(("スクリーンショットを保存しました", Duration::from_millis(100)));
+        assert_eq!(resolve_left_overlay_text(true, toast, "SCAN 1 / 2"), "SCAN 1 / 2");
+        assert_eq!(
+            resolve_left_overlay_text(false, toast, "SCAN 1 / 2"),
+            "スクリーンショットを保存しました"
+        );
+    }
+
+    #[test]
+    fn left_overlay_expires_screenshot_toast() {
+        let toast = Some(("スクリーンショットを保存しました", SCREENSHOT_TOAST_DURATION));
+        assert_eq!(resolve_left_overlay_text(false, toast, ""), "");
     }
 
     #[test]
