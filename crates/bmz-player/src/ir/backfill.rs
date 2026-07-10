@@ -10,7 +10,7 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 
 use crate::config::profile_config::{IrConfig, IrProviderConfig};
-use crate::ln_policy::{ChartLnProfile, LnScorePolicy};
+use crate::ln_policy::LnScorePolicy;
 use crate::select_options::{ArrangeOption, DoubleOptionScoreBucket};
 use crate::storage::common::{hash_to_hex, hex_to_hash};
 use crate::storage::library_db::{ChartAnalysis, ChartListItem, LibraryDatabase};
@@ -57,6 +57,7 @@ pub struct IrLocalUploadReport {
     pub candidates: u32,
     pub enqueued: u32,
     pub skipped_already_submitted: u32,
+    pub skipped_already_queued: u32,
     pub skipped_missing_chart: u32,
     pub skipped_course_stage: u32,
     pub skipped_autoplay: u32,
@@ -101,13 +102,20 @@ pub fn enqueue_local_score_jobs(
             report.skipped_autoplay += 1;
             continue;
         }
-        if !options.resend
-            && has_successful_score_submission(network_db, &target, row.id).with_context(|| {
+        if !options.resend {
+            match existing_score_state(network_db, &target, row.id).with_context(|| {
                 format!("failed to check IR submission state for score {}", row.id)
-            })?
-        {
-            report.skipped_already_submitted += 1;
-            continue;
+            })? {
+                ExistingScoreState::Submitted => {
+                    report.skipped_already_submitted += 1;
+                    continue;
+                }
+                ExistingScoreState::Queued => {
+                    report.skipped_already_queued += 1;
+                    continue;
+                }
+                ExistingScoreState::None => {}
+            }
         }
 
         let Some(chart) = primary_chart_for_score(library_db, row.chart_sha256)? else {
@@ -241,6 +249,32 @@ fn has_successful_score_submission(
         .optional()?
         .is_some();
     Ok(found)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ExistingScoreState {
+    None,
+    Queued,
+    Submitted,
+}
+
+fn existing_score_state(
+    network_db: &NetworkDatabase,
+    target: &TargetProvider,
+    local_score_id: i64,
+) -> Result<ExistingScoreState> {
+    if has_successful_score_submission(network_db, target, local_score_id)? {
+        return Ok(ExistingScoreState::Submitted);
+    }
+    if network_db.has_ir_score_job(
+        &target.provider_key,
+        &target.account_id,
+        IrJobKind::Score,
+        local_score_id,
+    )? {
+        return Ok(ExistingScoreState::Queued);
+    }
+    Ok(ExistingScoreState::None)
 }
 
 #[derive(Debug, Clone)]
@@ -432,7 +466,7 @@ fn build_local_score_submission(
             version: env!("CARGO_PKG_VERSION").to_string(),
             platform: std::env::consts::OS.to_string(),
         },
-        chart: chart_payload_from_library(chart, analysis, scored_total_notes),
+        chart: chart_payload_from_library(chart, analysis, scored_total_notes, row.ln_policy),
         rule: IrRulePayload {
             play_mode: play_mode_payload(&chart.mode),
             key_mode: chart.mode.clone(),
@@ -491,12 +525,12 @@ fn chart_payload_from_library(
     chart: &ChartListItem,
     analysis: Option<&ChartAnalysis>,
     score_total_notes: u32,
+    ln_policy: LnScorePolicy,
 ) -> IrChartPayload {
-    let long_notes = analysis.map(|analysis| analysis.long_notes).unwrap_or_default();
     let mine_notes = analysis
         .map(|analysis| analysis.lane_notes.iter().map(|lane| lane.mines).sum())
         .unwrap_or_else(|| u32::from(chart.has_mines));
-    let (ln, cn, hcn) = split_long_note_counts(chart.ln_profile, long_notes);
+    let (ln, cn, hcn) = long_note_counts_for_policy(chart, ln_policy);
     let metadata_total = if chart.bms_total > 0.0 { Some(chart.bms_total) } else { None };
     let gauge_total = gauge_total_for_chart(metadata_total, score_total_notes);
 
@@ -534,15 +568,15 @@ fn chart_payload_from_library(
     }
 }
 
-fn split_long_note_counts(profile: ChartLnProfile, long_notes: u32) -> (u32, u32, u32) {
-    match (
-        profile.has_undefined_ln || profile.has_defined_ln,
-        profile.has_defined_cn,
-        profile.has_defined_hcn,
-    ) {
-        (false, true, false) => (0, long_notes, 0),
-        (false, false, true) => (0, 0, long_notes),
-        _ => (long_notes, 0, 0),
+fn long_note_counts_for_policy(chart: &ChartListItem, policy: LnScorePolicy) -> (u32, u32, u32) {
+    let total = chart.ln_counts.total_pairs();
+    match policy {
+        LnScorePolicy::ForceLn => (total, 0, 0),
+        LnScorePolicy::ForceCn => (total, total, 0),
+        LnScorePolicy::ForceHcn => (total, 0, total),
+        LnScorePolicy::AutoLn | LnScorePolicy::AutoCn | LnScorePolicy::AutoHcn => {
+            (total, chart.ln_counts.defined_cn_pairs, chart.ln_counts.defined_hcn_pairs)
+        }
     }
 }
 
@@ -592,7 +626,19 @@ fn device_type_from_str(value: &str) -> InputDeviceKind {
 
 #[cfg(test)]
 mod tests {
+    use rusqlite::Connection;
+
     use super::*;
+    use crate::storage::common::configure_connection;
+    use crate::storage::migration::{NETWORK_MIGRATIONS, run_migrations};
+    use crate::storage::network_db::NewIrScoreSubmission;
+
+    fn test_network_db() -> NetworkDatabase {
+        let mut connection = Connection::open_in_memory().unwrap();
+        configure_connection(&connection).unwrap();
+        run_migrations(&mut connection, NETWORK_MIGRATIONS).unwrap();
+        NetworkDatabase::from_connection(connection)
+    }
 
     fn test_row() -> BackfillScoreRow {
         BackfillScoreRow {
@@ -659,7 +705,7 @@ mod tests {
             has_mines: true,
             judge_rank: Some(100),
             bms_total: 300.0,
-            ln_profile: ChartLnProfile {
+            ln_profile: crate::ln_policy::ChartLnProfile {
                 has_undefined_ln: false,
                 has_defined_ln: false,
                 has_defined_cn: true,
@@ -732,10 +778,55 @@ mod tests {
         assert_eq!(payload.chart.level, Some(12));
         assert_eq!(payload.chart.notes.total, 2100);
         assert_eq!(payload.result.notes, 2100);
-        assert_eq!(payload.chart.notes.ln, 0);
+        assert_eq!(payload.chart.notes.ln, 50);
         assert_eq!(payload.chart.notes.cn, 50);
         assert_eq!(payload.chart.notes.mine, 3);
         assert!(payload.chart.features.cn);
         assert!(payload.chart.features.mine);
+    }
+
+    #[test]
+    fn existing_queue_is_distinct_from_successful_submission() {
+        let mut network_db = test_network_db();
+        let target = TargetProvider {
+            provider_key: "bmz-official".to_string(),
+            account_id: "account-1".to_string(),
+        };
+        let job_id = network_db
+            .enqueue_ir_score_job(&NewIrScoreJob {
+                provider: target.provider_key.clone(),
+                account_id: target.account_id.clone(),
+                kind: IrJobKind::Score,
+                local_score_id: 42,
+                chart_sha256: [2; 32],
+                ln_policy: LnScorePolicy::ForceCn,
+                payload_json: "{}".to_string(),
+                now: 100,
+            })
+            .unwrap();
+
+        assert_eq!(
+            existing_score_state(&network_db, &target, 42).unwrap(),
+            ExistingScoreState::Queued
+        );
+
+        network_db
+            .insert_ir_score_submission(&NewIrScoreSubmission {
+                job_id,
+                provider: target.provider_key.clone(),
+                account_id: target.account_id.clone(),
+                kind: IrJobKind::Score,
+                local_score_id: 42,
+                remote_score_id: "remote-42".to_string(),
+                status: "succeeded".to_string(),
+                submitted_at: 120,
+                log_path: String::new(),
+                error: String::new(),
+            })
+            .unwrap();
+        assert_eq!(
+            existing_score_state(&network_db, &target, 42).unwrap(),
+            ExistingScoreState::Submitted
+        );
     }
 }

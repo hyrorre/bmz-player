@@ -566,8 +566,9 @@ async fn upload_local(
         println!("enqueued: {}", report.enqueued);
     }
     println!(
-        "skipped: already_submitted={}, missing_chart={}, course_stage={}, autoplay={}",
+        "skipped: already_submitted={}, already_queued={}, missing_chart={}, course_stage={}, autoplay={}",
         report.skipped_already_submitted,
+        report.skipped_already_queued,
         report.skipped_missing_chart,
         report.skipped_course_stage,
         report.skipped_autoplay,

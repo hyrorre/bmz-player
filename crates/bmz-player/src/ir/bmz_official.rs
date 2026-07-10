@@ -1,3 +1,5 @@
+use std::fmt;
+
 use anyhow::{Context, Result, bail};
 use bmz_gameplay::rule::RuleMode;
 use reqwest::{Url, header};
@@ -32,6 +34,26 @@ pub struct IrCourseRankingRequest {
     pub gauge: String,
     pub ln_policy: String,
     pub limit: u32,
+}
+
+#[derive(Debug)]
+struct IrHttpResponseError {
+    summary: String,
+    retry_after_seconds: Option<u64>,
+}
+
+impl fmt::Display for IrHttpResponseError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(&self.summary)
+    }
+}
+
+impl std::error::Error for IrHttpResponseError {}
+
+pub(crate) fn retry_after_seconds_from_error(error: &anyhow::Error) -> Option<u64> {
+    error.chain().find_map(|cause| {
+        cause.downcast_ref::<IrHttpResponseError>().and_then(|error| error.retry_after_seconds)
+    })
 }
 
 impl BmzOfficialIrClient {
@@ -142,10 +164,12 @@ impl BmzOfficialIrClient {
         if !status.is_success() {
             let retry_after = retry_after_header(&response);
             let body = response.text().await.unwrap_or_default();
-            bail!(
-                "BMZ IR replay upload failed: {}",
-                response_error_summary(status, &body, retry_after.as_deref())
-            );
+            return Err(http_response_error(
+                "BMZ IR replay upload",
+                status,
+                &body,
+                retry_after.as_deref(),
+            ));
         }
         Ok(())
     }
@@ -383,9 +407,25 @@ async fn decode_response<T: serde::de::DeserializeOwned>(
     if !status.is_success() {
         let retry_after = retry_after_header(&response);
         let body = response.text().await.unwrap_or_default();
-        bail!("{label} failed: {}", response_error_summary(status, &body, retry_after.as_deref()));
+        return Err(http_response_error(label, status, &body, retry_after.as_deref()));
     }
     response.json().await.with_context(|| format!("failed to decode {label} response"))
+}
+
+fn http_response_error(
+    label: &str,
+    status: reqwest::StatusCode,
+    body: &str,
+    retry_after: Option<&str>,
+) -> anyhow::Error {
+    anyhow::Error::new(IrHttpResponseError {
+        summary: format!("{label} failed: {}", response_error_summary(status, body, retry_after)),
+        retry_after_seconds: retry_after.and_then(parse_retry_after_seconds),
+    })
+}
+
+fn parse_retry_after_seconds(value: &str) -> Option<u64> {
+    value.trim().parse().ok()
 }
 
 /// エラー本文はトークン等の秘匿情報を含み得るため、そのままログへ流さない。
@@ -513,6 +553,19 @@ mod tests {
             Some("42"),
         );
         assert_eq!(summary, "429 Too Many Requests Too many requests (retry after 42s)");
+    }
+
+    #[test]
+    fn http_error_exposes_retry_after_seconds_to_sync() {
+        let error = http_response_error(
+            "BMZ IR score submission",
+            reqwest::StatusCode::TOO_MANY_REQUESTS,
+            r#"{"statusMessage":"Too many requests"}"#,
+            Some("123"),
+        );
+
+        assert_eq!(retry_after_seconds_from_error(&error), Some(123));
+        assert!(error.to_string().contains("retry after 123s"));
     }
 
     #[test]

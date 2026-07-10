@@ -1,7 +1,7 @@
 use std::path::Path;
 
 use anyhow::Result;
-use rusqlite::{Connection, params};
+use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 
 use super::common::{configure_connection, hash_to_hex, hex_to_hash};
 use crate::ln_policy::LnScorePolicy;
@@ -21,11 +21,12 @@ pub enum IrScoreJobStatus {
     Failed,
 }
 
-/// IR ジョブの種別。単曲スコアかコーススコアか。
+/// IR ジョブの種別。単曲スコア、コーススコア、または付随するリプレイ送信。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum IrJobKind {
     Score,
     Course,
+    Replay,
 }
 
 impl IrJobKind {
@@ -33,11 +34,16 @@ impl IrJobKind {
         match self {
             Self::Score => "score",
             Self::Course => "course",
+            Self::Replay => "replay",
         }
     }
 
     pub fn from_str_or_score(value: &str) -> Self {
-        if value == "course" { Self::Course } else { Self::Score }
+        match value {
+            "course" => Self::Course,
+            "replay" => Self::Replay,
+            _ => Self::Score,
+        }
     }
 }
 
@@ -157,6 +163,70 @@ impl NetworkDatabase {
         self.pending_ir_score_jobs_with_backoff_policy(now, limit, true)
     }
 
+    pub fn claim_pending_ir_score_jobs(
+        &mut self,
+        now: i64,
+        limit: u32,
+        ignore_retry_backoff: bool,
+    ) -> Result<Vec<IrScoreJobRecord>> {
+        const SENDING_STALE_AFTER_SECONDS: i64 = 300;
+        let retry_filter = if ignore_retry_backoff {
+            "status IN ('pending', 'failed')"
+        } else {
+            "status IN ('pending', 'failed') AND next_attempt_at <= ?1"
+        };
+        let sql = format!(
+            "SELECT id, provider, account_id, local_score_id, chart_sha256, ln_policy,
+                payload_json, status, attempt_count, next_attempt_at, last_error,
+                created_at, updated_at, kind
+             FROM ir_score_jobs
+             WHERE ({retry_filter})
+                OR (status = 'sending' AND updated_at <= ?1 - ?3)
+             ORDER BY next_attempt_at ASC, id ASC
+             LIMIT ?2"
+        );
+        let tx = self.conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let jobs = {
+            let mut stmt = tx.prepare(&sql)?;
+            stmt.query_map(params![now, limit, SENDING_STALE_AFTER_SECONDS], ir_score_job_from_row)?
+                .collect::<std::result::Result<Vec<_>, _>>()?
+        };
+        for job in &jobs {
+            tx.execute(
+                "UPDATE ir_score_jobs
+                 SET status = 'sending', updated_at = ?2
+                 WHERE id = ?1",
+                params![job.id, now],
+            )?;
+        }
+        tx.commit()?;
+        Ok(jobs)
+    }
+
+    pub fn has_ir_score_job(
+        &self,
+        provider: &str,
+        account_id: &str,
+        kind: IrJobKind,
+        local_score_id: i64,
+    ) -> Result<bool> {
+        Ok(self
+            .conn
+            .query_row(
+                "SELECT 1
+                 FROM ir_score_jobs
+                 WHERE provider = ?1
+                   AND account_id = ?2
+                   AND kind = ?3
+                   AND local_score_id = ?4
+                 LIMIT 1",
+                params![provider, account_id, kind.as_str(), local_score_id],
+                |_| Ok(()),
+            )
+            .optional()?
+            .is_some())
+    }
+
     fn pending_ir_score_jobs_with_backoff_policy(
         &self,
         now: i64,
@@ -217,6 +287,37 @@ impl NetworkDatabase {
         Ok(())
     }
 
+    pub fn mark_ir_score_job_failed(
+        &mut self,
+        job_id: i64,
+        now: i64,
+        last_error: &str,
+        retry_after_seconds: Option<u64>,
+    ) -> Result<()> {
+        let retry_at = retry_after_seconds
+            .map(|seconds| now.saturating_add(i64::try_from(seconds).unwrap_or(i64::MAX)));
+        self.conn.execute(
+            "UPDATE ir_score_jobs
+             SET status = 'failed',
+                 attempt_count = attempt_count + 1,
+                 next_attempt_at = COALESCE(
+                     ?4,
+                     ?2 + CASE
+                         WHEN attempt_count <= 0 THEN 60
+                         WHEN attempt_count = 1 THEN 300
+                         WHEN attempt_count = 2 THEN 1800
+                         WHEN attempt_count = 3 THEN 7200
+                         ELSE 86400
+                     END
+                 ),
+                 last_error = ?3,
+                 updated_at = ?2
+             WHERE id = ?1",
+            params![job_id, now, last_error, retry_at],
+        )?;
+        Ok(())
+    }
+
     pub fn insert_ir_score_submission(&mut self, record: &NewIrScoreSubmission) -> Result<i64> {
         self.conn.execute(
             "INSERT INTO ir_score_submissions (
@@ -237,6 +338,66 @@ impl NetworkDatabase {
             ],
         )?;
         Ok(self.conn.last_insert_rowid())
+    }
+
+    pub fn complete_ir_score_job(
+        &mut self,
+        record: &NewIrScoreSubmission,
+        replay_job: Option<&NewIrScoreJob>,
+    ) -> Result<()> {
+        let tx = self.conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        tx.execute(
+            "INSERT INTO ir_score_submissions (
+                job_id, provider, account_id, kind, local_score_id, remote_score_id,
+                status, submitted_at, log_path, error
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+            params![
+                record.job_id,
+                record.provider,
+                record.account_id,
+                record.kind.as_str(),
+                record.local_score_id,
+                record.remote_score_id,
+                record.status,
+                record.submitted_at,
+                record.log_path,
+                record.error,
+            ],
+        )?;
+        if let Some(job) = replay_job {
+            tx.execute(
+                "INSERT INTO ir_score_jobs (
+                    provider, account_id, kind, local_score_id, chart_sha256, ln_policy,
+                    payload_json, status, attempt_count, next_attempt_at, last_error,
+                    created_at, updated_at
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'pending', 0, ?8, '', ?8, ?8)
+                ON CONFLICT(provider, account_id, kind, local_score_id) DO UPDATE SET
+                    payload_json = excluded.payload_json,
+                    status = 'pending',
+                    attempt_count = 0,
+                    next_attempt_at = excluded.next_attempt_at,
+                    last_error = '',
+                    updated_at = excluded.updated_at",
+                params![
+                    job.provider,
+                    job.account_id,
+                    job.kind.as_str(),
+                    job.local_score_id,
+                    hash_to_hex(&job.chart_sha256),
+                    job.ln_policy.as_str(),
+                    job.payload_json,
+                    job.now,
+                ],
+            )?;
+        }
+        tx.execute(
+            "UPDATE ir_score_jobs
+             SET status = 'succeeded', payload_json = '', last_error = '', updated_at = ?2
+             WHERE id = ?1",
+            params![record.job_id, record.submitted_at],
+        )?;
+        tx.commit()?;
+        Ok(())
     }
 
     pub fn prune_succeeded_ir_score_jobs(&mut self, now: i64) -> Result<usize> {
@@ -395,6 +556,61 @@ mod tests {
     }
 
     #[test]
+    fn completing_score_job_atomically_enqueues_replay_job() {
+        let mut db = open_network_db();
+        let score_job_id = enqueue_test_job(&mut db, 42, 100);
+        let replay_job = NewIrScoreJob {
+            provider: "bmz-official".to_string(),
+            account_id: "account-1".to_string(),
+            kind: IrJobKind::Replay,
+            local_score_id: 42,
+            chart_sha256: [42; 32],
+            ln_policy: LnScorePolicy::ForceLn,
+            payload_json: r#"{"remote_score_id":"remote-42"}"#.to_string(),
+            now: 200,
+        };
+
+        db.complete_ir_score_job(
+            &NewIrScoreSubmission {
+                job_id: score_job_id,
+                provider: "bmz-official".to_string(),
+                account_id: "account-1".to_string(),
+                kind: IrJobKind::Score,
+                local_score_id: 42,
+                remote_score_id: "remote-42".to_string(),
+                status: "succeeded".to_string(),
+                submitted_at: 200,
+                log_path: "ir-submissions.jsonl".to_string(),
+                error: String::new(),
+            },
+            Some(&replay_job),
+        )
+        .unwrap();
+
+        let (score_status, score_payload): (String, String) = db
+            .conn()
+            .query_row(
+                "SELECT status, payload_json FROM ir_score_jobs WHERE id = ?1",
+                [score_job_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(score_status, "succeeded");
+        assert!(score_payload.is_empty());
+
+        let replay_jobs = db.pending_ir_score_jobs(200, 10).unwrap();
+        assert_eq!(replay_jobs.len(), 1);
+        assert_eq!(replay_jobs[0].kind, IrJobKind::Replay);
+        assert_eq!(replay_jobs[0].payload_json, replay_job.payload_json);
+
+        let submissions: i64 = db
+            .conn()
+            .query_row("SELECT COUNT(*) FROM ir_score_submissions", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(submissions, 1);
+    }
+
+    #[test]
     fn ir_score_job_failures_back_off_progressively() {
         let mut db = open_network_db();
         let job_id = db
@@ -426,6 +642,58 @@ mod tests {
             assert_eq!(attempt_count, attempt as u32 + 1);
             assert_eq!(next_attempt_at, now + delay, "attempt {attempt}");
         }
+    }
+
+    #[test]
+    fn ir_score_job_failure_honors_retry_after() {
+        let mut db = open_network_db();
+        let job_id = enqueue_test_job(&mut db, 42, 100);
+
+        db.mark_ir_score_job_failed(job_id, 200, "rate limited", Some(777)).unwrap();
+
+        let (status, attempt_count, next_attempt_at): (String, u32, i64) = db
+            .conn()
+            .query_row(
+                "SELECT status, attempt_count, next_attempt_at
+                 FROM ir_score_jobs
+                 WHERE id = ?1",
+                [job_id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(status, "failed");
+        assert_eq!(attempt_count, 1);
+        assert_eq!(next_attempt_at, 977);
+    }
+
+    #[test]
+    fn claiming_ir_jobs_marks_the_whole_batch_sending() {
+        let mut db = open_network_db();
+        let first = enqueue_test_job(&mut db, 1, 100);
+        let second = enqueue_test_job(&mut db, 2, 100);
+
+        let claimed = db.claim_pending_ir_score_jobs(100, 20, false).unwrap();
+        assert_eq!(claimed.iter().map(|job| job.id).collect::<Vec<_>>(), vec![first, second]);
+        assert!(db.claim_pending_ir_score_jobs(100, 20, false).unwrap().is_empty());
+
+        let statuses = db
+            .conn()
+            .prepare("SELECT status FROM ir_score_jobs ORDER BY id")
+            .unwrap()
+            .query_map([], |row| row.get::<_, String>(0))
+            .unwrap()
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .unwrap();
+        assert_eq!(statuses, vec!["sending", "sending"]);
+    }
+
+    #[test]
+    fn existing_ir_job_is_detected_before_backfill_reenqueue() {
+        let mut db = open_network_db();
+        enqueue_test_job(&mut db, 42, 100);
+
+        assert!(db.has_ir_score_job("bmz-official", "account-1", IrJobKind::Score, 42).unwrap());
+        assert!(!db.has_ir_score_job("bmz-official", "account-2", IrJobKind::Score, 42).unwrap());
     }
 
     #[test]

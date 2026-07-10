@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import { and, eq, lt } from 'drizzle-orm'
+import { lt, sql } from 'drizzle-orm'
 import { createError, getRequestIP, setHeader, type H3Event } from 'h3'
 import { db, schema } from 'hub:db'
 
@@ -53,51 +53,60 @@ export async function incrementRateLimit(
   event?: H3Event,
 ) {
   const scopeHash = hashScope(scopeValue)
-  const windowStart = new Date(Math.floor(nowMs / RATE_LIMIT_WINDOW_MS) * RATE_LIMIT_WINDOW_MS)
+  const windowStart = rateLimitWindowStart(nowMs)
   const now = new Date(nowMs)
 
-  const existing = await db.query.authRateLimits.findFirst({
-    columns: { attempts: true },
-    where: and(
-      eq(schema.authRateLimits.action, action),
-      eq(schema.authRateLimits.scope, scope),
-      eq(schema.authRateLimits.scopeHash, scopeHash),
-      eq(schema.authRateLimits.windowStart, windowStart),
-    ),
-  })
-  const attempts = (existing?.attempts ?? 0) + 1
-  if (attempts > limit) {
-    if (event) {
-      const windowEndMs = windowStart.getTime() + RATE_LIMIT_WINDOW_MS
-      const retryAfterSeconds = Math.max(1, Math.ceil((windowEndMs - nowMs) / 1000))
-      setHeader(event, 'Retry-After', String(retryAfterSeconds))
-    }
-    throw createError({ statusCode: 429, statusMessage })
-  }
-
-  if (existing) {
-    await db
-      .update(schema.authRateLimits)
-      .set({ attempts, updatedAt: now })
-      .where(
-        and(
-          eq(schema.authRateLimits.action, action),
-          eq(schema.authRateLimits.scope, scope),
-          eq(schema.authRateLimits.scopeHash, scopeHash),
-          eq(schema.authRateLimits.windowStart, windowStart),
-        ),
-      )
-    return
-  }
-
-  await db.insert(schema.authRateLimits).values({
+  const attempts = await incrementRateLimitAttempt(db, {
     action,
     scope,
     scopeHash,
     windowStart,
-    attempts,
-    updatedAt: now,
+    now,
   })
+  if (attempts > limit) {
+    if (event) {
+      const retryAfterSeconds = retryAfterFromWindowStart(windowStart, nowMs)
+      setHeader(event, 'Retry-After', retryAfterSeconds)
+    }
+    throw createError({ statusCode: 429, statusMessage })
+  }
+}
+
+async function incrementRateLimitAttempt(
+  database: Pick<typeof db, 'insert'>,
+  values: {
+    action: RateLimitAction
+    scope: RateLimitScope
+    scopeHash: string
+    windowStart: Date
+    now: Date
+  },
+): Promise<number> {
+  const updated = await database
+    .insert(schema.authRateLimits)
+    .values({
+      action: values.action,
+      scope: values.scope,
+      scopeHash: values.scopeHash,
+      windowStart: values.windowStart,
+      attempts: 1,
+      updatedAt: values.now,
+    })
+    .onConflictDoUpdate({
+      target: [
+        schema.authRateLimits.action,
+        schema.authRateLimits.scope,
+        schema.authRateLimits.scopeHash,
+        schema.authRateLimits.windowStart,
+      ],
+      set: {
+        attempts: sql`${schema.authRateLimits.attempts} + ${1}`,
+        updatedAt: values.now,
+      },
+    })
+    .returning({ attempts: schema.authRateLimits.attempts })
+    .get()
+  return updated.attempts
 }
 
 export async function pruneExpiredRateLimits(now: number) {
@@ -108,4 +117,19 @@ export async function pruneExpiredRateLimits(now: number) {
 
 function hashScope(value: string): string {
   return createHash('sha256').update(value).digest('hex')
+}
+
+function rateLimitWindowStart(nowMs: number): Date {
+  return new Date(Math.floor(nowMs / RATE_LIMIT_WINDOW_MS) * RATE_LIMIT_WINDOW_MS)
+}
+
+function retryAfterFromWindowStart(windowStart: Date, nowMs: number): number {
+  const windowEndMs = windowStart.getTime() + RATE_LIMIT_WINDOW_MS
+  return Math.max(1, Math.ceil((windowEndMs - nowMs) / 1000))
+}
+
+export const __test = {
+  incrementRateLimitAttempt,
+  rateLimitWindowStart,
+  retryAfterFromWindowStart,
 }

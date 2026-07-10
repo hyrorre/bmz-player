@@ -199,7 +199,7 @@ export async function submitScore(
   rankingLimit: number,
 ): Promise<IrSubmitResponse> {
   const doubleOption = normalizeDoubleOption(payload.play_options.double_option)
-  await upsertChart(payload, doubleOption === 'off')
+  await upsertChart(payload, shouldUpdateExistingChart(payload.play_options, doubleOption))
 
   const bp =
     judgeTotal(payload, 'bad') + judgeTotal(payload, 'poor') + judgeTotal(payload, 'empty_poor')
@@ -711,6 +711,13 @@ async function upsertChart(payload: IrScoreSubmission, allowUpdate: boolean) {
     .insert(schema.charts)
     .values(values)
     .onConflictDoUpdate({ target: schema.charts.sha256, set: values })
+}
+
+function shouldUpdateExistingChart(
+  playOptions: IrScoreSubmission['play_options'],
+  doubleOption: IrDoubleOption,
+): boolean {
+  return doubleOption === 'off' && playOptions.submission_source !== 'local_backfill'
 }
 
 async function fetchPreviousBest(
@@ -1267,6 +1274,7 @@ export function normalizeGaugeName(value: string): string {
 
 export const __test = {
   arrangeOptionsFromPlayOptions,
+  shouldUpdateExistingChart,
   dedupeBestRowsByPlayer,
   bestRowsFromHistory,
 }

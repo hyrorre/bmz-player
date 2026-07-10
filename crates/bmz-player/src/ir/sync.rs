@@ -8,11 +8,12 @@ use tokio::sync::Mutex;
 
 use crate::config::profile_config::{IrConfig, IrProviderConfig};
 use crate::storage::network_db::{
-    IrJobKind, IrScoreJobRecord, IrScoreJobStatus, NetworkDatabase, NewIrScoreSubmission,
+    IrJobKind, IrScoreJobRecord, IrScoreJobStatus, NetworkDatabase, NewIrScoreJob,
+    NewIrScoreSubmission,
 };
 use crate::storage::score_db::ScoreDatabase;
 
-use super::bmz_official::BmzOfficialIrClient;
+use super::bmz_official::{BmzOfficialIrClient, retry_after_seconds_from_error};
 use super::credentials::{IrStoredCredentials, load_credentials, save_credentials};
 use super::types::{IrRankingResult, IrRankingScope, IrScoreSubmission, IrSubmitOptions};
 
@@ -26,8 +27,13 @@ pub struct IrSyncReport {
     pub included_rankings: Vec<IrRankingResult>,
 }
 
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+struct IrReplayJobPayload {
+    remote_score_id: String,
+}
+
 pub const IR_SYNC_BATCH_LIMIT: u32 = 20;
-pub const IR_SYNC_JOB_SPACING_MS: u64 = 1_500;
+pub const IR_SYNC_JOB_SPACING_MS: u64 = 3_100;
 pub const IR_SYNC_LOOP_INTERVAL_SECS: u64 = 30;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -97,20 +103,27 @@ pub async fn sync_pending_ir_jobs(
     throttle: IrSyncThrottle,
 ) -> Result<IrSyncReport> {
     let mut report = IrSyncReport::default();
-    let jobs = if ignore_retry_backoff {
-        network_db.pending_ir_score_jobs_ignoring_backoff(now, limit)?
-    } else {
-        network_db.pending_ir_score_jobs(now, limit)?
-    };
+    let jobs = network_db.claim_pending_ir_score_jobs(now, limit, ignore_retry_backoff)?;
     let job_count = jobs.len();
-    let replay_paths = replay_paths_for_jobs(score_db_path, &jobs)?;
+    let replay_paths = match replay_paths_for_jobs(score_db_path, &jobs) {
+        Ok(paths) => paths,
+        Err(error) => {
+            let message = format!("failed to resolve replay paths: {error:#}");
+            for job in &jobs {
+                network_db.mark_ir_score_job_failed(job.id, now, &message, None)?;
+            }
+            return Err(error);
+        }
+    };
+    let batch_started = std::time::Instant::now();
     for (index, job) in jobs.into_iter().enumerate() {
+        let job_now = now.saturating_add(batch_started.elapsed().as_secs() as i64);
         let Some(provider) = provider_config(ir_config, &job.provider) else {
-            network_db.mark_ir_score_job_status(
+            network_db.mark_ir_score_job_failed(
                 job.id,
-                IrScoreJobStatus::Failed,
-                now,
+                job_now,
                 "provider is not configured",
+                None,
             )?;
             report.failed += 1;
             report
@@ -118,17 +131,96 @@ pub async fn sync_pending_ir_jobs(
                 .push(format!("job {}: provider '{}' not configured", job.id, job.provider));
             continue;
         };
-        network_db.mark_ir_score_job_status(job.id, IrScoreJobStatus::Sending, now, "")?;
-        let submit_result = match job.kind {
-            IrJobKind::Score => {
-                submit_job_payload(profile_root, provider, &job.payload_json, now).await
+        match job.kind {
+            IrJobKind::Replay => {
+                let replay_result = submit_replay_job(
+                    profile_root,
+                    provider,
+                    &job.payload_json,
+                    replay_paths.get(&job.id).and_then(Option::as_deref),
+                    job.local_score_id,
+                    job_now,
+                )
+                .await;
+                match replay_result {
+                    Ok(()) => {
+                        network_db.mark_ir_score_job_status(
+                            job.id,
+                            IrScoreJobStatus::Succeeded,
+                            job_now,
+                            "",
+                        )?;
+                        report.submitted += 1;
+                    }
+                    Err(error) => {
+                        let message = format!("replay upload failed: {error:#}");
+                        let _ = write_ir_submission_log(
+                            logs_dir,
+                            &job,
+                            "failed",
+                            "",
+                            job_now,
+                            &job.payload_json,
+                            "",
+                            &message,
+                        );
+                        network_db.mark_ir_score_job_failed(
+                            job.id,
+                            job_now,
+                            &message,
+                            retry_after_seconds_from_error(&error),
+                        )?;
+                        report.failed += 1;
+                        report.messages.push(format!("job {}: {message}", job.id));
+                        tracing::warn!(job_id = job.id, provider = job.provider, %message, "IR replay upload failed");
+                    }
+                }
             }
-            IrJobKind::Course => {
-                submit_course_job_payload(profile_root, provider, &job.payload_json, now).await
-            }
-        };
-        match submit_result {
-            Ok((request_json, response_json)) => {
+            IrJobKind::Score | IrJobKind::Course => {
+                let submit_result = match job.kind {
+                    IrJobKind::Score => {
+                        submit_job_payload(profile_root, provider, &job.payload_json, job_now).await
+                    }
+                    IrJobKind::Course => {
+                        submit_course_job_payload(
+                            profile_root,
+                            provider,
+                            &job.payload_json,
+                            job_now,
+                        )
+                        .await
+                    }
+                    IrJobKind::Replay => unreachable!(),
+                };
+                let Ok((request_json, response_json)) = submit_result else {
+                    let error = submit_result.unwrap_err();
+                    let message = format!("{error:#}");
+                    let _ = write_ir_submission_log(
+                        logs_dir,
+                        &job,
+                        "failed",
+                        "",
+                        job_now,
+                        &job.payload_json,
+                        "",
+                        &message,
+                    );
+                    network_db.mark_ir_score_job_failed(
+                        job.id,
+                        job_now,
+                        &message,
+                        retry_after_seconds_from_error(&error),
+                    )?;
+                    report.failed += 1;
+                    report.messages.push(format!("job {}: {message}", job.id));
+                    tracing::warn!(job_id = job.id, provider = job.provider, %message, "IR score submission failed");
+                    if index + 1 < job_count
+                        && let Some(delay) = throttle.job_delay()
+                    {
+                        tokio::time::sleep(delay).await;
+                    }
+                    continue;
+                };
                 let parsed_response =
                     serde_json::from_str::<super::types::IrSubmitResponse>(&response_json).ok();
                 if let Some(ranking) = parsed_response
@@ -148,70 +240,62 @@ pub async fn sync_pending_ir_jobs(
                         )
                     })
                     .unwrap_or_default();
-                let log_path = write_ir_submission_log(
-                    logs_dir,
-                    &job,
-                    "succeeded",
-                    &remote_score_id,
-                    now,
-                    &request_json,
-                    &response_json,
-                    "",
-                );
-                network_db.insert_ir_score_submission(&NewIrScoreSubmission {
-                    job_id: job.id,
-                    provider: job.provider.clone(),
-                    account_id: job.account_id.clone(),
-                    kind: job.kind,
-                    local_score_id: job.local_score_id,
-                    remote_score_id: remote_score_id.clone(),
-                    status: "succeeded".to_string(),
-                    submitted_at: now,
-                    log_path,
-                    error: String::new(),
-                })?;
-                report.submitted += 1;
-                // replay upload はスコア送信成功の付随処理。失敗しても job は
-                // succeeded のまま (リプレイは best 更新に影響しない)。
-                // コースジョブにはリプレイ申告がないため no-op になる。
-                upload_replay_if_declared(
-                    profile_root,
-                    provider,
-                    &job.payload_json,
-                    replay_paths.get(&job.id).and_then(Option::as_deref),
-                    job.local_score_id,
-                    &remote_score_id,
-                    now,
-                )
-                .await;
-                network_db.mark_ir_score_job_status(
-                    job.id,
-                    IrScoreJobStatus::Succeeded,
-                    now,
-                    "",
-                )?;
-            }
-            Err(error) => {
-                let message = format!("{error:#}");
-                let _ = write_ir_submission_log(
-                    logs_dir,
-                    &job,
-                    "failed",
-                    "",
-                    now,
-                    &job.payload_json,
-                    "",
-                    &message,
-                );
-                network_db.mark_ir_score_job_status(
-                    job.id,
-                    IrScoreJobStatus::Failed,
-                    now,
-                    &message,
-                )?;
-                report.failed += 1;
-                report.messages.push(format!("job {}: {message}", job.id));
-                tracing::warn!(job_id = job.id, provider = job.provider, %message, "IR score submission failed");
+                let completion =
+                    replay_job_for_score(&job, &remote_score_id, job_now).and_then(|replay_job| {
+                        let log_path = write_ir_submission_log(
+                            logs_dir,
+                            &job,
+                            "succeeded",
+                            &remote_score_id,
+                            job_now,
+                            &request_json,
+                            &response_json,
+                            "",
+                        );
+                        network_db.complete_ir_score_job(
+                            &NewIrScoreSubmission {
+                                job_id: job.id,
+                                provider: job.provider.clone(),
+                                account_id: job.account_id.clone(),
+                                kind: job.kind,
+                                local_score_id: job.local_score_id,
+                                remote_score_id: remote_score_id.clone(),
+                                status: "succeeded".to_string(),
+                                submitted_at: job_now,
+                                log_path,
+                                error: String::new(),
+                            },
+                            replay_job.as_ref(),
+                        )?;
+                        Ok(())
+                    });
+                match completion {
+                    Ok(()) => {
+                        report.submitted += 1;
+                    }
+                    Err(error) => {
+                        let message = format!("failed to complete IR score job: {error:#}");
+                        let _ = write_ir_submission_log(
+                            logs_dir,
+                            &job,
+                            "failed",
+                            &remote_score_id,
+                            job_now,
+                            &request_json,
+                            &response_json,
+                            &message,
+                        );
+                        network_db.mark_ir_score_job_failed(
+                            job.id,
+                            job_now,
+                            &message,
+                            retry_after_seconds_from_error(&error),
+                        )?;
+                        report.failed += 1;
+                        report.messages.push(format!("job {}: {message}", job.id));
+                        tracing::warn!(job_id = job.id, provider = job.provider, %message, "IR score completion failed");
+                    }
+                }
             }
         }
         if index + 1 < job_count
@@ -220,7 +304,8 @@ pub async fn sync_pending_ir_jobs(
             tokio::time::sleep(delay).await;
         }
     }
-    let pruned = network_db.prune_succeeded_ir_score_jobs(now)?;
+    let finished_at = now.saturating_add(batch_started.elapsed().as_secs() as i64);
+    let pruned = network_db.prune_succeeded_ir_score_jobs(finished_at)?;
     if pruned > 0 {
         tracing::debug!(pruned, "pruned succeeded IR score jobs");
     }
@@ -231,13 +316,13 @@ fn replay_paths_for_jobs(
     score_db_path: &Path,
     jobs: &[IrScoreJobRecord],
 ) -> Result<HashMap<i64, Option<String>>> {
-    if !jobs.iter().any(|job| job.kind == IrJobKind::Score) {
+    if !jobs.iter().any(|job| job.kind == IrJobKind::Replay) {
         return Ok(HashMap::new());
     }
     let score_db = ScoreDatabase::open(score_db_path)?;
     Ok(jobs
         .iter()
-        .filter(|job| job.kind == IrJobKind::Score)
+        .filter(|job| job.kind == IrJobKind::Replay)
         .map(|job| {
             let replay_path = match score_db.replay_path_for_history(job.local_score_id) {
                 Ok(path) => path,
@@ -314,63 +399,73 @@ fn write_ir_submission_log(
     LOG_FILE.to_string()
 }
 
-/// payload に replay hash を申告済みなら、保存済みリプレイファイルを
-/// 署名付き URL でアップロードし、サーバー側 hash 検証まで行う。
-async fn upload_replay_if_declared(
+fn replay_job_for_score(
+    job: &IrScoreJobRecord,
+    remote_score_id: &str,
+    now: i64,
+) -> Result<Option<NewIrScoreJob>> {
+    if job.kind != IrJobKind::Score {
+        return Ok(None);
+    }
+    let payload: IrScoreSubmission =
+        serde_json::from_str(&job.payload_json).context("failed to parse stored IR payload")?;
+    if payload.replay.is_none() {
+        return Ok(None);
+    }
+    if remote_score_id.is_empty() {
+        bail!("replay declared but remote score id is missing");
+    }
+    Ok(Some(NewIrScoreJob {
+        provider: job.provider.clone(),
+        account_id: job.account_id.clone(),
+        kind: IrJobKind::Replay,
+        local_score_id: job.local_score_id,
+        chart_sha256: job.chart_sha256,
+        ln_policy: job.ln_policy,
+        payload_json: serde_json::to_string(&IrReplayJobPayload {
+            remote_score_id: remote_score_id.to_string(),
+        })?,
+        now,
+    }))
+}
+
+async fn submit_replay_job(
     profile_root: &Path,
     provider: &IrProviderConfig,
     payload_json: &str,
     replay_path: Option<&str>,
     local_score_id: i64,
-    remote_score_id: &str,
     now: i64,
-) {
-    let declared = serde_json::from_str::<IrScoreSubmission>(payload_json)
-        .ok()
-        .and_then(|payload| payload.replay)
-        .is_some();
-    if !declared || remote_score_id.is_empty() {
-        return;
-    }
-    let Some(replay_path) = replay_path else {
-        tracing::warn!(
-            remote_score_id,
-            local_score_id,
-            "replay declared but local file path is missing"
-        );
-        return;
-    };
+) -> Result<()> {
+    let payload: IrReplayJobPayload =
+        serde_json::from_str(payload_json).context("failed to parse stored IR replay payload")?;
+    let replay_path = replay_path.with_context(|| {
+        format!("replay declared but local file path is missing for score {local_score_id}")
+    })?;
     if replay_path.is_empty() {
-        tracing::warn!(
-            remote_score_id,
-            local_score_id,
-            "replay declared but local file path is empty"
-        );
-        return;
+        bail!("replay declared but local file path is empty for score {local_score_id}");
     }
     let replay_path = replay_path.to_string();
-    let result = async {
-        let bytes =
-            std::fs::read(profile_root.join(&replay_path)).context("failed to read replay file")?;
-        let provider_key = crate::ir::provider_key::configured_provider_key(provider)
-            .context("IR provider key is not set; log in again")?;
-        let credentials =
-            ensure_fresh_credentials(profile_root, provider_key, &provider.base_url, now).await?;
-        let client = BmzOfficialIrClient::new(&provider.base_url, credentials.access_token)?;
-        let target = client.replay_upload_url(remote_score_id).await?;
-        client.upload_replay(&target.upload_url, bytes).await?;
-        let verify = client.verify_replay(remote_score_id).await?;
-        anyhow::Ok(verify.status)
+    let bytes =
+        std::fs::read(profile_root.join(&replay_path)).context("failed to read replay file")?;
+    let provider_key = crate::ir::provider_key::configured_provider_key(provider)
+        .context("IR provider key is not set; log in again")?;
+    let credentials =
+        ensure_fresh_credentials(profile_root, provider_key, &provider.base_url, now).await?;
+    let client = BmzOfficialIrClient::new(&provider.base_url, credentials.access_token)?;
+    let target = client.replay_upload_url(&payload.remote_score_id).await?;
+    client.upload_replay(&target.upload_url, bytes).await?;
+    let verify = client.verify_replay(&payload.remote_score_id).await?;
+    ensure_replay_verified(&verify.status)?;
+    tracing::info!(remote_score_id = payload.remote_score_id, status = %verify.status, "IR replay uploaded");
+    Ok(())
+}
+
+fn ensure_replay_verified(status: &str) -> Result<()> {
+    if status != "verified" {
+        bail!("IR replay verification returned status '{status}'");
     }
-    .await;
-    match result {
-        Ok(status) => {
-            tracing::info!(remote_score_id, %status, "IR replay uploaded");
-        }
-        Err(error) => {
-            tracing::warn!(remote_score_id, %error, "IR replay upload failed");
-        }
-    }
+    Ok(())
 }
 
 fn provider_config<'a>(
@@ -490,13 +585,19 @@ mod tests {
     #[test]
     fn ir_sync_rate_limit_defaults_match_backfill_budget() {
         assert_eq!(IR_SYNC_BATCH_LIMIT, 20);
-        assert_eq!(IR_SYNC_JOB_SPACING_MS, 1_500);
+        assert_eq!(IR_SYNC_JOB_SPACING_MS, 3_100);
         assert_eq!(IR_SYNC_LOOP_INTERVAL_SECS, 30);
         assert_eq!(
             IrSyncThrottle::rate_limited().job_delay(),
-            Some(std::time::Duration::from_millis(1_500))
+            Some(std::time::Duration::from_millis(3_100))
         );
         assert_eq!(IrSyncThrottle::none().job_delay(), None);
+    }
+
+    #[test]
+    fn replay_verification_rejects_non_verified_status() {
+        assert!(ensure_replay_verified("rejected").is_err());
+        assert!(ensure_replay_verified("verified").is_ok());
     }
 
     #[test]

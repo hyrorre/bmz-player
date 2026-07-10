@@ -53,13 +53,21 @@ GET    /api/v1/courses/{course_hash}/ranking   # global のみ
   egui プロファイル設定からもログイン可能。
 - 送信: リザルト確定時に `ir_score_jobs` へ enqueue (send_policy 判定込み) →
   リザルト画面で即時送信 + アプリ常駐ワーカー (30 秒間隔) が残りを処理。
-  送信は 1 バッチ 20 件、job 間 1.5 秒待ちで、backfill 時も同じペースに揃える。
+  送信は 1 バッチ 20 件、job 間 3.1 秒待ちで、backfill 時も同じペースに揃える。
+  バッチ取得時に対象 job をまとめて `sending` として claim し、リザルト送信と
+  常駐ワーカーが並行しても同じ job を二重送信しない。
   リトライは 1分 → 5分 → 30分 → 2時間 → 以降24時間。
+  429 が `Retry-After` を返した場合は通常のバックオフより優先してその時刻まで待つ。
+  score 成功履歴の保存と `kind=replay` job の投入は同じ transaction で確定する。
+  replay upload / verify の失敗は replay job だけを再試行し、成功済み score を
+  未送信状態へ戻さない。
   成功済み job は payload を空にし、同期後に 30 日以内または最新 500 件だけを
   `network.db` に保持する。未送信 / 失敗 / 送信中 job は剪定対象外。
 - local backfill: `bmz ir upload-local [--dry-run] [--limit N] [--sync]` で
   `score.db` の既存 `score_history` を unverified な score submit として enqueue
-  する。既送信履歴は既定でスキップし、course stage / autoplay は既定で除外。
+  する。既送信履歴と既に queue にある履歴は既定でスキップし、course stage /
+  autoplay は既定で除外。local backfill は未登録 chart を作成できるが、既存 chart
+  の正規メタデータは上書きしない。
   per-history ghost は現在の `score_history` には保持していないため送らない。
 - rate limit: score submit / course score は 15 分あたり user 1500 / IP 3000。
   replay upload 系は 1 replay あたり upload-url / upload / verify の 3 request を使うため、
