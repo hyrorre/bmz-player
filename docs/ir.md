@@ -56,6 +56,9 @@ GET    /api/v1/courses/{course_hash}/ranking   # global のみ
   送信は 1 バッチ 20 件、job 間 3.1 秒待ちで、backfill 時も同じペースに揃える。
   バッチ取得時に対象 job をまとめて `sending` として claim し、リザルト送信と
   常駐ワーカーが並行しても同じ job を二重送信しない。
+  CLI の `ir sync` / `ir upload-local --sync` は中断時に未処理jobを一括で
+  `sending` に残さないよう1件ずつclaimし、`[N/20]` の進捗を逐次表示する。
+  Ctrl+C時に残る `sending` は処理中の最大1件で、5分後に再取得される。
   リトライは 1分 → 5分 → 30分 → 2時間 → 以降24時間。
   429 が `Retry-After` を返した場合は通常のバックオフより優先してその時刻まで待つ。
   score 成功履歴の保存と `kind=replay` job の投入は同じ transaction で確定する。
@@ -67,7 +70,8 @@ GET    /api/v1/courses/{course_hash}/ranking   # global のみ
   `score.db` の既存 `score_history` を unverified な score submit として enqueue
   する。既送信履歴と既に queue にある履歴は既定でスキップし、course stage /
   autoplay は既定で除外。local backfill は未登録 chart を作成できるが、既存 chart
-  の正規メタデータは上書きしない。
+  の正規メタデータは上書きしない。`--sync` で既存の未完了score jobがある場合は、
+  queueを増やさず先に最大20件を同期する。
   per-history ghost は現在の `score_history` には保持していないため送らない。
 - rate limit: score submit / course score は 15 分あたり user 1500 / IP 3000。
   replay upload 系は 1 replay あたり upload-url / upload / verify の 3 request を使うため、

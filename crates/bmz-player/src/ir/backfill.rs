@@ -73,6 +73,14 @@ pub fn is_local_backfill_submission(payload: &IrScoreSubmission) -> bool {
         .is_some_and(|value| value == LOCAL_BACKFILL_SOURCE)
 }
 
+pub fn resolve_local_upload_target(
+    ir_config: &IrConfig,
+    requested: Option<&str>,
+) -> Result<(String, String)> {
+    let target = resolve_target_provider(ir_config, requested)?;
+    Ok((target.provider_key, target.account_id))
+}
+
 pub fn enqueue_local_score_jobs(
     profile_root: &Path,
     ir_config: &IrConfig,

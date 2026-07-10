@@ -227,6 +227,25 @@ impl NetworkDatabase {
             .is_some())
     }
 
+    pub fn unfinished_ir_score_job_count_for_kind(
+        &self,
+        provider: &str,
+        account_id: &str,
+        kind: IrJobKind,
+    ) -> Result<u32> {
+        let count: i64 = self.conn.query_row(
+            "SELECT COUNT(*)
+             FROM ir_score_jobs
+             WHERE provider = ?1
+               AND account_id = ?2
+               AND kind = ?3
+               AND status != 'succeeded'",
+            params![provider, account_id, kind.as_str()],
+            |row| row.get(0),
+        )?;
+        Ok(u32::try_from(count).unwrap_or(u32::MAX))
+    }
+
     fn pending_ir_score_jobs_with_backoff_policy(
         &self,
         now: i64,
@@ -694,6 +713,32 @@ mod tests {
 
         assert!(db.has_ir_score_job("bmz-official", "account-1", IrJobKind::Score, 42).unwrap());
         assert!(!db.has_ir_score_job("bmz-official", "account-2", IrJobKind::Score, 42).unwrap());
+        assert_eq!(
+            db.unfinished_ir_score_job_count_for_kind(
+                "bmz-official",
+                "account-1",
+                IrJobKind::Score,
+            )
+            .unwrap(),
+            1
+        );
+
+        let job_id = db
+            .conn()
+            .query_row("SELECT id FROM ir_score_jobs WHERE local_score_id = 42", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        db.mark_ir_score_job_status(job_id, IrScoreJobStatus::Succeeded, 200, "").unwrap();
+        assert_eq!(
+            db.unfinished_ir_score_job_count_for_kind(
+                "bmz-official",
+                "account-1",
+                IrJobKind::Score,
+            )
+            .unwrap(),
+            0
+        );
     }
 
     #[test]

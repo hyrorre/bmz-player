@@ -1,25 +1,29 @@
 use std::io::Write as _;
+use std::path::Path;
 
 use anyhow::{Context, Result, bail};
 
 use crate::cli::{IrCommand, RivalAction};
 use crate::config::load::{load_app_config, load_profile_config};
 use crate::config::profile_config::{
-    IrProviderConfig, IrProviderRoleConfig, IrSendPolicyConfig, ProfileConfig,
+    IrConfig, IrProviderConfig, IrProviderRoleConfig, IrSendPolicyConfig, ProfileConfig,
 };
 use crate::config::save::save_profile_config;
-use crate::ir::backfill::{IrLocalUploadOptions, enqueue_local_score_jobs};
+use crate::ir::backfill::{
+    IrLocalUploadOptions, enqueue_local_score_jobs, resolve_local_upload_target,
+};
 use crate::ir::bmz_official::{BmzOfficialIrClient, IrRankingRequest};
 use crate::ir::credentials::{
     IrStoredCredentials, delete_credentials, load_credentials, save_credentials,
 };
 use crate::ir::sync::{
-    IR_SYNC_BATCH_LIMIT, IrSyncThrottle, ensure_fresh_credentials, sync_pending_ir_jobs,
+    IR_SYNC_BATCH_LIMIT, IR_SYNC_JOB_SPACING_MS, IrSyncReport, IrSyncThrottle,
+    ensure_fresh_credentials, sync_pending_ir_jobs,
 };
 use crate::ir::types::IrRankingScope;
 use crate::paths::{ProfilePaths, resolve_app_paths, resolve_profile_paths};
 use crate::storage::library_db::LibraryDatabase;
-use crate::storage::network_db::NetworkDatabase;
+use crate::storage::network_db::{IrJobKind, NetworkDatabase};
 use crate::storage::score_db::ScoreDatabase;
 
 pub async fn run_ir_command(cmd: IrCommand) -> Result<()> {
@@ -513,16 +517,13 @@ async fn sync(profile_paths: &ProfilePaths, profile: &ProfileConfig) -> Result<(
     crate::storage::migration::migrate_score_db(&profile_paths.score_db)?;
     crate::storage::migration::migrate_network_db(&profile_paths.network_db)?;
     let mut network_db = NetworkDatabase::open(&profile_paths.network_db)?;
-    let report = sync_pending_ir_jobs(
+    let report = sync_cli_jobs(
         &mut network_db,
         &profile_paths.score_db,
         profile_paths.root_dir.as_path(),
         app_paths.logs_dir.as_path(),
         &profile.ir,
-        now_unix_seconds(),
         IR_SYNC_BATCH_LIMIT,
-        true,
-        IrSyncThrottle::rate_limited(),
     )
     .await?;
     println!("submitted: {}, failed: {}", report.submitted, report.failed);
@@ -543,9 +544,44 @@ async fn upload_local(
     crate::storage::migration::migrate_score_db(&profile_paths.score_db)?;
     crate::storage::migration::migrate_network_db(&profile_paths.network_db)?;
 
+    let mut network_db = NetworkDatabase::open(&profile_paths.network_db)?;
+    if sync_after_enqueue && !options.dry_run {
+        let (provider_key, account_id) =
+            resolve_local_upload_target(&profile.ir, options.provider.as_deref())?;
+        let queued = network_db.unfinished_ir_score_job_count_for_kind(
+            &provider_key,
+            &account_id,
+            IrJobKind::Score,
+        )?;
+        if queued > 0 {
+            println!("provider: {provider_key}");
+            println!("account: {account_id}");
+            println!("existing queued score jobs: {queued}; syncing before enqueueing more");
+            let sync_report = sync_cli_jobs(
+                &mut network_db,
+                &profile_paths.score_db,
+                profile_paths.root_dir.as_path(),
+                app_paths.logs_dir.as_path(),
+                &profile.ir,
+                IR_SYNC_BATCH_LIMIT,
+            )
+            .await?;
+            println!("submitted: {}, failed: {}", sync_report.submitted, sync_report.failed);
+            let remaining = network_db.unfinished_ir_score_job_count_for_kind(
+                &provider_key,
+                &account_id,
+                IrJobKind::Score,
+            )?;
+            println!("remaining queued score jobs for {provider_key}/{account_id}: {remaining}");
+            for message in &sync_report.messages {
+                println!("  {message}");
+            }
+            return Ok(());
+        }
+    }
+
     let library_db = LibraryDatabase::open(&app_paths.library_db)?;
     let score_db = ScoreDatabase::open(&profile_paths.score_db)?;
-    let mut network_db = NetworkDatabase::open(&profile_paths.network_db)?;
     let report = enqueue_local_score_jobs(
         profile_paths.root_dir.as_path(),
         &profile.ir,
@@ -583,31 +619,96 @@ async fn upload_local(
         println!("limit reached; rerun `bmz ir upload-local` to enqueue the next batch");
     }
 
-    if options.dry_run || !sync_after_enqueue || report.enqueued == 0 {
+    if options.dry_run || !sync_after_enqueue {
         return Ok(());
     }
 
-    let sync_limit = report.enqueued.min(IR_SYNC_BATCH_LIMIT);
-    let sync_report = sync_pending_ir_jobs(
+    let sync_report = sync_cli_jobs(
         &mut network_db,
         &profile_paths.score_db,
         profile_paths.root_dir.as_path(),
         app_paths.logs_dir.as_path(),
         &profile.ir,
-        now_unix_seconds(),
-        sync_limit,
-        true,
-        IrSyncThrottle::rate_limited(),
+        IR_SYNC_BATCH_LIMIT,
     )
     .await?;
     println!("submitted: {}, failed: {}", sync_report.submitted, sync_report.failed);
-    if report.enqueued > sync_limit {
-        println!("pending after this sync: {}", report.enqueued - sync_limit);
-    }
+    let remaining = network_db.unfinished_ir_score_job_count_for_kind(
+        &report.provider_key,
+        &report.account_id,
+        IrJobKind::Score,
+    )?;
+    println!(
+        "remaining queued score jobs for {}/{}: {remaining}",
+        report.provider_key, report.account_id
+    );
     for message in &sync_report.messages {
         println!("  {message}");
     }
     Ok(())
+}
+
+async fn sync_cli_jobs(
+    network_db: &mut NetworkDatabase,
+    score_db_path: &Path,
+    profile_root: &Path,
+    logs_dir: &Path,
+    ir_config: &IrConfig,
+    limit: u32,
+) -> Result<IrSyncReport> {
+    let estimated_seconds =
+        u64::from(limit.saturating_sub(1)).saturating_mul(IR_SYNC_JOB_SPACING_MS).div_ceil(1_000);
+    println!("syncing up to {limit} queued jobs (about {estimated_seconds}s)");
+
+    let mut total = IrSyncReport::default();
+    for index in 0..limit {
+        let ignore_retry_backoff = total.failed == 0;
+        if index > 0 {
+            let has_next = if ignore_retry_backoff {
+                !network_db
+                    .pending_ir_score_jobs_ignoring_backoff(now_unix_seconds(), 1)?
+                    .is_empty()
+            } else {
+                !network_db.pending_ir_score_jobs(now_unix_seconds(), 1)?.is_empty()
+            };
+            if !has_next {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(IR_SYNC_JOB_SPACING_MS)).await;
+        }
+        print!("[{}/{}] syncing...", index + 1, limit);
+        std::io::stdout().flush()?;
+        let report = match sync_pending_ir_jobs(
+            network_db,
+            score_db_path,
+            profile_root,
+            logs_dir,
+            ir_config,
+            now_unix_seconds(),
+            1,
+            ignore_retry_backoff,
+            IrSyncThrottle::none(),
+        )
+        .await
+        {
+            Ok(report) => report,
+            Err(error) => {
+                println!(" error");
+                return Err(error);
+            }
+        };
+        let processed = report.submitted.saturating_add(report.failed);
+        if processed == 0 {
+            println!(" no queued jobs");
+            break;
+        }
+        println!(" submitted={}, failed={}", report.submitted, report.failed);
+        total.submitted = total.submitted.saturating_add(report.submitted);
+        total.failed = total.failed.saturating_add(report.failed);
+        total.messages.extend(report.messages);
+        total.included_rankings.extend(report.included_rankings);
+    }
+    Ok(total)
 }
 
 fn primary_provider(profile: &ProfileConfig) -> Result<&IrProviderConfig> {
