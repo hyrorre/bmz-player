@@ -1,18 +1,16 @@
 //! BMSON `lines` を BMS 小節長 / `ObjTime` へ変換する。
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::num::NonZeroU8;
 use std::path::PathBuf;
 
 use bms_rs::bms::command::StringValue;
-use bms_rs::bms::command::channel::mapper::KeyLayoutBeat;
-use bms_rs::bms::command::channel::{Key, NoteKind, PlayerSide};
+use bms_rs::bms::command::channel::{Channel, Key, NoteChannelId, NoteKind, PlayerSide};
 use bms_rs::bms::command::time::ObjTime;
 use bms_rs::bms::model::Bms;
 use bms_rs::bms::model::obj::{SectionLenChangeObj, WavObj};
 use bms_rs::bms::prelude::{
-    BgaLayer, BgaObj, BpmChangeObj, KeyLayoutMapper, KeyMapping, ObjId, ScrollingFactorObj,
-    StopObj, Track,
+    BgaLayer, BgaObj, BpmChangeObj, KeyLayoutMapper, ObjId, ScrollingFactorObj, StopObj, Track,
 };
 use bms_rs::bmson::bmson_to_bms::BmsonToBmsWarning;
 use bms_rs::bmson::prelude::FinF64;
@@ -24,6 +22,12 @@ use strict_num_extended::NonNegativeF64;
 pub struct MeasureBoundaries {
     pub starts: Vec<u64>,
     pub default_step: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum BmsonLaneLayout {
+    Beat,
+    Pms,
 }
 
 impl MeasureBoundaries {
@@ -156,10 +160,11 @@ pub fn apply_section_lengths(bms: &mut Bms, boundaries: &MeasureBoundaries, reso
     }
 }
 
-pub fn rebuild_bms_timing_from_bmson(
+pub(crate) fn rebuild_bms_timing_from_bmson<T: KeyLayoutMapper>(
     bms: &mut Bms,
     bmson: &Bmson<'_>,
     boundaries: &MeasureBoundaries,
+    lane_layout: BmsonLaneLayout,
     warnings: &mut Vec<BmsonToBmsWarning>,
 ) {
     let wav_by_path: HashMap<PathBuf, ObjId> =
@@ -224,6 +229,7 @@ pub fn rebuild_bms_timing_from_bmson(
         bms.scroll.scrolling_factor_changes.insert(time, ScrollingFactorObj { time, factor });
     }
 
+    let mut seen_key_notes = HashSet::new();
     for sound_channel in &bmson.sound_channels {
         let wav_path = PathBuf::from(sound_channel.name.as_ref());
         let obj_id = wav_by_path.get(&wav_path).copied().unwrap_or_else(|| {
@@ -235,14 +241,22 @@ pub fn rebuild_bms_timing_from_bmson(
         bms.wav.wav_files.entry(obj_id).or_insert(wav_path);
 
         for note in &sound_channel.notes {
+            if let Some(x) = note.x
+                && !seen_key_notes.insert((x, note.y.0))
+            {
+                continue;
+            }
             let time = pulse_to_obj_time(note.y.0, boundaries);
-            let (key, side) = convert_lane_to_key_side(note.x);
             let kind = if note.l > 0 { NoteKind::Long } else { NoteKind::Visible };
-            bms.wav.notes.push_note(WavObj {
-                offset: time,
-                channel_id: KeyLayoutBeat::new(side, kind, key).to_channel_id(),
-                wav_id: obj_id,
-            });
+            let channel_id = bmson_note_channel::<T>(note.x, kind, lane_layout);
+            bms.wav.notes.push_note(WavObj { offset: time, channel_id, wav_id: obj_id });
+            if note.l > 0 && note.x.is_some() {
+                bms.wav.notes.push_note(WavObj {
+                    offset: pulse_to_obj_time(note.y.0.saturating_add(note.l), boundaries),
+                    channel_id,
+                    wav_id: obj_id,
+                });
+            }
         }
     }
 
@@ -258,10 +272,9 @@ pub fn rebuild_bms_timing_from_bmson(
 
         for mine_event in &mine_channel.notes {
             let time = pulse_to_obj_time(mine_event.y.0, boundaries);
-            let (key, side) = convert_lane_to_key_side(mine_event.x);
             bms.wav.notes.push_note(WavObj {
                 offset: time,
-                channel_id: KeyLayoutBeat::new(side, NoteKind::Landmine, key).to_channel_id(),
+                channel_id: bmson_note_channel::<T>(mine_event.x, NoteKind::Landmine, lane_layout),
                 wav_id: obj_id,
             });
         }
@@ -279,10 +292,9 @@ pub fn rebuild_bms_timing_from_bmson(
 
         for key_event in &key_channel.notes {
             let time = pulse_to_obj_time(key_event.y.0, boundaries);
-            let (key, side) = convert_lane_to_key_side(key_event.x);
             bms.wav.notes.push_note(WavObj {
                 offset: time,
-                channel_id: KeyLayoutBeat::new(side, NoteKind::Invisible, key).to_channel_id(),
+                channel_id: bmson_note_channel::<T>(key_event.x, NoteKind::Invisible, lane_layout),
                 wav_id: obj_id,
             });
         }
@@ -312,19 +324,34 @@ pub fn rebuild_bms_timing_from_bmson(
     }
 }
 
-fn convert_lane_to_key_side(lane: Option<NonZeroU8>) -> (Key, PlayerSide) {
-    let lane_value = lane.map_or(0, std::num::NonZero::get);
-    let (adjusted_lane, side) = if lane_value > 8 {
-        (lane_value - 8, PlayerSide::Player2)
-    } else {
-        (lane_value, PlayerSide::Player1)
+fn bmson_note_channel<T: KeyLayoutMapper>(
+    lane: Option<NonZeroU8>,
+    kind: NoteKind,
+    layout: BmsonLaneLayout,
+) -> NoteChannelId {
+    let Some(lane_value) = lane.map(std::num::NonZero::get) else {
+        return Channel::Bgm.into();
     };
-    let key = match adjusted_lane {
-        key @ 1..=7 => Key::Key(key),
-        8 => Key::Scratch(1),
-        _ => Key::Key(1),
+    let mapped = match layout {
+        BmsonLaneLayout::Pms if lane_value <= 9 => {
+            Some((Key::Key(lane_value), PlayerSide::Player1))
+        }
+        BmsonLaneLayout::Beat => {
+            let (adjusted_lane, side) = if lane_value > 8 {
+                (lane_value - 8, PlayerSide::Player2)
+            } else {
+                (lane_value, PlayerSide::Player1)
+            };
+            match adjusted_lane {
+                key @ 1..=7 => Some((Key::Key(key), side)),
+                8 => Some((Key::Scratch(1), side)),
+                _ => None,
+            }
+        }
+        BmsonLaneLayout::Pms => None,
     };
-    (key, side)
+    mapped
+        .map_or_else(|| Channel::Bgm.into(), |(key, side)| T::new(side, kind, key).to_channel_id())
 }
 
 #[cfg(test)]

@@ -149,7 +149,8 @@ fn import_with_layout<T: KeyLayoutMapper>(
         raw_text.clone()
     };
     let text = apply_beatoraja_random_control(&layout_text, random_seed, warnings);
-    let lnobj_parse_text = strip_lnobj_commands(&text);
+    let metadata_text = strip_empty_metadata_commands(&text);
+    let lnobj_parse_text = strip_lnobj_commands(&metadata_text);
     let bga_messages = extract_bga_message_lines(&lnobj_parse_text);
     let (parse_text, sparse_messages) =
         extract_sparse_bms_message_lines(&lnobj_parse_text, warnings);
@@ -374,6 +375,47 @@ fn strip_lnobj_commands(text: &str) -> String {
         rewritten.push('\n');
     }
     rewritten
+}
+
+fn strip_empty_metadata_commands(text: &str) -> String {
+    let mut rewritten = String::with_capacity(text.len());
+    for line in text.lines() {
+        if !is_empty_metadata_command(line) {
+            rewritten.push_str(line);
+        }
+        rewritten.push('\n');
+    }
+    rewritten
+}
+
+fn is_empty_metadata_command(line: &str) -> bool {
+    let Some(body) = line.trim().strip_prefix('#') else {
+        return false;
+    };
+    let (name, value) = split_bms_header_command(body.trim_start());
+    value.is_empty()
+        && matches!(
+            name.to_ascii_uppercase().as_str(),
+            "PLAYER"
+                | "GENRE"
+                | "TITLE"
+                | "SUBTITLE"
+                | "ARTIST"
+                | "SUBARTIST"
+                | "BPM"
+                | "PLAYLEVEL"
+                | "DIFFICULTY"
+                | "RANK"
+                | "DEFEXRANK"
+                | "TOTAL"
+                | "STAGEFILE"
+                | "BANNER"
+                | "BACKBMP"
+                | "PREVIEW"
+                | "VOLWAV"
+                | "LNTYPE"
+                | "LNMODE"
+        )
 }
 
 fn extract_lnobj_wav_key(
@@ -1061,7 +1103,10 @@ fn extract_bms_headers_from_text(text: &str) -> BTreeMap<String, String> {
         if name.is_empty() {
             continue;
         }
-        headers.insert(name.to_ascii_uppercase(), value);
+        let name = name.to_ascii_uppercase();
+        if !value.is_empty() || !headers.contains_key(&name) {
+            headers.insert(name, value);
+        }
     }
     headers
 }
@@ -2137,6 +2182,37 @@ mod tests {
             Some(&"http://example.com/append".to_string())
         );
         assert!(!chart.metadata.bms_headers.contains_key("00111"));
+    }
+
+    #[test]
+    fn empty_trailing_metadata_does_not_clear_previous_values() {
+        let (chart, _) = import_bms_text_with_warnings(
+            "\
+#TITLE Sakura Fubuki
+#ARTIST Street
+#GENRE Drumstep
+#BPM 175
+#PLAYLEVEL 12
+#TOTAL 440
+#STAGEFILE
+#WAV01 key.wav
+#00111:01
+#GENRE
+#TITLE
+#ARTIST
+#TOTAL
+",
+        );
+
+        assert_eq!(chart.metadata.title, "Sakura Fubuki");
+        assert_eq!(chart.metadata.artist, "Street");
+        assert_eq!(chart.metadata.genre, "Drumstep");
+        assert_eq!(chart.metadata.play_level, "12");
+        assert_eq!(chart.metadata.initial_bpm, 175.0);
+        assert_eq!(chart.metadata.total, Some(440.0));
+        assert_eq!(chart.metadata.stage_file, "");
+        assert_eq!(chart.metadata.bms_headers.get("TITLE"), Some(&"Sakura Fubuki".to_string()));
+        assert_eq!(chart.metadata.bms_headers.get("TOTAL"), Some(&"440".to_string()));
     }
 
     #[test]

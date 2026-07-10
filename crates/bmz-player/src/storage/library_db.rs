@@ -442,6 +442,25 @@ impl LibraryDatabase {
                 ],
                 |row| row.get(0),
             )?;
+        let previous_chart_id: Option<i64> = conn
+            .query_row(
+                "SELECT chart_id FROM chart_file_links WHERE chart_file_id = ?1",
+                params![chart_file_id],
+                |row| row.get(0),
+            )
+            .optional()?;
+        if let Some(chart_id) = previous_chart_id {
+            conn.prepare_cached("DELETE FROM chart_file_links WHERE chart_file_id = ?1")?
+                .execute(params![chart_file_id])?;
+            conn.prepare_cached("UPDATE course_entries SET chart_id = NULL WHERE chart_id = ?1")?
+                .execute(params![chart_id])?;
+            conn.prepare_cached(
+                "DELETE FROM charts
+                 WHERE id = ?1
+                   AND NOT EXISTS (SELECT 1 FROM chart_file_links WHERE chart_id = ?1)",
+            )?
+            .execute(params![chart_id])?;
+        }
         conn.prepare_cached("DELETE FROM chart_import_warnings WHERE chart_file_id = ?1")?
             .execute(params![chart_file_id])?;
         conn.prepare_cached(
@@ -2683,6 +2702,23 @@ mod tests {
 
         assert_eq!(status, "Failed");
         assert_eq!(code, "ImportFailed");
+    }
+
+    #[test]
+    fn failed_reimport_removes_previous_chart_link_and_orphan() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        configure_connection(&conn).unwrap();
+        run_migrations(&mut conn, LIBRARY_MIGRATIONS).unwrap();
+        let mut db = LibraryDatabase::from_connection(conn);
+        let path = Path::new("/songs/unsupported.bmson");
+        db.upsert_chart_import(&record_for_chart(path.to_str().unwrap(), &chart("old"))).unwrap();
+
+        db.upsert_failed_chart_file(None, path, 10, 2, 3, "unsupported chart mode").unwrap();
+
+        assert_eq!(db.chart_id_by_chart_file_path(path).unwrap(), None);
+        let chart_count: i64 =
+            db.conn().query_row("SELECT COUNT(*) FROM charts", [], |row| row.get(0)).unwrap();
+        assert_eq!(chart_count, 0);
     }
 
     #[test]

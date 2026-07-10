@@ -532,6 +532,35 @@ mod tests {
     }
 
     #[test]
+    fn removes_visible_notes_covered_by_long_channel_pair() {
+        let text = "\
+#TITLE Notes Inside Long Note
+#BPM 120
+#TOTAL 200
+#WAV01 start.wav
+#WAV02 inside.wav
+#WAV03 inside.wav
+#WAV04 end.wav
+#00111:01020304
+#00151:01000004
+#00211:01
+";
+        let path = write_temp_bms(text);
+        let result = import_bms_chart(&path, None, false).unwrap();
+
+        let lane = result.chart.notes_for_lane(Lane::Key1);
+        assert_eq!(result.chart.long_notes.len(), 1);
+        assert_eq!(result.chart.total_notes, 2);
+        assert_eq!(
+            lane.iter().filter(|note| note.kind == NoteKind::Tap).count(),
+            1,
+            "lane notes: {lane:?}"
+        );
+
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
     fn imports_scroll_and_speed_events() {
         // SCROLL チャネル (SC) と SPEED チャネル (SP) を含む BMS。
         // bms-rs は `#SCROLLxx` / `#SPEEDxx` 定義と `#xxxSC` / `#xxxSP` 行を

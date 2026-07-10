@@ -1,5 +1,3 @@
-use std::collections::HashSet;
-
 use bmz_core::lane::Lane;
 
 use crate::model::LongNoteStyle;
@@ -54,19 +52,30 @@ pub fn normalize_lane_objects(
         _ => None,
     }));
 
-    // LR2/beatoraja treat a visible note placed at the same lane/tick as a
-    // long-channel start as that long note's start, rather than two separate
-    // score notes. This pattern is used by charts that layer a keysound note
-    // over a 5x long-note channel.
-    let long_start_ticks: HashSet<_> = out
+    // LR2/beatoraja move visible notes covered by a long-channel pair to the
+    // BGM lane. At the boundaries the long start/end replaces the visible
+    // note as well. This is used both for a keysound layered at the LN start
+    // and for older LNTYPE 2 charts that densely place normal notes under LN.
+    let long_ranges: Vec<_> = out
         .iter()
         .filter_map(|event| match event {
-            ResolvedLaneEvent::Long { pair } => Some(pair.start_tick),
+            ResolvedLaneEvent::Long { pair } => Some((pair.start_tick, pair.end_tick)),
             _ => None,
         })
         .collect();
+    let unterminated_long_start_tick = {
+        let mut long_objects =
+            objects.iter().filter(|object| object.source == LaneObjectSource::LongChannel);
+        let mut pending = None;
+        for object in &mut long_objects {
+            pending = if pending.is_some() { None } else { Some(object.tick) };
+        }
+        pending
+    };
     out.retain(|event| {
-        !matches!(event, ResolvedLaneEvent::Tap { tick, .. } if long_start_ticks.contains(tick))
+        !matches!(event, ResolvedLaneEvent::Tap { tick, .. }
+            if long_ranges.iter().any(|(start, end)| start <= tick && tick <= end)
+                || unterminated_long_start_tick == Some(*tick))
     });
 
     out
@@ -250,5 +259,42 @@ mod tests {
         assert_eq!(events.len(), 1, "events: {events:?}");
         assert!(matches!(events[0], ResolvedLaneEvent::Long { .. }));
         assert!(warnings.is_empty());
+    }
+
+    #[test]
+    fn visible_notes_inside_and_at_end_of_long_channel_pair_are_removed() {
+        let mut warnings = Vec::new();
+        let events = normalize_lane_objects(
+            Lane::Key1,
+            &[
+                long_object(0, 7),
+                visible_object(48, 8),
+                visible_object(96, 9),
+                long_object(96, 10),
+                visible_object(144, 11),
+            ],
+            None,
+            &mut warnings,
+        );
+
+        assert_eq!(events.len(), 2, "events: {events:?}");
+        assert!(matches!(events[0], ResolvedLaneEvent::Long { .. }));
+        assert!(matches!(events[1], ResolvedLaneEvent::Tap { tick: ChartTick(144), .. }));
+        assert!(warnings.is_empty());
+    }
+
+    #[test]
+    fn visible_note_at_unterminated_long_start_is_removed() {
+        let mut warnings = Vec::new();
+        let events = normalize_lane_objects(
+            Lane::Key1,
+            &[visible_object(0, 7), long_object(0, 7), visible_object(96, 8)],
+            None,
+            &mut warnings,
+        );
+
+        assert_eq!(events.len(), 1, "events: {events:?}");
+        assert!(matches!(events[0], ResolvedLaneEvent::Tap { tick: ChartTick(96), .. }));
+        assert!(matches!(warnings.as_slice(), [ImportWarning::UnterminatedLongNote { .. }]));
     }
 }
