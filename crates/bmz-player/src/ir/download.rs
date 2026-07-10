@@ -208,12 +208,12 @@ fn import_ir_score_entry(
         return Ok(());
     }
 
+    let record = score_record_from_ir_entry(entry)?;
     report.candidates += 1;
     if dry_run {
         return Ok(());
     }
 
-    let record = score_record_from_ir_entry(entry)?;
     match score_db.insert_score_with_source(&record, &source)? {
         ScoreSourceInsertOutcome::Inserted { .. } => report.imported += 1,
         ScoreSourceInsertOutcome::Duplicate { .. } => report.skipped_existing += 1,
@@ -671,5 +671,35 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM score_history", [], |row| row.get(0))
             .unwrap();
         assert_eq!(count, 3);
+    }
+
+    #[test]
+    fn dry_run_reports_invalid_scores_without_counting_them_as_candidates() {
+        let mut score_db = open_score_db();
+        let network_db = open_network_db();
+        let mut invalid = score_entry("remote-invalid");
+        invalid.ex_score += 1;
+        let mut report = IrScoreDownloadReport::default();
+
+        import_ir_score_entries(
+            &mut score_db,
+            &network_db,
+            "provider-1",
+            "account-1",
+            &[invalid],
+            true,
+            1_800_000_000,
+            &mut report,
+        )
+        .unwrap();
+
+        assert_eq!(report.candidates, 0);
+        assert_eq!(report.failed, 1);
+        assert_eq!(report.messages.len(), 1);
+        let count: i64 = score_db
+            .conn()
+            .query_row("SELECT COUNT(*) FROM score_history", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(count, 0);
     }
 }
