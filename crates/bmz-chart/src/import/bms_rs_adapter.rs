@@ -143,7 +143,12 @@ fn import_with_layout<T: KeyLayoutMapper>(
     let identity = compute_chart_identity(&bytes);
     let raw_text = decode_bms_text(&bytes, warnings);
     let has_bms_random = source_text_has_bms_random(&raw_text);
-    let text = apply_beatoraja_random_control(&raw_text, random_seed, warnings);
+    let layout_text = if layout == ChartKeyLayout::pms(PmsKeyLayout::Standard) {
+        strip_pms_bme_upper_channels(&raw_text)
+    } else {
+        raw_text.clone()
+    };
+    let text = apply_beatoraja_random_control(&layout_text, random_seed, warnings);
     let lnobj_parse_text = strip_lnobj_commands(&text);
     let bga_messages = extract_bga_message_lines(&lnobj_parse_text);
     let (parse_text, sparse_messages) =
@@ -967,6 +972,18 @@ fn pms_bme_upper_channel(channel: [u8; 2]) -> bool {
     matches!(first, b'1' | b'3' | b'5' | b'6' | b'D' | b'E') && matches!(channel[1], b'6'..=b'9')
 }
 
+/// Standard PMS uses P2 channels 22-25 for keys 6-9. When a chart also
+/// contains BME-type P1 channels 16-19, beatoraja ignores those conflicting
+/// objects instead of adding them to the standard layout.
+fn strip_pms_bme_upper_channels(source: &str) -> String {
+    source
+        .split_inclusive('\n')
+        .filter(|line| {
+            message_channel_bytes(line).is_none_or(|channel| !pms_bme_upper_channel(channel))
+        })
+        .collect()
+}
+
 fn build_metadata(bms: &Bms) -> IntermediateMetadata {
     let initial_bpm = bms
         .bpm
@@ -1723,6 +1740,17 @@ mod tests {
         {
             assert_eq!(expected, actual);
         }
+    }
+
+    #[test]
+    fn pms_standard_drops_conflicting_bme_upper_channels() {
+        let mut text = pms_note_lines_standard();
+        text.push_str("#01018:01\n");
+
+        let chart = import_pms_text(&text);
+
+        assert_eq!(note_lanes(&chart).len(), 9);
+        assert_eq!(playable_lane_counts(&chart)[Lane::Key8.index()], 1);
     }
 
     #[test]

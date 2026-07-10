@@ -360,18 +360,30 @@ fn collect_lane_objects(
     timing_map: &TimingMap,
 ) -> [Vec<LaneObject>; LANE_COUNT] {
     let mut buckets: [Vec<LaneObject>; LANE_COUNT] = std::array::from_fn(|_| Vec::new());
+    let mut visible_by_tick: [HashMap<ChartTick, usize>; LANE_COUNT] =
+        std::array::from_fn(|_| HashMap::new());
 
     for object in tick_objects {
         let time = timing_map.tick_to_time(object.tick);
         match object.kind {
             TickObjectKind::VisibleNote { lane, wav_key } => {
-                buckets[lane.index()].push(LaneObject {
+                let lane_index = lane.index();
+                let lane_object = LaneObject {
                     lane,
                     tick: object.tick,
                     time,
                     wav_key,
                     source: LaneObjectSource::Visible,
-                });
+                };
+                if let Some(index) = visible_by_tick[lane_index].get(&object.tick).copied() {
+                    // beatoraja/jbms-parser merges repeated definitions of the same
+                    // visible lane position, with the later definition taking effect.
+                    buckets[lane_index][index] = lane_object;
+                } else {
+                    let index = buckets[lane_index].len();
+                    buckets[lane_index].push(lane_object);
+                    visible_by_tick[lane_index].insert(object.tick, index);
+                }
             }
             TickObjectKind::InvisibleNote { lane, wav_key } => {
                 buckets[lane.index()].push(LaneObject {

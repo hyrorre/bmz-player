@@ -359,6 +359,36 @@ mod tests {
     }
 
     #[test]
+    fn deduplicates_visible_note_overlapping_random_branch() {
+        let text = "\
+#TITLE Random Duplicate
+#BPM 120
+#TOTAL 200
+#WAV01 branch.wav
+#WAV02 main.wav
+#RANDOM 1
+#IF 1
+#00111:0000000000010000000000000000000000000000000000000000000000000000
+#ENDIF
+#ENDRANDOM
+#00111:0000000000020000000000000000000000000000000000000000000000000000
+";
+        let path = write_temp_bms(text);
+        let result = import_bms_chart(&path, Some(1), false).unwrap();
+
+        let lane = result.chart.notes_for_lane(Lane::Key1);
+        assert_eq!(lane.len(), 1);
+        assert_eq!(result.chart.total_notes, 1);
+        assert_eq!(
+            lane[0].sound.map(|id| result.chart.sounds[id.0 as usize].path.file_name().unwrap()),
+            Some(std::ffi::OsStr::new("main.wav")),
+            "the later main-data definition should replace the RANDOM branch note"
+        );
+
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
     fn lnobj_without_marker_is_handled_outside_bms_rs() {
         // LNOBJ is stripped before bms-rs parse and resolved during lane normalization.
         let text = "\
@@ -441,6 +471,62 @@ mod tests {
         assert_eq!(result.chart.long_notes.len(), 1);
         assert_eq!(result.chart.long_notes[0].style, LongNoteStyle::ChannelPair);
         assert_eq!(result.chart.total_notes, 1);
+
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn merges_visible_note_at_long_channel_start() {
+        let text = "\
+#TITLE Layered Long Start
+#BPM 120
+#TOTAL 200
+#WAV01 key.wav
+#WAV02 end.wav
+#00111:01
+#00151:0102
+";
+        let path = write_temp_bms(text);
+        let result = import_bms_chart(&path, None, false).unwrap();
+
+        let lane = result.chart.notes_for_lane(Lane::Key1);
+        assert_eq!(lane.len(), 2, "lane notes: {lane:?}");
+        assert_eq!(lane[0].kind, NoteKind::LongStart);
+        assert_eq!(lane[1].kind, NoteKind::LongEnd);
+        assert_eq!(result.chart.long_notes.len(), 1);
+        assert_eq!(result.chart.total_notes, 1);
+
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn merges_long_channel_start_without_disturbing_lnobj_pair() {
+        let text = "\
+#TITLE Layered Long Start With LNOBJ
+#BPM 120
+#TOTAL 200
+#WAV01 layered.wav
+#WAV02 lnobj-start.wav
+#WAV03 long-end.wav
+#WAVZZ marker.wav
+#LNOBJ ZZ
+#00111:0102ZZ
+#00151:010003
+";
+        let path = write_temp_bms(text);
+        let result = import_bms_chart(&path, None, false).unwrap();
+
+        assert_eq!(result.chart.long_notes.len(), 2);
+        assert_eq!(result.chart.total_notes, 2);
+        assert_eq!(
+            result
+                .chart
+                .notes_for_lane(Lane::Key1)
+                .iter()
+                .filter(|note| note.kind == NoteKind::Tap)
+                .count(),
+            0
+        );
 
         std::fs::remove_file(&path).unwrap();
     }

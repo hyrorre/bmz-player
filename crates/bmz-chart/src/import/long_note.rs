@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use bmz_core::lane::Lane;
 
 use crate::model::LongNoteStyle;
@@ -51,6 +53,21 @@ pub fn normalize_lane_objects(
         }),
         _ => None,
     }));
+
+    // LR2/beatoraja treat a visible note placed at the same lane/tick as a
+    // long-channel start as that long note's start, rather than two separate
+    // score notes. This pattern is used by charts that layer a keysound note
+    // over a 5x long-note channel.
+    let long_start_ticks: HashSet<_> = out
+        .iter()
+        .filter_map(|event| match event {
+            ResolvedLaneEvent::Long { pair } => Some(pair.start_tick),
+            _ => None,
+        })
+        .collect();
+    out.retain(|event| {
+        !matches!(event, ResolvedLaneEvent::Tap { tick, .. } if long_start_ticks.contains(tick))
+    });
 
     out
 }
@@ -217,6 +234,21 @@ mod tests {
         };
         assert_eq!(pair.wav_key, Some(7));
         assert_eq!(pair.end_wav_key, None);
+        assert!(warnings.is_empty());
+    }
+
+    #[test]
+    fn visible_note_at_long_channel_start_is_merged_into_long_note() {
+        let mut warnings = Vec::new();
+        let events = normalize_lane_objects(
+            Lane::Key1,
+            &[visible_object(0, 7), long_object(0, 7), long_object(96, 8)],
+            None,
+            &mut warnings,
+        );
+
+        assert_eq!(events.len(), 1, "events: {events:?}");
+        assert!(matches!(events[0], ResolvedLaneEvent::Long { .. }));
         assert!(warnings.is_empty());
     }
 }
