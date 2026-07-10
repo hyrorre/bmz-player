@@ -66,12 +66,15 @@ GET    /api/v1/courses/{course_hash}/ranking   # global のみ
   未送信状態へ戻さない。
   成功済み job は payload を空にし、同期後に 30 日以内または最新 500 件だけを
   `network.db` に保持する。未送信 / 失敗 / 送信中 job は剪定対象外。
-- local backfill: `bmz ir upload-local [--dry-run] [--limit N] [--sync]` で
+- local backfill: `bmz ir upload-local [--dry-run] [--limit N] [--sync] [--all]` で
   `score.db` の既存 `score_history` を unverified な score submit として enqueue
   する。既送信履歴と既に queue にある履歴は既定でスキップし、course stage /
   autoplay は既定で除外。local backfill は未登録 chart を作成できるが、既存 chart
   の正規メタデータは上書きしない。`--sync` で既存の未完了score jobがある場合は、
   queueを増やさず先に最大20件を同期する。
+  `--all` は `--sync` を含む完走モードで、既存queueの排出と次の投入batchを候補が
+  なくなるまで繰り返す。送信失敗または他プロセスの `sending` job で進捗できない場合は
+  非ゼロで終了し、retry/backoff または5分のlease後に再実行する。
   per-history ghost は現在の `score_history` には保持していないため送らない。
 - rate limit: score submit / course score は 15 分あたり user 1500 / IP 3000。
   replay upload 系は 1 replay あたり upload-url / upload / verify の 3 request を使うため、
