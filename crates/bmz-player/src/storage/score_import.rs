@@ -1,7 +1,10 @@
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use anyhow::{Context, Result, bail};
+use bmz_chart::import::import_bms_chart;
+use bmz_chart::model::PlayableChart;
 use bmz_core::clear::{ClearType, GaugeType};
 use bmz_core::course::{
     CourseClassConstraint, CourseGaugeConstraint, CourseJudgeConstraint, CourseSpeedConstraint,
@@ -14,7 +17,9 @@ use rusqlite::{Connection, OpenFlags, Row};
 use super::common::hex_to_hash;
 use super::library_db::LibraryDatabase;
 use super::score_db::{CourseScoreInsert, ScoreDatabase, ScoreRecord, decode_beatoraja_ghost};
-use crate::ln_policy::LnScorePolicy;
+use crate::ln_policy::{
+    LnPolicySetting, LnScorePolicy, expected_scored_note_count_for_policy, score_ln_policy,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ScoreImportKind {
@@ -52,7 +57,7 @@ impl ScoreImportKind {
     }
 
     const fn uses_lr2_schema(self) -> bool {
-        matches!(self, Self::Lr2 | Self::Lr2Oraja | Self::Lr2OrajaDx)
+        matches!(self, Self::Lr2)
     }
 }
 
@@ -116,6 +121,7 @@ fn import_lr2_scores(
     // borrow of `library_db` is released before we start inserting course scores.
     let course_index = build_lr2_course_index(library_db)?;
     let mut report = ScoreImportReport::default();
+    let mut chart_cache: HashMap<[u8; 32], Arc<PlayableChart>> = HashMap::new();
     let mut stmt = source.prepare(
         "SELECT hash, clear, perfect, great, good, bad, poor,
                 totalnotes, maxcombo, minbp, playcount, clearcount, ghost, rseed
@@ -161,15 +167,41 @@ fn import_lr2_scores(
         };
         report.matched += 1;
 
+        let judged = lr2_judged_note_count(&row);
+        let resolved = match resolve_import_ln_policy(
+            library_db,
+            chart_sha256,
+            LnScorePolicy::ForceLn,
+            judged,
+            &mut chart_cache,
+        ) {
+            Ok(Some(resolved)) => resolved,
+            Ok(None) => {
+                report.failed += 1;
+                tracing::warn!(
+                    md5 = %row.md5,
+                    judged,
+                    "LR2 score judge total does not match expected note count"
+                );
+                continue;
+            }
+            Err(error) => {
+                report.failed += 1;
+                tracing::warn!(md5 = %row.md5, %error, "failed to resolve LR2 import chart");
+                continue;
+            }
+        };
+
         let clear_type = lr2_clear_type(row.clear);
         let record = imported_score_record(
             chart_sha256,
             imported_at,
             clear_type,
-            row.total_notes,
-            score_state_from_lr2(&row),
+            resolved.expected_notes,
+            score_state_from_lr2(&row, resolved.expected_notes),
             row.random_seed,
             kind.rule_mode(),
+            resolved.ln_policy,
         );
         score_db.insert_score(&record)?;
         report.imported += 1;
@@ -193,8 +225,9 @@ fn import_beatoraja_scores(
     };
 
     let mut report = ScoreImportReport::default();
+    let mut chart_cache: HashMap<[u8; 32], Arc<PlayableChart>> = HashMap::new();
     let sql = format!(
-        "SELECT sha256, clear, epg, lpg, egr, lgr, egd, lgd, ebd, lbd,
+        "SELECT sha256, mode, clear, epg, lpg, egr, lgr, egd, lgd, ebd, lbd,
                 epr, lpr, ems, lms, notes, combo, minbp, ghost, seed, date
          FROM {table}"
     );
@@ -237,20 +270,200 @@ fn import_beatoraja_scores(
         }
         report.matched += 1;
 
+        let setting = beatoraja_mode_to_ln_setting(row.mode);
+        let charts = library_db.list_charts_by_sha256(chart_sha256)?;
+        let Some(chart_item) = charts.first() else {
+            report.skipped += 1;
+            continue;
+        };
+        let ln_policy = score_ln_policy(setting, chart_item.ln_profile);
+        let judged = beatoraja_judged_note_count(&row);
+        let resolved = match resolve_import_ln_policy(
+            library_db,
+            chart_sha256,
+            ln_policy,
+            judged,
+            &mut chart_cache,
+        ) {
+            Ok(Some(resolved)) => resolved,
+            Ok(None) => {
+                report.failed += 1;
+                tracing::warn!(
+                    sha256 = %row.sha256,
+                    mode = row.mode,
+                    judged,
+                    policy = ln_policy.as_str(),
+                    "beatoraja score judge total does not match expected note count"
+                );
+                continue;
+            }
+            Err(error) => {
+                report.failed += 1;
+                tracing::warn!(
+                    sha256 = %row.sha256,
+                    %error,
+                    "failed to resolve beatoraja import chart"
+                );
+                continue;
+            }
+        };
+
         let clear_type = beatoraja_clear_type(row.clear);
         let record = imported_score_record(
             chart_sha256,
             normalize_imported_played_at(row.date).unwrap_or(imported_at),
             clear_type,
-            row.total_notes,
-            score_state_from_beatoraja(&row),
+            resolved.expected_notes,
+            score_state_from_beatoraja(&row, resolved.expected_notes),
             row.random_seed,
             kind.rule_mode(),
+            resolved.ln_policy,
         );
         score_db.insert_score(&record)?;
         report.imported += 1;
     }
     Ok(report)
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ResolvedImportLnPolicy {
+    ln_policy: LnScorePolicy,
+    expected_notes: u32,
+}
+
+fn beatoraja_mode_to_ln_setting(mode: i64) -> LnPolicySetting {
+    match mode {
+        0 => LnPolicySetting::AutoLn,
+        1 => LnPolicySetting::AutoCn,
+        2 => LnPolicySetting::AutoHcn,
+        other => {
+            tracing::debug!(mode = other, "unknown beatoraja score.mode; treating as AutoLn");
+            LnPolicySetting::AutoLn
+        }
+    }
+}
+
+fn lr2_judged_note_count(row: &Lr2ScoreRow) -> u32 {
+    row.perfect
+        .saturating_add(row.great)
+        .saturating_add(row.good)
+        .saturating_add(row.bad)
+        .saturating_add(row.poor)
+}
+
+fn beatoraja_judged_note_count(row: &BeatorajaScoreRow) -> u32 {
+    row.epg
+        .saturating_add(row.lpg)
+        .saturating_add(row.egr)
+        .saturating_add(row.lgr)
+        .saturating_add(row.egd)
+        .saturating_add(row.lgd)
+        .saturating_add(row.ebd)
+        .saturating_add(row.lbd)
+        .saturating_add(row.epr)
+        .saturating_add(row.lpr)
+}
+
+fn resolve_import_ln_policy(
+    library_db: &LibraryDatabase,
+    chart_sha256: [u8; 32],
+    initial_policy: LnScorePolicy,
+    judged: u32,
+    chart_cache: &mut HashMap<[u8; 32], Arc<PlayableChart>>,
+) -> Result<Option<ResolvedImportLnPolicy>> {
+    let expected =
+        expected_notes_for_policy(library_db, chart_sha256, initial_policy, chart_cache)?;
+    if judged == expected {
+        return Ok(Some(ResolvedImportLnPolicy {
+            ln_policy: initial_policy,
+            expected_notes: expected,
+        }));
+    }
+    if initial_policy != LnScorePolicy::ForceLn {
+        let force_expected = expected_notes_for_policy(
+            library_db,
+            chart_sha256,
+            LnScorePolicy::ForceLn,
+            chart_cache,
+        )?;
+        if judged == force_expected {
+            return Ok(Some(ResolvedImportLnPolicy {
+                ln_policy: LnScorePolicy::ForceLn,
+                expected_notes: force_expected,
+            }));
+        }
+    }
+    Ok(None)
+}
+
+fn expected_notes_for_policy(
+    library_db: &LibraryDatabase,
+    chart_sha256: [u8; 32],
+    policy: LnScorePolicy,
+    chart_cache: &mut HashMap<[u8; 32], Arc<PlayableChart>>,
+) -> Result<u32> {
+    let charts = library_db.list_charts_by_sha256(chart_sha256)?;
+    let Some(item) = charts.first() else {
+        bail!("chart missing from library while resolving import note count");
+    };
+    // No long notes: every policy collapses to ForceLn / base total_notes.
+    if !item.ln_profile.has_any_ln() {
+        return Ok(item.total_notes);
+    }
+    // ForceLn never scores long ends separately, so base total_notes is enough.
+    if policy == LnScorePolicy::ForceLn {
+        return Ok(item.total_notes);
+    }
+    let chart = load_import_chart(library_db, chart_sha256, item.chart_id, chart_cache)?;
+    Ok(expected_scored_note_count_for_policy(&chart, policy))
+}
+
+fn load_import_chart(
+    library_db: &LibraryDatabase,
+    chart_sha256: [u8; 32],
+    chart_id: i64,
+    chart_cache: &mut HashMap<[u8; 32], Arc<PlayableChart>>,
+) -> Result<Arc<PlayableChart>> {
+    if let Some(chart) = chart_cache.get(&chart_sha256) {
+        return Ok(Arc::clone(chart));
+    }
+    #[cfg(test)]
+    if let Some(chart) = take_test_import_chart(chart_sha256) {
+        let chart = Arc::new(chart);
+        chart_cache.insert(chart_sha256, Arc::clone(&chart));
+        return Ok(chart);
+    }
+    let Some(path) = library_db.primary_chart_file_path(chart_id)? else {
+        bail!("chart file path missing for chart id {chart_id}");
+    };
+    let imported = import_bms_chart(Path::new(&path), None, false)
+        .with_context(|| format!("failed to import chart for score note-count check: {path}"))?;
+    let chart = Arc::new(imported.chart);
+    chart_cache.insert(chart_sha256, Arc::clone(&chart));
+    Ok(chart)
+}
+
+#[cfg(test)]
+thread_local! {
+    static TEST_IMPORT_CHARTS: std::cell::RefCell<HashMap<[u8; 32], PlayableChart>> =
+        std::cell::RefCell::new(HashMap::new());
+}
+
+#[cfg(test)]
+fn set_test_import_chart(sha256: [u8; 32], chart: PlayableChart) {
+    TEST_IMPORT_CHARTS.with(|maps| {
+        maps.borrow_mut().insert(sha256, chart);
+    });
+}
+
+#[cfg(test)]
+fn take_test_import_chart(sha256: [u8; 32]) -> Option<PlayableChart> {
+    TEST_IMPORT_CHARTS.with(|maps| maps.borrow().get(&sha256).cloned())
+}
+
+#[cfg(test)]
+fn clear_test_import_charts() {
+    TEST_IMPORT_CHARTS.with(|maps| maps.borrow_mut().clear());
 }
 
 fn imported_score_record(
@@ -261,10 +474,11 @@ fn imported_score_record(
     score: ScoreState,
     random_seed: Option<i64>,
     rule_mode: &str,
+    ln_policy: LnScorePolicy,
 ) -> ScoreRecord {
     ScoreRecord {
         chart_sha256,
-        ln_policy: LnScorePolicy::ForceLn,
+        ln_policy,
         double_option: crate::select_options::DoubleOptionScoreBucket::Off,
         played_at,
         clear_type,
@@ -505,6 +719,7 @@ fn lr2_row(row: &Row<'_>) -> rusqlite::Result<Lr2ScoreRow> {
 #[derive(Debug)]
 struct BeatorajaScoreRow {
     sha256: String,
+    mode: i64,
     clear: i64,
     epg: u32,
     lpg: u32,
@@ -529,31 +744,32 @@ struct BeatorajaScoreRow {
 fn beatoraja_row(row: &Row<'_>) -> rusqlite::Result<BeatorajaScoreRow> {
     Ok(BeatorajaScoreRow {
         sha256: row.get(0)?,
-        clear: row.get(1)?,
-        epg: row.get(2)?,
-        lpg: row.get(3)?,
-        egr: row.get(4)?,
-        lgr: row.get(5)?,
-        egd: row.get(6)?,
-        lgd: row.get(7)?,
-        ebd: row.get(8)?,
-        lbd: row.get(9)?,
-        epr: row.get(10)?,
-        lpr: row.get(11)?,
-        ems: row.get(12)?,
-        lms: row.get(13)?,
-        total_notes: row.get(14)?,
-        max_combo: row.get(15)?,
-        min_bp: row.get(16)?,
-        ghost: row.get::<_, Option<String>>(17)?.unwrap_or_default(),
-        random_seed: row.get(18)?,
-        date: row.get(19)?,
+        mode: row.get(1)?,
+        clear: row.get(2)?,
+        epg: row.get(3)?,
+        lpg: row.get(4)?,
+        egr: row.get(5)?,
+        lgr: row.get(6)?,
+        egd: row.get(7)?,
+        lgd: row.get(8)?,
+        ebd: row.get(9)?,
+        lbd: row.get(10)?,
+        epr: row.get(11)?,
+        lpr: row.get(12)?,
+        ems: row.get(13)?,
+        lms: row.get(14)?,
+        total_notes: row.get(15)?,
+        max_combo: row.get(16)?,
+        min_bp: row.get(17)?,
+        ghost: row.get::<_, Option<String>>(18)?.unwrap_or_default(),
+        random_seed: row.get(19)?,
+        date: row.get(20)?,
     })
 }
 
-fn score_state_from_lr2(row: &Lr2ScoreRow) -> ScoreState {
-    let ghost = decode_lr2_ghost(&row.ghost, row.total_notes);
-    let _ = (row.min_bp, row.play_count, row.clear_count);
+fn score_state_from_lr2(row: &Lr2ScoreRow, expected_notes: u32) -> ScoreState {
+    let ghost = decode_lr2_ghost(&row.ghost, expected_notes);
+    let _ = (row.min_bp, row.play_count, row.clear_count, row.total_notes);
     ScoreState {
         judges: JudgeCounts {
             fast_pgreat: row.perfect,
@@ -565,15 +781,15 @@ fn score_state_from_lr2(row: &Lr2ScoreRow) -> ScoreState {
         },
         combo: 0,
         max_combo: row.max_combo,
-        past_notes: row.total_notes,
+        past_notes: expected_notes,
         ghost,
         empty_poor_breaks_combo: false,
     }
 }
 
-fn score_state_from_beatoraja(row: &BeatorajaScoreRow) -> ScoreState {
-    let ghost = decode_external_ghost(&row.ghost, row.total_notes);
-    let _ = row.min_bp;
+fn score_state_from_beatoraja(row: &BeatorajaScoreRow, expected_notes: u32) -> ScoreState {
+    let ghost = decode_external_ghost(&row.ghost, expected_notes);
+    let _ = (row.min_bp, row.total_notes);
     ScoreState {
         judges: JudgeCounts {
             fast_pgreat: row.epg,
@@ -591,7 +807,7 @@ fn score_state_from_beatoraja(row: &BeatorajaScoreRow) -> ScoreState {
         },
         combo: 0,
         max_combo: row.max_combo,
-        past_notes: row.total_notes,
+        past_notes: expected_notes,
         ghost,
         empty_poor_breaks_combo: false,
     }
@@ -808,8 +1024,10 @@ mod tests {
     use std::path::Path;
 
     use bmz_chart::hash::compute_chart_identity;
-    use bmz_chart::model::{ChartMetadata, PlayableChart};
-    use bmz_core::time::TimeUs;
+    use bmz_chart::model::{ChartMetadata, LongNotePair, LongNoteStyle, PlayableChart};
+    use bmz_core::ids::NoteId;
+    use bmz_core::lane::Lane;
+    use bmz_core::time::{ChartTick, TimeUs};
     use rusqlite::params;
 
     use super::*;
@@ -841,7 +1059,7 @@ mod tests {
             ])
             .unwrap();
         assert_eq!(best[0].clear_type, "Hard");
-        assert_eq!(best[0].ex_score, 221);
+        assert_eq!(best[0].ex_score, 222);
         assert_eq!(best[0].ln_policy, LnScorePolicy::ForceLn);
         assert_eq!(best[0].device_type, InputDeviceKind::Keyboard);
     }
@@ -850,7 +1068,7 @@ mod tests {
     fn beatoraja_import_preserves_fast_slow_counts_and_current_schema_fields() {
         let (library_db, mut score_db, sha256, _) = open_test_databases();
         let source = Connection::open_in_memory().unwrap();
-        create_beatoraja_source(&source, &sha256, 1_700_000_001_000);
+        create_beatoraja_source(&source, &sha256, 1_700_000_001_000, 0);
 
         let report = import_beatoraja_scores(
             &source,
@@ -887,8 +1105,8 @@ mod tests {
             row,
             (
                 "ExHard".to_string(),
+                100,
                 10,
-                3,
                 1,
                 "Beatoraja".to_string(),
                 "ForceLn".to_string(),
@@ -900,14 +1118,14 @@ mod tests {
 
     #[test]
     fn lr2oraja_dx_import_sets_dx_rule_mode() {
-        let (mut library_db, mut score_db, _, md5) = open_test_databases();
+        let (library_db, mut score_db, sha256, _) = open_test_databases();
         let source = Connection::open_in_memory().unwrap();
-        create_lr2_source(&source, &md5);
+        create_beatoraja_source(&source, &sha256, 1_700_000_001_000, 0);
 
-        import_lr2_scores(
+        import_beatoraja_scores(
             &source,
             ScoreImportKind::Lr2OrajaDx,
-            &mut library_db,
+            &library_db,
             &mut score_db,
             1_700_000_000,
         )
@@ -918,6 +1136,141 @@ mod tests {
             .query_row("SELECT rule_mode FROM score_history", [], |row| row.get(0))
             .unwrap();
         assert_eq!(rule_mode, "Dx");
+    }
+
+    #[test]
+    fn lr2oraja_import_uses_beatoraja_schema_and_rule_mode() {
+        let (library_db, mut score_db, sha256, _) = open_test_databases();
+        let source = Connection::open_in_memory().unwrap();
+        create_beatoraja_source(&source, &sha256, 1_700_000_001_000, 0);
+
+        let report = import_beatoraja_scores(
+            &source,
+            ScoreImportKind::Lr2Oraja,
+            &library_db,
+            &mut score_db,
+            1_700_000_000,
+        )
+        .unwrap();
+        assert_eq!(report.imported, 1);
+        let rule_mode: String = score_db
+            .conn()
+            .query_row("SELECT rule_mode FROM score_history", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(rule_mode, "Lr2Oraja");
+    }
+
+    #[test]
+    fn beatoraja_import_mode_cn_on_undefined_ln_sets_force_cn() {
+        clear_test_import_charts();
+        let (mut library_db, mut score_db, sha256, _) =
+            open_test_databases_with_chart(undefined_ln_chart(2, 2));
+        set_test_import_chart(sha256, undefined_ln_chart(2, 2));
+        let source = Connection::open_in_memory().unwrap();
+        // ForceCn expected = 2 base + 2 CN ends = 4
+        create_beatoraja_source_with_judged(
+            &source,
+            &hash_to_hex(&sha256),
+            1_700_000_001_000,
+            1,
+            4,
+        );
+
+        let report = import_beatoraja_scores(
+            &source,
+            ScoreImportKind::Beatoraja,
+            &library_db,
+            &mut score_db,
+            1_700_000_000,
+        )
+        .unwrap();
+        assert_eq!(report.imported, 1);
+        let ln_policy: String = score_db
+            .conn()
+            .query_row("SELECT ln_policy FROM score_history", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(ln_policy, "ForceCn");
+        clear_test_import_charts();
+        let _ = &mut library_db;
+    }
+
+    #[test]
+    fn beatoraja_import_falls_back_to_force_ln_when_only_ln_expected_matches() {
+        clear_test_import_charts();
+        let (library_db, mut score_db, sha256, _) =
+            open_test_databases_with_chart(undefined_ln_chart(2, 2));
+        set_test_import_chart(sha256, undefined_ln_chart(2, 2));
+        let source = Connection::open_in_memory().unwrap();
+        // mode=1 -> ForceCn expects 4, but judged=2 matches ForceLn only
+        create_beatoraja_source_with_judged(
+            &source,
+            &hash_to_hex(&sha256),
+            1_700_000_001_000,
+            1,
+            2,
+        );
+
+        let report = import_beatoraja_scores(
+            &source,
+            ScoreImportKind::Beatoraja,
+            &library_db,
+            &mut score_db,
+            1_700_000_000,
+        )
+        .unwrap();
+        assert_eq!(report.imported, 1);
+        let ln_policy: String = score_db
+            .conn()
+            .query_row("SELECT ln_policy FROM score_history", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(ln_policy, "ForceLn");
+        clear_test_import_charts();
+    }
+
+    #[test]
+    fn beatoraja_import_fails_when_judge_total_mismatches_all_policies() {
+        clear_test_import_charts();
+        let (library_db, mut score_db, sha256, _) =
+            open_test_databases_with_chart(undefined_ln_chart(2, 2));
+        set_test_import_chart(sha256, undefined_ln_chart(2, 2));
+        let source = Connection::open_in_memory().unwrap();
+        create_beatoraja_source_with_judged(
+            &source,
+            &hash_to_hex(&sha256),
+            1_700_000_001_000,
+            1,
+            3,
+        );
+
+        let report = import_beatoraja_scores(
+            &source,
+            ScoreImportKind::Beatoraja,
+            &library_db,
+            &mut score_db,
+            1_700_000_000,
+        )
+        .unwrap();
+        assert_eq!(report.failed, 1);
+        assert_eq!(report.imported, 0);
+        clear_test_import_charts();
+    }
+
+    #[test]
+    fn lr2_import_fails_when_judge_total_mismatches() {
+        let (mut library_db, mut score_db, _, md5) = open_test_databases();
+        let source = Connection::open_in_memory().unwrap();
+        create_lr2_source_with_counts(&source, &hash_to_hex(&md5), 100, 20, 3, 2, 1);
+
+        let report = import_lr2_scores(
+            &source,
+            ScoreImportKind::Lr2,
+            &mut library_db,
+            &mut score_db,
+            1_700_000_000,
+        )
+        .unwrap();
+        assert_eq!(report.failed, 1);
+        assert_eq!(report.imported, 0);
     }
 
     #[test]
@@ -946,7 +1299,7 @@ mod tests {
         let source = Connection::open_in_memory().unwrap();
         // A 4-song course key: four 64-char hashes concatenated (256 chars).
         let course_key = "a".repeat(256);
-        create_beatoraja_source_with_sha256(&source, &course_key, 1_700_000_001_000);
+        create_beatoraja_source_with_sha256(&source, &course_key, 1_700_000_001_000, 0);
 
         let report = import_beatoraja_scores(
             &source,
@@ -1083,7 +1436,7 @@ mod tests {
             .unwrap();
         assert_eq!(distinct_hashes, 2);
         // The imported course score reflects the LR2 aggregate row (clear=4 -> Hard,
-        // ex = perfect*2 + great = 221).
+        // ex = perfect*2 + great = 222).
         let (clear, ex): (String, u32) = score_db
             .conn()
             .query_row("SELECT clear_type, ex_score FROM course_scores LIMIT 1", [], |r| {
@@ -1091,7 +1444,7 @@ mod tests {
             })
             .unwrap();
         assert_eq!(clear, "Hard");
-        assert_eq!(ex, 221);
+        assert_eq!(ex, 222);
     }
 
     #[test]
@@ -1142,7 +1495,7 @@ mod tests {
             ghost: "BAED".to_string(),
             random_seed: Some(123),
         };
-        let state = score_state_from_lr2(&row);
+        let state = score_state_from_lr2(&row, 4);
         assert_eq!(state.ghost, vec![3, 4, 0, 1]);
         assert_eq!(state.judges.fast_pgreat, 100);
     }
@@ -1162,11 +1515,16 @@ mod tests {
     }
 
     fn open_test_databases() -> (LibraryDatabase, ScoreDatabase, [u8; 32], [u8; 16]) {
+        open_test_databases_with_chart(chart())
+    }
+
+    fn open_test_databases_with_chart(
+        chart: PlayableChart,
+    ) -> (LibraryDatabase, ScoreDatabase, [u8; 32], [u8; 16]) {
         let mut library_conn = Connection::open_in_memory().unwrap();
         super::super::common::configure_connection(&library_conn).unwrap();
         run_migrations(&mut library_conn, LIBRARY_MIGRATIONS).unwrap();
         let mut library_db = LibraryDatabase::from_connection(library_conn);
-        let chart = chart();
         let sha256 = chart.identity.file_sha256;
         let md5 = chart.identity.file_md5;
         library_db
@@ -1222,11 +1580,44 @@ mod tests {
         chart
     }
 
+    fn undefined_ln_chart(total_notes: u32, long_pairs: u32) -> PlayableChart {
+        let mut chart = chart();
+        chart.total_notes = total_notes;
+        chart.long_notes = (0..long_pairs)
+            .map(|index| LongNotePair {
+                lane: Lane::Key1,
+                style: LongNoteStyle::ChannelPair,
+                mode: None,
+                start_note_id: NoteId(index * 2 + 1),
+                end_note_id: NoteId(index * 2 + 2),
+                start_tick: ChartTick(0),
+                end_tick: ChartTick(192),
+                start_time: TimeUs(0),
+                end_time: TimeUs(1_000_000),
+                sound: None,
+            })
+            .collect();
+        chart
+    }
+
     fn create_lr2_source(conn: &Connection, md5: &[u8; 16]) {
         create_lr2_source_with_hash(conn, &hash_to_hex(md5));
     }
 
     fn create_lr2_source_with_hash(conn: &Connection, hash: &str) {
+        // Judge total 100+22+3+2+1 = 128 matches chart.total_notes in open_test_databases.
+        create_lr2_source_with_counts(conn, hash, 100, 22, 3, 2, 1);
+    }
+
+    fn create_lr2_source_with_counts(
+        conn: &Connection,
+        hash: &str,
+        perfect: u32,
+        great: u32,
+        good: u32,
+        bad: u32,
+        poor: u32,
+    ) {
         conn.execute_batch(
             "CREATE TABLE score (
                 hash TEXT, clear INTEGER, perfect INTEGER, great INTEGER,
@@ -1237,30 +1628,73 @@ mod tests {
         )
         .unwrap();
         conn.execute(
-            "INSERT INTO score VALUES (?1, 4, 100, 21, 3, 2, 1, 128, 64, 3, 2, 1, '', 123)",
-            params![hash],
+            "INSERT INTO score VALUES (?1, 4, ?2, ?3, ?4, ?5, ?6, 128, 64, 3, 2, 1, '', 123)",
+            params![hash, perfect, great, good, bad, poor],
         )
         .unwrap();
     }
 
-    fn create_beatoraja_source(conn: &Connection, sha256: &[u8; 32], date: i64) {
-        create_beatoraja_source_with_sha256(conn, &hash_to_hex(sha256), date);
+    fn create_beatoraja_source(conn: &Connection, sha256: &[u8; 32], date: i64, mode: i64) {
+        create_beatoraja_source_with_sha256(conn, &hash_to_hex(sha256), date, mode);
     }
 
-    fn create_beatoraja_source_with_sha256(conn: &Connection, sha256: &str, date: i64) {
-        conn.execute_batch(
-            "CREATE TABLE score (
-                sha256 TEXT, clear INTEGER, epg INTEGER, lpg INTEGER,
-                egr INTEGER, lgr INTEGER, egd INTEGER, lgd INTEGER,
-                ebd INTEGER, lbd INTEGER, epr INTEGER, lpr INTEGER,
-                ems INTEGER, lms INTEGER, notes INTEGER, combo INTEGER,
-                minbp INTEGER, ghost TEXT, seed INTEGER, date INTEGER
-            );",
-        )
-        .unwrap();
+    fn create_beatoraja_source_with_sha256(conn: &Connection, sha256: &str, date: i64, mode: i64) {
+        // Default no-LN chart expects 128 scored notes.
+        create_beatoraja_source_with_judged(conn, sha256, date, mode, 128);
+    }
+
+    fn create_beatoraja_source_with_judged(
+        conn: &Connection,
+        sha256: &str,
+        date: i64,
+        mode: i64,
+        judged: u32,
+    ) {
+        // Split judged across fast/slow buckets for schema coverage; empty poor
+        // (ems/lms) is excluded from the import note-count check.
+        let epg = judged.saturating_sub(28).min(judged);
+        let rem = judged.saturating_sub(epg);
+        let lpg = rem.min(10);
+        let rem = rem.saturating_sub(lpg);
+        let egr = rem.min(5);
+        let rem = rem.saturating_sub(egr);
+        let lgr = rem.min(3);
+        let rem = rem.saturating_sub(lgr);
+        let egd = rem.min(2);
+        let rem = rem.saturating_sub(egd);
+        let lgd = rem.min(1);
+        let rem = rem.saturating_sub(lgd);
+        let ebd = rem.min(2);
+        let rem = rem.saturating_sub(ebd);
+        let lbd = rem.min(1);
+        let rem = rem.saturating_sub(lbd);
+        let epr = rem.min(3);
+        let lpr = rem.saturating_sub(epr);
+
+        if conn
+            .query_row(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='score'",
+                [],
+                |_| Ok(()),
+            )
+            .is_err()
+        {
+            conn.execute_batch(
+                "CREATE TABLE score (
+                    sha256 TEXT, mode INTEGER, clear INTEGER, epg INTEGER, lpg INTEGER,
+                    egr INTEGER, lgr INTEGER, egd INTEGER, lgd INTEGER,
+                    ebd INTEGER, lbd INTEGER, epr INTEGER, lpr INTEGER,
+                    ems INTEGER, lms INTEGER, notes INTEGER, combo INTEGER,
+                    minbp INTEGER, ghost TEXT, seed INTEGER, date INTEGER
+                );",
+            )
+            .unwrap();
+        }
         conn.execute(
-            "INSERT INTO score VALUES (?1, 7, 10, 3, 4, 2, 1, 1, 0, 0, 2, 1, 3, 1, 128, 80, 2, '', 456, ?2)",
-            params![sha256, date],
+            "INSERT INTO score VALUES (
+                ?1, ?2, 7, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, 3, 1, ?13, 80, 2, '', 456, ?14
+            )",
+            params![sha256, mode, epg, lpg, egr, lgr, egd, lgd, ebd, lbd, epr, lpr, judged, date],
         )
         .unwrap();
     }

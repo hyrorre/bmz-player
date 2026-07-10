@@ -214,6 +214,55 @@ pub fn effective_ln_mode(setting: LnPolicySetting, profile: ChartLnProfile) -> L
     }
 }
 
+/// Score-target note count under `setting`, matching judge `affects_score` rules.
+///
+/// Base count is Tap + LongStart (`chart.total_notes`). Each long pair whose
+/// effective mode is CN/HCN adds one more (the end note also scores). LN pairs
+/// score once at the end, so they do not add beyond the base LongStart.
+pub fn expected_scored_note_count(chart: &PlayableChart, setting: LnPolicySetting) -> u32 {
+    let profile = ChartLnProfile::from_chart(chart);
+    let policy = score_ln_policy(setting, profile);
+    let fallback = match policy {
+        LnScorePolicy::AutoLn | LnScorePolicy::ForceLn => LongNoteMode::Ln,
+        LnScorePolicy::AutoCn | LnScorePolicy::ForceCn => LongNoteMode::Cn,
+        LnScorePolicy::AutoHcn | LnScorePolicy::ForceHcn => LongNoteMode::Hcn,
+    };
+    let force_all =
+        matches!(policy, LnScorePolicy::ForceLn | LnScorePolicy::ForceCn | LnScorePolicy::ForceHcn);
+
+    let mut extra_ends = 0u32;
+    for pair in &chart.long_notes {
+        let mode = if force_all { fallback } else { pair.mode.unwrap_or(fallback) };
+        if matches!(mode, LongNoteMode::Cn | LongNoteMode::Hcn) {
+            extra_ends = extra_ends.saturating_add(1);
+        }
+    }
+    chart.total_notes.saturating_add(extra_ends)
+}
+
+/// Expected score-target note count for an already-resolved [`LnScorePolicy`].
+///
+/// `Force*` forces every long pair to that mode. `Auto*` keeps defined pair modes
+/// and applies the policy fallback to undefined pairs.
+pub fn expected_scored_note_count_for_policy(chart: &PlayableChart, policy: LnScorePolicy) -> u32 {
+    let (force_all, fallback) = match policy {
+        LnScorePolicy::ForceLn => (true, LongNoteMode::Ln),
+        LnScorePolicy::ForceCn => (true, LongNoteMode::Cn),
+        LnScorePolicy::ForceHcn => (true, LongNoteMode::Hcn),
+        LnScorePolicy::AutoLn => (false, LongNoteMode::Ln),
+        LnScorePolicy::AutoCn => (false, LongNoteMode::Cn),
+        LnScorePolicy::AutoHcn => (false, LongNoteMode::Hcn),
+    };
+    let mut extra_ends = 0u32;
+    for pair in &chart.long_notes {
+        let mode = if force_all { fallback } else { pair.mode.unwrap_or(fallback) };
+        if matches!(mode, LongNoteMode::Cn | LongNoteMode::Hcn) {
+            extra_ends = extra_ends.saturating_add(1);
+        }
+    }
+    chart.total_notes.saturating_add(extra_ends)
+}
+
 #[cfg(test)]
 mod tests {
     use bmz_chart::model::{ChartMetadata, LongNotePair, LongNoteStyle};
@@ -322,6 +371,25 @@ mod tests {
             score_ln_policy(LnPolicySetting::ForceHcn, DEFINED_CN_ONLY),
             LnScorePolicy::ForceHcn
         );
+    }
+
+    #[test]
+    fn expected_scored_notes_force_cn_adds_end_per_long_pair() {
+        let chart = chart_with_long_modes(&[None, None]);
+        // base total_notes = 2 (LongStarts); ForceCn scores start+end => 4
+        assert_eq!(expected_scored_note_count(&chart, LnPolicySetting::ForceCn), 4);
+        assert_eq!(expected_scored_note_count_for_policy(&chart, LnScorePolicy::ForceCn), 4);
+        assert_eq!(expected_scored_note_count(&chart, LnPolicySetting::ForceLn), 2);
+    }
+
+    #[test]
+    fn expected_scored_notes_auto_keeps_defined_and_applies_fallback() {
+        let chart = chart_with_long_modes(&[None, Some(LongNoteMode::Ln)]);
+        // AutoCn -> AutoCn policy: undefined->CN (+1), defined LN (+0) => base 2 + 1
+        assert_eq!(expected_scored_note_count(&chart, LnPolicySetting::AutoCn), 3);
+        // AutoLn on defined CN only collapses to ForceCn => both ends score
+        let defined_cn = chart_with_long_modes(&[Some(LongNoteMode::Cn)]);
+        assert_eq!(expected_scored_note_count(&defined_cn, LnPolicySetting::AutoLn), 2);
     }
 
     #[test]
