@@ -5,7 +5,12 @@ use bmz_core::time::TimeUs;
 
 use crate::sample::SampleBank;
 
-const TARGET_LUFS: f32 = -12.0;
+/// Analysis / DB に保存する `normalization_gain` の基準 loudness。
+/// 既存キャッシュ互換のため変更しない。
+const ANALYSIS_TARGET_LUFS: f32 = -12.0;
+/// プレイ再生に適用する正規化の目標 loudness。
+/// 解析値は変えず、適用時だけこの目標へ再計算する。
+pub const PLAY_TARGET_LUFS: f32 = -6.0;
 const MAX_ANALYSIS_DURATION_US: i64 = 10 * 60 * 1_000_000;
 const ANALYSIS_CHUNK_FRAMES: usize = 2048;
 
@@ -106,11 +111,22 @@ pub fn analyze_chart_loudness(
     Some(ChartLoudnessAnalysis { loudness_lufs, normalization_gain })
 }
 
+/// Analysis / DB 用: `ANALYSIS_TARGET_LUFS` (-12) 基準の下げのみゲイン。
 pub fn normalization_gain_for_loudness(loudness_lufs: f32) -> f32 {
+    normalization_gain_for_target(loudness_lufs, ANALYSIS_TARGET_LUFS)
+}
+
+/// プレイ適用用: `PLAY_TARGET_LUFS` (-6) 基準の下げのみゲイン。
+/// DB の `loudness_lufs` から再計算し、保存済み `normalization_gain` は使わない。
+pub fn play_normalization_gain_for_loudness(loudness_lufs: f32) -> f32 {
+    normalization_gain_for_target(loudness_lufs, PLAY_TARGET_LUFS)
+}
+
+fn normalization_gain_for_target(loudness_lufs: f32, target_lufs: f32) -> f32 {
     if !loudness_lufs.is_finite() {
         return 1.0;
     }
-    10.0f32.powf((TARGET_LUFS - loudness_lufs) / 20.0).clamp(0.0, 1.0)
+    10.0f32.powf((target_lufs - loudness_lufs) / 20.0).clamp(0.0, 1.0)
 }
 
 fn collect_loudness_events(chart: &PlayableChart, sample_rate: u32) -> Vec<LoudnessEvent> {
@@ -200,6 +216,24 @@ mod tests {
         let gain = normalization_gain_for_loudness(-6.0);
         assert!(gain < 1.0);
         assert!((gain - 10.0f32.powf(-6.0 / 20.0)).abs() < 0.001);
+    }
+
+    #[test]
+    fn play_normalization_gain_uses_minus_six_target() {
+        let at_target = play_normalization_gain_for_loudness(PLAY_TARGET_LUFS);
+        assert!((at_target - 1.0).abs() < 0.001);
+
+        let quieter = play_normalization_gain_for_loudness(-12.0);
+        assert!((quieter - 1.0).abs() < 0.001);
+
+        let louder = play_normalization_gain_for_loudness(0.0);
+        assert!((louder - 10.0f32.powf(-6.0 / 20.0)).abs() < 0.001);
+        assert!(louder < 1.0);
+
+        let analysis_gain = normalization_gain_for_loudness(-6.0);
+        let play_gain = play_normalization_gain_for_loudness(-6.0);
+        assert!(analysis_gain < play_gain);
+        assert!((play_gain - 1.0).abs() < 0.001);
     }
 
     #[test]

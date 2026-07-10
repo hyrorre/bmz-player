@@ -3,7 +3,7 @@ use bmz_audio::clock::AudioClock;
 use bmz_audio::engine::AudioEngine;
 use bmz_audio::ffmpeg_loader::FfmpegSampleLoader;
 use bmz_audio::loader::{LoadedSampleReport, SampleLoader, load_chart_samples};
-use bmz_audio::loudness::analyze_chart_loudness;
+use bmz_audio::loudness::{analyze_chart_loudness, play_normalization_gain_for_loudness};
 use bmz_chart::import::import_bms_chart;
 use bmz_chart::model::{BgaAssetRef, NoteEvent, NoteKind, PlayableChart, TimingEventKind};
 use bmz_core::clear::GaugeType;
@@ -973,7 +973,8 @@ fn load_or_compute_normalization_gain(
         return Ok(1.0);
     }
     if let Some(analysis) = library_db.chart_normalization_analysis_by_chart_id(chart_id)? {
-        return Ok(analysis.normalization_gain.clamp(0.0, 1.0));
+        // DB の normalization_gain は -12 LUFS 基準の互換値。再生は loudness から -6 相当へ再計算する。
+        return Ok(play_normalization_gain_for_loudness(analysis.loudness_lufs));
     }
 
     let Some(analysis) = analyze_chart_loudness(chart, &audio.samples, audio.output_sample_rate())
@@ -986,13 +987,15 @@ fn load_or_compute_normalization_gain(
         normalization_gain: analysis.normalization_gain,
     };
     library_db.write_chart_normalization_analysis(chart_id, stored)?;
+    let play_gain = play_normalization_gain_for_loudness(stored.loudness_lufs);
     tracing::info!(
         chart_id,
         loudness_lufs = stored.loudness_lufs,
         normalization_gain = stored.normalization_gain,
+        play_normalization_gain = play_gain,
         "stored chart volume normalization analysis"
     );
-    Ok(stored.normalization_gain.clamp(0.0, 1.0))
+    Ok(play_gain)
 }
 
 pub fn generate_arrange_seed() -> i64 {

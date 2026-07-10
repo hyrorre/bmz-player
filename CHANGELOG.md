@@ -1,5 +1,99 @@
 # CHANGELOG
 
+## v0.1.6
+
+### 改善
+
+- 選曲画面に favorite song / favorite chart のコレクション機能を追加しました。
+  - `F8` で song、`F9` で chart を favorite 登録 / 解除できます。
+  - favorite 用の仮想フォルダを追加し、通常フォルダと同じようにスコア・リプレイスロット・難易度表情報を表示するようにしました。
+
+- コースプレイとコースリザルトの保存・表示を改善しました。
+  - コース結果を profile の `score.db` に保存し、選曲画面でベスト、リプレイスロット、トロフィー達成状況を表示できるようにしました。
+  - コース結果を rule mode ごとに分離し、FAILED 時もコース全体のノート数で達成率を計算するようにしました。
+  - コース用の Result / Select スキン表示、stage 結果、ゲージ推移、retire / fail 音の扱いを調整しました。
+
+- BMZ IR と IR Web のコース・ランキング表示を拡張しました。
+  - コーススコア送信、コースランキング、自己スコア一覧、プレイヤー一覧を追加しました。
+  - charts / courses / players の一覧に pagination を追加しました。
+  - 1P / 2P 別の arrange option を IR 表示・payload に反映するようにしました。
+
+- プレイオプションとハイスピード表示を改善しました。
+  - `F-RANDOM` / `MF-RANDOM` を追加しました。 (いわゆる `HALF RANDOM` / `MIRROR HALF RANDOM` です)
+  - プレイ中に E2+Scratch または E2+鍵盤 で緑数字を調整できるようにしました。
+  - BMZ 独自の HS mode / target green number skin ref を追加しました。
+
+- スキン互換性とデフォルト選曲スキンを改善しました。
+  - デフォルト選曲スキンの表示情報を大幅に増やし、コース・favorite・リプレイスロット・ランプ情報を見やすくしました。
+  - play / result / select skin の score graph、value number、image ref、course row、folder lamp、operating time ref の対応を増やしました。
+  - Lua skin の option 依存 draw、`value` 式、end-of-note timing、result miss count 差分の扱いを改善しました。
+  - Rmz-skin の 5K / 6K 系 note color を同梱向けに更新しました。
+  - replay autosave rule、favorite、folder lamp などの select skin ref を追加・整理しました。
+
+- 音声再生をより安定させました。
+  - AudioEngine への操作を command queue 経由にし、system / play / preview 音の更新を audio callback と分離しました。
+  - 選曲 preview 音の切り替え、Result 終了音の fade、quick retry 時の asset 再利用を改善しました。
+  - 同一 chart sound の restart policy を整理し、beatoraja に近い鳴り方へ寄せました。
+
+- 動画 BGA / skin movie の再生を改善しました。
+  - skin movie が再生時刻に追従し、loop や未来フレーム待ちで不自然に止まったり早送りされたりしにくくしました。
+  - decoder drop 時に decode thread を join し、Result 背景動画などの freeze を防ぎました。
+
+- 配布物のライセンス表示を整備しました。
+  - `THIRD-PARTY-NOTICES.txt` と `cargo-about` 由来の Rust 依存ライセンス report を release package に含める流れを追加しました。
+  - アプリ内の egui 画面と BMZ IR Web の `/licenses` でライセンス report を表示できるようにしました。
+
+### 修正
+
+- BMS / BGA / 音声 asset の beatoraja 互換性を修正しました。
+  - 同時刻の複数 BGA layer を保持するようにしました。
+  - 未定義 BGA layer event をクリアし、同 stem の音声・BGA asset fallback を beatoraja に合わせました。
+  - long note end の無音キー音や hidden note 周りの音声扱いを修正しました。
+  - BGA 画像の読み込み完了前に READY を抜けないようにしました。
+  - system se の再生開始、終了条件を微調整しました。
+
+- プレイ中の安定性を修正しました。
+  - gauge / judge の境界ケースで play 中に panic せず継続できるようにしました。
+  - READY 待ち中の hold 入力、READY 中の skin intro 停止、同 tick STOP 後のノート非表示を修正しました。
+
+- リザルトと MYBEST 表示を修正しました。
+  - 初回 Result で MYBEST 表示が異なる不具合を修正しました。
+  - Result ゲージ遷移グラフ、clear lamp image ref、min BP 差分の初回表示を修正しました。
+  - current play / previous best / target の score rate、graph、value number の解決を修正しました。
+
+- 選曲画面の表示と操作を修正しました。
+  - best clear lamp 更新が保持されるようにしました。
+  - select bar / folder lamp / course level / course score / favorite ref の表示を修正しました。
+  - 初期選曲画面で select BGM が再生されない不具合を修正しました。
+  - `E1+E2` でも decide をキャンセルできるようにしました。
+
+- IR 同期とセキュリティを修正しました。
+  - 手動 IR sync の retry が詰まる問題を修正しました。
+  - course score best の FK failure を回避しました。
+  - replay upload に認証と size limit を追加し、score submit / refresh / replay endpoint に rate limit を追加しました。
+  - production では session password を必須にし、IR error response body をログへ丸ごと出さないようにしました。
+
+- スクリーンショット保存先と portable layout の表示を修正しました。
+  - スクリーンショットを data dir 配下へ保存するようにしました。
+  - portable 版では スキンの[同梱]表示を隠すようにしました。
+
+### テスト・開発環境
+
+- `bmz-skin-document` crate を追加し、skin document schema / load / runtime 型を `bmz-render` から分離しました。
+
+- `score.db` / `network.db` / `collection_db` まわりの migration と責務を整理しました。
+  - IR sync state を `network.db` に移し、client score database schema を整理しました。
+  - course score 専用 DB 層を追加しました。
+
+- release packaging と CI を更新しました。
+  - Windows release を default features で build するようにしました。
+  - release metadata assets の対象を絞りました。
+  - macOS / Windows package script に license report の同梱処理を追加しました。
+
+- `docs/hs.md`、`docs/ir.md`、`docs/licenses.md`、`docs/skin.md`、`docs/controls.md` を更新しました。
+
+- BGA、Lua skin、select skin ref、audio command queue、course score、IR Web まわりの回帰テストを追加・更新しました。
+
 ## v0.1.5
 
 ### 改善

@@ -4033,40 +4033,29 @@ impl WinitApp {
                 self.update_pre_ready_play_snapshot_options();
                 return;
             }
-            // Start ボタンの2回連続押し → レーンカバー表示切替
+            // Start / E1 の2回連続押し → レーンカバー表示切替
             if event.state == ElementState::Pressed
                 && !event.repeat
                 && let Some(control) = physical_key_name(event.physical_key)
                 && self.select_keys.is_start(&control)
             {
                 let now = Instant::now();
-                let is_double = self
-                    .last_play_start_press_at
-                    .is_some_and(|prev| now.duration_since(prev) <= PLAY_START_DOUBLE_PRESS_WINDOW);
-                if is_double {
-                    let session = &mut active_play.running.session;
-                    let was_visible = session.lane_cover_visible;
-                    session.lane_cover_visible = !session.lane_cover_visible;
-                    if !was_visible && session.lane_cover_visible {
-                        let speed_locked = self.active_course.as_ref().is_some_and(|c| {
-                            c.definition.constraints.speed
-                                == bmz_core::course::CourseSpeedConstraint::NoSpeed
-                        });
-                        reset_floating_hispeed_if_enabled(session, speed_locked);
-                    }
+                if register_play_start_double_press(&mut self.last_play_start_press_at, now) {
+                    let speed_locked = self.active_course.as_ref().is_some_and(|c| {
+                        c.definition.constraints.speed
+                            == bmz_core::course::CourseSpeedConstraint::NoSpeed
+                    });
+                    toggle_lane_cover_visibility(&mut active_play.running.session, speed_locked);
                     tracing::info!(
-                        lane_cover_visible = session.lane_cover_visible,
+                        lane_cover_visible = active_play.running.session.lane_cover_visible,
                         "toggled lane cover visibility",
                     );
-                    self.last_play_start_press_at = None;
                     update_pre_ready_play_snapshot_options_for_session(
                         self.play_ready_sound_started_at,
                         &mut self.last_play_snapshot,
                         &active_play.running.session,
                         active_play.running.applied_arrange.arrange,
                     );
-                } else {
-                    self.last_play_start_press_at = Some(now);
                 }
                 // Start キーはゲームプレイ入力としても通すのでフォールスルー
             }
@@ -4769,8 +4758,12 @@ impl WinitApp {
 
         self.update_select_e_action_hold(button, true);
 
-        // プレイ中: プレイ入力は push_shared_event で処理済み
+        // プレイ中: Start / E1 の2回連続押しでレーンカバー表示切替。
+        // プレイ入力自体は push_shared_event で処理済み。
         if self.active_play.is_some() {
+            if self.select_keys.is_start(button) {
+                self.handle_play_start_double_press();
+            }
             return;
         }
 
@@ -10598,6 +10591,33 @@ impl WinitApp {
         self.play_e1_held = pressed;
         self.refresh_play_lane_value_changing();
         self.update_play_exit_hold_timer();
+        true
+    }
+
+    /// Start / E1 の2回連続押しでレーンカバー (SUDDEN+) 表示を切り替える。
+    /// キーボード・ゲームパッド共通。トグルした場合は true。
+    fn handle_play_start_double_press(&mut self) -> bool {
+        let Some(active_play) = &mut self.active_play else {
+            return false;
+        };
+        let now = Instant::now();
+        if !register_play_start_double_press(&mut self.last_play_start_press_at, now) {
+            return false;
+        }
+        let speed_locked = self.active_course.as_ref().is_some_and(|c| {
+            c.definition.constraints.speed == bmz_core::course::CourseSpeedConstraint::NoSpeed
+        });
+        toggle_lane_cover_visibility(&mut active_play.running.session, speed_locked);
+        tracing::info!(
+            lane_cover_visible = active_play.running.session.lane_cover_visible,
+            "toggled lane cover visibility",
+        );
+        update_pre_ready_play_snapshot_options_for_session(
+            self.play_ready_sound_started_at,
+            &mut self.last_play_snapshot,
+            &active_play.running.session,
+            active_play.running.applied_arrange.arrange,
+        );
         true
     }
 
@@ -16560,6 +16580,30 @@ fn reset_floating_hispeed_if_enabled(
     }
 }
 
+/// Start / E1 の連続押し間隔を判定する。2回目なら true を返しタイムスタンプをクリアする。
+fn register_play_start_double_press(last_press_at: &mut Option<Instant>, now: Instant) -> bool {
+    let is_double = last_press_at
+        .is_some_and(|prev| now.duration_since(prev) <= PLAY_START_DOUBLE_PRESS_WINDOW);
+    if is_double {
+        *last_press_at = None;
+        true
+    } else {
+        *last_press_at = Some(now);
+        false
+    }
+}
+
+fn toggle_lane_cover_visibility(
+    session: &mut bmz_gameplay::session::GameSession,
+    speed_locked: bool,
+) {
+    let was_visible = session.lane_cover_visible;
+    session.lane_cover_visible = !session.lane_cover_visible;
+    if !was_visible && session.lane_cover_visible {
+        reset_floating_hispeed_if_enabled(session, speed_locked);
+    }
+}
+
 fn active_lane_cover_for_hispeed(session: &bmz_gameplay::session::GameSession) -> f32 {
     if session.lane_cover_visible {
         crate::config::play::clamp_lane_cover_for_lift(session.lane_cover, session.lift)
@@ -20633,6 +20677,46 @@ mod tests {
         session.lane_cover_visible = false;
         assert!(apply_lane_cover_step_to_session(&mut session, 0.02, false));
         assert!((session.lift - 0.7).abs() < 0.000_01);
+    }
+
+    #[test]
+    fn play_start_double_press_registers_within_window() {
+        let mut last = None;
+        let t0 = Instant::now();
+        assert!(!register_play_start_double_press(&mut last, t0));
+        assert_eq!(last, Some(t0));
+
+        let t1 = t0 + Duration::from_millis(200);
+        assert!(register_play_start_double_press(&mut last, t1));
+        assert_eq!(last, None);
+    }
+
+    #[test]
+    fn play_start_double_press_expires_outside_window() {
+        let mut last = None;
+        let t0 = Instant::now();
+        assert!(!register_play_start_double_press(&mut last, t0));
+
+        let t1 = t0 + PLAY_START_DOUBLE_PRESS_WINDOW + Duration::from_millis(1);
+        assert!(!register_play_start_double_press(&mut last, t1));
+        assert_eq!(last, Some(t1));
+    }
+
+    #[test]
+    fn toggle_lane_cover_visibility_flips_sudden_display() {
+        let profile = ProfileConfig::new_default("default", "Default", 1);
+        let mut session = crate::screens::play_session::build_game_session(
+            std::sync::Arc::new(app_test_chart()),
+            &profile,
+            crate::screens::play_session::PlaySessionOptions::default(),
+        );
+        session.lane_cover_visible = true;
+
+        toggle_lane_cover_visibility(&mut session, false);
+        assert!(!session.lane_cover_visible);
+
+        toggle_lane_cover_visibility(&mut session, false);
+        assert!(session.lane_cover_visible);
     }
 
     #[test]
