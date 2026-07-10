@@ -167,12 +167,23 @@ fn import_lr2_scores(
         };
         report.matched += 1;
 
-        let judged = lr2_judged_note_count(&row);
+        let ex_score = lr2_ex_score(&row);
+        if !score_summary_is_sane(row.total_notes, row.max_combo, ex_score) {
+            report.failed += 1;
+            tracing::warn!(
+                md5 = %row.md5,
+                source_notes = row.total_notes,
+                max_combo = row.max_combo,
+                ex_score,
+                "LR2 score summary exceeds source note count"
+            );
+            continue;
+        }
         let resolved = match resolve_import_ln_policy(
             library_db,
             chart_sha256,
             LnScorePolicy::ForceLn,
-            judged,
+            row.total_notes,
             &mut chart_cache,
         ) {
             Ok(Some(resolved)) => resolved,
@@ -180,8 +191,8 @@ fn import_lr2_scores(
                 report.failed += 1;
                 tracing::warn!(
                     md5 = %row.md5,
-                    judged,
-                    "LR2 score judge total does not match expected note count"
+                    source_notes = row.total_notes,
+                    "LR2 score source note count does not match expected note count"
                 );
                 continue;
             }
@@ -277,12 +288,23 @@ fn import_beatoraja_scores(
             continue;
         };
         let ln_policy = score_ln_policy(setting, chart_item.ln_profile);
-        let judged = beatoraja_judged_note_count(&row);
+        let ex_score = beatoraja_ex_score(&row);
+        if !score_summary_is_sane(row.total_notes, row.max_combo, ex_score) {
+            report.failed += 1;
+            tracing::warn!(
+                sha256 = %row.sha256,
+                source_notes = row.total_notes,
+                max_combo = row.max_combo,
+                ex_score,
+                "beatoraja score summary exceeds source note count"
+            );
+            continue;
+        }
         let resolved = match resolve_import_ln_policy(
             library_db,
             chart_sha256,
             ln_policy,
-            judged,
+            row.total_notes,
             &mut chart_cache,
         ) {
             Ok(Some(resolved)) => resolved,
@@ -291,9 +313,9 @@ fn import_beatoraja_scores(
                 tracing::warn!(
                     sha256 = %row.sha256,
                     mode = row.mode,
-                    judged,
+                    source_notes = row.total_notes,
                     policy = ln_policy.as_str(),
-                    "beatoraja score judge total does not match expected note count"
+                    "beatoraja score source note count does not match expected note count"
                 );
                 continue;
             }
@@ -343,37 +365,30 @@ fn beatoraja_mode_to_ln_setting(mode: i64) -> LnPolicySetting {
     }
 }
 
-fn lr2_judged_note_count(row: &Lr2ScoreRow) -> u32 {
-    row.perfect
-        .saturating_add(row.great)
-        .saturating_add(row.good)
-        .saturating_add(row.bad)
-        .saturating_add(row.poor)
+fn lr2_ex_score(row: &Lr2ScoreRow) -> u64 {
+    u64::from(row.perfect) * 2 + u64::from(row.great)
 }
 
-fn beatoraja_judged_note_count(row: &BeatorajaScoreRow) -> u32 {
-    row.epg
-        .saturating_add(row.lpg)
-        .saturating_add(row.egr)
-        .saturating_add(row.lgr)
-        .saturating_add(row.egd)
-        .saturating_add(row.lgd)
-        .saturating_add(row.ebd)
-        .saturating_add(row.lbd)
-        .saturating_add(row.epr)
-        .saturating_add(row.lpr)
+fn beatoraja_ex_score(row: &BeatorajaScoreRow) -> u64 {
+    (u64::from(row.epg) + u64::from(row.lpg)) * 2 + u64::from(row.egr) + u64::from(row.lgr)
+}
+
+fn score_summary_is_sane(total_notes: u32, max_combo: u32, ex_score: u64) -> bool {
+    total_notes > 0
+        && max_combo <= total_notes
+        && ex_score <= u64::from(total_notes).saturating_mul(2)
 }
 
 fn resolve_import_ln_policy(
     library_db: &LibraryDatabase,
     chart_sha256: [u8; 32],
     initial_policy: LnScorePolicy,
-    judged: u32,
+    source_notes: u32,
     chart_cache: &mut HashMap<[u8; 32], Arc<PlayableChart>>,
 ) -> Result<Option<ResolvedImportLnPolicy>> {
     let expected =
         expected_notes_for_policy(library_db, chart_sha256, initial_policy, chart_cache)?;
-    if judged == expected {
+    if source_notes == expected {
         return Ok(Some(ResolvedImportLnPolicy {
             ln_policy: initial_policy,
             expected_notes: expected,
@@ -386,7 +401,7 @@ fn resolve_import_ln_policy(
             LnScorePolicy::ForceLn,
             chart_cache,
         )?;
-        if judged == force_expected {
+        if source_notes == force_expected {
             return Ok(Some(ResolvedImportLnPolicy {
                 ln_policy: LnScorePolicy::ForceLn,
                 expected_notes: force_expected,
@@ -1168,11 +1183,14 @@ mod tests {
         set_test_import_chart(sha256, undefined_ln_chart(2, 2));
         let source = Connection::open_in_memory().unwrap();
         // ForceCn expected = 2 base + 2 CN ends = 4
-        create_beatoraja_source_with_judged(
+        create_beatoraja_source_with_score(
             &source,
             &hash_to_hex(&sha256),
             1_700_000_001_000,
             1,
+            7,
+            4,
+            4,
             4,
         );
 
@@ -1201,12 +1219,15 @@ mod tests {
             open_test_databases_with_chart(undefined_ln_chart(2, 2));
         set_test_import_chart(sha256, undefined_ln_chart(2, 2));
         let source = Connection::open_in_memory().unwrap();
-        // mode=1 -> ForceCn expects 4, but judged=2 matches ForceLn only
-        create_beatoraja_source_with_judged(
+        // mode=1 -> ForceCn expects 4, but source notes=2 match ForceLn only.
+        create_beatoraja_source_with_score(
             &source,
             &hash_to_hex(&sha256),
             1_700_000_001_000,
             1,
+            7,
+            2,
+            2,
             2,
         );
 
@@ -1228,17 +1249,20 @@ mod tests {
     }
 
     #[test]
-    fn beatoraja_import_fails_when_judge_total_mismatches_all_policies() {
+    fn beatoraja_import_fails_when_source_note_count_mismatches_all_policies() {
         clear_test_import_charts();
         let (library_db, mut score_db, sha256, _) =
             open_test_databases_with_chart(undefined_ln_chart(2, 2));
         set_test_import_chart(sha256, undefined_ln_chart(2, 2));
         let source = Connection::open_in_memory().unwrap();
-        create_beatoraja_source_with_judged(
+        create_beatoraja_source_with_score(
             &source,
             &hash_to_hex(&sha256),
             1_700_000_001_000,
             1,
+            7,
+            3,
+            3,
             3,
         );
 
@@ -1256,10 +1280,91 @@ mod tests {
     }
 
     #[test]
-    fn lr2_import_fails_when_judge_total_mismatches() {
+    fn beatoraja_import_accepts_failed_row_with_fewer_judgements() {
+        clear_test_import_charts();
+        let (library_db, mut score_db, sha256, _) =
+            open_test_databases_with_chart(undefined_ln_chart(2, 2));
+        set_test_import_chart(sha256, undefined_ln_chart(2, 2));
+        let source = Connection::open_in_memory().unwrap();
+        create_beatoraja_source_with_score(
+            &source,
+            &hash_to_hex(&sha256),
+            1_700_000_001_000,
+            1,
+            1,
+            4,
+            3,
+            3,
+        );
+
+        let report = import_beatoraja_scores(
+            &source,
+            ScoreImportKind::Beatoraja,
+            &library_db,
+            &mut score_db,
+            1_700_000_000,
+        )
+        .unwrap();
+        assert_eq!(report.imported, 1);
+        assert_eq!(report.failed, 0);
+        let clear_type: String = score_db
+            .conn()
+            .query_row("SELECT clear_type FROM score_history", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(clear_type, "Failed");
+        clear_test_import_charts();
+    }
+
+    #[test]
+    fn beatoraja_import_accepts_more_judgements_than_source_notes() {
+        let (library_db, mut score_db, sha256, _) = open_test_databases();
+        let source = Connection::open_in_memory().unwrap();
+        create_beatoraja_source_with_score(
+            &source,
+            &hash_to_hex(&sha256),
+            1_700_000_001_000,
+            0,
+            7,
+            128,
+            129,
+            80,
+        );
+
+        let report = import_beatoraja_scores(
+            &source,
+            ScoreImportKind::Beatoraja,
+            &library_db,
+            &mut score_db,
+            1_700_000_000,
+        )
+        .unwrap();
+        assert_eq!(report.imported, 1);
+        assert_eq!(report.failed, 0);
+    }
+
+    #[test]
+    fn lr2_import_accepts_empty_poor_in_judge_total() {
         let (mut library_db, mut score_db, _, md5) = open_test_databases();
         let source = Connection::open_in_memory().unwrap();
-        create_lr2_source_with_counts(&source, &hash_to_hex(&md5), 100, 20, 3, 2, 1);
+        create_lr2_source_with_score(&source, &hash_to_hex(&md5), 128, 64, 100, 22, 3, 2, 20);
+
+        let report = import_lr2_scores(
+            &source,
+            ScoreImportKind::Lr2,
+            &mut library_db,
+            &mut score_db,
+            1_700_000_000,
+        )
+        .unwrap();
+        assert_eq!(report.failed, 0);
+        assert_eq!(report.imported, 1);
+    }
+
+    #[test]
+    fn lr2_import_fails_when_source_note_count_mismatches() {
+        let (mut library_db, mut score_db, _, md5) = open_test_databases();
+        let source = Connection::open_in_memory().unwrap();
+        create_lr2_source_with_score(&source, &hash_to_hex(&md5), 127, 64, 100, 20, 3, 2, 1);
 
         let report = import_lr2_scores(
             &source,
@@ -1271,6 +1376,14 @@ mod tests {
         .unwrap();
         assert_eq!(report.failed, 1);
         assert_eq!(report.imported, 0);
+    }
+
+    #[test]
+    fn import_score_summary_sanity_checks_ex_score_and_combo() {
+        assert!(score_summary_is_sane(128, 128, 256));
+        assert!(!score_summary_is_sane(0, 0, 0));
+        assert!(!score_summary_is_sane(128, 129, 256));
+        assert!(!score_summary_is_sane(128, 128, 257));
     }
 
     #[test]
@@ -1605,13 +1718,16 @@ mod tests {
     }
 
     fn create_lr2_source_with_hash(conn: &Connection, hash: &str) {
-        // Judge total 100+22+3+2+1 = 128 matches chart.total_notes in open_test_databases.
-        create_lr2_source_with_counts(conn, hash, 100, 22, 3, 2, 1);
+        // `poor` includes Empty Poor in LR2 and may make the judge sum exceed totalnotes.
+        create_lr2_source_with_score(conn, hash, 128, 64, 100, 22, 3, 2, 10);
     }
 
-    fn create_lr2_source_with_counts(
+    #[allow(clippy::too_many_arguments)]
+    fn create_lr2_source_with_score(
         conn: &Connection,
         hash: &str,
+        total_notes: u32,
+        max_combo: u32,
         perfect: u32,
         great: u32,
         good: u32,
@@ -1628,8 +1744,8 @@ mod tests {
         )
         .unwrap();
         conn.execute(
-            "INSERT INTO score VALUES (?1, 4, ?2, ?3, ?4, ?5, ?6, 128, 64, 3, 2, 1, '', 123)",
-            params![hash, perfect, great, good, bad, poor],
+            "INSERT INTO score VALUES (?1, 4, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 3, 2, 1, '', 123)",
+            params![hash, perfect, great, good, bad, poor, total_notes, max_combo],
         )
         .unwrap();
     }
@@ -1640,15 +1756,19 @@ mod tests {
 
     fn create_beatoraja_source_with_sha256(conn: &Connection, sha256: &str, date: i64, mode: i64) {
         // Default no-LN chart expects 128 scored notes.
-        create_beatoraja_source_with_judged(conn, sha256, date, mode, 128);
+        create_beatoraja_source_with_score(conn, sha256, date, mode, 7, 128, 128, 80);
     }
 
-    fn create_beatoraja_source_with_judged(
+    #[allow(clippy::too_many_arguments)]
+    fn create_beatoraja_source_with_score(
         conn: &Connection,
         sha256: &str,
         date: i64,
         mode: i64,
+        clear: i64,
+        total_notes: u32,
         judged: u32,
+        max_combo: u32,
     ) {
         // Split judged across fast/slow buckets for schema coverage; empty poor
         // (ems/lms) is excluded from the import note-count check.
@@ -1692,9 +1812,26 @@ mod tests {
         }
         conn.execute(
             "INSERT INTO score VALUES (
-                ?1, ?2, 7, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, 3, 1, ?13, 80, 2, '', 456, ?14
+                ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, 3, 1, ?14, ?15, 2, '', 456, ?16
             )",
-            params![sha256, mode, epg, lpg, egr, lgr, egd, lgd, ebd, lbd, epr, lpr, judged, date],
+            params![
+                sha256,
+                mode,
+                clear,
+                epg,
+                lpg,
+                egr,
+                lgr,
+                egd,
+                lgd,
+                ebd,
+                lbd,
+                epr,
+                lpr,
+                total_notes,
+                max_combo,
+                date
+            ],
         )
         .unwrap();
     }

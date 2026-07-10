@@ -132,14 +132,18 @@ beatoraja 系の `mode` は key mode ではなく LNMODE である。
 
 ### ノーツ数チェック
 
-判定合計（empty poor 除外）と、**正規化後の `ln_policy` における期待スコア対象ノーツ数**を比較する。
+外部 DB のノーツ数と、**正規化後の `ln_policy` における期待スコア対象ノーツ数**を比較する。
 
+- beatoraja 系は `score.notes`、純 LR2 は `score.totalnotes` を外部 DB のノーツ数として使う
 - 期待値 = `Tap + LongStart`（library / chart `total_notes`）+ effective CN/HCN の long pair 数
 - library `total_notes` 自体は ln_policy 非考慮のため、生値だけでは比較しない
 - 不一致かつ policy が `ForceLn` 以外なら `ForceLn` で期待値を再計算して再比較（ビルド差フォールバック）
 - それでも不一致ならその行は `failed` としてスキップする
+- あわせて `EX score <= 外部ノーツ数 * 2`、`max combo <= 外部ノーツ数` を検証する
 
-純 LR2 は CN/HCN が無いため常に `ForceLn` とし、同様に判定合計と期待ノーツ数を照合する。
+判定合計はノーツ数チェックに使わない。beatoraja 系は途中 FAILED で未処理ノーツが判定に含まれず、非消滅判定では同じノーツに複数判定が付く場合がある。純 LR2 の `poor` には Empty Poor も含まれるため、いずれも判定合計とノーツ数の一致は保証されない。
+
+純 LR2 は CN/HCN が無いため常に `ForceLn` とし、`score.totalnotes` と期待ノーツ数を照合する。
 
 BMZ の score DB schema migration で既存行へ付けた `ForceLn` 既定値は、上記インポートとは別件である。
 
