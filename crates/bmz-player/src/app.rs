@@ -19,6 +19,7 @@ use bmz_core::input::InputDeviceKind;
 use bmz_core::lane::{KeyMode, Lane};
 use bmz_core::time::TimeUs;
 use bmz_gameplay::input::backend::{DeviceId, PhysicalControl};
+use bmz_gameplay::input::system::last_input_collection_diagnostics;
 use bmz_gameplay::result::PlayResult;
 use bmz_gameplay::score::{JudgeCounts, ScoreState};
 use bmz_gameplay::session::compute_frame_times;
@@ -41,8 +42,10 @@ use bmz_render::snapshot::{
 use bmz_video::VideoBgaDecoder;
 use winit::application::ApplicationHandler;
 use winit::dpi::{PhysicalPosition, PhysicalSize};
-use winit::event::{ElementState, MouseButton, MouseScrollDelta, StartCause, WindowEvent};
-use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy};
+use winit::event::{
+    DeviceEvent, ElementState, MouseButton, MouseScrollDelta, StartCause, WindowEvent,
+};
+use winit::event_loop::{ActiveEventLoop, ControlFlow, DeviceEvents, EventLoop, EventLoopProxy};
 use winit::keyboard::{KeyCode, PhysicalKey};
 use winit::monitor::{MonitorHandle, VideoModeHandle};
 use winit::window::{Fullscreen, Icon, Window, WindowAttributes, WindowId};
@@ -59,7 +62,7 @@ use crate::cli::{
     AUTOPLAY_ON_START_ARG, AppOptions, BOOT_RESULT_SAMPLE_ARG, SMOKE_EXIT_AFTER_FRAMES_ARG,
     SMOKE_EXIT_AFTER_RESULT_FRAMES_ARG, SMOKE_EXIT_ON_RESULT_ARG, SMOKE_SCREENSHOT_ARG,
 };
-use crate::config::app_config::{AppConfig, ObsConfig, PathEntry, WindowMode};
+use crate::config::app_config::{AppConfig, InputBackendKind, ObsConfig, PathEntry, WindowMode};
 use crate::config::key_config::{
     KeyBindingSlot, KeyBindingTarget, apply_play_binding, clear_play_binding,
     is_scratch_down_control, is_scratch_up_control,
@@ -80,6 +83,7 @@ use crate::generated_preview::{
     fallback_preview_start_ms, generated_preview_cache_key, parse_generated_preview_cache_key,
     render_generated_preview_for_chart,
 };
+use crate::input::shared::SharedInputBackend;
 use crate::input::winit::physical_key_to_control;
 use crate::practice_ui::PracticePanelContext;
 use crate::screens::course_session::{ActiveCourseSession, CourseEntryResult, CourseResultSummary};
@@ -95,7 +99,7 @@ use crate::screens::play_snapshot::{
     build_render_snapshot_with_target_and_bga_frames_cached, display_bga_frame,
 };
 use crate::screens::play_start::{
-    PlayStartOptions, PreloadedWinitPlaySession, PreparedWinitPlaySession, StartedWinitPlaySession,
+    PlayStartOptions, PreloadedInputPlaySession, PreparedInputPlaySession, StartedInputPlaySession,
     apply_arrange_override, apply_course_constraints, apply_queued_replay,
     open_prepared_winit_play_session, play_session_options_from_start,
     prepare_play_session_for_chart_with_winit_input, prepare_winit_play_session_from_preloaded,
@@ -361,7 +365,7 @@ impl UpdatePrompt {
 struct WinitApp {
     boot: BootstrappedApp,
     window: Option<Arc<Window>>,
-    active_play: Option<StartedWinitPlaySession>,
+    active_play: Option<StartedInputPlaySession>,
     /// コースプレイ中のセッション。単曲プレイ時は None。
     active_course: Option<ActiveCourseSession>,
     /// コース全体完了時のリザルト。リザルト画面から抜けるまで保持する。
@@ -373,6 +377,7 @@ struct WinitApp {
     audio_output_open_attempted: bool,
     audio_diagnostics_last_log_at: Instant,
     audio_diagnostics_last: Option<AudioOutputDiagnostics>,
+    input_diagnostics_last_sequence: u64,
     first_frame_startup_completed: bool,
     /// Ctrl-C(SIGINT)受信フラグ。セットされたら `about_to_wait` で event loop を
     /// 正常終了させ、cpal/ASIO ストリームの Drop(停止・後処理)を確実に走らせる。
@@ -394,7 +399,7 @@ struct WinitApp {
     /// Decide 演出中に preload worker から受け取った結果を退避し、
     /// `start_chart_with_options` で再利用するためのバッファ。
     /// 既に裏で完了している譜面/音源ロードを main で再度同期実行するのを避ける。
-    preloaded_play_session: Option<PreloadedWinitPlaySession>,
+    preloaded_play_session: Option<PreloadedInputPlaySession>,
     play_preload_generation: u64,
     play_ending: Option<PlayEndingTransition>,
     last_started_chart_id: Option<i64>,
@@ -435,6 +440,7 @@ struct WinitApp {
     select_held: bool,
     select_e_action_holds: HashSet<InputActionConfig>,
     pressed_controls: HashSet<String>,
+    raw_input_pressed_keys: HashSet<PhysicalKey>,
     arrange_option: ArrangeOption,
     arrange_option_2p: ArrangeOption,
     target_option: TargetOption,
@@ -1067,11 +1073,11 @@ struct PendingPlayPreload {
 struct PlayPreloadResult {
     generation: u64,
     chart_id: i64,
-    result: std::result::Result<PreloadedWinitPlaySession, String>,
+    result: std::result::Result<PreloadedInputPlaySession, String>,
 }
 
 struct QuickRetryReuse {
-    preloaded: PreloadedWinitPlaySession,
+    preloaded: PreloadedInputPlaySession,
     bga_frames: BgaFrameCatalog,
 }
 
@@ -1957,6 +1963,7 @@ impl WinitApp {
             audio_output_open_attempted,
             audio_diagnostics_last_log_at: now,
             audio_diagnostics_last: None,
+            input_diagnostics_last_sequence: 0,
             first_frame_startup_completed: false,
             shutdown_requested,
             finished_play: None,
@@ -2006,6 +2013,7 @@ impl WinitApp {
             select_held: false,
             select_e_action_holds: HashSet::new(),
             pressed_controls: HashSet::new(),
+            raw_input_pressed_keys: HashSet::new(),
             arrange_option,
             arrange_option_2p,
             target_option,
@@ -2163,6 +2171,71 @@ impl WinitApp {
         }
     }
 
+    fn keyboard_input_backend(&self) -> Option<KeyboardInputBackend> {
+        keyboard_input_backend_for_config(&self.boot.app_config)
+    }
+
+    fn raw_input_keyboard_enabled(&self) -> bool {
+        self.keyboard_input_backend() == Some(KeyboardInputBackend::RawInput)
+    }
+
+    fn window_keyboard_gameplay_enabled(&self) -> bool {
+        self.keyboard_input_backend() == Some(KeyboardInputBackend::Window)
+    }
+
+    fn configure_device_events(&self, event_loop: &ActiveEventLoop) {
+        let device_events = if self.raw_input_keyboard_enabled() {
+            DeviceEvents::WhenFocused
+        } else {
+            DeviceEvents::Never
+        };
+        event_loop.listen_device_events(device_events);
+    }
+
+    fn raw_input_gameplay_blocked(&self) -> bool {
+        let practice_overlay = self
+            .practice_session
+            .as_ref()
+            .is_some_and(|practice| practice.phase == PracticePhase::Config);
+        self.egui.as_ref().is_some_and(|egui| egui.blocks_game_input(practice_overlay))
+    }
+
+    fn route_raw_keyboard_gameplay_input(
+        &mut self,
+        physical_key: PhysicalKey,
+        state: ElementState,
+    ) {
+        if !self.raw_input_keyboard_enabled() {
+            return;
+        }
+        let Some(input) = self.active_play.as_ref().map(|active_play| active_play.input.clone())
+        else {
+            if state == ElementState::Released {
+                self.raw_input_pressed_keys.remove(&physical_key);
+            }
+            return;
+        };
+        let gameplay_blocked = self.raw_input_gameplay_blocked();
+        let Some(repeat) = raw_input_key_state_transition(
+            &mut self.raw_input_pressed_keys,
+            &physical_key,
+            state,
+            gameplay_blocked,
+        ) else {
+            return;
+        };
+        crate::input::winit::handle_key_parts(&input, physical_key, state, repeat);
+    }
+
+    fn release_raw_input_pressed_keys(&mut self) {
+        let Some(input) = self.active_play.as_ref().map(|active_play| active_play.input.clone())
+        else {
+            self.raw_input_pressed_keys.clear();
+            return;
+        };
+        release_raw_input_pressed_keys(&input, &mut self.raw_input_pressed_keys);
+    }
+
     fn ensure_window(&mut self, event_loop: &ActiveEventLoop) {
         if self.window.is_some() {
             return;
@@ -2193,6 +2266,7 @@ impl WinitApp {
                 // surface 接続後 (= GPU device/queue 利用可能) に upload worker を起動する。
                 // decode 結果はそれまで skin_decode_rx にバッファされ、起動後にドレインされる。
                 self.start_skin_upload_worker();
+                self.configure_device_events(event_loop);
                 window.request_redraw();
                 self.egui = Some(EguiLayer::new(&window, self.boot.profile_config.ui.show_fps));
                 self.window = Some(window);
@@ -3870,6 +3944,7 @@ impl WinitApp {
         {
             return;
         }
+        let window_keyboard_gameplay_enabled = self.window_keyboard_gameplay_enabled();
         if let Some(active_play) = &mut self.active_play {
             if event.state == ElementState::Pressed
                 && !event.repeat
@@ -3995,7 +4070,9 @@ impl WinitApp {
                 }
                 // Start キーはゲームプレイ入力としても通すのでフォールスルー
             }
-            active_play.input.handle_key_event(event);
+            if window_keyboard_gameplay_enabled {
+                crate::input::winit::handle_key_event(&active_play.input, event);
+            }
             return;
         }
 
@@ -5996,7 +6073,7 @@ impl WinitApp {
             session_options,
             Box::new(preloaded.input.clone()),
         );
-        let prepared_winit = crate::screens::play_start::PreparedWinitPlaySession {
+        let prepared_winit = crate::screens::play_start::PreparedInputPlaySession {
             prepared,
             input: preloaded.input,
         };
@@ -6950,10 +7027,10 @@ impl WinitApp {
         thread::Builder::new()
             .name(format!("play-preload-{chart_id}"))
             .spawn(move || {
-                let result = (|| -> Result<PreloadedWinitPlaySession> {
+                let result = (|| -> Result<PreloadedInputPlaySession> {
                     let library_db =
                         crate::storage::library_db::LibraryDatabase::open(&library_db_path)?;
-                    let input = crate::input::winit::WinitInputBackend::default();
+                    let input = crate::input::shared::SharedInputBackend::default();
                     let mut session_options =
                         crate::screens::play_start::play_session_options_from_start(
                             &app_config,
@@ -6967,7 +7044,7 @@ impl WinitApp {
                         session_options.clone(),
                         normalize_chart_volume,
                     )?;
-                    Ok(PreloadedWinitPlaySession { chart_id, preloaded, input, session_options })
+                    Ok(PreloadedInputPlaySession { chart_id, preloaded, input, session_options })
                 })()
                 .map_err(|error| format!("{error:#}"));
                 let _ = tx.send(PlayPreloadResult { generation, chart_id, result });
@@ -7021,8 +7098,8 @@ impl WinitApp {
 
     fn open_prepared_winit_play_session(
         &self,
-        prepared: PreparedWinitPlaySession,
-    ) -> Result<StartedWinitPlaySession> {
+        prepared: PreparedInputPlaySession,
+    ) -> Result<StartedInputPlaySession> {
         let runtime = self.audio_runtime.as_ref().context("audio output is not available")?;
         open_prepared_winit_play_session(&self.boot.score_db, runtime, prepared)
     }
@@ -7188,6 +7265,31 @@ impl WinitApp {
             max_callback_us = snapshot.max_callback_ns / 1_000,
             callback_budget_us = callback_budget_ns / 1_000,
             "audio output diagnostics reported possible dropout or clipping",
+        );
+    }
+
+    fn log_input_diagnostics(&mut self) {
+        let diagnostics = last_input_collection_diagnostics();
+        if diagnostics.sequence == 0 || diagnostics.sequence == self.input_diagnostics_last_sequence
+        {
+            return;
+        }
+        self.input_diagnostics_last_sequence = diagnostics.sequence;
+        if diagnostics.drained_events == 0 {
+            return;
+        }
+
+        tracing::debug!(
+            target: "bmz_player::input_profile",
+            sequence = diagnostics.sequence,
+            drained_events = diagnostics.drained_events,
+            translated_events = diagnostics.translated_events,
+            dropped_events = diagnostics.dropped_events,
+            timestamped_events = diagnostics.timestamped_events,
+            min_event_age_us = ?diagnostics.min_event_age_us,
+            max_event_age_us = ?diagnostics.max_event_age_us,
+            max_future_event_us = ?diagnostics.max_future_event_us,
+            "play input collection diagnostics"
         );
     }
 
@@ -7431,7 +7533,7 @@ impl WinitApp {
         );
     }
 
-    fn install_active_play(&mut self, chart_id: i64, mut active_play: StartedWinitPlaySession) {
+    fn install_active_play(&mut self, chart_id: i64, mut active_play: StartedInputPlaySession) {
         self.last_play_was_autoplay = active_play
             .running
             .session
@@ -8219,7 +8321,7 @@ impl WinitApp {
         session_options.rule_mode = self.boot.profile_config.play.rule_mode;
 
         Some(QuickRetryReuse {
-            preloaded: PreloadedWinitPlaySession {
+            preloaded: PreloadedInputPlaySession {
                 chart_id,
                 preloaded: PreloadedPlaySession {
                     chart: Arc::clone(&active.running.session.chart),
@@ -8229,7 +8331,7 @@ impl WinitApp {
                     applied_arrange: active.running.applied_arrange.clone(),
                     score_key: active.running.score_key,
                 },
-                input: crate::input::winit::WinitInputBackend::default(),
+                input: crate::input::shared::SharedInputBackend::default(),
                 session_options,
             },
             bga_frames: active.running.bga_frames.clone(),
@@ -13453,6 +13555,50 @@ fn launch_update_installer(path: &Path) -> Result<()> {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum KeyboardInputBackend {
+    Window,
+    RawInput,
+}
+
+fn keyboard_input_backend_for_config(config: &AppConfig) -> Option<KeyboardInputBackend> {
+    if !config.input.keyboard_enabled {
+        return None;
+    }
+    match config.input.backend {
+        InputBackendKind::Auto if cfg!(target_os = "windows") => {
+            Some(KeyboardInputBackend::RawInput)
+        }
+        InputBackendKind::RawInput if cfg!(target_os = "windows") => {
+            Some(KeyboardInputBackend::RawInput)
+        }
+        _ => Some(KeyboardInputBackend::Window),
+    }
+}
+
+/// UI がゲーム入力をブロックしていても、ゲームへ渡したキーの Release は通す。
+fn raw_input_key_state_transition(
+    pressed_keys: &mut HashSet<PhysicalKey>,
+    physical_key: &PhysicalKey,
+    state: ElementState,
+    gameplay_blocked: bool,
+) -> Option<bool> {
+    match state {
+        ElementState::Pressed if gameplay_blocked => None,
+        ElementState::Pressed => Some(!pressed_keys.insert(*physical_key)),
+        ElementState::Released => pressed_keys.remove(physical_key).then_some(false),
+    }
+}
+
+fn release_raw_input_pressed_keys(
+    input: &SharedInputBackend,
+    pressed_keys: &mut HashSet<PhysicalKey>,
+) {
+    for physical_key in std::mem::take(pressed_keys) {
+        crate::input::winit::handle_key_parts(input, physical_key, ElementState::Released, false);
+    }
+}
+
 fn config_renderer_backend(
     backend: crate::config::app_config::RendererBackend,
 ) -> bmz_render::WgpuBackend {
@@ -13600,6 +13746,7 @@ impl ApplicationHandler<AppUserEvent> for WinitApp {
                 self.focused = focused;
                 if !focused {
                     self.pressed_controls.clear();
+                    self.release_raw_input_pressed_keys();
                     self.sync_select_holds_from_pressed_controls();
                     self.clear_play_control_holds();
                 }
@@ -13651,6 +13798,8 @@ impl ApplicationHandler<AppUserEvent> for WinitApp {
                 if !self.first_frame_startup_completed {
                     self.ensure_audio_output();
                 }
+                self.advance_active_play();
+                self.log_input_diagnostics();
                 let scene_start = Instant::now();
                 self.render_current_scene();
                 let scene_us = instant_elapsed_us_u64(scene_start);
@@ -13666,7 +13815,6 @@ impl ApplicationHandler<AppUserEvent> for WinitApp {
                     // result_scene_started_at を再初期化し、動画 decode 時計が巻き戻って
                     // clocked decode thread が古い loop_base で待ち続けることがある。
                 }
-                self.advance_active_play();
                 self.advance_draining_audio();
                 if let Some(runtime) = &self.audio_runtime {
                     // chart sample bank を保持する source の破棄は、CPAL callback
@@ -13722,6 +13870,17 @@ impl ApplicationHandler<AppUserEvent> for WinitApp {
                 self.handle_smoke_exit_after_redraw(event_loop);
             }
             _ => {}
+        }
+    }
+
+    fn device_event(
+        &mut self,
+        _event_loop: &ActiveEventLoop,
+        _device_id: winit::event::DeviceId,
+        event: DeviceEvent,
+    ) {
+        if let DeviceEvent::Key(raw) = event {
+            self.route_raw_keyboard_gameplay_input(raw.physical_key, raw.state);
         }
     }
 
@@ -16561,7 +16720,7 @@ fn elapsed_since_ms(started_at: Instant) -> i32 {
 }
 
 fn preloaded_matches_start(
-    preloaded: &PreloadedWinitPlaySession,
+    preloaded: &PreloadedInputPlaySession,
     chart_id: i64,
     options: &PlayStartOptions,
 ) -> bool {
@@ -18043,6 +18202,61 @@ mod tests {
 
         config.vsync_mode = VsyncModeConfig::FastVsync;
         assert_eq!(config_present_mode(&config), bmz_render::WgpuPresentMode::Mailbox);
+    }
+
+    #[test]
+    fn keyboard_input_backend_uses_raw_input_on_windows_auto() {
+        let mut config = AppConfig::default();
+        config.input.backend = InputBackendKind::Auto;
+        let expected_auto = if cfg!(target_os = "windows") {
+            KeyboardInputBackend::RawInput
+        } else {
+            KeyboardInputBackend::Window
+        };
+        assert_eq!(keyboard_input_backend_for_config(&config), Some(expected_auto));
+
+        config.input.backend = InputBackendKind::Winit;
+        assert_eq!(keyboard_input_backend_for_config(&config), Some(KeyboardInputBackend::Window));
+
+        config.input.keyboard_enabled = false;
+        assert_eq!(keyboard_input_backend_for_config(&config), None);
+    }
+
+    #[test]
+    fn raw_input_blocking_drops_new_presses_but_keeps_release_for_tracked_keys() {
+        let key = PhysicalKey::Code(KeyCode::KeyZ);
+        let mut pressed_keys = HashSet::new();
+
+        assert_eq!(
+            raw_input_key_state_transition(&mut pressed_keys, &key, ElementState::Pressed, false,),
+            Some(false)
+        );
+        assert_eq!(
+            raw_input_key_state_transition(&mut pressed_keys, &key, ElementState::Pressed, true),
+            None
+        );
+        assert!(pressed_keys.contains(&key));
+        assert_eq!(
+            raw_input_key_state_transition(&mut pressed_keys, &key, ElementState::Released, true),
+            Some(false)
+        );
+        assert!(pressed_keys.is_empty());
+    }
+
+    #[test]
+    fn releasing_raw_input_pressed_keys_enqueues_release_events() {
+        use bmz_core::input::InputKind;
+        use bmz_gameplay::input::backend::InputBackend;
+
+        let input = SharedInputBackend::default();
+        let mut pressed_keys = HashSet::from([PhysicalKey::Code(KeyCode::KeyZ)]);
+
+        release_raw_input_pressed_keys(&input, &mut pressed_keys);
+
+        assert!(pressed_keys.is_empty());
+        let events = input.clone().drain_events();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].kind, InputKind::Release);
     }
 
     #[test]

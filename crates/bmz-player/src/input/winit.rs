@@ -1,49 +1,28 @@
-use std::sync::{Arc, Mutex};
-
 use bmz_core::input::InputKind;
 use bmz_gameplay::input::backend::{
-    BufferedInputBackend, DeviceId, DeviceInputEvent, DeviceTimestamp, InputBackend,
-    InputEventSink, PhysicalControl, monotonic_timestamp_ns,
+    DeviceId, DeviceInputEvent, DeviceTimestamp, PhysicalControl, monotonic_timestamp_ns,
 };
 use winit::event::{ElementState, KeyEvent};
 use winit::keyboard::{KeyCode, NativeKeyCode, PhysicalKey};
 
+use super::shared::SharedInputBackend;
+
 pub const W_KEYBOARD_DEVICE_ID: DeviceId = DeviceId(0);
 
-#[derive(Debug, Clone, Default)]
-pub struct WinitInputBackend {
-    buffer: Arc<Mutex<BufferedInputBackend>>,
-}
-
-impl WinitInputBackend {
-    pub fn handle_key_parts(&self, physical_key: PhysicalKey, state: ElementState, repeat: bool) {
-        if let Some(event) = physical_key_to_device_input(physical_key, state, repeat) {
-            self.push_shared_event(event);
-        }
-    }
-
-    pub fn handle_key_event(&self, event: &KeyEvent) {
-        if let Some(event) = key_event_to_device_input(event) {
-            self.push_shared_event(event);
-        }
-    }
-
-    pub(crate) fn push_shared_event(&self, event: DeviceInputEvent) {
-        if let Ok(mut buffer) = self.buffer.lock() {
-            buffer.push_event(event);
-        }
+pub fn handle_key_parts(
+    input: &SharedInputBackend,
+    physical_key: PhysicalKey,
+    state: ElementState,
+    repeat: bool,
+) {
+    if let Some(event) = physical_key_to_device_input(physical_key, state, repeat) {
+        input.push_shared_event(event);
     }
 }
 
-impl InputBackend for WinitInputBackend {
-    fn drain_events(&mut self) -> Vec<DeviceInputEvent> {
-        self.buffer.lock().map(|mut buffer| buffer.drain_events()).unwrap_or_default()
-    }
-}
-
-impl InputEventSink for WinitInputBackend {
-    fn push_event(&mut self, event: DeviceInputEvent) {
-        self.push_shared_event(event);
+pub fn handle_key_event(input: &SharedInputBackend, event: &KeyEvent) {
+    if let Some(event) = key_event_to_device_input(event) {
+        input.push_shared_event(event);
     }
 }
 
@@ -162,6 +141,8 @@ fn native_key_code_name(code: NativeKeyCode) -> String {
 
 #[cfg(test)]
 mod tests {
+    use bmz_gameplay::input::backend::InputBackend;
+
     use super::*;
 
     #[test]
@@ -222,11 +203,11 @@ mod tests {
 
     #[test]
     fn winit_input_backend_buffers_translated_events() {
-        let mut backend = WinitInputBackend::default();
+        let mut backend = SharedInputBackend::default();
 
-        backend.handle_key_parts(PhysicalKey::Code(KeyCode::KeyZ), ElementState::Pressed, false);
-        backend.handle_key_parts(PhysicalKey::Code(KeyCode::KeyZ), ElementState::Pressed, true);
-        backend.handle_key_parts(PhysicalKey::Code(KeyCode::KeyZ), ElementState::Released, false);
+        handle_key_parts(&backend, PhysicalKey::Code(KeyCode::KeyZ), ElementState::Pressed, false);
+        handle_key_parts(&backend, PhysicalKey::Code(KeyCode::KeyZ), ElementState::Pressed, true);
+        handle_key_parts(&backend, PhysicalKey::Code(KeyCode::KeyZ), ElementState::Released, false);
 
         let events = backend.drain_events();
         assert_eq!(events.len(), 2);
@@ -236,10 +217,11 @@ mod tests {
 
     #[test]
     fn cloned_winit_input_backend_shares_events() {
-        let event_source = WinitInputBackend::default();
+        let event_source = SharedInputBackend::default();
         let mut game_backend = event_source.clone();
 
-        event_source.handle_key_parts(
+        handle_key_parts(
+            &event_source,
             PhysicalKey::Code(KeyCode::KeyZ),
             ElementState::Pressed,
             false,
