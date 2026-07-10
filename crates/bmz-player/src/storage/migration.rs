@@ -473,6 +473,13 @@ pub const LIBRARY_MIGRATIONS: &[Migration] = &[
             "ALTER TABLE charts ADD COLUMN defined_hcn_pairs INTEGER NOT NULL DEFAULT 0;",
         ],
     },
+    Migration {
+        version: 22,
+        // Raw BMS headers are not consumed from library.db.  Earlier releases
+        // also captured Base62 channel data here, which could make the
+        // library database disproportionately large.
+        statements: &["UPDATE charts SET headers_json = '{}' WHERE headers_json <> '{}';"],
+    },
 ];
 
 pub const SCORE_MIGRATIONS: &[Migration] = &[
@@ -1375,7 +1382,7 @@ mod tests {
         run_migrations(&mut conn, LIBRARY_MIGRATIONS).unwrap();
 
         let version: i32 = conn.pragma_query_value(None, "user_version", |row| row.get(0)).unwrap();
-        assert_eq!(version, 21);
+        assert_eq!(version, 22);
 
         let mut stmt = conn.prepare("PRAGMA table_info(charts)").unwrap();
         let columns = stmt
@@ -1388,5 +1395,24 @@ mod tests {
         {
             assert!(columns.iter().any(|candidate| candidate == column));
         }
+    }
+
+    #[test]
+    fn library_migration_clears_persisted_raw_headers() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE charts (headers_json TEXT NOT NULL);
+             INSERT INTO charts (headers_json) VALUES ('{\"002D9\":\"note data\"}');
+             PRAGMA user_version = 21;",
+        )
+        .unwrap();
+
+        run_migrations(&mut conn, LIBRARY_MIGRATIONS).unwrap();
+
+        let headers_json: String =
+            conn.query_row("SELECT headers_json FROM charts", [], |row| row.get(0)).unwrap();
+        let version: i32 = conn.pragma_query_value(None, "user_version", |row| row.get(0)).unwrap();
+        assert_eq!(headers_json, "{}");
+        assert_eq!(version, 22);
     }
 }

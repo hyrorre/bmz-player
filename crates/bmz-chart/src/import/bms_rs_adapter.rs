@@ -1139,7 +1139,11 @@ fn is_bms_channel_command(body: &str) -> bool {
     let Some((head, tail)) = body.split_once(':') else {
         return false;
     };
-    head.len() >= 5 && head.chars().all(|c| c.is_ascii_digit()) && !tail.is_empty()
+    let bytes = head.as_bytes();
+    bytes.len() == 5
+        && bytes[..3].iter().all(u8::is_ascii_digit)
+        && bytes[3..].iter().all(u8::is_ascii_alphanumeric)
+        && !tail.is_empty()
 }
 
 fn append_url_from_headers(headers: &BTreeMap<String, String>) -> String {
@@ -2182,6 +2186,14 @@ mod tests {
             Some(&"http://example.com/append".to_string())
         );
         assert!(!chart.metadata.bms_headers.contains_key("00111"));
+    }
+
+    #[test]
+    fn bms_headers_exclude_base62_channel_commands() {
+        let headers = extract_bms_headers_from_text("#002D9:000102\n#TITLE Example");
+
+        assert!(!headers.contains_key("002D9"));
+        assert_eq!(headers.get("TITLE"), Some(&"Example".to_string()));
     }
 
     #[test]

@@ -1270,14 +1270,17 @@ fn insert_chart(conn: &Connection, record: &ChartImportRecord<'_>) -> Result<i64
         chart.metadata.has_bms_random,
         chart.metadata.source_url.as_str(),
         chart.metadata.append_url.as_str(),
-        chart_headers_json(chart),
+        chart_headers_json(),
         CHART_IMPORT_VERSION,
     ])?;
     Ok(conn.last_insert_rowid())
 }
 
-fn chart_headers_json(chart: &PlayableChart) -> String {
-    serde_json::to_string(&chart.metadata.bms_headers).unwrap_or_else(|_| "{}".to_string())
+fn chart_headers_json() -> &'static str {
+    // Header values needed by the library have dedicated columns.  Do not
+    // persist the raw header map: some BMS channel identifiers use Base62 and
+    // were historically mistaken for headers, retaining complete note lines.
+    "{}"
 }
 
 fn update_chart(conn: &Connection, chart_id: i64, record: &ChartImportRecord<'_>) -> Result<()> {
@@ -1341,7 +1344,7 @@ fn update_chart(conn: &Connection, chart_id: i64, record: &ChartImportRecord<'_>
         chart.metadata.has_bms_random,
         chart.metadata.source_url.as_str(),
         chart.metadata.append_url.as_str(),
-        chart_headers_json(chart),
+        chart_headers_json(),
         CHART_IMPORT_VERSION,
         chart_id,
     ])?;
@@ -2207,7 +2210,7 @@ mod tests {
     }
 
     #[test]
-    fn upsert_chart_import_persists_source_url_and_headers() {
+    fn upsert_chart_import_persists_source_url_without_raw_headers() {
         let mut conn = Connection::open_in_memory().unwrap();
         configure_connection(&conn).unwrap();
         run_migrations(&mut conn, LIBRARY_MIGRATIONS).unwrap();
@@ -2238,7 +2241,7 @@ mod tests {
 
         assert_eq!(source_url, "http://example.com/bms");
         assert_eq!(append_url, "http://example.com/append");
-        assert!(headers_json.contains("\"TITLE\":\"url song\""));
+        assert_eq!(headers_json, "{}");
     }
 
     #[test]
