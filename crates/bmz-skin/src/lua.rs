@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::Component;
 use std::path::{Path, PathBuf};
@@ -221,7 +221,7 @@ fn execute_lua_skin(
     record_static_skin_config_option_dependencies(&source, &skin_options, &dependencies);
 
     if let JsonValue::Object(ref mut root) = json {
-        postprocess_lua_skin_json(root);
+        postprocess_lua_skin_json(root, &mut warnings);
 
         let timers = main_state_probe
             .lock()
@@ -259,8 +259,15 @@ fn execute_lua_skin(
     Ok((json, warnings, skin_named_files, dependencies))
 }
 
-fn postprocess_lua_skin_json(root: &mut JsonMap<String, JsonValue>) {
-    repair_keybeam_destination_draws(root);
+fn postprocess_lua_skin_json(root: &mut JsonMap<String, JsonValue>, warnings: &mut Vec<String>) {
+    let repaired = repair_keybeam_destination_draws(root);
+    warnings.retain(|warning| {
+        !repaired.iter().any(|index| {
+            warning == &format!("skipping unsupported draw function at $.destination[{index}].draw")
+                || warning
+                    == &format!("skipping unsupported field `timer` at $.destination[{index}]")
+        })
+    });
 }
 
 fn install_instruction_limit(lua: &Lua) {
@@ -3900,12 +3907,13 @@ fn infer_constant_text_ref_at_load(function: &Function) -> Option<i32> {
     (1001..=1003).contains(&ref_id).then_some(ref_id)
 }
 
-fn repair_keybeam_destination_draws(root: &mut JsonMap<String, JsonValue>) {
+fn repair_keybeam_destination_draws(root: &mut JsonMap<String, JsonValue>) -> BTreeSet<usize> {
+    let mut repaired = BTreeSet::new();
     let Some(destinations) = root.get_mut("destination").and_then(JsonValue::as_array_mut) else {
-        return;
+        return repaired;
     };
     for index in 0..destinations.len().saturating_sub(1) {
-        let Some((hold_draw, fade_draw)) =
+        let Some((hold_draw, fade_draw, fade_timer)) =
             keybeam_draw_replacements(&destinations[index], &destinations[index + 1])
         else {
             continue;
@@ -3914,12 +3922,18 @@ fn repair_keybeam_destination_draws(root: &mut JsonMap<String, JsonValue>) {
             destination.insert("draw".to_string(), JsonValue::String(hold_draw));
         }
         if let JsonValue::Object(destination) = &mut destinations[index + 1] {
+            destination
+                .insert("timer".to_string(), JsonValue::Number(JsonNumber::from(fade_timer)));
             destination.insert("draw".to_string(), JsonValue::String(fade_draw));
         }
+        // Lua table path is 1-based, while the converted JSON array is 0-based.
+        repaired.insert(index + 1);
+        repaired.insert(index + 2);
     }
+    repaired
 }
 
-fn keybeam_draw_replacements(hold: &JsonValue, fade: &JsonValue) -> Option<(String, String)> {
+fn keybeam_draw_replacements(hold: &JsonValue, fade: &JsonValue) -> Option<(String, String, i32)> {
     let hold = hold.as_object()?;
     let fade = fade.as_object()?;
     let hold_id = json_string_field(hold, "id")?;
@@ -3929,17 +3943,15 @@ fn keybeam_draw_replacements(hold: &JsonValue, fade: &JsonValue) -> Option<(Stri
     if json_i32_field(hold, "timer").is_some() || json_i32_field(hold, "loop") == Some(-1) {
         return None;
     }
-    if !needs_keybeam_hold_draw_repair(json_string_field(hold, "draw")) {
+    if json_i32_field(fade, "loop") != Some(-1) {
         return None;
     }
-
-    let fade_timer = json_i32_field(fade, "timer")?;
-    if json_i32_field(fade, "loop") != Some(-1) || !is_keybeam_keyoff_timer(fade_timer) {
-        return None;
-    }
+    let fade_draw = json_string_field(fade, "draw")?;
+    let fade_timer = json_i32_field(fade, "timer")
+        .filter(|timer| is_keybeam_keyoff_timer(*timer))
+        .or_else(|| keybeam_keyoff_timer_from_draw(fade_draw))?;
     let keyon_timer = keybeam_keyon_timer_for_keyoff_timer(fade_timer)?;
     let hold_timer = keybeam_hold_timer_for_keyon_timer(keyon_timer)?;
-    let fade_draw = json_string_field(fade, "draw")?;
     let hold_draw = keybeam_hold_draw_from_fade_draw(fade_draw, keyon_timer, hold_timer)?;
     let fade_draw = fade_draw
         .split(" or ")
@@ -3947,7 +3959,7 @@ fn keybeam_draw_replacements(hold: &JsonValue, fade: &JsonValue) -> Option<(Stri
         .map(|branch| format!("keybeam_fade({fade_timer}) != 0 and {branch}"))
         .collect::<Vec<_>>()
         .join(" or ");
-    Some((hold_draw, fade_draw))
+    Some((hold_draw, fade_draw, fade_timer))
 }
 
 fn json_string_field<'a>(object: &'a JsonMap<String, JsonValue>, key: &str) -> Option<&'a str> {
@@ -3958,11 +3970,14 @@ fn json_i32_field(object: &JsonMap<String, JsonValue>, key: &str) -> Option<i32>
     i32::try_from(object.get(key)?.as_i64()?).ok()
 }
 
-fn needs_keybeam_hold_draw_repair(draw: Option<&str>) -> bool {
-    match draw.map(str::trim) {
-        None | Some("") | Some("number(0) < 0") => true,
-        Some(draw) => !draw.contains("timer("),
-    }
+fn keybeam_keyoff_timer_from_draw(draw: &str) -> Option<i32> {
+    let event_ids = draw
+        .split("event_index(")
+        .skip(1)
+        .filter_map(|tail| tail.split_once(')')?.0.trim().parse::<i32>().ok())
+        .collect::<BTreeSet<_>>();
+    let event_id = (event_ids.len() == 1).then(|| *event_ids.first().unwrap())?;
+    (500..=517).contains(&event_id).then_some(event_id - 380)
 }
 
 fn keybeam_keyon_timer_for_keyoff_timer(timer_id: i32) -> Option<i32> {
@@ -5284,13 +5299,13 @@ mod tests {
                     (
                         "draw".to_string(),
                         JsonValue::String(
-                            "event_index(503) == 2 or event_index(503) == 3".to_string(),
+                            "timer(103) != timer_off and timer(73) == timer_off and event_index(503) == 2"
+                                .to_string(),
                         ),
                     ),
                 ])),
                 JsonValue::Object(JsonMap::from_iter([
                     ("id".to_string(), JsonValue::String("key-beam-thick-great".to_string())),
-                    ("timer".to_string(), JsonValue::Number(JsonNumber::from(123))),
                     ("loop".to_string(), JsonValue::Number(JsonNumber::from(-1))),
                     (
                         "draw".to_string(),
@@ -5302,7 +5317,11 @@ mod tests {
             ]),
         )]);
 
-        postprocess_lua_skin_json(&mut root);
+        let mut warnings = vec![
+            "skipping unsupported draw function at $.destination[3].draw".to_string(),
+            "skipping unsupported field `timer` at $.destination[4]".to_string(),
+        ];
+        postprocess_lua_skin_json(&mut root, &mut warnings);
 
         let destinations = root.get("destination").and_then(JsonValue::as_array).unwrap();
         let draw = |index: usize| {
@@ -5318,6 +5337,11 @@ mod tests {
             "keybeam_hold(103) != 0 and event_index(503) == 2 or keybeam_hold(103) != 0 and event_index(503) == 3"
         );
         assert_eq!(draw(1), "keybeam_fade(122) != 0 and event_index(502) == 1");
+        assert_eq!(
+            destinations[3].as_object().and_then(|destination| destination.get("timer")),
+            Some(&JsonValue::Number(JsonNumber::from(123)))
+        );
+        assert!(warnings.is_empty());
     }
 
     #[test]

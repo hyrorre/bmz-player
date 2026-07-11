@@ -2669,22 +2669,27 @@ mod tests {
             destination.timer_expr.starts_with("bmz:keylogger_event:")
                 && destination.draw.starts_with("keylogger_judge(")
         }));
-        assert!(
-            loaded.document.destination.iter().any(|destination| matches!(
-                destination,
+        let keybeams = loaded
+            .document
+            .destination
+            .iter()
+            .filter_map(|entry| match entry {
                 bmz_skin_document::DestinationListEntry::Single(destination)
-                    if destination.draw.contains("keybeam_hold(")
-            )),
-            "PeacefulPlay keybeam hold closures should use the native runtime predicate"
-        );
-        assert!(
-            loaded.document.destination.iter().any(|destination| matches!(
-                destination,
-                bmz_skin_document::DestinationListEntry::Single(destination)
-                    if destination.draw.contains("keybeam_fade(")
-            )),
-            "PeacefulPlay keybeam fade closures should use the native runtime predicate"
-        );
+                    if destination.id.starts_with("key-beam-") =>
+                {
+                    Some(destination)
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(keybeams.len(), 9 * 4 * 2);
+        for pair in keybeams.chunks_exact(2) {
+            assert!(pair[0].timer.is_none());
+            assert!(pair[0].draw.starts_with("keybeam_hold("), "hold: {:?}", pair[0]);
+            assert!(matches!(pair[1].timer, Some(120..=129)));
+            assert!(pair[1].draw.starts_with("keybeam_fade("), "fade: {:?}", pair[1]);
+        }
+        assert!(loaded.warnings.is_empty(), "warnings: {:?}", loaded.warnings);
         let gauge_lead_glow = loaded
             .document
             .destination
