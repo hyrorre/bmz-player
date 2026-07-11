@@ -623,6 +623,8 @@ struct MainStateProbe {
     fixed_delay_timers: Vec<(i32, i32, i32)>,
     keylogger_destination_occurrences: BTreeMap<String, usize>,
     gauge_lead_glow_occurrences: BTreeMap<String, usize>,
+    gauge_value_destination_occurrences: BTreeMap<String, usize>,
+    gauge_value_overlay_mode: Option<&'static str>,
     load_dependencies: Option<Arc<Mutex<SkinLoadDependencies>>>,
 }
 
@@ -651,6 +653,8 @@ impl Default for MainStateProbe {
             fixed_delay_timers: Vec::new(),
             keylogger_destination_occurrences: BTreeMap::new(),
             gauge_lead_glow_occurrences: BTreeMap::new(),
+            gauge_value_destination_occurrences: BTreeMap::new(),
+            gauge_value_overlay_mode: None,
             load_dependencies: None,
         }
     }
@@ -2748,6 +2752,12 @@ fn lua_table_to_json(
                     continue;
                 }
                 if let Some(draw) =
+                    infer_gauge_value_digit_draw_condition(object_id.as_deref(), main_state_probe)
+                {
+                    object.insert(key.clone(), JsonValue::String(draw));
+                    continue;
+                }
+                if let Some(draw) =
                     infer_boolean_predicate(function, main_state_probe, object_id.as_deref())
                 {
                     object.insert(key.clone(), JsonValue::String(draw));
@@ -2818,6 +2828,30 @@ fn lua_table_to_json(
     }
     repair_result_table_title_text(path, &mut object);
     Ok(JsonValue::Object(object))
+}
+
+fn infer_gauge_value_digit_draw_condition(
+    object_id: Option<&str>,
+    main_state_probe: &Arc<Mutex<MainStateProbe>>,
+) -> Option<String> {
+    let id = object_id?;
+    let mut probe = main_state_probe.lock().ok()?;
+    let mode = match id {
+        "val-gauge-percent-integer" | "val-gauge-percent-fraction" | "gauge-value-percent" => {
+            probe.gauge_value_overlay_mode = Some("percent");
+            "percent"
+        }
+        "val-gauge-amount-integer" | "val-gauge-amount-fraction" => {
+            probe.gauge_value_overlay_mode = Some("amount");
+            "amount"
+        }
+        "gauge-value-dot" => probe.gauge_value_overlay_mode?,
+        _ => return None,
+    };
+    let occurrence = probe.gauge_value_destination_occurrences.entry(id.to_string()).or_default();
+    *occurrence += 1;
+    let digits = ((*occurrence - 1) % 3) + 1;
+    Some(format!("gauge_value_digits({mode},{digits})"))
 }
 
 fn repair_result_table_title_text(path: &str, object: &mut JsonMap<String, JsonValue>) {

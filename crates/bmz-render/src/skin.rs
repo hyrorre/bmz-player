@@ -7419,6 +7419,21 @@ fn eval_skin_draw_condition(condition: &str, state: &SkinDrawState) -> bool {
 }
 
 fn eval_skin_draw_term(term: &str, state: &SkinDrawState) -> Option<bool> {
+    if let Some((mode, digits)) = parse_gauge_value_digits_predicate(term) {
+        let value = match mode {
+            "percent" => clamped_gauge_value(state) * 100.0 / state.gauge_max.max(1.0),
+            "amount" => clamped_gauge_value(state),
+            _ => return None,
+        };
+        let actual_digits = if value.floor() >= 100.0 {
+            3
+        } else if value.floor() >= 10.0 {
+            2
+        } else {
+            1
+        };
+        return Some(actual_digits == digits);
+    }
     if let Some((group, part, below_border)) = parse_gauge_lead_glow_predicate(term) {
         return Some(eval_gauge_lead_glow_predicate(group, part, below_border, state));
     }
@@ -7456,6 +7471,14 @@ fn eval_skin_draw_term(term: &str, state: &SkinDrawState) -> Option<bool> {
         });
     }
     None
+}
+
+fn parse_gauge_value_digits_predicate(term: &str) -> Option<(&str, usize)> {
+    let inner = term.strip_prefix("gauge_value_digits(")?.strip_suffix(')')?;
+    let (mode, digits) = inner.split_once(',')?;
+    let mode = mode.trim();
+    let digits = digits.trim().parse::<usize>().ok()?;
+    (matches!(mode, "percent" | "amount") && (1..=3).contains(&digits)).then_some((mode, digits))
 }
 
 fn parse_gauge_lead_glow_predicate(term: &str) -> Option<(&str, i32, bool)> {
@@ -15205,6 +15228,28 @@ mod tests {
             "gauge_type() == 4 or gauge_type() == 5",
             &SkinDrawState { gauge_type: 2, ..Default::default() }
         ));
+    }
+
+    #[test]
+    fn peaceful_gauge_value_overlay_selects_exactly_one_integer_width() {
+        for (state, mode, expected_digits) in [
+            (SkinDrawState { gauge: 7.5, gauge_max: 120.0, ..Default::default() }, "percent", 1),
+            (SkinDrawState { gauge: 78.75, gauge_max: 120.0, ..Default::default() }, "percent", 2),
+            (SkinDrawState { gauge: 120.0, gauge_max: 120.0, ..Default::default() }, "percent", 3),
+            (SkinDrawState { gauge: 7.5, gauge_max: 120.0, ..Default::default() }, "amount", 1),
+            (SkinDrawState { gauge: 78.75, gauge_max: 120.0, ..Default::default() }, "amount", 2),
+            (SkinDrawState { gauge: 120.0, gauge_max: 120.0, ..Default::default() }, "amount", 3),
+        ] {
+            let visible = (1..=3)
+                .filter(|digits| {
+                    eval_skin_draw_condition(
+                        &format!("gauge_value_digits({mode},{digits})"),
+                        &state,
+                    )
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(visible, vec![expected_digits]);
+        }
     }
 
     #[test]

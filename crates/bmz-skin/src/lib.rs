@@ -2788,4 +2788,49 @@ mod tests {
             "only PeacefulPlay's end-of-note fixed-delay timer should be inferred"
         );
     }
+
+    #[test]
+    fn peaceful_play_gauge_overlay_keeps_one_destination_per_integer_width() {
+        let skin_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../data/skins/PeacefulPlay/play9.luaskin");
+        if !skin_path.is_file() {
+            return;
+        }
+
+        for (display, mode, integer_id) in [
+            ("%", "percent", "val-gauge-percent-integer"),
+            ("Value", "amount", "val-gauge-amount-integer"),
+        ] {
+            let properties = BTreeMap::from([
+                ("ゲージ量オーバーレイ Gauge Value Overlay".to_string(), "ON(100%)".to_string()),
+                ("ゲージ量表示方式 Gauge Value Display Mode".to_string(), display.to_string()),
+            ]);
+            let loaded = load_lua_skin(&skin_path, SkinKind::Play, &properties, &BTreeMap::new())
+                .expect("PeacefulPlay gauge overlay should decode");
+            assert!(
+                loaded.warnings.is_empty(),
+                "{display} overlay warnings: {:?}",
+                loaded.warnings
+            );
+            let predicates = loaded
+                .document
+                .destination
+                .iter()
+                .filter_map(|entry| match entry {
+                    bmz_skin_document::DestinationListEntry::Single(destination)
+                        if destination.id == integer_id =>
+                    {
+                        Some(destination.draw.as_str())
+                    }
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(
+                predicates,
+                (1..=3)
+                    .map(|digits| format!("gauge_value_digits({mode},{digits})"))
+                    .collect::<Vec<_>>()
+            );
+        }
+    }
 }
