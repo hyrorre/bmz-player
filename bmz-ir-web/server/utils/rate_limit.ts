@@ -13,8 +13,8 @@ export type RateLimitAction =
 export type RateLimitScope = 'email' | 'ip' | 'user'
 
 export const RATE_LIMIT_WINDOW_MS = 15 * 60 * 1000
-export const SCORE_SUBMIT_RATE_LIMIT = { user: 1500, ip: 3000 } as const
-export const SCORE_CLEANUP_RATE_LIMIT = { user: 120, ip: 240 } as const
+export const SCORE_SUBMIT_RATE_LIMIT = { user: 6000, ip: 12000 } as const
+export const SCORE_CLEANUP_RATE_LIMIT = { user: 6000, ip: 12000 } as const
 export const REPLAY_UPLOAD_RATE_LIMIT = { user: 900, ip: 1800 } as const
 
 /**

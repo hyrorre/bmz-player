@@ -18,8 +18,8 @@ use crate::ir::credentials::{
     IrStoredCredentials, delete_credentials, load_credentials, save_credentials,
 };
 use crate::ir::sync::{
-    IR_SYNC_BATCH_LIMIT, IR_SYNC_JOB_SPACING_MS, IrSyncJobFilter, IrSyncReport, IrSyncThrottle,
-    ensure_fresh_credentials, sync_pending_ir_jobs, sync_pending_ir_jobs_filtered,
+    IR_CLI_SYNC_BATCH_LIMIT, IR_CLI_SYNC_JOB_SPACING_MS, IrSyncJobFilter, IrSyncReport,
+    IrSyncThrottle, ensure_fresh_credentials, sync_pending_ir_jobs, sync_pending_ir_jobs_filtered,
 };
 use crate::ir::types::IrRankingScope;
 use crate::paths::{ProfilePaths, resolve_app_paths, resolve_profile_paths};
@@ -531,7 +531,7 @@ async fn sync(profile_paths: &ProfilePaths, profile: &ProfileConfig) -> Result<(
         profile_paths.root_dir.as_path(),
         app_paths.logs_dir.as_path(),
         &profile.ir,
-        IR_SYNC_BATCH_LIMIT,
+        IR_CLI_SYNC_BATCH_LIMIT,
     )
     .await?;
     println!("submitted: {}, failed: {}", report.submitted, report.failed);
@@ -584,7 +584,7 @@ async fn attest_submitted_scores(
             &provider_key,
             &account_id,
             IrJobKind::Attestation,
-            IR_SYNC_BATCH_LIMIT,
+            IR_CLI_SYNC_BATCH_LIMIT,
         )
         .await?;
         submitted = submitted.saturating_add(report.submitted);
@@ -626,7 +626,7 @@ async fn cleanup_imported_scores(
     apply: bool,
 ) -> Result<()> {
     const REMOTE_DELETE_BATCH_SIZE: usize = 100;
-    const REMOTE_DELETE_BATCH_SPACING_MS: u64 = 8_000;
+    const REMOTE_DELETE_BATCH_SPACING_MS: u64 = 200;
 
     crate::storage::migration::migrate_score_db(&profile_paths.score_db)?;
     crate::storage::migration::migrate_network_db(&profile_paths.network_db)?;
@@ -776,7 +776,7 @@ async fn upload_local(
                 profile_paths.root_dir.as_path(),
                 app_paths.logs_dir.as_path(),
                 &profile.ir,
-                IR_SYNC_BATCH_LIMIT,
+                IR_CLI_SYNC_BATCH_LIMIT,
             )
             .await?;
             println!("submitted: {}, failed: {}", sync_report.submitted, sync_report.failed);
@@ -842,7 +842,7 @@ async fn upload_local(
         profile_paths.root_dir.as_path(),
         app_paths.logs_dir.as_path(),
         &profile.ir,
-        IR_SYNC_BATCH_LIMIT,
+        IR_CLI_SYNC_BATCH_LIMIT,
     )
     .await?;
     println!("submitted: {}, failed: {}", sync_report.submitted, sync_report.failed);
@@ -901,7 +901,7 @@ async fn upload_all_local(
                 profile_paths.root_dir.as_path(),
                 app_paths.logs_dir.as_path(),
                 &profile.ir,
-                IR_SYNC_BATCH_LIMIT,
+                IR_CLI_SYNC_BATCH_LIMIT,
             )
             .await?;
             let remaining = network_db.unfinished_ir_score_job_count_for_kind(
@@ -961,7 +961,7 @@ async fn upload_all_local(
             profile_paths.root_dir.as_path(),
             app_paths.logs_dir.as_path(),
             &profile.ir,
-            IR_SYNC_BATCH_LIMIT,
+            IR_CLI_SYNC_BATCH_LIMIT,
         )
         .await?;
         let remaining = network_db.unfinished_ir_score_job_count_for_kind(
@@ -1063,8 +1063,9 @@ async fn sync_cli_jobs_with_filter(
     limit: u32,
     filter: Option<(&str, &str, IrJobKind)>,
 ) -> Result<IrSyncReport> {
-    let estimated_seconds =
-        u64::from(limit.saturating_sub(1)).saturating_mul(IR_SYNC_JOB_SPACING_MS).div_ceil(1_000);
+    let estimated_seconds = u64::from(limit.saturating_sub(1))
+        .saturating_mul(IR_CLI_SYNC_JOB_SPACING_MS)
+        .div_ceil(1_000);
     println!("syncing up to {limit} queued jobs (about {estimated_seconds}s)");
 
     let mut total = IrSyncReport::default();
@@ -1105,7 +1106,7 @@ async fn sync_cli_jobs_with_filter(
             if !has_next {
                 break;
             }
-            tokio::time::sleep(std::time::Duration::from_millis(IR_SYNC_JOB_SPACING_MS)).await;
+            tokio::time::sleep(std::time::Duration::from_millis(IR_CLI_SYNC_JOB_SPACING_MS)).await;
         }
         print!("[{}/{}] syncing...", index + 1, limit);
         std::io::stdout().flush()?;

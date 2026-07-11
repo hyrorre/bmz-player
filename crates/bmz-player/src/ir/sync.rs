@@ -39,6 +39,9 @@ struct IrScoreAttestationJobPayload {
 
 pub const IR_SYNC_BATCH_LIMIT: u32 = 20;
 pub const IR_SYNC_JOB_SPACING_MS: u64 = 3_100;
+/// 手動の `ir sync` / local backfill 用。結果画面・常駐同期の待機時間とは分ける。
+pub const IR_CLI_SYNC_BATCH_LIMIT: u32 = 100;
+pub const IR_CLI_SYNC_JOB_SPACING_MS: u64 = 200;
 pub const IR_SYNC_LOOP_INTERVAL_SECS: u64 = 30;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -750,9 +753,11 @@ mod tests {
     use crate::ln_policy::LnScorePolicy;
 
     #[test]
-    fn ir_sync_rate_limit_defaults_match_backfill_budget() {
+    fn ir_sync_throttles_keep_background_and_cli_budgets_separate() {
         assert_eq!(IR_SYNC_BATCH_LIMIT, 20);
         assert_eq!(IR_SYNC_JOB_SPACING_MS, 3_100);
+        assert_eq!(IR_CLI_SYNC_BATCH_LIMIT, 100);
+        assert_eq!(IR_CLI_SYNC_JOB_SPACING_MS, 200);
         assert_eq!(IR_SYNC_LOOP_INTERVAL_SECS, 30);
         assert_eq!(
             IrSyncThrottle::rate_limited().job_delay(),

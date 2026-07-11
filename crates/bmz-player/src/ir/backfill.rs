@@ -23,7 +23,7 @@ use super::types::{
     IrRulePayload, IrScoreSubmission,
 };
 
-pub const DEFAULT_UPLOAD_LOCAL_LIMIT: u32 = 50;
+pub const DEFAULT_UPLOAD_LOCAL_LIMIT: u32 = 200;
 pub const LOCAL_BACKFILL_SOURCE: &str = "local_backfill";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -688,6 +688,12 @@ mod tests {
         configure_connection(&connection).unwrap();
         run_migrations(&mut connection, NETWORK_MIGRATIONS).unwrap();
         NetworkDatabase::from_connection(connection)
+    }
+
+    #[test]
+    fn local_upload_defaults_use_the_fast_cli_batch_size() {
+        assert_eq!(DEFAULT_UPLOAD_LOCAL_LIMIT, 200);
+        assert_eq!(IrLocalUploadOptions::default().limit, 200);
     }
 
     fn test_row() -> BackfillScoreRow {

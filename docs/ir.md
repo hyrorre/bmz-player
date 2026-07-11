@@ -54,11 +54,12 @@ GET    /api/v1/courses/{course_hash}/ranking   # global のみ
   egui プロファイル設定からもログイン可能。
 - 送信: リザルト確定時に `ir_score_jobs` へ enqueue (send_policy 判定込み) →
   リザルト画面で即時送信 + アプリ常駐ワーカー (30 秒間隔) が残りを処理。
-  送信は 1 バッチ 20 件、job 間 3.1 秒待ちで、backfill 時も同じペースに揃える。
+  結果画面・常駐ワーカーは 1 バッチ 20 件、job 間 3.1 秒待ちで送信する。CLI の
+  `ir sync` / local backfill は手動検証を速くするため 100 件 / 200ms を使う。
   バッチ取得時に対象 job をまとめて `sending` として claim し、リザルト送信と
   常駐ワーカーが並行しても同じ job を二重送信しない。
   CLI の `ir sync` / `ir upload-local --sync` は中断時に未処理jobを一括で
-  `sending` に残さないよう1件ずつclaimし、`[N/20]` の進捗を逐次表示する。
+  `sending` に残さないよう1件ずつclaimし、`[N/100]` の進捗を逐次表示する。
   Ctrl+C時に残る `sending` は処理中の最大1件で、5分後に再取得される。
   リトライは 1分 → 5分 → 30分 → 2時間 → 以降24時間。
   429 が `Retry-After` を返した場合は通常のバックオフより優先してその時刻まで待つ。
@@ -72,7 +73,7 @@ GET    /api/v1/courses/{course_hash}/ranking   # global のみ
   する。既送信履歴と既に queue にある履歴は既定でスキップし、course stage /
   autoplay は既定で除外。local backfill は未登録 chart を作成できるが、既存 chart
   の正規メタデータは上書きしない。`--sync` で既存の未完了score jobがある場合は、
-  queueを増やさず先に最大20件を同期する。
+  queueを増やさず先に最大100件を同期する。投入 batch の既定値は200件。
   `--all` は `--sync` を含む完走モードで、既存queueの排出と次の投入batchを候補が
   なくなるまで繰り返す。送信失敗または他プロセスの `sending` job で進捗できない場合は
   非ゼロで終了し、retry/backoff または5分のlease後に再実行する。
@@ -95,11 +96,11 @@ GET    /api/v1/courses/{course_hash}/ranking   # global のみ
   から再構築し、次にローカルの IR job/submission 台帳を削除してから `score.db` の
   履歴、`score_best`、`player_stats` を再集計する。別 IR account への送信済み候補が
   ある場合は、ローカル削除を止める。
-- rate limit: score submit / course score は 15 分あたり user 1500 / IP 3000。
+- rate limit: score submit / course score は 15 分あたり user 6000 / IP 12000。
   replay upload 系は 1 replay あたり upload-url / upload / verify の 3 request を使うため、
   15 分あたり user 900 / IP 1800。429 では `Retry-After` を返す。
-  backfill cleanup は 100 score / request、15 分あたり user 120 / IP 240 で、client は
-  batch 間を 8 秒空ける。
+  backfill cleanup は 100 score / request、15 分あたり user 6000 / IP 12000 で、client は
+  batch 間を 200ms 空ける。
 - ランキング表示: Result / Select スキンの `NUMBER_IR_RANK(179)` /
   `NUMBER_IR_TOTALPLAYER(180/200)` / `NUMBER_IR_CLEARRATE(181)` /
   `OPTION_IR_LOADING/LOADED/NOPLAYER/FAILED(601..604)`、
