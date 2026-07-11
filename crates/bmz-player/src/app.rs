@@ -362,13 +362,13 @@ impl UpdatePrompt {
     }
 }
 
-/// 手動スクリーンショット後に左上へ短時間表示するトースト。
-struct ScreenshotToast {
+/// 左上へ短時間表示するトースト。
+struct LeftOverlayToast {
     message: String,
     shown_at: Instant,
 }
 
-const SCREENSHOT_TOAST_DURATION: Duration = Duration::from_secs(2);
+const LEFT_OVERLAY_TOAST_DURATION: Duration = Duration::from_secs(2);
 
 struct WinitApp {
     boot: BootstrappedApp,
@@ -477,8 +477,8 @@ struct WinitApp {
     smoke_exit_after_result_frames: Option<u32>,
     smoke_exit_on_result: bool,
     smoke_screenshot_path: Option<PathBuf>,
-    /// 手動スクリーンショット後に左上へ出す一時メッセージ。
-    screenshot_toast: Option<ScreenshotToast>,
+    /// 左上へ出す一時メッセージ。
+    left_overlay_toast: Option<LeftOverlayToast>,
     rendered_frames: u32,
     rendered_result_frames: u32,
     app_started_at: Instant,
@@ -2070,7 +2070,7 @@ impl WinitApp {
             smoke_exit_after_result_frames: options.smoke_exit_after_result_frames,
             smoke_exit_on_result: options.smoke_exit_on_result,
             smoke_screenshot_path: options.smoke_screenshot_path.as_ref().map(PathBuf::from),
-            screenshot_toast: None,
+            left_overlay_toast: None,
             rendered_frames: 0,
             rendered_result_frames: 0,
             app_started_at: now,
@@ -2555,7 +2555,7 @@ impl WinitApp {
     fn left_overlay_text(&self) -> String {
         resolve_left_overlay_text(
             self.renderer.has_pending_screenshot(),
-            self.screenshot_toast
+            self.left_overlay_toast
                 .as_ref()
                 .map(|toast| (toast.message.as_str(), toast.shown_at.elapsed())),
             &self.song_scan_overlay_text(),
@@ -5550,6 +5550,11 @@ impl WinitApp {
                 self.reload_select_items();
                 self.restart_select_bar_timer_without_scroll(Instant::now());
                 self.play_system_sound(crate::system_sound::SoundType::OptionChange);
+                self.show_left_overlay_toast(if enabled {
+                    "お気に入りの譜面に追加しました"
+                } else {
+                    "お気に入りの譜面から削除しました"
+                });
                 tracing::info!(enabled, title = row.display_title(), "favorite chart toggled");
             }
             Err(error) => tracing::error!(%error, "failed to toggle favorite chart"),
@@ -5586,6 +5591,11 @@ impl WinitApp {
                 self.reload_select_items();
                 self.restart_select_bar_timer_without_scroll(Instant::now());
                 self.play_system_sound(crate::system_sound::SoundType::OptionChange);
+                self.show_left_overlay_toast(if enabled {
+                    "お気に入りの曲に追加しました"
+                } else {
+                    "お気に入りの曲から削除しました"
+                });
                 tracing::info!(enabled, title = row.display_title(), "favorite song toggled");
             }
             Err(error) => tracing::error!(%error, "failed to toggle favorite song"),
@@ -11814,9 +11824,13 @@ impl WinitApp {
             "スクリーンショットを保存しました".to_string()
         };
         // トーストは次フレーム以降に出す。撮影フレームでは has_pending_screenshot で隠す。
-        self.screenshot_toast =
-            Some(ScreenshotToast { message: toast_message, shown_at: Instant::now() });
+        self.show_left_overlay_toast(toast_message);
         self.notify_obs_save_recording(crate::obs::ObsRecordingSaveReason::OnScreenshot);
+    }
+
+    fn show_left_overlay_toast(&mut self, message: impl Into<String>) {
+        self.left_overlay_toast =
+            Some(LeftOverlayToast { message: message.into(), shown_at: Instant::now() });
         if let Some(window) = &self.window {
             window.request_redraw();
         }
@@ -14227,7 +14241,7 @@ fn resolve_left_overlay_text(
 ) -> String {
     if !hide_toast
         && let Some((message, age)) = toast
-        && age < SCREENSHOT_TOAST_DURATION
+        && age < LEFT_OVERLAY_TOAST_DURATION
         && !message.is_empty()
     {
         return message.to_string();
@@ -21537,8 +21551,8 @@ mod tests {
     }
 
     #[test]
-    fn left_overlay_expires_screenshot_toast() {
-        let toast = Some(("スクリーンショットを保存しました", SCREENSHOT_TOAST_DURATION));
+    fn left_overlay_expires_toast() {
+        let toast = Some(("スクリーンショットを保存しました", LEFT_OVERLAY_TOAST_DURATION));
         assert_eq!(resolve_left_overlay_text(false, toast, ""), "");
     }
 
