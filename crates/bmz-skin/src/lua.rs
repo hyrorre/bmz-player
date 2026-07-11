@@ -614,6 +614,7 @@ struct MainStateProbe {
     next_dynamic_timer_id: i32,
     dynamic_timers: Vec<(i32, String)>,
     fixed_delay_timers: Vec<(i32, i32, i32)>,
+    keylogger_destination_occurrences: BTreeMap<String, usize>,
     load_dependencies: Option<Arc<Mutex<SkinLoadDependencies>>>,
 }
 
@@ -640,6 +641,7 @@ impl Default for MainStateProbe {
             next_dynamic_timer_id: SKIN_DYNAMIC_TIMER_BASE,
             dynamic_timers: Vec::new(),
             fixed_delay_timers: Vec::new(),
+            keylogger_destination_occurrences: BTreeMap::new(),
             load_dependencies: None,
         }
     }
@@ -2509,6 +2511,19 @@ fn lua_table_to_json(
         warnings.push(format!("mixed lua table converted to object at {path}"));
     }
     let object_id = lua_object_id(&entries);
+    let keylogger_destination = object_id.as_deref().and_then(parse_keylogger_destination_id);
+    let keylogger_slot = if path.contains(".destination[") && keylogger_destination.is_some() {
+        object_id.as_deref().and_then(|id| {
+            let mut probe = main_state_probe.lock().ok()?;
+            let occurrence =
+                probe.keylogger_destination_occurrences.entry(id.to_string()).or_default();
+            let slot = *occurrence % 16 + 1;
+            *occurrence += 1;
+            Some(slot)
+        })
+    } else {
+        None
+    };
     let mut object = JsonMap::new();
     for (key, value) in entries {
         let key = lua_key_to_json_key(key, path, warnings)?;
@@ -2636,6 +2651,15 @@ fn lua_table_to_json(
                 continue;
             }
             if key == "draw" {
+                if let (Some((graph_kind, lane, Some(kind))), Some(slot)) =
+                    (keylogger_destination, keylogger_slot)
+                {
+                    object.insert(
+                        key.clone(),
+                        JsonValue::String(format!("keylogger_{graph_kind}({lane},{slot},{kind})")),
+                    );
+                    continue;
+                }
                 if let Some(draw) =
                     infer_boolean_predicate(function, main_state_probe, object_id.as_deref())
                 {
@@ -2646,6 +2670,13 @@ fn lua_table_to_json(
                 continue;
             }
             if key == "timer" {
+                if let (Some((_, lane, _)), Some(slot)) = (keylogger_destination, keylogger_slot) {
+                    object.insert(
+                        "timer_expr".to_string(),
+                        JsonValue::String(format!("bmz:keylogger_event:{lane}:{slot}")),
+                    );
+                    continue;
+                }
                 if path.contains(".customTimers[")
                     && let Some(id) = object_id.as_deref().and_then(|id| id.parse::<i32>().ok())
                     && let Some((source_timer, delay_ms)) =
@@ -2715,6 +2746,19 @@ fn keylogger_graph_value_expr_from_id(id: &str) -> Option<String> {
         return None;
     }
     Some(format!("bmz:keylogger_graph:{graph_kind}:{lane}:{layer}"))
+}
+
+fn parse_keylogger_destination_id(id: &str) -> Option<(&'static str, usize, Option<&str>)> {
+    if let Some(rest) = id.strip_prefix("keylogger-note-judge-") {
+        let (lane, kind) = rest.split_once('-')?;
+        return Some(("judge", lane.parse().ok()?, Some(kind)));
+    }
+    if let Some(rest) = id.strip_prefix("keylogger-note-fastslow-") {
+        let (lane, kind) = rest.split_once('-')?;
+        return Some(("fastslow", lane.parse().ok()?, Some(kind)));
+    }
+    let lane = id.strip_prefix("keylogger-note-")?.parse().ok()?;
+    Some(("plain", lane, None))
 }
 
 fn lua_object_id(entries: &[(Value, Value)]) -> Option<String> {

@@ -2644,6 +2644,31 @@ mod tests {
                 .iter()
                 .all(|graph| { graph.value_expr.starts_with("bmz:keylogger_graph:") })
         );
+        let judge_color = load_lua_skin(
+            &skin_path,
+            SkinKind::Play,
+            &BTreeMap::from([("ノーツ色 Note Color".to_string(), "JUDGE".to_string())]),
+            &BTreeMap::new(),
+        )
+        .expect("PeacefulPlay judge-color key logger should decode");
+        let keylogger_notes = judge_color
+            .document
+            .destination
+            .iter()
+            .filter_map(|entry| match entry {
+                bmz_skin_document::DestinationListEntry::Single(destination)
+                    if destination.id.starts_with("keylogger-note-judge-") =>
+                {
+                    Some(destination)
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert!(!keylogger_notes.is_empty());
+        assert!(keylogger_notes.iter().all(|destination| {
+            destination.timer_expr.starts_with("bmz:keylogger_event:")
+                && destination.draw.starts_with("keylogger_judge(")
+        }));
         assert!(
             loaded.document.destination.iter().any(|destination| matches!(
                 destination,

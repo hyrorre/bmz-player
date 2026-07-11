@@ -1069,6 +1069,8 @@ pub struct SkinDrawState {
     pub keylogger_fast_slow_counts: [[u32; 3]; LANE_COUNT],
     /// display lane別、直近16 Pressの開始時刻からの経過ms。
     pub keylogger_event_ms: [[Option<i32>; 16]; LANE_COUNT],
+    pub keylogger_event_judge: [[u8; 16]; LANE_COUNT],
+    pub keylogger_event_fast_slow: [[u8; 16]; LANE_COUNT],
     pub keylogger_exclude_cool: bool,
     /// 過去ベスト max combo (ref 172)。
     pub best_max_combo: Option<u32>,
@@ -1303,6 +1305,8 @@ impl Default for SkinDrawState {
             keylogger_judge_counts: [[0; 4]; LANE_COUNT],
             keylogger_fast_slow_counts: [[0; 3]; LANE_COUNT],
             keylogger_event_ms: [[None; 16]; LANE_COUNT],
+            keylogger_event_judge: [[0; 16]; LANE_COUNT],
+            keylogger_event_fast_slow: [[0; 16]; LANE_COUNT],
             keylogger_exclude_cool: false,
             best_max_combo: None,
             target_max_combo: None,
@@ -1370,6 +1374,9 @@ struct KeyLoggerRuntime {
     judge_counts: [[u32; 4]; LANE_COUNT],
     fast_slow_counts: [[u32; 3]; LANE_COUNT],
     event_started_ms: [[Option<i32>; 16]; LANE_COUNT],
+    event_started_us: [[Option<i64>; 16]; LANE_COUNT],
+    event_judge: [[u8; 16]; LANE_COUNT],
+    event_fast_slow: [[u8; 16]; LANE_COUNT],
     next_event_slot: [usize; LANE_COUNT],
 }
 
@@ -1483,6 +1490,9 @@ impl KeyLoggerRuntime {
                     let slot = self.next_event_slot[lane];
                     self.event_started_ms[lane][slot] =
                         Some((input.time.0 / 1_000).clamp(i32::MIN as i64, i32::MAX as i64) as i32);
+                    self.event_started_us[lane][slot] = Some(input.time.0);
+                    self.event_judge[lane][slot] = 0;
+                    self.event_fast_slow[lane][slot] = 0;
                     self.next_event_slot[lane] = (slot + 1) % 16;
                 }
                 SkinRuntimeEventKind::Judgement(judgement) => {
@@ -1510,6 +1520,11 @@ impl KeyLoggerRuntime {
                         self.fast_slow_counts[lane][side] =
                             self.fast_slow_counts[lane][side].saturating_add(1);
                     }
+                    let slot = (self.next_event_slot[lane] + 15) % 16;
+                    if self.event_started_us[lane][slot] == Some(judgement.time.0) {
+                        self.event_judge[lane][slot] = (judge + 1) as u8;
+                        self.event_fast_slow[lane][slot] = side.map_or(0, |side| (side + 1) as u8);
+                    }
                 }
                 _ => {}
             }
@@ -1524,6 +1539,8 @@ impl KeyLoggerRuntime {
         state.keylogger_nps = self.press_history_us.len().min(999) as u32;
         state.keylogger_judge_counts = self.judge_counts;
         state.keylogger_fast_slow_counts = self.fast_slow_counts;
+        state.keylogger_event_judge = self.event_judge;
+        state.keylogger_event_fast_slow = self.event_fast_slow;
         for lane in 0..LANE_COUNT {
             for slot in 0..16 {
                 state.keylogger_event_ms[lane][slot] =
@@ -2916,7 +2933,7 @@ impl SkinDocumentRenderExt for SkinDocument {
         }
 
         let value_for_destination = values.get(destination.id.as_str()).copied();
-        let elapsed = skin_timer_elapsed_ms(destination.timer, state).or_else(|| {
+        let elapsed = destination_timer_elapsed_ms(destination, state).or_else(|| {
             value_for_destination
                 .filter(|value| pre_ready_lane_cover_value_destination(destination, value, state))
                 .map(|_| 0)
@@ -7402,6 +7419,14 @@ fn eval_skin_draw_condition(condition: &str, state: &SkinDrawState) -> bool {
 }
 
 fn eval_skin_draw_term(term: &str, state: &SkinDrawState) -> Option<bool> {
+    if let Some((graph_kind, lane, slot, kind)) = parse_keylogger_draw_predicate(term) {
+        let actual = match graph_kind {
+            "judge" => state.keylogger_event_judge.get(lane)?.get(slot).copied()?,
+            "fastslow" => state.keylogger_event_fast_slow.get(lane)?.get(slot).copied()?,
+            _ => return None,
+        };
+        return Some(actual == kind);
+    }
     if let Some(option_id) = parse_skin_option_operand(term) {
         return Some(test_skin_op(option_id, &[], state));
     }
@@ -7428,6 +7453,43 @@ fn eval_skin_draw_term(term: &str, state: &SkinDrawState) -> Option<bool> {
         });
     }
     None
+}
+
+fn parse_keylogger_draw_predicate(term: &str) -> Option<(&str, usize, usize, u8)> {
+    let inner = term.strip_prefix("keylogger_")?.strip_suffix(')')?;
+    let (graph_kind, args) = inner.split_once('(')?;
+    let mut args = args.split(',');
+    let lane = args.next()?.trim().parse::<usize>().ok()?.checked_sub(1)?;
+    let slot = args.next()?.trim().parse::<usize>().ok()?.checked_sub(1)?;
+    let kind_name = args.next()?.trim();
+    if args.next().is_some() || lane >= LANE_COUNT || slot >= 16 {
+        return None;
+    }
+    let kind = match (graph_kind, kind_name) {
+        ("judge", "none") | ("fastslow", "none") => 0,
+        ("judge", "cool") | ("fastslow", "cool") => 1,
+        ("judge", "great") | ("fastslow", "fast") => 2,
+        ("judge", "good") | ("fastslow", "slow") => 3,
+        ("judge", "bad") => 4,
+        _ => return None,
+    };
+    Some((graph_kind, lane, slot, kind))
+}
+
+fn destination_timer_elapsed_ms(
+    destination: &SkinDestinationDef,
+    state: &SkinDrawState,
+) -> Option<i32> {
+    if let Some(rest) = destination.timer_expr.strip_prefix("bmz:keylogger_event:") {
+        let mut parts = rest.split(':');
+        let lane = parts.next()?.parse::<usize>().ok()?.checked_sub(1)?;
+        let slot = parts.next()?.parse::<usize>().ok()?.checked_sub(1)?;
+        if parts.next().is_some() {
+            return None;
+        }
+        return state.keylogger_event_ms.get(lane)?.get(slot).copied().flatten();
+    }
+    skin_timer_elapsed_ms(destination.timer, state)
 }
 
 fn eval_skin_draw_operand(operand: &str, state: &SkinDrawState) -> Option<f32> {
@@ -12515,6 +12577,14 @@ mod tests {
         assert_eq!(state.keylogger_judge_counts[0], [0, 1, 0, 0]);
         assert_eq!(state.keylogger_fast_slow_counts[0], [0, 1, 0]);
         assert_eq!(state.keylogger_event_ms[0][0], Some(0));
+        assert!(eval_skin_draw_condition("keylogger_judge(1,1,great)", &state));
+        assert!(eval_skin_draw_condition("keylogger_fastslow(1,1,fast)", &state));
+        assert!(!eval_skin_draw_condition("keylogger_judge(1,1,bad)", &state));
+        let destination: SkinDestinationDef = serde_json::from_str(
+            r#"{"id":"keylogger-note-1","timer_expr":"bmz:keylogger_event:1:1","dst":[]}"#,
+        )
+        .unwrap();
+        assert_eq!(destination_timer_elapsed_ms(&destination, &state), Some(0));
         assert!(
             (keylogger_graph_value("bmz:keylogger_graph:judge:1:great", &state).unwrap() - 1.0)
                 .abs()
@@ -13791,6 +13861,7 @@ mod tests {
                 blend: 0,
                 filter: 0,
                 timer: None,
+                timer_expr: String::new(),
                 loop_time: None,
                 center: 0,
                 offset: 0,
