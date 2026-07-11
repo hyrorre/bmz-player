@@ -48,6 +48,20 @@ describe('ranking best row aggregation', () => {
     expect(2 + MAX_LOCAL_BACKFILL_DELETE_BATCH_SIZE * 5).toBeLessThanOrEqual(100)
   })
 
+  test('retains normal scores when cleanup candidates are mixed', () => {
+    expect(
+      __test.partitionLocalBackfillRows([
+        { id: 'backfill', play_options: { submission_source: 'local_backfill' } },
+        { id: 'normal', play_options: { device_type: 'keyboard' } },
+      ]),
+    ).toEqual({
+      localBackfillRows: [
+        { id: 'backfill', play_options: { submission_source: 'local_backfill' } },
+      ],
+      retainedScoreIds: ['normal'],
+    })
+  })
+
   test('reads arrange options from new and legacy play options', () => {
     expect(
       __test.arrangeOptionsFromPlayOptions({

@@ -91,11 +91,11 @@ GET    /api/v1/courses/{course_hash}/ranking   # global のみ
   per-history ghost は現在の `score_history` には保持していないため送らない。
 - import cleanup: `bmz ir cleanup-imported` は、Beatoraja 行と譜面 hash、プレイ日時、
   EX、全判定内訳、BP、CB、max combo、random seed が一致する旧 `source_kind=Local`
-  履歴を dry-run で表示する。`--apply` はまず選択した provider/account の
-  `local_backfill` score を server 側で削除して affected `best_scores` を残存 history
-  から再構築し、次にローカルの IR job/submission 台帳を削除してから `score.db` の
-  履歴、`score_best`、`player_stats` を再集計する。別 IR account への送信済み候補が
-  ある場合は、ローカル削除を止める。
+  履歴を dry-run で表示する。`--apply` は選択した provider/account の明示的な
+  `local_backfill` score だけを server 側で削除して affected `best_scores` を残存 history
+  から再構築する。ローカル重複に対応する通常プレイまたは旧形式の IR score は保持し、
+  次にローカルの IR job/submission 台帳を削除してから `score.db` の履歴、`score_best`、
+  `player_stats` を再集計する。別 IR account への送信済み候補がある場合は、ローカル削除を止める。
 - rate limit: score submit / course score は 15 分あたり user 6000 / IP 12000。
   replay upload 系は 1 replay あたり upload-url / upload / verify の 3 request を使うため、
   15 分あたり user 900 / IP 1800。429 では `Retry-After` を返す。

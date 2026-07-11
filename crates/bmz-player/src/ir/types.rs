@@ -200,6 +200,10 @@ pub struct IrLocalBackfillDeleteResponse {
     pub deleted_score_ids: Vec<String>,
     #[serde(default)]
     pub missing_score_ids: Vec<String>,
+    /// ローカル重複に対応するが `local_backfill` と明示されていない既存 IR score。
+    /// 通常プレイを誤削除しないため、サーバーは保持したまま返す。
+    #[serde(default)]
+    pub retained_score_ids: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -493,5 +497,18 @@ mod tests {
             global.data.as_ref().unwrap().ranking.pagination.as_ref().unwrap().total,
             Some(1)
         );
+    }
+
+    #[test]
+    fn local_backfill_delete_response_keeps_untagged_scores() {
+        let response: IrLocalBackfillDeleteResponse = serde_json::from_value(serde_json::json!({
+            "deleted_score_ids": ["backfill-score"],
+            "retained_score_ids": ["verified-play-score"]
+        }))
+        .unwrap();
+
+        assert_eq!(response.deleted_score_ids, ["backfill-score"]);
+        assert_eq!(response.retained_score_ids, ["verified-play-score"]);
+        assert!(response.missing_score_ids.is_empty());
     }
 }

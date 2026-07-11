@@ -653,7 +653,7 @@ async fn cleanup_imported_scores(
     println!("old Local candidates: {}", plan.legacy_history_ids.len());
     println!("retained Beatoraja rows: {}", plan.retained_beatoraja_history_ids.len());
     println!(
-        "submitted local backfill scores for selected provider: {}",
+        "submitted IR scores linked to old Local candidates for selected provider: {}",
         selected_remote_score_ids.len()
     );
     if !unselected_targets.is_empty() {
@@ -690,6 +690,7 @@ async fn cleanup_imported_scores(
         let client = BmzOfficialIrClient::new(&provider.base_url, credentials.access_token)?;
         let batches = selected_remote_score_ids.iter().cloned().collect::<Vec<_>>();
         let batch_count = batches.len().div_ceil(REMOTE_DELETE_BATCH_SIZE);
+        let mut retained_remote_score_ids = BTreeSet::new();
         for (index, score_ids) in batches.chunks(REMOTE_DELETE_BATCH_SIZE).enumerate() {
             if index > 0 {
                 tokio::time::sleep(std::time::Duration::from_millis(
@@ -712,6 +713,7 @@ async fn cleanup_imported_scores(
                 .deleted_score_ids
                 .iter()
                 .chain(&response.missing_score_ids)
+                .chain(&response.retained_score_ids)
                 .cloned()
                 .collect::<BTreeSet<_>>();
             if requested != returned {
@@ -720,6 +722,13 @@ async fn cleanup_imported_scores(
                     index + 1
                 );
             }
+            retained_remote_score_ids.extend(response.retained_score_ids);
+        }
+        if !retained_remote_score_ids.is_empty() {
+            println!(
+                "retained IR scores not marked local_backfill: {}",
+                retained_remote_score_ids.len()
+            );
         }
     }
 

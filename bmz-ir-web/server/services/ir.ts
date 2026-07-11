@@ -128,6 +128,7 @@ interface BestScoreKey {
 export interface LocalBackfillDeleteResult {
   deleted_score_ids: string[]
   missing_score_ids: string[]
+  retained_score_ids: string[]
 }
 
 export function parseRankingQuery(query: Record<string, unknown>): RankingQuery {
@@ -464,18 +465,16 @@ export async function deleteLocalBackfillScores(
     .where(and(eq(schema.scores.playerId, user.id), inArray(schema.scores.id, scoreIds)))
 
   const foundIds = new Set(rows.map((row) => row.id))
-  const nonBackfillIds = rows
-    .filter((row) => row.play_options?.submission_source !== LOCAL_BACKFILL_SOURCE)
-    .map((row) => row.id)
-  if (nonBackfillIds.length > 0) {
-    throw new IrBackfillCleanupError(`scores are not local backfills: ${nonBackfillIds.join(', ')}`)
-  }
-
-  const deletedScoreIds = rows.map((row) => row.id)
+  const { localBackfillRows, retainedScoreIds } = partitionLocalBackfillRows(rows)
+  const deletedScoreIds = localBackfillRows.map((row) => row.id)
   if (deletedScoreIds.length === 0) {
-    return { deleted_score_ids: [], missing_score_ids: scoreIds }
+    return {
+      deleted_score_ids: [],
+      missing_score_ids: scoreIds.filter((id) => !foundIds.has(id)),
+      retained_score_ids: retainedScoreIds,
+    }
   }
-  const affectedKeys = uniqueBestScoreKeys(rows)
+  const affectedKeys = uniqueBestScoreKeys(localBackfillRows)
   const affectedConditions = affectedKeys.map(bestScoreKeyCondition)
   const affectedWhere = and(eq(schema.bestScores.playerId, user.id), or(...affectedConditions))
   const remainingWhere = and(
@@ -561,6 +560,23 @@ export async function deleteLocalBackfillScores(
   return {
     deleted_score_ids: deletedScoreIds,
     missing_score_ids: scoreIds.filter((id) => !foundIds.has(id)),
+    retained_score_ids: retainedScoreIds,
+  }
+}
+
+function partitionLocalBackfillRows<
+  TRow extends { id: string; play_options: Record<string, unknown> | null },
+>(rows: TRow[]): { localBackfillRows: TRow[]; retainedScoreIds: string[] } {
+  const localBackfillRows = rows.filter(
+    (row) => row.play_options?.submission_source === LOCAL_BACKFILL_SOURCE,
+  )
+  return {
+    localBackfillRows,
+    // Legacy cleanup candidates can include a locally linked, verified normal play.
+    // Never delete it remotely merely because its local score_history row was reimported.
+    retainedScoreIds: rows
+      .filter((row) => row.play_options?.submission_source !== LOCAL_BACKFILL_SOURCE)
+      .map((row) => row.id),
   }
 }
 
@@ -1662,6 +1678,7 @@ export const __test = {
   dedupeBestRowsByPlayer,
   bestRowsFromHistory,
   uniqueBestScoreKeys,
+  partitionLocalBackfillRows,
   verificationStatusForSignedSubmission,
   idempotentScoreResponse,
   scoreSubmissionMetadata,
