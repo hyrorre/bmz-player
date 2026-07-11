@@ -137,13 +137,13 @@ fn collect_play_9k_settings_bindings(
                 back.insert(entry.control.clone());
             }
             LaneConfig::Key4 => {
-                increase.insert(entry.control.clone());
+                decrease.insert(entry.control.clone());
             }
             LaneConfig::Key5 | LaneConfig::Key7 => {
                 confirm.insert(entry.control.clone());
             }
             LaneConfig::Key6 => {
-                decrease.insert(entry.control.clone());
+                increase.insert(entry.control.clone());
             }
             _ => {}
         }
@@ -576,8 +576,8 @@ mod tests {
         assert!(bindings.is_confirm("C"));
         assert!(bindings.is_confirm("V"));
         assert!(bindings.is_back("X"));
-        assert!(bindings.is_increase("D"));
-        assert!(bindings.is_decrease("F"));
+        assert!(bindings.is_decrease("D"));
+        assert!(bindings.is_increase("F"));
         assert!(!bindings.is_confirm("Z"));
         assert!(!bindings.is_back("S"));
     }

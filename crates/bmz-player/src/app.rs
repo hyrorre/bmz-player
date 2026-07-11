@@ -3732,6 +3732,10 @@ impl WinitApp {
 
     fn sync_select_settings_from_profile_if_needed(&mut self, entry_id: SettingsEntryId) {
         self.sync_select_play_options_from_profile_if_needed(entry_id);
+        if entry_id == SettingsEntryId::SelectInputMode {
+            self.select_keys = SelectKeyBindings::from_profile(&self.boot.profile_config.input);
+            self.sync_select_holds_from_pressed_controls();
+        }
         if SettingsEntryId::VOLUME_ENTRIES.contains(&entry_id) {
             self.sync_realtime_profile_settings();
         }
@@ -17622,8 +17626,8 @@ impl SelectKeyBindings {
             merge_select_controls(key5_controls.clone(), key7_controls.clone()),
         );
         let back = merge_select_controls(actions_for(InputActionConfig::E2), key3_controls.clone());
-        let select_previous_controls = key6_controls.clone();
-        let select_next_controls = key4_controls.clone();
+        let select_previous_controls = key4_controls.clone();
+        let select_next_controls = key6_controls.clone();
         let target_previous_controls = key8_controls.clone();
         let target_next_controls = key9_controls.clone();
         let e_action_controls: Vec<(InputActionConfig, String)> = [
@@ -18000,9 +18004,11 @@ fn push_scratch_controls(
             push_scratch_control(down_controls, up_controls, control);
         }
         None => {
-            if is_scratch_up_control(&control) {
+            if is_scratch_up_control(&control) || is_legacy_keyboard_scratch_up_control(&control) {
                 push_scratch_control(up_controls, down_controls, control);
-            } else if is_scratch_down_control(&control) {
+            } else if is_scratch_down_control(&control)
+                || is_legacy_keyboard_scratch_down_control(&control)
+            {
                 push_scratch_control(down_controls, up_controls, control);
             } else {
                 push_unique_control(up_controls, control.clone());
@@ -18010,6 +18016,18 @@ fn push_scratch_controls(
             }
         }
     }
+}
+
+/// scratch direction が保存されていなかった旧 keyboard 設定の既定方向。
+///
+/// 旧 profile は `scratch` フィールドなしで Shift / Control を保存していたため、
+/// 方向を推測できないまま両方の選曲移動へ登録されていた。
+fn is_legacy_keyboard_scratch_up_control(control: &str) -> bool {
+    matches!(control, "LShift" | "RShift")
+}
+
+fn is_legacy_keyboard_scratch_down_control(control: &str) -> bool {
+    matches!(control, "LControl" | "RControl")
 }
 
 fn push_scratch_control(
@@ -19735,11 +19753,11 @@ mod tests {
 
         assert_eq!(
             select_action(PhysicalKey::Code(KeyCode::KeyF), ElementState::Pressed, false, &keys),
-            Some(SelectAction::Move(SelectMove::Previous))
+            Some(SelectAction::Move(SelectMove::Next))
         );
         assert_eq!(
             select_action(PhysicalKey::Code(KeyCode::KeyD), ElementState::Pressed, false, &keys),
-            Some(SelectAction::Move(SelectMove::Next))
+            Some(SelectAction::Move(SelectMove::Previous))
         );
         assert_eq!(
             select_action(PhysicalKey::Code(KeyCode::KeyC), ElementState::Pressed, false, &keys),

@@ -3,7 +3,7 @@ use bmz_core::lane::KeyMode;
 use super::play::{lane_from_config, lane_to_config};
 use super::play_input::{
     default_play_bindings, gamepad_play_binding_for_device, is_gamepad_device, play_binding,
-    resolve_play_bindings,
+    resolve_play_bindings, scratch_play_binding,
 };
 use super::profile_config::{
     BindingConfigEntry, InputActionConfig, LaneConfig, PlayModeInputConfig, ProfileConfig,
@@ -402,15 +402,43 @@ fn read_scratch_keyboard_slots(
     bindings: &[BindingConfigEntry],
     lane: LaneConfig,
 ) -> ScratchKeyboardSlots {
-    let keys = keyboard_controls_for_lane(bindings, lane);
     let mut slots = ScratchKeyboardSlots::default();
-    if keys.is_empty() {
-        return slots;
+    let mut up = Vec::new();
+    let mut down = Vec::new();
+    let mut undirected = Vec::new();
+
+    for entry in
+        bindings.iter().filter(|entry| entry.device == "keyboard" && entry.lane == Some(lane))
+    {
+        match entry.scratch {
+            Some(ScratchDirectionConfig::Up) => up.push(entry.control.clone()),
+            Some(ScratchDirectionConfig::Down) => down.push(entry.control.clone()),
+            None => undirected.push(entry.control.clone()),
+        }
     }
-    slots.up_primary = keys.first().cloned();
-    slots.down_primary = keys.get(1).cloned().or_else(|| keys.first().cloned());
-    slots.up_secondary = keys.get(2).cloned();
-    slots.down_secondary = keys.get(3).cloned().or_else(|| keys.get(2).cloned());
+
+    slots.up_primary = up.first().cloned();
+    slots.up_secondary = up.get(1).cloned();
+    slots.down_primary = down.first().cloned();
+    slots.down_secondary = down.get(1).cloned();
+
+    // scratch direction を持たない旧 profile は従来の表示順
+    // (UP, DOWN, UP, DOWN) をフォールバックとして使う。
+    for (index, control) in undirected.into_iter().enumerate() {
+        match index {
+            0 if slots.up_primary.is_none() => slots.up_primary = Some(control),
+            1 if slots.down_primary.is_none() => slots.down_primary = Some(control),
+            2 if slots.up_secondary.is_none() => slots.up_secondary = Some(control),
+            3 if slots.down_secondary.is_none() => slots.down_secondary = Some(control),
+            _ => {}
+        }
+    }
+    if slots.down_primary.is_none() {
+        slots.down_primary = slots.up_primary.clone();
+    }
+    if slots.down_secondary.is_none() {
+        slots.down_secondary = slots.up_secondary.clone();
+    }
     slots
 }
 
@@ -668,14 +696,14 @@ fn write_scratch_keyboard_bindings(
     slots: &ScratchKeyboardSlots,
 ) {
     remove_lane_device_bindings(bindings, lane, "keyboard");
-    for control in [
-        slots.up_primary.as_deref(),
-        slots.down_primary.as_deref(),
-        slots.up_secondary.as_deref(),
-        slots.down_secondary.as_deref(),
+    for (control, direction) in [
+        (slots.up_primary.as_deref(), ScratchDirectionConfig::Up),
+        (slots.down_primary.as_deref(), ScratchDirectionConfig::Down),
+        (slots.up_secondary.as_deref(), ScratchDirectionConfig::Up),
+        (slots.down_secondary.as_deref(), ScratchDirectionConfig::Down),
     ] {
         if let Some(control) = control.filter(|value| !value.is_empty()) {
-            bindings.push(play_binding(control, lane));
+            bindings.push(scratch_play_binding(control, lane, direction));
         }
     }
 }
@@ -1254,6 +1282,13 @@ mod tests {
             ),
             "W"
         );
+        let bindings = resolve_play_bindings(&profile.input, KeyMode::K7).unwrap();
+        assert!(bindings.iter().any(|entry| {
+            entry.control == "Q" && entry.scratch == Some(ScratchDirectionConfig::Up)
+        }));
+        assert!(bindings.iter().any(|entry| {
+            entry.control == "W" && entry.scratch == Some(ScratchDirectionConfig::Down)
+        }));
     }
 
     #[test]
