@@ -881,6 +881,36 @@ mod tests {
     }
 
     #[test]
+    fn lua_skin_mz_select_result_title_becomes_runtime_expr() {
+        let root = unique_test_dir("bmz-skin-lua-mz-select-result-title");
+        fs::create_dir_all(&root).unwrap();
+        fs::write(
+            root.join("result.luaskin"),
+            r#"
+            local main_state = require("main_state")
+            local title = main_state.text(1002) .. " " .. main_state.text(1001)
+            if title then title = title .. " " end
+            title = title .. main_state.text(12)
+            return {
+                type = 7,
+                text = {{ id = "title", font = 0, size = 24, constantText = title }},
+            }
+            "#,
+        )
+        .unwrap();
+
+        let loaded =
+            load_lua_skin_value(&root.join("result.luaskin"), &BTreeMap::new(), &BTreeMap::new())
+                .unwrap();
+
+        assert_eq!(
+            loaded.value["text"][0]["value_expr"],
+            bmz_skin_document::SKIN_EXPR_RESULT_TABLE_TITLE
+        );
+        assert!(loaded.value["text"][0].get("constantText").is_none());
+    }
+
+    #[test]
     fn lua_skin_event_util_module_loads_custom_event_helpers() {
         let root = unique_test_dir("bmz-skin-lua");
         fs::create_dir_all(&root).unwrap();

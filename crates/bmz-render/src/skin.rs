@@ -10200,6 +10200,14 @@ fn skin_state_text_with_draw_state(
     draw_state: Option<&SkinDrawState>,
     state: &SkinTextState<'_>,
 ) -> String {
+    if text.value_expr.trim() == SKIN_EXPR_RESULT_TABLE_TITLE {
+        return format!(
+            "{} {} {}",
+            state.table_level,
+            state.table_text_primary,
+            full_label(state.title, state.subtitle)
+        );
+    }
     if !text.constant_text.is_empty() {
         return text.constant_text.clone();
     }
@@ -22923,6 +22931,23 @@ mod tests {
             ),
             "Song Title"
         );
+    }
+
+    #[test]
+    fn skin_state_text_formats_result_table_title_expr() {
+        let text = SkinTextDef {
+            value_expr: SKIN_EXPR_RESULT_TABLE_TITLE.to_string(),
+            ..SkinTextDef::default()
+        };
+        let state = SkinTextState {
+            title: "Song",
+            subtitle: "Another",
+            table_text_primary: "Insane",
+            table_level: "★12",
+            ..SkinTextState::default()
+        };
+
+        assert_eq!(skin_state_text(&text, &state), "★12 Insane Song Another");
     }
 
     #[test]

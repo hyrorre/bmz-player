@@ -15,7 +15,7 @@ use bmz_skin_document::{
     SKIN_EXPR_ADJUSTED_RATE_ADOT, SKIN_EXPR_COURSE_TABLE_TEXT,
     SKIN_EXPR_FAST_SLOW_BREAKDOWN_HEIGHT, SKIN_EXPR_FS_THRESHOLD, SKIN_EXPR_GAUGE_AMOUNT_FRACTION,
     SKIN_EXPR_GAUGE_AMOUNT_INTEGER, SKIN_EXPR_GAUGE_PERCENT_FRACTION,
-    SKIN_EXPR_GAUGE_PERCENT_INTEGER, SKIN_REF_PLAY_GAUGE_TYPE,
+    SKIN_EXPR_GAUGE_PERCENT_INTEGER, SKIN_EXPR_RESULT_TABLE_TITLE, SKIN_REF_PLAY_GAUGE_TYPE,
 };
 
 use crate::{
@@ -2807,7 +2807,26 @@ fn lua_table_to_json(
             )?,
         );
     }
+    repair_result_table_title_text(path, &mut object);
     Ok(JsonValue::Object(object))
+}
+
+fn repair_result_table_title_text(path: &str, object: &mut JsonMap<String, JsonValue>) {
+    if !path.contains(".text[") || object.get("id").and_then(JsonValue::as_str) != Some("title") {
+        return;
+    }
+    let expected = format!(
+        "{LUA_TEXT_REF_SENTINEL_PREFIX}1002{LUA_TEXT_REF_SENTINEL_SUFFIX} \
+         {LUA_TEXT_REF_SENTINEL_PREFIX}1001{LUA_TEXT_REF_SENTINEL_SUFFIX} "
+    );
+    if object.get("constantText").and_then(JsonValue::as_str) != Some(expected.as_str()) {
+        return;
+    }
+    object.remove("constantText");
+    object.insert(
+        "value_expr".to_string(),
+        JsonValue::String(SKIN_EXPR_RESULT_TABLE_TITLE.to_string()),
+    );
 }
 
 fn keylogger_graph_value_expr_from_id(id: &str) -> Option<String> {
