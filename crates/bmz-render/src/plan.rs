@@ -270,7 +270,7 @@ fn advance_skin_dynamic_timers(
     state: &mut crate::skin::SkinDrawState,
     now_ms: i32,
 ) {
-    if let Some(document) = skin.document().filter(|document| !document.dynamic_timers.is_empty()) {
+    if let Some(document) = skin.document() {
         runtime.advance(document, state, now_ms);
     }
 }

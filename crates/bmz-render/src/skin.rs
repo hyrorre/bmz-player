@@ -873,6 +873,10 @@ pub struct SkinDrawState {
     /// 各レーンのkeyoff(離した直後の演出)タイマー経過ms。Noneなら非アクティブ。
     /// beatoraja の TIMER_KEYOFF_1P_KEY1..7 (121..127) / SCRATCH (120) に対応。
     pub keyoff_ms: [Option<i32>; LANE_COUNT],
+    /// PeacefulPlay互換キービームの押下中表示状態。renderer runtimeが更新する。
+    pub keybeam_hold_active: [bool; LANE_COUNT],
+    /// PeacefulPlay互換キービームの解放フェード表示状態。renderer runtimeが更新する。
+    pub keybeam_fade_active: [bool; LANE_COUNT],
     /// 各レーンの LN ホールドタイマー経過ms。ホールド中のみ Some。
     /// beatoraja の TIMER_HOLD_1P (70..=77) / TIMER_HOLD_2P (80..=87) に対応。
     pub hold_ms: [Option<i32>; LANE_COUNT],
@@ -1126,6 +1130,8 @@ pub struct SkinDrawState {
     pub hit_error_ring_index: usize,
     /// `dynamicTimer` で定義された observe タイマーの経過 ms。None は timer_off。
     pub dynamic_timer_ms: [Option<i32>; SKIN_DYNAMIC_TIMER_COUNT],
+    /// Lua custom timerのうち固定delayとしてIR化できたタイマーの経過ms。
+    pub fixed_delay_timer_ms: HashMap<i32, i32>,
     /// 選曲画面の設定フォルダ内。曲メタデータ用の op / text / number を抑制する。
     pub in_settings: bool,
     /// 設定項目の編集モード中 (`in_settings` と併用)。
@@ -1186,6 +1192,8 @@ impl Default for SkinDrawState {
             bomb_ms: [None; LANE_COUNT],
             keyon_ms: [None; LANE_COUNT],
             keyoff_ms: [None; LANE_COUNT],
+            keybeam_hold_active: [false; LANE_COUNT],
+            keybeam_fade_active: [false; LANE_COUNT],
             hold_ms: [None; LANE_COUNT],
             hcn_active_ms: [None; LANE_COUNT],
             hcn_damage_ms: [None; LANE_COUNT],
@@ -1319,6 +1327,7 @@ impl Default for SkinDrawState {
                 bmz_gameplay::hit_error::HIT_ERROR_RING_LEN],
             hit_error_ring_index: 0,
             dynamic_timer_ms: [None; SKIN_DYNAMIC_TIMER_COUNT],
+            fixed_delay_timer_ms: HashMap::new(),
             in_settings: false,
             settings_editing: false,
             select_chart_key_mode: None,
@@ -1330,21 +1339,43 @@ impl Default for SkinDrawState {
 #[derive(Debug, Clone)]
 pub struct DynamicTimerRuntime {
     starts: [Option<i32>; SKIN_DYNAMIC_TIMER_COUNT],
+    keybeam_keyon_starts: [Option<i32>; LANE_COUNT],
+    keybeam_keyoff_starts: [Option<i32>; LANE_COUNT],
+    keybeam_suppressed: [bool; LANE_COUNT],
+    keybeam_fade_allowed: [bool; LANE_COUNT],
 }
 
 impl Default for DynamicTimerRuntime {
     fn default() -> Self {
-        Self { starts: [None; SKIN_DYNAMIC_TIMER_COUNT] }
+        Self {
+            starts: [None; SKIN_DYNAMIC_TIMER_COUNT],
+            keybeam_keyon_starts: [None; LANE_COUNT],
+            keybeam_keyoff_starts: [None; LANE_COUNT],
+            keybeam_suppressed: [false; LANE_COUNT],
+            keybeam_fade_allowed: [false; LANE_COUNT],
+        }
     }
 }
 
 impl DynamicTimerRuntime {
     pub fn reset(&mut self) {
-        self.starts = [None; SKIN_DYNAMIC_TIMER_COUNT];
+        *self = Self::default();
     }
 
     /// observe 条件を評価し、`state.dynamic_timer_ms` を更新する。
     pub fn advance(&mut self, document: &SkinDocument, state: &mut SkinDrawState, now_ms: i32) {
+        self.advance_keybeam(state, now_ms);
+        state.fixed_delay_timer_ms.clear();
+        for def in &document.fixed_delay_timers {
+            let Some(source_elapsed) = skin_timer_elapsed_ms(Some(def.source_timer), state) else {
+                continue;
+            };
+            if source_elapsed >= def.delay_ms {
+                state
+                    .fixed_delay_timer_ms
+                    .insert(def.id, source_elapsed.saturating_sub(def.delay_ms));
+            }
+        }
         for def in &document.dynamic_timers {
             let idx = def.id.saturating_sub(SKIN_DYNAMIC_TIMER_BASE) as usize;
             if idx >= SKIN_DYNAMIC_TIMER_COUNT {
@@ -1357,6 +1388,32 @@ impl DynamicTimerRuntime {
                 self.starts[idx] = None;
                 state.dynamic_timer_ms[idx] = None;
             }
+        }
+    }
+
+    fn advance_keybeam(&mut self, state: &mut SkinDrawState, now_ms: i32) {
+        for lane in 0..LANE_COUNT {
+            let keyon_start = state.keyon_ms[lane].map(|elapsed| now_ms.saturating_sub(elapsed));
+            let keyoff_start = state.keyoff_ms[lane].map(|elapsed| now_ms.saturating_sub(elapsed));
+
+            if keyon_start.is_some() && keyon_start != self.keybeam_keyon_starts[lane] {
+                self.keybeam_suppressed[lane] = false;
+                self.keybeam_fade_allowed[lane] = false;
+            }
+            if state.hold_ms[lane].is_some() && state.keyon_ms[lane].is_some() {
+                self.keybeam_suppressed[lane] = true;
+            }
+
+            state.keybeam_hold_active[lane] =
+                state.keyon_ms[lane].is_some() && !self.keybeam_suppressed[lane];
+            if keyoff_start.is_some() && keyoff_start != self.keybeam_keyoff_starts[lane] {
+                self.keybeam_fade_allowed[lane] = !self.keybeam_suppressed[lane];
+                self.keybeam_suppressed[lane] = false;
+            }
+            state.keybeam_fade_active[lane] =
+                keyoff_start.is_some() && self.keybeam_fade_allowed[lane];
+            self.keybeam_keyon_starts[lane] = keyon_start;
+            self.keybeam_keyoff_starts[lane] = keyoff_start;
         }
     }
 }
@@ -7307,6 +7364,14 @@ fn eval_skin_draw_atom_operand(operand: &str, state: &SkinDrawState) -> Option<f
     if let Some(timer_id) = parse_skin_timer_operand(operand) {
         return Some(skin_timer_elapsed_ms(Some(timer_id), state).unwrap_or(i32::MIN) as f32);
     }
+    if let Some(timer_id) = parse_skin_keybeam_operand(operand, "keybeam_hold") {
+        return keybeam_lane_for_keyon_timer(timer_id)
+            .map(|lane| i32::from(state.keybeam_hold_active[lane]) as f32);
+    }
+    if let Some(timer_id) = parse_skin_keybeam_operand(operand, "keybeam_fade") {
+        return keybeam_lane_for_keyoff_timer(timer_id)
+            .map(|lane| i32::from(state.keybeam_fade_active[lane]) as f32);
+    }
     match operand {
         "gauge()" | "gauge" => Some(state.gauge),
         "gauge_type()" | "gauge_type" => Some(state.gauge_type as f32),
@@ -7334,6 +7399,31 @@ fn parse_skin_float_number_operand(operand: &str) -> Option<i32> {
 fn parse_skin_event_index_operand(operand: &str) -> Option<i32> {
     let inner = operand.strip_prefix("event_index(")?.strip_suffix(')')?.trim();
     inner.parse::<i32>().ok()
+}
+
+fn parse_skin_keybeam_operand(operand: &str, name: &str) -> Option<i32> {
+    let inner = operand.strip_prefix(name)?.strip_prefix('(')?.strip_suffix(')')?.trim();
+    inner.parse::<i32>().ok()
+}
+
+fn keybeam_lane_for_keyon_timer(timer: i32) -> Option<usize> {
+    match timer {
+        100..=107 => Some((timer - 100) as usize),
+        108..=109 => Some(Lane::Key8.index() + (timer - 108) as usize),
+        110 => Some(Lane::Scratch2.index()),
+        111..=117 => Some(Lane::Key8.index() + (timer - 111) as usize),
+        _ => None,
+    }
+}
+
+fn keybeam_lane_for_keyoff_timer(timer: i32) -> Option<usize> {
+    match timer {
+        120..=127 => Some((timer - 120) as usize),
+        128..=129 => Some(Lane::Key8.index() + (timer - 128) as usize),
+        130 => Some(Lane::Scratch2.index()),
+        131..=137 => Some(Lane::Key8.index() + (timer - 131) as usize),
+        _ => None,
+    }
 }
 
 fn skin_state_event_index(event_id: i32, state: &SkinDrawState) -> i32 {
@@ -9009,7 +9099,7 @@ fn skin_timer_elapsed_ms(timer: Option<i32>, state: &SkinDrawState) -> Option<i3
             let idx = (id - SKIN_DYNAMIC_TIMER_BASE) as usize;
             state.dynamic_timer_ms[idx]
         }
-        _ => None,
+        Some(id) => state.fixed_delay_timer_ms.get(&id).copied(),
     }
 }
 
@@ -19698,6 +19788,30 @@ mod tests {
     }
 
     #[test]
+    fn fixed_delay_timer_starts_after_source_delay() {
+        let document: SkinDocument = serde_json::from_str(
+            r#"{
+                "type": 0, "w": 1, "h": 1, "destination": [],
+                "fixedDelayTimer": [{ "id": 11900, "sourceTimer": 143, "delayMs": 1000 }]
+            }"#,
+        )
+        .unwrap();
+        let mut runtime = DynamicTimerRuntime::default();
+        let mut state = SkinDrawState { end_of_note_ms: Some(999), ..SkinDrawState::default() };
+
+        runtime.advance(&document, &mut state, 5_000);
+        assert_eq!(skin_timer_elapsed_ms(Some(11900), &state), None);
+
+        state.end_of_note_ms = Some(1_250);
+        runtime.advance(&document, &mut state, 5_251);
+        assert_eq!(skin_timer_elapsed_ms(Some(11900), &state), Some(250));
+
+        state.end_of_note_ms = None;
+        runtime.advance(&document, &mut state, 5_252);
+        assert_eq!(skin_timer_elapsed_ms(Some(11900), &state), None);
+    }
+
+    #[test]
     fn timer_zero_uses_scene_elapsed_time() {
         let state = SkinDrawState { elapsed_ms: 1_800, ..SkinDrawState::default() };
 
@@ -20120,6 +20234,47 @@ mod tests {
         assert_eq!(skin_state_event_index(506, &state), 8);
         assert_eq!(skin_state_event_index(507, &state), 0);
         assert_eq!(skin_state_event_index(511, &state), 1);
+    }
+
+    #[test]
+    fn keybeam_runtime_suppresses_ln_press_and_its_release_fade() {
+        let document: SkinDocument =
+            serde_json::from_str(r#"{ "type": 0, "w": 1, "h": 1, "destination": [] }"#).unwrap();
+        let mut runtime = DynamicTimerRuntime::default();
+        let mut state = SkinDrawState::default();
+        let lane = Lane::Key1.index();
+
+        state.keyon_ms[lane] = Some(0);
+        runtime.advance(&document, &mut state, 100);
+        assert!(state.keybeam_hold_active[lane]);
+
+        state.keyon_ms[lane] = Some(10);
+        state.hold_ms[lane] = Some(0);
+        runtime.advance(&document, &mut state, 110);
+        assert!(!state.keybeam_hold_active[lane]);
+
+        state.keyon_ms[lane] = None;
+        state.hold_ms[lane] = None;
+        state.keyoff_ms[lane] = Some(0);
+        runtime.advance(&document, &mut state, 120);
+        assert!(!state.keybeam_fade_active[lane]);
+
+        state.keyoff_ms[lane] = None;
+        state.keyon_ms[lane] = Some(0);
+        runtime.advance(&document, &mut state, 200);
+        state.keyon_ms[lane] = None;
+        state.keyoff_ms[lane] = Some(0);
+        runtime.advance(&document, &mut state, 210);
+        assert!(state.keybeam_fade_active[lane]);
+        assert!(eval_skin_draw_condition("keybeam_fade(121) != 0", &state));
+    }
+
+    #[test]
+    fn keybeam_timer_lane_mapping_matches_skin_timer_mapping() {
+        assert_eq!(keybeam_lane_for_keyon_timer(108), Some(Lane::Key8.index()));
+        assert_eq!(keybeam_lane_for_keyon_timer(110), Some(Lane::Scratch2.index()));
+        assert_eq!(keybeam_lane_for_keyoff_timer(128), Some(Lane::Key8.index()));
+        assert_eq!(keybeam_lane_for_keyoff_timer(130), Some(Lane::Scratch2.index()));
     }
 
     #[test]

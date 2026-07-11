@@ -237,6 +237,21 @@ fn execute_lua_skin(
             });
             root.insert("dynamicTimer".to_string(), JsonValue::Array(entries.collect()));
         }
+        let fixed_delay_timers = main_state_probe
+            .lock()
+            .ok()
+            .map(|probe| probe.fixed_delay_timers.clone())
+            .unwrap_or_default();
+        if !fixed_delay_timers.is_empty() {
+            let entries = fixed_delay_timers.into_iter().map(|(id, source_timer, delay_ms)| {
+                JsonValue::Object(JsonMap::from_iter([
+                    ("id".to_string(), JsonValue::Number(JsonNumber::from(id))),
+                    ("sourceTimer".to_string(), JsonValue::Number(JsonNumber::from(source_timer))),
+                    ("delayMs".to_string(), JsonValue::Number(JsonNumber::from(delay_ms))),
+                ]))
+            });
+            root.insert("fixedDelayTimer".to_string(), JsonValue::Array(entries.collect()));
+        }
     }
 
     let dependencies =
@@ -598,6 +613,7 @@ struct MainStateProbe {
     time_value_us: i32,
     next_dynamic_timer_id: i32,
     dynamic_timers: Vec<(i32, String)>,
+    fixed_delay_timers: Vec<(i32, i32, i32)>,
     load_dependencies: Option<Arc<Mutex<SkinLoadDependencies>>>,
 }
 
@@ -623,6 +639,7 @@ impl Default for MainStateProbe {
             time_value_us: 1_000_000,
             next_dynamic_timer_id: SKIN_DYNAMIC_TIMER_BASE,
             dynamic_timers: Vec::new(),
+            fixed_delay_timers: Vec::new(),
             load_dependencies: None,
         }
     }
@@ -2615,6 +2632,18 @@ fn lua_table_to_json(
                 continue;
             }
             if key == "timer" {
+                if path.contains(".customTimers[")
+                    && let Some(id) = object_id.as_deref().and_then(|id| id.parse::<i32>().ok())
+                    && let Some((source_timer, delay_ms)) =
+                        infer_fixed_delay_timer(function, main_state_probe)
+                {
+                    if let Ok(mut probe) = main_state_probe.lock()
+                        && !probe.fixed_delay_timers.iter().any(|(existing, _, _)| *existing == id)
+                    {
+                        probe.fixed_delay_timers.push((id, source_timer, delay_ms));
+                    }
+                    continue;
+                }
                 let map: Table = lua.globals().get("bmz_timer_fn_map")?;
                 if let Ok(timer_id) = map.get::<i32>(function.clone()) {
                     object.insert(key.clone(), JsonValue::Number(JsonNumber::from(timer_id)));
@@ -3274,6 +3303,32 @@ fn call_timer_function_with_values(
     }
 }
 
+fn call_timer_function_with_values_at_time(
+    function: &Function,
+    main_state_probe: &Arc<Mutex<MainStateProbe>>,
+    timer_values: BTreeMap<i32, i32>,
+    time_value_us: i32,
+) -> Option<i32> {
+    {
+        let mut probe = main_state_probe.lock().ok()?;
+        probe.begin_timer_recording_with_values(timer_values);
+        probe.time_value_us = time_value_us;
+    }
+    let result = function.call::<Value>(()).ok();
+    {
+        let mut probe = main_state_probe.lock().ok()?;
+        probe.time_value_us = 1_000_000;
+        probe.end_recording();
+    }
+    match result? {
+        Value::Integer(value) => i32::try_from(value).ok(),
+        Value::Number(value) if value.is_finite() && value.fract() == 0.0 => {
+            i32::try_from(value as i64).ok()
+        }
+        _ => None,
+    }
+}
+
 fn event_index_calls_with_timer_values(
     function: &Function,
     main_state_probe: &Arc<Mutex<MainStateProbe>>,
@@ -3395,6 +3450,63 @@ fn infer_timer_function_ref(
         }
     }
     None
+}
+
+/// `source timer timestamp + fixed delay` を返し、delay到達前はtimer-offとなる
+/// custom timerだけを限定的にIR化する。
+fn infer_fixed_delay_timer(
+    function: &Function,
+    main_state_probe: &Arc<Mutex<MainStateProbe>>,
+) -> Option<(i32, i32)> {
+    let timers = collect_timer_refs(function, main_state_probe)?;
+    let source_timer = *timers.as_slice().first()?;
+    if timers.len() != 1 {
+        return None;
+    }
+    let source_time_us = 100_000;
+    let returned_start = call_timer_function_with_values_at_time(
+        function,
+        main_state_probe,
+        BTreeMap::from([(source_timer, source_time_us)]),
+        i32::MAX / 2,
+    )?;
+    let delay_us = returned_start.checked_sub(source_time_us)?;
+    if delay_us <= 0 || delay_us % 1_000 != 0 {
+        return None;
+    }
+    let delay_ms = delay_us / 1_000;
+    if delay_ms > 60_000 {
+        return None;
+    }
+    let before = returned_start.checked_sub(1)?;
+    if call_timer_function_with_values_at_time(
+        function,
+        main_state_probe,
+        BTreeMap::from([(source_timer, source_time_us)]),
+        before,
+    ) != Some(TIMER_OFF_VALUE)
+        || call_timer_function_with_values_at_time(
+            function,
+            main_state_probe,
+            BTreeMap::from([(source_timer, source_time_us)]),
+            returned_start,
+        ) != Some(returned_start)
+        || call_timer_function_with_values_at_time(
+            function,
+            main_state_probe,
+            BTreeMap::from([(source_timer, source_time_us)]),
+            returned_start.saturating_add(123_000),
+        ) != Some(returned_start)
+        || call_timer_function_with_values_at_time(
+            function,
+            main_state_probe,
+            BTreeMap::new(),
+            returned_start.saturating_add(123_000),
+        ) != Some(TIMER_OFF_VALUE)
+    {
+        return None;
+    }
+    Some((source_timer, delay_ms))
 }
 
 fn call_draw_with_timer_option(
@@ -3648,18 +3760,21 @@ fn repair_keybeam_destination_draws(root: &mut JsonMap<String, JsonValue>) {
         return;
     };
     for index in 0..destinations.len().saturating_sub(1) {
-        let Some(draw) =
-            keybeam_hold_draw_replacement(&destinations[index], &destinations[index + 1])
+        let Some((hold_draw, fade_draw)) =
+            keybeam_draw_replacements(&destinations[index], &destinations[index + 1])
         else {
             continue;
         };
         if let JsonValue::Object(destination) = &mut destinations[index] {
-            destination.insert("draw".to_string(), JsonValue::String(draw));
+            destination.insert("draw".to_string(), JsonValue::String(hold_draw));
+        }
+        if let JsonValue::Object(destination) = &mut destinations[index + 1] {
+            destination.insert("draw".to_string(), JsonValue::String(fade_draw));
         }
     }
 }
 
-fn keybeam_hold_draw_replacement(hold: &JsonValue, fade: &JsonValue) -> Option<String> {
+fn keybeam_draw_replacements(hold: &JsonValue, fade: &JsonValue) -> Option<(String, String)> {
     let hold = hold.as_object()?;
     let fade = fade.as_object()?;
     let hold_id = json_string_field(hold, "id")?;
@@ -3679,7 +3794,15 @@ fn keybeam_hold_draw_replacement(hold: &JsonValue, fade: &JsonValue) -> Option<S
     }
     let keyon_timer = keybeam_keyon_timer_for_keyoff_timer(fade_timer)?;
     let hold_timer = keybeam_hold_timer_for_keyon_timer(keyon_timer)?;
-    keybeam_hold_draw_from_fade_draw(json_string_field(fade, "draw")?, keyon_timer, hold_timer)
+    let fade_draw = json_string_field(fade, "draw")?;
+    let hold_draw = keybeam_hold_draw_from_fade_draw(fade_draw, keyon_timer, hold_timer)?;
+    let fade_draw = fade_draw
+        .split(" or ")
+        .map(str::trim)
+        .map(|branch| format!("keybeam_fade({fade_timer}) != 0 and {branch}"))
+        .collect::<Vec<_>>()
+        .join(" or ");
+    Some((hold_draw, fade_draw))
 }
 
 fn json_string_field<'a>(object: &'a JsonMap<String, JsonValue>, key: &str) -> Option<&'a str> {
@@ -3707,10 +3830,9 @@ fn keybeam_keyon_timer_for_keyoff_timer(timer_id: i32) -> Option<i32> {
 fn keybeam_hold_draw_from_fade_draw(
     fade_draw: &str,
     keyon_timer: i32,
-    hold_timer: i32,
+    _hold_timer: i32,
 ) -> Option<String> {
-    let prefix =
-        format!("timer({keyon_timer}) != timer_off and timer({hold_timer}) == timer_off and ");
+    let prefix = format!("keybeam_hold({keyon_timer}) != 0 and ");
     let branches = fade_draw
         .split(" or ")
         .map(str::trim)
@@ -4824,6 +4946,29 @@ mod tests {
     use super::*;
 
     #[test]
+    fn infers_fixed_delay_timer_function() {
+        let lua = Lua::new();
+        let probe = Arc::new(Mutex::new(MainStateProbe::default()));
+        lua.globals()
+            .set("main_state", create_main_state_stub(&lua, probe.clone()).unwrap())
+            .unwrap();
+        let function = lua
+            .load(
+                r#"return function()
+                    local off = main_state.timer_off_value
+                    local source = main_state.timer(143)
+                    if source == off then return off end
+                    local start = source + 1000000
+                    if main_state.time() < start then return off end
+                    return start
+                end"#,
+            )
+            .eval::<Function>()
+            .unwrap();
+        assert_eq!(infer_fixed_delay_timer(&function, &probe), Some((143, 1000)));
+    }
+
+    #[test]
     fn infers_event_index_or_draw_condition() {
         let lua = Lua::new();
         let probe = Arc::new(Mutex::new(MainStateProbe::default()));
@@ -5009,14 +5154,12 @@ mod tests {
                 .and_then(JsonValue::as_str)
                 .unwrap()
         };
-        assert_eq!(
-            draw(0),
-            "timer(102) != timer_off and timer(72) == timer_off and event_index(502) == 1"
-        );
+        assert_eq!(draw(0), "keybeam_hold(102) != 0 and event_index(502) == 1");
         assert_eq!(
             draw(2),
-            "timer(103) != timer_off and timer(73) == timer_off and event_index(503) == 2 or timer(103) != timer_off and timer(73) == timer_off and event_index(503) == 3"
+            "keybeam_hold(103) != 0 and event_index(503) == 2 or keybeam_hold(103) != 0 and event_index(503) == 3"
         );
+        assert_eq!(draw(1), "keybeam_fade(122) != 0 and event_index(502) == 1");
     }
 
     #[test]

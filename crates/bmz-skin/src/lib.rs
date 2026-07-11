@@ -1354,6 +1354,44 @@ mod tests {
     }
 
     #[test]
+    fn lua_skin_infers_fixed_delay_custom_timer() {
+        let root = unique_test_dir("bmz-skin-lua");
+        fs::create_dir_all(&root).unwrap();
+        fs::write(
+            root.join("play.luaskin"),
+            r#"
+            local main_state = require("main_state")
+            return {
+                type = 0,
+                customTimers = {
+                    { id = 11900, timer = function()
+                        local off = main_state.timer_off_value
+                        local source = main_state.timer(143)
+                        if source == off then return off end
+                        local start = source + 1000000
+                        if main_state.time() < start then return off end
+                        return start
+                    end },
+                    { id = 11901, timer = function() return main_state.timer(150) end }
+                }
+            }
+            "#,
+        )
+        .unwrap();
+
+        let loaded =
+            load_lua_skin_value(&root.join("play.luaskin"), &BTreeMap::new(), &BTreeMap::new())
+                .unwrap();
+
+        assert_eq!(
+            loaded.value["fixedDelayTimer"],
+            serde_json::json!([{ "id": 11900, "sourceTimer": 143, "delayMs": 1000 }])
+        );
+        assert!(loaded.value["customTimers"][0].get("timer").is_none());
+        assert!(loaded.value["customTimers"][1].get("timer").is_none());
+    }
+
+    #[test]
     fn lua_skin_config_get_path_prefers_filepath_default() {
         let root = unique_test_dir("bmz-skin-lua");
         fs::create_dir_all(root.join("parts")).unwrap();
@@ -2584,6 +2622,31 @@ mod tests {
         assert!(
             property_warnings.is_empty(),
             "PeacefulPlay properties should accept integral Lua-number ops: {property_warnings:?}"
+        );
+        assert!(
+            loaded.document.destination.iter().any(|destination| matches!(
+                destination,
+                bmz_skin_document::DestinationListEntry::Single(destination)
+                    if destination.draw.contains("keybeam_hold(")
+            )),
+            "PeacefulPlay keybeam hold closures should use the native runtime predicate"
+        );
+        assert!(
+            loaded.document.destination.iter().any(|destination| matches!(
+                destination,
+                bmz_skin_document::DestinationListEntry::Single(destination)
+                    if destination.draw.contains("keybeam_fade(")
+            )),
+            "PeacefulPlay keybeam fade closures should use the native runtime predicate"
+        );
+        assert_eq!(
+            loaded.document.fixed_delay_timers,
+            vec![bmz_skin_document::SkinFixedDelayTimerDef {
+                id: 11900,
+                source_timer: 143,
+                delay_ms: 2000,
+            }],
+            "only PeacefulPlay's end-of-note fixed-delay timer should be inferred"
         );
     }
 }
