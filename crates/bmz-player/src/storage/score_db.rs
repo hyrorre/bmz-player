@@ -167,6 +167,14 @@ pub enum ScoreInsertMode {
     HistoryOnly,
 }
 
+/// 外部score DBを再インポートしたときの、既存履歴との照合結果。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ImportedScoreReconciliation {
+    Missing,
+    Unchanged,
+    Corrected,
+}
+
 #[derive(Debug, Clone)]
 pub struct ScoreRecordMetadata {
     pub ln_policy: LnScorePolicy,
@@ -314,6 +322,12 @@ struct ScoreBestRank {
     max_combo: u32,
 }
 
+#[derive(Debug, Clone, Copy)]
+struct SourceScoreHistoryMatch {
+    history_id: i64,
+    device_type: InputDeviceKind,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PreviousBestSnapshot {
     pub clear_type: String,
@@ -418,7 +432,7 @@ impl ScoreDatabase {
         insert_score_history(&tx, record, previous_best.as_ref())?;
         let history_id = tx.last_insert_rowid();
         if mode == ScoreInsertMode::Full {
-            upsert_score_best(&tx, record)?;
+            upsert_score_best(&tx, record, history_id)?;
             update_player_stats(&tx, record)?;
         }
         tx.commit()?;
@@ -430,85 +444,40 @@ impl ScoreDatabase {
     /// LR2 does not retain a per-score timestamp, and re-importing a source
     /// database must not create duplicates merely because the import time changed.
     pub fn has_same_score_from_source(&self, record: &ScoreRecord) -> Result<bool> {
-        let judges = &record.score.judges;
-        let exists = self
-            .conn
-            .query_row(
-                "SELECT 1
-                 FROM score_history
-                 WHERE source_kind = ?1
-                   AND chart_sha256 = ?2
-                   AND ln_policy = ?3
-                   AND double_option = ?4
-                   AND clear_type = ?5
-                   AND gauge_type = ?6
-                   AND gauge_value = ?7
-                   AND total_notes = ?8
-                   AND ex_score = ?9
-                   AND bp = ?10
-                   AND cb = ?11
-                   AND max_combo = ?12
-                   AND fast_pgreat = ?13
-                   AND slow_pgreat = ?14
-                   AND fast_great = ?15
-                   AND slow_great = ?16
-                   AND fast_good = ?17
-                   AND slow_good = ?18
-                   AND fast_bad = ?19
-                   AND slow_bad = ?20
-                   AND fast_poor = ?21
-                   AND slow_poor = ?22
-                   AND fast_empty_poor = ?23
-                   AND slow_empty_poor = ?24
-                   AND random_seed IS ?25
-                   AND arrange = ?26
-                   AND arrange_2p = ?27
-                   AND gauge_option = ?28
-                   AND rule_mode = ?29
-                   AND assist_mask = ?30
-                   AND autoplay = ?31
-                   AND device_type = ?32
-                   AND applied_double_option = ?33
-                 LIMIT 1",
-                params![
-                    record.source_kind.as_str(),
-                    hash_to_hex(&record.chart_sha256),
-                    record.ln_policy.as_str(),
-                    record.double_option.as_str(),
-                    record.clear_type.as_str(),
-                    gauge_type_str(record.gauge_type),
-                    record.gauge_value,
-                    record.total_notes,
-                    record.score.ex_score(),
-                    score_record_bp(record),
-                    score_record_cb(record),
-                    record.score.max_combo,
-                    judges.fast_pgreat,
-                    judges.slow_pgreat,
-                    judges.fast_great,
-                    judges.slow_great,
-                    judges.fast_good,
-                    judges.slow_good,
-                    judges.fast_bad,
-                    judges.slow_bad,
-                    judges.fast_poor,
-                    judges.slow_poor,
-                    judges.fast_empty_poor,
-                    judges.slow_empty_poor,
-                    record.random_seed,
-                    record.arrange.as_str(),
-                    record.arrange_2p.as_str(),
-                    record.gauge_option.as_str(),
-                    record.rule_mode.as_str(),
-                    record.assist_mask,
-                    record.autoplay,
-                    record.device_type.as_str(),
-                    record.applied_double_option.to_persistent_str(),
-                ],
-                |_| Ok(()),
-            )
-            .optional()?;
-        Ok(exists.is_some())
+        Ok(source_score_history_match(&self.conn, record)?
+            .is_some_and(|existing| existing.device_type == record.device_type))
+    }
+
+    /// 同一出所の既存履歴が入力デバイスだけ異なる場合に、その自己申告値を補正する。
+    /// 集計のdevice_typeは、その履歴がEXスコアの出所である場合だけ更新する。
+    pub fn reconcile_imported_score_device_type(
+        &mut self,
+        record: &ScoreRecord,
+    ) -> Result<ImportedScoreReconciliation> {
+        if record.source_kind == ScoreSourceKind::Local {
+            return Ok(ImportedScoreReconciliation::Missing);
+        }
+        let Some(existing) = source_score_history_match(&self.conn, record)? else {
+            return Ok(ImportedScoreReconciliation::Missing);
+        };
+        if existing.device_type == record.device_type {
+            return Ok(ImportedScoreReconciliation::Unchanged);
+        }
+
+        let tx = self.conn.transaction()?;
+        tx.execute(
+            "UPDATE score_history
+             SET device_type = ?1
+             WHERE id = ?2 AND device_type = ?3",
+            params![
+                record.device_type.as_str(),
+                existing.history_id,
+                existing.device_type.as_str()
+            ],
+        )?;
+        update_score_best_device_type_from_history(&tx, existing.history_id, record.device_type)?;
+        tx.commit()?;
+        Ok(ImportedScoreReconciliation::Corrected)
     }
 
     pub fn player_info(&self) -> Result<PlayerInfo> {
@@ -1147,6 +1116,107 @@ fn score_source_kind_from_row(
     })
 }
 
+fn source_score_history_match(
+    conn: &Connection,
+    record: &ScoreRecord,
+) -> Result<Option<SourceScoreHistoryMatch>> {
+    let judges = &record.score.judges;
+    conn.query_row(
+        "SELECT id, device_type
+         FROM score_history
+         WHERE source_kind = ?1
+           AND chart_sha256 = ?2
+           AND ln_policy = ?3
+           AND double_option = ?4
+           AND clear_type = ?5
+           AND gauge_type = ?6
+           AND gauge_value = ?7
+           AND total_notes = ?8
+           AND ex_score = ?9
+           AND bp = ?10
+           AND cb = ?11
+           AND max_combo = ?12
+           AND fast_pgreat = ?13
+           AND slow_pgreat = ?14
+           AND fast_great = ?15
+           AND slow_great = ?16
+           AND fast_good = ?17
+           AND slow_good = ?18
+           AND fast_bad = ?19
+           AND slow_bad = ?20
+           AND fast_poor = ?21
+           AND slow_poor = ?22
+           AND fast_empty_poor = ?23
+           AND slow_empty_poor = ?24
+           AND random_seed IS ?25
+           AND arrange = ?26
+           AND arrange_2p = ?27
+           AND gauge_option = ?28
+           AND rule_mode = ?29
+           AND assist_mask = ?30
+           AND autoplay = ?31
+           AND applied_double_option = ?32
+         ORDER BY id ASC
+         LIMIT 1",
+        params![
+            record.source_kind.as_str(),
+            hash_to_hex(&record.chart_sha256),
+            record.ln_policy.as_str(),
+            record.double_option.as_str(),
+            record.clear_type.as_str(),
+            gauge_type_str(record.gauge_type),
+            record.gauge_value,
+            record.total_notes,
+            record.score.ex_score(),
+            score_record_bp(record),
+            score_record_cb(record),
+            record.score.max_combo,
+            judges.fast_pgreat,
+            judges.slow_pgreat,
+            judges.fast_great,
+            judges.slow_great,
+            judges.fast_good,
+            judges.slow_good,
+            judges.fast_bad,
+            judges.slow_bad,
+            judges.fast_poor,
+            judges.slow_poor,
+            judges.fast_empty_poor,
+            judges.slow_empty_poor,
+            record.random_seed,
+            record.arrange.as_str(),
+            record.arrange_2p.as_str(),
+            record.gauge_option.as_str(),
+            record.rule_mode.as_str(),
+            record.assist_mask,
+            record.autoplay,
+            record.applied_double_option.to_persistent_str(),
+        ],
+        |row| {
+            Ok(SourceScoreHistoryMatch {
+                history_id: row.get(0)?,
+                device_type: device_type_from_row(row, 1)?,
+            })
+        },
+    )
+    .optional()
+    .map_err(Into::into)
+}
+
+fn update_score_best_device_type_from_history(
+    conn: &Connection,
+    history_id: i64,
+    device_type: InputDeviceKind,
+) -> Result<()> {
+    conn.execute(
+        "UPDATE score_best
+         SET device_type = ?1
+         WHERE best_score_history_id = ?2",
+        params![device_type.as_str(), history_id],
+    )?;
+    Ok(())
+}
+
 fn ln_policy_from_row(row: &rusqlite::Row<'_>, index: usize) -> rusqlite::Result<LnScorePolicy> {
     let value: String = row.get(index)?;
     LnScorePolicy::from_str_opt(&value).ok_or_else(|| {
@@ -1385,7 +1455,7 @@ fn update_player_stats(conn: &Connection, record: &ScoreRecord) -> Result<()> {
     Ok(())
 }
 
-fn upsert_score_best(conn: &Connection, record: &ScoreRecord) -> Result<()> {
+fn upsert_score_best(conn: &Connection, record: &ScoreRecord, history_id: i64) -> Result<()> {
     let judges = &record.score.judges;
     let ghost = encode_beatoraja_ghost(&record.score.ghost)?;
     let clear_increment = u32::from(is_counted_clear(record.clear_type));
@@ -1421,11 +1491,12 @@ fn upsert_score_best(conn: &Connection, record: &ScoreRecord) -> Result<()> {
             replay_path,
             ghost,
             device_type,
+            best_score_history_id,
             play_count,
             clear_count
         ) VALUES (
             ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13,
-            ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29
+            ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30
         )
         ON CONFLICT(chart_sha256, ln_policy, double_option, rule_mode) DO NOTHING",
         params![
@@ -1456,6 +1527,7 @@ fn upsert_score_best(conn: &Connection, record: &ScoreRecord) -> Result<()> {
             record.replay_path.as_str(),
             ghost,
             record.device_type.as_str(),
+            history_id,
             1_u32,
             clear_increment,
         ],
@@ -1544,9 +1616,10 @@ fn upsert_score_best(conn: &Connection, record: &ScoreRecord) -> Result<()> {
                 played_at = ?18,
                 replay_path = ?19,
                 ghost = ?20,
-                device_type = ?21
-             WHERE chart_sha256 = ?1 AND ln_policy = ?22 AND double_option = ?23
-               AND rule_mode = ?24",
+                device_type = ?21,
+                best_score_history_id = ?22
+             WHERE chart_sha256 = ?1 AND ln_policy = ?23 AND double_option = ?24
+               AND rule_mode = ?25",
             params![
                 hash_to_hex(&record.chart_sha256),
                 record.score.ex_score(),
@@ -1569,6 +1642,7 @@ fn upsert_score_best(conn: &Connection, record: &ScoreRecord) -> Result<()> {
                 record.replay_path.as_str(),
                 ghost,
                 record.device_type.as_str(),
+                history_id,
                 record.ln_policy.as_str(),
                 record.double_option.as_str(),
                 rule_mode.as_str(),
@@ -1884,6 +1958,80 @@ mod tests {
         let mut different_judges = same;
         different_judges.score.judges.fast_empty_poor = 1;
         assert!(!db.has_same_score_from_source(&different_judges).unwrap());
+    }
+
+    #[test]
+    fn imported_score_reconciliation_updates_history_and_its_best_device() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        configure_connection(&conn).unwrap();
+        run_migrations(&mut conn, SCORE_MIGRATIONS).unwrap();
+        let mut db = ScoreDatabase { conn };
+
+        let mut imported = record(20, ClearType::Normal);
+        imported.source_kind = ScoreSourceKind::Beatoraja;
+        let history_id = db.insert_score(&imported).unwrap();
+
+        let mut corrected = imported.clone();
+        corrected.played_at += 60;
+        corrected.device_type = InputDeviceKind::Controller;
+        assert_eq!(
+            db.reconcile_imported_score_device_type(&corrected).unwrap(),
+            ImportedScoreReconciliation::Corrected
+        );
+        assert!(db.has_same_score_from_source(&corrected).unwrap());
+        assert_eq!(
+            db.reconcile_imported_score_device_type(&corrected).unwrap(),
+            ImportedScoreReconciliation::Unchanged
+        );
+
+        let history_device: String = db
+            .conn()
+            .query_row(
+                "SELECT device_type FROM score_history WHERE id = ?1",
+                params![history_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let (best_history_id, best_device): (i64, String) = db
+            .conn()
+            .query_row("SELECT best_score_history_id, device_type FROM score_best", [], |row| {
+                Ok((row.get(0)?, row.get(1)?))
+            })
+            .unwrap();
+        assert_eq!(history_device, "controller");
+        assert_eq!(best_history_id, history_id);
+        assert_eq!(best_device, "controller");
+    }
+
+    #[test]
+    fn imported_score_reconciliation_does_not_change_local_best_device() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        configure_connection(&conn).unwrap();
+        run_migrations(&mut conn, SCORE_MIGRATIONS).unwrap();
+        let mut db = ScoreDatabase { conn };
+
+        let mut imported = record(20, ClearType::Normal);
+        imported.source_kind = ScoreSourceKind::Beatoraja;
+        db.insert_score(&imported).unwrap();
+
+        let local = record(40, ClearType::Normal);
+        let local_history_id = db.insert_score(&local).unwrap();
+
+        let mut corrected = imported.clone();
+        corrected.device_type = InputDeviceKind::Controller;
+        assert_eq!(
+            db.reconcile_imported_score_device_type(&corrected).unwrap(),
+            ImportedScoreReconciliation::Corrected
+        );
+
+        let (best_history_id, best_device): (i64, String) = db
+            .conn()
+            .query_row("SELECT best_score_history_id, device_type FROM score_best", [], |row| {
+                Ok((row.get(0)?, row.get(1)?))
+            })
+            .unwrap();
+        assert_eq!(best_history_id, local_history_id);
+        assert_eq!(best_device, "keyboard");
     }
 
     #[test]

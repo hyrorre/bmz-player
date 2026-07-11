@@ -9,6 +9,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use bmz_core::input::InputDeviceKind;
 use bmz_gameplay::rule::RuleMode;
 use bmz_render::scene::ResultGradeDiffDisplay;
 use bmz_render::skin::{SkinDocument, SkinFilepathDef, SkinOffsetDef, SkinPropertyDef};
@@ -365,6 +366,7 @@ pub struct EguiLayer {
     settings_add_table_error: String,
     score_import_path: String,
     score_import_kind: ScoreImportKind,
+    score_import_device_type: InputDeviceKind,
     score_import_status: String,
     score_import_error: String,
     /// 本体設定パネル: 出力デバイス選択用の列挙キャッシュ。
@@ -692,6 +694,7 @@ impl EguiLayer {
             settings_add_table_error: String::new(),
             score_import_path: String::new(),
             score_import_kind: ScoreImportKind::default(),
+            score_import_device_type: InputDeviceKind::Keyboard,
             score_import_status: String::new(),
             score_import_error: String::new(),
             audio_device_picker: AudioDevicePickerState::default(),
@@ -853,6 +856,7 @@ impl EguiLayer {
                         add_table_error: &mut self.settings_add_table_error,
                         score_import_path: &mut self.score_import_path,
                         score_import_kind: &mut self.score_import_kind,
+                        score_import_device_type: &mut self.score_import_device_type,
                         score_import_status: &self.score_import_status,
                         score_import_error: &self.score_import_error,
                         audio_device_picker: &mut self.audio_device_picker,
@@ -1736,6 +1740,7 @@ struct SettingsPanelState<'a> {
     add_table_error: &'a mut String,
     score_import_path: &'a mut String,
     score_import_kind: &'a mut ScoreImportKind,
+    score_import_device_type: &'a mut InputDeviceKind,
     score_import_status: &'a str,
     score_import_error: &'a str,
     audio_device_picker: &'a mut AudioDevicePickerState,
@@ -2252,6 +2257,7 @@ fn build_settings_panel(
                     ui,
                     state.score_import_path,
                     state.score_import_kind,
+                    state.score_import_device_type,
                     state.score_import_status,
                     state.score_import_error,
                     &mut score_import_request,
@@ -2909,6 +2915,7 @@ fn build_score_import_section(
     ui: &mut egui::Ui,
     path: &mut String,
     kind: &mut ScoreImportKind,
+    device_type: &mut InputDeviceKind,
     status: &str,
     error: &str,
     request: &mut Option<ScoreImportRequest>,
@@ -2951,12 +2958,21 @@ fn build_score_import_section(
                 },
             );
         });
+        ui.horizontal(|ui| {
+            ui.label("入力デバイス");
+            ui.selectable_value(device_type, InputDeviceKind::Keyboard, "キーボード");
+            ui.selectable_value(device_type, InputDeviceKind::Controller, "コントローラー");
+        });
         if ui.button("インポート").clicked() {
             let trimmed = path.trim();
             if trimmed.is_empty() {
                 *request = None;
             } else {
-                *request = Some(ScoreImportRequest { path: PathBuf::from(trimmed), kind: *kind });
+                *request = Some(ScoreImportRequest {
+                    path: PathBuf::from(trimmed),
+                    kind: *kind,
+                    device_type: *device_type,
+                });
             }
         }
         if !status.is_empty() {

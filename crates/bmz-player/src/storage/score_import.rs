@@ -17,7 +17,8 @@ use rusqlite::{Connection, OpenFlags, Row};
 use super::common::hex_to_hash;
 use super::library_db::LibraryDatabase;
 use super::score_db::{
-    CourseScoreInsert, ScoreDatabase, ScoreRecord, ScoreSourceKind, decode_beatoraja_ghost,
+    CourseScoreInsert, ImportedScoreReconciliation, ScoreDatabase, ScoreRecord, ScoreSourceKind,
+    decode_beatoraja_ghost,
 };
 use crate::ln_policy::{
     LnPolicySetting, LnScorePolicy, expected_scored_note_count_for_policy, score_ln_policy,
@@ -77,6 +78,8 @@ impl ScoreImportKind {
 pub struct ScoreImportRequest {
     pub path: PathBuf,
     pub kind: ScoreImportKind,
+    /// 外部score DBには入力デバイスの記録がないため、ユーザーが指定する。
+    pub device_type: InputDeviceKind,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -84,6 +87,7 @@ pub struct ScoreImportReport {
     pub scanned: u32,
     pub matched: u32,
     pub imported: u32,
+    pub corrected: u32,
     pub skipped: u32,
     pub failed: u32,
 }
@@ -91,8 +95,8 @@ pub struct ScoreImportReport {
 impl ScoreImportReport {
     pub fn summary(&self) -> String {
         format!(
-            "scanned {}, matched {}, imported {}, skipped {}, failed {}",
-            self.scanned, self.matched, self.imported, self.skipped, self.failed
+            "scanned {}, matched {}, imported {}, corrected {}, skipped {}, failed {}",
+            self.scanned, self.matched, self.imported, self.corrected, self.skipped, self.failed
         )
     }
 }
@@ -114,18 +118,51 @@ pub fn import_scores(
     .with_context(|| format!("failed to open score database: {}", request.path.display()))?;
 
     if request.kind.uses_lr2_schema() {
-        import_lr2_scores(&source, request.kind, library_db, score_db, imported_at)
+        import_lr2_scores_with_device_type(
+            &source,
+            request.kind,
+            library_db,
+            score_db,
+            imported_at,
+            request.device_type,
+        )
     } else {
-        import_beatoraja_scores(&source, request.kind, library_db, score_db, imported_at)
+        import_beatoraja_scores_with_device_type(
+            &source,
+            request.kind,
+            library_db,
+            score_db,
+            imported_at,
+            request.device_type,
+        )
     }
 }
 
+#[cfg(test)]
 fn import_lr2_scores(
     source: &Connection,
     kind: ScoreImportKind,
     library_db: &mut LibraryDatabase,
     score_db: &mut ScoreDatabase,
     imported_at: i64,
+) -> Result<ScoreImportReport> {
+    import_lr2_scores_with_device_type(
+        source,
+        kind,
+        library_db,
+        score_db,
+        imported_at,
+        InputDeviceKind::Keyboard,
+    )
+}
+
+fn import_lr2_scores_with_device_type(
+    source: &Connection,
+    kind: ScoreImportKind,
+    library_db: &mut LibraryDatabase,
+    score_db: &mut ScoreDatabase,
+    imported_at: i64,
+    device_type: InputDeviceKind,
 ) -> Result<ScoreImportReport> {
     ensure_table(source, "score")?;
     // Owned index of canonical LR2-dan courses (md5 stage sequence -> score-db
@@ -249,9 +286,17 @@ fn import_lr2_scores(
         record.arrange_2p = options.arrange_2p.to_persistent_str().to_string();
         record.applied_double_option = options.applied_double_option;
         record.double_option = options.applied_double_option.score_bucket();
-        if score_db.has_same_score_from_source(&record)? {
-            report.skipped += 1;
-            continue;
+        record.device_type = device_type;
+        match score_db.reconcile_imported_score_device_type(&record)? {
+            ImportedScoreReconciliation::Missing => {}
+            ImportedScoreReconciliation::Unchanged => {
+                report.skipped += 1;
+                continue;
+            }
+            ImportedScoreReconciliation::Corrected => {
+                report.corrected += 1;
+                continue;
+            }
         }
         score_db.insert_score(&record)?;
         report.imported += 1;
@@ -259,12 +304,31 @@ fn import_lr2_scores(
     Ok(report)
 }
 
+#[cfg(test)]
 fn import_beatoraja_scores(
     source: &Connection,
     kind: ScoreImportKind,
     library_db: &LibraryDatabase,
     score_db: &mut ScoreDatabase,
     imported_at: i64,
+) -> Result<ScoreImportReport> {
+    import_beatoraja_scores_with_device_type(
+        source,
+        kind,
+        library_db,
+        score_db,
+        imported_at,
+        InputDeviceKind::Keyboard,
+    )
+}
+
+fn import_beatoraja_scores_with_device_type(
+    source: &Connection,
+    kind: ScoreImportKind,
+    library_db: &LibraryDatabase,
+    score_db: &mut ScoreDatabase,
+    imported_at: i64,
+    device_type: InputDeviceKind,
 ) -> Result<ScoreImportReport> {
     let table = if table_exists(source, "score")? {
         "score"
@@ -386,9 +450,17 @@ fn import_beatoraja_scores(
         record.applied_double_option = beatoraja_double_option(row.option);
         record.double_option = record.applied_double_option.score_bucket();
         record.source_kind = kind.source_kind();
-        if score_db.has_same_score_from_source(&record)? {
-            report.skipped += 1;
-            continue;
+        record.device_type = device_type;
+        match score_db.reconcile_imported_score_device_type(&record)? {
+            ImportedScoreReconciliation::Missing => {}
+            ImportedScoreReconciliation::Unchanged => {
+                report.skipped += 1;
+                continue;
+            }
+            ImportedScoreReconciliation::Corrected => {
+                report.corrected += 1;
+                continue;
+            }
         }
         score_db.insert_score(&record)?;
         report.imported += 1;
@@ -1240,12 +1312,13 @@ mod tests {
         let source = Connection::open_in_memory().unwrap();
         create_lr2_source(&source, &md5);
 
-        let report = import_lr2_scores(
+        let report = import_lr2_scores_with_device_type(
             &source,
             ScoreImportKind::Lr2,
             &mut library_db,
             &mut score_db,
             1_700_000_000,
+            InputDeviceKind::Controller,
         )
         .unwrap();
 
@@ -1258,7 +1331,7 @@ mod tests {
         assert_eq!(best[0].clear_type, "Hard");
         assert_eq!(best[0].ex_score, 222);
         assert_eq!(best[0].ln_policy, LnScorePolicy::ForceLn);
-        assert_eq!(best[0].device_type, InputDeviceKind::Keyboard);
+        assert_eq!(best[0].device_type, InputDeviceKind::Controller);
     }
 
     #[test]
@@ -1327,12 +1400,13 @@ mod tests {
         // bucket, but is retained as the applied option in history.
         source.execute("UPDATE score SET option = 113", []).unwrap();
 
-        let report = import_beatoraja_scores(
+        let report = import_beatoraja_scores_with_device_type(
             &source,
             ScoreImportKind::Beatoraja,
             &library_db,
             &mut score_db,
             1_700_000_000,
+            InputDeviceKind::Controller,
         )
         .unwrap();
 
@@ -1381,7 +1455,7 @@ mod tests {
                 (
                     "RRandom".to_string(),
                     "Mirror".to_string(),
-                    "keyboard".to_string(),
+                    "controller".to_string(),
                     "Beatoraja".to_string(),
                     1_700_000_001,
                 ),
@@ -1468,6 +1542,54 @@ mod tests {
             .collect::<std::result::Result<_, _>>()
             .unwrap();
         assert_eq!(source_kinds, vec!["Beatoraja", "Lr2Oraja"]);
+    }
+
+    #[test]
+    fn beatoraja_reimport_corrects_device_type_without_adding_history() {
+        let (library_db, mut score_db, sha256, _) = open_test_databases();
+        let source = Connection::open_in_memory().unwrap();
+        create_beatoraja_source(&source, &sha256, 1_700_000_001_000, 0);
+
+        let first = import_beatoraja_scores_with_device_type(
+            &source,
+            ScoreImportKind::Beatoraja,
+            &library_db,
+            &mut score_db,
+            1_700_000_000,
+            InputDeviceKind::Keyboard,
+        )
+        .unwrap();
+        assert_eq!(first.imported, 1);
+
+        let corrected = import_beatoraja_scores_with_device_type(
+            &source,
+            ScoreImportKind::Beatoraja,
+            &library_db,
+            &mut score_db,
+            1_700_000_000,
+            InputDeviceKind::Controller,
+        )
+        .unwrap();
+        assert_eq!(corrected.imported, 0);
+        assert_eq!(corrected.corrected, 1);
+        assert_eq!(corrected.skipped, 0);
+
+        let history_count: u32 = score_db
+            .conn()
+            .query_row("SELECT COUNT(*) FROM score_history", [], |row| row.get(0))
+            .unwrap();
+        let history_device: String = score_db
+            .conn()
+            .query_row("SELECT device_type FROM score_history", [], |row| row.get(0))
+            .unwrap();
+        let best = score_db
+            .best_scores_for_charts(&[ScoreKey::new(sha256, LnScorePolicy::ForceLn)])
+            .unwrap()
+            .pop()
+            .unwrap();
+        assert_eq!(history_count, 1);
+        assert_eq!(history_device, "controller");
+        assert_eq!(best.device_type, InputDeviceKind::Controller);
     }
 
     #[test]

@@ -1313,6 +1313,45 @@ pub const SCORE_MIGRATIONS: &[Migration] = &[
                 ADD COLUMN applied_double_option TEXT NOT NULL DEFAULT 'Off';",
         ],
     },
+    Migration {
+        version: 22,
+        // score_best はスコア側の各列を保持する履歴行を明示的に参照する。
+        // これにより外部score DBの自己申告デバイスを訂正しても、同値の
+        // ローカルベストを誤って更新しない。
+        statements: &[
+            "ALTER TABLE score_best ADD COLUMN best_score_history_id INTEGER;",
+            "UPDATE score_best
+             SET best_score_history_id = (
+                SELECT score_history.id
+                FROM score_history
+                WHERE score_history.chart_sha256 = score_best.chart_sha256
+                  AND score_history.ln_policy = score_best.ln_policy
+                  AND score_history.double_option = score_best.double_option
+                  AND score_history.rule_mode = score_best.rule_mode
+                  AND score_history.ex_score = score_best.ex_score
+                  AND score_history.fast_pgreat = score_best.fast_pgreat
+                  AND score_history.slow_pgreat = score_best.slow_pgreat
+                  AND score_history.fast_great = score_best.fast_great
+                  AND score_history.slow_great = score_best.slow_great
+                  AND score_history.fast_good = score_best.fast_good
+                  AND score_history.slow_good = score_best.slow_good
+                  AND score_history.fast_bad = score_best.fast_bad
+                  AND score_history.slow_bad = score_best.slow_bad
+                  AND score_history.fast_poor = score_best.fast_poor
+                  AND score_history.slow_poor = score_best.slow_poor
+                  AND score_history.fast_empty_poor = score_best.fast_empty_poor
+                  AND score_history.slow_empty_poor = score_best.slow_empty_poor
+                  AND score_history.played_at = score_best.played_at
+                  AND score_history.replay_path = score_best.replay_path
+                  AND score_history.device_type = score_best.device_type
+                ORDER BY score_history.id ASC
+                LIMIT 1
+             );",
+            "CREATE INDEX idx_score_best_best_score_history_id
+                ON score_best(best_score_history_id)
+                WHERE best_score_history_id IS NOT NULL;",
+        ],
+    },
 ];
 
 pub const NETWORK_MIGRATIONS: &[Migration] = &[Migration {
@@ -1398,6 +1437,8 @@ pub const COLLECTION_MIGRATIONS: &[Migration] = &[Migration {
 
 #[cfg(test)]
 mod tests {
+    use rusqlite::params;
+
     use super::*;
 
     #[test]
@@ -1438,5 +1479,70 @@ mod tests {
         let version: i32 = conn.pragma_query_value(None, "user_version", |row| row.get(0)).unwrap();
         assert_eq!(headers_json, "{}");
         assert_eq!(version, 22);
+    }
+
+    #[test]
+    fn score_migration_backfills_best_score_history_reference() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        run_migrations(&mut conn, &SCORE_MIGRATIONS[..21]).unwrap();
+        conn.execute_batch(
+            "INSERT INTO score_history (
+                chart_sha256, played_at, clear_type, gauge_type, gauge_value,
+                total_notes, ex_score, bp, cb, max_combo,
+                fast_pgreat, slow_pgreat, fast_great, slow_great,
+                fast_good, slow_good, fast_bad, slow_bad,
+                fast_poor, slow_poor, fast_empty_poor, slow_empty_poor,
+                gauge_option, replay_path
+            ) VALUES (
+                'chart', 1, 'NoPlay', '', 0.0,
+                0, 0, 0, 0, 0,
+                0, 0, 0, 0,
+                0, 0, 0, 0,
+                0, 0, 0, 0,
+                '', ''
+            );",
+        )
+        .unwrap();
+        let history_id = conn.last_insert_rowid();
+        conn.execute(
+            "INSERT INTO score_best (
+                chart_sha256, ln_policy, double_option, rule_mode,
+                clear_type, gauge_type, gauge_value,
+                ex_score, bp, cb, max_combo,
+                fast_pgreat, slow_pgreat, fast_great, slow_great,
+                fast_good, slow_good, fast_bad, slow_bad,
+                fast_poor, slow_poor, fast_empty_poor, slow_empty_poor,
+                played_at, replay_path, ghost, play_count, clear_count, device_type
+            )
+            SELECT
+                chart_sha256, ln_policy, double_option, rule_mode,
+                clear_type, gauge_type, gauge_value,
+                ex_score, bp, cb, max_combo,
+                fast_pgreat, slow_pgreat, fast_great, slow_great,
+                fast_good, slow_good, fast_bad, slow_bad,
+                fast_poor, slow_poor, fast_empty_poor, slow_empty_poor,
+                played_at, replay_path, '', 1, 0, device_type
+            FROM score_history
+            WHERE id = ?1",
+            params![history_id],
+        )
+        .unwrap();
+        run_migrations(&mut conn, SCORE_MIGRATIONS).unwrap();
+
+        let version: i32 = conn.pragma_query_value(None, "user_version", |row| row.get(0)).unwrap();
+        assert_eq!(version, 22);
+
+        let mut stmt = conn.prepare("PRAGMA table_info(score_best)").unwrap();
+        let columns = stmt
+            .query_map([], |row| row.get::<_, String>(1))
+            .unwrap()
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .unwrap();
+        assert!(columns.iter().any(|column| column == "best_score_history_id"));
+
+        let linked_history_id: i64 = conn
+            .query_row("SELECT best_score_history_id FROM score_best", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(linked_history_id, history_id);
     }
 }
