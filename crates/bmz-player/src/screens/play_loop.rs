@@ -77,7 +77,7 @@ pub fn advance_play_screen_with_bga_frames(
     bga_frames: &BgaFrameCatalog,
 ) -> FrameOutput<RenderSnapshot> {
     let frame = advance_session_frame(session, audio);
-    let render_snapshot = build_render_snapshot_with_target_and_bga_frames(
+    let mut render_snapshot = build_render_snapshot_with_target_and_bga_frames(
         session,
         frame.times.render_now,
         &session.recent_judgements,
@@ -86,11 +86,13 @@ pub fn advance_play_screen_with_bga_frames(
         target_ex_score,
         bga_frames,
     );
+    render_snapshot.skin_events = frame.skin_events.clone();
     FrameOutput {
         render_snapshot,
         judgements: frame.judgements,
         mine_hits: frame.mine_hits,
         keysound_volumes: frame.keysound_volumes,
+        skin_events: frame.skin_events,
         state: frame.state,
     }
 }
@@ -199,11 +201,13 @@ fn frame_output_from_session_frame_cached(
         cache,
     );
     render_snapshot.play_elapsed_time = TimeUs(frame.times.audio_now.0.max(0));
+    render_snapshot.skin_events = frame.skin_events.clone();
     FrameOutput {
         render_snapshot,
         judgements: frame.judgements,
         mine_hits: frame.mine_hits,
         keysound_volumes: frame.keysound_volumes,
+        skin_events: frame.skin_events,
         state: frame.state,
     }
 }

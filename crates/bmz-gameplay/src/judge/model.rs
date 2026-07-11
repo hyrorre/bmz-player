@@ -83,7 +83,7 @@ impl JudgeWindows {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct JudgementEvent {
     pub note_id: Option<NoteId>,
     pub lane: Lane,

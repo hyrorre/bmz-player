@@ -2518,6 +2518,20 @@ fn lua_table_to_json(
         if let Value::Function(function) = &value {
             if key == "value" {
                 let is_graph = path.contains(".graph[");
+                if matches!(object_id.as_deref(), Some("val-hits-per-sec")) {
+                    object.insert(
+                        "value_expr".to_string(),
+                        JsonValue::String("bmz:keylogger_nps".to_string()),
+                    );
+                    continue;
+                }
+                if is_graph
+                    && let Some(value_expr) =
+                        object_id.as_deref().and_then(keylogger_graph_value_expr_from_id)
+                {
+                    object.insert("value_expr".to_string(), JsonValue::String(value_expr));
+                    continue;
+                }
                 if !is_graph
                     && path.contains(".imageset[")
                     && let Some(ref_id) = infer_gauge_type_imageset_ref(function, main_state_probe)
@@ -2685,6 +2699,22 @@ fn lua_table_to_json(
         );
     }
     Ok(JsonValue::Object(object))
+}
+
+fn keylogger_graph_value_expr_from_id(id: &str) -> Option<String> {
+    let rest = id.strip_prefix("keylogger-graph-")?;
+    let mut parts = rest.split('-');
+    let graph_kind = parts.next()?;
+    let lane = parts.next()?.parse::<usize>().ok()?;
+    let layer = parts.next()?;
+    if parts.next().is_some()
+        || !matches!(graph_kind, "judge" | "fastslow")
+        || lane == 0
+        || !matches!(layer, "cool" | "great" | "good" | "bad" | "fast" | "slow")
+    {
+        return None;
+    }
+    Some(format!("bmz:keylogger_graph:{graph_kind}:{lane}:{layer}"))
 }
 
 fn lua_object_id(entries: &[(Value, Value)]) -> Option<String> {
@@ -4944,6 +4974,19 @@ fn lua_key_to_json_key(key: Value, path: &str, warnings: &mut Vec<String>) -> Re
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn maps_peacefulplay_keylogger_graph_ids_to_builtin_expressions() {
+        assert_eq!(
+            keylogger_graph_value_expr_from_id("keylogger-graph-judge-3-good").as_deref(),
+            Some("bmz:keylogger_graph:judge:3:good")
+        );
+        assert_eq!(
+            keylogger_graph_value_expr_from_id("keylogger-graph-fastslow-9-fast").as_deref(),
+            Some("bmz:keylogger_graph:fastslow:9:fast")
+        );
+        assert!(keylogger_graph_value_expr_from_id("graph-now").is_none());
+    }
 
     #[test]
     fn infers_fixed_delay_timer_function() {

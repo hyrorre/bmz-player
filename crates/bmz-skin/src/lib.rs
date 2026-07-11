@@ -2623,6 +2623,27 @@ mod tests {
             property_warnings.is_empty(),
             "PeacefulPlay properties should accept integral Lua-number ops: {property_warnings:?}"
         );
+        assert_eq!(
+            loaded
+                .document
+                .value
+                .iter()
+                .find(|value| value.id == "val-hits-per-sec")
+                .map(|value| value.value_expr.as_str()),
+            Some("bmz:keylogger_nps")
+        );
+        let keylogger_graphs = loaded
+            .document
+            .graph
+            .iter()
+            .filter(|graph| graph.id.starts_with("keylogger-graph-"))
+            .collect::<Vec<_>>();
+        assert!(!keylogger_graphs.is_empty());
+        assert!(
+            keylogger_graphs
+                .iter()
+                .all(|graph| { graph.value_expr.starts_with("bmz:keylogger_graph:") })
+        );
         assert!(
             loaded.document.destination.iter().any(|destination| matches!(
                 destination,

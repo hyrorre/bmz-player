@@ -4,6 +4,7 @@ use bmz_chart::model::LongNoteMode;
 use bmz_core::judge::{Judge, TimingSide};
 use bmz_core::lane::{KeyMode, LANE_COUNT, Lane};
 use bmz_core::time::TimeUs;
+use bmz_gameplay::session::SkinRuntimeEvent;
 
 pub use crate::chart_graph::BpmGraphSegment;
 use crate::skin_offset::SkinOffsetValues;
@@ -160,6 +161,8 @@ pub struct RenderSnapshot {
     pub visible_long_notes: Vec<VisibleLongNote>,
     pub recent_inputs: Vec<DisplayInput>,
     pub recent_judgements: Vec<DisplayJudgement>,
+    /// このフレームで発生した key logger 等の skin runtime 向けイベント。
+    pub skin_events: Vec<SkinRuntimeEvent>,
     /// HitErrorVisualizer 用の直近判定タイミング (ms)。
     pub hit_error_ring: HitErrorRingSnapshot,
     /// Full combo timer elapsed ms (skin timer 48/49). None while inactive.

@@ -481,6 +481,8 @@ pub fn build_game_session_with_input_backend(
         scratch_angle_last_render_at: None,
         lane_auto_release_at: Default::default(),
         recent_judgements: Vec::new(),
+        pending_skin_events: Vec::new(),
+        next_skin_event_sequence: 0,
         result_judgements: Default::default(),
         hit_error_ring: HitErrorRing::default(),
         input_offset_auto_adjust_enabled,

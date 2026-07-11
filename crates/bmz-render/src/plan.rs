@@ -986,6 +986,7 @@ fn plan_play(
         skin_loaded: snapshot.resources_loaded && play_elapsed_ms >= skin_load_delay_ms,
         ..crate::skin::SkinDrawState::default()
     };
+    dynamic_timers.ingest_skin_events(&snapshot.skin_events, key_mode, snapshot.time.0);
     advance_skin_dynamic_timers(skin, dynamic_timers, &mut skin_state, play_elapsed_ms);
     let skin_text = SkinTextState {
         title: &snapshot.title,

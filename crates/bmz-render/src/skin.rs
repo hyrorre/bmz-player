@@ -1,13 +1,15 @@
 use std::borrow::Cow;
-use std::collections::{HashMap, hash_map::DefaultHasher};
+use std::collections::{HashMap, VecDeque, hash_map::DefaultHasher};
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use bmz_core::input::InputKind;
 use bmz_core::judge::{Judge, TimingSide};
 use bmz_core::lane::{KeyMode, LANE_COUNT, Lane};
+use bmz_gameplay::session::{SkinRuntimeEvent, SkinRuntimeEventKind};
 use serde::Deserialize;
 
 use crate::assets::load_png_rgba;
@@ -1059,6 +1061,15 @@ pub struct SkinDrawState {
     /// Fast/Slow 内訳 (ref 410-419/421-424)。
     /// Play/Result 中は Some、それ以外は None。
     pub fast_slow_counts: Option<crate::snapshot::FastSlowJudgeCounts>,
+    /// PeacefulPlay key logger: 直近1秒のPress数。
+    pub keylogger_nps: u32,
+    /// display lane別の COOL/GREAT/GOOD/BAD 累積数。
+    pub keylogger_judge_counts: [[u32; 4]; LANE_COUNT],
+    /// display lane別の COOL/FAST/SLOW 累積数。
+    pub keylogger_fast_slow_counts: [[u32; 3]; LANE_COUNT],
+    /// display lane別、直近16 Pressの開始時刻からの経過ms。
+    pub keylogger_event_ms: [[Option<i32>; 16]; LANE_COUNT],
+    pub keylogger_exclude_cool: bool,
     /// 過去ベスト max combo (ref 172)。
     pub best_max_combo: Option<u32>,
     /// ターゲット max combo (ref 173, 175 で使用)。
@@ -1288,6 +1299,11 @@ impl Default for SkinDrawState {
             select_bp: None,
             select_cb: None,
             fast_slow_counts: None,
+            keylogger_nps: 0,
+            keylogger_judge_counts: [[0; 4]; LANE_COUNT],
+            keylogger_fast_slow_counts: [[0; 3]; LANE_COUNT],
+            keylogger_event_ms: [[None; 16]; LANE_COUNT],
+            keylogger_exclude_cool: false,
             best_max_combo: None,
             target_max_combo: None,
             best_bp: None,
@@ -1343,6 +1359,18 @@ pub struct DynamicTimerRuntime {
     keybeam_keyoff_starts: [Option<i32>; LANE_COUNT],
     keybeam_suppressed: [bool; LANE_COUNT],
     keybeam_fade_allowed: [bool; LANE_COUNT],
+    key_logger: KeyLoggerRuntime,
+}
+
+#[derive(Debug, Clone, Default)]
+struct KeyLoggerRuntime {
+    last_sequence: Option<u64>,
+    last_now_us: Option<i64>,
+    press_history_us: VecDeque<i64>,
+    judge_counts: [[u32; 4]; LANE_COUNT],
+    fast_slow_counts: [[u32; 3]; LANE_COUNT],
+    event_started_ms: [[Option<i32>; 16]; LANE_COUNT],
+    next_event_slot: [usize; LANE_COUNT],
 }
 
 impl Default for DynamicTimerRuntime {
@@ -1353,6 +1381,7 @@ impl Default for DynamicTimerRuntime {
             keybeam_keyoff_starts: [None; LANE_COUNT],
             keybeam_suppressed: [false; LANE_COUNT],
             keybeam_fade_allowed: [false; LANE_COUNT],
+            key_logger: KeyLoggerRuntime::default(),
         }
     }
 }
@@ -1365,6 +1394,10 @@ impl DynamicTimerRuntime {
     /// observe 条件を評価し、`state.dynamic_timer_ms` を更新する。
     pub fn advance(&mut self, document: &SkinDocument, state: &mut SkinDrawState, now_ms: i32) {
         self.advance_keybeam(state, now_ms);
+        self.key_logger.write_state(state, now_ms);
+        state.keylogger_exclude_cool = !document.graph.iter().any(|graph| {
+            graph.id.starts_with("keylogger-graph-judge-") && graph.id.ends_with("-cool")
+        });
         state.fixed_delay_timer_ms.clear();
         for def in &document.fixed_delay_timers {
             let Some(source_elapsed) = skin_timer_elapsed_ms(Some(def.source_timer), state) else {
@@ -1391,6 +1424,15 @@ impl DynamicTimerRuntime {
         }
     }
 
+    pub fn ingest_skin_events(
+        &mut self,
+        events: &[SkinRuntimeEvent],
+        key_mode: KeyMode,
+        now_us: i64,
+    ) {
+        self.key_logger.ingest(events, key_mode, now_us);
+    }
+
     fn advance_keybeam(&mut self, state: &mut SkinDrawState, now_ms: i32) {
         for lane in 0..LANE_COUNT {
             let keyon_start = state.keyon_ms[lane].map(|elapsed| now_ms.saturating_sub(elapsed));
@@ -1414,6 +1456,79 @@ impl DynamicTimerRuntime {
                 keyoff_start.is_some() && self.keybeam_fade_allowed[lane];
             self.keybeam_keyon_starts[lane] = keyon_start;
             self.keybeam_keyoff_starts[lane] = keyoff_start;
+        }
+    }
+}
+
+impl KeyLoggerRuntime {
+    fn ingest(&mut self, events: &[SkinRuntimeEvent], key_mode: KeyMode, now_us: i64) {
+        if self.last_now_us.is_some_and(|last| now_us < last) {
+            *self = Self::default();
+        }
+        self.last_now_us = Some(now_us);
+        let active_lanes = key_mode.active_lanes();
+        for event in events {
+            if self.last_sequence.is_some_and(|last| event.sequence <= last) {
+                continue;
+            }
+            self.last_sequence = Some(event.sequence);
+            match &event.kind {
+                SkinRuntimeEventKind::Input(input) if input.kind == InputKind::Press => {
+                    let Some(lane) =
+                        active_lanes.iter().position(|candidate| *candidate == input.lane)
+                    else {
+                        continue;
+                    };
+                    self.press_history_us.push_back(input.time.0);
+                    let slot = self.next_event_slot[lane];
+                    self.event_started_ms[lane][slot] =
+                        Some((input.time.0 / 1_000).clamp(i32::MIN as i64, i32::MAX as i64) as i32);
+                    self.next_event_slot[lane] = (slot + 1) % 16;
+                }
+                SkinRuntimeEventKind::Judgement(judgement) => {
+                    let Some(lane) =
+                        active_lanes.iter().position(|candidate| *candidate == judgement.lane)
+                    else {
+                        continue;
+                    };
+                    let judge = match judgement.judge {
+                        Judge::PGreat => 0,
+                        Judge::Great => 1,
+                        Judge::Good => 2,
+                        Judge::Bad | Judge::Poor | Judge::EmptyPoor => 3,
+                    };
+                    self.judge_counts[lane][judge] =
+                        self.judge_counts[lane][judge].saturating_add(1);
+                    let side = match judgement.judge {
+                        Judge::PGreat => Some(0),
+                        _ => match judgement.side {
+                            TimingSide::Fast => Some(1),
+                            TimingSide::Slow => Some(2),
+                        },
+                    };
+                    if let Some(side) = side {
+                        self.fast_slow_counts[lane][side] =
+                            self.fast_slow_counts[lane][side].saturating_add(1);
+                    }
+                }
+                _ => {}
+            }
+        }
+        let keep_from = now_us.saturating_sub(1_000_000);
+        while self.press_history_us.front().is_some_and(|time| *time < keep_from) {
+            self.press_history_us.pop_front();
+        }
+    }
+
+    fn write_state(&self, state: &mut SkinDrawState, now_ms: i32) {
+        state.keylogger_nps = self.press_history_us.len().min(999) as u32;
+        state.keylogger_judge_counts = self.judge_counts;
+        state.keylogger_fast_slow_counts = self.fast_slow_counts;
+        for lane in 0..LANE_COUNT {
+            for slot in 0..16 {
+                state.keylogger_event_ms[lane][slot] =
+                    self.event_started_ms[lane][slot].map(|started| now_ms.saturating_sub(started));
+            }
         }
     }
 }
@@ -7516,6 +7631,12 @@ fn clamped_gauge_value(state: &SkinDrawState) -> f32 {
 }
 
 fn skin_builtin_value_f32(expr: &str, state: &SkinDrawState) -> Option<f32> {
+    if expr.trim() == "bmz:keylogger_nps" {
+        return Some(state.keylogger_nps as f32);
+    }
+    if let Some(value) = keylogger_graph_value(expr.trim(), state) {
+        return Some(value);
+    }
     match expr.trim() {
         SKIN_EXPR_ADJUSTED_COVER => state.adjusted_cover_progress,
         SKIN_EXPR_ADJUSTED_RATE => state.adjusted_rate,
@@ -7532,6 +7653,55 @@ fn skin_builtin_value_f32(expr: &str, state: &SkinDrawState) -> Option<f32> {
         SKIN_EXPR_GAUGE_AMOUNT_INTEGER => Some(clamped_gauge_value(state).floor()),
         SKIN_EXPR_GAUGE_AMOUNT_FRACTION => {
             Some((clamped_gauge_value(state) * 100.0).floor() % 100.0)
+        }
+        _ => None,
+    }
+}
+
+fn keylogger_graph_value(expr: &str, state: &SkinDrawState) -> Option<f32> {
+    let rest = expr.strip_prefix("bmz:keylogger_graph:")?;
+    let mut parts = rest.split(':');
+    let graph_kind = parts.next()?;
+    let lane = parts.next()?.parse::<usize>().ok()?.checked_sub(1)?;
+    let layer = parts.next()?;
+    if parts.next().is_some() || lane >= LANE_COUNT {
+        return None;
+    }
+    match graph_kind {
+        "judge" => {
+            let start = match layer {
+                "cool" => 0,
+                "great" => 1,
+                "good" => 2,
+                "bad" => 3,
+                _ => return None,
+            };
+            let denominator_start = usize::from(state.keylogger_exclude_cool);
+            let max = state
+                .keylogger_judge_counts
+                .iter()
+                .map(|counts| counts[denominator_start..].iter().sum::<u32>())
+                .max()
+                .unwrap_or(0);
+            let count = state.keylogger_judge_counts[lane][start..].iter().sum::<u32>();
+            Some(if max == 0 { 0.0 } else { count as f32 / max as f32 })
+        }
+        "fastslow" => {
+            let start = match layer {
+                "cool" => 0,
+                "fast" => 1,
+                "slow" => 2,
+                _ => return None,
+            };
+            let denominator_start = usize::from(state.keylogger_exclude_cool);
+            let max = state
+                .keylogger_fast_slow_counts
+                .iter()
+                .map(|counts| counts[denominator_start..].iter().sum::<u32>())
+                .max()
+                .unwrap_or(0);
+            let count = state.keylogger_fast_slow_counts[lane][start..].iter().sum::<u32>();
+            Some(if max == 0 { 0.0 } else { count as f32 / max as f32 })
         }
         _ => None,
     }
@@ -12302,11 +12472,78 @@ fn destination_render_layer<'a>(
 
 #[cfg(test)]
 mod tests {
+    use bmz_core::ids::NoteId;
+    use bmz_core::input::{InputDeviceKind, InputEvent, InputKind, InputSource};
     use bmz_core::time::TimeUs;
 
     use crate::plan::TextLayer;
 
     use super::*;
+
+    #[test]
+    fn keylogger_runtime_consumes_sequences_and_builds_nps_and_lane_counts() {
+        let input = SkinRuntimeEvent {
+            sequence: 10,
+            kind: SkinRuntimeEventKind::Input(InputEvent {
+                lane: Lane::Key1,
+                kind: InputKind::Press,
+                time: TimeUs(500_000),
+                source: InputSource::Human,
+                device_kind: InputDeviceKind::Keyboard,
+                scratch_direction: None,
+            }),
+        };
+        let judgement = SkinRuntimeEvent {
+            sequence: 11,
+            kind: SkinRuntimeEventKind::Judgement(bmz_gameplay::judge::model::JudgementEvent {
+                note_id: Some(NoteId(1)),
+                lane: Lane::Key1,
+                judge: Judge::Great,
+                side: TimingSide::Fast,
+                delta: TimeUs(-1_000),
+                time: TimeUs(500_000),
+                affects_score: true,
+            }),
+        };
+        let mut runtime = KeyLoggerRuntime::default();
+        runtime.ingest(&[input.clone(), judgement.clone()], KeyMode::K9, 500_000);
+        runtime.ingest(&[input, judgement], KeyMode::K9, 500_000);
+        let mut state = SkinDrawState::default();
+        runtime.write_state(&mut state, 500);
+
+        assert_eq!(state.keylogger_nps, 1);
+        assert_eq!(state.keylogger_judge_counts[0], [0, 1, 0, 0]);
+        assert_eq!(state.keylogger_fast_slow_counts[0], [0, 1, 0]);
+        assert_eq!(state.keylogger_event_ms[0][0], Some(0));
+        assert!(
+            (keylogger_graph_value("bmz:keylogger_graph:judge:1:great", &state).unwrap() - 1.0)
+                .abs()
+                < f32::EPSILON
+        );
+
+        runtime.ingest(&[], KeyMode::K9, 1_500_001);
+        runtime.write_state(&mut state, 1_500);
+        assert_eq!(state.keylogger_nps, 0);
+
+        let next_session_input = SkinRuntimeEvent {
+            sequence: 0,
+            kind: SkinRuntimeEventKind::Input(InputEvent {
+                lane: Lane::Key2,
+                kind: InputKind::Press,
+                time: TimeUs(0),
+                source: InputSource::Human,
+                device_kind: InputDeviceKind::Keyboard,
+                scratch_direction: None,
+            }),
+        };
+        runtime.ingest(&[next_session_input], KeyMode::K9, 0);
+        runtime.write_state(&mut state, 0);
+
+        assert_eq!(state.keylogger_nps, 1);
+        assert_eq!(state.keylogger_judge_counts, [[0; 4]; LANE_COUNT]);
+        assert_eq!(state.keylogger_event_ms[0], [None; 16]);
+        assert_eq!(state.keylogger_event_ms[1][0], Some(0));
+    }
 
     fn judge_region_state(region: usize, ms: i32, image_index: usize) -> JudgeRegionState {
         let mut judge_ms = [None; MAX_JUDGE_REGIONS];

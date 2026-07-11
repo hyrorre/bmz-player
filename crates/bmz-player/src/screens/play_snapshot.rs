@@ -442,6 +442,7 @@ pub fn build_render_snapshot_with_target_and_bga_frames_cached(
             .iter()
             .map(|event| display_judgement(event, session.display_combo()))
             .collect(),
+        skin_events: Vec::new(),
         hit_error_ring: bmz_render::snapshot::HitErrorRingSnapshot {
             values: session.hit_error_ring.values,
             index: session.hit_error_ring.index,

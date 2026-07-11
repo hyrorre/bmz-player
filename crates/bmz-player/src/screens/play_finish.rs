@@ -1051,6 +1051,8 @@ mod tests {
             scratch_angle_last_render_at: None,
             lane_auto_release_at: Default::default(),
             recent_judgements: Vec::new(),
+            pending_skin_events: Vec::new(),
+            next_skin_event_sequence: 0,
             result_judgements: Default::default(),
             hit_error_ring: bmz_gameplay::hit_error::HitErrorRing::default(),
             gauge_increase_started_at: None,

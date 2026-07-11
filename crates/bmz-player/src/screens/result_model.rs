@@ -559,6 +559,7 @@ mod tests {
             }],
             mine_hits: Vec::new(),
             keysound_volumes: Vec::new(),
+            skin_events: Vec::new(),
             state: PlayState::Playing,
         };
         let mut collector = ResultGraphCollector::default();
@@ -572,6 +573,7 @@ mod tests {
             judgements: Vec::new(),
             mine_hits: Vec::new(),
             keysound_volumes: Vec::new(),
+            skin_events: Vec::new(),
             state: PlayState::Playing,
         });
 
@@ -603,6 +605,7 @@ mod tests {
                 judgements: Vec::new(),
                 mine_hits: Vec::new(),
                 keysound_volumes: Vec::new(),
+                skin_events: Vec::new(),
                 state: PlayState::Playing,
             });
         }
@@ -650,6 +653,7 @@ mod tests {
                 judgements: Vec::new(),
                 mine_hits: Vec::new(),
                 keysound_volumes: Vec::new(),
+                skin_events: Vec::new(),
                 state: PlayState::Playing,
             });
         }
