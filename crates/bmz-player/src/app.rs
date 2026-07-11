@@ -5045,6 +5045,13 @@ impl WinitApp {
         if !matches!(self.view_state(), AppViewState::Select) {
             return;
         }
+        if in_settings_stack(&self.folder_stack) && self.settings_edit.is_some() {
+            let direction = settings_edit_direction_from_mouse_wheel(delta);
+            if direction != 0 {
+                self.adjust_settings_edit(direction);
+            }
+            return;
+        }
         if let Some(select_move) = select_wheel_move(delta) {
             self.move_selection(select_move);
         }
@@ -5206,6 +5213,23 @@ impl WinitApp {
     }
 
     fn handle_select_row_click(&mut self, row_index: u32, button: MouseButton) {
+        if in_settings_stack(&self.folder_stack) && button == MouseButton::Left {
+            if self.settings_edit.is_some() {
+                self.commit_settings_edit();
+                return;
+            }
+            if let Some(entry_id) =
+                self.select_items.get(row_index as usize).and_then(|item| match item {
+                    SelectItem::Config(row) => Some(row.entry_id),
+                    _ => None,
+                })
+            {
+                self.selected_index = row_index as usize;
+                self.restart_select_bar_timer_without_scroll(Instant::now());
+                self.begin_settings_edit(entry_id);
+                return;
+            }
+        }
         match select_row_click_action(
             row_index,
             button,
@@ -12356,6 +12380,10 @@ fn settings_browse_move_control(
 
 fn settings_edit_direction_from_analog_scroll(mov: i32) -> i32 {
     mov.signum()
+}
+
+fn settings_edit_direction_from_mouse_wheel(delta: MouseScrollDelta) -> i32 {
+    mouse_wheel_y(delta).signum() as i32
 }
 
 fn system_sound_manager_from_boot(
@@ -20133,6 +20161,20 @@ mod tests {
         assert_eq!(settings_edit_direction_from_analog_scroll(3), 1);
         assert_eq!(settings_edit_direction_from_analog_scroll(-2), -1);
         assert_eq!(settings_edit_direction_from_analog_scroll(0), 0);
+    }
+
+    #[test]
+    fn settings_edit_mouse_wheel_uses_scroll_direction() {
+        assert_eq!(
+            settings_edit_direction_from_mouse_wheel(MouseScrollDelta::LineDelta(0.0, 1.0)),
+            1
+        );
+        assert_eq!(
+            settings_edit_direction_from_mouse_wheel(MouseScrollDelta::PixelDelta(
+                winit::dpi::PhysicalPosition::new(0.0, -12.0)
+            )),
+            -1
+        );
     }
 
     #[test]
