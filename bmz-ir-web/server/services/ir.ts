@@ -484,48 +484,49 @@ export async function deleteLocalBackfillScores(
     or(...affectedKeys.map(scoreHistoryKeyCondition)),
   )
 
-  await db.transaction(async (tx) => {
+  const deletedScoreIdSet = new Set(deletedScoreIds)
+  const remainingRows = await db
+    .select({
+      id: schema.scores.id,
+      player_id: schema.scores.playerId,
+      chart_sha256: schema.scores.chartSha256,
+      ex_score: schema.scores.exScore,
+      clear_type: schema.scores.clearType,
+      clear_rank: schema.scores.clearRank,
+      max_combo: schema.scores.maxCombo,
+      min_bp: schema.scores.minBp,
+      min_cb: schema.scores.minCb,
+      device_type: schema.scores.deviceType,
+      gauge: schema.scores.gauge,
+      ln_policy: schema.scores.lnPolicy,
+      effective_ln_mode: schema.scores.effectiveLnMode,
+      double_option: schema.scores.doubleOption,
+      rule_mode: schema.scores.ruleMode,
+      scoring: schema.scores.scoring,
+      played_at: schema.scores.playedAt,
+      server_received_at: schema.scores.serverReceivedAt,
+      verification: schema.scores.verification,
+      play_options: schema.scores.playOptions,
+    })
+    .from(schema.scores)
+    .where(remainingWhere)
+
+  const rebuilt = bestRowsFromHistory(
+    remainingRows
+      .filter((row) => !deletedScoreIdSet.has(row.id))
+      .map((row) => ({ ...rowToBestScoreRow({ ...row, score_id: row.id }), id: row.id })),
+  )
+  const updatedAt = new Date()
+  const statements = [
+    // D1 は明示 transaction の BEGIN を受け付けない。batch は原子的に実行されるため、
     // score を削除すると source score を参照する best_scores は cascade され得る。
-    // affected key 全体を一旦組み直して、残存scoreから正しい代表行を復元する。
-    await tx.delete(schema.bestScores).where(affectedWhere)
-    await tx
+    // affected key 全体を同じ batch で組み直し、残存scoreから正しい代表行を復元する。
+    db.delete(schema.bestScores).where(affectedWhere),
+    db
       .delete(schema.scores)
-      .where(and(eq(schema.scores.playerId, user.id), inArray(schema.scores.id, deletedScoreIds)))
-
-    const remainingRows = await tx
-      .select({
-        id: schema.scores.id,
-        player_id: schema.scores.playerId,
-        chart_sha256: schema.scores.chartSha256,
-        ex_score: schema.scores.exScore,
-        clear_type: schema.scores.clearType,
-        clear_rank: schema.scores.clearRank,
-        max_combo: schema.scores.maxCombo,
-        min_bp: schema.scores.minBp,
-        min_cb: schema.scores.minCb,
-        device_type: schema.scores.deviceType,
-        gauge: schema.scores.gauge,
-        ln_policy: schema.scores.lnPolicy,
-        effective_ln_mode: schema.scores.effectiveLnMode,
-        double_option: schema.scores.doubleOption,
-        rule_mode: schema.scores.ruleMode,
-        played_at: schema.scores.playedAt,
-        server_received_at: schema.scores.serverReceivedAt,
-        verification: schema.scores.verification,
-        play_options: schema.scores.playOptions,
-      })
-      .from(schema.scores)
-      .where(remainingWhere)
-
-    const rebuilt = bestRowsFromHistory(
-      remainingRows.map((row) => ({
-        ...rowToBestScoreRow({ ...row, score_id: row.id }),
-        id: row.id,
-      })),
-    )
-    const updatedAt = new Date()
-    for (const row of rebuilt) {
-      await tx.insert(schema.bestScores).values({
+      .where(and(eq(schema.scores.playerId, user.id), inArray(schema.scores.id, deletedScoreIds))),
+    ...rebuilt.map((row) =>
+      db.insert(schema.bestScores).values({
         id: randomUUID(),
         playerId: row.player_id,
         chartSha256: row.chart_sha256,
@@ -552,9 +553,10 @@ export async function deleteLocalBackfillScores(
         serverReceivedAt: row.server_received_at,
         verification: row.verification,
         updatedAt,
-      })
-    }
-  })
+      }),
+    ),
+  ] as [BatchItem<'sqlite'>, ...BatchItem<'sqlite'>[]]
+  await db.batch(statements)
 
   return {
     deleted_score_ids: deletedScoreIds,
