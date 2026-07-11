@@ -1,7 +1,7 @@
 use std::path::Path;
 
 use anyhow::Result;
-use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
+use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params, params_from_iter};
 
 use super::common::{configure_connection, hash_to_hex, hex_to_hash};
 use crate::ln_policy::LnScorePolicy;
@@ -103,6 +103,21 @@ pub struct NewIrScoreSubmission {
     pub submitted_at: i64,
     pub log_path: String,
     pub error: String,
+}
+
+/// ローカル score_history と対応する、受理済み IR score の記録。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IrSubmittedScoreLink {
+    pub provider: String,
+    pub account_id: String,
+    pub local_score_id: i64,
+    pub remote_score_id: String,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct IrLocalScoreCleanupReport {
+    pub removed_jobs: u32,
+    pub removed_submissions: u32,
 }
 
 impl NetworkDatabase {
@@ -598,6 +613,90 @@ impl NetworkDatabase {
         )?;
         Ok(deleted)
     }
+
+    /// 指定した local score id に紐付く、全 provider の受理済み単曲 score を返す。
+    ///
+    /// cleanup 実行前に、選択した provider 以外へ送信済みの履歴を見落とさないために
+    /// provider / account を絞らない。
+    pub fn successful_ir_score_submissions_for_local_scores(
+        &self,
+        local_score_ids: &[i64],
+    ) -> Result<Vec<IrSubmittedScoreLink>> {
+        const QUERY_CHUNK_SIZE: usize = 500;
+        let mut links = Vec::new();
+        for ids in local_score_ids.chunks(QUERY_CHUNK_SIZE) {
+            let placeholders = sql_placeholders(ids.len());
+            let sql = format!(
+                "SELECT DISTINCT provider, account_id, local_score_id, remote_score_id
+                 FROM ir_score_submissions
+                 WHERE kind = 'score'
+                   AND status = 'succeeded'
+                   AND remote_score_id != ''
+                   AND local_score_id IN ({placeholders})
+                 ORDER BY provider, account_id, local_score_id, remote_score_id"
+            );
+            let mut statement = self.conn.prepare(&sql)?;
+            let rows = statement
+                .query_map(params_from_iter(ids.iter()), |row| {
+                    Ok(IrSubmittedScoreLink {
+                        provider: row.get(0)?,
+                        account_id: row.get(1)?,
+                        local_score_id: row.get(2)?,
+                        remote_score_id: row.get(3)?,
+                    })
+                })?
+                .collect::<std::result::Result<Vec<_>, _>>()?;
+            links.extend(rows);
+        }
+        Ok(links)
+    }
+
+    /// 指定 provider/account の古い local score に紐付く送信台帳とジョブを削除する。
+    ///
+    /// IR 本体の削除に成功した後で呼び出す。score/replay/attestation を含め、消える
+    /// score_history への参照を残さない。
+    pub fn purge_ir_records_for_local_scores(
+        &mut self,
+        provider: &str,
+        account_id: &str,
+        local_score_ids: &[i64],
+    ) -> Result<IrLocalScoreCleanupReport> {
+        const DELETE_CHUNK_SIZE: usize = 500;
+        let tx = self.conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let mut report = IrLocalScoreCleanupReport::default();
+        for ids in local_score_ids.chunks(DELETE_CHUNK_SIZE) {
+            let placeholders = sql_placeholders(ids.len());
+            let parameters = || {
+                std::iter::once(&provider as &dyn rusqlite::ToSql)
+                    .chain(std::iter::once(&account_id as &dyn rusqlite::ToSql))
+                    .chain(ids.iter().map(|id| id as &dyn rusqlite::ToSql))
+            };
+            let submissions_sql = format!(
+                "DELETE FROM ir_score_submissions
+                 WHERE provider = ?1
+                   AND account_id = ?2
+                   AND local_score_id IN ({placeholders})"
+            );
+            report.removed_submissions = report.removed_submissions.saturating_add(
+                tx.execute(&submissions_sql, params_from_iter(parameters()))? as u32,
+            );
+            let jobs_sql = format!(
+                "DELETE FROM ir_score_jobs
+                 WHERE provider = ?1
+                   AND account_id = ?2
+                   AND local_score_id IN ({placeholders})"
+            );
+            report.removed_jobs = report
+                .removed_jobs
+                .saturating_add(tx.execute(&jobs_sql, params_from_iter(parameters()))? as u32);
+        }
+        tx.commit()?;
+        Ok(report)
+    }
+}
+
+fn sql_placeholders(count: usize) -> String {
+    std::iter::repeat_n("?", count).collect::<Vec<_>>().join(", ")
 }
 
 fn ir_score_job_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<IrScoreJobRecord> {
@@ -721,6 +820,81 @@ mod tests {
             })
             .unwrap();
         assert!(payload_json.is_empty());
+    }
+
+    #[test]
+    fn cleanup_removes_selected_provider_records_for_removed_local_scores() {
+        let mut db = open_network_db();
+        let score_job = db
+            .enqueue_ir_score_job(&NewIrScoreJob {
+                provider: "bmz".to_string(),
+                account_id: "account-1".to_string(),
+                kind: IrJobKind::Score,
+                local_score_id: 42,
+                chart_sha256: [1; 32],
+                ln_policy: LnScorePolicy::AutoLn,
+                payload_json: "{}".to_string(),
+                now: 100,
+            })
+            .unwrap();
+        db.enqueue_ir_score_job(&NewIrScoreJob {
+            provider: "bmz".to_string(),
+            account_id: "account-1".to_string(),
+            kind: IrJobKind::Attestation,
+            local_score_id: 42,
+            chart_sha256: [0; 32],
+            ln_policy: LnScorePolicy::AutoLn,
+            payload_json: "{}".to_string(),
+            now: 100,
+        })
+        .unwrap();
+        db.insert_ir_score_submission(&NewIrScoreSubmission {
+            job_id: score_job,
+            provider: "bmz".to_string(),
+            account_id: "account-1".to_string(),
+            kind: IrJobKind::Score,
+            local_score_id: 42,
+            remote_score_id: "remote-42".to_string(),
+            status: "succeeded".to_string(),
+            submitted_at: 101,
+            log_path: String::new(),
+            error: String::new(),
+        })
+        .unwrap();
+        db.enqueue_ir_score_job(&NewIrScoreJob {
+            provider: "other".to_string(),
+            account_id: "account-2".to_string(),
+            kind: IrJobKind::Score,
+            local_score_id: 42,
+            chart_sha256: [2; 32],
+            ln_policy: LnScorePolicy::AutoLn,
+            payload_json: "{}".to_string(),
+            now: 100,
+        })
+        .unwrap();
+
+        assert_eq!(
+            db.successful_ir_score_submissions_for_local_scores(&[42]).unwrap(),
+            vec![IrSubmittedScoreLink {
+                provider: "bmz".to_string(),
+                account_id: "account-1".to_string(),
+                local_score_id: 42,
+                remote_score_id: "remote-42".to_string(),
+            }]
+        );
+        assert_eq!(
+            db.purge_ir_records_for_local_scores("bmz", "account-1", &[42]).unwrap(),
+            IrLocalScoreCleanupReport { removed_jobs: 2, removed_submissions: 1 }
+        );
+        let remaining: Vec<(String, String)> = db
+            .conn()
+            .prepare("SELECT provider, account_id FROM ir_score_jobs ORDER BY id")
+            .unwrap()
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
+            .unwrap();
+        assert_eq!(remaining, vec![("other".to_string(), "account-2".to_string())]);
     }
 
     #[test]

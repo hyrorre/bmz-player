@@ -21,6 +21,7 @@ POST   /api/v1/auth/logout
 POST   /api/v1/auth/refresh                    # refresh token rotation + provider_key
 GET    /api/v1/me
 POST   /api/v1/scores                          # include=rankings&ranking_scopes=... 対応
+POST   /api/v1/scores/delete-backfills         # 本人の古い local_backfill score を batch 削除
 GET    /api/v1/scores/{id}                     # スコア詳細 (公開)
 GET    /api/v1/charts                          # 譜面一覧 (?q= タイトル検索)
 GET    /api/v1/charts/{sha256}                 # 詳細 + play_count/clear_count 集計
@@ -49,7 +50,7 @@ GET    /api/v1/courses/{course_hash}/ranking   # global のみ
 
 ### クライアント (bmz-player)
 
-- CLI: `bmz ir login|logout|status|ranking|sync|upload-local|rivals|device-key|replay`。
+- CLI: `bmz ir login|logout|status|ranking|sync|upload-local|attest-submitted|cleanup-imported|rivals|device-key|replay`。
   egui プロファイル設定からもログイン可能。
 - 送信: リザルト確定時に `ir_score_jobs` へ enqueue (send_policy 判定込み) →
   リザルト画面で即時送信 + アプリ常駐ワーカー (30 秒間隔) が残りを処理。
@@ -87,9 +88,18 @@ GET    /api/v1/courses/{course_hash}/ranking   # global のみ
   これは廃止済みのevidence形式でqueueに残ったjobを回復するためで、初回送信の署名・
   データ検証は従来どおり行う。
   per-history ghost は現在の `score_history` には保持していないため送らない。
+- import cleanup: `bmz ir cleanup-imported` は、Beatoraja 行と譜面 hash、プレイ日時、
+  EX、全判定内訳、BP、CB、max combo、random seed が一致する旧 `source_kind=Local`
+  履歴を dry-run で表示する。`--apply` はまず選択した provider/account の
+  `local_backfill` score を server 側で削除して affected `best_scores` を残存 history
+  から再構築し、次にローカルの IR job/submission 台帳を削除してから `score.db` の
+  履歴、`score_best`、`player_stats` を再集計する。別 IR account への送信済み候補が
+  ある場合は、ローカル削除を止める。
 - rate limit: score submit / course score は 15 分あたり user 1500 / IP 3000。
   replay upload 系は 1 replay あたり upload-url / upload / verify の 3 request を使うため、
   15 分あたり user 900 / IP 1800。429 では `Retry-After` を返す。
+  backfill cleanup は 100 score / request、15 分あたり user 120 / IP 240 で、client は
+  batch 間を 8 秒空ける。
 - ランキング表示: Result / Select スキンの `NUMBER_IR_RANK(179)` /
   `NUMBER_IR_TOTALPLAYER(180/200)` / `NUMBER_IR_CLEARRATE(181)` /
   `OPTION_IR_LOADING/LOADED/NOPLAYER/FAILED(601..604)`、

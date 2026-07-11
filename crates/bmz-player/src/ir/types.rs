@@ -193,6 +193,15 @@ pub struct IrSubmitResponse {
     pub rankings: BTreeMap<IrRankingScope, IrScopedRankingResponse>,
 }
 
+/// `/api/v1/scores/delete-backfills` のレスポンス。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IrLocalBackfillDeleteResponse {
+    #[serde(default)]
+    pub deleted_score_ids: Vec<String>,
+    #[serde(default)]
+    pub missing_score_ids: Vec<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IrScopedRankingResponse {
     pub succeeded: bool,

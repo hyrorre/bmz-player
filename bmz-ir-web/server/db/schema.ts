@@ -57,7 +57,7 @@ export const authRateLimits = sqliteTable(
   {
     // enum は Drizzle の型レベル制約のみ (SQLite に CHECK は生成されない)。
     action: text('action', {
-      enum: ['login', 'register', 'score_submit', 'refresh', 'replay_upload'],
+      enum: ['login', 'register', 'score_submit', 'score_cleanup', 'refresh', 'replay_upload'],
     }).notNull(),
     scope: text('scope', { enum: ['email', 'ip', 'user'] }).notNull(),
     scopeHash: text('scope_hash').notNull(),

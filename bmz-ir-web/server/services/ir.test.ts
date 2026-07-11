@@ -116,6 +116,49 @@ describe('ranking best row aggregation', () => {
     expect(rebuilt[0]?.clear_type).toBe('FullCombo')
     expect(rebuilt[0]?.best_clear_score_id).toBe('fc-score')
   })
+
+  test('groups cleanup rebuilds by the complete ranking bucket', () => {
+    expect(
+      __test.uniqueBestScoreKeys([
+        {
+          chart_sha256: 'chart-a',
+          ln_policy: 'AutoLn',
+          double_option: 'off',
+          rule_mode: 'Beatoraja',
+          scoring: 'bms_ex_score_v1',
+        },
+        {
+          chart_sha256: 'chart-a',
+          ln_policy: 'AutoLn',
+          double_option: 'off',
+          rule_mode: 'Beatoraja',
+          scoring: 'bms_ex_score_v1',
+        },
+        {
+          chart_sha256: 'chart-a',
+          ln_policy: 'ForceLn',
+          double_option: 'off',
+          rule_mode: 'Beatoraja',
+          scoring: 'bms_ex_score_v1',
+        },
+      ]),
+    ).toEqual([
+      {
+        chartSha256: 'chart-a',
+        lnPolicy: 'AutoLn',
+        doubleOption: 'off',
+        ruleMode: 'Beatoraja',
+        scoring: 'bms_ex_score_v1',
+      },
+      {
+        chartSha256: 'chart-a',
+        lnPolicy: 'ForceLn',
+        doubleOption: 'off',
+        ruleMode: 'Beatoraja',
+        scoring: 'bms_ex_score_v1',
+      },
+    ])
+  })
 })
 
 describe('chart update policy', () => {

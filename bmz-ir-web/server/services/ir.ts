@@ -1,5 +1,5 @@
 import { createHash, createPublicKey, randomUUID, verify as cryptoVerify } from 'node:crypto'
-import { and, desc, eq, inArray, isNull } from 'drizzle-orm'
+import { and, desc, eq, inArray, isNull, or } from 'drizzle-orm'
 import type { BatchItem } from 'drizzle-orm/batch'
 import { db, schema } from 'hub:db'
 import { isUniqueConstraintError } from '../utils/db_errors'
@@ -25,6 +25,7 @@ const DEVICE_TYPES = new Set(['keyboard', 'controller'])
 const RULE_MODES = new Set(['Beatoraja', 'Lr2Oraja', 'Dx'])
 const RANKING_SCOPES = new Set(['global', 'self_and_rivals', 'rivals', 'self', 'around_self'])
 const LOCAL_BACKFILL_SOURCE = 'local_backfill'
+export const MAX_LOCAL_BACKFILL_DELETE_BATCH_SIZE = 100
 export const CLEAR_RANK: Record<string, number> = {
   no_play: 0,
   NoPlay: 0,
@@ -96,6 +97,7 @@ interface BestScoreRow extends BestScoreCandidate {
 
 export class IrEvidenceValidationError extends Error {}
 export class IrScoreNotFoundError extends Error {}
+export class IrBackfillCleanupError extends Error {}
 
 interface ScoreAttestationPayload {
   score_id: string
@@ -111,6 +113,19 @@ interface ScoreSubmissionMetadata {
   doubleOption: IrDoubleOption
   appliedDoubleOption: IrAppliedDoubleOption
   sourceKind: IrScoreSourceKind
+}
+
+interface BestScoreKey {
+  chartSha256: string
+  lnPolicy: LnScorePolicy
+  doubleOption: IrDoubleOption
+  ruleMode: IrRuleMode
+  scoring: 'bms_ex_score_v1'
+}
+
+export interface LocalBackfillDeleteResult {
+  deleted_score_ids: string[]
+  missing_score_ids: string[]
 }
 
 export function parseRankingQuery(query: Record<string, unknown>): RankingQuery {
@@ -411,6 +426,184 @@ export async function submitScore(
     previous_best: previousBest,
     rankings: Object.keys(rankings).length > 0 ? rankings : undefined,
   }
+}
+
+/**
+ * 古い local_backfill 行を本人だけが削除するための保守API。
+ *
+ * score_history の再importで正しい metadata を持つ行を作り直す用途に限定し、
+ * 通常プレイや別プレイヤーのscoreを削除できないようにする。
+ */
+export async function deleteLocalBackfillScores(
+  user: IrRequestUser,
+  requestedScoreIds: string[],
+): Promise<LocalBackfillDeleteResult> {
+  const scoreIds = [...new Set(requestedScoreIds.map((id) => id.trim()).filter(Boolean))]
+  if (scoreIds.length === 0) {
+    throw new IrBackfillCleanupError('score_ids must not be empty')
+  }
+  if (scoreIds.length > MAX_LOCAL_BACKFILL_DELETE_BATCH_SIZE) {
+    throw new IrBackfillCleanupError(
+      `score_ids must contain at most ${MAX_LOCAL_BACKFILL_DELETE_BATCH_SIZE} entries`,
+    )
+  }
+
+  const rows = await db
+    .select({
+      id: schema.scores.id,
+      chart_sha256: schema.scores.chartSha256,
+      ln_policy: schema.scores.lnPolicy,
+      double_option: schema.scores.doubleOption,
+      rule_mode: schema.scores.ruleMode,
+      scoring: schema.scores.scoring,
+      play_options: schema.scores.playOptions,
+    })
+    .from(schema.scores)
+    .where(and(eq(schema.scores.playerId, user.id), inArray(schema.scores.id, scoreIds)))
+
+  const foundIds = new Set(rows.map((row) => row.id))
+  const nonBackfillIds = rows
+    .filter((row) => row.play_options?.submission_source !== LOCAL_BACKFILL_SOURCE)
+    .map((row) => row.id)
+  if (nonBackfillIds.length > 0) {
+    throw new IrBackfillCleanupError(`scores are not local backfills: ${nonBackfillIds.join(', ')}`)
+  }
+
+  const deletedScoreIds = rows.map((row) => row.id)
+  if (deletedScoreIds.length === 0) {
+    return { deleted_score_ids: [], missing_score_ids: scoreIds }
+  }
+  const affectedKeys = uniqueBestScoreKeys(rows)
+  const affectedConditions = affectedKeys.map(bestScoreKeyCondition)
+  const affectedWhere = and(eq(schema.bestScores.playerId, user.id), or(...affectedConditions))
+  const remainingWhere = and(
+    eq(schema.scores.playerId, user.id),
+    eq(schema.scores.accepted, true),
+    or(...affectedKeys.map(scoreHistoryKeyCondition)),
+  )
+
+  await db.transaction(async (tx) => {
+    // score を削除すると source score を参照する best_scores は cascade され得る。
+    // affected key 全体を一旦組み直して、残存scoreから正しい代表行を復元する。
+    await tx.delete(schema.bestScores).where(affectedWhere)
+    await tx
+      .delete(schema.scores)
+      .where(and(eq(schema.scores.playerId, user.id), inArray(schema.scores.id, deletedScoreIds)))
+
+    const remainingRows = await tx
+      .select({
+        id: schema.scores.id,
+        player_id: schema.scores.playerId,
+        chart_sha256: schema.scores.chartSha256,
+        ex_score: schema.scores.exScore,
+        clear_type: schema.scores.clearType,
+        clear_rank: schema.scores.clearRank,
+        max_combo: schema.scores.maxCombo,
+        min_bp: schema.scores.minBp,
+        min_cb: schema.scores.minCb,
+        device_type: schema.scores.deviceType,
+        gauge: schema.scores.gauge,
+        ln_policy: schema.scores.lnPolicy,
+        effective_ln_mode: schema.scores.effectiveLnMode,
+        double_option: schema.scores.doubleOption,
+        rule_mode: schema.scores.ruleMode,
+        played_at: schema.scores.playedAt,
+        server_received_at: schema.scores.serverReceivedAt,
+        verification: schema.scores.verification,
+        play_options: schema.scores.playOptions,
+      })
+      .from(schema.scores)
+      .where(remainingWhere)
+
+    const rebuilt = bestRowsFromHistory(
+      remainingRows.map((row) => ({
+        ...rowToBestScoreRow({ ...row, score_id: row.id }),
+        id: row.id,
+      })),
+    )
+    const updatedAt = new Date()
+    for (const row of rebuilt) {
+      await tx.insert(schema.bestScores).values({
+        id: randomUUID(),
+        playerId: row.player_id,
+        chartSha256: row.chart_sha256,
+        scoreId: row.score_id,
+        bestExScoreId: row.best_ex_score_id,
+        bestClearScoreId: row.best_clear_score_id,
+        bestMaxComboScoreId: row.best_max_combo_score_id,
+        bestMinBpScoreId: row.best_min_bp_score_id,
+        bestMinCbScoreId: row.best_min_cb_score_id,
+        exScore: row.ex_score,
+        clearType: row.clear_type,
+        clearRank: row.clear_rank,
+        maxCombo: row.max_combo,
+        minBp: row.min_bp,
+        minCb: row.min_cb,
+        deviceType: row.device_type,
+        doubleOption: row.double_option,
+        gauge: row.gauge,
+        lnPolicy: row.ln_policy,
+        effectiveLnMode: row.effective_ln_mode,
+        ruleMode: row.rule_mode,
+        scoring: row.scoring,
+        playedAt: row.played_at ? new Date(row.played_at) : null,
+        serverReceivedAt: row.server_received_at,
+        verification: row.verification,
+        updatedAt,
+      })
+    }
+  })
+
+  return {
+    deleted_score_ids: deletedScoreIds,
+    missing_score_ids: scoreIds.filter((id) => !foundIds.has(id)),
+  }
+}
+
+function uniqueBestScoreKeys(
+  rows: Array<{
+    chart_sha256: string
+    ln_policy: string
+    double_option: string
+    rule_mode: string
+    scoring: string
+  }>,
+): BestScoreKey[] {
+  const keys = new Map<string, BestScoreKey>()
+  for (const row of rows) {
+    const key: BestScoreKey = {
+      chartSha256: row.chart_sha256,
+      lnPolicy: row.ln_policy as LnScorePolicy,
+      doubleOption: row.double_option as IrDoubleOption,
+      ruleMode: row.rule_mode as IrRuleMode,
+      scoring: row.scoring as 'bms_ex_score_v1',
+    }
+    keys.set(
+      [key.chartSha256, key.lnPolicy, key.doubleOption, key.ruleMode, key.scoring].join('\u0000'),
+      key,
+    )
+  }
+  return [...keys.values()]
+}
+
+function bestScoreKeyCondition(key: BestScoreKey) {
+  return and(
+    eq(schema.bestScores.chartSha256, key.chartSha256),
+    eq(schema.bestScores.lnPolicy, key.lnPolicy),
+    eq(schema.bestScores.doubleOption, key.doubleOption),
+    eq(schema.bestScores.ruleMode, key.ruleMode),
+    eq(schema.bestScores.scoring, key.scoring),
+  )
+}
+
+function scoreHistoryKeyCondition(key: BestScoreKey) {
+  return and(
+    eq(schema.scores.chartSha256, key.chartSha256),
+    eq(schema.scores.lnPolicy, key.lnPolicy),
+    eq(schema.scores.doubleOption, key.doubleOption),
+    eq(schema.scores.ruleMode, key.ruleMode),
+    eq(schema.scores.scoring, key.scoring),
+  )
 }
 
 async function findIdempotentScore(
@@ -1464,6 +1657,7 @@ export const __test = {
   shouldUpdateExistingChart,
   dedupeBestRowsByPlayer,
   bestRowsFromHistory,
+  uniqueBestScoreKeys,
   verificationStatusForSignedSubmission,
   idempotentScoreResponse,
   scoreSubmissionMetadata,

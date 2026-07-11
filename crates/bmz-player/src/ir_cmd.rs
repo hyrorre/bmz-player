@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::io::Write as _;
 use std::path::Path;
 
@@ -60,6 +61,9 @@ pub async fn run_ir_command(cmd: IrCommand) -> Result<()> {
         }
         IrCommand::AttestSubmitted { provider, sync, all } => {
             attest_submitted_scores(&profile_paths, &profile, provider.as_deref(), sync, all).await
+        }
+        IrCommand::CleanupImported { provider, apply } => {
+            cleanup_imported_scores(&profile_paths, &profile, provider.as_deref(), apply).await
         }
         IrCommand::Rivals { action } => rivals(&profile_paths, &mut profile, action).await,
         IrCommand::DeviceKey { rotate } => device_key(&profile_paths, &profile, rotate).await,
@@ -609,6 +613,132 @@ async fn attest_submitted_scores(
             );
         }
     }
+}
+
+/// 再import済み Beatoraja 行と照合できる、source_kind 導入前の Local 履歴を整理する。
+///
+/// IR 本体を先に削除し、成功後にネットワーク台帳と score.db を更新する。中断時は
+/// リモート削除 API の missing 応答を成功として扱うため、同じコマンドを再実行できる。
+async fn cleanup_imported_scores(
+    profile_paths: &ProfilePaths,
+    profile: &ProfileConfig,
+    requested_provider: Option<&str>,
+    apply: bool,
+) -> Result<()> {
+    const REMOTE_DELETE_BATCH_SIZE: usize = 100;
+    const REMOTE_DELETE_BATCH_SPACING_MS: u64 = 8_000;
+
+    crate::storage::migration::migrate_score_db(&profile_paths.score_db)?;
+    crate::storage::migration::migrate_network_db(&profile_paths.network_db)?;
+
+    let (provider_key, account_id) = resolve_local_upload_target(&profile.ir, requested_provider)?;
+    let mut score_db = ScoreDatabase::open(&profile_paths.score_db)?;
+    let plan = score_db.legacy_beatoraja_cleanup_plan()?;
+    let mut network_db = NetworkDatabase::open(&profile_paths.network_db)?;
+    let submitted_links =
+        network_db.successful_ir_score_submissions_for_local_scores(&plan.legacy_history_ids)?;
+    let selected_remote_score_ids = submitted_links
+        .iter()
+        .filter(|link| link.provider == provider_key && link.account_id == account_id)
+        .map(|link| link.remote_score_id.clone())
+        .collect::<BTreeSet<_>>();
+    let unselected_targets = submitted_links
+        .iter()
+        .filter(|link| link.provider != provider_key || link.account_id != account_id)
+        .map(|link| format!("{}/{}", link.provider, link.account_id))
+        .collect::<BTreeSet<_>>();
+
+    println!("provider: {provider_key}");
+    println!("account: {account_id}");
+    println!("old Local candidates: {}", plan.legacy_history_ids.len());
+    println!("retained Beatoraja rows: {}", plan.retained_beatoraja_history_ids.len());
+    println!(
+        "submitted local backfill scores for selected provider: {}",
+        selected_remote_score_ids.len()
+    );
+    if !unselected_targets.is_empty() {
+        println!(
+            "submitted scores for other IR accounts: {} ({})",
+            unselected_targets.len(),
+            unselected_targets.iter().take(3).cloned().collect::<Vec<_>>().join(", ")
+        );
+    }
+    if plan.legacy_history_ids.is_empty() {
+        println!("no old Local candidates match a Beatoraja row");
+        return Ok(());
+    }
+    if !apply {
+        println!("dry-run only; rerun with `bmz ir cleanup-imported --apply` to delete them");
+        return Ok(());
+    }
+    if !unselected_targets.is_empty() {
+        bail!(
+            "cleanup stopped: matching Local rows were submitted to other IR accounts; rerun once per account with --provider before deleting local history"
+        );
+    }
+
+    if !selected_remote_score_ids.is_empty() {
+        let provider = crate::ir::provider_key::provider_config_for_key(&profile.ir, &provider_key)
+            .context("configured cleanup provider is not available; run `bmz ir login` first")?;
+        let credentials = ensure_fresh_credentials(
+            profile_paths.root_dir.as_path(),
+            &provider_key,
+            &provider.base_url,
+            now_unix_seconds(),
+        )
+        .await?;
+        let client = BmzOfficialIrClient::new(&provider.base_url, credentials.access_token)?;
+        let batches = selected_remote_score_ids.iter().cloned().collect::<Vec<_>>();
+        let batch_count = batches.len().div_ceil(REMOTE_DELETE_BATCH_SIZE);
+        for (index, score_ids) in batches.chunks(REMOTE_DELETE_BATCH_SIZE).enumerate() {
+            if index > 0 {
+                tokio::time::sleep(std::time::Duration::from_millis(
+                    REMOTE_DELETE_BATCH_SPACING_MS,
+                ))
+                .await;
+            }
+            println!(
+                "[{}/{}] deleting {} IR local backfill scores",
+                index + 1,
+                batch_count,
+                score_ids.len()
+            );
+            let response =
+                client.delete_local_backfill_scores(score_ids).await.with_context(|| {
+                    format!("failed to delete IR local backfill batch {}", index + 1)
+                })?;
+            let requested = score_ids.iter().cloned().collect::<BTreeSet<_>>();
+            let returned = response
+                .deleted_score_ids
+                .iter()
+                .chain(&response.missing_score_ids)
+                .cloned()
+                .collect::<BTreeSet<_>>();
+            if requested != returned {
+                bail!(
+                    "IR local backfill cleanup batch {} returned an unexpected score set; local history was not changed",
+                    index + 1
+                );
+            }
+        }
+    }
+
+    let network_report = network_db.purge_ir_records_for_local_scores(
+        &provider_key,
+        &account_id,
+        &plan.legacy_history_ids,
+    )?;
+    let score_report = score_db.purge_legacy_beatoraja_imports(&plan)?;
+    println!("removed old Local history: {}", score_report.removed_legacy_history);
+    println!("retained Beatoraja rows: {}", score_report.retained_beatoraja_history);
+    println!(
+        "removed local IR records: jobs={}, submissions={}",
+        network_report.removed_jobs, network_report.removed_submissions
+    );
+    println!(
+        "run `bmz ir upload-local --all --provider {provider_key}` to submit retained Beatoraja rows with current metadata"
+    );
+    Ok(())
 }
 
 async fn upload_local(
