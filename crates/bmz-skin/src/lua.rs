@@ -873,6 +873,15 @@ impl MainStateProbe {
         self.gauge_type_value = 0;
     }
 
+    fn begin_timer_options_recording_with_values(
+        &mut self,
+        timer_values: BTreeMap<i32, i32>,
+        option_values: BTreeMap<i32, bool>,
+    ) {
+        self.begin_timer_recording_with_values(timer_values);
+        self.option_values = option_values;
+    }
+
     fn begin_gauge_type_call_recording(&mut self, value: i32) {
         self.mode = MainStateProbeMode::RecordNumbers { default_value: 0 };
         self.number_calls.clear();
@@ -3271,6 +3280,64 @@ fn infer_main_state_timer_option_draw_condition(
         .find_map(|(condition, expected)| (observed == expected).then_some(condition))
 }
 
+fn infer_main_state_two_options_timer_draw_condition(
+    function: &Function,
+    main_state_probe: &Arc<Mutex<MainStateProbe>>,
+) -> Option<String> {
+    let mut option_calls = collect_option_calls(function, main_state_probe)?;
+    option_calls.sort_unstable();
+    option_calls.dedup();
+    if option_calls.len() != 2 {
+        return None;
+    }
+    let option_a = option_calls[0];
+    let option_b = option_calls[1];
+
+    // Force both option branches open so a timer hidden behind Lua's short-circuit
+    // evaluation is recorded as well.
+    let timer_id = {
+        let mut probe = main_state_probe.lock().ok()?;
+        probe.begin_timer_options_recording_with_values(
+            BTreeMap::new(),
+            BTreeMap::from([(option_a, false), (option_b, true)]),
+        );
+        drop(probe);
+        let _ = function.call::<Value>(()).ok();
+        let mut probe = main_state_probe.lock().ok()?;
+        let timer_calls = probe.timer_calls.clone();
+        probe.end_recording();
+        single_number_call(&timer_calls)?
+    };
+
+    let samples = [
+        (false, false, i32::MIN),
+        (false, false, 100),
+        (false, true, i32::MIN),
+        (false, true, 100),
+        (true, false, i32::MIN),
+        (true, false, 100),
+        (true, true, i32::MIN),
+        (true, true, 100),
+    ];
+    let observed = samples
+        .iter()
+        .map(|(a, b, timer)| {
+            call_draw_with_timer_options(
+                function,
+                main_state_probe,
+                timer_id,
+                *timer,
+                [(option_a, *a), (option_b, *b)],
+            )
+        })
+        .collect::<Option<Vec<_>>>()?;
+    let expected =
+        samples.iter().map(|(a, b, timer)| *a || (*b && *timer == i32::MIN)).collect::<Vec<_>>();
+    (observed == expected).then(|| {
+        format!("option({option_a}) or option({option_b}) and timer({timer_id}) == timer_off")
+    })
+}
+
 fn infer_end_of_note_shadow_draw_condition(
     function: &Function,
     main_state_probe: &Arc<Mutex<MainStateProbe>>,
@@ -3704,6 +3771,27 @@ fn call_draw_with_timer_option(
     }
 }
 
+fn call_draw_with_timer_options(
+    function: &Function,
+    main_state_probe: &Arc<Mutex<MainStateProbe>>,
+    timer_id: i32,
+    timer_value: i32,
+    options: [(i32, bool); 2],
+) -> Option<bool> {
+    {
+        main_state_probe.lock().ok()?.begin_timer_options_recording_with_values(
+            BTreeMap::from([(timer_id, timer_value)]),
+            BTreeMap::from(options),
+        );
+    }
+    let result = function.call::<Value>(()).ok();
+    main_state_probe.lock().ok()?.end_recording();
+    match result? {
+        Value::Boolean(value) => Some(value),
+        _ => None,
+    }
+}
+
 fn infer_main_state_gauge_type_draw_condition(
     function: &Function,
     main_state_probe: &Arc<Mutex<MainStateProbe>>,
@@ -3865,6 +3953,22 @@ fn infer_boolean_predicate(
     main_state_probe: &Arc<Mutex<MainStateProbe>>,
     object_id: Option<&str>,
 ) -> Option<String> {
+    // PeacefulPlay のキービーム関数は closure 内に前フレーム状態を持つ。
+    // 汎用probeを先に走らせるとその状態が変化し、特に最後のLane9が
+    // 定数falseへ畳み込まれるため、対象objectは専用推論を最初に行う。
+    if object_id.is_some_and(|id| id.starts_with("key-beam-"))
+        && let Some(predicate) =
+            infer_keybeam_timer_event_draw_condition(function, main_state_probe)
+    {
+        return Some(predicate);
+    }
+    // Probe short-circuit option/timer predicates before simpler single-option
+    // inference can collapse them to the first branch alone.
+    if let Some(predicate) =
+        infer_main_state_two_options_timer_draw_condition(function, main_state_probe)
+    {
+        return Some(predicate);
+    }
     let refs = collect_number_refs(function, main_state_probe).unwrap_or_default();
     infer_result_average_timing_sign_draw_condition(function, main_state_probe)
         .or_else(|| {
@@ -3965,10 +4069,17 @@ fn keybeam_draw_replacements(hold: &JsonValue, fade: &JsonValue) -> Option<(Stri
     if json_i32_field(fade, "loop") != Some(-1) {
         return None;
     }
-    let fade_draw = json_string_field(fade, "draw")?;
+    let inferred_fade_draw = json_string_field(fade, "draw")?;
     let fade_timer = json_i32_field(fade, "timer")
         .filter(|timer| is_keybeam_keyoff_timer(*timer))
-        .or_else(|| keybeam_keyoff_timer_from_draw(fade_draw))?;
+        .or_else(|| keybeam_keyoff_timer_from_draw(inferred_fade_draw))?;
+    let fallback_draw;
+    let fade_draw = if inferred_fade_draw.contains("event_index(") {
+        inferred_fade_draw
+    } else {
+        fallback_draw = keybeam_judge_draw_from_id(hold_id, fade_timer)?;
+        &fallback_draw
+    };
     let keyon_timer = keybeam_keyon_timer_for_keyoff_timer(fade_timer)?;
     let hold_timer = keybeam_hold_timer_for_keyon_timer(keyon_timer)?;
     let hold_draw = keybeam_hold_draw_from_fade_draw(fade_draw, keyon_timer, hold_timer)?;
@@ -3979,6 +4090,28 @@ fn keybeam_draw_replacements(hold: &JsonValue, fade: &JsonValue) -> Option<(Stri
         .collect::<Vec<_>>()
         .join(" or ");
     Some((hold_draw, fade_draw, fade_timer))
+}
+
+fn keybeam_judge_draw_from_id(id: &str, keyoff_timer: i32) -> Option<String> {
+    let event_id = keyoff_timer.checked_add(380)?;
+    let values: &[i32] = if id.ends_with("-pgreat") {
+        &[1]
+    } else if id.ends_with("-great") {
+        &[2, 3]
+    } else if id.ends_with("-good") {
+        &[4, 5]
+    } else if id.ends_with("-other") {
+        &[0, 6, 7, 8, 9]
+    } else {
+        return None;
+    };
+    Some(
+        values
+            .iter()
+            .map(|value| format!("event_index({event_id}) == {value}"))
+            .collect::<Vec<_>>()
+            .join(" or "),
+    )
 }
 
 fn json_string_field<'a>(object: &'a JsonMap<String, JsonValue>, key: &str) -> Option<&'a str> {
@@ -5180,6 +5313,35 @@ mod tests {
         assert_eq!(
             infer_main_state_event_index_draw_condition(&function, &probe),
             Some("event_index(42) == 2 or event_index(42) == 3".to_string())
+        );
+    }
+
+    #[test]
+    fn infers_loading_or_loaded_before_ready_draw_condition() {
+        let lua = Lua::new();
+        let probe = Arc::new(Mutex::new(MainStateProbe::default()));
+        let main_state = create_main_state_stub(&lua, probe.clone()).expect("main_state probe");
+        lua.globals().set("main_state", main_state).unwrap();
+        let function = lua
+            .load(
+                r#"
+                return function()
+                    if main_state.option(80) then
+                        return true
+                    end
+                    if not main_state.option(81) then
+                        return false
+                    end
+                    return main_state.timer(40) == main_state.timer_off_value
+                end
+                "#,
+            )
+            .eval::<Function>()
+            .expect("draw function");
+
+        assert_eq!(
+            infer_main_state_two_options_timer_draw_condition(&function, &probe),
+            Some("option(80) or option(81) and timer(40) == timer_off".to_string())
         );
     }
 

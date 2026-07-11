@@ -2653,6 +2653,29 @@ mod tests {
             property_warnings.is_empty(),
             "PeacefulPlay properties should accept integral Lua-number ops: {property_warnings:?}"
         );
+        let duration_info = loaded
+            .document
+            .destination
+            .iter()
+            .filter_map(|entry| match entry {
+                bmz_skin_document::DestinationListEntry::Single(destination)
+                    if matches!(
+                        destination.id.as_str(),
+                        "val-duration" | "val-lanecover-amount" | "val-duration-green"
+                    ) =>
+                {
+                    Some(destination)
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(duration_info.len(), 3);
+        assert!(
+            duration_info.iter().all(|destination| {
+                destination.draw == "option(80) or option(81) and timer(40) == timer_off"
+            }),
+            "duration info: {duration_info:?}"
+        );
         assert_eq!(
             loaded
                 .document

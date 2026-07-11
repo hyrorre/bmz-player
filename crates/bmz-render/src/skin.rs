@@ -20658,8 +20658,10 @@ mod tests {
     #[test]
     fn keybeam_timer_lane_mapping_matches_skin_timer_mapping() {
         assert_eq!(keybeam_lane_for_keyon_timer(108), Some(Lane::Key8.index()));
+        assert_eq!(keybeam_lane_for_keyon_timer(109), Some(Lane::Key9.index()));
         assert_eq!(keybeam_lane_for_keyon_timer(110), Some(Lane::Scratch2.index()));
         assert_eq!(keybeam_lane_for_keyoff_timer(128), Some(Lane::Key8.index()));
+        assert_eq!(keybeam_lane_for_keyoff_timer(129), Some(Lane::Key9.index()));
         assert_eq!(keybeam_lane_for_keyoff_timer(130), Some(Lane::Scratch2.index()));
     }
 
