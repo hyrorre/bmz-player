@@ -7421,6 +7421,10 @@ fn default_chart_gauge_graph_value(state: &SkinDrawState) -> f32 {
     (default_chart_total_count_value(state) * 0.75).max(0.0)
 }
 
+fn clamped_gauge_value(state: &SkinDrawState) -> f32 {
+    if state.gauge_max <= 0.0 { 0.0 } else { state.gauge.clamp(0.0, state.gauge_max) }
+}
+
 fn skin_builtin_value_f32(expr: &str, state: &SkinDrawState) -> Option<f32> {
     match expr.trim() {
         SKIN_EXPR_ADJUSTED_COVER => state.adjusted_cover_progress,
@@ -7429,6 +7433,16 @@ fn skin_builtin_value_f32(expr: &str, state: &SkinDrawState) -> Option<f32> {
         SKIN_EXPR_FS_THRESHOLD => Some(state.fs_threshold_ms as f32),
         SKIN_EXPR_DEFAULT_CHART_TOTAL_COUNT => Some(default_chart_total_count_value(state)),
         SKIN_EXPR_DEFAULT_CHART_GAUGE => Some(default_chart_gauge_graph_value(state)),
+        SKIN_EXPR_GAUGE_PERCENT_INTEGER => {
+            Some((clamped_gauge_value(state) * 100.0 / state.gauge_max.max(1.0)).floor())
+        }
+        SKIN_EXPR_GAUGE_PERCENT_FRACTION => {
+            Some((clamped_gauge_value(state) * 10_000.0 / state.gauge_max.max(1.0)).floor() % 100.0)
+        }
+        SKIN_EXPR_GAUGE_AMOUNT_INTEGER => Some(clamped_gauge_value(state).floor()),
+        SKIN_EXPR_GAUGE_AMOUNT_FRACTION => {
+            Some((clamped_gauge_value(state) * 100.0).floor() % 100.0)
+        }
         _ => None,
     }
 }
@@ -21925,6 +21939,18 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(skin_value_number(&value, &state), Some(183_000));
+    }
+
+    #[test]
+    fn skin_value_number_evaluates_peaceful_play_gauge_values() {
+        let state = SkinDrawState { gauge: 78.75, gauge_max: 120.0, ..Default::default() };
+        let value =
+            |expr: &str| SkinValueDef { value_expr: expr.to_string(), ..Default::default() };
+
+        assert_eq!(skin_value_number(&value(SKIN_EXPR_GAUGE_PERCENT_INTEGER), &state), Some(65));
+        assert_eq!(skin_value_number(&value(SKIN_EXPR_GAUGE_PERCENT_FRACTION), &state), Some(62));
+        assert_eq!(skin_value_number(&value(SKIN_EXPR_GAUGE_AMOUNT_INTEGER), &state), Some(78));
+        assert_eq!(skin_value_number(&value(SKIN_EXPR_GAUGE_AMOUNT_FRACTION), &state), Some(75));
     }
 
     #[test]

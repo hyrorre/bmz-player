@@ -2563,4 +2563,27 @@ mod tests {
 
         assert_eq!(widths, vec![132; 4]);
     }
+
+    #[test]
+    fn peaceful_play_integral_property_ops_are_selectable_when_available() {
+        let skin_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../data/skins/PeacefulPlay/play9.luaskin");
+        if !skin_path.is_file() {
+            return;
+        }
+
+        let loaded = load_lua_skin(&skin_path, SkinKind::Play, &BTreeMap::new(), &BTreeMap::new())
+            .expect("PeacefulPlay play9 should decode");
+        let property_warnings = loaded
+            .warnings
+            .iter()
+            .filter(|warning| warning.message.contains("has no selectable op"))
+            .map(|warning| warning.message.as_str())
+            .collect::<Vec<_>>();
+
+        assert!(
+            property_warnings.is_empty(),
+            "PeacefulPlay properties should accept integral Lua-number ops: {property_warnings:?}"
+        );
+    }
 }

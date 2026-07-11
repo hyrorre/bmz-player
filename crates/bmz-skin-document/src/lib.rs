@@ -553,6 +553,10 @@ pub const SKIN_EXPR_COURSE_TABLE_TEXT: &str = "bmz:course_table_text";
 pub const SKIN_EXPR_FAST_SLOW_BREAKDOWN_HEIGHT: &str = "bmz:fast_slow_breakdown_height";
 pub const SKIN_EXPR_DEFAULT_CHART_TOTAL_COUNT: &str = "bmz:default_chart_total_count";
 pub const SKIN_EXPR_DEFAULT_CHART_GAUGE: &str = "bmz:default_chart_gauge";
+pub const SKIN_EXPR_GAUGE_PERCENT_INTEGER: &str = "bmz:gauge_percent_integer";
+pub const SKIN_EXPR_GAUGE_PERCENT_FRACTION: &str = "bmz:gauge_percent_fraction";
+pub const SKIN_EXPR_GAUGE_AMOUNT_INTEGER: &str = "bmz:gauge_amount_integer";
+pub const SKIN_EXPR_GAUGE_AMOUNT_FRACTION: &str = "bmz:gauge_amount_fraction";
 
 /// beatoraja 予約 ID と衝突しない動的タイマー ID 範囲の先頭。
 pub const SKIN_DYNAMIC_TIMER_BASE: i32 = 9000;

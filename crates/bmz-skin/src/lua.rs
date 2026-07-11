@@ -13,7 +13,9 @@ use serde_json::{Map as JsonMap, Number as JsonNumber, Value as JsonValue};
 use bmz_skin_document::{
     SKIN_DYNAMIC_TIMER_BASE, SKIN_EXPR_ADJUSTED_COVER, SKIN_EXPR_ADJUSTED_RATE,
     SKIN_EXPR_ADJUSTED_RATE_ADOT, SKIN_EXPR_COURSE_TABLE_TEXT,
-    SKIN_EXPR_FAST_SLOW_BREAKDOWN_HEIGHT, SKIN_EXPR_FS_THRESHOLD, SKIN_REF_PLAY_GAUGE_TYPE,
+    SKIN_EXPR_FAST_SLOW_BREAKDOWN_HEIGHT, SKIN_EXPR_FS_THRESHOLD, SKIN_EXPR_GAUGE_AMOUNT_FRACTION,
+    SKIN_EXPR_GAUGE_AMOUNT_INTEGER, SKIN_EXPR_GAUGE_PERCENT_FRACTION,
+    SKIN_EXPR_GAUGE_PERCENT_INTEGER, SKIN_REF_PLAY_GAUGE_TYPE,
 };
 
 use crate::{
@@ -1810,13 +1812,13 @@ fn skin_config_options_from_header(
 
 fn option_value_to_op(items: &[JsonValue], value: &str) -> Option<i64> {
     if let Ok(op) = value.parse::<i64>() {
-        return items.iter().find_map(|item| {
-            (item.get("op").and_then(JsonValue::as_i64) == Some(op)).then_some(op)
-        });
+        return items
+            .iter()
+            .find_map(|item| (item.get("op").and_then(json_integer) == Some(op)).then_some(op));
     }
     items.iter().find_map(|item| {
         (item.get("name").and_then(JsonValue::as_str) == Some(value))
-            .then(|| item.get("op").and_then(JsonValue::as_i64))
+            .then(|| item.get("op").and_then(json_integer))
             .flatten()
     })
 }
@@ -1827,14 +1829,25 @@ fn default_property_op(property: &JsonValue, items: &[JsonValue]) -> Option<i64>
     {
         return Some(op);
     }
-    items.first().and_then(|item| item.get("op")).and_then(JsonValue::as_i64)
+    items.first().and_then(|item| item.get("op")).and_then(json_integer)
 }
 
 fn option_name_to_op(items: &[JsonValue], value: &str) -> Option<i64> {
     items.iter().find_map(|item| {
         (item.get("name").and_then(JsonValue::as_str) == Some(value))
-            .then(|| item.get("op").and_then(JsonValue::as_i64))
+            .then(|| item.get("op").and_then(json_integer))
             .flatten()
+    })
+}
+
+fn json_integer(value: &JsonValue) -> Option<i64> {
+    value.as_i64().or_else(|| {
+        let value = value.as_f64()?;
+        (value.is_finite()
+            && value.fract() == 0.0
+            && value >= i64::MIN as f64
+            && value <= i64::MAX as f64)
+            .then_some(value as i64)
     })
 }
 
@@ -4270,6 +4283,10 @@ fn infer_bmz_builtin_value_expr(
         Some("threshold-num") | Some("threshold_num") | Some("fs-threshold") => {
             Some(SKIN_EXPR_FS_THRESHOLD.to_string())
         }
+        Some("val-gauge-percent-integer") => Some(SKIN_EXPR_GAUGE_PERCENT_INTEGER.to_string()),
+        Some("val-gauge-percent-fraction") => Some(SKIN_EXPR_GAUGE_PERCENT_FRACTION.to_string()),
+        Some("val-gauge-amount-integer") => Some(SKIN_EXPR_GAUGE_AMOUNT_INTEGER.to_string()),
+        Some("val-gauge-amount-fraction") => Some(SKIN_EXPR_GAUGE_AMOUNT_FRACTION.to_string()),
         _ => {
             let refs = collect_number_refs(function, main_state_probe)?;
             if refs.iter().any(|ref_id| matches!(ref_id, 160 | 90 | 91 | 314 | 14)) {
@@ -5143,6 +5160,25 @@ mod tests {
         );
     }
 
+    #[test]
+    fn infers_peaceful_play_gauge_value_builtins() {
+        let lua = Lua::new();
+        let probe = Arc::new(Mutex::new(MainStateProbe::default()));
+        let function = lua.load("return function() return 0 end").eval::<Function>().unwrap();
+
+        for (id, expected) in [
+            ("val-gauge-percent-integer", SKIN_EXPR_GAUGE_PERCENT_INTEGER),
+            ("val-gauge-percent-fraction", SKIN_EXPR_GAUGE_PERCENT_FRACTION),
+            ("val-gauge-amount-integer", SKIN_EXPR_GAUGE_AMOUNT_INTEGER),
+            ("val-gauge-amount-fraction", SKIN_EXPR_GAUGE_AMOUNT_FRACTION),
+        ] {
+            assert_eq!(
+                infer_bmz_builtin_value_expr(&function, Some(id), &probe),
+                Some(expected.to_string())
+            );
+        }
+    }
+
     fn unique_skin_test_dir(tag: &str) -> PathBuf {
         use std::sync::atomic::{AtomicU64, Ordering};
         static COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -5251,6 +5287,41 @@ mod tests {
 
         assert_eq!(option_value_to_op(&items, "923"), Some(923));
         assert_eq!(option_value_to_op(&items, "999"), None);
+    }
+
+    #[test]
+    fn property_options_accept_integral_lua_numbers() {
+        let property: JsonValue = serde_json::from_str(
+            r#"
+            {
+                "name": "Key Beam Length",
+                "def": "100%",
+                "item": [
+                    { "name": "100%", "op": 11400.0 },
+                    { "name": "90%", "op": 11401.0 }
+                ]
+            }
+            "#,
+        )
+        .unwrap();
+        let header = serde_json::json!({ "property": [property] });
+        let mut warnings = Vec::new();
+
+        let options = skin_config_options_from_header(
+            &header,
+            &BTreeMap::from([("Key Beam Length".to_string(), "90%".to_string())]),
+            &mut warnings,
+        );
+
+        assert_eq!(options.get("Key Beam Length"), Some(&11401));
+        assert!(warnings.is_empty(), "unexpected warnings: {warnings:?}");
+    }
+
+    #[test]
+    fn property_options_reject_fractional_lua_numbers() {
+        let items = vec![serde_json::json!({ "name": "invalid", "op": 11400.5 })];
+
+        assert_eq!(option_value_to_op(&items, "invalid"), None);
     }
 
     #[test]
