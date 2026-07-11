@@ -76,6 +76,8 @@ GET    /api/v1/courses/{course_hash}/ranking   # global のみ
   なくなるまで繰り返す。送信失敗または他プロセスの `sending` job で進捗できない場合は
   非ゼロで終了し、retry/backoff または5分のlease後に再実行する。
   送信直前にdevice keyで署名し、サーバー側では `signed_backfill` として保存する。
+  `source_kind`、1P/2Pの配置、実際に適用したDPオプションも送信し、ランキング用の
+  `double_option` バケットとは分けて個別スコアの履歴に保持する。
   既に送信済みで署名のないscoreは `bmz ir attest-submitted --all` で、ローカルの
   成功履歴に残るremote score IDへ後付けattestationを送る。attestationはscore本文を
   再送せず、所有者のdevice keyでscore IDを署名してverificationだけを更新する。

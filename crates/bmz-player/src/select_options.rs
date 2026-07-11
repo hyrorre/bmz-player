@@ -311,6 +311,15 @@ impl DoubleOption {
         }
     }
 
+    pub const fn ir_value(self) -> &'static str {
+        match self {
+            Self::Off => "off",
+            Self::Flip => "flip",
+            Self::Battle => "battle",
+            Self::BattleAutoScratch => "battle_auto_scratch",
+        }
+    }
+
     pub fn normalize_for_key_mode(self, key_mode: KeyMode) -> Self {
         match self {
             Self::Off => Self::Off,
@@ -500,6 +509,7 @@ mod tests {
         assert_eq!(DoubleOption::from_persistent_str("Flip"), DoubleOption::Flip);
         assert_eq!(DoubleOption::from_persistent_str("Off"), DoubleOption::Off);
         assert_eq!(DoubleOption::Flip.score_bucket(), DoubleOption::Off.score_bucket());
+        assert_eq!(DoubleOption::Flip.ir_value(), "flip");
     }
 
     #[test]

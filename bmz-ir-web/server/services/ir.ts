@@ -4,6 +4,7 @@ import type { BatchItem } from 'drizzle-orm/batch'
 import { db, schema } from 'hub:db'
 import { isUniqueConstraintError } from '../utils/db_errors'
 import type {
+  IrAppliedDoubleOption,
   IrChartLnProfile,
   IrDeviceType,
   IrDoubleOption,
@@ -12,6 +13,7 @@ import type {
   IrRankingScope,
   IrRuleMode,
   IrScoreSubmission,
+  IrScoreSourceKind,
   IrSubmitResponse,
   IrVerificationStatus,
   LnScorePolicy,
@@ -103,6 +105,12 @@ interface ScoreAttestationPayload {
 
 interface ScoreHistoryRankingRow extends Omit<BestScoreRow, 'score_id'> {
   id: string
+}
+
+interface ScoreSubmissionMetadata {
+  doubleOption: IrDoubleOption
+  appliedDoubleOption: IrAppliedDoubleOption
+  sourceKind: IrScoreSourceKind
 }
 
 export function parseRankingQuery(query: Record<string, unknown>): RankingQuery {
@@ -199,7 +207,7 @@ export function validateScoreSubmission(value: unknown): IrScoreSubmission {
   if (!DEVICE_TYPES.has(String(payload.play_options.device_type))) {
     throw new Error('play_options.device_type is invalid')
   }
-  normalizeDoubleOption(payload.play_options.double_option)
+  scoreSubmissionMetadata(payload.play_options)
   return payload
 }
 
@@ -272,7 +280,9 @@ export async function submitScore(
     return idempotentScoreResponse(existing)
   }
 
-  const doubleOption = normalizeDoubleOption(payload.play_options.double_option)
+  const { doubleOption, appliedDoubleOption, sourceKind } = scoreSubmissionMetadata(
+    payload.play_options,
+  )
   const verification = await resolveVerification(user.id, payload)
   await upsertChart(payload, shouldUpdateExistingChart(payload.play_options, doubleOption))
 
@@ -317,10 +327,14 @@ export async function submitScore(
     minCb: payload.result.min_cb,
     deviceType,
     doubleOption,
-    playOptions: { ...payload.play_options, double_option: doubleOption } as Record<
-      string,
-      unknown
-    >,
+    appliedDoubleOption,
+    sourceKind,
+    playOptions: {
+      ...payload.play_options,
+      double_option: doubleOption,
+      applied_double_option: appliedDoubleOption,
+      source_kind: sourceKind,
+    } as Record<string, unknown>,
     replayHash: payload.replay?.hash ?? null,
     replayFormat: payload.replay?.format ?? null,
     replayUploadIntent: payload.replay?.upload_intent ?? null,
@@ -1314,6 +1328,73 @@ function normalizeDoubleOption(value: unknown): IrDoubleOption {
   }
 }
 
+function scoreSubmissionMetadata(
+  playOptions: IrScoreSubmission['play_options'],
+): ScoreSubmissionMetadata {
+  const doubleOption = normalizeDoubleOption(playOptions.double_option)
+  const appliedDoubleOption = normalizeAppliedDoubleOption(
+    playOptions.applied_double_option,
+    doubleOption,
+  )
+  if (normalizeDoubleOption(appliedDoubleOption) !== doubleOption) {
+    throw new Error('applied_double_option does not match double_option')
+  }
+  return {
+    doubleOption,
+    appliedDoubleOption,
+    sourceKind: normalizeScoreSourceKind(playOptions.source_kind),
+  }
+}
+
+function normalizeAppliedDoubleOption(
+  value: unknown,
+  fallback: IrDoubleOption,
+): IrAppliedDoubleOption {
+  const normalized = String(value ?? fallback)
+    .trim()
+    .toLowerCase()
+    .replaceAll('-', '_')
+  switch (normalized) {
+    case '':
+      return fallback
+    case 'off':
+      return 'off'
+    case 'flip':
+      return 'flip'
+    case 'battle':
+      return 'battle'
+    case 'battle_auto_scratch':
+    case 'battle_assist':
+      return 'battle_auto_scratch'
+    default:
+      throw new Error('applied_double_option is invalid')
+  }
+}
+
+function normalizeScoreSourceKind(value: unknown): IrScoreSourceKind {
+  const normalized = String(value ?? 'local')
+    .trim()
+    .toLowerCase()
+    .replaceAll('-', '_')
+  switch (normalized) {
+    case '':
+    case 'local':
+      return 'local'
+    case 'beatoraja':
+      return 'beatoraja'
+    case 'lr2':
+      return 'lr2'
+    case 'lr2oraja':
+    case 'lr2_oraja':
+      return 'lr2oraja'
+    case 'lr2oraja_dx':
+    case 'lr2_oraja_dx':
+      return 'lr2oraja_dx'
+    default:
+      throw new Error('source_kind is invalid')
+  }
+}
+
 function clampInteger(value: unknown, fallback: number, min: number, max: number): number {
   const parsed = Number(value ?? fallback)
   if (!Number.isFinite(parsed)) {
@@ -1385,4 +1466,5 @@ export const __test = {
   bestRowsFromHistory,
   verificationStatusForSignedSubmission,
   idempotentScoreResponse,
+  scoreSubmissionMetadata,
 }

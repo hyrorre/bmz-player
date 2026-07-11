@@ -11,11 +11,11 @@ use sha2::{Digest, Sha256};
 
 use crate::config::profile_config::{IrConfig, IrProviderConfig};
 use crate::ln_policy::LnScorePolicy;
-use crate::select_options::{ArrangeOption, DoubleOptionScoreBucket};
+use crate::select_options::{ArrangeOption, DoubleOption, DoubleOptionScoreBucket};
 use crate::storage::common::{hash_to_hex, hex_to_hash};
 use crate::storage::library_db::{ChartAnalysis, ChartListItem, LibraryDatabase};
 use crate::storage::network_db::{IrJobKind, NetworkDatabase, NewIrScoreJob};
-use crate::storage::score_db::ScoreDatabase;
+use crate::storage::score_db::{ScoreDatabase, ScoreSourceKind};
 
 use super::types::{
     IrChartBpm, IrChartFeatures, IrChartLnProfile, IrChartNotes, IrChartPayload, IrClientInfo,
@@ -291,6 +291,7 @@ struct BackfillScoreRow {
     chart_sha256: [u8; 32],
     ln_policy: LnScorePolicy,
     double_option: DoubleOptionScoreBucket,
+    applied_double_option: DoubleOption,
     played_at: i64,
     clear_type: String,
     gauge_type: String,
@@ -313,6 +314,7 @@ struct BackfillScoreRow {
     slow_empty_poor: u32,
     random_seed: Option<i64>,
     arrange: ArrangeOption,
+    arrange_2p: ArrangeOption,
     gauge_option: String,
     rule_mode: String,
     assist_mask: u32,
@@ -320,6 +322,7 @@ struct BackfillScoreRow {
     device_type: InputDeviceKind,
     replay_path: Option<String>,
     course_score_id: Option<i64>,
+    source_kind: ScoreSourceKind,
 }
 
 fn load_score_history_rows(score_db: &ScoreDatabase) -> Result<Vec<BackfillScoreRow>> {
@@ -357,7 +360,10 @@ fn load_score_history_rows(score_db: &ScoreDatabase) -> Result<Vec<BackfillScore
             autoplay,
             device_type,
             replay_path,
-            course_score_id
+            course_score_id,
+            arrange_2p,
+            applied_double_option,
+            source_kind
          FROM score_history
          ORDER BY played_at ASC, id ASC",
     )?;
@@ -372,11 +378,15 @@ fn score_history_row_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Backf
     let arrange: String = row.get(25)?;
     let device_type: String = row.get(30)?;
     let replay_path: String = row.get(31)?;
+    let arrange_2p: String = row.get(33)?;
+    let applied_double_option: String = row.get(34)?;
+    let source_kind: String = row.get(35)?;
     Ok(BackfillScoreRow {
         id: row.get(0)?,
         chart_sha256: hex_to_hash::<32>(&sha256_hex)?,
         ln_policy: LnScorePolicy::from_str_opt(&ln_policy).unwrap_or(LnScorePolicy::ForceLn),
         double_option: DoubleOptionScoreBucket::from_str_or_off(&double_option),
+        applied_double_option: DoubleOption::from_persistent_str(&applied_double_option),
         played_at: row.get(4)?,
         clear_type: row.get(5)?,
         gauge_type: row.get(6)?,
@@ -399,6 +409,7 @@ fn score_history_row_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Backf
         slow_empty_poor: row.get(23)?,
         random_seed: row.get(24)?,
         arrange: ArrangeOption::from_persistent_str(&arrange),
+        arrange_2p: ArrangeOption::from_persistent_str(&arrange_2p),
         gauge_option: row.get(26)?,
         rule_mode: row.get(27)?,
         assist_mask: row.get(28)?,
@@ -406,6 +417,7 @@ fn score_history_row_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Backf
         device_type: device_type_from_str(&device_type),
         replay_path: if replay_path.is_empty() { None } else { Some(replay_path) },
         course_score_id: row.get(32)?,
+        source_kind: ScoreSourceKind::from_str_opt(&source_kind).unwrap_or_default(),
     })
 }
 
@@ -450,10 +462,18 @@ fn build_local_score_submission(
         .insert("device_type".to_string(), Value::String(row.device_type.as_str().to_string()));
     play_options.insert("option".to_string(), Value::String(arrange_1p.clone()));
     play_options.insert("arrange_1p".to_string(), Value::String(arrange_1p));
-    play_options.insert("arrange_2p".to_string(), Value::String("normal".to_string()));
+    play_options.insert("arrange_2p".to_string(), Value::String(arrange_option_ir(row.arrange_2p)));
     play_options.insert(
         "double_option".to_string(),
         Value::String(row.double_option.ir_value().to_string()),
+    );
+    play_options.insert(
+        "applied_double_option".to_string(),
+        Value::String(backfill_applied_double_option(row).ir_value().to_string()),
+    );
+    play_options.insert(
+        "source_kind".to_string(),
+        Value::String(score_source_kind_ir(row.source_kind).to_string()),
     );
     if let Some(seed) = row.random_seed {
         play_options.insert("random_seed".to_string(), serde_json::json!(seed));
@@ -526,6 +546,28 @@ fn build_local_score_submission(
         }),
         evidence: Default::default(),
         idempotency_key: format!("bmz-score-{}", row.id),
+    }
+}
+
+fn backfill_applied_double_option(row: &BackfillScoreRow) -> DoubleOption {
+    if row.applied_double_option.score_bucket() == row.double_option {
+        row.applied_double_option
+    } else {
+        match row.double_option {
+            DoubleOptionScoreBucket::Off => DoubleOption::Off,
+            DoubleOptionScoreBucket::Battle => DoubleOption::Battle,
+            DoubleOptionScoreBucket::BattleAutoScratch => DoubleOption::BattleAutoScratch,
+        }
+    }
+}
+
+fn score_source_kind_ir(source_kind: ScoreSourceKind) -> &'static str {
+    match source_kind {
+        ScoreSourceKind::Local => "local",
+        ScoreSourceKind::Beatoraja => "beatoraja",
+        ScoreSourceKind::Lr2 => "lr2",
+        ScoreSourceKind::Lr2Oraja => "lr2oraja",
+        ScoreSourceKind::Lr2OrajaDx => "lr2oraja_dx",
     }
 }
 
@@ -654,6 +696,7 @@ mod tests {
             chart_sha256: [2; 32],
             ln_policy: LnScorePolicy::ForceCn,
             double_option: DoubleOptionScoreBucket::Battle,
+            applied_double_option: DoubleOption::Battle,
             played_at: 1234,
             clear_type: "Hard".to_string(),
             gauge_type: "Hard".to_string(),
@@ -676,6 +719,7 @@ mod tests {
             slow_empty_poor: 12,
             random_seed: Some(99),
             arrange: ArrangeOption::Random,
+            arrange_2p: ArrangeOption::Mirror,
             gauge_option: String::new(),
             rule_mode: "Beatoraja".to_string(),
             assist_mask: 4,
@@ -683,6 +727,7 @@ mod tests {
             device_type: InputDeviceKind::Controller,
             replay_path: None,
             course_score_id: None,
+            source_kind: ScoreSourceKind::Beatoraja,
         }
     }
 
@@ -772,9 +817,25 @@ mod tests {
         assert_eq!(payload.result.judges.fast.pgreat, 10);
         assert_eq!(payload.result.judges.slow.empty_poor, 12);
         assert_eq!(payload.play_options["arrange_1p"], "random");
+        assert_eq!(payload.play_options["arrange_2p"], "mirror");
         assert_eq!(payload.play_options["double_option"], "battle");
+        assert_eq!(payload.play_options["applied_double_option"], "battle");
+        assert_eq!(payload.play_options["source_kind"], "beatoraja");
         assert_eq!(payload.play_options["device_type"], "controller");
         assert_eq!(payload.play_options["assist_mask"], 4);
+    }
+
+    #[test]
+    fn local_backfill_payload_keeps_flip_separate_from_off_score_bucket() {
+        let mut row = test_row();
+        row.double_option = DoubleOptionScoreBucket::Off;
+        row.applied_double_option = DoubleOption::Flip;
+
+        let payload =
+            build_local_score_submission(&row, &test_chart(), Some(&test_analysis()), None);
+
+        assert_eq!(payload.play_options["double_option"], "off");
+        assert_eq!(payload.play_options["applied_double_option"], "flip");
     }
 
     #[test]

@@ -290,6 +290,7 @@ fn enqueue_ir_jobs(
             arrange: applied_arrange.arrange,
             arrange_2p: applied_arrange.arrange_2p,
             double_option: score_key.double_option,
+            applied_double_option: applied_arrange.double_option,
             arrange_seed: applied_arrange.seed,
             random_seed: applied_arrange.seed,
             rule_mode: session.rule_mode.as_str().to_string(),

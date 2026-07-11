@@ -178,6 +178,16 @@ export const scores = sqliteTable(
     doubleOption: text('double_option', { enum: ['off', 'battle', 'battle_auto_scratch'] })
       .notNull()
       .default('off'),
+    appliedDoubleOption: text('applied_double_option', {
+      enum: ['off', 'flip', 'battle', 'battle_auto_scratch'],
+    })
+      .notNull()
+      .default('off'),
+    sourceKind: text('source_kind', {
+      enum: ['local', 'beatoraja', 'lr2', 'lr2oraja', 'lr2oraja_dx'],
+    })
+      .notNull()
+      .default('local'),
     playOptions: jsonText<Record<string, unknown>>('play_options', '{}'),
     replayHash: text('replay_hash'),
     replayFormat: text('replay_format'),

@@ -5,7 +5,7 @@ use bmz_gameplay::result::PlayResult;
 use bmz_gameplay::score::scored_note_count;
 
 use crate::ln_policy::{ChartLnProfile, LnScorePolicy};
-use crate::select_options::{ArrangeOption, DoubleOptionScoreBucket};
+use crate::select_options::{ArrangeOption, DoubleOption, DoubleOptionScoreBucket};
 use crate::storage::common::hash_to_hex;
 use crate::storage::score_db::encode_beatoraja_ghost;
 
@@ -26,6 +26,7 @@ pub struct IrSubmissionContext {
     pub arrange: ArrangeOption,
     pub arrange_2p: ArrangeOption,
     pub double_option: DoubleOptionScoreBucket,
+    pub applied_double_option: DoubleOption,
     pub arrange_seed: Option<i64>,
     pub random_seed: Option<i64>,
     pub rule_mode: String,
@@ -54,6 +55,11 @@ pub fn build_score_submission(
         "double_option".to_string(),
         serde_json::Value::String(context.double_option.ir_value().to_string()),
     );
+    play_options.insert(
+        "applied_double_option".to_string(),
+        serde_json::Value::String(context.applied_double_option.ir_value().to_string()),
+    );
+    play_options.insert("source_kind".to_string(), serde_json::Value::String("local".to_string()));
     if (context.arrange.uses_seed() || context.arrange_2p.uses_seed())
         && let Some(seed) = context.arrange_seed
     {
@@ -320,6 +326,7 @@ mod tests {
                 arrange: ArrangeOption::Random,
                 arrange_2p: ArrangeOption::Mirror,
                 double_option: DoubleOptionScoreBucket::Battle,
+                applied_double_option: DoubleOption::Battle,
                 arrange_seed: Some(42),
                 random_seed: Some(42),
                 rule_mode: "Beatoraja".to_string(),
@@ -348,6 +355,14 @@ mod tests {
         assert_eq!(
             payload.play_options.get("arrange_2p"),
             Some(&serde_json::Value::String("mirror".to_string()))
+        );
+        assert_eq!(
+            payload.play_options.get("applied_double_option"),
+            Some(&serde_json::Value::String("battle".to_string()))
+        );
+        assert_eq!(
+            payload.play_options.get("source_kind"),
+            Some(&serde_json::Value::String("local".to_string()))
         );
         assert_eq!(
             payload.play_options.get("double_option"),

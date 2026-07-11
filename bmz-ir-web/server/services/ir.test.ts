@@ -153,6 +153,43 @@ describe('verification status', () => {
   })
 })
 
+describe('score submission metadata', () => {
+  test('keeps FLIP separately while retaining its off ranking bucket', () => {
+    expect(
+      __test.scoreSubmissionMetadata({
+        device_type: 'keyboard',
+        double_option: 'off',
+        applied_double_option: 'flip',
+        source_kind: 'beatoraja',
+      }),
+    ).toEqual({
+      doubleOption: 'off',
+      appliedDoubleOption: 'flip',
+      sourceKind: 'beatoraja',
+    })
+  })
+
+  test('uses compatible defaults for older score submissions', () => {
+    expect(
+      __test.scoreSubmissionMetadata({ device_type: 'keyboard', double_option: 'battle' }),
+    ).toEqual({
+      doubleOption: 'battle',
+      appliedDoubleOption: 'battle',
+      sourceKind: 'local',
+    })
+  })
+
+  test('rejects an applied option outside the ranking bucket', () => {
+    expect(() =>
+      __test.scoreSubmissionMetadata({
+        device_type: 'keyboard',
+        double_option: 'battle',
+        applied_double_option: 'flip',
+      }),
+    ).toThrow('does not match')
+  })
+})
+
 describe('idempotent score response', () => {
   test('returns the stored score without reporting a best-score update', () => {
     expect(

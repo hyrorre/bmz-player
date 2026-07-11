@@ -10,6 +10,10 @@ export type IrDeviceType = 'keyboard' | 'controller'
 
 export type IrDoubleOption = 'off' | 'battle' | 'battle_auto_scratch'
 
+export type IrAppliedDoubleOption = 'off' | 'flip' | 'battle' | 'battle_auto_scratch'
+
+export type IrScoreSourceKind = 'local' | 'beatoraja' | 'lr2' | 'lr2oraja' | 'lr2oraja_dx'
+
 export type IrRuleMode = 'Beatoraja' | 'Lr2Oraja' | 'Dx'
 
 export interface IrChartLnProfile {
@@ -87,6 +91,8 @@ export interface IrScoreSubmission {
   play_options: {
     device_type: IrDeviceType
     double_option?: IrDoubleOption
+    applied_double_option?: IrAppliedDoubleOption
+    source_kind?: IrScoreSourceKind
     option?: string
     arrange_1p?: string
     arrange_2p?: string
@@ -245,6 +251,8 @@ export interface IrScoreHistoryEntry {
   gauge: string
   ln_policy: LnScorePolicy
   double_option: IrDoubleOption
+  applied_double_option: IrAppliedDoubleOption
+  source_kind: IrScoreSourceKind
   rule_mode: IrRuleMode
   device_type: IrDeviceType
   arrange_1p?: string
