@@ -99,7 +99,7 @@ GET    /api/v1/courses/{course_hash}/ranking   # global のみ
 - rate limit: score submit / course score は 15 分あたり user 6000 / IP 12000。
   replay upload 系は 1 replay あたり upload-url / upload / verify の 3 request を使うため、
   15 分あたり user 900 / IP 1800。429 では `Retry-After` を返す。
-  backfill cleanup は 100 score / request、15 分あたり user 6000 / IP 12000 で、client は
+  backfill cleanup は 19 score / request、15 分あたり user 6000 / IP 12000 で、client は
   batch 間を 200ms 空ける。
 - ランキング表示: Result / Select スキンの `NUMBER_IR_RANK(179)` /
   `NUMBER_IR_TOTALPLAYER(180/200)` / `NUMBER_IR_CLEARRATE(181)` /

@@ -25,7 +25,9 @@ const DEVICE_TYPES = new Set(['keyboard', 'controller'])
 const RULE_MODES = new Set(['Beatoraja', 'Lr2Oraja', 'Dx'])
 const RANKING_SCOPES = new Set(['global', 'self_and_rivals', 'rivals', 'self', 'around_self'])
 const LOCAL_BACKFILL_SOURCE = 'local_backfill'
-export const MAX_LOCAL_BACKFILL_DELETE_BATCH_SIZE = 100
+// D1 は 1 query あたり最大100 bind parameter。best score 再集計は score key ごとに
+// 5 bind を使うため、player / accepted 条件を含めても余裕を持てる19件に制限する。
+export const MAX_LOCAL_BACKFILL_DELETE_BATCH_SIZE = 19
 export const CLEAR_RANK: Record<string, number> = {
   no_play: 0,
   NoPlay: 0,

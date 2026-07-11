@@ -625,7 +625,7 @@ async fn cleanup_imported_scores(
     requested_provider: Option<&str>,
     apply: bool,
 ) -> Result<()> {
-    const REMOTE_DELETE_BATCH_SIZE: usize = 100;
+    const REMOTE_DELETE_BATCH_SIZE: usize = 19;
     const REMOTE_DELETE_BATCH_SPACING_MS: u64 = 200;
 
     crate::storage::migration::migrate_score_db(&profile_paths.score_db)?;

@@ -1,7 +1,12 @@
 import { describe, expect, test } from 'bun:test'
 import { isUniqueConstraintError } from '../utils/db_errors'
 import { computeCourseHash, validateCourseScoreSubmission } from './course_ir'
-import { __test, stableStringify, validateScoreAttestation } from './ir'
+import {
+  MAX_LOCAL_BACKFILL_DELETE_BATCH_SIZE,
+  __test,
+  stableStringify,
+  validateScoreAttestation,
+} from './ir'
 
 describe('stableStringify', () => {
   test('matches JCS number formatting used by Rust IR evidence', () => {
@@ -38,6 +43,11 @@ describe('stableStringify', () => {
 })
 
 describe('ranking best row aggregation', () => {
+  test('keeps cleanup batches inside D1 bind parameter limits', () => {
+    expect(MAX_LOCAL_BACKFILL_DELETE_BATCH_SIZE).toBe(19)
+    expect(2 + MAX_LOCAL_BACKFILL_DELETE_BATCH_SIZE * 5).toBeLessThanOrEqual(100)
+  })
+
   test('reads arrange options from new and legacy play options', () => {
     expect(
       __test.arrangeOptionsFromPlayOptions({
