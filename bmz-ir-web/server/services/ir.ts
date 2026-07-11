@@ -265,6 +265,13 @@ export async function submitScore(
   rankingScopes: IrRankingScope[],
   rankingLimit: number,
 ): Promise<IrSubmitResponse> {
+  // 同一 idempotency key の再送は、当時の evidence 形式がすでに廃止されていても
+  // 保存済み score を成功として返す。初回送信の検証・保存には到達させない。
+  const existing = await findIdempotentScore(user.id, payload.idempotency_key)
+  if (existing) {
+    return idempotentScoreResponse(existing)
+  }
+
   const doubleOption = normalizeDoubleOption(payload.play_options.double_option)
   const verification = await resolveVerification(user.id, payload)
   await upsertChart(payload, shouldUpdateExistingChart(payload.play_options, doubleOption))
@@ -335,8 +342,8 @@ export async function submitScore(
     min_cb: payload.result.min_cb,
     server_received_at: serverReceivedAt,
   }
-  let score: { id: string; serverReceivedAt: Date } = { id: scoreId, serverReceivedAt }
-  let best = await prepareBestScoreUpsert(user.id, payload, scoreId, verification, candidate)
+  const score = { id: scoreId, serverReceivedAt }
+  const best = await prepareBestScoreUpsert(user.id, payload, scoreId, verification, candidate)
   try {
     const insertStatement = db.insert(schema.scores).values(scoreInsert)
     if (best.statement) {
@@ -348,26 +355,13 @@ export async function submitScore(
     if (!isUniqueConstraintError(error)) {
       throw error
     }
-    // idempotency 重複。既存 score を採用し、best 更新は従来どおり
-    // 既存 score の受信時刻で再計算して単体実行する。
-    const existing = await db.query.scores.findFirst({
-      columns: { id: true, serverReceivedAt: true },
-      where: and(
-        eq(schema.scores.playerId, user.id),
-        eq(schema.scores.idempotencyKey, payload.idempotency_key),
-      ),
-    })
+    // 初回送信が同時に確定した競合。既存 score を返すだけにして、
+    // 再送 payload で best score を再計算・上書きしない。
+    const existing = await findIdempotentScore(user.id, payload.idempotency_key)
     if (!existing) {
       throw new Error('failed to insert score')
     }
-    score = existing
-    best = await prepareBestScoreUpsert(user.id, payload, existing.id, verification, {
-      ...candidate,
-      server_received_at: existing.serverReceivedAt,
-    })
-    if (best.statement) {
-      await best.statement
-    }
+    return idempotentScoreResponse(existing)
   }
   const { bestUpdated, updatedFields } = best
 
@@ -402,6 +396,35 @@ export async function submitScore(
     server_received_at: score.serverReceivedAt.toISOString(),
     previous_best: previousBest,
     rankings: Object.keys(rankings).length > 0 ? rankings : undefined,
+  }
+}
+
+async function findIdempotentScore(
+  playerId: string,
+  idempotencyKey: string,
+): Promise<{ id: string; serverReceivedAt: Date } | undefined> {
+  return db.query.scores.findFirst({
+    columns: { id: true, serverReceivedAt: true },
+    where: and(
+      eq(schema.scores.playerId, playerId),
+      eq(schema.scores.idempotencyKey, idempotencyKey),
+    ),
+  })
+}
+
+function idempotentScoreResponse(score: { id: string; serverReceivedAt: Date }): IrSubmitResponse {
+  return {
+    accepted: true,
+    score_id: score.id,
+    best_updated: false,
+    updated_fields: {
+      ex_score: false,
+      clear: false,
+      max_combo: false,
+      min_bp: false,
+      min_cb: false,
+    },
+    server_received_at: score.serverReceivedAt.toISOString(),
   }
 }
 
@@ -1361,4 +1384,5 @@ export const __test = {
   dedupeBestRowsByPlayer,
   bestRowsFromHistory,
   verificationStatusForSignedSubmission,
+  idempotentScoreResponse,
 }

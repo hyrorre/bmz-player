@@ -153,6 +153,29 @@ describe('verification status', () => {
   })
 })
 
+describe('idempotent score response', () => {
+  test('returns the stored score without reporting a best-score update', () => {
+    expect(
+      __test.idempotentScoreResponse({
+        id: 'existing-score',
+        serverReceivedAt: new Date('2026-07-11T03:00:00.000Z'),
+      }),
+    ).toEqual({
+      accepted: true,
+      score_id: 'existing-score',
+      best_updated: false,
+      updated_fields: {
+        ex_score: false,
+        clear: false,
+        max_combo: false,
+        min_bp: false,
+        min_cb: false,
+      },
+      server_received_at: '2026-07-11T03:00:00.000Z',
+    })
+  })
+})
+
 describe('score attestation validation', () => {
   test('requires a score id, purpose, and evidence object', () => {
     expect(() => validateScoreAttestation({})).toThrow('score_id is required')

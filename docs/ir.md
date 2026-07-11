@@ -81,6 +81,9 @@ GET    /api/v1/courses/{course_hash}/ranking   # global のみ
   再送せず、所有者のdevice keyでscore IDを署名してverificationだけを更新する。
   成功履歴の保持期間外でremote score IDを失ったscoreは対象外で、将来のserver側一括
   attestation APIが必要になる。
+  同じユーザー・`idempotency_key` の再送は、保存済みscoreを副作用なしで成功として返す。
+  これは廃止済みのevidence形式でqueueに残ったjobを回復するためで、初回送信の署名・
+  データ検証は従来どおり行う。
   per-history ghost は現在の `score_history` には保持していないため送らない。
 - rate limit: score submit / course score は 15 分あたり user 1500 / IP 3000。
   replay upload 系は 1 replay あたり upload-url / upload / verify の 3 request を使うため、
