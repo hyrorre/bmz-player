@@ -508,6 +508,57 @@ impl ScoreDatabase {
         })
     }
 
+    /// 同じ source_kind 内で、譜面・プレイ日時・スコア内訳・seed が完全一致する
+    /// 通常プレイ履歴を返す。course stage は重複整理の対象にしない。
+    pub fn same_source_duplicate_history_ids(&self, history_id: i64) -> Result<Vec<i64>> {
+        let mut statement = self.conn.prepare(
+            "SELECT duplicate.id
+             FROM score_history AS target
+             JOIN score_history AS duplicate
+               ON duplicate.id != target.id
+              AND duplicate.source_kind = target.source_kind
+              AND duplicate.course_score_id IS NULL
+              AND duplicate.chart_sha256 = target.chart_sha256
+              AND duplicate.played_at = target.played_at
+              AND duplicate.ex_score = target.ex_score
+              AND duplicate.bp = target.bp
+              AND duplicate.cb = target.cb
+              AND duplicate.max_combo = target.max_combo
+              AND duplicate.fast_pgreat = target.fast_pgreat
+              AND duplicate.slow_pgreat = target.slow_pgreat
+              AND duplicate.fast_great = target.fast_great
+              AND duplicate.slow_great = target.slow_great
+              AND duplicate.fast_good = target.fast_good
+              AND duplicate.slow_good = target.slow_good
+              AND duplicate.fast_bad = target.fast_bad
+              AND duplicate.slow_bad = target.slow_bad
+              AND duplicate.fast_poor = target.fast_poor
+              AND duplicate.slow_poor = target.slow_poor
+              AND duplicate.fast_empty_poor = target.fast_empty_poor
+              AND duplicate.slow_empty_poor = target.slow_empty_poor
+              AND duplicate.random_seed IS target.random_seed
+             WHERE target.id = ?1
+               AND target.course_score_id IS NULL
+             ORDER BY duplicate.id",
+        )?;
+        statement
+            .query_map(params![history_id], |row| row.get(0))?
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(Into::into)
+    }
+
+    /// 指定した通常プレイ履歴を削除し、残存履歴から集計を再構築する。
+    pub fn purge_score_history_ids_and_rebuild(&mut self, history_ids: &[i64]) -> Result<u32> {
+        if history_ids.is_empty() {
+            return Ok(0);
+        }
+        let tx = self.conn.transaction()?;
+        let removed_history = delete_score_history_ids(&tx, history_ids)?;
+        rebuild_score_aggregates(&tx)?;
+        tx.commit()?;
+        Ok(removed_history)
+    }
+
     /// 指定した旧 Local 候補を削除し、通常譜面の score_best と player_stats を
     /// 残存履歴から再集計する。コース stage 履歴は集計から除外したまま維持する。
     pub fn purge_legacy_beatoraja_imports(
@@ -522,10 +573,8 @@ impl ScoreDatabase {
             });
         }
 
-        let tx = self.conn.transaction()?;
-        let removed_legacy_history = delete_score_history_ids(&tx, legacy_history_ids)?;
-        rebuild_score_aggregates(&tx)?;
-        tx.commit()?;
+        let removed_legacy_history =
+            self.purge_score_history_ids_and_rebuild(legacy_history_ids)?;
         Ok(LegacyBeatorajaCleanupReport {
             removed_legacy_history,
             retained_beatoraja_history: plan.retained_beatoraja_history_ids.len() as u32,
@@ -2369,6 +2418,26 @@ mod tests {
         assert_eq!(stats.play_count, 2);
         assert_eq!(stats.clear_count, 2);
         assert_eq!(stats.playtime_seconds, 70);
+    }
+
+    #[test]
+    fn same_source_duplicate_history_ids_match_the_cleanup_fingerprint() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        configure_connection(&conn).unwrap();
+        run_migrations(&mut conn, SCORE_MIGRATIONS).unwrap();
+        let mut db = ScoreDatabase { conn };
+
+        let mut first = record(20, ClearType::Normal);
+        first.random_seed = Some(1234);
+        let first_id = db.insert_score(&first).unwrap();
+        let duplicate_id = db.insert_score(&first).unwrap();
+
+        let mut different = first;
+        different.played_at += 1;
+        let different_id = db.insert_score(&different).unwrap();
+
+        assert_eq!(db.same_source_duplicate_history_ids(duplicate_id).unwrap(), vec![first_id]);
+        assert!(db.same_source_duplicate_history_ids(different_id).unwrap().is_empty());
     }
 
     #[test]

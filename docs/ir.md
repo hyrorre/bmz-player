@@ -50,7 +50,7 @@ GET    /api/v1/courses/{course_hash}/ranking   # global のみ
 
 ### クライアント (bmz-player)
 
-- CLI: `bmz ir login|logout|status|ranking|sync|upload-local|attest-submitted|cleanup-imported|rivals|device-key|replay`。
+- CLI: `bmz ir login|logout|status|ranking|sync|upload-local|attest-submitted|cleanup-imported|cleanup-duplicate|rivals|device-key|replay`。
   egui プロファイル設定からもログイン可能。
 - 送信: リザルト確定時に `ir_score_jobs` へ enqueue (send_policy 判定込み) →
   リザルト画面で即時送信 + アプリ常駐ワーカー (30 秒間隔) が残りを処理。
@@ -96,6 +96,10 @@ GET    /api/v1/courses/{course_hash}/ranking   # global のみ
   から再構築する。ローカル重複に対応する通常プレイまたは旧形式の IR score は保持し、
   次にローカルの IR job/submission 台帳を削除してから `score.db` の履歴、`score_best`、
   `player_stats` を再集計する。別 IR account への送信済み候補がある場合は、ローカル削除を止める。
+- exact duplicate cleanup: `bmz ir cleanup-duplicate <HISTORY_ID> --apply` は、同じ source kind 内で
+  譜面 hash、プレイ日時、EX、全判定内訳、BP、CB、max combo、random seed が一致する履歴が
+  ちょうど1件だけあることを再確認してから、指定 history を削除する。対応する
+  `local_backfill` IR score、network job/submission、ローカル集計も同じ順序で整理する。
 - rate limit: score submit / course score は 15 分あたり user 6000 / IP 12000。
   replay upload 系は 1 replay あたり upload-url / upload / verify の 3 request を使うため、
   15 分あたり user 900 / IP 1800。429 では `Retry-After` を返す。
