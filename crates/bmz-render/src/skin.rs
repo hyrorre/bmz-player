@@ -7419,6 +7419,9 @@ fn eval_skin_draw_condition(condition: &str, state: &SkinDrawState) -> bool {
 }
 
 fn eval_skin_draw_term(term: &str, state: &SkinDrawState) -> Option<bool> {
+    if let Some((group, part, below_border)) = parse_gauge_lead_glow_predicate(term) {
+        return Some(eval_gauge_lead_glow_predicate(group, part, below_border, state));
+    }
     if let Some((graph_kind, lane, slot, kind)) = parse_keylogger_draw_predicate(term) {
         let actual = match graph_kind {
             "judge" => state.keylogger_event_judge.get(lane)?.get(slot).copied()?,
@@ -7453,6 +7456,55 @@ fn eval_skin_draw_term(term: &str, state: &SkinDrawState) -> Option<bool> {
         });
     }
     None
+}
+
+fn parse_gauge_lead_glow_predicate(term: &str) -> Option<(&str, i32, bool)> {
+    let inner = term.strip_prefix("gauge_lead_glow(")?.strip_suffix(')')?;
+    let mut args = inner.split(',').map(str::trim);
+    let group = args.next()?;
+    let part = args.next()?.parse::<i32>().ok()?;
+    let below_border = match args.next()? {
+        "above" => false,
+        "below" => true,
+        _ => return None,
+    };
+    if args.next().is_some()
+        || !(1..=24).contains(&part)
+        || !matches!(group, "assist_easy" | "easy" | "groove" | "hard" | "exhard" | "hazard")
+    {
+        return None;
+    }
+    Some((group, part, below_border))
+}
+
+fn eval_gauge_lead_glow_predicate(
+    group: &str,
+    part: i32,
+    below_border: bool,
+    state: &SkinDrawState,
+) -> bool {
+    let actual_group = match state.gauge_type {
+        0 => "assist_easy",
+        1 => "easy",
+        2 => "groove",
+        3 | 6 => "hard",
+        4 | 7 => "exhard",
+        5 | 8 => "hazard",
+        _ => "groove",
+    };
+    if actual_group != group || state.gauge <= 0.0 {
+        return false;
+    }
+    let max = state.gauge_max.max(1.0);
+    let border = match (max > 100.0, state.gauge_type) {
+        (true, 0) => 65.0,
+        (true, 1 | 2) => 85.0,
+        (false, 0) => 60.0,
+        (false, 1 | 2) => 80.0,
+        _ => 0.0,
+    };
+    let lead = ((state.gauge * 24.0 / max).floor() as i32).clamp(1, 24);
+    lead == part && ((part as f32 * max / 24.0) < border) == below_border
 }
 
 fn parse_keylogger_draw_predicate(term: &str) -> Option<(&str, usize, usize, u8)> {
@@ -15145,6 +15197,24 @@ mod tests {
             "gauge_type() == 4 or gauge_type() == 5",
             &SkinDrawState { gauge_type: 2, ..Default::default() }
         ));
+    }
+
+    #[test]
+    fn peaceful_gauge_lead_glow_uses_group_part_border_and_profile() {
+        let pms =
+            SkinDrawState { gauge: 60.0, gauge_max: 120.0, gauge_type: 2, ..Default::default() };
+        assert!(eval_skin_draw_condition("gauge_lead_glow(groove,12,below)", &pms));
+        assert!(!eval_skin_draw_condition("gauge_lead_glow(groove,12,above)", &pms));
+        assert!(!eval_skin_draw_condition("gauge_lead_glow(easy,12,below)", &pms));
+
+        let sevenkeys =
+            SkinDrawState { gauge: 80.0, gauge_max: 100.0, gauge_type: 2, ..Default::default() };
+        assert!(eval_skin_draw_condition("gauge_lead_glow(groove,19,below)", &sevenkeys));
+        assert!(!eval_skin_draw_condition("gauge_lead_glow(groove,19,above)", &sevenkeys));
+
+        let class =
+            SkinDrawState { gauge: 50.0, gauge_max: 100.0, gauge_type: 6, ..Default::default() };
+        assert!(eval_skin_draw_condition("gauge_lead_glow(hard,12,above)", &class));
     }
 
     #[test]

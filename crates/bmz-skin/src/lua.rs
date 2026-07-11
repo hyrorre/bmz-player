@@ -615,6 +615,7 @@ struct MainStateProbe {
     dynamic_timers: Vec<(i32, String)>,
     fixed_delay_timers: Vec<(i32, i32, i32)>,
     keylogger_destination_occurrences: BTreeMap<String, usize>,
+    gauge_lead_glow_occurrences: BTreeMap<String, usize>,
     load_dependencies: Option<Arc<Mutex<SkinLoadDependencies>>>,
 }
 
@@ -642,6 +643,7 @@ impl Default for MainStateProbe {
             dynamic_timers: Vec::new(),
             fixed_delay_timers: Vec::new(),
             keylogger_destination_occurrences: BTreeMap::new(),
+            gauge_lead_glow_occurrences: BTreeMap::new(),
             load_dependencies: None,
         }
     }
@@ -2453,6 +2455,50 @@ fn lua_value_to_json(
     })
 }
 
+fn peaceful_gauge_lead_glow_id(id: &str) -> Option<(&str, bool)> {
+    let (group, side) = id.strip_prefix("gauge-lead-glow-")?.rsplit_once('-')?;
+    if !matches!(group, "assist_easy" | "easy" | "groove" | "hard" | "exhard" | "hazard") {
+        return None;
+    }
+    Some((
+        group,
+        match side {
+            "above" => false,
+            "below" => true,
+            _ => return None,
+        },
+    ))
+}
+
+fn is_peaceful_gauge_lead_glow_destination(entries: &[(Value, Value)]) -> bool {
+    let Some(Value::Table(dst)) = entries.iter().find_map(|(key, value)| {
+        matches!(key, Value::String(key) if key.as_bytes() == b"dst").then_some(value)
+    }) else {
+        return false;
+    };
+    let frames =
+        [1, 2, 3].into_iter().map(|index| dst.get::<Table>(index).ok()).collect::<Option<Vec<_>>>();
+    let Some(frames) = frames else { return false };
+    let expected = [(0, 0), (750, 255), (1500, 0)];
+    let rect = frames[0]
+        .get::<f64>("x")
+        .ok()
+        .zip(frames[0].get::<f64>("y").ok())
+        .zip(frames[0].get::<f64>("w").ok())
+        .zip(frames[0].get::<f64>("h").ok());
+    frames.iter().zip(expected).all(|(frame, (time, alpha))| {
+        frame.get::<i32>("time").ok() == Some(time)
+            && frame.get::<i32>("a").ok() == Some(alpha)
+            && frame
+                .get::<f64>("x")
+                .ok()
+                .zip(frame.get::<f64>("y").ok())
+                .zip(frame.get::<f64>("w").ok())
+                .zip(frame.get::<f64>("h").ok())
+                == rect
+    })
+}
+
 fn lua_table_to_json(
     lua: &Lua,
     table: Table,
@@ -2511,6 +2557,21 @@ fn lua_table_to_json(
         warnings.push(format!("mixed lua table converted to object at {path}"));
     }
     let object_id = lua_object_id(&entries);
+    let gauge_lead_glow_destination = object_id
+        .as_deref()
+        .filter(|_| path.contains(".destination["))
+        .and_then(|id| peaceful_gauge_lead_glow_id(id))
+        .filter(|_| is_peaceful_gauge_lead_glow_destination(&entries))
+        .and_then(|(group, below_border)| {
+            let mut probe = main_state_probe.lock().ok()?;
+            let occurrence = probe
+                .gauge_lead_glow_occurrences
+                .entry(object_id.as_deref()?.to_string())
+                .or_default();
+            let part = *occurrence + 1;
+            *occurrence += 1;
+            Some((group.to_string(), below_border, part))
+        });
     let keylogger_destination = object_id.as_deref().and_then(parse_keylogger_destination_id);
     let keylogger_slot = if path.contains(".destination[") && keylogger_destination.is_some() {
         object_id.as_deref().and_then(|id| {
@@ -2651,6 +2712,16 @@ fn lua_table_to_json(
                 continue;
             }
             if key == "draw" {
+                if let Some((group, below_border, part)) = &gauge_lead_glow_destination {
+                    object.insert(
+                        key.clone(),
+                        JsonValue::String(format!(
+                            "gauge_lead_glow({group},{part},{})",
+                            if *below_border { "below" } else { "above" }
+                        )),
+                    );
+                    continue;
+                }
                 if let (Some((graph_kind, lane, Some(kind))), Some(slot)) =
                     (keylogger_destination, keylogger_slot)
                 {

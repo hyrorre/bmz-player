@@ -2685,6 +2685,41 @@ mod tests {
             )),
             "PeacefulPlay keybeam fade closures should use the native runtime predicate"
         );
+        let gauge_lead_glow = loaded
+            .document
+            .destination
+            .iter()
+            .filter_map(|entry| match entry {
+                bmz_skin_document::DestinationListEntry::Single(destination)
+                    if destination.id.starts_with("gauge-lead-glow-") =>
+                {
+                    Some(destination)
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(gauge_lead_glow.len(), 216);
+        assert!(
+            gauge_lead_glow
+                .iter()
+                .all(|destination| { destination.draw.starts_with("gauge_lead_glow(") }),
+            "unexpected gauge predicates: {:?}",
+            gauge_lead_glow
+                .iter()
+                .filter(|destination| !destination.draw.starts_with("gauge_lead_glow("))
+                .map(|destination| (&destination.id, &destination.draw))
+                .collect::<Vec<_>>()
+        );
+        let sevenkeys_path = skin_path.with_file_name("play7_9lane.luaskin");
+        let sevenkeys =
+            load_lua_skin(&sevenkeys_path, SkinKind::Play, &BTreeMap::new(), &BTreeMap::new())
+                .expect("PeacefulPlay play7_9lane should decode");
+        assert!(sevenkeys.document.destination.iter().any(|entry| matches!(
+            entry,
+            bmz_skin_document::DestinationListEntry::Single(destination)
+                if destination.id == "gauge-lead-glow-groove-below"
+                    && destination.draw.starts_with("gauge_lead_glow(groove,")
+        )));
         assert_eq!(
             loaded.document.fixed_delay_timers,
             vec![bmz_skin_document::SkinFixedDelayTimerDef {
