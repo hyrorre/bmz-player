@@ -152,6 +152,7 @@ pub fn finish_session_result(
                 playtime_seconds: chart_playtime_seconds(&session.chart),
                 ln_policy: score_key.ln_policy,
                 double_option: score_key.double_option,
+                applied_double_option: applied_arrange.double_option,
                 random_seed: arrange_seed,
                 gauge_option: String::new(),
                 rule_mode: session.rule_mode.as_str().to_string(),

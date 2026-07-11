@@ -1289,6 +1289,30 @@ pub const SCORE_MIGRATIONS: &[Migration] = &[
             "DROP INDEX IF EXISTS idx_score_course_replay_slots_hash;",
         ],
     },
+    Migration {
+        version: 20,
+        // Imported scores need durable provenance so repeated imports can be
+        // deduplicated without treating a local play as the same source row.
+        // Historical rows predate provenance tracking and remain local scores.
+        statements: &[
+            "ALTER TABLE score_history
+                ADD COLUMN source_kind TEXT NOT NULL DEFAULT 'Local';",
+            "ALTER TABLE score_history
+                ADD COLUMN arrange_2p TEXT NOT NULL DEFAULT 'Normal';",
+            "CREATE INDEX idx_score_history_source_kind_chart_sha256
+                ON score_history(source_kind, chart_sha256);",
+        ],
+    },
+    Migration {
+        version: 21,
+        // `double_option` remains the score aggregation bucket.  Keep the
+        // actually applied option separately because FLIP shares the Off
+        // bucket but must remain visible in score history.
+        statements: &[
+            "ALTER TABLE score_history
+                ADD COLUMN applied_double_option TEXT NOT NULL DEFAULT 'Off';",
+        ],
+    },
 ];
 
 pub const NETWORK_MIGRATIONS: &[Migration] = &[Migration {

@@ -16,10 +16,13 @@ use rusqlite::{Connection, OpenFlags, Row};
 
 use super::common::hex_to_hash;
 use super::library_db::LibraryDatabase;
-use super::score_db::{CourseScoreInsert, ScoreDatabase, ScoreRecord, decode_beatoraja_ghost};
+use super::score_db::{
+    CourseScoreInsert, ScoreDatabase, ScoreRecord, ScoreSourceKind, decode_beatoraja_ghost,
+};
 use crate::ln_policy::{
     LnPolicySetting, LnScorePolicy, expected_scored_note_count_for_policy, score_ln_policy,
 };
+use crate::select_options::{ArrangeOption, DoubleOption};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ScoreImportKind {
@@ -58,6 +61,15 @@ impl ScoreImportKind {
 
     const fn uses_lr2_schema(self) -> bool {
         matches!(self, Self::Lr2)
+    }
+
+    const fn source_kind(self) -> ScoreSourceKind {
+        match self {
+            Self::Lr2 => ScoreSourceKind::Lr2,
+            Self::Beatoraja => ScoreSourceKind::Beatoraja,
+            Self::Lr2Oraja => ScoreSourceKind::Lr2Oraja,
+            Self::Lr2OrajaDx => ScoreSourceKind::Lr2OrajaDx,
+        }
     }
 }
 
@@ -204,7 +216,7 @@ fn import_lr2_scores(
         };
 
         let clear_type = lr2_clear_type(row.clear);
-        let record = imported_score_record(
+        let mut record = imported_score_record(
             chart_sha256,
             imported_at,
             clear_type,
@@ -214,6 +226,11 @@ fn import_lr2_scores(
             kind.rule_mode(),
             resolved.ln_policy,
         );
+        record.source_kind = kind.source_kind();
+        if score_db.has_same_score_from_source(&record)? {
+            report.skipped += 1;
+            continue;
+        }
         score_db.insert_score(&record)?;
         report.imported += 1;
     }
@@ -239,7 +256,7 @@ fn import_beatoraja_scores(
     let mut chart_cache: HashMap<[u8; 32], Arc<PlayableChart>> = HashMap::new();
     let sql = format!(
         "SELECT sha256, mode, clear, epg, lpg, egr, lgr, egd, lgd, ebd, lbd,
-                epr, lpr, ems, lms, notes, combo, minbp, ghost, seed, date
+                epr, lpr, ems, lms, notes, combo, minbp, ghost, seed, date, option
          FROM {table}"
     );
     let mut stmt = source.prepare(&sql)?;
@@ -331,7 +348,8 @@ fn import_beatoraja_scores(
         };
 
         let clear_type = beatoraja_clear_type(row.clear);
-        let record = imported_score_record(
+        let (arrange, arrange_2p) = beatoraja_arrange_options(row.option, &chart_item.mode);
+        let mut record = imported_score_record(
             chart_sha256,
             normalize_imported_played_at(row.date).unwrap_or(imported_at),
             clear_type,
@@ -341,6 +359,15 @@ fn import_beatoraja_scores(
             kind.rule_mode(),
             resolved.ln_policy,
         );
+        record.arrange = arrange.to_persistent_str().to_string();
+        record.arrange_2p = arrange_2p.to_persistent_str().to_string();
+        record.applied_double_option = beatoraja_double_option(row.option);
+        record.double_option = record.applied_double_option.score_bucket();
+        record.source_kind = kind.source_kind();
+        if score_db.has_same_score_from_source(&record)? {
+            report.skipped += 1;
+            continue;
+        }
         score_db.insert_score(&record)?;
         report.imported += 1;
     }
@@ -361,6 +388,83 @@ fn beatoraja_mode_to_ln_setting(mode: i64) -> LnPolicySetting {
         other => {
             tracing::debug!(mode = other, "unknown beatoraja score.mode; treating as AutoLn");
             LnPolicySetting::AutoLn
+        }
+    }
+}
+
+/// Maps beatoraja's decimal-packed score option to the two arrangement slots
+/// which BMZ records for an attempt.  The low digit is 1P, the tens digit is
+/// 2P; the hundreds digit is handled separately by
+/// [`beatoraja_double_option`].
+fn beatoraja_arrange_options(option: i64, chart_mode: &str) -> (ArrangeOption, ArrangeOption) {
+    if option < 0 {
+        tracing::debug!(option, "negative beatoraja score.option; using Normal arrange");
+        return (ArrangeOption::Normal, ArrangeOption::Normal);
+    }
+    (
+        beatoraja_arrange_option(option % 10, chart_mode),
+        beatoraja_arrange_option((option / 10) % 10, chart_mode),
+    )
+}
+
+fn beatoraja_arrange_option(random_option: i64, chart_mode: &str) -> ArrangeOption {
+    let general = match random_option {
+        0 => ArrangeOption::Normal,
+        1 => ArrangeOption::Mirror,
+        2 => ArrangeOption::Random,
+        3 => ArrangeOption::RRandom,
+        4 => ArrangeOption::SRandom,
+        5 => ArrangeOption::Spiral,
+        6 => ArrangeOption::HRandom,
+        7 => ArrangeOption::AllScratch,
+        8 => ArrangeOption::RandomEx,
+        9 => ArrangeOption::SRandomEx,
+        _ => {
+            tracing::debug!(random_option, "unknown beatoraja random option; using Normal");
+            ArrangeOption::Normal
+        }
+    };
+
+    // beatoraja has a distinct POP'N option table.  BMZ does not implement
+    // CONVERGE or the playable-only variants, so retain an equivalent normal/
+    // random class without claiming an unsupported arrangement was reproduced.
+    if chart_mode != "9K" {
+        return general;
+    }
+    match random_option {
+        7 => {
+            tracing::debug!("beatoraja PMS CONVERGE has no BMZ equivalent; using Normal");
+            ArrangeOption::Normal
+        }
+        8 => {
+            tracing::debug!("approximating beatoraja PMS RANDOM PLAYABLE as Random");
+            ArrangeOption::Random
+        }
+        9 => {
+            tracing::debug!("approximating beatoraja PMS S-RANDOM PLAYABLE as SRandom");
+            ArrangeOption::SRandom
+        }
+        _ => general,
+    }
+}
+
+/// Reads beatoraja's hundreds digit as the actual DP option selected for the
+/// attempt.  This is intentionally separate from
+/// [`DoubleOptionScoreBucket`](crate::select_options::DoubleOptionScoreBucket):
+/// BMZ groups OFF and FLIP scores together, but history must retain which of
+/// those two layouts the player used.
+fn beatoraja_double_option(option: i64) -> DoubleOption {
+    if option < 0 {
+        return DoubleOption::Off;
+    }
+    match option / 100 {
+        0 => DoubleOption::Off,
+        1 => DoubleOption::Flip,
+        2 => DoubleOption::Battle,
+        3 => DoubleOption::BattleAutoScratch,
+        double_option => {
+            tracing::debug!(double_option, "unknown beatoraja double option; using Off bucket");
+            DoubleOption::Off
         }
     }
 }
@@ -495,6 +599,7 @@ fn imported_score_record(
         chart_sha256,
         ln_policy,
         double_option: crate::select_options::DoubleOptionScoreBucket::Off,
+        applied_double_option: DoubleOption::Off,
         played_at,
         clear_type,
         gauge_type: gauge_type_for_clear(clear_type),
@@ -505,12 +610,14 @@ fn imported_score_record(
         count_unprocessed_notes: clear_type == ClearType::Failed,
         random_seed,
         arrange: "Normal".to_string(),
+        arrange_2p: "Normal".to_string(),
         gauge_option: String::new(),
         rule_mode: rule_mode.to_string(),
         assist_mask: 0,
         autoplay: false,
         device_type: InputDeviceKind::Keyboard,
         replay_path: String::new(),
+        source_kind: ScoreSourceKind::Local,
     }
 }
 
@@ -754,6 +861,7 @@ struct BeatorajaScoreRow {
     ghost: String,
     random_seed: Option<i64>,
     date: i64,
+    option: i64,
 }
 
 fn beatoraja_row(row: &Row<'_>) -> rusqlite::Result<BeatorajaScoreRow> {
@@ -779,6 +887,7 @@ fn beatoraja_row(row: &Row<'_>) -> rusqlite::Result<BeatorajaScoreRow> {
         ghost: row.get::<_, Option<String>>(18)?.unwrap_or_default(),
         random_seed: row.get(19)?,
         date: row.get(20)?,
+        option: row.get(21)?,
     })
 }
 
@@ -1046,6 +1155,7 @@ mod tests {
     use rusqlite::params;
 
     use super::*;
+    use crate::select_options::DoubleOptionScoreBucket;
     use crate::storage::common::hash_to_hex;
     use crate::storage::library_db::{ChartImportRecord, LibraryDatabase};
     use crate::storage::migration::{LIBRARY_MIGRATIONS, SCORE_MIGRATIONS, run_migrations};
@@ -1084,6 +1194,9 @@ mod tests {
         let (library_db, mut score_db, sha256, _) = open_test_databases();
         let source = Connection::open_in_memory().unwrap();
         create_beatoraja_source(&source, &sha256, 1_700_000_001_000, 0);
+        // 1P=ROTATE, 2P=MIRROR, double=FLIP.  FLIP shares the Off score
+        // bucket, but is retained as the applied option in history.
+        source.execute("UPDATE score SET option = 113", []).unwrap();
 
         let report = import_beatoraja_scores(
             &source,
@@ -1095,23 +1208,30 @@ mod tests {
         .unwrap();
 
         assert_eq!(report.imported, 1);
-        let row: (String, u32, u32, u32, String, String, String, i64) = score_db
+        let row: (
+            (String, u32, u32, u32, String, String, String, String),
+            (String, String, String, String, i64),
+        ) = score_db
             .conn()
             .query_row(
                 "SELECT clear_type, fast_pgreat, slow_pgreat, slow_empty_poor,
-                    rule_mode, ln_policy, device_type, played_at
+                    rule_mode, ln_policy, double_option, applied_double_option, arrange, arrange_2p,
+                    device_type, source_kind, played_at
                  FROM score_history",
                 [],
                 |row| {
                     Ok((
-                        row.get(0)?,
-                        row.get(1)?,
-                        row.get(2)?,
-                        row.get(3)?,
-                        row.get(4)?,
-                        row.get(5)?,
-                        row.get(6)?,
-                        row.get(7)?,
+                        (
+                            row.get(0)?,
+                            row.get(1)?,
+                            row.get(2)?,
+                            row.get(3)?,
+                            row.get(4)?,
+                            row.get(5)?,
+                            row.get(6)?,
+                            row.get(7)?,
+                        ),
+                        (row.get(8)?, row.get(9)?, row.get(10)?, row.get(11)?, row.get(12)?),
                     ))
                 },
             )
@@ -1119,16 +1239,106 @@ mod tests {
         assert_eq!(
             row,
             (
-                "ExHard".to_string(),
-                100,
-                10,
-                1,
-                "Beatoraja".to_string(),
-                "ForceLn".to_string(),
-                "keyboard".to_string(),
-                1_700_000_001,
+                (
+                    "ExHard".to_string(),
+                    100,
+                    10,
+                    1,
+                    "Beatoraja".to_string(),
+                    "ForceLn".to_string(),
+                    "Off".to_string(),
+                    "Flip".to_string(),
+                ),
+                (
+                    "RRandom".to_string(),
+                    "Mirror".to_string(),
+                    "keyboard".to_string(),
+                    "Beatoraja".to_string(),
+                    1_700_000_001,
+                ),
             )
         );
+    }
+
+    #[test]
+    fn beatoraja_option_maps_both_arrange_slots_and_double_bucket() {
+        assert_eq!(
+            beatoraja_arrange_options(213, "7K"),
+            (ArrangeOption::RRandom, ArrangeOption::Mirror)
+        );
+        assert_eq!(beatoraja_double_option(213).score_bucket(), DoubleOptionScoreBucket::Battle);
+        assert_eq!(beatoraja_double_option(100), DoubleOption::Flip);
+        // FLIP is intentionally in the existing Off score bucket, while its
+        // actual option is retained by `ScoreRecord::applied_double_option`.
+        assert_eq!(beatoraja_double_option(100).score_bucket(), DoubleOptionScoreBucket::Off);
+        assert_eq!(beatoraja_double_option(200), DoubleOption::Battle);
+        assert_eq!(
+            beatoraja_double_option(300).score_bucket(),
+            DoubleOptionScoreBucket::BattleAutoScratch
+        );
+        assert_eq!(
+            beatoraja_arrange_options(7, "9K"),
+            (ArrangeOption::Normal, ArrangeOption::Normal)
+        );
+        assert_eq!(
+            beatoraja_arrange_options(8, "9K"),
+            (ArrangeOption::Random, ArrangeOption::Normal)
+        );
+        assert_eq!(
+            beatoraja_arrange_options(9, "9K"),
+            (ArrangeOption::SRandom, ArrangeOption::Normal)
+        );
+    }
+
+    #[test]
+    fn beatoraja_import_skips_identical_scores_from_same_source_kind() {
+        let (library_db, mut score_db, sha256, _) = open_test_databases();
+        let source = Connection::open_in_memory().unwrap();
+        create_beatoraja_source(&source, &sha256, 1_700_000_001_000, 0);
+
+        let first = import_beatoraja_scores(
+            &source,
+            ScoreImportKind::Beatoraja,
+            &library_db,
+            &mut score_db,
+            1_700_000_000,
+        )
+        .unwrap();
+        assert_eq!(first.imported, 1);
+
+        // A timestamp change alone does not make an external score a new play.
+        source.execute("UPDATE score SET date = ?1", params![1_700_000_002_000_i64]).unwrap();
+        let duplicate = import_beatoraja_scores(
+            &source,
+            ScoreImportKind::Beatoraja,
+            &library_db,
+            &mut score_db,
+            1_700_000_000,
+        )
+        .unwrap();
+        assert_eq!(duplicate.imported, 0);
+        assert_eq!(duplicate.skipped, 1);
+
+        // Provenance is part of the duplicate key: the same score imported from
+        // LR2oraja remains a separate history entry.
+        let distinct_source = import_beatoraja_scores(
+            &source,
+            ScoreImportKind::Lr2Oraja,
+            &library_db,
+            &mut score_db,
+            1_700_000_000,
+        )
+        .unwrap();
+        assert_eq!(distinct_source.imported, 1);
+        let source_kinds: Vec<String> = score_db
+            .conn()
+            .prepare("SELECT source_kind FROM score_history ORDER BY id")
+            .unwrap()
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .collect::<std::result::Result<_, _>>()
+            .unwrap();
+        assert_eq!(source_kinds, vec!["Beatoraja", "Lr2Oraja"]);
     }
 
     #[test]
@@ -1805,14 +2015,14 @@ mod tests {
                     egr INTEGER, lgr INTEGER, egd INTEGER, lgd INTEGER,
                     ebd INTEGER, lbd INTEGER, epr INTEGER, lpr INTEGER,
                     ems INTEGER, lms INTEGER, notes INTEGER, combo INTEGER,
-                    minbp INTEGER, ghost TEXT, seed INTEGER, date INTEGER
+                    minbp INTEGER, ghost TEXT, seed INTEGER, date INTEGER, option INTEGER
                 );",
             )
             .unwrap();
         }
         conn.execute(
             "INSERT INTO score VALUES (
-                ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, 3, 1, ?14, ?15, 2, '', 456, ?16
+                ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, 3, 1, ?14, ?15, 2, '', 456, ?16, 0
             )",
             params![
                 sha256,

@@ -2977,6 +2977,7 @@ mod tests {
             chart_sha256,
             ln_policy: LnScorePolicy::ForceLn,
             double_option: crate::select_options::DoubleOptionScoreBucket::Off,
+            applied_double_option: crate::select_options::DoubleOption::Off,
             played_at: 1_700_000_030,
             clear_type: ClearType::Normal,
             gauge_type: Some(GaugeType::Normal),
@@ -2987,12 +2988,14 @@ mod tests {
             count_unprocessed_notes: false,
             random_seed: None,
             arrange: "Normal".to_string(),
+            arrange_2p: "Normal".to_string(),
             gauge_option: String::new(),
             rule_mode: String::new(),
             assist_mask: 0,
             autoplay: false,
             device_type: bmz_core::input::InputDeviceKind::Keyboard,
             replay_path: String::new(),
+            source_kind: crate::storage::score_db::ScoreSourceKind::Local,
         }
     }
 

@@ -22,10 +22,45 @@ pub use super::course_score_db::{
 };
 use crate::config::profile_config::ReplaySlotRule;
 use crate::ln_policy::LnScorePolicy;
-use crate::select_options::DoubleOptionScoreBucket;
+use crate::select_options::{DoubleOption, DoubleOptionScoreBucket};
 
 pub struct ScoreDatabase {
     conn: Connection,
+}
+
+/// Score history provenance.  This is intentionally not part of [`ScoreKey`]:
+/// imported results and locally played results compete for the same best score.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum ScoreSourceKind {
+    #[default]
+    Local,
+    Beatoraja,
+    Lr2,
+    Lr2Oraja,
+    Lr2OrajaDx,
+}
+
+impl ScoreSourceKind {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Local => "Local",
+            Self::Beatoraja => "Beatoraja",
+            Self::Lr2 => "Lr2",
+            Self::Lr2Oraja => "Lr2Oraja",
+            Self::Lr2OrajaDx => "Lr2OrajaDx",
+        }
+    }
+
+    pub fn from_str_opt(value: &str) -> Option<Self> {
+        match value {
+            "Local" => Some(Self::Local),
+            "Beatoraja" => Some(Self::Beatoraja),
+            "Lr2" => Some(Self::Lr2),
+            "Lr2Oraja" => Some(Self::Lr2Oraja),
+            "Lr2OrajaDx" => Some(Self::Lr2OrajaDx),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -101,7 +136,11 @@ impl ScoreKey {
 pub struct ScoreRecord {
     pub chart_sha256: [u8; 32],
     pub ln_policy: LnScorePolicy,
+    /// Score aggregation key. FLIP deliberately shares the Off bucket.
     pub double_option: DoubleOptionScoreBucket,
+    /// The DP option actually applied to this play, retained independently
+    /// from the aggregation bucket so FLIP history is not lost.
+    pub applied_double_option: DoubleOption,
     pub played_at: i64,
     pub clear_type: ClearType,
     pub gauge_type: Option<GaugeType>,
@@ -112,12 +151,14 @@ pub struct ScoreRecord {
     pub count_unprocessed_notes: bool,
     pub random_seed: Option<i64>,
     pub arrange: String,
+    pub arrange_2p: String,
     pub gauge_option: String,
     pub rule_mode: String,
     pub assist_mask: u32,
     pub autoplay: bool,
     pub device_type: InputDeviceKind,
     pub replay_path: String,
+    pub source_kind: ScoreSourceKind,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -130,15 +171,18 @@ pub enum ScoreInsertMode {
 pub struct ScoreRecordMetadata {
     pub ln_policy: LnScorePolicy,
     pub double_option: DoubleOptionScoreBucket,
+    pub applied_double_option: DoubleOption,
     pub played_at: i64,
     pub playtime_seconds: u32,
     pub random_seed: Option<i64>,
     pub arrange: String,
+    pub arrange_2p: String,
     pub gauge_option: String,
     pub rule_mode: String,
     pub assist_mask: u32,
     pub device_type: InputDeviceKind,
     pub replay_path: String,
+    pub source_kind: ScoreSourceKind,
 }
 
 impl ScoreRecord {
@@ -146,21 +190,25 @@ impl ScoreRecord {
         let ScoreRecordMetadata {
             ln_policy,
             double_option,
+            applied_double_option,
             played_at,
             playtime_seconds,
             random_seed,
             arrange,
+            arrange_2p,
             gauge_option,
             rule_mode,
             assist_mask,
             device_type,
             replay_path,
+            source_kind,
         } = metadata;
 
         Self {
             chart_sha256: result.chart_sha256,
             ln_policy,
             double_option,
+            applied_double_option,
             played_at,
             clear_type: result.clear_type,
             gauge_type: Some(result.gauge_type),
@@ -171,12 +219,14 @@ impl ScoreRecord {
             count_unprocessed_notes: result.clear_type == ClearType::Failed,
             random_seed,
             arrange,
+            arrange_2p,
             gauge_option,
             rule_mode,
             assist_mask,
             autoplay: result.autoplay,
             device_type,
             replay_path,
+            source_kind,
         }
     }
 }
@@ -197,20 +247,38 @@ impl ScoreRecordMetadata {
         Self {
             ln_policy,
             double_option,
+            applied_double_option: DoubleOption::Off,
             played_at,
             playtime_seconds: 0,
             random_seed,
             arrange: arrange.into(),
+            arrange_2p: "Normal".to_string(),
             gauge_option: gauge_option.into(),
             rule_mode: rule_mode.into(),
             assist_mask,
             device_type,
             replay_path: replay_path.into(),
+            source_kind: ScoreSourceKind::Local,
         }
     }
 
     pub fn with_playtime_seconds(mut self, playtime_seconds: u32) -> Self {
         self.playtime_seconds = playtime_seconds;
+        self
+    }
+
+    pub fn with_arrange_2p(mut self, arrange_2p: impl Into<String>) -> Self {
+        self.arrange_2p = arrange_2p.into();
+        self
+    }
+
+    pub const fn with_applied_double_option(mut self, double_option: DoubleOption) -> Self {
+        self.applied_double_option = double_option;
+        self
+    }
+
+    pub const fn with_source_kind(mut self, source_kind: ScoreSourceKind) -> Self {
+        self.source_kind = source_kind;
         self
     }
 }
@@ -286,6 +354,9 @@ pub struct ScoreHistoryEntry {
     pub id: i64,
     pub chart_sha256: [u8; 32],
     pub ln_policy: LnScorePolicy,
+    /// The DP option actually applied to this play. This is separate from the
+    /// score bucket so a FLIP play is distinguishable from Off.
+    pub applied_double_option: DoubleOption,
     pub played_at: i64,
     pub clear_type: String,
     pub gauge_type: String,
@@ -298,6 +369,7 @@ pub struct ScoreHistoryEntry {
     pub autoplay: bool,
     pub device_type: InputDeviceKind,
     pub replay_path: String,
+    pub source_kind: ScoreSourceKind,
     /// `score.db`'s `course_scores.id` if this chart play happened as part
     /// of a course attempt, otherwise `None`.
     pub course_score_id: Option<i64>,
@@ -351,6 +423,92 @@ impl ScoreDatabase {
         }
         tx.commit()?;
         Ok(history_id)
+    }
+
+    /// Returns whether an imported score with the same persisted score contents
+    /// and provenance already exists. `played_at` is intentionally excluded:
+    /// LR2 does not retain a per-score timestamp, and re-importing a source
+    /// database must not create duplicates merely because the import time changed.
+    pub fn has_same_score_from_source(&self, record: &ScoreRecord) -> Result<bool> {
+        let judges = &record.score.judges;
+        let exists = self
+            .conn
+            .query_row(
+                "SELECT 1
+                 FROM score_history
+                 WHERE source_kind = ?1
+                   AND chart_sha256 = ?2
+                   AND ln_policy = ?3
+                   AND double_option = ?4
+                   AND clear_type = ?5
+                   AND gauge_type = ?6
+                   AND gauge_value = ?7
+                   AND total_notes = ?8
+                   AND ex_score = ?9
+                   AND bp = ?10
+                   AND cb = ?11
+                   AND max_combo = ?12
+                   AND fast_pgreat = ?13
+                   AND slow_pgreat = ?14
+                   AND fast_great = ?15
+                   AND slow_great = ?16
+                   AND fast_good = ?17
+                   AND slow_good = ?18
+                   AND fast_bad = ?19
+                   AND slow_bad = ?20
+                   AND fast_poor = ?21
+                   AND slow_poor = ?22
+                   AND fast_empty_poor = ?23
+                   AND slow_empty_poor = ?24
+                   AND random_seed IS ?25
+                   AND arrange = ?26
+                   AND arrange_2p = ?27
+                   AND gauge_option = ?28
+                   AND rule_mode = ?29
+                   AND assist_mask = ?30
+                   AND autoplay = ?31
+                   AND device_type = ?32
+                   AND applied_double_option = ?33
+                 LIMIT 1",
+                params![
+                    record.source_kind.as_str(),
+                    hash_to_hex(&record.chart_sha256),
+                    record.ln_policy.as_str(),
+                    record.double_option.as_str(),
+                    record.clear_type.as_str(),
+                    gauge_type_str(record.gauge_type),
+                    record.gauge_value,
+                    record.total_notes,
+                    record.score.ex_score(),
+                    score_record_bp(record),
+                    score_record_cb(record),
+                    record.score.max_combo,
+                    judges.fast_pgreat,
+                    judges.slow_pgreat,
+                    judges.fast_great,
+                    judges.slow_great,
+                    judges.fast_good,
+                    judges.slow_good,
+                    judges.fast_bad,
+                    judges.slow_bad,
+                    judges.fast_poor,
+                    judges.slow_poor,
+                    judges.fast_empty_poor,
+                    judges.slow_empty_poor,
+                    record.random_seed,
+                    record.arrange.as_str(),
+                    record.arrange_2p.as_str(),
+                    record.gauge_option.as_str(),
+                    record.rule_mode.as_str(),
+                    record.assist_mask,
+                    record.autoplay,
+                    record.device_type.as_str(),
+                    record.applied_double_option.to_persistent_str(),
+                ],
+                |_| Ok(()),
+            )
+            .optional()?;
+        Ok(exists.is_some())
     }
 
     pub fn player_info(&self) -> Result<PlayerInfo> {
@@ -811,7 +969,9 @@ impl ScoreDatabase {
                 old_max_combo,
                 old_bp,
                 old_cb,
-                device_type
+                device_type,
+                source_kind,
+                applied_double_option
             FROM score_history
             ORDER BY played_at DESC, id DESC
             LIMIT ?1 OFFSET ?2",
@@ -916,6 +1076,7 @@ fn score_history_entry_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Sco
         id: row.get(0)?,
         chart_sha256,
         ln_policy: ln_policy_from_row(row, 14)?,
+        applied_double_option: applied_double_option_from_row(row, 22)?,
         played_at: row.get(2)?,
         clear_type: row.get(3)?,
         gauge_type: row.get(4)?,
@@ -929,6 +1090,7 @@ fn score_history_entry_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Sco
         replay_path: row.get(12)?,
         course_score_id: row.get(13)?,
         device_type: device_type_from_row(row, 20)?,
+        source_kind: score_source_kind_from_row(row, 21)?,
         previous_best,
     })
 }
@@ -971,6 +1133,20 @@ fn device_type_from_row(
     }
 }
 
+fn score_source_kind_from_row(
+    row: &rusqlite::Row<'_>,
+    index: usize,
+) -> rusqlite::Result<ScoreSourceKind> {
+    let value: String = row.get(index)?;
+    ScoreSourceKind::from_str_opt(&value).ok_or_else(|| {
+        rusqlite::Error::FromSqlConversionFailure(
+            index,
+            rusqlite::types::Type::Text,
+            format!("invalid score source kind: {value}").into(),
+        )
+    })
+}
+
 fn ln_policy_from_row(row: &rusqlite::Row<'_>, index: usize) -> rusqlite::Result<LnScorePolicy> {
     let value: String = row.get(index)?;
     LnScorePolicy::from_str_opt(&value).ok_or_else(|| {
@@ -988,6 +1164,14 @@ fn double_option_from_row(
 ) -> rusqlite::Result<DoubleOptionScoreBucket> {
     let value: String = row.get(index)?;
     Ok(DoubleOptionScoreBucket::from_str_or_off(&value))
+}
+
+fn applied_double_option_from_row(
+    row: &rusqlite::Row<'_>,
+    index: usize,
+) -> rusqlite::Result<DoubleOption> {
+    let value: String = row.get(index)?;
+    Ok(DoubleOption::from_persistent_str(&value))
 }
 
 fn rule_mode_from_row(row: &rusqlite::Row<'_>, index: usize) -> rusqlite::Result<RuleMode> {
@@ -1066,12 +1250,15 @@ fn insert_score_history(
             slow_empty_poor,
             random_seed,
             arrange,
+            arrange_2p,
             gauge_option,
             rule_mode,
             assist_mask,
             autoplay,
             device_type,
             replay_path,
+            source_kind,
+            applied_double_option,
             old_clear_type,
             old_ex_score,
             old_max_combo,
@@ -1080,7 +1267,7 @@ fn insert_score_history(
         ) VALUES (
             ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13,
             ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30,
-            ?31, ?32, ?33, ?34, ?35, ?36, ?37
+            ?31, ?32, ?33, ?34, ?35, ?36, ?37, ?38, ?39, ?40
         )",
         params![
             hash_to_hex(&record.chart_sha256),
@@ -1109,12 +1296,15 @@ fn insert_score_history(
             judges.slow_empty_poor,
             record.random_seed,
             record.arrange.as_str(),
+            record.arrange_2p.as_str(),
             record.gauge_option.as_str(),
             record.rule_mode.as_str(),
             record.assist_mask,
             record.autoplay,
             record.device_type.as_str(),
             record.replay_path.as_str(),
+            record.source_kind.as_str(),
+            record.applied_double_option.to_persistent_str(),
             previous_best.map(|best| best.clear_type.as_str()),
             previous_best.map(|best| best.ex_score),
             previous_best.map(|best| best.max_combo),
@@ -1534,6 +1724,7 @@ mod tests {
             chart_sha256: [7; 32],
             ln_policy: LnScorePolicy::ForceLn,
             double_option: DoubleOptionScoreBucket::Off,
+            applied_double_option: DoubleOption::Off,
             played_at: 1_700_000_000,
             clear_type,
             gauge_type: Some(GaugeType::Normal),
@@ -1544,12 +1735,14 @@ mod tests {
             count_unprocessed_notes: clear_type == ClearType::Failed,
             random_seed: None,
             arrange: "Normal".to_string(),
+            arrange_2p: "Normal".to_string(),
             gauge_option: String::new(),
             rule_mode: String::new(),
             assist_mask: 0,
             autoplay: false,
             device_type: InputDeviceKind::Keyboard,
             replay_path: String::new(),
+            source_kind: ScoreSourceKind::Local,
         }
     }
 
@@ -1588,10 +1781,27 @@ mod tests {
         record.gauge_type = None;
         record.rule_mode = "Dx".to_string();
         record.arrange = "Random".to_string();
+        record.arrange_2p = "Mirror".to_string();
+        record.applied_double_option = DoubleOption::Flip;
+        record.source_kind = ScoreSourceKind::Beatoraja;
         record.device_type = InputDeviceKind::Controller;
         db.insert_score(&record).unwrap();
 
-        let (clear_type, gauge_type, gauge_option, rule_mode, arrange, device_type, replay_path): (
+        let (
+            clear_type,
+            gauge_type,
+            gauge_option,
+            rule_mode,
+            arrange,
+            arrange_2p,
+            device_type,
+            replay_path,
+            source_kind,
+            applied_double_option,
+        ): (
+            String,
+            String,
+            String,
             String,
             String,
             String,
@@ -1602,10 +1812,21 @@ mod tests {
         ) = db
             .conn()
             .query_row(
-                "SELECT clear_type, gauge_type, gauge_option, rule_mode, arrange, device_type, replay_path FROM score_history",
+                "SELECT clear_type, gauge_type, gauge_option, rule_mode, arrange, arrange_2p, device_type, replay_path, source_kind, applied_double_option FROM score_history",
                 [],
                 |row| {
-                    Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?, row.get(6)?))
+                    Ok((
+                        row.get(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                        row.get(4)?,
+                        row.get(5)?,
+                        row.get(6)?,
+                        row.get(7)?,
+                        row.get(8)?,
+                        row.get(9)?,
+                    ))
                 },
             )
             .unwrap();
@@ -1615,8 +1836,54 @@ mod tests {
         assert_eq!(gauge_option, "");
         assert_eq!(rule_mode, "Dx");
         assert_eq!(arrange, "Random");
+        assert_eq!(arrange_2p, "Mirror");
         assert_eq!(device_type, "controller");
         assert_eq!(replay_path, "");
+        assert_eq!(source_kind, "Beatoraja");
+        assert_eq!(applied_double_option, "Flip");
+        assert_eq!(db.recent_history(1, 0).unwrap()[0].source_kind, ScoreSourceKind::Beatoraja);
+        assert_eq!(db.recent_history(1, 0).unwrap()[0].applied_double_option, DoubleOption::Flip);
+    }
+
+    #[test]
+    fn same_score_from_source_ignores_time_but_keeps_score_context_distinct() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        configure_connection(&conn).unwrap();
+        run_migrations(&mut conn, SCORE_MIGRATIONS).unwrap();
+        let mut db = ScoreDatabase { conn };
+
+        let mut imported = record(20, ClearType::Normal);
+        imported.source_kind = ScoreSourceKind::Beatoraja;
+        imported.random_seed = Some(1234);
+        imported.arrange = "Random".to_string();
+        imported.arrange_2p = "Mirror".to_string();
+        imported.applied_double_option = DoubleOption::Flip;
+        imported.rule_mode = "Beatoraja".to_string();
+        db.insert_score(&imported).unwrap();
+
+        let mut same = imported.clone();
+        same.played_at += 60;
+        assert!(db.has_same_score_from_source(&same).unwrap());
+
+        let mut different_source = same.clone();
+        different_source.source_kind = ScoreSourceKind::Lr2Oraja;
+        assert!(!db.has_same_score_from_source(&different_source).unwrap());
+
+        let mut different_seed = same.clone();
+        different_seed.random_seed = Some(1235);
+        assert!(!db.has_same_score_from_source(&different_seed).unwrap());
+
+        let mut different_arrange_2p = same.clone();
+        different_arrange_2p.arrange_2p = "Random".to_string();
+        assert!(!db.has_same_score_from_source(&different_arrange_2p).unwrap());
+
+        let mut different_applied_double_option = same.clone();
+        different_applied_double_option.applied_double_option = DoubleOption::Off;
+        assert!(!db.has_same_score_from_source(&different_applied_double_option).unwrap());
+
+        let mut different_judges = same;
+        different_judges.score.judges.fast_empty_poor = 1;
+        assert!(!db.has_same_score_from_source(&different_judges).unwrap());
     }
 
     #[test]
@@ -2121,6 +2388,17 @@ mod tests {
             .query_row("SELECT course_score_id FROM score_history", [], |row| row.get(0))
             .unwrap();
         assert_eq!(course_score_id, None);
+
+        let (source_kind, arrange_2p, applied_double_option): (String, String, String) = conn
+            .query_row(
+                "SELECT source_kind, arrange_2p, applied_double_option FROM score_history",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(source_kind, ScoreSourceKind::Local.as_str());
+        assert_eq!(arrange_2p, "Normal");
+        assert_eq!(applied_double_option, DoubleOption::Off.to_persistent_str());
     }
 
     #[test]
@@ -2425,7 +2703,9 @@ mod tests {
                 0,
                 InputDeviceKind::Controller,
                 "",
-            ),
+            )
+            .with_arrange_2p("Mirror")
+            .with_source_kind(ScoreSourceKind::Lr2Oraja),
         );
 
         assert_eq!(record.chart_sha256, [9; 32]);
@@ -2436,6 +2716,8 @@ mod tests {
         assert_eq!(record.gauge_type, Some(GaugeType::Hard));
         assert_eq!(record.gauge_value, 76.5);
         assert_eq!(record.device_type, InputDeviceKind::Controller);
+        assert_eq!(record.arrange_2p, "Mirror");
+        assert_eq!(record.source_kind, ScoreSourceKind::Lr2Oraja);
         assert_eq!(record.score.ex_score(), 2);
         assert!(record.autoplay);
         assert_eq!(record.gauge_option, "Hard");
