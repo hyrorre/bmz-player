@@ -136,7 +136,7 @@ fn import_lr2_scores(
     let mut chart_cache: HashMap<[u8; 32], Arc<PlayableChart>> = HashMap::new();
     let mut stmt = source.prepare(
         "SELECT hash, clear, perfect, great, good, bad, poor,
-                totalnotes, maxcombo, minbp, playcount, clearcount, ghost, rseed
+                totalnotes, maxcombo, minbp, playcount, clearcount, ghost, rseed, op_best
          FROM score",
     )?;
     let rows = stmt.query_map([], lr2_row)?;
@@ -147,6 +147,24 @@ fn import_lr2_scores(
             Err(error) => {
                 report.failed += 1;
                 tracing::warn!(%error, "failed to read LR2 score row");
+                continue;
+            }
+        };
+        // `op_best` describes the arrangement that produced LR2's best EX
+        // score.  LR2's SCATTER / CONVERGE layouts cannot be represented by
+        // BMZ, so reject the whole aggregate row rather than recording a
+        // misleading option.  This happens before course handling as course
+        // rows use the same source table and field.
+        let options = match lr2_import_options(row.op_best) {
+            Ok(options) => options,
+            Err(error) => {
+                report.skipped += 1;
+                tracing::warn!(
+                    hash = %row.md5,
+                    op_best = row.op_best,
+                    ?error,
+                    "skipped LR2 score with unsupported best-play option"
+                );
                 continue;
             }
         };
@@ -227,6 +245,10 @@ fn import_lr2_scores(
             resolved.ln_policy,
         );
         record.source_kind = kind.source_kind();
+        record.arrange = options.arrange.to_persistent_str().to_string();
+        record.arrange_2p = options.arrange_2p.to_persistent_str().to_string();
+        record.applied_double_option = options.applied_double_option;
+        record.double_option = options.applied_double_option.score_bucket();
         if score_db.has_same_score_from_source(&record)? {
             report.skipped += 1;
             continue;
@@ -466,6 +488,54 @@ fn beatoraja_double_option(option: i64) -> DoubleOption {
             tracing::debug!(double_option, "unknown beatoraja double option; using Off bucket");
             DoubleOption::Off
         }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Lr2ImportOptions {
+    arrange: ArrangeOption,
+    arrange_2p: ArrangeOption,
+    applied_double_option: DoubleOption,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Lr2ImportOptionError {
+    Negative,
+    Scatter { player: u8 },
+    Converge { player: u8 },
+    UnknownArrange { player: u8, option: i64 },
+    UnknownDouble { option: i64 },
+}
+
+/// Decodes LR2's decimal-packed `score.op_best` setting.
+///
+/// The units digit is the gauge and intentionally ignored: LR2 keeps aggregate
+/// best values, so it need not identify the play that supplied every stored
+/// field.  Tens/hundreds are the 1P/2P arrangements and the thousands digit
+/// records DP FLIP.
+fn lr2_import_options(op_best: i64) -> Result<Lr2ImportOptions, Lr2ImportOptionError> {
+    if op_best < 0 {
+        return Err(Lr2ImportOptionError::Negative);
+    }
+    let arrange = lr2_arrange_option((op_best / 10) % 10, 1)?;
+    let arrange_2p = lr2_arrange_option((op_best / 100) % 10, 2)?;
+    let applied_double_option = match (op_best / 1000) % 10 {
+        0 => DoubleOption::Off,
+        1 => DoubleOption::Flip,
+        option => return Err(Lr2ImportOptionError::UnknownDouble { option }),
+    };
+    Ok(Lr2ImportOptions { arrange, arrange_2p, applied_double_option })
+}
+
+fn lr2_arrange_option(option: i64, player: u8) -> Result<ArrangeOption, Lr2ImportOptionError> {
+    match option {
+        0 => Ok(ArrangeOption::Normal),
+        1 => Ok(ArrangeOption::Mirror),
+        2 => Ok(ArrangeOption::Random),
+        3 => Ok(ArrangeOption::SRandom),
+        4 => Err(Lr2ImportOptionError::Scatter { player }),
+        5 => Err(Lr2ImportOptionError::Converge { player }),
+        option => Err(Lr2ImportOptionError::UnknownArrange { player, option }),
     }
 }
 
@@ -817,6 +887,7 @@ struct Lr2ScoreRow {
     clear_count: u32,
     ghost: String,
     random_seed: Option<i64>,
+    op_best: i64,
 }
 
 fn lr2_row(row: &Row<'_>) -> rusqlite::Result<Lr2ScoreRow> {
@@ -835,6 +906,7 @@ fn lr2_row(row: &Row<'_>) -> rusqlite::Result<Lr2ScoreRow> {
         clear_count: row.get(11)?,
         ghost: row.get::<_, Option<String>>(12)?.unwrap_or_default(),
         random_seed: row.get(13)?,
+        op_best: row.get(14)?,
     })
 }
 
@@ -1187,6 +1259,63 @@ mod tests {
         assert_eq!(best[0].ex_score, 222);
         assert_eq!(best[0].ln_policy, LnScorePolicy::ForceLn);
         assert_eq!(best[0].device_type, InputDeviceKind::Keyboard);
+    }
+
+    #[test]
+    fn lr2_import_preserves_supported_op_best_arrangements_and_flip() {
+        let (mut library_db, mut score_db, _, md5) = open_test_databases();
+        let source = Connection::open_in_memory().unwrap();
+        create_lr2_source(&source, &md5);
+        // Gauge=1 (ignored), 1P=RANDOM, 2P=S-RANDOM, DP=FLIP.
+        source.execute("UPDATE score SET op_best = 1321", []).unwrap();
+
+        let report = import_lr2_scores(
+            &source,
+            ScoreImportKind::Lr2,
+            &mut library_db,
+            &mut score_db,
+            1_700_000_000,
+        )
+        .unwrap();
+
+        assert_eq!(report.imported, 1);
+        let options: (String, String, String, String) = score_db
+            .conn()
+            .query_row(
+                "SELECT arrange, arrange_2p, double_option, applied_double_option
+                 FROM score_history",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .unwrap();
+        assert_eq!(
+            options,
+            ("Random".to_string(), "SRandom".to_string(), "Off".to_string(), "Flip".to_string(),)
+        );
+    }
+
+    #[test]
+    fn lr2_import_skips_unsupported_op_best_arrangements() {
+        for op_best in [40, 500, 60, 2_000] {
+            let (mut library_db, mut score_db, _, md5) = open_test_databases();
+            let source = Connection::open_in_memory().unwrap();
+            create_lr2_source(&source, &md5);
+            source.execute("UPDATE score SET op_best = ?1", [op_best]).unwrap();
+
+            let report = import_lr2_scores(
+                &source,
+                ScoreImportKind::Lr2,
+                &mut library_db,
+                &mut score_db,
+                1_700_000_000,
+            )
+            .unwrap();
+
+            assert_eq!(report.scanned, 1, "op_best={op_best}");
+            assert_eq!(report.skipped, 1, "op_best={op_best}");
+            assert_eq!(report.imported, 0, "op_best={op_best}");
+            assert_eq!(report.failed, 0, "op_best={op_best}");
+        }
     }
 
     #[test]
@@ -1768,6 +1897,25 @@ mod tests {
             .unwrap();
         assert_eq!(clear, "Hard");
         assert_eq!(ex, 222);
+
+        // Course rows share LR2's `score` table: do not create another course
+        // history entry when its best score used SCATTER.
+        source.execute("UPDATE score SET op_best = 40", []).unwrap();
+        let skipped = import_lr2_scores(
+            &source,
+            ScoreImportKind::Lr2,
+            &mut library_db,
+            &mut score_db,
+            1_700_000_001,
+        )
+        .unwrap();
+        assert_eq!(skipped.skipped, 1);
+        assert_eq!(skipped.imported, 0);
+        let count_after_skip: i64 = score_db
+            .conn()
+            .query_row("SELECT COUNT(*) FROM course_scores", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(count_after_skip, 2);
     }
 
     #[test]
@@ -1817,6 +1965,7 @@ mod tests {
             clear_count: 1,
             ghost: "BAED".to_string(),
             random_seed: Some(123),
+            op_best: 0,
         };
         let state = score_state_from_lr2(&row, 4);
         assert_eq!(state.ghost, vec![3, 4, 0, 1]);
@@ -1949,12 +2098,12 @@ mod tests {
                 hash TEXT, clear INTEGER, perfect INTEGER, great INTEGER,
                 good INTEGER, bad INTEGER, poor INTEGER, totalnotes INTEGER,
                 maxcombo INTEGER, minbp INTEGER, playcount INTEGER, clearcount INTEGER,
-                ghost TEXT, rseed INTEGER
+                ghost TEXT, rseed INTEGER, op_best INTEGER
             );",
         )
         .unwrap();
         conn.execute(
-            "INSERT INTO score VALUES (?1, 4, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 3, 2, 1, '', 123)",
+            "INSERT INTO score VALUES (?1, 4, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 3, 2, 1, '', 123, 0)",
             params![hash, perfect, great, good, bad, poor, total_notes, max_combo],
         )
         .unwrap();
