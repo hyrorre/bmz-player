@@ -36,12 +36,14 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::config::play::{
     audio_mix_from_profile, bottom_shiftable_gauge_from_config, gauge_auto_shift_from_config,
-    gauge_type_from_config, lane_binding_for_chart, lane_unit_to_f32, play_offsets_from_profile,
+    gauge_type_from_config, lane_binding_for_chart_with_slots, lane_unit_to_f32,
+    play_offsets_from_profile,
 };
 use crate::config::profile_config::{
     BgaExpandConfig, BgaModeConfig, HispeedModeConfig, JudgeAlgorithmConfig, LaneEffectConfig,
     ProfileConfig,
 };
+use crate::input::gilrs::GamepadSlotMap;
 use crate::ln_policy::{
     LnPolicySetting, apply_ln_policy_to_chart, force_ln_mode_for_chart, score_ln_policy_for_chart,
 };
@@ -92,6 +94,8 @@ pub struct PlaySessionOptions {
     /// `apply_course_constraints` が `CourseGaugeConstraint::Lr2/Keys5/...` を
     /// 解釈して設定する。`None` の場合はチャートの `KeyMode` から自動推定する。
     pub gauge_property: Option<GaugeProperty>,
+    /// 論理 `gamepad1`/`gamepad2` → 物理 gilrs id の対応。プレイ開始時に固定する。
+    pub gamepad_slots: GamepadSlotMap,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -148,6 +152,7 @@ impl Default for PlaySessionOptions {
             ln_policy_setting: LnPolicySetting::AutoLn,
             rule_mode: RuleMode::Beatoraja,
             gauge_property: None,
+            gamepad_slots: GamepadSlotMap::default(),
         }
     }
 }
@@ -355,7 +360,11 @@ pub fn build_game_session_with_input_backend(
     let input_system = InputSystem {
         backend: input_backend,
         translator: Box::new(DefaultInputTranslator {
-            binding: lane_binding_for_chart(&profile.input, key_mode),
+            binding: lane_binding_for_chart_with_slots(
+                &profile.input,
+                key_mode,
+                options.gamepad_slots,
+            ),
         }),
     };
 

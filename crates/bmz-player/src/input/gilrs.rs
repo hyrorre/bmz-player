@@ -14,6 +14,61 @@ const ANALOG_SCRATCH_THRESHOLD_MIN: u32 = 1;
 const ANALOG_SCRATCH_THRESHOLD_MAX: u32 = 1_000;
 const ANALOG_SCRATCH_CALLS_PER_AXIS_POLL: u32 = 2;
 
+/// 接続中ゲームパッドの表示用スナップショット。
+#[derive(Debug, Clone)]
+pub struct ConnectedGamepad {
+    /// gilrs の `GamepadId` (0-based)。
+    pub gilrs_id: u32,
+    pub device_id: DeviceId,
+    pub name: String,
+    pub is_connected: bool,
+}
+
+/// 論理スロット `gamepad1` / `gamepad2` → 物理 gilrs id の対応。
+///
+/// `slot_gilrs_ids[0]` が 1P、`[1]` が 2P。呼び出し側は未割当スロットを
+/// [`resolve_gamepad_slot_ids`] で接続順の gilrs id へ解決してから渡す。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct GamepadSlotMap {
+    pub slot_gilrs_ids: [Option<u32>; 2],
+}
+
+impl GamepadSlotMap {
+    pub fn from_slot_ids(slot_gilrs_ids: [Option<u32>; 2]) -> Self {
+        Self { slot_gilrs_ids }
+    }
+
+    /// プレイヤー番号 (1 or 2) に対応する `DeviceId` を返す。
+    pub fn device_id_for_player(self, player_index: u32) -> Option<DeviceId> {
+        let slot = player_index.checked_sub(1)? as usize;
+        if slot >= 2 {
+            return gilrs_gamepad_device_id_from_player_index(player_index);
+        }
+        match self.slot_gilrs_ids[slot] {
+            Some(gilrs_id) => Some(DeviceId(GILRS_DEVICE_ID_BASE.saturating_add(gilrs_id))),
+            None => gilrs_gamepad_device_id_from_player_index(player_index),
+        }
+    }
+}
+
+/// 設定で未割当の 1P / 2P スロットを、現在接続中のパッド順で補完する。
+pub fn resolve_gamepad_slot_ids(
+    mut configured: [Option<u32>; 2],
+    connected_gilrs_ids: impl IntoIterator<Item = u32>,
+) -> [Option<u32>; 2] {
+    let connected: Vec<u32> = connected_gilrs_ids.into_iter().collect();
+    for slot in 0..configured.len() {
+        if configured[slot].is_some() {
+            continue;
+        }
+        configured[slot] = connected
+            .iter()
+            .copied()
+            .find(|id| !configured.iter().flatten().any(|assigned| assigned == id));
+    }
+    configured
+}
+
 pub struct GilrsButtonEvent {
     pub name: String,
     pub device_id: DeviceId,
@@ -134,6 +189,19 @@ impl GilrsBackend {
         }
         self.check_scratch_timeouts(Instant::now(), &mut output.buttons);
         output
+    }
+
+    /// 接続中 (および gilrs が認識している) ゲームパッド一覧。
+    pub fn connected_gamepads(&self) -> Vec<ConnectedGamepad> {
+        self.gilrs
+            .gamepads()
+            .map(|(id, pad)| ConnectedGamepad {
+                gilrs_id: usize::from(id) as u32,
+                device_id: gilrs_gamepad_device_id(id),
+                name: pad.name().to_string(),
+                is_connected: pad.is_connected(),
+            })
+            .collect()
     }
 
     fn process_axis(
@@ -538,6 +606,19 @@ mod tests {
         assert_eq!(gilrs_gamepad_device_id_from_player_index(0), None);
         assert_eq!(gilrs_gamepad_device_id_from_player_index(1), Some(DeviceId(16)));
         assert_eq!(gilrs_gamepad_device_id_from_player_index(2), Some(DeviceId(17)));
+    }
+
+    #[test]
+    fn unresolved_slots_follow_connected_ids_instead_of_assuming_zero_and_one() {
+        assert_eq!(resolve_gamepad_slot_ids([None, None], [2, 5]), [Some(2), Some(5)]);
+        assert_eq!(resolve_gamepad_slot_ids([Some(7), None], [2, 7]), [Some(7), Some(2)]);
+        assert_eq!(resolve_gamepad_slot_ids([None, None], []), [None, None]);
+    }
+
+    #[test]
+    fn players_above_two_keep_their_numbered_device_mapping() {
+        let slots = GamepadSlotMap::default();
+        assert_eq!(slots.device_id_for_player(3), Some(DeviceId(18)));
     }
 
     #[test]

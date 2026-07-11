@@ -4,7 +4,7 @@ use bmz_render::scene::SelectRowKind;
 use crate::config::key_config::{
     COMMON_ACTIONS, KEY_BINDING_SLOTS, KEY_CONFIG_MODES, KeyBindingTarget, ScratchDirection,
     binding_row_label, format_play_binding, key_lanes_for_key_mode, key_mode_settings_path,
-    scratch_lanes_for_key_mode,
+    resolve_binding_slot, scratch_lanes_for_key_mode,
 };
 use crate::config::profile_config::ProfileConfig;
 use crate::config::settings_registry::{SettingsEntryId, format_settings_value};
@@ -230,17 +230,19 @@ fn key_binding_items(key_mode: KeyMode) -> Vec<SelectItem> {
         .copied()
         .flat_map(|slot| {
             let scratch_rows = scratch_lanes.iter().copied().flat_map(move |lane| {
+                let resolved = resolve_binding_slot(slot, key_mode, lane);
                 [ScratchDirection::Up, ScratchDirection::Down].into_iter().map(move |direction| {
                     SelectItem::KeyBinding(KeyBindingSelectRow {
                         key_mode,
-                        target: KeyBindingTarget::Scratch { lane, direction, slot },
+                        target: KeyBindingTarget::Scratch { lane, direction, slot: resolved },
                     })
                 })
             });
             let key_rows = key_lanes.iter().copied().map(move |lane| {
+                let resolved = resolve_binding_slot(slot, key_mode, lane);
                 SelectItem::KeyBinding(KeyBindingSelectRow {
                     key_mode,
-                    target: KeyBindingTarget::Key { lane, slot },
+                    target: KeyBindingTarget::Key { lane, slot: resolved },
                 })
             });
             scratch_rows.chain(key_rows)
@@ -417,6 +419,31 @@ mod tests {
         let items = load_settings_items("bmz-settings:keys:14k");
         assert_eq!(items.len(), 18 * KEY_BINDING_SLOTS.len() + 1);
         assert!(matches!(items.first(), Some(SelectItem::Back)));
+        assert!(items.iter().any(|item| matches!(
+            item,
+            SelectItem::KeyBinding(row)
+                if row.target == KeyBindingTarget::Key {
+                    lane: LaneConfig::Key1,
+                    slot: KeyBindingSlot::Controller1P,
+                }
+        )));
+        assert!(items.iter().any(|item| matches!(
+            item,
+            SelectItem::KeyBinding(row)
+                if row.target == KeyBindingTarget::Key {
+                    lane: LaneConfig::Key8,
+                    slot: KeyBindingSlot::Controller2P,
+                }
+        )));
+        assert!(items.iter().any(|item| matches!(
+            item,
+            SelectItem::KeyBinding(row)
+                if row.target == KeyBindingTarget::Scratch {
+                    lane: LaneConfig::Scratch2,
+                    direction: ScratchDirection::Up,
+                    slot: KeyBindingSlot::Controller2P,
+                }
+        )));
     }
 
     #[test]

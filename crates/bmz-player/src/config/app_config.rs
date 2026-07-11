@@ -251,6 +251,21 @@ pub struct GlobalInputConfig {
     pub keyboard_enabled: bool,
     pub gamepad_enabled: bool,
     pub midi_enabled: bool,
+    /// 論理スロット `gamepad1` / `gamepad2` に割り当てる gilrs `GamepadId` (0-based)。
+    /// `None` は未割当で、接続順フォールバック (`gamepad1`→最初のパッド) を使う。
+    #[serde(
+        default = "default_gamepad_slot_gilrs_ids",
+        skip_serializing_if = "gamepad_slots_unassigned"
+    )]
+    pub gamepad_slot_gilrs_ids: [Option<u32>; 2],
+}
+
+fn default_gamepad_slot_gilrs_ids() -> [Option<u32>; 2] {
+    [None, None]
+}
+
+fn gamepad_slots_unassigned(slots: &[Option<u32>; 2]) -> bool {
+    slots.iter().all(|slot| slot.is_none())
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -456,6 +471,7 @@ impl Default for AppConfig {
                 keyboard_enabled: true,
                 gamepad_enabled: true,
                 midi_enabled: false,
+                gamepad_slot_gilrs_ids: default_gamepad_slot_gilrs_ids(),
             },
             logging: LoggingConfig { level: LogLevel::Info, file_logging: true },
             tables: DifficultyTablesConfig::default(),

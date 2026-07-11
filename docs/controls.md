@@ -94,6 +94,23 @@ favorite 操作は invisible を使わず、登録済みなら解除、未登録
 | 14K | LShift / LControl, RShift / RControl | Z, S, X, D, C, F, V, M, K, Comma, L, Period, Semicolon, Slash |
 | 9K | - | Z, S, X, D, C, F, V, G, B |
 
+### ゲームパッド (10K / 14K)
+
+2 台のコントローラで 10K / 14K をプレイできます。
+
+| 論理スロット | 既定の役割 | デフォルト binding |
+| --- | --- | --- |
+| `gamepad1` | 1P (Scratch + Key1–7) | 接続順の 1 台目 |
+| `gamepad2` | 2P (Scratch2 + Key8–14) | 接続順の 2 台目 |
+
+- 未割当時は **接続順フォールバック** (1 台目 = 1P、2 台目 = 2P) です。
+- 1P / 2P の物理パッド割り当ては F1 → 本体設定 → **入力デバイス** から変更できます (接続一覧・自動割り当て・入れ替え)。
+- キー設定 (`設定 > キー設定 > 10K/14K`) の CONTROLLER スロットは、1P レーンが `gamepad1`、2P レーンが `gamepad2` として保存されます。
+- 7K など単一パッドモードの CONTROLLER は `gamepad` ワイルドカード (どのパッドでも可) です。
+- 割り当て変更は **次回プレイ開始から** 反映されます。
+
+10K は 14K の binding を継承し、両側 5 鍵 + 両皿だけが有効です。
+
 ### プレイ中操作
 
 | Key | 操作 |
