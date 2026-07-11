@@ -868,6 +868,27 @@ mod tests {
     }
 
     #[test]
+    fn numbered_gamepads_above_two_remain_device_specific() {
+        let mut input = sample_7k_input();
+        input.play.insert(
+            "14k".to_string(),
+            PlayModeInputConfig {
+                inherit: None,
+                bindings: vec![gamepad_play_binding_for_device(
+                    "gamepad3",
+                    "Button1",
+                    LaneConfig::Key1,
+                )],
+            },
+        );
+
+        let binding = lane_binding_for_key_mode(&input, KeyMode::K14).unwrap();
+        let control = PhysicalControl::GamepadButton("Button1".into());
+        assert_eq!(binding.resolve(DeviceId(18), &control), Some(Lane::Key1));
+        assert_eq!(binding.resolve(DeviceId(16), &control), None);
+    }
+
+    #[test]
     fn gamepad_wildcard_still_matches_any_gamepad_device() {
         let input = sample_7k_input();
         let binding = lane_binding_for_key_mode(&input, KeyMode::K7).unwrap();

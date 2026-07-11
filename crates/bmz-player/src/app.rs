@@ -7197,6 +7197,17 @@ impl WinitApp {
     fn play_session_app_config(&self) -> AppConfig {
         let mut app_config = self.boot.app_config.clone();
         app_config.audio.sample_rate = self.play_output_sample_rate();
+        let connected_gilrs_ids = self
+            .gilrs
+            .as_ref()
+            .into_iter()
+            .flat_map(|gilrs| gilrs.connected_gamepads())
+            .filter(|gamepad| gamepad.is_connected)
+            .map(|gamepad| gamepad.gilrs_id);
+        app_config.input.gamepad_slot_gilrs_ids = crate::input::gilrs::resolve_gamepad_slot_ids(
+            app_config.input.gamepad_slot_gilrs_ids,
+            connected_gilrs_ids,
+        );
         app_config
     }
 
