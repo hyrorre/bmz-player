@@ -3915,6 +3915,41 @@ impl WinitApp {
         }
     }
 
+    fn apply_gamepad_play_option_control(&mut self, device: DeviceId, control: &str) -> bool {
+        let app_config = self.play_session_app_config();
+        let slots = crate::input::gilrs::GamepadSlotMap::from_slot_ids(
+            app_config.input.gamepad_slot_gilrs_ids,
+        );
+        match select_option_lane_for_gamepad(
+            &self.boot.profile_config.input,
+            slots,
+            device,
+            control,
+        ) {
+            Some(Lane::Key1) => {
+                self.arrange_option = self.arrange_option.cycle();
+                tracing::info!(arrange = self.arrange_option.as_str(), "arrange option changed");
+                true
+            }
+            Some(Lane::Key2) => {
+                self.arrange_option = self.arrange_option.cycle_prev();
+                tracing::info!(arrange = self.arrange_option.as_str(), "arrange option changed");
+                true
+            }
+            Some(Lane::Key8) => {
+                self.arrange_option_2p = self.arrange_option_2p.cycle();
+                tracing::info!(arrange_2p = self.arrange_option_2p.as_str(), "2P arrange changed");
+                true
+            }
+            Some(Lane::Key9) => {
+                self.arrange_option_2p = self.arrange_option_2p.cycle_prev();
+                tracing::info!(arrange_2p = self.arrange_option_2p.as_str(), "2P arrange changed");
+                true
+            }
+            _ => self.apply_play_option_control(control),
+        }
+    }
+
     fn set_assist_option(&mut self, assist: AssistOption) {
         self.assist_option = assist;
         self.boot.profile_config.play.auto_play = assist == AssistOption::Autoplay;
@@ -4540,7 +4575,7 @@ impl WinitApp {
             if let Some(active_play) = &self.active_play {
                 active_play.input.push_shared_event(device_event);
             }
-            self.route_gamepad_button(&event.name.clone(), event.pressed);
+            self.route_gamepad_button(event.device_id, &event.name, event.pressed);
         }
         for tick in &output.axis_ticks {
             // キーコンフィグ待ち受け中は合成 Press を待たず、生 tick から直接捕捉する。
@@ -4730,7 +4765,7 @@ impl WinitApp {
         }
     }
 
-    fn route_gamepad_button(&mut self, button: &str, pressed: bool) {
+    fn route_gamepad_button(&mut self, device: DeviceId, button: &str, pressed: bool) {
         self.update_pressed_control(button, pressed);
         let has_play_control_context =
             self.active_play.is_some() || self.pending_play_start.is_some();
@@ -4976,7 +5011,7 @@ impl WinitApp {
                 return;
             }
             let option_changed = match self.select_option_panel {
-                1 => self.apply_play_option_control(button),
+                1 => self.apply_gamepad_play_option_control(device, button),
                 3 => self.apply_detail_option_control(button),
                 _ => false,
             };
@@ -17338,6 +17373,16 @@ fn target_cycle_from_control(control: &str, bindings: &SelectKeyBindings) -> Opt
     }
 }
 
+fn select_option_lane_for_gamepad(
+    input: &ProfileInputConfig,
+    slots: crate::input::gilrs::GamepadSlotMap,
+    device: DeviceId,
+    control: &str,
+) -> Option<Lane> {
+    crate::config::play::lane_binding_for_chart_with_slots(input, KeyMode::K14, slots)
+        .resolve(device, &PhysicalControl::GamepadButton(control.to_string()))
+}
+
 struct SelectKeyBindings {
     start: Vec<String>,
     e_action_controls: Vec<(InputActionConfig, String)>,
@@ -19130,6 +19175,40 @@ mod tests {
                 &keys
             ),
             Some(SelectAction::Move(SelectMove::Previous))
+        );
+    }
+
+    #[test]
+    fn select_option_gamepad_lane_distinguishes_same_buttons_by_device() {
+        let profile = ProfileConfig::new_default("default", "Default", 0);
+        let control = "Button1";
+
+        assert_eq!(
+            select_option_lane_for_gamepad(
+                &profile.input,
+                crate::input::gilrs::GamepadSlotMap::from_slot_ids([Some(0), Some(1)]),
+                DeviceId(16),
+                control,
+            ),
+            Some(Lane::Key1)
+        );
+        assert_eq!(
+            select_option_lane_for_gamepad(
+                &profile.input,
+                crate::input::gilrs::GamepadSlotMap::from_slot_ids([Some(0), Some(1)]),
+                DeviceId(17),
+                control,
+            ),
+            Some(Lane::Key8)
+        );
+        assert_eq!(
+            select_option_lane_for_gamepad(
+                &profile.input,
+                crate::input::gilrs::GamepadSlotMap::from_slot_ids([Some(1), Some(0)]),
+                DeviceId(16),
+                control,
+            ),
+            Some(Lane::Key8)
         );
     }
 
