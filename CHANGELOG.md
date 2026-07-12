@@ -1,5 +1,52 @@
 # CHANGELOG
 
+## v0.1.7
+
+### 改善
+
+- 入力遅延と複数コントローラ対応を改善しました。
+  - Windows でプレイ中のキーボード入力を Raw Input 経路へ切り替え、入力を描画前に反映するようにしました。
+  - gamepad のイベント時刻を保持し、10K / 14K で 1P / 2P に別々のコントローラを割り当てられるようにしました。
+  - 接続順に欠番がある場合や旧 wildcard 設定が混在する場合も、物理デバイス固有の割り当てを優先するようにしました。
+
+- 外部アプリ連携を追加しました。
+  - Discord Rich Presence で Select / Decide / Play / Result / Course Result の状態、曲名、アーティストを表示できるようにしました。
+  - OBS WebSocket v5 によるシーン切り替え、録画開始・停止、再接続、状態別 action 設定に対応しました。
+
+- 選曲プレビューと音量バランスを改善しました。
+  - `#PREVIEW` や preview 音声が無い譜面では、ノーツ密度の高い区間からプレビューをオンデマンド生成するようにしました。
+  - 選曲プレビューの音声が乱れる不具合を修正しました。
+  - プレイ音量の正規化基準を調整しました。
+
+- IR と外部スコアの取り込みを拡張しました。
+  - IR 登録前のローカルスコアを throttled sync で一括送信する `bmz ir upload-local` を追加しました。
+  - 送信済みスコアの device key attestation、import 元・option・device type の保持、再取り込み時の重複 cleanup を追加しました。
+  - beatoraja / LR2 スコアの LN policy とノート数を検証し、対応できないレイアウトを安全に skip するようにしました。
+
+- スキン互換性を改善しました。
+  - PeacefulPlay のゲージ値・先端発光、キービーム、NPS / key logger、READY 前表示を再現できるようにしました。
+  - mz-select の Result タイトル、WMII CSV LR2Skin の LN animation、ECFN 14K の Lua layout と turntable 回転を修正しました。
+  - Result skin で今回の IR 送信成功・失敗を表示できるようにしました。
+
+- 選曲画面と設定操作を改善しました。
+  - 設定項目をマウスクリックとホイールで編集できるようにしました。
+  - favorite 登録 / 解除とスクリーンショット保存を左上のトーストで通知するようにしました。
+  - 新規設定に Dystopia、PMS、DP 系を含む難易度表を追加しました。
+
+### 修正
+
+- FHS 使用中の通常のハイスピード変更で target green number が書き換わる問題を修正しました。
+- 2P コントローラ操作が 1P の選曲 option として解釈される問題と、9K の選曲移動方向を修正しました。
+- Discord / OBS が後から起動した場合や再接続した場合に、表示・シーン・録画状態が復帰しない問題を修正しました。
+- JavaScript の安全整数範囲を超える random seed が IR 署名検証時に丸められる問題を修正しました。
+- BMS / BMSON の beatoraja 互換性を向上させました。
+
+### テスト・開発環境
+
+- 入力 backend の queue、timestamp age、drain / translate / drop 件数を診断できるようにしました。
+- Raw Input、gamepad 割り当て、生成プレビュー、OBS / Discord、スコア import / IR cleanup、PeacefulPlay を含む外部スキンの回帰テストを追加しました。
+- `docs/controls.md`、`docs/ir.md`、`docs/ln.md` を更新しました。
+
 ## v0.1.6
 
 ### 改善
