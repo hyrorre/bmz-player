@@ -580,6 +580,7 @@ impl SkinContext {
         rect: Rect,
         mode: LongNoteMode,
         state: LongBodyState,
+        draw_state: &SkinDrawState,
     ) -> Option<SkinRenderItem> {
         let document = self.document.as_ref()?;
         document.note_long_body_render_item(
@@ -588,6 +589,7 @@ impl SkinContext {
             rect,
             mode,
             state,
+            draw_state,
             &self.document_sources,
         )
     }
@@ -2279,6 +2281,7 @@ pub trait SkinDocumentRenderExt {
         rect: Rect,
         mode: LongNoteMode,
         state: LongBodyState,
+        draw_state: &SkinDrawState,
         sources: &HashMap<String, SkinDocumentTexture>,
     ) -> Option<SkinRenderItem>;
 
@@ -2296,6 +2299,7 @@ pub trait SkinDocumentRenderExt {
         &self,
         image_id: &str,
         rect: Rect,
+        elapsed_ms: i32,
         sources: &HashMap<String, SkinDocumentTexture>,
     ) -> Option<SkinRenderItem>;
 
@@ -4413,7 +4417,7 @@ impl SkinDocumentRenderExt for SkinDocument {
     ) -> Option<SkinRenderItem> {
         let note = self.note.as_ref()?;
         let image_id = note.note.get(beatoraja_note_index(lane, key_mode))?;
-        self.note_part_render_item(image_id, rect, sources)
+        self.note_part_render_item(image_id, rect, 0, sources)
     }
 
     /// LN START（ヘッドキャップ）画像を描画する。
@@ -4431,7 +4435,7 @@ impl SkinDocumentRenderExt for SkinDocument {
         let index = beatoraja_note_index(lane, key_mode);
         let hcn = (mode == LongNoteMode::Hcn).then(|| note.hcnstart.get(index)).flatten();
         let image_id = hcn.or_else(|| note.lnstart.get(index)).or_else(|| note.note.get(index))?;
-        self.note_part_render_item(image_id, rect, sources)
+        self.note_part_render_item(image_id, rect, 0, sources)
     }
 
     /// LN END（テールキャップ）画像を描画する。
@@ -4449,7 +4453,7 @@ impl SkinDocumentRenderExt for SkinDocument {
         let index = beatoraja_note_index(lane, key_mode);
         let hcn = (mode == LongNoteMode::Hcn).then(|| note.hcnend.get(index)).flatten();
         let image_id = hcn.or_else(|| note.lnend.get(index)).or_else(|| note.note.get(index))?;
-        self.note_part_render_item(image_id, rect, sources)
+        self.note_part_render_item(image_id, rect, 0, sources)
     }
 
     /// LN/CN 用の胴体画像 id を選択する。
@@ -4544,6 +4548,7 @@ impl SkinDocumentRenderExt for SkinDocument {
         rect: Rect,
         mode: LongNoteMode,
         state: LongBodyState,
+        draw_state: &SkinDrawState,
         sources: &HashMap<String, SkinDocumentTexture>,
     ) -> Option<SkinRenderItem> {
         let note = self.note.as_ref()?;
@@ -4554,7 +4559,11 @@ impl SkinDocumentRenderExt for SkinDocument {
             self.ln_body_image_id(note, index, state.is_processing())
         }
         .or_else(|| note.note.get(index))?;
-        self.note_part_render_item(image_id, rect, sources)
+        let image = self.image.iter().find(|image| image.id == *image_id)?;
+        // LR2 `SRC_LN_BODY` uses the lane HOLD timer for the processing image,
+        // while the inactive copy has no timer and must remain on frame zero.
+        let elapsed_ms = skin_timer_elapsed_ms(image.timer, draw_state).unwrap_or(0);
+        self.note_part_render_item(image_id, rect, elapsed_ms, sources)
     }
 
     /// Mine ノート画像（`note.mine`）を描画する。スキンが `mine` を定義していない、
@@ -4569,7 +4578,7 @@ impl SkinDocumentRenderExt for SkinDocument {
     ) -> Option<SkinRenderItem> {
         let note = self.note.as_ref()?;
         let image_id = note.mine.get(beatoraja_note_index(lane, key_mode))?;
-        self.note_part_render_item(image_id, rect, sources)
+        self.note_part_render_item(image_id, rect, 0, sources)
     }
 
     fn note_height_for_lane(&self, lane: Lane, key_mode: KeyMode) -> Option<f32> {
@@ -4588,6 +4597,7 @@ impl SkinDocumentRenderExt for SkinDocument {
         &self,
         image_id: &str,
         rect: Rect,
+        elapsed_ms: i32,
         sources: &HashMap<String, SkinDocumentTexture>,
     ) -> Option<SkinRenderItem> {
         let image = self.image.iter().find(|image| image.id == image_id)?;
@@ -4595,7 +4605,7 @@ impl SkinDocumentRenderExt for SkinDocument {
         Some(SkinRenderItem::Image {
             texture: source.texture,
             rect,
-            uv: skin_image_texture_region(image, source.source_size, 0),
+            uv: skin_image_texture_region(image, source.source_size, elapsed_ms),
             tint: Color::rgb(1.0, 1.0, 1.0),
             blend: BlendMode::Normal,
             scale: SkinImageScale::Stretch,
@@ -15716,6 +15726,7 @@ mod tests {
                 Rect { x: 0.0, y: 0.0, width: 0.1, height: 0.1 },
                 LongNoteMode::Ln,
                 LongBodyState::Inactive,
+                &SkinDrawState::default(),
                 &sources,
             )
             .unwrap();
@@ -15769,6 +15780,7 @@ mod tests {
                 rect,
                 LongNoteMode::Ln,
                 LongBodyState::Processing,
+                &SkinDrawState::default(),
                 &sources,
             )
             .unwrap();
@@ -15779,6 +15791,7 @@ mod tests {
                 rect,
                 LongNoteMode::Ln,
                 LongBodyState::Inactive,
+                &SkinDrawState::default(),
                 &sources,
             )
             .unwrap();
@@ -15787,6 +15800,71 @@ mod tests {
         assert!(matches!(
             pressed,
             SkinRenderItem::Image { uv: TextureRegion { x, .. }, .. } if approx_eq(x, 0.5)
+        ));
+        assert!(matches!(
+            unpressed,
+            SkinRenderItem::Image { uv: TextureRegion { x, .. }, .. } if approx_eq(x, 0.2)
+        ));
+    }
+
+    #[test]
+    fn skin_document_animates_csv_ln_body_only_while_processing() {
+        let document: SkinDocument = serde_json::from_str(
+            r#"
+            {
+                "type": 0,
+                "source": [{ "id": 1, "path": "notes.png" }],
+                "image": [
+                    { "id": "active", "src": 1, "x": 0, "y": 0, "w": 20, "h": 10, "divx": 2, "cycle": 100, "timer": 70 },
+                    { "id": "inactive", "src": 1, "x": 20, "y": 0, "w": 10, "h": 10 }
+                ],
+                "note": {
+                    "id": "notes",
+                    "lnbody": ["inactive", "inactive", "inactive", "inactive", "inactive", "inactive", "inactive", "inactive"],
+                    "lnbodyActive": ["active", "active", "active", "active", "active", "active", "active", "active"]
+                }
+            }
+            "#,
+        )
+        .unwrap();
+        let sources = HashMap::from([(
+            "1".to_string(),
+            SkinDocumentTexture {
+                source_id: "1".to_string(),
+                texture: SkinTextureId(42),
+                source_size: SkinImageSize { width: 100.0, height: 10.0 },
+            },
+        )]);
+        let rect = Rect { x: 0.0, y: 0.0, width: 0.1, height: 0.1 };
+        let mut draw_state = SkinDrawState::default();
+        draw_state.hold_ms[Lane::Scratch.index()] = Some(50);
+
+        let pressed = document
+            .note_long_body_render_item(
+                Lane::Scratch,
+                KeyMode::K7,
+                rect,
+                LongNoteMode::Ln,
+                LongBodyState::Processing,
+                &draw_state,
+                &sources,
+            )
+            .unwrap();
+        let unpressed = document
+            .note_long_body_render_item(
+                Lane::Scratch,
+                KeyMode::K7,
+                rect,
+                LongNoteMode::Ln,
+                LongBodyState::Inactive,
+                &draw_state,
+                &sources,
+            )
+            .unwrap();
+
+        assert!(matches!(
+            pressed,
+            SkinRenderItem::Image { uv: TextureRegion { x, .. }, .. } if approx_eq(x, 0.1)
         ));
         assert!(matches!(
             unpressed,
@@ -15838,6 +15916,7 @@ mod tests {
                     rect,
                     LongNoteMode::Hcn,
                     state,
+                    &SkinDrawState::default(),
                     &sources,
                 )
                 .unwrap();

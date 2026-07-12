@@ -114,7 +114,7 @@ enum NoteSlot {
     LnStart,
     LnEnd,
     LnBody,
-    LnActive,
+    LnBodyActive,
     HcnStart,
     HcnEnd,
     HcnBody,
@@ -166,7 +166,7 @@ struct NoteState {
     lnstart: Vec<String>,
     lnend: Vec<String>,
     lnbody: Vec<String>,
-    lnactive: Vec<String>,
+    lnbody_active: Vec<String>,
     hcnstart: Vec<String>,
     hcnend: Vec<String>,
     hcnbody: Vec<String>,
@@ -516,11 +516,13 @@ impl<'a> CsvBuilder<'a> {
             "SRC_LN_START" | "SRC_AUTO_LN_START" => self.add_note_source(line, NoteSlot::LnStart),
             "SRC_LN_END" | "SRC_AUTO_LN_END" => self.add_note_source(line, NoteSlot::LnEnd),
             "SRC_LN_BODY" | "SRC_AUTO_LN_BODY" => {
-                self.add_note_source(line, NoteSlot::LnBody);
-                self.add_note_source(line, NoteSlot::LnActive);
+                // beatoraja registers the inactive LN body without animation, then
+                // keeps the animated variant for the currently-held LN body.
+                self.add_note_source_with_animation(line, NoteSlot::LnBody, false);
+                self.add_note_source(line, NoteSlot::LnBodyActive);
             }
             "SRC_LN_BODY_INACTIVE" => self.add_note_source(line, NoteSlot::LnBody),
-            "SRC_LN_BODY_ACTIVE" => self.add_note_source(line, NoteSlot::LnActive),
+            "SRC_LN_BODY_ACTIVE" => self.add_note_source(line, NoteSlot::LnBodyActive),
             "SRC_HCN_START" => self.add_note_source(line, NoteSlot::HcnStart),
             "SRC_HCN_END" => self.add_note_source(line, NoteSlot::HcnEnd),
             "SRC_HCN_BODY" => {
@@ -801,6 +803,10 @@ impl<'a> CsvBuilder<'a> {
     }
 
     fn add_note_source(&mut self, line: &CsvLine, slot: NoteSlot) {
+        self.add_note_source_with_animation(line, slot, true);
+    }
+
+    fn add_note_source_with_animation(&mut self, line: &CsvLine, slot: NoteSlot, animate: bool) {
         let values = parse_values(line);
         let Some(lane) = self.lr2_lane_to_beatoraja_index(values[1]) else {
             return;
@@ -818,8 +824,8 @@ impl<'a> CsvBuilder<'a> {
             "h": region.h,
             "divx": region.divx,
             "divy": region.divy,
-            "cycle": region.cycle,
-            "timer": region.timer,
+            "cycle": if animate { region.cycle } else { 0 },
+            "timer": if animate { region.timer } else { None },
         }));
         set_lane_note_value_if_empty(note_vec_mut(&mut self.note, slot), lane, id);
     }
@@ -1337,7 +1343,7 @@ impl<'a> CsvBuilder<'a> {
                 "lnstart": self.note.lnstart,
                 "lnend": self.note.lnend,
                 "lnbody": self.note.lnbody,
-                "lnactive": self.note.lnactive,
+                "lnbodyActive": self.note.lnbody_active,
                 "hcnstart": self.note.hcnstart,
                 "hcnend": self.note.hcnend,
                 "hcnbody": self.note.hcnbody,
@@ -1873,7 +1879,7 @@ fn note_vec_mut(note: &mut NoteState, slot: NoteSlot) -> &mut Vec<String> {
         NoteSlot::LnStart => &mut note.lnstart,
         NoteSlot::LnEnd => &mut note.lnend,
         NoteSlot::LnBody => &mut note.lnbody,
-        NoteSlot::LnActive => &mut note.lnactive,
+        NoteSlot::LnBodyActive => &mut note.lnbody_active,
         NoteSlot::HcnStart => &mut note.hcnstart,
         NoteSlot::HcnEnd => &mut note.hcnend,
         NoteSlot::HcnBody => &mut note.hcnbody,
@@ -2214,6 +2220,32 @@ mod tests {
         let frame = destination["dst"].as_array().unwrap().first().unwrap();
         assert_eq!(frame["w"], json!(120));
         assert_eq!(frame["h"], json!(30));
+    }
+
+    #[test]
+    fn lr2_ln_body_keeps_animation_only_while_held() {
+        let files = BTreeMap::new();
+
+        for command in ["SRC_LN_BODY", "SRC_AUTO_LN_BODY"] {
+            let skin_path = unique_test_dir("bmz-lr2-ln-body").join("play.lr2skin");
+            let mut builder = CsvBuilder::new(&skin_path, Header::default(), &files);
+            builder.execute(&parse_csv_line("#IMAGE,notes.png").expect("valid IMAGE")).unwrap();
+            builder
+                .execute(
+                    &parse_csv_line(&format!("#{command},0,0,0,0,10,20,4,6,266,123"))
+                        .expect("valid LN body source"),
+                )
+                .unwrap();
+
+            let inactive = &builder.images[0];
+            let active = &builder.images[1];
+            assert_eq!(inactive["id"], json!(builder.note.lnbody[7]));
+            assert_eq!(active["id"], json!(builder.note.lnbody_active[7]));
+            assert_eq!(inactive["cycle"], json!(0), "{command} inactive body");
+            assert!(inactive["timer"].is_null(), "{command} inactive body");
+            assert_eq!(active["cycle"], json!(266), "{command} active body");
+            assert_eq!(active["timer"], json!(123), "{command} active body");
+        }
     }
 
     #[test]

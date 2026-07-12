@@ -1206,6 +1206,7 @@ fn plan_play(
                     rect,
                     body.mode,
                     body.body_state,
+                    &skin_state,
                 )
             {
                 let item = skin.apply_play_skin_global_offset_to_item(item, &skin_state);
