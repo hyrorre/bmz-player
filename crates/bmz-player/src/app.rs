@@ -10607,11 +10607,7 @@ impl WinitApp {
             tracing::debug!("pending play hispeed change ignored: course NoSpeed constraint");
             return;
         }
-        apply_pending_hispeed_change_to_profile(
-            &mut self.boot.profile_config,
-            self.last_play_snapshot.as_ref(),
-            change,
-        );
+        apply_pending_hispeed_change_to_profile(&mut self.boot.profile_config, change);
         self.refresh_pending_play_lane_snapshot_from_profile();
         tracing::info!(
             hispeed = self.boot.profile_config.lane.hispeed,
@@ -16685,17 +16681,8 @@ fn adjusted_hispeed(current: f32, change: HispeedChange) -> f32 {
     ((current + delta) * 4.0).round().clamp(2.0, 40.0) / 4.0
 }
 
-fn apply_pending_hispeed_change_to_profile(
-    profile: &mut ProfileConfig,
-    snapshot: Option<&RenderSnapshot>,
-    change: HispeedChange,
-) {
+fn apply_pending_hispeed_change_to_profile(profile: &mut ProfileConfig, change: HispeedChange) {
     profile.lane.hispeed = adjusted_hispeed(profile.lane.hispeed, change);
-    if profile.lane.hispeed_mode == HispeedModeConfig::Floating
-        && let Some(green) = pending_play_green_number_for_profile_hispeed(profile, snapshot)
-    {
-        profile.lane.target_green_number = green;
-    }
 }
 
 fn pending_play_green_number_for_profile_hispeed(
@@ -16741,9 +16728,6 @@ fn apply_hispeed_change_to_session(
     change: HispeedChange,
 ) {
     session.hispeed = adjusted_hispeed(session.hispeed, change);
-    if session.hispeed_mode == HispeedMode::Floating {
-        session.target_green_number = current_green_number(session, session.audio_clock.now());
-    }
 }
 
 fn apply_play_option_control_to_session(
@@ -20851,26 +20835,22 @@ mod tests {
         profile.lane.hispeed = 2.0;
         profile.lane.hispeed_mode = HispeedModeConfig::Normal;
         profile.lane.target_green_number = 300;
-        let snapshot = RenderSnapshot { now_bpm: 120.0, ..Default::default() };
-
-        apply_pending_hispeed_change_to_profile(&mut profile, Some(&snapshot), HispeedChange::Up);
+        apply_pending_hispeed_change_to_profile(&mut profile, HispeedChange::Up);
 
         assert_eq!(profile.lane.hispeed, 2.25);
         assert_eq!(profile.lane.target_green_number, 300);
     }
 
     #[test]
-    fn pending_floating_hispeed_change_updates_fixed_green_before_ready() {
+    fn arrow_hispeed_change_keeps_target_green_before_ready() {
         let mut profile = ProfileConfig::new_default("default", "Default", 1);
         profile.lane.hispeed = 2.0;
         profile.lane.hispeed_mode = HispeedModeConfig::Floating;
         profile.lane.target_green_number = 300;
-        let snapshot = RenderSnapshot { now_bpm: 120.0, ..Default::default() };
-
-        apply_pending_hispeed_change_to_profile(&mut profile, Some(&snapshot), HispeedChange::Up);
+        apply_pending_hispeed_change_to_profile(&mut profile, HispeedChange::Up);
 
         assert_eq!(profile.lane.hispeed, 2.25);
-        assert_eq!(profile.lane.target_green_number, 533);
+        assert_eq!(profile.lane.target_green_number, 300);
     }
 
     #[test]
@@ -21079,6 +21059,44 @@ mod tests {
         assert_eq!(session.hispeed_mode, HispeedMode::Normal);
         assert_eq!(session.target_green_number, 300);
         assert_eq!(session.hispeed, 2.0);
+    }
+
+    #[test]
+    fn floating_hispeed_change_keeps_target_green_during_play() {
+        let mut profile = ProfileConfig::new_default("default", "Default", 1);
+        profile.lane.hispeed_mode = HispeedModeConfig::Floating;
+        profile.lane.target_green_number = 300;
+        let mut session = crate::screens::play_session::build_game_session(
+            std::sync::Arc::new(app_test_chart()),
+            &profile,
+            crate::screens::play_session::PlaySessionOptions::default(),
+        );
+
+        let hispeed = session.hispeed;
+        apply_hispeed_change_to_session(&mut session, HispeedChange::Up);
+
+        assert_eq!(session.hispeed, hispeed + 0.25);
+        assert_eq!(session.target_green_number, 300);
+    }
+
+    #[test]
+    fn e1_hispeed_change_keeps_target_green_during_play() {
+        let mut profile = ProfileConfig::new_default("default", "Default", 1);
+        profile.lane.hispeed_mode = HispeedModeConfig::Floating;
+        profile.lane.target_green_number = 300;
+        let mut session = crate::screens::play_session::build_game_session(
+            std::sync::Arc::new(app_test_chart()),
+            &profile,
+            crate::screens::play_session::PlaySessionOptions::default(),
+        );
+
+        assert!(apply_play_option_control_to_session(
+            &mut session,
+            PlayOptionControl::Hispeed(HispeedChange::Up),
+            false,
+        ));
+
+        assert_eq!(session.target_green_number, 300);
     }
 
     #[test]
