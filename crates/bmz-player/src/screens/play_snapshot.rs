@@ -834,9 +834,9 @@ fn set_scratch_angle_offset(
 fn scratch_angle_degrees(visual_time: TimeUs, scratch_index: i32, input_delta_ms: i64) -> i32 {
     let elapsed_ms = (visual_time.0.max(0) / 1_000).rem_euclid(SCRATCH_ANGLE_PERIOD_MS);
     let base_ms = if scratch_index % 2 == 0 {
-        elapsed_ms
-    } else {
         (SCRATCH_ANGLE_PERIOD_MS - elapsed_ms).rem_euclid(SCRATCH_ANGLE_PERIOD_MS)
+    } else {
+        elapsed_ms
     };
     let angle_ms = (base_ms + input_delta_ms).rem_euclid(SCRATCH_ANGLE_PERIOD_MS);
     (angle_ms / SCRATCH_ANGLE_DEGREES_DIVISOR) as i32
@@ -2145,7 +2145,7 @@ mod tests {
 
         assert_eq!(
             snapshot.skin_offsets.get(SCRATCH_ANGLE_OFFSET_1P),
-            Some(SkinOffsetValue { r: 280, ..SkinOffsetValue::default() })
+            Some(SkinOffsetValue { r: 80, ..SkinOffsetValue::default() })
         );
     }
 
@@ -2161,7 +2161,7 @@ mod tests {
 
         assert_eq!(
             snapshot.skin_offsets.get(SCRATCH_ANGLE_OFFSET_1P),
-            Some(SkinOffsetValue { r: 280, ..SkinOffsetValue::default() })
+            Some(SkinOffsetValue { r: 80, ..SkinOffsetValue::default() })
         );
     }
 
@@ -2178,7 +2178,7 @@ mod tests {
 
         assert_eq!(
             snapshot.skin_offsets.get(SCRATCH_ANGLE_OFFSET_1P),
-            Some(SkinOffsetValue { r: 253, ..SkinOffsetValue::default() })
+            Some(SkinOffsetValue { r: 53, ..SkinOffsetValue::default() })
         );
     }
 
@@ -2195,8 +2195,16 @@ mod tests {
 
         assert_eq!(
             snapshot.skin_offsets.get(SCRATCH_ANGLE_OFFSET_1P),
-            Some(SkinOffsetValue { r: 306, ..SkinOffsetValue::default() })
+            Some(SkinOffsetValue { r: 106, ..SkinOffsetValue::default() })
         );
+    }
+
+    #[test]
+    fn scratch_angle_offsets_match_beatoraja_1p_and_2p_phases() {
+        let visual_time = TimeUs(6_000_000);
+
+        assert_eq!(scratch_angle_degrees(visual_time, 0, 0), 80);
+        assert_eq!(scratch_angle_degrees(visual_time, 1, 0), 280);
     }
 
     #[test]

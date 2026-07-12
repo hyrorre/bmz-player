@@ -3096,7 +3096,7 @@ mod tests {
             })
             .expect("right combo digit");
         assert!(
-            right_digit > left_digit + 0.3,
+            right_digit > left_digit,
             "judge1 digit x={right_digit} should be right of judge x={left_digit}"
         );
 

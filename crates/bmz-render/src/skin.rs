@@ -2942,6 +2942,18 @@ impl SkinDocumentRenderExt for SkinDocument {
                 .filter(|value| pre_ready_lane_cover_value_destination(destination, value, state))
                 .map(|_| 0)
         })?;
+        let corrected_turntable_destination =
+            is_second_14k_turntable_destination(self, destination_index, destination, state).then(
+                || {
+                    // 一部の14K Lua skin は同じ turntable object を 1P / 2P に並べる際、
+                    // 両方へ offset=1 を指定している。beatoraja と同じ左右逆回転にするため、
+                    // 2個目だけ 2P scratch-angle offset へ振り替える。
+                    let mut corrected = destination.clone();
+                    corrected.offset = 2;
+                    corrected
+                },
+            );
+        let destination = corrected_turntable_destination.as_ref().unwrap_or(destination);
         let mut frame = resolve_destination_frame(destination, elapsed, enabled_options, state)?;
         let is_hidden_cover_destination = self
             .hidden_cover
@@ -11443,6 +11455,28 @@ fn apply_skin_offset_to_frame(
     apply_skin_offset_to_frame_inner(destination, frame, state, include_hidden_cover_offsets, false)
 }
 
+fn is_second_14k_turntable_destination(
+    document: &SkinDocument,
+    destination_index: usize,
+    destination: &SkinDestinationDef,
+    state: &SkinDrawState,
+) -> bool {
+    document.skin_type == 2
+        && state.key_mode == KeyMode::K14
+        && destination.id == "turntable"
+        && destination.offset == 1
+        && !destination.offsets.contains(&2)
+        && document.destination[..destination_index]
+            .iter()
+            .filter_map(|entry| match entry {
+                DestinationListEntry::Single(destination) => Some(destination),
+                DestinationListEntry::Conditional { .. } => None,
+            })
+            .filter(|entry| entry.id == "turntable" && entry.offset == 1)
+            .count()
+            == 1
+}
+
 /// beatoraja の `SkinObject.setRelative(true)` 相当 (SkinNumber 等で使用)。
 /// destination の offset を適用する際、x/y シフトはスキップし w/h/r/a のみ加算する。
 fn apply_skin_offset_to_frame_relative(
@@ -15456,6 +15490,36 @@ mod tests {
         assert!(
             matches!(items[0], SkinRenderItem::Image { rect: Rect { x, .. }, .. } if approx_eq(x, 0.0))
         );
+    }
+
+    #[test]
+    fn skin_document_uses_2p_offset_for_second_14k_turntable() {
+        let document: SkinDocument = serde_json::from_str(
+            r#"
+            {
+                "type": 2,
+                "destination": [
+                    { "id": "turntable", "offset": 1 },
+                    { "id": "turntable", "offset": 1 },
+                    { "id": "turntable", "offset": 1 }
+                ]
+            }
+            "#,
+        )
+        .unwrap();
+        let state = SkinDrawState { key_mode: KeyMode::K14, ..SkinDrawState::default() };
+
+        let destinations = document
+            .destination
+            .iter()
+            .map(|entry| match entry {
+                DestinationListEntry::Single(destination) => destination,
+                DestinationListEntry::Conditional { .. } => panic!("plain destination"),
+            })
+            .collect::<Vec<_>>();
+        assert!(!is_second_14k_turntable_destination(&document, 0, destinations[0], &state));
+        assert!(is_second_14k_turntable_destination(&document, 1, destinations[1], &state));
+        assert!(!is_second_14k_turntable_destination(&document, 2, destinations[2], &state));
     }
 
     #[test]
