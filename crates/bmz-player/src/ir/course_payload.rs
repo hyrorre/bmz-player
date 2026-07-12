@@ -132,8 +132,8 @@ pub fn build_course_submission(
         "option": arrange_option_ir_from_persistent(&context.arrange),
     });
     if let Some(seed) = context.random_seed {
-        play_options["random_seed"] = json!(seed);
-        play_options["seed"] = json!(seed);
+        play_options["random_seed"] = json!(seed.to_string());
+        play_options["seed"] = json!(seed.to_string());
     }
 
     json!({

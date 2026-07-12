@@ -12,6 +12,7 @@ import {
   requireNonNegativeInteger,
   resolveVerification,
   stableStringify,
+  validateSeedOptions,
   type IrRequestUser,
 } from './ir'
 import type { IrRuleMode, IrVerificationStatus } from '../../shared/types/ir'
@@ -136,6 +137,7 @@ export function validateCourseScoreSubmission(value: unknown): CourseScoreSubmis
   ) {
     throw new Error('play_options.device_type is invalid')
   }
+  validateSeedOptions(payload.play_options)
   return payload
 }
 

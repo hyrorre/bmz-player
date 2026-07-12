@@ -63,10 +63,10 @@ pub fn build_score_submission(
     if (context.arrange.uses_seed() || context.arrange_2p.uses_seed())
         && let Some(seed) = context.arrange_seed
     {
-        play_options.insert("seed".to_string(), serde_json::json!(seed));
+        play_options.insert("seed".to_string(), serde_json::json!(seed.to_string()));
     }
     if let Some(seed) = context.random_seed {
-        play_options.insert("random_seed".to_string(), serde_json::json!(seed));
+        play_options.insert("random_seed".to_string(), serde_json::json!(seed.to_string()));
     }
     if !context.rule_mode.is_empty() {
         play_options
@@ -368,8 +368,8 @@ mod tests {
             payload.play_options.get("double_option"),
             Some(&serde_json::Value::String("battle".to_string()))
         );
-        assert_eq!(payload.play_options.get("seed"), Some(&serde_json::json!(42)));
-        assert_eq!(payload.play_options.get("random_seed"), Some(&serde_json::json!(42)));
+        assert_eq!(payload.play_options.get("seed"), Some(&serde_json::json!("42")));
+        assert_eq!(payload.play_options.get("random_seed"), Some(&serde_json::json!("42")));
         let replay = payload.replay.expect("replay payload");
         assert_eq!(replay.hash, "ab".repeat(32));
         assert_eq!(replay.format, "bmz-replay-v1");

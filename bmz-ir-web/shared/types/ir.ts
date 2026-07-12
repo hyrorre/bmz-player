@@ -96,6 +96,10 @@ export interface IrScoreSubmission {
     option?: string
     arrange_1p?: string
     arrange_2p?: string
+    /** Current clients use decimal strings; numbers are accepted for legacy payloads. */
+    seed?: string | number
+    /** Current clients use decimal strings; numbers are accepted for legacy payloads. */
+    random_seed?: string | number
   } & Record<string, unknown>
   replay?: {
     hash?: string | null

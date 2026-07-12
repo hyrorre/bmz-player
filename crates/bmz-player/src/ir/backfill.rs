@@ -476,7 +476,7 @@ fn build_local_score_submission(
         Value::String(score_source_kind_ir(row.source_kind).to_string()),
     );
     if let Some(seed) = row.random_seed {
-        play_options.insert("random_seed".to_string(), serde_json::json!(seed));
+        play_options.insert("random_seed".to_string(), serde_json::json!(seed.to_string()));
     }
     if !row.rule_mode.is_empty() {
         play_options.insert("rule_mode".to_string(), Value::String(row.rule_mode.clone()));

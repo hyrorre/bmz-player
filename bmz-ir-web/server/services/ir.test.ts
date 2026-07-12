@@ -257,6 +257,23 @@ describe('score submission metadata', () => {
   })
 })
 
+describe('score seed validation', () => {
+  test('accepts signed 64-bit decimal strings and legacy safe integers', () => {
+    expect(() =>
+      __test.validateSeedOptions({ seed: '1783820891178268800', random_seed: 42 }),
+    ).not.toThrow()
+  })
+
+  test('rejects unsafe JSON numbers and invalid decimal strings', () => {
+    expect(() => __test.validateSeedOptions({ seed: 1_783_820_891_178_268_800 })).toThrow(
+      'play_options.seed is invalid',
+    )
+    expect(() => __test.validateSeedOptions({ random_seed: '12.5' })).toThrow(
+      'play_options.random_seed is invalid',
+    )
+  })
+})
+
 describe('idempotent score response', () => {
   test('returns the stored score without reporting a best-score update', () => {
     expect(
@@ -322,6 +339,15 @@ describe('database error classification', () => {
 })
 
 describe('course score validation', () => {
+  test('accepts a decimal string random seed', () => {
+    const payload = baseCourseSubmission()
+    payload.play_options.random_seed = '1783820891178268800'
+
+    expect(validateCourseScoreSubmission(payload).play_options.random_seed).toBe(
+      '1783820891178268800',
+    )
+  })
+
   test('normalizes legacy snake_case ln policy settings', () => {
     const payload = baseCourseSubmission({ lnPolicy: 'auto_hcn' })
 

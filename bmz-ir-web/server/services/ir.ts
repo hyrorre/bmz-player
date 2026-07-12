@@ -225,8 +225,22 @@ export function validateScoreSubmission(value: unknown): IrScoreSubmission {
   if (!DEVICE_TYPES.has(String(payload.play_options.device_type))) {
     throw new Error('play_options.device_type is invalid')
   }
+  validateSeedOptions(payload.play_options)
   scoreSubmissionMetadata(payload.play_options)
   return payload
+}
+
+export function validateSeedOptions(playOptions: Record<string, unknown>) {
+  for (const key of ['seed', 'random_seed'] as const) {
+    const value = playOptions[key]
+    if (value === undefined || value === null) continue
+    if (typeof value === 'number' && Number.isSafeInteger(value)) continue
+    if (typeof value === 'string' && /^-?\d+$/.test(value)) {
+      const seed = BigInt(value)
+      if (seed >= -(1n << 63n) && seed <= (1n << 63n) - 1n) continue
+    }
+    throw new Error(`play_options.${key} is invalid`)
+  }
 }
 
 export function validateScoreAttestation(value: unknown): ScoreAttestationPayload {
@@ -1682,4 +1696,5 @@ export const __test = {
   verificationStatusForSignedSubmission,
   idempotentScoreResponse,
   scoreSubmissionMetadata,
+  validateSeedOptions,
 }

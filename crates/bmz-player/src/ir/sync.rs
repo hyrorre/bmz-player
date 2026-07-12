@@ -615,6 +615,7 @@ async fn submit_job_payload(
 ) -> Result<(String, String)> {
     let mut payload: IrScoreSubmission =
         serde_json::from_str(payload_json).context("failed to parse stored IR payload")?;
+    normalize_legacy_score_seed_options(&mut payload);
     let provider_key = crate::ir::provider_key::configured_provider_key(provider)
         .context("IR provider key is not set; log in again")?;
     let credentials =
@@ -707,6 +708,7 @@ async fn submit_course_job_payload(
 }
 
 fn normalize_legacy_course_payload(payload: &mut serde_json::Value) {
+    normalize_legacy_seed_options_value(payload);
     let Some(rule) = payload.get_mut("rule").and_then(serde_json::Value::as_object_mut) else {
         return;
     };
@@ -717,6 +719,38 @@ fn normalize_legacy_course_payload(payload: &mut serde_json::Value) {
     };
     if needs_default {
         rule.insert("rule_mode".to_string(), serde_json::json!("Beatoraja"));
+    }
+}
+
+fn normalize_legacy_score_seed_options(payload: &mut IrScoreSubmission) {
+    for key in ["seed", "random_seed"] {
+        let Some(value) = payload.play_options.get_mut(key) else {
+            continue;
+        };
+        normalize_integer_value_to_string(value);
+    }
+}
+
+fn normalize_legacy_seed_options_value(payload: &mut serde_json::Value) {
+    let Some(play_options) =
+        payload.get_mut("play_options").and_then(serde_json::Value::as_object_mut)
+    else {
+        return;
+    };
+    for key in ["seed", "random_seed"] {
+        if let Some(value) = play_options.get_mut(key) {
+            normalize_integer_value_to_string(value);
+        }
+    }
+}
+
+fn normalize_integer_value_to_string(value: &mut serde_json::Value) {
+    let integer = value
+        .as_i64()
+        .map(|value| value.to_string())
+        .or_else(|| value.as_u64().map(|value| value.to_string()));
+    if let Some(integer) = integer {
+        *value = serde_json::Value::String(integer);
     }
 }
 
@@ -820,6 +854,10 @@ mod tests {
     #[test]
     fn legacy_course_payload_defaults_missing_rule_mode() {
         let mut payload = serde_json::json!({
+            "play_options": {
+                "seed": 1783820891178268800_i64,
+                "random_seed": 42
+            },
             "rule": {
                 "gauge": "Class",
                 "ln_policy": "AutoLn",
@@ -830,6 +868,17 @@ mod tests {
         normalize_legacy_course_payload(&mut payload);
 
         assert_eq!(payload["rule"]["rule_mode"], "Beatoraja");
+        assert_eq!(payload["play_options"]["seed"], "1783820891178268800");
+        assert_eq!(payload["play_options"]["random_seed"], "42");
+    }
+
+    #[test]
+    fn legacy_integer_seed_value_becomes_decimal_string() {
+        let mut seed = serde_json::json!(1783820891178268800_i64);
+
+        normalize_integer_value_to_string(&mut seed);
+
+        assert_eq!(seed, "1783820891178268800");
     }
 
     #[test]
