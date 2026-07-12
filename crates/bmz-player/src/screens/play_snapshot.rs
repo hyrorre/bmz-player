@@ -2129,7 +2129,7 @@ mod tests {
 
         assert_eq!(
             snapshot.skin_offsets.get(SCRATCH_ANGLE_OFFSET_1P),
-            Some(SkinOffsetValue { x: 1, y: 2, w: 3, h: 4, r: 280, a: -6 })
+            Some(SkinOffsetValue { x: 1, y: 2, w: 3, h: 4, r: 80, a: -6 })
         );
     }
 
