@@ -6943,6 +6943,7 @@ impl WinitApp {
             self.boot.profile_paths.network_db.clone(),
             self.boot.app_paths.logs_dir.clone(),
             &self.boot.profile_config.ir,
+            finished.stored.score_history_id,
             crate::storage::common::hash_to_hex(&finished.result.chart_sha256),
             finished.ln_policy,
             finished.double_option,
@@ -11035,6 +11036,10 @@ impl WinitApp {
                         self.boot.profile_paths.network_db.clone(),
                         self.boot.app_paths.logs_dir.clone(),
                         &self.boot.profile_config.ir,
+                        course_result
+                            .as_ref()
+                            .and_then(|course| course.course_score_id)
+                            .unwrap_or_default(),
                         course_hash,
                         gauge,
                         ln_policy,
@@ -11046,6 +11051,7 @@ impl WinitApp {
                         self.boot.profile_paths.network_db.clone(),
                         self.boot.app_paths.logs_dir.clone(),
                         &self.boot.profile_config.ir,
+                        finished.stored.score_history_id,
                         crate::storage::common::hash_to_hex(&finished.result.chart_sha256),
                         finished.ln_policy,
                         finished.double_option,

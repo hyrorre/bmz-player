@@ -181,6 +181,28 @@ impl NetworkDatabase {
         self.pending_ir_score_jobs_with_backoff_policy(now, limit, true)
     }
 
+    /// 指定した今回のプレイに紐付く IR ジョブを返す。
+    ///
+    /// 結果画面は常駐同期と同じ DB を共有するため、送信バッチ全体の集計ではなく
+    /// この attempt の状態を監視して skin の IR 送信タイマーを更新する。
+    pub fn ir_score_jobs_for_local_score(
+        &self,
+        kind: IrJobKind,
+        local_score_id: i64,
+    ) -> Result<Vec<IrScoreJobRecord>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, provider, account_id, local_score_id, chart_sha256, ln_policy,
+                payload_json, status, attempt_count, next_attempt_at, last_error,
+                created_at, updated_at, kind
+             FROM ir_score_jobs
+             WHERE kind = ?1 AND local_score_id = ?2
+             ORDER BY id ASC",
+        )?;
+        stmt.query_map(params![kind.as_str(), local_score_id], ir_score_job_from_row)?
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(Into::into)
+    }
+
     pub fn pending_ir_score_jobs_for_kind(
         &self,
         provider: &str,
@@ -895,6 +917,32 @@ mod tests {
             .collect::<rusqlite::Result<_>>()
             .unwrap();
         assert_eq!(remaining, vec![("other".to_string(), "account-2".to_string())]);
+    }
+
+    #[test]
+    fn attempt_job_lookup_keeps_kind_and_local_score_isolated() {
+        let mut db = open_network_db();
+        for (kind, local_score_id) in
+            [(IrJobKind::Score, 42), (IrJobKind::Course, 42), (IrJobKind::Score, 43)]
+        {
+            db.enqueue_ir_score_job(&NewIrScoreJob {
+                provider: format!("provider-{local_score_id}-{}", kind.as_str()),
+                account_id: "account".to_string(),
+                kind,
+                local_score_id,
+                chart_sha256: [local_score_id as u8; 32],
+                ln_policy: LnScorePolicy::AutoLn,
+                payload_json: "{}".to_string(),
+                now: 100,
+            })
+            .unwrap();
+        }
+
+        let jobs = db.ir_score_jobs_for_local_score(IrJobKind::Score, 42).unwrap();
+
+        assert_eq!(jobs.len(), 1);
+        assert_eq!(jobs[0].kind, IrJobKind::Score);
+        assert_eq!(jobs[0].local_score_id, 42);
     }
 
     #[test]

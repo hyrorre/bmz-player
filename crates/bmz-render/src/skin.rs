@@ -6780,9 +6780,11 @@ fn test_skin_op(op: i32, enabled_options: &[i32], state: &SkinDrawState) -> bool
                                 | SelectRowKind::RandomCourse
                         )))
         }
-        // BMZ currently has no IR backend, matching beatoraja's offline state.
-        50 => true,
-        51 => false,
+        // OPTION_OFFLINE / OPTION_ONLINE. beatoraja は設定済み IR 接続の有無を
+        // 返す。結果スキンでは 51 が IR 送信完了/失敗の timer 173/174 を
+        // 描画する前提条件としても使われる。
+        50 => matches!(state.ir_ranking.state, crate::scene::ResultIrState::Offline),
+        51 => !matches!(state.ir_ranking.state, crate::scene::ResultIrState::Offline),
         21 => state.select_option_panel == 1,
         22 => state.select_option_panel == 2,
         23 => state.select_option_panel == 3,
@@ -20525,6 +20527,20 @@ mod tests {
         for ref_id in [179, 180, 181, 182, 200, 201, 202, 220, 226, 227, 241, 242, 380, 390] {
             assert_eq!(skin_state_number(ref_id, &state), None, "IR number {ref_id}");
         }
+    }
+
+    #[test]
+    fn ir_online_property_enables_result_submission_destinations() {
+        let state = SkinDrawState {
+            ir_ranking: crate::scene::ResultIrSnapshot {
+                state: crate::scene::ResultIrState::Loading,
+                ..Default::default()
+            },
+            ..SkinDrawState::default()
+        };
+
+        assert!(!test_skin_op(50, &[], &state));
+        assert!(test_skin_op(51, &[], &state));
     }
 
     #[test]
