@@ -190,35 +190,69 @@ fn execute_lua_skin(
             && !warning.starts_with("mixed lua table converted to object at ")
     });
 
-    let lua = Lua::new();
-    install_instruction_limit(&lua);
-    let dependencies = Arc::new(Mutex::new(SkinLoadDependencies::default()));
-    let main_state_probe = install_sandbox(
-        &lua,
-        &root,
-        options,
-        Some(&skin_options),
-        &skin_files,
-        &skin_file_dependency_names_from_header(&header_json),
-        &skin_offsets,
-        runtime_state,
-        Some(dependencies.clone()),
-    )?;
-    let value = lua
-        .load(&source)
-        .set_name(input.to_string_lossy().as_ref())
-        .eval::<Value>()
-        .with_context(|| format!("failed to execute lua skin: {}", input.display()))?;
-    let mut json = lua_value_to_json(
-        &lua,
-        value,
-        "$",
-        0,
-        &mut warnings,
-        &main_state_probe,
-        &mut table_budget,
-    )?;
+    // Lua スキンには、無効な `op` を持つ destination でも Lua の table 構築時に
+    // 座標を評価するものがある。選択中の property ではその座標が初期化されない場合、
+    // 最終的には描画されない destination でも nil 算術でロード全体が失敗してしまう。
+    // その場合だけ各 property の末尾選択肢で再評価する。描画時の有効 op は呼び出し側が
+    // 元の選択値から設定するため、この再試行で無効 destination が表示されることはない。
+    let fallback_skin_options = fallback_skin_config_options(&header_json, &skin_options);
+    let mut use_fallback_options = false;
+    let (mut json, dependencies, main_state_probe) = loop {
+        let active_skin_options =
+            if use_fallback_options { &fallback_skin_options } else { &skin_options };
+        let lua = Lua::new();
+        install_instruction_limit(&lua);
+        let dependencies = Arc::new(Mutex::new(SkinLoadDependencies::default()));
+        let main_state_probe = install_sandbox(
+            &lua,
+            &root,
+            options,
+            Some(active_skin_options),
+            &skin_files,
+            &skin_file_dependency_names_from_header(&header_json),
+            &skin_offsets,
+            runtime_state,
+            Some(dependencies.clone()),
+        )?;
+        let value = match lua
+            .load(&source)
+            .set_name(input.to_string_lossy().as_ref())
+            .eval::<Value>()
+        {
+            Ok(value) => value,
+            Err(error)
+                if !use_fallback_options
+                    && fallback_skin_options != skin_options
+                    && lua_nil_arithmetic_error(&error) =>
+            {
+                use_fallback_options = true;
+                warnings.push(
+                    "retried lua skin with fallback property options after nil arithmetic in an inactive destination"
+                        .to_string(),
+                );
+                continue;
+            }
+            Err(error) => {
+                return Err(error)
+                    .with_context(|| format!("failed to execute lua skin: {}", input.display()));
+            }
+        };
+        let json = lua_value_to_json(
+            &lua,
+            value,
+            "$",
+            0,
+            &mut warnings,
+            &main_state_probe,
+            &mut table_budget,
+        )?;
+        break (json, dependencies, main_state_probe);
+    };
     record_static_skin_config_option_dependencies(&source, &skin_options, &dependencies);
+    if use_fallback_options && let Ok(mut dependencies) = dependencies.lock() {
+        // fallback 側の Lua 分岐で収集した依存関係は元選択の cache key に使えない。
+        dependencies.opaque = true;
+    }
 
     if let JsonValue::Object(ref mut root) = json {
         postprocess_lua_skin_json(root, &mut warnings);
@@ -1849,6 +1883,40 @@ fn skin_config_options_from_header(
     }
 
     result
+}
+
+/// 無効な destination が Lua 評価時にも座標を要求するスキン向けの退避値。
+/// property ごとに末尾の選択肢を採用し、通常の選択で初期化されなかった optional
+/// layout を構築できるようにする。呼び出し元は描画用の有効 op を元選択で上書きする。
+fn fallback_skin_config_options(
+    header: &JsonValue,
+    selected_options: &BTreeMap<String, i64>,
+) -> BTreeMap<String, i64> {
+    let mut fallback = selected_options.clone();
+    let Some(properties) = header.get("property").and_then(JsonValue::as_array) else {
+        return fallback;
+    };
+
+    for property in properties {
+        let Some(name) = property.get("name").and_then(JsonValue::as_str) else {
+            continue;
+        };
+        let Some(op) = property
+            .get("item")
+            .and_then(JsonValue::as_array)
+            .and_then(|items| items.last())
+            .and_then(|item| item.get("op"))
+            .and_then(json_integer)
+        else {
+            continue;
+        };
+        fallback.insert(name.to_string(), op);
+    }
+    fallback
+}
+
+fn lua_nil_arithmetic_error(error: &mlua::Error) -> bool {
+    error.to_string().contains("attempt to perform arithmetic on a nil value")
 }
 
 fn option_value_to_op(items: &[JsonValue], value: &str) -> Option<i64> {

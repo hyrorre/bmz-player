@@ -3028,10 +3028,8 @@ mod tests {
         if !skin_path.is_file() {
             return;
         }
-        let Ok(decoded) = decode_beatoraja_skin(&skin_path, SkinKind::Play) else {
-            // play14main.lua は skin_config 未注入だと geometry が未初期化で落ちる。
-            return;
-        };
+        let decoded = decode_beatoraja_skin(&skin_path, SkinKind::Play)
+            .expect("ECFN play14 should decode with default options");
         let judge0 =
             decoded.document.judge.iter().find(|judge| judge.id == "judge").expect("judge");
         let judge1 =
