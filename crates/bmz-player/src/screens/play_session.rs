@@ -249,6 +249,9 @@ pub fn apply_placeholder_session_visuals(
     let replay_playback = options.replay_player.is_some();
     snapshot.autoplay = !replay_playback && (profile.play.auto_play || options.autoplay);
     snapshot.replay_playback = replay_playback;
+    snapshot.bga_enabled =
+        bga_enabled_from_profile(profile, snapshot.autoplay, snapshot.replay_playback);
+    snapshot.bga_stretch = bga_stretch_from_profile(profile);
     snapshot.target_ex_score = options.target.target_ex_score(snapshot.total_notes);
     snapshot.target = options.target.as_string();
 
@@ -2090,6 +2093,54 @@ mod tests {
 
         assert!((snapshot.hispeed - 2.0).abs() < f32::EPSILON);
         assert_eq!(snapshot.note_display_duration_ms, 500);
+    }
+
+    #[test]
+    fn placeholder_session_visuals_match_session_bga_modes() {
+        for (mode, profile_autoplay, option_autoplay, replay, expected) in [
+            (BgaModeConfig::On, false, false, false, true),
+            (BgaModeConfig::Auto, false, false, false, false),
+            (BgaModeConfig::Auto, false, true, false, true),
+            (BgaModeConfig::Auto, false, false, true, true),
+            (BgaModeConfig::Auto, true, false, false, true),
+            (BgaModeConfig::Off, true, true, false, false),
+        ] {
+            let mut profile = ProfileConfig::new_default("default", "Default", 1);
+            profile.play.bga = mode;
+            profile.play.auto_play = profile_autoplay;
+            let options = PlaySessionOptions {
+                autoplay: option_autoplay,
+                replay_player: replay.then(ReplayPlayer::default),
+                ..PlaySessionOptions::default()
+            };
+            let mut snapshot = bmz_render::snapshot::RenderSnapshot::default();
+
+            apply_placeholder_session_visuals(&mut snapshot, &profile, KeyMode::K7, &options);
+            let session = build_game_session(Arc::new(chart()), &profile, options);
+
+            assert_eq!(snapshot.bga_enabled, expected, "mode={mode:?}");
+            assert_eq!(snapshot.bga_enabled, session.bga_enabled, "mode={mode:?}");
+        }
+    }
+
+    #[test]
+    fn placeholder_session_visuals_match_session_bga_expand() {
+        for (expand, expected) in [
+            (BgaExpandConfig::Full, 0),
+            (BgaExpandConfig::KeepAspect, 1),
+            (BgaExpandConfig::Off, 8),
+        ] {
+            let mut profile = ProfileConfig::new_default("default", "Default", 1);
+            profile.play.bga_expand = expand;
+            let options = PlaySessionOptions::default();
+            let mut snapshot = bmz_render::snapshot::RenderSnapshot::default();
+
+            apply_placeholder_session_visuals(&mut snapshot, &profile, KeyMode::K7, &options);
+            let session = build_game_session(Arc::new(chart()), &profile, options);
+
+            assert_eq!(snapshot.bga_stretch, expected, "expand={expand:?}");
+            assert_eq!(snapshot.bga_stretch, session.bga_stretch, "expand={expand:?}");
+        }
     }
 
     fn class_gauge_values(session: &GameSession) -> [f32; 6] {
