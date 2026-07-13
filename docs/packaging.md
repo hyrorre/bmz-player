@@ -61,9 +61,13 @@ BMZ Player/
       sample-playable/
     licenses/
       BMZ-GPL-3.0-only.txt
+      GameInput-LICENSE.txt
+      GameInput-NOTICE.txt
       license-notes.md
       third-party-notices.txt
       rust-dependency-licenses.txt
+    redist/
+      GameInputRedist.msi
 ```
 
 `bmz-player.exe` の隣の `resources` が runtime の `resource_dir` になる。
@@ -75,6 +79,19 @@ Inno Setup installer まで作る:
 ```powershell
 .\scripts\package-windows.ps1 -Installer
 ```
+
+GameInputを使うreleaseでは、`Microsoft.GameInput` NuGetを展開したrootを渡す。
+`redist/GameInputRedist.msi`, `LICENSE.txt`, `NOTICE.txt`が必須になる。
+
+```powershell
+.\scripts\package-windows.ps1 `
+  -Installer `
+  -GameInputPackageDir C:\packages\Microsoft.GameInput.3.4.218
+```
+
+portable stagingにはredistributableを同梱するだけで、自動実行しない。Inno Setup
+installerはMSIを一時展開し、`msiexec`を昇格実行する。GameInput runtimeを利用できない
+環境ではBMZ Playerはgilrsへfallbackする。
 
 package script は `Cargo.toml` の workspace version を読み取り、
 `installer/inno/bmz-player.iss` の `AppVersion` fallback と Inno Setup へ渡す
@@ -151,6 +168,13 @@ staging root へコピーする。Scoop で入れた vcpkg も通常は自動検
 ```powershell
 $env:BMZ_WINDOWS_DLL_DIRS = "C:\vcpkg\installed\x64-windows\bin;C:\extra\dlls"
 .\scripts\package-windows.ps1
+```
+
+GameInput package rootは環境変数でも指定できる:
+
+```powershell
+$env:BMZ_GAMEINPUT_PACKAGE_DIR = "C:\packages\Microsoft.GameInput.3.4.218"
+.\scripts\package-windows.ps1 -Installer
 ```
 
 短い packaged smoke を実行する:

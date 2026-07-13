@@ -9,6 +9,7 @@ param(
     [switch]$CopySiblingDlls,
     [switch]$Installer,
     [string]$IsccPath = "",
+    [string]$GameInputPackageDir = "",
     [switch]$NoDefaultFeatures,
     [string]$Features = "",
     [switch]$SkipRustLicenseReport,
@@ -341,6 +342,17 @@ if (-not $OutDir) {
 }
 $OutDir = Resolve-FullPath $OutDir
 
+if (-not $GameInputPackageDir -and $env:BMZ_GAMEINPUT_PACKAGE_DIR) {
+    $GameInputPackageDir = $env:BMZ_GAMEINPUT_PACKAGE_DIR
+}
+if ($GameInputPackageDir) {
+    $GameInputPackageDir = Resolve-FullPath $GameInputPackageDir
+    Require-Directory $GameInputPackageDir
+    Require-File (Join-Path $GameInputPackageDir "redist\GameInputRedist.msi")
+    Require-File (Join-Path $GameInputPackageDir "LICENSE.txt")
+    Require-File (Join-Path $GameInputPackageDir "NOTICE.txt")
+}
+
 Require-Command "cargo"
 Require-Command "robocopy"
 
@@ -406,6 +418,19 @@ Copy-DirectoryMirror (Join-Path $repoRoot "data\songs\sample-playable") (Join-Pa
 Copy-RequiredFile (Join-Path $repoRoot "LICENSE") (Join-Path $licensesDir "BMZ-GPL-3.0-only.txt")
 Copy-RequiredFile (Join-Path $repoRoot "docs\licenses.md") (Join-Path $licensesDir "license-notes.md")
 Copy-RequiredFile (Join-Path $repoRoot "THIRD-PARTY-NOTICES.txt") (Join-Path $licensesDir "third-party-notices.txt")
+if ($GameInputPackageDir) {
+    $redistDir = Join-Path $resourcesDir "redist"
+    New-Item -ItemType Directory -Force -Path $redistDir | Out-Null
+    Copy-RequiredFile `
+        (Join-Path $GameInputPackageDir "redist\GameInputRedist.msi") `
+        (Join-Path $redistDir "GameInputRedist.msi")
+    Copy-RequiredFile `
+        (Join-Path $GameInputPackageDir "LICENSE.txt") `
+        (Join-Path $licensesDir "GameInput-LICENSE.txt")
+    Copy-RequiredFile `
+        (Join-Path $GameInputPackageDir "NOTICE.txt") `
+        (Join-Path $licensesDir "GameInput-NOTICE.txt")
+}
 if (-not $SkipRustLicenseReport -and $env:BMZ_SKIP_RUST_LICENSE_REPORT -ne "1") {
     Write-Host "==> Generating Rust dependency license report"
     New-RustLicenseReport `

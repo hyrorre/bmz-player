@@ -56,6 +56,21 @@ Project:
   https://www.steinberg.net/asiosdk
 
 
+Microsoft GameInput Redistributable
+-----------------------------------
+
+BMZ Player's Windows installer includes the unmodified Microsoft GameInput
+redistributable from the Microsoft.GameInput NuGet package. The package's
+license and third-party notice are preserved as:
+
+  resources/licenses/GameInput-LICENSE.txt
+  resources/licenses/GameInput-NOTICE.txt
+
+Project:
+  https://aka.ms/gameinput
+  https://www.nuget.org/packages/Microsoft.GameInput
+
+
 Bundled Skins
 -------------
 

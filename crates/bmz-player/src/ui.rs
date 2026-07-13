@@ -2308,25 +2308,6 @@ fn build_settings_panel(
                                 "PipeWire",
                             );
                         });
-                    egui::ComboBox::from_label("ゲームパッドバックエンド")
-                        .selected_text(gamepad_backend_label(&config.input.gamepad_backend))
-                        .show_ui(ui, |ui| {
-                            ui.selectable_value(
-                                &mut config.input.gamepad_backend,
-                                GamepadBackendKind::Auto,
-                                gamepad_backend_label(&GamepadBackendKind::Auto),
-                            );
-                            ui.selectable_value(
-                                &mut config.input.gamepad_backend,
-                                GamepadBackendKind::Gilrs,
-                                gamepad_backend_label(&GamepadBackendKind::Gilrs),
-                            );
-                            ui.selectable_value(
-                                &mut config.input.gamepad_backend,
-                                GamepadBackendKind::GameInput,
-                                gamepad_backend_label(&GamepadBackendKind::GameInput),
-                            );
-                        });
                     let sample_rate_text =
                         if config.audio.sample_rate_mode == AudioSampleRateMode::Auto {
                             "自動 (ドライバ / OS 既定)".to_string()
@@ -2689,6 +2670,25 @@ fn build_settings_panel(
                                 &mut config.input.backend,
                                 InputBackendKind::Midi,
                                 input_backend_label(&InputBackendKind::Midi),
+                            );
+                        });
+                    egui::ComboBox::from_label("ゲームパッドバックエンド")
+                        .selected_text(gamepad_backend_label(&config.input.gamepad_backend))
+                        .show_ui(ui, |ui| {
+                            ui.selectable_value(
+                                &mut config.input.gamepad_backend,
+                                GamepadBackendKind::Auto,
+                                gamepad_backend_label(&GamepadBackendKind::Auto),
+                            );
+                            ui.selectable_value(
+                                &mut config.input.gamepad_backend,
+                                GamepadBackendKind::Gilrs,
+                                gamepad_backend_label(&GamepadBackendKind::Gilrs),
+                            );
+                            ui.selectable_value(
+                                &mut config.input.gamepad_backend,
+                                GamepadBackendKind::GameInput,
+                                gamepad_backend_label(&GamepadBackendKind::GameInput),
                             );
                         });
                     ui.checkbox(&mut config.input.keyboard_enabled, "キーボード");
