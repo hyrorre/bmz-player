@@ -480,6 +480,38 @@ pub const LIBRARY_MIGRATIONS: &[Migration] = &[
         // library database disproportionately large.
         statements: &["UPDATE charts SET headers_json = '{}' WHERE headers_json <> '{}';"],
     },
+    Migration {
+        version: 23,
+        // Course entries are initially resolved when their course is imported.
+        // Repair entries whose matching chart was imported later, preserving
+        // the same SHA-256-first, MD5-fallback rule used by course import.
+        statements: &["UPDATE course_entries
+             SET chart_id = COALESCE(
+                 (
+                     SELECT id
+                     FROM charts
+                     WHERE course_entries.sha256 <> ''
+                       AND charts.sha256 = course_entries.sha256
+                     ORDER BY id
+                     LIMIT 1
+                 ),
+                 (
+                     SELECT id
+                     FROM charts
+                     WHERE course_entries.md5 <> ''
+                       AND charts.md5 = course_entries.md5
+                     ORDER BY id
+                     LIMIT 1
+                 )
+             )
+             WHERE chart_id IS NULL
+               AND EXISTS (
+                   SELECT 1
+                   FROM charts
+                   WHERE (course_entries.sha256 <> '' AND charts.sha256 = course_entries.sha256)
+                      OR (course_entries.md5 <> '' AND charts.md5 = course_entries.md5)
+               );"],
+    },
 ];
 
 pub const SCORE_MIGRATIONS: &[Migration] = &[
@@ -1447,7 +1479,7 @@ mod tests {
         run_migrations(&mut conn, LIBRARY_MIGRATIONS).unwrap();
 
         let version: i32 = conn.pragma_query_value(None, "user_version", |row| row.get(0)).unwrap();
-        assert_eq!(version, 22);
+        assert_eq!(version, 23);
 
         let mut stmt = conn.prepare("PRAGMA table_info(charts)").unwrap();
         let columns = stmt
@@ -1466,7 +1498,17 @@ mod tests {
     fn library_migration_clears_persisted_raw_headers() {
         let mut conn = Connection::open_in_memory().unwrap();
         conn.execute_batch(
-            "CREATE TABLE charts (headers_json TEXT NOT NULL);
+            "CREATE TABLE charts (
+                id INTEGER PRIMARY KEY,
+                headers_json TEXT NOT NULL,
+                sha256 TEXT NOT NULL DEFAULT '',
+                md5 TEXT NOT NULL DEFAULT ''
+             );
+             CREATE TABLE course_entries (
+                chart_id INTEGER,
+                sha256 TEXT NOT NULL DEFAULT '',
+                md5 TEXT NOT NULL DEFAULT ''
+             );
              INSERT INTO charts (headers_json) VALUES ('{\"002D9\":\"note data\"}');
              PRAGMA user_version = 21;",
         )
@@ -1478,7 +1520,48 @@ mod tests {
             conn.query_row("SELECT headers_json FROM charts", [], |row| row.get(0)).unwrap();
         let version: i32 = conn.pragma_query_value(None, "user_version", |row| row.get(0)).unwrap();
         assert_eq!(headers_json, "{}");
-        assert_eq!(version, 22);
+        assert_eq!(version, 23);
+    }
+
+    #[test]
+    fn library_migration_backfills_unresolved_course_entries() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE charts (
+                id INTEGER PRIMARY KEY,
+                sha256 TEXT NOT NULL,
+                md5 TEXT NOT NULL
+             );
+             CREATE TABLE course_entries (
+                position INTEGER PRIMARY KEY,
+                chart_id INTEGER,
+                sha256 TEXT NOT NULL,
+                md5 TEXT NOT NULL
+             );
+             INSERT INTO charts (id, sha256, md5) VALUES
+                (10, 'preferred-sha', 'other-md5'),
+                (20, 'other-sha', 'fallback-md5');
+             INSERT INTO course_entries (position, chart_id, sha256, md5) VALUES
+                (0, NULL, 'preferred-sha', 'fallback-md5'),
+                (1, NULL, 'missing-sha', 'fallback-md5'),
+                (2, NULL, 'missing-sha', 'missing-md5'),
+                (3, 99, 'preferred-sha', 'fallback-md5');
+             PRAGMA user_version = 22;",
+        )
+        .unwrap();
+
+        run_migrations(&mut conn, LIBRARY_MIGRATIONS).unwrap();
+
+        let chart_ids = conn
+            .prepare("SELECT chart_id FROM course_entries ORDER BY position")
+            .unwrap()
+            .query_map([], |row| row.get::<_, Option<i64>>(0))
+            .unwrap()
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .unwrap();
+        let version: i32 = conn.pragma_query_value(None, "user_version", |row| row.get(0)).unwrap();
+        assert_eq!(chart_ids, vec![Some(10), Some(20), None, Some(99)]);
+        assert_eq!(version, 23);
     }
 
     #[test]

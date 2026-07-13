@@ -236,6 +236,11 @@ impl LibraryDatabase {
         };
 
         write_chart_analysis(conn, chart_id, record.chart)?;
+        super::course_db::backfill_unresolved_course_entries_for_chart(
+            conn,
+            &hash_to_hex(&record.chart.identity.file_sha256),
+            &hash_to_hex(&record.chart.identity.file_md5),
+        )?;
 
         Ok((chart_id, chart_file_id))
     }
@@ -1947,6 +1952,7 @@ fn warning_details(warning: &ImportWarning) -> (String, String) {
 mod tests {
     use bmz_chart::hash::compute_chart_identity;
     use bmz_chart::model::{ChartMetadata, LongNotePair, LongNoteStyle, NoteEvent, PlayableChart};
+    use bmz_core::course::{CourseConstraints, CourseDefinition, CourseEntry, CourseKind};
     use bmz_core::ids::NoteId;
     use bmz_core::lane::Lane;
     use bmz_core::time::{ChartTick, TimeUs};
@@ -1997,6 +2003,18 @@ mod tests {
             bga_assets: Vec::new(),
             total_notes: 0,
             end_time: TimeUs(10_000_000),
+        }
+    }
+
+    fn course_with_entries(entries: Vec<CourseEntry>) -> CourseDefinition {
+        CourseDefinition {
+            key: "table:test#0".to_string(),
+            title: "Test Course".to_string(),
+            kind: CourseKind::Dan,
+            entries,
+            constraints: CourseConstraints::default(),
+            trophies: Vec::new(),
+            release: true,
         }
     }
 
@@ -2118,6 +2136,110 @@ mod tests {
         let analysis = db.chart_analysis_by_chart_id(chart_id).unwrap().unwrap();
         assert_eq!(analysis.total_gauge, 260.0);
         assert_eq!(analysis.main_bpm, 128.0);
+    }
+
+    #[test]
+    fn upsert_chart_import_backfills_unresolved_course_entries() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        configure_connection(&conn).unwrap();
+        run_migrations(&mut conn, LIBRARY_MIGRATIONS).unwrap();
+        let mut db = LibraryDatabase { conn };
+        let chart = chart("course song");
+        let md5 = hash_to_hex(&chart.identity.file_md5);
+        let sha256 = hash_to_hex(&chart.identity.file_sha256);
+        let course = course_with_entries(vec![
+            CourseEntry {
+                title_hint: "SHA-256 match".to_string(),
+                md5: Some(md5.clone()),
+                sha256: Some(sha256),
+                chart_id: None,
+            },
+            CourseEntry {
+                title_hint: "MD5 fallback".to_string(),
+                md5: Some(md5),
+                sha256: Some("f".repeat(64)),
+                chart_id: None,
+            },
+        ]);
+        let course_id = db.upsert_course("table:test", &course, 0, 1).unwrap();
+        assert!(
+            db.list_course_entries(course_id)
+                .unwrap()
+                .iter()
+                .all(|entry| entry.entry.chart_id.is_none())
+        );
+
+        let chart_id =
+            db.upsert_chart_import(&record_for_chart("/songs/course.bms", &chart)).unwrap();
+
+        let entries = db.list_course_entries(course_id).unwrap();
+        assert_eq!(entries[0].entry.chart_id, Some(chart_id));
+        assert_eq!(entries[1].entry.chart_id, Some(chart_id));
+    }
+
+    #[test]
+    fn successful_reimport_restores_course_link_after_import_failure() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        configure_connection(&conn).unwrap();
+        run_migrations(&mut conn, LIBRARY_MIGRATIONS).unwrap();
+        let mut db = LibraryDatabase { conn };
+        let chart = chart("recovered course song");
+        let path = Path::new("/songs/recovered.bms");
+        let record = record_for_chart("/songs/recovered.bms", &chart);
+        let original_chart_id = db.upsert_chart_import(&record).unwrap();
+        let course = course_with_entries(vec![CourseEntry {
+            title_hint: "Recovered song".to_string(),
+            md5: Some(hash_to_hex(&chart.identity.file_md5)),
+            sha256: Some(hash_to_hex(&chart.identity.file_sha256)),
+            chart_id: None,
+        }]);
+        let course_id = db.upsert_course("table:test", &course, 0, 1).unwrap();
+        assert_eq!(
+            db.list_course_entries(course_id).unwrap()[0].entry.chart_id,
+            Some(original_chart_id)
+        );
+
+        db.upsert_failed_chart_file(None, path, 1, 2, 2, "temporary failure").unwrap();
+        assert_eq!(db.list_course_entries(course_id).unwrap()[0].entry.chart_id, None);
+
+        let recovered_chart_id = db.upsert_chart_import(&record).unwrap();
+        assert_eq!(
+            db.list_course_entries(course_id).unwrap()[0].entry.chart_id,
+            Some(recovered_chart_id)
+        );
+    }
+
+    #[test]
+    fn course_backfill_uses_oldest_duplicate_chart_id() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        configure_connection(&conn).unwrap();
+        run_migrations(&mut conn, LIBRARY_MIGRATIONS).unwrap();
+        let mut db = LibraryDatabase { conn };
+        let chart = chart("duplicate course song");
+        let oldest_chart_id =
+            db.upsert_chart_import(&record_for_chart("/songs/first.bms", &chart)).unwrap();
+        let course = course_with_entries(vec![CourseEntry {
+            title_hint: "Duplicate song".to_string(),
+            md5: Some(hash_to_hex(&chart.identity.file_md5)),
+            sha256: Some(hash_to_hex(&chart.identity.file_sha256)),
+            chart_id: None,
+        }]);
+        let course_id = db.upsert_course("table:test", &course, 0, 1).unwrap();
+        db.conn()
+            .execute(
+                "UPDATE course_entries SET chart_id = NULL WHERE course_id = ?1",
+                params![course_id],
+            )
+            .unwrap();
+
+        let duplicate_chart_id =
+            db.upsert_chart_import(&record_for_chart("/songs/second.bms", &chart)).unwrap();
+
+        assert!(duplicate_chart_id > oldest_chart_id);
+        assert_eq!(
+            db.list_course_entries(course_id).unwrap()[0].entry.chart_id,
+            Some(oldest_chart_id)
+        );
     }
 
     #[test]
