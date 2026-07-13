@@ -13,7 +13,7 @@ use super::play::lane_from_config;
 use super::profile_config::{
     BindingConfigEntry, LaneConfig, PlayModeInputConfig, ProfileInputConfig, ScratchDirectionConfig,
 };
-use crate::input::gilrs::GamepadSlotMap;
+use crate::input::gamepad::GamepadSlotMap;
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum InheritError {

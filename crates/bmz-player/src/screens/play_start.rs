@@ -16,7 +16,7 @@ use crate::config::play::{
     bottom_shiftable_gauge_from_config, gauge_auto_shift_from_config, gauge_type_from_config,
 };
 use crate::config::profile_config::{GaugeAutoShiftConfig, GaugeTypeConfig, ProfileConfig};
-use crate::input::gilrs::GamepadSlotMap;
+use crate::input::gamepad::GamepadSlotMap;
 use crate::input::shared::SharedInputBackend;
 use crate::screens::play_session::{
     PlaySessionOptions, PreloadedPlaySession, PreparedPlaySession,

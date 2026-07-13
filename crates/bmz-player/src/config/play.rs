@@ -10,7 +10,7 @@ use super::profile_config::{
     BottomShiftableGaugeConfig, GaugeAutoShiftConfig, GaugeTypeConfig, LaneConfig, ProfileConfig,
     ProfileInputConfig,
 };
-use crate::input::gilrs::GamepadSlotMap;
+use crate::input::gamepad::GamepadSlotMap;
 
 pub const DEFAULT_JUDGE_WINDOW: JudgeWindow = JudgeWindow {
     pgreat_us: 20_000,

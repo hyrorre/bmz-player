@@ -3917,7 +3917,7 @@ impl WinitApp {
 
     fn apply_gamepad_play_option_control(&mut self, device: DeviceId, control: &str) -> bool {
         let app_config = self.play_session_app_config();
-        let slots = crate::input::gilrs::GamepadSlotMap::from_slot_ids(
+        let slots = crate::input::gamepad::GamepadSlotMap::from_slot_ids(
             app_config.input.gamepad_slot_gilrs_ids,
         );
         match select_option_lane_for_gamepad(
@@ -4571,7 +4571,7 @@ impl WinitApp {
             }
         }
         for event in &output.buttons {
-            let device_event = crate::input::gilrs::to_device_input_event(event);
+            let device_event = crate::input::gamepad::to_device_input_event(event);
             if let Some(active_play) = &self.active_play {
                 active_play.input.push_shared_event(device_event);
             }
@@ -7277,11 +7277,12 @@ impl WinitApp {
             .into_iter()
             .flat_map(|gilrs| gilrs.connected_gamepads())
             .filter(|gamepad| gamepad.is_connected)
-            .map(|gamepad| gamepad.gilrs_id);
-        app_config.input.gamepad_slot_gilrs_ids = crate::input::gilrs::resolve_gamepad_slot_ids(
-            app_config.input.gamepad_slot_gilrs_ids,
-            connected_gilrs_ids,
-        );
+            .map(|gamepad| gamepad.backend_id);
+        app_config.input.gamepad_slot_gilrs_ids =
+            crate::input::gamepad::resolve_gamepad_slot_backend_ids(
+                app_config.input.gamepad_slot_gilrs_ids,
+                connected_gilrs_ids,
+            );
         app_config
     }
 
@@ -17365,7 +17366,7 @@ fn target_cycle_from_control(control: &str, bindings: &SelectKeyBindings) -> Opt
 
 fn select_option_lane_for_gamepad(
     input: &ProfileInputConfig,
-    slots: crate::input::gilrs::GamepadSlotMap,
+    slots: crate::input::gamepad::GamepadSlotMap,
     device: DeviceId,
     control: &str,
 ) -> Option<Lane> {
@@ -19176,7 +19177,7 @@ mod tests {
         assert_eq!(
             select_option_lane_for_gamepad(
                 &profile.input,
-                crate::input::gilrs::GamepadSlotMap::from_slot_ids([Some(0), Some(1)]),
+                crate::input::gamepad::GamepadSlotMap::from_slot_ids([Some(0), Some(1)]),
                 DeviceId(16),
                 control,
             ),
@@ -19185,7 +19186,7 @@ mod tests {
         assert_eq!(
             select_option_lane_for_gamepad(
                 &profile.input,
-                crate::input::gilrs::GamepadSlotMap::from_slot_ids([Some(0), Some(1)]),
+                crate::input::gamepad::GamepadSlotMap::from_slot_ids([Some(0), Some(1)]),
                 DeviceId(17),
                 control,
             ),
@@ -19194,7 +19195,7 @@ mod tests {
         assert_eq!(
             select_option_lane_for_gamepad(
                 &profile.input,
-                crate::input::gilrs::GamepadSlotMap::from_slot_ids([Some(1), Some(0)]),
+                crate::input::gamepad::GamepadSlotMap::from_slot_ids([Some(1), Some(0)]),
                 DeviceId(16),
                 control,
             ),

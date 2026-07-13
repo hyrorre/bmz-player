@@ -286,7 +286,7 @@ pub struct EguiRunContext<'a, 'practice> {
     pub update_dialog: Option<UpdateDialog<'a>>,
     pub obs_connection_status: &'a crate::obs::ObsConnectionStatus,
     /// 接続中ゲームパッド一覧 (gilrs)。未初期化時は空。
-    pub connected_gamepads: &'a [crate::input::gilrs::ConnectedGamepad],
+    pub connected_gamepads: &'a [crate::input::gamepad::ConnectedGamepad],
 }
 
 /// `EguiLayer::run` の 1 フレーム出力。
@@ -1750,7 +1750,7 @@ struct SettingsPanelState<'a> {
     audio_device_picker: &'a mut AudioDevicePickerState,
     obs_scene_picker: &'a mut ObsScenePickerState,
     obs_connection_status: &'a crate::obs::ObsConnectionStatus,
-    connected_gamepads: &'a [crate::input::gilrs::ConnectedGamepad],
+    connected_gamepads: &'a [crate::input::gamepad::ConnectedGamepad],
 }
 
 #[derive(Default)]
@@ -2691,7 +2691,7 @@ fn build_settings_panel(
                             let status = if pad.is_connected { "接続中" } else { "切断" };
                             ui.label(format!(
                                 "#{} {} ({})",
-                                pad.gilrs_id, pad.name, status
+                                pad.backend_id, pad.name, status
                             ));
                         }
                     }
@@ -2703,8 +2703,8 @@ fn build_settings_panel(
                             Some(id) => state
                                 .connected_gamepads
                                 .iter()
-                                .find(|pad| pad.gilrs_id == id)
-                                .map(|pad| format!("#{} {}", pad.gilrs_id, pad.name))
+                                .find(|pad| pad.backend_id == id)
+                                .map(|pad| format!("#{} {}", pad.backend_id, pad.name))
                                 .unwrap_or_else(|| format!("#{id} (未接続)")),
                         };
                         egui::ComboBox::from_label(label)
@@ -2718,8 +2718,8 @@ fn build_settings_panel(
                                 for pad in state.connected_gamepads {
                                     ui.selectable_value(
                                         &mut config.input.gamepad_slot_gilrs_ids[slot_index],
-                                        Some(pad.gilrs_id),
-                                        format!("#{} {}", pad.gilrs_id, pad.name),
+                                        Some(pad.backend_id),
+                                        format!("#{} {}", pad.backend_id, pad.name),
                                     );
                                 }
                             });
@@ -2730,7 +2730,7 @@ fn build_settings_panel(
                                 .connected_gamepads
                                 .iter()
                                 .filter(|pad| pad.is_connected)
-                                .map(|pad| pad.gilrs_id)
+                                .map(|pad| pad.backend_id)
                                 .collect();
                             config.input.gamepad_slot_gilrs_ids[0] = connected.first().copied();
                             config.input.gamepad_slot_gilrs_ids[1] = connected.get(1).copied();

@@ -43,7 +43,7 @@ use crate::config::profile_config::{
     BgaExpandConfig, BgaModeConfig, HispeedModeConfig, JudgeAlgorithmConfig, LaneEffectConfig,
     ProfileConfig,
 };
-use crate::input::gilrs::GamepadSlotMap;
+use crate::input::gamepad::GamepadSlotMap;
 use crate::ln_policy::{
     LnPolicySetting, apply_ln_policy_to_chart, force_ln_mode_for_chart, score_ln_policy_for_chart,
 };
