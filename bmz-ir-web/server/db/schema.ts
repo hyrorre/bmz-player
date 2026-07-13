@@ -79,6 +79,7 @@ export const profiles = sqliteTable('profiles', {
     .references(() => users.id, { onDelete: 'cascade' }),
   displayName: text('display_name').notNull().default(''),
   bio: text('bio').notNull().default(''),
+  dailyBoundaryMinutes: integer('daily_boundary_minutes').notNull().default(0),
   createdAt: integer('created_at', { mode: 'timestamp_ms' })
     .notNull()
     .default(sql`(unixepoch('subsec') * 1000)`),
@@ -130,6 +131,50 @@ export const charts = sqliteTable(
       .default(sql`(unixepoch('subsec') * 1000)`),
   },
   (table) => [index('idx_charts_md5').on(table.md5), index('idx_charts_title').on(table.title)],
+)
+
+export const difficultyTables = sqliteTable(
+  'difficulty_tables',
+  {
+    id: text('id').primaryKey(),
+    sourceUrl: text('source_url').notNull(),
+    headUrl: text('head_url').notNull().default(''),
+    name: text('name').notNull().default(''),
+    symbol: text('symbol').notNull().default(''),
+    levelOrder: jsonText<string[]>('level_order', '[]'),
+    priority: integer('priority').notNull().default(0),
+    activeGeneration: text('active_generation'),
+    lastFetchedAt: integer('last_fetched_at', { mode: 'timestamp_ms' }),
+    updatedAt: integer('updated_at', { mode: 'timestamp_ms' })
+      .notNull()
+      .default(sql`(unixepoch('subsec') * 1000)`),
+  },
+  (table) => [
+    uniqueIndex('idx_difficulty_tables_source').on(table.sourceUrl),
+    index('idx_difficulty_tables_priority').on(table.priority),
+  ],
+)
+
+export const difficultyTableEntries = sqliteTable(
+  'difficulty_table_entries',
+  {
+    id: integer('id').primaryKey({ autoIncrement: true }),
+    tableId: text('table_id')
+      .notNull()
+      .references(() => difficultyTables.id, { onDelete: 'cascade' }),
+    generation: text('generation').notNull(),
+    level: text('level').notNull(),
+    md5: text('md5').notNull().default(''),
+    sha256: text('sha256').notNull().default(''),
+    title: text('title').notNull().default(''),
+    artist: text('artist').notNull().default(''),
+    comment: text('comment').notNull().default(''),
+  },
+  (table) => [
+    index('idx_difficulty_table_entries_table_generation').on(table.tableId, table.generation),
+    index('idx_difficulty_table_entries_md5').on(table.md5),
+    index('idx_difficulty_table_entries_sha256').on(table.sha256),
+  ],
 )
 
 export const scores = sqliteTable(
@@ -221,6 +266,8 @@ export const scores = sqliteTable(
       table.scoring,
     ),
     index('idx_scores_received_at').on(table.serverReceivedAt),
+    index('idx_scores_player_played_at').on(table.playerId, table.playedAt),
+    index('idx_scores_player_received_at').on(table.playerId, table.serverReceivedAt),
   ],
 )
 

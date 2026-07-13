@@ -4,6 +4,7 @@ import type { FormSubmitEvent } from '@nuxt/ui'
 type ProfileState = {
   displayName: string
   bio: string
+  dailyBoundaryMinutes: number
 }
 
 type ProfileResponse = {
@@ -12,12 +13,24 @@ type ProfileResponse = {
     email: string
     display_name: string
     bio: string
+    daily_boundary_minutes: number
   }
 }
 
 const state = reactive<ProfileState>({
   displayName: '',
   bio: '',
+  dailyBoundaryMinutes: 0,
+})
+
+const dailyBoundaryItems = Array.from({ length: 48 }, (_, index) => {
+  const value = index * 30
+  const hours = Math.floor(value / 60)
+  const minutes = value % 60
+  return {
+    label: `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')} (JST)`,
+    value,
+  }
 })
 
 const loading = ref(false)
@@ -59,6 +72,7 @@ async function loadProfile() {
     const response = await requestFetch<ProfileResponse>('/api/v1/profile')
     state.displayName = response.player.display_name || ''
     state.bio = response.player.bio || ''
+    state.dailyBoundaryMinutes = response.player.daily_boundary_minutes ?? 0
   } catch (error) {
     errorMessage.value =
       error instanceof Error ? error.message : 'プロフィールの取得に失敗しました。'
@@ -83,7 +97,11 @@ async function submit(event: FormSubmitEvent<ProfileState>) {
   try {
     await requestFetch('/api/v1/profile', {
       method: 'PUT',
-      body: { display_name: displayName, bio },
+      body: {
+        display_name: displayName,
+        bio,
+        daily_boundary_minutes: event.data.dailyBoundaryMinutes,
+      },
     })
     await refreshSession()
     state.displayName = displayName
@@ -131,6 +149,20 @@ async function submit(event: FormSubmitEvent<ProfileState>) {
               maxlength="1000"
               placeholder="好きな譜面、プレイスタイルなど"
               :rows="6"
+              size="xl"
+            />
+          </UFormField>
+
+          <UFormField
+            label="成果日の切り替わり"
+            name="dailyBoundaryMinutes"
+            description="この時刻より前のプレイは前日の成果として集計します。"
+          >
+            <USelect
+              v-model="state.dailyBoundaryMinutes"
+              class="w-full"
+              :disabled="loading"
+              :items="dailyBoundaryItems"
               size="xl"
             />
           </UFormField>

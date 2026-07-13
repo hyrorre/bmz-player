@@ -29,6 +29,12 @@ export default defineNuxtConfig({
     },
   },
   nitro: {
+    experimental: {
+      tasks: true,
+    },
+    scheduledTasks: {
+      '17 */6 * * *': 'difficulty-tables:sync',
+    },
     compatibilityDate: '2026-03-29',
     preset: 'cloudflare_module',
     cloudflare: {

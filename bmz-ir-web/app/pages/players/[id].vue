@@ -50,6 +50,15 @@ const { data, pending, error } = await useFetch<PlayerDetail>(
           <p v-if="data.player.bio" class="mt-2 whitespace-pre-line text-sm text-neutral-300">
             {{ data.player.bio }}
           </p>
+          <UButton
+            class="mt-4"
+            color="neutral"
+            icon="i-lucide-calendar-days"
+            :to="{ path: '/daily', query: { player: data.player.id, mode: 'all' } }"
+            variant="subtle"
+          >
+            本日の成果
+          </UButton>
         </div>
 
         <h2 class="mb-3 text-lg font-medium">ベストスコア</h2>

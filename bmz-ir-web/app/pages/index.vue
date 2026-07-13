@@ -94,6 +94,16 @@ const { user } = useUserSession()
           >
             自分のスコア
           </UButton>
+          <UButton
+            v-if="user"
+            color="neutral"
+            icon="i-lucide-calendar-days"
+            size="xl"
+            to="/daily"
+            variant="subtle"
+          >
+            本日の成果
+          </UButton>
         </div>
       </div>
     </section>

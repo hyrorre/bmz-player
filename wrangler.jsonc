@@ -10,6 +10,9 @@
       "enabled": true,
     },
   },
+  "triggers": {
+    "crons": ["17 */6 * * *"],
+  },
   "d1_databases": [
     {
       "binding": "DB",

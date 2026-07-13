@@ -5,7 +5,7 @@ Codex に最終レビューと実装を引き継ぐための設計まとめ。
 
 ---
 
-## 実装状況 (2026-06-18)
+## 実装状況 (2026-07-13)
 
 以下は本メモを元に実装済みの範囲と、設計からの主な差分。
 ソースの所在: クライアントは `crates/bmz-player/src/ir/`、サーバーは
@@ -29,6 +29,7 @@ GET    /api/v1/charts/{sha256}/ranking         # scope/ln_policy/rule_mode/limit
 GET    /api/v1/rivals
 POST   /api/v1/rivals                          # { target_player_id, action: add|remove }
 GET    /api/v1/players/{id}                    # プロフィール + best scores
+GET    /api/v1/daily                           # player/date/mode=all の日次成果
 GET    /api/v1/device-keys                     # 自分の署名鍵一覧
 POST   /api/v1/device-keys                     # 公開鍵登録 (同一鍵は再利用)
 DELETE /api/v1/device-keys/{id}                # 失効 (revoked_at)
@@ -46,13 +47,20 @@ GET    /api/v1/courses/{course_hash}/ranking   # global のみ
 ```
 
 未実装: `PUT /api/v1/charts/{sha256}` (chart upsert は score submit 内で実施)、
-`DELETE /api/v1/rivals/{player_id}` (POST の action=remove で代替)、tables 系。
+`DELETE /api/v1/rivals/{player_id}` (POST の action=remove で代替)、難易度表の公開管理 API。
+
+日次成果は `/daily?player=<id>&date=YYYY-MM-DD&mode=all` で公開し、`player` 省略時は
+ログイン中の本人を対象にする。成果日の切り替わりは profile の
+`daily_boundary_minutes` (JST 00:00 からの分、既定 0) で設定できる。難易度表は
+運用側 allowlist を 6 時間ごとに D1 へ世代同期し、日次 API 返却時に MD5 優先、
+SHA-256 fallback でラベルを付与する。
 
 ### クライアント (bmz-player)
 
 - CLI: `bmz ir login|logout|status|ranking|sync|upload-local|attest-submitted|cleanup-imported|cleanup-duplicate|rivals|device-key|replay`。
   egui プロファイル設定からもログイン可能。
-- 送信: リザルト確定時に `ir_score_jobs` へ enqueue (send_policy 判定込み) →
+- 送信: リザルト確定時に譜面時間を `result.duration_ms` へ含め、
+  `ir_score_jobs` へ enqueue (send_policy 判定込み) →
   リザルト画面で即時送信 + アプリ常駐ワーカー (30 秒間隔) が残りを処理。
   結果画面・常駐ワーカーは 1 バッチ 20 件、job 間 3.1 秒待ちで送信する。CLI の
   `ir sync` / local backfill は手動検証を速くするため 100 件 / 200ms を使う。

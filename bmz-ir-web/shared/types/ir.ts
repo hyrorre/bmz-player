@@ -265,3 +265,84 @@ export interface IrScoreHistoryEntry {
   server_received_at: string
   verification: IrVerificationStatus
 }
+
+export type IrDailyMode = 'all'
+
+export interface IrDailyReport {
+  player: {
+    id: string
+    display_name: string
+  }
+  date: string
+  mode: IrDailyMode
+  timezone: 'Asia/Tokyo'
+  boundary_minutes: number
+  range: {
+    start: string
+    end: string
+  }
+  summary: {
+    play_notes: number
+    clear_count: number
+    play_count: number
+    chart_count: number
+    /** 全プレイの EX score / (全プレイの notes * 2) を百分率で返す。 */
+    accuracy: number | null
+    /** duration_ms があるプレイだけを合計する。 */
+    play_time_ms: number
+    play_time_unknown_count: number
+  }
+  charts: IrDailyChartResult[]
+}
+
+export interface IrDailyChartResult {
+  chart: {
+    sha256: string
+    md5: string | null
+    title: string
+    subtitle: string | null
+    artist: string
+    mode: string
+    level: number | null
+    difficulty: string | null
+    notes: number
+  }
+  /** 難易度表同期データとの突合結果。未同期時は空配列。 */
+  difficulty_labels: IrDailyDifficultyLabel[]
+  rules: IrDailyRuleResult[]
+}
+
+export interface IrDailyDifficultyLabel {
+  table_id: string
+  table_name: string
+  symbol: string
+  level: string
+}
+
+export interface IrDailyRuleResult {
+  rule: {
+    ln_policy: string
+    double_option: IrDoubleOption
+    rule_mode: IrRuleMode
+    scoring: string
+  }
+  plays: number
+  before: IrDailyBestSnapshot
+  after: IrDailyBestSnapshot
+  updated_fields: {
+    clear: boolean
+    ex_score: boolean
+    min_bp: boolean
+  }
+}
+
+export interface IrDailyBestSnapshot {
+  clear: {
+    type: string
+    rank: number
+  } | null
+  ex_score: number | null
+  /** ex_score を記録した同じ score 行の notes。スコア率計算に使う。 */
+  ex_score_notes: number | null
+  min_bp: number | null
+}

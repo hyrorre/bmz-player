@@ -34,6 +34,7 @@ export function useAppNavigation() {
             icon: 'i-lucide-user',
             defaultOpen: true,
             children: [
+              { label: '本日の成果', to: '/daily', icon: 'i-lucide-calendar-days' },
               { label: 'プロフィール', to: '/profile', icon: 'i-lucide-user-pen' },
               { label: 'アカウント設定', to: '/settings', icon: 'i-lucide-settings' },
               {
