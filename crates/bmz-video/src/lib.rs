@@ -39,6 +39,54 @@ struct SelectedVideoStream {
     codec_params: ffmpeg_next::codec::Parameters,
 }
 
+#[derive(Debug, Default)]
+struct VideoTimestampNormalizer {
+    origin_raw: Option<i64>,
+    last_us: i64,
+}
+
+impl VideoTimestampNormalizer {
+    fn frame_pts_us(
+        &mut self,
+        decoded: &ffmpeg_next::frame::Video,
+        time_base_num: i64,
+        time_base_den: i64,
+    ) -> i64 {
+        self.timestamp_us(
+            decoded.timestamp().or_else(|| decoded.pts()),
+            time_base_num,
+            time_base_den,
+        )
+    }
+
+    fn timestamp_us(
+        &mut self,
+        timestamp_raw: Option<i64>,
+        time_base_num: i64,
+        time_base_den: i64,
+    ) -> i64 {
+        if time_base_den == 0 {
+            return self.last_us;
+        }
+        let Some(timestamp_raw) = timestamp_raw else {
+            return self.last_us;
+        };
+        let origin_raw = *self.origin_raw.get_or_insert(timestamp_raw);
+        let elapsed_raw = i128::from(timestamp_raw) - i128::from(origin_raw);
+        let elapsed_us =
+            elapsed_raw.saturating_mul(i128::from(time_base_num)).saturating_mul(1_000_000)
+                / i128::from(time_base_den);
+        self.last_us = elapsed_us.clamp(0, i128::from(i64::MAX)) as i64;
+        self.last_us
+    }
+}
+
+#[derive(Default)]
+struct VideoDecodeContext {
+    scaler: Option<ffmpeg_next::software::scaling::context::Context>,
+    timestamp_normalizer: VideoTimestampNormalizer,
+}
+
 #[derive(Default)]
 struct ClockedFrameState {
     frame: Option<DecodedFrame>,
@@ -242,6 +290,7 @@ pub fn decode_first_frame(path: &Path) -> Result<DecodedFrame> {
     let selected = select_video_stream(&ictx)?;
     let mut decoder = open_video_decoder(&selected)?;
     let mut decoded = ffmpeg_next::frame::Video::empty();
+    let mut timestamp_normalizer = VideoTimestampNormalizer::default();
 
     for (stream, packet) in ictx.packets() {
         if stream.index() != selected.index {
@@ -250,11 +299,12 @@ pub fn decode_first_frame(path: &Path) -> Result<DecodedFrame> {
         decoder.send_packet(&packet)?;
         match decoder.receive_frame(&mut decoded) {
             Ok(()) => {
-                return rgba_frame_from_video(
+                let pts_us = timestamp_normalizer.frame_pts_us(
                     &decoded,
                     selected.time_base_num,
                     selected.time_base_den,
                 );
+                return rgba_frame_from_video(&decoded, pts_us);
             }
             Err(ffmpeg_next::Error::Other { errno: ffmpeg_next::error::EAGAIN }) => {}
             Err(ffmpeg_next::Error::Eof) => {
@@ -266,7 +316,14 @@ pub fn decode_first_frame(path: &Path) -> Result<DecodedFrame> {
 
     decoder.send_eof()?;
     match decoder.receive_frame(&mut decoded) {
-        Ok(()) => rgba_frame_from_video(&decoded, selected.time_base_num, selected.time_base_den),
+        Ok(()) => {
+            let pts_us = timestamp_normalizer.frame_pts_us(
+                &decoded,
+                selected.time_base_num,
+                selected.time_base_den,
+            );
+            rgba_frame_from_video(&decoded, pts_us)
+        }
         Err(e) => Err(e.into()),
     }
 }
@@ -290,8 +347,8 @@ fn decode_video_following_playback_time(
     let mut ictx = ffmpeg_next::format::input(path)?;
     let selected = select_video_stream(&ictx)?;
     let mut decoder = open_video_decoder(&selected)?;
-    let mut scaler: Option<ffmpeg_next::software::scaling::context::Context> = None;
     let mut decoded = ffmpeg_next::frame::Video::empty();
+    let mut decode_context = VideoDecodeContext::default();
     let mut loop_base_us = 0;
     while !stop_decode.load(Ordering::Acquire) {
         let mut target_us = playback_target_us.load(Ordering::Acquire);
@@ -317,7 +374,7 @@ fn decode_video_following_playback_time(
                 &mut decoded,
                 &selected,
                 loop_base_us,
-                &mut scaler,
+                &mut decode_context,
                 &clocked_frames,
                 &playback_target_us,
                 &stop_decode,
@@ -336,7 +393,7 @@ fn decode_video_following_playback_time(
                 &mut decoded,
                 &selected,
                 loop_base_us,
-                &mut scaler,
+                &mut decode_context,
                 &clocked_frames,
                 &playback_target_us,
                 &stop_decode,
@@ -383,6 +440,7 @@ where
     let mut scaler: Option<ffmpeg_next::software::scaling::context::Context> = None;
 
     let mut decoded = ffmpeg_next::frame::Video::empty();
+    let mut timestamp_normalizer = VideoTimestampNormalizer::default();
 
     for (stream, packet) in ictx.packets() {
         if stream.index() != selected.index {
@@ -399,13 +457,12 @@ where
                 Err(e) => return Err(e.into()),
             }
 
-            let frame = rgba_frame_from_video_with_scaler(
+            let pts_us = timestamp_normalizer.frame_pts_us(
                 &decoded,
                 selected.time_base_num,
                 selected.time_base_den,
-                &mut scaler,
-                None,
-            )?;
+            );
+            let frame = rgba_frame_from_video_with_scaler(&decoded, pts_us, &mut scaler, None)?;
 
             if matches!(on_frame(frame)?, DecodeFrameControl::Stop) {
                 return Ok(());
@@ -423,13 +480,12 @@ where
             Err(e) => return Err(e.into()),
         }
 
-        let frame = rgba_frame_from_video_with_scaler(
+        let pts_us = timestamp_normalizer.frame_pts_us(
             &decoded,
             selected.time_base_num,
             selected.time_base_den,
-            &mut scaler,
-            None,
-        )?;
+        );
+        let frame = rgba_frame_from_video_with_scaler(&decoded, pts_us, &mut scaler, None)?;
         if matches!(on_frame(frame)?, DecodeFrameControl::Stop) {
             return Ok(());
         }
@@ -463,7 +519,7 @@ fn drain_clocked_decoder_frames(
     decoded: &mut ffmpeg_next::frame::Video,
     selected: &SelectedVideoStream,
     loop_base_us: i64,
-    scaler: &mut Option<ffmpeg_next::software::scaling::context::Context>,
+    decode_context: &mut VideoDecodeContext,
     clocked_frames: &Mutex<ClockedFrameState>,
     playback_target_us: &AtomicI64,
     stop_decode: &AtomicBool,
@@ -483,7 +539,9 @@ fn drain_clocked_decoder_frames(
         }
 
         *decoded_any = true;
-        let pts_us = video_frame_pts_us(decoded, selected.time_base_num, selected.time_base_den)
+        let pts_us = decode_context
+            .timestamp_normalizer
+            .frame_pts_us(decoded, selected.time_base_num, selected.time_base_den)
             .saturating_add(loop_base_us);
         *last_pts_us = Some(pts_us);
         if should_skip_clocked_frame_conversion(pts_us, playback_target_us.load(Ordering::Acquire))
@@ -506,14 +564,12 @@ fn drain_clocked_decoder_frames(
             }
         }
 
-        let mut frame = rgba_frame_from_video_with_scaler(
+        let frame = rgba_frame_from_video_with_scaler(
             decoded,
-            selected.time_base_num,
-            selected.time_base_den,
-            scaler,
+            pts_us,
+            &mut decode_context.scaler,
             take_clocked_recycled_rgba(clocked_frames),
         )?;
-        frame.pts_us = pts_us;
         publish_clocked_frame(clocked_frames, frame)?;
     }
     Ok(ClockedDrainStatus::Continue)
@@ -652,19 +708,14 @@ fn choose_beatoraja_video_stream(
         .unwrap_or(best_index)
 }
 
-fn rgba_frame_from_video(
-    decoded: &ffmpeg_next::frame::Video,
-    time_base_num: i64,
-    time_base_den: i64,
-) -> Result<DecodedFrame> {
+fn rgba_frame_from_video(decoded: &ffmpeg_next::frame::Video, pts_us: i64) -> Result<DecodedFrame> {
     let mut scaler = None;
-    rgba_frame_from_video_with_scaler(decoded, time_base_num, time_base_den, &mut scaler, None)
+    rgba_frame_from_video_with_scaler(decoded, pts_us, &mut scaler, None)
 }
 
 fn rgba_frame_from_video_with_scaler(
     decoded: &ffmpeg_next::frame::Video,
-    time_base_num: i64,
-    time_base_den: i64,
+    pts_us: i64,
     scaler: &mut Option<ffmpeg_next::software::scaling::context::Context>,
     rgba_buffer: Option<Vec<u8>>,
 ) -> Result<DecodedFrame> {
@@ -686,23 +737,12 @@ fn rgba_frame_from_video_with_scaler(
     let mut rgba_frame = ffmpeg_next::frame::Video::empty();
     scaler.as_mut().unwrap().run(decoded, &mut rgba_frame)?;
 
-    let pts_us = video_frame_pts_us(decoded, time_base_num, time_base_den);
-
     let data = rgba_frame.data(0);
     let stride = rgba_frame.stride(0);
     let row_bytes = (w as usize) * 4;
     let rgba = copy_rgba_frame_data_with_buffer(data, stride, row_bytes, h as usize, rgba_buffer);
 
     Ok(DecodedFrame { pts_us, rgba, width: w, height: h })
-}
-
-fn video_frame_pts_us(
-    decoded: &ffmpeg_next::frame::Video,
-    time_base_num: i64,
-    time_base_den: i64,
-) -> i64 {
-    let pts_raw = decoded.pts().unwrap_or(0);
-    if time_base_den != 0 { pts_raw * time_base_num * 1_000_000 / time_base_den } else { 0 }
 }
 
 #[cfg(test)]
@@ -788,9 +828,38 @@ mod tests {
         let frame = decode_first_frame(&repo_root().join("data/songs/bga-compat/movie.webm"))
             .expect("fixture movie must decode");
 
+        assert_eq!(frame.pts_us, 0);
         assert_eq!(frame.width, 2);
         assert_eq!(frame.height, 2);
         assert_eq!(frame.rgba.len(), 2 * 2 * 4);
+    }
+
+    #[test]
+    fn video_timestamp_normalizer_starts_nonzero_timestamps_at_zero() {
+        let mut normalizer = VideoTimestampNormalizer::default();
+
+        assert_eq!(normalizer.timestamp_us(Some(48_003), 1, 90_000), 0);
+        assert_eq!(normalizer.timestamp_us(Some(51_006), 1, 90_000), 33_366);
+        assert_eq!(normalizer.timestamp_us(None, 1, 90_000), 33_366);
+        assert_eq!(normalizer.timestamp_us(Some(48_003), 1, 90_000), 0);
+    }
+
+    #[test]
+    fn video_timestamp_normalizer_handles_missing_and_invalid_timestamps() {
+        let mut normalizer = VideoTimestampNormalizer::default();
+
+        assert_eq!(normalizer.timestamp_us(None, 1, 90_000), 0);
+        assert_eq!(normalizer.timestamp_us(Some(10), 1, 0), 0);
+        assert_eq!(normalizer.timestamp_us(Some(10), 1, 90_000), 0);
+        assert_eq!(normalizer.timestamp_us(Some(5), 1, 90_000), 0);
+    }
+
+    #[test]
+    fn video_timestamp_normalizer_saturates_extreme_values() {
+        let mut normalizer = VideoTimestampNormalizer::default();
+
+        assert_eq!(normalizer.timestamp_us(Some(i64::MIN), 1, 1), 0);
+        assert_eq!(normalizer.timestamp_us(Some(i64::MAX), i64::MAX, 1), i64::MAX);
     }
 
     fn decoder_with_channel(
