@@ -148,7 +148,7 @@ use crate::skin_loader::{
 use crate::songs_cmd::scan_songs_with_progress;
 use crate::storage::collection_db::FavoriteHints;
 use crate::storage::difficulty_table_db::DifficultyTableRecord;
-use crate::storage::library_db::{ChartDistributionSecond, LibraryDatabase};
+use crate::storage::library_db::{ChartDistributionSecond, ChartListItem, LibraryDatabase};
 use crate::storage::migration::{migrate_library_db, migrate_network_db, migrate_score_db};
 use crate::storage::play_result::StoredPlayResult;
 use crate::storage::replay::load_replay_for_chart_policy_and_double_option;
@@ -1085,6 +1085,24 @@ struct DecideTransition {
     fadeout_started_at: Option<Instant>,
     cancel: bool,
     snapshot: RenderSnapshot,
+    title_override: Option<DecideTitleOverride>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct DecideTitleOverride {
+    title: String,
+    subtitle: String,
+}
+
+impl DecideTransition {
+    fn snapshot_for_render(&self) -> RenderSnapshot {
+        let mut snapshot = self.snapshot.clone();
+        if let Some(title_override) = &self.title_override {
+            snapshot.title.clone_from(&title_override.title);
+            snapshot.subtitle.clone_from(&title_override.subtitle);
+        }
+        snapshot
+    }
 }
 
 struct PendingPlayStart {
@@ -3612,7 +3630,7 @@ impl WinitApp {
     }
 
     fn decide_snapshot(&self, decide: &DecideTransition) -> RenderSnapshot {
-        let mut snapshot = decide.snapshot.clone();
+        let mut snapshot = decide.snapshot_for_render();
         let elapsed = match decide.fadeout_started_at {
             Some(fadeout_started_at) => {
                 let fadeout_duration = self.decide_fadeout_duration();
@@ -7277,7 +7295,7 @@ impl WinitApp {
 
     fn begin_decide_for_chart(&mut self, chart_id: i64, options: PlayStartOptions) {
         let snapshot = self.decide_snapshot_for_chart(chart_id);
-        self.begin_decide_for_chart_with_snapshot(chart_id, options, snapshot);
+        self.begin_decide_for_chart_with_snapshot(chart_id, options, snapshot, None);
     }
 
     fn begin_course_decide_for_chart(
@@ -7286,10 +7304,15 @@ impl WinitApp {
         options: PlayStartOptions,
         course_title: &str,
     ) {
-        let mut snapshot = self.decide_snapshot_for_chart(chart_id);
-        snapshot.title = course_title.to_string();
-        snapshot.subtitle.clear();
-        self.begin_decide_for_chart_with_snapshot(chart_id, options, snapshot);
+        let snapshot = self.decide_snapshot_for_chart(chart_id);
+        let title_override =
+            DecideTitleOverride { title: course_title.to_string(), subtitle: String::new() };
+        self.begin_decide_for_chart_with_snapshot(
+            chart_id,
+            options,
+            snapshot,
+            Some(title_override),
+        );
     }
 
     fn begin_decide_for_chart_with_snapshot(
@@ -7297,6 +7320,7 @@ impl WinitApp {
         chart_id: i64,
         options: PlayStartOptions,
         mut snapshot: RenderSnapshot,
+        title_override: Option<DecideTitleOverride>,
     ) {
         // Pre-import placeholder only: account for course LN overrides and
         // Battle here. The running session replaces this with a count derived
@@ -7341,6 +7365,7 @@ impl WinitApp {
             fadeout_started_at: None,
             cancel: false,
             snapshot,
+            title_override,
         });
     }
 
@@ -7705,36 +7730,25 @@ impl WinitApp {
 
     fn decide_snapshot_for_chart(&self, chart_id: i64) -> RenderSnapshot {
         let mut snapshot = RenderSnapshot::default();
-        if let Some(SelectItem::Chart(row)) = self.select_items.iter().find(|item| match item {
-            SelectItem::Chart(row) => {
-                row.chart.as_ref().is_some_and(|chart| chart.chart_id == chart_id)
-            }
-            SelectItem::Folder { .. }
-            | SelectItem::Course(_)
-            | SelectItem::Executable(_)
-            | SelectItem::Config(_)
-            | SelectItem::KeyBinding(_)
-            | SelectItem::Back
-            | SelectItem::AdvancedSettings => false,
-        }) && let Some(chart) = &row.chart
-        {
-            snapshot.title = chart.title.clone();
-            snapshot.subtitle = chart.subtitle.clone();
-            snapshot.artist = chart.artist.clone();
-            snapshot.subartist = chart.subartist.clone();
-            snapshot.genre = chart.genre.clone();
-            snapshot.difficulty_name = chart.difficulty_name.clone();
-            snapshot.play_level = chart.play_level.clone();
-            snapshot.judge_rank = chart.judge_rank;
-            snapshot.total_notes =
+        let metadata = chart_snapshot_metadata_for_chart(
+            &self.select_items,
+            chart_id,
+            |chart_id| {
+                self.boot
+                .library_db
+                .list_charts_by_ids(&[chart_id])
+                .map_err(|error| {
+                    tracing::warn!(%error, chart_id, "failed to load chart metadata for play snapshot");
+                    error
+                })
+                .ok()
+                .and_then(|mut charts| charts.pop())
+            },
+        );
+        if let Some((chart, best_ex_score)) = metadata {
+            let total_notes =
                 chart.scored_total_notes_for_setting(self.boot.profile_config.play.ln_mode_policy);
-            snapshot.duration = TimeUs(chart.length_ms.saturating_mul(1_000));
-            snapshot.min_bpm = chart.min_bpm as f32;
-            snapshot.max_bpm = chart.max_bpm as f32;
-            snapshot.now_bpm = chart.initial_bpm as f32;
-            // PACEMAKER の MyBest 表示。projected (ghost 進行値) は進捗 0 なので 0。
-            snapshot.best_ex_score = row.best_score.as_ref().map(|best| best.ex_score);
-            snapshot.projected_best_ex_score = snapshot.best_ex_score.map(|_| 0);
+            apply_chart_metadata_to_snapshot(&mut snapshot, &chart, total_notes, best_ex_score);
         }
         let (primary, secondary, fallback) = self.table_text_context_for_chart(chart_id).as_tuple();
         snapshot.table_text_primary = primary;
@@ -16761,6 +16775,47 @@ fn select_click_event_arg(
     }
 }
 
+fn chart_snapshot_metadata_for_chart(
+    select_items: &[SelectItem],
+    chart_id: i64,
+    fallback: impl FnOnce(i64) -> Option<ChartListItem>,
+) -> Option<(ChartListItem, Option<u32>)> {
+    select_items
+        .iter()
+        .find_map(|item| match item {
+            SelectItem::Chart(row) => row.chart.as_ref().and_then(|chart| {
+                (chart.chart_id == chart_id)
+                    .then(|| (chart.clone(), row.best_score.as_ref().map(|best| best.ex_score)))
+            }),
+            _ => None,
+        })
+        .or_else(|| fallback(chart_id).map(|chart| (chart, None)))
+}
+
+fn apply_chart_metadata_to_snapshot(
+    snapshot: &mut RenderSnapshot,
+    chart: &ChartListItem,
+    total_notes: u32,
+    best_ex_score: Option<u32>,
+) {
+    snapshot.title.clone_from(&chart.title);
+    snapshot.subtitle.clone_from(&chart.subtitle);
+    snapshot.artist.clone_from(&chart.artist);
+    snapshot.subartist.clone_from(&chart.subartist);
+    snapshot.genre.clone_from(&chart.genre);
+    snapshot.difficulty_name.clone_from(&chart.difficulty_name);
+    snapshot.play_level.clone_from(&chart.play_level);
+    snapshot.judge_rank = chart.judge_rank;
+    snapshot.total_notes = total_notes;
+    snapshot.duration = TimeUs(chart.length_ms.saturating_mul(1_000));
+    snapshot.min_bpm = chart.min_bpm as f32;
+    snapshot.max_bpm = chart.max_bpm as f32;
+    snapshot.now_bpm = chart.initial_bpm as f32;
+    // PACEMAKER の MyBest 表示。projected (ghost 進行値) は進捗 0 なので 0。
+    snapshot.best_ex_score = best_ex_score;
+    snapshot.projected_best_ex_score = best_ex_score.map(|_| 0);
+}
+
 fn course_titles_from_entries<'a>(
     entries: impl IntoIterator<Item = (&'a str, bool)>,
 ) -> [String; 10] {
@@ -18574,7 +18629,6 @@ mod tests {
     use crate::config::profile_config::ProfileConfig;
     use crate::screens::select_model::{SelectChartRow, SelectCourseRow};
     use crate::skin_loader::default_skin_root;
-    use crate::storage::library_db::ChartListItem;
     use crate::storage::score_db::BestScoreSummary;
 
     use super::*;
@@ -18583,6 +18637,69 @@ mod tests {
     fn winit_app_stack_size_stays_bounded() {
         let size = std::mem::size_of::<WinitApp>();
         assert!(size < 64 * 1024, "WinitApp is {size} bytes");
+    }
+
+    #[test]
+    fn course_decide_title_override_does_not_replace_play_snapshot_title() {
+        let transition = DecideTransition {
+            chart_id: 1,
+            options: PlayStartOptions::default(),
+            started_at: Instant::now(),
+            fadeout_started_at: None,
+            cancel: false,
+            snapshot: RenderSnapshot {
+                title: "Song Title".to_string(),
+                subtitle: "Song Subtitle".to_string(),
+                ..RenderSnapshot::default()
+            },
+            title_override: Some(DecideTitleOverride {
+                title: "Course Title".to_string(),
+                subtitle: String::new(),
+            }),
+        };
+
+        let decide_snapshot = transition.snapshot_for_render();
+
+        assert_eq!(decide_snapshot.title, "Course Title");
+        assert_eq!(decide_snapshot.subtitle, "");
+        assert_eq!(transition.snapshot.title, "Song Title");
+        assert_eq!(transition.snapshot.subtitle, "Song Subtitle");
+    }
+
+    #[test]
+    fn course_play_snapshot_uses_fallback_metadata_when_chart_row_is_absent() {
+        let mut chart = select_chart_row(7).chart.unwrap();
+        chart.title = "Resolved Song".to_string();
+        chart.subtitle = "Resolved Subtitle".to_string();
+        let items = vec![SelectItem::Course(select_course_row(1, 1))];
+        let (chart, best_ex_score) = chart_snapshot_metadata_for_chart(&items, 7, |chart_id| {
+            assert_eq!(chart_id, 7);
+            Some(chart)
+        })
+        .expect("library chart metadata");
+        let mut snapshot = RenderSnapshot::default();
+
+        apply_chart_metadata_to_snapshot(&mut snapshot, &chart, 123, best_ex_score);
+
+        assert_eq!(snapshot.title, "Resolved Song");
+        assert_eq!(snapshot.subtitle, "Resolved Subtitle");
+        assert_eq!(snapshot.total_notes, 123);
+        assert_eq!(snapshot.best_ex_score, None);
+    }
+
+    #[test]
+    fn chart_snapshot_metadata_preserves_selected_chart_best_score() {
+        let mut row = select_chart_row(7);
+        row.best_score = Some(best_score_with_replay(456, "best.json"));
+        let items = vec![SelectItem::Chart(row)];
+
+        let (chart, best_ex_score) = chart_snapshot_metadata_for_chart(&items, 7, |_| {
+            panic!("selected chart metadata should take priority")
+        })
+        .expect("selected chart metadata");
+
+        assert_eq!(chart.title, "Title 7");
+        assert_eq!(best_ex_score, Some(456));
     }
 
     #[test]
