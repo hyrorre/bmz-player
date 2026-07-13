@@ -30,6 +30,7 @@ GET    /api/v1/rivals
 POST   /api/v1/rivals                          # { target_player_id, action: add|remove }
 GET    /api/v1/players/{id}                    # プロフィール + best scores
 GET    /api/v1/daily                           # player/date/mode=all の日次成果
+POST   /api/v1/admin/difficulty-tables/sync    # 管理者による難易度表の即時同期
 GET    /api/v1/device-keys                     # 自分の署名鍵一覧
 POST   /api/v1/device-keys                     # 公開鍵登録 (同一鍵は再利用)
 DELETE /api/v1/device-keys/{id}                # 失効 (revoked_at)
@@ -54,6 +55,11 @@ GET    /api/v1/courses/{course_hash}/ranking   # global のみ
 `daily_boundary_minutes` (JST 00:00 からの分、既定 0) で設定できる。難易度表は
 運用側 allowlist を 6 時間ごとに D1 へ世代同期し、日次 API 返却時に MD5 優先、
 SHA-256 fallback でラベルを付与する。
+
+難易度表を即時同期する管理APIは、ログイン済みユーザーのうち
+`NUXT_IR_ADMIN_USER_IDS`（カンマ区切り）に含まれるIDだけが実行できる。未設定時は
+全ユーザーを拒否する。Cronと管理APIが重なった場合はD1の期限付きロックで片方を
+`already_running`としてスキップする。
 
 ### クライアント (bmz-player)
 

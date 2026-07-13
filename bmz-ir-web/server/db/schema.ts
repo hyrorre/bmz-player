@@ -177,6 +177,12 @@ export const difficultyTableEntries = sqliteTable(
   ],
 )
 
+export const taskLocks = sqliteTable('task_locks', {
+  name: text('name').primaryKey(),
+  owner: text('owner').notNull(),
+  leaseUntil: integer('lease_until', { mode: 'timestamp_ms' }).notNull(),
+})
+
 export const scores = sqliteTable(
   'scores',
   {

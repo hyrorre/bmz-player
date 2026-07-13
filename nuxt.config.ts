@@ -21,6 +21,7 @@ export default defineNuxtConfig({
   runtimeConfig: {
     ir: {
       providerKey: process.env.NUXT_IR_PROVIDER_KEY || '',
+      adminUserIds: process.env.NUXT_IR_ADMIN_USER_IDS || '',
     },
     session: {
       name: 'bmz-session',
