@@ -282,8 +282,8 @@ fn gamepad_stable_slots_unassigned(slots: &[Option<String>; 2]) -> bool {
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "PascalCase")]
 pub enum GamepadBackendKind {
-    #[default]
     Auto,
+    #[default]
     Gilrs,
     GameInput,
 }
@@ -497,7 +497,7 @@ impl Default for AppConfig {
             select: MusicSelectConfig::default(),
             input: GlobalInputConfig {
                 backend: InputBackendKind::Auto,
-                gamepad_backend: GamepadBackendKind::Auto,
+                gamepad_backend: GamepadBackendKind::Gilrs,
                 keyboard_enabled: true,
                 gamepad_enabled: true,
                 midi_enabled: false,
@@ -533,6 +533,24 @@ mod tests {
         assert!(!config.scan.auto_rescan_on_startup);
         assert_eq!(config.video.vsync_mode, VsyncModeConfig::Vsync);
         assert_eq!(config.video.frame_limit_in_background, 60);
+    }
+
+    #[test]
+    fn app_config_defaults_gamepad_backend_to_gilrs() {
+        let config = AppConfig::default();
+
+        assert_eq!(config.input.gamepad_backend, GamepadBackendKind::Gilrs);
+    }
+
+    #[test]
+    fn app_config_loads_missing_gamepad_backend_as_gilrs() {
+        let toml = toml::to_string(&AppConfig::default())
+            .unwrap()
+            .replace("gamepad_backend = \"Gilrs\"\n", "");
+
+        let config: AppConfig = toml::from_str(&toml).unwrap();
+
+        assert_eq!(config.input.gamepad_backend, GamepadBackendKind::Gilrs);
     }
 
     #[test]
