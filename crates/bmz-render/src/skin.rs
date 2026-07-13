@@ -3405,7 +3405,7 @@ impl SkinDocumentRenderExt for SkinDocument {
             title: selected_row.map(|row| row.title.as_str()).unwrap_or(&snapshot.selected_title),
             subtitle: select_detail_subtitle(snapshot, selected_row),
             artist: select_detail_artist(snapshot, selected_row),
-            genre: "",
+            genre: selected_row.map(|row| row.genre.as_str()).unwrap_or_default(),
             difficulty_name: if snapshot.in_settings {
                 ""
             } else {
@@ -23043,6 +23043,38 @@ mod tests {
         let state = SkinDrawState { total_notes: 100, ..SkinDrawState::default() };
         assert_eq!(graph_value(113, &state), 0.0);
         assert_eq!(graph_value(115, &state), 0.0);
+    }
+
+    #[test]
+    fn select_render_items_passes_selected_row_genre_to_string_ref_13() {
+        let document: SkinDocument = serde_json::from_str(
+            r#"
+            {
+                "type": 5,
+                "w": 100,
+                "h": 100,
+                "text": [{ "id": "genre", "size": 6, "ref": 13 }],
+                "destination": [{ "id": "genre", "dst": [{ "x": 10, "y": 40, "w": 40, "h": 6 }] }]
+            }
+            "#,
+        )
+        .unwrap();
+        let snapshot = SelectSnapshot {
+            selected_index: 0,
+            rows: vec![SelectRowSnapshot {
+                index: 0,
+                genre: "Techno".to_string(),
+                ..SelectRowSnapshot::default()
+            }],
+            ..SelectSnapshot::default()
+        };
+
+        let items = document.select_render_items(&HashMap::new(), &snapshot);
+
+        assert!(items.iter().any(|item| matches!(
+            item,
+            SkinRenderItem::Text { text, .. } if text == "Techno"
+        )));
     }
 
     #[test]

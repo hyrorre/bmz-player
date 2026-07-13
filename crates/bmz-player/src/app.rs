@@ -15894,6 +15894,7 @@ fn select_snapshot_rows(
                     title: name.clone(),
                     subtitle: String::new(),
                     artist: String::new(),
+                    genre: String::new(),
                     difficulty_name: String::new(),
                     play_level: String::new(),
                     table_level: String::new(),
@@ -15970,6 +15971,11 @@ fn select_snapshot_rows(
                             .map(|chart| chart.subtitle.clone())
                             .unwrap_or_default(),
                         artist: row.display_artist().to_string(),
+                        genre: row
+                            .chart
+                            .as_ref()
+                            .map(|chart| chart.genre.clone())
+                            .unwrap_or_default(),
                         difficulty_name: row
                             .chart
                             .as_ref()
@@ -16134,6 +16140,7 @@ fn select_snapshot_rows(
                     // Use the trophy names joined as "subtitle" so the artist
                     // slot shows e.g. "silvermedal / goldmedal".
                     artist: row.trophy_names.join(" / "),
+                    genre: String::new(),
                     // Beatoraja-style category tag (DAN / COURSE).
                     difficulty_name: row.category_label.clone(),
                     // Beatoraja GradeBar rows do not expose a play level.
@@ -16207,6 +16214,7 @@ fn select_snapshot_rows(
                         title: row.label().to_string(),
                         subtitle: String::new(),
                         artist: value.clone(),
+                        genre: String::new(),
                         difficulty_name: String::new(),
                         play_level: value,
                         table_level: String::new(),
@@ -16269,6 +16277,7 @@ fn select_snapshot_rows(
                         title: row.label(),
                         subtitle: String::new(),
                         artist: value.clone(),
+                        genre: String::new(),
                         difficulty_name: String::new(),
                         play_level: value,
                         table_level: String::new(),
@@ -16324,6 +16333,7 @@ fn select_snapshot_rows(
                     title: "戻る".to_string(),
                     subtitle: String::new(),
                     artist: String::new(),
+                    genre: String::new(),
                     difficulty_name: String::new(),
                     play_level: String::new(),
                     table_level: String::new(),
@@ -16378,6 +16388,7 @@ fn select_snapshot_rows(
                     title: "詳細設定".to_string(),
                     subtitle: String::new(),
                     artist: String::new(),
+                    genre: String::new(),
                     difficulty_name: String::new(),
                     play_level: String::new(),
                     table_level: String::new(),
