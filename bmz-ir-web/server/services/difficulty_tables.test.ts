@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'bun:test'
+import { DIFFICULTY_TABLE_SOURCES } from '../constants/difficulty_tables'
 import {
   __test,
   syncAllowlistedDifficultyTables,
@@ -62,6 +63,30 @@ describe('difficulty table parsing', () => {
 })
 
 describe('difficulty table fetching', () => {
+  test('declares the external origins used by the operator allowlist', () => {
+    const sources = new Map(
+      DIFFICULTY_TABLE_SOURCES.map(({ sourceUrl, allowedOrigins }) => [
+        sourceUrl,
+        allowedOrigins ?? [],
+      ]),
+    )
+
+    expect(sources.get('https://rattoto10.jounin.jp/table.html')).toEqual([
+      'https://rattoto10.github.io',
+    ])
+    expect(sources.get('https://mplwtch.github.io/Solomon/')).toEqual([
+      'https://script.google.com',
+      'https://script.googleusercontent.com',
+    ])
+    expect(sources.get('https://pmsdifficulty.xxxxxxxx.jp/_pastoral_upper.html')).toEqual([
+      'https://pmsdatabase.github.io',
+      'https://pmsdatabase-isr.vercel.app',
+      'https://script.google.com',
+      'https://script.googleusercontent.com',
+    ])
+    expect(sources.get('https://hibyethere.github.io/table/')).toEqual(['https://asumatoki.kr'])
+  })
+
   test('calls the supplied fetch function without an object receiver', async () => {
     const fetchImpl = function (this: unknown, input: string | URL | Request) {
       expect(this).toBeUndefined()
@@ -131,6 +156,39 @@ describe('difficulty table fetching', () => {
       __test.fetchDifficultyTable({ sourceUrl: 'https://example.com/header.json' }, { fetchImpl }),
     ).rejects.toThrow('resource origin is not allowlisted')
     expect(requested).toEqual(['https://example.com/header.json'])
+  })
+
+  test('follows redirects across explicitly allowed resource origins', async () => {
+    const requested: string[] = []
+    const fetchImpl = (async (input: string | URL | Request) => {
+      const url = String(input)
+      requested.push(url)
+      if (url === 'https://table.example/header.json') {
+        return new Response(`{"name":"X","symbol":"x","data_url":"https://script.google.com/data"}`)
+      }
+      if (url === 'https://script.google.com/data') {
+        return new Response('', {
+          status: 302,
+          headers: { location: 'https://script.googleusercontent.com/data' },
+        })
+      }
+      return new Response(`[{"level":"1","md5":"${'a'.repeat(32)}"}]`)
+    }) as typeof fetch
+
+    const table = await __test.fetchDifficultyTable(
+      {
+        sourceUrl: 'https://table.example/header.json',
+        allowedOrigins: ['https://script.google.com', 'https://script.googleusercontent.com'],
+      },
+      { fetchImpl },
+    )
+
+    expect(requested).toEqual([
+      'https://table.example/header.json',
+      'https://script.google.com/data',
+      'https://script.googleusercontent.com/data',
+    ])
+    expect(table.entries).toHaveLength(1)
   })
 
   test('enforces the streaming response size limit', async () => {
