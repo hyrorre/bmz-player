@@ -8,6 +8,7 @@
   - ゲームパッドbackendの既定値と自動選択はgilrsを優先し、Windowsでgilrsを初期化できない場合はGameInputへfallbackします。
   - GameInputのreading時刻を判定へ渡し、1P / 2P割り当てをstable device IDで保存するようにしました。
   - GameInputの履歴取得をデバイス単位にし、曲終了後や一時切断後も入力と割り当てが復帰するようにしました。
+  - ウィンドウのフォーカス切り替え時に選曲holdとアナログ入力を再同期し、選曲カーソルが意図せず動く問題を修正しました。
 
 ## v0.1.7
 

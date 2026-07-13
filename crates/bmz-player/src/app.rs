@@ -602,6 +602,8 @@ struct WinitApp {
     applied_window_mode: WindowMode,
     /// ウィンドウがフォーカスを持っているか。フレームレート上限の切替に使う。
     focused: bool,
+    /// フォーカス復帰直後の gamepad poll を状態再同期だけに使う。
+    discard_gamepad_output_until_resynced: bool,
     /// 直近フレームの開始時刻。フレームレート制限のスリープ量算出に使う。
     last_frame_at: Option<Instant>,
     /// Worker から取り込んだスキンを次の redraw で即表示するため、
@@ -2246,6 +2248,7 @@ impl WinitApp {
             egui: None,
             applied_window_mode: initial_window_mode,
             focused: true,
+            discard_gamepad_output_until_resynced: false,
             last_frame_at: None,
             skip_next_frame_pace: false,
             wgpu_fps: 0.0,
@@ -4697,6 +4700,21 @@ impl WinitApp {
         let Some(gamepad) = &mut self.gamepad else { return };
         let backend_name = gamepad.name();
         let output = gamepad.poll();
+        if should_discard_gamepad_output(
+            self.focused,
+            &mut self.discard_gamepad_output_until_resynced,
+        ) {
+            for event in output
+                .buttons
+                .iter()
+                .filter(|event| should_route_gamepad_event_while_discarding(event.pressed))
+            {
+                self.route_gamepad_button_event(event);
+            }
+            self.reset_select_analog_scroll();
+            self.reset_play_analog_scroll();
+            return;
+        }
         if should_log_raw_input {
             for event in &output.raw_events {
                 log_gamepad_key_config_raw_event(backend_name, event);
@@ -4713,11 +4731,7 @@ impl WinitApp {
             );
         }
         for event in &output.buttons {
-            let device_event = crate::input::gamepad::to_device_input_event(event);
-            if let Some(input) = self.play_input_backend() {
-                input.push_shared_event(device_event);
-            }
-            self.route_gamepad_button(event.device_id, &event.name, event.pressed);
+            self.route_gamepad_button_event(event);
         }
         for tick in &output.axis_ticks {
             // キーコンフィグ待ち受け中は合成 Press を待たず、生 tick から直接捕捉する。
@@ -4729,6 +4743,14 @@ impl WinitApp {
             }
             self.route_gamepad_axis_ticks(&tick.name, tick.ticks);
         }
+    }
+
+    fn route_gamepad_button_event(&mut self, event: &crate::input::gamepad::GamepadButtonEvent) {
+        let device_event = crate::input::gamepad::to_device_input_event(event);
+        if let Some(input) = self.play_input_backend() {
+            input.push_shared_event(device_event);
+        }
+        self.route_gamepad_button(event.device_id, &event.name, event.pressed);
     }
 
     fn should_log_gamepad_key_config_raw_input(&self) -> bool {
@@ -4867,6 +4889,10 @@ impl WinitApp {
     /// 蓄積したアナログ tick を analog_ticks_per_scroll ごとに 1 移動へ変換する。
     /// beatoraja MusicSelectInputProcessor の analogScrollBuffer と同じ仕組み。
     fn advance_select_analog_scroll(&mut self) {
+        if !self.focused {
+            self.reset_select_analog_scroll();
+            return;
+        }
         if !matches!(self.view_state(), AppViewState::Select) {
             self.reset_select_analog_scroll();
             return;
@@ -5658,6 +5684,10 @@ impl WinitApp {
     }
 
     fn advance_select_hold_move(&mut self) {
+        if !self.focused {
+            self.clear_select_hold();
+            return;
+        }
         if !matches!(self.view_state(), AppViewState::Select) {
             self.clear_select_hold();
             return;
@@ -14107,6 +14137,17 @@ fn release_raw_input_pressed_keys(
     }
 }
 
+fn should_discard_gamepad_output(focused: bool, discard_until_resynced: &mut bool) -> bool {
+    if !focused {
+        return true;
+    }
+    std::mem::take(discard_until_resynced)
+}
+
+fn should_route_gamepad_event_while_discarding(pressed: bool) -> bool {
+    !pressed
+}
+
 fn config_renderer_backend(
     backend: crate::config::app_config::RendererBackend,
 ) -> bmz_render::WgpuBackend {
@@ -14253,9 +14294,13 @@ impl ApplicationHandler<AppUserEvent> for WinitApp {
             WindowEvent::Focused(focused) => {
                 self.focused = focused;
                 if !focused {
+                    self.discard_gamepad_output_until_resynced = true;
                     self.pressed_controls.clear();
                     self.release_raw_input_pressed_keys();
                     self.sync_select_holds_from_pressed_controls();
+                    self.clear_select_hold();
+                    self.reset_select_analog_scroll();
+                    self.reset_play_analog_scroll();
                     self.clear_play_control_holds();
                 }
             }
@@ -18958,6 +19003,19 @@ mod tests {
         let events = input.clone().drain_events();
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].kind, InputKind::Release);
+    }
+
+    #[test]
+    fn gamepad_output_is_discarded_while_unfocused_and_once_after_regain() {
+        let mut discard_until_resynced = true;
+
+        assert!(should_discard_gamepad_output(false, &mut discard_until_resynced));
+        assert!(discard_until_resynced);
+        assert!(should_discard_gamepad_output(true, &mut discard_until_resynced));
+        assert!(!discard_until_resynced);
+        assert!(!should_discard_gamepad_output(true, &mut discard_until_resynced));
+        assert!(!should_route_gamepad_event_while_discarding(true));
+        assert!(should_route_gamepad_event_while_discarding(false));
     }
 
     #[test]
