@@ -40,8 +40,17 @@ impl MixerState {
 
     pub fn push_scheduled(&mut self, sounds: impl IntoIterator<Item = ScheduledSound>) {
         for sound in sounds {
-            if sound.restart_policy == RestartPolicy::StopSameSound {
-                stop_same_sound_at(&mut self.voices, sound.sound_id, sound.start_frame);
+            match sound.restart_policy {
+                RestartPolicy::StopSameSound => {
+                    stop_same_sound_at(&mut self.voices, sound.sound_id, sound.start_frame);
+                }
+                RestartPolicy::LimitSameSound(max_voices) => {
+                    if max_voices == 0 {
+                        continue;
+                    }
+                    limit_same_sound(&mut self.voices, sound.sound_id, max_voices);
+                }
+                RestartPolicy::Overlap => {}
             }
             self.voices.push(ActiveVoice {
                 next_output_frame: sound.start_frame,
@@ -186,6 +195,23 @@ impl MixerState {
                 *sample *= self.master_gain;
             }
         }
+    }
+}
+
+fn limit_same_sound(
+    voices: &mut Vec<ActiveVoice>,
+    sound_id: bmz_core::ids::SoundId,
+    max_voices: usize,
+) {
+    let mut same_sound_count =
+        voices.iter().filter(|voice| voice.sound.sound_id == sound_id).count();
+    while same_sound_count >= max_voices {
+        let Some(index) = voices.iter().position(|voice| voice.sound.sound_id == sound_id) else {
+            break;
+        };
+        // voice は古い順に追加されるため、最新の音を残して最古のものを落とす。
+        voices.swap_remove(index);
+        same_sound_count -= 1;
     }
 }
 
@@ -527,6 +553,26 @@ mod tests {
 
         assert_eq!(output, vec![1.0, 1.0, 2.0, 2.0, 2.0, 2.0, 1.0, 1.0]);
         assert!(mixer.voices.is_empty());
+    }
+
+    #[test]
+    fn limit_same_sound_policy_keeps_latest_voices_up_to_limit() {
+        let mut bank = SampleBank::default();
+        bank.insert(
+            SoundId(1),
+            DecodedSample { channels: 1, sample_rate: 48_000, frames: vec![1.0, 1.0, 1.0] },
+        );
+        let mut mixer = MixerState::default();
+        mixer.push_scheduled(
+            (0..5).map(|_| scheduled_sound(0, 1, 1.0, RestartPolicy::LimitSameSound(3))),
+        );
+
+        assert_eq!(mixer.voices.len(), 3);
+
+        let mut output = vec![0.0; 2];
+        mixer.mix_stereo(&bank, 0, &mut output);
+
+        assert_eq!(output, vec![3.0, 3.0]);
     }
 
     #[test]

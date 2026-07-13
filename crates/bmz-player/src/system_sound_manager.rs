@@ -27,6 +27,7 @@ use crate::system_sound::{SoundSetSelection, SoundType};
 /// BMS の `#WAVxx` は base-36 で最大 1296 個なので、100_000 オフセットなら衝突しない。
 const SYSTEM_SOUND_BASE: u32 = 100_000;
 const VOLUME_EPSILON: f32 = 0.000_1;
+const MAX_SCRATCH_VOICES: usize = 3;
 
 pub struct SystemSoundManager {
     engine: AudioEngineHandle,
@@ -103,10 +104,15 @@ impl SystemSoundManager {
         if sound_type.is_bgm() {
             commands.push(AudioEngineCommand::StopSound { id });
         }
-        commands.push(AudioEngineCommand::PlayNow {
-            sound_id: id,
-            volume: master_volume,
-            loop_playback,
+        commands.push(if sound_type == SoundType::Scratch {
+            AudioEngineCommand::PlayNowWithVoiceLimit {
+                sound_id: id,
+                volume: master_volume,
+                loop_playback,
+                max_voices: MAX_SCRATCH_VOICES,
+            }
+        } else {
+            AudioEngineCommand::PlayNow { sound_id: id, volume: master_volume, loop_playback }
         });
         if self.engine.push_commands(commands) {
             self.master_gain.set(gain);
@@ -315,6 +321,27 @@ mod tests {
 
         manager.play(SoundType::ResultClose, 1.0);
         assert_eq!(render(&mut processor, 1, 1), vec![1.25, 1.25]);
+    }
+
+    #[test]
+    fn play_scratch_limits_overlapping_voices_to_three() {
+        let (engine, mut processor) = test_engine();
+        let scratch_id = SoundId(SYSTEM_SOUND_BASE);
+        let mut id_map = HashMap::new();
+        id_map.insert(SoundType::Scratch, scratch_id);
+        insert_sample(
+            &engine,
+            &mut processor,
+            scratch_id,
+            DecodedSample { channels: 1, sample_rate: 48_000, frames: vec![1.0; 4] },
+        );
+
+        let manager = SystemSoundManager::with_id_map(engine, id_map);
+        for _ in 0..5 {
+            manager.play(SoundType::Scratch, 1.0);
+        }
+
+        assert_eq!(render(&mut processor, 0, 1), vec![3.0, 3.0]);
     }
 
     #[test]
