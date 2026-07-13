@@ -128,6 +128,37 @@ export function validateCourseScoreSubmission(value: unknown): CourseScoreSubmis
       throw new Error(`result.entries[${index}] must be an object`)
     }
   }
+  if (typeof payload.result.course_clear !== 'boolean') {
+    throw new Error('result.course_clear must be a boolean')
+  }
+  if (typeof payload.result.course_failed !== 'boolean') {
+    throw new Error('result.course_failed must be a boolean')
+  }
+  if (payload.result.played_entries === 0) {
+    throw new Error('result.played_entries must be at least 1')
+  }
+  if (payload.result.entries.length !== payload.result.played_entries) {
+    throw new Error('result.entries length must match result.played_entries')
+  }
+  if (payload.result.played_entries > payload.course.charts.length) {
+    throw new Error('result.played_entries exceeds course.charts length')
+  }
+  if (
+    !payload.result.course_failed &&
+    payload.result.played_entries !== payload.course.charts.length
+  ) {
+    throw new Error('a non-failed course must include every chart')
+  }
+  if (payload.result.course_failed && payload.result.course_clear) {
+    throw new Error('a failed course cannot be course_clear')
+  }
+  if (typeof payload.result.clear !== 'string') {
+    throw new Error('result.clear must be a string')
+  }
+  const expectedClear = courseResultClearType(payload.rule.gauge, payload.result.course_failed)
+  if (payload.result.clear !== expectedClear) {
+    throw new Error(`result.clear must be ${expectedClear} for the final course state`)
+  }
   if (!payload.idempotency_key || typeof payload.idempotency_key !== 'string') {
     throw new Error('idempotency_key is required')
   }
@@ -139,6 +170,30 @@ export function validateCourseScoreSubmission(value: unknown): CourseScoreSubmis
   }
   validateSeedOptions(payload.play_options)
   return payload
+}
+
+function courseResultClearType(gauge: string, courseFailed: boolean): string {
+  if (courseFailed) {
+    return 'Failed'
+  }
+  switch (gauge) {
+    case 'AssistEasy':
+      return 'AssistEasy'
+    case 'Easy':
+      return 'Easy'
+    case 'Normal':
+    case 'Class':
+      return 'Normal'
+    case 'Hard':
+    case 'ExClass':
+      return 'Hard'
+    case 'ExHard':
+    case 'Hazard':
+    case 'ExHardClass':
+      return 'ExHard'
+    default:
+      throw new Error('rule.gauge is invalid')
+  }
 }
 
 function normalizeCourseLnPolicy(value: unknown): string {

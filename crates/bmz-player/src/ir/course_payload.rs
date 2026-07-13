@@ -192,7 +192,7 @@ fn course_result_clear_type(result: &CourseResultSummary) -> bmz_core::clear::Cl
     if result.course_failed {
         return ClearType::Failed;
     }
-    if !result.course_clear {
+    if result.played_entries == 0 {
         return ClearType::NoPlay;
     }
 
@@ -329,10 +329,11 @@ mod tests {
         assert_eq!(payload["rule"]["ln_policy"], "ForceHcn");
         assert_eq!(payload["rule"]["rule_mode"], "Dx");
         assert_eq!(payload["result"]["max_combo"], json!(123));
+        assert_eq!(payload["result"]["clear"], json!("NoPlay"));
     }
 
     #[test]
-    fn course_submission_uses_final_course_clear_for_result_lamp() {
+    fn course_submission_uses_final_course_gauge_for_result_lamp() {
         let definition = IrCourseDefinition {
             charts: vec!["ab".repeat(32)],
             constraints: json!({ "gauge": "ExClass" }),
@@ -389,7 +390,7 @@ mod tests {
     }
 
     #[test]
-    fn course_submission_separates_stage_and_course_clear_lamps() {
+    fn course_submission_keeps_course_lamp_without_a_trophy() {
         let definition = IrCourseDefinition {
             charts: vec!["ab".repeat(32), "cd".repeat(32)],
             constraints: json!({ "gauge": "Hard" }),
@@ -418,7 +419,7 @@ mod tests {
             course_max_combo: 456,
             judge_counts: ResultJudgeCounts::default(),
             trophy_results: Vec::new(),
-            course_clear: true,
+            course_clear: false,
             course_failed: false,
             total_entries: 2,
             played_entries: 2,
@@ -444,6 +445,7 @@ mod tests {
         );
 
         assert_eq!(payload["result"]["clear"], json!("Hard"));
+        assert_eq!(payload["result"]["course_clear"], json!(false));
         assert_eq!(payload["result"]["entries"][0]["clear"], json!("NoPlay"));
         assert_eq!(payload["result"]["entries"][1]["clear"], json!("FullCombo"));
     }

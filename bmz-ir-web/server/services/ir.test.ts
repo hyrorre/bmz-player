@@ -376,6 +376,85 @@ describe('course score validation', () => {
 
     expect(() => validateCourseScoreSubmission(payload)).toThrow('rule_mode is invalid')
   })
+
+  test('accepts a completed course without an achieved trophy', () => {
+    const payload = baseCourseSubmission()
+    payload.result.course_clear = false
+
+    expect(validateCourseScoreSubmission(payload).result.clear).toBe('Normal')
+  })
+
+  test('rejects NoPlay for a completed course', () => {
+    const payload = baseCourseSubmission()
+    payload.result.course_clear = false
+    payload.result.clear = 'NoPlay'
+
+    expect(() => validateCourseScoreSubmission(payload)).toThrow(
+      'result.clear must be Normal for the final course state',
+    )
+  })
+
+  test('accepts a failed course with a partial result', () => {
+    const payload = baseCourseSubmission()
+    payload.result.clear = 'Failed'
+    payload.result.course_clear = false
+    payload.result.course_failed = true
+    payload.result.played_entries = 1
+    payload.result.entries = payload.result.entries.slice(0, 1)
+
+    expect(validateCourseScoreSubmission(payload).result.clear).toBe('Failed')
+  })
+
+  test('rejects a clear lamp for a failed course', () => {
+    const payload = baseCourseSubmission()
+    payload.result.course_clear = false
+    payload.result.course_failed = true
+
+    expect(() => validateCourseScoreSubmission(payload)).toThrow(
+      'result.clear must be Failed for the final course state',
+    )
+  })
+
+  test('rejects a partial non-failed course', () => {
+    const payload = baseCourseSubmission()
+    payload.result.played_entries = 1
+    payload.result.entries = payload.result.entries.slice(0, 1)
+
+    expect(() => validateCourseScoreSubmission(payload)).toThrow(
+      'a non-failed course must include every chart',
+    )
+  })
+
+  test('rejects a played entry count that differs from entries', () => {
+    const payload = baseCourseSubmission()
+    payload.result.played_entries = 1
+
+    expect(() => validateCourseScoreSubmission(payload)).toThrow(
+      'result.entries length must match result.played_entries',
+    )
+  })
+
+  test('derives the completed course lamp from the final gauge', () => {
+    const cases = [
+      ['AssistEasy', 'AssistEasy'],
+      ['Easy', 'Easy'],
+      ['Normal', 'Normal'],
+      ['Class', 'Normal'],
+      ['Hard', 'Hard'],
+      ['ExClass', 'Hard'],
+      ['ExHard', 'ExHard'],
+      ['Hazard', 'ExHard'],
+      ['ExHardClass', 'ExHard'],
+    ] as const
+
+    for (const [gauge, clear] of cases) {
+      const payload = baseCourseSubmission()
+      payload.rule.gauge = gauge
+      payload.result.clear = clear
+
+      expect(validateCourseScoreSubmission(payload).result.clear).toBe(clear)
+    }
+  })
 })
 
 function rankingRow(overrides: Partial<ReturnType<typeof baseRankingRow>> = {}) {
