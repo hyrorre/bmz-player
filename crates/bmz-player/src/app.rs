@@ -11249,14 +11249,18 @@ impl WinitApp {
             tracing::info!(mode = ?desired_mode, "window mode updated");
             self.applied_window_mode = desired_mode;
         }
+        let mut apply_obs_config = output.obs_enabled_changed;
         if output.save_app_config {
             match save_app_config(&self.boot.app_paths.config_toml, &self.boot.app_config) {
                 Ok(()) => {
                     tracing::info!("app config saved from egui settings panel");
-                    self.sync_obs_controller();
+                    apply_obs_config = true;
                 }
                 Err(error) => tracing::error!(%error, "failed to save app config"),
             }
+        }
+        if apply_obs_config {
+            self.sync_obs_controller();
         }
         if output.check_for_update {
             self.spawn_update_check("manual update check", true);

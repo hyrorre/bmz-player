@@ -293,6 +293,8 @@ pub struct EguiRunContext<'a, 'practice> {
 pub struct EguiOutput {
     /// renderer へ渡す描画データ。
     pub frame: EguiFrame,
+    /// OBS WebSocket の有効/無効変更を実行中のコントローラへ即時反映する要求。
+    pub obs_enabled_changed: bool,
     /// 本体設定 (`AppConfig`) の保存が要求されたか。
     pub save_app_config: bool,
     /// プロファイル設定 (`ProfileConfig`) の保存が要求されたか。
@@ -776,6 +778,7 @@ impl EguiLayer {
         let show_fps = &mut self.show_fps;
         let show_license_notice = &mut self.show_license_notice;
         let license_notice_text = &mut self.license_notice_text;
+        let mut obs_enabled_changed = false;
         let mut save_app_config = false;
         let mut save_profile_config = false;
         let mut reset_skin_config = false;
@@ -868,6 +871,7 @@ impl EguiLayer {
                         connected_gamepads,
                     },
                 );
+                obs_enabled_changed |= settings_actions.obs_enabled_changed;
                 save_app_config |= settings_actions.save;
                 save_profile_config |= settings_actions.save_profile;
                 check_for_update |= settings_actions.check_update;
@@ -911,6 +915,7 @@ impl EguiLayer {
                 textures_delta: full_output.textures_delta,
                 pixels_per_point: full_output.pixels_per_point,
             },
+            obs_enabled_changed,
             save_app_config,
             save_profile_config,
             reset_skin_config,
@@ -1727,6 +1732,7 @@ fn update_asset_kind_label(kind: UpdateAssetKind) -> &'static str {
 /// 本体設定パネルからのアクション要求。
 struct SettingsPanelActions {
     save: bool,
+    obs_enabled_changed: bool,
     save_profile: bool,
     check_update: bool,
     rescan: bool,
@@ -1915,6 +1921,7 @@ fn build_settings_panel(
     state: SettingsPanelState<'_>,
 ) -> SettingsPanelActions {
     let mut save_clicked = false;
+    let mut obs_enabled_changed = false;
     let mut save_profile = false;
     let mut rescan_clicked = false;
     let mut check_update_clicked = false;
@@ -2569,7 +2576,7 @@ fn build_settings_panel(
                     });
                 });
 
-                build_obs_settings_section(
+                obs_enabled_changed |= build_obs_settings_section(
                     ui,
                     config,
                     state.obs_scene_picker,
@@ -2835,6 +2842,7 @@ fn build_settings_panel(
         });
     SettingsPanelActions {
         save: save_clicked || apply_audio,
+        obs_enabled_changed,
         save_profile,
         check_update: check_update_clicked,
         rescan: rescan_clicked,
@@ -2850,10 +2858,11 @@ fn build_obs_settings_section(
     config: &mut AppConfig,
     state: &mut ObsScenePickerState,
     connection_status: &crate::obs::ObsConnectionStatus,
-) {
+) -> bool {
     state.poll();
+    let mut enabled_changed = false;
     egui::CollapsingHeader::new("OBS WebSocket").show(ui, |ui| {
-        ui.checkbox(&mut config.obs.enabled, "OBS WebSocket 連携");
+        enabled_changed = ui.checkbox(&mut config.obs.enabled, "OBS WebSocket 連携").changed();
         let (status_label, status_color) = obs_connection_status_label(connection_status.kind);
         ui.horizontal(|ui| {
             ui.label("接続状態");
@@ -2986,6 +2995,7 @@ fn build_obs_settings_section(
             }
         });
     });
+    enabled_changed
 }
 
 fn obs_connection_status_label(
