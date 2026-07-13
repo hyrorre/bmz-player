@@ -2942,18 +2942,6 @@ impl SkinDocumentRenderExt for SkinDocument {
                 .filter(|value| pre_ready_lane_cover_value_destination(destination, value, state))
                 .map(|_| 0)
         })?;
-        let corrected_turntable_destination =
-            is_second_14k_turntable_destination(self, destination_index, destination, state).then(
-                || {
-                    // 一部の14K Lua skin は同じ turntable object を 1P / 2P に並べる際、
-                    // 両方へ offset=1 を指定している。beatoraja と同じ左右逆回転にするため、
-                    // 2個目だけ 2P scratch-angle offset へ振り替える。
-                    let mut corrected = destination.clone();
-                    corrected.offset = 2;
-                    corrected
-                },
-            );
-        let destination = corrected_turntable_destination.as_ref().unwrap_or(destination);
         let mut frame = resolve_destination_frame(destination, elapsed, enabled_options, state)?;
         let is_hidden_cover_destination = self
             .hidden_cover
@@ -11457,28 +11445,6 @@ fn apply_skin_offset_to_frame(
     apply_skin_offset_to_frame_inner(destination, frame, state, include_hidden_cover_offsets, false)
 }
 
-fn is_second_14k_turntable_destination(
-    document: &SkinDocument,
-    destination_index: usize,
-    destination: &SkinDestinationDef,
-    state: &SkinDrawState,
-) -> bool {
-    document.skin_type == 2
-        && state.key_mode == KeyMode::K14
-        && destination.id == "turntable"
-        && destination.offset == 1
-        && !destination.offsets.contains(&2)
-        && document.destination[..destination_index]
-            .iter()
-            .filter_map(|entry| match entry {
-                DestinationListEntry::Single(destination) => Some(destination),
-                DestinationListEntry::Conditional { .. } => None,
-            })
-            .filter(|entry| entry.id == "turntable" && entry.offset == 1)
-            .count()
-            == 1
-}
-
 /// beatoraja の `SkinObject.setRelative(true)` 相当 (SkinNumber 等で使用)。
 /// destination の offset を適用する際、x/y シフトはスキップし w/h/r/a のみ加算する。
 fn apply_skin_offset_to_frame_relative(
@@ -15495,33 +15461,52 @@ mod tests {
     }
 
     #[test]
-    fn skin_document_uses_2p_offset_for_second_14k_turntable() {
+    fn skin_document_preserves_declared_14k_turntable_offsets() {
         let document: SkinDocument = serde_json::from_str(
             r#"
             {
                 "type": 2,
+                "w": 100,
+                "h": 100,
+                "source": [{ "id": "src", "path": "a.png" }],
+                "image": [{ "id": "turntable", "src": "src", "w": 10, "h": 10 }],
                 "destination": [
-                    { "id": "turntable", "offset": 1 },
-                    { "id": "turntable", "offset": 1 },
-                    { "id": "turntable", "offset": 1 }
+                    {
+                        "id": "turntable",
+                        "offset": 1,
+                        "dst": [{ "x": 0, "y": 0, "w": 10, "h": 10 }]
+                    },
+                    {
+                        "id": "turntable",
+                        "offset": 1,
+                        "dst": [{ "x": 20, "y": 0, "w": 10, "h": 10 }]
+                    },
+                    {
+                        "id": "turntable",
+                        "offset": 2,
+                        "dst": [{ "x": 40, "y": 0, "w": 10, "h": 10 }]
+                    }
                 ]
             }
             "#,
         )
         .unwrap();
-        let state = SkinDrawState { key_mode: KeyMode::K14, ..SkinDrawState::default() };
+        let mut skin_offsets = SkinOffsetValues::default();
+        skin_offsets.set(1, crate::skin_offset::SkinOffsetValue { r: 30, ..Default::default() });
+        skin_offsets.set(2, crate::skin_offset::SkinOffsetValue { r: 70, ..Default::default() });
+        let state =
+            SkinDrawState { key_mode: KeyMode::K14, skin_offsets, ..SkinDrawState::default() };
 
-        let destinations = document
-            .destination
+        let angles = document
+            .static_image_render_items(&mock_source("src", 10.0, 10.0), &state)
             .iter()
-            .map(|entry| match entry {
-                DestinationListEntry::Single(destination) => destination,
-                DestinationListEntry::Conditional { .. } => panic!("plain destination"),
+            .map(|item| match item {
+                SkinRenderItem::RotatedImage { angle_deg, .. } => *angle_deg as i32,
+                _ => panic!("turntable should be rotated"),
             })
             .collect::<Vec<_>>();
-        assert!(!is_second_14k_turntable_destination(&document, 0, destinations[0], &state));
-        assert!(is_second_14k_turntable_destination(&document, 1, destinations[1], &state));
-        assert!(!is_second_14k_turntable_destination(&document, 2, destinations[2], &state));
+
+        assert_eq!(angles, vec![30, 30, 70]);
     }
 
     #[test]

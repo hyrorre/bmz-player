@@ -839,7 +839,11 @@ fn scratch_angle_degrees(visual_time: TimeUs, scratch_index: i32, input_delta_ms
         elapsed_ms
     };
     let angle_ms = (base_ms + input_delta_ms).rem_euclid(SCRATCH_ANGLE_PERIOD_MS);
-    (angle_ms / SCRATCH_ANGLE_DEGREES_DIVISOR) as i32
+    let beatoraja_angle = (angle_ms / SCRATCH_ANGLE_DEGREES_DIVISOR) as i32;
+    // beatoraja's SpriteBatch rotates in bottom-origin coordinates, while BMZ's
+    // rotated-image vertices use top-origin coordinates. Negate the scratch
+    // offset so the turntable's visible rotation direction matches beatoraja.
+    (-beatoraja_angle).rem_euclid(360)
 }
 
 fn end_of_note_time(chart: &PlayableChart) -> TimeUs {
@@ -1237,7 +1241,7 @@ mod tests {
     use bmz_core::ids::NoteId;
     use bmz_core::input::{InputDeviceKind, InputEvent, InputKind, InputSource};
     use bmz_core::judge::{Judge, TimingSide};
-    use bmz_core::lane::Lane;
+    use bmz_core::lane::{KeyMode, Lane};
     use bmz_core::time::{ChartTick, TimeUs};
     use bmz_gameplay::judge::model::JudgementEvent;
 
@@ -2129,7 +2133,7 @@ mod tests {
 
         assert_eq!(
             snapshot.skin_offsets.get(SCRATCH_ANGLE_OFFSET_1P),
-            Some(SkinOffsetValue { x: 1, y: 2, w: 3, h: 4, r: 80, a: -6 })
+            Some(SkinOffsetValue { x: 1, y: 2, w: 3, h: 4, r: 280, a: -6 })
         );
     }
 
@@ -2145,7 +2149,7 @@ mod tests {
 
         assert_eq!(
             snapshot.skin_offsets.get(SCRATCH_ANGLE_OFFSET_1P),
-            Some(SkinOffsetValue { r: 80, ..SkinOffsetValue::default() })
+            Some(SkinOffsetValue { r: 280, ..SkinOffsetValue::default() })
         );
     }
 
@@ -2161,7 +2165,7 @@ mod tests {
 
         assert_eq!(
             snapshot.skin_offsets.get(SCRATCH_ANGLE_OFFSET_1P),
-            Some(SkinOffsetValue { r: 80, ..SkinOffsetValue::default() })
+            Some(SkinOffsetValue { r: 280, ..SkinOffsetValue::default() })
         );
     }
 
@@ -2178,7 +2182,7 @@ mod tests {
 
         assert_eq!(
             snapshot.skin_offsets.get(SCRATCH_ANGLE_OFFSET_1P),
-            Some(SkinOffsetValue { r: 53, ..SkinOffsetValue::default() })
+            Some(SkinOffsetValue { r: 307, ..SkinOffsetValue::default() })
         );
     }
 
@@ -2195,16 +2199,32 @@ mod tests {
 
         assert_eq!(
             snapshot.skin_offsets.get(SCRATCH_ANGLE_OFFSET_1P),
-            Some(SkinOffsetValue { r: 106, ..SkinOffsetValue::default() })
+            Some(SkinOffsetValue { r: 254, ..SkinOffsetValue::default() })
         );
     }
 
     #[test]
-    fn scratch_angle_offsets_match_beatoraja_1p_and_2p_phases() {
-        let visual_time = TimeUs(6_000_000);
+    fn scratch_angle_offsets_match_beatoraja_1p_and_2p_visual_directions() {
+        let first_frame = TimeUs(6_000_000);
+        let next_frame = TimeUs(6_006_000);
 
-        assert_eq!(scratch_angle_degrees(visual_time, 0, 0), 80);
-        assert_eq!(scratch_angle_degrees(visual_time, 1, 0), 280);
+        assert_eq!(scratch_angle_degrees(first_frame, 0, 0), 280);
+        assert_eq!(scratch_angle_degrees(next_frame, 0, 0), 281);
+        assert_eq!(scratch_angle_degrees(first_frame, 1, 0), 80);
+        assert_eq!(scratch_angle_degrees(next_frame, 1, 0), 79);
+    }
+
+    #[test]
+    fn build_render_snapshot_sets_opposite_14k_turntable_offsets() {
+        let profile = ProfileConfig::new_default("default", "Default", 1);
+        let mut chart = chart();
+        chart.metadata.key_mode = KeyMode::K14;
+        let session = build_game_session(Arc::new(chart), &profile, PlaySessionOptions::default());
+
+        let snapshot = build_render_snapshot(&session, TimeUs(6_000_000), &[], None);
+
+        assert_eq!(snapshot.skin_offsets.get(SCRATCH_ANGLE_OFFSET_1P).unwrap().r, 280);
+        assert_eq!(snapshot.skin_offsets.get(SCRATCH_ANGLE_OFFSET_2P).unwrap().r, 80);
     }
 
     #[test]
