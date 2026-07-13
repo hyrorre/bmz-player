@@ -90,6 +90,7 @@ pub fn resolve_gamepad_slot_assignments(
     stable_ids: [Option<&str>; 2],
     legacy_backend_ids: [Option<u32>; 2],
     use_legacy_backend_ids: bool,
+    include_known_disconnected: bool,
     connected: &[ConnectedGamepad],
 ) -> [Option<DeviceId>; 2] {
     let configured = std::array::from_fn(|slot| {
@@ -102,7 +103,10 @@ pub fn resolve_gamepad_slot_assignments(
     });
     resolve_gamepad_slot_device_ids(
         configured,
-        connected.iter().filter(|device| device.is_connected).map(|device| device.device_id),
+        connected
+            .iter()
+            .filter(|device| device.is_connected || include_known_disconnected)
+            .map(|device| device.device_id),
     )
 }
 
@@ -457,6 +461,7 @@ mod tests {
             [Some("gameinput:controller-a"), None],
             [None, None],
             false,
+            false,
             &[],
         );
         assert_eq!(slots[0], Some(gamepad_device_id_from_stable_id("gameinput:controller-a")));
@@ -471,9 +476,30 @@ mod tests {
             name: "controller".to_string(),
             is_connected: true,
         }];
-        let slots =
-            resolve_gamepad_slot_assignments([None, None], [Some(1), None], false, &connected);
+        let slots = resolve_gamepad_slot_assignments(
+            [None, None],
+            [Some(1), None],
+            false,
+            true,
+            &connected,
+        );
         assert_eq!(slots[0], Some(connected[0].device_id));
+    }
+
+    #[test]
+    fn gameinput_keeps_known_device_slot_during_transient_disconnect() {
+        let known = [ConnectedGamepad {
+            stable_id: "gameinput:controller-a".to_string(),
+            backend_id: 0,
+            device_id: gamepad_device_id_from_stable_id("gameinput:controller-a"),
+            name: "controller".to_string(),
+            is_connected: false,
+        }];
+
+        let slots =
+            resolve_gamepad_slot_assignments([None, None], [None, None], false, true, &known);
+
+        assert_eq!(slots[0], Some(known[0].device_id));
     }
 
     #[test]

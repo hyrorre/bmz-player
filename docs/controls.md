@@ -11,8 +11,8 @@
 | F12 | スクリーンショットを保存（左上に短時間メッセージ表示。撮影フレームには写らない） |
 
 詳細設定の「入力デバイス」では、ゲームパッドbackendを`自動選択` / `gilrs` /
-`GameInput (Windowsのみ)`から選べます。Windowsの自動選択はGameInputを優先し、
-初期化できない場合はgilrsへfallbackします。backend変更は次回起動時、1P / 2Pの
+`GameInput (Windowsのみ)`から選べます。既定値と自動選択はgilrsを優先し、Windowsで
+gilrsを初期化できない場合はGameInputへfallbackします。backend変更は次回起動時、1P / 2Pの
 コントローラ割り当て変更は次回プレイ開始時から反映されます。
 
 ## 選曲画面

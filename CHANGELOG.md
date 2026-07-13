@@ -5,8 +5,9 @@
 ### 改善
 
 - Windowsのゲームパッド入力にmain-thread polling方式のGameInput backendを追加しました。
-  - Windowsの自動選択ではGameInputを優先し、利用できない環境ではgilrsへfallbackします。
+  - ゲームパッドbackendの既定値と自動選択はgilrsを優先し、Windowsでgilrsを初期化できない場合はGameInputへfallbackします。
   - GameInputのreading時刻を判定へ渡し、1P / 2P割り当てをstable device IDで保存するようにしました。
+  - GameInputの履歴取得をデバイス単位にし、曲終了後や一時切断後も入力と割り当てが復帰するようにしました。
 
 ## v0.1.7
 

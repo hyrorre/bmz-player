@@ -140,6 +140,7 @@ struct DeviceState {
     device_id: DeviceId,
     name: String,
     device: *mut IGameInputDevice,
+    last_reading: *mut IGameInputReading,
     connected: bool,
     buttons: Vec<bool>,
     axes: Vec<f32>,
@@ -155,8 +156,6 @@ pub struct GameInputBackend {
     module: HMODULE,
     game_input: *mut IGameInput,
     owner_thread: ThreadId,
-    startup_timestamp_us: u64,
-    last_reading: *mut IGameInputReading,
     devices: HashMap<String, DeviceState>,
     next_backend_id: u32,
     analog: AnalogGamepadProcessor,
@@ -189,15 +188,10 @@ impl GameInputBackend {
             bail!("GameInputCreate failed with HRESULT 0x{:08x}", result as u32);
         }
 
-        // SAFETY: GameInputCreate returned a live object with the documented vtable.
-        let startup_timestamp_us =
-            unsafe { ((*(*game_input).vtable).get_current_timestamp)(game_input) };
         Ok(Self {
             module,
             game_input,
             owner_thread: std::thread::current().id(),
-            startup_timestamp_us,
-            last_reading: ptr::null_mut(),
             devices: HashMap::new(),
             next_backend_id: 0,
             analog: AnalogGamepadProcessor::new(sensitivity, scratch_threshold),
@@ -213,10 +207,10 @@ impl GameInputBackend {
 
         let backend_now_us = self.current_timestamp_us();
         let monotonic_now_ns = monotonic_timestamp_ns();
-        if self.last_reading.is_null() {
-            self.bootstrap_readings(backend_now_us, monotonic_now_ns, &mut output);
-        } else {
-            self.drain_next_readings(backend_now_us, monotonic_now_ns, &mut output);
+        self.discover_latest_device(backend_now_us, monotonic_now_ns, &mut output);
+        let stable_ids = self.devices.keys().cloned().collect::<Vec<_>>();
+        for stable_id in stable_ids {
+            self.drain_device_readings(&stable_id, backend_now_us, monotonic_now_ns, &mut output);
         }
         self.release_disconnected_devices(&mut output);
         self.analog.check_timeouts(Instant::now(), &mut output.buttons);
@@ -243,7 +237,7 @@ impl GameInputBackend {
         self.diagnostics
     }
 
-    fn bootstrap_readings(
+    fn discover_latest_device(
         &mut self,
         backend_now_us: u64,
         monotonic_now_ns: u128,
@@ -263,63 +257,105 @@ impl GameInputBackend {
             return;
         }
 
-        let mut history = vec![current];
-        loop {
-            let reference = *history.last().expect("history contains current reading");
-            let mut previous = ptr::null_mut();
-            // SAFETY: reference is a live reading and previous is a valid output pointer.
-            let result = unsafe {
-                ((*(*self.game_input).vtable).get_previous_reading)(
-                    self.game_input,
-                    reference,
-                    GAME_INPUT_KIND_CONTROLLER,
-                    ptr::null_mut(),
-                    &mut previous,
-                )
-            };
-            if result < 0 || previous.is_null() {
-                break;
-            }
-            if reading_timestamp_us(previous) < self.startup_timestamp_us {
-                release_reading(previous);
-                break;
-            }
-            history.push(previous);
+        let Some(stable_id) = reading_stable_id(current) else {
+            release_reading(current);
+            return;
+        };
+        if self.devices.get(&stable_id).is_some_and(|state| !state.last_reading.is_null()) {
+            release_reading(current);
+            return;
         }
 
-        for &reading in history.iter().rev() {
-            self.process_reading(reading, backend_now_us, monotonic_now_ns, output);
+        self.process_reading(current, backend_now_us, monotonic_now_ns, output);
+        if let Some(state) = self.devices.get_mut(&stable_id) {
+            state.last_reading = current;
+        } else {
+            release_reading(current);
         }
-        for reading in history.into_iter().skip(1) {
-            release_reading(reading);
-        }
-        self.last_reading = current;
     }
 
-    fn drain_next_readings(
+    fn drain_device_readings(
         &mut self,
+        stable_id: &str,
         backend_now_us: u64,
         monotonic_now_ns: u128,
         output: &mut GamepadPollOutput,
     ) {
         loop {
+            let Some((reference, device)) =
+                self.devices.get(stable_id).map(|state| (state.last_reading, state.device))
+            else {
+                return;
+            };
+            if reference.is_null() {
+                return;
+            }
             let mut next = ptr::null_mut();
-            // SAFETY: last_reading and game_input stay live for the call.
+            // SAFETY: reference, device, and game_input stay live for the call.
             let result = unsafe {
                 ((*(*self.game_input).vtable).get_next_reading)(
                     self.game_input,
-                    self.last_reading,
+                    reference,
                     GAME_INPUT_KIND_CONTROLLER,
-                    ptr::null_mut(),
+                    device,
                     &mut next,
                 )
             };
             if result < 0 || next.is_null() {
+                self.resync_device_reading(
+                    stable_id,
+                    reference,
+                    device,
+                    backend_now_us,
+                    monotonic_now_ns,
+                    output,
+                );
                 break;
             }
             self.process_reading(next, backend_now_us, monotonic_now_ns, output);
-            release_reading(self.last_reading);
-            self.last_reading = next;
+            if let Some(state) = self.devices.get_mut(stable_id) {
+                release_reading(state.last_reading);
+                state.last_reading = next;
+            } else {
+                release_reading(next);
+                break;
+            }
+        }
+    }
+
+    fn resync_device_reading(
+        &mut self,
+        stable_id: &str,
+        reference: *mut IGameInputReading,
+        device: *mut IGameInputDevice,
+        backend_now_us: u64,
+        monotonic_now_ns: u128,
+        output: &mut GamepadPollOutput,
+    ) {
+        let mut current = ptr::null_mut();
+        // SAFETY: device and game_input stay live for the call and output is writable.
+        let result = unsafe {
+            ((*(*self.game_input).vtable).get_current_reading)(
+                self.game_input,
+                GAME_INPUT_KIND_CONTROLLER,
+                device,
+                &mut current,
+            )
+        };
+        if result < 0 || current.is_null() {
+            return;
+        }
+        if current == reference {
+            release_reading(current);
+            return;
+        }
+
+        self.process_reading(current, backend_now_us, monotonic_now_ns, output);
+        if let Some(state) = self.devices.get_mut(stable_id) {
+            release_reading(state.last_reading);
+            state.last_reading = current;
+        } else {
+            release_reading(current);
         }
     }
 
@@ -358,6 +394,7 @@ impl GameInputBackend {
                     device_id: gamepad_device_id_from_stable_id(&identity.stable_id),
                     name: identity.name,
                     device,
+                    last_reading: ptr::null_mut(),
                     connected: true,
                     buttons: Vec::new(),
                     axes: Vec::new(),
@@ -440,6 +477,10 @@ impl GameInputBackend {
                     }
                 }
                 self.analog.release_device(state.device_id, timestamp, &mut output.buttons);
+                if !state.last_reading.is_null() {
+                    release_reading(state.last_reading);
+                    state.last_reading = ptr::null_mut();
+                }
                 tracing::info!(device = %state.stable_id, "GameInput controller disconnected");
             }
             state.connected = connected;
@@ -456,10 +497,10 @@ impl Drop for GameInputBackend {
     fn drop(&mut self) {
         debug_assert_eq!(self.owner_thread, std::thread::current().id());
         for state in self.devices.values() {
+            if !state.last_reading.is_null() {
+                release_reading(state.last_reading);
+            }
             release_device(state.device);
-        }
-        if !self.last_reading.is_null() {
-            release_reading(self.last_reading);
         }
         if !self.game_input.is_null() {
             // SAFETY: game_input is the retained GameInputCreate result.
@@ -500,6 +541,18 @@ fn device_identity(device: *mut IGameInputDevice) -> Option<DeviceIdentity> {
     let stable_id = format!("gameinput:{device_hex}");
     let name = format!("GameInput {:04X}:{:04X}", info.vendor_id, info.product_id);
     Some(DeviceIdentity { stable_id, name })
+}
+
+fn reading_stable_id(reading: *mut IGameInputReading) -> Option<String> {
+    let mut device = ptr::null_mut();
+    // SAFETY: reading is live and device is a valid output pointer.
+    unsafe { ((*(*reading).vtable).get_device)(reading, &mut device) };
+    if device.is_null() {
+        return None;
+    }
+    let stable_id = device_identity(device).map(|identity| identity.stable_id);
+    release_device(device);
+    stable_id
 }
 
 fn controller_button_count(reading: *mut IGameInputReading) -> usize {

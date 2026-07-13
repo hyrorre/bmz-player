@@ -1866,37 +1866,43 @@ fn initialize_gamepad_backend(
 ) -> Option<Box<crate::input::gamepad::GamepadBackend>> {
     match kind {
         GamepadBackendKind::Auto => {
-            #[cfg(windows)]
-            match crate::input::gameinput::GameInputBackend::new(sensitivity, scratch_threshold) {
-                Ok(backend) => {
-                    tracing::info!("GameInput initialized on main thread");
-                    return Some(Box::new(crate::input::gamepad::GamepadBackend::GameInput(
-                        backend,
-                    )));
-                }
-                Err(error) => {
-                    tracing::warn!(%error, "GameInput init failed, falling back to gilrs");
-                }
+            if let Some(backend) = initialize_gilrs_backend(sensitivity, scratch_threshold) {
+                return Some(backend);
             }
-            initialize_gilrs_backend(sensitivity, scratch_threshold)
+            #[cfg(windows)]
+            return initialize_gameinput_backend(sensitivity, scratch_threshold);
+            #[cfg(not(windows))]
+            None
         }
         GamepadBackendKind::Gilrs => initialize_gilrs_backend(sensitivity, scratch_threshold),
         GamepadBackendKind::GameInput => {
             #[cfg(windows)]
-            match crate::input::gameinput::GameInputBackend::new(sensitivity, scratch_threshold) {
-                Ok(backend) => {
-                    tracing::info!("GameInput initialized on main thread");
-                    return Some(Box::new(crate::input::gamepad::GamepadBackend::GameInput(
-                        backend,
-                    )));
-                }
-                Err(error) => {
-                    tracing::warn!(%error, "GameInput init failed, falling back to gilrs");
+            {
+                if let Some(backend) = initialize_gameinput_backend(sensitivity, scratch_threshold)
+                {
+                    return Some(backend);
                 }
             }
             #[cfg(not(windows))]
             tracing::warn!("GameInput is only available on Windows, falling back to gilrs");
             initialize_gilrs_backend(sensitivity, scratch_threshold)
+        }
+    }
+}
+
+#[cfg(windows)]
+fn initialize_gameinput_backend(
+    sensitivity: f32,
+    scratch_threshold: u32,
+) -> Option<Box<crate::input::gamepad::GamepadBackend>> {
+    match crate::input::gameinput::GameInputBackend::new(sensitivity, scratch_threshold) {
+        Ok(backend) => {
+            tracing::info!("GameInput initialized on main thread");
+            Some(Box::new(crate::input::gamepad::GamepadBackend::GameInput(backend)))
+        }
+        Err(error) => {
+            tracing::warn!(%error, "GameInput init failed");
+            None
         }
     }
 }
@@ -1911,7 +1917,7 @@ fn initialize_gilrs_backend(
             Some(Box::new(crate::input::gamepad::GamepadBackend::Gilrs(backend)))
         }
         Err(error) => {
-            tracing::warn!(%error, "gilrs init failed, gamepad disabled");
+            tracing::warn!(%error, "gilrs init failed");
             None
         }
     }
@@ -1924,13 +1930,13 @@ fn resolve_gamepad_runtime_slots(
     let connected = backend
         .into_iter()
         .flat_map(crate::input::gamepad::GamepadBackend::connected_gamepads)
-        .filter(|device| device.is_connected)
         .collect::<Vec<_>>();
     let using_gilrs = backend.is_some_and(crate::input::gamepad::GamepadBackend::is_gilrs);
     crate::input::gamepad::resolve_gamepad_slot_assignments(
         config.gamepad_slot_device_ids.each_ref().map(Option::as_deref),
         config.gamepad_slot_gilrs_ids,
         using_gilrs,
+        !using_gilrs,
         &connected,
     )
 }
