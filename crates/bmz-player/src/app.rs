@@ -10571,6 +10571,7 @@ impl WinitApp {
                 self.last_play_snapshot = None;
             }
         }
+        self.sync_profile_visual_offset_from_active_play();
     }
 
     fn maybe_start_ready_phase(&mut self) {
@@ -11343,12 +11344,21 @@ impl WinitApp {
     }
 
     fn sync_profile_visual_offset_from_active_play(&mut self) {
-        if let Some(active_play) = &self.active_play {
-            let session = &active_play.running.session;
-            if session.input_offset_auto_adjust.is_some() {
-                self.boot.profile_config.judge.visual_offset_us = session.offsets.visual_offset_us;
-            }
-        }
+        let Some((visual_offset_us, auto_adjust_active)) =
+            self.active_play.as_ref().map(|active| {
+                (
+                    active.running.session.offsets.visual_offset_us,
+                    active.running.session.input_offset_auto_adjust.is_some(),
+                )
+            })
+        else {
+            return;
+        };
+        sync_active_play_visual_offset_to_profile(
+            &mut self.boot.profile_config,
+            visual_offset_us,
+            auto_adjust_active,
+        );
     }
 
     fn play_skin_defs_for_path(&mut self, path: &str) -> SceneSkinDefs {
@@ -16768,6 +16778,18 @@ fn adjusted_hispeed(current: f32, change: HispeedChange) -> f32 {
     ((current + delta) * 4.0).round().clamp(2.0, 40.0) / 4.0
 }
 
+fn sync_active_play_visual_offset_to_profile(
+    profile: &mut ProfileConfig,
+    visual_offset_us: i64,
+    auto_adjust_active: bool,
+) {
+    if !auto_adjust_active || profile.judge.visual_offset_us == visual_offset_us {
+        return;
+    }
+    profile.judge.visual_offset_us = visual_offset_us;
+    profile.updated_at = now_unix_seconds();
+}
+
 fn apply_pending_hispeed_change_to_profile(profile: &mut ProfileConfig, change: HispeedChange) {
     profile.lane.hispeed = adjusted_hispeed(profile.lane.hispeed, change);
 }
@@ -18334,6 +18356,22 @@ mod tests {
     fn winit_app_stack_size_stays_bounded() {
         let size = std::mem::size_of::<WinitApp>();
         assert!(size < 64 * 1024, "WinitApp is {size} bytes");
+    }
+
+    #[test]
+    fn active_play_visual_offset_sync_preserves_auto_adjusted_value() {
+        let mut profile = ProfileConfig::new_default("default", "Default", 1);
+
+        sync_active_play_visual_offset_to_profile(&mut profile, 1_000, true);
+
+        assert_eq!(profile.judge.visual_offset_us, 1_000);
+        assert_eq!(
+            crate::config::play::play_offsets_from_profile(&profile).visual_offset_us,
+            1_000
+        );
+
+        sync_active_play_visual_offset_to_profile(&mut profile, 2_000, false);
+        assert_eq!(profile.judge.visual_offset_us, 1_000);
     }
 
     fn app_test_chart() -> bmz_chart::model::PlayableChart {
