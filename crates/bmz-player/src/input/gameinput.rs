@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::ffi::{CStr, c_void};
+use std::ffi::c_void;
 use std::ptr;
 use std::thread::ThreadId;
 use std::time::Instant;
@@ -478,9 +478,8 @@ struct DeviceIdentity {
 }
 
 fn load_create_function(module: HMODULE) -> Result<GameInputCreate> {
-    let name = CStr::from_bytes_with_nul(b"GameInputCreate\0").expect("static export name");
-    // SAFETY: module is live and name is nul-terminated.
-    let function = unsafe { GetProcAddress(module, name.as_ptr().cast::<u8>()) }
+    // SAFETY: module is live and the static export name is nul-terminated.
+    let function = unsafe { GetProcAddress(module, c"GameInputCreate".as_ptr().cast::<u8>()) }
         .context("GameInputCreate export is not available")?;
     // SAFETY: the export has the GameInputCreate signature documented by GameInput.h.
     Ok(unsafe {

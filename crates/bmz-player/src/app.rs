@@ -202,9 +202,10 @@ pub async fn run_with_options(options: AppOptions) -> Result<()> {
 
     spawn_ir_sync_worker(&boot);
 
-    let mut app = WinitApp::new(boot, options, None, None, shutdown_requested, event_proxy)?;
+    let mut app =
+        Box::new(WinitApp::new(boot, options, None, None, shutdown_requested, event_proxy)?);
     tracing::info!("starting winit event loop");
-    event_loop.run_app(&mut app).context("winit event loop failed")
+    event_loop.run_app(app.as_mut()).context("winit event loop failed")
 }
 
 /// IR スコアジョブをバックグラウンドで定期送信する。
@@ -429,7 +430,7 @@ struct WinitApp {
     /// フォルダから出た時にカーソル位置を復元するために使う。長さは `folder_stack` と一致。
     selected_index_stack: Vec<usize>,
     selected_index: usize,
-    renderer: Renderer,
+    renderer: Box<Renderer>,
     skin_catalog: SkinCatalog,
     skin_defs_cache: BTreeMap<String, SceneSkinDefs>,
     pending_table_fetch: Option<Receiver<Result<()>>>,
@@ -493,7 +494,7 @@ struct WinitApp {
     result_scene_started_at: Instant,
     option_panel_started_at: Instant,
     select_option_panel: u8,
-    gamepad: Option<crate::input::gamepad::GamepadBackend>,
+    gamepad: Option<Box<crate::input::gamepad::GamepadBackend>>,
     default_skin_manifest: Option<SkinManifest>,
     /// decode worker (CPU) → upload worker への送信端。
     skin_decode_tx: mpsc::Sender<PendingSkinResult>,
@@ -1862,14 +1863,16 @@ fn initialize_gamepad_backend(
     kind: GamepadBackendKind,
     sensitivity: f32,
     scratch_threshold: u32,
-) -> Option<crate::input::gamepad::GamepadBackend> {
+) -> Option<Box<crate::input::gamepad::GamepadBackend>> {
     match kind {
         GamepadBackendKind::Auto => {
             #[cfg(windows)]
             match crate::input::gameinput::GameInputBackend::new(sensitivity, scratch_threshold) {
                 Ok(backend) => {
                     tracing::info!("GameInput initialized on main thread");
-                    return Some(crate::input::gamepad::GamepadBackend::GameInput(backend));
+                    return Some(Box::new(crate::input::gamepad::GamepadBackend::GameInput(
+                        backend,
+                    )));
                 }
                 Err(error) => {
                     tracing::warn!(%error, "GameInput init failed, falling back to gilrs");
@@ -1883,7 +1886,9 @@ fn initialize_gamepad_backend(
             match crate::input::gameinput::GameInputBackend::new(sensitivity, scratch_threshold) {
                 Ok(backend) => {
                     tracing::info!("GameInput initialized on main thread");
-                    return Some(crate::input::gamepad::GamepadBackend::GameInput(backend));
+                    return Some(Box::new(crate::input::gamepad::GamepadBackend::GameInput(
+                        backend,
+                    )));
                 }
                 Err(error) => {
                     tracing::warn!(%error, "GameInput init failed, falling back to gilrs");
@@ -1899,11 +1904,11 @@ fn initialize_gamepad_backend(
 fn initialize_gilrs_backend(
     sensitivity: f32,
     scratch_threshold: u32,
-) -> Option<crate::input::gamepad::GamepadBackend> {
+) -> Option<Box<crate::input::gamepad::GamepadBackend>> {
     match crate::input::gilrs::GilrsBackend::new(sensitivity, scratch_threshold) {
         Ok(backend) => {
             tracing::info!("gilrs initialized");
-            Some(crate::input::gamepad::GamepadBackend::Gilrs(backend))
+            Some(Box::new(crate::input::gamepad::GamepadBackend::Gilrs(backend)))
         }
         Err(error) => {
             tracing::warn!(%error, "gilrs init failed, gamepad disabled");
@@ -1978,7 +1983,7 @@ impl WinitApp {
         let hs_fix_option = hs_fix_option_from_profile(boot.profile_config.play.hs_fix);
         let target_option = target_option_from_profile(boot.profile_config.play.target);
         let select_keys = SelectKeyBindings::from_profile(&boot.profile_config.input);
-        let mut renderer = Renderer::default();
+        let mut renderer = Box::new(Renderer::default());
         let skin_catalog = scan_skin_catalog(&boot.app_paths);
         let (skin_decode_tx, skin_decode_rx) = mpsc::channel::<PendingSkinResult>();
         let (skin_upload_tx, skin_upload_rx) = mpsc::channel::<PendingUploadResult>();
@@ -1997,7 +2002,7 @@ impl WinitApp {
             pending_decide_skin,
             pending_result_skin,
         ) = load_initial_skin_textures(
-            &mut renderer,
+            renderer.as_mut(),
             &boot.app_paths,
             &skin_decode_tx,
             &skin_source_asset_cache,
@@ -7355,7 +7360,7 @@ impl WinitApp {
         let mut app_config = self.boot.app_config.clone();
         app_config.audio.sample_rate = self.play_output_sample_rate();
         app_config.input.gamepad_slot_runtime_device_ids =
-            resolve_gamepad_runtime_slots(&app_config.input, self.gamepad.as_ref())
+            resolve_gamepad_runtime_slots(&app_config.input, self.gamepad.as_deref())
                 .map(|id| id.map(|id| id.0));
         app_config
     }
@@ -18318,6 +18323,12 @@ mod tests {
     use crate::storage::score_db::BestScoreSummary;
 
     use super::*;
+
+    #[test]
+    fn winit_app_stack_size_stays_bounded() {
+        let size = std::mem::size_of::<WinitApp>();
+        assert!(size < 64 * 1024, "WinitApp is {size} bytes");
+    }
 
     fn app_test_chart() -> bmz_chart::model::PlayableChart {
         bmz_chart::model::PlayableChart {
