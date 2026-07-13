@@ -10,6 +10,8 @@ const DEFAULT_INSERT_BATCH_SIZE = 250
 // total comfortably below D1's per-query bind limit used elsewhere in this app.
 export const DIFFICULTY_LABEL_LOOKUP_CHUNK_SIZE = 40
 const MAX_REDIRECTS = 5
+const FAILURE_LOG_LIMIT = 10
+const FAILURE_ERROR_MAX_LENGTH = 500
 
 export interface DifficultyTableSource {
   sourceUrl: string
@@ -56,6 +58,12 @@ export interface DifficultyTableSyncFailure {
 export interface DifficultyTableSyncBatchResult {
   successful: DifficultyTableSyncResult[]
   failed: DifficultyTableSyncFailure[]
+}
+
+export interface DifficultyTableSyncFailureDiagnostics {
+  failureCount: number
+  omittedCount: number
+  failures: DifficultyTableSyncFailure[]
 }
 
 interface DifficultyTableFetchOptions {
@@ -235,12 +243,29 @@ export async function syncAllowlistedDifficultyTables(
     } catch (error) {
       failed.push({
         sourceUrl: source.sourceUrl,
-        error: error instanceof Error ? error.message : String(error),
+        error: formatErrorWithCauses(error),
       })
     }
   }
 
   return { successful, failed }
+}
+
+/** Cloudflare Logs向けに件数とエラー文字列の長さを制限した失敗詳細を作る。 */
+export function difficultyTableSyncFailureDiagnostics(
+  failures: readonly DifficultyTableSyncFailure[],
+  limit = FAILURE_LOG_LIMIT,
+): DifficultyTableSyncFailureDiagnostics {
+  const normalizedLimit = Number.isSafeInteger(limit) && limit > 0 ? limit : FAILURE_LOG_LIMIT
+  const visible = failures.slice(0, normalizedLimit).map((failure) => ({
+    sourceUrl: failure.sourceUrl,
+    error: truncateDiagnostic(failure.error, FAILURE_ERROR_MAX_LENGTH),
+  }))
+  return {
+    failureCount: failures.length,
+    omittedCount: Math.max(0, failures.length - visible.length),
+    failures: visible,
+  }
 }
 
 async function fetchDifficultyTable(
@@ -466,7 +491,10 @@ async function fetchText(
     const timeout = setTimeout(() => controller.abort(), options.timeoutMs)
     let response: Response | undefined
     try {
-      response = await options.fetchImpl(currentUrl, {
+      // workerdのglobal fetchはreceiverに依存するため、optionsのメソッドとして
+      // 呼ばず、先にローカル変数へ取り出してreceiverなしで呼び出す。
+      const fetchImpl = options.fetchImpl
+      response = await fetchImpl(currentUrl, {
         redirect: 'manual',
         signal: controller.signal,
         headers: { 'user-agent': 'bmz-ir/0.1' },
@@ -660,6 +688,35 @@ function difficultyTableId(sourceUrl: string): string {
   return `table_${createHash('sha256').update(sourceUrl).digest('hex').slice(0, 32)}`
 }
 
+function truncateDiagnostic(value: string, maxLength: number): string {
+  return value.length <= maxLength ? value : `${value.slice(0, maxLength - 1)}…`
+}
+
+function formatErrorWithCauses(error: unknown): string {
+  const messages: string[] = []
+  const seen = new Set<unknown>()
+  let current: unknown = error
+
+  for (let depth = 0; current !== undefined && current !== null && depth < 4; depth += 1) {
+    if (seen.has(current)) break
+    seen.add(current)
+    const message = normalizeDiagnosticText(
+      current instanceof Error ? current.message : String(current),
+    )
+    if (message && messages.at(-1) !== message) messages.push(message)
+    current = current instanceof Error ? current.cause : undefined
+  }
+
+  return messages.join(' <- ') || 'unknown error'
+}
+
+function normalizeDiagnosticText(value: string): string {
+  return value
+    .replace(/[\r\n\t]+/gu, ' ')
+    .replace(/\s{2,}/gu, ' ')
+    .trim()
+}
+
 function difficultyLabelsFromRows(
   charts: readonly { sha256: string; md5: string | null }[],
   rows: readonly DifficultyLabelRow[],
@@ -727,4 +784,6 @@ export const __test = {
   persistDifficultyTableGeneration,
   difficultyTableId,
   difficultyLabelsFromRows,
+  difficultyTableSyncFailureDiagnostics,
+  formatErrorWithCauses,
 }

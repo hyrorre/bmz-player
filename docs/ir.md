@@ -59,7 +59,8 @@ SHA-256 fallback でラベルを付与する。
 難易度表を即時同期する管理APIは、ログイン済みユーザーのうち
 `NUXT_IR_ADMIN_USER_IDS`（カンマ区切り）に含まれるIDだけが実行できる。未設定時は
 全ユーザーを拒否する。Cronと管理APIが重なった場合はD1の期限付きロックで片方を
-`already_running`としてスキップする。
+`already_running`としてスキップする。同期失敗はCloudflare LogsへURLと原因を最大10件、
+各エラー500文字まで記録し、全件失敗時は最初の原因を管理APIの502エラーにも含める。
 
 ### クライアント (bmz-player)
 

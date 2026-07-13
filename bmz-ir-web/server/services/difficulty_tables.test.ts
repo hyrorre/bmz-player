@@ -1,5 +1,10 @@
 import { describe, expect, test } from 'bun:test'
-import { __test, syncDifficultyTable, type FetchedDifficultyTable } from './difficulty_tables'
+import {
+  __test,
+  syncAllowlistedDifficultyTables,
+  syncDifficultyTable,
+  type FetchedDifficultyTable,
+} from './difficulty_tables'
 
 describe('difficulty table parsing', () => {
   test('finds bmstable meta regardless of attribute order, quote style, and case', () => {
@@ -57,6 +62,23 @@ describe('difficulty table parsing', () => {
 })
 
 describe('difficulty table fetching', () => {
+  test('calls the supplied fetch function without an object receiver', async () => {
+    const fetchImpl = function (this: unknown, input: string | URL | Request) {
+      expect(this).toBeUndefined()
+      const url = String(input)
+      const body = url.endsWith('header.json')
+        ? `{"name":"X","symbol":"x","data_url":"data.json"}`
+        : `[{"level":"1","md5":"${'a'.repeat(32)}"}]`
+      return Promise.resolve(new Response(body))
+    } as typeof fetch
+
+    const table = await __test.fetchDifficultyTable(
+      { sourceUrl: 'https://example.com/header.json' },
+      { fetchImpl },
+    )
+    expect(table.entries).toHaveLength(1)
+  })
+
   test('resolves relative header and multiple data URLs', async () => {
     const requested: string[] = []
     const responses = new Map<string, string>([
@@ -134,6 +156,17 @@ describe('difficulty table synchronization', () => {
       syncDifficultyTable('https://other.example/header.json', [], { fetchImpl }),
     ).rejects.toThrow('not allowlisted')
     expect(fetched).toBe(false)
+  })
+
+  test('preserves the underlying runtime fetch cause', async () => {
+    const fetchImpl = (async () => {
+      throw new TypeError('Illegal invocation')
+    }) as typeof fetch
+    const source = { sourceUrl: 'https://example.com/header.json' }
+
+    const result = await syncAllowlistedDifficultyTables([source], { fetchImpl })
+    expect(result.failed[0]?.error).toContain('difficulty table request failed')
+    expect(result.failed[0]?.error).toContain('Illegal invocation')
   })
 
   test('activates only after all generation entries are staged', async () => {
@@ -244,6 +277,45 @@ describe('difficulty labels', () => {
     expect(result.get(sha256)).toEqual([
       { table_id: 'sha', table_name: 'SHA', symbol: '★', level: '1' },
     ])
+  })
+})
+
+describe('difficulty table failure diagnostics', () => {
+  test('limits visible failures and reports omitted entries', () => {
+    const diagnostics = __test.difficultyTableSyncFailureDiagnostics(
+      [
+        { sourceUrl: 'https://one.example/', error: 'first' },
+        { sourceUrl: 'https://two.example/', error: 'second' },
+        { sourceUrl: 'https://three.example/', error: 'third' },
+      ],
+      2,
+    )
+
+    expect(diagnostics).toEqual({
+      failureCount: 3,
+      omittedCount: 1,
+      failures: [
+        { sourceUrl: 'https://one.example/', error: 'first' },
+        { sourceUrl: 'https://two.example/', error: 'second' },
+      ],
+    })
+  })
+
+  test('truncates an unexpectedly large runtime error', () => {
+    const diagnostics = __test.difficultyTableSyncFailureDiagnostics([
+      { sourceUrl: 'https://example.com/', error: 'x'.repeat(600) },
+    ])
+
+    expect(diagnostics.failures[0]?.error).toHaveLength(500)
+    expect(diagnostics.failures[0]?.error.endsWith('…')).toBe(true)
+  })
+
+  test('normalizes an error cause chain', () => {
+    const cause = new TypeError('Illegal\ninvocation')
+    const error = new Error('difficulty table request failed', { cause })
+    expect(__test.formatErrorWithCauses(error)).toBe(
+      'difficulty table request failed <- Illegal invocation',
+    )
   })
 })
 
