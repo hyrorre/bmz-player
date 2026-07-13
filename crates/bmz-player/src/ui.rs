@@ -21,8 +21,8 @@ use winit::window::Window;
 
 use crate::config::app_config::{
     AppConfig, AudioBackend, AudioBufferSizeMode, AudioSampleRateMode, DifficultyTableSource,
-    InputBackendKind, LogLevel, ObsActionConfig, ObsRecordingMode, PathEntry, RendererBackend,
-    UpdateChannelConfig, VsyncModeConfig, WindowMode,
+    GamepadBackendKind, InputBackendKind, LogLevel, ObsActionConfig, ObsRecordingMode, PathEntry,
+    RendererBackend, UpdateChannelConfig, VsyncModeConfig, WindowMode,
 };
 use crate::config::play::{TARGET_GREEN_NUMBER_MAX, TARGET_GREEN_NUMBER_MIN};
 use crate::config::profile_config::{
@@ -2308,6 +2308,25 @@ fn build_settings_panel(
                                 "PipeWire",
                             );
                         });
+                    egui::ComboBox::from_label("ゲームパッドバックエンド")
+                        .selected_text(gamepad_backend_label(&config.input.gamepad_backend))
+                        .show_ui(ui, |ui| {
+                            ui.selectable_value(
+                                &mut config.input.gamepad_backend,
+                                GamepadBackendKind::Auto,
+                                gamepad_backend_label(&GamepadBackendKind::Auto),
+                            );
+                            ui.selectable_value(
+                                &mut config.input.gamepad_backend,
+                                GamepadBackendKind::Gilrs,
+                                gamepad_backend_label(&GamepadBackendKind::Gilrs),
+                            );
+                            ui.selectable_value(
+                                &mut config.input.gamepad_backend,
+                                GamepadBackendKind::GameInput,
+                                gamepad_backend_label(&GamepadBackendKind::GameInput),
+                            );
+                        });
                     let sample_rate_text =
                         if config.audio.sample_rate_mode == AudioSampleRateMode::Auto {
                             "自動 (ドライバ / OS 既定)".to_string()
@@ -2697,48 +2716,74 @@ fn build_settings_panel(
                     }
                     for (slot_index, label) in [(0usize, "1P コントローラ"), (1usize, "2P コントローラ")]
                     {
-                        let current = config.input.gamepad_slot_gilrs_ids[slot_index];
+                        let current = config.input.gamepad_slot_device_ids[slot_index].as_deref();
                         let selected_text = match current {
-                            None => "自動 (接続順)".to_string(),
-                            Some(id) => state
+                            Some(stable_id) => state
                                 .connected_gamepads
                                 .iter()
-                                .find(|pad| pad.backend_id == id)
+                                .find(|pad| pad.stable_id == stable_id)
                                 .map(|pad| format!("#{} {}", pad.backend_id, pad.name))
-                                .unwrap_or_else(|| format!("#{id} (未接続)")),
+                                .unwrap_or_else(|| {
+                                    let end = stable_id.len().min(20);
+                                    format!("{}... (未接続)", &stable_id[..end])
+                                }),
+                            None => config.input.gamepad_slot_gilrs_ids[slot_index]
+                                .and_then(|id| {
+                                    state
+                                        .connected_gamepads
+                                        .iter()
+                                        .find(|pad| pad.backend_id == id)
+                                        .map(|pad| {
+                                            format!("#{} {} (旧設定)", pad.backend_id, pad.name)
+                                        })
+                                })
+                                .unwrap_or_else(|| "自動 (接続順)".to_string()),
                         };
                         egui::ComboBox::from_label(label)
                             .selected_text(selected_text)
                             .show_ui(ui, |ui| {
-                                ui.selectable_value(
-                                    &mut config.input.gamepad_slot_gilrs_ids[slot_index],
-                                    None,
-                                    "自動 (接続順)",
-                                );
+                                if ui
+                                    .selectable_value(
+                                        &mut config.input.gamepad_slot_device_ids[slot_index],
+                                        None,
+                                        "自動 (接続順)",
+                                    )
+                                    .clicked()
+                                {
+                                    config.input.gamepad_slot_gilrs_ids[slot_index] = None;
+                                }
                                 for pad in state.connected_gamepads {
-                                    ui.selectable_value(
-                                        &mut config.input.gamepad_slot_gilrs_ids[slot_index],
-                                        Some(pad.backend_id),
-                                        format!("#{} {}", pad.backend_id, pad.name),
-                                    );
+                                    if ui
+                                        .selectable_value(
+                                            &mut config.input.gamepad_slot_device_ids[slot_index],
+                                            Some(pad.stable_id.clone()),
+                                            format!("#{} {}", pad.backend_id, pad.name),
+                                        )
+                                        .clicked()
+                                    {
+                                        config.input.gamepad_slot_gilrs_ids[slot_index] = None;
+                                    }
                                 }
                             });
                     }
                     ui.horizontal(|ui| {
                         if ui.button("接続順で自動割り当て").clicked() {
-                            let connected: Vec<u32> = state
+                            let connected: Vec<String> = state
                                 .connected_gamepads
                                 .iter()
                                 .filter(|pad| pad.is_connected)
-                                .map(|pad| pad.backend_id)
+                                .map(|pad| pad.stable_id.clone())
                                 .collect();
-                            config.input.gamepad_slot_gilrs_ids[0] = connected.first().copied();
-                            config.input.gamepad_slot_gilrs_ids[1] = connected.get(1).copied();
+                            config.input.gamepad_slot_device_ids[0] = connected.first().cloned();
+                            config.input.gamepad_slot_device_ids[1] = connected.get(1).cloned();
+                            config.input.gamepad_slot_gilrs_ids = [None, None];
                         }
                         if ui.button("1P / 2P を入れ替え").clicked() {
+                            config.input.gamepad_slot_device_ids.swap(0, 1);
                             config.input.gamepad_slot_gilrs_ids.swap(0, 1);
                         }
                         if ui.button("割り当て解除").clicked() {
+                            config.input.gamepad_slot_device_ids = [None, None];
                             config.input.gamepad_slot_gilrs_ids = [None, None];
                         }
                     });
@@ -3131,6 +3176,14 @@ fn input_backend_label(backend: &InputBackendKind) -> &'static str {
         InputBackendKind::RawInput => "Raw Input (Windowsのみ)",
         InputBackendKind::Hid => "HID (未実装)",
         InputBackendKind::Midi => "MIDI (未実装)",
+    }
+}
+
+fn gamepad_backend_label(backend: &GamepadBackendKind) -> &'static str {
+    match backend {
+        GamepadBackendKind::Auto => "自動選択",
+        GamepadBackendKind::Gilrs => "gilrs",
+        GamepadBackendKind::GameInput => "GameInput (Windowsのみ)",
     }
 }
 

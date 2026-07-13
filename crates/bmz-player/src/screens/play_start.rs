@@ -125,7 +125,10 @@ pub fn play_session_options_from_start(
         ln_policy_setting: Default::default(),
         rule_mode: Default::default(),
         gauge_property: start_options.course_gauge_property_override,
-        gamepad_slots: GamepadSlotMap::from_slot_ids(app_config.input.gamepad_slot_gilrs_ids),
+        gamepad_slots: GamepadSlotMap::from_runtime_or_legacy(
+            app_config.input.gamepad_slot_runtime_device_ids,
+            app_config.input.gamepad_slot_gilrs_ids,
+        ),
     }
 }
 

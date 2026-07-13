@@ -12,7 +12,7 @@ use windows_sys::Win32::System::LibraryLoader::{GetProcAddress, LoadLibraryW};
 use super::gamepad::{
     AnalogGamepadProcessor, ConnectedGamepad, GamepadButtonEvent, GamepadPollOutput,
     RawControlCode, RawInputEvent, RawInputEventKind, current_device_timestamp,
-    gamepad_device_id_from_backend_index,
+    gamepad_device_id_from_stable_id,
 };
 
 const GAME_INPUT_KIND_CONTROLLER: u32 = 0x0000_000e;
@@ -355,7 +355,7 @@ impl GameInputBackend {
                 DeviceState {
                     stable_id: identity.stable_id.clone(),
                     backend_id,
-                    device_id: gamepad_device_id_from_backend_index(backend_id),
+                    device_id: gamepad_device_id_from_stable_id(&identity.stable_id),
                     name: identity.name,
                     device,
                     connected: true,
@@ -496,7 +496,9 @@ fn device_identity(device: *mut IGameInputDevice) -> Option<DeviceIdentity> {
     }
     // SAFETY: GameInput guarantees the info pointer for the lifetime of the device.
     let info = unsafe { &*info };
-    let stable_id = info.device_id.value.iter().map(|byte| format!("{byte:02x}")).collect();
+    let device_hex: String =
+        info.device_id.value.iter().map(|byte| format!("{byte:02x}")).collect();
+    let stable_id = format!("gameinput:{device_hex}");
     let name = format!("GameInput {:04X}:{:04X}", info.vendor_id, info.product_id);
     Some(DeviceIdentity { stable_id, name })
 }

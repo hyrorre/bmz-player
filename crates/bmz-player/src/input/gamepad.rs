@@ -7,6 +7,7 @@ use bmz_gameplay::input::backend::{
 };
 
 pub const GAMEPAD_DEVICE_ID_BASE: u32 = 16;
+const STABLE_GAMEPAD_DEVICE_ID_MASK: u32 = 0x8000_0000;
 const BASE_TICK_MAX_SIZE: f32 = 0.009;
 const ANALOG_SCRATCH_THRESHOLD_MIN: u32 = 1;
 const ANALOG_SCRATCH_THRESHOLD_MAX: u32 = 1_000;
@@ -36,6 +37,17 @@ impl GamepadSlotMap {
         Self { slot_device_ids: slot_ids.map(|id| id.map(gamepad_device_id_from_backend_index)) }
     }
 
+    pub fn from_runtime_or_legacy(
+        runtime_device_ids: [Option<u32>; 2],
+        legacy_slot_ids: [Option<u32>; 2],
+    ) -> Self {
+        if runtime_device_ids.iter().any(Option::is_some) {
+            Self::from_device_ids(runtime_device_ids.map(|id| id.map(DeviceId)))
+        } else {
+            Self::from_slot_ids(legacy_slot_ids)
+        }
+    }
+
     pub fn device_id_for_player(self, player_index: u32) -> Option<DeviceId> {
         let slot = player_index.checked_sub(1)? as usize;
         if slot >= self.slot_device_ids.len() {
@@ -48,6 +60,13 @@ impl GamepadSlotMap {
 
 pub fn gamepad_device_id_from_backend_index(index: u32) -> DeviceId {
     DeviceId(GAMEPAD_DEVICE_ID_BASE.saturating_add(index))
+}
+
+pub fn gamepad_device_id_from_stable_id(stable_id: &str) -> DeviceId {
+    let hash = stable_id
+        .bytes()
+        .fold(2_166_136_261u32, |hash, byte| hash.wrapping_mul(16_777_619) ^ u32::from(byte));
+    DeviceId(STABLE_GAMEPAD_DEVICE_ID_MASK | (hash & !STABLE_GAMEPAD_DEVICE_ID_MASK))
 }
 
 pub fn resolve_gamepad_slot_device_ids(
@@ -67,21 +86,24 @@ pub fn resolve_gamepad_slot_device_ids(
     configured
 }
 
-pub fn resolve_gamepad_slot_backend_ids(
-    mut configured: [Option<u32>; 2],
-    connected_backend_ids: impl IntoIterator<Item = u32>,
-) -> [Option<u32>; 2] {
-    let connected: Vec<u32> = connected_backend_ids.into_iter().collect();
-    for slot in 0..configured.len() {
-        if configured[slot].is_some() {
-            continue;
-        }
-        configured[slot] = connected
-            .iter()
-            .copied()
-            .find(|id| !configured.iter().flatten().any(|assigned| assigned == id));
-    }
-    configured
+pub fn resolve_gamepad_slot_assignments(
+    stable_ids: [Option<&str>; 2],
+    legacy_backend_ids: [Option<u32>; 2],
+    use_legacy_backend_ids: bool,
+    connected: &[ConnectedGamepad],
+) -> [Option<DeviceId>; 2] {
+    let configured = std::array::from_fn(|slot| {
+        stable_ids[slot].map(gamepad_device_id_from_stable_id).or_else(|| {
+            use_legacy_backend_ids
+                .then_some(legacy_backend_ids[slot])
+                .flatten()
+                .map(gamepad_device_id_from_backend_index)
+        })
+    });
+    resolve_gamepad_slot_device_ids(
+        configured,
+        connected.iter().filter(|device| device.is_connected).map(|device| device.device_id),
+    )
 }
 
 #[derive(Debug, Clone)]
@@ -138,6 +160,50 @@ pub struct GamepadPollOutput {
     pub buttons: Vec<GamepadButtonEvent>,
     pub axis_ticks: Vec<GamepadAxisTickEvent>,
     pub raw_events: Vec<RawInputEvent>,
+}
+
+pub enum GamepadBackend {
+    Gilrs(super::gilrs::GilrsBackend),
+    #[cfg(windows)]
+    GameInput(super::gameinput::GameInputBackend),
+}
+
+impl GamepadBackend {
+    pub fn poll(&mut self) -> GamepadPollOutput {
+        match self {
+            Self::Gilrs(backend) => backend.poll(),
+            #[cfg(windows)]
+            Self::GameInput(backend) => backend.poll(),
+        }
+    }
+
+    pub fn connected_gamepads(&self) -> Vec<ConnectedGamepad> {
+        match self {
+            Self::Gilrs(backend) => backend.connected_gamepads(),
+            #[cfg(windows)]
+            Self::GameInput(backend) => backend.connected_gamepads(),
+        }
+    }
+
+    pub fn name(&self) -> &'static str {
+        match self {
+            Self::Gilrs(_) => "gilrs",
+            #[cfg(windows)]
+            Self::GameInput(_) => "GameInput",
+        }
+    }
+
+    pub fn is_gilrs(&self) -> bool {
+        matches!(self, Self::Gilrs(_))
+    }
+
+    #[cfg(windows)]
+    pub fn gameinput_diagnostics(&self) -> Option<super::gameinput::GameInputPollDiagnostics> {
+        match self {
+            Self::Gilrs(_) => None,
+            Self::GameInput(backend) => Some(backend.diagnostics()),
+        }
+    }
 }
 
 #[derive(Default)]
@@ -374,6 +440,40 @@ mod tests {
             ),
             [Some(DeviceId(16)), Some(DeviceId(18))]
         );
+    }
+
+    #[test]
+    fn stable_gamepad_device_id_is_deterministic_and_separate_from_gilrs_range() {
+        let first = gamepad_device_id_from_stable_id("gameinput:controller-a");
+        let second = gamepad_device_id_from_stable_id("gameinput:controller-a");
+        assert_eq!(first, second);
+        assert_ne!(first, gamepad_device_id_from_backend_index(0));
+        assert_ne!(first, gamepad_device_id_from_stable_id("gameinput:controller-b"));
+    }
+
+    #[test]
+    fn stable_slot_is_kept_when_device_is_disconnected() {
+        let slots = resolve_gamepad_slot_assignments(
+            [Some("gameinput:controller-a"), None],
+            [None, None],
+            false,
+            &[],
+        );
+        assert_eq!(slots[0], Some(gamepad_device_id_from_stable_id("gameinput:controller-a")));
+    }
+
+    #[test]
+    fn gameinput_ignores_legacy_gilrs_slot_and_uses_connected_device() {
+        let connected = [ConnectedGamepad {
+            stable_id: "gameinput:controller-a".to_string(),
+            backend_id: 4,
+            device_id: gamepad_device_id_from_stable_id("gameinput:controller-a"),
+            name: "controller".to_string(),
+            is_connected: true,
+        }];
+        let slots =
+            resolve_gamepad_slot_assignments([None, None], [Some(1), None], false, &connected);
+        assert_eq!(slots[0], Some(connected[0].device_id));
     }
 
     #[test]

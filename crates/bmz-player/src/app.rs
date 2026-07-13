@@ -62,7 +62,10 @@ use crate::cli::{
     AUTOPLAY_ON_START_ARG, AppOptions, BOOT_RESULT_SAMPLE_ARG, SMOKE_EXIT_AFTER_FRAMES_ARG,
     SMOKE_EXIT_AFTER_RESULT_FRAMES_ARG, SMOKE_EXIT_ON_RESULT_ARG, SMOKE_SCREENSHOT_ARG,
 };
-use crate::config::app_config::{AppConfig, InputBackendKind, ObsConfig, PathEntry, WindowMode};
+use crate::config::app_config::{
+    AppConfig, GamepadBackendKind, GlobalInputConfig, InputBackendKind, ObsConfig, PathEntry,
+    WindowMode,
+};
 use crate::config::key_config::{
     KeyBindingSlot, KeyBindingTarget, apply_play_binding, clear_play_binding,
     is_scratch_down_control, is_scratch_up_control,
@@ -490,7 +493,7 @@ struct WinitApp {
     result_scene_started_at: Instant,
     option_panel_started_at: Instant,
     select_option_panel: u8,
-    gilrs: Option<crate::input::gilrs::GilrsBackend>,
+    gamepad: Option<crate::input::gamepad::GamepadBackend>,
     default_skin_manifest: Option<SkinManifest>,
     /// decode worker (CPU) → upload worker への送信端。
     skin_decode_tx: mpsc::Sender<PendingSkinResult>,
@@ -1855,6 +1858,78 @@ fn player_stats_snapshot_from_stats(stats: &PlayerStats) -> PlayerStatsSnapshot 
     }
 }
 
+fn initialize_gamepad_backend(
+    kind: GamepadBackendKind,
+    sensitivity: f32,
+    scratch_threshold: u32,
+) -> Option<crate::input::gamepad::GamepadBackend> {
+    match kind {
+        GamepadBackendKind::Auto => {
+            #[cfg(windows)]
+            match crate::input::gameinput::GameInputBackend::new(sensitivity, scratch_threshold) {
+                Ok(backend) => {
+                    tracing::info!("GameInput initialized on main thread");
+                    return Some(crate::input::gamepad::GamepadBackend::GameInput(backend));
+                }
+                Err(error) => {
+                    tracing::warn!(%error, "GameInput init failed, falling back to gilrs");
+                }
+            }
+            initialize_gilrs_backend(sensitivity, scratch_threshold)
+        }
+        GamepadBackendKind::Gilrs => initialize_gilrs_backend(sensitivity, scratch_threshold),
+        GamepadBackendKind::GameInput => {
+            #[cfg(windows)]
+            match crate::input::gameinput::GameInputBackend::new(sensitivity, scratch_threshold) {
+                Ok(backend) => {
+                    tracing::info!("GameInput initialized on main thread");
+                    return Some(crate::input::gamepad::GamepadBackend::GameInput(backend));
+                }
+                Err(error) => {
+                    tracing::warn!(%error, "GameInput init failed, falling back to gilrs");
+                }
+            }
+            #[cfg(not(windows))]
+            tracing::warn!("GameInput is only available on Windows, falling back to gilrs");
+            initialize_gilrs_backend(sensitivity, scratch_threshold)
+        }
+    }
+}
+
+fn initialize_gilrs_backend(
+    sensitivity: f32,
+    scratch_threshold: u32,
+) -> Option<crate::input::gamepad::GamepadBackend> {
+    match crate::input::gilrs::GilrsBackend::new(sensitivity, scratch_threshold) {
+        Ok(backend) => {
+            tracing::info!("gilrs initialized");
+            Some(crate::input::gamepad::GamepadBackend::Gilrs(backend))
+        }
+        Err(error) => {
+            tracing::warn!(%error, "gilrs init failed, gamepad disabled");
+            None
+        }
+    }
+}
+
+fn resolve_gamepad_runtime_slots(
+    config: &GlobalInputConfig,
+    backend: Option<&crate::input::gamepad::GamepadBackend>,
+) -> [Option<DeviceId>; 2] {
+    let connected = backend
+        .into_iter()
+        .flat_map(crate::input::gamepad::GamepadBackend::connected_gamepads)
+        .filter(|device| device.is_connected)
+        .collect::<Vec<_>>();
+    let using_gilrs = backend.is_some_and(crate::input::gamepad::GamepadBackend::is_gilrs);
+    crate::input::gamepad::resolve_gamepad_slot_assignments(
+        config.gamepad_slot_device_ids.each_ref().map(Option::as_deref),
+        config.gamepad_slot_gilrs_ids,
+        using_gilrs,
+        &connected,
+    )
+}
+
 impl WinitApp {
     fn new(
         boot: BootstrappedApp,
@@ -1943,19 +2018,14 @@ impl WinitApp {
         let now = Instant::now();
         let pending_play_skin = false;
 
-        let gilrs = if boot.app_config.input.gamepad_enabled {
+        let gamepad = if boot.app_config.input.gamepad_enabled {
             let sensitivity = boot.profile_config.input.analog_scratch_sensitivity;
             let threshold = boot.profile_config.input.analog_scratch_threshold;
-            match crate::input::gilrs::GilrsBackend::new(sensitivity, threshold) {
-                Ok(g) => {
-                    tracing::info!("gilrs initialized");
-                    Some(g)
-                }
-                Err(e) => {
-                    tracing::warn!(error = %e, "gilrs init failed, gamepad disabled");
-                    None
-                }
-            }
+            initialize_gamepad_backend(
+                boot.app_config.input.gamepad_backend,
+                sensitivity,
+                threshold,
+            )
         } else {
             None
         };
@@ -2082,7 +2152,7 @@ impl WinitApp {
             result_scene_started_at: now,
             option_panel_started_at: now,
             select_option_panel: 0,
-            gilrs,
+            gamepad,
             default_skin_manifest,
             skin_decode_tx,
             skin_decode_rx: Some(skin_decode_rx),
@@ -3917,7 +3987,8 @@ impl WinitApp {
 
     fn apply_gamepad_play_option_control(&mut self, device: DeviceId, control: &str) -> bool {
         let app_config = self.play_session_app_config();
-        let slots = crate::input::gamepad::GamepadSlotMap::from_slot_ids(
+        let slots = crate::input::gamepad::GamepadSlotMap::from_runtime_or_legacy(
+            app_config.input.gamepad_slot_runtime_device_ids,
             app_config.input.gamepad_slot_gilrs_ids,
         );
         match select_option_lane_for_gamepad(
@@ -4563,12 +4634,24 @@ impl WinitApp {
     }
 
     fn poll_gamepad_events(&mut self) {
-        let Some(gilrs) = &mut self.gilrs else { return };
-        let output = gilrs.poll();
-        if self.should_log_gamepad_key_config_raw_input() {
+        let should_log_raw_input = self.should_log_gamepad_key_config_raw_input();
+        let Some(gamepad) = &mut self.gamepad else { return };
+        let backend_name = gamepad.name();
+        let output = gamepad.poll();
+        if should_log_raw_input {
             for event in &output.raw_events {
-                log_gilrs_key_config_raw_event(event);
+                log_gamepad_key_config_raw_event(backend_name, event);
             }
+        }
+        #[cfg(windows)]
+        if let Some(diagnostics) = gamepad.gameinput_diagnostics()
+            && diagnostics.reading_count > 0
+        {
+            tracing::trace!(
+                reading_count = diagnostics.reading_count,
+                oldest_reading_age_us = diagnostics.oldest_reading_age_us,
+                "GameInput main-thread poll"
+            );
         }
         for event in &output.buttons {
             let device_event = crate::input::gamepad::to_device_input_event(event);
@@ -7271,18 +7354,9 @@ impl WinitApp {
     fn play_session_app_config(&self) -> AppConfig {
         let mut app_config = self.boot.app_config.clone();
         app_config.audio.sample_rate = self.play_output_sample_rate();
-        let connected_gilrs_ids = self
-            .gilrs
-            .as_ref()
-            .into_iter()
-            .flat_map(|gilrs| gilrs.connected_gamepads())
-            .filter(|gamepad| gamepad.is_connected)
-            .map(|gamepad| gamepad.backend_id);
-        app_config.input.gamepad_slot_gilrs_ids =
-            crate::input::gamepad::resolve_gamepad_slot_backend_ids(
-                app_config.input.gamepad_slot_gilrs_ids,
-                connected_gilrs_ids,
-            );
+        app_config.input.gamepad_slot_runtime_device_ids =
+            resolve_gamepad_runtime_slots(&app_config.input, self.gamepad.as_ref())
+                .map(|id| id.map(|id| id.0));
         app_config
     }
 
@@ -11121,7 +11195,7 @@ impl WinitApp {
             .map(crate::obs::ObsController::status)
             .unwrap_or_else(crate::obs::ObsConnectionStatus::disabled);
         let connected_gamepads =
-            self.gilrs.as_ref().map(|gilrs| gilrs.connected_gamepads()).unwrap_or_default();
+            self.gamepad.as_ref().map(|gamepad| gamepad.connected_gamepads()).unwrap_or_default();
         let Some(egui) = self.egui.as_mut() else {
             return;
         };
@@ -16252,7 +16326,7 @@ fn select_analog_scroll_duration(mov: i32) -> Duration {
     Duration::from_millis((120 / remaining / remaining) as u64)
 }
 
-fn log_gilrs_key_config_raw_event(event: &crate::input::gilrs::GilrsRawEvent) {
+fn log_gamepad_key_config_raw_event(backend: &str, event: &crate::input::gamepad::RawInputEvent) {
     let mapped_control = event.mapped_control.as_deref().unwrap_or("<unmapped>");
     tracing::info!(
         device_id = event.device_id.0,
@@ -16264,7 +16338,8 @@ fn log_gilrs_key_config_raw_event(event: &crate::input::gilrs::GilrsRawEvent) {
         pressed = ?event.pressed,
         value = ?event.value,
         ticks = ?event.ticks,
-        "gilrs key config input"
+        backend,
+        "gamepad key config input"
     );
 }
 

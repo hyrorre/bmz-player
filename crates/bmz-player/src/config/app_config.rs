@@ -248,16 +248,23 @@ pub enum VsyncModeConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GlobalInputConfig {
     pub backend: InputBackendKind,
+    #[serde(default)]
+    pub gamepad_backend: GamepadBackendKind,
     pub keyboard_enabled: bool,
     pub gamepad_enabled: bool,
     pub midi_enabled: bool,
-    /// 論理スロット `gamepad1` / `gamepad2` に割り当てる gilrs `GamepadId` (0-based)。
-    /// `None` は未割当で、接続順フォールバック (`gamepad1`→最初のパッド) を使う。
+    /// 論理スロット `gamepad1` / `gamepad2` に割り当てるbackend非依存のデバイスID。
+    #[serde(default, skip_serializing_if = "gamepad_stable_slots_unassigned")]
+    pub gamepad_slot_device_ids: [Option<String>; 2],
+    /// 旧設定との互換用gilrs `GamepadId`。stable IDへ移行後は保存しない。
     #[serde(
         default = "default_gamepad_slot_gilrs_ids",
         skip_serializing_if = "gamepad_slots_unassigned"
     )]
     pub gamepad_slot_gilrs_ids: [Option<u32>; 2],
+    /// プレイ開始時に解決したbmz-gameplayのDeviceId。設定ファイルには保存しない。
+    #[serde(skip)]
+    pub gamepad_slot_runtime_device_ids: [Option<u32>; 2],
 }
 
 fn default_gamepad_slot_gilrs_ids() -> [Option<u32>; 2] {
@@ -266,6 +273,19 @@ fn default_gamepad_slot_gilrs_ids() -> [Option<u32>; 2] {
 
 fn gamepad_slots_unassigned(slots: &[Option<u32>; 2]) -> bool {
     slots.iter().all(|slot| slot.is_none())
+}
+
+fn gamepad_stable_slots_unassigned(slots: &[Option<String>; 2]) -> bool {
+    slots.iter().all(|slot| slot.is_none())
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "PascalCase")]
+pub enum GamepadBackendKind {
+    #[default]
+    Auto,
+    Gilrs,
+    GameInput,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -477,10 +497,13 @@ impl Default for AppConfig {
             select: MusicSelectConfig::default(),
             input: GlobalInputConfig {
                 backend: InputBackendKind::Auto,
+                gamepad_backend: GamepadBackendKind::Auto,
                 keyboard_enabled: true,
                 gamepad_enabled: true,
                 midi_enabled: false,
+                gamepad_slot_device_ids: [None, None],
                 gamepad_slot_gilrs_ids: default_gamepad_slot_gilrs_ids(),
+                gamepad_slot_runtime_device_ids: [None, None],
             },
             logging: LoggingConfig { level: LogLevel::Info, file_logging: true },
             tables: DifficultyTablesConfig::default(),
