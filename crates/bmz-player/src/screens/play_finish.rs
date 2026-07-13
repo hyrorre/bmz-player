@@ -234,6 +234,10 @@ fn chart_playtime_seconds(chart: &bmz_chart::model::PlayableChart) -> u32 {
     (chart.end_time.0.max(0) / 1_000_000).min(i64::from(u32::MAX)) as u32
 }
 
+fn chart_duration_ms(chart: &bmz_chart::model::PlayableChart) -> u64 {
+    (chart.end_time.0.max(0) / 1_000) as u64
+}
+
 fn clear_type_from_name(name: &str) -> Option<ClearType> {
     match name {
         "NoPlay" => Some(ClearType::NoPlay),
@@ -282,6 +286,7 @@ fn enqueue_ir_jobs(
         result,
         IrSubmissionContext {
             played_at,
+            duration_ms: Some(chart_duration_ms(&session.chart)),
             ln_policy: score_key.ln_policy,
             effective_ln_mode: effective_ln_mode_from_score_policy(score_key.ln_policy),
             gauge_option: result.gauge_type.as_str().to_string(),
@@ -779,7 +784,8 @@ mod tests {
             }],
             ..IrConfig::default()
         };
-        let session = session();
+        let mut session = session();
+        Arc::get_mut(&mut session.chart).unwrap().end_time = TimeUs(123_456_789);
 
         let finished = finish_session_result(
             &mut score_db,
@@ -798,7 +804,10 @@ mod tests {
         .unwrap();
 
         assert_eq!(finished.summary.ir_queued_jobs, 1);
-        assert_eq!(network_db.pending_ir_score_jobs(1_700_000_108, 10).unwrap().len(), 1);
+        let jobs = network_db.pending_ir_score_jobs(1_700_000_108, 10).unwrap();
+        assert_eq!(jobs.len(), 1);
+        let payload: serde_json::Value = serde_json::from_str(&jobs[0].payload_json).unwrap();
+        assert_eq!(payload["result"]["duration_ms"], 123_456);
 
         std::fs::remove_dir_all(root).unwrap();
     }

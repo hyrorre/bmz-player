@@ -18,6 +18,7 @@ use super::types::{
 #[derive(Debug, Clone)]
 pub struct IrSubmissionContext {
     pub played_at: i64,
+    pub duration_ms: Option<u64>,
     pub ln_policy: LnScorePolicy,
     pub effective_ln_mode: LongNoteMode,
     pub gauge_option: String,
@@ -95,6 +96,7 @@ pub fn build_score_submission(
         result: IrResultPayload {
             clear: result.clear_type.as_str().to_string(),
             played_at: context.played_at,
+            duration_ms: context.duration_ms,
             judges: IrJudgePayload {
                 fast: IrJudgeSidePayload {
                     pgreat: judges.fast_pgreat,
@@ -318,6 +320,7 @@ mod tests {
             &result,
             IrSubmissionContext {
                 played_at: 100,
+                duration_ms: Some(123_456),
                 ln_policy: LnScorePolicy::ForceLn,
                 effective_ln_mode: LongNoteMode::Ln,
                 gauge_option: "normal".to_string(),
@@ -336,6 +339,7 @@ mod tests {
 
         assert_eq!(payload.result.min_bp, 6);
         assert_eq!(payload.result.min_cb, 3);
+        assert_eq!(payload.result.duration_ms, Some(123_456));
         assert_eq!(payload.result.pass_notes, None);
         assert_eq!(payload.rule.ln_policy, LnScorePolicy::ForceLn);
         assert_eq!(payload.rule.rule_mode, "Beatoraja");

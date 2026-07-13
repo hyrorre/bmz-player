@@ -139,6 +139,8 @@ pub struct IrRulePayload {
 pub struct IrResultPayload {
     pub clear: String,
     pub played_at: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub duration_ms: Option<u64>,
     pub judges: IrJudgePayload,
     pub ex_score: u32,
     pub max_combo: u32,

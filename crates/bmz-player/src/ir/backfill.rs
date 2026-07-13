@@ -512,6 +512,7 @@ fn build_local_score_submission(
         result: IrResultPayload {
             clear: row.clear_type.clone(),
             played_at: row.played_at,
+            duration_ms: None,
             judges: IrJudgePayload {
                 fast: IrJudgeSidePayload {
                     pgreat: row.fast_pgreat,
@@ -820,6 +821,8 @@ mod tests {
         assert_eq!(payload.rule.effective_ln_mode, IrEffectiveLnMode::Cn);
         assert_eq!(payload.rule.gauge, "Hard");
         assert_eq!(payload.result.ex_score, 1500);
+        assert_eq!(payload.result.duration_ms, None);
+        assert!(serde_json::to_value(&payload).unwrap()["result"].get("duration_ms").is_none());
         assert_eq!(payload.result.judges.fast.pgreat, 10);
         assert_eq!(payload.result.judges.slow.empty_poor, 12);
         assert_eq!(payload.play_options["arrange_1p"], "random");
