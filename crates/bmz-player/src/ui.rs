@@ -3288,7 +3288,10 @@ fn build_profile_settings_panel(
                 );
 
                 egui::CollapsingHeader::new("音量").default_open(true).show(ui, |ui| {
-                    ui.checkbox(&mut profile.audio_mix.normalize_chart_volume, "譜面音量正規化");
+                    ui.checkbox(
+                        &mut profile.audio_mix.normalize_chart_volume,
+                        "譜面・プレビュー音量正規化",
+                    );
                     volume_slider(ui, &mut profile.audio_mix.master_volume, "マスター");
                     volume_slider(ui, &mut profile.audio_mix.key_volume, "キー音");
                     volume_slider(ui, &mut profile.audio_mix.bgm_volume, "BGM");

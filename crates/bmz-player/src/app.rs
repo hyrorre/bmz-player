@@ -12,6 +12,7 @@ use anyhow::{Context, Result};
 use bmz_audio::engine::AudioEngine;
 use bmz_audio::ffmpeg_loader::FfmpegSampleLoader;
 use bmz_audio::loader::SampleLoader;
+use bmz_audio::loudness::analyze_preview_loudness;
 use bmz_audio::sample::DecodedSample;
 use bmz_chart::model::{BgaAssetId, BgaAssetRef, PlayableChart};
 use bmz_core::clear::{ClearType, GaugeType};
@@ -567,6 +568,7 @@ struct WinitApp {
     select_preview_source: Option<String>,
     select_preview_playing: bool,
     select_preview_fade: SelectPreviewFade,
+    select_preview_normalization_gain: f32,
     select_preview: Option<SelectChartPreview>,
     select_meta_image_cache: HashMap<String, SelectMetaImageCacheEntry>,
     select_meta_image_tx: mpsc::Sender<SelectMetaImageResult>,
@@ -995,8 +997,14 @@ struct SelectMetaImageResult {
 
 enum SelectPreviewCacheEntry {
     Loading,
-    Ready(DecodedSample),
+    Ready(PreparedSelectPreview),
     Missing,
+}
+
+#[derive(Clone)]
+struct PreparedSelectPreview {
+    sample: DecodedSample,
+    normalization_gain: f32,
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
@@ -1015,7 +1023,7 @@ enum SelectPreviewFade {
 struct SelectPreviewResult {
     key: String,
     path: Option<PathBuf>,
-    result: std::result::Result<DecodedSample, String>,
+    result: std::result::Result<PreparedSelectPreview, String>,
 }
 
 /// 選曲プレビューの重いロード処理は一度に1件だけ実行する。
@@ -2217,6 +2225,7 @@ impl WinitApp {
             select_preview_source: None,
             select_preview_playing: false,
             select_preview_fade: SelectPreviewFade::Silent,
+            select_preview_normalization_gain: 1.0,
             select_preview,
             select_meta_image_cache: HashMap::new(),
             select_meta_image_tx,
@@ -3087,9 +3096,9 @@ impl WinitApp {
             }
             let is_current = self.select_preview_source.as_deref() == Some(result.key.as_str());
             match result.result {
-                Ok(sample) => {
+                Ok(prepared) => {
                     if is_current {
-                        let loaded = self.play_select_preview_sample(sample.clone(), 0.0);
+                        let loaded = self.play_select_preview_sample(prepared.clone(), 0.0);
                         self.select_preview_playing = loaded;
                         if loaded {
                             self.begin_select_preview_fade_in();
@@ -3097,7 +3106,7 @@ impl WinitApp {
                     }
                     self.insert_select_preview_cache(
                         result.key,
-                        SelectPreviewCacheEntry::Ready(sample),
+                        SelectPreviewCacheEntry::Ready(prepared),
                     );
                 }
                 Err(error) => {
@@ -3166,10 +3175,13 @@ impl WinitApp {
         if cache_key.as_deref() == self.select_preview_source.as_deref() {
             if !self.select_preview_playing
                 && let Some(key) = cache_key.as_deref()
-                && let Some(SelectPreviewCacheEntry::Ready(sample)) =
-                    self.select_preview_cache.get(key)
+                && let Some(prepared) =
+                    self.select_preview_cache.get(key).and_then(|entry| match entry {
+                        SelectPreviewCacheEntry::Ready(prepared) => Some(prepared.clone()),
+                        _ => None,
+                    })
             {
-                self.select_preview_playing = self.play_select_preview_sample(sample.clone(), 0.0);
+                self.select_preview_playing = self.play_select_preview_sample(prepared, 0.0);
                 if self.select_preview_playing {
                     self.begin_select_preview_fade_in();
                 }
@@ -3188,8 +3200,9 @@ impl WinitApp {
                     fading_out = true;
                     false
                 }
-                Some(SelectPreviewCacheEntry::Ready(sample)) => {
-                    let loaded = self.play_select_preview_sample(sample.clone(), 0.0);
+                Some(SelectPreviewCacheEntry::Ready(prepared)) => {
+                    let prepared = prepared.clone();
+                    let loaded = self.play_select_preview_sample(prepared, 0.0);
                     if loaded {
                         self.begin_select_preview_fade_in();
                     }
@@ -3376,18 +3389,30 @@ impl WinitApp {
     }
 
     fn select_preview_volume(&self) -> f32 {
+        self.select_preview_volume_for_gain(self.select_preview_normalization_gain)
+    }
+
+    fn select_preview_volume_for_gain(&self, analyzed_gain: f32) -> f32 {
         let mix = &self.boot.profile_config.audio_mix;
         let volume = crate::config::play::volume_unit_to_f32(mix.master_volume)
-            * crate::config::play::volume_unit_to_f32(mix.preview_volume);
+            * crate::config::play::volume_unit_to_f32(mix.preview_volume)
+            * select_preview_normalization_gain(mix.normalize_chart_volume, analyzed_gain);
         volume.clamp(0.0, 1.0)
     }
 
-    fn play_select_preview_sample(&self, sample: DecodedSample, volume_factor: f32) -> bool {
-        let loaded = self.select_preview.as_ref().is_some_and(|preview| {
-            preview
-                .play_sample(sample, self.select_preview_volume() * volume_factor.clamp(0.0, 1.0))
-        });
+    fn play_select_preview_sample(
+        &mut self,
+        prepared: PreparedSelectPreview,
+        volume_factor: f32,
+    ) -> bool {
+        let volume = self.select_preview_volume_for_gain(prepared.normalization_gain)
+            * volume_factor.clamp(0.0, 1.0);
+        let loaded = self
+            .select_preview
+            .as_ref()
+            .is_some_and(|preview| preview.play_sample(prepared.sample, volume));
         if loaded {
+            self.select_preview_normalization_gain = prepared.normalization_gain;
             self.start_audio_output_stream();
         }
         loaded
@@ -3493,6 +3518,7 @@ impl WinitApp {
                         generated.start_ms,
                         sample_rate,
                     )
+                    .map(prepare_select_preview)
                     .map_err(|error| format!("{error:#}"));
                     let _ = tx.send(SelectPreviewResult { key: result_key, path: None, result });
                 })
@@ -3513,7 +3539,7 @@ impl WinitApp {
             let result = match path.as_ref() {
                 Some(path) => {
                     let mut loader = FfmpegSampleLoader::default();
-                    loader.load(path).map_err(|error| error.to_string())
+                    loader.load(path).map(prepare_select_preview).map_err(|error| error.to_string())
                 }
                 None => Err("chart preview audio file not found".to_string()),
             };
@@ -12515,6 +12541,24 @@ fn classify_audio_output_issue(
     } else {
         AudioOutputIssueCause::Unknown
     }
+}
+
+fn prepare_select_preview(sample: DecodedSample) -> PreparedSelectPreview {
+    let normalization_gain = analyze_preview_loudness(&sample)
+        .map(|analysis| {
+            tracing::debug!(
+                loudness_lufs = analysis.loudness_lufs,
+                normalization_gain = analysis.normalization_gain,
+                "analyzed select preview loudness"
+            );
+            analysis.normalization_gain
+        })
+        .unwrap_or(1.0);
+    PreparedSelectPreview { sample, normalization_gain }
+}
+
+fn select_preview_normalization_gain(enabled: bool, analyzed_gain: f32) -> f32 {
+    if enabled && analyzed_gain.is_finite() { analyzed_gain.clamp(0.0, 1.0) } else { 1.0 }
 }
 
 fn should_use_generated_preview(preview_file: &str, explicit_preview_missing: bool) -> bool {
@@ -21836,6 +21880,25 @@ mod tests {
             select_preview_fade_factor(SelectPreviewFade::FadingOut { started_at }, done),
             0.0
         );
+    }
+
+    #[test]
+    fn select_preview_normalization_gain_follows_chart_normalization_setting() {
+        assert_eq!(select_preview_normalization_gain(true, 0.25), 0.25);
+        assert_eq!(select_preview_normalization_gain(false, 0.25), 1.0);
+        assert_eq!(select_preview_normalization_gain(true, f32::NAN), 1.0);
+        assert_eq!(select_preview_normalization_gain(true, 1.5), 1.0);
+    }
+
+    #[test]
+    fn prepare_select_preview_keeps_sample_with_analyzed_gain() {
+        let sample = DecodedSample { channels: 2, sample_rate: 48_000, frames: vec![1.0; 480] };
+
+        let prepared = prepare_select_preview(sample.clone());
+
+        assert_eq!(prepared.sample.frames, sample.frames);
+        assert!(prepared.normalization_gain > 0.0);
+        assert!(prepared.normalization_gain < 1.0);
     }
 
     #[test]
