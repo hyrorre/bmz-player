@@ -70,6 +70,7 @@ const SOURCE_CONFIGS: readonly Omit<DifficultyTableSource, 'priority'>[] = [
   {
     sourceUrl: 'https://pmsdifficulty.xxxxxxxx.jp/_pastoral_upper.html',
     allowedOrigins: PMS_DATABASE_ORIGINS,
+    requestTimeoutMs: 30_000,
   },
   {
     sourceUrl: 'https://hibyethere.github.io/table/',

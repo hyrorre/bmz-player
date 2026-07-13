@@ -20,6 +20,8 @@ export interface DifficultyTableSource {
    * cross-origin target must be declared here; the source origin is implicit.
    */
   allowedOrigins?: readonly string[]
+  /** Slow dynamic data endpoints may opt into a longer per-request timeout. */
+  requestTimeoutMs?: number
   priority?: number
 }
 
@@ -274,7 +276,7 @@ async function fetchDifficultyTable(
 ): Promise<FetchedDifficultyTable> {
   const fetchOptions: Required<Omit<DifficultyTableFetchOptions, 'now'>> = {
     fetchImpl: options.fetchImpl ?? fetch,
-    timeoutMs: options.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+    timeoutMs: difficultyTableRequestTimeoutMs(source, options.timeoutMs),
     maxResponseBytes: options.maxResponseBytes ?? DEFAULT_MAX_RESPONSE_BYTES,
   }
   if (!Number.isSafeInteger(fetchOptions.timeoutMs) || fetchOptions.timeoutMs <= 0) {
@@ -324,6 +326,13 @@ async function fetchDifficultyTable(
     entries,
     fetchedAt: (options.now ?? (() => new Date()))(),
   }
+}
+
+function difficultyTableRequestTimeoutMs(
+  source: DifficultyTableSource,
+  requestedTimeoutMs?: number,
+): number {
+  return requestedTimeoutMs ?? source.requestTimeoutMs ?? DEFAULT_TIMEOUT_MS
 }
 
 async function persistDifficultyTableGeneration(
@@ -785,5 +794,6 @@ export const __test = {
   difficultyTableId,
   difficultyLabelsFromRows,
   difficultyTableSyncFailureDiagnostics,
+  difficultyTableRequestTimeoutMs,
   formatErrorWithCauses,
 }

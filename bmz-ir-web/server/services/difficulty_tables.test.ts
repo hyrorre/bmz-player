@@ -85,6 +85,29 @@ describe('difficulty table fetching', () => {
       'https://script.googleusercontent.com',
     ])
     expect(sources.get('https://hibyethere.github.io/table/')).toEqual(['https://asumatoki.kr'])
+    expect(
+      DIFFICULTY_TABLE_SOURCES.find(
+        ({ sourceUrl }) => sourceUrl === 'https://pmsdifficulty.xxxxxxxx.jp/_pastoral_upper.html',
+      )?.requestTimeoutMs,
+    ).toBe(30_000)
+  })
+
+  test('uses a source-specific request timeout unless the caller overrides it', () => {
+    expect(__test.difficultyTableRequestTimeoutMs({ sourceUrl: 'https://example.com' })).toBe(
+      15_000,
+    )
+    expect(
+      __test.difficultyTableRequestTimeoutMs({
+        sourceUrl: 'https://example.com',
+        requestTimeoutMs: 30_000,
+      }),
+    ).toBe(30_000)
+    expect(
+      __test.difficultyTableRequestTimeoutMs(
+        { sourceUrl: 'https://example.com', requestTimeoutMs: 30_000 },
+        123,
+      ),
+    ).toBe(123)
   })
 
   test('calls the supplied fetch function without an object receiver', async () => {
