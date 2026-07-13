@@ -490,6 +490,9 @@ struct WinitApp {
     select_bar_started_at: Instant,
     play_scene_started_at: Instant,
     play_ready_sound_started_at: Option<Instant>,
+    /// READY 前に E1/E2 が最後に押されていた時刻。
+    /// beatoraja と同様、解放後 1 秒間は PRELOAD を維持する。
+    play_ready_last_control_hold_at: Option<Instant>,
     decide_sound_stopped_for_chart_start: bool,
     result_scene_started_at: Instant,
     option_panel_started_at: Instant,
@@ -1081,6 +1084,7 @@ struct PendingPlayStart {
 struct PendingPlayPreload {
     generation: u64,
     chart_id: i64,
+    input: SharedInputBackend,
     rx: Receiver<PlayPreloadResult>,
 }
 
@@ -2159,6 +2163,7 @@ impl WinitApp {
             select_bar_started_at: now,
             play_scene_started_at: now,
             play_ready_sound_started_at: None,
+            play_ready_last_control_hold_at: None,
             decide_sound_stopped_for_chart_start: false,
             result_scene_started_at: now,
             option_panel_started_at: now,
@@ -2311,6 +2316,15 @@ impl WinitApp {
         self.egui.as_ref().is_some_and(|egui| egui.blocks_game_input(practice_overlay))
     }
 
+    fn play_input_backend(&self) -> Option<SharedInputBackend> {
+        play_input_backend_for_context(
+            self.active_play.as_ref().map(|active_play| &active_play.input),
+            self.pending_play_start.is_some(),
+            self.preloaded_play_session.as_ref().map(|preloaded| &preloaded.input),
+            self.pending_play_preload.as_ref().map(|pending| &pending.input),
+        )
+    }
+
     fn route_raw_keyboard_gameplay_input(
         &mut self,
         physical_key: PhysicalKey,
@@ -2319,8 +2333,7 @@ impl WinitApp {
         if !self.raw_input_keyboard_enabled() {
             return;
         }
-        let Some(input) = self.active_play.as_ref().map(|active_play| active_play.input.clone())
-        else {
+        let Some(input) = self.play_input_backend() else {
             if state == ElementState::Released {
                 self.raw_input_pressed_keys.remove(&physical_key);
             }
@@ -2339,8 +2352,7 @@ impl WinitApp {
     }
 
     fn release_raw_input_pressed_keys(&mut self) {
-        let Some(input) = self.active_play.as_ref().map(|active_play| active_play.input.clone())
-        else {
+        let Some(input) = self.play_input_backend() else {
             self.raw_input_pressed_keys.clear();
             return;
         };
@@ -4251,6 +4263,9 @@ impl WinitApp {
         }
 
         if self.pending_play_start.is_some() {
+            if window_keyboard_gameplay_enabled && let Some(input) = self.play_input_backend() {
+                crate::input::winit::handle_key_event(&input, event);
+            }
             if let Some(change) = hispeed_action(event.physical_key, event.state, event.repeat) {
                 self.apply_pending_play_hispeed_change(change);
                 return;
@@ -4666,8 +4681,8 @@ impl WinitApp {
         }
         for event in &output.buttons {
             let device_event = crate::input::gamepad::to_device_input_event(event);
-            if let Some(active_play) = &self.active_play {
-                active_play.input.push_shared_event(device_event);
+            if let Some(input) = self.play_input_backend() {
+                input.push_shared_event(device_event);
             }
             self.route_gamepad_button(event.device_id, &event.name, event.pressed);
         }
@@ -6202,6 +6217,7 @@ impl WinitApp {
         self.play_ending = None;
         self.finished_play = None;
         self.play_ready_sound_started_at = None;
+        self.play_ready_last_control_hold_at = None;
         self.draining_audio = None;
         self.clear_play_backbmp_state();
         self.last_play_snapshot = None;
@@ -6313,6 +6329,7 @@ impl WinitApp {
         self.play_ending = None;
         self.finished_play = None;
         self.play_ready_sound_started_at = None;
+        self.play_ready_last_control_hold_at = None;
         self.practice_chart_zero_time = None;
         if let Some(practice) = &mut self.practice_session {
             practice.phase = PracticePhase::Config;
@@ -7275,13 +7292,14 @@ impl WinitApp {
         let ln_policy_setting = self.boot.profile_config.play.ln_mode_policy;
         let rule_mode = self.boot.profile_config.play.rule_mode;
         let normalize_chart_volume = self.boot.profile_config.audio_mix.normalize_chart_volume;
+        let input = SharedInputBackend::default();
+        let preload_input = input.clone();
         thread::Builder::new()
             .name(format!("play-preload-{chart_id}"))
             .spawn(move || {
                 let result = (|| -> Result<PreloadedInputPlaySession> {
                     let library_db =
                         crate::storage::library_db::LibraryDatabase::open(&library_db_path)?;
-                    let input = crate::input::shared::SharedInputBackend::default();
                     let mut session_options =
                         crate::screens::play_start::play_session_options_from_start(
                             &app_config,
@@ -7295,13 +7313,18 @@ impl WinitApp {
                         session_options.clone(),
                         normalize_chart_volume,
                     )?;
-                    Ok(PreloadedInputPlaySession { chart_id, preloaded, input, session_options })
+                    Ok(PreloadedInputPlaySession {
+                        chart_id,
+                        preloaded,
+                        input: preload_input,
+                        session_options,
+                    })
                 })()
                 .map_err(|error| format!("{error:#}"));
                 let _ = tx.send(PlayPreloadResult { generation, chart_id, result });
             })
             .expect("failed to spawn play preload thread");
-        self.pending_play_preload = Some(PendingPlayPreload { generation, chart_id, rx });
+        self.pending_play_preload = Some(PendingPlayPreload { generation, chart_id, input, rx });
         tracing::info!(chart_id, generation, "play preload started");
         self.start_chart_bga_texture_preload(chart_id, bga_options);
     }
@@ -7668,6 +7691,7 @@ impl WinitApp {
         self.result_key5_held = false;
         self.result_key7_held = false;
         self.play_ready_sound_started_at = None;
+        self.play_ready_last_control_hold_at = None;
         self.decide_sound_stopped_for_chart_start = false;
         if options.chart_zero_time == TimeUs(0) {
             options.chart_zero_time = self.play_skin_playstart_offset();
@@ -7725,17 +7749,6 @@ impl WinitApp {
         skin_duration_ms(ready_delay_ms)
     }
 
-    fn play_skin_animation_elapsed_time(&self, play_elapsed_time: TimeUs) -> TimeUs {
-        let ready_delay_us = self.play_skin_ready_delay().as_micros().min(i64::MAX as u128) as i64;
-        clamped_play_skin_animation_elapsed_time(
-            play_elapsed_time,
-            ready_delay_us,
-            self.play_ready_sound_started_at.is_some(),
-            self.play_e1_held,
-            self.play_e2_held,
-        )
-    }
-
     fn clear_play_backbmp_state(&mut self) {
         self.play_backbmp_source = None;
         self.play_backbmp_loaded = false;
@@ -7750,6 +7763,7 @@ impl WinitApp {
         self.play_ending = None;
         self.result_exit = None;
         self.play_ready_sound_started_at = None;
+        self.play_ready_last_control_hold_at = None;
         self.decide_sound_stopped_for_chart_start = false;
         self.active_play = None;
         self.clear_play_control_holds();
@@ -7834,7 +7848,7 @@ impl WinitApp {
         snapshot.target = active_play.running.target.clone();
         snapshot.backbmp_background = self.play_backbmp_loaded;
         let play_elapsed_time = self.play_elapsed_time();
-        snapshot.play_elapsed_time = self.play_skin_animation_elapsed_time(play_elapsed_time);
+        snapshot.play_elapsed_time = play_elapsed_time;
         snapshot.ready_elapsed_time = self.play_ready_sound_started_at.map(elapsed_since);
         self.apply_course_skin_context(&mut snapshot);
         self.apply_play_table_text(&mut snapshot);
@@ -10578,12 +10592,18 @@ impl WinitApp {
         if self.play_ready_sound_started_at.is_some() {
             return;
         }
-        if self.play_elapsed_time().0 < self.play_skin_ready_delay().as_micros() as i64 {
+        self.sync_play_control_holds_from_pressed_controls();
+        let now = Instant::now();
+        if play_ready_blocked_by_control_holds(self.play_e1_held, self.play_e2_held) {
+            self.play_ready_last_control_hold_at = Some(now);
+            self.update_pending_play_snapshot_timers();
             return;
         }
-        self.sync_play_control_holds_from_pressed_controls();
-        if play_ready_blocked_by_control_holds(self.play_e1_held, self.play_e2_held) {
+        if play_ready_blocked_by_recent_control_hold(self.play_ready_last_control_hold_at, now) {
             self.update_pending_play_snapshot_timers();
+            return;
+        }
+        if self.play_elapsed_time().0 < self.play_skin_ready_delay().as_micros() as i64 {
             return;
         }
         let chart_id = self
@@ -10606,9 +10626,14 @@ impl WinitApp {
             .practice_chart_zero_time
             .take()
             .unwrap_or_else(|| self.play_skin_playstart_offset());
+        let play_elapsed_time = self.play_elapsed_time();
         let Some(active_play) = &mut self.active_play else {
             return;
         };
+        bmz_gameplay::session::drain_pre_ready_visual_inputs(
+            &mut active_play.running.session,
+            play_elapsed_time,
+        );
         if let Err(error) = active_play.running.start(chart_zero_time) {
             tracing::error!(%error, "failed to start preloaded play audio");
             self.abort_pending_play_start();
@@ -10618,12 +10643,14 @@ impl WinitApp {
         self.pending_play_start = None;
         self.play_system_sound(crate::system_sound::SoundType::PlayReady);
         if let Some(snapshot) = &mut self.last_play_snapshot {
+            snapshot.play_elapsed_time = play_elapsed_time;
             snapshot.ready_elapsed_time = Some(TimeUs(0));
             snapshot.time = chart_zero_time;
             if let Some(active_play) = &self.active_play {
-                crate::screens::play_snapshot::refresh_play_skin_visuals(
+                crate::screens::play_snapshot::refresh_play_skin_visuals_with_input_elapsed(
                     snapshot,
                     &active_play.running.session,
+                    play_elapsed_time,
                 );
             }
         }
@@ -10645,18 +10672,16 @@ impl WinitApp {
 
     fn update_pending_play_snapshot_timers(&mut self) {
         let play_elapsed_time = self.play_elapsed_time();
-        let skin_elapsed_time = self.play_skin_animation_elapsed_time(play_elapsed_time);
         let ready_elapsed_time = self.play_ready_sound_started_at.map(elapsed_since);
         let Some(snapshot) = &mut self.last_play_snapshot else {
             return;
         };
-        snapshot.play_elapsed_time = skin_elapsed_time;
+        snapshot.play_elapsed_time = play_elapsed_time;
         snapshot.ready_elapsed_time = ready_elapsed_time;
     }
 
     fn update_pre_ready_play_state(&mut self) {
         let play_elapsed_time = self.play_elapsed_time();
-        let skin_elapsed_time = self.play_skin_animation_elapsed_time(play_elapsed_time);
         let Some(active_play) = &mut self.active_play else {
             return;
         };
@@ -10667,7 +10692,7 @@ impl WinitApp {
         let Some(snapshot) = &mut self.last_play_snapshot else {
             return;
         };
-        snapshot.play_elapsed_time = skin_elapsed_time;
+        snapshot.play_elapsed_time = play_elapsed_time;
         crate::screens::play_snapshot::refresh_play_skin_visuals_with_input_elapsed(
             snapshot,
             &active_play.running.session,
@@ -10822,6 +10847,7 @@ impl WinitApp {
         self.play_e1_held = false;
         self.play_e2_held = false;
         self.play_e3_held = false;
+        self.play_ready_last_control_hold_at = None;
         self.play_exit_hold_started_at = None;
     }
 
@@ -10830,10 +10856,15 @@ impl WinitApp {
             &self.pressed_controls,
             &self.select_keys,
         );
+        let was_ready_blocked =
+            play_ready_blocked_by_control_holds(self.play_e1_held, self.play_e2_held);
         if self.play_e1_held == e1_held
             && self.play_e2_held == e2_held
             && self.play_e3_held == e3_held
         {
+            if was_ready_blocked {
+                self.play_ready_last_control_hold_at = Some(Instant::now());
+            }
             return;
         }
         if self.play_e1_held != e1_held || self.play_e2_held != e2_held {
@@ -10842,6 +10873,9 @@ impl WinitApp {
         self.play_e1_held = e1_held;
         self.play_e2_held = e2_held;
         self.play_e3_held = e3_held;
+        if was_ready_blocked || play_ready_blocked_by_control_holds(e1_held, e2_held) {
+            self.play_ready_last_control_hold_at = Some(Instant::now());
+        }
         self.refresh_play_lane_value_changing();
         self.update_play_exit_hold_timer();
     }
@@ -10872,10 +10906,17 @@ impl WinitApp {
         if !self.select_keys.is_start(control) {
             return false;
         }
+        let was_ready_blocked =
+            play_ready_blocked_by_control_holds(self.play_e1_held, self.play_e2_held);
         if self.play_e1_held != pressed {
             self.reset_play_analog_scroll();
         }
         self.play_e1_held = pressed;
+        if was_ready_blocked
+            || play_ready_blocked_by_control_holds(self.play_e1_held, self.play_e2_held)
+        {
+            self.play_ready_last_control_hold_at = Some(Instant::now());
+        }
         self.refresh_play_lane_value_changing();
         self.update_play_exit_hold_timer();
         true
@@ -10909,6 +10950,8 @@ impl WinitApp {
     }
 
     fn update_play_exit_control_state(&mut self, control: &str, pressed: bool) -> bool {
+        let was_ready_blocked =
+            play_ready_blocked_by_control_holds(self.play_e1_held, self.play_e2_held);
         let mut changed = false;
         if self.select_keys.is_e2_action(control) {
             if self.play_e2_held != pressed {
@@ -10923,6 +10966,11 @@ impl WinitApp {
         }
         if !changed {
             return false;
+        }
+        if was_ready_blocked
+            || play_ready_blocked_by_control_holds(self.play_e1_held, self.play_e2_held)
+        {
+            self.play_ready_last_control_hold_at = Some(Instant::now());
         }
         self.refresh_play_lane_value_changing();
         self.update_play_exit_hold_timer();
@@ -13063,7 +13111,7 @@ fn play_skin_video_draw_state(
         course_stage: snapshot.course_stage,
         hit_error_ring: snapshot.hit_error_ring.values,
         hit_error_ring_index: snapshot.hit_error_ring.index,
-        skin_loaded: snapshot.resources_loaded,
+        skin_loaded: snapshot.ready_elapsed_time.is_some(),
         ..bmz_render::skin::SkinDrawState::default()
     }
 }
@@ -13906,6 +13954,21 @@ fn launch_update_installer(path: &Path) -> Result<()> {
 enum KeyboardInputBackend {
     Window,
     RawInput,
+}
+
+fn play_input_backend_for_context(
+    active: Option<&SharedInputBackend>,
+    pending_start: bool,
+    preloaded: Option<&SharedInputBackend>,
+    pending_preload: Option<&SharedInputBackend>,
+) -> Option<SharedInputBackend> {
+    if let Some(active) = active {
+        return Some(active.clone());
+    }
+    if !pending_start {
+        return None;
+    }
+    preloaded.or(pending_preload).cloned()
 }
 
 fn keyboard_input_backend_for_config(config: &AppConfig) -> Option<KeyboardInputBackend> {
@@ -15393,20 +15456,13 @@ fn play_ready_blocked_by_control_holds(e1_held: bool, e2_held: bool) -> bool {
     e1_held || e2_held
 }
 
-fn clamped_play_skin_animation_elapsed_time(
-    play_elapsed_time: TimeUs,
-    ready_delay_us: i64,
-    ready_started: bool,
-    e1_held: bool,
-    e2_held: bool,
-) -> TimeUs {
-    if !ready_started
-        && play_ready_blocked_by_control_holds(e1_held, e2_held)
-        && play_elapsed_time.0 > ready_delay_us
-    {
-        return TimeUs(ready_delay_us);
-    }
-    play_elapsed_time
+fn play_ready_blocked_by_recent_control_hold(
+    last_control_hold_at: Option<Instant>,
+    now: Instant,
+) -> bool {
+    last_control_hold_at.is_some_and(|last_control_hold_at| {
+        now.saturating_duration_since(last_control_hold_at) <= Duration::from_secs(1)
+    })
 }
 
 fn should_begin_play_fadeout_after_final_notes(
@@ -18674,6 +18730,28 @@ mod tests {
     }
 
     #[test]
+    fn pending_play_uses_preload_input_before_session_install() {
+        use bmz_core::input::InputKind;
+        use bmz_gameplay::input::backend::InputBackend;
+
+        let preload_input = SharedInputBackend::default();
+        assert!(play_input_backend_for_context(None, false, None, Some(&preload_input)).is_none());
+
+        let selected =
+            play_input_backend_for_context(None, true, None, Some(&preload_input)).unwrap();
+        crate::input::winit::handle_key_parts(
+            &selected,
+            PhysicalKey::Code(KeyCode::KeyZ),
+            ElementState::Pressed,
+            false,
+        );
+
+        let events = preload_input.clone().drain_events();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].kind, InputKind::Press);
+    }
+
+    #[test]
     fn raw_input_blocking_drops_new_presses_but_keeps_release_for_tracked_keys() {
         let key = PhysicalKey::Code(KeyCode::KeyZ);
         let mut pressed_keys = HashSet::new();
@@ -19819,6 +19897,31 @@ mod tests {
     }
 
     #[test]
+    fn play_skin_video_loaded_state_starts_with_ready_timer() {
+        let preload_state = play_skin_video_draw_state(
+            &RenderSnapshot {
+                resources_loaded: true,
+                ready_elapsed_time: None,
+                ..RenderSnapshot::default()
+            },
+            None,
+            None,
+        );
+        assert!(!preload_state.skin_loaded);
+
+        let ready_state = play_skin_video_draw_state(
+            &RenderSnapshot {
+                resources_loaded: true,
+                ready_elapsed_time: Some(TimeUs(0)),
+                ..RenderSnapshot::default()
+            },
+            None,
+            None,
+        );
+        assert!(ready_state.skin_loaded);
+    }
+
+    #[test]
     fn skin_video_source_gating_respects_conditional_destination_if_ops() {
         use bmz_render::skin::SkinDrawState;
 
@@ -20237,51 +20340,26 @@ mod tests {
     }
 
     #[test]
-    fn play_skin_animation_elapsed_is_clamped_while_ready_is_blocked() {
-        assert_eq!(
-            clamped_play_skin_animation_elapsed_time(
-                TimeUs(4_000_000),
-                3_500_000,
-                false,
-                true,
-                false
-            ),
-            TimeUs(3_500_000)
-        );
-        assert_eq!(
-            clamped_play_skin_animation_elapsed_time(
-                TimeUs(4_000_000),
-                3_500_000,
-                false,
-                false,
-                true
-            ),
-            TimeUs(3_500_000)
-        );
+    fn play_ready_waits_one_second_after_last_e1_or_e2_hold() {
+        let last_control_hold_at = Instant::now();
+
+        assert!(play_ready_blocked_by_recent_control_hold(
+            Some(last_control_hold_at),
+            last_control_hold_at + Duration::from_millis(999)
+        ));
+        assert!(play_ready_blocked_by_recent_control_hold(
+            Some(last_control_hold_at),
+            last_control_hold_at + Duration::from_secs(1)
+        ));
+        assert!(!play_ready_blocked_by_recent_control_hold(
+            Some(last_control_hold_at),
+            last_control_hold_at + Duration::from_millis(1_001)
+        ));
     }
 
     #[test]
-    fn play_skin_animation_elapsed_advances_without_ready_block() {
-        assert_eq!(
-            clamped_play_skin_animation_elapsed_time(
-                TimeUs(4_000_000),
-                3_500_000,
-                false,
-                false,
-                false
-            ),
-            TimeUs(4_000_000)
-        );
-        assert_eq!(
-            clamped_play_skin_animation_elapsed_time(
-                TimeUs(4_000_000),
-                3_500_000,
-                true,
-                true,
-                false
-            ),
-            TimeUs(4_000_000)
-        );
+    fn play_ready_has_no_release_delay_without_prior_control_hold() {
+        assert!(!play_ready_blocked_by_recent_control_hold(None, Instant::now()));
     }
 
     #[test]

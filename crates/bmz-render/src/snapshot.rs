@@ -58,7 +58,7 @@ pub struct RenderSnapshot {
     /// READY timer (TIMER_READY=40) elapsed time. None while READY is not active yet.
     pub ready_elapsed_time: Option<TimeUs>,
     /// BMS リソース (WAV 等) のバックグラウンドロードが完了しているか。
-    /// op 80 (ロード中) / 81 (ロード完了) の判定に使う。
+    /// READY 遷移可否の判定に使う。op 80/81 は ready_elapsed_time から判定する。
     /// preload 完了前の placeholder snapshot では false。
     pub resources_loaded: bool,
     pub duration: TimeUs,

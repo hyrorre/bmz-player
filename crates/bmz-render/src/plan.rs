@@ -872,10 +872,6 @@ fn plan_play(
     let ready_timer_ms = snapshot
         .ready_elapsed_time
         .map(|time| (time.0 / 1_000).clamp(i32::MIN as i64, i32::MAX as i64) as i32);
-    let skin_load_delay_ms = skin
-        .document()
-        .map(|document| document.loadstart.max(0).saturating_add(document.loadend.max(0)))
-        .unwrap_or(0);
     let skin_canvas_h = skin.document().map_or(720, |d| d.h) as f32;
     let skin_lane_h = skin_lane_height_px(skin, key_mode, skin_canvas_h);
 
@@ -980,10 +976,9 @@ fn plan_play(
         course_stage: snapshot.course_stage,
         hit_error_ring: snapshot.hit_error_ring.values,
         hit_error_ring_index: snapshot.hit_error_ring.index,
-        // op 80/81: 実リソースロード完了かつスキン宣言の最低ロード演出時間の経過。
-        // READY 開始条件 (maybe_start_ready_phase) と揃え、op 80 のロード中表示から
-        // timer 40 のフェードアウト表示へ隙間なく引き継げるようにする。
-        skin_loaded: snapshot.resources_loaded && play_elapsed_ms >= skin_load_delay_ms,
+        // beatoraja の op 80/81 はリソースロード状態ではなく PRELOAD state を表す。
+        // TIMER_READY (40) の開始と同じフレームで 80 -> 81 を切り替える。
+        skin_loaded: snapshot.ready_elapsed_time.is_some(),
         ..crate::skin::SkinDrawState::default()
     };
     dynamic_timers.ingest_skin_events(&snapshot.skin_events, key_mode, snapshot.time.0);
@@ -4128,7 +4123,7 @@ mod tests {
     }
 
     #[test]
-    fn play_skin_loaded_after_load_delay_without_ready_timer() {
+    fn play_skin_stays_loading_after_load_delay_until_ready_timer_starts() {
         let document: crate::skin::SkinDocument = serde_json::from_str(
             r#"{
                 "type": 7,
@@ -4139,6 +4134,9 @@ mod tests {
                 "source": [{"id": 1, "path": "panel.png"}],
                 "image": [{"id": "panel", "src": 1, "x": 0, "y": 0, "w": 10, "h": 10}],
                 "destination": [
+                    {"id": "panel", "op": [80], "dst": [
+                        {"time": 0, "x": 80, "y": 0, "w": 10, "h": 10}
+                    ]},
                     {"id": "panel", "op": [81], "dst": [
                         {"time": 0, "x": 20, "y": 0, "w": 10, "h": 10}
                     ]}
@@ -4169,6 +4167,11 @@ mod tests {
         );
 
         assert!(plan.commands.iter().any(|command| matches!(
+            command,
+            DrawCommand::Image { texture, rect, .. }
+                if *texture == TextureId(99) && approx_eq(rect.x, 0.8)
+        )));
+        assert!(!plan.commands.iter().any(|command| matches!(
             command,
             DrawCommand::Image { texture, rect, .. }
                 if *texture == TextureId(99) && approx_eq(rect.x, 0.2)
