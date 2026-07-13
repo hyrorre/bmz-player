@@ -13,7 +13,7 @@ use bmz_audio::engine::AudioEngine;
 use bmz_audio::ffmpeg_loader::FfmpegSampleLoader;
 use bmz_audio::loader::SampleLoader;
 use bmz_audio::sample::DecodedSample;
-use bmz_chart::model::{BgaAssetId, PlayableChart};
+use bmz_chart::model::{BgaAssetId, BgaAssetRef, PlayableChart};
 use bmz_core::clear::{ClearType, GaugeType};
 use bmz_core::input::InputDeviceKind;
 use bmz_core::lane::{KeyMode, Lane};
@@ -527,6 +527,7 @@ struct WinitApp {
     bga_load_rx: Option<Receiver<PendingBgaImageResult>>,
     bga_load_status: BgaImageLoadStatus,
     bga_preload_frames: BgaFrameCatalog,
+    bga_preload_assets: Option<Vec<BgaAssetRef>>,
     skin_video_sources: HashMap<SkinKind, Vec<ActiveSkinVideoSource>>,
     pending_select_skin: bool,
     pending_decide_skin: bool,
@@ -1097,6 +1098,7 @@ struct PlayPreloadResult {
 struct QuickRetryReuse {
     preloaded: PreloadedInputPlaySession,
     bga_frames: BgaFrameCatalog,
+    bga_assets: Vec<BgaAssetRef>,
 }
 
 enum SongScanEvent {
@@ -1300,6 +1302,10 @@ impl BgaImageLoadStatus {
 }
 
 enum PendingBgaImageResult {
+    Manifest {
+        generation: u64,
+        assets: Vec<BgaAssetRef>,
+    },
     Loaded(PendingBgaImage),
     PreloadFailed {
         generation: u64,
@@ -2186,6 +2192,7 @@ impl WinitApp {
             bga_load_rx: None,
             bga_load_status: BgaImageLoadStatus::default(),
             bga_preload_frames: BgaFrameCatalog::new(),
+            bga_preload_assets: None,
             skin_video_sources: initial_skin_video_sources,
             pending_select_skin,
             pending_decide_skin,
@@ -7810,7 +7817,21 @@ impl WinitApp {
             .as_ref()
             .is_some_and(|autoplay| autoplay.is_full());
         active_play.running.session.lane_cover_changing = self.play_lane_value_changing();
-        active_play.running.bga_frames = if self.bga_load_chart_id == Some(chart_id) {
+        let active_bga_assets = &active_play.running.session.chart.bga_assets;
+        let preload_matches_active_chart = self.bga_load_chart_id == Some(chart_id)
+            && self
+                .bga_preload_assets
+                .as_deref()
+                .is_some_and(|preloaded| bga_asset_manifests_match(preloaded, active_bga_assets));
+        if self.bga_load_chart_id == Some(chart_id) && !preload_matches_active_chart {
+            tracing::warn!(
+                chart_id,
+                preloaded_assets = self.bga_preload_assets.as_ref().map_or(0, Vec::len),
+                active_assets = active_bga_assets.len(),
+                "discarding BGA preload because its asset manifest does not match the active chart"
+            );
+        }
+        active_play.running.bga_frames = if preload_matches_active_chart {
             self.bga_preload_frames.clone()
         } else {
             self.start_chart_bga_texture_load_for_chart(
@@ -7870,6 +7891,7 @@ impl WinitApp {
         self.bga_load_chart_id = Some(chart_id);
         self.bga_load_rx = None;
         self.bga_preload_frames.clear();
+        self.bga_preload_assets = None;
         let generation = self.bga_load_generation;
         self.bga_load_status = BgaImageLoadStatus::loading(generation, chart_id);
         let Some(uploader) = self.renderer.gpu_uploader() else {
@@ -7913,6 +7935,7 @@ impl WinitApp {
         self.bga_load_rx = None;
         self.bga_load_status = BgaImageLoadStatus::default();
         self.bga_preload_frames.clear();
+        self.bga_preload_assets = None;
     }
 
     fn start_chart_bga_texture_load_for_chart(
@@ -7924,6 +7947,7 @@ impl WinitApp {
         self.bga_load_chart_id = Some(chart_id);
         self.bga_load_rx = None;
         self.bga_preload_frames.clear();
+        self.bga_preload_assets = Some(chart.bga_assets.clone());
         let generation = self.bga_load_generation;
         self.bga_load_status = BgaImageLoadStatus::loading(generation, chart_id);
         let static_asset_count = chart
@@ -7960,6 +7984,12 @@ impl WinitApp {
         let mut keep_rx = true;
         loop {
             match rx.try_recv() {
+                Ok(PendingBgaImageResult::Manifest { generation, assets }) => {
+                    if generation != self.bga_load_generation {
+                        continue;
+                    }
+                    self.bga_preload_assets = Some(assets);
+                }
                 Ok(PendingBgaImageResult::Loaded(image)) => {
                     if image.generation != self.bga_load_generation {
                         continue;
@@ -8632,7 +8662,13 @@ impl WinitApp {
                 session_options,
             },
             bga_frames: active.running.bga_frames.clone(),
+            bga_assets: active.running.session.chart.bga_assets.clone(),
         })
+    }
+
+    fn reused_bga_load_state(current_generation: u64, chart_id: i64) -> (u64, BgaImageLoadStatus) {
+        let generation = current_generation.wrapping_add(1);
+        (generation, BgaImageLoadStatus::ready(generation, chart_id))
     }
 
     fn queue_quick_retry_reuse(&mut self, chart_id: i64, reuse: QuickRetryReuse) {
@@ -8641,12 +8677,22 @@ impl WinitApp {
         self.pending_play_preload = None;
         self.preloaded_play_session = Some(reuse.preloaded);
 
-        self.bga_load_generation = self.bga_load_generation.wrapping_add(1);
+        let (bga_generation, bga_load_status) =
+            Self::reused_bga_load_state(self.bga_load_generation, chart_id);
+        self.bga_load_generation = bga_generation;
         self.bga_load_chart_id = Some(chart_id);
         self.bga_load_rx = None;
+        self.bga_load_status = bga_load_status;
         let bga_frames = reuse.bga_frames.len();
         self.bga_preload_frames = reuse.bga_frames;
-        tracing::info!(chart_id, play_generation, bga_frames, "quick retry assets reused");
+        self.bga_preload_assets = Some(reuse.bga_assets);
+        tracing::info!(
+            chart_id,
+            play_generation,
+            bga_generation,
+            bga_frames,
+            "quick retry assets reused"
+        );
     }
 
     fn handle_quick_retry_control(&mut self, control: &str) -> bool {
@@ -13818,7 +13864,15 @@ fn chart_bga_texture_preload_worker(
     uploader: bmz_render::renderer::GpuUploader,
 ) {
     match assets {
-        Ok(assets) => chart_bga_texture_load_worker(generation, assets, tx, uploader),
+        Ok(assets) => {
+            if tx
+                .send(PendingBgaImageResult::Manifest { generation, assets: assets.clone() })
+                .is_err()
+            {
+                return;
+            }
+            chart_bga_texture_load_worker(generation, assets, tx, uploader);
+        }
         Err(error) => {
             let _ = tx.send(PendingBgaImageResult::PreloadFailed {
                 generation,
@@ -17214,6 +17268,19 @@ fn bga_images_ready_for_ready_phase(
     status.is_ready_for(generation, chart_id)
 }
 
+fn bga_asset_manifests_match(preloaded: &[BgaAssetRef], active: &[BgaAssetRef]) -> bool {
+    if preloaded.len() != active.len() {
+        return false;
+    }
+    let mut preloaded = preloaded.iter().collect::<Vec<_>>();
+    let mut active = active.iter().collect::<Vec<_>>();
+    preloaded.sort_by_key(|asset| asset.id);
+    active.sort_by_key(|asset| asset.id);
+    preloaded.iter().zip(active).all(|(preloaded, active)| {
+        preloaded.id == active.id && preloaded.path == active.path && preloaded.kind == active.kind
+    })
+}
+
 fn skin_duration_ms(ms: i32) -> Duration {
     Duration::from_millis(ms.max(0) as u64)
 }
@@ -18467,6 +18534,50 @@ mod tests {
         }
     }
 
+    fn app_test_bga_asset(
+        id: u32,
+        path: &str,
+        kind: bmz_chart::model::BgaAssetKind,
+    ) -> BgaAssetRef {
+        BgaAssetRef { id: BgaAssetId(id), path: path.into(), kind }
+    }
+
+    #[test]
+    fn bga_asset_manifest_matches_id_path_and_kind_regardless_of_order() {
+        use bmz_chart::model::BgaAssetKind::{Static, Video};
+
+        let preloaded = vec![
+            app_test_bga_asset(0, "base.png", Static),
+            app_test_bga_asset(1, "layer.mp4", Video),
+        ];
+        let active = vec![
+            app_test_bga_asset(1, "layer.mp4", Video),
+            app_test_bga_asset(0, "base.png", Static),
+        ];
+
+        assert!(bga_asset_manifests_match(&preloaded, &active));
+    }
+
+    #[test]
+    fn bga_asset_manifest_rejects_changed_id_path_or_kind() {
+        use bmz_chart::model::BgaAssetKind::{Static, Video};
+
+        let preloaded = vec![app_test_bga_asset(0, "base.png", Static)];
+
+        assert!(!bga_asset_manifests_match(
+            &preloaded,
+            &[app_test_bga_asset(1, "base.png", Static)],
+        ));
+        assert!(!bga_asset_manifests_match(
+            &preloaded,
+            &[app_test_bga_asset(0, "poor.png", Static)],
+        ));
+        assert!(!bga_asset_manifests_match(
+            &preloaded,
+            &[app_test_bga_asset(0, "base.png", Video)],
+        ));
+    }
+
     #[test]
     fn bga_images_ready_gate_waits_for_current_terminal_load() {
         assert!(!bga_images_ready_for_ready_phase(
@@ -18493,6 +18604,12 @@ mod tests {
             Some(42),
             true,
         ));
+
+        let (reused_generation, reused_status) = WinitApp::reused_bga_load_state(7, 42);
+        assert_eq!(reused_generation, 8);
+        assert!(
+            bga_images_ready_for_ready_phase(reused_status, reused_generation, Some(42), true,)
+        );
     }
 
     #[test]

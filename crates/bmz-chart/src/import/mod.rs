@@ -76,7 +76,8 @@ mod tests {
 
     use crate::hash::compute_chart_identity;
     use crate::model::{
-        BgaAssetKind, BgaEventKind, JudgeRankKind, LongNoteStyle, NoteKind, TimingEventKind,
+        BgaAssetId, BgaAssetKind, BgaEventKind, JudgeRankKind, LongNoteStyle, NoteKind,
+        TimingEventKind,
     };
 
     use super::*;
@@ -226,6 +227,46 @@ mod tests {
         assert!(result.chart.bga_events.iter().any(|event| event.kind == BgaEventKind::Base));
         assert!(result.chart.bga_events.iter().any(|event| event.kind == BgaEventKind::Poor));
         assert!(result.chart.bga_events.iter().all(|event| event.tick.0 == 0 && event.time.0 == 0));
+    }
+
+    #[test]
+    fn bga_asset_ids_are_stable_across_repeated_imports_and_definition_order() {
+        let dir = tempfile::tempdir().unwrap();
+        let ordered_path = dir.path().join("ordered.bms");
+        let reversed_path = dir.path().join("reversed.bms");
+        let ordered = "\
+#TITLE Stable BGA Assets
+#BPM 120
+#BMP01 base.png
+#BMP02 poor.webm
+#BMP03 layer.jpg
+#00004:01
+#00006:02
+#00007:03
+";
+        let reversed = "\
+#TITLE Stable BGA Assets
+#BPM 120
+#BMP03 layer.jpg
+#BMP02 poor.webm
+#BMP01 base.png
+#00004:01
+#00006:02
+#00007:03
+";
+        std::fs::write(&ordered_path, ordered).unwrap();
+        std::fs::write(&reversed_path, reversed).unwrap();
+
+        let expected = vec![
+            (1, BgaAssetId(0), dir.path().join("base.png"), BgaAssetKind::Static),
+            (2, BgaAssetId(1), dir.path().join("poor.webm"), BgaAssetKind::Video),
+            (3, BgaAssetId(2), dir.path().join("layer.jpg"), BgaAssetKind::Static),
+        ];
+
+        for path in [&ordered_path, &ordered_path, &reversed_path] {
+            let result = import_bms_chart(path, None, false).unwrap();
+            assert_eq!(bga_asset_manifest(&result.chart), expected);
+        }
     }
 
     #[test]
@@ -1042,5 +1083,20 @@ mod tests {
             asset.kind,
             asset.path.strip_prefix(repo_root()).unwrap().to_string_lossy().replace('\\', "/"),
         )
+    }
+
+    fn bga_asset_manifest(
+        chart: &PlayableChart,
+    ) -> Vec<(u16, BgaAssetId, std::path::PathBuf, BgaAssetKind)> {
+        let mut manifest = chart
+            .bga_asset_by_bmp_key
+            .iter()
+            .map(|(&key, &asset_id)| {
+                let asset = chart.bga_assets.iter().find(|asset| asset.id == asset_id).unwrap();
+                (key, asset_id, asset.path.clone(), asset.kind)
+            })
+            .collect::<Vec<_>>();
+        manifest.sort_by_key(|(key, ..)| *key);
+        manifest
     }
 }
