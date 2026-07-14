@@ -484,6 +484,14 @@ mod tests {
         let items = load_settings_items(CONFIG_DISPLAY_PATH);
         assert!(items.iter().any(|item| matches!(
             item,
+            SelectItem::Config(row) if row.entry_id == SettingsEntryId::HispeedStepNhs
+        )));
+        assert!(items.iter().any(|item| matches!(
+            item,
+            SelectItem::Config(row) if row.entry_id == SettingsEntryId::HispeedStepFhs
+        )));
+        assert!(items.iter().any(|item| matches!(
+            item,
             SelectItem::Config(row) if row.entry_id == SettingsEntryId::TargetGreenNumber
         )));
     }

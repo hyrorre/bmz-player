@@ -365,6 +365,12 @@ pub struct LaneViewConfig {
     pub hispeed: f32,
     #[serde(default = "default_hispeed_mode")]
     pub hispeed_mode: HispeedModeConfig,
+    /// NHS のプレイ中 HS 変更刻み。0.05..=1.0 の範囲で持つ。
+    #[serde(default = "default_hispeed_step_nhs")]
+    pub hispeed_step_nhs: f32,
+    /// FHS のプレイ中 HS 変更刻み。0.05..=1.0 の範囲で持つ。
+    #[serde(default = "default_hispeed_step_fhs")]
+    pub hispeed_step_fhs: f32,
     /// SUDDEN+ レーンカバー量。0..=1000 の整数で持ち、ランタイムでは /1000 して扱う。
     pub sudden: u32,
     /// LIFT 量。0..=1000 の整数で持ち、ランタイムでは /1000 して扱う。
@@ -383,6 +389,21 @@ pub enum HispeedModeConfig {
 
 fn default_hispeed_mode() -> HispeedModeConfig {
     HispeedModeConfig::Normal
+}
+
+pub const HISPEED_STEP_MIN: f32 = 0.05;
+pub const HISPEED_STEP_MAX: f32 = 1.0;
+
+pub fn default_hispeed_step_nhs() -> f32 {
+    0.25
+}
+
+pub fn default_hispeed_step_fhs() -> f32 {
+    0.50
+}
+
+pub fn normalize_hispeed_step(value: f32, default: f32) -> f32 {
+    if value.is_finite() { value.clamp(HISPEED_STEP_MIN, HISPEED_STEP_MAX) } else { default }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -1002,6 +1023,8 @@ impl ProfileConfig {
             lane: LaneViewConfig {
                 hispeed: 2.0,
                 hispeed_mode: default_hispeed_mode(),
+                hispeed_step_nhs: default_hispeed_step_nhs(),
+                hispeed_step_fhs: default_hispeed_step_fhs(),
                 sudden: 0,
                 lift: 0,
                 hidden: 0,
@@ -1197,6 +1220,28 @@ mod tests {
         assert_eq!(play.misslayer_duration_ms, 500);
         assert_eq!(play.play_exit_hold_ms, 1000);
         assert_eq!(play.bottom_shiftable_gauge, BottomShiftableGaugeConfig::AssistEasy);
+    }
+
+    #[test]
+    fn lane_view_uses_mode_specific_hispeed_step_defaults_for_old_profiles() {
+        let lane: LaneViewConfig = toml::from_str(
+            r#"
+            hispeed = 2.0
+            hispeed_mode = "Normal"
+            sudden = 0
+            lift = 0
+            hidden = 0
+            target_green_number = 300
+            "#,
+        )
+        .unwrap();
+
+        assert_eq!(lane.hispeed_step_nhs, 0.25);
+        assert_eq!(lane.hispeed_step_fhs, 0.50);
+
+        let serialized = toml::to_string(&lane).unwrap();
+        assert!(serialized.contains("hispeed_step_nhs = 0.25"));
+        assert!(serialized.contains("hispeed_step_fhs = 0.5"));
     }
 
     #[test]

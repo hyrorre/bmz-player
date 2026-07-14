@@ -1,9 +1,10 @@
 use super::play::{TARGET_GREEN_NUMBER_MAX, TARGET_GREEN_NUMBER_MIN};
 use super::profile_config::{
     AssistOptionConfig, BgaExpandConfig, BgaModeConfig, BottomShiftableGaugeConfig,
-    DoubleOptionConfig, GaugeAutoShiftConfig, GaugeTypeConfig, HispeedModeConfig, HsFixConfig,
-    JudgeAlgorithmConfig, LaneEffectConfig, ProfileConfig, RandomOptionConfig, ReplaySlotRule,
-    ScratchInputMode, SelectInputModeConfig, TargetOptionConfig,
+    DoubleOptionConfig, GaugeAutoShiftConfig, GaugeTypeConfig, HISPEED_STEP_MAX, HISPEED_STEP_MIN,
+    HispeedModeConfig, HsFixConfig, JudgeAlgorithmConfig, LaneEffectConfig, ProfileConfig,
+    RandomOptionConfig, ReplaySlotRule, ScratchInputMode, SelectInputModeConfig,
+    TargetOptionConfig, default_hispeed_step_fhs, default_hispeed_step_nhs, normalize_hispeed_step,
 };
 use bmz_gameplay::rule::RuleMode;
 use bmz_render::scene::ResultGradeDiffDisplay;
@@ -44,6 +45,8 @@ pub enum SettingsEntryId {
     ShowLnTailCap,
     Hispeed,
     HispeedMode,
+    HispeedStepNhs,
+    HispeedStepFhs,
     Sudden,
     Lift,
     Hidden,
@@ -103,6 +106,8 @@ impl SettingsEntryId {
     pub const DISPLAY_ENTRIES: &'static [Self] = &[
         Self::Hispeed,
         Self::HispeedMode,
+        Self::HispeedStepNhs,
+        Self::HispeedStepFhs,
         Self::Sudden,
         Self::Lift,
         Self::Hidden,
@@ -160,6 +165,8 @@ impl SettingsEntryId {
             Self::ShowLnTailCap => "LN TAIL CAP",
             Self::Hispeed => "HISPEED",
             Self::HispeedMode => "HS MODE",
+            Self::HispeedStepNhs => "HS STEP NHS",
+            Self::HispeedStepFhs => "HS STEP FHS",
             Self::Sudden => "SUDDEN+",
             Self::Lift => "LIFT",
             Self::Hidden => "HIDDEN",
@@ -238,6 +245,8 @@ pub fn format_settings_value(profile: &ProfileConfig, id: SettingsEntryId) -> St
         }
         SettingsEntryId::Hispeed => format!("{:.2}", profile.lane.hispeed),
         SettingsEntryId::HispeedMode => format_hispeed_mode(profile.lane.hispeed_mode),
+        SettingsEntryId::HispeedStepNhs => format!("{:.2}", profile.lane.hispeed_step_nhs),
+        SettingsEntryId::HispeedStepFhs => format!("{:.2}", profile.lane.hispeed_step_fhs),
         SettingsEntryId::Sudden => format_lane_unit(profile.lane.sudden),
         SettingsEntryId::Lift => format_lane_unit(profile.lane.lift),
         SettingsEntryId::Hidden => format_lane_unit(profile.lane.hidden),
@@ -379,11 +388,27 @@ pub fn adjust_settings_value(profile: &mut ProfileConfig, id: SettingsEntryId, d
                 true
             }
         }
-        SettingsEntryId::Hispeed => adjust_hispeed(&mut profile.lane.hispeed, delta),
+        SettingsEntryId::Hispeed => {
+            let (step, default) = match profile.lane.hispeed_mode {
+                HispeedModeConfig::Normal => {
+                    (profile.lane.hispeed_step_nhs, default_hispeed_step_nhs())
+                }
+                HispeedModeConfig::Floating => {
+                    (profile.lane.hispeed_step_fhs, default_hispeed_step_fhs())
+                }
+            };
+            adjust_hispeed(&mut profile.lane.hispeed, delta, step, default)
+        }
         SettingsEntryId::HispeedMode => {
             cycle_enum(delta, profile.lane.hispeed_mode, cycle_hispeed_mode)
                 .map(|next| profile.lane.hispeed_mode = next)
                 .is_some()
+        }
+        SettingsEntryId::HispeedStepNhs => {
+            adjust_hispeed_step(&mut profile.lane.hispeed_step_nhs, delta)
+        }
+        SettingsEntryId::HispeedStepFhs => {
+            adjust_hispeed_step(&mut profile.lane.hispeed_step_fhs, delta)
         }
         SettingsEntryId::Sudden => adjust_u32(
             &mut profile.lane.sudden,
@@ -468,10 +493,19 @@ fn adjust_offset_ms(value: &mut i64, delta: i32) -> bool {
     *value != before
 }
 
-fn adjust_hispeed(value: &mut f32, delta: i32) -> bool {
+fn adjust_hispeed(value: &mut f32, delta: i32, step: f32, default_step: f32) -> bool {
     let before = *value;
-    let step = 0.25 * delta.signum() as f32;
-    *value = (*value + step).clamp(0.5, 10.0);
+    let step = normalize_hispeed_step(step, default_step);
+    *value = (*value + step * delta.signum() as f32).clamp(0.5, 10.0);
+    (*value - before).abs() > f32::EPSILON
+}
+
+fn adjust_hispeed_step(value: &mut f32, delta: i32) -> bool {
+    let before = *value;
+    let current = normalize_hispeed_step(*value, 0.25);
+    let next = ((current / 0.05).round() as i32 + delta)
+        .clamp((HISPEED_STEP_MIN / 0.05).round() as i32, (HISPEED_STEP_MAX / 0.05).round() as i32);
+    *value = next as f32 / 20.0;
     (*value - before).abs() > f32::EPSILON
 }
 
@@ -905,10 +939,26 @@ mod tests {
     }
 
     #[test]
-    fn adjust_hispeed_in_quarter_steps() {
+    fn adjust_hispeed_uses_mode_specific_steps() {
         let mut profile = ProfileConfig::new_default("default", "Default", 0);
         assert!(adjust_settings_value(&mut profile, SettingsEntryId::Hispeed, 1));
         assert!((profile.lane.hispeed - 2.25).abs() < f32::EPSILON);
+
+        profile.lane.hispeed_mode = HispeedModeConfig::Floating;
+        assert!(adjust_settings_value(&mut profile, SettingsEntryId::Hispeed, 1));
+        assert!((profile.lane.hispeed - 2.75).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn adjust_hispeed_step_settings_increments_by_five_hundredths() {
+        let mut profile = ProfileConfig::new_default("default", "Default", 0);
+        assert_eq!(format_settings_value(&profile, SettingsEntryId::HispeedStepNhs), "0.25");
+        assert_eq!(format_settings_value(&profile, SettingsEntryId::HispeedStepFhs), "0.50");
+
+        assert!(adjust_settings_value(&mut profile, SettingsEntryId::HispeedStepNhs, 1));
+        assert!((profile.lane.hispeed_step_nhs - 0.30).abs() < f32::EPSILON);
+        assert!(adjust_settings_value(&mut profile, SettingsEntryId::HispeedStepFhs, -1));
+        assert!((profile.lane.hispeed_step_fhs - 0.45).abs() < f32::EPSILON);
     }
 
     #[test]

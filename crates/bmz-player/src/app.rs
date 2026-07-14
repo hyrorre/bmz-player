@@ -78,6 +78,7 @@ use crate::config::profile_config::{
     DoubleOptionConfig, GaugeAutoShiftConfig, GaugeTypeConfig, HispeedModeConfig, HsFixConfig,
     InputActionConfig, JudgeAlgorithmConfig, LaneConfig, ProfileConfig, ProfileInputConfig,
     RandomOptionConfig, ScratchDirectionConfig, SelectInputModeConfig, TargetOptionConfig,
+    default_hispeed_step_fhs, default_hispeed_step_nhs, normalize_hispeed_step,
     replay_slot_rule_indices,
 };
 use crate::config::save::{save_app_config, save_profile_config};
@@ -4188,10 +4189,15 @@ impl WinitApp {
                     c.definition.constraints.speed
                         == bmz_core::course::CourseSpeedConstraint::NoSpeed
                 });
+                let hispeed_step = hispeed_step_for_profile(
+                    &self.boot.profile_config,
+                    active_play.running.session.hispeed_mode,
+                );
                 if apply_play_option_control_to_session(
                     &mut active_play.running.session,
                     action,
                     speed_locked,
+                    hispeed_step,
                 ) {
                     tracing::info!(
                         hispeed = active_play.running.session.hispeed,
@@ -4222,7 +4228,15 @@ impl WinitApp {
                     tracing::debug!("hispeed change ignored: course NoSpeed constraint");
                     return;
                 }
-                apply_hispeed_change_to_session(&mut active_play.running.session, change);
+                let hispeed_step = hispeed_step_for_profile(
+                    &self.boot.profile_config,
+                    active_play.running.session.hispeed_mode,
+                );
+                apply_hispeed_change_to_session(
+                    &mut active_play.running.session,
+                    change,
+                    hispeed_step,
+                );
                 tracing::info!(
                     hispeed = active_play.running.session.hispeed,
                     hispeed_mode = ?active_play.running.session.hispeed_mode,
@@ -4988,10 +5002,15 @@ impl WinitApp {
                 {
                     return;
                 }
+                let hispeed_step = hispeed_step_for_profile(
+                    &self.boot.profile_config,
+                    active_play.running.session.hispeed_mode,
+                );
                 if apply_play_option_control_to_session(
                     &mut active_play.running.session,
                     action,
                     speed_locked,
+                    hispeed_step,
                 ) {
                     tracing::info!(
                         hispeed = active_play.running.session.hispeed,
@@ -15837,8 +15856,15 @@ fn apply_current_play_options_to_profile(
     options: CurrentPlayOptions,
     updated_at: i64,
 ) {
+    let saved_hispeed_mode = lane_state
+        .map(|state| hispeed_mode_to_config(state.hispeed_mode))
+        .unwrap_or(profile.lane.hispeed_mode);
     if let Some(hispeed) = hispeed {
-        profile.lane.hispeed = clamp_hispeed_for_profile(hispeed);
+        let step = match saved_hispeed_mode {
+            HispeedModeConfig::Normal => profile.lane.hispeed_step_nhs,
+            HispeedModeConfig::Floating => profile.lane.hispeed_step_fhs,
+        };
+        profile.lane.hispeed = clamp_hispeed_for_profile(hispeed, saved_hispeed_mode, step);
     }
     if let Some(state) = lane_state {
         profile.lane.sudden = crate::config::play::lane_f32_to_unit(state.lane_cover);
@@ -15859,8 +15885,15 @@ fn apply_current_play_options_to_profile(
     profile.updated_at = updated_at;
 }
 
-fn clamp_hispeed_for_profile(hispeed: f32) -> f32 {
-    (hispeed * 4.0).round().clamp(2.0, 40.0) / 4.0
+fn clamp_hispeed_for_profile(hispeed: f32, mode: HispeedModeConfig, step: f32) -> f32 {
+    let clamped = hispeed.clamp(0.5, 10.0);
+    if mode == HispeedModeConfig::Normal
+        && (normalize_hispeed_step(step, default_hispeed_step_nhs()) - 0.25).abs() < f32::EPSILON
+    {
+        (clamped * 4.0).round().clamp(2.0, 40.0) / 4.0
+    } else {
+        clamped
+    }
 }
 
 fn hispeed_mode_to_config(mode: HispeedMode) -> HispeedModeConfig {
@@ -17039,12 +17072,23 @@ fn green_number_change_step(change: GreenNumberChange) -> i32 {
     }
 }
 
-fn adjusted_hispeed(current: f32, change: HispeedChange) -> f32 {
+fn hispeed_step_for_profile(profile: &ProfileConfig, mode: HispeedMode) -> f32 {
+    match mode {
+        HispeedMode::Normal => {
+            normalize_hispeed_step(profile.lane.hispeed_step_nhs, default_hispeed_step_nhs())
+        }
+        HispeedMode::Floating => {
+            normalize_hispeed_step(profile.lane.hispeed_step_fhs, default_hispeed_step_fhs())
+        }
+    }
+}
+
+fn adjusted_hispeed(current: f32, change: HispeedChange, step: f32) -> f32 {
     let delta = match change {
-        HispeedChange::Down => -0.25,
-        HispeedChange::Up => 0.25,
+        HispeedChange::Down => -step,
+        HispeedChange::Up => step,
     };
-    ((current + delta) * 4.0).round().clamp(2.0, 40.0) / 4.0
+    (current + delta).clamp(0.5, 10.0)
 }
 
 fn sync_active_play_visual_offset_to_profile(
@@ -17060,7 +17104,12 @@ fn sync_active_play_visual_offset_to_profile(
 }
 
 fn apply_pending_hispeed_change_to_profile(profile: &mut ProfileConfig, change: HispeedChange) {
-    profile.lane.hispeed = adjusted_hispeed(profile.lane.hispeed, change);
+    let mode = match profile.lane.hispeed_mode {
+        HispeedModeConfig::Normal => HispeedMode::Normal,
+        HispeedModeConfig::Floating => HispeedMode::Floating,
+    };
+    let step = hispeed_step_for_profile(profile, mode);
+    profile.lane.hispeed = adjusted_hispeed(profile.lane.hispeed, change, step);
 }
 
 fn pending_play_green_number_for_profile_hispeed(
@@ -17104,14 +17153,16 @@ fn apply_pending_green_number_step_to_profile(
 fn apply_hispeed_change_to_session(
     session: &mut bmz_gameplay::session::GameSession,
     change: HispeedChange,
+    step: f32,
 ) {
-    session.hispeed = adjusted_hispeed(session.hispeed, change);
+    session.hispeed = adjusted_hispeed(session.hispeed, change, step);
 }
 
 fn apply_play_option_control_to_session(
     session: &mut bmz_gameplay::session::GameSession,
     action: PlayOptionControl,
     speed_locked: bool,
+    hispeed_step: f32,
 ) -> bool {
     match action {
         PlayOptionControl::ToggleHispeedMode => {
@@ -17122,7 +17173,7 @@ fn apply_play_option_control_to_session(
                     session.hispeed_mode = HispeedMode::Floating;
                 }
                 HispeedMode::Floating => {
-                    session.hispeed = clamp_hispeed_for_profile(session.hispeed);
+                    session.hispeed = session.hispeed.clamp(0.5, 10.0);
                     session.hispeed_mode = HispeedMode::Normal;
                 }
             }
@@ -17132,7 +17183,7 @@ fn apply_play_option_control_to_session(
             if speed_locked {
                 return false;
             }
-            apply_hispeed_change_to_session(session, change);
+            apply_hispeed_change_to_session(session, change, hispeed_step);
             true
         }
         PlayOptionControl::LaneCover(change) => {
@@ -21382,11 +21433,12 @@ mod tests {
     }
 
     #[test]
-    fn adjusted_hispeed_steps_by_quarter_and_clamps_range() {
-        assert_eq!(adjusted_hispeed(2.0, HispeedChange::Up), 2.25);
-        assert_eq!(adjusted_hispeed(2.0, HispeedChange::Down), 1.75);
-        assert_eq!(adjusted_hispeed(10.0, HispeedChange::Up), 10.0);
-        assert_eq!(adjusted_hispeed(0.5, HispeedChange::Down), 0.5);
+    fn adjusted_hispeed_uses_configured_step_and_clamps_range() {
+        assert_eq!(adjusted_hispeed(2.0, HispeedChange::Up, 0.25), 2.25);
+        assert_eq!(adjusted_hispeed(2.0, HispeedChange::Down, 0.25), 1.75);
+        assert_eq!(adjusted_hispeed(2.0, HispeedChange::Up, 0.5), 2.5);
+        assert_eq!(adjusted_hispeed(10.0, HispeedChange::Up, 0.5), 10.0);
+        assert_eq!(adjusted_hispeed(0.5, HispeedChange::Down, 0.5), 0.5);
     }
 
     #[test]
@@ -21402,6 +21454,16 @@ mod tests {
     }
 
     #[test]
+    fn pending_floating_hispeed_change_uses_default_half_step() {
+        let mut profile = ProfileConfig::new_default("default", "Default", 1);
+        profile.lane.hispeed = 2.0;
+        profile.lane.hispeed_mode = HispeedModeConfig::Floating;
+        apply_pending_hispeed_change_to_profile(&mut profile, HispeedChange::Up);
+
+        assert_eq!(profile.lane.hispeed, 2.5);
+    }
+
+    #[test]
     fn arrow_hispeed_change_keeps_target_green_before_ready() {
         let mut profile = ProfileConfig::new_default("default", "Default", 1);
         profile.lane.hispeed = 2.0;
@@ -21409,7 +21471,7 @@ mod tests {
         profile.lane.target_green_number = 300;
         apply_pending_hispeed_change_to_profile(&mut profile, HispeedChange::Up);
 
-        assert_eq!(profile.lane.hispeed, 2.25);
+        assert_eq!(profile.lane.hispeed, 2.5);
         assert_eq!(profile.lane.target_green_number, 300);
     }
 
@@ -21629,13 +21691,16 @@ mod tests {
         let mut session = crate::screens::play_session::build_game_session(
             std::sync::Arc::new(app_test_chart()),
             &profile,
-            crate::screens::play_session::PlaySessionOptions::default(),
+            crate::screens::play_session::PlaySessionOptions {
+                hs_fix: HsFixOption::StartBpm,
+                ..Default::default()
+            },
         );
 
         let hispeed = session.hispeed;
-        apply_hispeed_change_to_session(&mut session, HispeedChange::Up);
+        apply_hispeed_change_to_session(&mut session, HispeedChange::Up, 0.5);
 
-        assert_eq!(session.hispeed, hispeed + 0.25);
+        assert_eq!(session.hispeed, hispeed + 0.5);
         assert_eq!(session.target_green_number, 300);
     }
 
@@ -21647,13 +21712,17 @@ mod tests {
         let mut session = crate::screens::play_session::build_game_session(
             std::sync::Arc::new(app_test_chart()),
             &profile,
-            crate::screens::play_session::PlaySessionOptions::default(),
+            crate::screens::play_session::PlaySessionOptions {
+                hs_fix: HsFixOption::StartBpm,
+                ..Default::default()
+            },
         );
 
         assert!(apply_play_option_control_to_session(
             &mut session,
             PlayOptionControl::Hispeed(HispeedChange::Up),
             false,
+            0.5,
         ));
 
         assert_eq!(session.target_green_number, 300);
@@ -21827,7 +21896,13 @@ mod tests {
 
     #[test]
     fn normal_hispeed_rounding_restores_quarter_steps() {
-        assert_eq!(clamp_hispeed_for_profile(3.783_051), 3.75);
+        assert_eq!(clamp_hispeed_for_profile(3.783_051, HispeedModeConfig::Normal, 0.25), 3.75);
+    }
+
+    #[test]
+    fn custom_hispeed_step_preserves_non_quarter_profile_values() {
+        assert_eq!(clamp_hispeed_for_profile(2.3, HispeedModeConfig::Normal, 0.3), 2.3);
+        assert_eq!(clamp_hispeed_for_profile(2.37, HispeedModeConfig::Floating, 0.5), 2.37);
     }
 
     #[test]
@@ -21873,7 +21948,7 @@ mod tests {
             42,
         );
 
-        assert_eq!(profile.lane.hispeed, 3.25);
+        assert_eq!(profile.lane.hispeed, 3.37);
         assert_eq!(profile.lane.sudden, 420);
         assert_eq!(profile.lane.lift, 100);
         assert_eq!(profile.lane.hispeed_mode, HispeedModeConfig::Floating);

@@ -120,10 +120,10 @@ favorite 操作は invisible を使わず、登録済みなら解除、未登録
 
 | Key | 操作 |
 | --- | --- |
-| Left / Right | ハイスピードを 0.25 刻みで下げる / 上げる |
+| Left / Right | ハイスピードを HS MODE ごとの設定刻みで下げる / 上げる (NHS 既定 0.25、FHS 既定 0.50) |
 | Up / Down | レーンカバー表示中はカバー位置、非表示中は LIFT を調整 |
-| E1 hold + KEY1/3/5/7 | ハイスピードを下げる。9K では KEY1/3/5 |
-| E1 hold + KEY2/4/6 | ハイスピードを上げる |
+| E1 hold + KEY1/3/5/7 | HS MODE ごとの設定刻みでハイスピードを下げる。9K では KEY1/3/5 |
+| E1 hold + KEY2/4/6 | HS MODE ごとの設定刻みでハイスピードを上げる |
 | E1 hold + E2 | HS MODE を切替 |
 | E1 hold + Scratch Up/Down | レーンカバーを上げる / 下げる |
 | E2 hold + KEY1/3/5/7 | 緑数字を下げる。9K では KEY1/3/5 |

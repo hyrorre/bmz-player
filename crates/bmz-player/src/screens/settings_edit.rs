@@ -323,6 +323,8 @@ impl SettingsEditSession {
             SettingsEntryId::HispeedMode => {
                 SettingsBaseline::HispeedMode(profile.lane.hispeed_mode)
             }
+            SettingsEntryId::HispeedStepNhs => SettingsBaseline::F32(profile.lane.hispeed_step_nhs),
+            SettingsEntryId::HispeedStepFhs => SettingsBaseline::F32(profile.lane.hispeed_step_fhs),
             SettingsEntryId::Sudden => SettingsBaseline::U32(profile.lane.sudden),
             SettingsEntryId::Lift => SettingsBaseline::U32(profile.lane.lift),
             SettingsEntryId::Hidden => SettingsBaseline::U32(profile.lane.hidden),
@@ -461,6 +463,12 @@ impl SettingsEditSession {
             }
             (SettingsEntryId::HispeedMode, SettingsBaseline::HispeedMode(value)) => {
                 profile.lane.hispeed_mode = *value;
+            }
+            (SettingsEntryId::HispeedStepNhs, SettingsBaseline::F32(value)) => {
+                profile.lane.hispeed_step_nhs = *value;
+            }
+            (SettingsEntryId::HispeedStepFhs, SettingsBaseline::F32(value)) => {
+                profile.lane.hispeed_step_fhs = *value;
             }
             (SettingsEntryId::Sudden, SettingsBaseline::U32(value)) => {
                 profile.lane.sudden = *value;

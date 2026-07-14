@@ -40,8 +40,7 @@ use crate::config::play::{
     play_offsets_from_profile,
 };
 use crate::config::profile_config::{
-    BgaExpandConfig, BgaModeConfig, HispeedModeConfig, JudgeAlgorithmConfig, LaneEffectConfig,
-    ProfileConfig,
+    BgaExpandConfig, BgaModeConfig, JudgeAlgorithmConfig, LaneEffectConfig, ProfileConfig,
 };
 use crate::input::gamepad::GamepadSlotMap;
 use crate::ln_policy::{
@@ -224,7 +223,8 @@ pub fn apply_placeholder_session_visuals(
         lane_unit_to_f32(profile.lane.sudden),
         snapshot.lift,
     );
-    let hispeed_mode = hispeed_mode_from_profile(profile.lane.hispeed_mode);
+    let hispeed_mode = hispeed_mode_from_hs_fix(options.hs_fix);
+    snapshot.hispeed_mode_index = hispeed_mode_index(hispeed_mode);
     snapshot.hispeed = placeholder_hispeed_for_mode(
         profile,
         hispeed_mode,
@@ -375,7 +375,7 @@ pub fn build_game_session_with_input_backend(
         chart.metadata.initial_bpm,
         &chart.timing_events,
     );
-    let hispeed_mode = hispeed_mode_from_profile(profile.lane.hispeed_mode);
+    let hispeed_mode = hispeed_mode_from_hs_fix(options.hs_fix);
     let target_green_number = profile.lane.target_green_number.max(1);
     let lift = lane_unit_to_f32(profile.lane.lift);
     let lane_cover =
@@ -568,10 +568,20 @@ fn apply_judge_constraint_to_window(
     window
 }
 
-fn hispeed_mode_from_profile(mode: HispeedModeConfig) -> HispeedMode {
+fn hispeed_mode_from_hs_fix(hs_fix: HsFixOption) -> HispeedMode {
+    match hs_fix {
+        HsFixOption::Off => HispeedMode::Normal,
+        HsFixOption::StartBpm
+        | HsFixOption::MaxBpm
+        | HsFixOption::MainBpm
+        | HsFixOption::MinBpm => HispeedMode::Floating,
+    }
+}
+
+fn hispeed_mode_index(mode: HispeedMode) -> i32 {
     match mode {
-        HispeedModeConfig::Normal => HispeedMode::Normal,
-        HispeedModeConfig::Floating => HispeedMode::Floating,
+        HispeedMode::Normal => 0,
+        HispeedMode::Floating => 1,
     }
 }
 
@@ -2012,6 +2022,7 @@ mod tests {
     use rusqlite::Connection;
 
     use super::*;
+    use crate::config::profile_config::HispeedModeConfig;
     use crate::storage::common::configure_connection;
     use crate::storage::library_db::{ChartImportRecord, LibraryDatabase};
     use crate::storage::migration::{LIBRARY_MIGRATIONS, run_migrations};
@@ -2085,14 +2096,32 @@ mod tests {
         profile.lane.target_green_number = 300;
         // Stale value from a different BPM should not leak into READY display.
         profile.lane.hispeed = 4.0;
-        let options = PlaySessionOptions::default();
+        let options =
+            PlaySessionOptions { hs_fix: HsFixOption::StartBpm, ..PlaySessionOptions::default() };
         let mut snapshot =
             bmz_render::snapshot::RenderSnapshot { now_bpm: 240.0, ..Default::default() };
 
         apply_placeholder_session_visuals(&mut snapshot, &profile, KeyMode::K7, &options);
 
         assert!((snapshot.hispeed - 2.0).abs() < f32::EPSILON);
+        assert_eq!(snapshot.hispeed_mode_index, 1);
         assert_eq!(snapshot.note_display_duration_ms, 500);
+    }
+
+    #[test]
+    fn placeholder_session_visuals_use_hsfix_to_select_hispeed_mode() {
+        let mut profile = ProfileConfig::new_default("default", "Default", 1);
+        profile.lane.hispeed_mode = HispeedModeConfig::Floating;
+        profile.lane.hispeed = 4.0;
+        profile.lane.target_green_number = 300;
+        let options = PlaySessionOptions::default();
+        let mut snapshot =
+            bmz_render::snapshot::RenderSnapshot { now_bpm: 240.0, ..Default::default() };
+
+        apply_placeholder_session_visuals(&mut snapshot, &profile, KeyMode::K7, &options);
+
+        assert_eq!(snapshot.hispeed, 4.0);
+        assert_eq!(snapshot.hispeed_mode_index, 0);
     }
 
     #[test]
@@ -2860,12 +2889,35 @@ mod tests {
         let mut fast_chart = chart();
         fast_chart.metadata.initial_bpm = 240.0;
 
-        let session =
-            build_game_session(Arc::new(fast_chart), &profile, PlaySessionOptions::default());
+        let session = build_game_session(
+            Arc::new(fast_chart),
+            &profile,
+            PlaySessionOptions { hs_fix: HsFixOption::StartBpm, ..PlaySessionOptions::default() },
+        );
 
         assert_eq!(session.hispeed_mode, HispeedMode::Floating);
         assert_eq!(session.target_green_number, 300);
         assert!((session.hispeed - 2.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn build_game_session_uses_hsfix_to_select_hispeed_mode() {
+        let mut profile = ProfileConfig::new_default("default", "Default", 1);
+        profile.lane.hispeed_mode = HispeedModeConfig::Floating;
+        profile.lane.hispeed = 4.0;
+        profile.lane.target_green_number = 300;
+        let normal = build_game_session(Arc::new(chart()), &profile, PlaySessionOptions::default());
+        assert_eq!(normal.hispeed_mode, HispeedMode::Normal);
+        assert_eq!(normal.hispeed, 4.0);
+
+        profile.lane.hispeed_mode = HispeedModeConfig::Normal;
+        let floating = build_game_session(
+            Arc::new(chart()),
+            &profile,
+            PlaySessionOptions { hs_fix: HsFixOption::StartBpm, ..PlaySessionOptions::default() },
+        );
+        assert_eq!(floating.hispeed_mode, HispeedMode::Floating);
+        assert!((floating.hispeed - 4.0).abs() < f32::EPSILON);
     }
 
     #[test]

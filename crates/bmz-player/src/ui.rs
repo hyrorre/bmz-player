@@ -28,10 +28,11 @@ use crate::config::play::{TARGET_GREEN_NUMBER_MAX, TARGET_GREEN_NUMBER_MIN};
 use crate::config::profile_config::{
     AssistOptionConfig, BgaExpandConfig, BgaModeConfig, BottomShiftableGaugeConfig,
     DoubleOptionConfig, FastSlowDisplayScope, GaugeAutoShiftConfig, GaugeTypeConfig,
-    HispeedModeConfig, HsFixConfig, IrConfig, IrCredentialStoreConfig, IrProviderConfig,
-    IrProviderRoleConfig, IrSendPolicyConfig, JudgeAlgorithmConfig, LaneEffectConfig,
-    ProfileConfig, RandomOptionConfig, ReplaySlotRule, ScratchInputMode, SkinConfig,
-    SkinHistoryEntryConfig, SkinOffsetConfig, TargetOptionConfig,
+    HISPEED_STEP_MAX, HISPEED_STEP_MIN, HispeedModeConfig, HsFixConfig, IrConfig,
+    IrCredentialStoreConfig, IrProviderConfig, IrProviderRoleConfig, IrSendPolicyConfig,
+    JudgeAlgorithmConfig, LaneEffectConfig, ProfileConfig, RandomOptionConfig, ReplaySlotRule,
+    ScratchInputMode, SkinConfig, SkinHistoryEntryConfig, SkinOffsetConfig, TargetOptionConfig,
+    default_hispeed_step_fhs, default_hispeed_step_nhs, normalize_hispeed_step,
 };
 use crate::ln_policy::LnPolicySetting;
 use crate::paths::{AppPaths, resolve_app_paths};
@@ -3572,9 +3573,19 @@ fn build_profile_settings_panel(
                 });
 
                 egui::CollapsingHeader::new("表示").show(ui, |ui| {
+                    let hispeed_step = match profile.lane.hispeed_mode {
+                        HispeedModeConfig::Normal => normalize_hispeed_step(
+                            profile.lane.hispeed_step_nhs,
+                            default_hispeed_step_nhs(),
+                        ),
+                        HispeedModeConfig::Floating => normalize_hispeed_step(
+                            profile.lane.hispeed_step_fhs,
+                            default_hispeed_step_fhs(),
+                        ),
+                    };
                     ui.add(
                         egui::Slider::new(&mut profile.lane.hispeed, 0.5..=10.0)
-                            .step_by(0.25)
+                            .step_by(hispeed_step as f64)
                             .text("ハイスピード"),
                     );
                     egui::ComboBox::from_label("ハイスピードモード")
@@ -3591,6 +3602,23 @@ fn build_profile_settings_panel(
                                 hispeed_mode_label(HispeedModeConfig::Floating),
                             );
                         });
+                    ui.add(
+                        egui::Slider::new(
+                            &mut profile.lane.hispeed_step_nhs,
+                            HISPEED_STEP_MIN..=HISPEED_STEP_MAX,
+                        )
+                        .step_by(0.05)
+                        .text("NHS HS変更刻み"),
+                    );
+                    ui.add(
+                        egui::Slider::new(
+                            &mut profile.lane.hispeed_step_fhs,
+                            HISPEED_STEP_MIN..=HISPEED_STEP_MAX,
+                        )
+                        .step_by(0.05)
+                        .text("FHS HS変更刻み"),
+                    );
+                    ui.label("HS変更刻みの範囲: 0.05..=1.00");
                     let sudden_max =
                         crate::config::play::lane_unit_max_for_other(profile.lane.lift);
                     lane_unit_slider_with_max(ui, &mut profile.lane.sudden, "SUDDEN+", sudden_max);
