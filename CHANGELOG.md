@@ -1,14 +1,42 @@
 # CHANGELOG
 
-## Unreleased
+## v0.1.8
 
 ### 改善
 
-- Windowsのゲームパッド入力にmain-thread polling方式のGameInput backendを追加しました。
+- Windowsのゲームパッド入力にGameInput backendを追加しました。 (main-thread polling方式)
   - ゲームパッドbackendの既定値と自動選択はgilrsを優先し、Windowsでgilrsを初期化できない場合はGameInputへfallbackします。
   - GameInputのreading時刻を判定へ渡し、1P / 2P割り当てをstable device IDで保存するようにしました。
   - GameInputの履歴取得をデバイス単位にし、曲終了後や一時切断後も入力と割り当てが復帰するようにしました。
-  - ウィンドウのフォーカス切り替え時に選曲holdとアナログ入力を再同期し、選曲カーソルが意図せず動く問題を修正しました。
+
+- IR と難易度表の運用機能を拡張しました。
+  - 通常プレイの譜面時間を IR payload へ送信し、日次の成果レポート（clear、EX score、min BP）を確認できるようにしました。
+
+- ハイスピード関連の挙動を微調整しました。
+  - NHS / FHS で異なる変更刻みを設定できるようにしました。
+  - HS-FIX に応じたモードで開始するようにしました。
+    - HS-FIX OFF の場合 NHS で開始されます。
+    - HS-FIX OFF 以外の場合 FHS で開始されます。
+  - 目標緑数字が変更される条件を変更し beatoraja の仕様に近づけました。
+
+- コース、BGA、音声・動画の互換性を改善しました。
+  - 譜面取り込み時に未解決のコース譜面リンクを SHA256 / MD5 で補修し、コース完走 clear を最終ゲージと失敗状態から正しく算出するようにしました。
+  - 選曲 preview の音量正規化機能を追加しました。
+  - カーソル音の過剰な重複再生を抑えました。
+  - READY 前のプレイ intro、タイトル、BGA mode / expand を実セッションと揃え、コース開始時の表示切り替えを滑らかにしました。
+
+### 修正
+
+- GameInput の起動時 stack 使用量、プレイ遷移後の履歴再開、gilrs を既定値とする設定互換性を修正しました。
+- OBS の有効 / 無効切り替えが再起動まで反映されない問題を修正しました。
+- 自動判定調整が機能していない問題を修正しました。
+- 選曲 skin の genre 表示、14K turntable の回転方向、コース開始時の曲タイトル表示を beatoraja 互換へ修正しました。
+- 動画 BGA の開始時刻がズレることがある問題を修正しました。
+
+### テスト・開発環境
+
+- GameInput runtime とライセンスを Windows 配布物へ同梱し、入力設定・controls / packaging / HS 仕様書を更新しました。
+- IR daily report / difficulty table 同期、GameInput、READY / BGA preload、preview 音量、動画 timestamp、コース clear / link の回帰テストを追加・更新しました。
 
 ## v0.1.7
 
