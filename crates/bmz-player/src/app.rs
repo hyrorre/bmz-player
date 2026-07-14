@@ -12223,19 +12223,9 @@ impl WinitApp {
     }
 
     fn active_lane_state(&self) -> Option<ActiveLaneState> {
-        self.active_play.as_ref().map(|active| {
-            let session = &active.running.session;
-            let target_green_number = match session.hispeed_mode {
-                HispeedMode::Normal => current_green_number(session, session.audio_clock.now()),
-                HispeedMode::Floating => session.target_green_number,
-            };
-            ActiveLaneState {
-                lane_cover: session.lane_cover,
-                lift: session.lift,
-                hispeed_mode: session.hispeed_mode,
-                target_green_number,
-            }
-        })
+        self.active_play
+            .as_ref()
+            .map(|active| active_lane_state_for_session(&active.running.session))
     }
 
     fn save_current_play_options(&mut self, hispeed: Option<f32>, reason: &'static str) {
@@ -15834,6 +15824,17 @@ struct ActiveLaneState {
     lift: f32,
     hispeed_mode: HispeedMode,
     target_green_number: u32,
+}
+
+fn active_lane_state_for_session(session: &bmz_gameplay::session::GameSession) -> ActiveLaneState {
+    ActiveLaneState {
+        lane_cover: session.lane_cover,
+        lift: session.lift,
+        hispeed_mode: session.hispeed_mode,
+        // NHS の現在表示は曲終了時に変動するため保存しない。target は NHS→FHS
+        // の明示切替時に session 側で更新された値を引き継ぐ。
+        target_green_number: session.target_green_number,
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -21726,6 +21727,43 @@ mod tests {
         ));
 
         assert_eq!(session.target_green_number, 300);
+    }
+
+    #[test]
+    fn active_lane_state_keeps_green_number_captured_when_switching_to_fhs() {
+        let profile = ProfileConfig::new_default("default", "Default", 1);
+        let mut session = crate::screens::play_session::build_game_session(
+            std::sync::Arc::new(app_test_chart()),
+            &profile,
+            crate::screens::play_session::PlaySessionOptions::default(),
+        );
+        let frame = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
+        session.audio_clock =
+            bmz_audio::clock::AudioClock::with_position(48_000, 0, 0, frame, true);
+        let expected_target = current_green_number(&session, session.audio_clock.now());
+        assert_ne!(expected_target, session.target_green_number);
+
+        assert!(apply_play_option_control_to_session(
+            &mut session,
+            PlayOptionControl::ToggleHispeedMode,
+            false,
+            0.25,
+        ));
+        assert_eq!(session.hispeed_mode, HispeedMode::Floating);
+        assert_eq!(session.target_green_number, expected_target);
+
+        // NHSへ戻ってHSを変更しても、終了時の現在緑数字でtargetを上書きしない。
+        session.hispeed = 1.0;
+        assert!(apply_play_option_control_to_session(
+            &mut session,
+            PlayOptionControl::ToggleHispeedMode,
+            false,
+            0.25,
+        ));
+        let state = active_lane_state_for_session(&session);
+
+        assert_eq!(state.hispeed_mode, HispeedMode::Normal);
+        assert_eq!(state.target_green_number, expected_target);
     }
 
     #[test]
