@@ -8,10 +8,13 @@ use std::pin::Pin;
 use std::sync::mpsc;
 use std::task::{Context as TaskContext, Poll, RawWaker, RawWakerVTable, Waker};
 use std::thread;
+#[cfg(windows)]
+use std::time::Duration;
 use std::time::Instant;
 
 use ab_glyph::{Font, FontArc, FontVec, Glyph, PxScale, ScaleFont, point};
 use anyhow::{Context, Result, anyhow};
+use image::ImageEncoder;
 
 use crate::assets::{RgbaImageAsset, load_png_rgba};
 use crate::bitmap_font::{BitmapFont, load_bitmap_font};
@@ -495,25 +498,27 @@ fn unpack_screenshot_rgba(
     rgba
 }
 
-fn save_screenshot_png(path: &Path, width: u32, height: u32, rgba: &[u8]) -> Result<()> {
+fn encode_screenshot_png(width: u32, height: u32, rgba: &[u8]) -> Result<Vec<u8>> {
+    let mut png = Vec::new();
+    image::codecs::png::PngEncoder::new(&mut png)
+        .write_image(rgba, width, height, image::ExtendedColorType::Rgba8)
+        .context("failed to encode screenshot as PNG")?;
+    Ok(png)
+}
+
+fn save_screenshot_png(path: &Path, png: &[u8]) -> Result<()> {
     if let Some(parent) = path.parent()
         && !parent.as_os_str().is_empty()
     {
         std::fs::create_dir_all(parent)
             .with_context(|| format!("failed to create {}", parent.display()))?;
     }
-    image::save_buffer_with_format(
-        path,
-        rgba,
-        width,
-        height,
-        image::ColorType::Rgba8,
-        image::ImageFormat::Png,
-    )
-    .with_context(|| format!("failed to save screenshot {}", path.display()))
+    std::fs::write(path, png)
+        .with_context(|| format!("failed to save screenshot {}", path.display()))
 }
 
-fn copy_screenshot_to_clipboard(width: u32, height: u32, rgba: &[u8]) -> Result<()> {
+#[cfg(not(windows))]
+fn copy_screenshot_to_clipboard(width: u32, height: u32, rgba: &[u8], _png: &[u8]) -> Result<()> {
     let mut clipboard = arboard::Clipboard::new().context("failed to open clipboard")?;
     clipboard
         .set_image(arboard::ImageData {
@@ -522,6 +527,88 @@ fn copy_screenshot_to_clipboard(width: u32, height: u32, rgba: &[u8]) -> Result<
             bytes: Cow::Borrowed(rgba),
         })
         .context("failed to copy screenshot to clipboard")
+}
+
+fn screenshot_dibv5(width: u32, height: u32, rgba: &[u8]) -> Result<Vec<u8>> {
+    const HEADER_SIZE: usize = 124;
+    const BI_BITFIELDS: u32 = 3;
+    const LCS_SRGB: u32 = 0x7352_4742;
+    const LCS_GM_IMAGES: u32 = 4;
+
+    let row_bytes = usize::try_from(width)
+        .ok()
+        .and_then(|width| width.checked_mul(4))
+        .context("screenshot width is too large for DIBV5")?;
+    let expected_len = row_bytes
+        .checked_mul(height as usize)
+        .context("screenshot dimensions are too large for DIBV5")?;
+    if rgba.len() != expected_len {
+        return Err(anyhow!(
+            "invalid screenshot RGBA length for DIBV5: expected {expected_len}, got {}",
+            rgba.len()
+        ));
+    }
+    let image_size = u32::try_from(expected_len).context("screenshot DIBV5 exceeds 4 GiB")?;
+    let width = i32::try_from(width).context("screenshot width exceeds DIBV5 range")?;
+    let height = i32::try_from(height).context("screenshot height exceeds DIBV5 range")?;
+
+    let mut dib = vec![0; HEADER_SIZE];
+    dib[0..4].copy_from_slice(&(HEADER_SIZE as u32).to_le_bytes());
+    dib[4..8].copy_from_slice(&width.to_le_bytes());
+    dib[8..12].copy_from_slice(&height.to_le_bytes());
+    dib[12..14].copy_from_slice(&1_u16.to_le_bytes());
+    dib[14..16].copy_from_slice(&32_u16.to_le_bytes());
+    dib[16..20].copy_from_slice(&BI_BITFIELDS.to_le_bytes());
+    dib[20..24].copy_from_slice(&image_size.to_le_bytes());
+    dib[40..44].copy_from_slice(&0x00ff_0000_u32.to_le_bytes());
+    dib[44..48].copy_from_slice(&0x0000_ff00_u32.to_le_bytes());
+    dib[48..52].copy_from_slice(&0x0000_00ff_u32.to_le_bytes());
+    dib[52..56].copy_from_slice(&0xff00_0000_u32.to_le_bytes());
+    dib[56..60].copy_from_slice(&LCS_SRGB.to_le_bytes());
+    dib[108..112].copy_from_slice(&LCS_GM_IMAGES.to_le_bytes());
+
+    dib.reserve(expected_len);
+    for row in rgba.chunks_exact(row_bytes).rev() {
+        for pixel in row.chunks_exact(4) {
+            dib.extend_from_slice(&[pixel[2], pixel[1], pixel[0], pixel[3]]);
+        }
+    }
+    Ok(dib)
+}
+
+#[cfg(windows)]
+fn copy_screenshot_to_clipboard(width: u32, height: u32, rgba: &[u8], png: &[u8]) -> Result<()> {
+    const CF_DIBV5: u32 = 17;
+    const OPEN_ATTEMPTS: usize = 50;
+    const OPEN_RETRY_DELAY: Duration = Duration::from_millis(10);
+
+    // Prepare every large allocation before taking the process-global Windows clipboard lock.
+    let dib = screenshot_dibv5(width, height, rgba)?;
+    let png_format = clipboard_win::register_format("PNG")
+        .context("failed to register Windows PNG clipboard format")?;
+    let mut attempt = 0;
+    let clipboard = loop {
+        match clipboard_win::Clipboard::new() {
+            Ok(clipboard) => break clipboard,
+            Err(_) if attempt < OPEN_ATTEMPTS => {
+                attempt += 1;
+                thread::sleep(OPEN_RETRY_DELAY);
+            }
+            Err(error) => {
+                return Err(anyhow!(
+                    "failed to open Windows clipboard after {} attempts: {error}",
+                    attempt + 1
+                ));
+            }
+        }
+    };
+    clipboard_win::empty().context("failed to empty Windows clipboard")?;
+    clipboard_win::raw::set_without_clear(png_format.get(), png)
+        .context("failed to set Windows PNG clipboard data")?;
+    clipboard_win::raw::set_without_clear(CF_DIBV5, &dib)
+        .context("failed to set Windows DIBV5 clipboard data")?;
+    drop(clipboard);
+    Ok(())
 }
 
 fn spawn_screenshot_save_job(
@@ -535,10 +622,24 @@ fn spawn_screenshot_save_job(
     let handle = thread::Builder::new()
         .name("bmz-screenshot-save".to_string())
         .spawn(move || {
-            save_screenshot_png(&request.path, width, height, &rgba)?;
+            let started = Instant::now();
+            let png = encode_screenshot_png(width, height, &rgba)?;
+            let png_encode_ms = started.elapsed().as_millis() as u64;
+            let write_started = Instant::now();
+            save_screenshot_png(&request.path, &png)?;
+            let png_write_ms = write_started.elapsed().as_millis() as u64;
+            let clipboard_started = Instant::now();
             let clipboard_result = request
                 .copy_to_clipboard
-                .then(|| copy_screenshot_to_clipboard(width, height, &rgba));
+                .then(|| copy_screenshot_to_clipboard(width, height, &rgba, &png));
+            let clipboard_ms = clipboard_started.elapsed().as_millis() as u64;
+            tracing::debug!(
+                path = %request.path.display(),
+                png_encode_ms,
+                png_write_ms,
+                clipboard_ms,
+                "screenshot save job completed"
+            );
             Ok(ScreenshotSaveOutcome { path: request.path, clipboard_result })
         })
         .with_context(|| {
@@ -555,14 +656,14 @@ fn finish_screenshot_save_job(job: ScreenshotSaveJob) {
                 "screenshot saved and copied to clipboard"
             ),
             Some(Err(error)) => tracing::warn!(
-                %error,
+                error = %format!("{error:#}"),
                 path = %outcome.path.display(),
                 "screenshot saved but clipboard copy failed"
             ),
             None => tracing::info!(path = %outcome.path.display(), "screenshot saved"),
         },
         Ok(Err(error)) => tracing::warn!(
-            %error,
+            error = %format!("{error:#}"),
             path = %job.path.display(),
             "failed to save screenshot"
         ),
@@ -4557,6 +4658,39 @@ mod tests {
 
     fn test_surface_size() -> SurfaceSize {
         SurfaceSize { width: 16, height: 9 }
+    }
+
+    #[test]
+    fn screenshot_png_is_encoded_once_for_file_and_clipboard_use() {
+        let png = encode_screenshot_png(1, 1, &[0x12, 0x34, 0x56, 0x78]).unwrap();
+        assert_eq!(&png[..8], b"\x89PNG\r\n\x1a\n");
+        let decoded = image::load_from_memory_with_format(&png, image::ImageFormat::Png)
+            .unwrap()
+            .into_rgba8();
+        assert_eq!(decoded.into_raw(), [0x12, 0x34, 0x56, 0x78]);
+    }
+
+    #[test]
+    fn screenshot_dibv5_has_bottom_up_bgra_pixels() {
+        let rgba = [
+            1, 2, 3, 4, 5, 6, 7, 8, // top row
+            9, 10, 11, 12, 13, 14, 15, 16, // bottom row
+        ];
+        let dib = screenshot_dibv5(2, 2, &rgba).unwrap();
+
+        assert_eq!(dib.len(), 124 + rgba.len());
+        assert_eq!(u32::from_le_bytes(dib[0..4].try_into().unwrap()), 124);
+        assert_eq!(i32::from_le_bytes(dib[4..8].try_into().unwrap()), 2);
+        assert_eq!(i32::from_le_bytes(dib[8..12].try_into().unwrap()), 2);
+        assert_eq!(u16::from_le_bytes(dib[14..16].try_into().unwrap()), 32);
+        assert_eq!(u32::from_le_bytes(dib[16..20].try_into().unwrap()), 3);
+        assert_eq!(&dib[124..], &[11, 10, 9, 12, 15, 14, 13, 16, 3, 2, 1, 4, 7, 6, 5, 8]);
+    }
+
+    #[test]
+    fn screenshot_dibv5_rejects_mismatched_rgba_length() {
+        let error = screenshot_dibv5(2, 2, &[0; 15]).unwrap_err();
+        assert!(error.to_string().contains("expected 16, got 15"));
     }
 
     #[test]

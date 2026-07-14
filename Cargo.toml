@@ -64,6 +64,7 @@ rayon = "1"
 font-kit = "0.14"
 ab_glyph = "0.2.32"
 arboard = "3"
+clipboard-win = { version = "5.4.1", features = ["std"] }
 rfd = "0.15"
 libc = "0.2"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "bmp", "gif", "tga"] }
