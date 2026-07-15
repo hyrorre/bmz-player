@@ -483,6 +483,9 @@ pub fn build_render_snapshot_with_target_and_bga_frames_cached(
         bpm_graph_segments: Arc::clone(&cache.bpm_graph_segments),
         autoplay: session.autoplay.as_ref().is_some_and(|autoplay| autoplay.is_full()),
         replay_playback: session.replay_player.is_some(),
+        practice_mode: false,
+        score_save_enabled: !session.autoplay.as_ref().is_some_and(|autoplay| autoplay.is_full())
+            && session.replay_player.is_none(),
         course_stage: None,
         course_titles: Default::default(),
         table_text_primary: String::new(),

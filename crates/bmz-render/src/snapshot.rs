@@ -152,6 +152,10 @@ pub struct RenderSnapshot {
     pub autoplay: bool,
     /// リプレイ再生中かどうか。プレイ中 FAST/SLOW 表示など、入力由来の表示制御に使う。
     pub replay_playback: bool,
+    /// プラクティス再生中かどうか。beatoraja OPTION_PRACTICE (1080) 用。
+    pub practice_mode: bool,
+    /// このプレイがスコア保存対象か。beatoraja OPTION_SCORE_SAVE_ENABLED (61) 用。
+    pub score_save_enabled: bool,
     /// OPTION_MODE_COURSE (290) とステージ別 op (280..283 / 289) 用。未対応時は None。
     pub course_stage: Option<CourseStageMarker>,
     /// beatoraja STRING_COURSE1_TITLE..10_TITLE (150..159) 用。

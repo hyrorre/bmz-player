@@ -1144,6 +1144,14 @@ pub struct SkinDrawState {
     pub stddev_timing_ms: Option<f32>,
     /// OPTION_AUTOPLAYON (33) / OPTION_AUTOPLAYOFF (32) 用。
     pub autoplay: bool,
+    /// BMSPlayer のプレイ画面か。プレイ専用 op が他 scene で true にならないために使う。
+    pub play_screen: bool,
+    /// BMSPlayer が replay モードか。
+    pub replay_playback: bool,
+    /// BMSPlayer が practice モードか。
+    pub practice_mode: bool,
+    /// beatoraja PlayerResource.updateScore。None は対象外 scene。
+    pub score_save_enabled: Option<bool>,
     /// OPTION_NOW_LOADING (80) / OPTION_LOADED (81) 用。
     pub skin_loaded: bool,
     /// OPTION_MODE_COURSE (290) とステージ別 op (280..283 / 289) 用。未対応時は None。
@@ -1365,6 +1373,10 @@ impl Default for SkinDrawState {
             average_duration_us: None,
             stddev_timing_ms: None,
             autoplay: false,
+            play_screen: false,
+            replay_playback: false,
+            practice_mode: false,
+            score_save_enabled: None,
             skin_loaded: true,
             course_stage: None,
             hsfix_index: 0,
@@ -6986,6 +6998,13 @@ fn test_skin_op(op: i32, enabled_options: &[i32], state: &SkinDrawState) -> bool
         // OPTION_AUTOPLAYOFF / OPTION_AUTOPLAYON
         32 => !state.autoplay,
         33 => state.autoplay,
+        // PlayerResource.updateScore. Select など対象外 scene では両方 false。
+        60 => state.score_save_enabled == Some(false),
+        61 => state.score_save_enabled == Some(true),
+        // BMSPlayer play mode. beatoraja では 82 は PLAY/PRACTICE、84 は REPLAY。
+        82 => state.play_screen && !state.autoplay && !state.replay_playback,
+        84 => state.play_screen && state.replay_playback,
+        1080 => state.play_screen && state.practice_mode,
         // OPTION_1P/2P/3P_PERFECT and EARLY/LATE judge-detail conditions.
         // beatoraja maps FAST/EARLY to positive recent judge timing, LATE/SLOW to negative.
         // judge_timing_sign is None when FAST/SLOW display is suppressed (Auto mode hides PGREAT,
@@ -13891,6 +13910,41 @@ mod tests {
             );
             assert!(test_skin_op(-op, &[op], &course_stage1), "negative {op} should invert false");
         }
+    }
+
+    #[test]
+    fn score_save_and_play_mode_ops_are_scene_scoped() {
+        let select = SkinDrawState::default();
+        let normal = SkinDrawState {
+            play_screen: true,
+            score_save_enabled: Some(true),
+            ..SkinDrawState::default()
+        };
+        let replay = SkinDrawState {
+            play_screen: true,
+            replay_playback: true,
+            score_save_enabled: Some(false),
+            ..SkinDrawState::default()
+        };
+        let practice = SkinDrawState {
+            play_screen: true,
+            practice_mode: true,
+            score_save_enabled: Some(false),
+            ..SkinDrawState::default()
+        };
+
+        assert!(!test_skin_op(60, &[], &select));
+        assert!(!test_skin_op(61, &[], &select));
+        assert!(!test_skin_op(82, &[], &select));
+        assert!(test_skin_op(61, &[], &normal));
+        assert!(test_skin_op(82, &[], &normal));
+        assert!(!test_skin_op(84, &[], &normal));
+        assert!(test_skin_op(60, &[], &replay));
+        assert!(!test_skin_op(82, &[], &replay));
+        assert!(test_skin_op(84, &[], &replay));
+        assert!(test_skin_op(60, &[], &practice));
+        assert!(test_skin_op(82, &[], &practice));
+        assert!(test_skin_op(1080, &[], &practice));
     }
 
     #[test]

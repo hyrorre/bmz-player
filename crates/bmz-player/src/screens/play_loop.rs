@@ -334,6 +334,7 @@ pub fn advance_running_play_session(
         running.applied_arrange.arrange_2p,
     );
     apply_running_play_target_to_snapshot(&mut output.render_snapshot, running);
+    apply_running_play_mode_to_snapshot(&mut output.render_snapshot, running);
     Ok(output)
 }
 
@@ -365,6 +366,7 @@ pub fn advance_running_play_session_until_result(
         running.applied_arrange.arrange_2p,
     );
     apply_running_play_target_to_snapshot(&mut frame.render_snapshot, running);
+    apply_running_play_mode_to_snapshot(&mut frame.render_snapshot, running);
     running.result_graph.record_frame(&frame);
     if matches!(frame.state, PlayState::Finished | PlayState::Failed) {
         let mut finished = finish_session_result_once(
@@ -400,6 +402,15 @@ fn apply_running_play_target_to_snapshot(
     running: &RunningPlaySession,
 ) {
     snapshot.target = running.target.clone();
+}
+
+fn apply_running_play_mode_to_snapshot(
+    snapshot: &mut RenderSnapshot,
+    running: &RunningPlaySession,
+) {
+    snapshot.practice_mode = running.practice_mode;
+    snapshot.score_save_enabled =
+        !snapshot.autoplay && !snapshot.replay_playback && !running.practice_mode;
 }
 
 /// `play_ending` 中に skin 側へ渡す壁時計ベースの timer 値。
@@ -438,6 +449,7 @@ pub fn refresh_play_ending_snapshot(
         running.applied_arrange.arrange_2p,
     );
     apply_running_play_target_to_snapshot(&mut snapshot, running);
+    apply_running_play_mode_to_snapshot(&mut snapshot, running);
     snapshot
 }
 

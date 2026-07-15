@@ -941,7 +941,13 @@ fn fmt_profile_ms(total_us: u128, frames: u128) -> String {
     format!("{:.3}", total_us as f64 / frames as f64 / 1000.0)
 }
 
-type PlaySkinSignature = (KeyMode, String, BTreeMap<String, String>, BTreeMap<String, String>);
+type PlaySkinSignature = (
+    KeyMode,
+    String,
+    BTreeMap<String, String>,
+    BTreeMap<String, String>,
+    bmz_skin::LuaLoadRuntimeState,
+);
 type ResultSkinSignature = (
     ResultSkinSlot,
     String,
@@ -2321,7 +2327,7 @@ impl WinitApp {
         let initial_result_skin_signature = result_skin_signature_for_config(
             &boot.profile_config.skin,
             ResultSkinSlot::Normal,
-            lua_runtime_state_for_result(false, false, KeyMode::default(), BTreeMap::new()),
+            lua_runtime_state_for_result(false, false, false, KeyMode::default(), BTreeMap::new()),
         );
 
         let mut app = Self {
@@ -2826,6 +2832,7 @@ impl WinitApp {
                     .then(|| self.finished_play.as_ref().map(|finished| finished.result.clear_type))
                     .flatten();
                 let result_failed = result_failed_for_skin_ops(summary.clear_type, raw_clear_type);
+                let score_save_enabled = self.current_result_score_save_enabled();
                 AppSceneSnapshot::Result(ResultSnapshot {
                     player_name: String::new(),
                     current_fps: 0,
@@ -2881,6 +2888,7 @@ impl WinitApp {
                         fast_empty_poor: summary.fast_slow_counts.fast_empty_poor,
                         slow_empty_poor: summary.fast_slow_counts.slow_empty_poor,
                     },
+                    score_save_enabled,
                     score_history_id: summary.score_history_id,
                     replay_saved: !summary.replay_path.is_empty(),
                     replay_slots: summary.replay_slots,
@@ -7808,7 +7816,10 @@ impl WinitApp {
         self.ensure_skin_ready(SkinKind::Decide);
         // Play スキンは裏で decode+upload を進めるが、Decide 入場では待たない。
         // 実際の Play 入場 (`start_chart_with_options`) で `ensure_skin_ready` が保険として残る。
-        self.spawn_play_skin_decode_for(self.play_skin_key_mode_for_chart(chart_id, &options));
+        let play_skin_key_mode = self.play_skin_key_mode_for_chart(chart_id, &options);
+        let play_skin_runtime_state =
+            lua_runtime_state_for_play(&options, self.boot.profile_config.play.auto_play);
+        self.spawn_play_skin_decode_for(play_skin_key_mode, play_skin_runtime_state);
         self.start_play_preload(chart_id, options.clone());
         let now = Instant::now();
         self.pending_decide = Some(DecideTransition {
@@ -8213,7 +8224,10 @@ impl WinitApp {
     fn start_chart_with_options(&mut self, chart_id: i64, mut options: PlayStartOptions) {
         self.last_play_was_autoplay = options.autoplay;
         self.ensure_skin_ready(SkinKind::Decide);
-        self.spawn_play_skin_decode_for(self.play_skin_key_mode_for_chart(chart_id, &options));
+        let play_skin_key_mode = self.play_skin_key_mode_for_chart(chart_id, &options);
+        let play_skin_runtime_state =
+            lua_runtime_state_for_play(&options, self.boot.profile_config.play.auto_play);
+        self.spawn_play_skin_decode_for(play_skin_key_mode, play_skin_runtime_state);
         self.ensure_skin_ready(SkinKind::Play);
         self.invalidate_play_preload();
         self.play_ending = None;
@@ -10871,7 +10885,29 @@ impl WinitApp {
         let key_mode = summary.as_ref().map(|summary| summary.key_mode).unwrap_or_default();
         let number_values =
             summary.as_ref().map(result_lua_runtime_number_values_for_summary).unwrap_or_default();
-        lua_runtime_state_for_result(table_song, ir_online, key_mode, number_values)
+        lua_runtime_state_for_result(
+            table_song,
+            ir_online,
+            self.result_score_save_enabled_for_slot(slot),
+            key_mode,
+            number_values,
+        )
+    }
+
+    fn current_result_score_save_enabled(&self) -> bool {
+        self.result_score_save_enabled_for_slot(self.current_result_skin_slot())
+    }
+
+    fn result_score_save_enabled_for_slot(&self, slot: ResultSkinSlot) -> bool {
+        match slot {
+            ResultSkinSlot::Course => {
+                self.finished_course.as_ref().is_some_and(|course| course.course_score_id.is_some())
+            }
+            ResultSkinSlot::Normal => self
+                .finished_play
+                .as_ref()
+                .is_some_and(|finished| finished.stored.score_history_id > 0),
+        }
     }
 
     fn set_empty_result_skin_context(&mut self) {
@@ -12192,7 +12228,7 @@ impl WinitApp {
         }
         // 旧 generation 分の upload 結果は apply_uploaded_skin の generation
         // チェックで破棄されるため、ここでの明示的なキュー破棄は不要。
-        if let Some((key_mode, old_path, old_options, old_files)) =
+        if let Some((key_mode, old_path, old_options, old_files, runtime_state)) =
             self.last_play_skin_signature.clone()
             && skin_reload_request_includes_key_mode(request, key_mode)
         {
@@ -12212,6 +12248,7 @@ impl WinitApp {
                     selection.path.trim().to_string(),
                     selection.options.clone(),
                     selection.files.clone(),
+                    runtime_state,
                 ));
                 tracing::debug!(
                     ?key_mode,
@@ -12221,7 +12258,7 @@ impl WinitApp {
                 return;
             }
             self.last_play_skin_signature = None;
-            self.spawn_play_skin_decode_for(key_mode);
+            self.spawn_play_skin_decode_for(key_mode, runtime_state);
         }
         let pending_after_reload = self.has_pending_skin_reload();
         tracing::info!(?request, "skin reload queued from egui skin panel");
@@ -12291,11 +12328,20 @@ impl WinitApp {
 
     /// 決定対象チャートの key_mode に対応するプレイスキンを background decode に投入する。
     /// 直前と同じ mode かつ path/options/files が同じなら何もしない。
-    fn spawn_play_skin_decode_for(&mut self, key_mode: KeyMode) {
+    fn spawn_play_skin_decode_for(
+        &mut self,
+        key_mode: KeyMode,
+        runtime_state: bmz_skin::LuaLoadRuntimeState,
+    ) {
         let selection = play_skin_selection_for(&self.boot.profile_config.skin, key_mode);
         let trimmed = selection.path.trim();
-        let signature =
-            (key_mode, trimmed.to_string(), selection.options.clone(), selection.files.clone());
+        let signature = (
+            key_mode,
+            trimmed.to_string(),
+            selection.options.clone(),
+            selection.files.clone(),
+            runtime_state.clone(),
+        );
 
         if !self.pending_play_skin && self.last_play_skin_signature.as_ref() == Some(&signature) {
             tracing::debug!(?key_mode, "play skin reuse (signature unchanged)");
@@ -12348,7 +12394,7 @@ impl WinitApp {
             SkinKind::Play,
             options,
             files,
-            bmz_skin::LuaLoadRuntimeState::default(),
+            runtime_state,
         );
         self.pending_play_skin = true;
         tracing::info!(?key_mode, path = %path_label, generation, "play skin decode queued");
@@ -13502,7 +13548,13 @@ fn load_initial_skin_textures(
                 SkinKind::Result,
                 if result_trimmed.is_empty() { BTreeMap::new() } else { result_options.clone() },
                 if result_trimmed.is_empty() { BTreeMap::new() } else { result_files.clone() },
-                lua_runtime_state_for_result(false, false, KeyMode::default(), BTreeMap::new()),
+                lua_runtime_state_for_result(
+                    false,
+                    false,
+                    false,
+                    KeyMode::default(),
+                    BTreeMap::new(),
+                ),
             );
             pending_result = true;
         }
@@ -13829,6 +13881,10 @@ fn play_skin_video_draw_state(
         adjusted_rate: snapshot.adjusted_rate,
         adjusted_rate_adot: snapshot.adjusted_rate_adot,
         autoplay: snapshot.autoplay,
+        play_screen: true,
+        replay_playback: snapshot.replay_playback,
+        practice_mode: snapshot.practice_mode,
+        score_save_enabled: Some(snapshot.score_save_enabled),
         course_stage: snapshot.course_stage,
         hit_error_ring: snapshot.hit_error_ring.values,
         hit_error_ring_index: snapshot.hit_error_ring.index,
@@ -16151,6 +16207,7 @@ fn result_long_note_mode_index(mode: bmz_chart::model::LongNoteMode) -> usize {
 fn lua_runtime_state_for_result(
     table_song: bool,
     ir_online: bool,
+    score_save_enabled: bool,
     key_mode: KeyMode,
     number_values: BTreeMap<i32, i32>,
 ) -> bmz_skin::LuaLoadRuntimeState {
@@ -16158,10 +16215,31 @@ fn lua_runtime_state_for_result(
     option_values.insert(1008, table_song);
     option_values.insert(50, !ir_online);
     option_values.insert(51, ir_online);
+    option_values.insert(60, !score_save_enabled);
+    option_values.insert(61, score_save_enabled);
     for option in 160..=164 {
         option_values.insert(option, result_key_mode_option_matches(option, key_mode));
     }
     bmz_skin::LuaLoadRuntimeState { number_values, option_values }
+}
+
+fn lua_runtime_state_for_play(
+    options: &PlayStartOptions,
+    profile_autoplay: bool,
+) -> bmz_skin::LuaLoadRuntimeState {
+    let replay_playback = options.replay_player.is_some();
+    let autoplay = !replay_playback && (profile_autoplay || options.autoplay);
+    let score_save_enabled = !autoplay && !replay_playback && !options.practice_mode;
+    let option_values = BTreeMap::from([
+        (32, !autoplay),
+        (33, autoplay),
+        (60, !score_save_enabled),
+        (61, score_save_enabled),
+        (82, !autoplay && !replay_playback),
+        (84, replay_playback),
+        (1080, options.practice_mode),
+    ]);
+    bmz_skin::LuaLoadRuntimeState { number_values: BTreeMap::new(), option_values }
 }
 
 fn result_key_mode_option_matches(option: i32, key_mode: KeyMode) -> bool {
@@ -20575,17 +20653,56 @@ mod tests {
 
     #[test]
     fn result_lua_runtime_state_exposes_ir_connection_options() {
-        let online = lua_runtime_state_for_result(false, true, KeyMode::K7, BTreeMap::new());
+        let online = lua_runtime_state_for_result(false, true, true, KeyMode::K7, BTreeMap::new());
         assert_eq!(online.option_values.get(&50), Some(&false));
         assert_eq!(online.option_values.get(&51), Some(&true));
+        assert_eq!(online.option_values.get(&60), Some(&false));
+        assert_eq!(online.option_values.get(&61), Some(&true));
         assert_eq!(online.option_values.get(&160), Some(&true));
         assert_eq!(online.option_values.get(&161), Some(&false));
 
-        let offline = lua_runtime_state_for_result(false, false, KeyMode::K5, BTreeMap::new());
+        let offline =
+            lua_runtime_state_for_result(false, false, false, KeyMode::K5, BTreeMap::new());
         assert_eq!(offline.option_values.get(&50), Some(&true));
         assert_eq!(offline.option_values.get(&51), Some(&false));
+        assert_eq!(offline.option_values.get(&60), Some(&true));
+        assert_eq!(offline.option_values.get(&61), Some(&false));
         assert_eq!(offline.option_values.get(&160), Some(&false));
         assert_eq!(offline.option_values.get(&161), Some(&true));
+    }
+
+    #[test]
+    fn play_lua_runtime_state_exposes_play_mode_and_score_save_options() {
+        let normal = lua_runtime_state_for_play(&PlayStartOptions::default(), false);
+        assert_eq!(normal.option_values.get(&61), Some(&true));
+        assert_eq!(normal.option_values.get(&82), Some(&true));
+        assert_eq!(normal.option_values.get(&84), Some(&false));
+
+        let autoplay = lua_runtime_state_for_play(
+            &PlayStartOptions { autoplay: true, ..PlayStartOptions::default() },
+            false,
+        );
+        assert_eq!(autoplay.option_values.get(&33), Some(&true));
+        assert_eq!(autoplay.option_values.get(&60), Some(&true));
+        assert_eq!(autoplay.option_values.get(&82), Some(&false));
+
+        let replay = lua_runtime_state_for_play(
+            &PlayStartOptions {
+                replay_player: Some(bmz_gameplay::replay::ReplayPlayer::default()),
+                ..PlayStartOptions::default()
+            },
+            false,
+        );
+        assert_eq!(replay.option_values.get(&33), Some(&false));
+        assert_eq!(replay.option_values.get(&84), Some(&true));
+
+        let practice = lua_runtime_state_for_play(
+            &PlayStartOptions { practice_mode: true, ..PlayStartOptions::default() },
+            false,
+        );
+        assert_eq!(practice.option_values.get(&60), Some(&true));
+        assert_eq!(practice.option_values.get(&82), Some(&true));
+        assert_eq!(practice.option_values.get(&1080), Some(&true));
     }
 
     #[test]

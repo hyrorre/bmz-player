@@ -249,6 +249,9 @@ pub fn apply_placeholder_session_visuals(
     let replay_playback = options.replay_player.is_some();
     snapshot.autoplay = !replay_playback && (profile.play.auto_play || options.autoplay);
     snapshot.replay_playback = replay_playback;
+    snapshot.practice_mode = options.practice_mode;
+    snapshot.score_save_enabled =
+        !snapshot.autoplay && !snapshot.replay_playback && !snapshot.practice_mode;
     snapshot.bga_enabled =
         bga_enabled_from_profile(profile, snapshot.autoplay, snapshot.replay_playback);
     snapshot.bga_stretch = bga_stretch_from_profile(profile);
@@ -2149,6 +2152,41 @@ mod tests {
 
             assert_eq!(snapshot.bga_enabled, expected, "mode={mode:?}");
             assert_eq!(snapshot.bga_enabled, session.bga_enabled, "mode={mode:?}");
+        }
+    }
+
+    #[test]
+    fn placeholder_session_visuals_expose_score_save_and_play_modes() {
+        let profile = ProfileConfig::new_default("default", "Default", 1);
+        for (options, save, replay, practice) in [
+            (PlaySessionOptions::default(), true, false, false),
+            (
+                PlaySessionOptions { autoplay: true, ..PlaySessionOptions::default() },
+                false,
+                false,
+                false,
+            ),
+            (
+                PlaySessionOptions {
+                    replay_player: Some(ReplayPlayer::default()),
+                    ..PlaySessionOptions::default()
+                },
+                false,
+                true,
+                false,
+            ),
+            (
+                PlaySessionOptions { practice_mode: true, ..PlaySessionOptions::default() },
+                false,
+                false,
+                true,
+            ),
+        ] {
+            let mut snapshot = bmz_render::snapshot::RenderSnapshot::default();
+            apply_placeholder_session_visuals(&mut snapshot, &profile, KeyMode::K7, &options);
+            assert_eq!(snapshot.score_save_enabled, save);
+            assert_eq!(snapshot.replay_playback, replay);
+            assert_eq!(snapshot.practice_mode, practice);
         }
     }
 

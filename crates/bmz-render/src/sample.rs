@@ -215,6 +215,7 @@ pub fn sample_result_scene() -> AppSceneSnapshot {
             fast_empty_poor: 5,
             slow_empty_poor: 4,
         },
+        score_save_enabled: true,
         score_history_id: 42,
         replay_saved: true,
         replay_slots: [true, false, false, false],
