@@ -505,6 +505,7 @@ struct WinitApp {
     decide_sound_stopped_for_chart_start: bool,
     result_scene_started_at: Instant,
     option_panel_started_at: Instant,
+    option_panel_off_started_at: [Option<Instant>; 6],
     select_option_panel: u8,
     gamepad: Option<Box<crate::input::gamepad::GamepadBackend>>,
     default_skin_manifest: Option<SkinManifest>,
@@ -2433,6 +2434,7 @@ impl WinitApp {
             decide_sound_stopped_for_chart_start: false,
             result_scene_started_at: now,
             option_panel_started_at: now,
+            option_panel_off_started_at: [None; 6],
             select_option_panel: 0,
             gamepad,
             default_skin_manifest,
@@ -3191,6 +3193,9 @@ impl WinitApp {
             operating_time_ms: 0,
             selection_time: self.select_bar_time(),
             option_panel_time: self.option_panel_time(),
+            option_panel_off_times: self
+                .option_panel_off_started_at
+                .map(|started_at| started_at.map(elapsed_since)),
             option_panel: self.select_option_panel,
             chart_count: self.select_items.len() as u32,
             selected_index: self.selected_index as u32,
@@ -4001,14 +4006,19 @@ impl WinitApp {
     }
 
     fn update_select_option_panel(&mut self) {
-        if in_settings_stack(&self.folder_stack) {
-            self.select_option_panel = 0;
-            return;
-        }
-        let panel = select_option_panel_for_holds(self.start_held, self.select_held);
-        if self.select_option_panel != panel {
-            self.select_option_panel = panel;
-            self.option_panel_started_at = Instant::now();
+        let panel = if in_settings_stack(&self.folder_stack) {
+            0
+        } else {
+            select_option_panel_for_holds(self.start_held, self.select_held)
+        };
+        let now = Instant::now();
+        if transition_select_option_panel(
+            &mut self.select_option_panel,
+            &mut self.option_panel_started_at,
+            &mut self.option_panel_off_started_at,
+            panel,
+            now,
+        ) {
             self.reset_select_analog_scroll();
         }
     }
@@ -11143,6 +11153,7 @@ impl WinitApp {
         self.select_scene_started_at = now;
         self.restart_select_bar_timer_without_scroll(now);
         self.option_panel_started_at = now;
+        self.option_panel_off_started_at = [None; 6];
     }
 
     fn advance_active_play(&mut self) {
@@ -16309,6 +16320,27 @@ fn select_option_panel_for_holds(start_held: bool, select_held: bool) -> u8 {
         (false, true) => 2,
         (false, false) => 0,
     }
+}
+
+fn transition_select_option_panel(
+    current_panel: &mut u8,
+    on_started_at: &mut Instant,
+    off_started_at: &mut [Option<Instant>; 6],
+    next_panel: u8,
+    now: Instant,
+) -> bool {
+    if *current_panel == next_panel {
+        return false;
+    }
+    if let Some(index) = current_panel.checked_sub(1).filter(|index| *index < 6) {
+        off_started_at[index as usize] = Some(now);
+    }
+    if let Some(index) = next_panel.checked_sub(1).filter(|index| *index < 6) {
+        off_started_at[index as usize] = None;
+    }
+    *current_panel = next_panel;
+    *on_started_at = now;
+    true
 }
 
 fn select_hold_state_from_pressed_controls(
@@ -21712,6 +21744,52 @@ mod tests {
         assert_eq!(select_option_panel_for_holds(true, false), 1);
         assert_eq!(select_option_panel_for_holds(false, true), 2);
         assert_eq!(select_option_panel_for_holds(true, true), 3);
+    }
+
+    #[test]
+    fn select_option_panel_transition_tracks_independent_off_timers() {
+        let base = Instant::now();
+        let mut current = 1;
+        let mut on_started_at = base;
+        let mut off_started_at = [None; 6];
+
+        assert!(transition_select_option_panel(
+            &mut current,
+            &mut on_started_at,
+            &mut off_started_at,
+            2,
+            base + Duration::from_millis(100),
+        ));
+        assert_eq!(current, 2);
+        assert_eq!(off_started_at[0], Some(base + Duration::from_millis(100)));
+        assert_eq!(off_started_at[1], None);
+
+        assert!(transition_select_option_panel(
+            &mut current,
+            &mut on_started_at,
+            &mut off_started_at,
+            0,
+            base + Duration::from_millis(200),
+        ));
+        assert_eq!(off_started_at[0], Some(base + Duration::from_millis(100)));
+        assert_eq!(off_started_at[1], Some(base + Duration::from_millis(200)));
+
+        assert!(transition_select_option_panel(
+            &mut current,
+            &mut on_started_at,
+            &mut off_started_at,
+            1,
+            base + Duration::from_millis(300),
+        ));
+        assert_eq!(off_started_at[0], None);
+        assert_eq!(off_started_at[1], Some(base + Duration::from_millis(200)));
+        assert!(!transition_select_option_panel(
+            &mut current,
+            &mut on_started_at,
+            &mut off_started_at,
+            1,
+            base + Duration::from_millis(400),
+        ));
     }
 
     #[test]

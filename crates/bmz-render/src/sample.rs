@@ -42,6 +42,7 @@ pub fn sample_select_scene() -> AppSceneSnapshot {
         operating_time_ms: 12_345,
         selection_time: TimeUs(345_000),
         option_panel_time: TimeUs(0),
+        option_panel_off_times: [None; 6],
         option_panel: 0,
         chart_count: 7,
         selected_index: 0,

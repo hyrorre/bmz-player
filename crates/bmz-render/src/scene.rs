@@ -54,6 +54,8 @@ pub struct SelectSnapshot {
     pub operating_time_ms: i32,
     pub selection_time: TimeUs,
     pub option_panel_time: TimeUs,
+    /// TIMER_PANEL1_OFF..6_OFF (31..36) の経過時間。None は対応タイマーOFF。
+    pub option_panel_off_times: [Option<TimeUs>; 6],
     pub option_panel: u8,
     pub chart_count: u32,
     pub selected_index: u32,
@@ -152,6 +154,7 @@ impl Default for SelectSnapshot {
             operating_time_ms: 0,
             selection_time: TimeUs::default(),
             option_panel_time: TimeUs::default(),
+            option_panel_off_times: [None; 6],
             option_panel: 0,
             chart_count: 0,
             selected_index: 0,

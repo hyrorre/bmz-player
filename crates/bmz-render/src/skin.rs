@@ -837,6 +837,7 @@ pub struct SkinDrawState {
     pub key_mode: KeyMode,
     pub select_bar_elapsed_ms: i32,
     pub select_option_panel_elapsed_ms: i32,
+    pub select_option_panel_off_elapsed_ms: [Option<i32>; 6],
     pub select_option_panel: u8,
     pub select_arrange_index: usize,
     pub select_arrange_2p_index: usize,
@@ -1194,6 +1195,7 @@ impl Default for SkinDrawState {
             key_mode: KeyMode::default(),
             select_bar_elapsed_ms: 0,
             select_option_panel_elapsed_ms: 0,
+            select_option_panel_off_elapsed_ms: [None; 6],
             select_option_panel: 0,
             select_arrange_index: 0,
             select_arrange_2p_index: 0,
@@ -3626,6 +3628,11 @@ impl SkinDocumentRenderExt for SkinDocument {
             select_option_panel_elapsed_ms: (snapshot.option_panel_time.0 / 1_000)
                 .clamp(i32::MIN as i64, i32::MAX as i64)
                 as i32,
+            select_option_panel_off_elapsed_ms: snapshot.option_panel_off_times.map(|elapsed| {
+                elapsed.map(|elapsed| {
+                    (elapsed.0 / 1_000).clamp(i32::MIN as i64, i32::MAX as i64) as i32
+                })
+            }),
             select_option_panel: snapshot.option_panel,
             select_arrange_index: select_arrange_index(&snapshot.arrange),
             select_arrange_2p_index: select_arrange_index(&snapshot.arrange_2p),
@@ -9689,7 +9696,9 @@ fn skin_timer_elapsed_ms(timer: Option<i32>, state: &SkinDrawState) -> Option<i3
         Some(42 | 43) => state.gauge_increase_ms,
         Some(44 | 45) => state.gauge_max_ms,
         Some(11) => Some(state.select_bar_elapsed_ms),
-        Some(21..=23) => Some(state.select_option_panel_elapsed_ms),
+        Some(21..=26) => (state.select_option_panel == (timer.unwrap() - 20) as u8)
+            .then_some(state.select_option_panel_elapsed_ms),
+        Some(31..=36) => state.select_option_panel_off_elapsed_ms[(timer.unwrap() - 31) as usize],
         Some(348..=352) => score_target_timer_elapsed_ms(timer.unwrap(), state),
         Some(46) => state.judge_ms[0],
         Some(47) => state.judge_ms[1],
@@ -21023,6 +21032,23 @@ mod tests {
         let state = SkinDrawState { elapsed_ms: 1_800, ..SkinDrawState::default() };
 
         assert_eq!(skin_timer_elapsed_ms(Some(0), &state), Some(1_800));
+    }
+
+    #[test]
+    fn select_panel_on_and_off_timers_follow_each_panel_state() {
+        let state = SkinDrawState {
+            select_option_panel: 2,
+            select_option_panel_elapsed_ms: 75,
+            select_option_panel_off_elapsed_ms: [Some(120), None, Some(340), None, None, None],
+            ..SkinDrawState::default()
+        };
+
+        assert_eq!(skin_timer_elapsed_ms(Some(21), &state), None);
+        assert_eq!(skin_timer_elapsed_ms(Some(22), &state), Some(75));
+        assert_eq!(skin_timer_elapsed_ms(Some(23), &state), None);
+        assert_eq!(skin_timer_elapsed_ms(Some(31), &state), Some(120));
+        assert_eq!(skin_timer_elapsed_ms(Some(32), &state), None);
+        assert_eq!(skin_timer_elapsed_ms(Some(33), &state), Some(340));
     }
 
     #[test]
