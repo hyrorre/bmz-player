@@ -1626,6 +1626,7 @@ fn build_result_skin_draw_state(
         gauge_type,
         result_gauge_graph_type: Some(snapshot.result_gauge_graph_type),
         result_panel: Some(snapshot.result_panel),
+        result_favorite_chart: Some(snapshot.favorite_chart),
         gauge_max,
         gauge_border,
         play_progress: 1.0,
@@ -3077,6 +3078,7 @@ mod tests {
                 key_mode: bmz_core::lane::KeyMode::default(),
                 result_gauge_graph_type: bmz_core::clear::GaugeType::Normal as i32,
                 result_panel: 0,
+                favorite_chart: false,
                 judge_counts: DisplayJudgeCounts::default(),
                 fast_slow_counts: FastSlowJudgeCounts::default(),
                 score_history_id: 0,
@@ -3212,6 +3214,7 @@ mod tests {
             key_mode: bmz_core::lane::KeyMode::default(),
             result_gauge_graph_type: bmz_core::clear::GaugeType::Normal as i32,
             result_panel: 0,
+            favorite_chart: false,
             judge_counts: DisplayJudgeCounts::default(),
             fast_slow_counts: FastSlowJudgeCounts::default(),
             score_history_id: 0,
@@ -3297,6 +3300,20 @@ mod tests {
 
         assert_eq!(state.select_arrange_index, 9);
         assert_eq!(state.result_arrange_index, 9);
+    }
+
+    #[test]
+    fn result_skin_state_maps_favorite_chart_as_two_state_index() {
+        let AppSceneSnapshot::Result(mut snapshot) = crate::sample::sample_result_scene() else {
+            panic!("sample result scene");
+        };
+
+        let not_favorite = build_result_skin_draw_state(&snapshot, 0);
+        assert_eq!(not_favorite.result_favorite_chart, Some(false));
+
+        snapshot.favorite_chart = true;
+        let favorite = build_result_skin_draw_state(&snapshot, 0);
+        assert_eq!(favorite.result_favorite_chart, Some(true));
     }
 
     #[test]
@@ -3483,6 +3500,7 @@ mod tests {
             key_mode: bmz_core::lane::KeyMode::default(),
             result_gauge_graph_type: bmz_core::clear::GaugeType::AssistEasy as i32,
             result_panel: 0,
+            favorite_chart: false,
             judge_counts: DisplayJudgeCounts::default(),
             fast_slow_counts: FastSlowJudgeCounts::default(),
             score_history_id: 0,
@@ -3620,6 +3638,7 @@ mod tests {
             key_mode: bmz_core::lane::KeyMode::default(),
             result_gauge_graph_type: bmz_core::clear::GaugeType::Normal as i32,
             result_panel: 0,
+            favorite_chart: false,
             judge_counts: DisplayJudgeCounts::default(),
             fast_slow_counts: FastSlowJudgeCounts::default(),
             score_history_id: 0,

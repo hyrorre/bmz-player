@@ -1025,6 +1025,9 @@ pub struct SkinDrawState {
     /// value ref 89/90 とは別名前空間。BMZ は invisible を持たず 0/1。
     pub select_favorite_song: bool,
     pub select_favorite_chart: bool,
+    /// Result の favorite_chart (image ref 90)。None は Result 以外。
+    /// BMZ は invisible を持たないため Some(false/true) の2状態だけを返す。
+    pub result_favorite_chart: Option<bool>,
     /// beatoraja IndexType autosave_replay1..4 (321..324) image row indices。
     pub select_replay_slot_rule_indices: [i64; 4],
     /// beatoraja ValueType folder_noplay..folder_max (320..330) 用のランプ別曲数。
@@ -1286,6 +1289,7 @@ impl Default for SkinDrawState {
             select_clear_index: 0,
             select_favorite_song: false,
             select_favorite_chart: false,
+            result_favorite_chart: None,
             select_replay_slot_rule_indices: [0; 4],
             select_folder_lamp_counts: [0; 11],
             select_row_kind: SelectRowKind::Song,
@@ -6413,6 +6417,9 @@ fn skin_image_index_number(ref_id: i32, state: &SkinDrawState) -> Option<i64> {
         }
         90 if state.select_screen && select_chart_metadata_available(state) => {
             Some(i64::from(state.select_favorite_chart))
+        }
+        90 if state.result_favorite_chart.is_some() => {
+            Some(i64::from(state.result_favorite_chart.unwrap_or(false)))
         }
         301..=307 => Some(0),
         308 => Some(state.select_ln_mode_index as i64),
@@ -18418,11 +18425,13 @@ mod tests {
                 "h": 100,
                 "image": [
                     { "id": "graph", "src": 1, "x": 0, "y": 0, "w": 10, "h": 10, "act": -10002 },
-                    { "id": "ir", "src": 1, "x": 0, "y": 0, "w": 10, "h": 10, "act": -10001 }
+                    { "id": "ir", "src": 1, "x": 0, "y": 0, "w": 10, "h": 10, "act": -10001 },
+                    { "id": "favorite", "src": 1, "x": 0, "y": 0, "w": 10, "h": 10, "divy": 3, "ref": 90, "act": 90 }
                 ],
                 "destination": [
                     { "id": "graph", "draw": "result_panel(1)", "dst": [{ "x": 10, "y": 20, "w": 30, "h": 10 }] },
-                    { "id": "ir", "draw": "result_panel(2)", "dst": [{ "x": 50, "y": 20, "w": 30, "h": 10 }] }
+                    { "id": "ir", "draw": "result_panel(2)", "dst": [{ "x": 50, "y": 20, "w": 30, "h": 10 }] },
+                    { "id": "favorite", "dst": [{ "x": 10, "y": 40, "w": 30, "h": 10 }] }
                 ]
             }
             "#,
@@ -18437,13 +18446,20 @@ mod tests {
         );
         assert!(document.result_click_hit(&ir_panel, 0.65, 0.75).is_none());
 
-        let graph_panel = SkinDrawState { result_panel: Some(2), ..SkinDrawState::default() };
+        let graph_panel = SkinDrawState {
+            result_panel: Some(2),
+            result_favorite_chart: Some(false),
+            ..SkinDrawState::default()
+        };
         let ir_hit = document.result_click_hit(&graph_panel, 0.65, 0.75).unwrap();
         assert_eq!(
             ir_hit.target,
             SkinClickTarget::Event { event_id: SKIN_EVENT_RESULT_PANEL_IR, click: 0 }
         );
         assert!(document.result_click_hit(&graph_panel, 0.2, 0.75).is_none());
+
+        let favorite_hit = document.result_click_hit(&graph_panel, 0.2, 0.55).unwrap();
+        assert_eq!(favorite_hit.target, SkinClickTarget::Event { event_id: 90, click: 0 });
     }
 
     #[test]
@@ -23005,6 +23021,17 @@ mod tests {
         let chart_favorite = SkinDrawState { select_favorite_chart: true, ..state };
         assert_eq!(skin_image_index_number(90, &chart_favorite), Some(1));
         assert_eq!(skin_state_number(90, &chart_favorite), Some(200));
+    }
+
+    #[test]
+    fn skin_image_index_number_result_favorite_ref_has_only_two_states() {
+        let not_favorite =
+            SkinDrawState { result_favorite_chart: Some(false), ..SkinDrawState::default() };
+        assert_eq!(skin_image_index_number(90, &not_favorite), Some(0));
+
+        let favorite =
+            SkinDrawState { result_favorite_chart: Some(true), ..SkinDrawState::default() };
+        assert_eq!(skin_image_index_number(90, &favorite), Some(1));
     }
 
     #[test]

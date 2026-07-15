@@ -2490,6 +2490,15 @@ mod tests {
                 .and_then(|image| image.act),
             Some(bmz_render::skin::SKIN_EVENT_RESULT_PANEL_IR)
         );
+        let favorite = loaded
+            .document
+            .image
+            .iter()
+            .find(|image| image.id == "favorite")
+            .expect("WMII result favorite button should decode");
+        assert_eq!(favorite.ref_id, 90);
+        assert_eq!(favorite.act, Some(90));
+        assert_eq!(favorite.divy, 3);
         assert!(loaded.document.destination.iter().any(|entry| matches!(
             entry,
             DestinationListEntry::Single(destination)

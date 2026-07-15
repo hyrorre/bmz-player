@@ -142,6 +142,7 @@ favorite 操作は invisible を使わず、登録済みなら解除、未登録
 ## リザルト画面
 
 対応スキンでは、`GRAPH DATA` / `INTERNET RANKING` タブをマウスでクリックしてパネルを直接切り替えられます。
+Favoriteボタンは現在の譜面をfavorite chartへ追加 / 解除します。BMZはInvisible状態へ切り替えません。
 
 ### 単曲リザルト
 

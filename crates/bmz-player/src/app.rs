@@ -397,6 +397,9 @@ struct WinitApp {
     /// 正常終了させ、cpal/ASIO ストリームの Drop(停止・後処理)を確実に走らせる。
     shutdown_requested: Arc<AtomicBool>,
     finished_play: Option<FinishedPlaySession>,
+    /// Result skin の favorite_chart (image ref 90) に渡す現在譜面の状態。
+    /// BMZ は beatoraja の invisible を持たないため false/true の2状態だけを使う。
+    result_favorite_chart: bool,
     /// リザルト画面の IR 送信・ランキング表示状態。
     /// 通常プレイでは play ending 中に早期起動し、Result 画面まで保持する。
     result_ir: Option<crate::screens::result_ir::ResultIrState>,
@@ -949,6 +952,12 @@ type ResultSkinSignature = (
 enum ResultSkinSlot {
     Normal,
     Course,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ResultSkinClickAction {
+    SetPanel(i32),
+    ToggleFavoriteChart,
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -2120,6 +2129,7 @@ impl WinitApp {
             first_frame_startup_completed: false,
             shutdown_requested,
             finished_play: None,
+            result_favorite_chart: false,
             result_ir: None,
             select_ir: crate::screens::select_ir::SelectIrRanking::default(),
             player_stats,
@@ -2588,6 +2598,7 @@ impl WinitApp {
                     key_mode: summary.key_mode,
                     result_gauge_graph_type: self.result_gauge_graph_type,
                     result_panel: self.result_panel,
+                    favorite_chart: self.result_favorite_chart,
                     judge_counts: DisplayJudgeCounts {
                         pgreat: summary.judge_counts.pgreat,
                         great: summary.judge_counts.great,
@@ -5316,7 +5327,9 @@ impl WinitApp {
         };
         if matches!(self.view_state(), AppViewState::Result(_)) {
             self.select_slider_dragging_type = None;
-            self.handle_result_skin_click(x, y);
+            if button == MouseButton::Left && self.result_exit.is_none() {
+                self.handle_result_skin_click(x, y);
+            }
             return;
         }
         if !matches!(self.view_state(), AppViewState::Select) {
@@ -5359,12 +5372,15 @@ impl WinitApp {
         let SkinClickTarget::Event { event_id, .. } = hit.target else {
             return;
         };
-        let panel = match event_id {
-            SKIN_EVENT_RESULT_PANEL_IR => 1,
-            SKIN_EVENT_RESULT_PANEL_GRAPH => 2,
-            _ => return,
-        };
-        self.set_result_panel(panel);
+        match result_skin_click_action(event_id) {
+            Some(ResultSkinClickAction::SetPanel(panel)) => {
+                self.set_result_panel(panel);
+            }
+            Some(ResultSkinClickAction::ToggleFavoriteChart) => {
+                self.toggle_favorite_chart_result();
+            }
+            None => {}
+        }
     }
 
     fn route_select_slider_drag(&mut self) {
@@ -5831,6 +5847,32 @@ impl WinitApp {
                 tracing::info!(enabled, title = row.display_title(), "favorite chart toggled");
             }
             Err(error) => tracing::error!(%error, "failed to toggle favorite chart"),
+        }
+    }
+
+    fn toggle_favorite_chart_result(&mut self) {
+        let Some((sha256, title, artist)) = self.finished_play.as_ref().map(|finished| {
+            (
+                finished.result.chart_sha256,
+                finished.summary.title.clone(),
+                finished.summary.artist.clone(),
+            )
+        }) else {
+            return;
+        };
+        let hints = FavoriteHints::new(title.clone(), artist, "");
+        match self.boot.collection_db.toggle_favorite_chart(sha256, &hints, now_unix_seconds()) {
+            Ok(enabled) => {
+                self.result_favorite_chart = enabled;
+                self.play_system_sound(crate::system_sound::SoundType::OptionChange);
+                self.show_left_overlay_toast(if enabled {
+                    "お気に入りの譜面に追加しました"
+                } else {
+                    "お気に入りの譜面から削除しました"
+                });
+                tracing::info!(enabled, %title, "favorite chart toggled from result");
+            }
+            Err(error) => tracing::error!(%error, "failed to toggle favorite chart from result"),
         }
     }
 
@@ -9615,6 +9657,7 @@ impl WinitApp {
 
     fn leave_result(&mut self) {
         self.finished_play = None;
+        self.result_favorite_chart = false;
         self.clear_active_course_state();
         self.result_exit = None;
         self.result_key5_held = false;
@@ -10319,6 +10362,7 @@ impl WinitApp {
     }
 
     fn ensure_result_skin_ready(&mut self, slot: ResultSkinSlot) {
+        self.refresh_result_favorite_chart();
         self.spawn_result_skin_decode_for(slot);
         self.ensure_skin_ready(SkinKind::Result);
         self.result_panel = self
@@ -10327,6 +10371,21 @@ impl WinitApp {
             .and_then(|document| document.result_panel_default)
             .filter(|panel| (0..=2).contains(panel))
             .unwrap_or(0);
+    }
+
+    fn refresh_result_favorite_chart(&mut self) {
+        let Some(sha256) = self.finished_play.as_ref().map(|finished| finished.result.chart_sha256)
+        else {
+            self.result_favorite_chart = false;
+            return;
+        };
+        self.result_favorite_chart = match self.boot.collection_db.is_favorite_chart(sha256) {
+            Ok(favorite) => favorite,
+            Err(error) => {
+                tracing::warn!(%error, "failed to load favorite chart state for result");
+                false
+            }
+        };
     }
 
     fn current_result_skin_slot(&self) -> ResultSkinSlot {
@@ -15548,6 +15607,15 @@ fn cycle_result_gauge_graph_type(current: i32) -> i32 {
         (current + 1).rem_euclid(6)
     } else {
         (current - 5).rem_euclid(3) + 6
+    }
+}
+
+fn result_skin_click_action(event_id: i32) -> Option<ResultSkinClickAction> {
+    match event_id {
+        SKIN_EVENT_RESULT_PANEL_IR => Some(ResultSkinClickAction::SetPanel(1)),
+        SKIN_EVENT_RESULT_PANEL_GRAPH => Some(ResultSkinClickAction::SetPanel(2)),
+        90 => Some(ResultSkinClickAction::ToggleFavoriteChart),
+        _ => None,
     }
 }
 
@@ -21493,6 +21561,16 @@ mod tests {
             cycle_result_gauge_graph_type(GaugeType::ExHardClass as i32),
             GaugeType::Class as i32
         );
+    }
+
+    #[test]
+    fn result_skin_event_90_toggles_favorite_without_invisible_state() {
+        assert_eq!(result_skin_click_action(90), Some(ResultSkinClickAction::ToggleFavoriteChart));
+        assert_eq!(
+            result_skin_click_action(SKIN_EVENT_RESULT_PANEL_IR),
+            Some(ResultSkinClickAction::SetPanel(1))
+        );
+        assert_eq!(result_skin_click_action(91), None);
     }
 
     #[test]

@@ -537,6 +537,8 @@ pub struct ResultSnapshot {
     pub result_gauge_graph_type: i32,
     /// Lua Result スキンの展開パネル (0=非表示、1=IR、2=グラフ)。
     pub result_panel: i32,
+    /// 現在の譜面が favorite chart か。BMZ は invisible を持たないため2状態。
+    pub favorite_chart: bool,
     pub judge_counts: DisplayJudgeCounts,
     pub fast_slow_counts: FastSlowJudgeCounts,
     pub score_history_id: i64,
@@ -623,6 +625,7 @@ mod tests {
             key_mode: KeyMode::default(),
             result_gauge_graph_type: 2,
             result_panel: 0,
+            favorite_chart: false,
             judge_counts: DisplayJudgeCounts::default(),
             fast_slow_counts: FastSlowJudgeCounts::default(),
             score_history_id: 1,
@@ -690,6 +693,7 @@ mod tests {
             key_mode: KeyMode::default(),
             result_gauge_graph_type: 2,
             result_panel: 0,
+            favorite_chart: false,
             judge_counts: DisplayJudgeCounts::default(),
             fast_slow_counts: FastSlowJudgeCounts::default(),
             score_history_id: 1,
