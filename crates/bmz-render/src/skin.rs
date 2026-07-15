@@ -21224,6 +21224,26 @@ mod tests {
     }
 
     #[test]
+    fn zero_delay_timer_alias_follows_source_timer() {
+        let document: SkinDocument = serde_json::from_str(
+            r#"{
+                "type": 0, "w": 1, "h": 1, "destination": [],
+                "fixedDelayTimer": [{ "id": 11901, "sourceTimer": 143, "delayMs": 0 }]
+            }"#,
+        )
+        .unwrap();
+        let mut runtime = DynamicTimerRuntime::default();
+        let mut state = SkinDrawState { end_of_note_ms: Some(1_250), ..SkinDrawState::default() };
+
+        runtime.advance(&document, &mut state, 5_000);
+        assert_eq!(skin_timer_elapsed_ms(Some(11901), &state), Some(1_250));
+
+        state.end_of_note_ms = None;
+        runtime.advance(&document, &mut state, 5_001);
+        assert_eq!(skin_timer_elapsed_ms(Some(11901), &state), None);
+    }
+
+    #[test]
     fn timer_zero_uses_scene_elapsed_time() {
         let state = SkinDrawState { elapsed_ms: 1_800, ..SkinDrawState::default() };
 

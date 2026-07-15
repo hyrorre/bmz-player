@@ -3380,7 +3380,10 @@ fn lua_table_to_json(
                 if path.contains(".customTimers[")
                     && let Some(id) = object_id.as_deref().and_then(|id| id.parse::<i32>().ok())
                     && let Some((source_timer, delay_ms)) =
-                        infer_fixed_delay_timer(function, main_state_probe)
+                        infer_fixed_delay_timer(function, main_state_probe).or_else(|| {
+                            infer_custom_timer_alias(function, main_state_probe)
+                                .map(|source_timer| (source_timer, 0))
+                        })
                 {
                     if let Ok(mut probe) = main_state_probe.lock()
                         && !probe.fixed_delay_timers.iter().any(|(existing, _, _)| *existing == id)
@@ -4575,6 +4578,39 @@ fn infer_fixed_delay_timer(
         return None;
     }
     Some((source_timer, delay_ms))
+}
+
+/// 既存 timer の値をそのまま返す custom timer を別 ID の alias としてIR化する。
+fn infer_custom_timer_alias(
+    function: &Function,
+    main_state_probe: &Arc<Mutex<MainStateProbe>>,
+) -> Option<i32> {
+    let timers = collect_timer_refs(function, main_state_probe)?;
+    let source_timer = *timers.as_slice().first()?;
+    if timers.len() != 1 {
+        return None;
+    }
+
+    for sample in [123_456, 765_432] {
+        if call_timer_function_with_values(
+            function,
+            main_state_probe,
+            BTreeMap::from([(source_timer, sample)]),
+        ) != Some(sample)
+        {
+            return None;
+        }
+    }
+    if call_timer_function_with_values(
+        function,
+        main_state_probe,
+        BTreeMap::from([(source_timer, TIMER_OFF_VALUE)]),
+    ) != Some(TIMER_OFF_VALUE)
+    {
+        return None;
+    }
+
+    Some(source_timer)
 }
 
 fn call_draw_with_timer_option(
@@ -7078,6 +7114,21 @@ mod tests {
             .eval::<Function>()
             .unwrap();
         assert_eq!(infer_fixed_delay_timer(&function, &probe), Some((143, 1000)));
+    }
+
+    #[test]
+    fn infers_custom_timer_alias_function() {
+        let lua = Lua::new();
+        let probe = Arc::new(Mutex::new(MainStateProbe::default()));
+        lua.globals()
+            .set("main_state", create_main_state_stub(&lua, probe.clone()).unwrap())
+            .unwrap();
+        let function = lua
+            .load("return function() return main_state.timer(150) end")
+            .eval::<Function>()
+            .unwrap();
+
+        assert_eq!(infer_custom_timer_alias(&function, &probe), Some(150));
     }
 
     #[test]

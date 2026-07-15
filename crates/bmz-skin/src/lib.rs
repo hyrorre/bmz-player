@@ -1802,7 +1802,10 @@ mod tests {
 
         assert_eq!(
             loaded.value["fixedDelayTimer"],
-            serde_json::json!([{ "id": 11900, "sourceTimer": 143, "delayMs": 1000 }])
+            serde_json::json!([
+                { "id": 11900, "sourceTimer": 143, "delayMs": 1000 },
+                { "id": 11901, "sourceTimer": 150, "delayMs": 0 }
+            ])
         );
         assert!(loaded.value["customTimers"][0].get("timer").is_none());
         assert!(loaded.value["customTimers"][1].get("timer").is_none());
