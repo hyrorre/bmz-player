@@ -218,7 +218,7 @@ pub fn apply_placeholder_session_visuals(
     snapshot.gauge_max = current.definition.max;
     snapshot.gauge_border = current.definition.border;
 
-    snapshot.lift = lane_unit_to_f32(profile.lane.lift);
+    snapshot.lift = lift_from_profile(profile);
     snapshot.lane_cover = crate::config::play::clamp_lane_cover_for_lift(
         lane_unit_to_f32(profile.lane.sudden),
         snapshot.lift,
@@ -380,7 +380,7 @@ pub fn build_game_session_with_input_backend(
     );
     let hispeed_mode = hispeed_mode_from_hs_fix(options.hs_fix);
     let target_green_number = profile.lane.target_green_number.max(1);
-    let lift = lane_unit_to_f32(profile.lane.lift);
+    let lift = lift_from_profile(profile);
     let lane_cover =
         crate::config::play::clamp_lane_cover_for_lift(lane_unit_to_f32(profile.lane.sudden), lift);
     let hsfix_base_bpm = hsfix_base_bpm_for_chart(&chart, &timing_map, options.hs_fix);
@@ -721,15 +721,19 @@ fn hidden_cover_from_profile(profile: &ProfileConfig) -> f32 {
 }
 
 fn lanecover_enabled_from_profile(profile: &ProfileConfig) -> bool {
-    let lift = lane_unit_to_f32(profile.lane.lift);
+    let lift = lift_from_profile(profile);
     let lane_cover =
         crate::config::play::clamp_lane_cover_for_lift(lane_unit_to_f32(profile.lane.sudden), lift);
     matches!(profile.play.lane_effect, LaneEffectConfig::Sudden | LaneEffectConfig::HiddenSudden)
         || lane_cover > 0.0
 }
 
-fn lift_enabled_from_profile(_profile: &ProfileConfig) -> bool {
-    true
+fn lift_from_profile(profile: &ProfileConfig) -> f32 {
+    if profile.lane.lift_enabled { lane_unit_to_f32(profile.lane.lift) } else { 0.0 }
+}
+
+fn lift_enabled_from_profile(profile: &ProfileConfig) -> bool {
+    profile.lane.lift_enabled
 }
 
 fn hidden_enabled_from_profile(profile: &ProfileConfig) -> bool {
@@ -2804,6 +2808,14 @@ mod tests {
 
         assert!(!disabled.lanecover_enabled);
         assert!(disabled.lift_enabled);
+
+        profile.lane.lift = 222;
+        profile.lane.lift_enabled = false;
+        let lift_disabled =
+            build_game_session(Arc::new(chart()), &profile, PlaySessionOptions::default());
+
+        assert_eq!(lift_disabled.lift, 0.0);
+        assert!(!lift_disabled.lift_enabled);
 
         profile.play.lane_effect = LaneEffectConfig::Sudden;
         let sudden_option =

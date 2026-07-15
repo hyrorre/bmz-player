@@ -3624,6 +3624,7 @@ fn build_profile_settings_panel(
                     lane_unit_slider_with_max(ui, &mut profile.lane.sudden, "SUDDEN+", sudden_max);
                     let lift_max =
                         crate::config::play::lane_unit_max_for_other(profile.lane.sudden);
+                    ui.checkbox(&mut profile.lane.lift_enabled, "LIFTを有効にする");
                     lane_unit_slider_with_max(ui, &mut profile.lane.lift, "LIFT", lift_max);
                     lane_unit_slider(ui, &mut profile.lane.hidden, "HIDDEN");
                     ui.add(

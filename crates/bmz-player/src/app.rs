@@ -3254,7 +3254,7 @@ impl WinitApp {
                 self.boot.profile_config.play.lane_effect,
                 LaneEffectConfig::Sudden | LaneEffectConfig::HiddenSudden
             ),
-            lift_enabled: true,
+            lift_enabled: self.boot.profile_config.lane.lift_enabled,
             hidden_enabled: matches!(
                 self.boot.profile_config.play.lane_effect,
                 LaneEffectConfig::Hidden | LaneEffectConfig::HiddenSudden
@@ -5947,6 +5947,11 @@ impl WinitApp {
             330 => {
                 self.boot.profile_config.play.lane_effect =
                     toggled_select_sudden(self.boot.profile_config.play.lane_effect);
+                self.play_system_sound(crate::system_sound::SoundType::OptionChange);
+            }
+            331 => {
+                self.boot.profile_config.lane.lift_enabled =
+                    !self.boot.profile_config.lane.lift_enabled;
                 self.play_system_sound(crate::system_sound::SoundType::OptionChange);
             }
             332 => {
@@ -16686,7 +16691,9 @@ fn apply_lane_state_to_profile(
     }
     if let Some(state) = lane_state {
         profile.lane.sudden = crate::config::play::lane_f32_to_unit(state.lane_cover);
-        profile.lane.lift = crate::config::play::lane_f32_to_unit(state.lift);
+        if profile.lane.lift_enabled {
+            profile.lane.lift = crate::config::play::lane_f32_to_unit(state.lift);
+        }
         profile.lane.hispeed_mode = hispeed_mode_to_config(state.hispeed_mode);
         profile.lane.target_green_number = state.target_green_number.max(1);
     }
@@ -23298,6 +23305,27 @@ mod tests {
         assert!(profile.play.auto_play);
         assert!(matches!(profile.play.assist, AssistOptionConfig::None));
         assert_eq!(profile.updated_at, 42);
+    }
+
+    #[test]
+    fn apply_lane_state_preserves_lift_amount_while_lift_is_disabled() {
+        let mut profile = ProfileConfig::new_default("default", "Default", 1);
+        profile.lane.lift = 240;
+        profile.lane.lift_enabled = false;
+
+        apply_lane_state_to_profile(
+            &mut profile,
+            None,
+            Some(ActiveLaneState {
+                lane_cover: 0.3,
+                lift: 0.0,
+                hispeed_mode: HispeedMode::Normal,
+                target_green_number: 300,
+            }),
+        );
+
+        assert_eq!(profile.lane.lift, 240);
+        assert!(!profile.lane.lift_enabled);
     }
 
     #[test]
