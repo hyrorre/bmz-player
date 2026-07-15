@@ -8,6 +8,8 @@ import type {
   IrChartLnProfile,
   IrDeviceType,
   IrDoubleOption,
+  IrJudgeCounts,
+  IrJudges,
   IrRanking,
   IrRankingEntry,
   IrRankingScope,
@@ -95,6 +97,7 @@ interface BestScoreRow extends BestScoreCandidate {
   arrange_2p?: string
   played_at: string | null
   verification: IrVerificationStatus
+  judges?: IrJudges
 }
 
 export class IrEvidenceValidationError extends Error {}
@@ -802,13 +805,15 @@ async function enrichBestRowsWithPlayOptions(rows: BestScoreRow[]): Promise<Best
     .select({
       id: schema.scores.id,
       play_options: schema.scores.playOptions,
+      judges: schema.scores.judges,
     })
     .from(schema.scores)
     .where(inArray(schema.scores.id, scoreIds))
-  const playOptionsByScoreId = new Map(scoreRows.map((row) => [row.id, row.play_options]))
+  const scoreById = new Map(scoreRows.map((row) => [row.id, row]))
   return rows.map((row) => ({
     ...row,
-    ...arrangeOptionsFromPlayOptions(playOptionsByScoreId.get(row.score_id)),
+    ...arrangeOptionsFromPlayOptions(scoreById.get(row.score_id)?.play_options),
+    judges: rankingJudges(scoreById.get(row.best_ex_score_id)?.judges),
   }))
 }
 
@@ -850,6 +855,7 @@ async function fetchRankingBestRowsFromHistory(
       played_at: schema.scores.playedAt,
       server_received_at: schema.scores.serverReceivedAt,
       verification: schema.scores.verification,
+      judges: schema.scores.judges,
       play_options: schema.scores.playOptions,
     })
     .from(schema.scores)
@@ -885,6 +891,7 @@ function rowToBestScoreRow(row: {
   played_at: Date | null
   server_received_at: Date
   verification: BestScoreRow['verification']
+  judges?: Record<string, unknown> | null
   play_options?: Record<string, unknown> | null
 }): BestScoreRow {
   const { play_options: playOptions, ...rowFields } = row
@@ -904,7 +911,35 @@ function rowToBestScoreRow(row: {
     rule_mode: row.rule_mode as IrRuleMode,
     device_type: row.device_type as IrDeviceType,
     played_at: row.played_at?.toISOString() ?? null,
+    judges: rankingJudges(row.judges),
   }
+}
+
+function rankingJudgeCounts(value: unknown): IrJudgeCounts | undefined {
+  if (!isRecord(value)) {
+    return undefined
+  }
+  const keys = ['pgreat', 'great', 'good', 'bad', 'poor', 'empty_poor'] as const
+  if (keys.some((key) => !Number.isInteger(value[key]) || Number(value[key]) < 0)) {
+    return undefined
+  }
+  return {
+    pgreat: Number(value.pgreat),
+    great: Number(value.great),
+    good: Number(value.good),
+    bad: Number(value.bad),
+    poor: Number(value.poor),
+    empty_poor: Number(value.empty_poor),
+  }
+}
+
+function rankingJudges(value: unknown): IrJudges | undefined {
+  if (!isRecord(value)) {
+    return undefined
+  }
+  const fast = rankingJudgeCounts(value.fast)
+  const slow = rankingJudgeCounts(value.slow)
+  return fast && slow ? { fast, slow } : undefined
 }
 
 function bestRowsFromHistory(rows: ScoreHistoryRankingRow[]): BestScoreRow[] {
@@ -1307,6 +1342,7 @@ function rankRows(
         arrange_2p: row.arrange_2p,
         played_at: row.played_at,
         verification: row.verification,
+        judges: row.judges,
         source_score_ids: {
           ex_score: row.best_ex_score_id,
           clear: row.best_clear_score_id,
@@ -1697,4 +1733,5 @@ export const __test = {
   idempotentScoreResponse,
   scoreSubmissionMetadata,
   validateSeedOptions,
+  rankingJudges,
 }

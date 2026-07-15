@@ -119,6 +119,11 @@ export interface IrJudgeCounts {
   empty_poor: number
 }
 
+export interface IrJudges {
+  fast: IrJudgeCounts
+  slow: IrJudgeCounts
+}
+
 export interface IrPreviousBest {
   clear_type: string
   ex_score: number
@@ -206,6 +211,8 @@ export interface IrRankingEntry {
     arrange_2p?: string
     played_at: string | null
     verification: IrVerificationStatus
+    /** Highest EX-score attempt's judgement breakdown. Absent on legacy rows. */
+    judges?: IrJudges
     source_score_ids?: {
       ex_score: string
       clear: string

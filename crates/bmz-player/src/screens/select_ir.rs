@@ -10,7 +10,9 @@ use std::sync::mpsc::{Receiver, Sender, channel};
 use std::time::{Duration, Instant};
 
 use bmz_gameplay::rule::RuleMode;
-use bmz_render::scene::{ResultIrSnapshot, ResultIrState as SkinIrState, SelectRivalSnapshot};
+use bmz_render::scene::{
+    ResultIrSnapshot, ResultIrState as SkinIrState, SelectRivalJudgeCounts, SelectRivalSnapshot,
+};
 
 use crate::config::profile_config::IrConfig;
 use crate::ir::types::{IrRankingResult, IrRankingScope};
@@ -348,6 +350,13 @@ fn top_rival_snapshot(rivals: &IrRankingResult) -> Option<SelectRivalSnapshot> {
         ex_score: entry.score.ex_score,
         max_combo: entry.score.max_combo,
         bp: entry.score.min_bp,
+        judge_counts: entry.score.judges.map(|judges| SelectRivalJudgeCounts {
+            pgreat: judges.fast.pgreat.saturating_add(judges.slow.pgreat),
+            great: judges.fast.great.saturating_add(judges.slow.great),
+            good: judges.fast.good.saturating_add(judges.slow.good),
+            bad: judges.fast.bad.saturating_add(judges.slow.bad),
+            poor: judges.fast.poor.saturating_add(judges.slow.poor),
+        }),
     })
 }
 
@@ -382,8 +391,8 @@ mod tests {
         IrProviderConfig, IrProviderRoleConfig, IrSendPolicyConfig,
     };
     use crate::ir::types::{
-        IrRankingBody, IrRankingChartRef, IrRankingEntry, IrRankingPagination, IrRankingPlayer,
-        IrRankingScore, IrRankingSelfRef,
+        IrJudgePayload, IrJudgeSidePayload, IrRankingBody, IrRankingChartRef, IrRankingEntry,
+        IrRankingPagination, IrRankingPlayer, IrRankingScore, IrRankingSelfRef,
     };
     use crate::screens::result_ir::ResultIrRankingEntry;
 
@@ -446,6 +455,7 @@ mod tests {
                         max_combo: 300,
                         min_bp: 2,
                         min_cb: 2,
+                        judges: None,
                         device_type: None,
                         played_at: None,
                     },
@@ -497,6 +507,7 @@ mod tests {
                     ex_score: 1500,
                     max_combo: 700,
                     bp: 12,
+                    judge_counts: None,
                 }),
                 global_ex_scores: vec![1800, 1600, 1400],
                 rival_ex_scores: vec![1500, 1200],
@@ -558,6 +569,7 @@ mod tests {
                     ex_score: 1500,
                     max_combo: 700,
                     bp: 12,
+                    judge_counts: None,
                 }),
                 global_ex_scores: vec![1200],
                 rival_ex_scores: vec![1500],
@@ -578,6 +590,35 @@ mod tests {
         );
         let rival = select_ir.rival_for(&ir_config(true), Some(sha)).unwrap();
         assert_eq!(rival.display_name, "RivalOne");
+    }
+
+    #[test]
+    fn rival_snapshot_sums_fast_and_slow_judges() {
+        let mut ranking = raw_global_ranking([7u8; 32], 1, 1500, 3);
+        ranking.ranking.entries[0].score.judges = Some(IrJudgePayload {
+            fast: IrJudgeSidePayload {
+                pgreat: 500,
+                great: 30,
+                good: 4,
+                bad: 2,
+                poor: 1,
+                empty_poor: 9,
+            },
+            slow: IrJudgeSidePayload {
+                pgreat: 400,
+                great: 20,
+                good: 3,
+                bad: 1,
+                poor: 2,
+                empty_poor: 8,
+            },
+        });
+
+        let rival = top_rival_snapshot(&ranking).unwrap();
+        assert_eq!(
+            rival.judge_counts,
+            Some(SelectRivalJudgeCounts { pgreat: 900, great: 50, good: 7, bad: 3, poor: 3 })
+        );
     }
 
     #[test]

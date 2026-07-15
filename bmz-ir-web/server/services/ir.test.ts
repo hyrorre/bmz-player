@@ -77,6 +77,25 @@ describe('ranking best row aggregation', () => {
     })
   })
 
+  test('keeps complete ranking judge breakdowns and rejects legacy invalid values', () => {
+    expect(
+      __test.rankingJudges({
+        fast: { pgreat: 10, great: 3, good: 2, bad: 1, poor: 4, empty_poor: 5 },
+        slow: { pgreat: 20, great: 6, good: 1, bad: 2, poor: 3, empty_poor: 0 },
+      }),
+    ).toEqual({
+      fast: { pgreat: 10, great: 3, good: 2, bad: 1, poor: 4, empty_poor: 5 },
+      slow: { pgreat: 20, great: 6, good: 1, bad: 2, poor: 3, empty_poor: 0 },
+    })
+    expect(__test.rankingJudges({ fast: {}, slow: {} })).toBeUndefined()
+    expect(
+      __test.rankingJudges({
+        fast: { pgreat: -1, great: 0, good: 0, bad: 0, poor: 0, empty_poor: 0 },
+        slow: { pgreat: 0, great: 0, good: 0, bad: 0, poor: 0, empty_poor: 0 },
+      }),
+    ).toBeUndefined()
+  })
+
   test('deduplicates users and keeps independent display bests', () => {
     const rows = [
       rankingRow({

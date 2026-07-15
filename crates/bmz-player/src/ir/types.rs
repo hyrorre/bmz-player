@@ -455,6 +455,8 @@ pub struct IrRankingScore {
     pub min_bp: u32,
     pub min_cb: u32,
     #[serde(default)]
+    pub judges: Option<IrJudgePayload>,
+    #[serde(default)]
     pub device_type: Option<String>,
     #[serde(default)]
     pub played_at: Option<String>,

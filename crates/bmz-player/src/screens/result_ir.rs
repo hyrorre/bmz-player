@@ -787,6 +787,7 @@ mod tests {
                         max_combo: 28,
                         min_bp: 0,
                         min_cb: 0,
+                        judges: None,
                         device_type: None,
                         played_at: None,
                     },

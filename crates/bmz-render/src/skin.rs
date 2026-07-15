@@ -1121,6 +1121,9 @@ pub struct SkinDrawState {
     pub rival_max_combo: Option<i64>,
     /// 同 BP (NUMBER_RIVAL_MISSCOUNT=276)。
     pub rival_bp: Option<i64>,
+    /// EXスコア元プレイの PGREAT/GREAT/GOOD/BAD/POOR
+    /// (NUMBER/FLOAT_RIVAL_*=280..289)。
+    pub rival_judge_counts: Option<[u32; 5]>,
     /// Result update/draw ops 用の保存前ベスト。
     pub previous_best_ex_score: Option<u32>,
     pub previous_best_clear_index: Option<i64>,
@@ -1372,6 +1375,7 @@ impl Default for SkinDrawState {
             rival_ex_score: None,
             rival_max_combo: None,
             rival_bp: None,
+            rival_judge_counts: None,
             previous_best_ex_score: None,
             previous_best_clear_index: None,
             previous_best_max_combo: None,
@@ -3767,6 +3771,11 @@ impl SkinDocumentRenderExt for SkinDocument {
             rival_ex_score: snapshot.rival.as_ref().map(|rival| i64::from(rival.ex_score)),
             rival_max_combo: snapshot.rival.as_ref().map(|rival| i64::from(rival.max_combo)),
             rival_bp: snapshot.rival.as_ref().map(|rival| i64::from(rival.bp)),
+            rival_judge_counts: snapshot.rival.as_ref().and_then(|rival| {
+                rival.judge_counts.map(|counts| {
+                    [counts.pgreat, counts.great, counts.good, counts.bad, counts.poor]
+                })
+            }),
             ..SkinDrawState::default()
         };
         if let Some(runtime) = dynamic_timers {
@@ -8110,6 +8119,11 @@ fn skin_state_float_number(ref_id: i32, state: &SkinDrawState) -> Option<f32> {
         105..=109 => Some(select_level_rate(state, Some(ref_id - 104))),
         110..=115 => Some(graph_value(ref_id, state)),
         140..=145 | 147 => Some(if state.select_screen { graph_value(ref_id, state) } else { 0.0 }),
+        285..=289 => {
+            let notes = state.select_total_notes.max(state.total_notes);
+            let count = state.rival_judge_counts?[usize::try_from(ref_id - 285).ok()?];
+            (notes > 0).then_some(count as f32 / notes as f32)
+        }
         _ => None,
     }
 }
@@ -8825,6 +8839,14 @@ fn skin_state_number(ref_id: i32, state: &SkinDrawState) -> Option<i64> {
         271 => state.rival_ex_score,
         275 => state.rival_max_combo,
         276 => state.rival_bp,
+        280..=284 => {
+            state.rival_judge_counts.map(|counts| i64::from(counts[(ref_id - 280) as usize]))
+        }
+        285..=289 => {
+            let notes = state.select_total_notes.max(state.total_notes);
+            let count = state.rival_judge_counts?[(ref_id - 285) as usize];
+            (notes > 0).then_some(i64::from(count) * 100 / i64::from(notes))
+        }
         // ベストスコア / ターゲットスコア (DB から供給、未取得時は None)
         150 | 170 => projected_best_score_at_progress(state).map(|s| s as i64),
         121 | 151 => state.target_ex_score.map(|s| projected_score_at_progress(s, state) as i64),
@@ -21398,16 +21420,31 @@ mod tests {
             rival_ex_score: Some(1500),
             rival_max_combo: Some(700),
             rival_bp: Some(12),
+            rival_judge_counts: Some([900, 50, 7, 3, 3]),
+            select_total_notes: 1000,
             ..SkinDrawState::default()
         };
         assert_eq!(skin_state_number(271, &state), Some(1500));
         assert_eq!(skin_state_number(275, &state), Some(700));
         assert_eq!(skin_state_number(276, &state), Some(12));
+        assert_eq!(skin_state_number(280, &state), Some(900));
+        assert_eq!(skin_state_number(281, &state), Some(50));
+        assert_eq!(skin_state_number(282, &state), Some(7));
+        assert_eq!(skin_state_number(283, &state), Some(3));
+        assert_eq!(skin_state_number(284, &state), Some(3));
+        assert_eq!(skin_state_number(285, &state), Some(90));
+        assert_eq!(skin_state_number(286, &state), Some(5));
+        assert_eq!(skin_state_number(287, &state), Some(0));
+        assert!((skin_state_float_number(285, &state).unwrap() - 0.9).abs() < f32::EPSILON);
+        assert!((skin_state_float_number(286, &state).unwrap() - 0.05).abs() < f32::EPSILON);
         assert!(!test_skin_op(624, &[], &state));
         assert!(test_skin_op(625, &[], &state));
 
         let no_rival = SkinDrawState::default();
         assert_eq!(skin_state_number(271, &no_rival), None);
+        assert_eq!(skin_state_number(280, &no_rival), None);
+        assert_eq!(skin_state_number(285, &no_rival), None);
+        assert_eq!(skin_state_float_number(285, &no_rival), None);
         assert!(test_skin_op(624, &[], &no_rival));
         assert!(!test_skin_op(625, &[], &no_rival));
     }

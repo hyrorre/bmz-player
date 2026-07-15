@@ -149,6 +149,18 @@ pub struct SelectRivalSnapshot {
     pub ex_score: u32,
     pub max_combo: u32,
     pub bp: u32,
+    /// EXスコア元プレイの PGREAT/GREAT/GOOD/BAD/POOR 内訳。
+    /// legacy IR 応答では取得できないため None。
+    pub judge_counts: Option<SelectRivalJudgeCounts>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SelectRivalJudgeCounts {
+    pub pgreat: u32,
+    pub great: u32,
+    pub good: u32,
+    pub bad: u32,
+    pub poor: u32,
 }
 
 impl Default for SelectSnapshot {
