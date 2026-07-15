@@ -141,7 +141,7 @@ use crate::skin_loader::{
     DecodedSkin, PreparedSource, SharedSkinDocumentCache, SharedSkinFontCache,
     SharedSkinGpuTextureCache, SharedSkinSourceAssetCache, SkinDocumentCache, SkinFontCache,
     SkinFontCacheKey, SkinGpuTextureCache, SkinKind, SkinSourceAssetCache, UploadedSkin,
-    decode_beatoraja_skin_with_options,
+    decode_beatoraja_skin_with_options_and_runtime_state,
     decode_beatoraja_skin_with_options_and_runtime_state_and_caches,
     default_play_skin_document_path_from_paths, default_skin_document_path_from_paths,
     enabled_options_from_selections, install_decoded_font, install_decoded_skin,
@@ -2313,6 +2313,7 @@ impl WinitApp {
             &skin_gpu_texture_cache,
             &skin_font_cache,
             0,
+            &boot.profile_config.display_name,
             &boot.profile_config.skin.select,
             &boot.profile_config.skin.decide,
             &boot.profile_config.skin.result,
@@ -2355,7 +2356,14 @@ impl WinitApp {
         let initial_result_skin_signature = result_skin_signature_for_config(
             &boot.profile_config.skin,
             ResultSkinSlot::Normal,
-            lua_runtime_state_for_result(false, false, false, KeyMode::default(), BTreeMap::new()),
+            lua_runtime_state_for_result(
+                false,
+                false,
+                false,
+                KeyMode::default(),
+                BTreeMap::new(),
+                &boot.profile_config.display_name,
+            ),
         );
 
         let mut app = Self {
@@ -7923,8 +7931,11 @@ impl WinitApp {
         // Play スキンは裏で decode+upload を進めるが、Decide 入場では待たない。
         // 実際の Play 入場 (`start_chart_with_options`) で `ensure_skin_ready` が保険として残る。
         let play_skin_key_mode = self.play_skin_key_mode_for_chart(chart_id, &options);
-        let play_skin_runtime_state =
-            lua_runtime_state_for_play(&options, self.boot.profile_config.play.auto_play);
+        let play_skin_runtime_state = lua_runtime_state_for_play(
+            &options,
+            self.boot.profile_config.play.auto_play,
+            &self.boot.profile_config.display_name,
+        );
         self.spawn_play_skin_decode_for(play_skin_key_mode, play_skin_runtime_state);
         self.start_play_preload(chart_id, options.clone());
         let now = Instant::now();
@@ -8331,8 +8342,11 @@ impl WinitApp {
         self.last_play_was_autoplay = options.autoplay;
         self.ensure_skin_ready(SkinKind::Decide);
         let play_skin_key_mode = self.play_skin_key_mode_for_chart(chart_id, &options);
-        let play_skin_runtime_state =
-            lua_runtime_state_for_play(&options, self.boot.profile_config.play.auto_play);
+        let play_skin_runtime_state = lua_runtime_state_for_play(
+            &options,
+            self.boot.profile_config.play.auto_play,
+            &self.boot.profile_config.display_name,
+        );
         self.spawn_play_skin_decode_for(play_skin_key_mode, play_skin_runtime_state);
         self.ensure_skin_ready(SkinKind::Play);
         self.invalidate_play_preload();
@@ -10997,6 +11011,7 @@ impl WinitApp {
             self.result_score_save_enabled_for_slot(slot),
             key_mode,
             number_values,
+            &self.boot.profile_config.display_name,
         )
     }
 
@@ -12305,6 +12320,7 @@ impl WinitApp {
             &self.skin_font_cache,
             &mut self.skin_reload_generations,
             texture_request,
+            &self.boot.profile_config.display_name,
             &skin.select,
             &skin.decide,
             &skin.result,
@@ -13572,6 +13588,7 @@ fn load_initial_skin_textures(
     skin_gpu_texture_cache: &SharedSkinGpuTextureCache,
     skin_font_cache: &SharedSkinFontCache,
     generation: u64,
+    player_name: &str,
     select_skin_path: &str,
     decide_skin_path: &str,
     result_skin_path: &str,
@@ -13621,7 +13638,7 @@ fn load_initial_skin_textures(
                 SkinKind::Decide,
                 if decide_trimmed.is_empty() { BTreeMap::new() } else { decide_options.clone() },
                 if decide_trimmed.is_empty() { BTreeMap::new() } else { decide_files.clone() },
-                bmz_skin::LuaLoadRuntimeState::default(),
+                lua_runtime_state_for_player(player_name),
             );
             pending_decide = true;
         }
@@ -13661,6 +13678,7 @@ fn load_initial_skin_textures(
                     false,
                     KeyMode::default(),
                     BTreeMap::new(),
+                    player_name,
                 ),
             );
             pending_result = true;
@@ -13701,6 +13719,7 @@ fn load_initial_skin_textures(
                     default_manifest.as_ref(),
                     active_select_options,
                     active_select_files,
+                    &lua_runtime_state_for_player(player_name),
                 );
                 if !video_sources.is_empty() {
                     skin_video_sources.insert(SkinKind::Select, video_sources);
@@ -13760,6 +13779,7 @@ fn reload_skin_textures(
     skin_font_cache: &SharedSkinFontCache,
     generations: &mut SkinReloadGenerations,
     request: SkinReloadRequest,
+    player_name: &str,
     select_skin_path: &str,
     decide_skin_path: &str,
     result_skin_path: &str,
@@ -13813,7 +13833,7 @@ fn reload_skin_textures(
                 kind,
                 if trimmed.is_empty() { BTreeMap::new() } else { options.clone() },
                 if trimmed.is_empty() { BTreeMap::new() } else { files.clone() },
-                bmz_skin::LuaLoadRuntimeState::default(),
+                lua_runtime_state_for_player(player_name),
             );
             match kind {
                 SkinKind::Select => pending_select = true,
@@ -13840,6 +13860,7 @@ fn apply_json_skin_sync(
     default_manifest: Option<&SkinManifest>,
     options: &BTreeMap<String, String>,
     files: &BTreeMap<String, String>,
+    runtime_state: &bmz_skin::LuaLoadRuntimeState,
 ) -> Vec<ActiveSkinVideoSource> {
     let Some(manifest) = default_manifest else {
         tracing::warn!(
@@ -13849,7 +13870,13 @@ fn apply_json_skin_sync(
         );
         return Vec::new();
     };
-    let decoded = match decode_beatoraja_skin_with_options(path, kind, options, files) {
+    let decoded = match decode_beatoraja_skin_with_options_and_runtime_state(
+        path,
+        kind,
+        options,
+        files,
+        runtime_state,
+    ) {
         Ok(decoded) => decoded,
         Err(error) => {
             tracing::warn!(
@@ -16339,6 +16366,7 @@ fn lua_runtime_state_for_result(
     score_save_enabled: bool,
     key_mode: KeyMode,
     number_values: BTreeMap<i32, i32>,
+    player_name: &str,
 ) -> bmz_skin::LuaLoadRuntimeState {
     let mut option_values = BTreeMap::new();
     option_values.insert(1008, table_song);
@@ -16349,12 +16377,17 @@ fn lua_runtime_state_for_result(
     for option in 160..=164 {
         option_values.insert(option, result_key_mode_option_matches(option, key_mode));
     }
-    bmz_skin::LuaLoadRuntimeState { number_values, option_values }
+    bmz_skin::LuaLoadRuntimeState {
+        number_values,
+        text_values: BTreeMap::from([(2, player_name.to_string())]),
+        option_values,
+    }
 }
 
 fn lua_runtime_state_for_play(
     options: &PlayStartOptions,
     profile_autoplay: bool,
+    player_name: &str,
 ) -> bmz_skin::LuaLoadRuntimeState {
     let replay_playback = options.replay_player.is_some();
     let autoplay = !replay_playback && (profile_autoplay || options.autoplay);
@@ -16368,7 +16401,18 @@ fn lua_runtime_state_for_play(
         (84, replay_playback),
         (1080, options.practice_mode),
     ]);
-    bmz_skin::LuaLoadRuntimeState { number_values: BTreeMap::new(), option_values }
+    bmz_skin::LuaLoadRuntimeState {
+        number_values: BTreeMap::new(),
+        text_values: BTreeMap::from([(2, player_name.to_string())]),
+        option_values,
+    }
+}
+
+fn lua_runtime_state_for_player(player_name: &str) -> bmz_skin::LuaLoadRuntimeState {
+    bmz_skin::LuaLoadRuntimeState {
+        text_values: BTreeMap::from([(2, player_name.to_string())]),
+        ..bmz_skin::LuaLoadRuntimeState::default()
+    }
 }
 
 fn result_key_mode_option_matches(option: i32, key_mode: KeyMode) -> bool {
@@ -20841,7 +20885,8 @@ mod tests {
 
     #[test]
     fn result_lua_runtime_state_exposes_ir_connection_options() {
-        let online = lua_runtime_state_for_result(false, true, true, KeyMode::K7, BTreeMap::new());
+        let online =
+            lua_runtime_state_for_result(false, true, true, KeyMode::K7, BTreeMap::new(), "Player");
         assert_eq!(online.option_values.get(&50), Some(&false));
         assert_eq!(online.option_values.get(&51), Some(&true));
         assert_eq!(online.option_values.get(&60), Some(&false));
@@ -20849,8 +20894,14 @@ mod tests {
         assert_eq!(online.option_values.get(&160), Some(&true));
         assert_eq!(online.option_values.get(&161), Some(&false));
 
-        let offline =
-            lua_runtime_state_for_result(false, false, false, KeyMode::K5, BTreeMap::new());
+        let offline = lua_runtime_state_for_result(
+            false,
+            false,
+            false,
+            KeyMode::K5,
+            BTreeMap::new(),
+            "Player",
+        );
         assert_eq!(offline.option_values.get(&50), Some(&true));
         assert_eq!(offline.option_values.get(&51), Some(&false));
         assert_eq!(offline.option_values.get(&60), Some(&true));
@@ -20861,7 +20912,8 @@ mod tests {
 
     #[test]
     fn play_lua_runtime_state_exposes_play_mode_and_score_save_options() {
-        let normal = lua_runtime_state_for_play(&PlayStartOptions::default(), false);
+        let normal = lua_runtime_state_for_play(&PlayStartOptions::default(), false, "Player");
+        assert_eq!(normal.text_values.get(&2).map(String::as_str), Some("Player"));
         assert_eq!(normal.option_values.get(&61), Some(&true));
         assert_eq!(normal.option_values.get(&82), Some(&true));
         assert_eq!(normal.option_values.get(&84), Some(&false));
@@ -20869,6 +20921,7 @@ mod tests {
         let autoplay = lua_runtime_state_for_play(
             &PlayStartOptions { autoplay: true, ..PlayStartOptions::default() },
             false,
+            "Player",
         );
         assert_eq!(autoplay.option_values.get(&33), Some(&true));
         assert_eq!(autoplay.option_values.get(&60), Some(&true));
@@ -20880,6 +20933,7 @@ mod tests {
                 ..PlayStartOptions::default()
             },
             false,
+            "Player",
         );
         assert_eq!(replay.option_values.get(&33), Some(&false));
         assert_eq!(replay.option_values.get(&84), Some(&true));
@@ -20887,6 +20941,7 @@ mod tests {
         let practice = lua_runtime_state_for_play(
             &PlayStartOptions { practice_mode: true, ..PlayStartOptions::default() },
             false,
+            "Player",
         );
         assert_eq!(practice.option_values.get(&60), Some(&true));
         assert_eq!(practice.option_values.get(&82), Some(&true));

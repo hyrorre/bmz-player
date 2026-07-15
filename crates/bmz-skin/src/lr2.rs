@@ -324,6 +324,7 @@ fn load_header(path: &Path, options: &BTreeMap<String, String>) -> Result<Loaded
     apply_derived_play_options(&mut header);
     let dependencies = SkinLoadDependencies {
         number_values: BTreeMap::new(),
+        text_values: BTreeMap::new(),
         option_values: processor.option_dependencies,
         files: BTreeSet::new(),
         loaded_files: BTreeMap::new(),

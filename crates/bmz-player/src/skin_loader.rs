@@ -236,6 +236,7 @@ struct SkinDocumentCacheKey {
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct SkinDocumentDependencyFingerprint {
     number_values: BTreeMap<i32, i32>,
+    text_values: BTreeMap<i32, String>,
     option_values: BTreeMap<i32, bool>,
     file_values: BTreeMap<String, String>,
     loaded_files: BTreeMap<PathBuf, SkinLoadedFileDependency>,
@@ -1398,6 +1399,7 @@ fn lr2_document_dependency_fingerprint(
         .context("failed to inspect lr2 skin loaded file dependencies")?;
     Ok(SkinDocumentDependencyFingerprint {
         number_values: BTreeMap::new(),
+        text_values: BTreeMap::new(),
         option_values,
         file_values,
         loaded_files,
@@ -1419,6 +1421,14 @@ fn document_dependency_fingerprint(
         .keys()
         .map(|ref_id| {
             let value = runtime_state.number_values.get(ref_id).copied().unwrap_or_default();
+            (*ref_id, value)
+        })
+        .collect();
+    let text_values = dependencies
+        .text_values
+        .keys()
+        .map(|ref_id| {
+            let value = runtime_state.text_values.get(ref_id).cloned().unwrap_or_default();
             (*ref_id, value)
         })
         .collect();
@@ -1448,6 +1458,7 @@ fn document_dependency_fingerprint(
         .collect();
     Some(SkinDocumentDependencyFingerprint {
         number_values,
+        text_values,
         option_values,
         file_values,
         loaded_files,
@@ -2461,6 +2472,7 @@ mod tests {
             BTreeMap::from([("Expand Panel".to_string(), "ON - GRAPH DEFAULT".to_string())]);
         let runtime_state = LuaLoadRuntimeState {
             number_values: BTreeMap::new(),
+            text_values: BTreeMap::new(),
             option_values: BTreeMap::from([(51, true), (160, true)]),
         };
         let loaded = load_skin_document_uncached(
@@ -2662,6 +2674,7 @@ mod tests {
                 &BTreeMap::new(),
                 &LuaLoadRuntimeState {
                     number_values: BTreeMap::from([(425, combo_break)]),
+                    text_values: BTreeMap::new(),
                     option_values: BTreeMap::from([(51, true), (160, true)]),
                 },
             )
@@ -3654,6 +3667,7 @@ mod tests {
         ]);
         let runtime_state = LuaLoadRuntimeState {
             number_values: BTreeMap::from([(178, -1)]),
+            text_values: BTreeMap::new(),
             option_values: BTreeMap::new(),
         };
         let decoded = decode_beatoraja_skin_with_options_and_runtime_state(
@@ -6148,6 +6162,7 @@ return {
 
         let zero_state = LuaLoadRuntimeState {
             number_values: BTreeMap::from([(178, 0)]),
+            text_values: BTreeMap::new(),
             option_values: BTreeMap::new(),
         };
         let first = load_skin_document(
@@ -6164,6 +6179,7 @@ return {
 
         let nonzero_state = LuaLoadRuntimeState {
             number_values: BTreeMap::from([(178, -1)]),
+            text_values: BTreeMap::new(),
             option_values: BTreeMap::new(),
         };
         let second = load_skin_document(
@@ -6177,6 +6193,57 @@ return {
         .unwrap();
         assert_eq!(second.cache_status, DocumentCacheStatus::Miss);
         assert_eq!(second.document.source[0].path, "nonzero.png");
+    }
+
+    #[test]
+    fn lua_document_cache_misses_when_runtime_text_changes() {
+        let root = unique_test_dir("bmz-lua-document-cache-text");
+        std::fs::create_dir_all(&root).unwrap();
+        let skin_path = root.join("select.luaskin");
+        std::fs::write(
+            &skin_path,
+            r#"
+local main_state = require("main_state")
+return {
+    type = 0,
+    text = {
+        { id = "player", constantText = main_state.text(2) },
+    },
+}
+"#,
+        )
+        .unwrap();
+        let cache = Arc::new(Mutex::new(SkinDocumentCache::default()));
+
+        let first = load_skin_document(
+            &skin_path,
+            SkinKind::Select,
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            &LuaLoadRuntimeState {
+                text_values: BTreeMap::from([(2, "Player One".to_string())]),
+                ..LuaLoadRuntimeState::default()
+            },
+            Some(cache.clone()),
+        )
+        .unwrap();
+        assert_eq!(first.cache_status, DocumentCacheStatus::Miss);
+        assert_eq!(first.document.text[0].constant_text, "Player One");
+
+        let second = load_skin_document(
+            &skin_path,
+            SkinKind::Select,
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            &LuaLoadRuntimeState {
+                text_values: BTreeMap::from([(2, "Player Two".to_string())]),
+                ..LuaLoadRuntimeState::default()
+            },
+            Some(cache),
+        )
+        .unwrap();
+        assert_eq!(second.cache_status, DocumentCacheStatus::Miss);
+        assert_eq!(second.document.text[0].constant_text, "Player Two");
     }
 
     #[test]

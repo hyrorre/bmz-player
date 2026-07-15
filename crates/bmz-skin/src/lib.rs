@@ -43,6 +43,7 @@ pub struct LoadedLuaSkinValue {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct SkinLoadDependencies {
     pub number_values: BTreeMap<i32, i32>,
+    pub text_values: BTreeMap<i32, String>,
     pub option_values: BTreeMap<i32, bool>,
     pub files: BTreeSet<String>,
     pub loaded_files: BTreeMap<PathBuf, SkinLoadedFileDependency>,
@@ -66,6 +67,7 @@ pub struct SkinLoadedFileDependency {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct LuaLoadRuntimeState {
     pub number_values: BTreeMap<i32, i32>,
+    pub text_values: BTreeMap<i32, String>,
     pub option_values: BTreeMap<i32, bool>,
 }
 
@@ -434,6 +436,7 @@ mod tests {
             &BTreeMap::new(),
             &LuaLoadRuntimeState {
                 number_values: BTreeMap::new(),
+                text_values: BTreeMap::new(),
                 option_values: BTreeMap::from([(1008, true)]),
             },
         )
@@ -1499,6 +1502,40 @@ mod tests {
 
         assert!(loaded.warnings.is_empty());
         assert_eq!(loaded.value["text"][0]["constantText"], env!("CARGO_PKG_VERSION"));
+    }
+
+    #[test]
+    fn lua_skin_main_state_player_name_is_available_during_load() {
+        let root = unique_test_dir("bmz-skin-lua-player-name");
+        fs::create_dir_all(&root).unwrap();
+        fs::write(
+            root.join("select.luaskin"),
+            r#"
+            local main_state = require("main_state")
+            return {
+                type = 0,
+                text = {
+                    { id = "player", constantText = main_state.text(2) },
+                },
+            }
+            "#,
+        )
+        .unwrap();
+        let runtime_state = LuaLoadRuntimeState {
+            text_values: BTreeMap::from([(2, "Player One".to_string())]),
+            ..LuaLoadRuntimeState::default()
+        };
+
+        let loaded = load_lua_skin_with_runtime_state(
+            &root.join("select.luaskin"),
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            &runtime_state,
+        )
+        .unwrap();
+
+        assert_eq!(loaded.document.text[0].constant_text, "Player One");
+        assert_eq!(loaded.dependencies.text_values.get(&2).map(String::as_str), Some("Player One"));
     }
 
     #[test]
@@ -2873,6 +2910,7 @@ mod tests {
 
         let runtime_state = LuaLoadRuntimeState {
             number_values: BTreeMap::new(),
+            text_values: BTreeMap::new(),
             option_values: BTreeMap::from([(50, false), (51, true)]),
         };
         let loaded = load_lua_skin_with_runtime_state(

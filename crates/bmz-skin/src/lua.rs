@@ -692,6 +692,11 @@ fn install_sandbox(
             main_state_probe.lock().map_err(|_| anyhow!("main_state probe lock poisoned"))?;
         probe.number_values = runtime_state.number_values.clone();
     }
+    if !runtime_state.text_values.is_empty() {
+        let mut probe =
+            main_state_probe.lock().map_err(|_| anyhow!("main_state probe lock poisoned"))?;
+        probe.text_values = runtime_state.text_values.clone();
+    }
     if !runtime_state.option_values.is_empty() {
         let mut probe =
             main_state_probe.lock().map_err(|_| anyhow!("main_state probe lock poisoned"))?;
@@ -1278,6 +1283,14 @@ impl MainStateProbe {
         }
     }
 
+    fn record_load_time_text_dependency(&self, ref_id: i32, value: &str) {
+        if let Some(dependencies) = &self.load_dependencies
+            && let Ok(mut dependencies) = dependencies.lock()
+        {
+            dependencies.text_values.insert(ref_id, value.to_string());
+        }
+    }
+
     fn timer(&mut self, timer_id: i32) -> i32 {
         if matches!(self.mode, MainStateProbeMode::RuntimeStub) {
             return i32::MIN;
@@ -1323,7 +1336,9 @@ impl MainStateProbe {
                     "{LUA_TEXT_REF_SENTINEL_PREFIX}{ref_id}{LUA_TEXT_REF_SENTINEL_SUFFIX}"
                 );
             }
-            return String::new();
+            let value = self.text_values.get(&ref_id).cloned().unwrap_or_default();
+            self.record_load_time_text_dependency(ref_id, &value);
+            return value;
         }
         self.text_calls.push(ref_id);
         self.text_values.get(&ref_id).cloned().unwrap_or_else(|| format!("Text{ref_id}"))
