@@ -1498,7 +1498,7 @@ mod tests {
                 .unwrap();
 
         assert!(loaded.warnings.is_empty());
-        assert_eq!(loaded.value["text"][0]["constantText"], "Player 0.1.0");
+        assert_eq!(loaded.value["text"][0]["constantText"], env!("CARGO_PKG_VERSION"));
     }
 
     #[test]
@@ -2696,6 +2696,19 @@ mod tests {
                 .unwrap();
         assert_eq!(loaded.document.skin_type, 5);
         assert!(loaded.document.songlist.is_some());
+        let version = loaded
+            .document
+            .text
+            .iter()
+            .find(|text| text.id == "default_version")
+            .expect("m-select version text should decode");
+        assert_eq!(version.constant_text, env!("CARGO_PKG_VERSION"));
+        for ref_id in 27..=29 {
+            assert!(
+                loaded.document.value.iter().any(|value| value.ref_id == ref_id),
+                "m-select should retain operating-time ref {ref_id}"
+            );
+        }
     }
 
     #[test]

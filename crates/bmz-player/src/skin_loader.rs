@@ -2358,7 +2358,8 @@ mod tests {
     use bmz_render::scene::{AppSceneSnapshot, SelectRowSnapshot, SelectSnapshot};
     use bmz_render::skin::{
         DestinationListEntry, DynamicTimerRuntime, SkinContext, SkinDocumentRenderExt,
-        SkinDocumentTexture, SkinImageSize, SkinManifest,
+        SkinDocumentTexture, SkinDrawState, SkinImageSize, SkinManifest, SkinRenderItem,
+        SkinTextState,
     };
 
     fn test_app_paths() -> AppPaths {
@@ -2592,6 +2593,55 @@ mod tests {
             Some(&Some("{\"playername\":\"bmz\"}".to_string()))
         );
         assert!(loaded.dependencies.virtual_io_files.contains_key("player/bmz/config_player.json"));
+    }
+
+    #[test]
+    fn wmii_result_renders_bmz_player_version_when_available() {
+        let skin_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../data/skins/WMII_FHD/result/result.luaskin");
+        if !skin_path.is_file() {
+            return;
+        }
+
+        let decoded = decode_beatoraja_skin_with_options(
+            &skin_path,
+            SkinKind::Result,
+            &BTreeMap::from([("Display Version".to_string(), "ON".to_string())]),
+            &BTreeMap::new(),
+        )
+        .unwrap();
+        assert!(
+            decoded.document.text.iter().any(|text| text.id == "version" && text.ref_id == 1010),
+            "WMII version text should retain STRING_VERSION ref 1010"
+        );
+        let sources = decoded
+            .sources
+            .iter()
+            .map(|source| {
+                (
+                    source.source_id.clone(),
+                    SkinDocumentTexture {
+                        source_id: source.source_id.clone(),
+                        texture: source.texture,
+                        source_size: SkinImageSize {
+                            width: source.size.width,
+                            height: source.size.height,
+                        },
+                    },
+                )
+            })
+            .collect::<std::collections::HashMap<_, _>>();
+        let items = decoded.document.static_render_items(
+            &sources,
+            &SkinDrawState { elapsed_ms: 2_000, ..SkinDrawState::default() },
+            &SkinTextState::default(),
+        );
+
+        assert!(items.iter().any(|item| matches!(
+            item,
+            SkinRenderItem::Text { text, .. }
+                if text == &format!("bmz-player {}", env!("CARGO_PKG_VERSION"))
+        )));
     }
 
     #[test]
@@ -3061,6 +3111,23 @@ mod tests {
                 .any(|item| matches!(item, bmz_render::skin::SkinRenderItem::Text { text, .. } if text == "Song")),
             "m_select select skin should render the song title text"
         );
+    }
+
+    #[test]
+    fn luxe_flat_lua_select_skin_keeps_operating_time_refs_when_available() {
+        let skin_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../data/skins/Luxez-Flat/music_select.luaskin");
+        if !skin_path.is_file() {
+            return;
+        }
+
+        let decoded = decode_beatoraja_skin(&skin_path, SkinKind::Select).unwrap();
+        for ref_id in 27..=29 {
+            assert!(
+                decoded.document.value.iter().any(|value| value.ref_id == ref_id),
+                "Luxe Flat should retain operating-time ref {ref_id}"
+            );
+        }
     }
 
     #[test]

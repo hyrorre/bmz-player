@@ -37,6 +37,7 @@ pub fn sample_select_scene() -> AppSceneSnapshot {
 
     AppSceneSnapshot::Select(SelectSnapshot {
         time: TimeUs(12_345_000),
+        operating_time_ms: 12_345,
         selection_time: TimeUs(345_000),
         option_panel_time: TimeUs(0),
         option_panel: 0,

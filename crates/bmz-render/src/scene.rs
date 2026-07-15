@@ -45,6 +45,9 @@ pub struct PlayerStatsSnapshot {
 #[derive(Debug, Clone, PartialEq)]
 pub struct SelectSnapshot {
     pub time: TimeUs,
+    /// アプリ起動後の経過時間 ms。
+    /// beatoraja の NUMBER_OPERATING_TIME_HOUR/MINUTE/SECOND (27..29) に使う。
+    pub operating_time_ms: i32,
     pub selection_time: TimeUs,
     pub option_panel_time: TimeUs,
     pub option_panel: u8,
@@ -140,6 +143,7 @@ impl Default for SelectSnapshot {
     fn default() -> Self {
         Self {
             time: TimeUs::default(),
+            operating_time_ms: 0,
             selection_time: TimeUs::default(),
             option_panel_time: TimeUs::default(),
             option_panel: 0,

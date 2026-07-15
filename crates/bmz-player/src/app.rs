@@ -2941,13 +2941,7 @@ impl WinitApp {
     }
 
     fn apply_operating_time_to_scene(&self, scene: &mut AppSceneSnapshot) {
-        let operating_time_ms = self.operating_time_ms();
-        match scene {
-            AppSceneSnapshot::Decide(snapshot) | AppSceneSnapshot::Play(snapshot) => {
-                snapshot.operating_time_ms = operating_time_ms;
-            }
-            AppSceneSnapshot::Select(_) | AppSceneSnapshot::Result(_) => {}
-        }
+        apply_operating_time_ms_to_scene(scene, self.operating_time_ms());
     }
 
     fn build_overlay_snapshot(&self) -> OverlaySnapshot {
@@ -3172,6 +3166,7 @@ impl WinitApp {
             Some(Self::select_note_display_duration_ms_for_skin(&self.boot.profile_config));
         SelectSnapshot {
             time: self.select_time(),
+            operating_time_ms: 0,
             selection_time: self.select_bar_time(),
             option_panel_time: self.option_panel_time(),
             option_panel: self.select_option_panel,
@@ -18137,6 +18132,18 @@ fn elapsed_since_ms(started_at: Instant) -> i32 {
     (started_at.elapsed().as_millis().min(i32::MAX as u128)) as i32
 }
 
+fn apply_operating_time_ms_to_scene(scene: &mut AppSceneSnapshot, operating_time_ms: i32) {
+    match scene {
+        AppSceneSnapshot::Select(snapshot) => {
+            snapshot.operating_time_ms = operating_time_ms;
+        }
+        AppSceneSnapshot::Decide(snapshot) | AppSceneSnapshot::Play(snapshot) => {
+            snapshot.operating_time_ms = operating_time_ms;
+        }
+        AppSceneSnapshot::Result(_) => {}
+    }
+}
+
 fn preloaded_matches_start(
     preloaded: &PreloadedInputPlaySession,
     chart_id: i64,
@@ -19394,6 +19401,18 @@ mod tests {
     fn winit_app_stack_size_stays_bounded() {
         let size = std::mem::size_of::<WinitApp>();
         assert!(size < 64 * 1024, "WinitApp is {size} bytes");
+    }
+
+    #[test]
+    fn operating_time_is_applied_to_select_snapshot() {
+        let mut scene = AppSceneSnapshot::Select(SelectSnapshot::default());
+
+        apply_operating_time_ms_to_scene(&mut scene, 90_061_234);
+
+        let AppSceneSnapshot::Select(snapshot) = scene else {
+            panic!("expected select snapshot");
+        };
+        assert_eq!(snapshot.operating_time_ms, 90_061_234);
     }
 
     #[test]

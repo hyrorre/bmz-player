@@ -3600,6 +3600,7 @@ impl SkinDocumentRenderExt for SkinDocument {
         let duration_green_ms = snapshot.note_display_duration_ms;
         let mut state = SkinDrawState {
             elapsed_ms: (snapshot.time.0 / 1_000).clamp(i32::MIN as i64, i32::MAX as i64) as i32,
+            operating_time_ms: snapshot.operating_time_ms,
             select_bar_elapsed_ms: (snapshot.selection_time.0 / 1_000)
                 .clamp(i32::MIN as i64, i32::MAX as i64) as i32,
             select_option_panel_elapsed_ms: (snapshot.option_panel_time.0 / 1_000)
@@ -10576,7 +10577,7 @@ fn skin_state_text_with_draw_state(
         1001 => state.table_text_primary.to_string(),
         1002 => state.table_level.to_string(),
         1003 => state.table_text_fallback.to_string(),
-        1010 => env!("CARGO_PKG_VERSION").to_string(),
+        1010 => format!("bmz-player {}", env!("CARGO_PKG_VERSION")),
         1020 => {
             if matches!(state.ir_ranking.state, crate::scene::ResultIrState::Offline) {
                 String::new()
@@ -18139,6 +18140,19 @@ mod tests {
     }
 
     #[test]
+    fn select_draw_state_uses_application_operating_time() {
+        let document: SkinDocument = serde_json::from_str(r#"{ "type": 5 }"#).unwrap();
+        let snapshot =
+            SelectSnapshot { operating_time_ms: 90_061_234, ..SelectSnapshot::default() };
+
+        let (state, _) = document.select_draw_state(&snapshot, None);
+
+        assert_eq!(skin_state_number(27, &state), Some(25));
+        assert_eq!(skin_state_number(28, &state), Some(1));
+        assert_eq!(skin_state_number(29, &state), Some(1));
+    }
+
+    #[test]
     fn select_draw_state_maps_hispeed_and_green_number() {
         let document: SkinDocument = serde_json::from_str(r#"{ "type": 5 }"#).unwrap();
         let snapshot = SelectSnapshot {
@@ -24201,7 +24215,10 @@ mod tests {
         assert_eq!(skin_state_text(&by_ref(1001), &state), "Insane");
         assert_eq!(skin_state_text(&by_ref(1002), &state), "★12");
         assert_eq!(skin_state_text(&by_ref(1003), &state), "★12Insane");
-        assert_eq!(skin_state_text(&by_ref(1010), &state), env!("CARGO_PKG_VERSION"));
+        assert_eq!(
+            skin_state_text(&by_ref(1010), &state),
+            format!("bmz-player {}", env!("CARGO_PKG_VERSION"))
+        );
 
         let concatenated = SkinTextDef {
             value_expr: "bmz:text_concat:1001:1002".to_string(),

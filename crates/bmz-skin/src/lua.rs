@@ -1315,7 +1315,7 @@ impl MainStateProbe {
 
     fn text(&mut self, ref_id: i32) -> String {
         if ref_id == 1010 {
-            return "BMZ Player 0.1.0".to_string();
+            return format!("bmz-player {}", env!("CARGO_PKG_VERSION"));
         }
         if matches!(self.mode, MainStateProbeMode::RuntimeStub) {
             if (1001..=1003).contains(&ref_id) {
