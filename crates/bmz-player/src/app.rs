@@ -2827,6 +2827,8 @@ impl WinitApp {
                     .flatten();
                 let result_failed = result_failed_for_skin_ops(summary.clear_type, raw_clear_type);
                 AppSceneSnapshot::Result(ResultSnapshot {
+                    player_name: String::new(),
+                    current_fps: 0,
                     clear_type: summary.clear_type,
                     result_failed,
                     arrange: summary.arrange.as_str().to_string(),
@@ -2931,6 +2933,7 @@ impl WinitApp {
             }
         };
         self.apply_operating_time_to_scene(&mut scene);
+        self.apply_skin_runtime_info_to_scene(&mut scene);
         let overlay = self.build_overlay_snapshot();
         self.apply_overlay_to_scene(&mut scene, overlay);
         scene
@@ -2942,6 +2945,15 @@ impl WinitApp {
 
     fn apply_operating_time_to_scene(&self, scene: &mut AppSceneSnapshot) {
         apply_operating_time_ms_to_scene(scene, self.operating_time_ms());
+    }
+
+    fn apply_skin_runtime_info_to_scene(&self, scene: &mut AppSceneSnapshot) {
+        let current_fps = self.wgpu_fps.max(0.0).round().min(u32::MAX as f32) as u32;
+        apply_skin_runtime_info_to_scene(
+            scene,
+            &self.boot.profile_config.display_name,
+            current_fps,
+        );
     }
 
     fn build_overlay_snapshot(&self) -> OverlaySnapshot {
@@ -3166,6 +3178,8 @@ impl WinitApp {
             Some(Self::select_note_display_duration_ms_for_skin(&self.boot.profile_config));
         SelectSnapshot {
             time: self.select_time(),
+            player_name: String::new(),
+            current_fps: 0,
             operating_time_ms: 0,
             selection_time: self.select_bar_time(),
             option_panel_time: self.option_panel_time(),
@@ -18144,6 +18158,27 @@ fn apply_operating_time_ms_to_scene(scene: &mut AppSceneSnapshot, operating_time
     }
 }
 
+fn apply_skin_runtime_info_to_scene(
+    scene: &mut AppSceneSnapshot,
+    player_name: &str,
+    current_fps: u32,
+) {
+    match scene {
+        AppSceneSnapshot::Select(snapshot) => {
+            snapshot.player_name = player_name.to_string();
+            snapshot.current_fps = current_fps;
+        }
+        AppSceneSnapshot::Decide(snapshot) | AppSceneSnapshot::Play(snapshot) => {
+            snapshot.player_name = player_name.to_string();
+            snapshot.current_fps = current_fps;
+        }
+        AppSceneSnapshot::Result(snapshot) => {
+            snapshot.player_name = player_name.to_string();
+            snapshot.current_fps = current_fps;
+        }
+    }
+}
+
 fn preloaded_matches_start(
     preloaded: &PreloadedInputPlaySession,
     chart_id: i64,
@@ -19413,6 +19448,33 @@ mod tests {
             panic!("expected select snapshot");
         };
         assert_eq!(snapshot.operating_time_ms, 90_061_234);
+    }
+
+    #[test]
+    fn player_name_and_fps_are_applied_to_every_scene() {
+        let mut scenes = [
+            AppSceneSnapshot::Select(SelectSnapshot::default()),
+            AppSceneSnapshot::Play(RenderSnapshot::default()),
+            bmz_render::sample::sample_result_scene(),
+        ];
+
+        for scene in &mut scenes {
+            apply_skin_runtime_info_to_scene(scene, "Test Player", 237);
+            match scene {
+                AppSceneSnapshot::Select(snapshot) => {
+                    assert_eq!(snapshot.player_name, "Test Player");
+                    assert_eq!(snapshot.current_fps, 237);
+                }
+                AppSceneSnapshot::Decide(snapshot) | AppSceneSnapshot::Play(snapshot) => {
+                    assert_eq!(snapshot.player_name, "Test Player");
+                    assert_eq!(snapshot.current_fps, 237);
+                }
+                AppSceneSnapshot::Result(snapshot) => {
+                    assert_eq!(snapshot.player_name, "Test Player");
+                    assert_eq!(snapshot.current_fps, 237);
+                }
+            }
+        }
     }
 
     #[test]

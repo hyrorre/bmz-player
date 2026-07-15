@@ -10,6 +10,7 @@ use bmz_chart::timing::{TICKS_PER_MEASURE, TimingMap};
 use bmz_core::judge::{Judge, TimingSide};
 use bmz_core::lane::{KeyMode, LANE_COUNT, Lane};
 use bmz_core::time::TimeUs;
+use bmz_gameplay::gauge::gauge_total_for_chart;
 use bmz_gameplay::judge::model::JudgementEvent;
 use bmz_gameplay::session::GameSession;
 use bmz_render::chart_graph::{
@@ -381,6 +382,8 @@ pub fn build_render_snapshot_with_target_and_bga_frames_cached(
         .collect();
     let mut snapshot = RenderSnapshot {
         time: render_now,
+        player_name: String::new(),
+        current_fps: 0,
         play_elapsed_time,
         operating_time_ms: 0,
         ready_elapsed_time: None,
@@ -402,6 +405,10 @@ pub fn build_render_snapshot_with_target_and_bga_frames_cached(
         max_combo: session.display_max_combo(),
         ex_score: session.score.ex_score(),
         total_notes: session.scored_total_notes,
+        chart_total_gauge: gauge_total_for_chart(
+            session.chart.metadata.total,
+            session.scored_total_notes,
+        ) as f32,
         past_notes: session.score.past_notes,
         judge_counts: display_judge_counts(session),
         fast_slow_counts: display_fast_slow_counts(session),
@@ -2043,6 +2050,16 @@ mod tests {
 
         assert!(!build_render_snapshot(&normal, TimeUs(0), &[], None).replay_playback);
         assert!(build_render_snapshot(&replay, TimeUs(0), &[], None).replay_playback);
+    }
+
+    #[test]
+    fn build_render_snapshot_carries_chart_total_gauge() {
+        let profile = ProfileConfig::new_default("default", "Default", 1);
+        let mut source = chart();
+        source.metadata.total = Some(350.0);
+        let session = build_game_session(Arc::new(source), &profile, PlaySessionOptions::default());
+
+        assert_eq!(build_render_snapshot(&session, TimeUs(0), &[], None).chart_total_gauge, 350.0);
     }
 
     #[test]

@@ -877,6 +877,7 @@ fn plan_play(
 
     let mut skin_state = crate::skin::SkinDrawState {
         elapsed_ms: play_elapsed_ms,
+        current_fps: snapshot.current_fps,
         operating_time_ms: snapshot.operating_time_ms,
         ready_timer_ms,
         play_timer_ms: (snapshot.time.0 >= 0)
@@ -890,6 +891,7 @@ fn plan_play(
         max_combo: snapshot.max_combo,
         ex_score: snapshot.ex_score,
         total_notes: snapshot.total_notes,
+        select_chart_total_gauge: snapshot.chart_total_gauge,
         past_notes: snapshot.past_notes,
         judge_counts: snapshot.judge_counts,
         fast_slow_counts: Some(snapshot.fast_slow_counts),
@@ -987,6 +989,7 @@ fn plan_play(
     dynamic_timers.ingest_skin_events(&snapshot.skin_events, key_mode, snapshot.time.0);
     advance_skin_dynamic_timers(skin, dynamic_timers, &mut skin_state, play_elapsed_ms);
     let skin_text = SkinTextState {
+        player_name: &snapshot.player_name,
         title: &snapshot.title,
         subtitle: &snapshot.subtitle,
         artist: &snapshot.artist,
@@ -1356,9 +1359,11 @@ fn plan_decide(
             (snapshot.play_elapsed_time.0 / 1_000).clamp(i32::MIN as i64, i32::MAX as i64) as i32;
         let mut state = crate::skin::SkinDrawState {
             elapsed_ms: play_elapsed_ms,
+            current_fps: snapshot.current_fps,
             operating_time_ms: snapshot.operating_time_ms,
             ready_timer_ms: Some(play_elapsed_ms),
             total_notes: snapshot.total_notes,
+            select_chart_total_gauge: snapshot.chart_total_gauge,
             past_notes: snapshot.past_notes,
             ex_score: snapshot.ex_score,
             judge_counts: snapshot.judge_counts,
@@ -1395,6 +1400,7 @@ fn plan_decide(
         };
         advance_skin_dynamic_timers(skin, dynamic_timers, &mut state, play_elapsed_ms);
         let text = SkinTextState {
+            player_name: &snapshot.player_name,
             title: &snapshot.title,
             subtitle: &snapshot.subtitle,
             artist: &snapshot.artist,
@@ -1464,6 +1470,7 @@ fn plan_result(
         );
         let grade_diff = crate::skin::result_grade_diff_label(&state).unwrap_or_default();
         let text = SkinTextState {
+            player_name: snapshot.player_name.as_str(),
             title: snapshot.title.as_str(),
             subtitle: snapshot.subtitle.as_str(),
             artist: snapshot.artist.as_str(),
@@ -1603,6 +1610,7 @@ fn build_result_skin_draw_state(
     };
     crate::skin::SkinDrawState {
         elapsed_ms,
+        current_fps: snapshot.current_fps,
         select_arrange_index: crate::skin::select_arrange_index(&snapshot.arrange),
         select_arrange_2p_index: crate::skin::select_arrange_index(&snapshot.arrange_2p),
         result_arrange_index: crate::skin::select_arrange_index(&snapshot.arrange),
@@ -3063,6 +3071,8 @@ mod tests {
             let skin =
                 SkinContext::from_manifest_and_document(manifest, document, [source_texture]);
             let snapshot = ResultSnapshot {
+                player_name: String::new(),
+                current_fps: 0,
                 clear_type: ClearType::Normal,
                 result_failed: false,
                 arrange: "NORMAL".to_string(),
@@ -3202,6 +3212,8 @@ mod tests {
             std::iter::empty(),
         );
         let snapshot = ResultSnapshot {
+            player_name: String::new(),
+            current_fps: 0,
             clear_type: ClearType::Normal,
             result_failed: false,
             arrange: "NORMAL".to_string(),
@@ -3512,6 +3524,8 @@ mod tests {
             std::iter::empty(),
         );
         let snapshot = ResultSnapshot {
+            player_name: String::new(),
+            current_fps: 0,
             clear_type: ClearType::Normal,
             result_failed: false,
             arrange: "NORMAL".to_string(),
@@ -3653,6 +3667,8 @@ mod tests {
         timing_distribution.add(-12);
         timing_distribution.add(8);
         let snapshot = ResultSnapshot {
+            player_name: String::new(),
+            current_fps: 0,
             clear_type: ClearType::Normal,
             result_failed: false,
             arrange: "NORMAL".to_string(),

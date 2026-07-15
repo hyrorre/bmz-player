@@ -827,6 +827,8 @@ impl SkinBgaFrame {
 #[derive(Debug, Clone, PartialEq)]
 pub struct SkinDrawState {
     pub elapsed_ms: i32,
+    /// beatoraja NUMBER_CURRENT_FPS (20)。
+    pub current_fps: u32,
     /// アプリ起動後の経過時間 ms。
     /// beatoraja の NUMBER_OPERATING_TIME_HOUR/MINUTE/SECOND (27..29) に使う。
     pub operating_time_ms: i32,
@@ -1177,6 +1179,7 @@ impl Default for SkinDrawState {
     fn default() -> Self {
         Self {
             elapsed_ms: 0,
+            current_fps: 0,
             operating_time_ms: 0,
             ready_timer_ms: None,
             play_timer_ms: None,
@@ -1583,6 +1586,8 @@ static DEFAULT_RESULT_IR_SNAPSHOT: crate::scene::ResultIrSnapshot =
 #[derive(Debug, Clone, PartialEq)]
 pub struct SkinTextState<'a> {
     pub title: &'a str,
+    /// 現在プロフィール名 (STRING_PLAYER=2)。
+    pub player_name: &'a str,
     /// IR ライバル名 (STRING_RIVAL=1)。未取得なら空。
     pub rival: &'a str,
     pub subtitle: &'a str,
@@ -1630,6 +1635,7 @@ impl<'a> Default for SkinTextState<'a> {
     fn default() -> Self {
         Self {
             title: "",
+            player_name: "",
             subtitle: "",
             artist: "",
             subartist: "",
@@ -3428,6 +3434,7 @@ impl SkinDocumentRenderExt for SkinDocument {
     ) -> Vec<SkinRenderItem> {
         let (state, selected_row) = self.select_draw_state(snapshot, dynamic_timers);
         let text = SkinTextState {
+            player_name: &snapshot.player_name,
             title: selected_row.map(|row| row.title.as_str()).unwrap_or(&snapshot.selected_title),
             subtitle: select_detail_subtitle(snapshot, selected_row),
             artist: select_detail_artist(snapshot, selected_row),
@@ -3600,6 +3607,7 @@ impl SkinDocumentRenderExt for SkinDocument {
         let duration_green_ms = snapshot.note_display_duration_ms;
         let mut state = SkinDrawState {
             elapsed_ms: (snapshot.time.0 / 1_000).clamp(i32::MIN as i64, i32::MAX as i64) as i32,
+            current_fps: snapshot.current_fps,
             operating_time_ms: snapshot.operating_time_ms,
             select_bar_elapsed_ms: (snapshot.selection_time.0 / 1_000)
                 .clamp(i32::MIN as i64, i32::MAX as i64) as i32,
@@ -8526,6 +8534,7 @@ fn skin_state_number(ref_id: i32, state: &SkinDrawState) -> Option<i64> {
         17 => Some(player_stat_u64(state.player_stats.playtime_seconds / 3600)),
         18 => Some(player_stat_u64((state.player_stats.playtime_seconds / 60) % 60)),
         19 => Some(player_stat_u64(state.player_stats.playtime_seconds % 60)),
+        20 => Some(i64::from(state.current_fps)),
         21..=26 => current_datetime_number(ref_id),
         27 => Some(operating_time_seconds(state) / 3_600),
         28 => Some((operating_time_seconds(state) / 60) % 60),
@@ -8581,10 +8590,8 @@ fn skin_state_number(ref_id: i32, state: &SkinDrawState) -> Option<i64> {
         363 if state.select_screen => Some(decimal_afterdot(state.select_chart_end_density)),
         364 if state.select_screen => Some(state.select_chart_density.floor() as i64),
         365 if state.select_screen => Some(decimal_afterdot(state.select_chart_density)),
-        // beatoraja chart_totalgauge(368): raw BMS #TOTAL from SongInformation.
-        368 if state.select_screen || state.result_failed.is_some() => {
-            Some(state.select_chart_total_gauge.floor() as i64)
-        }
+        // beatoraja chart_totalgauge(368): effective BMS #TOTAL from SongInformation.
+        368 => Some(state.select_chart_total_gauge.floor() as i64),
         75 | 105 | 174 => Some(state.max_combo as i64),
         76 if state.select_screen => state.select_bp.map(|count| count as i64).or(Some(0)),
         76 if state.result_failed.is_some() => Some(current_bp(state) as i64),
@@ -10635,6 +10642,7 @@ fn skin_state_text_with_draw_state(
                 state.rival.to_string()
             }
         }
+        2 => state.player_name.to_string(),
         3 => select_target_name(state.target),
         10 => state.title.to_string(),
         11 => state.subtitle.to_string(),
@@ -20688,6 +20696,7 @@ mod tests {
         assert_eq!(skin_state_number(79, &folder), None);
 
         let state = SkinDrawState {
+            current_fps: 237,
             play_timer_ms: Some(125_000),
             ex_score: 80,
             total_notes: 100,
@@ -20726,6 +20735,8 @@ mod tests {
         assert_eq!(skin_state_float_number(9_999, &state), None);
         assert_eq!(skin_state_number(161, &state), Some(2));
         assert_eq!(skin_state_number(162, &state), Some(5));
+        assert_eq!(skin_state_number(20, &state), Some(237));
+        assert_eq!(skin_state_number(368, &state), Some(350));
         assert_eq!(skin_state_number(165, &state), None);
     }
 
@@ -23903,6 +23914,7 @@ mod tests {
             ..Default::default()
         };
         let state = SkinTextState {
+            player_name: "BMZ Player",
             title: "My Title",
             subtitle: "Sub",
             artist: "Artist Name",
@@ -23944,6 +23956,8 @@ mod tests {
             skin_state_text(&make_text(1), &SkinTextState { rival: "Rival A", ..state.clone() }),
             "Rival A"
         );
+        // STRING_PLAYER (2)
+        assert_eq!(skin_state_text(&make_text(2), &state), "BMZ Player");
         // STRING_TARGET (3)
         assert_eq!(skin_state_text(&make_text(3), &state), "RANK AAA");
         // STRING_TARGETNAME_P1/N1 (209/210)

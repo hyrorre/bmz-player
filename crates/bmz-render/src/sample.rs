@@ -37,6 +37,8 @@ pub fn sample_select_scene() -> AppSceneSnapshot {
 
     AppSceneSnapshot::Select(SelectSnapshot {
         time: TimeUs(12_345_000),
+        player_name: "Sample Player".to_string(),
+        current_fps: 60,
         operating_time_ms: 12_345,
         selection_time: TimeUs(345_000),
         option_panel_time: TimeUs(0),
@@ -161,6 +163,8 @@ pub fn sample_play_scene() -> AppSceneSnapshot {
 
 pub fn sample_result_scene() -> AppSceneSnapshot {
     AppSceneSnapshot::Result(ResultSnapshot {
+        player_name: "Sample Player".to_string(),
+        current_fps: 60,
         clear_type: bmz_core::clear::ClearType::Normal,
         result_failed: false,
         arrange: "NORMAL".to_string(),

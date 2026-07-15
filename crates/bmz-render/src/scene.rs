@@ -45,6 +45,10 @@ pub struct PlayerStatsSnapshot {
 #[derive(Debug, Clone, PartialEq)]
 pub struct SelectSnapshot {
     pub time: TimeUs,
+    /// beatoraja STRING_PLAYER (2) に渡す現在プロフィール名。
+    pub player_name: String,
+    /// beatoraja NUMBER_CURRENT_FPS (20)。
+    pub current_fps: u32,
     /// アプリ起動後の経過時間 ms。
     /// beatoraja の NUMBER_OPERATING_TIME_HOUR/MINUTE/SECOND (27..29) に使う。
     pub operating_time_ms: i32,
@@ -143,6 +147,8 @@ impl Default for SelectSnapshot {
     fn default() -> Self {
         Self {
             time: TimeUs::default(),
+            player_name: String::new(),
+            current_fps: 0,
             operating_time_ms: 0,
             selection_time: TimeUs::default(),
             option_panel_time: TimeUs::default(),
@@ -511,6 +517,10 @@ pub enum ResultIrState {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ResultSnapshot {
+    /// beatoraja STRING_PLAYER (2) に渡す現在プロフィール名。
+    pub player_name: String,
+    /// beatoraja NUMBER_CURRENT_FPS (20)。
+    pub current_fps: u32,
     pub clear_type: ClearType,
     /// OPTION_RESULT_CLEAR/FAILED (90/91) に渡す実際の成否。
     ///
@@ -610,6 +620,8 @@ mod tests {
     #[test]
     fn result_snapshot_detects_full_combo() {
         let snapshot = ResultSnapshot {
+            player_name: String::new(),
+            current_fps: 0,
             clear_type: ClearType::Normal,
             result_failed: false,
             arrange: "NORMAL".to_string(),
@@ -681,6 +693,8 @@ mod tests {
     #[test]
     fn zero_note_result_is_not_full_combo() {
         let snapshot = ResultSnapshot {
+            player_name: String::new(),
+            current_fps: 0,
             clear_type: ClearType::Normal,
             result_failed: false,
             arrange: "NORMAL".to_string(),

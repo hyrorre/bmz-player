@@ -49,6 +49,10 @@ pub struct OverlaySnapshot {
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct RenderSnapshot {
     pub time: TimeUs,
+    /// beatoraja STRING_PLAYER (2) に渡す現在プロフィール名。
+    pub player_name: String,
+    /// beatoraja NUMBER_CURRENT_FPS (20)。
+    pub current_fps: u32,
     /// プレイ画面に遷移してからの経過時間。
     /// timer 未指定 destination の通常アニメーション時刻の基準に使う。
     pub play_elapsed_time: TimeUs,
@@ -80,6 +84,8 @@ pub struct RenderSnapshot {
     pub max_combo: u32,
     pub ex_score: u32,
     pub total_notes: u32,
+    /// beatoraja NUMBER_SONGGAUGE_TOTAL / FLOAT_CHART_TOTALGAUGE (368)。
+    pub chart_total_gauge: f32,
     pub past_notes: u32,
     pub judge_counts: DisplayJudgeCounts,
     pub fast_slow_counts: FastSlowJudgeCounts,
