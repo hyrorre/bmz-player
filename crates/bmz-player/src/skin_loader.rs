@@ -239,6 +239,7 @@ struct SkinDocumentDependencyFingerprint {
     option_values: BTreeMap<i32, bool>,
     file_values: BTreeMap<String, String>,
     loaded_files: BTreeMap<PathBuf, SkinLoadedFileDependency>,
+    virtual_io_files: BTreeMap<String, Option<String>>,
 }
 
 #[derive(Clone)]
@@ -1355,6 +1356,28 @@ fn skin_document_cache_key(path: &Path, kind: SkinKind) -> Option<SkinDocumentCa
     })
 }
 
+/// beatoraja の設定ファイルを読む Lua スキン向けの、個人情報を含まない読取専用設定。
+///
+/// ホスト側の beatoraja 設定や BMZ の入力割当は公開せず、入力監視は BMZ のイベント処理を
+/// 正とする。各 mode の空設定は WMII の設定探索を安全に完了させるためだけに供給する。
+fn lua_compat_virtual_io_files() -> BTreeMap<String, String> {
+    const PLAYER_CONFIG: &str = concat!(
+        "{",
+        "\"mode5\":{\"keyboard\":{},\"controller\":[],\"midi\":{}},",
+        "\"mode7\":{\"keyboard\":{},\"controller\":[],\"midi\":{}},",
+        "\"mode9\":{\"keyboard\":{},\"controller\":[],\"midi\":{}},",
+        "\"mode10\":{\"keyboard\":{},\"controller\":[],\"midi\":{}},",
+        "\"mode14\":{\"keyboard\":{},\"controller\":[],\"midi\":{}},",
+        "\"mode24\":{\"keyboard\":{},\"controller\":[],\"midi\":{}},",
+        "\"mode24double\":{\"keyboard\":{},\"controller\":[],\"midi\":{}}",
+        "}",
+    );
+    BTreeMap::from([
+        ("config_sys.json".to_string(), "{\"playername\":\"bmz\"}".to_string()),
+        ("player/bmz/config_player.json".to_string(), PLAYER_CONFIG.to_string()),
+    ])
+}
+
 fn lr2_document_dependency_fingerprint(
     skin_path: &Path,
     options: &BTreeMap<String, String>,
@@ -1378,6 +1401,7 @@ fn lr2_document_dependency_fingerprint(
         option_values,
         file_values,
         loaded_files,
+        virtual_io_files: BTreeMap::new(),
     })
 }
 
@@ -1416,11 +1440,18 @@ fn document_dependency_fingerprint(
         .map(|name| (name.clone(), files.get(name).cloned().unwrap_or_default()))
         .collect();
     let loaded_files = current_loaded_file_dependencies(&dependencies.loaded_files).ok()?;
+    let virtual_files = lua_compat_virtual_io_files();
+    let virtual_io_files = dependencies
+        .virtual_io_files
+        .keys()
+        .map(|path| (path.clone(), virtual_files.get(path).cloned()))
+        .collect();
     Some(SkinDocumentDependencyFingerprint {
         number_values,
         option_values,
         file_values,
         loaded_files,
+        virtual_io_files,
     })
 }
 
@@ -1589,9 +1620,15 @@ fn load_skin_document_uncached(
     let (mut document, mut resolved_files, dependencies) = if is_lua_skin_path(skin_path) {
         // Lua スキンはオプション選択 (名前 -> 選択肢名) とファイル選択
         // (filepath 定義名 -> 相対パス) をそのまま渡す。
-        let loaded =
-            bmz_skin::load_lua_skin_with_runtime_state(skin_path, options, files, runtime_state)
-                .with_context(|| format!("failed to load lua skin: {}", skin_path.display()))?;
+        let virtual_io_files = lua_compat_virtual_io_files();
+        let loaded = bmz_skin::load_lua_skin_with_runtime_state_and_virtual_io_files(
+            skin_path,
+            options,
+            files,
+            runtime_state,
+            &virtual_io_files,
+        )
+        .with_context(|| format!("failed to load lua skin: {}", skin_path.display()))?;
         for warning in loaded.warnings {
             tracing::warn!(
                 path = %skin_path.display(),
@@ -2311,6 +2348,7 @@ fn resolve_wildcard_directory_path(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::BTreeSet;
     use std::hint::black_box;
     use std::time::Instant;
 
@@ -2319,8 +2357,8 @@ mod tests {
     use bmz_render::renderer::Renderer;
     use bmz_render::scene::{AppSceneSnapshot, SelectRowSnapshot, SelectSnapshot};
     use bmz_render::skin::{
-        DynamicTimerRuntime, SkinContext, SkinDocumentRenderExt, SkinDocumentTexture,
-        SkinImageSize, SkinManifest,
+        DestinationListEntry, DynamicTimerRuntime, SkinContext, SkinDocumentRenderExt,
+        SkinDocumentTexture, SkinImageSize, SkinManifest,
     };
 
     fn test_app_paths() -> AppPaths {
@@ -2376,6 +2414,117 @@ mod tests {
             );
             assert!(!decoded.sources.is_empty(), "{} has no image sources", path.display());
         }
+    }
+
+    #[test]
+    fn lua_compat_virtual_io_contains_only_sanitized_beatoraja_config() {
+        let files = lua_compat_virtual_io_files();
+        assert_eq!(files.len(), 2);
+
+        let system: serde_json::Value =
+            serde_json::from_str(&files["config_sys.json"]).expect("system config should be JSON");
+        assert_eq!(system, serde_json::json!({ "playername": "bmz" }));
+
+        let player: serde_json::Value =
+            serde_json::from_str(&files["player/bmz/config_player.json"])
+                .expect("player config should be JSON");
+        let player = player.as_object().expect("player config should be an object");
+        assert_eq!(
+            player.keys().map(String::as_str).collect::<BTreeSet<_>>(),
+            BTreeSet::from([
+                "mode5",
+                "mode7",
+                "mode9",
+                "mode10",
+                "mode14",
+                "mode24",
+                "mode24double"
+            ])
+        );
+        for mode in player.values() {
+            assert_eq!(mode["keyboard"], serde_json::json!({}));
+            assert_eq!(mode["controller"], serde_json::json!([]));
+            assert_eq!(mode["midi"], serde_json::json!({}));
+        }
+    }
+
+    #[test]
+    fn wmii_backup_result_decodes_with_virtual_io_and_graph_default() {
+        let skin_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../data/skins/WMII_FHD.bak/result/result.luaskin");
+        if !skin_path.is_file() {
+            return;
+        }
+
+        let options =
+            BTreeMap::from([("Expand Panel".to_string(), "ON - GRAPH DEFAULT".to_string())]);
+        let runtime_state = LuaLoadRuntimeState {
+            number_values: BTreeMap::new(),
+            option_values: BTreeMap::from([(51, true)]),
+        };
+        let loaded = load_skin_document_uncached(
+            &skin_path,
+            SkinKind::Result,
+            &options,
+            &BTreeMap::new(),
+            &runtime_state,
+        )
+        .expect("unmodified WMII result backup should decode through the BMZ loader");
+
+        assert_eq!(loaded.document.result_panel_default, Some(2));
+        assert!(loaded.document.destination.iter().any(|entry| matches!(
+            entry,
+            DestinationListEntry::Single(destination)
+                if destination.draw.contains("result_panel(1)")
+        )));
+        assert!(loaded.document.destination.iter().any(|entry| matches!(
+            entry,
+            DestinationListEntry::Single(destination)
+                if destination.draw.contains("result_panel(2)")
+        )));
+        let destinations = loaded
+            .document
+            .destination
+            .iter()
+            .filter_map(|entry| match entry {
+                DestinationListEntry::Single(destination) => Some(destination),
+                DestinationListEntry::Conditional { .. } => None,
+            })
+            .collect::<Vec<_>>();
+        let rank_aaa = destinations
+            .iter()
+            .find(|destination| {
+                destination.id == "rankBig_AAA" && destination.loop_time == Some(100)
+            })
+            .expect("rankBig_AAA should survive malformed op repair");
+        assert_eq!(rank_aaa.op, [300, 920]);
+        assert_eq!(rank_aaa.loop_time, Some(100));
+        assert_eq!(rank_aaa.filter, 1);
+        assert_eq!(rank_aaa.dst.len(), 2);
+        for (id, rank) in [("AAA_BG", 300), ("AA_BG", 301), ("A_BG", 302)] {
+            let backgrounds = destinations
+                .iter()
+                .filter(|destination| {
+                    destination.id == id && matches!(destination.loop_time, Some(500 | 600 | 700))
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(backgrounds.len(), 3, "expected three {id} animations");
+            assert!(backgrounds.iter().all(|destination| destination.op == [90, rank]));
+        }
+        let clear_backgrounds = destinations
+            .iter()
+            .filter(|destination| {
+                destination.id == "clearBG"
+                    && matches!(destination.loop_time, Some(500 | 600 | 700))
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(clear_backgrounds.len(), 3);
+        assert!(clear_backgrounds.iter().all(|destination| destination.op == [90]));
+        assert_eq!(
+            loaded.dependencies.virtual_io_files.get("config_sys.json"),
+            Some(&Some("{\"playername\":\"bmz\"}".to_string()))
+        );
+        assert!(loaded.dependencies.virtual_io_files.contains_key("player/bmz/config_player.json"));
     }
 
     fn filepath_def(name: &str, path: &str, def: &str) -> SkinFilepathDef {

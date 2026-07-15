@@ -1578,6 +1578,12 @@ fn build_result_skin_draw_state(
     snapshot: &crate::scene::ResultSnapshot,
     result_ranktime_ms: i32,
 ) -> crate::skin::SkinDrawState {
+    let (gauge, gauge_type, gauge_max, gauge_border) = result_display_gauge(
+        &snapshot.graph.gauge_points,
+        snapshot.result_gauge_graph_type,
+        snapshot.gauge_value,
+        snapshot.gauge_type,
+    );
     let timing_stats = snapshot
         .graph
         .timing_distribution
@@ -1616,11 +1622,12 @@ fn build_result_skin_draw_state(
         judge_counts: snapshot.judge_counts,
         player_stats: snapshot.player_stats,
         fast_slow_counts: Some(snapshot.fast_slow_counts),
-        gauge: snapshot.gauge_value,
-        gauge_type: snapshot.gauge_type,
+        gauge,
+        gauge_type,
         result_gauge_graph_type: Some(snapshot.result_gauge_graph_type),
-        gauge_max: 100.0,
-        gauge_border: 80.0,
+        result_panel: Some(snapshot.result_panel),
+        gauge_max,
+        gauge_border,
         play_progress: 1.0,
         end_of_note: true,
         best_ex_score: snapshot.best_ex_score,
@@ -1668,6 +1675,20 @@ fn build_result_skin_draw_state(
         stddev_timing_ms: timing_stats.map(|stats| stats.1),
         ..crate::skin::SkinDrawState::default()
     }
+}
+
+fn result_display_gauge(
+    points: &[crate::snapshot::ResultGaugeGraphPoint],
+    selected_type: i32,
+    fallback_value: f32,
+    fallback_type: i32,
+) -> (f32, i32, f32, f32) {
+    points
+        .iter()
+        .rev()
+        .find(|point| point.gauge_type == selected_type)
+        .map(|point| (point.value, point.gauge_type, point.max, point.border))
+        .unwrap_or((fallback_value, fallback_type, 100.0, 80.0))
 }
 
 fn result_timing_stats(points: &[crate::snapshot::ResultTimingPoint]) -> Option<(f32, f32)> {
@@ -3055,6 +3076,7 @@ mod tests {
                 judge_rank: None,
                 key_mode: bmz_core::lane::KeyMode::default(),
                 result_gauge_graph_type: bmz_core::clear::GaugeType::Normal as i32,
+                result_panel: 0,
                 judge_counts: DisplayJudgeCounts::default(),
                 fast_slow_counts: FastSlowJudgeCounts::default(),
                 score_history_id: 0,
@@ -3189,6 +3211,7 @@ mod tests {
             judge_rank: None,
             key_mode: bmz_core::lane::KeyMode::default(),
             result_gauge_graph_type: bmz_core::clear::GaugeType::Normal as i32,
+            result_panel: 0,
             judge_counts: DisplayJudgeCounts::default(),
             fast_slow_counts: FastSlowJudgeCounts::default(),
             score_history_id: 0,
@@ -3357,6 +3380,51 @@ mod tests {
     }
 
     #[test]
+    fn result_display_gauge_uses_selected_graph_history_tail() {
+        use crate::snapshot::ResultGaugeGraphPoint;
+        use bmz_core::clear::GaugeType;
+
+        let points = [
+            ResultGaugeGraphPoint {
+                time_ms: 0,
+                value: 20.0,
+                max: 100.0,
+                border: 0.0,
+                gauge_type: GaugeType::ExHard as i32,
+            },
+            ResultGaugeGraphPoint {
+                time_ms: 1_000,
+                value: 80.0,
+                max: 100.0,
+                border: 80.0,
+                gauge_type: GaugeType::Normal as i32,
+            },
+            ResultGaugeGraphPoint {
+                time_ms: 1_000,
+                value: 42.0,
+                max: 100.0,
+                border: 0.0,
+                gauge_type: GaugeType::ExHard as i32,
+            },
+        ];
+
+        assert_eq!(
+            result_display_gauge(&points, GaugeType::ExHard as i32, 80.0, GaugeType::Normal as i32,),
+            (42.0, GaugeType::ExHard as i32, 100.0, 0.0)
+        );
+    }
+
+    #[test]
+    fn result_display_gauge_falls_back_when_selected_history_is_missing() {
+        use bmz_core::clear::GaugeType;
+
+        assert_eq!(
+            result_display_gauge(&[], GaugeType::ExHard as i32, 80.0, GaugeType::Normal as i32,),
+            (80.0, GaugeType::Normal as i32, 100.0, 80.0)
+        );
+    }
+
+    #[test]
     fn result_plan_renders_gaugegraph_from_result_graph_data() {
         use crate::scene::ResultSnapshot;
         use crate::snapshot::{FastSlowJudgeCounts, ResultGaugeGraphPoint, ResultGraphSnapshot};
@@ -3401,7 +3469,7 @@ mod tests {
             bp: 0,
             cb: 0,
             gauge_value: 80.0,
-            gauge_type: bmz_core::clear::GaugeType::AssistEasy as i32,
+            gauge_type: bmz_core::clear::GaugeType::Normal as i32,
             total_notes: 100,
             grade_diff_display: crate::scene::ResultGradeDiffDisplay::default(),
             duration_ms: 0,
@@ -3414,6 +3482,7 @@ mod tests {
             judge_rank: None,
             key_mode: bmz_core::lane::KeyMode::default(),
             result_gauge_graph_type: bmz_core::clear::GaugeType::AssistEasy as i32,
+            result_panel: 0,
             judge_counts: DisplayJudgeCounts::default(),
             fast_slow_counts: FastSlowJudgeCounts::default(),
             score_history_id: 0,
@@ -3468,6 +3537,12 @@ mod tests {
             ir: crate::scene::ResultIrSnapshot::default(),
             player_stats: crate::scene::PlayerStatsSnapshot::default(),
         };
+
+        let draw_state = result_skin_draw_state(&snapshot, 0);
+        assert_eq!(draw_state.gauge, 90.0);
+        assert_eq!(draw_state.gauge_type, bmz_core::clear::GaugeType::AssistEasy as i32);
+        assert_eq!(draw_state.gauge_max, 100.0);
+        assert_eq!(draw_state.gauge_border, 60.0);
 
         let plan = DrawPlan::from_scene_with_skin(
             &AppSceneSnapshot::Result(snapshot),
@@ -3544,6 +3619,7 @@ mod tests {
             judge_rank: None,
             key_mode: bmz_core::lane::KeyMode::default(),
             result_gauge_graph_type: bmz_core::clear::GaugeType::Normal as i32,
+            result_panel: 0,
             judge_counts: DisplayJudgeCounts::default(),
             fast_slow_counts: FastSlowJudgeCounts::default(),
             score_history_id: 0,

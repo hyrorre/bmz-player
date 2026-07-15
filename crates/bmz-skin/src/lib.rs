@@ -46,6 +46,14 @@ pub struct SkinLoadDependencies {
     pub option_values: BTreeMap<i32, bool>,
     pub files: BTreeSet<String>,
     pub loaded_files: BTreeMap<PathBuf, SkinLoadedFileDependency>,
+    /// Read-only virtual files observed through Lua `io.open` / `io.lines`.
+    ///
+    /// `None` records that no virtual file was present for the requested path,
+    /// while `Some` contains the exact contents supplied for that load. Keeping
+    /// the distinction lets a document cache invalidate both content changes
+    /// and virtual-file additions/removals without granting Lua filesystem
+    /// access outside the skin root.
+    pub virtual_io_files: BTreeMap<String, Option<String>>,
     pub opaque: bool,
 }
 
@@ -84,7 +92,34 @@ pub fn load_lua_skin_with_runtime_state(
     files: &BTreeMap<String, String>,
     runtime_state: &LuaLoadRuntimeState,
 ) -> Result<LoadedSkinDocument> {
-    let loaded = load_lua_skin_value_with_runtime_state(path, options, files, runtime_state)?;
+    load_lua_skin_with_runtime_state_and_virtual_io_files(
+        path,
+        options,
+        files,
+        runtime_state,
+        &BTreeMap::new(),
+    )
+}
+
+/// Loads a Lua skin with deterministic runtime values and an in-memory,
+/// read-only filesystem for compatibility configuration.
+///
+/// Virtual file keys use skin-style relative paths. Invalid paths, including
+/// absolute paths and parent traversal, are rejected before Lua executes.
+pub fn load_lua_skin_with_runtime_state_and_virtual_io_files(
+    path: &Path,
+    options: &BTreeMap<String, String>,
+    files: &BTreeMap<String, String>,
+    runtime_state: &LuaLoadRuntimeState,
+    virtual_io_files: &BTreeMap<String, String>,
+) -> Result<LoadedSkinDocument> {
+    let loaded = load_lua_skin_value_with_runtime_state_and_virtual_io_files(
+        path,
+        options,
+        files,
+        runtime_state,
+        virtual_io_files,
+    )?;
     let value = normalize_lua_skin_document(loaded.value);
     let mut document: SkinDocument = serde_path_to_error::deserialize(value)
         .with_context(|| format!("failed to parse lua skin as document: {}", path.display()))?;
@@ -138,7 +173,23 @@ pub fn load_lua_skin_value_with_runtime_state(
     files: &BTreeMap<String, String>,
     runtime_state: &LuaLoadRuntimeState,
 ) -> Result<LoadedLuaSkinValue> {
-    lua::load_lua_skin_value(path, options, files, runtime_state)
+    load_lua_skin_value_with_runtime_state_and_virtual_io_files(
+        path,
+        options,
+        files,
+        runtime_state,
+        &BTreeMap::new(),
+    )
+}
+
+pub fn load_lua_skin_value_with_runtime_state_and_virtual_io_files(
+    path: &Path,
+    options: &BTreeMap<String, String>,
+    files: &BTreeMap<String, String>,
+    runtime_state: &LuaLoadRuntimeState,
+    virtual_io_files: &BTreeMap<String, String>,
+) -> Result<LoadedLuaSkinValue> {
+    lua::load_lua_skin_value(path, options, files, runtime_state, virtual_io_files)
 }
 
 pub fn load_lua_skin_header_value(path: &Path) -> Result<LoadedLuaSkinValue> {
@@ -1031,6 +1082,173 @@ mod tests {
     }
 
     #[test]
+    fn lua_skin_io_read_all_lines_and_close_share_a_read_only_cursor() {
+        let root = unique_test_dir("bmz-skin-lua-io-read");
+        fs::create_dir_all(&root).unwrap();
+        fs::write(root.join("config.txt"), "alpha\r\nbeta\n").unwrap();
+        fs::write(
+            root.join("result.luaskin"),
+            r#"
+            local f = io.open("config.txt", "r")
+            local all = f:read("*a")
+            local eof = f:read("*all")
+            f:close()
+            local read_after_close = pcall(function() f:read("*a") end)
+            local lines = {}
+            for line in io.lines("config.txt") do
+                table.insert(lines, line)
+            end
+            return {
+                type = 7,
+                text = {{
+                    id = "io",
+                    font = 1,
+                    size = 16,
+                    constantText = all .. "|" .. eof .. "|" .. tostring(read_after_close) .. "|" .. table.concat(lines, ",")
+                }}
+            }
+            "#,
+        )
+        .unwrap();
+
+        let loaded =
+            load_lua_skin_value(&root.join("result.luaskin"), &BTreeMap::new(), &BTreeMap::new())
+                .unwrap();
+
+        assert_eq!(loaded.value["text"][0]["constantText"], "alpha\r\nbeta\n||false|alpha,beta");
+        assert!(
+            loaded
+                .dependencies
+                .loaded_files
+                .contains_key(&root.join("config.txt").canonicalize().unwrap())
+        );
+    }
+
+    #[test]
+    fn lua_skin_virtual_io_loads_wmii_style_player_config_without_host_access() {
+        let root = unique_test_dir("bmz-skin-lua-virtual-io");
+        fs::create_dir_all(&root).unwrap();
+        fs::write(
+            root.join("result.luaskin"),
+            r#"
+            local sys = io.open("config_sys.json", "r")
+            local player = sys:read("*a"):match('"playername"%s*:%s*"([^"]+)"')
+            sys:close()
+            local path = "player/" .. player .. "/config_player.json"
+            local config = io.open(path, "r")
+            local contents = config:read("*all")
+            config:close()
+            return {
+                type = 7,
+                text = {{ id = "config", font = 1, size = 16, constantText = path .. "|" .. contents }}
+            }
+            "#,
+        )
+        .unwrap();
+        let virtual_files = BTreeMap::from([
+            ("config_sys.json".to_string(), r#"{"playername":"bmz"}"#.to_string()),
+            (
+                "player\\bmz\\config_player.json".to_string(),
+                r#"{"mode7":{"keyboard":{},"controller":[],"midi":{}}}"#.to_string(),
+            ),
+        ]);
+
+        let loaded = load_lua_skin_value_with_runtime_state_and_virtual_io_files(
+            &root.join("result.luaskin"),
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            &LuaLoadRuntimeState::default(),
+            &virtual_files,
+        )
+        .unwrap();
+
+        assert_eq!(
+            loaded.value["text"][0]["constantText"],
+            r#"player/bmz/config_player.json|{"mode7":{"keyboard":{},"controller":[],"midi":{}}}"#
+        );
+        assert_eq!(
+            loaded.dependencies.virtual_io_files,
+            BTreeMap::from([
+                ("config_sys.json".to_string(), Some(r#"{"playername":"bmz"}"#.to_string())),
+                (
+                    "player/bmz/config_player.json".to_string(),
+                    Some(r#"{"mode7":{"keyboard":{},"controller":[],"midi":{}}}"#.to_string())
+                ),
+            ])
+        );
+        assert!(!loaded.dependencies.opaque);
+    }
+
+    #[test]
+    fn lua_skin_virtual_io_dependency_snapshot_changes_with_contents() {
+        let root = unique_test_dir("bmz-skin-lua-virtual-io-dependency");
+        fs::create_dir_all(&root).unwrap();
+        fs::write(
+            root.join("result.luaskin"),
+            r#"
+            local f = io.open("config_sys.json", "r")
+            local contents = f:read("*a")
+            f:close()
+            return { type = 7, text = {{ id = "config", font = 1, size = 16, constantText = contents }} }
+            "#,
+        )
+        .unwrap();
+        let load = |contents: &str| {
+            load_lua_skin_value_with_runtime_state_and_virtual_io_files(
+                &root.join("result.luaskin"),
+                &BTreeMap::new(),
+                &BTreeMap::new(),
+                &LuaLoadRuntimeState::default(),
+                &BTreeMap::from([("config_sys.json".to_string(), contents.to_string())]),
+            )
+            .unwrap()
+        };
+
+        let first = load("first");
+        let second = load("second");
+        assert_ne!(first.dependencies.virtual_io_files, second.dependencies.virtual_io_files);
+        assert_eq!(
+            second.dependencies.virtual_io_files["config_sys.json"],
+            Some("second".to_string())
+        );
+    }
+
+    #[test]
+    fn lua_skin_io_rejects_traversal_and_oversized_virtual_files() {
+        let parent = unique_test_dir("bmz-skin-lua-io-security");
+        let root = parent.join("skin");
+        fs::create_dir_all(&root).unwrap();
+        fs::write(parent.join("secret.txt"), "secret").unwrap();
+        fs::write(
+            root.join("result.luaskin"),
+            r#"
+            local paths = { "../secret.txt", "C:\\secret.txt", "//server/share/secret.txt" }
+            local opened = 0
+            for _, path in ipairs(paths) do
+                if io.open(path, "r") then opened = opened + 1 end
+            end
+            return { type = 7, text = {{ id = "opened", font = 1, size = 16, constantText = tostring(opened) }} }
+            "#,
+        )
+        .unwrap();
+
+        let loaded =
+            load_lua_skin_value(&root.join("result.luaskin"), &BTreeMap::new(), &BTreeMap::new())
+                .unwrap();
+        assert_eq!(loaded.value["text"][0]["constantText"], "0");
+
+        let error = load_lua_skin_value_with_runtime_state_and_virtual_io_files(
+            &root.join("result.luaskin"),
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            &LuaLoadRuntimeState::default(),
+            &BTreeMap::from([("config_sys.json".to_string(), "x".repeat(8 * 1024 * 1024 + 1))]),
+        )
+        .unwrap_err();
+        assert!(format!("{error:#}").contains("exceeds 8388608 byte limit"));
+    }
+
+    #[test]
     fn lua_skin_main_state_stubs_audio_volume_helpers() {
         let root = unique_test_dir("bmz-skin-lua");
         fs::create_dir_all(&root).unwrap();
@@ -1081,6 +1299,38 @@ mod tests {
                 .unwrap();
 
         assert_eq!(loaded.value["text"][0]["constantText"], "ok");
+    }
+
+    #[test]
+    fn lua_skin_luajava_input_stubs_are_neutral_during_load() {
+        let root = unique_test_dir("bmz-skin-lua-luajava-input");
+        fs::create_dir_all(&root).unwrap();
+        fs::write(
+            root.join("result.luaskin"),
+            r#"
+            local luajava = require("luajava")
+            local Gdx = luajava.bindClass("com.badlogic.gdx.Gdx")
+            local Controllers = luajava.bindClass("com.badlogic.gdx.controllers.Controllers")
+            local Expand_op = 2
+            local function input_handler()
+                if Gdx.input:isKeyPressed(1) or Controllers:getControllers().size > 0 then
+                    Expand_op = 1
+                end
+            end
+            input_handler()
+            return {
+                type = 7,
+                text = {{ id = "panel", font = 1, size = 16, constantText = tostring(Expand_op) }}
+            }
+            "#,
+        )
+        .unwrap();
+
+        let loaded =
+            load_lua_skin_value(&root.join("result.luaskin"), &BTreeMap::new(), &BTreeMap::new())
+                .unwrap();
+
+        assert_eq!(loaded.value["text"][0]["constantText"], "2");
     }
 
     #[test]
@@ -2271,6 +2521,35 @@ mod tests {
         assert!(format!("{err:#}").contains("instruction limit"));
     }
 
+    #[test]
+    fn lua_skin_stops_infinite_inference_callback() {
+        let root = unique_test_dir("bmz-skin-lua-inference-limit");
+        fs::create_dir_all(&root).unwrap();
+        fs::write(
+            root.join("play7.luaskin"),
+            r#"
+            return {
+                type = 0,
+                value = {{
+                    id = "loop",
+                    value = function() while true do end end,
+                }},
+            }
+            "#,
+        )
+        .unwrap();
+
+        let loaded =
+            load_lua_skin_value(&root.join("play7.luaskin"), &BTreeMap::new(), &BTreeMap::new())
+                .expect("an uninferrable callback should be dropped without hanging the loader");
+        assert!(
+            loaded
+                .warnings
+                .iter()
+                .any(|warning| warning.message.contains("unsupported value function"))
+        );
+    }
+
     fn unique_test_dir(name: &str) -> std::path::PathBuf {
         let nanos = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
         let counter = TEST_DIR_COUNTER.fetch_add(1, Ordering::Relaxed);
@@ -2538,6 +2817,7 @@ mod tests {
         .expect("WMII FHD result should decode as a skin document");
 
         assert!(!loaded.document.destination.is_empty());
+        assert_eq!(loaded.document.result_panel_default, Some(1));
         assert!(loaded.document.graph.iter().any(|graph| {
             graph.id == "ir_scoreGraph1" && graph.value_expr == "bmz:ir_score_rate:1"
         }));
@@ -2556,20 +2836,25 @@ mod tests {
             }
             _ => None,
         });
-        assert!(ir_score_draws.into_iter().any(|draw| draw.starts_with("ir_score_rate_band(1,")));
+        assert!(ir_score_draws.into_iter().any(|draw| {
+            draw.contains("result_panel(1)") && draw.contains("ir_score_rate_band(1,")
+        }));
         assert!(loaded.document.destination.iter().any(|entry| matches!(
             entry,
             bmz_skin_document::DestinationListEntry::Single(destination)
                 if destination.id == "irYouFrame"
-                    && destination.draw == "ir_ranking_user(1)"
+                    && destination.draw.contains("result_panel(1)")
+                    && destination.draw.contains("ir_ranking_user(1)")
         )));
         assert!(loaded.document.destination.iter().any(|entry| matches!(
             entry,
             bmz_skin_document::DestinationListEntry::Single(destination)
                 if destination.id == "irWait"
                     && destination.timer == Some(172)
-                    && destination.draw
-                        == "timer(173) == timer_off and timer(174) == timer_off"
+                    && destination.draw.contains("result_panel(1)")
+                    && destination.draw.contains(
+                        "timer(173) == timer_off and timer(174) == timer_off"
+                    )
         )));
 
         let graph_options =
@@ -2581,15 +2866,18 @@ mod tests {
             &runtime_state,
         )
         .expect("WMII FHD graph panel should decode as a skin document");
+        assert_eq!(graph_loaded.document.result_panel_default, Some(2));
         assert!(graph_loaded.document.destination.iter().any(|entry| matches!(
             entry,
             bmz_skin_document::DestinationListEntry::Single(destination)
-                if destination.id == "graphDataFrame" && destination.draw == "number(0) >= 0"
+                if destination.id == "graphDataFrame"
+                    && destination.draw.contains("result_panel(2)")
         )));
         assert!(graph_loaded.document.destination.iter().any(|entry| matches!(
             entry,
             bmz_skin_document::DestinationListEntry::Single(destination)
-                if destination.id == "irDataFrame" && destination.draw == "number(0) < 0"
+                if destination.id == "irDataFrame"
+                    && destination.draw.contains("result_panel(1)")
         )));
         let timing_average_draws =
             graph_loaded.document.destination.iter().filter_map(|entry| match entry {
@@ -2601,9 +2889,14 @@ mod tests {
                 _ => None,
             });
         let timing_average_draws = timing_average_draws.collect::<Vec<_>>();
-        assert!(timing_average_draws.contains(&"number(374) < 0 or number(375) < 0"));
+        assert!(timing_average_draws.iter().any(|draw| {
+            draw.contains("result_panel(2)") && draw.contains("number(374) < 0 or number(375) < 0")
+        }));
         assert!(
-            timing_average_draws.contains(&"number(374) >= 0 and number(375) >= 0"),
+            timing_average_draws.iter().any(|draw| {
+                draw.contains("result_panel(2)")
+                    && draw.contains("number(374) >= 0 and number(375) >= 0")
+            }),
             "WMII timing average layers must remain mutually exclusive: {timing_average_draws:?}"
         );
         assert!(!timing_average_draws.contains(&"number(0) >= 0"));

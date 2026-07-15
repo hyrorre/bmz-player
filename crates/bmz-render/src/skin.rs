@@ -1113,6 +1113,8 @@ pub struct SkinDrawState {
     pub result_update_score_ms: Option<i32>,
     /// Result gaugegraph display type selected by result key CHANGE_GRAPH.
     pub result_gauge_graph_type: Option<i32>,
+    /// Lua Result スキンの展開パネル (0=非表示、1=IR、2=グラフ)。
+    pub result_panel: Option<i32>,
     /// RESULT replay slot status for OPTION_REPLAYDATA* / *_SAVED.
     pub result_replay_slots: [bool; 4],
     pub result_saved_replay_slots: [bool; 4],
@@ -1334,6 +1336,7 @@ impl Default for SkinDrawState {
             result_graph_end_ms: None,
             result_update_score_ms: None,
             result_gauge_graph_type: None,
+            result_panel: None,
             result_replay_slots: [false; 4],
             result_saved_replay_slots: [false; 4],
             failed_ms: None,
@@ -7462,6 +7465,9 @@ fn eval_skin_draw_condition(condition: &str, state: &SkinDrawState) -> bool {
 }
 
 fn eval_skin_draw_term(term: &str, state: &SkinDrawState) -> Option<bool> {
+    if let Some(panel) = parse_result_panel_predicate(term) {
+        return state.result_panel.map(|current| current == panel);
+    }
     if let Some((slot, lower, upper)) = parse_ir_score_rate_band_predicate(term) {
         let score = ir_ranking_entry(&state.ir_ranking, slot - 1)?.ex_score?;
         let max_score =
@@ -7546,6 +7552,11 @@ fn eval_skin_draw_term(term: &str, state: &SkinDrawState) -> Option<bool> {
         });
     }
     None
+}
+
+fn parse_result_panel_predicate(term: &str) -> Option<i32> {
+    let panel = term.strip_prefix("result_panel(")?.strip_suffix(')')?.trim().parse().ok()?;
+    (0..=2).contains(&panel).then_some(panel)
 }
 
 fn parse_score_rate_band_predicate(term: &str) -> Option<(i64, i64)> {
@@ -13740,6 +13751,15 @@ mod tests {
     fn folded_constant_draw_condition_number_zero_is_true() {
         assert!(eval_skin_draw_condition("number(0) >= 0", &SkinDrawState::default()));
         assert!(!eval_skin_draw_condition("number(0) < 0", &SkinDrawState::default()));
+    }
+
+    #[test]
+    fn result_panel_draw_condition_uses_runtime_selection() {
+        let ir = SkinDrawState { result_panel: Some(1), ..Default::default() };
+        let graph = SkinDrawState { result_panel: Some(2), ..Default::default() };
+        assert!(eval_skin_draw_condition("result_panel(1)", &ir));
+        assert!(!eval_skin_draw_condition("result_panel(2)", &ir));
+        assert!(eval_skin_draw_condition("result_panel(0) or result_panel(2)", &graph,));
     }
 
     #[test]

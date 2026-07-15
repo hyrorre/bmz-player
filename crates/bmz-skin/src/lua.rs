@@ -24,9 +24,11 @@ use crate::{
 };
 
 const LUA_INSTRUCTION_LIMIT: i64 = 2_000_000;
+const LUA_INFERENCE_INSTRUCTION_LIMIT: i64 = 16_000_000;
 const LUA_HOOK_INTERVAL: u32 = 1_000;
 const LUA_MAX_TABLE_DEPTH: usize = 64;
 const LUA_MAX_TABLE_ENTRIES: usize = 200_000;
+const LUA_IO_MAX_READ_BYTES: usize = 8 * 1024 * 1024;
 const TIMER_OFF_VALUE: i32 = i32::MIN;
 
 /// beatoraja fast/slow 判定カウント ref (graph 比率推論用)
@@ -55,9 +57,10 @@ pub fn load_lua_skin_value(
     options: &BTreeMap<String, String>,
     files: &BTreeMap<String, String>,
     runtime_state: &LuaLoadRuntimeState,
+    virtual_io_files: &BTreeMap<String, String>,
 ) -> Result<LoadedLuaSkinValue> {
     let (value, warnings, files, dependencies) =
-        execute_lua_skin(input, options, files, runtime_state)?;
+        execute_lua_skin(input, options, files, runtime_state, virtual_io_files)?;
     Ok(LoadedLuaSkinValue {
         value,
         warnings: warnings.into_iter().map(|message| SkinLoadWarning { message }).collect(),
@@ -85,7 +88,7 @@ pub fn convert_lua_skin_to_json(
     files: &BTreeMap<String, String>,
 ) -> Result<ConvertReport> {
     let (json, warnings, _, _) =
-        execute_lua_skin(input, options, files, &LuaLoadRuntimeState::default())?;
+        execute_lua_skin(input, options, files, &LuaLoadRuntimeState::default(), &BTreeMap::new())?;
     if let Some(parent) = output.parent() {
         fs::create_dir_all(parent)
             .with_context(|| format!("failed to create output dir: {}", parent.display()))?;
@@ -110,7 +113,7 @@ fn execute_lua_skin_header(input: &Path) -> Result<(JsonValue, Vec<String>)> {
         .with_context(|| format!("failed to read lua skin: {}", input.display()))?;
 
     let lua = Lua::new();
-    install_instruction_limit(&lua);
+    let instruction_budget = install_instruction_limit(&lua);
     let probe = install_sandbox(
         &lua,
         &root,
@@ -120,6 +123,7 @@ fn execute_lua_skin_header(input: &Path) -> Result<(JsonValue, Vec<String>)> {
         &BTreeMap::new(),
         &BTreeMap::new(),
         &LuaLoadRuntimeState::default(),
+        &BTreeMap::new(),
         None,
     )?;
     let header = lua
@@ -127,8 +131,17 @@ fn execute_lua_skin_header(input: &Path) -> Result<(JsonValue, Vec<String>)> {
         .set_name(input.to_string_lossy().as_ref())
         .eval::<Value>()
         .with_context(|| format!("failed to execute lua skin header: {}", input.display()))?;
-    let header_json =
-        lua_value_to_json(&lua, header, "$", 0, &mut warnings, &probe, &mut table_budget)?;
+    instruction_budget.begin_inference();
+    let header_json = lua_value_to_json(
+        &lua,
+        header,
+        "$",
+        0,
+        &mut warnings,
+        &probe,
+        &instruction_budget,
+        &mut table_budget,
+    )?;
 
     Ok((header_json, warnings))
 }
@@ -138,6 +151,7 @@ fn execute_lua_skin(
     options: &BTreeMap<String, String>,
     files: &BTreeMap<String, String>,
     runtime_state: &LuaLoadRuntimeState,
+    virtual_io_files: &BTreeMap<String, String>,
 ) -> Result<(JsonValue, Vec<String>, BTreeMap<String, String>, SkinLoadDependencies)> {
     let input = canonicalize_skin_path(input)
         .with_context(|| format!("failed to canonicalize input: {}", input.display()))?;
@@ -152,7 +166,11 @@ fn execute_lua_skin(
         .with_context(|| format!("failed to read lua skin: {}", input.display()))?;
 
     let header_lua = Lua::new();
-    install_instruction_limit(&header_lua);
+    let header_instruction_budget = install_instruction_limit(&header_lua);
+    // The header pass intentionally uses neutral main_state values, but it must
+    // see the same read-only virtual filesystem as the document pass. Some
+    // skins read compatibility configuration while their required modules are
+    // initialized, before deciding whether to return a header or a document.
     let header_probe = install_sandbox(
         &header_lua,
         &root,
@@ -162,6 +180,7 @@ fn execute_lua_skin(
         &BTreeMap::new(),
         &BTreeMap::new(),
         &LuaLoadRuntimeState::default(),
+        virtual_io_files,
         None,
     )?;
     let header = header_lua
@@ -169,6 +188,7 @@ fn execute_lua_skin(
         .set_name(input.to_string_lossy().as_ref())
         .eval::<Value>()
         .with_context(|| format!("failed to execute lua skin header: {}", input.display()))?;
+    header_instruction_budget.begin_inference();
     let header_json = lua_value_to_json(
         &header_lua,
         header,
@@ -176,6 +196,7 @@ fn execute_lua_skin(
         0,
         &mut warnings,
         &header_probe,
+        &header_instruction_budget,
         &mut table_budget,
     )?;
     let skin_options = skin_config_options_from_header(&header_json, options, &mut warnings);
@@ -197,11 +218,11 @@ fn execute_lua_skin(
     // 元の選択値から設定するため、この再試行で無効 destination が表示されることはない。
     let fallback_skin_options = fallback_skin_config_options(&header_json, &skin_options);
     let mut use_fallback_options = false;
-    let (mut json, dependencies, main_state_probe) = loop {
+    let (mut json, dependencies, main_state_probe, result_panel_default) = loop {
         let active_skin_options =
             if use_fallback_options { &fallback_skin_options } else { &skin_options };
         let lua = Lua::new();
-        install_instruction_limit(&lua);
+        let instruction_budget = install_instruction_limit(&lua);
         let dependencies = Arc::new(Mutex::new(SkinLoadDependencies::default()));
         let main_state_probe = install_sandbox(
             &lua,
@@ -212,6 +233,7 @@ fn execute_lua_skin(
             &skin_file_dependency_names_from_header(&header_json),
             &skin_offsets,
             runtime_state,
+            virtual_io_files,
             Some(dependencies.clone()),
         )?;
         let value = match lua
@@ -237,6 +259,7 @@ fn execute_lua_skin(
                     .with_context(|| format!("failed to execute lua skin: {}", input.display()));
             }
         };
+        instruction_budget.begin_inference();
         let json = lua_value_to_json(
             &lua,
             value,
@@ -244,9 +267,12 @@ fn execute_lua_skin(
             0,
             &mut warnings,
             &main_state_probe,
+            &instruction_budget,
             &mut table_budget,
         )?;
-        break (json, dependencies, main_state_probe);
+        let result_panel_default =
+            lua.globals().get::<Value>("Expand_op").ok().and_then(lua_result_panel_value);
+        break (json, dependencies, main_state_probe, result_panel_default);
     };
     record_static_skin_config_option_dependencies(&source, &skin_options, &dependencies);
     if use_fallback_options && let Ok(mut dependencies) = dependencies.lock() {
@@ -256,6 +282,13 @@ fn execute_lua_skin(
 
     if let JsonValue::Object(ref mut root) = json {
         postprocess_lua_skin_json(root, &mut warnings);
+
+        if let Some(panel) = result_panel_default {
+            root.insert(
+                "resultPanelDefault".to_string(),
+                JsonValue::Number(JsonNumber::from(panel)),
+            );
+        }
 
         let timers = main_state_probe
             .lock()
@@ -293,7 +326,17 @@ fn execute_lua_skin(
     Ok((json, warnings, skin_named_files, dependencies))
 }
 
+fn lua_result_panel_value(value: Value) -> Option<i32> {
+    match value {
+        Value::Integer(value) => i32::try_from(value).ok(),
+        Value::Number(value) if value.is_finite() && value.fract() == 0.0 => Some(value as i32),
+        _ => None,
+    }
+    .filter(|panel| (0..=2).contains(panel))
+}
+
 fn postprocess_lua_skin_json(root: &mut JsonMap<String, JsonValue>, warnings: &mut Vec<String>) {
+    repair_malformed_destination_ops(root, warnings);
     let repaired = repair_keybeam_destination_draws(root);
     warnings.retain(|warning| {
         !repaired.iter().any(|index| {
@@ -304,17 +347,166 @@ fn postprocess_lua_skin_json(root: &mut JsonMap<String, JsonValue>, warnings: &m
     });
 }
 
-fn install_instruction_limit(lua: &Lua) {
-    let remaining = AtomicI64::new(LUA_INSTRUCTION_LIMIT);
+/// Repairs two malformed `op` table shapes accepted by Lua/beatoraja skins but
+/// rejected by the strict document schema. Keep the predicates narrow so an
+/// unrelated object or intentionally nested array is not silently flattened.
+fn repair_malformed_destination_ops(
+    root: &mut JsonMap<String, JsonValue>,
+    warnings: &mut Vec<String>,
+) {
+    let Some(destinations) = root.get_mut("destination").and_then(JsonValue::as_array_mut) else {
+        return;
+    };
+    const DESTINATION_FIELDS: &[&str] = &[
+        "blend",
+        "filter",
+        "timer",
+        "timer_expr",
+        "loop",
+        "center",
+        "offset",
+        "offsets",
+        "stretch",
+        "draw",
+        "dst",
+        "mouseRect",
+    ];
+    let mut repaired_count = 0;
+
+    for (index, destination) in destinations.iter_mut().enumerate() {
+        let Some(destination) = destination.as_object_mut() else {
+            continue;
+        };
+        let Some(op) = destination.remove("op") else {
+            continue;
+        };
+
+        let repaired = match op {
+            JsonValue::Object(mut mixed) => {
+                let has_destination_marker = mixed.get("dst").is_some_and(JsonValue::is_array);
+                let named_fields_are_known = mixed
+                    .keys()
+                    .filter(|key| key.parse::<usize>().is_err())
+                    .all(|key| DESTINATION_FIELDS.contains(&key.as_str()));
+                let named_fields_do_not_conflict = mixed
+                    .keys()
+                    .filter(|key| key.parse::<usize>().is_err())
+                    .all(|key| !destination.contains_key(key));
+
+                let mut numbered = mixed
+                    .iter()
+                    .filter_map(|(key, value)| {
+                        key.parse::<usize>().ok().map(|position| (position, value.clone()))
+                    })
+                    .collect::<Vec<_>>();
+                numbered.sort_by_key(|(position, _)| *position);
+                let numbered_are_contiguous_i32 = !numbered.is_empty()
+                    && numbered.iter().enumerate().all(|(offset, (position, value))| {
+                        *position == offset + 1
+                            && value.as_i64().and_then(|value| i32::try_from(value).ok()).is_some()
+                    });
+
+                if has_destination_marker
+                    && named_fields_are_known
+                    && named_fields_do_not_conflict
+                    && numbered_are_contiguous_i32
+                {
+                    for key in mixed
+                        .keys()
+                        .filter(|key| key.parse::<usize>().is_err())
+                        .cloned()
+                        .collect::<Vec<_>>()
+                    {
+                        if let Some(value) = mixed.remove(&key) {
+                            destination.insert(key, value);
+                        }
+                    }
+                    destination.insert(
+                        "op".to_string(),
+                        JsonValue::Array(numbered.into_iter().map(|(_, value)| value).collect()),
+                    );
+                    warnings.retain(|warning| {
+                        warning
+                            != &format!(
+                                "mixed lua table converted to object at $.destination[{}].op",
+                                index + 1
+                            )
+                    });
+                    true
+                } else {
+                    destination.insert("op".to_string(), JsonValue::Object(mixed));
+                    false
+                }
+            }
+            JsonValue::Array(mut outer) if outer.len() == 2 => {
+                let head = outer.first().and_then(JsonValue::as_i64);
+                let nested = outer.get(1).and_then(JsonValue::as_array);
+                let nested_is_i32 = nested.is_some_and(|values| {
+                    !values.is_empty()
+                        && values.iter().all(|value| {
+                            value.as_i64().and_then(|value| i32::try_from(value).ok()).is_some()
+                        })
+                });
+                let redundant_prefix = head.is_some()
+                    && nested.and_then(|values| values.first()).and_then(JsonValue::as_i64) == head;
+                if nested_is_i32 && redundant_prefix {
+                    destination.insert("op".to_string(), outer.swap_remove(1));
+                    true
+                } else {
+                    destination.insert("op".to_string(), JsonValue::Array(outer));
+                    false
+                }
+            }
+            op => {
+                destination.insert("op".to_string(), op);
+                false
+            }
+        };
+
+        if repaired {
+            repaired_count += 1;
+        }
+    }
+    if repaired_count > 0 {
+        warnings.push(format!("repaired {repaired_count} malformed destination op tables"));
+    }
+}
+
+#[derive(Clone)]
+struct LuaInstructionBudget {
+    total_remaining: Arc<AtomicI64>,
+    callback_remaining: Arc<AtomicI64>,
+}
+
+impl LuaInstructionBudget {
+    fn begin_inference(&self) {
+        self.total_remaining.store(LUA_INFERENCE_INSTRUCTION_LIMIT, Ordering::Relaxed);
+        self.begin_callback();
+    }
+
+    fn begin_callback(&self) {
+        self.callback_remaining.store(LUA_INSTRUCTION_LIMIT, Ordering::Relaxed);
+    }
+}
+
+fn install_instruction_limit(lua: &Lua) -> LuaInstructionBudget {
+    let budget = LuaInstructionBudget {
+        total_remaining: Arc::new(AtomicI64::new(LUA_INSTRUCTION_LIMIT)),
+        callback_remaining: Arc::new(AtomicI64::new(LUA_INSTRUCTION_LIMIT)),
+    };
+    let total_remaining = budget.total_remaining.clone();
+    let callback_remaining = budget.callback_remaining.clone();
     lua.set_hook(HookTriggers::new().every_nth_instruction(LUA_HOOK_INTERVAL), move |_, _| {
-        if remaining.fetch_sub(i64::from(LUA_HOOK_INTERVAL), Ordering::Relaxed)
-            <= i64::from(LUA_HOOK_INTERVAL)
+        let interval = i64::from(LUA_HOOK_INTERVAL);
+        if total_remaining.fetch_sub(interval, Ordering::Relaxed) <= interval
+            || callback_remaining.fetch_sub(interval, Ordering::Relaxed) <= interval
         {
             Err(mlua::Error::runtime("lua skin instruction limit exceeded"))
         } else {
             Ok(VmState::Continue)
         }
     });
+    budget
 }
 
 #[derive(Debug)]
@@ -485,6 +677,7 @@ fn install_sandbox(
     skin_file_dependency_names: &BTreeMap<String, String>,
     skin_offsets: &BTreeMap<String, LuaSkinOffsetValue>,
     runtime_state: &LuaLoadRuntimeState,
+    virtual_io_files: &BTreeMap<String, String>,
     load_dependencies: Option<Arc<Mutex<SkinLoadDependencies>>>,
 ) -> Result<Arc<Mutex<MainStateProbe>>> {
     let main_state_probe = Arc::new(Mutex::new(MainStateProbe::default()));
@@ -539,7 +732,7 @@ fn install_sandbox(
         globals.set("skin_config", skin_config)?;
     }
     globals.set("os", create_os_stub(lua, main_state_probe.clone())?)?;
-    globals.set("io", create_io_stub(lua, root)?)?;
+    globals.set("io", create_io_stub(lua, root, virtual_io_files, load_dependencies.clone())?)?;
     globals.set("debug", Value::Nil)?;
     if let Ok(package) = globals.get::<Table>("package") {
         package.set("loadlib", Value::Nil)?;
@@ -649,6 +842,7 @@ struct MainStateProbe {
     float_number_calls: Vec<i32>,
     float_number_values: BTreeMap<i32, f64>,
     text_calls: Vec<i32>,
+    text_values: BTreeMap<i32, String>,
     os_clock_calls: usize,
     os_clock_value: Option<f64>,
     time_value_us: i32,
@@ -679,6 +873,7 @@ impl Default for MainStateProbe {
             float_number_calls: Vec::new(),
             float_number_values: BTreeMap::new(),
             text_calls: Vec::new(),
+            text_values: BTreeMap::new(),
             os_clock_calls: 0,
             os_clock_value: None,
             time_value_us: 1_000_000,
@@ -711,6 +906,7 @@ impl MainStateProbe {
         self.float_number_calls.clear();
         self.float_number_values.clear();
         self.text_calls.clear();
+        self.text_values.clear();
         self.os_clock_calls = 0;
         self.os_clock_value = None;
         self.event_index_calls.clear();
@@ -793,6 +989,12 @@ impl MainStateProbe {
     ) {
         self.begin_number_recording_with_values(values);
         self.option_values = options;
+    }
+
+    fn begin_text_recording_with_values(&mut self, values: BTreeMap<i32, String>) {
+        self.begin_number_recording_with_values(BTreeMap::new());
+        self.text_calls.clear();
+        self.text_values = values;
     }
 
     fn begin_number_timer_recording_with_values(
@@ -1000,6 +1202,7 @@ impl MainStateProbe {
         self.gauge_type_calls = 0;
         self.gauge_type_value = 0;
         self.os_clock_value = None;
+        self.text_values.clear();
     }
 
     fn number(&mut self, ref_id: i32) -> i32 {
@@ -1110,7 +1313,7 @@ impl MainStateProbe {
             return String::new();
         }
         self.text_calls.push(ref_id);
-        format!("Text{ref_id}")
+        self.text_values.get(&ref_id).cloned().unwrap_or_else(|| format!("Text{ref_id}"))
     }
 
     fn event_index(&mut self, event_id: i32) -> i32 {
@@ -1393,20 +1596,44 @@ fn create_os_stub(lua: &Lua, probe: Arc<Mutex<MainStateProbe>>) -> mlua::Result<
     Ok(Value::Table(table))
 }
 
-fn create_io_stub(lua: &Lua, root: &Path) -> mlua::Result<Value> {
+fn create_io_stub(
+    lua: &Lua,
+    root: &Path,
+    virtual_io_files: &BTreeMap<String, String>,
+    load_dependencies: Option<Arc<Mutex<SkinLoadDependencies>>>,
+) -> mlua::Result<Value> {
+    let virtual_io_files =
+        normalize_virtual_io_files(virtual_io_files).map_err(mlua::Error::external)?;
     let table = lua.create_table()?;
     let root_for_open = root.to_path_buf();
+    let virtual_files_for_open = virtual_io_files.clone();
+    let dependencies_for_open = load_dependencies.clone();
     table.set(
         "open",
         lua.create_function(move |lua, (path, mode): (String, Option<String>)| {
             let mode = mode.unwrap_or_else(|| "r".to_string());
-            if mode.starts_with('r') {
-                let Ok(path) = resolve_skin_io_path(&root_for_open, &path) else {
+            if matches!(mode.as_str(), "r" | "rb") {
+                let Ok(requested) = normalize_skin_io_relative_path(&path) else {
                     return Ok(Value::Nil);
                 };
-                let Ok(source) = fs::read_to_string(path) else {
+                let virtual_source = virtual_files_for_open.get(&requested);
+                record_virtual_io_dependency(
+                    &requested,
+                    virtual_source.map(String::as_str),
+                    dependencies_for_open.as_ref(),
+                );
+                if let Some(source) = virtual_source {
+                    return create_read_file_stub(lua, source.clone());
+                }
+                let Ok(path) = resolve_skin_io_path(&root_for_open, &requested) else {
+                    mark_io_dependency_opaque(dependencies_for_open.as_ref());
                     return Ok(Value::Nil);
                 };
+                let Ok(source) = read_skin_io_source(&path) else {
+                    mark_io_dependency_opaque(dependencies_for_open.as_ref());
+                    return Ok(Value::Nil);
+                };
+                record_lua_loaded_file_dependency(&path, dependencies_for_open.as_ref());
                 return create_read_file_stub(lua, source);
             }
             if mode.starts_with('w') || mode.starts_with('a') {
@@ -1416,17 +1643,53 @@ fn create_io_stub(lua: &Lua, root: &Path) -> mlua::Result<Value> {
         })?,
     )?;
     let root_for_lines = root.to_path_buf();
+    let virtual_files_for_lines = virtual_io_files;
+    let dependencies_for_lines = load_dependencies;
     table.set(
         "lines",
         lua.create_function(move |lua, path: String| {
-            let Ok(path) = resolve_skin_io_path(&root_for_lines, &path) else {
-                return create_lines_iterator(lua, Vec::new());
+            let Ok(requested) = normalize_skin_io_relative_path(&path) else {
+                return create_lines_iterator(lua, Arc::new(Mutex::new(ReadFileState::default())));
             };
-            let source = fs::read_to_string(path).unwrap_or_default();
-            create_lines_iterator(lua, source.lines().map(str::to_string).collect())
+            let virtual_source = virtual_files_for_lines.get(&requested);
+            record_virtual_io_dependency(
+                &requested,
+                virtual_source.map(String::as_str),
+                dependencies_for_lines.as_ref(),
+            );
+            let source = if let Some(source) = virtual_source {
+                source.clone()
+            } else {
+                let Ok(path) = resolve_skin_io_path(&root_for_lines, &requested) else {
+                    mark_io_dependency_opaque(dependencies_for_lines.as_ref());
+                    return create_lines_iterator(
+                        lua,
+                        Arc::new(Mutex::new(ReadFileState::default())),
+                    );
+                };
+                let Ok(source) = read_skin_io_source(&path) else {
+                    mark_io_dependency_opaque(dependencies_for_lines.as_ref());
+                    return create_lines_iterator(
+                        lua,
+                        Arc::new(Mutex::new(ReadFileState::default())),
+                    );
+                };
+                record_lua_loaded_file_dependency(&path, dependencies_for_lines.as_ref());
+                source
+            };
+            create_lines_iterator(lua, Arc::new(Mutex::new(ReadFileState::new(source))))
         })?,
     )?;
-    table.set("close", lua.create_function(|_, _file: Value| Ok(true))?)?;
+    table.set(
+        "close",
+        lua.create_function(|_, file: Value| {
+            let Value::Table(file) = file else {
+                return Ok(false);
+            };
+            let close = file.get::<Function>("close")?;
+            close.call::<bool>(file)
+        })?,
+    )?;
     Ok(Value::Table(table))
 }
 
@@ -1436,28 +1699,96 @@ fn lua_os_clock_seconds() -> f64 {
     origin.elapsed().as_secs_f64()
 }
 
+#[derive(Debug, Default)]
+struct ReadFileState {
+    source: String,
+    cursor: usize,
+    closed: bool,
+}
+
+impl ReadFileState {
+    fn new(source: String) -> Self {
+        Self { source, cursor: 0, closed: false }
+    }
+}
+
 fn create_read_file_stub(lua: &Lua, source: String) -> mlua::Result<Value> {
     let file = lua.create_table()?;
-    let lines = source.lines().map(str::to_string).collect::<Vec<_>>();
+    let state = Arc::new(Mutex::new(ReadFileState::new(source)));
+    let state_for_read = state.clone();
+    file.set(
+        "read",
+        lua.create_function(move |lua, (_self, format): (Value, Option<String>)| {
+            let format = format.as_deref().unwrap_or("*l");
+            let mut state = state_for_read
+                .lock()
+                .map_err(|_| mlua::Error::external("io read lock poisoned"))?;
+            if state.closed {
+                return Err(mlua::Error::external("attempt to use a closed file"));
+            }
+            match format {
+                "*a" | "*all" => {
+                    let rest = state.source[state.cursor..].to_string();
+                    state.cursor = state.source.len();
+                    Ok(Value::String(lua.create_string(rest)?))
+                }
+                "*l" => match read_file_line(&mut state) {
+                    Some(line) => Ok(Value::String(lua.create_string(line)?)),
+                    None => Ok(Value::Nil),
+                },
+                _ => Err(mlua::Error::external(format!(
+                    "unsupported read format in Lua skin sandbox: {format}"
+                ))),
+            }
+        })?,
+    )?;
+    let state_for_lines = state.clone();
     file.set(
         "lines",
-        lua.create_function(move |lua, _: Value| create_lines_iterator(lua, lines.clone()))?,
+        lua.create_function(move |lua, _: Value| {
+            create_lines_iterator(lua, state_for_lines.clone())
+        })?,
     )?;
-    file.set("close", lua.create_function(|_, _: Value| Ok(true))?)?;
+    let state_for_close = state;
+    file.set(
+        "close",
+        lua.create_function(move |_, _: Value| {
+            let mut state = state_for_close
+                .lock()
+                .map_err(|_| mlua::Error::external("io close lock poisoned"))?;
+            state.closed = true;
+            Ok(true)
+        })?,
+    )?;
     Ok(Value::Table(file))
 }
 
-fn create_lines_iterator(lua: &Lua, lines: Vec<String>) -> mlua::Result<Function> {
-    let index = Arc::new(Mutex::new(0usize));
+fn create_lines_iterator(lua: &Lua, state: Arc<Mutex<ReadFileState>>) -> mlua::Result<Function> {
     lua.create_function(move |lua, ()| {
-        let mut index =
-            index.lock().map_err(|_| mlua::Error::external("io lines lock poisoned"))?;
-        let Some(line) = lines.get(*index) else {
+        let mut state =
+            state.lock().map_err(|_| mlua::Error::external("io lines lock poisoned"))?;
+        if state.closed {
+            return Err(mlua::Error::external("attempt to use a closed file"));
+        }
+        let Some(line) = read_file_line(&mut state) else {
             return Ok(Value::Nil);
         };
-        *index += 1;
         Ok(Value::String(lua.create_string(line)?))
     })
+}
+
+fn read_file_line(state: &mut ReadFileState) -> Option<String> {
+    if state.cursor >= state.source.len() {
+        return None;
+    }
+    let rest = &state.source[state.cursor..];
+    let end = rest.find('\n').unwrap_or(rest.len());
+    let line = rest[..end].strip_suffix('\r').unwrap_or(&rest[..end]).to_string();
+    state.cursor = state.cursor.saturating_add(end);
+    if state.cursor < state.source.len() && state.source.as_bytes()[state.cursor] == b'\n' {
+        state.cursor += 1;
+    }
+    Some(line)
 }
 
 fn create_write_file_stub(lua: &Lua) -> mlua::Result<Value> {
@@ -1686,7 +2017,11 @@ fn create_luajava_stub(lua: &Lua) -> mlua::Result<Value> {
     let table = lua.create_table()?;
     table.set(
         "bindClass",
-        lua.create_function(|lua, _class_name: String| create_luajava_object_stub(lua))?,
+        lua.create_function(|lua, class_name: String| match class_name.as_str() {
+            "com.badlogic.gdx.Gdx" => create_luajava_gdx_stub(lua),
+            "com.badlogic.gdx.controllers.Controllers" => create_luajava_controllers_stub(lua),
+            _ => create_luajava_object_stub(lua),
+        })?,
     )?;
     table.set(
         "newInstance",
@@ -1699,6 +2034,35 @@ fn create_luajava_stub(lua: &Lua) -> mlua::Result<Value> {
         lua.create_function(|lua, _: Variadic<Value>| create_luajava_object_stub(lua))?,
     )?;
     Ok(Value::Table(table))
+}
+
+fn create_luajava_gdx_stub(lua: &Lua) -> mlua::Result<Value> {
+    let gdx = lua.create_table()?;
+    let input = lua.create_table()?;
+    input
+        .set("isKeyPressed", lua.create_function(|_, (_self, _key): (Value, Value)| Ok(false))?)?;
+    gdx.set("input", input)?;
+    Ok(Value::Table(gdx))
+}
+
+fn create_luajava_controllers_stub(lua: &Lua) -> mlua::Result<Value> {
+    let controllers = lua.create_table()?;
+    controllers.set(
+        "getControllers",
+        lua.create_function(|lua, _self: Value| {
+            let list = lua.create_table()?;
+            // libGDX Array exposes `size` as a numeric field. Returning an
+            // empty list is the neutral load-time value and prevents skins
+            // from treating the generic truthy object stub as live input.
+            list.set("size", 0)?;
+            list.set(
+                "get",
+                lua.create_function(|_, (_self, _index): (Value, Value)| Ok(Value::Nil))?,
+            )?;
+            Ok(Value::Table(list))
+        })?,
+    )?;
+    Ok(Value::Table(controllers))
 }
 
 fn create_luajava_object_stub(lua: &Lua) -> mlua::Result<Value> {
@@ -2397,15 +2761,7 @@ fn resolve_lua_path(root: &Path, requested: &str, module: bool) -> Result<PathBu
 }
 
 fn resolve_skin_io_path(root: &Path, requested: &str) -> Result<PathBuf> {
-    let relative = requested.replace('\\', "/");
-    let relative_path = Path::new(&relative);
-    if relative_path.is_absolute()
-        || relative_path.components().any(|component| {
-            matches!(component, Component::ParentDir | Component::RootDir | Component::Prefix(_))
-        })
-    {
-        bail!("io path escapes skin root: {requested}");
-    }
+    let relative = normalize_skin_io_relative_path(requested)?;
 
     if let Some(path) = resolve_beatoraja_skin_alias(root, &relative) {
         return Ok(path);
@@ -2417,6 +2773,86 @@ fn resolve_skin_io_path(root: &Path, requested: &str) -> Result<PathBuf> {
         bail!("io path escapes skin root: {}", canonical.display());
     }
     Ok(canonical)
+}
+
+fn normalize_skin_io_relative_path(requested: &str) -> Result<String> {
+    if requested.contains('\0') {
+        bail!("io path contains NUL");
+    }
+    let relative = requested.replace('\\', "/");
+    if relative.starts_with('/') || relative.starts_with("//") {
+        bail!("io path escapes skin root: {requested}");
+    }
+    let mut normalized = Vec::new();
+    for (index, component) in relative.split('/').enumerate() {
+        if component.is_empty() || component == "." {
+            continue;
+        }
+        if component == ".."
+            || (index == 0
+                && component.as_bytes().get(1) == Some(&b':')
+                && component.as_bytes().first().is_some_and(u8::is_ascii_alphabetic))
+        {
+            bail!("io path escapes skin root: {requested}");
+        }
+        normalized.push(component);
+    }
+    if normalized.is_empty() {
+        bail!("io path is empty");
+    }
+    Ok(normalized.join("/"))
+}
+
+fn normalize_virtual_io_files(
+    files: &BTreeMap<String, String>,
+) -> Result<BTreeMap<String, String>> {
+    let mut normalized = BTreeMap::new();
+    for (path, source) in files {
+        let path = normalize_skin_io_relative_path(path)
+            .with_context(|| format!("invalid Lua virtual IO path: {path}"))?;
+        if source.len() > LUA_IO_MAX_READ_BYTES {
+            bail!("Lua virtual IO file exceeds {} byte limit: {path}", LUA_IO_MAX_READ_BYTES);
+        }
+        if normalized.insert(path.clone(), source.clone()).is_some() {
+            bail!("duplicate normalized Lua virtual IO path: {path}");
+        }
+    }
+    Ok(normalized)
+}
+
+fn read_skin_io_source(path: &Path) -> Result<String> {
+    let metadata = fs::metadata(path)?;
+    if metadata.len() > LUA_IO_MAX_READ_BYTES as u64 {
+        bail!("Lua IO file exceeds {} byte limit: {}", LUA_IO_MAX_READ_BYTES, path.display());
+    }
+    let source = fs::read_to_string(path)?;
+    if source.len() > LUA_IO_MAX_READ_BYTES {
+        bail!("Lua IO file exceeds {} byte limit: {}", LUA_IO_MAX_READ_BYTES, path.display());
+    }
+    Ok(source)
+}
+
+fn record_virtual_io_dependency(
+    path: &str,
+    source: Option<&str>,
+    dependencies: Option<&Arc<Mutex<SkinLoadDependencies>>>,
+) {
+    if let Some(dependencies) = dependencies
+        && let Ok(mut dependencies) = dependencies.lock()
+    {
+        dependencies.virtual_io_files.insert(path.to_string(), source.map(str::to_string));
+    }
+}
+
+fn mark_io_dependency_opaque(dependencies: Option<&Arc<Mutex<SkinLoadDependencies>>>) {
+    if let Some(dependencies) = dependencies
+        && let Ok(mut dependencies) = dependencies.lock()
+    {
+        // A missing real file cannot be represented by loaded_files metadata.
+        // Avoid caching a branch that could change merely because the file is
+        // created after this load.
+        dependencies.opaque = true;
+    }
 }
 
 fn resolve_beatoraja_skin_alias(root: &Path, relative: &str) -> Option<PathBuf> {
@@ -2493,6 +2929,7 @@ fn lua_value_to_json(
     depth: usize,
     warnings: &mut Vec<String>,
     main_state_probe: &Arc<Mutex<MainStateProbe>>,
+    instruction_budget: &LuaInstructionBudget,
     table_budget: &mut TableBudget,
 ) -> Result<JsonValue> {
     if depth > LUA_MAX_TABLE_DEPTH {
@@ -2518,6 +2955,7 @@ fn lua_value_to_json(
             depth + 1,
             warnings,
             main_state_probe,
+            instruction_budget,
             table_budget,
         )?,
         Value::Function(_) => {
@@ -2594,6 +3032,7 @@ fn lua_table_to_json(
     depth: usize,
     warnings: &mut Vec<String>,
     main_state_probe: &Arc<Mutex<MainStateProbe>>,
+    instruction_budget: &LuaInstructionBudget,
     table_budget: &mut TableBudget,
 ) -> Result<JsonValue> {
     let mut entries = Vec::new();
@@ -2635,6 +3074,7 @@ fn lua_table_to_json(
                 depth,
                 warnings,
                 main_state_probe,
+                instruction_budget,
                 table_budget,
             )?);
         }
@@ -2680,6 +3120,10 @@ fn lua_table_to_json(
             continue;
         }
         if let Value::Function(function) = &value {
+            // Inference deliberately invokes one callback several times with
+            // different probe values. Give each callback a fresh bounded
+            // slice while retaining the separate total inference cap.
+            instruction_budget.begin_callback();
             if key == "value" {
                 let is_graph = path.contains(".graph[");
                 if matches!(object_id.as_deref(), Some("val-hits-per-sec")) {
@@ -2846,6 +3290,15 @@ fn lua_table_to_json(
                 continue;
             }
             if key == "draw" {
+                if let Some(draw) = infer_result_panel_draw_condition(
+                    lua,
+                    function,
+                    object_id.as_deref(),
+                    main_state_probe,
+                ) {
+                    object.insert(key.clone(), JsonValue::String(draw));
+                    continue;
+                }
                 if let Some(draw) =
                     infer_result_score_draw(function, object_id.as_deref(), main_state_probe)
                 {
@@ -2942,6 +3395,7 @@ fn lua_table_to_json(
                 depth,
                 warnings,
                 main_state_probe,
+                instruction_budget,
                 table_budget,
             )?,
         );
@@ -4913,6 +5367,64 @@ fn infer_result_score_draw(
     }
 }
 
+fn infer_result_panel_draw_condition(
+    lua: &Lua,
+    function: &Function,
+    object_id: Option<&str>,
+    main_state_probe: &Arc<Mutex<MainStateProbe>>,
+) -> Option<String> {
+    const ALWAYS_TRUE: &str = "number(0) >= 0";
+    const ALWAYS_FALSE: &str = "number(0) < 0";
+
+    // The destination closure may only call a local helper (`drawCheck`) that
+    // reads Expand_op, so the closure itself does not necessarily carry a
+    // direct `_ENV` upvalue. Probe the shared Lua globals to cover both direct
+    // and transitive reads.
+    let globals = lua.globals();
+    let original = globals.raw_get::<Value>("Expand_op").ok()?;
+    lua_result_panel_value(original.clone())?;
+
+    let mut conditions = Vec::with_capacity(3);
+    for panel in 0..=2 {
+        if globals.raw_set("Expand_op", panel).is_err() {
+            let _ = globals.raw_set("Expand_op", original);
+            return None;
+        }
+        let specialized = infer_result_score_draw(function, object_id, main_state_probe);
+        conditions.push(if result_score_draw_object(object_id) {
+            specialized.or_else(|| infer_constant_draw_at_load(function, main_state_probe))
+        } else {
+            specialized.or_else(|| infer_boolean_predicate(function, main_state_probe, object_id))
+        });
+    }
+    let _ = globals.raw_set("Expand_op", original);
+
+    if conditions.windows(2).all(|pair| pair[0] == pair[1]) {
+        return None;
+    }
+
+    let branches = conditions
+        .into_iter()
+        .enumerate()
+        .filter_map(|(panel, condition)| match condition.as_deref() {
+            None | Some(ALWAYS_FALSE) => None,
+            Some(ALWAYS_TRUE) => Some(format!("result_panel({panel})")),
+            Some(condition) => Some(format!("result_panel({panel}) and {condition}")),
+        })
+        .collect::<Vec<_>>();
+    (!branches.is_empty()).then(|| branches.join(" or "))
+}
+
+fn result_score_draw_object(object_id: Option<&str>) -> bool {
+    object_id.is_some_and(|id| {
+        id == "scoreGraph"
+            || id.starts_with("ir_scoreGraph")
+            || id == "irYouFrame"
+            || id.starts_with("nextRank")
+            || matches!(id, "diff_plus" | "diff_minus" | "diff_rank")
+    })
+}
+
 fn ir_ranking_slot_from_id(id: &str, prefix: &str) -> Option<i32> {
     let slot = id.strip_prefix(prefix)?.parse::<i32>().ok()?;
     (1..=10).contains(&slot).then_some(slot)
@@ -4954,8 +5466,34 @@ fn infer_ir_ranking_user_draw(
 ) -> Option<String> {
     let refs = collect_text_refs(function, main_state_probe)?;
     let ranking_ref = refs.iter().copied().find(|ref_id| (120..=129).contains(ref_id))?;
-    (refs.iter().all(|ref_id| matches!(*ref_id, 1021) || *ref_id == ranking_ref))
-        .then(|| format!("ir_ranking_user({})", ranking_ref - 119))
+    if !refs.iter().all(|ref_id| matches!(*ref_id, 1021) || *ref_id == ranking_ref) {
+        return None;
+    }
+    let own = call_draw_with_text_values(
+        function,
+        main_state_probe,
+        BTreeMap::from([(ranking_ref, "same".to_string()), (1021, "same".to_string())]),
+    )?;
+    let other = call_draw_with_text_values(
+        function,
+        main_state_probe,
+        BTreeMap::from([(ranking_ref, "ranking".to_string()), (1021, "player".to_string())]),
+    )?;
+    (own && !other).then(|| format!("ir_ranking_user({})", ranking_ref - 119))
+}
+
+fn call_draw_with_text_values(
+    function: &Function,
+    main_state_probe: &Arc<Mutex<MainStateProbe>>,
+    values: BTreeMap<i32, String>,
+) -> Option<bool> {
+    main_state_probe.lock().ok()?.begin_text_recording_with_values(values);
+    let result = function.call::<Value>(()).ok();
+    main_state_probe.lock().ok()?.end_recording();
+    match result? {
+        Value::Boolean(value) => Some(value),
+        _ => None,
+    }
 }
 
 fn infer_ir_ranking_score_value_expr(
@@ -6015,6 +6553,76 @@ mod tests {
     }
 
     #[test]
+    fn infers_wmii_result_panel_gates_without_mutating_default() {
+        let lua = Lua::new();
+        let probe = Arc::new(Mutex::new(MainStateProbe::default()));
+        lua.globals()
+            .set("main_state", create_main_state_stub(&lua, probe.clone()).unwrap())
+            .unwrap();
+        lua.globals().set("Expand_op", 2).unwrap();
+        let functions = lua
+            .load(
+                r#"
+                return {
+                    ir = function() return Expand_op == 1 end,
+                    not_ir = function() return Expand_op ~= 1 end,
+                    band = function()
+                        local rate = main_state.number(382) / (main_state.number(74) * 2)
+                        return rate >= 7/9 and rate < 8/9 and Expand_op == 1
+                    end,
+                    own = function()
+                        return main_state.text(122) == main_state.text(1021) and Expand_op == 1
+                    end,
+                }
+                "#,
+            )
+            .eval::<Table>()
+            .unwrap();
+
+        assert_eq!(
+            infer_result_panel_draw_condition(
+                &lua,
+                &functions.get::<Function>("ir").unwrap(),
+                None,
+                &probe,
+            )
+            .as_deref(),
+            Some("result_panel(1)")
+        );
+        assert_eq!(
+            infer_result_panel_draw_condition(
+                &lua,
+                &functions.get::<Function>("not_ir").unwrap(),
+                None,
+                &probe,
+            )
+            .as_deref(),
+            Some("result_panel(0) or result_panel(2)")
+        );
+        assert_eq!(
+            infer_result_panel_draw_condition(
+                &lua,
+                &functions.get::<Function>("band").unwrap(),
+                Some("ir_scoreGraph3"),
+                &probe,
+            )
+            .as_deref(),
+            Some("result_panel(1) and ir_score_rate_band(3,7,8)")
+        );
+        assert_eq!(
+            infer_result_panel_draw_condition(
+                &lua,
+                &functions.get::<Function>("own").unwrap(),
+                Some("irYouFrame"),
+                &probe,
+            )
+            .as_deref(),
+            Some("result_panel(1) and ir_ranking_user(3)")
+        );
+        assert_eq!(lua.globals().get::<i32>("Expand_op").unwrap(), 2);
+    }
+
+    #[test]
     fn maps_peacefulplay_keylogger_graph_ids_to_builtin_expressions() {
         assert_eq!(
             keylogger_graph_value_expr_from_id("keylogger-graph-judge-3-good").as_deref(),
@@ -6617,5 +7225,79 @@ mod tests {
             seen.insert(name);
         }
         assert_eq!(seen.len(), 2, "Random selection should pick randomly among matches");
+    }
+
+    #[test]
+    fn repairs_strictly_recognized_malformed_destination_ops() {
+        let mut value = serde_json::json!({
+            "type": 7,
+            "destination": [
+                {
+                    "id": "rankBig_AAA",
+                    "op": {
+                        "1": 300,
+                        "2": 920,
+                        "loop": 100,
+                        "filter": 1,
+                        "dst": [{"x": 77, "y": 800, "w": 400, "h": 510}]
+                    }
+                },
+                {
+                    "id": "AAA_BG",
+                    "op": [90, [90, 300]],
+                    "dst": [{"x": 0, "y": 0, "w": 1, "h": 1}]
+                }
+            ]
+        });
+        let mut warnings =
+            vec!["mixed lua table converted to object at $.destination[1].op".to_string()];
+
+        postprocess_lua_skin_json(value.as_object_mut().unwrap(), &mut warnings);
+
+        assert_eq!(value["destination"][0]["op"], serde_json::json!([300, 920]));
+        assert_eq!(value["destination"][0]["loop"], 100);
+        assert_eq!(value["destination"][0]["filter"], 1);
+        assert!(value["destination"][0]["dst"].is_array());
+        assert_eq!(value["destination"][1]["op"], serde_json::json!([90, 300]));
+        assert_eq!(warnings, ["repaired 2 malformed destination op tables"]);
+
+        let document: bmz_skin_document::SkinDocument =
+            serde_json::from_value(value.clone()).expect("repaired destinations should decode");
+        let destinations = document
+            .destination
+            .iter()
+            .filter_map(|entry| match entry {
+                bmz_skin_document::DestinationListEntry::Single(destination) => Some(destination),
+                bmz_skin_document::DestinationListEntry::Conditional { .. } => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(destinations[0].op, [300, 920]);
+        assert_eq!(destinations[1].op, [90, 300]);
+
+        let once = value.clone();
+        let warning_count = warnings.len();
+        postprocess_lua_skin_json(value.as_object_mut().unwrap(), &mut warnings);
+        assert_eq!(value, once);
+        assert_eq!(warnings.len(), warning_count);
+    }
+
+    #[test]
+    fn leaves_ambiguous_destination_ops_unmodified() {
+        let mut value = serde_json::json!({
+            "destination": [
+                {"id": "sparse", "op": {"1": 90, "3": 300, "dst": []}},
+                {"id": "unknown", "op": {"1": 90, "custom": 1, "dst": []}},
+                {"id": "conflict", "loop": 200, "op": {"1": 90, "loop": 100, "dst": []}},
+                {"id": "different-prefix", "op": [90, [300]], "dst": []},
+                {"id": "deep", "op": [90, [90, [300]]], "dst": []}
+            ]
+        });
+        let original = value.clone();
+        let mut warnings = Vec::new();
+
+        postprocess_lua_skin_json(value.as_object_mut().unwrap(), &mut warnings);
+
+        assert_eq!(value, original);
+        assert!(warnings.is_empty());
     }
 }

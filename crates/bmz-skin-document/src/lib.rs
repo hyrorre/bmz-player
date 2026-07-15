@@ -112,6 +112,12 @@ pub struct SkinDocument {
     /// Lua `customTimers` のうち、既存タイマー開始時刻へ固定 delay を加える定義。
     #[serde(default, rename = "fixedDelayTimer")]
     pub fixed_delay_timers: Vec<SkinFixedDelayTimerDef>,
+    /// Lua Result スキンがロード時に選んだ展開パネル。
+    ///
+    /// WMII の `Expand_op` をロード時宣言へ変換した場合だけ設定され、
+    /// 0=非表示、1=IR、2=グラフとして Result 入力と描画状態を同期する。
+    #[serde(default, rename = "resultPanelDefault")]
+    pub result_panel_default: Option<i32>,
     /// ユーザがスキン設定パネルで選んだオプションから算出した有効 op コード列。
     /// `Some` のときレンダー時の `enabled_options()` はこれを返し、`None` の
     /// ときは従来通り `property.def` (または各 property の先頭 item) を既定として

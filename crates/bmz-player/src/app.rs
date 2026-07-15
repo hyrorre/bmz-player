@@ -625,6 +625,8 @@ struct WinitApp {
     /// リザルト画面で Key7 が現在押されているか。
     result_key7_held: bool,
     result_gauge_graph_type: i32,
+    /// Lua Result スキンの展開パネル (0=非表示、1=IR、2=グラフ)。
+    result_panel: i32,
     deferred_boot: Option<DeferredBoot>,
     /// 選曲画面で楽曲検索の入力モード中か。
     search_mode: bool,
@@ -2279,6 +2281,7 @@ impl WinitApp {
             result_key5_held: false,
             result_key7_held: false,
             result_gauge_graph_type: GaugeType::Normal as i32,
+            result_panel: 0,
             deferred_boot: deferred_boot_action(boot_chart_id, &options),
             search_mode: false,
             search_query: String::new(),
@@ -2584,6 +2587,7 @@ impl WinitApp {
                     judge_rank: summary.judge_rank,
                     key_mode: summary.key_mode,
                     result_gauge_graph_type: self.result_gauge_graph_type,
+                    result_panel: self.result_panel,
                     judge_counts: DisplayJudgeCounts {
                         pgreat: summary.judge_counts.pgreat,
                         great: summary.judge_counts.great,
@@ -6775,6 +6779,14 @@ impl WinitApp {
         pressed: bool,
         repeat: bool,
     ) -> bool {
+        if pressed
+            && !repeat
+            && self.result_input_ready()
+            && self.is_result_panel_toggle_control(control)
+            && self.toggle_result_panel()
+        {
+            return true;
+        }
         let Some(lane) = self.result_lane_for_control(control) else {
             return false;
         };
@@ -8951,6 +8963,14 @@ impl WinitApp {
         pressed: bool,
         repeat: bool,
     ) -> bool {
+        if pressed
+            && !repeat
+            && self.result_input_ready()
+            && self.is_result_panel_toggle_control(control)
+            && self.toggle_result_panel()
+        {
+            return true;
+        }
         let Some(lane) = self.result_lane_for_control(control) else {
             return false;
         };
@@ -8980,6 +9000,14 @@ impl WinitApp {
         pressed: bool,
         repeat: bool,
     ) -> bool {
+        if pressed
+            && !repeat
+            && self.result_input_ready()
+            && self.is_result_panel_toggle_control(control)
+            && self.toggle_result_panel()
+        {
+            return true;
+        }
         let Some(lane) = self.result_lane_for_control(control) else {
             return false;
         };
@@ -9115,6 +9143,28 @@ impl WinitApp {
         let key_mode = self.finished_play.as_ref()?.summary.key_mode;
         crate::config::play::lane_binding_for_chart(&self.boot.profile_config.input, key_mode)
             .resolve(DeviceId(0), control)
+    }
+
+    fn is_result_panel_toggle_control(&self, control: &PhysicalControl) -> bool {
+        physical_control_name(control)
+            .is_some_and(|control| control == "Select" || self.select_keys.is_e2_action(control))
+    }
+
+    fn toggle_result_panel(&mut self) -> bool {
+        let Some(document) = self.renderer.result_skin_document() else {
+            return false;
+        };
+        let Some(panel) = toggled_result_panel(
+            self.result_panel,
+            result_panel_supported(document),
+            self.result_ir.is_some(),
+        ) else {
+            return false;
+        };
+        self.result_panel = panel;
+        tracing::info!(panel = self.result_panel, "result panel changed");
+        self.play_system_sound(crate::system_sound::SoundType::OptionChange);
+        true
     }
 
     fn cycle_result_gauge_graph_type(&mut self) {
@@ -10233,6 +10283,12 @@ impl WinitApp {
     fn ensure_result_skin_ready(&mut self, slot: ResultSkinSlot) {
         self.spawn_result_skin_decode_for(slot);
         self.ensure_skin_ready(SkinKind::Result);
+        self.result_panel = self
+            .renderer
+            .result_skin_document()
+            .and_then(|document| document.result_panel_default)
+            .filter(|panel| (0..=2).contains(panel))
+            .unwrap_or(0);
     }
 
     fn current_result_skin_slot(&self) -> ResultSkinSlot {
@@ -15468,6 +15524,17 @@ fn is_course_intermediate_result(
     active_course && finished_play && !finished_course
 }
 
+fn toggled_result_panel(current: i32, supported: bool, ir_available: bool) -> Option<i32> {
+    if !supported || !ir_available {
+        return None;
+    }
+    match current {
+        1 => Some(2),
+        2 => Some(1),
+        _ => None,
+    }
+}
+
 fn result_failed_for_skin_ops(
     display_clear_type: ClearType,
     raw_clear_type: Option<ClearType>,
@@ -17505,6 +17572,15 @@ fn skin_duration_ms(ms: i32) -> Duration {
 
 fn result_input_duration_for_document(document: Option<&SkinDocument>) -> Duration {
     document.map(|document| skin_duration_ms(document.input)).unwrap_or_default()
+}
+
+fn result_panel_supported(document: &SkinDocument) -> bool {
+    document.result_panel_default.is_some()
+        && document
+            .destination
+            .iter()
+            .flat_map(destination_entry_values)
+            .any(|destination| destination.draw.contains("result_panel("))
 }
 
 #[cfg(test)]
@@ -21362,6 +21438,38 @@ mod tests {
             cycle_result_gauge_graph_type(GaugeType::ExHardClass as i32),
             GaugeType::Class as i32
         );
+    }
+
+    #[test]
+    fn result_panel_toggle_requires_supported_skin_and_ir() {
+        assert_eq!(toggled_result_panel(1, true, true), Some(2));
+        assert_eq!(toggled_result_panel(2, true, true), Some(1));
+        assert_eq!(toggled_result_panel(0, true, true), None);
+        assert_eq!(toggled_result_panel(1, false, true), None);
+        assert_eq!(toggled_result_panel(1, true, false), None);
+    }
+
+    #[test]
+    fn result_panel_support_requires_default_and_runtime_draw_gate() {
+        let document: SkinDocument = serde_json::from_value(serde_json::json!({
+            "type": 7,
+            "resultPanelDefault": 2,
+            "destination": [{
+                "id": "panel",
+                "draw": "result_panel(2)",
+                "dst": [{"x": 0, "y": 0, "w": 1, "h": 1}]
+            }]
+        }))
+        .unwrap();
+        assert!(result_panel_supported(&document));
+
+        let without_gate: SkinDocument = serde_json::from_value(serde_json::json!({
+            "type": 7,
+            "resultPanelDefault": 2,
+            "destination": []
+        }))
+        .unwrap();
+        assert!(!result_panel_supported(&without_gate));
     }
 
     #[test]

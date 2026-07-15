@@ -327,6 +327,7 @@ fn load_header(path: &Path, options: &BTreeMap<String, String>) -> Result<Loaded
         option_values: processor.option_dependencies,
         files: BTreeSet::new(),
         loaded_files: BTreeMap::new(),
+        virtual_io_files: BTreeMap::new(),
         opaque: false,
     };
     Ok(LoadedHeader { header, dependencies })

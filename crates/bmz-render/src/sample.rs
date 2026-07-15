@@ -183,6 +183,7 @@ pub fn sample_result_scene() -> AppSceneSnapshot {
         judge_rank: Some(2),
         key_mode: bmz_core::lane::KeyMode::K7,
         result_gauge_graph_type: bmz_core::clear::GaugeType::Normal as i32,
+        result_panel: 0,
         judge_counts: DisplayJudgeCounts {
             pgreat: 777,
             great: 334,
