@@ -1384,6 +1384,52 @@ mod tests {
     }
 
     #[test]
+    fn lua_skin_does_not_execute_mutating_act_during_conversion() {
+        let root = unique_test_dir("bmz-skin-lua-mutating-act");
+        fs::create_dir_all(&root).unwrap();
+        fs::write(
+            root.join("result.luaskin"),
+            r#"
+            Panel = 2
+            return {
+                type = 7,
+                image = {
+                    {
+                        id = "switch",
+                        src = "src",
+                        x = 0, y = 0, w = 10, h = 10,
+                        act = function() Panel = 1 end,
+                    },
+                    { id = "graph", src = "src", x = 0, y = 0, w = 10, h = 10 },
+                    { id = "ir", src = "src", x = 0, y = 0, w = 10, h = 10 },
+                },
+                destination = {
+                    {
+                        id = "graph",
+                        draw = function() return Panel == 2 end,
+                        dst = {{ x = 0, y = 0, w = 10, h = 10 }},
+                    },
+                    {
+                        id = "ir",
+                        draw = function() return Panel == 1 end,
+                        dst = {{ x = 0, y = 0, w = 10, h = 10 }},
+                    },
+                },
+            }
+            "#,
+        )
+        .unwrap();
+
+        let loaded =
+            load_lua_skin_value(&root.join("result.luaskin"), &BTreeMap::new(), &BTreeMap::new())
+                .unwrap();
+
+        assert!(loaded.value["image"][0].get("act").is_none());
+        assert_eq!(loaded.value["destination"][0]["draw"], "number(0) >= 0");
+        assert_eq!(loaded.value["destination"][1]["draw"], "number(0) < 0");
+    }
+
+    #[test]
     fn lua_skin_infers_fixed_delay_custom_timer() {
         let root = unique_test_dir("bmz-skin-lua");
         fs::create_dir_all(&root).unwrap();
@@ -1922,6 +1968,7 @@ mod tests {
                 image = {
                     { id = "judge_adv_f", src = "src", x = 0, y = 0, w = 52, h = 12 },
                     { id = "judge_adv_s", src = "src", x = 0, y = 12, w = 52, h = 12 },
+                    { id = "judge_adv_non_negative", src = "src", x = 0, y = 24, w = 52, h = 12 },
                 },
                 destination = {
                     {
@@ -1937,6 +1984,14 @@ mod tests {
                         draw = function()
                             local ave_timing = main_state.number(374) + (main_state.number(375) * 0.01)
                             return 0 < ave_timing
+                        end,
+                        dst = {{ x = 424, y = 132, w = 52, h = 12 }},
+                    },
+                    {
+                        id = "judge_adv_non_negative",
+                        draw = function()
+                            local ave_timing = main_state.number(374) + (main_state.number(375) * 0.01)
+                            return ave_timing >= 0
                         end,
                         dst = {{ x = 424, y = 132, w = 52, h = 12 }},
                     },
@@ -1966,8 +2021,57 @@ mod tests {
         else {
             panic!("expected fast destination");
         };
+        let bmz_skin_document::DestinationListEntry::Single(non_negative) =
+            &loaded.document.destination[2]
+        else {
+            panic!("expected non-negative destination");
+        };
         assert_eq!(slow.draw, "number(374) < 0 or number(375) < 0");
         assert_eq!(fast.draw, "number(374) > 0 or number(375) > 0");
+        assert_eq!(non_negative.draw, "number(374) >= 0 and number(375) >= 0");
+    }
+
+    #[test]
+    fn lua_skin_infers_all_terminal_timers_off_draw() {
+        let root = unique_test_dir("bmz-skin-lua-all-timers-off");
+        fs::create_dir_all(&root).unwrap();
+        fs::write(
+            root.join("result.luaskin"),
+            r#"
+            local main_state = require("main_state")
+            return {
+                type = 7,
+                image = {
+                    { id = "irWait", src = "src", x = 0, y = 0, w = 10, h = 10 },
+                },
+                destination = {
+                    {
+                        id = "irWait",
+                        timer = 172,
+                        draw = function()
+                            return main_state.timer(173) == main_state.timer_off_value
+                                and main_state.timer(174) == main_state.timer_off_value
+                        end,
+                        dst = {{ x = 0, y = 0, w = 10, h = 10 }},
+                    },
+                },
+            }
+            "#,
+        )
+        .unwrap();
+
+        let loaded = load_lua_skin(
+            &root.join("result.luaskin"),
+            SkinKind::Result,
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+        )
+        .unwrap();
+        let bmz_skin_document::DestinationListEntry::Single(wait) = &loaded.document.destination[0]
+        else {
+            panic!("expected wait destination");
+        };
+        assert_eq!(wait.draw, "timer(173) == timer_off and timer(174) == timer_off");
     }
 
     #[test]
@@ -2409,6 +2513,100 @@ mod tests {
             !messages.iter().any(|message| message.contains("`process`")),
             "loader process callback should be silently skipped: {messages:?}"
         );
+    }
+
+    /// WMII FHD result の Lua table が document schema まで decode できることを確認する。
+    /// 外部スキンが無い環境では skip する。
+    #[test]
+    fn wmii_fhd_result_lua_skin_decodes_when_available() {
+        let skin_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../data/skins/WMII_FHD/result/result.luaskin");
+        if !skin_path.is_file() {
+            return;
+        }
+
+        let runtime_state = LuaLoadRuntimeState {
+            number_values: BTreeMap::new(),
+            option_values: BTreeMap::from([(50, false), (51, true)]),
+        };
+        let loaded = load_lua_skin_with_runtime_state(
+            &skin_path,
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            &runtime_state,
+        )
+        .expect("WMII FHD result should decode as a skin document");
+
+        assert!(!loaded.document.destination.is_empty());
+        assert!(loaded.document.graph.iter().any(|graph| {
+            graph.id == "ir_scoreGraph1" && graph.value_expr == "bmz:ir_score_rate:1"
+        }));
+        assert!(loaded.document.value.iter().any(|value| {
+            value.id == "ir_diff_score1" && value.value_expr == "bmz:ir_score_diff:1"
+        }));
+        assert!(
+            loaded.document.text.iter().any(|text| text.id == "ir_username1" && text.ref_id == 120)
+        );
+
+        let ir_score_draws = loaded.document.destination.iter().filter_map(|entry| match entry {
+            bmz_skin_document::DestinationListEntry::Single(destination)
+                if destination.id == "ir_scoreGraph1" =>
+            {
+                Some(destination.draw.as_str())
+            }
+            _ => None,
+        });
+        assert!(ir_score_draws.into_iter().any(|draw| draw.starts_with("ir_score_rate_band(1,")));
+        assert!(loaded.document.destination.iter().any(|entry| matches!(
+            entry,
+            bmz_skin_document::DestinationListEntry::Single(destination)
+                if destination.id == "irYouFrame"
+                    && destination.draw == "ir_ranking_user(1)"
+        )));
+        assert!(loaded.document.destination.iter().any(|entry| matches!(
+            entry,
+            bmz_skin_document::DestinationListEntry::Single(destination)
+                if destination.id == "irWait"
+                    && destination.timer == Some(172)
+                    && destination.draw
+                        == "timer(173) == timer_off and timer(174) == timer_off"
+        )));
+
+        let graph_options =
+            BTreeMap::from([("Expand Panel".to_string(), "ON - GRAPH DEFAULT".to_string())]);
+        let graph_loaded = load_lua_skin_with_runtime_state(
+            &skin_path,
+            &graph_options,
+            &BTreeMap::new(),
+            &runtime_state,
+        )
+        .expect("WMII FHD graph panel should decode as a skin document");
+        assert!(graph_loaded.document.destination.iter().any(|entry| matches!(
+            entry,
+            bmz_skin_document::DestinationListEntry::Single(destination)
+                if destination.id == "graphDataFrame" && destination.draw == "number(0) >= 0"
+        )));
+        assert!(graph_loaded.document.destination.iter().any(|entry| matches!(
+            entry,
+            bmz_skin_document::DestinationListEntry::Single(destination)
+                if destination.id == "irDataFrame" && destination.draw == "number(0) < 0"
+        )));
+        let timing_average_draws =
+            graph_loaded.document.destination.iter().filter_map(|entry| match entry {
+                bmz_skin_document::DestinationListEntry::Single(destination)
+                    if destination.id == "timingAvg" =>
+                {
+                    Some(destination.draw.as_str())
+                }
+                _ => None,
+            });
+        let timing_average_draws = timing_average_draws.collect::<Vec<_>>();
+        assert!(timing_average_draws.contains(&"number(374) < 0 or number(375) < 0"));
+        assert!(
+            timing_average_draws.contains(&"number(374) >= 0 and number(375) >= 0"),
+            "WMII timing average layers must remain mutually exclusive: {timing_average_draws:?}"
+        );
+        assert!(!timing_average_draws.contains(&"number(0) >= 0"));
     }
 
     /// Rm-skin ロード成功と destination 非空を確認する。

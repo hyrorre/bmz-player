@@ -2705,11 +2705,26 @@ fn lua_table_to_json(
                 }
                 if !is_graph
                     && path.contains(".text[")
+                    && let Some(ref_id) =
+                        infer_ir_ranking_name_ref(function, object_id.as_deref(), main_state_probe)
+                {
+                    object.insert("ref".to_string(), JsonValue::Number(JsonNumber::from(ref_id)));
+                    continue;
+                }
+                if !is_graph
+                    && path.contains(".text[")
                     && let Some(value_expr) = infer_course_table_text_expr(
                         function,
                         object_id.as_deref(),
                         main_state_probe,
                     )
+                {
+                    object.insert("value_expr".to_string(), JsonValue::String(value_expr));
+                    continue;
+                }
+                if !is_graph
+                    && path.contains(".text[")
+                    && let Some(value_expr) = infer_text_concat_expr(function, main_state_probe)
                 {
                     object.insert("value_expr".to_string(), JsonValue::String(value_expr));
                     continue;
@@ -2725,6 +2740,26 @@ fn lua_table_to_json(
                     && path.contains(".slider[")
                     && let Some(value_expr) =
                         infer_slider_value_expr(function, object_id.as_deref(), main_state_probe)
+                {
+                    object.insert("value_expr".to_string(), JsonValue::String(value_expr));
+                    continue;
+                }
+                if !is_graph
+                    && let Some(value_expr) = infer_nearest_rank_diff_value_expr(
+                        function,
+                        object_id.as_deref(),
+                        main_state_probe,
+                    )
+                {
+                    object.insert("value_expr".to_string(), JsonValue::String(value_expr));
+                    continue;
+                }
+                if !is_graph
+                    && let Some(value_expr) = infer_ir_ranking_score_diff_value_expr(
+                        function,
+                        object_id.as_deref(),
+                        main_state_probe,
+                    )
                 {
                     object.insert("value_expr".to_string(), JsonValue::String(value_expr));
                     continue;
@@ -2752,6 +2787,14 @@ fn lua_table_to_json(
                     continue;
                 }
                 if is_graph
+                    && let Some(value_expr) = infer_ir_ranking_score_value_expr(
+                        function,
+                        object_id.as_deref(),
+                        main_state_probe,
+                    )
+                {
+                    object.insert("value_expr".to_string(), JsonValue::String(value_expr));
+                } else if is_graph
                     && let Some(graph_type) =
                         infer_fast_slow_ratio_graph_type(function, main_state_probe)
                 {
@@ -2779,14 +2822,17 @@ fn lua_table_to_json(
                 {
                     object.insert("value_expr".to_string(), JsonValue::String(value_expr));
                 } else if path.contains(".text[")
-                    && let Some(ref_id) = infer_constant_text_ref_at_load(function)
+                    && let Some(ref_id) =
+                        infer_constant_text_ref_at_load(function, main_state_probe)
                 {
                     object.insert("ref".to_string(), JsonValue::Number(JsonNumber::from(ref_id)));
                 } else if path.contains(".text[")
-                    && let Some(text) = infer_constant_text_at_load(function)
+                    && let Some(text) = infer_constant_text_at_load(function, main_state_probe)
                 {
                     object.insert("constantText".to_string(), JsonValue::String(text));
-                } else if let Some(value_expr) = infer_constant_number_at_load(function) {
+                } else if let Some(value_expr) =
+                    infer_constant_number_at_load(function, main_state_probe)
+                {
                     object.insert("value_expr".to_string(), JsonValue::String(value_expr));
                 } else {
                     warnings.push(format!("skipping unsupported value function at {path}.{key}"));
@@ -2794,12 +2840,18 @@ fn lua_table_to_json(
                 continue;
             }
             if key == "act"
-                && let Some(event_id) = infer_constant_integer_at_load(function)
+                && let Some(event_id) = infer_constant_integer_at_load(function, main_state_probe)
             {
                 object.insert(key.clone(), JsonValue::Number(JsonNumber::from(event_id)));
                 continue;
             }
             if key == "draw" {
+                if let Some(draw) =
+                    infer_result_score_draw(function, object_id.as_deref(), main_state_probe)
+                {
+                    object.insert(key.clone(), JsonValue::String(draw));
+                    continue;
+                }
                 if let Some((group, below_border, part)) = &gauge_lead_glow_destination {
                     object.insert(
                         key.clone(),
@@ -3624,6 +3676,41 @@ fn collect_timer_refs(
     Some(timers)
 }
 
+fn infer_all_timers_off_draw_condition(
+    function: &Function,
+    main_state_probe: &Arc<Mutex<MainStateProbe>>,
+) -> Option<String> {
+    let timers = collect_timer_refs(function, main_state_probe)?;
+    if !(2..=4).contains(&timers.len()) {
+        return None;
+    }
+
+    for active_mask in 0..(1_usize << timers.len()) {
+        let values = timers
+            .iter()
+            .enumerate()
+            .map(|(index, timer_id)| {
+                let value =
+                    if active_mask & (1 << index) == 0 { i32::MIN } else { 100 + index as i32 };
+                (*timer_id, value)
+            })
+            .collect::<BTreeMap<_, _>>();
+        let actual =
+            call_draw_with_numbers_and_timers(function, main_state_probe, BTreeMap::new(), values)?;
+        if actual != (active_mask == 0) {
+            return None;
+        }
+    }
+
+    Some(
+        timers
+            .iter()
+            .map(|timer_id| format!("timer({timer_id}) == timer_off"))
+            .collect::<Vec<_>>()
+            .join(" and "),
+    )
+}
+
 fn call_timer_function_with_values(
     function: &Function,
     main_state_probe: &Arc<Mutex<MainStateProbe>>,
@@ -4064,6 +4151,9 @@ fn infer_boolean_predicate(
     {
         return Some(predicate);
     }
+    if let Some(predicate) = infer_all_timers_off_draw_condition(function, main_state_probe) {
+        return Some(predicate);
+    }
     // Probe short-circuit option/timer predicates before simpler single-option
     // inference can collapse them to the first branch alone.
     if let Some(predicate) =
@@ -4100,11 +4190,15 @@ fn infer_boolean_predicate(
         .or_else(|| infer_or_of_number_lt_zero(function, main_state_probe))
         .or_else(|| infer_two_number_compare_and(function, main_state_probe))
         .or_else(|| infer_number_eq_zero_with_constant_tail(function, main_state_probe))
-        .or_else(|| infer_constant_draw_at_load(function))
+        .or_else(|| infer_constant_draw_at_load(function, main_state_probe))
 }
 
 /// `skin_config.option` のみ等、ロード時に結果が決まる draw function を畳み込む。
-fn infer_constant_draw_at_load(function: &Function) -> Option<String> {
+fn infer_constant_draw_at_load(
+    function: &Function,
+    main_state_probe: &Arc<Mutex<MainStateProbe>>,
+) -> Option<String> {
+    main_state_probe.lock().ok()?.end_recording();
     match function.call::<bool>(()).ok() {
         Some(true) => Some("number(0) >= 0".to_string()),
         Some(false) => Some("number(0) < 0".to_string()),
@@ -4112,7 +4206,11 @@ fn infer_constant_draw_at_load(function: &Function) -> Option<String> {
     }
 }
 
-fn infer_constant_text_at_load(function: &Function) -> Option<String> {
+fn infer_constant_text_at_load(
+    function: &Function,
+    main_state_probe: &Arc<Mutex<MainStateProbe>>,
+) -> Option<String> {
+    main_state_probe.lock().ok()?.end_recording();
     match function.call::<Value>(()).ok()? {
         Value::String(value) => Some(value.to_string_lossy()),
         Value::Integer(value) => Some(value.to_string()),
@@ -4122,8 +4220,11 @@ fn infer_constant_text_at_load(function: &Function) -> Option<String> {
     }
 }
 
-fn infer_constant_text_ref_at_load(function: &Function) -> Option<i32> {
-    let text = infer_constant_text_at_load(function)?;
+fn infer_constant_text_ref_at_load(
+    function: &Function,
+    main_state_probe: &Arc<Mutex<MainStateProbe>>,
+) -> Option<i32> {
+    let text = infer_constant_text_at_load(function, main_state_probe)?;
     let ref_id = text
         .strip_prefix(LUA_TEXT_REF_SENTINEL_PREFIX)?
         .strip_suffix(LUA_TEXT_REF_SENTINEL_SUFFIX)?
@@ -4256,7 +4357,11 @@ fn keybeam_hold_draw_from_fade_draw(
     (!branches.is_empty()).then(|| branches.join(" or "))
 }
 
-fn infer_constant_number_at_load(function: &Function) -> Option<String> {
+fn infer_constant_number_at_load(
+    function: &Function,
+    main_state_probe: &Arc<Mutex<MainStateProbe>>,
+) -> Option<String> {
+    main_state_probe.lock().ok()?.end_recording();
     match function.call::<Value>(()).ok()? {
         Value::Integer(value) => Some(value.to_string()),
         Value::Number(value) if value.is_finite() => Some(value.to_string()),
@@ -4264,8 +4369,18 @@ fn infer_constant_number_at_load(function: &Function) -> Option<String> {
     }
 }
 
-fn infer_constant_integer_at_load(function: &Function) -> Option<i64> {
-    match function.call::<Value>(()).ok()? {
+fn infer_constant_integer_at_load(
+    function: &Function,
+    _main_state_probe: &Arc<Mutex<MainStateProbe>>,
+) -> Option<i64> {
+    // `act` is an input callback. Calling it in the skin's live Lua environment
+    // can mutate globals used by later draw conversion (WMII switches Expand_op
+    // from GRAPH to IR this way). Evaluate serializable constant callbacks in an
+    // isolated Lua state so conversion has no observable side effects.
+    let isolated = Lua::new();
+    let dumped = function.dump(true);
+    let isolated_function = isolated.load(&dumped).into_function().ok()?;
+    match isolated_function.call::<Value>(()).ok()? {
         Value::Integer(value) => Some(value),
         Value::Number(value) if value.is_finite() && value.fract() == 0.0 => Some(value as i64),
         _ => None,
@@ -4551,6 +4666,14 @@ fn infer_result_average_timing_sign_draw_condition(
         return Some("number(374) < 0 or number(375) < 0".to_string());
     }
 
+    let expected_non_negative = samples
+        .iter()
+        .map(|(integer, afterdot)| *integer as f64 + *afterdot as f64 * 0.01 >= 0.0)
+        .collect::<Vec<_>>();
+    if observed == expected_non_negative {
+        return Some("number(374) >= 0 and number(375) >= 0".to_string());
+    }
+
     let expected_positive = samples
         .iter()
         .map(|(integer, afterdot)| *integer as f64 + *afterdot as f64 * 0.01 > 0.0)
@@ -4709,6 +4832,312 @@ fn infer_main_state_text_ref(
         calls
     };
     single_number_call(&text_calls)
+}
+
+fn infer_text_concat_expr(
+    function: &Function,
+    main_state_probe: &Arc<Mutex<MainStateProbe>>,
+) -> Option<String> {
+    main_state_probe.lock().ok()?.begin_number_call_recording(0);
+    let result = function.call::<Value>(()).ok();
+    let text_calls = {
+        let mut probe = main_state_probe.lock().ok()?;
+        let calls = probe.text_calls.clone();
+        probe.end_recording();
+        calls
+    };
+    if text_calls != [1001, 1002] {
+        return None;
+    }
+    let Value::String(text) = result? else {
+        return None;
+    };
+    (text.to_string_lossy() == "Text1001 Text1002").then(|| "bmz:text_concat:1001:1002".to_string())
+}
+
+fn infer_nearest_rank_diff_value_expr(
+    function: &Function,
+    object_id: Option<&str>,
+    main_state_probe: &Arc<Mutex<MainStateProbe>>,
+) -> Option<String> {
+    if object_id != Some("diff_rank")
+        || collect_number_refs(function, main_state_probe)? != [71, 74]
+    {
+        return None;
+    }
+    for total_notes in [9, 10, 37] {
+        for ex_score in 0..=total_notes * 2 {
+            let actual = call_number_float_with_values(
+                function,
+                main_state_probe,
+                BTreeMap::from([(71, ex_score), (74, total_notes)]),
+            )?;
+            let expected = wmii_nearest_rank(ex_score, total_notes)?.2 as f64;
+            if !approx_float_eq(actual, expected) {
+                return None;
+            }
+        }
+    }
+    Some("bmz:nearest_rank_diff_abs".to_string())
+}
+
+fn infer_result_score_draw(
+    function: &Function,
+    object_id: Option<&str>,
+    main_state_probe: &Arc<Mutex<MainStateProbe>>,
+) -> Option<String> {
+    match object_id? {
+        "scoreGraph" => infer_score_rate_band(function, main_state_probe),
+        id if id.starts_with("ir_scoreGraph") => {
+            infer_ir_score_rate_band(function, id, main_state_probe)
+        }
+        "irYouFrame" => infer_ir_ranking_user_draw(function, main_state_probe),
+        id if id.starts_with("nextRank") => {
+            let grade = id.strip_prefix("nextRank")?;
+            for sign in ["plus", "minus"] {
+                if verify_nearest_rank_draw(function, main_state_probe, Some(grade), sign) {
+                    return Some(format!("nearest_rank({grade},{sign})"));
+                }
+            }
+            None
+        }
+        "diff_plus" => verify_nearest_rank_draw(function, main_state_probe, None, "plus")
+            .then(|| "nearest_rank_sign(plus)".to_string()),
+        "diff_minus" => verify_nearest_rank_draw(function, main_state_probe, None, "minus")
+            .then(|| "nearest_rank_sign(minus)".to_string()),
+        "diff_rank" => ["plus", "minus"].into_iter().find_map(|sign| {
+            verify_nearest_rank_draw(function, main_state_probe, None, sign)
+                .then(|| format!("nearest_rank_sign({sign})"))
+        }),
+        _ => None,
+    }
+}
+
+fn ir_ranking_slot_from_id(id: &str, prefix: &str) -> Option<i32> {
+    let slot = id.strip_prefix(prefix)?.parse::<i32>().ok()?;
+    (1..=10).contains(&slot).then_some(slot)
+}
+
+fn collect_text_refs(
+    function: &Function,
+    main_state_probe: &Arc<Mutex<MainStateProbe>>,
+) -> Option<Vec<i32>> {
+    main_state_probe.lock().ok()?.begin_number_call_recording(0);
+    let _ = function.call::<Value>(()).ok();
+    let mut calls = {
+        let mut probe = main_state_probe.lock().ok()?;
+        let calls = probe.text_calls.clone();
+        probe.end_recording();
+        calls
+    };
+    calls.sort_unstable();
+    calls.dedup();
+    Some(calls)
+}
+
+fn infer_ir_ranking_name_ref(
+    function: &Function,
+    object_id: Option<&str>,
+    main_state_probe: &Arc<Mutex<MainStateProbe>>,
+) -> Option<i32> {
+    let slot = ir_ranking_slot_from_id(object_id?, "ir_username")?;
+    let expected_ref = 119 + slot;
+    let refs = collect_text_refs(function, main_state_probe)?;
+    (refs.contains(&expected_ref)
+        && refs.iter().all(|ref_id| matches!(*ref_id, 1021) || *ref_id == expected_ref))
+    .then_some(expected_ref)
+}
+
+fn infer_ir_ranking_user_draw(
+    function: &Function,
+    main_state_probe: &Arc<Mutex<MainStateProbe>>,
+) -> Option<String> {
+    let refs = collect_text_refs(function, main_state_probe)?;
+    let ranking_ref = refs.iter().copied().find(|ref_id| (120..=129).contains(ref_id))?;
+    (refs.iter().all(|ref_id| matches!(*ref_id, 1021) || *ref_id == ranking_ref))
+        .then(|| format!("ir_ranking_user({})", ranking_ref - 119))
+}
+
+fn infer_ir_ranking_score_value_expr(
+    function: &Function,
+    object_id: Option<&str>,
+    main_state_probe: &Arc<Mutex<MainStateProbe>>,
+) -> Option<String> {
+    let slot = ir_ranking_slot_from_id(object_id?, "ir_scoreGraph")?;
+    let score_ref = 379 + slot;
+    if collect_number_refs(function, main_state_probe)? != [74, score_ref] {
+        return None;
+    }
+    for (notes, score) in [(100, 0), (100, 123), (100, 200), (2151, 4155)] {
+        let actual = call_number_float_with_values(
+            function,
+            main_state_probe,
+            BTreeMap::from([(74, notes), (score_ref, score)]),
+        )?;
+        let expected = score as f64 / (notes * 2) as f64;
+        if !approx_float_eq(actual, expected) {
+            return None;
+        }
+    }
+    Some(format!("bmz:ir_score_rate:{slot}"))
+}
+
+fn infer_ir_ranking_score_diff_value_expr(
+    function: &Function,
+    object_id: Option<&str>,
+    main_state_probe: &Arc<Mutex<MainStateProbe>>,
+) -> Option<String> {
+    let slot = ir_ranking_slot_from_id(object_id?, "ir_diff_score")?;
+    let ranking_ref = 379 + slot;
+    if collect_number_refs(function, main_state_probe)? != [170, 171, ranking_ref] {
+        return None;
+    }
+    for (old_score, new_score, ranking_score) in
+        [(0, 0, 0), (2293, 2284, 2293), (2200, 2284, 2293), (2300, 2284, 2293)]
+    {
+        let actual = call_number_expr_with_values(
+            function,
+            main_state_probe,
+            BTreeMap::from([(170, old_score), (171, new_score), (ranking_ref, ranking_score)]),
+        )?;
+        let expected = old_score.max(new_score) - ranking_score;
+        if actual != i64::from(expected) {
+            return None;
+        }
+    }
+    Some(format!("bmz:ir_score_diff:{slot}"))
+}
+
+fn infer_ir_score_rate_band(
+    function: &Function,
+    object_id: &str,
+    main_state_probe: &Arc<Mutex<MainStateProbe>>,
+) -> Option<String> {
+    let slot = ir_ranking_slot_from_id(object_id, "ir_scoreGraph")?;
+    let score_ref = 379 + slot;
+    if collect_number_refs(function, main_state_probe)? != [74, score_ref] {
+        return None;
+    }
+    for lower in 0..=9 {
+        for upper in lower + 1..=10 {
+            let mut matches = true;
+            'samples: for total_notes in [9, 10, 37] {
+                let max = total_notes * 2;
+                for ex_score in 0..=max {
+                    let actual = call_draw_with_numbers(
+                        function,
+                        main_state_probe,
+                        BTreeMap::from([(74, total_notes), (score_ref, ex_score)]),
+                    );
+                    let expected = 9 * ex_score >= lower * max && 9 * ex_score < upper * max;
+                    if actual != Some(expected) {
+                        matches = false;
+                        break 'samples;
+                    }
+                }
+            }
+            if matches {
+                return Some(format!("ir_score_rate_band({slot},{lower},{upper})"));
+            }
+        }
+    }
+    None
+}
+
+fn infer_score_rate_band(
+    function: &Function,
+    main_state_probe: &Arc<Mutex<MainStateProbe>>,
+) -> Option<String> {
+    if collect_number_refs(function, main_state_probe)? != [71, 74] {
+        return None;
+    }
+    for lower in 0..=9 {
+        for upper in lower + 1..=10 {
+            let mut matches = true;
+            'samples: for total_notes in [9, 10, 37] {
+                let max = total_notes * 2;
+                for ex_score in 0..=max {
+                    let actual = call_draw_with_numbers(
+                        function,
+                        main_state_probe,
+                        BTreeMap::from([(71, ex_score), (74, total_notes)]),
+                    );
+                    let expected = 9 * ex_score >= lower * max && 9 * ex_score < upper * max;
+                    if actual != Some(expected) {
+                        matches = false;
+                        break 'samples;
+                    }
+                }
+            }
+            if matches {
+                return Some(format!("score_rate_band({lower},{upper})"));
+            }
+        }
+    }
+    None
+}
+
+fn verify_nearest_rank_draw(
+    function: &Function,
+    main_state_probe: &Arc<Mutex<MainStateProbe>>,
+    grade: Option<&str>,
+    sign: &str,
+) -> bool {
+    if collect_number_refs(function, main_state_probe).as_deref() != Some(&[71, 74]) {
+        return false;
+    }
+    for total_notes in [9, 10, 37] {
+        for ex_score in 0..=total_notes * 2 {
+            let Some((actual_grade, actual_sign, _)) = wmii_nearest_rank(ex_score, total_notes)
+            else {
+                return false;
+            };
+            let expected = grade.is_none_or(|grade| grade == actual_grade) && sign == actual_sign;
+            if call_draw_with_numbers(
+                function,
+                main_state_probe,
+                BTreeMap::from([(71, ex_score), (74, total_notes)]),
+            ) != Some(expected)
+            {
+                return false;
+            }
+        }
+    }
+    true
+}
+
+fn wmii_nearest_rank(ex_score: i32, total_notes: i32) -> Option<(&'static str, &'static str, i32)> {
+    let max = total_notes.checked_mul(2)?;
+    if max <= 0 {
+        return None;
+    }
+    let ex_score = ex_score.clamp(0, max);
+    const RANKS: [(&str, i32); 9] = [
+        ("F", 0),
+        ("E", 2),
+        ("D", 3),
+        ("C", 4),
+        ("B", 5),
+        ("A", 6),
+        ("AA", 7),
+        ("AAA", 8),
+        ("MAX", 9),
+    ];
+    if ex_score >= max {
+        return Some(("MAX", "plus", 0));
+    }
+    let current = RANKS.iter().rposition(|(_, ninths)| ex_score * 9 >= ninths * max).unwrap_or(0);
+    let (grade, lower) = RANKS[current];
+    let (next_grade, upper) = RANKS.get(current + 1).copied().unwrap_or((grade, lower));
+    let lower_score = (lower * max + 8) / 9;
+    let upper_score = (upper * max + 8) / 9;
+    let lower_diff = (ex_score - lower_score).max(0);
+    let upper_diff = (upper_score - ex_score).max(0);
+    if lower_diff <= upper_diff {
+        Some((grade, "plus", lower_diff))
+    } else {
+        Some((next_grade, "minus", upper_diff))
+    }
 }
 
 fn call_draw_with_float_and_number(
@@ -5358,6 +5787,232 @@ fn lua_key_to_json_key(key: Value, path: &str, warnings: &mut Vec<String>) -> Re
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn load_constant_fallback_preserves_existing_stub_behavior() {
+        let lua = Lua::new();
+        let probe = Arc::new(Mutex::new(MainStateProbe::default()));
+        lua.globals()
+            .set("main_state", create_main_state_stub(&lua, probe.clone()).unwrap())
+            .unwrap();
+        let draw = lua
+            .load(
+                r#"return function()
+                    local ex = main_state.number(71)
+                    local max = main_state.number(74) * 2
+                    if max == 0 then return false end
+                    local rate = ex / max
+                    return rate >= 2 / 9 and rate < 3 / 9
+                end"#,
+            )
+            .eval::<Function>()
+            .unwrap();
+        let value = lua
+            .load(
+                r#"return function()
+                    local ex = main_state.number(71)
+                    local max = main_state.number(74) * 2
+                    if max == 0 then return 0 end
+                    return math.abs(ex - math.ceil(max * 8 / 9))
+                end"#,
+            )
+            .eval::<Function>()
+            .unwrap();
+        let timer_value =
+            lua.load("return function() return main_state.time() end").eval::<Function>().unwrap();
+        let constant = lua.load("return function() return 42 end").eval::<Function>().unwrap();
+
+        assert!(infer_constant_draw_at_load(&draw, &probe).is_some());
+        assert!(infer_constant_number_at_load(&value, &probe).is_some());
+        assert!(infer_constant_number_at_load(&timer_value, &probe).is_some());
+        assert_eq!(infer_constant_number_at_load(&constant, &probe).as_deref(), Some("42"));
+    }
+
+    #[test]
+    fn infers_wmii_result_score_runtime_expressions() {
+        let lua = Lua::new();
+        let probe = Arc::new(Mutex::new(MainStateProbe::default()));
+        lua.globals()
+            .set("main_state", create_main_state_stub(&lua, probe.clone()).unwrap())
+            .unwrap();
+        let functions = lua
+            .load(
+                r#"
+                local ranks = {
+                    {name="F", value=0/9}, {name="E", value=2/9},
+                    {name="D", value=3/9}, {name="C", value=4/9},
+                    {name="B", value=5/9}, {name="A", value=6/9},
+                    {name="AA", value=7/9}, {name="AAA", value=8/9},
+                    {name="MAX", value=1},
+                }
+                local function info()
+                    local ex = main_state.number(71)
+                    local max = main_state.number(74) * 2
+                    if max == 0 then return nil end
+                    if ex >= max then return {target="MAX", sign="+", diff=0} end
+                    local current = 1
+                    for i = 1, #ranks do
+                        if ex / max >= ranks[i].value then current = i else break end
+                    end
+                    local cur, next = ranks[current], ranks[current + 1]
+                    local lower = math.ceil(cur.value * max)
+                    local upper = math.ceil(next.value * max)
+                    local to_lower = math.max(0, ex - lower)
+                    local to_upper = math.max(0, upper - ex)
+                    if to_lower <= to_upper then
+                        return {target=cur.name, sign="+", diff=to_lower}
+                    end
+                    return {target=next.name, sign="-", diff=to_upper}
+                end
+                return {
+                    band = function()
+                        local ex = main_state.number(71)
+                        local max = main_state.number(74) * 2
+                        if max == 0 then return false end
+                        return ex / max >= 2/9 and ex / max < 3/9
+                    end,
+                    max = function()
+                        local ex = main_state.number(71)
+                        local max = main_state.number(74) * 2
+                        if max == 0 then return false end
+                        return ex / max == 1
+                    end,
+                    diff = function() local i=info(); return i and i.diff or 0 end,
+                    aaa_minus = function()
+                        local i=info(); return i and i.target == "AAA" and i.sign == "-"
+                    end,
+                    plus = function() local i=info(); return i and i.sign == "+" end,
+                    text = function() return main_state.text(1001).." "..main_state.text(1002) end,
+                }
+                "#,
+            )
+            .eval::<Table>()
+            .unwrap();
+
+        assert_eq!(
+            infer_score_rate_band(&functions.get::<Function>("band").unwrap(), &probe).as_deref(),
+            Some("score_rate_band(2,3)")
+        );
+        assert_eq!(
+            infer_score_rate_band(&functions.get::<Function>("max").unwrap(), &probe).as_deref(),
+            Some("score_rate_band(9,10)")
+        );
+        assert_eq!(
+            infer_nearest_rank_diff_value_expr(
+                &functions.get::<Function>("diff").unwrap(),
+                Some("diff_rank"),
+                &probe,
+            )
+            .as_deref(),
+            Some("bmz:nearest_rank_diff_abs")
+        );
+        assert_eq!(
+            infer_result_score_draw(
+                &functions.get::<Function>("aaa_minus").unwrap(),
+                Some("nextRankAAA"),
+                &probe,
+            )
+            .as_deref(),
+            Some("nearest_rank(AAA,minus)")
+        );
+        assert_eq!(
+            infer_result_score_draw(
+                &functions.get::<Function>("plus").unwrap(),
+                Some("diff_plus"),
+                &probe,
+            )
+            .as_deref(),
+            Some("nearest_rank_sign(plus)")
+        );
+        assert_eq!(
+            infer_text_concat_expr(&functions.get::<Function>("text").unwrap(), &probe).as_deref(),
+            Some("bmz:text_concat:1001:1002")
+        );
+    }
+
+    #[test]
+    fn infers_wmii_result_ir_ranking_runtime_expressions() {
+        let lua = Lua::new();
+        let probe = Arc::new(Mutex::new(MainStateProbe::default()));
+        lua.globals()
+            .set("main_state", create_main_state_stub(&lua, probe.clone()).unwrap())
+            .unwrap();
+        lua.globals().set("Expand_op", 1).unwrap();
+        let functions = lua
+            .load(
+                r#"
+                return {
+                    graph = function()
+                        return main_state.number(382) / (main_state.number(74) * 2)
+                    end,
+                    diff = function()
+                        return math.max(main_state.number(170), main_state.number(171))
+                            - main_state.number(382)
+                    end,
+                    band = function()
+                        local rate = main_state.number(382) / (main_state.number(74) * 2)
+                        return rate >= 7/9 and rate < 8/9 and Expand_op == 1
+                    end,
+                    name = function()
+                        local current = main_state.text(122)
+                        local own = main_state.text(1021)
+                        if current == own then return own end
+                        return main_state.text(122)
+                    end,
+                    own = function()
+                        return main_state.text(122) == main_state.text(1021) and Expand_op == 1
+                    end,
+                }
+                "#,
+            )
+            .eval::<Table>()
+            .unwrap();
+
+        assert_eq!(
+            infer_ir_ranking_score_value_expr(
+                &functions.get::<Function>("graph").unwrap(),
+                Some("ir_scoreGraph3"),
+                &probe,
+            )
+            .as_deref(),
+            Some("bmz:ir_score_rate:3")
+        );
+        assert_eq!(
+            infer_ir_ranking_score_diff_value_expr(
+                &functions.get::<Function>("diff").unwrap(),
+                Some("ir_diff_score3"),
+                &probe,
+            )
+            .as_deref(),
+            Some("bmz:ir_score_diff:3")
+        );
+        assert_eq!(
+            infer_result_score_draw(
+                &functions.get::<Function>("band").unwrap(),
+                Some("ir_scoreGraph3"),
+                &probe,
+            )
+            .as_deref(),
+            Some("ir_score_rate_band(3,7,8)")
+        );
+        assert_eq!(
+            infer_ir_ranking_name_ref(
+                &functions.get::<Function>("name").unwrap(),
+                Some("ir_username3"),
+                &probe,
+            ),
+            Some(122)
+        );
+        assert_eq!(
+            infer_result_score_draw(
+                &functions.get::<Function>("own").unwrap(),
+                Some("irYouFrame"),
+                &probe,
+            )
+            .as_deref(),
+            Some("ir_ranking_user(3)")
+        );
+    }
 
     #[test]
     fn maps_peacefulplay_keylogger_graph_ids_to_builtin_expressions() {

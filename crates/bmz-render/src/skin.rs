@@ -1120,6 +1120,9 @@ pub struct SkinDrawState {
     pub failed_ms: Option<i32>,
     /// Result timing distribution average (NUMBER_AVERAGE_TIMING=374).
     pub average_timing_ms: Option<f32>,
+    /// Result全ノートの平均絶対判定ずれ us (NUMBER_AVERAGE_DURATION=372/373)。
+    /// 未判定ノートは beatoraja と同じく 1,000,000us として集計する。
+    pub average_duration_us: Option<i64>,
     /// Result timing distribution standard deviation (NUMBER_STDDEV_TIMING=376).
     pub stddev_timing_ms: Option<f32>,
     /// OPTION_AUTOPLAYON (33) / OPTION_AUTOPLAYOFF (32) 用。
@@ -1335,6 +1338,7 @@ impl Default for SkinDrawState {
             result_saved_replay_slots: [false; 4],
             failed_ms: None,
             average_timing_ms: None,
+            average_duration_us: None,
             stddev_timing_ms: None,
             autoplay: false,
             skin_loaded: true,
@@ -6181,6 +6185,7 @@ impl SkinDocumentRenderExt for SkinDocument {
     ) -> Option<SkinRenderItem> {
         let source = sources.get(&graph.src)?;
         let (fill_multiplier, uv_ratio) = graph_fill_dimensions(graph, state);
+        let fill_from_right = frame.w < 0;
         let source_w = source.source_size.width.max(1.0);
         let source_h = source.source_size.height.max(1.0);
         let base_uv = TextureRegion {
@@ -6203,9 +6208,16 @@ impl SkinDocumentRenderExt for SkinDocument {
                 },
             )
         } else {
-            // horizontal: fill from left
+            // horizontal: positive destinations fill from left. beatoraja keeps a
+            // negative destination width and therefore fills leftwards from the
+            // destination x; after rect normalization that is the right edge.
+            let clipped_w = dst.width * fill_multiplier;
             (
-                Rect { width: dst.width * fill_multiplier, ..dst },
+                Rect {
+                    x: if fill_from_right { dst.x + dst.width - clipped_w } else { dst.x },
+                    width: clipped_w,
+                    ..dst
+                },
                 TextureRegion { width: base_uv.width * uv_ratio, ..base_uv },
             )
         };
@@ -6347,7 +6359,11 @@ fn skin_image_index_number(ref_id: i32, state: &SkinDrawState) -> Option<i64> {
     match ref_id {
         11 if state.select_screen => Some(state.select_mode_index as i64),
         12 if state.select_screen => Some(state.select_sort_index as i64),
-        40 => Some(state.select_gauge_index as i64),
+        // beatoraja's `gaugetype_1p` image index is state-dependent: MusicSelector
+        // reads the configured gauge, while Play/Result read the gauge that is
+        // actually active after gauge auto shift has been applied.
+        40 if state.select_screen => Some(state.select_gauge_index as i64),
+        40 => Some(state.gauge_type.max(0) as i64),
         SKIN_REF_PLAY_GAUGE_TYPE => Some(state.gauge_type.max(0) as i64),
         41 => Some(state.select_target_index as i64),
         42 => Some(arrange_ref_index(state) as i64),
@@ -6384,6 +6400,11 @@ fn skin_image_index_number(ref_id: i32, state: &SkinDrawState) -> Option<i64> {
         }
         371 if state.result_failed.is_some() => result_mybest_clear_index_display(state),
         371 => state.target_clear_index,
+        // beatoraja's image/index property table is separate from numeric values:
+        // value 390..399 is ranking position, while image 390..399 is clear type.
+        390..=399 => {
+            ir_ranking_entry(&state.ir_ranking, ref_id - 390).and_then(|entry| entry.clear_index)
+        }
         ref_id if random_lane_ref_slot(ref_id).is_some() => {
             skin_random_lane_ref_number(ref_id, state)
         }
@@ -7327,21 +7348,31 @@ fn display_signed_number_digits_with_row_order(
         SignedNumberRowOrder::NegativeFirst => divx as u8,
     };
     let row_offset = if value < 0 { negative_row } else { positive_row };
-    let inner_width = max_digits;
     let abs = value.unsigned_abs();
-    let abs_text = if zero_pad && inner_width > 0 {
-        format!("{:0width$}", abs, width = inner_width)
-    } else {
-        abs.to_string()
-    };
-    let trimmed: String = if inner_width > 0 && abs_text.len() > inner_width {
-        abs_text[abs_text.len() - inner_width..].to_string()
+    let abs_text = abs.to_string();
+    let numeric_width = max_digits.saturating_sub(1);
+    let trimmed = if zero_pad {
+        if numeric_width == 0 {
+            String::new()
+        } else {
+            let padded = format!("{:0width$}", abs, width = numeric_width);
+            if padded.len() > numeric_width {
+                padded[padded.len() - numeric_width..].to_string()
+            } else {
+                padded
+            }
+        }
+    } else if abs_text.len() > max_digits {
+        abs_text[abs_text.len() - max_digits..].to_string()
     } else {
         abs_text
     };
-    let mut digits = Vec::with_capacity(trimmed.len() + 1);
-    // 先頭: 符号セル (sign image index = 11)
-    digits.push(11u8 + row_offset);
+    let sign_visible = zero_pad || trimmed.len() < max_digits;
+    let mut digits = Vec::with_capacity(max_digits);
+    if sign_visible {
+        // beatoraja の `keta` (`digit`) は符号セルを含む総枠数。
+        digits.push(11u8 + row_offset);
+    }
     for byte in trimmed.bytes() {
         if byte.is_ascii_digit() {
             digits.push((byte - b'0') + row_offset);
@@ -7431,6 +7462,38 @@ fn eval_skin_draw_condition(condition: &str, state: &SkinDrawState) -> bool {
 }
 
 fn eval_skin_draw_term(term: &str, state: &SkinDrawState) -> Option<bool> {
+    if let Some((slot, lower, upper)) = parse_ir_score_rate_band_predicate(term) {
+        let score = ir_ranking_entry(&state.ir_ranking, slot - 1)?.ex_score?;
+        let max_score =
+            i64::from(state.select_total_notes.max(state.total_notes)).checked_mul(2)?;
+        if max_score <= 0 {
+            return Some(false);
+        }
+        let score = score.clamp(0, max_score);
+        return Some(score * 9 >= max_score * lower && score * 9 < max_score * upper);
+    }
+    if let Some(slot) = parse_ir_ranking_user_predicate(term) {
+        let entry = ir_ranking_entry(&state.ir_ranking, slot - 1)?;
+        let user_name = state.ir_ranking.user_name.as_str();
+        return Some(!user_name.is_empty() && entry.player_name.as_str() == user_name);
+    }
+    if let Some((lower, upper)) = parse_score_rate_band_predicate(term) {
+        let score = i64::from(state.select_ex_score.unwrap_or(state.ex_score));
+        let total_notes = i64::from(state.select_total_notes.max(state.total_notes));
+        let max_score = total_notes.checked_mul(2)?;
+        if max_score <= 0 {
+            return Some(false);
+        }
+        let score = score.clamp(0, max_score);
+        return Some(score * 9 >= max_score * lower && score * 9 < max_score * upper);
+    }
+    if let Some((grade, sign)) = parse_nearest_rank_predicate(term) {
+        let diff = nearest_grade_diff(state)?;
+        return Some(diff.grade == grade && nearest_rank_sign_matches(diff.value, sign));
+    }
+    if let Some(sign) = parse_nearest_rank_sign_predicate(term) {
+        return nearest_grade_diff(state).map(|diff| nearest_rank_sign_matches(diff.value, sign));
+    }
     if let Some((mode, digits)) = parse_gauge_value_digits_predicate(term) {
         let value = match mode {
             "percent" => clamped_gauge_value(state) * 100.0 / state.gauge_max.max(1.0),
@@ -7483,6 +7546,57 @@ fn eval_skin_draw_term(term: &str, state: &SkinDrawState) -> Option<bool> {
         });
     }
     None
+}
+
+fn parse_score_rate_band_predicate(term: &str) -> Option<(i64, i64)> {
+    let inner = term.strip_prefix("score_rate_band(")?.strip_suffix(')')?;
+    let (lower, upper) = inner.split_once(',')?;
+    let lower = lower.trim().parse::<i64>().ok()?;
+    let upper = upper.trim().parse::<i64>().ok()?;
+    (0 <= lower && lower < upper && upper <= 10).then_some((lower, upper))
+}
+
+fn parse_ir_score_rate_band_predicate(term: &str) -> Option<(i32, i64, i64)> {
+    let inner = term.strip_prefix("ir_score_rate_band(")?.strip_suffix(')')?;
+    let mut args = inner.split(',').map(str::trim);
+    let slot = args.next()?.parse::<i32>().ok()?;
+    let lower = args.next()?.parse::<i64>().ok()?;
+    let upper = args.next()?.parse::<i64>().ok()?;
+    if args.next().is_some()
+        || !(1..=10).contains(&slot)
+        || !(0 <= lower && lower < upper && upper <= 10)
+    {
+        return None;
+    }
+    Some((slot, lower, upper))
+}
+
+fn parse_ir_ranking_user_predicate(term: &str) -> Option<i32> {
+    let slot = term.strip_prefix("ir_ranking_user(")?.strip_suffix(')')?.trim().parse().ok()?;
+    (1..=10).contains(&slot).then_some(slot)
+}
+
+fn parse_nearest_rank_predicate(term: &str) -> Option<(&str, &str)> {
+    let inner = term.strip_prefix("nearest_rank(")?.strip_suffix(')')?;
+    let (grade, sign) = inner.split_once(',')?;
+    let grade = grade.trim();
+    let sign = sign.trim();
+    (matches!(grade, "F" | "E" | "D" | "C" | "B" | "A" | "AA" | "AAA" | "MAX")
+        && matches!(sign, "plus" | "minus"))
+    .then_some((grade, sign))
+}
+
+fn parse_nearest_rank_sign_predicate(term: &str) -> Option<&str> {
+    let sign = term.strip_prefix("nearest_rank_sign(")?.strip_suffix(')')?.trim();
+    matches!(sign, "plus" | "minus").then_some(sign)
+}
+
+fn nearest_rank_sign_matches(value: i64, sign: &str) -> bool {
+    match sign {
+        "plus" => value >= 0,
+        "minus" => value < 0,
+        _ => false,
+    }
 }
 
 fn parse_gauge_value_digits_predicate(term: &str) -> Option<(&str, usize)> {
@@ -7780,6 +7894,15 @@ fn clamped_gauge_value(state: &SkinDrawState) -> f32 {
 }
 
 fn skin_builtin_value_f32(expr: &str, state: &SkinDrawState) -> Option<f32> {
+    if let Some(slot) = expr.trim().strip_prefix("bmz:ir_score_rate:") {
+        let slot = slot.parse::<i32>().ok()?;
+        if !(1..=10).contains(&slot) {
+            return None;
+        }
+        let score = ir_ranking_entry(&state.ir_ranking, slot - 1)?.ex_score?;
+        let max_score = state.select_total_notes.max(state.total_notes).checked_mul(2)?;
+        return Some(if max_score == 0 { 0.0 } else { score as f32 / max_score as f32 });
+    }
     if expr.trim() == "bmz:keylogger_nps" {
         return Some(state.keylogger_nps as f32);
     }
@@ -7857,6 +7980,18 @@ fn keylogger_graph_value(expr: &str, state: &SkinDrawState) -> Option<f32> {
 }
 
 fn skin_builtin_value_i64(expr: &str, state: &SkinDrawState) -> Option<i64> {
+    if let Some(slot) = expr.trim().strip_prefix("bmz:ir_score_diff:") {
+        let slot = slot.parse::<i32>().ok()?;
+        if !(1..=10).contains(&slot) {
+            return None;
+        }
+        let local_best = skin_state_number(170, state)?.max(skin_state_number(171, state)?);
+        let ranking_score = ir_ranking_entry(&state.ir_ranking, slot - 1)?.ex_score?;
+        return local_best.checked_sub(ranking_score);
+    }
+    if expr.trim() == "bmz:nearest_rank_diff_abs" {
+        return nearest_grade_diff(state).map(|diff| diff.value.abs());
+    }
     let number = skin_builtin_value_f32(expr, state)?;
     Some(match expr.trim() {
         SKIN_EXPR_DEFAULT_CHART_TOTAL_COUNT | SKIN_EXPR_DEFAULT_CHART_GAUGE => {
@@ -8385,7 +8520,9 @@ fn skin_state_number(ref_id: i32, state: &SkinDrawState) -> Option<i64> {
         527 => state.judge_timing_ms[2].map(|ms| -(ms as i64)),
         // 判定タイミングオフセット設定値 (NUMBER_JUDGETIMING=12)
         12 => Some(state.judge_timing_offset_ms as i64),
-        // Result timing distribution stats.
+        // Result judgement duration / timing distribution stats.
+        372 => state.average_duration_us.map(|value| value / 1_000),
+        373 => state.average_duration_us.map(|value| (value / 10) % 100),
         374 => state.average_timing_ms.map(|value| value as i64),
         375 => state.average_timing_ms.map(timing_afterdot),
         376 => state.stddev_timing_ms.map(|value| value as i64),
@@ -10235,6 +10372,9 @@ fn skin_state_text_with_draw_state(
     draw_state: Option<&SkinDrawState>,
     state: &SkinTextState<'_>,
 ) -> String {
+    if text.value_expr.trim() == "bmz:text_concat:1001:1002" {
+        return format!("{} {}", state.table_text_primary, state.table_level);
+    }
     if text.value_expr.trim() == SKIN_EXPR_RESULT_TABLE_TITLE {
         return format!(
             "{} {} {}",
@@ -10355,13 +10495,15 @@ fn skin_state_text_with_draw_state(
         1001 => state.table_text_primary.to_string(),
         1002 => state.table_level.to_string(),
         1003 => state.table_text_fallback.to_string(),
-        1020 | 1021 => {
+        1010 => env!("CARGO_PKG_VERSION").to_string(),
+        1020 => {
             if matches!(state.ir_ranking.state, crate::scene::ResultIrState::Offline) {
                 String::new()
             } else {
                 "BMZ IR".to_string()
             }
         }
+        1021 => state.ir_ranking.user_name.as_str().to_string(),
         200..=209 => select_target_name_by_offset(state.target, text.ref_id - 210),
         210..=219 => select_target_name_by_offset(state.target, text.ref_id - 209),
         1000 => state.current_folder.to_string(),
@@ -13601,6 +13743,20 @@ mod tests {
     }
 
     #[test]
+    fn wmii_result_draw_predicates_use_runtime_score_and_nearest_rank() {
+        let near_aa = SkinDrawState { ex_score: 155, total_notes: 100, ..Default::default() };
+        assert!(eval_skin_draw_condition("score_rate_band(6,7)", &near_aa));
+        assert!(!eval_skin_draw_condition("score_rate_band(7,8)", &near_aa));
+        assert!(eval_skin_draw_condition("nearest_rank(AA,minus)", &near_aa));
+        assert!(eval_skin_draw_condition("nearest_rank_sign(minus)", &near_aa));
+        assert!(!eval_skin_draw_condition("nearest_rank(A,plus)", &near_aa));
+
+        let max = SkinDrawState { ex_score: 200, total_notes: 100, ..Default::default() };
+        assert!(eval_skin_draw_condition("score_rate_band(9,10)", &max));
+        assert!(eval_skin_draw_condition("nearest_rank(MAX,plus)", &max));
+    }
+
+    #[test]
     fn judge_line_with_lift_offset_still_renders_at_minimum_lift() {
         let document: SkinDocument = serde_json::from_str(
             r#"
@@ -15221,6 +15377,19 @@ mod tests {
                 total_notes: 5,
                 judge_counts: DisplayJudgeCounts { pgreat: 5, ..Default::default() },
                 end_of_note_ms: Some(0),
+                ..Default::default()
+            }
+        ));
+        let ir_wait_draw = "timer(173) == timer_off and timer(174) == timer_off";
+        assert!(eval_skin_draw_condition(ir_wait_draw, &SkinDrawState::default()));
+        assert!(!eval_skin_draw_condition(
+            ir_wait_draw,
+            &SkinDrawState {
+                ir_ranking: crate::scene::ResultIrSnapshot {
+                    connect_begin_ms: Some(500),
+                    connect_success_ms: Some(100),
+                    ..Default::default()
+                },
                 ..Default::default()
             }
         ));
@@ -17812,7 +17981,7 @@ mod tests {
     }
 
     #[test]
-    fn judge_timing_value_digit_counts_numeric_digits_after_sign() {
+    fn judge_timing_value_omits_sign_when_numeric_digits_fill_all_cells() {
         let document: SkinDocument = serde_json::from_str(
             r#"
             {
@@ -17837,10 +18006,9 @@ mod tests {
             })
             .collect();
 
-        assert_eq!(digit_uvs.len(), 3);
-        assert!(approx_eq(digit_uvs[0], 11.0 / 12.0), "first cell should be plus sign");
-        assert!(approx_eq(digit_uvs[1], 1.0 / 12.0), "second cell should be tens digit");
-        assert!(approx_eq(digit_uvs[2], 2.0 / 12.0), "third cell should be ones digit");
+        assert_eq!(digit_uvs.len(), 2);
+        assert!(approx_eq(digit_uvs[0], 1.0 / 12.0), "first cell should be tens digit");
+        assert!(approx_eq(digit_uvs[1], 2.0 / 12.0), "second cell should be ones digit");
     }
 
     #[test]
@@ -19879,23 +20047,27 @@ mod tests {
     #[test]
     fn display_signed_number_digits_uses_sign_cell_and_row_offset() {
         // divx=12, divy=2 のレイアウト想定
-        // 正数 +12 (max_digits=5): [sign+(11), blank(10 or 0), blank, 1, 2]
-        // 実装は内側のみ zero_pad、行0
+        // beatoraja の digit=5 は符号を含むため、数値部分は4枠。
         let positive = display_signed_number_digits(12, 5, true, 12);
-        assert_eq!(positive.first(), Some(&11)); // sign cell
-        assert_eq!(positive.last(), Some(&2));
+        assert_eq!(positive, vec![11, 0, 0, 1, 2]);
         assert!(positive.iter().all(|&d| d < 12), "positive digits should be in row 0");
 
         // 負数 -12 (max_digits=5): row 1 (offset=12)
         let negative = display_signed_number_digits(-12, 5, true, 12);
-        assert_eq!(negative.first(), Some(&(11 + 12))); // sign cell row 1
-        assert_eq!(negative.last(), Some(&(2 + 12)));
+        assert_eq!(negative, vec![23, 12, 12, 13, 14]);
         assert!(negative.iter().all(|&d| d >= 12), "negative digits should be in row 1");
 
         // 0 は正側
         let zero = display_signed_number_digits(0, 5, true, 12);
-        assert_eq!(zero.first(), Some(&11));
+        assert_eq!(zero, vec![11, 0, 0, 0, 0]);
         assert!(zero.iter().all(|&d| d < 12));
+
+        // WMII IR差分: digit=5, zeropadding=4 は符号1枠 + 数値4枠。
+        assert_eq!(display_signed_number_digits(2284, 5, true, 12), vec![11, 2, 2, 8, 4]);
+        assert_eq!(display_signed_number_digits(-9, 5, true, 12), vec![23, 12, 12, 12, 21]);
+
+        // ゼロ埋めなしで全枠が数値に埋まる場合、beatoraja同様に符号枠は出ない。
+        assert_eq!(display_signed_number_digits(12_345, 5, false, 12), vec![1, 2, 3, 4, 5]);
 
         // NUMBER_DIFF_NEXTRANK (154) も同じ符号セル付き mimage レイアウトを使う。
         assert_eq!(display_signed_number_digits(-34, 4, false, 12), vec![23, 15, 16]);
@@ -20008,6 +20180,7 @@ mod tests {
             result_failed: Some(false),
             result_arrange_index: 9,
             average_timing_ms: Some(-12.34),
+            average_duration_us: Some(345_670),
             stddev_timing_ms: Some(56.78),
             ..SkinDrawState::default()
         };
@@ -20037,6 +20210,10 @@ mod tests {
         assert_eq!(skin_state_number(178, &state), Some(-2));
         assert_eq!(skin_state_number(370, &state), Some(5));
         assert_eq!(skin_state_number(371, &state), Some(4));
+        assert_eq!(skin_state_number(372, &state), Some(345));
+        assert_eq!(skin_state_number(373, &state), Some(67));
+        assert_eq!(skin_state_number(374, &state), Some(-12));
+        assert_eq!(skin_state_number(375, &state), Some(-34));
         assert_eq!(skin_image_index_number(370, &state), Some(5));
         assert_eq!(skin_image_index_number(371, &state), Some(4));
         assert!(test_skin_op(320, &[], &state));
@@ -20411,11 +20588,13 @@ mod tests {
                     crate::scene::ResultIrRankingEntrySnapshot {
                         rank: Some(1),
                         ex_score: Some(2000),
+                        clear_index: Some(8),
                         player_name: crate::scene::ResultIrRankingName::from_display_name("Alice"),
                     },
                     crate::scene::ResultIrRankingEntrySnapshot {
                         rank: Some(2),
                         ex_score: Some(1900),
+                        clear_index: Some(6),
                         player_name: crate::scene::ResultIrRankingName::from_display_name("Bob"),
                     },
                     crate::scene::ResultIrRankingEntrySnapshot::default(),
@@ -20443,6 +20622,8 @@ mod tests {
         assert_eq!(skin_state_number(381, &loaded), Some(1900));
         assert_eq!(skin_state_number(390, &loaded), Some(1));
         assert_eq!(skin_state_number(391, &loaded), Some(2));
+        assert_eq!(skin_image_index_number(390, &loaded), Some(8));
+        assert_eq!(skin_image_index_number(391, &loaded), Some(6));
         assert_eq!(skin_state_number(382, &loaded), None);
         assert!(!test_skin_op(601, &[], &loaded));
         assert!(test_skin_op(602, &[], &loaded));
@@ -20477,6 +20658,76 @@ mod tests {
             ..SkinDrawState::default()
         };
         assert!(test_skin_op(603, &[], &no_player));
+    }
+
+    #[test]
+    fn wmii_ir_score_graph_and_user_highlight_use_ranking_snapshot() {
+        let state = SkinDrawState {
+            total_notes: 100,
+            ir_ranking: crate::scene::ResultIrSnapshot {
+                state: crate::scene::ResultIrState::Loaded,
+                user_name: crate::scene::ResultIrRankingName::from_display_name("Alice"),
+                entries: [
+                    crate::scene::ResultIrRankingEntrySnapshot {
+                        rank: Some(1),
+                        ex_score: Some(155),
+                        clear_index: Some(8),
+                        player_name: crate::scene::ResultIrRankingName::from_display_name("Alice"),
+                    },
+                    crate::scene::ResultIrRankingEntrySnapshot::default(),
+                    crate::scene::ResultIrRankingEntrySnapshot::default(),
+                    crate::scene::ResultIrRankingEntrySnapshot::default(),
+                    crate::scene::ResultIrRankingEntrySnapshot::default(),
+                    crate::scene::ResultIrRankingEntrySnapshot::default(),
+                    crate::scene::ResultIrRankingEntrySnapshot::default(),
+                    crate::scene::ResultIrRankingEntrySnapshot::default(),
+                    crate::scene::ResultIrRankingEntrySnapshot::default(),
+                    crate::scene::ResultIrRankingEntrySnapshot::default(),
+                ],
+                ..Default::default()
+            },
+            ..SkinDrawState::default()
+        };
+
+        assert_eq!(skin_builtin_value_f32("bmz:ir_score_rate:1", &state), Some(0.775));
+        assert!(eval_skin_draw_condition("ir_score_rate_band(1,6,7)", &state));
+        assert!(!eval_skin_draw_condition("ir_score_rate_band(1,7,8)", &state));
+        assert!(eval_skin_draw_condition("ir_ranking_user(1)", &state));
+        assert!(!eval_skin_draw_condition("ir_ranking_user(2)", &state));
+    }
+
+    #[test]
+    fn wmii_ir_score_diff_uses_best_of_old_and_current_score() {
+        let mut entries =
+            std::array::from_fn(|_| crate::scene::ResultIrRankingEntrySnapshot::default());
+        entries[0] = crate::scene::ResultIrRankingEntrySnapshot {
+            rank: Some(1),
+            ex_score: Some(2293),
+            clear_index: Some(9),
+            player_name: crate::scene::ResultIrRankingName::from_display_name("Alice"),
+        };
+        let mut state = SkinDrawState {
+            ex_score: 2284,
+            total_notes: 1155,
+            past_notes: 1155,
+            previous_best_ex_score: Some(2293),
+            result_failed: Some(false),
+            ir_ranking: crate::scene::ResultIrSnapshot {
+                state: crate::scene::ResultIrState::Loaded,
+                entries,
+                ..Default::default()
+            },
+            ..SkinDrawState::default()
+        };
+
+        assert_eq!(skin_builtin_value_i64("bmz:ir_score_diff:1", &state), Some(0));
+
+        state.previous_best_ex_score = Some(2200);
+        assert_eq!(skin_builtin_value_i64("bmz:ir_score_diff:1", &state), Some(-9));
+
+        state.previous_best_ex_score = Some(2293);
+        state.ir_ranking.entries[0].ex_score = Some(2300);
+        assert_eq!(skin_builtin_value_i64("bmz:ir_score_diff:1", &state), Some(-7));
     }
 
     #[test]
@@ -20666,6 +20917,7 @@ mod tests {
     #[test]
     fn skin_state_imageset_index_maps_select_options() {
         let state = SkinDrawState {
+            select_screen: true,
             select_arrange_index: 2,
             select_arrange_2p_index: 5,
             select_double_option_index: 3,
@@ -20689,6 +20941,26 @@ mod tests {
         assert_eq!(skin_state_imageset_index(340, &state), Some(2));
         assert_eq!(skin_state_imageset_index(301, &state), Some(0));
         assert_eq!(skin_state_imageset_index(500, &state), None);
+    }
+
+    #[test]
+    fn result_gauge_type_image_index_uses_applied_gauge() {
+        let state = SkinDrawState {
+            select_screen: false,
+            select_gauge_index: bmz_core::clear::GaugeType::Normal as usize,
+            gauge_type: bmz_core::clear::GaugeType::ExHard as i32,
+            result_failed: Some(false),
+            ..SkinDrawState::default()
+        };
+
+        assert_eq!(
+            skin_state_imageset_index(40, &state),
+            Some(bmz_core::clear::GaugeType::ExHard as usize)
+        );
+        assert_eq!(
+            skin_image_ref_number(40, &state),
+            Some(bmz_core::clear::GaugeType::ExHard as i64)
+        );
     }
 
     #[test]
@@ -22144,6 +22416,54 @@ mod tests {
     }
 
     #[test]
+    fn lua_graph_with_negative_width_fills_leftwards_from_destination_x() {
+        let document: SkinDocument = serde_json::from_str(
+            r#"
+            {
+                "w": 1280, "h": 720,
+                "source": [{ "id": "bar-src", "path": "bar.png" }],
+                "graph": [{
+                    "id": "pg_fast", "src": "bar-src", "x": 0, "y": 0, "w": 1, "h": 1, "angle": 0,
+                    "value_expr": "(number(410))/(number(410)+number(411))"
+                }],
+                "destination": [
+                    { "id": "pg_fast", "dst": [{ "time": 0, "x": 640, "y": 0, "w": -640, "h": 8 }] }
+                ]
+            }
+            "#,
+        )
+        .unwrap();
+
+        let sources = mock_source("bar-src", 1.0, 1.0);
+        let state = SkinDrawState {
+            fast_slow_counts: Some(crate::snapshot::FastSlowJudgeCounts {
+                fast_pgreat: 1,
+                slow_pgreat: 3,
+                ..crate::snapshot::FastSlowJudgeCounts::default()
+            }),
+            ..SkinDrawState::default()
+        };
+        assert!(
+            approx_eq(graph_raw_value(&document.graph[0], &state), 0.25),
+            "WMII graph expression must preserve the FAST ratio"
+        );
+        let items = document.static_image_render_items(&sources, &state);
+
+        assert_eq!(items.len(), 1);
+        let SkinRenderItem::Image { rect, uv, .. } = &items[0] else { panic!() };
+        assert!(
+            approx_eq(rect.width, 0.125),
+            "25% of half-canvas width: got rect {rect:?}, uv {uv:?}"
+        );
+        assert!(
+            approx_eq(rect.x, 0.375),
+            "negative width must remain anchored at destination x: got {}",
+            rect.x
+        );
+        assert!(approx_eq(uv.width, 0.25), "source UV should be clipped to 25%: got {}", uv.width);
+    }
+
+    #[test]
     fn graph_music_progress_uses_play_progress() {
         // BARGRAPH_MUSIC_PROGRESS (101): play_progress=0.75 → bar is 75% full
         let document: SkinDocument = serde_json::from_str(
@@ -22674,6 +22994,16 @@ mod tests {
     }
 
     #[test]
+    fn wmii_nearest_rank_diff_value_uses_absolute_runtime_difference() {
+        let state = SkinDrawState { ex_score: 155, total_notes: 100, ..Default::default() };
+        let value = SkinValueDef {
+            value_expr: "bmz:nearest_rank_diff_abs".to_string(),
+            ..Default::default()
+        };
+        assert_eq!(skin_value_number(&value, &state), Some(1));
+    }
+
+    #[test]
     fn skin_value_number_evaluates_peaceful_play_gauge_values() {
         let state = SkinDrawState { gauge: 78.75, gauge_max: 120.0, ..Default::default() };
         let value =
@@ -23066,10 +23396,12 @@ mod tests {
     fn skin_state_text_maps_string_refs() {
         let ir_ranking = crate::scene::ResultIrSnapshot {
             state: crate::scene::ResultIrState::Loaded,
+            user_name: crate::scene::ResultIrRankingName::from_display_name("hyrorre"),
             entries: [
                 crate::scene::ResultIrRankingEntrySnapshot {
                     rank: Some(1),
                     ex_score: Some(2000),
+                    clear_index: Some(8),
                     player_name: crate::scene::ResultIrRankingName::from_display_name("Alice"),
                 },
                 crate::scene::ResultIrRankingEntrySnapshot::default(),
@@ -23141,7 +23473,7 @@ mod tests {
         assert_eq!(skin_state_text(&make_text(159), &state), "Stage 10");
         // STRING_IR_NAME / STRING_IR_USERNAME
         assert_eq!(skin_state_text(&make_text(1020), &state), "BMZ IR");
-        assert_eq!(skin_state_text(&make_text(1021), &state), "BMZ IR");
+        assert_eq!(skin_state_text(&make_text(1021), &state), "hyrorre");
         // Unknown ref → empty
         assert_eq!(skin_state_text(&make_text(99), &state), "");
 
@@ -23592,6 +23924,13 @@ mod tests {
         assert_eq!(skin_state_text(&by_ref(1001), &state), "Insane");
         assert_eq!(skin_state_text(&by_ref(1002), &state), "★12");
         assert_eq!(skin_state_text(&by_ref(1003), &state), "★12Insane");
+        assert_eq!(skin_state_text(&by_ref(1010), &state), env!("CARGO_PKG_VERSION"));
+
+        let concatenated = SkinTextDef {
+            value_expr: "bmz:text_concat:1001:1002".to_string(),
+            ..Default::default()
+        };
+        assert_eq!(skin_state_text(&concatenated, &state), "Insane ★12");
     }
 
     #[test]

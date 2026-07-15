@@ -1661,6 +1661,10 @@ fn build_result_skin_draw_state(
         hit_error_ring: snapshot.graph.hit_error_ring.values,
         hit_error_ring_index: snapshot.graph.hit_error_ring.index,
         average_timing_ms: timing_stats.map(|stats| stats.0),
+        average_duration_us: result_average_duration_us(
+            &snapshot.graph.timing_points,
+            snapshot.total_notes,
+        ),
         stddev_timing_ms: timing_stats.map(|stats| stats.1),
         ..crate::skin::SkinDrawState::default()
     }
@@ -1682,6 +1686,26 @@ fn result_timing_stats(points: &[crate::snapshot::ResultTimingPoint]) -> Option<
         .sum::<f32>()
         / count;
     Some((average_ms, variance.sqrt()))
+}
+
+fn result_average_duration_us(
+    points: &[crate::snapshot::ResultTimingPoint],
+    total_notes: u32,
+) -> Option<i64> {
+    if total_notes == 0 {
+        return None;
+    }
+    const UNJUDGED_DURATION_US: u128 = 1_000_000;
+    let judged_notes = points.len().min(total_notes as usize);
+    let judged_duration = points
+        .iter()
+        .take(judged_notes)
+        .map(|point| u128::from(point.delta_us.unsigned_abs()))
+        .sum::<u128>();
+    let unjudged_notes = total_notes as usize - judged_notes;
+    let total_duration = judged_duration
+        .saturating_add((unjudged_notes as u128).saturating_mul(UNJUDGED_DURATION_US));
+    Some((total_duration / u128::from(total_notes)).min(i64::MAX as u128) as i64)
 }
 
 struct ResultFallbackSummary<'a> {
@@ -3309,7 +3333,27 @@ mod tests {
         let state = build_result_skin_draw_state(&snapshot, 0);
 
         assert_eq!(state.average_timing_ms, Some(4.0));
+        assert_eq!(state.average_duration_us, Some(998_032));
         assert_eq!(state.stddev_timing_ms, Some(16.0));
+    }
+
+    #[test]
+    fn result_average_duration_uses_absolute_deltas_and_unjudged_penalty() {
+        let points = [
+            crate::snapshot::ResultTimingPoint {
+                time_ms: 0,
+                delta_us: -10_000,
+                judge: bmz_core::judge::Judge::Great,
+            },
+            crate::snapshot::ResultTimingPoint {
+                time_ms: 1000,
+                delta_us: 20_000,
+                judge: bmz_core::judge::Judge::PGreat,
+            },
+        ];
+
+        assert_eq!(result_average_duration_us(&points, 4), Some(507_500));
+        assert_eq!(result_average_duration_us(&points, 0), None);
     }
 
     #[test]

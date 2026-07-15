@@ -939,6 +939,7 @@ type ResultSkinSignature = (
     BTreeMap<String, String>,
     BTreeMap<String, String>,
     bool,
+    bool,
     BTreeMap<i32, i32>,
 );
 
@@ -2097,6 +2098,7 @@ impl WinitApp {
         let initial_result_skin_signature = result_skin_signature_for_config(
             &boot.profile_config.skin,
             ResultSkinSlot::Normal,
+            false,
             false,
             BTreeMap::new(),
         );
@@ -10240,15 +10242,18 @@ impl WinitApp {
     fn spawn_result_skin_decode_for(&mut self, slot: ResultSkinSlot) {
         let skin = &self.boot.profile_config.skin;
         let table_song = !self.play_table_text_primary.is_empty();
+        let ir_online = self.result_ir.is_some();
         let runtime_numbers = self.result_lua_runtime_number_values(slot);
-        let signature = result_skin_signature_for_config(skin, slot, table_song, runtime_numbers);
+        let signature =
+            result_skin_signature_for_config(skin, slot, table_song, ir_online, runtime_numbers);
         if !self.pending_result_skin && self.last_result_skin_signature.as_ref() == Some(&signature)
         {
             tracing::debug!(?slot, "result skin reuse (signature unchanged)");
             return;
         }
 
-        let (_, trimmed, options, files, table_song, runtime_numbers) = signature.clone();
+        let (_, trimmed, options, files, table_song, ir_online, runtime_numbers) =
+            signature.clone();
         self.last_result_skin_signature = Some(signature);
         self.pending_result_skin = false;
         let generation = self.skin_reload_generations.bump(SkinKind::Result);
@@ -10298,7 +10303,7 @@ impl WinitApp {
             SkinKind::Result,
             options,
             files,
-            lua_runtime_state_for_result(table_song, runtime_numbers),
+            lua_runtime_state_for_result(table_song, ir_online, runtime_numbers),
         );
         self.pending_result_skin = true;
         tracing::info!(?slot, path = %path_label, generation, "result skin decode queued");
@@ -12924,7 +12929,7 @@ fn load_initial_skin_textures(
                 SkinKind::Result,
                 if result_trimmed.is_empty() { BTreeMap::new() } else { result_options.clone() },
                 if result_trimmed.is_empty() { BTreeMap::new() } else { result_files.clone() },
-                lua_runtime_state_for_result(false, BTreeMap::new()),
+                lua_runtime_state_for_result(false, false, BTreeMap::new()),
             );
             pending_result = true;
         }
@@ -15493,6 +15498,7 @@ fn result_skin_signature_for_config(
     skin: &crate::config::profile_config::SkinConfig,
     slot: ResultSkinSlot,
     table_song: bool,
+    ir_online: bool,
     runtime_numbers: BTreeMap<i32, i32>,
 ) -> ResultSkinSignature {
     match slot {
@@ -15502,6 +15508,7 @@ fn result_skin_signature_for_config(
             skin.result_options.clone(),
             skin.result_files.clone(),
             table_song,
+            ir_online,
             runtime_numbers,
         ),
         ResultSkinSlot::Course => (
@@ -15510,6 +15517,7 @@ fn result_skin_signature_for_config(
             skin.course_result_options.clone(),
             skin.course_result_files.clone(),
             table_song,
+            ir_online,
             runtime_numbers,
         ),
     }
@@ -15528,10 +15536,13 @@ fn result_lua_runtime_number_values_for_summary(summary: &ResultSummary) -> BTre
 
 fn lua_runtime_state_for_result(
     table_song: bool,
+    ir_online: bool,
     number_values: BTreeMap<i32, i32>,
 ) -> bmz_skin::LuaLoadRuntimeState {
     let mut option_values = BTreeMap::new();
     option_values.insert(1008, table_song);
+    option_values.insert(50, !ir_online);
+    option_values.insert(51, ir_online);
     bmz_skin::LuaLoadRuntimeState { number_values, option_values }
 }
 
@@ -19673,6 +19684,17 @@ mod tests {
         assert!((summary.graph.bpm_graph_segments[0].end_ratio - 1.0 / 3.0).abs() < 0.001);
         assert!((summary.graph.bpm_graph_segments[1].start_ratio - 1.0 / 3.0).abs() < 0.001);
         assert_eq!(summary.graph.bpm_graph_segments[1].end_ratio, 1.0);
+    }
+
+    #[test]
+    fn result_lua_runtime_state_exposes_ir_connection_options() {
+        let online = lua_runtime_state_for_result(false, true, BTreeMap::new());
+        assert_eq!(online.option_values.get(&50), Some(&false));
+        assert_eq!(online.option_values.get(&51), Some(&true));
+
+        let offline = lua_runtime_state_for_result(false, false, BTreeMap::new());
+        assert_eq!(offline.option_values.get(&50), Some(&true));
+        assert_eq!(offline.option_values.get(&51), Some(&false));
     }
 
     #[test]

@@ -436,12 +436,18 @@ impl ResultIrRankingName {
 pub struct ResultIrRankingEntrySnapshot {
     pub rank: Option<i64>,
     pub ex_score: Option<i64>,
+    /// image/index property 390..399 で使う beatoraja clear type index。
+    pub clear_index: Option<i64>,
     pub player_name: ResultIrRankingName,
 }
 
 impl ResultIrRankingEntrySnapshot {
-    pub const EMPTY: Self =
-        Self { rank: None, ex_score: None, player_name: ResultIrRankingName::EMPTY };
+    pub const EMPTY: Self = Self {
+        rank: None,
+        ex_score: None,
+        clear_index: None,
+        player_name: ResultIrRankingName::EMPTY,
+    };
 }
 
 /// リザルト画面の IR ランキング表示状態。
@@ -451,6 +457,8 @@ impl ResultIrRankingEntrySnapshot {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ResultIrSnapshot {
     pub state: ResultIrState,
+    /// STRING_IR_USER_NAME=1021。自分のランキング行判定にも使う。
+    pub user_name: ResultIrRankingName,
     /// IR connect/send/access begin timer elapsed ms (TIMER_IR_CONNECT_BEGIN=172).
     pub connect_begin_ms: Option<i32>,
     /// IR connect/send/access success timer elapsed ms (TIMER_IR_CONNECT_SUCCESS=173).
@@ -472,6 +480,7 @@ pub struct ResultIrSnapshot {
 impl ResultIrSnapshot {
     pub const EMPTY: Self = Self {
         state: ResultIrState::Offline,
+        user_name: ResultIrRankingName::EMPTY,
         connect_begin_ms: None,
         connect_success_ms: None,
         connect_fail_ms: None,

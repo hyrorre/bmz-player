@@ -141,6 +141,7 @@ pub struct ResultIrState {
     ir_connect_begin_at: Option<Instant>,
     ir_connect_success_at: Option<Instant>,
     ir_connect_fail_at: Option<Instant>,
+    user_name: bmz_render::scene::ResultIrRankingName,
     query: ResultIrTaskQuery,
     sender: Sender<ResultIrEvent>,
     receiver: Receiver<ResultIrEvent>,
@@ -254,6 +255,7 @@ impl ResultIrState {
         snapshot.connect_begin_ms = self.ir_connect_begin_at.map(elapsed_since_ms);
         snapshot.connect_success_ms = self.ir_connect_success_at.map(elapsed_since_ms);
         snapshot.connect_fail_ms = self.ir_connect_fail_at.map(elapsed_since_ms);
+        snapshot.user_name = self.user_name;
         snapshot
     }
 
@@ -303,6 +305,8 @@ pub(crate) fn result_ir_ranking_to_skin_snapshot(
         *slot = ResultIrRankingEntrySnapshot {
             rank: Some(i64::from(entry.rank)),
             ex_score: Some(i64::from(entry.ex_score)),
+            clear_index: bmz_core::clear::ClearType::from_label(&entry.clear)
+                .map(|clear| i64::from(clear as u8)),
             player_name: ResultIrRankingName::from_display_name(&entry.player_name),
         };
     }
@@ -454,6 +458,9 @@ fn spawn_result_ir_task_for_target(
         ir_connect_begin_at: Some(Instant::now()),
         ir_connect_success_at: None,
         ir_connect_fail_at: None,
+        user_name: bmz_render::scene::ResultIrRankingName::from_display_name(
+            &provider.account_display_name,
+        ),
         query: query.clone(),
         sender: sender.clone(),
         receiver,
@@ -771,6 +778,10 @@ mod tests {
         assert_eq!(snapshot.clear_rate, Some(100));
         assert_eq!(snapshot.entries[0].rank, Some(1));
         assert_eq!(snapshot.entries[0].ex_score, Some(46));
+        assert_eq!(
+            snapshot.entries[0].clear_index,
+            Some(i64::from(bmz_core::clear::ClearType::Perfect as u8))
+        );
         assert_eq!(snapshot.entries[0].player_name.as_str(), "hyrorre");
     }
 
