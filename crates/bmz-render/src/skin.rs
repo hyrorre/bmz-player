@@ -7970,22 +7970,46 @@ fn skin_state_lane_judge_event_index(event_id: i32, state: &SkinDrawState) -> Op
 
 /// beatoraja `main_state.float_number(ref)`。BARGRAPH / SLIDER 系の比率 0.0-1.0。
 fn skin_state_float_number(ref_id: i32, state: &SkinDrawState) -> Option<f32> {
+    let is_play = !state.select_screen && state.result_failed.is_none();
     match ref_id {
         // `MainStateAccessor.float_number()` calls beatoraja's getRateProperty(),
         // so only SLIDER/BARGRAPH RateType IDs belong to this namespace.
-        1 => Some(state.select_scroll_progress.clamp(0.0, 1.0)),
-        4 | 5 => Some(if state.lanecover_enabled {
+        1 => Some(if state.select_screen {
+            state.select_scroll_progress.clamp(0.0, 1.0)
+        } else {
+            0.0
+        }),
+        4 | 5 => Some(if is_play && state.lanecover_enabled {
             bmz_lane_cover_for_lift(state.lane_cover, state.lift)
         } else {
             0.0
         }),
-        6 => Some(state.play_progress.clamp(0.0, 1.0)),
+        6 | 101 => Some(if is_play { state.play_progress.clamp(0.0, 1.0) } else { 0.0 }),
+        // Skin configuration / IR ranking scroll positions are not exposed by BMZ yet.
+        7 | 8 => Some(0.0),
         17 => Some(state.select_master_volume.clamp(0.0, 1.0)),
         18 => Some(state.select_key_volume.clamp(0.0, 1.0)),
         19 => Some(state.select_bgm_volume.clamp(0.0, 1.0)),
-        101 | 102 | 110..=115 | 140..=147 => Some(graph_value(ref_id, state)),
+        // Rate 102 is the continuous audio/BGA resource load progress. Do not substitute the
+        // PRELOAD boolean used by op 80/81 until that progress is carried into SkinDrawState.
+        102 => None,
+        103 => Some(select_level_rate(state, None)),
+        105..=109 => Some(select_level_rate(state, Some(ref_id - 104))),
+        110..=115 => Some(graph_value(ref_id, state)),
+        140..=145 | 147 => Some(if state.select_screen { graph_value(ref_id, state) } else { 0.0 }),
         _ => None,
     }
+}
+
+fn select_level_rate(state: &SkinDrawState, difficulty: Option<i32>) -> f32 {
+    if !state.select_screen
+        || difficulty.is_some_and(|difficulty| state.difficulty != i64::from(difficulty))
+    {
+        return 0.0;
+    }
+    // This intentionally follows beatoraja's current switch fallthrough: every supported mode
+    // ends with maxLevel=10.
+    (state.select_play_level as f32 / 10.0).max(0.0)
 }
 
 fn parse_skin_option_operand(operand: &str) -> Option<i32> {
@@ -8508,7 +8532,6 @@ fn skin_state_number(ref_id: i32, state: &SkinDrawState) -> Option<i64> {
         29 => Some(operating_time_seconds(state) % 60),
         161 => Some(i64::from(state.play_timer_ms.unwrap_or(0).max(0) / 60_000)),
         162 => Some(i64::from((state.play_timer_ms.unwrap_or(0).max(0) / 1_000) % 60)),
-        165 => Some(if state.skin_loaded { 100 } else { 0 }),
         42 => Some(arrange_ref_index(state) as i64),
         43 => Some(arrange_2p_ref_index(state) as i64),
         344 => Some(extended_arrange_ref_index(state) as i64),
@@ -9287,8 +9310,10 @@ fn extended_arrange_2p_ref_index(state: &SkinDrawState) -> usize {
 }
 
 fn random_lane_ref_slot(ref_id: i32) -> Option<usize> {
-    let slot = ref_id.checked_sub(SKIN_RANDOM_LANE_REF_BASE)? as usize;
-    (slot < SKIN_RANDOM_LANE_REF_COUNT).then_some(slot)
+    match ref_id {
+        450..=466 | 469 => Some((ref_id - SKIN_RANDOM_LANE_REF_BASE) as usize),
+        _ => None,
+    }
 }
 
 fn skin_random_lane_ref_number(ref_id: i32, state: &SkinDrawState) -> Option<i64> {
@@ -20639,6 +20664,7 @@ mod tests {
         let select = SkinDrawState {
             select_screen: true,
             select_play_level: 12,
+            difficulty: 4,
             select_ex_score: Some(0),
             select_play_count: 9,
             select_clear_count: 4,
@@ -20648,6 +20674,10 @@ mod tests {
             assert_eq!(skin_state_number(ref_id, &select), Some(12));
         }
         assert_eq!(skin_state_number(79, &select), Some(5));
+        assert!(approx_eq(skin_state_float_number(103, &select).unwrap(), 1.2));
+        assert_eq!(skin_state_float_number(105, &select), Some(0.0));
+        assert!(approx_eq(skin_state_float_number(108, &select).unwrap(), 1.2));
+        assert_eq!(skin_state_float_number(109, &select), Some(0.0));
 
         let folder = SkinDrawState {
             select_row_kind: SelectRowKind::Folder,
@@ -20686,12 +20716,17 @@ mod tests {
         };
         assert!(approx_eq(skin_state_float_number(111, &state).unwrap(), 0.8));
         assert!(approx_eq(skin_state_float_number(113, &state).unwrap(), 0.6));
+        assert_eq!(skin_state_float_number(101, &state), Some(0.0));
+        assert_eq!(skin_state_float_number(102, &state), None);
+        assert_eq!(skin_state_float_number(103, &state), Some(0.0));
+        assert_eq!(skin_state_float_number(140, &state), Some(0.0));
+        assert_eq!(skin_state_float_number(146, &state), None);
         assert_eq!(skin_state_float_number(1102, &state), None);
         assert_eq!(skin_state_float_number(372, &state), None);
         assert_eq!(skin_state_float_number(9_999, &state), None);
         assert_eq!(skin_state_number(161, &state), Some(2));
         assert_eq!(skin_state_number(162, &state), Some(5));
-        assert_eq!(skin_state_number(165, &state), Some(0));
+        assert_eq!(skin_state_number(165, &state), None);
     }
 
     #[test]
@@ -21613,6 +21648,12 @@ mod tests {
         assert_eq!(skin_state_event_index(452, &state), 1);
         assert_eq!(skin_state_event_index(457, &state), 0);
         assert_eq!(skin_state_event_index(459, &state), 0);
+        assert_eq!(skin_state_number(450, &state), Some(7));
+        assert_eq!(skin_state_number(466, &state), Some(0));
+        assert_eq!(skin_state_number(467, &state), None);
+        assert_eq!(skin_state_number(468, &state), None);
+        assert_eq!(skin_state_event_index(467, &state), 0);
+        assert_eq!(skin_state_event_index(468, &state), 0);
     }
 
     #[test]
