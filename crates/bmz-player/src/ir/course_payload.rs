@@ -525,6 +525,8 @@ mod tests {
             total_gauge: 0.0,
             judge_rank: None,
             key_mode: KeyMode::K7,
+            has_long_notes: false,
+            long_note_mode: bmz_chart::model::LongNoteMode::Ln,
             judge_counts: ResultJudgeCounts::default(),
             fast_slow_counts: ResultFastSlowJudgeCounts::default(),
             replay_path: String::new(),

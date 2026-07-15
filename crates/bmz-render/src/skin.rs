@@ -845,6 +845,10 @@ pub struct SkinDrawState {
     pub result_arrange_index: usize,
     pub result_extended_arrange_index: usize,
     pub result_random_lane_refs: [u8; SKIN_RANDOM_LANE_REF_COUNT],
+    /// Resultで実効譜面にLNが含まれるか。NoneはResult以外。
+    pub result_has_long_notes: Option<bool>,
+    /// Resultの実効LN種別imageset index (0=LN, 1=CN, 2=HCN)。
+    pub result_ln_mode_index: Option<usize>,
     pub select_gauge_index: usize,
     pub select_gauge_auto_shift_index: usize,
     pub select_bottom_shiftable_gauge_index: usize,
@@ -1187,6 +1191,8 @@ impl Default for SkinDrawState {
             result_arrange_index: 0,
             result_extended_arrange_index: 0,
             result_random_lane_refs: [0; SKIN_RANDOM_LANE_REF_COUNT],
+            result_has_long_notes: None,
+            result_ln_mode_index: None,
             select_gauge_index: 2,
             select_gauge_auto_shift_index: 0,
             select_bottom_shiftable_gauge_index: 0,
@@ -6422,6 +6428,9 @@ fn skin_image_index_number(ref_id: i32, state: &SkinDrawState) -> Option<i64> {
             Some(i64::from(state.result_favorite_chart.unwrap_or(false)))
         }
         301..=307 => Some(0),
+        308 if state.result_ln_mode_index.is_some() => {
+            Some(state.result_ln_mode_index.unwrap_or_default() as i64)
+        }
         308 => Some(state.select_ln_mode_index as i64),
         330 => Some(i64::from(state.lanecover_enabled)),
         331 => Some(i64::from(state.lift_enabled)),
@@ -6852,6 +6861,14 @@ fn test_skin_op(op: i32, enabled_options: &[i32], state: &SkinDrawState) -> bool
         300..=318 if state.result_failed.is_some() => result_rank_op_matches(op, state),
         300..=307 => select_small_rank_op_matches(op, state),
         320..=327 => best_rank_op_matches(op, state),
+        // OPTION_NO_LN / OPTION_LN. Resultでは、選曲設定ではなく
+        // LN policy / course constraint適用後の実効譜面を使う。
+        172 if state.result_has_long_notes.is_some() => {
+            !state.result_has_long_notes.unwrap_or_default()
+        }
+        173 if state.result_has_long_notes.is_some() => {
+            state.result_has_long_notes.unwrap_or_default()
+        }
         170 => !state.has_bga,
         171 => state.has_bga,
         // OPTION_BPMCHANGE (BPM変化あり) / OPTION_BPMSTOP (STOP命令あり)
@@ -7866,6 +7883,9 @@ fn skin_state_event_index(event_id: i32, state: &SkinDrawState) -> i32 {
         73 => state.select_assist_index as i32,
         75 => i32::from(state.judge_timing_auto_adjust),
         78 => state.select_gauge_auto_shift_index as i32,
+        308 if state.result_ln_mode_index.is_some() => {
+            state.result_ln_mode_index.unwrap_or_default() as i32
+        }
         308 => state.select_ln_mode_index as i32,
         340 => state.select_judge_algorithm_index as i32,
         341 => state.select_bottom_shiftable_gauge_index as i32,
@@ -13398,6 +13418,29 @@ mod tests {
         assert!(test_skin_op(41, &[], &enabled_no_song_bga));
         assert!(test_skin_op(170, &[], &enabled_no_song_bga));
         assert!(!test_skin_op(171, &[], &enabled_no_song_bga));
+    }
+
+    #[test]
+    fn result_long_note_options_and_index_use_effective_chart_state() {
+        let no_ln = SkinDrawState {
+            result_has_long_notes: Some(false),
+            result_ln_mode_index: Some(0),
+            ..SkinDrawState::default()
+        };
+        assert!(test_skin_op(172, &[], &no_ln));
+        assert!(!test_skin_op(173, &[], &no_ln));
+
+        for (index, expected) in [(0, 0), (1, 1), (2, 2)] {
+            let with_ln = SkinDrawState {
+                result_has_long_notes: Some(true),
+                result_ln_mode_index: Some(index),
+                ..SkinDrawState::default()
+            };
+            assert!(!test_skin_op(172, &[], &with_ln));
+            assert!(test_skin_op(173, &[], &with_ln));
+            assert_eq!(skin_image_index_number(308, &with_ln), Some(expected));
+            assert_eq!(skin_state_event_index(308, &with_ln), expected as i32);
+        }
     }
 
     #[test]

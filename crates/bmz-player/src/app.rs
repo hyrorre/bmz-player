@@ -943,9 +943,7 @@ type ResultSkinSignature = (
     String,
     BTreeMap<String, String>,
     BTreeMap<String, String>,
-    bool,
-    bool,
-    BTreeMap<i32, i32>,
+    bmz_skin::LuaLoadRuntimeState,
 );
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1463,6 +1461,8 @@ fn course_result_summary_for_skin(course: &CourseResultSummary) -> ResultSummary
         total_gauge: last.map(|summary| summary.total_gauge).unwrap_or(0.0),
         judge_rank: last.and_then(|summary| summary.judge_rank),
         key_mode: last.map(|summary| summary.key_mode).unwrap_or_default(),
+        has_long_notes: last.is_some_and(|summary| summary.has_long_notes),
+        long_note_mode: last.map(|summary| summary.long_note_mode).unwrap_or_default(),
         judge_counts: course.judge_counts.clone(),
         fast_slow_counts,
         replay_path: String::new(),
@@ -1718,6 +1718,8 @@ fn debug_boot_result_summary() -> ResultSummary {
         total_gauge: 363.0,
         judge_rank: Some(2),
         key_mode: KeyMode::K7,
+        has_long_notes: true,
+        long_note_mode: bmz_chart::model::LongNoteMode::Cn,
         judge_counts,
         fast_slow_counts,
         replay_path: String::new(),
@@ -2109,9 +2111,7 @@ impl WinitApp {
         let initial_result_skin_signature = result_skin_signature_for_config(
             &boot.profile_config.skin,
             ResultSkinSlot::Normal,
-            false,
-            false,
-            BTreeMap::new(),
+            lua_runtime_state_for_result(false, false, KeyMode::default(), BTreeMap::new()),
         );
 
         let mut app = Self {
@@ -2596,6 +2596,8 @@ impl WinitApp {
                     total_gauge: summary.total_gauge,
                     judge_rank: summary.judge_rank,
                     key_mode: summary.key_mode,
+                    has_long_notes: summary.has_long_notes,
+                    ln_mode_index: result_long_note_mode_index(summary.long_note_mode),
                     result_gauge_graph_type: self.result_gauge_graph_type,
                     result_panel: self.result_panel,
                     favorite_chart: self.result_favorite_chart,
@@ -10396,17 +10398,15 @@ impl WinitApp {
         let skin = &self.boot.profile_config.skin;
         let table_song = !self.play_table_text_primary.is_empty();
         let ir_online = self.result_ir.is_some();
-        let runtime_numbers = self.result_lua_runtime_number_values(slot);
-        let signature =
-            result_skin_signature_for_config(skin, slot, table_song, ir_online, runtime_numbers);
+        let runtime_state = self.result_lua_runtime_state(slot, table_song, ir_online);
+        let signature = result_skin_signature_for_config(skin, slot, runtime_state);
         if !self.pending_result_skin && self.last_result_skin_signature.as_ref() == Some(&signature)
         {
             tracing::debug!(?slot, "result skin reuse (signature unchanged)");
             return;
         }
 
-        let (_, trimmed, options, files, table_song, ir_online, runtime_numbers) =
-            signature.clone();
+        let (_, trimmed, options, files, runtime_state) = signature.clone();
         self.last_result_skin_signature = Some(signature);
         self.pending_result_skin = false;
         let generation = self.skin_reload_generations.bump(SkinKind::Result);
@@ -10456,13 +10456,18 @@ impl WinitApp {
             SkinKind::Result,
             options,
             files,
-            lua_runtime_state_for_result(table_song, ir_online, runtime_numbers),
+            runtime_state,
         );
         self.pending_result_skin = true;
         tracing::info!(?slot, path = %path_label, generation, "result skin decode queued");
     }
 
-    fn result_lua_runtime_number_values(&self, slot: ResultSkinSlot) -> BTreeMap<i32, i32> {
+    fn result_lua_runtime_state(
+        &self,
+        slot: ResultSkinSlot,
+        table_song: bool,
+        ir_online: bool,
+    ) -> bmz_skin::LuaLoadRuntimeState {
         let summary = match slot {
             ResultSkinSlot::Course => {
                 self.finished_course.as_ref().map(course_result_summary_for_skin)
@@ -10471,10 +10476,10 @@ impl WinitApp {
                 self.finished_play.as_ref().map(|finished| finished.summary.clone())
             }
         };
-        let Some(summary) = summary else {
-            return BTreeMap::new();
-        };
-        result_lua_runtime_number_values_for_summary(&summary)
+        let key_mode = summary.as_ref().map(|summary| summary.key_mode).unwrap_or_default();
+        let number_values =
+            summary.as_ref().map(result_lua_runtime_number_values_for_summary).unwrap_or_default();
+        lua_runtime_state_for_result(table_song, ir_online, key_mode, number_values)
     }
 
     fn set_empty_result_skin_context(&mut self) {
@@ -13082,7 +13087,7 @@ fn load_initial_skin_textures(
                 SkinKind::Result,
                 if result_trimmed.is_empty() { BTreeMap::new() } else { result_options.clone() },
                 if result_trimmed.is_empty() { BTreeMap::new() } else { result_files.clone() },
-                lua_runtime_state_for_result(false, false, BTreeMap::new()),
+                lua_runtime_state_for_result(false, false, KeyMode::default(), BTreeMap::new()),
             );
             pending_result = true;
         }
@@ -15687,9 +15692,7 @@ fn should_show_course_stage_result(
 fn result_skin_signature_for_config(
     skin: &crate::config::profile_config::SkinConfig,
     slot: ResultSkinSlot,
-    table_song: bool,
-    ir_online: bool,
-    runtime_numbers: BTreeMap<i32, i32>,
+    runtime_state: bmz_skin::LuaLoadRuntimeState,
 ) -> ResultSkinSignature {
     match slot {
         ResultSkinSlot::Normal => (
@@ -15697,18 +15700,14 @@ fn result_skin_signature_for_config(
             skin.result.trim().to_string(),
             skin.result_options.clone(),
             skin.result_files.clone(),
-            table_song,
-            ir_online,
-            runtime_numbers,
+            runtime_state,
         ),
         ResultSkinSlot::Course => (
             slot,
             skin.course_result.trim().to_string(),
             skin.course_result_options.clone(),
             skin.course_result_files.clone(),
-            table_song,
-            ir_online,
-            runtime_numbers,
+            runtime_state,
         ),
     }
 }
@@ -15724,16 +15723,39 @@ fn result_lua_runtime_number_values_for_summary(summary: &ResultSummary) -> BTre
     number_values
 }
 
+fn result_long_note_mode_index(mode: bmz_chart::model::LongNoteMode) -> usize {
+    match mode {
+        bmz_chart::model::LongNoteMode::Ln => 0,
+        bmz_chart::model::LongNoteMode::Cn => 1,
+        bmz_chart::model::LongNoteMode::Hcn => 2,
+    }
+}
+
 fn lua_runtime_state_for_result(
     table_song: bool,
     ir_online: bool,
+    key_mode: KeyMode,
     number_values: BTreeMap<i32, i32>,
 ) -> bmz_skin::LuaLoadRuntimeState {
     let mut option_values = BTreeMap::new();
     option_values.insert(1008, table_song);
     option_values.insert(50, !ir_online);
     option_values.insert(51, ir_online);
+    for option in 160..=164 {
+        option_values.insert(option, result_key_mode_option_matches(option, key_mode));
+    }
     bmz_skin::LuaLoadRuntimeState { number_values, option_values }
+}
+
+fn result_key_mode_option_matches(option: i32, key_mode: KeyMode) -> bool {
+    match option {
+        160 => matches!(key_mode, KeyMode::K7 | KeyMode::K8),
+        161 => key_mode == KeyMode::K5,
+        162 => key_mode == KeyMode::K14,
+        163 => key_mode == KeyMode::K10,
+        164 => key_mode == KeyMode::K9,
+        _ => false,
+    }
 }
 
 /// リザルト画面で押すと終了アニメーションを開始するレーン。
@@ -19708,6 +19730,8 @@ mod tests {
                 total_gauge: 260.0,
                 judge_rank: Some(2),
                 key_mode: KeyMode::K7,
+                has_long_notes: false,
+                long_note_mode: bmz_chart::model::LongNoteMode::Ln,
                 judge_counts: crate::screens::result_model::ResultJudgeCounts {
                     pgreat: ex_score / 2,
                     ..Default::default()
@@ -19887,13 +19911,17 @@ mod tests {
 
     #[test]
     fn result_lua_runtime_state_exposes_ir_connection_options() {
-        let online = lua_runtime_state_for_result(false, true, BTreeMap::new());
+        let online = lua_runtime_state_for_result(false, true, KeyMode::K7, BTreeMap::new());
         assert_eq!(online.option_values.get(&50), Some(&false));
         assert_eq!(online.option_values.get(&51), Some(&true));
+        assert_eq!(online.option_values.get(&160), Some(&true));
+        assert_eq!(online.option_values.get(&161), Some(&false));
 
-        let offline = lua_runtime_state_for_result(false, false, BTreeMap::new());
+        let offline = lua_runtime_state_for_result(false, false, KeyMode::K5, BTreeMap::new());
         assert_eq!(offline.option_values.get(&50), Some(&true));
         assert_eq!(offline.option_values.get(&51), Some(&false));
+        assert_eq!(offline.option_values.get(&160), Some(&false));
+        assert_eq!(offline.option_values.get(&161), Some(&true));
     }
 
     #[test]

@@ -534,6 +534,10 @@ pub struct ResultSnapshot {
     pub total_gauge: f32,
     pub judge_rank: Option<i32>,
     pub key_mode: KeyMode,
+    /// 実効譜面にLNが含まれるか (OPTION_NO_LN/LN=172/173)。
+    pub has_long_notes: bool,
+    /// 実効LN種別のimageset index (0=LN, 1=CN, 2=HCN)。
+    pub ln_mode_index: usize,
     pub result_gauge_graph_type: i32,
     /// Lua Result スキンの展開パネル (0=非表示、1=IR、2=グラフ)。
     pub result_panel: i32,
@@ -623,6 +627,8 @@ mod tests {
             total_gauge: 0.0,
             judge_rank: None,
             key_mode: KeyMode::default(),
+            has_long_notes: false,
+            ln_mode_index: 0,
             result_gauge_graph_type: 2,
             result_panel: 0,
             favorite_chart: false,
@@ -691,6 +697,8 @@ mod tests {
             total_gauge: 0.0,
             judge_rank: None,
             key_mode: KeyMode::default(),
+            has_long_notes: false,
+            ln_mode_index: 0,
             result_gauge_graph_type: 2,
             result_panel: 0,
             favorite_chart: false,

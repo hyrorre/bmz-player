@@ -1608,6 +1608,8 @@ fn build_result_skin_draw_state(
             &snapshot.lane_shuffle_pattern,
             snapshot.key_mode,
         ),
+        result_has_long_notes: Some(snapshot.has_long_notes),
+        result_ln_mode_index: Some(snapshot.ln_mode_index),
         ex_score: snapshot.ex_score,
         total_notes: snapshot.total_notes,
         past_notes: snapshot.total_notes,
@@ -3076,6 +3078,8 @@ mod tests {
                 total_gauge: 0.0,
                 judge_rank: None,
                 key_mode: bmz_core::lane::KeyMode::default(),
+                has_long_notes: false,
+                ln_mode_index: 0,
                 result_gauge_graph_type: bmz_core::clear::GaugeType::Normal as i32,
                 result_panel: 0,
                 favorite_chart: false,
@@ -3212,6 +3216,8 @@ mod tests {
             total_gauge: 0.0,
             judge_rank: None,
             key_mode: bmz_core::lane::KeyMode::default(),
+            has_long_notes: false,
+            ln_mode_index: 0,
             result_gauge_graph_type: bmz_core::clear::GaugeType::Normal as i32,
             result_panel: 0,
             favorite_chart: false,
@@ -3330,6 +3336,20 @@ mod tests {
 
         assert_eq!(state.result_arrange_index, 2);
         assert_eq!(state.result_random_lane_refs[0], 7);
+    }
+
+    #[test]
+    fn result_skin_state_maps_effective_long_note_state() {
+        let AppSceneSnapshot::Result(mut snapshot) = crate::sample::sample_result_scene() else {
+            panic!("sample result scene");
+        };
+        snapshot.has_long_notes = true;
+        snapshot.ln_mode_index = 2;
+
+        let state = build_result_skin_draw_state(&snapshot, 0);
+
+        assert_eq!(state.result_has_long_notes, Some(true));
+        assert_eq!(state.result_ln_mode_index, Some(2));
     }
 
     #[test]
@@ -3498,6 +3518,8 @@ mod tests {
             total_gauge: 0.0,
             judge_rank: None,
             key_mode: bmz_core::lane::KeyMode::default(),
+            has_long_notes: false,
+            ln_mode_index: 0,
             result_gauge_graph_type: bmz_core::clear::GaugeType::AssistEasy as i32,
             result_panel: 0,
             favorite_chart: false,
@@ -3636,6 +3658,8 @@ mod tests {
             total_gauge: 0.0,
             judge_rank: None,
             key_mode: bmz_core::lane::KeyMode::default(),
+            has_long_notes: false,
+            ln_mode_index: 0,
             result_gauge_graph_type: bmz_core::clear::GaugeType::Normal as i32,
             result_panel: 0,
             favorite_chart: false,

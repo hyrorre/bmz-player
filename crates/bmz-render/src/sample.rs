@@ -182,6 +182,8 @@ pub fn sample_result_scene() -> AppSceneSnapshot {
         total_gauge: 260.0,
         judge_rank: Some(2),
         key_mode: bmz_core::lane::KeyMode::K7,
+        has_long_notes: true,
+        ln_mode_index: 1,
         result_gauge_graph_type: bmz_core::clear::GaugeType::Normal as i32,
         result_panel: 0,
         favorite_chart: false,

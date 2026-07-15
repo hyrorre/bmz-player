@@ -37,6 +37,10 @@ pub struct ResultSummary {
     pub total_gauge: f32,
     pub judge_rank: Option<i32>,
     pub key_mode: KeyMode,
+    /// LN policy / course constraint適用後の実効譜面にLNが含まれるか。
+    pub has_long_notes: bool,
+    /// LN policy / course constraint適用後の実効LN種別。
+    pub long_note_mode: LongNoteMode,
     pub judge_counts: ResultJudgeCounts,
     pub fast_slow_counts: ResultFastSlowJudgeCounts,
     pub replay_path: String,
@@ -159,6 +163,8 @@ impl ResultSummary {
             total_gauge: gauge_total_for_chart(metadata.total, result.total_notes) as f32,
             judge_rank: metadata.judge_rank,
             key_mode: metadata.key_mode,
+            has_long_notes: !chart.long_notes.is_empty(),
+            long_note_mode: metadata.long_note_mode,
             judge_counts: ResultJudgeCounts::from_judge_counts(&result.score.judges),
             fast_slow_counts: ResultFastSlowJudgeCounts::from_judge_counts(&result.score.judges),
             replay_path: stored.replay_path.clone(),
@@ -436,6 +442,8 @@ mod tests {
         assert_eq!(summary.bp, 18);
         assert_eq!(summary.cb, 11);
         assert_eq!(summary.gauge_value, 82.0);
+        assert!(!summary.has_long_notes);
+        assert_eq!(summary.long_note_mode, LongNoteMode::Ln);
         assert_eq!(summary.score_history_id, 9);
         assert_eq!(summary.replay_path, "replay/test.toml");
         assert_eq!(
@@ -456,6 +464,31 @@ mod tests {
 
         assert_eq!(summary.bp, chart.total_notes);
         assert_eq!(summary.cb, chart.total_notes);
+    }
+
+    #[test]
+    fn result_summary_keeps_effective_long_note_state() {
+        let result = play_result();
+        let stored = stored_result();
+        let mut chart = chart();
+        chart.metadata.long_note_mode = LongNoteMode::Hcn;
+        chart.long_notes.push(bmz_chart::model::LongNotePair {
+            lane: Lane::Key1,
+            style: bmz_chart::model::LongNoteStyle::ChannelPair,
+            mode: Some(LongNoteMode::Hcn),
+            start_note_id: bmz_core::ids::NoteId(1),
+            end_note_id: bmz_core::ids::NoteId(2),
+            start_tick: bmz_core::time::ChartTick(0),
+            end_tick: bmz_core::time::ChartTick(1),
+            start_time: TimeUs(0),
+            end_time: TimeUs(1_000_000),
+            sound: None,
+        });
+
+        let summary = ResultSummary::from_play_result(&result, &stored, &chart);
+
+        assert!(summary.has_long_notes);
+        assert_eq!(summary.long_note_mode, LongNoteMode::Hcn);
     }
 
     fn play_result() -> PlayResult {

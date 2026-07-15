@@ -2460,7 +2460,7 @@ mod tests {
             BTreeMap::from([("Expand Panel".to_string(), "ON - GRAPH DEFAULT".to_string())]);
         let runtime_state = LuaLoadRuntimeState {
             number_values: BTreeMap::new(),
-            option_values: BTreeMap::from([(51, true)]),
+            option_values: BTreeMap::from([(51, true), (160, true)]),
         };
         let loaded = load_skin_document_uncached(
             &skin_path,
@@ -2518,6 +2518,12 @@ mod tests {
                 DestinationListEntry::Conditional { .. } => None,
             })
             .collect::<Vec<_>>();
+        assert!(destinations.iter().any(|destination| destination.id == "randomButton1p"));
+        let random_key = destinations
+            .iter()
+            .find(|destination| destination.id == "randomKeySet1P_1")
+            .expect("7K Result should retain the RANDOM lane placement destinations");
+        assert!(random_key.draw.contains("event_index(42)"));
         let rank_aaa = destinations
             .iter()
             .find(|destination| {
