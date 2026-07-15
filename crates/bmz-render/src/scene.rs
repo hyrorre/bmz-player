@@ -89,6 +89,10 @@ pub struct SelectSnapshot {
     /// Select detail option panelで表示する判定表示オフセット(ms)。
     pub judge_timing_offset_ms: i32,
     pub judge_timing_auto_adjust: bool,
+    /// Select skin image refs/events 330..332 の表示状態。
+    pub lanecover_enabled: bool,
+    pub lift_enabled: bool,
+    pub hidden_enabled: bool,
     pub master_volume: f32,
     pub key_volume: f32,
     pub bgm_volume: f32,
@@ -182,6 +186,9 @@ impl Default for SelectSnapshot {
             grade_diff_display: ResultGradeDiffDisplay::default(),
             judge_timing_offset_ms: 0,
             judge_timing_auto_adjust: false,
+            lanecover_enabled: false,
+            lift_enabled: true,
+            hidden_enabled: false,
             master_volume: 0.0,
             key_volume: 0.0,
             bgm_volume: 0.0,

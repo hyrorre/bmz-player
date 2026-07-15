@@ -77,9 +77,9 @@ use crate::config::play::{TARGET_GREEN_NUMBER_MAX, TARGET_GREEN_NUMBER_MIN};
 use crate::config::profile_config::{
     AssistOptionConfig, BgaExpandConfig, BgaModeConfig, BottomShiftableGaugeConfig,
     DoubleOptionConfig, GaugeAutoShiftConfig, GaugeTypeConfig, HispeedModeConfig, HsFixConfig,
-    InputActionConfig, JudgeAlgorithmConfig, LaneConfig, ProfileConfig, ProfileInputConfig,
-    RandomOptionConfig, ScratchDirectionConfig, SelectInputModeConfig, TargetOptionConfig,
-    default_hispeed_step_fhs, default_hispeed_step_nhs, normalize_hispeed_step,
+    InputActionConfig, JudgeAlgorithmConfig, LaneConfig, LaneEffectConfig, ProfileConfig,
+    ProfileInputConfig, RandomOptionConfig, ScratchDirectionConfig, SelectInputModeConfig,
+    TargetOptionConfig, default_hispeed_step_fhs, default_hispeed_step_nhs, normalize_hispeed_step,
     replay_slot_rule_indices,
 };
 use crate::config::save::{save_app_config, save_profile_config};
@@ -3250,6 +3250,15 @@ impl WinitApp {
             judge_timing_offset_ms: (self.boot.profile_config.judge.visual_offset_us / 1_000)
                 .clamp(i32::MIN as i64, i32::MAX as i64) as i32,
             judge_timing_auto_adjust: self.boot.profile_config.judge.visual_offset_auto_adjust,
+            lanecover_enabled: matches!(
+                self.boot.profile_config.play.lane_effect,
+                LaneEffectConfig::Sudden | LaneEffectConfig::HiddenSudden
+            ),
+            lift_enabled: true,
+            hidden_enabled: matches!(
+                self.boot.profile_config.play.lane_effect,
+                LaneEffectConfig::Hidden | LaneEffectConfig::HiddenSudden
+            ),
             master_volume: crate::config::play::volume_unit_to_f32(
                 self.boot.profile_config.audio_mix.master_volume,
             ),
@@ -5935,6 +5944,16 @@ impl WinitApp {
                 self.cycle_select_sort(arg);
             }
             321..=324 => self.cycle_replay_slot_rule(event_id, arg),
+            330 => {
+                self.boot.profile_config.play.lane_effect =
+                    toggled_select_sudden(self.boot.profile_config.play.lane_effect);
+                self.play_system_sound(crate::system_sound::SoundType::OptionChange);
+            }
+            332 => {
+                self.boot.profile_config.play.lane_effect =
+                    toggled_select_hidden(self.boot.profile_config.play.lane_effect);
+                self.play_system_sound(crate::system_sound::SoundType::OptionChange);
+            }
             _ => {
                 tracing::debug!(event_id, arg, "unsupported select skin event");
             }
@@ -16107,6 +16126,24 @@ fn cycle_result_gauge_graph_type(current: i32) -> i32 {
     }
 }
 
+fn toggled_select_sudden(current: LaneEffectConfig) -> LaneEffectConfig {
+    match current {
+        LaneEffectConfig::Off => LaneEffectConfig::Sudden,
+        LaneEffectConfig::Hidden => LaneEffectConfig::HiddenSudden,
+        LaneEffectConfig::Sudden => LaneEffectConfig::Off,
+        LaneEffectConfig::HiddenSudden => LaneEffectConfig::Hidden,
+    }
+}
+
+fn toggled_select_hidden(current: LaneEffectConfig) -> LaneEffectConfig {
+    match current {
+        LaneEffectConfig::Off => LaneEffectConfig::Hidden,
+        LaneEffectConfig::Hidden => LaneEffectConfig::Off,
+        LaneEffectConfig::Sudden => LaneEffectConfig::HiddenSudden,
+        LaneEffectConfig::HiddenSudden => LaneEffectConfig::Sudden,
+    }
+}
+
 fn result_skin_click_action(event_id: i32) -> Option<ResultSkinClickAction> {
     match event_id {
         SKIN_EVENT_RESULT_PANEL_IR => Some(ResultSkinClickAction::SetPanel(1)),
@@ -22478,6 +22515,17 @@ mod tests {
         assert_eq!(result_skin_click_action(317), Some(ResultSkinClickAction::SaveReplay(2)));
         assert_eq!(result_skin_click_action(318), Some(ResultSkinClickAction::SaveReplay(3)));
         assert_eq!(result_skin_click_action(319), None);
+    }
+
+    #[test]
+    fn select_skin_cover_events_toggle_sudden_and_hidden_independently() {
+        assert_eq!(toggled_select_sudden(LaneEffectConfig::Off), LaneEffectConfig::Sudden);
+        assert_eq!(toggled_select_sudden(LaneEffectConfig::Hidden), LaneEffectConfig::HiddenSudden);
+        assert_eq!(toggled_select_sudden(LaneEffectConfig::HiddenSudden), LaneEffectConfig::Hidden);
+
+        assert_eq!(toggled_select_hidden(LaneEffectConfig::Off), LaneEffectConfig::Hidden);
+        assert_eq!(toggled_select_hidden(LaneEffectConfig::Sudden), LaneEffectConfig::HiddenSudden);
+        assert_eq!(toggled_select_hidden(LaneEffectConfig::HiddenSudden), LaneEffectConfig::Sudden);
     }
 
     #[test]
