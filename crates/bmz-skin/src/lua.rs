@@ -1161,6 +1161,18 @@ impl MainStateProbe {
         self.event_index_values.insert(event_id, value);
     }
 
+    fn begin_event_index_options_recording_with_values(
+        &mut self,
+        event_id: i32,
+        event_value: i32,
+        option_values: BTreeMap<i32, bool>,
+        default_option_value: bool,
+    ) {
+        self.begin_event_index_recording_with_value(event_id, event_value);
+        self.option_values.insert(i32::MIN, default_option_value);
+        self.option_values.extend(option_values);
+    }
+
     fn begin_os_clock_recording(&mut self, value: f64) {
         self.mode = MainStateProbeMode::RecordNumbers { default_value: 0 };
         self.number_calls.clear();
@@ -3747,6 +3759,163 @@ fn call_draw_with_event_index(
     }
 }
 
+fn infer_main_state_event_index_options_draw_condition(
+    function: &Function,
+    main_state_probe: &Arc<Mutex<MainStateProbe>>,
+) -> Option<String> {
+    {
+        main_state_probe.lock().ok()?.begin_event_index_call_recording(0);
+    }
+    let _ = function.call::<Value>(()).ok();
+    let event_calls = {
+        let mut probe = main_state_probe.lock().ok()?;
+        let calls = probe.event_index_calls.clone();
+        probe.end_recording();
+        calls
+    };
+    let event_id = single_number_call(&event_calls)?;
+    let samples = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9];
+
+    let mut option_ids = Vec::new();
+    for event_value in samples {
+        {
+            main_state_probe.lock().ok()?.begin_event_index_options_recording_with_values(
+                event_id,
+                event_value,
+                BTreeMap::new(),
+                false,
+            );
+        }
+        let result = function.call::<Value>(()).ok();
+        let mut probe = main_state_probe.lock().ok()?;
+        let only_event_and_options = probe.number_calls.is_empty()
+            && probe.timer_calls.is_empty()
+            && probe.float_number_calls.is_empty()
+            && probe.gauge_type_calls == 0
+            && probe.event_index_calls.iter().all(|call| *call == event_id);
+        option_ids.extend(probe.option_calls.iter().copied());
+        probe.end_recording();
+        if !only_event_and_options || !matches!(result, Some(Value::Boolean(_))) {
+            return None;
+        }
+    }
+    option_ids.sort_unstable();
+    option_ids.dedup();
+    if option_ids.is_empty() || option_ids.len() > 2 {
+        return None;
+    }
+
+    let assignment_count = 1usize << option_ids.len();
+    let mut branches = Vec::new();
+    let mut observed_patterns = Vec::new();
+    let mut saw_option_dependent_pattern = false;
+    for event_value in samples {
+        let mut truth_table = Vec::with_capacity(assignment_count);
+        for assignment in 0..assignment_count {
+            let option_values = option_ids
+                .iter()
+                .enumerate()
+                .map(|(index, option_id)| (*option_id, assignment & (1 << index) != 0))
+                .collect();
+            truth_table.push(call_draw_with_event_index_options(
+                function,
+                main_state_probe,
+                event_id,
+                event_value,
+                option_values,
+            )?);
+        }
+        saw_option_dependent_pattern |= truth_table.windows(2).any(|values| values[0] != values[1]);
+        let option_cubes = option_truth_table_cubes(&option_ids, &truth_table)?;
+        for cube in option_cubes {
+            let mut terms = vec![format!("event_index({event_id}) == {event_value}")];
+            terms.extend(cube);
+            branches.push(terms.join(" and "));
+        }
+        observed_patterns.push(truth_table);
+    }
+
+    let saw_event_dependent_pattern =
+        observed_patterns.windows(2).any(|values| values[0] != values[1]);
+    if branches.is_empty() || !saw_option_dependent_pattern || !saw_event_dependent_pattern {
+        return None;
+    }
+    Some(branches.join(" or "))
+}
+
+fn call_draw_with_event_index_options(
+    function: &Function,
+    main_state_probe: &Arc<Mutex<MainStateProbe>>,
+    event_id: i32,
+    event_value: i32,
+    option_values: BTreeMap<i32, bool>,
+) -> Option<bool> {
+    {
+        main_state_probe.lock().ok()?.begin_event_index_options_recording_with_values(
+            event_id,
+            event_value,
+            option_values,
+            false,
+        );
+    }
+    let result = function.call::<Value>(()).ok();
+    main_state_probe.lock().ok()?.end_recording();
+    match result? {
+        Value::Boolean(value) => Some(value),
+        _ => None,
+    }
+}
+
+fn option_truth_table_cubes(option_ids: &[i32], truth_table: &[bool]) -> Option<Vec<Vec<String>>> {
+    match (option_ids, truth_table) {
+        ([], [false]) => Some(Vec::new()),
+        ([], [true]) => Some(vec![Vec::new()]),
+        ([_], [false, false]) => Some(Vec::new()),
+        ([_], [true, true]) => Some(vec![Vec::new()]),
+        ([option], [false, true]) => Some(vec![vec![format!("option({option})")]]),
+        ([option], [true, false]) => Some(vec![vec![format!("!option({option})")]]),
+        ([_, _], [false, false, false, false]) => Some(Vec::new()),
+        ([_, _], [true, true, true, true]) => Some(vec![Vec::new()]),
+        ([a, _], [false, true, false, true]) => Some(vec![vec![format!("option({a})")]]),
+        ([a, _], [true, false, true, false]) => Some(vec![vec![format!("!option({a})")]]),
+        ([_, b], [false, false, true, true]) => Some(vec![vec![format!("option({b})")]]),
+        ([_, b], [true, true, false, false]) => Some(vec![vec![format!("!option({b})")]]),
+        ([a, b], [false, false, false, true]) => {
+            Some(vec![vec![format!("option({a})"), format!("option({b})")]])
+        }
+        ([a, b], [false, true, false, false]) => {
+            Some(vec![vec![format!("option({a})"), format!("!option({b})")]])
+        }
+        ([a, b], [false, false, true, false]) => {
+            Some(vec![vec![format!("!option({a})"), format!("option({b})")]])
+        }
+        ([a, b], [true, false, false, false]) => {
+            Some(vec![vec![format!("!option({a})"), format!("!option({b})")]])
+        }
+        ([a, b], [false, true, true, true]) => {
+            Some(vec![vec![format!("option({a})")], vec![format!("option({b})")]])
+        }
+        ([a, b], [true, true, false, true]) => {
+            Some(vec![vec![format!("option({a})")], vec![format!("!option({b})")]])
+        }
+        ([a, b], [true, false, true, true]) => {
+            Some(vec![vec![format!("!option({a})")], vec![format!("option({b})")]])
+        }
+        ([a, b], [true, true, true, false]) => {
+            Some(vec![vec![format!("!option({a})")], vec![format!("!option({b})")]])
+        }
+        ([a, b], [false, true, true, false]) => Some(vec![
+            vec![format!("option({a})"), format!("!option({b})")],
+            vec![format!("!option({a})"), format!("option({b})")],
+        ]),
+        ([a, b], [true, false, false, true]) => Some(vec![
+            vec![format!("!option({a})"), format!("!option({b})")],
+            vec![format!("option({a})"), format!("option({b})")],
+        ]),
+        _ => None,
+    }
+}
+
 fn infer_main_state_option_draw_condition(
     function: &Function,
     main_state_probe: &Arc<Mutex<MainStateProbe>>,
@@ -4631,6 +4800,7 @@ fn infer_boolean_predicate(
             }
         })
         .or_else(|| infer_float_number_and_number_and_draw(function, main_state_probe))
+        .or_else(|| infer_main_state_event_index_options_draw_condition(function, main_state_probe))
         .or_else(|| infer_main_state_option_number_draw_condition(function, main_state_probe))
         .or_else(|| infer_main_state_draw_condition(function, main_state_probe))
         .or_else(|| infer_main_state_event_index_draw_condition(function, main_state_probe))
@@ -6736,6 +6906,52 @@ mod tests {
         assert_eq!(
             infer_main_state_event_index_draw_condition(&function, &probe),
             Some("event_index(42) == 2 or event_index(42) == 3".to_string())
+        );
+    }
+
+    #[test]
+    fn infers_event_index_and_dp_side_options_draw_condition() {
+        let lua = Lua::new();
+        let probe = Arc::new(Mutex::new(MainStateProbe::default()));
+        let main_state = create_main_state_stub(&lua, probe.clone()).unwrap();
+        lua.globals().set("main_state", main_state).unwrap();
+        let random = lua
+            .load(
+                r#"
+                return function()
+                    local rnd = main_state.event_index(43)
+                    return (rnd == 2 or rnd == 3)
+                        and (main_state.option(162) or main_state.option(163))
+                end
+                "#,
+            )
+            .eval::<Function>()
+            .unwrap();
+        let normal = lua
+            .load(
+                r#"
+                return function()
+                    return main_state.event_index(43) == 0
+                        and (main_state.option(162) or main_state.option(163))
+                end
+                "#,
+            )
+            .eval::<Function>()
+            .unwrap();
+
+        assert_eq!(
+            infer_boolean_predicate(&random, &probe, None),
+            Some(
+                "event_index(43) == 2 and option(162) or event_index(43) == 2 and option(163) or event_index(43) == 3 and option(162) or event_index(43) == 3 and option(163)"
+                    .to_string()
+            )
+        );
+        assert_eq!(
+            infer_boolean_predicate(&normal, &probe, None),
+            Some(
+                "event_index(43) == 0 and option(162) or event_index(43) == 0 and option(163)"
+                    .to_string()
+            )
         );
     }
 

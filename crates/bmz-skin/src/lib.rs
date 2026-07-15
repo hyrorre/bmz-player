@@ -2910,6 +2910,25 @@ mod tests {
                         "timer(173) == timer_off and timer(174) == timer_off"
                     )
         )));
+        let p2_random_draws = loaded
+            .document
+            .destination
+            .iter()
+            .filter_map(|entry| match entry {
+                bmz_skin_document::DestinationListEntry::Single(destination)
+                    if destination.id.starts_with("randomKeySet2P_") =>
+                {
+                    Some(destination.draw.as_str())
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(p2_random_draws.len(), 7);
+        assert!(p2_random_draws.iter().all(|draw| {
+            draw.contains("event_index(43) == 2 and option(162)")
+                && draw.contains("event_index(43) == 3 and option(163)")
+                && !draw.contains("number(0) < 0")
+        }));
 
         let graph_options =
             BTreeMap::from([("Expand Panel".to_string(), "ON - GRAPH DEFAULT".to_string())]);
