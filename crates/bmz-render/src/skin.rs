@@ -7971,7 +7971,8 @@ fn skin_state_lane_judge_event_index(event_id: i32, state: &SkinDrawState) -> Op
 /// beatoraja `main_state.float_number(ref)`。BARGRAPH / SLIDER 系の比率 0.0-1.0。
 fn skin_state_float_number(ref_id: i32, state: &SkinDrawState) -> Option<f32> {
     match ref_id {
-        // RateType values.
+        // `MainStateAccessor.float_number()` calls beatoraja's getRateProperty(),
+        // so only SLIDER/BARGRAPH RateType IDs belong to this namespace.
         1 => Some(state.select_scroll_progress.clamp(0.0, 1.0)),
         4 | 5 => Some(if state.lanecover_enabled {
             bmz_lane_cover_for_lift(state.lane_cover, state.lift)
@@ -7979,55 +7980,11 @@ fn skin_state_float_number(ref_id: i32, state: &SkinDrawState) -> Option<f32> {
             0.0
         }),
         6 => Some(state.play_progress.clamp(0.0, 1.0)),
-        14 => Some(bmz_lane_cover_for_lift(state.lane_cover, state.lift)),
         17 => Some(state.select_master_volume.clamp(0.0, 1.0)),
         18 => Some(state.select_key_volume.clamp(0.0, 1.0)),
         19 => Some(state.select_bgm_volume.clamp(0.0, 1.0)),
-        101 | 102 | 110..=115 | 140..=149 => Some(graph_value(ref_id, state)),
-        // FloatType score rates.
-        1102 => current_score_rate_notes(state).map(|_| current_score_rate_value(state)),
-        1115 | 155 => score_rate_value(state.ex_score, state.total_notes),
-        85 => judge_rate_value(state.judge_counts.pgreat, state.total_notes),
-        86 => judge_rate_value(state.judge_counts.great, state.total_notes),
-        87 => judge_rate_value(state.judge_counts.good, state.total_notes),
-        88 => judge_rate_value(state.judge_counts.bad, state.total_notes),
-        89 => judge_rate_value(state.judge_counts.poor, state.total_notes),
-        183 => result_mybest_ex_score(state)
-            .and_then(|score| score_rate_value(score, state.total_notes)),
-        122 | 135 | 157 => {
-            state.target_ex_score.and_then(|score| score_rate_value(score, state.total_notes))
-        }
-        310 => (state.hispeed > 0.0).then_some(state.hispeed),
-        1107 if !state.select_screen && state.result_failed.is_some() => Some(state.gauge),
-        1107 if state.ready_timer_ms.is_some() || state.play_timer_ms.is_some() => {
-            Some(state.gauge)
-        }
-        165 => Some(if state.skin_loaded { 1.0 } else { 0.0 }),
-        372 => state.average_duration_us.map(|value| value as f32 / 1_000.0),
-        374 => state.average_timing_ms,
-        376 => state.stddev_timing_ms,
-        360 if chart_information_available(state) => Some(state.select_chart_peak_density),
-        362 if chart_information_available(state) => Some(state.select_chart_end_density),
-        367 if chart_information_available(state) => Some(state.select_chart_density),
-        368 if chart_information_available(state) => Some(state.select_chart_total_gauge),
+        101 | 102 | 110..=115 | 140..=147 => Some(graph_value(ref_id, state)),
         _ => None,
-    }
-}
-
-fn score_rate_value(ex_score: u32, total_notes: u32) -> Option<f32> {
-    let max_score = total_notes.checked_mul(2)?;
-    (max_score > 0).then_some(ex_score as f32 / max_score as f32)
-}
-
-fn judge_rate_value(count: u32, total_notes: u32) -> Option<f32> {
-    (total_notes > 0).then_some(count as f32 / total_notes as f32)
-}
-
-fn chart_information_available(state: &SkinDrawState) -> bool {
-    if state.select_screen {
-        select_chart_metadata_available(state)
-    } else {
-        state.result_failed.is_some() || state.total_notes > 0
     }
 }
 
@@ -8613,7 +8570,11 @@ fn skin_state_number(ref_id: i32, state: &SkinDrawState) -> Option<i64> {
         77 => Some(state.select_target_index as i64),
         78 if state.select_screen => Some(state.select_clear_count as i64),
         78 => Some(state.select_gauge_auto_shift_index as i64),
-        79 if state.select_screen => {
+        79 if state.select_screen
+            && (state.select_ex_score.is_some()
+                || state.select_play_count > 0
+                || state.select_clear_count > 0) =>
+        {
             Some(state.select_play_count.saturating_sub(state.select_clear_count) as i64)
         }
         341 => Some(state.select_bottom_shiftable_gauge_index as i64),
@@ -8742,10 +8703,15 @@ fn skin_state_number(ref_id: i32, state: &SkinDrawState) -> Option<i64> {
         153 => state.target_ex_score.map(|target| {
             state.ex_score as i64 - projected_score_at_progress(target, state) as i64
         }),
-        // NUMBER_TARGET_MAXCOMBO=173
-        173 => state.target_max_combo.map(|c| c as i64),
-        // NUMBER_DIFF_MAXCOMBO=175 (符号付き、max_combo - target_max_combo)
-        175 => state.target_max_combo.map(|target| state.max_combo as i64 - target as i64),
+        // NUMBER_TARGET_MAXCOMBO=173 is the old/my-best score on Result.
+        173 if state.result_failed.is_some() => {
+            state.previous_best_max_combo.filter(|combo| *combo > 0).map(|combo| combo as i64)
+        }
+        // NUMBER_DIFF_MAXCOMBO=175 (current - old/my-best).
+        175 if state.result_failed.is_some() => state
+            .previous_best_max_combo
+            .filter(|combo| *combo > 0)
+            .map(|previous| state.max_combo as i64 - previous as i64),
         // NUMBER_TARGET_MISSCOUNT=176 (Result では old/mybest min_bp)
         176 => result_mybest_bp(state).map(|c| c as i64),
         // NUMBER_MISSCOUNT2=177 (Result では今回の min_bp)
@@ -20514,8 +20480,8 @@ mod tests {
         assert_eq!(skin_state_number(152, &state), Some(1888 - 1800));
         assert_eq!(skin_state_number(172, &state), Some(1888 - 1800));
         assert_eq!(skin_state_number(153, &state), Some(1888 - 1900));
-        assert_eq!(skin_state_number(173, &state), Some(1000));
-        assert_eq!(skin_state_number(175, &state), Some(777 - 1000));
+        assert_eq!(skin_state_number(173, &state), Some(700));
+        assert_eq!(skin_state_number(175, &state), Some(777 - 700));
         assert_eq!(skin_state_number(176, &state), Some(10));
         assert_eq!(skin_state_number(177, &state), Some(8));
         // 現在 bp = bad+poor = 8、MYBEST = 更新前の 10 → diff = -2
@@ -20673,6 +20639,7 @@ mod tests {
         let select = SkinDrawState {
             select_screen: true,
             select_play_level: 12,
+            select_ex_score: Some(0),
             select_play_count: 9,
             select_clear_count: 4,
             ..SkinDrawState::default()
@@ -20717,23 +20684,10 @@ mod tests {
             select_chart_total_gauge: 350.0,
             ..SkinDrawState::default()
         };
-        assert!(approx_eq(skin_state_float_number(1102, &state).unwrap(), 0.8));
-        assert!(approx_eq(skin_state_float_number(1115, &state).unwrap(), 0.4));
-        assert!(approx_eq(skin_state_float_number(155, &state).unwrap(), 0.4));
-        assert!(approx_eq(skin_state_float_number(85, &state).unwrap(), 0.2));
-        assert!(approx_eq(skin_state_float_number(183, &state).unwrap(), 0.6));
-        assert!(approx_eq(skin_state_float_number(122, &state).unwrap(), 0.75));
-        assert!(approx_eq(skin_state_float_number(310, &state).unwrap(), 1.75));
-        assert!(approx_eq(skin_state_float_number(1107, &state).unwrap(), 42.5));
-        assert_eq!(skin_state_float_number(14, &state), Some(0.0));
-        assert_eq!(skin_state_float_number(165, &state), Some(0.0));
-        assert!(approx_eq(skin_state_float_number(372, &state).unwrap(), 12.345));
-        assert!(approx_eq(skin_state_float_number(374, &state).unwrap(), -1.25));
-        assert!(approx_eq(skin_state_float_number(376, &state).unwrap(), 4.5));
-        assert!(approx_eq(skin_state_float_number(360, &state).unwrap(), 12.5));
-        assert!(approx_eq(skin_state_float_number(362, &state).unwrap(), 3.75));
-        assert!(approx_eq(skin_state_float_number(367, &state).unwrap(), 8.25));
-        assert!(approx_eq(skin_state_float_number(368, &state).unwrap(), 350.0));
+        assert!(approx_eq(skin_state_float_number(111, &state).unwrap(), 0.8));
+        assert!(approx_eq(skin_state_float_number(113, &state).unwrap(), 0.6));
+        assert_eq!(skin_state_float_number(1102, &state), None);
+        assert_eq!(skin_state_float_number(372, &state), None);
         assert_eq!(skin_state_float_number(9_999, &state), None);
         assert_eq!(skin_state_number(161, &state), Some(2));
         assert_eq!(skin_state_number(162, &state), Some(5));
