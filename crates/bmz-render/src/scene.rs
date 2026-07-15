@@ -512,6 +512,8 @@ pub enum ResultIrState {
     Offline,
     /// 送信・ランキング取得中 (OPTION_IR_LOADING=601)。
     Loading,
+    /// 選曲カーソルがランキング取得デバウンス中 (OPTION_IR_WAITING=606)。
+    Waiting,
     /// ランキング取得済み (OPTION_IR_LOADED=602)。
     Loaded,
     /// 取得失敗 (OPTION_IR_FAILED=604)。

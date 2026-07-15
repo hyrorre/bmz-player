@@ -232,7 +232,11 @@ impl SelectIrRanking {
                     .filter(|(_, in_flight_sha, _)| *in_flight_sha == sha256)
                     .map(|(_, _, started_at)| elapsed_since_ms(*started_at));
                 ResultIrSnapshot {
-                    state: SkinIrState::Loading,
+                    state: if begin_ms.is_some() {
+                        SkinIrState::Loading
+                    } else {
+                        SkinIrState::Waiting
+                    },
                     connect_begin_ms: begin_ms,
                     ..Default::default()
                 }
@@ -459,15 +463,15 @@ mod tests {
     }
 
     #[test]
-    fn snapshot_is_offline_without_provider_and_loading_when_uncached() {
+    fn snapshot_is_offline_without_provider_and_waiting_when_uncached() {
         let select_ir = SelectIrRanking::default();
         let sha = [7u8; 32];
 
         let offline = select_ir.snapshot_for(&ir_config(false), Some(sha));
         assert_eq!(offline.state, SkinIrState::Offline);
 
-        let loading = select_ir.snapshot_for(&ir_config(true), Some(sha));
-        assert_eq!(loading.state, SkinIrState::Loading);
+        let waiting = select_ir.snapshot_for(&ir_config(true), Some(sha));
+        assert_eq!(waiting.state, SkinIrState::Waiting);
 
         let none = select_ir.snapshot_for(&ir_config(true), None);
         assert_eq!(none.state, SkinIrState::Offline);
@@ -532,7 +536,7 @@ mod tests {
 
         select_ir.clear();
         let cleared = select_ir.snapshot_for(&ir_config(true), Some(sha));
-        assert_eq!(cleared.state, SkinIrState::Loading);
+        assert_eq!(cleared.state, SkinIrState::Waiting);
     }
 
     #[test]
@@ -595,6 +599,11 @@ mod tests {
         );
         assert!(select_ir.in_flight.is_none());
         assert!(select_ir.pending.is_some());
+        assert_eq!(select_ir.snapshot_for(&config, Some(sha)).state, SkinIrState::Waiting);
+
+        select_ir.in_flight = Some(("ctx".to_string(), sha, Instant::now()));
+        assert_eq!(select_ir.snapshot_for(&config, Some(sha)).state, SkinIrState::Loading);
+        select_ir.in_flight = None;
 
         // 選択が外れたら予約は破棄。
         select_ir.update(

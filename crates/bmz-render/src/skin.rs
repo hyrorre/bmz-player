@@ -6987,7 +6987,6 @@ fn test_skin_op(op: i32, enabled_options: &[i32], state: &SkinDrawState) -> bool
         624 => state.rival_ex_score.is_none(),
         625 => state.rival_ex_score.is_some(),
         // OPTION_IR_LOADING / LOADED / NOPLAYER / FAILED (601..604)。
-        // BANNED / WAITING / ACCESSING / BUSY (605..608) は未対応で false。
         601 => matches!(state.ir_ranking.state, crate::scene::ResultIrState::Loading),
         602 => matches!(state.ir_ranking.state, crate::scene::ResultIrState::Loaded),
         603 => {
@@ -6995,7 +6994,12 @@ fn test_skin_op(op: i32, enabled_options: &[i32], state: &SkinDrawState) -> bool
                 && state.ir_ranking.total_player == Some(0)
         }
         604 => matches!(state.ir_ranking.state, crate::scene::ResultIrState::Failed),
-        605..=608 => false,
+        // beatoraja MusicSelector: ranking object生成前はWAITING。
+        606 => matches!(state.ir_ranking.state, crate::scene::ResultIrState::Waiting),
+        // BooleanPropertyFactory のIR_BUSYは現行beatorajaでFAILと同条件。
+        608 => matches!(state.ir_ranking.state, crate::scene::ResultIrState::Failed),
+        // BANNED / ACCESSING は現行beatorajaにもproperty実装がない。
+        605 | 607 => false,
         // OPTION_DIFFICULTY0..5. 0 は UNKNOWN/OTHER、1..5 は BMS #DIFFICULTY。
         150 => state.difficulty <= 0 || state.difficulty > 5,
         151..=155 => state.difficulty == i64::from(op - 150),
@@ -21168,6 +21172,17 @@ mod tests {
         };
         assert!(test_skin_op(601, &[], &loading));
         assert!(!test_skin_op(602, &[], &loading));
+        assert!(!test_skin_op(606, &[], &loading));
+
+        let waiting = SkinDrawState {
+            ir_ranking: crate::scene::ResultIrSnapshot {
+                state: crate::scene::ResultIrState::Waiting,
+                ..Default::default()
+            },
+            ..SkinDrawState::default()
+        };
+        assert!(test_skin_op(606, &[], &waiting));
+        assert!(!test_skin_op(601, &[], &waiting));
 
         let failed = SkinDrawState {
             ir_ranking: crate::scene::ResultIrSnapshot {
@@ -21177,6 +21192,7 @@ mod tests {
             ..SkinDrawState::default()
         };
         assert!(test_skin_op(604, &[], &failed));
+        assert!(test_skin_op(608, &[], &failed));
 
         let no_player = SkinDrawState {
             ir_ranking: crate::scene::ResultIrSnapshot {

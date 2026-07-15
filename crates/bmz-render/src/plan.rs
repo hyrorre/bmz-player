@@ -1906,6 +1906,7 @@ fn ir_ranking_label(ir: &crate::scene::ResultIrSnapshot) -> Option<String> {
     match ir.state {
         ResultIrState::Offline => None,
         ResultIrState::Loading => Some("IR LOADING...".to_string()),
+        ResultIrState::Waiting => Some("IR WAITING...".to_string()),
         ResultIrState::Failed => Some("IR FAILED".to_string()),
         ResultIrState::Loaded => match (ir.rank, ir.total_player) {
             (Some(rank), Some(total)) => Some(format!("IR RANK {rank}/{total}")),
