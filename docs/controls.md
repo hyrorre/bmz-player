@@ -141,6 +141,8 @@ favorite 操作は invisible を使わず、登録済みなら解除、未登録
 
 ## リザルト画面
 
+対応スキンでは、`GRAPH DATA` / `INTERNET RANKING` タブをマウスでクリックしてパネルを直接切り替えられます。
+
 ### 単曲リザルト
 
 | Key | 操作 |

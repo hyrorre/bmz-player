@@ -895,6 +895,18 @@ impl Renderer {
         self.select_skin_context.select_click_hit(snapshot, x, y)
     }
 
+    pub fn result_skin_click_hit(
+        &self,
+        snapshot: &crate::scene::ResultSnapshot,
+        x: f32,
+        y: f32,
+    ) -> Option<SkinClickHit> {
+        let (x, y) = self.result_skin_canvas_point(x, y)?;
+        let document = self.result_skin_context.document()?;
+        let state = crate::plan::result_skin_draw_state(snapshot, document.ranktime);
+        self.result_skin_context.result_click_hit(&state, x, y)
+    }
+
     pub fn select_skin_slider_hit(
         &self,
         snapshot: &crate::scene::SelectSnapshot,
@@ -1087,6 +1099,15 @@ impl Renderer {
         };
         let viewport =
             CanvasViewport::from_policy(surface, self.select_skin_canvas_render_policy());
+        viewport.surface_to_canvas_point(x, y)
+    }
+
+    fn result_skin_canvas_point(&self, x: f32, y: f32) -> Option<(f32, f32)> {
+        let Some(surface) = self.gpu.as_ref().map(WgpuRenderer::surface_size) else {
+            return Some((x, y));
+        };
+        let viewport =
+            CanvasViewport::from_policy(surface, self.result_skin_canvas_render_policy());
         viewport.surface_to_canvas_point(x, y)
     }
 

@@ -1680,6 +1680,60 @@ mod tests {
     }
 
     #[test]
+    fn lua_skin_maps_result_panel_act_without_mutating_default() {
+        let root = unique_test_dir("bmz-skin-lua-result-panel-act");
+        fs::create_dir_all(&root).unwrap();
+        fs::write(
+            root.join("result.luaskin"),
+            r#"
+            Expand_op = 2
+            return {
+                type = 7,
+                image = {
+                    {
+                        id = "BtnGraphData", src = "src", x = 0, y = 0, w = 10, h = 10,
+                        act = function() Expand_op = 2 end,
+                    },
+                    {
+                        id = "BtnIrData", src = "src", x = 0, y = 0, w = 10, h = 10,
+                        act = function() Expand_op = 1 end,
+                    },
+                },
+                destination = {
+                    {
+                        id = "BtnGraphData",
+                        draw = function() return Expand_op == 1 end,
+                        dst = {{ x = 0, y = 0, w = 10, h = 10 }},
+                    },
+                    {
+                        id = "BtnIrData",
+                        draw = function() return Expand_op == 2 end,
+                        dst = {{ x = 10, y = 0, w = 10, h = 10 }},
+                    },
+                },
+            }
+            "#,
+        )
+        .unwrap();
+
+        let loaded =
+            load_lua_skin_value(&root.join("result.luaskin"), &BTreeMap::new(), &BTreeMap::new())
+                .unwrap();
+
+        assert_eq!(
+            loaded.value["image"][0]["act"],
+            serde_json::json!(bmz_skin_document::SKIN_EVENT_RESULT_PANEL_GRAPH)
+        );
+        assert_eq!(
+            loaded.value["image"][1]["act"],
+            serde_json::json!(bmz_skin_document::SKIN_EVENT_RESULT_PANEL_IR)
+        );
+        assert_eq!(loaded.value["resultPanelDefault"], serde_json::json!(2));
+        assert_eq!(loaded.value["destination"][0]["draw"], "result_panel(1)");
+        assert_eq!(loaded.value["destination"][1]["draw"], "result_panel(2)");
+    }
+
+    #[test]
     fn lua_skin_infers_fixed_delay_custom_timer() {
         let root = unique_test_dir("bmz-skin-lua");
         fs::create_dir_all(&root).unwrap();
@@ -2890,7 +2944,7 @@ mod tests {
             });
         let timing_average_draws = timing_average_draws.collect::<Vec<_>>();
         assert!(timing_average_draws.iter().any(|draw| {
-            draw.contains("result_panel(2)") && draw.contains("number(374) < 0 or number(375) < 0")
+            *draw == "result_panel(2) and number(374) < 0 or result_panel(2) and number(375) < 0"
         }));
         assert!(
             timing_average_draws.iter().any(|draw| {

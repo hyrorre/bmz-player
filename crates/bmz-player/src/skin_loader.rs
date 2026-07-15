@@ -2472,6 +2472,24 @@ mod tests {
         .expect("unmodified WMII result backup should decode through the BMZ loader");
 
         assert_eq!(loaded.document.result_panel_default, Some(2));
+        assert_eq!(
+            loaded
+                .document
+                .image
+                .iter()
+                .find(|image| image.id == "BtnGraphData")
+                .and_then(|image| image.act),
+            Some(bmz_render::skin::SKIN_EVENT_RESULT_PANEL_GRAPH)
+        );
+        assert_eq!(
+            loaded
+                .document
+                .image
+                .iter()
+                .find(|image| image.id == "BtnIrData")
+                .and_then(|image| image.act),
+            Some(bmz_render::skin::SKIN_EVENT_RESULT_PANEL_IR)
+        );
         assert!(loaded.document.destination.iter().any(|entry| matches!(
             entry,
             DestinationListEntry::Single(destination)
@@ -2520,6 +2538,40 @@ mod tests {
             .collect::<Vec<_>>();
         assert_eq!(clear_backgrounds.len(), 3);
         assert!(clear_backgrounds.iter().all(|destination| destination.op == [90]));
+        let expanded_timing_values = destinations
+            .iter()
+            .filter(|destination| {
+                matches!(
+                    destination.id.as_str(),
+                    "timingAvg"
+                        | "timingAvgAdot"
+                        | "timingDotMS"
+                        | "durationAvg"
+                        | "durationAvgAdot"
+                        | "stddav"
+                        | "stddaAdot"
+                ) && destination.dst.first().is_some_and(|entry| {
+                    matches!(
+                        entry,
+                        bmz_render::skin::SkinDstEntry::Frame(frame)
+                            if frame.x.is_some_and(|x| x >= 1_000)
+                    )
+                })
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(expanded_timing_values.len(), 12);
+        assert!(
+            expanded_timing_values.iter().all(|destination| {
+                destination.draw.contains("result_panel(2)")
+                    && !destination.draw.contains("result_panel(0)")
+                    && !destination.draw.contains("result_panel(1)")
+            }),
+            "expanded timing values must stay hidden on the IR panel: {:?}",
+            expanded_timing_values
+                .iter()
+                .map(|destination| (destination.id.as_str(), destination.draw.as_str()))
+                .collect::<Vec<_>>()
+        );
         assert_eq!(
             loaded.dependencies.virtual_io_files.get("config_sys.json"),
             Some(&Some("{\"playername\":\"bmz\"}".to_string()))

@@ -163,9 +163,9 @@ use crate::ui::{
 };
 use crate::update::{DownloadedUpdate, UpdateAssetKind, UpdateCandidate};
 use bmz_render::skin::{
-    DestinationListEntry, SkinAnimationDef, SkinClickHit, SkinClickTarget, SkinContext,
-    SkinDestinationDef, SkinDocument, SkinDocumentRenderExt, SkinDocumentTexture, SkinDstEntry,
-    SkinManifest, SkinSliderHit,
+    DestinationListEntry, SKIN_EVENT_RESULT_PANEL_GRAPH, SKIN_EVENT_RESULT_PANEL_IR,
+    SkinAnimationDef, SkinClickHit, SkinClickTarget, SkinContext, SkinDestinationDef, SkinDocument,
+    SkinDocumentRenderExt, SkinDocumentTexture, SkinDstEntry, SkinManifest, SkinSliderHit,
 };
 const SAMPLE_PLAYABLE_TITLE: &str = "BMZ Sample Playable";
 
@@ -5304,10 +5304,6 @@ impl WinitApp {
     }
 
     fn route_mouse_input(&mut self, state: ElementState, button: MouseButton) {
-        if !matches!(self.view_state(), AppViewState::Select) {
-            self.select_slider_dragging_type = None;
-            return;
-        }
         if state == ElementState::Released {
             self.select_slider_dragging_type = None;
             return;
@@ -5318,6 +5314,15 @@ impl WinitApp {
         let Some((x, y)) = self.cursor_position_normalized() else {
             return;
         };
+        if matches!(self.view_state(), AppViewState::Result(_)) {
+            self.select_slider_dragging_type = None;
+            self.handle_result_skin_click(x, y);
+            return;
+        }
+        if !matches!(self.view_state(), AppViewState::Select) {
+            self.select_slider_dragging_type = None;
+            return;
+        }
         if button == MouseButton::Left
             && !in_settings_stack(&self.folder_stack)
             && self.select_search_word_hit(x, y)
@@ -5342,6 +5347,24 @@ impl WinitApp {
             return;
         };
         self.handle_select_skin_click(hit, button, x, y);
+    }
+
+    fn handle_result_skin_click(&mut self, x: f32, y: f32) {
+        let AppSceneSnapshot::Result(snapshot) = self.scene_snapshot() else {
+            return;
+        };
+        let Some(hit) = self.renderer.result_skin_click_hit(&snapshot, x, y) else {
+            return;
+        };
+        let SkinClickTarget::Event { event_id, .. } = hit.target else {
+            return;
+        };
+        let panel = match event_id {
+            SKIN_EVENT_RESULT_PANEL_IR => 1,
+            SKIN_EVENT_RESULT_PANEL_GRAPH => 2,
+            _ => return,
+        };
+        self.set_result_panel(panel);
     }
 
     fn route_select_slider_drag(&mut self) {
@@ -9154,8 +9177,23 @@ impl WinitApp {
         let Some(document) = self.renderer.result_skin_document() else {
             return false;
         };
-        let Some(panel) = toggled_result_panel(
+        let Some(requested) = toggled_result_panel(
             self.result_panel,
+            result_panel_supported(document),
+            self.result_ir.is_some(),
+        ) else {
+            return false;
+        };
+        self.set_result_panel(requested)
+    }
+
+    fn set_result_panel(&mut self, requested: i32) -> bool {
+        let Some(document) = self.renderer.result_skin_document() else {
+            return false;
+        };
+        let Some(panel) = selected_result_panel(
+            self.result_panel,
+            requested,
             result_panel_supported(document),
             self.result_ir.is_some(),
         ) else {
@@ -15525,12 +15563,29 @@ fn is_course_intermediate_result(
 }
 
 fn toggled_result_panel(current: i32, supported: bool, ir_available: bool) -> Option<i32> {
-    if !supported || !ir_available {
+    if !ir_available {
         return None;
     }
-    match current {
-        1 => Some(2),
-        2 => Some(1),
+    let requested = match current {
+        1 => 2,
+        2 => 1,
+        _ => return None,
+    };
+    selected_result_panel(current, requested, supported, ir_available)
+}
+
+fn selected_result_panel(
+    current: i32,
+    requested: i32,
+    supported: bool,
+    ir_available: bool,
+) -> Option<i32> {
+    if !supported || current == requested {
+        return None;
+    }
+    match requested {
+        1 if ir_available => Some(1),
+        2 if matches!(current, 1 | 2) => Some(2),
         _ => None,
     }
 }
@@ -21447,6 +21502,16 @@ mod tests {
         assert_eq!(toggled_result_panel(0, true, true), None);
         assert_eq!(toggled_result_panel(1, false, true), None);
         assert_eq!(toggled_result_panel(1, true, false), None);
+    }
+
+    #[test]
+    fn result_panel_direct_selection_matches_tab_availability() {
+        assert_eq!(selected_result_panel(1, 2, true, true), Some(2));
+        assert_eq!(selected_result_panel(2, 1, true, true), Some(1));
+        assert_eq!(selected_result_panel(2, 1, true, false), None);
+        assert_eq!(selected_result_panel(1, 2, true, false), Some(2));
+        assert_eq!(selected_result_panel(2, 2, true, true), None);
+        assert_eq!(selected_result_panel(1, 2, false, true), None);
     }
 
     #[test]

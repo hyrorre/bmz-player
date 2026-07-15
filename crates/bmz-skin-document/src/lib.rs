@@ -574,6 +574,10 @@ pub const SKIN_DYNAMIC_TIMER_BASE: i32 = 9000;
 pub const SKIN_REF_PLAY_GAUGE_TYPE: i32 = 44;
 /// beatoraja `BUTTON_HSFIX` (`event_index(55)`)。
 pub const SKIN_EVENT_HSFIX: i32 = 55;
+/// Lua result skin の定数 `Expand_op` 代入を宣言的クリックイベントへ変換する ID。
+/// beatoraja の正数イベント ID と衝突しない BMZ 内部予約値を使う。
+pub const SKIN_EVENT_RESULT_PANEL_IR: i32 = -10_001;
+pub const SKIN_EVENT_RESULT_PANEL_GRAPH: i32 = -10_002;
 /// beatoraja `NUMBER_RANDOM_1P_1KEY..NUMBER_RANDOM_2P_SCR` (450..469).
 pub const SKIN_RANDOM_LANE_REF_BASE: i32 = 450;
 pub const SKIN_RANDOM_LANE_REF_COUNT: usize = 20;

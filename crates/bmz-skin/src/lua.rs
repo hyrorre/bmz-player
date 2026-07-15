@@ -11,11 +11,12 @@ use mlua::{Function, HookTriggers, Lua, Table, Value, Variadic, VmState};
 use serde_json::{Map as JsonMap, Number as JsonNumber, Value as JsonValue};
 
 use bmz_skin_document::{
-    SKIN_DYNAMIC_TIMER_BASE, SKIN_EXPR_ADJUSTED_COVER, SKIN_EXPR_ADJUSTED_RATE,
-    SKIN_EXPR_ADJUSTED_RATE_ADOT, SKIN_EXPR_COURSE_TABLE_TEXT,
-    SKIN_EXPR_FAST_SLOW_BREAKDOWN_HEIGHT, SKIN_EXPR_FS_THRESHOLD, SKIN_EXPR_GAUGE_AMOUNT_FRACTION,
-    SKIN_EXPR_GAUGE_AMOUNT_INTEGER, SKIN_EXPR_GAUGE_PERCENT_FRACTION,
-    SKIN_EXPR_GAUGE_PERCENT_INTEGER, SKIN_EXPR_RESULT_TABLE_TITLE, SKIN_REF_PLAY_GAUGE_TYPE,
+    SKIN_DYNAMIC_TIMER_BASE, SKIN_EVENT_RESULT_PANEL_GRAPH, SKIN_EVENT_RESULT_PANEL_IR,
+    SKIN_EXPR_ADJUSTED_COVER, SKIN_EXPR_ADJUSTED_RATE, SKIN_EXPR_ADJUSTED_RATE_ADOT,
+    SKIN_EXPR_COURSE_TABLE_TEXT, SKIN_EXPR_FAST_SLOW_BREAKDOWN_HEIGHT, SKIN_EXPR_FS_THRESHOLD,
+    SKIN_EXPR_GAUGE_AMOUNT_FRACTION, SKIN_EXPR_GAUGE_AMOUNT_INTEGER,
+    SKIN_EXPR_GAUGE_PERCENT_FRACTION, SKIN_EXPR_GAUGE_PERCENT_INTEGER,
+    SKIN_EXPR_RESULT_TABLE_TITLE, SKIN_REF_PLAY_GAUGE_TYPE,
 };
 
 use crate::{
@@ -3283,11 +3284,13 @@ fn lua_table_to_json(
                 }
                 continue;
             }
-            if key == "act"
-                && let Some(event_id) = infer_constant_integer_at_load(function, main_state_probe)
-            {
-                object.insert(key.clone(), JsonValue::Number(JsonNumber::from(event_id)));
-                continue;
+            if key == "act" {
+                let event_id = infer_constant_integer_at_load(function, main_state_probe)
+                    .or_else(|| infer_result_panel_act_at_load(lua, function));
+                if let Some(event_id) = event_id {
+                    object.insert(key.clone(), JsonValue::Number(JsonNumber::from(event_id)));
+                    continue;
+                }
             }
             if key == "draw" {
                 if let Some(draw) = infer_result_panel_draw_condition(
@@ -4841,6 +4844,26 @@ fn infer_constant_integer_at_load(
     }
 }
 
+fn infer_result_panel_act_at_load(lua: &Lua, function: &Function) -> Option<i64> {
+    let current = lua.globals().raw_get::<Value>("Expand_op").ok()?;
+    lua_result_panel_value(current)?;
+
+    // WMII の tab callback は `Expand_op = 1/2` だけを行う。元の Lua state を
+    // 実行時まで保持せず、隔離 state で代入先を観測して BMZ 内部 event に変換する。
+    let isolated = Lua::new();
+    let dumped = function.dump(true);
+    let isolated_function = isolated.load(&dumped).into_function().ok()?;
+    if !matches!(isolated_function.call::<Value>(()).ok()?, Value::Nil) {
+        return None;
+    }
+    let panel = isolated.globals().raw_get::<Value>("Expand_op").ok()?;
+    match lua_result_panel_value(panel)? {
+        1 => Some(i64::from(SKIN_EVENT_RESULT_PANEL_IR)),
+        2 => Some(i64::from(SKIN_EVENT_RESULT_PANEL_GRAPH)),
+        _ => None,
+    }
+}
+
 fn collect_number_refs(
     function: &Function,
     main_state_probe: &Arc<Mutex<MainStateProbe>>,
@@ -4999,7 +5022,11 @@ fn verify_draw_condition(
     refs: &[i32],
     expected: impl Fn(&BTreeMap<i32, i32>) -> bool,
 ) -> bool {
-    let samples = [-1, 0, 1, 2, 3, 5];
+    // Keep consecutive values through one past the largest threshold inferred
+    // by `infer_two_number_compare_and`. Without 4/6, an always-false draw can
+    // spuriously match `left > right and right >= 4/5` because the verifier has
+    // no sampled pair that can satisfy those predicates.
+    let samples = [-1, 0, 1, 2, 3, 4, 5, 6];
     for &left in &samples {
         for &right in &samples {
             let mut values = BTreeMap::new();
@@ -5406,10 +5433,13 @@ fn infer_result_panel_draw_condition(
     let branches = conditions
         .into_iter()
         .enumerate()
-        .filter_map(|(panel, condition)| match condition.as_deref() {
-            None | Some(ALWAYS_FALSE) => None,
-            Some(ALWAYS_TRUE) => Some(format!("result_panel({panel})")),
-            Some(condition) => Some(format!("result_panel({panel}) and {condition}")),
+        .flat_map(|(panel, condition)| match condition.as_deref() {
+            None | Some(ALWAYS_FALSE) => Vec::new(),
+            Some(ALWAYS_TRUE) => vec![format!("result_panel({panel})")],
+            Some(condition) => condition
+                .split(" or ")
+                .map(|branch| format!("result_panel({panel}) and {branch}"))
+                .collect(),
         })
         .collect::<Vec<_>>();
     (!branches.is_empty()).then(|| branches.join(" or "))
@@ -6573,6 +6603,14 @@ mod tests {
                     own = function()
                         return main_state.text(122) == main_state.text(1021) and Expand_op == 1
                     end,
+                    timing_negative = function()
+                        return (main_state.number(374) + main_state.number(375) * 0.01) < 0
+                            and Expand_op == 2
+                    end,
+                    timing_non_negative = function()
+                        return (main_state.number(374) + main_state.number(375) * 0.01) >= 0
+                            and Expand_op == 2
+                    end,
                 }
                 "#,
             )
@@ -6618,6 +6656,26 @@ mod tests {
             )
             .as_deref(),
             Some("result_panel(1) and ir_ranking_user(3)")
+        );
+        assert_eq!(
+            infer_result_panel_draw_condition(
+                &lua,
+                &functions.get::<Function>("timing_negative").unwrap(),
+                Some("timingAvg"),
+                &probe,
+            )
+            .as_deref(),
+            Some("result_panel(2) and number(374) < 0 or result_panel(2) and number(375) < 0")
+        );
+        assert_eq!(
+            infer_result_panel_draw_condition(
+                &lua,
+                &functions.get::<Function>("timing_non_negative").unwrap(),
+                Some("timingAvg"),
+                &probe,
+            )
+            .as_deref(),
+            Some("result_panel(2) and number(374) >= 0 and number(375) >= 0")
         );
         assert_eq!(lua.globals().get::<i32>("Expand_op").unwrap(), 2);
     }

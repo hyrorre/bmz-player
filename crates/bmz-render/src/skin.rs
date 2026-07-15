@@ -494,6 +494,10 @@ impl SkinContext {
         )
     }
 
+    pub fn result_click_hit(&self, state: &SkinDrawState, x: f32, y: f32) -> Option<SkinClickHit> {
+        self.document.as_ref()?.result_click_hit(state, x, y)
+    }
+
     pub fn select_slider_hit(
         &self,
         snapshot: &SelectSnapshot,
@@ -2110,6 +2114,8 @@ pub trait SkinDocumentRenderExt {
         y: f32,
     ) -> Option<SkinClickHit>;
 
+    fn result_click_hit(&self, state: &SkinDrawState, x: f32, y: f32) -> Option<SkinClickHit>;
+
     fn select_slider_hit(
         &self,
         snapshot: &SelectSnapshot,
@@ -3702,6 +3708,32 @@ impl SkinDocumentRenderExt for SkinDocument {
     ) -> Option<SkinClickHit> {
         self.select_click_hits(sources, snapshot, settings_dest_index)
             .into_iter()
+            .rev()
+            .find(|hit| rect_contains(hit.rect, x, y))
+    }
+
+    fn result_click_hit(&self, state: &SkinDrawState, x: f32, y: f32) -> Option<SkinClickHit> {
+        let enabled_options = self.enabled_options();
+        let images = self.image_map();
+        let destinations = self.all_destinations(&enabled_options);
+        let has_nearest_f_diff_rank_destination =
+            nearest_f_diff_rank_destination_available(&destinations);
+        destinations
+            .into_iter()
+            .filter(|destination| {
+                destination_ops_match(
+                    destination,
+                    &enabled_options,
+                    state,
+                    has_nearest_f_diff_rank_destination,
+                ) && eval_skin_draw_condition(&destination.draw, state)
+            })
+            .filter_map(|destination| {
+                Some(SkinClickHit {
+                    target: self.click_target_for_destination(destination, &images)?,
+                    rect: self.destination_click_rect(destination, &enabled_options, state)?,
+                })
+            })
             .rev()
             .find(|hit| rect_contains(hit.rect, x, y))
     }
@@ -18374,6 +18406,44 @@ mod tests {
 
         assert_eq!(hit.target, SkinClickTarget::Event { event_id: 15, click: 2 });
         assert_eq!(hit.rect, Rect { x: 0.1, y: 0.7, width: 0.3, height: 0.1 });
+    }
+
+    #[test]
+    fn result_click_hit_uses_runtime_panel_visibility() {
+        let document: SkinDocument = serde_json::from_str(
+            r#"
+            {
+                "type": 7,
+                "w": 100,
+                "h": 100,
+                "image": [
+                    { "id": "graph", "src": 1, "x": 0, "y": 0, "w": 10, "h": 10, "act": -10002 },
+                    { "id": "ir", "src": 1, "x": 0, "y": 0, "w": 10, "h": 10, "act": -10001 }
+                ],
+                "destination": [
+                    { "id": "graph", "draw": "result_panel(1)", "dst": [{ "x": 10, "y": 20, "w": 30, "h": 10 }] },
+                    { "id": "ir", "draw": "result_panel(2)", "dst": [{ "x": 50, "y": 20, "w": 30, "h": 10 }] }
+                ]
+            }
+            "#,
+        )
+        .unwrap();
+
+        let ir_panel = SkinDrawState { result_panel: Some(1), ..SkinDrawState::default() };
+        let graph_hit = document.result_click_hit(&ir_panel, 0.2, 0.75).unwrap();
+        assert_eq!(
+            graph_hit.target,
+            SkinClickTarget::Event { event_id: SKIN_EVENT_RESULT_PANEL_GRAPH, click: 0 }
+        );
+        assert!(document.result_click_hit(&ir_panel, 0.65, 0.75).is_none());
+
+        let graph_panel = SkinDrawState { result_panel: Some(2), ..SkinDrawState::default() };
+        let ir_hit = document.result_click_hit(&graph_panel, 0.65, 0.75).unwrap();
+        assert_eq!(
+            ir_hit.target,
+            SkinClickTarget::Event { event_id: SKIN_EVENT_RESULT_PANEL_IR, click: 0 }
+        );
+        assert!(document.result_click_hit(&graph_panel, 0.2, 0.75).is_none());
     }
 
     #[test]
