@@ -7663,6 +7663,16 @@ fn eval_skin_draw_term(term: &str, state: &SkinDrawState) -> Option<bool> {
         let score = score.clamp(0, max_score);
         return Some(score * 9 >= max_score * lower && score * 9 < max_score * upper);
     }
+    if let Some((slot, lower, upper)) = parse_ir_score_rate_range_predicate(term) {
+        let score = ir_ranking_entry(&state.ir_ranking, slot - 1)?.ex_score?;
+        let max_score =
+            i64::from(state.select_total_notes.max(state.total_notes)).checked_mul(2)?;
+        if max_score <= 0 {
+            return Some(false);
+        }
+        let score = score.clamp(0, max_score);
+        return Some(score * 1000 > max_score * lower && score * 1000 <= max_score * upper);
+    }
     if let Some(slot) = parse_ir_ranking_user_predicate(term) {
         let entry = ir_ranking_entry(&state.ir_ranking, slot - 1)?;
         let user_name = state.ir_ranking.user_name.as_str();
@@ -7761,6 +7771,21 @@ fn parse_ir_score_rate_band_predicate(term: &str) -> Option<(i32, i64, i64)> {
     if args.next().is_some()
         || !(1..=10).contains(&slot)
         || !(0 <= lower && lower < upper && upper <= 10)
+    {
+        return None;
+    }
+    Some((slot, lower, upper))
+}
+
+fn parse_ir_score_rate_range_predicate(term: &str) -> Option<(i32, i64, i64)> {
+    let inner = term.strip_prefix("ir_score_rate_range(")?.strip_suffix(')')?;
+    let mut args = inner.split(',').map(str::trim);
+    let slot = args.next()?.parse::<i32>().ok()?;
+    let lower = args.next()?.parse::<i64>().ok()?;
+    let upper = args.next()?.parse::<i64>().ok()?;
+    if args.next().is_some()
+        || !(1..=10).contains(&slot)
+        || !(-10 <= lower && lower < upper && upper <= 1000)
     {
         return None;
     }
@@ -21327,6 +21352,8 @@ mod tests {
         assert_eq!(skin_builtin_value_f32("bmz:ir_score_rate:1", &state), Some(0.775));
         assert!(eval_skin_draw_condition("ir_score_rate_band(1,6,7)", &state));
         assert!(!eval_skin_draw_condition("ir_score_rate_band(1,7,8)", &state));
+        assert!(eval_skin_draw_condition("option(51) and ir_score_rate_range(1,666,777)", &state));
+        assert!(!eval_skin_draw_condition("option(51) and ir_score_rate_range(1,777,888)", &state));
         assert!(eval_skin_draw_condition("ir_ranking_user(1)", &state));
         assert!(!eval_skin_draw_condition("ir_ranking_user(2)", &state));
     }

@@ -5168,6 +5168,15 @@ fn call_number_float_with_values(
     main_state_probe: &Arc<Mutex<MainStateProbe>>,
     values: BTreeMap<i32, i32>,
 ) -> Option<f64> {
+    call_number_float_raw_with_values(function, main_state_probe, values)
+        .filter(|value| value.is_finite())
+}
+
+fn call_number_float_raw_with_values(
+    function: &Function,
+    main_state_probe: &Arc<Mutex<MainStateProbe>>,
+    values: BTreeMap<i32, i32>,
+) -> Option<f64> {
     {
         main_state_probe.lock().ok()?.begin_number_recording_with_values(values);
     }
@@ -5175,7 +5184,7 @@ fn call_number_float_with_values(
     main_state_probe.lock().ok()?.end_recording();
     match result? {
         Value::Integer(value) => Some(value as f64),
-        Value::Number(value) if value.is_finite() => Some(value),
+        Value::Number(value) => Some(value),
         _ => None,
     }
 }
@@ -5197,6 +5206,22 @@ fn call_number_float_with_values_and_options(
     match result? {
         Value::Integer(value) => Some(value as f64),
         Value::Number(value) if value.is_finite() => Some(value),
+        _ => None,
+    }
+}
+
+fn call_draw_with_numbers_and_options(
+    function: &Function,
+    main_state_probe: &Arc<Mutex<MainStateProbe>>,
+    values: BTreeMap<i32, i32>,
+    options: BTreeMap<i32, bool>,
+) -> Option<bool> {
+    main_state_probe.lock().ok()?.begin_number_recording_with_values_and_options(values, options);
+    let result = function.call::<Value>(()).ok();
+    main_state_probe.lock().ok()?.end_recording();
+    match result? {
+        Value::Boolean(value) => Some(value),
+        Value::Nil => Some(false),
         _ => None,
     }
 }
@@ -5557,6 +5582,9 @@ fn infer_result_score_draw(
         id if id.starts_with("ir_scoreGraph") => {
             infer_ir_score_rate_band(function, id, main_state_probe)
         }
+        id if modern_chic_ir_ranking_graph(id).is_some() => {
+            infer_modern_chic_ir_score_rate_band(function, id, main_state_probe)
+        }
         "irYouFrame" => infer_ir_ranking_user_draw(function, main_state_probe),
         id if id.starts_with("nextRank") => {
             let grade = id.strip_prefix("nextRank")?;
@@ -5645,6 +5673,25 @@ fn ir_ranking_slot_from_id(id: &str, prefix: &str) -> Option<i32> {
     (1..=10).contains(&slot).then_some(slot)
 }
 
+fn modern_chic_ir_ranking_graph(id: &str) -> Option<(i32, &'static str)> {
+    let suffix = id.strip_prefix("s_rankingGraph")?;
+    let digit_start = suffix.find(|character: char| character.is_ascii_digit())?;
+    let (rank, slot) = suffix.split_at(digit_start);
+    let rank = match rank {
+        "AAA" => "AAA",
+        "AA" => "AA",
+        "A" => "A",
+        "B" => "B",
+        "C" => "C",
+        "D" => "D",
+        "E" => "E",
+        "F" => "F",
+        _ => return None,
+    };
+    let slot = slot.parse::<i32>().ok()?;
+    (1..=10).contains(&slot).then_some((slot, rank))
+}
+
 fn collect_text_refs(
     function: &Function,
     main_state_probe: &Arc<Mutex<MainStateProbe>>,
@@ -5716,18 +5763,24 @@ fn infer_ir_ranking_score_value_expr(
     object_id: Option<&str>,
     main_state_probe: &Arc<Mutex<MainStateProbe>>,
 ) -> Option<String> {
-    let slot = ir_ranking_slot_from_id(object_id?, "ir_scoreGraph")?;
+    let object_id = object_id?;
+    let modern_chic_slot = modern_chic_ir_ranking_graph(object_id).map(|(slot, _)| slot);
+    let slot = ir_ranking_slot_from_id(object_id, "ir_scoreGraph").or(modern_chic_slot)?;
     let score_ref = 379 + slot;
     if collect_number_refs(function, main_state_probe)? != [74, score_ref] {
         return None;
     }
-    for (notes, score) in [(100, 0), (100, 123), (100, 200), (2151, 4155)] {
+    let mut samples = vec![(100, 0), (100, 123), (100, 200), (2151, 4155)];
+    if modern_chic_slot.is_some() {
+        samples.insert(0, (100, i32::MIN));
+    }
+    for (notes, score) in samples {
         let actual = call_number_float_with_values(
             function,
             main_state_probe,
             BTreeMap::from([(74, notes), (score_ref, score)]),
         )?;
-        let expected = score as f64 / (notes * 2) as f64;
+        let expected = if score == i32::MIN { 0.0 } else { score as f64 / (notes * 2) as f64 };
         if !approx_float_eq(actual, expected) {
             return None;
         }
@@ -5795,6 +5848,55 @@ fn infer_ir_score_rate_band(
         }
     }
     None
+}
+
+fn modern_chic_ir_rate_bounds(rank: &str) -> Option<(i64, i64)> {
+    match rank {
+        "AAA" => Some((888, 1000)),
+        "AA" => Some((777, 888)),
+        "A" => Some((666, 777)),
+        "B" => Some((555, 666)),
+        "C" => Some((444, 555)),
+        "D" => Some((333, 444)),
+        "E" => Some((222, 333)),
+        "F" => Some((-10, 222)),
+        _ => None,
+    }
+}
+
+fn infer_modern_chic_ir_score_rate_band(
+    function: &Function,
+    object_id: &str,
+    main_state_probe: &Arc<Mutex<MainStateProbe>>,
+) -> Option<String> {
+    let (slot, rank) = modern_chic_ir_ranking_graph(object_id)?;
+    let score_ref = 379 + slot;
+    if collect_number_refs(function, main_state_probe)? != [74, score_ref]
+        || collect_option_calls(function, main_state_probe)? != [51]
+    {
+        return None;
+    }
+    let (lower, upper) = modern_chic_ir_rate_bounds(rank)?;
+    for online in [false, true] {
+        for total_notes in [10, 37] {
+            let max_score = total_notes * 2;
+            for ex_score in 0..=max_score {
+                let actual = call_draw_with_numbers_and_options(
+                    function,
+                    main_state_probe,
+                    BTreeMap::from([(74, total_notes), (score_ref, ex_score)]),
+                    BTreeMap::from([(51, online)]),
+                )?;
+                let expected = online
+                    && i64::from(ex_score) * 1000 > lower * i64::from(max_score)
+                    && i64::from(ex_score) * 1000 <= upper * i64::from(max_score);
+                if actual != expected {
+                    return None;
+                }
+            }
+        }
+    }
+    Some(format!("option(51) and ir_score_rate_range({slot},{lower},{upper})"))
 }
 
 fn infer_score_rate_band(
@@ -6451,7 +6553,11 @@ fn infer_division_of_number_sums(
         return None;
     }
     let zero_values = refs.iter().copied().map(|ref_id| (ref_id, 0)).collect::<BTreeMap<_, _>>();
-    let baseline = call_number_float_with_values(function, main_state_probe, zero_values.clone())?;
+    // Lua の 0/0 は NaN になる。beatoraja の graph 描画では非有限値が実質0幅に
+    // なるため、比率推論でも全ゼロ入力だけは0として扱う。
+    let baseline =
+        call_number_float_raw_with_values(function, main_state_probe, zero_values.clone())?;
+    let baseline = if baseline.is_finite() { baseline } else { 0.0 };
     let mut numerator_refs = Vec::new();
     for ref_id in &refs {
         let mut values = zero_values.clone();
@@ -6494,7 +6600,14 @@ fn infer_division_of_number_sums(
     ];
     for values in test_cases {
         let expected = expected_ratio(&values);
-        let actual = call_number_float_with_values(function, main_state_probe, values)?;
+        let actual = call_number_float_raw_with_values(function, main_state_probe, values)?;
+        let actual = if actual.is_finite() {
+            actual
+        } else if expected.abs() < f64::EPSILON {
+            0.0
+        } else {
+            return None;
+        };
         if !approx_float_eq(actual, expected) {
             return None;
         }
@@ -6765,6 +6878,72 @@ mod tests {
             .as_deref(),
             Some("ir_ranking_user(3)")
         );
+    }
+
+    #[test]
+    fn infers_modern_chic_select_graph_runtime_expressions() {
+        let lua = Lua::new();
+        let probe = Arc::new(Mutex::new(MainStateProbe::default()));
+        lua.globals()
+            .set("main_state", create_main_state_stub(&lua, probe.clone()).unwrap())
+            .unwrap();
+        let functions = lua
+            .load(
+                r#"
+                return {
+                    fast = function()
+                        local slow = main_state.number(424)
+                        local fast = main_state.number(423)
+                        return fast / (slow + fast)
+                    end,
+                    slow = function()
+                        local slow = main_state.number(424)
+                        local fast = main_state.number(423)
+                        return slow / (slow + fast)
+                    end,
+                    graph = function()
+                        local score = main_state.number(380)
+                        if score == -2147483648 then return 0 end
+                        return score / (main_state.number(74) * 2)
+                    end,
+                    band = function()
+                        local score = main_state.number(380)
+                        local rate = (score / (main_state.number(74) * 2)) * 100
+                        return main_state.option(51) and rate <= 88.8 and rate > 77.7
+                    end,
+                }
+                "#,
+            )
+            .eval::<Table>()
+            .unwrap();
+
+        assert_eq!(
+            infer_value_float_expr(&functions.get::<Function>("fast").unwrap(), &probe).as_deref(),
+            Some("(number(423))/(number(423)+number(424))")
+        );
+        assert_eq!(
+            infer_value_float_expr(&functions.get::<Function>("slow").unwrap(), &probe).as_deref(),
+            Some("(number(424))/(number(423)+number(424))")
+        );
+        assert_eq!(
+            infer_ir_ranking_score_value_expr(
+                &functions.get::<Function>("graph").unwrap(),
+                Some("s_rankingGraphAA1"),
+                &probe,
+            )
+            .as_deref(),
+            Some("bmz:ir_score_rate:1")
+        );
+        assert_eq!(
+            infer_result_score_draw(
+                &functions.get::<Function>("band").unwrap(),
+                Some("s_rankingGraphAA1"),
+                &probe,
+            )
+            .as_deref(),
+            Some("option(51) and ir_score_rate_range(1,777,888)")
+        );
+        assert_eq!(modern_chic_ir_ranking_graph("s_rankingGraphAAA10"), Some((10, "AAA")));
     }
 
     #[test]
