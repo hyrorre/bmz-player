@@ -834,6 +834,7 @@ pub struct SkinDrawState {
     pub operating_time_ms: i32,
     pub ready_timer_ms: Option<i32>,
     pub play_timer_ms: Option<i32>,
+    pub rhythm_timer_ms: Option<i32>,
     pub key_mode: KeyMode,
     pub select_bar_elapsed_ms: i32,
     pub select_option_panel_elapsed_ms: i32,
@@ -1192,6 +1193,7 @@ impl Default for SkinDrawState {
             operating_time_ms: 0,
             ready_timer_ms: None,
             play_timer_ms: None,
+            rhythm_timer_ms: None,
             key_mode: KeyMode::default(),
             select_bar_elapsed_ms: 0,
             select_option_panel_elapsed_ms: 0,
@@ -9693,6 +9695,7 @@ fn skin_timer_elapsed_ms(timer: Option<i32>, state: &SkinDrawState) -> Option<i3
         Some(174) => state.ir_ranking.connect_fail_ms,
         Some(40) => state.ready_timer_ms,
         Some(41) => state.play_timer_ms,
+        Some(140) => state.rhythm_timer_ms,
         Some(42 | 43) => state.gauge_increase_ms,
         Some(44 | 45) => state.gauge_max_ms,
         Some(11) => Some(state.select_bar_elapsed_ms),
@@ -21032,6 +21035,15 @@ mod tests {
         let state = SkinDrawState { elapsed_ms: 1_800, ..SkinDrawState::default() };
 
         assert_eq!(skin_timer_elapsed_ms(Some(0), &state), Some(1_800));
+    }
+
+    #[test]
+    fn rhythm_timer_uses_bpm_normalized_snapshot_time() {
+        let inactive = SkinDrawState::default();
+        assert_eq!(skin_timer_elapsed_ms(Some(140), &inactive), None);
+
+        let active = SkinDrawState { rhythm_timer_ms: Some(2_750), ..SkinDrawState::default() };
+        assert_eq!(skin_timer_elapsed_ms(Some(140), &active), Some(2_750));
     }
 
     #[test]

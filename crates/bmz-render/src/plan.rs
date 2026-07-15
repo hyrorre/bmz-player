@@ -882,6 +882,7 @@ fn plan_play(
         ready_timer_ms,
         play_timer_ms: (snapshot.time.0 >= 0)
             .then_some((snapshot.time.0 / 1_000).clamp(i32::MIN as i64, i32::MAX as i64) as i32),
+        rhythm_timer_ms: snapshot.rhythm_timer_elapsed_ms,
         key_mode,
         select_arrange_index: crate::skin::select_arrange_index(&snapshot.arrange),
         select_arrange_2p_index: crate::skin::select_arrange_index(&snapshot.arrange_2p),

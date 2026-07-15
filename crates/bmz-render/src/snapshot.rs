@@ -61,6 +61,8 @@ pub struct RenderSnapshot {
     pub operating_time_ms: i32,
     /// READY timer (TIMER_READY=40) elapsed time. None while READY is not active yet.
     pub ready_elapsed_time: Option<TimeUs>,
+    /// 直近の小節線からの60 BPM換算拍時間 (TIMER_RHYTHM=140)。
+    pub rhythm_timer_elapsed_ms: Option<i32>,
     /// BMS リソース (WAV 等) のバックグラウンドロードが完了しているか。
     /// READY 遷移可否の判定に使う。op 80/81 は ready_elapsed_time から判定する。
     /// preload 完了前の placeholder snapshot では false。

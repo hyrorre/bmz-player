@@ -168,6 +168,41 @@ fn optional_skin_timer_elapsed_ms(now: TimeUs, started_at: Option<TimeUs>) -> Op
     started_at.map(|started_at| skin_timer_elapsed_ms(now, started_at))
 }
 
+fn rhythm_timer_elapsed_ms(
+    timing_map: &TimingMap,
+    bar_lines: &[BarLine],
+    now: TimeUs,
+) -> Option<i32> {
+    if now.0 < 0 {
+        return None;
+    }
+    let section_start = bar_lines
+        .partition_point(|bar| bar.time <= now)
+        .checked_sub(1)
+        .map(|index| bar_lines[index].time)
+        .unwrap_or(TimeUs(0));
+    let elapsed_us = bpm_normalized_elapsed_us(timing_map, section_start, now);
+    Some((elapsed_us / 1_000.0).floor().clamp(0.0, i32::MAX as f64) as i32)
+}
+
+/// beatoraja TIMER_RHYTHM と同じく、実時間を区間 BPM / 60 倍して進める。
+/// STOP 中も現在 BPM で進行するため、tick 差ではなく時間区間を積分する。
+fn bpm_normalized_elapsed_us(timing_map: &TimingMap, start: TimeUs, end: TimeUs) -> f64 {
+    let mut cursor = start.0.max(0).min(end.0);
+    let end = end.0.max(cursor);
+    let mut elapsed_us = 0.0;
+    while cursor < end {
+        let segment = timing_map.find_segment_by_time(TimeUs(cursor));
+        let boundary =
+            if segment.start_time.0 > cursor { segment.start_time.0 } else { segment.end_time.0 };
+        let next = end.min(boundary.max(cursor.saturating_add(1)));
+        let bpm = if segment.bpm.is_finite() && segment.bpm > 0.0 { segment.bpm } else { 1.0 };
+        elapsed_us += (next - cursor) as f64 * bpm / 60.0;
+        cursor = next;
+    }
+    elapsed_us
+}
+
 fn lane_key_timer_ms(
     started_at: Option<TimeUs>,
     chart_time: TimeUs,
@@ -387,6 +422,11 @@ pub fn build_render_snapshot_with_target_and_bga_frames_cached(
         play_elapsed_time,
         operating_time_ms: 0,
         ready_elapsed_time: None,
+        rhythm_timer_elapsed_ms: rhythm_timer_elapsed_ms(
+            &session.timing_map,
+            &session.chart.bar_lines,
+            render_now,
+        ),
         // session が構築できている時点で WAV 等のロードは完了している。
         resources_loaded: true,
         duration: session.chart.end_time,
@@ -1310,6 +1350,35 @@ mod tests {
     use crate::screens::play_session::{PlaySessionOptions, build_game_session};
 
     use super::*;
+
+    #[test]
+    fn rhythm_timer_resets_at_bar_lines_and_integrates_bpm_and_stops() {
+        use bmz_chart::timing::{TickTimingEvent, TickTimingEventKind, build_timing_map};
+
+        let constant = build_timing_map(120.0, Vec::new());
+        let bars = vec![
+            BarLine { measure: 0, tick: ChartTick(0), time: TimeUs(0) },
+            BarLine { measure: 1, tick: ChartTick(3_840), time: TimeUs(2_000_000) },
+        ];
+        assert_eq!(rhythm_timer_elapsed_ms(&constant, &bars, TimeUs(-1)), None);
+        assert_eq!(rhythm_timer_elapsed_ms(&constant, &bars, TimeUs(1_000_000)), Some(2_000));
+        assert_eq!(rhythm_timer_elapsed_ms(&constant, &bars, TimeUs(2_500_000)), Some(1_000));
+
+        let bpm_change = build_timing_map(
+            120.0,
+            vec![TickTimingEvent { tick: ChartTick(960), kind: TickTimingEventKind::SetBpm(60.0) }],
+        );
+        assert_eq!(rhythm_timer_elapsed_ms(&bpm_change, &[], TimeUs(1_500_000)), Some(2_000));
+
+        let with_stop = build_timing_map(
+            120.0,
+            vec![TickTimingEvent {
+                tick: ChartTick(960),
+                kind: TickTimingEventKind::StopRaw { value: 96 },
+            }],
+        );
+        assert_eq!(rhythm_timer_elapsed_ms(&with_stop, &[], TimeUs(1_500_000)), Some(3_000));
+    }
 
     #[test]
     fn fast_slow_filter_suppresses_timing_ms_only_for_threshold_scope() {
