@@ -115,6 +115,8 @@ pub struct RenderSnapshot {
     pub lift_enabled: bool,
     /// beatoraja `OPTION_HIDDEN1_ON` (273)。
     pub hidden_enabled: bool,
+    /// beatoraja image/index ref 342。
+    pub hispeed_auto_adjust: bool,
     pub note_display_duration_ms: i32,
     pub hidden_cover: f32,
     pub skin_offsets: SkinOffsetValues,

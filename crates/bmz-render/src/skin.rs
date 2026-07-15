@@ -961,6 +961,8 @@ pub struct SkinDrawState {
     pub lift_enabled: bool,
     /// OPTION_HIDDEN1_ON (273)。
     pub hidden_enabled: bool,
+    /// beatoraja image/index ref 342。
+    pub hispeed_auto_adjust: bool,
     /// 現在 BPM (NUMBER_NOWBPM=160 に使用)。
     pub now_bpm: f32,
     /// 最小 BPM (NUMBER_MINBPM=91 に使用)。
@@ -1279,6 +1281,7 @@ impl Default for SkinDrawState {
             lanecover_enabled: true,
             lift_enabled: true,
             hidden_enabled: false,
+            hispeed_auto_adjust: false,
             now_bpm: 0.0,
             min_bpm: 0.0,
             max_bpm: 0.0,
@@ -3661,6 +3664,7 @@ impl SkinDocumentRenderExt for SkinDocument {
             lanecover_enabled: snapshot.lanecover_enabled,
             lift_enabled: snapshot.lift_enabled,
             hidden_enabled: snapshot.hidden_enabled,
+            hispeed_auto_adjust: snapshot.hispeed_auto_adjust,
             player_stats: snapshot.player_stats,
             select_assist_index: select_assist_index(&snapshot.assist),
             select_mode_index: select_mode_index(&snapshot.select_mode),
@@ -6492,6 +6496,7 @@ fn skin_image_index_number(ref_id: i32, state: &SkinDrawState) -> Option<i64> {
         332 => Some(i64::from(state.hidden_enabled)),
         340 => Some(state.select_judge_algorithm_index as i64),
         341 => Some(state.select_bottom_shiftable_gauge_index as i64),
+        342 => Some(i64::from(state.hispeed_auto_adjust)),
         344 => Some(extended_arrange_ref_index(state) as i64),
         345 => Some(extended_arrange_2p_ref_index(state) as i64),
         321..=324 => {
@@ -6500,7 +6505,7 @@ fn skin_image_index_number(ref_id: i32, state: &SkinDrawState) -> Option<i64> {
         }
         // extranotedepth / minemode / scrollmode / longnotemode / seventonine / constant 等は
         // profile 連携前のため 0 固定。value ref 350-353/360-361/400 とは衝突しない。
-        350..=353 | 360..=361 | 400 | 342 | 343 => Some(0),
+        350..=353 | 360..=361 | 400 | 343 => Some(0),
         370 if state.select_screen || state.result_failed.is_some() => {
             Some(state.select_clear_index)
         }
@@ -8648,6 +8653,7 @@ fn skin_state_number(ref_id: i32, state: &SkinDrawState) -> Option<i64> {
             Some(state.select_play_count.saturating_sub(state.select_clear_count) as i64)
         }
         341 => Some(state.select_bottom_shiftable_gauge_index as i64),
+        342 => Some(i64::from(state.hispeed_auto_adjust)),
         80 | 110 => Some(state.judge_counts.pgreat as i64),
         81 | 111 => Some(state.judge_counts.great as i64),
         82 | 112 => Some(state.judge_counts.good as i64),
@@ -18360,6 +18366,7 @@ mod tests {
             arrange_2p: "SPIRAL".to_string(),
             double_option: "BATTLE AS".to_string(),
             hs_fix: "MAIN BPM".to_string(),
+            hispeed_auto_adjust: true,
             ..SelectSnapshot::default()
         };
 
@@ -18369,6 +18376,7 @@ mod tests {
         assert_eq!(skin_state_number(43, &state), Some(5));
         assert_eq!(skin_state_number(54, &state), Some(3));
         assert_eq!(skin_state_number(55, &state), Some(3));
+        assert_eq!(skin_state_number(342, &state), Some(1));
     }
 
     #[test]

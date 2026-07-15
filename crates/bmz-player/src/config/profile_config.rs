@@ -378,6 +378,9 @@ pub struct LaneViewConfig {
     /// beatoraja `PlayConfig.enablelift` 相当。古いprofileは従来挙動を保つため有効扱い。
     #[serde(default = "default_true")]
     pub lift_enabled: bool,
+    /// beatoraja `PlayConfig.hispeedautoadjust` 相当。
+    #[serde(default)]
+    pub hispeed_auto_adjust: bool,
     /// HIDDEN レーンカバー量。0..=1000 の整数で持ち、ランタイムでは /1000 して扱う。
     pub hidden: u32,
     pub target_green_number: u32,
@@ -1031,6 +1034,7 @@ impl ProfileConfig {
                 sudden: 0,
                 lift: 0,
                 lift_enabled: true,
+                hispeed_auto_adjust: false,
                 hidden: 0,
                 target_green_number: 300,
             },
@@ -1243,11 +1247,13 @@ mod tests {
         assert_eq!(lane.hispeed_step_nhs, 0.25);
         assert_eq!(lane.hispeed_step_fhs, 0.50);
         assert!(lane.lift_enabled);
+        assert!(!lane.hispeed_auto_adjust);
 
         let serialized = toml::to_string(&lane).unwrap();
         assert!(serialized.contains("hispeed_step_nhs = 0.25"));
         assert!(serialized.contains("hispeed_step_fhs = 0.5"));
         assert!(serialized.contains("lift_enabled = true"));
+        assert!(serialized.contains("hispeed_auto_adjust = false"));
     }
 
     #[test]

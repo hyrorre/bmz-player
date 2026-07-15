@@ -179,6 +179,8 @@ pub struct GameSession {
     pub lift_enabled: bool,
     /// beatoraja `OPTION_HIDDEN1_ON` (273): HIDDEN 機能が有効か。
     pub hidden_enabled: bool,
+    /// beatoraja `PlayConfig.enableHispeedAutoAdjust`。
+    pub hispeed_auto_adjust: bool,
     /// Start/Select 押下中など、レーンカバー数値表示を出す状態。
     pub lane_cover_changing: bool,
     pub hidden_cover: f32,
@@ -2370,6 +2372,7 @@ mod tests {
             lanecover_enabled: false,
             lift_enabled: true,
             hidden_enabled: false,
+            hispeed_auto_adjust: false,
             hidden_cover: 0.0,
             skin_offsets: Vec::new(),
             bga_enabled: true,

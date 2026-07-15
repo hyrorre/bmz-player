@@ -236,6 +236,7 @@ pub fn apply_placeholder_session_visuals(
     snapshot.lanecover_enabled = lanecover_enabled_from_profile(profile);
     snapshot.lift_enabled = lift_enabled_from_profile(profile);
     snapshot.hidden_enabled = hidden_enabled_from_profile(profile);
+    snapshot.hispeed_auto_adjust = profile.lane.hispeed_auto_adjust;
     snapshot.hidden_cover = hidden_cover_from_profile(profile);
 
     snapshot.key_mode = key_mode;
@@ -510,6 +511,7 @@ pub fn build_game_session_with_input_backend(
         lanecover_enabled: lanecover_enabled_from_profile(profile),
         lift_enabled: lift_enabled_from_profile(profile),
         hidden_enabled: hidden_enabled_from_profile(profile),
+        hispeed_auto_adjust: profile.lane.hispeed_auto_adjust,
         hidden_cover: hidden_cover_from_profile(profile),
         skin_offsets: skin_offsets_from_profile(profile),
         bga_enabled: bga_enabled_from_profile(profile, autoplay_enabled, is_replay),

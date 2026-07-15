@@ -73,6 +73,7 @@ pub fn sample_select_scene() -> AppSceneSnapshot {
         lanecover_enabled: false,
         lift_enabled: true,
         hidden_enabled: false,
+        hispeed_auto_adjust: false,
         master_volume: 1.0,
         key_volume: 1.0,
         bgm_volume: 1.0,
@@ -169,6 +170,7 @@ pub fn sample_result_scene() -> AppSceneSnapshot {
     AppSceneSnapshot::Result(ResultSnapshot {
         player_name: "Sample Player".to_string(),
         current_fps: 60,
+        hispeed_auto_adjust: false,
         clear_type: bmz_core::clear::ClearType::Normal,
         result_failed: false,
         arrange: "NORMAL".to_string(),

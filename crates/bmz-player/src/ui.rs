@@ -3626,6 +3626,10 @@ fn build_profile_settings_panel(
                         crate::config::play::lane_unit_max_for_other(profile.lane.sudden);
                     ui.checkbox(&mut profile.lane.lift_enabled, "LIFTを有効にする");
                     lane_unit_slider_with_max(ui, &mut profile.lane.lift, "LIFT", lift_max);
+                    ui.checkbox(
+                        &mut profile.lane.hispeed_auto_adjust,
+                        "レーンカバー変更時に現在BPMへHSを自動調整",
+                    );
                     lane_unit_slider(ui, &mut profile.lane.hidden, "HIDDEN");
                     ui.add(
                         egui::Slider::new(

@@ -1150,10 +1150,16 @@ impl PendingPlayStart {
             key_mode,
             gamepad_slots,
         );
+        let hs_fix = options.hs_fix;
         Self {
             chart_id,
             options,
-            lane: PendingPlayLaneState::from_snapshot(snapshot, profile.lane.target_green_number),
+            lane: PendingPlayLaneState::from_snapshot(
+                snapshot,
+                profile.lane.target_green_number,
+                hs_fix,
+                profile.lane.hispeed_auto_adjust,
+            ),
             lane_actions: Vec::new(),
             visual_input: PendingPlayVisualInput::new(key_mode, binding, snapshot.autoplay),
         }
@@ -1169,10 +1175,17 @@ struct PendingPlayLaneState {
     lift: f32,
     lane_cover_visible: bool,
     lane_cover_changing: bool,
+    hsfix_base_bpm: f32,
+    hispeed_auto_adjust: bool,
 }
 
 impl PendingPlayLaneState {
-    fn from_snapshot(snapshot: &RenderSnapshot, target_green_number: u32) -> Self {
+    fn from_snapshot(
+        snapshot: &RenderSnapshot,
+        target_green_number: u32,
+        hs_fix: HsFixOption,
+        hispeed_auto_adjust: bool,
+    ) -> Self {
         Self {
             hispeed: snapshot.hispeed,
             hispeed_mode: if snapshot.hispeed_mode_index == 0 {
@@ -1185,6 +1198,14 @@ impl PendingPlayLaneState {
             lift: snapshot.lift,
             lane_cover_visible: true,
             lane_cover_changing: snapshot.lane_cover_changing,
+            hsfix_base_bpm: match hs_fix {
+                HsFixOption::Off | HsFixOption::StartBpm => snapshot.now_bpm,
+                HsFixOption::MaxBpm => snapshot.max_bpm,
+                HsFixOption::MainBpm => snapshot.main_bpm,
+                HsFixOption::MinBpm => snapshot.min_bpm,
+            }
+            .max(1.0),
+            hispeed_auto_adjust,
         }
     }
 
@@ -1209,6 +1230,11 @@ impl PendingPlayLaneState {
             1.0,
         )
         .clamp(0.5, 10.0);
+    }
+
+    fn refresh_cover_hispeed(&mut self, now_bpm: f32, speed_locked: bool) {
+        let target_bpm = if self.hispeed_auto_adjust { now_bpm } else { self.hsfix_base_bpm };
+        self.refresh_floating_hispeed(target_bpm, speed_locked);
     }
 
     fn current_green_number(self, now_bpm: f32) -> u32 {
@@ -2839,6 +2865,7 @@ impl WinitApp {
                 AppSceneSnapshot::Result(ResultSnapshot {
                     player_name: String::new(),
                     current_fps: 0,
+                    hispeed_auto_adjust: self.boot.profile_config.lane.hispeed_auto_adjust,
                     clear_type: summary.clear_type,
                     result_failed,
                     arrange: summary.arrange.as_str().to_string(),
@@ -3259,6 +3286,7 @@ impl WinitApp {
                 self.boot.profile_config.play.lane_effect,
                 LaneEffectConfig::Hidden | LaneEffectConfig::HiddenSudden
             ),
+            hispeed_auto_adjust: self.boot.profile_config.lane.hispeed_auto_adjust,
             master_volume: crate::config::play::volume_unit_to_f32(
                 self.boot.profile_config.audio_mix.master_volume,
             ),
@@ -5957,6 +5985,11 @@ impl WinitApp {
             332 => {
                 self.boot.profile_config.play.lane_effect =
                     toggled_select_hidden(self.boot.profile_config.play.lane_effect);
+                self.play_system_sound(crate::system_sound::SoundType::OptionChange);
+            }
+            342 => {
+                self.boot.profile_config.lane.hispeed_auto_adjust =
+                    !self.boot.profile_config.lane.hispeed_auto_adjust;
                 self.play_system_sound(crate::system_sound::SoundType::OptionChange);
             }
             _ => {
@@ -13900,6 +13933,7 @@ fn play_skin_video_draw_state(
         lanecover_enabled: snapshot.lanecover_enabled,
         lift_enabled: snapshot.lift_enabled,
         hidden_enabled: snapshot.hidden_enabled,
+        hispeed_auto_adjust: snapshot.hispeed_auto_adjust,
         hidden_cover: snapshot.hidden_cover,
         play_level: skin_video_play_level_number(&snapshot.play_level),
         table_song: !snapshot.table_text_primary.is_empty(),
@@ -17936,10 +17970,13 @@ fn apply_pending_play_lane_action_to_state(
             if lane.lane_cover_visible {
                 lane.lane_cover = (lane.lane_cover - delta)
                     .clamp(0.0, crate::config::play::lane_cover_max_for_lift(lane.lift));
+                lane.refresh_cover_hispeed(now_bpm, speed_locked);
             } else {
                 lane.lift = (lane.lift + delta).clamp(0.0, (1.0 - lane.lane_cover).clamp(0.0, 1.0));
+                if lane.hispeed_auto_adjust {
+                    lane.refresh_floating_hispeed(now_bpm, speed_locked);
+                }
             }
-            lane.refresh_floating_hispeed(now_bpm, speed_locked);
         }
         PendingPlayLaneAction::GreenNumberDelta(delta) => {
             if speed_locked {
@@ -17957,7 +17994,7 @@ fn apply_pending_play_lane_action_to_state(
             let was_visible = lane.lane_cover_visible;
             lane.lane_cover_visible = !lane.lane_cover_visible;
             if !was_visible && lane.lane_cover_visible {
-                lane.refresh_floating_hispeed(now_bpm, speed_locked);
+                lane.refresh_cover_hispeed(now_bpm, speed_locked);
             }
         }
     }
@@ -18102,12 +18139,24 @@ fn apply_lane_cover_step_to_session(
             .clamp(0.0, crate::config::play::lane_cover_max_for_lift(session.lift));
         if session.hispeed_mode == HispeedMode::Floating && !speed_locked {
             let now = session.audio_clock.now();
-            session.hispeed = hispeed_for_green_number(session, session.lane_cover, now);
+            session.hispeed = if session.hispeed_auto_adjust {
+                hispeed_for_green_number(session, session.lane_cover, now)
+            } else {
+                hispeed_for_green_number_at_bpm(
+                    session,
+                    session.lane_cover,
+                    now,
+                    session.hsfix_base_bpm,
+                )
+            };
         }
     } else {
         session.lift =
             (session.lift + delta).clamp(0.0, (1.0 - session.lane_cover).clamp(0.0, 1.0));
-        if session.hispeed_mode == HispeedMode::Floating && !speed_locked {
+        if session.hispeed_auto_adjust
+            && session.hispeed_mode == HispeedMode::Floating
+            && !speed_locked
+        {
             let now = session.audio_clock.now();
             session.hispeed = hispeed_for_green_number(session, 0.0, now);
         }
@@ -18121,8 +18170,12 @@ fn reset_floating_hispeed_if_enabled(
 ) {
     if session.hispeed_mode == HispeedMode::Floating && !speed_locked {
         let now = session.audio_clock.now();
-        session.hispeed =
-            hispeed_for_green_number(session, active_lane_cover_for_hispeed(session), now);
+        let lane_cover = active_lane_cover_for_hispeed(session);
+        session.hispeed = if session.hispeed_auto_adjust {
+            hispeed_for_green_number(session, lane_cover, now)
+        } else {
+            hispeed_for_green_number_at_bpm(session, lane_cover, now, session.hsfix_base_bpm)
+        };
     }
 }
 
@@ -18217,16 +18270,33 @@ fn hispeed_for_green_number(
     lane_cover: f32,
     now: TimeUs,
 ) -> f32 {
+    hispeed_for_green_number_at_bpm(
+        session,
+        lane_cover,
+        now,
+        floating_hispeed_target_bpm(session, now),
+    )
+}
+
+fn hispeed_for_green_number_at_bpm(
+    session: &bmz_gameplay::session::GameSession,
+    lane_cover: f32,
+    now: TimeUs,
+    target_bpm: f64,
+) -> f32 {
     let target_green = session.target_green_number.max(1) as f32;
     let visible_max = crate::config::play::visible_lane_fraction(lane_cover, session.lift);
-    let now_bpm = floating_hispeed_target_bpm(session, now);
     let scroll_multiplier = crate::screens::play_snapshot::current_scroll_multiplier(
         &session.chart,
         &session.timing_map,
         now,
     );
-    let hispeed =
-        hispeed_for_green_number_values(target_green, visible_max, now_bpm, scroll_multiplier);
+    let hispeed = hispeed_for_green_number_values(
+        target_green,
+        visible_max,
+        target_bpm.max(1.0),
+        scroll_multiplier,
+    );
     hispeed.clamp(0.5, 10.0)
 }
 
@@ -22689,6 +22759,8 @@ mod tests {
             lift: 0.0,
             lane_cover_visible: true,
             lane_cover_changing: false,
+            hsfix_base_bpm: 120.0,
+            hispeed_auto_adjust: false,
         };
 
         assert!(apply_pending_play_lane_action_to_state(
@@ -22715,6 +22787,8 @@ mod tests {
             lift: 0.0,
             lane_cover_visible: true,
             lane_cover_changing: true,
+            hsfix_base_bpm: 120.0,
+            hispeed_auto_adjust: false,
         };
 
         assert!(apply_pending_play_lane_action_to_state(
@@ -22743,6 +22817,8 @@ mod tests {
             lift: 0.0,
             lane_cover_visible: true,
             lane_cover_changing: true,
+            hsfix_base_bpm: 120.0,
+            hispeed_auto_adjust: false,
         };
 
         assert!(!apply_pending_play_lane_action_to_state(
@@ -22825,6 +22901,7 @@ mod tests {
     fn floating_hispeed_recalculation_uses_current_bpm_after_chart_start() {
         let mut profile = ProfileConfig::new_default("default", "Default", 1);
         profile.lane.hispeed_mode = HispeedModeConfig::Floating;
+        profile.lane.hispeed_auto_adjust = true;
         profile.lane.target_green_number = 300;
         let mut chart = app_test_chart();
         chart.metadata.initial_bpm = 120.0;
@@ -22844,12 +22921,41 @@ mod tests {
         );
         session.audio_clock =
             bmz_audio::clock::AudioClock::with_position(48_000, 0, 0, frame, true);
-        session.lane_cover = 0.25;
 
-        reset_floating_hispeed_if_enabled(&mut session, false);
+        apply_lane_cover_step_to_session(&mut session, -0.25, false);
 
         assert_eq!(session.hsfix_base_bpm, 240.0);
         assert!((session.hispeed - 3.0).abs() < 0.000_1, "hispeed={}", session.hispeed);
+    }
+
+    #[test]
+    fn lane_cover_change_uses_hsfix_base_when_hispeed_auto_adjust_is_off() {
+        let mut profile = ProfileConfig::new_default("default", "Default", 1);
+        profile.lane.hispeed_mode = HispeedModeConfig::Floating;
+        profile.lane.target_green_number = 300;
+        let mut chart = app_test_chart();
+        chart.metadata.initial_bpm = 120.0;
+        chart.timing_events.push(bmz_chart::model::TimingEvent {
+            tick: bmz_core::time::ChartTick(48),
+            time: TimeUs(1_000_000),
+            kind: bmz_chart::model::TimingEventKind::BpmChange { bpm: 240.0 },
+        });
+        let frame = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let mut session = crate::screens::play_session::build_game_session(
+            std::sync::Arc::new(chart),
+            &profile,
+            crate::screens::play_session::PlaySessionOptions {
+                hs_fix: HsFixOption::MaxBpm,
+                ..Default::default()
+            },
+        );
+        session.audio_clock =
+            bmz_audio::clock::AudioClock::with_position(48_000, 0, 0, frame, true);
+
+        apply_lane_cover_step_to_session(&mut session, -0.25, false);
+
+        assert!(!session.hispeed_auto_adjust);
+        assert!((session.hispeed - 1.5).abs() < 0.000_1, "hispeed={}", session.hispeed);
     }
 
     #[test]

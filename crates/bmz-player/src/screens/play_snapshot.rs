@@ -467,6 +467,7 @@ pub fn build_render_snapshot_with_target_and_bga_frames_cached(
         lanecover_enabled: session.lanecover_enabled,
         lift_enabled: session.lift_enabled,
         hidden_enabled: session.hidden_enabled,
+        hispeed_auto_adjust: session.hispeed_auto_adjust,
         note_display_duration_ms,
         hidden_cover: session.hidden_cover,
         skin_offsets: skin_offsets_from_session(session, render_now, play_elapsed_time),
@@ -714,6 +715,7 @@ pub fn update_render_snapshot_play_options(
     snapshot.lanecover_enabled = session.lanecover_enabled;
     snapshot.lift_enabled = session.lift_enabled;
     snapshot.hidden_enabled = session.hidden_enabled;
+    snapshot.hispeed_auto_adjust = session.hispeed_auto_adjust;
     snapshot.note_display_duration_ms = note_display_duration_ms(
         session,
         session.timing_map.bpm_at_time(render_now) as f32,

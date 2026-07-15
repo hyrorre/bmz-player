@@ -93,6 +93,8 @@ pub struct SelectSnapshot {
     pub lanecover_enabled: bool,
     pub lift_enabled: bool,
     pub hidden_enabled: bool,
+    /// beatoraja image/index ref 342。
+    pub hispeed_auto_adjust: bool,
     pub master_volume: f32,
     pub key_volume: f32,
     pub bgm_volume: f32,
@@ -189,6 +191,7 @@ impl Default for SelectSnapshot {
             lanecover_enabled: false,
             lift_enabled: true,
             hidden_enabled: false,
+            hispeed_auto_adjust: false,
             master_volume: 0.0,
             key_volume: 0.0,
             bgm_volume: 0.0,
@@ -533,6 +536,8 @@ pub struct ResultSnapshot {
     pub player_name: String,
     /// beatoraja NUMBER_CURRENT_FPS (20)。
     pub current_fps: u32,
+    /// beatoraja image/index ref 342。
+    pub hispeed_auto_adjust: bool,
     pub clear_type: ClearType,
     /// OPTION_RESULT_CLEAR/FAILED (90/91) に渡す実際の成否。
     ///
@@ -636,6 +641,7 @@ mod tests {
         let snapshot = ResultSnapshot {
             player_name: String::new(),
             current_fps: 0,
+            hispeed_auto_adjust: false,
             clear_type: ClearType::Normal,
             result_failed: false,
             arrange: "NORMAL".to_string(),
@@ -710,6 +716,7 @@ mod tests {
         let snapshot = ResultSnapshot {
             player_name: String::new(),
             current_fps: 0,
+            hispeed_auto_adjust: false,
             clear_type: ClearType::Normal,
             result_failed: false,
             arrange: "NORMAL".to_string(),

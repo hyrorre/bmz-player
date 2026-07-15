@@ -1090,6 +1090,7 @@ mod tests {
             lanecover_enabled: false,
             lift_enabled: true,
             hidden_enabled: false,
+            hispeed_auto_adjust: false,
             hidden_cover: 0.0,
             skin_offsets: Vec::new(),
             bga_enabled: true,
