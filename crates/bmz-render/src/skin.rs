@@ -2568,6 +2568,7 @@ pub trait SkinDocumentRenderExt {
         cover: &SkinHiddenCoverDef,
         destination: &SkinDestinationDef,
         frame: ResolvedSkinFrame,
+        force_lift_cover: bool,
         state: &SkinDrawState,
         sources: &HashMap<String, SkinDocumentTexture>,
     ) -> Option<SkinRenderItem>;
@@ -2974,7 +2975,12 @@ impl SkinDocumentRenderExt for SkinDocument {
             .hidden_cover
             .iter()
             .any(|cover| cover.id == destination.id && !is_lift_lane_cover_id(&cover.id));
+        let is_lift_cover_destination =
+            self.lift_cover.iter().any(|cover| cover.id == destination.id);
         apply_skin_offset_to_frame(destination, &mut frame, state, is_hidden_cover_destination);
+        if is_lift_cover_destination && !destination_uses_skin_offset(destination, 3) {
+            apply_skin_offset_ids_to_frame(&[3], &mut frame, state, false);
+        }
         if !destination_mouse_rect_contains(destination, frame, state) {
             return None;
         }
@@ -3275,8 +3281,13 @@ impl SkinDocumentRenderExt for SkinDocument {
             return Some(vec![item]);
         }
 
+        if let Some(lift_cover) = self.lift_cover.iter().find(|cover| cover.id == destination.id) {
+            return self
+                .hidden_cover_render_item(lift_cover, destination, frame, true, state, sources)
+                .map(|item| vec![item]);
+        }
         let hidden_cover = self.hidden_cover.iter().find(|cover| cover.id == destination.id)?;
-        self.hidden_cover_render_item(hidden_cover, destination, frame, state, sources)
+        self.hidden_cover_render_item(hidden_cover, destination, frame, false, state, sources)
             .map(|item| vec![item])
     }
 
@@ -6167,11 +6178,13 @@ impl SkinDocumentRenderExt for SkinDocument {
         cover: &SkinHiddenCoverDef,
         destination: &SkinDestinationDef,
         frame: ResolvedSkinFrame,
+        force_lift_cover: bool,
         state: &SkinDrawState,
         sources: &HashMap<String, SkinDocumentTexture>,
     ) -> Option<SkinRenderItem> {
-        let is_lift_cover =
-            is_lift_lane_cover_id(&cover.id) || is_lift_lane_cover_id(&destination.id);
+        let is_lift_cover = force_lift_cover
+            || is_lift_lane_cover_id(&cover.id)
+            || is_lift_lane_cover_id(&destination.id);
         if is_lift_cover {
             if state.offset_lift_px <= 0 {
                 return None;
@@ -19779,6 +19792,51 @@ mod tests {
             &SkinDrawState { offset_lift_px: 0, ..SkinDrawState::default() },
         );
         assert!(items.is_empty());
+    }
+
+    #[test]
+    fn lift_cover_schema_applies_lift_offset_once() {
+        let document: SkinDocument = serde_json::from_str(
+            r#"
+            {
+                "type": 0,
+                "w": 720,
+                "h": 720,
+                "source": [{ "id": 12, "path": "lift.png" }],
+                "liftCover": [
+                    { "id": "lift", "src": 12, "x": 0, "y": 0, "w": 431, "h": 723, "disapearLine": 357 }
+                ],
+                "destination": [
+                    { "id": "lift", "dst": [{ "x": 20, "y": -366, "w": 431, "h": 723 }] }
+                ]
+            }
+            "#,
+        )
+        .unwrap();
+        let sources = HashMap::from([(
+            "12".to_string(),
+            SkinDocumentTexture {
+                source_id: "12".to_string(),
+                texture: SkinTextureId(42),
+                source_size: SkinImageSize { width: 431.0, height: 723.0 },
+            },
+        )]);
+
+        let hidden = document.static_image_render_items(
+            &sources,
+            &SkinDrawState { offset_lift_px: 0, ..SkinDrawState::default() },
+        );
+        assert!(hidden.is_empty());
+
+        let lifted = document.static_image_render_items(
+            &sources,
+            &SkinDrawState { offset_lift_px: 200, ..SkinDrawState::default() },
+        );
+        let SkinRenderItem::Image { rect, uv, .. } = &lifted[0] else {
+            panic!("expected lift cover image");
+        };
+        assert!(approx_eq(rect.height, 200.0 / 720.0));
+        assert!(approx_eq(uv.height, 200.0 / 723.0));
     }
 
     #[test]

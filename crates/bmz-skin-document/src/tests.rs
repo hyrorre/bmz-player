@@ -53,6 +53,28 @@ fn skin_document_normalizes_numeric_and_string_ids() {
 }
 
 #[test]
+fn skin_document_decodes_lift_cover_with_beatoraja_link_default() {
+    let document: SkinDocument = serde_json::from_str(
+        r#"
+        {
+            "type": 0,
+            "liftCover": [
+                { "id": "lift", "src": 13, "x": 0, "y": 0, "w": 432, "h": 723, "disapearLine": 357 },
+                { "id": "linked-lift", "src": 14, "isDisapearLineLinkLift": true }
+            ]
+        }
+        "#,
+    )
+    .unwrap();
+
+    assert_eq!(document.lift_cover.len(), 2);
+    assert_eq!(document.lift_cover[0].id, "lift");
+    assert_eq!(document.lift_cover[0].src, "13");
+    assert!(!document.lift_cover[0].is_disappear_line_link_lift);
+    assert!(document.lift_cover[1].is_disappear_line_link_lift);
+}
+
+#[test]
 fn skin_document_expands_conditions_and_includes() {
     let root = unique_test_dir("bmz-skin-document-json");
     std::fs::create_dir_all(&root).unwrap();

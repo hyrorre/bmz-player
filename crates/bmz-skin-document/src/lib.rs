@@ -84,6 +84,8 @@ pub struct SkinDocument {
     pub graph: Vec<SkinGraphDef>,
     #[serde(default, rename = "hiddenCover")]
     pub hidden_cover: Vec<SkinHiddenCoverDef>,
+    #[serde(default, rename = "liftCover", deserialize_with = "deserialize_lift_cover_defs")]
+    pub lift_cover: Vec<SkinHiddenCoverDef>,
     #[serde(default, rename = "hiterrorvisualizer")]
     pub hiterror_visualizer: Vec<SkinHitErrorVisualizerDef>,
     #[serde(default)]
@@ -666,6 +668,22 @@ pub struct SkinHiddenCoverDef {
     pub disappear_line: i32,
     #[serde(default = "default_true", rename = "isDisapearLineLinkLift")]
     pub is_disappear_line_link_lift: bool,
+}
+
+fn deserialize_lift_cover_defs<'de, D>(deserializer: D) -> Result<Vec<SkinHiddenCoverDef>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let mut values = Vec::<JsonValue>::deserialize(deserializer)?;
+    for value in &mut values {
+        if let Some(object) = value.as_object_mut() {
+            object.entry("isDisapearLineLinkLift").or_insert(JsonValue::Bool(false));
+        }
+    }
+    values
+        .into_iter()
+        .map(|value| serde_json::from_value(value).map_err(D::Error::custom))
+        .collect()
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]

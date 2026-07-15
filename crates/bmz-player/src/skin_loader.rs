@@ -2239,7 +2239,7 @@ fn required_skin_source_ids(document: &SkinDocument) -> HashSet<&str> {
             required.insert(graph.src.as_str());
         }
     }
-    for cover in &document.hidden_cover {
+    for cover in document.hidden_cover.iter().chain(&document.lift_cover) {
         if destination_ids.contains(cover.id.as_str()) {
             required.insert(cover.src.as_str());
         }
@@ -4362,6 +4362,78 @@ mod tests {
     }
 
     #[test]
+    fn wmii_fhd_luaskin_renders_lift_cover_when_lifted() {
+        let skin_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../data/skins/WMII_FHD/play/play7wide.luaskin");
+        if !skin_path.is_file() {
+            return;
+        }
+
+        let decoded = decode_beatoraja_skin(&skin_path, SkinKind::Play).unwrap();
+        let lift_cover = decoded
+            .document
+            .lift_cover
+            .iter()
+            .find(|cover| cover.id.eq_ignore_ascii_case("lift"))
+            .unwrap_or_else(|| {
+                panic!(
+                    "WMII Lua lift cover should decode; got {:?}",
+                    decoded
+                        .document
+                        .lift_cover
+                        .iter()
+                        .map(|cover| (&cover.id, &cover.src))
+                        .collect::<Vec<_>>()
+                )
+            });
+        let lift_texture = decoded
+            .sources
+            .iter()
+            .find(|source| source.source_id == lift_cover.src)
+            .map(|source| source.texture)
+            .expect("WMII Lua lift source should decode");
+        let sources = decoded
+            .sources
+            .iter()
+            .map(|source| {
+                (
+                    source.source_id.clone(),
+                    SkinDocumentTexture {
+                        source_id: source.source_id.clone(),
+                        texture: source.texture,
+                        source_size: SkinImageSize {
+                            width: source.size.width,
+                            height: source.size.height,
+                        },
+                    },
+                )
+            })
+            .collect::<std::collections::HashMap<_, _>>();
+
+        let lifted_items = decoded.document.static_render_items(
+            &sources,
+            &bmz_render::skin::SkinDrawState {
+                elapsed_ms: 2_000,
+                play_timer_ms: Some(2_000),
+                offset_lift_px: 200,
+                lift: 200.0 / 1080.0,
+                lift_enabled: true,
+                ..Default::default()
+            },
+            &bmz_render::skin::SkinTextState::default(),
+        );
+
+        assert!(
+            lifted_items.iter().any(|item| matches!(
+                item,
+                bmz_render::skin::SkinRenderItem::Image { texture, tint, .. }
+                    if *texture == lift_texture && tint.a > 0.5
+            )),
+            "expected WMII Lua LIFT cover to render once lift offset is active; got {lifted_items:?}"
+        );
+    }
+
+    #[test]
     fn wmii_fhd_lr2skin_moves_judge_line_with_lift_when_available() {
         let skin_path = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../data/skins/WMII_FHD/play/FHDPLAY_AC.lr2skin");
@@ -6107,14 +6179,19 @@ return {
             {
                 "source": [
                     { "id": 1, "path": "used.png" },
-                    { "id": 2, "path": "unused.png" }
+                    { "id": 2, "path": "unused.png" },
+                    { "id": 3, "path": "lift.png" }
                 ],
                 "image": [
                     { "id": "used", "src": 1, "x": 0, "y": 0, "w": 8, "h": 8 },
                     { "id": "unused", "src": 2, "x": 0, "y": 0, "w": 8, "h": 8 }
                 ],
+                "liftCover": [
+                    { "id": "lift", "src": 3, "x": 0, "y": 0, "w": 8, "h": 8 }
+                ],
                 "destination": [
-                    { "id": "used", "dst": [{ "x": 0, "y": 0, "w": 8, "h": 8 }] }
+                    { "id": "used", "dst": [{ "x": 0, "y": 0, "w": 8, "h": 8 }] },
+                    { "id": "lift", "dst": [{ "x": 0, "y": 0, "w": 8, "h": 8 }] }
                 ]
             }
             "#,
@@ -6125,6 +6202,7 @@ return {
 
         assert!(required.contains("1"));
         assert!(!required.contains("2"));
+        assert!(required.contains("3"));
     }
 
     #[test]
