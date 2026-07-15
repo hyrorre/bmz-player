@@ -8,7 +8,7 @@ use bmz_chart::model::{
 };
 use bmz_chart::timing::{TICKS_PER_MEASURE, TimingMap};
 use bmz_core::judge::{Judge, TimingSide};
-use bmz_core::lane::{LANE_COUNT, Lane};
+use bmz_core::lane::{KeyMode, LANE_COUNT, Lane};
 use bmz_core::time::TimeUs;
 use bmz_gameplay::judge::model::JudgementEvent;
 use bmz_gameplay::session::GameSession;
@@ -199,7 +199,14 @@ fn lane_keyoff_ms(
 
 /// `play_elapsed_time` 更新後に keybeam / turntable 向け snapshot フィールドを再計算する。
 pub fn refresh_play_skin_visuals(snapshot: &mut RenderSnapshot, session: &GameSession) {
-    refresh_play_skin_visuals_with_input_elapsed(snapshot, session, snapshot.play_elapsed_time);
+    snapshot.skin_offsets =
+        skin_offsets_from_session(session, snapshot.time, snapshot.play_elapsed_time);
+    snapshot.keyon_ms = lane_keyon_ms(session, snapshot.time, snapshot.play_elapsed_time);
+    snapshot.keyoff_ms = lane_keyoff_ms(session, snapshot.time, snapshot.play_elapsed_time);
+    snapshot.gauge_increase_elapsed_ms =
+        optional_skin_timer_elapsed_ms(snapshot.time, session.gauge_increase_started_at);
+    snapshot.gauge_max_elapsed_ms =
+        optional_skin_timer_elapsed_ms(snapshot.time, session.gauge_max_started_at);
 }
 
 /// 通常アニメーション用の `play_elapsed_time` と、押下エフェクト用の実経過時間が
@@ -210,12 +217,55 @@ pub fn refresh_play_skin_visuals_with_input_elapsed(
     input_elapsed: TimeUs,
 ) {
     snapshot.skin_offsets = skin_offsets_from_session(session, snapshot.time, input_elapsed);
-    snapshot.keyon_ms = lane_keyon_ms(session, snapshot.time, input_elapsed);
-    snapshot.keyoff_ms = lane_keyoff_ms(session, snapshot.time, input_elapsed);
+    snapshot.keyon_ms = std::array::from_fn(|lane_index| {
+        session.lane_keyon_started_at[lane_index]
+            .map(|started_at| skin_timer_elapsed_ms(input_elapsed, started_at))
+    });
+    snapshot.keyoff_ms = std::array::from_fn(|lane_index| {
+        session.lane_keyoff_started_at[lane_index]
+            .map(|started_at| skin_timer_elapsed_ms(input_elapsed, started_at))
+    });
     snapshot.gauge_increase_elapsed_ms =
         optional_skin_timer_elapsed_ms(snapshot.time, session.gauge_increase_started_at);
     snapshot.gauge_max_elapsed_ms =
         optional_skin_timer_elapsed_ms(snapshot.time, session.gauge_max_started_at);
+}
+
+pub fn refresh_pending_play_input_visuals(
+    snapshot: &mut RenderSnapshot,
+    key_mode: KeyMode,
+    lane_keyon_started_at: [Option<TimeUs>; LANE_COUNT],
+    lane_keyoff_started_at: [Option<TimeUs>; LANE_COUNT],
+    lane_scratch_angle_delta_ms: [i64; LANE_COUNT],
+    input_elapsed: TimeUs,
+) {
+    snapshot.keyon_ms = std::array::from_fn(|lane_index| {
+        lane_keyon_started_at[lane_index]
+            .map(|started_at| skin_timer_elapsed_ms(input_elapsed, started_at))
+    });
+    snapshot.keyoff_ms = std::array::from_fn(|lane_index| {
+        lane_keyoff_started_at[lane_index]
+            .map(|started_at| skin_timer_elapsed_ms(input_elapsed, started_at))
+    });
+    let active_lanes = key_mode.active_lanes();
+    if active_lanes.contains(&Lane::Scratch) {
+        set_scratch_angle_offset(
+            &mut snapshot.skin_offsets,
+            SCRATCH_ANGLE_OFFSET_1P,
+            input_elapsed,
+            0,
+            lane_scratch_angle_delta_ms[Lane::Scratch.index()],
+        );
+    }
+    if active_lanes.contains(&Lane::Scratch2) {
+        set_scratch_angle_offset(
+            &mut snapshot.skin_offsets,
+            SCRATCH_ANGLE_OFFSET_2P,
+            input_elapsed,
+            1,
+            lane_scratch_angle_delta_ms[Lane::Scratch2.index()],
+        );
+    }
 }
 
 pub fn build_render_snapshot(
@@ -346,6 +396,7 @@ pub fn build_render_snapshot_with_target_and_bga_frames_cached(
         judge_rank: session.chart.metadata.judge_rank,
         play_level: session.chart.metadata.play_level.clone(),
         arrange: "NORMAL".to_string(),
+        arrange_2p: "NORMAL".to_string(),
         target: String::new(),
         combo: session.display_combo(),
         max_combo: session.display_max_combo(),
@@ -2237,6 +2288,19 @@ mod tests {
         snapshot.play_elapsed_time = TimeUs(1_050_000);
 
         refresh_play_skin_visuals(&mut snapshot, &session);
+
+        assert_eq!(snapshot.keyon_ms[Lane::Key1.index()], Some(50));
+    }
+
+    #[test]
+    fn refresh_play_skin_visuals_with_input_elapsed_tracks_short_pre_ready_keybeam() {
+        let profile = ProfileConfig::new_default("default", "Default", 1);
+        let mut session =
+            build_game_session(Arc::new(chart()), &profile, PlaySessionOptions::default());
+        session.lane_keyon_started_at[Lane::Key1.index()] = Some(TimeUs(100_000));
+        let mut snapshot = build_render_snapshot(&session, TimeUs(-100_000), &[], None);
+
+        refresh_play_skin_visuals_with_input_elapsed(&mut snapshot, &session, TimeUs(150_000));
 
         assert_eq!(snapshot.keyon_ms[Lane::Key1.index()], Some(50));
     }
