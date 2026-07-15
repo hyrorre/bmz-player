@@ -15714,6 +15714,7 @@ fn result_skin_signature_for_config(
 
 fn result_lua_runtime_number_values_for_summary(summary: &ResultSummary) -> BTreeMap<i32, i32> {
     let mut number_values = BTreeMap::new();
+    number_values.insert(425, i32::try_from(summary.cb).unwrap_or(i32::MAX));
     if let Some(previous_best_bp) = summary.previous_best_bp
         && let (Ok(current), Ok(previous)) =
             (i32::try_from(summary.bp), i32::try_from(previous_best_bp))
@@ -19890,6 +19891,10 @@ mod tests {
         assert_eq!(summary.previous_best_clear_type, Some(ClearType::Normal));
         assert_eq!(summary.previous_best_bp, Some(12));
         assert_eq!(result_lua_runtime_number_values_for_summary(&summary).get(&178), Some(&-12));
+        assert_eq!(
+            result_lua_runtime_number_values_for_summary(&summary).get(&425).copied(),
+            Some(i32::try_from(summary.cb).unwrap())
+        );
         assert_eq!(summary.replay_slots, [true, false, true, false]);
         assert_eq!(summary.saved_replay_slots, [false, false, true, false]);
         assert_eq!(summary.judge_counts.pgreat, 160);

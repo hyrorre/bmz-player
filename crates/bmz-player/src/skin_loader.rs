@@ -2594,6 +2594,54 @@ mod tests {
         assert!(loaded.dependencies.virtual_io_files.contains_key("player/bmz/config_player.json"));
     }
 
+    #[test]
+    fn wmii_backup_result_uses_runtime_combo_break_for_clear_animation() {
+        let skin_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../data/skins/WMII_FHD.bak/result/result.luaskin");
+        if !skin_path.is_file() {
+            return;
+        }
+
+        let options =
+            BTreeMap::from([("Expand Panel".to_string(), "ON - GRAPH DEFAULT".to_string())]);
+        let load = |combo_break: i32| {
+            load_skin_document_uncached(
+                &skin_path,
+                SkinKind::Result,
+                &options,
+                &BTreeMap::new(),
+                &LuaLoadRuntimeState {
+                    number_values: BTreeMap::from([(425, combo_break)]),
+                    option_values: BTreeMap::from([(51, true), (160, true)]),
+                },
+            )
+            .expect("unmodified WMII result backup should decode")
+        };
+        let destination_ids = |loaded: &LoadedSkinDocumentWithDependencies| {
+            loaded
+                .document
+                .destination
+                .iter()
+                .filter_map(|entry| match entry {
+                    DestinationListEntry::Single(destination) => Some(destination.id.clone()),
+                    DestinationListEntry::Conditional { .. } => None,
+                })
+                .collect::<Vec<_>>()
+        };
+
+        let full_combo = load(0);
+        let full_combo_ids = destination_ids(&full_combo);
+        assert!(full_combo_ids.iter().any(|id| id == "result_FULL"));
+        assert!(full_combo_ids.iter().any(|id| id == "result_COMBO"));
+        assert!(!full_combo_ids.iter().any(|id| id == "result_CLEAR"));
+
+        let normal_clear = load(1);
+        let normal_clear_ids = destination_ids(&normal_clear);
+        assert!(normal_clear_ids.iter().any(|id| id == "result_CLEAR"));
+        assert!(!normal_clear_ids.iter().any(|id| id == "result_FULL"));
+        assert!(!normal_clear_ids.iter().any(|id| id == "result_COMBO"));
+    }
+
     fn filepath_def(name: &str, path: &str, def: &str) -> SkinFilepathDef {
         SkinFilepathDef {
             category: String::new(),
