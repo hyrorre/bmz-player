@@ -265,6 +265,8 @@ pub struct SelectRowSnapshot {
     pub replay_slots: [bool; 4],
     pub favorite_chart: bool,
     pub favorite_song: bool,
+    /// Same-folder `.txt` presence for OPTION_NO_TEXT / OPTION_TEXT (174/175).
+    pub has_document: bool,
     pub has_long_notes: bool,
     pub has_mines: bool,
     pub has_random: bool,
@@ -337,6 +339,7 @@ impl Default for SelectRowSnapshot {
             replay_slots: [false; 4],
             favorite_chart: false,
             favorite_song: false,
+            has_document: false,
             has_long_notes: false,
             has_mines: false,
             has_random: false,

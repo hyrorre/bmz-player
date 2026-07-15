@@ -1026,6 +1026,8 @@ pub struct SkinDrawState {
     pub select_bgm_volume: f32,
     /// 選択中バーにバナー画像があるか (OPTION_NO_BANNER=192 / OPTION_BANNER=193)。
     pub select_has_banner: bool,
+    /// 選択中 SongData と同じフォルダに `.txt` があるか (OPTION_NO_TEXT/TEXT=174/175)。
+    pub select_has_document: bool,
     /// 選択中曲のレベル表記から取り出した数値。
     pub select_play_level: i64,
     /// 現在の曲のレベル表記から取り出した数値 (NUMBER_PLAYLEVEL=96)。
@@ -1321,6 +1323,7 @@ impl Default for SkinDrawState {
             select_key_volume: 1.0,
             select_bgm_volume: 1.0,
             select_has_banner: false,
+            select_has_document: false,
             select_play_level: 0,
             play_level: 0,
             table_song: false,
@@ -3698,6 +3701,7 @@ impl SkinDocumentRenderExt for SkinDocument {
             select_key_volume: snapshot.key_volume,
             select_bgm_volume: snapshot.bgm_volume,
             select_has_banner: snapshot.banner_image,
+            select_has_document: selected_row.is_some_and(|row| row.has_document),
             has_stagefile: snapshot.stage_background,
             has_backbmp: snapshot.backbmp_image,
             select_chart_count: snapshot.chart_count,
@@ -6974,6 +6978,9 @@ fn test_skin_op(op: i32, enabled_options: &[i32], state: &SkinDrawState) -> bool
         }
         170 => !state.has_bga,
         171 => state.has_bga,
+        // SongDataBooleanProperty returns false for both branches without a selected song.
+        174 => select_song_option_matches(state) && !state.select_has_document,
+        175 => select_song_option_matches(state) && state.select_has_document,
         // OPTION_BPMCHANGE (BPM変化あり) / OPTION_BPMSTOP (STOP命令あり)
         177 => state.min_bpm < state.max_bpm,
         1177 => state.has_bpm_stop,
@@ -11113,6 +11120,13 @@ fn select_banner_option_matches(want_banner: bool, state: &SkinDrawState) -> boo
     state.select_has_banner == want_banner
 }
 
+fn select_song_option_matches(state: &SkinDrawState) -> bool {
+    state.select_screen
+        && state.select_row_kind == SelectRowKind::Song
+        && !state.in_settings
+        && state.select_in_library
+}
+
 fn select_key_mode_option_matches(op: i32, state: &SkinDrawState) -> bool {
     if state.result_failed.is_some() || !state.select_screen {
         return key_mode_option_matches(op, state.key_mode);
@@ -13668,6 +13682,27 @@ mod tests {
         assert!(test_skin_op(41, &[], &enabled_no_song_bga));
         assert!(test_skin_op(170, &[], &enabled_no_song_bga));
         assert!(!test_skin_op(171, &[], &enabled_no_song_bga));
+    }
+
+    #[test]
+    fn select_document_options_follow_selected_song_text_presence() {
+        let no_document = SkinDrawState {
+            select_screen: true,
+            select_row_kind: SelectRowKind::Song,
+            select_in_library: true,
+            select_has_document: false,
+            ..SkinDrawState::default()
+        };
+        let with_document = SkinDrawState { select_has_document: true, ..no_document.clone() };
+        let folder =
+            SkinDrawState { select_row_kind: SelectRowKind::Folder, ..with_document.clone() };
+
+        assert!(test_skin_op(174, &[], &no_document));
+        assert!(!test_skin_op(175, &[], &no_document));
+        assert!(!test_skin_op(174, &[], &with_document));
+        assert!(test_skin_op(175, &[], &with_document));
+        assert!(!test_skin_op(174, &[], &folder));
+        assert!(!test_skin_op(175, &[], &folder));
     }
 
     #[test]
