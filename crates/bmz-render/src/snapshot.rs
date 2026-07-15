@@ -67,6 +67,8 @@ pub struct RenderSnapshot {
     /// READY 遷移可否の判定に使う。op 80/81 は ready_elapsed_time から判定する。
     /// preload 完了前の placeholder snapshot では false。
     pub resources_loaded: bool,
+    /// Audio/BGA resource load progress in the beatoraja RateType 102 range (0.0..=1.0).
+    pub resource_load_progress: f32,
     pub duration: TimeUs,
     pub title: String,
     pub subtitle: String,

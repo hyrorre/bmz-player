@@ -2,7 +2,7 @@ use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::mpsc::{self, Receiver};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -536,6 +536,8 @@ struct WinitApp {
     bga_load_chart_id: Option<i64>,
     bga_load_rx: Option<Receiver<PendingBgaImageResult>>,
     bga_load_status: BgaImageLoadStatus,
+    bga_load_completed_assets: u32,
+    bga_load_total_assets: u32,
     bga_preload_frames: BgaFrameCatalog,
     bga_preload_assets: Option<Vec<BgaAssetRef>>,
     skin_video_sources: HashMap<SkinKind, Vec<ActiveSkinVideoSource>>,
@@ -1367,6 +1369,7 @@ struct PendingPlayPreload {
     generation: u64,
     chart_id: i64,
     input: SharedInputBackend,
+    audio_progress: Arc<AtomicU32>,
     rx: Receiver<PlayPreloadResult>,
 }
 
@@ -1470,6 +1473,7 @@ const LANE_COVER_REPEAT_STEP: f32 = 0.01;
 /// beatoraja の `getAnalogDiffAndReset(i, 200)` の tolerance に相当。
 const SELECT_ANALOG_SCROLL_TOLERANCE_MS: u64 = 200;
 const SKIN_RELOAD_REDRAW_PROFILE_THRESHOLD: Duration = Duration::from_millis(8);
+const RESOURCE_LOAD_PROGRESS_SCALE: u32 = 1_000_000;
 
 struct PendingSkinResult {
     generation: u64,
@@ -2488,6 +2492,8 @@ impl WinitApp {
             bga_load_chart_id: None,
             bga_load_rx: None,
             bga_load_status: BgaImageLoadStatus::default(),
+            bga_load_completed_assets: 0,
+            bga_load_total_assets: 0,
             bga_preload_frames: BgaFrameCatalog::new(),
             bga_preload_assets: None,
             skin_video_sources: initial_skin_video_sources,
@@ -7963,6 +7969,8 @@ impl WinitApp {
         let normalize_chart_volume = self.boot.profile_config.audio_mix.normalize_chart_volume;
         let input = SharedInputBackend::default();
         let preload_input = input.clone();
+        let audio_progress = Arc::new(AtomicU32::new(0));
+        let worker_audio_progress = Arc::clone(&audio_progress);
         thread::Builder::new()
             .name(format!("play-preload-{chart_id}"))
             .spawn(move || {
@@ -7976,12 +7984,19 @@ impl WinitApp {
                         );
                     session_options.ln_policy_setting = ln_policy_setting;
                     session_options.rule_mode = rule_mode;
-                    let preloaded = crate::screens::play_session::preload_play_session_for_chart(
-                        &library_db,
-                        chart_id,
-                        session_options.clone(),
-                        normalize_chart_volume,
-                    )?;
+                    let preloaded =
+                        crate::screens::play_session::preload_play_session_for_chart_with_progress(
+                            &library_db,
+                            chart_id,
+                            session_options.clone(),
+                            normalize_chart_volume,
+                            |loaded, total| {
+                                worker_audio_progress.store(
+                                    resource_load_progress_units(loaded, total),
+                                    Ordering::Relaxed,
+                                );
+                            },
+                        )?;
                     Ok(PreloadedInputPlaySession {
                         chart_id,
                         preloaded,
@@ -7993,7 +8008,8 @@ impl WinitApp {
                 let _ = tx.send(PlayPreloadResult { generation, chart_id, result });
             })
             .expect("failed to spawn play preload thread");
-        self.pending_play_preload = Some(PendingPlayPreload { generation, chart_id, input, rx });
+        self.pending_play_preload =
+            Some(PendingPlayPreload { generation, chart_id, input, audio_progress, rx });
         tracing::info!(chart_id, generation, "play preload started");
         self.start_chart_bga_texture_preload(chart_id, bga_options);
     }
@@ -8585,6 +8601,8 @@ impl WinitApp {
         self.bga_load_rx = None;
         self.bga_preload_frames.clear();
         self.bga_preload_assets = None;
+        self.bga_load_completed_assets = 0;
+        self.bga_load_total_assets = 0;
         let generation = self.bga_load_generation;
         self.bga_load_status = BgaImageLoadStatus::loading(generation, chart_id);
         let Some(uploader) = self.renderer.gpu_uploader() else {
@@ -8627,6 +8645,8 @@ impl WinitApp {
         self.bga_load_chart_id = None;
         self.bga_load_rx = None;
         self.bga_load_status = BgaImageLoadStatus::default();
+        self.bga_load_completed_assets = 0;
+        self.bga_load_total_assets = 0;
         self.bga_preload_frames.clear();
         self.bga_preload_assets = None;
     }
@@ -8641,6 +8661,7 @@ impl WinitApp {
         self.bga_load_rx = None;
         self.bga_preload_frames.clear();
         self.bga_preload_assets = Some(chart.bga_assets.clone());
+        self.bga_load_completed_assets = 0;
         let generation = self.bga_load_generation;
         self.bga_load_status = BgaImageLoadStatus::loading(generation, chart_id);
         let static_asset_count = chart
@@ -8648,6 +8669,7 @@ impl WinitApp {
             .iter()
             .filter(|asset| asset.kind == bmz_chart::model::BgaAssetKind::Static)
             .count();
+        self.bga_load_total_assets = static_asset_count.min(u32::MAX as usize) as u32;
         if static_asset_count == 0 {
             self.bga_load_status = BgaImageLoadStatus::ready(generation, chart_id);
             return BgaFrameCatalog::new();
@@ -8655,6 +8677,7 @@ impl WinitApp {
         let Some(uploader) = self.renderer.gpu_uploader() else {
             tracing::warn!("loading BGA images synchronously because GPU uploader is unavailable");
             let frames = load_chart_bga_textures(&mut self.renderer, chart);
+            self.bga_load_completed_assets = self.bga_load_total_assets;
             self.bga_load_status = BgaImageLoadStatus::ready(generation, chart_id);
             return frames;
         };
@@ -8681,12 +8704,21 @@ impl WinitApp {
                     if generation != self.bga_load_generation {
                         continue;
                     }
+                    self.bga_load_total_assets = assets
+                        .iter()
+                        .filter(|asset| asset.kind == bmz_chart::model::BgaAssetKind::Static)
+                        .count()
+                        .min(u32::MAX as usize)
+                        as u32;
+                    self.bga_load_completed_assets = 0;
                     self.bga_preload_assets = Some(assets);
                 }
                 Ok(PendingBgaImageResult::Loaded(image)) => {
                     if image.generation != self.bga_load_generation {
                         continue;
                     }
+                    self.bga_load_completed_assets =
+                        self.bga_load_completed_assets.saturating_add(1);
                     self.renderer.insert_prepared_texture(image.texture_id, image.prepared);
                     self.bga_preload_frames.insert(
                         image.asset_id,
@@ -8723,6 +8755,8 @@ impl WinitApp {
                     if generation != self.bga_load_generation {
                         continue;
                     }
+                    self.bga_load_completed_assets =
+                        self.bga_load_completed_assets.saturating_add(1);
                     tracing::warn!(
                         asset_id = asset_id.0,
                         file_bytes,
@@ -8744,6 +8778,7 @@ impl WinitApp {
                 }
                 Ok(PendingBgaImageResult::Finished { generation, stats }) => {
                     if generation == self.bga_load_generation {
+                        self.bga_load_completed_assets = self.bga_load_total_assets;
                         if let Some(chart_id) = self.bga_load_chart_id {
                             self.bga_load_status = BgaImageLoadStatus::ready(generation, chart_id);
                         }
@@ -9381,6 +9416,13 @@ impl WinitApp {
         self.bga_load_status = bga_load_status;
         let bga_frames = reuse.bga_frames.len();
         self.bga_preload_frames = reuse.bga_frames;
+        self.bga_load_total_assets = reuse
+            .bga_assets
+            .iter()
+            .filter(|asset| asset.kind == bmz_chart::model::BgaAssetKind::Static)
+            .count()
+            .min(u32::MAX as usize) as u32;
+        self.bga_load_completed_assets = self.bga_load_total_assets;
         self.bga_preload_assets = Some(reuse.bga_assets);
         tracing::info!(
             chart_id,
@@ -11521,11 +11563,47 @@ impl WinitApp {
     fn update_pending_play_snapshot_timers(&mut self) {
         let play_elapsed_time = self.play_elapsed_time();
         let ready_elapsed_time = self.play_ready_sound_started_at.map(elapsed_since);
+        let resource_load_progress = self.current_play_resource_load_progress();
         if let Some(snapshot) = &mut self.last_play_snapshot {
             snapshot.play_elapsed_time = play_elapsed_time;
             snapshot.ready_elapsed_time = ready_elapsed_time;
+            snapshot.resource_load_progress = resource_load_progress;
         }
         self.refresh_pending_play_visual_snapshot(play_elapsed_time);
+    }
+
+    fn current_play_resource_load_progress(&self) -> f32 {
+        let chart_id = self
+            .pending_play_start
+            .as_ref()
+            .map(|start| start.chart_id)
+            .or(self.last_started_chart_id);
+        let audio_progress = self
+            .pending_play_preload
+            .as_ref()
+            .filter(|pending| Some(pending.chart_id) == chart_id)
+            .map(|pending| {
+                pending.audio_progress.load(Ordering::Relaxed) as f32
+                    / RESOURCE_LOAD_PROGRESS_SCALE as f32
+            })
+            .unwrap_or_else(|| {
+                if self.preloaded_play_session.is_some() || self.active_play.is_some() {
+                    1.0
+                } else {
+                    0.0
+                }
+            });
+        let bga_progress = bga_resource_load_progress(
+            self.bga_load_status,
+            self.bga_load_generation,
+            self.bga_load_chart_id,
+            chart_id,
+            self.bga_load_completed_assets,
+            self.bga_load_total_assets,
+        );
+        let bga_enabled =
+            self.last_play_snapshot.as_ref().is_some_and(|snapshot| snapshot.bga_enabled);
+        combined_resource_load_progress(audio_progress, bga_progress, bga_enabled)
     }
 
     fn update_pre_ready_play_state(&mut self) {
@@ -14025,6 +14103,7 @@ fn play_skin_video_draw_state(
         hit_error_ring: snapshot.hit_error_ring.values,
         hit_error_ring_index: snapshot.hit_error_ring.index,
         skin_loaded: snapshot.ready_elapsed_time.is_some(),
+        resource_load_progress: snapshot.resource_load_progress,
         ..bmz_render::skin::SkinDrawState::default()
     }
 }
@@ -18530,6 +18609,45 @@ fn bga_images_ready_for_ready_phase(
     status.is_ready_for(generation, chart_id)
 }
 
+fn resource_load_progress_units(loaded: usize, total: usize) -> u32 {
+    if total == 0 {
+        return RESOURCE_LOAD_PROGRESS_SCALE;
+    }
+    let loaded = loaded.min(total) as u64;
+    ((loaded * u64::from(RESOURCE_LOAD_PROGRESS_SCALE)) / total as u64) as u32
+}
+
+fn bga_resource_load_progress(
+    status: BgaImageLoadStatus,
+    generation: u64,
+    load_chart_id: Option<i64>,
+    active_chart_id: Option<i64>,
+    completed: u32,
+    total: u32,
+) -> f32 {
+    if load_chart_id != active_chart_id || active_chart_id.is_none() {
+        return 0.0;
+    }
+    match status {
+        BgaImageLoadStatus::Loading { generation: load_generation, chart_id }
+            if load_generation == generation && Some(chart_id) == active_chart_id =>
+        {
+            if total == 0 {
+                0.0
+            } else {
+                completed.min(total) as f32 / total as f32
+            }
+        }
+        status if status.is_ready_for(generation, active_chart_id.unwrap_or_default()) => 1.0,
+        _ => 0.0,
+    }
+}
+
+fn combined_resource_load_progress(audio: f32, bga: f32, bga_enabled: bool) -> f32 {
+    let audio = audio.clamp(0.0, 1.0);
+    if bga_enabled { (audio + bga.clamp(0.0, 1.0)) / 2.0 } else { audio }
+}
+
 fn bga_asset_manifests_match(preloaded: &[BgaAssetRef], active: &[BgaAssetRef]) -> bool {
     if preloaded.len() != active.len() {
         return false;
@@ -20010,6 +20128,54 @@ mod tests {
             Some(42),
             true,
         ));
+    }
+
+    #[test]
+    fn resource_load_progress_combines_audio_and_enabled_bga_like_beatoraja() {
+        assert_eq!(resource_load_progress_units(0, 4), 0);
+        assert_eq!(resource_load_progress_units(1, 4), 250_000);
+        assert_eq!(resource_load_progress_units(4, 4), RESOURCE_LOAD_PROGRESS_SCALE);
+        assert_eq!(resource_load_progress_units(0, 0), RESOURCE_LOAD_PROGRESS_SCALE);
+
+        assert!((combined_resource_load_progress(0.25, 0.75, true) - 0.5).abs() < f32::EPSILON);
+        assert!((combined_resource_load_progress(0.25, 0.75, false) - 0.25).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn bga_resource_load_progress_tracks_current_manifest() {
+        assert_eq!(
+            bga_resource_load_progress(
+                BgaImageLoadStatus::loading(7, 42),
+                7,
+                Some(42),
+                Some(42),
+                1,
+                4,
+            ),
+            0.25
+        );
+        assert_eq!(
+            bga_resource_load_progress(
+                BgaImageLoadStatus::ready(7, 42),
+                7,
+                Some(42),
+                Some(42),
+                0,
+                0,
+            ),
+            1.0
+        );
+        assert_eq!(
+            bga_resource_load_progress(
+                BgaImageLoadStatus::ready(6, 42),
+                7,
+                Some(42),
+                Some(42),
+                4,
+                4,
+            ),
+            0.0
+        );
     }
 
     #[test]

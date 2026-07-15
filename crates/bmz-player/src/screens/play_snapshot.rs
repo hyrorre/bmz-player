@@ -429,6 +429,7 @@ pub fn build_render_snapshot_with_target_and_bga_frames_cached(
         ),
         // session が構築できている時点で WAV 等のロードは完了している。
         resources_loaded: true,
+        resource_load_progress: 1.0,
         duration: session.chart.end_time,
         title: session.chart.metadata.title.clone(),
         subtitle: session.chart.metadata.subtitle.clone(),

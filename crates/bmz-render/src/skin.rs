@@ -1174,6 +1174,8 @@ pub struct SkinDrawState {
     pub score_save_enabled: Option<bool>,
     /// OPTION_NOW_LOADING (80) / OPTION_LOADED (81) 用。
     pub skin_loaded: bool,
+    /// NUMBER_LOADING_PROGRESS (165) / RateType load_progress (102) 用。
+    pub resource_load_progress: f32,
     /// OPTION_MODE_COURSE (290) とステージ別 op (280..283 / 289) 用。未対応時は None。
     pub course_stage: Option<CourseStageMarker>,
     /// beatoraja `event_index(SKIN_EVENT_HSFIX)`。0=OFF, 1=START, 2=MAX, 3=MAIN, 4=MIN。
@@ -1404,6 +1406,7 @@ impl Default for SkinDrawState {
             practice_mode: false,
             score_save_enabled: None,
             skin_loaded: true,
+            resource_load_progress: 1.0,
             course_stage: None,
             hsfix_index: 0,
             main_bpm: 0.0,
@@ -8119,9 +8122,7 @@ fn skin_state_float_number(ref_id: i32, state: &SkinDrawState) -> Option<f32> {
         17 => Some(state.select_master_volume.clamp(0.0, 1.0)),
         18 => Some(state.select_key_volume.clamp(0.0, 1.0)),
         19 => Some(state.select_bgm_volume.clamp(0.0, 1.0)),
-        // Rate 102 is the continuous audio/BGA resource load progress. Do not substitute the
-        // PRELOAD boolean used by op 80/81 until that progress is carried into SkinDrawState.
-        102 => None,
+        102 => Some(state.resource_load_progress.clamp(0.0, 1.0)),
         103 => Some(select_level_rate(state, None)),
         105..=109 => Some(select_level_rate(state, Some(ref_id - 104))),
         110..=115 => Some(graph_value(ref_id, state)),
@@ -8762,6 +8763,7 @@ fn skin_state_number(ref_id: i32, state: &SkinDrawState) -> Option<i64> {
         407 => Some(gauge_after_dot(state.gauge) as i64),
         163 => Some((state.timeleft_ms / 60_000) as i64),
         164 => Some(((state.timeleft_ms / 1_000) % 60) as i64),
+        165 => Some((state.resource_load_progress.clamp(0.0, 1.0) * 100.0) as i64),
         1163 => Some(result_or_select_length_ms(state) / 60_000),
         1164 => Some((result_or_select_length_ms(state) / 1_000) % 60),
         310 => Some(state.hispeed.floor() as i64),
@@ -20968,6 +20970,7 @@ mod tests {
             hispeed: 1.75,
             gauge: 42.5,
             skin_loaded: false,
+            resource_load_progress: 0.426,
             average_duration_us: Some(12_345),
             average_timing_ms: Some(-1.25),
             stddev_timing_ms: Some(4.5),
@@ -20980,7 +20983,7 @@ mod tests {
         assert!(approx_eq(skin_state_float_number(111, &state).unwrap(), 0.8));
         assert!(approx_eq(skin_state_float_number(113, &state).unwrap(), 0.6));
         assert_eq!(skin_state_float_number(101, &state), Some(0.0));
-        assert_eq!(skin_state_float_number(102, &state), None);
+        assert!(approx_eq(skin_state_float_number(102, &state).unwrap(), 0.426));
         assert_eq!(skin_state_float_number(103, &state), Some(0.0));
         assert_eq!(skin_state_float_number(140, &state), Some(0.0));
         assert_eq!(skin_state_float_number(146, &state), None);
@@ -20991,7 +20994,7 @@ mod tests {
         assert_eq!(skin_state_number(162, &state), Some(5));
         assert_eq!(skin_state_number(20, &state), Some(237));
         assert_eq!(skin_state_number(368, &state), Some(350));
-        assert_eq!(skin_state_number(165, &state), None);
+        assert_eq!(skin_state_number(165, &state), Some(42));
     }
 
     #[test]

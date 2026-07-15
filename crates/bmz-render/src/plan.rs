@@ -993,6 +993,7 @@ fn plan_play(
         // beatoraja の op 80/81 はリソースロード状態ではなく PRELOAD state を表す。
         // TIMER_READY (40) の開始と同じフレームで 80 -> 81 を切り替える。
         skin_loaded: snapshot.ready_elapsed_time.is_some(),
+        resource_load_progress: snapshot.resource_load_progress,
         ..crate::skin::SkinDrawState::default()
     };
     dynamic_timers.ingest_skin_events(&snapshot.skin_events, key_mode, snapshot.time.0);

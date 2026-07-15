@@ -2,7 +2,9 @@ use anyhow::{Context, Result, bail};
 use bmz_audio::clock::AudioClock;
 use bmz_audio::engine::AudioEngine;
 use bmz_audio::ffmpeg_loader::FfmpegSampleLoader;
-use bmz_audio::loader::{LoadedSampleReport, SampleLoader, load_chart_samples};
+use bmz_audio::loader::{
+    LoadedSampleReport, SampleLoader, load_chart_samples, load_chart_samples_with_progress,
+};
 use bmz_audio::loudness::{analyze_chart_loudness, play_normalization_gain_for_loudness};
 use bmz_chart::import::import_bms_chart;
 use bmz_chart::model::{BgaAssetRef, NoteEvent, NoteKind, PlayableChart, TimingEventKind};
@@ -833,6 +835,17 @@ pub fn build_audio_engine_for_chart(
     (audio, sample_report)
 }
 
+fn build_audio_engine_for_chart_with_progress(
+    chart: &PlayableChart,
+    sample_rate: u32,
+    loader: &mut dyn SampleLoader,
+    on_progress: impl FnMut(usize, usize),
+) -> (AudioEngine, Vec<LoadedSampleReport>) {
+    let mut audio = AudioEngine::new(sample_rate);
+    let sample_report = load_chart_samples_with_progress(&mut audio, chart, loader, on_progress);
+    (audio, sample_report)
+}
+
 pub fn load_prepared_play_session_for_chart(
     library_db: &LibraryDatabase,
     chart_id: i64,
@@ -870,11 +883,31 @@ pub fn preload_play_session_for_chart(
     options: PlaySessionOptions,
     normalize_chart_volume: bool,
 ) -> Result<PreloadedPlaySession> {
+    preload_play_session_for_chart_with_progress(
+        library_db,
+        chart_id,
+        options,
+        normalize_chart_volume,
+        |_, _| {},
+    )
+}
+
+pub fn preload_play_session_for_chart_with_progress(
+    library_db: &LibraryDatabase,
+    chart_id: i64,
+    options: PlaySessionOptions,
+    normalize_chart_volume: bool,
+    on_progress: impl FnMut(usize, usize),
+) -> Result<PreloadedPlaySession> {
     let imported = load_transformed_chart_for_play(library_db, chart_id, &options)?;
     let chart = Arc::new(imported.chart);
     let mut loader = FfmpegSampleLoader::default();
-    let (audio, sample_report) =
-        build_audio_engine_for_chart(&chart, options.sample_rate, &mut loader);
+    let (audio, sample_report) = build_audio_engine_for_chart_with_progress(
+        &chart,
+        options.sample_rate,
+        &mut loader,
+        on_progress,
+    );
     let normalization_gain = load_or_compute_normalization_gain(
         library_db,
         chart_id,
