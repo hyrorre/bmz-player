@@ -209,6 +209,7 @@ fn execute_lua_skin(
     warnings.retain(|warning| {
         !warning.starts_with("skipping unsupported draw function at ")
             && !warning.starts_with("skipping unsupported value function at ")
+            && !warning.starts_with("skipping unsupported custom timer function ")
             && !warning.starts_with("mixed lua table converted to object at ")
     });
 
@@ -321,6 +322,27 @@ fn execute_lua_skin(
             root.insert("fixedDelayTimer".to_string(), JsonValue::Array(entries.collect()));
         }
     }
+
+    let unsupported_dynamic_timers = main_state_probe
+        .lock()
+        .ok()
+        .map(|probe| probe.unsupported_dynamic_timers.clone())
+        .unwrap_or_default();
+    warnings.extend(unsupported_dynamic_timers.into_iter().map(|id| {
+        format!(
+            "timer_util.timer_observe_boolean callback for generated timer {id} could not be inferred; timer remains inactive"
+        )
+    }));
+    let load_time_constant_dynamic_timers = main_state_probe
+        .lock()
+        .ok()
+        .map(|probe| probe.load_time_constant_dynamic_timers.clone())
+        .unwrap_or_default();
+    warnings.extend(load_time_constant_dynamic_timers.into_iter().map(|id| {
+        format!(
+            "timer_util.timer_observe_boolean callback for generated timer {id} was fixed to its load-time value; runtime Lua state changes are unsupported"
+        )
+    }));
 
     let dependencies =
         dependencies.lock().map_err(|_| anyhow!("lua dependency tracker lock poisoned"))?.clone();
@@ -855,6 +877,8 @@ struct MainStateProbe {
     next_dynamic_timer_id: i32,
     dynamic_timers: Vec<(i32, String)>,
     fixed_delay_timers: Vec<(i32, i32, i32)>,
+    unsupported_dynamic_timers: Vec<i32>,
+    load_time_constant_dynamic_timers: Vec<i32>,
     keylogger_destination_occurrences: BTreeMap<String, usize>,
     gauge_lead_glow_occurrences: BTreeMap<String, usize>,
     gauge_value_destination_occurrences: BTreeMap<String, usize>,
@@ -886,6 +910,8 @@ impl Default for MainStateProbe {
             next_dynamic_timer_id: SKIN_DYNAMIC_TIMER_BASE,
             dynamic_timers: Vec::new(),
             fixed_delay_timers: Vec::new(),
+            unsupported_dynamic_timers: Vec::new(),
+            load_time_constant_dynamic_timers: Vec::new(),
             keylogger_destination_occurrences: BTreeMap::new(),
             gauge_lead_glow_occurrences: BTreeMap::new(),
             gauge_value_destination_occurrences: BTreeMap::new(),
@@ -2151,10 +2177,14 @@ fn create_timer_util_module(lua: &Lua, probe: Arc<Mutex<MainStateProbe>>) -> mlu
     table.set(
         "timer_observe_boolean",
         lua.create_function(move |lua, observed: Function| {
-            let observe = infer_is_gauge_iidx_global_observe(lua, &observed)
-                .or_else(|| infer_boolean_predicate(&observed, &probe_for_observe, None))
-                .or_else(|| infer_constant_boolean(&observed))
-                .unwrap_or_else(|| "number(0) < 0".to_string());
+            let specialized = infer_is_gauge_iidx_global_observe(lua, &observed);
+            let observe = specialized
+                .clone()
+                .or_else(|| infer_boolean_predicate(&observed, &probe_for_observe, None));
+            let unsupported = observe.is_none();
+            let load_time_constant = specialized.is_none()
+                && observe.as_deref().is_some_and(is_constant_boolean_condition);
+            let observe = observe.unwrap_or_else(|| "number(0) < 0".to_string());
             let timer_id = {
                 let mut probe = probe_for_observe
                     .lock()
@@ -2162,6 +2192,12 @@ fn create_timer_util_module(lua: &Lua, probe: Arc<Mutex<MainStateProbe>>) -> mlu
                 let timer_id = probe.next_dynamic_timer_id;
                 probe.next_dynamic_timer_id += 1;
                 probe.dynamic_timers.push((timer_id, observe));
+                if unsupported {
+                    probe.unsupported_dynamic_timers.push(timer_id);
+                }
+                if load_time_constant {
+                    probe.load_time_constant_dynamic_timers.push(timer_id);
+                }
                 timer_id
             };
             let state = Arc::new(Mutex::new(TimerObserveState { timer_value: TIMER_OFF_VALUE }));
@@ -3401,10 +3437,17 @@ fn lua_table_to_json(
                     object.insert(key.clone(), JsonValue::Number(JsonNumber::from(timer_id)));
                     continue;
                 }
+                if path.contains(".customTimers[") {
+                    let id = object_id.as_deref().unwrap_or("unknown");
+                    warnings.push(format!(
+                        "skipping unsupported custom timer function id {id} at {path}.{key}"
+                    ));
+                    continue;
+                }
             }
         }
         if is_unsupported_json_field_value(&value) {
-            if should_silently_skip_loader_field(path, &key, &value) {
+            if should_silently_skip_loader_field(&key, &value) {
                 continue;
             }
             warnings.push(format!("skipping unsupported field `{key}` at {path}"));
@@ -4767,12 +4810,8 @@ fn unique_numbers_in_order(values: &[i32]) -> Vec<i32> {
     unique
 }
 
-fn infer_constant_boolean(function: &Function) -> Option<String> {
-    match function.call::<bool>(()).ok() {
-        Some(true) => Some("number(0) >= 0".to_string()),
-        Some(false) => Some("number(0) < 0".to_string()),
-        _ => None,
-    }
+fn is_constant_boolean_condition(condition: &str) -> bool {
+    matches!(condition, "number(0) >= 0" | "number(0) < 0")
 }
 
 /// Starseeker 等が `return is_gauge_iidx` / `return not is_gauge_iidx` と書くが
@@ -6667,10 +6706,8 @@ fn is_unsupported_json_field_value(value: &Value) -> bool {
 /// BMZ は `.luaskin` 実行結果だけを使い、関数参照自体は JSON 化しない。
 const SILENTLY_SKIPPED_LOADER_FIELDS: &[&str] = &["process", "main", "processHeader", "act"];
 
-fn should_silently_skip_loader_field(path: &str, key: &str, value: &Value) -> bool {
-    matches!(value, Value::Function(_))
-        && (SILENTLY_SKIPPED_LOADER_FIELDS.contains(&key)
-            || (key == "timer" && path.contains(".customTimers[")))
+fn should_silently_skip_loader_field(key: &str, value: &Value) -> bool {
+    matches!(value, Value::Function(_)) && SILENTLY_SKIPPED_LOADER_FIELDS.contains(&key)
 }
 
 fn lua_key_to_json_key(key: Value, path: &str, warnings: &mut Vec<String>) -> Result<String> {

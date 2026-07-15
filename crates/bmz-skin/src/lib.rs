@@ -1663,7 +1663,11 @@ mod tests {
             load_lua_skin_value(&root.join("select.luaskin"), &BTreeMap::new(), &BTreeMap::new())
                 .unwrap();
 
-        assert!(loaded.warnings.is_empty());
+        assert_eq!(loaded.warnings.len(), 1);
+        assert_eq!(
+            loaded.warnings[0].message,
+            "skipping unsupported custom timer function id 9001 at $.customTimers[1].timer"
+        );
         assert_eq!(loaded.value["image"][0]["act"], serde_json::json!(15));
         assert_eq!(loaded.value["image"][1]["act"], serde_json::json!(12));
         assert!(loaded.value["image"][2].get("act").is_none());
@@ -1789,7 +1793,8 @@ mod tests {
                         if main_state.time() < start then return off end
                         return start
                     end },
-                    { id = 11901, timer = function() return main_state.timer(150) end }
+                    { id = 11901, timer = function() return main_state.timer(150) end },
+                    { id = 11902, timer = function() return main_state.timer(150) + 1 end }
                 }
             }
             "#,
@@ -1809,6 +1814,47 @@ mod tests {
         );
         assert!(loaded.value["customTimers"][0].get("timer").is_none());
         assert!(loaded.value["customTimers"][1].get("timer").is_none());
+        assert!(loaded.value["customTimers"][2].get("timer").is_none());
+        assert!(loaded.warnings.iter().any(|warning| {
+            warning.message
+                == "skipping unsupported custom timer function id 11902 at $.customTimers[3].timer"
+        }));
+    }
+
+    #[test]
+    fn lua_skin_warns_when_timer_observe_callback_needs_runtime_lua() {
+        let root = unique_test_dir("bmz-skin-lua");
+        fs::create_dir_all(&root).unwrap();
+        fs::write(
+            root.join("select.luaskin"),
+            r#"
+            local timer_util = require("timer_util")
+            local menu_open = false
+            local menu_timer = timer_util.timer_observe_boolean(function()
+                return menu_open
+            end)
+            return {
+                type = 0,
+                destination = {
+                    { id = "menu", dst = { { timer = menu_timer } } }
+                }
+            }
+            "#,
+        )
+        .unwrap();
+
+        let loaded =
+            load_lua_skin_value(&root.join("select.luaskin"), &BTreeMap::new(), &BTreeMap::new())
+                .unwrap();
+
+        assert_eq!(
+            loaded.value["dynamicTimer"],
+            serde_json::json!([{ "id": 9000, "observe": "number(0) < 0" }])
+        );
+        assert!(loaded.warnings.iter().any(|warning| {
+            warning.message
+                == "timer_util.timer_observe_boolean callback for generated timer 9000 was fixed to its load-time value; runtime Lua state changes are unsupported"
+        }));
     }
 
     #[test]
@@ -3360,7 +3406,10 @@ mod tests {
             assert!(matches!(pair[1].timer, Some(120..=129)));
             assert!(pair[1].draw.starts_with("keybeam_fade("), "fade: {:?}", pair[1]);
         }
-        assert!(loaded.warnings.is_empty(), "warnings: {:?}", loaded.warnings);
+        assert_eq!(loaded.warnings.len(), 8, "warnings: {:?}", loaded.warnings);
+        assert!(loaded.warnings.iter().all(|warning| {
+            warning.message.starts_with("skipping unsupported custom timer function id 1190")
+        }));
         let gauge_lead_glow = loaded
             .document
             .destination
@@ -3425,11 +3474,15 @@ mod tests {
             ]);
             let loaded = load_lua_skin(&skin_path, SkinKind::Play, &properties, &BTreeMap::new())
                 .expect("PeacefulPlay gauge overlay should decode");
-            assert!(
-                loaded.warnings.is_empty(),
+            assert_eq!(
+                loaded.warnings.len(),
+                8,
                 "{display} overlay warnings: {:?}",
                 loaded.warnings
             );
+            assert!(loaded.warnings.iter().all(|warning| {
+                warning.message.starts_with("skipping unsupported custom timer function id 1190")
+            }));
             let predicates = loaded
                 .document
                 .destination
