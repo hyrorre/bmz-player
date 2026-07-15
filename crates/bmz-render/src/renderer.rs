@@ -903,7 +903,9 @@ impl Renderer {
     ) -> Option<SkinClickHit> {
         let (x, y) = self.result_skin_canvas_point(x, y)?;
         let document = self.result_skin_context.document()?;
-        let state = crate::plan::result_skin_draw_state(snapshot, document.ranktime);
+        let mut state = crate::plan::result_skin_draw_state(snapshot, document.ranktime);
+        state.start_input_ms =
+            crate::skin::skin_start_input_elapsed_ms(state.elapsed_ms, document.input);
         self.result_skin_context.result_click_hit(&state, x, y)
     }
 

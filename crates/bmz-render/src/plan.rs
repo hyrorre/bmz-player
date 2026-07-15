@@ -877,6 +877,10 @@ fn plan_play(
 
     let mut skin_state = crate::skin::SkinDrawState {
         elapsed_ms: play_elapsed_ms,
+        start_input_ms: crate::skin::skin_start_input_elapsed_ms(
+            play_elapsed_ms,
+            skin.document().map_or(0, |document| document.input),
+        ),
         current_fps: snapshot.current_fps,
         operating_time_ms: snapshot.operating_time_ms,
         ready_timer_ms,
@@ -1364,6 +1368,10 @@ fn plan_decide(
             (snapshot.play_elapsed_time.0 / 1_000).clamp(i32::MIN as i64, i32::MAX as i64) as i32;
         let mut state = crate::skin::SkinDrawState {
             elapsed_ms: play_elapsed_ms,
+            start_input_ms: crate::skin::skin_start_input_elapsed_ms(
+                play_elapsed_ms,
+                skin.document().map_or(0, |document| document.input),
+            ),
             current_fps: snapshot.current_fps,
             operating_time_ms: snapshot.operating_time_ms,
             ready_timer_ms: Some(play_elapsed_ms),
@@ -1468,6 +1476,8 @@ fn plan_result(
     if let Some(document) = skin.document().filter(|document| matches!(document.skin_type, 7 | 15))
     {
         let mut state = build_result_skin_draw_state(snapshot, document.ranktime);
+        state.start_input_ms =
+            crate::skin::skin_start_input_elapsed_ms(state.elapsed_ms, document.input);
         advance_skin_dynamic_timers(
             skin,
             dynamic_timers,

@@ -827,6 +827,8 @@ impl SkinBgaFrame {
 #[derive(Debug, Clone, PartialEq)]
 pub struct SkinDrawState {
     pub elapsed_ms: i32,
+    /// beatoraja TIMER_STARTINPUT (1)。skin.input 待機後からの経過 ms。
+    pub start_input_ms: Option<i32>,
     /// beatoraja NUMBER_CURRENT_FPS (20)。
     pub current_fps: u32,
     /// アプリ起動後の経過時間 ms。
@@ -1189,6 +1191,7 @@ impl Default for SkinDrawState {
     fn default() -> Self {
         Self {
             elapsed_ms: 0,
+            start_input_ms: None,
             current_fps: 0,
             operating_time_ms: 0,
             ready_timer_ms: None,
@@ -3621,8 +3624,10 @@ impl SkinDocumentRenderExt for SkinDocument {
             (x.clamp(0.0, 1.0) * self.w as f32, (1.0 - y.clamp(0.0, 1.0)) * self.h as f32)
         });
         let duration_green_ms = snapshot.note_display_duration_ms;
+        let elapsed_ms = (snapshot.time.0 / 1_000).clamp(i32::MIN as i64, i32::MAX as i64) as i32;
         let mut state = SkinDrawState {
-            elapsed_ms: (snapshot.time.0 / 1_000).clamp(i32::MIN as i64, i32::MAX as i64) as i32,
+            elapsed_ms,
+            start_input_ms: skin_start_input_elapsed_ms(elapsed_ms, self.input),
             current_fps: snapshot.current_fps,
             operating_time_ms: snapshot.operating_time_ms,
             select_bar_elapsed_ms: (snapshot.selection_time.0 / 1_000)
@@ -9684,6 +9689,7 @@ fn skin_timer_elapsed_ms(timer: Option<i32>, state: &SkinDrawState) -> Option<i3
     match timer {
         None => Some(state.elapsed_ms),
         Some(0) => Some(state.elapsed_ms),
+        Some(1) => state.start_input_ms,
         Some(2) => state.fadeout_ms,
         Some(3) => state.failed_ms,
         Some(150) => state.result_graph_begin_ms,
@@ -9760,6 +9766,12 @@ fn skin_timer_elapsed_ms(timer: Option<i32>, state: &SkinDrawState) -> Option<i3
         }
         Some(id) => state.fixed_delay_timer_ms.get(&id).copied(),
     }
+}
+
+/// beatoraja の各 scene が TIMER_STARTINPUT を開始する条件と経過時間。
+/// `now > skin.input` の厳密な不等号も合わせる。
+pub fn skin_start_input_elapsed_ms(elapsed_ms: i32, input_ms: i32) -> Option<i32> {
+    (elapsed_ms > input_ms).then_some(elapsed_ms.saturating_sub(input_ms))
 }
 
 fn skin_text_align(align: i32) -> TextAlign {
@@ -21038,6 +21050,16 @@ mod tests {
     }
 
     #[test]
+    fn start_input_timer_activates_strictly_after_skin_input_delay() {
+        assert_eq!(skin_start_input_elapsed_ms(499, 500), None);
+        assert_eq!(skin_start_input_elapsed_ms(500, 500), None);
+        assert_eq!(skin_start_input_elapsed_ms(501, 500), Some(1));
+
+        let state = SkinDrawState { start_input_ms: Some(275), ..SkinDrawState::default() };
+        assert_eq!(skin_timer_elapsed_ms(Some(1), &state), Some(275));
+    }
+
+    #[test]
     fn rhythm_timer_uses_bpm_normalized_snapshot_time() {
         let inactive = SkinDrawState::default();
         assert_eq!(skin_timer_elapsed_ms(Some(140), &inactive), None);
@@ -23909,6 +23931,24 @@ mod tests {
         assert!((graph_value(141, &state) - 0.3).abs() < 1e-5);
         assert!((graph_value(148, &state) - (12.0 / 21.0)).abs() < 1e-5);
         assert!((graph_value(149, &state) - (9.0 / 21.0)).abs() < 1e-5);
+    }
+
+    #[test]
+    fn select_state_starts_input_timer_after_document_delay() {
+        let document: SkinDocument =
+            serde_json::from_str(r#"{ "w": 1280, "h": 720, "input": 500 }"#).unwrap();
+
+        let (waiting, _) = document.select_draw_state(
+            &SelectSnapshot { time: TimeUs(500_000), ..SelectSnapshot::default() },
+            None,
+        );
+        let (active, _) = document.select_draw_state(
+            &SelectSnapshot { time: TimeUs(725_000), ..SelectSnapshot::default() },
+            None,
+        );
+
+        assert_eq!(waiting.start_input_ms, None);
+        assert_eq!(active.start_input_ms, Some(225));
     }
 
     #[test]
