@@ -21,6 +21,7 @@ const RESULT_GAUGE_GRAPH_SAMPLE_MS: i32 = 500;
 pub struct ResultSummary {
     pub clear_type: ClearType,
     pub arrange: String,
+    pub arrange_2p: String,
     pub lane_shuffle_pattern: Vec<u8>,
     pub ex_score: u32,
     pub max_combo: u32,
@@ -147,6 +148,7 @@ impl ResultSummary {
         Self {
             clear_type: result.clear_type,
             arrange: "NORMAL".to_string(),
+            arrange_2p: "NORMAL".to_string(),
             lane_shuffle_pattern: Vec::new(),
             ex_score: result.score.ex_score(),
             max_combo: result.score.max_combo,
@@ -433,6 +435,8 @@ mod tests {
 
         let summary = ResultSummary::from_play_result(&result, &stored, &chart);
 
+        assert_eq!(summary.arrange, "NORMAL");
+        assert_eq!(summary.arrange_2p, "NORMAL");
         assert_eq!(summary.title, "Test");
         assert_eq!(summary.duration_ms, 90_000);
         assert_eq!(summary.initial_bpm, 128.0);

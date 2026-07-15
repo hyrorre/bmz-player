@@ -70,8 +70,10 @@ pub struct RenderSnapshot {
     pub difficulty_name: String,
     pub judge_rank: Option<i32>,
     pub play_level: String,
-    /// Play option arrange label for skin ref 42/43.
+    /// 1P play option arrange label for skin ref 42/344.
     pub arrange: String,
+    /// 2P play option arrange label for skin ref 43/345.
+    pub arrange_2p: String,
     /// Play target option id for skin string refs 1 / 3 / 200..=219.
     pub target: String,
     pub combo: u32,

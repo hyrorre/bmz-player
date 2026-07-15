@@ -169,6 +169,7 @@ pub fn finish_session_result(
     let mut summary = ResultSummary::from_play_result(&result, &stored, &session.chart);
     summary.clear_type = summary_clear_type;
     summary.arrange = applied_arrange.arrange.as_str().to_string();
+    summary.arrange_2p = applied_arrange.arrange_2p.as_str().to_string();
     summary.lane_shuffle_pattern = applied_arrange.pattern.clone().unwrap_or_default();
     summary.target_ex_score = target_ex_score;
     summary.saved_replay_slots = stored.slot_paths.each_ref().map(Option::is_some);
@@ -595,7 +596,7 @@ mod tests {
         let lane_shuffle_pattern = (0..bmz_core::lane::LANE_COUNT as u8).rev().collect::<Vec<_>>();
         let applied_arrange = AppliedArrange {
             arrange: crate::select_options::ArrangeOption::Random,
-            arrange_2p: crate::select_options::ArrangeOption::Normal,
+            arrange_2p: crate::select_options::ArrangeOption::Mirror,
             double_option: crate::select_options::DoubleOption::Off,
             seed: Some(42),
             pattern: Some(lane_shuffle_pattern.clone()),
@@ -620,6 +621,7 @@ mod tests {
         assert_eq!(finished.summary.score_history_id, finished.stored.score_history_id);
         assert_eq!(finished.summary.clear_type, finished.result.clear_type);
         assert_eq!(finished.summary.arrange, "RANDOM");
+        assert_eq!(finished.summary.arrange_2p, "MIRROR");
         assert_eq!(finished.summary.lane_shuffle_pattern, lane_shuffle_pattern);
         assert_eq!(finished.summary.target_ex_score, Some(1600));
         assert_eq!(finished.summary.saved_replay_slots, [true, true, true, false]);

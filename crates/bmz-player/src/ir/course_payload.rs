@@ -509,6 +509,7 @@ mod tests {
         ResultSummary {
             clear_type,
             arrange: "NORMAL".to_string(),
+            arrange_2p: "NORMAL".to_string(),
             lane_shuffle_pattern: Vec::new(),
             ex_score: 0,
             max_combo: 0,

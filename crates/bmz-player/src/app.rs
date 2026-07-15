@@ -1433,6 +1433,7 @@ fn course_result_summary_for_skin(course: &CourseResultSummary) -> ResultSummary
     ResultSummary {
         clear_type: course.final_clear_type,
         arrange: "NORMAL".to_string(),
+        arrange_2p: "NORMAL".to_string(),
         lane_shuffle_pattern: Vec::new(),
         ex_score: course.total_ex_score,
         max_combo,
@@ -1702,6 +1703,7 @@ fn debug_boot_result_summary() -> ResultSummary {
     ResultSummary {
         clear_type: ClearType::Failed,
         arrange: "RANDOM".to_string(),
+        arrange_2p: "NORMAL".to_string(),
         lane_shuffle_pattern: vec![3, 1, 4, 2, 7, 5, 6],
         ex_score: judge_counts.pgreat * 2 + judge_counts.great,
         max_combo: 239,
@@ -2575,6 +2577,7 @@ impl WinitApp {
                     clear_type: summary.clear_type,
                     result_failed,
                     arrange: summary.arrange.as_str().to_string(),
+                    arrange_2p: summary.arrange_2p.as_str().to_string(),
                     lane_shuffle_pattern: summary.lane_shuffle_pattern.clone(),
                     ex_score: summary.ex_score,
                     ex_score_rate: summary.ex_score_rate(),
@@ -4233,6 +4236,7 @@ impl WinitApp {
                     &mut self.last_play_snapshot,
                     &active_play.running.session,
                     active_play.running.applied_arrange.arrange,
+                    active_play.running.applied_arrange.arrange_2p,
                 );
                 // E1+lane keys should still reach gameplay input so notes are judged
                 // and key beams render while changing play options.
@@ -4267,6 +4271,7 @@ impl WinitApp {
                     &mut self.last_play_snapshot,
                     &active_play.running.session,
                     active_play.running.applied_arrange.arrange,
+                    active_play.running.applied_arrange.arrange_2p,
                 );
                 return;
             }
@@ -4315,6 +4320,7 @@ impl WinitApp {
                         &mut self.last_play_snapshot,
                         &active_play.running.session,
                         active_play.running.applied_arrange.arrange,
+                        active_play.running.applied_arrange.arrange_2p,
                     );
                 }
                 // Start キーはゲームプレイ入力としても通すのでフォールスルー
@@ -7949,6 +7955,7 @@ impl WinitApp {
         self.draining_audio = None;
         self.play_scene_started_at = Instant::now();
         snapshot.arrange = options.arrange.as_str().to_string();
+        snapshot.arrange_2p = options.arrange_2p.as_str().to_string();
         snapshot.play_elapsed_time = TimeUs(0);
         snapshot.ready_elapsed_time = None;
         snapshot.time = self.play_skin_playstart_offset();
@@ -8036,6 +8043,7 @@ impl WinitApp {
         );
         self.apply_profile_fast_slow_filter(&mut snapshot);
         snapshot.arrange = active_play.running.applied_arrange.arrange.as_str().to_string();
+        snapshot.arrange_2p = active_play.running.applied_arrange.arrange_2p.as_str().to_string();
         snapshot.target = active_play.running.target.clone();
         snapshot.backbmp_background = self.play_backbmp_loaded;
         let play_elapsed_time = self.play_elapsed_time();
@@ -11007,6 +11015,7 @@ impl WinitApp {
             &mut self.last_play_snapshot,
             &active_play.running.session,
             active_play.running.applied_arrange.arrange,
+            active_play.running.applied_arrange.arrange_2p,
         );
     }
 
@@ -11191,6 +11200,7 @@ impl WinitApp {
                 &mut self.last_play_snapshot,
                 &active_play.running.session,
                 active_play.running.applied_arrange.arrange,
+                active_play.running.applied_arrange.arrange_2p,
             );
         } else if self.pending_play_start.is_some()
             && self.play_ready_sound_started_at.is_none()
@@ -11243,6 +11253,7 @@ impl WinitApp {
             &mut self.last_play_snapshot,
             &active_play.running.session,
             active_play.running.applied_arrange.arrange,
+            active_play.running.applied_arrange.arrange_2p,
         );
         true
     }
@@ -16979,6 +16990,7 @@ fn update_pre_ready_play_snapshot_options_for_session(
     last_play_snapshot: &mut Option<RenderSnapshot>,
     session: &bmz_gameplay::session::GameSession,
     arrange: ArrangeOption,
+    arrange_2p: ArrangeOption,
 ) {
     if ready_sound_started_at.is_some() {
         return;
@@ -16992,6 +17004,7 @@ fn update_pre_ready_play_snapshot_options_for_session(
         snapshot.time,
     );
     snapshot.arrange = arrange.as_str().to_string();
+    snapshot.arrange_2p = arrange_2p.as_str().to_string();
 }
 
 fn update_play_exit_hold_started_at(
@@ -19715,6 +19728,7 @@ mod tests {
             ResultSummary {
                 clear_type: ClearType::NoPlay,
                 arrange: "NORMAL".to_string(),
+                arrange_2p: "NORMAL".to_string(),
                 lane_shuffle_pattern: Vec::new(),
                 ex_score,
                 max_combo,

@@ -883,6 +883,9 @@ fn plan_play(
             .then_some((snapshot.time.0 / 1_000).clamp(i32::MIN as i64, i32::MAX as i64) as i32),
         key_mode,
         select_arrange_index: crate::skin::select_arrange_index(&snapshot.arrange),
+        select_arrange_2p_index: crate::skin::select_arrange_index(&snapshot.arrange_2p),
+        select_extended_arrange_index: crate::skin::extended_arrange_index(&snapshot.arrange),
+        select_extended_arrange_2p_index: crate::skin::extended_arrange_index(&snapshot.arrange_2p),
         combo: snapshot.combo,
         max_combo: snapshot.max_combo,
         ex_score: snapshot.ex_score,
@@ -1601,9 +1604,13 @@ fn build_result_skin_draw_state(
     crate::skin::SkinDrawState {
         elapsed_ms,
         select_arrange_index: crate::skin::select_arrange_index(&snapshot.arrange),
+        select_arrange_2p_index: crate::skin::select_arrange_index(&snapshot.arrange_2p),
         result_arrange_index: crate::skin::select_arrange_index(&snapshot.arrange),
+        result_arrange_2p_index: crate::skin::select_arrange_index(&snapshot.arrange_2p),
         select_extended_arrange_index: crate::skin::extended_arrange_index(&snapshot.arrange),
+        select_extended_arrange_2p_index: crate::skin::extended_arrange_index(&snapshot.arrange_2p),
         result_extended_arrange_index: crate::skin::extended_arrange_index(&snapshot.arrange),
+        result_extended_arrange_2p_index: crate::skin::extended_arrange_index(&snapshot.arrange_2p),
         result_random_lane_refs: crate::skin::result_random_lane_refs(
             &snapshot.lane_shuffle_pattern,
             snapshot.key_mode,
@@ -3059,6 +3066,7 @@ mod tests {
                 clear_type: ClearType::Normal,
                 result_failed: false,
                 arrange: "NORMAL".to_string(),
+                arrange_2p: "NORMAL".to_string(),
                 lane_shuffle_pattern: Vec::new(),
                 ex_score: 100,
                 ex_score_rate: 0.5,
@@ -3197,6 +3205,7 @@ mod tests {
             clear_type: ClearType::Normal,
             result_failed: false,
             arrange: "NORMAL".to_string(),
+            arrange_2p: "NORMAL".to_string(),
             lane_shuffle_pattern: Vec::new(),
             ex_score: 100,
             ex_score_rate: 0.5,
@@ -3301,11 +3310,18 @@ mod tests {
             panic!("sample result scene");
         };
         snapshot.arrange = "S-RANDOM-EX".to_string();
+        snapshot.arrange_2p = "MF-RANDOM".to_string();
 
         let state = build_result_skin_draw_state(&snapshot, 0);
 
         assert_eq!(state.select_arrange_index, 9);
+        assert_eq!(state.select_arrange_2p_index, 2);
         assert_eq!(state.result_arrange_index, 9);
+        assert_eq!(state.result_arrange_2p_index, 2);
+        assert_eq!(state.select_extended_arrange_index, 9);
+        assert_eq!(state.select_extended_arrange_2p_index, 11);
+        assert_eq!(state.result_extended_arrange_index, 9);
+        assert_eq!(state.result_extended_arrange_2p_index, 11);
     }
 
     #[test]
@@ -3499,6 +3515,7 @@ mod tests {
             clear_type: ClearType::Normal,
             result_failed: false,
             arrange: "NORMAL".to_string(),
+            arrange_2p: "NORMAL".to_string(),
             lane_shuffle_pattern: Vec::new(),
             ex_score: 100,
             ex_score_rate: 0.5,
@@ -3639,6 +3656,7 @@ mod tests {
             clear_type: ClearType::Normal,
             result_failed: false,
             arrange: "NORMAL".to_string(),
+            arrange_2p: "NORMAL".to_string(),
             lane_shuffle_pattern: Vec::new(),
             ex_score: 100,
             ex_score_rate: 0.5,
@@ -4926,7 +4944,7 @@ mod tests {
     }
 
     #[test]
-    fn play_plan_uses_snapshot_arrange_for_skin_imageset() {
+    fn play_plan_uses_snapshot_2p_arrange_for_skin_imageset() {
         let document: crate::skin::SkinDocument = serde_json::from_str(
             r#"
             {
@@ -4940,7 +4958,7 @@ mod tests {
                     { "id": "random", "src": 1, "x": 20, "y": 0, "w": 10, "h": 10 }
                 ],
                 "imageset": [
-                    { "id": "arrange", "ref": 42, "images": ["normal", "mirror", "random"] }
+                    { "id": "arrange", "ref": 43, "images": ["normal", "mirror", "random"] }
                 ],
                 "destination": [
                     { "id": "arrange", "dst": [{ "time": 0, "x": 10, "y": 20, "w": 20, "h": 10 }] }
@@ -4956,7 +4974,11 @@ mod tests {
             source_size: crate::skin::SkinImageSize { width: 30.0, height: 10.0 },
         };
         let skin = SkinContext::from_manifest_and_document(manifest, document, [source_texture]);
-        let snapshot = RenderSnapshot { arrange: "RANDOM".to_string(), ..Default::default() };
+        let snapshot = RenderSnapshot {
+            arrange: "NORMAL".to_string(),
+            arrange_2p: "RANDOM".to_string(),
+            ..Default::default()
+        };
 
         let plan = DrawPlan::from_scene_with_skin(
             &AppSceneSnapshot::Play(snapshot),
@@ -4972,7 +4994,7 @@ mod tests {
     }
 
     #[test]
-    fn play_plan_uses_snapshot_arrange_for_ref_image() {
+    fn play_plan_uses_snapshot_extended_2p_arrange_for_ref_image() {
         let document: crate::skin::SkinDocument = serde_json::from_str(
             r#"
             {
@@ -4981,7 +5003,7 @@ mod tests {
                 "h": 100,
                 "source": [{ "id": 1, "path": "arrange.png" }],
                 "image": [
-                    { "id": "arrange", "src": 1, "x": 0, "y": 0, "w": 10, "h": 30, "divy": 3, "len": 3, "ref": 42 }
+                    { "id": "arrange", "src": 1, "x": 0, "y": 0, "w": 10, "h": 120, "divy": 12, "len": 12, "ref": 345 }
                 ],
                 "destination": [
                     { "id": "arrange", "dst": [{ "time": 0, "x": 10, "y": 20, "w": 20, "h": 10 }] }
@@ -4994,10 +5016,14 @@ mod tests {
         let source_texture = crate::skin::SkinDocumentTexture {
             source_id: "1".to_string(),
             texture: crate::skin::SkinTextureId(77),
-            source_size: crate::skin::SkinImageSize { width: 10.0, height: 30.0 },
+            source_size: crate::skin::SkinImageSize { width: 10.0, height: 120.0 },
         };
         let skin = SkinContext::from_manifest_and_document(manifest, document, [source_texture]);
-        let snapshot = RenderSnapshot { arrange: "RANDOM".to_string(), ..Default::default() };
+        let snapshot = RenderSnapshot {
+            arrange: "NORMAL".to_string(),
+            arrange_2p: "MF-RANDOM".to_string(),
+            ..Default::default()
+        };
 
         let plan = DrawPlan::from_scene_with_skin(
             &AppSceneSnapshot::Play(snapshot),
@@ -5008,7 +5034,7 @@ mod tests {
         assert!(plan.commands.iter().any(|command| matches!(
             command,
             DrawCommand::Image { texture, uv, .. }
-                if *texture == TextureId(77) && (uv.y - 20.0 / 30.0).abs() < 0.001
+                if *texture == TextureId(77) && (uv.y - 110.0 / 120.0).abs() < 0.001
         )));
     }
 

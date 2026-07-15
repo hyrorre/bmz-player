@@ -328,7 +328,11 @@ pub fn advance_running_play_session(
         &running.bga_frames,
         &running.render_snapshot_cache,
     );
-    apply_play_arrange_to_snapshot(&mut output.render_snapshot, running.applied_arrange.arrange);
+    apply_play_arrange_to_snapshot(
+        &mut output.render_snapshot,
+        running.applied_arrange.arrange,
+        running.applied_arrange.arrange_2p,
+    );
     apply_running_play_target_to_snapshot(&mut output.render_snapshot, running);
     Ok(output)
 }
@@ -355,7 +359,11 @@ pub fn advance_running_play_session_until_result(
         &running.bga_frames,
         &running.render_snapshot_cache,
     );
-    apply_play_arrange_to_snapshot(&mut frame.render_snapshot, running.applied_arrange.arrange);
+    apply_play_arrange_to_snapshot(
+        &mut frame.render_snapshot,
+        running.applied_arrange.arrange,
+        running.applied_arrange.arrange_2p,
+    );
     apply_running_play_target_to_snapshot(&mut frame.render_snapshot, running);
     running.result_graph.record_frame(&frame);
     if matches!(frame.state, PlayState::Finished | PlayState::Failed) {
@@ -424,7 +432,11 @@ pub fn refresh_play_ending_snapshot(
         timers,
         &running.render_snapshot_cache,
     );
-    apply_play_arrange_to_snapshot(&mut snapshot, running.applied_arrange.arrange);
+    apply_play_arrange_to_snapshot(
+        &mut snapshot,
+        running.applied_arrange.arrange,
+        running.applied_arrange.arrange_2p,
+    );
     apply_running_play_target_to_snapshot(&mut snapshot, running);
     snapshot
 }
@@ -432,8 +444,10 @@ pub fn refresh_play_ending_snapshot(
 fn apply_play_arrange_to_snapshot(
     snapshot: &mut RenderSnapshot,
     arrange: crate::select_options::ArrangeOption,
+    arrange_2p: crate::select_options::ArrangeOption,
 ) {
     snapshot.arrange = arrange.as_str().to_string();
+    snapshot.arrange_2p = arrange_2p.as_str().to_string();
 }
 
 pub fn refresh_play_ending_snapshot_with_session(
@@ -546,9 +560,10 @@ mod tests {
     fn apply_play_arrange_to_snapshot_sets_skin_label() {
         let mut snapshot = RenderSnapshot::default();
 
-        apply_play_arrange_to_snapshot(&mut snapshot, ArrangeOption::Mirror);
+        apply_play_arrange_to_snapshot(&mut snapshot, ArrangeOption::Mirror, ArrangeOption::Random);
 
         assert_eq!(snapshot.arrange, "MIRROR");
+        assert_eq!(snapshot.arrange_2p, "RANDOM");
     }
 
     #[test]

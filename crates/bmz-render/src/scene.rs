@@ -514,6 +514,7 @@ pub struct ResultSnapshot {
     /// 背景や CLEAR/FAILED 演出は実プレイ結果に合わせるため分けて持つ。
     pub result_failed: bool,
     pub arrange: String,
+    pub arrange_2p: String,
     pub lane_shuffle_pattern: Vec<u8>,
     pub ex_score: u32,
     pub ex_score_rate: f32,
@@ -608,6 +609,7 @@ mod tests {
             clear_type: ClearType::Normal,
             result_failed: false,
             arrange: "NORMAL".to_string(),
+            arrange_2p: "NORMAL".to_string(),
             lane_shuffle_pattern: Vec::new(),
             ex_score: 20,
             ex_score_rate: 1.0,
@@ -678,6 +680,7 @@ mod tests {
             clear_type: ClearType::Normal,
             result_failed: false,
             arrange: "NORMAL".to_string(),
+            arrange_2p: "NORMAL".to_string(),
             lane_shuffle_pattern: Vec::new(),
             ex_score: 0,
             ex_score_rate: 1.0,
