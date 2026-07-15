@@ -496,6 +496,9 @@ pub struct ResultIrSnapshot {
     pub clear_rate: Option<i64>,
     /// 更新前の順位 (NUMBER_IR_PREVRANK=182)。未対応なら None。
     pub previous_rank: Option<i64>,
+    /// IRランキングの先頭表示行と最大スクロール位置。rate type 8の算出に使う。
+    pub scroll_offset: usize,
+    pub scroll_max: usize,
     /// 上位ランキング行 (STRING_RANKINGNAME1..10 / NUMBER_RANKING*_EXSCORE/INDEX)。
     pub entries: [ResultIrRankingEntrySnapshot; IR_RANKING_ENTRY_SLOTS],
 }
@@ -511,6 +514,8 @@ impl ResultIrSnapshot {
         total_player: None,
         clear_rate: None,
         previous_rank: None,
+        scroll_offset: 0,
+        scroll_max: 0,
         entries: [ResultIrRankingEntrySnapshot::EMPTY; IR_RANKING_ENTRY_SLOTS],
     };
 }

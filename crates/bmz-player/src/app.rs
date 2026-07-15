@@ -5708,6 +5708,14 @@ impl WinitApp {
         if matches!(self.view_state(), AppViewState::Result(_)) {
             self.select_slider_dragging_type = None;
             if button == MouseButton::Left && self.result_exit.is_none() {
+                let AppSceneSnapshot::Result(snapshot) = self.scene_snapshot() else {
+                    return;
+                };
+                if let Some(hit) = self.renderer.result_skin_slider_hit(&snapshot, x, y) {
+                    self.select_slider_dragging_type = Some(hit.slider_type);
+                    self.apply_result_slider_hit(hit);
+                    return;
+                }
                 self.handle_result_skin_click(x, y);
             }
             return;
@@ -5771,14 +5779,27 @@ impl WinitApp {
     }
 
     fn route_select_slider_drag(&mut self) {
-        if self.select_slider_dragging_type.is_none()
-            || !matches!(self.view_state(), AppViewState::Select)
-        {
+        if self.select_slider_dragging_type.is_none() {
             return;
         }
         let Some((x, y)) = self.cursor_position_normalized() else {
             return;
         };
+        if matches!(self.view_state(), AppViewState::Result(_)) {
+            if self.result_exit.is_some() {
+                return;
+            }
+            let AppSceneSnapshot::Result(snapshot) = self.scene_snapshot() else {
+                return;
+            };
+            if let Some(hit) = self.renderer.result_skin_slider_hit(&snapshot, x, y) {
+                self.apply_result_slider_hit(hit);
+            }
+            return;
+        }
+        if !matches!(self.view_state(), AppViewState::Select) {
+            return;
+        }
         let snapshot = self.select_snapshot();
         if let Some(hit) = self.renderer.select_skin_slider_hit(&snapshot, x, y) {
             self.apply_select_slider_hit(hit);
@@ -5856,6 +5877,16 @@ impl WinitApp {
             _ => {
                 tracing::debug!(slider_type = hit.slider_type, "unsupported select skin slider");
             }
+        }
+    }
+
+    fn apply_result_slider_hit(&mut self, hit: SkinSliderHit) {
+        if hit.slider_type == 8 {
+            if let Some(result_ir) = &mut self.result_ir {
+                result_ir.set_skin_scroll_rate(hit.value);
+            }
+        } else {
+            tracing::debug!(slider_type = hit.slider_type, "unsupported result skin slider");
         }
     }
 

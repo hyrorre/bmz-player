@@ -142,6 +142,7 @@ pub struct ResultIrState {
     ir_connect_success_at: Option<Instant>,
     ir_connect_fail_at: Option<Instant>,
     user_name: bmz_render::scene::ResultIrRankingName,
+    skin_scroll_offset: usize,
     query: ResultIrTaskQuery,
     sender: Sender<ResultIrEvent>,
     receiver: Receiver<ResultIrEvent>,
@@ -243,7 +244,9 @@ impl ResultIrState {
             RankingLoadState::Failed(_) => {
                 ResultIrSnapshot { state: SkinIrState::Failed, ..Default::default() }
             }
-            RankingLoadState::Loaded(ranking) => result_ir_ranking_to_skin_snapshot(ranking),
+            RankingLoadState::Loaded(ranking) => {
+                result_ir_ranking_to_skin_snapshot_at(ranking, self.skin_scroll_offset)
+            }
         };
         self.with_connect_timers(snapshot)
     }
@@ -263,6 +266,20 @@ impl ResultIrState {
         match self.active_tab {
             ResultRankingTab::Global => &self.global,
             ResultRankingTab::SelfAndRivals => &self.self_and_rivals,
+        }
+    }
+
+    pub fn set_skin_scroll_rate(&mut self, value: f32) {
+        let max = self.skin_scroll_max();
+        self.skin_scroll_offset = ((value.clamp(0.0, 1.0) * max as f32).round() as usize).min(max);
+    }
+
+    fn skin_scroll_max(&self) -> usize {
+        match &self.global {
+            RankingLoadState::Loaded(ranking) => {
+                ranking.entries.len().saturating_sub(bmz_render::scene::IR_RANKING_ENTRY_SLOTS)
+            }
+            _ => 0,
         }
     }
 
@@ -296,12 +313,21 @@ pub fn ranking_to_ir_snapshot(ranking: &IrRankingResult) -> bmz_render::scene::R
 pub(crate) fn result_ir_ranking_to_skin_snapshot(
     ranking: &ResultIrRanking,
 ) -> bmz_render::scene::ResultIrSnapshot {
+    result_ir_ranking_to_skin_snapshot_at(ranking, 0)
+}
+
+fn result_ir_ranking_to_skin_snapshot_at(
+    ranking: &ResultIrRanking,
+    requested_offset: usize,
+) -> bmz_render::scene::ResultIrSnapshot {
     use bmz_render::scene::{
         IR_RANKING_ENTRY_SLOTS, ResultIrRankingEntrySnapshot, ResultIrRankingName,
         ResultIrSnapshot, ResultIrState as SkinIrState,
     };
+    let scroll_max = ranking.entries.len().saturating_sub(IR_RANKING_ENTRY_SLOTS);
+    let scroll_offset = requested_offset.min(scroll_max);
     let mut entries = [ResultIrRankingEntrySnapshot::default(); IR_RANKING_ENTRY_SLOTS];
-    for (slot, entry) in entries.iter_mut().zip(ranking.entries.iter()) {
+    for (slot, entry) in entries.iter_mut().zip(ranking.entries.iter().skip(scroll_offset)) {
         *slot = ResultIrRankingEntrySnapshot {
             rank: Some(i64::from(entry.rank)),
             ex_score: Some(i64::from(entry.ex_score)),
@@ -316,6 +342,8 @@ pub(crate) fn result_ir_ranking_to_skin_snapshot(
         total_player: ranking.total.map(i64::from).or(Some(ranking.entries.len() as i64)),
         clear_rate: ranking.clear_rate.map(i64::from),
         previous_rank: None,
+        scroll_offset,
+        scroll_max,
         entries,
         ..Default::default()
     }
@@ -461,6 +489,7 @@ fn spawn_result_ir_task_for_target(
         user_name: bmz_render::scene::ResultIrRankingName::from_display_name(
             &provider.account_display_name,
         ),
+        skin_scroll_offset: 0,
         query: query.clone(),
         sender: sender.clone(),
         receiver,
@@ -734,8 +763,9 @@ mod tests {
     use crate::select_options::DoubleOptionScoreBucket;
 
     use super::{
-        ResultIrTarget, ResultIrTaskQuery, course_ranking_to_result_ir_ranking,
-        included_global_ranking_for_query, ranking_to_ir_snapshot,
+        ResultIrRanking, ResultIrRankingEntry, ResultIrTarget, ResultIrTaskQuery,
+        course_ranking_to_result_ir_ranking, included_global_ranking_for_query,
+        ranking_to_ir_snapshot, result_ir_ranking_to_skin_snapshot_at,
     };
 
     #[test]
@@ -820,6 +850,33 @@ mod tests {
         assert_eq!(display.entries[0].player_name, "course-player");
         assert_eq!(display.entries[0].ex_score, 1234);
         assert_eq!(display.entries[0].bp, 7);
+    }
+
+    #[test]
+    fn ranking_snapshot_scrolls_the_ten_visible_skin_rows() {
+        let ranking = ResultIrRanking {
+            scope: IrRankingScope::Global,
+            entries: (1..=15)
+                .map(|rank| ResultIrRankingEntry {
+                    rank,
+                    player_name: format!("player-{rank}"),
+                    ex_score: rank * 10,
+                    clear: "Normal".to_string(),
+                    bp: 0,
+                    max_combo: 0,
+                })
+                .collect(),
+            clear_rate: None,
+            self_rank: None,
+            total: Some(15),
+        };
+
+        let snapshot = result_ir_ranking_to_skin_snapshot_at(&ranking, 3);
+
+        assert_eq!(snapshot.scroll_offset, 3);
+        assert_eq!(snapshot.scroll_max, 5);
+        assert_eq!(snapshot.entries[0].rank, Some(4));
+        assert_eq!(snapshot.entries[9].rank, Some(13));
     }
 
     #[test]

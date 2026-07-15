@@ -498,6 +498,15 @@ impl SkinContext {
         self.document.as_ref()?.result_click_hit(state, x, y)
     }
 
+    pub fn result_slider_hit(
+        &self,
+        state: &SkinDrawState,
+        x: f32,
+        y: f32,
+    ) -> Option<SkinSliderHit> {
+        self.document.as_ref()?.result_slider_hit(state, x, y)
+    }
+
     pub fn select_slider_hit(
         &self,
         snapshot: &SelectSnapshot,
@@ -2158,6 +2167,8 @@ pub trait SkinDocumentRenderExt {
 
     fn result_click_hit(&self, state: &SkinDrawState, x: f32, y: f32) -> Option<SkinClickHit>;
 
+    fn result_slider_hit(&self, state: &SkinDrawState, x: f32, y: f32) -> Option<SkinSliderHit>;
+
     fn select_slider_hit(
         &self,
         snapshot: &SelectSnapshot,
@@ -3805,6 +3816,29 @@ impl SkinDocumentRenderExt for SkinDocument {
             .find(|hit| rect_contains(hit.rect, x, y))
     }
 
+    fn result_slider_hit(&self, state: &SkinDrawState, x: f32, y: f32) -> Option<SkinSliderHit> {
+        let enabled_options = self.enabled_options();
+        let destinations = self.all_destinations(&enabled_options);
+        let has_nearest_f_diff_rank_destination =
+            nearest_f_diff_rank_destination_available(&destinations);
+        destinations
+            .into_iter()
+            .filter(|destination| {
+                destination_ops_match(
+                    destination,
+                    &enabled_options,
+                    state,
+                    has_nearest_f_diff_rank_destination,
+                ) && eval_skin_draw_condition(&destination.draw, state)
+            })
+            .filter_map(|destination| {
+                let slider = self.slider.iter().find(|slider| slider.id == destination.id)?;
+                (slider.slider_type == 8).then_some(())?;
+                self.destination_slider_hit(slider, destination, &enabled_options, state, x, y)
+            })
+            .next_back()
+    }
+
     fn select_slider_hit(
         &self,
         snapshot: &SelectSnapshot,
@@ -4021,7 +4055,7 @@ impl SkinDocumentRenderExt for SkinDocument {
         x: f32,
         y: f32,
     ) -> Option<SkinSliderHit> {
-        if !slider.changeable || !matches!(slider.slider_type, 1 | 17..=19) {
+        if !slider.changeable || !matches!(slider.slider_type, 1 | 8 | 17..=19) {
             return None;
         }
         let elapsed = skin_timer_elapsed_ms(destination.timer, state)?;
@@ -8038,8 +8072,9 @@ fn skin_state_float_number(ref_id: i32, state: &SkinDrawState) -> Option<f32> {
             0.0
         }),
         6 | 101 => Some(if is_play { state.play_progress.clamp(0.0, 1.0) } else { 0.0 }),
-        // Skin configuration / IR ranking scroll positions are not exposed by BMZ yet.
-        7 | 8 => Some(0.0),
+        // Skin configuration scroll position is not exposed by BMZ yet.
+        7 => Some(0.0),
+        8 => Some(ir_ranking_scroll_progress(state)),
         17 => Some(state.select_master_volume.clamp(0.0, 1.0)),
         18 => Some(state.select_key_volume.clamp(0.0, 1.0)),
         19 => Some(state.select_bgm_volume.clamp(0.0, 1.0)),
@@ -8063,6 +8098,14 @@ fn select_level_rate(state: &SkinDrawState, difficulty: Option<i32>) -> f32 {
     // This intentionally follows beatoraja's current switch fallthrough: every supported mode
     // ends with maxLevel=10.
     (state.select_play_level as f32 / 10.0).max(0.0)
+}
+
+fn ir_ranking_scroll_progress(state: &SkinDrawState) -> f32 {
+    if state.ir_ranking.scroll_max == 0 {
+        0.0
+    } else {
+        (state.ir_ranking.scroll_offset as f32 / state.ir_ranking.scroll_max as f32).clamp(0.0, 1.0)
+    }
 }
 
 fn parse_skin_option_operand(operand: &str) -> Option<i32> {
@@ -9691,6 +9734,7 @@ fn skin_slider_progress_by_type(slider_type: i32, state: &SkinDrawState) -> Opti
             (lane_cover > 0.0).then_some(lane_cover)
         }
         6 => Some(state.play_progress.clamp(0.0, 1.0)),
+        8 => Some(ir_ranking_scroll_progress(state)),
         17 => Some(state.select_master_volume.clamp(0.0, 1.0)),
         18 => Some(state.select_key_volume.clamp(0.0, 1.0)),
         19 => Some(state.select_bgm_volume.clamp(0.0, 1.0)),
@@ -18815,6 +18859,41 @@ mod tests {
                 )
                 .is_none()
         );
+    }
+
+    #[test]
+    fn result_ir_slider_hit_and_rate_use_ranking_scroll_position() {
+        let document: SkinDocument = serde_json::from_str(
+            r#"
+            {
+                "type": 7,
+                "w": 100,
+                "h": 100,
+                "slider": [
+                    { "id": "ir-scroll", "src": 1, "x": 0, "y": 0, "w": 10, "h": 5, "angle": 2, "range": 50, "type": 8, "changeable": true }
+                ],
+                "destination": [
+                    { "id": "ir-scroll", "draw": "result_panel(1)", "dst": [{ "x": 10, "y": 70, "w": 10, "h": 5 }] }
+                ]
+            }
+            "#,
+        )
+        .unwrap();
+        let state = SkinDrawState {
+            result_panel: Some(1),
+            ir_ranking: crate::scene::ResultIrSnapshot {
+                scroll_offset: 5,
+                scroll_max: 10,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        assert!(approx_eq(skin_state_float_number(8, &state).unwrap(), 0.5));
+        assert!(approx_eq(skin_slider_progress_by_type(8, &state).unwrap(), 0.5));
+        let hit = document.result_slider_hit(&state, 0.15, 0.525).unwrap();
+        assert_eq!(hit.slider_type, 8);
+        assert!(approx_eq(hit.value, 0.5));
     }
 
     #[test]

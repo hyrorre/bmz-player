@@ -909,6 +909,20 @@ impl Renderer {
         self.result_skin_context.result_click_hit(&state, x, y)
     }
 
+    pub fn result_skin_slider_hit(
+        &self,
+        snapshot: &crate::scene::ResultSnapshot,
+        x: f32,
+        y: f32,
+    ) -> Option<SkinSliderHit> {
+        let (x, y) = self.result_skin_canvas_point(x, y)?;
+        let document = self.result_skin_context.document()?;
+        let mut state = crate::plan::result_skin_draw_state(snapshot, document.ranktime);
+        state.start_input_ms =
+            crate::skin::skin_start_input_elapsed_ms(state.elapsed_ms, document.input);
+        self.result_skin_context.result_slider_hit(&state, x, y)
+    }
+
     pub fn select_skin_slider_hit(
         &self,
         snapshot: &crate::scene::SelectSnapshot,
