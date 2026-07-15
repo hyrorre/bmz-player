@@ -7114,11 +7114,7 @@ fn test_skin_op(op: i32, enabled_options: &[i32], state: &SkinDrawState) -> bool
 }
 
 fn gauge_range_option_matches(op: i32, state: &SkinDrawState) -> bool {
-    if state.select_screen
-        || state.result_failed.is_some()
-        || (state.ready_timer_ms.is_none() && state.play_timer_ms.is_none())
-        || state.gauge_max <= 0.0
-    {
+    if !state.play_screen || state.gauge_max <= 0.0 {
         return false;
     }
     let range = (op - 230) as f32;
@@ -21000,7 +20996,7 @@ mod tests {
     #[test]
     fn skin_ops_map_gauge_ranges_and_result_judge_existence() {
         let play = SkinDrawState {
-            ready_timer_ms: Some(0),
+            play_screen: true,
             gauge: 45.0,
             gauge_max: 100.0,
             ..SkinDrawState::default()
@@ -21008,6 +21004,12 @@ mod tests {
         assert!(test_skin_op(234, &[], &play));
         assert!(!test_skin_op(233, &[], &play));
         assert!(test_skin_op(240, &[], &SkinDrawState { gauge: 100.0, ..play.clone() }));
+        assert!(test_skin_op(
+            234,
+            &[],
+            &SkinDrawState { ready_timer_ms: None, play_timer_ms: None, ..play.clone() }
+        ));
+        assert!(!test_skin_op(234, &[], &SkinDrawState { play_screen: false, ..play.clone() }));
 
         let result = SkinDrawState {
             result_failed: Some(false),
