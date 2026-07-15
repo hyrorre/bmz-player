@@ -967,6 +967,7 @@ enum ResultSkinSlot {
 enum ResultSkinClickAction {
     SetPanel(i32),
     ToggleFavoriteChart,
+    SaveReplay(u8),
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -5720,6 +5721,13 @@ impl WinitApp {
             }
             Some(ResultSkinClickAction::ToggleFavoriteChart) => {
                 self.toggle_favorite_chart_result();
+            }
+            Some(ResultSkinClickAction::SaveReplay(slot)) => {
+                if self.finished_course.is_some() {
+                    self.save_finished_course_replay_slot(slot);
+                } else {
+                    self.save_finished_play_replay_slot(slot);
+                }
             }
             None => {}
         }
@@ -16104,6 +16112,8 @@ fn result_skin_click_action(event_id: i32) -> Option<ResultSkinClickAction> {
         SKIN_EVENT_RESULT_PANEL_IR => Some(ResultSkinClickAction::SetPanel(1)),
         SKIN_EVENT_RESULT_PANEL_GRAPH => Some(ResultSkinClickAction::SetPanel(2)),
         90 => Some(ResultSkinClickAction::ToggleFavoriteChart),
+        19 => Some(ResultSkinClickAction::SaveReplay(0)),
+        316..=318 => Some(ResultSkinClickAction::SaveReplay((event_id - 315) as u8)),
         _ => None,
     }
 }
@@ -22459,6 +22469,15 @@ mod tests {
             Some(ResultSkinClickAction::SetPanel(1))
         );
         assert_eq!(result_skin_click_action(91), None);
+    }
+
+    #[test]
+    fn result_skin_replay_events_map_all_four_slots() {
+        assert_eq!(result_skin_click_action(19), Some(ResultSkinClickAction::SaveReplay(0)));
+        assert_eq!(result_skin_click_action(316), Some(ResultSkinClickAction::SaveReplay(1)));
+        assert_eq!(result_skin_click_action(317), Some(ResultSkinClickAction::SaveReplay(2)));
+        assert_eq!(result_skin_click_action(318), Some(ResultSkinClickAction::SaveReplay(3)));
+        assert_eq!(result_skin_click_action(319), None);
     }
 
     #[test]
