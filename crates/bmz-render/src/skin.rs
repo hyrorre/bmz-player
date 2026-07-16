@@ -8182,6 +8182,33 @@ fn default_chart_gauge_graph_value(state: &SkinDrawState) -> f32 {
     (default_chart_total_count_value(state) * 0.75).max(0.0)
 }
 
+fn course_clear_rate_value(state: &SkinDrawState) -> f32 {
+    let notes = f64::from(state.total_notes);
+    if notes <= 0.0 {
+        return 0.0;
+    }
+    let pgreat = f64::from(state.judge_counts.pgreat);
+    let great = f64::from(state.judge_counts.great);
+    let good = f64::from(state.judge_counts.good);
+    let bad = f64::from(state.judge_counts.bad);
+    let poor_and_miss =
+        f64::from(state.judge_counts.poor.saturating_add(state.judge_counts.empty_poor));
+    let progress = (pgreat + great + good + bad + poor_and_miss).min(notes);
+    if progress <= 0.0 {
+        return 0.0;
+    }
+
+    // WMII course result's "CLEAR RATE": course progress contributes 40%,
+    // while its judgement-quality formula contributes the remaining 60%.
+    let x = 8.0 * (pgreat + great) + 2.0 * good - (68.0 * bad + 100.0 * poor_and_miss);
+    let mut y = 100.0 * x / (6.0 * notes);
+    if y >= 0.0 {
+        y /= 2.0;
+    }
+    let performance = (0.6 * (y + 50.0)).clamp(0.0, 60.0);
+    (40.0 * progress / notes + performance) as f32
+}
+
 fn clamped_gauge_value(state: &SkinDrawState) -> f32 {
     if state.gauge_max <= 0.0 { 0.0 } else { state.gauge.clamp(0.0, state.gauge_max) }
 }
@@ -8209,6 +8236,7 @@ fn skin_builtin_value_f32(expr: &str, state: &SkinDrawState) -> Option<f32> {
         SKIN_EXPR_FS_THRESHOLD => Some(state.fs_threshold_ms as f32),
         SKIN_EXPR_DEFAULT_CHART_TOTAL_COUNT => Some(default_chart_total_count_value(state)),
         SKIN_EXPR_DEFAULT_CHART_GAUGE => Some(default_chart_gauge_graph_value(state)),
+        SKIN_EXPR_COURSE_CLEAR_RATE => Some(course_clear_rate_value(state)),
         SKIN_EXPR_GAUGE_PERCENT_INTEGER => {
             Some((clamped_gauge_value(state) * 100.0 / state.gauge_max.max(1.0)).floor())
         }
@@ -24000,6 +24028,34 @@ mod tests {
         assert_eq!(skin_value_number(&value(SKIN_EXPR_GAUGE_PERCENT_FRACTION), &state), Some(62));
         assert_eq!(skin_value_number(&value(SKIN_EXPR_GAUGE_AMOUNT_INTEGER), &state), Some(78));
         assert_eq!(skin_value_number(&value(SKIN_EXPR_GAUGE_AMOUNT_FRACTION), &state), Some(75));
+    }
+
+    #[test]
+    fn wmii_course_clear_rate_uses_course_progress_and_aggregate_judges() {
+        let completed = SkinDrawState {
+            total_notes: 7_085,
+            judge_counts: DisplayJudgeCounts {
+                pgreat: 6_407,
+                great: 631,
+                good: 24,
+                bad: 9,
+                poor: 14,
+                empty_poor: 32,
+            },
+            ..SkinDrawState::default()
+        };
+        let partial = SkinDrawState {
+            total_notes: 100,
+            judge_counts: DisplayJudgeCounts { pgreat: 50, ..DisplayJudgeCounts::default() },
+            ..SkinDrawState::default()
+        };
+        let value = SkinValueDef {
+            value_expr: SKIN_EXPR_COURSE_CLEAR_RATE.to_string(),
+            ..SkinValueDef::default()
+        };
+
+        assert_eq!(skin_value_number(&value, &completed), Some(100));
+        assert!((course_clear_rate_value(&partial) - 70.0).abs() < 0.001);
     }
 
     #[test]

@@ -1797,6 +1797,36 @@ fn course_total_notes_for_definition(
     Ok(total_notes)
 }
 
+fn hydrate_course_entry_title_hints(
+    library_db: &LibraryDatabase,
+    definition: &mut bmz_core::course::CourseDefinition,
+) -> Result<()> {
+    let chart_ids =
+        definition.entries.iter().filter_map(|entry| entry.chart_id).collect::<Vec<_>>();
+    let titles = library_db
+        .list_charts_by_ids(&chart_ids)?
+        .into_iter()
+        .map(|chart| (chart.chart_id, chart.title))
+        .collect::<HashMap<_, _>>();
+    apply_course_entry_title_hints(definition, &titles);
+    Ok(())
+}
+
+fn apply_course_entry_title_hints(
+    definition: &mut bmz_core::course::CourseDefinition,
+    titles: &HashMap<i64, String>,
+) {
+    for entry in &mut definition.entries {
+        let Some(chart_id) = entry.chart_id else {
+            continue;
+        };
+        let Some(title) = titles.get(&chart_id).filter(|title| !title.trim().is_empty()) else {
+            continue;
+        };
+        entry.title_hint.clone_from(title);
+    }
+}
+
 fn aggregate_course_result_graph(
     entries: &[ResultSummary],
 ) -> bmz_render::snapshot::ResultGraphSnapshot {
@@ -7026,7 +7056,11 @@ impl WinitApp {
             tracing::warn!(course_id, "course not found");
             return;
         };
-        let definition = stored.definition;
+        let mut definition = stored.definition;
+        if let Err(error) = hydrate_course_entry_title_hints(&self.boot.library_db, &mut definition)
+        {
+            tracing::warn!(%error, course_id, "failed to hydrate course entry titles");
+        }
         if definition.entries.is_empty()
             || definition.entries.iter().any(|entry| entry.chart_id.is_none())
         {
@@ -7169,7 +7203,11 @@ impl WinitApp {
             }
         };
 
-        let definition = stored.definition;
+        let mut definition = stored.definition;
+        if let Err(error) = hydrate_course_entry_title_hints(&self.boot.library_db, &mut definition)
+        {
+            tracing::warn!(%error, course_id, "failed to hydrate replay course entry titles");
+        }
         let first_chart_id = definition.entries.iter().find_map(|e| e.chart_id);
         let Some(first_chart_id) = first_chart_id else {
             tracing::warn!(course_id, "no resolved chart in course");
@@ -11066,14 +11104,24 @@ impl WinitApp {
         let key_mode = summary.as_ref().map(|summary| summary.key_mode).unwrap_or_default();
         let number_values =
             summary.as_ref().map(result_lua_runtime_number_values_for_summary).unwrap_or_default();
-        lua_runtime_state_for_result(
+        let mut runtime_state = lua_runtime_state_for_result(
             table_song,
             ir_online,
             self.result_score_save_enabled_for_slot(slot),
             key_mode,
             number_values,
             &self.boot.profile_config.display_name,
-        )
+        );
+        if let Some(stage) = self.current_course_stage_marker() {
+            apply_course_mode_lua_options(&mut runtime_state, Some(stage));
+        }
+        if let ResultSkinSlot::Course = slot
+            && let Some(course) = &self.finished_course
+        {
+            apply_course_mode_lua_options(&mut runtime_state, None);
+            apply_course_result_lua_load_state(&mut runtime_state, course);
+        }
+        runtime_state
     }
 
     fn current_result_score_save_enabled(&self) -> bool {
@@ -16440,7 +16488,33 @@ fn result_skin_signature_for_config(
 
 fn result_lua_runtime_number_values_for_summary(summary: &ResultSummary) -> BTreeMap<i32, i32> {
     let mut number_values = BTreeMap::new();
+    let value = |value: u32| i32::try_from(value).unwrap_or(i32::MAX);
+    number_values.insert(71, value(summary.ex_score));
+    number_values.insert(74, value(summary.total_notes));
+    number_values.insert(101, value(summary.ex_score));
+    number_values.insert(107, summary.gauge_value.floor().clamp(0.0, i32::MAX as f32) as i32);
+    number_values.insert(110, value(summary.judge_counts.pgreat));
+    number_values.insert(111, value(summary.judge_counts.great));
+    number_values.insert(112, value(summary.judge_counts.good));
+    number_values.insert(113, value(summary.judge_counts.bad));
+    number_values.insert(114, value(summary.judge_counts.poor));
+    number_values.insert(177, value(summary.bp));
+    number_values.insert(420, value(summary.judge_counts.empty_poor));
     number_values.insert(425, i32::try_from(summary.cb).unwrap_or(i32::MAX));
+    number_values.insert(
+        426,
+        value(summary.judge_counts.poor.saturating_add(summary.judge_counts.empty_poor)),
+    );
+    number_values.insert(
+        427,
+        value(
+            summary
+                .judge_counts
+                .bad
+                .saturating_add(summary.judge_counts.poor)
+                .saturating_add(summary.judge_counts.empty_poor),
+        ),
+    );
     if let Some(previous_best_bp) = summary.previous_best_bp
         && let (Ok(current), Ok(previous)) =
             (i32::try_from(summary.bp), i32::try_from(previous_best_bp))
@@ -16448,6 +16522,65 @@ fn result_lua_runtime_number_values_for_summary(summary: &ResultSummary) -> BTre
         number_values.insert(178, current.saturating_sub(previous));
     }
     number_values
+}
+
+fn apply_course_mode_lua_options(
+    runtime_state: &mut bmz_skin::LuaLoadRuntimeState,
+    stage: Option<CourseStageMarker>,
+) {
+    runtime_state.option_values.insert(290, true);
+    for option in [280, 281, 282, 283, 289] {
+        runtime_state.option_values.insert(option, false);
+    }
+    let option = match stage {
+        Some(CourseStageMarker::Stage1) => Some(280),
+        Some(CourseStageMarker::Stage2) => Some(281),
+        Some(CourseStageMarker::Stage3) => Some(282),
+        Some(CourseStageMarker::Stage4) => Some(283),
+        Some(CourseStageMarker::Final) => Some(289),
+        None => None,
+    };
+    if let Some(option) = option {
+        runtime_state.option_values.insert(option, true);
+    }
+}
+
+fn apply_course_result_lua_load_state(
+    runtime_state: &mut bmz_skin::LuaLoadRuntimeState,
+    course: &CourseResultSummary,
+) {
+    for (index, title) in course.course_titles.iter().enumerate() {
+        runtime_state.text_values.insert(150 + index as i32, title.clone());
+    }
+
+    // WMII stores these values from each intermediate MusicResult in
+    // `skin/WMII_FHD/result/courseData.json`, then reads them from CourseResult.
+    // Lua filesystem writes are intentionally disabled in BMZ, so expose the
+    // equivalent attempt data as an app-owned, read-only virtual file.
+    let songs = course
+        .entry_summaries
+        .iter()
+        .enumerate()
+        .map(|(index, summary)| {
+            let max_ex_score = summary.total_notes.saturating_mul(2);
+            let rate = if max_ex_score > 0 {
+                f64::from(summary.ex_score) / f64::from(max_ex_score)
+            } else {
+                0.0
+            };
+            serde_json::json!({
+                "stage": index + 1,
+                "score": summary.ex_score,
+                "gauge": summary.gauge_value.floor(),
+                "miss": summary.bp,
+                "rate": rate,
+            })
+        })
+        .collect::<Vec<_>>();
+    let course_data = serde_json::json!({ "songs": songs }).to_string();
+    runtime_state
+        .virtual_io_files
+        .insert("skin/WMII_FHD/result/courseData.json".to_string(), course_data);
 }
 
 fn result_long_note_mode_index(mode: bmz_chart::model::LongNoteMode) -> usize {
@@ -16479,6 +16612,7 @@ fn lua_runtime_state_for_result(
         number_values,
         text_values: BTreeMap::from([(2, player_name.to_string())]),
         option_values,
+        ..Default::default()
     }
 }
 
@@ -16503,6 +16637,7 @@ fn lua_runtime_state_for_play(
         number_values: BTreeMap::new(),
         text_values: BTreeMap::from([(2, player_name.to_string())]),
         option_values,
+        ..Default::default()
     }
 }
 
@@ -21097,6 +21232,10 @@ mod tests {
         assert_eq!(summary.previous_best_clear_type, Some(ClearType::Normal));
         assert_eq!(summary.previous_best_bp, Some(12));
         let number_values = result_lua_runtime_number_values_for_summary(&summary);
+        assert_eq!(number_values.get(&74), Some(&400));
+        assert_eq!(number_values.get(&110), Some(&160));
+        assert_eq!(number_values.get(&113), Some(&2));
+        assert_eq!(number_values.get(&426), Some(&0));
         assert_eq!(number_values.get(&178), Some(&25));
         assert_eq!(number_values.get(&425).copied(), Some(i32::try_from(summary.cb).unwrap()));
         assert_eq!(summary.replay_slots, [true, false, true, false]);
@@ -21116,6 +21255,57 @@ mod tests {
         assert!((summary.graph.bpm_graph_segments[0].end_ratio - 1.0 / 3.0).abs() < 0.001);
         assert!((summary.graph.bpm_graph_segments[1].start_ratio - 1.0 / 3.0).abs() < 0.001);
         assert_eq!(summary.graph.bpm_graph_segments[1].end_ratio, 1.0);
+
+        let mut runtime_state =
+            lua_runtime_state_for_result(false, false, true, KeyMode::K7, number_values, "Player");
+        apply_course_result_lua_load_state(&mut runtime_state, &course);
+        assert_eq!(runtime_state.text_values.get(&150).map(String::as_str), Some("Stage 1"));
+        let data: serde_json::Value = serde_json::from_str(
+            &runtime_state.virtual_io_files["skin/WMII_FHD/result/courseData.json"],
+        )
+        .unwrap();
+        assert_eq!(data["songs"].as_array().map(Vec::len), Some(2));
+        assert_eq!(data["songs"][1]["score"], serde_json::json!(200));
+    }
+
+    #[test]
+    fn course_entry_title_hints_are_hydrated_for_unplayed_stages() {
+        let mut definition = bmz_core::course::CourseDefinition {
+            key: "course".to_string(),
+            title: "Course".to_string(),
+            kind: bmz_core::course::CourseKind::Course,
+            entries: vec![
+                bmz_core::course::CourseEntry {
+                    title_hint: String::new(),
+                    md5: None,
+                    sha256: None,
+                    chart_id: Some(10),
+                },
+                bmz_core::course::CourseEntry {
+                    title_hint: "stale".to_string(),
+                    md5: None,
+                    sha256: None,
+                    chart_id: Some(20),
+                },
+                bmz_core::course::CourseEntry {
+                    title_hint: "Missing".to_string(),
+                    md5: None,
+                    sha256: None,
+                    chart_id: None,
+                },
+            ],
+            constraints: bmz_core::course::CourseConstraints::default(),
+            trophies: Vec::new(),
+            release: true,
+        };
+        apply_course_entry_title_hints(
+            &mut definition,
+            &HashMap::from([(10, "Resolved One".to_string()), (20, "Resolved Two".to_string())]),
+        );
+
+        assert_eq!(definition.entries[0].title_hint, "Resolved One");
+        assert_eq!(definition.entries[1].title_hint, "Resolved Two");
+        assert_eq!(definition.entries[2].title_hint, "Missing");
     }
 
     #[test]

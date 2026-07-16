@@ -15,8 +15,8 @@ use serde_json::{Map as JsonMap, Number as JsonNumber, Value as JsonValue};
 use bmz_skin_document::{
     SKIN_DYNAMIC_TIMER_BASE, SKIN_EVENT_RESULT_PANEL_GRAPH, SKIN_EVENT_RESULT_PANEL_IR,
     SKIN_EXPR_ADJUSTED_COVER, SKIN_EXPR_ADJUSTED_RATE, SKIN_EXPR_ADJUSTED_RATE_ADOT,
-    SKIN_EXPR_COURSE_TABLE_TEXT, SKIN_EXPR_FAST_SLOW_BREAKDOWN_HEIGHT, SKIN_EXPR_FS_THRESHOLD,
-    SKIN_EXPR_GAUGE_AMOUNT_FRACTION, SKIN_EXPR_GAUGE_AMOUNT_INTEGER,
+    SKIN_EXPR_COURSE_CLEAR_RATE, SKIN_EXPR_COURSE_TABLE_TEXT, SKIN_EXPR_FAST_SLOW_BREAKDOWN_HEIGHT,
+    SKIN_EXPR_FS_THRESHOLD, SKIN_EXPR_GAUGE_AMOUNT_FRACTION, SKIN_EXPR_GAUGE_AMOUNT_INTEGER,
     SKIN_EXPR_GAUGE_PERCENT_FRACTION, SKIN_EXPR_GAUGE_PERCENT_INTEGER,
     SKIN_EXPR_RESULT_TABLE_TITLE, SKIN_REF_PLAY_GAUGE_TYPE,
 };
@@ -6369,6 +6369,9 @@ fn infer_bmz_builtin_value_expr(
         }
         Some("threshold-num") | Some("threshold_num") | Some("fs-threshold") => {
             Some(SKIN_EXPR_FS_THRESHOLD.to_string())
+        }
+        Some("courseClearRate") | Some("course-clear-rate") | Some("course_clear_rate") => {
+            Some(SKIN_EXPR_COURSE_CLEAR_RATE.to_string())
         }
         Some("val-gauge-percent-integer") => Some(SKIN_EXPR_GAUGE_PERCENT_INTEGER.to_string()),
         Some("val-gauge-percent-fraction") => Some(SKIN_EXPR_GAUGE_PERCENT_FRACTION.to_string()),

@@ -1379,6 +1379,12 @@ fn lua_compat_virtual_io_files() -> BTreeMap<String, String> {
     ])
 }
 
+fn lua_virtual_io_files(runtime_state: &LuaLoadRuntimeState) -> BTreeMap<String, String> {
+    let mut files = lua_compat_virtual_io_files();
+    files.extend(runtime_state.virtual_io_files.clone());
+    files
+}
+
 fn lr2_document_dependency_fingerprint(
     skin_path: &Path,
     options: &BTreeMap<String, String>,
@@ -1450,7 +1456,7 @@ fn document_dependency_fingerprint(
         .map(|name| (name.clone(), files.get(name).cloned().unwrap_or_default()))
         .collect();
     let loaded_files = current_loaded_file_dependencies(&dependencies.loaded_files).ok()?;
-    let virtual_files = lua_compat_virtual_io_files();
+    let virtual_files = lua_virtual_io_files(runtime_state);
     let virtual_io_files = dependencies
         .virtual_io_files
         .keys()
@@ -1631,7 +1637,7 @@ fn load_skin_document_uncached(
     let (mut document, mut resolved_files, dependencies) = if is_lua_skin_path(skin_path) {
         // Lua スキンはオプション選択 (名前 -> 選択肢名) とファイル選択
         // (filepath 定義名 -> 相対パス) をそのまま渡す。
-        let virtual_io_files = lua_compat_virtual_io_files();
+        let virtual_io_files = lua_virtual_io_files(runtime_state);
         let loaded = bmz_skin::load_lua_skin_with_runtime_state_and_virtual_io_files(
             skin_path,
             options,
@@ -2474,6 +2480,7 @@ mod tests {
             number_values: BTreeMap::new(),
             text_values: BTreeMap::new(),
             option_values: BTreeMap::from([(51, true), (160, true)]),
+            ..LuaLoadRuntimeState::default()
         };
         let loaded = load_skin_document_uncached(
             &skin_path,
@@ -2608,6 +2615,87 @@ mod tests {
     }
 
     #[test]
+    fn wmii_course_result_uses_native_stage_titles_and_result_data() {
+        let skin_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../data/skins/WMII_FHD/result/courseResult.luaskin");
+        if !skin_path.is_file() {
+            return;
+        }
+
+        let runtime_state = LuaLoadRuntimeState {
+            text_values: BTreeMap::from([
+                (150, "Stage One".to_string()),
+                (151, "Stage Two".to_string()),
+                (152, "Stage Three".to_string()),
+                (153, "Stage Four".to_string()),
+            ]),
+            option_values: BTreeMap::from([(160, true), (290, true)]),
+            virtual_io_files: BTreeMap::from([(
+                "skin/WMII_FHD/result/courseData.json".to_string(),
+                serde_json::json!({
+                    "songs": [
+                        { "stage": 1, "score": 1000, "gauge": 80, "miss": 10, "rate": 0.5 },
+                        { "stage": 2, "score": 2000, "gauge": 81, "miss": 11, "rate": 0.6 },
+                        { "stage": 3, "score": 3000, "gauge": 82, "miss": 12, "rate": 0.7 },
+                        { "stage": 4, "score": 3456, "gauge": 88, "miss": 13, "rate": 0.75 }
+                    ]
+                })
+                .to_string(),
+            )]),
+            ..LuaLoadRuntimeState::default()
+        };
+        let loaded = load_skin_document_uncached(
+            &skin_path,
+            SkinKind::Result,
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            &runtime_state,
+        )
+        .expect("unmodified WMII course result should decode with native stage data");
+
+        for (id, expected) in
+            [("stage_gauge4", "88"), ("stage_score4", "3456"), ("stage_miss4", "13")]
+        {
+            let value = loaded
+                .document
+                .value
+                .iter()
+                .find(|value| value.id == id)
+                .unwrap_or_else(|| panic!("missing {id}"));
+            assert_eq!(value.value_expr, expected, "unexpected {id} expression");
+        }
+        let graph = loaded
+            .document
+            .graph
+            .iter()
+            .find(|graph| graph.id == "stage_scoreGraph4")
+            .expect("missing stage 4 score-rate graph");
+        assert_eq!(graph.value_expr, "0.75");
+        assert!(loaded.document.destination.iter().any(|entry| matches!(
+            entry,
+            DestinationListEntry::Single(destination) if destination.id == "courseTitle4"
+        )));
+        assert_eq!(
+            loaded
+                .document
+                .value
+                .iter()
+                .find(|value| value.id == "courseClearRate")
+                .map(|value| value.value_expr.as_str()),
+            Some(bmz_render::skin::SKIN_EXPR_COURSE_CLEAR_RATE)
+        );
+        assert_eq!(
+            loaded.dependencies.virtual_io_files.get("skin/WMII_FHD/result/courseData.json"),
+            runtime_state
+                .virtual_io_files
+                .get("skin/WMII_FHD/result/courseData.json")
+                .cloned()
+                .map(Some)
+                .as_ref()
+        );
+    }
+
+    #[test]
     fn luxe_flat_result_decodes_local_panel_state_and_tab_actions() {
         let skin_path = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../data/skins/Luxez-Flat/result/result.luaskin");
@@ -2724,6 +2812,7 @@ mod tests {
                     number_values: BTreeMap::from([(425, combo_break)]),
                     text_values: BTreeMap::new(),
                     option_values: BTreeMap::from([(51, true), (160, true)]),
+                    ..LuaLoadRuntimeState::default()
                 },
             )
             .expect("unmodified WMII result should decode")
@@ -3742,6 +3831,7 @@ mod tests {
             number_values: BTreeMap::from([(178, -1)]),
             text_values: BTreeMap::new(),
             option_values: BTreeMap::new(),
+            ..LuaLoadRuntimeState::default()
         };
         let decoded = decode_beatoraja_skin_with_options_and_runtime_state(
             &skin_path,
@@ -6237,6 +6327,7 @@ return {
             number_values: BTreeMap::from([(178, 0)]),
             text_values: BTreeMap::new(),
             option_values: BTreeMap::new(),
+            ..LuaLoadRuntimeState::default()
         };
         let first = load_skin_document(
             &skin_path,
@@ -6254,6 +6345,7 @@ return {
             number_values: BTreeMap::from([(178, -1)]),
             text_values: BTreeMap::new(),
             option_values: BTreeMap::new(),
+            ..LuaLoadRuntimeState::default()
         };
         let second = load_skin_document(
             &skin_path,
