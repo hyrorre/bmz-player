@@ -2,8 +2,9 @@ use std::collections::BTreeMap;
 
 use bmz_gameplay::rule::RuleMode;
 use bmz_render::scene::ResultGradeDiffDisplay;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
+use crate::i18n::AppLocale;
 use crate::ln_policy::LnPolicySetting;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -701,10 +702,53 @@ pub struct ReplayConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UiConfig {
+    #[serde(
+        default = "default_profile_language",
+        deserialize_with = "deserialize_profile_language",
+        serialize_with = "serialize_profile_language"
+    )]
     pub language: String,
     pub theme: String,
     pub show_fps: bool,
     pub confirm_on_exit: bool,
+}
+
+impl UiConfig {
+    /// 保存互換の String から、UI で利用する型付き locale を返す。
+    pub fn locale(&self) -> AppLocale {
+        AppLocale::profile_language(&self.language)
+    }
+
+    /// 言語 ComboBox などで選ばれた locale を canonical code で保持する。
+    pub fn set_locale(&mut self, locale: AppLocale) {
+        self.language = locale.code().to_owned();
+    }
+
+    /// alias や不明値を profile 保存用の canonical code へ正規化する。
+    pub fn normalize_language(&mut self) -> AppLocale {
+        let locale = self.locale();
+        self.set_locale(locale);
+        locale
+    }
+}
+
+fn default_profile_language() -> String {
+    AppLocale::DEFAULT.code().to_owned()
+}
+
+fn deserialize_profile_language<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let language = String::deserialize(deserializer)?;
+    Ok(AppLocale::profile_language(&language).code().to_owned())
+}
+
+fn serialize_profile_language<S>(language: &str, serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: Serializer,
+{
+    serializer.serialize_str(AppLocale::profile_language(language).code())
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1557,6 +1601,56 @@ mod tests {
         assert_eq!(profile.audio_mix.system_se_volume, 50);
         assert!(profile.ir.prefetch_global_ranking_on_score_submit);
         assert!(profile.ir.prefetch_rival_ranking_on_score_submit);
+    }
+
+    #[test]
+    fn ui_language_keeps_string_storage_with_canonical_locale_code() {
+        let ui: UiConfig = toml::from_str(
+            r#"
+            language = "ZH_hant_hk"
+            theme = "default"
+            show_fps = false
+            confirm_on_exit = false
+            "#,
+        )
+        .unwrap();
+
+        assert_eq!(ui.language, "zh-HK");
+        assert_eq!(ui.locale(), AppLocale::ZhHk);
+        assert!(toml::to_string(&ui).unwrap().contains("language = \"zh-HK\""));
+    }
+
+    #[test]
+    fn ui_language_recovers_missing_and_unsupported_values_to_japanese() {
+        let missing: UiConfig = toml::from_str(
+            r#"
+            theme = "default"
+            show_fps = false
+            confirm_on_exit = false
+            "#,
+        )
+        .unwrap();
+        assert_eq!(missing.language, "ja");
+
+        let unsupported: UiConfig = toml::from_str(
+            r#"
+            language = "fr"
+            theme = "default"
+            show_fps = false
+            confirm_on_exit = false
+            "#,
+        )
+        .unwrap();
+        assert_eq!(unsupported.language, "ja");
+    }
+
+    #[test]
+    fn ui_language_setter_uses_profile_compatible_string() {
+        let mut profile = ProfileConfig::new_default("default", "Default", 1);
+        profile.ui.set_locale(AppLocale::Ko);
+
+        assert_eq!(profile.ui.language, "ko");
+        assert_eq!(profile.ui.locale(), AppLocale::Ko);
     }
 
     #[test]

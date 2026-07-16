@@ -6,6 +6,7 @@ use bmz_core::course::{CourseKind, CourseLnConstraint};
 use bmz_gameplay::rule::RuleMode;
 use bmz_render::scene::SelectRowKind;
 
+use crate::i18n::{AppLocale, FluentArgs, Localizer};
 use crate::ln_policy::{LnPolicySetting, LnScorePolicy, score_ln_policy};
 use crate::screens::settings_model::{ConfigSelectRow, KeyBindingSelectRow};
 use crate::song_download::ChartDownloadMetadata;
@@ -74,13 +75,25 @@ pub fn parse_favorite_song_detail_path(path: &str) -> Option<[u8; 32]> {
 /// Returns one folder item per entry in the search history, newest last
 /// (matching the order in which `history` is maintained by the caller).
 pub fn search_history_folder_items(history: &[String]) -> Vec<SelectItem> {
+    search_history_folder_items_for_locale(history, AppLocale::DEFAULT)
+}
+
+pub fn search_history_folder_items_for_locale(
+    history: &[String],
+    locale: AppLocale,
+) -> Vec<SelectItem> {
+    let text = Localizer::new(locale);
     history
         .iter()
-        .map(|query| SelectItem::Folder {
-            path: format!("{SEARCH_PATH_PREFIX}{query}"),
-            name: format!("Search : '{query}'"),
-            kind: SelectRowKind::SearchFolder,
-            summary: None,
+        .map(|query| {
+            let mut args = FluentArgs::new();
+            args.set("query", query.as_str());
+            SelectItem::Folder {
+                path: format!("{SEARCH_PATH_PREFIX}{query}"),
+                name: text.format("select-search-history", &args),
+                kind: SelectRowKind::SearchFolder,
+                summary: None,
+            }
         })
         .collect()
 }
@@ -510,6 +523,10 @@ pub enum SelectItem {
 
 impl SelectItem {
     pub fn display_name(&self) -> String {
+        self.display_name_for_locale(AppLocale::DEFAULT)
+    }
+
+    pub fn display_name_for_locale(&self, locale: AppLocale) -> String {
         match self {
             Self::Folder { name, .. } => name.clone(),
             Self::Chart(row) => row.display_title().to_string(),
@@ -517,8 +534,8 @@ impl SelectItem {
             Self::Executable(row) => row.title.clone(),
             Self::Config(row) => row.label().to_string(),
             Self::KeyBinding(row) => row.label(),
-            Self::Back => "戻る".to_string(),
-            Self::AdvancedSettings => "詳細設定".to_string(),
+            Self::Back => Localizer::new(locale).text("select-back"),
+            Self::AdvancedSettings => Localizer::new(locale).text("select-advanced-settings"),
         }
     }
 }
@@ -3100,16 +3117,22 @@ mod tests {
         match &items[0] {
             SelectItem::Folder { path, name, kind, summary } => {
                 assert_eq!(path, "bmz-search:alpha");
-                assert_eq!(name, "Search : 'alpha'");
+                assert_eq!(name, "検索: 'alpha'");
                 assert_eq!(*kind, SelectRowKind::SearchFolder);
                 assert_eq!(*summary, None);
             }
             other => panic!("expected folder, got {other:?}"),
         }
         match &items[1] {
-            SelectItem::Folder { name, .. } => assert_eq!(name, "Search : 'beta'"),
+            SelectItem::Folder { name, .. } => assert_eq!(name, "検索: 'beta'"),
             other => panic!("expected folder, got {other:?}"),
         }
+
+        let english = search_history_folder_items_for_locale(&history, AppLocale::En);
+        assert!(matches!(
+            &english[0],
+            SelectItem::Folder { name, .. } if name == "Search: 'alpha'"
+        ));
     }
 
     #[test]

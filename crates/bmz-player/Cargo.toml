@@ -29,8 +29,10 @@ flate2.workspace = true
 tar.workspace = true
 sevenz-rust2.workspace = true
 webbrowser.workspace = true
+fluent-bundle.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
+unic-langid.workspace = true
 rusqlite.workspace = true
 ctrlc.workspace = true
 winit.workspace = true
@@ -58,6 +60,9 @@ bmz-gameplay = { path = "../bmz-gameplay" }
 bmz-render = { path = "../bmz-render" }
 bmz-skin = { path = "../bmz-skin" }
 bmz-video = { path = "../bmz-video" }
+
+[dev-dependencies]
+fluent-syntax.workspace = true
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = [

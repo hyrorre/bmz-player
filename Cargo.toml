@@ -40,6 +40,9 @@ sevenz-rust2 = { version = "0.21.3", features = ["util"] }
 webbrowser = "1.2"
 bytemuck = "1"
 futures-util = "0.3"
+fluent-bundle = "0.16"
+fluent-syntax = "0.12"
+unic-langid = "0.9"
 
 rusqlite = { version = "0.31", features = ["bundled"] }
 

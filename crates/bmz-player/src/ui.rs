@@ -34,6 +34,7 @@ use crate::config::profile_config::{
     ScratchInputMode, SkinConfig, SkinHistoryEntryConfig, SkinOffsetConfig, TargetOptionConfig,
     default_hispeed_step_fhs, default_hispeed_step_nhs, normalize_hispeed_step,
 };
+use crate::i18n::{AppLocale, FluentArgs, Localizer};
 use crate::ln_policy::LnPolicySetting;
 use crate::logging::{LogBuffer, LogEntry, LogLevel as TracingLogLevel};
 use crate::paths::{AppPaths, resolve_app_paths};
@@ -52,6 +53,17 @@ const BUNDLED_THIRD_PARTY_NOTICES: &str = include_str!("../../../THIRD-PARTY-NOT
 const THIRD_PARTY_NOTICE_PATH: &str = "licenses/third-party-notices.txt";
 const RUST_DEPENDENCY_LICENSE_PATH: &str = "licenses/rust-dependency-licenses.txt";
 const LOCAL_RUST_DEPENDENCY_LICENSE_FILE: &str = "rust-dependency-licenses.txt";
+
+macro_rules! tr {
+    ($text:expr, $key:literal) => {
+        $text.text($key)
+    };
+    ($text:expr, $key:literal, $($name:literal => $value:expr),+ $(,)?) => {{
+        let mut args = FluentArgs::new();
+        $(args.set($name, $value);)+
+        $text.format($key, &args)
+    }};
+}
 
 /// スキンが宣言する設定可能項目の定義 (1 シーン分)。
 ///
@@ -358,6 +370,8 @@ pub struct SongScanRequest {
 pub struct EguiLayer {
     ctx: egui::Context,
     state: egui_winit::State,
+    /// egui の未指定テキストで最優先する地域別 CJK coverage。
+    font_coverage: bmz_render::FontCoverage,
     /// メニュー全体の表示状態。F1 でトグルする。
     visible: bool,
     /// デバッグ表示パネルの開閉状態。
@@ -493,7 +507,7 @@ struct IrDeviceKeyOutcome {
 }
 
 impl IrDeviceKeyUiState {
-    fn poll(&mut self) {
+    fn poll(&mut self, text: Localizer) {
         let Some(receiver) = &self.receiver else {
             return;
         };
@@ -507,11 +521,12 @@ impl IrDeviceKeyUiState {
             Ok(outcome) => Some(IrProviderUiMessage {
                 target: IrProviderUiTarget::new(outcome.provider.clone(), outcome.base_url),
                 ok: true,
-                text: format!(
-                    "{} の署名鍵を再生成しました: {} ({})",
-                    outcome.provider,
-                    short_public_key(&outcome.public_key),
-                    outcome.key_id
+                text: tr!(
+                    text,
+                    "profile-ir-device-key-rotated",
+                    "provider" => outcome.provider,
+                    "public_key" => short_public_key(&outcome.public_key),
+                    "key_id" => outcome.key_id,
                 ),
             }),
             Err(error) => {
@@ -568,7 +583,7 @@ impl IrDeviceKeyUiState {
 impl IrLoginUiState {
     /// ログインタスクの完了を取り込み、成功時は provider 設定を更新する。
     /// profile 設定が更新された (保存が必要な) 場合に true を返す。
-    fn poll(&mut self, profile: &mut ProfileConfig) -> bool {
+    fn poll(&mut self, profile: &mut ProfileConfig, text: Localizer) -> bool {
         let Some(receiver) = &self.receiver else {
             return false;
         };
@@ -587,7 +602,11 @@ impl IrLoginUiState {
                         outcome.base_url.clone(),
                     ),
                     ok: true,
-                    text: format!("{} としてログインしました", outcome.display_name),
+                    text: tr!(
+                        text,
+                        "profile-ir-login-success",
+                        "display_name" => outcome.display_name.clone(),
+                    ),
                 });
                 if let Some(entry) = profile.ir.providers.iter_mut().find(|entry| {
                     entry.provider == outcome.provider && entry.base_url == outcome.base_url
@@ -688,7 +707,8 @@ impl EguiLayer {
     /// `show_fps` は右上 FPS オーバーレイの初期表示状態。
     pub fn new(window: &Window, show_fps: bool) -> Self {
         let ctx = egui::Context::default();
-        install_japanese_font(&ctx);
+        let font_coverage = bmz_render::FontCoverage::Japanese;
+        install_cjk_fonts(&ctx, font_coverage);
         let state = egui_winit::State::new(
             ctx.clone(),
             ViewportId::ROOT,
@@ -700,6 +720,7 @@ impl EguiLayer {
         Self {
             ctx,
             state,
+            font_coverage,
             visible: false,
             show_debug: false,
             debug_log_filter: DebugLogFilter::default(),
@@ -790,6 +811,12 @@ impl EguiLayer {
             obs_connection_status,
             connected_gamepads,
         } = context;
+        let font_coverage = profile_config.ui.locale().font_coverage();
+        if font_coverage != self.font_coverage {
+            install_cjk_fonts(&self.ctx, font_coverage);
+            self.font_coverage = font_coverage;
+        }
+        let text = Localizer::new(profile_config.ui.locale());
         let raw_input = self.state.take_egui_input(window);
         let ctx = self.ctx.clone();
         let show_debug = &mut self.show_debug;
@@ -823,10 +850,10 @@ impl EguiLayer {
         self.update_dialog_active = update_dialog_allowed;
         let full_output = ctx.run_ui(raw_input, |ui| {
             if update_dialog_allowed && let Some(dialog) = update_dialog {
-                update_dialog_action = build_update_dialog(ui.ctx(), dialog);
+                update_dialog_action = build_update_dialog(ui.ctx(), dialog, text);
             }
             if let Some(practice_ctx) = practice.as_mut() {
-                let panel = build_practice_panel(ui.ctx(), practice_ctx);
+                let panel = build_practice_panel(ui.ctx(), practice_ctx, text);
                 practice_start |= panel.start_play;
                 practice_leave |= panel.leave;
             }
@@ -836,16 +863,16 @@ impl EguiLayer {
                 // IR ランキングも egui 補助ウィンドウなので、他の egui
                 // ウィンドウと同じ F1 メニュー表示中だけ出す。
                 if let Some(state) = result_ir.as_mut() {
-                    build_result_ir_panel(ctx, state);
+                    build_result_ir_panel(ctx, state, text);
                 }
                 // Course info panels are developer/debug egui overlays, so keep
                 // them behind the same F1 menu visibility gate as the other
                 // egui windows.
                 if let Some(summary) = course_result {
-                    build_course_result_panel(ctx, summary, result_ir_visible);
+                    build_course_result_panel(ctx, summary, result_ir_visible, text);
                 }
                 if let Some(preview) = course_preview {
-                    build_course_preview_panel(ctx, preview);
+                    build_course_preview_panel(ctx, preview, text);
                 }
                 build_menu(
                     ctx,
@@ -857,12 +884,14 @@ impl EguiLayer {
                     show_license_notice,
                     app_paths,
                     directory_open_status,
+                    text,
                 );
                 build_third_party_notice_panel(
                     ctx,
                     show_license_notice,
                     app_paths,
                     license_notice_text,
+                    text,
                 );
                 build_debug_panel(
                     ctx,
@@ -871,6 +900,7 @@ impl EguiLayer {
                     log_buffer,
                     &mut self.debug_log_filter,
                     &mut self.debug_log_autoscroll,
+                    text,
                 );
                 let settings_actions = build_settings_panel(
                     ctx,
@@ -885,6 +915,7 @@ impl EguiLayer {
                     show_fps,
                     settings_editable,
                     difficulty_tables,
+                    text,
                     SettingsPanelState {
                         new_root_path: &mut self.settings_new_root_path,
                         add_root_error: &mut self.settings_add_root_error,
@@ -921,6 +952,7 @@ impl EguiLayer {
                     &mut self.profile_manager,
                     profile_root,
                     settings_editable,
+                    text,
                 );
                 save_profile_config |= profile_settings_actions.save;
                 save_app_config |= profile_settings_actions.save_app_config;
@@ -931,6 +963,7 @@ impl EguiLayer {
                     skin_meta,
                     skin_catalog,
                     app_paths,
+                    text,
                 );
                 save_profile_config |= skin_actions.save;
                 reset_skin_config |= skin_actions.reset;
@@ -963,27 +996,46 @@ impl EguiLayer {
     }
 }
 
-/// egui のデフォルトフォントは日本語グリフを含まないため、OS の CJK 対応
-/// フォントを各フォントファミリの末尾フォールバックとして登録する。
-fn install_japanese_font(ctx: &egui::Context) {
-    let Some(bytes) = bmz_render::renderer::load_japanese_font_bytes() else {
-        return;
-    };
+/// egui のデフォルトフォントは CJK グリフを含まないため、locale の地域別字形を
+/// 優先した全 CJK face を各フォントファミリの末尾 fallback として登録する。
+fn install_cjk_fonts(ctx: &egui::Context, preferred: bmz_render::FontCoverage) {
+    let fallbacks = bmz_render::renderer::load_cjk_font_fallback_data(preferred);
+    ctx.set_fonts(cjk_font_definitions(fallbacks));
+}
+
+fn cjk_font_definitions(
+    fallbacks: Vec<(bmz_render::FontCoverage, bmz_render::renderer::SystemFontData)>,
+) -> egui::FontDefinitions {
     let mut fonts = egui::FontDefinitions::default();
-    let font_data = egui::FontData::from_owned(bytes).tweak(egui::FontTweak {
-        scale: 1.0,
-        y_offset_factor: 0.26,
-        y_offset: 0.0,
-        ..Default::default()
-    });
-    fonts.font_data.insert("bmz_jp".to_owned(), std::sync::Arc::new(font_data));
-    // Latin は egui 既定フォントのまま、欠落グリフ (日本語) だけここへフォールバックさせる。
-    for family in [egui::FontFamily::Proportional, egui::FontFamily::Monospace] {
-        if let Some(chain) = fonts.families.get_mut(&family) {
-            chain.push("bmz_jp".to_owned());
+    for (coverage, data) in fallbacks {
+        let name = cjk_font_name(coverage).to_owned();
+        let mut font_data = egui::FontData::from_owned(data.bytes).tweak(egui::FontTweak {
+            scale: 1.0,
+            y_offset_factor: 0.26,
+            y_offset: 0.0,
+            ..Default::default()
+        });
+        font_data.index = data.font_index;
+        fonts.font_data.insert(name.clone(), std::sync::Arc::new(font_data));
+        // Latin は egui 既定フォントの先頭順を維持し、欠落グリフだけ CJK face へ
+        // preferred 順で fallback させる。
+        for family in [egui::FontFamily::Proportional, egui::FontFamily::Monospace] {
+            if let Some(chain) = fonts.families.get_mut(&family) {
+                chain.push(name.clone());
+            }
         }
     }
-    ctx.set_fonts(fonts);
+    fonts
+}
+
+const fn cjk_font_name(coverage: bmz_render::FontCoverage) -> &'static str {
+    match coverage {
+        bmz_render::FontCoverage::Japanese => "bmz_cjk_japanese",
+        bmz_render::FontCoverage::Korean => "bmz_cjk_korean",
+        bmz_render::FontCoverage::SimplifiedChinese => "bmz_cjk_simplified_chinese",
+        bmz_render::FontCoverage::TraditionalChinese => "bmz_cjk_traditional_chinese",
+        bmz_render::FontCoverage::HongKong => "bmz_cjk_hong_kong",
+    }
 }
 
 /// 各サブパネルの開閉を切り替えるメインメニューハブ。
@@ -997,21 +1049,23 @@ fn build_menu(
     show_license_notice: &mut bool,
     app_paths: &AppPaths,
     directory_open_status: &mut Option<DirectoryOpenStatus>,
+    text: Localizer,
 ) {
-    egui::Window::new("BMZ メニュー")
+    egui::Window::new(tr!(text, "menu-title"))
+        .id(egui::Id::new("bmz_menu"))
         .open(visible)
         .constrain_to(ctx.content_rect().shrink(PANEL_VIEWPORT_MARGIN))
         .default_pos(egui::pos2(16.0, 16.0))
         .show(ctx, |ui| {
-            ui.label("F1 でこのメニューを開閉します。");
+            ui.label(tr!(text, "menu-toggle-help"));
             ui.separator();
-            ui.checkbox(show_debug, "デバッグ表示");
-            ui.checkbox(show_settings, "本体設定");
-            ui.checkbox(show_profile_settings, "プロファイル設定");
-            ui.checkbox(show_skin, "スキン設定");
-            ui.checkbox(show_license_notice, "ライセンス表記");
+            ui.checkbox(show_debug, tr!(text, "menu-debug"));
+            ui.checkbox(show_settings, tr!(text, "menu-app-settings"));
+            ui.checkbox(show_profile_settings, tr!(text, "menu-profile-settings"));
+            ui.checkbox(show_skin, tr!(text, "menu-skin-settings"));
+            ui.checkbox(show_license_notice, tr!(text, "menu-licenses"));
             ui.separator();
-            ui.label("ディレクトリを開く");
+            ui.label(tr!(text, "menu-open-directory"));
             ui.horizontal_wrapped(|ui| {
                 for target in directory_open_targets(app_paths) {
                     if ui
@@ -1019,7 +1073,7 @@ fn build_menu(
                         .on_hover_text(target.path.display().to_string())
                         .clicked()
                     {
-                        *directory_open_status = Some(open_directory_target(target));
+                        *directory_open_status = Some(open_directory_target(target, text));
                     }
                 }
             });
@@ -1028,13 +1082,22 @@ fn build_menu(
                     Some(error) => {
                         ui.colored_label(
                             egui::Color32::LIGHT_RED,
-                            format!("{} を開けません: {error}", status.label),
+                            tr!(
+                                text,
+                                "menu-directory-open-failed",
+                                "label" => status.label,
+                                "error" => error
+                            ),
                         )
                         .on_hover_text(status.path.display().to_string());
                     }
                     None => {
-                        ui.small(format!("{} を開きました", status.label))
-                            .on_hover_text(status.path.display().to_string());
+                        ui.small(tr!(
+                            text,
+                            "menu-directory-opened",
+                            "label" => status.label
+                        ))
+                        .on_hover_text(status.path.display().to_string());
                     }
                 }
             }
@@ -1046,25 +1109,32 @@ fn build_third_party_notice_panel(
     open: &mut bool,
     app_paths: &AppPaths,
     notice_text: &mut Option<String>,
+    text: Localizer,
 ) {
     if !*open {
         return;
     }
     let notice = notice_text.get_or_insert_with(|| combined_license_notice_text(app_paths));
     let mut notice = notice.as_str();
-    sized_panel_window("ライセンス表記", ctx, open, 620.0, 560.0, egui::pos2(936.0, 320.0)).show(
+    localized_sized_panel_window(
+        "license_notice_panel",
+        tr!(text, "licenses-title"),
         ctx,
-        |ui| {
-            scrollable_window_content(ui, |ui| {
-                ui.add(
-                    egui::TextEdit::multiline(&mut notice)
-                        .font(egui::TextStyle::Monospace)
-                        .desired_width(f32::INFINITY)
-                        .interactive(false),
-                );
-            });
-        },
-    );
+        open,
+        620.0,
+        560.0,
+        egui::pos2(936.0, 320.0),
+    )
+    .show(ctx, |ui| {
+        scrollable_window_content(ui, |ui| {
+            ui.add(
+                egui::TextEdit::multiline(&mut notice)
+                    .font(egui::TextStyle::Monospace)
+                    .desired_width(f32::INFINITY)
+                    .interactive(false),
+            );
+        });
+    });
 }
 
 fn combined_license_notice_text(app_paths: &AppPaths) -> String {
@@ -1124,14 +1194,18 @@ fn directory_open_targets(app_paths: &AppPaths) -> [DirectoryOpenTarget<'_>; 4] 
     ]
 }
 
-fn open_directory_target(target: DirectoryOpenTarget<'_>) -> DirectoryOpenStatus {
-    let error = open_directory(target.path).err();
+fn open_directory_target(target: DirectoryOpenTarget<'_>, text: Localizer) -> DirectoryOpenStatus {
+    let error = open_directory(target.path, text).err();
     DirectoryOpenStatus { label: target.label, path: target.path.to_path_buf(), error }
 }
 
-fn open_directory(path: &Path) -> Result<(), String> {
+fn open_directory(path: &Path, text: Localizer) -> Result<(), String> {
     if !path.is_dir() {
-        return Err(format!("ディレクトリが存在しません: {}", path.display()));
+        return Err(tr!(
+            text,
+            "menu-directory-missing",
+            "path" => path.display().to_string()
+        ));
     }
     spawn_directory_opener(path).map_err(|error| format!("{} ({})", error, path.display()))
 }
@@ -1229,20 +1303,6 @@ fn clamp_panel_layout(
     (default_inner, max_inner, default_pos)
 }
 
-/// 既存 Window の outer rect が constrain からはみ出していれば位置を補正する。
-fn panel_window_pos(
-    ctx: &egui::Context,
-    title: &'static str,
-    constrain: egui::Rect,
-    default_pos: egui::Pos2,
-) -> egui::Pos2 {
-    let id = egui::Id::new(title);
-    let Some(rect) = ctx.memory(|memory| memory.area_rect(id)) else {
-        return default_pos;
-    };
-    constrain_window_rect_to_area(rect, constrain).min
-}
-
 /// egui `Context::constrain_window_rect_to_area` と同等 (crate 外からは非公開のため)。
 fn constrain_window_rect_to_area(window: egui::Rect, area: egui::Rect) -> egui::Rect {
     let mut pos = window.min;
@@ -1255,8 +1315,10 @@ fn constrain_window_rect_to_area(window: egui::Rect, area: egui::Rect) -> egui::
     egui::Rect::from_min_size(pos, window.size())
 }
 
-fn sized_panel_window<'open>(
-    title: &'static str,
+/// 翻訳で title が変わっても Window の状態を維持する、固定 ID 付きパネル。
+fn localized_sized_panel_window<'open>(
+    id: &'static str,
+    title: String,
     ctx: &egui::Context,
     open: &'open mut bool,
     preferred_width: f32,
@@ -1267,8 +1329,13 @@ fn sized_panel_window<'open>(
     let chrome = panel_window_chrome(ctx);
     let (default_inner, max_inner, clamped_default_pos) =
         clamp_panel_layout(constrain, chrome, preferred_width, preferred_height, default_pos);
-    let pos = panel_window_pos(ctx, title, constrain, clamped_default_pos);
+    let window_id = egui::Id::new(id);
+    let pos = ctx
+        .memory(|memory| memory.area_rect(window_id))
+        .map(|rect| constrain_window_rect_to_area(rect, constrain).min)
+        .unwrap_or(clamped_default_pos);
     egui::Window::new(title)
+        .id(window_id)
         .open(open)
         .resizable(true)
         .constrain_to(constrain)
@@ -1286,6 +1353,7 @@ fn sized_panel_window<'open>(
 fn build_result_ir_panel(
     ctx: &egui::Context,
     state: &mut crate::screens::result_ir::ResultIrState,
+    text: Localizer,
 ) {
     use crate::screens::result_ir::{IrSubmitState, RankingLoadState, ResultRankingTab};
 
@@ -1293,7 +1361,7 @@ fn build_result_ir_panel(
     let panel_width = 360.0_f32;
     let pos = egui::pos2(content_rect.right() - panel_width - 16.0, 16.0);
 
-    egui::Window::new("IR ランキング")
+    egui::Window::new(tr!(text, "result-ir-title"))
         .id(egui::Id::new("result_ir_overlay"))
         .resizable(false)
         .collapsible(true)
@@ -1305,14 +1373,19 @@ fn build_result_ir_panel(
                 IrSubmitState::Sending => {
                     ui.horizontal(|ui| {
                         ui.spinner();
-                        ui.label("スコア送信中...");
+                        ui.label(tr!(text, "result-ir-submitting"));
                     });
                 }
                 IrSubmitState::Done { submitted, failed, message } => {
                     if *failed > 0 {
                         ui.colored_label(
                             egui::Color32::LIGHT_RED,
-                            format!("送信失敗 {failed} 件 (成功 {submitted} 件)"),
+                            tr!(
+                                text,
+                                "result-ir-submit-failed",
+                                "failed" => *failed,
+                                "submitted" => *submitted
+                            ),
                         );
                         if let Some(message) = message {
                             ui.small(message.clone());
@@ -1320,10 +1393,14 @@ fn build_result_ir_panel(
                     } else if *submitted > 0 {
                         ui.colored_label(
                             egui::Color32::LIGHT_GREEN,
-                            format!("スコア送信済み ({submitted} 件)"),
+                            tr!(
+                                text,
+                                "result-ir-submitted",
+                                "submitted" => *submitted
+                            ),
                         );
                     } else {
-                        ui.label("送信対象なし");
+                        ui.label(tr!(text, "result-ir-nothing-to-submit"));
                     }
                 }
             }
@@ -1333,11 +1410,13 @@ fn build_result_ir_panel(
             ui.horizontal(|ui| {
                 let global = state.active_tab == ResultRankingTab::Global;
                 let rivals = state.active_tab == ResultRankingTab::SelfAndRivals;
-                if ui.selectable_label(global, "全体").clicked() && !global {
+                if ui.selectable_label(global, tr!(text, "result-ir-tab-global")).clicked()
+                    && !global
+                {
                     selected_tab = Some(ResultRankingTab::Global);
                 }
                 if state.supports_tab(ResultRankingTab::SelfAndRivals)
-                    && ui.selectable_label(rivals, "ライバル").clicked()
+                    && ui.selectable_label(rivals, tr!(text, "result-ir-tab-rivals")).clicked()
                     && !rivals
                 {
                     selected_tab = Some(ResultRankingTab::SelfAndRivals);
@@ -1355,26 +1434,26 @@ fn build_result_ir_panel(
                 RankingLoadState::NotRequested | RankingLoadState::Loading => {
                     ui.horizontal(|ui| {
                         ui.spinner();
-                        ui.label("ランキング取得中...");
+                        ui.label(tr!(text, "result-ir-loading"));
                     });
                 }
                 RankingLoadState::Failed(error) => {
-                    ui.colored_label(egui::Color32::LIGHT_RED, "ランキング取得失敗");
+                    ui.colored_label(egui::Color32::LIGHT_RED, tr!(text, "result-ir-load-failed"));
                     ui.small(error.clone());
                 }
                 RankingLoadState::Loaded(ranking) => {
                     if ranking.entries.is_empty() {
-                        ui.label("この条件のスコアはまだありません");
+                        ui.label(tr!(text, "result-ir-empty"));
                     } else {
                         egui::Grid::new("result_ir_ranking_grid")
                             .num_columns(5)
                             .striped(true)
                             .show(ui, |ui| {
                                 ui.strong("#");
-                                ui.strong("プレイヤー");
-                                ui.strong("EX");
-                                ui.strong("クリア");
-                                ui.strong("BP");
+                                ui.strong(tr!(text, "result-ir-player"));
+                                ui.strong(tr!(text, "course-column-ex"));
+                                ui.strong(tr!(text, "result-ir-clear"));
+                                ui.strong(tr!(text, "course-column-bp"));
                                 ui.end_row();
                                 for entry in &ranking.entries {
                                     ui.monospace(entry.rank.to_string());
@@ -1387,7 +1466,7 @@ fn build_result_ir_panel(
                             });
                         if let Some(rank) = ranking.self_rank {
                             ui.separator();
-                            ui.label(format!("自分の順位: {} 位", rank));
+                            ui.label(tr!(text, "result-ir-self-rank", "rank" => rank));
                         }
                     }
                 }
@@ -1399,6 +1478,7 @@ fn build_course_result_panel(
     ctx: &egui::Context,
     summary: &CourseResultSummary,
     result_ir_visible: bool,
+    text: Localizer,
 ) {
     let content_rect = ctx.content_rect();
     // Panel widened from 360px to 440px so the 6-column per-chart grid
@@ -1408,7 +1488,7 @@ fn build_course_result_panel(
     let pos_x = (content_rect.right() - panel_width - right_margin).max(content_rect.left() + 16.0);
     let pos = egui::pos2(pos_x, 16.0);
 
-    egui::Window::new("コースリザルト")
+    egui::Window::new(tr!(text, "course-result-title"))
         .id(egui::Id::new("course_result_overlay"))
         .resizable(false)
         .collapsible(true)
@@ -1421,17 +1501,20 @@ fn build_course_result_panel(
 
             ui.horizontal(|ui| {
                 let kind_label = match summary.kind {
-                    bmz_core::course::CourseKind::Dan => "段位",
-                    bmz_core::course::CourseKind::Course => "コース",
+                    bmz_core::course::CourseKind::Dan => tr!(text, "course-kind-dan"),
+                    bmz_core::course::CourseKind::Course => tr!(text, "course-kind-course"),
                 };
                 ui.label(kind_label);
                 ui.separator();
                 if summary.course_failed {
-                    ui.colored_label(egui::Color32::LIGHT_RED, "FAILED");
+                    ui.colored_label(egui::Color32::LIGHT_RED, tr!(text, "course-status-failed"));
                 } else if summary.course_clear {
-                    ui.colored_label(egui::Color32::LIGHT_GREEN, "CLEAR");
+                    ui.colored_label(egui::Color32::LIGHT_GREEN, tr!(text, "course-status-clear"));
                 } else {
-                    ui.colored_label(egui::Color32::LIGHT_YELLOW, "NO TROPHY");
+                    ui.colored_label(
+                        egui::Color32::LIGHT_YELLOW,
+                        tr!(text, "course-status-no-trophy"),
+                    );
                 }
                 ui.separator();
                 ui.label(format!("{}/{}", summary.played_entries, summary.total_entries));
@@ -1446,25 +1529,25 @@ fn build_course_result_panel(
                 0.0
             };
             egui::Grid::new("course_result_totals").num_columns(2).show(ui, |ui| {
-                ui.label("EX SCORE");
+                ui.label(tr!(text, "course-ex-score"));
                 ui.label(format!(
                     "{} / {} ({:.2}%)",
                     summary.total_ex_score, summary.max_ex_score, score_rate
                 ));
                 ui.end_row();
-                ui.label("NOTES");
+                ui.label(tr!(text, "course-notes"));
                 ui.label(format!("{}", summary.total_notes));
                 ui.end_row();
                 ui.label("BP");
                 ui.label(format!("{}", summary.bp));
                 ui.end_row();
-                ui.label("PG / GR");
+                ui.label(tr!(text, "course-pg-great"));
                 ui.label(format!(
                     "{} / {}",
                     summary.judge_counts.pgreat, summary.judge_counts.great
                 ));
                 ui.end_row();
-                ui.label("GD / BD / PR");
+                ui.label(tr!(text, "course-good-bad-poor"));
                 ui.label(format!(
                     "{} / {} / {}",
                     summary.judge_counts.good, summary.judge_counts.bad, summary.judge_counts.poor,
@@ -1474,7 +1557,7 @@ fn build_course_result_panel(
 
             if !summary.trophy_results.is_empty() {
                 ui.separator();
-                ui.label("トロフィー");
+                ui.label(tr!(text, "course-trophies"));
                 // `trophy_results` is built only from `definition.trophies`
                 // in `ActiveCourseSession::into_result`, so it cannot show
                 // a name that the course author did not declare.
@@ -1495,7 +1578,7 @@ fn build_course_result_panel(
             // record (the lookup runs after insert_course_score).
             if let Some(best) = &summary.best_score {
                 ui.separator();
-                ui.label("ベスト");
+                ui.label(tr!(text, "course-best"));
                 let best_rate = if best.max_ex_score > 0 {
                     best.ex_score as f32 / best.max_ex_score as f32 * 100.0
                 } else {
@@ -1505,7 +1588,7 @@ fn build_course_result_panel(
                     && best.max_ex_score == summary.max_ex_score
                     && !summary.course_failed;
                 egui::Grid::new("course_result_best").num_columns(2).show(ui, |ui| {
-                    ui.label("EX SCORE");
+                    ui.label(tr!(text, "course-ex-score"));
                     let ex_text =
                         format!("{} / {} ({:.2}%)", best.ex_score, best.max_ex_score, best_rate);
                     if is_new_record {
@@ -1514,10 +1597,10 @@ fn build_course_result_panel(
                         ui.label(ex_text);
                     }
                     ui.end_row();
-                    ui.label("CLEAR");
+                    ui.label(tr!(text, "course-column-clear"));
                     ui.label(&best.clear_type);
                     ui.end_row();
-                    ui.label("MAX COMBO");
+                    ui.label(tr!(text, "course-max-combo"));
                     ui.label(format!("{}", best.max_combo));
                     ui.end_row();
                     ui.label("BP");
@@ -1525,28 +1608,34 @@ fn build_course_result_panel(
                     ui.end_row();
                 });
                 if is_new_record {
-                    ui.colored_label(egui::Color32::from_rgb(255, 215, 0), "★ NEW RECORD");
+                    ui.colored_label(
+                        egui::Color32::from_rgb(255, 215, 0),
+                        tr!(text, "course-new-record"),
+                    );
                 }
             }
 
             if !summary.entry_summaries.is_empty() {
                 ui.separator();
-                ui.label("各曲");
+                ui.label(tr!(text, "course-each-song"));
                 egui::Grid::new("course_result_entries").num_columns(6).striped(true).show(
                     ui,
                     |ui| {
                         // Header row.
                         ui.label("#");
-                        ui.label("曲名");
-                        ui.label("EX");
-                        ui.label("COMBO");
-                        ui.label("CLEAR");
-                        ui.label("BP");
+                        ui.label(tr!(text, "course-column-title"));
+                        ui.label(tr!(text, "course-column-ex"));
+                        ui.label(tr!(text, "course-column-combo"));
+                        ui.label(tr!(text, "course-column-clear"));
+                        ui.label(tr!(text, "course-column-bp"));
                         ui.end_row();
                         for (i, entry) in summary.entry_summaries.iter().enumerate() {
                             ui.label(format!("{}", i + 1));
-                            let title =
-                                if entry.title.is_empty() { "(no title)" } else { &entry.title };
+                            let title = if entry.title.is_empty() {
+                                tr!(text, "common-no-title")
+                            } else {
+                                entry.title.clone()
+                            };
                             ui.label(title);
                             ui.label(format!("{}", entry.ex_score));
                             ui.label(format!("{}", entry.max_combo));
@@ -1571,11 +1660,11 @@ fn build_course_result_panel(
 
 /// 選曲画面でコース行にカーソルがある間、コース内の各曲のメタ情報を表示する
 /// プレビューパネル。
-fn build_course_preview_panel(ctx: &egui::Context, preview: &SelectCourseRow) {
+fn build_course_preview_panel(ctx: &egui::Context, preview: &SelectCourseRow, text: Localizer) {
     let content_rect = ctx.content_rect();
     let pos = egui::pos2(16.0, content_rect.bottom() - 320.0);
 
-    egui::Window::new("コース内訳")
+    egui::Window::new(tr!(text, "course-preview-title"))
         .id(egui::Id::new("course_preview_overlay"))
         .resizable(false)
         .collapsible(true)
@@ -1589,12 +1678,21 @@ fn build_course_preview_panel(ctx: &egui::Context, preview: &SelectCourseRow) {
             ui.horizontal(|ui| {
                 ui.label(&preview.category_label);
                 ui.separator();
-                ui.label(format!("{}/{} resolved", preview.resolved_count, preview.entry_count));
+                ui.label(tr!(
+                    text,
+                    "course-preview-resolved",
+                    "resolved" => preview.resolved_count,
+                    "total" => preview.entry_count
+                ));
                 ui.separator();
-                ui.label(format!("notes {}", preview.total_notes));
+                ui.label(tr!(text, "course-preview-notes", "notes" => preview.total_notes));
             });
             if !preview.trophy_names.is_empty() {
-                ui.label(format!("trophies: {}", preview.trophy_names.join(" / ")));
+                ui.label(tr!(
+                    text,
+                    "course-preview-trophies",
+                    "trophies" => preview.trophy_names.join(" / ")
+                ));
             }
             ui.separator();
             egui::ScrollArea::vertical().max_height(220.0).show(ui, |ui| {
@@ -1602,20 +1700,27 @@ fn build_course_preview_panel(ctx: &egui::Context, preview: &SelectCourseRow) {
                     ui,
                     |ui| {
                         ui.label("#");
-                        ui.label("曲名");
+                        ui.label(tr!(text, "course-column-title"));
                         ui.label("☆");
-                        ui.label("notes");
+                        ui.label(tr!(text, "course-notes"));
                         ui.end_row();
                         for (i, entry) in preview.entry_previews.iter().enumerate() {
                             ui.label(format!("{}", i + 1));
-                            let title =
-                                if entry.title.is_empty() { "(no title)" } else { &entry.title };
+                            let title = if entry.title.is_empty() {
+                                tr!(text, "common-no-title")
+                            } else {
+                                entry.title.clone()
+                            };
                             if entry.resolved {
-                                ui.label(title);
+                                ui.label(&title);
                             } else {
                                 ui.colored_label(
                                     egui::Color32::GRAY,
-                                    format!("{} (missing)", title),
+                                    tr!(
+                                        text,
+                                        "course-preview-missing",
+                                        "title" => title.as_str()
+                                    ),
                                 );
                             }
                             ui.label(&entry.play_level);
@@ -1692,110 +1797,115 @@ fn build_debug_panel(
     log_buffer: &LogBuffer,
     debug_log_filter: &mut DebugLogFilter,
     debug_log_autoscroll: &mut bool,
+    text: Localizer,
 ) {
-    sized_panel_window("デバッグ表示", ctx, open, 620.0, 500.0, egui::pos2(16.0, 140.0)).show(
+    localized_sized_panel_window(
+        "debug_panel",
+        tr!(text, "debug-title"),
         ctx,
-        |ui| {
-            scrollable_window_content(ui, |ui| {
-                let dt = ctx.input(|i| i.stable_dt);
-                egui::Grid::new("debug_grid").num_columns(2).show(ui, |ui| {
-                    ui.label("FPS");
-                    ui.label(info.current_fps.to_string());
-                    ui.end_row();
-                    ui.label("フレーム時間");
-                    ui.label(format!("{:.2} ms", dt * 1000.0));
-                    ui.end_row();
-                    ui.label("シーン");
-                    ui.label(info.scene);
-                    ui.end_row();
-                    ui.label("解像度");
-                    ui.label(format!("{} x {}", info.width, info.height));
-                    ui.end_row();
-                    ui.label("実効 Present Mode");
-                    ui.label(info.effective_present_mode.unwrap_or("未初期化"));
-                    ui.end_row();
-                    ui.label("最大フレーム遅延");
-                    ui.label(
-                        info.maximum_frame_latency
-                            .map_or_else(|| "未初期化".to_string(), |latency| latency.to_string()),
-                    );
-                    ui.end_row();
-                });
+        open,
+        620.0,
+        500.0,
+        egui::pos2(16.0, 140.0),
+    )
+    .show(ctx, |ui| {
+        scrollable_window_content(ui, |ui| {
+            let dt = ctx.input(|i| i.stable_dt);
+            egui::Grid::new("debug_grid").num_columns(2).show(ui, |ui| {
+                ui.label("FPS");
+                ui.label(info.current_fps.to_string());
+                ui.end_row();
+                ui.label("フレーム時間");
+                ui.label(format!("{:.2} ms", dt * 1000.0));
+                ui.end_row();
+                ui.label("シーン");
+                ui.label(info.scene);
+                ui.end_row();
+                ui.label("解像度");
+                ui.label(format!("{} x {}", info.width, info.height));
+                ui.end_row();
+                ui.label("実効 Present Mode");
+                ui.label(info.effective_present_mode.unwrap_or("未初期化"));
+                ui.end_row();
+                ui.label("最大フレーム遅延");
+                ui.label(
+                    info.maximum_frame_latency
+                        .map_or_else(|| "未初期化".to_string(), |latency| latency.to_string()),
+                );
+                ui.end_row();
+            });
 
-                ui.separator();
-                ui.horizontal(|ui| {
-                    ui.label("ログ");
-                    egui::ComboBox::from_id_salt("debug_log_filter")
-                        .selected_text(debug_log_filter.label())
-                        .show_ui(ui, |ui| {
-                            for filter in DebugLogFilter::ALL {
-                                ui.selectable_value(debug_log_filter, filter, filter.label());
-                            }
-                        });
-                    ui.checkbox(debug_log_autoscroll, "自動スクロール");
-                });
-
-                let entries = log_buffer.snapshot();
-                let visible_entries = entries
-                    .iter()
-                    .filter(|entry| debug_log_filter.allows(entry.level))
-                    .collect::<Vec<_>>();
-                let mut copy_requested = false;
-                let mut clear_requested = false;
-                ui.horizontal(|ui| {
-                    ui.small(format!("表示 {}/{} 件", visible_entries.len(), entries.len()));
-                    if ui.button("コピー").clicked() {
-                        copy_requested = true;
-                    }
-                    if ui.button("クリア").clicked() {
-                        clear_requested = true;
-                    }
-                });
-
-                egui::ScrollArea::vertical()
-                    .id_salt("debug_log_scroll")
-                    .max_height(300.0)
-                    .auto_shrink([false, false])
-                    .stick_to_bottom(*debug_log_autoscroll)
-                    .show(ui, |ui| {
-                        if visible_entries.is_empty() {
-                            ui.weak("表示できるログはありません");
-                        }
-                        for entry in visible_entries {
-                            ui.horizontal_wrapped(|ui| {
-                                ui.colored_label(
-                                    log_level_color(entry.level),
-                                    entry.level.as_str(),
-                                );
-                                ui.weak(format!("{}:", entry.target));
-                                ui.label(&entry.message);
-                            });
+            ui.separator();
+            ui.horizontal(|ui| {
+                ui.label("ログ");
+                egui::ComboBox::from_id_salt("debug_log_filter")
+                    .selected_text(debug_log_filter.label())
+                    .show_ui(ui, |ui| {
+                        for filter in DebugLogFilter::ALL {
+                            ui.selectable_value(debug_log_filter, filter, filter.label());
                         }
                     });
+                ui.checkbox(debug_log_autoscroll, "自動スクロール");
+            });
 
-                if copy_requested {
-                    let text = entries
-                        .iter()
-                        .filter(|entry| debug_log_filter.allows(entry.level))
-                        .map(format_log_entry)
-                        .collect::<Vec<_>>()
-                        .join("\n");
-                    ui.ctx().copy_text(text);
+            let entries = log_buffer.snapshot();
+            let visible_entries = entries
+                .iter()
+                .filter(|entry| debug_log_filter.allows(entry.level))
+                .collect::<Vec<_>>();
+            let mut copy_requested = false;
+            let mut clear_requested = false;
+            ui.horizontal(|ui| {
+                ui.small(format!("表示 {}/{} 件", visible_entries.len(), entries.len()));
+                if ui.button("コピー").clicked() {
+                    copy_requested = true;
                 }
-                if clear_requested {
-                    log_buffer.clear();
+                if ui.button("クリア").clicked() {
+                    clear_requested = true;
                 }
             });
-        },
-    );
+
+            egui::ScrollArea::vertical()
+                .id_salt("debug_log_scroll")
+                .max_height(300.0)
+                .auto_shrink([false, false])
+                .stick_to_bottom(*debug_log_autoscroll)
+                .show(ui, |ui| {
+                    if visible_entries.is_empty() {
+                        ui.weak("表示できるログはありません");
+                    }
+                    for entry in visible_entries {
+                        ui.horizontal_wrapped(|ui| {
+                            ui.colored_label(log_level_color(entry.level), entry.level.as_str());
+                            ui.weak(format!("{}:", entry.target));
+                            ui.label(&entry.message);
+                        });
+                    }
+                });
+
+            if copy_requested {
+                let text = entries
+                    .iter()
+                    .filter(|entry| debug_log_filter.allows(entry.level))
+                    .map(format_log_entry)
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                ui.ctx().copy_text(text);
+            }
+            if clear_requested {
+                log_buffer.clear();
+            }
+        });
+    });
 }
 
 fn build_update_dialog(
     ctx: &egui::Context,
     dialog: UpdateDialog<'_>,
+    text: Localizer,
 ) -> Option<UpdateDialogAction> {
     let mut action = None;
-    egui::Window::new("アップデート")
+    egui::Window::new(tr!(text, "update-title"))
         .id(egui::Id::new("update_dialog"))
         .collapsible(false)
         .resizable(false)
@@ -1803,16 +1913,24 @@ fn build_update_dialog(
         .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
         .show(ctx, |ui| match dialog {
             UpdateDialog::Available(candidate) => {
-                ui.heading(format!("BMZ Player {} が利用できます", candidate.version));
-                ui.label(format!("現在のバージョン: {}", current_version()));
+                ui.heading(tr!(
+                    text,
+                    "update-available",
+                    "version" => candidate.version.as_str()
+                ));
+                ui.label(tr!(
+                    text,
+                    "update-current-version",
+                    "version" => current_version()
+                ));
                 if let Some(published_at) = candidate.published_at.as_deref() {
-                    ui.label(format!("公開日: {published_at}"));
+                    ui.label(tr!(text, "update-published-at", "date" => published_at));
                 }
                 if let Some(asset) = candidate.asset.as_ref() {
-                    ui.label(format!("更新ファイル: {}", asset.name));
-                    ui.label(update_asset_kind_label(asset.kind));
+                    ui.label(tr!(text, "update-asset", "asset" => asset.name.as_str()));
+                    ui.label(update_asset_kind_label(asset.kind, text));
                 } else {
-                    ui.label("この環境向けの自動更新ファイルはまだありません。");
+                    ui.label(tr!(text, "update-no-compatible-asset"));
                 }
                 if let Some(body) = release_body_excerpt(&candidate.body) {
                     ui.separator();
@@ -1821,49 +1939,60 @@ fn build_update_dialog(
                 ui.separator();
                 ui.horizontal(|ui| {
                     let can_update = candidate.asset.is_some();
-                    if ui.add_enabled(can_update, egui::Button::new("アップデート")).clicked()
+                    if ui
+                        .add_enabled(can_update, egui::Button::new(tr!(text, "update-button")))
+                        .clicked()
                     {
                         action = Some(UpdateDialogAction::Update);
                     }
-                    if ui.button("今回はアップデートしない").clicked() {
+                    if ui.button(tr!(text, "update-not-now")).clicked() {
                         action = Some(UpdateDialogAction::NotNow);
                     }
-                    if ui.button("このリリースをスキップ").clicked() {
+                    if ui.button(tr!(text, "update-skip-release")).clicked() {
                         action = Some(UpdateDialogAction::SkipRelease);
                     }
                 });
-                if ui.button("リリースページを開く").clicked() {
+                if ui.button(tr!(text, "update-open-release-page")).clicked() {
                     action = Some(UpdateDialogAction::OpenReleasePage);
                 }
             }
             UpdateDialog::Downloading(candidate) => {
-                ui.heading(format!("BMZ Player {} をダウンロード中", candidate.version));
+                ui.heading(tr!(
+                    text,
+                    "update-downloading",
+                    "version" => candidate.version.as_str()
+                ));
                 ui.horizontal(|ui| {
                     ui.spinner();
-                    ui.label("更新ファイルを取得しています。");
+                    ui.label(tr!(text, "update-fetching-asset"));
                 });
                 if let Some(asset) = candidate.asset.as_ref() {
-                    ui.label(format!("更新ファイル: {}", asset.name));
+                    ui.label(tr!(text, "update-asset", "asset" => asset.name.as_str()));
                 }
             }
             UpdateDialog::Error { message, candidate } => {
-                ui.heading("アップデート確認に失敗しました");
+                ui.heading(tr!(text, "update-check-failed"));
                 ui.colored_label(egui::Color32::LIGHT_RED, message);
                 ui.separator();
                 ui.horizontal(|ui| {
-                    if ui.button("閉じる").clicked() {
+                    if ui.button(tr!(text, "common-close")).clicked() {
                         action = Some(UpdateDialogAction::NotNow);
                     }
-                    if candidate.is_some() && ui.button("リリースページを開く").clicked()
+                    if candidate.is_some()
+                        && ui.button(tr!(text, "update-open-release-page")).clicked()
                     {
                         action = Some(UpdateDialogAction::OpenReleasePage);
                     }
                 });
             }
             UpdateDialog::UpToDate => {
-                ui.heading("BMZ Player は最新です");
-                ui.label(format!("現在のバージョン: {}", current_version()));
-                if ui.button("閉じる").clicked() {
+                ui.heading(tr!(text, "update-up-to-date"));
+                ui.label(tr!(
+                    text,
+                    "update-current-version",
+                    "version" => current_version()
+                ));
+                if ui.button(tr!(text, "common-close")).clicked() {
                     action = Some(UpdateDialogAction::NotNow);
                 }
             }
@@ -1889,11 +2018,11 @@ fn release_body_excerpt(body: &str) -> Option<String> {
     Some(text)
 }
 
-fn update_asset_kind_label(kind: UpdateAssetKind) -> &'static str {
+fn update_asset_kind_label(kind: UpdateAssetKind, text: Localizer) -> String {
     match kind {
-        UpdateAssetKind::WindowsInstaller => "インストーラーを起動して更新します。",
-        UpdateAssetKind::MacosAppZip => "macOS 版はリリースページから手動で更新します。",
-        UpdateAssetKind::Other => "リリースページから手動で更新します。",
+        UpdateAssetKind::WindowsInstaller => tr!(text, "update-kind-windows-installer"),
+        UpdateAssetKind::MacosAppZip => tr!(text, "update-kind-macos-manual"),
+        UpdateAssetKind::Other => tr!(text, "update-kind-manual"),
     }
 }
 
@@ -1937,7 +2066,7 @@ struct ObsScenePickerState {
 }
 
 impl ObsScenePickerState {
-    fn poll(&mut self) {
+    fn poll(&mut self, text: Localizer) {
         let Some(receiver) = &self.receiver else {
             return;
         };
@@ -1950,11 +2079,12 @@ impl ObsScenePickerState {
             Ok(list) => {
                 self.scenes = list.scenes;
                 self.error.clear();
-                self.message = format!(
-                    "{} 件のシーンを取得しました ({}, 録画: {})",
-                    self.scenes.len(),
-                    list.version,
-                    if list.recording_active { "ON" } else { "OFF" }
+                self.message = tr!(
+                    text,
+                    "settings-obs-scenes-loaded",
+                    "count" => self.scenes.len(),
+                    "version" => list.version,
+                    "recording" => if list.recording_active { "ON" } else { "OFF" }
                 );
             }
             Err(error) => {
@@ -2034,21 +2164,24 @@ fn settings_list_label(ui: &mut egui::Ui, text: &str, width: f32) {
         .on_hover_text(text);
 }
 
-fn settings_drag_handle(ui: &mut egui::Ui, payload: SettingsDragPayload) {
+fn settings_drag_handle(ui: &mut egui::Ui, payload: SettingsDragPayload, text: Localizer) {
     let response = ui.add_sized(
         [SETTINGS_LIST_DRAG_HANDLE_WIDTH, ui.spacing().interact_size.y],
         egui::Button::new(egui::RichText::new("≡").size(18.0)).sense(egui::Sense::drag()),
     );
     response.dnd_set_drag_payload(payload);
-    response.on_hover_cursor(egui::CursorIcon::Grab).on_hover_text("ドラッグして並び替え");
+    response
+        .on_hover_cursor(egui::CursorIcon::Grab)
+        .on_hover_text(tr!(text, "settings-drag-to-reorder"));
 }
 
 fn settings_drag_ghost(
     ctx: &egui::Context,
     id: egui::Id,
-    text: &str,
+    label: &str,
     label_width: f32,
     show_song_options: bool,
+    text: Localizer,
 ) {
     let Some(pointer_pos) = ctx.pointer_interact_pos() else {
         return;
@@ -2064,14 +2197,23 @@ fn settings_drag_ghost(
                         [SETTINGS_LIST_DRAG_HANDLE_WIDTH, ui.spacing().interact_size.y],
                         egui::Label::new(egui::RichText::new("≡").size(18.0)),
                     );
-                    settings_list_label(ui, text, label_width);
+                    settings_list_label(ui, label, label_width);
                 });
                 if show_song_options {
                     let mut enabled = true;
                     let mut recursive = true;
                     ui.horizontal(|ui| {
-                        ui.add_enabled(false, egui::Checkbox::new(&mut enabled, "有効"));
-                        ui.add_enabled(false, egui::Checkbox::new(&mut recursive, "再帰スキャン"));
+                        ui.add_enabled(
+                            false,
+                            egui::Checkbox::new(&mut enabled, tr!(text, "common-enabled")),
+                        );
+                        ui.add_enabled(
+                            false,
+                            egui::Checkbox::new(
+                                &mut recursive,
+                                tr!(text, "settings-song-recursive"),
+                            ),
+                        );
                     });
                 }
             });
@@ -2088,6 +2230,7 @@ fn build_settings_panel(
     show_fps: &mut bool,
     editable: bool,
     difficulty_tables: &[DifficultyTableRecord],
+    text: Localizer,
     state: SettingsPanelState<'_>,
 ) -> SettingsPanelActions {
     let mut save_clicked = false;
@@ -2099,16 +2242,26 @@ fn build_settings_panel(
     let mut table_fetch_urls = Vec::new();
     let mut score_import_request = None;
     let mut apply_audio = false;
-    sized_panel_window("本体設定", ctx, open, 440.0, 520.0, egui::pos2(16.0, 320.0)).show(
+    localized_sized_panel_window(
+        "app_settings_panel",
+        tr!(text, "settings-app-title"),
+        ctx,
+        open,
+        440.0,
+        520.0,
+        egui::pos2(16.0, 320.0),
+    )
+    .show(
         ctx,
         |ui| {
             if !editable {
-                ui.label("Decide / Play 中は本体設定を変更できません。");
+                ui.label(tr!(text, "settings-disabled-during-play"));
                 ui.separator();
             }
             ui.add_enabled_ui(editable, |ui| {
                 scrollable_window_content(ui, |ui| {
-                egui::CollapsingHeader::new("曲フォルダ (BMS)")
+                egui::CollapsingHeader::new(tr!(text, "settings-song-folders"))
+                    .id_salt("settings_song_folders")
                     .default_open(true)
                     .show(ui, |ui| {
                         let mut root_action = None;
@@ -2126,19 +2279,19 @@ fn build_settings_panel(
                                             index,
                                         };
                                         ui.horizontal(|ui| {
-                                            settings_drag_handle(ui, payload);
+                                            settings_drag_handle(ui, payload, text);
                                             settings_list_label(ui, &root.path, label_width);
                                             ui.with_layout(
                                                 egui::Layout::right_to_left(egui::Align::Center),
                                                 |ui| {
-                                                    if ui.button("削除").clicked() {
+                                                    if ui.button(tr!(text, "common-delete")).clicked() {
                                                         root_action =
                                                             Some(SettingsListAction::Remove(index));
                                                     }
                                                     if ui
                                                         .add_enabled(
                                                             root.enabled,
-                                                            egui::Button::new("再読込"),
+                                                            egui::Button::new(tr!(text, "common-reload")),
                                                         )
                                                         .clicked()
                                                     {
@@ -2151,7 +2304,7 @@ fn build_settings_panel(
                                                     if ui
                                                         .add_enabled(
                                                             index + 1 < root_len,
-                                                            egui::Button::new("下へ"),
+                                                            egui::Button::new(tr!(text, "common-move-down")),
                                                         )
                                                         .clicked()
                                                     {
@@ -2162,7 +2315,7 @@ fn build_settings_panel(
                                                     if ui
                                                         .add_enabled(
                                                             index > 0,
-                                                            egui::Button::new("上へ"),
+                                                            egui::Button::new(tr!(text, "common-move-up")),
                                                         )
                                                         .clicked()
                                                     {
@@ -2173,8 +2326,14 @@ fn build_settings_panel(
                                             );
                                         });
                                         ui.horizontal(|ui| {
-                                            ui.checkbox(&mut root.enabled, "有効");
-                                            ui.checkbox(&mut root.recursive, "再帰スキャン");
+                                            ui.checkbox(
+                                                &mut root.enabled,
+                                                tr!(text, "common-enabled"),
+                                            );
+                                            ui.checkbox(
+                                                &mut root.recursive,
+                                                tr!(text, "settings-song-recursive"),
+                                            );
                                         });
                                     },
                                 );
@@ -2190,6 +2349,7 @@ fn build_settings_panel(
                                         &root.path,
                                         label_width,
                                         true,
+                                        text,
                                     );
                                 }
                                 if let Some(payload) = dropped
@@ -2207,10 +2367,10 @@ fn build_settings_panel(
                             apply_settings_list_action(&mut config.songs.roots, action);
                         }
                         if config.songs.roots.is_empty() {
-                            ui.label("登録された曲フォルダはありません。");
+                            ui.label(tr!(text, "settings-song-folders-empty"));
                         }
                         ui.horizontal(|ui| {
-                            ui.label("パス");
+                            ui.label(tr!(text, "common-path"));
                             ui.add(
                                 egui::TextEdit::singleline(state.new_root_path)
                                     .desired_width(240.0)
@@ -2218,17 +2378,17 @@ fn build_settings_panel(
                             );
                         });
                         ui.horizontal(|ui| {
-                            if ui.button("フォルダを選択…").clicked()
+                            if ui.button(tr!(text, "common-choose-folder")).clicked()
                                 && let Some(folder) = rfd::FileDialog::new().pick_folder()
                             {
                                 *state.new_root_path = folder.to_string_lossy().into_owned();
                                 state.add_root_error.clear();
                             }
-                            if ui.button("追加").clicked() {
+                            if ui.button(tr!(text, "common-add")).clicked() {
                                 let path = state.new_root_path.trim().to_string();
                                 if path.is_empty() {
                                     *state.add_root_error =
-                                        "パスを入力するかフォルダを選択してください。".to_string();
+                                        tr!(text, "settings-song-path-required");
                                 } else {
                                     match add_song_root_entry(
                                         &mut config.songs.roots,
@@ -2258,47 +2418,60 @@ fn build_settings_panel(
                         if !state.add_root_error.is_empty() {
                             ui.colored_label(egui::Color32::RED, state.add_root_error.as_str());
                         }
-                        if ui.button("ライブラリを再スキャン").clicked() {
+                        if ui.button(tr!(text, "settings-library-rescan")).clicked() {
                             rescan_clicked = true;
                         }
-                        ui.label(
-                            "追加したフォルダは自動でスキャンします。再スキャンは有効なルート全体を対象にします。",
-                        );
+                        ui.label(tr!(text, "settings-song-scan-help"));
                     });
 
-                egui::CollapsingHeader::new("スキャン").show(ui, |ui| {
-                    ui.checkbox(&mut config.scan.follow_symlinks, "シンボリックリンクを辿る");
-                    ui.checkbox(&mut config.scan.skip_hidden, "隠しファイル / フォルダをスキップ");
+                egui::CollapsingHeader::new(tr!(text, "settings-scan-title"))
+                    .id_salt("settings_scan")
+                    .show(ui, |ui| {
+                    ui.checkbox(
+                        &mut config.scan.follow_symlinks,
+                        tr!(text, "settings-scan-follow-symlinks"),
+                    );
+                    ui.checkbox(
+                        &mut config.scan.skip_hidden,
+                        tr!(text, "settings-scan-skip-hidden"),
+                    );
                     ui.checkbox(
                         &mut config.scan.auto_rescan_on_startup,
-                        "起動時に自動再スキャン",
+                        tr!(text, "settings-scan-on-startup"),
                     );
                     ui.checkbox(
                         &mut config.scan.rescan_missing_files,
-                        "存在しないファイルを DB から除去 (未実装)",
+                        tr!(text, "settings-scan-remove-missing"),
                     );
                 });
 
-                egui::CollapsingHeader::new("選曲").show(ui, |ui| {
+                egui::CollapsingHeader::new(tr!(text, "settings-select-title"))
+                    .id_salt("settings_select")
+                    .show(ui, |ui| {
                     ui.add(
                         egui::Slider::new(
                             &mut config.select.scroll_duration_low_ms,
                             2..=1000,
                         )
-                        .text("スクロール初回 (ms)"),
+                        .text(tr!(text, "settings-select-scroll-initial")),
                     );
                     ui.add(
                         egui::Slider::new(
                             &mut config.select.scroll_duration_high_ms,
                             1..=1000,
                         )
-                        .text("スクロール連続 (ms)"),
+                        .text(tr!(text, "settings-select-scroll-repeat")),
                     );
-                    ui.label("選曲バー移動とキー長押しリピートに即時反映されます。");
+                    ui.label(tr!(text, "settings-select-scroll-help"));
                 });
 
-                egui::CollapsingHeader::new("難易度表").show(ui, |ui| {
-                    ui.checkbox(&mut config.tables.auto_fetch_on_startup, "起動時に自動取得");
+                egui::CollapsingHeader::new(tr!(text, "settings-tables-title"))
+                    .id_salt("settings_tables")
+                    .show(ui, |ui| {
+                    ui.checkbox(
+                        &mut config.tables.auto_fetch_on_startup,
+                        tr!(text, "settings-tables-fetch-on-startup"),
+                    );
                     let mut table_action = None;
                     let table_len = config.tables.sources.len();
                     for (index, source) in config.tables.sources.iter_mut().enumerate() {
@@ -2323,24 +2496,27 @@ fn build_settings_panel(
                                                 SETTINGS_TABLE_ENABLED_WIDTH,
                                                 ui.spacing().interact_size.y,
                                             ],
-                                            egui::Checkbox::new(&mut source.enabled, "有効"),
+                                            egui::Checkbox::new(
+                                                &mut source.enabled,
+                                                tr!(text, "common-enabled"),
+                                            ),
                                         );
-                                        settings_drag_handle(ui, payload);
+                                        settings_drag_handle(ui, payload, text);
                                         settings_list_label(ui, &source_label, label_width);
                                         ui.with_layout(
                                             egui::Layout::right_to_left(egui::Align::Center),
                                             |ui| {
-                                                if ui.button("削除").clicked() {
+                                                if ui.button(tr!(text, "common-delete")).clicked() {
                                                     table_action =
                                                         Some(SettingsListAction::Remove(index));
                                                 }
-                                                if ui.button("取得").clicked() {
+                                                if ui.button(tr!(text, "common-fetch")).clicked() {
                                                     table_fetch_urls.push(source.url.clone());
                                                 }
                                                 if ui
                                                     .add_enabled(
                                                         index + 1 < table_len,
-                                                        egui::Button::new("下へ"),
+                                                        egui::Button::new(tr!(text, "common-move-down")),
                                                     )
                                                     .clicked()
                                                 {
@@ -2350,7 +2526,7 @@ fn build_settings_panel(
                                                 if ui
                                                     .add_enabled(
                                                         index > 0,
-                                                        egui::Button::new("上へ"),
+                                                        egui::Button::new(tr!(text, "common-move-up")),
                                                     )
                                                     .clicked()
                                                 {
@@ -2374,6 +2550,7 @@ fn build_settings_panel(
                                     &source_label,
                                     label_width,
                                     false,
+                                    text,
                                 );
                             }
                             if let Some(payload) = dropped
@@ -2390,7 +2567,7 @@ fn build_settings_panel(
                         apply_settings_list_action(&mut config.tables.sources, action);
                     }
                     if config.tables.sources.is_empty() {
-                        ui.label("登録された難易度表はありません。");
+                        ui.label(tr!(text, "settings-tables-empty"));
                     }
                     let enabled_table_urls: Vec<String> = config
                         .tables
@@ -2402,7 +2579,7 @@ fn build_settings_panel(
                     if ui
                         .add_enabled(
                             !enabled_table_urls.is_empty(),
-                            egui::Button::new("有効な表を全件取得"),
+                            egui::Button::new(tr!(text, "settings-tables-fetch-enabled")),
                         )
                         .clicked()
                     {
@@ -2416,11 +2593,12 @@ fn build_settings_panel(
                                 .hint_text("https://.../header.json"),
                         );
                     });
-                    if ui.button("追加").clicked() {
+                    if ui.button(tr!(text, "common-add")).clicked() {
                         let url = state.new_table_url.trim().to_string();
                         match add_difficulty_table_source(
                             &mut config.tables.sources,
                             &url,
+                            text,
                         ) {
                             Ok(()) => {
                                 table_fetch_urls.push(url);
@@ -2434,7 +2612,7 @@ fn build_settings_panel(
                     if !state.add_table_error.is_empty() {
                         ui.colored_label(egui::Color32::RED, state.add_table_error.as_str());
                     }
-                    ui.label("追加した表は自動で取得します。手動取得は各行または全件取得を使います。");
+                    ui.label(tr!(text, "settings-tables-help"));
                 });
 
                 egui::CollapsingHeader::new("未所持譜面の取得").show(ui, |ui| {
@@ -2478,21 +2656,24 @@ fn build_settings_panel(
                     state.score_import_status,
                     state.score_import_error,
                     &mut score_import_request,
+                    text,
                 );
 
-                egui::CollapsingHeader::new("音声").show(ui, |ui| {
+                egui::CollapsingHeader::new(tr!(text, "settings-audio-title"))
+                    .id_salt("settings_audio")
+                    .show(ui, |ui| {
                     let available_audio_backends = crate::audio::available_audio_backends();
                     if !available_audio_backends.contains(&config.audio.backend) {
                         config.audio.backend = AudioBackend::Auto;
                     }
-                    egui::ComboBox::from_label("バックエンド")
-                        .selected_text(audio_backend_label(&config.audio.backend))
+                    egui::ComboBox::new("audio_backend", tr!(text, "settings-backend"))
+                        .selected_text(audio_backend_label(&config.audio.backend, text))
                         .show_ui(ui, |ui| {
                             for backend in &available_audio_backends {
                                 ui.selectable_value(
                                     &mut config.audio.backend,
                                     backend.clone(),
-                                    audio_backend_label(backend),
+                                    audio_backend_label(backend, text),
                                 );
                             }
                         });
@@ -2519,16 +2700,25 @@ fn build_settings_panel(
                     }
                     let sample_rate_text =
                         if config.audio.sample_rate_mode == AudioSampleRateMode::Auto {
-                            "自動 (ドライバ / OS 既定)".to_string()
+                            tr!(text, "settings-audio-auto-driver-default")
                         } else {
                             audio_sample_rate_label(config.audio.sample_rate)
                         };
-                    egui::ComboBox::from_label("サンプルレート")
+                    egui::ComboBox::new(
+                        "audio_sample_rate",
+                        tr!(text, "settings-audio-sample-rate"),
+                    )
                         .selected_text(sample_rate_text)
                         .show_ui(ui, |ui| {
                             let is_auto =
                                 config.audio.sample_rate_mode == AudioSampleRateMode::Auto;
-                            if ui.selectable_label(is_auto, "自動 (ドライバ / OS 既定)").clicked() {
+                            if ui
+                                .selectable_label(
+                                    is_auto,
+                                    tr!(text, "settings-audio-auto-driver-default"),
+                                )
+                                .clicked()
+                            {
                                 config.audio.sample_rate_mode = AudioSampleRateMode::Auto;
                             }
                             for hz in [44_100u32, 48_000, 96_000, 192_000, 384_000] {
@@ -2544,27 +2734,33 @@ fn build_settings_panel(
                                 }
                             }
                         });
-                    egui::ComboBox::from_label("バッファサイズモード")
-                        .selected_text(audio_buffer_size_mode_label(&config.audio.buffer_size_mode))
+                    egui::ComboBox::new(
+                        "audio_buffer_mode",
+                        tr!(text, "settings-audio-buffer-mode"),
+                    )
+                        .selected_text(audio_buffer_size_mode_label(
+                            &config.audio.buffer_size_mode,
+                            text,
+                        ))
                         .show_ui(ui, |ui| {
                             ui.selectable_value(
                                 &mut config.audio.buffer_size_mode,
                                 AudioBufferSizeMode::Auto,
-                                "自動",
+                                tr!(text, "common-auto"),
                             );
                             ui.selectable_value(
                                 &mut config.audio.buffer_size_mode,
                                 AudioBufferSizeMode::Fixed,
-                                "固定",
+                                tr!(text, "common-fixed"),
                             );
                         });
                     if config.audio.buffer_size_mode == AudioBufferSizeMode::Fixed {
                         ui.add(
                             egui::Slider::new(&mut config.audio.buffer_size, 32..=4096)
-                                .text("バッファサイズ (フレーム)"),
+                                .text(tr!(text, "settings-audio-buffer-frames")),
                         );
                         ui.horizontal(|ui| {
-                            ui.label("プリセット:");
+                            ui.label(tr!(text, "settings-audio-presets"));
                             for frames in [32u32, 48, 64, 96, 128, 256] {
                                 if ui.button(frames.to_string()).clicked() {
                                     config.audio.buffer_size = frames;
@@ -2585,26 +2781,33 @@ fn build_settings_panel(
                     }
 
                     ui.horizontal(|ui| {
-                        if ui.button("デバイス一覧を更新").clicked() {
+                        if ui.button(tr!(text, "settings-audio-refresh-devices")).clicked() {
                             state.audio_device_picker.names =
                                 crate::audio::list_output_devices(&config.audio.backend);
                             state.audio_device_picker.backend = Some(config.audio.backend.clone());
                         }
-                        ui.label(format!("{} 件", state.audio_device_picker.names.len()));
+                        ui.label(tr!(
+                            text,
+                            "common-count",
+                            "count" => state.audio_device_picker.names.len()
+                        ));
                     });
 
                     if config.audio.backend == AudioBackend::Asio {
-                        egui::ComboBox::from_label("ASIO ドライバ")
+                        egui::ComboBox::new(
+                            "audio_asio_driver",
+                            tr!(text, "settings-audio-asio-driver"),
+                        )
                             .selected_text(if config.audio.asio_driver.is_empty() {
-                                "(未指定)"
+                                tr!(text, "common-unspecified")
                             } else {
-                                config.audio.asio_driver.as_str()
+                                config.audio.asio_driver.clone()
                             })
                             .show_ui(ui, |ui| {
                                 ui.selectable_value(
                                     &mut config.audio.asio_driver,
                                     String::new(),
-                                    "(未指定)",
+                                    tr!(text, "common-unspecified"),
                                 );
                                 for name in state.audio_device_picker.names.iter() {
                                     ui.selectable_value(
@@ -2615,17 +2818,20 @@ fn build_settings_panel(
                                 }
                             });
                     } else {
-                        egui::ComboBox::from_label("出力デバイス")
+                        egui::ComboBox::new(
+                            "audio_output_device",
+                            tr!(text, "settings-audio-output-device"),
+                        )
                             .selected_text(if config.audio.output_device.is_empty() {
-                                "(デフォルト)"
+                                tr!(text, "common-default")
                             } else {
-                                config.audio.output_device.as_str()
+                                config.audio.output_device.clone()
                             })
                             .show_ui(ui, |ui| {
                                 ui.selectable_value(
                                     &mut config.audio.output_device,
                                     String::new(),
-                                    "(デフォルト)",
+                                    tr!(text, "common-default"),
                                 );
                                 for name in state.audio_device_picker.names.iter() {
                                     ui.selectable_value(
@@ -2637,7 +2843,10 @@ fn build_settings_panel(
                             });
                     }
                     if config.audio.backend == AudioBackend::Asio {
-                        egui::ComboBox::from_label("出力チャンネル")
+                        egui::ComboBox::new(
+                            "audio_output_channel",
+                            tr!(text, "settings-audio-output-channel"),
+                        )
                             .selected_text(audio_channel_pair_label(config.audio.output_channel_pair))
                             .show_ui(ui, |ui| {
                                 for pair in 0u32..6 {
@@ -2648,65 +2857,73 @@ fn build_settings_panel(
                                     );
                                 }
                             });
-                        ui.label(
-                            "出力チャンネルは多ch ASIO デバイス向け。デバイスのch数を超える指定は先頭ペアに戻ります。",
-                        );
+                        ui.label(tr!(text, "settings-audio-channel-help"));
                     }
-                    ui.label(
-                        "ASIO ではドライバ側のバッファ設定が優先される場合があります。",
-                    );
-                    if ui.button("適用 (音声出力を開き直す)").clicked() {
+                    ui.label(tr!(text, "settings-audio-asio-buffer-help"));
+                    if ui.button(tr!(text, "settings-audio-apply")).clicked() {
                         apply_audio = true;
                     }
-                    ui.label(
-                        "「適用」で現在の設定を保存し音声出力を再構築します(再生中は不可)。",
-                    );
+                    ui.label(tr!(text, "settings-audio-apply-help"));
                 });
 
-                egui::CollapsingHeader::new("映像").show(ui, |ui| {
-                    egui::ComboBox::from_label("ウィンドウモード")
-                        .selected_text(window_mode_label(&config.video.mode))
+                egui::CollapsingHeader::new(tr!(text, "settings-video-title"))
+                    .id_salt("settings_video")
+                    .show(ui, |ui| {
+                    egui::ComboBox::new(
+                        "video_window_mode",
+                        tr!(text, "settings-video-window-mode"),
+                    )
+                        .selected_text(window_mode_label(&config.video.mode, text))
                         .show_ui(ui, |ui| {
                             ui.selectable_value(
                                 &mut config.video.mode,
                                 WindowMode::Windowed,
-                                "ウィンドウ",
+                                tr!(text, "settings-windowed"),
                             );
                             ui.selectable_value(
                                 &mut config.video.mode,
                                 WindowMode::BorderlessFullscreen,
-                                "ボーダレスフルスクリーン",
+                                tr!(text, "settings-borderless-fullscreen"),
                             );
                             ui.selectable_value(
                                 &mut config.video.mode,
                                 WindowMode::ExclusiveFullscreen,
-                                "排他フルスクリーン",
+                                tr!(text, "settings-exclusive-fullscreen"),
                             );
                         });
                     ui.add(
-                        egui::Slider::new(&mut config.video.width, 640..=3840).text("幅 (px)"),
+                        egui::Slider::new(&mut config.video.width, 640..=3840)
+                            .text(tr!(text, "settings-video-width")),
                     );
                     ui.add(
-                        egui::Slider::new(&mut config.video.height, 480..=2160).text("高さ (px)"),
+                        egui::Slider::new(&mut config.video.height, 480..=2160)
+                            .text(tr!(text, "settings-video-height")),
                     );
                     let available_monitors = window.available_monitors().collect::<Vec<_>>();
                     let selected_monitor = if config.video.monitor_name.is_empty() {
-                        "プライマリモニター".to_string()
+                        tr!(text, "settings-video-primary-monitor")
                     } else if available_monitors
                         .iter()
                         .any(|monitor| monitor_config_name(monitor) == config.video.monitor_name)
                     {
                         config.video.monitor_name.clone()
                     } else {
-                        format!("未接続: {}", config.video.monitor_name)
+                        tr!(
+                            text,
+                            "settings-video-monitor-disconnected",
+                            "name" => config.video.monitor_name.as_str()
+                        )
                     };
-                    egui::ComboBox::from_label("フルスクリーン画面")
+                    egui::ComboBox::new(
+                        "video_monitor",
+                        tr!(text, "settings-video-monitor"),
+                    )
                         .selected_text(selected_monitor)
                         .show_ui(ui, |ui| {
                             ui.selectable_value(
                                 &mut config.video.monitor_name,
                                 String::new(),
-                                "プライマリモニター",
+                                tr!(text, "settings-video-primary-monitor"),
                             );
                             for monitor in &available_monitors {
                                 let name = monitor_config_name(monitor);
@@ -2717,7 +2934,10 @@ fn build_settings_panel(
                                 );
                             }
                         });
-                    egui::ComboBox::from_label("同期モード")
+                    egui::ComboBox::new(
+                        "video_vsync_mode",
+                        tr!(text, "settings-video-vsync-mode"),
+                    )
                         .selected_text(vsync_mode_label(&config.video.vsync_mode))
                         .show_ui(ui, |ui| {
                             ui.selectable_value(
@@ -2747,38 +2967,41 @@ fn build_settings_panel(
                             .speed(1.0)
                             .suffix(" FPS"),
                     );
-                    ui.label("目標 FPS は 0 で無制限");
-                    if ui.checkbox(show_fps, "FPS 表示").changed() {
+                    ui.label(tr!(text, "settings-video-target-fps-unlimited"));
+                    if ui.checkbox(show_fps, tr!(text, "settings-show-fps")).changed() {
                         profile.ui.show_fps = *show_fps;
                         save_profile = true;
                     }
                     ui.add(
                         egui::Slider::new(&mut config.video.frame_limit_in_background, 1..=120)
-                            .text("バックグラウンド FPS 上限"),
+                            .text(tr!(text, "settings-video-background-fps")),
                     );
                     let available_renderer_backends = available_renderer_backends();
                     if !available_renderer_backends.contains(&config.video.renderer) {
                         config.video.renderer = RendererBackend::Auto;
                     }
-                    egui::ComboBox::from_label("レンダリングバックエンド")
-                        .selected_text(renderer_backend_label(&config.video.renderer))
+                    egui::ComboBox::new(
+                        "video_renderer",
+                        tr!(text, "settings-video-renderer"),
+                    )
+                        .selected_text(renderer_backend_label(&config.video.renderer, text))
                         .show_ui(ui, |ui| {
                             for backend in &available_renderer_backends {
                                 ui.selectable_value(
                                     &mut config.video.renderer,
                                     backend.clone(),
-                                    renderer_backend_label(backend),
+                                    renderer_backend_label(backend, text),
                                 );
                             }
                         });
-                    ui.label(
-                        "VSync / Present Mode / ウィンドウモード / 目標 FPS は即時反映。目標 FPS に上限はありません。幅 / 高さ / フルスクリーン画面 / レンダリングバックエンドは次回起動時に反映されます。",
-                    );
+                    ui.label(tr!(text, "settings-video-apply-help"));
                 });
 
-                egui::CollapsingHeader::new("スクリーンショット").show(ui, |ui| {
+                egui::CollapsingHeader::new(tr!(text, "settings-screenshot-title"))
+                    .id_salt("settings_screenshot")
+                    .show(ui, |ui| {
                     ui.horizontal(|ui| {
-                        ui.label("保存先");
+                        ui.label(tr!(text, "settings-screenshot-directory"));
                         ui.add(
                             egui::TextEdit::singleline(&mut config.screenshot.dir)
                                 .desired_width(300.0)
@@ -2786,14 +3009,14 @@ fn build_settings_panel(
                         );
                     });
                     ui.horizontal(|ui| {
-                        if ui.button("フォルダを選択...").clicked()
+                        if ui.button(tr!(text, "common-choose-folder")).clicked()
                             && let Some(dir) = rfd::FileDialog::new().pick_folder()
                         {
                             config.screenshot.dir = dir.to_string_lossy().into_owned();
                         }
                         ui.checkbox(
                             &mut config.screenshot.copy_to_clipboard,
-                            "クリップボードにもコピー",
+                            tr!(text, "settings-screenshot-copy-clipboard"),
                         );
                     });
                 });
@@ -2803,12 +3026,24 @@ fn build_settings_panel(
                     config,
                     state.obs_scene_picker,
                     state.obs_connection_status,
+                    text,
                 );
 
-                egui::CollapsingHeader::new("アップデート").show(ui, |ui| {
-                    ui.checkbox(&mut config.updates.enabled, "アップデート通知");
-                    ui.checkbox(&mut config.updates.check_on_startup, "起動時に確認");
-                    egui::ComboBox::from_label("チャンネル")
+                egui::CollapsingHeader::new(tr!(text, "settings-updates-title"))
+                    .id_salt("settings_updates")
+                    .show(ui, |ui| {
+                    ui.checkbox(
+                        &mut config.updates.enabled,
+                        tr!(text, "settings-updates-notifications"),
+                    );
+                    ui.checkbox(
+                        &mut config.updates.check_on_startup,
+                        tr!(text, "settings-updates-on-startup"),
+                    );
+                    egui::ComboBox::new(
+                        "updates_channel",
+                        tr!(text, "settings-updates-channel"),
+                    )
                         .selected_text(update_channel_label(config.updates.channel))
                         .show_ui(ui, |ui| {
                             ui.selectable_value(
@@ -2823,20 +3058,21 @@ fn build_settings_panel(
                             );
                         });
                     if config.updates.skipped_version.is_empty() {
-                        ui.label("スキップ中のリリースはありません。");
+                        ui.label(tr!(text, "settings-updates-no-skipped-release"));
                     } else {
                         ui.horizontal(|ui| {
-                            ui.label(format!(
-                                "スキップ中: BMZ Player {}",
-                                config.updates.skipped_version
+                            ui.label(tr!(
+                                text,
+                                "settings-updates-skipping",
+                                "version" => config.updates.skipped_version.as_str()
                             ));
-                            if ui.button("解除").clicked() {
+                            if ui.button(tr!(text, "common-clear")).clicked() {
                                 config.updates.skipped_version.clear();
                                 save_clicked = true;
                             }
                         });
                     }
-                    if ui.button("更新を確認").clicked() {
+                    if ui.button(tr!(text, "settings-updates-check")).clicked() {
                         check_update_clicked = true;
                     }
                 });
@@ -2848,7 +3084,7 @@ fn build_settings_panel(
                         ui.add(
                             egui::TextEdit::singleline(&mut config.discord.application_id)
                                 .desired_width(260.0)
-                                .hint_text("空欄なら BMZ 既定"),
+                                .hint_text(tr!(text, "settings-discord-default-hint")),
                         );
                     });
                     ui.horizontal(|ui| {
@@ -2867,83 +3103,106 @@ fn build_settings_panel(
                                 .hint_text("BMZ Player"),
                         );
                     });
-                    ui.checkbox(&mut config.discord.show_song_details, "曲名とアーティストを表示");
-                    ui.label("Application ID が空欄なら BMZ の既定 ID を使います。");
+                    ui.checkbox(
+                        &mut config.discord.show_song_details,
+                        tr!(text, "settings-discord-song-details"),
+                    );
+                    ui.label(tr!(text, "settings-discord-default-help"));
                 });
 
-                egui::CollapsingHeader::new("入力デバイス").show(ui, |ui| {
-                    egui::ComboBox::from_label("バックエンド")
-                        .selected_text(input_backend_label(&config.input.backend))
+                egui::CollapsingHeader::new(tr!(text, "settings-input-title"))
+                    .id_salt("settings_input")
+                    .show(ui, |ui| {
+                    egui::ComboBox::new("input_backend", tr!(text, "settings-backend"))
+                        .selected_text(input_backend_label(&config.input.backend, text))
                         .show_ui(ui, |ui| {
                             ui.selectable_value(
                                 &mut config.input.backend,
                                 InputBackendKind::Auto,
-                                input_backend_label(&InputBackendKind::Auto),
+                                input_backend_label(&InputBackendKind::Auto, text),
                             );
                             ui.selectable_value(
                                 &mut config.input.backend,
                                 InputBackendKind::Winit,
-                                input_backend_label(&InputBackendKind::Winit),
+                                input_backend_label(&InputBackendKind::Winit, text),
                             );
                             ui.selectable_value(
                                 &mut config.input.backend,
                                 InputBackendKind::RawInput,
-                                input_backend_label(&InputBackendKind::RawInput),
+                                input_backend_label(&InputBackendKind::RawInput, text),
                             );
                             ui.selectable_value(
                                 &mut config.input.backend,
                                 InputBackendKind::Hid,
-                                input_backend_label(&InputBackendKind::Hid),
+                                input_backend_label(&InputBackendKind::Hid, text),
                             );
                             ui.selectable_value(
                                 &mut config.input.backend,
                                 InputBackendKind::Midi,
-                                input_backend_label(&InputBackendKind::Midi),
+                                input_backend_label(&InputBackendKind::Midi, text),
                             );
                         });
-                    egui::ComboBox::from_label("ゲームパッドバックエンド")
-                        .selected_text(gamepad_backend_label(&config.input.gamepad_backend))
+                    egui::ComboBox::new(
+                        "gamepad_backend",
+                        tr!(text, "settings-input-gamepad-backend"),
+                    )
+                        .selected_text(gamepad_backend_label(&config.input.gamepad_backend, text))
                         .show_ui(ui, |ui| {
                             ui.selectable_value(
                                 &mut config.input.gamepad_backend,
                                 GamepadBackendKind::Auto,
-                                gamepad_backend_label(&GamepadBackendKind::Auto),
+                                gamepad_backend_label(&GamepadBackendKind::Auto, text),
                             );
                             ui.selectable_value(
                                 &mut config.input.gamepad_backend,
                                 GamepadBackendKind::Gilrs,
-                                gamepad_backend_label(&GamepadBackendKind::Gilrs),
+                                gamepad_backend_label(&GamepadBackendKind::Gilrs, text),
                             );
                             ui.selectable_value(
                                 &mut config.input.gamepad_backend,
                                 GamepadBackendKind::GameInput,
-                                gamepad_backend_label(&GamepadBackendKind::GameInput),
+                                gamepad_backend_label(&GamepadBackendKind::GameInput, text),
                             );
                         });
-                    ui.checkbox(&mut config.input.keyboard_enabled, "キーボード");
-                    ui.checkbox(&mut config.input.gamepad_enabled, "ゲームパッド");
-                    ui.checkbox(&mut config.input.midi_enabled, "MIDI (未実装)");
-                    ui.label(
-                        "入力バックエンド設定は次回起動時に反映されます。HID / MIDI は未実装です。",
+                    ui.checkbox(
+                        &mut config.input.keyboard_enabled,
+                        tr!(text, "settings-input-keyboard"),
                     );
+                    ui.checkbox(
+                        &mut config.input.gamepad_enabled,
+                        tr!(text, "settings-input-gamepad"),
+                    );
+                    ui.checkbox(
+                        &mut config.input.midi_enabled,
+                        tr!(text, "settings-input-midi-unimplemented"),
+                    );
+                    ui.label(tr!(text, "settings-input-backend-help"));
                     ui.separator();
-                    ui.label("10K / 14K 用コントローラ割り当て");
-                    ui.label(format!(
-                        "接続中: {} 台",
-                        state.connected_gamepads.iter().filter(|pad| pad.is_connected).count()
+                    ui.label(tr!(text, "settings-input-controller-assignment"));
+                    ui.label(tr!(
+                        text,
+                        "settings-input-connected-count",
+                        "count" => state.connected_gamepads.iter().filter(|pad| pad.is_connected).count()
                     ));
                     if state.connected_gamepads.is_empty() {
-                        ui.label("ゲームパッドが検出されていません。");
+                        ui.label(tr!(text, "settings-input-no-gamepads"));
                     } else {
                         for pad in state.connected_gamepads {
-                            let status = if pad.is_connected { "接続中" } else { "切断" };
+                            let status = if pad.is_connected {
+                                tr!(text, "common-connected")
+                            } else {
+                                tr!(text, "common-disconnected")
+                            };
                             ui.label(format!(
                                 "#{} {} ({})",
                                 pad.backend_id, pad.name, status
                             ));
                         }
                     }
-                    for (slot_index, label) in [(0usize, "1P コントローラ"), (1usize, "2P コントローラ")]
+                    for (slot_index, label) in [
+                        (0usize, tr!(text, "settings-input-controller-1p")),
+                        (1usize, tr!(text, "settings-input-controller-2p")),
+                    ]
                     {
                         let current = config.input.gamepad_slot_device_ids[slot_index].as_deref();
                         let selected_text = match current {
@@ -2954,7 +3213,11 @@ fn build_settings_panel(
                                 .map(|pad| format!("#{} {}", pad.backend_id, pad.name))
                                 .unwrap_or_else(|| {
                                     let end = stable_id.len().min(20);
-                                    format!("{}... (未接続)", &stable_id[..end])
+                                    tr!(
+                                        text,
+                                        "settings-input-device-disconnected",
+                                        "device" => format!("{}...", &stable_id[..end])
+                                    )
                                 }),
                             None => config.input.gamepad_slot_gilrs_ids[slot_index]
                                 .and_then(|id| {
@@ -2963,10 +3226,14 @@ fn build_settings_panel(
                                         .iter()
                                         .find(|pad| pad.backend_id == id)
                                         .map(|pad| {
-                                            format!("#{} {} (旧設定)", pad.backend_id, pad.name)
+                                            tr!(
+                                                text,
+                                                "settings-input-legacy-device",
+                                                "device" => format!("#{} {}", pad.backend_id, pad.name)
+                                            )
                                         })
                                 })
-                                .unwrap_or_else(|| "自動 (接続順)".to_string()),
+                                .unwrap_or_else(|| tr!(text, "settings-input-auto-order")),
                         };
                         egui::ComboBox::from_label(label)
                             .selected_text(selected_text)
@@ -2975,7 +3242,7 @@ fn build_settings_panel(
                                     .selectable_value(
                                         &mut config.input.gamepad_slot_device_ids[slot_index],
                                         None,
-                                        "自動 (接続順)",
+                                        tr!(text, "settings-input-auto-order"),
                                     )
                                     .clicked()
                                 {
@@ -2996,7 +3263,7 @@ fn build_settings_panel(
                             });
                     }
                     ui.horizontal(|ui| {
-                        if ui.button("接続順で自動割り当て").clicked() {
+                        if ui.button(tr!(text, "settings-input-auto-assign")).clicked() {
                             let connected: Vec<String> = state
                                 .connected_gamepads
                                 .iter()
@@ -3007,22 +3274,25 @@ fn build_settings_panel(
                             config.input.gamepad_slot_device_ids[1] = connected.get(1).cloned();
                             config.input.gamepad_slot_gilrs_ids = [None, None];
                         }
-                        if ui.button("1P / 2P を入れ替え").clicked() {
+                        if ui.button(tr!(text, "settings-input-swap")).clicked() {
                             config.input.gamepad_slot_device_ids.swap(0, 1);
                             config.input.gamepad_slot_gilrs_ids.swap(0, 1);
                         }
-                        if ui.button("割り当て解除").clicked() {
+                        if ui.button(tr!(text, "settings-input-clear-assignment")).clicked() {
                             config.input.gamepad_slot_device_ids = [None, None];
                             config.input.gamepad_slot_gilrs_ids = [None, None];
                         }
                     });
-                    ui.label(
-                        "未割当は接続順フォールバック (1台目=1P, 2台目=2P)。変更は次回プレイ開始から反映されます。",
-                    );
+                    ui.label(tr!(text, "settings-input-assignment-help"));
                 });
 
-                egui::CollapsingHeader::new("ログ (未実装)").show(ui, |ui| {
-                    egui::ComboBox::from_label("レベル")
+                egui::CollapsingHeader::new(tr!(text, "settings-logging-title"))
+                    .id_salt("settings_logging")
+                    .show(ui, |ui| {
+                    egui::ComboBox::new(
+                        "logging_level",
+                        tr!(text, "settings-logging-level"),
+                    )
                         .selected_text(log_level_label(&config.logging.level))
                         .show_ui(ui, |ui| {
                             ui.selectable_value(
@@ -3051,12 +3321,15 @@ fn build_settings_panel(
                                 log_level_label(&LogLevel::Error),
                             );
                         });
-                    ui.checkbox(&mut config.logging.file_logging, "ファイル出力 (未実装)");
-                    ui.label("ログ設定は未実装です。現在は起動時の固定ログ設定を使用します。");
+                    ui.checkbox(
+                        &mut config.logging.file_logging,
+                        tr!(text, "settings-logging-file-unimplemented"),
+                    );
+                    ui.label(tr!(text, "settings-logging-help"));
                 });
 
                 ui.separator();
-                if ui.button("保存").clicked() {
+                if ui.button(tr!(text, "settings-save")).clicked() {
                     save_clicked = true;
                 }
                 });
@@ -3091,17 +3364,24 @@ fn build_obs_settings_section(
     config: &mut AppConfig,
     state: &mut ObsScenePickerState,
     connection_status: &crate::obs::ObsConnectionStatus,
+    text: Localizer,
 ) -> bool {
-    state.poll();
+    state.poll(text);
     let mut enabled_changed = false;
-    egui::CollapsingHeader::new("OBS WebSocket").show(ui, |ui| {
-        enabled_changed = ui.checkbox(&mut config.obs.enabled, "OBS WebSocket 連携").changed();
-        let (status_label, status_color) = obs_connection_status_label(connection_status.kind);
+    egui::CollapsingHeader::new("OBS WebSocket").id_salt("settings_obs").show(ui, |ui| {
+        enabled_changed =
+            ui.checkbox(&mut config.obs.enabled, tr!(text, "settings-obs-enabled")).changed();
+        let (status_label, status_color) =
+            obs_connection_status_label(connection_status.kind, text);
         ui.horizontal(|ui| {
-            ui.label("接続状態");
+            ui.label(tr!(text, "settings-obs-connection-status"));
             ui.colored_label(status_color, status_label);
             if let Some(retry_in_ms) = connection_status.retry_in_ms {
-                ui.label(format!("次の再試行: {:.1} 秒", retry_in_ms as f64 / 1000.0));
+                ui.label(tr!(
+                    text,
+                    "settings-obs-next-retry",
+                    "seconds" => retry_in_ms as f64 / 1000.0
+                ));
             }
         });
         if let Some(detail) = &connection_status.detail {
@@ -3111,54 +3391,56 @@ fn build_obs_settings_section(
             ui.colored_label(egui::Color32::RED, error);
         }
         ui.horizontal(|ui| {
-            ui.label("ホスト");
+            ui.label(tr!(text, "settings-obs-host"));
             ui.add(
                 egui::TextEdit::singleline(&mut config.obs.host)
                     .desired_width(180.0)
                     .hint_text("localhost"),
             );
-            ui.label("ポート");
+            ui.label(tr!(text, "settings-obs-port"));
             ui.add(egui::DragValue::new(&mut config.obs.port).range(0..=65535));
         });
         ui.horizontal(|ui| {
-            ui.label("パスワード");
+            ui.label(tr!(text, "settings-obs-password"));
             ui.add(
                 egui::TextEdit::singleline(&mut config.obs.password)
                     .desired_width(220.0)
                     .password(true),
             );
         });
-        egui::ComboBox::from_label("録画保存モード")
-            .selected_text(obs_recording_mode_label(config.obs.recording_mode))
+        egui::ComboBox::new("obs_recording_mode", tr!(text, "settings-obs-recording-mode"))
+            .selected_text(obs_recording_mode_label(config.obs.recording_mode, text))
             .show_ui(ui, |ui| {
                 ui.selectable_value(
                     &mut config.obs.recording_mode,
                     ObsRecordingMode::KeepAll,
-                    obs_recording_mode_label(ObsRecordingMode::KeepAll),
+                    obs_recording_mode_label(ObsRecordingMode::KeepAll, text),
                 );
                 ui.selectable_value(
                     &mut config.obs.recording_mode,
                     ObsRecordingMode::OnScreenshot,
-                    obs_recording_mode_label(ObsRecordingMode::OnScreenshot),
+                    obs_recording_mode_label(ObsRecordingMode::OnScreenshot, text),
                 );
                 ui.selectable_value(
                     &mut config.obs.recording_mode,
                     ObsRecordingMode::OnReplay,
-                    obs_recording_mode_label(ObsRecordingMode::OnReplay),
+                    obs_recording_mode_label(ObsRecordingMode::OnReplay, text),
                 );
             });
         ui.add(
             egui::Slider::new(&mut config.obs.record_stop_wait_ms, 0..=10_000)
-                .text("StopRecord 遅延 (ms)"),
+                .text(tr!(text, "settings-obs-stop-delay")),
         );
 
         ui.horizontal(|ui| {
-            if ui.add_enabled(!state.busy, egui::Button::new("シーン一覧を取得")).clicked()
+            if ui
+                .add_enabled(!state.busy, egui::Button::new(tr!(text, "settings-obs-load-scenes")))
+                .clicked()
             {
                 state.start_load(config.obs.clone());
             }
             if state.busy {
-                ui.label("取得中...");
+                ui.label(tr!(text, "common-loading"));
             }
         });
         if !state.message.is_empty() {
@@ -3169,22 +3451,30 @@ fn build_obs_settings_section(
         }
 
         ui.separator();
-        ui.strong("状態別設定");
+        ui.strong(tr!(text, "settings-obs-state-settings"));
         egui::Grid::new("obs_state_mapping_grid").striped(true).show(ui, |ui| {
-            ui.label("状態");
-            ui.label("シーン");
-            ui.label("アクション");
+            ui.label(tr!(text, "settings-obs-state"));
+            ui.label(tr!(text, "settings-obs-scene"));
+            ui.label(tr!(text, "settings-obs-action"));
             ui.end_row();
             for event in crate::obs::ObsEventKey::ALL {
                 let key = event.config_key();
-                ui.label(event.label());
+                ui.label(obs_event_label(event, text));
 
                 let mut scene = config.obs.scenes.get(key).cloned().unwrap_or_default();
-                let selected_scene = if scene.is_empty() { "(No Change)" } else { scene.as_str() };
+                let selected_scene = if scene.is_empty() {
+                    tr!(text, "settings-obs-no-change")
+                } else {
+                    scene.clone()
+                };
                 egui::ComboBox::from_id_salt(("obs_scene", key))
                     .selected_text(selected_scene)
                     .show_ui(ui, |ui| {
-                        ui.selectable_value(&mut scene, String::new(), "(No Change)");
+                        ui.selectable_value(
+                            &mut scene,
+                            String::new(),
+                            tr!(text, "settings-obs-no-change"),
+                        );
                         if !scene.is_empty() && !state.scenes.iter().any(|name| name == &scene) {
                             let current_scene = scene.clone();
                             ui.selectable_value(&mut scene, current_scene.clone(), current_scene);
@@ -3201,22 +3491,22 @@ fn build_obs_settings_section(
 
                 let mut action = config.obs.actions.get(key).copied().unwrap_or_default();
                 egui::ComboBox::from_id_salt(("obs_action", key))
-                    .selected_text(obs_action_label(action))
+                    .selected_text(obs_action_label(action, text))
                     .show_ui(ui, |ui| {
                         ui.selectable_value(
                             &mut action,
                             ObsActionConfig::None,
-                            obs_action_label(ObsActionConfig::None),
+                            obs_action_label(ObsActionConfig::None, text),
                         );
                         ui.selectable_value(
                             &mut action,
                             ObsActionConfig::StartRecord,
-                            obs_action_label(ObsActionConfig::StartRecord),
+                            obs_action_label(ObsActionConfig::StartRecord, text),
                         );
                         ui.selectable_value(
                             &mut action,
                             ObsActionConfig::StopRecord,
-                            obs_action_label(ObsActionConfig::StopRecord),
+                            obs_action_label(ObsActionConfig::StopRecord, text),
                         );
                     });
                 if action == ObsActionConfig::None {
@@ -3233,41 +3523,57 @@ fn build_obs_settings_section(
 
 fn obs_connection_status_label(
     kind: crate::obs::ObsConnectionStatusKind,
-) -> (&'static str, egui::Color32) {
+    text: Localizer,
+) -> (String, egui::Color32) {
     match kind {
-        crate::obs::ObsConnectionStatusKind::Disabled => ("無効", egui::Color32::GRAY),
+        crate::obs::ObsConnectionStatusKind::Disabled => {
+            (tr!(text, "settings-obs-disabled"), egui::Color32::GRAY)
+        }
         crate::obs::ObsConnectionStatusKind::Connecting => {
-            ("接続中", egui::Color32::from_rgb(120, 190, 255))
+            (tr!(text, "common-connecting"), egui::Color32::from_rgb(120, 190, 255))
         }
         crate::obs::ObsConnectionStatusKind::WaitingForServer => {
-            ("OBS を待機中", egui::Color32::from_rgb(225, 185, 75))
+            (tr!(text, "settings-obs-waiting"), egui::Color32::from_rgb(225, 185, 75))
         }
-        crate::obs::ObsConnectionStatusKind::Connected => ("接続済み", egui::Color32::GREEN),
+        crate::obs::ObsConnectionStatusKind::Connected => {
+            (tr!(text, "common-connected"), egui::Color32::GREEN)
+        }
         crate::obs::ObsConnectionStatusKind::Reconnecting => {
-            ("再接続待機中", egui::Color32::YELLOW)
+            (tr!(text, "settings-obs-reconnecting"), egui::Color32::YELLOW)
         }
         crate::obs::ObsConnectionStatusKind::AuthenticationFailed => {
-            ("認証失敗", egui::Color32::RED)
+            (tr!(text, "settings-obs-auth-failed"), egui::Color32::RED)
         }
         crate::obs::ObsConnectionStatusKind::ConfigurationError => {
-            ("設定エラー", egui::Color32::RED)
+            (tr!(text, "settings-obs-config-error"), egui::Color32::RED)
         }
     }
 }
 
-fn obs_recording_mode_label(mode: ObsRecordingMode) -> &'static str {
+fn obs_recording_mode_label(mode: ObsRecordingMode, text: Localizer) -> String {
     match mode {
-        ObsRecordingMode::KeepAll => "すべて保持",
-        ObsRecordingMode::OnScreenshot => "スクリーンショット時に保持",
-        ObsRecordingMode::OnReplay => "リプレイ保存時に保持",
+        ObsRecordingMode::KeepAll => tr!(text, "settings-obs-recording-keep-all"),
+        ObsRecordingMode::OnScreenshot => tr!(text, "settings-obs-recording-screenshot"),
+        ObsRecordingMode::OnReplay => tr!(text, "settings-obs-recording-replay"),
     }
 }
 
-fn obs_action_label(action: ObsActionConfig) -> &'static str {
+fn obs_action_label(action: ObsActionConfig, text: Localizer) -> String {
     match action {
-        ObsActionConfig::None => "(Do Nothing)",
-        ObsActionConfig::StartRecord => "Start Recording",
-        ObsActionConfig::StopRecord => "Stop Recording",
+        ObsActionConfig::None => tr!(text, "settings-obs-action-none"),
+        ObsActionConfig::StartRecord => tr!(text, "settings-obs-action-start"),
+        ObsActionConfig::StopRecord => tr!(text, "settings-obs-action-stop"),
+    }
+}
+
+fn obs_event_label(event: crate::obs::ObsEventKey, text: Localizer) -> String {
+    match event {
+        crate::obs::ObsEventKey::MusicSelect => tr!(text, "settings-obs-event-select"),
+        crate::obs::ObsEventKey::Decide => tr!(text, "settings-obs-event-decide"),
+        crate::obs::ObsEventKey::Play => tr!(text, "settings-obs-event-play"),
+        crate::obs::ObsEventKey::PlayEnded => tr!(text, "settings-obs-event-play-ended"),
+        crate::obs::ObsEventKey::Result => tr!(text, "settings-obs-event-result"),
+        crate::obs::ObsEventKey::CourseResult => tr!(text, "settings-obs-event-course-result"),
     }
 }
 
@@ -3279,80 +3585,94 @@ fn build_score_import_section(
     status: &str,
     error: &str,
     request: &mut Option<ScoreImportRequest>,
+    text: Localizer,
 ) {
-    egui::CollapsingHeader::new("スコアインポート").show(ui, |ui| {
-        ui.horizontal(|ui| {
-            ui.label("DB");
-            ui.add(
-                egui::TextEdit::singleline(path)
-                    .desired_width(260.0)
-                    .hint_text("score.db / scoredatalog.db / LR2 score db"),
-            );
-        });
-        ui.horizontal(|ui| {
-            if ui.button("ファイルを選択…").clicked()
-                && let Some(file) =
-                    rfd::FileDialog::new().add_filter("SQLite DB", &["db"]).pick_file()
-            {
-                *path = file.to_string_lossy().into_owned();
+    egui::CollapsingHeader::new(tr!(text, "settings-score-import-title"))
+        .id_salt("settings_score_import")
+        .show(ui, |ui| {
+            ui.horizontal(|ui| {
+                ui.label("DB");
+                ui.add(
+                    egui::TextEdit::singleline(path)
+                        .desired_width(260.0)
+                        .hint_text("score.db / scoredatalog.db / LR2 score db"),
+                );
+            });
+            ui.horizontal(|ui| {
+                if ui.button(tr!(text, "common-choose-file")).clicked()
+                    && let Some(file) =
+                        rfd::FileDialog::new().add_filter("SQLite DB", &["db"]).pick_file()
+                {
+                    *path = file.to_string_lossy().into_owned();
+                }
+                egui::ComboBox::from_id_salt("score_import_kind")
+                    .selected_text(kind.label())
+                    .show_ui(ui, |ui| {
+                        ui.selectable_value(
+                            kind,
+                            ScoreImportKind::Lr2,
+                            ScoreImportKind::Lr2.label(),
+                        );
+                        ui.selectable_value(
+                            kind,
+                            ScoreImportKind::Beatoraja,
+                            ScoreImportKind::Beatoraja.label(),
+                        );
+                        ui.selectable_value(
+                            kind,
+                            ScoreImportKind::Lr2Oraja,
+                            ScoreImportKind::Lr2Oraja.label(),
+                        );
+                        ui.selectable_value(
+                            kind,
+                            ScoreImportKind::Lr2OrajaDx,
+                            ScoreImportKind::Lr2OrajaDx.label(),
+                        );
+                    });
+            });
+            ui.horizontal(|ui| {
+                ui.label(tr!(text, "settings-score-import-device"));
+                ui.selectable_value(
+                    device_type,
+                    InputDeviceKind::Keyboard,
+                    tr!(text, "settings-input-keyboard"),
+                );
+                ui.selectable_value(
+                    device_type,
+                    InputDeviceKind::Controller,
+                    tr!(text, "settings-score-import-controller"),
+                );
+            });
+            if ui.button(tr!(text, "settings-score-import-button")).clicked() {
+                let trimmed = path.trim();
+                if trimmed.is_empty() {
+                    *request = None;
+                } else {
+                    *request = Some(ScoreImportRequest {
+                        path: PathBuf::from(trimmed),
+                        kind: *kind,
+                        device_type: *device_type,
+                    });
+                }
             }
-            egui::ComboBox::from_id_salt("score_import_kind").selected_text(kind.label()).show_ui(
-                ui,
-                |ui| {
-                    ui.selectable_value(kind, ScoreImportKind::Lr2, ScoreImportKind::Lr2.label());
-                    ui.selectable_value(
-                        kind,
-                        ScoreImportKind::Beatoraja,
-                        ScoreImportKind::Beatoraja.label(),
-                    );
-                    ui.selectable_value(
-                        kind,
-                        ScoreImportKind::Lr2Oraja,
-                        ScoreImportKind::Lr2Oraja.label(),
-                    );
-                    ui.selectable_value(
-                        kind,
-                        ScoreImportKind::Lr2OrajaDx,
-                        ScoreImportKind::Lr2OrajaDx.label(),
-                    );
-                },
-            );
-        });
-        ui.horizontal(|ui| {
-            ui.label("入力デバイス");
-            ui.selectable_value(device_type, InputDeviceKind::Keyboard, "キーボード");
-            ui.selectable_value(device_type, InputDeviceKind::Controller, "コントローラー");
-        });
-        if ui.button("インポート").clicked() {
-            let trimmed = path.trim();
-            if trimmed.is_empty() {
-                *request = None;
-            } else {
-                *request = Some(ScoreImportRequest {
-                    path: PathBuf::from(trimmed),
-                    kind: *kind,
-                    device_type: *device_type,
-                });
+            if !status.is_empty() {
+                ui.colored_label(egui::Color32::LIGHT_GREEN, status);
             }
-        }
-        if !status.is_empty() {
-            ui.colored_label(egui::Color32::LIGHT_GREEN, status);
-        }
-        if !error.is_empty() {
-            ui.colored_label(egui::Color32::RED, error);
-        }
-    });
+            if !error.is_empty() {
+                ui.colored_label(egui::Color32::RED, error);
+            }
+        });
 }
 
-fn audio_backend_label(backend: &AudioBackend) -> &'static str {
+fn audio_backend_label(backend: &AudioBackend, text: Localizer) -> String {
     match backend {
-        AudioBackend::Auto => "自動選択",
-        AudioBackend::Wasapi => "WASAPI",
-        AudioBackend::Asio => "ASIO",
-        AudioBackend::CoreAudio => "Core Audio",
-        AudioBackend::Alsa => "ALSA",
-        AudioBackend::Pulse => "PulseAudio",
-        AudioBackend::PipeWire => "PipeWire",
+        AudioBackend::Auto => tr!(text, "common-auto-select"),
+        AudioBackend::Wasapi => "WASAPI".to_owned(),
+        AudioBackend::Asio => "ASIO".to_owned(),
+        AudioBackend::CoreAudio => "Core Audio".to_owned(),
+        AudioBackend::Alsa => "ALSA".to_owned(),
+        AudioBackend::Pulse => "PulseAudio".to_owned(),
+        AudioBackend::PipeWire => "PipeWire".to_owned(),
     }
 }
 
@@ -3363,10 +3683,10 @@ fn audio_output_mode_label(mode: &AudioOutputMode) -> &'static str {
     }
 }
 
-fn audio_buffer_size_mode_label(mode: &AudioBufferSizeMode) -> &'static str {
+fn audio_buffer_size_mode_label(mode: &AudioBufferSizeMode, text: Localizer) -> String {
     match mode {
-        AudioBufferSizeMode::Auto => "自動",
-        AudioBufferSizeMode::Fixed => "固定",
+        AudioBufferSizeMode::Auto => tr!(text, "common-auto"),
+        AudioBufferSizeMode::Fixed => tr!(text, "common-fixed"),
     }
 }
 
@@ -3392,21 +3712,21 @@ fn update_channel_label(channel: UpdateChannelConfig) -> &'static str {
     }
 }
 
-fn window_mode_label(mode: &WindowMode) -> &'static str {
+fn window_mode_label(mode: &WindowMode, text: Localizer) -> String {
     match mode {
-        WindowMode::Windowed => "ウィンドウ",
-        WindowMode::BorderlessFullscreen => "ボーダレスフルスクリーン",
-        WindowMode::ExclusiveFullscreen => "排他フルスクリーン",
+        WindowMode::Windowed => tr!(text, "settings-windowed"),
+        WindowMode::BorderlessFullscreen => tr!(text, "settings-borderless-fullscreen"),
+        WindowMode::ExclusiveFullscreen => tr!(text, "settings-exclusive-fullscreen"),
     }
 }
 
-fn renderer_backend_label(backend: &RendererBackend) -> &'static str {
+fn renderer_backend_label(backend: &RendererBackend, text: Localizer) -> String {
     match backend {
-        RendererBackend::Auto => "自動選択",
-        RendererBackend::Vulkan => "Vulkan",
-        RendererBackend::Metal => "Metal",
-        RendererBackend::Dx12 => "DirectX 12",
-        RendererBackend::Gl => "OpenGL",
+        RendererBackend::Auto => tr!(text, "common-auto-select"),
+        RendererBackend::Vulkan => "Vulkan".to_owned(),
+        RendererBackend::Metal => "Metal".to_owned(),
+        RendererBackend::Dx12 => "DirectX 12".to_owned(),
+        RendererBackend::Gl => "OpenGL".to_owned(),
     }
 }
 
@@ -3432,21 +3752,21 @@ fn vsync_mode_label(mode: &VsyncModeConfig) -> &'static str {
     }
 }
 
-fn input_backend_label(backend: &InputBackendKind) -> &'static str {
+fn input_backend_label(backend: &InputBackendKind, text: Localizer) -> String {
     match backend {
-        InputBackendKind::Auto => "自動選択",
-        InputBackendKind::Winit => "winit",
-        InputBackendKind::RawInput => "Raw Input (Windowsのみ)",
-        InputBackendKind::Hid => "HID (未実装)",
-        InputBackendKind::Midi => "MIDI (未実装)",
+        InputBackendKind::Auto => tr!(text, "common-auto-select"),
+        InputBackendKind::Winit => "winit".to_owned(),
+        InputBackendKind::RawInput => tr!(text, "settings-input-raw-input"),
+        InputBackendKind::Hid => tr!(text, "settings-input-hid-unimplemented"),
+        InputBackendKind::Midi => tr!(text, "settings-input-midi-unimplemented"),
     }
 }
 
-fn gamepad_backend_label(backend: &GamepadBackendKind) -> &'static str {
+fn gamepad_backend_label(backend: &GamepadBackendKind, text: Localizer) -> String {
     match backend {
-        GamepadBackendKind::Auto => "自動選択",
-        GamepadBackendKind::Gilrs => "gilrs",
-        GamepadBackendKind::GameInput => "GameInput (Windowsのみ)",
+        GamepadBackendKind::Auto => tr!(text, "common-auto-select"),
+        GamepadBackendKind::Gilrs => "gilrs".to_owned(),
+        GamepadBackendKind::GameInput => tr!(text, "settings-input-gameinput"),
     }
 }
 
@@ -3463,12 +3783,13 @@ fn log_level_label(level: &LogLevel) -> &'static str {
 fn add_difficulty_table_source(
     sources: &mut Vec<DifficultyTableSource>,
     url: &str,
+    text: Localizer,
 ) -> Result<(), String> {
     if url.is_empty() {
-        return Err("URL を入力してください。".to_string());
+        return Err(tr!(text, "settings-tables-url-required"));
     }
     if sources.iter().any(|source| source.url == url) {
-        return Err("同じ URL の難易度表が既に登録されています。".to_string());
+        return Err(tr!(text, "settings-tables-url-duplicate"));
     }
     sources.push(DifficultyTableSource { url: url.to_string(), enabled: true });
     Ok(())
@@ -3491,6 +3812,7 @@ fn restore_restricted_profile_settings(profile: &mut ProfileConfig, mut readonly
     *profile = readonly;
 }
 
+#[allow(clippy::too_many_arguments)]
 fn build_profile_settings_panel(
     ctx: &egui::Context,
     open: &mut bool,
@@ -3502,28 +3824,39 @@ fn build_profile_settings_panel(
     profile_manager: &mut ProfileManagerUiState,
     profile_root: &std::path::Path,
     unrestricted: bool,
+    mut text: Localizer,
 ) -> ProfileSettingsPanelActions {
     let mut save_clicked = false;
     let mut save_app_config = false;
     // ログインタスクの完了を反映。provider 設定が更新されたら保存する。
-    save_clicked |= ir_login.poll(profile);
-    ir_device_key.poll();
+    save_clicked |= ir_login.poll(profile, text);
+    ir_device_key.poll(text);
     let readonly_profile = (!unrestricted).then(|| profile.clone());
     let readonly_app_config = (!unrestricted).then(|| app_config.clone());
-    sized_panel_window("プロファイル設定", ctx, open, 460.0, 560.0, egui::pos2(476.0, 320.0)).show(
+    localized_sized_panel_window(
+        "profile_settings_panel",
+        tr!(text, "profile-settings-title"),
         ctx,
-        |ui| {
-            scrollable_window_content(ui, |ui| {
-                if !unrestricted {
-                    ui.label("Decide / Play 中は音量・判定・表示・入力のみ変更できます。");
-                    ui.separator();
-                }
-                egui::CollapsingHeader::new("基本").default_open(true).show(ui, |ui| {
+        open,
+        460.0,
+        560.0,
+        egui::pos2(476.0, 320.0),
+    )
+    .show(ctx, |ui| {
+        scrollable_window_content(ui, |ui| {
+            if !unrestricted {
+                ui.label(tr!(text, "profile-settings-restricted"));
+                ui.separator();
+            }
+            egui::CollapsingHeader::new(tr!(text, "profile-basic-title"))
+                .id_salt("profile_basic")
+                .default_open(true)
+                .show(ui, |ui| {
                     if !unrestricted {
                         ui.disable();
                     }
                     ui.horizontal(|ui| {
-                        ui.label("表示名");
+                        ui.label(tr!(text, "profile-display-name"));
                         ui.text_edit_singleline(&mut profile.display_name);
                     });
                     ui.horizontal(|ui| {
@@ -3532,84 +3865,130 @@ fn build_profile_settings_panel(
                     });
                 });
 
-                save_app_config |= build_profile_manager_section(
-                    ui,
-                    app_config,
-                    profile,
-                    profile_manager,
-                    unrestricted,
-                );
+            save_app_config |= build_profile_manager_section(
+                ui,
+                app_config,
+                profile,
+                profile_manager,
+                unrestricted,
+                text,
+            );
 
-                egui::CollapsingHeader::new("音量").default_open(true).show(ui, |ui| {
+            egui::CollapsingHeader::new(tr!(text, "profile-volume-title"))
+                .id_salt("profile_volume")
+                .default_open(true)
+                .show(ui, |ui| {
                     ui.checkbox(
                         &mut profile.audio_mix.normalize_chart_volume,
-                        "譜面・プレビュー音量正規化",
+                        tr!(text, "profile-volume-normalize"),
                     );
-                    volume_slider(ui, &mut profile.audio_mix.master_volume, "マスター");
-                    volume_slider(ui, &mut profile.audio_mix.key_volume, "キー音");
+                    volume_slider(
+                        ui,
+                        &mut profile.audio_mix.master_volume,
+                        &tr!(text, "profile-volume-master"),
+                    );
+                    volume_slider(
+                        ui,
+                        &mut profile.audio_mix.key_volume,
+                        &tr!(text, "profile-volume-keysound"),
+                    );
                     volume_slider(ui, &mut profile.audio_mix.bgm_volume, "BGM");
-                    volume_slider(ui, &mut profile.audio_mix.preview_volume, "選曲プレビュー");
-                    volume_slider(ui, &mut profile.audio_mix.system_bgm_volume, "システム BGM");
-                    volume_slider(ui, &mut profile.audio_mix.system_se_volume, "システム SE");
-                    ui.label("音量は即時反映されます。");
+                    volume_slider(
+                        ui,
+                        &mut profile.audio_mix.preview_volume,
+                        &tr!(text, "profile-volume-preview"),
+                    );
+                    volume_slider(
+                        ui,
+                        &mut profile.audio_mix.system_bgm_volume,
+                        &tr!(text, "profile-volume-system-bgm"),
+                    );
+                    volume_slider(
+                        ui,
+                        &mut profile.audio_mix.system_se_volume,
+                        &tr!(text, "profile-volume-system-se"),
+                    );
+                    ui.label(tr!(text, "profile-volume-help"));
                 });
 
-                egui::CollapsingHeader::new("判定").show(ui, |ui| {
-                    offset_ms_slider(ui, &mut profile.judge.input_offset_us, "入力オフセット");
-                    offset_ms_slider(ui, &mut profile.judge.visual_offset_us, "表示オフセット");
-                    ui.checkbox(&mut profile.judge.visual_offset_auto_adjust, "自動判定調整");
-                    egui::ComboBox::from_label("判定アルゴリズム")
-                        .selected_text(judge_algorithm_label(profile.judge.judge_algorithm))
-                        .show_ui(ui, |ui| {
-                            ui.selectable_value(
-                                &mut profile.judge.judge_algorithm,
-                                JudgeAlgorithmConfig::Combo,
-                                judge_algorithm_label(JudgeAlgorithmConfig::Combo),
-                            );
-                            ui.selectable_value(
-                                &mut profile.judge.judge_algorithm,
-                                JudgeAlgorithmConfig::Duration,
-                                judge_algorithm_label(JudgeAlgorithmConfig::Duration),
-                            );
-                            ui.selectable_value(
-                                &mut profile.judge.judge_algorithm,
-                                JudgeAlgorithmConfig::Lowest,
-                                judge_algorithm_label(JudgeAlgorithmConfig::Lowest),
-                            );
-                        });
-                    egui::ComboBox::from_label("FAST/SLOW 表示モード")
-                        .selected_text(fast_slow_scope_label(profile.judge.fast_slow_display_scope))
-                        .show_ui(ui, |ui| {
-                            ui.selectable_value(
-                                &mut profile.judge.fast_slow_display_scope,
-                                FastSlowDisplayScope::Auto,
-                                fast_slow_scope_label(FastSlowDisplayScope::Auto),
-                            );
-                            ui.selectable_value(
-                                &mut profile.judge.fast_slow_display_scope,
-                                FastSlowDisplayScope::ThresholdMs,
-                                fast_slow_scope_label(FastSlowDisplayScope::ThresholdMs),
-                            );
-                        });
+            egui::CollapsingHeader::new(tr!(text, "profile-judge-title"))
+                .id_salt("profile_judge")
+                .show(ui, |ui| {
+                    offset_ms_slider(
+                        ui,
+                        &mut profile.judge.input_offset_us,
+                        &tr!(text, "profile-judge-input-offset"),
+                    );
+                    offset_ms_slider(
+                        ui,
+                        &mut profile.judge.visual_offset_us,
+                        &tr!(text, "profile-judge-visual-offset"),
+                    );
+                    ui.checkbox(
+                        &mut profile.judge.visual_offset_auto_adjust,
+                        tr!(text, "profile-judge-auto-adjust"),
+                    );
+                    egui::ComboBox::new(
+                        "profile_judge_algorithm",
+                        tr!(text, "profile-judge-algorithm"),
+                    )
+                    .selected_text(judge_algorithm_label(profile.judge.judge_algorithm))
+                    .show_ui(ui, |ui| {
+                        ui.selectable_value(
+                            &mut profile.judge.judge_algorithm,
+                            JudgeAlgorithmConfig::Combo,
+                            judge_algorithm_label(JudgeAlgorithmConfig::Combo),
+                        );
+                        ui.selectable_value(
+                            &mut profile.judge.judge_algorithm,
+                            JudgeAlgorithmConfig::Duration,
+                            judge_algorithm_label(JudgeAlgorithmConfig::Duration),
+                        );
+                        ui.selectable_value(
+                            &mut profile.judge.judge_algorithm,
+                            JudgeAlgorithmConfig::Lowest,
+                            judge_algorithm_label(JudgeAlgorithmConfig::Lowest),
+                        );
+                    });
+                    egui::ComboBox::new(
+                        "profile_fast_slow_scope",
+                        tr!(text, "profile-fast-slow-mode"),
+                    )
+                    .selected_text(fast_slow_scope_label(
+                        text,
+                        profile.judge.fast_slow_display_scope,
+                    ))
+                    .show_ui(ui, |ui| {
+                        ui.selectable_value(
+                            &mut profile.judge.fast_slow_display_scope,
+                            FastSlowDisplayScope::Auto,
+                            fast_slow_scope_label(text, FastSlowDisplayScope::Auto),
+                        );
+                        ui.selectable_value(
+                            &mut profile.judge.fast_slow_display_scope,
+                            FastSlowDisplayScope::ThresholdMs,
+                            fast_slow_scope_label(text, FastSlowDisplayScope::ThresholdMs),
+                        );
+                    });
                     if profile.judge.fast_slow_display_scope == FastSlowDisplayScope::ThresholdMs {
                         ui.add(
                             egui::Slider::new(
                                 &mut profile.judge.fast_slow_display_threshold_ms,
                                 0..=50,
                             )
-                            .text("FAST/SLOW 表示閾値 (ms)"),
+                            .text(tr!(text, "profile-fast-slow-threshold")),
                         );
-                        ui.label(
-                            "0 = 常時表示。|差分| がこれ未満の判定は FAST/SLOW を表示しません。",
-                        );
+                        ui.label(tr!(text, "profile-fast-slow-threshold-help"));
                     }
                 });
 
-                egui::CollapsingHeader::new("プレイ").show(ui, |ui| {
+            egui::CollapsingHeader::new(tr!(text, "profile-play-title"))
+                .id_salt("profile_play")
+                .show(ui, |ui| {
                     if !unrestricted {
                         ui.disable();
                     }
-                    egui::ComboBox::from_label("ルール")
+                    egui::ComboBox::new("profile_rule", tr!(text, "profile-play-rule"))
                         .selected_text(rule_mode_label(profile.play.rule_mode))
                         .show_ui(ui, |ui| {
                             ui.selectable_value(
@@ -3628,7 +4007,7 @@ fn build_profile_settings_panel(
                                 rule_mode_label(RuleMode::Dx),
                             );
                         });
-                    egui::ComboBox::from_label("LN モード")
+                    egui::ComboBox::new("profile_ln_mode", tr!(text, "profile-play-ln-mode"))
                         .selected_text(profile.play.ln_mode_policy.display_label())
                         .show_ui(ui, |ui| {
                             for value in LnPolicySetting::ORDER {
@@ -3639,7 +4018,7 @@ fn build_profile_settings_panel(
                                 );
                             }
                         });
-                    egui::ComboBox::from_label("ゲージ")
+                    egui::ComboBox::new("profile_gauge", tr!(text, "profile-play-gauge"))
                         .selected_text(gauge_label(profile.play.gauge))
                         .show_ui(ui, |ui| {
                             for (value, label) in [
@@ -3654,24 +4033,23 @@ fn build_profile_settings_panel(
                                 ui.selectable_value(&mut profile.play.gauge, value, label);
                             }
                         });
-                    egui::ComboBox::from_label("ゲージオートシフト")
-                        .selected_text(gauge_auto_shift_label(profile.play.gauge_auto_shift))
-                        .show_ui(ui, |ui| {
-                            for (value, label) in [
-                                (GaugeAutoShiftConfig::Off, "OFF"),
-                                (GaugeAutoShiftConfig::Continue, "CONTINUE"),
-                                (GaugeAutoShiftConfig::HardToGroove, "HARD->GROOVE"),
-                                (GaugeAutoShiftConfig::BestClear, "BEST CLEAR"),
-                                (GaugeAutoShiftConfig::SelectToUnder, "SELECT UNDER"),
-                            ] {
-                                ui.selectable_value(
-                                    &mut profile.play.gauge_auto_shift,
-                                    value,
-                                    label,
-                                );
-                            }
-                        });
-                    egui::ComboBox::from_label("GAS 下限ゲージ")
+                    egui::ComboBox::new(
+                        "profile_gauge_auto_shift",
+                        tr!(text, "profile-play-gauge-auto-shift"),
+                    )
+                    .selected_text(gauge_auto_shift_label(profile.play.gauge_auto_shift))
+                    .show_ui(ui, |ui| {
+                        for (value, label) in [
+                            (GaugeAutoShiftConfig::Off, "OFF"),
+                            (GaugeAutoShiftConfig::Continue, "CONTINUE"),
+                            (GaugeAutoShiftConfig::HardToGroove, "HARD->GROOVE"),
+                            (GaugeAutoShiftConfig::BestClear, "BEST CLEAR"),
+                            (GaugeAutoShiftConfig::SelectToUnder, "SELECT UNDER"),
+                        ] {
+                            ui.selectable_value(&mut profile.play.gauge_auto_shift, value, label);
+                        }
+                    });
+                    egui::ComboBox::new("profile_gas_floor", tr!(text, "profile-play-gas-floor"))
                         .selected_text(bottom_shiftable_gauge_label(
                             profile.play.bottom_shiftable_gauge,
                         ))
@@ -3688,21 +4066,21 @@ fn build_profile_settings_panel(
                                 );
                             }
                         });
-                    egui::ComboBox::from_label("ランダム")
+                    egui::ComboBox::new("profile_random", tr!(text, "profile-play-random"))
                         .selected_text(random_label(profile.play.random))
                         .show_ui(ui, |ui| {
                             for (value, label) in random_options() {
                                 ui.selectable_value(&mut profile.play.random, value, label);
                             }
                         });
-                    egui::ComboBox::from_label("ランダム 2P")
+                    egui::ComboBox::new("profile_random_2p", tr!(text, "profile-play-random-2p"))
                         .selected_text(random_label(profile.play.random2))
                         .show_ui(ui, |ui| {
                             for (value, label) in random_options() {
                                 ui.selectable_value(&mut profile.play.random2, value, label);
                             }
                         });
-                    egui::ComboBox::from_label("DP オプション")
+                    egui::ComboBox::new("profile_dp_option", tr!(text, "profile-play-dp-option"))
                         .selected_text(double_option_label(profile.play.double_option))
                         .show_ui(ui, |ui| {
                             for (value, label) in [
@@ -3727,7 +4105,7 @@ fn build_profile_settings_panel(
                                 ui.selectable_value(&mut profile.play.hs_fix, value, label);
                             }
                         });
-                    egui::ComboBox::from_label("ターゲット")
+                    egui::ComboBox::new("profile_target", tr!(text, "profile-play-target"))
                         .selected_text(target_label(profile.play.target))
                         .show_ui(ui, |ui| {
                             for (value, label) in [
@@ -3748,33 +4126,39 @@ fn build_profile_settings_panel(
                                 ui.selectable_value(&mut profile.play.target, value, label);
                             }
                         });
-                    egui::ComboBox::from_label("リザルト差分表示")
-                        .selected_text(grade_diff_display_label(profile.play.grade_diff_display))
-                        .show_ui(ui, |ui| {
-                            ui.selectable_value(
-                                &mut profile.play.grade_diff_display,
-                                ResultGradeDiffDisplay::Next,
-                                grade_diff_display_label(ResultGradeDiffDisplay::Next),
-                            );
-                            ui.selectable_value(
-                                &mut profile.play.grade_diff_display,
-                                ResultGradeDiffDisplay::Nearest,
-                                grade_diff_display_label(ResultGradeDiffDisplay::Nearest),
-                            );
-                        });
-                    egui::ComboBox::from_label("レーンエフェクト")
-                        .selected_text(lane_effect_label(profile.play.lane_effect))
-                        .show_ui(ui, |ui| {
-                            for (value, label) in [
-                                (LaneEffectConfig::Off, "OFF"),
-                                (LaneEffectConfig::Hidden, "HIDDEN"),
-                                (LaneEffectConfig::Sudden, "SUDDEN"),
-                                (LaneEffectConfig::HiddenSudden, "HIDDEN+SUDDEN"),
-                            ] {
-                                ui.selectable_value(&mut profile.play.lane_effect, value, label);
-                            }
-                        });
-                    egui::ComboBox::from_label("アシスト")
+                    egui::ComboBox::new(
+                        "profile_result_diff",
+                        tr!(text, "profile-play-result-diff"),
+                    )
+                    .selected_text(grade_diff_display_label(profile.play.grade_diff_display))
+                    .show_ui(ui, |ui| {
+                        ui.selectable_value(
+                            &mut profile.play.grade_diff_display,
+                            ResultGradeDiffDisplay::Next,
+                            grade_diff_display_label(ResultGradeDiffDisplay::Next),
+                        );
+                        ui.selectable_value(
+                            &mut profile.play.grade_diff_display,
+                            ResultGradeDiffDisplay::Nearest,
+                            grade_diff_display_label(ResultGradeDiffDisplay::Nearest),
+                        );
+                    });
+                    egui::ComboBox::new(
+                        "profile_lane_effect",
+                        tr!(text, "profile-play-lane-effect"),
+                    )
+                    .selected_text(lane_effect_label(profile.play.lane_effect))
+                    .show_ui(ui, |ui| {
+                        for (value, label) in [
+                            (LaneEffectConfig::Off, "OFF"),
+                            (LaneEffectConfig::Hidden, "HIDDEN"),
+                            (LaneEffectConfig::Sudden, "SUDDEN"),
+                            (LaneEffectConfig::HiddenSudden, "HIDDEN+SUDDEN"),
+                        ] {
+                            ui.selectable_value(&mut profile.play.lane_effect, value, label);
+                        }
+                    });
+                    egui::ComboBox::new("profile_assist", tr!(text, "profile-play-assist"))
                         .selected_text(assist_label(profile.play.assist))
                         .show_ui(ui, |ui| {
                             for (value, label) in [
@@ -3796,30 +4180,38 @@ fn build_profile_settings_panel(
                                 ui.selectable_value(&mut profile.play.bga, value, label);
                             }
                         });
-                    egui::ComboBox::from_label("BGA 表示")
-                        .selected_text(bga_expand_label(profile.play.bga_expand))
-                        .show_ui(ui, |ui| {
-                            for (value, label) in [
-                                (BgaExpandConfig::KeepAspect, "KEEP ASPECT"),
-                                (BgaExpandConfig::Full, "FULL"),
-                                (BgaExpandConfig::Off, "OFF"),
-                            ] {
-                                ui.selectable_value(&mut profile.play.bga_expand, value, label);
-                            }
-                        });
-                    ui.checkbox(&mut profile.play.auto_play, "オートプレイ");
-                    ui.checkbox(&mut profile.play.show_ln_tail_cap, "LN終端キャップを表示");
+                    egui::ComboBox::new(
+                        "profile_bga_expand",
+                        tr!(text, "profile-play-bga-display"),
+                    )
+                    .selected_text(bga_expand_label(profile.play.bga_expand))
+                    .show_ui(ui, |ui| {
+                        for (value, label) in [
+                            (BgaExpandConfig::KeepAspect, "KEEP ASPECT"),
+                            (BgaExpandConfig::Full, "FULL"),
+                            (BgaExpandConfig::Off, "OFF"),
+                        ] {
+                            ui.selectable_value(&mut profile.play.bga_expand, value, label);
+                        }
+                    });
+                    ui.checkbox(&mut profile.play.auto_play, tr!(text, "profile-play-autoplay"));
+                    ui.checkbox(
+                        &mut profile.play.show_ln_tail_cap,
+                        tr!(text, "profile-play-ln-tail-cap"),
+                    );
                     ui.add(
                         egui::Slider::new(&mut profile.play.misslayer_duration_ms, 0..=5000)
-                            .text("ミスレイヤー表示時間 (ms)"),
+                            .text(tr!(text, "profile-play-miss-layer-duration")),
                     );
                     ui.add(
                         egui::Slider::new(&mut profile.play.play_exit_hold_ms, 100..=5000)
-                            .text("E1+E2 強制終了長押し時間 (ms)"),
+                            .text(tr!(text, "profile-play-exit-hold-duration")),
                     );
                 });
 
-                egui::CollapsingHeader::new("表示").show(ui, |ui| {
+            egui::CollapsingHeader::new(tr!(text, "profile-display-title"))
+                .id_salt("profile_display")
+                .show(ui, |ui| {
                     let hispeed_step = match profile.lane.hispeed_mode {
                         HispeedModeConfig::Normal => normalize_hispeed_step(
                             profile.lane.hispeed_step_nhs,
@@ -3833,29 +4225,32 @@ fn build_profile_settings_panel(
                     ui.add(
                         egui::Slider::new(&mut profile.lane.hispeed, 0.5..=10.0)
                             .step_by(hispeed_step as f64)
-                            .text("ハイスピード"),
+                            .text(tr!(text, "profile-display-hispeed")),
                     );
-                    egui::ComboBox::from_label("ハイスピードモード")
-                        .selected_text(hispeed_mode_label(profile.lane.hispeed_mode))
-                        .show_ui(ui, |ui| {
-                            ui.selectable_value(
-                                &mut profile.lane.hispeed_mode,
-                                HispeedModeConfig::Normal,
-                                hispeed_mode_label(HispeedModeConfig::Normal),
-                            );
-                            ui.selectable_value(
-                                &mut profile.lane.hispeed_mode,
-                                HispeedModeConfig::Floating,
-                                hispeed_mode_label(HispeedModeConfig::Floating),
-                            );
-                        });
+                    egui::ComboBox::new(
+                        "profile_hispeed_mode",
+                        tr!(text, "profile-display-hispeed-mode"),
+                    )
+                    .selected_text(hispeed_mode_label(profile.lane.hispeed_mode))
+                    .show_ui(ui, |ui| {
+                        ui.selectable_value(
+                            &mut profile.lane.hispeed_mode,
+                            HispeedModeConfig::Normal,
+                            hispeed_mode_label(HispeedModeConfig::Normal),
+                        );
+                        ui.selectable_value(
+                            &mut profile.lane.hispeed_mode,
+                            HispeedModeConfig::Floating,
+                            hispeed_mode_label(HispeedModeConfig::Floating),
+                        );
+                    });
                     ui.add(
                         egui::Slider::new(
                             &mut profile.lane.hispeed_step_nhs,
                             HISPEED_STEP_MIN..=HISPEED_STEP_MAX,
                         )
                         .step_by(0.05)
-                        .text("NHS HS変更刻み"),
+                        .text(tr!(text, "profile-display-nhs-step")),
                     );
                     ui.add(
                         egui::Slider::new(
@@ -3863,19 +4258,22 @@ fn build_profile_settings_panel(
                             HISPEED_STEP_MIN..=HISPEED_STEP_MAX,
                         )
                         .step_by(0.05)
-                        .text("FHS HS変更刻み"),
+                        .text(tr!(text, "profile-display-fhs-step")),
                     );
-                    ui.label("HS変更刻みの範囲: 0.05..=1.00");
+                    ui.label(tr!(text, "profile-display-step-range"));
                     let sudden_max =
                         crate::config::play::lane_unit_max_for_other(profile.lane.lift);
                     lane_unit_slider_with_max(ui, &mut profile.lane.sudden, "SUDDEN+", sudden_max);
                     let lift_max =
                         crate::config::play::lane_unit_max_for_other(profile.lane.sudden);
-                    ui.checkbox(&mut profile.lane.lift_enabled, "LIFTを有効にする");
+                    ui.checkbox(
+                        &mut profile.lane.lift_enabled,
+                        tr!(text, "profile-display-lift-enabled"),
+                    );
                     lane_unit_slider_with_max(ui, &mut profile.lane.lift, "LIFT", lift_max);
                     ui.checkbox(
                         &mut profile.lane.hispeed_auto_adjust,
-                        "レーンカバー変更時に現在BPMへHSを自動調整",
+                        tr!(text, "profile-display-auto-adjust-hispeed"),
                     );
                     lane_unit_slider(ui, &mut profile.lane.hidden, "HIDDEN");
                     ui.add(
@@ -3883,12 +4281,14 @@ fn build_profile_settings_panel(
                             &mut profile.lane.target_green_number,
                             TARGET_GREEN_NUMBER_MIN..=TARGET_GREEN_NUMBER_MAX,
                         )
-                        .text("緑数字ターゲット"),
+                        .text(tr!(text, "profile-display-green-number")),
                     );
                 });
 
-                egui::CollapsingHeader::new("入力").show(ui, |ui| {
-                    egui::ComboBox::from_label("スクラッチ")
+            egui::CollapsingHeader::new(tr!(text, "profile-input-title"))
+                .id_salt("profile_input")
+                .show(ui, |ui| {
+                    egui::ComboBox::new("profile_scratch_mode", tr!(text, "profile-input-scratch"))
                         .selected_text(scratch_input_mode_label(profile.input.scratch_mode))
                         .show_ui(ui, |ui| {
                             ui.selectable_value(
@@ -3904,54 +4304,77 @@ fn build_profile_settings_panel(
                         });
                     ui.add(
                         egui::Slider::new(&mut profile.input.analog_scratch_sensitivity, 0.1..=5.0)
-                            .text("アナログ感度"),
+                            .text(tr!(text, "profile-input-analog-sensitivity")),
                     );
                     ui.add(
                         egui::Slider::new(&mut profile.input.analog_scratch_threshold, 1..=1000)
-                            .text("アナログ停止閾値"),
+                            .text(tr!(text, "profile-input-analog-stop-threshold")),
                     );
-                    ui.label("キー割り当ては選曲画面の設定ツリーで編集できます。");
+                    ui.label(tr!(text, "profile-input-key-bindings-help"));
                 });
 
-                egui::CollapsingHeader::new("リプレイ").show(ui, |ui| {
+            egui::CollapsingHeader::new(tr!(text, "profile-replay-title"))
+                .id_salt("profile_replay")
+                .show(ui, |ui| {
                     if !unrestricted {
                         ui.disable();
                     }
-                    ui.checkbox(&mut profile.replay.auto_save, "自動保存");
-                    ui.checkbox(&mut profile.replay.compress, "圧縮");
+                    ui.checkbox(
+                        &mut profile.replay.auto_save,
+                        tr!(text, "profile-replay-auto-save"),
+                    );
+                    ui.checkbox(&mut profile.replay.compress, tr!(text, "profile-replay-compress"));
                     for (index, rule) in profile.replay.slot_rules.iter_mut().enumerate() {
-                        egui::ComboBox::from_label(format!("スロット {}", index + 1))
-                            .selected_text(replay_slot_rule_label(*rule))
-                            .show_ui(ui, |ui| {
-                                for value in [
-                                    ReplaySlotRule::Disabled,
-                                    ReplaySlotRule::Always,
-                                    ReplaySlotRule::ScoreUpdate,
-                                    ReplaySlotRule::BpUpdate,
-                                    ReplaySlotRule::MaxComboUpdate,
-                                    ReplaySlotRule::ClearUpdate,
-                                ] {
-                                    ui.selectable_value(rule, value, replay_slot_rule_label(value));
-                                }
-                            });
+                        egui::ComboBox::new(
+                            ("profile_replay_slot", index),
+                            tr!(text, "profile-replay-slot", "number" => index + 1),
+                        )
+                        .selected_text(replay_slot_rule_label(*rule))
+                        .show_ui(ui, |ui| {
+                            for value in [
+                                ReplaySlotRule::Disabled,
+                                ReplaySlotRule::Always,
+                                ReplaySlotRule::ScoreUpdate,
+                                ReplaySlotRule::BpUpdate,
+                                ReplaySlotRule::MaxComboUpdate,
+                                ReplaySlotRule::ClearUpdate,
+                            ] {
+                                ui.selectable_value(rule, value, replay_slot_rule_label(value));
+                            }
+                        });
                     }
                 });
 
-                egui::CollapsingHeader::new("システム音").show(ui, |ui| {
+            egui::CollapsingHeader::new(tr!(text, "profile-system-sound-title"))
+                .id_salt("profile_system_sound")
+                .show(ui, |ui| {
                     if !unrestricted {
                         ui.disable();
                     }
-                    system_sound_path_row(ui, "BGM ルート", &mut profile.system_sound.bgm_dir);
-                    system_sound_path_row(ui, "SE ルート", &mut profile.system_sound.se_dir);
                     system_sound_path_row(
                         ui,
-                        "フォールバック",
+                        text,
+                        &tr!(text, "profile-system-sound-bgm-root"),
+                        &mut profile.system_sound.bgm_dir,
+                    );
+                    system_sound_path_row(
+                        ui,
+                        text,
+                        &tr!(text, "profile-system-sound-se-root"),
+                        &mut profile.system_sound.se_dir,
+                    );
+                    system_sound_path_row(
+                        ui,
+                        text,
+                        &tr!(text, "profile-system-sound-fallback"),
                         &mut profile.system_sound.default_sound_dir,
                     );
-                    ui.label("システム音の再スキャンは次回起動時に反映されます。");
+                    ui.label(tr!(text, "profile-system-sound-rescan-help"));
                 });
 
-                egui::CollapsingHeader::new("IR").show(ui, |ui| {
+            egui::CollapsingHeader::new(tr!(text, "profile-ir-title")).id_salt("profile_ir").show(
+                ui,
+                |ui| {
                     if !unrestricted {
                         ui.disable();
                     }
@@ -3978,15 +4401,19 @@ fn build_profile_settings_panel(
                         .map(|(_, label)| label.clone())
                         .unwrap_or_else(|| {
                             if profile.ir.primary_provider.is_empty() {
-                                "未設定".to_string()
+                                tr!(text, "profile-ir-unset")
                             } else {
                                 profile.ir.primary_provider.clone()
                             }
                         });
-                    egui::ComboBox::from_label("Primary IR")
+                    egui::ComboBox::new("profile_primary_ir", tr!(text, "profile-ir-primary"))
                         .selected_text(selected_primary_text)
                         .show_ui(ui, |ui| {
-                            ui.selectable_value(&mut selected_primary, String::new(), "未設定");
+                            ui.selectable_value(
+                                &mut selected_primary,
+                                String::new(),
+                                tr!(text, "profile-ir-unset"),
+                            );
                             for (provider_key, label) in &primary_options {
                                 ui.selectable_value(
                                     &mut selected_primary,
@@ -4001,28 +4428,31 @@ fn build_profile_settings_panel(
                     }
                     ui.checkbox(
                         &mut profile.ir.prefetch_global_ranking_on_score_submit,
-                        "スコア送信後に全体順位を取得",
+                        tr!(text, "profile-ir-prefetch-global"),
                     );
-                    egui::ComboBox::from_label("秘密情報の保存先 (要再起動)")
-                        .selected_text(match profile.ir.credential_store {
-                            IrCredentialStoreConfig::File => "ファイル (プロファイル内)",
-                            IrCredentialStoreConfig::Os => "OS credential store",
-                        })
-                        .show_ui(ui, |ui| {
-                            ui.selectable_value(
-                                &mut profile.ir.credential_store,
-                                IrCredentialStoreConfig::File,
-                                "ファイル (プロファイル内)",
-                            );
-                            ui.selectable_value(
-                                &mut profile.ir.credential_store,
-                                IrCredentialStoreConfig::Os,
-                                "OS credential store",
-                            );
-                        });
+                    egui::ComboBox::new(
+                        "profile_ir_credential_store",
+                        tr!(text, "profile-ir-credential-store"),
+                    )
+                    .selected_text(match profile.ir.credential_store {
+                        IrCredentialStoreConfig::File => tr!(text, "profile-ir-credential-file"),
+                        IrCredentialStoreConfig::Os => tr!(text, "profile-ir-credential-os"),
+                    })
+                    .show_ui(ui, |ui| {
+                        ui.selectable_value(
+                            &mut profile.ir.credential_store,
+                            IrCredentialStoreConfig::File,
+                            tr!(text, "profile-ir-credential-file"),
+                        );
+                        ui.selectable_value(
+                            &mut profile.ir.credential_store,
+                            IrCredentialStoreConfig::Os,
+                            tr!(text, "profile-ir-credential-os"),
+                        );
+                    });
                     ui.checkbox(
                         &mut profile.ir.prefetch_rival_ranking_on_score_submit,
-                        "スコア送信後にライバル順位を取得",
+                        tr!(text, "profile-ir-prefetch-rival"),
                     );
                     let mut remove_index = None;
                     for (index, provider) in profile.ir.providers.iter_mut().enumerate() {
@@ -4030,8 +4460,8 @@ fn build_profile_settings_panel(
                             ui.separator();
                             ui.horizontal(|ui| {
                                 ui.checkbox(&mut provider.enabled, "");
-                                ui.label(format!("provider {}", index + 1));
-                                if ui.button("削除").clicked() {
+                                ui.label(tr!(text, "profile-ir-provider", "number" => index + 1));
+                                if ui.button(tr!(text, "common-delete")).clicked() {
                                     remove_index = Some(index);
                                 }
                             });
@@ -4043,18 +4473,19 @@ fn build_profile_settings_panel(
                             let provider_key =
                                 crate::ir::provider_key::configured_provider_key(provider)
                                     .map(str::to_string);
+                            let provider_key_text = provider_key
+                                .clone()
+                                .unwrap_or_else(|| tr!(text, "profile-ir-key-after-login"));
                             ui.horizontal(|ui| {
                                 ui.label("Key");
-                                ui.monospace(
-                                    provider_key.as_deref().unwrap_or("(ログイン後に取得)"),
-                                );
+                                ui.monospace(&provider_key_text);
                             });
                             ui.horizontal(|ui| {
-                                ui.label("メール");
+                                ui.label(tr!(text, "profile-ir-email"));
                                 ui.text_edit_singleline(&mut ir_login.email);
                             });
                             ui.horizontal(|ui| {
-                                ui.label("パスワード");
+                                ui.label(tr!(text, "profile-ir-password"));
                                 ui.add(
                                     egui::TextEdit::singleline(&mut ir_login.password)
                                         .password(true),
@@ -4066,7 +4497,10 @@ fn build_profile_settings_panel(
                                     && !ir_login.email.is_empty()
                                     && !ir_login.password.is_empty();
                                 if ui
-                                    .add_enabled(can_login, egui::Button::new("ログイン"))
+                                    .add_enabled(
+                                        can_login,
+                                        egui::Button::new(tr!(text, "profile-ir-login")),
+                                    )
                                     .clicked()
                                 {
                                     ir_login.start_login(
@@ -4082,7 +4516,7 @@ fn build_profile_settings_panel(
                                 if login_busy {
                                     ui.spinner();
                                 }
-                                if ui.button("ログアウト").clicked() {
+                                if ui.button(tr!(text, "profile-ir-logout")).clicked() {
                                     let result = provider_key
                                         .as_deref()
                                         .map(|provider_key| {
@@ -4098,7 +4532,7 @@ fn build_profile_settings_panel(
                                             ir_login.message = Some(IrProviderUiMessage {
                                                 target: row_target.clone(),
                                                 ok: true,
-                                                text: "ログアウトしました".to_string(),
+                                                text: tr!(text, "profile-ir-logout-success"),
                                             });
                                             save_clicked = true;
                                         }
@@ -4119,7 +4553,13 @@ fn build_profile_settings_panel(
                                     && !provider.base_url.is_empty()
                                     && provider_key.is_some();
                                 if ui
-                                    .add_enabled(can_rotate, egui::Button::new("署名鍵を再生成"))
+                                    .add_enabled(
+                                        can_rotate,
+                                        egui::Button::new(tr!(
+                                            text,
+                                            "profile-ir-device-key-rotate"
+                                        )),
+                                    )
                                     .clicked()
                                 {
                                     ir_device_key.start_rotate(
@@ -4153,27 +4593,30 @@ fn build_profile_settings_panel(
                                 };
                                 ui.colored_label(color, message.text.clone());
                             }
-                            egui::ComboBox::from_label("送信方針")
-                                .selected_text(ir_send_policy_label(provider.send_policy))
-                                .show_ui(ui, |ui| {
-                                    for value in [
-                                        IrSendPolicyConfig::UpdateScore,
-                                        IrSendPolicyConfig::Always,
-                                        IrSendPolicyConfig::CompleteSong,
-                                    ] {
-                                        ui.selectable_value(
-                                            &mut provider.send_policy,
-                                            value,
-                                            ir_send_policy_label(value),
-                                        );
-                                    }
-                                });
+                            egui::ComboBox::new(
+                                ("profile_ir_send_policy", index),
+                                tr!(text, "profile-ir-send-policy"),
+                            )
+                            .selected_text(ir_send_policy_label(provider.send_policy))
+                            .show_ui(ui, |ui| {
+                                for value in [
+                                    IrSendPolicyConfig::UpdateScore,
+                                    IrSendPolicyConfig::Always,
+                                    IrSendPolicyConfig::CompleteSong,
+                                ] {
+                                    ui.selectable_value(
+                                        &mut provider.send_policy,
+                                        value,
+                                        ir_send_policy_label(value),
+                                    );
+                                }
+                            });
                             ui.horizontal(|ui| {
-                                ui.label("最終ログイン");
+                                ui.label(tr!(text, "profile-ir-last-login"));
                                 ui.monospace(format_optional_timestamp(provider.last_login_at));
                             });
                             ui.horizontal(|ui| {
-                                ui.label("最終成功");
+                                ui.label(tr!(text, "profile-ir-last-success"));
                                 ui.monospace(format_optional_timestamp(provider.last_success_at));
                             });
                         });
@@ -4181,7 +4624,7 @@ fn build_profile_settings_panel(
                     if let Some(index) = remove_index {
                         profile.ir.providers.remove(index);
                     }
-                    if ui.button("provider を追加").clicked() {
+                    if ui.button(tr!(text, "profile-ir-add-provider")).clicked() {
                         profile.ir.providers.push(IrProviderConfig {
                             provider: "bmz".to_string(),
                             provider_key: String::new(),
@@ -4195,33 +4638,53 @@ fn build_profile_settings_panel(
                             last_success_at: None,
                         });
                     }
-                });
+                },
+            );
 
-                egui::CollapsingHeader::new("UI").show(ui, |ui| {
+            egui::CollapsingHeader::new(tr!(text, "profile-ui-title")).id_salt("profile_ui").show(
+                ui,
+                |ui| {
                     if !unrestricted {
                         ui.disable();
                     }
+                    let current_locale = profile.ui.locale();
+                    let mut selected_locale = current_locale;
+                    egui::ComboBox::new("profile_ui_language", tr!(text, "profile-ui-language"))
+                        .selected_text(selected_locale.native_name())
+                        .show_ui(ui, |ui| {
+                            for locale in AppLocale::SUPPORTED {
+                                ui.selectable_value(
+                                    &mut selected_locale,
+                                    locale,
+                                    locale.native_name(),
+                                );
+                            }
+                        });
+                    if selected_locale != current_locale {
+                        profile.ui.set_locale(selected_locale);
+                        text = Localizer::new(selected_locale);
+                        save_clicked = true;
+                    }
                     ui.horizontal(|ui| {
-                        ui.label("言語 (未実装)");
-                        ui.text_edit_singleline(&mut profile.ui.language);
-                    });
-                    ui.horizontal(|ui| {
-                        ui.label("テーマ (未実装)");
+                        ui.label(tr!(text, "profile-ui-theme-unimplemented"));
                         ui.text_edit_singleline(&mut profile.ui.theme);
                     });
-                    if ui.checkbox(show_fps, "FPS 表示").changed() {
+                    if ui.checkbox(show_fps, tr!(text, "settings-show-fps")).changed() {
                         profile.ui.show_fps = *show_fps;
                     }
-                    ui.checkbox(&mut profile.ui.confirm_on_exit, "終了確認 (未実装)");
-                });
+                    ui.checkbox(
+                        &mut profile.ui.confirm_on_exit,
+                        tr!(text, "profile-ui-confirm-exit-unimplemented"),
+                    );
+                },
+            );
 
-                ui.separator();
-                if ui.button("保存").clicked() {
-                    save_clicked = true;
-                }
-            });
-        },
-    );
+            ui.separator();
+            if ui.button(tr!(text, "settings-save")).clicked() {
+                save_clicked = true;
+            }
+        });
+    });
     if let Some(readonly) = readonly_profile {
         restore_restricted_profile_settings(profile, readonly);
     }
@@ -4238,147 +4701,160 @@ fn build_profile_manager_section(
     profile: &ProfileConfig,
     state: &mut ProfileManagerUiState,
     editable: bool,
+    text: Localizer,
 ) -> bool {
     let mut save_app_config = false;
-    egui::CollapsingHeader::new("プロファイル管理").default_open(false).show(ui, |ui| {
-        if !editable {
-            ui.disable();
-        }
-        let app_paths = match resolve_app_paths() {
-            Ok(paths) => paths,
-            Err(error) => {
-                ui.colored_label(egui::Color32::RED, format!("{error:#}"));
-                return;
+    egui::CollapsingHeader::new(tr!(text, "profile-manager-title"))
+        .id_salt("profile_manager")
+        .default_open(false)
+        .show(ui, |ui| {
+            if !editable {
+                ui.disable();
             }
-        };
-        let profiles = match profile_cmd::profile_summaries(&app_paths) {
-            Ok(profiles) => profiles,
-            Err(error) => {
-                ui.colored_label(egui::Color32::RED, format!("{error:#}"));
-                return;
+            let app_paths = match resolve_app_paths() {
+                Ok(paths) => paths,
+                Err(error) => {
+                    ui.colored_label(egui::Color32::RED, format!("{error:#}"));
+                    return;
+                }
+            };
+            let profiles = match profile_cmd::profile_summaries(&app_paths) {
+                Ok(profiles) => profiles,
+                Err(error) => {
+                    ui.colored_label(egui::Color32::RED, format!("{error:#}"));
+                    return;
+                }
+            };
+
+            if state.copy_source_id.is_empty() {
+                state.copy_source_id = profile.id.clone();
             }
-        };
 
-        if state.copy_source_id.is_empty() {
-            state.copy_source_id = profile.id.clone();
-        }
+            ui.horizontal(|ui| {
+                ui.label(tr!(text, "profile-manager-current"));
+                ui.monospace(&profile.id);
+            });
+            ui.horizontal(|ui| {
+                ui.label(tr!(text, "profile-manager-next-startup"));
+                egui::ComboBox::from_id_salt("profile_active_next")
+                    .selected_text(profile_selection_label(&profiles, &app_config.active_profile))
+                    .show_ui(ui, |ui| {
+                        let active_profile = app_config.active_profile.clone();
+                        for summary in &profiles {
+                            let selected = summary.id == active_profile;
+                            let label = profile_selection_label(&profiles, &summary.id);
+                            if ui.selectable_label(selected, label).clicked() && !selected {
+                                app_config.active_profile = summary.id.clone();
+                                state.message = tr!(
+                                    text,
+                                    "profile-manager-next-startup-changed",
+                                    "id" => summary.id.clone(),
+                                );
+                                state.error.clear();
+                                save_app_config = true;
+                            }
+                        }
+                    });
+            });
 
-        ui.horizontal(|ui| {
-            ui.label("実行中");
-            ui.monospace(&profile.id);
-        });
-        ui.horizontal(|ui| {
-            ui.label("次回起動");
-            egui::ComboBox::from_id_salt("profile_active_next")
-                .selected_text(profile_selection_label(&profiles, &app_config.active_profile))
-                .show_ui(ui, |ui| {
-                    let active_profile = app_config.active_profile.clone();
-                    for summary in &profiles {
-                        let selected = summary.id == active_profile;
-                        let label = profile_selection_label(&profiles, &summary.id);
-                        if ui.selectable_label(selected, label).clicked() && !selected {
-                            app_config.active_profile = summary.id.clone();
-                            state.message =
-                                format!("次回起動 profile を {} に変更しました。", summary.id);
-                            state.error.clear();
+            ui.separator();
+            ui.label(tr!(text, "profile-manager-create-title"));
+            ui.horizontal(|ui| {
+                ui.label("ID");
+                profile_id_text_edit(ui, &mut state.create_id);
+            });
+            ui.horizontal(|ui| {
+                ui.label(tr!(text, "profile-display-name"));
+                ui.text_edit_singleline(&mut state.create_display_name);
+            });
+            ui.checkbox(&mut state.create_activate, tr!(text, "profile-manager-activate-next"));
+            if ui.button(tr!(text, "profile-manager-create")).clicked() {
+                let id = state.create_id.trim().to_string();
+                let display_name =
+                    trimmed_non_empty(&state.create_display_name).map(str::to_string);
+                match profile_cmd::create_profile(&app_paths, &id, display_name.as_deref(), false) {
+                    Ok(()) => {
+                        if state.create_activate {
+                            app_config.active_profile = id.clone();
                             save_app_config = true;
                         }
+                        state.message = tr!(text, "profile-manager-created", "id" => id.clone());
+                        state.error.clear();
+                        state.create_id.clear();
+                        state.create_display_name.clear();
                     }
-                });
-        });
-
-        ui.separator();
-        ui.label("新規作成");
-        ui.horizontal(|ui| {
-            ui.label("ID");
-            profile_id_text_edit(ui, &mut state.create_id);
-        });
-        ui.horizontal(|ui| {
-            ui.label("表示名");
-            ui.text_edit_singleline(&mut state.create_display_name);
-        });
-        ui.checkbox(&mut state.create_activate, "次回起動 profile にする");
-        if ui.button("作成").clicked() {
-            let id = state.create_id.trim().to_string();
-            let display_name = trimmed_non_empty(&state.create_display_name).map(str::to_string);
-            match profile_cmd::create_profile(&app_paths, &id, display_name.as_deref(), false) {
-                Ok(()) => {
-                    if state.create_activate {
-                        app_config.active_profile = id.clone();
-                        save_app_config = true;
+                    Err(error) => {
+                        state.error = format!("{error:#}");
+                        state.message.clear();
                     }
-                    state.message = format!("profile を作成しました: {id}");
-                    state.error.clear();
-                    state.create_id.clear();
-                    state.create_display_name.clear();
-                }
-                Err(error) => {
-                    state.error = format!("{error:#}");
-                    state.message.clear();
                 }
             }
-        }
 
-        ui.separator();
-        ui.label("複製");
-        ui.horizontal(|ui| {
-            ui.label("複製元");
-            egui::ComboBox::from_id_salt("profile_copy_source")
-                .selected_text(profile_selection_label(&profiles, &state.copy_source_id))
-                .show_ui(ui, |ui| {
-                    for summary in &profiles {
-                        let selected = summary.id == state.copy_source_id;
-                        let label = profile_selection_label(&profiles, &summary.id);
-                        if ui.selectable_label(selected, label).clicked() {
-                            state.copy_source_id = summary.id.clone();
+            ui.separator();
+            ui.label(tr!(text, "profile-manager-copy-title"));
+            ui.horizontal(|ui| {
+                ui.label(tr!(text, "profile-manager-copy-source"));
+                egui::ComboBox::from_id_salt("profile_copy_source")
+                    .selected_text(profile_selection_label(&profiles, &state.copy_source_id))
+                    .show_ui(ui, |ui| {
+                        for summary in &profiles {
+                            let selected = summary.id == state.copy_source_id;
+                            let label = profile_selection_label(&profiles, &summary.id);
+                            if ui.selectable_label(selected, label).clicked() {
+                                state.copy_source_id = summary.id.clone();
+                            }
                         }
+                    });
+            });
+            ui.horizontal(|ui| {
+                ui.label(tr!(text, "profile-manager-new-id"));
+                profile_id_text_edit(ui, &mut state.copy_target_id);
+            });
+            ui.horizontal(|ui| {
+                ui.label(tr!(text, "profile-display-name"));
+                ui.text_edit_singleline(&mut state.copy_display_name);
+            });
+            ui.checkbox(&mut state.copy_activate, tr!(text, "profile-manager-activate-next"));
+            if ui.button(tr!(text, "profile-manager-copy")).clicked() {
+                let source_id = state.copy_source_id.trim().to_string();
+                let target_id = state.copy_target_id.trim().to_string();
+                let display_name = trimmed_non_empty(&state.copy_display_name).map(str::to_string);
+                match profile_cmd::copy_profile(
+                    &app_paths,
+                    &source_id,
+                    &target_id,
+                    display_name.as_deref(),
+                    false,
+                ) {
+                    Ok(()) => {
+                        if state.copy_activate {
+                            app_config.active_profile = target_id.clone();
+                            save_app_config = true;
+                        }
+                        state.message = tr!(
+                            text,
+                            "profile-manager-copied",
+                            "source_id" => source_id,
+                            "target_id" => target_id.clone(),
+                        );
+                        state.error.clear();
+                        state.copy_target_id.clear();
+                        state.copy_display_name.clear();
                     }
-                });
-        });
-        ui.horizontal(|ui| {
-            ui.label("新ID");
-            profile_id_text_edit(ui, &mut state.copy_target_id);
-        });
-        ui.horizontal(|ui| {
-            ui.label("表示名");
-            ui.text_edit_singleline(&mut state.copy_display_name);
-        });
-        ui.checkbox(&mut state.copy_activate, "次回起動 profile にする");
-        if ui.button("複製").clicked() {
-            let source_id = state.copy_source_id.trim().to_string();
-            let target_id = state.copy_target_id.trim().to_string();
-            let display_name = trimmed_non_empty(&state.copy_display_name).map(str::to_string);
-            match profile_cmd::copy_profile(
-                &app_paths,
-                &source_id,
-                &target_id,
-                display_name.as_deref(),
-                false,
-            ) {
-                Ok(()) => {
-                    if state.copy_activate {
-                        app_config.active_profile = target_id.clone();
-                        save_app_config = true;
+                    Err(error) => {
+                        state.error = format!("{error:#}");
+                        state.message.clear();
                     }
-                    state.message = format!("profile を複製しました: {source_id} -> {target_id}");
-                    state.error.clear();
-                    state.copy_target_id.clear();
-                    state.copy_display_name.clear();
-                }
-                Err(error) => {
-                    state.error = format!("{error:#}");
-                    state.message.clear();
                 }
             }
-        }
 
-        if !state.message.is_empty() {
-            ui.colored_label(egui::Color32::LIGHT_GREEN, state.message.as_str());
-        }
-        if !state.error.is_empty() {
-            ui.colored_label(egui::Color32::RED, state.error.as_str());
-        }
-    });
+            if !state.message.is_empty() {
+                ui.colored_label(egui::Color32::LIGHT_GREEN, state.message.as_str());
+            }
+            if !state.error.is_empty() {
+                ui.colored_label(egui::Color32::RED, state.error.as_str());
+            }
+        });
     save_app_config
 }
 
@@ -4454,10 +4930,10 @@ fn judge_algorithm_label(value: JudgeAlgorithmConfig) -> &'static str {
     }
 }
 
-fn fast_slow_scope_label(value: FastSlowDisplayScope) -> &'static str {
+fn fast_slow_scope_label(text: Localizer, value: FastSlowDisplayScope) -> String {
     match value {
-        FastSlowDisplayScope::Auto => "Auto (beatoraja 準拠)",
-        FastSlowDisplayScope::ThresholdMs => "閾値 ms (PGREAT 含む全判定)",
+        FastSlowDisplayScope::Auto => tr!(text, "profile-fast-slow-auto"),
+        FastSlowDisplayScope::ThresholdMs => tr!(text, "profile-fast-slow-threshold-mode"),
     }
 }
 
@@ -4636,11 +5112,11 @@ fn replay_slot_rule_label(value: ReplaySlotRule) -> &'static str {
     }
 }
 
-fn system_sound_path_row(ui: &mut egui::Ui, label: &str, value: &mut String) {
+fn system_sound_path_row(ui: &mut egui::Ui, text: Localizer, label: &str, value: &mut String) {
     ui.horizontal(|ui| {
         ui.label(label);
         ui.add(egui::TextEdit::singleline(value).desired_width(260.0));
-        if ui.button("選択…").clicked()
+        if ui.button(tr!(text, "common-choose-folder")).clicked()
             && let Some(folder) = rfd::FileDialog::new().pick_folder()
         {
             *value = folder.to_string_lossy().into_owned();
@@ -4720,6 +5196,65 @@ enum SkinSlot {
     Play14,
     Result,
     CourseResult,
+}
+
+impl SkinSlot {
+    /// locale を切り替えても egui の永続 widget ID が変わらないよう、
+    /// i18n 前に ID へ使われていた日本語ラベルを固定 salt として維持する。
+    const fn path_combo_id(self) -> &'static str {
+        match self {
+            Self::Select => "選曲",
+            Self::Decide => "決定",
+            Self::Play4 => "プレイ (4K)",
+            Self::Play5 => "プレイ (5K)",
+            Self::Play6 => "プレイ (6K)",
+            Self::Play7 => "プレイ (7K)",
+            Self::Play8 => "プレイ (8K)",
+            Self::Play9 => "プレイ (9K)",
+            Self::Play10 => "プレイ (10K)",
+            Self::Play14 => "プレイ (14K)",
+            Self::Result => "リザルト",
+            Self::CourseResult => "コースリザルト",
+        }
+    }
+
+    const fn defs_header_id(self) -> &'static str {
+        match self {
+            Self::Select => "選曲スキン",
+            Self::Decide => "決定スキン",
+            Self::Play4 => "プレイスキン (4K)",
+            Self::Play5 => "プレイスキン (5K)",
+            Self::Play6 => "プレイスキン (6K)",
+            Self::Play7 => "プレイスキン (7K)",
+            Self::Play8 => "プレイスキン (8K)",
+            Self::Play9 => "プレイスキン (9K)",
+            Self::Play10 => "プレイスキン (10K)",
+            Self::Play14 => "プレイスキン (14K)",
+            Self::Result => "リザルトスキン",
+            Self::CourseResult => "コースリザルトスキン",
+        }
+    }
+}
+
+fn skin_scene_label(slot: SkinSlot, text: Localizer) -> String {
+    match slot {
+        SkinSlot::Select => tr!(text, "skin-scene-select"),
+        SkinSlot::Decide => tr!(text, "skin-scene-decide"),
+        SkinSlot::Play4 => tr!(text, "skin-scene-play", "keys" => "4K"),
+        SkinSlot::Play5 => tr!(text, "skin-scene-play", "keys" => "5K"),
+        SkinSlot::Play6 => tr!(text, "skin-scene-play", "keys" => "6K"),
+        SkinSlot::Play7 => tr!(text, "skin-scene-play", "keys" => "7K"),
+        SkinSlot::Play8 => tr!(text, "skin-scene-play", "keys" => "8K"),
+        SkinSlot::Play9 => tr!(text, "skin-scene-play", "keys" => "9K"),
+        SkinSlot::Play10 => tr!(text, "skin-scene-play", "keys" => "10K"),
+        SkinSlot::Play14 => tr!(text, "skin-scene-play", "keys" => "14K"),
+        SkinSlot::Result => tr!(text, "skin-scene-result"),
+        SkinSlot::CourseResult => tr!(text, "skin-scene-course-result"),
+    }
+}
+
+fn skin_scene_defs_label(slot: SkinSlot, text: Localizer) -> String {
+    tr!(text, "skin-scene-options", "scene" => skin_scene_label(slot, text))
 }
 
 fn skin_reload_request_from_diff(before: &SkinConfig, after: &SkinConfig) -> SkinReloadRequest {
@@ -4818,34 +5353,33 @@ fn skin_path_combo(
     label: &str,
     candidates: &[SkinCandidate],
     show_bundled_origin: bool,
+    text: Localizer,
 ) -> bool {
     ui.label(label);
     let current = skin_slot_path(skin, slot).to_string();
     let mut selected = current.clone();
-    let selected_text = skin_candidate_label(candidates, &current, show_bundled_origin);
-    egui::ComboBox::from_id_salt(("skin_path_combo", label))
+    let selected_text = skin_candidate_label(candidates, &current, show_bundled_origin, text);
+    egui::ComboBox::from_id_salt(("skin_path_combo", slot.path_combo_id()))
         .selected_text(selected_text)
         .width(320.0)
         .show_ui(ui, |ui| {
-            ui.selectable_value(&mut selected, String::new(), "(デフォルト)");
+            ui.selectable_value(&mut selected, String::new(), tr!(text, "skin-default"));
             for candidate in candidates {
                 let response = ui.selectable_value(
                     &mut selected,
                     candidate.path.clone(),
-                    skin_candidate_display(candidate, show_bundled_origin),
+                    skin_candidate_display(candidate, show_bundled_origin, text),
                 );
                 match candidate.origin {
                     SkinCandidateOrigin::Bundled if show_bundled_origin => {
-                        response.on_hover_text(
-                            "同梱スキンです。編集する場合は data_dir/skins にコピーしてユーザースキンとして選択してください。",
-                        );
+                        response.on_hover_text(tr!(text, "skin-origin-bundled-help"));
                     }
                     SkinCandidateOrigin::Bundled => {}
                     SkinCandidateOrigin::User => {
-                        response.on_hover_text("data_dir/skins 配下のユーザースキンです。");
+                        response.on_hover_text(tr!(text, "skin-origin-user-help"));
                     }
                     SkinCandidateOrigin::External => {
-                        response.on_hover_text("BMZ の data_dir 外にある外部スキンです。");
+                        response.on_hover_text(tr!(text, "skin-origin-external-help"));
                     }
                 }
             }
@@ -4870,19 +5404,24 @@ fn skin_candidate_label(
     candidates: &[SkinCandidate],
     current: &str,
     show_bundled_origin: bool,
+    text: Localizer,
 ) -> String {
     if current.is_empty() {
-        return "(デフォルト)".to_string();
+        return tr!(text, "skin-default");
     }
     candidates
         .iter()
         .find(|candidate| candidate.path == current)
-        .map(|candidate| skin_candidate_display(candidate, show_bundled_origin))
+        .map(|candidate| skin_candidate_display(candidate, show_bundled_origin, text))
         .unwrap_or_else(|| current.to_string())
 }
 
-fn skin_candidate_display(candidate: &SkinCandidate, show_bundled_origin: bool) -> String {
-    let label = skin_candidate_origin_label(candidate.origin, show_bundled_origin);
+fn skin_candidate_display(
+    candidate: &SkinCandidate,
+    show_bundled_origin: bool,
+    text: Localizer,
+) -> String {
+    let label = skin_candidate_origin_label(candidate.origin, show_bundled_origin, text);
     let text = if candidate.name.is_empty() {
         candidate.path.clone()
     } else {
@@ -4894,12 +5433,15 @@ fn skin_candidate_display(candidate: &SkinCandidate, show_bundled_origin: bool) 
 fn skin_candidate_origin_label(
     origin: SkinCandidateOrigin,
     show_bundled_origin: bool,
-) -> Option<&'static str> {
+    text: Localizer,
+) -> Option<String> {
     match origin {
-        SkinCandidateOrigin::Bundled if show_bundled_origin => Some("[同梱]"),
+        SkinCandidateOrigin::Bundled if show_bundled_origin => {
+            Some(tr!(text, "skin-origin-bundled"))
+        }
         SkinCandidateOrigin::Bundled => None,
-        SkinCandidateOrigin::User => Some("[ユーザー]"),
-        SkinCandidateOrigin::External => Some("[外部]"),
+        SkinCandidateOrigin::User => Some(tr!(text, "skin-origin-user")),
+        SkinCandidateOrigin::External => Some(tr!(text, "skin-origin-external")),
     }
 }
 
@@ -5069,129 +5611,149 @@ fn build_skin_panel(
     skin_meta: &SkinConfigMeta,
     skin_catalog: &SkinCatalog,
     app_paths: &AppPaths,
+    text: Localizer,
 ) -> SkinPanelActions {
     let mut save_clicked = false;
     let mut reset_clicked = false;
     let mut changed = false;
     let before_skin = skin.clone();
     let show_bundled_origin = show_bundled_skin_origin(app_paths, skin_catalog);
-    sized_panel_window("スキン設定", ctx, open, 440.0, 560.0, egui::pos2(16.0, 480.0)).show(
+    localized_sized_panel_window(
+        "スキン設定",
+        tr!(text, "skin-title"),
         ctx,
-        |ui| {
-            scrollable_window_content(ui, |ui| {
-            ui.label("各画面のスキン。空欄なら内蔵描画 / デフォルトスキンを使用します。");
+        open,
+        440.0,
+        560.0,
+        egui::pos2(16.0, 480.0),
+    )
+    .show(ctx, |ui| {
+        scrollable_window_content(ui, |ui| {
+            ui.label(tr!(text, "skin-description"));
             egui::Grid::new("skin_grid").num_columns(2).show(ui, |ui| {
                 changed |= skin_path_combo(
                     ui,
                     skin,
                     SkinSlot::Select,
-                    "選曲",
+                    &skin_scene_label(SkinSlot::Select, text),
                     &skin_catalog.select,
                     show_bundled_origin,
+                    text,
                 );
                 ui.end_row();
                 changed |= skin_path_combo(
                     ui,
                     skin,
                     SkinSlot::Decide,
-                    "決定",
+                    &skin_scene_label(SkinSlot::Decide, text),
                     &skin_catalog.decide,
                     show_bundled_origin,
+                    text,
                 );
                 ui.end_row();
                 changed |= skin_path_combo(
                     ui,
                     skin,
                     SkinSlot::Play4,
-                    "プレイ (4K)",
+                    &skin_scene_label(SkinSlot::Play4, text),
                     &skin_catalog.play4,
                     show_bundled_origin,
+                    text,
                 );
                 ui.end_row();
                 changed |= skin_path_combo(
                     ui,
                     skin,
                     SkinSlot::Play5,
-                    "プレイ (5K)",
+                    &skin_scene_label(SkinSlot::Play5, text),
                     &skin_catalog.play5,
                     show_bundled_origin,
+                    text,
                 );
                 ui.end_row();
                 changed |= skin_path_combo(
                     ui,
                     skin,
                     SkinSlot::Play6,
-                    "プレイ (6K)",
+                    &skin_scene_label(SkinSlot::Play6, text),
                     &skin_catalog.play6,
                     show_bundled_origin,
+                    text,
                 );
                 ui.end_row();
                 changed |= skin_path_combo(
                     ui,
                     skin,
                     SkinSlot::Play7,
-                    "プレイ (7K)",
+                    &skin_scene_label(SkinSlot::Play7, text),
                     &skin_catalog.play7,
                     show_bundled_origin,
+                    text,
                 );
                 ui.end_row();
                 changed |= skin_path_combo(
                     ui,
                     skin,
                     SkinSlot::Play8,
-                    "プレイ (8K)",
+                    &skin_scene_label(SkinSlot::Play8, text),
                     &skin_catalog.play8,
                     show_bundled_origin,
+                    text,
                 );
                 ui.end_row();
                 changed |= skin_path_combo(
                     ui,
                     skin,
                     SkinSlot::Play9,
-                    "プレイ (9K)",
+                    &skin_scene_label(SkinSlot::Play9, text),
                     &skin_catalog.play9,
                     show_bundled_origin,
+                    text,
                 );
                 ui.end_row();
                 changed |= skin_path_combo(
                     ui,
                     skin,
                     SkinSlot::Play10,
-                    "プレイ (10K)",
+                    &skin_scene_label(SkinSlot::Play10, text),
                     &skin_catalog.play10,
                     show_bundled_origin,
+                    text,
                 );
                 ui.end_row();
                 changed |= skin_path_combo(
                     ui,
                     skin,
                     SkinSlot::Play14,
-                    "プレイ (14K)",
+                    &skin_scene_label(SkinSlot::Play14, text),
                     &skin_catalog.play14,
                     show_bundled_origin,
+                    text,
                 );
                 ui.end_row();
                 changed |= skin_path_combo(
                     ui,
                     skin,
                     SkinSlot::Result,
-                    "リザルト",
+                    &skin_scene_label(SkinSlot::Result, text),
                     &skin_catalog.result,
                     show_bundled_origin,
+                    text,
                 );
                 ui.end_row();
                 changed |= skin_path_combo(
                     ui,
                     skin,
                     SkinSlot::CourseResult,
-                    "コースリザルト",
+                    &skin_scene_label(SkinSlot::CourseResult, text),
                     &skin_catalog.course_result,
                     show_bundled_origin,
+                    text,
                 );
                 ui.end_row();
             });
             ui.separator();
-            ui.label("読み込み済みスキンが宣言する設定可能項目:");
+            ui.label(tr!(text, "skin-loaded-options-description"));
             let select_root = skin_root_path(app_paths, &skin.select);
             let decide_root = skin_root_path(app_paths, &skin.decide);
             let play4_root = skin_root_path(app_paths, &skin.play4);
@@ -5206,127 +5768,136 @@ fn build_skin_panel(
             let course_result_root = skin_root_path(app_paths, &skin.course_result);
             changed |= build_scene_skin_defs(
                 ui,
-                "選曲スキン",
+                SkinSlot::Select,
                 &skin_meta.select,
                 select_root.as_deref(),
                 &mut skin.select_options,
                 &mut skin.select_files,
                 &mut skin.select_offsets,
+                text,
             );
             changed |= build_scene_skin_defs(
                 ui,
-                "決定スキン",
+                SkinSlot::Decide,
                 &skin_meta.decide,
                 decide_root.as_deref(),
                 &mut skin.decide_options,
                 &mut skin.decide_files,
                 &mut skin.decide_offsets,
+                text,
             );
             changed |= build_scene_skin_defs(
                 ui,
-                "プレイスキン (4K)",
+                SkinSlot::Play4,
                 &skin_meta.play4,
                 play4_root.as_deref(),
                 &mut skin.play4_options,
                 &mut skin.play4_files,
                 &mut skin.play4_offsets,
+                text,
             );
             changed |= build_scene_skin_defs(
                 ui,
-                "プレイスキン (5K)",
+                SkinSlot::Play5,
                 &skin_meta.play5,
                 play5_root.as_deref(),
                 &mut skin.play5_options,
                 &mut skin.play5_files,
                 &mut skin.play5_offsets,
+                text,
             );
             changed |= build_scene_skin_defs(
                 ui,
-                "プレイスキン (6K)",
+                SkinSlot::Play6,
                 &skin_meta.play6,
                 play6_root.as_deref(),
                 &mut skin.play6_options,
                 &mut skin.play6_files,
                 &mut skin.play6_offsets,
+                text,
             );
             changed |= build_scene_skin_defs(
                 ui,
-                "プレイスキン (7K)",
+                SkinSlot::Play7,
                 &skin_meta.play7,
                 play7_root.as_deref(),
                 &mut skin.play7_options,
                 &mut skin.play7_files,
                 &mut skin.play7_offsets,
+                text,
             );
             changed |= build_scene_skin_defs(
                 ui,
-                "プレイスキン (8K)",
+                SkinSlot::Play8,
                 &skin_meta.play8,
                 play8_root.as_deref(),
                 &mut skin.play8_options,
                 &mut skin.play8_files,
                 &mut skin.play8_offsets,
+                text,
             );
             changed |= build_scene_skin_defs(
                 ui,
-                "プレイスキン (9K)",
+                SkinSlot::Play9,
                 &skin_meta.play9,
                 play9_root.as_deref(),
                 &mut skin.play9_options,
                 &mut skin.play9_files,
                 &mut skin.play9_offsets,
+                text,
             );
             changed |= build_scene_skin_defs(
                 ui,
-                "プレイスキン (10K)",
+                SkinSlot::Play10,
                 &skin_meta.play10,
                 play10_root.as_deref(),
                 &mut skin.play10_options,
                 &mut skin.play10_files,
                 &mut skin.play10_offsets,
+                text,
             );
             changed |= build_scene_skin_defs(
                 ui,
-                "プレイスキン (14K)",
+                SkinSlot::Play14,
                 &skin_meta.play14,
                 play14_root.as_deref(),
                 &mut skin.play14_options,
                 &mut skin.play14_files,
                 &mut skin.play14_offsets,
+                text,
             );
             changed |= build_scene_skin_defs(
                 ui,
-                "リザルトスキン",
+                SkinSlot::Result,
                 &skin_meta.result,
                 result_root.as_deref(),
                 &mut skin.result_options,
                 &mut skin.result_files,
                 &mut skin.result_offsets,
+                text,
             );
             changed |= build_scene_skin_defs(
                 ui,
-                "コースリザルトスキン",
+                SkinSlot::CourseResult,
                 &skin_meta.course_result,
                 course_result_root.as_deref(),
                 &mut skin.course_result_options,
                 &mut skin.course_result_files,
                 &mut skin.course_result_offsets,
+                text,
             );
             ui.separator();
-            ui.label(
-                "「保存」で profile.toml へ書き出し。「リセット」で保存済みの設定へ戻します。オプションの「デフォルトに戻す」は保存までディスクへ書きません。",
-            );
+            ui.label(tr!(text, "skin-save-reset-help"));
             ui.horizontal(|ui| {
-                if ui.button("保存").clicked() {
+                if ui.button(tr!(text, "skin-save")).clicked() {
                     save_clicked = true;
                 }
-                if ui.button("リセット").clicked() {
+                if ui.button(tr!(text, "skin-reset")).clicked() {
                     reset_clicked = true;
                 }
             });
-            });
-        },
-    );
+        });
+    });
     let reload = if changed {
         skin_reload_request_from_diff(&before_skin, skin)
     } else {
@@ -5342,27 +5913,29 @@ fn build_skin_panel(
 /// - offset: 宣言された要素ごとに x/y/w/h/r/a を編集し `offsets` (id 単位) へ反映。
 fn build_scene_skin_defs(
     ui: &mut egui::Ui,
-    label: &str,
+    slot: SkinSlot,
     defs: &SceneSkinDefs,
     skin_root: Option<&Path>,
     options: &mut BTreeMap<String, String>,
     files: &mut BTreeMap<String, String>,
     offsets: &mut Vec<SkinOffsetConfig>,
+    text: Localizer,
 ) -> bool {
     let mut changed = false;
-    egui::CollapsingHeader::new(label).show(ui, |ui| {
-        if defs.is_empty() {
-            ui.label("設定可能項目はありません (スキン未読込、または定義なし)。");
-            return;
-        }
-        let _ = fill_missing_skin_defaults(defs, skin_root, options, files);
-        if !defs.property.is_empty() {
-            ui.strong("オプション");
-            // property / filepath は同名 (例: "シャッター") を持ちうるので、egui の
-            // ComboBox ID 衝突を防ぐためにカテゴリで名前空間を切る。
-            ui.push_id("property", |ui| {
-                for (index, prop) in defs.property.iter().enumerate() {
-                    ui.push_id(index, |ui| {
+    egui::CollapsingHeader::new(skin_scene_defs_label(slot, text))
+        .id_salt(slot.defs_header_id())
+        .show(ui, |ui| {
+            if defs.is_empty() {
+                ui.label(tr!(text, "skin-no-settings"));
+                return;
+            }
+            let _ = fill_missing_skin_defaults(defs, skin_root, options, files);
+            if !defs.property.is_empty() {
+                ui.strong(tr!(text, "skin-options"));
+                // property / filepath は同名 (例: "シャッター") を持ちうるので、egui の
+                // ComboBox ID 衝突を防ぐためにカテゴリで名前空間を切る。
+                ui.push_id("property", |ui| {
+                    for prop in &defs.property {
                         let mut selected = options
                             .get(&prop.name)
                             .cloned()
@@ -5384,23 +5957,21 @@ fn build_scene_skin_defs(
                             options.insert(prop.name.clone(), selected);
                             changed = true;
                         }
-                    });
-                }
-            });
-        }
-        if !defs.filepath.is_empty() {
-            ui.strong("ファイル選択");
-            ui.push_id("filepath", |ui| {
-                for (index, filepath) in defs.filepath.iter().enumerate() {
-                    ui.push_id(index, |ui| {
+                    }
+                });
+            }
+            if !defs.filepath.is_empty() {
+                ui.strong(tr!(text, "skin-file-selection"));
+                ui.push_id("filepath", |ui| {
+                    for filepath in &defs.filepath {
                         let mut selected = files.get(&filepath.name).cloned().unwrap_or_default();
                         let before = selected.clone();
                         let display = if selected.is_empty() {
-                            "(未選択)"
+                            tr!(text, "skin-file-none")
                         } else if selected == RANDOM_FILE_SELECTION {
-                            "ランダム"
+                            tr!(text, "skin-file-random")
                         } else {
-                            filepath_selection_label(&selected)
+                            filepath_selection_label(&selected).to_string()
                         };
                         egui::ComboBox::from_label(&filepath.name).selected_text(display).show_ui(
                             ui,
@@ -5410,7 +5981,7 @@ fn build_scene_skin_defs(
                                 ui.selectable_value(
                                     &mut selected,
                                     RANDOM_FILE_SELECTION.to_string(),
-                                    "ランダム",
+                                    tr!(text, "skin-file-random"),
                                 );
                                 // 候補列挙は ComboBox を開いたときだけ行う (毎フレームの fs 走査を回避)。
                                 let candidates = match skin_root {
@@ -5423,7 +5994,7 @@ fn build_scene_skin_defs(
                                     selected = normalized;
                                 }
                                 if candidates.is_empty() {
-                                    ui.label("候補なし");
+                                    ui.label(tr!(text, "skin-file-no-candidates"));
                                 }
                                 for candidate in candidates {
                                     let label = filepath_selection_label(&candidate);
@@ -5435,39 +6006,40 @@ fn build_scene_skin_defs(
                             files.insert(filepath.name.clone(), selected);
                             changed = true;
                         }
-                    });
-                }
-            });
-        }
-        if !defs.offset.is_empty() {
-            ui.strong("オフセット可能要素");
-            for offset_def in &defs.offset {
-                ui.push_id(offset_def.id, |ui| {
-                    ui.label(format!(
-                        "{} [{}] — id {}",
-                        offset_def.name, offset_def.category, offset_def.id
-                    ));
-                    let existing = offsets.iter().find(|o| o.id == offset_def.id).copied();
-                    let mut value = existing
-                        .unwrap_or(SkinOffsetConfig { id: offset_def.id, ..Default::default() });
-                    let before = value;
-                    ui.horizontal(|ui| {
-                        changed |= add_offset_drag_values(ui, offset_def, &mut value);
-                    });
-                    if value != before {
-                        match offsets.iter_mut().find(|o| o.id == offset_def.id) {
-                            Some(entry) => *entry = value,
-                            None => offsets.push(value),
-                        }
-                        changed = true;
                     }
                 });
             }
-        }
-        if !defs.is_empty() && ui.button("デフォルトに戻す").clicked() {
-            changed |= reset_scene_skin_to_defaults(defs, skin_root, options, files, offsets);
-        }
-    });
+            if !defs.offset.is_empty() {
+                ui.strong(tr!(text, "skin-offset-elements"));
+                for offset_def in &defs.offset {
+                    ui.push_id(offset_def.id, |ui| {
+                        ui.label(format!(
+                            "{} [{}] — id {}",
+                            offset_def.name, offset_def.category, offset_def.id
+                        ));
+                        let existing = offsets.iter().find(|o| o.id == offset_def.id).copied();
+                        let mut value = existing.unwrap_or(SkinOffsetConfig {
+                            id: offset_def.id,
+                            ..Default::default()
+                        });
+                        let before = value;
+                        ui.horizontal(|ui| {
+                            changed |= add_offset_drag_values(ui, offset_def, &mut value, text);
+                        });
+                        if value != before {
+                            match offsets.iter_mut().find(|o| o.id == offset_def.id) {
+                                Some(entry) => *entry = value,
+                                None => offsets.push(value),
+                            }
+                            changed = true;
+                        }
+                    });
+                }
+            }
+            if !defs.is_empty() && ui.button(tr!(text, "skin-reset-defaults")).clicked() {
+                changed |= reset_scene_skin_to_defaults(defs, skin_root, options, files, offsets);
+            }
+        });
     changed
 }
 
@@ -5535,6 +6107,7 @@ fn add_offset_drag_values(
     ui: &mut egui::Ui,
     def: &SkinOffsetDef,
     value: &mut SkinOffsetConfig,
+    text: Localizer,
 ) -> bool {
     let mut changed = false;
     let mut any = false;
@@ -5563,7 +6136,7 @@ fn add_offset_drag_values(
         any = true;
     }
     if !any {
-        ui.label("調整可能な値はありません");
+        ui.label(tr!(text, "skin-offset-no-adjustable-values"));
     }
     changed
 }
@@ -5712,6 +6285,30 @@ mod tests {
     use super::*;
 
     #[test]
+    fn cjk_font_definitions_keep_latin_first_and_preserve_face_indices() {
+        use bmz_render::FontCoverage;
+        use bmz_render::renderer::SystemFontData;
+
+        let defaults = egui::FontDefinitions::default();
+        let fonts = cjk_font_definitions(vec![
+            (FontCoverage::Korean, SystemFontData { bytes: vec![1], font_index: 3 }),
+            (FontCoverage::Japanese, SystemFontData { bytes: vec![2], font_index: 7 }),
+        ]);
+
+        for family in [egui::FontFamily::Proportional, egui::FontFamily::Monospace] {
+            let default_chain = defaults.families.get(&family).expect("default family");
+            let chain = fonts.families.get(&family).expect("CJK family");
+            assert_eq!(&chain[..default_chain.len()], default_chain);
+            assert_eq!(
+                &chain[default_chain.len()..],
+                &["bmz_cjk_korean".to_string(), "bmz_cjk_japanese".to_string()]
+            );
+        }
+        assert_eq!(fonts.font_data["bmz_cjk_korean"].index, 3);
+        assert_eq!(fonts.font_data["bmz_cjk_japanese"].index, 7);
+    }
+
+    #[test]
     fn decide_and_play_restrict_settings_panels() {
         assert!(!scene_restricts_settings("Select"));
         assert!(scene_restricts_settings("Decide"));
@@ -5822,11 +6419,11 @@ mod tests {
         };
 
         assert_eq!(
-            skin_candidate_display(&candidate, true),
+            skin_candidate_display(&candidate, true, Localizer::new(crate::i18n::AppLocale::Ja),),
             "[同梱] Default (resource:skins/default/select.json)"
         );
         assert_eq!(
-            skin_candidate_display(&candidate, false),
+            skin_candidate_display(&candidate, false, Localizer::new(crate::i18n::AppLocale::Ja),),
             "Default (resource:skins/default/select.json)"
         );
     }
@@ -5840,7 +6437,7 @@ mod tests {
         };
 
         assert_eq!(
-            skin_candidate_display(&candidate, false),
+            skin_candidate_display(&candidate, false, Localizer::new(crate::i18n::AppLocale::Ja),),
             "[ユーザー] Custom (data:skins/custom/play7.luaskin)"
         );
     }

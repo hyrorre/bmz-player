@@ -8,6 +8,7 @@ use crate::config::key_config::{
 };
 use crate::config::profile_config::ProfileConfig;
 use crate::config::settings_registry::{SettingsEntryId, format_settings_value};
+use crate::i18n::{AppLocale, Localizer};
 use crate::screens::select_model::SelectItem;
 
 pub const CONFIG_ROOT_PATH: &str = "bmz-settings:";
@@ -62,22 +63,37 @@ pub fn in_settings_stack(stack: &[String]) -> bool {
 }
 
 pub fn settings_breadcrumb(path: &str) -> String {
+    settings_breadcrumb_for_locale(path, AppLocale::DEFAULT)
+}
+
+pub fn settings_breadcrumb_for_locale(path: &str, locale: AppLocale) -> String {
+    let text = Localizer::new(locale);
+    let root = text.text("settings-category-root");
     match parse_settings_path(path) {
-        Some(SettingsPath::Root) | None => "設定".to_string(),
-        Some(SettingsPath::Volume) => "設定 > 音量".to_string(),
-        Some(SettingsPath::Judge) => "設定 > 判定".to_string(),
-        Some(SettingsPath::Play) => "設定 > プレイ".to_string(),
-        Some(SettingsPath::Display) => "設定 > 表示".to_string(),
-        Some(SettingsPath::Input) => "設定 > 入力".to_string(),
-        Some(SettingsPath::Select) => "設定 > 選曲".to_string(),
-        Some(SettingsPath::Replay) => "設定 > リプレイ".to_string(),
-        Some(SettingsPath::KeysRoot) => "設定 > キー設定".to_string(),
-        Some(SettingsPath::KeysCommon) => "設定 > キー設定 > 共通".to_string(),
+        Some(SettingsPath::Root) | None => root,
+        Some(SettingsPath::Volume) => breadcrumb(&root, &text.text("settings-category-volume")),
+        Some(SettingsPath::Judge) => breadcrumb(&root, &text.text("settings-category-judge")),
+        Some(SettingsPath::Play) => breadcrumb(&root, &text.text("settings-category-play")),
+        Some(SettingsPath::Display) => breadcrumb(&root, &text.text("settings-category-display")),
+        Some(SettingsPath::Input) => breadcrumb(&root, &text.text("settings-category-input")),
+        Some(SettingsPath::Select) => breadcrumb(&root, &text.text("settings-category-select")),
+        Some(SettingsPath::Replay) => breadcrumb(&root, &text.text("settings-category-replay")),
+        Some(SettingsPath::KeysRoot) => breadcrumb(&root, &text.text("settings-category-keys")),
+        Some(SettingsPath::KeysCommon) => format!(
+            "{} > {} > {}",
+            root,
+            text.text("settings-category-keys"),
+            text.text("settings-category-common")
+        ),
         Some(SettingsPath::KeysMode(key_mode)) => {
-            format!("設定 > キー設定 > {}", key_mode.as_str())
+            format!("{} > {} > {}", root, text.text("settings-category-keys"), key_mode.as_str())
         }
-        Some(SettingsPath::Unknown(_)) => "設定".to_string(),
+        Some(SettingsPath::Unknown(_)) => root,
     }
+}
+
+fn breadcrumb(root: &str, section: &str) -> String {
+    format!("{root} > {section}")
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -112,62 +128,71 @@ impl KeyBindingSelectRow {
 }
 
 pub fn settings_root_item() -> SelectItem {
+    settings_root_item_for_locale(AppLocale::DEFAULT)
+}
+
+pub fn settings_root_item_for_locale(locale: AppLocale) -> SelectItem {
     SelectItem::Folder {
         path: CONFIG_ROOT_PATH.to_string(),
-        name: "設定".to_string(),
+        name: Localizer::new(locale).text("settings-category-root"),
         kind: SelectRowKind::SearchFolder,
         summary: None,
     }
 }
 
 pub fn load_settings_items(path: &str) -> Vec<SelectItem> {
+    load_settings_items_for_locale(path, AppLocale::DEFAULT)
+}
+
+pub fn load_settings_items_for_locale(path: &str, locale: AppLocale) -> Vec<SelectItem> {
+    let text = Localizer::new(locale);
     let mut items = match parse_settings_path(path) {
         Some(SettingsPath::Root) => vec![
             SelectItem::Folder {
                 path: CONFIG_VOLUME_PATH.to_string(),
-                name: "音量".to_string(),
+                name: text.text("settings-category-volume"),
                 kind: SelectRowKind::SettingsFolder,
                 summary: None,
             },
             SelectItem::Folder {
                 path: CONFIG_JUDGE_PATH.to_string(),
-                name: "判定".to_string(),
+                name: text.text("settings-category-judge"),
                 kind: SelectRowKind::SettingsFolder,
                 summary: None,
             },
             SelectItem::Folder {
                 path: CONFIG_PLAY_PATH.to_string(),
-                name: "プレイ".to_string(),
+                name: text.text("settings-category-play"),
                 kind: SelectRowKind::SettingsFolder,
                 summary: None,
             },
             SelectItem::Folder {
                 path: CONFIG_DISPLAY_PATH.to_string(),
-                name: "表示".to_string(),
+                name: text.text("settings-category-display"),
                 kind: SelectRowKind::SettingsFolder,
                 summary: None,
             },
             SelectItem::Folder {
                 path: CONFIG_INPUT_PATH.to_string(),
-                name: "入力".to_string(),
+                name: text.text("settings-category-input"),
                 kind: SelectRowKind::SettingsFolder,
                 summary: None,
             },
             SelectItem::Folder {
                 path: CONFIG_SELECT_PATH.to_string(),
-                name: "選曲".to_string(),
+                name: text.text("settings-category-select"),
                 kind: SelectRowKind::SettingsFolder,
                 summary: None,
             },
             SelectItem::Folder {
                 path: CONFIG_REPLAY_PATH.to_string(),
-                name: "リプレイ".to_string(),
+                name: text.text("settings-category-replay"),
                 kind: SelectRowKind::SettingsFolder,
                 summary: None,
             },
             SelectItem::Folder {
                 path: CONFIG_KEYS_PATH.to_string(),
-                name: "キー設定".to_string(),
+                name: text.text("settings-category-keys"),
                 kind: SelectRowKind::SettingsFolder,
                 summary: None,
             },
@@ -180,7 +205,7 @@ pub fn load_settings_items(path: &str) -> Vec<SelectItem> {
         Some(SettingsPath::Input) => config_items(SettingsEntryId::INPUT_ENTRIES),
         Some(SettingsPath::Select) => config_items(SettingsEntryId::SELECT_ENTRIES),
         Some(SettingsPath::Replay) => config_items(SettingsEntryId::REPLAY_ENTRIES),
-        Some(SettingsPath::KeysRoot) => key_mode_folder_items(),
+        Some(SettingsPath::KeysRoot) => key_mode_folder_items(locale),
         Some(SettingsPath::KeysCommon) => common_key_binding_items(),
         Some(SettingsPath::KeysMode(key_mode)) => key_binding_items(key_mode),
         Some(SettingsPath::Unknown(_)) | None => Vec::new(),
@@ -191,10 +216,10 @@ pub fn load_settings_items(path: &str) -> Vec<SelectItem> {
     items
 }
 
-fn key_mode_folder_items() -> Vec<SelectItem> {
+fn key_mode_folder_items(locale: AppLocale) -> Vec<SelectItem> {
     std::iter::once(SelectItem::Folder {
         path: CONFIG_KEYS_COMMON_PATH.to_string(),
-        name: "共通".to_string(),
+        name: Localizer::new(locale).text("settings-category-common"),
         kind: SelectRowKind::SettingsFolder,
         summary: None,
     })
@@ -296,6 +321,16 @@ mod tests {
             &items[1],
             SelectItem::Folder { name, .. } if name == "音量"
         ));
+
+        let english = load_settings_items_for_locale(CONFIG_ROOT_PATH, AppLocale::En);
+        assert!(matches!(
+            &english[1],
+            SelectItem::Folder { name, .. } if name == "Volume"
+        ));
+        assert_eq!(
+            settings_breadcrumb_for_locale(CONFIG_KEYS_COMMON_PATH, AppLocale::Ko),
+            "설정 > 키 설정 > 공통"
+        );
     }
 
     #[test]

@@ -90,6 +90,7 @@ use crate::generated_preview::{
     fallback_preview_start_ms, generated_preview_cache_key, parse_generated_preview_cache_key,
     render_generated_preview_for_chart,
 };
+use crate::i18n::{FluentArgs, Localizer};
 use crate::input::shared::SharedInputBackend;
 use crate::input::winit::{
     W_KEYBOARD_DEVICE_ID, key_event_to_device_input, physical_key_to_control,
@@ -132,13 +133,14 @@ use crate::screens::select_model::{
     load_select_items_in_folder_for_rule_mode_with_filters,
     load_select_items_in_table_level_for_rule_mode, parse_favorite_song_detail_path,
     parse_same_folder_path, parse_search_query, parse_table_path, random_select_item_from_items,
-    root_folder_items, same_folder_path, search_history_folder_items,
+    root_folder_items, same_folder_path, search_history_folder_items_for_locale,
     select_folder_summary_for_rule_mode, song_scan_path_from_context,
     table_folder_items_for_active_sources, table_level_folder_items, table_source_url_from_context,
 };
 use crate::screens::settings_edit::{SettingsBindings, SettingsEditSession, adjust_settings_draft};
 use crate::screens::settings_model::{
-    in_settings_stack, load_settings_items, settings_breadcrumb, settings_root_item,
+    in_settings_stack, load_settings_items_for_locale, settings_breadcrumb_for_locale,
+    settings_root_item_for_locale,
 };
 use crate::select_options::{ArrangeOption, AssistOption, DoubleOption, HsFixOption, TargetOption};
 use crate::skin_loader::{
@@ -2702,6 +2704,7 @@ impl WinitApp {
         let target_option = target_option_from_profile(boot.profile_config.play.target);
         let select_keys = SelectKeyBindings::from_profile(&boot.profile_config.input);
         let mut renderer = Box::new(Renderer::default());
+        renderer.set_default_font_coverage(boot.profile_config.ui.locale().font_coverage());
         let skin_catalog = scan_skin_catalog(&boot.app_paths);
         let (skin_decode_tx, skin_decode_rx) = mpsc::channel::<PendingSkinResult>();
         // GPU upload 済みのスキンを main thread 側で一度に大量に install しないよう、
@@ -3679,6 +3682,8 @@ impl WinitApp {
     }
 
     fn select_snapshot(&self) -> SelectSnapshot {
+        let locale = self.boot.profile_config.ui.locale();
+        let text = Localizer::new(locale);
         let selected = self.select_items.get(self.selected_index);
         let selected_course_ir = self.selected_course_ir_target();
         let current_folder = match self.folder_stack.last() {
@@ -3697,7 +3702,7 @@ impl WinitApp {
                     .to_string()
             }
             Some(path) if path.starts_with(TABLE_ROOT_PATH) => match parse_table_path(path) {
-                Some(TablePath::Root) | None => "難易度表".to_string(),
+                Some(TablePath::Root) | None => text.text("select-difficulty-tables"),
                 Some(TablePath::Table { source_url }) => self.table_breadcrumb_name(source_url),
                 Some(TablePath::Level { source_url, level }) => {
                     let table = self.table_breadcrumb(source_url);
@@ -3705,7 +3710,7 @@ impl WinitApp {
                 }
             },
             Some(path) if in_settings_stack(std::slice::from_ref(path)) => {
-                settings_breadcrumb(path)
+                settings_breadcrumb_for_locale(path, locale)
             }
             Some(path) => std::path::Path::new(path)
                 .file_name()
@@ -3738,7 +3743,9 @@ impl WinitApp {
                 Some(SelectItem::Chart(row)) => row.chart.as_ref().map(|chart| chart.chart_id),
                 _ => None,
             },
-            selected_title: selected.map(|i| i.display_name()).unwrap_or_default(),
+            selected_title: selected
+                .map(|item| item.display_name_for_locale(locale))
+                .unwrap_or_default(),
             hispeed: self.boot.profile_config.lane.hispeed,
             note_display_duration_ms,
             rows: select_snapshot_rows(
@@ -3929,7 +3936,12 @@ impl WinitApp {
         } else if let Some(message) = &self.search_message {
             (message.clone(), MESSAGE_ALPHA, None)
         } else {
-            ("type / to search song".to_string(), PLACEHOLDER_ALPHA, None)
+            (
+                Localizer::new(self.boot.profile_config.ui.locale())
+                    .text("select-search-placeholder"),
+                PLACEHOLDER_ALPHA,
+                None,
+            )
         }
     }
 
@@ -6894,11 +6906,12 @@ impl WinitApp {
                 self.reload_select_items();
                 self.restart_select_bar_timer_without_scroll(Instant::now());
                 self.play_system_sound(crate::system_sound::SoundType::OptionChange);
-                self.show_left_overlay_toast(if enabled {
-                    "お気に入りの譜面に追加しました"
+                let text = Localizer::new(self.boot.profile_config.ui.locale());
+                self.show_left_overlay_toast(text.text(if enabled {
+                    "toast-favorite-chart-added"
                 } else {
-                    "お気に入りの譜面から削除しました"
-                });
+                    "toast-favorite-chart-removed"
+                }));
                 tracing::info!(enabled, title = row.display_title(), "favorite chart toggled");
             }
             Err(error) => tracing::error!(%error, "failed to toggle favorite chart"),
@@ -6920,11 +6933,12 @@ impl WinitApp {
             Ok(enabled) => {
                 self.result_favorite_chart = enabled;
                 self.play_system_sound(crate::system_sound::SoundType::OptionChange);
-                self.show_left_overlay_toast(if enabled {
-                    "お気に入りの譜面に追加しました"
+                let text = Localizer::new(self.boot.profile_config.ui.locale());
+                self.show_left_overlay_toast(text.text(if enabled {
+                    "toast-favorite-chart-added"
                 } else {
-                    "お気に入りの譜面から削除しました"
-                });
+                    "toast-favorite-chart-removed"
+                }));
                 tracing::info!(enabled, %title, "favorite chart toggled from result");
             }
             Err(error) => tracing::error!(%error, "failed to toggle favorite chart from result"),
@@ -7133,11 +7147,12 @@ impl WinitApp {
                 self.reload_select_items();
                 self.restart_select_bar_timer_without_scroll(Instant::now());
                 self.play_system_sound(crate::system_sound::SoundType::OptionChange);
-                self.show_left_overlay_toast(if enabled {
-                    "お気に入りの曲に追加しました"
+                let text = Localizer::new(self.boot.profile_config.ui.locale());
+                self.show_left_overlay_toast(text.text(if enabled {
+                    "toast-favorite-song-added"
                 } else {
-                    "お気に入りの曲から削除しました"
-                });
+                    "toast-favorite-song-removed"
+                }));
                 tracing::info!(enabled, title = row.display_title(), "favorite song toggled");
             }
             Err(error) => tracing::error!(%error, "failed to toggle favorite song"),
@@ -7542,7 +7557,10 @@ impl WinitApp {
             self.search_query.clear();
             self.search_cursor = 0;
             self.reset_search_caret_blink();
-            self.search_message = Some("no song found".to_string());
+            self.search_message = Some(
+                Localizer::new(self.boot.profile_config.ui.locale())
+                    .text("select-search-no-results"),
+            );
             tracing::info!(%query, "song search returned no results");
             return;
         }
@@ -7555,7 +7573,12 @@ impl WinitApp {
         self.search_history.push_back(query.clone());
 
         self.set_search_mode(false);
-        self.search_message = Some(format!("{hit_count} song(s) found"));
+        let mut args = FluentArgs::new();
+        args.set("count", hit_count as i64);
+        self.search_message = Some(
+            Localizer::new(self.boot.profile_config.ui.locale())
+                .format("select-search-results", &args),
+        );
 
         // 検索結果フォルダへ入る。`enter_or_play_selected` と同じ流儀でカーソル
         // 位置を退避してから push する。
@@ -11611,17 +11634,23 @@ impl WinitApp {
                 self.refresh_player_stats_snapshot();
                 self.reload_select_items();
                 if let Some(egui) = self.egui.as_mut() {
+                    let mut args = FluentArgs::new();
+                    args.set("label", label);
+                    args.set("path", request.path.display().to_string());
+                    args.set("summary", summary);
                     egui.set_score_import_status(
-                        format!(
-                            "{label}: {} をインポートしました ({summary})",
-                            request.path.display()
-                        ),
+                        Localizer::new(self.boot.profile_config.ui.locale())
+                            .format("score-import-success", &args),
                         false,
                     );
                 }
             }
             Err(error) => {
-                let message = format!("{label}: インポートに失敗しました: {error}");
+                let mut args = FluentArgs::new();
+                args.set("label", label);
+                args.set("error", error.to_string());
+                let message = Localizer::new(self.boot.profile_config.ui.locale())
+                    .format("score-import-failed", &args);
                 tracing::error!(kind = label, path, error = %format_error_chain(&error), "external score import failed");
                 if let Some(egui) = self.egui.as_mut() {
                     egui.set_score_import_status(message, true);
@@ -11973,7 +12002,12 @@ impl WinitApp {
                         if let Err(error) = open_external_url(&candidate.html_url) {
                             tracing::warn!(%error, "failed to open release page");
                             self.update_prompt = Some(UpdatePrompt::Error {
-                                message: format!("リリースページを開けませんでした: {error:#}"),
+                                message: {
+                                    let mut args = FluentArgs::new();
+                                    args.set("error", format!("{error:#}"));
+                                    Localizer::new(self.boot.profile_config.ui.locale())
+                                        .format("update-release-open-failed", &args)
+                                },
                                 candidate: Some(candidate),
                             });
                         } else {
@@ -13577,6 +13611,7 @@ impl WinitApp {
             .unwrap_or_else(crate::obs::ObsConnectionStatus::disabled);
         let connected_gamepads =
             self.gamepad.as_ref().map(|gamepad| gamepad.connected_gamepads()).unwrap_or_default();
+        let locale_before_ui = self.boot.profile_config.ui.locale();
         let Some(mut egui) = self.egui.take() else {
             return;
         };
@@ -13603,6 +13638,14 @@ impl WinitApp {
             },
         );
         self.egui = Some(egui);
+        let locale_after_ui = self.boot.profile_config.ui.locale();
+        self.renderer.set_default_font_coverage(locale_after_ui.font_coverage());
+        if locale_after_ui != locale_before_ui {
+            // 設定・検索履歴などアプリが生成した行名を新しい locale で作り直す。
+            // 選択復元は表示名ではなく typed/path ID を使う。
+            self.search_message = None;
+            self.reload_select_items();
+        }
         self.renderer.set_egui_frame(output.frame);
         if profile_lane_settings_changed(&lane_profile_before_egui, &self.boot.profile_config.lane)
         {
@@ -13790,9 +13833,16 @@ impl WinitApp {
     }
 
     fn reset_profile_config_from_disk(&mut self) {
+        let locale_before = self.boot.profile_config.ui.locale();
         match load_profile_config(&self.boot.profile_paths.profile_toml) {
             Ok(profile) => {
                 self.boot.profile_config = profile;
+                let locale_after = self.boot.profile_config.ui.locale();
+                if locale_after != locale_before {
+                    self.renderer.set_default_font_coverage(locale_after.font_coverage());
+                    self.search_message = None;
+                    self.reload_select_items();
+                }
                 self.apply_profile_skin_offsets_to_active_play();
                 self.reload_skins(SkinReloadRequest {
                     select: true,
@@ -14383,11 +14433,11 @@ impl WinitApp {
                 path = %path.display(),
                 "manual screenshot requested with clipboard copy"
             );
-            "スクリーンショットを保存しました（クリップボード）".to_string()
+            Localizer::new(self.boot.profile_config.ui.locale()).text("screenshot-saved-clipboard")
         } else {
             self.renderer.request_screenshot(path.clone());
             tracing::info!(path = %path.display(), "manual screenshot requested");
-            "スクリーンショットを保存しました".to_string()
+            Localizer::new(self.boot.profile_config.ui.locale()).text("screenshot-saved")
         };
         // トーストは次フレーム以降に出す。撮影フレームでは has_pending_screenshot で隠す。
         self.show_left_overlay_toast(toast_message);
@@ -17318,7 +17368,7 @@ fn build_select_items_for_stack(
     let active_table_sources = table_source_order(&boot.app_config);
     match stack.last() {
         Some(path) if path.starts_with(crate::screens::settings_model::CONFIG_ROOT_PATH) => {
-            load_settings_items(path)
+            load_settings_items_for_locale(path, boot.profile_config.ui.locale())
         }
         Some(path) if path == COURSE_ROOT_PATH => {
             match load_select_items_for_courses(
@@ -17530,9 +17580,12 @@ fn build_select_items_for_stack(
                     tracing::error!(%error, "failed to load difficulty table folders");
                 }
             }
-            items.push(settings_root_item());
+            items.push(settings_root_item_for_locale(boot.profile_config.ui.locale()));
             if !search_history.is_empty() {
-                items.extend(search_history_folder_items(search_history));
+                items.extend(search_history_folder_items_for_locale(
+                    search_history,
+                    boot.profile_config.ui.locale(),
+                ));
             }
             items
         }
@@ -17608,10 +17661,11 @@ enum SelectItemKey {
     Folder(String),
     ChartId(i64),
     ChartSha256([u8; 32]),
+    ChartFallback { title: String, artist: String, table_level: String, table_full: String },
     Course(i64),
     Executable(String),
-    Config(String),
-    KeyBinding(String),
+    Config(SettingsEntryId),
+    KeyBinding { key_mode: KeyMode, target: KeyBindingTarget },
     Back,
     AdvancedSettings,
 }
@@ -17624,11 +17678,18 @@ fn select_item_key(item: &SelectItem) -> SelectItemKey {
             .as_ref()
             .map(|chart| SelectItemKey::ChartId(chart.chart_id))
             .or_else(|| row.score_sha256().map(SelectItemKey::ChartSha256))
-            .unwrap_or_else(|| SelectItemKey::Config(row.display_title().to_string())),
+            .unwrap_or_else(|| SelectItemKey::ChartFallback {
+                title: row.display_title().to_string(),
+                artist: row.display_artist().to_string(),
+                table_level: row.table_level.clone(),
+                table_full: row.table_text.table_full.clone(),
+            }),
         SelectItem::Course(row) => SelectItemKey::Course(row.course_id),
         SelectItem::Executable(row) => SelectItemKey::Executable(row.title.clone()),
-        SelectItem::Config(row) => SelectItemKey::Config(row.label().to_string()),
-        SelectItem::KeyBinding(row) => SelectItemKey::KeyBinding(row.label()),
+        SelectItem::Config(row) => SelectItemKey::Config(row.entry_id),
+        SelectItem::KeyBinding(row) => {
+            SelectItemKey::KeyBinding { key_mode: row.key_mode, target: row.target }
+        }
         SelectItem::Back => SelectItemKey::Back,
         SelectItem::AdvancedSettings => SelectItemKey::AdvancedSettings,
     }
@@ -19460,7 +19521,7 @@ fn select_snapshot_rows(
                 }
                 SelectItem::Back => SelectRowSnapshot {
                     index: index as u32,
-                    title: "戻る".to_string(),
+                    title: Localizer::new(profile.ui.locale()).text("select-back"),
                     subtitle: String::new(),
                     artist: String::new(),
                     genre: String::new(),
@@ -19516,7 +19577,7 @@ fn select_snapshot_rows(
                 },
                 SelectItem::AdvancedSettings => SelectRowSnapshot {
                     index: index as u32,
-                    title: "詳細設定".to_string(),
+                    title: Localizer::new(profile.ui.locale()).text("select-advanced-settings"),
                     subtitle: String::new(),
                     artist: String::new(),
                     genre: String::new(),
@@ -27407,6 +27468,32 @@ mod tests {
 
         assert_eq!(restored_select_index(&new_items, Some(&selected_key), 0), 1);
         assert_eq!(new_items[1].display_name(), "Played");
+    }
+
+    #[test]
+    fn select_item_key_uses_typed_settings_identity() {
+        let config = SelectItem::Config(crate::screens::settings_model::ConfigSelectRow {
+            entry_id: SettingsEntryId::MasterVolume,
+        });
+        assert_eq!(select_item_key(&config), SelectItemKey::Config(SettingsEntryId::MasterVolume));
+
+        let binding = SelectItem::KeyBinding(crate::screens::settings_model::KeyBindingSelectRow {
+            key_mode: KeyMode::K7,
+            target: KeyBindingTarget::Action {
+                action: InputActionConfig::E1,
+                slot: KeyBindingSlot::KeyboardPrimary,
+            },
+        });
+        assert_eq!(
+            select_item_key(&binding),
+            SelectItemKey::KeyBinding {
+                key_mode: KeyMode::K7,
+                target: KeyBindingTarget::Action {
+                    action: InputActionConfig::E1,
+                    slot: KeyBindingSlot::KeyboardPrimary,
+                },
+            }
+        );
     }
 
     fn select_chart_row(index: usize) -> SelectChartRow {

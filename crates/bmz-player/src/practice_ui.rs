@@ -3,6 +3,7 @@
 use egui::{Context, RichText};
 
 use crate::config::profile_config::GaugeTypeConfig;
+use crate::i18n::Localizer;
 use crate::screens::practice::PracticeProperty;
 use crate::select_options::ArrangeOption;
 
@@ -21,6 +22,7 @@ pub struct PracticePanelOutput {
 pub fn build_practice_panel(
     ctx: &Context,
     practice: &mut PracticePanelContext<'_>,
+    text: Localizer,
 ) -> PracticePanelOutput {
     let mut start_play = false;
     let mut leave = false;
@@ -33,12 +35,12 @@ pub fn build_practice_panel(
                 .fill(egui::Color32::from_rgba_unmultiplied(16, 20, 32, 230))
                 .show(ui, |ui| {
                     ui.set_min_width(360.0);
-                    ui.heading("Practice Mode");
+                    ui.heading(text.text("practice-title"));
                     ui.label(RichText::new(practice.chart_title).weak());
                     ui.separator();
 
                     ui.horizontal(|ui| {
-                        ui.label("Start");
+                        ui.label(text.text("practice-start-time"));
                         time_ms_field(
                             ui,
                             &mut practice.property.start_time_ms,
@@ -46,7 +48,7 @@ pub fn build_practice_panel(
                         );
                     });
                     ui.horizontal(|ui| {
-                        ui.label("End");
+                        ui.label(text.text("practice-end-time"));
                         time_ms_field(
                             ui,
                             &mut practice.property.end_time_ms,
@@ -55,21 +57,21 @@ pub fn build_practice_panel(
                     });
 
                     ui.horizontal(|ui| {
-                        ui.label("Gauge");
+                        ui.label(text.text("practice-gauge"));
                         egui::ComboBox::from_id_salt("practice_gauge")
-                            .selected_text(gauge_label(practice.property.gauge))
+                            .selected_text(gauge_label(text, practice.property.gauge))
                             .show_ui(ui, |ui| {
                                 for gauge in practice_gauges() {
                                     ui.selectable_value(
                                         &mut practice.property.gauge,
                                         gauge,
-                                        gauge_label(gauge),
+                                        gauge_label(text, gauge),
                                     );
                                 }
                             });
                     });
                     ui.horizontal(|ui| {
-                        ui.label("Gauge %");
+                        ui.label(text.text("practice-gauge-percent"));
                         ui.add(
                             egui::DragValue::new(&mut practice.property.start_gauge)
                                 .range(1..=100)
@@ -77,7 +79,7 @@ pub fn build_practice_panel(
                         );
                     });
                     ui.horizontal(|ui| {
-                        ui.label("Judgerank");
+                        ui.label(text.text("practice-judge-rank"));
                         ui.add(
                             egui::DragValue::new(&mut practice.property.judgerank)
                                 .range(1..=400)
@@ -85,22 +87,22 @@ pub fn build_practice_panel(
                         );
                     });
                     ui.horizontal(|ui| {
-                        ui.label("Arrange");
+                        ui.label(text.text("practice-arrange"));
                         egui::ComboBox::from_id_salt("practice_arrange")
-                            .selected_text(practice.property.arrange.as_str())
+                            .selected_text(arrange_label(text, practice.property.arrange))
                             .show_ui(ui, |ui| {
                                 for arrange in ArrangeOption::VALUES {
                                     ui.selectable_value(
                                         &mut practice.property.arrange,
                                         arrange,
-                                        arrange.as_str(),
+                                        arrange_label(text, arrange),
                                     );
                                 }
                             });
                     });
                     if let Some(total) = practice.property.total.as_mut() {
                         ui.horizontal(|ui| {
-                            ui.label("TOTAL");
+                            ui.label(text.text("practice-total"));
                             ui.add(egui::DragValue::new(total).range(20.0..=5000.0).speed(1.0));
                         });
                     }
@@ -109,17 +111,20 @@ pub fn build_practice_panel(
                     if practice.media_ready {
                         ui.colored_label(
                             egui::Color32::LIGHT_GREEN,
-                            "Enter / ボタンで区間プレイを開始",
+                            text.text("practice-ready-hint"),
                         );
                     } else {
-                        ui.colored_label(egui::Color32::YELLOW, "メディア読込中…");
+                        ui.colored_label(
+                            egui::Color32::YELLOW,
+                            text.text("practice-media-loading"),
+                        );
                     }
 
                     ui.horizontal(|ui| {
-                        if ui.button("プレイ開始").clicked() {
+                        if ui.button(text.text("practice-start-play")).clicked() {
                             start_play = true;
                         }
-                        if ui.button("選曲へ戻る (Esc)").clicked() {
+                        if ui.button(text.text("practice-back-to-select")).clicked() {
                             leave = true;
                         }
                     });
@@ -162,14 +167,73 @@ fn practice_gauges() -> [GaugeTypeConfig; 6] {
     ]
 }
 
-fn gauge_label(gauge: GaugeTypeConfig) -> &'static str {
-    match gauge {
-        GaugeTypeConfig::AssistEasy => "ASSIST EASY",
-        GaugeTypeConfig::Easy => "EASY",
-        GaugeTypeConfig::Normal => "NORMAL",
-        GaugeTypeConfig::Hard => "HARD",
-        GaugeTypeConfig::ExHard => "EX-HARD",
-        GaugeTypeConfig::Hazard => "HAZARD",
-        GaugeTypeConfig::AutoShift => "AUTO SHIFT",
+fn gauge_label(text: Localizer, gauge: GaugeTypeConfig) -> String {
+    text.text(match gauge {
+        GaugeTypeConfig::AssistEasy => "practice-gauge-assist-easy",
+        GaugeTypeConfig::Easy => "practice-gauge-easy",
+        GaugeTypeConfig::Normal => "practice-gauge-normal",
+        GaugeTypeConfig::Hard => "practice-gauge-hard",
+        GaugeTypeConfig::ExHard => "practice-gauge-ex-hard",
+        GaugeTypeConfig::Hazard => "practice-gauge-hazard",
+        GaugeTypeConfig::AutoShift => "practice-gauge-auto-shift",
+    })
+}
+
+fn arrange_label(text: Localizer, arrange: ArrangeOption) -> String {
+    text.text(match arrange {
+        ArrangeOption::Normal => "practice-arrange-normal",
+        ArrangeOption::Mirror => "practice-arrange-mirror",
+        ArrangeOption::Random => "practice-arrange-random",
+        ArrangeOption::RRandom => "practice-arrange-r-random",
+        ArrangeOption::SRandom => "practice-arrange-s-random",
+        ArrangeOption::Spiral => "practice-arrange-spiral",
+        ArrangeOption::HRandom => "practice-arrange-h-random",
+        ArrangeOption::AllScratch => "practice-arrange-all-scratch",
+        ArrangeOption::RandomEx => "practice-arrange-random-ex",
+        ArrangeOption::SRandomEx => "practice-arrange-s-random-ex",
+        ArrangeOption::FRandom => "practice-arrange-f-random",
+        ArrangeOption::MFRandom => "practice-arrange-mf-random",
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::i18n::AppLocale;
+
+    #[test]
+    fn practice_labels_resolve_for_every_locale() {
+        let keys = [
+            "practice-title",
+            "practice-start-time",
+            "practice-end-time",
+            "practice-gauge",
+            "practice-gauge-percent",
+            "practice-judge-rank",
+            "practice-arrange",
+            "practice-total",
+            "practice-ready-hint",
+            "practice-media-loading",
+            "practice-start-play",
+            "practice-back-to-select",
+        ];
+        for locale in AppLocale::SUPPORTED {
+            let text = Localizer::new(locale);
+            for key in keys {
+                assert_ne!(text.text(key), key, "{} is missing {key}", locale.code());
+            }
+            for gauge in practice_gauges() {
+                assert!(!gauge_label(text, gauge).starts_with("practice-"));
+            }
+            for arrange in ArrangeOption::VALUES {
+                assert!(!arrange_label(text, arrange).starts_with("practice-"));
+            }
+        }
+    }
+
+    #[test]
+    fn time_format_is_locale_neutral() {
+        assert_eq!(format_time_ms(0), "00:00.0");
+        assert_eq!(format_time_ms(125_678), "02:05.6");
     }
 }
