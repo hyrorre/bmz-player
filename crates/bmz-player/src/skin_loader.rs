@@ -2703,12 +2703,16 @@ mod tests {
             return;
         }
 
+        let runtime_state = LuaLoadRuntimeState {
+            option_values: BTreeMap::from([(50, false), (51, true)]),
+            ..LuaLoadRuntimeState::default()
+        };
         let loaded = load_skin_document_uncached(
             &skin_path,
             SkinKind::Result,
             &BTreeMap::new(),
             &BTreeMap::new(),
-            &LuaLoadRuntimeState::default(),
+            &runtime_state,
         )
         .expect("unmodified Luxe Flat result should decode through the BMZ loader");
 
@@ -2740,6 +2744,39 @@ mod tests {
             entry,
             DestinationListEntry::Single(destination)
                 if destination.draw.contains("result_panel(2)")
+        )));
+        assert_eq!(
+            loaded
+                .document
+                .value
+                .iter()
+                .find(|value| value.id == "rank_diff_count")
+                .map(|value| value.value_expr.as_str()),
+            Some("bmz:nearest_rank_diff_abs")
+        );
+        assert_eq!(
+            loaded
+                .document
+                .value
+                .iter()
+                .find(|value| value.id == "ir_scorerate1")
+                .map(|value| value.value_expr.as_str()),
+            Some("bmz:ir_score_rate_integer:1")
+        );
+        assert_eq!(
+            loaded
+                .document
+                .value
+                .iter()
+                .find(|value| value.id == "ir_scorerate_dot1")
+                .map(|value| value.value_expr.as_str()),
+            Some("bmz:ir_score_rate_fraction:1")
+        );
+        assert!(loaded.document.destination.iter().any(|entry| matches!(
+            entry,
+            DestinationListEntry::Single(destination)
+                if destination.id == "rank_diff_aaa_plus"
+                    && destination.draw.contains("nearest_rank(AAA,plus)")
         )));
     }
 

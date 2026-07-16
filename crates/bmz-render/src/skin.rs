@@ -8219,8 +8219,7 @@ fn skin_builtin_value_f32(expr: &str, state: &SkinDrawState) -> Option<f32> {
         if !(1..=10).contains(&slot) {
             return None;
         }
-        let score = ir_ranking_entry(&state.ir_ranking, slot - 1)?.ex_score?;
-        let max_score = state.select_total_notes.max(state.total_notes).checked_mul(2)?;
+        let (score, max_score) = ir_ranking_score_and_max(state, slot)?;
         return Some(if max_score == 0 { 0.0 } else { score as f32 / max_score as f32 });
     }
     if expr.trim() == "bmz:keylogger_nps" {
@@ -8301,6 +8300,14 @@ fn keylogger_graph_value(expr: &str, state: &SkinDrawState) -> Option<f32> {
 }
 
 fn skin_builtin_value_i64(expr: &str, state: &SkinDrawState) -> Option<i64> {
+    if let Some(slot) = expr.trim().strip_prefix("bmz:ir_score_rate_integer:") {
+        let slot = slot.parse::<i32>().ok()?;
+        return ir_ranking_score_rate_parts(state, slot).map(|parts| parts.0);
+    }
+    if let Some(slot) = expr.trim().strip_prefix("bmz:ir_score_rate_fraction:") {
+        let slot = slot.parse::<i32>().ok()?;
+        return ir_ranking_score_rate_parts(state, slot).map(|parts| parts.1);
+    }
     if let Some(slot) = expr.trim().strip_prefix("bmz:ir_score_diff:") {
         let slot = slot.parse::<i32>().ok()?;
         if !(1..=10).contains(&slot) {
@@ -8585,6 +8592,13 @@ fn select_settings_screen_number(ref_id: i32, state: &SkinDrawState) -> Option<i
 
 fn select_chart_metadata_available(state: &SkinDrawState) -> bool {
     !state.select_screen
+        || (state.select_row_kind == SelectRowKind::Song
+            && !state.select_is_folder
+            && state.select_in_library)
+}
+
+fn select_score_metadata_available(state: &SkinDrawState) -> bool {
+    !state.select_screen
         || (matches!(state.select_row_kind, SelectRowKind::Song | SelectRowKind::Course)
             && !state.select_is_folder
             && state.select_in_library)
@@ -8605,6 +8619,10 @@ fn select_chart_score_number_requires_song(ref_id: i32) -> bool {
             | 400
             | 410..=427
     )
+}
+
+fn select_chart_detail_number_requires_song(ref_id: i32) -> bool {
+    matches!(ref_id, 350..=368 | 1163 | 1164)
 }
 
 fn player_stat_u64(value: u64) -> i64 {
@@ -8677,6 +8695,13 @@ fn skin_state_number(ref_id: i32, state: &SkinDrawState) -> Option<i64> {
 
     if state.select_screen
         && select_chart_score_number_requires_song(ref_id)
+        && !select_score_metadata_available(state)
+    {
+        return None;
+    }
+
+    if state.select_screen
+        && select_chart_detail_number_requires_song(ref_id)
         && !select_chart_metadata_available(state)
     {
         return None;
@@ -9092,6 +9117,24 @@ fn ir_ranking_entry(
     })
 }
 
+fn ir_ranking_score_and_max(state: &SkinDrawState, slot: i32) -> Option<(i64, i64)> {
+    if !(1..=10).contains(&slot) {
+        return None;
+    }
+    let score = ir_ranking_entry(&state.ir_ranking, slot - 1)?.ex_score?;
+    let max_score = i64::from(state.select_total_notes.max(state.total_notes).checked_mul(2)?);
+    Some((score, max_score))
+}
+
+fn ir_ranking_score_rate_parts(state: &SkinDrawState, slot: i32) -> Option<(i64, i64)> {
+    let (score, max_score) = ir_ranking_score_and_max(state, slot)?;
+    if score <= 0 || max_score <= 0 {
+        return Some((0, 0));
+    }
+    let scaled = i128::from(score).checked_mul(10_000)?.checked_div(i128::from(max_score))?;
+    Some((i64::try_from(scaled / 100).ok()?, i64::try_from(scaled % 100).ok()?))
+}
+
 fn ir_total_clear_count(ranking: &crate::scene::ResultIrSnapshot) -> Option<i64> {
     let total = ranking.total_player?;
     let clear_rate = ranking.clear_rate?;
@@ -9213,7 +9256,7 @@ fn nearest_grade_diff(state: &SkinDrawState) -> Option<NearestGradeDiff> {
             return Some(if score * 18 < max * half_step {
                 NearestGradeDiff {
                     grade: plus_grade,
-                    value: div_ceil(score * 9 - max * lower_step, 9),
+                    value: (score - div_ceil(max * lower_step, 9)).max(0),
                 }
             } else {
                 NearestGradeDiff {
@@ -9224,7 +9267,7 @@ fn nearest_grade_diff(state: &SkinDrawState) -> Option<NearestGradeDiff> {
         }
     }
     if score * 18 < max * 17 {
-        Some(NearestGradeDiff { grade: "AAA", value: div_ceil(score * 9 - max * 8, 9) })
+        Some(NearestGradeDiff { grade: "AAA", value: (score - div_ceil(max * 8, 9)).max(0) })
     } else if score < max {
         Some(NearestGradeDiff { grade: "MAX", value: -(max - score) })
     } else {
@@ -14632,7 +14675,7 @@ mod tests {
                 select_ex_score: Some(500),
                 ..nearest.clone()
             }),
-            Some("E+56".to_string())
+            Some("E+55".to_string())
         );
         assert_eq!(
             result_grade_diff_label(&SkinDrawState {
@@ -21575,6 +21618,8 @@ mod tests {
         };
 
         assert_eq!(skin_builtin_value_f32("bmz:ir_score_rate:1", &state), Some(0.775));
+        assert_eq!(skin_builtin_value_i64("bmz:ir_score_rate_integer:1", &state), Some(77));
+        assert_eq!(skin_builtin_value_i64("bmz:ir_score_rate_fraction:1", &state), Some(50));
         assert!(eval_skin_draw_condition("ir_score_rate_band(1,6,7)", &state));
         assert!(!eval_skin_draw_condition("ir_score_rate_band(1,7,8)", &state));
         assert!(eval_skin_draw_condition("option(51) and ir_score_rate_range(1,666,777)", &state));
@@ -21809,10 +21854,33 @@ mod tests {
         assert_eq!(skin_state_number(91, &state), None);
         assert_eq!(skin_state_number(92, &state), None);
         assert_eq!(skin_state_number(160, &state), None);
+        for ref_id in [350, 351, 352, 353, 360, 362, 364, 368, 1163, 1164] {
+            assert_eq!(skin_state_number(ref_id, &state), None, "chart detail ref {ref_id}");
+        }
         assert_eq!(skin_state_number(312, &state), Some(500));
         assert_eq!(skin_state_number(313, &state), Some(300));
         for op in 180..=184 {
             assert!(!test_skin_op(op, &[], &state), "judge rank option {op}");
+        }
+    }
+
+    #[test]
+    fn select_course_keeps_score_totals_but_hides_per_chart_details() {
+        let state = SkinDrawState {
+            select_screen: true,
+            select_row_kind: SelectRowKind::Course,
+            select_in_library: true,
+            select_total_notes: 10_718,
+            total_notes: 10_718,
+            select_chart_normal_notes: 10_718,
+            select_chart_total_gauge: 224.0,
+            select_length_ms: 180_000,
+            ..SkinDrawState::default()
+        };
+
+        assert_eq!(skin_state_number(74, &state), Some(10_718));
+        for ref_id in [90, 91, 92, 160, 350, 351, 352, 353, 360, 362, 364, 368, 1163, 1164] {
+            assert_eq!(skin_state_number(ref_id, &state), None, "chart detail ref {ref_id}");
         }
     }
 
@@ -24016,6 +24084,26 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(skin_value_number(&value, &state), Some(1));
+    }
+
+    #[test]
+    fn luxe_flat_nearest_rank_uses_runtime_result_score() {
+        let state = SkinDrawState {
+            ex_score: 2246,
+            total_notes: 1261,
+            result_failed: Some(false),
+            result_grade_diff_display: ResultGradeDiffDisplay::Nearest,
+            ..Default::default()
+        };
+        let value = SkinValueDef {
+            value_expr: "bmz:nearest_rank_diff_abs".to_string(),
+            ..Default::default()
+        };
+
+        assert_eq!(skin_value_number(&value, &state), Some(4));
+        assert_eq!(result_grade_diff_label(&state), Some("AAA+4".to_string()));
+        assert!(eval_skin_draw_condition("nearest_rank(AAA,plus)", &state));
+        assert!(!eval_skin_draw_condition("nearest_rank(MAX,minus)", &state));
     }
 
     #[test]
