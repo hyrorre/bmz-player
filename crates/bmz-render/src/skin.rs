@@ -12720,6 +12720,8 @@ fn slider_value_at(
     x: f32,
     y: f32,
 ) -> Option<f32> {
+    // beatoraja SkinSlider.mousePressed: hit track is based on destination origin +
+    // range along the movement axis (not the thumb center / half size).
     let range = slider.range.unsigned_abs() as f32;
     if range <= f32::EPSILON {
         return None;
@@ -12728,36 +12730,18 @@ fn slider_value_at(
     let frame_y = frame.y as f32;
     let frame_w = frame.w as f32;
     let frame_h = frame.h as f32;
-    let half_w = frame_w * 0.5;
-    let half_h = frame_h * 0.5;
     let value = match slider.angle {
-        0 if frame_x <= x
-            && x <= frame_x + frame_w
-            && frame_y + half_h <= y
-            && y <= frame_y + range + half_h =>
-        {
-            (y - frame_y - half_h) / range
+        0 if frame_x <= x && x <= frame_x + frame_w && frame_y <= y && y <= frame_y + range => {
+            (y - frame_y) / range
         }
-        1 if frame_x + half_w <= x
-            && x <= frame_x + range + half_w
-            && frame_y <= y
-            && y <= frame_y + frame_h =>
-        {
-            (x - frame_x - half_w) / range
+        1 if frame_x <= x && x <= frame_x + range && frame_y <= y && y <= frame_y + frame_h => {
+            (x - frame_x) / range
         }
-        2 if frame_x <= x
-            && x <= frame_x + frame_w
-            && frame_y - range + half_h <= y
-            && y <= frame_y + half_h =>
-        {
-            (frame_y + half_h - y) / range
+        2 if frame_x <= x && x <= frame_x + frame_w && frame_y - range <= y && y <= frame_y => {
+            (frame_y - y) / range
         }
-        3 if frame_x - range + half_w <= x
-            && x <= frame_x + half_w
-            && frame_y <= y
-            && y <= frame_y + frame_h =>
-        {
-            (frame_x + half_w - x) / range
+        3 if frame_x - range <= x && x <= frame_x && frame_y <= y && y <= frame_y + frame_h => {
+            (frame_x - x) / range
         }
         _ => return None,
     };
@@ -12770,48 +12754,7 @@ fn scroll_slider_value_at(
     x: f32,
     y: f32,
 ) -> Option<f32> {
-    let range = slider.range.unsigned_abs() as f32;
-    if range <= f32::EPSILON {
-        return None;
-    }
-    let frame_x = frame.x as f32;
-    let frame_y = frame.y as f32;
-    let frame_w = frame.w as f32;
-    let frame_h = frame.h as f32;
-    let half_w = frame_w * 0.5;
-    let half_h = frame_h * 0.5;
-    let value = match slider.angle {
-        0 if frame_x <= x
-            && x <= frame_x + frame_w
-            && frame_y + half_h <= y
-            && y <= frame_y + range + half_h =>
-        {
-            (y - frame_y - half_h) / range
-        }
-        1 if frame_x + half_w <= x
-            && x <= frame_x + range + half_w
-            && frame_y <= y
-            && y <= frame_y + frame_h =>
-        {
-            (x - frame_x - half_w) / range
-        }
-        2 if frame_x <= x
-            && x <= frame_x + frame_w
-            && frame_y - range + half_h <= y
-            && y <= frame_y + half_h =>
-        {
-            (frame_y + half_h - y) / range
-        }
-        3 if frame_x - range + half_w <= x
-            && x <= frame_x + half_w
-            && frame_y <= y
-            && y <= frame_y + frame_h =>
-        {
-            (frame_x + half_w - x) / range
-        }
-        _ => return None,
-    };
-    Some(value.clamp(0.0, 1.0))
+    slider_value_at(slider, frame, x, y)
 }
 
 fn multiply_bga_tints(destination: Color, bga: SkinBgaFrame) -> Color {
@@ -19135,11 +19078,12 @@ mod tests {
         .unwrap();
         let snapshot = SelectSnapshot::default();
 
+        // angle=1 destination x=10 range=50 → value 0.5 at skin x=35 (norm x=0.35)
         let hit = document
             .select_slider_hit(
                 &snapshot,
                 &crate::select_settings_dest::SelectSettingsDestIndex::default(),
-                0.40,
+                0.35,
                 0.775,
             )
             .unwrap();
@@ -19188,7 +19132,8 @@ mod tests {
 
         assert!(approx_eq(skin_state_float_number(8, &state).unwrap(), 0.5));
         assert!(approx_eq(skin_slider_progress_by_type(8, &state).unwrap(), 0.5));
-        let hit = document.result_slider_hit(&state, 0.15, 0.525).unwrap();
+        // angle=2 destination y=70 range=50 → value 0.5 at skin y=45 (norm y=0.55)
+        let hit = document.result_slider_hit(&state, 0.15, 0.55).unwrap();
         assert_eq!(hit.slider_type, 8);
         assert!(approx_eq(hit.value, 0.5));
     }
@@ -19213,27 +19158,87 @@ mod tests {
         .unwrap();
         let snapshot = SelectSnapshot::default();
 
+        // beatoraja: value=(region.y - mouse_y)/range. Mid = skin y 45 → norm 0.55.
         let hit = document
             .select_slider_hit(
                 &snapshot,
                 &crate::select_settings_dest::SelectSettingsDestIndex::default(),
                 0.15,
-                0.525,
+                0.55,
             )
             .unwrap();
 
         assert_eq!(hit.slider_type, 1);
         assert!(approx_eq(hit.value, 0.5));
+        // Top of track (value 0) is destination y itself → skin y 70 → norm 0.30.
         let top_hit = document
             .select_slider_hit(
                 &snapshot,
                 &crate::select_settings_dest::SelectSettingsDestIndex::default(),
                 0.15,
-                0.275,
+                0.30,
             )
             .unwrap();
         assert_eq!(top_hit.slider_type, 1);
         assert!(approx_eq(top_hit.value, 0.0));
+    }
+
+    #[test]
+    fn select_slider_hit_matches_mz_select_songlist_scroll_collision() {
+        // mz-select default_songlistscroll2 collision:
+        // parts_position=(1888,270), dst x=1864 y=790 w=64 h=64, angle=2 range=500
+        let document: SkinDocument = serde_json::from_str(
+            r#"
+            {
+                "type": 5,
+                "w": 1920,
+                "h": 1080,
+                "slider": [
+                    {
+                        "id": "default_songlistscroll2_collision",
+                        "src": 1,
+                        "x": 80,
+                        "y": 0,
+                        "w": 64,
+                        "h": 64,
+                        "angle": 2,
+                        "range": 500,
+                        "type": 1
+                    }
+                ],
+                "destination": [
+                    {
+                        "id": "default_songlistscroll2_collision",
+                        "dst": [{ "x": 1864, "y": 790, "w": 64, "h": 64 }]
+                    }
+                ]
+            }
+            "#,
+        )
+        .unwrap();
+        let snapshot = SelectSnapshot::default();
+        let settings = crate::select_settings_dest::SelectSettingsDestIndex::default();
+        let x = (1864.0 + 32.0) / 1920.0;
+
+        let top =
+            document.select_slider_hit(&snapshot, &settings, x, 1.0 - 790.0 / 1080.0).unwrap();
+        assert_eq!(top.slider_type, 1);
+        assert!(approx_eq(top.value, 0.0));
+
+        let mid =
+            document.select_slider_hit(&snapshot, &settings, x, 1.0 - 540.0 / 1080.0).unwrap();
+        assert_eq!(mid.slider_type, 1);
+        assert!(approx_eq(mid.value, 0.5));
+
+        let bottom =
+            document.select_slider_hit(&snapshot, &settings, x, 1.0 - 290.0 / 1080.0).unwrap();
+        assert_eq!(bottom.slider_type, 1);
+        assert!(approx_eq(bottom.value, 1.0));
+
+        // Clicks above destination y must miss (beatoraja uses region.y as the upper edge).
+        assert!(
+            document.select_slider_hit(&snapshot, &settings, x, 1.0 - 822.0 / 1080.0).is_none()
+        );
     }
 
     #[test]
