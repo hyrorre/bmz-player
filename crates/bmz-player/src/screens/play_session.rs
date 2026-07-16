@@ -8,6 +8,7 @@ use bmz_audio::loader::{
 use bmz_audio::loudness::{analyze_chart_loudness, play_normalization_gain_for_loudness};
 use bmz_chart::import::import_bms_chart;
 use bmz_chart::model::{BgaAssetRef, NoteEvent, NoteKind, PlayableChart, TimingEventKind};
+use bmz_chart::start_margin::apply_start_note_margin;
 use bmz_core::clear::GaugeType;
 use bmz_core::ids::NoteId;
 use bmz_core::lane::{KeyMode, LANE_COUNT, Lane};
@@ -952,6 +953,9 @@ fn load_transformed_chart_for_play(
 ) -> Result<TransformedPlayChart> {
     let mut chart =
         load_source_chart_for_chart(library_db, chart_id, random_seed_for_chart(options))?;
+    // beatoraja BMSModelUtils.setStartNoteTime(model, 1000) 相当。
+    // LN / arrange より前に適用し、practice 切出しもシフト後時刻を使う。
+    apply_start_note_margin(&mut chart);
     let applied_double_option =
         options.double_option.normalize_for_key_mode(chart.metadata.key_mode);
     let score_key = ScoreKey::with_options(
@@ -3112,6 +3116,51 @@ mod tests {
         .unwrap();
 
         assert_eq!(session.chart.metadata.title, "Linked");
+
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn load_transformed_chart_applies_start_note_margin() {
+        let path = write_temp_bms(
+            "\
+#TITLE Early Note
+#BPM 120
+#00011:01
+#00201:01
+",
+        );
+        let imported = import_bms_chart(&path, None, true).unwrap();
+        let source_first =
+            imported.chart.lane_notes.iter().flatten().map(|note| note.time.0).min().unwrap();
+        assert_eq!(source_first, 0);
+
+        let mut conn = Connection::open_in_memory().unwrap();
+        configure_connection(&conn).unwrap();
+        run_migrations(&mut conn, LIBRARY_MIGRATIONS).unwrap();
+        let mut library_db = LibraryDatabase::from_connection(conn);
+        let chart_id = library_db
+            .upsert_chart_import(&ChartImportRecord {
+                root_id: None,
+                file_path: &path,
+                file_size: 1,
+                modified_at: 1,
+                scanned_at: 1,
+                chart: &imported.chart,
+            })
+            .unwrap();
+
+        let transformed =
+            load_transformed_chart_for_play(&library_db, chart_id, &PlaySessionOptions::default())
+                .unwrap();
+        let play_first =
+            transformed.chart.lane_notes.iter().flatten().map(|note| note.time.0).min().unwrap();
+        assert_eq!(play_first, 1_000_000);
+
+        let source = load_source_chart_for_chart(&library_db, chart_id, None).unwrap();
+        let source_first_again =
+            source.lane_notes.iter().flatten().map(|note| note.time.0).min().unwrap();
+        assert_eq!(source_first_again, 0, "source chart must stay unshifted");
 
         std::fs::remove_file(path).unwrap();
     }
