@@ -7330,6 +7330,13 @@ impl WinitApp {
         if pressed
             && !repeat
             && self.result_input_ready()
+            && self.select_result_panel_for_control(control)
+        {
+            return true;
+        }
+        if pressed
+            && !repeat
+            && self.result_input_ready()
             && self.is_result_panel_toggle_control(control)
             && self.toggle_result_panel()
         {
@@ -9601,6 +9608,13 @@ impl WinitApp {
         if pressed
             && !repeat
             && self.result_input_ready()
+            && self.select_result_panel_for_control(control)
+        {
+            return true;
+        }
+        if pressed
+            && !repeat
+            && self.result_input_ready()
             && self.is_result_panel_toggle_control(control)
             && self.toggle_result_panel()
         {
@@ -9635,6 +9649,13 @@ impl WinitApp {
         pressed: bool,
         repeat: bool,
     ) -> bool {
+        if pressed
+            && !repeat
+            && self.result_input_ready()
+            && self.select_result_panel_for_control(control)
+        {
+            return true;
+        }
         if pressed
             && !repeat
             && self.result_input_ready()
@@ -9783,6 +9804,10 @@ impl WinitApp {
     fn is_result_panel_toggle_control(&self, control: &PhysicalControl) -> bool {
         physical_control_name(control)
             .is_some_and(|control| control == "Select" || self.select_keys.is_e2_action(control))
+    }
+
+    fn select_result_panel_for_control(&mut self, control: &PhysicalControl) -> bool {
+        result_panel_for_control(control).is_some_and(|panel| self.set_result_panel(panel))
     }
 
     fn toggle_result_panel(&mut self) -> bool {
@@ -18954,6 +18979,14 @@ fn physical_control_name(control: &PhysicalControl) -> Option<&str> {
     }
 }
 
+fn result_panel_for_control(control: &PhysicalControl) -> Option<i32> {
+    match physical_control_name(control)? {
+        "ArrowLeft" => Some(2),
+        "ArrowRight" => Some(1),
+        _ => None,
+    }
+}
+
 fn digit_to_replay_slot(physical_key: PhysicalKey) -> Option<u8> {
     match physical_key {
         PhysicalKey::Code(KeyCode::Digit1) => Some(0),
@@ -22871,6 +22904,22 @@ mod tests {
         assert_eq!(toggled_result_panel(0, true, true), None);
         assert_eq!(toggled_result_panel(1, false, true), None);
         assert_eq!(toggled_result_panel(1, true, false), None);
+    }
+
+    #[test]
+    fn result_panel_arrow_keys_match_luxe_flat_direction() {
+        assert_eq!(
+            result_panel_for_control(&PhysicalControl::KeyboardKey("ArrowLeft".to_string())),
+            Some(2)
+        );
+        assert_eq!(
+            result_panel_for_control(&PhysicalControl::KeyboardKey("ArrowRight".to_string())),
+            Some(1)
+        );
+        assert_eq!(
+            result_panel_for_control(&PhysicalControl::KeyboardKey("ArrowUp".to_string())),
+            None
+        );
     }
 
     #[test]

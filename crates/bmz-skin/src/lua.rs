@@ -1,5 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
+use std::ffi::CStr;
 use std::fs;
+use std::os::raw::c_int;
 use std::path::Component;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicI64, Ordering};
@@ -273,7 +275,9 @@ fn execute_lua_skin(
             &mut table_budget,
         )?;
         let result_panel_default =
-            lua.globals().get::<Value>("Expand_op").ok().and_then(lua_result_panel_value);
+            lua.globals().get::<Value>("Expand_op").ok().and_then(lua_result_panel_value).or_else(
+                || main_state_probe.lock().ok().and_then(|probe| probe.result_panel_default),
+            );
         break (json, dependencies, main_state_probe, result_panel_default);
     };
     record_static_skin_config_option_dependencies(&source, &skin_options, &dependencies);
@@ -356,6 +360,98 @@ fn lua_result_panel_value(value: Value) -> Option<i32> {
         _ => None,
     }
     .filter(|panel| (0..=2).contains(panel))
+}
+
+fn result_panel_from_local_mode(mode: i32) -> Option<i32> {
+    match mode {
+        0 => Some(2),
+        1 => Some(1),
+        _ => None,
+    }
+}
+
+fn record_local_result_panel_default(
+    main_state_probe: &Arc<Mutex<MainStateProbe>>,
+    mode: i32,
+) -> Option<()> {
+    let panel = result_panel_from_local_mode(mode)?;
+    let mut probe = main_state_probe.lock().ok()?;
+    probe.result_panel_default.get_or_insert(panel);
+    Some(())
+}
+
+/// Returns the index and integer value of a closure upvalue named `result_mode`.
+///
+/// Lua 5.4 does not expose arbitrary upvalues through mlua's safe API. This
+/// private C callback only inspects the function passed as argument 1 and never
+/// installs the debug library into the skin sandbox.
+unsafe extern "C-unwind" fn find_result_mode_upvalue(state: *mut mlua::lua_State) -> c_int {
+    // SAFETY: mlua invokes this callback with a live Lua state. Every inspected
+    // stack slot belongs to this call, and `lua_getupvalue` pushes exactly one
+    // value whenever it returns a non-null name.
+    unsafe {
+        if mlua::ffi::lua_type(state, 1) != mlua::ffi::LUA_TFUNCTION {
+            return 0;
+        }
+        for index in 1..=255 {
+            let name = mlua::ffi::lua_getupvalue(state, 1, index);
+            if name.is_null() {
+                break;
+            }
+            let matches = CStr::from_ptr(name).to_bytes() == b"result_mode";
+            if matches && mlua::ffi::lua_isinteger(state, -1) != 0 {
+                let value = mlua::ffi::lua_tointeger(state, -1);
+                mlua::ffi::lua_pop(state, 1);
+                mlua::ffi::lua_pushinteger(state, i64::from(index));
+                mlua::ffi::lua_pushinteger(state, value);
+                return 2;
+            }
+            mlua::ffi::lua_pop(state, 1);
+        }
+        0
+    }
+}
+
+/// Replaces one integer closure upvalue and reports whether the index existed.
+unsafe extern "C-unwind" fn set_integer_upvalue(state: *mut mlua::lua_State) -> c_int {
+    // SAFETY: arguments are validated before touching the stack. `lua_setupvalue`
+    // consumes the pushed value and only mutates the function passed to this call.
+    unsafe {
+        if mlua::ffi::lua_type(state, 1) != mlua::ffi::LUA_TFUNCTION
+            || mlua::ffi::lua_isinteger(state, 2) == 0
+            || mlua::ffi::lua_isinteger(state, 3) == 0
+        {
+            mlua::ffi::lua_pushboolean(state, 0);
+            return 1;
+        }
+        let index = mlua::ffi::lua_tointeger(state, 2);
+        let value = mlua::ffi::lua_tointeger(state, 3);
+        let Ok(index) = c_int::try_from(index) else {
+            mlua::ffi::lua_pushboolean(state, 0);
+            return 1;
+        };
+        mlua::ffi::lua_pushinteger(state, value);
+        let name = mlua::ffi::lua_setupvalue(state, 1, index);
+        mlua::ffi::lua_pushboolean(state, if name.is_null() { 0 } else { 1 });
+        1
+    }
+}
+
+fn lua_result_mode_upvalue(lua: &Lua, function: &Function) -> Option<(i32, i32)> {
+    // SAFETY: both callbacks obey Lua's C function ABI and access only their
+    // call frame. They are retained by mlua for the duration of `call`.
+    let helper = unsafe { lua.create_c_function(find_result_mode_upvalue).ok()? };
+    let (index, value) = helper.call::<(i64, i64)>(function.clone()).ok()?;
+    Some((i32::try_from(index).ok()?, i32::try_from(value).ok()?))
+}
+
+fn set_lua_integer_upvalue(lua: &Lua, function: &Function, index: i32, value: i32) -> bool {
+    // SAFETY: see `lua_result_mode_upvalue`; Rust-side argument conversion also
+    // guarantees the C callback receives a function and two integers.
+    let Ok(helper) = (unsafe { lua.create_c_function(set_integer_upvalue) }) else {
+        return false;
+    };
+    helper.call::<bool>((function.clone(), index, value)).unwrap_or(false)
 }
 
 fn postprocess_lua_skin_json(root: &mut JsonMap<String, JsonValue>, warnings: &mut Vec<String>) {
@@ -883,6 +979,7 @@ struct MainStateProbe {
     gauge_lead_glow_occurrences: BTreeMap<String, usize>,
     gauge_value_destination_occurrences: BTreeMap<String, usize>,
     gauge_value_overlay_mode: Option<&'static str>,
+    result_panel_default: Option<i32>,
     load_dependencies: Option<Arc<Mutex<SkinLoadDependencies>>>,
 }
 
@@ -916,6 +1013,7 @@ impl Default for MainStateProbe {
             gauge_lead_glow_occurrences: BTreeMap::new(),
             gauge_value_destination_occurrences: BTreeMap::new(),
             gauge_value_overlay_mode: None,
+            result_panel_default: None,
             load_dependencies: None,
         }
     }
@@ -3349,7 +3447,7 @@ fn lua_table_to_json(
             }
             if key == "act" {
                 let event_id = infer_constant_integer_at_load(function, main_state_probe)
-                    .or_else(|| infer_result_panel_act_at_load(lua, function));
+                    .or_else(|| infer_result_panel_act_at_load(lua, function, main_state_probe));
                 if let Some(event_id) = event_id {
                     object.insert(key.clone(), JsonValue::Number(JsonNumber::from(event_id)));
                     continue;
@@ -5104,20 +5202,46 @@ fn infer_constant_integer_at_load(
     }
 }
 
-fn infer_result_panel_act_at_load(lua: &Lua, function: &Function) -> Option<i64> {
-    let current = lua.globals().raw_get::<Value>("Expand_op").ok()?;
-    lua_result_panel_value(current)?;
+fn infer_result_panel_act_at_load(
+    lua: &Lua,
+    function: &Function,
+    main_state_probe: &Arc<Mutex<MainStateProbe>>,
+) -> Option<i64> {
+    if let Some(current) =
+        lua.globals().raw_get::<Value>("Expand_op").ok().and_then(lua_result_panel_value)
+    {
+        // WMII の tab callback は `Expand_op = 1/2` だけを行う。元の Lua state を
+        // 実行時まで保持せず、隔離 state で代入先を観測して BMZ 内部 event に変換する。
+        let isolated = Lua::new();
+        isolated.globals().raw_set("Expand_op", current).ok()?;
+        let dumped = function.dump(true);
+        let isolated_function = isolated.load(&dumped).into_function().ok()?;
+        if !matches!(isolated_function.call::<Value>(()).ok()?, Value::Nil) {
+            return None;
+        }
+        let panel = isolated.globals().raw_get::<Value>("Expand_op").ok()?;
+        return result_panel_event(lua_result_panel_value(panel)?);
+    }
 
-    // WMII の tab callback は `Expand_op = 1/2` だけを行う。元の Lua state を
-    // 実行時まで保持せず、隔離 state で代入先を観測して BMZ 内部 event に変換する。
+    // Luxe Flat keeps the active tab in a local closure upvalue instead of the
+    // global used by WMII. Preserve upvalue names in the dumped callback, seed
+    // its isolated copy, and observe only the resulting `result_mode` value.
+    let (upvalue_index, current_mode) = lua_result_mode_upvalue(lua, function)?;
+    record_local_result_panel_default(main_state_probe, current_mode)?;
     let isolated = Lua::new();
-    let dumped = function.dump(true);
+    let dumped = function.dump(false);
     let isolated_function = isolated.load(&dumped).into_function().ok()?;
-    if !matches!(isolated_function.call::<Value>(()).ok()?, Value::Nil) {
+    if !set_lua_integer_upvalue(&isolated, &isolated_function, upvalue_index, current_mode)
+        || !matches!(isolated_function.call::<Value>(()).ok()?, Value::Nil)
+    {
         return None;
     }
-    let panel = isolated.globals().raw_get::<Value>("Expand_op").ok()?;
-    match lua_result_panel_value(panel)? {
+    let (_, mode) = lua_result_mode_upvalue(&isolated, &isolated_function)?;
+    result_panel_event(result_panel_from_local_mode(mode)?)
+}
+
+fn result_panel_event(panel: i32) -> Option<i64> {
+    match panel {
         1 => Some(i64::from(SKIN_EVENT_RESULT_PANEL_IR)),
         2 => Some(i64::from(SKIN_EVENT_RESULT_PANEL_GRAPH)),
         _ => None,
@@ -5691,18 +5815,42 @@ fn infer_result_panel_draw_condition(
     const ALWAYS_TRUE: &str = "number(0) >= 0";
     const ALWAYS_FALSE: &str = "number(0) < 0";
 
-    // The destination closure may only call a local helper (`drawCheck`) that
-    // reads Expand_op, so the closure itself does not necessarily carry a
-    // direct `_ENV` upvalue. Probe the shared Lua globals to cover both direct
-    // and transitive reads.
     let globals = lua.globals();
-    let original = globals.raw_get::<Value>("Expand_op").ok()?;
-    lua_result_panel_value(original.clone())?;
+    let global_original = globals
+        .raw_get::<Value>("Expand_op")
+        .ok()
+        .filter(|value| lua_result_panel_value(value.clone()).is_some());
+    let local_original = if global_original.is_none() {
+        let (index, mode) = lua_result_mode_upvalue(lua, function)?;
+        record_local_result_panel_default(main_state_probe, mode)?;
+        Some((index, mode))
+    } else {
+        None
+    };
 
     let mut conditions = Vec::with_capacity(3);
     for panel in 0..=2 {
-        if globals.raw_set("Expand_op", panel).is_err() {
-            let _ = globals.raw_set("Expand_op", original);
+        let state_updated = if global_original.is_some() {
+            globals.raw_set("Expand_op", panel).is_ok()
+        } else if let Some((index, _)) = local_original {
+            // Luxe Flat: result_mode 0=GRAPH, 1=IR. Use 2 for the inactive
+            // BMZ panel state so neither equality branch is selected.
+            let mode = match panel {
+                1 => 1,
+                2 => 0,
+                _ => 2,
+            };
+            set_lua_integer_upvalue(lua, function, index, mode)
+        } else {
+            false
+        };
+        if !state_updated {
+            restore_result_panel_probe_state(
+                lua,
+                function,
+                global_original.as_ref(),
+                local_original,
+            );
             return None;
         }
         let specialized = infer_result_score_draw(function, object_id, main_state_probe);
@@ -5712,7 +5860,7 @@ fn infer_result_panel_draw_condition(
             specialized.or_else(|| infer_boolean_predicate(function, main_state_probe, object_id))
         });
     }
-    let _ = globals.raw_set("Expand_op", original);
+    restore_result_panel_probe_state(lua, function, global_original.as_ref(), local_original);
 
     if conditions.windows(2).all(|pair| pair[0] == pair[1]) {
         return None;
@@ -5731,6 +5879,19 @@ fn infer_result_panel_draw_condition(
         })
         .collect::<Vec<_>>();
     (!branches.is_empty()).then(|| branches.join(" or "))
+}
+
+fn restore_result_panel_probe_state(
+    lua: &Lua,
+    function: &Function,
+    global_original: Option<&Value>,
+    local_original: Option<(i32, i32)>,
+) {
+    if let Some(original) = global_original {
+        let _ = lua.globals().raw_set("Expand_op", original.clone());
+    } else if let Some((index, mode)) = local_original {
+        let _ = set_lua_integer_upvalue(lua, function, index, mode);
+    }
 }
 
 fn result_score_draw_object(object_id: Option<&str>) -> bool {
@@ -7115,6 +7276,85 @@ mod tests {
             Some("result_panel(2) and number(374) >= 0 and number(375) >= 0")
         );
         assert_eq!(lua.globals().get::<i32>("Expand_op").unwrap(), 2);
+    }
+
+    #[test]
+    fn infers_luxe_flat_local_result_panel_state_without_mutating_default() {
+        let lua = Lua::new();
+        let probe = Arc::new(Mutex::new(MainStateProbe::default()));
+        lua.globals()
+            .set("main_state", create_main_state_stub(&lua, probe.clone()).unwrap())
+            .unwrap();
+        let functions = lua
+            .load(
+                r#"
+                local result_mode = 0
+                return {
+                    graph_act = function() result_mode = 0 end,
+                    ir_act = function() result_mode = 1 end,
+                    graph = function() return result_mode == 0 end,
+                    ir = function() return result_mode == 1 end,
+                    graph_score = function()
+                        return result_mode == 0 and main_state.number(71) >= 0
+                    end,
+                }
+                "#,
+            )
+            .eval::<Table>()
+            .unwrap();
+
+        assert_eq!(
+            infer_result_panel_act_at_load(
+                &lua,
+                &functions.get::<Function>("graph_act").unwrap(),
+                &probe,
+            ),
+            Some(i64::from(SKIN_EVENT_RESULT_PANEL_GRAPH))
+        );
+        assert_eq!(
+            infer_result_panel_act_at_load(
+                &lua,
+                &functions.get::<Function>("ir_act").unwrap(),
+                &probe,
+            ),
+            Some(i64::from(SKIN_EVENT_RESULT_PANEL_IR))
+        );
+        assert_eq!(
+            infer_result_panel_draw_condition(
+                &lua,
+                &functions.get::<Function>("graph").unwrap(),
+                None,
+                &probe,
+            )
+            .as_deref(),
+            Some("result_panel(2)")
+        );
+        assert_eq!(
+            infer_result_panel_draw_condition(
+                &lua,
+                &functions.get::<Function>("ir").unwrap(),
+                None,
+                &probe,
+            )
+            .as_deref(),
+            Some("result_panel(1)")
+        );
+        assert_eq!(
+            infer_result_panel_draw_condition(
+                &lua,
+                &functions.get::<Function>("graph_score").unwrap(),
+                None,
+                &probe,
+            )
+            .as_deref(),
+            Some("result_panel(2) and number(71) >= 0")
+        );
+        assert_eq!(probe.lock().unwrap().result_panel_default, Some(2));
+        assert_eq!(
+            lua_result_mode_upvalue(&lua, &functions.get::<Function>("graph").unwrap())
+                .map(|(_, mode)| mode),
+            Some(0)
+        );
     }
 
     #[test]

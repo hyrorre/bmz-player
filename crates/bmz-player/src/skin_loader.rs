@@ -2608,6 +2608,54 @@ mod tests {
     }
 
     #[test]
+    fn luxe_flat_result_decodes_local_panel_state_and_tab_actions() {
+        let skin_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../data/skins/Luxez-Flat/result/result.luaskin");
+        if !skin_path.is_file() {
+            return;
+        }
+
+        let loaded = load_skin_document_uncached(
+            &skin_path,
+            SkinKind::Result,
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            &LuaLoadRuntimeState::default(),
+        )
+        .expect("unmodified Luxe Flat result should decode through the BMZ loader");
+
+        assert_eq!(loaded.document.result_panel_default, Some(2));
+        assert_eq!(
+            loaded
+                .document
+                .image
+                .iter()
+                .find(|image| image.id == "result_modeselect_graph_data_off")
+                .and_then(|image| image.act),
+            Some(bmz_render::skin::SKIN_EVENT_RESULT_PANEL_GRAPH)
+        );
+        assert_eq!(
+            loaded
+                .document
+                .image
+                .iter()
+                .find(|image| image.id == "result_modeselect_ir_ranking_off")
+                .and_then(|image| image.act),
+            Some(bmz_render::skin::SKIN_EVENT_RESULT_PANEL_IR)
+        );
+        assert!(loaded.document.destination.iter().any(|entry| matches!(
+            entry,
+            DestinationListEntry::Single(destination)
+                if destination.draw.contains("result_panel(1)")
+        )));
+        assert!(loaded.document.destination.iter().any(|entry| matches!(
+            entry,
+            DestinationListEntry::Single(destination)
+                if destination.draw.contains("result_panel(2)")
+        )));
+    }
+
+    #[test]
     fn wmii_result_renders_bmz_player_version_when_available() {
         let skin_path = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../data/skins/WMII_FHD/result/result.luaskin");

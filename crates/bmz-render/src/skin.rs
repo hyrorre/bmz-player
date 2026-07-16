@@ -12212,13 +12212,25 @@ fn result_judge_pie_segment_color(
 fn skin_image_item_for_frame(
     texture: SkinTextureId,
     rect: Rect,
-    uv: TextureRegion,
+    mut uv: TextureRegion,
     frame: ResolvedSkinFrame,
     center: i32,
     blend: BlendMode,
     source_size: Option<SkinImageSize>,
     linear_filter: bool,
 ) -> SkinRenderItem {
+    // beatoraja forwards signed destination sizes to SpriteBatch. BMZ keeps
+    // rectangles normalized for hit testing and clipping, so preserve the sign
+    // as a reversed UV extent instead. This reproduces `w = -101`/`h < 0`
+    // image mirroring without emitting a negative on-screen rectangle.
+    if frame.w < 0 {
+        uv.x += uv.width;
+        uv.width = -uv.width;
+    }
+    if frame.h < 0 {
+        uv.y += uv.height;
+        uv.height = -uv.height;
+    }
     let tint = Color::rgba(
         frame.r as f32 / 255.0,
         frame.g as f32 / 255.0,
@@ -13110,6 +13122,48 @@ mod tests {
     use crate::plan::TextLayer;
 
     use super::*;
+
+    #[test]
+    fn negative_image_destination_size_mirrors_texture_region() {
+        let item = skin_image_item_for_frame(
+            SkinTextureId(1),
+            Rect { x: 0.2, y: 0.3, width: 0.4, height: 0.5 },
+            TextureRegion { x: 0.1, y: 0.2, width: 0.3, height: 0.4 },
+            ResolvedSkinFrame { w: -101, h: -53, ..ResolvedSkinFrame::default() },
+            0,
+            BlendMode::Normal,
+            None,
+            false,
+        );
+
+        let SkinRenderItem::Image { rect, uv, .. } = item else { panic!() };
+        assert!(approx_eq(rect.x, 0.2));
+        assert!(approx_eq(rect.width, 0.4));
+        assert!(approx_eq(uv.x, 0.4));
+        assert!(approx_eq(uv.width, -0.3));
+        assert!(approx_eq(uv.y, 0.6));
+        assert!(approx_eq(uv.height, -0.4));
+    }
+
+    #[test]
+    fn positive_image_destination_size_keeps_texture_region_direction() {
+        let item = skin_image_item_for_frame(
+            SkinTextureId(1),
+            Rect { x: 0.2, y: 0.3, width: 0.4, height: 0.5 },
+            TextureRegion { x: 0.1, y: 0.2, width: 0.3, height: 0.4 },
+            ResolvedSkinFrame { w: 101, h: 53, ..ResolvedSkinFrame::default() },
+            0,
+            BlendMode::Normal,
+            None,
+            false,
+        );
+
+        let SkinRenderItem::Image { uv, .. } = item else { panic!() };
+        assert!(approx_eq(uv.x, 0.1));
+        assert!(approx_eq(uv.width, 0.3));
+        assert!(approx_eq(uv.y, 0.2));
+        assert!(approx_eq(uv.height, 0.4));
+    }
 
     #[test]
     fn keylogger_runtime_consumes_sequences_and_builds_nps_and_lane_counts() {
@@ -23291,6 +23345,37 @@ mod tests {
             rect.x
         );
         assert!(approx_eq(uv.width, 0.25), "source UV should be clipped to 25%: got {}", uv.width);
+    }
+
+    #[test]
+    fn negative_static_image_width_matches_beatoraja_horizontal_mirroring() {
+        let document: SkinDocument = serde_json::from_str(
+            r#"
+            {
+                "w": 1920, "h": 1080,
+                "source": [{ "id": "frame-src", "path": "frame.png" }],
+                "image": [{
+                    "id": "table-level-frame", "src": "frame-src",
+                    "x": 0, "y": 0, "w": 101, "h": 53
+                }],
+                "destination": [{
+                    "id": "table-level-frame",
+                    "dst": [{ "x": 1193, "y": 100, "w": -101, "h": 53 }]
+                }]
+            }
+            "#,
+        )
+        .unwrap();
+
+        let sources = mock_source("frame-src", 101.0, 53.0);
+        let items = document.static_image_render_items(&sources, &SkinDrawState::default());
+
+        assert_eq!(items.len(), 1);
+        let SkinRenderItem::Image { rect, uv, .. } = &items[0] else { panic!() };
+        assert!(approx_eq(rect.x, (1193.0 - 101.0) / 1920.0));
+        assert!(approx_eq(rect.width, 101.0 / 1920.0));
+        assert!(approx_eq(uv.x, 1.0));
+        assert!(approx_eq(uv.width, -1.0));
     }
 
     #[test]
