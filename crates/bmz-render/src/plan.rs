@@ -4909,7 +4909,7 @@ mod tests {
         )));
         assert!(plan.commands.iter().any(|command| matches!(
             command,
-            DrawCommand::Text { text, .. } if text == "F 5  S 10"
+            DrawCommand::Text { text, .. } if text == "F 7  S 11"
         )));
     }
 

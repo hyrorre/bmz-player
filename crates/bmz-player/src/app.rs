@@ -16489,6 +16489,7 @@ fn result_skin_signature_for_config(
 fn result_lua_runtime_number_values_for_summary(summary: &ResultSummary) -> BTreeMap<i32, i32> {
     let mut number_values = BTreeMap::new();
     let value = |value: u32| i32::try_from(value).unwrap_or(i32::MAX);
+    let difference = |current: u32, previous: u32| value(current).saturating_sub(value(previous));
     number_values.insert(71, value(summary.ex_score));
     number_values.insert(74, value(summary.total_notes));
     number_values.insert(101, value(summary.ex_score));
@@ -16498,8 +16499,49 @@ fn result_lua_runtime_number_values_for_summary(summary: &ResultSummary) -> BTre
     number_values.insert(112, value(summary.judge_counts.good));
     number_values.insert(113, value(summary.judge_counts.bad));
     number_values.insert(114, value(summary.judge_counts.poor));
+    let previous_best_ex_score = summary.previous_best_ex_score.unwrap_or(0);
+    number_values.insert(152, difference(summary.ex_score, previous_best_ex_score));
+    number_values.insert(172, difference(summary.ex_score, previous_best_ex_score));
+    if let Some(target_ex_score) = summary.target_ex_score {
+        number_values.insert(153, difference(summary.ex_score, target_ex_score));
+    }
     number_values.insert(177, value(summary.bp));
+    let counts = summary.fast_slow_counts;
+    number_values.insert(410, value(counts.fast_pgreat));
+    number_values.insert(411, value(counts.slow_pgreat));
+    number_values.insert(412, value(counts.fast_great));
+    number_values.insert(413, value(counts.slow_great));
+    number_values.insert(414, value(counts.fast_good));
+    number_values.insert(415, value(counts.slow_good));
+    number_values.insert(416, value(counts.fast_bad));
+    number_values.insert(417, value(counts.slow_bad));
+    number_values.insert(418, value(counts.fast_poor));
+    number_values.insert(419, value(counts.slow_poor));
     number_values.insert(420, value(summary.judge_counts.empty_poor));
+    number_values.insert(421, value(counts.fast_empty_poor));
+    number_values.insert(422, value(counts.slow_empty_poor));
+    number_values.insert(
+        423,
+        value(
+            counts
+                .fast_great
+                .saturating_add(counts.fast_good)
+                .saturating_add(counts.fast_bad)
+                .saturating_add(counts.fast_poor)
+                .saturating_add(counts.fast_empty_poor),
+        ),
+    );
+    number_values.insert(
+        424,
+        value(
+            counts
+                .slow_great
+                .saturating_add(counts.slow_good)
+                .saturating_add(counts.slow_bad)
+                .saturating_add(counts.slow_poor)
+                .saturating_add(counts.slow_empty_poor),
+        ),
+    );
     number_values.insert(425, i32::try_from(summary.cb).unwrap_or(i32::MAX));
     number_values.insert(
         426,
@@ -16515,6 +16557,12 @@ fn result_lua_runtime_number_values_for_summary(summary: &ResultSummary) -> BTre
                 .saturating_add(summary.judge_counts.empty_poor),
         ),
     );
+    number_values.insert(370, summary.clear_type as i32);
+    number_values.insert(371, summary.previous_best_clear_type.unwrap_or(ClearType::NoPlay) as i32);
+    if let Some((average_timing_ms, _)) = summary.graph.timing_distribution.stats() {
+        number_values.insert(374, average_timing_ms as i32);
+        number_values.insert(375, (average_timing_ms * 100.0) as i32 % 100);
+    }
     if let Some(previous_best_bp) = summary.previous_best_bp
         && let (Ok(current), Ok(previous)) =
             (i32::try_from(summary.bp), i32::try_from(previous_best_bp))
@@ -20751,6 +20799,28 @@ mod tests {
         assert!(!summary.graph.early_late_graph_buckets.is_empty());
         assert!(!summary.graph.timing_points.is_empty());
         assert!(summary.graph.timing_distribution.total() > 0);
+    }
+
+    #[test]
+    fn result_lua_runtime_values_cover_load_time_result_decisions() {
+        let mut summary = debug_boot_result_summary();
+        summary.graph.timing_distribution =
+            bmz_render::snapshot::ResultTimingDistribution::new(150);
+        summary.graph.timing_distribution.add(-13);
+        summary.graph.timing_distribution.add(-12);
+
+        let values = result_lua_runtime_number_values_for_summary(&summary);
+
+        assert_eq!(values.get(&152), Some(&((summary.ex_score as i32).saturating_sub(760))));
+        assert_eq!(values.get(&153), Some(&((summary.ex_score as i32).saturating_sub(1_056))));
+        assert_eq!(values.get(&370), Some(&(ClearType::Failed as i32)));
+        assert_eq!(values.get(&371), Some(&(ClearType::Normal as i32)));
+        assert_eq!(values.get(&374), Some(&-12));
+        assert_eq!(values.get(&375), Some(&-50));
+        assert_eq!(values.get(&410), Some(&128));
+        assert_eq!(values.get(&422), Some(&2));
+        assert_eq!(values.get(&423), Some(&46));
+        assert_eq!(values.get(&424), Some(&104));
     }
 
     #[test]

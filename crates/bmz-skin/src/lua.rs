@@ -412,6 +412,37 @@ unsafe extern "C-unwind" fn find_result_mode_upvalue(state: *mut mlua::lua_State
     }
 }
 
+/// Returns the index and boolean value of a closure upvalue named `flag_score`.
+///
+/// mz-select keeps its score-availability guard local to the player-data
+/// module, while Luxe Flat exposes the same guard as a global. Inspecting the
+/// closure lets both original skins produce the same runtime draw predicate.
+unsafe extern "C-unwind" fn find_flag_score_upvalue(state: *mut mlua::lua_State) -> c_int {
+    // SAFETY: see `find_result_mode_upvalue`; this callback only inspects the
+    // function passed in stack slot 1 and balances every pushed upvalue.
+    unsafe {
+        if mlua::ffi::lua_type(state, 1) != mlua::ffi::LUA_TFUNCTION {
+            return 0;
+        }
+        for index in 1..=255 {
+            let name = mlua::ffi::lua_getupvalue(state, 1, index);
+            if name.is_null() {
+                break;
+            }
+            let matches = CStr::from_ptr(name).to_bytes() == b"flag_score";
+            if matches && mlua::ffi::lua_type(state, -1) == mlua::ffi::LUA_TBOOLEAN {
+                let value = mlua::ffi::lua_toboolean(state, -1);
+                mlua::ffi::lua_pop(state, 1);
+                mlua::ffi::lua_pushinteger(state, i64::from(index));
+                mlua::ffi::lua_pushboolean(state, value);
+                return 2;
+            }
+            mlua::ffi::lua_pop(state, 1);
+        }
+        0
+    }
+}
+
 /// Replaces one integer closure upvalue and reports whether the index existed.
 unsafe extern "C-unwind" fn set_integer_upvalue(state: *mut mlua::lua_State) -> c_int {
     // SAFETY: arguments are validated before touching the stack. `lua_setupvalue`
@@ -437,6 +468,31 @@ unsafe extern "C-unwind" fn set_integer_upvalue(state: *mut mlua::lua_State) -> 
     }
 }
 
+/// Replaces one boolean closure upvalue and reports whether the index existed.
+unsafe extern "C-unwind" fn set_boolean_upvalue(state: *mut mlua::lua_State) -> c_int {
+    // SAFETY: arguments are validated before touching the stack. `lua_setupvalue`
+    // consumes the pushed value and only mutates the supplied function.
+    unsafe {
+        if mlua::ffi::lua_type(state, 1) != mlua::ffi::LUA_TFUNCTION
+            || mlua::ffi::lua_isinteger(state, 2) == 0
+            || mlua::ffi::lua_type(state, 3) != mlua::ffi::LUA_TBOOLEAN
+        {
+            mlua::ffi::lua_pushboolean(state, 0);
+            return 1;
+        }
+        let index = mlua::ffi::lua_tointeger(state, 2);
+        let value = mlua::ffi::lua_toboolean(state, 3);
+        let Ok(index) = c_int::try_from(index) else {
+            mlua::ffi::lua_pushboolean(state, 0);
+            return 1;
+        };
+        mlua::ffi::lua_pushboolean(state, value);
+        let name = mlua::ffi::lua_setupvalue(state, 1, index);
+        mlua::ffi::lua_pushboolean(state, if name.is_null() { 0 } else { 1 });
+        1
+    }
+}
+
 fn lua_result_mode_upvalue(lua: &Lua, function: &Function) -> Option<(i32, i32)> {
     // SAFETY: both callbacks obey Lua's C function ABI and access only their
     // call frame. They are retained by mlua for the duration of `call`.
@@ -449,6 +505,23 @@ fn set_lua_integer_upvalue(lua: &Lua, function: &Function, index: i32, value: i3
     // SAFETY: see `lua_result_mode_upvalue`; Rust-side argument conversion also
     // guarantees the C callback receives a function and two integers.
     let Ok(helper) = (unsafe { lua.create_c_function(set_integer_upvalue) }) else {
+        return false;
+    };
+    helper.call::<bool>((function.clone(), index, value)).unwrap_or(false)
+}
+
+fn lua_flag_score_upvalue(lua: &Lua, function: &Function) -> Option<(i32, bool)> {
+    // SAFETY: the callback obeys Lua's C function ABI and accesses only its
+    // call frame. It is retained by mlua for the duration of `call`.
+    let helper = unsafe { lua.create_c_function(find_flag_score_upvalue).ok()? };
+    let (index, value) = helper.call::<(i64, bool)>(function.clone()).ok()?;
+    Some((i32::try_from(index).ok()?, value))
+}
+
+fn set_lua_boolean_upvalue(lua: &Lua, function: &Function, index: i32, value: bool) -> bool {
+    // SAFETY: see `lua_flag_score_upvalue`; Rust-side argument conversion
+    // guarantees the callback receives a function, integer, and boolean.
+    let Ok(helper) = (unsafe { lua.create_c_function(set_boolean_upvalue) }) else {
         return false;
     };
     helper.call::<bool>((function.clone(), index, value)).unwrap_or(false)
@@ -3624,18 +3697,33 @@ fn infer_select_score_available_draw_condition(
     main_state_probe: &Arc<Mutex<MainStateProbe>>,
 ) -> Option<String> {
     let globals = lua.globals();
-    let original = globals.get::<Value>("flag_score").ok()?;
-    let Value::Boolean(original) = original else {
-        return None;
+    #[derive(Clone, Copy)]
+    enum ScoreGuard {
+        Global(bool),
+        Upvalue(i32, bool),
+    }
+    let guard = match globals.get::<Value>("flag_score").ok() {
+        Some(Value::Boolean(original)) => ScoreGuard::Global(original),
+        _ => {
+            let (index, original) = lua_flag_score_upvalue(lua, function)?;
+            ScoreGuard::Upvalue(index, original)
+        }
+    };
+    let original = match guard {
+        ScoreGuard::Global(value) | ScoreGuard::Upvalue(_, value) => value,
+    };
+    let set_guard = |value: bool| match guard {
+        ScoreGuard::Global(_) => globals.set("flag_score", value).is_ok(),
+        ScoreGuard::Upvalue(index, _) => set_lua_boolean_upvalue(lua, function, index, value),
     };
     let evaluate = |value: bool| -> Option<bool> {
-        globals.set("flag_score", value).ok()?;
+        set_guard(value).then_some(())?;
         main_state_probe.lock().ok()?.end_recording();
         function.call::<bool>(()).ok()
     };
     let when_unavailable = evaluate(false);
     let when_available = evaluate(true);
-    let _ = globals.set("flag_score", original);
+    let _ = set_guard(original);
 
     match (when_unavailable, when_available) {
         (Some(false), Some(true)) => Some("select_score_available()".to_string()),
@@ -7057,6 +7145,22 @@ mod tests {
             Some("select_score_available()")
         );
         assert!(!lua.globals().get::<bool>("flag_score").unwrap());
+    }
+
+    #[test]
+    fn infers_select_score_availability_from_mz_select_local_guard() {
+        let lua = Lua::new();
+        let probe = Arc::new(Mutex::new(MainStateProbe::default()));
+        let draw = lua
+            .load("local flag_score = false; return function() return flag_score end")
+            .eval::<Function>()
+            .unwrap();
+
+        assert_eq!(
+            infer_select_score_available_draw_condition(&lua, &draw, &probe).as_deref(),
+            Some("select_score_available()")
+        );
+        assert!(!draw.call::<bool>(()).unwrap());
     }
 
     #[test]

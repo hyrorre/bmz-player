@@ -5564,8 +5564,14 @@ impl SkinDocumentRenderExt for SkinDocument {
         let render_progress = (state.elapsed_ms.max(0) as f32 / 1500.0).clamp(0.0, 1.0);
         let render_x = rect.x + rect.width * render_progress;
         let mut items = Vec::with_capacity(points.len().saturating_mul(2).saturating_add(3));
-        items.push(SkinRenderItem::Rect { rect, color: colors.graph_bg, blend });
-        if border_y > rect.y {
+        // Additive black is a no-op in beatoraja. DrawCommand::Rect currently
+        // has no blend field, so forwarding it as a normal rectangle would
+        // cover an earlier JUDGE / EARLY-LATE graph (mz-select overlays its
+        // gauge graph this way). Drop only the mathematically neutral color.
+        if blend != BlendMode::Add || !is_additive_black(colors.graph_bg) {
+            items.push(SkinRenderItem::Rect { rect, color: colors.graph_bg, blend });
+        }
+        if border_y > rect.y && (blend != BlendMode::Add || !is_additive_black(colors.border_bg)) {
             items.push(SkinRenderItem::Rect {
                 rect: Rect { x: rect.x, y: rect.y, width: rect.width, height: border_y - rect.y },
                 color: colors.border_bg,
@@ -7666,7 +7672,11 @@ fn eval_skin_draw_condition(condition: &str, state: &SkinDrawState) -> bool {
 
 fn eval_skin_draw_term(term: &str, state: &SkinDrawState) -> Option<bool> {
     if term == "select_score_available()" {
-        return Some(state.select_screen && state.select_ex_score.is_some());
+        return Some(
+            state.select_screen
+                && select_score_metadata_available(state)
+                && state.select_ex_score.is_some(),
+        );
     }
     if let Some(panel) = parse_result_panel_predicate(term) {
         return state.result_panel.map(|current| current == panel);
@@ -10036,6 +10046,10 @@ struct GaugeGraphColors {
     graph_line: Color,
     border_bg: Color,
     border_line: Color,
+}
+
+fn is_additive_black(color: Color) -> bool {
+    color.r == 0.0 && color.g == 0.0 && color.b == 0.0
 }
 
 fn gaugegraph_color_index(gauge_type: i32) -> usize {
@@ -14351,15 +14365,32 @@ mod tests {
 
     #[test]
     fn select_score_available_requires_an_actual_score_record() {
-        let folder = SkinDrawState { select_screen: true, ..SkinDrawState::default() };
+        let folder = SkinDrawState {
+            select_screen: true,
+            select_row_kind: SelectRowKind::Folder,
+            select_is_folder: true,
+            select_in_library: true,
+            select_ex_score: Some(1234),
+            ..SkinDrawState::default()
+        };
         let zero_score = SkinDrawState {
             select_screen: true,
+            select_row_kind: SelectRowKind::Song,
+            select_in_library: true,
             select_ex_score: Some(0),
+            ..SkinDrawState::default()
+        };
+        let out_of_library = SkinDrawState {
+            select_screen: true,
+            select_row_kind: SelectRowKind::Song,
+            select_in_library: false,
+            select_ex_score: Some(1234),
             ..SkinDrawState::default()
         };
 
         assert!(!eval_skin_draw_condition("select_score_available()", &folder));
         assert!(eval_skin_draw_condition("select_score_available()", &zero_score));
+        assert!(!eval_skin_draw_condition("select_score_available()", &out_of_library));
     }
 
     #[test]
@@ -20618,8 +20649,8 @@ mod tests {
         assert_eq!(skin_state_number(184, &state), Some(50));
         assert_eq!(skin_state_number(400, &state), Some(1));
         assert_eq!(skin_state_number(420, &state), Some(2));
-        assert_eq!(skin_state_number(423, &state), Some(60));
-        assert_eq!(skin_state_number(424, &state), Some(64));
+        assert_eq!(skin_state_number(423, &state), Some(80));
+        assert_eq!(skin_state_number(424, &state), Some(85));
         assert_eq!(skin_state_number(425, &state), Some(7));
         assert_eq!(skin_state_number(426, &state), Some(5));
         assert_eq!(skin_state_number(427, &state), Some(9));
@@ -21086,10 +21117,10 @@ mod tests {
         assert_eq!(skin_state_number(419, &state), Some(2));
         assert_eq!(skin_state_number(421, &state), Some(5));
         assert_eq!(skin_state_number(422, &state), Some(4));
-        // TOTAL_EARLY = fast 合計 (PGREAT 除外) = 180+12+2+3 = 197
-        assert_eq!(skin_state_number(423, &state), Some(197));
-        // TOTAL_LATE = slow 合計 (PGREAT 除外) = 154+10+1+2 = 167
-        assert_eq!(skin_state_number(424, &state), Some(167));
+        // TOTAL_EARLY = fast 合計 (PGREAT 除外) = 180+12+2+3+5 = 202
+        assert_eq!(skin_state_number(423, &state), Some(202));
+        // TOTAL_LATE = slow 合計 (PGREAT 除外) = 154+10+1+2+4 = 171
+        assert_eq!(skin_state_number(424, &state), Some(171));
 
         // Result timing distribution
         assert_eq!(skin_state_number(374, &state), Some(-12));
@@ -23961,6 +23992,7 @@ mod tests {
 
         let song = SkinDrawState {
             select_row_kind: SelectRowKind::Song,
+            select_is_folder: false,
             select_in_library: true,
             select_chart_normal_notes: 900,
             ..state

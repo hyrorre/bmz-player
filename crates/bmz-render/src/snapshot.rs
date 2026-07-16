@@ -267,11 +267,11 @@ pub struct FastSlowJudgeCounts {
 
 impl FastSlowJudgeCounts {
     pub fn fast_total(self) -> u32 {
-        self.fast_great + self.fast_good + self.fast_bad + self.fast_poor
+        self.fast_great + self.fast_good + self.fast_bad + self.fast_poor + self.fast_empty_poor
     }
 
     pub fn slow_total(self) -> u32 {
-        self.slow_great + self.slow_good + self.slow_bad + self.slow_poor
+        self.slow_great + self.slow_good + self.slow_bad + self.slow_poor + self.slow_empty_poor
     }
 }
 

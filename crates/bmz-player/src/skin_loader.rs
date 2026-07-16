@@ -3404,6 +3404,159 @@ mod tests {
     }
 
     #[test]
+    fn mz_select_lua_select_skin_keeps_local_score_availability_guards() {
+        let skin_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../data/skins/mz-select/music_select.luaskin");
+        if !skin_path.is_file() {
+            return;
+        }
+
+        let decoded = decode_beatoraja_skin(&skin_path, SkinKind::Select).unwrap();
+        let guarded = decoded
+            .document
+            .destination
+            .iter()
+            .filter_map(|entry| match entry {
+                DestinationListEntry::Single(destination)
+                    if destination.id.starts_with("default_playerdata_")
+                        && destination.draw == "select_score_available()" =>
+                {
+                    Some(destination.id.as_str())
+                }
+                DestinationListEntry::Single(_) | DestinationListEntry::Conditional { .. } => None,
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(guarded.len(), 21, "mz-select player-data score guards: {guarded:?}");
+        assert!(guarded.contains(&"default_playerdata_state_clear"));
+        assert!(guarded.contains(&"default_playerdata_score_count"));
+        assert!(guarded.contains(&"default_playerdata_scorerate_dot_count"));
+    }
+
+    #[test]
+    fn mz_select_result_uses_runtime_decisions_and_draws_note_graphs() {
+        let skin_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../data/skins/mz-select/result/result.luaskin");
+        if !skin_path.is_file() {
+            return;
+        }
+        let runtime_state = LuaLoadRuntimeState {
+            number_values: BTreeMap::from([
+                (74, 100),
+                (153, 354),
+                (370, 7),
+                (371, 5),
+                (374, -12),
+                (375, -50),
+                (410, 20),
+                (411, 10),
+                (412, 8),
+                (413, 4),
+                (414, 3),
+                (415, 2),
+                (416, 1),
+                (417, 1),
+                (418, 1),
+                (419, 1),
+                (421, 1),
+                (422, 1),
+            ]),
+            ..LuaLoadRuntimeState::default()
+        };
+        let decoded = decode_beatoraja_skin_with_options_and_runtime_state(
+            &skin_path,
+            SkinKind::Result,
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            &runtime_state,
+        )
+        .expect("decode mz-select result skin with runtime result values");
+
+        let timing = decoded
+            .document
+            .text
+            .iter()
+            .find(|text| text.id == "timing")
+            .expect("mz-select timing text");
+        assert_eq!(timing.constant_text, "平均12.5ms遅い");
+        let clear_state = decoded
+            .document
+            .image
+            .iter()
+            .find(|image| image.id == "clear_state")
+            .expect("mz-select clear update image");
+        assert_eq!(clear_state.x, 0, "current clear above previous should use UP image");
+        assert!(decoded.document.destination.iter().any(|entry| matches!(
+            entry,
+            DestinationListEntry::Single(destination) if destination.id == "win"
+        )));
+        assert!(!decoded.document.destination.iter().any(|entry| matches!(
+            entry,
+            DestinationListEntry::Single(destination) if destination.id == "draw"
+        )));
+
+        let document_textures = decoded.sources.iter().map(|source| SkinDocumentTexture {
+            source_id: source.source_id.clone(),
+            texture: source.texture,
+            source_size: source.size,
+        });
+        let context = SkinContext::from_manifest_and_document(
+            bmz_render::skin::default_skin_manifest(),
+            decoded.document,
+            document_textures,
+        );
+        let graph = bmz_render::snapshot::ResultGraphSnapshot {
+            judge_graph_buckets: vec![
+                bmz_render::snapshot::ResultJudgeGraphBucket { values: [0, 10, 5, 2, 1, 1] },
+                bmz_render::snapshot::ResultJudgeGraphBucket { values: [0, 8, 4, 2, 1, 0] },
+            ],
+            early_late_graph_buckets: vec![
+                bmz_render::snapshot::ResultEarlyLateGraphBucket {
+                    values: [0, 10, 4, 2, 1, 0, 3, 2, 1, 0],
+                },
+                bmz_render::snapshot::ResultEarlyLateGraphBucket {
+                    values: [0, 8, 3, 2, 1, 0, 4, 2, 1, 0],
+                },
+            ],
+            judge_graph_density: vec![12, 18],
+            ..bmz_render::snapshot::ResultGraphSnapshot::default()
+        };
+        let state = bmz_render::skin::SkinDrawState {
+            elapsed_ms: 500,
+            result_failed: Some(false),
+            total_notes: 100,
+            key_mode: KeyMode::K7,
+            ..bmz_render::skin::SkinDrawState::default()
+        };
+        let items = context.static_document_items_for_result_state_and_text(
+            &graph,
+            &state,
+            &bmz_render::skin::SkinTextState::default(),
+        );
+        let populated_batches = items
+            .iter()
+            .filter(|item| {
+                matches!(
+                    item,
+                    bmz_render::skin::SkinRenderItem::RectBatch { rects, .. } if !rects.is_empty()
+                )
+            })
+            .count();
+        assert_eq!(populated_batches, 2, "JUDGE and FAST/SLOW graph batches should render");
+        assert!(
+            !items.iter().any(|item| matches!(
+                item,
+                bmz_render::skin::SkinRenderItem::Rect {
+                    color,
+                    blend: bmz_render::skin::BlendMode::Add,
+                    ..
+                } if color.r == 0.0 && color.g == 0.0 && color.b == 0.0
+            )),
+            "additive black gauge backgrounds must not cover the two note graphs"
+        );
+    }
+
+    #[test]
     fn ecfn_play7_judge_combo_x_matches_beatoraja_layout_when_available() {
         use std::collections::HashMap;
 
