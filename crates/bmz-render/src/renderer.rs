@@ -148,6 +148,7 @@ pub struct Renderer {
     /// サーフェス生成時および `set_present_mode` で参照する希望 present mode。
     present_mode: WgpuPresentMode,
     backend: WgpuBackend,
+    default_font_coverage: bmz_font::FontCoverage,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -391,7 +392,7 @@ struct WgpuRenderer {
     text_atlas: TextAtlasCache,
     text_buffer: Option<wgpu::Buffer>,
     text_buffer_capacity: usize,
-    font: Option<FontArc>,
+    default_fonts: FontFallbackChain,
     egui: EguiPainter,
     pending_screenshot_readbacks: Vec<ScreenshotReadback>,
     screenshot_save_jobs: Vec<ScreenshotSaveJob>,
@@ -732,8 +733,13 @@ impl Renderer {
             return Ok(());
         }
 
-        let mut gpu =
-            WgpuRenderer::new_with_fallbacks(window, size, self.present_mode, self.backend)?;
+        let mut gpu = WgpuRenderer::new_with_fallbacks(
+            window,
+            size,
+            self.present_mode,
+            self.backend,
+            self.default_font_coverage,
+        )?;
         for texture in self.pending_textures.drain(..) {
             gpu.upsert_rgba_texture(texture.id, texture.width, texture.height, &texture.rgba);
         }
@@ -1109,6 +1115,20 @@ impl Renderer {
         self.backend = backend;
     }
 
+    /// 未指定テキストの CJK 字形で最優先する地域 coverage を変更する。
+    ///
+    /// 優先 face に無い文字は、他の全 CJK coverage と一般 sans-serif へ
+    /// 文字単位で fallback する。スキンが明示指定したフォントには影響しない。
+    pub fn set_default_font_coverage(&mut self, coverage: bmz_font::FontCoverage) {
+        if self.default_font_coverage == coverage {
+            return;
+        }
+        self.default_font_coverage = coverage;
+        if let Some(gpu) = &mut self.gpu {
+            gpu.set_default_font_coverage(coverage);
+        }
+    }
+
     pub fn render_last_plan(&mut self) -> Result<RenderSurfaceStatus> {
         let egui = self.pending_egui.take();
         let screenshot = self.pending_screenshot.take();
@@ -1260,6 +1280,7 @@ impl WgpuRenderer {
         size: SurfaceSize,
         present_mode: WgpuPresentMode,
         backend: WgpuBackend,
+        default_font_coverage: bmz_font::FontCoverage,
     ) -> Result<Self>
     where
         T: Into<wgpu::SurfaceTarget<'static>> + Clone,
@@ -1267,7 +1288,7 @@ impl WgpuRenderer {
         let candidates = fallback_wgpu_backends(backend);
         let mut last_error = None;
         for candidate in candidates {
-            match Self::new(window.clone(), size, present_mode, *candidate) {
+            match Self::new(window.clone(), size, present_mode, *candidate, default_font_coverage) {
                 Ok(renderer) => {
                     if backend == WgpuBackend::Auto && *candidate != WgpuBackend::Auto {
                         tracing::info!(backend = ?candidate, "selected auto renderer backend");
@@ -1294,6 +1315,7 @@ impl WgpuRenderer {
         size: SurfaceSize,
         present_mode: WgpuPresentMode,
         backend: WgpuBackend,
+        default_font_coverage: bmz_font::FontCoverage,
     ) -> Result<Self>
     where
         T: Into<wgpu::SurfaceTarget<'static>>,
@@ -1400,7 +1422,7 @@ impl WgpuRenderer {
             text_atlas: TextAtlasCache::new(TEXT_ATLAS_WIDTH),
             text_buffer: None,
             text_buffer_capacity: 0,
-            font: load_default_font(),
+            default_fonts: load_default_font_fallbacks(default_font_coverage),
             egui,
             pending_screenshot_readbacks: Vec::new(),
             screenshot_save_jobs: Vec::new(),
@@ -1922,6 +1944,11 @@ impl WgpuRenderer {
         );
     }
 
+    fn set_default_font_coverage(&mut self, coverage: bmz_font::FontCoverage) {
+        self.default_fonts = load_default_font_fallbacks(coverage);
+        self.reset_text_atlas();
+    }
+
     fn build_text_frame(
         &mut self,
         plan: &DrawPlan,
@@ -1932,12 +1959,12 @@ impl WgpuRenderer {
         if !surface.is_drawable() {
             return TextFrame::default();
         }
-        let Some(default_font) = self.font.clone() else {
+        if self.default_fonts.is_empty() {
             return TextFrame::default();
-        };
-        build_text_frame_with_cache(
+        }
+        build_text_frame_with_fallback_cache(
             plan,
-            &default_font,
+            &self.default_fonts,
             fonts,
             bitmap_fonts,
             surface,
@@ -2661,9 +2688,80 @@ fn build_text_frame(
     frame
 }
 
-fn build_text_frame_with_cache(
+#[derive(Clone)]
+struct FontFallbackFace {
+    cache_id: String,
+    font: FontArc,
+}
+
+#[derive(Clone, Default)]
+struct FontFallbackChain {
+    faces: Vec<FontFallbackFace>,
+}
+
+impl FontFallbackChain {
+    fn is_empty(&self) -> bool {
+        self.faces.is_empty()
+    }
+
+    fn primary(&self) -> Option<&FontFallbackFace> {
+        self.faces.first()
+    }
+
+    fn select(&self, ch: char) -> Option<&FontFallbackFace> {
+        self.faces.iter().find(|face| face.font.glyph_id(ch).0 != 0).or_else(|| self.primary())
+    }
+
+    #[cfg(test)]
+    fn single(font: FontArc) -> Self {
+        Self { faces: vec![FontFallbackFace { cache_id: DEFAULT_TEXT_FONT_ID.to_string(), font }] }
+    }
+}
+
+#[derive(Clone, Copy)]
+enum VectorFontSet<'a> {
+    Single { cache_id: &'a str, font: &'a FontArc },
+    Fallback(&'a FontFallbackChain),
+}
+
+impl<'a> VectorFontSet<'a> {
+    fn primary(self) -> Option<(&'a str, &'a FontArc)> {
+        match self {
+            Self::Single { cache_id, font } => Some((cache_id, font)),
+            Self::Fallback(fonts) => {
+                fonts.primary().map(|face| (face.cache_id.as_str(), &face.font))
+            }
+        }
+    }
+
+    fn select(self, ch: char) -> Option<(&'a str, &'a FontArc)> {
+        match self {
+            Self::Single { cache_id, font } => Some((cache_id, font)),
+            Self::Fallback(fonts) => {
+                fonts.select(ch).map(|face| (face.cache_id.as_str(), &face.font))
+            }
+        }
+    }
+
+    fn layout_cache_id(self, text: &str) -> String {
+        match self {
+            Self::Single { cache_id, .. } => cache_id.to_string(),
+            Self::Fallback(_) => {
+                let mut id = String::from(DEFAULT_TEXT_FONT_ID);
+                for ch in text.chars() {
+                    let selected = self.select(ch).map(|(id, _)| id).unwrap_or("<missing>");
+                    id.push('|');
+                    id.push_str(selected);
+                }
+                id
+            }
+        }
+    }
+}
+
+fn build_text_frame_with_fallback_cache(
     plan: &DrawPlan,
-    default_font: &FontArc,
+    default_fonts: &FontFallbackChain,
     fonts: &HashMap<String, FontArc>,
     bitmap_fonts: &HashMap<String, BitmapFont>,
     surface: SurfaceSize,
@@ -2690,20 +2788,47 @@ fn build_text_frame_with_cache(
                 bitmap_text_caret_rect(origin, text, style, bitmap_font, surface, caret)
             }));
         } else {
-            let font_id = style.font_id.as_deref().unwrap_or(DEFAULT_TEXT_FONT_ID);
-            let font = style
+            let vector_fonts = style
                 .font_id
-                .as_ref()
-                .and_then(|font_id| fonts.get(font_id))
-                .unwrap_or(default_font);
-            builder.push_text(origin, text, style.clone(), font_id, font, surface);
+                .as_deref()
+                .and_then(|font_id| {
+                    fonts.get(font_id).map(|font| VectorFontSet::Single { cache_id: font_id, font })
+                })
+                .unwrap_or(VectorFontSet::Fallback(default_fonts));
+            builder.push_text(origin, text, style.clone(), vector_fonts, surface);
             command_caret_rects.push(caret.and_then(|caret| {
-                vector_text_caret_rect(origin, text, style, font, surface, caret)
+                vector_text_caret_rect_with_fallback(
+                    origin,
+                    text,
+                    style,
+                    vector_fonts,
+                    surface,
+                    caret,
+                )
             }));
         }
         command_quad_counts.push(builder.quads.len() - quads_before);
     }
     builder.finish(command_quad_counts, command_caret_rects)
+}
+
+#[cfg(test)]
+fn build_text_frame_with_cache(
+    plan: &DrawPlan,
+    default_font: &FontArc,
+    fonts: &HashMap<String, FontArc>,
+    bitmap_fonts: &HashMap<String, BitmapFont>,
+    surface: SurfaceSize,
+    atlas: &mut TextAtlasCache,
+) -> TextFrame {
+    build_text_frame_with_fallback_cache(
+        plan,
+        &FontFallbackChain::single(default_font.clone()),
+        fonts,
+        bitmap_fonts,
+        surface,
+        atlas,
+    )
 }
 
 const DEFAULT_TEXT_FONT_ID: &str = "<default>";
@@ -3204,8 +3329,7 @@ impl<'a> CachedTextFrameBuilder<'a> {
         origin: &Point,
         text: &str,
         style: TextStyle,
-        font_id: &str,
-        font: &FontArc,
+        fonts: VectorFontSet<'_>,
         surface: SurfaceSize,
     ) {
         if let Some(shadow) = style.shadow.filter(|shadow| shadow.color.a > 0.0) {
@@ -3215,7 +3339,7 @@ impl<'a> CachedTextFrameBuilder<'a> {
             shadow_style.shadow = None;
             let shadow_origin =
                 Point { x: origin.x + shadow.offset.x, y: origin.y + shadow.offset.y };
-            self.push_text(&shadow_origin, text, shadow_style, font_id, font, surface);
+            self.push_text(&shadow_origin, text, shadow_style, fonts, surface);
         }
         if let Some(outline) = style.outline.filter(|outline| outline.color.a > 0.0) {
             let mut outline_style = style.clone();
@@ -3235,19 +3359,13 @@ impl<'a> CachedTextFrameBuilder<'a> {
                 (outline_x, outline_y),
             ] {
                 let outline_origin = Point { x: origin.x + offset_x, y: origin.y + offset_y };
-                self.push_text(
-                    &outline_origin,
-                    text,
-                    outline_style.clone(),
-                    font_id,
-                    font,
-                    surface,
-                );
+                self.push_text(&outline_origin, text, outline_style.clone(), fonts, surface);
             }
         }
 
+        let layout_font_id = fonts.layout_cache_id(text);
         let layout_key =
-            text_layout_key(TextGlyphKind::Vector, font_id, origin, text, &style, surface);
+            text_layout_key(TextGlyphKind::Vector, &layout_font_id, origin, text, &style, surface);
         if let Some(cached) = layout_key.as_ref().and_then(|key| self.atlas.cached_layout(key)) {
             self.quads.extend(cached);
             return;
@@ -3259,17 +3377,20 @@ impl<'a> CachedTextFrameBuilder<'a> {
         let max_width = style.max_width.max(0.0) * surface.width as f32;
         let mut text = std::borrow::Cow::Borrowed(text);
         let mut scale = PxScale::from(px_size);
-        let mut scaled_font = font.as_scaled(scale);
-        let mut text_width = text_width_px(&text, font, &scaled_font);
+        let Some((_, primary_font)) = fonts.primary() else {
+            return;
+        };
+        let mut scaled_primary = primary_font.as_scaled(scale);
+        let mut text_width = fallback_text_width_px(&text, fonts, scale);
         if style.wrapping && max_width > 0.0 {
-            let lines = wrap_text_to_width(&text, font, &scaled_font, max_width);
-            let line_height = (scaled_font.ascent() - scaled_font.descent()
-                + scaled_font.line_gap())
+            let lines = wrap_fallback_text_to_width(&text, fonts, scale, max_width);
+            let line_height = (scaled_primary.ascent() - scaled_primary.descent()
+                + scaled_primary.line_gap())
             .max(px_size);
             let origin_x = origin.x * surface.width as f32;
-            let first_baseline_y = origin.y * surface.height as f32 + scaled_font.ascent();
+            let first_baseline_y = origin.y * surface.height as f32 + scaled_primary.ascent();
             for (index, line) in lines.iter().enumerate() {
-                let line_width = text_width_px(line, font, &scaled_font);
+                let line_width = fallback_text_width_px(line, fonts, scale);
                 let baseline_y = first_baseline_y + line_height * index as f32;
                 self.push_text_line(
                     origin_x,
@@ -3278,8 +3399,7 @@ impl<'a> CachedTextFrameBuilder<'a> {
                     line_width,
                     scale,
                     style.clone(),
-                    font_id,
-                    font,
+                    fonts,
                     surface,
                 );
             }
@@ -3291,17 +3411,14 @@ impl<'a> CachedTextFrameBuilder<'a> {
                 TextOverflow::Shrink => {
                     px_size = (px_size * max_width / text_width).max(1.0);
                     scale = PxScale::from(px_size);
-                    scaled_font = font.as_scaled(scale);
-                    text_width = text_width_px(&text, font, &scaled_font);
+                    scaled_primary = primary_font.as_scaled(scale);
+                    text_width = fallback_text_width_px(&text, fonts, scale);
                 }
                 TextOverflow::Truncate => {
-                    text = std::borrow::Cow::Owned(truncate_text_to_width(
-                        &text,
-                        font,
-                        &scaled_font,
-                        max_width,
+                    text = std::borrow::Cow::Owned(truncate_fallback_text_to_width(
+                        &text, fonts, scale, max_width,
                     ));
-                    text_width = text_width_px(&text, font, &scaled_font);
+                    text_width = fallback_text_width_px(&text, fonts, scale);
                 }
             }
         }
@@ -3312,11 +3429,10 @@ impl<'a> CachedTextFrameBuilder<'a> {
             } else {
                 0.0
             };
-        let baseline_y = origin.y * surface.height as f32 + shrink_offset_y + scaled_font.ascent();
+        let baseline_y =
+            origin.y * surface.height as f32 + shrink_offset_y + scaled_primary.ascent();
 
-        self.push_text_line(
-            cursor_x, baseline_y, &text, text_width, scale, style, font_id, font, surface,
-        );
+        self.push_text_line(cursor_x, baseline_y, &text, text_width, scale, style, fonts, surface);
 
         if let Some(key) = layout_key {
             self.atlas.insert_layout(key, &self.quads[quads_before..]);
@@ -3331,16 +3447,18 @@ impl<'a> CachedTextFrameBuilder<'a> {
         text_width: f32,
         scale: PxScale,
         style: TextStyle,
-        font_id: &str,
-        font: &FontArc,
+        fonts: VectorFontSet<'_>,
         surface: SurfaceSize,
     ) {
-        let scaled_font = font.as_scaled(scale);
         let max_width = style.max_width.max(0.0) * surface.width as f32;
         let align_offset = text_align_offset_px(style.align, max_width, text_width);
         let mut cursor_x = origin_x + align_offset;
 
         for ch in text.chars() {
+            let Some((font_id, font)) = fonts.select(ch) else {
+                continue;
+            };
+            let scaled_font = font.as_scaled(scale);
             let glyph_id = font.glyph_id(ch);
             let advance = scaled_font.h_advance(glyph_id);
             if let Some(cached) = self.atlas.cached_vector_glyph(font_id, ch, scale, font) {
@@ -3746,8 +3864,20 @@ impl TextAtlasBuilder {
     }
 }
 
+#[cfg(test)]
 fn text_width_px<F: Font>(text: &str, font: &FontArc, scaled_font: &impl ScaleFont<F>) -> f32 {
     text.chars().map(|ch| scaled_font.h_advance(font.glyph_id(ch))).sum()
+}
+
+fn fallback_char_advance(ch: char, fonts: VectorFontSet<'_>, scale: PxScale) -> f32 {
+    let Some((_, font)) = fonts.select(ch) else {
+        return 0.0;
+    };
+    font.as_scaled(scale).h_advance(font.glyph_id(ch))
+}
+
+fn fallback_text_width_px(text: &str, fonts: VectorFontSet<'_>, scale: PxScale) -> f32 {
+    text.chars().map(|ch| fallback_char_advance(ch, fonts, scale)).sum()
 }
 
 fn bitmap_text_width_px(text: &str, font: &BitmapFont, scale: f32) -> f32 {
@@ -3885,6 +4015,7 @@ fn text_align_offset_px(align: TextAlign, max_width: f32, text_width: f32) -> f3
     }
 }
 
+#[cfg(test)]
 fn vector_text_caret_rect(
     origin: &Point,
     text: &str,
@@ -3922,6 +4053,60 @@ fn vector_text_caret_rect(
     let align_offset = text_align_offset_px(style.align, max_width, text_width);
     let cursor = clamp_text_byte_index(&visible, caret.byte_index);
     let prefix_width = text_width_px(&visible[..cursor], font, &scaled_font);
+    let shrink_offset_y =
+        if matches!(style.overflow, TextOverflow::Shrink) && px_size < original_px_size {
+            (original_px_size - px_size) / 2.0
+        } else {
+            0.0
+        };
+    let x = (origin.x * surface.width as f32 + align_offset + prefix_width) / surface.width as f32;
+    let y = (origin.y * surface.height as f32 + shrink_offset_y) / surface.height as f32;
+    Some(RectCommand {
+        rect: Rect {
+            x,
+            y,
+            width: (2.0 / surface.width as f32).max(0.001),
+            height: (px_size / surface.height as f32).max(0.001),
+        },
+        color: caret.color,
+    })
+}
+
+fn vector_text_caret_rect_with_fallback(
+    origin: &Point,
+    text: &str,
+    style: &TextStyle,
+    fonts: VectorFontSet<'_>,
+    surface: SurfaceSize,
+    caret: TextCaret,
+) -> Option<RectCommand> {
+    if style.wrapping || !surface.is_drawable() || fonts.primary().is_none() {
+        return None;
+    }
+    let mut px_size = (style.size * surface.height as f32).max(1.0);
+    let original_px_size = px_size;
+    let max_width = style.max_width.max(0.0) * surface.width as f32;
+    let mut visible = Cow::Borrowed(text);
+    let mut scale = PxScale::from(px_size);
+    let mut text_width = fallback_text_width_px(&visible, fonts, scale);
+    if max_width > 0.0 && text_width > max_width {
+        match style.overflow {
+            TextOverflow::Overflow => {}
+            TextOverflow::Shrink => {
+                px_size = (px_size * max_width / text_width).max(1.0);
+                scale = PxScale::from(px_size);
+                text_width = fallback_text_width_px(&visible, fonts, scale);
+            }
+            TextOverflow::Truncate => {
+                visible =
+                    Cow::Owned(truncate_fallback_text_to_width(&visible, fonts, scale, max_width));
+                text_width = fallback_text_width_px(&visible, fonts, scale);
+            }
+        }
+    }
+    let align_offset = text_align_offset_px(style.align, max_width, text_width);
+    let cursor = clamp_text_byte_index(&visible, caret.byte_index);
+    let prefix_width = fallback_text_width_px(&visible[..cursor], fonts, scale);
     let shrink_offset_y =
         if matches!(style.overflow, TextOverflow::Shrink) && px_size < original_px_size {
             (original_px_size - px_size) / 2.0
@@ -4026,6 +4211,7 @@ fn truncate_bitmap_text_to_width(
     result
 }
 
+#[cfg(test)]
 fn wrap_text_to_width<F: Font>(
     text: &str,
     font: &FontArc,
@@ -4050,6 +4236,31 @@ fn wrap_text_to_width<F: Font>(
     lines
 }
 
+fn wrap_fallback_text_to_width(
+    text: &str,
+    fonts: VectorFontSet<'_>,
+    scale: PxScale,
+    max_width: f32,
+) -> Vec<String> {
+    let mut lines = Vec::new();
+    for source_line in text.split('\n') {
+        let mut line = String::new();
+        let mut width = 0.0;
+        for ch in source_line.chars() {
+            let advance = fallback_char_advance(ch, fonts, scale);
+            if !line.is_empty() && width + advance > max_width {
+                lines.push(std::mem::take(&mut line));
+                width = 0.0;
+            }
+            line.push(ch);
+            width += advance;
+        }
+        lines.push(line);
+    }
+    lines
+}
+
+#[cfg(test)]
 fn truncate_text_to_width<F: Font>(
     text: &str,
     font: &FontArc,
@@ -4060,6 +4271,25 @@ fn truncate_text_to_width<F: Font>(
     let mut result = String::new();
     for ch in text.chars() {
         let advance = scaled_font.h_advance(font.glyph_id(ch));
+        if width + advance > max_width {
+            break;
+        }
+        width += advance;
+        result.push(ch);
+    }
+    result
+}
+
+fn truncate_fallback_text_to_width(
+    text: &str,
+    fonts: VectorFontSet<'_>,
+    scale: PxScale,
+    max_width: f32,
+) -> String {
+    let mut width = 0.0;
+    let mut result = String::new();
+    for ch in text.chars() {
+        let advance = fallback_char_advance(ch, fonts, scale);
         if width + advance > max_width {
             break;
         }
@@ -4718,20 +4948,44 @@ fn wgpu_present_mode_label(mode: wgpu::PresentMode) -> &'static str {
     }
 }
 
+#[cfg(test)]
 fn load_default_font() -> Option<FontArc> {
-    if let Some(resolved) = bmz_font::resolve_system_font(true) {
-        return load_font_from_resolved(&resolved);
+    load_default_font_fallbacks(bmz_font::FontCoverage::Japanese)
+        .primary()
+        .map(|face| face.font.clone())
+}
+
+fn load_default_font_fallbacks(preferred: bmz_font::FontCoverage) -> FontFallbackChain {
+    let mut resolved = bmz_font::resolve_system_font_fallbacks(preferred);
+    if let Some(general) = bmz_font::resolve_system_font(false)
+        && !resolved.iter().any(|(_, font)| font == &general)
+    {
+        resolved.push((preferred, general));
     }
 
-    if let Some(resolved) = bmz_font::resolve_system_font(false) {
+    let mut faces = Vec::new();
+    for (index, (coverage, resolved)) in resolved.iter().enumerate() {
+        if let Some(font) = load_font_from_resolved(resolved) {
+            faces.push(FontFallbackFace {
+                cache_id: format!("{DEFAULT_TEXT_FONT_ID}:{coverage:?}:{index}"),
+                font,
+            });
+        }
+    }
+
+    if faces.is_empty() {
+        tracing::warn!("no default render font found; text draw commands will be skipped");
+    } else if !faces
+        .iter()
+        .any(|face| preferred.glyph_probes().iter().all(|ch| face.font.glyph_id(*ch).0 != 0))
+    {
         tracing::warn!(
-            "no Japanese-capable font found; default skin text will fall back to a Latin-only font"
+            ?preferred,
+            "no font matching preferred CJK coverage; default text will use other fallback faces"
         );
-        return load_font_from_resolved(&resolved);
     }
 
-    tracing::warn!("no default render font found; text draw commands will be skipped");
-    None
+    FontFallbackChain { faces }
 }
 
 fn load_font_from_resolved(resolved: &bmz_font::ResolvedFont) -> Option<FontArc> {
@@ -4751,14 +5005,48 @@ fn load_font_from_resolved(resolved: &bmz_font::ResolvedFont) -> Option<FontArc>
 /// OS フォント DB から CJK 対応 face を font-kit 経由で解決し、
 /// collection index 付きでファイル全体を返す。
 pub fn load_japanese_font_bytes() -> Option<Vec<u8>> {
-    let resolved = bmz_font::resolve_system_font(true)?;
+    load_font_bytes_for_coverage(bmz_font::FontCoverage::Japanese)
+}
+
+/// egui など外部 UI に渡せる OS フォントデータ。
+///
+/// TTC/OTC では `font_index` を `egui::FontData::index` などへ引き継ぐ必要がある。
+#[derive(Debug, Clone)]
+pub struct SystemFontData {
+    pub bytes: Vec<u8>,
+    pub font_index: u32,
+}
+
+/// egui など外部 UI 向けに、指定 coverage を満たす OS フォントの生バイト列を返す。
+pub fn load_font_bytes_for_coverage(coverage: bmz_font::FontCoverage) -> Option<Vec<u8>> {
+    load_system_font_data_for_coverage(coverage).map(|data| data.bytes)
+}
+
+/// 指定 coverage を満たす OS フォントを collection index 付きで返す。
+pub fn load_system_font_data_for_coverage(
+    coverage: bmz_font::FontCoverage,
+) -> Option<SystemFontData> {
+    let resolved = bmz_font::resolve_system_font_for_coverage(coverage)?;
     let bytes = bmz_font::read_resolved_font_bytes(&resolved).ok()?;
-    if bmz_font::font_supports_japanese(&bytes, resolved.font_index) {
-        Some(bytes)
+    if bmz_font::font_supports_coverage(&bytes, resolved.font_index, coverage) {
+        Some(SystemFontData { bytes, font_index: resolved.font_index })
     } else {
-        tracing::warn!("no Japanese-capable font found for egui; text may render as tofu");
+        tracing::warn!(?coverage, "no matching font found for egui; text may render as tofu");
         None
     }
+}
+
+/// 優先 coverage を先頭にして、利用可能な全 CJK fallback font を返す。
+pub fn load_cjk_font_fallback_data(
+    preferred: bmz_font::FontCoverage,
+) -> Vec<(bmz_font::FontCoverage, SystemFontData)> {
+    bmz_font::resolve_system_font_fallbacks(preferred)
+        .into_iter()
+        .filter_map(|(coverage, resolved)| {
+            let bytes = bmz_font::read_resolved_font_bytes(&resolved).ok()?;
+            Some((coverage, SystemFontData { bytes, font_index: resolved.font_index }))
+        })
+        .collect()
 }
 
 fn block_on<T>(future: impl Future<Output = T>) -> T {
@@ -5499,6 +5787,153 @@ mod tests {
         if cjk_available {
             assert!(font_supports_japanese(&font));
         }
+    }
+
+    #[test]
+    fn default_font_fallback_chain_prefers_requested_coverage() {
+        for coverage in bmz_font::ALL_FONT_COVERAGES {
+            if bmz_font::resolve_system_font_for_coverage(coverage).is_none() {
+                continue;
+            }
+            let fonts = load_default_font_fallbacks(coverage);
+            let Some(primary) = fonts.primary() else {
+                panic!("resolved {coverage:?} font should be loadable");
+            };
+            assert!(
+                coverage.glyph_probes().iter().all(|ch| primary.font.glyph_id(*ch).0 != 0),
+                "primary face should match requested {coverage:?} coverage"
+            );
+        }
+    }
+
+    #[test]
+    fn default_font_fallback_uses_selected_face_in_glyph_and_layout_cache_keys() {
+        let fonts = load_default_font_fallbacks(bmz_font::FontCoverage::Japanese);
+        let Some(primary) = fonts.primary() else { return };
+        let fallback_char = bmz_font::ALL_FONT_COVERAGES
+            .iter()
+            .flat_map(|coverage| coverage.glyph_probes())
+            .copied()
+            .find(|ch| {
+                fonts.select(*ch).is_some_and(|selected| {
+                    selected.cache_id != primary.cache_id && selected.font.glyph_id(*ch).0 != 0
+                })
+            });
+        let Some(fallback_char) = fallback_char else {
+            return;
+        };
+        let selected_id = fonts.select(fallback_char).unwrap().cache_id.clone();
+        let surface = SurfaceSize { width: 320, height: 240 };
+        let text = format!("A{fallback_char}");
+        let plan = DrawPlan {
+            clear: Color::rgb(0.0, 0.0, 0.0),
+            commands: vec![DrawCommand::Text {
+                origin: Point { x: 0.1, y: 0.1 },
+                text: text.clone(),
+                caret: None,
+                style: TextStyle {
+                    font_id: None,
+                    size: 0.1,
+                    bitmap_size: None,
+                    color: Color::rgb(1.0, 1.0, 1.0),
+                    layer: crate::plan::TextLayer::Skin,
+                    align: TextAlign::Left,
+                    max_width: 0.0,
+                    overflow: TextOverflow::Overflow,
+                    wrapping: false,
+                    outline: None,
+                    shadow: None,
+                },
+            }],
+        };
+        let mut atlas = TextAtlasCache::new(TEXT_ATLAS_WIDTH);
+
+        let frame = build_text_frame_with_fallback_cache(
+            &plan,
+            &fonts,
+            &HashMap::new(),
+            &HashMap::new(),
+            surface,
+            &mut atlas,
+        );
+
+        assert!(!frame.instances.is_empty());
+        assert!(
+            atlas
+                .glyphs
+                .keys()
+                .any(|key| { key.ch == fallback_char && key.font_id == selected_id })
+        );
+        assert!(
+            !atlas
+                .glyphs
+                .keys()
+                .any(|key| { key.ch == fallback_char && key.font_id != selected_id })
+        );
+        assert!(
+            atlas
+                .layouts
+                .entries
+                .keys()
+                .any(|key| { key.text == text && key.font_id.contains(&selected_id) })
+        );
+    }
+
+    #[test]
+    fn explicit_vector_font_does_not_use_default_fallback_faces() {
+        let default_fonts = load_default_font_fallbacks(bmz_font::FontCoverage::Japanese);
+        let Some(primary) = default_fonts.primary() else { return };
+        let fallback_char = bmz_font::ALL_FONT_COVERAGES
+            .iter()
+            .flat_map(|coverage| coverage.glyph_probes())
+            .copied()
+            .find(|ch| {
+                primary.font.glyph_id(*ch).0 == 0
+                    && default_fonts
+                        .select(*ch)
+                        .is_some_and(|selected| selected.font.glyph_id(*ch).0 != 0)
+            });
+        let Some(fallback_char) = fallback_char else {
+            return;
+        };
+        let custom_id = "skin:custom";
+        let mut custom_fonts = HashMap::new();
+        custom_fonts.insert(custom_id.to_string(), primary.font.clone());
+        let surface = SurfaceSize { width: 320, height: 240 };
+        let plan = DrawPlan {
+            clear: Color::rgb(0.0, 0.0, 0.0),
+            commands: vec![DrawCommand::Text {
+                origin: Point { x: 0.1, y: 0.1 },
+                text: fallback_char.to_string(),
+                caret: None,
+                style: TextStyle {
+                    font_id: Some(custom_id.to_string()),
+                    size: 0.1,
+                    bitmap_size: None,
+                    color: Color::rgb(1.0, 1.0, 1.0),
+                    layer: crate::plan::TextLayer::Skin,
+                    align: TextAlign::Left,
+                    max_width: 0.0,
+                    overflow: TextOverflow::Overflow,
+                    wrapping: false,
+                    outline: None,
+                    shadow: None,
+                },
+            }],
+        };
+        let mut atlas = TextAtlasCache::new(TEXT_ATLAS_WIDTH);
+
+        build_text_frame_with_fallback_cache(
+            &plan,
+            &default_fonts,
+            &custom_fonts,
+            &HashMap::new(),
+            surface,
+            &mut atlas,
+        );
+
+        assert!(atlas.glyphs.keys().all(|key| key.font_id == custom_id));
+        assert!(atlas.layouts.entries.keys().all(|key| key.font_id == custom_id));
     }
 
     #[test]
