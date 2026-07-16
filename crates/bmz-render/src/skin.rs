@@ -3478,10 +3478,10 @@ impl SkinDocumentRenderExt for SkinDocument {
         let (state, selected_row) = self.select_draw_state(snapshot, dynamic_timers);
         let text = SkinTextState {
             player_name: &snapshot.player_name,
-            title: selected_row.map(|row| row.title.as_str()).unwrap_or(&snapshot.selected_title),
+            title: select_detail_title(snapshot, selected_row),
             subtitle: select_detail_subtitle(snapshot, selected_row),
             artist: select_detail_artist(snapshot, selected_row),
-            genre: selected_row.map(|row| row.genre.as_str()).unwrap_or_default(),
+            genre: select_detail_genre(snapshot, selected_row),
             difficulty_name: if snapshot.in_settings {
                 ""
             } else {
@@ -7665,6 +7665,9 @@ fn eval_skin_draw_condition(condition: &str, state: &SkinDrawState) -> bool {
 }
 
 fn eval_skin_draw_term(term: &str, state: &SkinDrawState) -> Option<bool> {
+    if term == "select_score_available()" {
+        return Some(state.select_screen && state.select_ex_score.is_some());
+    }
     if let Some(panel) = parse_result_panel_predicate(term) {
         return state.result_panel.map(|current| current == panel);
     }
@@ -11155,11 +11158,53 @@ fn select_detail_artist<'a>(
     selected_row: Option<&'a SelectRowSnapshot>,
 ) -> &'a str {
     if !snapshot.in_settings {
-        return selected_row.map(|row| row.artist.as_str()).unwrap_or_default();
+        return selected_row
+            .filter(|row| row.kind == SelectRowKind::Song)
+            .map(|row| row.artist.as_str())
+            .unwrap_or_default();
     }
     selected_row
         .filter(|row| row.kind == SelectRowKind::Config)
         .map(|row| row.artist.as_str())
+        .unwrap_or_default()
+}
+
+fn select_detail_title<'a>(
+    snapshot: &'a SelectSnapshot,
+    selected_row: Option<&'a SelectRowSnapshot>,
+) -> &'a str {
+    let Some(row) = selected_row else {
+        return if snapshot.in_settings { "" } else { &snapshot.selected_title };
+    };
+    if snapshot.in_settings {
+        return row.title.as_str();
+    }
+    match row.kind {
+        SelectRowKind::Song
+        | SelectRowKind::Folder
+        | SelectRowKind::TableFolder
+        | SelectRowKind::SearchFolder
+        | SelectRowKind::Command
+        | SelectRowKind::Container
+        | SelectRowKind::SettingsFolder => row.title.as_str(),
+        SelectRowKind::Course
+        | SelectRowKind::Executable
+        | SelectRowKind::RandomCourse
+        | SelectRowKind::NoSong
+        | SelectRowKind::Config => "",
+    }
+}
+
+fn select_detail_genre<'a>(
+    snapshot: &SelectSnapshot,
+    selected_row: Option<&'a SelectRowSnapshot>,
+) -> &'a str {
+    if snapshot.in_settings {
+        return selected_row.map(|row| row.genre.as_str()).unwrap_or_default();
+    }
+    selected_row
+        .filter(|row| row.kind == SelectRowKind::Song)
+        .map(|row| row.genre.as_str())
         .unwrap_or_default()
 }
 
@@ -11175,7 +11220,10 @@ fn select_detail_subtitle<'a>(
         }
         return "";
     }
-    selected_row.map(|row| row.subtitle.as_str()).unwrap_or_default()
+    selected_row
+        .filter(|row| row.kind == SelectRowKind::Song)
+        .map(|row| row.subtitle.as_str())
+        .unwrap_or_default()
 }
 
 fn select_row_shows_score_decorations(row: &SelectRowSnapshot) -> bool {
@@ -14228,6 +14276,19 @@ mod tests {
         let max = SkinDrawState { ex_score: 200, total_notes: 100, ..Default::default() };
         assert!(eval_skin_draw_condition("score_rate_band(9,10)", &max));
         assert!(eval_skin_draw_condition("nearest_rank(MAX,plus)", &max));
+    }
+
+    #[test]
+    fn select_score_available_requires_an_actual_score_record() {
+        let folder = SkinDrawState { select_screen: true, ..SkinDrawState::default() };
+        let zero_score = SkinDrawState {
+            select_screen: true,
+            select_ex_score: Some(0),
+            ..SkinDrawState::default()
+        };
+
+        assert!(!eval_skin_draw_condition("select_score_available()", &folder));
+        assert!(eval_skin_draw_condition("select_score_available()", &zero_score));
     }
 
     #[test]
@@ -24433,6 +24494,58 @@ mod tests {
             ),
             "Song Title"
         );
+    }
+
+    #[test]
+    fn select_course_rows_only_expose_course_stage_title_refs() {
+        let document: SkinDocument = serde_json::from_str(
+            r#"
+            {
+                "type": 5,
+                "w": 100,
+                "h": 100,
+                "text": [
+                    { "id": "title", "size": 6, "ref": 12 },
+                    { "id": "genre", "size": 6, "ref": 13 },
+                    { "id": "artist", "size": 6, "ref": 16 },
+                    { "id": "stage", "size": 6, "ref": 150 }
+                ],
+                "destination": [
+                    { "id": "title", "dst": [{ "x": 10, "y": 70, "w": 40, "h": 6 }] },
+                    { "id": "genre", "dst": [{ "x": 10, "y": 60, "w": 40, "h": 6 }] },
+                    { "id": "artist", "dst": [{ "x": 10, "y": 50, "w": 40, "h": 6 }] },
+                    { "id": "stage", "dst": [{ "x": 10, "y": 40, "w": 40, "h": 6 }] }
+                ]
+            }
+            "#,
+        )
+        .unwrap();
+        let snapshot = SelectSnapshot {
+            selected_index: 0,
+            rows: vec![SelectRowSnapshot {
+                index: 0,
+                title: "Course title".to_string(),
+                genre: "Course genre".to_string(),
+                artist: "Course artist".to_string(),
+                kind: SelectRowKind::Course,
+                course_titles: std::array::from_fn(|index| {
+                    if index == 0 { "Stage title".to_string() } else { String::new() }
+                }),
+                ..SelectRowSnapshot::default()
+            }],
+            ..SelectSnapshot::default()
+        };
+
+        let items = document.select_render_items(&HashMap::new(), &snapshot);
+        let texts = items
+            .iter()
+            .filter_map(|item| match item {
+                SkinRenderItem::Text { text, .. } => Some(text.as_str()),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(texts, vec!["Stage title"]);
     }
 
     #[test]

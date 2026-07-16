@@ -3495,6 +3495,12 @@ fn lua_table_to_json(
                     continue;
                 }
                 if let Some(draw) =
+                    infer_select_score_available_draw_condition(lua, function, main_state_probe)
+                {
+                    object.insert(key.clone(), JsonValue::String(draw));
+                    continue;
+                }
+                if let Some(draw) =
                     infer_boolean_predicate(function, main_state_probe, object_id.as_deref())
                 {
                     object.insert(key.clone(), JsonValue::String(draw));
@@ -3600,6 +3606,31 @@ fn infer_gauge_value_digit_draw_condition(
     *occurrence += 1;
     let digits = ((*occurrence - 1) % 3) + 1;
     Some(format!("gauge_value_digits({mode},{digits})"))
+}
+
+fn infer_select_score_available_draw_condition(
+    lua: &Lua,
+    function: &Function,
+    main_state_probe: &Arc<Mutex<MainStateProbe>>,
+) -> Option<String> {
+    let globals = lua.globals();
+    let original = globals.get::<Value>("flag_score").ok()?;
+    let Value::Boolean(original) = original else {
+        return None;
+    };
+    let evaluate = |value: bool| -> Option<bool> {
+        globals.set("flag_score", value).ok()?;
+        main_state_probe.lock().ok()?.end_recording();
+        function.call::<bool>(()).ok()
+    };
+    let when_unavailable = evaluate(false);
+    let when_available = evaluate(true);
+    let _ = globals.set("flag_score", original);
+
+    match (when_unavailable, when_available) {
+        (Some(false), Some(true)) => Some("select_score_available()".to_string()),
+        _ => None,
+    }
 }
 
 fn repair_result_table_title_text(path: &str, object: &mut JsonMap<String, JsonValue>) {
@@ -6887,6 +6918,22 @@ fn lua_key_to_json_key(key: Value, path: &str, warnings: &mut Vec<String>) -> Re
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn infers_select_score_availability_from_luxe_global_guard() {
+        let lua = Lua::new();
+        let probe = Arc::new(Mutex::new(MainStateProbe::default()));
+        let draw = lua
+            .load("flag_score = false; return function() return flag_score end")
+            .eval::<Function>()
+            .unwrap();
+
+        assert_eq!(
+            infer_select_score_available_draw_condition(&lua, &draw, &probe).as_deref(),
+            Some("select_score_available()")
+        );
+        assert!(!lua.globals().get::<bool>("flag_score").unwrap());
+    }
 
     #[test]
     fn load_constant_fallback_preserves_existing_stub_behavior() {

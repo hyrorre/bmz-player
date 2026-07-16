@@ -5055,71 +5055,81 @@ fn build_scene_skin_defs(
             // property / filepath は同名 (例: "シャッター") を持ちうるので、egui の
             // ComboBox ID 衝突を防ぐためにカテゴリで名前空間を切る。
             ui.push_id("property", |ui| {
-                for prop in &defs.property {
-                    let mut selected =
-                        options.get(&prop.name).cloned().unwrap_or_else(|| property_default(prop));
-                    let before = selected.clone();
-                    egui::ComboBox::from_label(&prop.name).selected_text(&selected).show_ui(
-                        ui,
-                        |ui| {
-                            for item in &prop.item {
-                                ui.selectable_value(&mut selected, item.name.clone(), &item.name);
-                            }
-                        },
-                    );
-                    if selected != before {
-                        options.insert(prop.name.clone(), selected);
-                        changed = true;
-                    }
+                for (index, prop) in defs.property.iter().enumerate() {
+                    ui.push_id(index, |ui| {
+                        let mut selected = options
+                            .get(&prop.name)
+                            .cloned()
+                            .unwrap_or_else(|| property_default(prop));
+                        let before = selected.clone();
+                        egui::ComboBox::from_label(&prop.name).selected_text(&selected).show_ui(
+                            ui,
+                            |ui| {
+                                for item in &prop.item {
+                                    ui.selectable_value(
+                                        &mut selected,
+                                        item.name.clone(),
+                                        &item.name,
+                                    );
+                                }
+                            },
+                        );
+                        if selected != before {
+                            options.insert(prop.name.clone(), selected);
+                            changed = true;
+                        }
+                    });
                 }
             });
         }
         if !defs.filepath.is_empty() {
             ui.strong("ファイル選択");
             ui.push_id("filepath", |ui| {
-                for filepath in &defs.filepath {
-                    let mut selected = files.get(&filepath.name).cloned().unwrap_or_default();
-                    let before = selected.clone();
-                    let display = if selected.is_empty() {
-                        "(未選択)"
-                    } else if selected == RANDOM_FILE_SELECTION {
-                        "ランダム"
-                    } else {
-                        filepath_selection_label(&selected)
-                    };
-                    egui::ComboBox::from_label(&filepath.name).selected_text(display).show_ui(
-                        ui,
-                        |ui| {
-                            // beatoraja 同様、具体ファイルに加えて「ランダム」を選べる。
-                            // ランダム選択時は毎ロードで候補からランダムに解決する。
-                            ui.selectable_value(
-                                &mut selected,
-                                RANDOM_FILE_SELECTION.to_string(),
-                                "ランダム",
-                            );
-                            // 候補列挙は ComboBox を開いたときだけ行う (毎フレームの fs 走査を回避)。
-                            let candidates = match skin_root {
-                                Some(root) => glob_candidates(root, &filepath.path),
-                                None => Vec::new(),
-                            };
-                            if let Some(normalized) =
-                                normalize_filepath_selection(&selected, &candidates)
-                            {
-                                selected = normalized;
-                            }
-                            if candidates.is_empty() {
-                                ui.label("候補なし");
-                            }
-                            for candidate in candidates {
-                                let label = filepath_selection_label(&candidate);
-                                ui.selectable_value(&mut selected, candidate.clone(), label);
-                            }
-                        },
-                    );
-                    if selected != before {
-                        files.insert(filepath.name.clone(), selected);
-                        changed = true;
-                    }
+                for (index, filepath) in defs.filepath.iter().enumerate() {
+                    ui.push_id(index, |ui| {
+                        let mut selected = files.get(&filepath.name).cloned().unwrap_or_default();
+                        let before = selected.clone();
+                        let display = if selected.is_empty() {
+                            "(未選択)"
+                        } else if selected == RANDOM_FILE_SELECTION {
+                            "ランダム"
+                        } else {
+                            filepath_selection_label(&selected)
+                        };
+                        egui::ComboBox::from_label(&filepath.name).selected_text(display).show_ui(
+                            ui,
+                            |ui| {
+                                // beatoraja 同様、具体ファイルに加えて「ランダム」を選べる。
+                                // ランダム選択時は毎ロードで候補からランダムに解決する。
+                                ui.selectable_value(
+                                    &mut selected,
+                                    RANDOM_FILE_SELECTION.to_string(),
+                                    "ランダム",
+                                );
+                                // 候補列挙は ComboBox を開いたときだけ行う (毎フレームの fs 走査を回避)。
+                                let candidates = match skin_root {
+                                    Some(root) => glob_candidates(root, &filepath.path),
+                                    None => Vec::new(),
+                                };
+                                if let Some(normalized) =
+                                    normalize_filepath_selection(&selected, &candidates)
+                                {
+                                    selected = normalized;
+                                }
+                                if candidates.is_empty() {
+                                    ui.label("候補なし");
+                                }
+                                for candidate in candidates {
+                                    let label = filepath_selection_label(&candidate);
+                                    ui.selectable_value(&mut selected, candidate.clone(), label);
+                                }
+                            },
+                        );
+                        if selected != before {
+                            files.insert(filepath.name.clone(), selected);
+                            changed = true;
+                        }
+                    });
                 }
             });
         }

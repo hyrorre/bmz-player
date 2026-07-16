@@ -3253,6 +3253,31 @@ mod tests {
     }
 
     #[test]
+    fn luxe_flat_lua_select_skin_keeps_score_availability_guards_when_available() {
+        let skin_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../data/skins/Luxez-Flat/music_select.luaskin");
+        if !skin_path.is_file() {
+            return;
+        }
+
+        let decoded = decode_beatoraja_skin(&skin_path, SkinKind::Select).unwrap();
+        let clear_state = decoded
+            .document
+            .destination
+            .iter()
+            .find_map(|entry| match entry {
+                DestinationListEntry::Single(destination)
+                    if destination.id == "default_playerdata_state_clear" =>
+                {
+                    Some(destination)
+                }
+                DestinationListEntry::Single(_) | DestinationListEntry::Conditional { .. } => None,
+            })
+            .expect("Luxe Flat should retain the player clear-state destination");
+        assert_eq!(clear_state.draw, "select_score_available()");
+    }
+
+    #[test]
     fn ecfn_play7_judge_combo_x_matches_beatoraja_layout_when_available() {
         use std::collections::HashMap;
 
