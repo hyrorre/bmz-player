@@ -51,6 +51,9 @@ pub struct ScanConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AudioConfig {
     pub backend: AudioBackend,
+    /// OS の通常共有出力、または Windows 10 以降の IAudioClient3 低遅延共有出力。
+    #[serde(default)]
+    pub output_mode: AudioOutputMode,
     pub output_device: String,
     /// `sample_rate_mode` が `Fixed` のときに要求するサンプルレート(Hz)。
     pub sample_rate: u32,
@@ -59,6 +62,8 @@ pub struct AudioConfig {
     pub sample_rate_mode: AudioSampleRateMode,
     pub buffer_size_mode: AudioBufferSizeMode,
     pub buffer_size: u32,
+    /// 将来の WASAPI 排他モード用に旧設定を保持する。低遅延共有モードとは独立。
+    #[serde(default)]
     pub exclusive_mode: bool,
     pub asio_driver: String,
     /// 出力するステレオチャンネルペア(0 始まり)。0 = 1-2ch, 1 = 3-4ch, 2 = 5-6ch …。
@@ -78,6 +83,14 @@ pub enum AudioBackend {
     Alsa,
     Pulse,
     PipeWire,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "PascalCase")]
+pub enum AudioOutputMode {
+    #[default]
+    Shared,
+    SharedLowLatency,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -474,6 +487,7 @@ impl Default for AppConfig {
             },
             audio: AudioConfig {
                 backend: AudioBackend::Auto,
+                output_mode: AudioOutputMode::Shared,
                 output_device: String::new(),
                 sample_rate: 48_000,
                 sample_rate_mode: AudioSampleRateMode::Auto,
@@ -540,6 +554,48 @@ mod tests {
         let config = AppConfig::default();
 
         assert_eq!(config.input.gamepad_backend, GamepadBackendKind::Gilrs);
+    }
+
+    #[test]
+    fn app_config_defaults_audio_output_to_standard_shared_mode() {
+        let config = AppConfig::default();
+
+        assert_eq!(config.audio.output_mode, AudioOutputMode::Shared);
+    }
+
+    #[test]
+    fn app_config_loads_missing_audio_output_mode_as_standard_shared() {
+        let toml = toml::to_string(&AppConfig::default())
+            .unwrap()
+            .replace("output_mode = \"Shared\"\n", "");
+
+        let config: AppConfig = toml::from_str(&toml).unwrap();
+
+        assert_eq!(config.audio.output_mode, AudioOutputMode::Shared);
+    }
+
+    #[test]
+    fn app_config_round_trips_low_latency_shared_audio_mode() {
+        let mut config = AppConfig::default();
+        config.audio.output_mode = AudioOutputMode::SharedLowLatency;
+
+        let toml = toml::to_string(&config).unwrap();
+        let loaded: AppConfig = toml::from_str(&toml).unwrap();
+
+        assert_eq!(loaded.audio.output_mode, AudioOutputMode::SharedLowLatency);
+    }
+
+    #[test]
+    fn legacy_exclusive_flag_does_not_enable_low_latency_shared_mode() {
+        let toml = toml::to_string(&AppConfig::default())
+            .unwrap()
+            .replace("output_mode = \"Shared\"\n", "")
+            .replace("exclusive_mode = false", "exclusive_mode = true");
+
+        let config: AppConfig = toml::from_str(&toml).unwrap();
+
+        assert!(config.audio.exclusive_mode);
+        assert_eq!(config.audio.output_mode, AudioOutputMode::Shared);
     }
 
     #[test]

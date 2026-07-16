@@ -20,9 +20,9 @@ use winit::event::WindowEvent;
 use winit::window::Window;
 
 use crate::config::app_config::{
-    AppConfig, AudioBackend, AudioBufferSizeMode, AudioSampleRateMode, DifficultyTableSource,
-    GamepadBackendKind, InputBackendKind, LogLevel, ObsActionConfig, ObsRecordingMode, PathEntry,
-    RendererBackend, UpdateChannelConfig, VsyncModeConfig, WindowMode,
+    AppConfig, AudioBackend, AudioBufferSizeMode, AudioOutputMode, AudioSampleRateMode,
+    DifficultyTableSource, GamepadBackendKind, InputBackendKind, LogLevel, ObsActionConfig,
+    ObsRecordingMode, PathEntry, RendererBackend, UpdateChannelConfig, VsyncModeConfig, WindowMode,
 };
 use crate::config::play::{TARGET_GREEN_NUMBER_MAX, TARGET_GREEN_NUMBER_MIN};
 use crate::config::profile_config::{
@@ -2316,6 +2316,32 @@ fn build_settings_panel(
                                 "PipeWire",
                             );
                         });
+                    egui::ComboBox::from_label("出力モード")
+                        .selected_text(audio_output_mode_label(&config.audio.output_mode))
+                        .show_ui(ui, |ui| {
+                            ui.selectable_value(
+                                &mut config.audio.output_mode,
+                                AudioOutputMode::Shared,
+                                "共有 (標準)",
+                            );
+                            ui.selectable_value(
+                                &mut config.audio.output_mode,
+                                AudioOutputMode::SharedLowLatency,
+                                "共有 (IAudioClient3 低遅延)",
+                            );
+                        });
+                    if config.audio.output_mode == AudioOutputMode::SharedLowLatency {
+                        if audio_low_latency_shared_available(&config.audio.backend) {
+                            ui.label(
+                                "Windows 10 以降の WASAPI で共有エンジン周期を短縮します。適用結果と実周期はログに記録されます。",
+                            );
+                        } else {
+                            ui.colored_label(
+                                egui::Color32::YELLOW,
+                                "選択中の OS / バックエンドでは利用できないため、標準共有出力へ戻ります。",
+                            );
+                        }
+                    }
                     let sample_rate_text =
                         if config.audio.sample_rate_mode == AudioSampleRateMode::Auto {
                             "自動 (ドライバ / OS 既定)".to_string()
@@ -2370,8 +2396,6 @@ fn build_settings_panel(
                             }
                         }
                     });
-                    ui.checkbox(&mut config.audio.exclusive_mode, "排他モード (未実装)");
-
                     // ASIO 以外は安価なのでバックエンド変更時に自動列挙する。
                     // ASIO はドライバ初期化を伴い得るため、更新ボタンでのみ列挙する。
                     let backend = config.audio.backend.clone();
@@ -2456,7 +2480,7 @@ fn build_settings_panel(
                         apply_audio = true;
                     }
                     ui.label(
-                        "「適用」で現在の設定を保存し音声出力を再構築します(再生中は不可)。排他モードは未実装です。",
+                        "「適用」で現在の設定を保存し音声出力を再構築します(再生中は不可)。",
                     );
                 });
 
@@ -3122,6 +3146,17 @@ fn audio_backend_label(backend: &AudioBackend) -> &'static str {
         AudioBackend::Pulse => "PulseAudio",
         AudioBackend::PipeWire => "PipeWire",
     }
+}
+
+fn audio_output_mode_label(mode: &AudioOutputMode) -> &'static str {
+    match mode {
+        AudioOutputMode::Shared => "共有 (標準)",
+        AudioOutputMode::SharedLowLatency => "共有 (IAudioClient3 低遅延)",
+    }
+}
+
+fn audio_low_latency_shared_available(backend: &AudioBackend) -> bool {
+    cfg!(windows) && matches!(backend, AudioBackend::Auto | AudioBackend::Wasapi)
 }
 
 fn audio_buffer_size_mode_label(mode: &AudioBufferSizeMode) -> &'static str {
@@ -5391,6 +5426,14 @@ fn filepath_def_acronym(def: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn low_latency_shared_audio_is_only_available_for_windows_wasapi() {
+        assert_eq!(audio_low_latency_shared_available(&AudioBackend::Auto), cfg!(windows));
+        assert_eq!(audio_low_latency_shared_available(&AudioBackend::Wasapi), cfg!(windows));
+        assert!(!audio_low_latency_shared_available(&AudioBackend::Asio));
+        assert!(!audio_low_latency_shared_available(&AudioBackend::CoreAudio));
+    }
 
     #[test]
     fn decide_and_play_restrict_settings_panels() {

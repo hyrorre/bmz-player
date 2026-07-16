@@ -48,6 +48,7 @@ getrandom = "0.2"
 encoding_rs = "0.8"
 
 cpal = "0.18"
+windows = "0.62"
 ctrlc = "3"
 ffmpeg-next = "8"
 wgpu = "29"
