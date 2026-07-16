@@ -2960,13 +2960,30 @@ mod tests {
         let runtime_state = LuaLoadRuntimeState {
             number_values: BTreeMap::new(),
             text_values: BTreeMap::new(),
-            option_values: BTreeMap::from([(50, false), (51, true)]),
+            option_values: BTreeMap::from([(50, false), (51, true), (162, true)]),
         };
-        let loaded = load_lua_skin_with_runtime_state(
+        let virtual_io_files = BTreeMap::from([
+            ("config_sys.json".to_string(), r#"{"playername":"bmz"}"#.to_string()),
+            (
+                "player/bmz/config_player.json".to_string(),
+                serde_json::json!({
+                    "mode5": {"keyboard": {}, "controller": [], "midi": {}},
+                    "mode7": {"keyboard": {}, "controller": [], "midi": {}},
+                    "mode9": {"keyboard": {}, "controller": [], "midi": {}},
+                    "mode10": {"keyboard": {}, "controller": [], "midi": {}},
+                    "mode14": {"keyboard": {}, "controller": [], "midi": {}},
+                    "mode24": {"keyboard": {}, "controller": [], "midi": {}},
+                    "mode24double": {"keyboard": {}, "controller": [], "midi": {}}
+                })
+                .to_string(),
+            ),
+        ]);
+        let loaded = load_lua_skin_with_runtime_state_and_virtual_io_files(
             &skin_path,
             &BTreeMap::new(),
             &BTreeMap::new(),
             &runtime_state,
+            &virtual_io_files,
         )
         .expect("WMII FHD result should decode as a skin document");
 
@@ -3029,14 +3046,19 @@ mod tests {
                 && draw.contains("event_index(43) == 3 and option(163)")
                 && !draw.contains("number(0) < 0")
         }));
+        assert_eq!(
+            loaded.dependencies.virtual_io_files.get("config_sys.json"),
+            Some(&Some(r#"{"playername":"bmz"}"#.to_string()))
+        );
 
         let graph_options =
             BTreeMap::from([("Expand Panel".to_string(), "ON - GRAPH DEFAULT".to_string())]);
-        let graph_loaded = load_lua_skin_with_runtime_state(
+        let graph_loaded = load_lua_skin_with_runtime_state_and_virtual_io_files(
             &skin_path,
             &graph_options,
             &BTreeMap::new(),
             &runtime_state,
+            &virtual_io_files,
         )
         .expect("WMII FHD graph panel should decode as a skin document");
         assert_eq!(graph_loaded.document.result_panel_default, Some(2));

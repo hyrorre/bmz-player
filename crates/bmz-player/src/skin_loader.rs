@@ -2461,9 +2461,9 @@ mod tests {
     }
 
     #[test]
-    fn wmii_backup_result_decodes_with_virtual_io_and_graph_default() {
+    fn wmii_result_decodes_with_virtual_io_and_graph_default() {
         let skin_path = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../data/skins/WMII_FHD.bak/result/result.luaskin");
+            .join("../../data/skins/WMII_FHD/result/result.luaskin");
         if !skin_path.is_file() {
             return;
         }
@@ -2482,7 +2482,7 @@ mod tests {
             &BTreeMap::new(),
             &runtime_state,
         )
-        .expect("unmodified WMII result backup should decode through the BMZ loader");
+        .expect("unmodified WMII result should decode through the BMZ loader");
 
         assert_eq!(loaded.document.result_panel_default, Some(2));
         assert_eq!(
@@ -2705,9 +2705,9 @@ mod tests {
     }
 
     #[test]
-    fn wmii_backup_result_uses_runtime_combo_break_for_clear_animation() {
+    fn wmii_result_uses_runtime_combo_break_for_clear_animation() {
         let skin_path = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../data/skins/WMII_FHD.bak/result/result.luaskin");
+            .join("../../data/skins/WMII_FHD/result/result.luaskin");
         if !skin_path.is_file() {
             return;
         }
@@ -2726,7 +2726,7 @@ mod tests {
                     option_values: BTreeMap::from([(51, true), (160, true)]),
                 },
             )
-            .expect("unmodified WMII result backup should decode")
+            .expect("unmodified WMII result should decode")
         };
         let destination_ids = |loaded: &LoadedSkinDocumentWithDependencies| {
             loaded
