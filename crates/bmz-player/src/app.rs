@@ -387,6 +387,16 @@ struct WinitApp {
     active_course: Option<ActiveCourseSession>,
     /// コース全体完了時のリザルト。リザルト画面から抜けるまで保持する。
     finished_course: Option<CourseResultSummary>,
+    /// `finished_course` から Result skin 用に集約した結果。
+    ///
+    /// コースの graph は全ステージ分を連結するため構築コストが高い。コース完了時に
+    /// 一度だけ生成し、リザルト表示中はこの値を参照する。
+    finished_course_skin_summary: Option<ResultSummary>,
+    /// 完了したコースの canonical hash。IR ranking の起動や replay slot 保存で
+    /// course 定義を DB から再走査しないため、identity 解決時に保持する。
+    finished_course_hash: Option<String>,
+    /// IR 無効時も course ranking task の起動判定を毎フレーム繰り返さないための印。
+    finished_course_ir_attempted: bool,
     /// プレイ終了でリザルトへ移った後、曲の余韻を鳴らし切るために保持する音声出力。
     /// ドレインが完了するか、選曲復帰・次プレイ開始で解放される。
     draining_audio: Option<AppAudioOutput>,
@@ -1639,7 +1649,7 @@ enum AppViewState {
     Select,
     Decide,
     Play,
-    Result(Box<ResultSummary>),
+    Result,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1742,7 +1752,20 @@ fn course_result_summary_for_skin(course: &CourseResultSummary) -> ResultSummary
         },
         difficulty_name: String::new(),
         play_level: String::new(),
-        graph: aggregate_course_result_graph(&course.entry_summaries),
+        graph: Arc::new(aggregate_course_result_graph(&course.entry_summaries)),
+    }
+}
+
+fn mark_course_replay_slot_saved(
+    course: &mut CourseResultSummary,
+    skin_summary: Option<&mut ResultSummary>,
+    slot: usize,
+) {
+    course.saved_replay_slots[slot] = true;
+    course.replay_slots[slot] = true;
+    if let Some(summary) = skin_summary {
+        summary.saved_replay_slots[slot] = true;
+        summary.replay_slots[slot] = true;
     }
 }
 
@@ -2024,7 +2047,7 @@ fn debug_boot_result_summary() -> ResultSummary {
         genre: "DEBUG".to_string(),
         difficulty_name: "ANOTHER".to_string(),
         play_level: "12".to_string(),
-        graph: debug_boot_result_graph(duration_ms),
+        graph: Arc::new(debug_boot_result_graph(duration_ms)),
     }
 }
 
@@ -2405,6 +2428,9 @@ impl WinitApp {
             active_play: None,
             active_course: None,
             finished_course: None,
+            finished_course_skin_summary: None,
+            finished_course_hash: None,
+            finished_course_ir_attempted: false,
             draining_audio: None,
             audio_runtime,
             audio_output_open_attempted,
@@ -2861,12 +2887,8 @@ impl WinitApp {
             return AppViewState::Play;
         }
 
-        if let Some(course) = &self.finished_course {
-            return AppViewState::Result(Box::new(course_result_summary_for_skin(course)));
-        }
-
-        if let Some(finished) = &self.finished_play {
-            return AppViewState::Result(Box::new(finished.summary.clone()));
+        if self.finished_course.is_some() || self.finished_play.is_some() {
+            return AppViewState::Result;
         }
 
         AppViewState::Select
@@ -2885,6 +2907,30 @@ impl WinitApp {
         AppSceneKind::Select
     }
 
+    fn current_result_summary(&self) -> Option<&ResultSummary> {
+        self.finished_course_skin_summary
+            .as_ref()
+            .or_else(|| self.finished_play.as_ref().map(|finished| &finished.summary))
+    }
+
+    fn install_finished_course(
+        &mut self,
+        course: CourseResultSummary,
+        course_hash: Option<String>,
+    ) {
+        self.finished_course_skin_summary = Some(course_result_summary_for_skin(&course));
+        self.finished_course = Some(course);
+        self.finished_course_hash = course_hash;
+        self.finished_course_ir_attempted = false;
+    }
+
+    fn clear_finished_course(&mut self) {
+        self.finished_course = None;
+        self.finished_course_skin_summary = None;
+        self.finished_course_hash = None;
+        self.finished_course_ir_attempted = false;
+    }
+
     fn scene_snapshot(&self) -> AppSceneSnapshot {
         let mut scene = match self.view_state() {
             AppViewState::Select => AppSceneSnapshot::Select(self.select_snapshot()),
@@ -2898,7 +2944,11 @@ impl WinitApp {
             AppViewState::Play => {
                 AppSceneSnapshot::Play(self.last_play_snapshot.clone().unwrap_or_default())
             }
-            AppViewState::Result(summary) => {
+            AppViewState::Result => {
+                // `view_state` only returns Result when one of the result sources exists.
+                // A finished course is always installed together with its skin summary.
+                let summary =
+                    self.current_result_summary().expect("result scene is missing its summary");
                 let raw_clear_type = self
                     .is_course_intermediate_result()
                     .then(|| self.finished_play.as_ref().map(|finished| finished.result.clear_type))
@@ -2928,9 +2978,9 @@ impl WinitApp {
                         &self.boot.profile_config,
                     )),
                     initial_bpm: summary.initial_bpm,
-                    min_bpm: result_min_bpm(&summary),
-                    max_bpm: result_max_bpm(&summary),
-                    main_bpm: result_main_bpm(&summary),
+                    min_bpm: result_min_bpm(summary),
+                    max_bpm: result_max_bpm(summary),
+                    main_bpm: result_main_bpm(summary),
                     total_gauge: summary.total_gauge,
                     judge_rank: summary.judge_rank,
                     key_mode: summary.key_mode,
@@ -3080,7 +3130,7 @@ impl WinitApp {
 
     fn is_autoplay_for_overlay(&self) -> bool {
         match self.view_state() {
-            AppViewState::Result(_) => self.last_play_was_autoplay,
+            AppViewState::Result => self.last_play_was_autoplay,
             AppViewState::Play => self
                 .active_play
                 .as_ref()
@@ -5748,7 +5798,7 @@ impl WinitApp {
         let Some((x, y)) = self.cursor_position_normalized() else {
             return;
         };
-        if matches!(self.view_state(), AppViewState::Result(_)) {
+        if matches!(self.view_state(), AppViewState::Result) {
             self.select_slider_dragging_type = None;
             if button == MouseButton::Left && self.result_exit.is_none() {
                 let AppSceneSnapshot::Result(snapshot) = self.scene_snapshot() else {
@@ -5828,7 +5878,7 @@ impl WinitApp {
         let Some((x, y)) = self.cursor_position_normalized() else {
             return;
         };
-        if matches!(self.view_state(), AppViewState::Result(_)) {
+        if matches!(self.view_state(), AppViewState::Result) {
             if self.result_exit.is_some() {
                 return;
             }
@@ -7520,7 +7570,7 @@ impl WinitApp {
                     course_id,
                     "course identity unavailable; skipping course score save"
                 );
-                self.finished_course = Some(course_result);
+                self.install_finished_course(course_result, None);
                 if let Some(last) = last_finished {
                     self.result_gauge_graph_type = last.summary.gauge_type as i32;
                     self.finished_play = Some(last);
@@ -7690,7 +7740,9 @@ impl WinitApp {
         if course_result.saved_replay_slots.iter().any(|saved| *saved) {
             self.notify_obs_save_recording(crate::obs::ObsRecordingSaveReason::OnReplay);
         }
-        self.finished_course = Some(course_result);
+        let course_hash =
+            course_identity.as_ref().map(|(_, identity)| identity.course_hash.clone());
+        self.install_finished_course(course_result, course_hash);
         // Use the last chart's result for the standard result skin display.
         if let Some(last) = last_finished {
             self.result_gauge_graph_type = last.summary.gauge_type as i32;
@@ -7737,14 +7789,12 @@ impl WinitApp {
         self.course_identity_with_stored(course_id).map(|(_, identity)| identity)
     }
 
-    fn course_result_ir_target(
-        &self,
-        course: &crate::screens::course_session::CourseResultSummary,
-    ) -> Option<(String, String, String)> {
-        let identity = self.ir_course_identity(course.course_id)?;
+    fn course_result_ir_target(&self) -> Option<(String, String, String)> {
+        let course = self.finished_course.as_ref()?;
+        let course_hash = self.finished_course_hash.clone()?;
         let gauge = course.final_gauge_type.as_str().to_string();
         let ln_policy = self.boot.profile_config.play.ln_mode_policy.as_ir_str().to_string();
-        Some((identity.course_hash, gauge, ln_policy))
+        Some((course_hash, gauge, ln_policy))
     }
 
     fn start_result_ir_for_finished_play(&mut self, finished: &FinishedPlaySession) {
@@ -9006,7 +9056,7 @@ impl WinitApp {
             );
         }
         self.active_course = None;
-        self.finished_course = None;
+        self.clear_finished_course();
     }
 
     fn play_start_options(&self) -> PlayStartOptions {
@@ -9333,7 +9383,7 @@ impl WinitApp {
         tracing::info!(course_id, entries = arrange_overrides.len(), ?mode, "retrying course");
         // Drop the finished-course/result state before re-entering the course;
         // start_course_with_arrange installs a fresh active_course session.
-        self.finished_course = None;
+        self.clear_finished_course();
         self.finished_play = None;
         self.result_exit = None;
         self.result_key5_held = false;
@@ -9561,10 +9611,12 @@ impl WinitApp {
                 },
             ) {
                 Ok(mut finished) => {
-                    finished.summary.graph = active_play
-                        .running
-                        .result_graph
-                        .snapshot_for_session(&active_play.running.session);
+                    finished.summary.graph = Arc::new(
+                        active_play
+                            .running
+                            .result_graph
+                            .snapshot_for_session(&active_play.running.session),
+                    );
                     Some(finished)
                 }
                 Err(error) => {
@@ -9758,7 +9810,7 @@ impl WinitApp {
         let Some(course_id) = self.finished_course.as_ref().map(|course| course.course_id) else {
             return false;
         };
-        let Some(identity) = self.ir_course_identity(course_id) else {
+        let Some(course_hash) = self.finished_course_hash.clone() else {
             tracing::warn!(course_id, slot, "course identity unavailable for replay slot save");
             return false;
         };
@@ -9783,7 +9835,7 @@ impl WinitApp {
         let played_at = course.course_played_at.unwrap_or(0);
         let rule_mode = course.rule_mode;
         let record = crate::storage::score_db::CourseReplaySlotRecord {
-            course_hash: identity.course_hash.clone(),
+            course_hash: course_hash.clone(),
             rule_mode,
             slot,
             rule: crate::config::profile_config::ReplaySlotRule::Always.as_str().to_string(),
@@ -9796,13 +9848,16 @@ impl WinitApp {
         };
         match self.boot.score_db.upsert_course_replay_slot(&record) {
             Ok(()) => {
-                course.saved_replay_slots[slot as usize] = true;
-                course.replay_slots[slot as usize] = true;
+                mark_course_replay_slot_saved(
+                    course,
+                    self.finished_course_skin_summary.as_mut(),
+                    slot as usize,
+                );
                 self.notify_obs_save_recording(crate::obs::ObsRecordingSaveReason::OnReplay);
                 self.play_system_sound(crate::system_sound::SoundType::OptionChange);
                 tracing::info!(
                     course_id,
-                    course_hash = %identity.course_hash,
+                    course_hash = %course_hash,
                     rule_mode = rule_mode.as_str(),
                     slot,
                     "saved course replay slot"
@@ -9813,7 +9868,7 @@ impl WinitApp {
                 tracing::warn!(
                     %error,
                     course_id,
-                    course_hash = %identity.course_hash,
+                    course_hash = %course_hash,
                     slot,
                     "failed to save course replay slot from result"
                 );
@@ -10120,10 +10175,12 @@ impl WinitApp {
                     },
                 ) {
                     Ok(mut finished) => {
-                        finished.summary.graph = started
-                            .running
-                            .result_graph
-                            .snapshot_for_session(&started.running.session);
+                        finished.summary.graph = Arc::new(
+                            started
+                                .running
+                                .result_graph
+                                .snapshot_for_session(&started.running.session),
+                        );
                         finished
                     }
                     Err(error) => {
@@ -11094,16 +11151,12 @@ impl WinitApp {
         ir_online: bool,
     ) -> bmz_skin::LuaLoadRuntimeState {
         let summary = match slot {
-            ResultSkinSlot::Course => {
-                self.finished_course.as_ref().map(course_result_summary_for_skin)
-            }
-            ResultSkinSlot::Normal => {
-                self.finished_play.as_ref().map(|finished| finished.summary.clone())
-            }
+            ResultSkinSlot::Course => self.finished_course_skin_summary.as_ref(),
+            ResultSkinSlot::Normal => self.finished_play.as_ref().map(|finished| &finished.summary),
         };
-        let key_mode = summary.as_ref().map(|summary| summary.key_mode).unwrap_or_default();
+        let key_mode = summary.map(|summary| summary.key_mode).unwrap_or_default();
         let number_values =
-            summary.as_ref().map(result_lua_runtime_number_values_for_summary).unwrap_or_default();
+            summary.map(result_lua_runtime_number_values_for_summary).unwrap_or_default();
         let mut runtime_state = lua_runtime_state_for_result(
             table_song,
             ir_online,
@@ -11489,10 +11542,12 @@ impl WinitApp {
                     },
                 ) {
                     Ok(mut finished) => {
-                        finished.summary.graph = active_play
-                            .running
-                            .result_graph
-                            .snapshot_for_session(&active_play.running.session);
+                        finished.summary.graph = Arc::new(
+                            active_play
+                                .running
+                                .result_graph
+                                .snapshot_for_session(&active_play.running.session),
+                        );
                         Some(finished)
                     }
                     Err(error) => {
@@ -12090,10 +12145,40 @@ impl WinitApp {
             result: SceneSkinDefs::from_document(self.renderer.result_skin_document()),
             course_result: course_result_defs,
         };
-        // Clone the course summary so the egui closure can borrow it while
-        // `self.egui` is uniquely borrowed.  CourseResultSummary is small —
-        // a few strings and Vec<ResultSummary> — so the clone cost is minor.
-        let course_result = self.finished_course.clone();
+        let course_result_active =
+            matches!(scene_kind, AppSceneKind::Result) && self.finished_course.is_some();
+        if matches!(scene_kind, AppSceneKind::Result)
+            && self
+                .result_ir
+                .as_ref()
+                .is_some_and(|state| state.is_course() != course_result_active)
+        {
+            self.result_ir = None;
+        }
+        if course_result_active && self.result_ir.is_none() && !self.finished_course_ir_attempted {
+            // IR が無効、または identity が解決できない場合も、この Result 滞在中の
+            // 起動判定は一度で完了させる。
+            self.finished_course_ir_attempted = true;
+            if let Some((course_hash, gauge, ln_policy)) = self.course_result_ir_target() {
+                self.result_ir = crate::screens::result_ir::spawn_course_result_ir_task(
+                    self.boot.profile_paths.root_dir.clone(),
+                    self.boot.profile_paths.score_db.clone(),
+                    self.boot.profile_paths.network_db.clone(),
+                    self.boot.app_paths.logs_dir.clone(),
+                    &self.boot.profile_config.ir,
+                    self.finished_course
+                        .as_ref()
+                        .and_then(|course| course.course_score_id)
+                        .unwrap_or_default(),
+                    course_hash,
+                    gauge,
+                    ln_policy,
+                );
+            }
+        }
+        // `egui` は run の直前に Option から一時的に取り出すため、コース全ステージの
+        // graph を含む CourseResultSummary をフレームごとに clone せず参照で渡せる。
+        let course_result = self.finished_course.as_ref();
         // Only show the course preview when the user is on the select screen
         // and the cursor is over a course row.
         let course_preview = matches!(scene_kind, AppSceneKind::Select)
@@ -12104,8 +12189,6 @@ impl WinitApp {
                 })
             })
             .flatten();
-        let course_ir_target =
-            self.finished_course.as_ref().and_then(|course| self.course_result_ir_target(course));
         let practice_media_ready = self.practice_media_ready();
         let mut practice_panel_ctx = None;
         if let Some(practice) = &mut self.practice_session
@@ -12122,44 +12205,22 @@ impl WinitApp {
         // 画面まで状態を保持する。コース最終リザルトでは course_hash ベースの
         // course ranking を取得するため、単曲用 state は Result 突入時に差し替える。
         if matches!(scene_kind, AppSceneKind::Result) {
-            let course_result_active = self.finished_course.is_some();
-            if self
-                .result_ir
-                .as_ref()
-                .is_some_and(|state| state.is_course() != course_result_active)
+            if self.result_ir.is_none()
+                && !course_result_active
+                && let Some(finished) = &self.finished_play
             {
-                self.result_ir = None;
-            }
-            if self.result_ir.is_none() {
-                if let Some((course_hash, gauge, ln_policy)) = course_ir_target {
-                    self.result_ir = crate::screens::result_ir::spawn_course_result_ir_task(
-                        self.boot.profile_paths.root_dir.clone(),
-                        self.boot.profile_paths.score_db.clone(),
-                        self.boot.profile_paths.network_db.clone(),
-                        self.boot.app_paths.logs_dir.clone(),
-                        &self.boot.profile_config.ir,
-                        course_result
-                            .as_ref()
-                            .and_then(|course| course.course_score_id)
-                            .unwrap_or_default(),
-                        course_hash,
-                        gauge,
-                        ln_policy,
-                    );
-                } else if !course_result_active && let Some(finished) = &self.finished_play {
-                    self.result_ir = crate::screens::result_ir::spawn_result_ir_task(
-                        self.boot.profile_paths.root_dir.clone(),
-                        self.boot.profile_paths.score_db.clone(),
-                        self.boot.profile_paths.network_db.clone(),
-                        self.boot.app_paths.logs_dir.clone(),
-                        &self.boot.profile_config.ir,
-                        finished.stored.score_history_id,
-                        crate::storage::common::hash_to_hex(&finished.result.chart_sha256),
-                        finished.ln_policy,
-                        finished.double_option,
-                        finished.rule_mode,
-                    );
-                }
+                self.result_ir = crate::screens::result_ir::spawn_result_ir_task(
+                    self.boot.profile_paths.root_dir.clone(),
+                    self.boot.profile_paths.score_db.clone(),
+                    self.boot.profile_paths.network_db.clone(),
+                    self.boot.app_paths.logs_dir.clone(),
+                    &self.boot.profile_config.ir,
+                    finished.stored.score_history_id,
+                    crate::storage::common::hash_to_hex(&finished.result.chart_sha256),
+                    finished.ln_policy,
+                    finished.double_option,
+                    finished.rule_mode,
+                );
             }
             let loaded_rankings =
                 self.result_ir.as_mut().map(|state| state.poll()).unwrap_or_default();
@@ -12227,7 +12288,7 @@ impl WinitApp {
             .unwrap_or_else(crate::obs::ObsConnectionStatus::disabled);
         let connected_gamepads =
             self.gamepad.as_ref().map(|gamepad| gamepad.connected_gamepads()).unwrap_or_default();
-        let Some(egui) = self.egui.as_mut() else {
+        let Some(mut egui) = self.egui.take() else {
             return;
         };
         let output = egui.run(
@@ -12238,7 +12299,7 @@ impl WinitApp {
                 profile_config: &mut self.boot.profile_config,
                 skin_meta: &skin_meta,
                 skin_catalog: &self.skin_catalog,
-                course_result: course_result.as_ref(),
+                course_result,
                 course_preview: course_preview.as_ref(),
                 practice: practice_panel_ctx.as_mut(),
                 result_ir: result_ir_panel,
@@ -12249,6 +12310,7 @@ impl WinitApp {
                 connected_gamepads: &connected_gamepads,
             },
         );
+        self.egui = Some(egui);
         self.renderer.set_egui_frame(output.frame);
         self.sync_realtime_profile_settings();
         self.sync_discord_presence_config();
@@ -12804,7 +12866,7 @@ impl WinitApp {
                 .as_ref()
                 .map(|decide| (SkinKind::Decide, elapsed_since(decide.started_at).0)),
             AppViewState::Play => Some((SkinKind::Play, self.play_elapsed_time().0)),
-            AppViewState::Result(_) => {
+            AppViewState::Result => {
                 Some((SkinKind::Result, elapsed_since(self.result_scene_started_at).0))
             }
         }
@@ -12846,7 +12908,7 @@ impl WinitApp {
     fn render_current_scene(&mut self) {
         let select_view = matches!(self.view_state(), AppViewState::Select);
         let play_view = matches!(self.view_state(), AppViewState::Play);
-        let result_view = matches!(self.view_state(), AppViewState::Result(_));
+        let result_view = matches!(self.view_state(), AppViewState::Result);
         let profiling_select = select_view
             && tracing::enabled!(target: "bmz_player::select_profile", tracing::Level::DEBUG);
         let profiling_play = play_view
@@ -21124,7 +21186,7 @@ mod tests {
                 genre: String::new(),
                 difficulty_name: String::new(),
                 play_level: String::new(),
-                graph: bmz_render::snapshot::ResultGraphSnapshot {
+                graph: Arc::new(bmz_render::snapshot::ResultGraphSnapshot {
                     gauge_points: vec![bmz_render::snapshot::ResultGaugeGraphPoint {
                         time_ms: duration_ms,
                         value: 80.0,
@@ -21145,11 +21207,11 @@ mod tests {
                         is_stop: false,
                     }],
                     ..Default::default()
-                },
+                }),
             }
         }
 
-        let course = CourseResultSummary {
+        let mut course = CourseResultSummary {
             course_id: 1,
             course_score_id: None,
             course_played_at: None,
@@ -21233,7 +21295,7 @@ mod tests {
             }),
         };
 
-        let summary = course_result_summary_for_skin(&course);
+        let mut summary = course_result_summary_for_skin(&course);
         assert_eq!(summary.title, "Course Title");
         assert_eq!(summary.genre, "DAN");
         assert_eq!(summary.clear_type, ClearType::Hard);
@@ -21285,6 +21347,12 @@ mod tests {
         .unwrap();
         assert_eq!(data["songs"].as_array().map(Vec::len), Some(2));
         assert_eq!(data["songs"][1]["score"], serde_json::json!(200));
+
+        mark_course_replay_slot_saved(&mut course, Some(&mut summary), 1);
+        assert_eq!(course.replay_slots, [true, true, true, false]);
+        assert_eq!(course.saved_replay_slots, [false, true, true, false]);
+        assert_eq!(summary.replay_slots, course.replay_slots);
+        assert_eq!(summary.saved_replay_slots, course.saved_replay_slots);
     }
 
     #[test]

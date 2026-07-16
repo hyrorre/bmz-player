@@ -133,7 +133,7 @@ pub fn advance_play_screen_until_result(
         )?;
         let mut result_graph = crate::screens::result_model::ResultGraphCollector::default();
         result_graph.record_frame(&frame);
-        finished.summary.graph = result_graph.snapshot_for_session(session);
+        finished.summary.graph = std::sync::Arc::new(result_graph.snapshot_for_session(session));
         return Ok(PlayAdvanceOutcome::Finished { frame, finished });
     }
 
@@ -386,7 +386,8 @@ pub fn advance_running_play_session_until_result(
                 finish_mode: FinishResultMode::Normal,
             },
         )?;
-        finished.summary.graph = running.result_graph.snapshot_for_session(&running.session);
+        finished.summary.graph =
+            std::sync::Arc::new(running.result_graph.snapshot_for_session(&running.session));
         running.finished = Some(finished.clone());
         // ここでは音声を止めない。スケジュール済みの BGM/キー音は
         // オーディオ出力スレッド側で曲の最後まで鳴り切る。出力の解放は

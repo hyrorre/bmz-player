@@ -3814,8 +3814,9 @@ mod tests {
             fast_empty_poor: 1,
             slow_empty_poor: 1,
         };
-        snapshot.graph.judge_graph_density = vec![1, 3, 2, 4];
-        snapshot.graph.timing_points = vec![
+        let graph = std::sync::Arc::make_mut(&mut snapshot.graph);
+        graph.judge_graph_density = vec![1, 3, 2, 4];
+        graph.timing_points = vec![
             bmz_render::snapshot::ResultTimingPoint {
                 time_ms: 100,
                 delta_us: -12_000,

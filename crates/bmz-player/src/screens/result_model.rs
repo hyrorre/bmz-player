@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use bmz_chart::model::{LongNoteMode, NoteEvent, NoteKind, PlayableChart};
 use bmz_core::clear::{ClearType, GaugeType};
@@ -69,7 +70,7 @@ pub struct ResultSummary {
     pub genre: String,
     pub difficulty_name: String,
     pub play_level: String,
-    pub graph: ResultGraphSnapshot,
+    pub graph: Arc<ResultGraphSnapshot>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -194,7 +195,7 @@ impl ResultSummary {
             genre: metadata.genre.clone(),
             difficulty_name: metadata.difficulty_name.clone(),
             play_level: metadata.play_level.clone(),
-            graph: ResultGraphSnapshot::default(),
+            graph: Arc::new(ResultGraphSnapshot::default()),
         }
     }
 
