@@ -926,6 +926,42 @@ pub fn preload_play_session_for_chart_with_progress(
     })
 }
 
+/// Same as [`preload_play_session_for_chart`], but reuses an already-decoded sample bank
+/// (beatoraja-style media keep on arrange change / result retry).
+pub fn preload_play_session_reusing_sample_bank(
+    library_db: &LibraryDatabase,
+    chart_id: i64,
+    options: PlaySessionOptions,
+    normalize_chart_volume: bool,
+    output_sample_rate: u32,
+    samples: bmz_audio::sample::SampleBank,
+    sample_report: Vec<LoadedSampleReport>,
+    normalization_gain: Option<f32>,
+) -> Result<PreloadedPlaySession> {
+    let imported = load_transformed_chart_for_play(library_db, chart_id, &options)?;
+    let chart = Arc::new(imported.chart);
+    let audio = AudioEngine::with_sample_bank(output_sample_rate, samples);
+    let normalization_gain = match normalization_gain {
+        Some(gain) => gain,
+        None => load_or_compute_normalization_gain(
+            library_db,
+            chart_id,
+            normalize_chart_volume,
+            &chart,
+            &audio,
+        )?,
+    };
+
+    Ok(PreloadedPlaySession {
+        chart,
+        audio,
+        sample_report,
+        normalization_gain,
+        applied_arrange: imported.applied_arrange,
+        score_key: imported.score_key,
+    })
+}
+
 struct TransformedPlayChart {
     chart: PlayableChart,
     applied_arrange: AppliedArrange,
