@@ -792,6 +792,7 @@ mod tests {
         assert_eq!(best.course_score_id, score_id);
         assert_eq!(best.course_hash, "course-a");
         assert_eq!(best.ex_score, 500);
+        assert_eq!(best.bp, 7);
         assert_eq!(best.cb, 10);
         assert_eq!(best.play_count, 1);
         assert_eq!(best.clear_count, 1);
@@ -810,6 +811,7 @@ mod tests {
         );
         let entry = course_score_entry_by_id(&conn, score_id).unwrap().unwrap();
         assert_eq!(entry.title, "Dan 1");
+        assert_eq!(entry.bp, 7);
         assert_eq!(entry.achieved_trophies, vec!["gold".to_string()]);
     }
 
@@ -845,6 +847,7 @@ mod tests {
 
         let slot = course_replay_slot(&conn, "course-a", RuleMode::Beatoraja, 3).unwrap().unwrap();
         assert_eq!(slot.ex_score, 700);
+        assert_eq!(slot.bp, 7);
         assert_eq!(
             course_replay_slot_presence(&conn, "course-a", RuleMode::Beatoraja).unwrap(),
             [true, false, false, true]

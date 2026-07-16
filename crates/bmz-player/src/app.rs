@@ -1653,7 +1653,6 @@ enum AppSceneKind {
 fn course_result_summary_for_skin(course: &CourseResultSummary) -> ResultSummary {
     let last = course.entry_summaries.last();
     let max_combo = course.course_max_combo;
-    let bp = course.entry_summaries.iter().map(|summary| summary.bp).sum();
     let cb = course.entry_summaries.iter().map(|summary| summary.cb).sum();
     let fast_slow_counts =
         course.entry_summaries.iter().fold(ResultFastSlowJudgeCounts::default(), |acc, summary| {
@@ -1683,7 +1682,7 @@ fn course_result_summary_for_skin(course: &CourseResultSummary) -> ResultSummary
         lane_shuffle_pattern: Vec::new(),
         ex_score: course.total_ex_score,
         max_combo,
-        bp,
+        bp: course.bp,
         cb,
         gauge_value: course.final_gauge_value,
         gauge_type: course.final_gauge_type,
@@ -7516,9 +7515,6 @@ impl WinitApp {
                     None
                 });
             let final_clear_type = course_result.final_clear_type;
-            let bp = course_result.judge_counts.bad
-                + course_result.judge_counts.poor
-                + course_result.judge_counts.empty_poor;
             let played_at = SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .map(|d| d.as_secs() as i64)
@@ -7551,7 +7547,7 @@ impl WinitApp {
                 gauge_type: course_result.final_gauge_type.as_str().to_string(),
                 gauge_value: course_result.final_gauge_value,
                 max_combo,
-                bp,
+                bp: course_result.bp,
                 course_failed: course_result.course_failed,
                 course_clear: course_result.course_clear,
                 arrange: course_arrange,
@@ -7605,7 +7601,7 @@ impl WinitApp {
                         course_score_id,
                         played_at,
                         course_result.total_ex_score,
-                        bp,
+                        course_result.bp,
                         max_combo,
                         final_clear_type as u8,
                     );
@@ -9738,8 +9734,6 @@ impl WinitApp {
         if slot > 3 {
             return false;
         }
-        let bp =
-            course.judge_counts.bad + course.judge_counts.poor + course.judge_counts.empty_poor;
         let max_combo = course.course_max_combo;
         let clear_rank = if course.course_clear {
             bmz_core::clear::ClearType::Normal as u8
@@ -9758,7 +9752,7 @@ impl WinitApp {
             course_score_id,
             played_at,
             ex_score: course.total_ex_score,
-            bp,
+            bp: course.bp,
             max_combo,
             clear_rank,
         };
@@ -20995,6 +20989,7 @@ mod tests {
             // Failed course results keep the full course notes as the rank/rate
             // denominator even when only a subset of entries produced summaries.
             total_notes: 400,
+            bp: 37,
             final_clear_type: ClearType::Hard,
             final_gauge_type: GaugeType::ExClass,
             final_gauge_value: 42.5,
@@ -21057,6 +21052,7 @@ mod tests {
         assert_eq!(summary.gauge_value, 42.5);
         assert_eq!(summary.ex_score, 320);
         assert_eq!(summary.total_notes, 400);
+        assert_eq!(summary.bp, 37);
         assert!((summary.ex_score_rate() - 0.4).abs() < 0.001);
         assert_eq!(summary.max_combo, 170);
         assert_eq!(summary.score_history_id, 22);
@@ -21065,11 +21061,9 @@ mod tests {
         assert_eq!(summary.previous_best_ex_score, Some(300));
         assert_eq!(summary.previous_best_clear_type, Some(ClearType::Normal));
         assert_eq!(summary.previous_best_bp, Some(12));
-        assert_eq!(result_lua_runtime_number_values_for_summary(&summary).get(&178), Some(&-12));
-        assert_eq!(
-            result_lua_runtime_number_values_for_summary(&summary).get(&425).copied(),
-            Some(i32::try_from(summary.cb).unwrap())
-        );
+        let number_values = result_lua_runtime_number_values_for_summary(&summary);
+        assert_eq!(number_values.get(&178), Some(&25));
+        assert_eq!(number_values.get(&425).copied(), Some(i32::try_from(summary.cb).unwrap()));
         assert_eq!(summary.replay_slots, [true, false, true, false]);
         assert_eq!(summary.saved_replay_slots, [false, false, true, false]);
         assert_eq!(summary.judge_counts.pgreat, 160);

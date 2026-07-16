@@ -101,7 +101,6 @@ pub fn build_course_submission(
     context: &IrCourseSubmissionContext,
 ) -> Value {
     let course_hash = compute_course_hash(definition);
-    let bp = result.judge_counts.bad + result.judge_counts.poor + result.judge_counts.empty_poor;
     let entries: Vec<Value> = result
         .entry_summaries
         .iter()
@@ -164,7 +163,7 @@ pub fn build_course_submission(
             "ex_score": result.total_ex_score,
             "max_ex_score": result.max_ex_score,
             "max_combo": result.course_max_combo,
-            "bp": bp,
+            "bp": result.bp,
             "judges": {
                 "pgreat": result.judge_counts.pgreat,
                 "great": result.judge_counts.great,
@@ -296,6 +295,7 @@ mod tests {
             total_ex_score: 0,
             max_ex_score: 0,
             total_notes: 0,
+            bp: 0,
             final_clear_type: bmz_core::clear::ClearType::NoPlay,
             final_gauge_type: bmz_core::clear::GaugeType::Class,
             final_gauge_value: 0.0,
@@ -353,6 +353,7 @@ mod tests {
             total_ex_score: 1234,
             max_ex_score: 2000,
             total_notes: 1000,
+            bp: 0,
             final_clear_type: ClearType::Hard,
             final_gauge_type: GaugeType::ExClass,
             final_gauge_value: 66.4,
@@ -413,6 +414,7 @@ mod tests {
             total_ex_score: 1234,
             max_ex_score: 2000,
             total_notes: 1000,
+            bp: 0,
             final_clear_type: ClearType::NoPlay,
             final_gauge_type: GaugeType::Hard,
             final_gauge_value: 66.4,
@@ -471,6 +473,7 @@ mod tests {
             total_ex_score: 1234,
             max_ex_score: 2000,
             total_notes: 1000,
+            bp: 789,
             final_clear_type: ClearType::NoPlay,
             final_gauge_type: GaugeType::ExHardClass,
             final_gauge_value: 0.0,
@@ -503,6 +506,7 @@ mod tests {
         );
 
         assert_eq!(payload["result"]["clear"], json!("Failed"));
+        assert_eq!(payload["result"]["bp"], json!(789));
     }
 
     fn stage_summary(clear_type: ClearType, gauge_value: f32) -> ResultSummary {

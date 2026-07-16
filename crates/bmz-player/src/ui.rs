@@ -1426,6 +1426,9 @@ fn build_course_result_panel(
                 ui.label("NOTES");
                 ui.label(format!("{}", summary.total_notes));
                 ui.end_row();
+                ui.label("BP");
+                ui.label(format!("{}", summary.bp));
+                ui.end_row();
                 ui.label("PG / GR");
                 ui.label(format!(
                     "{} / {}",
@@ -1488,6 +1491,9 @@ fn build_course_result_panel(
                     ui.label("MAX COMBO");
                     ui.label(format!("{}", best.max_combo));
                     ui.end_row();
+                    ui.label("BP");
+                    ui.label(format!("{}", best.bp));
+                    ui.end_row();
                 });
                 if is_new_record {
                     ui.colored_label(egui::Color32::from_rgb(255, 215, 0), "★ NEW RECORD");
@@ -1525,10 +1531,7 @@ fn build_course_result_panel(
                                 _ => ui.visuals().text_color(),
                             };
                             ui.colored_label(clear_color, clear_text);
-                            let miss = entry.judge_counts.bad
-                                + entry.judge_counts.poor
-                                + entry.judge_counts.empty_poor;
-                            ui.label(format!("{}", miss));
+                            ui.label(format!("{}", entry.bp));
                             ui.end_row();
                         }
                     },
