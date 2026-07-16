@@ -24,6 +24,10 @@ const appliedSearch = ref('')
 const page = ref(1)
 const pageSize = 50
 const offset = computed(() => (page.value - 1) * pageSize)
+const localePath = useLocalePath()
+const { t } = useI18n()
+const { formatDateTime } = useLocaleFormat()
+const { translateApiError } = useApiError()
 const { data, pending, error, refresh } = await useFetch<PlayerListResult>('/api/v1/players', {
   query: computed(() => ({
     limit: pageSize,
@@ -48,10 +52,15 @@ watch(page, () => {
 
 function formatDate(value: string | null): string {
   if (!value) {
-    return 'スコアなし'
+    return t('players.noScores')
   }
-  return new Date(value).toLocaleString('sv-SE')
+  return formatDateTime(value)
 }
+
+const errorDescription = computed(() =>
+  error.value ? translateApiError(error.value, 'errors.playersLoadFailed') : '',
+)
+useSeoMeta({ title: () => t('players.title') })
 </script>
 
 <template>
@@ -59,9 +68,9 @@ function formatDate(value: string | null): string {
     <section class="mx-auto w-full max-w-4xl px-5 py-10">
       <div class="mb-8">
         <p class="mb-2 text-sm font-medium text-primary-300">BMZ Internet Ranking</p>
-        <h1 class="text-3xl font-semibold">ユーザー一覧</h1>
+        <h1 class="text-3xl font-semibold">{{ t('players.title') }}</h1>
         <p class="mt-2 text-sm text-neutral-300">
-          登録済みユーザーのプロフィールとスコア状況を確認できます。
+          {{ t('players.description') }}
         </p>
       </div>
 
@@ -70,22 +79,24 @@ function formatDate(value: string | null): string {
           v-model="search"
           class="flex-1"
           icon="i-lucide-search"
-          placeholder="ユーザー名またはIDで検索"
+          :placeholder="t('players.searchPlaceholder')"
           @keydown.enter="applySearch"
         />
-        <UButton color="primary" variant="subtle" @click="applySearch">検索</UButton>
+        <UButton color="primary" variant="subtle" @click="applySearch">{{
+          t('common.search')
+        }}</UButton>
       </div>
 
-      <UAlert v-if="error" color="error" :description="error.message" class="mb-6" />
-      <p v-else-if="pending" class="text-sm text-neutral-400">読み込み中...</p>
+      <UAlert v-if="error" color="error" :description="errorDescription" class="mb-6" />
+      <p v-else-if="pending" class="text-sm text-neutral-400">{{ t('common.loading') }}</p>
       <p v-else-if="!data?.players.length" class="text-sm text-neutral-400">
-        まだユーザーが登録されていません。
+        {{ t('players.empty') }}
       </p>
 
       <ul v-else class="divide-y divide-neutral-800 rounded-lg border border-neutral-800">
         <li v-for="player in data.players" :key="player.id">
           <NuxtLink
-            :to="`/players/${player.id}`"
+            :to="localePath(`/players/${player.id}`)"
             class="flex items-center justify-between gap-4 px-4 py-3 hover:bg-neutral-900"
           >
             <div class="min-w-0">
@@ -94,7 +105,12 @@ function formatDate(value: string | null): string {
             </div>
             <div class="shrink-0 text-right text-sm text-neutral-300">
               <p>
-                {{ player.best_score_count }} 譜面 / {{ player.best_course_score_count }} コース
+                {{
+                  t('players.scoreCounts', {
+                    charts: player.best_score_count,
+                    courses: player.best_course_score_count,
+                  })
+                }}
               </p>
               <p class="text-neutral-500">{{ formatDate(player.last_score_at) }}</p>
             </div>

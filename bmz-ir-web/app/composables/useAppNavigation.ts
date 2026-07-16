@@ -12,33 +12,34 @@ export function useAppSidebar() {
 
 export function useAppNavigation() {
   const { user, clear } = useUserSession()
-  const router = useRouter()
+  const localePath = useLocalePath()
+  const { t } = useI18n()
 
   const logout = async () => {
     await $fetch('/api/v1/auth/logout', { method: 'POST' })
     await clear()
-    router.push('/')
+    await navigateTo(localePath('/'))
   }
 
-  const navigationItems: NavigationMenuItem[] = [
-    { label: '譜面', icon: 'i-lucide-list-music', to: '/charts' },
-    { label: 'コース', icon: 'i-lucide-medal', to: '/courses' },
-    { label: 'ユーザー', icon: 'i-lucide-users', to: '/players' },
-  ]
+  const navigationItems = computed<NavigationMenuItem[]>(() => [
+    { label: t('nav.charts'), icon: 'i-lucide-list-music', to: localePath('/charts') },
+    { label: t('nav.courses'), icon: 'i-lucide-medal', to: localePath('/courses') },
+    { label: t('nav.players'), icon: 'i-lucide-users', to: localePath('/players') },
+  ])
 
   const accountItems = computed<NavigationMenuItem[]>(() =>
     user.value
       ? [
           {
-            label: user.value.displayName ?? 'プロフィール',
+            label: user.value.displayName ?? t('nav.profile'),
             icon: 'i-lucide-user',
             defaultOpen: true,
             children: [
-              { label: '本日の成果', to: '/daily', icon: 'i-lucide-calendar-days' },
-              { label: 'プロフィール', to: '/profile', icon: 'i-lucide-user-pen' },
-              { label: 'アカウント設定', to: '/settings', icon: 'i-lucide-settings' },
+              { label: t('nav.daily'), to: localePath('/daily'), icon: 'i-lucide-calendar-days' },
+              { label: t('nav.profile'), to: localePath('/profile'), icon: 'i-lucide-user-pen' },
+              { label: t('nav.settings'), to: localePath('/settings'), icon: 'i-lucide-settings' },
               {
-                label: 'ログアウト',
+                label: t('nav.logout'),
                 icon: 'i-lucide-log-out',
                 onSelect: () => logout(),
               },
@@ -46,12 +47,12 @@ export function useAppNavigation() {
           },
         ]
       : [
-          { label: 'ログイン', icon: 'i-lucide-log-in', to: '/login' },
-          { label: '登録', icon: 'i-lucide-user-plus', to: '/register' },
+          { label: t('nav.login'), icon: 'i-lucide-log-in', to: localePath('/login') },
+          { label: t('nav.register'), icon: 'i-lucide-user-plus', to: localePath('/register') },
         ],
   )
 
-  const sidebarMenuItems = computed(() => [navigationItems, accountItems.value])
+  const sidebarMenuItems = computed(() => [navigationItems.value, accountItems.value])
 
   return {
     navigationItems,

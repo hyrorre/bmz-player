@@ -14,6 +14,10 @@ interface DailyRow {
 }
 
 const route = useRoute()
+const localePath = useLocalePath()
+const { t } = useI18n()
+const { formatNumber: formatLocaleNumber, formatDate, compareText } = useLocaleFormat()
+const { translateApiError } = useApiError()
 const initialDate = ref(currentDailyDate(0))
 const dateInput = ref(queryString(route.query.date) ?? initialDate.value)
 
@@ -62,10 +66,7 @@ const rows = computed<DailyRow[]>(() =>
     .sort((left, right) => {
       const leftLevel = left.difficultyLabels.map(difficultyLabel).join(',')
       const rightLevel = right.difficultyLabels.map(difficultyLabel).join(',')
-      return (
-        leftLevel.localeCompare(rightLevel, 'ja', { numeric: true }) ||
-        left.chart.title.localeCompare(right.chart.title, 'ja')
-      )
+      return compareText(leftLevel, rightLevel) || compareText(left.chart.title, right.chart.title)
     }),
 )
 
@@ -91,7 +92,7 @@ async function navigateDate(date: string, replace = false) {
   const query: Record<string, string> = { date, mode: 'all' }
   const player = queryString(route.query.player)
   if (player) query.player = player
-  await navigateTo({ path: '/daily', query }, { replace })
+  await navigateTo({ path: localePath('/daily'), query }, { replace })
 }
 
 function onDateChange() {
@@ -103,7 +104,7 @@ function difficultyLabel(label: IrDailyChartResult['difficulty_labels'][number])
 }
 
 function formatNumber(value: number): string {
-  return new Intl.NumberFormat('ja-JP').format(value)
+  return formatLocaleNumber(value)
 }
 
 function formatAccuracy(value: number | null): string {
@@ -125,10 +126,7 @@ function formatBoundary(value: number): string {
 }
 
 function displayDate(value: string): string {
-  return new Intl.DateTimeFormat('ja-JP', {
-    dateStyle: 'long',
-    timeZone: 'Asia/Tokyo',
-  }).format(new Date(`${value}T12:00:00+09:00`))
+  return formatDate(new Date(`${value}T12:00:00+09:00`))
 }
 
 function clearLabel(value: string | undefined): string {
@@ -194,6 +192,11 @@ function signedDelta(value: number): string {
 function ruleLabel(result: IrDailyRuleResult): string {
   return `${result.rule.ln_policy} / ${result.rule.double_option} / ${result.rule.rule_mode}`
 }
+
+const errorDescription = computed(() =>
+  error.value ? translateApiError(error.value, 'errors.dailyLoadFailed') : '',
+)
+useSeoMeta({ title: () => t('daily.title') })
 </script>
 
 <template>
@@ -203,11 +206,11 @@ function ruleLabel(result: IrDailyRuleResult): string {
         v-if="error"
         color="error"
         icon="i-lucide-circle-alert"
-        :description="error.message"
+        :description="errorDescription"
       />
       <div v-else-if="status === 'pending'" class="py-16 text-center text-muted">
         <UIcon name="i-lucide-loader-circle" class="mx-auto mb-3 size-8 animate-spin" />
-        読み込み中...
+        {{ t('common.loading') }}
       </div>
 
       <template v-else-if="data">
@@ -218,7 +221,9 @@ function ruleLabel(result: IrDailyRuleResult): string {
           <h1 class="text-3xl font-semibold tracking-normal sm:text-4xl">
             {{ data.player.display_name }}
           </h1>
-          <p class="mt-3 text-base text-muted">{{ displayDate(data.date) }} の成果報告</p>
+          <p class="mt-3 text-base text-muted">
+            {{ t('daily.reportForDate', { date: displayDate(data.date) }) }}
+          </p>
           <div class="mt-4">
             <UBadge color="neutral" variant="subtle">ALL</UBadge>
           </div>
@@ -246,7 +251,7 @@ function ruleLabel(result: IrDailyRuleResult): string {
                 {{ formatPlayTime(data.summary.play_time_ms) }}
               </p>
               <p v-if="data.summary.play_time_unknown_count" class="mt-1 text-xs text-muted">
-                {{ data.summary.play_time_unknown_count }}件は時間不明
+                {{ t('daily.unknownPlayTimes', { count: data.summary.play_time_unknown_count }) }}
               </p>
             </div>
           </div>
@@ -260,17 +265,17 @@ function ruleLabel(result: IrDailyRuleResult): string {
               variant="subtle"
               @click="navigateDate(shiftDate(data.date, -1))"
             >
-              前の日
+              {{ t('daily.previousDay') }}
             </UButton>
             <UInput
               v-model="dateInput"
-              aria-label="成果日"
+              :aria-label="t('daily.resultDate')"
               :max="todayDate"
               type="date"
               @change="onDateChange"
             />
             <UButton color="neutral" variant="subtle" @click="navigateDate(todayDate)">
-              今日
+              {{ t('daily.today') }}
             </UButton>
             <UButton
               color="neutral"
@@ -279,12 +284,17 @@ function ruleLabel(result: IrDailyRuleResult): string {
               variant="subtle"
               @click="navigateDate(shiftDate(data.date, 1))"
             >
-              次の日
+              {{ t('daily.nextDay') }}
             </UButton>
           </div>
 
           <p class="mb-4 text-center text-xs text-muted">
-            成果日の切り替わり: {{ boundaryLabel }} ・ {{ data.summary.chart_count }}譜面
+            {{
+              t('daily.boundarySummary', {
+                boundary: boundaryLabel,
+                count: data.summary.chart_count,
+              })
+            }}
           </p>
 
           <div v-if="rows.length" class="overflow-x-auto rounded-xl border border-muted">
@@ -323,7 +333,7 @@ function ruleLabel(result: IrDailyRuleResult): string {
                   </td>
                   <td class="max-w-100 px-4 py-3 align-top">
                     <NuxtLink
-                      :to="`/charts/${row.chart.sha256}`"
+                      :to="localePath(`/charts/${row.chart.sha256}`)"
                       class="font-semibold text-highlighted hover:underline"
                     >
                       {{ row.chart.title || row.chart.sha256.slice(0, 12) }}
@@ -414,7 +424,7 @@ function ruleLabel(result: IrDailyRuleResult): string {
 
           <div v-else class="rounded-xl border border-dashed border-muted py-14 text-center">
             <UIcon name="i-lucide-calendar-x" class="mx-auto mb-3 size-8 text-muted" />
-            <p class="font-medium">この日のプレイ記録はありません。</p>
+            <p class="font-medium">{{ t('daily.empty') }}</p>
           </div>
         </section>
       </template>

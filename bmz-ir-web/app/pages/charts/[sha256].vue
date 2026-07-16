@@ -50,6 +50,10 @@ interface ChartDetail {
 }
 
 const route = useRoute()
+const localePath = useLocalePath()
+const { t } = useI18n()
+const { formatDateTime } = useLocaleFormat()
+const { translateApiError } = useApiError()
 const chartParam = computed(() =>
   String(route.params.sha256 ?? '')
     .trim()
@@ -62,12 +66,12 @@ if (/^[0-9a-f]{32}$/.test(chartParam.value)) {
     const lookup = await $fetch<{ sha256: string }>('/api/v1/charts/lookup', {
       query: { md5: chartParam.value },
     })
-    await navigateTo(`/charts/${lookup.sha256}`, { redirectCode: 301, replace: true })
+    await navigateTo(localePath(`/charts/${lookup.sha256}`), { redirectCode: 301, replace: true })
   } catch {
-    paramError.value = '指定された MD5 の譜面は見つかりません'
+    paramError.value = t('chart.md5NotFound')
   }
 } else if (chartParam.value && !/^[0-9a-f]{64}$/.test(chartParam.value)) {
-  paramError.value = '譜面 ID は MD5 (32 hex) または SHA256 (64 hex) である必要があります'
+  paramError.value = t('chart.invalidId')
 }
 
 const sha256 = computed(() => (/^[0-9a-f]{64}$/.test(chartParam.value) ? chartParam.value : ''))
@@ -173,7 +177,7 @@ const copySha256 = async () => {
 }
 
 function formatScoreDate(value: string | null) {
-  return value ? new Date(value).toLocaleString() : '-'
+  return value ? formatDateTime(value) : '-'
 }
 
 function formatArrange(value: string | null | undefined) {
@@ -183,6 +187,19 @@ function formatArrange(value: string | null | undefined) {
 function formatArrangePair(score: { arrange_1p?: string | null; arrange_2p?: string | null }) {
   return `ARRANGE 1P ${formatArrange(score.arrange_1p)} / 2P ${formatArrange(score.arrange_2p)}`
 }
+
+const detailErrorDescription = computed(() =>
+  detailError.value ? translateApiError(detailError.value, 'errors.chartLoadFailed') : '',
+)
+const rankingErrorDescription = computed(() =>
+  rankingError.value ? translateApiError(rankingError.value, 'errors.rankingLoadFailed') : '',
+)
+const historyErrorDescription = computed(() =>
+  selfHistoryError.value
+    ? translateApiError(selfHistoryError.value, 'errors.historyLoadFailed')
+    : '',
+)
+useSeoMeta({ title: () => detail.value?.chart.title ?? t('chart.title') })
 </script>
 
 <template>
@@ -192,13 +209,15 @@ function formatArrangePair(score: { arrange_1p?: string | null; arrange_2p?: str
       <UAlert
         v-else-if="detailError"
         color="error"
-        :description="detailError.message"
+        :description="detailErrorDescription"
         class="mb-6"
       />
       <template v-else-if="detail">
         <div class="mb-8">
           <p class="mb-2 text-sm font-medium text-primary-300">
-            <NuxtLink to="/charts" class="hover:underline">譜面一覧</NuxtLink>
+            <NuxtLink :to="localePath('/charts')" class="hover:underline">{{
+              t('charts.title')
+            }}</NuxtLink>
           </p>
           <p>{{ detail.chart.genre }}</p>
           <h1 class="text-3xl font-semibold">
@@ -216,17 +235,25 @@ function formatArrangePair(score: { arrange_1p?: string | null; arrange_2p?: str
           <p class="mt-1 text-sm text-neutral-400">
             {{ detail.chart.mode }}
             <span v-if="detail.chart.level != null"> ☆{{ detail.chart.level }}</span>
-            ・ {{ detail.chart.notes }} notes ・ プレイ {{ detail.stats.global.play_count }} /
-            クリア
-            {{ detail.stats.global.clear_count }}
+            ・ {{ t('charts.notes', { count: detail.chart.notes }) }} ・
+            {{
+              t('chart.playClearCount', {
+                plays: detail.stats.global.play_count,
+                clears: detail.stats.global.clear_count,
+              })
+            }}
           </p>
           <p class="mt-3 text-sm text-neutral-400">
             md5 {{ detail.chart.md5 }}
-            <UButton size="xs" variant="subtle" color="neutral" @click="copyMd5">コピー</UButton>
+            <UButton size="xs" variant="subtle" color="neutral" @click="copyMd5">{{
+              t('chart.copy')
+            }}</UButton>
           </p>
           <p class="mt-1 text-sm text-neutral-400">
             sha256 {{ detail.chart.sha256 }}
-            <UButton size="xs" variant="subtle" color="neutral" @click="copySha256">コピー</UButton>
+            <UButton size="xs" variant="subtle" color="neutral" @click="copySha256">{{
+              t('chart.copy')
+            }}</UButton>
           </p>
         </div>
 
@@ -240,19 +267,26 @@ function formatArrangePair(score: { arrange_1p?: string | null; arrange_2p?: str
           class="mb-4 flex flex-col gap-3 rounded-lg border border-neutral-800 p-4 sm:flex-row sm:items-center sm:justify-between"
         >
           <div v-if="selfBestEntry" class="min-w-0">
-            <p class="text-xs text-neutral-500">自己ベスト</p>
+            <p class="text-xs text-neutral-500">{{ t('ranking.personalBest') }}</p>
             <div class="mt-1 flex flex-wrap items-baseline gap-x-4 gap-y-1">
               <p class="text-sm text-neutral-300">#{{ selfBestEntry.rank }}</p>
               <p class="text-xl font-semibold">
                 EX
-                <NuxtLink :to="`/scores/${selfBestEntry.score.score_id}`" class="hover:underline">
+                <NuxtLink
+                  :to="localePath(`/scores/${selfBestEntry.score.score_id}`)"
+                  class="hover:underline"
+                >
                   {{ selfBestEntry.score.ex_score }}
                 </NuxtLink>
               </p>
               <p class="text-sm">
                 CLEAR
                 <NuxtLink
-                  :to="`/scores/${selfBestEntry.score.source_score_ids?.clear ?? selfBestEntry.score.score_id}`"
+                  :to="
+                    localePath(
+                      `/scores/${selfBestEntry.score.source_score_ids?.clear ?? selfBestEntry.score.score_id}`,
+                    )
+                  "
                   class="hover:underline"
                 >
                   {{ selfBestEntry.score.clear }}
@@ -269,7 +303,7 @@ function formatArrangePair(score: { arrange_1p?: string | null; arrange_2p?: str
               {{ formatArrangePair(selfBestEntry.score) }}
             </p>
           </div>
-          <p v-else class="text-sm text-neutral-400">この条件の自己ベストはまだありません。</p>
+          <p v-else class="text-sm text-neutral-400">{{ t('ranking.noPersonalBest') }}</p>
           <UButton
             icon="i-lucide-list"
             color="neutral"
@@ -277,28 +311,30 @@ function formatArrangePair(score: { arrange_1p?: string | null; arrange_2p?: str
             class="shrink-0"
             @click="openHistory"
           >
-            自己スコア履歴
+            {{ t('ranking.selfHistory') }}
           </UButton>
         </div>
 
-        <UAlert v-if="rankingError" color="error" :description="rankingError.message" />
-        <p v-else-if="rankingPending" class="text-sm text-neutral-400">ランキング読み込み中...</p>
+        <UAlert v-if="rankingError" color="error" :description="rankingErrorDescription" />
+        <p v-else-if="rankingPending" class="text-sm text-neutral-400">
+          {{ t('ranking.loading') }}
+        </p>
         <p v-else-if="!ranking?.ranking.entries.length" class="text-sm text-neutral-400">
-          この条件のスコアはまだありません。
+          {{ t('ranking.noScores') }}
         </p>
         <div v-else class="overflow-x-auto rounded-lg border border-neutral-800">
           <table class="w-full text-sm">
             <thead class="bg-neutral-900 text-left text-neutral-300">
               <tr>
                 <th class="px-3 py-2">#</th>
-                <th class="px-3 py-2">プレイヤー</th>
+                <th class="px-3 py-2">{{ t('table.player') }}</th>
                 <th class="px-3 py-2 text-right">EX</th>
-                <th class="px-3 py-2">クリア</th>
-                <th class="px-3 py-2">条件</th>
+                <th class="px-3 py-2">{{ t('table.clear') }}</th>
+                <th class="px-3 py-2">{{ t('table.conditions') }}</th>
                 <th class="px-3 py-2 text-right">COMBO</th>
                 <th class="px-3 py-2 text-right">BP</th>
-                <th class="px-3 py-2">入力</th>
-                <th class="px-3 py-2">日時</th>
+                <th class="px-3 py-2">{{ t('table.input') }}</th>
+                <th class="px-3 py-2">{{ t('table.date') }}</th>
               </tr>
             </thead>
             <tbody>
@@ -309,7 +345,7 @@ function formatArrangePair(score: { arrange_1p?: string | null; arrange_2p?: str
               >
                 <td class="px-3 py-2 text-neutral-300">{{ entry.rank }}</td>
                 <td class="px-3 py-2">
-                  <NuxtLink :to="`/players/${entry.player.id}`" class="hover:underline">
+                  <NuxtLink :to="localePath(`/players/${entry.player.id}`)" class="hover:underline">
                     {{ entry.player.display_name }}
                   </NuxtLink>
                   <UBadge v-if="entry.relation.is_rival" size="sm" color="warning" variant="subtle">
@@ -317,13 +353,20 @@ function formatArrangePair(score: { arrange_1p?: string | null; arrange_2p?: str
                   </UBadge>
                 </td>
                 <td class="px-3 py-2 text-right font-medium">
-                  <NuxtLink :to="`/scores/${entry.score.score_id}`" class="hover:underline">
+                  <NuxtLink
+                    :to="localePath(`/scores/${entry.score.score_id}`)"
+                    class="hover:underline"
+                  >
                     {{ entry.score.ex_score }}
                   </NuxtLink>
                 </td>
                 <td class="px-3 py-2">
                   <NuxtLink
-                    :to="`/scores/${entry.score.source_score_ids?.clear ?? entry.score.score_id}`"
+                    :to="
+                      localePath(
+                        `/scores/${entry.score.source_score_ids?.clear ?? entry.score.score_id}`,
+                      )
+                    "
                     class="hover:underline"
                   >
                     {{ entry.score.clear }}
@@ -349,28 +392,30 @@ function formatArrangePair(score: { arrange_1p?: string | null; arrange_2p?: str
           </table>
         </div>
 
-        <UModal v-model:open="historyOpen" title="自己スコア履歴">
+        <UModal v-model:open="historyOpen" :title="t('ranking.selfHistory')">
           <template #body>
             <UAlert
               v-if="selfHistoryError"
               color="error"
-              :description="selfHistoryError.message"
+              :description="historyErrorDescription"
               class="mb-4"
             />
-            <p v-else-if="selfHistoryPending" class="text-sm text-neutral-400">読み込み中...</p>
+            <p v-else-if="selfHistoryPending" class="text-sm text-neutral-400">
+              {{ t('common.loading') }}
+            </p>
             <p v-else-if="!selfHistory?.scores.length" class="text-sm text-neutral-400">
-              この条件の自己スコア履歴はまだありません。
+              {{ t('ranking.noHistory') }}
             </p>
             <div v-else class="overflow-x-auto rounded-lg border border-neutral-800">
               <table class="w-full text-sm">
                 <thead class="bg-neutral-900 text-left text-neutral-300">
                   <tr>
-                    <th class="px-3 py-2">日時</th>
+                    <th class="px-3 py-2">{{ t('table.date') }}</th>
                     <th class="px-3 py-2 text-right">EX</th>
-                    <th class="px-3 py-2">クリア</th>
+                    <th class="px-3 py-2">{{ t('table.clear') }}</th>
                     <th class="px-3 py-2 text-right">COMBO</th>
                     <th class="px-3 py-2 text-right">BP</th>
-                    <th class="px-3 py-2">条件</th>
+                    <th class="px-3 py-2">{{ t('table.conditions') }}</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -383,7 +428,10 @@ function formatArrangePair(score: { arrange_1p?: string | null; arrange_2p?: str
                       {{ formatScoreDate(score.played_at ?? score.server_received_at) }}
                     </td>
                     <td class="px-3 py-2 text-right font-medium">
-                      <NuxtLink :to="`/scores/${score.score_id}`" class="hover:underline">
+                      <NuxtLink
+                        :to="localePath(`/scores/${score.score_id}`)"
+                        class="hover:underline"
+                      >
                         {{ score.ex_score }}
                       </NuxtLink>
                     </td>

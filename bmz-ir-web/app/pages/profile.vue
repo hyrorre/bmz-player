@@ -39,6 +39,9 @@ const errorMessage = ref('')
 const successMessage = ref('')
 const requestFetch = useRequestFetch()
 const { user, fetch: refreshSession } = useUserSession()
+const localePath = useLocalePath()
+const { t } = useI18n()
+const { translateApiError } = useApiError()
 
 await loadProfile()
 
@@ -46,15 +49,15 @@ function validate(profile: Partial<ProfileState>) {
   const errors: { name: keyof ProfileState; message: string }[] = []
 
   if (!profile.displayName?.trim()) {
-    errors.push({ name: 'displayName', message: '名前を入力してください。' })
+    errors.push({ name: 'displayName', message: t('validation.displayNameRequired') })
   }
 
   if ((profile.displayName?.trim().length ?? 0) > 64) {
-    errors.push({ name: 'displayName', message: '名前は64文字以内にしてください。' })
+    errors.push({ name: 'displayName', message: t('validation.displayNameMax') })
   }
 
   if ((profile.bio?.length ?? 0) > 1000) {
-    errors.push({ name: 'bio', message: '自己紹介は1000文字以内にしてください。' })
+    errors.push({ name: 'bio', message: t('validation.bioMax') })
   }
 
   return errors
@@ -62,7 +65,7 @@ function validate(profile: Partial<ProfileState>) {
 
 async function loadProfile() {
   if (!user.value) {
-    await navigateTo('/login')
+    await navigateTo(localePath('/login'))
     return
   }
   loading.value = true
@@ -74,8 +77,7 @@ async function loadProfile() {
     state.bio = response.player.bio || ''
     state.dailyBoundaryMinutes = response.player.daily_boundary_minutes ?? 0
   } catch (error) {
-    errorMessage.value =
-      error instanceof Error ? error.message : 'プロフィールの取得に失敗しました。'
+    errorMessage.value = translateApiError(error, 'errors.profileLoadFailed')
   } finally {
     loading.value = false
   }
@@ -83,7 +85,7 @@ async function loadProfile() {
 
 async function submit(event: FormSubmitEvent<ProfileState>) {
   if (!user.value) {
-    await navigateTo('/login')
+    await navigateTo(localePath('/login'))
     return
   }
 
@@ -106,14 +108,15 @@ async function submit(event: FormSubmitEvent<ProfileState>) {
     await refreshSession()
     state.displayName = displayName
     state.bio = bio
-    successMessage.value = 'プロフィールを保存しました。'
+    successMessage.value = t('profile.saved')
   } catch (error) {
-    errorMessage.value =
-      error instanceof Error ? error.message : 'プロフィールの保存に失敗しました。'
+    errorMessage.value = translateApiError(error, 'errors.profileSaveFailed')
   } finally {
     saving.value = false
   }
 }
+
+useSeoMeta({ title: () => t('profile.title') })
 </script>
 
 <template>
@@ -122,14 +125,14 @@ async function submit(event: FormSubmitEvent<ProfileState>) {
       <div class="space-y-6">
         <div>
           <p class="mb-2 text-sm font-medium text-primary-300">BMZ Internet Ranking</p>
-          <h1 class="text-3xl font-semibold tracking-normal">プロフィール編集</h1>
+          <h1 class="text-3xl font-semibold tracking-normal">{{ t('profile.title') }}</h1>
           <p class="mt-3 text-sm leading-6 text-neutral-300">
-            ランキングやユーザーページに表示する情報を編集します。
+            {{ t('profile.description') }}
           </p>
         </div>
 
         <UForm :state="state" :validate="validate" class="space-y-5" @submit="submit">
-          <UFormField label="名前" name="displayName" required>
+          <UFormField :label="t('profile.name')" name="displayName" required>
             <UInput
               v-model="state.displayName"
               autocomplete="nickname"
@@ -141,22 +144,22 @@ async function submit(event: FormSubmitEvent<ProfileState>) {
             />
           </UFormField>
 
-          <UFormField label="自己紹介" name="bio">
+          <UFormField :label="t('profile.bio')" name="bio">
             <UTextarea
               v-model="state.bio"
               class="w-full"
               :disabled="loading"
               maxlength="1000"
-              placeholder="好きな譜面、プレイスタイルなど"
+              :placeholder="t('profile.bioPlaceholder')"
               :rows="6"
               size="xl"
             />
           </UFormField>
 
           <UFormField
-            label="成果日の切り替わり"
+            :label="t('profile.dailyBoundary')"
             name="dailyBoundaryMinutes"
-            description="この時刻より前のプレイは前日の成果として集計します。"
+            :description="t('profile.dailyBoundaryDescription')"
           >
             <USelect
               v-model="state.dailyBoundaryMinutes"
@@ -182,10 +185,16 @@ async function submit(event: FormSubmitEvent<ProfileState>) {
 
           <div class="flex flex-col gap-3 sm:flex-row">
             <UButton color="primary" icon="i-lucide-save" :loading="saving" size="xl" type="submit">
-              保存する
+              {{ t('common.save') }}
             </UButton>
-            <UButton color="neutral" icon="i-lucide-house" size="xl" to="/" variant="subtle">
-              トップへ戻る
+            <UButton
+              color="neutral"
+              icon="i-lucide-house"
+              size="xl"
+              :to="localePath('/')"
+              variant="subtle"
+            >
+              {{ t('common.backHome') }}
             </UButton>
           </div>
         </UForm>

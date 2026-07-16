@@ -6,18 +6,20 @@ type RequestResetState = {
 }
 
 const { user } = useUserSession()
+const localePath = useLocalePath()
+const { t } = useI18n()
 
-const requestFields: AuthFormField[] = [
+const requestFields = computed<AuthFormField[]>(() => [
   {
     name: 'email',
     type: 'email',
-    label: 'メールアドレス',
+    label: t('auth.email'),
     placeholder: 'name@example.com',
     autocomplete: 'email',
     required: true,
     defaultValue: '',
   },
-]
+])
 
 const requestLoading = ref(false)
 const requestErrorMessage = ref('')
@@ -27,7 +29,7 @@ function validateRequest(state: Partial<RequestResetState>) {
   const errors: { name: keyof RequestResetState; message: string }[] = []
 
   if (!state.email?.trim()) {
-    errors.push({ name: 'email', message: 'メールアドレスを入力してください。' })
+    errors.push({ name: 'email', message: t('validation.emailRequired') })
   }
 
   return errors
@@ -40,9 +42,10 @@ async function requestReset(event: FormSubmitEvent<RequestResetState>) {
   requestLoading.value = true
 
   requestLoading.value = false
-  requestErrorMessage.value =
-    'メール送信による再設定は現在未対応です。ログイン中のアカウント設定から変更してください。'
+  requestErrorMessage.value = t('reset.unsupported')
 }
+
+useSeoMeta({ title: () => t('reset.title') })
 </script>
 
 <template>
@@ -52,28 +55,30 @@ async function requestReset(event: FormSubmitEvent<RequestResetState>) {
         <template #header>
           <div class="flex items-center gap-3">
             <UIcon class="size-5 text-primary-300" name="i-lucide-key-round" />
-            <h1 class="text-xl font-semibold">パスワード変更</h1>
+            <h1 class="text-xl font-semibold">{{ t('reset.changePassword') }}</h1>
           </div>
         </template>
 
         <p class="text-sm leading-6 text-neutral-300">
-          ログイン中のパスワード変更は、現在のパスワード確認が必要です。
+          {{ t('reset.loggedInDescription') }}
         </p>
 
         <template #footer>
-          <UButton block color="primary" to="/settings">アカウント設定へ移動</UButton>
+          <UButton block color="primary" :to="localePath('/settings')">{{
+            t('reset.goSettings')
+          }}</UButton>
         </template>
       </UCard>
 
       <UAuthForm
         v-else
         class="w-full"
-        description="登録メールアドレスへ再設定リンクを送信します。"
+        :description="t('reset.description')"
         :fields="requestFields"
         icon="i-lucide-mail"
         :loading="requestLoading"
-        :submit="{ label: '再設定メールを送信', color: 'primary', block: true }"
-        title="パスワードを忘れた場合"
+        :submit="{ label: t('reset.submit'), color: 'primary', block: true }"
+        :title="t('reset.title')"
         :validate="validateRequest"
         @submit="requestReset"
       >
@@ -94,9 +99,12 @@ async function requestReset(event: FormSubmitEvent<RequestResetState>) {
 
         <template #footer>
           <p class="text-center text-sm text-neutral-300">
-            パスワードを思い出した場合は
-            <NuxtLink class="font-medium text-primary-300 hover:text-primary-200" to="/login">
-              ログイン
+            {{ t('reset.remembered') }}
+            <NuxtLink
+              class="font-medium text-primary-300 hover:text-primary-200"
+              :to="localePath('/login')"
+            >
+              {{ t('nav.login') }}
             </NuxtLink>
           </p>
         </template>

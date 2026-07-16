@@ -1,5 +1,7 @@
 <script setup lang="ts">
 const { open } = useAppSidebar()
+const localePath = useLocalePath()
+const { t } = useI18n()
 
 const headerUi = {
   root: 'h-auto',
@@ -10,16 +12,20 @@ const headerUi = {
 </script>
 
 <template>
-  <UHeader title="BMZ IR" to="/" toggle-side="left" :toggle="true" :ui="headerUi">
+  <UHeader title="BMZ IR" :to="localePath('/')" toggle-side="left" :toggle="true" :ui="headerUi">
     <template #toggle>
       <UButton
         icon="i-lucide-menu"
         color="neutral"
         variant="ghost"
         class="lg:hidden"
-        aria-label="メニューを開く"
+        :aria-label="t('common.openMenu')"
         @click="open = !open"
       />
+    </template>
+    <template #right>
+      <LocaleSelect />
+      <UColorModeButton />
     </template>
   </UHeader>
 </template>

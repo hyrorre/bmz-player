@@ -49,6 +49,10 @@ interface ScoreDetail {
 
 const route = useRoute()
 const scoreId = computed(() => String(route.params.id ?? ''))
+const localePath = useLocalePath()
+const { t } = useI18n()
+const { formatDateTime, formatNumber } = useLocaleFormat()
+const { translateApiError } = useApiError()
 const { data, pending, error } = await useFetch<ScoreDetail>(
   () => `/api/v1/scores/${scoreId.value}`,
 )
@@ -64,7 +68,7 @@ async function downloadReplay() {
     const target = await $fetch<{ download_url: string }>(`/api/v1/scores/${scoreId.value}/replay`)
     window.location.href = target.download_url
   } catch (error) {
-    replayError.value = error instanceof Error ? error.message : 'リプレイの取得に失敗しました。'
+    replayError.value = translateApiError(error, 'errors.replayLoadFailed')
   }
 }
 
@@ -92,11 +96,11 @@ const judgeRows = [
 const verificationBadge = computed(() => {
   switch (data.value?.score.verification) {
     case 'verified_play':
-      return { color: 'success' as const, label: 'プレイ署名済み' }
+      return { color: 'success' as const, label: t('score.verifiedPlay') }
     case 'signed_backfill':
-      return { color: 'info' as const, label: '履歴署名済み' }
+      return { color: 'info' as const, label: t('score.signedBackfill') }
     default:
-      return { color: 'neutral' as const, label: '未署名' }
+      return { color: 'neutral' as const, label: t('score.unsigned') }
   }
 })
 
@@ -108,30 +112,37 @@ const arrangeLabel = computed(() => {
   const score = data.value?.score
   return `ARRANGE 1P ${formatArrange(score?.arrange_1p)} / 2P ${formatArrange(score?.arrange_2p)}`
 })
+const errorDescription = computed(() =>
+  error.value ? translateApiError(error.value, 'errors.scoreLoadFailed') : '',
+)
+useSeoMeta({ title: () => t('score.title') })
 </script>
 
 <template>
   <main>
     <section class="mx-auto w-full max-w-3xl px-5 py-10">
-      <UAlert v-if="error" color="error" :description="error.message" />
-      <p v-else-if="pending" class="text-sm text-neutral-400">読み込み中...</p>
+      <UAlert v-if="error" color="error" :description="errorDescription" />
+      <p v-else-if="pending" class="text-sm text-neutral-400">{{ t('common.loading') }}</p>
       <template v-else-if="data">
         <div class="mb-8">
           <p class="mb-2 text-sm font-medium text-primary-300">
-            <NuxtLink :to="`/charts/${data.score.chart_sha256}`" class="hover:underline">
+            <NuxtLink
+              :to="localePath(`/charts/${data.score.chart_sha256}`)"
+              class="hover:underline"
+            >
               {{ data.chart?.title ?? data.score.chart_sha256.slice(0, 12) }}
             </NuxtLink>
-            のスコア
+            {{ t('score.scoreSuffix') }}
           </p>
           <h1 class="text-3xl font-semibold">
-            <NuxtLink :to="`/players/${data.player.id}`" class="hover:underline">
+            <NuxtLink :to="localePath(`/players/${data.player.id}`)" class="hover:underline">
               {{ data.player.display_name }}
             </NuxtLink>
           </h1>
           <p class="mt-2 text-sm text-neutral-400">
             {{ data.score.gauge }} / {{ data.score.ln_policy }} / {{ data.score.rule_mode }} ・
             {{ arrangeLabel }} ・ {{ data.score.device_type }} ・
-            {{ new Date(data.score.played_at ?? data.score.server_received_at).toLocaleString() }}
+            {{ formatDateTime(data.score.played_at ?? data.score.server_received_at) }}
             <UBadge :color="verificationBadge.color" size="sm" variant="subtle">
               {{ verificationBadge.label }}
             </UBadge>
@@ -157,15 +168,15 @@ const arrangeLabel = computed(() => {
           </div>
         </div>
 
-        <h2 class="mb-3 text-lg font-medium">判定内訳</h2>
+        <h2 class="mb-3 text-lg font-medium">{{ t('score.judgementBreakdown') }}</h2>
         <div class="mb-8 overflow-x-auto rounded-lg border border-neutral-800">
           <table class="w-full text-sm">
             <thead class="bg-neutral-900 text-left text-neutral-300">
               <tr>
-                <th class="px-3 py-2">判定</th>
+                <th class="px-3 py-2">{{ t('score.judgement') }}</th>
                 <th class="px-3 py-2 text-right">FAST</th>
                 <th class="px-3 py-2 text-right">SLOW</th>
-                <th class="px-3 py-2 text-right">合計</th>
+                <th class="px-3 py-2 text-right">{{ t('table.total') }}</th>
               </tr>
             </thead>
             <tbody>
@@ -179,20 +190,24 @@ const arrangeLabel = computed(() => {
           </table>
         </div>
 
-        <h2 class="mb-3 text-lg font-medium">リプレイ</h2>
+        <h2 class="mb-3 text-lg font-medium">{{ t('score.replay') }}</h2>
         <div class="space-y-3">
           <UAlert v-if="replayError" color="error" :description="replayError" />
           <template v-if="replayAvailable">
             <p class="text-sm text-neutral-400">
-              {{ data.replay?.format }} ・ {{ data.replay?.size_bytes ?? '?' }} bytes ・
-              {{ data.replay?.status === 'verified' ? 'hash 検証済み' : 'アップロード済み' }}
+              {{ data.replay?.format }} ・
+              {{ data.replay?.size_bytes == null ? '?' : formatNumber(data.replay.size_bytes) }}
+              bytes ・
+              {{
+                data.replay?.status === 'verified' ? t('score.hashVerified') : t('score.uploaded')
+              }}
             </p>
             <UButton color="primary" icon="i-lucide-download" @click="downloadReplay">
-              リプレイをダウンロード
+              {{ t('score.downloadReplay') }}
             </UButton>
           </template>
           <p v-else class="text-sm text-neutral-400">
-            このスコアのリプレイはアップロードされていません。
+            {{ t('score.noReplay') }}
           </p>
         </div>
 

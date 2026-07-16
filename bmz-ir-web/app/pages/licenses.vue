@@ -3,15 +3,14 @@ const reportUrl = '/licenses/web-dependency-licenses.txt'
 const licenseText = ref('')
 const loading = ref(true)
 const errorMessage = ref('')
+const { t } = useI18n()
 
 const packageCount = computed(() => {
   const match = /^Packages: (?<count>\d+)$/mu.exec(licenseText.value)
   return match?.groups?.count ?? ''
 })
 
-useSeoMeta({
-  title: 'Web Dependency Licenses - BMZ IR',
-})
+useSeoMeta({ title: () => t('licenses.title') })
 
 onMounted(async () => {
   loading.value = true
@@ -26,10 +25,9 @@ onMounted(async () => {
     }
     licenseText.value = await response.text()
   } catch (error) {
-    errorMessage.value =
-      error instanceof Error
-        ? `web-dependency-licenses.txt を読み込めませんでした (${error.message})。`
-        : 'web-dependency-licenses.txt を読み込めませんでした。'
+    errorMessage.value = t('licenses.loadFailed', {
+      detail: error instanceof Error ? ` (${error.message})` : '',
+    })
   } finally {
     loading.value = false
   }
@@ -42,9 +40,9 @@ onMounted(async () => {
       <div class="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
         <div>
           <p class="text-sm font-medium text-primary-300">BMZ IR</p>
-          <h1 class="mt-1 text-3xl font-semibold tracking-normal">Web Dependency Licenses</h1>
+          <h1 class="mt-1 text-3xl font-semibold tracking-normal">{{ t('licenses.title') }}</h1>
           <p class="mt-2 max-w-2xl text-sm leading-6 text-neutral-300">
-            Cloudflare Worker bundle に含まれる Web 依存パッケージの third-party notice です。
+            {{ t('licenses.description') }}
           </p>
         </div>
         <UButton
@@ -55,7 +53,7 @@ onMounted(async () => {
           target="_blank"
           variant="subtle"
         >
-          txt を開く
+          {{ t('licenses.openTxt') }}
         </UButton>
       </div>
 
@@ -73,7 +71,9 @@ onMounted(async () => {
       >
         <div class="flex items-center justify-between border-b border-neutral-800 px-4 py-3">
           <p class="text-sm font-medium text-neutral-200">web-dependency-licenses.txt</p>
-          <p v-if="packageCount" class="text-xs text-neutral-400">{{ packageCount }} packages</p>
+          <p v-if="packageCount" class="text-xs text-neutral-400">
+            {{ t('licenses.packageCount', { count: packageCount }) }}
+          </p>
         </div>
         <div v-if="loading" class="space-y-3 p-4">
           <USkeleton class="h-4 w-48" />
