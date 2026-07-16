@@ -20902,6 +20902,25 @@ mod tests {
     }
 
     #[test]
+    fn skin_catalog_loads_luxez_flat_select_lua_header_when_available() {
+        let repo_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let skin_root = repo_root.join("data/skins");
+        let path = skin_root.join("Luxez-Flat/music_select.luaskin");
+        if !path.is_file() {
+            return;
+        }
+
+        let (skin_type, candidate) =
+            load_skin_candidate(&skin_root, &path, SkinCandidateOrigin::Bundled)
+                .expect("load Luxez-Flat catalog candidate");
+
+        assert_eq!(skin_type, 5);
+        assert_eq!(candidate.path, "resource:skins/Luxez-Flat/music_select.luaskin");
+        assert_eq!(candidate.origin, SkinCandidateOrigin::Bundled);
+        assert!(!candidate.name.trim().is_empty(), "candidate name should not be empty");
+    }
+
+    #[test]
     fn skin_catalog_maps_play_key_modes_by_exact_skin_type() {
         let mut catalog = SkinCatalog::default();
         push_skin_candidate(

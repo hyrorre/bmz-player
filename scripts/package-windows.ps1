@@ -389,11 +389,13 @@ Sync-InnoAppVersion $issPath $version
 $defaultSkin = Join-Path $repoRoot "data\skins\default\select.json"
 $rmzSkin = Join-Path $repoRoot "data\skins\Rmz-skin\play7main.luaskin"
 $mzSelectSkin = Join-Path $repoRoot "data\skins\mz-select\music_select.luaskin"
+$luxezFlatSkin = Join-Path $repoRoot "data\skins\Luxez-Flat\music_select.luaskin"
 $sampleSong = Join-Path $repoRoot "data\songs\sample-playable\sample-playable.bms"
 $appIcon = Join-Path $repoRoot "assets\app-icon\bmz-player.ico"
 Require-File $defaultSkin
 Require-File $rmzSkin
 Require-File $mzSelectSkin
+Require-File $luxezFlatSkin
 Require-File $sampleSong
 Require-File $appIcon
 
@@ -414,6 +416,7 @@ Copy-RequiredFile $binary (Join-Path $stageDir "bmz-player.exe")
 Copy-DirectoryMirror (Join-Path $repoRoot "data\skins\default") (Join-Path $resourcesDir "skins\default")
 Copy-DirectoryMirror (Join-Path $repoRoot "data\skins\Rmz-skin") (Join-Path $resourcesDir "skins\Rmz-skin")
 Copy-DirectoryMirror (Join-Path $repoRoot "data\skins\mz-select") (Join-Path $resourcesDir "skins\mz-select")
+Copy-DirectoryMirror (Join-Path $repoRoot "data\skins\Luxez-Flat") (Join-Path $resourcesDir "skins\Luxez-Flat")
 Copy-DirectoryMirror (Join-Path $repoRoot "data\songs\sample-playable") (Join-Path $resourcesDir "songs\sample-playable")
 Copy-RequiredFile (Join-Path $repoRoot "LICENSE") (Join-Path $licensesDir "BMZ-GPL-3.0-only.txt")
 Copy-RequiredFile (Join-Path $repoRoot "docs\licenses.md") (Join-Path $licensesDir "license-notes.md")

@@ -4,3 +4,6 @@
 [submodule "data/skins/mz-select"]
 	path = data/skins/mz-select
 	url = https://github.com/hyrorre/mz-select
+[submodule "data/skins/Luxez-Flat"]
+	path = data/skins/Luxez-Flat
+	url = https://github.com/hyrorre/Luxez-Flat

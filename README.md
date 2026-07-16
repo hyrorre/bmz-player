@@ -34,6 +34,7 @@ Features
 
 - m-select (bundled)
 - Rm-skin (bundled)
+- Luxez-Flat (bundled)
 - EC:FN / Starseeker ([https://kaidou0912.hatenablog.com/entry/2025/03/01/151604](https://kaidou0912.hatenablog.com/entry/2025/03/01/151604))
 
 data_dir の skins フォルダに配置してください。
@@ -54,6 +55,7 @@ Currently bundled submodules:
 
 - `data/skins/Rmz-skin` — BMZ bundled fork of Rm-skin. See the skin repository's README and `_license/` directory for license details.
 - `data/skins/mz-select` — BMZ bundled copy of m-select. See the skin repository's `readme.txt` and `license/` directory for license details.
+- `data/skins/Luxez-Flat` — BMZ bundled fork of Luxez-Flat. See the skin repository's `readme.txt` and `font_license/` directory for license details.
 
 ## System Requirements
 

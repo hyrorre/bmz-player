@@ -88,3 +88,9 @@ data/skins/mz-select:
   Bundled Git submodule for the BMZ Player distribution. Preserve readme.txt and
   the license/ directory in release packages. Bundled fonts and VOICEVOX audio
   have separate terms documented there.
+
+data/skins/Luxez-Flat:
+  Bundled Git submodule for the BMZ Player distribution. Preserve readme.txt and
+  the font_license/ directory in release packages. The skin includes third-party
+  BGM, sound, image, and font materials whose terms and credits are documented
+  by the bundled readme and license files.

@@ -36,6 +36,7 @@ modules:
       - cp -a data/skins/default /app/share/bmz-player/skins/default
       - cp -a data/skins/Rmz-skin /app/share/bmz-player/skins/Rmz-skin
       - cp -a data/skins/mz-select /app/share/bmz-player/skins/mz-select
+      - cp -a data/skins/Luxez-Flat /app/share/bmz-player/skins/Luxez-Flat
       - cp -a data/songs/sample-playable /app/share/bmz-player/songs/sample-playable
       - find /app/share/bmz-player -name .git -prune -exec rm -rf '{}' +
       - install -Dm644 LICENSE /app/share/bmz-player/licenses/BMZ-GPL-3.0-only.txt

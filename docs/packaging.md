@@ -57,6 +57,7 @@ BMZ Player/
       default/
       Rmz-skin/
       mz-select/
+      Luxez-Flat/
     songs/
       sample-playable/
     licenses/
@@ -230,6 +231,7 @@ BMZ Player.app/
         default/
         Rmz-skin/
         mz-select/
+        Luxez-Flat/
       songs/
         sample-playable/
       licenses/
@@ -355,7 +357,7 @@ flatpak install --user flathub org.freedesktop.Platform//25.08 org.freedesktop.S
 submodule skin が空の場合は先に初期化する:
 
 ```sh
-git submodule update --init --recursive data/skins/Rmz-skin data/skins/mz-select
+git submodule update --init --recursive data/skins/Rmz-skin data/skins/mz-select data/skins/Luxez-Flat
 ```
 
 Flatpak bundle を作る:
@@ -418,6 +420,7 @@ Flatpak layout:
     default/
     Rmz-skin/
     mz-select/
+    Luxez-Flat/
   songs/
     sample-playable/
   licenses/
