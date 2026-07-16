@@ -25,8 +25,12 @@ Supported Skin
 Features
 - score database migration from LR2 / beatoraja
 - auto-adjust (自動判定調整)
-- normalizing volume per-chart (自動音量調整)
+- normalizing volume per-chart (譜面ごとの自動音量調整)
 - internet ranking (BMZ IR)
+- on-demand preview generation
+  - #PREVIEW 定義や preview.wav(.ogg) がない曲のプレビューを再生することができます
+- Discord Rich Presence
+- OBS WebSocket control integration
 
 **Don't use this application for playing copyrighted contents.**
 
@@ -36,6 +40,8 @@ Features
 - Rm-skin (bundled)
 - Luxez-Flat (bundled)
 - EC:FN / Starseeker ([https://kaidou0912.hatenablog.com/entry/2025/03/01/151604](https://kaidou0912.hatenablog.com/entry/2025/03/01/151604))
+- WMII ([https://wispworks-web.vercel.app/](https://wispworks-web.vercel.app/))
+- PeacefulPlay ([https://ralba-gear.hateblo.jp/entry/PeacefulPlay](https://ralba-gear.hateblo.jp/entry/PeacefulPlay))
 
 data_dir の skins フォルダに配置してください。
 
@@ -71,10 +77,11 @@ Use the same version of FFmpeg as specified in Cargo.toml
 
 ### Windows (stable-x86_64-pc-windows-msvc)
 
+Install scoop beforehand. (or manually install vcpkg)
+
 ```powershell
 # Install vcpkg
-git clone https://github.com/microsoft/vcpkg.git C:\vcpkg
-$Env:Path+=";C:\vcpkg"
+scoop install vcpkg
 vcpkg integrate install
 
 # Install rust
@@ -126,21 +133,13 @@ cargo run
 ## Roadmap
 
 - [ ] more beatoraja-compatible features 
-- [ ] IR score.db import (IRからスコアをダウンロードしてscore.dbに保存する機能)
-- [ ] IR score.db upload (ローカルのscore.dbをIRにアップロードする機能)
-- [ ] random select
 - [ ] battle mode
 - [ ] rec mode (譜面動画作成モード)
 - [ ] practice mode
-- [ ] read-only IR (LR2IR, Mocha, MinIR)
-- [ ] OBS WebSocket control integration
-- [ ] Discord Rich Presence
 - [ ] Arena Mode
 - [ ] i18n (en / ko / zh-CN / zh-TW / zh-HK)
-- [ ] low-latency input (keyboard / controller)
 - [ ] WASAPI exclusive
 - [ ] ギミック系BMSへの対応
-- [ ] auto generate preview
 - [ ] non stop mode
 
 ## Out of Scope (but welcome your contributions)
@@ -149,5 +148,3 @@ cargo run
 - [ ] 18K PMS (9K DOUBLE PLAY)
 - [ ] LR2-style csv skin
 - [ ] More features like LR2
-- [ ] osu! mania charts
-- [ ] ModernChic skin support (too much code that relies on Java / libGDX)
