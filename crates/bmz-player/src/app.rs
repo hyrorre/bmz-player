@@ -20873,6 +20873,41 @@ mod tests {
     }
 
     #[test]
+    fn skin_catalog_loads_modern_chic_headers_when_available() {
+        let repo_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let skin_root = repo_root.join("data/skins");
+        let root = skin_root.join("ModernChic");
+        if !root.is_dir() {
+            return;
+        }
+        let cases = [
+            ("musicselect.luaskin", 5),
+            ("decide.luaskin", 6),
+            ("play5_hw.luaskin", 1),
+            ("play7_hw.luaskin", 0),
+            ("play10_hw.luaskin", 3),
+            ("play14_hw.luaskin", 2),
+            ("result.luaskin", 7),
+            ("course.luaskin", 15),
+        ];
+
+        for (file_name, expected_type) in cases {
+            let path = root.join(file_name);
+            let loaded = bmz_skin::load_lua_skin_header_value(&path)
+                .unwrap_or_else(|error| panic!("load {} header: {error:#}", path.display()));
+            let document: SkinDocument = serde_json::from_value(loaded.value)
+                .unwrap_or_else(|error| panic!("decode {} header: {error:#}", path.display()));
+            assert_eq!(document.skin_type, expected_type, "{}", path.display());
+
+            let (skin_type, candidate) =
+                load_skin_candidate(&skin_root, &path, SkinCandidateOrigin::Bundled)
+                    .unwrap_or_else(|| panic!("load {} catalog candidate", path.display()));
+            assert_eq!(skin_type, expected_type, "{}", path.display());
+            assert!(candidate.name.contains("ModernChic"), "candidate name: {}", candidate.name);
+        }
+    }
+
+    #[test]
     fn course_result_summary_for_skin_uses_aggregate_course_values() {
         fn entry_summary(
             ex_score: u32,

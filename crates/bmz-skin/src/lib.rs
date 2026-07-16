@@ -204,7 +204,9 @@ fn normalize_lua_skin_document(value: JsonValue) -> JsonValue {
     let value = bmz_skin_document::normalize_lua_json_skin_integer_numbers(value);
     let value = normalize_lua_skin_category_map(value);
     let value = normalize_lua_end_of_note_shadow_destinations(value);
-    normalize_lua_skin_offset_map(value)
+    let value = normalize_lua_skin_offset_map(value);
+    let value = normalize_lua_skin_category_labels(value);
+    normalize_lua_skin_offset_flags(value)
 }
 
 /// Rm-skin 縺ｮ `processHeader()` 縺ｯ `category = { property = {...}, filepath = {...} }` 蠖｢蠑上�
@@ -218,6 +220,80 @@ fn normalize_lua_skin_category_map(value: JsonValue) -> JsonValue {
         if !entries.is_empty() && entries.iter().all(|entry| matches!(entry, JsonValue::Object(_)))
         {
             map.insert("category".to_string(), JsonValue::Array(entries));
+        }
+    }
+    JsonValue::Object(map)
+}
+
+/// LuaSkinLoader は Java の String フィールドへ Lua の数値を渡すと `tojstring()` で
+/// 文字列化する。ModernChic は category ID に数値を使うため、厳密な JSON decode の
+/// 前に同じ変換を行う。
+fn normalize_lua_skin_category_labels(value: JsonValue) -> JsonValue {
+    let JsonValue::Object(mut map) = value else {
+        return value;
+    };
+
+    if let Some(JsonValue::Array(categories)) = map.get_mut("category") {
+        for category in categories {
+            let JsonValue::Object(category) = category else {
+                continue;
+            };
+            stringify_json_scalar(category.get_mut("name"));
+            if let Some(JsonValue::Array(items)) = category.get_mut("item") {
+                for item in items {
+                    stringify_json_scalar(Some(item));
+                }
+            }
+        }
+    }
+
+    for key in ["property", "filepath", "offset"] {
+        if let Some(JsonValue::Array(definitions)) = map.get_mut(key) {
+            for definition in definitions {
+                let JsonValue::Object(definition) = definition else {
+                    continue;
+                };
+                stringify_json_scalar(definition.get_mut("category"));
+            }
+        }
+    }
+
+    JsonValue::Object(map)
+}
+
+fn stringify_json_scalar(value: Option<&mut JsonValue>) {
+    let Some(value) = value else {
+        return;
+    };
+    let replacement = match value {
+        JsonValue::Number(number) => Some(number.to_string()),
+        JsonValue::Bool(boolean) => Some(boolean.to_string()),
+        _ => None,
+    };
+    if let Some(replacement) = replacement {
+        *value = JsonValue::String(replacement);
+    }
+}
+
+/// LuaSkinLoader の boolean 変換は Lua の truthiness (`toboolean`) に従う。
+/// Lua では数値の 0 も true なので、JSON の 0/1 判定にはしない。
+fn normalize_lua_skin_offset_flags(value: JsonValue) -> JsonValue {
+    let JsonValue::Object(mut map) = value else {
+        return value;
+    };
+    if let Some(JsonValue::Array(offsets)) = map.get_mut("offset") {
+        for offset in offsets {
+            let JsonValue::Object(offset) = offset else {
+                continue;
+            };
+            for key in ["x", "y", "w", "h", "r", "a"] {
+                let Some(flag) = offset.get_mut(key) else {
+                    continue;
+                };
+                if !flag.is_boolean() {
+                    *flag = JsonValue::Bool(!flag.is_null());
+                }
+            }
         }
     }
     JsonValue::Object(map)
@@ -2728,6 +2804,28 @@ mod tests {
     }
 
     #[test]
+    fn normalize_lua_skin_category_labels_stringifies_modern_chic_ids() {
+        let value = serde_json::json!({
+            "category": [{ "name": 10, "item": [11, 12] }],
+            "property": [{ "name": "Option", "category": 11, "item": [], "def": "" }],
+            "filepath": [{ "name": "Image", "path": "*.png", "category": 12, "def": "" }],
+            "offset": [{ "name": "Offset", "id": 40, "category": 13, "a": 0 }]
+        });
+
+        let normalized = normalize_lua_skin_document(value);
+
+        assert_eq!(normalized["category"][0]["name"], "10");
+        assert_eq!(normalized["category"][0]["item"][0], "11");
+        assert_eq!(normalized["category"][0]["item"][1], "12");
+        assert_eq!(normalized["property"][0]["category"], "11");
+        assert_eq!(normalized["filepath"][0]["category"], "12");
+        assert_eq!(normalized["offset"][0]["category"], "13");
+        let document = serde_json::from_value::<SkinDocument>(normalized)
+            .expect("normalized Lua header values should decode as a skin document");
+        assert!(document.offset[0].a, "Lua numeric zero is truthy");
+    }
+
+    #[test]
     fn normalize_lua_skin_offset_map_converts_skin_config_shape() {
         let value = JsonValue::Object(JsonMap::from_iter([(
             "offset".to_string(),
@@ -2795,6 +2893,19 @@ mod tests {
                 "m-select should retain operating-time ref {ref_id}"
             );
         }
+    }
+
+    #[test]
+    fn modern_chic_lua_select_header_loads_when_available() {
+        let skin_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../data/skins/ModernChic/musicselect.luaskin");
+        if !skin_path.is_file() {
+            return;
+        }
+        let loaded = load_lua_skin_header_value(&skin_path).unwrap();
+        let document: SkinDocument = serde_path_to_error::deserialize(loaded.value)
+            .unwrap_or_else(|error| panic!("decode {} header: {error:#}", skin_path.display()));
+        assert_eq!(document.skin_type, 5);
     }
 
     #[test]
