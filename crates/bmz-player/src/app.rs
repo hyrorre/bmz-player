@@ -421,6 +421,8 @@ struct WinitApp {
     /// 既に裏で完了している譜面/音源ロードを main で再度同期実行するのを避ける。
     preloaded_play_session: Option<PreloadedInputPlaySession>,
     play_preload_generation: u64,
+    /// 同曲リトライ用に残すキー音 / 静止画 BGA / 動画デコーダ。
+    play_media_cache: Option<PlayMediaCache>,
     play_ending: Option<PlayEndingTransition>,
     last_started_chart_id: Option<i64>,
     /// プレイ開始時点の難易度表テキスト (beatoraja TEXT_TABLE1..3)。
@@ -1383,6 +1385,24 @@ struct QuickRetryReuse {
     preloaded: PreloadedInputPlaySession,
     bga_frames: BgaFrameCatalog,
     bga_assets: Vec<BgaAssetRef>,
+    video_bga_decoders: crate::video_bga::VideoBgaDecoderMap,
+}
+
+/// Media kept across same-song retry (beatoraja `BMSResource` style).
+/// Cleared when leaving result back to select, or when starting an unrelated chart.
+struct PlayMediaCache {
+    chart_id: i64,
+    /// Present for SameArrange reuse of the exact chart Arc.
+    chart: Option<std::sync::Arc<PlayableChart>>,
+    output_sample_rate: u32,
+    samples: bmz_audio::sample::SampleBank,
+    sample_report: Vec<bmz_audio::loader::LoadedSampleReport>,
+    normalization_gain: f32,
+    applied_arrange: Option<crate::screens::play_session::AppliedArrange>,
+    score_key: Option<crate::storage::score_db::ScoreKey>,
+    bga_frames: BgaFrameCatalog,
+    bga_assets: Vec<BgaAssetRef>,
+    video_bga_decoders: crate::video_bga::VideoBgaDecoderMap,
 }
 
 enum SongScanEvent {
@@ -2425,6 +2445,7 @@ impl WinitApp {
             pending_play_preload: None,
             preloaded_play_session: None,
             play_preload_generation: 0,
+            play_media_cache: None,
             play_ending: None,
             last_started_chart_id: None,
             play_table_text_primary: String::new(),
@@ -8407,6 +8428,9 @@ impl WinitApp {
         self.spawn_play_skin_decode_for(play_skin_key_mode, play_skin_runtime_state);
         self.ensure_skin_ready(SkinKind::Play);
         self.invalidate_play_preload();
+        if self.play_media_cache.as_ref().is_some_and(|cache| cache.chart_id != chart_id) {
+            self.play_media_cache = None;
+        }
         self.play_ending = None;
         self.result_exit = None;
         self.result_key5_held = false;
@@ -8588,6 +8612,20 @@ impl WinitApp {
                 &active_play.running.session.chart,
             )
         };
+        if let Some(cache) = self.play_media_cache.as_mut()
+            && cache.chart_id == chart_id
+        {
+            let mut videos = std::mem::take(&mut cache.video_bga_decoders);
+            if !videos.is_empty() {
+                crate::video_bga::prepare_reused_video_decoders(&mut videos);
+                active_play.running.video_bga_decoders = videos;
+                tracing::info!(
+                    chart_id,
+                    decoders = active_play.running.video_bga_decoders.len(),
+                    "installed reused video BGA decoders"
+                );
+            }
+        }
         let chart = &active_play.running.session.chart;
         let folder = chart_asset_folder(chart)
             .map(|path| path.to_string_lossy().into_owned())
@@ -8989,6 +9027,7 @@ impl WinitApp {
         // would be treated as the next entry of a stale course (route
         // through advance_course_after_finish with mismatched chart_id).
         self.clear_active_course_state();
+        self.play_media_cache = None;
         let now = Instant::now();
         self.select_scene_started_at = now;
         self.restart_select_bar_timer_without_scroll(now);
@@ -9302,11 +9341,118 @@ impl WinitApp {
             tracing::warn!("no previous chart is available to retry");
             return;
         };
-        let options = match mode {
+        let mut options = match mode {
             ResultRetryMode::SameArrange => self.result_retry_same_arrange_options(),
             ResultRetryMode::DifferentArrange => self.result_retry_different_arrange_options(),
         };
+        if options.chart_zero_time == TimeUs(0) {
+            options.chart_zero_time = self.play_skin_playstart_offset();
+        }
+
+        if let Some(cache) = self.play_media_cache.take()
+            && cache.chart_id == chart_id
+        {
+            match mode {
+                ResultRetryMode::SameArrange if cache.chart.is_some() => {
+                    if let Some(mut reuse) =
+                        self.quick_retry_reuse_from_media_cache(chart_id, &options, &cache)
+                    {
+                        let mut cache = cache;
+                        reuse.video_bga_decoders = std::mem::take(&mut cache.video_bga_decoders);
+                        self.play_media_cache = Some(cache);
+                        self.queue_quick_retry_reuse(chart_id, reuse);
+                        self.start_chart_from_preloaded_or_sync(chart_id, options);
+                        return;
+                    }
+                    self.play_media_cache = Some(cache);
+                }
+                _ => {
+                    self.start_play_preload_reusing_media(chart_id, options.clone(), cache);
+                    self.begin_result_retry_play_scene(chart_id, options);
+                    return;
+                }
+            }
+        }
         self.start_chart_with_options(chart_id, options);
+    }
+
+    fn begin_result_retry_play_scene(&mut self, chart_id: i64, options: PlayStartOptions) {
+        self.ensure_skin_ready(SkinKind::Decide);
+        let play_skin_key_mode = self.play_skin_key_mode_for_chart(chart_id, &options);
+        let play_skin_runtime_state = lua_runtime_state_for_play(
+            &options,
+            self.boot.profile_config.play.auto_play,
+            &self.boot.profile_config.display_name,
+        );
+        self.spawn_play_skin_decode_for(play_skin_key_mode, play_skin_runtime_state);
+        self.ensure_skin_ready(SkinKind::Play);
+        self.play_ending = None;
+        self.result_exit = None;
+        self.result_key5_held = false;
+        self.result_key7_held = false;
+        self.play_ready_sound_started_at = None;
+        self.play_ready_last_control_hold_at = None;
+        self.decide_sound_stopped_for_chart_start = false;
+        self.draining_audio = None;
+        self.enter_play_scene(chart_id, options, self.decide_snapshot_for_chart(chart_id));
+        self.poll_play_preload();
+    }
+
+    fn start_chart_from_preloaded_or_sync(&mut self, chart_id: i64, mut options: PlayStartOptions) {
+        self.last_play_was_autoplay = options.autoplay;
+        self.ensure_skin_ready(SkinKind::Decide);
+        let play_skin_key_mode = self.play_skin_key_mode_for_chart(chart_id, &options);
+        let play_skin_runtime_state = lua_runtime_state_for_play(
+            &options,
+            self.boot.profile_config.play.auto_play,
+            &self.boot.profile_config.display_name,
+        );
+        self.spawn_play_skin_decode_for(play_skin_key_mode, play_skin_runtime_state);
+        self.ensure_skin_ready(SkinKind::Play);
+        self.play_ending = None;
+        self.result_exit = None;
+        self.result_key5_held = false;
+        self.result_key7_held = false;
+        self.play_ready_sound_started_at = None;
+        self.play_ready_last_control_hold_at = None;
+        self.decide_sound_stopped_for_chart_start = false;
+        if options.chart_zero_time == TimeUs(0) {
+            options.chart_zero_time = self.play_skin_playstart_offset();
+        }
+        self.draining_audio = None;
+
+        let opened = match self.preloaded_play_session.take() {
+            Some(preloaded) => {
+                tracing::debug!(chart_id, "using buffered play preload for result retry");
+                let prepared =
+                    prepare_winit_play_session_from_preloaded(&self.boot.profile_config, preloaded);
+                self.open_prepared_winit_play_session(prepared)
+            }
+            None => {
+                let app_config = self.play_session_app_config();
+                prepare_play_session_for_chart_with_winit_input(
+                    &self.boot.library_db,
+                    &app_config,
+                    &self.boot.profile_config,
+                    chart_id,
+                    options.clone(),
+                )
+                .and_then(|prepared| self.open_prepared_winit_play_session(prepared))
+            }
+        };
+        match opened {
+            Ok(active_play) => {
+                self.enter_play_scene(
+                    chart_id,
+                    options.clone(),
+                    self.decide_snapshot_for_chart(chart_id),
+                );
+                self.install_active_play(chart_id, active_play);
+            }
+            Err(error) => {
+                tracing::error!(chart_id, %error, "failed to start play from reused media");
+            }
+        }
     }
 
     /// Replay the whole course from its first chart, reproducing each chart's
@@ -9384,15 +9530,10 @@ impl WinitApp {
         options
     }
 
-    fn quick_retry_reuse_active_assets(
+    fn clone_active_sample_bank(
         &self,
         chart_id: i64,
-        options: &PlayStartOptions,
-        mode: ResultRetryMode,
-    ) -> Option<QuickRetryReuse> {
-        if mode != ResultRetryMode::SameArrange {
-            return None;
-        }
+    ) -> Option<(u32, bmz_audio::sample::SampleBank)> {
         let active = self.active_play.as_ref()?;
         let mut sample_bank = None;
         for attempt in 0..QUICK_RETRY_REUSE_LOCK_ATTEMPTS {
@@ -9404,16 +9545,92 @@ impl WinitApp {
                 thread::sleep(QUICK_RETRY_REUSE_LOCK_RETRY_SLEEP);
             }
         }
-        let Some((output_sample_rate, samples)) = sample_bank else {
+        if sample_bank.is_none() {
             tracing::debug!(
                 chart_id,
                 attempts = QUICK_RETRY_REUSE_LOCK_ATTEMPTS,
-                "quick retry asset reuse skipped because audio is busy"
+                "play media reuse skipped because audio is busy"
             );
-            return None;
-        };
-        let audio = AudioEngine::with_sample_bank(output_sample_rate, samples);
+        }
+        sample_bank
+    }
 
+    fn take_play_media_cache_from_active(
+        &mut self,
+        chart_id: i64,
+        mode: ResultRetryMode,
+    ) -> Option<PlayMediaCache> {
+        let (output_sample_rate, samples) = self.clone_active_sample_bank(chart_id)?;
+        let active = self.active_play.as_mut()?;
+        let video_bga_decoders = std::mem::take(&mut active.running.video_bga_decoders);
+        let (chart, applied_arrange, score_key) = match mode {
+            ResultRetryMode::SameArrange => (
+                Some(Arc::clone(&active.running.session.chart)),
+                Some(active.running.applied_arrange.clone()),
+                Some(active.running.score_key),
+            ),
+            ResultRetryMode::DifferentArrange => (None, None, None),
+        };
+        Some(PlayMediaCache {
+            chart_id,
+            chart,
+            output_sample_rate,
+            samples,
+            sample_report: active.running.sample_report.clone(),
+            normalization_gain: active.running.session.audio_mix.normalization_gain,
+            applied_arrange,
+            score_key,
+            bga_frames: active.running.bga_frames.clone(),
+            bga_assets: active.running.session.chart.bga_assets.clone(),
+            video_bga_decoders,
+        })
+    }
+
+    fn capture_play_media_cache_from_running(
+        &mut self,
+        chart_id: i64,
+        running: &mut crate::audio::RunningPlaySession,
+    ) {
+        let mut sample_bank = None;
+        for attempt in 0..QUICK_RETRY_REUSE_LOCK_ATTEMPTS {
+            sample_bank = running.audio.engine.clone_sample_bank();
+            if sample_bank.is_some() {
+                break;
+            }
+            if attempt + 1 < QUICK_RETRY_REUSE_LOCK_ATTEMPTS {
+                thread::sleep(QUICK_RETRY_REUSE_LOCK_RETRY_SLEEP);
+            }
+        }
+        let Some((output_sample_rate, samples)) = sample_bank else {
+            tracing::debug!(chart_id, "play media cache capture skipped because audio is busy");
+            return;
+        };
+        let video_bga_decoders = std::mem::take(&mut running.video_bga_decoders);
+        self.play_media_cache = Some(PlayMediaCache {
+            chart_id,
+            chart: Some(Arc::clone(&running.session.chart)),
+            output_sample_rate,
+            samples,
+            sample_report: running.sample_report.clone(),
+            normalization_gain: running.session.audio_mix.normalization_gain,
+            applied_arrange: Some(running.applied_arrange.clone()),
+            score_key: Some(running.score_key),
+            bga_frames: running.bga_frames.clone(),
+            bga_assets: running.session.chart.bga_assets.clone(),
+            video_bga_decoders,
+        });
+    }
+
+    fn quick_retry_reuse_from_media_cache(
+        &self,
+        chart_id: i64,
+        options: &PlayStartOptions,
+        cache: &PlayMediaCache,
+    ) -> Option<QuickRetryReuse> {
+        let chart = cache.chart.as_ref()?;
+        let applied_arrange = cache.applied_arrange.clone()?;
+        let score_key = cache.score_key?;
+        let audio = AudioEngine::with_sample_bank(cache.output_sample_rate, cache.samples.clone());
         let mut session_options =
             play_session_options_from_start(&self.play_session_app_config(), options.clone());
         session_options.ln_policy_setting = self.boot.profile_config.play.ln_mode_policy;
@@ -9423,18 +9640,19 @@ impl WinitApp {
             preloaded: PreloadedInputPlaySession {
                 chart_id,
                 preloaded: PreloadedPlaySession {
-                    chart: Arc::clone(&active.running.session.chart),
+                    chart: Arc::clone(chart),
                     audio,
-                    sample_report: active.running.sample_report.clone(),
-                    normalization_gain: active.running.session.audio_mix.normalization_gain,
-                    applied_arrange: active.running.applied_arrange.clone(),
-                    score_key: active.running.score_key,
+                    sample_report: cache.sample_report.clone(),
+                    normalization_gain: cache.normalization_gain,
+                    applied_arrange,
+                    score_key,
                 },
                 input: crate::input::shared::SharedInputBackend::default(),
                 session_options,
             },
-            bga_frames: active.running.bga_frames.clone(),
-            bga_assets: active.running.session.chart.bga_assets.clone(),
+            bga_frames: cache.bga_frames.clone(),
+            bga_assets: cache.bga_assets.clone(),
+            video_bga_decoders: HashMap::new(),
         })
     }
 
@@ -9443,35 +9661,114 @@ impl WinitApp {
         (generation, BgaImageLoadStatus::ready(generation, chart_id))
     }
 
-    fn queue_quick_retry_reuse(&mut self, chart_id: i64, reuse: QuickRetryReuse) {
-        self.play_preload_generation = self.play_preload_generation.wrapping_add(1);
-        let play_generation = self.play_preload_generation;
-        self.pending_play_preload = None;
-        self.preloaded_play_session = Some(reuse.preloaded);
-
+    fn apply_reused_bga_preload(
+        &mut self,
+        chart_id: i64,
+        bga_frames: BgaFrameCatalog,
+        bga_assets: Vec<BgaAssetRef>,
+    ) {
         let (bga_generation, bga_load_status) =
             Self::reused_bga_load_state(self.bga_load_generation, chart_id);
         self.bga_load_generation = bga_generation;
         self.bga_load_chart_id = Some(chart_id);
         self.bga_load_rx = None;
         self.bga_load_status = bga_load_status;
-        let bga_frames = reuse.bga_frames.len();
-        self.bga_preload_frames = reuse.bga_frames;
-        self.bga_load_total_assets = reuse
-            .bga_assets
+        let bga_frame_count = bga_frames.len();
+        self.bga_preload_frames = bga_frames;
+        self.bga_load_total_assets = bga_assets
             .iter()
             .filter(|asset| asset.kind == bmz_chart::model::BgaAssetKind::Static)
             .count()
             .min(u32::MAX as usize) as u32;
         self.bga_load_completed_assets = self.bga_load_total_assets;
-        self.bga_preload_assets = Some(reuse.bga_assets);
+        self.bga_preload_assets = Some(bga_assets);
         tracing::info!(
             chart_id,
-            play_generation,
             bga_generation,
-            bga_frames,
-            "quick retry assets reused"
+            bga_frames = bga_frame_count,
+            "reused static BGA preload"
         );
+    }
+
+    fn queue_quick_retry_reuse(&mut self, chart_id: i64, mut reuse: QuickRetryReuse) {
+        self.play_preload_generation = self.play_preload_generation.wrapping_add(1);
+        let play_generation = self.play_preload_generation;
+        self.pending_play_preload = None;
+        self.preloaded_play_session = Some(reuse.preloaded);
+        self.apply_reused_bga_preload(chart_id, reuse.bga_frames, reuse.bga_assets);
+        if let Some(cache) = self.play_media_cache.as_mut()
+            && cache.chart_id == chart_id
+        {
+            cache.video_bga_decoders = std::mem::take(&mut reuse.video_bga_decoders);
+        }
+        tracing::info!(chart_id, play_generation, "quick retry assets reused");
+    }
+
+    fn start_play_preload_reusing_media(
+        &mut self,
+        chart_id: i64,
+        options: PlayStartOptions,
+        cache: PlayMediaCache,
+    ) {
+        self.play_preload_generation = self.play_preload_generation.wrapping_add(1);
+        let generation = self.play_preload_generation;
+        self.preloaded_play_session = None;
+        self.apply_reused_bga_preload(chart_id, cache.bga_frames.clone(), cache.bga_assets.clone());
+        self.play_media_cache = Some(cache);
+
+        let media = self.play_media_cache.as_ref().expect("just stored");
+        let output_sample_rate = media.output_sample_rate;
+        let samples = media.samples.clone();
+        let sample_report = media.sample_report.clone();
+        let normalization_gain = media.normalization_gain;
+
+        let (tx, rx) = mpsc::channel();
+        let library_db_path = self.boot.app_paths.library_db.clone();
+        let app_config = self.play_session_app_config();
+        let ln_policy_setting = self.boot.profile_config.play.ln_mode_policy;
+        let rule_mode = self.boot.profile_config.play.rule_mode;
+        let normalize_chart_volume = self.boot.profile_config.audio_mix.normalize_chart_volume;
+        let input = SharedInputBackend::default();
+        let preload_input = input.clone();
+        let audio_progress = Arc::new(AtomicU32::new(resource_load_progress_units(1, 1)));
+        thread::Builder::new()
+            .name(format!("play-preload-reuse-{chart_id}"))
+            .spawn(move || {
+                let result = (|| -> Result<PreloadedInputPlaySession> {
+                    let library_db =
+                        crate::storage::library_db::LibraryDatabase::open(&library_db_path)?;
+                    let mut session_options =
+                        crate::screens::play_start::play_session_options_from_start(
+                            &app_config,
+                            options,
+                        );
+                    session_options.ln_policy_setting = ln_policy_setting;
+                    session_options.rule_mode = rule_mode;
+                    let preloaded =
+                        crate::screens::play_session::preload_play_session_reusing_sample_bank(
+                            &library_db,
+                            chart_id,
+                            session_options.clone(),
+                            normalize_chart_volume,
+                            output_sample_rate,
+                            samples,
+                            sample_report,
+                            Some(normalization_gain),
+                        )?;
+                    Ok(PreloadedInputPlaySession {
+                        chart_id,
+                        preloaded,
+                        input: preload_input,
+                        session_options,
+                    })
+                })()
+                .map_err(|error| format!("{error:#}"));
+                let _ = tx.send(PlayPreloadResult { generation, chart_id, result });
+            })
+            .expect("failed to spawn play preload reuse thread");
+        self.pending_play_preload =
+            Some(PendingPlayPreload { generation, chart_id, input, audio_progress, rx });
+        tracing::info!(chart_id, generation, "play preload with reused media started");
     }
 
     fn handle_quick_retry_control(&mut self, control: &str) -> bool {
@@ -9602,7 +9899,7 @@ impl WinitApp {
         if options.chart_zero_time == TimeUs(0) {
             options.chart_zero_time = self.play_skin_playstart_offset();
         }
-        let reuse = self.quick_retry_reuse_active_assets(chart_id, &options, mode);
+        let media = self.take_play_media_cache_from_active(chart_id, mode);
         tracing::info!(chart_id, ?mode, "quick retrying chart");
         self.notify_obs_retry_play();
         self.save_current_play_options(
@@ -9614,10 +9911,22 @@ impl WinitApp {
         self.finished_play = None;
         self.draining_audio = None;
         self.clear_play_control_holds();
-        if let Some(reuse) = reuse {
-            self.queue_quick_retry_reuse(chart_id, reuse);
-        } else {
-            self.start_play_preload(chart_id, options.clone());
+        match media {
+            Some(mut cache) if cache.chart.is_some() => {
+                let mut reuse = self
+                    .quick_retry_reuse_from_media_cache(chart_id, &options, &cache)
+                    .expect("SameArrange cache includes chart");
+                reuse.video_bga_decoders = std::mem::take(&mut cache.video_bga_decoders);
+                self.play_media_cache = Some(cache);
+                self.queue_quick_retry_reuse(chart_id, reuse);
+            }
+            Some(cache) => {
+                self.start_play_preload_reusing_media(chart_id, options.clone(), cache);
+            }
+            None => {
+                self.play_media_cache = None;
+                self.start_play_preload(chart_id, options.clone());
+            }
         }
         self.enter_play_scene(chart_id, options, self.decide_snapshot_for_chart(chart_id));
         self.poll_play_preload();
@@ -10128,6 +10437,12 @@ impl WinitApp {
                     }
                     Err(error) => {
                         tracing::error!(%error, "failed to finish play session");
+                        if let Some(chart_id) = self.last_started_chart_id {
+                            self.capture_play_media_cache_from_running(
+                                chart_id,
+                                &mut started.running,
+                            );
+                        }
                         let mut audio = started.running.audio;
                         audio.mark_draining();
                         self.draining_audio = Some(audio);
@@ -10138,6 +10453,9 @@ impl WinitApp {
                 }
             }
         };
+        if let Some(chart_id) = self.last_started_chart_id {
+            self.capture_play_media_cache_from_running(chart_id, &mut started.running);
+        }
         let mut audio = started.running.audio;
         audio.mark_draining();
         self.draining_audio = Some(audio);
@@ -10292,6 +10610,7 @@ impl WinitApp {
         self.clear_play_backbmp_state();
         // リザルト画面を抜けたら、まだ鳴っていても余韻再生を止める。
         self.draining_audio = None;
+        self.play_media_cache = None;
         self.last_play_snapshot = None;
         self.reload_select_items();
         self.sync_select_holds_from_pressed_controls();
