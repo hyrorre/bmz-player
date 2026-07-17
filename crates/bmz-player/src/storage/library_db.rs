@@ -1030,20 +1030,8 @@ impl LibraryDatabase {
     }
 }
 
-const CHART_LIST_ITEM_LOOKUP_SQL: &str = "
-    SELECT id, md5, sha256, title, subtitle, artist,
-           difficulty_name, play_level, mode, total_notes,
-           initial_bpm, COALESCE(min_bpm, initial_bpm),
-           COALESCE(max_bpm, initial_bpm), length_ms, folder_path,
-           stage_file, banner_file, backbmp_file, preview_file,
-           has_long_notes, has_mines, judge_rank,
-           has_undefined_ln, has_defined_ln, has_defined_cn, has_defined_hcn,
-           subartist, genre, COALESCE(bms_total, 0),
-           undefined_ln_pairs, defined_ln_pairs, defined_cn_pairs, defined_hcn_pairs
-    FROM charts
-    WHERE {column} = ?1
-    ORDER BY id DESC
-    LIMIT 1";
+/// Keep batched hash lookups below SQLite's historical 999-variable default.
+const CHART_HASH_LOOKUP_BATCH_SIZE: usize = 500;
 
 fn charts_by_hash_column(
     conn: &Connection,
@@ -1055,15 +1043,30 @@ fn charts_by_hash_column(
     if hashes.is_empty() {
         return Ok(map);
     }
-    let sql = CHART_LIST_ITEM_LOOKUP_SQL.replace("{column}", column);
-    let mut stmt = conn.prepare(&sql)?;
-    for hash in hashes {
-        if map.contains_key(*hash) {
-            continue;
-        }
-        let chart = stmt.query_row(params![hash], chart_list_item_from_row).optional()?;
-        if let Some(chart) = chart {
-            map.insert((*hash).to_string(), chart);
+
+    let mut unique_hashes = hashes.to_vec();
+    unique_hashes.sort_unstable();
+    unique_hashes.dedup();
+
+    for chunk in unique_hashes.chunks(CHART_HASH_LOOKUP_BATCH_SIZE) {
+        let placeholders = std::iter::repeat_n("?", chunk.len()).collect::<Vec<_>>().join(", ");
+        let sql = format!(
+            "SELECT {CHART_LIST_ITEM_COLUMNS_C}, latest.lookup_hash
+             FROM charts c
+             JOIN (
+                 SELECT {column} AS lookup_hash, MAX(id) AS chart_id
+                 FROM charts
+                 WHERE {column} IN ({placeholders})
+                 GROUP BY {column}
+             ) latest ON latest.chart_id = c.id"
+        );
+        let mut stmt = conn.prepare(&sql)?;
+        let rows = stmt.query_map(rusqlite::params_from_iter(chunk.iter().copied()), |row| {
+            Ok((row.get::<_, String>(33)?, chart_list_item_from_row(row)?))
+        })?;
+        for row in rows {
+            let (hash, chart) = row?;
+            map.insert(hash, chart);
         }
     }
     Ok(map)
@@ -2944,6 +2947,37 @@ mod tests {
         let resolved = db.charts_by_md5s(&[md5.as_str()]).unwrap();
 
         assert_eq!(resolved.get(&md5).map(|chart| chart.chart_id), Some(fresh_id));
+    }
+
+    #[test]
+    fn charts_by_md5s_batches_more_hashes_than_one_sqlite_variable_chunk() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        configure_connection(&conn).unwrap();
+        run_migrations(&mut conn, LIBRARY_MIGRATIONS).unwrap();
+        let mut db = LibraryDatabase::from_connection(conn);
+
+        let first = chart("batch-first");
+        let second = chart("batch-second");
+        let first_id =
+            db.upsert_chart_import(&record_for_chart("/songs/first.bms", &first)).unwrap();
+        let second_id =
+            db.upsert_chart_import(&record_for_chart("/songs/second.bms", &second)).unwrap();
+        let first_md5 = hash_to_hex(&first.identity.file_md5);
+        let second_md5 = hash_to_hex(&second.identity.file_md5);
+
+        let mut hashes = (0..CHART_HASH_LOOKUP_BATCH_SIZE * 2 + 1)
+            .map(|index| format!("{index:032x}"))
+            .collect::<Vec<_>>();
+        hashes.push(first_md5.clone());
+        hashes.push(second_md5.clone());
+        hashes.push(first_md5.clone());
+        let hash_refs = hashes.iter().map(String::as_str).collect::<Vec<_>>();
+
+        let resolved = db.charts_by_md5s(&hash_refs).unwrap();
+
+        assert_eq!(resolved.len(), 2);
+        assert_eq!(resolved.get(&first_md5).map(|chart| chart.chart_id), Some(first_id));
+        assert_eq!(resolved.get(&second_md5).map(|chart| chart.chart_id), Some(second_id));
     }
 
     #[test]
