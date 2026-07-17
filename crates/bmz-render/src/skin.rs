@@ -1097,8 +1097,9 @@ pub struct SkinDrawState {
     pub judge_timing_offset_ms: i32,
     /// beatoraja IndexType.notesdisplaytimingautoadjust (number/event id 75).
     pub judge_timing_auto_adjust: bool,
-    /// 選曲画面の表示曲数 (NUMBER_SELECT_BAR_COUNT=300 相当)。
-    pub select_chart_count: u32,
+    /// 選択中 DirectoryBar に含まれる譜面数 (NUMBER_FOLDER_TOTALSONGS=300)。
+    /// 非 DirectoryBar では None。これは現在の表示フォルダー全体の行数ではなく、カーソル行の値。
+    pub select_folder_song_count: Option<u32>,
     /// 現在の描画状態が選曲画面かどうか。番号 ref の一部は scene ごとに意味が違う。
     pub select_screen: bool,
     /// 選曲バーのスクロール位置 0.0-1.0。
@@ -1401,7 +1402,7 @@ impl Default for SkinDrawState {
             target_ex_score: None,
             judge_timing_offset_ms: 0,
             judge_timing_auto_adjust: false,
-            select_chart_count: 0,
+            select_folder_song_count: None,
             select_screen: false,
             select_scroll_progress: 0.0,
             select_master_volume: 1.0,
@@ -3794,7 +3795,7 @@ impl SkinDocumentRenderExt for SkinDocument {
             select_has_document: selected_row.is_some_and(|row| row.has_document),
             has_stagefile: snapshot.stage_background,
             has_backbmp: snapshot.backbmp_image,
-            select_chart_count: snapshot.chart_count,
+            select_folder_song_count: selected_row.and_then(select_row_folder_song_count),
             select_screen: true,
             select_play_level: selected_row.map(select_row_level_number).unwrap_or(0),
             play_level: selected_row.map(select_row_level_number).unwrap_or(0),
@@ -8700,6 +8701,15 @@ fn select_folder_lamp_counts_available(state: &SkinDrawState) -> bool {
         )
 }
 
+fn select_row_folder_song_count(row: &SelectRowSnapshot) -> Option<u32> {
+    (row.is_folder
+        && matches!(
+            row.kind,
+            SelectRowKind::Folder | SelectRowKind::SearchFolder | SelectRowKind::TableFolder
+        ))
+    .then(|| row.folder_lamp_counts.iter().copied().sum())
+}
+
 fn select_folder_lamp_count(ref_id: i32, counts: &[u32; 11]) -> Option<i64> {
     let index = match ref_id {
         320 => 0,
@@ -8771,7 +8781,7 @@ fn skin_state_number(ref_id: i32, state: &SkinDrawState) -> Option<i64> {
             Some(state.judge_timing_offset_ms as i64)
         }
         12 if state.select_screen => Some(state.select_sort_index as i64),
-        300 => Some(state.select_chart_count as i64),
+        300 if state.select_screen => state.select_folder_song_count.map(i64::from),
         30 => Some(player_stat_u64(state.player_stats.play_count)),
         31 => Some(player_stat_u64(state.player_stats.clear_count)),
         32 => Some(player_stat_u64(
@@ -21912,7 +21922,7 @@ mod tests {
     #[test]
     fn skin_state_number_maps_select_refs() {
         let state = SkinDrawState {
-            select_chart_count: 42,
+            select_folder_song_count: Some(42),
             select_screen: true,
             select_play_level: 12,
             select_clear_index: 5,
@@ -24163,7 +24173,22 @@ mod tests {
             ..state
         };
         assert_eq!(skin_state_number(320, &song), None);
+        assert_eq!(skin_state_number(300, &song), None);
         assert_eq!(skin_state_number(350, &song), Some(900));
+    }
+
+    #[test]
+    fn select_folder_song_count_uses_cursor_folder_row() {
+        let row = SelectRowSnapshot {
+            is_folder: true,
+            kind: SelectRowKind::Folder,
+            folder_lamp_counts: [2, 3, 0, 1, 0, 0, 0, 0, 0, 0, 0],
+            ..SelectRowSnapshot::default()
+        };
+        assert_eq!(select_row_folder_song_count(&row), Some(6));
+
+        let song = SelectRowSnapshot { kind: SelectRowKind::Song, ..row };
+        assert_eq!(select_row_folder_song_count(&song), None);
     }
 
     #[test]
