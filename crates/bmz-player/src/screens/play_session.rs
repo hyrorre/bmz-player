@@ -936,42 +936,6 @@ pub fn preload_play_session_for_chart_with_progress(
     })
 }
 
-/// Same as [`preload_play_session_for_chart`], but reuses an already-decoded sample bank
-/// (beatoraja-style media keep on arrange change / result retry).
-pub fn preload_play_session_reusing_sample_bank(
-    library_db: &LibraryDatabase,
-    chart_id: i64,
-    options: PlaySessionOptions,
-    normalize_chart_volume: bool,
-    output_sample_rate: u32,
-    samples: bmz_audio::sample::SampleBank,
-    sample_report: Vec<LoadedSampleReport>,
-    normalization_gain: Option<f32>,
-) -> Result<PreloadedPlaySession> {
-    let imported = load_transformed_chart_for_play(library_db, chart_id, &options)?;
-    let chart = Arc::new(imported.chart);
-    let audio = AudioEngine::with_sample_bank(output_sample_rate, samples);
-    let normalization_gain = match normalization_gain {
-        Some(gain) => gain,
-        None => load_or_compute_normalization_gain(
-            library_db,
-            chart_id,
-            normalize_chart_volume,
-            &chart,
-            &audio,
-        )?,
-    };
-
-    Ok(PreloadedPlaySession {
-        chart,
-        audio,
-        sample_report,
-        normalization_gain,
-        applied_arrange: imported.applied_arrange,
-        score_key: imported.score_key,
-    })
-}
-
 /// Rebuild only the audio side of an already transformed chart.
 ///
 /// Same-arrange quick retry can keep the exact chart/BGA resources, but the
@@ -3404,14 +3368,15 @@ mod tests {
     }
 
     #[test]
-    fn retry_audio_reload_rebuilds_samples_from_cached_chart() {
-        let (path, wav_path) = write_temp_bms_with_wav(
+    fn retry_audio_reload_preserves_bgm_and_keysound_asset_mapping() {
+        let (path, bgm_path, key_path) = write_temp_bms_with_two_wavs(
             "\
 #TITLE Retry audio
 #BPM 120
-#WAV01 test.wav
+#WAV01 bgm.wav
+#WAV02 key.wav
 #00001:01
-#00011:01
+#00011:02
 ",
         );
         let imported = import_bms_chart(&path, None, true).unwrap();
@@ -3432,12 +3397,38 @@ mod tests {
         assert!(Arc::ptr_eq(&preloaded.chart, &chart));
         assert_eq!(preloaded.normalization_gain, 0.75);
         assert_eq!(preloaded.score_key, score_key);
-        assert!(matches!(preloaded.sample_report[0].status, LoadedSampleStatus::Loaded));
-        assert!(preloaded.audio.samples.get(SoundId(0)).is_some());
-        assert_eq!(progress.last(), Some(&(1, 1)));
+        assert!(
+            preloaded
+                .sample_report
+                .iter()
+                .all(|report| matches!(report.status, LoadedSampleStatus::Loaded))
+        );
+        let bgm_id = preloaded
+            .chart
+            .sounds
+            .iter()
+            .find(|asset| asset.path == bgm_path)
+            .map(|asset| asset.id)
+            .expect("BGM asset");
+        let key_id = preloaded
+            .chart
+            .sounds
+            .iter()
+            .find(|asset| asset.path == key_path)
+            .map(|asset| asset.id)
+            .expect("keysound asset");
+        assert_eq!(preloaded.chart.bgm_events.first().map(|event| event.sound), Some(bgm_id));
+        assert_eq!(
+            preloaded.chart.lane_notes.iter().flatten().find_map(|note| note.sound),
+            Some(key_id)
+        );
+        assert!(preloaded.audio.samples.get(bgm_id).unwrap().frames[0] > 0.4);
+        assert!(preloaded.audio.samples.get(key_id).unwrap().frames[0] < -0.4);
+        assert_eq!(progress.last(), Some(&(2, 2)));
 
         std::fs::remove_file(path).unwrap();
-        std::fs::remove_file(wav_path).unwrap();
+        std::fs::remove_file(bgm_path).unwrap();
+        std::fs::remove_file(key_path).unwrap();
     }
 
     fn chart() -> PlayableChart {
@@ -3527,6 +3518,33 @@ mod tests {
         )
         .unwrap();
         (bms_path, wav_path)
+    }
+
+    fn write_temp_bms_with_two_wavs(
+        text: &str,
+    ) -> (std::path::PathBuf, std::path::PathBuf, std::path::PathBuf) {
+        let stamp =
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+        let dir = std::env::temp_dir();
+        let prefix = format!("bmz-retry-audio-{}-{stamp}", std::process::id());
+        let bms_path = dir.join(format!("{prefix}.bms"));
+        let bgm_path = dir.join(format!("{prefix}-bgm.wav"));
+        let key_path = dir.join(format!("{prefix}-key.wav"));
+        let bms = text
+            .replace("bgm.wav", bgm_path.file_name().unwrap().to_str().unwrap())
+            .replace("key.wav", key_path.file_name().unwrap().to_str().unwrap());
+        std::fs::write(&bms_path, bms).unwrap();
+        std::fs::write(
+            &bgm_path,
+            [wav_header(1, 1, 48_000, 16, 2).as_slice(), &16_384_i16.to_le_bytes()].concat(),
+        )
+        .unwrap();
+        std::fs::write(
+            &key_path,
+            [wav_header(1, 1, 48_000, 16, 2).as_slice(), &(-16_384_i16).to_le_bytes()].concat(),
+        )
+        .unwrap();
+        (bms_path, bgm_path, key_path)
     }
 
     fn wav_header(

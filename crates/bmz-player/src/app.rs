@@ -9,7 +9,6 @@ use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result};
-use bmz_audio::engine::AudioEngine;
 use bmz_audio::ffmpeg_loader::FfmpegSampleLoader;
 use bmz_audio::loader::SampleLoader;
 use bmz_audio::loudness::analyze_preview_loudness;
@@ -100,8 +99,8 @@ use crate::screens::play_finish::FinishedPlaySession;
 use crate::screens::play_loop::{
     PlayEndingSkinTimers, advance_running_play_session, refresh_play_ending_snapshot,
 };
+use crate::screens::play_session::AppliedArrange;
 use crate::screens::play_session::build_practice_prepared_from_preloaded;
-use crate::screens::play_session::{AppliedArrange, PreloadedPlaySession};
 use crate::screens::play_snapshot::{
     BgaFrameCatalog, apply_fast_slow_display_filter, bga_texture_id,
     build_render_snapshot_with_target_and_bga_frames_cached, display_bga_frame,
@@ -1391,22 +1390,12 @@ struct PlayPreloadResult {
     result: std::result::Result<PreloadedInputPlaySession, String>,
 }
 
-struct QuickRetryReuse {
-    preloaded: PreloadedInputPlaySession,
-    bga_frames: BgaFrameCatalog,
-    bga_assets: Vec<BgaAssetRef>,
-    video_bga_decoders: crate::video_bga::VideoBgaDecoderMap,
-}
-
 /// Media kept across same-song retry (beatoraja `BMSResource` style).
 /// Cleared when leaving result back to select, or when starting an unrelated chart.
 struct PlayMediaCache {
     chart_id: i64,
     /// Present for SameArrange reuse of the exact chart Arc.
     chart: Option<std::sync::Arc<PlayableChart>>,
-    output_sample_rate: u32,
-    samples: bmz_audio::sample::SampleBank,
-    sample_report: Vec<bmz_audio::loader::LoadedSampleReport>,
     normalization_gain: f32,
     applied_arrange: Option<crate::screens::play_session::AppliedArrange>,
     score_key: Option<crate::storage::score_db::ScoreKey>,
@@ -1480,6 +1469,12 @@ enum ResultRetryMode {
     DifferentArrange,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RetryPreloadKind {
+    CachedChartWithFreshAudio,
+    ReimportedChartWithFreshAudio,
+}
+
 const SELECT_EXIT_HOLD_DURATION: Duration = Duration::from_millis(1_200);
 const FALLBACK_RESULT_SCENE_DURATION: Duration = Duration::from_secs(10);
 /// プレイ中の Start ボタンを「2回連続押し」と判定する間隔上限。
@@ -1494,8 +1489,6 @@ const SELECT_PREVIEW_FADE_DURATION: Duration = Duration::from_millis(150);
 /// beatoraja MusicSelector waits this long after a song-bar change before preview starts.
 const SELECT_PREVIEW_START_DELAY: Duration = Duration::from_millis(400);
 const SELECT_PREVIEW_CACHE_LIMIT: usize = 8;
-const QUICK_RETRY_REUSE_LOCK_ATTEMPTS: usize = 4;
-const QUICK_RETRY_REUSE_LOCK_RETRY_SLEEP: Duration = Duration::from_micros(250);
 /// レーンカバー / LIFT を上下キーで動かす際のステップ幅。
 const LANE_COVER_STEP: f32 = 0.001;
 const LANE_COVER_REPEAT_STEP: f32 = 0.01;
@@ -9433,22 +9426,18 @@ impl WinitApp {
         if let Some(cache) = self.play_media_cache.take()
             && cache.chart_id == chart_id
         {
-            match mode {
-                ResultRetryMode::SameArrange if cache.chart.is_some() => {
-                    if let Some(mut reuse) =
-                        self.quick_retry_reuse_from_media_cache(chart_id, &options, &cache)
-                    {
-                        let mut cache = cache;
-                        reuse.video_bga_decoders = std::mem::take(&mut cache.video_bga_decoders);
-                        self.play_media_cache = Some(cache);
-                        self.queue_quick_retry_reuse(chart_id, reuse);
-                        self.start_chart_from_preloaded_or_sync(chart_id, options);
-                        return;
-                    }
-                    self.play_media_cache = Some(cache);
+            match retry_preload_kind(mode, cache.chart.is_some()) {
+                RetryPreloadKind::CachedChartWithFreshAudio => {
+                    self.start_quick_retry_preload_reloading_audio(
+                        chart_id,
+                        options.clone(),
+                        cache,
+                    );
+                    self.begin_result_retry_play_scene(chart_id, options);
+                    return;
                 }
-                _ => {
-                    self.start_play_preload_reusing_media(chart_id, options.clone(), cache);
+                RetryPreloadKind::ReimportedChartWithFreshAudio => {
+                    self.start_play_preload_reusing_bga(chart_id, options.clone(), cache);
                     self.begin_result_retry_play_scene(chart_id, options);
                     return;
                 }
@@ -9477,63 +9466,6 @@ impl WinitApp {
         self.draining_audio = None;
         self.enter_play_scene(chart_id, options, self.decide_snapshot_for_chart(chart_id));
         self.poll_play_preload();
-    }
-
-    fn start_chart_from_preloaded_or_sync(&mut self, chart_id: i64, mut options: PlayStartOptions) {
-        self.last_play_was_autoplay = options.autoplay;
-        self.ensure_skin_ready(SkinKind::Decide);
-        let play_skin_key_mode = self.play_skin_key_mode_for_chart(chart_id, &options);
-        let play_skin_runtime_state = lua_runtime_state_for_play(
-            &options,
-            self.boot.profile_config.play.auto_play,
-            &self.boot.profile_config.display_name,
-        );
-        self.spawn_play_skin_decode_for(play_skin_key_mode, play_skin_runtime_state);
-        self.ensure_skin_ready(SkinKind::Play);
-        self.play_ending = None;
-        self.result_exit = None;
-        self.result_key5_held = false;
-        self.result_key7_held = false;
-        self.play_ready_sound_started_at = None;
-        self.play_ready_last_control_hold_at = None;
-        self.decide_sound_stopped_for_chart_start = false;
-        if options.chart_zero_time == TimeUs(0) {
-            options.chart_zero_time = self.play_skin_playstart_offset();
-        }
-        self.draining_audio = None;
-
-        let opened = match self.preloaded_play_session.take() {
-            Some(preloaded) => {
-                tracing::debug!(chart_id, "using buffered play preload for result retry");
-                let prepared =
-                    prepare_winit_play_session_from_preloaded(&self.boot.profile_config, preloaded);
-                self.open_prepared_winit_play_session(prepared)
-            }
-            None => {
-                let app_config = self.play_session_app_config();
-                prepare_play_session_for_chart_with_winit_input(
-                    &self.boot.library_db,
-                    &app_config,
-                    &self.boot.profile_config,
-                    chart_id,
-                    options.clone(),
-                )
-                .and_then(|prepared| self.open_prepared_winit_play_session(prepared))
-            }
-        };
-        match opened {
-            Ok(active_play) => {
-                self.enter_play_scene(
-                    chart_id,
-                    options.clone(),
-                    self.decide_snapshot_for_chart(chart_id),
-                );
-                self.install_active_play(chart_id, active_play);
-            }
-            Err(error) => {
-                tracing::error!(chart_id, %error, "failed to start play from reused media");
-            }
-        }
     }
 
     /// Replay the whole course from its first chart, reproducing each chart's
@@ -9611,37 +9543,11 @@ impl WinitApp {
         options
     }
 
-    fn clone_active_sample_bank(
-        &self,
-        chart_id: i64,
-    ) -> Option<(u32, bmz_audio::sample::SampleBank)> {
-        let active = self.active_play.as_ref()?;
-        let mut sample_bank = None;
-        for attempt in 0..QUICK_RETRY_REUSE_LOCK_ATTEMPTS {
-            sample_bank = active.running.audio.engine.clone_sample_bank();
-            if sample_bank.is_some() {
-                break;
-            }
-            if attempt + 1 < QUICK_RETRY_REUSE_LOCK_ATTEMPTS {
-                thread::sleep(QUICK_RETRY_REUSE_LOCK_RETRY_SLEEP);
-            }
-        }
-        if sample_bank.is_none() {
-            tracing::debug!(
-                chart_id,
-                attempts = QUICK_RETRY_REUSE_LOCK_ATTEMPTS,
-                "play media reuse skipped because audio is busy"
-            );
-        }
-        sample_bank
-    }
-
     fn take_play_media_cache_from_active(
         &mut self,
         chart_id: i64,
         mode: ResultRetryMode,
     ) -> Option<PlayMediaCache> {
-        let (output_sample_rate, samples) = self.clone_active_sample_bank(chart_id)?;
         let active = self.active_play.as_mut()?;
         let video_bga_decoders = std::mem::take(&mut active.running.video_bga_decoders);
         let (chart, applied_arrange, score_key) = match mode {
@@ -9655,9 +9561,6 @@ impl WinitApp {
         Some(PlayMediaCache {
             chart_id,
             chart,
-            output_sample_rate,
-            samples,
-            sample_report: active.running.sample_report.clone(),
             normalization_gain: active.running.session.audio_mix.normalization_gain,
             applied_arrange,
             score_key,
@@ -9672,27 +9575,10 @@ impl WinitApp {
         chart_id: i64,
         running: &mut crate::audio::RunningPlaySession,
     ) {
-        let mut sample_bank = None;
-        for attempt in 0..QUICK_RETRY_REUSE_LOCK_ATTEMPTS {
-            sample_bank = running.audio.engine.clone_sample_bank();
-            if sample_bank.is_some() {
-                break;
-            }
-            if attempt + 1 < QUICK_RETRY_REUSE_LOCK_ATTEMPTS {
-                thread::sleep(QUICK_RETRY_REUSE_LOCK_RETRY_SLEEP);
-            }
-        }
-        let Some((output_sample_rate, samples)) = sample_bank else {
-            tracing::debug!(chart_id, "play media cache capture skipped because audio is busy");
-            return;
-        };
         let video_bga_decoders = std::mem::take(&mut running.video_bga_decoders);
         self.play_media_cache = Some(PlayMediaCache {
             chart_id,
             chart: Some(Arc::clone(&running.session.chart)),
-            output_sample_rate,
-            samples,
-            sample_report: running.sample_report.clone(),
             normalization_gain: running.session.audio_mix.normalization_gain,
             applied_arrange: Some(running.applied_arrange.clone()),
             score_key: Some(running.score_key),
@@ -9700,41 +9586,6 @@ impl WinitApp {
             bga_assets: running.session.chart.bga_assets.clone(),
             video_bga_decoders,
         });
-    }
-
-    fn quick_retry_reuse_from_media_cache(
-        &self,
-        chart_id: i64,
-        options: &PlayStartOptions,
-        cache: &PlayMediaCache,
-    ) -> Option<QuickRetryReuse> {
-        let chart = cache.chart.as_ref()?;
-        let applied_arrange = cache.applied_arrange.clone()?;
-        let score_key = cache.score_key?;
-        let audio = AudioEngine::with_sample_bank(cache.output_sample_rate, cache.samples.clone());
-        let mut session_options =
-            play_session_options_from_start(&self.play_session_app_config(), options.clone());
-        session_options.ln_policy_setting = self.boot.profile_config.play.ln_mode_policy;
-        session_options.rule_mode = self.boot.profile_config.play.rule_mode;
-
-        Some(QuickRetryReuse {
-            preloaded: PreloadedInputPlaySession {
-                chart_id,
-                preloaded: PreloadedPlaySession {
-                    chart: Arc::clone(chart),
-                    audio,
-                    sample_report: cache.sample_report.clone(),
-                    normalization_gain: cache.normalization_gain,
-                    applied_arrange,
-                    score_key,
-                },
-                input: crate::input::shared::SharedInputBackend::default(),
-                session_options,
-            },
-            bga_frames: cache.bga_frames.clone(),
-            bga_assets: cache.bga_assets.clone(),
-            video_bga_decoders: HashMap::new(),
-        })
     }
 
     fn reused_bga_load_state(current_generation: u64, chart_id: i64) -> (u64, BgaImageLoadStatus) {
@@ -9771,37 +9622,20 @@ impl WinitApp {
         );
     }
 
-    fn queue_quick_retry_reuse(&mut self, chart_id: i64, mut reuse: QuickRetryReuse) {
-        self.play_preload_generation = self.play_preload_generation.wrapping_add(1);
-        let play_generation = self.play_preload_generation;
-        self.pending_play_preload = None;
-        self.preloaded_play_session = Some(reuse.preloaded);
-        self.apply_reused_bga_preload(chart_id, reuse.bga_frames, reuse.bga_assets);
-        if let Some(cache) = self.play_media_cache.as_mut()
-            && cache.chart_id == chart_id
-        {
-            cache.video_bga_decoders = std::mem::take(&mut reuse.video_bga_decoders);
-        }
-        tracing::info!(chart_id, play_generation, "quick retry assets reused");
-    }
-
-    fn start_play_preload_reusing_media(
+    fn start_play_preload_reusing_bga(
         &mut self,
         chart_id: i64,
         options: PlayStartOptions,
-        cache: PlayMediaCache,
+        mut cache: PlayMediaCache,
     ) {
+        cache.chart = None;
+        cache.applied_arrange = None;
+        cache.score_key = None;
         self.play_preload_generation = self.play_preload_generation.wrapping_add(1);
         let generation = self.play_preload_generation;
         self.preloaded_play_session = None;
         self.apply_reused_bga_preload(chart_id, cache.bga_frames.clone(), cache.bga_assets.clone());
         self.play_media_cache = Some(cache);
-
-        let media = self.play_media_cache.as_ref().expect("just stored");
-        let output_sample_rate = media.output_sample_rate;
-        let samples = media.samples.clone();
-        let sample_report = media.sample_report.clone();
-        let normalization_gain = media.normalization_gain;
 
         let (tx, rx) = mpsc::channel();
         let library_db_path = self.boot.app_paths.library_db.clone();
@@ -9811,9 +9645,10 @@ impl WinitApp {
         let normalize_chart_volume = self.boot.profile_config.audio_mix.normalize_chart_volume;
         let input = SharedInputBackend::default();
         let preload_input = input.clone();
-        let audio_progress = Arc::new(AtomicU32::new(resource_load_progress_units(1, 1)));
+        let audio_progress = Arc::new(AtomicU32::new(0));
+        let worker_audio_progress = Arc::clone(&audio_progress);
         thread::Builder::new()
-            .name(format!("play-preload-reuse-{chart_id}"))
+            .name(format!("play-preload-reuse-bga-{chart_id}"))
             .spawn(move || {
                 let result = (|| -> Result<PreloadedInputPlaySession> {
                     let library_db =
@@ -9826,15 +9661,17 @@ impl WinitApp {
                     session_options.ln_policy_setting = ln_policy_setting;
                     session_options.rule_mode = rule_mode;
                     let preloaded =
-                        crate::screens::play_session::preload_play_session_reusing_sample_bank(
+                        crate::screens::play_session::preload_play_session_for_chart_with_progress(
                             &library_db,
                             chart_id,
                             session_options.clone(),
                             normalize_chart_volume,
-                            output_sample_rate,
-                            samples,
-                            sample_report,
-                            Some(normalization_gain),
+                            |loaded, total| {
+                                worker_audio_progress.store(
+                                    resource_load_progress_units(loaded, total),
+                                    Ordering::Relaxed,
+                                );
+                            },
                         )?;
                     Ok(PreloadedInputPlaySession {
                         chart_id,
@@ -9846,10 +9683,10 @@ impl WinitApp {
                 .map_err(|error| format!("{error:#}"));
                 let _ = tx.send(PlayPreloadResult { generation, chart_id, result });
             })
-            .expect("failed to spawn play preload reuse thread");
+            .expect("failed to spawn BGA-reusing play preload thread");
         self.pending_play_preload =
             Some(PendingPlayPreload { generation, chart_id, input, audio_progress, rx });
-        tracing::info!(chart_id, generation, "play preload with reused media started");
+        tracing::info!(chart_id, generation, "play preload with reused BGA started");
     }
 
     /// Keep the expensive BGA resources warm, but rebuild the chart sound bank
@@ -10064,11 +9901,14 @@ impl WinitApp {
         self.draining_audio = None;
         self.clear_play_control_holds();
         match media {
-            Some(cache) if cache.chart.is_some() => {
+            Some(cache)
+                if retry_preload_kind(mode, cache.chart.is_some())
+                    == RetryPreloadKind::CachedChartWithFreshAudio =>
+            {
                 self.start_quick_retry_preload_reloading_audio(chart_id, options.clone(), cache);
             }
             Some(cache) => {
-                self.start_play_preload_reusing_media(chart_id, options.clone(), cache);
+                self.start_play_preload_reusing_bga(chart_id, options.clone(), cache);
             }
             None => {
                 self.play_media_cache = None;
@@ -17254,6 +17094,17 @@ fn lane_skips_result_exit(lane: Lane) -> bool {
     )
 }
 
+fn retry_preload_kind(mode: ResultRetryMode, cached_chart_available: bool) -> RetryPreloadKind {
+    match mode {
+        ResultRetryMode::SameArrange if cached_chart_available => {
+            RetryPreloadKind::CachedChartWithFreshAudio
+        }
+        ResultRetryMode::SameArrange | ResultRetryMode::DifferentArrange => {
+            RetryPreloadKind::ReimportedChartWithFreshAudio
+        }
+    }
+}
+
 /// フェードアウト終了時の Key5/Key7 押下状態から遷移を決める。
 /// beatoraja 準拠: Key5=別配置 (REPLAY_DIFFERENT)、Key7=同配置 (REPLAY_SAME)。
 /// - Key7 押下 (両押し含む) → 同配置 (SameArrange)
@@ -23868,6 +23719,26 @@ mod tests {
         assert!(should_show_course_stage_result(true, true, false));
         assert!(should_show_course_stage_result(false, false, false));
         assert!(!should_show_course_stage_result(false, true, false));
+    }
+
+    #[test]
+    fn retry_preload_always_builds_fresh_audio_for_the_retried_chart() {
+        assert_eq!(
+            retry_preload_kind(ResultRetryMode::SameArrange, true),
+            RetryPreloadKind::CachedChartWithFreshAudio
+        );
+        assert_eq!(
+            retry_preload_kind(ResultRetryMode::SameArrange, false),
+            RetryPreloadKind::ReimportedChartWithFreshAudio
+        );
+        assert_eq!(
+            retry_preload_kind(ResultRetryMode::DifferentArrange, true),
+            RetryPreloadKind::ReimportedChartWithFreshAudio
+        );
+        assert_eq!(
+            retry_preload_kind(ResultRetryMode::DifferentArrange, false),
+            RetryPreloadKind::ReimportedChartWithFreshAudio
+        );
     }
 
     #[test]
