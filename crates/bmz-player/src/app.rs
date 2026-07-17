@@ -9779,7 +9779,10 @@ impl WinitApp {
     }
 
     fn begin_play_fadeout_after_final_notes_control(&mut self, control: &str) -> bool {
-        if !play_fadeout_after_final_notes_control(control, &self.select_keys) {
+        let escape_before_play_ending = control == "Escape" && self.play_ending.is_none();
+        if !play_fadeout_after_final_notes_control(control, &self.select_keys)
+            && !escape_before_play_ending
+        {
             return false;
         }
         if let Some(ending) = &mut self.play_ending {
@@ -17202,7 +17205,7 @@ fn should_begin_play_fadeout_after_final_notes(
         && !play_ending_active
         && play_state == bmz_gameplay::session::PlayState::Playing
         && final_notes_processed
-        && play_fadeout_after_final_notes_control(control, bindings)
+        && (play_fadeout_after_final_notes_control(control, bindings) || control == "Escape")
 }
 
 fn should_play_retire_sound_for_failed_transition(
@@ -22990,6 +22993,7 @@ mod tests {
 
         assert!(play_fadeout_after_final_notes_control("Q", &keys));
         assert!(play_fadeout_after_final_notes_control("W", &keys));
+        assert!(!play_fadeout_after_final_notes_control("Escape", &keys));
         assert!(!play_fadeout_after_final_notes_control("Z", &keys));
     }
 
@@ -23005,6 +23009,14 @@ mod tests {
             bmz_gameplay::session::PlayState::Playing,
             true,
         ));
+        assert!(should_begin_play_fadeout_after_final_notes(
+            "Escape",
+            &keys,
+            true,
+            false,
+            bmz_gameplay::session::PlayState::Playing,
+            true,
+        ));
         assert!(!should_begin_play_fadeout_after_final_notes(
             "Q",
             &keys,
@@ -23012,6 +23024,22 @@ mod tests {
             false,
             bmz_gameplay::session::PlayState::Playing,
             true,
+        ));
+        assert!(!should_begin_play_fadeout_after_final_notes(
+            "Escape",
+            &keys,
+            true,
+            true,
+            bmz_gameplay::session::PlayState::Playing,
+            true,
+        ));
+        assert!(!should_begin_play_fadeout_after_final_notes(
+            "Escape",
+            &keys,
+            true,
+            false,
+            bmz_gameplay::session::PlayState::Playing,
+            false,
         ));
         assert!(!should_begin_play_fadeout_after_final_notes(
             "Q",
