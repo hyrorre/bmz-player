@@ -512,6 +512,13 @@ pub const LIBRARY_MIGRATIONS: &[Migration] = &[
                       OR (course_entries.md5 <> '' AND charts.md5 = course_entries.md5)
                );"],
     },
+    Migration {
+        version: 24,
+        // Difficulty-table navigation filters entries by table and level.
+        // Keep that lookup indexed without changing the stored data.
+        statements: &["CREATE INDEX idx_dte_table_id_level
+            ON difficulty_table_entries(table_id, level);"],
+    },
 ];
 
 pub const SCORE_MIGRATIONS: &[Migration] = &[
@@ -1479,7 +1486,7 @@ mod tests {
         run_migrations(&mut conn, LIBRARY_MIGRATIONS).unwrap();
 
         let version: i32 = conn.pragma_query_value(None, "user_version", |row| row.get(0)).unwrap();
-        assert_eq!(version, 23);
+        assert_eq!(version, 24);
 
         let mut stmt = conn.prepare("PRAGMA table_info(charts)").unwrap();
         let columns = stmt
@@ -1492,6 +1499,22 @@ mod tests {
         {
             assert!(columns.iter().any(|candidate| candidate == column));
         }
+    }
+
+    #[test]
+    fn library_migration_indexes_difficulty_table_levels() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        run_migrations(&mut conn, LIBRARY_MIGRATIONS).unwrap();
+
+        let columns = conn
+            .prepare("PRAGMA index_info(idx_dte_table_id_level)")
+            .unwrap()
+            .query_map([], |row| row.get::<_, String>(2))
+            .unwrap()
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .unwrap();
+
+        assert_eq!(columns, ["table_id", "level"]);
     }
 
     #[test]
@@ -1509,6 +1532,10 @@ mod tests {
                 sha256 TEXT NOT NULL DEFAULT '',
                 md5 TEXT NOT NULL DEFAULT ''
              );
+             CREATE TABLE difficulty_table_entries (
+                table_id INTEGER NOT NULL,
+                level TEXT NOT NULL
+             );
              INSERT INTO charts (headers_json) VALUES ('{\"002D9\":\"note data\"}');
              PRAGMA user_version = 21;",
         )
@@ -1520,7 +1547,7 @@ mod tests {
             conn.query_row("SELECT headers_json FROM charts", [], |row| row.get(0)).unwrap();
         let version: i32 = conn.pragma_query_value(None, "user_version", |row| row.get(0)).unwrap();
         assert_eq!(headers_json, "{}");
-        assert_eq!(version, 23);
+        assert_eq!(version, 24);
     }
 
     #[test]
@@ -1537,6 +1564,10 @@ mod tests {
                 chart_id INTEGER,
                 sha256 TEXT NOT NULL,
                 md5 TEXT NOT NULL
+             );
+             CREATE TABLE difficulty_table_entries (
+                table_id INTEGER NOT NULL,
+                level TEXT NOT NULL
              );
              INSERT INTO charts (id, sha256, md5) VALUES
                 (10, 'preferred-sha', 'other-md5'),
@@ -1561,7 +1592,7 @@ mod tests {
             .unwrap();
         let version: i32 = conn.pragma_query_value(None, "user_version", |row| row.get(0)).unwrap();
         assert_eq!(chart_ids, vec![Some(10), Some(20), None, Some(99)]);
-        assert_eq!(version, 23);
+        assert_eq!(version, 24);
     }
 
     #[test]

@@ -126,7 +126,12 @@ pub(super) fn list_table_entries(
     conn: &Connection,
     source_url: &str,
 ) -> Result<Vec<TableEntryRow>> {
-    list_table_entries_filtered(conn, source_url, None)
+    let sql = "
+        SELECT dte.level, dte.md5, dte.sha256, dte.title, dte.artist, dte.comment
+        FROM difficulty_table_entries dte
+        JOIN difficulty_tables dt ON dt.id = dte.table_id
+        WHERE dt.source_url = ?1";
+    query_table_entries(conn, sql, params![source_url])
 }
 
 /// Lists entries at one level of a difficulty table without joining local charts.
@@ -135,23 +140,21 @@ pub(super) fn list_table_entries_at_level(
     source_url: &str,
     level: &str,
 ) -> Result<Vec<TableEntryRow>> {
-    list_table_entries_filtered(conn, source_url, Some(level))
-}
-
-fn list_table_entries_filtered(
-    conn: &Connection,
-    source_url: &str,
-    level: Option<&str>,
-) -> Result<Vec<TableEntryRow>> {
     let sql = "
         SELECT dte.level, dte.md5, dte.sha256, dte.title, dte.artist, dte.comment
         FROM difficulty_table_entries dte
         JOIN difficulty_tables dt ON dt.id = dte.table_id
-        WHERE dt.source_url = ?1
-          AND (?2 IS NULL OR dte.level = ?2)";
+        WHERE dt.source_url = ?1 AND dte.level = ?2";
+    query_table_entries(conn, sql, params![source_url, level])
+}
 
+fn query_table_entries(
+    conn: &Connection,
+    sql: &str,
+    params: impl rusqlite::Params,
+) -> Result<Vec<TableEntryRow>> {
     let mut stmt = conn.prepare(sql)?;
-    let rows = stmt.query_map(params![source_url, level], |row| {
+    let rows = stmt.query_map(params, |row| {
         Ok(TableEntryRow {
             level: row.get(0)?,
             md5: row.get(1)?,
