@@ -9,6 +9,8 @@ use ::cpal::{SampleFormat, StreamConfig};
 use bmz_core::time::TimeUs;
 use thiserror::Error;
 
+#[cfg(windows)]
+use crate::backend::wasapi::WasapiSharedPeriodGuard;
 use crate::clock::AudioClock;
 use crate::command::{AudioEngineHandle, CommandedAudioEngine};
 use crate::engine::AudioEngine;
@@ -17,6 +19,8 @@ pub type SharedAudioEngine = Arc<Mutex<AudioEngine>>;
 type SharedOutputCommands = Arc<Mutex<VecDeque<CpalOutputCommand>>>;
 type RetiredOutputSources = Arc<Mutex<Vec<RenderAudioSource>>>;
 const OUTPUT_COMMAND_QUEUE_CAPACITY: usize = 256;
+const OUTPUT_SCRATCH_INITIAL_FRAMES: usize = 4096;
+const OUTPUT_SOURCE_INITIAL_CAPACITY: usize = 8;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum CpalOutputSourceKind {
@@ -51,6 +55,9 @@ pub struct CpalOutputConfig {
     /// 1 コールバックあたりのバッファフレーム数。`None` はデバイス既定(自動)。
     /// `Some(n)` でも端末がサポートする範囲にクランプされる。
     pub buffer_size: Option<u32>,
+    /// Windows の WASAPI 共有モードで `IAudioClient3` の低遅延エンジン周期を要求する。
+    /// 非対応 OS / ホスト / デバイスでは通常の CPAL 共有モードへフォールバックする。
+    pub low_latency_shared: bool,
     /// ステレオを書き込む先頭チャンネル(0 始まりのインターリーブ位置)。
     /// 0 = 1-2ch, 2 = 3-4ch, 4 = 5-6ch …。デバイスのチャンネル数を超える場合は
     /// ストリーム生成時に有効な範囲へクランプされる。
@@ -117,6 +124,9 @@ pub struct CpalSharedOutput {
 
 struct CpalSharedOutputInner {
     stream: ::cpal::Stream,
+    // Audible CPAL stream must be dropped before releasing the shared engine-period request.
+    #[cfg(windows)]
+    _low_latency_guard: Option<WasapiSharedPeriodGuard>,
     host_id: ::cpal::HostId,
     sample_rate: u32,
     current_frame: Arc<AtomicU64>,
@@ -213,6 +223,7 @@ impl CpalBackend {
         let device = output_device(&host, config.output_device_name.as_deref())?;
         let requested_sample_rate = config.sample_rate;
         let requested_buffer_size = config.buffer_size;
+        let requested_low_latency_shared = config.low_latency_shared;
         let requested_channel_offset = config.channel_offset;
         let supported_config =
             device.default_output_config().map_err(CpalBackendError::DefaultOutputConfig)?;
@@ -223,7 +234,29 @@ impl CpalBackend {
         let sample_rate =
             resolve_sample_rate(&device, requested_sample_rate, default_sample_rate, sample_format);
         config.sample_rate = sample_rate;
-        config.buffer_size = resolve_buffer_size(requested_buffer_size, &supported_buffer_size);
+        #[cfg(windows)]
+        let mut resolved_buffer_size =
+            resolve_buffer_size(requested_buffer_size, &supported_buffer_size);
+        #[cfg(not(windows))]
+        let resolved_buffer_size =
+            resolve_buffer_size(requested_buffer_size, &supported_buffer_size);
+        #[cfg(windows)]
+        let mut low_latency_guard = if requested_low_latency_shared {
+            open_wasapi_shared_period_guard(&host, &device, sample_rate, requested_buffer_size)
+        } else {
+            None
+        };
+        #[cfg(windows)]
+        if let Some(guard) = low_latency_guard.as_ref() {
+            resolved_buffer_size = ::cpal::BufferSize::Fixed(guard.info().client_period_frames);
+        }
+        #[cfg(not(windows))]
+        if requested_low_latency_shared {
+            tracing::warn!(
+                "WASAPI low-latency shared mode is only available on Windows; using standard shared output"
+            );
+        }
+        config.buffer_size = resolved_buffer_size;
         let channel_offset =
             resolve_channel_offset(requested_channel_offset, config.channels as usize);
 
@@ -240,6 +273,7 @@ impl CpalBackend {
             channels = config.channels,
             supported_buffer_size = ?supported_buffer_size,
             requested_buffer_size = ?requested_buffer_size,
+            requested_low_latency_shared,
             resolved_buffer_size = ?config.buffer_size,
             requested_channel_offset,
             channel_offset,
@@ -255,57 +289,81 @@ impl CpalBackend {
             Arc::new(Mutex::new(Vec::with_capacity(OUTPUT_COMMAND_QUEUE_CAPACITY)));
         let diagnostics = Arc::new(CpalOutputDiagnosticsCounters::default());
 
-        let stream = match sample_format {
+        let build_stream = |config: &StreamConfig| match sample_format {
             SampleFormat::F32 => build_output_stream::<f32>(
                 &device,
-                &config,
+                config,
                 channel_offset,
                 Arc::clone(&output_commands),
                 Arc::clone(&retired_sources),
                 Arc::clone(&current_frame),
                 Arc::clone(&diagnostics),
-            )?,
+            ),
             SampleFormat::I16 => build_output_stream::<i16>(
                 &device,
-                &config,
+                config,
                 channel_offset,
                 Arc::clone(&output_commands),
                 Arc::clone(&retired_sources),
                 Arc::clone(&current_frame),
                 Arc::clone(&diagnostics),
-            )?,
+            ),
             SampleFormat::U16 => build_output_stream::<u16>(
                 &device,
-                &config,
+                config,
                 channel_offset,
                 Arc::clone(&output_commands),
                 Arc::clone(&retired_sources),
                 Arc::clone(&current_frame),
                 Arc::clone(&diagnostics),
-            )?,
+            ),
             SampleFormat::I32 => build_output_stream::<i32>(
                 &device,
-                &config,
+                config,
                 channel_offset,
                 Arc::clone(&output_commands),
                 Arc::clone(&retired_sources),
                 Arc::clone(&current_frame),
                 Arc::clone(&diagnostics),
-            )?,
+            ),
             _ => build_output_stream::<f32>(
                 &device,
-                &config,
+                config,
                 channel_offset,
                 Arc::clone(&output_commands),
                 Arc::clone(&retired_sources),
                 Arc::clone(&current_frame),
                 Arc::clone(&diagnostics),
-            )?,
+            ),
         };
+        let stream_result = build_stream(&config);
+        #[cfg(windows)]
+        let stream = match stream_result {
+            Ok(stream) => stream,
+            Err(error) if low_latency_guard.is_some() => {
+                // Some drivers accept the IAudioClient3 period stream but reject the matching
+                // legacy IAudioClient ring-buffer duration used by CPAL. Release the period
+                // request before retrying the exact standard shared-mode configuration.
+                drop(low_latency_guard.take());
+                config.buffer_size =
+                    resolve_buffer_size(requested_buffer_size, &supported_buffer_size);
+                tracing::warn!(
+                    %error,
+                    fallback_buffer_size = ?config.buffer_size,
+                    "failed to build the CPAL stream at the low-latency period; retrying standard shared output",
+                );
+                build_stream(&config)?
+            }
+            Err(error) => return Err(error),
+        };
+        #[cfg(not(windows))]
+        let stream = stream_result?;
 
         Ok(CpalSharedOutput {
             inner: Rc::new(CpalSharedOutputInner {
                 stream,
+                #[cfg(windows)]
+                _low_latency_guard: low_latency_guard,
                 host_id: host.id(),
                 sample_rate,
                 current_frame,
@@ -315,6 +373,62 @@ impl CpalBackend {
                 next_source_id: AtomicU64::new(1),
             }),
         })
+    }
+}
+
+#[cfg(windows)]
+fn open_wasapi_shared_period_guard(
+    host: &::cpal::Host,
+    device: &::cpal::Device,
+    sample_rate: u32,
+    requested_buffer_size: Option<u32>,
+) -> Option<WasapiSharedPeriodGuard> {
+    if host.id() != ::cpal::HostId::Wasapi {
+        tracing::warn!(
+            host = ?host.id(),
+            "WASAPI low-latency shared mode was requested for another host; using standard shared output",
+        );
+        return None;
+    }
+
+    let endpoint_id = match device.id() {
+        Ok(id) => id.id().to_owned(),
+        Err(error) => {
+            tracing::warn!(
+                %error,
+                "failed to identify WASAPI endpoint for low-latency shared mode; using standard shared output",
+            );
+            return None;
+        }
+    };
+    match WasapiSharedPeriodGuard::open(endpoint_id.clone(), sample_rate, requested_buffer_size) {
+        Ok(guard) => {
+            let info = guard.info();
+            tracing::info!(
+                endpoint_id = %endpoint_id,
+                client_sample_rate = sample_rate,
+                queried_engine_sample_rate = info.queried_engine_sample_rate,
+                current_engine_sample_rate = info.current_engine_sample_rate,
+                default_period_frames = info.default_period_frames,
+                fundamental_period_frames = info.fundamental_period_frames,
+                min_period_frames = info.min_period_frames,
+                max_period_frames = info.max_period_frames,
+                selected_period_frames = info.selected_period_frames,
+                current_period_frames = info.current_period_frames,
+                client_period_frames = info.client_period_frames,
+                period_stream_buffer_frames = info.buffer_frames,
+                "enabled IAudioClient3 low-latency shared mode",
+            );
+            Some(guard)
+        }
+        Err(error) => {
+            tracing::warn!(
+                %error,
+                endpoint_id = %endpoint_id,
+                "failed to enable IAudioClient3 low-latency shared mode; using standard shared output",
+            );
+            None
+        }
     }
 }
 
@@ -550,6 +664,19 @@ impl CpalSharedOutput {
         self.inner.sample_rate
     }
 
+    /// IAudioClient3 の共有エンジン周期要求が現在のストリームで有効なら、
+    /// 実効 engine period を CPAL client sample-rate の frames へ換算して返す。
+    pub fn low_latency_shared_period_frames(&self) -> Option<u32> {
+        #[cfg(windows)]
+        {
+            self.inner._low_latency_guard.as_ref().map(|guard| guard.info().client_period_frames)
+        }
+        #[cfg(not(windows))]
+        {
+            None
+        }
+    }
+
     pub fn take_diagnostics(&self) -> CpalOutputDiagnostics {
         self.inner.diagnostics.take_snapshot()
     }
@@ -735,10 +862,12 @@ where
     T: ::cpal::SizedSample + OutputSample,
 {
     let channels = config.channels as usize;
-    let mut mix = Vec::new();
-    let mut source_scratch = Vec::new();
-    let mut render_sources = Vec::new();
-    let mut source_command_scratch = Vec::new();
+    // 最短周期の最初の callback で割り当てやゼロ初期化を発生させない。4096 frames
+    // あれば設定 UI の最大 fixed buffer と 384 kHz / 約 10 ms までを覆える。
+    let mut mix = vec![0.0; OUTPUT_SCRATCH_INITIAL_FRAMES * 2];
+    let mut source_scratch = vec![0.0; OUTPUT_SCRATCH_INITIAL_FRAMES * 2];
+    let mut render_sources = Vec::with_capacity(OUTPUT_SOURCE_INITIAL_CAPACITY);
+    let mut source_command_scratch = Vec::with_capacity(OUTPUT_COMMAND_QUEUE_CAPACITY);
     let error_diagnostics = Arc::clone(&diagnostics);
     device
         .build_output_stream(
@@ -1143,6 +1272,20 @@ impl OutputSample for i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(windows)]
+    #[test]
+    #[ignore = "requires a Windows 10+ output device with IAudioClient3 low-period support"]
+    fn opens_default_wasapi_low_latency_shared_stream() {
+        let output = CpalBackend::open_shared(CpalOutputConfig {
+            host: Some(CpalHostId::Wasapi),
+            low_latency_shared: true,
+            ..Default::default()
+        })
+        .unwrap();
+
+        assert!(output.low_latency_shared_period_frames().is_some());
+    }
 
     #[test]
     fn write_interleaved_output_downmixes_mono() {

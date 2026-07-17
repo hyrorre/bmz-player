@@ -14,7 +14,7 @@ use bmz_gameplay::session::GameSession;
 use std::collections::{HashMap, HashSet};
 
 use crate::config::app_config::{
-    AudioBackend, AudioBufferSizeMode, AudioConfig, AudioSampleRateMode,
+    AudioBackend, AudioBufferSizeMode, AudioConfig, AudioOutputMode, AudioSampleRateMode,
 };
 use crate::screens::play_finish::FinishedPlaySession;
 use crate::screens::play_session::{AppliedArrange, PreparedPlaySession};
@@ -284,10 +284,18 @@ fn cpal_output_config(config: &AudioConfig) -> Result<CpalOutputConfig> {
     let output_device_name = cpal_output_device_name(config);
     let sample_rate = cpal_sample_rate(config);
     let buffer_size = cpal_buffer_size(config);
+    let low_latency_shared = config.output_mode == AudioOutputMode::SharedLowLatency;
     // ペア番号(0=1-2ch, 1=3-4ch …)をインターリーブ先頭チャンネル位置へ変換する。
     let channel_offset = config.output_channel_pair.saturating_mul(2);
 
-    Ok(CpalOutputConfig { host, output_device_name, sample_rate, buffer_size, channel_offset })
+    Ok(CpalOutputConfig {
+        host,
+        output_device_name,
+        sample_rate,
+        buffer_size,
+        low_latency_shared,
+        channel_offset,
+    })
 }
 
 /// サンプルレートモードが `Fixed` のときだけ Hz を指定する。`Auto` は
@@ -446,5 +454,25 @@ mod tests {
         let output = cpal_output_config(&config).unwrap();
 
         assert_eq!(output.buffer_size, None);
+    }
+
+    #[test]
+    fn low_latency_shared_mode_is_passed_to_cpal_config() {
+        let mut config = AppConfig::default().audio;
+        config.output_mode = AudioOutputMode::SharedLowLatency;
+
+        let output = cpal_output_config(&config).unwrap();
+
+        assert!(output.low_latency_shared);
+    }
+
+    #[test]
+    fn legacy_exclusive_mode_does_not_enable_low_latency_shared_mode() {
+        let mut config = AppConfig::default().audio;
+        config.exclusive_mode = true;
+
+        let output = cpal_output_config(&config).unwrap();
+
+        assert!(!output.low_latency_shared);
     }
 }

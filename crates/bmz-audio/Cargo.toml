@@ -7,13 +7,27 @@ license.workspace = true
 [dependencies]
 anyhow.workspace = true
 thiserror.workspace = true
-cpal.workspace = true
 tracing.workspace = true
 ffmpeg-next.workspace = true
 
 bmz-core = { path = "../bmz-core" }
 bmz-chart = { path = "../bmz-chart" }
 bmz-ffmpeg = { path = "../bmz-ffmpeg" }
+
+[target.'cfg(not(windows))'.dependencies]
+cpal.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+cpal = { workspace = true, features = ["realtime"] }
+windows = { workspace = true, features = [
+    "Win32_Foundation",
+    "Win32_Media_Audio",
+    "Win32_Security",
+    "Win32_System_Com",
+    "Win32_System_Com_StructuredStorage",
+    "Win32_System_Threading",
+    "Win32_System_Variant",
+] }
 
 [features]
 default = []
