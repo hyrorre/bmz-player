@@ -2280,68 +2280,39 @@ fn build_settings_panel(
                 );
 
                 egui::CollapsingHeader::new("音声").show(ui, |ui| {
+                    let available_audio_backends = crate::audio::available_audio_backends();
+                    if !available_audio_backends.contains(&config.audio.backend) {
+                        config.audio.backend = AudioBackend::Auto;
+                    }
                     egui::ComboBox::from_label("バックエンド")
                         .selected_text(audio_backend_label(&config.audio.backend))
                         .show_ui(ui, |ui| {
-                            ui.selectable_value(
-                                &mut config.audio.backend,
-                                AudioBackend::Auto,
-                                "自動選択",
-                            );
-                            ui.selectable_value(
-                                &mut config.audio.backend,
-                                AudioBackend::CoreAudio,
-                                "Core Audio",
-                            );
-                            ui.selectable_value(
-                                &mut config.audio.backend,
-                                AudioBackend::Wasapi,
-                                "WASAPI",
-                            );
-                            ui.selectable_value(
-                                &mut config.audio.backend,
-                                AudioBackend::Asio,
-                                "ASIO",
-                            );
-                            ui.selectable_value(
-                                &mut config.audio.backend,
-                                AudioBackend::Alsa,
-                                "ALSA",
-                            );
-                            ui.selectable_value(
-                                &mut config.audio.backend,
-                                AudioBackend::Pulse,
-                                "PulseAudio",
-                            );
-                            ui.selectable_value(
-                                &mut config.audio.backend,
-                                AudioBackend::PipeWire,
-                                "PipeWire",
-                            );
+                            for backend in &available_audio_backends {
+                                ui.selectable_value(
+                                    &mut config.audio.backend,
+                                    backend.clone(),
+                                    audio_backend_label(backend),
+                                );
+                            }
                         });
-                    egui::ComboBox::from_label("出力モード")
-                        .selected_text(audio_output_mode_label(&config.audio.output_mode))
-                        .show_ui(ui, |ui| {
-                            ui.selectable_value(
-                                &mut config.audio.output_mode,
-                                AudioOutputMode::Shared,
-                                "共有 (標準)",
-                            );
-                            ui.selectable_value(
-                                &mut config.audio.output_mode,
-                                AudioOutputMode::SharedLowLatency,
-                                "共有 (IAudioClient3 低遅延)",
-                            );
-                        });
-                    if config.audio.output_mode == AudioOutputMode::SharedLowLatency {
-                        if audio_low_latency_shared_available(&config.audio.backend) {
+                    if config.audio.backend == AudioBackend::Wasapi {
+                        egui::ComboBox::from_label("出力モード")
+                            .selected_text(audio_output_mode_label(&config.audio.output_mode))
+                            .show_ui(ui, |ui| {
+                                ui.selectable_value(
+                                    &mut config.audio.output_mode,
+                                    AudioOutputMode::Shared,
+                                    "共有 (標準)",
+                                );
+                                ui.selectable_value(
+                                    &mut config.audio.output_mode,
+                                    AudioOutputMode::SharedLowLatency,
+                                    "共有 (IAudioClient3 低遅延)",
+                                );
+                            });
+                        if config.audio.output_mode == AudioOutputMode::SharedLowLatency {
                             ui.label(
                                 "Windows 10 以降の WASAPI で共有エンジン周期を短縮します。適用結果と実周期はログに記録されます。",
-                            );
-                        } else {
-                            ui.colored_label(
-                                egui::Color32::YELLOW,
-                                "選択中の OS / バックエンドでは利用できないため、標準共有出力へ戻ります。",
                             );
                         }
                     }
@@ -2386,19 +2357,21 @@ fn build_settings_panel(
                                 "固定",
                             );
                         });
-                    ui.add(
-                        egui::Slider::new(&mut config.audio.buffer_size, 32..=4096)
-                            .text("バッファサイズ (フレーム)"),
-                    );
-                    ui.horizontal(|ui| {
-                        ui.label("プリセット:");
-                        for frames in [32u32, 48, 64, 96, 128, 256] {
-                            if ui.button(frames.to_string()).clicked() {
-                                config.audio.buffer_size = frames;
-                                config.audio.buffer_size_mode = AudioBufferSizeMode::Fixed;
+                    if config.audio.buffer_size_mode == AudioBufferSizeMode::Fixed {
+                        ui.add(
+                            egui::Slider::new(&mut config.audio.buffer_size, 32..=4096)
+                                .text("バッファサイズ (フレーム)"),
+                        );
+                        ui.horizontal(|ui| {
+                            ui.label("プリセット:");
+                            for frames in [32u32, 48, 64, 96, 128, 256] {
+                                if ui.button(frames.to_string()).clicked() {
+                                    config.audio.buffer_size = frames;
+                                    config.audio.buffer_size_mode = AudioBufferSizeMode::Fixed;
+                                }
                             }
-                        }
-                    });
+                        });
+                    }
                     // ASIO 以外は安価なのでバックエンド変更時に自動列挙する。
                     // ASIO はドライバ初期化を伴い得るため、更新ボタンでのみ列挙する。
                     let backend = config.audio.backend.clone();
@@ -2462,20 +2435,22 @@ fn build_settings_panel(
                                 }
                             });
                     }
-                    egui::ComboBox::from_label("出力チャンネル")
-                        .selected_text(audio_channel_pair_label(config.audio.output_channel_pair))
-                        .show_ui(ui, |ui| {
-                            for pair in 0u32..6 {
-                                ui.selectable_value(
-                                    &mut config.audio.output_channel_pair,
-                                    pair,
-                                    audio_channel_pair_label(pair),
-                                );
-                            }
-                        });
-                    ui.label(
-                        "出力チャンネルは多ch ASIO デバイス向け。デバイスのch数を超える指定は先頭ペアに戻ります。",
-                    );
+                    if config.audio.backend == AudioBackend::Asio {
+                        egui::ComboBox::from_label("出力チャンネル")
+                            .selected_text(audio_channel_pair_label(config.audio.output_channel_pair))
+                            .show_ui(ui, |ui| {
+                                for pair in 0u32..6 {
+                                    ui.selectable_value(
+                                        &mut config.audio.output_channel_pair,
+                                        pair,
+                                        audio_channel_pair_label(pair),
+                                    );
+                                }
+                            });
+                        ui.label(
+                            "出力チャンネルは多ch ASIO デバイス向け。デバイスのch数を超える指定は先頭ペアに戻ります。",
+                        );
+                    }
                     ui.label(
                         "ASIO ではドライバ側のバッファ設定が優先される場合があります。",
                     );
@@ -2548,34 +2523,20 @@ fn build_settings_panel(
                         egui::Slider::new(&mut config.video.frame_limit_in_background, 1..=120)
                             .text("バックグラウンド FPS 上限"),
                     );
+                    let available_renderer_backends = available_renderer_backends();
+                    if !available_renderer_backends.contains(&config.video.renderer) {
+                        config.video.renderer = RendererBackend::Auto;
+                    }
                     egui::ComboBox::from_label("レンダリングバックエンド")
                         .selected_text(renderer_backend_label(&config.video.renderer))
                         .show_ui(ui, |ui| {
-                            ui.selectable_value(
-                                &mut config.video.renderer,
-                                RendererBackend::Auto,
-                                "自動選択",
-                            );
-                            ui.selectable_value(
-                                &mut config.video.renderer,
-                                RendererBackend::Vulkan,
-                                "Vulkan",
-                            );
-                            ui.selectable_value(
-                                &mut config.video.renderer,
-                                RendererBackend::Metal,
-                                "Metal",
-                            );
-                            ui.selectable_value(
-                                &mut config.video.renderer,
-                                RendererBackend::Dx12,
-                                "DirectX 12",
-                            );
-                            ui.selectable_value(
-                                &mut config.video.renderer,
-                                RendererBackend::Gl,
-                                "OpenGL",
-                            );
+                            for backend in &available_renderer_backends {
+                                ui.selectable_value(
+                                    &mut config.video.renderer,
+                                    backend.clone(),
+                                    renderer_backend_label(backend),
+                                );
+                            }
                         });
                     ui.label(
                         "VSync / Present Mode / ウィンドウモード / 目標 FPS は即時反映。幅 / 高さ / レンダリングバックエンドは次回起動時に反映されます。",
@@ -3158,10 +3119,6 @@ fn audio_output_mode_label(mode: &AudioOutputMode) -> &'static str {
     }
 }
 
-fn audio_low_latency_shared_available(backend: &AudioBackend) -> bool {
-    cfg!(windows) && matches!(backend, AudioBackend::Auto | AudioBackend::Wasapi)
-}
-
 fn audio_buffer_size_mode_label(mode: &AudioBufferSizeMode) -> &'static str {
     match mode {
         AudioBufferSizeMode::Auto => "自動",
@@ -3207,6 +3164,19 @@ fn renderer_backend_label(backend: &RendererBackend) -> &'static str {
         RendererBackend::Dx12 => "DirectX 12",
         RendererBackend::Gl => "OpenGL",
     }
+}
+
+fn available_renderer_backends() -> Vec<RendererBackend> {
+    bmz_render::available_wgpu_backends()
+        .into_iter()
+        .map(|backend| match backend {
+            bmz_render::WgpuBackend::Auto => RendererBackend::Auto,
+            bmz_render::WgpuBackend::Vulkan => RendererBackend::Vulkan,
+            bmz_render::WgpuBackend::Metal => RendererBackend::Metal,
+            bmz_render::WgpuBackend::Dx12 => RendererBackend::Dx12,
+            bmz_render::WgpuBackend::Gl => RendererBackend::Gl,
+        })
+        .collect()
 }
 
 fn vsync_mode_label(mode: &VsyncModeConfig) -> &'static str {
@@ -5433,14 +5403,6 @@ fn filepath_def_acronym(def: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn low_latency_shared_audio_is_only_available_for_windows_wasapi() {
-        assert_eq!(audio_low_latency_shared_available(&AudioBackend::Auto), cfg!(windows));
-        assert_eq!(audio_low_latency_shared_available(&AudioBackend::Wasapi), cfg!(windows));
-        assert!(!audio_low_latency_shared_available(&AudioBackend::Asio));
-        assert!(!audio_low_latency_shared_available(&AudioBackend::CoreAudio));
-    }
 
     #[test]
     fn decide_and_play_restrict_settings_panels() {

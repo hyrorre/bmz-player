@@ -13,4 +13,4 @@ pub mod snapshot;
 pub mod text;
 pub mod ui;
 
-pub use renderer::{WgpuBackend, WgpuPresentMode};
+pub use renderer::{WgpuBackend, WgpuPresentMode, available_wgpu_backends};

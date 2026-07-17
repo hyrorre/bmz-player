@@ -325,6 +325,25 @@ pub fn list_output_devices(backend: &AudioBackend) -> Vec<String> {
     bmz_audio::backend::cpal::list_output_device_names(host)
 }
 
+/// 設定 UI に表示できる音声バックエンドを、現在の OS / feature 構成から返す。
+///
+/// `Auto` は cpal の既定ホストを使うため常に候補に含める。明示的なホストは
+/// cpal が現在のビルドで提供している場合だけ表示する。
+pub fn available_audio_backends() -> Vec<AudioBackend> {
+    [
+        AudioBackend::Auto,
+        AudioBackend::Wasapi,
+        AudioBackend::Asio,
+        AudioBackend::CoreAudio,
+        AudioBackend::Alsa,
+        AudioBackend::Pulse,
+        AudioBackend::PipeWire,
+    ]
+    .into_iter()
+    .filter(|backend| *backend == AudioBackend::Auto || cpal_host_for_backend(backend).is_ok())
+    .collect()
+}
+
 fn cpal_host_for_backend(backend: &AudioBackend) -> Result<Option<CpalHostId>> {
     match backend {
         AudioBackend::Auto => Ok(None),

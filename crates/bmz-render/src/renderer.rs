@@ -60,6 +60,20 @@ impl WgpuBackend {
     }
 }
 
+/// 設定 UI に表示できるレンダリングバックエンドを、現在の OS / feature 構成から返す。
+///
+/// wgpu の `enabled_backend_features` は、対象プラットフォームとビルド時に有効な
+/// backend feature を反映する。`Auto` は常に利用可能な論理選択肢として含める。
+pub fn available_wgpu_backends() -> Vec<WgpuBackend> {
+    [WgpuBackend::Auto, WgpuBackend::Vulkan, WgpuBackend::Metal, WgpuBackend::Dx12, WgpuBackend::Gl]
+        .into_iter()
+        .filter(|backend| {
+            *backend == WgpuBackend::Auto
+                || wgpu::Instance::enabled_backend_features().contains(backend.to_wgpu())
+        })
+        .collect()
+}
+
 fn auto_wgpu_backends() -> wgpu::Backends {
     #[cfg(target_os = "linux")]
     {
