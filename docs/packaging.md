@@ -123,6 +123,9 @@ dist/windows/installer/bmz-player-<version>-windows-<arch>-setup.exe
 
 ### Windows options
 
+GitHub Actions の Windows release job は `triplets/x64-windows-release.cmake` を
+overlay triplet として使い、vcpkg の FFmpeg を Release-only でビルドする。
+
 debug build で作る:
 
 ```powershell

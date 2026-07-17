@@ -270,6 +270,15 @@ function Resolve-InstallerArch {
 function Resolve-VcpkgTriplet {
     param([string]$Target)
 
+    if (-not $Target) {
+        if ($env:VCPKGRS_TRIPLET) {
+            return $env:VCPKGRS_TRIPLET
+        }
+        if ($env:VCPKG_DEFAULT_TRIPLET) {
+            return $env:VCPKG_DEFAULT_TRIPLET
+        }
+    }
+
     if ($Target -match "i686|i586|x86-pc-windows") {
         return "x86-windows"
     }

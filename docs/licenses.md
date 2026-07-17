@@ -37,7 +37,9 @@ Recommended release policy:
 
 Development installs are not redistributable artifacts by themselves:
 
-- Windows instructions currently use `vcpkg install ffmpeg:x64-windows`.
+- Windows development instructions currently use `vcpkg install ffmpeg:x64-windows`;
+  the release workflow uses the repository's `x64-windows-release` triplet so only
+  Release FFmpeg artifacts are built.
 - macOS instructions currently use `brew install ffmpeg`.
 - Linux instructions currently use distribution packages such as `ffmpeg-free` / `ffmpeg-free-devel`.
 
