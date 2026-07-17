@@ -12,7 +12,8 @@ const ANALYSIS_TARGET_LUFS: f32 = -12.0;
 /// 解析値は変えず、適用時だけこの目標へ再計算する。
 pub const PLAY_TARGET_LUFS: f32 = -6.0;
 /// 選曲プレビューに適用する正規化の目標 loudness。
-pub const PREVIEW_TARGET_LUFS: f32 = -9.0;
+/// プレイ再生と同じ目標値を使う。
+pub const PREVIEW_TARGET_LUFS: f32 = PLAY_TARGET_LUFS;
 /// 選曲プレビューの sample peak 上限。true peak ではなく decode 済み PCM の最大値で判定する。
 pub const PREVIEW_PEAK_CEILING_DBFS: f32 = -1.0;
 const MAX_ANALYSIS_DURATION_US: i64 = 10 * 60 * 1_000_000;
@@ -279,6 +280,17 @@ mod tests {
         let play_gain = play_normalization_gain_for_loudness(-6.0);
         assert!(analysis_gain < play_gain);
         assert!((play_gain - 1.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn preview_normalization_uses_same_minus_six_target_as_play() {
+        assert_eq!(PREVIEW_TARGET_LUFS, PLAY_TARGET_LUFS);
+
+        let sample = DecodedSample { channels: 2, sample_rate: 48_000, frames: vec![0.5; 200] };
+        let analysis = analyze_preview_loudness(&sample).unwrap();
+        let expected_gain = play_normalization_gain_for_loudness(analysis.loudness_lufs);
+
+        assert!((analysis.normalization_gain - expected_gain).abs() < 0.001);
     }
 
     #[test]
