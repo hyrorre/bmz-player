@@ -3154,7 +3154,7 @@ mod tests {
                 table_text_secondary: String::new(),
                 table_text_fallback: String::new(),
                 course_titles: Default::default(),
-                graph: crate::snapshot::ResultGraphSnapshot::default(),
+                graph: std::sync::Arc::new(crate::snapshot::ResultGraphSnapshot::default()),
                 overlay: crate::snapshot::OverlaySnapshot::default(),
                 ir: crate::scene::ResultIrSnapshot::default(),
                 player_stats: crate::scene::PlayerStatsSnapshot::default(),
@@ -3297,11 +3297,11 @@ mod tests {
             table_text_secondary: String::new(),
             table_text_fallback: String::new(),
             course_titles: Default::default(),
-            graph: ResultGraphSnapshot {
+            graph: std::sync::Arc::new(ResultGraphSnapshot {
                 judge_graph_density: vec![1, 3, 2],
                 judge_graph_buckets: vec![ResultJudgeGraphBucket { values: [0, 0, 1, 0, 0, 0] }],
                 ..ResultGraphSnapshot::default()
-            },
+            }),
             overlay: crate::snapshot::OverlaySnapshot::default(),
             ir: crate::scene::ResultIrSnapshot::default(),
             player_stats: crate::scene::PlayerStatsSnapshot::default(),
@@ -3429,7 +3429,7 @@ mod tests {
         let AppSceneSnapshot::Result(mut snapshot) = crate::sample::sample_result_scene() else {
             panic!("sample result scene");
         };
-        snapshot.graph.timing_points = vec![
+        std::sync::Arc::make_mut(&mut snapshot.graph).timing_points = vec![
             crate::snapshot::ResultTimingPoint {
                 time_ms: 0,
                 delta_us: -12_000,
@@ -3611,7 +3611,7 @@ mod tests {
             table_text_secondary: String::new(),
             table_text_fallback: String::new(),
             course_titles: Default::default(),
-            graph: ResultGraphSnapshot {
+            graph: std::sync::Arc::new(ResultGraphSnapshot {
                 gauge_points: vec![
                     ResultGaugeGraphPoint {
                         time_ms: 0,
@@ -3629,7 +3629,7 @@ mod tests {
                     },
                 ],
                 ..ResultGraphSnapshot::default()
-            },
+            }),
             overlay: crate::snapshot::OverlaySnapshot::default(),
             ir: crate::scene::ResultIrSnapshot::default(),
             player_stats: crate::scene::PlayerStatsSnapshot::default(),
@@ -3647,19 +3647,19 @@ mod tests {
             &mut crate::skin::DynamicTimerRuntime::default(),
         );
 
-        assert!(plan.commands.iter().any(|command| matches!(
-            command,
-            DrawCommand::Rect { color: Color { r, g, b, .. }, .. }
-                if (*r - 0.0).abs() < 0.01 && (*g - 1.0).abs() < 0.01 && (*b - 0.0).abs() < 0.01
-        )));
-        assert!(plan.commands.iter().any(|command| matches!(
-            command,
-            DrawCommand::Rect { rect, color: Color { r, g, b, .. } }
-                if (*r - 1.0).abs() < 0.01
+        assert!(plan.commands.iter().any(|command| {
+            draw_command_has_rect(command, |_, Color { r, g, b, .. }| {
+                (*r - 0.0).abs() < 0.01 && (*g - 1.0).abs() < 0.01 && (*b - 0.0).abs() < 0.01
+            })
+        }));
+        assert!(plan.commands.iter().any(|command| {
+            draw_command_has_rect(command, |rect, Color { r, g, b, .. }| {
+                (*r - 1.0).abs() < 0.01
                     && *g < 0.01
                     && *b < 0.01
                     && (rect.height - 0.4).abs() < 0.01
-        )));
+            })
+        }));
     }
 
     #[test]
@@ -3756,14 +3756,14 @@ mod tests {
             table_text_secondary: String::new(),
             table_text_fallback: String::new(),
             course_titles: Default::default(),
-            graph: ResultGraphSnapshot {
+            graph: std::sync::Arc::new(ResultGraphSnapshot {
                 timing_distribution,
                 timing_points: vec![
                     ResultTimingPoint { time_ms: 0, delta_us: -12_000, judge: Judge::Great },
                     ResultTimingPoint { time_ms: 100, delta_us: 8_000, judge: Judge::PGreat },
                 ],
                 ..ResultGraphSnapshot::default()
-            },
+            }),
             overlay: crate::snapshot::OverlaySnapshot::default(),
             ir: crate::scene::ResultIrSnapshot::default(),
             player_stats: crate::scene::PlayerStatsSnapshot::default(),
@@ -5446,6 +5446,19 @@ mod tests {
         match command {
             DrawCommand::Rect { color, .. } => predicate(color),
             DrawCommand::RectBatch { rects, .. } => rects.iter().any(|rect| predicate(&rect.color)),
+            _ => false,
+        }
+    }
+
+    fn draw_command_has_rect(
+        command: &DrawCommand,
+        predicate: impl Fn(&Rect, &Color) -> bool,
+    ) -> bool {
+        match command {
+            DrawCommand::Rect { rect, color } => predicate(rect, color),
+            DrawCommand::RectBatch { rects, .. } => {
+                rects.iter().any(|command| predicate(&command.rect, &command.color))
+            }
             _ => false,
         }
     }

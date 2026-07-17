@@ -3,6 +3,7 @@ use std::collections::{HashMap, VecDeque, hash_map::DefaultHasher};
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -209,11 +210,14 @@ impl PartialEq for SkinContext {
 }
 
 const RESULT_RENDER_CACHE_MAX_ENTRIES: usize = 64;
+static NEXT_RESULT_GAUGE_GRAPH_REVISION: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Debug, Default)]
 struct ResultRenderCache {
     planning: Option<ResultPlanningCache>,
     rect_batches: HashMap<ResultRectBatchCacheKey, Arc<[RectCommand]>>,
+    gauge_graph: Option<ResultGaugeGraphCache>,
+    gauge_rect_batches: HashMap<ResultGaugeGraphRectBatchCacheKey, Arc<[RectCommand]>>,
 }
 
 impl ResultRenderCache {
@@ -268,6 +272,74 @@ impl ResultRenderCache {
         self.rect_batches.insert(key, Arc::clone(&rects));
         rects
     }
+
+    fn prepare_gauge_graph(&mut self, graph: &Arc<crate::snapshot::ResultGraphSnapshot>) {
+        if self.gauge_graph.as_ref().is_some_and(|cached| Arc::ptr_eq(&cached.graph, graph)) {
+            return;
+        }
+        let revision = NEXT_RESULT_GAUGE_GRAPH_REVISION.fetch_add(1, Ordering::Relaxed);
+        self.gauge_graph = Some(ResultGaugeGraphCache {
+            graph: Arc::clone(graph),
+            revision,
+            points_by_type: HashMap::new(),
+        });
+        if self.gauge_rect_batches.len() >= RESULT_RENDER_CACHE_MAX_ENTRIES {
+            self.gauge_rect_batches.clear();
+        }
+    }
+
+    fn cached_gauge_points(
+        &mut self,
+        gauge_type: i32,
+    ) -> Option<(u64, Arc<[crate::snapshot::ResultGaugeGraphPoint]>)> {
+        let cached = self.gauge_graph.as_mut()?;
+        let points = cached
+            .points_by_type
+            .entry(gauge_type)
+            .or_insert_with(|| {
+                let filtered = cached
+                    .graph
+                    .gauge_points
+                    .iter()
+                    .copied()
+                    .filter(|point| point.gauge_type == gauge_type)
+                    .collect::<Vec<_>>();
+                if filtered.is_empty() {
+                    Arc::from(cached.graph.gauge_points.as_slice())
+                } else {
+                    Arc::from(filtered)
+                }
+            })
+            .clone();
+        Some((cached.revision, points))
+    }
+
+    fn gauge_graph_revision(&self) -> Option<u64> {
+        self.gauge_graph.as_ref().map(|cached| cached.revision)
+    }
+
+    fn cached_gauge_rect_batch(
+        &mut self,
+        key: ResultGaugeGraphRectBatchCacheKey,
+        build: impl FnOnce() -> Arc<[RectCommand]>,
+    ) -> Arc<[RectCommand]> {
+        if let Some(rects) = self.gauge_rect_batches.get(&key) {
+            return Arc::clone(rects);
+        }
+        let rects = build();
+        if self.gauge_rect_batches.len() >= RESULT_RENDER_CACHE_MAX_ENTRIES {
+            self.gauge_rect_batches.clear();
+        }
+        self.gauge_rect_batches.insert(key, Arc::clone(&rects));
+        rects
+    }
+}
+
+#[derive(Debug)]
+struct ResultGaugeGraphCache {
+    graph: Arc<crate::snapshot::ResultGraphSnapshot>,
+    revision: u64,
+    points_by_type: HashMap<i32, Arc<[crate::snapshot::ResultGaugeGraphPoint]>>,
 }
 
 #[derive(Debug, Clone)]
@@ -321,6 +393,16 @@ struct ResultRectBatchCacheKey {
 enum ResultRectBatchKind {
     Judge,
     EarlyLate,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+struct ResultGaugeGraphRectBatchCacheKey {
+    destination_index: usize,
+    frame: ResolvedSkinFrame,
+    graph_revision: u64,
+    display_gauge_type: i32,
+    gauge_max_bits: u32,
+    gauge_border_bits: u32,
 }
 
 impl Default for SkinContext {
@@ -433,7 +515,7 @@ impl SkinContext {
 
     pub fn static_document_items_for_result_state_and_text(
         &self,
-        graph: &crate::snapshot::ResultGraphSnapshot,
+        graph: &Arc<crate::snapshot::ResultGraphSnapshot>,
         state: &SkinDrawState,
         text: &SkinTextState<'_>,
     ) -> Vec<SkinRenderItem> {
@@ -441,11 +523,12 @@ impl SkinContext {
             return Vec::new();
         };
         if let Ok(mut cache) = self.result_render_cache.lock() {
+            cache.prepare_gauge_graph(graph);
             return document.static_render_items_with_graphs_cached(
                 &self.document_sources,
                 state,
                 text,
-                SkinRuntimeGraphs::from_result_graph(graph),
+                SkinRuntimeGraphs::from_result_graph(graph.as_ref()),
                 Some(&mut cache),
             );
         }
@@ -453,7 +536,7 @@ impl SkinContext {
             &self.document_sources,
             state,
             text,
-            SkinRuntimeGraphs::from_result_graph(graph),
+            SkinRuntimeGraphs::from_result_graph(graph.as_ref()),
         )
     }
 
@@ -2521,11 +2604,13 @@ pub trait SkinDocumentRenderExt {
 
     fn gaugegraph_render_items(
         &self,
+        destination_index: usize,
         graph: &SkinGaugeGraphDef,
         destination: &SkinDestinationDef,
         frame: ResolvedSkinFrame,
         state: &SkinDrawState,
         points: &[crate::snapshot::ResultGaugeGraphPoint],
+        cache: Option<&mut ResultRenderCache>,
     ) -> Vec<SkinRenderItem>;
 
     fn timing_visualizer_render_items(
@@ -3068,11 +3153,13 @@ impl SkinDocumentRenderExt for SkinDocument {
         }
         if let Some(gauge_graph) = self.gaugegraph.iter().find(|graph| graph.id == destination.id) {
             return Some(self.gaugegraph_render_items(
+                destination_index,
                 gauge_graph,
                 destination,
                 frame,
                 state,
                 runtime_graphs.result_gauge_graph_points,
+                cache,
             ));
         }
         if let Some(judge_graph) = self.judgegraph.iter().find(|graph| graph.id == destination.id) {
@@ -5524,29 +5611,42 @@ impl SkinDocumentRenderExt for SkinDocument {
 
     fn gaugegraph_render_items(
         &self,
+        destination_index: usize,
         graph: &SkinGaugeGraphDef,
         destination: &SkinDestinationDef,
         frame: ResolvedSkinFrame,
         state: &SkinDrawState,
         points: &[crate::snapshot::ResultGaugeGraphPoint],
+        mut cache: Option<&mut ResultRenderCache>,
     ) -> Vec<SkinRenderItem> {
-        let filtered_points;
-        let points = if let Some(gauge_type) = state.result_gauge_graph_type {
-            filtered_points = points
-                .iter()
-                .copied()
-                .filter(|point| point.gauge_type == gauge_type)
-                .collect::<Vec<_>>();
-            if filtered_points.is_empty() { points } else { filtered_points.as_slice() }
+        let cached_points = state
+            .result_gauge_graph_type
+            .and_then(|gauge_type| cache.as_deref_mut()?.cached_gauge_points(gauge_type));
+        let graph_revision = cached_points
+            .as_ref()
+            .map(|(revision, _)| *revision)
+            .or_else(|| cache.as_deref().and_then(ResultRenderCache::gauge_graph_revision));
+        let uncached_filtered_points = if cached_points.is_none() {
+            state.result_gauge_graph_type.map(|gauge_type| {
+                points
+                    .iter()
+                    .copied()
+                    .filter(|point| point.gauge_type == gauge_type)
+                    .collect::<Vec<_>>()
+            })
         } else {
-            points
+            None
         };
+        let points = cached_points
+            .as_ref()
+            .map(|(_, points)| points.as_ref())
+            .or_else(|| uncached_filtered_points.as_deref().filter(|filtered| !filtered.is_empty()))
+            .unwrap_or(points);
         if points.is_empty() {
             return Vec::new();
         }
         let rect = normalize_skin_frame_rect(frame, self.w, self.h);
         let frame_alpha = frame.a as f32 / 255.0;
-        let blend = if destination.blend == 2 { BlendMode::Add } else { BlendMode::Normal };
         let max = points
             .iter()
             .find_map(|point| (point.max > 0.0).then_some(point.max))
@@ -5558,122 +5658,44 @@ impl SkinDocumentRenderExt for SkinDocument {
         let border = points.first().map(|point| point.border).unwrap_or(state.gauge_border);
         let color_index = gaugegraph_color_index(display_gauge_type);
         let colors = gaugegraph_colors(graph, color_index, frame_alpha);
-        let border_y = rect.y + rect.height * (1.0 - (border / max).clamp(0.0, 1.0));
         let line_w = (2.0 / self.w.max(1) as f32).max(0.001);
         let line_h = (2.0 / self.h.max(1) as f32).max(0.001);
         let render_progress = (state.elapsed_ms.max(0) as f32 / 1500.0).clamp(0.0, 1.0);
-        let render_x = rect.x + rect.width * render_progress;
-        let mut items = Vec::with_capacity(points.len().saturating_mul(2).saturating_add(3));
-        // Additive black is a no-op in beatoraja. DrawCommand::Rect currently
-        // has no blend field, so forwarding it as a normal rectangle would
-        // cover an earlier JUDGE / EARLY-LATE graph (mz-select overlays its
-        // gauge graph this way). Drop only the mathematically neutral color.
-        if blend != BlendMode::Add || !is_additive_black(colors.graph_bg) {
-            items.push(SkinRenderItem::Rect { rect, color: colors.graph_bg, blend });
-        }
-        if border_y > rect.y && (blend != BlendMode::Add || !is_additive_black(colors.border_bg)) {
-            items.push(SkinRenderItem::Rect {
-                rect: Rect { x: rect.x, y: rect.y, width: rect.width, height: border_y - rect.y },
-                color: colors.border_bg,
-                blend,
-            });
-        }
-        let sample_count = points.len();
-        for (index, pair) in points.windows(2).enumerate() {
-            let from = pair[0];
-            let to = pair[1];
-            let x1 = rect.x + gaugegraph_sample_ratio(index, sample_count) * rect.width;
-            if x1 > render_x {
-                break;
-            }
-            let x2 = (rect.x + gaugegraph_sample_ratio(index + 1, sample_count) * rect.width)
-                .min(render_x);
-            let y1 = gaugegraph_y(rect, from.value, max);
-            let y2 = gaugegraph_y(rect, to.value, max);
-            if (x2 - x1).abs() <= f32::EPSILON {
-                continue;
-            }
-            if from.value < border && to.value < border {
-                push_gaugegraph_segment(
-                    &mut items,
-                    x1,
-                    x2,
-                    y1,
-                    y2,
-                    line_w,
-                    line_h,
-                    colors.graph_line,
-                    blend,
-                );
-            } else if from.value >= border && to.value >= border {
-                push_gaugegraph_segment(
-                    &mut items,
-                    x1,
-                    x2,
-                    y1,
-                    y2,
-                    line_w,
-                    line_h,
-                    colors.border_line,
-                    blend,
-                );
+        let build = || {
+            gaugegraph_rect_batch(
+                points,
+                rect,
+                max,
+                border,
+                colors,
+                line_w,
+                line_h,
+                render_progress,
+                destination.blend == 2,
+            )
+        };
+        let completed = render_progress >= 1.0;
+        let key = graph_revision.map(|graph_revision| ResultGaugeGraphRectBatchCacheKey {
+            destination_index,
+            frame,
+            graph_revision,
+            display_gauge_type,
+            gauge_max_bits: max.to_bits(),
+            gauge_border_bits: border.to_bits(),
+        });
+        let rects = if completed {
+            if let (Some(cache), Some(key)) = (cache, key) {
+                cache.cached_gauge_rect_batch(key, build)
             } else {
-                let split_x = if (to.value - from.value).abs() <= f32::EPSILON {
-                    x1
-                } else {
-                    x1 + (x2 - x1)
-                        * ((border - from.value) / (to.value - from.value)).clamp(0.0, 1.0)
-                };
-                let graph_color =
-                    if from.value < border { colors.graph_line } else { colors.border_line };
-                let border_color =
-                    if from.value < border { colors.border_line } else { colors.graph_line };
-                push_gaugegraph_segment(
-                    &mut items,
-                    x1,
-                    split_x,
-                    y1,
-                    border_y,
-                    line_w,
-                    line_h,
-                    graph_color,
-                    blend,
-                );
-                push_gaugegraph_segment(
-                    &mut items,
-                    split_x,
-                    x2,
-                    border_y,
-                    y2,
-                    line_w,
-                    line_h,
-                    border_color,
-                    blend,
-                );
+                build()
             }
-        }
-        if points.len() == 1 {
-            let y = gaugegraph_y(rect, points[0].value, max);
-            let color =
-                if points[0].value < border { colors.graph_line } else { colors.border_line };
-            items.push(SkinRenderItem::Rect {
-                rect: Rect { x: rect.x, y, width: (render_x - rect.x).max(line_w), height: line_h },
-                color,
-                blend,
-            });
-        } else if let Some(last) = points.last().copied() {
-            let x1 = rect.x
-                + gaugegraph_sample_ratio(sample_count.saturating_sub(1), sample_count)
-                    * rect.width;
-            let x2 = render_x;
-            if x2 > x1 {
-                let y = gaugegraph_y(rect, last.value, max);
-                let color =
-                    if last.value < border { colors.graph_line } else { colors.border_line };
-                push_gaugegraph_segment(&mut items, x1, x2, y, y, line_w, line_h, color, blend);
-            }
-        }
-        items
+        } else {
+            build()
+        };
+        let batch_cache = completed
+            .then(|| key.and_then(|key| result_gauge_graph_rect_batch_cache(key, &rects)))
+            .flatten();
+        rect_batch_render_items(rects, batch_cache)
     }
 
     fn timing_visualizer_render_items(
@@ -10149,8 +10171,105 @@ fn gaugegraph_sample_ratio(index: usize, sample_count: usize) -> f32 {
 }
 
 #[allow(clippy::too_many_arguments)]
+fn gaugegraph_rect_batch(
+    points: &[crate::snapshot::ResultGaugeGraphPoint],
+    rect: Rect,
+    max: f32,
+    border: f32,
+    colors: GaugeGraphColors,
+    line_w: f32,
+    line_h: f32,
+    render_progress: f32,
+    additive: bool,
+) -> Arc<[RectCommand]> {
+    let border_y = rect.y + rect.height * (1.0 - (border / max).clamp(0.0, 1.0));
+    let render_x = rect.x + rect.width * render_progress;
+    let mut rects = Vec::with_capacity(points.len().saturating_mul(2).saturating_add(3));
+    // Additive black is a no-op in beatoraja. RectBatch has no blend field,
+    // so emitting it as a normal rectangle would cover an earlier graph.
+    if !additive || !is_additive_black(colors.graph_bg) {
+        rects.push(RectCommand { rect, color: colors.graph_bg });
+    }
+    if border_y > rect.y && (!additive || !is_additive_black(colors.border_bg)) {
+        rects.push(RectCommand {
+            rect: Rect { x: rect.x, y: rect.y, width: rect.width, height: border_y - rect.y },
+            color: colors.border_bg,
+        });
+    }
+    let sample_count = points.len();
+    for (index, pair) in points.windows(2).enumerate() {
+        let from = pair[0];
+        let to = pair[1];
+        let x1 = rect.x + gaugegraph_sample_ratio(index, sample_count) * rect.width;
+        if x1 > render_x {
+            break;
+        }
+        let x2 =
+            (rect.x + gaugegraph_sample_ratio(index + 1, sample_count) * rect.width).min(render_x);
+        let y1 = gaugegraph_y(rect, from.value, max);
+        let y2 = gaugegraph_y(rect, to.value, max);
+        if (x2 - x1).abs() <= f32::EPSILON {
+            continue;
+        }
+        if from.value < border && to.value < border {
+            push_gaugegraph_segment(&mut rects, x1, x2, y1, y2, line_w, line_h, colors.graph_line);
+        } else if from.value >= border && to.value >= border {
+            push_gaugegraph_segment(&mut rects, x1, x2, y1, y2, line_w, line_h, colors.border_line);
+        } else {
+            let split_x = if (to.value - from.value).abs() <= f32::EPSILON {
+                x1
+            } else {
+                x1 + (x2 - x1) * ((border - from.value) / (to.value - from.value)).clamp(0.0, 1.0)
+            };
+            let graph_color =
+                if from.value < border { colors.graph_line } else { colors.border_line };
+            let border_color =
+                if from.value < border { colors.border_line } else { colors.graph_line };
+            push_gaugegraph_segment(
+                &mut rects,
+                x1,
+                split_x,
+                y1,
+                border_y,
+                line_w,
+                line_h,
+                graph_color,
+            );
+            push_gaugegraph_segment(
+                &mut rects,
+                split_x,
+                x2,
+                border_y,
+                y2,
+                line_w,
+                line_h,
+                border_color,
+            );
+        }
+    }
+    if points.len() == 1 {
+        let y = gaugegraph_y(rect, points[0].value, max);
+        let color = if points[0].value < border { colors.graph_line } else { colors.border_line };
+        rects.push(RectCommand {
+            rect: Rect { x: rect.x, y, width: (render_x - rect.x).max(line_w), height: line_h },
+            color,
+        });
+    } else if let Some(last) = points.last().copied() {
+        let x1 = rect.x
+            + gaugegraph_sample_ratio(sample_count.saturating_sub(1), sample_count) * rect.width;
+        let x2 = render_x;
+        if x2 > x1 {
+            let y = gaugegraph_y(rect, last.value, max);
+            let color = if last.value < border { colors.graph_line } else { colors.border_line };
+            push_gaugegraph_segment(&mut rects, x1, x2, y, y, line_w, line_h, color);
+        }
+    }
+    Arc::from(rects)
+}
+
+#[allow(clippy::too_many_arguments)]
 fn push_gaugegraph_segment(
-    items: &mut Vec<SkinRenderItem>,
+    rects: &mut Vec<RectCommand>,
     x1: f32,
     x2: f32,
     y1: f32,
@@ -10158,19 +10277,13 @@ fn push_gaugegraph_segment(
     line_w: f32,
     line_h: f32,
     color: Color,
-    blend: BlendMode,
 ) {
     let width = (x2 - x1).max(line_w);
-    items.push(SkinRenderItem::Rect {
+    rects.push(RectCommand {
         rect: Rect { x: x1, y: y1.min(y2), width: line_w, height: (y2 - y1).abs() + line_h },
         color,
-        blend,
     });
-    items.push(SkinRenderItem::Rect {
-        rect: Rect { x: x1, y: y2, width, height: line_h },
-        color,
-        blend,
-    });
+    rects.push(RectCommand { rect: Rect { x: x1, y: y2, width, height: line_h }, color });
 }
 
 fn skin_timing_distribution_from_points(
@@ -10473,6 +10586,27 @@ fn result_note_graph_rect_batch_cache(
     }
     let mut hasher = DefaultHasher::new();
     "result-note-graph-rect-batch".hash(&mut hasher);
+    key.hash(&mut hasher);
+    Some(RectBatchCache { key: RectBatchCacheKey(hasher.finish()), bounds })
+}
+
+fn result_gauge_graph_rect_batch_cache(
+    key: ResultGaugeGraphRectBatchCacheKey,
+    rects: &[RectCommand],
+) -> Option<RectBatchCache> {
+    let first = rects.first()?.rect;
+    let bounds = rects.iter().skip(1).fold(first, |bounds, command| {
+        let left = bounds.x.min(command.rect.x);
+        let top = bounds.y.min(command.rect.y);
+        let right = (bounds.x + bounds.width).max(command.rect.x + command.rect.width);
+        let bottom = (bounds.y + bounds.height).max(command.rect.y + command.rect.height);
+        Rect { x: left, y: top, width: right - left, height: bottom - top }
+    });
+    if bounds.width <= f32::EPSILON || bounds.height <= f32::EPSILON {
+        return None;
+    }
+    let mut hasher = DefaultHasher::new();
+    "result-gauge-graph-rect-batch".hash(&mut hasher);
     key.hash(&mut hasher);
     Some(RectBatchCache { key: RectBatchCacheKey(hasher.finish()), bounds })
 }
@@ -24348,6 +24482,201 @@ mod tests {
         assert!((gaugegraph_sample_ratio(1, 3) - (1.0 / 3.0)).abs() < 1e-6);
         assert!((gaugegraph_sample_ratio(2, 3) - (2.0 / 3.0)).abs() < 1e-6);
         assert_eq!(gaugegraph_sample_ratio(0, 0), 0.0);
+    }
+
+    #[test]
+    fn result_gaugegraph_caches_only_completed_graph_per_type_and_graph_arc() {
+        use crate::snapshot::{ResultGaugeGraphPoint, ResultGraphSnapshot};
+
+        let document: SkinDocument = serde_json::from_str(r#"{"w":1280,"h":720}"#).unwrap();
+        let graph_def: SkinGaugeGraphDef = serde_json::from_str(r#"{"id":"graph"}"#).unwrap();
+        let destination: SkinDestinationDef =
+            serde_json::from_str(r#"{"id":"graph","dst":[]}"#).unwrap();
+        let frame = ResolvedSkinFrame { w: 640, h: 360, a: 255, ..Default::default() };
+        let graph = Arc::new(ResultGraphSnapshot {
+            gauge_points: vec![
+                ResultGaugeGraphPoint {
+                    value: 20.0,
+                    max: 100.0,
+                    border: 80.0,
+                    gauge_type: 2,
+                    ..Default::default()
+                },
+                ResultGaugeGraphPoint {
+                    value: 70.0,
+                    max: 100.0,
+                    border: 80.0,
+                    gauge_type: 3,
+                    ..Default::default()
+                },
+                ResultGaugeGraphPoint {
+                    value: 40.0,
+                    max: 100.0,
+                    border: 80.0,
+                    gauge_type: 2,
+                    ..Default::default()
+                },
+                ResultGaugeGraphPoint {
+                    value: 90.0,
+                    max: 100.0,
+                    border: 80.0,
+                    gauge_type: 3,
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        });
+        let render = |cache: &mut ResultRenderCache, elapsed_ms, gauge_type| {
+            document.gaugegraph_render_items(
+                7,
+                &graph_def,
+                &destination,
+                frame,
+                &SkinDrawState {
+                    elapsed_ms,
+                    result_gauge_graph_type: Some(gauge_type),
+                    ..Default::default()
+                },
+                &graph.gauge_points,
+                Some(cache),
+            )
+        };
+
+        let mut cache = ResultRenderCache::default();
+        cache.prepare_gauge_graph(&graph);
+        let reveal = render(&mut cache, 1499, 2);
+        assert!(matches!(reveal.as_slice(), [SkinRenderItem::RectBatch { cache: None, .. }]));
+
+        let normal = render(&mut cache, 1500, 2);
+        let [SkinRenderItem::RectBatch { rects: normal_rects, cache: Some(normal_key) }] =
+            normal.as_slice()
+        else {
+            panic!("completed gauge graph must use the offscreen batch cache");
+        };
+        let normal_again = render(&mut cache, 2500, 2);
+        let [
+            SkinRenderItem::RectBatch { rects: normal_again_rects, cache: Some(normal_again_key) },
+        ] = normal_again.as_slice()
+        else {
+            panic!("completed gauge graph cache must stay reusable");
+        };
+        assert!(Arc::ptr_eq(normal_rects, normal_again_rects));
+        assert_eq!(normal_key, normal_again_key);
+
+        let hard = render(&mut cache, 2500, 3);
+        let [SkinRenderItem::RectBatch { cache: Some(hard_key), .. }] = hard.as_slice() else {
+            panic!("switched gauge graph must also use its own batch cache");
+        };
+        assert_ne!(normal_key.key, hard_key.key);
+        let normal_after_switch = render(&mut cache, 2500, 2);
+        let [
+            SkinRenderItem::RectBatch {
+                rects: normal_after_switch_rects,
+                cache: Some(normal_after_switch_key),
+            },
+        ] = normal_after_switch.as_slice()
+        else {
+            panic!("switching back must reuse the original gauge batch");
+        };
+        assert!(Arc::ptr_eq(normal_rects, normal_after_switch_rects));
+        assert_eq!(normal_key, normal_after_switch_key);
+
+        let changed_graph = Arc::new(ResultGraphSnapshot {
+            gauge_points: graph
+                .gauge_points
+                .iter()
+                .copied()
+                .map(|mut point| {
+                    point.value += 1.0;
+                    point
+                })
+                .collect(),
+            ..Default::default()
+        });
+        cache.prepare_gauge_graph(&changed_graph);
+        let changed = document.gaugegraph_render_items(
+            7,
+            &graph_def,
+            &destination,
+            frame,
+            &SkinDrawState {
+                elapsed_ms: 1500,
+                result_gauge_graph_type: Some(2),
+                ..Default::default()
+            },
+            &changed_graph.gauge_points,
+            Some(&mut cache),
+        );
+        let [SkinRenderItem::RectBatch { cache: Some(changed_key), .. }] = changed.as_slice()
+        else {
+            panic!("changed graph must produce a completed batch");
+        };
+        assert_ne!(normal_key.key, changed_key.key);
+
+        let mut other_context_cache = ResultRenderCache::default();
+        other_context_cache.prepare_gauge_graph(&graph);
+        let other_context = render(&mut other_context_cache, 1500, 2);
+        let [SkinRenderItem::RectBatch { cache: Some(other_context_key), .. }] =
+            other_context.as_slice()
+        else {
+            panic!("another skin context must produce a completed batch");
+        };
+        assert_ne!(normal_key.key, other_context_key.key);
+    }
+
+    #[test]
+    fn result_gaugegraph_batch_skips_additive_black_backgrounds() {
+        use crate::snapshot::ResultGaugeGraphPoint;
+
+        let document: SkinDocument = serde_json::from_str(r#"{"w":1280,"h":720}"#).unwrap();
+        let graph_def: SkinGaugeGraphDef = serde_json::from_str(
+            r#"{
+                "id":"graph",
+                "borderlineColor":"00FF00",
+                "borderColor":"000000",
+                "grooveFailLineColor":"FF0000",
+                "grooveFailBGColor":"000000"
+            }"#,
+        )
+        .unwrap();
+        let destination: SkinDestinationDef =
+            serde_json::from_str(r#"{"id":"graph","blend":2,"dst":[]}"#).unwrap();
+        let frame = ResolvedSkinFrame { w: 640, h: 360, a: 255, ..Default::default() };
+        let points = [
+            ResultGaugeGraphPoint {
+                value: 20.0,
+                max: 100.0,
+                border: 80.0,
+                gauge_type: 2,
+                ..Default::default()
+            },
+            ResultGaugeGraphPoint {
+                value: 40.0,
+                max: 100.0,
+                border: 80.0,
+                gauge_type: 2,
+                ..Default::default()
+            },
+        ];
+
+        let items = document.gaugegraph_render_items(
+            7,
+            &graph_def,
+            &destination,
+            frame,
+            &SkinDrawState {
+                elapsed_ms: 1500,
+                result_gauge_graph_type: Some(2),
+                ..Default::default()
+            },
+            &points,
+            None,
+        );
+        let [SkinRenderItem::RectBatch { rects, .. }] = items.as_slice() else {
+            panic!("gauge graph must render as a rectangle batch");
+        };
+        assert!(!rects.is_empty());
+        assert!(rects.iter().all(|command| !is_additive_black(command.color)));
     }
 
     #[test]

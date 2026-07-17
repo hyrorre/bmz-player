@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use bmz_core::clear::ClearType;
 use bmz_core::lane::KeyMode;
 use bmz_core::time::TimeUs;
@@ -636,7 +638,7 @@ pub struct ResultSnapshot {
     /// beatoraja STRING_COURSE1_TITLE..10_TITLE (150..159) for course results.
     pub course_titles: [String; 10],
     /// Result 画面の graph 系 skin object に渡すプレイ中の推移データ。
-    pub graph: crate::snapshot::ResultGraphSnapshot,
+    pub graph: Arc<crate::snapshot::ResultGraphSnapshot>,
     /// 右下に常時表示するオーバーレイ文字列。
     pub overlay: OverlaySnapshot,
     /// IR ランキング表示状態 (NUMBER_IR_* / OPTION_IR_*)。
@@ -722,7 +724,7 @@ mod tests {
             table_text_secondary: String::new(),
             table_text_fallback: String::new(),
             course_titles: Default::default(),
-            graph: crate::snapshot::ResultGraphSnapshot::default(),
+            graph: Arc::new(crate::snapshot::ResultGraphSnapshot::default()),
             overlay: OverlaySnapshot::default(),
             ir: ResultIrSnapshot::default(),
             player_stats: PlayerStatsSnapshot::default(),
@@ -797,7 +799,7 @@ mod tests {
             table_text_secondary: String::new(),
             table_text_fallback: String::new(),
             course_titles: Default::default(),
-            graph: crate::snapshot::ResultGraphSnapshot::default(),
+            graph: Arc::new(crate::snapshot::ResultGraphSnapshot::default()),
             overlay: OverlaySnapshot::default(),
             ir: ResultIrSnapshot::default(),
             player_stats: PlayerStatsSnapshot::default(),

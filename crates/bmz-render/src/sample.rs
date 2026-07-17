@@ -251,7 +251,7 @@ pub fn sample_result_scene() -> AppSceneSnapshot {
         table_text_secondary: String::new(),
         table_text_fallback: String::new(),
         course_titles: Default::default(),
-        graph: crate::snapshot::ResultGraphSnapshot::default(),
+        graph: std::sync::Arc::new(crate::snapshot::ResultGraphSnapshot::default()),
         overlay: OverlaySnapshot::default(),
         ir: crate::scene::ResultIrSnapshot::default(),
         player_stats: PlayerStatsSnapshot::default(),

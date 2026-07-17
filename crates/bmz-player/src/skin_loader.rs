@@ -3505,7 +3505,7 @@ mod tests {
             decoded.document,
             document_textures,
         );
-        let graph = bmz_render::snapshot::ResultGraphSnapshot {
+        let graph = std::sync::Arc::new(bmz_render::snapshot::ResultGraphSnapshot {
             judge_graph_buckets: vec![
                 bmz_render::snapshot::ResultJudgeGraphBucket { values: [0, 10, 5, 2, 1, 1] },
                 bmz_render::snapshot::ResultJudgeGraphBucket { values: [0, 8, 4, 2, 1, 0] },
@@ -3520,7 +3520,7 @@ mod tests {
             ],
             judge_graph_density: vec![12, 18],
             ..bmz_render::snapshot::ResultGraphSnapshot::default()
-        };
+        });
         let state = bmz_render::skin::SkinDrawState {
             elapsed_ms: 500,
             result_failed: Some(false),
@@ -3967,8 +3967,9 @@ mod tests {
             fast_empty_poor: 1,
             slow_empty_poor: 1,
         };
-        snapshot.graph.judge_graph_density = vec![1, 3, 2, 4];
-        snapshot.graph.timing_points = vec![
+        let graph = std::sync::Arc::make_mut(&mut snapshot.graph);
+        graph.judge_graph_density = vec![1, 3, 2, 4];
+        graph.timing_points = vec![
             bmz_render::snapshot::ResultTimingPoint {
                 time_ms: 100,
                 delta_us: -12_000,
