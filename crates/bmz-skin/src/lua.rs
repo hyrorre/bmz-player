@@ -529,6 +529,7 @@ fn set_lua_boolean_upvalue(lua: &Lua, function: &Function, index: i32, value: bo
 
 fn postprocess_lua_skin_json(root: &mut JsonMap<String, JsonValue>, warnings: &mut Vec<String>) {
     repair_malformed_destination_ops(root, warnings);
+    repair_select_score_rate_punctuation(root);
     let repaired = repair_keybeam_destination_draws(root);
     warnings.retain(|warning| {
         !repaired.iter().any(|index| {
@@ -3769,6 +3770,42 @@ fn repair_result_course_title_text(path: &str, object: &mut JsonMap<String, Json
     object.insert("ref".to_string(), JsonValue::Number(JsonNumber::from(12)));
 }
 
+/// Some select skins keep the score-rate digits visible for both songs and
+/// courses, but gate the shared decimal-point/percent sprite with SONGBAR only.
+/// Grade bars expose the same score-rate refs, so extend that punctuation
+/// destination to GRADEBAR without changing the third-party skin file.
+fn repair_select_score_rate_punctuation(root: &mut JsonMap<String, JsonValue>) {
+    let has_value = |id: &str, ref_id: i64| {
+        root.get("value").and_then(JsonValue::as_array).is_some_and(|values| {
+            values.iter().any(|value| {
+                value.get("id").and_then(JsonValue::as_str) == Some(id)
+                    && value.get("ref").and_then(JsonValue::as_i64) == Some(ref_id)
+            })
+        })
+    };
+    if !has_value("scorerate_count", 102) || !has_value("scorerate_dot_count", 103) {
+        return;
+    }
+    let Some(destinations) = root.get_mut("destination").and_then(JsonValue::as_array_mut) else {
+        return;
+    };
+    for destination in destinations {
+        let Some(object) = destination.as_object_mut() else {
+            continue;
+        };
+        if object.get("id").and_then(JsonValue::as_str) == Some("score_per")
+            && object.get("op")
+                == Some(&JsonValue::Array(vec![JsonValue::Number(JsonNumber::from(2))]))
+        {
+            object.remove("op");
+            object.insert(
+                "draw".to_string(),
+                JsonValue::String("option(2) or option(3)".to_string()),
+            );
+        }
+    }
+}
+
 #[cfg(test)]
 mod result_course_title_repair_tests {
     use super::*;
@@ -3797,6 +3834,44 @@ mod result_course_title_repair_tests {
 
         assert_eq!(object.get("constantText"), Some(&JsonValue::String(String::new())));
         assert!(!object.contains_key("ref"));
+    }
+}
+
+#[cfg(test)]
+mod select_score_rate_punctuation_repair_tests {
+    use super::*;
+
+    #[test]
+    fn extends_song_score_rate_punctuation_to_course_rows() {
+        let mut root = serde_json::from_value::<JsonMap<String, JsonValue>>(serde_json::json!({
+            "value": [
+                { "id": "scorerate_count", "ref": 102 },
+                { "id": "scorerate_dot_count", "ref": 103 }
+            ],
+            "destination": [{ "id": "score_per", "op": [2], "dst": [] }]
+        }))
+        .unwrap();
+
+        repair_select_score_rate_punctuation(&mut root);
+        let object = root["destination"][0].as_object().unwrap();
+
+        assert_eq!(object.get("draw").and_then(JsonValue::as_str), Some("option(2) or option(3)"));
+        assert!(!object.contains_key("op"));
+    }
+
+    #[test]
+    fn preserves_unrelated_song_only_destination() {
+        let mut root = serde_json::from_value::<JsonMap<String, JsonValue>>(serde_json::json!({
+            "value": [{ "id": "other", "ref": 102 }],
+            "destination": [{ "id": "score_per", "op": [2], "dst": [] }]
+        }))
+        .unwrap();
+
+        repair_select_score_rate_punctuation(&mut root);
+        let object = root["destination"][0].as_object().unwrap();
+
+        assert!(!object.contains_key("draw"));
+        assert!(object.contains_key("op"));
     }
 }
 
