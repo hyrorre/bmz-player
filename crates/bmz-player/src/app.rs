@@ -379,10 +379,7 @@ struct LeftOverlayToast {
 const LEFT_OVERLAY_TOAST_DURATION: Duration = Duration::from_secs(2);
 
 /// beatoraja の `Gdx.graphics.getFramesPerSecond()` と同様、1 秒ごとに
-/// 確定したフレーム数を skin の NUMBER_CURRENT_FPS (20) へ渡す。
-///
-/// `wgpu_fps` は診断 overlay 向けの EMA のまま残し、skin 内の数値が
-/// 毎フレーム揺れないよう用途を分ける。
+/// 確定したフレーム数を skin の NUMBER_CURRENT_FPS (20) と右上表示へ渡す。
 struct SkinFpsCounter {
     window_started_at: Instant,
     frames: u32,
@@ -406,6 +403,10 @@ impl SkinFpsCounter {
     fn current(&self) -> u32 {
         self.current
     }
+}
+
+fn fps_overlay_text(show_fps: bool, current_fps: u32) -> String {
+    if !show_fps || current_fps == 0 { String::new() } else { format!("FPS {current_fps}") }
 }
 
 struct WinitApp {
@@ -661,9 +662,7 @@ struct WinitApp {
     /// Worker から取り込んだスキンを次の redraw で即表示するため、
     /// 1 フレーム分だけ frame pacing sleep をスキップする。
     skip_next_frame_pace: bool,
-    /// RedrawRequested 間隔から平滑化した wgpu 描画 FPS。
-    wgpu_fps: f32,
-    /// skin の NUMBER_CURRENT_FPS (20) へ渡す秒単位の確定 FPS。
+    /// skin の NUMBER_CURRENT_FPS (20) と右上表示へ渡す秒単位の確定 FPS。
     skin_fps: SkinFpsCounter,
     /// 設定画面で編集中の項目。`None` なら一覧操作モード。
     settings_edit: Option<SettingsEditSession>,
@@ -2654,7 +2653,6 @@ impl WinitApp {
             discard_gamepad_output_until_resynced: false,
             last_frame_at: None,
             skip_next_frame_pace: false,
-            wgpu_fps: 0.0,
             skin_fps: SkinFpsCounter::new(now),
             settings_edit: None,
             key_config_edit: None,
@@ -3146,7 +3144,7 @@ impl WinitApp {
         OverlaySnapshot {
             left_text: self.left_overlay_text(),
             text: self.always_overlay_text(),
-            fps_text: self.wgpu_fps_overlay_text(),
+            fps_text: self.skin_fps_overlay_text(),
         }
     }
 
@@ -3176,11 +3174,8 @@ impl WinitApp {
         }
     }
 
-    fn wgpu_fps_overlay_text(&self) -> String {
-        if !self.boot.profile_config.ui.show_fps || self.wgpu_fps <= 0.0 {
-            return String::new();
-        }
-        format!("FPS {:.0}", self.wgpu_fps)
+    fn skin_fps_overlay_text(&self) -> String {
+        fps_overlay_text(self.boot.profile_config.ui.show_fps, self.skin_fps.current())
     }
 
     fn is_autoplay_for_overlay(&self) -> bool {
@@ -12364,17 +12359,6 @@ impl WinitApp {
     fn limit_frame_rate(&mut self) {
         let frame_started = Instant::now();
         self.skin_fps.record_frame(frame_started);
-        if let Some(last) = self.last_frame_at {
-            let dt = frame_started.duration_since(last).as_secs_f32();
-            if dt > 0.0 {
-                let instant_fps = 1.0 / dt;
-                self.wgpu_fps = if self.wgpu_fps <= 0.0 {
-                    instant_fps
-                } else {
-                    self.wgpu_fps.mul_add(0.9, instant_fps * 0.1)
-                };
-            }
-        }
         let fps = if self.focused {
             self.boot.app_config.video.target_fps
         } else {
@@ -20516,10 +20500,18 @@ mod tests {
 
         fps.record_frame(started_at + Duration::from_secs(1));
         assert_eq!(fps.current(), 5);
+        assert_eq!(fps_overlay_text(true, fps.current()), "FPS 5");
         fps.record_frame(started_at + Duration::from_millis(1_250));
         assert_eq!(fps.current(), 5);
         fps.record_frame(started_at + Duration::from_secs(2));
         assert_eq!(fps.current(), 2);
+    }
+
+    #[test]
+    fn fps_overlay_text_uses_skin_fps_value() {
+        assert_eq!(fps_overlay_text(true, 237), "FPS 237");
+        assert_eq!(fps_overlay_text(false, 237), "");
+        assert_eq!(fps_overlay_text(true, 0), "");
     }
 
     #[test]
