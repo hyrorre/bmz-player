@@ -6548,7 +6548,10 @@ fn skin_image_index_number(ref_id: i32, state: &SkinDrawState) -> Option<i64> {
         40 if state.select_screen => Some(state.select_gauge_index as i64),
         40 => Some(state.gauge_type.max(0) as i64),
         SKIN_REF_PLAY_GAUGE_TYPE => Some(state.gauge_type.max(0) as i64),
-        41 => Some(state.select_target_index as i64),
+        // Target sprites use both the legacy ref=41 and BUTTON_TARGET=77.
+        // They share beatoraja's 11-entry target-list index rather than BMZ's
+        // compact target enumeration.
+        41 | 77 => Some(state.select_target_index as i64),
         42 => Some(arrange_ref_index(state) as i64),
         43 => Some(arrange_2p_ref_index(state) as i64),
         54 => Some(state.select_double_option_index as i64),
