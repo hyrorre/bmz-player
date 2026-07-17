@@ -9832,6 +9832,70 @@ impl WinitApp {
         tracing::info!(chart_id, generation, "play preload with reused media started");
     }
 
+    /// Keep the expensive BGA resources warm, but rebuild the chart sound bank
+    /// for a quick retry.  Reusing decoded samples made the retry depend on the
+    /// previous engine's `SoundId` layout; rebuilding from the exact cached
+    /// chart restores the keysound/BGM-to-asset correspondence while retaining
+    /// static textures and video decoders.
+    fn start_quick_retry_preload_reloading_audio(
+        &mut self,
+        chart_id: i64,
+        options: PlayStartOptions,
+        cache: PlayMediaCache,
+    ) {
+        let chart = Arc::clone(cache.chart.as_ref().expect("SameArrange cache includes chart"));
+        let applied_arrange =
+            cache.applied_arrange.clone().expect("SameArrange cache includes applied arrange");
+        let score_key = cache.score_key.expect("SameArrange cache includes score key");
+        let normalization_gain = cache.normalization_gain;
+
+        self.play_preload_generation = self.play_preload_generation.wrapping_add(1);
+        let generation = self.play_preload_generation;
+        self.preloaded_play_session = None;
+        self.apply_reused_bga_preload(chart_id, cache.bga_frames.clone(), cache.bga_assets.clone());
+        self.play_media_cache = Some(cache);
+
+        let mut session_options =
+            play_session_options_from_start(&self.play_session_app_config(), options);
+        session_options.ln_policy_setting = self.boot.profile_config.play.ln_mode_policy;
+        session_options.rule_mode = self.boot.profile_config.play.rule_mode;
+        let input = SharedInputBackend::default();
+        let preload_input = input.clone();
+        let audio_progress = Arc::new(AtomicU32::new(0));
+        let worker_audio_progress = Arc::clone(&audio_progress);
+        let sample_rate = session_options.sample_rate;
+        let (tx, rx) = mpsc::channel();
+        thread::Builder::new()
+            .name(format!("quick-retry-audio-preload-{chart_id}"))
+            .spawn(move || {
+                let preloaded = crate::screens::play_session::
+                    preload_play_session_reloading_audio_with_progress(
+                        chart,
+                        sample_rate,
+                        normalization_gain,
+                        applied_arrange,
+                        score_key,
+                        |loaded, total| {
+                            worker_audio_progress.store(
+                                resource_load_progress_units(loaded, total),
+                                Ordering::Relaxed,
+                            );
+                        },
+                    );
+                let result = Ok(PreloadedInputPlaySession {
+                    chart_id,
+                    preloaded,
+                    input: preload_input,
+                    session_options,
+                });
+                let _ = tx.send(PlayPreloadResult { generation, chart_id, result });
+            })
+            .expect("failed to spawn quick retry audio preload thread");
+        self.pending_play_preload =
+            Some(PendingPlayPreload { generation, chart_id, input, audio_progress, rx });
+        tracing::info!(chart_id, generation, "quick retry audio preload started");
+    }
+
     fn handle_quick_retry_control(&mut self, control: &str) -> bool {
         let Some(ending) = &self.play_ending else {
             return false;
@@ -9980,13 +10044,8 @@ impl WinitApp {
         self.draining_audio = None;
         self.clear_play_control_holds();
         match media {
-            Some(mut cache) if cache.chart.is_some() => {
-                let mut reuse = self
-                    .quick_retry_reuse_from_media_cache(chart_id, &options, &cache)
-                    .expect("SameArrange cache includes chart");
-                reuse.video_bga_decoders = std::mem::take(&mut cache.video_bga_decoders);
-                self.play_media_cache = Some(cache);
-                self.queue_quick_retry_reuse(chart_id, reuse);
+            Some(cache) if cache.chart.is_some() => {
+                self.start_quick_retry_preload_reloading_audio(chart_id, options.clone(), cache);
             }
             Some(cache) => {
                 self.start_play_preload_reusing_media(chart_id, options.clone(), cache);
@@ -11500,6 +11559,15 @@ impl WinitApp {
             number_values,
             &self.boot.profile_config.display_name,
         );
+        if let Some(summary) = summary {
+            apply_result_summary_lua_load_state(
+                &mut runtime_state,
+                summary,
+                &self.play_table_text_primary,
+                &self.play_table_text_secondary,
+                &self.play_table_text_fallback,
+            );
+        }
         if let Some(stage) = self.current_course_stage_marker() {
             apply_course_mode_lua_options(&mut runtime_state, Some(stage));
         }
@@ -17028,6 +17096,37 @@ fn apply_course_result_lua_load_state(
         .insert("skin/WMII_FHD/result/courseData.json".to_string(), course_data);
 }
 
+fn apply_result_summary_lua_load_state(
+    runtime_state: &mut bmz_skin::LuaLoadRuntimeState,
+    summary: &ResultSummary,
+    table_primary: &str,
+    table_level: &str,
+    table_full: &str,
+) {
+    let full_title = if summary.subtitle.is_empty() {
+        summary.title.clone()
+    } else {
+        format!("{} {}", summary.title, summary.subtitle)
+    };
+    let full_artist = if summary.subartist.is_empty() {
+        summary.artist.clone()
+    } else {
+        format!("{} {}", summary.artist, summary.subartist)
+    };
+    runtime_state.text_values.extend([
+        (10, summary.title.clone()),
+        (11, summary.subtitle.clone()),
+        (12, full_title),
+        (13, summary.genre.clone()),
+        (14, summary.artist.clone()),
+        (15, summary.subartist.clone()),
+        (16, full_artist),
+        (1001, table_primary.to_string()),
+        (1002, table_level.to_string()),
+        (1003, table_full.to_string()),
+    ]);
+}
+
 fn result_long_note_mode_index(mode: bmz_chart::model::LongNoteMode) -> usize {
     match mode {
         bmz_chart::model::LongNoteMode::Ln => 0,
@@ -21744,7 +21843,17 @@ mod tests {
 
         let mut runtime_state =
             lua_runtime_state_for_result(false, false, true, KeyMode::K7, number_values, "Player");
+        apply_result_summary_lua_load_state(
+            &mut runtime_state,
+            &summary,
+            "Table",
+            "★12",
+            "Table ★12",
+        );
         apply_course_result_lua_load_state(&mut runtime_state, &course);
+        assert_eq!(runtime_state.text_values.get(&10).map(String::as_str), Some("Course Title"));
+        assert_eq!(runtime_state.text_values.get(&12).map(String::as_str), Some("Course Title"));
+        assert_eq!(runtime_state.text_values.get(&1003).map(String::as_str), Some("Table ★12"));
         assert_eq!(runtime_state.text_values.get(&150).map(String::as_str), Some("Stage 1"));
         let data: serde_json::Value = serde_json::from_str(
             &runtime_state.virtual_io_files["skin/WMII_FHD/result/courseData.json"],

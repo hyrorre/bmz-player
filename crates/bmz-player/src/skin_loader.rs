@@ -2696,6 +2696,41 @@ mod tests {
     }
 
     #[test]
+    fn modern_chic_result_bakes_runtime_song_label_when_available() {
+        let skin_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../data/skins/ModernChic/result.luaskin");
+        if !skin_path.is_file() {
+            return;
+        }
+        let runtime_state = LuaLoadRuntimeState {
+            text_values: BTreeMap::from([
+                (10, "Song".to_string()),
+                (11, "Subtitle".to_string()),
+                (12, "Song Subtitle".to_string()),
+                (13, "Genre".to_string()),
+                (14, "Artist".to_string()),
+                (1003, "Table ★12".to_string()),
+            ]),
+            ..LuaLoadRuntimeState::default()
+        };
+        let loaded = load_skin_document_uncached(
+            &skin_path,
+            SkinKind::Result,
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            &runtime_state,
+        )
+        .expect("unmodified ModernChic result should decode with runtime song text");
+        let bottom = loaded
+            .document
+            .text
+            .iter()
+            .find(|text| text.id == "bottomResult")
+            .expect("ModernChic bottomResult text");
+        assert_eq!(bottom.constant_text, "Song Subtitle / Artist / Genre / Table ★12");
+    }
+
+    #[test]
     fn luxe_flat_result_decodes_local_panel_state_and_tab_actions() {
         let skin_path = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../data/skins/Luxez-Flat/result/result.luaskin");

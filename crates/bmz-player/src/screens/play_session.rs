@@ -772,6 +772,10 @@ fn skin_offsets_from_profile(profile: &ProfileConfig, key_mode: KeyMode) -> Vec<
         .skin
         .history
         .get(play_skin_path)
+        // Older profiles keep the currently edited offsets in `skin.offsets` while
+        // still containing an empty per-skin history entry.  Treat that empty entry
+        // as missing so the saved values are not discarded at play startup.
+        .filter(|entry| !entry.offsets.is_empty())
         .map(|entry| entry.offsets.as_slice())
         .unwrap_or(profile.skin.offsets.as_slice());
     offsets
@@ -967,6 +971,33 @@ pub fn preload_play_session_reusing_sample_bank(
         applied_arrange: imported.applied_arrange,
         score_key: imported.score_key,
     })
+}
+
+/// Rebuild only the audio side of an already transformed chart.
+///
+/// Same-arrange quick retry can keep the exact chart/BGA resources, but the
+/// sound bank is rebuilt from that chart so every `SoundId` is paired with the
+/// asset declared by the retried session.  This intentionally does not carry
+/// mixer voices, scheduled sounds, or any other playback state across retries.
+pub fn preload_play_session_reloading_audio_with_progress(
+    chart: Arc<PlayableChart>,
+    sample_rate: u32,
+    normalization_gain: f32,
+    applied_arrange: AppliedArrange,
+    score_key: ScoreKey,
+    on_progress: impl FnMut(usize, usize),
+) -> PreloadedPlaySession {
+    let mut loader = FfmpegSampleLoader::default();
+    let (audio, sample_report) =
+        build_audio_engine_for_chart_with_progress(&chart, sample_rate, &mut loader, on_progress);
+    PreloadedPlaySession {
+        chart,
+        audio,
+        sample_report,
+        normalization_gain,
+        applied_arrange,
+        score_key,
+    }
 }
 
 struct TransformedPlayChart {
@@ -3029,6 +3060,30 @@ mod tests {
     }
 
     #[test]
+    fn build_game_session_falls_back_to_legacy_offsets_for_empty_skin_history() {
+        use crate::config::profile_config::{SkinHistoryEntryConfig, SkinOffsetConfig};
+
+        let mut profile = ProfileConfig::new_default("default", "Default", 1);
+        profile.skin.play7 = "resource:skins/ECFN/play/play7.luaskin".to_string();
+        profile.skin.offsets = vec![
+            SkinOffsetConfig { id: 43, a: 180, ..Default::default() },
+            SkinOffsetConfig { id: 44, a: 110, ..Default::default() },
+        ];
+        profile.skin.history.insert(profile.skin.play7.clone(), SkinHistoryEntryConfig::default());
+
+        let session =
+            build_game_session(Arc::new(chart()), &profile, PlaySessionOptions::default());
+
+        assert_eq!(
+            session.skin_offsets,
+            vec![
+                PlaySkinOffset { id: 43, x: 0, y: 0, w: 0, h: 0, r: 0, a: 180 },
+                PlaySkinOffset { id: 44, x: 0, y: 0, w: 0, h: 0, r: 0, a: 110 },
+            ]
+        );
+    }
+
+    #[test]
     fn build_game_session_clamps_profile_hispeed() {
         let mut profile = ProfileConfig::new_default("default", "Default", 1);
         profile.lane.hispeed = 11.0;
@@ -3348,6 +3403,43 @@ mod tests {
         assert_eq!(prepared.audio.mixer.output_sample_rate, 48_000);
         assert!(matches!(prepared.sample_report[0].status, LoadedSampleStatus::Loaded));
         assert!(prepared.audio.samples.get(SoundId(0)).is_some());
+
+        std::fs::remove_file(path).unwrap();
+        std::fs::remove_file(wav_path).unwrap();
+    }
+
+    #[test]
+    fn retry_audio_reload_rebuilds_samples_from_cached_chart() {
+        let (path, wav_path) = write_temp_bms_with_wav(
+            "\
+#TITLE Retry audio
+#BPM 120
+#WAV01 test.wav
+#00001:01
+#00011:01
+",
+        );
+        let imported = import_bms_chart(&path, None, true).unwrap();
+        let chart = Arc::new(imported.chart);
+        let score_key =
+            ScoreKey::new(chart.identity.file_sha256, crate::ln_policy::LnScorePolicy::AutoLn);
+        let mut progress = Vec::new();
+
+        let preloaded = preload_play_session_reloading_audio_with_progress(
+            Arc::clone(&chart),
+            48_000,
+            0.75,
+            normal_applied_arrange(),
+            score_key,
+            |loaded, total| progress.push((loaded, total)),
+        );
+
+        assert!(Arc::ptr_eq(&preloaded.chart, &chart));
+        assert_eq!(preloaded.normalization_gain, 0.75);
+        assert_eq!(preloaded.score_key, score_key);
+        assert!(matches!(preloaded.sample_report[0].status, LoadedSampleStatus::Loaded));
+        assert!(preloaded.audio.samples.get(SoundId(0)).is_some());
+        assert_eq!(progress.last(), Some(&(1, 1)));
 
         std::fs::remove_file(path).unwrap();
         std::fs::remove_file(wav_path).unwrap();

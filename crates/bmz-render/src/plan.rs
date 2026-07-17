@@ -890,6 +890,7 @@ fn plan_play(
         key_mode,
         select_arrange_index: crate::skin::select_arrange_index(&snapshot.arrange),
         select_arrange_2p_index: crate::skin::select_arrange_index(&snapshot.arrange_2p),
+        select_target_index: crate::skin::play_target_image_index(&snapshot.target),
         select_extended_arrange_index: crate::skin::extended_arrange_index(&snapshot.arrange),
         select_extended_arrange_2p_index: crate::skin::extended_arrange_index(&snapshot.arrange_2p),
         combo: snapshot.combo,
@@ -5034,6 +5035,52 @@ mod tests {
             command,
             DrawCommand::Image { texture, uv, .. }
                 if *texture == TextureId(77) && (uv.x - 20.0 / 30.0).abs() < 0.001
+        )));
+    }
+
+    #[test]
+    fn play_plan_uses_beatoraja_target_list_index_for_skin_imageset() {
+        let document: crate::skin::SkinDocument = serde_json::from_str(
+            r#"
+            {
+                "type": 0,
+                "w": 100,
+                "h": 100,
+                "source": [{ "id": 1, "path": "target.png" }],
+                "image": [
+                    { "id": "target", "src": 1, "x": 0, "y": 0, "w": 10, "h": 110, "divy": 11, "len": 11, "ref": 41 }
+                ],
+                "destination": [
+                    { "id": "target", "dst": [{ "time": 0, "x": 10, "y": 20, "w": 20, "h": 10 }] }
+                ]
+            }
+            "#,
+        )
+        .unwrap();
+        let source_texture = crate::skin::SkinDocumentTexture {
+            source_id: "1".to_string(),
+            texture: crate::skin::SkinTextureId(78),
+            source_size: crate::skin::SkinImageSize { width: 10.0, height: 110.0 },
+        };
+        let skin = SkinContext::from_manifest_and_document(
+            SkinManifest::default(),
+            document,
+            [source_texture],
+        );
+        let snapshot = RenderSnapshot { target: "RANK_AAA".to_string(), ..Default::default() };
+
+        let plan = DrawPlan::from_scene_with_skin(
+            &AppSceneSnapshot::Play(snapshot),
+            &skin,
+            &mut crate::skin::DynamicTimerRuntime::default(),
+        );
+
+        // beatoraja の11段階では AAA は 7 番目。BMZ の選択肢に A+/AA+/AAA+
+        // がなくても、その分を詰めずに元の画像行を選ぶ。
+        assert!(plan.commands.iter().any(|command| matches!(
+            command,
+            DrawCommand::Image { texture, uv, .. }
+                if *texture == TextureId(78) && (uv.y - 70.0 / 110.0).abs() < 0.001
         )));
     }
 

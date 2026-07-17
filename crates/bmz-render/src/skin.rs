@@ -12068,7 +12068,7 @@ fn select_bottom_shiftable_gauge_index(mode: &str) -> usize {
 
 /// beatoraja の既定 target list と、play skin の target graph (ref 41/77) が
 /// 使う 11 段階の画像 index。選曲画面用の BMZ target 列挙順とは別物。
-fn play_target_image_index(target: &str) -> usize {
+pub(crate) fn play_target_image_index(target: &str) -> usize {
     match target {
         "RANK_A" | "A" => 1,
         "RANK_AA-" => 3,

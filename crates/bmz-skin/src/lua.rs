@@ -1529,6 +1529,10 @@ impl MainStateProbe {
         }
         if matches!(self.mode, MainStateProbeMode::RuntimeStub) {
             if (1001..=1003).contains(&ref_id) {
+                if let Some(value) = self.text_values.get(&ref_id).cloned() {
+                    self.record_load_time_text_dependency(ref_id, &value);
+                    return value;
+                }
                 return format!(
                     "{LUA_TEXT_REF_SENTINEL_PREFIX}{ref_id}{LUA_TEXT_REF_SENTINEL_SUFFIX}"
                 );
