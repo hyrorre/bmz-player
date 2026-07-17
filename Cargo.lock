@@ -539,7 +539,7 @@ dependencies = [
 
 [[package]]
 name = "bmz-audio"
-version = "0.1.9"
+version = "0.1.10"
 dependencies = [
  "anyhow",
  "bmz-chart",
@@ -554,7 +554,7 @@ dependencies = [
 
 [[package]]
 name = "bmz-chart"
-version = "0.1.9"
+version = "0.1.10"
 dependencies = [
  "bms-rs",
  "bmz-core",
@@ -570,21 +570,21 @@ dependencies = [
 
 [[package]]
 name = "bmz-core"
-version = "0.1.9"
+version = "0.1.10"
 dependencies = [
  "serde",
 ]
 
 [[package]]
 name = "bmz-ffmpeg"
-version = "0.1.9"
+version = "0.1.10"
 dependencies = [
  "ffmpeg-next",
 ]
 
 [[package]]
 name = "bmz-font"
-version = "0.1.9"
+version = "0.1.10"
 dependencies = [
  "ab_glyph",
  "font-kit",
@@ -592,7 +592,7 @@ dependencies = [
 
 [[package]]
 name = "bmz-gameplay"
-version = "0.1.9"
+version = "0.1.10"
 dependencies = [
  "anyhow",
  "bmz-audio",
@@ -604,7 +604,7 @@ dependencies = [
 
 [[package]]
 name = "bmz-player"
-version = "0.1.9"
+version = "0.1.10"
 dependencies = [
  "anyhow",
  "base64",
@@ -644,7 +644,7 @@ dependencies = [
 
 [[package]]
 name = "bmz-render"
-version = "0.1.9"
+version = "0.1.10"
 dependencies = [
  "ab_glyph",
  "anyhow",
@@ -668,7 +668,7 @@ dependencies = [
 
 [[package]]
 name = "bmz-skin"
-version = "0.1.9"
+version = "0.1.10"
 dependencies = [
  "anyhow",
  "bmz-skin-document",
@@ -681,7 +681,7 @@ dependencies = [
 
 [[package]]
 name = "bmz-skin-convert"
-version = "0.1.9"
+version = "0.1.10"
 dependencies = [
  "anyhow",
  "bmz-skin",
@@ -690,7 +690,7 @@ dependencies = [
 
 [[package]]
 name = "bmz-skin-document"
-version = "0.1.9"
+version = "0.1.10"
 dependencies = [
  "anyhow",
  "bmz-core",
@@ -700,7 +700,7 @@ dependencies = [
 
 [[package]]
 name = "bmz-video"
-version = "0.1.9"
+version = "0.1.10"
 dependencies = [
  "anyhow",
  "bmz-ffmpeg",

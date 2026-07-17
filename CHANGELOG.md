@@ -1,5 +1,27 @@
 # CHANGELOG
 
+## v0.1.10
+
+### 改善
+
+- スキン offset の保存と復元を key mode / slot 単位に分離しました。
+  - 12 スロットごとに offset を保存し、旧形式の共通設定と path 単位の履歴は互換移行します。
+  - プレイ開始前、セッション生成、ライブ反映で現在のスキン設定を一貫して使用するようにしました。
+
+- FPS 表示を安定化しました。
+  - 右上のオーバーレイと skin ref 20 に、beatoraja と同じ秒単位の確定 FPS を表示するようにしました。
+  - フレーム間隔の EMA による表示の揺れと、オーバーレイ・スキン間の値の乖離を解消しました。
+
+### 修正
+
+- プレイ開始時に古い skin history の offset / height が復元され、現在の Notes offset と異なる表示になる問題を修正しました。
+- Windows release packaging で FFmpeg の Debug 構成までビルドされ、処理時間が増えていた問題を修正しました。
+
+### テスト・開発環境
+
+- スキン slot 分離、旧設定・履歴移行、offset 優先順位、FPS 表示の回帰テストを追加・更新しました。
+- Windows 配布用に Release 専用 vcpkg triplet と staging を追加し、packaging / licenses ドキュメントを更新しました。
+
 ## v0.1.9
 
 ### 改善
