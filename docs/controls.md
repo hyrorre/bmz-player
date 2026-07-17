@@ -128,7 +128,7 @@ favorite 操作は invisible を使わず、登録済みなら解除、未登録
 | E1 hold + Scratch Up/Down | レーンカバーを上げる / 下げる |
 | E2 hold + KEY1/3/5/7 | 緑数字を下げる。9K では KEY1/3/5 |
 | E2 hold + KEY2/4/6 | 緑数字を上げる |
-| E2 hold + Scratch Up/Down | 緑数字を上げる / 下げる |
+| E2 hold + Scratch Up/Down | 緑数字を下げる / 上げる |
 | E1 double press | レーンカバー表示を切替 |
 | Escape | プレイを中断して選曲へ戻る |
 | E1+E2 hold | 一定時間長押しでプレイを中断 |

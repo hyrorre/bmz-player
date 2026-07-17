@@ -126,14 +126,32 @@ pub(super) fn list_table_entries(
     conn: &Connection,
     source_url: &str,
 ) -> Result<Vec<TableEntryRow>> {
+    list_table_entries_filtered(conn, source_url, None)
+}
+
+/// Lists entries at one level of a difficulty table without joining local charts.
+pub(super) fn list_table_entries_at_level(
+    conn: &Connection,
+    source_url: &str,
+    level: &str,
+) -> Result<Vec<TableEntryRow>> {
+    list_table_entries_filtered(conn, source_url, Some(level))
+}
+
+fn list_table_entries_filtered(
+    conn: &Connection,
+    source_url: &str,
+    level: Option<&str>,
+) -> Result<Vec<TableEntryRow>> {
     let sql = "
         SELECT dte.level, dte.md5, dte.sha256, dte.title, dte.artist, dte.comment
         FROM difficulty_table_entries dte
         JOIN difficulty_tables dt ON dt.id = dte.table_id
-        WHERE dt.source_url = ?1";
+        WHERE dt.source_url = ?1
+          AND (?2 IS NULL OR dte.level = ?2)";
 
     let mut stmt = conn.prepare(sql)?;
-    let rows = stmt.query_map(params![source_url], |row| {
+    let rows = stmt.query_map(params![source_url, level], |row| {
         Ok(TableEntryRow {
             level: row.get(0)?,
             md5: row.get(1)?,
@@ -320,5 +338,18 @@ mod tests {
         assert_eq!(entries.len(), 2);
         assert_eq!(entries[0].title, "Song A");
         assert_eq!(entries[1].title, "Song B");
+    }
+
+    #[test]
+    fn list_table_entries_at_level_filters_in_sql() {
+        let mut conn = open_db();
+        let table = sample_table("https://example.com/");
+        upsert_difficulty_table(&mut conn, &table).unwrap();
+
+        let rows = list_table_entries_at_level(&conn, "https://example.com/", "2").unwrap();
+
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].level, "2");
+        assert_eq!(rows[0].title, "Song B");
     }
 }

@@ -1704,6 +1704,15 @@ fn course_result_summary_for_skin(course: &CourseResultSummary) -> ResultSummary
     let skin_best_score = course.previous_best_score.as_ref();
     let skin_best_clear_type =
         skin_best_score.and_then(|best| ClearType::from_label(&best.clear_type));
+    // A course target is the sum of the per-stage pacemaker targets.  Keeping
+    // this in the aggregate ResultSummary makes the standard Result value refs
+    // (121/151, 122/123, 157/158 and signed diff 153) work for course skins too.
+    // If even one played stage had no target, there is no meaningful course
+    // target to display.
+    let target_ex_score = course
+        .entry_summaries
+        .iter()
+        .try_fold(0_u32, |total, summary| total.checked_add(summary.target_ex_score?));
 
     ResultSummary {
         clear_type: course.final_clear_type,
@@ -1753,7 +1762,7 @@ fn course_result_summary_for_skin(course: &CourseResultSummary) -> ResultSummary
         previous_best_clear_type: skin_best_clear_type,
         previous_best_max_combo: skin_best_score.map(|best| best.max_combo),
         previous_best_bp: skin_best_score.map(|best| best.bp),
-        target_ex_score: None,
+        target_ex_score,
         target_max_combo: None,
         target_bp: None,
         target_clear_type: None,
@@ -5334,8 +5343,9 @@ impl WinitApp {
                     );
                 }
                 PlayAnalogOptionMode::GreenNumber => {
-                    let delta = green_number_change_step(green_number_change_from_lane(change))
-                        * steps.abs();
+                    let delta =
+                        green_number_change_step(green_number_change_from_analog_steps(steps))
+                            * steps.abs();
                     if apply_green_number_step_to_session(session, delta, speed_locked) {
                         tracing::info!(
                             hispeed = session.hispeed,
@@ -5356,8 +5366,9 @@ impl WinitApp {
                     ));
                 }
                 PlayAnalogOptionMode::GreenNumber => {
-                    let delta = green_number_change_step(green_number_change_from_lane(change))
-                        * steps.abs();
+                    let delta =
+                        green_number_change_step(green_number_change_from_analog_steps(steps))
+                            * steps.abs();
                     self.apply_pending_play_lane_action(PendingPlayLaneAction::GreenNumberDelta(
                         delta,
                     ));
@@ -9958,6 +9969,11 @@ impl WinitApp {
             self.active_play.as_ref().map(|active| active.running.session.hispeed),
             "quick retry",
         );
+        if let Some(active) = &mut self.active_play
+            && let Err(error) = active.running.pause_audio()
+        {
+            tracing::warn!(%error, "failed to stop previous play audio for quick retry");
+        }
         self.active_play = None;
         self.play_ending = None;
         self.finished_play = None;
@@ -18652,11 +18668,10 @@ fn lane_cover_change_step(change: LaneCoverChange) -> f32 {
     }
 }
 
-fn green_number_change_from_lane(change: LaneCoverChange) -> GreenNumberChange {
-    match change {
-        LaneCoverChange::Up => GreenNumberChange::Up,
-        LaneCoverChange::Down => GreenNumberChange::Down,
-    }
+/// アナログスクラッチによる緑数字操作は、レーンカバー操作とは増減方向が逆。
+/// 正の step (Scratch Down) で緑数字を上げ、負の step (Scratch Up) で下げる。
+fn green_number_change_from_analog_steps(steps: i32) -> GreenNumberChange {
+    if steps > 0 { GreenNumberChange::Up } else { GreenNumberChange::Down }
 }
 
 fn green_number_change_step(change: GreenNumberChange) -> i32 {
@@ -21562,7 +21577,7 @@ mod tests {
                 previous_best_clear_type: None,
                 previous_best_max_combo: None,
                 previous_best_bp: None,
-                target_ex_score: None,
+                target_ex_score: Some(ex_score + 40),
                 target_max_combo: None,
                 target_bp: None,
                 target_clear_type: None,
@@ -21701,6 +21716,7 @@ mod tests {
         assert_eq!(summary.previous_best_ex_score, Some(300));
         assert_eq!(summary.previous_best_clear_type, Some(ClearType::Normal));
         assert_eq!(summary.previous_best_bp, Some(12));
+        assert_eq!(summary.target_ex_score, Some(400));
         let number_values = result_lua_runtime_number_values_for_summary(&summary);
         assert_eq!(number_values.get(&74), Some(&400));
         assert_eq!(number_values.get(&110), Some(&160));
@@ -23102,6 +23118,12 @@ mod tests {
         assert_eq!(play_analog_lane_cover_delta("Axis1", -4, &gamepad_keys), Some(4));
         assert_eq!(play_analog_lane_cover_delta("Axis2", -4, &gamepad_keys), None);
         assert_eq!(play_analog_lane_cover_delta("Axis1", 0, &gamepad_keys), None);
+    }
+
+    #[test]
+    fn play_analog_green_number_uses_opposite_direction_from_lane_cover() {
+        assert_eq!(green_number_change_from_analog_steps(1), GreenNumberChange::Up);
+        assert_eq!(green_number_change_from_analog_steps(-1), GreenNumberChange::Down);
     }
 
     #[test]

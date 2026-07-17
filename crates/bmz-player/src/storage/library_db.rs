@@ -913,7 +913,20 @@ impl LibraryDatabase {
         &self,
         source_url: &str,
     ) -> Result<Vec<TableEntryListItem>> {
-        let rows = super::difficulty_table_db::list_table_entries(&self.conn, source_url)?;
+        self.list_table_entries_with_chart_at_level(source_url, None)
+    }
+
+    pub fn list_table_entries_with_chart_at_level(
+        &self,
+        source_url: &str,
+        level: Option<&str>,
+    ) -> Result<Vec<TableEntryListItem>> {
+        let rows = match level {
+            Some(level) => super::difficulty_table_db::list_table_entries_at_level(
+                &self.conn, source_url, level,
+            )?,
+            None => super::difficulty_table_db::list_table_entries(&self.conn, source_url)?,
+        };
         let md5_refs: Vec<&str> =
             rows.iter().filter(|row| row.md5.len() >= 24).map(|row| row.md5.as_str()).collect();
         let sha256_refs: Vec<&str> = rows

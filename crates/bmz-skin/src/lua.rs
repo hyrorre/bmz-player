@@ -3664,6 +3664,7 @@ fn lua_table_to_json(
         );
     }
     repair_result_table_title_text(path, &mut object);
+    repair_result_course_title_text(path, &mut object);
     Ok(JsonValue::Object(object))
 }
 
@@ -3747,6 +3748,52 @@ fn repair_result_table_title_text(path: &str, object: &mut JsonMap<String, JsonV
         "value_expr".to_string(),
         JsonValue::String(SKIN_EXPR_RESULT_TABLE_TITLE.to_string()),
     );
+}
+
+/// ModernChic Result builds `bottomCourse` by evaluating
+/// `main_state.text(FULLTITLE)` while the Lua skin is loaded.  The value is
+/// runtime state in beatoraja, so replace the empty load-time stub with the
+/// corresponding text ref rather than permanently baking in an empty string.
+fn repair_result_course_title_text(path: &str, object: &mut JsonMap<String, JsonValue>) {
+    if !path.contains(".text[")
+        || object.get("id").and_then(JsonValue::as_str) != Some("bottomCourse")
+        || object.get("constantText").and_then(JsonValue::as_str) != Some("")
+    {
+        return;
+    }
+    object.remove("constantText");
+    object.insert("ref".to_string(), JsonValue::Number(JsonNumber::from(12)));
+}
+
+#[cfg(test)]
+mod result_course_title_repair_tests {
+    use super::*;
+
+    #[test]
+    fn replaces_empty_load_time_course_title_with_full_title_ref() {
+        let mut object = JsonMap::from_iter([
+            ("id".to_string(), JsonValue::String("bottomCourse".to_string())),
+            ("constantText".to_string(), JsonValue::String(String::new())),
+        ]);
+
+        repair_result_course_title_text("$.text[2]", &mut object);
+
+        assert_eq!(object.get("ref"), Some(&JsonValue::Number(JsonNumber::from(12))));
+        assert!(!object.contains_key("constantText"));
+    }
+
+    #[test]
+    fn preserves_unrelated_empty_constant_text() {
+        let mut object = JsonMap::from_iter([
+            ("id".to_string(), JsonValue::String("other".to_string())),
+            ("constantText".to_string(), JsonValue::String(String::new())),
+        ]);
+
+        repair_result_course_title_text("$.text[2]", &mut object);
+
+        assert_eq!(object.get("constantText"), Some(&JsonValue::String(String::new())));
+        assert!(!object.contains_key("ref"));
+    }
 }
 
 fn keylogger_graph_value_expr_from_id(id: &str) -> Option<String> {

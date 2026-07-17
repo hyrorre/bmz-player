@@ -3765,7 +3765,7 @@ impl SkinDocumentRenderExt for SkinDocument {
             select_bottom_shiftable_gauge_index: select_bottom_shiftable_gauge_index(
                 &snapshot.bottom_shiftable_gauge,
             ),
-            select_target_index: select_target_index(&snapshot.target),
+            select_target_index: play_target_image_index(&snapshot.target),
             select_bga_index: select_bga_index(&snapshot.bga),
             judge_timing_offset_ms: snapshot.judge_timing_offset_ms,
             judge_timing_auto_adjust: snapshot.judge_timing_auto_adjust,
@@ -12056,8 +12056,21 @@ fn select_bottom_shiftable_gauge_index(mode: &str) -> usize {
     }
 }
 
-fn select_target_index(target: &str) -> usize {
-    select_target_index_for_name(target).unwrap_or(0)
+/// beatoraja の既定 target list と、play skin の target graph (ref 41/77) が
+/// 使う 11 段階の画像 index。選曲画面用の BMZ target 列挙順とは別物。
+fn play_target_image_index(target: &str) -> usize {
+    match target {
+        "RANK_A" | "A" => 1,
+        "RANK_AA-" => 3,
+        "RANK_AA" | "AA" => 4,
+        "RANK_AAA-" => 6,
+        "RANK_AAA" | "AAA" => 7,
+        "RANK_MAX-" => 9,
+        "MAX" => 10,
+        // BMZ 固有の動的 target は専用 sprite を持たないため、先頭へ
+        // fallback する（従来の NONE と同じ扱い）。
+        _ => 0,
+    }
 }
 
 fn select_bga_index(bga: &str) -> usize {
@@ -22493,24 +22506,37 @@ mod tests {
 
     #[test]
     fn select_target_index_maps_fixed_targets() {
-        assert_eq!(select_target_index("NONE"), 0);
-        assert_eq!(select_target_index("RANK_A"), 1);
-        assert_eq!(select_target_index("RANK_AA-"), 2);
-        assert_eq!(select_target_index("RANK_AA"), 3);
-        assert_eq!(select_target_index("RANK_AAA-"), 4);
-        assert_eq!(select_target_index("RANK_AAA"), 5);
-        assert_eq!(select_target_index("RANK_MAX-"), 6);
-        assert_eq!(select_target_index("MAX"), 7);
-        assert_eq!(select_target_index("RANK_NEXT"), 8);
-        assert_eq!(select_target_index("IR_TOP"), 9);
-        assert_eq!(select_target_index("IR_NEXT"), 10);
-        assert_eq!(select_target_index("RIVAL TOP"), 11);
-        assert_eq!(select_target_index("RIVAL NEXT"), 12);
-        assert_eq!(select_target_index("RIVAL"), 11);
-        assert_eq!(select_target_index("AAA"), 5);
-        assert_eq!(select_target_index("AA"), 3);
-        assert_eq!(select_target_index("A"), 1);
-        assert_eq!(select_target_index("B"), 1);
+        let index = |target| select_target_index_for_name(target).unwrap_or(0);
+        assert_eq!(index("NONE"), 0);
+        assert_eq!(index("RANK_A"), 1);
+        assert_eq!(index("RANK_AA-"), 2);
+        assert_eq!(index("RANK_AA"), 3);
+        assert_eq!(index("RANK_AAA-"), 4);
+        assert_eq!(index("RANK_AAA"), 5);
+        assert_eq!(index("RANK_MAX-"), 6);
+        assert_eq!(index("MAX"), 7);
+        assert_eq!(index("RANK_NEXT"), 8);
+        assert_eq!(index("IR_TOP"), 9);
+        assert_eq!(index("IR_NEXT"), 10);
+        assert_eq!(index("RIVAL TOP"), 11);
+        assert_eq!(index("RIVAL NEXT"), 12);
+        assert_eq!(index("RIVAL"), 11);
+        assert_eq!(index("AAA"), 5);
+        assert_eq!(index("AA"), 3);
+        assert_eq!(index("A"), 1);
+        assert_eq!(index("B"), 1);
+    }
+
+    #[test]
+    fn play_target_image_index_matches_beatoraja_default_target_list() {
+        assert_eq!(play_target_image_index("RANK_A"), 1);
+        assert_eq!(play_target_image_index("RANK_AA-"), 3);
+        assert_eq!(play_target_image_index("RANK_AA"), 4);
+        assert_eq!(play_target_image_index("RANK_AAA-"), 6);
+        assert_eq!(play_target_image_index("RANK_AAA"), 7);
+        assert_eq!(play_target_image_index("RANK_MAX-"), 9);
+        assert_eq!(play_target_image_index("MAX"), 10);
+        assert_eq!(play_target_image_index("IR_TOP"), 0);
     }
 
     #[test]

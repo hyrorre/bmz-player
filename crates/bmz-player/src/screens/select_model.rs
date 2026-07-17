@@ -927,10 +927,8 @@ fn load_select_items_in_table_filtered(
         .map(|t| (t.name, t.symbol, t.level_order))
         .unwrap_or_default();
 
-    let mut entries = library_db.list_table_entries_with_chart(source_url)?;
-    if let Some(level) = level_filter {
-        entries.retain(|entry| entry.level == level);
-    }
+    let mut entries =
+        library_db.list_table_entries_with_chart_at_level(source_url, level_filter)?;
     entries = dedupe_table_entries(entries);
 
     // Sort by the table's level_order, then alphabetically by display title.
@@ -1796,10 +1794,8 @@ fn folder_summary_for_table(
     ln_policy_setting: LnPolicySetting,
     rule_mode: RuleMode,
 ) -> Result<SelectFolderSummary> {
-    let mut entries = library_db.list_table_entries_with_chart(source_url)?;
-    if let Some(level) = level_filter {
-        entries.retain(|entry| entry.level == level);
-    }
+    let mut entries =
+        library_db.list_table_entries_with_chart_at_level(source_url, level_filter)?;
     entries = dedupe_table_entries(entries);
     let charts = entries.into_iter().filter_map(|entry| entry.chart).collect();
     folder_summary_for_charts(score_db, charts, ln_policy_setting, rule_mode)
