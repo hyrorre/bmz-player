@@ -348,7 +348,7 @@ pub fn apply_course_constraints(options: &mut PlayStartOptions, constraints: &Co
 /// プレイヤー選択の Gauge から段位ゲージ (CLASS / EXCLASS / EXHARDCLASS) を決める。
 /// beatoraja `GrooveGauge.create`: `type<=2?CLASS:type==3?EXCLASS:EXHARDCLASS` 準拠。
 /// `AutoShift` は beatoraja に存在しないため EXHARDCLASS にマップする。
-fn course_gauge_for(gauge: GaugeTypeConfig) -> GaugeType {
+pub(crate) fn course_gauge_for(gauge: GaugeTypeConfig) -> GaugeType {
     match gauge {
         GaugeTypeConfig::AssistEasy | GaugeTypeConfig::Easy | GaugeTypeConfig::Normal => {
             GaugeType::Class

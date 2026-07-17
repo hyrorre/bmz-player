@@ -371,7 +371,9 @@ fn chart_ranking_to_result_ir_ranking(ranking: &IrRankingResult) -> ResultIrRank
     }
 }
 
-fn course_ranking_to_result_ir_ranking(ranking: &IrCourseRankingResult) -> ResultIrRanking {
+pub(crate) fn course_ranking_to_result_ir_ranking(
+    ranking: &IrCourseRankingResult,
+) -> ResultIrRanking {
     ResultIrRanking {
         scope: ranking.ranking.scope,
         entries: ranking

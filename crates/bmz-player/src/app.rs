@@ -3300,6 +3300,7 @@ impl WinitApp {
 
     fn select_snapshot(&self) -> SelectSnapshot {
         let selected = self.select_items.get(self.selected_index);
+        let selected_course_ir = self.selected_course_ir_target();
         let current_folder = match self.folder_stack.last() {
             None => String::new(),
             Some(path) if path == FAVORITE_ROOT_PATH => "FAVORITE".to_string(),
@@ -3436,9 +3437,15 @@ impl WinitApp {
             search_word_alpha,
             search_caret_byte_index,
             mouse_position: self.cursor_position_normalized(),
-            ir: self
-                .select_ir
-                .snapshot_for(&self.boot.profile_config.ir, self.selected_chart_sha256()),
+            ir: selected_course_ir.as_ref().map_or_else(
+                || {
+                    self.select_ir
+                        .snapshot_for(&self.boot.profile_config.ir, self.selected_chart_sha256())
+                },
+                |target| {
+                    self.select_ir.course_snapshot_for(&self.boot.profile_config.ir, Some(target))
+                },
+            ),
             rival: self
                 .select_ir
                 .rival_for(&self.boot.profile_config.ir, self.selected_chart_sha256()),
@@ -3455,6 +3462,19 @@ impl WinitApp {
             SelectItem::Chart(row) => row.score_sha256(),
             _ => None,
         }
+    }
+
+    fn selected_course_ir_target(&self) -> Option<crate::screens::select_ir::SelectCourseIrTarget> {
+        let SelectItem::Course(row) = self.select_items.get(self.selected_index)? else {
+            return None;
+        };
+        Some(crate::screens::select_ir::SelectCourseIrTarget {
+            course_hash: row.course_hash.clone()?,
+            gauge: crate::screens::play_start::course_gauge_for(self.gauge_option)
+                .as_str()
+                .to_string(),
+            ln_policy: self.boot.profile_config.play.ln_mode_policy.as_ir_str().to_string(),
+        })
     }
 
     fn select_note_display_duration_ms_for_skin(profile: &ProfileConfig) -> i32 {
@@ -12592,6 +12612,9 @@ impl WinitApp {
                 })
             })
             .flatten();
+        let selected_course_ir_target = matches!(scene_kind, AppSceneKind::Select)
+            .then(|| self.selected_course_ir_target())
+            .flatten();
         let practice_media_ready = self.practice_media_ready();
         let mut practice_panel_ctx = None;
         if let Some(practice) = &mut self.practice_session
@@ -12665,22 +12688,28 @@ impl WinitApp {
                 ln_profile,
             );
             let double_option = self.double_option.normalize_for_key_mode(key_mode).score_bucket();
-            let context = select_ir_cache_context(
-                self.boot.profile_config.play.ln_mode_policy,
-                ln_policy,
-                double_option,
-                self.boot.profile_config.play.rule_mode,
-            );
             let ir_config = self.boot.profile_config.ir.clone();
-            self.select_ir.update(
-                &ir_config,
-                &self.boot.profile_paths.root_dir,
-                &context,
-                ln_policy,
-                double_option,
-                self.boot.profile_config.play.rule_mode,
-                selected,
-            );
+            if let Some(course) = selected_course_ir_target {
+                let context =
+                    format!("course:{}:{}:{}", course.course_hash, course.gauge, course.ln_policy);
+                self.select_ir.update_course(&ir_config, &context, Some(course));
+            } else {
+                let context = select_ir_cache_context(
+                    self.boot.profile_config.play.ln_mode_policy,
+                    ln_policy,
+                    double_option,
+                    self.boot.profile_config.play.rule_mode,
+                );
+                self.select_ir.update(
+                    &ir_config,
+                    &self.boot.profile_paths.root_dir,
+                    &context,
+                    ln_policy,
+                    double_option,
+                    self.boot.profile_config.play.rule_mode,
+                    selected,
+                );
+            }
         }
         let result_ir_panel = self.result_ir.as_mut();
         let update_dialog = self.update_prompt.as_ref().map(UpdatePrompt::as_dialog);
@@ -17959,8 +17988,12 @@ fn select_snapshot_rows(
                     gauge_value: row.best_score.as_ref().map(|best| best.gauge_value),
                     bp: row.best_score.as_ref().map(|best| best.bp),
                     cb: row.best_score.as_ref().map(|best| best.cb),
-                    judge_counts: DisplayJudgeCounts::default(),
-                    fast_slow_counts: None,
+                    judge_counts: row
+                        .best_score
+                        .as_ref()
+                        .map(|best| best.judge_counts)
+                        .unwrap_or_default(),
+                    fast_slow_counts: row.best_score.as_ref().map(|best| best.fast_slow_counts),
                     play_count: row.best_score.as_ref().map(|best| best.play_count).unwrap_or(0),
                     clear_count: row.best_score.as_ref().map(|best| best.clear_count).unwrap_or(0),
                     replay_slots: row.replay_slots,
@@ -21772,6 +21805,8 @@ mod tests {
                 max_combo: 180,
                 bp: 4,
                 cb: 2,
+                judge_counts: Default::default(),
+                fast_slow_counts: Default::default(),
                 course_failed: false,
                 course_clear: true,
                 play_count: 3,
@@ -21790,6 +21825,8 @@ mod tests {
                 max_combo: 150,
                 bp: 12,
                 cb: 8,
+                judge_counts: Default::default(),
+                fast_slow_counts: Default::default(),
                 course_failed: false,
                 course_clear: true,
                 play_count: 2,
@@ -25057,6 +25094,19 @@ mod tests {
             max_combo: 345,
             bp: 12,
             cb: 8,
+            judge_counts: DisplayJudgeCounts {
+                pgreat: 500,
+                great: 100,
+                good: 20,
+                bad: 10,
+                poor: 5,
+                empty_poor: 3,
+            },
+            fast_slow_counts: bmz_render::snapshot::FastSlowJudgeCounts {
+                fast_pgreat: 300,
+                slow_pgreat: 200,
+                ..Default::default()
+            },
             course_failed: false,
             course_clear: true,
             play_count: 42,
@@ -25077,6 +25127,9 @@ mod tests {
         assert_eq!(snapshot_rows[0].bp, Some(12));
         assert_eq!(snapshot_rows[0].cb, Some(8));
         assert_eq!(snapshot_rows[0].max_combo, Some(345));
+        assert_eq!(snapshot_rows[0].judge_counts.pgreat, 500);
+        assert_eq!(snapshot_rows[0].judge_counts.empty_poor, 3);
+        assert_eq!(snapshot_rows[0].fast_slow_counts.unwrap().fast_pgreat, 300);
         assert_eq!(snapshot_rows[0].play_count, 42);
         assert_eq!(snapshot_rows[0].clear_count, 31);
         assert_eq!(snapshot_rows[0].replay_slots, [true, false, true, false]);
@@ -25520,6 +25573,7 @@ mod tests {
             .collect();
         SelectCourseRow {
             course_id: resolved_count as i64,
+            course_hash: None,
             title: format!("Course {resolved_count}/{entry_count}"),
             kind: bmz_core::course::CourseKind::Dan,
             constraints: bmz_core::course::CourseConstraints::default(),

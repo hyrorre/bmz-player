@@ -371,6 +371,8 @@ impl SelectChartRow {
 #[derive(Debug, Clone, PartialEq)]
 pub struct SelectCourseRow {
     pub course_id: i64,
+    /// Canonical IR course hash. None while any course entry is unresolved.
+    pub course_hash: Option<String>,
     pub title: String,
     pub kind: CourseKind,
     pub constraints: bmz_core::course::CourseConstraints,
@@ -764,6 +766,7 @@ fn build_select_course_row(
 
     SelectItem::Course(SelectCourseRow {
         course_id: stored.id,
+        course_hash: identity.as_ref().map(|identity| identity.course_hash.clone()),
         title: stored.definition.title,
         kind: stored.definition.kind,
         constraints: stored.definition.constraints,

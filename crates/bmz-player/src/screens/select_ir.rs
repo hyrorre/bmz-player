@@ -15,10 +15,12 @@ use bmz_render::scene::{
 };
 
 use crate::config::profile_config::IrConfig;
-use crate::ir::types::{IrRankingResult, IrRankingScope};
+use crate::ir::bmz_official::{BmzOfficialIrClient, IrCourseRankingRequest};
+use crate::ir::types::{IrCourseRankingResult, IrRankingResult, IrRankingScope};
 use crate::ln_policy::LnScorePolicy;
 use crate::screens::result_ir::{
-    ResultIrQuery, ResultIrRanking, ranking_to_ir_snapshot, result_ir_ranking_to_skin_snapshot,
+    ResultIrQuery, ResultIrRanking, course_ranking_to_result_ir_ranking, ranking_to_ir_snapshot,
+    result_ir_ranking_to_skin_snapshot,
 };
 use crate::select_options::DoubleOptionScoreBucket;
 use crate::select_options::TargetOption;
@@ -32,6 +34,15 @@ const CACHE_CAPACITY: usize = 256;
 
 type FetchResult =
     (String, [u8; 32], Instant, Result<(IrRankingResult, Option<IrRankingResult>), String>);
+type CourseFetchResult =
+    (String, SelectCourseIrTarget, Instant, Result<IrCourseRankingResult, String>);
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct SelectCourseIrTarget {
+    pub course_hash: String,
+    pub gauge: String,
+    pub ln_policy: String,
+}
 
 /// カーソル譜面ごとのキャッシュ済み IR 表示データ。
 #[derive(Debug, Clone)]
@@ -40,6 +51,12 @@ struct CachedChartIr {
     rival: Option<SelectRivalSnapshot>,
     global_ex_scores: Vec<u32>,
     rival_ex_scores: Vec<u32>,
+    completed_at: Instant,
+}
+
+#[derive(Debug, Clone)]
+struct CachedCourseIr {
+    ir: ResultIrSnapshot,
     completed_at: Instant,
 }
 
@@ -52,11 +69,17 @@ pub struct SelectIrRanking {
     context: String,
     sender: Sender<FetchResult>,
     receiver: Receiver<FetchResult>,
+    course_cache: HashMap<SelectCourseIrTarget, CachedCourseIr>,
+    course_in_flight: Option<(String, SelectCourseIrTarget, Instant)>,
+    course_pending: Option<(SelectCourseIrTarget, Instant)>,
+    course_sender: Sender<CourseFetchResult>,
+    course_receiver: Receiver<CourseFetchResult>,
 }
 
 impl Default for SelectIrRanking {
     fn default() -> Self {
         let (sender, receiver) = channel();
+        let (course_sender, course_receiver) = channel();
         Self {
             cache: HashMap::new(),
             in_flight: None,
@@ -64,6 +87,11 @@ impl Default for SelectIrRanking {
             context: String::new(),
             sender,
             receiver,
+            course_cache: HashMap::new(),
+            course_in_flight: None,
+            course_pending: None,
+            course_sender,
+            course_receiver,
         }
     }
 }
@@ -167,6 +195,85 @@ impl SelectIrRanking {
         }
     }
 
+    /// コース行用のグローバルIRランキングをデバウンス付きで取得する。
+    pub fn update_course(
+        &mut self,
+        ir_config: &IrConfig,
+        context: &str,
+        selected: Option<SelectCourseIrTarget>,
+    ) {
+        if self.context != context {
+            self.context = context.to_string();
+            self.clear();
+        }
+        while let Ok((result_context, target, requested_at, result)) =
+            self.course_receiver.try_recv()
+        {
+            if self.course_in_flight.as_ref().is_some_and(|(context, current, _)| {
+                context == &result_context && current == &target
+            }) {
+                self.course_in_flight = None;
+            }
+            if result_context != self.context {
+                continue;
+            }
+            if self
+                .course_cache
+                .get(&target)
+                .is_some_and(|entry| entry.completed_at >= requested_at)
+            {
+                continue;
+            }
+            let completed_at = Instant::now();
+            let ir = match result {
+                Ok(ranking) => result_ir_ranking_to_skin_snapshot(
+                    &course_ranking_to_result_ir_ranking(&ranking),
+                ),
+                Err(error) => {
+                    tracing::debug!(%error, "select course IR ranking fetch failed");
+                    ResultIrSnapshot { state: SkinIrState::Failed, ..Default::default() }
+                }
+            };
+            if self.course_cache.len() >= CACHE_CAPACITY && !self.course_cache.contains_key(&target)
+            {
+                self.course_cache.clear();
+            }
+            self.course_cache.insert(target, CachedCourseIr { ir, completed_at });
+        }
+
+        let Some(provider) = enabled_provider(ir_config) else {
+            return;
+        };
+        let Some(target) = selected else {
+            self.course_pending = None;
+            return;
+        };
+        if self.course_cache.contains_key(&target)
+            || self.course_in_flight.as_ref().is_some_and(|(_, current, _)| current == &target)
+        {
+            self.course_pending = None;
+            return;
+        }
+        match &self.course_pending {
+            Some((pending, since)) if pending == &target => {
+                if since.elapsed() >= FETCH_DEBOUNCE && self.course_in_flight.is_none() {
+                    self.course_pending = None;
+                    let requested_at = Instant::now();
+                    self.course_in_flight =
+                        Some((self.context.clone(), target.clone(), requested_at));
+                    spawn_course_fetch(
+                        provider.1,
+                        self.context.clone(),
+                        target,
+                        requested_at,
+                        self.course_sender.clone(),
+                    );
+                }
+            }
+            _ => self.course_pending = Some((target, Instant::now())),
+        }
+    }
+
     /// Result 画面でスコア送信と同時に取得した Global ranking を選曲キャッシュへ反映する。
     pub fn cache_result_global_ranking(
         &mut self,
@@ -245,6 +352,50 @@ impl SelectIrRanking {
             })
     }
 
+    pub fn course_snapshot_for(
+        &self,
+        ir_config: &IrConfig,
+        selected: Option<&SelectCourseIrTarget>,
+    ) -> ResultIrSnapshot {
+        if enabled_provider(ir_config).is_none() {
+            return ResultIrSnapshot::default();
+        }
+        let Some(target) = selected else {
+            return ResultIrSnapshot::default();
+        };
+        self.course_cache
+            .get(target)
+            .map(|entry| {
+                let mut snapshot = entry.ir.clone();
+                match snapshot.state {
+                    SkinIrState::Loaded => {
+                        snapshot.connect_success_ms = Some(elapsed_since_ms(entry.completed_at));
+                    }
+                    SkinIrState::Failed => {
+                        snapshot.connect_fail_ms = Some(elapsed_since_ms(entry.completed_at));
+                    }
+                    _ => {}
+                }
+                snapshot
+            })
+            .unwrap_or_else(|| {
+                let begin_ms = self
+                    .course_in_flight
+                    .as_ref()
+                    .filter(|(_, current, _)| current == target)
+                    .map(|(_, _, started_at)| elapsed_since_ms(*started_at));
+                ResultIrSnapshot {
+                    state: if begin_ms.is_some() {
+                        SkinIrState::Loading
+                    } else {
+                        SkinIrState::Waiting
+                    },
+                    connect_begin_ms: begin_ms,
+                    ..Default::default()
+                }
+            })
+    }
+
     /// 選択中譜面のライバルベスト (最上位 1 名)。未取得 / IR 未設定なら None。
     pub fn rival_for(
         &self,
@@ -285,6 +436,9 @@ impl SelectIrRanking {
         self.cache.clear();
         self.in_flight = None;
         self.pending = None;
+        self.course_cache.clear();
+        self.course_in_flight = None;
+        self.course_pending = None;
     }
 
     fn insert_entry(&mut self, sha256: [u8; 32], entry: CachedChartIr) {
@@ -342,6 +496,33 @@ fn spawn_fetch(
     });
 }
 
+fn spawn_course_fetch(
+    base_url: String,
+    context: String,
+    target: SelectCourseIrTarget,
+    requested_at: Instant,
+    sender: Sender<CourseFetchResult>,
+) {
+    tokio::spawn(async move {
+        let result = async {
+            let client = BmzOfficialIrClient::anonymous(&base_url)?;
+            client
+                .fetch_course_ranking(
+                    &target.course_hash,
+                    &IrCourseRankingRequest {
+                        gauge: target.gauge.clone(),
+                        ln_policy: target.ln_policy.clone(),
+                        limit: 20,
+                    },
+                )
+                .await
+        }
+        .await
+        .map_err(|error| format!("{error:#}"));
+        let _ = sender.send((context, target, requested_at, result));
+    });
+}
+
 /// rivals scope ランキングの先頭 (ライバル中ベスト) をスキン用に変換する。
 fn top_rival_snapshot(rivals: &IrRankingResult) -> Option<SelectRivalSnapshot> {
     let entry = rivals.ranking.entries.first()?;
@@ -391,8 +572,9 @@ mod tests {
         IrProviderConfig, IrProviderRoleConfig, IrSendPolicyConfig,
     };
     use crate::ir::types::{
-        IrJudgePayload, IrJudgeSidePayload, IrRankingBody, IrRankingChartRef, IrRankingEntry,
-        IrRankingPagination, IrRankingPlayer, IrRankingScore, IrRankingSelfRef,
+        IrCourseRankingBody, IrCourseRankingCourseRef, IrCourseRankingEntry, IrCourseRankingResult,
+        IrCourseRankingScore, IrJudgePayload, IrJudgeSidePayload, IrRankingBody, IrRankingChartRef,
+        IrRankingEntry, IrRankingPagination, IrRankingPlayer, IrRankingScore, IrRankingSelfRef,
     };
     use crate::screens::result_ir::ResultIrRankingEntry;
 
@@ -548,6 +730,62 @@ mod tests {
         select_ir.clear();
         let cleared = select_ir.snapshot_for(&ir_config(true), Some(sha));
         assert_eq!(cleared.state, SkinIrState::Waiting);
+    }
+
+    #[test]
+    fn course_fetch_result_populates_select_skin_ranking_rows() {
+        let mut select_ir = SelectIrRanking::default();
+        let target = SelectCourseIrTarget {
+            course_hash: "ab".repeat(32),
+            gauge: "Class".to_string(),
+            ln_policy: "auto".to_string(),
+        };
+        let requested_at = Instant::now();
+        select_ir.context = "course-context".to_string();
+        select_ir.course_in_flight =
+            Some((select_ir.context.clone(), target.clone(), requested_at));
+        select_ir
+            .course_sender
+            .send((
+                select_ir.context.clone(),
+                target.clone(),
+                requested_at,
+                Ok(IrCourseRankingResult {
+                    course: IrCourseRankingCourseRef { course_hash: target.course_hash.clone() },
+                    rule: None,
+                    ranking: IrCourseRankingBody {
+                        scope: IrRankingScope::Global,
+                        entries: vec![IrCourseRankingEntry {
+                            rank: 1,
+                            player: IrRankingPlayer {
+                                id: "player-1".to_string(),
+                                display_name: "CourseTop".to_string(),
+                            },
+                            score: IrCourseRankingScore {
+                                course_score_id: "course-score-1".to_string(),
+                                clear: "Hard".to_string(),
+                                course_clear: true,
+                                ex_score: 4321,
+                                max_combo: 999,
+                                bp: 12,
+                                device_type: None,
+                                played_at: None,
+                                verification: None,
+                            },
+                        }],
+                    },
+                }),
+            ))
+            .unwrap();
+
+        select_ir.update_course(&ir_config(true), "course-context", Some(target.clone()));
+        let snapshot = select_ir.course_snapshot_for(&ir_config(true), Some(&target));
+
+        assert_eq!(snapshot.state, SkinIrState::Loaded);
+        assert_eq!(snapshot.total_player, Some(1));
+        assert_eq!(snapshot.entries[0].rank, Some(1));
+        assert_eq!(snapshot.entries[0].ex_score, Some(4321));
+        assert_eq!(snapshot.entries[0].player_name.as_str(), "CourseTop");
     }
 
     #[test]
