@@ -19,15 +19,16 @@ use bmz_skin::{
 };
 use rayon::prelude::*;
 
-use crate::config::profile_config::SkinConfig;
+use crate::config::profile_config::{SkinConfig, SkinOffsetConfig};
 use crate::paths::{AppPaths, resolve_app_paths};
 
-/// `SkinConfig` から key_mode に対応するプレイスキン path / options / files を借用する。
+/// `SkinConfig` から key_mode に対応するプレイスキン path / options / files / offsets を借用する。
 pub struct PlaySkinSelection<'a> {
     pub key_mode: KeyMode,
     pub path: &'a str,
     pub options: &'a BTreeMap<String, String>,
     pub files: &'a BTreeMap<String, String>,
+    pub offsets: &'a [SkinOffsetConfig],
 }
 
 /// `SkinConfig` から key_mode に応じたプレイスキン設定の参照を取り出す。
@@ -38,48 +39,56 @@ pub fn play_skin_selection_for(skin: &SkinConfig, key_mode: KeyMode) -> PlaySkin
             path: skin.play5.as_str(),
             options: &skin.play5_options,
             files: &skin.play5_files,
+            offsets: &skin.play5_offsets,
         },
         KeyMode::K4 => PlaySkinSelection {
             key_mode,
             path: skin.play4.as_str(),
             options: &skin.play4_options,
             files: &skin.play4_files,
+            offsets: &skin.play4_offsets,
         },
         KeyMode::K6 => PlaySkinSelection {
             key_mode,
             path: skin.play6.as_str(),
             options: &skin.play6_options,
             files: &skin.play6_files,
+            offsets: &skin.play6_offsets,
         },
         KeyMode::K7 => PlaySkinSelection {
             key_mode,
             path: skin.play7.as_str(),
             options: &skin.play7_options,
             files: &skin.play7_files,
+            offsets: &skin.play7_offsets,
         },
         KeyMode::K8 => PlaySkinSelection {
             key_mode,
             path: skin.play8.as_str(),
             options: &skin.play8_options,
             files: &skin.play8_files,
+            offsets: &skin.play8_offsets,
         },
         KeyMode::K10 => PlaySkinSelection {
             key_mode,
             path: skin.play10.as_str(),
             options: &skin.play10_options,
             files: &skin.play10_files,
+            offsets: &skin.play10_offsets,
         },
         KeyMode::K14 => PlaySkinSelection {
             key_mode,
             path: skin.play14.as_str(),
             options: &skin.play14_options,
             files: &skin.play14_files,
+            offsets: &skin.play14_offsets,
         },
         KeyMode::K9 => PlaySkinSelection {
             key_mode,
             path: skin.play9.as_str(),
             options: &skin.play9_options,
             files: &skin.play9_files,
+            offsets: &skin.play9_offsets,
         },
     }
 }
@@ -4100,6 +4109,8 @@ mod tests {
         skin.play9_options.insert("e".to_string(), "p".to_string());
         skin.play10_files.insert("c".to_string(), "z.png".to_string());
         skin.play14_files.insert("d".to_string(), "w.png".to_string());
+        skin.play7_offsets.push(SkinOffsetConfig { id: 30, h: 7, ..Default::default() });
+        skin.play14_offsets.push(SkinOffsetConfig { id: 30, h: 14, ..Default::default() });
 
         let s4 = play_skin_selection_for(&skin, KeyMode::K4);
         assert_eq!(s4.path, "skin4.json");
@@ -4116,6 +4127,7 @@ mod tests {
         let s7 = play_skin_selection_for(&skin, KeyMode::K7);
         assert_eq!(s7.path, "skin7.json");
         assert!(s7.options.contains_key("b"));
+        assert_eq!(s7.offsets[0].h, 7);
 
         let s8 = play_skin_selection_for(&skin, KeyMode::K8);
         assert_eq!(s8.path, "skin8.json");
@@ -4132,6 +4144,7 @@ mod tests {
         let s14 = play_skin_selection_for(&skin, KeyMode::K14);
         assert_eq!(s14.path, "skin14.json");
         assert!(s14.files.contains_key("d"));
+        assert_eq!(s14.offsets[0].h, 14);
     }
 
     #[test]

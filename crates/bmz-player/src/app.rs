@@ -12797,13 +12797,14 @@ impl WinitApp {
     }
 
     fn apply_profile_skin_offsets_to_active_play(&mut self) {
-        let Some(active_play) = &mut self.active_play else {
+        let Some(key_mode) = self
+            .active_play
+            .as_ref()
+            .map(|active_play| active_play.running.session.chart.metadata.key_mode)
+        else {
             return;
         };
-        active_play.running.session.skin_offsets = self
-            .boot
-            .profile_config
-            .skin
+        let offsets = play_skin_selection_for(&self.boot.profile_config.skin, key_mode)
             .offsets
             .iter()
             .map(|offset| PlaySkinOffset {
@@ -12816,6 +12817,9 @@ impl WinitApp {
                 a: offset.a,
             })
             .collect();
+        if let Some(active_play) = &mut self.active_play {
+            active_play.running.session.skin_offsets = offsets;
+        }
     }
 
     /// 現在の profile config のスキンパスを renderer へ再適用する。

@@ -16,6 +16,7 @@ pub fn load_app_config(path: &Path) -> Result<AppConfig> {
 pub fn load_profile_config(path: &Path) -> Result<ProfileConfig> {
     let text = std::fs::read_to_string(path)?;
     let mut config: ProfileConfig = toml::from_str(&text)?;
+    config.skin.migrate_legacy_offsets();
     normalize_profile_input(&mut config.input);
     validate_play_inherit_config(&config.input).map_err(|error| anyhow::anyhow!("{error}"))?;
     Ok(config)

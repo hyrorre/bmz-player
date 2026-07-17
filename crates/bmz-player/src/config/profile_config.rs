@@ -794,8 +794,45 @@ pub struct SkinConfig {
     /// `.json` / `.lr2skin` で終わるパスは beatoraja スキンとして扱う。
     #[serde(default)]
     pub course_result: String,
-    #[serde(default)]
-    pub offsets: Vec<SkinOffsetConfig>,
+    /// 選曲スキンのオフセット設定。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub select_offsets: Vec<SkinOffsetConfig>,
+    /// 決定スキンのオフセット設定。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub decide_offsets: Vec<SkinOffsetConfig>,
+    /// 4K プレイスキンのオフセット設定。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub play4_offsets: Vec<SkinOffsetConfig>,
+    /// 5K プレイスキンのオフセット設定。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub play5_offsets: Vec<SkinOffsetConfig>,
+    /// 6K プレイスキンのオフセット設定。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub play6_offsets: Vec<SkinOffsetConfig>,
+    /// 7K プレイスキンのオフセット設定。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub play7_offsets: Vec<SkinOffsetConfig>,
+    /// 8K プレイスキンのオフセット設定。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub play8_offsets: Vec<SkinOffsetConfig>,
+    /// 9K プレイスキンのオフセット設定。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub play9_offsets: Vec<SkinOffsetConfig>,
+    /// 10K プレイスキンのオフセット設定。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub play10_offsets: Vec<SkinOffsetConfig>,
+    /// 14K プレイスキンのオフセット設定。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub play14_offsets: Vec<SkinOffsetConfig>,
+    /// リザルトスキンのオフセット設定。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub result_offsets: Vec<SkinOffsetConfig>,
+    /// コースリザルトスキンのオフセット設定。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub course_result_offsets: Vec<SkinOffsetConfig>,
+    /// v0.1.9 以前の全スロット共通オフセット。ロード時に各スロットへ移行する。
+    #[serde(rename = "offsets", default, skip_serializing)]
+    pub(crate) legacy_offsets: Vec<SkinOffsetConfig>,
     /// 選曲スキンのカスタマイズオプション選択 (オプション名 -> 選択肢名)。
     #[serde(default)]
     pub select_options: BTreeMap<String, String>,
@@ -868,12 +905,41 @@ pub struct SkinConfig {
     /// コースリザルトスキンのファイル選択。
     #[serde(default)]
     pub course_result_files: BTreeMap<String, String>,
-    /// スキンファイル path ごとのカスタマイズ履歴。
+    /// スキンスロットとファイル path ごとのカスタマイズ履歴。
     ///
     /// beatoraja の `skinHistory` 相当。スキンを切り替えても、各スキンの
     /// option / filepath / offset を前回値へ戻せるように保持する。
     #[serde(default)]
     pub history: BTreeMap<String, SkinHistoryEntryConfig>,
+}
+
+impl SkinConfig {
+    /// 旧形式の共通オフセットを、まだ個別設定がない全スロットへ引き継ぐ。
+    pub fn migrate_legacy_offsets(&mut self) {
+        let legacy_offsets = std::mem::take(&mut self.legacy_offsets);
+        if legacy_offsets.is_empty() {
+            return;
+        }
+
+        for offsets in [
+            &mut self.select_offsets,
+            &mut self.decide_offsets,
+            &mut self.play4_offsets,
+            &mut self.play5_offsets,
+            &mut self.play6_offsets,
+            &mut self.play7_offsets,
+            &mut self.play8_offsets,
+            &mut self.play9_offsets,
+            &mut self.play10_offsets,
+            &mut self.play14_offsets,
+            &mut self.result_offsets,
+            &mut self.course_result_offsets,
+        ] {
+            if offsets.is_empty() {
+                *offsets = legacy_offsets.clone();
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
@@ -1393,6 +1459,34 @@ mod tests {
         assert!(toml.contains("course_result = \"data/skins/result/course_result.luaskin\""));
         assert!(toml.contains("[course_result_options]"));
         assert!(toml.contains("[course_result_files]"));
+    }
+
+    #[test]
+    fn skin_config_migrates_legacy_offsets_to_each_slot() {
+        let mut skin: SkinConfig = toml::from_str(
+            r#"
+            [[offsets]]
+            id = 30
+            h = 12
+
+            [[play7_offsets]]
+            id = 30
+            h = 7
+            "#,
+        )
+        .unwrap();
+
+        skin.migrate_legacy_offsets();
+
+        assert_eq!(skin.select_offsets[0].h, 12);
+        assert_eq!(skin.play4_offsets[0].h, 12);
+        assert_eq!(skin.play7_offsets[0].h, 7);
+        assert_eq!(skin.course_result_offsets[0].h, 12);
+
+        let serialized = toml::to_string(&skin).unwrap();
+        assert!(!serialized.contains("[[offsets]]"));
+        assert!(serialized.contains("[[select_offsets]]"));
+        assert!(serialized.contains("[[play7_offsets]]"));
     }
 
     #[test]

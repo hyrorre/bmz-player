@@ -53,6 +53,7 @@ use crate::screens::practice::{
     PracticeProperty, apply_practice_property, apply_practice_start_gauge,
 };
 use crate::select_options::{ArrangeOption, DoubleOption, HsFixOption, TargetOption};
+use crate::skin_loader::play_skin_selection_for;
 use crate::storage::library_db::ChartNormalizationAnalysis;
 use crate::storage::library_db::LibraryDatabase;
 use crate::storage::score_db::ScoreKey;
@@ -297,7 +298,7 @@ pub fn apply_placeholder_session_visuals(
     // プロファイルのスキンオフセット (位置調整)。スクラッチ回転角は session が
     // 必要なので install 後の refresh に任せる。
     let mut offsets = bmz_render::skin_offset::SkinOffsetValues::default();
-    for offset in skin_offsets_from_profile(profile) {
+    for offset in skin_offsets_from_profile(profile, key_mode) {
         offsets.set(
             offset.id,
             bmz_render::skin_offset::SkinOffsetValue {
@@ -516,7 +517,7 @@ pub fn build_game_session_with_input_backend(
         hidden_enabled: hidden_enabled_from_profile(profile),
         hispeed_auto_adjust: profile.lane.hispeed_auto_adjust,
         hidden_cover: hidden_cover_from_profile(profile),
-        skin_offsets: skin_offsets_from_profile(profile),
+        skin_offsets: skin_offsets_from_profile(profile, key_mode),
         bga_enabled: bga_enabled_from_profile(profile, autoplay_enabled, is_replay),
         poor_bga_duration_us: poor_bga_duration_us_from_profile(profile),
         bga_stretch: bga_stretch_from_profile(profile),
@@ -764,12 +765,10 @@ fn bga_enabled_from_profile(profile: &ProfileConfig, autoplay: bool, replay: boo
     }
 }
 
-fn skin_offsets_from_profile(profile: &ProfileConfig) -> Vec<PlaySkinOffset> {
-    // `skin.offsets` is the active editor state. `skin.history` is only a cache
-    // restored into this field when the user switches skins; reading history here
-    // can resurrect a stale Notes offset after an update or an unsaved edit.
-    profile
-        .skin
+fn skin_offsets_from_profile(profile: &ProfileConfig, key_mode: KeyMode) -> Vec<PlaySkinOffset> {
+    // 各 key mode のアクティブな編集値だけを使う。`skin.history` はスキン切替時に
+    // このスロットへ復元するためのキャッシュであり、実行時に直接参照しない。
+    play_skin_selection_for(&profile.skin, key_mode)
         .offsets
         .iter()
         .copied()
@@ -2960,9 +2959,9 @@ mod tests {
     }
 
     #[test]
-    fn build_game_session_copies_profile_skin_offsets() {
+    fn build_game_session_copies_selected_play_slot_offsets() {
         let mut profile = ProfileConfig::new_default("default", "Default", 1);
-        profile.skin.offsets.push(crate::config::profile_config::SkinOffsetConfig {
+        profile.skin.play7_offsets.push(crate::config::profile_config::SkinOffsetConfig {
             id: 42,
             x: 1,
             y: 2,
@@ -2970,6 +2969,11 @@ mod tests {
             h: 4,
             r: 5,
             a: -6,
+        });
+        profile.skin.play14_offsets.push(crate::config::profile_config::SkinOffsetConfig {
+            id: 42,
+            h: 99,
+            ..Default::default()
         });
 
         let session =
@@ -2987,7 +2991,7 @@ mod tests {
 
         let mut profile = ProfileConfig::new_default("default", "Default", 1);
         profile.skin.play7 = "data/skins/ECFN/play/play7.luaskin".to_string();
-        profile.skin.offsets = vec![SkinOffsetConfig { id: 30, h: 12, ..Default::default() }];
+        profile.skin.play7_offsets = vec![SkinOffsetConfig { id: 30, h: 12, ..Default::default() }];
         profile.skin.history.insert(
             profile.skin.play7.clone(),
             SkinHistoryEntryConfig {
@@ -3011,7 +3015,7 @@ mod tests {
 
         let mut profile = ProfileConfig::new_default("default", "Default", 1);
         profile.skin.play7 = "resource:skins/ECFN/play/play7.luaskin".to_string();
-        profile.skin.offsets = vec![
+        profile.skin.play7_offsets = vec![
             SkinOffsetConfig { id: 43, a: 180, ..Default::default() },
             SkinOffsetConfig { id: 44, a: 110, ..Default::default() },
         ];

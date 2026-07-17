@@ -4542,7 +4542,18 @@ fn skin_reload_request_from_diff(before: &SkinConfig, after: &SkinConfig) -> Ski
     {
         request.course_result = true;
     }
-    request.offsets = before.offsets != after.offsets;
+    request.offsets = before.select_offsets != after.select_offsets
+        || before.decide_offsets != after.decide_offsets
+        || before.play4_offsets != after.play4_offsets
+        || before.play5_offsets != after.play5_offsets
+        || before.play6_offsets != after.play6_offsets
+        || before.play7_offsets != after.play7_offsets
+        || before.play8_offsets != after.play8_offsets
+        || before.play9_offsets != after.play9_offsets
+        || before.play10_offsets != after.play10_offsets
+        || before.play14_offsets != after.play14_offsets
+        || before.result_offsets != after.result_offsets
+        || before.course_result_offsets != after.course_result_offsets;
     request
 }
 
@@ -4730,6 +4741,41 @@ fn skin_slot_files_mut(skin: &mut SkinConfig, slot: SkinSlot) -> &mut BTreeMap<S
     }
 }
 
+fn skin_slot_offsets_mut(skin: &mut SkinConfig, slot: SkinSlot) -> &mut Vec<SkinOffsetConfig> {
+    match slot {
+        SkinSlot::Select => &mut skin.select_offsets,
+        SkinSlot::Decide => &mut skin.decide_offsets,
+        SkinSlot::Play4 => &mut skin.play4_offsets,
+        SkinSlot::Play5 => &mut skin.play5_offsets,
+        SkinSlot::Play6 => &mut skin.play6_offsets,
+        SkinSlot::Play7 => &mut skin.play7_offsets,
+        SkinSlot::Play8 => &mut skin.play8_offsets,
+        SkinSlot::Play9 => &mut skin.play9_offsets,
+        SkinSlot::Play10 => &mut skin.play10_offsets,
+        SkinSlot::Play14 => &mut skin.play14_offsets,
+        SkinSlot::Result => &mut skin.result_offsets,
+        SkinSlot::CourseResult => &mut skin.course_result_offsets,
+    }
+}
+
+fn skin_slot_history_key(slot: SkinSlot, path: &str) -> String {
+    let slot_name = match slot {
+        SkinSlot::Select => "select",
+        SkinSlot::Decide => "decide",
+        SkinSlot::Play4 => "play4",
+        SkinSlot::Play5 => "play5",
+        SkinSlot::Play6 => "play6",
+        SkinSlot::Play7 => "play7",
+        SkinSlot::Play8 => "play8",
+        SkinSlot::Play9 => "play9",
+        SkinSlot::Play10 => "play10",
+        SkinSlot::Play14 => "play14",
+        SkinSlot::Result => "result",
+        SkinSlot::CourseResult => "course_result",
+    };
+    format!("{slot_name}::{path}")
+}
+
 fn save_skin_slot_history(skin: &mut SkinConfig, slot: SkinSlot) {
     let path = skin_slot_path(skin, slot).trim().to_string();
     if path.is_empty() {
@@ -4737,21 +4783,28 @@ fn save_skin_slot_history(skin: &mut SkinConfig, slot: SkinSlot) {
     }
     let options = skin_slot_options_mut(skin, slot).clone();
     let files = skin_slot_files_mut(skin, slot).clone();
-    skin.history
-        .insert(path, SkinHistoryEntryConfig { options, files, offsets: skin.offsets.clone() });
+    let offsets = skin_slot_offsets_mut(skin, slot).clone();
+    skin.history.insert(
+        skin_slot_history_key(slot, &path),
+        SkinHistoryEntryConfig { options, files, offsets },
+    );
 }
 
 fn restore_skin_slot_history(skin: &mut SkinConfig, slot: SkinSlot) {
     let path = skin_slot_path(skin, slot).trim().to_string();
-    let Some(entry) = skin.history.get(&path).cloned() else {
+    let history_key = skin_slot_history_key(slot, &path);
+    let Some(entry) =
+        skin.history.get(&history_key).cloned().or_else(|| skin.history.get(&path).cloned())
+    else {
         skin_slot_options_mut(skin, slot).clear();
         skin_slot_files_mut(skin, slot).clear();
-        skin.offsets.clear();
+        skin_slot_offsets_mut(skin, slot).clear();
         return;
     };
+    skin.history.entry(history_key).or_insert_with(|| entry.clone());
     *skin_slot_options_mut(skin, slot) = entry.options;
     *skin_slot_files_mut(skin, slot) = entry.files;
-    skin.offsets = entry.offsets;
+    *skin_slot_offsets_mut(skin, slot) = entry.offsets;
 }
 
 /// プロファイルのスキン設定 (`SkinConfig`) を編集するパネル。
@@ -4904,7 +4957,7 @@ fn build_skin_panel(
                 select_root.as_deref(),
                 &mut skin.select_options,
                 &mut skin.select_files,
-                &mut skin.offsets,
+                &mut skin.select_offsets,
             );
             changed |= build_scene_skin_defs(
                 ui,
@@ -4913,7 +4966,7 @@ fn build_skin_panel(
                 decide_root.as_deref(),
                 &mut skin.decide_options,
                 &mut skin.decide_files,
-                &mut skin.offsets,
+                &mut skin.decide_offsets,
             );
             changed |= build_scene_skin_defs(
                 ui,
@@ -4922,7 +4975,7 @@ fn build_skin_panel(
                 play4_root.as_deref(),
                 &mut skin.play4_options,
                 &mut skin.play4_files,
-                &mut skin.offsets,
+                &mut skin.play4_offsets,
             );
             changed |= build_scene_skin_defs(
                 ui,
@@ -4931,7 +4984,7 @@ fn build_skin_panel(
                 play5_root.as_deref(),
                 &mut skin.play5_options,
                 &mut skin.play5_files,
-                &mut skin.offsets,
+                &mut skin.play5_offsets,
             );
             changed |= build_scene_skin_defs(
                 ui,
@@ -4940,7 +4993,7 @@ fn build_skin_panel(
                 play6_root.as_deref(),
                 &mut skin.play6_options,
                 &mut skin.play6_files,
-                &mut skin.offsets,
+                &mut skin.play6_offsets,
             );
             changed |= build_scene_skin_defs(
                 ui,
@@ -4949,7 +5002,7 @@ fn build_skin_panel(
                 play7_root.as_deref(),
                 &mut skin.play7_options,
                 &mut skin.play7_files,
-                &mut skin.offsets,
+                &mut skin.play7_offsets,
             );
             changed |= build_scene_skin_defs(
                 ui,
@@ -4958,7 +5011,7 @@ fn build_skin_panel(
                 play8_root.as_deref(),
                 &mut skin.play8_options,
                 &mut skin.play8_files,
-                &mut skin.offsets,
+                &mut skin.play8_offsets,
             );
             changed |= build_scene_skin_defs(
                 ui,
@@ -4967,7 +5020,7 @@ fn build_skin_panel(
                 play9_root.as_deref(),
                 &mut skin.play9_options,
                 &mut skin.play9_files,
-                &mut skin.offsets,
+                &mut skin.play9_offsets,
             );
             changed |= build_scene_skin_defs(
                 ui,
@@ -4976,7 +5029,7 @@ fn build_skin_panel(
                 play10_root.as_deref(),
                 &mut skin.play10_options,
                 &mut skin.play10_files,
-                &mut skin.offsets,
+                &mut skin.play10_offsets,
             );
             changed |= build_scene_skin_defs(
                 ui,
@@ -4985,7 +5038,7 @@ fn build_skin_panel(
                 play14_root.as_deref(),
                 &mut skin.play14_options,
                 &mut skin.play14_files,
-                &mut skin.offsets,
+                &mut skin.play14_offsets,
             );
             changed |= build_scene_skin_defs(
                 ui,
@@ -4994,7 +5047,7 @@ fn build_skin_panel(
                 result_root.as_deref(),
                 &mut skin.result_options,
                 &mut skin.result_files,
-                &mut skin.offsets,
+                &mut skin.result_offsets,
             );
             changed |= build_scene_skin_defs(
                 ui,
@@ -5003,7 +5056,7 @@ fn build_skin_panel(
                 course_result_root.as_deref(),
                 &mut skin.course_result_options,
                 &mut skin.course_result_files,
-                &mut skin.offsets,
+                &mut skin.course_result_offsets,
             );
             ui.separator();
             ui.label(
@@ -6069,7 +6122,7 @@ mod tests {
     fn skin_slot_history_restores_options_files_and_offsets_by_path() {
         let mut skin = SkinConfig {
             play7: "data/skins/ECFN/play/play7.luaskin".to_string(),
-            offsets: vec![SkinOffsetConfig { id: 32, x: 12, ..Default::default() }],
+            play7_offsets: vec![SkinOffsetConfig { id: 32, x: 12, ..Default::default() }],
             ..SkinConfig::default()
         };
         skin.play7_options.insert("Judge".to_string(), "On".to_string());
@@ -6079,7 +6132,7 @@ mod tests {
         skin.play7 = "data/skins/Starseeker/play/play7.luaskin".to_string();
         skin.play7_options.insert("Judge".to_string(), "Off".to_string());
         skin.play7_files.insert("Notes".to_string(), "other.png".to_string());
-        skin.offsets = vec![SkinOffsetConfig { id: 32, x: -4, ..Default::default() }];
+        skin.play7_offsets = vec![SkinOffsetConfig { id: 32, x: -4, ..Default::default() }];
         save_skin_slot_history(&mut skin, SkinSlot::Play7);
 
         skin.play7 = "data/skins/ECFN/play/play7.luaskin".to_string();
@@ -6087,7 +6140,50 @@ mod tests {
 
         assert_eq!(skin.play7_options.get("Judge").map(String::as_str), Some("On"));
         assert_eq!(skin.play7_files.get("Notes").map(String::as_str), Some("default.png"));
-        assert_eq!(skin.offsets, vec![SkinOffsetConfig { id: 32, x: 12, ..Default::default() }]);
+        assert_eq!(
+            skin.play7_offsets,
+            vec![SkinOffsetConfig { id: 32, x: 12, ..Default::default() }]
+        );
+    }
+
+    #[test]
+    fn skin_slot_history_isolates_same_path_by_slot() {
+        let shared_path = "data/skins/shared/play.luaskin".to_string();
+        let mut skin = SkinConfig {
+            play7: shared_path.clone(),
+            play14: shared_path,
+            play7_offsets: vec![SkinOffsetConfig { id: 30, h: 7, ..Default::default() }],
+            play14_offsets: vec![SkinOffsetConfig { id: 30, h: 14, ..Default::default() }],
+            ..SkinConfig::default()
+        };
+
+        save_skin_slot_history(&mut skin, SkinSlot::Play7);
+        save_skin_slot_history(&mut skin, SkinSlot::Play14);
+        skin.play7_offsets.clear();
+        skin.play14_offsets.clear();
+        restore_skin_slot_history(&mut skin, SkinSlot::Play7);
+        restore_skin_slot_history(&mut skin, SkinSlot::Play14);
+
+        assert_eq!(skin.play7_offsets[0].h, 7);
+        assert_eq!(skin.play14_offsets[0].h, 14);
+    }
+
+    #[test]
+    fn skin_slot_history_restores_legacy_path_only_entry() {
+        let path = "data/skins/legacy/play7.luaskin".to_string();
+        let mut skin = SkinConfig { play7: path.clone(), ..SkinConfig::default() };
+        skin.history.insert(
+            path.clone(),
+            SkinHistoryEntryConfig {
+                offsets: vec![SkinOffsetConfig { id: 30, h: 12, ..Default::default() }],
+                ..Default::default()
+            },
+        );
+
+        restore_skin_slot_history(&mut skin, SkinSlot::Play7);
+
+        assert_eq!(skin.play7_offsets[0].h, 12);
+        assert!(skin.history.contains_key(&skin_slot_history_key(SkinSlot::Play7, &path)));
     }
 
     #[test]
@@ -6130,7 +6226,7 @@ mod tests {
     fn skin_reload_diff_marks_offsets_without_texture_reload() {
         let before = SkinConfig::default();
         let mut after = before.clone();
-        after.offsets.push(SkinOffsetConfig { id: 32, x: 1, ..Default::default() });
+        after.play7_offsets.push(SkinOffsetConfig { id: 32, x: 1, ..Default::default() });
 
         let request = skin_reload_request_from_diff(&before, &after);
 
