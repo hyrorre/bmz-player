@@ -12136,7 +12136,6 @@ fn select_judge_algorithm_index(algorithm: &str) -> usize {
     match algorithm {
         "Duration" | "DURATION" => 1,
         "Lowest" | "LOWEST" => 2,
-        "Score" | "SCORE" => 3,
         _ => 0,
     }
 }
@@ -19471,8 +19470,18 @@ mod tests {
         )
         .unwrap();
         let sources = mock_source("1", 100.0, 100.0);
-        let snapshot =
-            SelectSnapshot { time: TimeUs(100_000), chart_count: 1, ..SelectSnapshot::default() };
+        let snapshot = SelectSnapshot {
+            time: TimeUs(100_000),
+            chart_count: 1,
+            rows: vec![SelectRowSnapshot {
+                index: 0,
+                is_folder: true,
+                kind: SelectRowKind::Folder,
+                folder_lamp_counts: [1; 11],
+                ..SelectRowSnapshot::default()
+            }],
+            ..SelectSnapshot::default()
+        };
 
         assert!(document.select_render_items(&sources, &snapshot).is_empty());
 
@@ -22150,7 +22159,6 @@ mod tests {
         assert_eq!(select_judge_algorithm_index("Combo"), 0);
         assert_eq!(select_judge_algorithm_index("Duration"), 1);
         assert_eq!(select_judge_algorithm_index("Lowest"), 2);
-        assert_eq!(select_judge_algorithm_index("Score"), 3);
         assert_eq!(select_judge_algorithm_index("unknown"), 0);
     }
 

@@ -677,7 +677,6 @@ fn format_judge_algorithm(value: JudgeAlgorithmConfig) -> String {
         JudgeAlgorithmConfig::Combo => "COMBO".to_string(),
         JudgeAlgorithmConfig::Duration => "DURATION".to_string(),
         JudgeAlgorithmConfig::Lowest => "LOWEST".to_string(),
-        JudgeAlgorithmConfig::Score => "SCORE".to_string(),
     }
 }
 
@@ -925,7 +924,7 @@ mod tests {
     }
 
     #[test]
-    fn cycle_judge_algorithm_includes_score() {
+    fn cycle_judge_algorithm_uses_beatoraja_order() {
         let mut profile = ProfileConfig::new_default("default", "Default", 0);
 
         assert_eq!(format_settings_value(&profile, SettingsEntryId::JudgeAlgorithm), "COMBO");
@@ -934,8 +933,8 @@ mod tests {
         assert!(adjust_settings_value(&mut profile, SettingsEntryId::JudgeAlgorithm, 1));
         assert_eq!(profile.judge.judge_algorithm, JudgeAlgorithmConfig::Lowest);
         assert!(adjust_settings_value(&mut profile, SettingsEntryId::JudgeAlgorithm, 1));
-        assert_eq!(profile.judge.judge_algorithm, JudgeAlgorithmConfig::Score);
-        assert_eq!(format_settings_value(&profile, SettingsEntryId::JudgeAlgorithm), "SCORE");
+        assert_eq!(profile.judge.judge_algorithm, JudgeAlgorithmConfig::Combo);
+        assert_eq!(format_settings_value(&profile, SettingsEntryId::JudgeAlgorithm), "COMBO");
     }
 
     #[test]

@@ -832,11 +832,6 @@
       "size": 12
     },
     {
-      "id": "option_judgeAlgo_3",
-      "constantText": "SCORE",
-      "size": 12
-    },
-    {
       "id": "option_bottomGauge_0",
       "constantText": "OFF",
       "size": 12
@@ -6418,7 +6413,7 @@
     {
       "id": "panel_img",
       "op": [23],
-      "draw": "event_index(340) == 3",
+      "draw": "event_index(340) == 2",
       "dst": [
         {
           "x": 664,
@@ -6433,7 +6428,7 @@
       ]
     },
     {
-      "id": "option_judgeAlgo_3",
+      "id": "option_judgeAlgo_2",
       "op": [23],
       "dst": [
         {
@@ -6467,7 +6462,7 @@
     {
       "id": "panel_img",
       "op": [23],
-      "draw": "event_index(340) == 2",
+      "draw": "event_index(340) == 1",
       "dst": [
         {
           "x": 664,
@@ -6482,7 +6477,7 @@
       ]
     },
     {
-      "id": "option_judgeAlgo_2",
+      "id": "option_judgeAlgo_1",
       "op": [23],
       "dst": [
         {
@@ -6516,60 +6511,11 @@
     {
       "id": "panel_img",
       "op": [23],
-      "draw": "event_index(340) == 1",
-      "dst": [
-        {
-          "x": 664,
-          "y": 232,
-          "w": 154,
-          "h": 21,
-          "a": 225,
-          "r": 172,
-          "g": 82,
-          "b": 24
-        }
-      ]
-    },
-    {
-      "id": "option_judgeAlgo_1",
-      "op": [23],
-      "dst": [
-        {
-          "x": 676,
-          "y": 237,
-          "w": 130,
-          "h": 13,
-          "a": 255,
-          "r": 248,
-          "g": 252,
-          "b": 246
-        }
-      ]
-    },
-    {
-      "id": "panel_inactive_img",
-      "op": [23],
-      "dst": [
-        {
-          "x": 664,
-          "y": 257,
-          "w": 154,
-          "h": 21,
-          "a": 130,
-          "r": 10,
-          "g": 15,
-          "b": 18
-        }
-      ]
-    },
-    {
-      "id": "panel_img",
-      "op": [23],
       "draw": "event_index(340) == 0",
       "dst": [
         {
           "x": 664,
-          "y": 257,
+          "y": 232,
           "w": 154,
           "h": 21,
           "a": 225,
@@ -6585,7 +6531,7 @@
       "dst": [
         {
           "x": 676,
-          "y": 262,
+          "y": 237,
           "w": 130,
           "h": 13,
           "a": 255,

@@ -713,7 +713,6 @@ fn judge_algorithm_from_config(value: JudgeAlgorithmConfig) -> JudgeAlgorithm {
         JudgeAlgorithmConfig::Combo => JudgeAlgorithm::Combo,
         JudgeAlgorithmConfig::Duration => JudgeAlgorithm::Duration,
         JudgeAlgorithmConfig::Lowest => JudgeAlgorithm::Lowest,
-        JudgeAlgorithmConfig::Score => JudgeAlgorithm::Score,
     }
 }
 
@@ -2187,10 +2186,6 @@ mod tests {
         let duration =
             build_game_session(Arc::new(chart()), &profile, PlaySessionOptions::default());
         assert_eq!(duration.judge.algorithm, JudgeAlgorithm::Duration);
-
-        profile.judge.judge_algorithm = JudgeAlgorithmConfig::Score;
-        let score = build_game_session(Arc::new(chart()), &profile, PlaySessionOptions::default());
-        assert_eq!(score.judge.algorithm, JudgeAlgorithm::Score);
     }
 
     #[test]

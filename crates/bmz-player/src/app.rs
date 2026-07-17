@@ -25255,7 +25255,7 @@ mod tests {
         );
         assert_eq!(
             cycle_judge_algorithm_with_direction(JudgeAlgorithmConfig::Combo, -1),
-            JudgeAlgorithmConfig::Score
+            JudgeAlgorithmConfig::Lowest
         );
     }
 

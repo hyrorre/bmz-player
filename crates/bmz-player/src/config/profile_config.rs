@@ -341,21 +341,20 @@ pub enum FastSlowDisplayScope {
 #[serde(rename_all = "PascalCase")]
 pub enum JudgeAlgorithmConfig {
     Combo,
+    #[serde(alias = "Score")]
     Duration,
     Lowest,
-    Score,
 }
 
 impl JudgeAlgorithmConfig {
-    /// beatoraja `JudgeAlgorithm.values()` order.
-    pub const ORDER: [Self; 4] = [Self::Combo, Self::Duration, Self::Lowest, Self::Score];
+    /// beatoraja skin / launcher order.
+    pub const ORDER: [Self; 3] = [Self::Combo, Self::Duration, Self::Lowest];
 
     pub const fn beatoraja_name(self) -> &'static str {
         match self {
             Self::Combo => "Combo",
             Self::Duration => "Duration",
             Self::Lowest => "Lowest",
-            Self::Score => "Score",
         }
     }
 }
@@ -1205,6 +1204,22 @@ fn gamepad_action_binding(control: &str, action: InputActionConfig) -> BindingCo
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn legacy_score_judge_algorithm_is_loaded_as_duration() {
+        let judge: JudgeConfig = toml::from_str(
+            r#"
+            input_offset_us = 0
+            visual_offset_us = 0
+            judge_algorithm = "Score"
+            fast_slow_display_threshold_ms = 0
+            fast_slow_display_scope = "Auto"
+            "#,
+        )
+        .unwrap();
+
+        assert_eq!(judge.judge_algorithm, JudgeAlgorithmConfig::Duration);
+    }
 
     #[test]
     fn play_defaults_uses_default_misslayer_duration_for_old_profiles() {
