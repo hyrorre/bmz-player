@@ -378,6 +378,36 @@ struct LeftOverlayToast {
 
 const LEFT_OVERLAY_TOAST_DURATION: Duration = Duration::from_secs(2);
 
+/// beatoraja の `Gdx.graphics.getFramesPerSecond()` と同様、1 秒ごとに
+/// 確定したフレーム数を skin の NUMBER_CURRENT_FPS (20) へ渡す。
+///
+/// `wgpu_fps` は診断 overlay 向けの EMA のまま残し、skin 内の数値が
+/// 毎フレーム揺れないよう用途を分ける。
+struct SkinFpsCounter {
+    window_started_at: Instant,
+    frames: u32,
+    current: u32,
+}
+
+impl SkinFpsCounter {
+    fn new(now: Instant) -> Self {
+        Self { window_started_at: now, frames: 0, current: 0 }
+    }
+
+    fn record_frame(&mut self, now: Instant) {
+        self.frames = self.frames.saturating_add(1);
+        if now.duration_since(self.window_started_at) >= Duration::from_secs(1) {
+            self.current = self.frames;
+            self.frames = 0;
+            self.window_started_at = now;
+        }
+    }
+
+    fn current(&self) -> u32 {
+        self.current
+    }
+}
+
 struct WinitApp {
     boot: BootstrappedApp,
     window: Option<Arc<Window>>,
@@ -633,6 +663,8 @@ struct WinitApp {
     skip_next_frame_pace: bool,
     /// RedrawRequested 間隔から平滑化した wgpu 描画 FPS。
     wgpu_fps: f32,
+    /// skin の NUMBER_CURRENT_FPS (20) へ渡す秒単位の確定 FPS。
+    skin_fps: SkinFpsCounter,
     /// 設定画面で編集中の項目。`None` なら一覧操作モード。
     settings_edit: Option<SettingsEditSession>,
     /// キー設定の待ち受け状態。
@@ -2623,6 +2655,7 @@ impl WinitApp {
             last_frame_at: None,
             skip_next_frame_pace: false,
             wgpu_fps: 0.0,
+            skin_fps: SkinFpsCounter::new(now),
             settings_edit: None,
             key_config_edit: None,
             result_exit: None,
@@ -3102,11 +3135,10 @@ impl WinitApp {
     }
 
     fn apply_skin_runtime_info_to_scene(&self, scene: &mut AppSceneSnapshot) {
-        let current_fps = self.wgpu_fps.max(0.0).round().min(u32::MAX as f32) as u32;
         apply_skin_runtime_info_to_scene(
             scene,
             &self.boot.profile_config.display_name,
-            current_fps,
+            self.skin_fps.current(),
         );
     }
 
@@ -12331,6 +12363,7 @@ impl WinitApp {
     /// 無制限としてスリープしない。
     fn limit_frame_rate(&mut self) {
         let frame_started = Instant::now();
+        self.skin_fps.record_frame(frame_started);
         if let Some(last) = self.last_frame_at {
             let dt = frame_started.duration_since(last).as_secs_f32();
             if dt > 0.0 {
@@ -20465,6 +20498,24 @@ mod tests {
             panic!("expected select snapshot");
         };
         assert_eq!(snapshot.operating_time_ms, 90_061_234);
+    }
+
+    #[test]
+    fn skin_fps_updates_only_after_each_one_second_window() {
+        let started_at = Instant::now();
+        let mut fps = SkinFpsCounter::new(started_at);
+
+        for elapsed_ms in [0, 250, 500, 750] {
+            fps.record_frame(started_at + Duration::from_millis(elapsed_ms));
+            assert_eq!(fps.current(), 0);
+        }
+
+        fps.record_frame(started_at + Duration::from_secs(1));
+        assert_eq!(fps.current(), 5);
+        fps.record_frame(started_at + Duration::from_millis(1_250));
+        assert_eq!(fps.current(), 5);
+        fps.record_frame(started_at + Duration::from_secs(2));
+        assert_eq!(fps.current(), 2);
     }
 
     #[test]

@@ -53,7 +53,6 @@ use crate::screens::practice::{
     PracticeProperty, apply_practice_property, apply_practice_start_gauge,
 };
 use crate::select_options::{ArrangeOption, DoubleOption, HsFixOption, TargetOption};
-use crate::skin_loader::play_skin_selection_for;
 use crate::storage::library_db::ChartNormalizationAnalysis;
 use crate::storage::library_db::LibraryDatabase;
 use crate::storage::score_db::ScoreKey;
@@ -298,7 +297,7 @@ pub fn apply_placeholder_session_visuals(
     // プロファイルのスキンオフセット (位置調整)。スクラッチ回転角は session が
     // 必要なので install 後の refresh に任せる。
     let mut offsets = bmz_render::skin_offset::SkinOffsetValues::default();
-    for offset in skin_offsets_from_profile(profile, key_mode) {
+    for offset in skin_offsets_from_profile(profile) {
         offsets.set(
             offset.id,
             bmz_render::skin_offset::SkinOffsetValue {
@@ -517,7 +516,7 @@ pub fn build_game_session_with_input_backend(
         hidden_enabled: hidden_enabled_from_profile(profile),
         hispeed_auto_adjust: profile.lane.hispeed_auto_adjust,
         hidden_cover: hidden_cover_from_profile(profile),
-        skin_offsets: skin_offsets_from_profile(profile, key_mode),
+        skin_offsets: skin_offsets_from_profile(profile),
         bga_enabled: bga_enabled_from_profile(profile, autoplay_enabled, is_replay),
         poor_bga_duration_us: poor_bga_duration_us_from_profile(profile),
         bga_stretch: bga_stretch_from_profile(profile),
@@ -765,19 +764,13 @@ fn bga_enabled_from_profile(profile: &ProfileConfig, autoplay: bool, replay: boo
     }
 }
 
-fn skin_offsets_from_profile(profile: &ProfileConfig, key_mode: KeyMode) -> Vec<PlaySkinOffset> {
-    let play_skin_path = play_skin_selection_for(&profile.skin, key_mode).path.trim();
-    let offsets = profile
+fn skin_offsets_from_profile(profile: &ProfileConfig) -> Vec<PlaySkinOffset> {
+    // `skin.offsets` is the active editor state. `skin.history` is only a cache
+    // restored into this field when the user switches skins; reading history here
+    // can resurrect a stale Notes offset after an update or an unsaved edit.
+    profile
         .skin
-        .history
-        .get(play_skin_path)
-        // Older profiles keep the currently edited offsets in `skin.offsets` while
-        // still containing an empty per-skin history entry.  Treat that empty entry
-        // as missing so the saved values are not discarded at play startup.
-        .filter(|entry| !entry.offsets.is_empty())
-        .map(|entry| entry.offsets.as_slice())
-        .unwrap_or(profile.skin.offsets.as_slice());
-    offsets
+        .offsets
         .iter()
         .copied()
         .map(|offset| PlaySkinOffset {
@@ -2989,19 +2982,16 @@ mod tests {
     }
 
     #[test]
-    fn build_game_session_uses_offsets_for_selected_keymode_skin_history() {
+    fn build_game_session_uses_active_offsets_instead_of_skin_history() {
         use crate::config::profile_config::{SkinHistoryEntryConfig, SkinOffsetConfig};
 
         let mut profile = ProfileConfig::new_default("default", "Default", 1);
         profile.skin.play7 = "data/skins/ECFN/play/play7.luaskin".to_string();
-        profile.skin.offsets = vec![SkinOffsetConfig { id: 43, a: 12, ..Default::default() }];
+        profile.skin.offsets = vec![SkinOffsetConfig { id: 30, h: 12, ..Default::default() }];
         profile.skin.history.insert(
             profile.skin.play7.clone(),
             SkinHistoryEntryConfig {
-                offsets: vec![
-                    SkinOffsetConfig { id: 43, a: 180, ..Default::default() },
-                    SkinOffsetConfig { id: 44, a: 110, ..Default::default() },
-                ],
+                offsets: vec![SkinOffsetConfig { id: 30, h: 48, ..Default::default() }],
                 ..Default::default()
             },
         );
@@ -3011,15 +3001,12 @@ mod tests {
 
         assert_eq!(
             session.skin_offsets,
-            vec![
-                PlaySkinOffset { id: 43, x: 0, y: 0, w: 0, h: 0, r: 0, a: 180 },
-                PlaySkinOffset { id: 44, x: 0, y: 0, w: 0, h: 0, r: 0, a: 110 },
-            ]
+            vec![PlaySkinOffset { id: 30, x: 0, y: 0, w: 0, h: 12, r: 0, a: 0 }]
         );
     }
 
     #[test]
-    fn build_game_session_falls_back_to_legacy_offsets_for_empty_skin_history() {
+    fn build_game_session_keeps_active_offsets_with_empty_skin_history() {
         use crate::config::profile_config::{SkinHistoryEntryConfig, SkinOffsetConfig};
 
         let mut profile = ProfileConfig::new_default("default", "Default", 1);
