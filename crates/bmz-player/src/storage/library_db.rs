@@ -705,20 +705,26 @@ impl LibraryDatabase {
         if ids.is_empty() {
             return Ok(HashMap::new());
         }
-        let mut stmt = self.conn.prepare(
-            "SELECT chart_id, normal_notes, long_notes, scratch_notes, long_scratch_notes,
-                density, peak_density, end_density, total_gauge, main_bpm, speed_changes_json
-             FROM chart_analysis
-             WHERE chart_id = ?1",
-        )?;
+
+        let mut unique_ids = ids.to_vec();
+        unique_ids.sort_unstable();
+        unique_ids.dedup();
         let mut out = HashMap::with_capacity(ids.len());
-        for id in ids {
-            if let Some((chart_id, summary)) = stmt
-                .query_row(params![id], |row| {
+        for chunk in unique_ids.chunks(CHART_ANALYSIS_LOOKUP_BATCH_SIZE) {
+            let placeholders = std::iter::repeat_n("?", chunk.len()).collect::<Vec<_>>().join(", ");
+            let sql = format!(
+                "SELECT chart_id, normal_notes, long_notes, scratch_notes, long_scratch_notes,
+                    density, peak_density, end_density, total_gauge, main_bpm, speed_changes_json
+                 FROM chart_analysis
+                 WHERE chart_id IN ({placeholders})"
+            );
+            let mut stmt = self.conn.prepare(&sql)?;
+            let rows = stmt
+                .query_map(rusqlite::params_from_iter(chunk.iter().copied()), |row| {
                     Ok((row.get(0)?, chart_analysis_summary_from_row_with_offset(row, 1)?))
-                })
-                .optional()?
-            {
+                })?;
+            for row in rows {
+                let (chart_id, summary) = row?;
                 out.insert(chart_id, summary);
             }
         }
@@ -1032,6 +1038,7 @@ impl LibraryDatabase {
 
 /// Keep batched hash lookups below SQLite's historical 999-variable default.
 const CHART_HASH_LOOKUP_BATCH_SIZE: usize = 500;
+const CHART_ANALYSIS_LOOKUP_BATCH_SIZE: usize = 500;
 
 fn charts_by_hash_column(
     conn: &Connection,
@@ -2978,6 +2985,32 @@ mod tests {
         assert_eq!(resolved.len(), 2);
         assert_eq!(resolved.get(&first_md5).map(|chart| chart.chart_id), Some(first_id));
         assert_eq!(resolved.get(&second_md5).map(|chart| chart.chart_id), Some(second_id));
+    }
+
+    #[test]
+    fn chart_analysis_summaries_batch_more_ids_than_one_sqlite_variable_chunk() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        configure_connection(&conn).unwrap();
+        run_migrations(&mut conn, LIBRARY_MIGRATIONS).unwrap();
+        let mut db = LibraryDatabase::from_connection(conn);
+
+        let first = chart("analysis-batch-first");
+        let second = chart("analysis-batch-second");
+        let first_id =
+            db.upsert_chart_import(&record_for_chart("/songs/first.bms", &first)).unwrap();
+        let second_id =
+            db.upsert_chart_import(&record_for_chart("/songs/second.bms", &second)).unwrap();
+        let mut ids =
+            (10_000..10_000 + CHART_ANALYSIS_LOOKUP_BATCH_SIZE as i64 * 2 + 1).collect::<Vec<_>>();
+        ids.push(first_id);
+        ids.push(second_id);
+        ids.push(first_id);
+
+        let summaries = db.chart_analysis_summaries_by_chart_ids(&ids).unwrap();
+
+        assert_eq!(summaries.len(), 2);
+        assert!(summaries.contains_key(&first_id));
+        assert!(summaries.contains_key(&second_id));
     }
 
     #[test]

@@ -1,3 +1,4 @@
+use std::collections::{HashMap, HashSet};
 use std::io::{Read, Write};
 use std::path::Path;
 
@@ -27,6 +28,10 @@ use crate::select_options::{DoubleOption, DoubleOptionScoreBucket};
 pub struct ScoreDatabase {
     conn: Connection,
 }
+
+/// Each score key occupies four SQLite bind variables. Keep batches below the
+/// historical 999-variable default while leaving room for future predicates.
+const SCORE_KEY_LOOKUP_BATCH_SIZE: usize = 200;
 
 /// Score history provenance.  This is intentionally not part of [`ScoreKey`]:
 /// imported results and locally played results compete for the same best score.
@@ -130,6 +135,17 @@ impl ScoreKey {
     pub const fn with_rule_mode(self, rule_mode: RuleMode) -> Self {
         Self { rule_mode, ..self }
     }
+}
+
+fn score_key_query_params(keys: &[ScoreKey]) -> Vec<String> {
+    let mut params = Vec::with_capacity(keys.len() * 4);
+    for key in keys {
+        params.push(hash_to_hex(&key.chart_sha256));
+        params.push(key.ln_policy.as_str().to_string());
+        params.push(key.double_option.as_str().to_string());
+        params.push(key.rule_mode.as_str().to_string());
+    }
+    params
 }
 
 #[derive(Debug, Clone)]
@@ -683,101 +699,113 @@ impl ScoreDatabase {
     }
 
     pub fn best_scores_for_charts(&self, keys: &[ScoreKey]) -> Result<Vec<BestScoreSummary>> {
-        let mut out = Vec::new();
-        let mut stmt = self.conn.prepare(
-            "SELECT
-                chart_sha256,
-                ln_policy,
-                double_option,
-                rule_mode,
-                clear_type,
-                gauge_type,
-                gauge_value,
-                ex_score,
-                bp,
-                cb,
-                max_combo,
-                fast_pgreat,
-                slow_pgreat,
-                fast_great,
-                slow_great,
-                fast_good,
-                slow_good,
-                fast_bad,
-                slow_bad,
-                fast_poor,
-                slow_poor,
-                fast_empty_poor,
-                slow_empty_poor,
-                play_count,
-                clear_count,
-                device_type,
-                played_at,
-                replay_path
-            FROM score_best
-            WHERE chart_sha256 = ?1 AND ln_policy = ?2 AND double_option = ?3
-              AND rule_mode = ?4",
-        )?;
+        let mut seen = HashSet::with_capacity(keys.len());
+        let unique_keys = keys.iter().copied().filter(|key| seen.insert(*key)).collect::<Vec<_>>();
+        let mut found = HashMap::with_capacity(unique_keys.len());
 
-        for key in keys {
-            if let Some(summary) = stmt
-                .query_row(
-                    params![
-                        hash_to_hex(&key.chart_sha256),
-                        key.ln_policy.as_str(),
-                        key.double_option.as_str(),
-                        key.rule_mode.as_str(),
-                    ],
-                    best_score_summary_from_row,
-                )
-                .optional()?
-            {
-                out.push(summary);
+        for chunk in unique_keys.chunks(SCORE_KEY_LOOKUP_BATCH_SIZE) {
+            let placeholders =
+                std::iter::repeat_n("(?, ?, ?, ?)", chunk.len()).collect::<Vec<_>>().join(", ");
+            let sql = format!(
+                "SELECT
+                    chart_sha256,
+                    ln_policy,
+                    double_option,
+                    rule_mode,
+                    clear_type,
+                    gauge_type,
+                    gauge_value,
+                    ex_score,
+                    bp,
+                    cb,
+                    max_combo,
+                    fast_pgreat,
+                    slow_pgreat,
+                    fast_great,
+                    slow_great,
+                    fast_good,
+                    slow_good,
+                    fast_bad,
+                    slow_bad,
+                    fast_poor,
+                    slow_poor,
+                    fast_empty_poor,
+                    slow_empty_poor,
+                    play_count,
+                    clear_count,
+                    device_type,
+                    played_at,
+                    replay_path
+                FROM score_best
+                WHERE (chart_sha256, ln_policy, double_option, rule_mode)
+                    IN ({placeholders})"
+            );
+            let params = score_key_query_params(chunk);
+            let mut stmt = self.conn.prepare(&sql)?;
+            let rows =
+                stmt.query_map(params_from_iter(params.iter()), best_score_summary_from_row)?;
+            for row in rows {
+                let summary = row?;
+                let key = ScoreKey::with_options(
+                    summary.chart_sha256,
+                    summary.ln_policy,
+                    summary.double_option,
+                    summary.rule_mode,
+                );
+                found.insert(key, summary);
             }
         }
 
-        Ok(out)
+        Ok(keys.iter().filter_map(|key| found.get(key).cloned()).collect())
     }
 
     pub fn replay_slots_for_charts(&self, keys: &[ScoreKey]) -> Result<Vec<ReplaySlotSummary>> {
-        let mut out = Vec::new();
-        let mut stmt = self.conn.prepare(
-            "SELECT slot FROM replay_slots
-                 WHERE chart_sha256 = ?1 AND ln_policy = ?2 AND double_option = ?3
-                   AND rule_mode = ?4",
-        )?;
+        let mut seen = HashSet::with_capacity(keys.len());
+        let unique_keys = keys.iter().copied().filter(|key| seen.insert(*key)).collect::<Vec<_>>();
+        let mut found: HashMap<ScoreKey, [bool; 4]> = HashMap::with_capacity(unique_keys.len());
 
-        for key in keys {
-            let slots: Vec<u8> = stmt
-                .query_map(
-                    params![
-                        hash_to_hex(&key.chart_sha256),
-                        key.ln_policy.as_str(),
-                        key.double_option.as_str(),
-                        key.rule_mode.as_str(),
-                    ],
-                    |row| row.get::<_, u8>(0),
-                )?
-                .collect::<std::result::Result<Vec<_>, _>>()?;
-            if slots.is_empty() {
-                continue;
-            }
-            let mut replay_slots = [false; 4];
-            for slot in slots {
-                if (slot as usize) < replay_slots.len() {
+        for chunk in unique_keys.chunks(SCORE_KEY_LOOKUP_BATCH_SIZE) {
+            let placeholders =
+                std::iter::repeat_n("(?, ?, ?, ?)", chunk.len()).collect::<Vec<_>>().join(", ");
+            let sql = format!(
+                "SELECT chart_sha256, ln_policy, double_option, rule_mode, slot
+                 FROM replay_slots
+                 WHERE (chart_sha256, ln_policy, double_option, rule_mode)
+                    IN ({placeholders})"
+            );
+            let params = score_key_query_params(chunk);
+            let mut stmt = self.conn.prepare(&sql)?;
+            let rows = stmt.query_map(params_from_iter(params.iter()), |row| {
+                let sha256_hex: String = row.get(0)?;
+                let key = ScoreKey::with_options(
+                    hex_to_hash::<32>(&sha256_hex)?,
+                    ln_policy_from_row(row, 1)?,
+                    double_option_from_row(row, 2)?,
+                    rule_mode_from_row(row, 3)?,
+                );
+                Ok((key, row.get::<_, u8>(4)?))
+            })?;
+            for row in rows {
+                let (key, slot) = row?;
+                let replay_slots = found.entry(key).or_default();
+                if (slot as usize) < 4 {
                     replay_slots[slot as usize] = true;
                 }
             }
-            out.push(ReplaySlotSummary {
-                chart_sha256: key.chart_sha256,
-                ln_policy: key.ln_policy,
-                double_option: key.double_option,
-                rule_mode: key.rule_mode,
-                replay_slots,
-            });
         }
 
-        Ok(out)
+        Ok(keys
+            .iter()
+            .filter_map(|key| {
+                found.get(key).copied().map(|replay_slots| ReplaySlotSummary {
+                    chart_sha256: key.chart_sha256,
+                    ln_policy: key.ln_policy,
+                    double_option: key.double_option,
+                    rule_mode: key.rule_mode,
+                    replay_slots,
+                })
+            })
+            .collect())
     }
 
     pub fn replay_slot(&self, key: ScoreKey, slot: u8) -> Result<Option<ReplaySlotRecord>> {
@@ -3154,6 +3182,49 @@ mod tests {
         assert_eq!(slots.len(), 1);
         assert_eq!(slots[0].chart_sha256, [1; 32]);
         assert_eq!(slots[0].replay_slots, [true, false, true, false]);
+    }
+
+    #[test]
+    fn select_score_lookups_batch_more_keys_than_one_sqlite_variable_chunk() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        configure_connection(&conn).unwrap();
+        run_migrations(&mut conn, SCORE_MIGRATIONS).unwrap();
+        let mut db = ScoreDatabase { conn };
+
+        let mut first = record(20, ClearType::Normal);
+        first.chart_sha256 = [1; 32];
+        let mut second = record(10, ClearType::Easy);
+        second.chart_sha256 = [2; 32];
+        db.insert_score(&first).unwrap();
+        db.insert_score(&second).unwrap();
+        db.upsert_replay_slot(&sample_slot(0, 20)).unwrap();
+        db.upsert_replay_slot(&sample_slot(2, 20)).unwrap();
+        let mut second_slot = sample_slot(1, 10);
+        second_slot.chart_sha256 = [2; 32];
+        db.upsert_replay_slot(&second_slot).unwrap();
+
+        let mut keys = (0..SCORE_KEY_LOOKUP_BATCH_SIZE * 2 + 1)
+            .map(|index| {
+                let mut sha = [0; 32];
+                sha[..8].copy_from_slice(&(index as u64 + 100).to_le_bytes());
+                key(sha)
+            })
+            .collect::<Vec<_>>();
+        keys.extend([key([2; 32]), key([1; 32]), key([1; 32])]);
+
+        let scores = db.best_scores_for_charts(&keys).unwrap();
+        let slots = db.replay_slots_for_charts(&keys).unwrap();
+
+        assert_eq!(
+            scores.iter().map(|score| score.chart_sha256).collect::<Vec<_>>(),
+            [[2; 32], [1; 32], [1; 32]]
+        );
+        assert_eq!(slots.len(), 3);
+        assert_eq!(slots[0].chart_sha256, [2; 32]);
+        assert_eq!(slots[0].replay_slots, [false, true, false, false]);
+        assert_eq!(slots[1].chart_sha256, [1; 32]);
+        assert_eq!(slots[1].replay_slots, [true, false, true, false]);
+        assert_eq!(slots[2], slots[1]);
     }
 
     #[test]
