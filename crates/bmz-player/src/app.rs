@@ -17081,17 +17081,7 @@ fn lane_starts_result_exit(lane: Lane) -> bool {
 }
 
 fn lane_skips_result_exit(lane: Lane) -> bool {
-    matches!(
-        lane,
-        Lane::Key1
-            | Lane::Key3
-            | Lane::Key5
-            | Lane::Key7
-            | Lane::Key8
-            | Lane::Key10
-            | Lane::Key12
-            | Lane::Key14
-    )
+    matches!(lane, Lane::Key1 | Lane::Key3 | Lane::Key8 | Lane::Key10 | Lane::Key12 | Lane::Key14)
 }
 
 fn retry_preload_kind(mode: ResultRetryMode, cached_chart_available: bool) -> RetryPreloadKind {
@@ -23525,23 +23515,16 @@ mod tests {
 
     #[test]
     fn lane_skips_result_exit_matches_1p_and_2p_requested_keys() {
-        for lane in [
-            Lane::Key1,
-            Lane::Key3,
-            Lane::Key5,
-            Lane::Key7,
-            Lane::Key8,
-            Lane::Key10,
-            Lane::Key12,
-            Lane::Key14,
-        ] {
+        for lane in [Lane::Key1, Lane::Key3, Lane::Key8, Lane::Key10, Lane::Key12, Lane::Key14] {
             assert!(lane_skips_result_exit(lane), "{lane:?} should skip");
         }
         for lane in [
             Lane::Scratch,
             Lane::Key2,
             Lane::Key4,
+            Lane::Key5,
             Lane::Key6,
+            Lane::Key7,
             Lane::Key9,
             Lane::Key11,
             Lane::Key13,
