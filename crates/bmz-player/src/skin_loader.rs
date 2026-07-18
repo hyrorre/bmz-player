@@ -4185,6 +4185,70 @@ mod tests {
             "MILLIONDOLLAR CIM atlases must provide RGBA assets before GPU upload"
         );
         let document = &decoded.document;
+        let circle_destinations = document
+            .destination
+            .iter()
+            .filter_map(|entry| match entry {
+                DestinationListEntry::Single(destination)
+                    if destination.id == "Graph_Circle_Meter"
+                        || destination.id == "Graph_Circle_Frame" =>
+                {
+                    Some(destination)
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(circle_destinations.len(), 724);
+        let circle_timers = circle_destinations
+            .iter()
+            .filter_map(|destination| destination.timer)
+            .collect::<BTreeSet<_>>();
+        assert_eq!(circle_timers.len(), 1, "the shared circle visibility edge needs one timer");
+        assert!(circle_timers.iter().all(|timer| {
+            ((*timer - bmz_render::skin::SKIN_DYNAMIC_TIMER_BASE) as usize)
+                < bmz_render::skin::SKIN_DYNAMIC_TIMER_COUNT
+        }));
+
+        let source_12 = decoded
+            .sources
+            .iter()
+            .find(|source| source.source_id == "12")
+            .expect("MILLIONDOLLAR parts atlas");
+        let sources = decoded
+            .sources
+            .iter()
+            .map(|source| {
+                (
+                    source.source_id.clone(),
+                    SkinDocumentTexture {
+                        source_id: source.source_id.clone(),
+                        texture: source.texture,
+                        source_size: source.size,
+                    },
+                )
+            })
+            .collect::<HashMap<_, _>>();
+        let mut circle_runtime = DynamicTimerRuntime::default();
+        circle_runtime.reset_for_document(Some(document));
+        let mut circle_state = SkinDrawState::default();
+        circle_runtime.advance(document, &mut circle_state, 100);
+        let circle_items =
+            document.static_render_items(&sources, &circle_state, &SkinTextState::default());
+        let rendered_segments = circle_items
+            .iter()
+            .filter(|item| {
+                matches!(
+                    item,
+                    SkinRenderItem::RotatedImage { texture, .. }
+                        if *texture == source_12.texture
+                )
+            })
+            .count();
+        assert!(
+            rendered_segments >= 700,
+            "MILLIONDOLLAR circle graph segments must render, got {rendered_segments}"
+        );
+
         let event = document.runtime_events.first().expect("runtime toggle event");
         let initial_true = event
             .toggle_flags

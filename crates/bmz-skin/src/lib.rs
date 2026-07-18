@@ -2295,6 +2295,53 @@ mod tests {
     }
 
     #[test]
+    fn lua_skin_timer_observe_reuses_id_for_same_runtime_predicate() {
+        let root = unique_test_dir("bmz-skin-lua-shared-observe-timer");
+        fs::create_dir_all(&root).unwrap();
+        fs::write(
+            root.join("result.luaskin"),
+            r#"
+            local main_state = require("main_state")
+            local timer_util = require("timer_util")
+            local function visible_timer()
+                return timer_util.timer_observe_boolean(function()
+                    return main_state.number(300) > 0
+                end)
+            end
+            return {
+                type = 7,
+                destination = {
+                    { id = "segment-a", timer = visible_timer(), dst = {{ x = 0, y = 0, w = 1, h = 1 }} },
+                    { id = "segment-b", timer = visible_timer(), dst = {{ x = 1, y = 0, w = 1, h = 1 }} },
+                },
+            }
+            "#,
+        )
+        .unwrap();
+
+        let loaded = load_lua_skin(
+            &root.join("result.luaskin"),
+            SkinKind::Result,
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+        )
+        .unwrap();
+
+        assert_eq!(loaded.document.dynamic_timers.len(), 1);
+        assert_eq!(loaded.document.dynamic_timers[0].observe, "number(300) > 0");
+        let timers = loaded
+            .document
+            .destination
+            .iter()
+            .filter_map(|entry| match entry {
+                bmz_skin_document::DestinationListEntry::Single(destination) => destination.timer,
+                bmz_skin_document::DestinationListEntry::Conditional { .. } => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(timers, vec![bmz_skin_document::SKIN_DYNAMIC_TIMER_BASE; 2]);
+    }
+
+    #[test]
     fn lua_skin_timer_observe_infers_is_gauge_iidx_global() {
         let root = unique_test_dir("bmz-skin-lua-iidx");
         fs::create_dir_all(&root).unwrap();

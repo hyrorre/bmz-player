@@ -1175,6 +1175,7 @@ struct MainStateProbe {
     time_value_us: i32,
     next_dynamic_timer_id: i32,
     dynamic_timers: Vec<(i32, String)>,
+    dynamic_timer_ids_by_observe: BTreeMap<String, i32>,
     fixed_delay_timers: Vec<(i32, i32, i32)>,
     unsupported_dynamic_timers: Vec<i32>,
     load_time_constant_dynamic_timers: Vec<i32>,
@@ -1216,6 +1217,7 @@ impl Default for MainStateProbe {
             time_value_us: 1_000_000,
             next_dynamic_timer_id: SKIN_DYNAMIC_TIMER_BASE,
             dynamic_timers: Vec::new(),
+            dynamic_timer_ids_by_observe: BTreeMap::new(),
             fixed_delay_timers: Vec::new(),
             unsupported_dynamic_timers: Vec::new(),
             load_time_constant_dynamic_timers: Vec::new(),
@@ -2564,16 +2566,26 @@ fn create_timer_util_module(lua: &Lua, probe: Arc<Mutex<MainStateProbe>>) -> mlu
                 let mut probe = probe_for_observe
                     .lock()
                     .map_err(|_| mlua::Error::external("main_state probe lock poisoned"))?;
-                let timer_id = probe.next_dynamic_timer_id;
-                probe.next_dynamic_timer_id += 1;
-                probe.dynamic_timers.push((timer_id, observe));
-                if unsupported {
-                    probe.unsupported_dynamic_timers.push(timer_id);
+                if !unsupported
+                    && let Some(timer_id) =
+                        probe.dynamic_timer_ids_by_observe.get(&observe).copied()
+                {
+                    timer_id
+                } else {
+                    let timer_id = probe.next_dynamic_timer_id;
+                    probe.next_dynamic_timer_id += 1;
+                    probe.dynamic_timers.push((timer_id, observe.clone()));
+                    if !unsupported {
+                        probe.dynamic_timer_ids_by_observe.insert(observe, timer_id);
+                    }
+                    if unsupported {
+                        probe.unsupported_dynamic_timers.push(timer_id);
+                    }
+                    if load_time_constant {
+                        probe.load_time_constant_dynamic_timers.push(timer_id);
+                    }
+                    timer_id
                 }
-                if load_time_constant {
-                    probe.load_time_constant_dynamic_timers.push(timer_id);
-                }
-                timer_id
             };
             let state = Arc::new(Mutex::new(TimerObserveState { timer_value: TIMER_OFF_VALUE }));
             let observed_for_timer = observed.clone();
