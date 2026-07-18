@@ -1635,6 +1635,9 @@ fn build_result_skin_draw_state(
         logical_input_held: snapshot.skin_input.held,
         select_arrange_index: crate::skin::select_arrange_index(&snapshot.arrange),
         select_arrange_2p_index: crate::skin::select_arrange_index(&snapshot.arrange_2p),
+        select_double_option_index: crate::skin::select_double_option_index(
+            &snapshot.double_option,
+        ),
         result_arrange_index: crate::skin::select_arrange_index(&snapshot.arrange),
         result_arrange_2p_index: crate::skin::select_arrange_index(&snapshot.arrange_2p),
         select_extended_arrange_index: crate::skin::extended_arrange_index(&snapshot.arrange),
@@ -3105,6 +3108,7 @@ mod tests {
                 result_failed: false,
                 arrange: "NORMAL".to_string(),
                 arrange_2p: "NORMAL".to_string(),
+                double_option: "OFF".to_string(),
                 lane_shuffle_pattern: Vec::new(),
                 ex_score: 100,
                 ex_score_rate: 0.5,
@@ -3250,6 +3254,7 @@ mod tests {
             result_failed: false,
             arrange: "NORMAL".to_string(),
             arrange_2p: "NORMAL".to_string(),
+            double_option: "OFF".to_string(),
             lane_shuffle_pattern: Vec::new(),
             ex_score: 100,
             ex_score_rate: 0.5,
@@ -3357,11 +3362,13 @@ mod tests {
         };
         snapshot.arrange = "S-RANDOM-EX".to_string();
         snapshot.arrange_2p = "MF-RANDOM".to_string();
+        snapshot.double_option = "FLIP".to_string();
 
         let state = build_result_skin_draw_state(&snapshot, 0);
 
         assert_eq!(state.select_arrange_index, 9);
         assert_eq!(state.select_arrange_2p_index, 2);
+        assert_eq!(state.select_double_option_index, 1);
         assert_eq!(state.result_arrange_index, 9);
         assert_eq!(state.result_arrange_2p_index, 2);
         assert_eq!(state.select_extended_arrange_index, 9);
@@ -3566,6 +3573,7 @@ mod tests {
             result_failed: false,
             arrange: "NORMAL".to_string(),
             arrange_2p: "NORMAL".to_string(),
+            double_option: "OFF".to_string(),
             lane_shuffle_pattern: Vec::new(),
             ex_score: 100,
             ex_score_rate: 0.5,
@@ -3713,6 +3721,7 @@ mod tests {
             result_failed: false,
             arrange: "NORMAL".to_string(),
             arrange_2p: "NORMAL".to_string(),
+            double_option: "OFF".to_string(),
             lane_shuffle_pattern: Vec::new(),
             ex_score: 100,
             ex_score_rate: 0.5,

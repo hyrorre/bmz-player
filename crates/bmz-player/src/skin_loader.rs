@@ -256,6 +256,7 @@ struct SkinDocumentDependencyFingerprint {
     number_values: BTreeMap<i32, i32>,
     text_values: BTreeMap<i32, String>,
     option_values: BTreeMap<i32, bool>,
+    event_index_values: BTreeMap<i32, i32>,
     file_values: BTreeMap<String, String>,
     loaded_files: BTreeMap<PathBuf, SkinLoadedFileDependency>,
     virtual_io_files: BTreeMap<String, Option<String>>,
@@ -1504,6 +1505,7 @@ fn lr2_document_dependency_fingerprint(
         number_values: BTreeMap::new(),
         text_values: BTreeMap::new(),
         option_values,
+        event_index_values: BTreeMap::new(),
         file_values,
         loaded_files,
         virtual_io_files: BTreeMap::new(),
@@ -1547,6 +1549,14 @@ fn document_dependency_fingerprint(
             (*option_id, value)
         })
         .collect();
+    let event_index_values = dependencies
+        .event_index_values
+        .keys()
+        .map(|event_id| {
+            let value = runtime_state.event_index_values.get(event_id).copied().unwrap_or_default();
+            (*event_id, value)
+        })
+        .collect();
     let file_values = dependencies
         .files
         .iter()
@@ -1563,6 +1573,7 @@ fn document_dependency_fingerprint(
         number_values,
         text_values,
         option_values,
+        event_index_values,
         file_values,
         loaded_files,
         virtual_io_files,
@@ -4248,6 +4259,21 @@ mod tests {
             rendered_segments >= 700,
             "MILLIONDOLLAR circle graph segments must render, got {rendered_segments}"
         );
+        let circle_angles = circle_items
+            .iter()
+            .filter_map(|item| match item {
+                SkinRenderItem::RotatedImage { texture, angle_deg, center, .. }
+                    if *texture == source_12.texture =>
+                {
+                    assert!((center.x - 0.5).abs() < f32::EPSILON);
+                    assert!((center.y - 0.5).abs() < f32::EPSILON);
+                    Some(*angle_deg)
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert!(circle_angles.iter().all(|angle| *angle >= 0.0));
+        assert!(circle_angles.iter().any(|angle| *angle >= 359.0));
 
         let event = document.runtime_events.first().expect("runtime toggle event");
         let initial_true = event
@@ -4294,6 +4320,61 @@ mod tests {
         runtime.advance(document, &mut state, 200);
         assert_eq!(state.dynamic_timer_ms[true_timer], Some(0));
         assert_eq!(state.dynamic_timer_ms[false_timer], None);
+    }
+
+    #[test]
+    fn milliondollar_result_song_info_uses_runtime_judge_rank_and_ln_mode_when_available() {
+        let skin_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../data/skins/MILLIONDOLLAR/result.luaskin");
+        if !skin_path.is_file() {
+            return;
+        }
+
+        let decoded = decode_beatoraja_skin_with_options_and_runtime_state(
+            &skin_path,
+            SkinKind::Result,
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            &LuaLoadRuntimeState {
+                option_values: BTreeMap::from([
+                    (180, false),
+                    (181, true),
+                    (182, false),
+                    (183, false),
+                    (184, false),
+                ]),
+                event_index_values: BTreeMap::from([(42, 2), (43, 0), (54, 0), (308, 2)]),
+                ..LuaLoadRuntimeState::default()
+            },
+        )
+        .expect("decode MILLIONDOLLAR result skin with chart metadata");
+
+        let judge_rank = decoded
+            .document
+            .image
+            .iter()
+            .find(|image| image.id == "Parts_Text_Info_Judgerank")
+            .expect("MILLIONDOLLAR judge-rank label");
+        let ln_type = decoded
+            .document
+            .image
+            .iter()
+            .find(|image| image.id == "Parts_Text_Info_Lntype")
+            .expect("MILLIONDOLLAR LN-type label");
+        let arrange = decoded
+            .document
+            .image
+            .iter()
+            .find(|image| image.id == "Parts_Texts_Useoption_SP")
+            .expect("MILLIONDOLLAR SP arrange label");
+        assert_eq!(judge_rank.y, 310, "HARD must select atlas row 3");
+        assert_eq!(ln_type.y, 291, "HCN must select atlas row 2");
+        assert_eq!(arrange.y, 48, "RANDOM must select atlas row 2");
+        assert!(decoded.document.destination.iter().any(|entry| matches!(
+            entry,
+            DestinationListEntry::Single(destination)
+                if destination.id == "Parts_Texts_Useoption_SP"
+        )));
     }
 
     #[test]
@@ -6849,6 +6930,58 @@ return {
         .unwrap();
         assert_eq!(second.cache_status, DocumentCacheStatus::Miss);
         assert_eq!(second.document.source[0].path, "nonzero.png");
+    }
+
+    #[test]
+    fn lua_document_cache_misses_when_runtime_event_index_changes() {
+        let root = unique_test_dir("bmz-lua-document-cache-event-index");
+        std::fs::create_dir_all(&root).unwrap();
+        let skin_path = root.join("result.luaskin");
+        std::fs::write(
+            &skin_path,
+            r#"
+local main_state = require("main_state")
+local lnmode = main_state.event_index(308)
+return {
+    type = 7,
+    source = {
+        { id = "bg", path = lnmode == 0 and "ln.png" or "charge.png" },
+    },
+}
+"#,
+        )
+        .unwrap();
+        let cache = Arc::new(Mutex::new(SkinDocumentCache::default()));
+
+        let first = load_skin_document(
+            &skin_path,
+            SkinKind::Result,
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            &LuaLoadRuntimeState {
+                event_index_values: BTreeMap::from([(308, 0)]),
+                ..LuaLoadRuntimeState::default()
+            },
+            Some(cache.clone()),
+        )
+        .unwrap();
+        assert_eq!(first.cache_status, DocumentCacheStatus::Miss);
+        assert_eq!(first.document.source[0].path, "ln.png");
+
+        let second = load_skin_document(
+            &skin_path,
+            SkinKind::Result,
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            &LuaLoadRuntimeState {
+                event_index_values: BTreeMap::from([(308, 2)]),
+                ..LuaLoadRuntimeState::default()
+            },
+            Some(cache),
+        )
+        .unwrap();
+        assert_eq!(second.cache_status, DocumentCacheStatus::Miss);
+        assert_eq!(second.document.source[0].path, "charge.png");
     }
 
     #[test]

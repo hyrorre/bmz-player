@@ -177,6 +177,7 @@ pub fn sample_result_scene() -> AppSceneSnapshot {
         result_failed: false,
         arrange: "NORMAL".to_string(),
         arrange_2p: "NORMAL".to_string(),
+        double_option: "OFF".to_string(),
         lane_shuffle_pattern: Vec::new(),
         ex_score: 1888,
         ex_score_rate: 0.944,

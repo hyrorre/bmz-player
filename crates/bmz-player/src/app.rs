@@ -3102,6 +3102,10 @@ impl WinitApp {
                     result_failed,
                     arrange: summary.arrange.as_str().to_string(),
                     arrange_2p: summary.arrange_2p.as_str().to_string(),
+                    double_option: self
+                        .result_double_option_for_slot(self.current_result_skin_slot())
+                        .as_str()
+                        .to_string(),
                     lane_shuffle_pattern: summary.lane_shuffle_pattern.clone(),
                     ex_score: summary.ex_score,
                     ex_score_rate: summary.ex_score_rate(),
@@ -11598,6 +11602,13 @@ impl WinitApp {
                 &self.play_table_text_fallback,
             );
         }
+        runtime_state.event_index_values.insert(
+            54,
+            i32::try_from(bmz_render::skin::select_double_option_index(
+                self.result_double_option_for_slot(slot).as_str(),
+            ))
+            .unwrap_or_default(),
+        );
         if let Some(stage) = self.current_course_stage_marker() {
             apply_course_mode_lua_options(&mut runtime_state, Some(stage));
         }
@@ -11608,6 +11619,17 @@ impl WinitApp {
             apply_course_result_lua_load_state(&mut runtime_state, course);
         }
         runtime_state
+    }
+
+    fn result_double_option_for_slot(&self, slot: ResultSkinSlot) -> DoubleOption {
+        match slot {
+            ResultSkinSlot::Normal => self
+                .finished_play
+                .as_ref()
+                .map(|finished| finished.applied_arrange.double_option)
+                .unwrap_or(DoubleOption::Off),
+            ResultSkinSlot::Course => DoubleOption::Off,
+        }
     }
 
     fn current_result_score_save_enabled(&self) -> bool {
@@ -17208,6 +17230,39 @@ fn apply_result_summary_lua_load_state(
         (1002, table_level.to_string()),
         (1003, table_full.to_string()),
     ]);
+    for option in 180..=184 {
+        runtime_state.option_values.insert(option, false);
+    }
+    if let Some(option) = result_judge_rank_option_id(summary.judge_rank) {
+        runtime_state.option_values.insert(option, true);
+    }
+    runtime_state.event_index_values.insert(
+        308,
+        i32::try_from(result_long_note_mode_index(summary.long_note_mode)).unwrap_or_default(),
+    );
+    runtime_state.event_index_values.insert(
+        42,
+        i32::try_from(bmz_render::skin::select_arrange_index(&summary.arrange)).unwrap_or_default(),
+    );
+    runtime_state.event_index_values.insert(
+        43,
+        i32::try_from(bmz_render::skin::select_arrange_index(&summary.arrange_2p))
+            .unwrap_or_default(),
+    );
+}
+
+fn result_judge_rank_option_id(judge_rank: Option<i32>) -> Option<i32> {
+    let Some(rank) = judge_rank else {
+        return Some(182);
+    };
+    match rank {
+        0 | 10..=34 => Some(180),
+        1 | 35..=59 => Some(181),
+        2 | 60..=84 => Some(182),
+        3 | 85..=109 => Some(183),
+        4 | 110.. => Some(184),
+        _ => None,
+    }
 }
 
 fn result_long_note_mode_index(mode: bmz_chart::model::LongNoteMode) -> usize {
@@ -22055,6 +22110,10 @@ mod tests {
         assert!((summary.graph.bpm_graph_segments[1].start_ratio - 1.0 / 3.0).abs() < 0.001);
         assert_eq!(summary.graph.bpm_graph_segments[1].end_ratio, 1.0);
 
+        summary.judge_rank = Some(3);
+        summary.long_note_mode = bmz_chart::model::LongNoteMode::Hcn;
+        summary.arrange = "RANDOM".to_string();
+        summary.arrange_2p = "MIRROR".to_string();
         let mut runtime_state =
             lua_runtime_state_for_result(false, false, true, KeyMode::K7, number_values, "Player");
         apply_result_summary_lua_load_state(
@@ -22069,6 +22128,12 @@ mod tests {
         assert_eq!(runtime_state.text_values.get(&12).map(String::as_str), Some("Course Title"));
         assert_eq!(runtime_state.text_values.get(&1003).map(String::as_str), Some("Table ★12"));
         assert_eq!(runtime_state.text_values.get(&150).map(String::as_str), Some("Stage 1"));
+        assert_eq!(runtime_state.option_values.get(&180), Some(&false));
+        assert_eq!(runtime_state.option_values.get(&183), Some(&true));
+        assert_eq!(runtime_state.option_values.get(&184), Some(&false));
+        assert_eq!(runtime_state.event_index_values.get(&308), Some(&2));
+        assert_eq!(runtime_state.event_index_values.get(&42), Some(&2));
+        assert_eq!(runtime_state.event_index_values.get(&43), Some(&1));
         assert_eq!(
             runtime_state.number_values.get(&bmz_render::skin::SKIN_REF_BMZ_COURSE_STAGE_COUNT),
             Some(&2)
@@ -22164,6 +22229,26 @@ mod tests {
         assert_eq!(offline.option_values.get(&61), Some(&false));
         assert_eq!(offline.option_values.get(&160), Some(&false));
         assert_eq!(offline.option_values.get(&161), Some(&true));
+    }
+
+    #[test]
+    fn result_judge_rank_options_match_beatoraja_ranges() {
+        for (rank, expected) in [
+            (Some(0), Some(180)),
+            (Some(34), Some(180)),
+            (Some(1), Some(181)),
+            (Some(59), Some(181)),
+            (Some(2), Some(182)),
+            (Some(84), Some(182)),
+            (Some(3), Some(183)),
+            (Some(109), Some(183)),
+            (Some(4), Some(184)),
+            (Some(110), Some(184)),
+            (None, Some(182)),
+        ] {
+            assert_eq!(result_judge_rank_option_id(rank), expected, "rank {rank:?}");
+        }
+        assert_eq!(result_judge_rank_option_id(Some(9)), None);
     }
 
     #[test]

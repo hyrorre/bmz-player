@@ -45,6 +45,7 @@ pub struct SkinLoadDependencies {
     pub number_values: BTreeMap<i32, i32>,
     pub text_values: BTreeMap<i32, String>,
     pub option_values: BTreeMap<i32, bool>,
+    pub event_index_values: BTreeMap<i32, i32>,
     pub files: BTreeSet<String>,
     pub loaded_files: BTreeMap<PathBuf, SkinLoadedFileDependency>,
     /// Read-only virtual files observed through Lua `io.open` / `io.lines`.
@@ -69,6 +70,7 @@ pub struct LuaLoadRuntimeState {
     pub number_values: BTreeMap<i32, i32>,
     pub text_values: BTreeMap<i32, String>,
     pub option_values: BTreeMap<i32, bool>,
+    pub event_index_values: BTreeMap<i32, i32>,
     /// App-owned, read-only files exposed to Lua `io.open` during skin load.
     ///
     /// This is used for compatibility data whose original implementation is
@@ -534,6 +536,40 @@ mod tests {
             panic!("destination frame should be static");
         };
         assert_eq!(frame.y, Some(45));
+    }
+
+    #[test]
+    fn lua_skin_runtime_event_index_is_available_during_load() {
+        let root = unique_test_dir("bmz-skin-lua-runtime-event-index");
+        fs::create_dir_all(&root).unwrap();
+        fs::write(
+            root.join("result.luaskin"),
+            r#"
+            local main_state = require("main_state")
+            local row = main_state.event_index(308)
+            return {
+                type = 7,
+                image = {
+                    { id = "ln-type", src = 1, x = 0, y = 10 + row * 19, w = 50, h = 19 }
+                }
+            }
+            "#,
+        )
+        .unwrap();
+
+        let loaded = load_lua_skin_with_runtime_state(
+            &root.join("result.luaskin"),
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            &LuaLoadRuntimeState {
+                event_index_values: BTreeMap::from([(308, 2)]),
+                ..LuaLoadRuntimeState::default()
+            },
+        )
+        .unwrap();
+
+        assert_eq!(loaded.document.image[0].y, 48);
+        assert_eq!(loaded.dependencies.event_index_values.get(&308), Some(&2));
     }
 
     #[test]

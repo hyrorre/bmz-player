@@ -3043,7 +3043,6 @@ impl SkinDocumentRenderExt for SkinDocument {
         frame.r = r;
         frame.g = g;
         frame.b = b;
-        frame.angle = -frame.angle;
         let source = resolve_document_source(sources, &image.src)?;
         let pixel_rect = skin_image_pixel_rect(image, images);
         let uv = skin_image_texture_region_for_state(
@@ -12176,7 +12175,7 @@ fn rank_index(ex_score: Option<u32>, total_notes: u32) -> Option<usize> {
     Some(rank)
 }
 
-pub(crate) fn select_arrange_index(arrange: &str) -> usize {
+pub fn select_arrange_index(arrange: &str) -> usize {
     match arrange {
         "MIRROR" => 1,
         "RANDOM" | "F-RANDOM" | "MF-RANDOM" => 2,
@@ -12199,7 +12198,7 @@ pub(crate) fn extended_arrange_index(arrange: &str) -> usize {
     }
 }
 
-fn select_double_option_index(double_option: &str) -> usize {
+pub fn select_double_option_index(double_option: &str) -> usize {
     match double_option {
         "FLIP" => 1,
         "BATTLE" => 2,
@@ -12852,7 +12851,11 @@ fn skin_image_item_for_frame(
         blend,
         source_size,
         linear_filter,
-        angle_deg: frame.angle as f32,
+        // beatoraja/LibGDX rotates in bottom-origin coordinates, where a
+        // positive angle is counter-clockwise. BMZ renders in top-origin
+        // coordinates, so negate the destination angle to preserve the same
+        // on-screen direction.
+        angle_deg: -frame.angle as f32,
         center: skin_rotation_center(center),
     }
 }
@@ -16694,7 +16697,7 @@ mod tests {
     }
 
     #[test]
-    fn skin_document_preserves_declared_14k_turntable_offsets() {
+    fn skin_document_applies_declared_14k_turntable_offsets_with_beatoraja_rotation() {
         let document: SkinDocument = serde_json::from_str(
             r#"
             {
@@ -16739,7 +16742,7 @@ mod tests {
             })
             .collect::<Vec<_>>();
 
-        assert_eq!(angles, vec![30, 30, 70]);
+        assert_eq!(angles, vec![-30, -30, -70]);
     }
 
     #[test]
@@ -23975,7 +23978,7 @@ mod tests {
         assert!(matches!(
             items[0],
             SkinRenderItem::RotatedImage { angle_deg, center, .. }
-                if approx_eq(angle_deg, 90.0) && approx_eq(center.x, 0.0) && approx_eq(center.y, 1.0)
+                if approx_eq(angle_deg, -90.0) && approx_eq(center.x, 0.0) && approx_eq(center.y, 1.0)
         ));
     }
 

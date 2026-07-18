@@ -1023,6 +1023,11 @@ fn install_sandbox(
             main_state_probe.lock().map_err(|_| anyhow!("main_state probe lock poisoned"))?;
         probe.option_values = runtime_state.option_values.clone();
     }
+    if !runtime_state.event_index_values.is_empty() {
+        let mut probe =
+            main_state_probe.lock().map_err(|_| anyhow!("main_state probe lock poisoned"))?;
+        probe.event_index_values = runtime_state.event_index_values.clone();
+    }
     let globals = lua.globals();
     if let Some(skin_config_options) = skin_config_options {
         let skin_config = lua.create_table()?;
@@ -1636,6 +1641,14 @@ impl MainStateProbe {
         }
     }
 
+    fn record_load_time_event_index_dependency(&self, event_id: i32, value: i32) {
+        if let Some(dependencies) = &self.load_dependencies
+            && let Ok(mut dependencies) = dependencies.lock()
+        {
+            dependencies.event_index_values.insert(event_id, value);
+        }
+    }
+
     fn record_load_time_text_dependency(&self, ref_id: i32, value: &str) {
         if let Some(dependencies) = &self.load_dependencies
             && let Ok(mut dependencies) = dependencies.lock()
@@ -1703,7 +1716,11 @@ impl MainStateProbe {
 
     fn event_index(&mut self, event_id: i32) -> i32 {
         match self.mode {
-            MainStateProbeMode::RuntimeStub => 0,
+            MainStateProbeMode::RuntimeStub => {
+                let value = self.event_index_values.get(&event_id).copied().unwrap_or_default();
+                self.record_load_time_event_index_dependency(event_id, value);
+                value
+            }
             MainStateProbeMode::SymbolicNumbers { base_value } => {
                 self.event_index_calls.push(event_id);
                 self.event_index_values.get(&event_id).copied().unwrap_or(base_value + event_id)
