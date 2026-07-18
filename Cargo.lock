@@ -658,6 +658,7 @@ dependencies = [
  "clipboard-win",
  "egui",
  "egui-wgpu",
+ "flate2",
  "image",
  "libc",
  "serde",

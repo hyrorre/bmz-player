@@ -9,7 +9,7 @@ use bmz_audio::ffmpeg_loader::FfmpegSampleLoader;
 use bmz_audio::loader::SampleLoader;
 use bmz_audio::sample::DecodedSample;
 use bmz_core::lane::KeyMode;
-use bmz_render::assets::{RgbaImageAsset, load_png_rgba};
+use bmz_render::assets::{RgbaImageAsset, load_static_rgba_image};
 use bmz_render::bitmap_font::{BitmapFont, load_bitmap_font};
 use bmz_render::plan::TextureId;
 use bmz_render::renderer::{GpuUploader, PreparedTexture, Renderer};
@@ -1075,7 +1075,7 @@ pub fn decode_beatoraja_skin_with_options_and_runtime_state_and_caches(
     let fonts: Vec<DecodedFont> = decoded_fonts.into_iter().map(|(font, _)| font).collect();
 
     // ソースは ID 順を保つため、まず resolved path リストを順次組み立て、
-    // PNG/動画先頭フレームのデコード本体だけを並列実行する。
+    // 静止画/動画先頭フレームのデコード本体だけを並列実行する。
     let source_tasks: Vec<SourceDecodeTask> = document
         .source
         .iter()
@@ -1100,7 +1100,7 @@ pub fn decode_beatoraja_skin_with_options_and_runtime_state_and_caches(
                 .and_then(|extension| extension.to_str())
                 .map(str::to_ascii_lowercase)
                 .unwrap_or_default();
-            if extension == "png" {
+            if is_skin_static_source_extension(&extension) {
                 return Some(SourceDecodeTask::File {
                     index,
                     source_id: source.id.clone(),
@@ -1166,7 +1166,7 @@ pub fn decode_beatoraja_skin_with_options_and_runtime_state_and_caches(
                     &source_path,
                     false,
                     source_cache.as_ref(),
-                    || load_png_rgba(&source_path),
+                    || load_static_rgba_image(&source_path),
                 ) {
                     Ok((asset, status)) => {
                         let size = SkinImageSize {
@@ -1375,6 +1375,10 @@ fn lr2_builtin_source_asset(path: &str) -> Option<RgbaImageAsset> {
 
 fn is_skin_video_source_extension(extension: &str) -> bool {
     matches!(extension, "mp4" | "wmv" | "m4v" | "webm" | "mpg" | "mpeg" | "m1v" | "m2v" | "avi")
+}
+
+fn is_skin_static_source_extension(extension: &str) -> bool {
+    matches!(extension, "png" | "bmp" | "jpg" | "jpeg" | "gif" | "tga" | "cim")
 }
 
 fn load_source_asset_with_cache<F>(
@@ -4164,6 +4168,22 @@ mod tests {
             &BTreeMap::new(),
         )
         .expect("decode MILLIONDOLLAR result skin");
+        let cim_sources = decoded
+            .sources
+            .iter()
+            .filter(|source| {
+                source
+                    .path
+                    .extension()
+                    .and_then(|extension| extension.to_str())
+                    .is_some_and(|extension| extension.eq_ignore_ascii_case("cim"))
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(cim_sources.len(), 11, "all MILLIONDOLLAR CIM atlases must decode");
+        assert!(
+            cim_sources.iter().all(|source| source.asset.is_some()),
+            "MILLIONDOLLAR CIM atlases must provide RGBA assets before GPU upload"
+        );
         let document = &decoded.document;
         let event = document.runtime_events.first().expect("runtime toggle event");
         let initial_true = event
