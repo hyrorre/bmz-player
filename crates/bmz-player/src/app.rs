@@ -1811,6 +1811,7 @@ fn course_result_summary_for_skin(course: &CourseResultSummary) -> ResultSummary
 
     ResultSummary {
         clear_type: course.final_clear_type,
+        target_name: String::new(),
         arrange: "NORMAL".to_string(),
         arrange_2p: "NORMAL".to_string(),
         lane_shuffle_pattern: Vec::new(),
@@ -2146,6 +2147,7 @@ fn debug_boot_result_summary() -> ResultSummary {
     let duration_ms = 180_000;
     ResultSummary {
         clear_type: ClearType::Failed,
+        target_name: "RANK AAA".to_string(),
         arrange: "RANDOM".to_string(),
         arrange_2p: "NORMAL".to_string(),
         lane_shuffle_pattern: vec![3, 1, 4, 2, 7, 5, 6],
@@ -3162,6 +3164,7 @@ impl WinitApp {
                 let score_save_enabled = self.current_result_score_save_enabled();
                 AppSceneSnapshot::Result(ResultSnapshot {
                     player_name: String::new(),
+                    target_name: summary.target_name.clone(),
                     current_fps: 0,
                     skin_input: Default::default(),
                     hispeed_auto_adjust: self.boot.profile_config.lane.hispeed_auto_adjust,
@@ -10052,6 +10055,7 @@ impl WinitApp {
                     played_at: now_unix_seconds(),
                     applied_arrange: &active_play.running.applied_arrange,
                     target_ex_score: active_play.running.target_ex_score,
+                    target_name: &active_play.running.target,
                     score_key: active_play.running.score_key,
                     practice_mode: active_play.running.practice_mode,
                     finish_mode,
@@ -10635,6 +10639,7 @@ impl WinitApp {
                         played_at: now_unix_seconds(),
                         applied_arrange: &started.running.applied_arrange,
                         target_ex_score: started.running.target_ex_score,
+                        target_name: &started.running.target,
                         score_key: started.running.score_key,
                         practice_mode: started.running.practice_mode,
                         finish_mode: if self.active_course.is_some() {
@@ -12073,6 +12078,7 @@ impl WinitApp {
                         played_at: now_unix_seconds(),
                         applied_arrange: &active_play.running.applied_arrange,
                         target_ex_score: active_play.running.target_ex_score,
+                        target_name: &active_play.running.target,
                         score_key: active_play.running.score_key,
                         practice_mode: active_play.running.practice_mode,
                         finish_mode,
@@ -17310,6 +17316,8 @@ fn apply_result_summary_lua_load_state(
         format!("{} {}", summary.artist, summary.subartist)
     };
     runtime_state.text_values.extend([
+        (1, summary.target_name.clone()),
+        (3, summary.target_name.clone()),
         (10, summary.title.clone()),
         (11, summary.subtitle.clone()),
         (12, full_title),
@@ -22105,6 +22113,7 @@ mod tests {
         ) -> ResultSummary {
             ResultSummary {
                 clear_type: ClearType::NoPlay,
+                target_name: "RANK AAA".to_string(),
                 arrange: "NORMAL".to_string(),
                 arrange_2p: "NORMAL".to_string(),
                 lane_shuffle_pattern: Vec::new(),
@@ -22318,6 +22327,7 @@ mod tests {
         summary.long_note_mode = bmz_chart::model::LongNoteMode::Hcn;
         summary.arrange = "RANDOM".to_string();
         summary.arrange_2p = "MIRROR".to_string();
+        summary.target_name = "RANK AAA".to_string();
         let mut runtime_state =
             lua_runtime_state_for_result(false, None, true, KeyMode::K7, number_values, "Player");
         apply_result_summary_lua_load_state(
@@ -22327,6 +22337,8 @@ mod tests {
             "★12",
             "Table ★12",
         );
+        assert_eq!(runtime_state.text_values.get(&1).map(String::as_str), Some("RANK AAA"));
+        assert_eq!(runtime_state.text_values.get(&3).map(String::as_str), Some("RANK AAA"));
         apply_course_result_lua_load_state(&mut runtime_state, &course);
         assert_eq!(runtime_state.text_values.get(&10).map(String::as_str), Some("Course Title"));
         assert_eq!(runtime_state.text_values.get(&12).map(String::as_str), Some("Course Title"));

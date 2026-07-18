@@ -393,7 +393,7 @@ pub fn finish_session_result_once(
         return Ok(finished);
     }
 
-    let finished = finish_session_result(
+    let mut finished = finish_session_result(
         score_db,
         network_db,
         request.profile_paths,
@@ -407,6 +407,7 @@ pub fn finish_session_result_once(
         request.practice_mode,
         request.finish_mode,
     )?;
+    finished.summary.target_name = request.target_name.replace('_', " ");
     *cached = Some(finished.clone());
     Ok(finished)
 }
@@ -419,6 +420,7 @@ pub struct FinishSessionResultOnceRequest<'a> {
     pub played_at: i64,
     pub applied_arrange: &'a AppliedArrange,
     pub target_ex_score: Option<u32>,
+    pub target_name: &'a str,
     pub score_key: ScoreKey,
     pub practice_mode: bool,
     pub finish_mode: FinishResultMode,
@@ -850,6 +852,7 @@ mod tests {
                 played_at: 1_700_000_103,
                 applied_arrange: &AppliedArrange::default(),
                 target_ex_score: None,
+                target_name: "RANK_AAA",
                 score_key: score_key(&session),
                 practice_mode: false,
                 finish_mode: FinishResultMode::Normal,
@@ -868,6 +871,7 @@ mod tests {
                 played_at: 1_700_000_104,
                 applied_arrange: &AppliedArrange::default(),
                 target_ex_score: None,
+                target_name: "RANK_AAA",
                 score_key: score_key(&session),
                 practice_mode: false,
                 finish_mode: FinishResultMode::Normal,
@@ -876,6 +880,7 @@ mod tests {
         .unwrap();
 
         assert_eq!(first.stored.score_history_id, second.stored.score_history_id);
+        assert_eq!(first.summary.target_name, "RANK AAA");
         assert_eq!(score_db.recent_history(10, 0).unwrap().len(), 1);
 
         std::fs::remove_dir_all(root).unwrap();

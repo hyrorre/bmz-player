@@ -4336,6 +4336,7 @@ mod tests {
             &BTreeMap::new(),
             &BTreeMap::new(),
             &LuaLoadRuntimeState {
+                text_values: BTreeMap::from([(1, "RANK AAA".to_string())]),
                 option_values: BTreeMap::from([
                     (180, false),
                     (181, true),
@@ -4367,9 +4368,16 @@ mod tests {
             .iter()
             .find(|image| image.id == "Parts_Texts_Useoption_SP")
             .expect("MILLIONDOLLAR SP arrange label");
+        let target_rank = decoded
+            .document
+            .image
+            .iter()
+            .find(|image| image.id == "Parts_Texts_Target_Rank")
+            .expect("MILLIONDOLLAR fixed target rank label");
         assert_eq!(judge_rank.y, 310, "HARD must select atlas row 3");
         assert_eq!(ln_type.y, 291, "HCN must select atlas row 2");
         assert_eq!(arrange.y, 48, "RANDOM must select atlas row 2");
+        assert_eq!(target_rank.y, 16, "RANK AAA must select the AAA target row");
         assert!(decoded.document.destination.iter().any(|entry| matches!(
             entry,
             DestinationListEntry::Single(destination)

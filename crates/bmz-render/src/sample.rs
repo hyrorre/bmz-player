@@ -170,6 +170,7 @@ pub fn sample_play_scene() -> AppSceneSnapshot {
 pub fn sample_result_scene() -> AppSceneSnapshot {
     AppSceneSnapshot::Result(ResultSnapshot {
         player_name: "Sample Player".to_string(),
+        target_name: "RANK AAA".to_string(),
         current_fps: 60,
         skin_input: Default::default(),
         hispeed_auto_adjust: false,

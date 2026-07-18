@@ -593,6 +593,8 @@ pub enum ResultIrState {
 pub struct ResultSnapshot {
     /// beatoraja STRING_PLAYER (2) に渡す現在プロフィール名。
     pub player_name: String,
+    /// beatoraja STRING_RIVAL/STRING_TARGET (1/3)。
+    pub target_name: String,
     /// beatoraja NUMBER_CURRENT_FPS (20)。
     pub current_fps: u32,
     pub skin_input: SkinLogicalInputSnapshot,
@@ -702,6 +704,7 @@ mod tests {
     fn result_snapshot_detects_full_combo() {
         let snapshot = ResultSnapshot {
             player_name: String::new(),
+            target_name: String::new(),
             current_fps: 0,
             skin_input: SkinLogicalInputSnapshot::default(),
             hispeed_auto_adjust: false,
@@ -780,6 +783,7 @@ mod tests {
     fn zero_note_result_is_not_full_combo() {
         let snapshot = ResultSnapshot {
             player_name: String::new(),
+            target_name: String::new(),
             current_fps: 0,
             skin_input: SkinLogicalInputSnapshot::default(),
             hispeed_auto_adjust: false,

@@ -381,6 +381,7 @@ pub fn advance_running_play_session_until_result(
                 played_at,
                 applied_arrange: &running.applied_arrange,
                 target_ex_score: running.target_ex_score,
+                target_name: &running.target,
                 score_key: running.score_key,
                 practice_mode: running.practice_mode,
                 finish_mode: FinishResultMode::Normal,

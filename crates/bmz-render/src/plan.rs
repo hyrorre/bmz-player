@@ -1492,6 +1492,8 @@ fn plan_result(
         let grade_diff = crate::skin::result_grade_diff_label(&state).unwrap_or_default();
         let text = SkinTextState {
             player_name: snapshot.player_name.as_str(),
+            rival: snapshot.target_name.as_str(),
+            target: snapshot.target_name.as_str(),
             title: snapshot.title.as_str(),
             subtitle: snapshot.subtitle.as_str(),
             artist: snapshot.artist.as_str(),
@@ -3101,6 +3103,7 @@ mod tests {
                 SkinContext::from_manifest_and_document(manifest, document, [source_texture]);
             let snapshot = ResultSnapshot {
                 player_name: String::new(),
+                target_name: String::new(),
                 current_fps: 0,
                 skin_input: Default::default(),
                 hispeed_auto_adjust: false,
@@ -3247,6 +3250,7 @@ mod tests {
         );
         let snapshot = ResultSnapshot {
             player_name: String::new(),
+            target_name: String::new(),
             current_fps: 0,
             skin_input: Default::default(),
             hispeed_auto_adjust: false,
@@ -3566,6 +3570,7 @@ mod tests {
         );
         let snapshot = ResultSnapshot {
             player_name: String::new(),
+            target_name: String::new(),
             current_fps: 0,
             skin_input: Default::default(),
             hispeed_auto_adjust: false,
@@ -3714,6 +3719,7 @@ mod tests {
         timing_distribution.add(8);
         let snapshot = ResultSnapshot {
             player_name: String::new(),
+            target_name: String::new(),
             current_fps: 0,
             skin_input: Default::default(),
             hispeed_auto_adjust: false,
