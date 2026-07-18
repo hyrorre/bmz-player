@@ -12722,6 +12722,7 @@ impl WinitApp {
         let presentation = self.renderer.surface_presentation_status();
         let info = DebugInfo {
             scene,
+            current_fps: self.skin_fps.current(),
             width: size.width,
             height: size.height,
             effective_present_mode: presentation.map(|status| status.effective_mode),

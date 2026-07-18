@@ -266,6 +266,8 @@ pub enum SkinCandidateOrigin {
 pub struct DebugInfo {
     /// 現在のシーン種別 ("Select" / "Play" / "Result")。
     pub scene: &'static str,
+    /// 右上 FPS オーバーレイと同じ、1 秒間の実測 FPS。
+    pub current_fps: u32,
     /// 描画サーフェスの幅 (px)。
     pub width: u32,
     /// 描画サーフェスの高さ (px)。
@@ -1612,10 +1614,9 @@ fn build_debug_panel(ctx: &egui::Context, open: &mut bool, info: &DebugInfo) {
         |ui| {
             scrollable_window_content(ui, |ui| {
                 let dt = ctx.input(|i| i.stable_dt);
-                let fps = if dt > 0.0 { 1.0 / dt } else { 0.0 };
                 egui::Grid::new("debug_grid").num_columns(2).show(ui, |ui| {
                     ui.label("FPS");
-                    ui.label(format!("{fps:.1}"));
+                    ui.label(info.current_fps.to_string());
                     ui.end_row();
                     ui.label("フレーム時間");
                     ui.label(format!("{:.2} ms", dt * 1000.0));
