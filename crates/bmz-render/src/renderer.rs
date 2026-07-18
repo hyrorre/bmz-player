@@ -884,8 +884,23 @@ impl Renderer {
     }
 
     pub fn set_result_skin_context(&mut self, skin_context: SkinContext) {
-        self.result_dynamic_timer_runtime.reset();
         self.result_skin_context = skin_context;
+        self.result_dynamic_timer_runtime.reset_for_document(self.result_skin_context.document());
+    }
+
+    /// リザルトスキンが定義する内部 runtime event を dispatch する。
+    ///
+    /// クリック入力などを app 層が解決した後に呼ぶ。event が未定義なら false。
+    pub fn dispatch_result_skin_runtime_event(&mut self, event_id: i32) -> bool {
+        let Some(document) = self.result_skin_context.document() else {
+            return false;
+        };
+        self.result_dynamic_timer_runtime.dispatch_runtime_event(document, event_id)
+    }
+
+    /// 同じリザルトスキンで新しい scene に入る際、runtime state を初期化する。
+    pub fn reset_result_skin_runtime(&mut self) {
+        self.result_dynamic_timer_runtime.reset_for_document(self.result_skin_context.document());
     }
 
     /// リザルトスキンが宣言する終了フェードアウト時間 (ms)。

@@ -14,11 +14,11 @@ use serde_json::{Map as JsonMap, Number as JsonNumber, Value as JsonValue};
 
 use bmz_skin_document::{
     SKIN_DYNAMIC_TIMER_BASE, SKIN_EVENT_RESULT_PANEL_GRAPH, SKIN_EVENT_RESULT_PANEL_IR,
-    SKIN_EXPR_ADJUSTED_COVER, SKIN_EXPR_ADJUSTED_RATE, SKIN_EXPR_ADJUSTED_RATE_ADOT,
-    SKIN_EXPR_COURSE_CLEAR_RATE, SKIN_EXPR_COURSE_TABLE_TEXT, SKIN_EXPR_FAST_SLOW_BREAKDOWN_HEIGHT,
-    SKIN_EXPR_FS_THRESHOLD, SKIN_EXPR_GAUGE_AMOUNT_FRACTION, SKIN_EXPR_GAUGE_AMOUNT_INTEGER,
-    SKIN_EXPR_GAUGE_PERCENT_FRACTION, SKIN_EXPR_GAUGE_PERCENT_INTEGER,
-    SKIN_EXPR_RESULT_TABLE_TITLE, SKIN_REF_PLAY_GAUGE_TYPE,
+    SKIN_EVENT_RUNTIME_BASE, SKIN_EXPR_ADJUSTED_COVER, SKIN_EXPR_ADJUSTED_RATE,
+    SKIN_EXPR_ADJUSTED_RATE_ADOT, SKIN_EXPR_COURSE_CLEAR_RATE, SKIN_EXPR_COURSE_TABLE_TEXT,
+    SKIN_EXPR_FAST_SLOW_BREAKDOWN_HEIGHT, SKIN_EXPR_FS_THRESHOLD, SKIN_EXPR_GAUGE_AMOUNT_FRACTION,
+    SKIN_EXPR_GAUGE_AMOUNT_INTEGER, SKIN_EXPR_GAUGE_PERCENT_FRACTION,
+    SKIN_EXPR_GAUGE_PERCENT_INTEGER, SKIN_EXPR_RESULT_TABLE_TITLE, SKIN_REF_PLAY_GAUGE_TYPE,
 };
 
 use crate::{
@@ -33,6 +33,22 @@ const LUA_MAX_TABLE_DEPTH: usize = 64;
 const LUA_MAX_TABLE_ENTRIES: usize = 200_000;
 const LUA_IO_MAX_READ_BYTES: usize = 8 * 1024 * 1024;
 const TIMER_OFF_VALUE: i32 = i32::MIN;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct LuaRuntimeFlagProbe {
+    id: i32,
+    table: String,
+    field: String,
+    initial: bool,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+enum LuaRuntimeScalar {
+    Boolean(bool),
+    Integer(i64),
+    Number(f64),
+    String(Vec<u8>),
+}
 
 /// beatoraja fast/slow 判定カウント ref (graph 比率推論用)
 const FAST_SLOW_FAST_REFS: [i32; 6] = [410, 412, 414, 416, 418, 421];
@@ -324,6 +340,42 @@ fn execute_lua_skin(
                 ]))
             });
             root.insert("fixedDelayTimer".to_string(), JsonValue::Array(entries.collect()));
+        }
+        let runtime_flags = main_state_probe
+            .lock()
+            .ok()
+            .map(|probe| probe.runtime_flags.clone())
+            .unwrap_or_default();
+        if !runtime_flags.is_empty() {
+            let entries = runtime_flags.into_iter().map(|flag| {
+                JsonValue::Object(JsonMap::from_iter([
+                    ("id".to_string(), JsonValue::Number(JsonNumber::from(flag.id))),
+                    ("initial".to_string(), JsonValue::Bool(flag.initial)),
+                ]))
+            });
+            root.insert("runtimeFlag".to_string(), JsonValue::Array(entries.collect()));
+        }
+        let runtime_events = main_state_probe
+            .lock()
+            .ok()
+            .map(|probe| probe.runtime_events.clone())
+            .unwrap_or_default();
+        if !runtime_events.is_empty() {
+            let entries = runtime_events.into_iter().map(|(id, toggle_flags)| {
+                JsonValue::Object(JsonMap::from_iter([
+                    ("id".to_string(), JsonValue::Number(JsonNumber::from(id))),
+                    (
+                        "toggleFlags".to_string(),
+                        JsonValue::Array(
+                            toggle_flags
+                                .into_iter()
+                                .map(|flag_id| JsonValue::Number(JsonNumber::from(flag_id)))
+                                .collect(),
+                        ),
+                    ),
+                ]))
+            });
+            root.insert("runtimeEvent".to_string(), JsonValue::Array(entries.collect()));
         }
     }
 
@@ -1049,6 +1101,11 @@ struct MainStateProbe {
     fixed_delay_timers: Vec<(i32, i32, i32)>,
     unsupported_dynamic_timers: Vec<i32>,
     load_time_constant_dynamic_timers: Vec<i32>,
+    next_runtime_flag_id: i32,
+    runtime_flags: Vec<LuaRuntimeFlagProbe>,
+    next_runtime_event_id: i32,
+    runtime_events: Vec<(i32, Vec<i32>)>,
+    runtime_event_ids_by_flags: BTreeMap<Vec<i32>, i32>,
     keylogger_destination_occurrences: BTreeMap<String, usize>,
     gauge_lead_glow_occurrences: BTreeMap<String, usize>,
     gauge_value_destination_occurrences: BTreeMap<String, usize>,
@@ -1083,6 +1140,11 @@ impl Default for MainStateProbe {
             fixed_delay_timers: Vec::new(),
             unsupported_dynamic_timers: Vec::new(),
             load_time_constant_dynamic_timers: Vec::new(),
+            next_runtime_flag_id: 0,
+            runtime_flags: Vec::new(),
+            next_runtime_event_id: SKIN_EVENT_RUNTIME_BASE,
+            runtime_events: Vec::new(),
+            runtime_event_ids_by_flags: BTreeMap::new(),
             keylogger_destination_occurrences: BTreeMap::new(),
             gauge_lead_glow_occurrences: BTreeMap::new(),
             gauge_value_destination_occurrences: BTreeMap::new(),
@@ -2356,6 +2418,7 @@ fn create_timer_util_module(lua: &Lua, probe: Arc<Mutex<MainStateProbe>>) -> mlu
             let specialized = infer_is_gauge_iidx_global_observe(lua, &observed);
             let observe = specialized
                 .clone()
+                .or_else(|| infer_runtime_boolean_field_observe(lua, &observed, &probe_for_observe))
                 .or_else(|| infer_boolean_predicate(&observed, &probe_for_observe, None));
             let unsupported = observe.is_none();
             let load_time_constant = specialized.is_none()
@@ -3380,6 +3443,18 @@ fn lua_table_to_json(
                     object.insert("value_expr".to_string(), JsonValue::String(value_expr));
                     continue;
                 }
+                if is_graph
+                    && let Some(value_expr) = object_id
+                        .as_deref()
+                        .and_then(milliondollar_fast_slow_graph_value_expr_from_id)
+                {
+                    // MILLIONDOLLAR keeps these two values in CUSTOMS, which
+                    // is evaluated while the skin is loaded.  Preserve their
+                    // runtime main_state/option dependencies as an expression
+                    // instead of freezing the load-time value.
+                    object.insert("value_expr".to_string(), JsonValue::String(value_expr));
+                    continue;
+                }
                 if !is_graph
                     && path.contains(".imageset[")
                     && let Some(ref_id) = infer_gauge_type_imageset_ref(function, main_state_probe)
@@ -3535,6 +3610,7 @@ fn lua_table_to_json(
             }
             if key == "act" {
                 let event_id = infer_constant_integer_at_load(function, main_state_probe)
+                    .or_else(|| infer_runtime_toggle_act(lua, function, main_state_probe))
                     .or_else(|| infer_result_panel_act_at_load(lua, function, main_state_probe));
                 if let Some(event_id) = event_id {
                     object.insert(key.clone(), JsonValue::Number(JsonNumber::from(event_id)));
@@ -3889,6 +3965,21 @@ fn keylogger_graph_value_expr_from_id(id: &str) -> Option<String> {
         return None;
     }
     Some(format!("bmz:keylogger_graph:{graph_kind}:{lane}:{layer}"))
+}
+
+fn milliondollar_fast_slow_graph_value_expr_from_id(id: &str) -> Option<String> {
+    let numerator = match id {
+        "Graph_Totalfastslow_Fast" => {
+            "option(928)*number(423)+(1-option(928))*(number(423)+number(410))"
+        }
+        "Graph_Totalfastslow_Slow" => {
+            "option(928)*number(424)+(1-option(928))*(number(424)+number(411))"
+        }
+        _ => return None,
+    };
+    Some(format!(
+        "({numerator})/(number(110)+number(111)+number(112)+number(113)+number(114)+number(420))"
+    ))
 }
 
 fn parse_keylogger_destination_id(id: &str) -> Option<(&'static str, usize, Option<&str>)> {
@@ -5165,6 +5256,188 @@ fn unique_numbers_in_order(values: &[i32]) -> Vec<i32> {
 
 fn is_constant_boolean_condition(condition: &str) -> bool {
     matches!(condition, "number(0) >= 0" | "number(0) < 0")
+}
+
+/// `CUSTOMS.some_flag` のようなトップレベル bool 参照を宣言的 runtime flag へ写す。
+///
+/// 任意テーブルやネストした値は触らず、各 bool を一つずつ反転して callback の結果が
+/// 反転・復元する単一依存だけを受理する。これにより描画中の Lua 実行を避けつつ、
+/// MILLIONDOLLAR の表示切替 callback を Rust 側の状態へ移せる。
+fn infer_runtime_boolean_field_observe(
+    lua: &Lua,
+    function: &Function,
+    main_state_probe: &Arc<Mutex<MainStateProbe>>,
+) -> Option<String> {
+    let baseline = match function.call::<Value>(()).ok()? {
+        Value::Boolean(value) => value,
+        _ => return None,
+    };
+    let customs = lua.globals().get::<Table>("CUSTOMS").ok()?;
+    let bool_fields = customs
+        .clone()
+        .pairs::<Value, Value>()
+        .filter_map(|entry| {
+            let (key, value) = entry.ok()?;
+            let Value::String(key) = key else {
+                return None;
+            };
+            let Value::Boolean(value) = value else {
+                return None;
+            };
+            Some((key.to_str().ok()?.to_string(), value))
+        })
+        .collect::<Vec<_>>();
+
+    let mut candidates = Vec::new();
+    for (field, initial) in bool_fields {
+        customs.set(field.as_str(), !initial).ok()?;
+        let flipped = function.call::<Value>(()).ok();
+        customs.set(field.as_str(), initial).ok()?;
+        let restored = function.call::<Value>(()).ok();
+        if matches!(flipped, Some(Value::Boolean(value)) if value == !baseline)
+            && matches!(restored, Some(Value::Boolean(value)) if value == baseline)
+        {
+            candidates.push((field, initial));
+        }
+    }
+    let [(field, initial)] = candidates.as_slice() else {
+        return None;
+    };
+
+    let flag_id = {
+        let mut probe = main_state_probe.lock().ok()?;
+        if let Some(flag) =
+            probe.runtime_flags.iter().find(|flag| flag.table == "CUSTOMS" && flag.field == *field)
+        {
+            flag.id
+        } else {
+            let id = probe.next_runtime_flag_id;
+            probe.next_runtime_flag_id += 1;
+            probe.runtime_flags.push(LuaRuntimeFlagProbe {
+                id,
+                table: "CUSTOMS".to_string(),
+                field: field.clone(),
+                initial: *initial,
+            });
+            id
+        }
+    };
+    Some(if baseline == *initial {
+        format!("runtime_flag({flag_id})")
+    } else {
+        format!("not runtime_flag({flag_id})")
+    })
+}
+
+fn lua_runtime_scalar(value: Value) -> Option<LuaRuntimeScalar> {
+    match value {
+        Value::Boolean(value) => Some(LuaRuntimeScalar::Boolean(value)),
+        Value::Integer(value) => Some(LuaRuntimeScalar::Integer(value)),
+        Value::Number(value) if value.is_finite() => Some(LuaRuntimeScalar::Number(value)),
+        Value::String(value) => Some(LuaRuntimeScalar::String(value.as_bytes().to_vec())),
+        _ => None,
+    }
+}
+
+fn customs_scalar_snapshot(customs: &Table) -> Option<BTreeMap<String, LuaRuntimeScalar>> {
+    let mut snapshot = BTreeMap::new();
+    for entry in customs.clone().pairs::<Value, Value>() {
+        let (key, value) = entry.ok()?;
+        let Value::String(key) = key else {
+            continue;
+        };
+        let Some(value) = lua_runtime_scalar(value) else {
+            continue;
+        };
+        snapshot.insert(key.to_str().ok()?.to_string(), value);
+    }
+    Some(snapshot)
+}
+
+fn restore_customs_scalar_snapshot(
+    lua: &Lua,
+    customs: &Table,
+    snapshot: &BTreeMap<String, LuaRuntimeScalar>,
+) -> mlua::Result<()> {
+    for (field, value) in snapshot {
+        match value {
+            LuaRuntimeScalar::Boolean(value) => customs.set(field.as_str(), *value)?,
+            LuaRuntimeScalar::Integer(value) => customs.set(field.as_str(), *value)?,
+            LuaRuntimeScalar::Number(value) => customs.set(field.as_str(), *value)?,
+            LuaRuntimeScalar::String(value) => {
+                customs.set(field.as_str(), lua.create_string(value.as_slice())?)?
+            }
+        }
+    }
+    Ok(())
+}
+
+/// 登録済み `CUSTOMS` bool だけを反転し、二回呼ぶと全 scalar が復元する act を
+/// `runtimeEvent` へ変換する。外部副作用を持つ任意 callback は対象にしない。
+fn infer_runtime_toggle_act(
+    lua: &Lua,
+    function: &Function,
+    main_state_probe: &Arc<Mutex<MainStateProbe>>,
+) -> Option<i64> {
+    let registered = main_state_probe.lock().ok()?.runtime_flags.clone();
+    if registered.is_empty() || registered.iter().any(|flag| flag.table != "CUSTOMS") {
+        return None;
+    }
+    let customs = lua.globals().get::<Table>("CUSTOMS").ok()?;
+    let before = customs_scalar_snapshot(&customs)?;
+    let first_result = function.call::<Value>(()).ok();
+    let after_first = customs_scalar_snapshot(&customs)?;
+
+    let mut changed_flag_ids = Vec::new();
+    let mut safe = matches!(first_result, Some(Value::Nil));
+    for (field, before_value) in &before {
+        let after_value = after_first.get(field);
+        if after_value == Some(before_value) {
+            continue;
+        }
+        let (LuaRuntimeScalar::Boolean(before_bool), Some(LuaRuntimeScalar::Boolean(after_bool))) =
+            (before_value, after_value)
+        else {
+            safe = false;
+            continue;
+        };
+        if *after_bool != !*before_bool {
+            safe = false;
+            continue;
+        }
+        let Some(flag) = registered.iter().find(|flag| flag.field == *field) else {
+            safe = false;
+            continue;
+        };
+        changed_flag_ids.push(flag.id);
+    }
+    if before.len() != after_first.len() || changed_flag_ids.is_empty() {
+        safe = false;
+    }
+
+    let second_result = function.call::<Value>(()).ok();
+    let after_second = customs_scalar_snapshot(&customs);
+    let _ = restore_customs_scalar_snapshot(lua, &customs, &before);
+    if !safe || !matches!(second_result, Some(Value::Nil)) || after_second.as_ref() != Some(&before)
+    {
+        return None;
+    }
+
+    changed_flag_ids.sort_unstable();
+    changed_flag_ids.dedup();
+    let event_id = {
+        let mut probe = main_state_probe.lock().ok()?;
+        if let Some(event_id) = probe.runtime_event_ids_by_flags.get(&changed_flag_ids) {
+            *event_id
+        } else {
+            let event_id = probe.next_runtime_event_id;
+            probe.next_runtime_event_id -= 1;
+            probe.runtime_event_ids_by_flags.insert(changed_flag_ids.clone(), event_id);
+            probe.runtime_events.push((event_id, changed_flag_ids));
+            event_id
+        }
+    };
+    Some(i64::from(event_id))
 }
 
 /// Starseeker 等が `return is_gauge_iidx` / `return not is_gauge_iidx` と書くが
@@ -7836,6 +8109,58 @@ mod tests {
             Some("bmz:keylogger_graph:fastslow:9:fast")
         );
         assert!(keylogger_graph_value_expr_from_id("graph-now").is_none());
+    }
+
+    #[test]
+    fn maps_milliondollar_fast_slow_graph_ids_to_runtime_expressions() {
+        assert_eq!(
+            milliondollar_fast_slow_graph_value_expr_from_id("Graph_Totalfastslow_Fast").as_deref(),
+            Some(
+                "(option(928)*number(423)+(1-option(928))*(number(423)+number(410)))/(number(110)+number(111)+number(112)+number(113)+number(114)+number(420))"
+            )
+        );
+        assert_eq!(
+            milliondollar_fast_slow_graph_value_expr_from_id("Graph_Totalfastslow_Slow").as_deref(),
+            Some(
+                "(option(928)*number(424)+(1-option(928))*(number(424)+number(411)))/(number(110)+number(111)+number(112)+number(113)+number(114)+number(420))"
+            )
+        );
+        assert!(milliondollar_fast_slow_graph_value_expr_from_id("graph-now").is_none());
+    }
+
+    /// Third-party skin baseline.  It is intentionally skipped for clean CI
+    /// checkouts that do not contain the locally installed skin.
+    #[test]
+    fn milliondollar_result_fast_slow_graphs_convert_when_available() {
+        let skin_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../data/skins/MILLIONDOLLAR/result.luaskin");
+        if !skin_path.is_file() {
+            return;
+        }
+
+        let loaded = load_lua_skin_value(
+            &skin_path,
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            &LuaLoadRuntimeState::default(),
+            &BTreeMap::new(),
+        )
+        .expect("MILLIONDOLLAR result should convert");
+        let messages: Vec<_> =
+            loaded.warnings.iter().map(|warning| warning.message.as_str()).collect();
+        assert!(
+            !messages.iter().any(|message| {
+                message.contains("Graph_Totalfastslow_Fast")
+                    || message.contains("Graph_Totalfastslow_Slow")
+                    || (message.contains("graph[") && message.contains("unsupported value"))
+            }),
+            "MILLIONDOLLAR fast/slow graph values should convert: {messages:?}"
+        );
+        let document = loaded.value.to_string();
+        assert!(document.contains("Graph_Totalfastslow_Fast"));
+        assert!(document.contains("option(928)*number(423)"));
+        assert!(document.contains("Graph_Totalfastslow_Slow"));
+        assert!(document.contains("option(928)*number(424)"));
     }
 
     #[test]

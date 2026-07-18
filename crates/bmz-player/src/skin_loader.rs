@@ -4045,6 +4045,69 @@ mod tests {
     }
 
     #[test]
+    fn milliondollar_result_runtime_events_toggle_observe_timers_when_available() {
+        let skin_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../data/skins/MILLIONDOLLAR/result.luaskin");
+        if !skin_path.is_file() {
+            return;
+        }
+
+        let decoded = decode_beatoraja_skin_with_options(
+            &skin_path,
+            SkinKind::Result,
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+        )
+        .expect("decode MILLIONDOLLAR result skin");
+        let document = &decoded.document;
+        let event = document.runtime_events.first().expect("runtime toggle event");
+        let initial_true = event
+            .toggle_flags
+            .iter()
+            .find(|flag_id| {
+                document.runtime_flags.iter().any(|flag| flag.id == **flag_id && flag.initial)
+            })
+            .copied()
+            .expect("initially visible flag");
+        let initial_false = event
+            .toggle_flags
+            .iter()
+            .find(|flag_id| {
+                document.runtime_flags.iter().any(|flag| flag.id == **flag_id && !flag.initial)
+            })
+            .copied()
+            .expect("initially hidden flag");
+        let timer_index = |flag_id: i32| {
+            let observe = format!("runtime_flag({flag_id})");
+            let timer = document
+                .dynamic_timers
+                .iter()
+                .find(|timer| timer.observe == observe)
+                .expect("timer observing runtime flag");
+            usize::try_from(timer.id - bmz_render::skin::SKIN_DYNAMIC_TIMER_BASE).unwrap()
+        };
+        let true_timer = timer_index(initial_true);
+        let false_timer = timer_index(initial_false);
+        let mut runtime = DynamicTimerRuntime::default();
+        runtime.reset_for_document(Some(document));
+        let mut state = SkinDrawState::default();
+
+        runtime.advance(document, &mut state, 100);
+        assert_eq!(state.dynamic_timer_ms[true_timer], Some(0));
+        assert_eq!(state.dynamic_timer_ms[false_timer], None);
+
+        assert!(runtime.dispatch_runtime_event(document, event.id));
+        runtime.advance(document, &mut state, 150);
+        assert_eq!(state.dynamic_timer_ms[true_timer], None);
+        assert_eq!(state.dynamic_timer_ms[false_timer], Some(0));
+
+        assert!(runtime.dispatch_runtime_event(document, event.id));
+        runtime.advance(document, &mut state, 200);
+        assert_eq!(state.dynamic_timer_ms[true_timer], Some(0));
+        assert_eq!(state.dynamic_timer_ms[false_timer], None);
+    }
+
+    #[test]
     fn starseeker_result_misscount_diff_uses_runtime_number_color_block() {
         let skin_path = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../data/skins/Starseeker/result/result.luaskin");

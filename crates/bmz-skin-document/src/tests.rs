@@ -125,3 +125,20 @@ fn skin_document_expands_conditions_and_includes() {
     };
     assert_eq!(frame.x, Some(1));
 }
+
+#[test]
+fn runtime_flags_and_events_deserialize() {
+    let document: SkinDocument = serde_json::from_str(
+        r#"{
+            "runtimeFlag": [{ "id": -20001, "initial": true }],
+            "runtimeEvent": [{ "id": -20002, "toggleFlags": [-20001, -20003] }]
+        }"#,
+    )
+    .unwrap();
+
+    assert_eq!(document.runtime_flags.len(), 1);
+    assert_eq!(document.runtime_flags[0].id, -20_001);
+    assert!(document.runtime_flags[0].initial);
+    assert_eq!(document.runtime_events[0].id, -20_002);
+    assert_eq!(document.runtime_events[0].toggle_flags, [-20_001, -20_003]);
+}

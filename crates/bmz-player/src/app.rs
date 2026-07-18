@@ -5939,7 +5939,9 @@ impl WinitApp {
                     self.save_finished_play_replay_slot(slot);
                 }
             }
-            None => {}
+            None => {
+                let _ = self.renderer.dispatch_result_skin_runtime_event(event_id);
+            }
         }
     }
 
@@ -11333,6 +11335,7 @@ impl WinitApp {
         self.refresh_result_favorite_chart();
         self.spawn_result_skin_decode_for(slot);
         self.ensure_skin_ready(SkinKind::Result);
+        self.renderer.reset_result_skin_runtime();
         self.result_panel = self
             .renderer
             .result_skin_document()

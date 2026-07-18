@@ -919,6 +919,8 @@ impl SkinBgaFrame {
 #[derive(Debug, Clone, PartialEq)]
 pub struct SkinDrawState {
     pub elapsed_ms: i32,
+    /// Lua callback をロード時に変換した runtime flag。DynamicTimerRuntime が注入する。
+    pub runtime_flags: HashMap<i32, bool>,
     /// beatoraja TIMER_STARTINPUT (1)。skin.input 待機後からの経過 ms。
     pub start_input_ms: Option<i32>,
     /// beatoraja NUMBER_CURRENT_FPS (20)。
@@ -1293,6 +1295,7 @@ impl Default for SkinDrawState {
     fn default() -> Self {
         Self {
             elapsed_ms: 0,
+            runtime_flags: HashMap::new(),
             start_input_ms: None,
             current_fps: 0,
             operating_time_ms: 0,
@@ -1513,6 +1516,8 @@ impl Default for SkinDrawState {
 /// `dynamicTimer` observe 条件のエッジ検出用ランタイム。Renderer が保持する。
 #[derive(Debug, Clone)]
 pub struct DynamicTimerRuntime {
+    runtime_flags: HashMap<i32, bool>,
+    runtime_flags_initialized: bool,
     starts: [Option<i32>; SKIN_DYNAMIC_TIMER_COUNT],
     keybeam_keyon_starts: [Option<i32>; LANE_COUNT],
     keybeam_keyoff_starts: [Option<i32>; LANE_COUNT],
@@ -1538,6 +1543,8 @@ struct KeyLoggerRuntime {
 impl Default for DynamicTimerRuntime {
     fn default() -> Self {
         Self {
+            runtime_flags: HashMap::new(),
+            runtime_flags_initialized: false,
             starts: [None; SKIN_DYNAMIC_TIMER_COUNT],
             keybeam_keyon_starts: [None; LANE_COUNT],
             keybeam_keyoff_starts: [None; LANE_COUNT],
@@ -1553,8 +1560,32 @@ impl DynamicTimerRuntime {
         *self = Self::default();
     }
 
+    /// スキン install / scene 再入場時に、timer と runtime flag を初期状態へ戻す。
+    pub fn reset_for_document(&mut self, document: Option<&SkinDocument>) {
+        self.reset();
+        if let Some(document) = document {
+            self.initialize_runtime_flags(document);
+        }
+    }
+
+    /// 宣言済み runtime event を dispatch する。対象 event がなければ false。
+    pub fn dispatch_runtime_event(&mut self, document: &SkinDocument, event_id: i32) -> bool {
+        self.ensure_runtime_flags(document);
+        let mut handled = false;
+        for event in document.runtime_events.iter().filter(|event| event.id == event_id) {
+            handled = true;
+            for flag_id in &event.toggle_flags {
+                let flag = self.runtime_flags.entry(*flag_id).or_insert(false);
+                *flag = !*flag;
+            }
+        }
+        handled
+    }
+
     /// observe 条件を評価し、`state.dynamic_timer_ms` を更新する。
     pub fn advance(&mut self, document: &SkinDocument, state: &mut SkinDrawState, now_ms: i32) {
+        self.ensure_runtime_flags(document);
+        state.runtime_flags.clone_from(&self.runtime_flags);
         self.advance_keybeam(state, now_ms);
         self.key_logger.write_state(state, now_ms);
         state.keylogger_exclude_cool = !document.graph.iter().any(|graph| {
@@ -1584,6 +1615,18 @@ impl DynamicTimerRuntime {
                 state.dynamic_timer_ms[idx] = None;
             }
         }
+    }
+
+    fn ensure_runtime_flags(&mut self, document: &SkinDocument) {
+        if !self.runtime_flags_initialized {
+            self.initialize_runtime_flags(document);
+        }
+    }
+
+    fn initialize_runtime_flags(&mut self, document: &SkinDocument) {
+        self.runtime_flags =
+            document.runtime_flags.iter().map(|flag| (flag.id, flag.initial)).collect();
+        self.runtime_flags_initialized = true;
     }
 
     pub fn ingest_skin_events(
@@ -7697,6 +7740,12 @@ fn eval_skin_draw_condition(condition: &str, state: &SkinDrawState) -> bool {
 }
 
 fn eval_skin_draw_term(term: &str, state: &SkinDrawState) -> Option<bool> {
+    if let Some(flag_id) = parse_runtime_flag_operand(term) {
+        return Some(*state.runtime_flags.get(&flag_id).unwrap_or(&false));
+    }
+    if let Some(flag_id) = term.strip_prefix("not ").and_then(parse_runtime_flag_operand) {
+        return Some(!state.runtime_flags.get(&flag_id).copied().unwrap_or(false));
+    }
     if term == "select_score_available()" {
         return Some(
             state.select_screen
@@ -8005,6 +8054,13 @@ fn eval_skin_draw_sum_operand(operand: &str, state: &SkinDrawState) -> Option<f3
 }
 
 fn eval_skin_draw_atom_operand(operand: &str, state: &SkinDrawState) -> Option<f32> {
+    if let Some(flag_id) = parse_runtime_flag_operand(operand) {
+        return Some(if state.runtime_flags.get(&flag_id).copied().unwrap_or(false) {
+            1.0
+        } else {
+            0.0
+        });
+    }
     if let Some(ref_id) = parse_skin_float_number_operand(operand) {
         return skin_state_float_number(ref_id, state);
     }
@@ -8037,6 +8093,11 @@ fn eval_skin_draw_atom_operand(operand: &str, state: &SkinDrawState) -> Option<f
         "timer_off" | "timer_off_value" => Some(i32::MIN as f32),
         value => value.parse::<f32>().ok(),
     }
+}
+
+fn parse_runtime_flag_operand(operand: &str) -> Option<i32> {
+    let inner = operand.strip_prefix("runtime_flag(")?.strip_suffix(')')?.trim();
+    inner.parse().ok()
 }
 
 fn parse_skin_number_operand(operand: &str) -> Option<i32> {
@@ -25869,5 +25930,38 @@ mod tests {
         assert_eq!(skin_timer_elapsed_ms(Some(128), &state), Some(128));
         assert_eq!(skin_timer_elapsed_ms(Some(258), &state), Some(258));
         assert_eq!(skin_timer_elapsed_ms(Some(278), &state), Some(278));
+    }
+
+    #[test]
+    fn runtime_event_toggles_flags_and_restarts_observe_timer() {
+        let document: SkinDocument = serde_json::from_str(
+            r#"{
+                "runtimeFlag": [{ "id": -20001, "initial": false }],
+                "runtimeEvent": [{ "id": -20002, "toggleFlags": [-20001] }],
+                "dynamicTimer": [{ "id": 9000, "observe": "runtime_flag(-20001)" }]
+            }"#,
+        )
+        .unwrap();
+        let mut runtime = DynamicTimerRuntime::default();
+        let mut state = SkinDrawState::default();
+
+        runtime.advance(&document, &mut state, 100);
+        assert_eq!(state.dynamic_timer_ms[0], None);
+        assert!(eval_skin_draw_condition("not runtime_flag(-20001)", &state));
+
+        assert!(runtime.dispatch_runtime_event(&document, -20_002));
+        runtime.advance(&document, &mut state, 150);
+        assert_eq!(state.dynamic_timer_ms[0], Some(0));
+        assert!(eval_skin_draw_condition("runtime_flag(-20001)", &state));
+
+        runtime.advance(&document, &mut state, 175);
+        assert_eq!(state.dynamic_timer_ms[0], Some(25));
+        assert!(runtime.dispatch_runtime_event(&document, -20_002));
+        runtime.advance(&document, &mut state, 200);
+        assert_eq!(state.dynamic_timer_ms[0], None);
+
+        runtime.reset_for_document(Some(&document));
+        runtime.advance(&document, &mut state, 250);
+        assert_eq!(state.dynamic_timer_ms[0], None);
     }
 }

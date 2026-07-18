@@ -1941,6 +1941,102 @@ mod tests {
     }
 
     #[test]
+    fn lua_skin_converts_customs_boolean_toggle_to_runtime_event() {
+        let root = unique_test_dir("bmz-skin-lua-runtime-toggle");
+        fs::create_dir_all(&root).unwrap();
+        fs::write(
+            root.join("result.luaskin"),
+            r#"
+            local timer_util = require("timer_util")
+            CUSTOMS = {
+                show_primary = true,
+                show_secondary = false,
+            }
+            CUSTOMS.toggle = function()
+                CUSTOMS.show_primary = not CUSTOMS.show_primary
+                CUSTOMS.show_secondary = not CUSTOMS.show_secondary
+            end
+            local primary_timer = timer_util.timer_observe_boolean(function()
+                return CUSTOMS.show_primary
+            end)
+            local secondary_timer = timer_util.timer_observe_boolean(function()
+                return CUSTOMS.show_secondary
+            end)
+            return {
+                type = 7,
+                image = {
+                    {
+                        id = "switch",
+                        src = 1,
+                        x = 0,
+                        y = 0,
+                        w = 10,
+                        h = 10,
+                        act = function() return CUSTOMS.toggle() end,
+                    },
+                },
+                destination = {
+                    { id = "switch", timer = primary_timer, dst = {{ x = 0, y = 0, w = 10, h = 10 }} },
+                    { id = "switch", timer = secondary_timer, dst = {{ x = 0, y = 0, w = 10, h = 10 }} },
+                },
+            }
+            "#,
+        )
+        .unwrap();
+
+        let loaded =
+            load_lua_skin_value(&root.join("result.luaskin"), &BTreeMap::new(), &BTreeMap::new())
+                .unwrap();
+
+        assert_eq!(
+            loaded.value["runtimeFlag"],
+            serde_json::json!([
+                { "id": 0, "initial": true },
+                { "id": 1, "initial": false }
+            ])
+        );
+        assert_eq!(
+            loaded.value["dynamicTimer"],
+            serde_json::json!([
+                { "id": 9000, "observe": "runtime_flag(0)" },
+                { "id": 9001, "observe": "runtime_flag(1)" }
+            ])
+        );
+        assert_eq!(
+            loaded.value["runtimeEvent"],
+            serde_json::json!([{ "id": -20000, "toggleFlags": [0, 1] }])
+        );
+        assert_eq!(loaded.value["image"][0]["act"], serde_json::json!(-20000));
+        assert!(!loaded.warnings.iter().any(|warning| {
+            warning.message.contains("runtime Lua state changes are unsupported")
+        }));
+    }
+
+    #[test]
+    fn milliondollar_result_runtime_toggles_convert_when_available() {
+        let skin_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../data/skins/MILLIONDOLLAR/result.luaskin");
+        if !skin_path.is_file() {
+            return;
+        }
+
+        let loaded = load_lua_skin_value(&skin_path, &BTreeMap::new(), &BTreeMap::new()).unwrap();
+        assert_eq!(loaded.value["runtimeFlag"].as_array().map(Vec::len), Some(4));
+        assert_eq!(loaded.value["runtimeEvent"].as_array().map(Vec::len), Some(2));
+        assert!(loaded.value["dynamicTimer"].as_array().is_some_and(|timers| {
+            !timers.is_empty()
+                && timers.iter().all(|timer| {
+                    timer["observe"]
+                        .as_str()
+                        .is_some_and(|observe| observe.contains("runtime_flag("))
+                })
+        }));
+        assert!(!loaded.warnings.iter().any(|warning| {
+            warning.message.contains("runtime Lua state changes are unsupported")
+        }));
+    }
+
+    #[test]
     fn lua_skin_config_get_path_prefers_filepath_default() {
         let root = unique_test_dir("bmz-skin-lua");
         fs::create_dir_all(root.join("parts")).unwrap();

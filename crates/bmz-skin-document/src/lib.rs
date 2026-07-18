@@ -114,6 +114,12 @@ pub struct SkinDocument {
     /// Lua `customTimers` のうち、既存タイマー開始時刻へ固定 delay を加える定義。
     #[serde(default, rename = "fixedDelayTimer")]
     pub fixed_delay_timers: Vec<SkinFixedDelayTimerDef>,
+    /// Lua skin callback をロード時に変換した、初期値を持つ内部フラグ。
+    #[serde(default, rename = "runtimeFlag")]
+    pub runtime_flags: Vec<SkinRuntimeFlagDef>,
+    /// Lua skin callback をロード時に変換した、内部フラグのトグルイベント。
+    #[serde(default, rename = "runtimeEvent")]
+    pub runtime_events: Vec<SkinRuntimeEventDef>,
     /// Lua Result スキンがロード時に選んだ展開パネル。
     ///
     /// WMII の `Expand_op` をロード時宣言へ変換した場合だけ設定され、
@@ -581,6 +587,9 @@ pub const SKIN_EVENT_HSFIX: i32 = 55;
 /// beatoraja の正数イベント ID と衝突しない BMZ 内部予約値を使う。
 pub const SKIN_EVENT_RESULT_PANEL_IR: i32 = -10_001;
 pub const SKIN_EVENT_RESULT_PANEL_GRAPH: i32 = -10_002;
+/// Lua callback から変換する runtime event の内部予約 ID 範囲。
+/// beatoraja 正数イベント ID と衝突しないよう負数を使う。
+pub const SKIN_EVENT_RUNTIME_BASE: i32 = -20_000;
 /// beatoraja `NUMBER_RANDOM_1P_1KEY..NUMBER_RANDOM_2P_SCR` (450..469).
 pub const SKIN_RANDOM_LANE_REF_BASE: i32 = 450;
 pub const SKIN_RANDOM_LANE_REF_COUNT: usize = 20;
@@ -604,6 +613,22 @@ pub struct SkinFixedDelayTimerDef {
     pub source_timer: i32,
     #[serde(rename = "delayMs")]
     pub delay_ms: i32,
+}
+
+/// 描画ランタイムで保持する bool フラグの初期値。
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct SkinRuntimeFlagDef {
+    pub id: i32,
+    #[serde(default)]
+    pub initial: bool,
+}
+
+/// event ID を受けて複数の runtime flag を反転する宣言的イベント。
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct SkinRuntimeEventDef {
+    pub id: i32,
+    #[serde(default, rename = "toggleFlags")]
+    pub toggle_flags: Vec<i32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
