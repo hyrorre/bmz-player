@@ -17039,6 +17039,7 @@ fn result_lua_runtime_number_values_for_summary(summary: &ResultSummary) -> BTre
     number_values.insert(71, value(summary.ex_score));
     number_values.insert(74, value(summary.total_notes));
     number_values.insert(101, value(summary.ex_score));
+    number_values.insert(171, value(summary.ex_score));
     number_values.insert(107, summary.gauge_value.floor().clamp(0.0, i32::MAX as f32) as i32);
     number_values.insert(110, value(summary.judge_counts.pgreat));
     number_values.insert(111, value(summary.judge_counts.great));
@@ -17046,9 +17047,13 @@ fn result_lua_runtime_number_values_for_summary(summary: &ResultSummary) -> BTre
     number_values.insert(113, value(summary.judge_counts.bad));
     number_values.insert(114, value(summary.judge_counts.poor));
     let previous_best_ex_score = summary.previous_best_ex_score.unwrap_or(0);
+    number_values.insert(150, value(previous_best_ex_score));
+    number_values.insert(170, value(previous_best_ex_score));
     number_values.insert(152, difference(summary.ex_score, previous_best_ex_score));
     number_values.insert(172, difference(summary.ex_score, previous_best_ex_score));
     if let Some(target_ex_score) = summary.target_ex_score {
+        number_values.insert(121, value(target_ex_score));
+        number_values.insert(151, value(target_ex_score));
         number_values.insert(153, difference(summary.ex_score, target_ex_score));
     }
     number_values.insert(177, value(summary.bp));
@@ -21571,6 +21576,11 @@ mod tests {
 
         let values = result_lua_runtime_number_values_for_summary(&summary);
 
+        assert_eq!(values.get(&150), Some(&760));
+        assert_eq!(values.get(&170), Some(&760));
+        assert_eq!(values.get(&171), Some(&(summary.ex_score as i32)));
+        assert_eq!(values.get(&121), Some(&1_056));
+        assert_eq!(values.get(&151), Some(&1_056));
         assert_eq!(values.get(&152), Some(&((summary.ex_score as i32).saturating_sub(760))));
         assert_eq!(values.get(&153), Some(&((summary.ex_score as i32).saturating_sub(1_056))));
         assert_eq!(values.get(&370), Some(&(ClearType::Failed as i32)));

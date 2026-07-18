@@ -4378,6 +4378,57 @@ mod tests {
     }
 
     #[test]
+    fn milliondollar_result_rank_diff_uses_load_time_result_scores_when_available() {
+        let skin_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../data/skins/MILLIONDOLLAR/result.luaskin");
+        if !skin_path.is_file() {
+            return;
+        }
+
+        let decoded = decode_beatoraja_skin_with_options_and_runtime_state(
+            &skin_path,
+            SkinKind::Result,
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            &LuaLoadRuntimeState {
+                number_values: BTreeMap::from([
+                    (71, 2_877),
+                    (74, 1_550),
+                    (151, 2_756),
+                    (170, 3_021),
+                    (171, 2_877),
+                ]),
+                ..LuaLoadRuntimeState::default()
+            },
+        )
+        .expect("decode MILLIONDOLLAR result skin with result scores");
+
+        let best_rank = decoded
+            .document
+            .image
+            .iter()
+            .find(|image| image.id == "Parts_Rank_Middle_Best")
+            .expect("MILLIONDOLLAR best DJ level");
+        let next_rank = decoded
+            .document
+            .image
+            .iter()
+            .find(|image| image.id == "Parts_Rank_Nextrank")
+            .expect("MILLIONDOLLAR next-rank label");
+        let next_rank_diff = decoded
+            .document
+            .value
+            .iter()
+            .find(|value| value.id == "Number_Nextrank_Diff")
+            .expect("MILLIONDOLLAR next-rank difference");
+
+        assert_eq!(best_rank.y, 0, "3021/3100 must select the AAA row");
+        assert_eq!(next_rank.x, 951, "positive rank difference must select the plus label");
+        assert_eq!(next_rank.y, 18, "AAA+ must select the plus row");
+        assert_eq!(next_rank_diff.value_expr, "121");
+    }
+
+    #[test]
     fn starseeker_result_misscount_diff_uses_runtime_number_color_block() {
         let skin_path = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../data/skins/Starseeker/result/result.luaskin");
