@@ -2613,7 +2613,7 @@ impl WinitApp {
             ResultSkinSlot::Normal,
             lua_runtime_state_for_result(
                 false,
-                false,
+                None,
                 false,
                 KeyMode::default(),
                 BTreeMap::new(),
@@ -11574,8 +11574,8 @@ impl WinitApp {
     fn spawn_result_skin_decode_for(&mut self, slot: ResultSkinSlot) {
         let skin = &self.boot.profile_config.skin;
         let table_song = !self.play_table_text_primary.is_empty();
-        let ir_online = self.result_ir.is_some();
-        let runtime_state = self.result_lua_runtime_state(slot, table_song, ir_online);
+        let ir_name = result_ir_skin_name(&self.boot.profile_config.ir);
+        let runtime_state = self.result_lua_runtime_state(slot, table_song, ir_name);
         let signature = result_skin_signature_for_config(skin, slot, runtime_state);
         if !self.pending_result_skin && self.last_result_skin_signature.as_ref() == Some(&signature)
         {
@@ -11643,7 +11643,7 @@ impl WinitApp {
         &self,
         slot: ResultSkinSlot,
         table_song: bool,
-        ir_online: bool,
+        ir_name: Option<&str>,
     ) -> bmz_skin::LuaLoadRuntimeState {
         let summary = match slot {
             ResultSkinSlot::Course => self.finished_course_skin_summary.as_ref(),
@@ -11654,7 +11654,7 @@ impl WinitApp {
             summary.map(result_lua_runtime_number_values_for_summary).unwrap_or_default();
         let mut runtime_state = lua_runtime_state_for_result(
             table_song,
-            ir_online,
+            ir_name,
             self.result_score_save_enabled_for_slot(slot),
             key_mode,
             number_values,
@@ -14451,7 +14451,7 @@ fn load_initial_skin_textures(
                 if result_trimmed.is_empty() { BTreeMap::new() } else { result_files.clone() },
                 lua_runtime_state_for_result(
                     false,
-                    false,
+                    None,
                     false,
                     KeyMode::default(),
                     BTreeMap::new(),
@@ -17364,14 +17364,29 @@ fn result_long_note_mode_index(mode: bmz_chart::model::LongNoteMode) -> usize {
     }
 }
 
+fn result_ir_skin_name(ir_config: &crate::config::profile_config::IrConfig) -> Option<&str> {
+    let provider = ir_config.providers.iter().find(|provider| {
+        provider.enabled
+            && !provider.base_url.is_empty()
+            && crate::ir::provider_key::configured_provider_key(provider).is_some()
+    })?;
+    let provider_key = crate::ir::provider_key::configured_provider_key(provider)?;
+    Some(if provider_key == "bmz-official" || provider.provider == "bmz-official" {
+        "BMZ IR"
+    } else {
+        provider_key
+    })
+}
+
 fn lua_runtime_state_for_result(
     table_song: bool,
-    ir_online: bool,
+    ir_name: Option<&str>,
     score_save_enabled: bool,
     key_mode: KeyMode,
     mut number_values: BTreeMap<i32, i32>,
     player_name: &str,
 ) -> bmz_skin::LuaLoadRuntimeState {
+    let ir_online = ir_name.is_some();
     let mut option_values = BTreeMap::new();
     option_values.insert(1008, table_song);
     option_values.insert(50, !ir_online);
@@ -17384,7 +17399,10 @@ fn lua_runtime_state_for_result(
     extend_bmz_key_mode_lua_state(&mut number_values, &mut option_values, key_mode);
     bmz_skin::LuaLoadRuntimeState {
         number_values,
-        text_values: BTreeMap::from([(2, player_name.to_string())]),
+        text_values: BTreeMap::from([
+            (2, player_name.to_string()),
+            (1020, ir_name.unwrap_or_default().to_string()),
+        ]),
         option_values,
         ..Default::default()
     }
@@ -22301,7 +22319,7 @@ mod tests {
         summary.arrange = "RANDOM".to_string();
         summary.arrange_2p = "MIRROR".to_string();
         let mut runtime_state =
-            lua_runtime_state_for_result(false, false, true, KeyMode::K7, number_values, "Player");
+            lua_runtime_state_for_result(false, None, true, KeyMode::K7, number_values, "Player");
         apply_result_summary_lua_load_state(
             &mut runtime_state,
             &summary,
@@ -22392,18 +22410,25 @@ mod tests {
 
     #[test]
     fn result_lua_runtime_state_exposes_ir_connection_options() {
-        let online =
-            lua_runtime_state_for_result(false, true, true, KeyMode::K7, BTreeMap::new(), "Player");
+        let online = lua_runtime_state_for_result(
+            false,
+            Some("BMZ IR"),
+            true,
+            KeyMode::K7,
+            BTreeMap::new(),
+            "Player",
+        );
         assert_eq!(online.option_values.get(&50), Some(&false));
         assert_eq!(online.option_values.get(&51), Some(&true));
         assert_eq!(online.option_values.get(&60), Some(&false));
         assert_eq!(online.option_values.get(&61), Some(&true));
         assert_eq!(online.option_values.get(&160), Some(&true));
         assert_eq!(online.option_values.get(&161), Some(&false));
+        assert_eq!(online.text_values.get(&1020).map(String::as_str), Some("BMZ IR"));
 
         let offline = lua_runtime_state_for_result(
             false,
-            false,
+            None,
             false,
             KeyMode::K5,
             BTreeMap::new(),
@@ -22415,6 +22440,7 @@ mod tests {
         assert_eq!(offline.option_values.get(&61), Some(&false));
         assert_eq!(offline.option_values.get(&160), Some(&false));
         assert_eq!(offline.option_values.get(&161), Some(&true));
+        assert_eq!(offline.text_values.get(&1020).map(String::as_str), Some(""));
     }
 
     #[test]
