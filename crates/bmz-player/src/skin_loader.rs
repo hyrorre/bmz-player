@@ -3412,6 +3412,10 @@ mod tests {
             &BTreeMap::new(),
         )
         .unwrap();
+        assert!(decoded.document.text.iter().any(|text| {
+            text.id == "defaultNotesProcessingCounter_notes"
+                || text.id == "defaultNotesProcessingCounter_stroke"
+        }));
         let document_textures =
             decoded.sources.iter().map(|source| bmz_render::skin::SkinDocumentTexture {
                 source_id: source.source_id.clone(),

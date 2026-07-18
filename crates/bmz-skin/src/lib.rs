@@ -2106,6 +2106,7 @@ mod tests {
         let loaded =
             load_lua_skin(&skin_path, SkinKind::Result, &options, &BTreeMap::new()).unwrap();
 
+        assert!(loaded.document.value.iter().any(|value| value.id == "Number_Todayplayednotes"));
         assert!(loaded.document.scene_audio.iter().any(|action| {
             action.action == bmz_skin_document::SkinAudioActionKind::Loop
                 && action.path == "RESULT/parts/BGM.ogg"

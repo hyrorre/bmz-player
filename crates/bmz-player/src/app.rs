@@ -33,8 +33,8 @@ use bmz_render::renderer::{
     PreparedTexture, RenderFrameTimings, RenderSurfaceStatus, Renderer, SurfaceSize,
 };
 use bmz_render::scene::{
-    AppSceneSnapshot, PlayerStatsSnapshot, ResultSnapshot, SelectChartDistributionSecond,
-    SelectRowSnapshot, SelectSnapshot,
+    AppSceneSnapshot, DailyPlayerStatsSnapshot, PlayerStatsSnapshot, ResultSnapshot,
+    SelectChartDistributionSecond, SelectRowSnapshot, SelectSnapshot,
 };
 use bmz_render::skin::{SkinImageSize, SkinTextureId};
 use bmz_render::snapshot::{
@@ -156,7 +156,7 @@ use crate::storage::migration::{migrate_library_db, migrate_network_db, migrate_
 use crate::storage::play_result::StoredPlayResult;
 use crate::storage::replay::load_replay_for_chart_policy_and_double_option;
 use crate::storage::scan::{ScanProgress, ScanReport};
-use crate::storage::score_db::{PlayerStats, ScoreDatabase};
+use crate::storage::score_db::{DailyPlayerStats, PlayerStats, ScoreDatabase};
 use crate::storage::score_import::{ScoreImportRequest, import_scores};
 use crate::ui::{
     DebugInfo, EguiLayer, EguiRunContext, SceneSkinDefs, SkinCandidate, SkinCandidateOrigin,
@@ -2237,13 +2237,18 @@ fn result_main_bpm(summary: &ResultSummary) -> f32 {
 }
 
 fn player_stats_snapshot(score_db: &ScoreDatabase) -> PlayerStatsSnapshot {
-    match score_db.player_stats() {
+    let mut snapshot = match score_db.player_stats() {
         Ok(stats) => player_stats_snapshot_from_stats(&stats),
         Err(error) => {
             tracing::warn!(%error, "failed to load player statistics");
             PlayerStatsSnapshot::default()
         }
+    };
+    match score_db.current_local_day_player_stats() {
+        Ok(stats) => snapshot.daily = daily_player_stats_snapshot_from_stats(&stats),
+        Err(error) => tracing::warn!(%error, "failed to load daily player statistics"),
     }
+    snapshot
 }
 
 fn player_stats_snapshot_from_stats(stats: &PlayerStats) -> PlayerStatsSnapshot {
@@ -2264,6 +2269,20 @@ fn player_stats_snapshot_from_stats(stats: &PlayerStats) -> PlayerStatsSnapshot 
         slow_poor: stats.slow_poor,
         fast_empty_poor: stats.fast_empty_poor,
         slow_empty_poor: stats.slow_empty_poor,
+        daily: DailyPlayerStatsSnapshot::default(),
+    }
+}
+
+fn daily_player_stats_snapshot_from_stats(stats: &DailyPlayerStats) -> DailyPlayerStatsSnapshot {
+    DailyPlayerStatsSnapshot {
+        play_count: stats.play_count,
+        clear_count: stats.clear_count,
+        pgreat: stats.pgreat,
+        great: stats.great,
+        good: stats.good,
+        bad: stats.bad,
+        poor: stats.poor,
+        empty_poor: stats.empty_poor,
     }
 }
 

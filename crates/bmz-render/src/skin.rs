@@ -20,8 +20,8 @@ use crate::plan::{
     TextOutline, TextOverflow, TextShadow, TextStyle, TextureId, UvRect,
 };
 use crate::scene::{
-    CourseConstraintFlags, PlayerStatsSnapshot, ResultGradeDiffDisplay, SelectRowKind,
-    SelectRowSnapshot, SelectSnapshot,
+    CourseConstraintFlags, DailyPlayerStatsSnapshot, PlayerStatsSnapshot, ResultGradeDiffDisplay,
+    SelectRowKind, SelectRowSnapshot, SelectSnapshot,
 };
 use crate::skin_offset::{SKIN_OFFSET_BAR_LINE, SkinOffsetValues};
 use crate::snapshot::{CourseStageMarker, DisplayJudgeCounts, LongBodyState};
@@ -8427,6 +8427,9 @@ fn skin_builtin_value_i64(expr: &str, state: &SkinDrawState) -> Option<i64> {
 }
 
 fn skin_value_number(value: &SkinValueDef, state: &SkinDrawState) -> Option<i64> {
+    if value.id == "Number_Todayplayednotes" {
+        return Some(player_stat_u64(daily_completed_notes(&state.player_stats.daily)));
+    }
     if !value.expr.trim().is_empty() {
         return skin_state_number_expr(&value.expr, state);
     }
@@ -8751,6 +8754,73 @@ fn player_total_play_notes(stats: &PlayerStatsSnapshot) -> u64 {
         .saturating_add(player_total_great(stats))
         .saturating_add(player_total_good(stats))
         .saturating_add(player_total_bad(stats))
+}
+
+fn daily_play_notes(stats: &DailyPlayerStatsSnapshot) -> u64 {
+    stats.pgreat.saturating_add(stats.great).saturating_add(stats.good).saturating_add(stats.bad)
+}
+
+fn daily_completed_notes(stats: &DailyPlayerStatsSnapshot) -> u64 {
+    daily_play_notes(stats).saturating_add(stats.poor).saturating_add(stats.empty_poor)
+}
+
+fn rounded_percent(numerator: u64, denominator: u64) -> f64 {
+    if denominator == 0 {
+        return 0.0;
+    }
+    ((numerator as f64 / denominator as f64) * 10_000.0).round() / 100.0
+}
+
+fn m_select_daily_rank(stats: &DailyPlayerStatsSnapshot) -> &'static str {
+    let notes = daily_play_notes(stats);
+    let ex_score = stats.pgreat.saturating_mul(2).saturating_add(stats.great);
+    let max_score = notes.saturating_mul(2);
+    let accuracy = if max_score == 0 { 0.0 } else { ex_score as f64 / max_score as f64 * 100.0 };
+    if accuracy < (100.0 / 9.0) * 2.0 {
+        "F"
+    } else if accuracy < (100.0 / 9.0) * 3.0 {
+        "E"
+    } else if accuracy < (100.0 / 9.0) * 4.0 {
+        "D"
+    } else if accuracy < (100.0 / 9.0) * 5.0 {
+        "C"
+    } else if accuracy < (100.0 / 9.0) * 6.0 {
+        "B"
+    } else if accuracy < (100.0 / 9.0) * 7.0 {
+        "A"
+    } else if accuracy < (100.0 / 9.0) * 8.0 {
+        "AA"
+    } else {
+        "AAA"
+    }
+}
+
+fn m_select_daily_stats_text(id: &str, stats: &DailyPlayerStatsSnapshot) -> Option<String> {
+    let notes = daily_play_notes(stats);
+    let judge = |count: u64| format!("{}  ({}%)", count, rounded_percent(count, notes));
+    Some(match id {
+        "defaultNotesProcessingCounter_exscore" => {
+            stats.pgreat.saturating_mul(2).saturating_add(stats.great).to_string()
+        }
+        "defaultNotesProcessingCounter_pg" => judge(stats.pgreat),
+        "defaultNotesProcessingCounter_gr" => judge(stats.great),
+        "defaultNotesProcessingCounter_gd" => judge(stats.good),
+        "defaultNotesProcessingCounter_bd" => judge(stats.bad),
+        "defaultNotesProcessingCounter_pr" => judge(stats.poor),
+        "defaultNotesProcessingCounter_notes" | "defaultNotesProcessingCounter_stroke" => {
+            notes.to_string()
+        }
+        "defaultNotesProcessingCounter_cp" => {
+            format!("{}/{}", stats.clear_count, stats.play_count)
+        }
+        "defaultNotesProcessingCounter_rank" => m_select_daily_rank(stats).to_string(),
+        "defaultNotesProcessingCounter_rate" => rounded_percent(
+            stats.pgreat.saturating_mul(2).saturating_add(stats.great),
+            notes.saturating_mul(2),
+        )
+        .to_string(),
+        _ => return None,
+    })
 }
 
 fn operating_time_seconds(state: &SkinDrawState) -> i64 {
@@ -10992,6 +11062,11 @@ fn skin_state_text_with_draw_state(
     draw_state: Option<&SkinDrawState>,
     state: &SkinTextState<'_>,
 ) -> String {
+    if let Some(draw_state) = draw_state
+        && let Some(value) = m_select_daily_stats_text(&text.id, &draw_state.player_stats.daily)
+    {
+        return value;
+    }
     if text.value_expr.trim() == "bmz:text_concat:1001:1002" {
         return format!("{} {}", state.table_text_primary, state.table_level);
     }
@@ -20927,6 +21002,7 @@ mod tests {
                 slow_poor: 11,
                 fast_empty_poor: 12,
                 slow_empty_poor: 13,
+                daily: Default::default(),
             },
             ..SkinDrawState::default()
         };
@@ -20945,6 +21021,74 @@ mod tests {
         assert_eq!(skin_state_number(333, &state), Some(44));
         assert_eq!(skin_state_number(77, &state), Some(42));
         assert_eq!(skin_state_number(78, &state), Some(31));
+    }
+
+    #[test]
+    fn compatible_daily_statistics_use_skin_specific_note_definitions() {
+        let daily = DailyPlayerStatsSnapshot {
+            play_count: 5,
+            clear_count: 4,
+            pgreat: 50,
+            great: 25,
+            good: 10,
+            bad: 5,
+            poor: 3,
+            empty_poor: 2,
+        };
+        let state = SkinDrawState {
+            player_stats: PlayerStatsSnapshot { daily, ..PlayerStatsSnapshot::default() },
+            ..SkinDrawState::default()
+        };
+
+        let million_value = SkinValueDef {
+            id: "Number_Todayplayednotes".to_string(),
+            value_expr: "1".to_string(),
+            ..SkinValueDef::default()
+        };
+        assert_eq!(skin_value_number(&million_value, &state), Some(95));
+
+        let text = |id: &str| SkinTextDef { id: id.to_string(), ..SkinTextDef::default() };
+        let text_state = SkinTextState::default();
+        assert_eq!(
+            skin_state_text_with_draw_state(
+                &text("defaultNotesProcessingCounter_notes"),
+                Some(&state),
+                &text_state,
+            ),
+            "90"
+        );
+        assert_eq!(
+            skin_state_text_with_draw_state(
+                &text("defaultNotesProcessingCounter_pg"),
+                Some(&state),
+                &text_state,
+            ),
+            "50  (55.56%)"
+        );
+        assert_eq!(
+            skin_state_text_with_draw_state(
+                &text("defaultNotesProcessingCounter_cp"),
+                Some(&state),
+                &text_state,
+            ),
+            "4/5"
+        );
+        assert_eq!(
+            skin_state_text_with_draw_state(
+                &text("defaultNotesProcessingCounter_rank"),
+                Some(&state),
+                &text_state,
+            ),
+            "A"
+        );
+        assert_eq!(
+            skin_state_text_with_draw_state(
+                &text("defaultNotesProcessingCounter_rate"),
+                Some(&state),
+                &text_state,
+            ),
+            "69.44"
+        );
     }
 
     #[test]

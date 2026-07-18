@@ -25,6 +25,18 @@ pub enum AppSceneSnapshot {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct DailyPlayerStatsSnapshot {
+    pub play_count: u64,
+    pub clear_count: u64,
+    pub pgreat: u64,
+    pub great: u64,
+    pub good: u64,
+    pub bad: u64,
+    pub poor: u64,
+    pub empty_poor: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct PlayerStatsSnapshot {
     pub play_count: u64,
     pub clear_count: u64,
@@ -42,6 +54,7 @@ pub struct PlayerStatsSnapshot {
     pub slow_poor: u64,
     pub fast_empty_poor: u64,
     pub slow_empty_poor: u64,
+    pub daily: DailyPlayerStatsSnapshot,
 }
 
 #[derive(Debug, Clone, PartialEq)]

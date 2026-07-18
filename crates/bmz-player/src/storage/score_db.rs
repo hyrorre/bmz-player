@@ -97,6 +97,22 @@ pub struct PlayerStats {
     pub updated_at: i64,
 }
 
+/// Profile-wide score aggregates for one local-time day.
+///
+/// Unlike [`PlayerStats`], this is derived from `score_history` on demand so
+/// the day boundary does not require another set of persisted counters.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct DailyPlayerStats {
+    pub play_count: u64,
+    pub clear_count: u64,
+    pub pgreat: u64,
+    pub great: u64,
+    pub good: u64,
+    pub bad: u64,
+    pub poor: u64,
+    pub empty_poor: u64,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ScoreKey {
     pub chart_sha256: [u8; 32],
@@ -653,6 +669,48 @@ impl ScoreDatabase {
                 player_stats_from_row,
             )
             .map_err(Into::into)
+    }
+
+    /// Aggregate locally played score history inside `[start_at, end_at)`.
+    pub fn daily_player_stats_between(
+        &self,
+        start_at: i64,
+        end_at: i64,
+    ) -> Result<DailyPlayerStats> {
+        self.conn
+            .query_row(
+                "SELECT
+                    COUNT(*),
+                    COALESCE(SUM(CASE
+                        WHEN clear_type NOT IN ('NoPlay', 'Failed') THEN 1 ELSE 0
+                    END), 0),
+                    COALESCE(SUM(fast_pgreat + slow_pgreat), 0),
+                    COALESCE(SUM(fast_great + slow_great), 0),
+                    COALESCE(SUM(fast_good + slow_good), 0),
+                    COALESCE(SUM(fast_bad + slow_bad), 0),
+                    COALESCE(SUM(fast_poor + slow_poor), 0),
+                    COALESCE(SUM(fast_empty_poor + slow_empty_poor), 0)
+                 FROM score_history
+                 WHERE source_kind = 'Local'
+                   AND autoplay = 0
+                   AND played_at >= ?1
+                   AND played_at < ?2",
+                params![start_at, end_at],
+                daily_player_stats_from_row,
+            )
+            .map_err(Into::into)
+    }
+
+    /// Aggregate the current calendar day using the host's local timezone.
+    pub fn current_local_day_player_stats(&self) -> Result<DailyPlayerStats> {
+        let (start_at, end_at) = self.conn.query_row(
+            "SELECT
+                CAST(strftime('%s', date('now', 'localtime'), 'utc') AS INTEGER),
+                CAST(strftime('%s', date('now', 'localtime', '+1 day'), 'utc') AS INTEGER)",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )?;
+        self.daily_player_stats_between(start_at, end_at)
     }
 
     pub fn best_ex_score(&self, key: ScoreKey) -> Result<Option<u32>> {
@@ -1212,6 +1270,19 @@ fn player_stats_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<PlayerStat
         fast_empty_poor: row.get(14)?,
         slow_empty_poor: row.get(15)?,
         updated_at: row.get(16)?,
+    })
+}
+
+fn daily_player_stats_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<DailyPlayerStats> {
+    Ok(DailyPlayerStats {
+        play_count: row.get(0)?,
+        clear_count: row.get(1)?,
+        pgreat: row.get(2)?,
+        great: row.get(3)?,
+        good: row.get(4)?,
+        bad: row.get(5)?,
+        poor: row.get(6)?,
+        empty_poor: row.get(7)?,
     })
 }
 
@@ -2865,6 +2936,63 @@ mod tests {
         assert_eq!(stats.slow_bad, 2);
         assert_eq!(stats.fast_empty_poor, 4);
         assert_eq!(stats.updated_at, 20);
+    }
+
+    #[test]
+    fn daily_player_stats_aggregates_only_local_history_inside_range() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        configure_connection(&conn).unwrap();
+        run_migrations(&mut conn, SCORE_MIGRATIONS).unwrap();
+        let mut db = ScoreDatabase { conn };
+
+        let mut played = record(0, ClearType::Normal);
+        played.played_at = 110;
+        played.score = ScoreState::default();
+        played.score.judges.fast_pgreat = 2;
+        played.score.judges.slow_great = 3;
+        played.score.judges.fast_good = 4;
+        played.score.judges.slow_bad = 5;
+        played.score.judges.fast_poor = 6;
+        played.score.judges.slow_empty_poor = 7;
+        db.insert_score(&played).unwrap();
+
+        let mut failed = record(0, ClearType::Failed);
+        failed.chart_sha256 = [8; 32];
+        failed.played_at = 120;
+        failed.score = ScoreState::default();
+        failed.score.judges.slow_pgreat = 11;
+        db.insert_score(&failed).unwrap();
+
+        let mut outside = record(0, ClearType::Normal);
+        outside.chart_sha256 = [9; 32];
+        outside.played_at = 99;
+        outside.score = ScoreState::default();
+        outside.score.judges.fast_pgreat = 100;
+        db.insert_score(&outside).unwrap();
+
+        let mut imported = record(0, ClearType::Normal);
+        imported.chart_sha256 = [10; 32];
+        imported.played_at = 130;
+        imported.source_kind = ScoreSourceKind::Beatoraja;
+        imported.score = ScoreState::default();
+        imported.score.judges.fast_pgreat = 200;
+        db.insert_score(&imported).unwrap();
+
+        let stats = db.daily_player_stats_between(100, 200).unwrap();
+        assert_eq!(
+            stats,
+            DailyPlayerStats {
+                play_count: 2,
+                clear_count: 1,
+                pgreat: 13,
+                great: 3,
+                good: 4,
+                bad: 5,
+                poor: 6,
+                empty_poor: 7,
+            }
+        );
+        assert_eq!(db.current_local_day_player_stats().unwrap(), DailyPlayerStats::default());
     }
 
     #[test]
