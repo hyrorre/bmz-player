@@ -603,6 +603,8 @@ struct WinitApp {
     /// `system_audio` が `None` の場合や、サウンドセット未指定の場合も `Some` で
     /// 構築されるが id_map が空なので各 play/stop は no-op になる。
     system_sound: Option<crate::system_sound_manager::SystemSoundManager>,
+    /// 現在インストール済みの Result skin が宣言した BGM / SE ランタイム。
+    result_skin_audio: Option<crate::skin_audio::SkinAudioRuntime>,
     /// 選曲画面でESCを長押し中の開始時刻。離されたり画面を抜けると None になる。
     select_exit_hold_started_at: Option<Instant>,
     /// 選曲 `#STAGEFILE` のロード済みキャッシュキー (`folder|file`)。
@@ -2616,6 +2618,7 @@ impl WinitApp {
             skin_reload_generations: SkinReloadGenerations::default(),
             system_audio,
             system_sound,
+            result_skin_audio: None,
             select_exit_hold_started_at: None,
             select_stage_source: None,
             select_stage_loaded: false,
@@ -10224,6 +10227,14 @@ impl WinitApp {
         tracing::info!(?action, "result screen exit animation started");
         self.result_exit =
             Some(ResultExit { started_at: Instant::now(), action, skip_requested: false });
+        let (skin_bgm_volume, skin_se_volume) = self.result_skin_audio_volumes();
+        let dispatched = self
+            .result_skin_audio
+            .as_mut()
+            .is_some_and(|audio| audio.trigger_timer(2, skin_bgm_volume, skin_se_volume));
+        if dispatched {
+            self.start_audio_output_stream();
+        }
         // HeldLanes の遷移判定はフェードアウト終了時に Key5/Key7 の
         // 押下状態を読むため、ここでは held フラグをリセットしない。
         // Result SE は毎フレームの master-gain command ではなく callback 側で
@@ -10525,6 +10536,9 @@ impl WinitApp {
         // 何らかの理由でリザルトを抜けていたら終了状態を破棄する。
         if self.finished_play.is_none() {
             self.stop_result_exit_system_sounds();
+            if let Some(audio) = &self.result_skin_audio {
+                audio.stop_all();
+            }
             self.result_exit = None;
             return;
         }
@@ -10625,6 +10639,9 @@ impl WinitApp {
     }
 
     fn leave_result(&mut self) {
+        if let Some(audio) = &self.result_skin_audio {
+            audio.stop_all();
+        }
         self.finished_play = None;
         self.result_favorite_chart = false;
         self.clear_active_course_state();
@@ -11336,6 +11353,14 @@ impl WinitApp {
         self.spawn_result_skin_decode_for(slot);
         self.ensure_skin_ready(SkinKind::Result);
         self.renderer.reset_result_skin_runtime();
+        let (skin_bgm_volume, skin_se_volume) = self.result_skin_audio_volumes();
+        let started = self.result_skin_audio.as_mut().is_some_and(|audio| {
+            audio.reset();
+            audio.start_scene(skin_bgm_volume, skin_se_volume)
+        });
+        if started {
+            self.start_audio_output_stream();
+        }
         self.result_panel = self
             .renderer
             .result_skin_document()
@@ -11571,7 +11596,24 @@ impl WinitApp {
             );
             return false;
         };
-        let UploadedSkin { kind, document, fonts, prepared, decode_stats, upload_stats } = uploaded;
+        let UploadedSkin {
+            kind,
+            document,
+            fonts,
+            prepared,
+            audio_assets,
+            decode_stats,
+            upload_stats,
+        } = uploaded;
+        if kind == SkinKind::Result {
+            self.result_skin_audio = self.system_audio.as_ref().map(|audio| {
+                crate::skin_audio::SkinAudioRuntime::install(
+                    audio.engine(),
+                    &document,
+                    audio_assets,
+                )
+            });
+        }
         let font_count = fonts.len();
         let font_install_start = Instant::now();
         let mut font_install_count = 0usize;
@@ -13702,6 +13744,14 @@ impl WinitApp {
             );
             self.start_audio_output_stream();
         }
+    }
+
+    fn result_skin_audio_volumes(&self) -> (f32, f32) {
+        let mix = &self.boot.profile_config.audio_mix;
+        let master = crate::config::play::volume_unit_to_f32(mix.master_volume);
+        let bgm = master * crate::config::play::volume_unit_to_f32(mix.system_bgm_volume);
+        let se = master * crate::config::play::volume_unit_to_f32(mix.system_se_volume);
+        (bgm.clamp(0.0, 1.0), se.clamp(0.0, 1.0))
     }
 
     fn play_course_result_entry_sound(&self, clear_type: bmz_core::clear::ClearType) {

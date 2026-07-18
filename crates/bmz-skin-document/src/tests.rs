@@ -142,3 +142,33 @@ fn runtime_flags_and_events_deserialize() {
     assert_eq!(document.runtime_events[0].id, -20_002);
     assert_eq!(document.runtime_events[0].toggle_flags, [-20_001, -20_003]);
 }
+
+#[test]
+fn scene_audio_and_custom_event_deserialize() {
+    let document: SkinDocument = serde_json::from_str(
+        r#"{
+            "sceneAudio": [
+                { "action": "loop", "path": "result/bgm.ogg", "volume": 0.75 }
+            ],
+            "customEvents": [
+                {
+                    "id": 1001,
+                    "timer": 2,
+                    "once": true,
+                    "audioActions": [
+                        { "action": "stop", "path": "result/bgm.ogg" },
+                        { "action": "play", "path": "result/close.ogg", "volume": 0.5 }
+                    ]
+                }
+            ]
+        }"#,
+    )
+    .unwrap();
+
+    assert_eq!(document.scene_audio[0].action, SkinAudioActionKind::Loop);
+    assert_eq!(document.scene_audio[0].volume, 0.75);
+    assert_eq!(document.custom_events[0].timer, 2);
+    assert!(document.custom_events[0].once);
+    assert_eq!(document.custom_events[0].audio_actions.len(), 2);
+    assert_eq!(document.custom_events[0].audio_actions[0].volume, 1.0);
+}

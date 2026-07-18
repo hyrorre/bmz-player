@@ -1338,6 +1338,7 @@ mod tests {
     fn lua_skin_main_state_stubs_audio_volume_helpers() {
         let root = unique_test_dir("bmz-skin-lua");
         fs::create_dir_all(&root).unwrap();
+        fs::write(root.join("sound.wav"), []).unwrap();
         fs::write(
             root.join("play7.luaskin"),
             r#"
@@ -1358,6 +1359,64 @@ mod tests {
                 .unwrap();
 
         assert_eq!(loaded.value["text"][0]["constantText"], "2.0|true");
+        assert_eq!(
+            loaded.value["sceneAudio"],
+            serde_json::json!([
+                { "action": "play", "path": "sound.wav", "volume": 1.0 }
+            ])
+        );
+    }
+
+    #[test]
+    fn lua_skin_converts_timer_custom_event_audio_actions() {
+        let root = unique_test_dir("bmz-skin-lua-audio-event");
+        fs::create_dir_all(&root).unwrap();
+        fs::write(root.join("bgm.ogg"), []).unwrap();
+        fs::write(root.join("close.ogg"), []).unwrap();
+        fs::write(
+            root.join("result.luaskin"),
+            r#"
+            local main_state = require("main_state")
+            local timer_util = require("timer_util")
+            main_state.audio_loop("bgm.ogg", 0.8)
+            local called = false
+            return {
+                type = 7,
+                customEvents = {{
+                    id = 1001,
+                    action = function()
+                        if not called then
+                            called = true
+                            main_state.audio_stop("bgm.ogg")
+                            main_state.audio_play("close.ogg", 0.5)
+                        end
+                    end,
+                    condition = function()
+                        return timer_util.is_timer_on(main_state.timer(2))
+                    end,
+                }},
+            }
+            "#,
+        )
+        .unwrap();
+
+        let loaded = load_lua_skin(
+            &root.join("result.luaskin"),
+            SkinKind::Result,
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+        )
+        .unwrap();
+
+        assert_eq!(loaded.document.scene_audio.len(), 1);
+        assert_eq!(loaded.document.scene_audio[0].path, "bgm.ogg");
+        assert_eq!(loaded.document.custom_events.len(), 1);
+        let event = &loaded.document.custom_events[0];
+        assert_eq!(event.id, 1001);
+        assert_eq!(event.timer, 2);
+        assert!(event.once);
+        assert_eq!(event.audio_actions.len(), 2);
+        assert!(loaded.warnings.is_empty(), "warnings: {:?}", loaded.warnings);
     }
 
     #[test]
@@ -2033,6 +2092,35 @@ mod tests {
         }));
         assert!(!loaded.warnings.iter().any(|warning| {
             warning.message.contains("runtime Lua state changes are unsupported")
+        }));
+    }
+
+    #[test]
+    fn milliondollar_result_audio_events_convert_when_available() {
+        let skin_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../data/skins/MILLIONDOLLAR/result.luaskin");
+        if !skin_path.is_file() {
+            return;
+        }
+        let options = BTreeMap::from([("BGM".to_string(), "使用する".to_string())]);
+        let loaded =
+            load_lua_skin(&skin_path, SkinKind::Result, &options, &BTreeMap::new()).unwrap();
+
+        assert!(loaded.document.scene_audio.iter().any(|action| {
+            action.action == bmz_skin_document::SkinAudioActionKind::Loop
+                && action.path == "RESULT/parts/BGM.ogg"
+        }));
+        let event = loaded
+            .document
+            .custom_events
+            .iter()
+            .find(|event| event.id == 1001)
+            .expect("timer 2 audio event");
+        assert_eq!(event.timer, 2);
+        assert!(event.once);
+        assert_eq!(event.audio_actions.len(), 2);
+        assert!(!loaded.warnings.iter().any(|warning| {
+            warning.message.contains("customEvents") || warning.message.contains("audio_")
         }));
     }
 

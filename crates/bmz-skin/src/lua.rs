@@ -50,6 +50,20 @@ enum LuaRuntimeScalar {
     String(Vec<u8>),
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LuaAudioActionKindProbe {
+    Play,
+    Loop,
+    Stop,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct LuaAudioActionProbe {
+    action: LuaAudioActionKindProbe,
+    path: String,
+    volume: f64,
+}
+
 /// beatoraja fast/slow 判定カウント ref (graph 比率推論用)
 const FAST_SLOW_FAST_REFS: [i32; 6] = [410, 412, 414, 416, 418, 421];
 const FAST_SLOW_SLOW_REFS: [i32; 6] = [411, 413, 415, 417, 419, 422];
@@ -238,7 +252,7 @@ fn execute_lua_skin(
     // 元の選択値から設定するため、この再試行で無効 destination が表示されることはない。
     let fallback_skin_options = fallback_skin_config_options(&header_json, &skin_options);
     let mut use_fallback_options = false;
-    let (mut json, dependencies, main_state_probe, result_panel_default) = loop {
+    let (mut json, dependencies, main_state_probe, result_panel_default, scene_audio_actions) = loop {
         let active_skin_options =
             if use_fallback_options { &fallback_skin_options } else { &skin_options };
         let lua = Lua::new();
@@ -279,6 +293,13 @@ fn execute_lua_skin(
                     .with_context(|| format!("failed to execute lua skin: {}", input.display()));
             }
         };
+        let scene_audio_actions = {
+            let mut probe =
+                main_state_probe.lock().map_err(|_| anyhow!("main_state probe lock poisoned"))?;
+            let actions = probe.take_audio_actions();
+            probe.capture_audio_actions = false;
+            actions
+        };
         instruction_budget.begin_inference();
         let json = lua_value_to_json(
             &lua,
@@ -294,7 +315,7 @@ fn execute_lua_skin(
             lua.globals().get::<Value>("Expand_op").ok().and_then(lua_result_panel_value).or_else(
                 || main_state_probe.lock().ok().and_then(|probe| probe.result_panel_default),
             );
-        break (json, dependencies, main_state_probe, result_panel_default);
+        break (json, dependencies, main_state_probe, result_panel_default, scene_audio_actions);
     };
     record_static_skin_config_option_dependencies(&source, &skin_options, &dependencies);
     if use_fallback_options && let Ok(mut dependencies) = dependencies.lock() {
@@ -302,6 +323,7 @@ fn execute_lua_skin(
         dependencies.opaque = true;
     }
 
+    let skin_audio_root = root.clone();
     if let JsonValue::Object(ref mut root) = json {
         postprocess_lua_skin_json(root, &mut warnings);
 
@@ -377,6 +399,15 @@ fn execute_lua_skin(
             });
             root.insert("runtimeEvent".to_string(), JsonValue::Array(entries.collect()));
         }
+        if !scene_audio_actions.is_empty() {
+            root.insert(
+                "sceneAudio".to_string(),
+                JsonValue::Array(
+                    scene_audio_actions.into_iter().map(lua_audio_action_to_json).collect(),
+                ),
+            );
+        }
+        normalize_lua_skin_audio_paths(&skin_audio_root, root, &mut warnings);
     }
 
     let unsupported_dynamic_timers = main_state_probe
@@ -403,6 +434,52 @@ fn execute_lua_skin(
     let dependencies =
         dependencies.lock().map_err(|_| anyhow!("lua dependency tracker lock poisoned"))?.clone();
     Ok((json, warnings, skin_named_files, dependencies))
+}
+
+fn normalize_lua_skin_audio_paths(
+    skin_root: &Path,
+    root: &mut JsonMap<String, JsonValue>,
+    warnings: &mut Vec<String>,
+) {
+    if let Some(JsonValue::Array(actions)) = root.get_mut("sceneAudio") {
+        normalize_lua_skin_audio_action_array(skin_root, actions, warnings);
+    }
+    if let Some(JsonValue::Array(events)) = root.get_mut("customEvents") {
+        for event in events {
+            let JsonValue::Object(event) = event else { continue };
+            if let Some(JsonValue::Array(actions)) = event.get_mut("audioActions") {
+                normalize_lua_skin_audio_action_array(skin_root, actions, warnings);
+            }
+        }
+    }
+}
+
+fn normalize_lua_skin_audio_action_array(
+    skin_root: &Path,
+    actions: &mut Vec<JsonValue>,
+    warnings: &mut Vec<String>,
+) {
+    actions.retain_mut(|action| {
+        let JsonValue::Object(action) = action else { return false };
+        let Some(JsonValue::String(path)) = action.get_mut("path") else { return false };
+        let requested = path.clone();
+        let requested_path = Path::new(&requested);
+        let candidate = if requested_path.is_absolute() {
+            requested_path.to_path_buf()
+        } else {
+            skin_root.join(requested_path)
+        };
+        let Ok(candidate) = canonicalize_skin_path(&candidate) else {
+            warnings.push(format!("skipping missing skin audio path: {requested}"));
+            return false;
+        };
+        let Ok(relative) = candidate.strip_prefix(skin_root) else {
+            warnings.push(format!("skipping skin audio path outside skin root: {requested}"));
+            return false;
+        };
+        *path = relative.to_string_lossy().replace('\\', "/");
+        true
+    });
 }
 
 fn lua_result_panel_value(value: Value) -> Option<i32> {
@@ -1106,6 +1183,8 @@ struct MainStateProbe {
     next_runtime_event_id: i32,
     runtime_events: Vec<(i32, Vec<i32>)>,
     runtime_event_ids_by_flags: BTreeMap<Vec<i32>, i32>,
+    capture_audio_actions: bool,
+    audio_actions: Vec<LuaAudioActionProbe>,
     keylogger_destination_occurrences: BTreeMap<String, usize>,
     gauge_lead_glow_occurrences: BTreeMap<String, usize>,
     gauge_value_destination_occurrences: BTreeMap<String, usize>,
@@ -1145,6 +1224,8 @@ impl Default for MainStateProbe {
             next_runtime_event_id: SKIN_EVENT_RUNTIME_BASE,
             runtime_events: Vec::new(),
             runtime_event_ids_by_flags: BTreeMap::new(),
+            capture_audio_actions: true,
+            audio_actions: Vec::new(),
             keylogger_destination_occurrences: BTreeMap::new(),
             gauge_lead_glow_occurrences: BTreeMap::new(),
             gauge_value_destination_occurrences: BTreeMap::new(),
@@ -1168,6 +1249,16 @@ enum MainStateProbeMode {
 }
 
 impl MainStateProbe {
+    fn record_audio_action(&mut self, action: LuaAudioActionKindProbe, path: String, volume: f64) {
+        if self.capture_audio_actions && !path.is_empty() && volume.is_finite() {
+            self.audio_actions.push(LuaAudioActionProbe { action, path, volume });
+        }
+    }
+
+    fn take_audio_actions(&mut self) -> Vec<LuaAudioActionProbe> {
+        std::mem::take(&mut self.audio_actions)
+    }
+
     fn clear_aux_calls(&mut self) {
         self.float_number_calls.clear();
         self.float_number_values.clear();
@@ -1788,7 +1879,7 @@ fn create_main_state_stub(lua: &Lua, probe: Arc<Mutex<MainStateProbe>>) -> mlua:
                 .volume_number(58))
         })?,
     )?;
-    let probe_for_volume_bg = probe;
+    let probe_for_volume_bg = probe.clone();
     table.set(
         "volume_bg",
         lua.create_function(move |_, ()| {
@@ -1801,12 +1892,57 @@ fn create_main_state_stub(lua: &Lua, probe: Arc<Mutex<MainStateProbe>>) -> mlua:
     table.set("set_volume_sys", lua.create_function(|_, _: Value| Ok(true))?)?;
     table.set("set_volume_key", lua.create_function(|_, _: Value| Ok(true))?)?;
     table.set("set_volume_bg", lua.create_function(|_, _: Value| Ok(true))?)?;
-    table
-        .set("audio_play", lua.create_function(|_, (_path, _volume): (Value, Value)| Ok(true))?)?;
-    table
-        .set("audio_loop", lua.create_function(|_, (_path, _volume): (Value, Value)| Ok(true))?)?;
-    table.set("audio_stop", lua.create_function(|_, _path: Value| Ok(true))?)?;
+    let probe_for_audio_play = probe.clone();
+    table.set(
+        "audio_play",
+        lua.create_function(move |_, (path, volume): (Value, Value)| {
+            if let Some((path, volume)) = lua_audio_path_and_volume(path, volume) {
+                probe_for_audio_play
+                    .lock()
+                    .map_err(|_| mlua::Error::external("main_state probe lock poisoned"))?
+                    .record_audio_action(LuaAudioActionKindProbe::Play, path, volume);
+            }
+            Ok(true)
+        })?,
+    )?;
+    let probe_for_audio_loop = probe.clone();
+    table.set(
+        "audio_loop",
+        lua.create_function(move |_, (path, volume): (Value, Value)| {
+            if let Some((path, volume)) = lua_audio_path_and_volume(path, volume) {
+                probe_for_audio_loop
+                    .lock()
+                    .map_err(|_| mlua::Error::external("main_state probe lock poisoned"))?
+                    .record_audio_action(LuaAudioActionKindProbe::Loop, path, volume);
+            }
+            Ok(true)
+        })?,
+    )?;
+    table.set(
+        "audio_stop",
+        lua.create_function(move |_, path: Value| {
+            if let Value::String(path) = path
+                && let Ok(path) = path.to_str()
+            {
+                probe
+                    .lock()
+                    .map_err(|_| mlua::Error::external("main_state probe lock poisoned"))?
+                    .record_audio_action(LuaAudioActionKindProbe::Stop, path.to_string(), 1.0);
+            }
+            Ok(true)
+        })?,
+    )?;
     Ok(Value::Table(table))
+}
+
+fn lua_audio_path_and_volume(path: Value, volume: Value) -> Option<(String, f64)> {
+    let Value::String(path) = path else { return None };
+    let volume = match volume {
+        Value::Integer(volume) => volume as f64,
+        Value::Number(volume) if volume.is_finite() => volume,
+        _ => return None,
+    };
+    Some((path.to_str().ok()?.to_string(), volume))
 }
 
 fn create_main_state_offset_table(lua: &Lua) -> mlua::Result<Value> {
@@ -3603,6 +3739,11 @@ fn lua_table_to_json(
                     infer_constant_number_at_load(function, main_state_probe)
                 {
                     object.insert("value_expr".to_string(), JsonValue::String(value_expr));
+                } else if matches!(object_id.as_deref(), Some("Number_Info_Level_Insane")) {
+                    // MILLIONDOLLAR parses digits from table level text. Non-table
+                    // results legitimately receive an empty string and return nil;
+                    // the matching destination is hidden, so keep an inert value.
+                    object.insert("value_expr".to_string(), JsonValue::String("0".to_string()));
                 } else {
                     warnings.push(format!("skipping unsupported value function at {path}.{key}"));
                 }
@@ -3616,6 +3757,25 @@ fn lua_table_to_json(
                     object.insert(key.clone(), JsonValue::Number(JsonNumber::from(event_id)));
                     continue;
                 }
+            }
+            if key == "action"
+                && path.contains(".customEvents[")
+                && let Some(actions) =
+                    infer_custom_audio_event_action(lua, function, main_state_probe)
+            {
+                object.insert(
+                    "audioActions".to_string(),
+                    JsonValue::Array(actions.into_iter().map(lua_audio_action_to_json).collect()),
+                );
+                object.insert("once".to_string(), JsonValue::Bool(true));
+                continue;
+            }
+            if key == "condition"
+                && path.contains(".customEvents[")
+                && let Some(timer_id) = infer_timer_on_condition(function, main_state_probe)
+            {
+                object.insert("timer".to_string(), JsonValue::Number(JsonNumber::from(timer_id)));
+                continue;
             }
             if key == "draw" {
                 if let Some(draw) = infer_result_panel_draw_condition(
@@ -5294,7 +5454,7 @@ fn infer_runtime_boolean_field_observe(
         let flipped = function.call::<Value>(()).ok();
         customs.set(field.as_str(), initial).ok()?;
         let restored = function.call::<Value>(()).ok();
-        if matches!(flipped, Some(Value::Boolean(value)) if value == !baseline)
+        if matches!(flipped, Some(Value::Boolean(value)) if value != baseline)
             && matches!(restored, Some(Value::Boolean(value)) if value == baseline)
         {
             candidates.push((field, initial));
@@ -5337,6 +5497,73 @@ fn lua_runtime_scalar(value: Value) -> Option<LuaRuntimeScalar> {
         Value::String(value) => Some(LuaRuntimeScalar::String(value.as_bytes().to_vec())),
         _ => None,
     }
+}
+
+fn lua_audio_action_to_json(action: LuaAudioActionProbe) -> JsonValue {
+    let action_name = match action.action {
+        LuaAudioActionKindProbe::Play => "play",
+        LuaAudioActionKindProbe::Loop => "loop",
+        LuaAudioActionKindProbe::Stop => "stop",
+    };
+    let volume =
+        JsonNumber::from_f64(action.volume.clamp(0.0, 1.0)).unwrap_or_else(|| JsonNumber::from(0));
+    JsonValue::Object(JsonMap::from_iter([
+        ("action".to_string(), JsonValue::String(action_name.to_string())),
+        ("path".to_string(), JsonValue::String(action.path)),
+        ("volume".to_string(), JsonValue::Number(volume)),
+    ]))
+}
+
+/// timer が off のとき false、on のとき true になる単一 timer 条件だけを受理する。
+fn infer_timer_on_condition(
+    function: &Function,
+    main_state_probe: &Arc<Mutex<MainStateProbe>>,
+) -> Option<i32> {
+    let timers = collect_timer_refs(function, main_state_probe)?;
+    let [timer_id] = timers.as_slice() else { return None };
+    let off = call_draw_with_numbers_and_timers(
+        function,
+        main_state_probe,
+        BTreeMap::new(),
+        BTreeMap::from([(*timer_id, TIMER_OFF_VALUE)]),
+    )?;
+    let on = call_draw_with_numbers_and_timers(
+        function,
+        main_state_probe,
+        BTreeMap::new(),
+        BTreeMap::from([(*timer_id, 123_456)]),
+    )?;
+    (!off && on).then_some(*timer_id)
+}
+
+/// `customEvents.action` を一度だけ sandbox 内で呼び、音声命令以外に
+/// `CUSTOMS` の scalar 状態を変えない callback を宣言データへ落とす。
+fn infer_custom_audio_event_action(
+    lua: &Lua,
+    function: &Function,
+    main_state_probe: &Arc<Mutex<MainStateProbe>>,
+) -> Option<Vec<LuaAudioActionProbe>> {
+    let customs = lua.globals().get::<Table>("CUSTOMS").ok();
+    let before = customs.as_ref().and_then(customs_scalar_snapshot);
+    {
+        let mut probe = main_state_probe.lock().ok()?;
+        probe.audio_actions.clear();
+        probe.capture_audio_actions = true;
+    }
+    let result = function.call::<Value>(()).ok();
+    let actions = {
+        let mut probe = main_state_probe.lock().ok()?;
+        probe.capture_audio_actions = false;
+        probe.take_audio_actions()
+    };
+    let after = customs.as_ref().and_then(customs_scalar_snapshot);
+    if !matches!(result, Some(Value::Nil))
+        || actions.is_empty()
+        || before.is_some() && before != after
+    {
+        return None;
+    }
+    Some(actions)
 }
 
 fn customs_scalar_snapshot(customs: &Table) -> Option<BTreeMap<String, LuaRuntimeScalar>> {
@@ -5401,7 +5628,7 @@ fn infer_runtime_toggle_act(
             safe = false;
             continue;
         };
-        if *after_bool != !*before_bool {
+        if *after_bool == *before_bool {
             safe = false;
             continue;
         }

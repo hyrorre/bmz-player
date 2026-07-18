@@ -120,6 +120,12 @@ pub struct SkinDocument {
     /// Lua skin callback をロード時に変換した、内部フラグのトグルイベント。
     #[serde(default, rename = "runtimeEvent")]
     pub runtime_events: Vec<SkinRuntimeEventDef>,
+    /// Lua のロード中に呼ばれた `main_state.audio_*` をシーン開始時の命令へ変換したもの。
+    #[serde(default, rename = "sceneAudio")]
+    pub scene_audio: Vec<SkinAudioActionDef>,
+    /// Lua `customEvents` のうち、タイマー開始を条件とする宣言的な音声イベント。
+    #[serde(default, rename = "customEvents")]
+    pub custom_events: Vec<SkinCustomEventDef>,
     /// Lua Result スキンがロード時に選んだ展開パネル。
     ///
     /// WMII の `Expand_op` をロード時宣言へ変換した場合だけ設定され、
@@ -629,6 +635,39 @@ pub struct SkinRuntimeEventDef {
     pub id: i32,
     #[serde(default, rename = "toggleFlags")]
     pub toggle_flags: Vec<i32>,
+}
+
+/// スキン音声に対する宣言的な再生・停止命令。
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct SkinAudioActionDef {
+    pub action: SkinAudioActionKind,
+    pub path: String,
+    #[serde(default = "default_skin_audio_volume")]
+    pub volume: f32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SkinAudioActionKind {
+    Play,
+    Loop,
+    Stop,
+}
+
+/// 条件が単一 timer の ON へ落とせる Lua `customEvents` 定義。
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct SkinCustomEventDef {
+    pub id: i32,
+    #[serde(default)]
+    pub timer: i32,
+    #[serde(default)]
+    pub once: bool,
+    #[serde(default, rename = "audioActions")]
+    pub audio_actions: Vec<SkinAudioActionDef>,
+}
+
+fn default_skin_audio_volume() -> f32 {
+    1.0
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]

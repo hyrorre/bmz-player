@@ -40,6 +40,7 @@ pub mod practice_ui;
 pub mod profile_cmd;
 pub mod screens;
 pub mod select_options;
+pub mod skin_audio;
 pub mod skin_loader;
 pub mod songs_cmd;
 pub mod storage;

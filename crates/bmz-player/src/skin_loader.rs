@@ -5,6 +5,9 @@ use std::sync::{Arc, Mutex};
 use std::time::{Instant, SystemTime};
 
 use anyhow::{Context, Result};
+use bmz_audio::ffmpeg_loader::FfmpegSampleLoader;
+use bmz_audio::loader::SampleLoader;
+use bmz_audio::sample::DecodedSample;
 use bmz_core::lane::KeyMode;
 use bmz_render::assets::{RgbaImageAsset, load_png_rgba};
 use bmz_render::bitmap_font::{BitmapFont, load_bitmap_font};
@@ -159,7 +162,13 @@ pub struct DecodedSkin {
     pub document: SkinDocument,
     pub fonts: Vec<DecodedFont>,
     pub sources: Vec<DecodedSource>,
+    pub audio_assets: Vec<DecodedSkinAudio>,
     pub stats: SkinDecodeStats,
+}
+
+pub struct DecodedSkinAudio {
+    pub path: String,
+    pub sample: DecodedSample,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -578,6 +587,7 @@ pub struct UploadedSkin {
     pub document: SkinDocument,
     pub fonts: Vec<DecodedFont>,
     pub prepared: Vec<PreparedSource>,
+    pub audio_assets: Vec<DecodedSkinAudio>,
     pub decode_stats: SkinDecodeStats,
     pub upload_stats: SkinUploadStats,
 }
@@ -612,7 +622,7 @@ pub fn upload_decoded_skin_with_texture_cache(
     texture_cache: Option<&SharedSkinGpuTextureCache>,
 ) -> UploadedSkin {
     let upload_start = Instant::now();
-    let DecodedSkin { kind, document, fonts, sources, stats: decode_stats } = decoded;
+    let DecodedSkin { kind, document, fonts, sources, audio_assets, stats: decode_stats } = decoded;
     let mut upload_stats = SkinUploadStats::default();
     let prepared = sources
         .into_iter()
@@ -707,7 +717,80 @@ pub fn upload_decoded_skin_with_texture_cache(
         })
         .collect();
     upload_stats.upload_us = elapsed_us(upload_start);
-    UploadedSkin { kind, document, fonts, prepared, decode_stats, upload_stats }
+    UploadedSkin { kind, document, fonts, prepared, audio_assets, decode_stats, upload_stats }
+}
+
+const MAX_SKIN_AUDIO_ASSETS: usize = 64;
+
+fn decode_skin_audio_assets(
+    kind: SkinKind,
+    skin_root: &Path,
+    document: &SkinDocument,
+) -> Vec<DecodedSkinAudio> {
+    if kind != SkinKind::Result {
+        return Vec::new();
+    }
+    let mut paths = document
+        .scene_audio
+        .iter()
+        .chain(document.custom_events.iter().flat_map(|event| &event.audio_actions))
+        .map(|action| action.path.clone())
+        .filter(|path| !path.is_empty())
+        .collect::<HashSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>();
+    paths.sort();
+    if paths.len() > MAX_SKIN_AUDIO_ASSETS {
+        tracing::warn!(
+            count = paths.len(),
+            limit = MAX_SKIN_AUDIO_ASSETS,
+            "truncating excessive skin audio asset list"
+        );
+        paths.truncate(MAX_SKIN_AUDIO_ASSETS);
+    }
+    paths
+        .into_par_iter()
+        .filter_map(|path| {
+            let Some(resolved) = resolve_skin_audio_path(skin_root, &path) else {
+                tracing::warn!(path, "skipping invalid or missing skin audio asset");
+                return None;
+            };
+            let mut loader = FfmpegSampleLoader::default();
+            match loader.load(&resolved) {
+                Ok(sample) => Some(DecodedSkinAudio { path, sample }),
+                Err(error) => {
+                    tracing::warn!(
+                        path = %resolved.display(),
+                        %error,
+                        "failed to decode skin audio asset"
+                    );
+                    None
+                }
+            }
+        })
+        .collect()
+}
+
+fn resolve_skin_audio_path(skin_root: &Path, path: &str) -> Option<PathBuf> {
+    let normalized = path.replace('\\', "/");
+    let relative = Path::new(&normalized);
+    if relative.is_absolute()
+        || relative.components().any(|component| {
+            matches!(
+                component,
+                std::path::Component::ParentDir
+                    | std::path::Component::RootDir
+                    | std::path::Component::Prefix(_)
+            )
+        })
+    {
+        return None;
+    }
+    let canonical_root = fs::canonicalize(skin_root).ok()?;
+    let candidate = resolve_case_insensitive_path(&skin_root.join(relative));
+    let canonical = fs::canonicalize(candidate).ok()?;
+    canonical.is_file().then_some(())?;
+    canonical.starts_with(canonical_root).then_some(canonical)
 }
 
 pub fn default_skin_root() -> PathBuf {
@@ -909,6 +992,7 @@ pub fn decode_beatoraja_skin_with_options_and_runtime_state_and_caches(
         }
     }
     let skin_root = skin_path.parent().unwrap_or_else(|| Path::new(".")).to_path_buf();
+    let audio_assets = decode_skin_audio_assets(kind, &skin_root, &document);
     let required_sources: HashSet<String> =
         required_skin_source_ids(&document).into_iter().map(str::to_string).collect();
     let warn_missing_required = kind.warn_missing_required_sources();
@@ -1273,7 +1357,7 @@ pub fn decode_beatoraja_skin_with_options_and_runtime_state_and_caches(
         })
         .collect();
 
-    Ok(DecodedSkin { kind, document, fonts, sources, stats })
+    Ok(DecodedSkin { kind, document, fonts, sources, audio_assets, stats })
 }
 
 fn lr2_builtin_source_asset(path: &str) -> Option<RgbaImageAsset> {
@@ -1856,7 +1940,7 @@ pub fn install_decoded_skin(
     decoded: DecodedSkin,
     default_manifest: SkinManifest,
 ) -> Result<()> {
-    let DecodedSkin { kind, document, fonts, sources, stats: _ } = decoded;
+    let DecodedSkin { kind, document, fonts, sources, audio_assets: _, stats: _ } = decoded;
 
     for font in fonts {
         install_decoded_font(renderer, font);
@@ -2399,6 +2483,23 @@ mod tests {
         for file_name in ["select.json", "decide.json", "result.json", "play7.json"] {
             assert!(root.join(file_name).is_file(), "missing bundled default {file_name}");
         }
+    }
+
+    #[test]
+    fn skin_audio_path_stays_inside_skin_root() {
+        let root = unique_test_dir("bmz-skin-audio-path");
+        fs::create_dir_all(root.join("parts")).unwrap();
+        fs::write(root.join("parts/bgm.ogg"), []).unwrap();
+
+        let resolved = resolve_skin_audio_path(&root, "parts/bgm.ogg").unwrap();
+        assert_eq!(resolved.file_name().and_then(|name| name.to_str()), Some("bgm.ogg"));
+        assert!(resolve_skin_audio_path(&root, "../outside.ogg").is_none());
+        assert!(
+            resolve_skin_audio_path(&root, root.join("parts/bgm.ogg").to_string_lossy().as_ref())
+                .is_none()
+        );
+
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
