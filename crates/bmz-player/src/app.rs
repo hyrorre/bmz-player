@@ -689,6 +689,11 @@ struct WinitApp {
     select_preview_load_queue: SelectPreviewLoadQueue,
     /// 生成プレビュー worker が CPU を使っている間だけ diagnostics の原因分類に使う。
     select_generated_preview_loading: bool,
+    /// プレイ開始時にロードした `#STAGEFILE` のキャッシュキー。
+    /// Result でも同じ runtime image 100 を使うため、Result 終了まで保持する。
+    play_stagefile_source: Option<String>,
+    play_stagefile_loaded: bool,
+    play_stagefile_size: Option<SkinImageSize>,
     /// プレイ `#BACKBMP` のロード済みキャッシュキー。
     play_backbmp_source: Option<String>,
     play_backbmp_loaded: bool,
@@ -2788,6 +2793,9 @@ impl WinitApp {
             select_preview_rx,
             select_preview_load_queue: SelectPreviewLoadQueue::default(),
             select_generated_preview_loading: false,
+            play_stagefile_source: None,
+            play_stagefile_loaded: false,
+            play_stagefile_size: None,
             play_backbmp_source: None,
             play_backbmp_loaded: false,
             last_play_start_press_at: None,
@@ -3260,6 +3268,8 @@ impl WinitApp {
                     table_text_primary: self.play_table_text_primary.clone(),
                     table_text_secondary: self.play_table_text_secondary.clone(),
                     table_text_fallback: self.play_table_text_fallback.clone(),
+                    stagefile_background: self.play_stagefile_loaded,
+                    stagefile_image_size: self.play_stagefile_size,
                     course_titles: self
                         .finished_course
                         .as_ref()
@@ -7184,7 +7194,7 @@ impl WinitApp {
         self.play_ready_sound_started_at = None;
         self.play_ready_last_control_hold_at = None;
         self.draining_audio = None;
-        self.clear_play_backbmp_state();
+        self.clear_play_meta_image_state();
         self.last_play_snapshot = None;
         self.reload_select_items();
         let now = Instant::now();
@@ -8785,9 +8795,23 @@ impl WinitApp {
         skin_duration_ms(ready_delay_ms)
     }
 
-    fn clear_play_backbmp_state(&mut self) {
+    fn clear_play_meta_image_state(&mut self) {
+        self.play_stagefile_source = None;
+        self.play_stagefile_loaded = false;
+        self.play_stagefile_size = None;
         self.play_backbmp_source = None;
         self.play_backbmp_loaded = false;
+    }
+
+    fn sync_play_stagefile_texture(&mut self, folder: &str, relative: &str) {
+        let stagefile_key = format!("{folder}|{relative}");
+        if self.play_stagefile_source.as_deref() == Some(stagefile_key.as_str()) {
+            return;
+        }
+        self.play_stagefile_source = Some(stagefile_key);
+        self.play_stagefile_size =
+            load_chart_meta_texture(&mut self.renderer, SELECT_STAGE_TEXTURE, folder, relative);
+        self.play_stagefile_loaded = self.play_stagefile_size.is_some();
     }
 
     fn enter_play_scene(
@@ -8803,7 +8827,16 @@ impl WinitApp {
         self.decide_sound_stopped_for_chart_start = false;
         self.active_play = None;
         self.clear_play_control_holds();
-        self.clear_play_backbmp_state();
+        self.clear_play_meta_image_state();
+        if let Some(chart) = self
+            .boot
+            .library_db
+            .list_charts_by_ids(&[chart_id])
+            .ok()
+            .and_then(|mut charts| charts.pop())
+        {
+            self.sync_play_stagefile_texture(&chart.folder_path, &chart.stage_file);
+        }
         self.finished_play = None;
         self.draining_audio = None;
         self.play_scene_started_at = Instant::now();
@@ -8812,6 +8845,8 @@ impl WinitApp {
         snapshot.play_elapsed_time = TimeUs(0);
         snapshot.ready_elapsed_time = None;
         snapshot.time = self.play_skin_playstart_offset();
+        snapshot.stagefile_background = self.play_stagefile_loaded;
+        snapshot.stagefile_image_size = self.play_stagefile_size;
         // preload 完了で install_active_play がフル snapshot に置き換えるまでの間、
         // 初期ゲージや緑数字が空表示にならないようセッション開始時相当の値を埋める。
         let key_mode = self.play_skin_key_mode_for_chart(chart_id, &options);
@@ -8921,6 +8956,7 @@ impl WinitApp {
         let folder = chart_asset_folder(chart)
             .map(|path| path.to_string_lossy().into_owned())
             .unwrap_or_default();
+        self.sync_play_stagefile_texture(&folder, &chart.metadata.stage_file);
         let backbmp_key = format!("{}|{}", folder, chart.metadata.backbmp_file);
         if self.play_backbmp_source.as_deref() != Some(backbmp_key.as_str()) {
             self.play_backbmp_source = Some(backbmp_key);
@@ -8929,7 +8965,8 @@ impl WinitApp {
                 PLAY_BACKBMP_TEXTURE,
                 &folder,
                 &chart.metadata.backbmp_file,
-            );
+            )
+            .is_some();
         }
         let render_now = self.play_skin_playstart_offset();
         let mut snapshot = build_render_snapshot_with_target_and_bga_frames_cached(
@@ -8946,6 +8983,8 @@ impl WinitApp {
         snapshot.arrange = active_play.running.applied_arrange.arrange.as_str().to_string();
         snapshot.arrange_2p = active_play.running.applied_arrange.arrange_2p.as_str().to_string();
         snapshot.target = active_play.running.target.clone();
+        snapshot.stagefile_background = self.play_stagefile_loaded;
+        snapshot.stagefile_image_size = self.play_stagefile_size;
         snapshot.backbmp_background = self.play_backbmp_loaded;
         let play_elapsed_time = self.play_elapsed_time();
         snapshot.play_elapsed_time = play_elapsed_time;
@@ -9310,7 +9349,7 @@ impl WinitApp {
         self.pending_play_start = None;
         self.active_play = None;
         self.decide_sound_stopped_for_chart_start = true;
-        self.clear_play_backbmp_state();
+        self.clear_play_meta_image_state();
         self.last_play_snapshot = None;
         // An audio-open / audio-start failure bounces the user back to the
         // select screen.  If they were in a course at the time, the course
@@ -10836,7 +10875,7 @@ impl WinitApp {
         self.result_exit = None;
         self.result_key5_held = false;
         self.result_key7_held = false;
-        self.clear_play_backbmp_state();
+        self.clear_play_meta_image_state();
         // リザルト画面を抜けたら、まだ鳴っていても余韻再生を止める。
         self.draining_audio = None;
         self.play_media_cache = None;
@@ -12001,6 +12040,8 @@ impl WinitApp {
         let course_stage = self.current_course_stage_marker();
         let play_elapsed_time = self.play_elapsed_time();
         let ready_elapsed_time = self.play_ready_sound_started_at.map(elapsed_since);
+        let stagefile_background = self.play_stagefile_loaded;
+        let stagefile_image_size = self.play_stagefile_size;
         let backbmp_background = self.play_backbmp_loaded;
         let Some(active_play) = &mut self.active_play else {
             return;
@@ -12029,6 +12070,8 @@ impl WinitApp {
                 self.apply_profile_fast_slow_filter(&mut snapshot);
                 snapshot.play_elapsed_time = play_elapsed_time;
                 snapshot.ready_elapsed_time = ready_elapsed_time;
+                snapshot.stagefile_background = stagefile_background;
+                snapshot.stagefile_image_size = stagefile_image_size;
                 snapshot.backbmp_background = backbmp_background;
                 snapshot.course_stage = course_stage;
                 snapshot.course_titles = course_titles.clone();
@@ -12103,6 +12146,8 @@ impl WinitApp {
                 let mut snapshot = frame.render_snapshot;
                 snapshot.play_elapsed_time = play_elapsed_time;
                 snapshot.ready_elapsed_time = ready_elapsed_time;
+                snapshot.stagefile_background = stagefile_background;
+                snapshot.stagefile_image_size = stagefile_image_size;
                 snapshot.backbmp_background = backbmp_background;
                 snapshot.course_stage = course_stage;
                 snapshot.course_titles = course_titles.clone();
@@ -12136,7 +12181,7 @@ impl WinitApp {
             Err(error) => {
                 tracing::error!(%error, "failed to advance play session");
                 self.active_play = None;
-                self.clear_play_backbmp_state();
+                self.clear_play_meta_image_state();
                 self.last_play_snapshot = None;
             }
         }
@@ -12565,6 +12610,8 @@ impl WinitApp {
         };
         let play_elapsed_time = self.play_elapsed_time();
         let ready_elapsed_time = self.play_ready_sound_started_at.map(elapsed_since);
+        let stagefile_background = self.play_stagefile_loaded;
+        let stagefile_image_size = self.play_stagefile_size;
         let timers = PlayEndingSkinTimers {
             play_elapsed_time,
             ready_elapsed_time,
@@ -12580,6 +12627,8 @@ impl WinitApp {
             };
             snapshot.play_elapsed_time = timers.play_elapsed_time;
             snapshot.ready_elapsed_time = timers.ready_elapsed_time;
+            snapshot.stagefile_background = stagefile_background;
+            snapshot.stagefile_image_size = stagefile_image_size;
             snapshot.failed_elapsed_ms = timers.failed_elapsed_ms;
             snapshot.music_end_elapsed_ms = timers.music_end_elapsed_ms;
             snapshot.fadeout_elapsed_ms = timers.fadeout_elapsed_ms;
@@ -12594,6 +12643,8 @@ impl WinitApp {
         );
 
         let mut snapshot = refresh_play_ending_snapshot(&mut active_play.running, timers);
+        snapshot.stagefile_background = stagefile_background;
+        snapshot.stagefile_image_size = stagefile_image_size;
         self.apply_profile_fast_slow_filter(&mut snapshot);
         self.apply_course_skin_context(&mut snapshot);
         self.apply_play_table_text(&mut snapshot);
@@ -15379,22 +15430,20 @@ fn load_chart_meta_texture(
     texture_id: TextureId,
     folder_path: &str,
     relative: &str,
-) -> bool {
-    let Some(path) = crate::chart_asset::resolve_chart_asset_path(folder_path, relative) else {
-        return false;
-    };
+) -> Option<SkinImageSize> {
+    let path = crate::chart_asset::resolve_chart_asset_path(folder_path, relative)?;
     match load_static_rgba_image(&path) {
         Ok(image) => {
             if let Err(error) = renderer.upsert_image_asset(texture_id, &image) {
                 tracing::warn!(path = %path.display(), %error, "failed to upload chart meta image");
-                false
+                None
             } else {
-                true
+                Some(SkinImageSize { width: image.width as f32, height: image.height as f32 })
             }
         }
         Err(error) => {
             tracing::debug!(path = %path.display(), %error, "skipping chart meta image");
-            false
+            None
         }
     }
 }

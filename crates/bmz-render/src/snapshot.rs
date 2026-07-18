@@ -222,6 +222,10 @@ pub struct RenderSnapshot {
     pub hcn_damage_ms: [Option<i32>; LANE_COUNT],
     /// 右下に常時表示するオーバーレイ文字列。
     pub overlay: OverlaySnapshot,
+    /// `#STAGEFILE` テクスチャがロード済みなら true。
+    pub stagefile_background: bool,
+    /// ロード済み `#STAGEFILE` の画像サイズ。
+    pub stagefile_image_size: Option<crate::skin::SkinImageSize>,
     /// `#BACKBMP` テクスチャがロード済みなら true (BGA より下に描画)。
     pub backbmp_background: bool,
     /// BMS `#TEXT` / チャネル #99 で表示する譜面テキスト。

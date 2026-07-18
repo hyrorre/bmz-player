@@ -254,6 +254,8 @@ pub fn sample_result_scene() -> AppSceneSnapshot {
         table_text_primary: String::new(),
         table_text_secondary: String::new(),
         table_text_fallback: String::new(),
+        stagefile_background: false,
+        stagefile_image_size: None,
         course_titles: Default::default(),
         course_result: Default::default(),
         graph: std::sync::Arc::new(crate::snapshot::ResultGraphSnapshot::default()),

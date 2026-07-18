@@ -966,6 +966,8 @@ fn plan_play(
         has_bga: snapshot.has_bga,
         has_bpm_stop: snapshot.has_bpm_stop,
         bga_enabled: snapshot.bga_enabled,
+        has_stagefile: snapshot.stagefile_background,
+        stagefile_image_size: snapshot.stagefile_image_size,
         has_backbmp: snapshot.backbmp_background,
         bga_base: snapshot.bga_base.map(skin_bga_frame_from_display),
         bga_layer: snapshot.bga_layer.map(skin_bga_frame_from_display),
@@ -1698,6 +1700,8 @@ fn build_result_skin_draw_state(
         table_song: !snapshot.table_text_primary.is_empty(),
         difficulty: skin_difficulty_code(&snapshot.difficulty_name),
         judge_rank: snapshot.judge_rank,
+        has_stagefile: snapshot.stagefile_background,
+        stagefile_image_size: snapshot.stagefile_image_size,
         key_mode: snapshot.key_mode,
         now_bpm: snapshot.initial_bpm,
         min_bpm: snapshot.min_bpm,
@@ -3167,6 +3171,8 @@ mod tests {
                 table_text_primary: String::new(),
                 table_text_secondary: String::new(),
                 table_text_fallback: String::new(),
+                stagefile_background: false,
+                stagefile_image_size: None,
                 course_titles: Default::default(),
                 course_result: Default::default(),
                 graph: std::sync::Arc::new(crate::snapshot::ResultGraphSnapshot::default()),
@@ -3314,6 +3320,8 @@ mod tests {
             table_text_primary: String::new(),
             table_text_secondary: String::new(),
             table_text_fallback: String::new(),
+            stagefile_background: false,
+            stagefile_image_size: None,
             course_titles: Default::default(),
             course_result: Default::default(),
             graph: std::sync::Arc::new(ResultGraphSnapshot {
@@ -3634,6 +3642,8 @@ mod tests {
             table_text_primary: String::new(),
             table_text_secondary: String::new(),
             table_text_fallback: String::new(),
+            stagefile_background: false,
+            stagefile_image_size: None,
             course_titles: Default::default(),
             course_result: Default::default(),
             graph: std::sync::Arc::new(ResultGraphSnapshot {
@@ -3783,6 +3793,8 @@ mod tests {
             table_text_primary: String::new(),
             table_text_secondary: String::new(),
             table_text_fallback: String::new(),
+            stagefile_background: false,
+            stagefile_image_size: None,
             course_titles: Default::default(),
             course_result: Default::default(),
             graph: std::sync::Arc::new(ResultGraphSnapshot {
@@ -4752,6 +4764,74 @@ mod tests {
                     && approx_eq(rect.y, 0.0)
                     && approx_eq(rect.width, 1.0)
                     && approx_eq(rect.height, 1.0)
+        )));
+    }
+
+    #[test]
+    fn play_plan_passes_runtime_stagefile_to_skin_document() {
+        let document: SkinDocument = serde_json::from_str(
+            r#"
+            {
+                "type": 0,
+                "w": 100,
+                "h": 100,
+                "destination": [
+                    { "id": "-100", "op": [191], "dst": [{ "x": 0, "y": 0, "w": 40, "h": 20 }] }
+                ]
+            }
+            "#,
+        )
+        .unwrap();
+        let skin = SkinContext::from_manifest_and_document(SkinManifest::default(), document, []);
+        let AppSceneSnapshot::Play(mut snapshot) = crate::sample::sample_play_scene() else {
+            panic!("sample play scene");
+        };
+        snapshot.stagefile_background = true;
+        snapshot.stagefile_image_size = Some(SkinImageSize { width: 400.0, height: 200.0 });
+
+        let plan = DrawPlan::from_scene_with_skin(
+            &AppSceneSnapshot::Play(snapshot),
+            &skin,
+            &mut crate::skin::DynamicTimerRuntime::default(),
+        );
+
+        assert!(plan.commands.iter().any(|command| matches!(
+            command,
+            DrawCommand::Image { texture, .. } if *texture == SELECT_STAGE_TEXTURE
+        )));
+    }
+
+    #[test]
+    fn result_plan_passes_runtime_stagefile_to_skin_document() {
+        let document: SkinDocument = serde_json::from_str(
+            r#"
+            {
+                "type": 7,
+                "w": 100,
+                "h": 100,
+                "destination": [
+                    { "id": "-100", "op": [191], "dst": [{ "x": 0, "y": 0, "w": 40, "h": 20 }] }
+                ]
+            }
+            "#,
+        )
+        .unwrap();
+        let skin = SkinContext::from_manifest_and_document(SkinManifest::default(), document, []);
+        let AppSceneSnapshot::Result(mut snapshot) = crate::sample::sample_result_scene() else {
+            panic!("sample result scene");
+        };
+        snapshot.stagefile_background = true;
+        snapshot.stagefile_image_size = Some(SkinImageSize { width: 400.0, height: 200.0 });
+
+        let plan = DrawPlan::from_scene_with_skin(
+            &AppSceneSnapshot::Result(snapshot),
+            &skin,
+            &mut crate::skin::DynamicTimerRuntime::default(),
+        );
+
+        assert!(plan.commands.iter().any(|command| matches!(
+            command,
+            DrawCommand::Image { texture, .. } if *texture == SELECT_STAGE_TEXTURE
         )));
     }
 

@@ -4638,6 +4638,31 @@ mod tests {
     }
 
     #[test]
+    fn rmz_play7_keeps_runtime_stagefile_loading_destinations_when_available() {
+        let skin_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../data/skins/Rmz-skin/play7main.luaskin");
+        if !skin_path.is_file() {
+            return;
+        }
+
+        let decoded = decode_beatoraja_skin(&skin_path, SkinKind::Play).unwrap();
+        let destinations = decoded.document.all_destinations(&decoded.document.enabled_options());
+        let stagefile_destinations =
+            destinations.iter().filter(|destination| destination.id == "-100").collect::<Vec<_>>();
+
+        assert!(stagefile_destinations.iter().any(|destination| {
+            destination.timer.is_none()
+                && destination.op.contains(&80)
+                && destination.op.contains(&191)
+        }));
+        assert!(stagefile_destinations.iter().any(|destination| {
+            destination.timer == Some(40)
+                && destination.op.contains(&81)
+                && destination.op.contains(&191)
+        }));
+    }
+
+    #[test]
     fn rmz_play7_lanecover_green_renders_green_number_when_available() {
         let skin_path = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../data/skins/Rmz-skin/play7main.luaskin");

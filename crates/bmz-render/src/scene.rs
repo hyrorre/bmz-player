@@ -676,6 +676,10 @@ pub struct ResultSnapshot {
     pub table_text_primary: String,
     pub table_text_secondary: String,
     pub table_text_fallback: String,
+    /// 直前にプレイした譜面の `#STAGEFILE` テクスチャがロード済みなら true。
+    pub stagefile_background: bool,
+    /// ロード済み `#STAGEFILE` の画像サイズ。
+    pub stagefile_image_size: Option<SkinImageSize>,
     /// beatoraja STRING_COURSE1_TITLE..10_TITLE (150..159) for course results.
     pub course_titles: [String; 10],
     pub course_result: CourseResultSkinSnapshot,
@@ -768,6 +772,8 @@ mod tests {
             table_text_primary: String::new(),
             table_text_secondary: String::new(),
             table_text_fallback: String::new(),
+            stagefile_background: false,
+            stagefile_image_size: None,
             course_titles: Default::default(),
             course_result: CourseResultSkinSnapshot::default(),
             graph: Arc::new(crate::snapshot::ResultGraphSnapshot::default()),
@@ -847,6 +853,8 @@ mod tests {
             table_text_primary: String::new(),
             table_text_secondary: String::new(),
             table_text_fallback: String::new(),
+            stagefile_background: false,
+            stagefile_image_size: None,
             course_titles: Default::default(),
             course_result: CourseResultSkinSnapshot::default(),
             graph: Arc::new(crate::snapshot::ResultGraphSnapshot::default()),

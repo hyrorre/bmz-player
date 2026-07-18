@@ -594,6 +594,8 @@ pub fn build_render_snapshot_with_target_and_bga_frames_cached(
             })
         }),
         overlay: OverlaySnapshot::default(),
+        stagefile_background: false,
+        stagefile_image_size: None,
         backbmp_background: false,
         chart_text: bmz_chart::text::chart_text_at_time(&session.chart.text_events, render_now)
             .to_string(),

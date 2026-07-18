@@ -510,7 +510,8 @@ impl SkinContext {
         let Some(document) = &self.document else {
             return Vec::new();
         };
-        document.static_render_items(&self.document_sources, state, text)
+        let runtime_sources = static_runtime_document_sources(&self.document_sources, state);
+        document.static_render_items(&runtime_sources, state, text)
     }
 
     pub fn static_document_items_for_result_state_and_text(
@@ -522,10 +523,11 @@ impl SkinContext {
         let Some(document) = &self.document else {
             return Vec::new();
         };
+        let runtime_sources = static_runtime_document_sources(&self.document_sources, state);
         if let Ok(mut cache) = self.result_render_cache.lock() {
             cache.prepare_gauge_graph(graph);
             return document.static_render_items_with_graphs_cached(
-                &self.document_sources,
+                &runtime_sources,
                 state,
                 text,
                 SkinRuntimeGraphs::from_result_graph(graph.as_ref()),
@@ -533,7 +535,7 @@ impl SkinContext {
             );
         }
         document.static_render_items_with_graphs(
-            &self.document_sources,
+            &runtime_sources,
             state,
             text,
             SkinRuntimeGraphs::from_result_graph(graph.as_ref()),
@@ -610,7 +612,8 @@ impl SkinContext {
         let Some(document) = &self.document else {
             return (Vec::new(), Vec::new(), Vec::new());
         };
-        document.static_render_items_split(&self.document_sources, state, text)
+        let runtime_sources = static_runtime_document_sources(&self.document_sources, state);
+        document.static_render_items_split(&runtime_sources, state, text)
     }
 
     pub fn static_document_play_items_split_for_state_and_text(
@@ -623,8 +626,9 @@ impl SkinContext {
         let Some(document) = &self.document else {
             return (Vec::new(), Vec::new(), Vec::new());
         };
+        let runtime_sources = static_runtime_document_sources(&self.document_sources, state);
         document.static_render_items_split_with_graphs(
-            &self.document_sources,
+            &runtime_sources,
             state,
             text,
             SkinRuntimeGraphs::from_document_with_play_graphs(
@@ -866,6 +870,19 @@ fn select_runtime_document_sources(
     sources
 }
 
+fn static_runtime_document_sources(
+    base_sources: &HashMap<String, SkinDocumentTexture>,
+    state: &SkinDrawState,
+) -> HashMap<String, SkinDocumentTexture> {
+    let mut sources = base_sources.clone();
+    if state.has_stagefile
+        && let Some(source_size) = state.stagefile_image_size
+    {
+        insert_runtime_document_source(&mut sources, "100", SELECT_STAGE_TEXTURE, source_size);
+    }
+    sources
+}
+
 fn insert_runtime_document_source(
     sources: &mut HashMap<String, SkinDocumentTexture>,
     source_id: &str,
@@ -1076,6 +1093,8 @@ pub struct SkinDrawState {
     pub bga_enabled: bool,
     /// `#STAGEFILE` 相当の曲画像があるか (OPTION_NO_STAGEFILE=190 / OPTION_STAGEFILE=191)。
     pub has_stagefile: bool,
+    /// runtime image 100 (`#STAGEFILE`) のロード済み画像サイズ。
+    pub stagefile_image_size: Option<SkinImageSize>,
     /// `#BACKBMP` 相当の背景画像がロード済みか (OPTION_NO_BACKBMP=194 / OPTION_BACKBMP=195)。
     pub has_backbmp: bool,
     /// 現在表示するBGA本体画像。
@@ -1400,6 +1419,7 @@ impl Default for SkinDrawState {
             has_bpm_stop: false,
             bga_enabled: true,
             has_stagefile: false,
+            stagefile_image_size: None,
             has_backbmp: false,
             bga_base: None,
             bga_layer: None,
@@ -14716,6 +14736,10 @@ mod tests {
         assert!(test_skin_op(194, &[], &loaded));
         assert!(!test_skin_op(195, &[], &loaded));
 
+        let with_stagefile = SkinDrawState { has_stagefile: true, ..SkinDrawState::default() };
+        assert!(!test_skin_op(190, &[], &with_stagefile));
+        assert!(test_skin_op(191, &[], &with_stagefile));
+
         let with_backbmp = SkinDrawState { has_backbmp: true, ..SkinDrawState::default() };
         assert!(!test_skin_op(194, &[], &with_backbmp));
         assert!(test_skin_op(195, &[], &with_backbmp));
@@ -19280,6 +19304,86 @@ mod tests {
         };
 
         let items = context.select_document_items(&snapshot);
+
+        assert!(items.iter().any(|item| matches!(
+            item,
+            SkinRenderItem::Image {
+                texture,
+                source_size: Some(SkinImageSize { width: 400.0, height: 200.0 }),
+                ..
+            } if *texture == SkinTextureId(SELECT_STAGE_TEXTURE.0)
+        )));
+    }
+
+    #[test]
+    fn play_destination_negative_image_id_renders_runtime_stagefile_source() {
+        let document: SkinDocument = serde_json::from_str(
+            r#"
+            {
+                "type": 0,
+                "w": 100,
+                "h": 100,
+                "destination": [
+                    { "id": "-100", "op": [191], "dst": [{ "x": 0, "y": 0, "w": 40, "h": 20 }] }
+                ]
+            }
+            "#,
+        )
+        .unwrap();
+        let context =
+            SkinContext::from_manifest_and_document(default_skin_manifest(), document, []);
+        let state = SkinDrawState {
+            has_stagefile: true,
+            stagefile_image_size: Some(SkinImageSize { width: 400.0, height: 200.0 }),
+            ..SkinDrawState::default()
+        };
+
+        let (behind, front, overlay) = context.static_document_play_items_split_for_state_and_text(
+            &state,
+            &SkinTextState::default(),
+            &[],
+            &[],
+        );
+
+        assert!(behind.iter().chain(&front).chain(&overlay).any(|item| matches!(
+            item,
+            SkinRenderItem::Image {
+                texture,
+                source_size: Some(SkinImageSize { width: 400.0, height: 200.0 }),
+                ..
+            } if *texture == SkinTextureId(SELECT_STAGE_TEXTURE.0)
+        )));
+    }
+
+    #[test]
+    fn result_destination_negative_image_id_renders_runtime_stagefile_source() {
+        let document: SkinDocument = serde_json::from_str(
+            r#"
+            {
+                "type": 7,
+                "w": 100,
+                "h": 100,
+                "destination": [
+                    { "id": "-100", "op": [191], "dst": [{ "x": 0, "y": 0, "w": 40, "h": 20 }] }
+                ]
+            }
+            "#,
+        )
+        .unwrap();
+        let context =
+            SkinContext::from_manifest_and_document(default_skin_manifest(), document, []);
+        let state = SkinDrawState {
+            has_stagefile: true,
+            stagefile_image_size: Some(SkinImageSize { width: 400.0, height: 200.0 }),
+            result_failed: Some(false),
+            ..SkinDrawState::default()
+        };
+
+        let items = context.static_document_items_for_result_state_and_text(
+            &Arc::new(crate::snapshot::ResultGraphSnapshot::default()),
+            &state,
+            &SkinTextState::default(),
+        );
 
         assert!(items.iter().any(|item| matches!(
             item,
