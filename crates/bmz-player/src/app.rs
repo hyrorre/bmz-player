@@ -410,6 +410,49 @@ impl SkinFpsCounter {
     }
 }
 
+#[derive(Debug, Default)]
+struct FramePacer {
+    next_frame_at: Option<Instant>,
+    fps: Option<u32>,
+}
+
+impl FramePacer {
+    fn delay(&self, now: Instant, fps: u32, skip_wait: bool) -> Duration {
+        if skip_wait || fps == 0 || self.fps != Some(fps) {
+            return Duration::ZERO;
+        }
+        self.next_frame_at
+            .and_then(|deadline| deadline.checked_duration_since(now))
+            .unwrap_or_default()
+    }
+
+    fn record_frame_started(&mut self, now: Instant, fps: u32, rebase: bool) {
+        if fps == 0 {
+            self.next_frame_at = None;
+            self.fps = None;
+            return;
+        }
+
+        let budget = frame_budget(fps);
+        let fps_changed = self.fps != Some(fps);
+        let next_frame_at = if rebase || fps_changed {
+            now + budget
+        } else if let Some(previous_deadline) = self.next_frame_at {
+            let scheduled = previous_deadline + budget;
+            if scheduled > now { scheduled } else { now + budget }
+        } else {
+            now + budget
+        };
+        self.next_frame_at = Some(next_frame_at);
+        self.fps = Some(fps);
+    }
+}
+
+fn frame_budget(fps: u32) -> Duration {
+    debug_assert!(fps > 0);
+    Duration::from_secs_f64(1.0 / f64::from(fps)).max(Duration::from_nanos(1))
+}
+
 fn fps_overlay_text(show_fps: bool, current_fps: u32) -> String {
     if !show_fps || current_fps == 0 { String::new() } else { format!("FPS {current_fps}") }
 }
@@ -664,8 +707,8 @@ struct WinitApp {
     focused: bool,
     /// フォーカス復帰直後の gamepad poll を状態再同期だけに使う。
     discard_gamepad_output_until_resynced: bool,
-    /// 直近フレームの開始時刻。フレームレート制限のスリープ量算出に使う。
-    last_frame_at: Option<Instant>,
+    /// 次の描画開始 deadline を管理するフレームペーサー。
+    frame_pacer: FramePacer,
     /// Worker から取り込んだスキンを次の redraw で即表示するため、
     /// 1 フレーム分だけ frame pacing sleep をスキップする。
     skip_next_frame_pace: bool,
@@ -2731,7 +2774,7 @@ impl WinitApp {
             applied_window_mode: initial_window_mode,
             focused: true,
             discard_gamepad_output_until_resynced: false,
-            last_frame_at: None,
+            frame_pacer: FramePacer::default(),
             skip_next_frame_pace: false,
             skin_fps: SkinFpsCounter::new(now),
             settings_edit: None,
@@ -12532,32 +12575,24 @@ impl WinitApp {
     /// `target_fps` (フォアグラウンド) / `frame_limit_in_background`
     /// (非フォーカス時) に従ってフレーム開始間隔を一定に保つ。
     ///
-    /// 各 `RedrawRequested` の先頭で呼び、前フレーム開始からの経過が
-    /// フレーム予算に満たなければ残りをスリープする。FPS 値が 0 の場合は
-    /// 無制限としてスリープしない。
+    /// 各 `RedrawRequested` の先頭で呼び、次の描画開始 deadline までスリープする。
+    /// sleep 後の実開始時刻を基準に次回 deadline を更新し、待機フレームと即時
+    /// フレームが交互に発生することを防ぐ。FPS 値が 0 の場合は無制限。
     fn limit_frame_rate(&mut self) {
-        let frame_started = Instant::now();
-        self.skin_fps.record_frame(frame_started);
         let fps = if self.focused {
             self.boot.app_config.video.target_fps
         } else {
             self.boot.app_config.video.frame_limit_in_background
         };
-        if self.skip_next_frame_pace {
-            self.skip_next_frame_pace = false;
-            self.last_frame_at = Some(frame_started);
-            return;
+        let skip_wait = self.skip_next_frame_pace;
+        self.skip_next_frame_pace = false;
+        let delay = self.frame_pacer.delay(Instant::now(), fps, skip_wait);
+        if !delay.is_zero() {
+            thread::sleep(delay);
         }
-        if fps > 0
-            && let Some(last) = self.last_frame_at
-        {
-            let budget = Duration::from_secs_f64(1.0 / f64::from(fps));
-            let elapsed = last.elapsed();
-            if elapsed < budget {
-                thread::sleep(budget - elapsed);
-            }
-        }
-        self.last_frame_at = Some(frame_started);
+        let frame_started = Instant::now();
+        self.frame_pacer.record_frame_started(frame_started, fps, skip_wait);
+        self.skin_fps.record_frame(frame_started);
     }
 
     /// egui の 1 フレームを構築し、renderer へ描画データを渡す。
@@ -20851,6 +20886,67 @@ mod tests {
         assert_eq!(fps.current(), 5);
         fps.record_frame(started_at + Duration::from_secs(2));
         assert_eq!(fps.current(), 2);
+    }
+
+    #[test]
+    fn frame_pacer_waits_for_every_light_frame_without_alternating() {
+        let started_at = Instant::now();
+        let budget = frame_budget(120);
+        let work = Duration::from_micros(500);
+        let mut pacer = FramePacer::default();
+
+        assert_eq!(pacer.delay(started_at, 120, false), Duration::ZERO);
+        pacer.record_frame_started(started_at, 120, false);
+
+        let mut previous_frame = started_at;
+        for _ in 0..4 {
+            let redraw_arrived_at = previous_frame + work;
+            let delay = pacer.delay(redraw_arrived_at, 120, false);
+            assert_eq!(delay, budget - work);
+
+            let frame_started = redraw_arrived_at + delay;
+            assert_eq!(frame_started.duration_since(previous_frame), budget);
+            pacer.record_frame_started(frame_started, 120, false);
+            previous_frame = frame_started;
+        }
+    }
+
+    #[test]
+    fn frame_pacer_rebases_after_a_missed_deadline() {
+        let started_at = Instant::now();
+        let budget = frame_budget(120);
+        let work = Duration::from_micros(500);
+        let mut pacer = FramePacer::default();
+        pacer.record_frame_started(started_at, 120, false);
+
+        let late_frame = started_at + budget + budget;
+        assert_eq!(pacer.delay(late_frame, 120, false), Duration::ZERO);
+        pacer.record_frame_started(late_frame, 120, false);
+
+        let next_redraw = late_frame + work;
+        assert_eq!(pacer.delay(next_redraw, 120, false), budget - work);
+    }
+
+    #[test]
+    fn frame_pacer_rebases_when_fps_changes_or_wait_is_skipped() {
+        let started_at = Instant::now();
+        let work = Duration::from_micros(500);
+        let mut pacer = FramePacer::default();
+        pacer.record_frame_started(started_at, 120, false);
+
+        let fps_changed_at = started_at + work;
+        assert_eq!(pacer.delay(fps_changed_at, 60, false), Duration::ZERO);
+        pacer.record_frame_started(fps_changed_at, 60, false);
+        assert_eq!(pacer.delay(fps_changed_at + work, 60, false), frame_budget(60) - work);
+
+        let skipped_at = fps_changed_at + Duration::from_millis(2);
+        assert_eq!(pacer.delay(skipped_at, 60, true), Duration::ZERO);
+        pacer.record_frame_started(skipped_at, 60, true);
+        assert_eq!(pacer.delay(skipped_at + work, 60, false), frame_budget(60) - work);
+
+        pacer.record_frame_started(skipped_at + work, 0, false);
+        assert_eq!(pacer.delay(skipped_at + work, 0, false), Duration::ZERO);
+        assert_eq!(pacer.delay(skipped_at + work, 120, false), Duration::ZERO);
     }
 
     #[test]
