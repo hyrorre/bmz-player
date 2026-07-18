@@ -4378,6 +4378,41 @@ mod tests {
     }
 
     #[test]
+    fn milliondollar_result_uses_integer_only_gauge_layout_at_one_hundred_percent_when_available() {
+        let skin_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../data/skins/MILLIONDOLLAR/result.luaskin");
+        if !skin_path.is_file() {
+            return;
+        }
+
+        let decoded = decode_beatoraja_skin_with_options_and_runtime_state(
+            &skin_path,
+            SkinKind::Result,
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            &LuaLoadRuntimeState {
+                number_values: BTreeMap::from([(107, 100)]),
+                ..LuaLoadRuntimeState::default()
+            },
+        )
+        .expect("decode MILLIONDOLLAR result skin with full gauge");
+
+        let draw_for = |id: &str| {
+            decoded.document.destination.iter().find_map(|entry| match entry {
+                DestinationListEntry::Single(destination) if destination.id == id => {
+                    Some(destination.draw.as_str())
+                }
+                _ => None,
+            })
+        };
+        assert_eq!(draw_for("Number_Remaingauge_Max_1"), Some("number(107) == 100"));
+        assert_eq!(draw_for("Number_Remaingauge_Max_00"), Some("number(107) == 100"));
+        assert_eq!(draw_for("Number_Remaingauge_Normal"), Some("number(107) < 100"));
+        assert_eq!(draw_for("Parts_Text_Remaingauge_Dot"), Some("number(107) < 100"));
+        assert_eq!(draw_for("Number_Remaingauge_Afterdot"), Some("number(107) < 100"));
+    }
+
+    #[test]
     fn milliondollar_result_rank_diff_uses_load_time_result_scores_when_available() {
         let skin_path = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../data/skins/MILLIONDOLLAR/result.luaskin");

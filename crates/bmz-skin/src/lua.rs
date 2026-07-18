@@ -3841,9 +3841,11 @@ fn lua_table_to_json(
                     );
                     continue;
                 }
-                if let Some(draw) =
-                    infer_gauge_value_digit_draw_condition(object_id.as_deref(), main_state_probe)
-                {
+                if let Some(draw) = infer_gauge_value_digit_draw_condition(
+                    function,
+                    object_id.as_deref(),
+                    main_state_probe,
+                ) {
                     object.insert(key.clone(), JsonValue::String(draw));
                     continue;
                 }
@@ -3939,10 +3941,29 @@ fn lua_table_to_json(
 }
 
 fn infer_gauge_value_digit_draw_condition(
+    function: &Function,
     object_id: Option<&str>,
     main_state_probe: &Arc<Mutex<MainStateProbe>>,
 ) -> Option<String> {
     let id = object_id?;
+    if matches!(
+        id,
+        "Number_Remaingauge_Max_1"
+            | "Number_Remaingauge_Max_00"
+            | "Number_Remaingauge_Normal"
+            | "Parts_Text_Remaingauge_Dot"
+            | "Number_Remaingauge_Afterdot"
+    ) {
+        let below_max =
+            call_draw_with_numbers(function, main_state_probe, BTreeMap::from([(107, 99)]))?;
+        let at_max =
+            call_draw_with_numbers(function, main_state_probe, BTreeMap::from([(107, 100)]))?;
+        return match (below_max, at_max) {
+            (false, true) => Some("number(107) == 100".to_string()),
+            (true, false) => Some("number(107) < 100".to_string()),
+            _ => None,
+        };
+    }
     let mut probe = main_state_probe.lock().ok()?;
     let mode = match id {
         "val-gauge-percent-integer" | "val-gauge-percent-fraction" | "gauge-value-percent" => {
