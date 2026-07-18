@@ -166,6 +166,7 @@ use crate::ui::{
     UpdateDialogAction,
 };
 use crate::update::{DownloadedUpdate, UpdateAssetKind, UpdateCandidate};
+use crate::window_config::select_monitor;
 use bmz_render::skin::{
     DestinationListEntry, SKIN_EVENT_DAILY_STATISTICS_RESET, SKIN_EVENT_RESULT_PANEL_GRAPH,
     SKIN_EVENT_RESULT_PANEL_IR, SKIN_OPTION_BMZ_DOUBLE_PLAY, SKIN_OPTION_BMZ_KEY_MODE_BASE,
@@ -2992,8 +2993,15 @@ impl WinitApp {
         }
 
         let video = &self.boot.app_config.video;
-        let attributes = window_attributes_from_config(video)
-            .with_fullscreen(fullscreen_from_config(&video.mode, event_loop.primary_monitor()));
+        let attributes =
+            window_attributes_from_config(video).with_fullscreen(fullscreen_from_config(
+                &video.mode,
+                select_monitor(
+                    &video.monitor_name,
+                    event_loop.available_monitors(),
+                    event_loop.primary_monitor(),
+                ),
+            ));
         match event_loop.create_window(attributes) {
             Ok(window) => {
                 let window = Arc::new(window);
@@ -12941,7 +12949,12 @@ impl WinitApp {
         // ウィンドウモード変更をライブ反映する (差分があるときのみ適用)。
         let desired_mode = self.boot.app_config.video.mode.clone();
         if desired_mode != self.applied_window_mode {
-            window.set_fullscreen(fullscreen_from_config(&desired_mode, window.current_monitor()));
+            let monitor = select_monitor(
+                &self.boot.app_config.video.monitor_name,
+                window.available_monitors(),
+                window.primary_monitor(),
+            );
+            window.set_fullscreen(fullscreen_from_config(&desired_mode, monitor));
             tracing::info!(mode = ?desired_mode, "window mode updated");
             self.applied_window_mode = desired_mode;
         }

@@ -44,6 +44,7 @@ use crate::skin_loader::RANDOM_FILE_SELECTION;
 use crate::songs_cmd::add_song_root_entry;
 use crate::storage::score_import::{ScoreImportKind, ScoreImportRequest};
 use crate::update::{UpdateAssetKind, UpdateCandidate, current_version};
+use crate::window_config::monitor_config_name;
 
 const BUNDLED_THIRD_PARTY_NOTICES: &str = include_str!("../../../THIRD-PARTY-NOTICES.txt");
 const THIRD_PARTY_NOTICE_PATH: &str = "licenses/third-party-notices.txt";
@@ -851,6 +852,7 @@ impl EguiLayer {
                 build_debug_panel(ctx, show_debug, info);
                 let settings_actions = build_settings_panel(
                     ctx,
+                    window,
                     show_settings,
                     if settings_editable {
                         app_config
@@ -1930,6 +1932,7 @@ fn settings_drag_ghost(
 /// `AppConfig` を編集する本体設定パネル。
 fn build_settings_panel(
     ctx: &egui::Context,
+    window: &Window,
     open: &mut bool,
     config: &mut AppConfig,
     profile: &mut ProfileConfig,
@@ -2501,6 +2504,34 @@ fn build_settings_panel(
                     ui.add(
                         egui::Slider::new(&mut config.video.height, 480..=2160).text("高さ (px)"),
                     );
+                    let available_monitors = window.available_monitors().collect::<Vec<_>>();
+                    let selected_monitor = if config.video.monitor_name.is_empty() {
+                        "プライマリモニター".to_string()
+                    } else if available_monitors
+                        .iter()
+                        .any(|monitor| monitor_config_name(monitor) == config.video.monitor_name)
+                    {
+                        config.video.monitor_name.clone()
+                    } else {
+                        format!("未接続: {}", config.video.monitor_name)
+                    };
+                    egui::ComboBox::from_label("フルスクリーン画面")
+                        .selected_text(selected_monitor)
+                        .show_ui(ui, |ui| {
+                            ui.selectable_value(
+                                &mut config.video.monitor_name,
+                                String::new(),
+                                "プライマリモニター",
+                            );
+                            for monitor in &available_monitors {
+                                let name = monitor_config_name(monitor);
+                                ui.selectable_value(
+                                    &mut config.video.monitor_name,
+                                    name.clone(),
+                                    name,
+                                );
+                            }
+                        });
                     egui::ComboBox::from_label("同期モード")
                         .selected_text(vsync_mode_label(&config.video.vsync_mode))
                         .show_ui(ui, |ui| {
@@ -2526,8 +2557,12 @@ fn build_settings_panel(
                             );
                         });
                     ui.add(
-                        egui::Slider::new(&mut config.video.target_fps, 30..=480).text("目標 FPS"),
+                        egui::DragValue::new(&mut config.video.target_fps)
+                            .range(0..=u32::MAX)
+                            .speed(1.0)
+                            .suffix(" FPS"),
                     );
+                    ui.label("目標 FPS は 0 で無制限");
                     if ui.checkbox(show_fps, "FPS 表示").changed() {
                         profile.ui.show_fps = *show_fps;
                         save_profile = true;
@@ -2552,7 +2587,7 @@ fn build_settings_panel(
                             }
                         });
                     ui.label(
-                        "VSync / Present Mode / ウィンドウモード / 目標 FPS は即時反映。幅 / 高さ / レンダリングバックエンドは次回起動時に反映されます。",
+                        "VSync / Present Mode / ウィンドウモード / 目標 FPS は即時反映。目標 FPS に上限はありません。幅 / 高さ / フルスクリーン画面 / レンダリングバックエンドは次回起動時に反映されます。",
                     );
                 });
 

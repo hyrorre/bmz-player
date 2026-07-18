@@ -114,9 +114,13 @@ pub enum AudioSampleRateMode {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VideoConfig {
     pub mode: WindowMode,
+    /// フルスクリーン時に使用するモニター。空文字列はプライマリモニターを意味する。
+    #[serde(default)]
+    pub monitor_name: String,
     pub width: u32,
     pub height: u32,
     pub vsync_mode: VsyncModeConfig,
+    /// 目標 FPS。0 はフレームペーサーによる待機を行わず、無制限を意味する。
     pub target_fps: u32,
     pub frame_limit_in_background: u32,
     pub renderer: RendererBackend,
@@ -499,6 +503,7 @@ impl Default for AppConfig {
             },
             video: VideoConfig {
                 mode: WindowMode::Windowed,
+                monitor_name: String::new(),
                 width: 1280,
                 height: 720,
                 vsync_mode: VsyncModeConfig::Vsync,
@@ -547,6 +552,34 @@ mod tests {
         assert!(!config.scan.auto_rescan_on_startup);
         assert_eq!(config.video.vsync_mode, VsyncModeConfig::Vsync);
         assert_eq!(config.video.frame_limit_in_background, 60);
+    }
+
+    #[test]
+    fn app_config_defaults_fullscreen_monitor_to_primary() {
+        let config = AppConfig::default();
+
+        assert!(config.video.monitor_name.is_empty());
+    }
+
+    #[test]
+    fn app_config_loads_missing_fullscreen_monitor_as_primary() {
+        let toml =
+            toml::to_string(&AppConfig::default()).unwrap().replace("monitor_name = \"\"\n", "");
+
+        let config: AppConfig = toml::from_str(&toml).unwrap();
+
+        assert!(config.video.monitor_name.is_empty());
+    }
+
+    #[test]
+    fn app_config_round_trips_unlimited_target_fps() {
+        let mut config = AppConfig::default();
+        config.video.target_fps = 0;
+
+        let toml = toml::to_string(&config).unwrap();
+        let loaded: AppConfig = toml::from_str(&toml).unwrap();
+
+        assert_eq!(loaded.video.target_fps, 0);
     }
 
     #[test]
