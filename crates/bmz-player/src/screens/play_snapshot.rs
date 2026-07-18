@@ -421,6 +421,7 @@ pub fn build_render_snapshot_with_target_and_bga_frames_cached(
         current_fps: 0,
         play_elapsed_time,
         operating_time_ms: 0,
+        skin_input: Default::default(),
         ready_elapsed_time: None,
         rhythm_timer_elapsed_ms: rhythm_timer_elapsed_ms(
             &session.timing_map,

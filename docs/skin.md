@@ -88,6 +88,85 @@ BMZ 独自のプレイ中状態はこの範囲へ追加する。
 
 `op: [1901]` または `draw: "number(1901)==1"` で FHS 時だけ destination を表示できる。
 
+### BMZ Key Mode Refs
+
+選曲中は曲行の譜面、決定・プレイ・リザルトでは実際のプレイ譜面から値を得る。
+フォルダ行や設定行では、譜面モードの number / option を無効として扱う。
+
+| ref / option | kind | meaning |
+| ---: | --- | --- |
+| 1903 | number / event_index | key mode (`4`, `5`, `6`, `7`, `8`, `9`, `10`, `14`) |
+| 1904 | number | Scratch を含む実レーン数 |
+| 1905..1912 | option | 順に 4K / 5K / 6K / 7K / 8K / 9K / 10K / 14K 完全一致 |
+| 1913 | option | Scratch なし (4K / 6K / 8K / 9K) |
+| 1914 | option | single play (5K / 7K) |
+| 1915 | option | double play (10K / 14K) |
+
+### BMZ Logical Input Refs
+
+| option | timer | logical input |
+| ---: | ---: | --- |
+| 1920 | 19000 | E1 |
+| 1921 | 19001 | E2 |
+| 1922 | 19002 | E3 |
+| 1923 | 19003 | E4 |
+| 1924 | 19004 | UI Left |
+| 1925 | 19005 | UI Right |
+| 1926 | 19006 | UI Up |
+| 1927 | 19007 | UI Down |
+
+option は論理入力の押下中、timer は直近の論理入力 press edge からの経過 ms を返す。
+同じ論理入力に複数の物理キーを割り当てた場合は OR 集約し、押下中に別キーを追加しても
+timer を再起動しない。scene 入場時から押されている入力は press edge として扱わない。
+E1 は設定済み E1 と legacy Start、E2 は設定済み E2 と legacy Select を含む。
+
+`runtimeEvent` に `triggerAction` を指定すると、Lua で入力状態を取得せずに runtime flag を
+切り替えられる。値は `e1_press`, `e2_press`, `e3_press`, `e4_press`,
+`ui_left_press`, `ui_right_press`, `ui_up_press`, `ui_down_press`。
+
+```json
+{
+  "runtimeFlag": [{ "id": 1, "initial": false }],
+  "runtimeEvent": [{
+    "id": -20001,
+    "toggleFlags": [1],
+    "triggerAction": "e1_press"
+  }]
+}
+```
+
+### BMZ Daily Statistics Refs
+
+`score.db` の local / non-autoplay `score_history` をプロファイル単位で集計する。
+`profile.toml` の `[statistics] day_start_hour = 0` で日付境界のローカル時刻を指定できる。
+
+| ref | kind | meaning |
+| ---: | --- | --- |
+| 1930 / 1931 | number | play count / clear count |
+| 1932..1937 | number | PGREAT / GREAT / GOOD / BAD / POOR / EMPTY POOR |
+| 1938 / 1939 | number | 処理ノーツ / 完了ノーツ |
+| 1940 / 1941 | number | EX score / max EX score |
+| 1942 | number | rate (0..10000) |
+| 1943 | number / text | rank index (`0=AAA` .. `7=F`) / rank label |
+| 1944..1946 | number | score / clear / miss count の更新回数 |
+| 1950..1959 | text | 当日の直近曲名 (新しい順、連続重複を除外) |
+
+event `-10100` は表示上の日次集計を現在時刻でリセットする。score history 自体は削除しない。
+MILLIONDOLLAR / m-select の既存オブジェクトID特例と仮想ファイル互換経路も継続する。
+
+### BMZ Course Result Refs
+
+| ref | meaning |
+| ---: | --- |
+| 19100 | result stage count |
+| 19110..19119 | stage 1..10 EX score |
+| 19120..19129 | stage 1..10 gauge (整数部) |
+| 19130..19139 | stage 1..10 BP |
+| 19140..19149 | stage 1..10 rate (0..10000) |
+
+stage title は beatoraja 互換 text `150..159` を使う。WMII RESULT 用
+`skin/WMII_FHD/result/courseData.json` の read-only 仮想ファイルも互換性のため併存する。
+
 ## Profile Slots
 
 profile の `[skin]` は key mode ごとに play skin path と設定を持つ。

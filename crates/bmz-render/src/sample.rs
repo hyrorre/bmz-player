@@ -40,6 +40,7 @@ pub fn sample_select_scene() -> AppSceneSnapshot {
         player_name: "Sample Player".to_string(),
         current_fps: 60,
         operating_time_ms: 12_345,
+        skin_input: Default::default(),
         selection_time: TimeUs(345_000),
         option_panel_time: TimeUs(0),
         option_panel_off_times: [None; 6],
@@ -170,6 +171,7 @@ pub fn sample_result_scene() -> AppSceneSnapshot {
     AppSceneSnapshot::Result(ResultSnapshot {
         player_name: "Sample Player".to_string(),
         current_fps: 60,
+        skin_input: Default::default(),
         hispeed_auto_adjust: false,
         clear_type: bmz_core::clear::ClearType::Normal,
         result_failed: false,
@@ -251,6 +253,7 @@ pub fn sample_result_scene() -> AppSceneSnapshot {
         table_text_secondary: String::new(),
         table_text_fallback: String::new(),
         course_titles: Default::default(),
+        course_result: Default::default(),
         graph: std::sync::Arc::new(crate::snapshot::ResultGraphSnapshot::default()),
         overlay: OverlaySnapshot::default(),
         ir: crate::scene::ResultIrSnapshot::default(),

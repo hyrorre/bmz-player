@@ -1001,6 +1001,25 @@ impl Renderer {
     }
 
     pub fn render_scene_status(&mut self, scene: AppSceneSnapshot) -> Result<RenderSurfaceStatus> {
+        let entering_scene = self.last_scene.as_ref().is_none_or(|previous| {
+            std::mem::discriminant(previous) != std::mem::discriminant(&scene)
+        });
+        if entering_scene {
+            match &scene {
+                AppSceneSnapshot::Select(_) => self
+                    .select_dynamic_timer_runtime
+                    .reset_for_document(self.select_skin_context.document()),
+                AppSceneSnapshot::Decide(_) => self
+                    .decide_dynamic_timer_runtime
+                    .reset_for_document(self.decide_skin_context.document()),
+                AppSceneSnapshot::Play(_) => self
+                    .play_dynamic_timer_runtime
+                    .reset_for_document(self.play_skin_context.document()),
+                AppSceneSnapshot::Result(_) => self
+                    .result_dynamic_timer_runtime
+                    .reset_for_document(self.result_skin_context.document()),
+            }
+        }
         let plan_start = Instant::now();
         let plan = match &scene {
             AppSceneSnapshot::Select(_) => DrawPlan::from_scene_with_skin(

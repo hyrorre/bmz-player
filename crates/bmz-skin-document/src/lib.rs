@@ -589,10 +589,45 @@ pub const SKIN_DYNAMIC_TIMER_BASE: i32 = 9000;
 pub const SKIN_REF_PLAY_GAUGE_TYPE: i32 = 44;
 /// beatoraja `BUTTON_HSFIX` (`event_index(55)`)。
 pub const SKIN_EVENT_HSFIX: i32 = 55;
+/// BMZ extension: exact key mode number (`4`, `5`, `6`, `7`, `8`, `9`, `10`, `14`).
+pub const SKIN_REF_BMZ_KEY_MODE: i32 = 1903;
+/// BMZ extension: active physical lane count including scratch lanes.
+pub const SKIN_REF_BMZ_ACTIVE_LANE_COUNT: i32 = 1904;
+/// BMZ extension: exact key mode options in K4/K5/K6/K7/K8/K9/K10/K14 order.
+pub const SKIN_OPTION_BMZ_KEY_MODE_BASE: i32 = 1905;
+pub const SKIN_OPTION_BMZ_KEY_MODE_COUNT: usize = 8;
+pub const SKIN_OPTION_BMZ_KEY_MODE_LAST: i32 = 1912;
+/// BMZ extension: scratch layout options.
+pub const SKIN_OPTION_BMZ_NO_SCRATCH: i32 = 1913;
+pub const SKIN_OPTION_BMZ_SINGLE_PLAY: i32 = 1914;
+pub const SKIN_OPTION_BMZ_DOUBLE_PLAY: i32 = 1915;
+/// BMZ extension: E1/E2/E3/E4/UI Left/Right/Up/Down held options.
+pub const SKIN_OPTION_BMZ_INPUT_BASE: i32 = 1920;
+pub const SKIN_OPTION_BMZ_INPUT_LAST: i32 = 1927;
+pub const SKIN_BMZ_INPUT_COUNT: usize = 8;
+/// BMZ extension: matching press-edge timers.
+pub const SKIN_TIMER_BMZ_INPUT_BASE: i32 = 19_000;
+pub const SKIN_TIMER_BMZ_INPUT_LAST: i32 = 19_007;
+/// BMZ extension: generic daily statistics number refs.
+pub const SKIN_REF_BMZ_DAILY_BASE: i32 = 1930;
+pub const SKIN_REF_BMZ_DAILY_LAST: i32 = 1946;
+/// BMZ extension: daily rank label and recent title text refs.
+pub const SKIN_TEXT_BMZ_DAILY_RANK: i32 = 1943;
+pub const SKIN_TEXT_BMZ_DAILY_RECENT_BASE: i32 = 1950;
+pub const SKIN_TEXT_BMZ_DAILY_RECENT_LAST: i32 = 1959;
+/// BMZ extension: course result stage count and ten stage slots.
+pub const SKIN_REF_BMZ_COURSE_STAGE_COUNT: i32 = 19_100;
+pub const SKIN_REF_BMZ_COURSE_STAGE_EX_BASE: i32 = 19_110;
+pub const SKIN_REF_BMZ_COURSE_STAGE_GAUGE_BASE: i32 = 19_120;
+pub const SKIN_REF_BMZ_COURSE_STAGE_BP_BASE: i32 = 19_130;
+pub const SKIN_REF_BMZ_COURSE_STAGE_RATE_BASE: i32 = 19_140;
+pub const SKIN_BMZ_COURSE_STAGE_COUNT: usize = 10;
 /// Lua result skin の定数 `Expand_op` 代入を宣言的クリックイベントへ変換する ID。
 /// beatoraja の正数イベント ID と衝突しない BMZ 内部予約値を使う。
 pub const SKIN_EVENT_RESULT_PANEL_IR: i32 = -10_001;
 pub const SKIN_EVENT_RESULT_PANEL_GRAPH: i32 = -10_002;
+/// Clear the visible daily statistics window without deleting score history.
+pub const SKIN_EVENT_DAILY_STATISTICS_RESET: i32 = -10_100;
 /// Lua callback から変換する runtime event の内部予約 ID 範囲。
 /// beatoraja 正数イベント ID と衝突しないよう負数を使う。
 pub const SKIN_EVENT_RUNTIME_BASE: i32 = -20_000;
@@ -635,6 +670,38 @@ pub struct SkinRuntimeEventDef {
     pub id: i32,
     #[serde(default, rename = "toggleFlags")]
     pub toggle_flags: Vec<i32>,
+    /// BMZ extension: logical input press edge that dispatches this runtime event.
+    #[serde(default, rename = "triggerAction")]
+    pub trigger_action: Option<SkinRuntimeTriggerAction>,
+}
+
+/// Runtime event trigger that does not require Lua-side input or file access.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SkinRuntimeTriggerAction {
+    E1Press,
+    E2Press,
+    E3Press,
+    E4Press,
+    UiLeftPress,
+    UiRightPress,
+    UiUpPress,
+    UiDownPress,
+}
+
+impl SkinRuntimeTriggerAction {
+    pub const fn index(self) -> usize {
+        match self {
+            Self::E1Press => 0,
+            Self::E2Press => 1,
+            Self::E3Press => 2,
+            Self::E4Press => 3,
+            Self::UiLeftPress => 4,
+            Self::UiRightPress => 5,
+            Self::UiUpPress => 6,
+            Self::UiDownPress => 7,
+        }
+    }
 }
 
 /// スキン音声に対する宣言的な再生・停止命令。

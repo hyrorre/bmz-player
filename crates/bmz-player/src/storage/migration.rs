@@ -1391,6 +1391,16 @@ pub const SCORE_MIGRATIONS: &[Migration] = &[
                 WHERE best_score_history_id IS NOT NULL;",
         ],
     },
+    Migration {
+        version: 23,
+        statements: &[
+            "CREATE TABLE daily_statistics_state (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                reset_at INTEGER NOT NULL DEFAULT 0
+            );",
+            "INSERT INTO daily_statistics_state (id, reset_at) VALUES (1, 0);",
+        ],
+    },
 ];
 
 pub const NETWORK_MIGRATIONS: &[Migration] = &[Migration {
@@ -1644,7 +1654,7 @@ mod tests {
         run_migrations(&mut conn, SCORE_MIGRATIONS).unwrap();
 
         let version: i32 = conn.pragma_query_value(None, "user_version", |row| row.get(0)).unwrap();
-        assert_eq!(version, 22);
+        assert_eq!(version, 23);
 
         let mut stmt = conn.prepare("PRAGMA table_info(score_best)").unwrap();
         let columns = stmt

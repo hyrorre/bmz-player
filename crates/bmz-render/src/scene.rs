@@ -6,7 +6,10 @@ use bmz_core::time::TimeUs;
 
 use crate::chart_graph::BpmGraphSegment;
 use crate::skin::SkinImageSize;
-use crate::snapshot::{DisplayJudgeCounts, FastSlowJudgeCounts, OverlaySnapshot, RenderSnapshot};
+use crate::snapshot::{
+    DisplayJudgeCounts, FastSlowJudgeCounts, OverlaySnapshot, RenderSnapshot,
+    SkinLogicalInputSnapshot,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub enum ResultGradeDiffDisplay {
@@ -24,7 +27,7 @@ pub enum AppSceneSnapshot {
     Result(ResultSnapshot),
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct DailyPlayerStatsSnapshot {
     pub play_count: u64,
     pub clear_count: u64,
@@ -34,9 +37,14 @@ pub struct DailyPlayerStatsSnapshot {
     pub bad: u64,
     pub poor: u64,
     pub empty_poor: u64,
+    pub score_update_count: u64,
+    pub clear_update_count: u64,
+    pub miss_count_update_count: u64,
+    /// Most recent locally played titles in the current statistics day.
+    pub recent_titles: [String; 10],
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct PlayerStatsSnapshot {
     pub play_count: u64,
     pub clear_count: u64,
@@ -57,6 +65,20 @@ pub struct PlayerStatsSnapshot {
     pub daily: DailyPlayerStatsSnapshot,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct CourseStageResultSkinSnapshot {
+    pub ex_score: u32,
+    pub gauge: f32,
+    pub bp: u32,
+    pub rate_basis_points: u32,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct CourseResultSkinSnapshot {
+    pub stage_count: u32,
+    pub stages: [CourseStageResultSkinSnapshot; bmz_skin_document::SKIN_BMZ_COURSE_STAGE_COUNT],
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct SelectSnapshot {
     pub time: TimeUs,
@@ -67,6 +89,7 @@ pub struct SelectSnapshot {
     /// アプリ起動後の経過時間 ms。
     /// beatoraja の NUMBER_OPERATING_TIME_HOUR/MINUTE/SECOND (27..29) に使う。
     pub operating_time_ms: i32,
+    pub skin_input: SkinLogicalInputSnapshot,
     pub selection_time: TimeUs,
     pub option_panel_time: TimeUs,
     /// TIMER_PANEL1_OFF..6_OFF (31..36) の経過時間。None は対応タイマーOFF。
@@ -185,6 +208,7 @@ impl Default for SelectSnapshot {
             player_name: String::new(),
             current_fps: 0,
             operating_time_ms: 0,
+            skin_input: SkinLogicalInputSnapshot::default(),
             selection_time: TimeUs::default(),
             option_panel_time: TimeUs::default(),
             option_panel_off_times: [None; 6],
@@ -571,6 +595,7 @@ pub struct ResultSnapshot {
     pub player_name: String,
     /// beatoraja NUMBER_CURRENT_FPS (20)。
     pub current_fps: u32,
+    pub skin_input: SkinLogicalInputSnapshot,
     /// beatoraja image/index ref 342。
     pub hispeed_auto_adjust: bool,
     pub clear_type: ClearType,
@@ -650,6 +675,7 @@ pub struct ResultSnapshot {
     pub table_text_fallback: String,
     /// beatoraja STRING_COURSE1_TITLE..10_TITLE (150..159) for course results.
     pub course_titles: [String; 10],
+    pub course_result: CourseResultSkinSnapshot,
     /// Result 画面の graph 系 skin object に渡すプレイ中の推移データ。
     pub graph: Arc<crate::snapshot::ResultGraphSnapshot>,
     /// 右下に常時表示するオーバーレイ文字列。
@@ -676,6 +702,7 @@ mod tests {
         let snapshot = ResultSnapshot {
             player_name: String::new(),
             current_fps: 0,
+            skin_input: SkinLogicalInputSnapshot::default(),
             hispeed_auto_adjust: false,
             clear_type: ClearType::Normal,
             result_failed: false,
@@ -737,6 +764,7 @@ mod tests {
             table_text_secondary: String::new(),
             table_text_fallback: String::new(),
             course_titles: Default::default(),
+            course_result: CourseResultSkinSnapshot::default(),
             graph: Arc::new(crate::snapshot::ResultGraphSnapshot::default()),
             overlay: OverlaySnapshot::default(),
             ir: ResultIrSnapshot::default(),
@@ -751,6 +779,7 @@ mod tests {
         let snapshot = ResultSnapshot {
             player_name: String::new(),
             current_fps: 0,
+            skin_input: SkinLogicalInputSnapshot::default(),
             hispeed_auto_adjust: false,
             clear_type: ClearType::Normal,
             result_failed: false,
@@ -812,6 +841,7 @@ mod tests {
             table_text_secondary: String::new(),
             table_text_fallback: String::new(),
             course_titles: Default::default(),
+            course_result: CourseResultSkinSnapshot::default(),
             graph: Arc::new(crate::snapshot::ResultGraphSnapshot::default()),
             overlay: OverlaySnapshot::default(),
             ir: ResultIrSnapshot::default(),

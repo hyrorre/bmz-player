@@ -20,8 +20,8 @@ use crate::plan::{
     TextOutline, TextOverflow, TextShadow, TextStyle, TextureId, UvRect,
 };
 use crate::scene::{
-    CourseConstraintFlags, DailyPlayerStatsSnapshot, PlayerStatsSnapshot, ResultGradeDiffDisplay,
-    SelectRowKind, SelectRowSnapshot, SelectSnapshot,
+    CourseConstraintFlags, CourseResultSkinSnapshot, DailyPlayerStatsSnapshot, PlayerStatsSnapshot,
+    ResultGradeDiffDisplay, SelectRowKind, SelectRowSnapshot, SelectSnapshot,
 };
 use crate::skin_offset::{SKIN_OFFSET_BAR_LINE, SkinOffsetValues};
 use crate::snapshot::{CourseStageMarker, DisplayJudgeCounts, LongBodyState};
@@ -921,6 +921,10 @@ pub struct SkinDrawState {
     pub elapsed_ms: i32,
     /// Lua callback をロード時に変換した runtime flag。DynamicTimerRuntime が注入する。
     pub runtime_flags: HashMap<i32, bool>,
+    /// BMZ logical inputs in E1/E2/E3/E4/UI Left/Right/Up/Down order.
+    pub logical_input_held: [bool; SKIN_BMZ_INPUT_COUNT],
+    /// Elapsed milliseconds since the latest aggregate false-to-true press edge.
+    pub logical_input_press_ms: [Option<i32>; SKIN_BMZ_INPUT_COUNT],
     /// beatoraja TIMER_STARTINPUT (1)。skin.input 待機後からの経過 ms。
     pub start_input_ms: Option<i32>,
     /// beatoraja NUMBER_CURRENT_FPS (20)。
@@ -972,6 +976,7 @@ pub struct SkinDrawState {
     pub result_grade_diff_f_fallback_to_e: bool,
     pub judge_counts: DisplayJudgeCounts,
     pub player_stats: PlayerStatsSnapshot,
+    pub course_result: CourseResultSkinSnapshot,
     pub gauge: f32,
     pub gauge_type: i32,
     pub gauge_auto_shift: bool,
@@ -1296,6 +1301,8 @@ impl Default for SkinDrawState {
         Self {
             elapsed_ms: 0,
             runtime_flags: HashMap::new(),
+            logical_input_held: [false; SKIN_BMZ_INPUT_COUNT],
+            logical_input_press_ms: [None; SKIN_BMZ_INPUT_COUNT],
             start_input_ms: None,
             current_fps: 0,
             operating_time_ms: 0,
@@ -1341,6 +1348,7 @@ impl Default for SkinDrawState {
             result_grade_diff_f_fallback_to_e: false,
             judge_counts: DisplayJudgeCounts::default(),
             player_stats: PlayerStatsSnapshot::default(),
+            course_result: CourseResultSkinSnapshot::default(),
             gauge: 0.0,
             gauge_type: 2,
             gauge_auto_shift: false,
@@ -1519,6 +1527,9 @@ pub struct DynamicTimerRuntime {
     runtime_flags: HashMap<i32, bool>,
     runtime_flags_initialized: bool,
     starts: [Option<i32>; SKIN_DYNAMIC_TIMER_COUNT],
+    logical_input_initialized: bool,
+    logical_input_held: [bool; SKIN_BMZ_INPUT_COUNT],
+    logical_input_starts: [Option<i32>; SKIN_BMZ_INPUT_COUNT],
     keybeam_keyon_starts: [Option<i32>; LANE_COUNT],
     keybeam_keyoff_starts: [Option<i32>; LANE_COUNT],
     keybeam_suppressed: [bool; LANE_COUNT],
@@ -1546,6 +1557,9 @@ impl Default for DynamicTimerRuntime {
             runtime_flags: HashMap::new(),
             runtime_flags_initialized: false,
             starts: [None; SKIN_DYNAMIC_TIMER_COUNT],
+            logical_input_initialized: false,
+            logical_input_held: [false; SKIN_BMZ_INPUT_COUNT],
+            logical_input_starts: [None; SKIN_BMZ_INPUT_COUNT],
             keybeam_keyon_starts: [None; LANE_COUNT],
             keybeam_keyoff_starts: [None; LANE_COUNT],
             keybeam_suppressed: [false; LANE_COUNT],
@@ -1585,7 +1599,10 @@ impl DynamicTimerRuntime {
     /// observe 条件を評価し、`state.dynamic_timer_ms` を更新する。
     pub fn advance(&mut self, document: &SkinDocument, state: &mut SkinDrawState, now_ms: i32) {
         self.ensure_runtime_flags(document);
+        self.advance_logical_inputs(document, state.logical_input_held, now_ms);
         state.runtime_flags.clone_from(&self.runtime_flags);
+        state.logical_input_press_ms =
+            self.logical_input_starts.map(|start| start.map(|start| now_ms.saturating_sub(start)));
         self.advance_keybeam(state, now_ms);
         self.key_logger.write_state(state, now_ms);
         state.keylogger_exclude_cool = !document.graph.iter().any(|graph| {
@@ -1621,6 +1638,33 @@ impl DynamicTimerRuntime {
         if !self.runtime_flags_initialized {
             self.initialize_runtime_flags(document);
         }
+    }
+
+    fn advance_logical_inputs(
+        &mut self,
+        document: &SkinDocument,
+        held: [bool; SKIN_BMZ_INPUT_COUNT],
+        now_ms: i32,
+    ) {
+        if !self.logical_input_initialized {
+            self.logical_input_initialized = true;
+            self.logical_input_held = held;
+            return;
+        }
+        for (index, &is_held) in held.iter().enumerate() {
+            if is_held && !self.logical_input_held[index] {
+                self.logical_input_starts[index] = Some(now_ms);
+                for event in document.runtime_events.iter().filter(|event| {
+                    event.trigger_action.is_some_and(|action| action.index() == index)
+                }) {
+                    for flag_id in &event.toggle_flags {
+                        let flag = self.runtime_flags.entry(*flag_id).or_insert(false);
+                        *flag = !*flag;
+                    }
+                }
+            }
+        }
+        self.logical_input_held = held;
     }
 
     fn initialize_runtime_flags(&mut self, document: &SkinDocument) {
@@ -3785,6 +3829,7 @@ impl SkinDocumentRenderExt for SkinDocument {
             start_input_ms: skin_start_input_elapsed_ms(elapsed_ms, self.input),
             current_fps: snapshot.current_fps,
             operating_time_ms: snapshot.operating_time_ms,
+            logical_input_held: snapshot.skin_input.held,
             select_bar_elapsed_ms: (snapshot.selection_time.0 / 1_000)
                 .clamp(i32::MIN as i64, i32::MAX as i64) as i32,
             select_option_panel_elapsed_ms: (snapshot.option_panel_time.0 / 1_000)
@@ -3817,7 +3862,7 @@ impl SkinDocumentRenderExt for SkinDocument {
             lift_enabled: snapshot.lift_enabled,
             hidden_enabled: snapshot.hidden_enabled,
             hispeed_auto_adjust: snapshot.hispeed_auto_adjust,
-            player_stats: snapshot.player_stats,
+            player_stats: snapshot.player_stats.clone(),
             select_assist_index: select_assist_index(&snapshot.assist),
             select_mode_index: select_mode_index(&snapshot.select_mode),
             select_sort_index: select_sort_index(&snapshot.select_sort),
@@ -6998,6 +7043,9 @@ fn test_skin_op(op: i32, enabled_options: &[i32], state: &SkinDrawState) -> bool
         40 => !state.bga_enabled,
         41 => state.bga_enabled,
         1901 => skin_hispeed_mode_is_floating(state),
+        SKIN_OPTION_BMZ_INPUT_BASE..=SKIN_OPTION_BMZ_INPUT_LAST => {
+            state.logical_input_held[(op - SKIN_OPTION_BMZ_INPUT_BASE) as usize]
+        }
         1 => matches!(
             state.select_row_kind,
             SelectRowKind::Folder
@@ -7035,6 +7083,12 @@ fn test_skin_op(op: i32, enabled_options: &[i32], state: &SkinDrawState) -> bool
         23 => state.select_option_panel == 3,
         160..=164 => select_key_mode_option_matches(op, state),
         1160 | 1161 => select_key_mode_option_matches(op, state),
+        SKIN_OPTION_BMZ_KEY_MODE_BASE..=SKIN_OPTION_BMZ_KEY_MODE_LAST => {
+            select_key_mode_option_matches(op, state)
+        }
+        SKIN_OPTION_BMZ_NO_SCRATCH | SKIN_OPTION_BMZ_SINGLE_PLAY | SKIN_OPTION_BMZ_DOUBLE_PLAY => {
+            select_key_mode_option_matches(op, state)
+        }
         196 | 197 | 198 | 1196..=1208 if state.result_failed.is_some() => {
             result_replay_op_matches(op, state)
         }
@@ -8161,6 +8215,7 @@ fn skin_state_event_index(event_id: i32, state: &SkinDrawState) -> i32 {
         344 => extended_arrange_ref_index(state) as i32,
         345 => extended_arrange_2p_ref_index(state) as i32,
         1900 => skin_hispeed_mode_index(state),
+        SKIN_REF_BMZ_KEY_MODE => effective_skin_key_mode(state).map_or(0, skin_key_mode_number),
         SKIN_EVENT_HSFIX => state.hsfix_index,
         _ => skin_random_lane_ref_number(event_id, state)
             .and_then(|value| i32::try_from(value).ok())
@@ -8764,6 +8819,35 @@ fn daily_completed_notes(stats: &DailyPlayerStatsSnapshot) -> u64 {
     daily_play_notes(stats).saturating_add(stats.poor).saturating_add(stats.empty_poor)
 }
 
+fn daily_ex_score(stats: &DailyPlayerStatsSnapshot) -> u64 {
+    stats.pgreat.saturating_mul(2).saturating_add(stats.great)
+}
+
+fn daily_max_ex_score(stats: &DailyPlayerStatsSnapshot) -> u64 {
+    daily_play_notes(stats).saturating_mul(2)
+}
+
+fn daily_rate_basis_points(stats: &DailyPlayerStatsSnapshot) -> u64 {
+    let max = daily_max_ex_score(stats);
+    daily_ex_score(stats).saturating_mul(10_000).checked_div(max).unwrap_or(0)
+}
+
+fn daily_rank_index(stats: &DailyPlayerStatsSnapshot) -> i64 {
+    let max = daily_max_ex_score(stats);
+    if max == 0 {
+        return 7;
+    }
+    let scaled = daily_ex_score(stats).saturating_mul(9);
+    (2..=8)
+        .rev()
+        .find(|threshold| scaled >= max.saturating_mul(*threshold))
+        .map_or(7, |threshold| 8 - threshold as i64)
+}
+
+fn daily_rank_label(stats: &DailyPlayerStatsSnapshot) -> &'static str {
+    ["AAA", "AA", "A", "B", "C", "D", "E", "F"][daily_rank_index(stats) as usize]
+}
+
 fn rounded_percent(numerator: u64, denominator: u64) -> f64 {
     if denominator == 0 {
         return 0.0;
@@ -8772,27 +8856,7 @@ fn rounded_percent(numerator: u64, denominator: u64) -> f64 {
 }
 
 fn m_select_daily_rank(stats: &DailyPlayerStatsSnapshot) -> &'static str {
-    let notes = daily_play_notes(stats);
-    let ex_score = stats.pgreat.saturating_mul(2).saturating_add(stats.great);
-    let max_score = notes.saturating_mul(2);
-    let accuracy = if max_score == 0 { 0.0 } else { ex_score as f64 / max_score as f64 * 100.0 };
-    if accuracy < (100.0 / 9.0) * 2.0 {
-        "F"
-    } else if accuracy < (100.0 / 9.0) * 3.0 {
-        "E"
-    } else if accuracy < (100.0 / 9.0) * 4.0 {
-        "D"
-    } else if accuracy < (100.0 / 9.0) * 5.0 {
-        "C"
-    } else if accuracy < (100.0 / 9.0) * 6.0 {
-        "B"
-    } else if accuracy < (100.0 / 9.0) * 7.0 {
-        "A"
-    } else if accuracy < (100.0 / 9.0) * 8.0 {
-        "AA"
-    } else {
-        "AAA"
-    }
+    daily_rank_label(stats)
 }
 
 fn m_select_daily_stats_text(id: &str, stats: &DailyPlayerStatsSnapshot) -> Option<String> {
@@ -8999,6 +9063,65 @@ fn skin_state_number(ref_id: i32, state: &SkinDrawState) -> Option<i64> {
         1900 => Some(skin_hispeed_mode_index(state) as i64),
         1901 => Some(i64::from(skin_hispeed_mode_is_floating(state))),
         1902 => Some(skin_target_green_number(state)),
+        1930 => Some(player_stat_u64(state.player_stats.daily.play_count)),
+        1931 => Some(player_stat_u64(state.player_stats.daily.clear_count)),
+        1932 => Some(player_stat_u64(state.player_stats.daily.pgreat)),
+        1933 => Some(player_stat_u64(state.player_stats.daily.great)),
+        1934 => Some(player_stat_u64(state.player_stats.daily.good)),
+        1935 => Some(player_stat_u64(state.player_stats.daily.bad)),
+        1936 => Some(player_stat_u64(state.player_stats.daily.poor)),
+        1937 => Some(player_stat_u64(state.player_stats.daily.empty_poor)),
+        1938 => Some(player_stat_u64(daily_play_notes(&state.player_stats.daily))),
+        1939 => Some(player_stat_u64(daily_completed_notes(&state.player_stats.daily))),
+        1940 => Some(player_stat_u64(daily_ex_score(&state.player_stats.daily))),
+        1941 => Some(player_stat_u64(daily_max_ex_score(&state.player_stats.daily))),
+        1942 => Some(player_stat_u64(daily_rate_basis_points(&state.player_stats.daily))),
+        1943 => Some(daily_rank_index(&state.player_stats.daily)),
+        1944 => Some(player_stat_u64(state.player_stats.daily.score_update_count)),
+        1945 => Some(player_stat_u64(state.player_stats.daily.clear_update_count)),
+        1946 => Some(player_stat_u64(state.player_stats.daily.miss_count_update_count)),
+        SKIN_REF_BMZ_COURSE_STAGE_COUNT => Some(i64::from(state.course_result.stage_count)),
+        id if (SKIN_REF_BMZ_COURSE_STAGE_EX_BASE
+            ..SKIN_REF_BMZ_COURSE_STAGE_EX_BASE + SKIN_BMZ_COURSE_STAGE_COUNT as i32)
+            .contains(&id) =>
+        {
+            Some(
+                state.course_result.stages[(ref_id - SKIN_REF_BMZ_COURSE_STAGE_EX_BASE) as usize]
+                    .ex_score as i64,
+            )
+        }
+        id if (SKIN_REF_BMZ_COURSE_STAGE_GAUGE_BASE
+            ..SKIN_REF_BMZ_COURSE_STAGE_GAUGE_BASE + SKIN_BMZ_COURSE_STAGE_COUNT as i32)
+            .contains(&id) =>
+        {
+            Some(
+                state.course_result.stages[(ref_id - SKIN_REF_BMZ_COURSE_STAGE_GAUGE_BASE) as usize]
+                    .gauge
+                    .floor() as i64,
+            )
+        }
+        id if (SKIN_REF_BMZ_COURSE_STAGE_BP_BASE
+            ..SKIN_REF_BMZ_COURSE_STAGE_BP_BASE + SKIN_BMZ_COURSE_STAGE_COUNT as i32)
+            .contains(&id) =>
+        {
+            Some(
+                state.course_result.stages[(ref_id - SKIN_REF_BMZ_COURSE_STAGE_BP_BASE) as usize].bp
+                    as i64,
+            )
+        }
+        id if (SKIN_REF_BMZ_COURSE_STAGE_RATE_BASE
+            ..SKIN_REF_BMZ_COURSE_STAGE_RATE_BASE + SKIN_BMZ_COURSE_STAGE_COUNT as i32)
+            .contains(&id) =>
+        {
+            Some(
+                state.course_result.stages[(ref_id - SKIN_REF_BMZ_COURSE_STAGE_RATE_BASE) as usize]
+                    .rate_basis_points as i64,
+            )
+        }
+        SKIN_REF_BMZ_KEY_MODE => effective_skin_key_mode(state).map(skin_key_mode_number_i64),
+        SKIN_REF_BMZ_ACTIVE_LANE_COUNT => {
+            effective_skin_key_mode(state).map(|mode| mode.lane_count() as i64)
+        }
         312 => {
             if state.select_screen && !duration_refs_available(state) {
                 return None;
@@ -10051,6 +10174,9 @@ fn skin_timer_elapsed_ms(timer: Option<i32>, state: &SkinDrawState) -> Option<i3
         Some(1) => state.start_input_ms,
         Some(2) => state.fadeout_ms,
         Some(3) => state.failed_ms,
+        Some(SKIN_TIMER_BMZ_INPUT_BASE..=SKIN_TIMER_BMZ_INPUT_LAST) => {
+            state.logical_input_press_ms[(timer.unwrap() - SKIN_TIMER_BMZ_INPUT_BASE) as usize]
+        }
         Some(150) => state.result_graph_begin_ms,
         Some(151) => state.result_graph_end_ms,
         Some(152) => state.result_update_score_ms,
@@ -11180,6 +11306,16 @@ fn skin_state_text_with_draw_state(
             .map(|entry| entry.player_name.as_str().to_string())
             .unwrap_or_default(),
         150..=159 => state.course_titles[(text.ref_id - 150) as usize].to_string(),
+        SKIN_TEXT_BMZ_DAILY_RANK => draw_state
+            .map(|state| daily_rank_label(&state.player_stats.daily).to_string())
+            .unwrap_or_default(),
+        SKIN_TEXT_BMZ_DAILY_RECENT_BASE..=SKIN_TEXT_BMZ_DAILY_RECENT_LAST => draw_state
+            .map(|state| {
+                state.player_stats.daily.recent_titles
+                    [(text.ref_id - SKIN_TEXT_BMZ_DAILY_RECENT_BASE) as usize]
+                    .clone()
+            })
+            .unwrap_or_default(),
         1900 => draw_state
             .map(|state| {
                 if skin_hispeed_mode_is_floating(state) { "FHS" } else { "NHS" }.to_string()
@@ -11497,16 +11633,33 @@ fn select_song_option_matches(state: &SkinDrawState) -> bool {
 }
 
 fn select_key_mode_option_matches(op: i32, state: &SkinDrawState) -> bool {
-    if state.result_failed.is_some() || !state.select_screen {
-        return key_mode_option_matches(op, state.key_mode);
+    effective_skin_key_mode(state).is_some_and(|mode| key_mode_option_matches(op, mode))
+}
+
+fn effective_skin_key_mode(state: &SkinDrawState) -> Option<KeyMode> {
+    if !state.select_screen || state.result_failed.is_some() {
+        return Some(state.key_mode);
     }
-    if state.in_settings || state.select_row_kind != SelectRowKind::Song {
-        return false;
+    (!state.in_settings && state.select_row_kind == SelectRowKind::Song && !state.select_is_folder)
+        .then_some(state.select_chart_key_mode)
+        .flatten()
+}
+
+fn skin_key_mode_number(mode: KeyMode) -> i32 {
+    skin_key_mode_number_i64(mode) as i32
+}
+
+fn skin_key_mode_number_i64(mode: KeyMode) -> i64 {
+    match mode {
+        KeyMode::K4 => 4,
+        KeyMode::K5 => 5,
+        KeyMode::K6 => 6,
+        KeyMode::K7 => 7,
+        KeyMode::K8 => 8,
+        KeyMode::K9 => 9,
+        KeyMode::K10 => 10,
+        KeyMode::K14 => 14,
     }
-    let Some(mode) = state.select_chart_key_mode else {
-        return false;
-    };
-    key_mode_option_matches(op, mode)
 }
 
 fn key_mode_option_matches(op: i32, mode: KeyMode) -> bool {
@@ -11517,6 +11670,19 @@ fn key_mode_option_matches(op: i32, mode: KeyMode) -> bool {
         163 => matches!(mode, KeyMode::K10),
         164 => matches!(mode, KeyMode::K9),
         1160 | 1161 => false,
+        SKIN_OPTION_BMZ_KEY_MODE_BASE => mode == KeyMode::K4,
+        op if op == SKIN_OPTION_BMZ_KEY_MODE_BASE + 1 => mode == KeyMode::K5,
+        op if op == SKIN_OPTION_BMZ_KEY_MODE_BASE + 2 => mode == KeyMode::K6,
+        op if op == SKIN_OPTION_BMZ_KEY_MODE_BASE + 3 => mode == KeyMode::K7,
+        op if op == SKIN_OPTION_BMZ_KEY_MODE_BASE + 4 => mode == KeyMode::K8,
+        op if op == SKIN_OPTION_BMZ_KEY_MODE_BASE + 5 => mode == KeyMode::K9,
+        op if op == SKIN_OPTION_BMZ_KEY_MODE_BASE + 6 => mode == KeyMode::K10,
+        op if op == SKIN_OPTION_BMZ_KEY_MODE_BASE + 7 => mode == KeyMode::K14,
+        SKIN_OPTION_BMZ_NO_SCRATCH => {
+            matches!(mode, KeyMode::K4 | KeyMode::K6 | KeyMode::K8 | KeyMode::K9)
+        }
+        SKIN_OPTION_BMZ_SINGLE_PLAY => matches!(mode, KeyMode::K5 | KeyMode::K7),
+        SKIN_OPTION_BMZ_DOUBLE_PLAY => matches!(mode, KeyMode::K10 | KeyMode::K14),
         _ => false,
     }
 }
@@ -14736,6 +14902,20 @@ mod tests {
         };
         assert!(test_skin_op(160, &[], &song_7k));
         assert!(!test_skin_op(161, &[], &song_7k));
+        assert!(test_skin_op(SKIN_OPTION_BMZ_KEY_MODE_BASE + 3, &[], &song_7k));
+        assert!(test_skin_op(SKIN_OPTION_BMZ_SINGLE_PLAY, &[], &song_7k));
+        assert!(!test_skin_op(SKIN_OPTION_BMZ_NO_SCRATCH, &[], &song_7k));
+        assert_eq!(skin_state_number(SKIN_REF_BMZ_KEY_MODE, &song_7k), Some(7));
+        assert_eq!(skin_state_number(SKIN_REF_BMZ_ACTIVE_LANE_COUNT, &song_7k), Some(8));
+
+        let folder = SkinDrawState {
+            select_screen: true,
+            select_row_kind: SelectRowKind::Folder,
+            select_chart_key_mode: Some(KeyMode::K7),
+            ..SkinDrawState::default()
+        };
+        assert_eq!(skin_state_number(SKIN_REF_BMZ_KEY_MODE, &folder), None);
+        assert!(!test_skin_op(SKIN_OPTION_BMZ_KEY_MODE_BASE + 3, &[], &folder));
     }
 
     #[test]
@@ -14750,6 +14930,10 @@ mod tests {
 
         let result_14k = SkinDrawState { key_mode: KeyMode::K14, ..result_5k };
         assert!(test_skin_op(162, &[], &result_14k));
+        assert!(test_skin_op(SKIN_OPTION_BMZ_KEY_MODE_LAST, &[], &result_14k));
+        assert!(test_skin_op(SKIN_OPTION_BMZ_DOUBLE_PLAY, &[], &result_14k));
+        assert_eq!(skin_state_event_index(SKIN_REF_BMZ_KEY_MODE, &result_14k), 14);
+        assert_eq!(skin_state_number(SKIN_REF_BMZ_ACTIVE_LANE_COUNT, &result_14k), Some(16));
     }
 
     #[test]
@@ -14758,6 +14942,11 @@ mod tests {
 
         assert!(test_skin_op(162, &[], &play_14k));
         assert!(!test_skin_op(160, &[], &play_14k));
+
+        let play_6k = SkinDrawState { key_mode: KeyMode::K6, ..SkinDrawState::default() };
+        assert!(test_skin_op(SKIN_OPTION_BMZ_KEY_MODE_BASE + 2, &[], &play_6k));
+        assert!(test_skin_op(SKIN_OPTION_BMZ_NO_SCRATCH, &[], &play_6k));
+        assert_eq!(skin_state_number(SKIN_REF_BMZ_KEY_MODE, &play_6k), Some(6));
     }
 
     #[test]
@@ -21034,6 +21223,11 @@ mod tests {
             bad: 5,
             poor: 3,
             empty_poor: 2,
+            score_update_count: 3,
+            clear_update_count: 2,
+            miss_count_update_count: 1,
+            recent_titles: std::array::from_fn(|index| format!("Recent {}", index + 1)),
+            ..Default::default()
         };
         let state = SkinDrawState {
             player_stats: PlayerStatsSnapshot { daily, ..PlayerStatsSnapshot::default() },
@@ -21046,6 +21240,16 @@ mod tests {
             ..SkinValueDef::default()
         };
         assert_eq!(skin_value_number(&million_value, &state), Some(95));
+        assert_eq!(skin_state_number(1930, &state), Some(5));
+        assert_eq!(skin_state_number(1938, &state), Some(90));
+        assert_eq!(skin_state_number(1939, &state), Some(95));
+        assert_eq!(skin_state_number(1940, &state), Some(125));
+        assert_eq!(skin_state_number(1941, &state), Some(180));
+        assert_eq!(skin_state_number(1942, &state), Some(6944));
+        assert_eq!(skin_state_number(1943, &state), Some(2));
+        assert_eq!(skin_state_number(1944, &state), Some(3));
+        assert_eq!(skin_state_number(1945, &state), Some(2));
+        assert_eq!(skin_state_number(1946, &state), Some(1));
 
         let text = |id: &str| SkinTextDef { id: id.to_string(), ..SkinTextDef::default() };
         let text_state = SkinTextState::default();
@@ -21089,6 +21293,31 @@ mod tests {
             ),
             "69.44"
         );
+        let generic_rank = SkinTextDef { ref_id: 1943, ..Default::default() };
+        let generic_recent = SkinTextDef { ref_id: 1950, ..Default::default() };
+        assert_eq!(skin_state_text_with_draw_state(&generic_rank, Some(&state), &text_state), "A");
+        assert_eq!(
+            skin_state_text_with_draw_state(&generic_recent, Some(&state), &text_state),
+            "Recent 1"
+        );
+    }
+
+    #[test]
+    fn course_stage_result_refs_map_fixed_slots() {
+        let mut course_result = CourseResultSkinSnapshot { stage_count: 2, ..Default::default() };
+        course_result.stages[1] = crate::scene::CourseStageResultSkinSnapshot {
+            ex_score: 200,
+            gauge: 42.9,
+            bp: 17,
+            rate_basis_points: 8_333,
+        };
+        let state = SkinDrawState { course_result, ..Default::default() };
+
+        assert_eq!(skin_state_number(SKIN_REF_BMZ_COURSE_STAGE_COUNT, &state), Some(2));
+        assert_eq!(skin_state_number(SKIN_REF_BMZ_COURSE_STAGE_EX_BASE + 1, &state), Some(200));
+        assert_eq!(skin_state_number(SKIN_REF_BMZ_COURSE_STAGE_GAUGE_BASE + 1, &state), Some(42));
+        assert_eq!(skin_state_number(SKIN_REF_BMZ_COURSE_STAGE_BP_BASE + 1, &state), Some(17));
+        assert_eq!(skin_state_number(SKIN_REF_BMZ_COURSE_STAGE_RATE_BASE + 1, &state), Some(8_333));
     }
 
     #[test]
@@ -21776,6 +22005,42 @@ mod tests {
         assert_eq!(skin_timer_elapsed_ms(Some(172), &active), Some(180));
         assert_eq!(skin_timer_elapsed_ms(Some(173), &active), Some(90));
         assert_eq!(skin_timer_elapsed_ms(Some(174), &active), Some(30));
+    }
+
+    #[test]
+    fn logical_input_press_edges_drive_options_timers_and_runtime_events() {
+        let document: SkinDocument = serde_json::from_str(
+            r#"{
+                "type": 0, "w": 1, "h": 1, "destination": [],
+                "runtimeFlag": [{ "id": 1, "initial": false }],
+                "runtimeEvent": [{
+                    "id": -20001,
+                    "toggleFlags": [1],
+                    "triggerAction": "e1_press"
+                }]
+            }"#,
+        )
+        .unwrap();
+        let mut runtime = DynamicTimerRuntime::default();
+        let mut state = SkinDrawState::default();
+
+        // A held input on scene entry is synchronized without inventing a press edge.
+        state.logical_input_held[0] = true;
+        runtime.advance(&document, &mut state, 100);
+        assert_eq!(state.runtime_flags.get(&1), Some(&false));
+        assert_eq!(skin_timer_elapsed_ms(Some(SKIN_TIMER_BMZ_INPUT_BASE), &state), None);
+        assert!(test_skin_op(SKIN_OPTION_BMZ_INPUT_BASE, &[], &state));
+
+        state.logical_input_held[0] = false;
+        runtime.advance(&document, &mut state, 110);
+        state.logical_input_held[0] = true;
+        runtime.advance(&document, &mut state, 120);
+        assert_eq!(state.runtime_flags.get(&1), Some(&true));
+        assert_eq!(skin_timer_elapsed_ms(Some(SKIN_TIMER_BMZ_INPUT_BASE), &state), Some(0));
+
+        runtime.advance(&document, &mut state, 150);
+        assert_eq!(state.runtime_flags.get(&1), Some(&true));
+        assert_eq!(skin_timer_elapsed_ms(Some(SKIN_TIMER_BMZ_INPUT_BASE), &state), Some(30));
     }
 
     #[test]

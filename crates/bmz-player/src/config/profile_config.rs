@@ -29,6 +29,15 @@ pub struct ProfileConfig {
     pub skin: SkinConfig,
     #[serde(default)]
     pub select: SelectStateConfig,
+    #[serde(default)]
+    pub statistics: StatisticsConfig,
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
+pub struct StatisticsConfig {
+    /// Local hour at which BMZ starts a new statistics day (0..=23).
+    #[serde(default)]
+    pub day_start_hour: u8,
 }
 
 /// 選曲画面の表示状態。フィルター (5K/7K など) とソートを永続化する。
@@ -1129,6 +1138,7 @@ impl ProfileConfig {
             system_sound: SystemSoundConfig::default(),
             skin: SkinConfig::default(),
             select: SelectStateConfig::default(),
+            statistics: StatisticsConfig::default(),
         }
     }
 }

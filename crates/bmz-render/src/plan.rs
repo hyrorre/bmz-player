@@ -888,6 +888,7 @@ fn plan_play(
             .then_some((snapshot.time.0 / 1_000).clamp(i32::MIN as i64, i32::MAX as i64) as i32),
         rhythm_timer_ms: snapshot.rhythm_timer_elapsed_ms,
         key_mode,
+        logical_input_held: snapshot.skin_input.held,
         select_arrange_index: crate::skin::select_arrange_index(&snapshot.arrange),
         select_arrange_2p_index: crate::skin::select_arrange_index(&snapshot.arrange_2p),
         select_target_index: crate::skin::play_target_image_index(&snapshot.target),
@@ -1377,6 +1378,8 @@ fn plan_decide(
             current_fps: snapshot.current_fps,
             operating_time_ms: snapshot.operating_time_ms,
             ready_timer_ms: Some(play_elapsed_ms),
+            key_mode: snapshot.key_mode,
+            logical_input_held: snapshot.skin_input.held,
             total_notes: snapshot.total_notes,
             select_chart_total_gauge: snapshot.chart_total_gauge,
             past_notes: snapshot.past_notes,
@@ -1629,6 +1632,7 @@ fn build_result_skin_draw_state(
     crate::skin::SkinDrawState {
         elapsed_ms,
         current_fps: snapshot.current_fps,
+        logical_input_held: snapshot.skin_input.held,
         select_arrange_index: crate::skin::select_arrange_index(&snapshot.arrange),
         select_arrange_2p_index: crate::skin::select_arrange_index(&snapshot.arrange_2p),
         result_arrange_index: crate::skin::select_arrange_index(&snapshot.arrange),
@@ -1655,7 +1659,8 @@ fn build_result_skin_draw_state(
         result_duration_ms: snapshot.duration_ms,
         max_combo: snapshot.max_combo,
         judge_counts: snapshot.judge_counts,
-        player_stats: snapshot.player_stats,
+        player_stats: snapshot.player_stats.clone(),
+        course_result: snapshot.course_result,
         fast_slow_counts: Some(snapshot.fast_slow_counts),
         gauge,
         gauge_type,
@@ -3094,6 +3099,7 @@ mod tests {
             let snapshot = ResultSnapshot {
                 player_name: String::new(),
                 current_fps: 0,
+                skin_input: Default::default(),
                 hispeed_auto_adjust: false,
                 clear_type: ClearType::Normal,
                 result_failed: false,
@@ -3155,6 +3161,7 @@ mod tests {
                 table_text_secondary: String::new(),
                 table_text_fallback: String::new(),
                 course_titles: Default::default(),
+                course_result: Default::default(),
                 graph: std::sync::Arc::new(crate::snapshot::ResultGraphSnapshot::default()),
                 overlay: crate::snapshot::OverlaySnapshot::default(),
                 ir: crate::scene::ResultIrSnapshot::default(),
@@ -3237,6 +3244,7 @@ mod tests {
         let snapshot = ResultSnapshot {
             player_name: String::new(),
             current_fps: 0,
+            skin_input: Default::default(),
             hispeed_auto_adjust: false,
             clear_type: ClearType::Normal,
             result_failed: false,
@@ -3298,6 +3306,7 @@ mod tests {
             table_text_secondary: String::new(),
             table_text_fallback: String::new(),
             course_titles: Default::default(),
+            course_result: Default::default(),
             graph: std::sync::Arc::new(ResultGraphSnapshot {
                 judge_graph_density: vec![1, 3, 2],
                 judge_graph_buckets: vec![ResultJudgeGraphBucket { values: [0, 0, 1, 0, 0, 0] }],
@@ -3551,6 +3560,7 @@ mod tests {
         let snapshot = ResultSnapshot {
             player_name: String::new(),
             current_fps: 0,
+            skin_input: Default::default(),
             hispeed_auto_adjust: false,
             clear_type: ClearType::Normal,
             result_failed: false,
@@ -3612,6 +3622,7 @@ mod tests {
             table_text_secondary: String::new(),
             table_text_fallback: String::new(),
             course_titles: Default::default(),
+            course_result: Default::default(),
             graph: std::sync::Arc::new(ResultGraphSnapshot {
                 gauge_points: vec![
                     ResultGaugeGraphPoint {
@@ -3696,6 +3707,7 @@ mod tests {
         let snapshot = ResultSnapshot {
             player_name: String::new(),
             current_fps: 0,
+            skin_input: Default::default(),
             hispeed_auto_adjust: false,
             clear_type: ClearType::Normal,
             result_failed: false,
@@ -3757,6 +3769,7 @@ mod tests {
             table_text_secondary: String::new(),
             table_text_fallback: String::new(),
             course_titles: Default::default(),
+            course_result: Default::default(),
             graph: std::sync::Arc::new(ResultGraphSnapshot {
                 timing_distribution,
                 timing_points: vec![

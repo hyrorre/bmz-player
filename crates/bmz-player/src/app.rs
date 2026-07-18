@@ -33,12 +33,14 @@ use bmz_render::renderer::{
     PreparedTexture, RenderFrameTimings, RenderSurfaceStatus, Renderer, SurfaceSize,
 };
 use bmz_render::scene::{
-    AppSceneSnapshot, DailyPlayerStatsSnapshot, PlayerStatsSnapshot, ResultSnapshot,
-    SelectChartDistributionSecond, SelectRowSnapshot, SelectSnapshot,
+    AppSceneSnapshot, CourseResultSkinSnapshot, CourseStageResultSkinSnapshot,
+    DailyPlayerStatsSnapshot, PlayerStatsSnapshot, ResultSnapshot, SelectChartDistributionSecond,
+    SelectRowSnapshot, SelectSnapshot,
 };
 use bmz_render::skin::{SkinImageSize, SkinTextureId};
 use bmz_render::snapshot::{
     CourseStageMarker, DisplayJudgeCounts, FastSlowJudgeCounts, OverlaySnapshot, RenderSnapshot,
+    SkinLogicalInputSnapshot,
 };
 use bmz_video::VideoBgaDecoder;
 use winit::application::ApplicationHandler;
@@ -165,9 +167,12 @@ use crate::ui::{
 };
 use crate::update::{DownloadedUpdate, UpdateAssetKind, UpdateCandidate};
 use bmz_render::skin::{
-    DestinationListEntry, SKIN_EVENT_RESULT_PANEL_GRAPH, SKIN_EVENT_RESULT_PANEL_IR,
-    SkinAnimationDef, SkinClickHit, SkinClickTarget, SkinContext, SkinDestinationDef, SkinDocument,
-    SkinDocumentRenderExt, SkinDocumentTexture, SkinDstEntry, SkinManifest, SkinSliderHit,
+    DestinationListEntry, SKIN_EVENT_DAILY_STATISTICS_RESET, SKIN_EVENT_RESULT_PANEL_GRAPH,
+    SKIN_EVENT_RESULT_PANEL_IR, SKIN_OPTION_BMZ_DOUBLE_PLAY, SKIN_OPTION_BMZ_KEY_MODE_BASE,
+    SKIN_OPTION_BMZ_KEY_MODE_COUNT, SKIN_OPTION_BMZ_NO_SCRATCH, SKIN_OPTION_BMZ_SINGLE_PLAY,
+    SKIN_REF_BMZ_ACTIVE_LANE_COUNT, SKIN_REF_BMZ_KEY_MODE, SkinAnimationDef, SkinClickHit,
+    SkinClickTarget, SkinContext, SkinDestinationDef, SkinDocument, SkinDocumentRenderExt,
+    SkinDocumentTexture, SkinDstEntry, SkinManifest, SkinSliderHit,
 };
 const SAMPLE_PLAYABLE_TITLE: &str = "BMZ Sample Playable";
 
@@ -1014,6 +1019,7 @@ enum ResultSkinClickAction {
     SetPanel(i32),
     ToggleFavoriteChart,
     SaveReplay(u8),
+    ResetDailyStatistics,
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -1811,6 +1817,28 @@ fn course_result_summary_for_skin(course: &CourseResultSummary) -> ResultSummary
     }
 }
 
+fn course_result_skin_snapshot(course: &CourseResultSummary) -> CourseResultSkinSnapshot {
+    let mut stages =
+        [CourseStageResultSkinSnapshot::default(); bmz_render::skin::SKIN_BMZ_COURSE_STAGE_COUNT];
+    for (slot, summary) in stages.iter_mut().zip(&course.entry_summaries) {
+        let max_ex_score = summary.total_notes.saturating_mul(2);
+        *slot = CourseStageResultSkinSnapshot {
+            ex_score: summary.ex_score,
+            gauge: summary.gauge_value,
+            bp: summary.bp,
+            rate_basis_points: summary
+                .ex_score
+                .saturating_mul(10_000)
+                .checked_div(max_ex_score)
+                .unwrap_or(0),
+        };
+    }
+    CourseResultSkinSnapshot {
+        stage_count: course.entry_summaries.len().min(stages.len()) as u32,
+        stages,
+    }
+}
+
 fn mark_course_replay_slot_saved(
     course: &mut CourseResultSummary,
     skin_summary: Option<&mut ResultSummary>,
@@ -2236,7 +2264,11 @@ fn result_main_bpm(summary: &ResultSummary) -> f32 {
         .unwrap_or(summary.main_bpm)
 }
 
-fn player_stats_snapshot(score_db: &ScoreDatabase) -> PlayerStatsSnapshot {
+fn player_stats_snapshot(
+    score_db: &ScoreDatabase,
+    library_db: &LibraryDatabase,
+    day_start_hour: u8,
+) -> PlayerStatsSnapshot {
     let mut snapshot = match score_db.player_stats() {
         Ok(stats) => player_stats_snapshot_from_stats(&stats),
         Err(error) => {
@@ -2244,9 +2276,27 @@ fn player_stats_snapshot(score_db: &ScoreDatabase) -> PlayerStatsSnapshot {
             PlayerStatsSnapshot::default()
         }
     };
-    match score_db.current_local_day_player_stats() {
-        Ok(stats) => snapshot.daily = daily_player_stats_snapshot_from_stats(&stats),
-        Err(error) => tracing::warn!(%error, "failed to load daily player statistics"),
+    match score_db.current_daily_statistics_range(day_start_hour) {
+        Ok((start_at, end_at)) => {
+            match score_db.daily_player_stats_between(start_at, end_at) {
+                Ok(stats) => snapshot.daily = daily_player_stats_snapshot_from_stats(&stats),
+                Err(error) => tracing::warn!(%error, "failed to load daily player statistics"),
+            }
+            match score_db.daily_recent_chart_sha256s_between(start_at, end_at, 10) {
+                Ok(hashes) => {
+                    for (index, hash) in hashes.into_iter().enumerate() {
+                        snapshot.daily.recent_titles[index] = library_db
+                            .list_charts_by_sha256(hash)
+                            .ok()
+                            .and_then(|charts| charts.into_iter().next())
+                            .map(|chart| chart.title)
+                            .unwrap_or_default();
+                    }
+                }
+                Err(error) => tracing::warn!(%error, "failed to load recent daily chart titles"),
+            }
+        }
+        Err(error) => tracing::warn!(%error, "failed to resolve daily statistics range"),
     }
     snapshot
 }
@@ -2283,6 +2333,10 @@ fn daily_player_stats_snapshot_from_stats(stats: &DailyPlayerStats) -> DailyPlay
         bad: stats.bad,
         poor: stats.poor,
         empty_poor: stats.empty_poor,
+        score_update_count: stats.score_update_count,
+        clear_update_count: stats.clear_update_count,
+        miss_count_update_count: stats.miss_count_update_count,
+        recent_titles: Default::default(),
     }
 }
 
@@ -2482,7 +2536,11 @@ impl WinitApp {
         let select_preview =
             system_audio.as_ref().map(|audio| SelectChartPreview::new(audio.engine()));
         let audio_output_open_attempted = audio_runtime.is_some();
-        let player_stats = player_stats_snapshot(&boot.score_db);
+        let player_stats = player_stats_snapshot(
+            &boot.score_db,
+            &boot.library_db,
+            boot.profile_config.statistics.day_start_hour,
+        );
         let initial_result_skin_signature = result_skin_signature_for_config(
             &boot.profile_config.skin,
             ResultSkinSlot::Normal,
@@ -2722,7 +2780,11 @@ impl WinitApp {
     }
 
     fn refresh_player_stats_snapshot(&mut self) {
-        self.player_stats = player_stats_snapshot(&self.boot.score_db);
+        self.player_stats = player_stats_snapshot(
+            &self.boot.score_db,
+            &self.boot.library_db,
+            self.boot.profile_config.statistics.day_start_hour,
+        );
     }
 
     fn request_redraw(&self) {
@@ -3034,6 +3096,7 @@ impl WinitApp {
                 AppSceneSnapshot::Result(ResultSnapshot {
                     player_name: String::new(),
                     current_fps: 0,
+                    skin_input: Default::default(),
                     hispeed_auto_adjust: self.boot.profile_config.lane.hispeed_auto_adjust,
                     clear_type: summary.clear_type,
                     result_failed,
@@ -3128,6 +3191,11 @@ impl WinitApp {
                         .as_ref()
                         .map(|course| course.course_titles.clone())
                         .unwrap_or_default(),
+                    course_result: self
+                        .finished_course
+                        .as_ref()
+                        .map(course_result_skin_snapshot)
+                        .unwrap_or_default(),
                     graph: summary.graph.clone(),
                     overlay: OverlaySnapshot::default(),
                     ir: self
@@ -3135,10 +3203,17 @@ impl WinitApp {
                         .as_ref()
                         .map(|state| state.skin_snapshot())
                         .unwrap_or_default(),
-                    player_stats: self.player_stats,
+                    player_stats: self.player_stats.clone(),
                 })
             }
         };
+        apply_skin_logical_input_to_scene(
+            &mut scene,
+            skin_logical_input_snapshot_from_pressed_controls(
+                &self.pressed_controls,
+                &self.select_keys,
+            ),
+        );
         self.apply_operating_time_to_scene(&mut scene);
         self.apply_skin_runtime_info_to_scene(&mut scene);
         let overlay = self.build_overlay_snapshot();
@@ -3385,6 +3460,7 @@ impl WinitApp {
             player_name: String::new(),
             current_fps: 0,
             operating_time_ms: 0,
+            skin_input: Default::default(),
             selection_time: self.select_bar_time(),
             option_panel_time: self.option_panel_time(),
             option_panel_off_times: self
@@ -3494,7 +3570,7 @@ impl WinitApp {
             replay_slot_rule_indices: replay_slot_rule_indices(
                 &self.boot.profile_config.replay.slot_rules,
             ),
-            player_stats: self.player_stats,
+            player_stats: self.player_stats.clone(),
         }
     }
 
@@ -5961,6 +6037,9 @@ impl WinitApp {
                     self.save_finished_play_replay_slot(slot);
                 }
             }
+            Some(ResultSkinClickAction::ResetDailyStatistics) => {
+                self.reset_daily_statistics();
+            }
             None => {
                 let _ = self.renderer.dispatch_result_skin_runtime_event(event_id);
             }
@@ -6141,6 +6220,7 @@ impl WinitApp {
 
     fn execute_select_skin_event(&mut self, event_id: i32, arg: i32) {
         match event_id {
+            SKIN_EVENT_DAILY_STATISTICS_RESET => self.reset_daily_statistics(),
             // beatoraja EventFactory: play / autoplay / practice.
             15 => {
                 self.set_assist_option(AssistOption::Normal);
@@ -6215,6 +6295,16 @@ impl WinitApp {
             _ => {
                 tracing::debug!(event_id, arg, "unsupported select skin event");
             }
+        }
+    }
+
+    fn reset_daily_statistics(&mut self) {
+        match self.boot.score_db.reset_daily_statistics(now_unix_seconds()) {
+            Ok(()) => {
+                self.refresh_player_stats_snapshot();
+                self.play_system_sound(crate::system_sound::SoundType::OptionChange);
+            }
+            Err(error) => tracing::warn!(%error, "failed to reset daily statistics"),
         }
     }
 
@@ -8127,6 +8217,7 @@ impl WinitApp {
         let play_skin_runtime_state = lua_runtime_state_for_play(
             &options,
             self.boot.profile_config.play.auto_play,
+            play_skin_key_mode,
             &self.boot.profile_config.display_name,
         );
         self.spawn_play_skin_decode_for(play_skin_key_mode, play_skin_runtime_state);
@@ -8548,6 +8639,7 @@ impl WinitApp {
         let play_skin_runtime_state = lua_runtime_state_for_play(
             &options,
             self.boot.profile_config.play.auto_play,
+            play_skin_key_mode,
             &self.boot.profile_config.display_name,
         );
         self.spawn_play_skin_decode_for(play_skin_key_mode, play_skin_runtime_state);
@@ -9503,6 +9595,7 @@ impl WinitApp {
         let play_skin_runtime_state = lua_runtime_state_for_play(
             &options,
             self.boot.profile_config.play.auto_play,
+            play_skin_key_mode,
             &self.boot.profile_config.display_name,
         );
         self.spawn_play_skin_decode_for(play_skin_key_mode, play_skin_runtime_state);
@@ -16821,6 +16914,7 @@ fn result_skin_click_action(event_id: i32) -> Option<ResultSkinClickAction> {
     match event_id {
         SKIN_EVENT_RESULT_PANEL_IR => Some(ResultSkinClickAction::SetPanel(1)),
         SKIN_EVENT_RESULT_PANEL_GRAPH => Some(ResultSkinClickAction::SetPanel(2)),
+        SKIN_EVENT_DAILY_STATISTICS_RESET => Some(ResultSkinClickAction::ResetDailyStatistics),
         90 => Some(ResultSkinClickAction::ToggleFavoriteChart),
         19 => Some(ResultSkinClickAction::SaveReplay(0)),
         316..=318 => Some(ResultSkinClickAction::SaveReplay((event_id - 315) as u8)),
@@ -17030,6 +17124,30 @@ fn apply_course_result_lua_load_state(
     for (index, title) in course.course_titles.iter().enumerate() {
         runtime_state.text_values.insert(150 + index as i32, title.clone());
     }
+    let course_result = course_result_skin_snapshot(course);
+    runtime_state.number_values.insert(
+        bmz_render::skin::SKIN_REF_BMZ_COURSE_STAGE_COUNT,
+        course_result.stage_count as i32,
+    );
+    for (index, stage) in course_result.stages.iter().enumerate() {
+        let index = index as i32;
+        runtime_state.number_values.insert(
+            bmz_render::skin::SKIN_REF_BMZ_COURSE_STAGE_EX_BASE + index,
+            i32::try_from(stage.ex_score).unwrap_or(i32::MAX),
+        );
+        runtime_state.number_values.insert(
+            bmz_render::skin::SKIN_REF_BMZ_COURSE_STAGE_GAUGE_BASE + index,
+            stage.gauge.floor() as i32,
+        );
+        runtime_state.number_values.insert(
+            bmz_render::skin::SKIN_REF_BMZ_COURSE_STAGE_BP_BASE + index,
+            i32::try_from(stage.bp).unwrap_or(i32::MAX),
+        );
+        runtime_state.number_values.insert(
+            bmz_render::skin::SKIN_REF_BMZ_COURSE_STAGE_RATE_BASE + index,
+            i32::try_from(stage.rate_basis_points).unwrap_or(i32::MAX),
+        );
+    }
 
     // WMII stores these values from each intermediate MusicResult in
     // `skin/WMII_FHD/result/courseData.json`, then reads them from CourseResult.
@@ -17105,7 +17223,7 @@ fn lua_runtime_state_for_result(
     ir_online: bool,
     score_save_enabled: bool,
     key_mode: KeyMode,
-    number_values: BTreeMap<i32, i32>,
+    mut number_values: BTreeMap<i32, i32>,
     player_name: &str,
 ) -> bmz_skin::LuaLoadRuntimeState {
     let mut option_values = BTreeMap::new();
@@ -17117,6 +17235,7 @@ fn lua_runtime_state_for_result(
     for option in 160..=164 {
         option_values.insert(option, result_key_mode_option_matches(option, key_mode));
     }
+    extend_bmz_key_mode_lua_state(&mut number_values, &mut option_values, key_mode);
     bmz_skin::LuaLoadRuntimeState {
         number_values,
         text_values: BTreeMap::from([(2, player_name.to_string())]),
@@ -17128,12 +17247,13 @@ fn lua_runtime_state_for_result(
 fn lua_runtime_state_for_play(
     options: &PlayStartOptions,
     profile_autoplay: bool,
+    key_mode: KeyMode,
     player_name: &str,
 ) -> bmz_skin::LuaLoadRuntimeState {
     let replay_playback = options.replay_player.is_some();
     let autoplay = !replay_playback && (profile_autoplay || options.autoplay);
     let score_save_enabled = !autoplay && !replay_playback && !options.practice_mode;
-    let option_values = BTreeMap::from([
+    let mut option_values = BTreeMap::from([
         (32, !autoplay),
         (33, autoplay),
         (60, !score_save_enabled),
@@ -17142,8 +17262,10 @@ fn lua_runtime_state_for_play(
         (84, replay_playback),
         (1080, options.practice_mode),
     ]);
+    let mut number_values = BTreeMap::new();
+    extend_bmz_key_mode_lua_state(&mut number_values, &mut option_values, key_mode);
     bmz_skin::LuaLoadRuntimeState {
-        number_values: BTreeMap::new(),
+        number_values,
         text_values: BTreeMap::from([(2, player_name.to_string())]),
         option_values,
         ..Default::default()
@@ -17164,6 +17286,59 @@ fn result_key_mode_option_matches(option: i32, key_mode: KeyMode) -> bool {
         162 => key_mode == KeyMode::K14,
         163 => key_mode == KeyMode::K10,
         164 => key_mode == KeyMode::K9,
+        _ => false,
+    }
+}
+
+fn extend_bmz_key_mode_lua_state(
+    number_values: &mut BTreeMap<i32, i32>,
+    option_values: &mut BTreeMap<i32, bool>,
+    key_mode: KeyMode,
+) {
+    number_values.insert(SKIN_REF_BMZ_KEY_MODE, bmz_key_mode_number(key_mode));
+    number_values.insert(SKIN_REF_BMZ_ACTIVE_LANE_COUNT, key_mode.lane_count() as i32);
+    for option in SKIN_OPTION_BMZ_KEY_MODE_BASE
+        ..SKIN_OPTION_BMZ_KEY_MODE_BASE + SKIN_OPTION_BMZ_KEY_MODE_COUNT as i32
+    {
+        option_values.insert(option, bmz_key_mode_option_matches(option, key_mode));
+    }
+    for option in
+        [SKIN_OPTION_BMZ_NO_SCRATCH, SKIN_OPTION_BMZ_SINGLE_PLAY, SKIN_OPTION_BMZ_DOUBLE_PLAY]
+    {
+        option_values.insert(option, bmz_key_mode_option_matches(option, key_mode));
+    }
+}
+
+fn bmz_key_mode_number(key_mode: KeyMode) -> i32 {
+    match key_mode {
+        KeyMode::K4 => 4,
+        KeyMode::K5 => 5,
+        KeyMode::K6 => 6,
+        KeyMode::K7 => 7,
+        KeyMode::K8 => 8,
+        KeyMode::K9 => 9,
+        KeyMode::K10 => 10,
+        KeyMode::K14 => 14,
+    }
+}
+
+fn bmz_key_mode_option_matches(option: i32, key_mode: KeyMode) -> bool {
+    match option - SKIN_OPTION_BMZ_KEY_MODE_BASE {
+        0 => key_mode == KeyMode::K4,
+        1 => key_mode == KeyMode::K5,
+        2 => key_mode == KeyMode::K6,
+        3 => key_mode == KeyMode::K7,
+        4 => key_mode == KeyMode::K8,
+        5 => key_mode == KeyMode::K9,
+        6 => key_mode == KeyMode::K10,
+        7 => key_mode == KeyMode::K14,
+        _ if option == SKIN_OPTION_BMZ_NO_SCRATCH => {
+            matches!(key_mode, KeyMode::K4 | KeyMode::K6 | KeyMode::K8 | KeyMode::K9)
+        }
+        _ if option == SKIN_OPTION_BMZ_SINGLE_PLAY => matches!(key_mode, KeyMode::K5 | KeyMode::K7),
+        _ if option == SKIN_OPTION_BMZ_DOUBLE_PLAY => {
+            matches!(key_mode, KeyMode::K10 | KeyMode::K14)
+        }
         _ => false,
     }
 }
@@ -17261,6 +17436,45 @@ fn select_hold_state_from_pressed_controls(
         .filter_map(|control| bindings.e_action_for_control(control))
         .collect();
     (start_held, select_held, e_action_holds)
+}
+
+fn skin_logical_input_snapshot_from_pressed_controls(
+    pressed_controls: &HashSet<String>,
+    bindings: &SelectKeyBindings,
+) -> SkinLogicalInputSnapshot {
+    let mut held = [false; bmz_render::skin::SKIN_BMZ_INPUT_COUNT];
+    for control in pressed_controls {
+        held[0] |= bindings.is_start(control);
+        held[1] |= control == "Select" || bindings.is_e2_action(control);
+        match bindings.e_action_for_control(control) {
+            Some(InputActionConfig::E1) => held[0] = true,
+            Some(InputActionConfig::E2) => held[1] = true,
+            Some(InputActionConfig::E3) => held[2] = true,
+            Some(InputActionConfig::E4) => held[3] = true,
+            _ => {}
+        }
+        match control.as_str() {
+            "ArrowLeft" | "DPadLeft" => held[4] = true,
+            "ArrowRight" | "DPadRight" => held[5] = true,
+            "ArrowUp" | "DPadUp" => held[6] = true,
+            "ArrowDown" | "DPadDown" => held[7] = true,
+            _ => {}
+        }
+    }
+    SkinLogicalInputSnapshot { held }
+}
+
+fn apply_skin_logical_input_to_scene(
+    scene: &mut AppSceneSnapshot,
+    skin_input: SkinLogicalInputSnapshot,
+) {
+    match scene {
+        AppSceneSnapshot::Select(snapshot) => snapshot.skin_input = skin_input,
+        AppSceneSnapshot::Decide(snapshot) | AppSceneSnapshot::Play(snapshot) => {
+            snapshot.skin_input = skin_input;
+        }
+        AppSceneSnapshot::Result(snapshot) => snapshot.skin_input = skin_input,
+    }
 }
 
 fn play_control_hold_state_from_pressed_controls(
@@ -21855,6 +22069,22 @@ mod tests {
         assert_eq!(runtime_state.text_values.get(&12).map(String::as_str), Some("Course Title"));
         assert_eq!(runtime_state.text_values.get(&1003).map(String::as_str), Some("Table ★12"));
         assert_eq!(runtime_state.text_values.get(&150).map(String::as_str), Some("Stage 1"));
+        assert_eq!(
+            runtime_state.number_values.get(&bmz_render::skin::SKIN_REF_BMZ_COURSE_STAGE_COUNT),
+            Some(&2)
+        );
+        assert_eq!(
+            runtime_state
+                .number_values
+                .get(&(bmz_render::skin::SKIN_REF_BMZ_COURSE_STAGE_EX_BASE + 1)),
+            Some(&200)
+        );
+        assert_eq!(
+            runtime_state
+                .number_values
+                .get(&(bmz_render::skin::SKIN_REF_BMZ_COURSE_STAGE_GAUGE_BASE + 1)),
+            Some(&80)
+        );
         let data: serde_json::Value = serde_json::from_str(
             &runtime_state.virtual_io_files["skin/WMII_FHD/result/courseData.json"],
         )
@@ -21938,15 +22168,21 @@ mod tests {
 
     #[test]
     fn play_lua_runtime_state_exposes_play_mode_and_score_save_options() {
-        let normal = lua_runtime_state_for_play(&PlayStartOptions::default(), false, "Player");
+        let normal =
+            lua_runtime_state_for_play(&PlayStartOptions::default(), false, KeyMode::K7, "Player");
         assert_eq!(normal.text_values.get(&2).map(String::as_str), Some("Player"));
         assert_eq!(normal.option_values.get(&61), Some(&true));
         assert_eq!(normal.option_values.get(&82), Some(&true));
         assert_eq!(normal.option_values.get(&84), Some(&false));
+        assert_eq!(normal.number_values.get(&SKIN_REF_BMZ_KEY_MODE), Some(&7));
+        assert_eq!(normal.number_values.get(&SKIN_REF_BMZ_ACTIVE_LANE_COUNT), Some(&8));
+        assert_eq!(normal.option_values.get(&(SKIN_OPTION_BMZ_KEY_MODE_BASE + 3)), Some(&true));
+        assert_eq!(normal.option_values.get(&SKIN_OPTION_BMZ_SINGLE_PLAY), Some(&true));
 
         let autoplay = lua_runtime_state_for_play(
             &PlayStartOptions { autoplay: true, ..PlayStartOptions::default() },
             false,
+            KeyMode::K7,
             "Player",
         );
         assert_eq!(autoplay.option_values.get(&33), Some(&true));
@@ -21959,6 +22195,7 @@ mod tests {
                 ..PlayStartOptions::default()
             },
             false,
+            KeyMode::K7,
             "Player",
         );
         assert_eq!(replay.option_values.get(&33), Some(&false));
@@ -21967,6 +22204,7 @@ mod tests {
         let practice = lua_runtime_state_for_play(
             &PlayStartOptions { practice_mode: true, ..PlayStartOptions::default() },
             false,
+            KeyMode::K7,
             "Player",
         );
         assert_eq!(practice.option_values.get(&60), Some(&true));
@@ -23053,6 +23291,26 @@ mod tests {
     }
 
     #[test]
+    fn skin_logical_inputs_include_all_e_actions_and_ui_directions() {
+        let keys = default_select_keys();
+        let pressed = HashSet::from([
+            "Q".to_string(),
+            "W".to_string(),
+            "E".to_string(),
+            "R".to_string(),
+            "ArrowLeft".to_string(),
+            "DPadRight".to_string(),
+            "ArrowUp".to_string(),
+            "DPadDown".to_string(),
+        ]);
+
+        assert_eq!(
+            skin_logical_input_snapshot_from_pressed_controls(&pressed, &keys).held,
+            [true; bmz_render::skin::SKIN_BMZ_INPUT_COUNT]
+        );
+    }
+
+    #[test]
     fn play_control_hold_state_rebuilds_from_pressed_controls() {
         let keys = default_select_keys();
         let pressed = HashSet::from(["Q".to_string(), "W".to_string(), "E".to_string()]);
@@ -23714,6 +23972,10 @@ mod tests {
     #[test]
     fn result_skin_event_90_toggles_favorite_without_invisible_state() {
         assert_eq!(result_skin_click_action(90), Some(ResultSkinClickAction::ToggleFavoriteChart));
+        assert_eq!(
+            result_skin_click_action(SKIN_EVENT_DAILY_STATISTICS_RESET),
+            Some(ResultSkinClickAction::ResetDailyStatistics)
+        );
         assert_eq!(
             result_skin_click_action(SKIN_EVENT_RESULT_PANEL_IR),
             Some(ResultSkinClickAction::SetPanel(1))

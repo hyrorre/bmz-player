@@ -46,6 +46,12 @@ pub struct OverlaySnapshot {
     pub fps_text: String,
 }
 
+/// BMZ skin extension logical inputs in E1/E2/E3/E4/UI Left/Right/Up/Down order.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct SkinLogicalInputSnapshot {
+    pub held: [bool; bmz_skin_document::SKIN_BMZ_INPUT_COUNT],
+}
+
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct RenderSnapshot {
     pub time: TimeUs,
@@ -59,6 +65,7 @@ pub struct RenderSnapshot {
     /// アプリ起動後の経過時間 ms。
     /// beatoraja の NUMBER_OPERATING_TIME_HOUR/MINUTE/SECOND (27..29) に使う。
     pub operating_time_ms: i32,
+    pub skin_input: SkinLogicalInputSnapshot,
     /// READY timer (TIMER_READY=40) elapsed time. None while READY is not active yet.
     pub ready_elapsed_time: Option<TimeUs>,
     /// 直近の小節線からの60 BPM換算拍時間 (TIMER_RHYTHM=140)。

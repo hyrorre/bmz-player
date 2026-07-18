@@ -111,6 +111,9 @@ pub struct DailyPlayerStats {
     pub bad: u64,
     pub poor: u64,
     pub empty_poor: u64,
+    pub score_update_count: u64,
+    pub clear_update_count: u64,
+    pub miss_count_update_count: u64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -689,7 +692,27 @@ impl ScoreDatabase {
                     COALESCE(SUM(fast_good + slow_good), 0),
                     COALESCE(SUM(fast_bad + slow_bad), 0),
                     COALESCE(SUM(fast_poor + slow_poor), 0),
-                    COALESCE(SUM(fast_empty_poor + slow_empty_poor), 0)
+                    COALESCE(SUM(fast_empty_poor + slow_empty_poor), 0),
+                    COALESCE(SUM(CASE
+                        WHEN old_ex_score IS NULL OR ex_score > old_ex_score THEN 1 ELSE 0
+                    END), 0),
+                    COALESCE(SUM(CASE WHEN old_clear_type IS NULL OR
+                        CASE clear_type
+                            WHEN 'Failed' THEN 1 WHEN 'AssistEasy' THEN 2
+                            WHEN 'LightAssistEasy' THEN 3 WHEN 'Easy' THEN 4
+                            WHEN 'Normal' THEN 5 WHEN 'Hard' THEN 6
+                            WHEN 'ExHard' THEN 7 WHEN 'FullCombo' THEN 8
+                            WHEN 'Perfect' THEN 9 WHEN 'Max' THEN 10 ELSE 0 END
+                        > CASE old_clear_type
+                            WHEN 'Failed' THEN 1 WHEN 'AssistEasy' THEN 2
+                            WHEN 'LightAssistEasy' THEN 3 WHEN 'Easy' THEN 4
+                            WHEN 'Normal' THEN 5 WHEN 'Hard' THEN 6
+                            WHEN 'ExHard' THEN 7 WHEN 'FullCombo' THEN 8
+                            WHEN 'Perfect' THEN 9 WHEN 'Max' THEN 10 ELSE 0 END
+                        THEN 1 ELSE 0 END), 0),
+                    COALESCE(SUM(CASE
+                        WHEN old_bp IS NULL OR fast_bad + slow_bad + fast_poor + slow_poor < old_bp
+                        THEN 1 ELSE 0 END), 0)
                  FROM score_history
                  WHERE source_kind = 'Local'
                    AND autoplay = 0
@@ -703,14 +726,72 @@ impl ScoreDatabase {
 
     /// Aggregate the current calendar day using the host's local timezone.
     pub fn current_local_day_player_stats(&self) -> Result<DailyPlayerStats> {
-        let (start_at, end_at) = self.conn.query_row(
+        self.current_local_day_player_stats_with_start_hour(0)
+    }
+
+    pub fn current_local_day_player_stats_with_start_hour(
+        &self,
+        day_start_hour: u8,
+    ) -> Result<DailyPlayerStats> {
+        let (start_at, end_at) = self.current_daily_statistics_range(day_start_hour)?;
+        self.daily_player_stats_between(start_at, end_at)
+    }
+
+    pub fn current_daily_statistics_range(&self, day_start_hour: u8) -> Result<(i64, i64)> {
+        let hour = day_start_hour.min(23);
+        let shift_to_day = format!("-{hour} hours");
+        let shift_from_day = format!("+{hour} hours");
+        let (calendar_start, end_at): (i64, i64) = self.conn.query_row(
             "SELECT
-                CAST(strftime('%s', date('now', 'localtime'), 'utc') AS INTEGER),
-                CAST(strftime('%s', date('now', 'localtime', '+1 day'), 'utc') AS INTEGER)",
-            [],
+                CAST(strftime('%s', date('now', 'localtime', ?1), ?2, 'utc') AS INTEGER),
+                CAST(strftime('%s', date('now', 'localtime', ?1), '+1 day', ?2, 'utc') AS INTEGER)",
+            params![shift_to_day, shift_from_day],
             |row| Ok((row.get(0)?, row.get(1)?)),
         )?;
-        self.daily_player_stats_between(start_at, end_at)
+        let reset_at: i64 = self.conn.query_row(
+            "SELECT reset_at FROM daily_statistics_state WHERE id = 1",
+            [],
+            |row| row.get(0),
+        )?;
+        Ok((calendar_start.max(reset_at).min(end_at), end_at))
+    }
+
+    pub fn reset_daily_statistics(&self, reset_at: i64) -> Result<()> {
+        self.conn.execute(
+            "UPDATE daily_statistics_state SET reset_at = ?1 WHERE id = 1",
+            params![reset_at],
+        )?;
+        Ok(())
+    }
+
+    pub fn daily_recent_chart_sha256s_between(
+        &self,
+        start_at: i64,
+        end_at: i64,
+        limit: usize,
+    ) -> Result<Vec<[u8; 32]>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT chart_sha256
+             FROM score_history
+             WHERE source_kind = 'Local'
+               AND autoplay = 0
+               AND played_at >= ?1
+               AND played_at < ?2
+             ORDER BY played_at DESC, id DESC",
+        )?;
+        let mut rows = stmt.query(params![start_at, end_at])?;
+        let mut hashes = Vec::with_capacity(limit);
+        let mut previous_hex = None;
+        while hashes.len() < limit {
+            let Some(row) = rows.next()? else { break };
+            let hex: String = row.get(0)?;
+            if previous_hex.as_deref() == Some(hex.as_str()) {
+                continue;
+            }
+            previous_hex = Some(hex.clone());
+            hashes.push(hex_to_hash::<32>(&hex)?);
+        }
+        Ok(hashes)
     }
 
     pub fn best_ex_score(&self, key: ScoreKey) -> Result<Option<u32>> {
@@ -1283,6 +1364,9 @@ fn daily_player_stats_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Dail
         bad: row.get(5)?,
         poor: row.get(6)?,
         empty_poor: row.get(7)?,
+        score_update_count: row.get(8)?,
+        clear_update_count: row.get(9)?,
+        miss_count_update_count: row.get(10)?,
     })
 }
 
@@ -2990,8 +3074,18 @@ mod tests {
                 bad: 5,
                 poor: 6,
                 empty_poor: 7,
+                score_update_count: 2,
+                clear_update_count: 2,
+                miss_count_update_count: 2,
             }
         );
+        assert_eq!(
+            db.daily_recent_chart_sha256s_between(100, 200, 10).unwrap(),
+            vec![[8; 32], [7; 32]]
+        );
+        db.reset_daily_statistics(i64::MAX).unwrap();
+        let (reset_start, reset_end) = db.current_daily_statistics_range(0).unwrap();
+        assert_eq!(reset_start, reset_end);
         assert_eq!(db.current_local_day_player_stats().unwrap(), DailyPlayerStats::default());
     }
 
