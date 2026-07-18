@@ -269,6 +269,10 @@ pub struct DebugInfo {
     pub width: u32,
     /// 描画サーフェスの高さ (px)。
     pub height: u32,
+    /// GPU/OS capabilityのfallbackを反映した実効present mode。
+    pub effective_present_mode: Option<&'static str>,
+    /// swapchainに許可している最大in-flight frame数。
+    pub maximum_frame_latency: Option<u32>,
 }
 
 /// `EguiLayer::run` の 1 フレーム入力。
@@ -1619,6 +1623,15 @@ fn build_debug_panel(ctx: &egui::Context, open: &mut bool, info: &DebugInfo) {
                     ui.end_row();
                     ui.label("解像度");
                     ui.label(format!("{} x {}", info.width, info.height));
+                    ui.end_row();
+                    ui.label("実効 Present Mode");
+                    ui.label(info.effective_present_mode.unwrap_or("未初期化"));
+                    ui.end_row();
+                    ui.label("最大フレーム遅延");
+                    ui.label(
+                        info.maximum_frame_latency
+                            .map_or_else(|| "未初期化".to_string(), |latency| latency.to_string()),
+                    );
                     ui.end_row();
                 });
             });

@@ -48,6 +48,21 @@ pub enum WgpuPresentMode {
     Mailbox,
 }
 
+/// Surfaceへ実際に適用されたpresent設定。要求modeがGPU/OSで利用できない場合、
+/// `effective_mode`はfallback後の値になる。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SurfacePresentationStatus {
+    pub requested_mode: WgpuPresentMode,
+    pub effective_mode: &'static str,
+    pub maximum_frame_latency: u32,
+}
+
+/// 入力から表示までの待ちを最小化するため、通常modeでswapchainに許可する最大の
+/// in-flight frame数。MailboxだけはDX12でこの値×monitor HzにFPSが制限されるため、
+/// 既定値2を維持してFast VSyncがrefresh rateそのものへ落ちるのを避ける。
+const LOW_LATENCY_MAXIMUM_FRAME_LATENCY: u32 = 1;
+const MAILBOX_MAXIMUM_FRAME_LATENCY: u32 = 2;
+
 impl WgpuBackend {
     pub fn to_wgpu(self) -> wgpu::Backends {
         match self {
@@ -1076,6 +1091,15 @@ impl Renderer {
         }
     }
 
+    pub fn surface_presentation_status(&self) -> Option<SurfacePresentationStatus> {
+        let gpu = self.gpu.as_ref()?;
+        Some(SurfacePresentationStatus {
+            requested_mode: self.present_mode,
+            effective_mode: wgpu_present_mode_label(gpu.config.present_mode),
+            maximum_frame_latency: gpu.config.desired_maximum_frame_latency,
+        })
+    }
+
     pub fn set_backend(&mut self, backend: WgpuBackend) {
         self.backend = backend;
     }
@@ -1305,13 +1329,13 @@ impl WgpuRenderer {
         // beatoraja (libGDX) は GL_FRAMEBUFFER_SRGB を使わないため値をそのまま表示する。
         // それと合わせるため sRGB サフィックスを除去して non-sRGB サーフェスとして使う。
         config.format = config.format.remove_srgb_suffix();
-        config.present_mode = resolve_wgpu_present_mode(present_mode, &capabilities.present_modes);
-        config.usage |= wgpu::TextureUsages::COPY_SRC;
+        configure_surface_settings(&mut config, present_mode, &capabilities.present_modes);
         surface.configure(&device, &config);
         tracing::info!(
             requested = ?present_mode,
-            configured = ?config.present_mode,
+            effective = ?config.present_mode,
             available = ?capabilities.present_modes,
+            maximum_frame_latency = config.desired_maximum_frame_latency,
             backend = ?backend,
             "configured renderer present mode"
         );
@@ -1882,12 +1906,13 @@ impl WgpuRenderer {
     }
 
     fn set_present_mode(&mut self, present_mode: WgpuPresentMode) {
-        self.config.present_mode = resolve_wgpu_present_mode(present_mode, &self.present_modes);
+        configure_surface_settings(&mut self.config, present_mode, &self.present_modes);
         self.configure_surface();
         tracing::info!(
             requested = ?present_mode,
-            configured = ?self.config.present_mode,
+            effective = ?self.config.present_mode,
             available = ?self.present_modes,
+            maximum_frame_latency = self.config.desired_maximum_frame_latency,
             "configured renderer present mode"
         );
     }
@@ -4663,6 +4688,31 @@ fn resolve_wgpu_present_mode(
     fallback
 }
 
+fn configure_surface_settings(
+    config: &mut wgpu::SurfaceConfiguration,
+    requested_present_mode: WgpuPresentMode,
+    available_present_modes: &[wgpu::PresentMode],
+) {
+    config.present_mode =
+        resolve_wgpu_present_mode(requested_present_mode, available_present_modes);
+    config.desired_maximum_frame_latency = match config.present_mode {
+        wgpu::PresentMode::Mailbox => MAILBOX_MAXIMUM_FRAME_LATENCY,
+        _ => LOW_LATENCY_MAXIMUM_FRAME_LATENCY,
+    };
+    config.usage |= wgpu::TextureUsages::COPY_SRC;
+}
+
+fn wgpu_present_mode_label(mode: wgpu::PresentMode) -> &'static str {
+    match mode {
+        wgpu::PresentMode::AutoVsync => "AutoVsync",
+        wgpu::PresentMode::AutoNoVsync => "AutoNoVsync",
+        wgpu::PresentMode::Fifo => "Fifo",
+        wgpu::PresentMode::FifoRelaxed => "FifoRelaxed",
+        wgpu::PresentMode::Immediate => "Immediate",
+        wgpu::PresentMode::Mailbox => "Mailbox",
+    }
+}
+
 fn load_default_font() -> Option<FontArc> {
     if let Some(resolved) = bmz_font::resolve_system_font(true) {
         return load_font_from_resolved(&resolved);
@@ -4886,6 +4936,38 @@ mod tests {
             FifoRelaxed
         );
         assert_eq!(resolve_wgpu_present_mode(WgpuPresentMode::Mailbox, &[Fifo]), Fifo);
+    }
+
+    #[test]
+    fn surface_settings_prioritize_low_latency_and_preserve_capture_usage() {
+        let mut config = wgpu::SurfaceConfiguration {
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            format: wgpu::TextureFormat::Bgra8Unorm,
+            width: 1,
+            height: 1,
+            desired_maximum_frame_latency: 2,
+            present_mode: wgpu::PresentMode::Fifo,
+            alpha_mode: wgpu::CompositeAlphaMode::Opaque,
+            view_formats: vec![],
+        };
+
+        configure_surface_settings(
+            &mut config,
+            WgpuPresentMode::Mailbox,
+            &[wgpu::PresentMode::Fifo],
+        );
+
+        assert_eq!(config.desired_maximum_frame_latency, 1);
+        assert_eq!(config.present_mode, wgpu::PresentMode::Fifo);
+        assert!(config.usage.contains(wgpu::TextureUsages::COPY_SRC));
+
+        configure_surface_settings(
+            &mut config,
+            WgpuPresentMode::Mailbox,
+            &[wgpu::PresentMode::Mailbox, wgpu::PresentMode::Fifo],
+        );
+        assert_eq!(config.present_mode, wgpu::PresentMode::Mailbox);
+        assert_eq!(config.desired_maximum_frame_latency, 2);
     }
 
     #[test]

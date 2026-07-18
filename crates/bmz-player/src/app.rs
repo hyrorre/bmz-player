@@ -193,7 +193,9 @@ pub async fn run_with_options(options: AppOptions) -> Result<()> {
     let event_loop = EventLoop::<AppUserEvent>::with_user_event()
         .build()
         .context("failed to create event loop")?;
-    event_loop.set_control_flow(ControlFlow::Poll);
+    // 描画間隔は `FramePacer` の deadline を `WaitUntil` へ渡して制御する。
+    // event loop thread 自体を sleep させず、フレーム待機中も入力イベントを処理する。
+    event_loop.set_control_flow(ControlFlow::Wait);
     let event_proxy = event_loop.create_proxy();
 
     // Ctrl-C(SIGINT)で event loop を正常終了させ、cpal/ASIO ストリームの Drop を
@@ -446,6 +448,11 @@ impl FramePacer {
         self.next_frame_at = Some(next_frame_at);
         self.fps = Some(fps);
     }
+
+    fn next_deadline(&self, now: Instant, fps: u32, skip_wait: bool) -> Option<Instant> {
+        let delay = self.delay(now, fps, skip_wait);
+        if delay.is_zero() { None } else { now.checked_add(delay) }
+    }
 }
 
 fn frame_budget(fps: u32) -> Duration {
@@ -605,7 +612,7 @@ struct WinitApp {
     /// move するため Option で保持する。
     skin_decode_rx: Option<Receiver<PendingSkinResult>>,
     /// upload worker → main への送信端 (upload worker を spawn する際に clone)。
-    skin_upload_tx: mpsc::Sender<PendingUploadResult>,
+    skin_upload_tx: mpsc::SyncSender<PendingUploadResult>,
     /// upload worker → main の受信端。GPU アップロード済みスキンを取り込む。
     skin_upload_rx: Receiver<PendingUploadResult>,
     /// upload worker を spawn 済みか (surface 接続時に一度だけ起動)。
@@ -1580,6 +1587,19 @@ const SELECT_ANALOG_SCROLL_TOLERANCE_MS: u64 = 200;
 const SKIN_RELOAD_REDRAW_PROFILE_THRESHOLD: Duration = Duration::from_millis(8);
 const RESOURCE_LOAD_PROGRESS_SCALE: u32 = 1_000_000;
 
+/// GPU texture の登録を伴う完了結果は、通常描画を止めないよう少量ずつ処理する。
+/// BGA worker 側も同じ数で backpressure を掛け、先行した `Queue::write_texture` が
+/// GPU queue を埋め続けないようにする。
+const MAX_PENDING_BGA_TEXTURE_UPLOADS: usize = 2;
+const MAX_BGA_TEXTURE_RESULTS_PER_REDRAW: usize = 2;
+const MAX_PENDING_SKIN_UPLOADS: usize = 1;
+const MAX_SKIN_UPLOADS_PER_REDRAW: usize = 1;
+
+fn bounded_gpu_upload_channel<T>(capacity: usize) -> (mpsc::SyncSender<T>, Receiver<T>) {
+    debug_assert!(capacity > 0);
+    mpsc::sync_channel(capacity)
+}
+
 struct PendingSkinResult {
     generation: u64,
     path: PathBuf,
@@ -2516,7 +2536,11 @@ impl WinitApp {
         let mut renderer = Box::new(Renderer::default());
         let skin_catalog = scan_skin_catalog(&boot.app_paths);
         let (skin_decode_tx, skin_decode_rx) = mpsc::channel::<PendingSkinResult>();
-        let (skin_upload_tx, skin_upload_rx) = mpsc::channel::<PendingUploadResult>();
+        // GPU upload 済みのスキンを main thread 側で一度に大量に install しないよう、
+        // upload worker との間には小さな backpressure を設ける。これにより skin reload
+        // と通常描画が重なっても GPU queue を先行 upload で埋め尽くさない。
+        let (skin_upload_tx, skin_upload_rx) =
+            bounded_gpu_upload_channel::<PendingUploadResult>(MAX_PENDING_SKIN_UPLOADS);
         let skin_source_asset_cache = Arc::new(Mutex::new(SkinSourceAssetCache::default()));
         let skin_document_cache = Arc::new(Mutex::new(SkinDocumentCache::default()));
         let skin_font_cache = Arc::new(Mutex::new(SkinFontCache::default()));
@@ -8959,7 +8983,7 @@ impl WinitApp {
         thread::Builder::new()
             .name(format!("bga-image-load-{chart_id}"))
             .spawn({
-                let (tx, rx) = mpsc::channel();
+                let (tx, rx) = bounded_gpu_upload_channel(MAX_PENDING_BGA_TEXTURE_UPLOADS);
                 self.bga_load_rx = Some(rx);
                 move || {
                     let session_options =
@@ -9026,7 +9050,7 @@ impl WinitApp {
         };
 
         let assets = chart.bga_assets.clone();
-        let (tx, rx) = mpsc::channel();
+        let (tx, rx) = bounded_gpu_upload_channel(MAX_PENDING_BGA_TEXTURE_UPLOADS);
         thread::Builder::new()
             .name("bga-image-load".to_string())
             .spawn(move || chart_bga_texture_load_worker(generation, assets, tx, uploader))
@@ -9041,7 +9065,7 @@ impl WinitApp {
             return;
         };
         let mut keep_rx = true;
-        loop {
+        for _ in 0..MAX_BGA_TEXTURE_RESULTS_PER_REDRAW {
             match rx.try_recv() {
                 Ok(PendingBgaImageResult::Manifest { generation, assets }) => {
                     if generation != self.bga_load_generation {
@@ -11474,7 +11498,7 @@ impl WinitApp {
     /// 毎フレーム呼ぶ。テクスチャ挿入 + フォント登録 + SkinContext 構築のみで軽量。
     fn drain_pending_skins(&mut self) -> SkinDrainStats {
         let mut stats = SkinDrainStats::default();
-        loop {
+        for _ in 0..MAX_SKIN_UPLOADS_PER_REDRAW {
             match self.skin_upload_rx.try_recv() {
                 Ok(result) => {
                     stats.received_count += 1;
@@ -11977,15 +12001,6 @@ impl WinitApp {
             return;
         };
 
-        // 動画BGAテクスチャを更新（前フレームの時刻を使用、1フレーム遅延は許容）
-        let video_update_time =
-            self.last_play_snapshot.as_ref().map(|s| s.time).unwrap_or(bmz_core::time::TimeUs(0));
-        crate::video_bga::update_video_bga_frames(
-            &mut self.renderer,
-            &mut active_play.running,
-            video_update_time,
-        );
-
         let state_before_advance = active_play.running.session.state;
         let advance_outcome = advance_running_play_session(&mut active_play.running);
         match advance_outcome {
@@ -11999,6 +12014,13 @@ impl WinitApp {
                 active_play.running.result_graph.record_frame(&frame);
                 let mine_hits = frame.mine_hits.len();
                 let mut snapshot = frame.render_snapshot;
+                // gameplayと同じ絶対時刻で動画を選び、前snapshot参照による
+                // 常時1フレーム分のBGA表示遅延を発生させない。
+                crate::video_bga::update_video_bga_frames(
+                    &mut self.renderer,
+                    &mut active_play.running,
+                    snapshot.time,
+                );
                 self.apply_profile_fast_slow_filter(&mut snapshot);
                 snapshot.play_elapsed_time = play_elapsed_time;
                 snapshot.ready_elapsed_time = ready_elapsed_time;
@@ -12572,27 +12594,50 @@ impl WinitApp {
         self.last_play_snapshot = Some(snapshot);
     }
 
-    /// `target_fps` (フォアグラウンド) / `frame_limit_in_background`
-    /// (非フォーカス時) に従ってフレーム開始間隔を一定に保つ。
-    ///
-    /// 各 `RedrawRequested` の先頭で呼び、次の描画開始 deadline までスリープする。
-    /// sleep 後の実開始時刻を基準に次回 deadline を更新し、待機フレームと即時
-    /// フレームが交互に発生することを防ぐ。FPS 値が 0 の場合は無制限。
-    fn limit_frame_rate(&mut self) {
-        let fps = if self.focused {
+    fn current_frame_limit(&self) -> u32 {
+        if self.focused {
             self.boot.app_config.video.target_fps
         } else {
             self.boot.app_config.video.frame_limit_in_background
-        };
-        let skip_wait = self.skip_next_frame_pace;
-        self.skip_next_frame_pace = false;
-        let delay = self.frame_pacer.delay(Instant::now(), fps, skip_wait);
-        if !delay.is_zero() {
-            thread::sleep(delay);
         }
-        let frame_started = Instant::now();
-        self.frame_pacer.record_frame_started(frame_started, fps, skip_wait);
-        self.skin_fps.record_frame(frame_started);
+    }
+
+    /// `RedrawRequested` が現在の deadline に到達していればフレームを開始する。
+    ///
+    /// deadline より早い redraw は描画せず `WaitUntil` へ戻す。event loop thread を
+    /// sleep させないため、待機中も keyboard/device event を遅延なく受け取れる。
+    fn begin_scheduled_frame(&mut self, event_loop: &ActiveEventLoop) -> bool {
+        let fps = self.current_frame_limit();
+        let skip_wait = self.skip_next_frame_pace;
+        let now = Instant::now();
+        if let Some(deadline) = self.frame_pacer.next_deadline(now, fps, skip_wait) {
+            event_loop.set_control_flow(ControlFlow::WaitUntil(deadline));
+            return false;
+        }
+
+        self.skip_next_frame_pace = false;
+        self.frame_pacer.record_frame_started(now, fps, skip_wait);
+        self.skin_fps.record_frame(now);
+        true
+    }
+
+    /// 次の frame deadline まで winit に待機させ、到達時に redraw を要求する。
+    /// FPS が 0、設定変更直後、明示的な skip 時は即座に次フレームを要求する。
+    fn schedule_next_frame(&self, event_loop: &ActiveEventLoop) {
+        let now = Instant::now();
+        let fps = self.current_frame_limit();
+        if let Some(deadline) = self.frame_pacer.next_deadline(now, fps, self.skip_next_frame_pace)
+        {
+            event_loop.set_control_flow(ControlFlow::WaitUntil(deadline));
+            return;
+        }
+
+        if fps == 0 {
+            event_loop.set_control_flow(ControlFlow::Poll);
+        } else {
+            event_loop.set_control_flow(ControlFlow::Wait);
+        }
+        self.request_redraw();
     }
 
     /// egui の 1 フレームを構築し、renderer へ描画データを渡す。
@@ -12609,7 +12654,14 @@ impl WinitApp {
             AppSceneKind::Result => "Result",
         };
         let size = window.inner_size();
-        let info = DebugInfo { scene, width: size.width, height: size.height };
+        let presentation = self.renderer.surface_presentation_status();
+        let info = DebugInfo {
+            scene,
+            width: size.width,
+            height: size.height,
+            effective_present_mode: presentation.map(|status| status.effective_mode),
+            maximum_frame_latency: presentation.map(|status| status.maximum_frame_latency),
+        };
         let play4_path = self.boot.profile_config.skin.play4.clone();
         let play5_path = self.boot.profile_config.skin.play5.clone();
         let play6_path = self.boot.profile_config.skin.play6.clone();
@@ -15084,7 +15136,7 @@ fn spawn_skin_decode(
 /// decode 側 (`decode_rx`) が全て drop されるとループを抜ける (アプリ終了時)。
 fn skin_upload_worker(
     decode_rx: Receiver<PendingSkinResult>,
-    upload_tx: mpsc::Sender<PendingUploadResult>,
+    upload_tx: mpsc::SyncSender<PendingUploadResult>,
     uploader: bmz_render::renderer::GpuUploader,
     texture_cache: SharedSkinGpuTextureCache,
     event_proxy: EventLoopProxy<AppUserEvent>,
@@ -15453,7 +15505,7 @@ fn chart_bga_texture_preload_worker(
     generation: u64,
     chart_id: i64,
     assets: Result<Vec<bmz_chart::model::BgaAssetRef>>,
-    tx: mpsc::Sender<PendingBgaImageResult>,
+    tx: mpsc::SyncSender<PendingBgaImageResult>,
     uploader: bmz_render::renderer::GpuUploader,
 ) {
     match assets {
@@ -15479,7 +15531,7 @@ fn chart_bga_texture_preload_worker(
 fn chart_bga_texture_load_worker(
     generation: u64,
     assets: Vec<bmz_chart::model::BgaAssetRef>,
-    tx: mpsc::Sender<PendingBgaImageResult>,
+    tx: mpsc::SyncSender<PendingBgaImageResult>,
     uploader: bmz_render::renderer::GpuUploader,
 ) {
     use bmz_chart::model::BgaAssetKind;
@@ -15701,6 +15753,10 @@ impl ApplicationHandler<AppUserEvent> for WinitApp {
         if cause == StartCause::Init {
             tracing::info!("winit app init");
             self.ensure_window(event_loop);
+        } else if matches!(cause, StartCause::ResumeTimeReached { .. }) {
+            // `WaitUntil` の deadline 到達時だけ描画を要求する。待機中に届いた
+            // keyboard/device/user event は redraw を発生させず、その場で処理できる。
+            self.request_redraw();
         }
     }
 
@@ -15825,6 +15881,11 @@ impl ApplicationHandler<AppUserEvent> for WinitApp {
                 }
             }
             WindowEvent::RedrawRequested => {
+                let limit_start = Instant::now();
+                if !self.begin_scheduled_frame(event_loop) {
+                    return;
+                }
+                let limit_us = instant_elapsed_us_u64(limit_start);
                 let redraw_started_at = Instant::now();
                 let scene_before = self.current_scene_kind();
                 let pending_skin_before = self.has_pending_skin_reload();
@@ -15844,9 +15905,6 @@ impl ApplicationHandler<AppUserEvent> for WinitApp {
                 let drain_start = Instant::now();
                 let skin_drain_stats = self.drain_pending_skins();
                 let drain_us = instant_elapsed_us_u64(drain_start);
-                let limit_start = Instant::now();
-                self.limit_frame_rate();
-                let limit_us = instant_elapsed_us_u64(limit_start);
                 let input_start = Instant::now();
                 self.poll_gamepad_events();
                 self.advance_select_hold_move();
@@ -15896,15 +15954,6 @@ impl ApplicationHandler<AppUserEvent> for WinitApp {
                     runtime.reap_retired_sources();
                 }
                 self.log_audio_diagnostics();
-                // 次フレームの再描画をここで要求して描画ループを自走させる。
-                // about_to_wait から要求すると、Windows のウィンドウ移動/リサイズ中に
-                // 発生するモーダルループ (WM_ENTERSIZEMOVE..WM_EXITSIZEMOVE) では
-                // about_to_wait が呼ばれず、メインループが停止してしまう。
-                // RedrawRequested 内から request_redraw すると実 WM_PAINT が生成され、
-                // モーダルループのメッセージ処理でも拾われるためループが止まらない。
-                if let Some(window) = &self.window {
-                    window.request_redraw();
-                }
                 let post_scene_us = instant_elapsed_us_u64(post_scene_start);
                 let total_us = instant_elapsed_us_u64(redraw_started_at);
                 let pending_skin_after = self.has_pending_skin_reload();
@@ -16007,7 +16056,9 @@ impl ApplicationHandler<AppUserEvent> for WinitApp {
         if self.shutdown_requested.load(Ordering::SeqCst) {
             tracing::info!("Ctrl-C received; exiting cleanly");
             event_loop.exit();
+            return;
         }
+        self.schedule_next_frame(event_loop);
     }
 
     fn exiting(&mut self, _event_loop: &ActiveEventLoop) {
@@ -20858,6 +20909,21 @@ mod tests {
     }
 
     #[test]
+    fn gpu_upload_channels_apply_backpressure_at_the_configured_capacity() {
+        let (bga_tx, _bga_rx) = bounded_gpu_upload_channel::<u8>(MAX_PENDING_BGA_TEXTURE_UPLOADS);
+        for value in 0..MAX_PENDING_BGA_TEXTURE_UPLOADS {
+            bga_tx.try_send(value as u8).expect("BGA queue should accept its capacity");
+        }
+        assert!(matches!(bga_tx.try_send(255), Err(mpsc::TrySendError::Full(255))));
+
+        let (skin_tx, _skin_rx) = bounded_gpu_upload_channel::<u8>(MAX_PENDING_SKIN_UPLOADS);
+        for value in 0..MAX_PENDING_SKIN_UPLOADS {
+            skin_tx.try_send(value as u8).expect("skin queue should accept its capacity");
+        }
+        assert!(matches!(skin_tx.try_send(255), Err(mpsc::TrySendError::Full(255))));
+    }
+
+    #[test]
     fn operating_time_is_applied_to_select_snapshot() {
         let mut scene = AppSceneSnapshot::Select(SelectSnapshot::default());
 
@@ -20909,6 +20975,20 @@ mod tests {
             pacer.record_frame_started(frame_started, 120, false);
             previous_frame = frame_started;
         }
+    }
+
+    #[test]
+    fn frame_pacer_exposes_the_next_deadline_without_blocking() {
+        let started_at = Instant::now();
+        let budget = frame_budget(120);
+        let work = Duration::from_micros(500);
+        let mut pacer = FramePacer::default();
+        pacer.record_frame_started(started_at, 120, false);
+
+        assert_eq!(pacer.next_deadline(started_at + work, 120, false), Some(started_at + budget));
+        assert_eq!(pacer.next_deadline(started_at + budget, 120, false), None);
+        assert_eq!(pacer.next_deadline(started_at + work, 120, true), None);
+        assert_eq!(pacer.next_deadline(started_at + work, 0, false), None);
     }
 
     #[test]
