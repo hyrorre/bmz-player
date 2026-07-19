@@ -78,10 +78,10 @@ use crate::config::play::{TARGET_GREEN_NUMBER_MAX, TARGET_GREEN_NUMBER_MIN};
 use crate::config::profile_config::{
     AssistOptionConfig, BgaExpandConfig, BgaModeConfig, BottomShiftableGaugeConfig,
     DoubleOptionConfig, GaugeAutoShiftConfig, GaugeTypeConfig, HispeedModeConfig, HsFixConfig,
-    InputActionConfig, JudgeAlgorithmConfig, LaneConfig, LaneEffectConfig, ProfileConfig,
-    ProfileInputConfig, RandomOptionConfig, ScratchDirectionConfig, SelectInputModeConfig,
-    TargetOptionConfig, default_hispeed_step_fhs, default_hispeed_step_nhs, normalize_hispeed_step,
-    replay_slot_rule_indices,
+    InputActionConfig, JudgeAlgorithmConfig, LaneConfig, LaneEffectConfig, LaneViewConfig,
+    ProfileConfig, ProfileInputConfig, RandomOptionConfig, ScratchDirectionConfig,
+    SelectInputModeConfig, TargetOptionConfig, default_hispeed_step_fhs, default_hispeed_step_nhs,
+    normalize_hispeed_step, replay_slot_rule_indices,
 };
 use crate::config::save::{save_app_config, save_profile_config};
 use crate::config::settings_registry::SettingsEntryId;
@@ -12934,6 +12934,7 @@ impl WinitApp {
         let Some(mut egui) = self.egui.take() else {
             return;
         };
+        let lane_profile_before_egui = self.boot.profile_config.lane.clone();
         let output = egui.run(
             &window,
             EguiRunContext {
@@ -12956,6 +12957,10 @@ impl WinitApp {
         );
         self.egui = Some(egui);
         self.renderer.set_egui_frame(output.frame);
+        if profile_lane_settings_changed(&lane_profile_before_egui, &self.boot.profile_config.lane)
+        {
+            self.sync_active_play_lane_settings_from_profile(&lane_profile_before_egui);
+        }
         self.sync_realtime_profile_settings();
         self.sync_discord_presence_config();
         if output.practice_leave {
@@ -13050,6 +13055,38 @@ impl WinitApp {
             });
         }
         self.apply_select_preview_audio_mix();
+    }
+
+    fn sync_active_play_lane_settings_from_profile(&mut self, before: &LaneViewConfig) {
+        let speed_locked = self.active_course.as_ref().is_some_and(|course| {
+            course.definition.constraints.speed == bmz_core::course::CourseSpeedConstraint::NoSpeed
+        });
+        let profile_lane = self.boot.profile_config.lane.clone();
+        let Some(active_play) = &mut self.active_play else {
+            return;
+        };
+        if apply_profile_lane_settings_to_session(
+            &mut active_play.running.session,
+            before,
+            &profile_lane,
+            speed_locked,
+        ) {
+            update_pre_ready_play_snapshot_options_for_session(
+                self.play_ready_sound_started_at,
+                &mut self.last_play_snapshot,
+                &active_play.running.session,
+                active_play.running.applied_arrange.arrange,
+                active_play.running.applied_arrange.arrange_2p,
+            );
+            tracing::info!(
+                hispeed = active_play.running.session.hispeed,
+                hispeed_mode = ?active_play.running.session.hispeed_mode,
+                target_green_number = active_play.running.session.target_green_number,
+                lane_cover = active_play.running.session.lane_cover,
+                lift = active_play.running.session.lift,
+                "applied egui lane settings to active play"
+            );
+        }
     }
 
     fn sync_active_play_realtime_profile_settings(&mut self) {
@@ -17948,6 +17985,95 @@ struct ActiveLaneState {
     lift: f32,
     hispeed_mode: HispeedMode,
     target_green_number: u32,
+}
+
+fn profile_lane_settings_changed(before: &LaneViewConfig, after: &LaneViewConfig) -> bool {
+    before.hispeed != after.hispeed
+        || before.hispeed_mode != after.hispeed_mode
+        || before.sudden != after.sudden
+        || before.lift != after.lift
+        || before.lift_enabled != after.lift_enabled
+        || before.hispeed_auto_adjust != after.hispeed_auto_adjust
+        || before.target_green_number != after.target_green_number
+}
+
+fn apply_profile_lane_settings_to_session(
+    session: &mut bmz_gameplay::session::GameSession,
+    before: &LaneViewConfig,
+    profile: &LaneViewConfig,
+    speed_locked: bool,
+) -> bool {
+    if !profile_lane_settings_changed(before, profile) {
+        return false;
+    }
+
+    let mode_changed = before.hispeed_mode != profile.hispeed_mode;
+    let hispeed_changed = before.hispeed != profile.hispeed;
+    let sudden_changed = before.sudden != profile.sudden;
+    let lift_changed = before.lift != profile.lift;
+    let lift_enabled_changed = before.lift_enabled != profile.lift_enabled;
+    let auto_adjust_changed = before.hispeed_auto_adjust != profile.hispeed_auto_adjust;
+    let target_green_changed = before.target_green_number != profile.target_green_number;
+    let cover_changed = sudden_changed || lift_changed || lift_enabled_changed;
+
+    if cover_changed {
+        session.lift_enabled = profile.lift_enabled;
+        session.lift = if profile.lift_enabled {
+            crate::config::play::lane_unit_to_f32(profile.lift)
+        } else {
+            0.0
+        };
+        session.lane_cover = crate::config::play::clamp_lane_cover_for_lift(
+            crate::config::play::lane_unit_to_f32(profile.sudden),
+            session.lift,
+        );
+    }
+    if auto_adjust_changed {
+        session.hispeed_auto_adjust = profile.hispeed_auto_adjust;
+    }
+
+    let now = session.audio_clock.now();
+    if mode_changed {
+        session.hispeed_mode = match profile.hispeed_mode {
+            HispeedModeConfig::Normal => HispeedMode::Normal,
+            HispeedModeConfig::Floating => HispeedMode::Floating,
+        };
+        if session.hispeed_mode == HispeedMode::Floating
+            && !target_green_changed
+            && !hispeed_changed
+        {
+            session.target_green_number = current_green_number(session, now);
+        }
+    }
+
+    if speed_locked {
+        return true;
+    }
+
+    if target_green_changed {
+        session.target_green_number = profile.target_green_number.max(1);
+    }
+
+    let direct_hispeed_change = hispeed_changed;
+    if direct_hispeed_change {
+        session.hispeed = profile.hispeed.clamp(0.5, 10.0);
+    }
+
+    if session.hispeed_mode == HispeedMode::Floating {
+        if direct_hispeed_change && !target_green_changed {
+            // FHS の直接 HS 変更は、現在の見た目から緑数字ターゲットを更新する。
+            session.target_green_number = current_green_number(session, now);
+        } else if target_green_changed
+            || cover_changed
+            || auto_adjust_changed
+            || (mode_changed && !direct_hispeed_change)
+        {
+            session.hispeed =
+                hispeed_for_green_number(session, active_lane_cover_for_hispeed(session), now);
+        }
+    }
+
+    true
 }
 
 fn active_lane_state_for_session(session: &bmz_gameplay::session::GameSession) -> ActiveLaneState {
@@ -24758,6 +24884,7 @@ mod tests {
     fn lane_cover_change_uses_hsfix_base_when_hispeed_auto_adjust_is_off() {
         let mut profile = ProfileConfig::new_default("default", "Default", 1);
         profile.lane.hispeed_mode = HispeedModeConfig::Floating;
+        profile.lane.hispeed_auto_adjust = false;
         profile.lane.target_green_number = 300;
         let mut chart = app_test_chart();
         chart.metadata.initial_bpm = 120.0;
@@ -24782,6 +24909,46 @@ mod tests {
 
         assert!(!session.hispeed_auto_adjust);
         assert!((session.hispeed - 1.5).abs() < 0.000_1, "hispeed={}", session.hispeed);
+    }
+
+    #[test]
+    fn egui_lane_profile_cover_change_keeps_runtime_nhs_hispeed() {
+        let profile = ProfileConfig::new_default("default", "Default", 1);
+        let before = profile.lane.clone();
+        let mut edited = profile.lane.clone();
+        edited.sudden = 250;
+        let mut session = crate::screens::play_session::build_game_session(
+            std::sync::Arc::new(app_test_chart()),
+            &profile,
+            crate::screens::play_session::PlaySessionOptions::default(),
+        );
+        session.hispeed = 3.5;
+
+        assert!(apply_profile_lane_settings_to_session(&mut session, &before, &edited, false));
+        assert!((session.hispeed - 3.5).abs() < f32::EPSILON);
+        assert!((session.lane_cover - 0.25).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn egui_lane_profile_target_change_recalculates_fhs_hispeed() {
+        let mut profile = ProfileConfig::new_default("default", "Default", 1);
+        profile.lane.hispeed_mode = HispeedModeConfig::Floating;
+        let before = profile.lane.clone();
+        let mut edited = profile.lane.clone();
+        edited.target_green_number = 320;
+        let mut session = crate::screens::play_session::build_game_session(
+            std::sync::Arc::new(app_test_chart()),
+            &profile,
+            crate::screens::play_session::PlaySessionOptions {
+                hs_fix: HsFixOption::StartBpm,
+                ..Default::default()
+            },
+        );
+
+        assert!(apply_profile_lane_settings_to_session(&mut session, &before, &edited, false));
+        assert_eq!(session.hispeed_mode, HispeedMode::Floating);
+        assert_eq!(session.target_green_number, 320);
+        assert!((session.hispeed - 3.75).abs() < 0.000_1, "hispeed={}", session.hispeed);
     }
 
     #[test]

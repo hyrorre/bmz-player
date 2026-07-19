@@ -4376,10 +4376,20 @@ fn lane_unit_slider_with_max(ui: &mut egui::Ui, value: &mut u32, label: &str, ma
     ui.add(egui::Slider::new(value, 0..=max).text(label));
 }
 
+const OFFSET_SLIDER_MIN_MS: i64 = -500;
+const OFFSET_SLIDER_MAX_MS: i64 = 500;
+const OFFSET_SLIDER_STEP_MS: f64 = 1.0;
+
 fn offset_ms_slider(ui: &mut egui::Ui, value_us: &mut i64, label: &str) {
-    let mut value_ms = (*value_us / 1_000).clamp(-500, 500);
-    if ui.add(egui::Slider::new(&mut value_ms, -500..=500).text(format!("{label} (ms)"))).changed()
-    {
+    let mut value_ms = (*value_us / 1_000).clamp(OFFSET_SLIDER_MIN_MS, OFFSET_SLIDER_MAX_MS);
+    let response = ui.add(
+        egui::Slider::new(&mut value_ms, OFFSET_SLIDER_MIN_MS..=OFFSET_SLIDER_MAX_MS)
+            // smart_aim は 5/10/50 などの値へ吸着するため、オフセットでは使わない。
+            .smart_aim(false)
+            .step_by(OFFSET_SLIDER_STEP_MS)
+            .text(format!("{label} (ms)")),
+    );
+    if response.changed() {
         *value_us = value_ms * 1_000;
     }
 }

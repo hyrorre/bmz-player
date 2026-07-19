@@ -7,6 +7,8 @@ BMZ のハイスピード周りは、現状では次の 2 軸に分かれる。
 
 `HS Auto Adjust` は独立した profile 設定としては持たない。BMZ では FHS 中の
 自動再計算を、beatoraja の `HI-SPEED FIX Auto Adjust` ON 相当として扱う。
+profile に項目がない場合の既定値は ON。`hispeed_auto_adjust = false` を明示した
+既存 profile は OFF のまま維持する。
 
 ## Terms
 
@@ -119,6 +121,11 @@ FHS の自動再計算は主に次の操作で起きる。
 - レーンカバー / LIFT を変更する
 - レーンカバー表示を OFF から ON に戻す
 - NHS から FHS に切り替える
+
+プレイ中に F1 から開くプロファイル設定の「表示」内でハイスピード、SUDDEN+、LIFT、
+緑数字ターゲット、HS Auto Adjust を変更した場合も、変更した項目だけを実行中の
+セッションへ即時反映する。未変更の項目は、プレイ中のキーボード／スクラッチ操作で
+更新された値を上書きしない。
 
 Course の `NoSpeed` 制約中は、HS 変更、緑数字変更、FHS 再計算を行わない。
 

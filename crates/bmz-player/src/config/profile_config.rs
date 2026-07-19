@@ -387,7 +387,7 @@ pub struct LaneViewConfig {
     #[serde(default = "default_true")]
     pub lift_enabled: bool,
     /// beatoraja `PlayConfig.hispeedautoadjust` 相当。
-    #[serde(default)]
+    #[serde(default = "default_true")]
     pub hispeed_auto_adjust: bool,
     /// HIDDEN レーンカバー量。0..=1000 の整数で持ち、ランタイムでは /1000 して扱う。
     pub hidden: u32,
@@ -1108,7 +1108,7 @@ impl ProfileConfig {
                 sudden: 0,
                 lift: 0,
                 lift_enabled: true,
-                hispeed_auto_adjust: false,
+                hispeed_auto_adjust: true,
                 hidden: 0,
                 target_green_number: 300,
             },
@@ -1322,7 +1322,7 @@ mod tests {
     }
 
     #[test]
-    fn lane_view_uses_mode_specific_hispeed_step_defaults_for_old_profiles() {
+    fn lane_view_uses_mode_specific_hispeed_step_and_auto_adjust_defaults_for_old_profiles() {
         let lane: LaneViewConfig = toml::from_str(
             r#"
             hispeed = 2.0
@@ -1338,13 +1338,30 @@ mod tests {
         assert_eq!(lane.hispeed_step_nhs, 0.25);
         assert_eq!(lane.hispeed_step_fhs, 0.50);
         assert!(lane.lift_enabled);
-        assert!(!lane.hispeed_auto_adjust);
+        assert!(lane.hispeed_auto_adjust);
 
         let serialized = toml::to_string(&lane).unwrap();
         assert!(serialized.contains("hispeed_step_nhs = 0.25"));
         assert!(serialized.contains("hispeed_step_fhs = 0.5"));
         assert!(serialized.contains("lift_enabled = true"));
-        assert!(serialized.contains("hispeed_auto_adjust = false"));
+        assert!(serialized.contains("hispeed_auto_adjust = true"));
+    }
+
+    #[test]
+    fn lane_view_preserves_explicit_hispeed_auto_adjust_off() {
+        let lane: LaneViewConfig = toml::from_str(
+            r#"
+            hispeed = 2.0
+            sudden = 0
+            lift = 0
+            hidden = 0
+            target_green_number = 300
+            hispeed_auto_adjust = false
+            "#,
+        )
+        .unwrap();
+
+        assert!(!lane.hispeed_auto_adjust);
     }
 
     #[test]
@@ -1504,6 +1521,7 @@ mod tests {
         let profile = ProfileConfig::new_default("default", "Default", 1);
 
         assert_eq!(profile.play.ln_mode_policy, LnPolicySetting::AutoLn);
+        assert!(profile.lane.hispeed_auto_adjust);
         assert!(profile.input.start_key.is_none());
         assert!(profile.input.ui.bindings.iter().any(|entry| {
             entry.device == "keyboard"
