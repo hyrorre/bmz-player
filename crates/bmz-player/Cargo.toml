@@ -36,6 +36,7 @@ egui.workspace = true
 egui-winit.workspace = true
 rfd.workspace = true
 image.workspace = true
+arboard.workspace = true
 
 rayon.workspace = true
 futures-util.workspace = true

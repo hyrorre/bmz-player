@@ -74,7 +74,9 @@ use crate::config::key_config::{
     is_scratch_down_control, is_scratch_up_control,
 };
 use crate::config::load::load_profile_config;
-use crate::config::play::{TARGET_GREEN_NUMBER_MAX, TARGET_GREEN_NUMBER_MIN};
+use crate::config::play::{
+    TARGET_GREEN_NUMBER_MAX, TARGET_GREEN_NUMBER_MIN, green_number_from_duration_ms,
+};
 use crate::config::profile_config::{
     AssistOptionConfig, BgaExpandConfig, BgaModeConfig, BottomShiftableGaugeConfig,
     DoubleOptionConfig, GaugeAutoShiftConfig, GaugeTypeConfig, HispeedModeConfig, HsFixConfig,
@@ -153,6 +155,7 @@ use crate::skin_loader::{
 };
 use crate::songs_cmd::scan_songs_with_progress;
 use crate::storage::collection_db::FavoriteHints;
+use crate::storage::common::hash_to_hex;
 use crate::storage::difficulty_table_db::DifficultyTableRecord;
 use crate::storage::library_db::{ChartDistributionSecond, ChartListItem, LibraryDatabase};
 use crate::storage::migration::{migrate_library_db, migrate_network_db, migrate_score_db};
@@ -486,6 +489,8 @@ struct WinitApp {
     active_play: Option<StartedInputPlaySession>,
     /// コースプレイ中のセッション。単曲プレイ時は None。
     active_course: Option<ActiveCourseSession>,
+    /// 選曲画面の F10 で開始したフォルダ内 Autoplay。
+    autoplay_folder: Option<AutoplayFolderSession>,
     /// コース全体完了時のリザルト。リザルト画面から抜けるまで保持する。
     finished_course: Option<CourseResultSummary>,
     /// `finished_course` から Result skin 用に集約した結果。
@@ -1281,7 +1286,11 @@ impl PendingPlayStart {
             options,
             lane: PendingPlayLaneState::from_snapshot(
                 snapshot,
-                profile.lane.target_green_number,
+                if hs_fix == HsFixOption::Off {
+                    profile.lane.target_green_number
+                } else {
+                    green_number_from_duration_ms(profile.play.duration_ms)
+                },
                 hs_fix,
                 profile.lane.hispeed_auto_adjust,
             ),
@@ -1553,6 +1562,13 @@ struct ResultExit {
     skip_requested: bool,
 }
 
+/// F10 で開始したフォルダ内 Autoplay の進行状態。
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct AutoplayFolderSession {
+    chart_ids: Vec<i64>,
+    next_index: usize,
+}
+
 /// リザルト画面を抜けたあとに実行する遷移。
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum ResultExitAction {
@@ -1573,6 +1589,8 @@ enum ResultExitAction {
     AdvanceCourse,
     /// コース途中落ちの単曲リザルトを閉じて、コース最終リザルトへ進む。
     FinishCourse,
+    /// フォルダ内 Autoplay の次の譜面を開始する。
+    AdvanceAutoplayFolder,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -2652,6 +2670,7 @@ impl WinitApp {
             window: None,
             active_play: None,
             active_course: None,
+            autoplay_folder: None,
             finished_course: None,
             finished_course_skin_summary: None,
             finished_course_hash: None,
@@ -3707,7 +3726,12 @@ impl WinitApp {
     }
 
     fn select_note_display_duration_ms_for_skin(profile: &ProfileConfig) -> i32 {
-        profile.lane.target_green_number.max(1).min(i32::MAX as u32) as i32
+        let green_number = if profile.play.hs_fix != HsFixConfig::Off {
+            green_number_from_duration_ms(profile.play.duration_ms)
+        } else {
+            profile.lane.target_green_number.max(1)
+        };
+        green_number.min(i32::MAX as u32) as i32
     }
 
     fn ensure_visible_select_chart_distributions(&self, visible_limit: usize) {
@@ -4836,11 +4860,26 @@ impl WinitApp {
         {
             self.cycle_bga_option();
             true
+        } else if let Some(delta_ms) = duration_delta_control(control, &self.select_keys) {
+            self.adjust_play_duration_ms(delta_ms)
         } else if let Some(delta_ms) = visual_offset_delta_control(control, &self.select_keys) {
             self.adjust_visual_offset_ms(delta_ms)
         } else {
             false
         }
+    }
+
+    fn adjust_play_duration_ms(&mut self, delta_ms: i32) -> bool {
+        let current = self.boot.profile_config.play.duration_ms;
+        let next = crate::config::play::adjust_play_duration_ms(current, delta_ms);
+        if current == next {
+            return false;
+        }
+        self.boot.profile_config.play.duration_ms = next;
+        self.boot.profile_config.updated_at = now_unix_seconds();
+        self.sync_realtime_profile_settings();
+        tracing::info!(duration_ms = next, "note display duration changed");
+        true
     }
 
     fn adjust_visual_offset_ms(&mut self, delta_ms: i32) -> bool {
@@ -5233,6 +5272,25 @@ impl WinitApp {
         }
 
         if matches!(self.view_state(), AppViewState::Select)
+            && event.state == ElementState::Pressed
+            && !event.repeat
+        {
+            match event.physical_key {
+                PhysicalKey::Code(KeyCode::F3) => self.handle_select_f3_action(),
+                PhysicalKey::Code(KeyCode::F10) => self.start_autoplay_folder_selected(),
+                PhysicalKey::Code(KeyCode::F11) => self.open_primary_ir_for_selected(),
+                PhysicalKey::Code(KeyCode::Numpad9) => self.open_selected_chart_documents(),
+                _ => {}
+            }
+            if matches!(
+                event.physical_key,
+                PhysicalKey::Code(KeyCode::F3 | KeyCode::F10 | KeyCode::F11 | KeyCode::Numpad9)
+            ) {
+                return;
+            }
+        }
+
+        if matches!(self.view_state(), AppViewState::Select)
             && event.state == ElementState::Released
             && let Some(control) = physical_key_name(event.physical_key)
         {
@@ -5393,7 +5451,13 @@ impl WinitApp {
         }
 
         if self.select_option_panel != 0 {
-            if event.state == ElementState::Pressed && !event.repeat {
+            if event.state == ElementState::Pressed
+                && (!event.repeat
+                    || (self.select_option_panel == 3
+                        && physical_key_name(event.physical_key).is_some_and(|control| {
+                            duration_delta_control(&control, &self.select_keys).is_some()
+                        })))
+            {
                 match self.select_option_panel {
                     1 => {
                         if let Some(slot) = digit_to_replay_slot(event.physical_key) {
@@ -6710,6 +6774,178 @@ impl WinitApp {
         }
     }
 
+    fn handle_select_f3_action(&mut self) {
+        let e1_held = self.select_e_action_holds.contains(&InputActionConfig::E1);
+        let e2_held = self.select_e_action_holds.contains(&InputActionConfig::E2);
+        let ctrl_held = self.pressed_controls.iter().any(|control| {
+            matches!(control.as_str(), "LControl" | "RControl" | "ControlLeft" | "ControlRight")
+        });
+        let shift_held = self.pressed_controls.iter().any(|control| {
+            matches!(control.as_str(), "LShift" | "RShift" | "ShiftLeft" | "ShiftRight")
+        });
+
+        if e1_held {
+            self.copy_selected_hash(false);
+        } else if e2_held || (ctrl_held && shift_held) {
+            self.copy_selected_hash(true);
+        } else if ctrl_held {
+            self.copy_selected_hash(false);
+        } else {
+            self.open_selected_chart_folder();
+        }
+    }
+
+    fn copy_selected_hash(&mut self, sha256: bool) {
+        let Some(row) = self.selected_chart_row().cloned() else {
+            return;
+        };
+        let Some(value) = (if sha256 {
+            row.score_sha256().map(|hash| hash_to_hex(&hash))
+        } else {
+            row.chart.as_ref().map(|chart| hash_to_hex(&chart.md5))
+        }) else {
+            self.show_left_overlay_toast(if sha256 {
+                "SHA256 を取得できません"
+            } else {
+                "MD5 はローカル譜面でのみ利用できます"
+            });
+            return;
+        };
+        match arboard::Clipboard::new().and_then(|mut clipboard| clipboard.set_text(value.clone()))
+        {
+            Ok(()) => {
+                self.show_left_overlay_toast(if sha256 {
+                    "SHA256 をクリップボードへコピーしました"
+                } else {
+                    "MD5 をクリップボードへコピーしました"
+                });
+                tracing::info!(sha256, hash = %value, "copied chart hash to clipboard");
+            }
+            Err(error) => {
+                tracing::warn!(%error, sha256, "failed to copy chart hash to clipboard");
+                self.show_left_overlay_toast("クリップボードへのコピーに失敗しました");
+            }
+        }
+    }
+
+    fn open_selected_chart_folder(&mut self) {
+        let Some(chart) = self.selected_chart_row().and_then(|row| row.chart.clone()) else {
+            return;
+        };
+        let folder = PathBuf::from(&chart.folder_path);
+        if let Err(error) = open_file_browser_path(&folder) {
+            tracing::warn!(path = %folder.display(), %error, "failed to open selected chart folder");
+            self.show_left_overlay_toast("譜面フォルダを開けませんでした");
+        } else {
+            tracing::info!(path = %folder.display(), "opened selected chart folder");
+        }
+    }
+
+    fn open_selected_chart_documents(&mut self) {
+        let Some(chart) = self.selected_chart_row().and_then(|row| row.chart.clone()) else {
+            return;
+        };
+        let folder = PathBuf::from(&chart.folder_path);
+        let mut opened = 0usize;
+        match std::fs::read_dir(&folder) {
+            Ok(entries) => {
+                for entry in entries.flatten() {
+                    let path = entry.path();
+                    let is_text = path
+                        .extension()
+                        .and_then(|extension| extension.to_str())
+                        .is_some_and(|extension| extension.eq_ignore_ascii_case("txt"));
+                    if is_text && open_file_with_default_app(&path).is_ok() {
+                        opened += 1;
+                    }
+                }
+            }
+            Err(error) => {
+                tracing::warn!(path = %folder.display(), %error, "failed to read chart documents");
+            }
+        }
+        if opened == 0 {
+            self.show_left_overlay_toast("曲テキストが見つかりません");
+        } else {
+            self.show_left_overlay_toast(format!("曲テキストを {} 件開きました", opened));
+        }
+    }
+
+    fn open_primary_ir_for_selected(&mut self) {
+        let Some(row) = self.selected_chart_row() else {
+            return;
+        };
+        let Some(sha256) = row.score_sha256() else {
+            self.show_left_overlay_toast("IRページを開く譜面ハッシュがありません");
+            return;
+        };
+        let Some(provider) = primary_ir_provider_for_profile(&self.boot.profile_config) else {
+            self.show_left_overlay_toast("プライマリIRが設定されていません");
+            return;
+        };
+        let url =
+            format!("{}/charts/{}", provider.base_url.trim_end_matches('/'), hash_to_hex(&sha256));
+        match open_external_url(&url) {
+            Ok(()) => {
+                self.show_left_overlay_toast("プライマリIRページを開きました");
+                tracing::info!(%url, "opened primary IR chart page");
+            }
+            Err(error) => {
+                tracing::warn!(%error, %url, "failed to open primary IR chart page");
+                self.show_left_overlay_toast("プライマリIRページを開けませんでした");
+            }
+        }
+    }
+
+    fn start_autoplay_folder_selected(&mut self) {
+        let Some((path, kind)) =
+            self.select_items.get(self.selected_index).and_then(|item| match item {
+                SelectItem::Folder { path, kind, .. } => Some((path.clone(), *kind)),
+                _ => None,
+            })
+        else {
+            return;
+        };
+        if kind != bmz_render::scene::SelectRowKind::Folder {
+            self.show_left_overlay_toast("通常の曲フォルダでのみ Autoplay できます");
+            return;
+        }
+        let mut folder_paths = vec![path.clone()];
+        match self.boot.library_db.list_descendant_folder_paths(&path) {
+            Ok(descendants) => folder_paths.extend(descendants),
+            Err(error) => {
+                tracing::warn!(folder = %path, %error, "failed to list autoplay folder descendants");
+            }
+        }
+        let folder_refs: Vec<&str> = folder_paths.iter().map(String::as_str).collect();
+        let charts = match self.boot.library_db.list_charts_in_folders(&folder_refs) {
+            Ok(charts) => charts,
+            Err(error) => {
+                tracing::warn!(folder = %path, %error, "failed to list autoplay folder charts");
+                self.show_left_overlay_toast("フォルダ内の譜面を取得できませんでした");
+                return;
+            }
+        };
+        let mut chart_ids = Vec::with_capacity(charts.len());
+        let mut seen = HashSet::new();
+        for chart in charts {
+            if seen.insert(chart.chart_id) {
+                chart_ids.push(chart.chart_id);
+            }
+        }
+        let Some(&first_chart_id) = chart_ids.first() else {
+            self.show_left_overlay_toast("フォルダ内に譜面がありません");
+            return;
+        };
+        self.clear_active_course_state();
+        self.autoplay_folder = Some(AutoplayFolderSession { chart_ids, next_index: 1 });
+        let mut options = self.play_start_options();
+        options.autoplay = true;
+        self.begin_decide_for_chart(first_chart_id, options);
+        self.show_left_overlay_toast("フォルダ内 Autoplay を開始しました");
+        tracing::info!(folder = %path, first_chart_id, "started folder autoplay");
+    }
+
     fn toggle_favorite_song_selected(&mut self) {
         let Some(row) = self.selected_chart_row().cloned() else {
             return;
@@ -7137,6 +7373,7 @@ impl WinitApp {
     }
 
     fn start_chart(&mut self, chart_id: i64) {
+        self.autoplay_folder = None;
         let options = self.play_start_options();
         self.begin_decide_for_chart(chart_id, options);
     }
@@ -7217,6 +7454,7 @@ impl WinitApp {
             self.commit_pending_play_lane_state_to_profile();
         }
         self.practice_session = None;
+        self.autoplay_folder = None;
         self.practice_chart_zero_time = None;
         self.active_play = None;
         self.pending_play_start = None;
@@ -7384,6 +7622,7 @@ impl WinitApp {
     }
 
     fn start_course(&mut self, course_id: i64) {
+        self.autoplay_folder = None;
         self.start_course_with_arrange(course_id, Vec::new(), false);
     }
 
@@ -7658,6 +7897,33 @@ impl WinitApp {
         self.result_key5_held = false;
         self.result_key7_held = false;
         self.start_next_course_chart();
+    }
+
+    fn autoplay_folder_has_next(&self) -> bool {
+        self.autoplay_folder
+            .as_ref()
+            .is_some_and(|session| session.next_index < session.chart_ids.len())
+    }
+
+    fn advance_autoplay_folder(&mut self) {
+        let Some(session) = self.autoplay_folder.as_mut() else {
+            self.leave_result();
+            return;
+        };
+        let Some(&chart_id) = session.chart_ids.get(session.next_index) else {
+            self.autoplay_folder = None;
+            self.leave_result();
+            return;
+        };
+        session.next_index += 1;
+        self.finished_play = None;
+        self.result_exit = None;
+        self.result_key5_held = false;
+        self.result_key7_held = false;
+        let mut options = self.play_start_options();
+        options.autoplay = true;
+        self.start_chart_with_options(chart_id, options);
+        tracing::info!(chart_id, "advanced folder autoplay");
     }
 
     fn finish_course_after_intermediate_result(&mut self) {
@@ -9390,6 +9656,7 @@ impl WinitApp {
         // would be treated as the next entry of a stale course (route
         // through advance_course_after_finish with mismatched chart_id).
         self.clear_active_course_state();
+        self.autoplay_folder = None;
         self.play_media_cache = None;
         let now = Instant::now();
         self.select_scene_started_at = now;
@@ -10599,6 +10866,7 @@ impl WinitApp {
             // was being started, drop the course session — the user opted
             // out before the first chart actually began.
             self.clear_active_course_state();
+            self.autoplay_folder = None;
             let now = Instant::now();
             self.select_scene_started_at = now;
             self.restart_select_bar_timer_without_scroll(now);
@@ -10785,6 +11053,8 @@ impl WinitApp {
             // 中間リザルトは scene 時間経過で次の曲へ、それ以外は選曲へ戻る。
             let action = if self.is_course_intermediate_result() {
                 self.course_intermediate_exit_action()
+            } else if self.autoplay_folder_has_next() {
+                ResultExitAction::AdvanceAutoplayFolder
             } else {
                 ResultExitAction::Leave
             };
@@ -10837,6 +11107,7 @@ impl WinitApp {
             }
             ResultExitAction::AdvanceCourse => self.advance_to_next_course_chart(),
             ResultExitAction::FinishCourse => self.finish_course_after_intermediate_result(),
+            ResultExitAction::AdvanceAutoplayFolder => self.advance_autoplay_folder(),
         }
     }
 
@@ -10906,6 +11177,7 @@ impl WinitApp {
             audio.stop_all();
         }
         self.finished_play = None;
+        self.autoplay_folder = None;
         self.result_favorite_chart = false;
         self.clear_active_course_state();
         self.result_exit = None;
@@ -10969,11 +11241,16 @@ impl WinitApp {
     }
 
     fn result_auto_exit_duration(&self) -> Option<Duration> {
-        result_auto_exit_duration_for_document(
+        let duration = result_auto_exit_duration_for_document(
             self.renderer.result_skin_document(),
             self.is_course_intermediate_result(),
             self.course_intermediate_auto_advance_enabled(),
-        )
+        );
+        if duration.is_none() && self.autoplay_folder_has_next() {
+            Some(FALLBACK_RESULT_SCENE_DURATION)
+        } else {
+            duration
+        }
     }
 
     fn reload_select_items(&mut self) {
@@ -15788,6 +16065,86 @@ fn open_external_url(url: &str) -> Result<()> {
     Ok(())
 }
 
+fn open_file_browser_path(path: &Path) -> Result<()> {
+    #[cfg(target_os = "windows")]
+    {
+        let target = if path.is_dir() {
+            path.to_path_buf()
+        } else {
+            path.parent().unwrap_or(path).to_path_buf()
+        };
+        Command::new("explorer")
+            .arg(target)
+            .spawn()
+            .context("failed to open path with explorer")?;
+    }
+    #[cfg(target_os = "macos")]
+    {
+        Command::new("open").arg(path).spawn().context("failed to open path with open")?;
+    }
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        let target = if path.is_dir() {
+            path.to_path_buf()
+        } else {
+            path.parent().unwrap_or(path).to_path_buf()
+        };
+        Command::new("xdg-open")
+            .arg(target)
+            .spawn()
+            .context("failed to open path with xdg-open")?;
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "macos", unix)))]
+    {
+        anyhow::bail!("opening paths is not supported on this platform: {}", path.display());
+    }
+    Ok(())
+}
+
+fn open_file_with_default_app(path: &Path) -> Result<()> {
+    #[cfg(target_os = "windows")]
+    {
+        Command::new("cmd")
+            .args(["/C", "start", ""])
+            .arg(path)
+            .spawn()
+            .context("failed to open file with cmd /C start")?;
+    }
+    #[cfg(target_os = "macos")]
+    {
+        Command::new("open").arg(path).spawn().context("failed to open file with open")?;
+    }
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        Command::new("xdg-open").arg(path).spawn().context("failed to open file with xdg-open")?;
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "macos", unix)))]
+    {
+        anyhow::bail!("opening files is not supported on this platform: {}", path.display());
+    }
+    Ok(())
+}
+
+fn primary_ir_provider_for_profile(
+    profile: &ProfileConfig,
+) -> Option<&crate::config::profile_config::IrProviderConfig> {
+    let key = if profile.ir.primary_provider.trim().is_empty() {
+        profile
+            .ir
+            .providers
+            .iter()
+            .find(|provider| {
+                provider.enabled
+                    && !provider.base_url.trim().is_empty()
+                    && crate::ir::provider_key::configured_provider_key(provider).is_some()
+            })
+            .and_then(crate::ir::provider_key::configured_provider_key)
+    } else {
+        Some(profile.ir.primary_provider.trim())
+    }?;
+    crate::ir::provider_key::provider_config_for_key(&profile.ir, key)
+}
+
 fn launch_update_installer(path: &Path) -> Result<()> {
     #[cfg(target_os = "windows")]
     {
@@ -19356,6 +19713,16 @@ fn visual_offset_delta_control(control: &str, bindings: &SelectKeyBindings) -> O
     }
 }
 
+fn duration_delta_control(control: &str, bindings: &SelectKeyBindings) -> Option<i32> {
+    if bindings.is_ui_key4(control) {
+        Some(-1)
+    } else if bindings.is_ui_key6(control) {
+        Some(1)
+    } else {
+        None
+    }
+}
+
 fn lane_cover_step(physical_key: PhysicalKey, state: ElementState, repeat: bool) -> Option<f32> {
     if state != ElementState::Pressed {
         return None;
@@ -20543,11 +20910,11 @@ impl SelectKeyBindings {
         );
         let bga_str = kb_bga_str.as_deref().unwrap_or("?");
         let option_hint = format!(
-            "F1 MENU  F5 RELOAD   \
+            "F1 MENU  F3 FOLDER/HASH  F5 RELOAD  F10 AUTOPLAY  F11 IR  N9 TEXT   \
              {start_str}:PLAY OPT  BACK:E2 OPT  {start_str}+BACK:DETAIL OPT  \
              {start_str}+K1/K2:1P ARR  {start_str}+2P K1/K2:2P ARR  {start_str}+K3/K4:GAUGE  \
              {start_str}+K5:HS-FIX  {start_str}+K6:DP OPT  {start_str}+K7:AUTOPLAY  \
-             {start_str}+BACK+{key2_str}:GAS  {start_str}+UP/DOWN:TARGET  {start_str}+{bga_str}:BGA  {start_str}+1..4:REPLAY"
+             {start_str}+BACK+{key2_str}:GAS  {start_str}+UP/DOWN:TARGET  {start_str}+{bga_str}:BGA  {start_str}+K4/K6:DURATION  {start_str}+K5/K7:TIMING  {start_str}+1..4:REPLAY"
         );
 
         Self {
@@ -20708,10 +21075,10 @@ impl SelectKeyBindings {
         )
         .unwrap_or_else(|| "?".to_string());
         let option_hint = format!(
-            "F1 MENU  F5 RELOAD   \
+            "F1 MENU  F3 FOLDER/HASH  F5 RELOAD  F10 AUTOPLAY  F11 IR  N9 TEXT   \
              {start_str}:PLAY OPT  BACK:E2 OPT  {start_str}+BACK:DETAIL OPT  \
              {start_str}+K1/K2:1P ARR  {start_str}+K3:GAUGE  {start_str}+K5:HS-FIX  \
-             {start_str}+K8/K9:TARGET  {start_str}+{bga_str}:BGA  {start_str}+1..4:REPLAY"
+             {start_str}+K8/K9:TARGET  {start_str}+{bga_str}:BGA  {start_str}+K4/K6:DURATION  {start_str}+K5/K7:TIMING  {start_str}+1..4:REPLAY"
         );
         let hispeed_down_controls = merge_select_controls(
             key1_controls.clone(),
@@ -25326,6 +25693,9 @@ mod tests {
         assert_eq!(visual_offset_delta_control("Period", &keys), Some(-1));
         assert_eq!(visual_offset_delta_control("P2K7", &keys), Some(1));
         assert_eq!(visual_offset_delta_control("Z", &keys), None);
+        assert_eq!(duration_delta_control("D", &keys), Some(-1));
+        assert_eq!(duration_delta_control("F", &keys), Some(1));
+        assert_eq!(duration_delta_control("C", &keys), None);
     }
 
     #[test]
@@ -25356,6 +25726,16 @@ mod tests {
         profile.lane.target_green_number = 280;
 
         assert_eq!(WinitApp::select_note_display_duration_ms_for_skin(&profile), 280);
+    }
+
+    #[test]
+    fn select_skin_green_number_uses_duration_for_hs_fix() {
+        let mut profile = ProfileConfig::new_default("default", "Default", 1);
+        profile.play.hs_fix = HsFixConfig::StartBpm;
+        profile.play.duration_ms = 501;
+        profile.lane.target_green_number = 280;
+
+        assert_eq!(WinitApp::select_note_display_duration_ms_for_skin(&profile), 301);
     }
 
     #[test]

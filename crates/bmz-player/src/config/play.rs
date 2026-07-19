@@ -25,6 +25,19 @@ pub const DEFAULT_JUDGE_WINDOW: JudgeWindow = JudgeWindow {
 
 pub const TARGET_GREEN_NUMBER_MIN: u32 = 1;
 pub const TARGET_GREEN_NUMBER_MAX: u32 = 999;
+pub const PLAY_DURATION_MIN_MS: u32 = 1;
+pub const PLAY_DURATION_MAX_MS: u32 = 10_000;
+
+/// beatoraja の DURATION と BMZ の緑数字表示を相互変換する。
+pub fn green_number_from_duration_ms(duration_ms: u32) -> u32 {
+    ((duration_ms as f32 * 0.6).round() as u32)
+        .clamp(TARGET_GREEN_NUMBER_MIN, TARGET_GREEN_NUMBER_MAX)
+}
+
+pub fn adjust_play_duration_ms(current: u32, delta_ms: i32) -> u32 {
+    (current as i64 + i64::from(delta_ms))
+        .clamp(PLAY_DURATION_MIN_MS as i64, PLAY_DURATION_MAX_MS as i64) as u32
+}
 
 pub fn play_offsets_from_profile(profile: &ProfileConfig) -> PlayOffsets {
     PlayOffsets {
@@ -187,6 +200,14 @@ mod tests {
 
         assert_eq!(offsets.input_offset_us, -1_000);
         assert_eq!(offsets.visual_offset_us, 2_000);
+    }
+
+    #[test]
+    fn duration_matches_beatoraja_default_and_is_clamped() {
+        assert_eq!(green_number_from_duration_ms(500), 300);
+        assert_eq!(adjust_play_duration_ms(500, -1), 499);
+        assert_eq!(adjust_play_duration_ms(PLAY_DURATION_MIN_MS, -1), PLAY_DURATION_MIN_MS);
+        assert_eq!(adjust_play_duration_ms(PLAY_DURATION_MAX_MS, 1), PLAY_DURATION_MAX_MS);
     }
 
     #[test]

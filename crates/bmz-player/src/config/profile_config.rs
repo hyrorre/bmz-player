@@ -102,6 +102,9 @@ pub struct PlayDefaultsConfig {
     pub bga_expand: BgaExpandConfig,
     #[serde(default = "default_misslayer_duration_ms")]
     pub misslayer_duration_ms: u32,
+    /// ノーツ表示時間 (ms)。beatoraja の DURATION に対応する。
+    #[serde(default = "default_play_duration_ms")]
+    pub duration_ms: u32,
     /// E1+E2 長押し強制終了までの時間(ms)。beatoraja 既定 1000ms。
     #[serde(default = "default_play_exit_hold_ms")]
     pub play_exit_hold_ms: u32,
@@ -124,6 +127,10 @@ pub fn default_bga_expand() -> BgaExpandConfig {
 }
 
 pub fn default_misslayer_duration_ms() -> u32 {
+    500
+}
+
+pub fn default_play_duration_ms() -> u32 {
     500
 }
 
@@ -1089,6 +1096,7 @@ impl ProfileConfig {
                 bga: default_bga_mode(),
                 bga_expand: default_bga_expand(),
                 misslayer_duration_ms: default_misslayer_duration_ms(),
+                duration_ms: default_play_duration_ms(),
                 play_exit_hold_ms: default_play_exit_hold_ms(),
                 show_ln_tail_cap: false,
             },
