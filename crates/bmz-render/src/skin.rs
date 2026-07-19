@@ -1,5 +1,5 @@
 use std::borrow::Cow;
-use std::collections::{HashMap, VecDeque, hash_map::DefaultHasher};
+use std::collections::{BTreeMap, HashMap, VecDeque, hash_map::DefaultHasher};
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
@@ -117,6 +117,44 @@ struct DestinationResolveContext<'a, 'text> {
 
 /// beatoraja `PlaySkin.judgeregion` 上限 (TIMER_JUDGE_1P/2P/3P = 46/47/247)。
 pub const MAX_JUDGE_REGIONS: usize = 3;
+const LUA_DRAW_CALLBACK_PREFIX: &str = "bmz:lua_draw_callback:";
+
+/// Renderer-facing interface for Lua draw sidecars. Implementations own the VM
+/// outside `SkinDocument`; the renderer only supplies a read-only frame state.
+pub trait SkinLuaDrawRuntime: std::fmt::Debug + Send + Sync {
+    fn evaluate_draw(
+        &self,
+        callback_id: usize,
+        state: &SkinDrawState,
+        enabled_options: &[i32],
+        text_values: &BTreeMap<i32, String>,
+    ) -> bool;
+}
+
+#[derive(Clone)]
+pub struct SkinLuaRuntimeContext {
+    runtime: Arc<dyn SkinLuaDrawRuntime>,
+    enabled_options: Arc<[i32]>,
+    text_values: Arc<BTreeMap<i32, String>>,
+}
+
+impl std::fmt::Debug for SkinLuaRuntimeContext {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("SkinLuaRuntimeContext")
+            .field("enabled_options", &self.enabled_options)
+            .field("text_value_count", &self.text_values.len())
+            .finish_non_exhaustive()
+    }
+}
+
+impl PartialEq for SkinLuaRuntimeContext {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.runtime, &other.runtime)
+            && self.enabled_options == other.enabled_options
+            && self.text_values == other.text_values
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct JudgeRegionState {
@@ -195,6 +233,7 @@ pub struct SkinSliderHit {
 pub struct SkinContext {
     manifest: SkinManifest,
     document: Option<SkinDocument>,
+    lua_draw_runtime: Option<Arc<dyn SkinLuaDrawRuntime>>,
     document_sources: HashMap<String, SkinDocumentTexture>,
     select_settings_dest_index: Arc<crate::select_settings_dest::SelectSettingsDestIndex>,
     result_render_cache: Arc<Mutex<ResultRenderCache>>,
@@ -204,6 +243,11 @@ impl PartialEq for SkinContext {
     fn eq(&self, other: &Self) -> bool {
         self.manifest == other.manifest
             && self.document == other.document
+            && match (&self.lua_draw_runtime, &other.lua_draw_runtime) {
+                (Some(left), Some(right)) => Arc::ptr_eq(left, right),
+                (None, None) => true,
+                _ => false,
+            }
             && self.document_sources == other.document_sources
             && self.select_settings_dest_index == other.select_settings_dest_index
     }
@@ -410,6 +454,7 @@ impl Default for SkinContext {
         Self {
             manifest: default_skin_manifest(),
             document: None,
+            lua_draw_runtime: None,
             document_sources: HashMap::new(),
             select_settings_dest_index: Arc::new(
                 crate::select_settings_dest::SelectSettingsDestIndex::default(),
@@ -424,6 +469,7 @@ impl SkinContext {
         Self {
             manifest,
             document: None,
+            lua_draw_runtime: None,
             document_sources: HashMap::new(),
             select_settings_dest_index: Arc::new(
                 crate::select_settings_dest::SelectSettingsDestIndex::default(),
@@ -442,6 +488,7 @@ impl SkinContext {
         Self {
             manifest,
             document: Some(document),
+            lua_draw_runtime: None,
             document_sources: document_sources
                 .into_iter()
                 .map(|source| (source.source_id.clone(), source))
@@ -457,6 +504,32 @@ impl SkinContext {
 
     pub fn document(&self) -> Option<&SkinDocument> {
         self.document.as_ref()
+    }
+
+    pub fn set_lua_draw_runtime(&mut self, runtime: Option<Arc<dyn SkinLuaDrawRuntime>>) {
+        self.lua_draw_runtime = runtime;
+    }
+
+    fn state_with_lua_runtime(
+        &self,
+        state: &SkinDrawState,
+        text: &SkinTextState<'_>,
+    ) -> SkinDrawState {
+        let mut state = state.clone();
+        let Some(runtime) = self.lua_draw_runtime.as_ref() else {
+            return state;
+        };
+        let enabled_options: Arc<[i32]> = self
+            .document
+            .as_ref()
+            .map(|document| Arc::from(document.enabled_options()))
+            .unwrap_or_else(|| Arc::from([]));
+        state.lua_runtime = Some(SkinLuaRuntimeContext {
+            runtime: Arc::clone(runtime),
+            enabled_options,
+            text_values: Arc::new(lua_main_state_text_values(&state, text)),
+        });
+        state
     }
 
     pub fn set_user_selected_options(&mut self, enabled_options: Vec<i32>) -> bool {
@@ -511,7 +584,8 @@ impl SkinContext {
             return Vec::new();
         };
         let runtime_sources = static_runtime_document_sources(&self.document_sources, state);
-        document.static_render_items(&runtime_sources, state, text)
+        let state = self.state_with_lua_runtime(state, text);
+        document.static_render_items(&runtime_sources, &state, text)
     }
 
     pub fn static_document_items_for_result_state_and_text(
@@ -524,11 +598,16 @@ impl SkinContext {
             return Vec::new();
         };
         let runtime_sources = static_runtime_document_sources(&self.document_sources, state);
-        if let Ok(mut cache) = self.result_render_cache.lock() {
+        let state = self.state_with_lua_runtime(state, text);
+        // A runtime callback may execute arbitrary bounded Lua. Do not hold the
+        // result cache lock across that call.
+        if self.lua_draw_runtime.is_none()
+            && let Ok(mut cache) = self.result_render_cache.lock()
+        {
             cache.prepare_gauge_graph(graph);
             return document.static_render_items_with_graphs_cached(
                 &runtime_sources,
-                state,
+                &state,
                 text,
                 SkinRuntimeGraphs::from_result_graph(graph.as_ref()),
                 Some(&mut cache),
@@ -536,7 +615,7 @@ impl SkinContext {
         }
         document.static_render_items_with_graphs(
             &runtime_sources,
-            state,
+            &state,
             text,
             SkinRuntimeGraphs::from_result_graph(graph.as_ref()),
         )
@@ -560,6 +639,7 @@ impl SkinContext {
             snapshot,
             dynamic_timers,
             &self.select_settings_dest_index,
+            self.lua_draw_runtime.clone(),
         )
     }
 
@@ -613,7 +693,8 @@ impl SkinContext {
             return (Vec::new(), Vec::new(), Vec::new());
         };
         let runtime_sources = static_runtime_document_sources(&self.document_sources, state);
-        document.static_render_items_split(&runtime_sources, state, text)
+        let state = self.state_with_lua_runtime(state, text);
+        document.static_render_items_split(&runtime_sources, &state, text)
     }
 
     pub fn static_document_play_items_split_for_state_and_text(
@@ -627,9 +708,10 @@ impl SkinContext {
             return (Vec::new(), Vec::new(), Vec::new());
         };
         let runtime_sources = static_runtime_document_sources(&self.document_sources, state);
+        let state = self.state_with_lua_runtime(state, text);
         document.static_render_items_split_with_graphs(
             &runtime_sources,
-            state,
+            &state,
             text,
             SkinRuntimeGraphs::from_document_with_play_graphs(
                 document,
@@ -721,7 +803,8 @@ impl SkinContext {
         let Some(document) = self.document.as_ref() else {
             return Vec::new();
         };
-        document.note_group_render_items(note_y, key_mode, state, &self.document_sources)
+        let state = self.state_with_lua_runtime(state, &SkinTextState::default());
+        document.note_group_render_items(note_y, key_mode, &state, &self.document_sources)
     }
 
     pub fn document_gauge_items(&self, gauge: f32, elapsed_ms: i32) -> Option<Vec<SkinRenderItem>> {
@@ -936,6 +1019,10 @@ impl SkinBgaFrame {
 #[derive(Debug, Clone, PartialEq)]
 pub struct SkinDrawState {
     pub elapsed_ms: i32,
+    /// Lua skin のruntime draw callbackにだけ渡すsidecar context。
+    /// JSON skinと通常のcompiled条件では常にNone。
+    #[doc(hidden)]
+    pub lua_runtime: Option<SkinLuaRuntimeContext>,
     /// Lua callback をロード時に変換した runtime flag。DynamicTimerRuntime が注入する。
     pub runtime_flags: HashMap<i32, bool>,
     /// BMZ logical inputs in E1/E2/E3/E4/UI Left/Right/Up/Down order.
@@ -1319,6 +1406,7 @@ impl Default for SkinDrawState {
     fn default() -> Self {
         Self {
             elapsed_ms: 0,
+            lua_runtime: None,
             runtime_flags: HashMap::new(),
             logical_input_held: [false; SKIN_BMZ_INPUT_COUNT],
             logical_input_press_ms: [None; SKIN_BMZ_INPUT_COUNT],
@@ -2349,6 +2437,7 @@ pub trait SkinDocumentRenderExt {
         snapshot: &SelectSnapshot,
         dynamic_timers: Option<&mut DynamicTimerRuntime>,
         settings_dest_index: &crate::select_settings_dest::SelectSettingsDestIndex,
+        lua_draw_runtime: Option<Arc<dyn SkinLuaDrawRuntime>>,
     ) -> Vec<SkinRenderItem>;
 
     fn select_draw_state<'a>(
@@ -3659,6 +3748,7 @@ impl SkinDocumentRenderExt for SkinDocument {
             snapshot,
             None,
             &crate::select_settings_dest::SelectSettingsDestIndex::default(),
+            None,
         )
     }
 
@@ -3668,8 +3758,9 @@ impl SkinDocumentRenderExt for SkinDocument {
         snapshot: &SelectSnapshot,
         dynamic_timers: Option<&mut DynamicTimerRuntime>,
         settings_dest_index: &crate::select_settings_dest::SelectSettingsDestIndex,
+        lua_draw_runtime: Option<Arc<dyn SkinLuaDrawRuntime>>,
     ) -> Vec<SkinRenderItem> {
-        let (state, selected_row) = self.select_draw_state(snapshot, dynamic_timers);
+        let (mut state, selected_row) = self.select_draw_state(snapshot, dynamic_timers);
         let text = SkinTextState {
             player_name: &snapshot.player_name,
             title: select_detail_title(snapshot, selected_row),
@@ -3734,6 +3825,13 @@ impl SkinDocumentRenderExt for SkinDocument {
         let values: HashMap<&str, &SkinValueDef> =
             self.value.iter().map(|value| (value.id.as_str(), value)).collect();
         let enabled_options = self.enabled_options();
+        if let Some(runtime) = lua_draw_runtime {
+            state.lua_runtime = Some(SkinLuaRuntimeContext {
+                runtime,
+                enabled_options: Arc::from(enabled_options.clone()),
+                text_values: Arc::new(lua_main_state_text_values(&state, &text)),
+            });
+        }
         let destinations = self.all_destinations(&enabled_options);
         let has_nearest_f_diff_rank_destination =
             nearest_f_diff_rank_destination_available(&destinations);
@@ -7803,6 +7901,19 @@ fn eval_skin_draw_condition(condition: &str, state: &SkinDrawState) -> bool {
     if condition.is_empty() {
         return true;
     }
+    if let Some(callback_id) =
+        condition.strip_prefix(LUA_DRAW_CALLBACK_PREFIX).and_then(|id| id.parse::<usize>().ok())
+    {
+        let Some(runtime) = state.lua_runtime.as_ref() else {
+            return false;
+        };
+        return runtime.runtime.evaluate_draw(
+            callback_id,
+            state,
+            &runtime.enabled_options,
+            &runtime.text_values,
+        );
+    }
 
     condition.split("||").flat_map(|segment| segment.split(" or ")).any(|branch| {
         branch
@@ -11302,7 +11413,15 @@ fn skin_state_text_with_draw_state(
         }
         _ => {}
     }
-    match text.ref_id {
+    skin_main_state_text(text.ref_id, draw_state, state)
+}
+
+fn skin_main_state_text(
+    ref_id: i32,
+    draw_state: Option<&SkinDrawState>,
+    state: &SkinTextState<'_>,
+) -> String {
+    match ref_id {
         1 => {
             if state.rival.is_empty() {
                 select_play_target_name(state.target)
@@ -11321,17 +11440,17 @@ fn skin_state_text_with_draw_state(
         16 => full_label(state.artist, state.subartist),
         17 => state.table_level.to_string(),
         30 => state.search_word.to_string(),
-        120..=129 => ir_ranking_entry(state.ir_ranking, text.ref_id - 120)
+        120..=129 => ir_ranking_entry(state.ir_ranking, ref_id - 120)
             .map(|entry| entry.player_name.as_str().to_string())
             .unwrap_or_default(),
-        150..=159 => state.course_titles[(text.ref_id - 150) as usize].to_string(),
+        150..=159 => state.course_titles[(ref_id - 150) as usize].to_string(),
         SKIN_TEXT_BMZ_DAILY_RANK => draw_state
             .map(|state| daily_rank_label(&state.player_stats.daily).to_string())
             .unwrap_or_default(),
         SKIN_TEXT_BMZ_DAILY_RECENT_BASE..=SKIN_TEXT_BMZ_DAILY_RECENT_LAST => draw_state
             .map(|state| {
                 state.player_stats.daily.recent_titles
-                    [(text.ref_id - SKIN_TEXT_BMZ_DAILY_RECENT_BASE) as usize]
+                    [(ref_id - SKIN_TEXT_BMZ_DAILY_RECENT_BASE) as usize]
                     .clone()
             })
             .unwrap_or_default(),
@@ -11355,11 +11474,71 @@ fn skin_state_text_with_draw_state(
             }
         }
         1021 => state.ir_ranking.user_name.as_str().to_string(),
-        200..=209 => select_target_name_by_offset(state.target, text.ref_id - 210),
-        210..=219 => select_target_name_by_offset(state.target, text.ref_id - 209),
+        200..=209 => select_target_name_by_offset(state.target, ref_id - 210),
+        210..=219 => select_target_name_by_offset(state.target, ref_id - 209),
         1000 => state.current_folder.to_string(),
         _ => String::new(),
     }
+}
+
+fn lua_main_state_text_values(
+    draw_state: &SkinDrawState,
+    text_state: &SkinTextState<'_>,
+) -> BTreeMap<i32, String> {
+    let mut refs = vec![
+        1,
+        2,
+        3,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16,
+        17,
+        30,
+        1000,
+        1001,
+        1002,
+        1003,
+        1010,
+        1020,
+        1021,
+        1900,
+        SKIN_TEXT_BMZ_DAILY_RANK,
+    ];
+    refs.extend(120..=129);
+    refs.extend(150..=159);
+    refs.extend(200..=219);
+    refs.extend(SKIN_TEXT_BMZ_DAILY_RECENT_BASE..=SKIN_TEXT_BMZ_DAILY_RECENT_LAST);
+    refs.into_iter()
+        .map(|ref_id| (ref_id, skin_main_state_text(ref_id, Some(draw_state), text_state)))
+        .collect()
+}
+
+pub fn lua_main_state_option(
+    option_id: i32,
+    enabled_options: &[i32],
+    state: &SkinDrawState,
+) -> bool {
+    test_skin_op(option_id, enabled_options, state)
+}
+
+pub fn lua_main_state_number(ref_id: i32, state: &SkinDrawState) -> i64 {
+    skin_state_number(ref_id, state).unwrap_or_default()
+}
+
+pub fn lua_main_state_float(ref_id: i32, state: &SkinDrawState) -> f64 {
+    f64::from(skin_state_float_number(ref_id, state).unwrap_or_default())
+}
+
+pub fn lua_main_state_timer(timer_id: i32, state: &SkinDrawState) -> Option<i32> {
+    skin_timer_elapsed_ms(Some(timer_id), state)
+}
+
+pub fn lua_main_state_event_index(event_id: i32, state: &SkinDrawState) -> i32 {
+    skin_state_event_index(event_id, state)
 }
 
 const SELECT_TARGET_IDS: [&str; 13] = [
@@ -19926,6 +20105,7 @@ mod tests {
             &snapshot,
             Some(&mut runtime),
             &crate::select_settings_dest::SelectSettingsDestIndex::default(),
+            None,
         );
 
         assert_eq!(items.len(), 1);
@@ -26479,5 +26659,56 @@ mod tests {
         runtime.reset_for_document(Some(&document));
         runtime.advance(&document, &mut state, 250);
         assert_eq!(state.dynamic_timer_ms[0], None);
+    }
+
+    #[derive(Debug, Default)]
+    struct AlternatingLuaDrawRuntime {
+        calls: std::sync::atomic::AtomicUsize,
+    }
+
+    impl SkinLuaDrawRuntime for AlternatingLuaDrawRuntime {
+        fn evaluate_draw(
+            &self,
+            callback_id: usize,
+            _state: &SkinDrawState,
+            _enabled_options: &[i32],
+            _text_values: &BTreeMap<i32, String>,
+        ) -> bool {
+            assert_eq!(callback_id, 0);
+            (self.calls.fetch_add(1, Ordering::Relaxed) + 1).is_multiple_of(2)
+        }
+    }
+
+    #[test]
+    fn runtime_lua_draw_is_evaluated_for_every_render_without_frame_cache() {
+        let document: SkinDocument = serde_json::from_str(
+            r#"{
+                "w": 100,
+                "h": 100,
+                "source": [{ "id": 1, "path": "panel.png" }],
+                "image": [{ "id": "panel", "src": 1, "w": 10, "h": 10 }],
+                "destination": [{
+                    "id": "panel",
+                    "draw": "bmz:lua_draw_callback:0",
+                    "dst": [{ "x": 0, "y": 0, "w": 10, "h": 10 }]
+                }]
+            }"#,
+        )
+        .unwrap();
+        let runtime = Arc::new(AlternatingLuaDrawRuntime::default());
+        let mut context = SkinContext::from_manifest_and_document(
+            default_skin_manifest(),
+            document,
+            [SkinDocumentTexture {
+                source_id: "1".to_string(),
+                texture: SkinTextureId(41),
+                source_size: SkinImageSize { width: 10.0, height: 10.0 },
+            }],
+        );
+        context.set_lua_draw_runtime(Some(runtime.clone()));
+
+        assert!(context.static_document_items().is_empty());
+        assert_eq!(context.static_document_items().len(), 1);
+        assert_eq!(runtime.calls.load(Ordering::Relaxed), 2);
     }
 }

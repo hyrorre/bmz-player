@@ -7,9 +7,10 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
+use std::{fmt, panic};
 
 use anyhow::{Context, Result, anyhow, bail};
-use mlua::{Function, HookTriggers, Lua, Table, Value, Variadic, VmState};
+use mlua::{Function, HookTriggers, Lua, RegistryKey, Table, Value, Variadic, VmState};
 use serde_json::{Map as JsonMap, Number as JsonNumber, Value as JsonValue};
 
 use bmz_skin_document::{
@@ -22,7 +23,7 @@ use bmz_skin_document::{
 };
 
 use crate::{
-    LoadedLuaSkinValue, LuaLoadRuntimeState, SkinLoadDependencies, SkinLoadWarning,
+    LoadedLuaSkinValue, LuaLoadRuntimeState, LuaMainState, SkinLoadDependencies, SkinLoadWarning,
     SkinLoadedFileDependency,
 };
 
@@ -32,7 +33,9 @@ const LUA_HOOK_INTERVAL: u32 = 1_000;
 const LUA_MAX_TABLE_DEPTH: usize = 64;
 const LUA_MAX_TABLE_ENTRIES: usize = 200_000;
 const LUA_IO_MAX_READ_BYTES: usize = 8 * 1024 * 1024;
+const LUA_MEMORY_LIMIT_BYTES: usize = 256 * 1024 * 1024;
 const TIMER_OFF_VALUE: i32 = i32::MIN;
+pub const LUA_DRAW_CALLBACK_PREFIX: &str = "bmz:lua_draw_callback:";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct LuaRuntimeFlagProbe {
@@ -85,6 +88,161 @@ pub struct ConvertReport {
     pub warnings: Vec<String>,
 }
 
+struct LuaRuntimeCallback {
+    path: String,
+    key: Option<RegistryKey>,
+}
+
+/// A Lua-only sidecar that owns the runtime VM and every callback registry key.
+///
+/// The VM is intentionally not cloneable. Its callbacks are obtained by a second
+/// load after inference has completed, so inference can never mutate runtime
+/// closure state, module state, or the Lua random-number generator.
+pub struct LuaSkinRuntime {
+    lua: Lua,
+    callbacks: Vec<LuaRuntimeCallback>,
+    main_state_key: RegistryKey,
+    instruction_budget: LuaInstructionBudget,
+    skin_path: PathBuf,
+    failed_callbacks: BTreeSet<usize>,
+    failure_log_count: usize,
+}
+
+impl fmt::Debug for LuaSkinRuntime {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("LuaSkinRuntime")
+            .field("skin_path", &self.skin_path)
+            .field("callback_count", &self.callbacks.len())
+            .field("failed_callbacks", &self.failed_callbacks)
+            .finish_non_exhaustive()
+    }
+}
+
+impl LuaSkinRuntime {
+    pub fn callback_count(&self) -> usize {
+        self.callbacks.len()
+    }
+
+    pub fn callback_path(&self, callback_id: usize) -> Option<&str> {
+        self.callbacks.get(callback_id).map(|callback| callback.path.as_str())
+    }
+
+    /// Number of callback failures that produced a diagnostic. Repeated failures
+    /// of the same callback remain log-once and do not increase this value.
+    pub fn failure_log_count(&self) -> usize {
+        self.failure_log_count
+    }
+
+    pub fn evaluate_draw(&mut self, callback_id: usize, state: &dyn LuaMainState) -> bool {
+        self.instruction_budget.begin_runtime_callback();
+        let result = panic::catch_unwind(panic::AssertUnwindSafe(|| {
+            self.evaluate_draw_inner(callback_id, state)
+        }));
+        match result {
+            Ok(Ok(value)) => value,
+            Ok(Err(error)) => {
+                self.log_callback_failure_once(callback_id, &error.to_string());
+                false
+            }
+            Err(_) => {
+                self.log_callback_failure_once(callback_id, "panic while executing Lua callback");
+                false
+            }
+        }
+    }
+
+    fn evaluate_draw_inner(
+        &self,
+        callback_id: usize,
+        state: &dyn LuaMainState,
+    ) -> mlua::Result<bool> {
+        let callback = self.callbacks.get(callback_id).ok_or_else(|| {
+            mlua::Error::runtime(format!("unknown Lua draw callback ID {callback_id}"))
+        })?;
+        let key = callback.key.as_ref().ok_or_else(|| {
+            mlua::Error::runtime(format!(
+                "Lua draw callback was not registered at {}",
+                callback.path
+            ))
+        })?;
+        let function: Function = self.lua.registry_value(key)?;
+        let main_state: Table = self.lua.registry_value(&self.main_state_key)?;
+
+        self.lua.scope(|scope| {
+            const FIELDS: &[&str] = &[
+                "option",
+                "number",
+                "float",
+                "float_number",
+                "text",
+                "timer",
+                "event_index",
+                "gauge_type",
+                "time",
+                "judge",
+            ];
+            let originals = FIELDS
+                .iter()
+                .map(|field| Ok((*field, main_state.get::<Value>(*field)?)))
+                .collect::<mlua::Result<Vec<_>>>()?;
+
+            main_state.set("option", scope.create_function(|_, id: i32| Ok(state.option(id)))?)?;
+            main_state.set("number", scope.create_function(|_, id: i32| Ok(state.number(id)))?)?;
+            let float = scope.create_function(|_, id: i32| Ok(state.float(id)))?;
+            main_state.set("float", float.clone())?;
+            main_state.set("float_number", float)?;
+            main_state.set("text", scope.create_function(|_, id: i32| Ok(state.text(id)))?)?;
+            main_state.set(
+                "timer",
+                scope
+                    .create_function(|_, id: i32| Ok(state.timer(id).unwrap_or(TIMER_OFF_VALUE)))?,
+            )?;
+            main_state.set(
+                "event_index",
+                scope.create_function(|_, id: i32| Ok(state.event_index(id)))?,
+            )?;
+            main_state.set("gauge_type", scope.create_function(|_, ()| Ok(state.gauge_type()))?)?;
+            main_state.set("time", scope.create_function(|_, ()| Ok(state.time_us()))?)?;
+            main_state
+                .set("judge", scope.create_function(|_, index: i32| Ok(state.judge(index)))?)?;
+
+            let result = match function.call::<Value>(()) {
+                Ok(Value::Boolean(value)) => Ok(value),
+                Ok(Value::Nil) => Err(mlua::Error::runtime("Lua draw callback returned nil")),
+                Ok(value) => Err(mlua::Error::runtime(format!(
+                    "Lua draw callback returned {}, expected boolean",
+                    value.type_name()
+                ))),
+                Err(error) => Err(error),
+            };
+
+            // Scoped functions borrow the current frame snapshot. Restore the
+            // persistent load-time stubs before the scope invalidates them.
+            for (field, value) in originals {
+                main_state.set(field, value)?;
+            }
+            result
+        })
+    }
+
+    fn log_callback_failure_once(&mut self, callback_id: usize, error: &str) {
+        if !self.failed_callbacks.insert(callback_id) {
+            return;
+        }
+        self.failure_log_count = self.failure_log_count.saturating_add(1);
+        let path = self.callback_path(callback_id).unwrap_or("<unknown>");
+        tracing::warn!(
+            skin = %self.skin_path.display(),
+            callback_id,
+            field_path = path,
+            classification = "ERROR",
+            error,
+            "Lua draw callback failed; falling back to false"
+        );
+    }
+}
+
 pub fn load_lua_skin_value(
     input: &Path,
     options: &BTreeMap<String, String>,
@@ -92,10 +250,12 @@ pub fn load_lua_skin_value(
     runtime_state: &LuaLoadRuntimeState,
     virtual_io_files: &BTreeMap<String, String>,
 ) -> Result<LoadedLuaSkinValue> {
-    let (value, warnings, files, dependencies) =
+    let ExecutedLuaSkin { value, warnings, files, dependencies, lua_runtime, runtime_draw_paths } =
         execute_lua_skin(input, options, files, runtime_state, virtual_io_files)?;
     Ok(LoadedLuaSkinValue {
         value,
+        lua_runtime,
+        runtime_draw_paths,
         warnings: warnings.into_iter().map(|message| SkinLoadWarning { message }).collect(),
         files,
         dependencies,
@@ -107,6 +267,8 @@ pub fn load_lua_skin_header_value(input: &Path) -> Result<LoadedLuaSkinValue> {
     let (value, warnings) = execute_lua_skin_header(input)?;
     Ok(LoadedLuaSkinValue {
         value,
+        lua_runtime: None,
+        runtime_draw_paths: Vec::new(),
         warnings: warnings.into_iter().map(|message| SkinLoadWarning { message }).collect(),
         files: BTreeMap::new(),
         dependencies: SkinLoadDependencies::default(),
@@ -120,8 +282,14 @@ pub fn convert_lua_skin_to_json(
     options: &BTreeMap<String, String>,
     files: &BTreeMap<String, String>,
 ) -> Result<ConvertReport> {
-    let (json, warnings, _, _) =
+    let ExecutedLuaSkin { value: json, warnings, runtime_draw_paths, .. } =
         execute_lua_skin(input, options, files, &LuaLoadRuntimeState::default(), &BTreeMap::new())?;
+    if !runtime_draw_paths.is_empty() {
+        bail!(
+            "lua-to-json cannot serialize runtime draw callbacks: {}",
+            runtime_draw_paths.join(", ")
+        );
+    }
     if let Some(parent) = output.parent() {
         fs::create_dir_all(parent)
             .with_context(|| format!("failed to create output dir: {}", parent.display()))?;
@@ -179,13 +347,22 @@ fn execute_lua_skin_header(input: &Path) -> Result<(JsonValue, Vec<String>)> {
     Ok((header_json, warnings))
 }
 
+struct ExecutedLuaSkin {
+    value: JsonValue,
+    warnings: Vec<String>,
+    files: BTreeMap<String, String>,
+    dependencies: SkinLoadDependencies,
+    lua_runtime: Option<LuaSkinRuntime>,
+    runtime_draw_paths: Vec<String>,
+}
+
 fn execute_lua_skin(
     input: &Path,
     options: &BTreeMap<String, String>,
     files: &BTreeMap<String, String>,
     runtime_state: &LuaLoadRuntimeState,
     virtual_io_files: &BTreeMap<String, String>,
-) -> Result<(JsonValue, Vec<String>, BTreeMap<String, String>, SkinLoadDependencies)> {
+) -> Result<ExecutedLuaSkin> {
     let input = canonicalize_skin_path(input)
         .with_context(|| format!("failed to canonicalize input: {}", input.display()))?;
     let parent =
@@ -431,9 +608,174 @@ fn execute_lua_skin(
         )
     }));
 
-    let dependencies =
+    let runtime_draw_paths = main_state_probe
+        .lock()
+        .map_err(|_| anyhow!("main_state probe lock poisoned"))?
+        .runtime_draw_paths
+        .clone();
+    let active_skin_options =
+        if use_fallback_options { &fallback_skin_options } else { &skin_options };
+    let lua_runtime = if runtime_draw_paths.is_empty() {
+        None
+    } else {
+        match build_lua_skin_runtime(
+            &input,
+            &root,
+            &source,
+            options,
+            active_skin_options,
+            &skin_files,
+            &skin_file_dependency_names_from_header(&header_json),
+            &skin_offsets,
+            runtime_state,
+            virtual_io_files,
+            &runtime_draw_paths,
+        ) {
+            Ok(runtime) => Some(runtime),
+            Err(error) => {
+                warnings.push(format!(
+                    "ERROR: failed to build Lua draw callback runtime for {}: {error:#}; callbacks fall back to false",
+                    input.display()
+                ));
+                None
+            }
+        }
+    };
+    let mut dependencies =
         dependencies.lock().map_err(|_| anyhow!("lua dependency tracker lock poisoned"))?.clone();
-    Ok((json, warnings, skin_named_files, dependencies))
+    // A cached document cannot safely clone its sidecar VM. Keeping runtime
+    // callback documents out of the document cache preserves registry/VM IDs.
+    dependencies.opaque |= !runtime_draw_paths.is_empty();
+    Ok(ExecutedLuaSkin {
+        value: json,
+        warnings,
+        files: skin_named_files,
+        dependencies,
+        lua_runtime,
+        runtime_draw_paths,
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn build_lua_skin_runtime(
+    input: &Path,
+    root: &Path,
+    source: &str,
+    options: &BTreeMap<String, String>,
+    skin_config_options: &BTreeMap<String, i64>,
+    skin_files: &BTreeMap<String, String>,
+    skin_file_dependency_names: &BTreeMap<String, String>,
+    skin_offsets: &BTreeMap<String, LuaSkinOffsetValue>,
+    runtime_state: &LuaLoadRuntimeState,
+    virtual_io_files: &BTreeMap<String, String>,
+    runtime_draw_paths: &[String],
+) -> Result<LuaSkinRuntime> {
+    let lua = Lua::new();
+    let instruction_budget = install_instruction_limit(&lua);
+    // This is a clean runtime VM. Installing the sandbox and evaluating the
+    // skin creates closures, but no draw callback is invoked here.
+    install_sandbox(
+        &lua,
+        root,
+        options,
+        Some(skin_config_options),
+        skin_files,
+        skin_file_dependency_names,
+        skin_offsets,
+        runtime_state,
+        virtual_io_files,
+        None,
+    )?;
+    let value = lua
+        .load(source)
+        .set_name(input.to_string_lossy().as_ref())
+        .eval::<Value>()
+        .with_context(|| format!("failed to execute runtime Lua skin: {}", input.display()))?;
+
+    let mut callbacks = Vec::with_capacity(runtime_draw_paths.len());
+    for (callback_id, path) in runtime_draw_paths.iter().enumerate() {
+        let callback =
+            lua_value_at_field_path(value.clone(), path).ok().and_then(|value| match value {
+                Value::Function(function) => lua.create_registry_value(function).ok(),
+                _ => None,
+            });
+        if callback.is_some() {
+            tracing::debug!(
+                skin = %input.display(),
+                callback_id,
+                field_path = path,
+                classification = "RUNTIME",
+                "registered Lua draw callback"
+            );
+        } else {
+            tracing::warn!(
+                skin = %input.display(),
+                callback_id,
+                field_path = path,
+                classification = "ERROR",
+                "failed to register Lua draw callback; callback falls back to false"
+            );
+        }
+        callbacks.push(LuaRuntimeCallback { path: path.clone(), key: callback });
+    }
+    let main_state: Table = lua.globals().get("bmz_main_state")?;
+    let main_state_key = lua.create_registry_value(main_state)?;
+    Ok(LuaSkinRuntime {
+        lua,
+        callbacks,
+        main_state_key,
+        instruction_budget,
+        skin_path: input.to_path_buf(),
+        failed_callbacks: BTreeSet::new(),
+        failure_log_count: 0,
+    })
+}
+
+fn lua_value_at_field_path(mut value: Value, path: &str) -> Result<Value> {
+    let bytes = path.as_bytes();
+    if bytes.first() != Some(&b'$') {
+        bail!("invalid Lua callback field path: {path}");
+    }
+    let mut cursor = 1;
+    while cursor < bytes.len() {
+        match bytes[cursor] {
+            b'.' => {
+                cursor += 1;
+                let start = cursor;
+                while cursor < bytes.len() && !matches!(bytes[cursor], b'.' | b'[') {
+                    cursor += 1;
+                }
+                if start == cursor {
+                    bail!("empty Lua callback field in path: {path}");
+                }
+                let key = &path[start..cursor];
+                let Value::Table(table) = value else {
+                    bail!("Lua callback path parent is not a table at {key}: {path}");
+                };
+                value = table.get::<Value>(key)?;
+            }
+            b'[' => {
+                cursor += 1;
+                let start = cursor;
+                while cursor < bytes.len() && bytes[cursor] != b']' {
+                    cursor += 1;
+                }
+                if cursor >= bytes.len() {
+                    bail!("unterminated Lua callback array index: {path}");
+                }
+                let index = path[start..cursor]
+                    .parse::<i64>()
+                    .with_context(|| format!("invalid Lua callback array index: {path}"))?;
+                cursor += 1;
+                let Value::Table(table) = value else {
+                    bail!("Lua callback array parent is not a table at [{index}]: {path}");
+                };
+                value = table.get::<Value>(index)?;
+            }
+            _ => bail!("invalid Lua callback field path: {path}"),
+        }
+    }
+    Ok(value)
 }
 
 fn normalize_lua_skin_audio_paths(
@@ -809,6 +1151,13 @@ impl LuaInstructionBudget {
     fn begin_callback(&self) {
         self.callback_remaining.store(LUA_INSTRUCTION_LIMIT, Ordering::Relaxed);
     }
+
+    fn begin_runtime_callback(&self) {
+        // Runtime has no inference-wide work to preserve. Reset both counters so
+        // every draw invocation gets an independent, bounded instruction slice.
+        self.total_remaining.store(LUA_INSTRUCTION_LIMIT, Ordering::Relaxed);
+        self.begin_callback();
+    }
 }
 
 fn install_instruction_limit(lua: &Lua) -> LuaInstructionBudget {
@@ -1002,6 +1351,7 @@ fn install_sandbox(
     virtual_io_files: &BTreeMap<String, String>,
     load_dependencies: Option<Arc<Mutex<SkinLoadDependencies>>>,
 ) -> Result<Arc<Mutex<MainStateProbe>>> {
+    lua.set_memory_limit(LUA_MEMORY_LIMIT_BYTES).context("failed to set Lua skin memory limit")?;
     let main_state_probe = Arc::new(Mutex::new(MainStateProbe::default()));
     if let Some(load_dependencies) = load_dependencies.clone() {
         let mut probe =
@@ -1114,12 +1464,15 @@ fn install_sandbox(
     })?;
     globals.set("loadfile", loadfile)?;
 
+    let main_state = create_main_state_stub(lua, main_state_probe.clone())?;
+    lua.globals().set("bmz_main_state", main_state)?;
+
     let root = sandbox_root;
     let probe_for_require = main_state_probe.clone();
     let dependencies_for_require = load_dependencies.clone();
     let require = lua.create_function(move |lua, module: String| {
         if module == "main_state" {
-            return create_main_state_stub(lua, probe_for_require.clone());
+            return lua.globals().get("bmz_main_state");
         }
         if module == "timer_util" {
             return create_timer_util_module(lua, probe_for_require.clone());
@@ -1196,6 +1549,7 @@ struct MainStateProbe {
     gauge_value_destination_occurrences: BTreeMap<String, usize>,
     gauge_value_overlay_mode: Option<&'static str>,
     result_panel_default: Option<i32>,
+    runtime_draw_paths: Vec<String>,
     load_dependencies: Option<Arc<Mutex<SkinLoadDependencies>>>,
 }
 
@@ -1238,6 +1592,7 @@ impl Default for MainStateProbe {
             gauge_value_destination_occurrences: BTreeMap::new(),
             gauge_value_overlay_mode: None,
             result_panel_default: None,
+            runtime_draw_paths: Vec::new(),
             load_dependencies: None,
         }
     }
@@ -3587,6 +3942,20 @@ fn lua_table_to_json(
         if matches!(value, Value::Nil) {
             continue;
         }
+        if key == "draw"
+            && let Value::Boolean(value) = &value
+        {
+            object.insert(
+                key.clone(),
+                JsonValue::String(if *value {
+                    "number(0) >= 0".to_string()
+                } else {
+                    "number(0) < 0".to_string()
+                }),
+            );
+            tracing::debug!(field_path = %format!("{path}.{key}"), classification = "STATIC", "classified Lua draw condition");
+            continue;
+        }
         if let Value::Function(function) = &value {
             // Inference deliberately invokes one callback several times with
             // different probe values. Give each callback a fresh bounded
@@ -3814,12 +4183,14 @@ fn lua_table_to_json(
                     main_state_probe,
                 ) {
                     object.insert(key.clone(), JsonValue::String(draw));
+                    tracing::debug!(field_path = %format!("{path}.{key}"), classification = "COMPILED", "classified Lua draw condition");
                     continue;
                 }
                 if let Some(draw) =
                     infer_result_score_draw(function, object_id.as_deref(), main_state_probe)
                 {
                     object.insert(key.clone(), JsonValue::String(draw));
+                    tracing::debug!(field_path = %format!("{path}.{key}"), classification = "COMPILED", "classified Lua draw condition");
                     continue;
                 }
                 if let Some((group, below_border, part)) = &gauge_lead_glow_destination {
@@ -3830,6 +4201,7 @@ fn lua_table_to_json(
                             if *below_border { "below" } else { "above" }
                         )),
                     );
+                    tracing::debug!(field_path = %format!("{path}.{key}"), classification = "COMPILED", "classified Lua draw condition");
                     continue;
                 }
                 if let (Some((graph_kind, lane, Some(kind))), Some(slot)) =
@@ -3839,6 +4211,7 @@ fn lua_table_to_json(
                         key.clone(),
                         JsonValue::String(format!("keylogger_{graph_kind}({lane},{slot},{kind})")),
                     );
+                    tracing::debug!(field_path = %format!("{path}.{key}"), classification = "COMPILED", "classified Lua draw condition");
                     continue;
                 }
                 if let Some(draw) = infer_gauge_value_digit_draw_condition(
@@ -3847,20 +4220,29 @@ fn lua_table_to_json(
                     main_state_probe,
                 ) {
                     object.insert(key.clone(), JsonValue::String(draw));
+                    tracing::debug!(field_path = %format!("{path}.{key}"), classification = "COMPILED", "classified Lua draw condition");
                     continue;
                 }
                 if let Some(draw) =
                     infer_select_score_available_draw_condition(lua, function, main_state_probe)
                 {
                     object.insert(key.clone(), JsonValue::String(draw));
+                    tracing::debug!(field_path = %format!("{path}.{key}"), classification = "COMPILED", "classified Lua draw condition");
                     continue;
                 }
                 if let Some(draw) =
                     infer_boolean_predicate(function, main_state_probe, object_id.as_deref())
                 {
                     object.insert(key.clone(), JsonValue::String(draw));
+                    tracing::debug!(field_path = %format!("{path}.{key}"), classification = "COMPILED", "classified Lua draw condition");
                 } else {
-                    warnings.push(format!("skipping unsupported draw function at {path}.{key}"));
+                    let field_path = format!("{path}.{key}");
+                    let callback_id = register_runtime_draw_path(main_state_probe, &field_path)?;
+                    object.insert(
+                        key.clone(),
+                        JsonValue::String(format!("{LUA_DRAW_CALLBACK_PREFIX}{callback_id}")),
+                    );
+                    tracing::debug!(%field_path, callback_id, classification = "RUNTIME", "classified Lua draw condition");
                 }
                 continue;
             }
@@ -3938,6 +4320,17 @@ fn lua_table_to_json(
     repair_result_table_title_text(path, &mut object);
     repair_result_course_title_text(path, &mut object);
     Ok(JsonValue::Object(object))
+}
+
+fn register_runtime_draw_path(
+    main_state_probe: &Arc<Mutex<MainStateProbe>>,
+    field_path: &str,
+) -> Result<usize> {
+    let mut probe =
+        main_state_probe.lock().map_err(|_| anyhow!("main_state probe lock poisoned"))?;
+    let callback_id = probe.runtime_draw_paths.len();
+    probe.runtime_draw_paths.push(field_path.to_string());
+    Ok(callback_id)
 }
 
 fn infer_gauge_value_digit_draw_condition(
@@ -5819,11 +6212,20 @@ fn infer_constant_draw_at_load(
     main_state_probe: &Arc<Mutex<MainStateProbe>>,
 ) -> Option<String> {
     main_state_probe.lock().ok()?.end_recording();
-    match function.call::<bool>(()).ok() {
-        Some(true) => Some("number(0) >= 0".to_string()),
-        Some(false) => Some("number(0) < 0".to_string()),
+    // A single successful call is not evidence of a constant: closures may
+    // count invocations or mutate module/upvalue state. Repeated disagreement
+    // keeps the function on the runtime fallback path.
+    let call = || match function.call::<Value>(()).ok()? {
+        Value::Boolean(value) => Some(value),
         _ => None,
+    };
+    let first = call()?;
+    let second = call()?;
+    let third = call()?;
+    if first != second || second != third {
+        return None;
     }
+    if first { Some("number(0) >= 0".to_string()) } else { Some("number(0) < 0".to_string()) }
 }
 
 fn infer_constant_text_at_load(

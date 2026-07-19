@@ -11871,6 +11871,7 @@ impl WinitApp {
         let UploadedSkin {
             kind,
             document,
+            lua_runtime,
             fonts,
             prepared,
             audio_assets,
@@ -11957,6 +11958,7 @@ impl WinitApp {
             kind,
             manifest,
             document,
+            lua_runtime,
             document_textures,
             preserve_play_dynamic_timers,
         );

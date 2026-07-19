@@ -23,17 +23,24 @@ pub struct SkinLoadWarning {
     pub message: String,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct LoadedSkinDocument {
     pub document: SkinDocument,
+    /// Lua skin にだけ付属する、シリアライズ不能な callback runtime。
+    ///
+    /// `SkinDocument` には callback ID だけを含む描画条件を残し、Lua VM と
+    /// registry key はこの sidecar の寿命内に閉じ込める。
+    pub lua_runtime: Option<LuaSkinRuntime>,
     pub warnings: Vec<SkinLoadWarning>,
     pub files: BTreeMap<String, String>,
     pub dependencies: SkinLoadDependencies,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct LoadedLuaSkinValue {
     pub value: JsonValue,
+    pub lua_runtime: Option<LuaSkinRuntime>,
+    pub runtime_draw_paths: Vec<String>,
     pub warnings: Vec<SkinLoadWarning>,
     pub files: BTreeMap<String, String>,
     pub dependencies: SkinLoadDependencies,
@@ -78,6 +85,39 @@ pub struct LuaLoadRuntimeState {
     /// document cache invalidate when the supplied result data changes.
     pub virtual_io_files: BTreeMap<String, String>,
 }
+
+/// Runtime callback から参照できる、現在フレームの読み取り専用状態。
+///
+/// 実装側は renderer の snapshot などを借用してよい。Lua へ Rust オブジェクト
+/// 自体を渡さず、callback 実行中にこの accessor を同期的に読むだけにする。
+pub trait LuaMainState {
+    fn option(&self, id: i32) -> bool;
+    fn number(&self, id: i32) -> i64;
+    fn float(&self, id: i32) -> f64;
+    fn text(&self, id: i32) -> String;
+    fn timer(&self, id: i32) -> Option<i32>;
+    fn event_index(&self, id: i32) -> i32;
+    fn gauge_type(&self) -> i32;
+    fn time_us(&self) -> i32;
+
+    fn judge(&self, index: i32) -> i64 {
+        main_state_judge_ref(index).map_or(0, |id| self.number(id))
+    }
+}
+
+fn main_state_judge_ref(index: i32) -> Option<i32> {
+    match index {
+        0 => Some(110),
+        1 => Some(111),
+        2 => Some(112),
+        3 => Some(113),
+        4 => Some(114),
+        5 => Some(420),
+        _ => None,
+    }
+}
+
+pub use lua::LuaSkinRuntime;
 
 pub fn load_beatoraja_json_skin(path: &Path, enabled_options: &[i32]) -> Result<SkinDocument> {
     SkinDocument::load_beatoraja_json_with_options(path, enabled_options)
@@ -136,6 +176,7 @@ pub fn load_lua_skin_with_runtime_state_and_virtual_io_files(
     document.internal_enabled_options = loaded.internal_enabled_options;
     Ok(LoadedSkinDocument {
         document,
+        lua_runtime: loaded.lua_runtime,
         warnings: loaded.warnings,
         files: loaded.files,
         dependencies: loaded.dependencies,
@@ -155,6 +196,7 @@ pub fn load_lr2_csv_skin(
     document.internal_enabled_options = loaded.internal_enabled_options;
     Ok(LoadedSkinDocument {
         document,
+        lua_runtime: None,
         warnings: loaded.warnings,
         files: BTreeMap::new(),
         dependencies: loaded.dependencies,
@@ -3912,5 +3954,215 @@ mod tests {
                     .collect::<Vec<_>>()
             );
         }
+    }
+
+    #[derive(Default)]
+    struct TestLuaMainState {
+        options: BTreeMap<i32, bool>,
+        numbers: BTreeMap<i32, i64>,
+        floats: BTreeMap<i32, f64>,
+        texts: BTreeMap<i32, String>,
+        timers: BTreeMap<i32, i32>,
+    }
+
+    impl LuaMainState for TestLuaMainState {
+        fn option(&self, id: i32) -> bool {
+            self.options.get(&id).copied().unwrap_or(false)
+        }
+
+        fn number(&self, id: i32) -> i64 {
+            self.numbers.get(&id).copied().unwrap_or_default()
+        }
+
+        fn float(&self, id: i32) -> f64 {
+            self.floats.get(&id).copied().unwrap_or_default()
+        }
+
+        fn text(&self, id: i32) -> String {
+            self.texts.get(&id).cloned().unwrap_or_default()
+        }
+
+        fn timer(&self, id: i32) -> Option<i32> {
+            self.timers.get(&id).copied()
+        }
+
+        fn event_index(&self, _id: i32) -> i32 {
+            0
+        }
+
+        fn gauge_type(&self) -> i32 {
+            0
+        }
+
+        fn time_us(&self) -> i32 {
+            0
+        }
+    }
+
+    fn load_runtime_draw_fixture(name: &str, draw_source: &str) -> LoadedSkinDocument {
+        let root = unique_test_dir(name);
+        fs::create_dir_all(&root).unwrap();
+        let path = root.join("skin.luaskin");
+        fs::write(
+            &path,
+            format!(
+                r#"
+                local main_state = require("main_state")
+                {draw_source}
+                return {{
+                    type = 0,
+                    destination = {{{{
+                        id = "runtime",
+                        draw = draw,
+                        dst = {{{{ x = 0, y = 0, w = 1, h = 1 }}}}
+                    }}}}
+                }}
+                "#
+            ),
+        )
+        .unwrap();
+        load_lua_skin(&path, SkinKind::Play, &BTreeMap::new(), &BTreeMap::new()).unwrap()
+    }
+
+    fn only_destination_draw(loaded: &LoadedSkinDocument) -> &str {
+        let bmz_skin_document::DestinationListEntry::Single(destination) =
+            &loaded.document.destination[0]
+        else {
+            panic!("expected single destination")
+        };
+        &destination.draw
+    }
+
+    #[test]
+    fn lua_static_boolean_draw_stays_static() {
+        let loaded = load_runtime_draw_fixture("bmz-skin-static-bool-draw", "local draw = true");
+        assert_eq!(only_destination_draw(&loaded), "number(0) >= 0");
+        assert!(loaded.lua_runtime.is_none());
+    }
+
+    #[test]
+    fn lua_inferable_draw_keeps_compiled_path() {
+        let loaded = load_runtime_draw_fixture(
+            "bmz-skin-compiled-draw",
+            "local draw = function() return main_state.option(46) end",
+        );
+        assert_eq!(only_destination_draw(&loaded), "option(46)");
+        assert!(loaded.lua_runtime.is_none());
+    }
+
+    #[test]
+    fn lua_stateful_draw_uses_clean_runtime_vm_and_runs_each_call() {
+        let mut loaded = load_runtime_draw_fixture(
+            "bmz-skin-stateful-runtime-draw",
+            r#"
+            local count = 0
+            local draw = function()
+                count = count + 1
+                return count % 2 == 0
+            end
+            "#,
+        );
+        assert_eq!(only_destination_draw(&loaded), "bmz:lua_draw_callback:0");
+        let runtime = loaded.lua_runtime.as_mut().expect("runtime fallback");
+        let state = TestLuaMainState::default();
+        // Inference invoked its own closure repeatedly. Runtime must still begin
+        // at the untouched count=0 state and must not cache between calls.
+        assert!(!runtime.evaluate_draw(0, &state));
+        assert!(runtime.evaluate_draw(0, &state));
+        assert!(!runtime.evaluate_draw(0, &state));
+    }
+
+    #[test]
+    fn lua_runtime_draw_reads_updated_main_state_each_call() {
+        let mut loaded = load_runtime_draw_fixture(
+            "bmz-skin-runtime-current-state",
+            r#"
+            local draw = function()
+                if main_state.number(999) == 0 then
+                    error("analysis values are intentionally unsupported")
+                end
+                return main_state.option(46)
+                    and main_state.number(71) == 5
+                    and main_state.float(72) > 1.5
+                    and main_state.text(10) == "updated"
+                    and main_state.timer(2) == 123
+            end
+            "#,
+        );
+        assert_eq!(only_destination_draw(&loaded), "bmz:lua_draw_callback:0");
+        let runtime = loaded.lua_runtime.as_mut().expect("runtime fallback");
+        let mut state = TestLuaMainState::default();
+        state.numbers.insert(999, 1);
+        assert!(!runtime.evaluate_draw(0, &state));
+        state.options.insert(46, true);
+        state.numbers.insert(71, 5);
+        state.floats.insert(72, 2.0);
+        state.texts.insert(10, "updated".to_string());
+        state.timers.insert(2, 123);
+        assert!(runtime.evaluate_draw(0, &state));
+        state.texts.insert(10, "changed".to_string());
+        assert!(!runtime.evaluate_draw(0, &state));
+    }
+
+    #[test]
+    fn lua_runtime_draw_errors_and_invalid_values_are_log_once_false() {
+        for (name, source) in [
+            ("bmz-skin-runtime-error", "local draw = function() error('expected test error') end"),
+            ("bmz-skin-runtime-invalid-return", "local draw = function() return 'not boolean' end"),
+            ("bmz-skin-runtime-nil-return", "local draw = function() return nil end"),
+            (
+                "bmz-skin-runtime-missing-main-state-api",
+                "local draw = function() return main_state.missing_api() end",
+            ),
+        ] {
+            let mut loaded = load_runtime_draw_fixture(name, source);
+            let runtime = loaded.lua_runtime.as_mut().expect("runtime fallback");
+            let state = TestLuaMainState::default();
+            assert!(!runtime.evaluate_draw(0, &state));
+            assert!(!runtime.evaluate_draw(0, &state));
+            assert_eq!(runtime.failure_log_count(), 1);
+        }
+    }
+
+    #[test]
+    fn lua_runtime_draw_instruction_limit_falls_back_to_false() {
+        let mut loaded = load_runtime_draw_fixture(
+            "bmz-skin-runtime-instruction-limit",
+            "local draw = function() while true do end end",
+        );
+        let runtime = loaded.lua_runtime.as_mut().expect("runtime fallback");
+        assert!(!runtime.evaluate_draw(0, &TestLuaMainState::default()));
+        assert_eq!(runtime.failure_log_count(), 1);
+    }
+
+    #[test]
+    fn lua_to_json_rejects_runtime_draw_callbacks() {
+        let root = unique_test_dir("bmz-skin-runtime-json-convert");
+        fs::create_dir_all(&root).unwrap();
+        let input = root.join("skin.luaskin");
+        let output = root.join("skin.json");
+        fs::write(
+            &input,
+            r#"
+            local count = 0
+            return {
+                destination = {{
+                    id = "runtime",
+                    draw = function()
+                        count = count + 1
+                        return count % 2 == 0
+                    end,
+                    dst = {{ x = 0, y = 0, w = 1, h = 1 }}
+                }}
+            }
+            "#,
+        )
+        .unwrap();
+        let error =
+            convert_lua_skin_to_json_file(&input, &output, &BTreeMap::new(), &BTreeMap::new())
+                .unwrap_err();
+        assert!(error.to_string().contains("cannot serialize runtime draw callbacks"));
+        assert!(error.to_string().contains("$.destination[1].draw"));
+        assert!(!output.exists());
     }
 }

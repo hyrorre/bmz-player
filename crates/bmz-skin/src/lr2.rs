@@ -206,6 +206,8 @@ pub fn load_lr2_csv_skin_value(
     let internal_enabled_options = builder.internal_enabled_options();
     Ok(LoadedLuaSkinValue {
         value: builder.finish(),
+        lua_runtime: None,
+        runtime_draw_paths: Vec::new(),
         warnings,
         files: BTreeMap::new(),
         dependencies,

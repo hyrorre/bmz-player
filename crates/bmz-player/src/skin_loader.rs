@@ -14,11 +14,14 @@ use bmz_render::bitmap_font::{BitmapFont, load_bitmap_font};
 use bmz_render::plan::TextureId;
 use bmz_render::renderer::{GpuUploader, PreparedTexture, Renderer};
 use bmz_render::skin::{
-    DestinationListEntry, SkinContext, SkinDocument, SkinDocumentTexture, SkinFilepathDef,
-    SkinImageSize, SkinManifest, SkinTextureId, default_skin_manifest_for_root,
+    DestinationListEntry, SkinContext, SkinDocument, SkinDocumentTexture, SkinDrawState,
+    SkinFilepathDef, SkinImageSize, SkinLuaDrawRuntime, SkinManifest, SkinTextureId,
+    default_skin_manifest_for_root, lua_main_state_event_index, lua_main_state_float,
+    lua_main_state_number, lua_main_state_option, lua_main_state_timer,
 };
 use bmz_skin::{
-    LuaLoadRuntimeState, SkinKind as DecodeSkinKind, SkinLoadDependencies, SkinLoadedFileDependency,
+    LuaLoadRuntimeState, LuaMainState, LuaSkinRuntime, SkinKind as DecodeSkinKind,
+    SkinLoadDependencies, SkinLoadedFileDependency,
 };
 use rayon::prelude::*;
 
@@ -160,6 +163,7 @@ pub fn default_play_skin_document_path_from_paths(
 pub struct DecodedSkin {
     pub kind: SkinKind,
     pub document: SkinDocument,
+    pub lua_runtime: Option<LuaSkinRuntime>,
     pub fonts: Vec<DecodedFont>,
     pub sources: Vec<DecodedSource>,
     pub audio_assets: Vec<DecodedSkinAudio>,
@@ -586,11 +590,86 @@ pub struct PreparedSource {
 pub struct UploadedSkin {
     pub kind: SkinKind,
     pub document: SkinDocument,
+    pub lua_runtime: Option<LuaSkinRuntime>,
     pub fonts: Vec<DecodedFont>,
     pub prepared: Vec<PreparedSource>,
     pub audio_assets: Vec<DecodedSkinAudio>,
     pub decode_stats: SkinDecodeStats,
     pub upload_stats: SkinUploadStats,
+}
+
+#[derive(Debug)]
+struct LuaSkinDrawRuntimeAdapter {
+    // `take` before evaluation makes it impossible to hold this mutex while Lua
+    // executes. Renderer evaluation is single-threaded; a concurrent/reentrant
+    // attempt observes None and safely falls back to false.
+    runtime: Mutex<Option<LuaSkinRuntime>>,
+}
+
+impl LuaSkinDrawRuntimeAdapter {
+    fn new(runtime: LuaSkinRuntime) -> Self {
+        Self { runtime: Mutex::new(Some(runtime)) }
+    }
+}
+
+struct RenderLuaMainState<'a> {
+    state: &'a SkinDrawState,
+    enabled_options: &'a [i32],
+    text_values: &'a BTreeMap<i32, String>,
+}
+
+impl LuaMainState for RenderLuaMainState<'_> {
+    fn option(&self, id: i32) -> bool {
+        lua_main_state_option(id, self.enabled_options, self.state)
+    }
+
+    fn number(&self, id: i32) -> i64 {
+        lua_main_state_number(id, self.state)
+    }
+
+    fn float(&self, id: i32) -> f64 {
+        lua_main_state_float(id, self.state)
+    }
+
+    fn text(&self, id: i32) -> String {
+        self.text_values.get(&id).cloned().unwrap_or_default()
+    }
+
+    fn timer(&self, id: i32) -> Option<i32> {
+        lua_main_state_timer(id, self.state)
+    }
+
+    fn event_index(&self, id: i32) -> i32 {
+        lua_main_state_event_index(id, self.state)
+    }
+
+    fn gauge_type(&self) -> i32 {
+        self.state.gauge_type
+    }
+
+    fn time_us(&self) -> i32 {
+        self.state.elapsed_ms.saturating_mul(1_000)
+    }
+}
+
+impl SkinLuaDrawRuntime for LuaSkinDrawRuntimeAdapter {
+    fn evaluate_draw(
+        &self,
+        callback_id: usize,
+        state: &SkinDrawState,
+        enabled_options: &[i32],
+        text_values: &BTreeMap<i32, String>,
+    ) -> bool {
+        let Some(mut runtime) = self.runtime.lock().ok().and_then(|mut slot| slot.take()) else {
+            return false;
+        };
+        let provider = RenderLuaMainState { state, enabled_options, text_values };
+        let result = runtime.evaluate_draw(callback_id, &provider);
+        if let Ok(mut slot) = self.runtime.lock() {
+            *slot = Some(runtime);
+        }
+        result
+    }
 }
 
 #[derive(Debug, Clone, Default)]
@@ -623,7 +702,15 @@ pub fn upload_decoded_skin_with_texture_cache(
     texture_cache: Option<&SharedSkinGpuTextureCache>,
 ) -> UploadedSkin {
     let upload_start = Instant::now();
-    let DecodedSkin { kind, document, fonts, sources, audio_assets, stats: decode_stats } = decoded;
+    let DecodedSkin {
+        kind,
+        document,
+        lua_runtime,
+        fonts,
+        sources,
+        audio_assets,
+        stats: decode_stats,
+    } = decoded;
     let mut upload_stats = SkinUploadStats::default();
     let prepared = sources
         .into_iter()
@@ -718,7 +805,16 @@ pub fn upload_decoded_skin_with_texture_cache(
         })
         .collect();
     upload_stats.upload_us = elapsed_us(upload_start);
-    UploadedSkin { kind, document, fonts, prepared, audio_assets, decode_stats, upload_stats }
+    UploadedSkin {
+        kind,
+        document,
+        lua_runtime,
+        fonts,
+        prepared,
+        audio_assets,
+        decode_stats,
+        upload_stats,
+    }
 }
 
 const MAX_SKIN_AUDIO_ASSETS: usize = 64;
@@ -980,8 +1076,12 @@ pub fn decode_beatoraja_skin_with_options_and_runtime_state_and_caches(
     installed_fonts: Option<HashMap<String, SkinFontCacheKey>>,
 ) -> Result<DecodedSkin> {
     let document_start = Instant::now();
-    let LoadedSkinDocumentForDecode { mut document, files: resolved_files, cache_status } =
-        load_skin_document(skin_path, kind, options, files, runtime_state, document_cache)?;
+    let LoadedSkinDocumentForDecode {
+        mut document,
+        lua_runtime,
+        files: resolved_files,
+        cache_status,
+    } = load_skin_document(skin_path, kind, options, files, runtime_state, document_cache)?;
     let document_us = elapsed_us(document_start);
     // フォント ID は scene 横断的に Renderer のグローバルマップに登録されるので、
     // play / select / result で同じ "0" 等が衝突する。namespace を付与して隔離する。
@@ -1358,7 +1458,7 @@ pub fn decode_beatoraja_skin_with_options_and_runtime_state_and_caches(
         })
         .collect();
 
-    Ok(DecodedSkin { kind, document, fonts, sources, audio_assets, stats })
+    Ok(DecodedSkin { kind, document, lua_runtime, fonts, sources, audio_assets, stats })
 }
 
 fn lr2_builtin_source_asset(path: &str) -> Option<RgbaImageAsset> {
@@ -1608,6 +1708,7 @@ fn load_skin_video_first_frame_rgba(path: &Path) -> Result<RgbaImageAsset> {
 
 struct LoadedSkinDocumentForDecode {
     document: SkinDocument,
+    lua_runtime: Option<LuaSkinRuntime>,
     files: BTreeMap<String, String>,
     cache_status: DocumentCacheStatus,
 }
@@ -1643,6 +1744,7 @@ fn load_skin_document(
                 Some(enabled_options_from_selections(&document, options));
             return Ok(LoadedSkinDocumentForDecode {
                 document,
+                lua_runtime: None,
                 files: resolved_files,
                 cache_status: DocumentCacheStatus::Hit,
             });
@@ -1664,6 +1766,7 @@ fn load_skin_document(
         }
         return Ok(LoadedSkinDocumentForDecode {
             document: loaded.document,
+            lua_runtime: loaded.lua_runtime,
             files: loaded.files,
             cache_status: loaded.cache_status,
         });
@@ -1683,6 +1786,7 @@ fn load_skin_document(
                 Some(enabled_options_from_selections(&document, options));
             return Ok(LoadedSkinDocumentForDecode {
                 document,
+                lua_runtime: None,
                 files: resolved_files,
                 cache_status: DocumentCacheStatus::Hit,
             });
@@ -1709,6 +1813,7 @@ fn load_skin_document(
         }
         return Ok(LoadedSkinDocumentForDecode {
             document: loaded.document,
+            lua_runtime: loaded.lua_runtime,
             files: loaded.files,
             cache_status: loaded.cache_status,
         });
@@ -1723,6 +1828,7 @@ fn load_skin_document(
     loaded.cache_status = cache_status;
     Ok(LoadedSkinDocumentForDecode {
         document: loaded.document,
+        lua_runtime: loaded.lua_runtime,
         files: loaded.files,
         cache_status: loaded.cache_status,
     })
@@ -1730,6 +1836,7 @@ fn load_skin_document(
 
 struct LoadedSkinDocumentWithDependencies {
     document: SkinDocument,
+    lua_runtime: Option<LuaSkinRuntime>,
     files: BTreeMap<String, String>,
     dependencies: SkinLoadDependencies,
     cache_status: DocumentCacheStatus,
@@ -1742,60 +1849,64 @@ fn load_skin_document_uncached(
     files: &BTreeMap<String, String>,
     runtime_state: &LuaLoadRuntimeState,
 ) -> Result<LoadedSkinDocumentWithDependencies> {
-    let (mut document, mut resolved_files, dependencies) = if is_lua_skin_path(skin_path) {
-        // Lua スキンはオプション選択 (名前 -> 選択肢名) とファイル選択
-        // (filepath 定義名 -> 相対パス) をそのまま渡す。
-        let virtual_io_files = lua_virtual_io_files(runtime_state);
-        let loaded = bmz_skin::load_lua_skin_with_runtime_state_and_virtual_io_files(
-            skin_path,
-            options,
-            files,
-            runtime_state,
-            &virtual_io_files,
-        )
-        .with_context(|| format!("failed to load lua skin: {}", skin_path.display()))?;
-        for warning in loaded.warnings {
-            tracing::warn!(
-                path = %skin_path.display(),
-                kind = ?kind,
-                warning = %warning.message,
-                "lua skin load warning"
-            );
-        }
-        (loaded.document, loaded.files, loaded.dependencies)
-    } else if is_lr2_skin_path(skin_path) {
-        let loaded = bmz_skin::load_lr2_csv_skin(skin_path, decode_skin_kind(kind), options, files)
-            .with_context(|| format!("failed to load lr2 csv skin: {}", skin_path.display()))?;
-        for warning in loaded.warnings {
-            tracing::warn!(
-                path = %skin_path.display(),
-                kind = ?kind,
-                warning = %warning.message,
-                "lr2 csv skin load warning"
-            );
-        }
-        (loaded.document, BTreeMap::new(), loaded.dependencies)
-    } else {
-        let document =
-            bmz_skin::load_beatoraja_json_skin_with_defaults(skin_path).with_context(|| {
-                format!("failed to load beatoraja json skin: {}", skin_path.display())
-            })?;
-        if options.is_empty() {
-            (document, BTreeMap::new(), SkinLoadDependencies::default())
+    let (mut document, lua_runtime, mut resolved_files, dependencies) =
+        if is_lua_skin_path(skin_path) {
+            // Lua スキンはオプション選択 (名前 -> 選択肢名) とファイル選択
+            // (filepath 定義名 -> 相対パス) をそのまま渡す。
+            let virtual_io_files = lua_virtual_io_files(runtime_state);
+            let loaded = bmz_skin::load_lua_skin_with_runtime_state_and_virtual_io_files(
+                skin_path,
+                options,
+                files,
+                runtime_state,
+                &virtual_io_files,
+            )
+            .with_context(|| format!("failed to load lua skin: {}", skin_path.display()))?;
+            for warning in loaded.warnings {
+                tracing::warn!(
+                    path = %skin_path.display(),
+                    kind = ?kind,
+                    warning = %warning.message,
+                    "lua skin load warning"
+                );
+            }
+            (loaded.document, loaded.lua_runtime, loaded.files, loaded.dependencies)
+        } else if is_lr2_skin_path(skin_path) {
+            let loaded =
+                bmz_skin::load_lr2_csv_skin(skin_path, decode_skin_kind(kind), options, files)
+                    .with_context(|| {
+                        format!("failed to load lr2 csv skin: {}", skin_path.display())
+                    })?;
+            for warning in loaded.warnings {
+                tracing::warn!(
+                    path = %skin_path.display(),
+                    kind = ?kind,
+                    warning = %warning.message,
+                    "lr2 csv skin load warning"
+                );
+            }
+            (loaded.document, None, BTreeMap::new(), loaded.dependencies)
         } else {
-            // JSON スキンは property 定義から選択肢の op コード列を組み立て、
-            // それを有効オプションとして再デコードする。
-            let enabled = enabled_options_from_selections(&document, options);
-            let document =
-                bmz_skin::load_beatoraja_json_skin(skin_path, &enabled).with_context(|| {
-                    format!(
-                        "failed to load beatoraja json skin with options: {}",
-                        skin_path.display()
-                    )
+            let document = bmz_skin::load_beatoraja_json_skin_with_defaults(skin_path)
+                .with_context(|| {
+                    format!("failed to load beatoraja json skin: {}", skin_path.display())
                 })?;
-            (document, BTreeMap::new(), SkinLoadDependencies::default())
-        }
-    };
+            if options.is_empty() {
+                (document, None, BTreeMap::new(), SkinLoadDependencies::default())
+            } else {
+                // JSON スキンは property 定義から選択肢の op コード列を組み立て、
+                // それを有効オプションとして再デコードする。
+                let enabled = enabled_options_from_selections(&document, options);
+                let document = bmz_skin::load_beatoraja_json_skin(skin_path, &enabled)
+                    .with_context(|| {
+                        format!(
+                            "failed to load beatoraja json skin with options: {}",
+                            skin_path.display()
+                        )
+                    })?;
+                (document, None, BTreeMap::new(), SkinLoadDependencies::default())
+            }
+        };
     for (name, selected) in files {
         resolved_files.insert(name.clone(), selected.clone());
     }
@@ -1805,6 +1916,7 @@ fn load_skin_document_uncached(
     document.user_selected_options = Some(enabled_options_from_selections(&document, options));
     Ok(LoadedSkinDocumentWithDependencies {
         document,
+        lua_runtime,
         files: resolved_files,
         dependencies,
         cache_status: DocumentCacheStatus::Disabled,
@@ -1955,7 +2067,8 @@ pub fn install_decoded_skin(
     decoded: DecodedSkin,
     default_manifest: SkinManifest,
 ) -> Result<()> {
-    let DecodedSkin { kind, document, fonts, sources, audio_assets: _, stats: _ } = decoded;
+    let DecodedSkin { kind, document, lua_runtime, fonts, sources, audio_assets: _, stats: _ } =
+        decoded;
 
     for font in fonts {
         install_decoded_font(renderer, font);
@@ -1964,7 +2077,15 @@ pub fn install_decoded_skin(
     let document_textures: Vec<SkinDocumentTexture> =
         sources.into_iter().filter_map(|source| install_decoded_source(renderer, source)).collect();
 
-    set_decoded_skin_context(renderer, kind, default_manifest, document, document_textures, false);
+    set_decoded_skin_context(
+        renderer,
+        kind,
+        default_manifest,
+        document,
+        lua_runtime,
+        document_textures,
+        false,
+    );
     Ok(())
 }
 
@@ -2048,11 +2169,15 @@ pub fn set_decoded_skin_context(
     kind: SkinKind,
     default_manifest: SkinManifest,
     document: SkinDocument,
+    lua_runtime: Option<LuaSkinRuntime>,
     document_textures: Vec<SkinDocumentTexture>,
     preserve_play_dynamic_timers: bool,
 ) {
-    let context =
+    let mut context =
         SkinContext::from_manifest_and_document(default_manifest, document, document_textures);
+    context.set_lua_draw_runtime(lua_runtime.map(|runtime| {
+        Arc::new(LuaSkinDrawRuntimeAdapter::new(runtime)) as Arc<dyn SkinLuaDrawRuntime>
+    }));
     match kind {
         SkinKind::Play => {
             renderer.set_play_skin_context(context, preserve_play_dynamic_timers);
