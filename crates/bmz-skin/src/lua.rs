@@ -6934,10 +6934,9 @@ fn infer_ir_ranking_score_rate_value_expr(
     let object_id = object_id?;
     let (slot, part) = if let Some(slot) = object_id.strip_prefix("ir_scorerate_dot") {
         (slot.parse::<i32>().ok()?, "fraction")
-    } else if let Some(slot) = object_id.strip_prefix("ir_scorerate") {
-        (slot.parse::<i32>().ok()?, "integer")
     } else {
-        return None;
+        let slot = object_id.strip_prefix("ir_scorerate")?;
+        (slot.parse::<i32>().ok()?, "integer")
     };
     if !(1..=10).contains(&slot) {
         return None;
