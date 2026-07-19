@@ -35,6 +35,7 @@ use crate::config::profile_config::{
     default_hispeed_step_fhs, default_hispeed_step_nhs, normalize_hispeed_step,
 };
 use crate::ln_policy::LnPolicySetting;
+use crate::logging::{LogBuffer, LogEntry, LogLevel as TracingLogLevel};
 use crate::paths::{AppPaths, resolve_app_paths};
 use crate::practice_ui::{PracticePanelContext, build_practice_panel};
 use crate::profile_cmd;
@@ -281,6 +282,7 @@ pub struct DebugInfo {
 /// `EguiLayer::run` の 1 フレーム入力。
 pub struct EguiRunContext<'a, 'practice> {
     pub info: &'a DebugInfo,
+    pub log_buffer: &'a LogBuffer,
     pub app_config: &'a mut AppConfig,
     pub profile_config: &'a mut ProfileConfig,
     pub skin_meta: &'a SkinConfigMeta,
@@ -357,6 +359,10 @@ pub struct EguiLayer {
     visible: bool,
     /// デバッグ表示パネルの開閉状態。
     show_debug: bool,
+    /// デバッグ表示内のログ最低表示レベル。
+    debug_log_filter: DebugLogFilter,
+    /// デバッグ表示内のログを末尾へ追従するか。
+    debug_log_autoscroll: bool,
     /// 右上 FPS オーバーレイの表示状態。
     show_fps: bool,
     /// 本体設定パネルの開閉状態。
@@ -693,6 +699,8 @@ impl EguiLayer {
             state,
             visible: false,
             show_debug: false,
+            debug_log_filter: DebugLogFilter::default(),
+            debug_log_autoscroll: true,
             show_fps,
             show_settings: false,
             show_profile_settings: false,
@@ -763,6 +771,7 @@ impl EguiLayer {
     pub fn run(&mut self, window: &Window, context: EguiRunContext<'_, '_>) -> EguiOutput {
         let EguiRunContext {
             info,
+            log_buffer,
             app_config,
             profile_config,
             skin_meta,
@@ -851,7 +860,14 @@ impl EguiLayer {
                     app_paths,
                     license_notice_text,
                 );
-                build_debug_panel(ctx, show_debug, info);
+                build_debug_panel(
+                    ctx,
+                    show_debug,
+                    info,
+                    log_buffer,
+                    &mut self.debug_log_filter,
+                    &mut self.debug_log_autoscroll,
+                );
                 let settings_actions = build_settings_panel(
                     ctx,
                     window,
@@ -1607,9 +1623,72 @@ fn build_course_preview_panel(ctx: &egui::Context, preview: &SelectCourseRow) {
         });
 }
 
-/// FPS / フレーム時間 / シーン / 解像度を表示するデバッグパネル。
-fn build_debug_panel(ctx: &egui::Context, open: &mut bool, info: &DebugInfo) {
-    sized_panel_window("デバッグ表示", ctx, open, 320.0, 200.0, egui::pos2(16.0, 140.0)).show(
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+enum DebugLogFilter {
+    All,
+    Error,
+    Warn,
+    #[default]
+    Info,
+    Debug,
+    Trace,
+}
+
+impl DebugLogFilter {
+    const ALL: [Self; 6] =
+        [Self::All, Self::Error, Self::Warn, Self::Info, Self::Debug, Self::Trace];
+
+    const fn label(self) -> &'static str {
+        match self {
+            Self::All => "全て",
+            Self::Error => "ERROR 以上",
+            Self::Warn => "WARN 以上",
+            Self::Info => "INFO 以上",
+            Self::Debug => "DEBUG 以上",
+            Self::Trace => "TRACE 以上",
+        }
+    }
+
+    const fn minimum_level(self) -> Option<TracingLogLevel> {
+        match self {
+            Self::All => None,
+            Self::Error => Some(TracingLogLevel::Error),
+            Self::Warn => Some(TracingLogLevel::Warn),
+            Self::Info => Some(TracingLogLevel::Info),
+            Self::Debug => Some(TracingLogLevel::Debug),
+            Self::Trace => Some(TracingLogLevel::Trace),
+        }
+    }
+
+    fn allows(self, level: TracingLogLevel) -> bool {
+        self.minimum_level().is_none_or(|minimum| level >= minimum)
+    }
+}
+
+fn log_level_color(level: TracingLogLevel) -> egui::Color32 {
+    match level {
+        TracingLogLevel::Trace => egui::Color32::GRAY,
+        TracingLogLevel::Debug => egui::Color32::LIGHT_BLUE,
+        TracingLogLevel::Info => egui::Color32::LIGHT_GREEN,
+        TracingLogLevel::Warn => egui::Color32::YELLOW,
+        TracingLogLevel::Error => egui::Color32::LIGHT_RED,
+    }
+}
+
+fn format_log_entry(entry: &LogEntry) -> String {
+    format!("[{}] {} {}", entry.level.as_str(), entry.target, entry.message)
+}
+
+/// FPS / フレーム時間 / シーン / 解像度 / tracing ログを表示するデバッグパネル。
+fn build_debug_panel(
+    ctx: &egui::Context,
+    open: &mut bool,
+    info: &DebugInfo,
+    log_buffer: &LogBuffer,
+    debug_log_filter: &mut DebugLogFilter,
+    debug_log_autoscroll: &mut bool,
+) {
+    sized_panel_window("デバッグ表示", ctx, open, 620.0, 500.0, egui::pos2(16.0, 140.0)).show(
         ctx,
         |ui| {
             scrollable_window_content(ui, |ui| {
@@ -1637,6 +1716,70 @@ fn build_debug_panel(ctx: &egui::Context, open: &mut bool, info: &DebugInfo) {
                     );
                     ui.end_row();
                 });
+
+                ui.separator();
+                ui.horizontal(|ui| {
+                    ui.label("ログ");
+                    egui::ComboBox::from_id_salt("debug_log_filter")
+                        .selected_text(debug_log_filter.label())
+                        .show_ui(ui, |ui| {
+                            for filter in DebugLogFilter::ALL {
+                                ui.selectable_value(debug_log_filter, filter, filter.label());
+                            }
+                        });
+                    ui.checkbox(debug_log_autoscroll, "自動スクロール");
+                });
+
+                let entries = log_buffer.snapshot();
+                let visible_entries = entries
+                    .iter()
+                    .filter(|entry| debug_log_filter.allows(entry.level))
+                    .collect::<Vec<_>>();
+                let mut copy_requested = false;
+                let mut clear_requested = false;
+                ui.horizontal(|ui| {
+                    ui.small(format!("表示 {}/{} 件", visible_entries.len(), entries.len()));
+                    if ui.button("コピー").clicked() {
+                        copy_requested = true;
+                    }
+                    if ui.button("クリア").clicked() {
+                        clear_requested = true;
+                    }
+                });
+
+                egui::ScrollArea::vertical()
+                    .id_salt("debug_log_scroll")
+                    .max_height(300.0)
+                    .auto_shrink([false, false])
+                    .stick_to_bottom(*debug_log_autoscroll)
+                    .show(ui, |ui| {
+                        if visible_entries.is_empty() {
+                            ui.weak("表示できるログはありません");
+                        }
+                        for entry in visible_entries {
+                            ui.horizontal_wrapped(|ui| {
+                                ui.colored_label(
+                                    log_level_color(entry.level),
+                                    entry.level.as_str(),
+                                );
+                                ui.weak(format!("{}:", entry.target));
+                                ui.label(&entry.message);
+                            });
+                        }
+                    });
+
+                if copy_requested {
+                    let text = entries
+                        .iter()
+                        .filter(|entry| debug_log_filter.allows(entry.level))
+                        .map(format_log_entry)
+                        .collect::<Vec<_>>()
+                        .join("\n");
+                    ui.ctx().copy_text(text);
+                }
+                if clear_requested {
+                    log_buffer.clear();
+                }
             });
         },
     );
@@ -5512,6 +5655,25 @@ mod tests {
         assert!(scene_restricts_settings("Decide"));
         assert!(scene_restricts_settings("Play"));
         assert!(!scene_restricts_settings("Result"));
+    }
+
+    #[test]
+    fn debug_log_filter_keeps_selected_level_and_more_severe_entries() {
+        assert!(!DebugLogFilter::Info.allows(TracingLogLevel::Debug));
+        assert!(DebugLogFilter::Info.allows(TracingLogLevel::Info));
+        assert!(DebugLogFilter::Info.allows(TracingLogLevel::Error));
+        assert!(DebugLogFilter::All.allows(TracingLogLevel::Trace));
+    }
+
+    #[test]
+    fn debug_log_copy_text_includes_level_target_and_message() {
+        let entry = LogEntry {
+            level: TracingLogLevel::Warn,
+            target: "bmz_player::test".to_string(),
+            message: "slow frame".to_string(),
+        };
+
+        assert_eq!(format_log_entry(&entry), "[WARN] bmz_player::test slow frame");
     }
 
     #[test]

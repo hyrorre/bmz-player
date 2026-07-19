@@ -94,6 +94,7 @@ use crate::input::shared::SharedInputBackend;
 use crate::input::winit::{
     key_event_to_device_input, physical_key_to_control, physical_key_to_device_input,
 };
+use crate::logging::LogBuffer;
 use crate::practice_ui::PracticePanelContext;
 use crate::screens::course_session::{ActiveCourseSession, CourseEntryResult, CourseResultSummary};
 use crate::screens::key_config_edit::KeyConfigEditSession;
@@ -187,6 +188,13 @@ pub async fn run() -> Result<()> {
 }
 
 pub async fn run_with_options(options: AppOptions) -> Result<()> {
+    run_with_options_and_log_buffer(options, LogBuffer::default()).await
+}
+
+pub async fn run_with_options_and_log_buffer(
+    options: AppOptions,
+    log_buffer: LogBuffer,
+) -> Result<()> {
     let mut boot = bootstrap::bootstrap()?;
 
     fetch_startup_difficulty_tables(&mut boot).await;
@@ -214,8 +222,15 @@ pub async fn run_with_options(options: AppOptions) -> Result<()> {
 
     spawn_ir_sync_worker(&boot);
 
-    let mut app =
-        Box::new(WinitApp::new(boot, options, None, None, shutdown_requested, event_proxy)?);
+    let mut app = Box::new(WinitApp::new(
+        boot,
+        options,
+        None,
+        None,
+        shutdown_requested,
+        event_proxy,
+        log_buffer,
+    )?);
     tracing::info!("starting winit event loop");
     event_loop.run_app(app.as_mut()).context("winit event loop failed")
 }
@@ -713,6 +728,8 @@ struct WinitApp {
     /// 本体設定 / スキン設定 / デバッグ表示用の egui レイヤ。
     /// ウィンドウ生成時に初期化される。
     egui: Option<EguiLayer>,
+    /// デバッグ表示へ渡す bounded tracing ログバッファ。
+    log_buffer: LogBuffer,
     /// 現在ウィンドウへ適用済みのウィンドウモード。
     /// config 側との差分検出でライブ反映の要否を判定する。
     applied_window_mode: WindowMode,
@@ -2501,6 +2518,7 @@ impl WinitApp {
         system_audio: Option<crate::audio::SystemAudio>,
         shutdown_requested: Arc<AtomicBool>,
         event_proxy: EventLoopProxy<AppUserEvent>,
+        log_buffer: LogBuffer,
     ) -> Result<Self> {
         let mut boot = boot;
         if let Some(cli_renderer) = options.renderer.clone() {
@@ -2806,6 +2824,7 @@ impl WinitApp {
             play_e3_held: false,
             play_exit_hold_started_at: None,
             egui: None,
+            log_buffer,
             applied_window_mode: initial_window_mode,
             focused: true,
             discard_gamepad_output_until_resynced: false,
@@ -12929,6 +12948,7 @@ impl WinitApp {
                 result_ir: result_ir_panel,
                 profile_root: &self.boot.profile_paths.root_dir,
                 app_paths: &self.boot.app_paths,
+                log_buffer: &self.log_buffer,
                 update_dialog,
                 obs_connection_status: &obs_connection_status,
                 connected_gamepads: &connected_gamepads,
