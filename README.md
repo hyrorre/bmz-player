@@ -13,7 +13,7 @@ Supported OS
 Supported Format
 - BMS (5K / 7K / 10K / 14K)
 - PMS (9K)
-- Qwilight/UE-style BMS (4K / 6K / 8K)
+- Qwilight / UE-style BMS (4K / 6K / 8K)
 - Base 62 BMS (62進数BMS)
 - BMSON
 
@@ -27,11 +27,12 @@ Features
 - auto-adjust (自動判定調整)
 - normalizing volume per-chart (譜面ごとの自動音量調整)
 - internet ranking (BMZ IR)
+- selectable rule-mode (beatoraja / LR2oraja / DX MODE)
+- advanced selectable ln-mode (AUTO(LN) / AUTO(CN) / AUTO(HCN) / FORCE(LN) / FORCE(CN) / FORCE(HCN))
 - on-demand preview generation
   - #PREVIEW 定義や preview.wav(.ogg) がない曲のプレビューを再生することができます
 - Discord Rich Presence
 - OBS WebSocket control integration
-
 **Don't use this application for playing copyrighted contents.**
 
 ## Recommended Skins
