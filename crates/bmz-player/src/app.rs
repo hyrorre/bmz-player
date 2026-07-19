@@ -4421,6 +4421,7 @@ impl WinitApp {
         } else {
             select_option_panel_for_holds(self.start_held, self.select_held)
         };
+        let previous_panel = self.select_option_panel;
         let now = Instant::now();
         if transition_select_option_panel(
             &mut self.select_option_panel,
@@ -4430,6 +4431,11 @@ impl WinitApp {
             now,
         ) {
             self.reset_select_analog_scroll();
+            if let Some(sound_type) =
+                select_option_panel_sound_for_transition(previous_panel, panel)
+            {
+                self.play_system_sound(sound_type);
+            }
         }
     }
 
@@ -10882,7 +10888,10 @@ impl WinitApp {
         let Some(manager) = &self.system_sound else {
             return;
         };
-        let sound_type = crate::system_sound::SoundType::ResultClose;
+        let sound_type = result_exit_sound_for_context(
+            self.active_course.is_some() || self.finished_course.is_some(),
+            manager.has_sound(crate::system_sound::SoundType::CourseClose),
+        );
         manager.play_with_master_gain_and_fade_out(
             sound_type,
             system_sound_volume_from_mix(&self.boot.profile_config.audio_mix, sound_type),
@@ -14107,7 +14116,14 @@ impl WinitApp {
 
     fn play_course_result_entry_sound(&self, clear_type: bmz_core::clear::ClearType) {
         use crate::system_sound::SoundType;
-        for sound in [SoundType::ResultClear, SoundType::ResultFail, SoundType::ResultClose] {
+        for sound in [
+            SoundType::ResultClear,
+            SoundType::ResultFail,
+            SoundType::ResultClose,
+            SoundType::CourseClear,
+            SoundType::CourseFail,
+            SoundType::CourseClose,
+        ] {
             self.stop_system_sound(sound);
         }
         let preferred = course_result_entry_sound_for_clear(clear_type);
@@ -14347,6 +14363,19 @@ fn course_result_entry_sound_for_clear(
         SoundType::CourseFail
     } else {
         SoundType::CourseClear
+    }
+}
+
+fn result_exit_sound_for_context(
+    is_course_result: bool,
+    course_close_available: bool,
+) -> crate::system_sound::SoundType {
+    use crate::system_sound::SoundType;
+
+    if is_course_result && course_close_available {
+        SoundType::CourseClose
+    } else {
+        SoundType::ResultClose
     }
 }
 
@@ -17693,6 +17722,19 @@ fn select_option_panel_for_holds(start_held: bool, select_held: bool) -> u8 {
         (true, false) => 1,
         (false, true) => 2,
         (false, false) => 0,
+    }
+}
+
+fn select_option_panel_sound_for_transition(
+    current_panel: u8,
+    next_panel: u8,
+) -> Option<crate::system_sound::SoundType> {
+    use crate::system_sound::SoundType;
+
+    match (current_panel == 0, next_panel == 0) {
+        (true, false) => Some(SoundType::OptionOpen),
+        (false, true) => Some(SoundType::OptionClose),
+        _ => None,
     }
 }
 
@@ -23742,6 +23784,17 @@ mod tests {
     }
 
     #[test]
+    fn select_option_panel_transition_plays_open_and_close_sounds() {
+        use crate::system_sound::SoundType;
+
+        assert_eq!(select_option_panel_sound_for_transition(0, 1), Some(SoundType::OptionOpen));
+        assert_eq!(select_option_panel_sound_for_transition(3, 0), Some(SoundType::OptionClose));
+        assert_eq!(select_option_panel_sound_for_transition(1, 2), None);
+        assert_eq!(select_option_panel_sound_for_transition(2, 3), None);
+        assert_eq!(select_option_panel_sound_for_transition(0, 0), None);
+    }
+
+    #[test]
     fn select_option_panel_transition_tracks_independent_off_timers() {
         let base = Instant::now();
         let mut current = 1;
@@ -25673,6 +25726,15 @@ mod tests {
         assert_eq!(result_entry_sound_for_clear(ClearType::Normal), SoundType::ResultClear);
         assert_eq!(course_result_entry_sound_for_clear(ClearType::Failed), SoundType::CourseFail);
         assert_eq!(course_result_entry_sound_for_clear(ClearType::Normal), SoundType::CourseClear);
+    }
+
+    #[test]
+    fn result_exit_sound_prefers_course_close_for_course_results() {
+        use crate::system_sound::SoundType;
+
+        assert_eq!(result_exit_sound_for_context(false, false), SoundType::ResultClose);
+        assert_eq!(result_exit_sound_for_context(true, true), SoundType::CourseClose);
+        assert_eq!(result_exit_sound_for_context(true, false), SoundType::ResultClose);
     }
 
     #[test]
