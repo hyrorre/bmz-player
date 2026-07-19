@@ -558,6 +558,7 @@ fn copy_screenshot_to_clipboard(width: u32, height: u32, rgba: &[u8], _png: &[u8
         .context("failed to copy screenshot to clipboard")
 }
 
+#[cfg(any(windows, test))]
 fn screenshot_dibv5(width: u32, height: u32, rgba: &[u8]) -> Result<Vec<u8>> {
     const HEADER_SIZE: usize = 124;
     const BI_BITFIELDS: u32 = 3;
