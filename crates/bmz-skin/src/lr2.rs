@@ -2702,12 +2702,14 @@ mod tests {
     }
 
     #[test]
-    fn lr2_destination_preserves_custom_offset_id() {
+    fn lr2_destination_preserves_angle_and_custom_offset_id() {
         let mut values = [0; 22];
+        values[14] = -90;
         values[21] = 32;
 
         let destination = destination_def_with_default_offsets("image", &values, 1080, &[], &[]);
 
+        assert_eq!(destination["dst"][0]["angle"], -90);
         assert_eq!(destination["offset"], 32);
     }
 

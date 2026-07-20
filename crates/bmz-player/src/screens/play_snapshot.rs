@@ -1039,11 +1039,10 @@ fn scratch_angle_degrees(visual_time: TimeUs, scratch_index: i32, input_delta_ms
         elapsed_ms
     };
     let angle_ms = (base_ms + input_delta_ms).rem_euclid(SCRATCH_ANGLE_PERIOD_MS);
-    let beatoraja_angle = (angle_ms / SCRATCH_ANGLE_DEGREES_DIVISOR) as i32;
-    // beatoraja's SpriteBatch rotates in bottom-origin coordinates, while BMZ's
-    // rotated-image vertices use top-origin coordinates. Negate the scratch
-    // offset so the turntable's visible rotation direction matches beatoraja.
-    (-beatoraja_angle).rem_euclid(360)
+    // Keep the offset in beatoraja's bottom-origin angle convention. The shared
+    // skin renderer converts it to BMZ's top-origin convention together with
+    // destination angles after applying all offsets.
+    (angle_ms / SCRATCH_ANGLE_DEGREES_DIVISOR) as i32
 }
 
 fn end_of_note_time(chart: &PlayableChart) -> TimeUs {
@@ -1440,6 +1439,7 @@ fn side_suffix(side: TimingSide) -> &'static str {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
     use std::sync::Arc;
 
     use bmz_chart::hash::compute_chart_identity;
@@ -1450,6 +1450,10 @@ mod tests {
     use bmz_core::lane::{KeyMode, Lane};
     use bmz_core::time::TimeUs;
     use bmz_gameplay::judge::model::JudgementEvent;
+    use bmz_render::skin::{
+        SkinDocument, SkinDocumentRenderExt, SkinDocumentTexture, SkinDrawState, SkinImageSize,
+        SkinRenderItem, SkinTextureId,
+    };
 
     use crate::config::profile_config::ProfileConfig;
     use crate::screens::play_session::{PlaySessionOptions, build_game_session};
@@ -2499,7 +2503,7 @@ mod tests {
 
         assert_eq!(
             snapshot.skin_offsets.get(SCRATCH_ANGLE_OFFSET_1P),
-            Some(SkinOffsetValue { x: 1, y: 2, w: 3, h: 4, r: 280, a: -6 })
+            Some(SkinOffsetValue { x: 1, y: 2, w: 3, h: 4, r: 80, a: -6 })
         );
     }
 
@@ -2515,7 +2519,7 @@ mod tests {
 
         assert_eq!(
             snapshot.skin_offsets.get(SCRATCH_ANGLE_OFFSET_1P),
-            Some(SkinOffsetValue { r: 280, ..SkinOffsetValue::default() })
+            Some(SkinOffsetValue { r: 80, ..SkinOffsetValue::default() })
         );
     }
 
@@ -2531,7 +2535,7 @@ mod tests {
 
         assert_eq!(
             snapshot.skin_offsets.get(SCRATCH_ANGLE_OFFSET_1P),
-            Some(SkinOffsetValue { r: 280, ..SkinOffsetValue::default() })
+            Some(SkinOffsetValue { r: 80, ..SkinOffsetValue::default() })
         );
     }
 
@@ -2548,7 +2552,7 @@ mod tests {
 
         assert_eq!(
             snapshot.skin_offsets.get(SCRATCH_ANGLE_OFFSET_1P),
-            Some(SkinOffsetValue { r: 307, ..SkinOffsetValue::default() })
+            Some(SkinOffsetValue { r: 53, ..SkinOffsetValue::default() })
         );
     }
 
@@ -2565,19 +2569,19 @@ mod tests {
 
         assert_eq!(
             snapshot.skin_offsets.get(SCRATCH_ANGLE_OFFSET_1P),
-            Some(SkinOffsetValue { r: 254, ..SkinOffsetValue::default() })
+            Some(SkinOffsetValue { r: 106, ..SkinOffsetValue::default() })
         );
     }
 
     #[test]
-    fn scratch_angle_offsets_match_beatoraja_1p_and_2p_visual_directions() {
+    fn scratch_angle_offsets_match_beatoraja_1p_and_2p_values() {
         let first_frame = TimeUs(6_000_000);
         let next_frame = TimeUs(6_006_000);
 
-        assert_eq!(scratch_angle_degrees(first_frame, 0, 0), 280);
-        assert_eq!(scratch_angle_degrees(next_frame, 0, 0), 281);
-        assert_eq!(scratch_angle_degrees(first_frame, 1, 0), 80);
-        assert_eq!(scratch_angle_degrees(next_frame, 1, 0), 79);
+        assert_eq!(scratch_angle_degrees(first_frame, 0, 0), 80);
+        assert_eq!(scratch_angle_degrees(next_frame, 0, 0), 79);
+        assert_eq!(scratch_angle_degrees(first_frame, 1, 0), 280);
+        assert_eq!(scratch_angle_degrees(next_frame, 1, 0), 281);
     }
 
     #[test]
@@ -2589,8 +2593,69 @@ mod tests {
 
         let snapshot = build_render_snapshot(&session, TimeUs(6_000_000), &[], None);
 
-        assert_eq!(snapshot.skin_offsets.get(SCRATCH_ANGLE_OFFSET_1P).unwrap().r, 280);
-        assert_eq!(snapshot.skin_offsets.get(SCRATCH_ANGLE_OFFSET_2P).unwrap().r, 80);
+        assert_eq!(snapshot.skin_offsets.get(SCRATCH_ANGLE_OFFSET_1P).unwrap().r, 80);
+        assert_eq!(snapshot.skin_offsets.get(SCRATCH_ANGLE_OFFSET_2P).unwrap().r, 280);
+    }
+
+    #[test]
+    fn scratch_offsets_render_with_beatoraja_rotation_after_skin_conversion() {
+        let profile = ProfileConfig::new_default("default", "Default", 1);
+        let mut chart = chart();
+        chart.metadata.key_mode = KeyMode::K14;
+        let session = build_game_session(Arc::new(chart), &profile, PlaySessionOptions::default());
+        let document: SkinDocument = serde_json::from_str(
+            r#"
+            {
+                "type": 2,
+                "w": 100,
+                "h": 100,
+                "source": [{ "id": "src", "path": "turntable.png" }],
+                "image": [{ "id": "turntable", "src": "src", "w": 10, "h": 10 }],
+                "destination": [
+                    {
+                        "id": "turntable",
+                        "offset": 1,
+                        "dst": [{ "x": 0, "y": 0, "w": 10, "h": 10 }]
+                    },
+                    {
+                        "id": "turntable",
+                        "offset": 2,
+                        "dst": [{ "x": 20, "y": 0, "w": 10, "h": 10 }]
+                    }
+                ]
+            }
+            "#,
+        )
+        .unwrap();
+        let sources = HashMap::from([(
+            "src".to_string(),
+            SkinDocumentTexture {
+                source_id: "src".to_string(),
+                texture: SkinTextureId(42),
+                source_size: SkinImageSize { width: 10.0, height: 10.0 },
+            },
+        )]);
+
+        for (visual_time, expected_angles) in
+            [(TimeUs(6_000_000), [-80, -280]), (TimeUs(6_006_000), [-79, -281])]
+        {
+            let snapshot = build_render_snapshot(&session, visual_time, &[], None);
+            let state = SkinDrawState {
+                key_mode: KeyMode::K14,
+                skin_offsets: snapshot.skin_offsets,
+                ..SkinDrawState::default()
+            };
+            let angles = document
+                .static_image_render_items(&sources, &state)
+                .iter()
+                .map(|item| match item {
+                    SkinRenderItem::RotatedImage { angle_deg, .. } => *angle_deg as i32,
+                    _ => panic!("turntable should be rotated"),
+                })
+                .collect::<Vec<_>>();
+
+            assert_eq!(angles, expected_angles);
+        }
     }
 
     #[test]

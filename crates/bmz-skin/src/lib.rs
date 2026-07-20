@@ -535,6 +535,43 @@ mod tests {
     }
 
     #[test]
+    fn lua_skin_preserves_destination_angle_for_shared_renderer_conversion() {
+        let root = unique_test_dir("bmz-skin-lua-rotation");
+        fs::create_dir_all(&root).unwrap();
+        fs::write(
+            root.join("play7.luaskin"),
+            r#"
+            return {
+                type = 0,
+                destination = {
+                    { id = "turntable", offset = 1, dst = {{ x = 1, y = 2, w = 3, h = 4, angle = -90 }} }
+                }
+            }
+            "#,
+        )
+        .unwrap();
+
+        let loaded = load_lua_skin(
+            &root.join("play7.luaskin"),
+            SkinKind::Play,
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+        )
+        .unwrap();
+        let bmz_skin_document::DestinationListEntry::Single(destination) =
+            &loaded.document.destination[0]
+        else {
+            panic!("destination should be single");
+        };
+        let bmz_skin_document::SkinDstEntry::Frame(frame) = &destination.dst[0] else {
+            panic!("destination frame should be static");
+        };
+
+        assert_eq!(frame.angle, Some(-90));
+        assert_eq!(destination.offset, 1);
+    }
+
+    #[test]
     fn lua_skin_runtime_option_is_available_during_load() {
         let root = unique_test_dir("bmz-skin-lua-runtime-option");
         fs::create_dir_all(&root).unwrap();
