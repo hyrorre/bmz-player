@@ -5492,7 +5492,7 @@ impl SkinDocumentRenderExt for SkinDocument {
             display_signed_number_digits(
                 number,
                 max_digits,
-                signed_value_zero_pad(value, padding),
+                signed_value_padding(value, padding),
                 value.divx.max(1) as u32,
             )
         } else {
@@ -5545,7 +5545,7 @@ impl SkinDocumentRenderExt for SkinDocument {
             SignedNumberRender::Signed(row_order) => display_signed_number_digits_with_row_order(
                 number,
                 max_digits,
-                signed_value_zero_pad(value, padding),
+                signed_value_padding(value, padding),
                 divx as u32,
                 row_order,
             ),
@@ -7721,17 +7721,17 @@ fn number_padding(value: &SkinValueDef) -> NumberPadding {
         return NumberPadding::Zero;
     }
     let image_cells = value.divx.max(1).saturating_mul(value.divy.max(1));
-    if !ref_id_is_signed(value.ref_id) && image_cells % 10 != 0 {
+    if !value_layout_is_signed(value) && !ref_id_is_signed(value.ref_id) && image_cells % 10 != 0 {
         return NumberPadding::Blank;
     }
     NumberPadding::None
 }
 
-fn signed_value_zero_pad(value: &SkinValueDef, padding: NumberPadding) -> bool {
+fn signed_value_padding(value: &SkinValueDef, padding: NumberPadding) -> NumberPadding {
     if matches!(value.ref_id, 152 | 153 | 172 | 175 | 178) {
-        return false;
+        return NumberPadding::None;
     }
-    padding.is_zero_padding()
+    padding
 }
 
 fn display_number_digits(value: i64, max_digits: usize, padding: NumberPadding) -> Vec<u8> {
@@ -7766,13 +7766,13 @@ fn display_number_digits(value: i64, max_digits: usize, padding: NumberPadding) 
 fn display_signed_number_digits(
     value: i64,
     max_digits: usize,
-    zero_pad: bool,
+    padding: NumberPadding,
     divx: u32,
 ) -> Vec<u8> {
     display_signed_number_digits_with_row_order(
         value,
         max_digits,
-        zero_pad,
+        padding,
         divx,
         SignedNumberRowOrder::PositiveFirst,
     )
@@ -7781,7 +7781,7 @@ fn display_signed_number_digits(
 fn display_signed_number_digits_with_row_order(
     value: i64,
     max_digits: usize,
-    zero_pad: bool,
+    padding: NumberPadding,
     divx: u32,
     row_order: SignedNumberRowOrder,
 ) -> Vec<u8> {
@@ -7800,27 +7800,32 @@ fn display_signed_number_digits_with_row_order(
     let abs = value.unsigned_abs();
     let abs_text = abs.to_string();
     let numeric_width = max_digits.saturating_sub(1);
-    let trimmed = if zero_pad {
-        if numeric_width == 0 {
-            String::new()
+    let trimmed = if matches!(padding, NumberPadding::None) {
+        if abs_text.len() > max_digits {
+            abs_text[abs_text.len() - max_digits..].to_string()
         } else {
-            let padded = format!("{:0width$}", abs, width = numeric_width);
-            if padded.len() > numeric_width {
-                padded[padded.len() - numeric_width..].to_string()
-            } else {
-                padded
-            }
+            abs_text
         }
-    } else if abs_text.len() > max_digits {
-        abs_text[abs_text.len() - max_digits..].to_string()
+    } else if abs_text.len() > numeric_width {
+        abs_text[abs_text.len() - numeric_width..].to_string()
     } else {
         abs_text
     };
-    let sign_visible = zero_pad || trimmed.len() < max_digits;
+    let sign_visible = !matches!(padding, NumberPadding::None) || trimmed.len() < max_digits;
     let mut digits = Vec::with_capacity(max_digits);
     if sign_visible {
         // beatoraja の `keta` (`digit`) は符号セルを含む総枠数。
         digits.push(11u8 + row_offset);
+    }
+    if sign_visible && numeric_width > trimmed.len() {
+        let fill = match padding {
+            NumberPadding::Zero => 0,
+            NumberPadding::Blank => 10,
+            NumberPadding::None => u8::MAX,
+        };
+        if fill != u8::MAX {
+            digits.extend(std::iter::repeat_n(fill + row_offset, numeric_width - trimmed.len()));
+        }
     }
     for byte in trimmed.bytes() {
         if byte.is_ascii_digit() {
@@ -21722,37 +21727,55 @@ mod tests {
     fn display_signed_number_digits_uses_sign_cell_and_row_offset() {
         // divx=12, divy=2 のレイアウト想定
         // beatoraja の digit=5 は符号を含むため、数値部分は4枠。
-        let positive = display_signed_number_digits(12, 5, true, 12);
+        let positive = display_signed_number_digits(12, 5, NumberPadding::Zero, 12);
         assert_eq!(positive, vec![11, 0, 0, 1, 2]);
         assert!(positive.iter().all(|&d| d < 12), "positive digits should be in row 0");
 
         // 負数 -12 (max_digits=5): row 1 (offset=12)
-        let negative = display_signed_number_digits(-12, 5, true, 12);
+        let negative = display_signed_number_digits(-12, 5, NumberPadding::Zero, 12);
         assert_eq!(negative, vec![23, 12, 12, 13, 14]);
         assert!(negative.iter().all(|&d| d >= 12), "negative digits should be in row 1");
 
         // 0 は正側
-        let zero = display_signed_number_digits(0, 5, true, 12);
+        let zero = display_signed_number_digits(0, 5, NumberPadding::Zero, 12);
         assert_eq!(zero, vec![11, 0, 0, 0, 0]);
         assert!(zero.iter().all(|&d| d < 12));
 
         // WMII IR差分: digit=5, zeropadding=4 は符号1枠 + 数値4枠。
-        assert_eq!(display_signed_number_digits(2284, 5, true, 12), vec![11, 2, 2, 8, 4]);
-        assert_eq!(display_signed_number_digits(-9, 5, true, 12), vec![23, 12, 12, 12, 21]);
+        assert_eq!(
+            display_signed_number_digits(2284, 5, NumberPadding::Zero, 12),
+            vec![11, 2, 2, 8, 4]
+        );
+        assert_eq!(
+            display_signed_number_digits(-9, 5, NumberPadding::Zero, 12),
+            vec![23, 12, 12, 12, 21]
+        );
+
+        // LR2の符号付き数値は省略されたzeropaddingを2として扱い、符号を先頭に固定する。
+        assert_eq!(display_signed_number_digits(9, 3, NumberPadding::Blank, 12), vec![11, 10, 9]);
+        assert_eq!(display_signed_number_digits(-9, 3, NumberPadding::Blank, 12), vec![23, 22, 21]);
+        assert_eq!(display_signed_number_digits(13, 3, NumberPadding::Blank, 12), vec![11, 1, 3]);
+        assert_eq!(
+            display_signed_number_digits(-13, 3, NumberPadding::Blank, 12),
+            vec![23, 13, 15]
+        );
 
         // ゼロ埋めなしで全枠が数値に埋まる場合、beatoraja同様に符号枠は出ない。
-        assert_eq!(display_signed_number_digits(12_345, 5, false, 12), vec![1, 2, 3, 4, 5]);
+        assert_eq!(
+            display_signed_number_digits(12_345, 5, NumberPadding::None, 12),
+            vec![1, 2, 3, 4, 5]
+        );
 
         // NUMBER_DIFF_NEXTRANK (154) も同じ符号セル付き mimage レイアウトを使う。
-        assert_eq!(display_signed_number_digits(-34, 4, false, 12), vec![23, 15, 16]);
+        assert_eq!(display_signed_number_digits(-34, 4, NumberPadding::None, 12), vec![23, 15, 16]);
         assert!(ref_id_is_signed(154));
-        assert_eq!(display_signed_number_digits(34, 4, false, 12), vec![11, 3, 4]);
-        assert_eq!(display_signed_number_digits(0, 4, false, 12), vec![11, 0]);
+        assert_eq!(display_signed_number_digits(34, 4, NumberPadding::None, 12), vec![11, 3, 4]);
+        assert_eq!(display_signed_number_digits(0, 4, NumberPadding::None, 12), vec![11, 0]);
         assert_eq!(
             display_signed_number_digits_with_row_order(
                 -34,
                 4,
-                false,
+                NumberPadding::None,
                 12,
                 SignedNumberRowOrder::NegativeFirst
             ),
@@ -21762,7 +21785,7 @@ mod tests {
             display_signed_number_digits_with_row_order(
                 0,
                 4,
-                false,
+                NumberPadding::None,
                 12,
                 SignedNumberRowOrder::NegativeFirst
             ),
@@ -21792,8 +21815,11 @@ mod tests {
         };
         let score_diff_padding = number_padding(&score_diff_value);
         assert!(score_diff_padding.is_zero_padding());
-        assert!(!signed_value_zero_pad(&score_diff_value, score_diff_padding));
-        assert_eq!(display_signed_number_digits(16, 5, false, 12), vec![11, 1, 6]);
+        assert_eq!(
+            signed_value_padding(&score_diff_value, score_diff_padding),
+            NumberPadding::None
+        );
+        assert_eq!(display_signed_number_digits(16, 5, NumberPadding::None, 12), vec![11, 1, 6]);
 
         let select_detail =
             SkinDrawState { select_screen: true, select_option_panel: 3, ..Default::default() };

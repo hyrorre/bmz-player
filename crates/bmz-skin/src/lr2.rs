@@ -642,6 +642,16 @@ impl<'a> CsvBuilder<'a> {
             self.current = None;
             return;
         };
+        let cells = region.divx.saturating_mul(region.divy);
+        let signed_layout = cells >= 24 && cells % 24 == 0;
+        let digit = if signed_layout { values[13].saturating_add(1) } else { values[13] };
+        let zeropadding = if line.fields.get(14).is_some_and(|value| !value.is_empty()) {
+            values[14]
+        } else if signed_layout || cells % 10 != 0 {
+            2
+        } else {
+            0
+        };
         let id = self.alloc_id("lr2-number");
         self.values.push(json!({
             "id": id,
@@ -656,8 +666,9 @@ impl<'a> CsvBuilder<'a> {
             "timer": region.timer,
             "ref": values[11],
             "align": values[12],
-            "digit": values[13],
-            "zeropadding": values[15],
+            "digit": digit,
+            "zeropadding": zeropadding,
+            "space": values[15],
         }));
         self.set_current(id);
     }
@@ -2201,7 +2212,30 @@ mod tests {
             )
             .unwrap();
 
-        assert_eq!(builder.values.first().unwrap()["ref"], json!(426));
+        let value = builder.values.first().unwrap();
+        assert_eq!(value["ref"], json!(426));
+        assert_eq!(value["digit"], json!(4));
+        assert_eq!(value["zeropadding"], json!(0));
+        assert_eq!(value["space"], json!(1));
+    }
+
+    #[test]
+    fn lr2_signed_number_reserves_sign_digit_and_defaults_to_blank_padding() {
+        let files = BTreeMap::new();
+        let skin_path = unique_test_dir("bmz-lr2-signed-number").join("play.lr2skin");
+        let mut builder = CsvBuilder::new(&skin_path, Header::default(), &files);
+        builder.add_source("numbers.png");
+        builder
+            .execute(
+                &parse_csv_line("#SRC_NUMBER,0,0,0,0,168,30,12,2,0,0,12,0,2,,,,,,,,")
+                    .expect("valid SRC_NUMBER"),
+            )
+            .unwrap();
+
+        let value = builder.values.first().unwrap();
+        assert_eq!(value["digit"], json!(3));
+        assert_eq!(value["zeropadding"], json!(2));
+        assert_eq!(value["space"], json!(0));
     }
 
     #[test]
