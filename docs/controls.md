@@ -57,16 +57,16 @@ favorite 操作は invisible を使わず、登録済みなら解除、未登録
 | KEY1 | 決定 / 開く / 曲開始 | 1P RANDOM 次 | - | BGA 切替 |
 | KEY2 | 戻る / 閉じる | 1P RANDOM 前 | - | GAUGE AUTO SHIFT 切替 |
 | KEY3 | 決定 / 開く / 曲開始 | GAUGE 次 | - | JUDGE AUTO ADJUST 切替 |
-| KEY4 | 戻る / 閉じる | GAUGE 前 | - | DURATION -1 ms |
+| KEY4 | 戻る / 閉じる | GAUGE 前 | - | GREEN NUMBER -1 |
 | KEY5 | 決定 / 開く / 曲開始 | HS-FIX 次 | ASSIST 次 | VISUAL OFFSET -1 ms |
-| KEY6 | 戻る / 閉じる | DP OPTION 次 | - | DURATION +1 ms |
+| KEY6 | 戻る / 閉じる | DP OPTION 次 | - | GREEN NUMBER +1 |
 | KEY7 | 決定 / 開く / 曲開始 | AUTOPLAY 切替 | - | VISUAL OFFSET +1 ms |
 | 2P KEY1 | 決定 / 開く / 曲開始 | 2P RANDOM 次 | - | BGA 切替 |
 | 2P KEY2 | 戻る / 閉じる | 2P RANDOM 前 | - | GAUGE AUTO SHIFT 切替 |
 | 2P KEY3 | 決定 / 開く / 曲開始 | GAUGE 次 | - | JUDGE AUTO ADJUST 切替 |
-| 2P KEY4 | 戻る / 閉じる | GAUGE 前 | - | DURATION -1 ms |
+| 2P KEY4 | 戻る / 閉じる | GAUGE 前 | - | GREEN NUMBER -1 |
 | 2P KEY5 | 決定 / 開く / 曲開始 | HS-FIX 次 | - | VISUAL OFFSET -1 ms |
-| 2P KEY6 | 戻る / 閉じる | DP OPTION 次 | - | DURATION +1 ms |
+| 2P KEY6 | 戻る / 閉じる | DP OPTION 次 | - | GREEN NUMBER +1 |
 | 2P KEY7 | 決定 / 開く / 曲開始 | AUTOPLAY 切替 | - | VISUAL OFFSET +1 ms |
 | Scratch Up | カーソル上 | TARGET 前 | - | - |
 | Scratch Down | カーソル下 | TARGET 次 | - | - |
@@ -79,9 +79,9 @@ favorite 操作は invisible を使わず、登録済みなら解除、未登録
 | KEY1 | - | 1P RANDOM 次 | - | BGA 切替 |
 | KEY2 | - | 1P RANDOM 前 | - | GAUGE AUTO SHIFT 切替 |
 | KEY3 | 戻る / 閉じる | GAUGE 次 | ASSIST 次 | JUDGE AUTO ADJUST 切替 |
-| KEY4 | カーソル下 | GAUGE 前 | - | DURATION -1 ms |
+| KEY4 | カーソル下 | GAUGE 前 | - | GREEN NUMBER -1 |
 | KEY5 | 決定 / 開く / 曲開始 | HS-FIX 次 | - | VISUAL OFFSET -1 ms |
-| KEY6 | カーソル上 | DP OPTION 次 | - | DURATION +1 ms |
+| KEY6 | カーソル上 | DP OPTION 次 | - | GREEN NUMBER +1 |
 | KEY7 | 決定 / 開く / 曲開始 | AUTOPLAY 切替 | - | VISUAL OFFSET +1 ms |
 | KEY8 | - | TARGET 前 | - | - |
 | KEY9 | - | TARGET 次 | - | - |

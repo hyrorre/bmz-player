@@ -229,11 +229,7 @@ pub fn apply_placeholder_session_visuals(
     );
     let hispeed_mode = hispeed_mode_from_hs_fix(options.hs_fix);
     snapshot.hispeed_mode_index = hispeed_mode_index(hispeed_mode);
-    let target_green_number = if hispeed_mode == HispeedMode::Floating {
-        crate::config::play::green_number_from_duration_ms(profile.play.duration_ms)
-    } else {
-        profile.lane.target_green_number.max(1)
-    };
+    let target_green_number = profile.lane.target_green_number.max(1);
     snapshot.hispeed = placeholder_hispeed_for_mode(
         profile,
         hispeed_mode,
@@ -389,11 +385,7 @@ pub fn build_game_session_with_input_backend(
         &chart.timing_events,
     );
     let hispeed_mode = hispeed_mode_from_hs_fix(options.hs_fix);
-    let target_green_number = if hispeed_mode == HispeedMode::Floating {
-        crate::config::play::green_number_from_duration_ms(profile.play.duration_ms)
-    } else {
-        profile.lane.target_green_number.max(1)
-    };
+    let target_green_number = profile.lane.target_green_number.max(1);
     let lift = lift_from_profile(profile);
     let lane_cover =
         crate::config::play::clamp_lane_cover_for_lift(lane_unit_to_f32(profile.lane.sudden), lift);

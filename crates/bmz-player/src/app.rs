@@ -74,9 +74,7 @@ use crate::config::key_config::{
     is_scratch_down_control, is_scratch_up_control,
 };
 use crate::config::load::load_profile_config;
-use crate::config::play::{
-    TARGET_GREEN_NUMBER_MAX, TARGET_GREEN_NUMBER_MIN, green_number_from_duration_ms,
-};
+use crate::config::play::{TARGET_GREEN_NUMBER_MAX, TARGET_GREEN_NUMBER_MIN};
 use crate::config::profile_config::{
     AssistOptionConfig, BgaExpandConfig, BgaModeConfig, BottomShiftableGaugeConfig,
     DoubleOptionConfig, GaugeAutoShiftConfig, GaugeTypeConfig, HispeedModeConfig, HsFixConfig,
@@ -1286,11 +1284,7 @@ impl PendingPlayStart {
             options,
             lane: PendingPlayLaneState::from_snapshot(
                 snapshot,
-                if hs_fix == HsFixOption::Off {
-                    profile.lane.target_green_number
-                } else {
-                    green_number_from_duration_ms(profile.play.duration_ms)
-                },
+                profile.lane.target_green_number,
                 hs_fix,
                 profile.lane.hispeed_auto_adjust,
             ),
@@ -1379,7 +1373,7 @@ impl PendingPlayLaneState {
             self.lift,
             1.0,
         );
-        green_number_from_duration(duration)
+        green_number_from_display_duration(duration)
     }
 
     fn apply_to_snapshot(self, snapshot: &mut RenderSnapshot) {
@@ -3726,12 +3720,7 @@ impl WinitApp {
     }
 
     fn select_note_display_duration_ms_for_skin(profile: &ProfileConfig) -> i32 {
-        let green_number = if profile.play.hs_fix != HsFixConfig::Off {
-            green_number_from_duration_ms(profile.play.duration_ms)
-        } else {
-            profile.lane.target_green_number.max(1)
-        };
-        green_number.min(i32::MAX as u32) as i32
+        profile.lane.target_green_number.max(1).min(i32::MAX as u32) as i32
     }
 
     fn ensure_visible_select_chart_distributions(&self, visible_limit: usize) {
@@ -4860,8 +4849,8 @@ impl WinitApp {
         {
             self.cycle_bga_option();
             true
-        } else if let Some(delta_ms) = duration_delta_control(control, &self.select_keys) {
-            self.adjust_play_duration_ms(delta_ms)
+        } else if let Some(delta) = green_number_delta_control(control, &self.select_keys) {
+            self.adjust_select_green_number(delta)
         } else if let Some(delta_ms) = visual_offset_delta_control(control, &self.select_keys) {
             self.adjust_visual_offset_ms(delta_ms)
         } else {
@@ -4869,16 +4858,16 @@ impl WinitApp {
         }
     }
 
-    fn adjust_play_duration_ms(&mut self, delta_ms: i32) -> bool {
-        let current = self.boot.profile_config.play.duration_ms;
-        let next = crate::config::play::adjust_play_duration_ms(current, delta_ms);
+    fn adjust_select_green_number(&mut self, delta: i32) -> bool {
+        let current = self.boot.profile_config.lane.target_green_number.max(1);
+        let next = adjusted_green_number(current, delta);
         if current == next {
             return false;
         }
-        self.boot.profile_config.play.duration_ms = next;
+        self.boot.profile_config.lane.target_green_number = next;
         self.boot.profile_config.updated_at = now_unix_seconds();
         self.sync_realtime_profile_settings();
-        tracing::info!(duration_ms = next, "note display duration changed");
+        tracing::info!(target_green_number = next, "select green number changed");
         true
     }
 
@@ -5455,7 +5444,7 @@ impl WinitApp {
                 && (!event.repeat
                     || (self.select_option_panel == 3
                         && physical_key_name(event.physical_key).is_some_and(|control| {
-                            duration_delta_control(&control, &self.select_keys).is_some()
+                            green_number_delta_control(&control, &self.select_keys).is_some()
                         })))
             {
                 match self.select_option_panel {
@@ -19713,7 +19702,7 @@ fn visual_offset_delta_control(control: &str, bindings: &SelectKeyBindings) -> O
     }
 }
 
-fn duration_delta_control(control: &str, bindings: &SelectKeyBindings) -> Option<i32> {
+fn green_number_delta_control(control: &str, bindings: &SelectKeyBindings) -> Option<i32> {
     if bindings.is_ui_key4(control) {
         Some(-1)
     } else if bindings.is_ui_key6(control) {
@@ -20052,7 +20041,7 @@ fn current_green_number(session: &bmz_gameplay::session::GameSession, now: TimeU
         active_lane_cover_for_hispeed(session),
         now,
     );
-    green_number_from_duration(total)
+    green_number_from_display_duration(total)
 }
 
 fn adjusted_green_number(current: u32, delta: i32) -> u32 {
@@ -20060,10 +20049,10 @@ fn adjusted_green_number(current: u32, delta: i32) -> u32 {
     next.clamp(TARGET_GREEN_NUMBER_MIN as i64, TARGET_GREEN_NUMBER_MAX as i64) as u32
 }
 
-fn green_number_from_duration(duration_ms: f32) -> u32 {
-    ((duration_ms * 0.6)
-        .round()
-        .clamp(TARGET_GREEN_NUMBER_MIN as f32, TARGET_GREEN_NUMBER_MAX as f32)) as u32
+fn green_number_from_display_duration(duration_ms: f32) -> u32 {
+    let displayed_duration_ms = duration_ms.round().clamp(0.0, i32::MAX as f32) as i32;
+    bmz_render::skin::duration_to_green_number_ms(displayed_duration_ms)
+        .clamp(TARGET_GREEN_NUMBER_MIN as i32, TARGET_GREEN_NUMBER_MAX as i32) as u32
 }
 
 fn instant_elapsed_us_u64(start: Instant) -> u64 {
@@ -20914,7 +20903,7 @@ impl SelectKeyBindings {
              {start_str}:PLAY OPT  BACK:E2 OPT  {start_str}+BACK:DETAIL OPT  \
              {start_str}+K1/K2:1P ARR  {start_str}+2P K1/K2:2P ARR  {start_str}+K3/K4:GAUGE  \
              {start_str}+K5:HS-FIX  {start_str}+K6:DP OPT  {start_str}+K7:AUTOPLAY  \
-             {start_str}+BACK+{key2_str}:GAS  {start_str}+UP/DOWN:TARGET  {start_str}+{bga_str}:BGA  {start_str}+K4/K6:DURATION  {start_str}+K5/K7:TIMING  {start_str}+1..4:REPLAY"
+             {start_str}+BACK+{key2_str}:GAS  {start_str}+UP/DOWN:TARGET  {start_str}+{bga_str}:BGA  {start_str}+K4/K6:GREEN  {start_str}+K5/K7:TIMING  {start_str}+1..4:REPLAY"
         );
 
         Self {
@@ -21078,7 +21067,7 @@ impl SelectKeyBindings {
             "F1 MENU  F3 FOLDER/HASH  F5 RELOAD  F10 AUTOPLAY  F11 IR  N9 TEXT   \
              {start_str}:PLAY OPT  BACK:E2 OPT  {start_str}+BACK:DETAIL OPT  \
              {start_str}+K1/K2:1P ARR  {start_str}+K3:GAUGE  {start_str}+K5:HS-FIX  \
-             {start_str}+K8/K9:TARGET  {start_str}+{bga_str}:BGA  {start_str}+K4/K6:DURATION  {start_str}+K5/K7:TIMING  {start_str}+1..4:REPLAY"
+             {start_str}+K8/K9:TARGET  {start_str}+{bga_str}:BGA  {start_str}+K4/K6:GREEN  {start_str}+K5/K7:TIMING  {start_str}+1..4:REPLAY"
         );
         let hispeed_down_controls = merge_select_controls(
             key1_controls.clone(),
@@ -25693,9 +25682,9 @@ mod tests {
         assert_eq!(visual_offset_delta_control("Period", &keys), Some(-1));
         assert_eq!(visual_offset_delta_control("P2K7", &keys), Some(1));
         assert_eq!(visual_offset_delta_control("Z", &keys), None);
-        assert_eq!(duration_delta_control("D", &keys), Some(-1));
-        assert_eq!(duration_delta_control("F", &keys), Some(1));
-        assert_eq!(duration_delta_control("C", &keys), None);
+        assert_eq!(green_number_delta_control("D", &keys), Some(-1));
+        assert_eq!(green_number_delta_control("F", &keys), Some(1));
+        assert_eq!(green_number_delta_control("C", &keys), None);
     }
 
     #[test]
@@ -25707,6 +25696,12 @@ mod tests {
         assert!(
             (hispeed_for_green_number_values(295.0, 0.93, 120.0, 1.0) - 3.783_051).abs() < 0.000_01
         );
+    }
+
+    #[test]
+    fn green_number_change_uses_the_displayed_integer_duration() {
+        assert_eq!(green_number_from_display_duration(500.0), 300);
+        assert_eq!(green_number_from_display_duration(500.6), 301);
     }
 
     #[test]
@@ -25726,16 +25721,6 @@ mod tests {
         profile.lane.target_green_number = 280;
 
         assert_eq!(WinitApp::select_note_display_duration_ms_for_skin(&profile), 280);
-    }
-
-    #[test]
-    fn select_skin_green_number_uses_duration_for_hs_fix() {
-        let mut profile = ProfileConfig::new_default("default", "Default", 1);
-        profile.play.hs_fix = HsFixConfig::StartBpm;
-        profile.play.duration_ms = 501;
-        profile.lane.target_green_number = 280;
-
-        assert_eq!(WinitApp::select_note_display_duration_ms_for_skin(&profile), 301);
     }
 
     #[test]
