@@ -79,7 +79,7 @@ pub fn advance_play_screen_with_bga_frames(
     let frame = advance_session_frame(session, audio);
     let mut render_snapshot = build_render_snapshot_with_target_and_bga_frames(
         session,
-        frame.times.render_now,
+        frame.times.audio_now,
         &session.recent_judgements,
         best_ex_score,
         best_ghost,
@@ -192,7 +192,7 @@ fn frame_output_from_session_frame_cached(
 ) -> FrameOutput<RenderSnapshot> {
     let mut render_snapshot = build_render_snapshot_with_target_and_bga_frames_cached(
         session,
-        frame.times.render_now,
+        frame.times.audio_now,
         &session.recent_judgements,
         best_ex_score,
         best_ghost,
@@ -495,12 +495,12 @@ pub fn refresh_play_ending_snapshot_with_session_cached(
 ) -> RenderSnapshot {
     let times = compute_frame_times(session);
     apply_auto_key_release(session, times.audio_now);
-    update_recent_judgements(session, &[], times.render_now);
-    update_recent_inputs(session, &[], times.render_now);
+    update_recent_judgements(session, &[], times.audio_now);
+    update_recent_inputs(session, &[], times.audio_now);
 
     let mut snapshot = build_render_snapshot_with_target_and_bga_frames_cached(
         session,
-        times.render_now,
+        times.audio_now,
         &session.recent_judgements,
         best_ex_score,
         best_ghost,

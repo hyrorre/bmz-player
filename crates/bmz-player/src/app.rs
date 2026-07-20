@@ -12939,7 +12939,7 @@ impl WinitApp {
             return;
         };
 
-        let video_update_time = compute_frame_times(&active_play.running.session).render_now;
+        let video_update_time = compute_frame_times(&active_play.running.session).audio_now;
         crate::video_bga::update_video_bga_frames(
             &mut self.renderer,
             &mut active_play.running,

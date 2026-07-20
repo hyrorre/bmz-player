@@ -19,12 +19,12 @@ pub struct ActiveVideoBgaDecoder {
 /// `restart`) on the first activation after install / quick retry.
 pub const REUSED_VIDEO_EVENT_START: TimeUs = TimeUs(i64::MIN);
 
-/// render_now 時刻でアクティブな動画BGAのテクスチャを更新する。
+/// 表示オフセットを含まない chart_now 時刻でアクティブな動画BGAのテクスチャを更新する。
 /// bga_frames カタログを更新して幅・高さも最新に保つ。
 pub fn update_video_bga_frames(
     renderer: &mut bmz_render::renderer::Renderer,
     running: &mut RunningPlaySession,
-    render_now: TimeUs,
+    chart_now: TimeUs,
 ) {
     if !running.session.bga_enabled || !running.session.chart.metadata.has_bga {
         // Keep warm decoders across BGA-disabled stretches so quick retry can reuse them.
@@ -39,7 +39,7 @@ pub fn update_video_bga_frames(
     // Base と Layer は BGA イベント時刻をビデオ開始時刻とする
     for kind in [BgaEventKind::Base, BgaEventKind::Layer, BgaEventKind::Layer2] {
         let Some(event) =
-            chart.bga_events.iter().rev().find(|e| e.time <= render_now && e.kind == kind)
+            chart.bga_events.iter().rev().find(|e| e.time <= chart_now && e.kind == kind)
         else {
             continue;
         };
@@ -55,7 +55,7 @@ pub fn update_video_bga_frames(
         }
         active_video_assets.insert(asset_id);
 
-        let video_offset_us = render_now.0 - event.time.0;
+        let video_offset_us = chart_now.0 - event.time.0;
         update_single_video(
             renderer,
             video_bga_decoders,
@@ -73,8 +73,8 @@ pub fn update_video_bga_frames(
     if poor_duration_us > 0 {
         let judgement = session.recent_judgements.iter().rev().find(|j| {
             matches!(j.judge, Judge::Bad | Judge::Poor)
-                && render_now.0 >= j.time.0
-                && render_now.0 < j.time.0 + poor_duration_us
+                && chart_now.0 >= j.time.0
+                && chart_now.0 < j.time.0 + poor_duration_us
         });
 
         if let Some(judgement) = judgement {
@@ -91,7 +91,7 @@ pub fn update_video_bga_frames(
                 && asset.kind == BgaAssetKind::Video
             {
                 active_video_assets.insert(asset_id);
-                let video_offset_us = render_now.0 - judge_time.0;
+                let video_offset_us = chart_now.0 - judge_time.0;
                 update_single_video(
                     renderer,
                     video_bga_decoders,

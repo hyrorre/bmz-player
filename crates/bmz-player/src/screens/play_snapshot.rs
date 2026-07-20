@@ -306,13 +306,13 @@ pub fn refresh_pending_play_input_visuals(
 
 pub fn build_render_snapshot(
     session: &GameSession,
-    render_now: TimeUs,
+    chart_now: TimeUs,
     recent_judgements: &[JudgementEvent],
     best_ex_score: Option<u32>,
 ) -> RenderSnapshot {
     build_render_snapshot_with_bga_frames(
         session,
-        render_now,
+        chart_now,
         recent_judgements,
         best_ex_score,
         &BgaFrameCatalog::new(),
@@ -321,14 +321,14 @@ pub fn build_render_snapshot(
 
 pub fn build_render_snapshot_with_bga_frames(
     session: &GameSession,
-    render_now: TimeUs,
+    chart_now: TimeUs,
     recent_judgements: &[JudgementEvent],
     best_ex_score: Option<u32>,
     bga_frames: &BgaFrameCatalog,
 ) -> RenderSnapshot {
     build_render_snapshot_with_target_and_bga_frames(
         session,
-        render_now,
+        chart_now,
         recent_judgements,
         best_ex_score,
         None,
@@ -339,7 +339,7 @@ pub fn build_render_snapshot_with_bga_frames(
 
 pub fn build_render_snapshot_with_target_and_bga_frames(
     session: &GameSession,
-    render_now: TimeUs,
+    chart_now: TimeUs,
     recent_judgements: &[JudgementEvent],
     best_ex_score: Option<u32>,
     best_ghost: Option<&[u8]>,
@@ -349,7 +349,7 @@ pub fn build_render_snapshot_with_target_and_bga_frames(
     let cache = PlayRenderSnapshotCache::from_chart(&session.chart);
     build_render_snapshot_with_target_and_bga_frames_cached(
         session,
-        render_now,
+        chart_now,
         recent_judgements,
         best_ex_score,
         best_ghost,
@@ -361,7 +361,7 @@ pub fn build_render_snapshot_with_target_and_bga_frames(
 
 pub fn build_render_snapshot_with_target_and_bga_frames_cached(
     session: &GameSession,
-    render_now: TimeUs,
+    chart_now: TimeUs,
     recent_judgements: &[JudgementEvent],
     best_ex_score: Option<u32>,
     best_ghost: Option<&[u8]>,
@@ -371,10 +371,13 @@ pub fn build_render_snapshot_with_target_and_bga_frames_cached(
 ) -> RenderSnapshot {
     let projected_best_ex_score =
         best_ghost.map(|ghost| ghost_ex_score_at_progress(ghost, session.score.past_notes));
-    let play_elapsed_time = if render_now.0 < 0 { TimeUs(0) } else { render_now };
-    let gauge_graph_time_ms = (render_now.0.max(0) / 1_000).clamp(0, i32::MAX as i64) as i32;
-    let now_bpm = session.timing_map.bpm_at_time(render_now) as f32;
-    let cursor_tick = session.timing_map.time_to_tick_f64(scroll_render_time(render_now));
+    let lane_render_now = lane_render_time(session, chart_now);
+    let play_elapsed_time = if chart_now.0 < 0 { TimeUs(0) } else { chart_now };
+    let gauge_graph_time_ms = (chart_now.0.max(0) / 1_000).clamp(0, i32::MAX as i64) as i32;
+    // beatoraja の LaneRenderer と同じく、現在 BPM と緑数字は表示オフセットを
+    // 適用したレーン時刻から求める。判定演出や BGA の時計には適用しない。
+    let now_bpm = session.timing_map.bpm_at_time(lane_render_now) as f32;
+    let cursor_tick = session.timing_map.time_to_tick_f64(scroll_render_time(lane_render_now));
     let scroll_multiplier = current_scroll_multiplier_from_segments(
         &cache.scroll_segments,
         &cache.speed_segments,
@@ -416,7 +419,7 @@ pub fn build_render_snapshot_with_target_and_bga_frames_cached(
         })
         .collect();
     let mut snapshot = RenderSnapshot {
-        time: render_now,
+        time: chart_now,
         player_name: String::new(),
         current_fps: 0,
         play_elapsed_time,
@@ -426,7 +429,7 @@ pub fn build_render_snapshot_with_target_and_bga_frames_cached(
         rhythm_timer_elapsed_ms: rhythm_timer_elapsed_ms(
             &session.timing_map,
             &session.chart.bar_lines,
-            render_now,
+            chart_now,
         ),
         // session が構築できている時点で WAV 等のロードは完了している。
         resources_loaded: true,
@@ -472,7 +475,7 @@ pub fn build_render_snapshot_with_target_and_bga_frames_cached(
         hispeed_auto_adjust: session.hispeed_auto_adjust,
         note_display_duration_ms,
         hidden_cover: session.hidden_cover,
-        skin_offsets: skin_offsets_from_session(session, render_now, play_elapsed_time),
+        skin_offsets: skin_offsets_from_session(session, chart_now, play_elapsed_time),
         now_bpm,
         min_bpm: cache.min_bpm,
         max_bpm: cache.max_bpm,
@@ -481,26 +484,26 @@ pub fn build_render_snapshot_with_target_and_bga_frames_cached(
         bga_enabled: session.bga_enabled,
         bga_base: session
             .bga_enabled
-            .then(|| current_bga_frame(cache, render_now, BgaEventKind::Base, bga_frames))
+            .then(|| current_bga_frame(cache, chart_now, BgaEventKind::Base, bga_frames))
             .flatten(),
         bga_layer: session
             .bga_enabled
             .then(|| {
-                current_keybound_bga_frame(session, cache, render_now, bga_frames).or_else(|| {
-                    current_bga_frame(cache, render_now, BgaEventKind::Layer, bga_frames)
+                current_keybound_bga_frame(session, cache, chart_now, bga_frames).or_else(|| {
+                    current_bga_frame(cache, chart_now, BgaEventKind::Layer, bga_frames)
                 })
             })
             .flatten(),
         bga_layer2: session
             .bga_enabled
-            .then(|| current_bga_frame(cache, render_now, BgaEventKind::Layer2, bga_frames))
+            .then(|| current_bga_frame(cache, chart_now, BgaEventKind::Layer2, bga_frames))
             .flatten(),
         bga_poor: session
             .bga_enabled
             .then(|| {
                 current_poor_bga_frame(
                     cache,
-                    render_now,
+                    chart_now,
                     recent_judgements,
                     bga_frames,
                     session.poor_bga_duration_us,
@@ -552,44 +555,41 @@ pub fn build_render_snapshot_with_target_and_bga_frames_cached(
             index: session.hit_error_ring.index,
         },
         full_combo_elapsed_ms: session.full_combo_started_at.and_then(|started_at| {
-            (render_now.0 >= started_at.0)
-                .then_some(((render_now.0 - started_at.0) / 1_000).clamp(0, i32::MAX as i64) as i32)
+            (chart_now.0 >= started_at.0)
+                .then_some(((chart_now.0 - started_at.0) / 1_000).clamp(0, i32::MAX as i64) as i32)
         }),
-        end_of_note_elapsed_ms: end_of_note_elapsed_ms(
-            render_now,
-            end_of_note_time(&session.chart),
-        ),
+        end_of_note_elapsed_ms: end_of_note_elapsed_ms(chart_now, end_of_note_time(&session.chart)),
         fadeout_elapsed_ms: None,
         failed_elapsed_ms: None,
         music_end_elapsed_ms: None,
         gauge_increase_elapsed_ms: optional_skin_timer_elapsed_ms(
-            render_now,
+            chart_now,
             session.gauge_increase_started_at,
         ),
         gauge_max_elapsed_ms: optional_skin_timer_elapsed_ms(
-            render_now,
+            chart_now,
             session.gauge_max_started_at,
         ),
         bar_lines: Vec::new(),
         visible_long_notes: Vec::new(),
-        keyon_ms: lane_keyon_ms(session, render_now, play_elapsed_time),
-        keyoff_ms: lane_keyoff_ms(session, render_now, play_elapsed_time),
+        keyon_ms: lane_keyon_ms(session, chart_now, play_elapsed_time),
+        keyoff_ms: lane_keyoff_ms(session, chart_now, play_elapsed_time),
         show_ln_tail_cap: session.show_ln_tail_cap,
         // beatoraja の TIMER_HCN_ACTIVE / TIMER_HCN_DAMAGE: HCN passing 中のみアクティブ。
         hcn_active_ms: std::array::from_fn(|lane_index| {
             session.lane_hcn_timer[lane_index].filter(|t| t.inclease).map(|t| {
-                ((render_now.0 - t.since.0) / 1_000).clamp(i32::MIN as i64, i32::MAX as i64) as i32
+                ((chart_now.0 - t.since.0) / 1_000).clamp(i32::MIN as i64, i32::MAX as i64) as i32
             })
         }),
         hcn_damage_ms: std::array::from_fn(|lane_index| {
             session.lane_hcn_timer[lane_index].filter(|t| !t.inclease).map(|t| {
-                ((render_now.0 - t.since.0) / 1_000).clamp(i32::MIN as i64, i32::MAX as i64) as i32
+                ((chart_now.0 - t.since.0) / 1_000).clamp(i32::MIN as i64, i32::MAX as i64) as i32
             })
         }),
         // beatoraja の TIMER_HOLD: LN ホールド中 (processing != null) のみアクティブ。
         hold_ms: std::array::from_fn(|lane_index| {
             session.judge.lanes[lane_index].active_long.map(|active| {
-                ((render_now.0 - active.started_at.0) / 1_000)
+                ((chart_now.0 - active.started_at.0) / 1_000)
                     .clamp(i32::MIN as i64, i32::MAX as i64) as i32
             })
         }),
@@ -597,17 +597,17 @@ pub fn build_render_snapshot_with_target_and_bga_frames_cached(
         stagefile_background: false,
         stagefile_image_size: None,
         backbmp_background: false,
-        chart_text: bmz_chart::text::chart_text_at_time(&session.chart.text_events, render_now)
+        chart_text: bmz_chart::text::chart_text_at_time(&session.chart.text_events, chart_now)
             .to_string(),
     };
 
-    // beatoraja の LaneRenderer と同様、playstart 中 (render_now < 0) は
+    // beatoraja の LaneRenderer と同様、playstart 中 (lane_render_now < 0) は
     // レーンスクロールの基準時刻を 0 に固定する。音声の chart_zero_time は
     // マイナスのまま維持し、見た目だけ clamp する。
-    // chart 時刻が 0 未満の間は譜面オブジェクトを出さない (beatoraja の
+    // レーン描画時刻が 0 未満の間は譜面オブジェクトを出さない (beatoraja の
     // TIMER_PLAY 開始前と同じ)。
-    let scroll_time = scroll_render_time(render_now);
-    if render_now.0 >= 0 {
+    let scroll_time = scroll_render_time(lane_render_now);
+    if lane_render_now.0 >= 0 {
         let scroll = ScrollContext::new(session, cache);
         let cursor_tick = scroll.cursor_tick(scroll_time);
         let simple_tick_upper_bound = scroll.simple_tick_upper_bound(cursor_tick);
@@ -616,7 +616,7 @@ pub fn build_render_snapshot_with_target_and_bga_frames_cached(
             for note in
                 visible_lane_notes(session.chart.notes_for_lane(lane), simple_tick_upper_bound)
             {
-                if note.time < render_now {
+                if note.time < lane_render_now {
                     continue;
                 }
                 match note.kind {
@@ -680,8 +680,8 @@ pub fn build_render_snapshot_with_target_and_bga_frames_cached(
             let body_state = if is_processing {
                 LongBodyState::Processing
             } else if mode == LongNoteMode::Hcn
-                && render_now.0 >= long.start_time.0
-                && render_now.0 < long.end_time.0
+                && chart_now.0 >= long.start_time.0
+                && chart_now.0 < long.end_time.0
                 && let Some(timer) = session.lane_hcn_timer[lane_index]
             {
                 if timer.inclease { LongBodyState::HcnActive } else { LongBodyState::HcnDamage }
@@ -704,7 +704,7 @@ pub fn build_render_snapshot_with_target_and_bga_frames_cached(
 pub fn update_render_snapshot_play_options(
     snapshot: &mut RenderSnapshot,
     session: &GameSession,
-    render_now: TimeUs,
+    chart_now: TimeUs,
 ) {
     snapshot.hispeed = session.hispeed;
     snapshot.hispeed_mode_index = hispeed_mode_index(session.hispeed_mode);
@@ -720,10 +720,11 @@ pub fn update_render_snapshot_play_options(
     snapshot.lift_enabled = session.lift_enabled;
     snapshot.hidden_enabled = session.hidden_enabled;
     snapshot.hispeed_auto_adjust = session.hispeed_auto_adjust;
+    let lane_render_now = lane_render_time(session, chart_now);
     snapshot.note_display_duration_ms = note_display_duration_ms(
         session,
-        session.timing_map.bpm_at_time(render_now) as f32,
-        current_scroll_multiplier(&session.chart, &session.timing_map, render_now),
+        session.timing_map.bpm_at_time(lane_render_now) as f32,
+        current_scroll_multiplier(&session.chart, &session.timing_map, lane_render_now),
     );
     snapshot.hidden_cover = session.hidden_cover;
 }
@@ -977,6 +978,12 @@ fn end_of_note_elapsed_ms(render_now: TimeUs, end_time: TimeUs) -> Option<i32> {
         return None;
     }
     Some(((render_now.0 - end_time.0) / 1_000).clamp(0, i32::MAX as i64) as i32)
+}
+
+/// beatoraja の LaneRenderer が `microtime += judgetiming` とする範囲にだけ
+/// 表示オフセットを適用する。判定演出・BGA・skin timer は `chart_now` を使う。
+fn lane_render_time(session: &GameSession, chart_now: TimeUs) -> TimeUs {
+    TimeUs(chart_now.0.saturating_add(session.offsets.visual_offset_us))
 }
 
 /// ノーツ / 小節線 / ロングノートのスクロール計算に使う時刻。
@@ -1529,6 +1536,26 @@ mod tests {
     }
 
     #[test]
+    fn visual_offset_moves_lane_objects_without_advancing_effect_timers() {
+        let profile = ProfileConfig::new_default("default", "Default", 1);
+        let mut session =
+            build_game_session(Arc::new(chart()), &profile, PlaySessionOptions::default());
+        session.hispeed = 1.0;
+        session.offsets.visual_offset_us = 500_000;
+        session.full_combo_started_at = Some(TimeUs(0));
+        session.lane_keyon_started_at[Lane::Key1.index()] = Some(TimeUs(0));
+
+        let snapshot = build_render_snapshot(&session, TimeUs(0), &[], None);
+
+        assert_eq!(snapshot.time, TimeUs(0));
+        assert_eq!(snapshot.play_elapsed_time, TimeUs(0));
+        assert_eq!(snapshot.full_combo_elapsed_ms, Some(0));
+        assert_eq!(snapshot.keyon_ms[Lane::Key1.index()], Some(0));
+        let y = snapshot.visible_notes[Lane::Key1.index()][0].y;
+        assert!((y - 0.25).abs() < 1e-3, "expected lane y ~0.25, got {y}");
+    }
+
+    #[test]
     fn judged_notes_remain_visible_until_their_scheduled_time() {
         let profile = ProfileConfig::new_default("default", "Default", 1);
         let mut session =
@@ -1768,6 +1795,28 @@ mod tests {
         let snap = build_render_snapshot(&session, TimeUs(2_000_000), &[], None);
         let y = snap.visible_notes[Lane::Key1.index()][0].y;
         assert!((y - 0.25).abs() < 1e-3, "expected ~0.25, got {y}");
+    }
+
+    #[test]
+    fn visual_offset_advances_lane_bpm_without_advancing_snapshot_time() {
+        use bmz_chart::model::{TimingEvent, TimingEventKind};
+        use bmz_chart::timing::TICKS_PER_BEAT;
+
+        let mut c = chart();
+        c.metadata.initial_bpm = 120.0;
+        c.timing_events = vec![TimingEvent {
+            tick: ChartTick(TICKS_PER_BEAT as u64 * 4),
+            time: TimeUs(2_000_000),
+            kind: TimingEventKind::BpmChange { bpm: 240.0 },
+        }];
+        let profile = ProfileConfig::new_default("default", "Default", 1);
+        let mut session = build_game_session(Arc::new(c), &profile, PlaySessionOptions::default());
+        session.offsets.visual_offset_us = 100_000;
+
+        let snapshot = build_render_snapshot(&session, TimeUs(1_950_000), &[], None);
+
+        assert_eq!(snapshot.time, TimeUs(1_950_000));
+        assert_eq!(snapshot.now_bpm, 240.0);
     }
 
     #[test]
@@ -2503,6 +2552,8 @@ mod tests {
         let mut session =
             build_game_session(Arc::new(chart), &profile, PlaySessionOptions::default());
         session.poor_bga_duration_us = 250_000;
+        // レーン表示オフセットが BGA イベント選択へ漏れないことも同時に検証する。
+        session.offsets.visual_offset_us = 500_000;
         let bga_frames = BgaFrameCatalog::from([
             (BgaAssetId(0), display_bga_frame(BgaAssetId(0), 256, 256)),
             (BgaAssetId(1), display_bga_frame(BgaAssetId(1), 640, 480)),

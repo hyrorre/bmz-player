@@ -92,7 +92,6 @@ pub struct PlaySkinOffset {
 #[derive(Debug, Clone, Copy)]
 pub struct FrameTimes {
     pub audio_now: TimeUs,
-    pub render_now: TimeUs,
     pub audio_schedule_until: TimeUs,
 }
 
@@ -302,9 +301,8 @@ impl BgmScheduler {
 
 pub fn compute_frame_times(session: &GameSession) -> FrameTimes {
     let audio_now = session.audio_clock.now();
-    let render_now = TimeUs(audio_now.0 + session.offsets.visual_offset_us);
     let audio_schedule_until = TimeUs(audio_now.0 + AUDIO_SCHEDULE_AHEAD_US);
-    FrameTimes { audio_now, render_now, audio_schedule_until }
+    FrameTimes { audio_now, audio_schedule_until }
 }
 
 pub fn apply_judge_outcome(
@@ -966,12 +964,12 @@ pub fn advance_session_frame(
 ) -> SessionFrame {
     let times = compute_frame_times(session);
     sync_input_timestamp_anchor(session, times.audio_now);
-    rebase_pre_ready_visual_times(session, times.render_now);
-    update_scratch_angle_phase(session, times.render_now);
+    rebase_pre_ready_visual_times(session, times.audio_now);
+    update_scratch_angle_phase(session, times.audio_now);
     let mut judgements = Vec::new();
 
     if session.state == PlayState::Ready && times.audio_now.0 < 0 {
-        drain_pre_ready_visual_inputs(session, times.render_now);
+        drain_pre_ready_visual_inputs(session, times.audio_now);
     } else if session.state == PlayState::Ready {
         session.state = PlayState::Playing;
     }
@@ -1016,7 +1014,7 @@ pub fn advance_session_frame(
         apply_hcn_gauge(session, times.audio_now);
         update_failed_state_from_gauge(session);
         schedule_keysounds(session, audio);
-        update_recent_judgements(session, &judgements, times.render_now);
+        update_recent_judgements(session, &judgements, times.audio_now);
         update_full_combo_timer(session, &judgements);
 
         if should_finish(session, times.audio_now) {

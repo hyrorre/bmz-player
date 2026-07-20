@@ -54,6 +54,8 @@ pub struct SkinLogicalInputSnapshot {
 
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct RenderSnapshot {
+    /// 表示オフセットを含まない譜面時刻。判定演出・BGA・skin timer の基準に使う。
+    /// ノート等のレーン描画位置は app 側で表示オフセットを別途適用して構築する。
     pub time: TimeUs,
     /// beatoraja STRING_PLAYER (2) に渡す現在プロフィール名。
     pub player_name: String,
