@@ -72,6 +72,8 @@ pub struct RenderSnapshot {
     pub ready_elapsed_time: Option<TimeUs>,
     /// 直近の小節線からの60 BPM換算拍時間 (TIMER_RHYTHM=140)。
     pub rhythm_timer_elapsed_ms: Option<i32>,
+    /// 直近の4分拍からの実時間。PMS ノート拡縮に使い、TIMER_RHYTHM とは分けて扱う。
+    pub quarter_note_elapsed_ms: Option<i32>,
     /// BMS リソース (WAV 等) のバックグラウンドロードが完了しているか。
     /// READY 遷移可否の判定に使う。op 80/81 は ready_elapsed_time から判定する。
     /// preload 完了前の placeholder snapshot では false。
@@ -207,6 +209,9 @@ pub struct RenderSnapshot {
     /// Gauge max timer elapsed ms (skin timer 44/45). None while inactive.
     pub gauge_max_elapsed_ms: Option<i32>,
     pub bar_lines: Vec<VisibleBarLine>,
+    pub bpm_lines: Vec<VisibleBarLine>,
+    pub stop_lines: Vec<VisibleBarLine>,
+    pub time_lines: Vec<VisibleBarLine>,
     /// 各レーンのキー押下開始からの経過 ms(押下中のみ Some)。skin timer 100..=107 に渡る。
     pub keyon_ms: [Option<i32>; LANE_COUNT],
     /// 各レーンのキー解放からの経過 ms(離した直後のみ Some)。skin timer 120..=127 に渡る。

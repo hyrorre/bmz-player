@@ -308,6 +308,10 @@ pub struct SkinImageDef {
     pub click: i32,
     #[serde(default)]
     pub act: Option<i32>,
+    /// `act` を状態参照に使いつつ、クリックイベントは無効にする画像向け。
+    /// 未指定時は従来どおり `act` の有無をクリック可否として扱う。
+    #[serde(default)]
+    pub clickable: Option<bool>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -322,6 +326,8 @@ pub struct SkinImageSetDef {
     pub click: i32,
     #[serde(default)]
     pub act: Option<i32>,
+    #[serde(default)]
+    pub clickable: Option<bool>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Default)]
@@ -348,6 +354,10 @@ pub struct SkinValueDef {
     pub cycle: i32,
     #[serde(default)]
     pub align: i32,
+    /// LR2 CSV の judge combo だけが持つ alignment 解釈。
+    /// 未指定の JSON/Lua judge は beatoraja と同じく中央寄せにする。
+    #[serde(default, rename = "judgeAlign")]
+    pub judge_align: Option<i32>,
     #[serde(default)]
     pub digit: i32,
     #[serde(default)]
@@ -1068,6 +1078,10 @@ pub struct SkinNoteSetDef {
     pub processed: Vec<String>,
     #[serde(default)]
     pub size: Vec<i32>,
+    #[serde(default = "default_note_dst2")]
+    pub dst2: i32,
+    #[serde(default = "default_note_expansion_rate")]
+    pub expansionrate: Vec<i32>,
     #[serde(default)]
     pub dst: Vec<SkinDstEntry>,
     #[serde(default)]
@@ -1078,6 +1092,14 @@ pub struct SkinNoteSetDef {
     pub stop: Vec<SkinDestinationDef>,
     #[serde(default)]
     pub time: Vec<SkinDestinationDef>,
+}
+
+fn default_note_dst2() -> i32 {
+    i32::MIN
+}
+
+fn default_note_expansion_rate() -> Vec<i32> {
+    vec![100, 100]
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]

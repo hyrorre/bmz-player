@@ -794,6 +794,23 @@ impl SkinContext {
         document.note_height_for_lane(lane, key_mode)
     }
 
+    pub fn document_note_expansion_scale(&self, state: &SkinDrawState) -> (f32, f32) {
+        let Some(note) = self.document.as_ref().and_then(|document| document.note.as_ref()) else {
+            return (1.0, 1.0);
+        };
+        let elapsed = state.quarter_note_elapsed_ms.unwrap_or(i32::MAX).max(0) as f32;
+        let pulse = if elapsed < 9.0 {
+            elapsed / 9.0
+        } else if elapsed <= 159.0 {
+            (159.0 - elapsed) / 150.0
+        } else {
+            0.0
+        };
+        let width = note.expansionrate.first().copied().unwrap_or(100) as f32 / 100.0;
+        let height = note.expansionrate.get(1).copied().unwrap_or(100) as f32 / 100.0;
+        (1.0 + (width - 1.0) * pulse, 1.0 + (height - 1.0) * pulse)
+    }
+
     pub fn document_bar_line_items(
         &self,
         note_y: f32,
@@ -805,6 +822,66 @@ impl SkinContext {
         };
         let state = self.state_with_lua_runtime(state, &SkinTextState::default());
         document.note_group_render_items(note_y, key_mode, &state, &self.document_sources)
+    }
+
+    pub fn document_bpm_line_items(
+        &self,
+        note_y: f32,
+        key_mode: KeyMode,
+        state: &SkinDrawState,
+    ) -> Vec<SkinRenderItem> {
+        let Some(document) = self.document.as_ref() else {
+            return Vec::new();
+        };
+        let Some(note) = document.note.as_ref() else {
+            return Vec::new();
+        };
+        let state = self.state_with_lua_runtime(state, &SkinTextState::default());
+        document.note_line_render_items(&note.bpm, note_y, key_mode, &state, &self.document_sources)
+    }
+
+    pub fn document_stop_line_items(
+        &self,
+        note_y: f32,
+        key_mode: KeyMode,
+        state: &SkinDrawState,
+    ) -> Vec<SkinRenderItem> {
+        let Some(document) = self.document.as_ref() else {
+            return Vec::new();
+        };
+        let Some(note) = document.note.as_ref() else {
+            return Vec::new();
+        };
+        let state = self.state_with_lua_runtime(state, &SkinTextState::default());
+        document.note_line_render_items(
+            &note.stop,
+            note_y,
+            key_mode,
+            &state,
+            &self.document_sources,
+        )
+    }
+
+    pub fn document_time_line_items(
+        &self,
+        note_y: f32,
+        key_mode: KeyMode,
+        state: &SkinDrawState,
+    ) -> Vec<SkinRenderItem> {
+        let Some(document) = self.document.as_ref() else {
+            return Vec::new();
+        };
+        let Some(note) = document.note.as_ref() else {
+            return Vec::new();
+        };
+        let state = self.state_with_lua_runtime(state, &SkinTextState::default());
+        document.note_line_render_items(
+            &note.time,
+            note_y,
+            key_mode,
+            &state,
+            &self.document_sources,
+        )
     }
 
     pub fn document_gauge_items(&self, gauge: f32, elapsed_ms: i32) -> Option<Vec<SkinRenderItem>> {
@@ -900,6 +977,30 @@ impl SkinContext {
         Some(document.apply_notes_offset_to_rect(rect, state))
     }
 
+    pub fn missed_note_rect_for_fall(
+        &self,
+        lane: Lane,
+        key_mode: KeyMode,
+        fall: f32,
+        note_height: f32,
+        state: &SkinDrawState,
+    ) -> Option<Rect> {
+        let document = self.document.as_ref()?;
+        let note = document.note.as_ref()?;
+        if note.dst2 == i32::MIN {
+            return None;
+        }
+        let enabled_options = document.enabled_options();
+        let area = document.note_lane_area(lane, key_mode, &enabled_options)?;
+        let canvas_h = document.h.max(1) as f32;
+        let judge_bottom = note_judge_bottom_y(area, state, canvas_h);
+        let target_bottom = (canvas_h - note.dst2 as f32) / canvas_h;
+        let bottom_y = judge_bottom + (target_bottom - judge_bottom) * fall.clamp(0.0, 1.0);
+        let rect =
+            Rect { x: area.x, y: bottom_y - note_height, width: area.width, height: note_height };
+        Some(document.apply_notes_offset_to_rect(rect, state))
+    }
+
     /// ロングノート胴体の矩形を計算する。`head_y`/`tail_y` は `VisibleNote::y` と同じ
     /// 正規化座標（0.0=判定ライン, 1.0=最奥）。
     pub fn note_body_rect(
@@ -962,6 +1063,14 @@ fn static_runtime_document_sources(
         && let Some(source_size) = state.stagefile_image_size
     {
         insert_runtime_document_source(&mut sources, "100", SELECT_STAGE_TEXTURE, source_size);
+    }
+    if state.has_backbmp {
+        insert_runtime_document_source(
+            &mut sources,
+            "101",
+            PLAY_BACKBMP_TEXTURE,
+            SkinImageSize { width: 1.0, height: 1.0 },
+        );
     }
     sources
 }
@@ -1039,6 +1148,7 @@ pub struct SkinDrawState {
     pub ready_timer_ms: Option<i32>,
     pub play_timer_ms: Option<i32>,
     pub rhythm_timer_ms: Option<i32>,
+    pub quarter_note_elapsed_ms: Option<i32>,
     pub key_mode: KeyMode,
     pub select_bar_elapsed_ms: i32,
     pub select_option_panel_elapsed_ms: i32,
@@ -1416,6 +1526,7 @@ impl Default for SkinDrawState {
             ready_timer_ms: None,
             play_timer_ms: None,
             rhythm_timer_ms: None,
+            quarter_note_elapsed_ms: None,
             key_mode: KeyMode::default(),
             select_bar_elapsed_ms: 0,
             select_option_panel_elapsed_ms: 0,
@@ -2661,6 +2772,15 @@ pub trait SkinDocumentRenderExt {
 
     fn note_group_render_items(
         &self,
+        note_y: f32,
+        key_mode: KeyMode,
+        state: &SkinDrawState,
+        sources: &HashMap<String, SkinDocumentTexture>,
+    ) -> Vec<SkinRenderItem>;
+
+    fn note_line_render_items(
+        &self,
+        destinations: &[SkinDestinationDef],
         note_y: f32,
         key_mode: KeyMode,
         state: &SkinDrawState,
@@ -4331,12 +4451,18 @@ impl SkinDocumentRenderExt for SkinDocument {
         images: &HashMap<&str, &SkinImageDef>,
     ) -> Option<SkinClickTarget> {
         if let Some(image) = images.get(destination.id.as_str())
+            && image.clickable.unwrap_or(image.act.is_some())
             && let Some(event_id) = image.act
         {
             return Some(SkinClickTarget::Event { event_id, click: image.click });
         }
         let imageset = self.imageset.iter().find(|set| set.id == destination.id)?;
-        imageset.act.map(|event_id| SkinClickTarget::Event { event_id, click: imageset.click })
+        imageset
+            .clickable
+            .unwrap_or(imageset.act.is_some())
+            .then_some(imageset.act)
+            .flatten()
+            .map(|event_id| SkinClickTarget::Event { event_id, click: imageset.click })
     }
 
     fn destination_click_rect(
@@ -5074,6 +5200,17 @@ impl SkinDocumentRenderExt for SkinDocument {
         let Some(note) = self.note.as_ref() else {
             return Vec::new();
         };
+        self.note_line_render_items(&note.group, note_y, key_mode, state, sources)
+    }
+
+    fn note_line_render_items(
+        &self,
+        destinations: &[SkinDestinationDef],
+        note_y: f32,
+        key_mode: KeyMode,
+        state: &SkinDrawState,
+        sources: &HashMap<String, SkinDocumentTexture>,
+    ) -> Vec<SkinRenderItem> {
         let images = self.image_map();
         let enabled_options = self.enabled_options();
         let Some(area) = self.note_lane_area(Lane::Key1, key_mode, &enabled_options) else {
@@ -5084,7 +5221,7 @@ impl SkinDocumentRenderExt for SkinDocument {
         let judge_bottom_px = canvas_h * (1.0 - note_judge_bottom_y(area, state, canvas_h));
         let timeline_bottom_px = canvas_h * (1.0 - bottom_y);
         let mut items = Vec::new();
-        for destination in &note.group {
+        for destination in destinations {
             if !test_skin_ops(&destination.op, &enabled_options, state)
                 || !eval_skin_draw_condition(&destination.draw, state)
             {
@@ -5447,7 +5584,14 @@ impl SkinDocumentRenderExt for SkinDocument {
                 &mut number_frame,
                 &offset_state,
             );
-            if let Some(value) = self.value.iter().find(|value| value.id == number_destination.id) {
+            let judge_align = self
+                .value
+                .iter()
+                .find(|value| value.id == number_destination.id)
+                .map_or(2, |value| value.judge_align.unwrap_or(2));
+            if let Some(value) = self.value.iter().find(|value| value.id == number_destination.id)
+                && judge_align == 2
+            {
                 Self::apply_beatoraja_judge_number_dst_x(&mut number_frame, value.digit);
             }
             let signed_render =
@@ -5466,7 +5610,7 @@ impl SkinDocumentRenderExt for SkinDocument {
                 elapsed_ms,
                 sources,
                 false,
-                Some(2),
+                Some(judge_align),
                 signed_render,
             ));
         }
@@ -15412,6 +15556,7 @@ mod tests {
                 timer: None,
                 cycle: 0,
                 align: 0,
+                judge_align: None,
                 digit: 0,
                 padding: 0,
                 zeropadding: 0,
@@ -17503,6 +17648,7 @@ mod tests {
                 ref_id: 0,
                 click: 0,
                 act: None,
+                clickable: None,
             })
             .collect();
         let sources = HashMap::from([(
@@ -17578,6 +17724,7 @@ mod tests {
                 ref_id: 0,
                 click: 0,
                 act: None,
+                clickable: None,
             })
             .collect();
         let sources = HashMap::from([(
@@ -17726,6 +17873,7 @@ mod tests {
                 ref_id: 0,
                 click: 0,
                 act: None,
+                clickable: None,
             })
             .collect();
         let sources = HashMap::from([(
@@ -20949,6 +21097,7 @@ mod tests {
             ref_id: 0,
             click: 0,
             act: None,
+            clickable: None,
         };
 
         let uv =
@@ -21804,6 +21953,7 @@ mod tests {
             timer: None,
             cycle: 0,
             align: 0,
+            judge_align: None,
             digit: 5,
             padding: 0,
             zeropadding: 1,
@@ -23100,6 +23250,7 @@ mod tests {
             ref_id: 0,
             click: 0,
             act: Some(75),
+            clickable: None,
         };
         let source_size = SkinImageSize { width: 68.0, height: 99.0 };
         let off = skin_image_texture_region_for_state(
@@ -23937,6 +24088,68 @@ mod tests {
             rect_no_lift.y,
             rect_lifted.y
         );
+    }
+
+    #[test]
+    fn pms_note_expansion_uses_quarter_note_elapsed_time() {
+        let document: SkinDocument = serde_json::from_str(
+            r#"
+            {
+                "w": 100, "h": 100,
+                "note": {
+                    "id": "notes",
+                    "note": ["n1"],
+                    "expansionrate": [150, 80],
+                    "dst": [{ "time": 0, "x": 10, "y": 20, "w": 30, "h": 60 }]
+                }
+            }
+            "#,
+        )
+        .unwrap();
+        let skin = SkinContext::from_manifest_and_document(default_skin_manifest(), document, []);
+
+        let peak = skin.document_note_expansion_scale(&SkinDrawState {
+            quarter_note_elapsed_ms: Some(9),
+            ..SkinDrawState::default()
+        });
+        let finished = skin.document_note_expansion_scale(&SkinDrawState {
+            quarter_note_elapsed_ms: Some(159),
+            ..SkinDrawState::default()
+        });
+
+        assert!(approx_eq(peak.0, 1.5));
+        assert!(approx_eq(peak.1, 0.8));
+        assert!(approx_eq(finished.0, 1.0));
+        assert!(approx_eq(finished.1, 1.0));
+    }
+
+    #[test]
+    fn pms_missed_note_falls_toward_dst2() {
+        let document: SkinDocument = serde_json::from_str(
+            r#"
+            {
+                "w": 100, "h": 100,
+                "note": {
+                    "id": "notes",
+                    "note": ["n1"],
+                    "size": [10],
+                    "dst2": 90,
+                    "dst": [{ "time": 0, "x": 10, "y": 20, "w": 30, "h": 60 }]
+                }
+            }
+            "#,
+        )
+        .unwrap();
+        let skin = SkinContext::from_manifest_and_document(default_skin_manifest(), document, []);
+        let state = SkinDrawState::default();
+
+        let start =
+            skin.missed_note_rect_for_fall(Lane::Key1, KeyMode::K9, 0.0, 0.1, &state).unwrap();
+        let end =
+            skin.missed_note_rect_for_fall(Lane::Key1, KeyMode::K9, 1.0, 0.1, &state).unwrap();
+
+        assert!(approx_eq(start.y + start.height, 0.8));
+        assert!(approx_eq(end.y + end.height, 0.1));
     }
 
     #[test]

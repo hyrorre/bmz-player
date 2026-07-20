@@ -1462,6 +1462,9 @@ pub fn decode_beatoraja_skin_with_options_and_runtime_state_and_caches(
 }
 
 fn lr2_builtin_source_asset(path: &str) -> Option<RgbaImageAsset> {
+    if path == "bmz://lr2/judgedetail" {
+        return Some(lr2_judge_detail_asset());
+    }
     let pixel = match path {
         "bmz://lr2/black" => [0, 0, 0, 255],
         "bmz://lr2/white" => [255, 255, 255, 255],
@@ -1472,6 +1475,96 @@ fn lr2_builtin_source_asset(path: &str) -> Option<RgbaImageAsset> {
         _ => return None,
     };
     Some(RgbaImageAsset { width: 1, height: 1, pixels: pixel.to_vec() })
+}
+
+fn lr2_judge_detail_asset() -> RgbaImageAsset {
+    const WIDTH: u32 = 120;
+    const HEIGHT: u32 = 100;
+    let mut pixels = vec![0; (WIDTH * HEIGHT * 4) as usize];
+    draw_lr2_bitmap_text(&mut pixels, WIDTH, 5, 5, "EARLY", [255, 255, 255, 255]);
+    draw_lr2_bitmap_text(&mut pixels, WIDTH, 59, 5, "LATE", [255, 255, 255, 255]);
+    for (pair, color) in [[255, 255, 255, 255], [255, 192, 64, 255]].into_iter().enumerate() {
+        for row in 0..2 {
+            let y = 20 + pair as u32 * 40 + row * 20;
+            for digit in 0..10 {
+                draw_lr2_bitmap_glyph(
+                    &mut pixels,
+                    WIDTH,
+                    digit as u32 * 10 + 2,
+                    y + 5,
+                    char::from(b'0' + digit as u8),
+                    color,
+                );
+            }
+            draw_lr2_bitmap_glyph(
+                &mut pixels,
+                WIDTH,
+                112,
+                y + 5,
+                if row == 0 { '+' } else { '-' },
+                color,
+            );
+        }
+    }
+    RgbaImageAsset { width: WIDTH, height: HEIGHT, pixels }
+}
+
+fn draw_lr2_bitmap_text(pixels: &mut [u8], width: u32, x: u32, y: u32, text: &str, color: [u8; 4]) {
+    for (index, character) in text.chars().enumerate() {
+        draw_lr2_bitmap_glyph(pixels, width, x + index as u32 * 8, y, character, color);
+    }
+}
+
+fn draw_lr2_bitmap_glyph(
+    pixels: &mut [u8],
+    width: u32,
+    x: u32,
+    y: u32,
+    character: char,
+    color: [u8; 4],
+) {
+    let rows = lr2_bitmap_glyph(character);
+    for (row, bits) in rows.into_iter().enumerate() {
+        for column in 0..3 {
+            if bits & (1 << (2 - column)) == 0 {
+                continue;
+            }
+            for dy in 0..2 {
+                for dx in 0..2 {
+                    let px = x + column * 2 + dx;
+                    let py = y + row as u32 * 2 + dy;
+                    let offset = ((py * width + px) * 4) as usize;
+                    if let Some(target) = pixels.get_mut(offset..offset + 4) {
+                        target.copy_from_slice(&color);
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn lr2_bitmap_glyph(character: char) -> [u8; 5] {
+    match character {
+        '0' => [0b111, 0b101, 0b101, 0b101, 0b111],
+        '1' => [0b010, 0b110, 0b010, 0b010, 0b111],
+        '2' => [0b111, 0b001, 0b111, 0b100, 0b111],
+        '3' => [0b111, 0b001, 0b111, 0b001, 0b111],
+        '4' => [0b101, 0b101, 0b111, 0b001, 0b001],
+        '5' => [0b111, 0b100, 0b111, 0b001, 0b111],
+        '6' => [0b111, 0b100, 0b111, 0b101, 0b111],
+        '7' => [0b111, 0b001, 0b010, 0b010, 0b010],
+        '8' => [0b111, 0b101, 0b111, 0b101, 0b111],
+        '9' => [0b111, 0b101, 0b111, 0b001, 0b111],
+        'A' => [0b010, 0b101, 0b111, 0b101, 0b101],
+        'E' => [0b111, 0b100, 0b110, 0b100, 0b111],
+        'L' => [0b100, 0b100, 0b100, 0b100, 0b111],
+        'R' => [0b110, 0b101, 0b110, 0b101, 0b101],
+        'T' => [0b111, 0b010, 0b010, 0b010, 0b010],
+        'Y' => [0b101, 0b101, 0b010, 0b010, 0b010],
+        '+' => [0b000, 0b010, 0b111, 0b010, 0b000],
+        '-' => [0b000, 0b000, 0b111, 0b000, 0b000],
+        _ => [0; 5],
+    }
 }
 
 fn is_skin_video_source_extension(extension: &str) -> bool {
@@ -5101,7 +5194,8 @@ mod tests {
             });
 
         assert_eq!(auto_judge.ref_id, 0);
-        assert_eq!(auto_judge.click, 0);
+        assert_eq!(auto_judge.click, 2);
+        assert_eq!(auto_judge.clickable, Some(false));
         assert!(
             auto_judge.h > 0,
             "WMII auto judge button should keep a positive source height: {auto_judge:?}"
@@ -5530,7 +5624,13 @@ mod tests {
             return;
         }
 
-        let decoded = decode_beatoraja_skin(&skin_path, SkinKind::Play).unwrap();
+        let decoded = decode_beatoraja_skin_with_options(
+            &skin_path,
+            SkinKind::Play,
+            &BTreeMap::from([("Score Graph".to_string(), "On".to_string())]),
+            &BTreeMap::new(),
+        )
+        .unwrap();
         let sources = decoded
             .sources
             .iter()
@@ -5590,7 +5690,7 @@ mod tests {
     }
 
     #[test]
-    fn wmii_fhd_lr2skin_keeps_score_graph_and_extends_bga_on_autoplay_when_available() {
+    fn wmii_fhd_lr2skin_hides_score_graph_and_extends_bga_on_autoplay_when_available() {
         let skin_path = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../data/skins/WMII_FHD/play/FHDPLAY_AC.lr2skin");
         if !skin_path.is_file() {
@@ -5608,12 +5708,6 @@ mod tests {
             &BTreeMap::new(),
         )
         .unwrap();
-        let frame_texture = decoded
-            .sources
-            .iter()
-            .find(|source| source.source_id == "2")
-            .expect("WMII AC frame source should load")
-            .texture;
         let sources = decoded
             .sources
             .iter()
@@ -5656,16 +5750,15 @@ mod tests {
         assert!(
             items.iter().any(|item| matches!(
                 item,
-                bmz_render::skin::SkinRenderItem::Image { texture, rect, tint, .. }
-                    if *texture == frame_texture
-                        && (rect.x - 726.0 / 1920.0).abs() < 0.01
+                bmz_render::skin::SkinRenderItem::Image { rect, tint, .. }
+                    if (rect.x - 726.0 / 1920.0).abs() < 0.01
                         && (rect.width - 1027.0 / 1920.0).abs() < 0.01
                         && tint.a > 0.5
             )),
             "expected WMII autoplay extended BGA frame to render; got {items:?}"
         );
         assert!(
-            items.iter().any(|item| matches!(
+            !items.iter().any(|item| matches!(
                 item,
                 bmz_render::skin::SkinRenderItem::Image { rect, tint, .. }
                     if (rect.x - 546.0 / 1920.0).abs() < 0.01
@@ -5673,17 +5766,17 @@ mod tests {
                         && (rect.height - 798.0 / 1080.0).abs() < 0.01
                         && tint.a > 0.5
             )),
-            "expected WMII score graph frame to render during autoplay"
+            "WMII score graph frame must stay hidden during autoplay"
         );
         assert!(
-            items.iter().any(|item| matches!(
+            !items.iter().any(|item| matches!(
                 item,
                 bmz_render::skin::SkinRenderItem::Image { rect, tint, .. }
                     if (rect.x - 551.0 / 1920.0).abs() < 0.01
                         && (rect.width - 267.0 / 1920.0).abs() < 0.01
                         && tint.a > 0.5
             )),
-            "expected WMII score graph target labels to render during autoplay"
+            "WMII score graph target labels must stay hidden during autoplay"
         );
     }
 
@@ -6503,7 +6596,7 @@ mod tests {
     }
 
     #[test]
-    fn wmii_fhd_lr2skin_enables_score_graph_by_default_when_available() {
+    fn wmii_fhd_lr2skin_defaults_score_graph_to_off_when_available() {
         let skin_path = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../data/skins/WMII_FHD/play/FHDPLAY_AC.lr2skin");
         if !skin_path.is_file() {
@@ -6512,18 +6605,14 @@ mod tests {
 
         let decoded = decode_beatoraja_skin(&skin_path, SkinKind::Play).unwrap();
 
+        assert!(decoded.document.graph.iter().all(|graph| !matches!(graph.graph_type, 110..=115)));
         assert!(
-            decoded.document.graph.iter().any(|graph| matches!(graph.graph_type, 110..=115)),
-            "expected WMII score graph bar definitions to load"
-        );
-        assert!(
-            decoded.document.destination.iter().any(|entry| match entry {
-                bmz_render::skin::DestinationListEntry::Single(destination) =>
-                    destination.op.contains(&39),
-                bmz_render::skin::DestinationListEntry::Conditional { destinations, .. } =>
-                    destinations.iter().any(|destination| destination.op.contains(&39)),
-            }),
-            "expected WMII score graph destinations to keep op39 enabled by default"
+            decoded
+                .document
+                .property
+                .iter()
+                .any(|property| property.name == "Score Graph" && property.def == "Off"),
+            "expected beatoraja's built-in Score Graph option to default to Off"
         );
     }
 

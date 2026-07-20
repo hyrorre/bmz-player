@@ -845,6 +845,8 @@ fn plan_play(
     // 見逃しPOOR（is_miss）はボムエフェクトを出さない
     let mut bomb_ms: [Option<i32>; LANE_COUNT] = [None; LANE_COUNT];
     let mut lane_judge: [Option<usize>; LANE_COUNT] = [None; LANE_COUNT];
+    let judge_timer_limit =
+        skin.document().map_or(1, |document| document.judgetimer).max(0) as usize;
     for j in &snapshot.recent_judgements {
         if j.is_miss {
             continue;
@@ -852,8 +854,11 @@ fn plan_play(
         let idx = j.lane.index();
         let elapsed =
             ((snapshot.time.0 - j.time.0) / 1_000).clamp(i32::MIN as i64, i32::MAX as i64) as i32;
-        bomb_ms[idx] = Some(elapsed);
-        lane_judge[idx] = judge_image_index(&j.text);
+        let judge_index = judge_image_index(&j.text);
+        lane_judge[idx] = judge_index;
+        if judge_starts_bomb(judge_index, judge_timer_limit) {
+            bomb_ms[idx] = Some(elapsed);
+        }
     }
 
     // keyon/keyoff のタイマー値は session 側で per-lane に追跡された keyon/keyoff
@@ -887,6 +892,7 @@ fn plan_play(
         play_timer_ms: (snapshot.time.0 >= 0)
             .then_some((snapshot.time.0 / 1_000).clamp(i32::MIN as i64, i32::MAX as i64) as i32),
         rhythm_timer_ms: snapshot.rhythm_timer_elapsed_ms,
+        quarter_note_elapsed_ms: snapshot.quarter_note_elapsed_ms,
         key_mode,
         logical_input_held: snapshot.skin_input.held,
         select_arrange_index: crate::skin::select_arrange_index(&snapshot.arrange),
@@ -1167,6 +1173,14 @@ fn plan_play(
                 &snapshot.skin_offsets,
             );
         }
+        push_play_aux_lines(
+            &mut commands,
+            skin,
+            &skin_state,
+            snapshot,
+            key_mode,
+            &snapshot.skin_offsets,
+        );
         push_judge_line(skin_manifest, &mut commands, board, snapshot.lift);
 
         // SUDDEN+（レーンカバー）: レーン上部を覆う。ノーツは build_render_snapshot で
@@ -1212,6 +1226,14 @@ fn plan_play(
                 &snapshot.skin_offsets,
             );
         }
+        push_play_aux_lines(
+            &mut commands,
+            skin,
+            &skin_state,
+            snapshot,
+            key_mode,
+            &snapshot.skin_offsets,
+        );
         for body in &snapshot.visible_long_notes {
             if let Some(rect) =
                 skin.note_body_rect(body.lane, key_mode, body.head_y, body.tail_y, &skin_state)
@@ -1263,9 +1285,27 @@ fn plan_play(
             let lane_index = lane.index();
             let note_height = skin.document_note_height(lane, key_mode).unwrap_or(NOTE_HEIGHT);
             for note in &snapshot.visible_notes[lane_index] {
-                if let Some(rect) =
+                let rect = if note.y < 0.0 {
+                    skin.missed_note_rect_for_fall(
+                        lane,
+                        key_mode,
+                        -note.y,
+                        note_height,
+                        &skin_state,
+                    )
+                } else {
                     skin.note_rect_for_progress(lane, key_mode, note.y, note_height, &skin_state)
-                {
+                };
+                if let Some(mut rect) = rect {
+                    if key_mode == KeyMode::K9 {
+                        let (scale_x, scale_y) = skin.document_note_expansion_scale(&skin_state);
+                        let center_x = rect.x + rect.width / 2.0;
+                        let center_y = rect.y + rect.height / 2.0;
+                        rect.width *= scale_x;
+                        rect.height *= scale_y;
+                        rect.x = center_x - rect.width / 2.0;
+                        rect.y = center_y - rect.height / 2.0;
+                    }
                     let item = match note.kind {
                         NoteVisualKind::LnStart => {
                             skin.document_ln_start_item(lane, key_mode, rect, LongNoteMode::Ln)
@@ -1330,6 +1370,10 @@ fn plan_play(
     push_scene_overlays(&mut commands, &snapshot.overlay);
 
     DrawPlan { clear: Color::rgb(0.0, 0.0, 0.0), commands }
+}
+
+fn judge_starts_bomb(judge_index: Option<usize>, judge_timer_limit: usize) -> bool {
+    judge_index.is_some_and(|judge| judge <= judge_timer_limit)
 }
 
 fn play_command_capacity(snapshot: &RenderSnapshot, has_document: bool) -> usize {
@@ -2248,6 +2292,48 @@ fn push_play_bar_line(
     apply_bar_line_alpha_offset(&mut commands[start..], skin_offsets);
 }
 
+fn push_play_aux_lines(
+    commands: &mut Vec<DrawCommand>,
+    skin: &SkinContext,
+    skin_state: &crate::skin::SkinDrawState,
+    snapshot: &RenderSnapshot,
+    key_mode: KeyMode,
+    skin_offsets: &SkinOffsetValues,
+) {
+    if !snapshot.practice_mode {
+        return;
+    }
+    for line in &snapshot.time_lines {
+        push_play_aux_line(commands, skin, skin_state, line, skin_offsets, |skin, y| {
+            skin.document_time_line_items(y, key_mode, skin_state)
+        });
+    }
+    for line in &snapshot.bpm_lines {
+        push_play_aux_line(commands, skin, skin_state, line, skin_offsets, |skin, y| {
+            skin.document_bpm_line_items(y, key_mode, skin_state)
+        });
+    }
+    for line in &snapshot.stop_lines {
+        push_play_aux_line(commands, skin, skin_state, line, skin_offsets, |skin, y| {
+            skin.document_stop_line_items(y, key_mode, skin_state)
+        });
+    }
+}
+
+fn push_play_aux_line(
+    commands: &mut Vec<DrawCommand>,
+    skin: &SkinContext,
+    skin_state: &crate::skin::SkinDrawState,
+    line: &crate::snapshot::VisibleBarLine,
+    skin_offsets: &SkinOffsetValues,
+    render: impl FnOnce(&SkinContext, f32) -> Vec<crate::skin::SkinRenderItem>,
+) {
+    let start = commands.len();
+    let items = skin.apply_play_skin_global_offset(render(skin, line.y), skin_state);
+    append_skin_render_items(commands, &items);
+    apply_bar_line_alpha_offset(&mut commands[start..], skin_offsets);
+}
+
 /// beatoraja `SkinObject.prepareColor` 相当。小節線コマンド列に alpha offset を加算する。
 fn apply_bar_line_alpha_offset(commands: &mut [DrawCommand], skin_offsets: &SkinOffsetValues) {
     let offset = skin_offsets.get(SKIN_OFFSET_BAR_LINE).unwrap_or_default();
@@ -2958,6 +3044,15 @@ mod tests {
         assert_eq!(skin_difficulty_code(" hyper "), 3);
         assert_eq!(skin_difficulty_code("ANOTHER"), 4);
         assert_eq!(skin_difficulty_code("unknown"), 0);
+    }
+
+    #[test]
+    fn lr2_judgetimer_limits_bomb_judgements() {
+        assert!(judge_starts_bomb(Some(0), 1));
+        assert!(judge_starts_bomb(Some(1), 1));
+        assert!(!judge_starts_bomb(Some(2), 1));
+        assert!(judge_starts_bomb(Some(3), 3));
+        assert!(!judge_starts_bomb(None, 3));
     }
 
     #[test]

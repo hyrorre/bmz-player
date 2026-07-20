@@ -9,7 +9,7 @@ use bmz_chart::model::{
 use bmz_chart::timing::{TICKS_PER_MEASURE, TimingMap};
 use bmz_core::judge::{Judge, TimingSide};
 use bmz_core::lane::{KeyMode, LANE_COUNT, Lane};
-use bmz_core::time::TimeUs;
+use bmz_core::time::{ChartTick, TimeUs};
 use bmz_gameplay::gauge::gauge_total_for_chart;
 use bmz_gameplay::judge::model::JudgementEvent;
 use bmz_gameplay::session::GameSession;
@@ -185,6 +185,29 @@ fn rhythm_timer_elapsed_ms(
     Some((elapsed_us / 1_000.0).floor().clamp(0.0, i32::MAX as f64) as i32)
 }
 
+fn quarter_note_elapsed_ms(
+    timing_map: &TimingMap,
+    bar_lines: &[BarLine],
+    now: TimeUs,
+) -> Option<i32> {
+    if now.0 < 0 {
+        return None;
+    }
+    let section_index = bar_lines.partition_point(|bar| bar.time <= now).checked_sub(1);
+    let section_tick = section_index.map_or(0, |index| bar_lines[index].tick.0);
+    let next_tick = section_index
+        .and_then(|index| bar_lines.get(index + 1))
+        .map_or_else(|| section_tick.saturating_add(TICKS_PER_MEASURE as u64), |bar| bar.tick.0);
+    let section_length = next_tick.saturating_sub(section_tick).max(1);
+    let cursor_tick = timing_map.time_to_tick_f64(now).max(section_tick as f64);
+    let quarter_width = section_length as f64 / 4.0;
+    let quarter_index = ((cursor_tick - section_tick as f64) / quarter_width).floor().max(0.0);
+    let quarter_tick = section_tick
+        .saturating_add((quarter_index * quarter_width).round().clamp(0.0, u64::MAX as f64) as u64);
+    let quarter_time = timing_map.tick_to_time(ChartTick(quarter_tick));
+    Some(((now.0 - quarter_time.0) / 1_000).clamp(0, i32::MAX as i64) as i32)
+}
+
 /// beatoraja TIMER_RHYTHM と同じく、実時間を区間 BPM / 60 倍して進める。
 /// STOP 中も現在 BPM で進行するため、tick 差ではなく時間区間を積分する。
 fn bpm_normalized_elapsed_us(timing_map: &TimingMap, start: TimeUs, end: TimeUs) -> f64 {
@@ -201,6 +224,24 @@ fn bpm_normalized_elapsed_us(timing_map: &TimingMap, start: TimeUs, end: TimeUs)
         cursor = next;
     }
     elapsed_us
+}
+
+fn pms_missed_note_fall_progress(
+    timing_map: &TimingMap,
+    note_tick: ChartTick,
+    note_time: TimeUs,
+    bad_slow_us: i64,
+    now: TimeUs,
+) -> f32 {
+    let stop_end = timing_map
+        .segments
+        .iter()
+        .filter(|segment| segment.start_tick == note_tick)
+        .map(|segment| segment.start_time.0)
+        .max()
+        .unwrap_or(note_time.0);
+    let fall_start = TimeUs(stop_end.saturating_add(bad_slow_us.max(0)));
+    (bpm_normalized_elapsed_us(timing_map, fall_start, now) / 4_000_000.0) as f32
 }
 
 fn lane_key_timer_ms(
@@ -431,6 +472,11 @@ pub fn build_render_snapshot_with_target_and_bga_frames_cached(
             &session.chart.bar_lines,
             chart_now,
         ),
+        quarter_note_elapsed_ms: quarter_note_elapsed_ms(
+            &session.timing_map,
+            &session.chart.bar_lines,
+            chart_now,
+        ),
         // session が構築できている時点で WAV 等のロードは完了している。
         resources_loaded: true,
         resource_load_progress: 1.0,
@@ -571,6 +617,9 @@ pub fn build_render_snapshot_with_target_and_bga_frames_cached(
             session.gauge_max_started_at,
         ),
         bar_lines: Vec::new(),
+        bpm_lines: Vec::new(),
+        stop_lines: Vec::new(),
+        time_lines: Vec::new(),
         visible_long_notes: Vec::new(),
         keyon_ms: lane_keyon_ms(session, chart_now, play_elapsed_time),
         keyoff_ms: lane_keyoff_ms(session, chart_now, play_elapsed_time),
@@ -616,7 +665,12 @@ pub fn build_render_snapshot_with_target_and_bga_frames_cached(
             for note in
                 visible_lane_notes(session.chart.notes_for_lane(lane), simple_tick_upper_bound)
             {
-                if note.time < lane_render_now {
+                let processed_judge = session.judge.judged_notes.get(&note.id).copied();
+                let falling_pms_poor = snapshot.key_mode == KeyMode::K9
+                    && note.kind == NoteKind::Tap
+                    && processed_judge == Some(Judge::Poor)
+                    && note.time < lane_render_now;
+                if note.time < lane_render_now && !falling_pms_poor {
                     continue;
                 }
                 match note.kind {
@@ -635,13 +689,25 @@ pub fn build_render_snapshot_with_target_and_bga_frames_cached(
                     // visible_long_notes 側でロングノート本体と一緒に描画する。
                     NoteKind::LongStart | NoteKind::LongEnd => continue,
                     NoteKind::Tap => {
-                        if let Some(y) = scroll.note_y(note.time, cursor_tick) {
+                        let y = if falling_pms_poor {
+                            Some(-pms_missed_note_fall_progress(
+                                &session.timing_map,
+                                note.tick,
+                                note.time,
+                                session.judge.window_set.note.bad_slow_us.max(0),
+                                lane_render_now,
+                            ))
+                            .filter(|fall| *fall >= -1.0)
+                        } else {
+                            scroll.note_y(note.time, cursor_tick)
+                        };
+                        if let Some(y) = y {
                             snapshot.visible_notes[lane.index()].push(VisibleNote {
                                 lane,
                                 time: note.time,
                                 y,
                                 kind: NoteVisualKind::Tap,
-                                processed_judge: session.judge.judged_notes.get(&note.id).copied(),
+                                processed_judge,
                             });
                         }
                     }
@@ -652,6 +718,32 @@ pub fn build_render_snapshot_with_target_and_bga_frames_cached(
         for bar in visible_bar_lines(&session.chart.bar_lines, simple_tick_upper_bound) {
             if let Some(y) = scroll.note_y(bar.time, cursor_tick) {
                 snapshot.bar_lines.push(VisibleBarLine { time: bar.time, y });
+            }
+        }
+
+        for event in &session.chart.timing_events {
+            if simple_tick_upper_bound.is_some_and(|upper| event.tick.0 as f64 > upper) {
+                break;
+            }
+            let Some(y) = scroll.note_y(event.time, cursor_tick) else {
+                continue;
+            };
+            let line = VisibleBarLine { time: event.time, y };
+            match event.kind {
+                TimingEventKind::BpmChange { .. } => snapshot.bpm_lines.push(line),
+                TimingEventKind::Stop { .. } => snapshot.stop_lines.push(line),
+            }
+        }
+
+        let end_second = (session.chart.end_time.0.max(0) / 1_000_000).min(21_600);
+        for second in 1..=end_second {
+            let time = TimeUs(second.saturating_mul(1_000_000));
+            let tick = session.timing_map.time_to_tick_f64(scroll_render_time(time));
+            if simple_tick_upper_bound.is_some_and(|upper| tick > upper) {
+                break;
+            }
+            if let Some(y) = scroll.note_y(time, cursor_tick) {
+                snapshot.time_lines.push(VisibleBarLine { time, y });
             }
         }
 
@@ -1356,13 +1448,17 @@ mod tests {
     use bmz_core::input::{InputDeviceKind, InputEvent, InputKind, InputSource};
     use bmz_core::judge::{Judge, TimingSide};
     use bmz_core::lane::{KeyMode, Lane};
-    use bmz_core::time::{ChartTick, TimeUs};
+    use bmz_core::time::TimeUs;
     use bmz_gameplay::judge::model::JudgementEvent;
 
     use crate::config::profile_config::ProfileConfig;
     use crate::screens::play_session::{PlaySessionOptions, build_game_session};
 
     use super::*;
+
+    fn approx_eq(left: f32, right: f32) -> bool {
+        (left - right).abs() < 0.0001
+    }
 
     #[test]
     fn rhythm_timer_resets_at_bar_lines_and_integrates_bpm_and_stops() {
@@ -1391,6 +1487,81 @@ mod tests {
             }],
         );
         assert_eq!(rhythm_timer_elapsed_ms(&with_stop, &[], TimeUs(1_500_000)), Some(3_000));
+    }
+
+    #[test]
+    fn quarter_note_timer_tracks_real_milliseconds_since_latest_quarter() {
+        use bmz_chart::timing::{TickTimingEvent, TickTimingEventKind, build_timing_map};
+
+        let bars = vec![
+            BarLine { measure: 0, tick: ChartTick(0), time: TimeUs(0) },
+            BarLine { measure: 1, tick: ChartTick(3_840), time: TimeUs(2_000_000) },
+        ];
+        let constant = build_timing_map(120.0, Vec::new());
+        assert_eq!(quarter_note_elapsed_ms(&constant, &bars, TimeUs(-1)), None);
+        assert_eq!(quarter_note_elapsed_ms(&constant, &bars, TimeUs(505_000)), Some(5));
+        assert_eq!(quarter_note_elapsed_ms(&constant, &bars, TimeUs(1_158_000)), Some(158));
+
+        let bpm_change = build_timing_map(
+            120.0,
+            vec![TickTimingEvent { tick: ChartTick(960), kind: TickTimingEventKind::SetBpm(60.0) }],
+        );
+        assert_eq!(quarter_note_elapsed_ms(&bpm_change, &bars, TimeUs(1_505_000)), Some(5));
+    }
+
+    #[test]
+    fn pms_missed_note_fall_waits_for_late_bad_and_uses_no_speed_rate() {
+        use bmz_chart::timing::{TickTimingEvent, TickTimingEventKind, build_timing_map};
+
+        let constant = build_timing_map(120.0, Vec::new());
+        assert!(approx_eq(
+            pms_missed_note_fall_progress(
+                &constant,
+                ChartTick(0),
+                TimeUs(0),
+                200_000,
+                TimeUs(200_000),
+            ),
+            0.0,
+        ));
+        assert!(approx_eq(
+            pms_missed_note_fall_progress(
+                &constant,
+                ChartTick(0),
+                TimeUs(0),
+                200_000,
+                TimeUs(700_000),
+            ),
+            0.25,
+        ));
+
+        let with_stop = build_timing_map(
+            120.0,
+            vec![TickTimingEvent {
+                tick: ChartTick(0),
+                kind: TickTimingEventKind::StopRaw { value: 96 },
+            }],
+        );
+        assert!(approx_eq(
+            pms_missed_note_fall_progress(
+                &with_stop,
+                ChartTick(0),
+                TimeUs(0),
+                200_000,
+                TimeUs(1_200_000),
+            ),
+            0.0,
+        ));
+        assert!(approx_eq(
+            pms_missed_note_fall_progress(
+                &with_stop,
+                ChartTick(0),
+                TimeUs(0),
+                200_000,
+                TimeUs(1_700_000),
+            ),
+            0.25,
+        ));
     }
 
     #[test]

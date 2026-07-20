@@ -10,6 +10,7 @@ use crate::{LoadedLuaSkinValue, SkinLoadDependencies, SkinLoadWarning, SkinLoade
 
 const LR2_OFFSET_LIFT: i32 = 3;
 const LR2_OFFSET_JUDGE_1P: i32 = 32;
+const LR2_REFERENCE_IMAGES: [i32; 5] = [100, 101, 102, 110, 111];
 
 #[derive(Debug, Clone)]
 struct CsvLine {
@@ -46,11 +47,15 @@ struct Header {
     w: u32,
     h: u32,
     fadeout: i32,
+    input: i32,
+    scene: i32,
     close: i32,
     loadstart: i32,
     loadend: i32,
     playstart: i32,
+    judgetimer: i32,
     finishmargin: i32,
+    builtin_options: [bool; 4],
     options: Vec<CustomOption>,
     files: Vec<CustomFile>,
     offsets: Vec<CustomOffset>,
@@ -71,11 +76,15 @@ impl Default for Header {
             w: 1280,
             h: 720,
             fadeout: 0,
+            input: 0,
+            scene: 0,
             close: 0,
             loadstart: 0,
             loadend: 0,
             playstart: 0,
+            judgetimer: 1,
             finishmargin: 0,
+            builtin_options: [true; 4],
             options: Vec::new(),
             files: Vec::new(),
             offsets: Vec::new(),
@@ -136,10 +145,16 @@ struct CsvBuilder<'a> {
     fonts: Vec<JsonValue>,
     lr2font_ids: Vec<Option<String>>,
     images: Vec<JsonValue>,
+    imagesets: Vec<JsonValue>,
+    lr2_imagesets: Vec<Vec<SourceRegion>>,
     values: Vec<JsonValue>,
     texts: Vec<JsonValue>,
     sliders: Vec<JsonValue>,
     graphs: Vec<JsonValue>,
+    judge_graphs: Vec<JsonValue>,
+    bpm_graphs: Vec<JsonValue>,
+    timing_visualizers: Vec<JsonValue>,
+    special_destination_sizes: HashMap<String, (i32, i32)>,
     hidden_covers: Vec<JsonValue>,
     gauge: Option<JsonValue>,
     gauges: Vec<JsonValue>,
@@ -149,6 +164,8 @@ struct CsvBuilder<'a> {
     destinations: Vec<JsonValue>,
     current: Option<CurrentObject>,
     conditional_ops: Vec<i32>,
+    runtime_option_aliases: HashMap<i32, Vec<i32>>,
+    stretch: i32,
     lr2_gauge_id: Option<String>,
     lr2_gauge_add_x: i32,
     lr2_gauge_add_y: i32,
@@ -176,7 +193,14 @@ struct NoteState {
     mine: Vec<String>,
     size: Vec<i32>,
     dst: Vec<JsonValue>,
+    dst2: Option<i32>,
+    expansion_rate: Option<[i32; 2]>,
+    line_sources: Vec<Option<String>>,
+    line_destinations: Vec<Option<JsonValue>>,
     group: Vec<JsonValue>,
+    bpm: Vec<JsonValue>,
+    stop: Vec<JsonValue>,
+    time: Vec<JsonValue>,
 }
 
 #[derive(Default, Clone)]
@@ -185,6 +209,7 @@ struct JudgeState {
     numbers: Vec<JsonValue>,
     shift: bool,
     marker_inserted: bool,
+    detail_inserted: bool,
 }
 
 pub fn load_lr2_csv_skin_value(
@@ -194,6 +219,7 @@ pub fn load_lr2_csv_skin_value(
 ) -> Result<LoadedLuaSkinValue> {
     let LoadedHeader { mut header, mut dependencies } = load_header(path, options)?;
     apply_default_play_header_items(&mut header);
+    apply_selected_header_options(&mut header, options);
     let mut builder = CsvBuilder::new(path, header, files);
     let lines = read_csv_lines(path)?;
     let mut processor = Processor::new(builder.header.selected_ops.clone());
@@ -222,6 +248,7 @@ pub fn load_lr2_csv_skin_dependency_option_values(
 ) -> Result<BTreeMap<i32, bool>> {
     let LoadedHeader { mut header, .. } = load_header(path, options)?;
     apply_default_play_header_items(&mut header);
+    apply_selected_header_options(&mut header, options);
     Ok(option_ids
         .into_iter()
         .map(|option_id| {
@@ -264,11 +291,21 @@ fn load_header(path: &Path, options: &BTreeMap<String, String>) -> Result<Loaded
                 header.author = field(line, 3).to_string();
             }
             "FADEOUT" => header.fadeout = parse_i32(line.fields.get(1)),
+            "STARTINPUT" => header.input = parse_i32(line.fields.get(1)),
+            "SCENETIME" => header.scene = parse_i32(line.fields.get(1)),
             "CLOSE" => header.close = parse_i32(line.fields.get(1)),
             "LOADSTART" => header.loadstart = parse_i32(line.fields.get(1)),
             "LOADEND" => header.loadend = parse_i32(line.fields.get(1)),
             "PLAYSTART" => header.playstart = parse_i32(line.fields.get(1)),
+            "JUDGETIMER" => header.judgetimer = parse_i32(line.fields.get(1)),
             "FINISHMARGIN" => header.finishmargin = parse_i32(line.fields.get(1)),
+            "CUSTOMOPTION_ADDITION_SETTING" => {
+                for (index, enabled) in header.builtin_options.iter_mut().enumerate() {
+                    if let Some(value) = line.fields.get(index + 1) {
+                        *enabled = parse_i32(Some(value)) != 0;
+                    }
+                }
+            }
             "CUSTOMOPTION" => {
                 let name = field(line, 1).to_string();
                 let base = parse_i32(line.fields.get(2));
@@ -310,19 +347,7 @@ fn load_header(path: &Path, options: &BTreeMap<String, String>) -> Result<Loaded
         }
     }
 
-    for option in &header.options {
-        let selected_index = options
-            .iter()
-            .find(|(name, _)| lr2_option_text_matches(name, &option.name))
-            .map(|(_, selected)| selected)
-            .and_then(|selected| {
-                option.items.iter().position(|item| lr2_option_text_matches(item, selected))
-            })
-            .unwrap_or(0);
-        for (index, _) in option.items.iter().enumerate() {
-            header.selected_ops.insert(option.base + index as i32, index == selected_index);
-        }
-    }
+    apply_selected_header_options(&mut header, options);
     apply_derived_play_options(&mut header);
     let dependencies = SkinLoadDependencies {
         number_values: BTreeMap::new(),
@@ -337,19 +362,38 @@ fn load_header(path: &Path, options: &BTreeMap<String, String>) -> Result<Loaded
     Ok(LoadedHeader { header, dependencies })
 }
 
+fn apply_selected_header_options(header: &mut Header, options: &BTreeMap<String, String>) {
+    for option in &header.options {
+        let selected_index = options
+            .iter()
+            .find(|(name, _)| lr2_option_text_matches(name, &option.name))
+            .map(|(_, selected)| selected)
+            .and_then(|selected| {
+                option.items.iter().position(|item| lr2_option_text_matches(item, selected))
+            })
+            .unwrap_or(0);
+        for (index, _) in option.items.iter().enumerate() {
+            header.selected_ops.insert(option.base + index as i32, index == selected_index);
+        }
+    }
+}
+
 fn apply_default_play_header_items(header: &mut Header) {
     if !matches!(header.skin_type, 0 | 1 | 2 | 3 | 4 | 12 | 13) {
         return;
     }
-    add_builtin_option(header, "BGA Size", 30, &["Normal", "Extend"]);
-    add_builtin_option(header, "Ghost", 34, &["Off", "Type A", "Type B", "Type C"]);
-    let has_score_graph_option = header.options.iter().any(|option| option.name == "Score Graph");
-    add_builtin_option(header, "Score Graph", 38, &["Off", "On"]);
-    if !has_score_graph_option {
-        header.selected_ops.insert(38, false);
-        header.selected_ops.insert(39, true);
+    if header.builtin_options[0] {
+        add_builtin_option(header, "BGA Size", 30, &["Normal", "Extend"]);
     }
-    add_builtin_option(header, "Judge Detail", 1997, &["Off", "EARLY/LATE", "+-ms"]);
+    if header.builtin_options[1] {
+        add_builtin_option(header, "Ghost", 34, &["Off", "Type A", "Type B", "Type C"]);
+    }
+    if header.builtin_options[2] {
+        add_builtin_option(header, "Score Graph", 38, &["Off", "On"]);
+    }
+    if header.builtin_options[3] {
+        add_builtin_option(header, "Judge Detail", 1997, &["Off", "EARLY/LATE", "+-ms"]);
+    }
     add_builtin_offset(header, "All offset(%)", 1, [true, true, true, true, false, false]);
     add_builtin_offset(header, "Notes offset", 31, [false, false, false, true, false, false]);
     add_builtin_offset(header, "Judge offset", 32, [true, true, true, true, false, true]);
@@ -426,10 +470,16 @@ impl<'a> CsvBuilder<'a> {
             fonts: Vec::new(),
             lr2font_ids: Vec::new(),
             images: Vec::new(),
+            imagesets: Vec::new(),
+            lr2_imagesets: Vec::new(),
             values: Vec::new(),
             texts: Vec::new(),
             sliders: Vec::new(),
             graphs: Vec::new(),
+            judge_graphs: Vec::new(),
+            bpm_graphs: Vec::new(),
+            timing_visualizers: Vec::new(),
+            special_destination_sizes: HashMap::new(),
             hidden_covers: Vec::new(),
             gauge: None,
             gauges: Vec::new(),
@@ -439,6 +489,8 @@ impl<'a> CsvBuilder<'a> {
             destinations: Vec::new(),
             current: None,
             conditional_ops: Vec::new(),
+            runtime_option_aliases: HashMap::new(),
+            stretch: 0,
             lr2_gauge_id: None,
             lr2_gauge_add_x: 0,
             lr2_gauge_add_y: 0,
@@ -498,6 +550,8 @@ impl<'a> CsvBuilder<'a> {
             "FONT" => self.add_system_font(line),
             "LR2FONT" => self.add_lr2_font(field(line, 1)),
             "SRC_IMAGE" | "SRC_BUTTON" => self.add_image(line),
+            "IMAGESET" => self.add_imageset_source(line),
+            "SRC_IMAGESET" => self.add_imageset(line),
             "DST_IMAGE" | "DST_BUTTON" => self.add_destination(line),
             "SRC_NUMBER" => self.add_number(line),
             "DST_NUMBER" => self.add_destination(line),
@@ -509,10 +563,16 @@ impl<'a> CsvBuilder<'a> {
             "SRC_BARGRAPH" => self.add_graph(line, false),
             "SRC_BARGRAPH_REFNUMBER" => self.add_graph(line, true),
             "DST_BARGRAPH" => self.add_destination(line),
+            "SRC_NOTECHART_1P" => self.add_note_chart(line),
+            "DST_NOTECHART_1P" => self.add_destination(line),
+            "SRC_BPMCHART" => self.add_bpm_chart(line),
+            "DST_BPMCHART" => self.add_destination(line),
+            "SRC_TIMING_1P" => self.add_timing_visualizer(line),
+            "DST_TIMING_1P" => self.add_destination(line),
             "SRC_GROOVEGAUGE" | "SRC_GROOVEGAUGE_EX" => self.add_gauge(line),
             "DST_GROOVEGAUGE" => self.add_destination(line),
-            "SRC_LINE" => self.add_image(line),
-            "DST_LINE" => self.add_note_group_destination(line, &[LR2_OFFSET_LIFT]),
+            "SRC_LINE" => self.add_line_source(line),
+            "DST_LINE" => self.add_line_destination(line),
             "SRC_JUDGELINE" => self.add_image(line),
             "DST_JUDGELINE" => self.add_destination_with_default_offsets(line, &[LR2_OFFSET_LIFT]),
             "SRC_BGA" => self.add_bga(),
@@ -540,21 +600,31 @@ impl<'a> CsvBuilder<'a> {
             "SRC_HCN_REACTIVE" => self.add_note_source(line, NoteSlot::HcnReactive),
             "SRC_MINE" | "SRC_AUTO_MINE" => self.add_note_source(line, NoteSlot::Mine),
             "DST_NOTE" => self.add_note_destination(line),
+            "DST_NOTE2" => self.note.dst2 = Some(parse_i32(line.fields.get(1))),
+            "DST_NOTE_EXPANSION_RATE" => {
+                self.note.expansion_rate =
+                    Some([parse_i32(line.fields.get(1)), parse_i32(line.fields.get(2))]);
+            }
             "SRC_NOWJUDGE_1P" => self.add_judge_image(line, 0),
             "DST_NOWJUDGE_1P" => self.add_judge_image_destination(line, 0),
             "SRC_NOWJUDGE_2P" => self.add_judge_image(line, 1),
             "DST_NOWJUDGE_2P" => self.add_judge_image_destination(line, 1),
+            "SRC_NOWJUDGE_3P" => self.add_judge_image(line, 2),
+            "DST_NOWJUDGE_3P" => self.add_judge_image_destination(line, 2),
             "SRC_NOWCOMBO_1P" => self.add_judge_number(line, 0),
             "DST_NOWCOMBO_1P" => self.add_judge_number_destination(line, 0),
             "SRC_NOWCOMBO_2P" => self.add_judge_number(line, 1),
             "DST_NOWCOMBO_2P" => self.add_judge_number_destination(line, 1),
+            "SRC_NOWCOMBO_3P" => self.add_judge_number(line, 2),
+            "DST_NOWCOMBO_3P" => self.add_judge_number_destination(line, 2),
             "SRC_HIDDEN" => self.add_hidden_cover(line),
             "DST_HIDDEN" => self.add_destination(line),
             "SRC_LIFT" => self.add_lift_cover(line),
             "DST_LIFT" => self.add_destination(line),
-            "STARTINPUT" => {}
+            "STARTINPUT" | "SCENETIME" | "JUDGETIMER" => {}
+            "STRETCH" => self.stretch = parse_i32(line.fields.get(1)),
             "FADEOUT" | "CLOSE" | "LOADSTART" | "LOADEND" | "PLAYSTART" | "FINISHMARGIN" => {}
-            "TRANSCLOLR" | "SCRATCHSIDE" | "ENDOFHEADER" | "STRETCH" => {}
+            "TRANSCLOLR" | "SCRATCHSIDE" | "ENDOFHEADER" => {}
             other if other.starts_with("DST_") || other.starts_with("SRC_") => {
                 self.warn(format!("unsupported lr2 csv command: #{other}"));
             }
@@ -566,10 +636,13 @@ impl<'a> CsvBuilder<'a> {
     fn apply_play_header_command(&mut self, line: &CsvLine) {
         match line.command.as_str() {
             "FADEOUT" => self.header.fadeout = parse_i32(line.fields.get(1)),
+            "STARTINPUT" => self.header.input = parse_i32(line.fields.get(1)),
+            "SCENETIME" => self.header.scene = parse_i32(line.fields.get(1)),
             "CLOSE" => self.header.close = parse_i32(line.fields.get(1)),
             "LOADSTART" => self.header.loadstart = parse_i32(line.fields.get(1)),
             "LOADEND" => self.header.loadend = parse_i32(line.fields.get(1)),
             "PLAYSTART" => self.header.playstart = parse_i32(line.fields.get(1)),
+            "JUDGETIMER" => self.header.judgetimer = parse_i32(line.fields.get(1)),
             "FINISHMARGIN" => self.header.finishmargin = parse_i32(line.fields.get(1)),
             _ => {}
         }
@@ -630,9 +703,62 @@ impl<'a> CsvBuilder<'a> {
         });
         if line.command == "SRC_BUTTON" {
             image["act"] = json!(values[11]);
-            image["click"] = json!(values[12]);
+            image["clickable"] = json!(values[12] == 1);
+            image["click"] = json!(if values[14] > 0 {
+                0
+            } else if values[14] < 0 {
+                1
+            } else {
+                2
+            });
+            image["len"] = json!(values[15]);
         }
         self.images.push(image);
+        self.set_current(id);
+    }
+
+    fn add_imageset_source(&mut self, line: &CsvLine) {
+        let values = parse_values(line);
+        let Some(region) = self.source_region(&values) else {
+            return;
+        };
+        self.lr2_imagesets.push(vec![region]);
+    }
+
+    fn add_imageset(&mut self, line: &CsvLine) {
+        let values = parse_values(line);
+        let count = values[4].max(0) as usize;
+        let mut image_ids = Vec::with_capacity(count);
+        for index in 0..count {
+            let source_index = parse_i32(line.fields.get(5 + index));
+            let Some(regions) = self.lr2_imagesets.get(source_index.max(0) as usize).cloned()
+            else {
+                self.warn(format!("lr2 csv imageset index {source_index} is not defined"));
+                continue;
+            };
+            for region in regions {
+                let id = self.alloc_id("lr2-imageset-image");
+                self.images.push(json!({
+                    "id": id,
+                    "src": region.src,
+                    "x": region.x,
+                    "y": region.y,
+                    "w": region.w,
+                    "h": region.h,
+                    "divx": region.divx,
+                    "divy": region.divy,
+                    "cycle": values[1],
+                    "timer": if values[2] != 0 { json!(values[2]) } else { JsonValue::Null },
+                }));
+                image_ids.push(id);
+            }
+        }
+        if image_ids.is_empty() {
+            self.current = None;
+            return;
+        }
+        let id = self.alloc_id("lr2-imageset");
+        self.imagesets.push(json!({ "id": id, "ref": values[3], "images": image_ids }));
         self.set_current(id);
     }
 
@@ -645,9 +771,9 @@ impl<'a> CsvBuilder<'a> {
         let cells = region.divx.saturating_mul(region.divy);
         let signed_layout = cells >= 24 && cells % 24 == 0;
         let digit = if signed_layout { values[13].saturating_add(1) } else { values[13] };
-        let zeropadding = if line.fields.get(14).is_some_and(|value| !value.is_empty()) {
-            values[14]
-        } else if signed_layout || cells % 10 != 0 {
+        let zeropadding = if signed_layout {
+            if line.fields.get(14).is_some_and(|value| !value.is_empty()) { values[14] } else { 2 }
+        } else if cells % 10 != 0 {
             2
         } else {
             0
@@ -746,6 +872,62 @@ impl<'a> CsvBuilder<'a> {
             "min": values[13],
             "max": values[14],
         }));
+        self.set_current(id);
+    }
+
+    fn add_note_chart(&mut self, line: &CsvLine) {
+        let values = parse_values(line);
+        let id = self.alloc_id("lr2-notechart");
+        self.judge_graphs.push(json!({
+            "id": id,
+            "type": values[1],
+            "delay": values[15],
+            "backTexOff": values[16],
+            "orderReverse": values[17],
+            "noGap": values[18],
+            "noGapX": values[19],
+        }));
+        self.special_destination_sizes.insert(id.clone(), (values[11], values[12]));
+        self.set_current(id);
+    }
+
+    fn add_bpm_chart(&mut self, line: &CsvLine) {
+        let values = parse_values(line);
+        let id = self.alloc_id("lr2-bpmchart");
+        self.bpm_graphs.push(json!({
+            "id": id,
+            "delay": values[3],
+            "lineWidth": values[4],
+            "mainBPMColor": field(line, 5),
+            "minBPMColor": field(line, 6),
+            "maxBPMColor": field(line, 7),
+            "otherBPMColor": field(line, 8),
+            "stopLineColor": field(line, 9),
+            "transitionLineColor": field(line, 10),
+        }));
+        self.special_destination_sizes.insert(id.clone(), (values[1], values[2]));
+        self.set_current(id);
+    }
+
+    fn add_timing_visualizer(&mut self, line: &CsvLine) {
+        let values = parse_values(line);
+        let id = self.alloc_id("lr2-timing");
+        self.timing_visualizers.push(json!({
+            "id": id,
+            "width": values[4],
+            "judgeWidthMillis": values[6],
+            "lineWidth": values[7],
+            "lineColor": field(line, 8),
+            "centerColor": field(line, 9),
+            "PGColor": field(line, 10),
+            "GRColor": field(line, 11),
+            "GDColor": field(line, 12),
+            "BDColor": field(line, 13),
+            "PRColor": field(line, 14),
+            "transparent": values[15],
+            "drawDecay": values[16],
+        }));
+        self.special_destination_sizes.insert(id.clone(), (values[4], values[5]));
         self.set_current(id);
     }
 
@@ -869,21 +1051,117 @@ impl<'a> CsvBuilder<'a> {
         }
     }
 
-    fn add_note_group_destination(&mut self, line: &CsvLine, default_offsets: &[i32]) {
-        let Some(current) = self.current.clone() else {
+    fn add_line_source(&mut self, line: &CsvLine) {
+        let values = parse_values(line);
+        let index = values[1].max(0) as usize;
+        let Some(region) = self.source_region(&values) else {
             return;
         };
-        let values = parse_values(line);
-        for variant in current.variants {
-            let ops = self.combined_conditional_ops(&variant);
-            let destination = self.destination_def_with_default_offsets(
-                &variant.id,
-                &values,
-                &ops,
-                default_offsets,
-            );
-            push_destination(&mut self.note.group, destination);
+        let id = self.alloc_id("lr2-line");
+        self.images.push(json!({
+            "id": id,
+            "src": region.src,
+            "x": region.x,
+            "y": region.y,
+            "w": region.w,
+            "h": region.h,
+            "divx": region.divx,
+            "divy": region.divy,
+            "cycle": region.cycle,
+            "timer": region.timer,
+        }));
+        if self.note.line_sources.len() <= index {
+            self.note.line_sources.resize(index + 1, None);
         }
+        self.note.line_sources[index] = Some(id.clone());
+        self.set_current(id);
+    }
+
+    fn add_line_destination(&mut self, line: &CsvLine) {
+        let values = parse_values(line);
+        let index = values[1].max(0) as usize;
+        let Some(id) = self.note.line_sources.get(index).and_then(|id| id.clone()) else {
+            return;
+        };
+        let ops = self.conditional_ops.clone();
+        let destination =
+            self.destination_def_with_default_offsets(&id, &values, &ops, &[LR2_OFFSET_LIFT]);
+        if self.note.line_destinations.len() <= index {
+            self.note.line_destinations.resize(index + 1, None);
+        }
+        if let Some(previous) = &mut self.note.line_destinations[index] {
+            merge_destination_entry(previous, destination);
+        } else {
+            self.note.line_destinations[index] = Some(destination);
+        }
+    }
+
+    fn complete_play_lines(&mut self) {
+        for side in 0..2 {
+            let Some(base) = self.note.line_destinations.get(side).and_then(|line| line.clone())
+            else {
+                continue;
+            };
+            self.note.group.push(base.clone());
+            for (slot, height_scale, color) in [
+                (side + 2, 2, [0, 192, 0]),
+                (side + 4, 2, [192, 192, 0]),
+                (side + 6, 1, [64, 192, 192]),
+            ] {
+                let destination = if let Some(explicit) =
+                    self.note.line_destinations.get(slot).and_then(|line| line.clone())
+                {
+                    explicit
+                } else {
+                    self.default_play_line_destination(&base, height_scale, color)
+                };
+                match slot {
+                    2 | 3 => self.note.bpm.push(destination),
+                    4 | 5 => self.note.stop.push(destination),
+                    6 | 7 => self.note.time.push(destination),
+                    _ => {}
+                }
+            }
+        }
+    }
+
+    fn default_play_line_destination(
+        &mut self,
+        base: &JsonValue,
+        height_scale: i32,
+        color: [i32; 3],
+    ) -> JsonValue {
+        self.ensure_reference_source(111);
+        let id = self.alloc_id("lr2-default-line");
+        self.images.push(json!({
+            "id": id,
+            "src": "111",
+            "x": 0,
+            "y": 0,
+            "w": 1,
+            "h": 1,
+            "divx": 1,
+            "divy": 1,
+        }));
+        let mut destination = base.clone();
+        destination["id"] = json!(id);
+        if let Some(frames) = destination.get_mut("dst").and_then(JsonValue::as_array_mut) {
+            for frame in frames {
+                if let Some(object) = frame.as_object_mut() {
+                    if let Some(height) = object.get("h").and_then(JsonValue::as_i64) {
+                        object.insert(
+                            "h".to_string(),
+                            json!(height.saturating_mul(height_scale as i64)),
+                        );
+                    }
+                    object.insert("a".to_string(), json!(255));
+                    object.insert("r".to_string(), json!(color[0]));
+                    object.insert("g".to_string(), json!(color[1]));
+                    object.insert("b".to_string(), json!(color[2]));
+                }
+            }
+        }
+        destination
     }
 
     fn lr2_lane_to_beatoraja_index(&self, lane: i32) -> Option<i32> {
@@ -943,12 +1221,98 @@ impl<'a> CsvBuilder<'a> {
                 merge_destination_entry(entry, dst);
             }
         }
+        if !self.judges[index].detail_inserted {
+            self.judges[index].detail_inserted = true;
+            self.add_default_judge_detail(&values, index);
+        }
+    }
+
+    fn add_default_judge_detail(&mut self, judge_dst: &[i32; 22], side: usize) {
+        const TIMERS: [i32; 3] = [46, 47, 247];
+        const EARLY_OPTIONS: [i32; 3] = [1242, 1262, 1362];
+        const LATE_OPTIONS: [i32; 3] = [1243, 1263, 1363];
+        const PERFECT_OPTIONS: [i32; 3] = [241, 261, 361];
+        const DURATION_REFS: [i32; 3] = [525, 526, 527];
+        let side = side.min(2);
+        if !self.sources.iter().any(|source| {
+            source.get("id").and_then(JsonValue::as_str) == Some("lr2-judgedetail-source")
+        }) {
+            self.sources.push(json!({
+                "id": "lr2-judgedetail-source",
+                "path": "bmz://lr2/judgedetail",
+            }));
+        }
+
+        let center_x = judge_dst[3].saturating_add(judge_dst[5] / 2);
+        let y = (self.header.h as i32).saturating_sub(judge_dst[4].saturating_sub(5));
+        let label_w = ((40_i64 * i64::from(self.header.w)) / 1280).max(1) as i32;
+        let digit_w = ((8_i64 * i64::from(self.header.w)) / 1280).max(1) as i32;
+        let height = ((16_i64 * i64::from(self.header.h)) / 720).max(1) as i32;
+        let timer = TIMERS[side];
+
+        for (name, x, op) in [("early", 0, EARLY_OPTIONS[side]), ("late", 50, LATE_OPTIONS[side])] {
+            let id = self.alloc_id(&format!("lr2-judge-detail-{name}"));
+            self.images.push(json!({
+                "id": id,
+                "src": "lr2-judgedetail-source",
+                "x": x,
+                "y": 0,
+                "w": 50,
+                "h": 20,
+                "divx": 1,
+                "divy": 1,
+            }));
+            self.destinations.push(judge_detail_destination(
+                &id,
+                center_x,
+                y,
+                label_w,
+                height,
+                timer,
+                &[1998, op],
+            ));
+        }
+
+        for (index, (source_y, perfect_op)) in
+            [(20, PERFECT_OPTIONS[side]), (60, -PERFECT_OPTIONS[side])].into_iter().enumerate()
+        {
+            let id = self.alloc_id(&format!("lr2-judge-detail-number-{index}"));
+            self.values.push(json!({
+                "id": id,
+                "src": "lr2-judgedetail-source",
+                "x": 0,
+                "y": source_y,
+                "w": 120,
+                "h": 40,
+                "divx": 12,
+                "divy": 2,
+                "ref": DURATION_REFS[side],
+                "align": judge_dst[12],
+                "digit": 4,
+                "zeropadding": 0,
+                "space": judge_dst[15],
+            }));
+            self.destinations.push(judge_detail_destination(
+                &id,
+                center_x,
+                y,
+                digit_w,
+                height,
+                timer,
+                &[1999, perfect_op],
+            ));
+        }
     }
 
     fn add_judge_number(&mut self, line: &CsvLine, index: usize) {
         let values = parse_values(line);
         self.add_number(line);
         if let Some(variant) = self.current_primary_variant() {
+            if let Some(value) = self.values.iter_mut().find(|value| {
+                value.get("id").and_then(JsonValue::as_str) == Some(variant.id.as_str())
+            }) {
+                value["judgeAlign"] = json!(if values[12] == 1 { 2 } else { values[12] });
+            }
             self.ensure_judge(index);
             set_judge_slot(
                 &mut self.judges[index].numbers,
@@ -966,12 +1330,13 @@ impl<'a> CsvBuilder<'a> {
         let values = parse_values(line);
         for variant in current.variants {
             let ops = self.combined_conditional_ops(&variant);
-            let dst = judge_combo_destination_def(
+            let mut dst = judge_combo_destination_def(
                 &variant.id,
                 &values,
                 &ops,
                 &[LR2_OFFSET_JUDGE_1P, LR2_OFFSET_LIFT],
             );
+            self.expand_destination_option_aliases(&mut dst);
             if let Some(entry) = self.judges[index].numbers.iter_mut().rev().find(|entry| {
                 entry.get("id").and_then(JsonValue::as_str) == Some(variant.id.as_str())
             }) {
@@ -1039,32 +1404,59 @@ impl<'a> CsvBuilder<'a> {
         let values = parse_values(line);
         for variant in current.variants {
             let ops = self.combined_conditional_ops(&variant);
-            let dst = if self.lr2_gauge_id.as_deref() == Some(variant.id.as_str()) {
+            let mut destination_values = values;
+            if let Some(&(width, height)) = self.special_destination_sizes.get(&variant.id) {
+                destination_values[4] = destination_values[4].saturating_sub(height);
+                destination_values[5] = width;
+                destination_values[6] = height;
+            }
+            let mut dst = if self.lr2_gauge_id.as_deref() == Some(variant.id.as_str()) {
                 gauge_destination_def(
                     &variant.id,
-                    &values,
+                    &destination_values,
                     self.header.h as i32,
                     self.lr2_gauge_add_x,
                     self.lr2_gauge_add_y,
                     &ops,
                 )
+            } else if line.command == "DST_BARGRAPH" {
+                let mut destination = destination_def_with_default_offsets(
+                    &variant.id,
+                    &destination_values,
+                    self.header.h as i32,
+                    &ops,
+                    default_offsets,
+                );
+                if let Some(frame) = destination
+                    .get_mut("dst")
+                    .and_then(JsonValue::as_array_mut)
+                    .and_then(|frames| frames.first_mut())
+                {
+                    frame["x"] = json!(destination_values[3]);
+                    frame["w"] = json!(destination_values[5]);
+                }
+                destination
             } else if variant.id.contains("lr2-liftcover") {
                 self.destination_def_with_default_offsets(
                     &variant.id,
-                    &values,
+                    &destination_values,
                     &ops,
                     &[LR2_OFFSET_LIFT],
                 )
             } else if !default_offsets.is_empty() {
                 self.destination_def_with_default_offsets(
                     &variant.id,
-                    &values,
+                    &destination_values,
                     &ops,
                     default_offsets,
                 )
             } else {
-                self.destination_def_with_ops(&variant.id, &values, &ops)
+                self.destination_def_with_ops(&variant.id, &destination_values, &ops)
             };
+            if matches!(line.command.as_str(), "DST_IMAGE" | "DST_BGA") {
+                dst["stretch"] = json!(self.stretch);
+            }
+            self.expand_destination_option_aliases(&mut dst);
             if self.current_has_destination {
                 merge_or_push_current_destination(&mut self.destinations, dst);
             } else {
@@ -1098,13 +1490,56 @@ impl<'a> CsvBuilder<'a> {
         ops
     }
 
+    fn register_runtime_option_alias(&mut self, option: i32, value: bool, condition: &[i32]) {
+        if value
+            && !condition.is_empty()
+            && !self.header.selected_ops.get(&option.abs()).copied().unwrap_or(false)
+        {
+            self.runtime_option_aliases.entry(option.abs()).or_insert_with(|| condition.to_vec());
+        }
+    }
+
+    fn expand_destination_option_aliases(&self, destination: &mut JsonValue) {
+        let Some(ops) = destination.get_mut("op").and_then(JsonValue::as_array_mut) else {
+            return;
+        };
+        let original = std::mem::take(ops);
+        for op in original {
+            let Some(op) = op.as_i64().and_then(|value| i32::try_from(value).ok()) else {
+                continue;
+            };
+            let option_id = op.abs();
+            if let Some(alias) = self.runtime_option_aliases.get(&option_id) {
+                if op >= 0 {
+                    ops.extend(alias.iter().map(|value| json!(value)));
+                } else if alias.len() == 1 {
+                    ops.push(json!(-alias[0]));
+                } else {
+                    ops.push(json!(op));
+                }
+            } else {
+                ops.push(json!(op));
+            }
+        }
+        let mut seen = BTreeSet::new();
+        ops.retain(|op| op.as_i64().is_none_or(|value| seen.insert(value)));
+    }
+
     fn destination_def_with_ops(
         &self,
         id: &str,
         values: &[i32; 22],
         conditional_ops: &[i32],
     ) -> JsonValue {
-        destination_def_with_default_offsets(id, values, self.header.h as i32, conditional_ops, &[])
+        let mut destination = destination_def_with_default_offsets(
+            id,
+            values,
+            self.header.h as i32,
+            conditional_ops,
+            &[],
+        );
+        self.expand_destination_option_aliases(&mut destination);
+        destination
     }
 
     fn destination_def_with_default_offsets(
@@ -1114,13 +1549,15 @@ impl<'a> CsvBuilder<'a> {
         conditional_ops: &[i32],
         default_offsets: &[i32],
     ) -> JsonValue {
-        destination_def_with_default_offsets(
+        let mut destination = destination_def_with_default_offsets(
             id,
             values,
             self.header.h as i32,
             conditional_ops,
             default_offsets,
-        )
+        );
+        self.expand_destination_option_aliases(&mut destination);
+        destination
     }
 
     fn ensure_judge(&mut self, index: usize) {
@@ -1135,18 +1572,18 @@ impl<'a> CsvBuilder<'a> {
             return None;
         }
         let source_id = source_index.to_string();
-        if matches!(source_index, 101 | 110 | 111) {
+        if LR2_REFERENCE_IMAGES.contains(&source_index) {
             self.ensure_reference_source(source_index);
             return Some(SourceRegion {
                 src: source_id,
-                x: values[3],
-                y: values[4],
-                w: values[5],
-                h: values[6],
-                divx: values[7].max(1),
-                divy: values[8].max(1),
-                cycle: values[9],
-                timer: (values[10] != 0).then_some(values[10]),
+                x: 0,
+                y: 0,
+                w: -1,
+                h: -1,
+                divx: 1,
+                divy: 1,
+                cycle: 0,
+                timer: None,
             });
         }
         if source_index as usize >= self.source_paths.len() {
@@ -1286,7 +1723,8 @@ impl<'a> CsvBuilder<'a> {
         self.warnings.push(SkinLoadWarning { message });
     }
 
-    fn finish(self) -> JsonValue {
+    fn finish(mut self) -> JsonValue {
+        self.complete_play_lines();
         let category = json!([{ "name": "LR2", "item": ["property", "filepath", "offset"] }]);
         let property = self
             .header
@@ -1353,6 +1791,10 @@ impl<'a> CsvBuilder<'a> {
             })
             .collect::<Vec<_>>();
         let note = (!self.note.note.is_empty() || !self.note.dst.is_empty()).then(|| {
+            let dst2 = self.note.dst2.map(|y| {
+                (self.header.h as i32)
+                    .saturating_sub(y.saturating_add(self.note.size.first().copied().unwrap_or(0)))
+            });
             json!({
                 "id": "notes",
                 "note": self.note.note,
@@ -1368,8 +1810,13 @@ impl<'a> CsvBuilder<'a> {
                 "hcnreactive": self.note.hcnreactive,
                 "mine": self.note.mine,
                 "size": self.note.size,
+                "dst2": dst2.unwrap_or(i32::MIN),
+                "expansionrate": self.note.expansion_rate.unwrap_or([100, 100]),
                 "dst": self.note.dst,
                 "group": self.note.group,
+                "bpm": self.note.bpm,
+                "stop": self.note.stop,
+                "time": self.note.time,
             })
         });
         let judge = self
@@ -1393,10 +1840,13 @@ impl<'a> CsvBuilder<'a> {
             "w": self.header.w,
             "h": self.header.h,
             "fadeout": self.header.fadeout,
+            "input": self.header.input,
+            "scene": self.header.scene,
             "close": self.header.close,
             "loadstart": self.header.loadstart,
             "loadend": self.header.loadend,
             "playstart": self.header.playstart,
+            "judgetimer": self.header.judgetimer,
             "finishmargin": self.header.finishmargin,
             "category": category,
             "property": property,
@@ -1405,10 +1855,14 @@ impl<'a> CsvBuilder<'a> {
             "source": self.sources,
             "font": self.fonts,
             "image": self.images,
+            "imageset": self.imagesets,
             "value": self.values,
             "text": self.texts,
             "slider": self.sliders,
             "graph": self.graphs,
+            "judgegraph": self.judge_graphs,
+            "bpmgraph": self.bpm_graphs,
+            "timingvisualizer": self.timing_visualizers,
             "hiddenCover": self.hidden_covers,
             "gauge": self.gauge,
             "gauges": self.gauges,
@@ -1422,6 +1876,7 @@ impl<'a> CsvBuilder<'a> {
 
 struct Processor {
     ops: HashMap<i32, bool>,
+    runtime_aliases: HashMap<i32, Vec<i32>>,
     stack: Vec<IfState>,
     option_dependencies: BTreeMap<i32, bool>,
 }
@@ -1432,11 +1887,17 @@ struct IfState {
     branch_taken: bool,
     active: bool,
     runtime_ops: Vec<i32>,
+    runtime_branches: Vec<Vec<i32>>,
 }
 
 impl Processor {
     fn new(ops: HashMap<i32, bool>) -> Self {
-        Self { ops, stack: Vec::new(), option_dependencies: BTreeMap::new() }
+        Self {
+            ops,
+            runtime_aliases: HashMap::new(),
+            stack: Vec::new(),
+            option_dependencies: BTreeMap::new(),
+        }
     }
 
     fn process_lines(
@@ -1455,9 +1916,15 @@ impl Processor {
             if line.command == "SETOPTION" {
                 let index = parse_i32(line.fields.get(1));
                 let value = parse_i32(line.fields.get(2)) >= 1;
-                if self.active_runtime_ops().is_empty() {
+                let runtime_ops = self.active_runtime_ops();
+                if runtime_ops.is_empty() {
                     self.ops.insert(index, value);
                     builder.header.selected_ops.insert(index, value);
+                } else {
+                    if value && !self.ops.get(&index.abs()).copied().unwrap_or(false) {
+                        self.runtime_aliases.entry(index.abs()).or_insert(runtime_ops.clone());
+                    }
+                    builder.register_runtime_option_alias(index, value, &runtime_ops);
                 }
                 continue;
             }
@@ -1497,7 +1964,12 @@ impl Processor {
                     parent_active,
                     branch_taken: condition,
                     active: condition,
-                    runtime_ops: if condition { eval.runtime_ops } else { Vec::new() },
+                    runtime_ops: if condition { eval.runtime_ops.clone() } else { Vec::new() },
+                    runtime_branches: if condition && !eval.runtime_ops.is_empty() {
+                        vec![eval.runtime_ops]
+                    } else {
+                        Vec::new()
+                    },
                 });
                 true
             }
@@ -1505,7 +1977,23 @@ impl Processor {
                 let Some(mut state) = self.stack.pop() else {
                     return true;
                 };
-                if !state.parent_active || state.branch_taken {
+                if !state.runtime_branches.is_empty() {
+                    let eval = self.eval_if(line);
+                    if !state.parent_active || !eval.matches || eval.runtime_ops.is_empty() {
+                        state.active = false;
+                        state.runtime_ops.clear();
+                    } else if let Some(mut previous) =
+                        negate_runtime_branches(&state.runtime_branches)
+                    {
+                        previous.extend(eval.runtime_ops.iter().copied());
+                        state.active = true;
+                        state.runtime_ops = previous;
+                        state.runtime_branches.push(eval.runtime_ops);
+                    } else {
+                        state.active = false;
+                        state.runtime_ops.clear();
+                    }
+                } else if !state.parent_active || state.branch_taken {
                     state.active = false;
                     state.runtime_ops.clear();
                 } else {
@@ -1519,9 +2007,19 @@ impl Processor {
             }
             "ELSE" => {
                 if let Some(state) = self.stack.last_mut() {
-                    state.active = state.parent_active && !state.branch_taken;
+                    if !state.runtime_branches.is_empty() {
+                        if let Some(ops) = negate_runtime_branches(&state.runtime_branches) {
+                            state.active = state.parent_active;
+                            state.runtime_ops = ops;
+                        } else {
+                            state.active = false;
+                            state.runtime_ops.clear();
+                        }
+                    } else {
+                        state.active = state.parent_active && !state.branch_taken;
+                        state.runtime_ops.clear();
+                    }
                     state.branch_taken = true;
-                    state.runtime_ops.clear();
                 }
                 true
             }
@@ -1545,7 +2043,17 @@ impl Processor {
             line.fields.iter().skip(1).filter(|field| !field.trim().is_empty()).all(|field| {
                 let option = parse_option_token(field);
                 let option_id = option.abs();
-                if is_runtime_lr2_option(option_id) {
+                if let Some(alias) = self.runtime_aliases.get(&option_id) {
+                    if option >= 0 {
+                        runtime_ops.extend(alias.iter().copied());
+                        true
+                    } else if alias.len() == 1 {
+                        runtime_ops.push(-alias[0]);
+                        true
+                    } else {
+                        false
+                    }
+                } else if is_runtime_lr2_option(option_id) {
                     runtime_ops.push(option);
                     true
                 } else if let Some(enabled) = ops.get(&option_id).copied() {
@@ -1574,7 +2082,39 @@ struct IfEval {
 }
 
 fn is_runtime_lr2_option(option: i32) -> bool {
-    matches!(option, 32 | 33 | 150..=155)
+    matches!(
+        option,
+        32 | 33
+            | 40..=43
+            | 60
+            | 61
+            | 82
+            | 84
+            | 150..=155
+            | 160..=175
+            | 177
+            | 180..=191
+            | 194
+            | 195
+            | 230..=273
+            | 280..=293
+            | 330..=354
+            | 624
+            | 625
+            | 1046
+            | 1080
+            | 1177
+            | 1242
+            | 1243
+            | 1262
+            | 1263
+            | 1362
+            | 1363
+    )
+}
+
+fn negate_runtime_branches(branches: &[Vec<i32>]) -> Option<Vec<i32>> {
+    branches.iter().map(|branch| (branch.len() == 1).then_some(-branch[0])).collect()
 }
 
 fn lr2_option_text_matches(a: &str, b: &str) -> bool {
@@ -1610,7 +2150,6 @@ fn destination_def_with_default_offsets(
     let frame = destination_frame(values, canvas_h);
     let mut op = conditional_ops.to_vec();
     op.extend(values[18..=20].iter().copied().filter(|value| *value != 0));
-    normalize_lr2_destination_ops(&mut op);
     let mut destination = json!({
         "id": id,
         "blend": values[12],
@@ -1626,12 +2165,6 @@ fn destination_def_with_default_offsets(
         destination["offsets"] = json!(default_offsets);
     }
     destination
-}
-
-fn normalize_lr2_destination_ops(op: &mut Vec<i32>) {
-    if op.contains(&39) {
-        op.retain(|value| !matches!(*value, 32 | -33));
-    }
 }
 
 fn gauge_destination_def(
@@ -1655,7 +2188,6 @@ fn gauge_destination_def(
     let frame = gauge_destination_frame(&values, canvas_h);
     let mut op = conditional_ops.to_vec();
     op.extend(values[18..=20].iter().copied().filter(|value| *value != 0));
-    normalize_lr2_destination_ops(&mut op);
     json!({
         "id": id,
         "blend": values[12],
@@ -1722,6 +2254,28 @@ fn judge_combo_destination_def(
     destination
 }
 
+fn judge_detail_destination(
+    id: &str,
+    x: i32,
+    y: i32,
+    w: i32,
+    h: i32,
+    timer: i32,
+    op: &[i32],
+) -> JsonValue {
+    json!({
+        "id": id,
+        "timer": timer,
+        "loop": -1,
+        "offsets": [33, LR2_OFFSET_LIFT],
+        "op": op,
+        "dst": [
+            { "time": 0, "x": x, "y": y, "w": w, "h": h, "a": 255, "r": 255, "g": 255, "b": 255 },
+            { "time": 500, "x": x, "y": y, "w": w, "h": h, "a": 255, "r": 255, "g": 255, "b": 255 },
+        ],
+    })
+}
+
 fn lr2_gauge_nodes(cell_ids: &[String], animation_type: i32, is_ex: bool) -> Vec<String> {
     let mut nodes = vec![cell_ids.first().cloned().unwrap_or_default(); 36];
     let cells_per_frame = if is_ex {
@@ -1781,15 +2335,6 @@ fn lr2_gauge_slots(
         }
         slots
     }
-}
-
-fn push_destination(destinations: &mut Vec<JsonValue>, destination: JsonValue) {
-    if let Some(previous) = destinations.last_mut()
-        && merge_destination_entry(previous, destination.clone())
-    {
-        return;
-    }
-    destinations.push(destination);
 }
 
 fn merge_or_push_current_destination(destinations: &mut Vec<JsonValue>, destination: JsonValue) {
@@ -2181,11 +2726,33 @@ mod tests {
                     .expect("valid DST_LINE"),
             )
             .unwrap();
+        builder.complete_play_lines();
 
         let group = builder.note.group.first().expect("DST_LINE should produce note.group");
 
         assert_eq!(group["offset"], 0);
         assert_eq!(group["offsets"].as_array().unwrap(), &[json!(LR2_OFFSET_LIFT)]);
+        for destinations in [&builder.note.bpm, &builder.note.stop, &builder.note.time] {
+            assert_eq!(destinations.len(), 1);
+            assert_eq!(destinations[0]["offsets"].as_array().unwrap(), &[json!(LR2_OFFSET_LIFT)]);
+        }
+        let bpm_frame = builder.note.bpm[0]["dst"].as_array().unwrap().first().unwrap();
+        assert_eq!(bpm_frame["h"], json!(4));
+        assert_eq!(
+            (bpm_frame["r"].as_i64(), bpm_frame["g"].as_i64(), bpm_frame["b"].as_i64()),
+            (Some(0), Some(192), Some(0))
+        );
+        let stop_frame = builder.note.stop[0]["dst"].as_array().unwrap().first().unwrap();
+        assert_eq!(
+            (stop_frame["r"].as_i64(), stop_frame["g"].as_i64(), stop_frame["b"].as_i64()),
+            (Some(192), Some(192), Some(0))
+        );
+        let time_frame = builder.note.time[0]["dst"].as_array().unwrap().first().unwrap();
+        assert_eq!(time_frame["h"], json!(2));
+        assert_eq!(
+            (time_frame["r"].as_i64(), time_frame["g"].as_i64(), time_frame["b"].as_i64()),
+            (Some(64), Some(192), Some(192))
+        );
     }
 
     #[test]
@@ -2236,6 +2803,187 @@ mod tests {
         assert_eq!(value["digit"], json!(3));
         assert_eq!(value["zeropadding"], json!(2));
         assert_eq!(value["space"], json!(0));
+    }
+
+    #[test]
+    fn lr2_unsigned_number_ignores_explicit_zero_padding_like_beatoraja() {
+        let files = BTreeMap::new();
+        let skin_path = unique_test_dir("bmz-lr2-unsigned-number").join("play.lr2skin");
+        let mut builder = CsvBuilder::new(&skin_path, Header::default(), &files);
+        builder.add_source("numbers.png");
+        builder
+            .execute(
+                &parse_csv_line("#SRC_NUMBER,0,0,0,0,100,20,10,1,0,0,100,0,4,2,0")
+                    .expect("valid SRC_NUMBER"),
+            )
+            .unwrap();
+
+        let value = builder.values.first().unwrap();
+        assert_eq!(value["digit"], json!(4));
+        assert_eq!(value["zeropadding"], json!(0));
+    }
+
+    #[test]
+    fn lr2_button_keeps_state_reference_separate_from_clickability() {
+        let files = BTreeMap::new();
+        let skin_path = unique_test_dir("bmz-lr2-button").join("play.lr2skin");
+        let mut builder = CsvBuilder::new(&skin_path, Header::default(), &files);
+        builder.add_source("button.png");
+        builder
+            .execute(
+                &parse_csv_line("#SRC_BUTTON,0,0,0,0,20,10,2,1,0,0,77,0,0,-1,3")
+                    .expect("valid SRC_BUTTON"),
+            )
+            .unwrap();
+
+        let image = builder.images.first().unwrap();
+        assert_eq!(image["act"], json!(77));
+        assert_eq!(image["clickable"], json!(false));
+        assert_eq!(image["click"], json!(1));
+        assert_eq!(image["len"], json!(3));
+    }
+
+    #[test]
+    fn lr2_imageset_combines_registered_source_sets() {
+        let files = BTreeMap::new();
+        let skin_path = unique_test_dir("bmz-lr2-imageset").join("play.lr2skin");
+        let mut builder = CsvBuilder::new(&skin_path, Header::default(), &files);
+        builder.add_source("set.png");
+        builder
+            .execute(&parse_csv_line("#IMAGESET,0,0,0,0,20,10,2,1,0,0").expect("valid IMAGESET"))
+            .unwrap();
+        builder
+            .execute(&parse_csv_line("#SRC_IMAGESET,100,0,88,1,0").expect("valid SRC_IMAGESET"))
+            .unwrap();
+
+        let imageset = builder.imagesets.first().unwrap();
+        assert_eq!(imageset["ref"], json!(88));
+        assert_eq!(imageset["images"].as_array().unwrap().len(), 1);
+        assert_eq!(builder.images.last().unwrap()["cycle"], json!(100));
+    }
+
+    #[test]
+    fn lr2_play_headers_and_stretch_are_preserved() {
+        let path = Path::new("skin/play/test.lr2skin");
+        let files = BTreeMap::new();
+        let mut builder = CsvBuilder::new(path, Header::default(), &files);
+        let lines = [
+            parse_csv_line("#STARTINPUT,350").unwrap(),
+            parse_csv_line("#SCENETIME,90000").unwrap(),
+            parse_csv_line("#JUDGETIMER,3").unwrap(),
+            parse_csv_line("#IMAGE,parts/frame.png").unwrap(),
+            parse_csv_line("#SRC_IMAGE,0,0,0,0,10,10,1,1,0,0").unwrap(),
+            parse_csv_line("#STRETCH,2").unwrap(),
+            parse_csv_line("#DST_IMAGE,0,0,0,10,20,30,40,0,255,255,255,255,0,0,0,0,0,0,0,0,0")
+                .unwrap(),
+        ];
+        let mut processor = Processor::new(HashMap::new());
+
+        processor.process_lines(&lines, path, &mut builder).unwrap();
+
+        assert_eq!(builder.header.input, 350);
+        assert_eq!(builder.header.scene, 90_000);
+        assert_eq!(builder.header.judgetimer, 3);
+        assert_eq!(builder.destinations[0]["stretch"], json!(2));
+    }
+
+    #[test]
+    fn lr2_bargraph_preserves_negative_fill_direction() {
+        let files = BTreeMap::new();
+        let skin_path = unique_test_dir("bmz-lr2-negative-graph").join("play.lr2skin");
+        let mut builder = CsvBuilder::new(&skin_path, Header::default(), &files);
+        builder.add_source("graph.png");
+        builder
+            .execute(
+                &parse_csv_line("#SRC_BARGRAPH,0,0,0,0,100,10,1,1,0,0,0,0")
+                    .expect("valid SRC_BARGRAPH"),
+            )
+            .unwrap();
+        builder
+            .execute(
+                &parse_csv_line(
+                    "#DST_BARGRAPH,0,0,50,20,-30,8,0,255,255,255,255,0,0,0,0,0,0,0,0,0",
+                )
+                .expect("valid DST_BARGRAPH"),
+            )
+            .unwrap();
+
+        let frame = builder.destinations[0]["dst"].as_array().unwrap().first().unwrap();
+        assert_eq!(frame["x"], json!(50));
+        assert_eq!(frame["w"], json!(-30));
+    }
+
+    #[test]
+    fn lr2_play_chart_sources_keep_beatoraja_fields_and_destination_size() {
+        let files = BTreeMap::new();
+        let skin_path = unique_test_dir("bmz-lr2-play-chart").join("play.lr2skin");
+        let mut builder = CsvBuilder::new(&skin_path, Header::default(), &files);
+        builder
+            .execute(
+                &parse_csv_line("#SRC_NOTECHART_1P,2,0,0,0,0,0,0,0,0,0,300,120,0,0,15,1,1,1,1")
+                    .expect("valid SRC_NOTECHART_1P"),
+            )
+            .unwrap();
+        builder
+            .execute(
+                &parse_csv_line(
+                    "#DST_NOTECHART_1P,0,0,50,200,0,0,0,255,255,255,255,0,0,0,0,0,0,0,0,0",
+                )
+                .expect("valid DST_NOTECHART_1P"),
+            )
+            .unwrap();
+
+        let graph = builder.judge_graphs.first().unwrap();
+        assert_eq!(graph["type"], json!(2));
+        assert_eq!(graph["delay"], json!(15));
+        assert_eq!(graph["backTexOff"], json!(1));
+        assert_eq!(graph["orderReverse"], json!(1));
+        assert_eq!(graph["noGap"], json!(1));
+        assert_eq!(graph["noGapX"], json!(1));
+        let frame = builder.destinations[0]["dst"].as_array().unwrap().first().unwrap();
+        assert_eq!(frame["x"], json!(50));
+        assert_eq!(frame["y"], json!(520));
+        assert_eq!(frame["w"], json!(300));
+        assert_eq!(frame["h"], json!(120));
+    }
+
+    #[test]
+    fn lr2_nowjudge_adds_beatoraja_judge_detail_objects() {
+        let files = BTreeMap::new();
+        let skin_path = unique_test_dir("bmz-lr2-judge-detail").join("play.lr2skin");
+        let mut builder = CsvBuilder::new(&skin_path, Header::default(), &files);
+        builder.add_source("judge.png");
+        builder
+            .execute(
+                &parse_csv_line("#SRC_NOWJUDGE_1P,5,0,0,0,100,20,1,1,0,0,0")
+                    .expect("valid SRC_NOWJUDGE_1P"),
+            )
+            .unwrap();
+        builder
+            .execute(
+                &parse_csv_line(
+                    "#DST_NOWJUDGE_1P,0,0,100,200,120,24,0,255,255,255,255,0,0,0,0,0,0,0,0,0",
+                )
+                .expect("valid DST_NOWJUDGE_1P"),
+            )
+            .unwrap();
+
+        assert!(builder.sources.iter().any(|source| source["path"] == "bmz://lr2/judgedetail"));
+        let detail_destinations = builder
+            .destinations
+            .iter()
+            .filter(|destination| {
+                destination["op"].as_array().is_some_and(|ops| {
+                    ops.iter().any(|op| matches!(op.as_i64(), Some(1998 | 1999)))
+                })
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(detail_destinations.len(), 4);
+        assert!(detail_destinations.iter().all(|destination| {
+            destination["offsets"]
+                .as_array()
+                .is_some_and(|offsets| offsets == &[json!(33), json!(LR2_OFFSET_LIFT)])
+        }));
     }
 
     #[test]
@@ -2434,6 +3182,39 @@ mod tests {
     }
 
     #[test]
+    fn processor_converts_runtime_else_to_negated_op() {
+        let mut processor = Processor::new(HashMap::new());
+        assert!(!processor.should_execute(&parse_csv_line("#IF,41").unwrap()));
+        assert_eq!(processor.active_runtime_ops(), vec![41]);
+        assert!(!processor.should_execute(&parse_csv_line("#ELSE").unwrap()));
+        assert_eq!(processor.active_runtime_ops(), vec![-41]);
+        assert!(!processor.should_execute(&parse_csv_line("#ENDIF").unwrap()));
+        assert!(processor.active_runtime_ops().is_empty());
+    }
+
+    #[test]
+    fn processor_expands_conditional_setoption_to_its_runtime_source() {
+        let path = Path::new("skin/play/test.lr2skin");
+        let files = BTreeMap::new();
+        let mut builder = CsvBuilder::new(path, Header::default(), &files);
+        let lines = [
+            parse_csv_line("#IF,41").unwrap(),
+            parse_csv_line("#SETOPTION,982,1").unwrap(),
+            parse_csv_line("#ENDIF").unwrap(),
+            parse_csv_line("#SRC_BGA").unwrap(),
+            parse_csv_line("#IF,982").unwrap(),
+            parse_csv_line("#DST_BGA,0,0,0,10,20,30,40,0,255,255,255,255,0,0,0,0,0,0,0,0,0")
+                .unwrap(),
+            parse_csv_line("#ENDIF").unwrap(),
+        ];
+        let mut processor = Processor::new(HashMap::new());
+
+        processor.process_lines(&lines, path, &mut builder).unwrap();
+
+        assert_eq!(builder.destinations[0]["op"].as_array().unwrap(), &[json!(41)]);
+    }
+
+    #[test]
     fn processor_does_not_leak_setoption_inside_runtime_if() {
         let path = Path::new("skin/play/test.lr2skin");
         let files = BTreeMap::new();
@@ -2473,7 +3254,7 @@ mod tests {
     }
 
     #[test]
-    fn processor_drops_autoplay_off_from_score_graph_destinations() {
+    fn processor_keeps_autoplay_off_on_score_graph_destinations() {
         let path = Path::new("skin/play/test.lr2skin");
         let files = BTreeMap::new();
         let mut builder = CsvBuilder::new(path, Header::default(), &files);
@@ -2490,7 +3271,7 @@ mod tests {
         processor.process_lines(&lines, path, &mut builder).unwrap();
 
         let op = builder.destinations[0]["op"].as_array().unwrap();
-        assert_eq!(op, &[json!(39)]);
+        assert_eq!(op, &[json!(32), json!(39)]);
     }
 
     #[test]

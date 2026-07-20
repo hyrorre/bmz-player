@@ -15156,6 +15156,7 @@ fn play_skin_video_draw_state(
         ready_timer_ms: snapshot.ready_elapsed_time.map(time_us_to_skin_ms),
         play_timer_ms: (snapshot.time.0 >= 0).then_some(time_us_to_skin_ms(snapshot.time)),
         rhythm_timer_ms: snapshot.rhythm_timer_elapsed_ms,
+        quarter_note_elapsed_ms: snapshot.quarter_note_elapsed_ms,
         key_mode: snapshot.key_mode,
         combo: snapshot.combo,
         max_combo: snapshot.max_combo,
