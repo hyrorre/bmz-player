@@ -225,29 +225,32 @@ fn common_key_binding_items() -> Vec<SelectItem> {
 fn key_binding_items(key_mode: KeyMode) -> Vec<SelectItem> {
     let scratch_lanes = scratch_lanes_for_key_mode(key_mode);
     let key_lanes = key_lanes_for_key_mode(key_mode);
-    KEY_BINDING_SLOTS
-        .iter()
+    let hispeed_rows = (key_mode == KeyMode::K8)
+        .then_some(SettingsEntryId::HISPEED_8K_ENTRIES)
+        .into_iter()
+        .flatten()
         .copied()
-        .flat_map(|slot| {
-            let scratch_rows = scratch_lanes.iter().copied().flat_map(move |lane| {
-                let resolved = resolve_binding_slot(slot, key_mode, lane);
-                [ScratchDirection::Up, ScratchDirection::Down].into_iter().map(move |direction| {
-                    SelectItem::KeyBinding(KeyBindingSelectRow {
-                        key_mode,
-                        target: KeyBindingTarget::Scratch { lane, direction, slot: resolved },
-                    })
-                })
-            });
-            let key_rows = key_lanes.iter().copied().map(move |lane| {
-                let resolved = resolve_binding_slot(slot, key_mode, lane);
+        .map(|entry_id| SelectItem::Config(ConfigSelectRow { entry_id }));
+    let binding_rows = KEY_BINDING_SLOTS.iter().copied().flat_map(|slot| {
+        let scratch_rows = scratch_lanes.iter().copied().flat_map(move |lane| {
+            let resolved = resolve_binding_slot(slot, key_mode, lane);
+            [ScratchDirection::Up, ScratchDirection::Down].into_iter().map(move |direction| {
                 SelectItem::KeyBinding(KeyBindingSelectRow {
                     key_mode,
-                    target: KeyBindingTarget::Key { lane, slot: resolved },
+                    target: KeyBindingTarget::Scratch { lane, direction, slot: resolved },
                 })
-            });
-            scratch_rows.chain(key_rows)
-        })
-        .collect()
+            })
+        });
+        let key_rows = key_lanes.iter().copied().map(move |lane| {
+            let resolved = resolve_binding_slot(slot, key_mode, lane);
+            SelectItem::KeyBinding(KeyBindingSelectRow {
+                key_mode,
+                target: KeyBindingTarget::Key { lane, slot: resolved },
+            })
+        });
+        scratch_rows.chain(key_rows)
+    });
+    hispeed_rows.chain(binding_rows).collect()
 }
 
 fn config_items(entries: &'static [SettingsEntryId]) -> Vec<SelectItem> {
@@ -453,13 +456,33 @@ mod tests {
         {
             let items =
                 load_settings_items(&format!("bmz-settings:keys:{}", key_mode.play_map_key()));
-            assert_eq!(items.len(), rows_per_slot * KEY_BINDING_SLOTS.len() + 1);
+            let hispeed_rows =
+                if key_mode == KeyMode::K8 { SettingsEntryId::HISPEED_8K_ENTRIES.len() } else { 0 };
+            assert_eq!(items.len(), rows_per_slot * KEY_BINDING_SLOTS.len() + hispeed_rows + 1);
             assert!(matches!(items.first(), Some(SelectItem::Back)));
             assert!(items.iter().any(|item| matches!(
                 item,
                 SelectItem::KeyBinding(row) if row.key_mode == key_mode
             )));
         }
+    }
+
+    #[test]
+    fn settings_keys_8k_lists_each_hispeed_direction() {
+        let items = load_settings_items("bmz-settings:keys:8k");
+        let entries: Vec<_> = items
+            .iter()
+            .filter_map(|item| match item {
+                SelectItem::Config(row)
+                    if SettingsEntryId::HISPEED_8K_ENTRIES.contains(&row.entry_id) =>
+                {
+                    Some(row.entry_id)
+                }
+                _ => None,
+            })
+            .collect();
+
+        assert_eq!(entries, SettingsEntryId::HISPEED_8K_ENTRIES);
     }
 
     #[test]

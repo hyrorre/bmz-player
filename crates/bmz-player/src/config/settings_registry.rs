@@ -2,10 +2,12 @@ use super::play::{TARGET_GREEN_NUMBER_MAX, TARGET_GREEN_NUMBER_MIN};
 use super::profile_config::{
     AssistOptionConfig, BgaExpandConfig, BgaModeConfig, BottomShiftableGaugeConfig,
     DoubleOptionConfig, GaugeAutoShiftConfig, GaugeTypeConfig, HISPEED_STEP_MAX, HISPEED_STEP_MIN,
-    HispeedModeConfig, HsFixConfig, JudgeAlgorithmConfig, LaneEffectConfig, ProfileConfig,
-    RandomOptionConfig, ReplaySlotRule, ScratchInputMode, SelectInputModeConfig,
-    TargetOptionConfig, default_hispeed_step_fhs, default_hispeed_step_nhs, normalize_hispeed_step,
+    HispeedDirectionConfig, HispeedModeConfig, HsFixConfig, JudgeAlgorithmConfig, LaneConfig,
+    LaneEffectConfig, ProfileConfig, RandomOptionConfig, ReplaySlotRule, ScratchInputMode,
+    SelectInputModeConfig, TargetOptionConfig, default_hispeed_step_fhs, default_hispeed_step_nhs,
+    normalize_hispeed_step,
 };
+use bmz_core::lane::KeyMode;
 use bmz_gameplay::rule::RuleMode;
 use bmz_render::scene::ResultGradeDiffDisplay;
 
@@ -56,6 +58,14 @@ pub enum SettingsEntryId {
     AnalogScratchSensitivity,
     AnalogScratchThreshold,
     AnalogTicksPerScroll,
+    Hispeed8Key1,
+    Hispeed8Key2,
+    Hispeed8Key3,
+    Hispeed8Key4,
+    Hispeed8Key5,
+    Hispeed8Key6,
+    Hispeed8Key7,
+    Hispeed8Key8,
     SelectRandomSelect,
     ReplayAutoSave,
     ReplaySlot1Rule,
@@ -124,6 +134,17 @@ impl SettingsEntryId {
 
     pub const SELECT_ENTRIES: &'static [Self] = &[Self::SelectRandomSelect];
 
+    pub const HISPEED_8K_ENTRIES: &'static [Self] = &[
+        Self::Hispeed8Key1,
+        Self::Hispeed8Key2,
+        Self::Hispeed8Key3,
+        Self::Hispeed8Key4,
+        Self::Hispeed8Key5,
+        Self::Hispeed8Key6,
+        Self::Hispeed8Key7,
+        Self::Hispeed8Key8,
+    ];
+
     pub const REPLAY_ENTRIES: &'static [Self] = &[
         Self::ReplayAutoSave,
         Self::ReplaySlot1Rule,
@@ -176,6 +197,14 @@ impl SettingsEntryId {
             Self::AnalogScratchSensitivity => "ANALOG SENS",
             Self::AnalogScratchThreshold => "ANALOG STOP",
             Self::AnalogTicksPerScroll => "ANALOG SCROLL",
+            Self::Hispeed8Key1 => "KEY 1 HS DIRECTION",
+            Self::Hispeed8Key2 => "KEY 2 HS DIRECTION",
+            Self::Hispeed8Key3 => "KEY 3 HS DIRECTION",
+            Self::Hispeed8Key4 => "KEY 4 HS DIRECTION",
+            Self::Hispeed8Key5 => "KEY 5 HS DIRECTION",
+            Self::Hispeed8Key6 => "KEY 6 HS DIRECTION",
+            Self::Hispeed8Key7 => "KEY 7 HS DIRECTION",
+            Self::Hispeed8Key8 => "KEY 8 HS DIRECTION",
             Self::SelectRandomSelect => "RANDOM SELECT",
             Self::ReplayAutoSave => "REPLAY SAVE",
             Self::ReplaySlot1Rule => "REPLAY 1",
@@ -263,6 +292,24 @@ pub fn format_settings_value(profile: &ProfileConfig, id: SettingsEntryId) -> St
         }
         SettingsEntryId::AnalogTicksPerScroll => {
             format!("{} ticks", profile.input.analog_ticks_per_scroll)
+        }
+        id @ (SettingsEntryId::Hispeed8Key1
+        | SettingsEntryId::Hispeed8Key2
+        | SettingsEntryId::Hispeed8Key3
+        | SettingsEntryId::Hispeed8Key4
+        | SettingsEntryId::Hispeed8Key5
+        | SettingsEntryId::Hispeed8Key6
+        | SettingsEntryId::Hispeed8Key7
+        | SettingsEntryId::Hispeed8Key8) => {
+            let lane = eight_key_hispeed_lane(id).expect("guarded 8K hispeed setting");
+            format_hispeed_direction(
+                crate::config::play_input::hispeed_direction_for_lane(
+                    &profile.input,
+                    KeyMode::K8,
+                    super::play::lane_from_config(lane),
+                )
+                .expect("8K key lane has a hispeed direction"),
+            )
         }
         SettingsEntryId::SelectRandomSelect => format_bool_on_off(profile.select.random_select),
         SettingsEntryId::ReplayAutoSave => format_bool_on_off(profile.replay.auto_save),
@@ -448,6 +495,31 @@ pub fn adjust_settings_value(profile: &mut ProfileConfig, id: SettingsEntryId, d
         SettingsEntryId::AnalogTicksPerScroll => {
             adjust_u32(&mut profile.input.analog_ticks_per_scroll, delta, 1, 100)
         }
+        id @ (SettingsEntryId::Hispeed8Key1
+        | SettingsEntryId::Hispeed8Key2
+        | SettingsEntryId::Hispeed8Key3
+        | SettingsEntryId::Hispeed8Key4
+        | SettingsEntryId::Hispeed8Key5
+        | SettingsEntryId::Hispeed8Key6
+        | SettingsEntryId::Hispeed8Key7
+        | SettingsEntryId::Hispeed8Key8) => {
+            let lane = eight_key_hispeed_lane(id).expect("guarded 8K hispeed setting");
+            let current = crate::config::play_input::hispeed_direction_for_lane(
+                &profile.input,
+                KeyMode::K8,
+                super::play::lane_from_config(lane),
+            )
+            .expect("8K key lane has a hispeed direction");
+            let next = match current {
+                HispeedDirectionConfig::Down => HispeedDirectionConfig::Up,
+                HispeedDirectionConfig::Up => HispeedDirectionConfig::Down,
+            };
+            crate::config::play_input::set_eight_key_hispeed_direction(
+                &mut profile.input,
+                lane,
+                next,
+            )
+        }
         SettingsEntryId::SelectRandomSelect => {
             if delta == 0 {
                 false
@@ -477,6 +549,28 @@ pub fn adjust_settings_value(profile: &mut ProfileConfig, id: SettingsEntryId, d
             adjust_replay_slot_rule(&mut profile.replay.slot_rules[3], delta)
         }
     }
+}
+
+pub const fn eight_key_hispeed_lane(id: SettingsEntryId) -> Option<LaneConfig> {
+    match id {
+        SettingsEntryId::Hispeed8Key1 => Some(LaneConfig::Key1),
+        SettingsEntryId::Hispeed8Key2 => Some(LaneConfig::Key2),
+        SettingsEntryId::Hispeed8Key3 => Some(LaneConfig::Key3),
+        SettingsEntryId::Hispeed8Key4 => Some(LaneConfig::Key4),
+        SettingsEntryId::Hispeed8Key5 => Some(LaneConfig::Key5),
+        SettingsEntryId::Hispeed8Key6 => Some(LaneConfig::Key6),
+        SettingsEntryId::Hispeed8Key7 => Some(LaneConfig::Key7),
+        SettingsEntryId::Hispeed8Key8 => Some(LaneConfig::Key8),
+        _ => None,
+    }
+}
+
+fn format_hispeed_direction(value: HispeedDirectionConfig) -> String {
+    match value {
+        HispeedDirectionConfig::Down => "DOWN",
+        HispeedDirectionConfig::Up => "UP",
+    }
+    .to_string()
 }
 
 fn adjust_u32(value: &mut u32, delta: i32, min: u32, max: u32) -> bool {
@@ -1102,5 +1196,23 @@ mod tests {
             profile.replay.slot_rules[1],
             crate::config::profile_config::ReplaySlotRule::BpUpdate
         );
+    }
+
+    #[test]
+    fn eight_key_hispeed_direction_rows_toggle_independently() {
+        let mut profile = ProfileConfig::new_default("default", "Default", 0);
+        assert_eq!(format_settings_value(&profile, SettingsEntryId::Hispeed8Key1), "UP");
+        assert_eq!(format_settings_value(&profile, SettingsEntryId::Hispeed8Key2), "DOWN");
+
+        assert!(adjust_settings_value(&mut profile, SettingsEntryId::Hispeed8Key1, 1));
+        assert_eq!(format_settings_value(&profile, SettingsEntryId::Hispeed8Key1), "DOWN");
+        assert_eq!(format_settings_value(&profile, SettingsEntryId::Hispeed8Key2), "DOWN");
+        assert_eq!(
+            profile.input.play[KeyMode::K8.play_map_key()].hispeed.get(&LaneConfig::Key1),
+            Some(&HispeedDirectionConfig::Down),
+        );
+
+        assert!(adjust_settings_value(&mut profile, SettingsEntryId::Hispeed8Key1, -1));
+        assert!(profile.input.play[KeyMode::K8.play_map_key()].hispeed.is_empty());
     }
 }

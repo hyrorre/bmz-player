@@ -920,28 +920,26 @@ pub fn clear_play_binding(
     persist_bindings(input, key_mode, bindings)
 }
 
-pub fn snapshot_play_bindings(
+pub fn snapshot_play_mode_config(
     input: &ProfileInputConfig,
     key_mode: KeyMode,
-) -> Vec<BindingConfigEntry> {
-    input
-        .play
-        .get(key_mode.play_map_key())
-        .map(|config| config.bindings.clone())
-        .unwrap_or_default()
+) -> Option<PlayModeInputConfig> {
+    input.play.get(key_mode.play_map_key()).cloned()
 }
 
-pub fn restore_play_bindings(
+pub fn restore_play_mode_config(
     input: &mut ProfileInputConfig,
     key_mode: KeyMode,
-    bindings: Vec<BindingConfigEntry>,
+    config: Option<PlayModeInputConfig>,
 ) {
-    if bindings.is_empty() {
-        input.play.remove(key_mode.play_map_key());
-        return;
+    match config {
+        Some(config) => {
+            input.play.insert(key_mode.play_map_key().to_string(), config);
+        }
+        None => {
+            input.play.remove(key_mode.play_map_key());
+        }
     }
-    let config = ensure_play_mode_config(input, key_mode);
-    config.bindings = bindings;
 }
 
 fn ensure_play_mode_config(
@@ -951,6 +949,7 @@ fn ensure_play_mode_config(
     input.play.entry(key_mode.play_map_key().to_string()).or_insert_with(|| PlayModeInputConfig {
         inherit: None,
         bindings: default_play_bindings(key_mode),
+        ..Default::default()
     })
 }
 

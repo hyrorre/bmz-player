@@ -129,12 +129,10 @@ favorite 操作は invisible を使わず、登録済みなら解除、未登録
 | --- | --- |
 | Left / Right | ハイスピードを HS MODE ごとの設定刻みで下げる / 上げる (NHS 既定 0.25、FHS 既定 0.50) |
 | Up / Down | レーンカバー表示中はカバー位置、非表示中は LIFT を調整 |
-| E1 hold + KEY1/3/5/7 | HS MODE ごとの設定刻みでハイスピードを下げる。9K では KEY1/3/5 |
-| E1 hold + KEY2/4/6 | HS MODE ごとの設定刻みでハイスピードを上げる |
+| E1 hold + 鍵盤 | KEY MODE ごとの HS 方向に従い、HS MODE ごとの設定刻みでハイスピードを下げる / 上げる |
 | E1 hold + E2 | HS MODE を切替 |
 | E1 hold + Scratch Up/Down | レーンカバーを上げる / 下げる |
-| E2 hold + KEY1/3/5/7 | 緑数字を下げる。9K では KEY1/3/5 |
-| E2 hold + KEY2/4/6 | 緑数字を上げる |
+| E2 hold + 鍵盤 | E1 と同じ KEY MODE ごとの HS 方向に従い、緑数字を下げる / 上げる |
 | E2 hold + Scratch Up/Down | 緑数字を下げる / 上げる |
 | E1 double press | レーンカバー表示を切替 |
 | Escape | プレイを中断して選曲へ戻る。最終ノーツ処理後、終了演出開始前は E1 と同じく終了演出を開始 |
@@ -142,6 +140,21 @@ favorite 操作は invisible を使わず、登録済みなら解除、未登録
 | E2+E3 | 即時にプレイを中断 |
 | FAILED 演出中に E1 | リザルトへ進まず別配置でクイックリトライ |
 | FAILED 演出中に E2 | リザルトへ進まず同配置でクイックリトライ |
+
+E1/E2 hold 中の鍵盤方向は、譜面の KEY MODE ごとに次のとおりです。`Down` はハイスピードまたは緑数字を下げ、`Up` は上げます。10K/14K は 1P/2P の両側に同じ規則を適用します。
+
+| KEY MODE | Down | Up |
+| --- | --- | --- |
+| 4K | KEY1 / KEY4 | KEY2 / KEY3 |
+| 5K | KEY1 / KEY3 / KEY5 | KEY2 / KEY4 |
+| 6K | KEY1 / KEY3 / KEY4 / KEY6 | KEY2 / KEY5 |
+| 7K | KEY1 / KEY3 / KEY5 / KEY7 | KEY2 / KEY4 / KEY6 |
+| 8K（既定） | KEY2 / KEY4 / KEY5 / KEY7 | KEY1 / KEY3 / KEY6 / KEY8 |
+| 9K | KEY1 / KEY3 / KEY5 / KEY7 / KEY9 | KEY2 / KEY4 / KEY6 / KEY8 |
+| 10K（1P/2P） | KEY1 / KEY3 / KEY5 | KEY2 / KEY4 |
+| 14K（1P/2P） | KEY1 / KEY3 / KEY5 / KEY7 | KEY2 / KEY4 / KEY6 |
+
+8K の各鍵盤の方向は、`設定 → キー設定 → 8K` で個別に `Down` / `Up` へ変更できます。
 
 コースの `NoSpeed` 制約中は、ハイスピード変更とハイスピードへ影響するレーンカバー操作が無効になります。
 クイックリトライは単曲の通常プレイでのみ有効です。

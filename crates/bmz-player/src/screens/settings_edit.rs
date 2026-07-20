@@ -6,13 +6,13 @@ use bmz_gameplay::rule::RuleMode;
 use crate::config::play_input::resolve_play_bindings;
 use crate::config::profile_config::{
     AssistOptionConfig, BgaExpandConfig, BgaModeConfig, BottomShiftableGaugeConfig,
-    DoubleOptionConfig, GaugeAutoShiftConfig, GaugeTypeConfig, HispeedModeConfig, HsFixConfig,
-    InputActionConfig, JudgeAlgorithmConfig, LaneConfig, LaneEffectConfig, ProfileConfig,
-    ProfileInputConfig, RandomOptionConfig, ReplaySlotRule, ScratchDirectionConfig,
-    ScratchInputMode, SelectInputModeConfig, TargetOptionConfig,
+    DoubleOptionConfig, GaugeAutoShiftConfig, GaugeTypeConfig, HispeedDirectionConfig,
+    HispeedModeConfig, HsFixConfig, InputActionConfig, JudgeAlgorithmConfig, LaneConfig,
+    LaneEffectConfig, ProfileConfig, ProfileInputConfig, RandomOptionConfig, ReplaySlotRule,
+    ScratchDirectionConfig, ScratchInputMode, SelectInputModeConfig, TargetOptionConfig,
 };
 use crate::config::settings_registry::{
-    SettingsEntryId, adjust_settings_value, format_settings_value,
+    SettingsEntryId, adjust_settings_value, eight_key_hispeed_lane, format_settings_value,
 };
 use bmz_render::scene::ResultGradeDiffDisplay;
 
@@ -245,6 +245,7 @@ enum SettingsBaseline {
     BgaMode(BgaModeConfig),
     BgaExpand(BgaExpandConfig),
     HispeedMode(HispeedModeConfig),
+    HispeedDirection(HispeedDirectionConfig),
     SelectInputMode(SelectInputModeConfig),
     ScratchInputMode(ScratchInputMode),
     ReplaySlotRule(ReplaySlotRule),
@@ -348,6 +349,24 @@ impl SettingsEditSession {
             }
             SettingsEntryId::AnalogTicksPerScroll => {
                 SettingsBaseline::U32(profile.input.analog_ticks_per_scroll)
+            }
+            id @ (SettingsEntryId::Hispeed8Key1
+            | SettingsEntryId::Hispeed8Key2
+            | SettingsEntryId::Hispeed8Key3
+            | SettingsEntryId::Hispeed8Key4
+            | SettingsEntryId::Hispeed8Key5
+            | SettingsEntryId::Hispeed8Key6
+            | SettingsEntryId::Hispeed8Key7
+            | SettingsEntryId::Hispeed8Key8) => {
+                let lane = eight_key_hispeed_lane(id).expect("8K hispeed setting has a lane");
+                SettingsBaseline::HispeedDirection(
+                    crate::config::play_input::hispeed_direction_for_lane(
+                        &profile.input,
+                        KeyMode::K8,
+                        crate::config::play::lane_from_config(lane),
+                    )
+                    .expect("8K key lane has a hispeed direction"),
+                )
             }
             SettingsEntryId::ReplayAutoSave => SettingsBaseline::Bool(profile.replay.auto_save),
             SettingsEntryId::ReplaySlot1Rule => {
@@ -499,6 +518,24 @@ impl SettingsEditSession {
             }
             (SettingsEntryId::AnalogTicksPerScroll, SettingsBaseline::U32(value)) => {
                 profile.input.analog_ticks_per_scroll = *value;
+            }
+            (
+                id @ (SettingsEntryId::Hispeed8Key1
+                | SettingsEntryId::Hispeed8Key2
+                | SettingsEntryId::Hispeed8Key3
+                | SettingsEntryId::Hispeed8Key4
+                | SettingsEntryId::Hispeed8Key5
+                | SettingsEntryId::Hispeed8Key6
+                | SettingsEntryId::Hispeed8Key7
+                | SettingsEntryId::Hispeed8Key8),
+                SettingsBaseline::HispeedDirection(value),
+            ) => {
+                let lane = eight_key_hispeed_lane(*id).expect("8K hispeed setting has a lane");
+                crate::config::play_input::set_eight_key_hispeed_direction(
+                    &mut profile.input,
+                    lane,
+                    *value,
+                );
             }
             (SettingsEntryId::ReplayAutoSave, SettingsBaseline::Bool(value)) => {
                 profile.replay.auto_save = *value;

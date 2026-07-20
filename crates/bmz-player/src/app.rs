@@ -77,11 +77,11 @@ use crate::config::load::load_profile_config;
 use crate::config::play::{TARGET_GREEN_NUMBER_MAX, TARGET_GREEN_NUMBER_MIN};
 use crate::config::profile_config::{
     AssistOptionConfig, BgaExpandConfig, BgaModeConfig, BottomShiftableGaugeConfig,
-    DoubleOptionConfig, GaugeAutoShiftConfig, GaugeTypeConfig, HispeedModeConfig, HsFixConfig,
-    InputActionConfig, JudgeAlgorithmConfig, LaneConfig, LaneEffectConfig, LaneViewConfig,
-    ProfileConfig, ProfileInputConfig, RandomOptionConfig, ScratchDirectionConfig,
-    SelectInputModeConfig, TargetOptionConfig, default_hispeed_step_fhs, default_hispeed_step_nhs,
-    normalize_hispeed_step, replay_slot_rule_indices,
+    DoubleOptionConfig, GaugeAutoShiftConfig, GaugeTypeConfig, HispeedDirectionConfig,
+    HispeedModeConfig, HsFixConfig, InputActionConfig, JudgeAlgorithmConfig, LaneConfig,
+    LaneEffectConfig, LaneViewConfig, ProfileConfig, ProfileInputConfig, RandomOptionConfig,
+    ScratchDirectionConfig, SelectInputModeConfig, TargetOptionConfig, default_hispeed_step_fhs,
+    default_hispeed_step_nhs, normalize_hispeed_step, replay_slot_rule_indices,
 };
 use crate::config::save::{save_app_config, save_profile_config};
 use crate::config::settings_registry::SettingsEntryId;
@@ -92,7 +92,8 @@ use crate::generated_preview::{
 };
 use crate::input::shared::SharedInputBackend;
 use crate::input::winit::{
-    key_event_to_device_input, physical_key_to_control, physical_key_to_device_input,
+    W_KEYBOARD_DEVICE_ID, key_event_to_device_input, physical_key_to_control,
+    physical_key_to_device_input,
 };
 use crate::logging::LogBuffer;
 use crate::practice_ui::PracticePanelContext;
@@ -576,6 +577,7 @@ struct WinitApp {
     select_held: bool,
     select_e_action_holds: HashSet<InputActionConfig>,
     pressed_controls: HashSet<String>,
+    pressed_play_inputs: HashSet<(DeviceId, PhysicalControl)>,
     raw_input_pressed_keys: HashSet<PhysicalKey>,
     window_input_pressed_keys: HashSet<PhysicalKey>,
     arrange_option: ArrangeOption,
@@ -590,6 +592,9 @@ struct WinitApp {
     select_mode_filter: SelectModeFilter,
     select_sort: SelectSort,
     select_keys: SelectKeyBindings,
+    /// 現在のプレイ譜面の KEY MODE と device-aware lane binding。
+    /// 選曲用 binding と分離し、10K/14K の同名 gamepad control も側別に解決する。
+    play_option_input: Option<PlayOptionInput>,
     select_bar_scroll_direction: i32,
     select_bar_scroll_duration: Duration,
     select_hold_move: Option<SelectMove>,
@@ -1406,6 +1411,100 @@ enum PendingPlayLaneAction {
     LaneCoverDelta(f32),
     GreenNumberDelta(i32),
     ToggleLaneCoverVisibility,
+}
+
+#[derive(Debug, Clone)]
+struct PlayOptionInput {
+    key_mode: KeyMode,
+    binding: LaneBinding,
+    action_bindings: Vec<PlayActionBinding>,
+}
+
+#[derive(Debug, Clone)]
+struct PlayActionBinding {
+    device: Option<DeviceId>,
+    control: PhysicalControl,
+    action: InputActionConfig,
+}
+
+impl PlayOptionInput {
+    fn new(
+        key_mode: KeyMode,
+        binding: LaneBinding,
+        profile_input: &ProfileInputConfig,
+        gamepad_slots: crate::input::gamepad::GamepadSlotMap,
+    ) -> Self {
+        let mut action_bindings: Vec<_> = profile_input
+            .ui
+            .bindings
+            .iter()
+            .filter_map(|entry| {
+                let action = entry.action?;
+                let (device, control) = match entry.device.trim().to_ascii_lowercase().as_str() {
+                    "keyboard" => (
+                        Some(W_KEYBOARD_DEVICE_ID),
+                        PhysicalControl::KeyboardKey(entry.control.clone()),
+                    ),
+                    "hid" => (None, PhysicalControl::HidButton(entry.control.parse::<u32>().ok()?)),
+                    "gamepad" => (None, PhysicalControl::GamepadButton(entry.control.clone())),
+                    device => {
+                        let player = crate::config::play_input::gamepad_player_index(device)?;
+                        (
+                            gamepad_slots.device_id_for_player(player),
+                            PhysicalControl::GamepadButton(entry.control.clone()),
+                        )
+                    }
+                };
+                Some(PlayActionBinding { device, control, action })
+            })
+            .collect();
+        if let Some(legacy_start) = profile_input.start_key.as_ref()
+            && !action_bindings.iter().any(|entry| {
+                entry.device == Some(W_KEYBOARD_DEVICE_ID)
+                    && entry.control == PhysicalControl::KeyboardKey(legacy_start.clone())
+                    && entry.action == InputActionConfig::E1
+            })
+        {
+            action_bindings.push(PlayActionBinding {
+                device: Some(W_KEYBOARD_DEVICE_ID),
+                control: PhysicalControl::KeyboardKey(legacy_start.clone()),
+                action: InputActionConfig::E1,
+            });
+        }
+        if !action_bindings.iter().any(|entry| entry.action == InputActionConfig::E1) {
+            action_bindings.push(PlayActionBinding {
+                device: Some(W_KEYBOARD_DEVICE_ID),
+                control: PhysicalControl::KeyboardKey("Q".to_string()),
+                action: InputActionConfig::E1,
+            });
+        }
+        Self { key_mode, binding, action_bindings }
+    }
+
+    fn resolves_lane(&self, device: DeviceId, control: &PhysicalControl) -> bool {
+        self.binding.resolve_entry(device, control).is_some()
+    }
+
+    fn is_action(
+        &self,
+        device: DeviceId,
+        control: &PhysicalControl,
+        action: InputActionConfig,
+    ) -> bool {
+        let has_device_specific_binding = self
+            .action_bindings
+            .iter()
+            .any(|entry| entry.device == Some(device) && entry.control == *control);
+        self.action_bindings.iter().any(|entry| {
+            entry.control == *control
+                && entry.action == action
+                && if has_device_specific_binding {
+                    entry.device == Some(device)
+                } else {
+                    entry.device.is_none()
+                }
+        })
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -2726,6 +2825,7 @@ impl WinitApp {
             select_held: false,
             select_e_action_holds: HashSet::new(),
             pressed_controls: HashSet::new(),
+            pressed_play_inputs: HashSet::new(),
             raw_input_pressed_keys: HashSet::new(),
             window_input_pressed_keys: HashSet::new(),
             arrange_option,
@@ -2740,6 +2840,7 @@ impl WinitApp {
             select_mode_filter,
             select_sort,
             select_keys,
+            play_option_input: None,
             select_bar_scroll_direction: 0,
             select_bar_scroll_duration: Duration::ZERO,
             select_hold_move: None,
@@ -4405,6 +4506,20 @@ impl WinitApp {
         }
     }
 
+    fn update_pressed_play_input(
+        &mut self,
+        device: DeviceId,
+        control: &PhysicalControl,
+        pressed: bool,
+    ) {
+        let input = (device, control.clone());
+        if pressed {
+            self.pressed_play_inputs.insert(input);
+        } else {
+            self.pressed_play_inputs.remove(&input);
+        }
+    }
+
     fn sync_select_holds_from_pressed_controls(&mut self) {
         let (start_held, select_held, e_action_holds) =
             select_hold_state_from_pressed_controls(&self.pressed_controls, &self.select_keys);
@@ -4890,8 +5005,16 @@ impl WinitApp {
 
     fn route_keyboard_input(&mut self, event: &winit::event::KeyEvent) {
         let play_control = (!event.repeat).then(|| physical_key_name(event.physical_key)).flatten();
+        let play_physical_control = physical_key_to_control(event.physical_key);
         if let Some(control) = play_control.as_deref() {
             self.update_pressed_control(control, event.state == ElementState::Pressed);
+        }
+        if let Some(control) = play_physical_control.as_ref() {
+            self.update_pressed_play_input(
+                W_KEYBOARD_DEVICE_ID,
+                control,
+                event.state == ElementState::Pressed,
+            );
         }
         let has_play_control_context =
             self.active_play.is_some() || self.pending_play_start.is_some();
@@ -4909,12 +5032,20 @@ impl WinitApp {
         {
             return;
         }
-        if has_play_control_context && let Some(control) = play_control.as_deref() {
-            self.update_play_e1_control_state(control, event.state == ElementState::Pressed);
+        if has_play_control_context && let Some(control) = play_physical_control.as_ref() {
+            self.update_play_e1_control_state(
+                W_KEYBOARD_DEVICE_ID,
+                control,
+                event.state == ElementState::Pressed,
+            );
         }
         if has_play_control_context
-            && let Some(control) = play_control.as_deref()
-            && self.update_play_exit_control_state(control, event.state == ElementState::Pressed)
+            && let Some(control) = play_physical_control.as_ref()
+            && self.update_play_exit_control_state(
+                W_KEYBOARD_DEVICE_ID,
+                control,
+                event.state == ElementState::Pressed,
+            )
         {
             return;
         }
@@ -4936,17 +5067,23 @@ impl WinitApp {
         {
             self.route_play_device_input(device_event);
         }
-        if let Some(active_play) = &mut self.active_play {
-            if event.state == ElementState::Pressed
-                && !event.repeat
-                && active_play.running.session.lane_cover_changing
-                && let Some(control) = physical_key_name(event.physical_key)
-                && let Some(action) = play_option_control_for_holds(
-                    &control,
+        let play_option_control = if event.state == ElementState::Pressed && !event.repeat {
+            play_physical_control.as_ref().and_then(|control| {
+                play_option_control_for_input(
+                    W_KEYBOARD_DEVICE_ID,
+                    control,
                     self.play_e1_held,
                     self.play_e2_held,
-                    &self.select_keys,
+                    self.play_option_input.as_ref(),
+                    &self.boot.profile_config.input,
                 )
+            })
+        } else {
+            None
+        };
+        if let Some(active_play) = &mut self.active_play {
+            if active_play.running.session.lane_cover_changing
+                && let Some(action) = play_option_control
             {
                 let speed_locked = self.active_course.as_ref().is_some_and(|c| {
                     c.definition.constraints.speed
@@ -5102,17 +5239,8 @@ impl WinitApp {
                 self.apply_pending_play_lane_action(PendingPlayLaneAction::LaneCoverDelta(delta));
                 return;
             }
-            if event.state == ElementState::Pressed
-                && !event.repeat
-                && let Some(control) = play_control.as_deref()
-                && let Some(action) = play_option_control_for_holds(
-                    control,
-                    self.play_e1_held,
-                    self.play_e2_held,
-                    &self.select_keys,
-                )
-            {
-                self.apply_pending_play_option_control(action, control.starts_with("Axis"));
+            if let Some(action) = play_option_control {
+                self.apply_pending_play_option_control(action, false);
                 return;
             }
             if event.state == ElementState::Pressed
@@ -5782,7 +5910,9 @@ impl WinitApp {
     }
 
     fn route_gamepad_button(&mut self, device: DeviceId, button: &str, pressed: bool) {
+        let physical_control = PhysicalControl::GamepadButton(button.to_string());
         self.update_pressed_control(button, pressed);
+        self.update_pressed_play_input(device, &physical_control, pressed);
         let has_play_control_context =
             self.active_play.is_some() || self.pending_play_start.is_some();
         if pressed && self.handle_quick_retry_control(button) {
@@ -5791,24 +5921,31 @@ impl WinitApp {
         if pressed && self.begin_play_fadeout_after_final_notes_control(button) {
             return;
         }
-        if has_play_control_context {
-            self.update_play_e1_control_state(button, pressed);
-        }
-        if has_play_control_context && self.update_play_exit_control_state(button, pressed) {
+        let play_e1_control = has_play_control_context
+            && self.update_play_e1_control_state(device, &physical_control, pressed);
+        if has_play_control_context
+            && self.update_play_exit_control_state(device, &physical_control, pressed)
+        {
             return;
         }
+        let play_option_control = pressed.then(|| {
+            play_option_control_for_input(
+                device,
+                &physical_control,
+                self.play_e1_held,
+                self.play_e2_held,
+                self.play_option_input.as_ref(),
+                &self.boot.profile_config.input,
+            )
+        });
+        let play_option_control = play_option_control.flatten();
         if pressed {
             let speed_locked = self.active_course.as_ref().is_some_and(|c| {
                 c.definition.constraints.speed == bmz_core::course::CourseSpeedConstraint::NoSpeed
             });
             if let Some(active_play) = &mut self.active_play
                 && active_play.running.session.lane_cover_changing
-                && let Some(action) = play_option_control_for_holds(
-                    button,
-                    self.play_e1_held,
-                    self.play_e2_held,
-                    &self.select_keys,
-                )
+                && let Some(action) = play_option_control
             {
                 if button.starts_with("Axis")
                     && matches!(
@@ -5861,7 +5998,7 @@ impl WinitApp {
         // プレイ中: Start / E1 の2回連続押しでレーンカバー表示切替。
         // プレイ入力自体は push_shared_event で処理済み。
         if self.active_play.is_some() {
-            if self.select_keys.is_start(button) {
+            if play_e1_control {
                 self.handle_play_start_double_press();
             }
             return;
@@ -5883,18 +6020,11 @@ impl WinitApp {
         }
 
         if self.pending_play_start.is_some() {
-            if pressed
-                && let Some(action) = play_option_control_for_holds(
-                    button,
-                    self.play_e1_held,
-                    self.play_e2_held,
-                    &self.select_keys,
-                )
-            {
+            if let Some(action) = play_option_control {
                 self.apply_pending_play_option_control(action, button.starts_with("Axis"));
                 return;
             }
-            if self.select_keys.is_start(button) {
+            if play_e1_control {
                 self.handle_play_start_double_press();
             }
             return;
@@ -7605,6 +7735,12 @@ impl WinitApp {
         );
         pending_play_start.lane.lane_cover_changing = self.play_lane_value_changing();
         pending_play_start.lane.apply_to_snapshot(&mut snapshot);
+        self.play_option_input = Some(PlayOptionInput::new(
+            key_mode,
+            pending_play_start.visual_input.binding.clone(),
+            &self.boot.profile_config.input,
+            session_options.gamepad_slots,
+        ));
         self.last_play_snapshot = Some(snapshot);
         self.pending_play_start = Some(pending_play_start);
         tracing::info!(chart_id, "practice round finished; back to configuration");
@@ -9155,6 +9291,12 @@ impl WinitApp {
             session_options.gamepad_slots,
         );
         pending_play_start.lane.apply_to_snapshot(&mut snapshot);
+        self.play_option_input = Some(PlayOptionInput::new(
+            key_mode,
+            pending_play_start.visual_input.binding.clone(),
+            &self.boot.profile_config.input,
+            session_options.gamepad_slots,
+        ));
         self.capture_play_table_text_for_chart(chart_id);
         self.apply_course_skin_context(&mut snapshot);
         self.apply_play_table_text(&mut snapshot);
@@ -12759,10 +12901,13 @@ impl WinitApp {
     }
 
     fn sync_play_control_holds_from_pressed_controls(&mut self) {
-        let (e1_held, e2_held, e3_held) = play_control_hold_state_from_pressed_controls(
-            &self.pressed_controls,
-            &self.select_keys,
-        );
+        let (e1_held, e2_held, e3_held) = self
+            .play_option_input
+            .as_ref()
+            .map(|input| {
+                play_control_hold_state_from_pressed_inputs(&self.pressed_play_inputs, input)
+            })
+            .unwrap_or((false, false, false));
         let was_ready_blocked =
             play_ready_blocked_by_control_holds(self.play_e1_held, self.play_e2_held);
         if self.play_e1_held == e1_held
@@ -12812,8 +12957,17 @@ impl WinitApp {
         }
     }
 
-    fn update_play_e1_control_state(&mut self, control: &str, pressed: bool) -> bool {
-        if !self.select_keys.is_start(control) {
+    fn update_play_e1_control_state(
+        &mut self,
+        device: DeviceId,
+        control: &PhysicalControl,
+        pressed: bool,
+    ) -> bool {
+        let is_e1 = self.play_option_input.as_ref().is_some_and(|input| {
+            !input.resolves_lane(device, control)
+                && input.is_action(device, control, InputActionConfig::E1)
+        });
+        if !is_e1 {
             return false;
         }
         let was_ready_blocked =
@@ -12867,18 +13021,37 @@ impl WinitApp {
         true
     }
 
-    fn update_play_exit_control_state(&mut self, control: &str, pressed: bool) -> bool {
+    fn update_play_exit_control_state(
+        &mut self,
+        device: DeviceId,
+        control: &PhysicalControl,
+        pressed: bool,
+    ) -> bool {
         let was_ready_blocked =
             play_ready_blocked_by_control_holds(self.play_e1_held, self.play_e2_held);
+        let (is_e2, is_e3) = self
+            .play_option_input
+            .as_ref()
+            .map(|input| {
+                if input.resolves_lane(device, control) {
+                    (false, false)
+                } else {
+                    (
+                        input.is_action(device, control, InputActionConfig::E2),
+                        input.is_action(device, control, InputActionConfig::E3),
+                    )
+                }
+            })
+            .unwrap_or((false, false));
         let mut changed = false;
-        if self.select_keys.is_e2_action(control) {
+        if is_e2 {
             if self.play_e2_held != pressed {
                 self.reset_play_analog_scroll();
             }
             self.play_e2_held = pressed;
             changed = true;
         }
-        if self.select_keys.is_e3_action(control) {
+        if is_e3 {
             self.play_e3_held = pressed;
             changed = true;
         }
@@ -16375,6 +16548,7 @@ impl ApplicationHandler<AppUserEvent> for WinitApp {
                 if !focused {
                     self.discard_gamepad_output_until_resynced = true;
                     self.pressed_controls.clear();
+                    self.pressed_play_inputs.clear();
                     self.release_raw_input_pressed_keys();
                     self.release_window_input_pressed_keys();
                     self.sync_select_holds_from_pressed_controls();
@@ -18160,13 +18334,18 @@ fn apply_skin_logical_input_to_scene(
     }
 }
 
-fn play_control_hold_state_from_pressed_controls(
-    pressed_controls: &HashSet<String>,
-    bindings: &SelectKeyBindings,
+fn play_control_hold_state_from_pressed_inputs(
+    pressed_inputs: &HashSet<(DeviceId, PhysicalControl)>,
+    input: &PlayOptionInput,
 ) -> (bool, bool, bool) {
-    let e1_held = pressed_controls.iter().any(|control| bindings.is_start(control));
-    let e2_held = pressed_controls.iter().any(|control| bindings.is_e2_action(control));
-    let e3_held = pressed_controls.iter().any(|control| bindings.is_e3_action(control));
+    let action_held = |action| {
+        pressed_inputs.iter().any(|(device, control)| {
+            !input.resolves_lane(*device, control) && input.is_action(*device, control, action)
+        })
+    };
+    let e1_held = action_held(InputActionConfig::E1);
+    let e2_held = action_held(InputActionConfig::E2);
+    let e3_held = action_held(InputActionConfig::E3);
     (e1_held, e2_held, e3_held)
 }
 
@@ -19637,60 +19816,68 @@ fn hispeed_action(
     }
 }
 
-fn play_option_control_for_holds(
-    control: &str,
+fn play_option_control_for_input(
+    device: DeviceId,
+    control: &PhysicalControl,
     e1_held: bool,
     e2_held: bool,
-    bindings: &SelectKeyBindings,
+    play_input: Option<&PlayOptionInput>,
+    profile_input: &ProfileInputConfig,
 ) -> Option<PlayOptionControl> {
-    if e1_held && bindings.is_e2_action(control) {
+    let play_input = play_input?;
+    let resolved = play_input.binding.resolve_entry(device, control);
+    if e1_held && resolved.is_none() && play_input.is_action(device, control, InputActionConfig::E2)
+    {
         return Some(PlayOptionControl::ToggleHispeedMode);
     }
-    if e1_held && !e2_held {
-        return e1_play_option_control(control, bindings);
+    if e1_held == e2_held {
+        return None;
     }
-    if e2_held && !e1_held {
-        return e2_play_option_control(control, bindings);
-    }
-    None
-}
 
-fn e1_play_option_control(
-    control: &str,
-    bindings: &SelectKeyBindings,
-) -> Option<PlayOptionControl> {
-    if bindings.is_hispeed_down_key(control) {
-        return Some(PlayOptionControl::Hispeed(HispeedChange::Down));
+    let resolved = resolved?;
+    if let Some(direction) = crate::config::play_input::hispeed_direction_for_lane(
+        profile_input,
+        play_input.key_mode,
+        resolved.lane,
+    ) {
+        return match (e1_held, direction) {
+            (true, HispeedDirectionConfig::Down) => {
+                Some(PlayOptionControl::Hispeed(HispeedChange::Down))
+            }
+            (true, HispeedDirectionConfig::Up) => {
+                Some(PlayOptionControl::Hispeed(HispeedChange::Up))
+            }
+            (false, HispeedDirectionConfig::Down) => {
+                Some(PlayOptionControl::GreenNumber(GreenNumberChange::Down))
+            }
+            (false, HispeedDirectionConfig::Up) => {
+                Some(PlayOptionControl::GreenNumber(GreenNumberChange::Up))
+            }
+        };
     }
-    if bindings.is_hispeed_up_key(control) {
-        return Some(PlayOptionControl::Hispeed(HispeedChange::Up));
-    }
-    if bindings.is_scratch_up(control) {
-        return Some(PlayOptionControl::LaneCover(LaneCoverChange::Up));
-    }
-    if bindings.is_scratch_down(control) {
-        return Some(PlayOptionControl::LaneCover(LaneCoverChange::Down));
-    }
-    None
-}
 
-fn e2_play_option_control(
-    control: &str,
-    bindings: &SelectKeyBindings,
-) -> Option<PlayOptionControl> {
-    if bindings.is_hispeed_down_key(control) {
-        return Some(PlayOptionControl::GreenNumber(GreenNumberChange::Down));
+    let control_name = physical_control_name(control);
+    let scratch_direction = resolved.scratch_direction.or_else(|| {
+        control_name.and_then(|control| {
+            if is_scratch_up_control(control) {
+                Some(ScratchDirection::Up)
+            } else if is_scratch_down_control(control) {
+                Some(ScratchDirection::Down)
+            } else {
+                None
+            }
+        })
+    })?;
+    match (e1_held, scratch_direction) {
+        (true, ScratchDirection::Up) => Some(PlayOptionControl::LaneCover(LaneCoverChange::Up)),
+        (true, ScratchDirection::Down) => Some(PlayOptionControl::LaneCover(LaneCoverChange::Down)),
+        (false, ScratchDirection::Up) => {
+            Some(PlayOptionControl::GreenNumber(GreenNumberChange::Up))
+        }
+        (false, ScratchDirection::Down) => {
+            Some(PlayOptionControl::GreenNumber(GreenNumberChange::Down))
+        }
     }
-    if bindings.is_hispeed_up_key(control) {
-        return Some(PlayOptionControl::GreenNumber(GreenNumberChange::Up));
-    }
-    if bindings.is_scratch_up(control) {
-        return Some(PlayOptionControl::GreenNumber(GreenNumberChange::Up));
-    }
-    if bindings.is_scratch_down(control) {
-        return Some(PlayOptionControl::GreenNumber(GreenNumberChange::Down));
-    }
-    None
 }
 
 fn visual_offset_delta_control(control: &str, bindings: &SelectKeyBindings) -> Option<i32> {
@@ -20690,8 +20877,6 @@ struct SelectKeyBindings {
     key12_controls: Vec<String>,
     key13_controls: Vec<String>,
     key14_controls: Vec<String>,
-    hispeed_down_controls: Vec<String>,
-    hispeed_up_controls: Vec<String>,
     scratch_up_controls: Vec<String>,
     scratch_down_controls: Vec<String>,
     select_scratch_up_controls: Vec<String>,
@@ -20818,16 +21003,6 @@ impl SelectKeyBindings {
             actions_for(InputActionConfig::SelectSameFolder),
             "Numpad8",
         );
-        let hispeed_down_controls: Vec<String> =
-            [LaneConfig::Key1, LaneConfig::Key3, LaneConfig::Key5, LaneConfig::Key7]
-                .iter()
-                .flat_map(|&l| keys_for(l))
-                .collect();
-        let hispeed_up_controls: Vec<String> =
-            [LaneConfig::Key2, LaneConfig::Key4, LaneConfig::Key6]
-                .iter()
-                .flat_map(|&l| keys_for(l))
-                .collect();
         let mut scratch_up_controls = Vec::new();
         let mut scratch_down_controls = Vec::new();
         let mut select_scratch_up_controls = Vec::new();
@@ -20928,8 +21103,6 @@ impl SelectKeyBindings {
             key12_controls,
             key13_controls,
             key14_controls,
-            hispeed_down_controls,
-            hispeed_up_controls,
             scratch_up_controls,
             scratch_down_controls,
             select_scratch_up_controls,
@@ -21070,15 +21243,6 @@ impl SelectKeyBindings {
              {start_str}+K1/K2:1P ARR  {start_str}+K3:GAUGE  {start_str}+K5:HS-FIX  \
              {start_str}+K8/K9:TARGET  {start_str}+{bga_str}:BGA  {start_str}+K4/K6:GREEN  {start_str}+K5/K7:TIMING  {start_str}+1..4:REPLAY"
         );
-        let hispeed_down_controls = merge_select_controls(
-            key1_controls.clone(),
-            merge_select_controls(key3_controls.clone(), key5_controls.clone()),
-        );
-        let hispeed_up_controls = merge_select_controls(
-            key2_controls.clone(),
-            merge_select_controls(key4_controls.clone(), key6_controls.clone()),
-        );
-
         Self {
             start,
             e_action_controls,
@@ -21100,8 +21264,6 @@ impl SelectKeyBindings {
             key12_controls: Vec::new(),
             key13_controls: Vec::new(),
             key14_controls: Vec::new(),
-            hispeed_down_controls,
-            hispeed_up_controls,
             scratch_up_controls: Vec::new(),
             scratch_down_controls: Vec::new(),
             select_scratch_up_controls: Vec::new(),
@@ -21245,14 +21407,6 @@ impl SelectKeyBindings {
 
     fn is_e3_action(&self, control: &str) -> bool {
         self.e3_action_controls.iter().any(|k| k == control)
-    }
-
-    fn is_hispeed_down_key(&self, control: &str) -> bool {
-        self.hispeed_down_controls.iter().any(|k| k == control)
-    }
-
-    fn is_hispeed_up_key(&self, control: &str) -> bool {
-        self.hispeed_up_controls.iter().any(|k| k == control)
     }
 
     fn is_scratch_up(&self, control: &str) -> bool {
@@ -23162,6 +23316,33 @@ mod tests {
         SelectKeyBindings::from_profile(&input)
     }
 
+    fn play_option_input_for(input: &ProfileInputConfig, key_mode: KeyMode) -> PlayOptionInput {
+        PlayOptionInput::new(
+            key_mode,
+            crate::config::play::lane_binding_for_chart(input, key_mode),
+            input,
+            crate::input::gamepad::GamepadSlotMap::default(),
+        )
+    }
+
+    fn keyboard_play_option(
+        control: &str,
+        e1_held: bool,
+        e2_held: bool,
+        _keys: &SelectKeyBindings,
+        play_input: &PlayOptionInput,
+        input: &ProfileInputConfig,
+    ) -> Option<PlayOptionControl> {
+        play_option_control_for_input(
+            W_KEYBOARD_DEVICE_ID,
+            &PhysicalControl::KeyboardKey(control.to_string()),
+            e1_held,
+            e2_held,
+            Some(play_input),
+            input,
+        )
+    }
+
     fn select_keys_with_full_2p_bindings() -> SelectKeyBindings {
         let mut input = crate::config::play_input::default_profile_input();
         let key = KeyMode::K14.play_map_key().to_string();
@@ -23170,6 +23351,7 @@ mod tests {
             crate::config::profile_config::PlayModeInputConfig {
                 inherit: None,
                 bindings: crate::config::play_input::default_play_14k_bindings(),
+                ..Default::default()
             },
         );
         let play14 = input.play.get_mut(&key).expect("14K bindings");
@@ -24242,24 +24424,51 @@ mod tests {
 
     #[test]
     fn play_control_hold_state_rebuilds_from_pressed_controls() {
-        let keys = default_select_keys();
-        let pressed = HashSet::from(["Q".to_string(), "W".to_string(), "E".to_string()]);
+        let input = crate::config::play_input::default_profile_input();
+        let play_input = play_option_input_for(&input, KeyMode::K7);
+        let keyboard = |control: &str| {
+            (W_KEYBOARD_DEVICE_ID, PhysicalControl::KeyboardKey(control.to_string()))
+        };
+        let pressed = HashSet::from([keyboard("Q"), keyboard("W"), keyboard("E")]);
 
         assert_eq!(
-            play_control_hold_state_from_pressed_controls(&pressed, &keys),
+            play_control_hold_state_from_pressed_inputs(&pressed, &play_input),
             (true, true, true)
         );
 
-        let pressed = HashSet::from(["Q".to_string()]);
+        let pressed = HashSet::from([keyboard("Q")]);
         assert_eq!(
-            play_control_hold_state_from_pressed_controls(&pressed, &keys),
+            play_control_hold_state_from_pressed_inputs(&pressed, &play_input),
             (true, false, false)
         );
 
-        let pressed = HashSet::from(["W".to_string()]);
+        let pressed = HashSet::from([keyboard("W")]);
         assert_eq!(
-            play_control_hold_state_from_pressed_controls(&pressed, &keys),
+            play_control_hold_state_from_pressed_inputs(&pressed, &play_input),
             (false, true, false)
+        );
+    }
+
+    #[test]
+    fn play_control_hold_state_keeps_legacy_and_default_e1_fallbacks() {
+        let mut legacy_input = crate::config::play_input::default_profile_input();
+        legacy_input.ui.bindings.retain(|entry| entry.action != Some(InputActionConfig::E1));
+        legacy_input.start_key = Some("E".to_string());
+        let legacy_play_input = play_option_input_for(&legacy_input, KeyMode::K7);
+        let legacy_pressed =
+            HashSet::from([(W_KEYBOARD_DEVICE_ID, PhysicalControl::KeyboardKey("E".to_string()))]);
+        assert_eq!(
+            play_control_hold_state_from_pressed_inputs(&legacy_pressed, &legacy_play_input),
+            (true, false, true)
+        );
+
+        legacy_input.start_key = None;
+        let fallback_play_input = play_option_input_for(&legacy_input, KeyMode::K7);
+        let fallback_pressed =
+            HashSet::from([(W_KEYBOARD_DEVICE_ID, PhysicalControl::KeyboardKey("Q".to_string()))]);
+        assert_eq!(
+            play_control_hold_state_from_pressed_inputs(&fallback_pressed, &fallback_play_input),
+            (true, false, false)
         );
     }
 
@@ -25581,97 +25790,251 @@ mod tests {
     }
 
     #[test]
-    fn play_option_control_maps_e1_combo_targets() {
-        let keys = default_select_keys();
+    fn play_option_control_maps_seven_key_lane_and_scratch_targets() {
+        let input = crate::config::play_input::default_profile_input();
+        let keys = SelectKeyBindings::from_profile(&input);
+        let play_input = play_option_input_for(&input, KeyMode::K7);
 
         assert_eq!(
-            play_option_control_for_holds("W", true, true, &keys),
+            keyboard_play_option("W", true, true, &keys, &play_input, &input),
             Some(PlayOptionControl::ToggleHispeedMode)
         );
         assert_eq!(
-            play_option_control_for_holds("Z", true, false, &keys),
+            keyboard_play_option("Z", true, false, &keys, &play_input, &input),
             Some(PlayOptionControl::Hispeed(HispeedChange::Down))
         );
         assert_eq!(
-            play_option_control_for_holds("V", true, false, &keys),
+            keyboard_play_option("V", true, false, &keys, &play_input, &input),
             Some(PlayOptionControl::Hispeed(HispeedChange::Down))
         );
         assert_eq!(
-            play_option_control_for_holds("S", true, false, &keys),
+            keyboard_play_option("S", true, false, &keys, &play_input, &input),
             Some(PlayOptionControl::Hispeed(HispeedChange::Up))
         );
         assert_eq!(
-            play_option_control_for_holds("F", true, false, &keys),
+            keyboard_play_option("F", true, false, &keys, &play_input, &input),
             Some(PlayOptionControl::Hispeed(HispeedChange::Up))
         );
         assert_eq!(
-            play_option_control_for_holds("Axis1+", true, false, &keys),
+            keyboard_play_option("LShift", true, false, &keys, &play_input, &input),
             Some(PlayOptionControl::LaneCover(LaneCoverChange::Up))
         );
         assert_eq!(
-            play_option_control_for_holds("Axis1-", true, false, &keys),
+            keyboard_play_option("LControl", true, false, &keys, &play_input, &input),
             Some(PlayOptionControl::LaneCover(LaneCoverChange::Down))
         );
-        assert_eq!(play_option_control_for_holds("Axis2-", true, false, &keys), None);
-        assert_eq!(play_option_control_for_holds("Axis2+", true, false, &keys), None);
     }
 
     #[test]
-    fn play_option_control_maps_e2_combo_targets_to_green_number() {
-        let keys = default_select_keys();
+    fn play_option_control_maps_e2_to_mode_specific_green_number_direction() {
+        let input = crate::config::play_input::default_profile_input();
+        let keys = SelectKeyBindings::from_profile(&input);
+        let play_input = play_option_input_for(&input, KeyMode::K7);
 
         assert_eq!(
-            play_option_control_for_holds("Z", false, true, &keys),
+            keyboard_play_option("Z", false, true, &keys, &play_input, &input),
             Some(PlayOptionControl::GreenNumber(GreenNumberChange::Down))
         );
         assert_eq!(
-            play_option_control_for_holds("V", false, true, &keys),
+            keyboard_play_option("S", false, true, &keys, &play_input, &input),
+            Some(PlayOptionControl::GreenNumber(GreenNumberChange::Up))
+        );
+        assert_eq!(
+            keyboard_play_option("LShift", false, true, &keys, &play_input, &input),
+            Some(PlayOptionControl::GreenNumber(GreenNumberChange::Up))
+        );
+        assert_eq!(
+            keyboard_play_option("LControl", false, true, &keys, &play_input, &input),
             Some(PlayOptionControl::GreenNumber(GreenNumberChange::Down))
         );
+        assert_eq!(keyboard_play_option("Z", true, true, &keys, &play_input, &input), None);
+    }
+
+    #[test]
+    fn play_option_control_uses_chart_mode_instead_of_select_input_mode() {
+        let input = crate::config::play_input::default_profile_input();
+        assert_eq!(input.select_input_mode, SelectInputModeConfig::Key7Key14);
+        let keys = SelectKeyBindings::from_profile(&input);
+        let play_input = play_option_input_for(&input, KeyMode::K9);
+
         assert_eq!(
-            play_option_control_for_holds("S", false, true, &keys),
-            Some(PlayOptionControl::GreenNumber(GreenNumberChange::Up))
+            keyboard_play_option("B", true, false, &keys, &play_input, &input),
+            Some(PlayOptionControl::Hispeed(HispeedChange::Down))
         );
         assert_eq!(
-            play_option_control_for_holds("F", false, true, &keys),
-            Some(PlayOptionControl::GreenNumber(GreenNumberChange::Up))
+            keyboard_play_option("G", true, false, &keys, &play_input, &input),
+            Some(PlayOptionControl::Hispeed(HispeedChange::Up))
+        );
+    }
+
+    #[test]
+    fn play_option_control_applies_eight_key_default_and_override() {
+        let mut input = crate::config::play_input::default_profile_input();
+        let keys = SelectKeyBindings::from_profile(&input);
+        let play_input = play_option_input_for(&input, KeyMode::K8);
+
+        assert_eq!(
+            keyboard_play_option("Z", true, false, &keys, &play_input, &input),
+            Some(PlayOptionControl::Hispeed(HispeedChange::Up))
+        );
+        assert!(crate::config::play_input::set_eight_key_hispeed_direction(
+            &mut input,
+            LaneConfig::Key1,
+            HispeedDirectionConfig::Down,
+        ));
+        assert_eq!(
+            keyboard_play_option("Z", true, false, &keys, &play_input, &input),
+            Some(PlayOptionControl::Hispeed(HispeedChange::Down))
+        );
+    }
+
+    #[test]
+    fn play_option_control_distinguishes_two_player_gamepads() {
+        let mut input = crate::config::play_input::default_profile_input();
+        input.play.insert(
+            KeyMode::K14.play_map_key().to_string(),
+            crate::config::profile_config::PlayModeInputConfig {
+                inherit: None,
+                bindings: vec![
+                    crate::config::play_input::gamepad_play_binding_for_device(
+                        "gamepad1",
+                        "Button1",
+                        LaneConfig::Key1,
+                    ),
+                    crate::config::play_input::gamepad_play_binding_for_device(
+                        "gamepad2",
+                        "Button1",
+                        LaneConfig::Key9,
+                    ),
+                ],
+                ..Default::default()
+            },
+        );
+        let slots = crate::input::gamepad::GamepadSlotMap::from_device_ids([
+            Some(DeviceId(11)),
+            Some(DeviceId(22)),
+        ]);
+        let play_input = PlayOptionInput::new(
+            KeyMode::K14,
+            crate::config::play::lane_binding_for_chart_with_slots(&input, KeyMode::K14, slots),
+            &input,
+            slots,
+        );
+        let control = PhysicalControl::GamepadButton("Button1".to_string());
+
+        assert_eq!(
+            play_option_control_for_input(
+                DeviceId(11),
+                &control,
+                true,
+                false,
+                Some(&play_input),
+                &input,
+            ),
+            Some(PlayOptionControl::Hispeed(HispeedChange::Down))
         );
         assert_eq!(
-            play_option_control_for_holds("Axis1+", false, true, &keys),
-            Some(PlayOptionControl::GreenNumber(GreenNumberChange::Up))
+            play_option_control_for_input(
+                DeviceId(22),
+                &control,
+                true,
+                false,
+                Some(&play_input),
+                &input,
+            ),
+            Some(PlayOptionControl::Hispeed(HispeedChange::Up))
         );
-        assert_eq!(
-            play_option_control_for_holds("Axis1-", false, true, &keys),
-            Some(PlayOptionControl::GreenNumber(GreenNumberChange::Down))
+    }
+
+    #[test]
+    fn play_option_control_prioritizes_two_player_lane_over_other_devices_e2_button() {
+        let mut input = crate::config::play_input::default_profile_input();
+        input.ui.bindings.retain(|entry| {
+            entry.action != Some(InputActionConfig::E2)
+                || !crate::config::play_input::is_gamepad_device(&entry.device)
+        });
+        input.ui.bindings.push(crate::config::profile_config::BindingConfigEntry {
+            device: "gamepad1".to_string(),
+            control: "Button10".to_string(),
+            lane: None,
+            action: Some(InputActionConfig::E2),
+            scratch: None,
+        });
+        input.play.insert(
+            KeyMode::K14.play_map_key().to_string(),
+            crate::config::profile_config::PlayModeInputConfig {
+                inherit: None,
+                bindings: vec![
+                    crate::config::play_input::gamepad_play_binding_for_device(
+                        "gamepad1",
+                        "Button1",
+                        LaneConfig::Key1,
+                    ),
+                    crate::config::play_input::gamepad_play_binding_for_device(
+                        "gamepad2",
+                        "Button10",
+                        LaneConfig::Key9,
+                    ),
+                ],
+                ..Default::default()
+            },
         );
+        let slots = crate::input::gamepad::GamepadSlotMap::from_device_ids([
+            Some(DeviceId(11)),
+            Some(DeviceId(22)),
+        ]);
+        let play_input = PlayOptionInput::new(
+            KeyMode::K14,
+            crate::config::play::lane_binding_for_chart_with_slots(&input, KeyMode::K14, slots),
+            &input,
+            slots,
+        );
+        let control = PhysicalControl::GamepadButton("Button10".to_string());
+
         assert_eq!(
-            play_option_control_for_holds("W", true, true, &keys),
+            play_option_control_for_input(
+                DeviceId(11),
+                &control,
+                true,
+                true,
+                Some(&play_input),
+                &input,
+            ),
             Some(PlayOptionControl::ToggleHispeedMode)
         );
-        assert_eq!(play_option_control_for_holds("Z", true, true, &keys), None);
-    }
-
-    #[test]
-    fn play_option_control_maps_9k_e2_keys_to_green_number() {
-        let keys = select_keys_9k();
-
         assert_eq!(
-            play_option_control_for_holds("Z", false, true, &keys),
-            Some(PlayOptionControl::GreenNumber(GreenNumberChange::Down))
+            play_option_control_for_input(
+                DeviceId(22),
+                &control,
+                true,
+                false,
+                Some(&play_input),
+                &input,
+            ),
+            Some(PlayOptionControl::Hispeed(HispeedChange::Up))
         );
         assert_eq!(
-            play_option_control_for_holds("C", false, true, &keys),
-            Some(PlayOptionControl::GreenNumber(GreenNumberChange::Down))
-        );
-        assert_eq!(
-            play_option_control_for_holds("S", false, true, &keys),
+            play_option_control_for_input(
+                DeviceId(22),
+                &control,
+                false,
+                true,
+                Some(&play_input),
+                &input,
+            ),
             Some(PlayOptionControl::GreenNumber(GreenNumberChange::Up))
         );
+
+        let p2_lane_pressed = HashSet::from([(DeviceId(22), control.clone())]);
         assert_eq!(
-            play_option_control_for_holds("F", false, true, &keys),
-            Some(PlayOptionControl::GreenNumber(GreenNumberChange::Up))
+            play_control_hold_state_from_pressed_inputs(&p2_lane_pressed, &play_input),
+            (false, false, false)
         );
-        assert_eq!(play_option_control_for_holds("V", false, true, &keys), None);
+        let p1_e2_pressed = HashSet::from([(DeviceId(11), control)]);
+        assert_eq!(
+            play_control_hold_state_from_pressed_inputs(&p1_e2_pressed, &play_input),
+            (false, true, false)
+        );
     }
 
     #[test]

@@ -432,6 +432,12 @@ pub struct PlayModeInputConfig {
     pub inherit: Option<String>,
     #[serde(default)]
     pub bindings: Vec<BindingConfigEntry>,
+    /// 8K の論理キーごとのハイスピード操作方向 override。
+    ///
+    /// 未指定のキーはプレイ側のモード既定方向を使う。8K 以外では保存されない
+    /// 想定だが、profile の前方互換性のため入力設定型では値を保持する。
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub hispeed: BTreeMap<LaneConfig, HispeedDirectionConfig>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -549,7 +555,7 @@ impl SelectInputModeConfig {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 pub enum LaneConfig {
     Scratch,
@@ -569,6 +575,14 @@ pub enum LaneConfig {
     Key12,
     Key13,
     Key14,
+}
+
+/// 鍵盤入力でハイスピードを変更する方向。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub enum HispeedDirectionConfig {
+    Down,
+    Up,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1727,5 +1741,41 @@ mod tests {
         assert!(toml.contains("action = \"E4\""));
         assert!(toml.contains("control = \"Axis1+\"\nlane = \"Scratch\"\nscratch = \"up\""));
         assert!(toml.contains("control = \"Axis1-\"\nlane = \"Scratch\"\nscratch = \"down\""));
+    }
+
+    #[test]
+    fn play_mode_input_hispeed_directions_roundtrip_through_toml() {
+        let mut hispeed = BTreeMap::new();
+        hispeed.insert(LaneConfig::Key1, HispeedDirectionConfig::Down);
+        hispeed.insert(LaneConfig::Key6, HispeedDirectionConfig::Up);
+        let config = PlayModeInputConfig {
+            inherit: None,
+            bindings: vec![BindingConfigEntry {
+                device: "keyboard".to_string(),
+                control: "Z".to_string(),
+                lane: Some(LaneConfig::Key1),
+                action: None,
+                scratch: None,
+            }],
+            hispeed,
+        };
+
+        let toml = toml::to_string(&config).unwrap();
+        let parsed: PlayModeInputConfig = toml::from_str(&toml).unwrap();
+
+        assert!(toml.contains("[hispeed]"));
+        assert!(toml.contains("Key1 = \"Down\""));
+        assert!(toml.contains("Key6 = \"Up\""));
+        assert_eq!(parsed.bindings.len(), 1);
+        assert_eq!(parsed.hispeed.get(&LaneConfig::Key1), Some(&HispeedDirectionConfig::Down));
+        assert_eq!(parsed.hispeed.get(&LaneConfig::Key6), Some(&HispeedDirectionConfig::Up));
+    }
+
+    #[test]
+    fn play_mode_input_omits_empty_hispeed_directions_and_reads_old_profiles() {
+        let config: PlayModeInputConfig = toml::from_str("inherit = \"7k\"").unwrap();
+
+        assert!(config.hispeed.is_empty());
+        assert!(!toml::to_string(&config).unwrap().contains("hispeed"));
     }
 }
