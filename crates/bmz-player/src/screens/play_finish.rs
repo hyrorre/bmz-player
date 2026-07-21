@@ -141,6 +141,7 @@ pub fn finish_session_result(
     } else {
         let arrange = applied_arrange.arrange;
         let arrange_seed = applied_arrange.seed;
+        let random_seed = applied_arrange.packed_beatoraja_seed(session.chart.metadata.key_mode);
         let arrange_pattern = applied_arrange.pattern.clone();
         store_play_result(
             score_db,
@@ -153,7 +154,7 @@ pub fn finish_session_result(
                 ln_policy: score_key.ln_policy,
                 double_option: score_key.double_option,
                 applied_double_option: applied_arrange.double_option,
-                random_seed: arrange_seed,
+                random_seed,
                 gauge_option: String::new(),
                 rule_mode: session.rule_mode.as_str().to_string(),
                 assist_mask: 0,
@@ -161,6 +162,13 @@ pub fn finish_session_result(
                 arrange,
                 arrange_2p: applied_arrange.arrange_2p,
                 arrange_seed,
+                arrange_seed_2p: applied_arrange.seed_2p,
+                bms_random_choices: applied_arrange.bms_random_choices.clone(),
+                seed_scheme: if applied_arrange.legacy_seed {
+                    crate::storage::replay::SEED_SCHEME_LEGACY_SHARED_V3.to_string()
+                } else {
+                    crate::storage::replay::SEED_SCHEME_BEATORAJA_24BIT_V1.to_string()
+                },
                 arrange_pattern,
                 mode: finish_mode.store_mode(),
             },
@@ -297,8 +305,14 @@ fn enqueue_ir_jobs(
             arrange_2p: applied_arrange.arrange_2p,
             double_option: score_key.double_option,
             applied_double_option: applied_arrange.double_option,
-            arrange_seed: applied_arrange.seed,
-            random_seed: applied_arrange.seed,
+            arrange_seed: applied_arrange.packed_beatoraja_seed(session.chart.metadata.key_mode),
+            random_seed: applied_arrange.packed_beatoraja_seed(session.chart.metadata.key_mode),
+            seed_scheme: if applied_arrange.legacy_seed {
+                crate::storage::replay::SEED_SCHEME_LEGACY_SHARED_V3.to_string()
+            } else {
+                crate::storage::replay::SEED_SCHEME_BEATORAJA_24BIT_V1.to_string()
+            },
+            bms_random_choices: applied_arrange.bms_random_choices.clone(),
             rule_mode: session.rule_mode.as_str().to_string(),
             // 保存時に serialize 済みバイト列から計算した hash。プレイ終了
             // 直後のフレームでリプレイファイルを読み直さない。
@@ -601,6 +615,9 @@ mod tests {
             arrange_2p: crate::select_options::ArrangeOption::Mirror,
             double_option: crate::select_options::DoubleOption::Off,
             seed: Some(42),
+            seed_2p: None,
+            legacy_seed: false,
+            bms_random_choices: vec![1, 2],
             pattern: Some(lane_shuffle_pattern.clone()),
         };
 

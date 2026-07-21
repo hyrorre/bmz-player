@@ -134,6 +134,26 @@ pub fn build_course_submission(
         play_options["random_seed"] = json!(seed.to_string());
         play_options["seed"] = json!(seed.to_string());
     }
+    let entry_randomizations: Vec<Value> = result
+        .entry_arranges
+        .iter()
+        .map(|arrange| {
+            json!({
+                "arrange_1p": arrange_option_ir(arrange.arrange),
+                "arrange_2p": arrange_option_ir(arrange.arrange_2p),
+                "seed": arrange
+                    .packed_beatoraja_seed_from_sides()
+                    .map(|seed| seed.to_string()),
+                "seed_scheme": if arrange.legacy_seed {
+                    crate::storage::replay::SEED_SCHEME_LEGACY_SHARED_V3
+                } else {
+                    crate::storage::replay::SEED_SCHEME_BEATORAJA_24BIT_V1
+                },
+                "bms_random_choices": arrange.bms_random_choices,
+            })
+        })
+        .collect();
+    play_options["entry_randomizations"] = json!(entry_randomizations);
 
     json!({
         "client": {
@@ -182,7 +202,11 @@ pub fn build_course_submission(
 }
 
 fn arrange_option_ir_from_persistent(value: &str) -> String {
-    ArrangeOption::from_persistent_str(value).as_str().to_ascii_lowercase()
+    arrange_option_ir(ArrangeOption::from_persistent_str(value))
+}
+
+fn arrange_option_ir(value: ArrangeOption) -> String {
+    value.as_str().to_ascii_lowercase()
 }
 
 fn course_result_clear_type(result: &CourseResultSummary) -> bmz_core::clear::ClearType {

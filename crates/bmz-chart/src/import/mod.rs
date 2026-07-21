@@ -24,6 +24,17 @@ enum ChartFileFormat {
 pub struct ImportResult {
     pub chart: PlayableChart,
     pub warnings: Vec<ImportWarning>,
+    /// BMS `#RANDOM` ごとの実際の選択値。BMSON では常に空。
+    pub bms_random_choices: Vec<i32>,
+}
+
+/// BMS の `#RANDOM` 分岐を選ぶ方法。
+///
+/// `Choices` はリプレイ時に、記録済みの選択値を出現順に強制するために使う。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BmsRandomSource {
+    Seed(Option<u64>),
+    Choices(Vec<i32>),
 }
 
 /// 拡張子に応じて BMS / BMSON を import する。
@@ -32,19 +43,39 @@ pub fn import_chart(
     random_seed: Option<u64>,
     check_resource_existence: bool,
 ) -> Result<ImportResult, ImportError> {
+    import_chart_with_random_source(
+        path,
+        BmsRandomSource::Seed(random_seed),
+        check_resource_existence,
+    )
+}
+
+/// 拡張子に応じて BMS / BMSON を import し、BMS の乱数分岐方法を指定する。
+pub fn import_chart_with_random_source(
+    path: &Path,
+    random_source: BmsRandomSource,
+    check_resource_existence: bool,
+) -> Result<ImportResult, ImportError> {
     let mut warnings = Vec::new();
+    let mut bms_random_choices = Vec::new();
     let intermediate = match chart_file_format(path) {
         ChartFileFormat::Bmson => bmson_adapter::import_bmson_to_intermediate(path, &mut warnings)?,
-        ChartFileFormat::Bms => {
-            bms_rs_adapter::import_bms_to_intermediate(path, random_seed, &mut warnings)?
-        }
-        ChartFileFormat::Pms => {
-            bms_rs_adapter::import_pms_to_intermediate(path, random_seed, &mut warnings)?
-        }
+        ChartFileFormat::Bms => bms_rs_adapter::import_bms_to_intermediate_with_random_source(
+            path,
+            &random_source,
+            &mut bms_random_choices,
+            &mut warnings,
+        )?,
+        ChartFileFormat::Pms => bms_rs_adapter::import_pms_to_intermediate_with_random_source(
+            path,
+            &random_source,
+            &mut bms_random_choices,
+            &mut warnings,
+        )?,
     };
     let chart =
         normalize::normalize_chart(path, intermediate, &mut warnings, check_resource_existence)?;
-    Ok(ImportResult { chart, warnings })
+    Ok(ImportResult { chart, warnings, bms_random_choices })
 }
 
 pub fn import_bms_chart(
@@ -53,6 +84,15 @@ pub fn import_bms_chart(
     check_resource_existence: bool,
 ) -> Result<ImportResult, ImportError> {
     import_chart(path, random_seed, check_resource_existence)
+}
+
+/// BMS の `#RANDOM` 分岐方法を指定して import する。
+pub fn import_bms_chart_with_random_source(
+    path: &Path,
+    random_source: BmsRandomSource,
+    check_resource_existence: bool,
+) -> Result<ImportResult, ImportError> {
+    import_chart_with_random_source(path, random_source, check_resource_existence)
 }
 
 fn chart_file_format(path: &Path) -> ChartFileFormat {
@@ -396,6 +436,106 @@ mod tests {
             result_b.chart.notes_for_lane(Lane::Key1).len(),
             "fixed seed should give identical note count"
         );
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn returns_bms_random_choices_without_setrandom_values() {
+        let text = "\
+#TITLE Random Choices
+#BPM 120
+#TOTAL 200
+#RANDOM 2
+#IF 1
+#00111:01
+#ENDIF
+#IF 2
+#00112:01
+#ENDIF
+#ENDRANDOM
+#SETRANDOM 2
+#IF 2
+#00213:01
+#ENDIF
+#ENDRANDOM
+";
+        let path = write_temp_bms(text);
+        let result = import_bms_chart(&path, Some(1), false).unwrap();
+
+        assert_eq!(result.bms_random_choices.len(), 1);
+        assert!((1..=2).contains(&result.bms_random_choices[0]));
+
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn recorded_bms_random_choices_replay_the_same_branch() {
+        let text = "\
+#TITLE Random Replay
+#BPM 120
+#TOTAL 200
+#RANDOM 2
+#IF 1
+#00111:01
+#ENDIF
+#IF 2
+#00112:01
+#ENDIF
+#ENDRANDOM
+";
+        let path = write_temp_bms(text);
+        let seeded = import_bms_chart(&path, Some(1), false).unwrap();
+        let replayed = import_bms_chart_with_random_source(
+            &path,
+            BmsRandomSource::Choices(seeded.bms_random_choices.clone()),
+            false,
+        )
+        .unwrap();
+
+        assert_eq!(
+            replayed.bms_random_choices, seeded.bms_random_choices,
+            "recorded choices must take priority over random seed selection"
+        );
+        assert_eq!(
+            replayed.chart.notes_for_lane(Lane::Key1).len(),
+            seeded.chart.notes_for_lane(Lane::Key1).len()
+        );
+        assert_eq!(
+            replayed.chart.notes_for_lane(Lane::Key2).len(),
+            seeded.chart.notes_for_lane(Lane::Key2).len()
+        );
+
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn invalid_bms_random_choice_is_clamped_with_a_warning() {
+        let text = "\
+#TITLE Invalid Random Choice
+#BPM 120
+#TOTAL 200
+#RANDOM 2
+#IF 1
+#00111:01
+#ENDIF
+#IF 2
+#00112:01
+#ENDIF
+#ENDRANDOM
+";
+        let path = write_temp_bms(text);
+        let result =
+            import_bms_chart_with_random_source(&path, BmsRandomSource::Choices(vec![99]), false)
+                .unwrap();
+
+        assert_eq!(result.bms_random_choices, vec![2]);
+        assert_eq!(result.chart.notes_for_lane(Lane::Key1).len(), 0);
+        assert_eq!(result.chart.notes_for_lane(Lane::Key2).len(), 1);
+        assert!(result.warnings.iter().any(|warning| matches!(
+            warning,
+            ImportWarning::ParserDiagnostic { code, .. } if code == "BmsRandomChoiceOutOfRange"
+        )));
+
         std::fs::remove_file(&path).unwrap();
     }
 

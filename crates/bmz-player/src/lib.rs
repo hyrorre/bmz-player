@@ -39,6 +39,7 @@ pub mod obs;
 pub mod paths;
 pub mod practice_ui;
 pub mod profile_cmd;
+pub mod random_option_seed;
 pub mod screens;
 pub mod select_options;
 pub mod skin_audio;

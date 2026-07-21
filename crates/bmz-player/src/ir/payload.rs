@@ -30,6 +30,9 @@ pub struct IrSubmissionContext {
     pub applied_double_option: DoubleOption,
     pub arrange_seed: Option<i64>,
     pub random_seed: Option<i64>,
+    /// Provider-neutral seed semantics. Providers decide which options/schemes they accept.
+    pub seed_scheme: String,
+    pub bms_random_choices: Vec<i32>,
     pub rule_mode: String,
     /// 保存済みリプレイファイルの SHA256 (hex)。リプレイが無ければ None。
     pub replay_hash: Option<String>,
@@ -61,13 +64,23 @@ pub fn build_score_submission(
         serde_json::Value::String(context.applied_double_option.ir_value().to_string()),
     );
     play_options.insert("source_kind".to_string(), serde_json::Value::String("local".to_string()));
-    if (context.arrange.uses_seed() || context.arrange_2p.uses_seed())
-        && let Some(seed) = context.arrange_seed
-    {
+    if let Some(seed) = context.arrange_seed {
         play_options.insert("seed".to_string(), serde_json::json!(seed.to_string()));
     }
     if let Some(seed) = context.random_seed {
         play_options.insert("random_seed".to_string(), serde_json::json!(seed.to_string()));
+    }
+    if !context.seed_scheme.is_empty() {
+        play_options.insert(
+            "seed_scheme".to_string(),
+            serde_json::Value::String(context.seed_scheme.clone()),
+        );
+    }
+    if !context.bms_random_choices.is_empty() {
+        play_options.insert(
+            "bms_random_choices".to_string(),
+            serde_json::json!(context.bms_random_choices),
+        );
     }
     if !context.rule_mode.is_empty() {
         play_options
@@ -271,6 +284,12 @@ mod tests {
     use super::*;
 
     #[test]
+    fn f_random_options_remain_available_to_ir_providers() {
+        assert_eq!(arrange_option_ir(ArrangeOption::FRandom), "f-random");
+        assert_eq!(arrange_option_ir(ArrangeOption::MFRandom), "mf-random");
+    }
+
+    #[test]
     fn build_score_submission_uses_bmz_bp_and_cb() {
         let chart = PlayableChart {
             identity: ChartIdentity { file_md5: [1; 16], file_sha256: [2; 32] },
@@ -332,6 +351,8 @@ mod tests {
                 applied_double_option: DoubleOption::Battle,
                 arrange_seed: Some(42),
                 random_seed: Some(42),
+                seed_scheme: "beatoraja_24bit_v1".to_string(),
+                bms_random_choices: vec![2, 1],
                 rule_mode: "Beatoraja".to_string(),
                 replay_hash: Some("ab".repeat(32)),
             },
@@ -374,6 +395,14 @@ mod tests {
         );
         assert_eq!(payload.play_options.get("seed"), Some(&serde_json::json!("42")));
         assert_eq!(payload.play_options.get("random_seed"), Some(&serde_json::json!("42")));
+        assert_eq!(
+            payload.play_options.get("seed_scheme"),
+            Some(&serde_json::json!("beatoraja_24bit_v1"))
+        );
+        assert_eq!(
+            payload.play_options.get("bms_random_choices"),
+            Some(&serde_json::json!([2, 1]))
+        );
         let replay = payload.replay.expect("replay payload");
         assert_eq!(replay.hash, "ab".repeat(32));
         assert_eq!(replay.format, "bmz-replay-v1");

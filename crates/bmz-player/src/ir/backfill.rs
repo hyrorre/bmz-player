@@ -313,6 +313,7 @@ struct BackfillScoreRow {
     fast_empty_poor: u32,
     slow_empty_poor: u32,
     random_seed: Option<i64>,
+    seed_scheme: String,
     arrange: ArrangeOption,
     arrange_2p: ArrangeOption,
     gauge_option: String,
@@ -363,7 +364,8 @@ fn load_score_history_rows(score_db: &ScoreDatabase) -> Result<Vec<BackfillScore
             course_score_id,
             arrange_2p,
             applied_double_option,
-            source_kind
+            source_kind,
+            seed_scheme
          FROM score_history
          ORDER BY played_at ASC, id ASC",
     )?;
@@ -381,6 +383,7 @@ fn score_history_row_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Backf
     let arrange_2p: String = row.get(33)?;
     let applied_double_option: String = row.get(34)?;
     let source_kind: String = row.get(35)?;
+    let seed_scheme: String = row.get(36)?;
     Ok(BackfillScoreRow {
         id: row.get(0)?,
         chart_sha256: hex_to_hash::<32>(&sha256_hex)?,
@@ -408,6 +411,7 @@ fn score_history_row_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Backf
         fast_empty_poor: row.get(22)?,
         slow_empty_poor: row.get(23)?,
         random_seed: row.get(24)?,
+        seed_scheme,
         arrange: ArrangeOption::from_persistent_str(&arrange),
         arrange_2p: ArrangeOption::from_persistent_str(&arrange_2p),
         gauge_option: row.get(26)?,
@@ -477,6 +481,12 @@ fn build_local_score_submission(
     );
     if let Some(seed) = row.random_seed {
         play_options.insert("random_seed".to_string(), serde_json::json!(seed.to_string()));
+        if row.seed_scheme == crate::storage::replay::SEED_SCHEME_BEATORAJA_24BIT_V1 {
+            play_options.insert("seed".to_string(), serde_json::json!(seed.to_string()));
+        }
+    }
+    if !row.seed_scheme.is_empty() {
+        play_options.insert("seed_scheme".to_string(), Value::String(row.seed_scheme.clone()));
     }
     if !row.rule_mode.is_empty() {
         play_options.insert("rule_mode".to_string(), Value::String(row.rule_mode.clone()));
@@ -725,6 +735,7 @@ mod tests {
             fast_empty_poor: 11,
             slow_empty_poor: 12,
             random_seed: Some(99),
+            seed_scheme: crate::storage::replay::SEED_SCHEME_BEATORAJA_24BIT_V1.to_string(),
             arrange: ArrangeOption::Random,
             arrange_2p: ArrangeOption::Mirror,
             gauge_option: String::new(),

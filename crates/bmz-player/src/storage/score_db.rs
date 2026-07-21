@@ -185,6 +185,7 @@ pub struct ScoreRecord {
     pub score: ScoreState,
     pub count_unprocessed_notes: bool,
     pub random_seed: Option<i64>,
+    pub seed_scheme: String,
     pub arrange: String,
     pub arrange_2p: String,
     pub gauge_option: String,
@@ -233,6 +234,7 @@ pub struct ScoreRecordMetadata {
     pub played_at: i64,
     pub playtime_seconds: u32,
     pub random_seed: Option<i64>,
+    pub seed_scheme: String,
     pub arrange: String,
     pub arrange_2p: String,
     pub gauge_option: String,
@@ -252,6 +254,7 @@ impl ScoreRecord {
             played_at,
             playtime_seconds,
             random_seed,
+            seed_scheme,
             arrange,
             arrange_2p,
             gauge_option,
@@ -276,6 +279,7 @@ impl ScoreRecord {
             score: result.score.clone(),
             count_unprocessed_notes: result.clear_type == ClearType::Failed,
             random_seed,
+            seed_scheme,
             arrange,
             arrange_2p,
             gauge_option,
@@ -309,6 +313,7 @@ impl ScoreRecordMetadata {
             played_at,
             playtime_seconds: 0,
             random_seed,
+            seed_scheme: String::new(),
             arrange: arrange.into(),
             arrange_2p: "Normal".to_string(),
             gauge_option: gauge_option.into(),
@@ -330,13 +335,21 @@ impl ScoreRecordMetadata {
         self
     }
 
+    pub fn with_seed_scheme(mut self, seed_scheme: impl Into<String>) -> Self {
+        self.seed_scheme = seed_scheme.into();
+        self
+    }
+
     pub const fn with_applied_double_option(mut self, double_option: DoubleOption) -> Self {
         self.applied_double_option = double_option;
         self
     }
 
-    pub const fn with_source_kind(mut self, source_kind: ScoreSourceKind) -> Self {
+    pub fn with_source_kind(mut self, source_kind: ScoreSourceKind) -> Self {
         self.source_kind = source_kind;
+        if source_kind == ScoreSourceKind::Beatoraja && self.seed_scheme.is_empty() {
+            self.seed_scheme = "beatoraja_24bit_v1".to_string();
+        }
         self
     }
 }
@@ -1440,6 +1453,7 @@ fn source_score_history_match(
            AND assist_mask = ?30
            AND autoplay = ?31
            AND applied_double_option = ?32
+           AND seed_scheme = ?33
          ORDER BY id ASC
          LIMIT 1",
         params![
@@ -1475,6 +1489,7 @@ fn source_score_history_match(
             record.assist_mask,
             record.autoplay,
             record.applied_double_option.to_persistent_str(),
+            record.seed_scheme.as_str(),
         ],
         |row| {
             Ok(SourceScoreHistoryMatch {
@@ -1838,11 +1853,12 @@ fn insert_score_history(
             old_ex_score,
             old_max_combo,
             old_bp,
-            old_cb
+            old_cb,
+            seed_scheme
         ) VALUES (
             ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13,
             ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30,
-            ?31, ?32, ?33, ?34, ?35, ?36, ?37, ?38, ?39, ?40
+            ?31, ?32, ?33, ?34, ?35, ?36, ?37, ?38, ?39, ?40, ?41
         )",
         params![
             hash_to_hex(&record.chart_sha256),
@@ -1885,6 +1901,7 @@ fn insert_score_history(
             previous_best.map(|best| best.max_combo),
             previous_best.map(|best| best.bp),
             previous_best.map(|best| best.cb),
+            record.seed_scheme.as_str(),
         ],
     )?;
     Ok(())
@@ -2313,6 +2330,7 @@ mod tests {
             score: score_with_ex_score(ex_score),
             count_unprocessed_notes: clear_type == ClearType::Failed,
             random_seed: None,
+            seed_scheme: String::new(),
             arrange: "Normal".to_string(),
             arrange_2p: "Normal".to_string(),
             gauge_option: String::new(),
@@ -2363,6 +2381,7 @@ mod tests {
         record.arrange_2p = "Mirror".to_string();
         record.applied_double_option = DoubleOption::Flip;
         record.source_kind = ScoreSourceKind::Beatoraja;
+        record.seed_scheme = "beatoraja_24bit_v1".to_string();
         record.device_type = InputDeviceKind::Controller;
         db.insert_score(&record).unwrap();
 
@@ -2420,6 +2439,11 @@ mod tests {
         assert_eq!(replay_path, "");
         assert_eq!(source_kind, "Beatoraja");
         assert_eq!(applied_double_option, "Flip");
+        let seed_scheme: String = db
+            .conn()
+            .query_row("SELECT seed_scheme FROM score_history", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(seed_scheme, "beatoraja_24bit_v1");
         assert_eq!(db.recent_history(1, 0).unwrap()[0].source_kind, ScoreSourceKind::Beatoraja);
         assert_eq!(db.recent_history(1, 0).unwrap()[0].applied_double_option, DoubleOption::Flip);
     }

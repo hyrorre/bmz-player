@@ -1401,6 +1401,20 @@ pub const SCORE_MIGRATIONS: &[Migration] = &[
             "INSERT INTO daily_statistics_state (id, reset_at) VALUES (1, 0);",
         ],
     },
+    Migration {
+        version: 24,
+        // Existing BMZ local rows used one unrestricted seed for both arrange
+        // and BMS #RANDOM. Keep that meaning explicit instead of reinterpreting
+        // the number. Imported beatoraja rows already use the packed 24-bit
+        // side format and can be labelled accordingly.
+        statements: &[
+            "ALTER TABLE score_history
+                ADD COLUMN seed_scheme TEXT NOT NULL DEFAULT 'legacy_shared_v3';",
+            "UPDATE score_history
+             SET seed_scheme = 'beatoraja_24bit_v1'
+             WHERE source_kind = 'Beatoraja';",
+        ],
+    },
 ];
 
 pub const NETWORK_MIGRATIONS: &[Migration] = &[Migration {
@@ -1654,7 +1668,7 @@ mod tests {
         run_migrations(&mut conn, SCORE_MIGRATIONS).unwrap();
 
         let version: i32 = conn.pragma_query_value(None, "user_version", |row| row.get(0)).unwrap();
-        assert_eq!(version, 23);
+        assert_eq!(version, 24);
 
         let mut stmt = conn.prepare("PRAGMA table_info(score_best)").unwrap();
         let columns = stmt

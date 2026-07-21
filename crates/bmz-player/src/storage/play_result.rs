@@ -45,6 +45,9 @@ pub struct StorePlayResultRequest {
     pub arrange: ArrangeOption,
     pub arrange_2p: ArrangeOption,
     pub arrange_seed: Option<i64>,
+    pub arrange_seed_2p: Option<i64>,
+    pub bms_random_choices: Vec<i32>,
+    pub seed_scheme: String,
     pub arrange_pattern: Option<Vec<u8>>,
     pub mode: StorePlayResultMode,
 }
@@ -104,6 +107,8 @@ pub fn store_play_result(
     let arrange = request.arrange;
     let arrange_2p = request.arrange_2p;
     let arrange_seed = request.arrange_seed;
+    let arrange_seed_2p = request.arrange_seed_2p;
+    let bms_random_choices = request.bms_random_choices.clone();
     let arrange_pattern = request.arrange_pattern.clone();
     let replay_events = request.replay_events.clone();
     let rule_mode = bmz_gameplay::rule::RuleMode::from_str_opt(&request.rule_mode)
@@ -124,7 +129,9 @@ pub fn store_play_result(
             arrange_seed,
             arrange_pattern.clone(),
             replay_events.clone(),
-        );
+        )
+        .with_randomization(arrange_seed_2p, bms_random_choices.clone())
+        .with_seed_scheme(request.seed_scheme.clone());
         let hash = save_replay_with_hash(&path, &replay)?;
         (format!("replay/{file_name}"), Some(hash))
     } else {
@@ -147,6 +154,7 @@ pub fn store_play_result(
         )
         .with_applied_double_option(request.applied_double_option)
         .with_arrange_2p(arrange_2p.to_persistent_str())
+        .with_seed_scheme(request.seed_scheme.clone())
         .with_playtime_seconds(request.playtime_seconds),
     );
     record.clear_type = request.mode.stored_clear_type(result.clear_type);
@@ -187,7 +195,9 @@ pub fn store_play_result(
                 arrange_seed,
                 arrange_pattern.clone(),
                 replay_events.clone(),
-            );
+            )
+            .with_randomization(arrange_seed_2p, bms_random_choices.clone())
+            .with_seed_scheme(request.seed_scheme.clone());
             save_replay(&path, &replay)?;
             let rel_path = format!("replay/{file_name}");
             score_db.upsert_replay_slot(&ReplaySlotRecord {
@@ -386,6 +396,9 @@ mod tests {
                 arrange: ArrangeOption::Normal,
                 arrange_2p: ArrangeOption::Normal,
                 arrange_seed: None,
+                arrange_seed_2p: None,
+                bms_random_choices: Vec::new(),
+                seed_scheme: String::new(),
                 arrange_pattern: None,
                 mode: StorePlayResultMode::Normal,
             },
@@ -453,6 +466,9 @@ mod tests {
                 arrange: ArrangeOption::Normal,
                 arrange_2p: ArrangeOption::Normal,
                 arrange_seed: None,
+                arrange_seed_2p: None,
+                bms_random_choices: Vec::new(),
+                seed_scheme: String::new(),
                 arrange_pattern: None,
                 mode: StorePlayResultMode::Normal,
             },
@@ -510,6 +526,9 @@ mod tests {
                 arrange: ArrangeOption::Normal,
                 arrange_2p: ArrangeOption::Normal,
                 arrange_seed: None,
+                arrange_seed_2p: None,
+                bms_random_choices: Vec::new(),
+                seed_scheme: String::new(),
                 arrange_pattern: None,
                 mode: StorePlayResultMode::Normal,
             },
@@ -582,6 +601,9 @@ mod tests {
                 arrange: ArrangeOption::Normal,
                 arrange_2p: ArrangeOption::Normal,
                 arrange_seed: None,
+                arrange_seed_2p: None,
+                bms_random_choices: Vec::new(),
+                seed_scheme: String::new(),
                 arrange_pattern: None,
                 mode: StorePlayResultMode::Normal,
             },
@@ -636,6 +658,9 @@ mod tests {
                 arrange: ArrangeOption::Normal,
                 arrange_2p: ArrangeOption::Normal,
                 arrange_seed: None,
+                arrange_seed_2p: None,
+                bms_random_choices: Vec::new(),
+                seed_scheme: String::new(),
                 arrange_pattern: None,
                 mode: StorePlayResultMode::CourseStage,
             },
@@ -725,6 +750,9 @@ mod tests {
                 arrange: ArrangeOption::Normal,
                 arrange_2p: ArrangeOption::Normal,
                 arrange_seed: None,
+                arrange_seed_2p: None,
+                bms_random_choices: Vec::new(),
+                seed_scheme: String::new(),
                 arrange_pattern: None,
                 mode: StorePlayResultMode::Normal,
             },
@@ -758,6 +786,9 @@ mod tests {
                 arrange: ArrangeOption::Normal,
                 arrange_2p: ArrangeOption::Normal,
                 arrange_seed: None,
+                arrange_seed_2p: None,
+                bms_random_choices: Vec::new(),
+                seed_scheme: String::new(),
                 arrange_pattern: None,
                 mode: StorePlayResultMode::Normal,
             },
@@ -815,6 +846,9 @@ mod tests {
                 arrange: ArrangeOption::Normal,
                 arrange_2p: ArrangeOption::Normal,
                 arrange_seed: None,
+                arrange_seed_2p: None,
+                bms_random_choices: Vec::new(),
+                seed_scheme: String::new(),
                 arrange_pattern: None,
                 mode: StorePlayResultMode::Normal,
             },

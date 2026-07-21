@@ -6,7 +6,9 @@ use bmz_audio::loader::{
     LoadedSampleReport, SampleLoader, load_chart_samples, load_chart_samples_with_progress,
 };
 use bmz_audio::loudness::{analyze_chart_loudness, play_normalization_gain_for_loudness};
-use bmz_chart::import::import_bms_chart;
+use bmz_chart::import::{
+    BmsRandomSource, ImportResult, import_bms_chart, import_bms_chart_with_random_source,
+};
 use bmz_chart::model::{BgaAssetRef, NoteEvent, NoteKind, PlayableChart, TimingEventKind};
 use bmz_chart::start_margin::apply_start_note_margin;
 use bmz_core::clear::GaugeType;
@@ -35,7 +37,6 @@ use bmz_gameplay::session::{
     BgmScheduler, GameSession, HispeedMode, InputOffsetAutoAdjustState, PlaySkinOffset, PlayState,
 };
 use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::config::play::{
     audio_mix_from_profile, bottom_shiftable_gauge_from_config, gauge_auto_shift_from_config,
@@ -49,6 +50,7 @@ use crate::input::gamepad::GamepadSlotMap;
 use crate::ln_policy::{
     LnPolicySetting, apply_ln_policy_to_chart, force_ln_mode_for_chart, score_ln_policy_for_chart,
 };
+use crate::random_option_seed::{JavaRandom, RandomOptionSeed, RandomOptionSeeds};
 use crate::screens::practice::{
     PracticeProperty, apply_practice_property, apply_practice_start_gauge,
 };
@@ -73,7 +75,16 @@ pub struct PlaySessionOptions {
     pub double_option: DoubleOption,
     pub hs_fix: HsFixOption,
     pub target: TargetOption,
+    /// beatoraja-compatible 24-bit RANDOM option seed for the 1P side.
     pub arrange_seed: Option<i64>,
+    /// beatoraja-compatible 24-bit RANDOM option seed for the 2P side.
+    pub arrange_seed_2p: Option<i64>,
+    /// Replay v3 and older used one unrestricted i64 seed with SplitMix64.
+    pub legacy_arrange_seed: bool,
+    /// Independent seed used only while selecting BMS `#RANDOM` branches.
+    pub bms_random_seed: Option<u64>,
+    /// Recorded `#RANDOM` decisions, in source order, for exact replay.
+    pub bms_random_choices: Option<Vec<i32>>,
     pub arrange_pattern: Option<Vec<u8>>,
     /// When set, overrides the gauge's starting value.  Used to carry the
     /// gauge between charts during a course.
@@ -106,8 +117,40 @@ pub struct AppliedArrange {
     pub arrange: ArrangeOption,
     pub arrange_2p: ArrangeOption,
     pub double_option: DoubleOption,
+    /// 1P option seed. New plays always use the beatoraja 24-bit range.
     pub seed: Option<i64>,
+    /// Independent 2P option seed for DP charts.
+    pub seed_2p: Option<i64>,
+    /// True only when replaying the pre-v4 SplitMix64 seed format.
+    pub legacy_seed: bool,
+    /// BMS `#RANDOM` decisions applied before the arrange modifier.
+    pub bms_random_choices: Vec<i32>,
     pub pattern: Option<Vec<u8>>,
+}
+
+impl AppliedArrange {
+    pub fn packed_beatoraja_seed_from_sides(&self) -> Option<i64> {
+        if self.legacy_seed {
+            return None;
+        }
+        let p1 = RandomOptionSeed::new(u32::try_from(self.seed?).ok()?)?;
+        let seeds = if let Some(seed_2p) = self.seed_2p {
+            let p2 = RandomOptionSeed::new(u32::try_from(seed_2p).ok()?)?;
+            RandomOptionSeeds::double(p1, p2)
+        } else {
+            RandomOptionSeeds::single(p1)
+        };
+        i64::try_from(seeds.pack()).ok()
+    }
+
+    pub fn packed_beatoraja_seed(&self, key_mode: KeyMode) -> Option<i64> {
+        if self.legacy_seed {
+            return None;
+        }
+        let packed = self.packed_beatoraja_seed_from_sides()?;
+        let has_p2 = self.seed_2p.is_some();
+        (has_p2 == matches!(key_mode, KeyMode::K10 | KeyMode::K14)).then_some(packed)
+    }
 }
 
 pub struct PreparedPlaySession {
@@ -146,6 +189,10 @@ impl Default for PlaySessionOptions {
             hs_fix: HsFixOption::Off,
             target: TargetOption::None,
             arrange_seed: None,
+            arrange_seed_2p: None,
+            legacy_arrange_seed: false,
+            bms_random_seed: None,
+            bms_random_choices: None,
             arrange_pattern: None,
             initial_gauge_value: None,
             initial_gauge_values: None,
@@ -816,9 +863,12 @@ pub fn load_game_session_for_chart_with_input_backend(
     let Some(path) = library_db.primary_chart_file_path(chart_id)? else {
         bail!("chart file not found for chart id {chart_id}");
     };
-    let import =
-        import_bms_chart(std::path::Path::new(&path), random_seed_for_chart(&options), true)
-            .with_context(|| format!("failed to import chart file: {path}"))?;
+    let import = import_bms_chart_with_random_source(
+        std::path::Path::new(&path),
+        bms_random_source_for_chart(&options),
+        true,
+    )
+    .with_context(|| format!("failed to import chart file: {path}"))?;
     Ok(build_game_session_with_input_backend(
         Arc::new(import.chart),
         profile,
@@ -827,11 +877,15 @@ pub fn load_game_session_for_chart_with_input_backend(
     ))
 }
 
-/// `import_bms_chart` に渡す BMS `#RANDOM` / `#IF` 解決用 seed。
-/// アレンジ seed (リプレイにも保存される) と同じ値を流用することで、
-/// 同じ replay を再生したときに RANDOM が必ず同じ分岐へ落ちることを保証する。
-fn random_seed_for_chart(options: &PlaySessionOptions) -> Option<u64> {
-    options.arrange_seed.map(|s| s as u64)
+fn bms_random_source_for_chart(options: &PlaySessionOptions) -> BmsRandomSource {
+    if let Some(choices) = &options.bms_random_choices {
+        BmsRandomSource::Choices(choices.clone())
+    } else if options.legacy_arrange_seed {
+        // Replay v3 and older derived `#RANDOM` from the shared arrange seed.
+        BmsRandomSource::Seed(options.arrange_seed.map(|seed| seed as u64))
+    } else {
+        BmsRandomSource::Seed(options.bms_random_seed)
+    }
 }
 
 pub fn build_audio_engine_for_chart(
@@ -981,13 +1035,29 @@ pub fn load_source_chart_for_chart(
         .chart)
 }
 
+fn load_source_chart_import_for_play(
+    library_db: &LibraryDatabase,
+    chart_id: i64,
+    options: &PlaySessionOptions,
+) -> Result<ImportResult> {
+    let Some(path) = library_db.primary_chart_file_path(chart_id)? else {
+        bail!("chart file not found for chart id {chart_id}");
+    };
+    import_bms_chart_with_random_source(
+        std::path::Path::new(&path),
+        bms_random_source_for_chart(options),
+        true,
+    )
+    .with_context(|| format!("failed to import chart file: {path}"))
+}
+
 fn load_transformed_chart_for_play(
     library_db: &LibraryDatabase,
     chart_id: i64,
     options: &PlaySessionOptions,
 ) -> Result<TransformedPlayChart> {
-    let mut chart =
-        load_source_chart_for_chart(library_db, chart_id, random_seed_for_chart(options))?;
+    let import = load_source_chart_import_for_play(library_db, chart_id, options)?;
+    let mut chart = import.chart;
     // beatoraja BMSModelUtils.setStartNoteTime(model, 1000) 相当。
     // LN / arrange より前に適用し、practice 切出しもシフト後時刻を使う。
     apply_start_note_margin(&mut chart);
@@ -1011,9 +1081,12 @@ fn load_transformed_chart_for_play(
         options.arrange,
         options.arrange_2p,
         options.arrange_seed,
+        options.arrange_seed_2p,
+        options.legacy_arrange_seed,
         options.arrange_pattern.as_deref(),
     );
     applied_arrange.double_option = applied_double_option;
+    applied_arrange.bms_random_choices = import.bms_random_choices;
 
     Ok(TransformedPlayChart { chart, applied_arrange, score_key })
 }
@@ -1032,8 +1105,7 @@ pub fn load_chart_bga_assets_for_chart(
     chart_id: i64,
     options: &PlaySessionOptions,
 ) -> Result<Vec<BgaAssetRef>> {
-    Ok(load_source_chart_for_chart(library_db, chart_id, random_seed_for_chart(options))?
-        .bga_assets)
+    Ok(load_source_chart_import_for_play(library_db, chart_id, options)?.chart.bga_assets)
 }
 
 pub fn build_practice_prepared_from_preloaded(
@@ -1132,15 +1204,18 @@ fn load_or_compute_normalization_gain(
 }
 
 pub fn generate_arrange_seed() -> i64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_nanos() as i64).unwrap_or(12345)
+    i64::from(RandomOptionSeeds::fresh(false).p1.value())
 }
 
-fn normal_applied_arrange() -> AppliedArrange {
+fn normal_applied_arrange(seed: i64, legacy_seed: bool) -> AppliedArrange {
     AppliedArrange {
         arrange: ArrangeOption::Normal,
         arrange_2p: ArrangeOption::Normal,
         double_option: DoubleOption::Off,
-        seed: None,
+        seed: Some(seed),
+        seed_2p: None,
+        legacy_seed,
+        bms_random_choices: Vec::new(),
         pattern: None,
     }
 }
@@ -1151,9 +1226,20 @@ pub fn apply_arrange(
     seed: Option<i64>,
     pattern: Option<&[u8]>,
 ) -> AppliedArrange {
+    apply_arrange_internal(chart, arrange, seed, pattern, false)
+}
+
+fn apply_arrange_internal(
+    chart: &mut PlayableChart,
+    arrange: ArrangeOption,
+    seed: Option<i64>,
+    pattern: Option<&[u8]>,
+    legacy_seed: bool,
+) -> AppliedArrange {
     let key_mode = chart.metadata.key_mode;
+    let used_seed = seed.unwrap_or_else(generate_arrange_seed);
     if arrange_requires_scratch(arrange) && !key_mode_has_scratch(key_mode) {
-        return normal_applied_arrange();
+        return normal_applied_arrange(used_seed, legacy_seed);
     }
 
     if let Some(perm) = pattern {
@@ -1163,13 +1249,16 @@ pub fn apply_arrange(
             arrange,
             arrange_2p: ArrangeOption::Normal,
             double_option: DoubleOption::Off,
-            seed,
+            seed: Some(used_seed),
+            seed_2p: None,
+            legacy_seed,
+            bms_random_choices: Vec::new(),
             pattern: Some(perm.to_vec()),
         };
     }
 
     match arrange {
-        ArrangeOption::Normal => normal_applied_arrange(),
+        ArrangeOption::Normal => normal_applied_arrange(used_seed, legacy_seed),
         ArrangeOption::Mirror => {
             let perm = mirror_permutation(key_mode);
             apply_lane_permutation(chart, &perm);
@@ -1177,55 +1266,66 @@ pub fn apply_arrange(
                 arrange: ArrangeOption::Mirror,
                 arrange_2p: ArrangeOption::Normal,
                 double_option: DoubleOption::Off,
-                seed: None,
+                seed: Some(used_seed),
+                seed_2p: None,
+                legacy_seed,
+                bms_random_choices: Vec::new(),
                 pattern: Some(perm.iter().map(|&i| i as u8).collect()),
             }
         }
         ArrangeOption::Random => {
-            let used_seed = seed.unwrap_or_else(generate_arrange_seed);
-            let perm = random_lane_permutation(used_seed, key_mode, false);
+            let perm = random_lane_permutation(used_seed, key_mode, false, legacy_seed);
             apply_lane_permutation(chart, &perm);
             AppliedArrange {
                 arrange: ArrangeOption::Random,
                 arrange_2p: ArrangeOption::Normal,
                 double_option: DoubleOption::Off,
                 seed: Some(used_seed),
+                seed_2p: None,
+                legacy_seed,
+                bms_random_choices: Vec::new(),
                 pattern: Some(perm.iter().map(|&i| i as u8).collect()),
             }
         }
         ArrangeOption::RRandom => {
-            let used_seed = seed.unwrap_or_else(generate_arrange_seed);
-            let perm = rotate_lane_permutation(used_seed, key_mode, false);
+            let perm = rotate_lane_permutation(used_seed, key_mode, false, legacy_seed);
             apply_lane_permutation(chart, &perm);
             AppliedArrange {
                 arrange: ArrangeOption::RRandom,
                 arrange_2p: ArrangeOption::Normal,
                 double_option: DoubleOption::Off,
                 seed: Some(used_seed),
+                seed_2p: None,
+                legacy_seed,
+                bms_random_choices: Vec::new(),
                 pattern: Some(perm.iter().map(|&i| i as u8).collect()),
             }
         }
         ArrangeOption::RandomEx => {
-            let used_seed = seed.unwrap_or_else(generate_arrange_seed);
-            let perm = random_lane_permutation(used_seed, key_mode, true);
+            let perm = random_lane_permutation(used_seed, key_mode, true, legacy_seed);
             apply_lane_permutation(chart, &perm);
             AppliedArrange {
                 arrange: ArrangeOption::RandomEx,
                 arrange_2p: ArrangeOption::Normal,
                 double_option: DoubleOption::Off,
                 seed: Some(used_seed),
+                seed_2p: None,
+                legacy_seed,
+                bms_random_choices: Vec::new(),
                 pattern: Some(perm.iter().map(|&i| i as u8).collect()),
             }
         }
         ArrangeOption::FRandom | ArrangeOption::MFRandom => {
-            let used_seed = seed.unwrap_or_else(generate_arrange_seed);
-            let perm = f_random_lane_permutation(used_seed, key_mode, arrange);
+            let perm = f_random_lane_permutation(used_seed, key_mode, arrange, legacy_seed);
             apply_lane_permutation(chart, &perm);
             AppliedArrange {
                 arrange,
                 arrange_2p: ArrangeOption::Normal,
                 double_option: DoubleOption::Off,
                 seed: Some(used_seed),
+                seed_2p: None,
+                legacy_seed,
+                bms_random_choices: Vec::new(),
                 pattern: Some(perm.iter().map(|&i| i as u8).collect()),
             }
         }
@@ -1234,13 +1334,15 @@ pub fn apply_arrange(
         | ArrangeOption::HRandom
         | ArrangeOption::AllScratch
         | ArrangeOption::SRandomEx => {
-            let used_seed = seed.unwrap_or_else(generate_arrange_seed);
-            apply_note_arrange(chart, arrange, used_seed);
+            apply_note_arrange(chart, arrange, used_seed, legacy_seed);
             AppliedArrange {
                 arrange,
                 arrange_2p: ArrangeOption::Normal,
                 double_option: DoubleOption::Off,
                 seed: Some(used_seed),
+                seed_2p: None,
+                legacy_seed,
+                bms_random_choices: Vec::new(),
                 pattern: None,
             }
         }
@@ -1263,8 +1365,21 @@ pub fn apply_arrange_pair(
     arrange_1p: ArrangeOption,
     arrange_2p: ArrangeOption,
     seed: Option<i64>,
+    seed_2p: Option<i64>,
+    legacy_seed: bool,
     pattern: Option<&[u8]>,
 ) -> AppliedArrange {
+    let used_seed = seed.unwrap_or_else(generate_arrange_seed);
+    let key_mode = chart.metadata.key_mode;
+    if !matches!(key_mode, KeyMode::K10 | KeyMode::K14) {
+        return apply_arrange_internal(chart, arrange_1p, Some(used_seed), pattern, legacy_seed);
+    }
+
+    let used_seed_2p = if legacy_seed {
+        used_seed.wrapping_add(0x9e37_79b9)
+    } else {
+        seed_2p.unwrap_or_else(generate_arrange_seed)
+    };
     if let Some(perm) = pattern {
         let perm_usize: Vec<usize> = perm.iter().map(|&i| i as usize).collect();
         apply_lane_permutation(chart, &perm_usize);
@@ -1272,31 +1387,26 @@ pub fn apply_arrange_pair(
             arrange: arrange_1p,
             arrange_2p,
             double_option: DoubleOption::Off,
-            seed,
+            seed: Some(used_seed),
+            seed_2p: Some(used_seed_2p),
+            legacy_seed,
+            bms_random_choices: Vec::new(),
             pattern: Some(perm.to_vec()),
         };
     }
 
-    let key_mode = chart.metadata.key_mode;
-    if !matches!(key_mode, KeyMode::K10 | KeyMode::K14) {
-        return apply_arrange(chart, arrange_1p, seed, None);
-    }
-
-    let used_seed = (arrange_1p.uses_seed() || arrange_2p.uses_seed())
-        .then(|| seed.unwrap_or_else(generate_arrange_seed));
     let mut combined_perm: Vec<usize> = (0..LANE_COUNT).collect();
     let mut has_perm = false;
 
-    if let Some(perm) = apply_arrange_side(chart, arrange_1p, used_seed, ArrangeSide::P1) {
+    if let Some(perm) =
+        apply_arrange_side(chart, arrange_1p, Some(used_seed), ArrangeSide::P1, legacy_seed)
+    {
         merge_lane_permutation(&mut combined_perm, &perm);
         has_perm = true;
     }
-    if let Some(perm) = apply_arrange_side(
-        chart,
-        arrange_2p,
-        used_seed.map(|seed| seed.wrapping_add(0x9e37_79b9)),
-        ArrangeSide::P2,
-    ) {
+    if let Some(perm) =
+        apply_arrange_side(chart, arrange_2p, Some(used_seed_2p), ArrangeSide::P2, legacy_seed)
+    {
         merge_lane_permutation(&mut combined_perm, &perm);
         has_perm = true;
     }
@@ -1305,7 +1415,10 @@ pub fn apply_arrange_pair(
         arrange: arrange_1p,
         arrange_2p,
         double_option: DoubleOption::Off,
-        seed: used_seed,
+        seed: Some(used_seed),
+        seed_2p: Some(used_seed_2p),
+        legacy_seed,
+        bms_random_choices: Vec::new(),
         pattern: has_perm.then(|| combined_perm.iter().map(|&i| i as u8).collect()),
     }
 }
@@ -1436,6 +1549,7 @@ fn apply_arrange_side(
     arrange: ArrangeOption,
     seed: Option<i64>,
     side: ArrangeSide,
+    legacy_seed: bool,
 ) -> Option<Vec<usize>> {
     if arrange == ArrangeOption::Normal {
         return None;
@@ -1462,16 +1576,16 @@ fn apply_arrange_side(
         }
         ArrangeOption::Random => {
             let mut perm: Vec<usize> = (0..LANE_COUNT).collect();
-            let mut rng = SplitMix64::new(seed.unwrap_or_else(generate_arrange_seed));
+            let mut rng = ArrangeRng::new(seed.unwrap_or_else(generate_arrange_seed), legacy_seed);
             for group in groups {
-                fisher_yates_shuffle(&mut rng, &group, &mut perm);
+                shuffle_lane_group(&mut rng, &group, &mut perm, legacy_seed);
             }
             apply_lane_permutation(chart, &perm);
             Some(perm)
         }
         ArrangeOption::RRandom => {
             let mut perm: Vec<usize> = (0..LANE_COUNT).collect();
-            let mut rng = SplitMix64::new(seed.unwrap_or_else(generate_arrange_seed));
+            let mut rng = ArrangeRng::new(seed.unwrap_or_else(generate_arrange_seed), legacy_seed);
             for group in groups {
                 rotate_lane_group(&mut rng, &group, &mut perm);
             }
@@ -1480,9 +1594,9 @@ fn apply_arrange_side(
         }
         ArrangeOption::RandomEx => {
             let mut perm: Vec<usize> = (0..LANE_COUNT).collect();
-            let mut rng = SplitMix64::new(seed.unwrap_or_else(generate_arrange_seed));
+            let mut rng = ArrangeRng::new(seed.unwrap_or_else(generate_arrange_seed), legacy_seed);
             for group in groups {
-                fisher_yates_shuffle(&mut rng, &group, &mut perm);
+                shuffle_lane_group(&mut rng, &group, &mut perm, legacy_seed);
             }
             apply_lane_permutation(chart, &perm);
             Some(perm)
@@ -1493,6 +1607,7 @@ fn apply_arrange_side(
                 chart.metadata.key_mode,
                 arrange,
                 side,
+                legacy_seed,
             );
             apply_lane_permutation(chart, &perm);
             Some(perm)
@@ -1507,6 +1622,7 @@ fn apply_arrange_side(
                 arrange,
                 seed.unwrap_or_else(generate_arrange_seed),
                 &groups,
+                legacy_seed,
             );
             None
         }
@@ -1529,17 +1645,27 @@ fn mirror_permutation(key_mode: KeyMode) -> Vec<usize> {
     perm
 }
 
-fn random_lane_permutation(seed: i64, key_mode: KeyMode, include_scratch: bool) -> Vec<usize> {
+fn random_lane_permutation(
+    seed: i64,
+    key_mode: KeyMode,
+    include_scratch: bool,
+    legacy_seed: bool,
+) -> Vec<usize> {
     let mut perm: Vec<usize> = (0..LANE_COUNT).collect();
-    let mut rng = SplitMix64::new(seed);
+    let mut rng = ArrangeRng::new(seed, legacy_seed);
     for group in arrange_lane_groups(key_mode, include_scratch) {
-        fisher_yates_shuffle(&mut rng, &group, &mut perm);
+        shuffle_lane_group(&mut rng, &group, &mut perm, legacy_seed);
     }
     perm
 }
 
-fn f_random_lane_permutation(seed: i64, key_mode: KeyMode, arrange: ArrangeOption) -> Vec<usize> {
-    let f_random = shuffle_lane_groups(seed, f_random_lane_groups(key_mode));
+fn f_random_lane_permutation(
+    seed: i64,
+    key_mode: KeyMode,
+    arrange: ArrangeOption,
+    legacy_seed: bool,
+) -> Vec<usize> {
+    let f_random = shuffle_lane_groups(seed, f_random_lane_groups(key_mode), legacy_seed);
     if arrange == ArrangeOption::MFRandom {
         compose_lane_permutations(&f_random, &mirror_permutation(key_mode))
     } else {
@@ -1552,8 +1678,10 @@ fn f_random_lane_permutation_for_side(
     key_mode: KeyMode,
     arrange: ArrangeOption,
     side: ArrangeSide,
+    legacy_seed: bool,
 ) -> Vec<usize> {
-    let f_random = shuffle_lane_groups(seed, f_random_lane_groups_for_side(key_mode, side));
+    let f_random =
+        shuffle_lane_groups(seed, f_random_lane_groups_for_side(key_mode, side), legacy_seed);
     if arrange == ArrangeOption::MFRandom {
         let mirror = mirror_lane_permutation_for_side(key_mode, side);
         compose_lane_permutations(&f_random, &mirror)
@@ -1562,11 +1690,11 @@ fn f_random_lane_permutation_for_side(
     }
 }
 
-fn shuffle_lane_groups(seed: i64, groups: Vec<Vec<usize>>) -> Vec<usize> {
+fn shuffle_lane_groups(seed: i64, groups: Vec<Vec<usize>>, legacy_seed: bool) -> Vec<usize> {
     let mut perm: Vec<usize> = (0..LANE_COUNT).collect();
-    let mut rng = SplitMix64::new(seed);
+    let mut rng = ArrangeRng::new(seed, legacy_seed);
     for group in groups {
-        fisher_yates_shuffle(&mut rng, &group, &mut perm);
+        shuffle_lane_group(&mut rng, &group, &mut perm, legacy_seed);
     }
     perm
 }
@@ -1583,20 +1711,25 @@ fn compose_lane_permutations(first: &[usize], second: &[usize]) -> Vec<usize> {
     second.iter().map(|&source| first[source]).collect()
 }
 
-fn rotate_lane_permutation(seed: i64, key_mode: KeyMode, include_scratch: bool) -> Vec<usize> {
+fn rotate_lane_permutation(
+    seed: i64,
+    key_mode: KeyMode,
+    include_scratch: bool,
+    legacy_seed: bool,
+) -> Vec<usize> {
     let mut perm: Vec<usize> = (0..LANE_COUNT).collect();
-    let mut rng = SplitMix64::new(seed);
+    let mut rng = ArrangeRng::new(seed, legacy_seed);
     for group in arrange_lane_groups(key_mode, include_scratch) {
         rotate_lane_group(&mut rng, &group, &mut perm);
     }
     perm
 }
 
-fn rotate_lane_group(rng: &mut SplitMix64, group: &[usize], perm: &mut [usize]) {
+fn rotate_lane_group(rng: &mut ArrangeRng, group: &[usize], perm: &mut [usize]) {
     if group.len() < 2 {
         return;
     }
-    let inc = rng.next_bool();
+    let inc = rng.next_usize(2) == 1;
     let mut index = rng.next_usize(group.len() - 1);
     if inc {
         index += 1;
@@ -1744,10 +1877,15 @@ fn apply_lane_permutation(chart: &mut PlayableChart, perm: &[usize]) {
     }
 }
 
-fn apply_note_arrange(chart: &mut PlayableChart, arrange: ArrangeOption, seed: i64) {
+fn apply_note_arrange(
+    chart: &mut PlayableChart,
+    arrange: ArrangeOption,
+    seed: i64,
+    legacy_seed: bool,
+) {
     let include_scratch = matches!(arrange, ArrangeOption::AllScratch | ArrangeOption::SRandomEx);
     let groups = arrange_lane_groups(chart.metadata.key_mode, include_scratch);
-    apply_note_arrange_for_groups(chart, arrange, seed, &groups);
+    apply_note_arrange_for_groups(chart, arrange, seed, &groups, legacy_seed);
 }
 
 fn apply_note_arrange_for_groups(
@@ -1755,8 +1893,9 @@ fn apply_note_arrange_for_groups(
     arrange: ArrangeOption,
     seed: i64,
     groups: &[Vec<usize>],
+    legacy_seed: bool,
 ) {
-    let mut engine = NoteArrangeEngine::new(arrange, seed, groups);
+    let mut engine = NoteArrangeEngine::new(arrange, seed, groups, legacy_seed);
     let mut notes: Vec<NoteEvent> = chart.lane_notes.iter_mut().flat_map(std::mem::take).collect();
     notes.sort_by_key(|note| (note.tick, note.time, note.lane as u8, note.id));
 
@@ -1800,15 +1939,15 @@ fn apply_note_arrange_for_groups(
 
 struct NoteArrangeEngine {
     arrange: ArrangeOption,
-    rng: SplitMix64,
+    rng: ArrangeRng,
     groups: Vec<NoteArrangeGroup>,
 }
 
 impl NoteArrangeEngine {
-    fn new(arrange: ArrangeOption, seed: i64, groups: &[Vec<usize>]) -> Self {
+    fn new(arrange: ArrangeOption, seed: i64, groups: &[Vec<usize>], legacy_seed: bool) -> Self {
         Self {
             arrange,
-            rng: SplitMix64::new(seed),
+            rng: ArrangeRng::new(seed, legacy_seed),
             groups: groups.iter().map(|lanes| NoteArrangeGroup::new(lanes)).collect(),
         }
     }
@@ -1873,7 +2012,7 @@ impl NoteArrangeGroup {
         notes: &[NoteEvent],
         time: TimeUs,
         arrange: ArrangeOption,
-        rng: &mut SplitMix64,
+        rng: &mut ArrangeRng,
     ) -> std::collections::HashMap<usize, usize> {
         if self.lanes.is_empty() {
             return std::collections::HashMap::new();
@@ -1918,7 +2057,7 @@ impl NoteArrangeGroup {
         notes: &[NoteEvent],
         time: TimeUs,
         threshold: TimeUs,
-        rng: &mut SplitMix64,
+        rng: &mut ArrangeRng,
         changeable: Vec<usize>,
         assignable: Vec<usize>,
     ) -> std::collections::HashMap<usize, usize> {
@@ -1982,7 +2121,7 @@ impl NoteArrangeGroup {
         map
     }
 
-    fn spiral_map(&mut self, rng: &mut SplitMix64) -> std::collections::HashMap<usize, usize> {
+    fn spiral_map(&mut self, rng: &mut ArrangeRng) -> std::collections::HashMap<usize, usize> {
         if self.lanes.len() < 2 {
             return std::collections::HashMap::new();
         }
@@ -2007,7 +2146,7 @@ impl NoteArrangeGroup {
         &mut self,
         notes: &[NoteEvent],
         time: TimeUs,
-        _rng: &mut SplitMix64,
+        _rng: &mut ArrangeRng,
         changeable: &mut Vec<usize>,
         assignable: &mut Vec<usize>,
         map: &mut std::collections::HashMap<usize, usize>,
@@ -2051,10 +2190,6 @@ impl SplitMix64 {
         value ^ (value >> 31)
     }
 
-    fn next_bool(&mut self) -> bool {
-        self.next_u64() & 1 == 1
-    }
-
     fn next_usize(&mut self, bound: usize) -> usize {
         assert!(bound > 0);
         let bound = bound as u128;
@@ -2068,7 +2203,51 @@ impl SplitMix64 {
     }
 }
 
-fn fisher_yates_shuffle(rng: &mut SplitMix64, lanes: &[usize], perm: &mut [usize]) {
+#[derive(Debug, Clone)]
+enum ArrangeRng {
+    Beatoraja(JavaRandom),
+    Legacy(SplitMix64),
+}
+
+impl ArrangeRng {
+    fn new(seed: i64, legacy_seed: bool) -> Self {
+        if legacy_seed {
+            Self::Legacy(SplitMix64::new(seed))
+        } else {
+            Self::Beatoraja(JavaRandom::new(seed))
+        }
+    }
+
+    fn next_usize(&mut self, bound: usize) -> usize {
+        assert!(bound > 0);
+        match self {
+            Self::Beatoraja(random) => random.next_int_bound(bound as i32) as usize,
+            Self::Legacy(random) => random.next_usize(bound),
+        }
+    }
+}
+
+fn shuffle_lane_group(
+    rng: &mut ArrangeRng,
+    lanes: &[usize],
+    perm: &mut [usize],
+    legacy_seed: bool,
+) {
+    if legacy_seed {
+        fisher_yates_shuffle(rng, lanes, perm);
+        return;
+    }
+
+    // beatoraja LaneRandomShuffleModifier: source lane order is stable and
+    // each destination is selected from, then removed from, the remaining list.
+    let mut remaining = lanes.to_vec();
+    for &lane in lanes {
+        let index = rng.next_usize(remaining.len());
+        perm[lane] = remaining.remove(index);
+    }
+}
+
+fn fisher_yates_shuffle(rng: &mut ArrangeRng, lanes: &[usize], perm: &mut [usize]) {
     if lanes.len() < 2 {
         return;
     }
@@ -2449,7 +2628,7 @@ mod tests {
 
     #[test]
     fn random_lane_permutation_k9_preserves_active_lanes() {
-        let perm = random_lane_permutation(42, KeyMode::K9, false);
+        let perm = random_lane_permutation(42, KeyMode::K9, false, false);
         let active: HashSet<_> =
             KeyMode::K9.active_lanes().iter().map(|&lane| lane as usize).collect();
         let mapped: HashSet<_> =
@@ -2463,10 +2642,10 @@ mod tests {
             let active: HashSet<_> =
                 key_mode.active_lanes().iter().map(|&lane| lane.index()).collect();
             for perm in [
-                random_lane_permutation(42, key_mode, false),
-                random_lane_permutation(42, key_mode, true),
-                rotate_lane_permutation(42, key_mode, false),
-                rotate_lane_permutation(42, key_mode, true),
+                random_lane_permutation(42, key_mode, false, false),
+                random_lane_permutation(42, key_mode, true, false),
+                rotate_lane_permutation(42, key_mode, false, false),
+                rotate_lane_permutation(42, key_mode, true, false),
             ] {
                 let mapped: HashSet<_> =
                     key_mode.active_lanes().iter().map(|&lane| perm[lane.index()]).collect();
@@ -2559,8 +2738,8 @@ mod tests {
 
     #[test]
     fn mf_random_applies_mirror_after_f_random() {
-        let f_random = f_random_lane_permutation(42, KeyMode::K7, ArrangeOption::FRandom);
-        let mf_random = f_random_lane_permutation(42, KeyMode::K7, ArrangeOption::MFRandom);
+        let f_random = f_random_lane_permutation(42, KeyMode::K7, ArrangeOption::FRandom, false);
+        let mf_random = f_random_lane_permutation(42, KeyMode::K7, ArrangeOption::MFRandom, false);
         let mirror = mirror_permutation(KeyMode::K7);
 
         assert_eq!(mf_random, compose_lane_permutations(&f_random, &mirror));
@@ -2581,7 +2760,7 @@ mod tests {
                 let applied = apply_arrange(&mut chart, arrange, Some(7), None);
 
                 assert_eq!(applied.arrange, ArrangeOption::Normal);
-                assert_eq!(applied.seed, None);
+                assert_eq!(applied.seed, Some(7));
                 assert_eq!(applied.pattern, None);
                 assert_eq!(lanes_for_notes(&chart), before);
             }
@@ -2604,7 +2783,7 @@ mod tests {
                 apply_arrange(&mut chart, ArrangeOption::RandomEx, Some(7), Some(&pattern));
 
             assert_eq!(applied.arrange, ArrangeOption::Normal);
-            assert_eq!(applied.seed, None);
+            assert_eq!(applied.seed, Some(7));
             assert_eq!(applied.pattern, None);
             assert_eq!(lanes_for_notes(&chart), before);
         }
@@ -2650,6 +2829,18 @@ mod tests {
     }
 
     #[test]
+    fn random_lane_shuffle_matches_beatoraja_java_fixture() {
+        // java.util.Random(42) + LaneRandomShuffleModifier's remove-at-index loop.
+        let lanes = vec![0, 1, 2, 3, 4, 5, 6];
+        let mut perm: Vec<usize> = (0..LANE_COUNT).collect();
+        let mut rng = ArrangeRng::new(42, false);
+
+        shuffle_lane_group(&mut rng, &lanes, &mut perm, false);
+
+        assert_eq!(&perm[..7], &[1, 4, 5, 0, 2, 6, 3]);
+    }
+
+    #[test]
     fn apply_arrange_random_moves_notes_between_lanes() {
         use bmz_chart::model::{NoteEvent, NoteKind};
         use bmz_core::time::ChartTick;
@@ -2678,7 +2869,7 @@ mod tests {
 
     #[test]
     fn rotate_random_uses_non_identity_lane_rotation() {
-        let perm = rotate_lane_permutation(7, KeyMode::K7, false);
+        let perm = rotate_lane_permutation(7, KeyMode::K7, false, false);
         let key_lanes: Vec<usize> = (Lane::Key1.index()..=Lane::Key7.index()).collect();
         let mapped: HashSet<_> = key_lanes.iter().map(|&lane| perm[lane]).collect();
 
@@ -2712,11 +2903,16 @@ mod tests {
             &mut chart,
             ArrangeOption::Normal,
             ArrangeOption::Mirror,
-            None,
+            Some(1),
+            Some(2),
+            false,
             None,
         );
 
         assert_eq!(applied.arrange, ArrangeOption::Normal);
+        assert_eq!(applied.seed, Some(1));
+        assert_eq!(applied.seed_2p, Some(2));
+        assert_eq!(applied.packed_beatoraja_seed(KeyMode::K14), Some(1 + (2 << 24)));
         assert_eq!(chart.lane_notes[Lane::Key1.index()][0].id, NoteId(1));
         assert!(chart.lane_notes[Lane::Key8.index()].is_empty());
         assert!(
@@ -2724,6 +2920,27 @@ mod tests {
                 .iter()
                 .any(|note| note.id == NoteId(2) && note.lane == Lane::Key14)
         );
+    }
+
+    #[test]
+    fn recorded_sp_pattern_does_not_gain_a_second_player_seed() {
+        let mut chart = chart();
+        chart.metadata.key_mode = KeyMode::K7;
+        let pattern: Vec<u8> = (0..LANE_COUNT as u8).collect();
+
+        let applied = apply_arrange_pair(
+            &mut chart,
+            ArrangeOption::Random,
+            ArrangeOption::Normal,
+            Some(1),
+            None,
+            false,
+            Some(&pattern),
+        );
+
+        assert_eq!(applied.seed, Some(1));
+        assert_eq!(applied.seed_2p, None);
+        assert_eq!(applied.packed_beatoraja_seed(KeyMode::K7), Some(1));
     }
 
     #[test]
@@ -3412,7 +3629,7 @@ mod tests {
             Arc::clone(&chart),
             48_000,
             0.75,
-            normal_applied_arrange(),
+            normal_applied_arrange(0, false),
             score_key,
             |loaded, total| progress.push((loaded, total)),
         );

@@ -52,6 +52,7 @@ use bmz_core::time::ChartTick;
 use crate::hash::compute_chart_identity;
 use crate::timing::TICKS_PER_MEASURE;
 
+use super::BmsRandomSource;
 use super::decode::decode_bms_text;
 use super::error::{ImportError, ImportWarning};
 use super::intermediate::{
@@ -96,12 +97,46 @@ pub fn import_bms_to_intermediate(
     random_seed: Option<u64>,
     warnings: &mut Vec<ImportWarning>,
 ) -> Result<IntermediateChart, ImportError> {
-    import_with_layout::<KeyLayoutBeat>(source_path, ChartKeyLayout::beat(), random_seed, warnings)
+    import_bms_to_intermediate_with_random_source(
+        source_path,
+        &BmsRandomSource::Seed(random_seed),
+        &mut Vec::new(),
+        warnings,
+    )
+}
+
+pub fn import_bms_to_intermediate_with_random_source(
+    source_path: &Path,
+    random_source: &BmsRandomSource,
+    bms_random_choices: &mut Vec<i32>,
+    warnings: &mut Vec<ImportWarning>,
+) -> Result<IntermediateChart, ImportError> {
+    import_with_layout::<KeyLayoutBeat>(
+        source_path,
+        ChartKeyLayout::beat(),
+        random_source,
+        bms_random_choices,
+        warnings,
+    )
 }
 
 pub fn import_pms_to_intermediate(
     source_path: &Path,
     random_seed: Option<u64>,
+    warnings: &mut Vec<ImportWarning>,
+) -> Result<IntermediateChart, ImportError> {
+    import_pms_to_intermediate_with_random_source(
+        source_path,
+        &BmsRandomSource::Seed(random_seed),
+        &mut Vec::new(),
+        warnings,
+    )
+}
+
+pub fn import_pms_to_intermediate_with_random_source(
+    source_path: &Path,
+    random_source: &BmsRandomSource,
+    bms_random_choices: &mut Vec<i32>,
     warnings: &mut Vec<ImportWarning>,
 ) -> Result<IntermediateChart, ImportError> {
     let bytes = std::fs::read(source_path)
@@ -120,13 +155,15 @@ pub fn import_pms_to_intermediate(
         PmsKeyLayout::Standard => import_with_layout::<KeyLayoutPms>(
             source_path,
             ChartKeyLayout::pms(PmsKeyLayout::Standard),
-            random_seed,
+            random_source,
+            bms_random_choices,
             warnings,
         ),
         PmsKeyLayout::BmeType => import_with_layout::<KeyLayoutPmsBmeType>(
             source_path,
             ChartKeyLayout::pms(PmsKeyLayout::BmeType),
-            random_seed,
+            random_source,
+            bms_random_choices,
             warnings,
         ),
     }
@@ -135,7 +172,8 @@ pub fn import_pms_to_intermediate(
 fn import_with_layout<T: KeyLayoutMapper>(
     source_path: &Path,
     layout: ChartKeyLayout,
-    random_seed: Option<u64>,
+    random_source: &BmsRandomSource,
+    bms_random_choices: &mut Vec<i32>,
     warnings: &mut Vec<ImportWarning>,
 ) -> Result<IntermediateChart, ImportError> {
     let bytes = std::fs::read(source_path)
@@ -148,7 +186,8 @@ fn import_with_layout<T: KeyLayoutMapper>(
     } else {
         raw_text.clone()
     };
-    let text = apply_beatoraja_random_control(&layout_text, random_seed, warnings);
+    let text =
+        apply_beatoraja_random_control(&layout_text, random_source, bms_random_choices, warnings);
     let metadata_text = strip_empty_metadata_commands(&text);
     let lnobj_parse_text = strip_lnobj_commands(&metadata_text);
     let bga_messages = extract_bga_message_lines(&lnobj_parse_text);
@@ -157,7 +196,8 @@ fn import_with_layout<T: KeyLayoutMapper>(
 
     let BmsOutput { bms, warnings: bms_warnings } = parse_bms::<T, _, _, _>(
         &parse_text,
-        default_config_with_rng(JavaRandom::new(random_seed.unwrap_or(0) as i64)).key_mapper::<T>(),
+        default_config_with_rng(JavaRandom::new(random_source_seed(random_source) as i64))
+            .key_mapper::<T>(),
     );
     for w in bms_warnings {
         if let Some(w) = map_bms_warning(&w) {
@@ -215,11 +255,13 @@ enum BeatorajaRandomControl<'a> {
 
 fn apply_beatoraja_random_control(
     text: &str,
-    random_seed: Option<u64>,
+    random_source: &BmsRandomSource,
+    bms_random_choices: &mut Vec<i32>,
     warnings: &mut Vec<ImportWarning>,
 ) -> String {
     let mut rewritten = String::with_capacity(text.len());
-    let mut rng = JavaRandom::new(random_seed.unwrap_or(0) as i64);
+    let mut rng = JavaRandom::new(random_source_seed(random_source) as i64);
+    let mut choice_index = 0;
     let mut random_stack = Vec::new();
     let mut skip_stack = Vec::new();
 
@@ -231,7 +273,7 @@ fn apply_beatoraja_random_control(
                 if let Some(max) =
                     parse_beatoraja_control_int(args, line_number, "#RANDOM", warnings)
                 {
-                    let selected = if max <= 0 {
+                    let max = if max <= 0 {
                         warnings.push(ImportWarning::ParserDiagnostic {
                             code: "RandomZeroClamped".to_string(),
                             message: format!(
@@ -240,8 +282,38 @@ fn apply_beatoraja_random_control(
                         });
                         1
                     } else {
-                        rng.next_int_bound(max) + 1
+                        max
                     };
+                    let selected = match random_source {
+                        BmsRandomSource::Seed(_) => rng.next_int_bound(max) + 1,
+                        BmsRandomSource::Choices(choices) => {
+                            let current_index = choice_index;
+                            choice_index += 1;
+                            match choices.get(current_index).copied() {
+                                None => {
+                                    warnings.push(ImportWarning::ParserDiagnostic {
+                                        code: "BmsRandomChoiceMissing".to_string(),
+                                        message: format!(
+                                            "line {line_number} #RANDOM {max} has no recorded choice at index {current_index}; using deterministic fallback"
+                                        ),
+                                    });
+                                    rng.next_int_bound(max) + 1
+                                }
+                                Some(choice) if !(1..=max).contains(&choice) => {
+                                    let clamped = choice.clamp(1, max);
+                                    warnings.push(ImportWarning::ParserDiagnostic {
+                                        code: "BmsRandomChoiceOutOfRange".to_string(),
+                                        message: format!(
+                                            "line {line_number} #RANDOM {max} cannot use recorded choice {choice} at index {current_index}; clamping to {clamped}"
+                                        ),
+                                    });
+                                    clamped
+                                }
+                                Some(choice) => choice,
+                            }
+                        }
+                    };
+                    bms_random_choices.push(selected);
                     random_stack.push(selected);
                 }
             }
@@ -318,7 +390,26 @@ fn apply_beatoraja_random_control(
         rewritten.push('\n');
     }
 
+    if let BmsRandomSource::Choices(choices) = random_source
+        && choice_index < choices.len()
+    {
+        warnings.push(ImportWarning::ParserDiagnostic {
+            code: "BmsRandomChoiceExtra".to_string(),
+            message: format!(
+                "{} recorded BMS #RANDOM choice(s) were unused",
+                choices.len() - choice_index
+            ),
+        });
+    }
+
     rewritten
+}
+
+fn random_source_seed(random_source: &BmsRandomSource) -> u64 {
+    match random_source {
+        BmsRandomSource::Seed(seed) => seed.unwrap_or(0),
+        BmsRandomSource::Choices(_) => 0,
+    }
 }
 
 fn beatoraja_random_control_line(line: &str) -> Option<BeatorajaRandomControl<'_>> {

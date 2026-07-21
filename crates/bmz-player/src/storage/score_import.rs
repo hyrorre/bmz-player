@@ -282,6 +282,9 @@ fn import_lr2_scores_with_device_type(
             resolved.ln_policy,
         );
         record.source_kind = kind.source_kind();
+        if record.source_kind == ScoreSourceKind::Beatoraja {
+            record.seed_scheme = crate::storage::replay::SEED_SCHEME_BEATORAJA_24BIT_V1.to_string();
+        }
         record.arrange = options.arrange.to_persistent_str().to_string();
         record.arrange_2p = options.arrange_2p.to_persistent_str().to_string();
         record.applied_double_option = options.applied_double_option;
@@ -450,6 +453,9 @@ fn import_beatoraja_scores_with_device_type(
         record.applied_double_option = beatoraja_double_option(row.option);
         record.double_option = record.applied_double_option.score_bucket();
         record.source_kind = kind.source_kind();
+        if record.source_kind == ScoreSourceKind::Beatoraja {
+            record.seed_scheme = crate::storage::replay::SEED_SCHEME_BEATORAJA_24BIT_V1.to_string();
+        }
         record.device_type = device_type;
         match score_db.reconcile_imported_score_device_type(&record)? {
             ImportedScoreReconciliation::Missing => {}
@@ -751,6 +757,7 @@ fn imported_score_record(
         score,
         count_unprocessed_notes: clear_type == ClearType::Failed,
         random_seed,
+        seed_scheme: crate::storage::replay::SEED_SCHEME_LEGACY_SHARED_V3.to_string(),
         arrange: "Normal".to_string(),
         arrange_2p: "Normal".to_string(),
         gauge_option: String::new(),

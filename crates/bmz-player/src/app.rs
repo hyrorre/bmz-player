@@ -8387,7 +8387,10 @@ impl WinitApp {
                         &insert.gauge_type,
                         played_at,
                         &insert.arrange,
-                        course_result.entry_arranges.first().and_then(|arrange| arrange.seed),
+                        course_result
+                            .entry_arranges
+                            .first()
+                            .and_then(|arrange| arrange.packed_beatoraja_seed_from_sides()),
                     );
 
                     course_result.course_score_id = Some(course_score_id);
@@ -9830,8 +9833,9 @@ impl WinitApp {
     }
 
     fn play_start_options(&self) -> PlayStartOptions {
-        let arrange_seed = (self.arrange_option.uses_seed() || self.arrange_option_2p.uses_seed())
-            .then(crate::screens::play_session::generate_arrange_seed);
+        // beatoraja assigns a 24-bit seed even to NORMAL/MIRROR. Generate both
+        // sides here so preload, retry, replay and IR all observe one stable pair.
+        let option_seeds = crate::random_option_seed::RandomOptionSeeds::fresh(true);
         PlayStartOptions {
             autoplay: self.assist_option == AssistOption::Autoplay,
             gauge: Some(self.gauge_option),
@@ -9842,7 +9846,9 @@ impl WinitApp {
             double_option: self.double_option,
             hs_fix: self.hs_fix_option,
             target: self.target_option,
-            arrange_seed,
+            arrange_seed: Some(i64::from(option_seeds.p1.value())),
+            arrange_seed_2p: option_seeds.p2.map(|seed| i64::from(seed.value())),
+            bms_random_seed: Some(crate::random_option_seed::fresh_bms_random_seed()),
             ..Default::default()
         }
     }
@@ -9938,6 +9944,10 @@ impl WinitApp {
             hs_fix: HsFixOption::Off,
             target: self.target_option,
             arrange_seed: replay_file.arrange_seed,
+            arrange_seed_2p: replay_file.arrange_seed_2p,
+            legacy_arrange_seed: replay_file.uses_legacy_seed_scheme(),
+            bms_random_seed: None,
+            bms_random_choices: replay_file.bms_random_choices.clone(),
             arrange_pattern: replay_file.lane_shuffle_pattern.clone(),
             initial_gauge_value: None,
             initial_gauge_values: None,
@@ -10022,6 +10032,10 @@ impl WinitApp {
             hs_fix: HsFixOption::Off,
             target: self.target_option,
             arrange_seed: replay_file.arrange_seed,
+            arrange_seed_2p: replay_file.arrange_seed_2p,
+            legacy_arrange_seed: replay_file.uses_legacy_seed_scheme(),
+            bms_random_seed: None,
+            bms_random_choices: replay_file.bms_random_choices.clone(),
             arrange_pattern: replay_file.lane_shuffle_pattern.clone(),
             initial_gauge_value: None,
             initial_gauge_values: None,
@@ -10214,6 +10228,9 @@ impl WinitApp {
         {
             options.arrange = applied.arrange;
             options.arrange_seed = applied.seed;
+            options.arrange_seed_2p = applied.seed_2p;
+            options.legacy_arrange_seed = applied.legacy_seed;
+            options.bms_random_choices = Some(applied.bms_random_choices.clone());
             options.arrange_pattern = applied.pattern.clone();
         }
         options
@@ -10224,7 +10241,6 @@ impl WinitApp {
         if let Some(applied) = self.finished_play.as_ref().map(|finished| &finished.applied_arrange)
         {
             options.arrange = applied.arrange;
-            options.arrange_seed = None;
             options.arrange_pattern = None;
         }
         options
@@ -10240,10 +10256,12 @@ impl WinitApp {
             match mode {
                 ResultRetryMode::SameArrange => {
                     options.arrange_seed = applied.seed;
+                    options.arrange_seed_2p = applied.seed_2p;
+                    options.legacy_arrange_seed = applied.legacy_seed;
+                    options.bms_random_choices = Some(applied.bms_random_choices.clone());
                     options.arrange_pattern = applied.pattern.clone();
                 }
                 ResultRetryMode::DifferentArrange => {
-                    options.arrange_seed = None;
                     options.arrange_pattern = None;
                 }
             }
@@ -20492,6 +20510,10 @@ fn preloaded_matches_start(
         && preloaded.session_options.double_option == options.double_option
         && preloaded.session_options.hs_fix == options.hs_fix
         && preloaded.session_options.arrange_seed == options.arrange_seed
+        && preloaded.session_options.arrange_seed_2p == options.arrange_seed_2p
+        && preloaded.session_options.legacy_arrange_seed == options.legacy_arrange_seed
+        && preloaded.session_options.bms_random_seed == options.bms_random_seed
+        && preloaded.session_options.bms_random_choices == options.bms_random_choices
         && preloaded.session_options.arrange_pattern == options.arrange_pattern
         && preloaded.session_options.initial_gauge_value == options.initial_gauge_value
         && preloaded.session_options.initial_gauge_values == options.initial_gauge_values

@@ -136,6 +136,11 @@ SHA-256 fallback でラベルを付与する。
   `/api/v1/auth/refresh` が返す `provider_key` を credentials / device key /
   `ir_score_jobs.provider` / `primary_provider` の識別子として使う。
   `IrProviderConfig.provider` は表示名または実装種別として残す。
+- random seed: 新規プレイは beatoraja と同じ side 別 24 bit seed を使い、SP は P1、
+  DP は `P1 + P2 * 2^24` を `play_options.seed` / `random_seed` に10進文字列で送る。
+  `seed_scheme=beatoraja_24bit_v1` と BMS `#RANDOM` の選択列を別 metadata として保持する。
+  F-RANDOM / MF-RANDOM を含む option の送信可否・外部IDへの対応は共通層で拒否せず、
+  将来の `IrProvider` capability とユーザー設定で決める。
 
 ### 設計からの主な差分
 

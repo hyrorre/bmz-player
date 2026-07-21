@@ -3037,6 +3037,7 @@ mod tests {
             score,
             count_unprocessed_notes: false,
             random_seed: None,
+            seed_scheme: String::new(),
             arrange: "Normal".to_string(),
             arrange_2p: "Normal".to_string(),
             gauge_option: String::new(),

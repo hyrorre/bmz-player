@@ -336,7 +336,7 @@ SCROLL / SPEED:
 BMS パーサ:
 
 - `bms-rs` 1.x を主パーサとして使用 (`crates/bmz-chart/src/import/bms_rs_adapter.rs`)。RANDOM/IF, LNOBJ, Mine, Base62, BMSON 等は bms-rs 側で吸収します。
-- `random_seed` は `PlaySessionOptions.arrange_seed` (リプレイにも保存) から流すため、同じリプレイで RANDOM が必ず同じ分岐へ落ちます。
+- 譜面オプション seed は beatoraja と同じ side 別 24 bit で、DP の score/IR 値は `P1 + P2 * 2^24` に pack します。BMS `#RANDOM` は option seed から分離し、選択列を Replay v4 に保存・再投入することで同じ分岐を再現します。
 - bms-rs の `BmsWarning` は `map_bms_warning` で `ImportWarning::ParserDiagnostic { code, message }` に分類。`code` 名はそのまま `chart_import_warnings.code` に保存され、UI で識別できます。
 
 ## Storage and Config
