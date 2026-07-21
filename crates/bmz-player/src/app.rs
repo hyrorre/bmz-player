@@ -1417,6 +1417,7 @@ enum PendingPlayLaneAction {
 struct PlayOptionInput {
     key_mode: KeyMode,
     binding: LaneBinding,
+    scratch_binding: LaneBinding,
     action_bindings: Vec<PlayActionBinding>,
 }
 
@@ -1434,6 +1435,13 @@ impl PlayOptionInput {
         profile_input: &ProfileInputConfig,
         gamepad_slots: crate::input::gamepad::GamepadSlotMap,
     ) -> Self {
+        let scratch_binding =
+            crate::config::play_input::lane_binding_for_play_option_scratch_with_slots(
+                profile_input,
+                key_mode,
+                gamepad_slots,
+            )
+            .unwrap_or_else(|_| LaneBinding { entries: Vec::new() });
         let mut action_bindings: Vec<_> = profile_input
             .ui
             .bindings
@@ -1478,11 +1486,21 @@ impl PlayOptionInput {
                 action: InputActionConfig::E1,
             });
         }
-        Self { key_mode, binding, action_bindings }
+        Self { key_mode, binding, scratch_binding, action_bindings }
+    }
+
+    fn resolve_entry(
+        &self,
+        device: DeviceId,
+        control: &PhysicalControl,
+    ) -> Option<bmz_gameplay::input::binding::BindingResolution> {
+        self.binding
+            .resolve_entry(device, control)
+            .or_else(|| self.scratch_binding.resolve_entry(device, control))
     }
 
     fn resolves_lane(&self, device: DeviceId, control: &PhysicalControl) -> bool {
-        self.binding.resolve_entry(device, control).is_some()
+        self.resolve_entry(device, control).is_some()
     }
 
     fn is_action(
@@ -19825,7 +19843,7 @@ fn play_option_control_for_input(
     profile_input: &ProfileInputConfig,
 ) -> Option<PlayOptionControl> {
     let play_input = play_input?;
-    let resolved = play_input.binding.resolve_entry(device, control);
+    let resolved = play_input.resolve_entry(device, control);
     if e1_held && resolved.is_none() && play_input.is_action(device, control, InputActionConfig::E2)
     {
         return Some(PlayOptionControl::ToggleHispeedMode);
@@ -25823,6 +25841,40 @@ mod tests {
             keyboard_play_option("LControl", true, false, &keys, &play_input, &input),
             Some(PlayOptionControl::LaneCover(LaneCoverChange::Down))
         );
+    }
+
+    #[test]
+    fn play_option_control_maps_scratch_for_scratchless_key_modes() {
+        let input = crate::config::play_input::default_profile_input();
+        let keys = SelectKeyBindings::from_profile(&input);
+
+        for key_mode in [KeyMode::K4, KeyMode::K6, KeyMode::K8, KeyMode::K9] {
+            let play_input = play_option_input_for(&input, key_mode);
+            assert_eq!(
+                keyboard_play_option("LShift", true, false, &keys, &play_input, &input),
+                Some(PlayOptionControl::LaneCover(LaneCoverChange::Up)),
+                "{} Scratch Up",
+                key_mode.as_str(),
+            );
+            assert_eq!(
+                keyboard_play_option("LControl", true, false, &keys, &play_input, &input),
+                Some(PlayOptionControl::LaneCover(LaneCoverChange::Down)),
+                "{} Scratch Down",
+                key_mode.as_str(),
+            );
+            assert_eq!(
+                keyboard_play_option("LShift", false, true, &keys, &play_input, &input),
+                Some(PlayOptionControl::GreenNumber(GreenNumberChange::Up)),
+                "{} Scratch Up green number",
+                key_mode.as_str(),
+            );
+            assert_eq!(
+                keyboard_play_option("LControl", false, true, &keys, &play_input, &input),
+                Some(PlayOptionControl::GreenNumber(GreenNumberChange::Down)),
+                "{} Scratch Down green number",
+                key_mode.as_str(),
+            );
+        }
     }
 
     #[test]

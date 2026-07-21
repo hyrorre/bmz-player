@@ -124,6 +124,49 @@ pub fn lane_binding_for_key_mode_with_slots(
             .into_iter()
             .filter_map(|entry| {
                 let lane = entry.lane?;
+                let lane_value = lane_from_config(lane);
+                if !key_mode.active_lanes().contains(&lane_value) {
+                    return None;
+                }
+                Some(BindingEntry {
+                    device: binding_device_from_config(&entry.device, slots),
+                    control: control_from_config(&entry.device, &entry.control),
+                    lane: lane_value,
+                    scratch_direction: scratch_direction_from_binding(lane, &entry),
+                })
+            })
+            .collect(),
+    })
+}
+
+/// プレイ中の E1/E2 + Scratch 操作用 binding を返す。
+///
+/// 4K / 6K / 8K / 9K は譜面レーンとして Scratch を持たないため、通常の
+/// gameplay binding へ混ぜず、7K の Scratch 設定だけを option 操作用に借りる。
+/// mode 側に Scratch binding が明示されている場合はそちらを優先する。
+pub fn lane_binding_for_play_option_scratch_with_slots(
+    input: &ProfileInputConfig,
+    key_mode: KeyMode,
+    slots: GamepadSlotMap,
+) -> Result<LaneBinding, InheritError> {
+    let mut bindings: Vec<_> = resolve_play_bindings(input, key_mode)?
+        .into_iter()
+        .filter(|entry| matches!(entry.lane, Some(LaneConfig::Scratch | LaneConfig::Scratch2)))
+        .collect();
+    if bindings.is_empty()
+        && matches!(key_mode, KeyMode::K4 | KeyMode::K6 | KeyMode::K8 | KeyMode::K9)
+    {
+        bindings = resolve_play_bindings(input, KeyMode::K7)?
+            .into_iter()
+            .filter(|entry| entry.lane == Some(LaneConfig::Scratch))
+            .collect();
+    }
+
+    Ok(LaneBinding {
+        entries: bindings
+            .into_iter()
+            .filter_map(|entry| {
+                let lane = entry.lane?;
                 Some(BindingEntry {
                     device: binding_device_from_config(&entry.device, slots),
                     control: control_from_config(&entry.device, &entry.control),
@@ -1089,6 +1132,74 @@ mod tests {
                 .iter()
                 .any(|entry| { entry.device == "gamepad" && entry.control == "Button14" })
         );
+    }
+
+    #[test]
+    fn scratchless_modes_resolve_seven_key_scratch_for_play_options_only() {
+        let input = default_profile_input();
+        let up = PhysicalControl::KeyboardKey("LShift".to_string());
+        let down = PhysicalControl::KeyboardKey("LControl".to_string());
+
+        for key_mode in [KeyMode::K4, KeyMode::K6, KeyMode::K8, KeyMode::K9] {
+            let gameplay = lane_binding_for_key_mode(&input, key_mode).unwrap();
+            assert_eq!(gameplay.resolve(DeviceId(0), &up), None, "{}", key_mode.as_str());
+
+            let options = lane_binding_for_play_option_scratch_with_slots(
+                &input,
+                key_mode,
+                GamepadSlotMap::default(),
+            )
+            .unwrap();
+            assert_eq!(options.resolve(DeviceId(0), &up), Some(Lane::Scratch));
+            assert_eq!(options.resolve(DeviceId(0), &down), Some(Lane::Scratch));
+            assert_eq!(
+                options.resolve(DeviceId(42), &PhysicalControl::GamepadButton("Axis1+".into())),
+                Some(Lane::Scratch),
+            );
+        }
+    }
+
+    #[test]
+    fn mode_specific_scratch_binding_precedes_seven_key_option_fallback() {
+        for key_mode in [KeyMode::K4, KeyMode::K6, KeyMode::K8, KeyMode::K9] {
+            let mut input = default_profile_input();
+            let mut bindings = default_play_bindings(key_mode);
+            bindings.push(scratch_play_binding(
+                "T",
+                LaneConfig::Scratch,
+                ScratchDirectionConfig::Up,
+            ));
+            input.play.insert(
+                key_mode.play_map_key().to_string(),
+                PlayModeInputConfig { inherit: None, bindings, ..Default::default() },
+            );
+
+            let options = lane_binding_for_play_option_scratch_with_slots(
+                &input,
+                key_mode,
+                GamepadSlotMap::default(),
+            )
+            .unwrap();
+            assert_eq!(
+                options.resolve(DeviceId(0), &PhysicalControl::KeyboardKey("T".into())),
+                Some(Lane::Scratch),
+                "{}",
+                key_mode.as_str(),
+            );
+            let gameplay = lane_binding_for_key_mode(&input, key_mode).unwrap();
+            assert_eq!(
+                gameplay.resolve(DeviceId(0), &PhysicalControl::KeyboardKey("T".into())),
+                None,
+                "{}",
+                key_mode.as_str(),
+            );
+            assert_eq!(
+                options.resolve(DeviceId(0), &PhysicalControl::KeyboardKey("LShift".into())),
+                None,
+                "{}",
+                key_mode.as_str(),
+            );
+        }
     }
 
     #[test]
