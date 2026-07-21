@@ -40,9 +40,16 @@ pub struct PlayRenderSnapshotCache {
     min_bpm: f32,
     max_bpm: f32,
     has_bpm_stop: bool,
-    scroll_segments: Arc<[(f64, f64)]>,
+    end_of_note_time: TimeUs,
+    scroll_integral: ScrollIntegralCache,
     speed_segments: Arc<[(f64, f64)]>,
     bga_events: BgaEventCache,
+}
+
+#[derive(Debug, Clone)]
+struct ScrollIntegralCache {
+    segments: Arc<[(f64, f64)]>,
+    integral_at_event: Arc<[f64]>,
 }
 
 #[derive(Debug, Clone)]
@@ -62,13 +69,9 @@ impl PlayRenderSnapshotCache {
             .timing_events
             .iter()
             .any(|event| matches!(event.kind, TimingEventKind::Stop { .. }));
-        let scroll_segments = Arc::from(
-            chart
-                .scroll_events
-                .iter()
-                .map(|event| (event.tick.0 as f64, event.factor))
-                .collect::<Vec<_>>()
-                .into_boxed_slice(),
+        let end_of_note_time = end_of_note_time(chart);
+        let scroll_integral = ScrollIntegralCache::from_segments(
+            chart.scroll_events.iter().map(|event| (event.tick.0 as f64, event.factor)),
         );
         let speed_segments = Arc::from(
             chart
@@ -85,10 +88,62 @@ impl PlayRenderSnapshotCache {
             min_bpm,
             max_bpm,
             has_bpm_stop,
-            scroll_segments,
+            end_of_note_time,
+            scroll_integral,
             speed_segments,
             bga_events,
         }
+    }
+}
+
+impl ScrollIntegralCache {
+    fn from_segments(segments: impl IntoIterator<Item = (f64, f64)>) -> Self {
+        let segments = segments.into_iter().collect::<Vec<_>>();
+        debug_assert!(segments.windows(2).all(|pair| pair[0].0 <= pair[1].0));
+
+        let mut integral_at_event = Vec::with_capacity(segments.len());
+        let mut previous_tick = 0.0;
+        let mut previous_factor = 1.0;
+        let mut integral = 0.0;
+        for &(tick, next_factor) in &segments {
+            integral += (tick - previous_tick) * previous_factor;
+            integral_at_event.push(integral);
+            previous_tick = tick;
+            previous_factor = next_factor;
+        }
+
+        Self {
+            segments: Arc::from(segments.into_boxed_slice()),
+            integral_at_event: Arc::from(integral_at_event.into_boxed_slice()),
+        }
+    }
+
+    fn is_empty(&self) -> bool {
+        self.segments.is_empty()
+    }
+
+    fn factor_at(&self, tick: f64) -> f64 {
+        self.segments
+            .partition_point(|(event_tick, _)| *event_tick <= tick)
+            .checked_sub(1)
+            .map_or(1.0, |index| self.segments[index].1)
+    }
+
+    fn primitive(&self, tick: f64) -> f64 {
+        let Some(index) =
+            self.segments.partition_point(|(event_tick, _)| *event_tick <= tick).checked_sub(1)
+        else {
+            return tick;
+        };
+        let (event_tick, factor) = self.segments[index];
+        self.integral_at_event[index] + (tick - event_tick) * factor
+    }
+
+    fn delta(&self, from_tick: f64, to_tick: f64) -> f64 {
+        if (from_tick - to_tick).abs() < f64::EPSILON {
+            return 0.0;
+        }
+        self.primitive(to_tick) - self.primitive(from_tick)
     }
 }
 
@@ -420,7 +475,7 @@ pub fn build_render_snapshot_with_target_and_bga_frames_cached(
     let now_bpm = session.timing_map.bpm_at_time(lane_render_now) as f32;
     let cursor_tick = session.timing_map.time_to_tick_f64(scroll_render_time(lane_render_now));
     let scroll_multiplier = current_scroll_multiplier_from_segments(
-        &cache.scroll_segments,
+        &cache.scroll_integral,
         &cache.speed_segments,
         cursor_tick,
     );
@@ -604,7 +659,7 @@ pub fn build_render_snapshot_with_target_and_bga_frames_cached(
             (chart_now.0 >= started_at.0)
                 .then_some(((chart_now.0 - started_at.0) / 1_000).clamp(0, i32::MAX as i64) as i32)
         }),
-        end_of_note_elapsed_ms: end_of_note_elapsed_ms(chart_now, end_of_note_time(&session.chart)),
+        end_of_note_elapsed_ms: end_of_note_elapsed_ms(chart_now, cache.end_of_note_time),
         fadeout_elapsed_ms: None,
         failed_elapsed_ms: None,
         music_end_elapsed_ms: None,
@@ -660,11 +715,14 @@ pub fn build_render_snapshot_with_target_and_bga_frames_cached(
         let scroll = ScrollContext::new(session, cache);
         let cursor_tick = scroll.cursor_tick(scroll_time);
         let simple_tick_upper_bound = scroll.simple_tick_upper_bound(cursor_tick);
+        let note_lower_time = (snapshot.key_mode != KeyMode::K9).then_some(lane_render_now);
 
         for lane in Lane::ALL {
-            for note in
-                visible_lane_notes(session.chart.notes_for_lane(lane), simple_tick_upper_bound)
-            {
+            for note in visible_lane_notes(
+                session.chart.notes_for_lane(lane),
+                note_lower_time,
+                simple_tick_upper_bound,
+            ) {
                 let processed_judge = session.judge.judged_notes.get(&note.id).copied();
                 let falling_pms_poor = snapshot.key_mode == KeyMode::K9
                     && note.kind == NoteKind::Tap
@@ -751,7 +809,7 @@ pub fn build_render_snapshot_with_target_and_bga_frames_cached(
             if let Some(upper_tick) = simple_tick_upper_bound
                 && (long.start_tick.0 as f64) > upper_tick
             {
-                continue;
+                break;
             }
             let head = scroll.note_progress(long.start_time, cursor_tick);
             let tail = scroll.note_progress(long.end_time, cursor_tick);
@@ -1095,9 +1153,9 @@ struct ScrollContext<'a> {
     lookahead_ticks: f64,
     /// SCROLL イベント (tick 昇順)。`(tick, factor)`。
     /// 区間ごとに factor を掛けて scroll 位置を畳む。空なら factor 1.0 固定。
-    scroll_segments: &'a [(f64, f64)],
-    /// SPEED イベント (tick 昇順)。beatoraja は線形補間だが、まずは SCROLL と同じ
-    /// 階段関数で扱い、note 位置時点での値を倍率として掛ける。
+    scroll_integral: &'a ScrollIntegralCache,
+    /// SPEED イベント (tick 昇順)。隣接イベント間を線形補間し、note 位置時点の値を
+    /// 倍率として掛ける。
     speed_segments: &'a [(f64, f64)],
 }
 
@@ -1108,7 +1166,7 @@ impl<'a> ScrollContext<'a> {
             hispeed: session.hispeed,
             visible_lane_fraction: crate::config::play::visible_lane_fraction(0.0, session.lift),
             lookahead_ticks: TICKS_PER_MEASURE as f64,
-            scroll_segments: &cache.scroll_segments,
+            scroll_integral: &cache.scroll_integral,
             speed_segments: &cache.speed_segments,
         }
     }
@@ -1118,7 +1176,7 @@ impl<'a> ScrollContext<'a> {
     }
 
     fn simple_tick_upper_bound(&self, cursor_tick: f64) -> Option<f64> {
-        if !self.scroll_segments.is_empty() || !self.speed_segments.is_empty() {
+        if !self.scroll_integral.is_empty() || !self.speed_segments.is_empty() {
             return None;
         }
         let hispeed = self.hispeed.max(0.01) as f64;
@@ -1154,17 +1212,21 @@ impl<'a> ScrollContext<'a> {
     /// SPEED 倍率を掛けた「見かけの距離」を返す。factor が負だと delta も負になり、
     /// note_y は `None` に倒れる(= 逆スクロール時は画面外として描画対象外)。
     fn scroll_delta(&self, from_tick: f64, to_tick: f64) -> f64 {
-        accumulate_scroll(self.scroll_segments, from_tick, to_tick)
-            * speed_at(self.speed_segments, to_tick)
+        self.scroll_integral.delta(from_tick, to_tick) * speed_at(self.speed_segments, to_tick)
     }
 }
 
-fn visible_lane_notes(notes: &[NoteEvent], upper_tick: Option<f64>) -> &[NoteEvent] {
-    let Some(upper_tick) = upper_tick else {
-        return notes;
-    };
-    let end = notes.partition_point(|note| (note.tick.0 as f64) <= upper_tick);
-    &notes[..end]
+fn visible_lane_notes(
+    notes: &[NoteEvent],
+    lower_time: Option<TimeUs>,
+    upper_tick: Option<f64>,
+) -> &[NoteEvent] {
+    let start =
+        lower_time.map_or(0, |lower_time| notes.partition_point(|note| note.time < lower_time));
+    let end = upper_tick.map_or(notes.len(), |upper_tick| {
+        notes.partition_point(|note| (note.tick.0 as f64) <= upper_tick)
+    });
+    &notes[start.min(end)..end]
 }
 
 fn visible_bar_lines(bar_lines: &[BarLine], upper_tick: Option<f64>) -> &[BarLine] {
@@ -1177,6 +1239,7 @@ fn visible_bar_lines(bar_lines: &[BarLine], upper_tick: Option<f64>) -> &[BarLin
 
 /// `segments` を階段関数として `from..to` の区間積分を返す。factor は次のイベントまで
 /// 一定。`from > to` の場合は対称に負値を返す。
+#[cfg(test)]
 fn accumulate_scroll(segments: &[(f64, f64)], from_tick: f64, to_tick: f64) -> f64 {
     if (from_tick - to_tick).abs() < f64::EPSILON {
         return 0.0;
@@ -1211,34 +1274,27 @@ pub(crate) fn current_scroll_multiplier(
 }
 
 fn current_scroll_multiplier_for_tick(chart: &PlayableChart, cursor_tick: f64) -> f32 {
-    let scroll = chart
-        .scroll_events
-        .iter()
-        .take_while(|event| event.tick.0 as f64 <= cursor_tick)
-        .last()
-        .map_or(1.0, |event| event.factor);
+    let scroll_index =
+        chart.scroll_events.partition_point(|event| event.tick.0 as f64 <= cursor_tick);
+    let scroll = scroll_index.checked_sub(1).map_or(1.0, |index| chart.scroll_events[index].factor);
     let speed = current_speed_factor_for_tick(&chart.speed_events, cursor_tick);
     (scroll * speed) as f32
 }
 
 fn current_scroll_multiplier_from_segments(
-    scroll_segments: &[(f64, f64)],
+    scroll_integral: &ScrollIntegralCache,
     speed_segments: &[(f64, f64)],
     cursor_tick: f64,
 ) -> f32 {
-    (factor_before(scroll_segments, cursor_tick) * speed_at(speed_segments, cursor_tick)) as f32
+    (scroll_integral.factor_at(cursor_tick) * speed_at(speed_segments, cursor_tick)) as f32
 }
 
-/// 指定 tick 直前(同時刻も含む)の factor 値を返す(イベント未定義なら 1.0)。
+#[cfg(test)]
 fn factor_before(segments: &[(f64, f64)], tick: f64) -> f64 {
-    let mut current = 1.0;
-    for &(t, f) in segments {
-        if t > tick {
-            break;
-        }
-        current = f;
-    }
-    current
+    segments
+        .partition_point(|(event_tick, _)| *event_tick <= tick)
+        .checked_sub(1)
+        .map_or(1.0, |index| segments[index].1)
 }
 
 fn current_speed_factor_for_tick(events: &[bmz_chart::model::SpeedEvent], tick: f64) -> f64 {
@@ -1246,17 +1302,15 @@ fn current_speed_factor_for_tick(events: &[bmz_chart::model::SpeedEvent], tick: 
         return 1.0;
     }
 
-    let mut prev: Option<(f64, f64)> = None;
-    let mut next: Option<(f64, f64)> = None;
-    for event in events {
+    let next_index = events.partition_point(|event| event.tick.0 as f64 <= tick);
+    let prev = next_index.checked_sub(1).map(|index| {
+        let event = &events[index];
+        (event.tick.0 as f64, event.factor)
+    });
+    let next = events.get(next_index).map(|event| {
         let event_tick = event.tick.0 as f64;
-        if event_tick <= tick {
-            prev = Some((event_tick, event.factor));
-        } else {
-            next = Some((event_tick, event.factor));
-            break;
-        }
-    }
+        (event_tick, event.factor)
+    });
     interpolate_speed(prev, next, tick)
 }
 
@@ -1267,16 +1321,9 @@ fn speed_at(segments: &[(f64, f64)], tick: f64) -> f64 {
         return 1.0;
     }
     // tick を挟む直前 (prev) / 直後 (next) のイベントを探す。
-    let mut prev: Option<(f64, f64)> = None;
-    let mut next: Option<(f64, f64)> = None;
-    for &(t, f) in segments {
-        if t <= tick {
-            prev = Some((t, f));
-        } else {
-            next = Some((t, f));
-            break;
-        }
-    }
+    let next_index = segments.partition_point(|(event_tick, _)| *event_tick <= tick);
+    let prev = next_index.checked_sub(1).map(|index| segments[index]);
+    let next = segments.get(next_index).copied();
     interpolate_speed(prev, next, tick)
 }
 
@@ -1763,6 +1810,59 @@ mod tests {
     }
 
     #[test]
+    fn build_render_snapshot_culls_past_and_far_future_notes() {
+        let mut chart = chart();
+        chart.lane_notes[Lane::Key1.index()] = vec![
+            tap_note(1, Lane::Key1, 960, 500_000),
+            tap_note(2, Lane::Key1, 1_920, 1_000_000),
+            tap_note(3, Lane::Key1, 3_840, 2_000_000),
+            tap_note(4, Lane::Key1, 7_680, 4_000_000),
+        ];
+        chart.total_notes = 4;
+        chart.end_time = TimeUs(4_000_000);
+        let profile = ProfileConfig::new_default("default", "Default", 1);
+        let mut session =
+            build_game_session(Arc::new(chart), &profile, PlaySessionOptions::default());
+        session.hispeed = 1.0;
+
+        let snapshot = build_render_snapshot(&session, TimeUs(1_000_000), &[], None);
+        let notes = &snapshot.visible_notes[Lane::Key1.index()];
+
+        assert_eq!(notes.len(), 2);
+        assert_eq!(notes[0].time, TimeUs(1_000_000));
+        assert_eq!(notes[0].y, 0.0);
+        assert_eq!(notes[1].time, TimeUs(2_000_000));
+        assert_eq!(notes[1].y, 0.5);
+    }
+
+    #[test]
+    fn build_render_snapshot_keeps_k9_poor_note_while_falling() {
+        let mut chart = chart();
+        chart.metadata.key_mode = KeyMode::K9;
+        chart.lane_notes[Lane::Key1.index()] = vec![tap_note(1, Lane::Key1, 0, 0)];
+        let profile = ProfileConfig::new_default("default", "Default", 1);
+        let mut session =
+            build_game_session(Arc::new(chart), &profile, PlaySessionOptions::default());
+        session.hispeed = 1.0;
+        session.judge.judged_notes.insert(NoteId(1), Judge::Poor);
+        let bad_slow_us = session.judge.window_set.note.bad_slow_us.max(0);
+
+        let falling =
+            build_render_snapshot(&session, TimeUs(bad_slow_us.saturating_add(500_000)), &[], None);
+        let notes = &falling.visible_notes[Lane::Key1.index()];
+        assert_eq!(notes.len(), 1);
+        assert!(notes[0].y < 0.0);
+
+        let finished = build_render_snapshot(
+            &session,
+            TimeUs(bad_slow_us.saturating_add(2_500_000)),
+            &[],
+            None,
+        );
+        assert!(finished.visible_notes[Lane::Key1.index()].is_empty());
+    }
+
+    #[test]
     fn end_of_note_timer_counts_from_last_note_time() {
         let profile = ProfileConfig::new_default("default", "Default", 1);
         let session =
@@ -1800,6 +1900,50 @@ mod tests {
         assert_eq!(before_last_note.end_of_note_elapsed_ms, None);
         assert_eq!(at_last_note.end_of_note_elapsed_ms, Some(0));
         assert_eq!(after_last_note.end_of_note_elapsed_ms, Some(250));
+    }
+
+    #[test]
+    fn cached_end_of_note_time_uses_last_renderable_note() {
+        let profile = ProfileConfig::new_default("default", "Default", 1);
+        let mut chart = chart();
+        chart.lane_notes[Lane::Key2.index()] = vec![NoteEvent {
+            id: NoteId(2),
+            lane: Lane::Key2,
+            kind: NoteKind::Invisible,
+            tick: ChartTick(3_840),
+            time: TimeUs(2_000_000),
+            sound: None,
+            damage: None,
+        }];
+        chart.lane_notes[Lane::Key3.index()] = vec![NoteEvent {
+            id: NoteId(3),
+            lane: Lane::Key3,
+            kind: NoteKind::Mine,
+            tick: ChartTick(5_760),
+            time: TimeUs(3_000_000),
+            sound: None,
+            damage: Some(10),
+        }];
+        chart.end_time = TimeUs(3_000_000);
+        let session = build_game_session(Arc::new(chart), &profile, PlaySessionOptions::default());
+        let cache = PlayRenderSnapshotCache::from_chart(&session.chart);
+        let frames = BgaFrameCatalog::new();
+        let snapshot_at = |time| {
+            build_render_snapshot_with_target_and_bga_frames_cached(
+                &session,
+                time,
+                &[],
+                None,
+                None,
+                None,
+                &frames,
+                &cache,
+            )
+        };
+
+        assert_eq!(snapshot_at(TimeUs(2_999_999)).end_of_note_elapsed_ms, None);
+        assert_eq!(snapshot_at(TimeUs(3_000_000)).end_of_note_elapsed_ms, Some(0));
+        assert_eq!(snapshot_at(TimeUs(3_250_000)).end_of_note_elapsed_ms, Some(250));
     }
 
     #[test]
@@ -2111,6 +2255,46 @@ mod tests {
         assert!((super::speed_at(&segments, 500.0) - 1.0).abs() < 1e-6);
         assert!((super::speed_at(&segments, 1000.0) - 2.0).abs() < 1e-6);
         assert!((super::speed_at(&segments, 2000.0) - 2.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn speed_at_keeps_last_factor_at_duplicate_tick() {
+        let segments = [(0.0, 1.0), (1000.0, 2.0), (1000.0, 3.0), (2000.0, 5.0)];
+
+        assert!((super::speed_at(&segments, 1000.0) - 3.0).abs() < 1e-6);
+        assert!((super::speed_at(&segments, 1500.0) - 4.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn accumulate_scroll_preserves_boundaries_reverse_and_negative_factors() {
+        let segments = [(0.0, 2.0), (100.0, 0.5), (200.0, -1.0)];
+        let integral = ScrollIntegralCache::from_segments(segments);
+
+        assert!((super::accumulate_scroll(&segments, 0.0, 50.0) - 100.0).abs() < 1e-6);
+        assert!((super::accumulate_scroll(&segments, 0.0, 150.0) - 225.0).abs() < 1e-6);
+        assert!((super::accumulate_scroll(&segments, 0.0, 250.0) - 200.0).abs() < 1e-6);
+        assert!((super::accumulate_scroll(&segments, 50.0, 250.0) - 100.0).abs() < 1e-6);
+        assert!((super::accumulate_scroll(&segments, 250.0, 50.0) + 100.0).abs() < 1e-6);
+        assert_eq!(super::accumulate_scroll(&segments, 50.0, 50.0), 0.0);
+        for (from_tick, to_tick) in
+            [(0.0, 50.0), (0.0, 150.0), (0.0, 250.0), (50.0, 250.0), (250.0, 50.0), (50.0, 50.0)]
+        {
+            let expected = super::accumulate_scroll(&segments, from_tick, to_tick);
+            assert!((integral.delta(from_tick, to_tick) - expected).abs() < 1e-6);
+        }
+
+        let duplicate_tick = [(0.0, 2.0), (0.0, 3.0), (100.0, 1.0)];
+        assert!((super::accumulate_scroll(&duplicate_tick, 0.0, 50.0) - 150.0).abs() < 1e-6);
+        let duplicate_integral = ScrollIntegralCache::from_segments(duplicate_tick);
+        assert!((duplicate_integral.delta(0.0, 50.0) - 150.0).abs() < 1e-6);
+
+        let delayed_event = [(100.0, 2.0), (200.0, 0.5)];
+        let delayed_integral = ScrollIntegralCache::from_segments(delayed_event);
+        for (from_tick, to_tick) in [(0.0, 50.0), (0.0, 100.0), (50.0, 150.0), (250.0, 50.0)] {
+            let expected = super::accumulate_scroll(&delayed_event, from_tick, to_tick);
+            assert!((delayed_integral.delta(from_tick, to_tick) - expected).abs() < 1e-6);
+        }
+        assert_eq!(delayed_integral.delta(0.0, f64::EPSILON / 2.0), 0.0);
     }
 
     #[test]
@@ -2938,15 +3122,7 @@ mod tests {
     }
 
     fn chart() -> PlayableChart {
-        let note = NoteEvent {
-            id: NoteId(1),
-            lane: Lane::Key1,
-            kind: NoteKind::Tap,
-            tick: ChartTick(0),
-            time: TimeUs(1_000_000),
-            sound: None,
-            damage: None,
-        };
+        let note = tap_note(1, Lane::Key1, 0, 1_000_000);
         let mut lane_notes = std::array::from_fn(|_| Vec::new());
         lane_notes[Lane::Key1.index()].push(note);
 
@@ -2981,6 +3157,18 @@ mod tests {
             bga_assets: Vec::new(),
             total_notes: 1,
             end_time: TimeUs(1_000_000),
+        }
+    }
+
+    fn tap_note(id: u32, lane: Lane, tick: u64, time_us: i64) -> NoteEvent {
+        NoteEvent {
+            id: NoteId(id),
+            lane,
+            kind: NoteKind::Tap,
+            tick: ChartTick(tick),
+            time: TimeUs(time_us),
+            sound: None,
+            damage: None,
         }
     }
 
@@ -3087,5 +3275,46 @@ mod tests {
         // 終端も通過したら非表示
         let passed = build_render_snapshot(&session, TimeUs(2_000_000), &[], None);
         assert!(passed.visible_long_notes.is_empty());
+    }
+
+    #[test]
+    fn cached_snapshot_remains_correct_after_time_rewind() {
+        let profile = ProfileConfig::new_default("default", "Default", 1);
+        let mut session = build_game_session(
+            Arc::new(chart_with_long_note()),
+            &profile,
+            PlaySessionOptions::default(),
+        );
+        session.hispeed = 1.0;
+        let cache = PlayRenderSnapshotCache::from_chart(&session.chart);
+        let frames = BgaFrameCatalog::new();
+
+        let later = build_render_snapshot_with_target_and_bga_frames_cached(
+            &session,
+            TimeUs(1_000_000),
+            &[],
+            None,
+            None,
+            None,
+            &frames,
+            &cache,
+        );
+        let earlier = build_render_snapshot_with_target_and_bga_frames_cached(
+            &session,
+            TimeUs(0),
+            &[],
+            None,
+            None,
+            None,
+            &frames,
+            &cache,
+        );
+
+        assert_eq!(later.visible_long_notes.len(), 1);
+        assert_eq!(later.visible_long_notes[0].head_y, 0.0);
+        assert_eq!(later.visible_long_notes[0].tail_y, 0.25);
+        assert_eq!(earlier.visible_long_notes.len(), 1);
+        assert_eq!(earlier.visible_long_notes[0].head_y, 0.25);
+        assert_eq!(earlier.visible_long_notes[0].tail_y, 0.75);
     }
 }
