@@ -61,11 +61,22 @@ pub struct JudgeWindows {
     pub scratch: JudgeWindow,
     pub long_note_end: JudgeWindow,
     pub long_scratch_end: JudgeWindow,
+    /// 通常レーンの LN/CN/HCN を早離しした後、押し直しを許す猶予。
+    pub long_note_release_margin_us: i64,
+    /// スクラッチ LN の早離し後、押し直しを許す猶予。
+    pub long_scratch_release_margin_us: i64,
 }
 
 impl JudgeWindows {
     pub const fn uniform(window: JudgeWindow) -> Self {
-        Self { note: window, scratch: window, long_note_end: window, long_scratch_end: window }
+        Self {
+            note: window,
+            scratch: window,
+            long_note_end: window,
+            long_scratch_end: window,
+            long_note_release_margin_us: 0,
+            long_scratch_release_margin_us: 0,
+        }
     }
 
     pub const fn press_window(self, lane: Lane) -> JudgeWindow {
@@ -79,6 +90,13 @@ impl JudgeWindows {
         match lane {
             Lane::Scratch | Lane::Scratch2 => self.long_scratch_end,
             _ => self.long_note_end,
+        }
+    }
+
+    pub const fn long_release_margin_us(self, lane: Lane) -> i64 {
+        match lane {
+            Lane::Scratch | Lane::Scratch2 => self.long_scratch_release_margin_us,
+            _ => self.long_note_release_margin_us,
         }
     }
 }
@@ -142,6 +160,15 @@ pub struct ActiveLongNote {
     pub end: LongNoteEndRef,
     /// HEAD が判定されてホールドが始まった時刻。beatoraja の TIMER_HOLD 相当の起点。
     pub started_at: TimeUs,
+    /// BAD/POOR 相当の早離しを、release margin 中だけ保留する。
+    pub pending_release: Option<PendingLongRelease>,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct PendingLongRelease {
+    pub released_at: TimeUs,
+    pub judge: Judge,
+    pub delta: TimeUs,
 }
 
 #[derive(Debug, Clone, Copy, Default)]

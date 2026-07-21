@@ -22,10 +22,10 @@ pub enum GaugeProperty {
     FiveKeys,
     #[default]
     SevenKeys,
-    /// pop'n music 系（9K）。bmz-player のキーモードでは現状未対応だが、
-    /// `CourseGaugeConstraint::Keys9` から指定された場合の段位ゲージ値として保持する。
+    /// pop'n music 系（9K）。通常は K9 chart から選び、
+    /// `CourseGaugeConstraint::Keys9` から明示される場合もある。
     Pms,
-    /// keyboard mania 系（24K）。同上で、コース定義側から指定された場合のみ使う。
+    /// keyboard mania 系（24K）。コース定義側から指定された場合のみ使う。
     Keyboard,
     /// LR2 互換。コース側で `gauge_lr2` 指定時に明示的に使う。
     Lr2,
@@ -57,6 +57,7 @@ pub enum GaugeModifier {
     LimitIncrement,
     ModifyDamage,
     Iidx,
+    Pop,
 }
 
 #[repr(u8)]
@@ -148,7 +149,25 @@ impl GaugeState {
         property: GaugeProperty,
         rule_mode: RuleMode,
     ) -> Self {
-        let gauges = gauge_definitions_for_rule_mode(property, rule_mode)
+        Self::new_with_property_and_rule_mode_and_keymode(
+            selected,
+            total,
+            total_notes,
+            property,
+            rule_mode,
+            KeyMode::K7,
+        )
+    }
+
+    pub fn new_with_property_and_rule_mode_and_keymode(
+        selected: GaugeType,
+        total: f64,
+        total_notes: u32,
+        property: GaugeProperty,
+        rule_mode: RuleMode,
+        key_mode: KeyMode,
+    ) -> Self {
+        let gauges = gauge_definitions_for_rule_mode_and_keymode(property, rule_mode, key_mode)
             .into_iter()
             .map(|definition| {
                 let definition = compile_gauge_definition(&definition, total, total_notes);
@@ -215,6 +234,26 @@ impl GaugeState {
         property: GaugeProperty,
         rule_mode: RuleMode,
     ) -> Self {
+        Self::new_with_auto_shift_property_and_rule_mode_and_keymode(
+            selected,
+            mode,
+            total,
+            total_notes,
+            property,
+            rule_mode,
+            KeyMode::K7,
+        )
+    }
+
+    pub fn new_with_auto_shift_property_and_rule_mode_and_keymode(
+        selected: GaugeType,
+        mode: GaugeAutoShiftMode,
+        total: f64,
+        total_notes: u32,
+        property: GaugeProperty,
+        rule_mode: RuleMode,
+        key_mode: KeyMode,
+    ) -> Self {
         let start = match mode {
             GaugeAutoShiftMode::BestClear => {
                 if is_course_gauge(selected) {
@@ -228,8 +267,14 @@ impl GaugeState {
             | GaugeAutoShiftMode::HardToGroove
             | GaugeAutoShiftMode::SelectToUnder => selected,
         };
-        let mut state =
-            Self::new_with_property_and_rule_mode(start, total, total_notes, property, rule_mode);
+        let mut state = Self::new_with_property_and_rule_mode_and_keymode(
+            start,
+            total,
+            total_notes,
+            property,
+            rule_mode,
+            key_mode,
+        );
         state.original = selected;
         state.auto_shift = mode != GaugeAutoShiftMode::Off;
         state.auto_shift_mode = mode;
@@ -538,6 +583,10 @@ pub fn compile_gauge_definition(
     total_notes: u32,
 ) -> GaugeRuntimeDefinition {
     let mut values = base.values;
+    if base.modifier == GaugeModifier::Pop && total_notes >= 1537 {
+        // Endless Dream DX 9KEY: 辛ゲージ帯では GOOD の基礎回復量を2倍にする。
+        values[GaugeJudgeIndex::Gd as usize] *= 2.0;
+    }
     for value in &mut values {
         *value = apply_modifier(*value, base.modifier, total, total_notes);
     }
@@ -587,6 +636,17 @@ fn apply_modifier(value: f32, modifier: GaugeModifier, total: f64, total_notes: 
                 value
             }
         }
+        GaugeModifier::Pop => {
+            if value > 0.0 {
+                if total_notes > 0 {
+                    value * pop_total_value(total_notes) / total_notes as f32
+                } else {
+                    0.0
+                }
+            } else {
+                value
+            }
+        }
     }
 }
 
@@ -624,6 +684,18 @@ fn iidx_total_value(total_notes: u32) -> f32 {
     260.0_f32.max(7.605 * notes / (0.01 * notes + 6.5))
 }
 
+fn pop_total_value(total_notes: u32) -> f32 {
+    if total_notes == 0 {
+        return 0.0;
+    }
+    if total_notes > 3072 {
+        (0.097 * total_notes as f32).floor()
+    } else {
+        let multiplier = 3072 / total_notes;
+        (multiplier as f32 * total_notes as f32 / 1024.0 * 100.0).min(300.0)
+    }
+}
+
 /// 既定 `SevenKeys` プロパティのゲージ定義（後方互換）。
 pub fn default_gauge_definitions() -> Vec<GaugeDefinition> {
     gauge_definitions_for(GaugeProperty::default())
@@ -639,10 +711,24 @@ pub fn gauge_definitions_for_rule_mode(
     property: GaugeProperty,
     rule_mode: RuleMode,
 ) -> Vec<GaugeDefinition> {
+    gauge_definitions_for_rule_mode_and_keymode(property, rule_mode, KeyMode::K7)
+}
+
+pub fn gauge_definitions_for_rule_mode_and_keymode(
+    property: GaugeProperty,
+    rule_mode: RuleMode,
+    key_mode: KeyMode,
+) -> Vec<GaugeDefinition> {
     match rule_mode {
         RuleMode::Beatoraja => gauge_definitions_for(property),
         RuleMode::Lr2Oraja => lr2oraja_gauge_definitions(),
-        RuleMode::Dx => dx_gauge_definition_table().to_vec(),
+        RuleMode::Dx => {
+            if key_mode == KeyMode::K9 {
+                dx_pop_gauge_definition_table().to_vec()
+            } else {
+                dx_gauge_definition_table().to_vec()
+            }
+        }
     }
 }
 
@@ -1186,7 +1272,7 @@ fn dx_gauge_definition_table() -> [GaugeDefinition; 9] {
             GaugeModifier::Iidx,
             2.0,
             100.0,
-            20.0,
+            22.0,
             60.0,
             [1.0, 1.0, 0.5, -1.6, -4.8, -1.6],
             &[],
@@ -1197,7 +1283,7 @@ fn dx_gauge_definition_table() -> [GaugeDefinition; 9] {
             GaugeModifier::Iidx,
             2.0,
             100.0,
-            20.0,
+            22.0,
             80.0,
             [1.0, 1.0, 0.5, -1.6, -4.8, -1.6],
             &[],
@@ -1208,7 +1294,7 @@ fn dx_gauge_definition_table() -> [GaugeDefinition; 9] {
             GaugeModifier::Iidx,
             2.0,
             100.0,
-            20.0,
+            22.0,
             80.0,
             [1.0, 1.0, 0.5, -2.0, -6.0, -2.0],
             &[],
@@ -1277,6 +1363,110 @@ fn dx_gauge_definition_table() -> [GaugeDefinition; 9] {
             100.0,
             0.0,
             [0.16, 0.16, 0.04, -6.0, -10.0, -6.0],
+            &[],
+        ),
+    ]
+}
+
+fn dx_pop_gauge_definition_table() -> [GaugeDefinition; 9] {
+    [
+        def(
+            GaugeType::AssistEasy,
+            Some(ClearType::AssistEasy),
+            GaugeModifier::Pop,
+            2.0,
+            120.0,
+            30.0,
+            65.0,
+            [1.2, 1.2, 0.6, -1.02, -3.0, -3.0],
+            &[],
+        ),
+        def(
+            GaugeType::Easy,
+            Some(ClearType::Easy),
+            GaugeModifier::Pop,
+            2.0,
+            120.0,
+            30.0,
+            85.0,
+            [1.2, 1.2, 0.6, -1.02, -3.0, -3.0],
+            &[],
+        ),
+        def(
+            GaugeType::Normal,
+            Some(ClearType::Normal),
+            GaugeModifier::Pop,
+            2.0,
+            120.0,
+            30.0,
+            85.0,
+            [1.2, 1.2, 0.6, -2.04, -6.0, -6.0],
+            &[],
+        ),
+        def(
+            GaugeType::Hard,
+            Some(ClearType::Hard),
+            GaugeModifier::Pop,
+            2.0,
+            120.0,
+            30.0,
+            85.0,
+            [1.2, 1.2, 0.6, -4.08, -12.0, -12.0],
+            &[],
+        ),
+        def(
+            GaugeType::ExHard,
+            Some(ClearType::ExHard),
+            GaugeModifier::Pop,
+            2.0,
+            120.0,
+            30.0,
+            85.0,
+            [1.2, 1.2, 0.6, -8.16, -24.0, -24.0],
+            &[],
+        ),
+        def(
+            GaugeType::Hazard,
+            None,
+            GaugeModifier::None,
+            0.0,
+            100.0,
+            100.0,
+            0.0,
+            [0.15, 0.06, 0.0, -100.0, -100.0, -100.0],
+            &[],
+        ),
+        def(
+            GaugeType::Class,
+            Some(ClearType::Normal),
+            GaugeModifier::None,
+            0.0,
+            100.0,
+            100.0,
+            0.0,
+            [0.15, 0.15, 0.06, -1.5, -3.0, -3.0],
+            DX_HARD_GUTS,
+        ),
+        def(
+            GaugeType::ExClass,
+            Some(ClearType::Hard),
+            GaugeModifier::None,
+            0.0,
+            100.0,
+            100.0,
+            0.0,
+            [0.15, 0.15, 0.03, -3.0, -6.0, -6.0],
+            &[],
+        ),
+        def(
+            GaugeType::ExHardClass,
+            Some(ClearType::ExHard),
+            GaugeModifier::None,
+            0.0,
+            100.0,
+            100.0,
+            0.0,
+            [0.15, 0.15, 0.0, -5.0, -10.0, -10.0],
             &[],
         ),
     ]
@@ -1548,6 +1738,17 @@ mod tests {
             .expect("definition exists")
     }
 
+    fn definition_for_rule_mode_and_keymode(
+        gauge_type: GaugeType,
+        rule_mode: RuleMode,
+        key_mode: KeyMode,
+    ) -> GaugeDefinition {
+        gauge_definitions_for_rule_mode_and_keymode(GaugeProperty::SevenKeys, rule_mode, key_mode)
+            .into_iter()
+            .find(|def| def.gauge_type == gauge_type)
+            .expect("definition exists")
+    }
+
     #[test]
     fn class_gauges_start_full_and_clear_above_zero() {
         for &(ty, expected_clear) in &[
@@ -1695,6 +1896,7 @@ mod tests {
     fn dx_gauge_definitions_match_lr2oraja_iidx_mode() {
         let normal = definition_for_rule_mode(GaugeType::Normal, RuleMode::Dx);
         assert_eq!(normal.modifier, GaugeModifier::Iidx);
+        assert_eq!(normal.init, 22.0);
         assert_eq!(normal.values, [1.0, 1.0, 0.5, -2.0, -6.0, -2.0]);
 
         let hard = definition_for_rule_mode(GaugeType::Hard, RuleMode::Dx);
@@ -1714,6 +1916,81 @@ mod tests {
         assert!(
             (gauge.current().value - (start + iidx_total_value(1000) / 1000.0)).abs() < 0.000_1
         );
+    }
+
+    #[test]
+    fn dx_9key_gauge_definitions_match_endless_dream_pop_mode() {
+        let assist =
+            definition_for_rule_mode_and_keymode(GaugeType::AssistEasy, RuleMode::Dx, KeyMode::K9);
+        assert_eq!(assist.modifier, GaugeModifier::Pop);
+        assert_eq!((assist.min, assist.max, assist.init, assist.border), (2.0, 120.0, 30.0, 65.0));
+        assert_eq!(assist.values, [1.2, 1.2, 0.6, -1.02, -3.0, -3.0]);
+
+        let easy = definition_for_rule_mode_and_keymode(GaugeType::Easy, RuleMode::Dx, KeyMode::K9);
+        assert_eq!((easy.min, easy.max, easy.init, easy.border), (2.0, 120.0, 30.0, 85.0));
+        assert_eq!(easy.values, [1.2, 1.2, 0.6, -1.02, -3.0, -3.0]);
+
+        let normal =
+            definition_for_rule_mode_and_keymode(GaugeType::Normal, RuleMode::Dx, KeyMode::K9);
+        assert_eq!(normal.modifier, GaugeModifier::Pop);
+        assert_eq!((normal.min, normal.max, normal.init, normal.border), (2.0, 120.0, 30.0, 85.0));
+        assert_eq!(normal.values, [1.2, 1.2, 0.6, -2.04, -6.0, -6.0]);
+
+        let hard = definition_for_rule_mode_and_keymode(GaugeType::Hard, RuleMode::Dx, KeyMode::K9);
+        assert_eq!(hard.modifier, GaugeModifier::Pop);
+        assert_eq!(hard.values, [1.2, 1.2, 0.6, -4.08, -12.0, -12.0]);
+
+        let exhard =
+            definition_for_rule_mode_and_keymode(GaugeType::ExHard, RuleMode::Dx, KeyMode::K9);
+        assert_eq!(exhard.values, [1.2, 1.2, 0.6, -8.16, -24.0, -24.0]);
+
+        let hazard =
+            definition_for_rule_mode_and_keymode(GaugeType::Hazard, RuleMode::Dx, KeyMode::K9);
+        assert_eq!((hazard.min, hazard.max, hazard.init, hazard.border), (0.0, 100.0, 100.0, 0.0));
+        assert_eq!(hazard.values, [0.15, 0.06, 0.0, -100.0, -100.0, -100.0]);
+
+        let class =
+            definition_for_rule_mode_and_keymode(GaugeType::Class, RuleMode::Dx, KeyMode::K9);
+        assert_eq!(class.values, [0.15, 0.15, 0.06, -1.5, -3.0, -3.0]);
+        assert_eq!(class.guts, DX_HARD_GUTS);
+
+        let exclass =
+            definition_for_rule_mode_and_keymode(GaugeType::ExClass, RuleMode::Dx, KeyMode::K9);
+        assert_eq!(exclass.values, [0.15, 0.15, 0.03, -3.0, -6.0, -6.0]);
+        let exhard_class =
+            definition_for_rule_mode_and_keymode(GaugeType::ExHardClass, RuleMode::Dx, KeyMode::K9);
+        assert_eq!(exhard_class.values, [0.15, 0.15, 0.0, -5.0, -10.0, -10.0]);
+
+        let k7_with_pms_override = gauge_definitions_for_rule_mode_and_keymode(
+            GaugeProperty::Pms,
+            RuleMode::Dx,
+            KeyMode::K7,
+        )
+        .into_iter()
+        .find(|definition| definition.gauge_type == GaugeType::Normal)
+        .unwrap();
+        assert_eq!(k7_with_pms_override.modifier, GaugeModifier::Iidx);
+        assert_eq!(k7_with_pms_override.init, 22.0);
+    }
+
+    #[test]
+    fn dx_9key_pop_recovery_uses_note_count_formula_and_dense_good_boost() {
+        assert_eq!(pop_total_value(0), 0.0);
+        assert_eq!(pop_total_value(3072), 300.0);
+        assert_eq!(pop_total_value(3073), 298.0);
+
+        let normal =
+            definition_for_rule_mode_and_keymode(GaugeType::Normal, RuleMode::Dx, KeyMode::K9);
+        let below = compile_gauge_definition(&normal, 999.0, 1536);
+        let dense = compile_gauge_definition(&normal, 999.0, 1537);
+        assert!((below.values[GaugeJudgeIndex::Pg as usize] - 0.234_375).abs() < 0.000_001);
+        assert!((below.values[GaugeJudgeIndex::Gd as usize] - 0.117_187_5).abs() < 0.000_001);
+        assert!((dense.values[GaugeJudgeIndex::Pg as usize] - 0.117_187_5).abs() < 0.000_001);
+        assert!((dense.values[GaugeJudgeIndex::Gd as usize] - 0.117_187_5).abs() < 0.000_001);
+
+        let empty = compile_gauge_definition(&normal, 999.0, 0);
+        assert_eq!(empty.values[GaugeJudgeIndex::Pg as usize], 0.0);
+        assert_eq!(empty.values[GaugeJudgeIndex::Bd as usize], -2.04);
     }
 
     #[test]

@@ -1608,6 +1608,18 @@ mod tests {
     }
 
     #[test]
+    fn hcn_passing_waits_until_the_head_is_judged() {
+        let mut session = session_with_autoplay(chart_with_hcn_long_note());
+
+        update_hcn_lane_timers(&mut session, TimeUs(100_000));
+        assert!(session.lane_hcn_timer[Lane::Key1.index()].is_none());
+
+        session.judge.judged_notes.insert(NoteId(1), Judge::Poor);
+        update_hcn_lane_timers(&mut session, TimeUs(100_000));
+        assert!(session.lane_hcn_timer[Lane::Key1.index()].is_some());
+    }
+
+    #[test]
     fn hcn_gauge_recovers_when_pressed_after_missed_start() {
         let mut session = session_with_autoplay(chart_with_hcn_long_note());
         session.gauge.set_initial_value(50.0);

@@ -192,21 +192,23 @@ pub fn apply_placeholder_session_visuals(
     let rule_mode = profile.play.rule_mode;
     let gauge_total = gauge_total_for_chart_and_rule_mode(None, snapshot.total_notes, rule_mode);
     let mut gauge = if gauge_auto_shift != GaugeAutoShiftMode::Off {
-        GaugeState::new_with_auto_shift_property_and_rule_mode(
+        GaugeState::new_with_auto_shift_property_and_rule_mode_and_keymode(
             gauge_type,
             gauge_auto_shift,
             gauge_total,
             snapshot.total_notes,
             gauge_property,
             rule_mode,
+            key_mode,
         )
     } else {
-        GaugeState::new_with_property_and_rule_mode(
+        GaugeState::new_with_property_and_rule_mode_and_keymode(
             gauge_type,
             gauge_total,
             snapshot.total_notes,
             gauge_property,
             rule_mode,
+            key_mode,
         )
     };
     gauge.set_bottom_shiftable_gauge(bottom_shiftable_gauge);
@@ -423,23 +425,25 @@ pub fn build_game_session_with_input_backend(
             .gauge_property
             .unwrap_or_else(|| GaugeProperty::from_keymode(chart.metadata.key_mode));
         if gauge_auto_shift != GaugeAutoShiftMode::Off {
-            let mut gauge = GaugeState::new_with_auto_shift_property_and_rule_mode(
+            let mut gauge = GaugeState::new_with_auto_shift_property_and_rule_mode_and_keymode(
                 gauge_type,
                 gauge_auto_shift,
                 gauge_total,
                 scored_total_notes,
                 gauge_property,
                 rule_mode,
+                chart.metadata.key_mode,
             );
             gauge.set_bottom_shiftable_gauge(bottom_shiftable_gauge);
             gauge
         } else {
-            GaugeState::new_with_property_and_rule_mode(
+            GaugeState::new_with_property_and_rule_mode_and_keymode(
                 gauge_type,
                 gauge_total,
                 scored_total_notes,
                 gauge_property,
                 rule_mode,
+                chart.metadata.key_mode,
             )
         }
     };
@@ -558,6 +562,8 @@ fn apply_judge_constraint_to_windows(
         scratch: apply_judge_constraint_to_window(windows.scratch, constraint),
         long_note_end: apply_judge_constraint_to_window(windows.long_note_end, constraint),
         long_scratch_end: apply_judge_constraint_to_window(windows.long_scratch_end, constraint),
+        long_note_release_margin_us: windows.long_note_release_margin_us,
+        long_scratch_release_margin_us: windows.long_scratch_release_margin_us,
     }
 }
 
@@ -2360,6 +2366,31 @@ mod tests {
             .find(|g| g.definition.gauge_type == GaugeType::Hard)
             .expect("Hard gauge present");
         assert_eq!(hard.definition.values, [0.16, 0.16, 0.0, -4.5, -9.0, -4.5]);
+    }
+
+    #[test]
+    fn build_game_session_applies_dx_9key_pop_rules() {
+        let mut profile = ProfileConfig::new_default("default", "Default", 1);
+        profile.play.rule_mode = RuleMode::Dx;
+        let mut chart = chart();
+        chart.metadata.key_mode = KeyMode::K9;
+
+        let session = build_game_session(Arc::new(chart), &profile, PlaySessionOptions::default());
+
+        assert_eq!(session.base_judge_window.pgreat_us, 25_000);
+        assert_eq!(session.base_judge_window.good_us, 87_500);
+        assert_eq!(session.judge.window_set.long_note_end.good_us, 217_000);
+        assert_eq!(session.judge.window_set.long_note_release_margin_us, 200_000);
+        assert!(session.score.empty_poor_breaks_combo);
+        let normal = session
+            .gauge
+            .gauges
+            .iter()
+            .find(|g| g.definition.gauge_type == GaugeType::Normal)
+            .expect("Normal gauge present");
+        assert_eq!((normal.definition.min, normal.definition.max), (2.0, 120.0));
+        assert_eq!((normal.definition.init, normal.definition.border), (30.0, 85.0));
+        assert_eq!(normal.definition.values[3..], [-2.04, -6.0, -6.0]);
     }
 
     #[test]
