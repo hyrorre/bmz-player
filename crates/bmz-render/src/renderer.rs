@@ -925,6 +925,10 @@ impl Renderer {
         self.result_skin_context.document().map(|document| document.fadeout).unwrap_or(0).max(0)
     }
 
+    pub fn result_skin_timer_animation_duration_ms(&self, timer: i32) -> i32 {
+        self.result_skin_context.timer_animation_duration_ms(timer)
+    }
+
     /// 選曲スキンの document (設定 UI が property/offset 定義を読むため公開)。
     pub fn select_skin_document(&self) -> Option<&SkinDocument> {
         self.select_skin_context.document()
@@ -5057,6 +5061,36 @@ mod tests {
         ));
 
         assert_eq!(renderer.result_skin_fadeout_ms(), 300);
+    }
+
+    #[test]
+    fn result_skin_timer_animation_duration_reads_document_or_defaults_to_zero() {
+        use crate::skin::{SkinContext, SkinDocument, SkinManifest};
+
+        let mut renderer = Renderer::default();
+        assert_eq!(renderer.result_skin_timer_animation_duration_ms(2), 0);
+
+        let document: SkinDocument = serde_json::from_str(
+            r#"{
+                "type": 7,
+                "w": 100,
+                "h": 100,
+                "destination": [{
+                    "id": "fadeout",
+                    "timer": 2,
+                    "dst": [{ "time": 0 }, { "time": 500 }]
+                }]
+            }"#,
+        )
+        .unwrap();
+        let manifest: SkinManifest = SkinManifest::default();
+        renderer.set_result_skin_context(SkinContext::from_manifest_and_document(
+            manifest,
+            document,
+            [],
+        ));
+
+        assert_eq!(renderer.result_skin_timer_animation_duration_ms(2), 500);
     }
 
     #[test]

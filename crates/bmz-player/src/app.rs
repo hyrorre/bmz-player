@@ -1666,11 +1666,13 @@ fn failed_play_ending(started_at: Instant) -> PlayEndingTransition {
 }
 
 /// リザルト画面終了フェードアウトの進行状態。
-/// フェードアウト時間が経過したら `action` を実行して画面を切り替える。
+/// 通常はフェードアウト時間が経過したら、スキップ要求時は実アニメーションの
+/// 最終フレームを1フレーム保持してから `action` を実行して画面を切り替える。
 struct ResultExit {
     started_at: Instant,
     action: ResultExitAction,
     skip_requested: bool,
+    skip_final_frame_held: bool,
 }
 
 /// F10 で開始したフォルダ内 Autoplay の進行状態。
@@ -10893,15 +10895,20 @@ impl WinitApp {
     }
 
     /// リザルト画面の終了アニメーションを開始する。
-    /// スキンが宣言するフェードアウト時間が経過したら `advance_result_exit` が
-    /// 実際の遷移 (選曲へ戻る / リトライ) を実行する。
+    /// 通常はスキンが宣言するフェードアウト時間が経過したら、スキップ要求時は
+    /// timer=2 の実アニメーションが終わって最終フレームを保持したら、
+    /// `advance_result_exit` が実際の遷移 (選曲へ戻る / リトライ) を実行する。
     fn begin_result_exit(&mut self, action: ResultExitAction) {
         if self.result_exit.is_some() || self.finished_play.is_none() {
             return;
         }
         tracing::info!(?action, "result screen exit animation started");
-        self.result_exit =
-            Some(ResultExit { started_at: Instant::now(), action, skip_requested: false });
+        self.result_exit = Some(ResultExit {
+            started_at: Instant::now(),
+            action,
+            skip_requested: false,
+            skip_final_frame_held: false,
+        });
         let (skin_bgm_volume, skin_se_volume) = self.result_skin_audio_volumes();
         let dispatched = self
             .result_skin_audio
@@ -10953,7 +10960,7 @@ impl WinitApp {
             return false;
         };
         if !exit.skip_requested {
-            tracing::info!("result screen exit animation skipped");
+            tracing::info!("result screen exit animation skip requested");
         }
         exit.skip_requested = true;
         true
@@ -11191,7 +11198,8 @@ impl WinitApp {
         self.ensure_result_skin_ready(ResultSkinSlot::Normal);
     }
 
-    /// 終了フェードアウトの経過を監視し、スキンのフェードアウト時間を過ぎたら
+    /// 終了フェードアウトの経過を監視し、通常はスキンのフェードアウト時間を、
+    /// スキップ時は timer=2 の実アニメーション終端と最終フレーム保持を過ぎたら
     /// 保留していた遷移を実行する。毎フレーム描画前に呼ぶ。
     fn advance_result_exit(&mut self) {
         if self.finished_play.is_some()
@@ -11224,13 +11232,30 @@ impl WinitApp {
         let started_at = exit.started_at;
         let action = exit.action.clone();
         let skip_requested = exit.skip_requested;
+        let skip_final_frame_held = exit.skip_final_frame_held;
         let fadeout = Duration::from_millis(self.renderer.result_skin_fadeout_ms().max(0) as u64);
+        let animation_duration = Duration::from_millis(
+            self.renderer.result_skin_timer_animation_duration_ms(2).max(0) as u64,
+        );
         let elapsed = started_at.elapsed();
         // スキンの終了アニメーション時間に合わせて、プレイ残響(draining_audio)を
         // 1.0 → 0.0 へ絞る。リザルトSEは begin_result_exit で callback 側の
         // fade-out を開始済みなので、ここでは毎フレーム command を投げない。
         self.fade_audio_for_result_exit(elapsed, fadeout);
-        if elapsed < fadeout && !skip_requested {
+        if skip_requested && elapsed >= animation_duration && !skip_final_frame_held {
+            // この呼び出しでは遷移せず、次のフレームで最終状態を1フレーム描画する。
+            if let Some(exit) = self.result_exit.as_mut() {
+                exit.skip_final_frame_held = true;
+            }
+            return;
+        }
+        if !result_exit_transition_ready(
+            elapsed,
+            fadeout,
+            animation_duration,
+            skip_requested,
+            skip_final_frame_held,
+        ) {
             return;
         }
         self.stop_result_exit_system_sounds();
@@ -20378,6 +20403,17 @@ fn result_exit_skip_key(physical_key: PhysicalKey, state: ElementState, repeat: 
     matches!(physical_key, PhysicalKey::Code(KeyCode::Enter | KeyCode::Escape))
 }
 
+fn result_exit_transition_ready(
+    elapsed: Duration,
+    fadeout: Duration,
+    animation_duration: Duration,
+    skip_requested: bool,
+    skip_final_frame_held: bool,
+) -> bool {
+    let required_duration = if skip_requested { animation_duration } else { fadeout };
+    elapsed >= required_duration && (!skip_requested || skip_final_frame_held)
+}
+
 fn decide_action(
     physical_key: PhysicalKey,
     state: ElementState,
@@ -25073,6 +25109,49 @@ mod tests {
             ElementState::Pressed,
             false
         ));
+    }
+
+    #[test]
+    fn result_exit_skip_waits_for_animation_and_holds_final_frame_once() {
+        let animation_duration = Duration::from_millis(1_000);
+        let fadeout = Duration::from_millis(3_000);
+
+        assert!(!result_exit_transition_ready(
+            Duration::from_millis(999),
+            fadeout,
+            animation_duration,
+            true,
+            false,
+        ));
+        assert!(!result_exit_transition_ready(
+            animation_duration,
+            fadeout,
+            animation_duration,
+            true,
+            false,
+        ));
+        assert!(result_exit_transition_ready(
+            animation_duration,
+            fadeout,
+            animation_duration,
+            true,
+            true,
+        ));
+    }
+
+    #[test]
+    fn result_exit_without_skip_still_waits_for_skin_fadeout() {
+        let fadeout = Duration::from_millis(3_000);
+        let animation_duration = Duration::from_millis(1_000);
+
+        assert!(!result_exit_transition_ready(
+            animation_duration,
+            fadeout,
+            animation_duration,
+            false,
+            false,
+        ));
+        assert!(result_exit_transition_ready(fadeout, fadeout, animation_duration, false, false,));
     }
 
     #[test]
