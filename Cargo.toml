@@ -35,6 +35,9 @@ ryu = "1.0"
 toml = "0.8"
 base64 = "0.22"
 flate2 = "1"
+tar = "0.4.46"
+sevenz-rust2 = { version = "0.21.3", features = ["util"] }
+webbrowser = "1.2"
 bytemuck = "1"
 futures-util = "0.3"
 

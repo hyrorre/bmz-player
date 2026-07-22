@@ -44,6 +44,7 @@ pub mod screens;
 pub mod select_options;
 pub mod skin_audio;
 pub mod skin_loader;
+pub mod song_download;
 pub mod songs_cmd;
 pub mod storage;
 pub mod system_sound;

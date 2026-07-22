@@ -8,6 +8,7 @@ use bmz_render::scene::SelectRowKind;
 
 use crate::ln_policy::{LnPolicySetting, LnScorePolicy, score_ln_policy};
 use crate::screens::settings_model::{ConfigSelectRow, KeyBindingSelectRow};
+use crate::song_download::ChartDownloadMetadata;
 use crate::storage::collection_db::{CollectionDatabase, FavoriteChartRecord, FavoriteSongRecord};
 use crate::storage::common::hash_to_hex;
 use crate::storage::library_db::{
@@ -334,6 +335,7 @@ pub struct SelectChartRow {
     pub fallback_title: String,
     pub fallback_artist: String,
     pub entry_sha256: Option<[u8; 32]>,
+    pub download_metadata: ChartDownloadMetadata,
     pub best_score: Option<BestScoreSummary>,
     pub replay_slots: [bool; 4],
     pub favorite_chart: bool,
@@ -1122,6 +1124,14 @@ fn select_chart_row_from_table_entry(
         fallback_title: entry.title,
         fallback_artist: entry.artist,
         entry_sha256,
+        download_metadata: ChartDownloadMetadata {
+            md5: entry.md5,
+            sha256: entry.sha256,
+            url: entry.url,
+            append_url: entry.append_url,
+            ipfs: entry.ipfs,
+            append_ipfs: entry.append_ipfs,
+        },
         best_score,
         replay_slots,
         favorite_chart: false,
@@ -1517,6 +1527,7 @@ fn missing_favorite_chart_item(
         fallback_title: fallback_favorite_title(&record.title_hint, record.chart_sha256),
         fallback_artist: record.artist_hint,
         entry_sha256: Some(record.chart_sha256),
+        download_metadata: ChartDownloadMetadata::default(),
         best_score,
         replay_slots,
         favorite_chart: true,
@@ -1540,6 +1551,7 @@ fn missing_favorite_song_item(
         fallback_title: fallback_favorite_title(&record.title_hint, record.representative_sha256),
         fallback_artist: record.artist_hint,
         entry_sha256: Some(record.representative_sha256),
+        download_metadata: ChartDownloadMetadata::default(),
         best_score,
         replay_slots,
         favorite_chart: false,
@@ -1682,6 +1694,7 @@ fn chart_items_with_enrichment(
             fallback_title: String::new(),
             fallback_artist: String::new(),
             entry_sha256: None,
+            download_metadata: ChartDownloadMetadata::default(),
             best_score,
             replay_slots,
             favorite_chart: false,
@@ -2370,6 +2383,7 @@ mod tests {
                 title: String::new(),
                 artist: String::new(),
                 comment: String::new(),
+                ..FetchedTableEntry::default()
             }],
             courses: Vec::new(),
             fetched_at: 0,
@@ -2395,6 +2409,7 @@ mod tests {
                 title: String::new(),
                 artist: String::new(),
                 comment: String::new(),
+                ..FetchedTableEntry::default()
             }],
             courses: Vec::new(),
             fetched_at: 0,
@@ -2536,6 +2551,7 @@ mod tests {
                     title: String::new(),
                     artist: String::new(),
                     comment: String::new(),
+                    ..FetchedTableEntry::default()
                 },
                 FetchedTableEntry {
                     level: "5".to_string(),
@@ -2544,6 +2560,7 @@ mod tests {
                     title: String::new(),
                     artist: String::new(),
                     comment: String::new(),
+                    ..FetchedTableEntry::default()
                 },
             ],
             courses: Vec::new(),
@@ -2648,6 +2665,7 @@ mod tests {
             fallback_title: String::new(),
             fallback_artist: String::new(),
             entry_sha256: None,
+            download_metadata: ChartDownloadMetadata::default(),
             best_score: None,
             replay_slots: [false; 4],
             favorite_chart: false,
@@ -2693,6 +2711,7 @@ mod tests {
                 title: String::new(),
                 artist: String::new(),
                 comment: String::new(),
+                ..FetchedTableEntry::default()
             }],
             courses: Vec::new(),
             fetched_at: 0,
@@ -2740,6 +2759,7 @@ mod tests {
                     title: String::new(),
                     artist: String::new(),
                     comment: String::new(),
+                    ..FetchedTableEntry::default()
                 },
                 FetchedTableEntry {
                     level: "10".to_string(),
@@ -2748,6 +2768,7 @@ mod tests {
                     title: String::new(),
                     artist: String::new(),
                     comment: String::new(),
+                    ..FetchedTableEntry::default()
                 },
             ],
             courses: Vec::new(),
@@ -2786,6 +2807,10 @@ mod tests {
                 title: "Missing Song".to_string(),
                 artist: "Missing Artist".to_string(),
                 comment: String::new(),
+                url: "https://example.com/missing".to_string(),
+                append_url: "https://example.com/missing-diff".to_string(),
+                ipfs: "/ipfs/bafybeigdyrzt5sfp7udm7hu76uh7y26nf3ktekzrxql4i5f3u".to_string(),
+                append_ipfs: String::new(),
             }],
             courses: Vec::new(),
             fetched_at: 0,
@@ -2808,6 +2833,8 @@ mod tests {
             if row.display_title() == "Missing Song"
                 && row.display_artist() == "Missing Artist"
                 && !row.in_library()
+                && row.download_metadata.url == "https://example.com/missing"
+                && row.download_metadata.ipfs.starts_with("/ipfs/")
         ));
     }
 
@@ -2831,6 +2858,7 @@ mod tests {
                 title: "Table Title".to_string(),
                 artist: "Table Artist".to_string(),
                 comment: String::new(),
+                ..FetchedTableEntry::default()
             }],
             courses: Vec::new(),
             fetched_at: 0,
@@ -2875,6 +2903,7 @@ mod tests {
                     title: "Registered Song".to_string(),
                     artist: String::new(),
                     comment: String::new(),
+                    ..FetchedTableEntry::default()
                 },
                 FetchedTableEntry {
                     level: "12".to_string(),
@@ -2883,6 +2912,7 @@ mod tests {
                     title: "Registered Song".to_string(),
                     artist: String::new(),
                     comment: String::new(),
+                    ..FetchedTableEntry::default()
                 },
             ],
             courses: Vec::new(),
@@ -2928,6 +2958,7 @@ mod tests {
                     title: String::new(),
                     artist: String::new(),
                     comment: String::new(),
+                    ..FetchedTableEntry::default()
                 },
                 FetchedTableEntry {
                     level: "12".to_string(),
@@ -2936,6 +2967,7 @@ mod tests {
                     title: String::new(),
                     artist: String::new(),
                     comment: String::new(),
+                    ..FetchedTableEntry::default()
                 },
             ],
             courses: Vec::new(),
@@ -2983,6 +3015,7 @@ mod tests {
                     title: String::new(),
                     artist: String::new(),
                     comment: String::new(),
+                    ..FetchedTableEntry::default()
                 },
                 FetchedTableEntry {
                     level: "12".to_string(),
@@ -2991,6 +3024,7 @@ mod tests {
                     title: String::new(),
                     artist: String::new(),
                     comment: String::new(),
+                    ..FetchedTableEntry::default()
                 },
             ],
             courses: Vec::new(),

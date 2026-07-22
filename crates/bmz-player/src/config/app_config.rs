@@ -23,6 +23,8 @@ pub struct AppConfig {
     #[serde(default)]
     pub tables: DifficultyTablesConfig,
     #[serde(default)]
+    pub downloads: ChartDownloadsConfig,
+    #[serde(default)]
     pub updates: UpdatesConfig,
     #[serde(default)]
     pub discord: DiscordConfig,
@@ -366,6 +368,18 @@ pub struct DifficultyTableSource {
     pub enabled: bool,
 }
 
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ChartDownloadsConfig {
+    #[serde(default)]
+    pub ipfs_enabled: bool,
+    #[serde(default)]
+    pub ipfs_api_url: String,
+    #[serde(default)]
+    pub http_enabled: bool,
+    #[serde(default)]
+    pub http_api_url: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UpdatesConfig {
     #[serde(default = "default_true")]
@@ -526,6 +540,7 @@ impl Default for AppConfig {
             },
             logging: LoggingConfig { level: LogLevel::Info, file_logging: true },
             tables: DifficultyTablesConfig::default(),
+            downloads: ChartDownloadsConfig::default(),
             updates: UpdatesConfig::default(),
             discord: DiscordConfig::default(),
         }
@@ -679,6 +694,31 @@ mod tests {
         assert_eq!(config.tables.sources.len(), DEFAULT_DIFFICULTY_TABLE_SOURCE_URLS.len());
         assert!(config.tables.sources.iter().all(|source| source.enabled));
         assert_eq!(config.tables.sources[0].url, DEFAULT_DIFFICULTY_TABLE_SOURCE_URLS[0]);
+    }
+
+    #[test]
+    fn app_config_defaults_chart_downloads_disabled_without_api_urls() {
+        let config = AppConfig::default();
+
+        assert!(!config.downloads.ipfs_enabled);
+        assert!(config.downloads.ipfs_api_url.is_empty());
+        assert!(!config.downloads.http_enabled);
+        assert!(config.downloads.http_api_url.is_empty());
+    }
+
+    #[test]
+    fn app_config_loads_missing_chart_downloads_section() {
+        let mut serialized = toml::to_string(&AppConfig::default()).unwrap();
+        let start = serialized.find("[downloads]").unwrap();
+        let end = serialized[start + 1..]
+            .find("\n[")
+            .map(|offset| start + 1 + offset)
+            .unwrap_or(serialized.len());
+        serialized.replace_range(start..end, "");
+
+        let config: AppConfig = toml::from_str(&serialized).unwrap();
+
+        assert_eq!(config.downloads, ChartDownloadsConfig::default());
     }
 
     #[test]

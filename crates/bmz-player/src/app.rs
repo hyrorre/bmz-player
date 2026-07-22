@@ -122,12 +122,13 @@ use crate::screens::practice::{
 use crate::screens::result_model::{ResultFastSlowJudgeCounts, ResultSummary};
 use crate::screens::select_model::{
     COURSE_ROOT_PATH, DifficultyTableText, FAVORITE_CHART_PATH, FAVORITE_ROOT_PATH,
-    FAVORITE_SONG_PATH, MAX_SEARCH_HISTORY, SEARCH_PATH_PREFIX, SelectExecutableKind,
-    SelectFolderSummary, SelectItem, TABLE_ROOT_PATH, TablePath, apply_collection_flags,
-    course_root_item, difficulty_table_text_for_chart_with_active_sources, favorite_root_item,
-    favorite_root_items, favorite_song_representatives_for_folder, load_select_items_for_courses,
-    load_select_items_for_favorite_charts, load_select_items_for_favorite_song,
-    load_select_items_for_favorite_songs, load_select_items_for_search_for_rule_mode_with_filters,
+    FAVORITE_SONG_PATH, MAX_SEARCH_HISTORY, SEARCH_PATH_PREFIX, SelectChartRow,
+    SelectExecutableKind, SelectFolderSummary, SelectItem, TABLE_ROOT_PATH, TablePath,
+    apply_collection_flags, course_root_item, difficulty_table_text_for_chart_with_active_sources,
+    favorite_root_item, favorite_root_items, favorite_song_representatives_for_folder,
+    load_select_items_for_courses, load_select_items_for_favorite_charts,
+    load_select_items_for_favorite_song, load_select_items_for_favorite_songs,
+    load_select_items_for_search_for_rule_mode_with_filters,
     load_select_items_in_folder_for_rule_mode_with_filters,
     load_select_items_in_table_level_for_rule_mode, parse_favorite_song_detail_path,
     parse_same_folder_path, parse_search_query, parse_table_path, random_select_item_from_items,
@@ -151,6 +152,10 @@ use crate::skin_loader::{
     is_decodable_skin_path, is_json_skin_path, is_lr2_skin_path, is_lua_skin_path,
     load_default_skin_into_renderer_from_paths, play_skin_selection_for, set_decoded_skin_context,
     upload_decoded_skin_with_texture_cache,
+};
+use crate::song_download::{
+    ChartDownloadRequest, ChartDownloadResult, MissingChartAction, choose_missing_chart_action,
+    download_chart, open_browser_urls,
 };
 use crate::songs_cmd::scan_songs_with_progress;
 use crate::storage::collection_db::FavoriteHints;
@@ -560,6 +565,8 @@ struct WinitApp {
     skin_defs_cache: BTreeMap<String, SceneSkinDefs>,
     pending_table_fetch: Option<Receiver<Result<()>>>,
     pending_song_scan: Option<Receiver<SongScanEvent>>,
+    pending_chart_download: Option<Receiver<Result<ChartDownloadResult>>>,
+    queued_download_scan: Option<(PathBuf, String)>,
     song_scan_progress: Option<ScanProgress>,
     pending_update_check: Option<Receiver<Result<Option<UpdateCandidate>>>>,
     pending_update_check_reports_up_to_date: bool,
@@ -2828,6 +2835,8 @@ impl WinitApp {
             skin_defs_cache: BTreeMap::new(),
             pending_table_fetch: None,
             pending_song_scan: None,
+            pending_chart_download: None,
+            queued_download_scan: None,
             song_scan_progress: None,
             pending_update_check: None,
             pending_update_check_reports_up_to_date: false,
@@ -7176,10 +7185,7 @@ impl WinitApp {
                         row.chart.as_ref().expect("in_library row has chart").chart_id,
                     );
                 } else {
-                    tracing::info!(
-                        title = row.display_title(),
-                        "skipping play for chart missing from library"
-                    );
+                    self.acquire_missing_chart(&row);
                 }
             }
             Some(SelectItem::Course(row)) => {
@@ -7210,6 +7216,110 @@ impl WinitApp {
             }
             None => {
                 tracing::warn!("no item is available to select");
+            }
+        }
+    }
+
+    fn acquire_missing_chart(&mut self, row: &SelectChartRow) {
+        let action =
+            choose_missing_chart_action(&self.boot.app_config.downloads, &row.download_metadata);
+        match action {
+            MissingChartAction::Browser(urls) => match open_browser_urls(&urls) {
+                Ok(count) => {
+                    self.show_left_overlay_toast(format!("入手先をブラウザで開きました ({count})"));
+                    tracing::info!(title = row.display_title(), count, "opened missing chart URLs");
+                }
+                Err(error) => {
+                    self.show_left_overlay_toast(format!("ブラウザを開けませんでした: {error}"));
+                    tracing::error!(%error, title = row.display_title(), "failed to open chart URLs");
+                }
+            },
+            MissingChartAction::Unavailable => {
+                self.show_left_overlay_toast("この譜面には利用可能な入手先がありません");
+                tracing::info!(
+                    title = row.display_title(),
+                    "missing chart has no available acquisition source"
+                );
+            }
+            action @ (MissingChartAction::Ipfs { .. } | MissingChartAction::Http { .. }) => {
+                self.spawn_chart_download(action, row.display_title().to_string());
+            }
+        }
+    }
+
+    fn spawn_chart_download(&mut self, action: MissingChartAction, title: String) {
+        if self.pending_chart_download.is_some() {
+            self.show_left_overlay_toast("別の譜面を取得中です");
+            return;
+        }
+        let source_name = match &action {
+            MissingChartAction::Ipfs { .. } => "IPFS",
+            MissingChartAction::Http { .. } => "HTTP",
+            MissingChartAction::Browser(_) | MissingChartAction::Unavailable => return,
+        };
+        let request = ChartDownloadRequest {
+            action,
+            title: title.clone(),
+            data_dir: self.boot.app_paths.data_dir.clone(),
+        };
+        let (tx, rx) = mpsc::channel();
+        thread::Builder::new()
+            .name("chart-download".to_string())
+            .spawn(move || {
+                let result = (|| -> Result<ChartDownloadResult> {
+                    let runtime =
+                        tokio::runtime::Runtime::new().context("failed to create tokio runtime")?;
+                    runtime.block_on(download_chart(request))
+                })();
+                let _ = tx.send(result);
+            })
+            .expect("failed to spawn chart download thread");
+        self.pending_chart_download = Some(rx);
+        self.show_left_overlay_toast(format!("{source_name} から譜面を取得しています"));
+        tracing::info!(source = source_name, %title, "started chart download");
+    }
+
+    fn poll_pending_chart_download(&mut self) {
+        let Some(rx) = &self.pending_chart_download else {
+            return;
+        };
+        match rx.try_recv() {
+            Ok(Ok(result)) => {
+                self.pending_chart_download = None;
+                let source_name = result.source.display_name();
+                self.show_left_overlay_toast(format!(
+                    "{source_name} 取得完了。譜面を登録しています"
+                ));
+                tracing::info!(
+                    source = source_name,
+                    path = %result.chart_dir.display(),
+                    "chart download complete"
+                );
+                let label = format!("{source_name} chart download scan");
+                if self.pending_song_scan.is_some() {
+                    self.queued_download_scan = Some((result.root_dir, label));
+                } else {
+                    self.spawn_song_scan(
+                        vec![PathEntry {
+                            path: result.root_dir.to_string_lossy().into_owned(),
+                            enabled: true,
+                            recursive: true,
+                        }],
+                        true,
+                        label,
+                    );
+                }
+            }
+            Ok(Err(error)) => {
+                self.pending_chart_download = None;
+                self.show_left_overlay_toast(format!("譜面の取得に失敗しました: {error}"));
+                tracing::error!(error = %format_error_chain(&error), "chart download failed");
+            }
+            Err(mpsc::TryRecvError::Empty) => {}
+            Err(mpsc::TryRecvError::Disconnected) => {
+                self.pending_chart_download = None;
+                self.show_left_overlay_toast("譜面取得処理が予期せず終了しました");
+                tracing::warn!("chart download worker disconnected");
             }
         }
     }
@@ -11616,6 +11726,16 @@ impl WinitApp {
         }
         if keep_pending {
             self.pending_song_scan = Some(rx);
+        } else if let Some((root, label)) = self.queued_download_scan.take() {
+            self.spawn_song_scan(
+                vec![PathEntry {
+                    path: root.to_string_lossy().into_owned(),
+                    enabled: true,
+                    recursive: true,
+                }],
+                true,
+                label,
+            );
         }
     }
 
@@ -16654,6 +16774,7 @@ impl ApplicationHandler<AppUserEvent> for WinitApp {
                 self.poll_play_preload();
                 self.refresh_play_target_from_source();
                 self.poll_pending_table_fetch();
+                self.poll_pending_chart_download();
                 self.poll_pending_song_scan();
                 self.poll_pending_update_check();
                 self.poll_pending_update_download();
@@ -27319,6 +27440,7 @@ mod tests {
             fallback_title: String::new(),
             fallback_artist: String::new(),
             entry_sha256: None,
+            download_metadata: crate::song_download::ChartDownloadMetadata::default(),
             best_score: None,
             replay_slots: [false; 4],
             favorite_chart: false,

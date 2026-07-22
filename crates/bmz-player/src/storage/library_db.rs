@@ -168,6 +168,10 @@ pub struct TableEntryListItem {
     pub title: String,
     pub artist: String,
     pub comment: String,
+    pub url: String,
+    pub append_url: String,
+    pub ipfs: String,
+    pub append_ipfs: String,
     pub chart: Option<ChartListItem>,
 }
 
@@ -957,6 +961,10 @@ impl LibraryDatabase {
                     title: row.title,
                     artist: row.artist,
                     comment: row.comment,
+                    url: row.url,
+                    append_url: row.append_url,
+                    ipfs: row.ipfs,
+                    append_ipfs: row.append_ipfs,
                     chart,
                 }
             })

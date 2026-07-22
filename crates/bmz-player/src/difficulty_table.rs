@@ -14,6 +14,7 @@ pub struct FetchedDifficultyTable {
     pub fetched_at: i64,
 }
 
+#[derive(Debug, Clone, Default)]
 pub struct FetchedTableEntry {
     pub level: String,
     pub md5: String,
@@ -21,6 +22,10 @@ pub struct FetchedTableEntry {
     pub title: String,
     pub artist: String,
     pub comment: String,
+    pub url: String,
+    pub append_url: String,
+    pub ipfs: String,
+    pub append_ipfs: String,
 }
 
 #[derive(Deserialize)]
@@ -88,6 +93,14 @@ struct DataEntry {
     artist: Option<String>,
     #[serde(default)]
     comment: Option<String>,
+    #[serde(default)]
+    url: Option<String>,
+    #[serde(default, alias = "appendUrl", alias = "appendURL", alias = "append_url")]
+    appendurl: Option<String>,
+    #[serde(default)]
+    ipfs: Option<String>,
+    #[serde(default, alias = "appendIpfs", alias = "append_ipfs")]
+    appendipfs: Option<String>,
 }
 
 /// Fetches and parses a BMS difficulty table.
@@ -147,6 +160,10 @@ pub async fn fetch_difficulty_table(
                 title: entry.title.unwrap_or_default(),
                 artist: entry.artist.unwrap_or_default(),
                 comment: entry.comment.unwrap_or_default(),
+                url: trimmed_or_default(entry.url),
+                append_url: trimmed_or_default(entry.appendurl),
+                ipfs: trimmed_or_default(entry.ipfs),
+                append_ipfs: trimmed_or_default(entry.appendipfs),
             });
         }
     }
@@ -163,6 +180,10 @@ pub async fn fetch_difficulty_table(
         courses,
         fetched_at,
     })
+}
+
+fn trimmed_or_default(value: Option<String>) -> String {
+    value.map(|value| value.trim().to_string()).unwrap_or_default()
 }
 
 fn parse_courses_from_header(
@@ -290,6 +311,26 @@ mod tests {
         let header: HeaderJson =
             serde_json::from_str(body).expect("mixed numeric/string level_order should parse");
         assert_eq!(header.level_order, vec!["1", "2", "3", "???"]);
+    }
+
+    #[test]
+    fn parse_download_metadata_aliases() {
+        let entry: DataEntry = serde_json::from_str(
+            r#"{
+                "level": "1",
+                "md5": "00112233445566778899aabbccddeeff",
+                "url": " https://example.com/song ",
+                "appendUrl": "https://example.com/diff",
+                "ipfs": "/ipfs/bafy-main",
+                "appendIpfs": "/ipfs/bafy-diff"
+            }"#,
+        )
+        .unwrap();
+
+        assert_eq!(trimmed_or_default(entry.url), "https://example.com/song");
+        assert_eq!(entry.appendurl.as_deref(), Some("https://example.com/diff"));
+        assert_eq!(entry.ipfs.as_deref(), Some("/ipfs/bafy-main"));
+        assert_eq!(entry.appendipfs.as_deref(), Some("/ipfs/bafy-diff"));
     }
 
     #[test]

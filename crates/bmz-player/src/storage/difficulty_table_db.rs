@@ -32,6 +32,10 @@ pub struct TableEntryRow {
     pub title: String,
     pub artist: String,
     pub comment: String,
+    pub url: String,
+    pub append_url: String,
+    pub ipfs: String,
+    pub append_ipfs: String,
 }
 
 pub(super) fn upsert_difficulty_table(
@@ -71,8 +75,9 @@ pub(super) fn upsert_difficulty_table(
     for entry in &table.entries {
         tx.execute(
             "INSERT INTO difficulty_table_entries
-             (table_id, level, md5, sha256, title, artist, comment)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+             (table_id, level, md5, sha256, title, artist, comment,
+              url, append_url, ipfs, append_ipfs)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
             params![
                 table_id,
                 entry.level,
@@ -80,7 +85,11 @@ pub(super) fn upsert_difficulty_table(
                 entry.sha256,
                 entry.title,
                 entry.artist,
-                entry.comment
+                entry.comment,
+                entry.url,
+                entry.append_url,
+                entry.ipfs,
+                entry.append_ipfs,
             ],
         )?;
     }
@@ -127,7 +136,8 @@ pub(super) fn list_table_entries(
     source_url: &str,
 ) -> Result<Vec<TableEntryRow>> {
     let sql = "
-        SELECT dte.level, dte.md5, dte.sha256, dte.title, dte.artist, dte.comment
+        SELECT dte.level, dte.md5, dte.sha256, dte.title, dte.artist, dte.comment,
+               dte.url, dte.append_url, dte.ipfs, dte.append_ipfs
         FROM difficulty_table_entries dte
         JOIN difficulty_tables dt ON dt.id = dte.table_id
         WHERE dt.source_url = ?1";
@@ -141,7 +151,8 @@ pub(super) fn list_table_entries_at_level(
     level: &str,
 ) -> Result<Vec<TableEntryRow>> {
     let sql = "
-        SELECT dte.level, dte.md5, dte.sha256, dte.title, dte.artist, dte.comment
+        SELECT dte.level, dte.md5, dte.sha256, dte.title, dte.artist, dte.comment,
+               dte.url, dte.append_url, dte.ipfs, dte.append_ipfs
         FROM difficulty_table_entries dte
         JOIN difficulty_tables dt ON dt.id = dte.table_id
         WHERE dt.source_url = ?1 AND dte.level = ?2";
@@ -162,6 +173,10 @@ fn query_table_entries(
             title: row.get(3)?,
             artist: row.get(4)?,
             comment: row.get(5)?,
+            url: row.get(6)?,
+            append_url: row.get(7)?,
+            ipfs: row.get(8)?,
+            append_ipfs: row.get(9)?,
         })
     })?;
     rows.collect::<std::result::Result<Vec<_>, _>>().map_err(Into::into)
@@ -253,6 +268,10 @@ mod tests {
                     title: "Song A".to_string(),
                     artist: String::new(),
                     comment: String::new(),
+                    url: "https://example.com/song-a".to_string(),
+                    append_url: "https://example.com/song-a-diff".to_string(),
+                    ipfs: "/ipfs/bafy-song-a".to_string(),
+                    append_ipfs: "/ipfs/bafy-song-a-diff".to_string(),
                 },
                 FetchedTableEntry {
                     level: "2".to_string(),
@@ -261,6 +280,7 @@ mod tests {
                     title: "Song B".to_string(),
                     artist: String::new(),
                     comment: String::new(),
+                    ..FetchedTableEntry::default()
                 },
             ],
             courses: Vec::new(),
@@ -281,6 +301,21 @@ mod tests {
         assert_eq!(tables[0].name, "Insane Table");
         assert_eq!(tables[0].symbol, "★");
         assert_eq!(tables[0].level_order, vec!["1", "2"]);
+    }
+
+    #[test]
+    fn download_metadata_round_trips_with_table_entries() {
+        let mut conn = open_db();
+        let table = sample_table("https://example.com/");
+        upsert_difficulty_table(&mut conn, &table).unwrap();
+
+        let rows = list_table_entries_at_level(&conn, &table.source_url, "1").unwrap();
+
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].url, "https://example.com/song-a");
+        assert_eq!(rows[0].append_url, "https://example.com/song-a-diff");
+        assert_eq!(rows[0].ipfs, "/ipfs/bafy-song-a");
+        assert_eq!(rows[0].append_ipfs, "/ipfs/bafy-song-a-diff");
     }
 
     #[test]

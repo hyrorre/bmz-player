@@ -2429,6 +2429,39 @@ fn build_settings_panel(
                     ui.label("追加した表は自動で取得します。手動取得は各行または全件取得を使います。");
                 });
 
+                egui::CollapsingHeader::new("未所持譜面の取得").show(ui, |ui| {
+                    ui.label(
+                        "既定ではIPFS/HTTPを使用しません。各サービスの利用規約を確認してから有効にしてください。",
+                    );
+                    ui.separator();
+                    ui.checkbox(&mut config.downloads.ipfs_enabled, "IPFS取得を有効にする");
+                    ui.horizontal(|ui| {
+                        ui.label("IPFS API URL");
+                        ui.add(
+                            egui::TextEdit::singleline(&mut config.downloads.ipfs_api_url)
+                                .desired_width(360.0)
+                                .hint_text("http://127.0.0.1:5001/"),
+                        );
+                    });
+                    ui.label(
+                        "Kubo互換APIのベースURLを入力します。{cid} を含む完全なURLも利用できます。",
+                    );
+                    ui.separator();
+                    ui.checkbox(&mut config.downloads.http_enabled, "HTTP取得を有効にする");
+                    ui.horizontal(|ui| {
+                        ui.label("HTTP API URL");
+                        ui.add(
+                            egui::TextEdit::singleline(&mut config.downloads.http_api_url)
+                                .desired_width(360.0)
+                                .hint_text("https://example.com/package/{md5}"),
+                        );
+                    });
+                    ui.label(
+                        "URLには {md5} / {sha256} / %s を指定できます。直接7zを返すAPIと、Ginger/Konmai形式のJSON応答に対応します。",
+                    );
+                    ui.label("保存先: data/songs/ipfs または data/songs/http");
+                });
+
                 build_score_import_section(
                     ui,
                     state.score_import_path,

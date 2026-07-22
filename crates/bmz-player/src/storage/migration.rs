@@ -519,6 +519,16 @@ pub const LIBRARY_MIGRATIONS: &[Migration] = &[
         statements: &["CREATE INDEX idx_dte_table_id_level
             ON difficulty_table_entries(table_id, level);"],
     },
+    Migration {
+        version: 25,
+        // Preserve missing-chart acquisition metadata supplied by difficulty tables.
+        statements: &[
+            "ALTER TABLE difficulty_table_entries ADD COLUMN url TEXT NOT NULL DEFAULT '';",
+            "ALTER TABLE difficulty_table_entries ADD COLUMN append_url TEXT NOT NULL DEFAULT '';",
+            "ALTER TABLE difficulty_table_entries ADD COLUMN ipfs TEXT NOT NULL DEFAULT '';",
+            "ALTER TABLE difficulty_table_entries ADD COLUMN append_ipfs TEXT NOT NULL DEFAULT '';",
+        ],
+    },
 ];
 
 pub const SCORE_MIGRATIONS: &[Migration] = &[
@@ -1510,7 +1520,7 @@ mod tests {
         run_migrations(&mut conn, LIBRARY_MIGRATIONS).unwrap();
 
         let version: i32 = conn.pragma_query_value(None, "user_version", |row| row.get(0)).unwrap();
-        assert_eq!(version, 24);
+        assert_eq!(version, 25);
 
         let mut stmt = conn.prepare("PRAGMA table_info(charts)").unwrap();
         let columns = stmt
@@ -1539,6 +1549,24 @@ mod tests {
             .unwrap();
 
         assert_eq!(columns, ["table_id", "level"]);
+    }
+
+    #[test]
+    fn library_migration_adds_difficulty_table_download_metadata() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        run_migrations(&mut conn, LIBRARY_MIGRATIONS).unwrap();
+
+        let columns = conn
+            .prepare("PRAGMA table_info(difficulty_table_entries)")
+            .unwrap()
+            .query_map([], |row| row.get::<_, String>(1))
+            .unwrap()
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .unwrap();
+
+        for column in ["url", "append_url", "ipfs", "append_ipfs"] {
+            assert!(columns.iter().any(|candidate| candidate == column));
+        }
     }
 
     #[test]
@@ -1571,7 +1599,7 @@ mod tests {
             conn.query_row("SELECT headers_json FROM charts", [], |row| row.get(0)).unwrap();
         let version: i32 = conn.pragma_query_value(None, "user_version", |row| row.get(0)).unwrap();
         assert_eq!(headers_json, "{}");
-        assert_eq!(version, 24);
+        assert_eq!(version, 25);
     }
 
     #[test]
@@ -1616,7 +1644,7 @@ mod tests {
             .unwrap();
         let version: i32 = conn.pragma_query_value(None, "user_version", |row| row.get(0)).unwrap();
         assert_eq!(chart_ids, vec![Some(10), Some(20), None, Some(99)]);
-        assert_eq!(version, 24);
+        assert_eq!(version, 25);
     }
 
     #[test]
