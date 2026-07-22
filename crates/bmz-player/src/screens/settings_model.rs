@@ -563,6 +563,14 @@ mod tests {
             item,
             SelectItem::Config(row) if row.entry_id == SettingsEntryId::ScratchInputMode
         )));
+        assert!(items.iter().any(|item| matches!(
+            item,
+            SelectItem::Config(row) if row.entry_id == SettingsEntryId::KeyboardReleaseBounceMs
+        )));
+        assert!(items.iter().any(|item| matches!(
+            item,
+            SelectItem::Config(row) if row.entry_id == SettingsEntryId::ControllerReleaseBounceMs
+        )));
     }
 
     #[test]

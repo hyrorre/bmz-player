@@ -741,6 +741,8 @@ pub fn default_profile_input() -> ProfileInputConfig {
         analog_scratch_timeout_ms: 500,
         analog_scratch_threshold: 100,
         analog_ticks_per_scroll: 3,
+        keyboard_release_bounce_ms: 0,
+        controller_release_bounce_ms: 0,
     }
 }
 
@@ -832,6 +834,8 @@ mod tests {
             analog_scratch_timeout_ms: 500,
             analog_scratch_threshold: 100,
             analog_ticks_per_scroll: 3,
+            keyboard_release_bounce_ms: 0,
+            controller_release_bounce_ms: 0,
         }
     }
 
@@ -867,6 +871,8 @@ mod tests {
             analog_scratch_timeout_ms: 500,
             analog_scratch_threshold: 100,
             analog_ticks_per_scroll: 3,
+            keyboard_release_bounce_ms: 0,
+            controller_release_bounce_ms: 0,
         };
         let bindings = resolve_play_bindings(&input, KeyMode::K10).unwrap();
         assert!(bindings.iter().any(|e| e.lane == Some(LaneConfig::Key8)));
@@ -977,6 +983,8 @@ mod tests {
             analog_scratch_timeout_ms: 500,
             analog_scratch_threshold: 100,
             analog_ticks_per_scroll: 3,
+            keyboard_release_bounce_ms: 0,
+            controller_release_bounce_ms: 0,
         };
         assert_eq!(
             validate_play_inherit_config(&input),

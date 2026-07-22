@@ -30,9 +30,10 @@ use crate::config::profile_config::{
     DoubleOptionConfig, FastSlowDisplayScope, GaugeAutoShiftConfig, GaugeTypeConfig,
     HISPEED_STEP_MAX, HISPEED_STEP_MIN, HispeedModeConfig, HsFixConfig, IrConfig,
     IrCredentialStoreConfig, IrProviderConfig, IrProviderRoleConfig, IrSendPolicyConfig,
-    JudgeAlgorithmConfig, LaneEffectConfig, ProfileConfig, RandomOptionConfig, ReplaySlotRule,
-    ScratchInputMode, SkinConfig, SkinHistoryEntryConfig, SkinOffsetConfig, TargetOptionConfig,
-    default_hispeed_step_fhs, default_hispeed_step_nhs, normalize_hispeed_step,
+    JudgeAlgorithmConfig, LaneEffectConfig, ProfileConfig, RELEASE_BOUNCE_MS_MAX,
+    RandomOptionConfig, ReplaySlotRule, ScratchInputMode, SkinConfig, SkinHistoryEntryConfig,
+    SkinOffsetConfig, TargetOptionConfig, default_hispeed_step_fhs, default_hispeed_step_nhs,
+    normalize_hispeed_step,
 };
 use crate::i18n::{AppLocale, FluentArgs, Localizer};
 use crate::ln_policy::LnPolicySetting;
@@ -4336,6 +4337,21 @@ fn build_profile_settings_panel(
                         egui::Slider::new(&mut profile.input.analog_scratch_threshold, 1..=1000)
                             .text(tr!(text, "profile-input-analog-stop-threshold")),
                     );
+                    ui.add(
+                        egui::Slider::new(
+                            &mut profile.input.keyboard_release_bounce_ms,
+                            0..=RELEASE_BOUNCE_MS_MAX,
+                        )
+                        .text(tr!(text, "profile-input-keyboard-release-bounce-ms")),
+                    );
+                    ui.add(
+                        egui::Slider::new(
+                            &mut profile.input.controller_release_bounce_ms,
+                            0..=RELEASE_BOUNCE_MS_MAX,
+                        )
+                        .text(tr!(text, "profile-input-controller-release-bounce-ms")),
+                    );
+                    ui.label(tr!(text, "profile-input-release-bounce-help"));
                     ui.label(tr!(text, "profile-input-key-bindings-help"));
                 });
 
@@ -6400,6 +6416,8 @@ mod tests {
         edited.judge.input_offset_us = 4_000;
         edited.lane.hispeed = 3.25;
         edited.input.analog_scratch_threshold = 321;
+        edited.input.keyboard_release_bounce_ms = 4;
+        edited.input.controller_release_bounce_ms = 7;
 
         restore_restricted_profile_settings(&mut edited, baseline.clone());
 
@@ -6409,6 +6427,8 @@ mod tests {
         assert_eq!(edited.judge.input_offset_us, 4_000);
         assert_eq!(edited.lane.hispeed, 3.25);
         assert_eq!(edited.input.analog_scratch_threshold, 321);
+        assert_eq!(edited.input.keyboard_release_bounce_ms, 4);
+        assert_eq!(edited.input.controller_release_bounce_ms, 7);
     }
     use std::fs;
     use std::sync::atomic::{AtomicU64, Ordering};

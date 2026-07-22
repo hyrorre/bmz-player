@@ -20,6 +20,7 @@ use bmz_core::lane::{KeyMode, LANE_COUNT, Lane};
 use bmz_core::time::TimeUs;
 use bmz_gameplay::input::backend::{DeviceId, DeviceInputEvent, InputBackend, PhysicalControl};
 use bmz_gameplay::input::binding::LaneBinding;
+use bmz_gameplay::input::bounce::{InputBounceConfig, InputBounceFilter};
 use bmz_gameplay::input::system::last_input_collection_diagnostics;
 use bmz_gameplay::result::PlayResult;
 use bmz_gameplay::score::{JudgeCounts, ScoreState};
@@ -74,7 +75,9 @@ use crate::config::key_config::{
     is_scratch_down_control, is_scratch_up_control,
 };
 use crate::config::load::load_profile_config;
-use crate::config::play::{TARGET_GREEN_NUMBER_MAX, TARGET_GREEN_NUMBER_MIN};
+use crate::config::play::{
+    TARGET_GREEN_NUMBER_MAX, TARGET_GREEN_NUMBER_MIN, input_bounce_config_from_profile,
+};
 use crate::config::profile_config::{
     AssistOptionConfig, BgaExpandConfig, BgaModeConfig, BottomShiftableGaugeConfig,
     DoubleOptionConfig, GaugeAutoShiftConfig, GaugeTypeConfig, HispeedDirectionConfig,
@@ -598,6 +601,8 @@ struct WinitApp {
     pressed_play_inputs: HashSet<(DeviceId, PhysicalControl)>,
     raw_input_pressed_keys: HashSet<PhysicalKey>,
     window_input_pressed_keys: HashSet<PhysicalKey>,
+    app_input_bounce_filter: InputBounceFilter,
+    raw_input_bounce_filter: InputBounceFilter,
     arrange_option: ArrangeOption,
     arrange_option_2p: ArrangeOption,
     target_option: TargetOption,
@@ -2877,6 +2882,8 @@ impl WinitApp {
             pressed_play_inputs: HashSet::new(),
             raw_input_pressed_keys: HashSet::new(),
             window_input_pressed_keys: HashSet::new(),
+            app_input_bounce_filter: InputBounceFilter::default(),
+            raw_input_bounce_filter: InputBounceFilter::default(),
             arrange_option,
             arrange_option_2p,
             target_option,
@@ -3091,6 +3098,12 @@ impl WinitApp {
         )
     }
 
+    fn filter_app_input_bounce(&mut self, event: DeviceInputEvent) -> Option<DeviceInputEvent> {
+        let config = input_bounce_config_from_profile(&self.boot.profile_config.input);
+        self.app_input_bounce_filter.set_config(config);
+        self.app_input_bounce_filter.accept(event)
+    }
+
     fn route_play_device_input(&mut self, event: DeviceInputEvent) {
         let Some(input) = self.play_input_backend() else {
             return;
@@ -3139,18 +3152,19 @@ impl WinitApp {
             if state == ElementState::Released {
                 self.raw_input_pressed_keys.remove(&physical_key);
             }
+            self.raw_input_bounce_filter.clear();
             return;
         }
+        let config = input_bounce_config_from_profile(&self.boot.profile_config.input);
         let gameplay_blocked = self.raw_input_gameplay_blocked();
-        let Some(repeat) = raw_input_key_state_transition(
+        if let Some(event) = filtered_raw_input_transition(
             &mut self.raw_input_pressed_keys,
-            &physical_key,
+            &mut self.raw_input_bounce_filter,
+            config,
+            physical_key,
             state,
             gameplay_blocked,
-        ) else {
-            return;
-        };
-        if let Some(event) = physical_key_to_device_input(physical_key, state, repeat) {
+        ) {
             self.route_play_device_input(event);
         }
     }
@@ -3160,6 +3174,7 @@ impl WinitApp {
         for event in events {
             self.route_play_device_input(event);
         }
+        self.raw_input_bounce_filter.clear();
     }
 
     fn release_window_input_pressed_keys(&mut self) {
@@ -3167,6 +3182,7 @@ impl WinitApp {
         for event in events {
             self.route_play_device_input(event);
         }
+        self.app_input_bounce_filter.clear();
     }
 
     fn ensure_window(&mut self, event_loop: &ActiveEventLoop) {
@@ -5063,6 +5079,12 @@ impl WinitApp {
     }
 
     fn route_keyboard_input(&mut self, event: &winit::event::KeyEvent) {
+        if !event.repeat
+            && let Some(device_event) = key_event_to_device_input(event)
+            && self.filter_app_input_bounce(device_event).is_none()
+        {
+            return;
+        }
         let play_control = (!event.repeat).then(|| physical_key_name(event.physical_key)).flatten();
         let play_physical_control = physical_key_to_control(event.physical_key);
         if let Some(control) = play_control.as_deref() {
@@ -5762,6 +5784,9 @@ impl WinitApp {
 
     fn route_gamepad_button_event(&mut self, event: &crate::input::gamepad::GamepadButtonEvent) {
         let device_event = crate::input::gamepad::to_device_input_event(event);
+        let Some(device_event) = self.filter_app_input_bounce(device_event) else {
+            return;
+        };
         self.route_play_device_input(device_event);
         self.route_gamepad_button(event.device_id, &event.name, event.pressed);
     }
@@ -16634,18 +16659,35 @@ fn keyboard_input_backend_for_config(config: &AppConfig) -> Option<KeyboardInput
     }
 }
 
-/// UI がゲーム入力をブロックしていても、ゲームへ渡したキーの Release は通す。
-fn raw_input_key_state_transition(
+/// UI がゲーム入力をブロックしていても、受理済みキーの Release は通す。
+/// バウンスとして抑制した Press は押下集合へ追加しない。
+fn filtered_raw_input_transition(
     pressed_keys: &mut HashSet<PhysicalKey>,
-    physical_key: &PhysicalKey,
+    bounce_filter: &mut InputBounceFilter,
+    bounce_config: InputBounceConfig,
+    physical_key: PhysicalKey,
     state: ElementState,
     gameplay_blocked: bool,
-) -> Option<bool> {
-    match state {
-        ElementState::Pressed if gameplay_blocked => None,
-        ElementState::Pressed => Some(!pressed_keys.insert(*physical_key)),
-        ElementState::Released => pressed_keys.remove(physical_key).then_some(false),
+) -> Option<DeviceInputEvent> {
+    let tracked = pressed_keys.contains(&physical_key);
+    if matches!(state, ElementState::Pressed) && (gameplay_blocked || tracked) {
+        return None;
     }
+    if matches!(state, ElementState::Released) && !tracked {
+        return None;
+    }
+    let event = physical_key_to_device_input(physical_key, state, false)?;
+    bounce_filter.set_config(bounce_config);
+    let event = bounce_filter.accept(event)?;
+    match state {
+        ElementState::Pressed => {
+            pressed_keys.insert(physical_key);
+        }
+        ElementState::Released => {
+            pressed_keys.remove(&physical_key);
+        }
+    }
+    Some(event)
 }
 
 fn raw_input_release_events(pressed_keys: &mut HashSet<PhysicalKey>) -> Vec<DeviceInputEvent> {
@@ -22762,21 +22804,97 @@ mod tests {
     fn raw_input_blocking_drops_new_presses_but_keeps_release_for_tracked_keys() {
         let key = PhysicalKey::Code(KeyCode::KeyZ);
         let mut pressed_keys = HashSet::new();
+        let mut bounce_filter = InputBounceFilter::default();
 
-        assert_eq!(
-            raw_input_key_state_transition(&mut pressed_keys, &key, ElementState::Pressed, false,),
-            Some(false)
-        );
-        assert_eq!(
-            raw_input_key_state_transition(&mut pressed_keys, &key, ElementState::Pressed, true),
-            None
+        let press = filtered_raw_input_transition(
+            &mut pressed_keys,
+            &mut bounce_filter,
+            InputBounceConfig::default(),
+            key,
+            ElementState::Pressed,
+            false,
+        )
+        .unwrap();
+        assert_eq!(press.kind, InputKind::Press);
+        assert!(
+            filtered_raw_input_transition(
+                &mut pressed_keys,
+                &mut bounce_filter,
+                InputBounceConfig::default(),
+                key,
+                ElementState::Pressed,
+                true,
+            )
+            .is_none()
         );
         assert!(pressed_keys.contains(&key));
-        assert_eq!(
-            raw_input_key_state_transition(&mut pressed_keys, &key, ElementState::Released, true),
-            Some(false)
-        );
+        let release = filtered_raw_input_transition(
+            &mut pressed_keys,
+            &mut bounce_filter,
+            InputBounceConfig::default(),
+            key,
+            ElementState::Released,
+            true,
+        )
+        .unwrap();
+        assert_eq!(release.kind, InputKind::Release);
         assert!(pressed_keys.is_empty());
+    }
+
+    #[test]
+    fn raw_input_bounce_press_does_not_restore_pressed_state() {
+        let key = PhysicalKey::Code(KeyCode::KeyZ);
+        let config =
+            InputBounceConfig { keyboard_threshold_us: 1_000_000, controller_threshold_us: 0 };
+        let mut pressed_keys = HashSet::new();
+        let mut bounce_filter = InputBounceFilter::default();
+
+        assert!(
+            filtered_raw_input_transition(
+                &mut pressed_keys,
+                &mut bounce_filter,
+                config,
+                key,
+                ElementState::Pressed,
+                false,
+            )
+            .is_some()
+        );
+        assert!(
+            filtered_raw_input_transition(
+                &mut pressed_keys,
+                &mut bounce_filter,
+                config,
+                key,
+                ElementState::Released,
+                false,
+            )
+            .is_some()
+        );
+        assert!(
+            filtered_raw_input_transition(
+                &mut pressed_keys,
+                &mut bounce_filter,
+                config,
+                key,
+                ElementState::Pressed,
+                false,
+            )
+            .is_none()
+        );
+
+        assert!(pressed_keys.is_empty());
+        assert!(
+            filtered_raw_input_transition(
+                &mut pressed_keys,
+                &mut bounce_filter,
+                config,
+                key,
+                ElementState::Released,
+                false,
+            )
+            .is_none()
+        );
     }
 
     #[test]

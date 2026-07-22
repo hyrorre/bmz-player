@@ -3,6 +3,7 @@ use std::cell::Cell;
 use bmz_core::input::InputEvent;
 
 use super::backend::{DeviceInputEvent, DeviceTimestamp, InputBackend};
+use super::bounce::InputBounceFilter;
 use super::translator::{InputTimingContext, InputTranslator};
 
 thread_local! {
@@ -41,6 +42,7 @@ impl InputCollectionDiagnostics {
 pub struct InputSystem {
     pub backend: Box<dyn InputBackend>,
     pub translator: Box<dyn InputTranslator>,
+    pub bounce_filter: InputBounceFilter,
 }
 
 impl InputSystem {
@@ -48,6 +50,10 @@ impl InputSystem {
         self.backend.update();
         let events = self.backend.drain_events();
         let mut diagnostics = input_collection_diagnostics(&events, ctx);
+        let events = events
+            .into_iter()
+            .filter_map(|event| self.bounce_filter.accept(event))
+            .collect::<Vec<_>>();
         let inputs = events
             .into_iter()
             .filter_map(|event| self.translator.translate(event, ctx))
@@ -214,6 +220,7 @@ mod tests {
                     }],
                 },
             }),
+            bounce_filter: Default::default(),
         };
 
         let inputs = system.collect_game_inputs(&ctx);

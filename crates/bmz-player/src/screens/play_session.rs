@@ -22,6 +22,7 @@ use bmz_gameplay::gauge::{
 };
 use bmz_gameplay::hit_error::HitErrorRing;
 use bmz_gameplay::input::backend::{InputBackend, NullInputBackend};
+use bmz_gameplay::input::bounce::InputBounceFilter;
 use bmz_gameplay::input::system::InputSystem;
 use bmz_gameplay::input::translator::DefaultInputTranslator;
 use bmz_gameplay::judge::engine::JudgeEngine;
@@ -40,8 +41,8 @@ use std::sync::Arc;
 
 use crate::config::play::{
     audio_mix_from_profile, bottom_shiftable_gauge_from_config, gauge_auto_shift_from_config,
-    gauge_type_from_config, lane_binding_for_chart_with_slots, lane_unit_to_f32,
-    play_offsets_from_profile,
+    gauge_type_from_config, input_bounce_config_from_profile, lane_binding_for_chart_with_slots,
+    lane_unit_to_f32, play_offsets_from_profile,
 };
 use crate::config::profile_config::{
     BgaExpandConfig, BgaModeConfig, JudgeAlgorithmConfig, LaneEffectConfig, ProfileConfig,
@@ -427,6 +428,7 @@ pub fn build_game_session_with_input_backend(
                 options.gamepad_slots,
             ),
         }),
+        bounce_filter: InputBounceFilter::new(input_bounce_config_from_profile(&profile.input)),
     };
 
     let timing_map = bmz_chart::timing::TimingMap::from_chart_timing_events(
@@ -2318,6 +2320,24 @@ mod tests {
 
         assert!(session.input_offset_auto_adjust_enabled);
         assert!(session.input_offset_auto_adjust.is_some());
+    }
+
+    #[test]
+    fn build_game_session_uses_release_bounce_settings_from_profile() {
+        let mut profile = ProfileConfig::new_default("default", "Default", 1);
+        profile.input.keyboard_release_bounce_ms = 3;
+        profile.input.controller_release_bounce_ms = 8;
+
+        let session =
+            build_game_session(Arc::new(chart()), &profile, PlaySessionOptions::default());
+
+        assert_eq!(
+            session.input_system.bounce_filter.config(),
+            bmz_gameplay::input::bounce::InputBounceConfig {
+                keyboard_threshold_us: 3_000,
+                controller_threshold_us: 8_000,
+            }
+        );
     }
 
     #[test]

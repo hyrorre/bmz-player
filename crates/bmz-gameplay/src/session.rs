@@ -1847,6 +1847,7 @@ mod tests {
                     }],
                 },
             }),
+            bounce_filter: Default::default(),
         };
         session.replay_player = Some(crate::replay::ReplayPlayer::default());
         session.autoplay = None;
@@ -1890,6 +1891,7 @@ mod tests {
                     }],
                 },
             }),
+            bounce_filter: Default::default(),
         };
         let mut audio = TestAudio::default();
 
@@ -2087,6 +2089,7 @@ mod tests {
                     }],
                 },
             }),
+            bounce_filter: Default::default(),
         };
 
         let judgements = process_human_inputs(&mut session);
@@ -2124,6 +2127,7 @@ mod tests {
                     }],
                 },
             }),
+            bounce_filter: Default::default(),
         };
 
         drain_pre_ready_visual_inputs(&mut session, TimeUs(2_000_000));
@@ -2161,6 +2165,7 @@ mod tests {
                     }],
                 },
             }),
+            bounce_filter: Default::default(),
         };
 
         drain_pre_ready_visual_inputs(&mut session, TimeUs(2_000_000));
@@ -2199,6 +2204,7 @@ mod tests {
                     }],
                 },
             }),
+            bounce_filter: Default::default(),
         };
 
         drain_pre_ready_visual_inputs(&mut session, TimeUs(2_000_000));
@@ -2327,6 +2333,7 @@ mod tests {
                 translator: Box::new(DefaultInputTranslator {
                     binding: LaneBinding { entries: Vec::new() },
                 }),
+                bounce_filter: Default::default(),
             },
             judge: JudgeEngine::new(JudgeWindow::symmetric(
                 16_000, 40_000, 80_000, 120_000, 500_000, 200_000, 16_000,

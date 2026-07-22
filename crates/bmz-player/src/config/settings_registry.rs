@@ -3,9 +3,9 @@ use super::profile_config::{
     AssistOptionConfig, BgaExpandConfig, BgaModeConfig, BottomShiftableGaugeConfig,
     DoubleOptionConfig, GaugeAutoShiftConfig, GaugeTypeConfig, HISPEED_STEP_MAX, HISPEED_STEP_MIN,
     HispeedDirectionConfig, HispeedModeConfig, HsFixConfig, JudgeAlgorithmConfig, LaneConfig,
-    LaneEffectConfig, ProfileConfig, RandomOptionConfig, ReplaySlotRule, ScratchInputMode,
-    SelectInputModeConfig, TargetOptionConfig, default_hispeed_step_fhs, default_hispeed_step_nhs,
-    normalize_hispeed_step,
+    LaneEffectConfig, ProfileConfig, RELEASE_BOUNCE_MS_MAX, RandomOptionConfig, ReplaySlotRule,
+    ScratchInputMode, SelectInputModeConfig, TargetOptionConfig, default_hispeed_step_fhs,
+    default_hispeed_step_nhs, normalize_hispeed_step,
 };
 use bmz_core::lane::KeyMode;
 use bmz_gameplay::rule::RuleMode;
@@ -58,6 +58,8 @@ pub enum SettingsEntryId {
     AnalogScratchSensitivity,
     AnalogScratchThreshold,
     AnalogTicksPerScroll,
+    KeyboardReleaseBounceMs,
+    ControllerReleaseBounceMs,
     Hispeed8Key1,
     Hispeed8Key2,
     Hispeed8Key3,
@@ -130,6 +132,8 @@ impl SettingsEntryId {
         Self::AnalogScratchSensitivity,
         Self::AnalogScratchThreshold,
         Self::AnalogTicksPerScroll,
+        Self::KeyboardReleaseBounceMs,
+        Self::ControllerReleaseBounceMs,
     ];
 
     pub const SELECT_ENTRIES: &'static [Self] = &[Self::SelectRandomSelect];
@@ -197,6 +201,8 @@ impl SettingsEntryId {
             Self::AnalogScratchSensitivity => "ANALOG SENS",
             Self::AnalogScratchThreshold => "ANALOG STOP",
             Self::AnalogTicksPerScroll => "ANALOG SCROLL",
+            Self::KeyboardReleaseBounceMs => "KEYBOARD BOUNCE",
+            Self::ControllerReleaseBounceMs => "CONTROLLER BOUNCE",
             Self::Hispeed8Key1 => "KEY 1 HS DIRECTION",
             Self::Hispeed8Key2 => "KEY 2 HS DIRECTION",
             Self::Hispeed8Key3 => "KEY 3 HS DIRECTION",
@@ -292,6 +298,12 @@ pub fn format_settings_value(profile: &ProfileConfig, id: SettingsEntryId) -> St
         }
         SettingsEntryId::AnalogTicksPerScroll => {
             format!("{} ticks", profile.input.analog_ticks_per_scroll)
+        }
+        SettingsEntryId::KeyboardReleaseBounceMs => {
+            format!("{} ms", profile.input.keyboard_release_bounce_ms)
+        }
+        SettingsEntryId::ControllerReleaseBounceMs => {
+            format!("{} ms", profile.input.controller_release_bounce_ms)
         }
         id @ (SettingsEntryId::Hispeed8Key1
         | SettingsEntryId::Hispeed8Key2
@@ -495,6 +507,18 @@ pub fn adjust_settings_value(profile: &mut ProfileConfig, id: SettingsEntryId, d
         SettingsEntryId::AnalogTicksPerScroll => {
             adjust_u32(&mut profile.input.analog_ticks_per_scroll, delta, 1, 100)
         }
+        SettingsEntryId::KeyboardReleaseBounceMs => adjust_u32(
+            &mut profile.input.keyboard_release_bounce_ms,
+            delta,
+            0,
+            RELEASE_BOUNCE_MS_MAX,
+        ),
+        SettingsEntryId::ControllerReleaseBounceMs => adjust_u32(
+            &mut profile.input.controller_release_bounce_ms,
+            delta,
+            0,
+            RELEASE_BOUNCE_MS_MAX,
+        ),
         id @ (SettingsEntryId::Hispeed8Key1
         | SettingsEntryId::Hispeed8Key2
         | SettingsEntryId::Hispeed8Key3
@@ -1164,6 +1188,21 @@ mod tests {
             format_settings_value(&profile, SettingsEntryId::AnalogScratchThreshold),
             "1000 ticks"
         );
+
+        assert!(adjust_settings_value(&mut profile, SettingsEntryId::KeyboardReleaseBounceMs, 5,));
+        assert_eq!(profile.input.keyboard_release_bounce_ms, 5);
+        assert_eq!(
+            format_settings_value(&profile, SettingsEntryId::KeyboardReleaseBounceMs),
+            "5 ms"
+        );
+
+        profile.input.controller_release_bounce_ms = RELEASE_BOUNCE_MS_MAX;
+        assert!(!adjust_settings_value(
+            &mut profile,
+            SettingsEntryId::ControllerReleaseBounceMs,
+            1,
+        ));
+        assert_eq!(profile.input.controller_release_bounce_ms, RELEASE_BOUNCE_MS_MAX);
     }
 
     #[test]

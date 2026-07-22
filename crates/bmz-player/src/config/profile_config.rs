@@ -466,7 +466,20 @@ pub struct ProfileInputConfig {
     /// 選曲画面でアナログスクラッチ何 tick ごとにカーソルを 1 つ動かすか (beatoraja の analogTicksPerScroll)。
     #[serde(default = "default_analog_ticks_per_scroll")]
     pub analog_ticks_per_scroll: u32,
+    /// Release 直後に同じキーボードキーから届く Press を無視する時間。
+    ///
+    /// 0 はフィルタ無効。物理スイッチの Release 側チャタリングを対象とし、
+    /// Press 自体や Release の判定時刻は遅延させない。
+    #[serde(default = "default_keyboard_release_bounce_ms")]
+    pub keyboard_release_bounce_ms: u32,
+    /// Release 直後に同じコントローラーボタンから届く Press を無視する時間。
+    ///
+    /// 0 はフィルタ無効。
+    #[serde(default = "default_controller_release_bounce_ms")]
+    pub controller_release_bounce_ms: u32,
 }
+
+pub const RELEASE_BOUNCE_MS_MAX: u32 = 20;
 
 fn default_analog_scratch_sensitivity() -> f32 {
     1.0
@@ -482,6 +495,14 @@ pub fn default_analog_scratch_threshold() -> u32 {
 
 fn default_analog_ticks_per_scroll() -> u32 {
     3
+}
+
+fn default_keyboard_release_bounce_ms() -> u32 {
+    0
+}
+
+fn default_controller_release_bounce_ms() -> u32 {
+    0
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1818,6 +1839,8 @@ mod tests {
         assert_eq!(input.legacy_bindings[0].lane, Some(LaneConfig::Key1));
         assert_eq!(input.analog_scratch_timeout_ms, 500);
         assert_eq!(input.analog_scratch_threshold, default_analog_scratch_threshold());
+        assert_eq!(input.keyboard_release_bounce_ms, 0);
+        assert_eq!(input.controller_release_bounce_ms, 0);
     }
 
     #[test]
@@ -1829,12 +1852,27 @@ mod tests {
         assert!(!toml.contains("start_key"));
         assert!(!toml.contains("analog_scratch_timeout_ms"));
         assert!(toml.contains("analog_scratch_threshold = 100"));
+        assert!(toml.contains("keyboard_release_bounce_ms = 0"));
+        assert!(toml.contains("controller_release_bounce_ms = 0"));
         assert!(toml.contains("action = \"E1\""));
         assert!(toml.contains("action = \"E2\""));
         assert!(toml.contains("action = \"E3\""));
         assert!(toml.contains("action = \"E4\""));
         assert!(toml.contains("control = \"Axis1+\"\nlane = \"Scratch\"\nscratch = \"up\""));
         assert!(toml.contains("control = \"Axis1-\"\nlane = \"Scratch\"\nscratch = \"down\""));
+    }
+
+    #[test]
+    fn input_release_bounce_settings_roundtrip_through_toml() {
+        let mut input = crate::config::play_input::default_profile_input();
+        input.keyboard_release_bounce_ms = 3;
+        input.controller_release_bounce_ms = 8;
+
+        let toml = toml::to_string(&input).unwrap();
+        let decoded: ProfileInputConfig = toml::from_str(&toml).unwrap();
+
+        assert_eq!(decoded.keyboard_release_bounce_ms, 3);
+        assert_eq!(decoded.controller_release_bounce_ms, 8);
     }
 
     #[test]

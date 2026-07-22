@@ -350,6 +350,12 @@ impl SettingsEditSession {
             SettingsEntryId::AnalogTicksPerScroll => {
                 SettingsBaseline::U32(profile.input.analog_ticks_per_scroll)
             }
+            SettingsEntryId::KeyboardReleaseBounceMs => {
+                SettingsBaseline::U32(profile.input.keyboard_release_bounce_ms)
+            }
+            SettingsEntryId::ControllerReleaseBounceMs => {
+                SettingsBaseline::U32(profile.input.controller_release_bounce_ms)
+            }
             id @ (SettingsEntryId::Hispeed8Key1
             | SettingsEntryId::Hispeed8Key2
             | SettingsEntryId::Hispeed8Key3
@@ -519,6 +525,12 @@ impl SettingsEditSession {
             (SettingsEntryId::AnalogTicksPerScroll, SettingsBaseline::U32(value)) => {
                 profile.input.analog_ticks_per_scroll = *value;
             }
+            (SettingsEntryId::KeyboardReleaseBounceMs, SettingsBaseline::U32(value)) => {
+                profile.input.keyboard_release_bounce_ms = *value;
+            }
+            (SettingsEntryId::ControllerReleaseBounceMs, SettingsBaseline::U32(value)) => {
+                profile.input.controller_release_bounce_ms = *value;
+            }
             (
                 id @ (SettingsEntryId::Hispeed8Key1
                 | SettingsEntryId::Hispeed8Key2
@@ -659,6 +671,12 @@ mod tests {
         profile.input.scratch_mode = ScratchInputMode::AnyDirection;
         scratch_session.restore(&mut profile);
         assert_eq!(profile.input.scratch_mode, ScratchInputMode::Normal);
+
+        let controller_bounce_session =
+            SettingsEditSession::capture(&profile, SettingsEntryId::ControllerReleaseBounceMs);
+        profile.input.controller_release_bounce_ms = 12;
+        controller_bounce_session.restore(&mut profile);
+        assert_eq!(profile.input.controller_release_bounce_ms, 0);
 
         let replay_session =
             SettingsEditSession::capture(&profile, SettingsEntryId::ReplaySlot2Rule);

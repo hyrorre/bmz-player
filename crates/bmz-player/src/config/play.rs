@@ -2,6 +2,7 @@ use bmz_core::clear::GaugeType;
 use bmz_core::lane::{KeyMode, Lane};
 use bmz_gameplay::gauge::GaugeAutoShiftMode;
 use bmz_gameplay::input::binding::LaneBinding;
+use bmz_gameplay::input::bounce::InputBounceConfig;
 use bmz_gameplay::judge::model::JudgeWindow;
 use bmz_gameplay::session::{PlayAudioMix, PlayOffsets};
 
@@ -30,6 +31,13 @@ pub fn play_offsets_from_profile(profile: &ProfileConfig) -> PlayOffsets {
     PlayOffsets {
         input_offset_us: profile.judge.input_offset_us,
         visual_offset_us: profile.judge.visual_offset_us,
+    }
+}
+
+pub fn input_bounce_config_from_profile(input: &ProfileInputConfig) -> InputBounceConfig {
+    InputBounceConfig {
+        keyboard_threshold_us: u64::from(input.keyboard_release_bounce_ms) * 1_000,
+        controller_threshold_us: u64::from(input.controller_release_bounce_ms) * 1_000,
     }
 }
 

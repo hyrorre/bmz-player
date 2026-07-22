@@ -1059,6 +1059,7 @@ mod tests {
                 translator: Box::new(DefaultInputTranslator {
                     binding: LaneBinding { entries: Vec::new() },
                 }),
+                bounce_filter: Default::default(),
             },
             judge: JudgeEngine::new(DEFAULT_JUDGE_WINDOW),
             base_judge_window: DEFAULT_JUDGE_WINDOW,
