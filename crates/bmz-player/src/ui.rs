@@ -43,6 +43,7 @@ use crate::screens::course_session::CourseResultSummary;
 use crate::screens::select_model::SelectCourseRow;
 use crate::skin_loader::RANDOM_FILE_SELECTION;
 use crate::songs_cmd::add_song_root_entry;
+use crate::storage::difficulty_table_db::DifficultyTableRecord;
 use crate::storage::score_import::{ScoreImportKind, ScoreImportRequest};
 use crate::update::{UpdateAssetKind, UpdateCandidate, current_version};
 use crate::window_config::monitor_config_name;
@@ -293,6 +294,8 @@ pub struct EguiRunContext<'a, 'practice> {
     pub result_ir: Option<&'a mut crate::screens::result_ir::ResultIrState>,
     pub profile_root: &'a Path,
     pub app_paths: &'a AppPaths,
+    /// 取得済み難易度表のメタデータ。設定済み URL の表示名解決に使う。
+    pub difficulty_tables: &'a [DifficultyTableRecord],
     pub update_dialog: Option<UpdateDialog<'a>>,
     pub obs_connection_status: &'a crate::obs::ObsConnectionStatus,
     /// 接続中ゲームパッド一覧 (gilrs)。未初期化時は空。
@@ -782,6 +785,7 @@ impl EguiLayer {
             mut result_ir,
             profile_root,
             app_paths,
+            difficulty_tables,
             update_dialog,
             obs_connection_status,
             connected_gamepads,
@@ -880,6 +884,7 @@ impl EguiLayer {
                     profile_config,
                     show_fps,
                     settings_editable,
+                    difficulty_tables,
                     SettingsPanelState {
                         new_root_path: &mut self.settings_new_root_path,
                         add_root_error: &mut self.settings_add_root_error,
@@ -2082,6 +2087,7 @@ fn build_settings_panel(
     profile: &mut ProfileConfig,
     show_fps: &mut bool,
     editable: bool,
+    difficulty_tables: &[DifficultyTableRecord],
     state: SettingsPanelState<'_>,
 ) -> SettingsPanelActions {
     let mut save_clicked = false;
@@ -2297,6 +2303,8 @@ fn build_settings_panel(
                     let table_len = config.tables.sources.len();
                     for (index, source) in config.tables.sources.iter_mut().enumerate() {
                         ui.push_id(("table_source", index), |ui| {
+                            let source_label =
+                                difficulty_table_source_label(&source.url, difficulty_tables);
                             let label_width = (ui.available_width()
                                 - SETTINGS_TABLE_LIST_BUTTONS_WIDTH
                                 - SETTINGS_TABLE_ENABLED_WIDTH
@@ -2318,7 +2326,7 @@ fn build_settings_panel(
                                             egui::Checkbox::new(&mut source.enabled, "有効"),
                                         );
                                         settings_drag_handle(ui, payload);
-                                        settings_list_label(ui, &source.url, label_width);
+                                        settings_list_label(ui, &source_label, label_width);
                                         ui.with_layout(
                                             egui::Layout::right_to_left(egui::Align::Center),
                                             |ui| {
@@ -2363,7 +2371,7 @@ fn build_settings_panel(
                                 settings_drag_ghost(
                                     ui.ctx(),
                                     egui::Id::new(("settings_table_source_ghost", index)),
-                                    &source.url,
+                                    &source_label,
                                     label_width,
                                     false,
                                 );
@@ -3065,6 +3073,17 @@ fn build_settings_panel(
         score_import_request,
         apply_audio,
     }
+}
+
+fn difficulty_table_source_label(
+    source_url: &str,
+    difficulty_tables: &[DifficultyTableRecord],
+) -> String {
+    difficulty_tables
+        .iter()
+        .find(|table| table.source_url == source_url && !table.name.trim().is_empty())
+        .map(|table| format!("{} ({source_url})", table.name))
+        .unwrap_or_else(|| source_url.to_string())
 }
 
 fn build_obs_settings_section(
@@ -5698,6 +5717,31 @@ mod tests {
         assert!(scene_restricts_settings("Decide"));
         assert!(scene_restricts_settings("Play"));
         assert!(!scene_restricts_settings("Result"));
+    }
+
+    #[test]
+    fn difficulty_table_source_label_shows_fetched_table_name() {
+        let tables = vec![DifficultyTableRecord {
+            id: 1,
+            source_url: "https://example.com/header.json".to_string(),
+            name: "発狂BMS難易度表".to_string(),
+            symbol: "★".to_string(),
+            level_order: vec!["1".to_string()],
+            fetched_at: 1_700_000_000,
+        }];
+
+        assert_eq!(
+            difficulty_table_source_label("https://example.com/header.json", &tables),
+            "発狂BMS難易度表 (https://example.com/header.json)"
+        );
+    }
+
+    #[test]
+    fn difficulty_table_source_label_keeps_url_before_first_fetch() {
+        assert_eq!(
+            difficulty_table_source_label("https://example.com/header.json", &[]),
+            "https://example.com/header.json"
+        );
     }
 
     #[test]

@@ -551,6 +551,7 @@ struct WinitApp {
     play_table_text_fallback: String,
     select_items: Vec<SelectItem>,
     select_distribution_cache: RefCell<HashMap<i64, Vec<ChartDistributionSecond>>>,
+    difficulty_tables: Vec<DifficultyTableRecord>,
     table_breadcrumb_cache: RefCell<HashMap<String, TableBreadcrumb>>,
     select_folder_summary_cache: HashMap<String, SelectFolderSummaryCacheEntry>,
     select_folder_summary_tx: mpsc::Sender<SelectFolderSummaryResult>,
@@ -2784,6 +2785,13 @@ impl WinitApp {
                 &boot.profile_config.display_name,
             ),
         );
+        let difficulty_tables = match boot.library_db.list_difficulty_tables() {
+            Ok(tables) => tables,
+            Err(error) => {
+                tracing::warn!(%error, "failed to list difficulty tables for egui");
+                Vec::new()
+            }
+        };
 
         let mut app = Self {
             boot,
@@ -2823,6 +2831,7 @@ impl WinitApp {
             play_table_text_fallback: String::new(),
             select_items,
             select_distribution_cache: RefCell::new(HashMap::new()),
+            difficulty_tables,
             table_breadcrumb_cache: RefCell::new(HashMap::new()),
             select_folder_summary_cache: HashMap::new(),
             select_folder_summary_tx,
@@ -3581,17 +3590,14 @@ impl WinitApp {
             return cached.clone();
         }
 
-        let mut cache = self.table_breadcrumb_cache.borrow_mut();
-        if let Ok(tables) = self.boot.library_db.list_difficulty_tables() {
-            for table in tables {
-                cache.insert(table.source_url.clone(), table_breadcrumb_from_record(&table));
-            }
-        }
-
-        cache
-            .entry(source_url.to_string())
-            .or_insert_with(|| Self::fallback_table_breadcrumb(source_url))
-            .clone()
+        let breadcrumb = self
+            .difficulty_tables
+            .iter()
+            .find(|table| table.source_url == source_url)
+            .map(table_breadcrumb_from_record)
+            .unwrap_or_else(|| Self::fallback_table_breadcrumb(source_url));
+        self.table_breadcrumb_cache.borrow_mut().insert(source_url.to_string(), breadcrumb.clone());
+        breadcrumb
     }
 
     /// 難易度表のパンくず表示名。テーブルが既知なら表名、
@@ -11795,6 +11801,12 @@ impl WinitApp {
             Ok(Ok(())) => {
                 tracing::info!("table fetch complete");
                 self.pending_table_fetch = None;
+                match self.boot.library_db.list_difficulty_tables() {
+                    Ok(tables) => self.difficulty_tables = tables,
+                    Err(error) => {
+                        tracing::warn!(%error, "failed to refresh difficulty table metadata")
+                    }
+                }
                 self.table_breadcrumb_cache.borrow_mut().clear();
                 self.reload_select_items();
             }
@@ -13580,6 +13592,7 @@ impl WinitApp {
                 result_ir: result_ir_panel,
                 profile_root: &self.boot.profile_paths.root_dir,
                 app_paths: &self.boot.app_paths,
+                difficulty_tables: &self.difficulty_tables,
                 log_buffer: &self.log_buffer,
                 update_dialog,
                 obs_connection_status: &obs_connection_status,
