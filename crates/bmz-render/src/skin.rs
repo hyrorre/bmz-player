@@ -2296,6 +2296,9 @@ pub enum SkinPhase {
 pub enum BlendMode {
     Normal,
     Add,
+    /// 透明な render target へ通常 alpha 合成済みの offscreen texture 用。
+    /// RGB は premultiplied 済みなので、再合成時に source alpha を掛け直さない。
+    Premultiplied,
     /// BGA Layer/Layer2 の黒クロマキー描画。
     /// beatoraja の `layer.frag` 相当: RGB(0,0,0) ピクセルを α=0 として描画する。
     LayerMask,
@@ -10638,19 +10641,15 @@ fn gaugegraph_colors(
     } else {
         gaugegraph_explicit_color_strings(graph)
     };
+    let with_frame_alpha = |value: &str, fallback: Color| {
+        let color = skin_hex_color(value).unwrap_or(fallback);
+        color.with_alpha(color.a * frame_alpha)
+    };
     GaugeGraphColors {
-        border_line: skin_hex_color(&colors[color_index][0])
-            .unwrap_or(Color::rgb(0.0, 0.0, 0.0))
-            .with_alpha(frame_alpha),
-        border_bg: skin_hex_color(&colors[color_index][1])
-            .unwrap_or(Color::rgb(0.0, 0.0, 0.0))
-            .with_alpha(frame_alpha),
-        graph_line: skin_hex_color(&colors[color_index][2])
-            .unwrap_or(Color::rgb(0.0, 0.0, 0.0))
-            .with_alpha(frame_alpha),
-        graph_bg: skin_hex_color(&colors[color_index][3])
-            .unwrap_or(Color::rgb(0.0, 0.0, 0.0))
-            .with_alpha(frame_alpha),
+        border_line: with_frame_alpha(&colors[color_index][0], Color::rgb(0.0, 0.0, 0.0)),
+        border_bg: with_frame_alpha(&colors[color_index][1], Color::rgb(0.0, 0.0, 0.0)),
+        graph_line: with_frame_alpha(&colors[color_index][2], Color::rgb(0.0, 0.0, 0.0)),
+        graph_bg: with_frame_alpha(&colors[color_index][3], Color::rgb(0.0, 0.0, 0.0)),
     }
 }
 
@@ -25540,6 +25539,25 @@ mod tests {
         assert!((gaugegraph_sample_ratio(1, 3) - (1.0 / 3.0)).abs() < 1e-6);
         assert!((gaugegraph_sample_ratio(2, 3) - (2.0 / 3.0)).abs() < 1e-6);
         assert_eq!(gaugegraph_sample_ratio(0, 0), 0.0);
+    }
+
+    #[test]
+    fn result_gaugegraph_multiplies_color_alpha_by_destination_alpha() {
+        let graph: SkinGaugeGraphDef = serde_json::from_str(
+            r#"{
+                "id":"graph",
+                "color":["11223380","445566","77889940","AABBCC"]
+            }"#,
+        )
+        .unwrap();
+        let frame_alpha = 200.0 / 255.0;
+
+        let colors = gaugegraph_colors(&graph, 0, frame_alpha);
+
+        assert!((colors.border_line.a - (128.0 / 255.0) * frame_alpha).abs() < 1e-6);
+        assert!((colors.border_bg.a - frame_alpha).abs() < 1e-6);
+        assert!((colors.graph_line.a - (64.0 / 255.0) * frame_alpha).abs() < 1e-6);
+        assert!((colors.graph_bg.a - frame_alpha).abs() < 1e-6);
     }
 
     #[test]

@@ -3175,7 +3175,7 @@ mod tests {
     fn result_plan_uses_skin_document_for_result_and_course_result_types() {
         use crate::scene::ResultSnapshot;
         use crate::skin::SkinTextureId;
-        use crate::snapshot::FastSlowJudgeCounts;
+        use crate::snapshot::{FastSlowJudgeCounts, ResultGaugeGraphPoint, ResultGraphSnapshot};
         use bmz_core::clear::ClearType;
 
         for skin_type in [7, 15] {
@@ -3186,8 +3186,10 @@ mod tests {
                 "h": 100,
                 "source": [{"id": 1, "path": "x.png"}],
                 "image": [{"id": "logo", "src": 1, "x": 0, "y": 0, "w": 8, "h": 8}],
+                "gaugegraph": [{"id": "graph"}],
                 "destination": [
-                    {"id": "logo", "dst": [{"x": 0, "y": 0, "w": 8, "h": 8}]}
+                    {"id": "logo", "dst": [{"x": 0, "y": 0, "w": 8, "h": 8}]},
+                    {"id": "graph", "dst": [{"x": 0, "y": 8, "w": 100, "h": 80}]}
                 ]
             }"#
             .replace("__TYPE__", &skin_type.to_string());
@@ -3254,7 +3256,7 @@ mod tests {
                 previous_best_max_combo: None,
                 previous_best_bp: None,
                 target_clear_type: None,
-                elapsed_time: TimeUs(0),
+                elapsed_time: TimeUs(1_500_000),
                 fadeout_elapsed: None,
                 title: String::new(),
                 subtitle: String::new(),
@@ -3270,7 +3272,25 @@ mod tests {
                 stagefile_image_size: None,
                 course_titles: Default::default(),
                 course_result: Default::default(),
-                graph: std::sync::Arc::new(crate::snapshot::ResultGraphSnapshot::default()),
+                graph: std::sync::Arc::new(ResultGraphSnapshot {
+                    gauge_points: vec![
+                        ResultGaugeGraphPoint {
+                            value: 20.0,
+                            max: 100.0,
+                            border: 80.0,
+                            gauge_type: bmz_core::clear::GaugeType::Normal as i32,
+                            ..Default::default()
+                        },
+                        ResultGaugeGraphPoint {
+                            value: 80.0,
+                            max: 100.0,
+                            border: 80.0,
+                            gauge_type: bmz_core::clear::GaugeType::Normal as i32,
+                            ..Default::default()
+                        },
+                    ],
+                    ..Default::default()
+                }),
                 overlay: crate::snapshot::OverlaySnapshot::default(),
                 ir: crate::scene::ResultIrSnapshot::default(),
                 player_stats: crate::scene::PlayerStatsSnapshot::default(),
@@ -3286,6 +3306,12 @@ mod tests {
                 command,
                 DrawCommand::Image { texture, .. } if *texture == TextureId(99)
             )));
+            assert!(
+                plan.commands.iter().any(|command| matches!(
+                    command,
+                    DrawCommand::RectBatch { cache: Some(_), .. }
+                ))
+            );
         }
     }
 

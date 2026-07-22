@@ -370,6 +370,7 @@ struct WgpuRenderer {
     rect_buffer_capacity: usize,
     image_pipeline: wgpu::RenderPipeline,
     image_add_pipeline: wgpu::RenderPipeline,
+    image_premultiplied_pipeline: wgpu::RenderPipeline,
     image_layer_pipeline: wgpu::RenderPipeline,
     image_bind_group_layout: wgpu::BindGroupLayout,
     image_sampler: wgpu::Sampler,
@@ -1378,6 +1379,12 @@ impl WgpuRenderer {
         );
         let image_add_pipeline =
             create_image_pipeline(&device, config.format, &image_bind_group_layout, BlendMode::Add);
+        let image_premultiplied_pipeline = create_image_pipeline(
+            &device,
+            config.format,
+            &image_bind_group_layout,
+            BlendMode::Premultiplied,
+        );
         let image_layer_pipeline = create_image_pipeline(
             &device,
             config.format,
@@ -1400,6 +1407,7 @@ impl WgpuRenderer {
             rect_buffer_capacity: 0,
             image_pipeline,
             image_add_pipeline,
+            image_premultiplied_pipeline,
             image_layer_pipeline,
             image_bind_group_layout,
             image_sampler,
@@ -1718,6 +1726,7 @@ impl WgpuRenderer {
                         pass.set_pipeline(match blend {
                             BlendMode::Normal => &self.image_pipeline,
                             BlendMode::Add => &self.image_add_pipeline,
+                            BlendMode::Premultiplied => &self.image_premultiplied_pipeline,
                             BlendMode::LayerMask => &self.image_layer_pipeline,
                         });
                         pass.set_bind_group(0, bind_group, &[]);
@@ -2407,7 +2416,7 @@ fn encode_plan_geometry_into(
                     push_or_extend_image(
                         steps,
                         texture,
-                        BlendMode::Normal,
+                        BlendMode::Premultiplied,
                         false,
                         start..images.len(),
                     );
@@ -4512,7 +4521,7 @@ fn create_image_pipeline(
 ) -> wgpu::RenderPipeline {
     let shader_source = match blend_mode {
         BlendMode::LayerMask => IMAGE_SHADER_LAYER,
-        BlendMode::Normal | BlendMode::Add => IMAGE_SHADER,
+        BlendMode::Normal | BlendMode::Add | BlendMode::Premultiplied => IMAGE_SHADER,
     };
     let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("bmz-render image shader"),
@@ -4528,6 +4537,7 @@ fn create_image_pipeline(
         label: Some(match blend_mode {
             BlendMode::Normal => "bmz-render image pipeline",
             BlendMode::Add => "bmz-render additive image pipeline",
+            BlendMode::Premultiplied => "bmz-render premultiplied image pipeline",
             BlendMode::LayerMask => "bmz-render layer-mask image pipeline",
         }),
         layout: Some(&layout),
@@ -4583,6 +4593,18 @@ fn create_image_pipeline(
 fn image_blend_state(blend_mode: BlendMode) -> wgpu::BlendState {
     match blend_mode {
         BlendMode::Normal | BlendMode::LayerMask => wgpu::BlendState::ALPHA_BLENDING,
+        BlendMode::Premultiplied => wgpu::BlendState {
+            color: wgpu::BlendComponent {
+                src_factor: wgpu::BlendFactor::One,
+                dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
+                operation: wgpu::BlendOperation::Add,
+            },
+            alpha: wgpu::BlendComponent {
+                src_factor: wgpu::BlendFactor::One,
+                dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
+                operation: wgpu::BlendOperation::Add,
+            },
+        },
         BlendMode::Add => wgpu::BlendState {
             color: wgpu::BlendComponent {
                 src_factor: wgpu::BlendFactor::SrcAlpha,
@@ -6529,7 +6551,7 @@ mod tests {
             geometry.steps,
             vec![DrawStep::Image {
                 texture,
-                blend: BlendMode::Normal,
+                blend: BlendMode::Premultiplied,
                 linear: false,
                 range: 0..IMAGE_INSTANCE_BYTES,
             }]
@@ -6592,6 +6614,18 @@ mod tests {
         assert_eq!(blend.color.src_factor, wgpu::BlendFactor::SrcAlpha);
         assert_eq!(blend.color.dst_factor, wgpu::BlendFactor::One);
         assert_eq!(blend.color.operation, wgpu::BlendOperation::Add);
+    }
+
+    #[test]
+    fn premultiplied_image_blend_does_not_apply_source_alpha_twice() {
+        let blend = image_blend_state(BlendMode::Premultiplied);
+
+        assert_eq!(blend.color.src_factor, wgpu::BlendFactor::One);
+        assert_eq!(blend.color.dst_factor, wgpu::BlendFactor::OneMinusSrcAlpha);
+        assert_eq!(blend.color.operation, wgpu::BlendOperation::Add);
+        assert_eq!(blend.alpha.src_factor, wgpu::BlendFactor::One);
+        assert_eq!(blend.alpha.dst_factor, wgpu::BlendFactor::OneMinusSrcAlpha);
+        assert_eq!(blend.alpha.operation, wgpu::BlendOperation::Add);
     }
 
     #[test]
