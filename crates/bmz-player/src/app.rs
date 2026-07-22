@@ -8942,6 +8942,10 @@ impl WinitApp {
             snapshot.total_notes = chart.scored_total_notes(policy).saturating_mul(multiplier);
         }
         self.ensure_skin_ready(SkinKind::Decide);
+        // Play 画面へ入ってから stagefile の有無が切り替わると、ロード演出中に
+        // 代替タイトルから曲画像へ差し替わって見える。Decide 中に先行ロードし、
+        // Play の最初の snapshot から同じ runtime image 100 を使えるようにする。
+        self.prepare_play_stagefile_texture(chart_id);
         // Play スキンは裏で decode+upload を進めるが、Decide 入場では待たない。
         // 実際の Play 入場 (`start_chart_with_options`) で `ensure_skin_ready` が保険として残る。
         let play_skin_key_mode = self.play_skin_key_mode_for_chart(chart_id, &options);
@@ -9443,11 +9447,33 @@ impl WinitApp {
     }
 
     fn clear_play_meta_image_state(&mut self) {
+        self.clear_play_stagefile_state();
+        self.clear_play_backbmp_state();
+    }
+
+    fn clear_play_stagefile_state(&mut self) {
         self.play_stagefile_source = None;
         self.play_stagefile_loaded = false;
         self.play_stagefile_size = None;
+    }
+
+    fn clear_play_backbmp_state(&mut self) {
         self.play_backbmp_source = None;
         self.play_backbmp_loaded = false;
+    }
+
+    fn prepare_play_stagefile_texture(&mut self, chart_id: i64) {
+        let chart = self
+            .boot
+            .library_db
+            .list_charts_by_ids(&[chart_id])
+            .ok()
+            .and_then(|mut charts| charts.pop());
+        let Some(chart) = chart else {
+            self.clear_play_stagefile_state();
+            return;
+        };
+        self.sync_play_stagefile_texture(&chart.folder_path, &chart.stage_file);
     }
 
     fn sync_play_stagefile_texture(&mut self, folder: &str, relative: &str) {
@@ -9474,16 +9500,10 @@ impl WinitApp {
         self.decide_sound_stopped_for_chart_start = false;
         self.active_play = None;
         self.clear_play_control_holds();
-        self.clear_play_meta_image_state();
-        if let Some(chart) = self
-            .boot
-            .library_db
-            .list_charts_by_ids(&[chart_id])
-            .ok()
-            .and_then(|mut charts| charts.pop())
-        {
-            self.sync_play_stagefile_texture(&chart.folder_path, &chart.stage_file);
-        }
+        // begin_decide_for_chart_with_snapshot で先行ロードした stagefile は保持する。
+        // boot / retry など Decide を通らない経路でも、この呼び出しで補完する。
+        self.clear_play_backbmp_state();
+        self.prepare_play_stagefile_texture(chart_id);
         self.finished_play = None;
         self.draining_audio = None;
         self.play_scene_started_at = Instant::now();

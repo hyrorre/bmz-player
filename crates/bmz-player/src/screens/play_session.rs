@@ -2366,6 +2366,23 @@ mod tests {
     }
 
     #[test]
+    fn placeholder_session_visuals_preserve_preloaded_stagefile() {
+        let profile = ProfileConfig::new_default("default", "Default", 1);
+        let options = PlaySessionOptions::default();
+        let stagefile_size = bmz_render::skin::SkinImageSize { width: 320.0, height: 240.0 };
+        let mut snapshot = bmz_render::snapshot::RenderSnapshot {
+            stagefile_background: true,
+            stagefile_image_size: Some(stagefile_size),
+            ..Default::default()
+        };
+
+        apply_placeholder_session_visuals(&mut snapshot, &profile, KeyMode::K7, &options);
+
+        assert!(snapshot.stagefile_background);
+        assert_eq!(snapshot.stagefile_image_size, Some(stagefile_size));
+    }
+
+    #[test]
     fn placeholder_session_visuals_initialize_floating_hispeed_for_ready_display() {
         let mut profile = ProfileConfig::new_default("default", "Default", 1);
         profile.lane.hispeed_mode = HispeedModeConfig::Floating;
