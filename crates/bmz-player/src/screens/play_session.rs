@@ -2366,13 +2366,14 @@ mod tests {
     }
 
     #[test]
-    fn placeholder_session_visuals_preserve_preloaded_stagefile() {
+    fn placeholder_session_visuals_preserve_preloaded_meta_images() {
         let profile = ProfileConfig::new_default("default", "Default", 1);
         let options = PlaySessionOptions::default();
         let stagefile_size = bmz_render::skin::SkinImageSize { width: 320.0, height: 240.0 };
         let mut snapshot = bmz_render::snapshot::RenderSnapshot {
             stagefile_background: true,
             stagefile_image_size: Some(stagefile_size),
+            backbmp_background: true,
             ..Default::default()
         };
 
@@ -2380,6 +2381,7 @@ mod tests {
 
         assert!(snapshot.stagefile_background);
         assert_eq!(snapshot.stagefile_image_size, Some(stagefile_size));
+        assert!(snapshot.backbmp_background);
     }
 
     #[test]
