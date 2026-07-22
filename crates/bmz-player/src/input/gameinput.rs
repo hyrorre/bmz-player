@@ -431,6 +431,7 @@ impl GameInputBackend {
                 device_id: state.device_id,
                 pressed,
                 timestamp,
+                synthesized_analog_axis: false,
             });
         }
         state.buttons = buttons;
@@ -473,6 +474,7 @@ impl GameInputBackend {
                             device_id: state.device_id,
                             pressed: false,
                             timestamp,
+                            synthesized_analog_axis: false,
                         });
                     }
                 }

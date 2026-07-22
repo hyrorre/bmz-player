@@ -44,6 +44,7 @@ pub fn physical_key_to_device_input(
         control: physical_key_to_control(physical_key)?,
         kind: input_kind_from_element_state(state),
         timestamp: DeviceTimestamp::MonotonicNs(monotonic_timestamp_ns()),
+        bounce_policy: Default::default(),
     })
 }
 

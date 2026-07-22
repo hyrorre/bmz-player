@@ -161,6 +161,7 @@ mod tests {
             control: PhysicalControl::KeyboardKey("Z".to_string()),
             kind: InputKind::Press,
             timestamp: DeviceTimestamp::MonotonicNs(ns),
+            bounce_policy: Default::default(),
         }
     }
 

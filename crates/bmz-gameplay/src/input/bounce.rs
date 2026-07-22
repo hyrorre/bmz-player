@@ -2,7 +2,9 @@ use std::collections::HashMap;
 
 use bmz_core::input::InputKind;
 
-use super::backend::{DeviceId, DeviceInputEvent, DeviceTimestamp, PhysicalControl};
+use super::backend::{
+    DeviceId, DeviceInputEvent, DeviceTimestamp, InputBouncePolicy, PhysicalControl,
+};
 
 /// チャタリング抑制のデバイス種別ごとの閾値。
 ///
@@ -62,6 +64,9 @@ impl InputBounceFilter {
     /// monotonic timestamp が双方にある場合だけ、Release 直後の Press を閾値で
     /// 抑制する。時刻が欠落または逆行している場合は、状態重複の除外だけを行う。
     pub fn accept(&mut self, event: DeviceInputEvent) -> Option<DeviceInputEvent> {
+        if event.bounce_policy == InputBouncePolicy::Bypass {
+            return Some(event);
+        }
         let threshold_us = self.config.threshold_for(&event.control);
         if threshold_us == 0 {
             return Some(event);
@@ -128,6 +133,7 @@ mod tests {
             control,
             kind,
             timestamp: DeviceTimestamp::MonotonicNs(timestamp_ns),
+            bounce_policy: InputBouncePolicy::Apply,
         }
     }
 
@@ -175,6 +181,22 @@ mod tests {
         }
         assert!(filter.accept(event(0, controller(), InputKind::Press, 5_000_000)).is_none());
         assert!(filter.accept(event(0, keyboard(), InputKind::Press, 5_000_000)).is_some());
+    }
+
+    #[test]
+    fn bypass_policy_passes_controller_event_without_tracking_state() {
+        let config =
+            InputBounceConfig { keyboard_threshold_us: 0, controller_threshold_us: 20_000 };
+        let mut filter = InputBounceFilter::new(config);
+        let mut release = event(0, controller(), InputKind::Release, 1_000_000);
+        release.bounce_policy = InputBouncePolicy::Bypass;
+        let mut press = event(0, controller(), InputKind::Press, 1_001_000);
+        press.bounce_policy = InputBouncePolicy::Bypass;
+
+        assert!(filter.accept(release).is_some());
+        assert!(filter.accept(press).is_some());
+        assert!(filter.accept(event(0, controller(), InputKind::Release, 2_000_000)).is_some());
+        assert!(filter.accept(event(0, controller(), InputKind::Press, 2_001_000)).is_none());
     }
 
     #[test]

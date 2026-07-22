@@ -46,6 +46,7 @@ mod tests {
             control: PhysicalControl::KeyboardKey("Z".to_string()),
             kind: InputKind::Press,
             timestamp: DeviceTimestamp::Unknown,
+            bounce_policy: Default::default(),
         });
 
         let events = game_backend.drain_events();

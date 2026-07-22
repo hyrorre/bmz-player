@@ -119,7 +119,13 @@ fn process_button_event(
         ticks: None,
     });
 
-    output.buttons.push(GilrsButtonEvent { name: mapped_control, device_id, pressed, timestamp });
+    output.buttons.push(GilrsButtonEvent {
+        name: mapped_control,
+        device_id,
+        pressed,
+        timestamp,
+        synthesized_analog_axis: false,
+    });
 }
 
 fn device_timestamp_from_system_time(event_time: SystemTime) -> DeviceTimestamp {
@@ -219,6 +225,7 @@ mod tests {
             name: "South".to_string(),
             pressed: true,
             timestamp: test_timestamp(123),
+            synthesized_analog_axis: false,
         };
 
         let input = to_device_input_event(&event);

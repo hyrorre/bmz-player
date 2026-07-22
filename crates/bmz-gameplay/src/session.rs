@@ -1834,6 +1834,7 @@ mod tests {
             control: PhysicalControl::KeyboardKey("Z".to_string()),
             kind: InputKind::Press,
             timestamp: DeviceTimestamp::Unknown,
+            bounce_policy: Default::default(),
         });
         session.input_system = InputSystem {
             backend: Box::new(backend),
@@ -1878,6 +1879,7 @@ mod tests {
             control: PhysicalControl::KeyboardKey("Z".to_string()),
             kind: InputKind::Press,
             timestamp: DeviceTimestamp::Unknown,
+            bounce_policy: Default::default(),
         });
         session.input_system = InputSystem {
             backend: Box::new(backend),
@@ -2076,6 +2078,7 @@ mod tests {
             control: PhysicalControl::KeyboardKey("Z".to_string()),
             kind: InputKind::Press,
             timestamp: DeviceTimestamp::MonotonicNs(1_500_000),
+            bounce_policy: Default::default(),
         });
         session.input_system = InputSystem {
             backend: Box::new(backend),
@@ -2114,6 +2117,7 @@ mod tests {
             control: PhysicalControl::KeyboardKey("Z".to_string()),
             kind: InputKind::Press,
             timestamp: DeviceTimestamp::Unknown,
+            bounce_policy: Default::default(),
         });
         session.input_system = InputSystem {
             backend: Box::new(backend),
@@ -2152,6 +2156,7 @@ mod tests {
             control: PhysicalControl::GamepadButton("scratch-up".to_string()),
             kind: InputKind::Press,
             timestamp: DeviceTimestamp::Unknown,
+            bounce_policy: Default::default(),
         });
         session.input_system = InputSystem {
             backend: Box::new(backend),
@@ -2191,6 +2196,7 @@ mod tests {
             control: PhysicalControl::KeyboardKey("Z".to_string()),
             kind: InputKind::Press,
             timestamp: DeviceTimestamp::Unknown,
+            bounce_policy: Default::default(),
         });
         session.input_system = InputSystem {
             backend: Box::new(backend),

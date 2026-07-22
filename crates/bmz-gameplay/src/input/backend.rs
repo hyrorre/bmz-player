@@ -21,12 +21,22 @@ pub enum DeviceTimestamp {
     BackendTicks(u64),
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum InputBouncePolicy {
+    /// 通常の物理入力として設定済み閾値を適用する。
+    #[default]
+    Apply,
+    /// 上位層で正規入力と確認済みのイベントを、状態追跡もせずそのまま通す。
+    Bypass,
+}
+
 #[derive(Debug, Clone)]
 pub struct DeviceInputEvent {
     pub device: DeviceId,
     pub control: PhysicalControl,
     pub kind: InputKind,
     pub timestamp: DeviceTimestamp,
+    pub bounce_policy: InputBouncePolicy,
 }
 
 /// Returns a process-local monotonic timestamp in nanoseconds.
@@ -101,6 +111,7 @@ mod tests {
             control: PhysicalControl::KeyboardKey("Z".to_string()),
             kind: InputKind::Press,
             timestamp: DeviceTimestamp::Unknown,
+            bounce_policy: Default::default(),
         });
 
         assert_eq!(backend.drain_events().len(), 1);
@@ -117,12 +128,14 @@ mod tests {
                 control: PhysicalControl::KeyboardKey("Z".to_string()),
                 kind: InputKind::Press,
                 timestamp: DeviceTimestamp::Unknown,
+                bounce_policy: Default::default(),
             },
             DeviceInputEvent {
                 device: DeviceId(1),
                 control: PhysicalControl::KeyboardKey("Z".to_string()),
                 kind: InputKind::Release,
                 timestamp: DeviceTimestamp::Unknown,
+                bounce_policy: Default::default(),
             },
         ]);
 

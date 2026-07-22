@@ -3407,6 +3407,7 @@ mod tests {
             control: PhysicalControl::KeyboardKey("Z".to_string()),
             kind: InputKind::Press,
             timestamp: DeviceTimestamp::Unknown,
+            bounce_policy: Default::default(),
         });
         let chart = Arc::new(chart());
         let mut session = build_game_session_with_input_backend(

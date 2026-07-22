@@ -18,7 +18,9 @@ use bmz_core::clear::{ClearType, GaugeType};
 use bmz_core::input::{InputDeviceKind, InputKind, ScratchDirection};
 use bmz_core::lane::{KeyMode, LANE_COUNT, Lane};
 use bmz_core::time::TimeUs;
-use bmz_gameplay::input::backend::{DeviceId, DeviceInputEvent, InputBackend, PhysicalControl};
+use bmz_gameplay::input::backend::{
+    DeviceId, DeviceInputEvent, InputBackend, InputBouncePolicy, PhysicalControl,
+};
 use bmz_gameplay::input::binding::LaneBinding;
 use bmz_gameplay::input::bounce::{InputBounceConfig, InputBounceFilter};
 use bmz_gameplay::input::system::last_input_collection_diagnostics;
@@ -5783,7 +5785,13 @@ impl WinitApp {
     }
 
     fn route_gamepad_button_event(&mut self, event: &crate::input::gamepad::GamepadButtonEvent) {
-        let device_event = crate::input::gamepad::to_device_input_event(event);
+        let mut device_event = crate::input::gamepad::to_device_input_event(event);
+        if should_bypass_analog_scratch_bounce(
+            event,
+            self.play_option_input.as_ref().map(|input| &input.binding),
+        ) {
+            device_event.bounce_policy = InputBouncePolicy::Bypass;
+        }
         let Some(device_event) = self.filter_app_input_bounce(device_event) else {
             return;
         };
@@ -14899,6 +14907,20 @@ impl WinitApp {
             manager.stop(sound_type);
         }
     }
+}
+
+fn should_bypass_analog_scratch_bounce(
+    event: &crate::input::gamepad::GamepadButtonEvent,
+    play_binding: Option<&LaneBinding>,
+) -> bool {
+    if !event.synthesized_analog_axis {
+        return false;
+    }
+    let Some(play_binding) = play_binding else { return false };
+    let control = PhysicalControl::GamepadButton(event.name.clone());
+    play_binding
+        .resolve_entry(event.device_id, &control)
+        .is_some_and(|binding| matches!(binding.lane, Lane::Scratch | Lane::Scratch2))
 }
 
 fn should_play_select_bgm_on_enter(select_preview_playing: bool) -> bool {
@@ -26442,6 +26464,70 @@ mod tests {
             ),
             Some(PlayOptionControl::Hispeed(HispeedChange::Up))
         );
+    }
+
+    #[test]
+    fn bounce_bypass_requires_synthesized_axis_bound_to_profile_scratch_lane() {
+        let mut input = crate::config::play_input::default_profile_input();
+        input.play.insert(
+            KeyMode::K14.play_map_key().to_string(),
+            crate::config::profile_config::PlayModeInputConfig {
+                inherit: None,
+                bindings: vec![
+                    crate::config::play_input::gamepad_play_binding_for_device(
+                        "gamepad1",
+                        "Axis1+",
+                        LaneConfig::Scratch,
+                    ),
+                    crate::config::play_input::gamepad_play_binding_for_device(
+                        "gamepad1",
+                        "Axis2+",
+                        LaneConfig::Key1,
+                    ),
+                    crate::config::play_input::gamepad_play_binding_for_device(
+                        "gamepad1",
+                        "Axis3+",
+                        LaneConfig::Scratch2,
+                    ),
+                ],
+                ..Default::default()
+            },
+        );
+        let slots =
+            crate::input::gamepad::GamepadSlotMap::from_device_ids([Some(DeviceId(11)), None]);
+        let binding =
+            crate::config::play::lane_binding_for_chart_with_slots(&input, KeyMode::K14, slots);
+        let event = |name: &str, device_id, synthesized_analog_axis| {
+            crate::input::gamepad::GamepadButtonEvent {
+                name: name.to_string(),
+                device_id,
+                pressed: true,
+                timestamp: bmz_gameplay::input::backend::DeviceTimestamp::MonotonicNs(1),
+                synthesized_analog_axis,
+            }
+        };
+
+        assert!(should_bypass_analog_scratch_bounce(
+            &event("Axis1+", DeviceId(11), true),
+            Some(&binding),
+        ));
+        assert!(!should_bypass_analog_scratch_bounce(
+            &event("Axis2+", DeviceId(11), true),
+            Some(&binding),
+        ));
+        assert!(should_bypass_analog_scratch_bounce(
+            &event("Axis3+", DeviceId(11), true),
+            Some(&binding),
+        ));
+        assert!(!should_bypass_analog_scratch_bounce(
+            &event("Axis1+", DeviceId(11), false),
+            Some(&binding),
+        ));
+        assert!(!should_bypass_analog_scratch_bounce(
+            &event("Axis1+", DeviceId(22), true),
+            Some(&binding),
+        ));
+        assert!(!should_bypass_analog_scratch_bounce(&event("Axis1+", DeviceId(11), true), None,));
     }
 
     #[test]

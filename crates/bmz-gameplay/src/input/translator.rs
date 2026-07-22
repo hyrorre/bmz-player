@@ -128,6 +128,7 @@ mod tests {
                     control: keyboard_control("Z"),
                     kind: InputKind::Press,
                     timestamp: DeviceTimestamp::MonotonicNs(1_250_000),
+                    bounce_policy: Default::default(),
                 },
                 &ctx,
             )
@@ -169,6 +170,7 @@ mod tests {
                     control: PhysicalControl::GamepadButton("South".to_string()),
                     kind: InputKind::Press,
                     timestamp: DeviceTimestamp::Unknown,
+                    bounce_policy: Default::default(),
                 },
                 &ctx,
             )

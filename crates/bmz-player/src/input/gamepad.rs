@@ -3,7 +3,8 @@ use std::time::{Duration, Instant};
 
 use bmz_core::input::InputKind;
 use bmz_gameplay::input::backend::{
-    DeviceId, DeviceInputEvent, DeviceTimestamp, PhysicalControl, monotonic_timestamp_ns,
+    DeviceId, DeviceInputEvent, DeviceTimestamp, InputBouncePolicy, PhysicalControl,
+    monotonic_timestamp_ns,
 };
 
 pub const GAMEPAD_DEVICE_ID_BASE: u32 = 16;
@@ -116,6 +117,7 @@ pub struct GamepadButtonEvent {
     pub device_id: DeviceId,
     pub pressed: bool,
     pub timestamp: DeviceTimestamp,
+    pub synthesized_analog_axis: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -385,7 +387,13 @@ impl ScratchState {
     ) {
         if let Some(axis_name) = self.control_name.as_deref() {
             let name = format!("{}{}", axis_name, if self.positive_direction { "+" } else { "-" });
-            events.push(GamepadButtonEvent { name, device_id, pressed, timestamp });
+            events.push(GamepadButtonEvent {
+                name,
+                device_id,
+                pressed,
+                timestamp,
+                synthesized_analog_axis: true,
+            });
         }
     }
 }
@@ -396,6 +404,7 @@ pub fn to_device_input_event(event: &GamepadButtonEvent) -> DeviceInputEvent {
         control: PhysicalControl::GamepadButton(event.name.clone()),
         kind: if event.pressed { InputKind::Press } else { InputKind::Release },
         timestamp: event.timestamp,
+        bounce_policy: InputBouncePolicy::Apply,
     }
 }
 
@@ -520,6 +529,7 @@ mod tests {
         assert!(events.is_empty());
         state.apply_movement(1, "Axis1", device_id, event_timestamp(2), 100, &mut events);
         assert_eq!(button_events(&events), vec![("Axis1+".to_string(), true)]);
+        assert!(events.iter().all(|event| event.synthesized_analog_axis));
     }
 
     #[test]
