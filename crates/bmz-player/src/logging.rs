@@ -151,9 +151,6 @@ impl EventVisitor {
             }
             let _ = write!(message, "{name}={value}");
         }
-        if message.is_empty() {
-            message.push_str("(メッセージなし)");
-        }
         message
     }
 }

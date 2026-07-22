@@ -1748,14 +1748,14 @@ impl DebugLogFilter {
     const ALL: [Self; 6] =
         [Self::All, Self::Error, Self::Warn, Self::Info, Self::Debug, Self::Trace];
 
-    const fn label(self) -> &'static str {
+    fn label(self, text: Localizer) -> String {
         match self {
-            Self::All => "全て",
-            Self::Error => "ERROR 以上",
-            Self::Warn => "WARN 以上",
-            Self::Info => "INFO 以上",
-            Self::Debug => "DEBUG 以上",
-            Self::Trace => "TRACE 以上",
+            Self::All => tr!(text, "debug-log-filter-all"),
+            Self::Error => tr!(text, "debug-log-filter-error"),
+            Self::Warn => tr!(text, "debug-log-filter-warn"),
+            Self::Info => tr!(text, "debug-log-filter-info"),
+            Self::Debug => tr!(text, "debug-log-filter-debug"),
+            Self::Trace => tr!(text, "debug-log-filter-trace"),
         }
     }
 
@@ -1785,8 +1785,12 @@ fn log_level_color(level: TracingLogLevel) -> egui::Color32 {
     }
 }
 
-fn format_log_entry(entry: &LogEntry) -> String {
-    format!("[{}] {} {}", entry.level.as_str(), entry.target, entry.message)
+fn localized_log_message(entry: &LogEntry, text: Localizer) -> String {
+    if entry.message.is_empty() { tr!(text, "debug-log-no-message") } else { entry.message.clone() }
+}
+
+fn format_log_entry(entry: &LogEntry, text: Localizer) -> String {
+    format!("[{}] {} {}", entry.level.as_str(), entry.target, localized_log_message(entry, text))
 }
 
 /// FPS / フレーム時間 / シーン / 解像度 / tracing ログを表示するデバッグパネル。
@@ -1815,37 +1819,40 @@ fn build_debug_panel(
                 ui.label("FPS");
                 ui.label(info.current_fps.to_string());
                 ui.end_row();
-                ui.label("フレーム時間");
+                ui.label(tr!(text, "debug-frame-time"));
                 ui.label(format!("{:.2} ms", dt * 1000.0));
                 ui.end_row();
-                ui.label("シーン");
+                ui.label(tr!(text, "debug-scene"));
                 ui.label(info.scene);
                 ui.end_row();
-                ui.label("解像度");
+                ui.label(tr!(text, "debug-resolution"));
                 ui.label(format!("{} x {}", info.width, info.height));
                 ui.end_row();
-                ui.label("実効 Present Mode");
-                ui.label(info.effective_present_mode.unwrap_or("未初期化"));
-                ui.end_row();
-                ui.label("最大フレーム遅延");
+                ui.label(tr!(text, "debug-present-mode"));
                 ui.label(
-                    info.maximum_frame_latency
-                        .map_or_else(|| "未初期化".to_string(), |latency| latency.to_string()),
+                    info.effective_present_mode
+                        .map_or_else(|| tr!(text, "debug-uninitialized"), ToString::to_string),
                 );
+                ui.end_row();
+                ui.label(tr!(text, "debug-max-frame-latency"));
+                ui.label(info.maximum_frame_latency.map_or_else(
+                    || tr!(text, "debug-uninitialized"),
+                    |latency| latency.to_string(),
+                ));
                 ui.end_row();
             });
 
             ui.separator();
             ui.horizontal(|ui| {
-                ui.label("ログ");
+                ui.label(tr!(text, "debug-log"));
                 egui::ComboBox::from_id_salt("debug_log_filter")
-                    .selected_text(debug_log_filter.label())
+                    .selected_text(debug_log_filter.label(text))
                     .show_ui(ui, |ui| {
                         for filter in DebugLogFilter::ALL {
-                            ui.selectable_value(debug_log_filter, filter, filter.label());
+                            ui.selectable_value(debug_log_filter, filter, filter.label(text));
                         }
                     });
-                ui.checkbox(debug_log_autoscroll, "自動スクロール");
+                ui.checkbox(debug_log_autoscroll, tr!(text, "debug-log-autoscroll"));
             });
 
             let entries = log_buffer.snapshot();
@@ -1856,11 +1863,16 @@ fn build_debug_panel(
             let mut copy_requested = false;
             let mut clear_requested = false;
             ui.horizontal(|ui| {
-                ui.small(format!("表示 {}/{} 件", visible_entries.len(), entries.len()));
-                if ui.button("コピー").clicked() {
+                ui.small(tr!(
+                    text,
+                    "debug-log-count",
+                    "visible" => visible_entries.len(),
+                    "total" => entries.len()
+                ));
+                if ui.button(tr!(text, "common-copy")).clicked() {
                     copy_requested = true;
                 }
-                if ui.button("クリア").clicked() {
+                if ui.button(tr!(text, "debug-log-clear")).clicked() {
                     clear_requested = true;
                 }
             });
@@ -1872,13 +1884,13 @@ fn build_debug_panel(
                 .stick_to_bottom(*debug_log_autoscroll)
                 .show(ui, |ui| {
                     if visible_entries.is_empty() {
-                        ui.weak("表示できるログはありません");
+                        ui.weak(tr!(text, "debug-log-empty"));
                     }
                     for entry in visible_entries {
                         ui.horizontal_wrapped(|ui| {
                             ui.colored_label(log_level_color(entry.level), entry.level.as_str());
                             ui.weak(format!("{}:", entry.target));
-                            ui.label(&entry.message);
+                            ui.label(localized_log_message(entry, text));
                         });
                     }
                 });
@@ -1887,7 +1899,7 @@ fn build_debug_panel(
                 let text = entries
                     .iter()
                     .filter(|entry| debug_log_filter.allows(entry.level))
-                    .map(format_log_entry)
+                    .map(|entry| format_log_entry(entry, text))
                     .collect::<Vec<_>>()
                     .join("\n");
                 ui.ctx().copy_text(text);
@@ -2615,37 +2627,48 @@ fn build_settings_panel(
                     ui.label(tr!(text, "settings-tables-help"));
                 });
 
-                egui::CollapsingHeader::new("未所持譜面の取得").show(ui, |ui| {
-                    ui.label(
-                        "既定ではIPFS/HTTPを使用しません。各サービスの利用規約を確認してから有効にしてください。",
-                    );
+                egui::CollapsingHeader::new(tr!(text, "settings-downloads-title"))
+                    .id_salt("settings_downloads")
+                    .show(ui, |ui| {
+                    ui.label(tr!(text, "settings-downloads-disclaimer"));
                     ui.separator();
-                    ui.checkbox(&mut config.downloads.ipfs_enabled, "IPFS取得を有効にする");
+                    ui.checkbox(
+                        &mut config.downloads.ipfs_enabled,
+                        tr!(text, "settings-downloads-ipfs-enable"),
+                    );
                     ui.horizontal(|ui| {
-                        ui.label("IPFS API URL");
+                        ui.label(tr!(text, "settings-downloads-ipfs-api-url"));
                         ui.add(
                             egui::TextEdit::singleline(&mut config.downloads.ipfs_api_url)
                                 .desired_width(360.0)
                                 .hint_text("http://127.0.0.1:5001/"),
                         );
                     });
-                    ui.label(
-                        "Kubo互換APIのベースURLを入力します。{cid} を含む完全なURLも利用できます。",
-                    );
+                    ui.label(tr!(
+                        text,
+                        "settings-downloads-ipfs-help",
+                        "cid" => "{cid}"
+                    ));
                     ui.separator();
-                    ui.checkbox(&mut config.downloads.http_enabled, "HTTP取得を有効にする");
+                    ui.checkbox(
+                        &mut config.downloads.http_enabled,
+                        tr!(text, "settings-downloads-http-enable"),
+                    );
                     ui.horizontal(|ui| {
-                        ui.label("HTTP API URL");
+                        ui.label(tr!(text, "settings-downloads-http-api-url"));
                         ui.add(
                             egui::TextEdit::singleline(&mut config.downloads.http_api_url)
                                 .desired_width(360.0)
                                 .hint_text("https://example.com/package/{md5}"),
                         );
                     });
-                    ui.label(
-                        "URLには {md5} / {sha256} / %s を指定できます。直接7zを返すAPIと、Ginger/Konmai形式のJSON応答に対応します。",
-                    );
-                    ui.label("保存先: data/songs/ipfs または data/songs/http");
+                    ui.label(tr!(
+                        text,
+                        "settings-downloads-http-help",
+                        "md5" => "{md5}",
+                        "sha256" => "{sha256}"
+                    ));
+                    ui.label(tr!(text, "settings-downloads-save-path"));
                 });
 
                 build_score_import_section(
@@ -2678,24 +2701,25 @@ fn build_settings_panel(
                             }
                         });
                     if config.audio.backend == AudioBackend::Wasapi {
-                        egui::ComboBox::from_label("出力モード")
-                            .selected_text(audio_output_mode_label(&config.audio.output_mode))
+                        egui::ComboBox::new(
+                            "audio_output_mode",
+                            tr!(text, "settings-audio-output-mode"),
+                        )
+                            .selected_text(audio_output_mode_label(&config.audio.output_mode, text))
                             .show_ui(ui, |ui| {
                                 ui.selectable_value(
                                     &mut config.audio.output_mode,
                                     AudioOutputMode::Shared,
-                                    "共有 (標準)",
+                                    tr!(text, "settings-audio-output-mode-shared"),
                                 );
                                 ui.selectable_value(
                                     &mut config.audio.output_mode,
                                     AudioOutputMode::SharedLowLatency,
-                                    "共有 (IAudioClient3 低遅延)",
+                                    tr!(text, "settings-audio-output-mode-low-latency"),
                                 );
                             });
                         if config.audio.output_mode == AudioOutputMode::SharedLowLatency {
-                            ui.label(
-                                "Windows 10 以降の WASAPI で共有エンジン周期を短縮します。適用結果と実周期はログに記録されます。",
-                            );
+                            ui.label(tr!(text, "settings-audio-low-latency-help"));
                         }
                     }
                     let sample_rate_text =
@@ -3676,10 +3700,12 @@ fn audio_backend_label(backend: &AudioBackend, text: Localizer) -> String {
     }
 }
 
-fn audio_output_mode_label(mode: &AudioOutputMode) -> &'static str {
+fn audio_output_mode_label(mode: &AudioOutputMode, text: Localizer) -> String {
     match mode {
-        AudioOutputMode::Shared => "共有 (標準)",
-        AudioOutputMode::SharedLowLatency => "共有 (IAudioClient3 低遅延)",
+        AudioOutputMode::Shared => tr!(text, "settings-audio-output-mode-shared"),
+        AudioOutputMode::SharedLowLatency => {
+            tr!(text, "settings-audio-output-mode-low-latency")
+        }
     }
 }
 
@@ -6357,7 +6383,11 @@ mod tests {
             message: "slow frame".to_string(),
         };
 
-        assert_eq!(format_log_entry(&entry), "[WARN] bmz_player::test slow frame");
+        let text = Localizer::new(AppLocale::En);
+        assert_eq!(format_log_entry(&entry, text), "[WARN] bmz_player::test slow frame");
+
+        let empty = LogEntry { message: String::new(), ..entry };
+        assert_eq!(format_log_entry(&empty, text), "[WARN] bmz_player::test (no message)");
     }
 
     #[test]

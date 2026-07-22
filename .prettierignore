@@ -27,6 +27,11 @@ bun.lock
 # local
 .local/
 
+# bundled third-party skin submodules
+data/skins/Rmz-skin/
+data/skins/mz-select/
+data/skins/Luxez-Flat/
+
 # generated files
 server/db/migrations/
 bmz-ir-web/shared/types/worker-configuration.d.ts

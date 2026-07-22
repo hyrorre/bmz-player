@@ -488,8 +488,13 @@ fn frame_budget(fps: u32) -> Duration {
     Duration::from_secs_f64(1.0 / f64::from(fps)).max(Duration::from_nanos(1))
 }
 
-fn fps_overlay_text(show_fps: bool, current_fps: u32) -> String {
-    if !show_fps || current_fps == 0 { String::new() } else { format!("FPS {current_fps}") }
+fn fps_overlay_text(show_fps: bool, current_fps: u32, text: Localizer) -> String {
+    if !show_fps || current_fps == 0 {
+        return String::new();
+    }
+    let mut args = FluentArgs::new();
+    args.set("fps", i64::from(current_fps));
+    text.format("fps-overlay", &args)
 }
 
 struct WinitApp {
@@ -3541,7 +3546,11 @@ impl WinitApp {
     }
 
     fn skin_fps_overlay_text(&self) -> String {
-        fps_overlay_text(self.boot.profile_config.ui.show_fps, self.skin_fps.current())
+        fps_overlay_text(
+            self.boot.profile_config.ui.show_fps,
+            self.skin_fps.current(),
+            Localizer::new(self.boot.profile_config.ui.locale()),
+        )
     }
 
     fn is_autoplay_for_overlay(&self) -> bool {
@@ -6967,6 +6976,7 @@ impl WinitApp {
     }
 
     fn copy_selected_hash(&mut self, sha256: bool) {
+        let text = Localizer::new(self.boot.profile_config.ui.locale());
         let Some(row) = self.selected_chart_row().cloned() else {
             return;
         };
@@ -6975,44 +6985,46 @@ impl WinitApp {
         } else {
             row.chart.as_ref().map(|chart| hash_to_hex(&chart.md5))
         }) else {
-            self.show_left_overlay_toast(if sha256 {
-                "SHA256 を取得できません"
+            self.show_left_overlay_toast(text.text(if sha256 {
+                "toast-chart-hash-unavailable-sha256"
             } else {
-                "MD5 はローカル譜面でのみ利用できます"
-            });
+                "toast-chart-hash-md5-local-only"
+            }));
             return;
         };
         match arboard::Clipboard::new().and_then(|mut clipboard| clipboard.set_text(value.clone()))
         {
             Ok(()) => {
-                self.show_left_overlay_toast(if sha256 {
-                    "SHA256 をクリップボードへコピーしました"
+                self.show_left_overlay_toast(text.text(if sha256 {
+                    "toast-chart-hash-copied-sha256"
                 } else {
-                    "MD5 をクリップボードへコピーしました"
-                });
+                    "toast-chart-hash-copied-md5"
+                }));
                 tracing::info!(sha256, hash = %value, "copied chart hash to clipboard");
             }
             Err(error) => {
                 tracing::warn!(%error, sha256, "failed to copy chart hash to clipboard");
-                self.show_left_overlay_toast("クリップボードへのコピーに失敗しました");
+                self.show_left_overlay_toast(text.text("toast-clipboard-copy-failed"));
             }
         }
     }
 
     fn open_selected_chart_folder(&mut self) {
+        let text = Localizer::new(self.boot.profile_config.ui.locale());
         let Some(chart) = self.selected_chart_row().and_then(|row| row.chart.clone()) else {
             return;
         };
         let folder = PathBuf::from(&chart.folder_path);
         if let Err(error) = open_file_browser_path(&folder) {
             tracing::warn!(path = %folder.display(), %error, "failed to open selected chart folder");
-            self.show_left_overlay_toast("譜面フォルダを開けませんでした");
+            self.show_left_overlay_toast(text.text("toast-chart-folder-open-failed"));
         } else {
             tracing::info!(path = %folder.display(), "opened selected chart folder");
         }
     }
 
     fn open_selected_chart_documents(&mut self) {
+        let text = Localizer::new(self.boot.profile_config.ui.locale());
         let Some(chart) = self.selected_chart_row().and_then(|row| row.chart.clone()) else {
             return;
         };
@@ -7036,39 +7048,43 @@ impl WinitApp {
             }
         }
         if opened == 0 {
-            self.show_left_overlay_toast("曲テキストが見つかりません");
+            self.show_left_overlay_toast(text.text("toast-chart-text-not-found"));
         } else {
-            self.show_left_overlay_toast(format!("曲テキストを {} 件開きました", opened));
+            let mut args = FluentArgs::new();
+            args.set("count", opened as i64);
+            self.show_left_overlay_toast(text.format("toast-chart-text-opened", &args));
         }
     }
 
     fn open_primary_ir_for_selected(&mut self) {
+        let text = Localizer::new(self.boot.profile_config.ui.locale());
         let Some(row) = self.selected_chart_row() else {
             return;
         };
         let Some(sha256) = row.score_sha256() else {
-            self.show_left_overlay_toast("IRページを開く譜面ハッシュがありません");
+            self.show_left_overlay_toast(text.text("toast-ir-chart-hash-missing"));
             return;
         };
         let Some(provider) = primary_ir_provider_for_profile(&self.boot.profile_config) else {
-            self.show_left_overlay_toast("プライマリIRが設定されていません");
+            self.show_left_overlay_toast(text.text("toast-primary-ir-not-configured"));
             return;
         };
         let url =
             format!("{}/charts/{}", provider.base_url.trim_end_matches('/'), hash_to_hex(&sha256));
         match open_external_url(&url) {
             Ok(()) => {
-                self.show_left_overlay_toast("プライマリIRページを開きました");
+                self.show_left_overlay_toast(text.text("toast-primary-ir-opened"));
                 tracing::info!(%url, "opened primary IR chart page");
             }
             Err(error) => {
                 tracing::warn!(%error, %url, "failed to open primary IR chart page");
-                self.show_left_overlay_toast("プライマリIRページを開けませんでした");
+                self.show_left_overlay_toast(text.text("toast-primary-ir-open-failed"));
             }
         }
     }
 
     fn start_autoplay_folder_selected(&mut self) {
+        let text = Localizer::new(self.boot.profile_config.ui.locale());
         let Some((path, kind)) =
             self.select_items.get(self.selected_index).and_then(|item| match item {
                 SelectItem::Folder { path, kind, .. } => Some((path.clone(), *kind)),
@@ -7078,7 +7094,7 @@ impl WinitApp {
             return;
         };
         if kind != bmz_render::scene::SelectRowKind::Folder {
-            self.show_left_overlay_toast("通常の曲フォルダでのみ Autoplay できます");
+            self.show_left_overlay_toast(text.text("toast-folder-autoplay-only-normal-folder"));
             return;
         }
         let mut folder_paths = vec![path.clone()];
@@ -7093,7 +7109,7 @@ impl WinitApp {
             Ok(charts) => charts,
             Err(error) => {
                 tracing::warn!(folder = %path, %error, "failed to list autoplay folder charts");
-                self.show_left_overlay_toast("フォルダ内の譜面を取得できませんでした");
+                self.show_left_overlay_toast(text.text("toast-folder-autoplay-charts-load-failed"));
                 return;
             }
         };
@@ -7105,7 +7121,7 @@ impl WinitApp {
             }
         }
         let Some(&first_chart_id) = chart_ids.first() else {
-            self.show_left_overlay_toast("フォルダ内に譜面がありません");
+            self.show_left_overlay_toast(text.text("toast-folder-autoplay-empty"));
             return;
         };
         self.clear_active_course_state();
@@ -7113,7 +7129,7 @@ impl WinitApp {
         let mut options = self.play_start_options();
         options.autoplay = true;
         self.begin_decide_for_chart(first_chart_id, options);
-        self.show_left_overlay_toast("フォルダ内 Autoplay を開始しました");
+        self.show_left_overlay_toast(text.text("toast-folder-autoplay-started"));
         tracing::info!(folder = %path, first_chart_id, "started folder autoplay");
     }
 
@@ -7245,21 +7261,24 @@ impl WinitApp {
     }
 
     fn acquire_missing_chart(&mut self, row: &SelectChartRow) {
+        let text = Localizer::new(self.boot.profile_config.ui.locale());
         let action =
             choose_missing_chart_action(&self.boot.app_config.downloads, &row.download_metadata);
         match action {
             MissingChartAction::Browser(urls) => match open_browser_urls(&urls) {
                 Ok(count) => {
-                    self.show_left_overlay_toast(format!("入手先をブラウザで開きました ({count})"));
+                    let mut args = FluentArgs::new();
+                    args.set("count", count as i64);
+                    self.show_left_overlay_toast(text.format("toast-chart-sources-opened", &args));
                     tracing::info!(title = row.display_title(), count, "opened missing chart URLs");
                 }
                 Err(error) => {
-                    self.show_left_overlay_toast(format!("ブラウザを開けませんでした: {error}"));
+                    self.show_left_overlay_toast(text.text("toast-chart-sources-open-failed"));
                     tracing::error!(%error, title = row.display_title(), "failed to open chart URLs");
                 }
             },
             MissingChartAction::Unavailable => {
-                self.show_left_overlay_toast("この譜面には利用可能な入手先がありません");
+                self.show_left_overlay_toast(text.text("toast-chart-source-unavailable"));
                 tracing::info!(
                     title = row.display_title(),
                     "missing chart has no available acquisition source"
@@ -7272,8 +7291,9 @@ impl WinitApp {
     }
 
     fn spawn_chart_download(&mut self, action: MissingChartAction, title: String) {
+        let text = Localizer::new(self.boot.profile_config.ui.locale());
         if self.pending_chart_download.is_some() {
-            self.show_left_overlay_toast("別の譜面を取得中です");
+            self.show_left_overlay_toast(text.text("toast-chart-download-in-progress"));
             return;
         }
         let source_name = match &action {
@@ -7299,11 +7319,14 @@ impl WinitApp {
             })
             .expect("failed to spawn chart download thread");
         self.pending_chart_download = Some(rx);
-        self.show_left_overlay_toast(format!("{source_name} から譜面を取得しています"));
+        let mut args = FluentArgs::new();
+        args.set("source", source_name);
+        self.show_left_overlay_toast(text.format("toast-chart-download-started", &args));
         tracing::info!(source = source_name, %title, "started chart download");
     }
 
     fn poll_pending_chart_download(&mut self) {
+        let text = Localizer::new(self.boot.profile_config.ui.locale());
         let Some(rx) = &self.pending_chart_download else {
             return;
         };
@@ -7311,9 +7334,11 @@ impl WinitApp {
             Ok(Ok(result)) => {
                 self.pending_chart_download = None;
                 let source_name = result.source.display_name();
-                self.show_left_overlay_toast(format!(
-                    "{source_name} 取得完了。譜面を登録しています"
-                ));
+                let mut args = FluentArgs::new();
+                args.set("source", source_name);
+                self.show_left_overlay_toast(
+                    text.format("toast-chart-download-complete-registering", &args),
+                );
                 tracing::info!(
                     source = source_name,
                     path = %result.chart_dir.display(),
@@ -7336,13 +7361,13 @@ impl WinitApp {
             }
             Ok(Err(error)) => {
                 self.pending_chart_download = None;
-                self.show_left_overlay_toast(format!("譜面の取得に失敗しました: {error}"));
+                self.show_left_overlay_toast(text.text("toast-chart-download-failed"));
                 tracing::error!(error = %format_error_chain(&error), "chart download failed");
             }
             Err(mpsc::TryRecvError::Empty) => {}
             Err(mpsc::TryRecvError::Disconnected) => {
                 self.pending_chart_download = None;
-                self.show_left_overlay_toast("譜面取得処理が予期せず終了しました");
+                self.show_left_overlay_toast(text.text("toast-chart-download-worker-ended"));
                 tracing::warn!("chart download worker disconnected");
             }
         }
@@ -22011,7 +22036,10 @@ mod tests {
 
         fps.record_frame(started_at + Duration::from_secs(1));
         assert_eq!(fps.current(), 5);
-        assert_eq!(fps_overlay_text(true, fps.current()), "FPS 5");
+        assert_eq!(
+            fps_overlay_text(true, fps.current(), Localizer::new(crate::i18n::AppLocale::Ja),),
+            "FPS 5"
+        );
         fps.record_frame(started_at + Duration::from_millis(1_250));
         assert_eq!(fps.current(), 5);
         fps.record_frame(started_at + Duration::from_secs(2));
@@ -22095,9 +22123,10 @@ mod tests {
 
     #[test]
     fn fps_overlay_text_uses_skin_fps_value() {
-        assert_eq!(fps_overlay_text(true, 237), "FPS 237");
-        assert_eq!(fps_overlay_text(false, 237), "");
-        assert_eq!(fps_overlay_text(true, 0), "");
+        let text = Localizer::new(crate::i18n::AppLocale::Ja);
+        assert_eq!(fps_overlay_text(true, 237, text), "FPS 237");
+        assert_eq!(fps_overlay_text(false, 237, text), "");
+        assert_eq!(fps_overlay_text(true, 0, text), "");
     }
 
     #[test]
