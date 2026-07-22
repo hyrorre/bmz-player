@@ -3,6 +3,8 @@ use rusqlite::{Connection, params};
 
 use crate::difficulty_table::FetchedDifficultyTable;
 
+const DOWNLOAD_METADATA_VERSION: i64 = 1;
+
 #[derive(Debug, Clone)]
 pub struct DifficultyTableRecord {
     pub id: i64,
@@ -46,21 +48,26 @@ pub(super) fn upsert_difficulty_table(
     let tx = conn.transaction()?;
 
     tx.execute(
-        "INSERT INTO difficulty_tables (source_url, head_url, name, symbol, level_order, fetched_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+        "INSERT INTO difficulty_tables (
+             source_url, head_url, name, symbol, level_order, fetched_at,
+             download_metadata_version
+         )
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
          ON CONFLICT(source_url) DO UPDATE SET
              head_url = excluded.head_url,
              name = excluded.name,
              symbol = excluded.symbol,
              level_order = excluded.level_order,
-             fetched_at = excluded.fetched_at",
+             fetched_at = excluded.fetched_at,
+             download_metadata_version = excluded.download_metadata_version",
         params![
             table.source_url,
             table.head_url,
             table.name,
             table.symbol,
             level_order_json,
-            table.fetched_at
+            table.fetched_at,
+            DOWNLOAD_METADATA_VERSION,
         ],
     )?;
 
@@ -128,6 +135,18 @@ pub(super) fn list_difficulty_tables(conn: &Connection) -> Result<Vec<Difficulty
         });
     }
     Ok(result)
+}
+
+pub(super) fn list_difficulty_table_sources_with_current_download_metadata(
+    conn: &Connection,
+) -> Result<Vec<String>> {
+    let mut stmt = conn.prepare(
+        "SELECT source_url
+         FROM difficulty_tables
+         WHERE download_metadata_version = ?1",
+    )?;
+    let rows = stmt.query_map(params![DOWNLOAD_METADATA_VERSION], |row| row.get(0))?;
+    rows.collect::<std::result::Result<Vec<_>, _>>().map_err(Into::into)
 }
 
 /// Lists every entry of the given difficulty table without joining local charts.
@@ -316,6 +335,28 @@ mod tests {
         assert_eq!(rows[0].append_url, "https://example.com/song-a-diff");
         assert_eq!(rows[0].ipfs, "/ipfs/bafy-song-a");
         assert_eq!(rows[0].append_ipfs, "/ipfs/bafy-song-a-diff");
+    }
+
+    #[test]
+    fn download_metadata_version_marks_legacy_tables_for_refresh() {
+        let mut conn = open_db();
+        let table = sample_table("https://example.com/");
+        upsert_difficulty_table(&mut conn, &table).unwrap();
+
+        assert_eq!(
+            list_difficulty_table_sources_with_current_download_metadata(&conn).unwrap(),
+            vec!["https://example.com/".to_string()]
+        );
+
+        conn.execute(
+            "UPDATE difficulty_tables SET download_metadata_version = 0 WHERE source_url = ?1",
+            params![table.source_url],
+        )
+        .unwrap();
+
+        assert!(
+            list_difficulty_table_sources_with_current_download_metadata(&conn).unwrap().is_empty()
+        );
     }
 
     #[test]

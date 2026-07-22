@@ -95,11 +95,24 @@ struct DataEntry {
     comment: Option<String>,
     #[serde(default)]
     url: Option<String>,
-    #[serde(default, alias = "appendUrl", alias = "appendURL", alias = "append_url")]
+    #[serde(
+        default,
+        alias = "appendUrl",
+        alias = "appendURL",
+        alias = "append_url",
+        alias = "urlDiff",
+        alias = "url_diff"
+    )]
     appendurl: Option<String>,
     #[serde(default)]
     ipfs: Option<String>,
-    #[serde(default, alias = "appendIpfs", alias = "append_ipfs")]
+    #[serde(
+        default,
+        alias = "appendIpfs",
+        alias = "append_ipfs",
+        alias = "ipfsDiff",
+        alias = "ipfs_diff"
+    )]
     appendipfs: Option<String>,
 }
 
@@ -320,9 +333,9 @@ mod tests {
                 "level": "1",
                 "md5": "00112233445566778899aabbccddeeff",
                 "url": " https://example.com/song ",
-                "appendUrl": "https://example.com/diff",
+                "url_diff": "https://example.com/diff",
                 "ipfs": "/ipfs/bafy-main",
-                "appendIpfs": "/ipfs/bafy-diff"
+                "ipfs_diff": "/ipfs/bafy-diff"
             }"#,
         )
         .unwrap();
@@ -331,6 +344,24 @@ mod tests {
         assert_eq!(entry.appendurl.as_deref(), Some("https://example.com/diff"));
         assert_eq!(entry.ipfs.as_deref(), Some("/ipfs/bafy-main"));
         assert_eq!(entry.appendipfs.as_deref(), Some("/ipfs/bafy-diff"));
+    }
+
+    #[test]
+    fn parse_download_metadata_accepts_all_append_aliases() {
+        let cases = [
+            r#"{"appendurl":"https://example.com/diff","appendipfs":"/ipfs/diff"}"#,
+            r#"{"appendUrl":"https://example.com/diff","appendIpfs":"/ipfs/diff"}"#,
+            r#"{"appendURL":"https://example.com/diff","append_ipfs":"/ipfs/diff"}"#,
+            r#"{"append_url":"https://example.com/diff","ipfsDiff":"/ipfs/diff"}"#,
+            r#"{"urlDiff":"https://example.com/diff","ipfs_diff":"/ipfs/diff"}"#,
+            r#"{"url_diff":"https://example.com/diff","appendIpfs":"/ipfs/diff"}"#,
+        ];
+
+        for body in cases {
+            let entry: DataEntry = serde_json::from_str(body).unwrap();
+            assert_eq!(entry.appendurl.as_deref(), Some("https://example.com/diff"));
+            assert_eq!(entry.appendipfs.as_deref(), Some("/ipfs/diff"));
+        }
     }
 
     #[test]

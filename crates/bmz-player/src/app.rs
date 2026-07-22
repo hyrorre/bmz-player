@@ -310,10 +310,13 @@ async fn fetch_startup_difficulty_tables(boot: &mut bootstrap::BootstrappedApp) 
     use std::time::{SystemTime, UNIX_EPOCH};
     let now = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0);
 
-    let fetched_source_urls: HashSet<String> = match boot.library_db.list_difficulty_tables() {
-        Ok(tables) => tables.into_iter().map(|table| table.source_url).collect(),
+    let fetched_source_urls: HashSet<String> = match boot
+        .library_db
+        .list_difficulty_table_sources_with_current_download_metadata()
+    {
+        Ok(source_urls) => source_urls.into_iter().collect(),
         Err(error) => {
-            tracing::warn!(%error, "failed to list fetched difficulty tables");
+            tracing::warn!(%error, "failed to list difficulty tables with current download metadata");
             HashSet::new()
         }
     };

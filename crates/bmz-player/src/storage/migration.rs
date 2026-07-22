@@ -529,6 +529,13 @@ pub const LIBRARY_MIGRATIONS: &[Migration] = &[
             "ALTER TABLE difficulty_table_entries ADD COLUMN append_ipfs TEXT NOT NULL DEFAULT '';",
         ],
     },
+    Migration {
+        version: 26,
+        // Existing tables predate download metadata persistence. Refetch them once even when
+        // regular startup refreshes are disabled, then mark successful upserts as current.
+        statements: &["ALTER TABLE difficulty_tables
+             ADD COLUMN download_metadata_version INTEGER NOT NULL DEFAULT 0;"],
+    },
 ];
 
 pub const SCORE_MIGRATIONS: &[Migration] = &[
@@ -1520,7 +1527,7 @@ mod tests {
         run_migrations(&mut conn, LIBRARY_MIGRATIONS).unwrap();
 
         let version: i32 = conn.pragma_query_value(None, "user_version", |row| row.get(0)).unwrap();
-        assert_eq!(version, 25);
+        assert_eq!(version, 26);
 
         let mut stmt = conn.prepare("PRAGMA table_info(charts)").unwrap();
         let columns = stmt
@@ -1567,6 +1574,33 @@ mod tests {
         for column in ["url", "append_url", "ipfs", "append_ipfs"] {
             assert!(columns.iter().any(|candidate| candidate == column));
         }
+
+        let table_columns = conn
+            .prepare("PRAGMA table_info(difficulty_tables)")
+            .unwrap()
+            .query_map([], |row| row.get::<_, String>(1))
+            .unwrap()
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .unwrap();
+        assert!(table_columns.iter().any(|column| column == "download_metadata_version"));
+
+        conn.execute(
+            "INSERT INTO difficulty_tables
+             (source_url, head_url, name, symbol, level_order, fetched_at)
+             VALUES ('https://example.com/', 'https://example.com/header.json',
+                     'Example', '★', '[]', 0)",
+            [],
+        )
+        .unwrap();
+        let version: i64 = conn
+            .query_row(
+                "SELECT download_metadata_version FROM difficulty_tables
+                 WHERE source_url = 'https://example.com/'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(version, 0);
     }
 
     #[test]
@@ -1588,6 +1622,9 @@ mod tests {
                 table_id INTEGER NOT NULL,
                 level TEXT NOT NULL
              );
+             CREATE TABLE difficulty_tables (
+                source_url TEXT NOT NULL
+             );
              INSERT INTO charts (headers_json) VALUES ('{\"002D9\":\"note data\"}');
              PRAGMA user_version = 21;",
         )
@@ -1599,7 +1636,7 @@ mod tests {
             conn.query_row("SELECT headers_json FROM charts", [], |row| row.get(0)).unwrap();
         let version: i32 = conn.pragma_query_value(None, "user_version", |row| row.get(0)).unwrap();
         assert_eq!(headers_json, "{}");
-        assert_eq!(version, 25);
+        assert_eq!(version, 26);
     }
 
     #[test]
@@ -1620,6 +1657,9 @@ mod tests {
              CREATE TABLE difficulty_table_entries (
                 table_id INTEGER NOT NULL,
                 level TEXT NOT NULL
+             );
+             CREATE TABLE difficulty_tables (
+                source_url TEXT NOT NULL
              );
              INSERT INTO charts (id, sha256, md5) VALUES
                 (10, 'preferred-sha', 'other-md5'),
@@ -1644,7 +1684,7 @@ mod tests {
             .unwrap();
         let version: i32 = conn.pragma_query_value(None, "user_version", |row| row.get(0)).unwrap();
         assert_eq!(chart_ids, vec![Some(10), Some(20), None, Some(99)]);
-        assert_eq!(version, 25);
+        assert_eq!(version, 26);
     }
 
     #[test]

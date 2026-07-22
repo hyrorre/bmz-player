@@ -902,6 +902,14 @@ impl LibraryDatabase {
         super::difficulty_table_db::list_difficulty_tables(&self.conn)
     }
 
+    pub fn list_difficulty_table_sources_with_current_download_metadata(
+        &self,
+    ) -> Result<Vec<String>> {
+        super::difficulty_table_db::list_difficulty_table_sources_with_current_download_metadata(
+            &self.conn,
+        )
+    }
+
     pub fn list_difficulty_table_entries_by_md5s(
         &self,
         md5s: &[&str],
