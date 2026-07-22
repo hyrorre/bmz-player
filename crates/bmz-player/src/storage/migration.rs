@@ -1505,6 +1505,177 @@ pub const SCORE_MIGRATIONS: &[Migration] = &[
                 ON score_history_sources(score_history_id);",
         ],
     },
+    Migration {
+        version: 26,
+        // Some imported score histories do not include their final gauge value.
+        // Rebuild the two score tables so NULL can represent that absence
+        // without inventing a value from the clear lamp.
+        statements: &[
+            "CREATE TEMP TABLE score_history_sources_backup AS
+                SELECT id, score_history_id, source, provider, account_id,
+                       remote_score_id, verification, server_received_at, imported_at
+                FROM score_history_sources;",
+            "DROP TABLE score_history_sources;",
+            "ALTER TABLE score_history RENAME TO score_history_old;",
+            "CREATE TABLE score_history (
+                id INTEGER PRIMARY KEY,
+                chart_sha256 TEXT NOT NULL,
+                ln_policy TEXT NOT NULL DEFAULT 'ForceLn',
+                double_option TEXT NOT NULL DEFAULT 'Off',
+                played_at INTEGER NOT NULL,
+                clear_type TEXT NOT NULL,
+                gauge_type TEXT NOT NULL,
+                gauge_value REAL,
+                total_notes INTEGER NOT NULL,
+                ex_score INTEGER NOT NULL,
+                bp INTEGER NOT NULL,
+                cb INTEGER NOT NULL,
+                max_combo INTEGER NOT NULL,
+                fast_pgreat INTEGER NOT NULL,
+                slow_pgreat INTEGER NOT NULL,
+                fast_great INTEGER NOT NULL,
+                slow_great INTEGER NOT NULL,
+                fast_good INTEGER NOT NULL,
+                slow_good INTEGER NOT NULL,
+                fast_bad INTEGER NOT NULL,
+                slow_bad INTEGER NOT NULL,
+                fast_poor INTEGER NOT NULL,
+                slow_poor INTEGER NOT NULL,
+                fast_empty_poor INTEGER NOT NULL,
+                slow_empty_poor INTEGER NOT NULL,
+                random_seed INTEGER,
+                arrange TEXT NOT NULL DEFAULT 'Normal',
+                gauge_option TEXT NOT NULL,
+                rule_mode TEXT NOT NULL DEFAULT 'Beatoraja',
+                assist_mask INTEGER NOT NULL DEFAULT 0,
+                autoplay INTEGER NOT NULL DEFAULT 0,
+                device_type TEXT NOT NULL DEFAULT 'keyboard',
+                replay_path TEXT NOT NULL,
+                course_score_id INTEGER REFERENCES course_scores(id) ON DELETE SET NULL,
+                old_clear_type TEXT,
+                old_ex_score INTEGER,
+                old_max_combo INTEGER,
+                old_bp INTEGER,
+                old_cb INTEGER,
+                source_kind TEXT NOT NULL DEFAULT 'Local',
+                arrange_2p TEXT NOT NULL DEFAULT 'Normal',
+                applied_double_option TEXT NOT NULL DEFAULT 'Off',
+                seed_scheme TEXT NOT NULL DEFAULT 'legacy_shared_v3'
+            );",
+            "INSERT INTO score_history (
+                id, chart_sha256, ln_policy, double_option, played_at,
+                clear_type, gauge_type, gauge_value, total_notes, ex_score,
+                bp, cb, max_combo, fast_pgreat, slow_pgreat, fast_great,
+                slow_great, fast_good, slow_good, fast_bad, slow_bad,
+                fast_poor, slow_poor, fast_empty_poor, slow_empty_poor,
+                random_seed, arrange, gauge_option, rule_mode, assist_mask,
+                autoplay, device_type, replay_path, course_score_id,
+                old_clear_type, old_ex_score, old_max_combo, old_bp, old_cb,
+                source_kind, arrange_2p, applied_double_option, seed_scheme
+            )
+            SELECT
+                id, chart_sha256, ln_policy, double_option, played_at,
+                clear_type, gauge_type, gauge_value, total_notes, ex_score,
+                bp, cb, max_combo, fast_pgreat, slow_pgreat, fast_great,
+                slow_great, fast_good, slow_good, fast_bad, slow_bad,
+                fast_poor, slow_poor, fast_empty_poor, slow_empty_poor,
+                random_seed, arrange, gauge_option, rule_mode, assist_mask,
+                autoplay, device_type, replay_path, course_score_id,
+                old_clear_type, old_ex_score, old_max_combo, old_bp, old_cb,
+                source_kind, arrange_2p, applied_double_option, seed_scheme
+            FROM score_history_old;",
+            "DROP TABLE score_history_old;",
+            "CREATE INDEX idx_score_history_chart_sha256 ON score_history(chart_sha256);",
+            "CREATE INDEX idx_score_history_played_at ON score_history(played_at DESC);",
+            "CREATE INDEX idx_score_history_course_score_id
+                ON score_history(course_score_id)
+                WHERE course_score_id IS NOT NULL;",
+            "CREATE INDEX idx_score_history_source_kind_chart_sha256
+                ON score_history(source_kind, chart_sha256);",
+            "CREATE TABLE score_history_sources (
+                id INTEGER PRIMARY KEY,
+                score_history_id INTEGER NOT NULL
+                    REFERENCES score_history(id) ON DELETE CASCADE,
+                source TEXT NOT NULL,
+                provider TEXT NOT NULL,
+                account_id TEXT NOT NULL,
+                remote_score_id TEXT NOT NULL,
+                verification TEXT NOT NULL DEFAULT '',
+                server_received_at INTEGER NOT NULL DEFAULT 0,
+                imported_at INTEGER NOT NULL,
+                UNIQUE(source, provider, account_id, remote_score_id)
+            );",
+            "INSERT INTO score_history_sources (
+                id, score_history_id, source, provider, account_id,
+                remote_score_id, verification, server_received_at, imported_at
+            )
+            SELECT
+                id, score_history_id, source, provider, account_id,
+                remote_score_id, verification, server_received_at, imported_at
+            FROM score_history_sources_backup;",
+            "DROP TABLE score_history_sources_backup;",
+            "CREATE INDEX idx_score_history_sources_history
+                ON score_history_sources(score_history_id);",
+            "ALTER TABLE score_best RENAME TO score_best_old;",
+            "CREATE TABLE score_best (
+                chart_sha256 TEXT NOT NULL,
+                ln_policy TEXT NOT NULL,
+                double_option TEXT NOT NULL DEFAULT 'Off',
+                rule_mode TEXT NOT NULL DEFAULT 'Beatoraja',
+                clear_type TEXT NOT NULL,
+                gauge_type TEXT NOT NULL,
+                gauge_value REAL,
+                ex_score INTEGER NOT NULL,
+                bp INTEGER NOT NULL,
+                cb INTEGER NOT NULL,
+                max_combo INTEGER NOT NULL,
+                fast_pgreat INTEGER NOT NULL,
+                slow_pgreat INTEGER NOT NULL,
+                fast_great INTEGER NOT NULL,
+                slow_great INTEGER NOT NULL,
+                fast_good INTEGER NOT NULL,
+                slow_good INTEGER NOT NULL,
+                fast_bad INTEGER NOT NULL,
+                slow_bad INTEGER NOT NULL,
+                fast_poor INTEGER NOT NULL,
+                slow_poor INTEGER NOT NULL,
+                fast_empty_poor INTEGER NOT NULL,
+                slow_empty_poor INTEGER NOT NULL,
+                played_at INTEGER NOT NULL,
+                replay_path TEXT NOT NULL,
+                ghost TEXT NOT NULL DEFAULT '',
+                play_count INTEGER NOT NULL DEFAULT 0,
+                clear_count INTEGER NOT NULL DEFAULT 0,
+                device_type TEXT NOT NULL DEFAULT 'keyboard',
+                best_score_history_id INTEGER,
+                PRIMARY KEY(chart_sha256, ln_policy, double_option, rule_mode)
+            );",
+            "INSERT INTO score_best (
+                chart_sha256, ln_policy, double_option, rule_mode,
+                clear_type, gauge_type, gauge_value, ex_score, bp, cb,
+                max_combo, fast_pgreat, slow_pgreat, fast_great, slow_great,
+                fast_good, slow_good, fast_bad, slow_bad, fast_poor,
+                slow_poor, fast_empty_poor, slow_empty_poor, played_at,
+                replay_path, ghost, play_count, clear_count, device_type,
+                best_score_history_id
+            )
+            SELECT
+                chart_sha256, ln_policy, double_option, rule_mode,
+                clear_type, gauge_type, gauge_value, ex_score, bp, cb,
+                max_combo, fast_pgreat, slow_pgreat, fast_great, slow_great,
+                fast_good, slow_good, fast_bad, slow_bad, fast_poor,
+                slow_poor, fast_empty_poor, slow_empty_poor, played_at,
+                replay_path, ghost, play_count, clear_count, device_type,
+                best_score_history_id
+            FROM score_best_old;",
+            "DROP TABLE score_best_old;",
+            "CREATE INDEX idx_score_best_clear_type ON score_best(clear_type);",
+            "CREATE INDEX idx_score_best_ex_score ON score_best(ex_score DESC);",
+            "CREATE INDEX idx_score_best_best_score_history_id
+                ON score_best(best_score_history_id)
+                WHERE best_score_history_id IS NOT NULL;",
+        ],
+    },
 ];
 
 pub const NETWORK_MIGRATIONS: &[Migration] = &[Migration {
@@ -1806,10 +1977,21 @@ mod tests {
             params![history_id],
         )
         .unwrap();
+        let version_26 =
+            SCORE_MIGRATIONS.iter().position(|migration| migration.version == 26).unwrap();
+        run_migrations(&mut conn, &SCORE_MIGRATIONS[..version_26]).unwrap();
+        conn.execute(
+            "INSERT INTO score_history_sources (
+                score_history_id, source, provider, account_id, remote_score_id,
+                verification, server_received_at, imported_at
+            ) VALUES (?1, 'bmz_ir', 'provider', 'account', 'remote', '', 2, 3)",
+            params![history_id],
+        )
+        .unwrap();
         run_migrations(&mut conn, SCORE_MIGRATIONS).unwrap();
 
         let version: i32 = conn.pragma_query_value(None, "user_version", |row| row.get(0)).unwrap();
-        assert_eq!(version, 25);
+        assert_eq!(version, 26);
 
         let mut stmt = conn.prepare("PRAGMA table_info(score_best)").unwrap();
         let columns = stmt
@@ -1823,6 +2005,24 @@ mod tests {
             .query_row("SELECT best_score_history_id FROM score_best", [], |row| row.get(0))
             .unwrap();
         assert_eq!(linked_history_id, history_id);
+
+        let source_history_id: i64 = conn
+            .query_row("SELECT score_history_id FROM score_history_sources", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(source_history_id, history_id);
+
+        for table in ["score_history", "score_best"] {
+            let sql = format!(
+                "SELECT \"notnull\" FROM pragma_table_info('{table}') WHERE name = 'gauge_value'"
+            );
+            let not_null: i32 = conn.query_row(&sql, [], |row| row.get(0)).unwrap();
+            assert_eq!(not_null, 0, "{table}.gauge_value should be nullable");
+            conn.execute(&format!("UPDATE {table} SET gauge_value = NULL"), []).unwrap();
+            let gauge_value: Option<f32> = conn
+                .query_row(&format!("SELECT gauge_value FROM {table}"), [], |row| row.get(0))
+                .unwrap();
+            assert_eq!(gauge_value, None);
+        }
     }
 
     #[test]
@@ -1854,7 +2054,7 @@ mod tests {
         run_score_migrations(&mut conn).unwrap();
 
         let version: i32 = conn.pragma_query_value(None, "user_version", |row| row.get(0)).unwrap();
-        assert_eq!(version, 25);
+        assert_eq!(version, 26);
         assert!(column_exists(&conn, "score_history", "source_kind").unwrap());
         assert!(column_exists(&conn, "score_history", "arrange_2p").unwrap());
         assert!(column_exists(&conn, "score_history", "applied_double_option").unwrap());

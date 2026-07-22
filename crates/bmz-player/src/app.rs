@@ -19223,7 +19223,7 @@ fn select_snapshot_rows(
                             .unwrap_or_default(),
                         ex_score: row.best_score.as_ref().map(|score| score.ex_score),
                         max_combo: row.best_score.as_ref().map(|score| score.max_combo),
-                        gauge_value: row.best_score.as_ref().map(|score| score.gauge_value),
+                        gauge_value: row.best_score.as_ref().and_then(|score| score.gauge_value),
                         bp: row.best_score.as_ref().map(|score| score.bp),
                         cb: row.best_score.as_ref().map(|score| score.cb),
                         judge_counts: row
@@ -27622,7 +27622,7 @@ mod tests {
             rule_mode: bmz_gameplay::rule::RuleMode::Beatoraja,
             clear_type: "Normal".to_string(),
             gauge_type: "Normal".to_string(),
-            gauge_value: 80.0,
+            gauge_value: Some(80.0),
             ex_score,
             bp: 0,
             cb: 0,

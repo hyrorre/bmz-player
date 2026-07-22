@@ -496,7 +496,7 @@ mod tests {
             rule_mode: bmz_gameplay::rule::RuleMode::Beatoraja,
             clear_type: "Hard".to_string(),
             gauge_type: "Normal".to_string(),
-            gauge_value: 100.0,
+            gauge_value: Some(100.0),
             ex_score: 100,
             bp: 0,
             cb: 0,

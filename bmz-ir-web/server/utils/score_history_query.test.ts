@@ -1,4 +1,6 @@
 import { describe, expect, test } from 'bun:test'
+import { getTableConfig } from 'drizzle-orm/sqlite-core'
+import { scores } from '../db/schema'
 import {
   optionalHexQuery,
   ownScoreHistoryCursorFromQuery,
@@ -6,6 +8,21 @@ import {
 } from './score_history_query'
 
 describe('own score history query', () => {
+  test('has an index matching the stable history filter and cursor order', () => {
+    const historyIndex = getTableConfig(scores).indexes.find(
+      (candidate) => candidate.config.name === 'idx_scores_player_scoring_accepted_received_id',
+    )
+    const columns = historyIndex?.config.columns as Array<{ name: string }> | undefined
+
+    expect(columns?.map((column) => column.name)).toEqual([
+      'player_id',
+      'scoring',
+      'accepted',
+      'server_received_at',
+      'id',
+    ])
+  })
+
   test('returns HTTP 400 for an invalid chart hash', () => {
     expectHttp400(() => optionalHexQuery('invalid', 64, 'chart_sha256'))
     expect(optionalHexQuery('ab'.repeat(32), 64, 'chart_sha256')).toBe('ab'.repeat(32))

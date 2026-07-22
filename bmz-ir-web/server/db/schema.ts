@@ -274,6 +274,13 @@ export const scores = sqliteTable(
     index('idx_scores_received_at').on(table.serverReceivedAt),
     index('idx_scores_player_played_at').on(table.playerId, table.playedAt),
     index('idx_scores_player_received_at').on(table.playerId, table.serverReceivedAt),
+    index('idx_scores_player_scoring_accepted_received_id').on(
+      table.playerId,
+      table.scoring,
+      table.accepted,
+      table.serverReceivedAt,
+      table.id,
+    ),
   ],
 )
 

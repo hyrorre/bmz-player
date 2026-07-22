@@ -751,7 +751,7 @@ fn imported_score_record(
         played_at,
         clear_type,
         gauge_type: gauge_type_for_clear(clear_type),
-        gauge_value: gauge_value_for_clear(clear_type),
+        gauge_value: Some(gauge_value_for_clear(clear_type)),
         total_notes,
         playtime_seconds: 0,
         score,

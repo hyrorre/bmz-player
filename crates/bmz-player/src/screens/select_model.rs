@@ -3082,7 +3082,7 @@ mod tests {
             played_at: 1_700_000_030,
             clear_type: ClearType::Normal,
             gauge_type: Some(GaugeType::Normal),
-            gauge_value: 80.0,
+            gauge_value: Some(80.0),
             total_notes: 1,
             playtime_seconds: 0,
             score,

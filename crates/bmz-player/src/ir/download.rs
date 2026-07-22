@@ -275,7 +275,7 @@ pub fn score_record_from_ir_entry(entry: &IrOwnScoreHistoryEntry) -> Result<Scor
         played_at: entry.played_at.unwrap_or(entry.server_received_at),
         clear_type,
         gauge_type: gauge_type_from_ir(&entry.gauge).or_else(|| gauge_type_for_clear(clear_type)),
-        gauge_value: gauge_value_for_clear(clear_type),
+        gauge_value: None,
         total_notes: entry.notes,
         playtime_seconds: entry
             .duration_ms
@@ -408,13 +408,6 @@ fn gauge_type_for_clear(clear_type: ClearType) -> Option<GaugeType> {
         ClearType::Hard => Some(GaugeType::Hard),
         ClearType::ExHard => Some(GaugeType::ExHard),
         ClearType::NoPlay | ClearType::Failed => None,
-    }
-}
-
-fn gauge_value_for_clear(clear_type: ClearType) -> f32 {
-    match clear_type {
-        ClearType::NoPlay | ClearType::Failed => 0.0,
-        _ => 100.0,
     }
 }
 
@@ -558,7 +551,7 @@ mod tests {
         assert_eq!(record.chart_sha256, [0x11; 32]);
         assert_eq!(record.clear_type, ClearType::Hard);
         assert_eq!(record.gauge_type, Some(GaugeType::Hard));
-        assert_eq!(record.gauge_value, 100.0);
+        assert_eq!(record.gauge_value, None);
         assert_eq!(record.score.ex_score(), 21);
         assert_eq!(record.score.bp(), 1);
         assert_eq!(record.count_unprocessed_notes, false);
@@ -625,15 +618,25 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM score_history", [], |row| row.get(0))
             .unwrap();
         assert_eq!(count, 1);
+        let history_gauge: Option<f32> = score_db
+            .conn()
+            .query_row("SELECT gauge_value FROM score_history", [], |row| row.get(0))
+            .unwrap();
+        let best_gauge: Option<f32> = score_db
+            .conn()
+            .query_row("SELECT gauge_value FROM score_best", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(history_gauge, None);
+        assert_eq!(best_gauge, None);
     }
 
     #[test]
     fn import_ir_score_entries_links_previously_uploaded_local_score() {
         let mut score_db = open_score_db();
         let mut network_db = open_network_db();
-        let local_history_id = score_db
-            .insert_score(&score_record_from_ir_entry(&score_entry("local")).unwrap())
-            .unwrap();
+        let mut local_record = score_record_from_ir_entry(&score_entry("local")).unwrap();
+        local_record.gauge_value = Some(64.0);
+        let local_history_id = score_db.insert_score(&local_record).unwrap();
         let job_id = network_db
             .enqueue_ir_score_job(&NewIrScoreJob {
                 provider: "provider-1".to_string(),

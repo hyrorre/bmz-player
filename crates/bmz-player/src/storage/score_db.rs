@@ -179,7 +179,8 @@ pub struct ScoreRecord {
     pub played_at: i64,
     pub clear_type: ClearType,
     pub gauge_type: Option<GaugeType>,
-    pub gauge_value: f32,
+    /// Final gauge value. Imported histories may not provide this value.
+    pub gauge_value: Option<f32>,
     pub total_notes: u32,
     pub playtime_seconds: u32,
     pub score: ScoreState,
@@ -295,7 +296,7 @@ impl ScoreRecord {
             played_at,
             clear_type: result.clear_type,
             gauge_type: Some(result.gauge_type),
-            gauge_value: result.gauge_value,
+            gauge_value: Some(result.gauge_value),
             total_notes: result.total_notes,
             playtime_seconds,
             score: result.score.clone(),
@@ -384,7 +385,7 @@ pub struct BestScoreSummary {
     pub rule_mode: RuleMode,
     pub clear_type: String,
     pub gauge_type: String,
-    pub gauge_value: f32,
+    pub gauge_value: Option<f32>,
     pub ex_score: u32,
     pub bp: u32,
     pub cb: u32,
@@ -459,7 +460,7 @@ pub struct ScoreHistoryEntry {
     pub played_at: i64,
     pub clear_type: String,
     pub gauge_type: String,
-    pub gauge_value: f32,
+    pub gauge_value: Option<f32>,
     pub total_notes: u32,
     pub ex_score: u32,
     pub bp: u32,
@@ -1490,7 +1491,7 @@ fn source_score_history_match(
            AND double_option = ?4
            AND clear_type = ?5
            AND gauge_type = ?6
-           AND gauge_value = ?7
+           AND (?7 IS NULL OR gauge_value = ?7)
            AND total_notes = ?8
            AND ex_score = ?9
            AND bp = ?10
@@ -2439,7 +2440,7 @@ mod tests {
             played_at: 1_700_000_000,
             clear_type,
             gauge_type: Some(GaugeType::Normal),
-            gauge_value: 82.0,
+            gauge_value: Some(82.0),
             total_notes: ex_score / 2,
             playtime_seconds: 0,
             score: score_with_ex_score(ex_score),
@@ -2786,14 +2787,14 @@ mod tests {
         db.insert_score(&record(40, ClearType::Normal)).unwrap();
         let mut hard = record(20, ClearType::Hard);
         hard.gauge_type = Some(GaugeType::Hard);
-        hard.gauge_value = 12.0;
+        hard.gauge_value = Some(12.0);
         db.insert_score(&hard).unwrap();
 
         let best = db.best_scores_for_charts(&[key([7; 32])]).unwrap().pop().unwrap();
         assert_eq!(best.ex_score, 40);
         assert_eq!(best.clear_type, "Hard");
         assert_eq!(best.gauge_type, "Hard");
-        assert_eq!(best.gauge_value, 12.0);
+        assert_eq!(best.gauge_value, Some(12.0));
     }
 
     #[test]
@@ -2805,18 +2806,18 @@ mod tests {
 
         let mut hard = record(20, ClearType::Hard);
         hard.gauge_type = Some(GaugeType::Hard);
-        hard.gauge_value = 12.0;
+        hard.gauge_value = Some(12.0);
         db.insert_score(&hard).unwrap();
         let mut normal = record(40, ClearType::Normal);
         normal.gauge_type = Some(GaugeType::Normal);
-        normal.gauge_value = 82.0;
+        normal.gauge_value = Some(82.0);
         db.insert_score(&normal).unwrap();
 
         let best = db.best_scores_for_charts(&[key([7; 32])]).unwrap().pop().unwrap();
         assert_eq!(best.ex_score, 40);
         assert_eq!(best.clear_type, "Hard");
         assert_eq!(best.gauge_type, "Hard");
-        assert_eq!(best.gauge_value, 12.0);
+        assert_eq!(best.gauge_value, Some(12.0));
     }
 
     #[test]
@@ -3450,7 +3451,7 @@ mod tests {
             let mut rec = record(20 + i as u32 * 10, ClearType::Hard);
             rec.chart_sha256 = *sha;
             rec.gauge_type = Some(*gauge);
-            rec.gauge_value = 42.0 + i as f32;
+            rec.gauge_value = Some(42.0 + i as f32);
             db.insert_score(&rec).unwrap();
         }
 
@@ -3471,7 +3472,7 @@ mod tests {
         for (i, (sha, _, expected_label)) in cases.iter().enumerate() {
             let summary = by_sha.remove(sha).expect("best entry exists");
             assert_eq!(summary.gauge_type, *expected_label);
-            assert_eq!(summary.gauge_value, 42.0 + i as f32);
+            assert_eq!(summary.gauge_value, Some(42.0 + i as f32));
         }
     }
 
@@ -3700,7 +3701,7 @@ mod tests {
         assert_eq!(record.played_at, 1_700_000_040);
         assert_eq!(record.clear_type, ClearType::Normal);
         assert_eq!(record.gauge_type, Some(GaugeType::Hard));
-        assert_eq!(record.gauge_value, 76.5);
+        assert_eq!(record.gauge_value, Some(76.5));
         assert_eq!(record.device_type, InputDeviceKind::Controller);
         assert_eq!(record.arrange_2p, "Mirror");
         assert_eq!(record.source_kind, ScoreSourceKind::Lr2Oraja);
