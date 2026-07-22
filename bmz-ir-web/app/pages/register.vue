@@ -8,12 +8,15 @@ type RegisterState = {
 }
 
 const { loggedIn, fetch: refreshSession } = useUserSession()
+const localePath = useLocalePath()
+const { t } = useI18n()
+const { translateApiError } = useApiError()
 
-const fields: AuthFormField[] = [
+const fields = computed<AuthFormField[]>(() => [
   {
     name: 'displayName',
     type: 'text',
-    label: '表示名',
+    label: t('auth.displayName'),
     placeholder: 'name',
     autocomplete: 'nickname',
     required: true,
@@ -22,7 +25,7 @@ const fields: AuthFormField[] = [
   {
     name: 'email',
     type: 'email',
-    label: 'メールアドレス',
+    label: t('auth.email'),
     placeholder: 'name@example.com',
     autocomplete: 'email',
     required: true,
@@ -31,35 +34,35 @@ const fields: AuthFormField[] = [
   {
     name: 'password',
     type: 'password',
-    label: 'パスワード',
-    placeholder: '8文字以上',
+    label: t('auth.password'),
+    placeholder: t('auth.passwordMin'),
     autocomplete: 'new-password',
     required: true,
     defaultValue: '',
   },
-]
+])
 
 const loading = ref(false)
 const errorMessage = ref('')
 const successMessage = ref('')
 
 if (loggedIn.value) {
-  await navigateTo('/')
+  await navigateTo(localePath('/'))
 }
 
 function validate(state: Partial<RegisterState>) {
   const errors: { name: keyof RegisterState; message: string }[] = []
 
   if (!state.displayName?.trim()) {
-    errors.push({ name: 'displayName', message: '表示名を入力してください。' })
+    errors.push({ name: 'displayName', message: t('validation.displayNameRequired') })
   }
 
   if (!state.email?.trim()) {
-    errors.push({ name: 'email', message: 'メールアドレスを入力してください。' })
+    errors.push({ name: 'email', message: t('validation.emailRequired') })
   }
 
   if (!state.password || state.password.length < 8) {
-    errors.push({ name: 'password', message: 'パスワードは8文字以上にしてください。' })
+    errors.push({ name: 'password', message: t('validation.passwordMin') })
   }
 
   return errors
@@ -81,16 +84,17 @@ async function submit(event: FormSubmitEvent<RegisterState>) {
     })
     await refreshSession()
   } catch (error) {
-    errorMessage.value =
-      error instanceof Error && error.message ? error.message : 'アカウント登録に失敗しました。'
+    errorMessage.value = translateApiError(error, 'errors.registerFailed')
     loading.value = false
     return
   }
 
   loading.value = false
   successMessage.value = ''
-  await navigateTo('/')
+  await navigateTo(localePath('/'))
 }
+
+useSeoMeta({ title: () => t('register.title') })
 </script>
 
 <template>
@@ -98,12 +102,12 @@ async function submit(event: FormSubmitEvent<RegisterState>) {
     <section class="mx-auto flex w-full max-w-md flex-col justify-center px-5 py-10">
       <UAuthForm
         class="w-full"
-        description="BMZ IR にスコアを送信するためのアカウントを作成します。"
+        :description="t('register.description')"
         :fields="fields"
         icon="i-lucide-user-plus"
         :loading="loading"
-        :submit="{ label: '登録する', color: 'primary', block: true }"
-        title="アカウント登録"
+        :submit="{ label: t('register.submit'), color: 'primary', block: true }"
+        :title="t('register.title')"
         :validate="validate"
         @submit="submit"
       >
@@ -124,9 +128,12 @@ async function submit(event: FormSubmitEvent<RegisterState>) {
 
         <template #footer>
           <p class="text-center text-sm text-neutral-300">
-            アカウントをお持ちの場合は
-            <NuxtLink class="font-medium text-primary-300 hover:text-primary-200" to="/login">
-              ログイン
+            {{ t('register.haveAccount') }}
+            <NuxtLink
+              class="font-medium text-primary-300 hover:text-primary-200"
+              :to="localePath('/login')"
+            >
+              {{ t('nav.login') }}
             </NuxtLink>
           </p>
         </template>

@@ -5,12 +5,12 @@ use bmz_gameplay::score::{JudgeCounts, ScoreState};
 use rusqlite::{OptionalExtension, params};
 
 use crate::ln_policy::LnScorePolicy;
-use crate::select_options::DoubleOptionScoreBucket;
+use crate::select_options::{DoubleOption, DoubleOptionScoreBucket};
 use crate::storage::common::hex_to_hash;
 use crate::storage::network_db::NetworkDatabase;
 use crate::storage::score_db::{
     ScoreDatabase, ScoreHistorySourceKey, ScoreHistorySourceRecord, ScoreRecord,
-    ScoreSourceInsertOutcome,
+    ScoreSourceInsertOutcome, ScoreSourceKind,
 };
 
 use super::bmz_official::{BmzOfficialIrClient, IrOwnScoreHistoryRequest};
@@ -250,27 +250,51 @@ pub fn score_record_from_ir_entry(entry: &IrOwnScoreHistoryEntry) -> Result<Scor
     let rule_mode =
         if entry.rule_mode.trim().is_empty() { "Beatoraja" } else { entry.rule_mode.as_str() };
 
+    let double_option = double_option_from_ir(&entry.double_option);
+    let source_kind = source_kind_from_ir(&entry.source_kind);
+    let seed_scheme = if entry.seed_scheme.trim().is_empty() {
+        match source_kind {
+            ScoreSourceKind::Beatoraja => {
+                crate::storage::replay::SEED_SCHEME_BEATORAJA_24BIT_V1.to_string()
+            }
+            _ => crate::storage::replay::SEED_SCHEME_LEGACY_SHARED_V3.to_string(),
+        }
+    } else {
+        entry.seed_scheme.clone()
+    };
+
     Ok(ScoreRecord {
         chart_sha256: hex_to_hash::<32>(&entry.chart_sha256)?,
         ln_policy: LnScorePolicy::from_str_opt(&entry.ln_policy)
             .with_context(|| format!("unsupported LN policy: {}", entry.ln_policy))?,
-        double_option: double_option_from_ir(&entry.double_option),
+        double_option,
+        applied_double_option: applied_double_option_from_ir(
+            &entry.applied_double_option,
+            double_option,
+        ),
         played_at: entry.played_at.unwrap_or(entry.server_received_at),
         clear_type,
         gauge_type: gauge_type_from_ir(&entry.gauge).or_else(|| gauge_type_for_clear(clear_type)),
         gauge_value: gauge_value_for_clear(clear_type),
         total_notes: entry.notes,
-        playtime_seconds: 0,
+        playtime_seconds: entry
+            .duration_ms
+            .map(|duration_ms| duration_ms / 1_000)
+            .unwrap_or(0)
+            .min(u64::from(u32::MAX)) as u32,
         score,
         count_unprocessed_notes,
         random_seed: entry.random_seed,
+        seed_scheme,
         arrange: arrange_from_ir(entry.arrange_1p.as_deref()),
+        arrange_2p: arrange_from_ir(entry.arrange_2p.as_deref()),
         gauge_option: entry.gauge.clone(),
         rule_mode: rule_mode.to_string(),
         assist_mask: entry.assist_mask.unwrap_or(0),
         autoplay: false,
         device_type: device_type_from_ir(&entry.device_type),
         replay_path: String::new(),
+        source_kind,
     })
 }
 
@@ -398,6 +422,32 @@ fn double_option_from_ir(value: &str) -> DoubleOptionScoreBucket {
     DoubleOptionScoreBucket::from_ir_query_or_off(Some(value))
 }
 
+fn applied_double_option_from_ir(
+    value: &str,
+    score_bucket: DoubleOptionScoreBucket,
+) -> DoubleOption {
+    match normalize_token(value).as_str() {
+        "flip" => DoubleOption::Flip,
+        "battle" => DoubleOption::Battle,
+        "battleautoscratch" | "battleassist" => DoubleOption::BattleAutoScratch,
+        _ => match score_bucket {
+            DoubleOptionScoreBucket::Off => DoubleOption::Off,
+            DoubleOptionScoreBucket::Battle => DoubleOption::Battle,
+            DoubleOptionScoreBucket::BattleAutoScratch => DoubleOption::BattleAutoScratch,
+        },
+    }
+}
+
+fn source_kind_from_ir(value: &str) -> ScoreSourceKind {
+    match normalize_token(value).as_str() {
+        "beatoraja" => ScoreSourceKind::Beatoraja,
+        "lr2" => ScoreSourceKind::Lr2,
+        "lr2oraja" => ScoreSourceKind::Lr2Oraja,
+        "lr2orajadx" => ScoreSourceKind::Lr2OrajaDx,
+        _ => ScoreSourceKind::Local,
+    }
+}
+
 fn arrange_from_ir(value: Option<&str>) -> String {
     match value.map(normalize_token).as_deref() {
         Some("mirror") => "Mirror",
@@ -464,6 +514,8 @@ mod tests {
             gauge: "HARD".to_string(),
             ln_policy: "ForceLn".to_string(),
             double_option: "off".to_string(),
+            applied_double_option: "flip".to_string(),
+            source_kind: "beatoraja".to_string(),
             rule_mode: "Beatoraja".to_string(),
             judges: IrJudgePayload {
                 fast: super::super::types::IrJudgeSidePayload {
@@ -485,10 +537,12 @@ mod tests {
             },
             notes: 12,
             pass_notes: 12,
+            duration_ms: Some(123_000),
             device_type: "controller".to_string(),
             arrange_1p: Some("random".to_string()),
             arrange_2p: None,
             random_seed: Some(123),
+            seed_scheme: "beatoraja_24bit_v1".to_string(),
             assist_mask: Some(4),
             played_at: Some(1_700_000_000),
             server_received_at: 1_700_000_005,
@@ -509,7 +563,11 @@ mod tests {
         assert_eq!(record.score.bp(), 1);
         assert_eq!(record.count_unprocessed_notes, false);
         assert_eq!(record.random_seed, Some(123));
+        assert_eq!(record.playtime_seconds, 123);
+        assert_eq!(record.seed_scheme, "beatoraja_24bit_v1");
         assert_eq!(record.arrange, "Random");
+        assert_eq!(record.applied_double_option, DoubleOption::Flip);
+        assert_eq!(record.source_kind, ScoreSourceKind::Beatoraja);
         assert_eq!(record.assist_mask, 4);
         assert_eq!(record.device_type, InputDeviceKind::Controller);
     }

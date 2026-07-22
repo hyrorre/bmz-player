@@ -23,16 +23,18 @@
     "db:execute:remote:exported": "wrangler d1 execute DB --remote --file .wrangler/exported.sql",
     "generate": "nuxt generate",
     "preview": "nuxt preview",
-    "test:ir": "bun test bmz-ir-web/server/services/ir.test.ts bmz-ir-web/server/utils/auth_input.test.ts bmz-ir-web/server/utils/auth_token_policy.test.ts bmz-ir-web/server/utils/provider_key.test.ts bmz-ir-web/server/utils/rate_limit.test.ts bmz-ir-web/server/utils/score_history_query.test.ts",
+    "test:ir": "bun test bmz-ir-web/server/services/ir.test.ts bmz-ir-web/server/services/daily_report.test.ts bmz-ir-web/server/services/difficulty_tables.test.ts bmz-ir-web/server/utils/admin.test.ts bmz-ir-web/server/utils/auth_input.test.ts bmz-ir-web/server/utils/auth_token_policy.test.ts bmz-ir-web/server/utils/provider_key.test.ts bmz-ir-web/server/utils/rate_limit.test.ts bmz-ir-web/server/utils/score_history_query.test.ts",
+    "test:i18n": "bun test i18n/locales/catalog.test.ts",
     "postinstall": "nuxt prepare"
   },
   "dependencies": {
     "@libsql/client": "^0.17.3",
-    "@nuxthub/core": "^0.10.7",
     "@nuxt/ui": "4.8.2",
+    "@nuxthub/core": "^0.10.7",
+    "@nuxtjs/i18n": "^10.4.0",
     "drizzle-orm": "^0.45.2",
-    "nuxt-auth-utils": "^0.5.29",
     "nuxt": "^4.4.8",
+    "nuxt-auth-utils": "^0.5.29",
     "tailwindcss": "^4.3.1"
   },
   "devDependencies": {

@@ -142,6 +142,8 @@ main() {
     die "missing Rmz-skin contents; run: git submodule update --init --recursive data/skins/Rmz-skin"
   [[ -f "${root}/data/skins/mz-select/music_select.luaskin" ]] || \
     die "missing mz-select contents; run: git submodule update --init --recursive data/skins/mz-select"
+  [[ -f "${root}/data/skins/Luxez-Flat/music_select.luaskin" ]] || \
+    die "missing Luxez-Flat contents; run: git submodule update --init --recursive data/skins/Luxez-Flat"
   [[ -f "${root}/data/songs/sample-playable/sample-playable.bms" ]] || \
     die "missing bundled sample song"
   [[ -f "${root}/assets/app-icon/bmz-player-window-windows.png" ]] || die "missing Flatpak app icon"

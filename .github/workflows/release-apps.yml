@@ -91,10 +91,13 @@ jobs:
     needs: metadata
     env:
       BMZ_VERSION: ${{ needs.metadata.outputs.version }}
-      VCPKG_DEFAULT_TRIPLET: x64-windows
+      VCPKG_DEFAULT_TRIPLET: x64-windows-release
+      VCPKGRS_TRIPLET: x64-windows-release
       VCPKG_ROOT: C:\vcpkg
       VCPKGRS_DYNAMIC: 1
       LIBCLANG_PATH: C:\Program Files\LLVM\bin
+      GAMEINPUT_VERSION: 3.4.218
+      GAMEINPUT_PACKAGE_SHA256: 7F33C11D81D0286F649B4238877A94D116C19767713EF5D0E2DDC542CC411C26
     steps:
       - name: Checkout release ref
         uses: actions/checkout@v7
@@ -117,7 +120,7 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: release-windows-x64-${{ hashFiles('Cargo.lock') }}
+          key: release-windows-x64-${{ hashFiles('Cargo.lock', 'triplets/x64-windows-release.cmake') }}
           restore-keys: |
             release-windows-x64-
 
@@ -135,7 +138,33 @@ jobs:
             & (Join-Path $env:VCPKG_ROOT "bootstrap-vcpkg.bat") -disableMetrics
           }
 
-          & (Join-Path $env:VCPKG_ROOT "vcpkg.exe") install ffmpeg:x64-windows
+          $overlayTriplets = Join-Path $env:GITHUB_WORKSPACE "triplets"
+          & (Join-Path $env:VCPKG_ROOT "vcpkg.exe") install `
+            "--overlay-triplets=$overlayTriplets" `
+            "ffmpeg:$env:VCPKG_DEFAULT_TRIPLET"
+
+      - name: Download Microsoft GameInput redistributable
+        shell: pwsh
+        run: |
+          $root = Join-Path $PWD "dist\gameinput"
+          $package = Join-Path $root "Microsoft.GameInput.$env:GAMEINPUT_VERSION.nupkg"
+          $packageRoot = Join-Path $root "package"
+          New-Item -ItemType Directory -Force -Path $root | Out-Null
+          Invoke-WebRequest `
+            -Uri "https://www.nuget.org/api/v2/package/Microsoft.GameInput/$env:GAMEINPUT_VERSION" `
+            -OutFile $package
+
+          $actualHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $package).Hash
+          if ($actualHash -ne $env:GAMEINPUT_PACKAGE_SHA256) {
+            throw "Microsoft.GameInput package SHA256 mismatch: $actualHash"
+          }
+
+          Add-Type -AssemblyName System.IO.Compression.FileSystem
+          [System.IO.Compression.ZipFile]::ExtractToDirectory($package, $packageRoot)
+          if (-not (Test-Path -LiteralPath (Join-Path $packageRoot "redist\GameInputRedist.msi") -PathType Leaf)) {
+            throw "GameInputRedist.msi was not found in Microsoft.GameInput package"
+          }
+          "BMZ_GAMEINPUT_PACKAGE_DIR=$packageRoot" | Out-File -LiteralPath $env:GITHUB_ENV -Encoding utf8 -Append
 
       - name: Record Windows dependency provenance
         shell: pwsh
@@ -148,7 +177,8 @@ jobs:
           "vcpkg packages:" | Out-File -LiteralPath $provenance -Encoding utf8 -Append
           & (Join-Path $env:VCPKG_ROOT "vcpkg.exe") list ffmpeg | Out-File -LiteralPath $provenance -Encoding utf8 -Append
 
-          $ffmpegExe = Get-ChildItem -LiteralPath $env:VCPKG_ROOT -Filter ffmpeg.exe -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+          $ffmpegBin = Join-Path $env:VCPKG_ROOT "installed\$env:VCPKG_DEFAULT_TRIPLET\bin"
+          $ffmpegExe = Get-ChildItem -LiteralPath $ffmpegBin -Filter ffmpeg.exe -ErrorAction SilentlyContinue | Select-Object -First 1
           if ($ffmpegExe) {
             "" | Out-File -LiteralPath $provenance -Encoding utf8 -Append
             "ffmpeg -version:" | Out-File -LiteralPath $provenance -Encoding utf8 -Append
@@ -160,13 +190,17 @@ jobs:
             "" | Out-File -LiteralPath $provenance -Encoding utf8 -Append
             "ffmpeg.exe was not present in vcpkg; package version was recorded from vcpkg list." | Out-File -LiteralPath $provenance -Encoding utf8 -Append
           }
+          "" | Out-File -LiteralPath $provenance -Encoding utf8 -Append
+          "Microsoft.GameInput NuGet: $env:GAMEINPUT_VERSION" | Out-File -LiteralPath $provenance -Encoding utf8 -Append
+          "Microsoft.GameInput package SHA256: $env:GAMEINPUT_PACKAGE_SHA256" | Out-File -LiteralPath $provenance -Encoding utf8 -Append
 
       - name: Package Windows app
         shell: pwsh
         run: |
           .\scripts\package-windows.ps1 `
             -Installer `
-            -DllDir (Join-Path $env:VCPKG_ROOT "installed\x64-windows\bin")
+            -GameInputPackageDir $env:BMZ_GAMEINPUT_PACKAGE_DIR `
+            -DllDir (Join-Path $env:VCPKG_ROOT "installed\$env:VCPKG_DEFAULT_TRIPLET\bin")
 
       - name: Verify packaged executable
         shell: pwsh

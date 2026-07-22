@@ -101,7 +101,6 @@ pub fn build_course_submission(
     context: &IrCourseSubmissionContext,
 ) -> Value {
     let course_hash = compute_course_hash(definition);
-    let bp = result.judge_counts.bad + result.judge_counts.poor + result.judge_counts.empty_poor;
     let entries: Vec<Value> = result
         .entry_summaries
         .iter()
@@ -132,9 +131,29 @@ pub fn build_course_submission(
         "option": arrange_option_ir_from_persistent(&context.arrange),
     });
     if let Some(seed) = context.random_seed {
-        play_options["random_seed"] = json!(seed);
-        play_options["seed"] = json!(seed);
+        play_options["random_seed"] = json!(seed.to_string());
+        play_options["seed"] = json!(seed.to_string());
     }
+    let entry_randomizations: Vec<Value> = result
+        .entry_arranges
+        .iter()
+        .map(|arrange| {
+            json!({
+                "arrange_1p": arrange_option_ir(arrange.arrange),
+                "arrange_2p": arrange_option_ir(arrange.arrange_2p),
+                "seed": arrange
+                    .packed_beatoraja_seed_from_sides()
+                    .map(|seed| seed.to_string()),
+                "seed_scheme": if arrange.legacy_seed {
+                    crate::storage::replay::SEED_SCHEME_LEGACY_SHARED_V3
+                } else {
+                    crate::storage::replay::SEED_SCHEME_BEATORAJA_24BIT_V1
+                },
+                "bms_random_choices": arrange.bms_random_choices,
+            })
+        })
+        .collect();
+    play_options["entry_randomizations"] = json!(entry_randomizations);
 
     json!({
         "client": {
@@ -164,7 +183,7 @@ pub fn build_course_submission(
             "ex_score": result.total_ex_score,
             "max_ex_score": result.max_ex_score,
             "max_combo": result.course_max_combo,
-            "bp": bp,
+            "bp": result.bp,
             "judges": {
                 "pgreat": result.judge_counts.pgreat,
                 "great": result.judge_counts.great,
@@ -183,7 +202,11 @@ pub fn build_course_submission(
 }
 
 fn arrange_option_ir_from_persistent(value: &str) -> String {
-    ArrangeOption::from_persistent_str(value).as_str().to_ascii_lowercase()
+    arrange_option_ir(ArrangeOption::from_persistent_str(value))
+}
+
+fn arrange_option_ir(value: ArrangeOption) -> String {
+    value.as_str().to_ascii_lowercase()
 }
 
 fn course_result_clear_type(result: &CourseResultSummary) -> bmz_core::clear::ClearType {
@@ -192,7 +215,7 @@ fn course_result_clear_type(result: &CourseResultSummary) -> bmz_core::clear::Cl
     if result.course_failed {
         return ClearType::Failed;
     }
-    if !result.course_clear {
+    if result.played_entries == 0 {
         return ClearType::NoPlay;
     }
 
@@ -296,6 +319,7 @@ mod tests {
             total_ex_score: 0,
             max_ex_score: 0,
             total_notes: 0,
+            bp: 0,
             final_clear_type: bmz_core::clear::ClearType::NoPlay,
             final_gauge_type: bmz_core::clear::GaugeType::Class,
             final_gauge_value: 0.0,
@@ -329,10 +353,11 @@ mod tests {
         assert_eq!(payload["rule"]["ln_policy"], "ForceHcn");
         assert_eq!(payload["rule"]["rule_mode"], "Dx");
         assert_eq!(payload["result"]["max_combo"], json!(123));
+        assert_eq!(payload["result"]["clear"], json!("NoPlay"));
     }
 
     #[test]
-    fn course_submission_uses_final_course_clear_for_result_lamp() {
+    fn course_submission_uses_final_course_gauge_for_result_lamp() {
         let definition = IrCourseDefinition {
             charts: vec!["ab".repeat(32)],
             constraints: json!({ "gauge": "ExClass" }),
@@ -352,6 +377,7 @@ mod tests {
             total_ex_score: 1234,
             max_ex_score: 2000,
             total_notes: 1000,
+            bp: 0,
             final_clear_type: ClearType::Hard,
             final_gauge_type: GaugeType::ExClass,
             final_gauge_value: 66.4,
@@ -389,7 +415,7 @@ mod tests {
     }
 
     #[test]
-    fn course_submission_separates_stage_and_course_clear_lamps() {
+    fn course_submission_keeps_course_lamp_without_a_trophy() {
         let definition = IrCourseDefinition {
             charts: vec!["ab".repeat(32), "cd".repeat(32)],
             constraints: json!({ "gauge": "Hard" }),
@@ -412,13 +438,14 @@ mod tests {
             total_ex_score: 1234,
             max_ex_score: 2000,
             total_notes: 1000,
+            bp: 0,
             final_clear_type: ClearType::NoPlay,
             final_gauge_type: GaugeType::Hard,
             final_gauge_value: 66.4,
             course_max_combo: 456,
             judge_counts: ResultJudgeCounts::default(),
             trophy_results: Vec::new(),
-            course_clear: true,
+            course_clear: false,
             course_failed: false,
             total_entries: 2,
             played_entries: 2,
@@ -444,6 +471,7 @@ mod tests {
         );
 
         assert_eq!(payload["result"]["clear"], json!("Hard"));
+        assert_eq!(payload["result"]["course_clear"], json!(false));
         assert_eq!(payload["result"]["entries"][0]["clear"], json!("NoPlay"));
         assert_eq!(payload["result"]["entries"][1]["clear"], json!("FullCombo"));
     }
@@ -469,6 +497,7 @@ mod tests {
             total_ex_score: 1234,
             max_ex_score: 2000,
             total_notes: 1000,
+            bp: 789,
             final_clear_type: ClearType::NoPlay,
             final_gauge_type: GaugeType::ExHardClass,
             final_gauge_value: 0.0,
@@ -501,12 +530,15 @@ mod tests {
         );
 
         assert_eq!(payload["result"]["clear"], json!("Failed"));
+        assert_eq!(payload["result"]["bp"], json!(789));
     }
 
     fn stage_summary(clear_type: ClearType, gauge_value: f32) -> ResultSummary {
         ResultSummary {
             clear_type,
+            target_name: String::new(),
             arrange: "NORMAL".to_string(),
+            arrange_2p: "NORMAL".to_string(),
             lane_shuffle_pattern: Vec::new(),
             ex_score: 0,
             max_combo: 0,
@@ -523,6 +555,8 @@ mod tests {
             total_gauge: 0.0,
             judge_rank: None,
             key_mode: KeyMode::K7,
+            has_long_notes: false,
+            long_note_mode: bmz_chart::model::LongNoteMode::Ln,
             judge_counts: ResultJudgeCounts::default(),
             fast_slow_counts: ResultFastSlowJudgeCounts::default(),
             replay_path: String::new(),

@@ -7,12 +7,15 @@ type LoginState = {
 }
 
 const { loggedIn, fetch: refreshSession } = useUserSession()
+const localePath = useLocalePath()
+const { t } = useI18n()
+const { translateApiError } = useApiError()
 
-const fields: AuthFormField[] = [
+const fields = computed<AuthFormField[]>(() => [
   {
     name: 'email',
     type: 'email',
-    label: 'メールアドレス',
+    label: t('auth.email'),
     placeholder: 'name@example.com',
     autocomplete: 'email',
     required: true,
@@ -21,30 +24,30 @@ const fields: AuthFormField[] = [
   {
     name: 'password',
     type: 'password',
-    label: 'パスワード',
-    placeholder: 'パスワード',
+    label: t('auth.password'),
+    placeholder: t('auth.password'),
     autocomplete: 'current-password',
     required: true,
     defaultValue: '',
   },
-]
+])
 
 const loading = ref(false)
 const errorMessage = ref('')
 
 if (loggedIn.value) {
-  await navigateTo('/')
+  await navigateTo(localePath('/'))
 }
 
 function validate(state: Partial<LoginState>) {
   const errors: { name: keyof LoginState; message: string }[] = []
 
   if (!state.email?.trim()) {
-    errors.push({ name: 'email', message: 'メールアドレスを入力してください。' })
+    errors.push({ name: 'email', message: t('validation.emailRequired') })
   }
 
   if (!state.password) {
-    errors.push({ name: 'password', message: 'パスワードを入力してください。' })
+    errors.push({ name: 'password', message: t('validation.passwordRequired') })
   }
 
   return errors
@@ -64,15 +67,16 @@ async function submit(event: FormSubmitEvent<LoginState>) {
     })
     await refreshSession()
   } catch (error) {
-    errorMessage.value =
-      error instanceof Error && error.message ? error.message : 'ログインに失敗しました。'
+    errorMessage.value = translateApiError(error, 'errors.loginFailed')
     loading.value = false
     return
   }
 
   loading.value = false
-  await navigateTo('/')
+  await navigateTo(localePath('/'))
 }
+
+useSeoMeta({ title: () => t('auth.login') })
 </script>
 
 <template>
@@ -80,12 +84,12 @@ async function submit(event: FormSubmitEvent<LoginState>) {
     <section class="mx-auto flex w-full max-w-md flex-col justify-center px-5 py-10">
       <UAuthForm
         class="w-full"
-        description="BMZ IR のスコア送信とランキング閲覧に使うアカウントへログインします。"
+        :description="t('login.description')"
         :fields="fields"
         icon="i-lucide-log-in"
         :loading="loading"
-        :submit="{ label: 'ログイン', color: 'primary', block: true }"
-        title="ログイン"
+        :submit="{ label: t('auth.login'), color: 'primary', block: true }"
+        :title="t('auth.login')"
         :validate="validate"
         @submit="submit"
       >
@@ -101,18 +105,21 @@ async function submit(event: FormSubmitEvent<LoginState>) {
         <template #footer>
           <div class="space-y-2 text-center text-sm text-neutral-300">
             <p>
-              アカウントをお持ちでない場合は
-              <NuxtLink class="font-medium text-primary-300 hover:text-primary-200" to="/register">
-                登録
+              {{ t('login.noAccount') }}
+              <NuxtLink
+                class="font-medium text-primary-300 hover:text-primary-200"
+                :to="localePath('/register')"
+              >
+                {{ t('nav.register') }}
               </NuxtLink>
             </p>
             <p>
-              パスワードを忘れた場合は
+              {{ t('login.forgotPassword') }}
               <NuxtLink
                 class="font-medium text-primary-300 hover:text-primary-200"
-                to="/reset-password"
+                :to="localePath('/reset-password')"
               >
-                再設定
+                {{ t('login.reset') }}
               </NuxtLink>
             </p>
           </div>

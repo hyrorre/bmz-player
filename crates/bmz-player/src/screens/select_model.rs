@@ -1,12 +1,15 @@
 use std::collections::{HashMap, HashSet};
+use std::path::Path;
 
 use anyhow::Result;
 use bmz_core::course::{CourseKind, CourseLnConstraint};
 use bmz_gameplay::rule::RuleMode;
 use bmz_render::scene::SelectRowKind;
 
+use crate::i18n::{AppLocale, FluentArgs, Localizer};
 use crate::ln_policy::{LnPolicySetting, LnScorePolicy, score_ln_policy};
 use crate::screens::settings_model::{ConfigSelectRow, KeyBindingSelectRow};
+use crate::song_download::ChartDownloadMetadata;
 use crate::storage::collection_db::{CollectionDatabase, FavoriteChartRecord, FavoriteSongRecord};
 use crate::storage::common::hash_to_hex;
 use crate::storage::library_db::{
@@ -72,13 +75,25 @@ pub fn parse_favorite_song_detail_path(path: &str) -> Option<[u8; 32]> {
 /// Returns one folder item per entry in the search history, newest last
 /// (matching the order in which `history` is maintained by the caller).
 pub fn search_history_folder_items(history: &[String]) -> Vec<SelectItem> {
+    search_history_folder_items_for_locale(history, AppLocale::DEFAULT)
+}
+
+pub fn search_history_folder_items_for_locale(
+    history: &[String],
+    locale: AppLocale,
+) -> Vec<SelectItem> {
+    let text = Localizer::new(locale);
     history
         .iter()
-        .map(|query| SelectItem::Folder {
-            path: format!("{SEARCH_PATH_PREFIX}{query}"),
-            name: format!("Search : '{query}'"),
-            kind: SelectRowKind::SearchFolder,
-            summary: None,
+        .map(|query| {
+            let mut args = FluentArgs::new();
+            args.set("query", query.as_str());
+            SelectItem::Folder {
+                path: format!("{SEARCH_PATH_PREFIX}{query}"),
+                name: text.format("select-search-history", &args),
+                kind: SelectRowKind::SearchFolder,
+                summary: None,
+            }
         })
         .collect()
 }
@@ -328,9 +343,12 @@ pub fn difficulty_table_text_for_chart_with_active_sources(
 pub struct SelectChartRow {
     pub chart: Option<ChartListItem>,
     pub chart_analysis: Option<ChartAnalysisSummary>,
+    /// beatoraja `SongData.hasDocument()` compatible same-folder `.txt` presence.
+    pub has_document: bool,
     pub fallback_title: String,
     pub fallback_artist: String,
     pub entry_sha256: Option<[u8; 32]>,
+    pub download_metadata: ChartDownloadMetadata,
     pub best_score: Option<BestScoreSummary>,
     pub replay_slots: [bool; 4],
     pub favorite_chart: bool,
@@ -368,6 +386,8 @@ impl SelectChartRow {
 #[derive(Debug, Clone, PartialEq)]
 pub struct SelectCourseRow {
     pub course_id: i64,
+    /// Canonical IR course hash. None while any course entry is unresolved.
+    pub course_hash: Option<String>,
     pub title: String,
     pub kind: CourseKind,
     pub constraints: bmz_core::course::CourseConstraints,
@@ -503,6 +523,10 @@ pub enum SelectItem {
 
 impl SelectItem {
     pub fn display_name(&self) -> String {
+        self.display_name_for_locale(AppLocale::DEFAULT)
+    }
+
+    pub fn display_name_for_locale(&self, locale: AppLocale) -> String {
         match self {
             Self::Folder { name, .. } => name.clone(),
             Self::Chart(row) => row.display_title().to_string(),
@@ -510,8 +534,8 @@ impl SelectItem {
             Self::Executable(row) => row.title.clone(),
             Self::Config(row) => row.label().to_string(),
             Self::KeyBinding(row) => row.label(),
-            Self::Back => "戻る".to_string(),
-            Self::AdvancedSettings => "詳細設定".to_string(),
+            Self::Back => Localizer::new(locale).text("select-back"),
+            Self::AdvancedSettings => Localizer::new(locale).text("select-advanced-settings"),
         }
     }
 }
@@ -761,6 +785,7 @@ fn build_select_course_row(
 
     SelectItem::Course(SelectCourseRow {
         course_id: stored.id,
+        course_hash: identity.as_ref().map(|identity| identity.course_hash.clone()),
         title: stored.definition.title,
         kind: stored.definition.kind,
         constraints: stored.definition.constraints,
@@ -924,10 +949,8 @@ fn load_select_items_in_table_filtered(
         .map(|t| (t.name, t.symbol, t.level_order))
         .unwrap_or_default();
 
-    let mut entries = library_db.list_table_entries_with_chart(source_url)?;
-    if let Some(level) = level_filter {
-        entries.retain(|entry| entry.level == level);
-    }
+    let mut entries =
+        library_db.list_table_entries_with_chart_at_level(source_url, level_filter)?;
     entries = dedupe_table_entries(entries);
 
     // Sort by the table's level_order, then alphabetically by display title.
@@ -959,6 +982,7 @@ fn load_select_items_in_table_filtered(
         .collect();
     let mut analysis_map = library_db.chart_analysis_summaries_by_chart_ids(&chart_ids)?;
 
+    let mut document_folder_cache = HashMap::new();
     Ok(entries
         .into_iter()
         .map(|entry| {
@@ -970,9 +994,11 @@ fn load_select_items_in_table_filtered(
                 score_key.and_then(|key| replay_slot_map.remove(&key)).unwrap_or([false; 4]);
             let chart_analysis =
                 entry.chart.as_ref().and_then(|chart| analysis_map.remove(&chart.chart_id));
+            let has_document = chart_has_document(entry.chart.as_ref(), &mut document_folder_cache);
             SelectItem::Chart(select_chart_row_from_table_entry(
                 entry,
                 chart_analysis,
+                has_document,
                 best_score,
                 replay_slots,
                 table_text,
@@ -1101,6 +1127,7 @@ fn entry_score_key(
 fn select_chart_row_from_table_entry(
     entry: TableEntryListItem,
     chart_analysis: Option<ChartAnalysisSummary>,
+    has_document: bool,
     best_score: Option<BestScoreSummary>,
     replay_slots: [bool; 4],
     table_text: DifficultyTableText,
@@ -1110,9 +1137,18 @@ fn select_chart_row_from_table_entry(
     SelectChartRow {
         chart: entry.chart,
         chart_analysis,
+        has_document,
         fallback_title: entry.title,
         fallback_artist: entry.artist,
         entry_sha256,
+        download_metadata: ChartDownloadMetadata {
+            md5: entry.md5,
+            sha256: entry.sha256,
+            url: entry.url,
+            append_url: entry.append_url,
+            ipfs: entry.ipfs,
+            append_ipfs: entry.append_ipfs,
+        },
         best_score,
         replay_slots,
         favorite_chart: false,
@@ -1120,6 +1156,24 @@ fn select_chart_row_from_table_entry(
         table_level,
         table_text,
     }
+}
+
+fn chart_folder_has_document(folder_path: &str) -> bool {
+    std::fs::read_dir(Path::new(folder_path)).is_ok_and(|entries| {
+        entries
+            .filter_map(Result::ok)
+            .any(|entry| entry.path().extension().is_some_and(|extension| extension == "txt"))
+    })
+}
+
+fn chart_has_document(
+    chart: Option<&ChartListItem>,
+    folder_cache: &mut HashMap<String, bool>,
+) -> bool {
+    let Some(chart) = chart else { return false };
+    *folder_cache
+        .entry(chart.folder_path.clone())
+        .or_insert_with(|| chart_folder_has_document(&chart.folder_path))
 }
 
 fn hex_to_hash<const N: usize>(hex: &str) -> Result<[u8; N]> {
@@ -1486,9 +1540,11 @@ fn missing_favorite_chart_item(
     Ok(SelectItem::Chart(SelectChartRow {
         chart: None,
         chart_analysis: None,
+        has_document: false,
         fallback_title: fallback_favorite_title(&record.title_hint, record.chart_sha256),
         fallback_artist: record.artist_hint,
         entry_sha256: Some(record.chart_sha256),
+        download_metadata: ChartDownloadMetadata::default(),
         best_score,
         replay_slots,
         favorite_chart: true,
@@ -1508,9 +1564,11 @@ fn missing_favorite_song_item(
     Ok(SelectItem::Chart(SelectChartRow {
         chart: None,
         chart_analysis: None,
+        has_document: false,
         fallback_title: fallback_favorite_title(&record.title_hint, record.representative_sha256),
         fallback_artist: record.artist_hint,
         entry_sha256: Some(record.representative_sha256),
+        download_metadata: ChartDownloadMetadata::default(),
         best_score,
         replay_slots,
         favorite_chart: false,
@@ -1632,6 +1690,7 @@ fn chart_items_with_enrichment(
     }
 
     let mut items = Vec::with_capacity(all_charts.len());
+    let mut document_folder_cache = HashMap::new();
     for chart in all_charts {
         let score_key = score_key_for_chart(&chart, ln_policy_setting, rule_mode);
         let best_score = score_map.remove(&score_key);
@@ -1644,12 +1703,15 @@ fn chart_items_with_enrichment(
             .unwrap_or_default();
         let table_text =
             md5_text_map.remove(&md5_hex).or_else(|| sha256_text_map.remove(&sha256_hex));
+        let has_document = chart_has_document(Some(&chart), &mut document_folder_cache);
         items.push(SelectItem::Chart(SelectChartRow {
             chart_analysis: analysis_map.remove(&chart.chart_id),
             chart: Some(chart),
+            has_document,
             fallback_title: String::new(),
             fallback_artist: String::new(),
             entry_sha256: None,
+            download_metadata: ChartDownloadMetadata::default(),
             best_score,
             replay_slots,
             favorite_chart: false,
@@ -1765,10 +1827,8 @@ fn folder_summary_for_table(
     ln_policy_setting: LnPolicySetting,
     rule_mode: RuleMode,
 ) -> Result<SelectFolderSummary> {
-    let mut entries = library_db.list_table_entries_with_chart(source_url)?;
-    if let Some(level) = level_filter {
-        entries.retain(|entry| entry.level == level);
-    }
+    let mut entries =
+        library_db.list_table_entries_with_chart_at_level(source_url, level_filter)?;
     entries = dedupe_table_entries(entries);
     let charts = entries.into_iter().filter_map(|entry| entry.chart).collect();
     folder_summary_for_charts(score_db, charts, ln_policy_setting, rule_mode)
@@ -1862,6 +1922,25 @@ mod tests {
     use rusqlite::Connection;
 
     use super::*;
+
+    #[test]
+    fn chart_folder_document_detection_matches_beatoraja_txt_rule() {
+        let folder = std::env::temp_dir().join(format!(
+            "bmz-select-document-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
+        ));
+        std::fs::create_dir_all(&folder).unwrap();
+        let uppercase_document = folder.join("readme.TXT");
+        std::fs::write(&uppercase_document, b"not matched by beatoraja").unwrap();
+        assert!(!chart_folder_has_document(folder.to_str().unwrap()));
+        std::fs::remove_file(uppercase_document).unwrap();
+
+        std::fs::write(folder.join("readme.txt"), b"document").unwrap();
+        assert!(chart_folder_has_document(folder.to_str().unwrap()));
+
+        std::fs::remove_dir_all(folder).unwrap();
+    }
     use crate::storage::common::configure_connection;
     use crate::storage::library_db::{ChartImportRecord, LibraryDatabase};
     use crate::storage::migration::{
@@ -2321,6 +2400,7 @@ mod tests {
                 title: String::new(),
                 artist: String::new(),
                 comment: String::new(),
+                ..FetchedTableEntry::default()
             }],
             courses: Vec::new(),
             fetched_at: 0,
@@ -2346,6 +2426,7 @@ mod tests {
                 title: String::new(),
                 artist: String::new(),
                 comment: String::new(),
+                ..FetchedTableEntry::default()
             }],
             courses: Vec::new(),
             fetched_at: 0,
@@ -2487,6 +2568,7 @@ mod tests {
                     title: String::new(),
                     artist: String::new(),
                     comment: String::new(),
+                    ..FetchedTableEntry::default()
                 },
                 FetchedTableEntry {
                     level: "5".to_string(),
@@ -2495,6 +2577,7 @@ mod tests {
                     title: String::new(),
                     artist: String::new(),
                     comment: String::new(),
+                    ..FetchedTableEntry::default()
                 },
             ],
             courses: Vec::new(),
@@ -2595,9 +2678,11 @@ mod tests {
                 ln_counts: Default::default(),
             }),
             chart_analysis: None,
+            has_document: false,
             fallback_title: String::new(),
             fallback_artist: String::new(),
             entry_sha256: None,
+            download_metadata: ChartDownloadMetadata::default(),
             best_score: None,
             replay_slots: [false; 4],
             favorite_chart: false,
@@ -2643,6 +2728,7 @@ mod tests {
                 title: String::new(),
                 artist: String::new(),
                 comment: String::new(),
+                ..FetchedTableEntry::default()
             }],
             courses: Vec::new(),
             fetched_at: 0,
@@ -2690,6 +2776,7 @@ mod tests {
                     title: String::new(),
                     artist: String::new(),
                     comment: String::new(),
+                    ..FetchedTableEntry::default()
                 },
                 FetchedTableEntry {
                     level: "10".to_string(),
@@ -2698,6 +2785,7 @@ mod tests {
                     title: String::new(),
                     artist: String::new(),
                     comment: String::new(),
+                    ..FetchedTableEntry::default()
                 },
             ],
             courses: Vec::new(),
@@ -2736,6 +2824,10 @@ mod tests {
                 title: "Missing Song".to_string(),
                 artist: "Missing Artist".to_string(),
                 comment: String::new(),
+                url: "https://example.com/missing".to_string(),
+                append_url: "https://example.com/missing-diff".to_string(),
+                ipfs: "/ipfs/bafybeigdyrzt5sfp7udm7hu76uh7y26nf3ktekzrxql4i5f3u".to_string(),
+                append_ipfs: String::new(),
             }],
             courses: Vec::new(),
             fetched_at: 0,
@@ -2758,6 +2850,8 @@ mod tests {
             if row.display_title() == "Missing Song"
                 && row.display_artist() == "Missing Artist"
                 && !row.in_library()
+                && row.download_metadata.url == "https://example.com/missing"
+                && row.download_metadata.ipfs.starts_with("/ipfs/")
         ));
     }
 
@@ -2781,6 +2875,7 @@ mod tests {
                 title: "Table Title".to_string(),
                 artist: "Table Artist".to_string(),
                 comment: String::new(),
+                ..FetchedTableEntry::default()
             }],
             courses: Vec::new(),
             fetched_at: 0,
@@ -2825,6 +2920,7 @@ mod tests {
                     title: "Registered Song".to_string(),
                     artist: String::new(),
                     comment: String::new(),
+                    ..FetchedTableEntry::default()
                 },
                 FetchedTableEntry {
                     level: "12".to_string(),
@@ -2833,6 +2929,7 @@ mod tests {
                     title: "Registered Song".to_string(),
                     artist: String::new(),
                     comment: String::new(),
+                    ..FetchedTableEntry::default()
                 },
             ],
             courses: Vec::new(),
@@ -2878,6 +2975,7 @@ mod tests {
                     title: String::new(),
                     artist: String::new(),
                     comment: String::new(),
+                    ..FetchedTableEntry::default()
                 },
                 FetchedTableEntry {
                     level: "12".to_string(),
@@ -2886,6 +2984,7 @@ mod tests {
                     title: String::new(),
                     artist: String::new(),
                     comment: String::new(),
+                    ..FetchedTableEntry::default()
                 },
             ],
             courses: Vec::new(),
@@ -2933,6 +3032,7 @@ mod tests {
                     title: String::new(),
                     artist: String::new(),
                     comment: String::new(),
+                    ..FetchedTableEntry::default()
                 },
                 FetchedTableEntry {
                     level: "12".to_string(),
@@ -2941,6 +3041,7 @@ mod tests {
                     title: String::new(),
                     artist: String::new(),
                     comment: String::new(),
+                    ..FetchedTableEntry::default()
                 },
             ],
             courses: Vec::new(),
@@ -2977,6 +3078,7 @@ mod tests {
             chart_sha256,
             ln_policy: LnScorePolicy::ForceLn,
             double_option: crate::select_options::DoubleOptionScoreBucket::Off,
+            applied_double_option: crate::select_options::DoubleOption::Off,
             played_at: 1_700_000_030,
             clear_type: ClearType::Normal,
             gauge_type: Some(GaugeType::Normal),
@@ -2986,13 +3088,16 @@ mod tests {
             score,
             count_unprocessed_notes: false,
             random_seed: None,
+            seed_scheme: String::new(),
             arrange: "Normal".to_string(),
+            arrange_2p: "Normal".to_string(),
             gauge_option: String::new(),
             rule_mode: String::new(),
             assist_mask: 0,
             autoplay: false,
             device_type: bmz_core::input::InputDeviceKind::Keyboard,
             replay_path: String::new(),
+            source_kind: crate::storage::score_db::ScoreSourceKind::Local,
         }
     }
 
@@ -3012,16 +3117,22 @@ mod tests {
         match &items[0] {
             SelectItem::Folder { path, name, kind, summary } => {
                 assert_eq!(path, "bmz-search:alpha");
-                assert_eq!(name, "Search : 'alpha'");
+                assert_eq!(name, "検索: 'alpha'");
                 assert_eq!(*kind, SelectRowKind::SearchFolder);
                 assert_eq!(*summary, None);
             }
             other => panic!("expected folder, got {other:?}"),
         }
         match &items[1] {
-            SelectItem::Folder { name, .. } => assert_eq!(name, "Search : 'beta'"),
+            SelectItem::Folder { name, .. } => assert_eq!(name, "検索: 'beta'"),
             other => panic!("expected folder, got {other:?}"),
         }
+
+        let english = search_history_folder_items_for_locale(&history, AppLocale::En);
+        assert!(matches!(
+            &english[0],
+            SelectItem::Folder { name, .. } if name == "Search: 'alpha'"
+        ));
     }
 
     #[test]

@@ -11,9 +11,10 @@ use bmz_gameplay::input::binding::{BindingEntry, LaneBinding};
 
 use super::play::lane_from_config;
 use super::profile_config::{
-    BindingConfigEntry, LaneConfig, PlayModeInputConfig, ProfileInputConfig, ScratchDirectionConfig,
+    BindingConfigEntry, HispeedDirectionConfig, LaneConfig, PlayModeInputConfig,
+    ProfileInputConfig, ScratchDirectionConfig,
 };
-use crate::input::gilrs::gilrs_gamepad_device_id_from_player_index;
+use crate::input::gamepad::GamepadSlotMap;
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum InheritError {
@@ -109,14 +110,65 @@ pub fn lane_binding_for_key_mode(
     input: &ProfileInputConfig,
     key_mode: KeyMode,
 ) -> Result<LaneBinding, InheritError> {
+    lane_binding_for_key_mode_with_slots(input, key_mode, GamepadSlotMap::default())
+}
+
+pub fn lane_binding_for_key_mode_with_slots(
+    input: &ProfileInputConfig,
+    key_mode: KeyMode,
+    slots: GamepadSlotMap,
+) -> Result<LaneBinding, InheritError> {
     let bindings = resolve_play_bindings(input, key_mode)?;
     Ok(LaneBinding {
         entries: bindings
             .into_iter()
             .filter_map(|entry| {
                 let lane = entry.lane?;
+                let lane_value = lane_from_config(lane);
+                if !key_mode.active_lanes().contains(&lane_value) {
+                    return None;
+                }
                 Some(BindingEntry {
-                    device: binding_device_from_config(&entry.device),
+                    device: binding_device_from_config(&entry.device, slots),
+                    control: control_from_config(&entry.device, &entry.control),
+                    lane: lane_value,
+                    scratch_direction: scratch_direction_from_binding(lane, &entry),
+                })
+            })
+            .collect(),
+    })
+}
+
+/// プレイ中の E1/E2 + Scratch 操作用 binding を返す。
+///
+/// 4K / 6K / 8K / 9K は譜面レーンとして Scratch を持たないため、通常の
+/// gameplay binding へ混ぜず、7K の Scratch 設定だけを option 操作用に借りる。
+/// mode 側に Scratch binding が明示されている場合はそちらを優先する。
+pub fn lane_binding_for_play_option_scratch_with_slots(
+    input: &ProfileInputConfig,
+    key_mode: KeyMode,
+    slots: GamepadSlotMap,
+) -> Result<LaneBinding, InheritError> {
+    let mut bindings: Vec<_> = resolve_play_bindings(input, key_mode)?
+        .into_iter()
+        .filter(|entry| matches!(entry.lane, Some(LaneConfig::Scratch | LaneConfig::Scratch2)))
+        .collect();
+    if bindings.is_empty()
+        && matches!(key_mode, KeyMode::K4 | KeyMode::K6 | KeyMode::K8 | KeyMode::K9)
+    {
+        bindings = resolve_play_bindings(input, KeyMode::K7)?
+            .into_iter()
+            .filter(|entry| entry.lane == Some(LaneConfig::Scratch))
+            .collect();
+    }
+
+    Ok(LaneBinding {
+        entries: bindings
+            .into_iter()
+            .filter_map(|entry| {
+                let lane = entry.lane?;
+                Some(BindingEntry {
+                    device: binding_device_from_config(&entry.device, slots),
                     control: control_from_config(&entry.device, &entry.control),
                     lane: lane_from_config(lane),
                     scratch_direction: scratch_direction_from_binding(lane, &entry),
@@ -156,6 +208,121 @@ pub fn resolve_play_bindings(
 ) -> Result<Vec<BindingConfigEntry>, InheritError> {
     let mut chain = Vec::new();
     resolve_play_bindings_inner(input, key_mode, &mut chain, &mut HashSet::new())
+}
+
+/// プレイ中の E1/E2 + 鍵盤操作に使う論理レーンの方向を返す。
+///
+/// 8K だけは profile のレーン別 override を優先し、それ以外はモード既定を使う。
+/// Scratch はレーンカバー専用なのでここでは方向を返さない。
+pub fn hispeed_direction_for_lane(
+    input: &ProfileInputConfig,
+    key_mode: KeyMode,
+    lane: Lane,
+) -> Option<HispeedDirectionConfig> {
+    let default = default_hispeed_direction_for_lane(key_mode, lane)?;
+    if key_mode != KeyMode::K8 {
+        return Some(default);
+    }
+    input
+        .play
+        .get(key_mode.play_map_key())
+        .and_then(|config| config.hispeed.get(&lane_to_config(lane)))
+        .copied()
+        .or(Some(default))
+}
+
+/// 8K の1レーン分の方向 override を更新する。
+///
+/// 既定値と同じ方向は map から取り除き、旧 profile と同じ省略形へ戻す。
+pub fn set_eight_key_hispeed_direction(
+    input: &mut ProfileInputConfig,
+    lane: LaneConfig,
+    direction: HispeedDirectionConfig,
+) -> bool {
+    let lane = lane_from_config(lane);
+    let Some(default) = default_hispeed_direction_for_lane(KeyMode::K8, lane) else {
+        return false;
+    };
+    let lane_config = lane_to_config(lane);
+    let current = hispeed_direction_for_lane(input, KeyMode::K8, lane);
+    if current == Some(direction) {
+        return false;
+    }
+
+    if direction == default {
+        if let Some(config) = input.play.get_mut(KeyMode::K8.play_map_key()) {
+            config.hispeed.remove(&lane_config);
+        }
+    } else {
+        input
+            .play
+            .entry(KeyMode::K8.play_map_key().to_string())
+            .or_default()
+            .hispeed
+            .insert(lane_config, direction);
+    }
+    true
+}
+
+pub const fn default_hispeed_direction_for_lane(
+    key_mode: KeyMode,
+    lane: Lane,
+) -> Option<HispeedDirectionConfig> {
+    use HispeedDirectionConfig::{Down, Up};
+
+    match key_mode {
+        KeyMode::K4 => match lane {
+            Lane::Key1 | Lane::Key4 => Some(Down),
+            Lane::Key2 | Lane::Key3 => Some(Up),
+            _ => None,
+        },
+        KeyMode::K5 => match lane {
+            Lane::Key1 | Lane::Key3 | Lane::Key5 => Some(Down),
+            Lane::Key2 | Lane::Key4 => Some(Up),
+            _ => None,
+        },
+        KeyMode::K6 => match lane {
+            Lane::Key1 | Lane::Key3 | Lane::Key4 | Lane::Key6 => Some(Down),
+            Lane::Key2 | Lane::Key5 => Some(Up),
+            _ => None,
+        },
+        KeyMode::K7 => match lane {
+            Lane::Key1 | Lane::Key3 | Lane::Key5 | Lane::Key7 => Some(Down),
+            Lane::Key2 | Lane::Key4 | Lane::Key6 => Some(Up),
+            _ => None,
+        },
+        KeyMode::K8 => match lane {
+            Lane::Key2 | Lane::Key4 | Lane::Key5 | Lane::Key7 => Some(Down),
+            Lane::Key1 | Lane::Key3 | Lane::Key6 | Lane::Key8 => Some(Up),
+            _ => None,
+        },
+        KeyMode::K9 => match lane {
+            Lane::Key1 | Lane::Key3 | Lane::Key5 | Lane::Key7 | Lane::Key9 => Some(Down),
+            Lane::Key2 | Lane::Key4 | Lane::Key6 | Lane::Key8 => Some(Up),
+            _ => None,
+        },
+        KeyMode::K10 => match lane {
+            Lane::Key1 | Lane::Key3 | Lane::Key5 | Lane::Key8 | Lane::Key10 | Lane::Key12 => {
+                Some(Down)
+            }
+            Lane::Key2 | Lane::Key4 | Lane::Key9 | Lane::Key11 => Some(Up),
+            _ => None,
+        },
+        KeyMode::K14 => match lane {
+            Lane::Key1
+            | Lane::Key3
+            | Lane::Key5
+            | Lane::Key7
+            | Lane::Key8
+            | Lane::Key10
+            | Lane::Key12
+            | Lane::Key14 => Some(Down),
+            Lane::Key2 | Lane::Key4 | Lane::Key6 | Lane::Key9 | Lane::Key11 | Lane::Key13 => {
+                Some(Up)
+            }
+            _ => None,
+        },
+    }
 }
 
 fn resolve_play_bindings_inner(
@@ -314,11 +481,11 @@ pub fn is_gamepad_device(device: &str) -> bool {
     gamepad_player_index(device).is_some() || device.trim().eq_ignore_ascii_case("gamepad")
 }
 
-fn binding_device_from_config(device: &str) -> Option<DeviceId> {
-    gamepad_player_index(device).and_then(gilrs_gamepad_device_id_from_player_index)
+fn binding_device_from_config(device: &str, slots: GamepadSlotMap) -> Option<DeviceId> {
+    gamepad_player_index(device).and_then(|index| slots.device_id_for_player(index))
 }
 
-fn gamepad_player_index(device: &str) -> Option<u32> {
+pub fn gamepad_player_index(device: &str) -> Option<u32> {
     let lower = device.trim().to_ascii_lowercase();
     let suffix = lower.strip_prefix("gamepad")?;
     if suffix.is_empty() {
@@ -555,7 +722,11 @@ pub fn default_profile_input() -> ProfileInputConfig {
     let mut play = BTreeMap::new();
     play.insert(
         KeyMode::K7.play_map_key().to_string(),
-        PlayModeInputConfig { inherit: None, bindings: default_play_7k_bindings() },
+        PlayModeInputConfig {
+            inherit: None,
+            bindings: default_play_7k_bindings(),
+            ..Default::default()
+        },
     );
     ProfileInputConfig {
         scratch_mode: super::profile_config::ScratchInputMode::Normal,
@@ -621,13 +792,13 @@ pub fn migrate_legacy_bindings(
     if !play_7k.is_empty() {
         play.insert(
             KeyMode::K7.play_map_key().to_string(),
-            PlayModeInputConfig { inherit: None, bindings: play_7k },
+            PlayModeInputConfig { inherit: None, bindings: play_7k, ..Default::default() },
         );
     }
     if !play_14k.is_empty() {
         play.insert(
             KeyMode::K14.play_map_key().to_string(),
-            PlayModeInputConfig { inherit: None, bindings: play_14k },
+            PlayModeInputConfig { inherit: None, bindings: play_14k, ..Default::default() },
         );
     }
     (ui_bindings, play)
@@ -644,7 +815,11 @@ mod tests {
         let mut play = BTreeMap::new();
         play.insert(
             "7k".to_string(),
-            PlayModeInputConfig { inherit: None, bindings: default_play_7k_bindings() },
+            PlayModeInputConfig {
+                inherit: None,
+                bindings: default_play_7k_bindings(),
+                ..Default::default()
+            },
         );
         ProfileInputConfig {
             scratch_mode: crate::config::profile_config::ScratchInputMode::Normal,
@@ -675,7 +850,11 @@ mod tests {
         let mut play = BTreeMap::new();
         play.insert(
             "14k".to_string(),
-            PlayModeInputConfig { inherit: None, bindings: default_play_14k_bindings() },
+            PlayModeInputConfig {
+                inherit: None,
+                bindings: default_play_14k_bindings(),
+                ..Default::default()
+            },
         );
         let input = ProfileInputConfig {
             scratch_mode: crate::config::profile_config::ScratchInputMode::Normal,
@@ -745,7 +924,11 @@ mod tests {
         let mut play = input.play.clone();
         play.insert(
             "9k".to_string(),
-            PlayModeInputConfig { inherit: Some("7k".into()), bindings: Vec::new() },
+            PlayModeInputConfig {
+                inherit: Some("7k".into()),
+                bindings: Vec::new(),
+                ..Default::default()
+            },
         );
         let input = ProfileInputConfig { play, ..input };
         assert_eq!(
@@ -760,7 +943,11 @@ mod tests {
         let mut play = input.play.clone();
         play.insert(
             "4k".to_string(),
-            PlayModeInputConfig { inherit: Some("5k".into()), bindings: Vec::new() },
+            PlayModeInputConfig {
+                inherit: Some("5k".into()),
+                bindings: Vec::new(),
+                ..Default::default()
+            },
         );
         let input = ProfileInputConfig { play, ..input };
         validate_play_inherit_config(&input).unwrap();
@@ -773,7 +960,11 @@ mod tests {
         let mut play = BTreeMap::new();
         play.insert(
             "6k".to_string(),
-            PlayModeInputConfig { inherit: Some("5k".into()), bindings: Vec::new() },
+            PlayModeInputConfig {
+                inherit: Some("5k".into()),
+                bindings: Vec::new(),
+                ..Default::default()
+            },
         );
         let input = ProfileInputConfig {
             scratch_mode: crate::config::profile_config::ScratchInputMode::Normal,
@@ -812,6 +1003,7 @@ mod tests {
                     gamepad_play_binding_for_device("gamepad1", "Button1", LaneConfig::Key1),
                     gamepad_play_binding_for_device("gamepad2", "Button1", LaneConfig::Key8),
                 ],
+                ..Default::default()
             },
         );
 
@@ -829,6 +1021,57 @@ mod tests {
             binding.resolve(DeviceId(18), &PhysicalControl::GamepadButton("Button1".into())),
             None
         );
+    }
+
+    #[test]
+    fn gamepad_slot_map_remaps_logical_players_to_assigned_gilrs_ids() {
+        let mut input = sample_7k_input();
+        input.play.insert(
+            "14k".to_string(),
+            PlayModeInputConfig {
+                inherit: None,
+                bindings: vec![
+                    gamepad_play_binding_for_device("gamepad1", "Button1", LaneConfig::Key1),
+                    gamepad_play_binding_for_device("gamepad2", "Button1", LaneConfig::Key8),
+                ],
+                ..Default::default()
+            },
+        );
+
+        // Swap: logical 1P → gilrs id 1 (DeviceId 17), logical 2P → gilrs id 0 (DeviceId 16)
+        let slots = GamepadSlotMap::from_slot_ids([Some(1), Some(0)]);
+        let binding = lane_binding_for_key_mode_with_slots(&input, KeyMode::K14, slots).unwrap();
+
+        assert_eq!(
+            binding.resolve(DeviceId(17), &PhysicalControl::GamepadButton("Button1".into())),
+            Some(Lane::Key1)
+        );
+        assert_eq!(
+            binding.resolve(DeviceId(16), &PhysicalControl::GamepadButton("Button1".into())),
+            Some(Lane::Key8)
+        );
+    }
+
+    #[test]
+    fn numbered_gamepads_above_two_remain_device_specific() {
+        let mut input = sample_7k_input();
+        input.play.insert(
+            "14k".to_string(),
+            PlayModeInputConfig {
+                inherit: None,
+                bindings: vec![gamepad_play_binding_for_device(
+                    "gamepad3",
+                    "Button1",
+                    LaneConfig::Key1,
+                )],
+                ..Default::default()
+            },
+        );
+
+        let binding = lane_binding_for_key_mode(&input, KeyMode::K14).unwrap();
+        let control = PhysicalControl::GamepadButton("Button1".into());
+        assert_eq!(binding.resolve(DeviceId(18), &control), Some(Lane::Key1));
+        assert_eq!(binding.resolve(DeviceId(16), &control), None);
     }
 
     #[test]
@@ -889,5 +1132,178 @@ mod tests {
                 .iter()
                 .any(|entry| { entry.device == "gamepad" && entry.control == "Button14" })
         );
+    }
+
+    #[test]
+    fn scratchless_modes_resolve_seven_key_scratch_for_play_options_only() {
+        let input = default_profile_input();
+        let up = PhysicalControl::KeyboardKey("LShift".to_string());
+        let down = PhysicalControl::KeyboardKey("LControl".to_string());
+
+        for key_mode in [KeyMode::K4, KeyMode::K6, KeyMode::K8, KeyMode::K9] {
+            let gameplay = lane_binding_for_key_mode(&input, key_mode).unwrap();
+            assert_eq!(gameplay.resolve(DeviceId(0), &up), None, "{}", key_mode.as_str());
+
+            let options = lane_binding_for_play_option_scratch_with_slots(
+                &input,
+                key_mode,
+                GamepadSlotMap::default(),
+            )
+            .unwrap();
+            assert_eq!(options.resolve(DeviceId(0), &up), Some(Lane::Scratch));
+            assert_eq!(options.resolve(DeviceId(0), &down), Some(Lane::Scratch));
+            assert_eq!(
+                options.resolve(DeviceId(42), &PhysicalControl::GamepadButton("Axis1+".into())),
+                Some(Lane::Scratch),
+            );
+        }
+    }
+
+    #[test]
+    fn mode_specific_scratch_binding_precedes_seven_key_option_fallback() {
+        for key_mode in [KeyMode::K4, KeyMode::K6, KeyMode::K8, KeyMode::K9] {
+            let mut input = default_profile_input();
+            let mut bindings = default_play_bindings(key_mode);
+            bindings.push(scratch_play_binding(
+                "T",
+                LaneConfig::Scratch,
+                ScratchDirectionConfig::Up,
+            ));
+            input.play.insert(
+                key_mode.play_map_key().to_string(),
+                PlayModeInputConfig { inherit: None, bindings, ..Default::default() },
+            );
+
+            let options = lane_binding_for_play_option_scratch_with_slots(
+                &input,
+                key_mode,
+                GamepadSlotMap::default(),
+            )
+            .unwrap();
+            assert_eq!(
+                options.resolve(DeviceId(0), &PhysicalControl::KeyboardKey("T".into())),
+                Some(Lane::Scratch),
+                "{}",
+                key_mode.as_str(),
+            );
+            let gameplay = lane_binding_for_key_mode(&input, key_mode).unwrap();
+            assert_eq!(
+                gameplay.resolve(DeviceId(0), &PhysicalControl::KeyboardKey("T".into())),
+                None,
+                "{}",
+                key_mode.as_str(),
+            );
+            assert_eq!(
+                options.resolve(DeviceId(0), &PhysicalControl::KeyboardKey("LShift".into())),
+                None,
+                "{}",
+                key_mode.as_str(),
+            );
+        }
+    }
+
+    #[test]
+    fn hispeed_direction_table_matches_each_key_mode() {
+        use HispeedDirectionConfig::{Down, Up};
+
+        let cases = [
+            (KeyMode::K4, vec![Lane::Key1, Lane::Key4], vec![Lane::Key2, Lane::Key3]),
+            (KeyMode::K5, vec![Lane::Key1, Lane::Key3, Lane::Key5], vec![Lane::Key2, Lane::Key4]),
+            (
+                KeyMode::K6,
+                vec![Lane::Key1, Lane::Key3, Lane::Key4, Lane::Key6],
+                vec![Lane::Key2, Lane::Key5],
+            ),
+            (
+                KeyMode::K7,
+                vec![Lane::Key1, Lane::Key3, Lane::Key5, Lane::Key7],
+                vec![Lane::Key2, Lane::Key4, Lane::Key6],
+            ),
+            (
+                KeyMode::K8,
+                vec![Lane::Key2, Lane::Key4, Lane::Key5, Lane::Key7],
+                vec![Lane::Key1, Lane::Key3, Lane::Key6, Lane::Key8],
+            ),
+            (
+                KeyMode::K9,
+                vec![Lane::Key1, Lane::Key3, Lane::Key5, Lane::Key7, Lane::Key9],
+                vec![Lane::Key2, Lane::Key4, Lane::Key6, Lane::Key8],
+            ),
+            (
+                KeyMode::K10,
+                vec![Lane::Key1, Lane::Key3, Lane::Key5, Lane::Key8, Lane::Key10, Lane::Key12],
+                vec![Lane::Key2, Lane::Key4, Lane::Key9, Lane::Key11],
+            ),
+            (
+                KeyMode::K14,
+                vec![
+                    Lane::Key1,
+                    Lane::Key3,
+                    Lane::Key5,
+                    Lane::Key7,
+                    Lane::Key8,
+                    Lane::Key10,
+                    Lane::Key12,
+                    Lane::Key14,
+                ],
+                vec![Lane::Key2, Lane::Key4, Lane::Key6, Lane::Key9, Lane::Key11, Lane::Key13],
+            ),
+        ];
+
+        for (key_mode, down, up) in cases {
+            for lane in down {
+                assert_eq!(
+                    default_hispeed_direction_for_lane(key_mode, lane),
+                    Some(Down),
+                    "{} {lane:?}",
+                    key_mode.as_str(),
+                );
+            }
+            for lane in up {
+                assert_eq!(
+                    default_hispeed_direction_for_lane(key_mode, lane),
+                    Some(Up),
+                    "{} {lane:?}",
+                    key_mode.as_str(),
+                );
+            }
+            for &lane in key_mode.active_lanes() {
+                if matches!(lane, Lane::Scratch | Lane::Scratch2) {
+                    assert_eq!(default_hispeed_direction_for_lane(key_mode, lane), None);
+                } else {
+                    assert!(default_hispeed_direction_for_lane(key_mode, lane).is_some());
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn eight_key_hispeed_override_only_persists_non_default_direction() {
+        let mut input = default_profile_input();
+
+        assert_eq!(
+            hispeed_direction_for_lane(&input, KeyMode::K8, Lane::Key1),
+            Some(HispeedDirectionConfig::Up),
+        );
+        assert!(set_eight_key_hispeed_direction(
+            &mut input,
+            LaneConfig::Key1,
+            HispeedDirectionConfig::Down,
+        ));
+        assert_eq!(
+            input.play[KeyMode::K8.play_map_key()].hispeed.get(&LaneConfig::Key1),
+            Some(&HispeedDirectionConfig::Down),
+        );
+        assert!(set_eight_key_hispeed_direction(
+            &mut input,
+            LaneConfig::Key1,
+            HispeedDirectionConfig::Up,
+        ));
+        assert!(input.play[KeyMode::K8.play_map_key()].hispeed.is_empty());
+        assert!(!set_eight_key_hispeed_direction(
+            &mut input,
+            LaneConfig::Scratch,
+            HispeedDirectionConfig::Down,
+        ));
     }
 }

@@ -1,13 +1,16 @@
 use std::borrow::Cow;
-use std::collections::{HashMap, hash_map::DefaultHasher};
+use std::collections::{BTreeMap, HashMap, VecDeque, hash_map::DefaultHasher};
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use bmz_core::input::InputKind;
 use bmz_core::judge::{Judge, TimingSide};
 use bmz_core::lane::{KeyMode, LANE_COUNT, Lane};
+use bmz_gameplay::session::{SkinRuntimeEvent, SkinRuntimeEventKind};
 use serde::Deserialize;
 
 use crate::assets::load_png_rgba;
@@ -17,8 +20,8 @@ use crate::plan::{
     TextOutline, TextOverflow, TextShadow, TextStyle, TextureId, UvRect,
 };
 use crate::scene::{
-    CourseConstraintFlags, PlayerStatsSnapshot, ResultGradeDiffDisplay, SelectRowKind,
-    SelectRowSnapshot, SelectSnapshot,
+    CourseConstraintFlags, CourseResultSkinSnapshot, DailyPlayerStatsSnapshot, PlayerStatsSnapshot,
+    ResultGradeDiffDisplay, SelectRowKind, SelectRowSnapshot, SelectSnapshot,
 };
 use crate::skin_offset::{SKIN_OFFSET_BAR_LINE, SkinOffsetValues};
 use crate::snapshot::{CourseStageMarker, DisplayJudgeCounts, LongBodyState};
@@ -114,6 +117,44 @@ struct DestinationResolveContext<'a, 'text> {
 
 /// beatoraja `PlaySkin.judgeregion` 上限 (TIMER_JUDGE_1P/2P/3P = 46/47/247)。
 pub const MAX_JUDGE_REGIONS: usize = 3;
+const LUA_DRAW_CALLBACK_PREFIX: &str = "bmz:lua_draw_callback:";
+
+/// Renderer-facing interface for Lua draw sidecars. Implementations own the VM
+/// outside `SkinDocument`; the renderer only supplies a read-only frame state.
+pub trait SkinLuaDrawRuntime: std::fmt::Debug + Send + Sync {
+    fn evaluate_draw(
+        &self,
+        callback_id: usize,
+        state: &SkinDrawState,
+        enabled_options: &[i32],
+        text_values: &BTreeMap<i32, String>,
+    ) -> bool;
+}
+
+#[derive(Clone)]
+pub struct SkinLuaRuntimeContext {
+    runtime: Arc<dyn SkinLuaDrawRuntime>,
+    enabled_options: Arc<[i32]>,
+    text_values: Arc<BTreeMap<i32, String>>,
+}
+
+impl std::fmt::Debug for SkinLuaRuntimeContext {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("SkinLuaRuntimeContext")
+            .field("enabled_options", &self.enabled_options)
+            .field("text_value_count", &self.text_values.len())
+            .finish_non_exhaustive()
+    }
+}
+
+impl PartialEq for SkinLuaRuntimeContext {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.runtime, &other.runtime)
+            && self.enabled_options == other.enabled_options
+            && self.text_values == other.text_values
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct JudgeRegionState {
@@ -192,6 +233,7 @@ pub struct SkinSliderHit {
 pub struct SkinContext {
     manifest: SkinManifest,
     document: Option<SkinDocument>,
+    lua_draw_runtime: Option<Arc<dyn SkinLuaDrawRuntime>>,
     document_sources: HashMap<String, SkinDocumentTexture>,
     select_settings_dest_index: Arc<crate::select_settings_dest::SelectSettingsDestIndex>,
     result_render_cache: Arc<Mutex<ResultRenderCache>>,
@@ -201,17 +243,25 @@ impl PartialEq for SkinContext {
     fn eq(&self, other: &Self) -> bool {
         self.manifest == other.manifest
             && self.document == other.document
+            && match (&self.lua_draw_runtime, &other.lua_draw_runtime) {
+                (Some(left), Some(right)) => Arc::ptr_eq(left, right),
+                (None, None) => true,
+                _ => false,
+            }
             && self.document_sources == other.document_sources
             && self.select_settings_dest_index == other.select_settings_dest_index
     }
 }
 
 const RESULT_RENDER_CACHE_MAX_ENTRIES: usize = 64;
+static NEXT_RESULT_GAUGE_GRAPH_REVISION: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Debug, Default)]
 struct ResultRenderCache {
     planning: Option<ResultPlanningCache>,
     rect_batches: HashMap<ResultRectBatchCacheKey, Arc<[RectCommand]>>,
+    gauge_graph: Option<ResultGaugeGraphCache>,
+    gauge_rect_batches: HashMap<ResultGaugeGraphRectBatchCacheKey, Arc<[RectCommand]>>,
 }
 
 impl ResultRenderCache {
@@ -266,6 +316,74 @@ impl ResultRenderCache {
         self.rect_batches.insert(key, Arc::clone(&rects));
         rects
     }
+
+    fn prepare_gauge_graph(&mut self, graph: &Arc<crate::snapshot::ResultGraphSnapshot>) {
+        if self.gauge_graph.as_ref().is_some_and(|cached| Arc::ptr_eq(&cached.graph, graph)) {
+            return;
+        }
+        let revision = NEXT_RESULT_GAUGE_GRAPH_REVISION.fetch_add(1, Ordering::Relaxed);
+        self.gauge_graph = Some(ResultGaugeGraphCache {
+            graph: Arc::clone(graph),
+            revision,
+            points_by_type: HashMap::new(),
+        });
+        if self.gauge_rect_batches.len() >= RESULT_RENDER_CACHE_MAX_ENTRIES {
+            self.gauge_rect_batches.clear();
+        }
+    }
+
+    fn cached_gauge_points(
+        &mut self,
+        gauge_type: i32,
+    ) -> Option<(u64, Arc<[crate::snapshot::ResultGaugeGraphPoint]>)> {
+        let cached = self.gauge_graph.as_mut()?;
+        let points = cached
+            .points_by_type
+            .entry(gauge_type)
+            .or_insert_with(|| {
+                let filtered = cached
+                    .graph
+                    .gauge_points
+                    .iter()
+                    .copied()
+                    .filter(|point| point.gauge_type == gauge_type)
+                    .collect::<Vec<_>>();
+                if filtered.is_empty() {
+                    Arc::from(cached.graph.gauge_points.as_slice())
+                } else {
+                    Arc::from(filtered)
+                }
+            })
+            .clone();
+        Some((cached.revision, points))
+    }
+
+    fn gauge_graph_revision(&self) -> Option<u64> {
+        self.gauge_graph.as_ref().map(|cached| cached.revision)
+    }
+
+    fn cached_gauge_rect_batch(
+        &mut self,
+        key: ResultGaugeGraphRectBatchCacheKey,
+        build: impl FnOnce() -> Arc<[RectCommand]>,
+    ) -> Arc<[RectCommand]> {
+        if let Some(rects) = self.gauge_rect_batches.get(&key) {
+            return Arc::clone(rects);
+        }
+        let rects = build();
+        if self.gauge_rect_batches.len() >= RESULT_RENDER_CACHE_MAX_ENTRIES {
+            self.gauge_rect_batches.clear();
+        }
+        self.gauge_rect_batches.insert(key, Arc::clone(&rects));
+        rects
+    }
+}
+
+#[derive(Debug)]
+struct ResultGaugeGraphCache {
+    graph: Arc<crate::snapshot::ResultGraphSnapshot>,
+    revision: u64,
+    points_by_type: HashMap<i32, Arc<[crate::snapshot::ResultGaugeGraphPoint]>>,
 }
 
 #[derive(Debug, Clone)]
@@ -321,11 +439,22 @@ enum ResultRectBatchKind {
     EarlyLate,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+struct ResultGaugeGraphRectBatchCacheKey {
+    destination_index: usize,
+    frame: ResolvedSkinFrame,
+    graph_revision: u64,
+    display_gauge_type: i32,
+    gauge_max_bits: u32,
+    gauge_border_bits: u32,
+}
+
 impl Default for SkinContext {
     fn default() -> Self {
         Self {
             manifest: default_skin_manifest(),
             document: None,
+            lua_draw_runtime: None,
             document_sources: HashMap::new(),
             select_settings_dest_index: Arc::new(
                 crate::select_settings_dest::SelectSettingsDestIndex::default(),
@@ -340,6 +469,7 @@ impl SkinContext {
         Self {
             manifest,
             document: None,
+            lua_draw_runtime: None,
             document_sources: HashMap::new(),
             select_settings_dest_index: Arc::new(
                 crate::select_settings_dest::SelectSettingsDestIndex::default(),
@@ -358,6 +488,7 @@ impl SkinContext {
         Self {
             manifest,
             document: Some(document),
+            lua_draw_runtime: None,
             document_sources: document_sources
                 .into_iter()
                 .map(|source| (source.source_id.clone(), source))
@@ -373,6 +504,32 @@ impl SkinContext {
 
     pub fn document(&self) -> Option<&SkinDocument> {
         self.document.as_ref()
+    }
+
+    pub fn set_lua_draw_runtime(&mut self, runtime: Option<Arc<dyn SkinLuaDrawRuntime>>) {
+        self.lua_draw_runtime = runtime;
+    }
+
+    fn state_with_lua_runtime(
+        &self,
+        state: &SkinDrawState,
+        text: &SkinTextState<'_>,
+    ) -> SkinDrawState {
+        let mut state = state.clone();
+        let Some(runtime) = self.lua_draw_runtime.as_ref() else {
+            return state;
+        };
+        let enabled_options: Arc<[i32]> = self
+            .document
+            .as_ref()
+            .map(|document| Arc::from(document.enabled_options()))
+            .unwrap_or_else(|| Arc::from([]));
+        state.lua_runtime = Some(SkinLuaRuntimeContext {
+            runtime: Arc::clone(runtime),
+            enabled_options,
+            text_values: Arc::new(lua_main_state_text_values(&state, text)),
+        });
+        state
     }
 
     pub fn set_user_selected_options(&mut self, enabled_options: Vec<i32>) -> bool {
@@ -426,32 +583,41 @@ impl SkinContext {
         let Some(document) = &self.document else {
             return Vec::new();
         };
-        document.static_render_items(&self.document_sources, state, text)
+        let runtime_sources = static_runtime_document_sources(&self.document_sources, state);
+        let state = self.state_with_lua_runtime(state, text);
+        document.static_render_items(&runtime_sources, &state, text)
     }
 
     pub fn static_document_items_for_result_state_and_text(
         &self,
-        graph: &crate::snapshot::ResultGraphSnapshot,
+        graph: &Arc<crate::snapshot::ResultGraphSnapshot>,
         state: &SkinDrawState,
         text: &SkinTextState<'_>,
     ) -> Vec<SkinRenderItem> {
         let Some(document) = &self.document else {
             return Vec::new();
         };
-        if let Ok(mut cache) = self.result_render_cache.lock() {
+        let runtime_sources = static_runtime_document_sources(&self.document_sources, state);
+        let state = self.state_with_lua_runtime(state, text);
+        // A runtime callback may execute arbitrary bounded Lua. Do not hold the
+        // result cache lock across that call.
+        if self.lua_draw_runtime.is_none()
+            && let Ok(mut cache) = self.result_render_cache.lock()
+        {
+            cache.prepare_gauge_graph(graph);
             return document.static_render_items_with_graphs_cached(
-                &self.document_sources,
-                state,
+                &runtime_sources,
+                &state,
                 text,
-                SkinRuntimeGraphs::from_result_graph(graph),
+                SkinRuntimeGraphs::from_result_graph(graph.as_ref()),
                 Some(&mut cache),
             );
         }
         document.static_render_items_with_graphs(
-            &self.document_sources,
-            state,
+            &runtime_sources,
+            &state,
             text,
-            SkinRuntimeGraphs::from_result_graph(graph),
+            SkinRuntimeGraphs::from_result_graph(graph.as_ref()),
         )
     }
 
@@ -473,6 +639,7 @@ impl SkinContext {
             snapshot,
             dynamic_timers,
             &self.select_settings_dest_index,
+            self.lua_draw_runtime.clone(),
         )
     }
 
@@ -490,6 +657,19 @@ impl SkinContext {
             x,
             y,
         )
+    }
+
+    pub fn result_click_hit(&self, state: &SkinDrawState, x: f32, y: f32) -> Option<SkinClickHit> {
+        self.document.as_ref()?.result_click_hit(state, x, y)
+    }
+
+    pub fn result_slider_hit(
+        &self,
+        state: &SkinDrawState,
+        x: f32,
+        y: f32,
+    ) -> Option<SkinSliderHit> {
+        self.document.as_ref()?.result_slider_hit(state, x, y)
     }
 
     pub fn select_slider_hit(
@@ -512,7 +692,9 @@ impl SkinContext {
         let Some(document) = &self.document else {
             return (Vec::new(), Vec::new(), Vec::new());
         };
-        document.static_render_items_split(&self.document_sources, state, text)
+        let runtime_sources = static_runtime_document_sources(&self.document_sources, state);
+        let state = self.state_with_lua_runtime(state, text);
+        document.static_render_items_split(&runtime_sources, &state, text)
     }
 
     pub fn static_document_play_items_split_for_state_and_text(
@@ -525,9 +707,11 @@ impl SkinContext {
         let Some(document) = &self.document else {
             return (Vec::new(), Vec::new(), Vec::new());
         };
+        let runtime_sources = static_runtime_document_sources(&self.document_sources, state);
+        let state = self.state_with_lua_runtime(state, text);
         document.static_render_items_split_with_graphs(
-            &self.document_sources,
-            state,
+            &runtime_sources,
+            &state,
             text,
             SkinRuntimeGraphs::from_document_with_play_graphs(
                 document,
@@ -578,6 +762,7 @@ impl SkinContext {
         rect: Rect,
         mode: LongNoteMode,
         state: LongBodyState,
+        draw_state: &SkinDrawState,
     ) -> Option<SkinRenderItem> {
         let document = self.document.as_ref()?;
         document.note_long_body_render_item(
@@ -586,6 +771,7 @@ impl SkinContext {
             rect,
             mode,
             state,
+            draw_state,
             &self.document_sources,
         )
     }
@@ -608,6 +794,23 @@ impl SkinContext {
         document.note_height_for_lane(lane, key_mode)
     }
 
+    pub fn document_note_expansion_scale(&self, state: &SkinDrawState) -> (f32, f32) {
+        let Some(note) = self.document.as_ref().and_then(|document| document.note.as_ref()) else {
+            return (1.0, 1.0);
+        };
+        let elapsed = state.quarter_note_elapsed_ms.unwrap_or(i32::MAX).max(0) as f32;
+        let pulse = if elapsed < 9.0 {
+            elapsed / 9.0
+        } else if elapsed <= 159.0 {
+            (159.0 - elapsed) / 150.0
+        } else {
+            0.0
+        };
+        let width = note.expansionrate.first().copied().unwrap_or(100) as f32 / 100.0;
+        let height = note.expansionrate.get(1).copied().unwrap_or(100) as f32 / 100.0;
+        (1.0 + (width - 1.0) * pulse, 1.0 + (height - 1.0) * pulse)
+    }
+
     pub fn document_bar_line_items(
         &self,
         note_y: f32,
@@ -617,7 +820,68 @@ impl SkinContext {
         let Some(document) = self.document.as_ref() else {
             return Vec::new();
         };
-        document.note_group_render_items(note_y, key_mode, state, &self.document_sources)
+        let state = self.state_with_lua_runtime(state, &SkinTextState::default());
+        document.note_group_render_items(note_y, key_mode, &state, &self.document_sources)
+    }
+
+    pub fn document_bpm_line_items(
+        &self,
+        note_y: f32,
+        key_mode: KeyMode,
+        state: &SkinDrawState,
+    ) -> Vec<SkinRenderItem> {
+        let Some(document) = self.document.as_ref() else {
+            return Vec::new();
+        };
+        let Some(note) = document.note.as_ref() else {
+            return Vec::new();
+        };
+        let state = self.state_with_lua_runtime(state, &SkinTextState::default());
+        document.note_line_render_items(&note.bpm, note_y, key_mode, &state, &self.document_sources)
+    }
+
+    pub fn document_stop_line_items(
+        &self,
+        note_y: f32,
+        key_mode: KeyMode,
+        state: &SkinDrawState,
+    ) -> Vec<SkinRenderItem> {
+        let Some(document) = self.document.as_ref() else {
+            return Vec::new();
+        };
+        let Some(note) = document.note.as_ref() else {
+            return Vec::new();
+        };
+        let state = self.state_with_lua_runtime(state, &SkinTextState::default());
+        document.note_line_render_items(
+            &note.stop,
+            note_y,
+            key_mode,
+            &state,
+            &self.document_sources,
+        )
+    }
+
+    pub fn document_time_line_items(
+        &self,
+        note_y: f32,
+        key_mode: KeyMode,
+        state: &SkinDrawState,
+    ) -> Vec<SkinRenderItem> {
+        let Some(document) = self.document.as_ref() else {
+            return Vec::new();
+        };
+        let Some(note) = document.note.as_ref() else {
+            return Vec::new();
+        };
+        let state = self.state_with_lua_runtime(state, &SkinTextState::default());
+        document.note_line_render_items(
+            &note.time,
+            note_y,
+            key_mode,
+            &state,
+            &self.document_sources,
+        )
     }
 
     pub fn document_gauge_items(&self, gauge: f32, elapsed_ms: i32) -> Option<Vec<SkinRenderItem>> {
@@ -713,6 +977,30 @@ impl SkinContext {
         Some(document.apply_notes_offset_to_rect(rect, state))
     }
 
+    pub fn missed_note_rect_for_fall(
+        &self,
+        lane: Lane,
+        key_mode: KeyMode,
+        fall: f32,
+        note_height: f32,
+        state: &SkinDrawState,
+    ) -> Option<Rect> {
+        let document = self.document.as_ref()?;
+        let note = document.note.as_ref()?;
+        if note.dst2 == i32::MIN {
+            return None;
+        }
+        let enabled_options = document.enabled_options();
+        let area = document.note_lane_area(lane, key_mode, &enabled_options)?;
+        let canvas_h = document.h.max(1) as f32;
+        let judge_bottom = note_judge_bottom_y(area, state, canvas_h);
+        let target_bottom = (canvas_h - note.dst2 as f32) / canvas_h;
+        let bottom_y = judge_bottom + (target_bottom - judge_bottom) * fall.clamp(0.0, 1.0);
+        let rect =
+            Rect { x: area.x, y: bottom_y - note_height, width: area.width, height: note_height };
+        Some(document.apply_notes_offset_to_rect(rect, state))
+    }
+
     /// ロングノート胴体の矩形を計算する。`head_y`/`tail_y` は `VisibleNote::y` と同じ
     /// 正規化座標（0.0=判定ライン, 1.0=最奥）。
     pub fn note_body_rect(
@@ -762,6 +1050,27 @@ fn select_runtime_document_sources(
         && let Some(source_size) = snapshot.banner_image_size
     {
         insert_runtime_document_source(&mut sources, "102", SELECT_BANNER_TEXTURE, source_size);
+    }
+    sources
+}
+
+fn static_runtime_document_sources(
+    base_sources: &HashMap<String, SkinDocumentTexture>,
+    state: &SkinDrawState,
+) -> HashMap<String, SkinDocumentTexture> {
+    let mut sources = base_sources.clone();
+    if state.has_stagefile
+        && let Some(source_size) = state.stagefile_image_size
+    {
+        insert_runtime_document_source(&mut sources, "100", SELECT_STAGE_TEXTURE, source_size);
+    }
+    if state.has_backbmp {
+        insert_runtime_document_source(
+            &mut sources,
+            "101",
+            PLAY_BACKBMP_TEXTURE,
+            SkinImageSize { width: 1.0, height: 1.0 },
+        );
     }
     sources
 }
@@ -819,14 +1128,31 @@ impl SkinBgaFrame {
 #[derive(Debug, Clone, PartialEq)]
 pub struct SkinDrawState {
     pub elapsed_ms: i32,
+    /// Lua skin のruntime draw callbackにだけ渡すsidecar context。
+    /// JSON skinと通常のcompiled条件では常にNone。
+    #[doc(hidden)]
+    pub lua_runtime: Option<SkinLuaRuntimeContext>,
+    /// Lua callback をロード時に変換した runtime flag。DynamicTimerRuntime が注入する。
+    pub runtime_flags: HashMap<i32, bool>,
+    /// BMZ logical inputs in E1/E2/E3/E4/UI Left/Right/Up/Down order.
+    pub logical_input_held: [bool; SKIN_BMZ_INPUT_COUNT],
+    /// Elapsed milliseconds since the latest aggregate false-to-true press edge.
+    pub logical_input_press_ms: [Option<i32>; SKIN_BMZ_INPUT_COUNT],
+    /// beatoraja TIMER_STARTINPUT (1)。skin.input 待機後からの経過 ms。
+    pub start_input_ms: Option<i32>,
+    /// beatoraja NUMBER_CURRENT_FPS (20)。
+    pub current_fps: u32,
     /// アプリ起動後の経過時間 ms。
     /// beatoraja の NUMBER_OPERATING_TIME_HOUR/MINUTE/SECOND (27..29) に使う。
     pub operating_time_ms: i32,
     pub ready_timer_ms: Option<i32>,
     pub play_timer_ms: Option<i32>,
+    pub rhythm_timer_ms: Option<i32>,
+    pub quarter_note_elapsed_ms: Option<i32>,
     pub key_mode: KeyMode,
     pub select_bar_elapsed_ms: i32,
     pub select_option_panel_elapsed_ms: i32,
+    pub select_option_panel_off_elapsed_ms: [Option<i32>; 6],
     pub select_option_panel: u8,
     pub select_arrange_index: usize,
     pub select_arrange_2p_index: usize,
@@ -835,8 +1161,14 @@ pub struct SkinDrawState {
     pub select_double_option_index: usize,
     pub select_hs_fix_index: usize,
     pub result_arrange_index: usize,
+    pub result_arrange_2p_index: usize,
     pub result_extended_arrange_index: usize,
+    pub result_extended_arrange_2p_index: usize,
     pub result_random_lane_refs: [u8; SKIN_RANDOM_LANE_REF_COUNT],
+    /// Resultで実効譜面にLNが含まれるか。NoneはResult以外。
+    pub result_has_long_notes: Option<bool>,
+    /// Resultの実効LN種別imageset index (0=LN, 1=CN, 2=HCN)。
+    pub result_ln_mode_index: Option<usize>,
     pub select_gauge_index: usize,
     pub select_gauge_auto_shift_index: usize,
     pub select_bottom_shiftable_gauge_index: usize,
@@ -858,6 +1190,7 @@ pub struct SkinDrawState {
     pub result_grade_diff_f_fallback_to_e: bool,
     pub judge_counts: DisplayJudgeCounts,
     pub player_stats: PlayerStatsSnapshot,
+    pub course_result: CourseResultSkinSnapshot,
     pub gauge: f32,
     pub gauge_type: i32,
     pub gauge_auto_shift: bool,
@@ -873,6 +1206,10 @@ pub struct SkinDrawState {
     /// 各レーンのkeyoff(離した直後の演出)タイマー経過ms。Noneなら非アクティブ。
     /// beatoraja の TIMER_KEYOFF_1P_KEY1..7 (121..127) / SCRATCH (120) に対応。
     pub keyoff_ms: [Option<i32>; LANE_COUNT],
+    /// PeacefulPlay互換キービームの押下中表示状態。renderer runtimeが更新する。
+    pub keybeam_hold_active: [bool; LANE_COUNT],
+    /// PeacefulPlay互換キービームの解放フェード表示状態。renderer runtimeが更新する。
+    pub keybeam_fade_active: [bool; LANE_COUNT],
     /// 各レーンの LN ホールドタイマー経過ms。ホールド中のみ Some。
     /// beatoraja の TIMER_HOLD_1P (70..=77) / TIMER_HOLD_2P (80..=87) に対応。
     pub hold_ms: [Option<i32>; LANE_COUNT],
@@ -937,6 +1274,8 @@ pub struct SkinDrawState {
     pub lift_enabled: bool,
     /// OPTION_HIDDEN1_ON (273)。
     pub hidden_enabled: bool,
+    /// beatoraja image/index ref 342。
+    pub hispeed_auto_adjust: bool,
     /// 現在 BPM (NUMBER_NOWBPM=160 に使用)。
     pub now_bpm: f32,
     /// 最小 BPM (NUMBER_MINBPM=91 に使用)。
@@ -951,6 +1290,8 @@ pub struct SkinDrawState {
     pub bga_enabled: bool,
     /// `#STAGEFILE` 相当の曲画像があるか (OPTION_NO_STAGEFILE=190 / OPTION_STAGEFILE=191)。
     pub has_stagefile: bool,
+    /// runtime image 100 (`#STAGEFILE`) のロード済み画像サイズ。
+    pub stagefile_image_size: Option<SkinImageSize>,
     /// `#BACKBMP` 相当の背景画像がロード済みか (OPTION_NO_BACKBMP=194 / OPTION_BACKBMP=195)。
     pub has_backbmp: bool,
     /// 現在表示するBGA本体画像。
@@ -979,8 +1320,9 @@ pub struct SkinDrawState {
     pub judge_timing_offset_ms: i32,
     /// beatoraja IndexType.notesdisplaytimingautoadjust (number/event id 75).
     pub judge_timing_auto_adjust: bool,
-    /// 選曲画面の表示曲数 (NUMBER_SELECT_BAR_COUNT=300 相当)。
-    pub select_chart_count: u32,
+    /// 選択中 DirectoryBar に含まれる譜面数 (NUMBER_FOLDER_TOTALSONGS=300)。
+    /// 非 DirectoryBar では None。これは現在の表示フォルダー全体の行数ではなく、カーソル行の値。
+    pub select_folder_song_count: Option<u32>,
     /// 現在の描画状態が選曲画面かどうか。番号 ref の一部は scene ごとに意味が違う。
     pub select_screen: bool,
     /// 選曲バーのスクロール位置 0.0-1.0。
@@ -991,6 +1333,8 @@ pub struct SkinDrawState {
     pub select_bgm_volume: f32,
     /// 選択中バーにバナー画像があるか (OPTION_NO_BANNER=192 / OPTION_BANNER=193)。
     pub select_has_banner: bool,
+    /// 選択中 SongData と同じフォルダに `.txt` があるか (OPTION_NO_TEXT/TEXT=174/175)。
+    pub select_has_document: bool,
     /// 選択中曲のレベル表記から取り出した数値。
     pub select_play_level: i64,
     /// 現在の曲のレベル表記から取り出した数値 (NUMBER_PLAYLEVEL=96)。
@@ -1013,6 +1357,9 @@ pub struct SkinDrawState {
     /// value ref 89/90 とは別名前空間。BMZ は invisible を持たず 0/1。
     pub select_favorite_song: bool,
     pub select_favorite_chart: bool,
+    /// Result の favorite_chart (image ref 90)。None は Result 以外。
+    /// BMZ は invisible を持たないため Some(false/true) の2状態だけを返す。
+    pub result_favorite_chart: Option<bool>,
     /// beatoraja IndexType autosave_replay1..4 (321..324) image row indices。
     pub select_replay_slot_rule_indices: [i64; 4],
     /// beatoraja ValueType folder_noplay..folder_max (320..330) 用のランプ別曲数。
@@ -1055,6 +1402,17 @@ pub struct SkinDrawState {
     /// Fast/Slow 内訳 (ref 410-419/421-424)。
     /// Play/Result 中は Some、それ以外は None。
     pub fast_slow_counts: Option<crate::snapshot::FastSlowJudgeCounts>,
+    /// PeacefulPlay key logger: 直近1秒のPress数。
+    pub keylogger_nps: u32,
+    /// display lane別の COOL/GREAT/GOOD/BAD 累積数。
+    pub keylogger_judge_counts: [[u32; 4]; LANE_COUNT],
+    /// display lane別の COOL/FAST/SLOW 累積数。
+    pub keylogger_fast_slow_counts: [[u32; 3]; LANE_COUNT],
+    /// display lane別、直近16 Pressの開始時刻からの経過ms。
+    pub keylogger_event_ms: [[Option<i32>; 16]; LANE_COUNT],
+    pub keylogger_event_judge: [[u8; 16]; LANE_COUNT],
+    pub keylogger_event_fast_slow: [[u8; 16]; LANE_COUNT],
+    pub keylogger_exclude_cool: bool,
     /// 過去ベスト max combo (ref 172)。
     pub best_max_combo: Option<u32>,
     /// ターゲット max combo (ref 173, 175 で使用)。
@@ -1072,6 +1430,9 @@ pub struct SkinDrawState {
     pub rival_max_combo: Option<i64>,
     /// 同 BP (NUMBER_RIVAL_MISSCOUNT=276)。
     pub rival_bp: Option<i64>,
+    /// EXスコア元プレイの PGREAT/GREAT/GOOD/BAD/POOR
+    /// (NUMBER/FLOAT_RIVAL_*=280..289)。
+    pub rival_judge_counts: Option<[u32; 5]>,
     /// Result update/draw ops 用の保存前ベスト。
     pub previous_best_ex_score: Option<u32>,
     pub previous_best_clear_index: Option<i64>,
@@ -1094,6 +1455,8 @@ pub struct SkinDrawState {
     pub result_update_score_ms: Option<i32>,
     /// Result gaugegraph display type selected by result key CHANGE_GRAPH.
     pub result_gauge_graph_type: Option<i32>,
+    /// Lua Result スキンの展開パネル (0=非表示、1=IR、2=グラフ)。
+    pub result_panel: Option<i32>,
     /// RESULT replay slot status for OPTION_REPLAYDATA* / *_SAVED.
     pub result_replay_slots: [bool; 4],
     pub result_saved_replay_slots: [bool; 4],
@@ -1101,12 +1464,25 @@ pub struct SkinDrawState {
     pub failed_ms: Option<i32>,
     /// Result timing distribution average (NUMBER_AVERAGE_TIMING=374).
     pub average_timing_ms: Option<f32>,
+    /// Result全ノートの平均絶対判定ずれ us (NUMBER_AVERAGE_DURATION=372/373)。
+    /// 未判定ノートは beatoraja と同じく 1,000,000us として集計する。
+    pub average_duration_us: Option<i64>,
     /// Result timing distribution standard deviation (NUMBER_STDDEV_TIMING=376).
     pub stddev_timing_ms: Option<f32>,
     /// OPTION_AUTOPLAYON (33) / OPTION_AUTOPLAYOFF (32) 用。
     pub autoplay: bool,
+    /// BMSPlayer のプレイ画面か。プレイ専用 op が他 scene で true にならないために使う。
+    pub play_screen: bool,
+    /// BMSPlayer が replay モードか。
+    pub replay_playback: bool,
+    /// BMSPlayer が practice モードか。
+    pub practice_mode: bool,
+    /// beatoraja PlayerResource.updateScore。None は対象外 scene。
+    pub score_save_enabled: Option<bool>,
     /// OPTION_NOW_LOADING (80) / OPTION_LOADED (81) 用。
     pub skin_loaded: bool,
+    /// NUMBER_LOADING_PROGRESS (165) / RateType load_progress (102) 用。
+    pub resource_load_progress: f32,
     /// OPTION_MODE_COURSE (290) とステージ別 op (280..283 / 289) 用。未対応時は None。
     pub course_stage: Option<CourseStageMarker>,
     /// beatoraja `event_index(SKIN_EVENT_HSFIX)`。0=OFF, 1=START, 2=MAX, 3=MAIN, 4=MIN。
@@ -1126,6 +1502,8 @@ pub struct SkinDrawState {
     pub hit_error_ring_index: usize,
     /// `dynamicTimer` で定義された observe タイマーの経過 ms。None は timer_off。
     pub dynamic_timer_ms: [Option<i32>; SKIN_DYNAMIC_TIMER_COUNT],
+    /// Lua custom timerのうち固定delayとしてIR化できたタイマーの経過ms。
+    pub fixed_delay_timer_ms: HashMap<i32, i32>,
     /// 選曲画面の設定フォルダ内。曲メタデータ用の op / text / number を抑制する。
     pub in_settings: bool,
     /// 設定項目の編集モード中 (`in_settings` と併用)。
@@ -1138,12 +1516,21 @@ impl Default for SkinDrawState {
     fn default() -> Self {
         Self {
             elapsed_ms: 0,
+            lua_runtime: None,
+            runtime_flags: HashMap::new(),
+            logical_input_held: [false; SKIN_BMZ_INPUT_COUNT],
+            logical_input_press_ms: [None; SKIN_BMZ_INPUT_COUNT],
+            start_input_ms: None,
+            current_fps: 0,
             operating_time_ms: 0,
             ready_timer_ms: None,
             play_timer_ms: None,
+            rhythm_timer_ms: None,
+            quarter_note_elapsed_ms: None,
             key_mode: KeyMode::default(),
             select_bar_elapsed_ms: 0,
             select_option_panel_elapsed_ms: 0,
+            select_option_panel_off_elapsed_ms: [None; 6],
             select_option_panel: 0,
             select_arrange_index: 0,
             select_arrange_2p_index: 0,
@@ -1152,8 +1539,12 @@ impl Default for SkinDrawState {
             select_double_option_index: 0,
             select_hs_fix_index: 0,
             result_arrange_index: 0,
+            result_arrange_2p_index: 0,
             result_extended_arrange_index: 0,
+            result_extended_arrange_2p_index: 0,
             result_random_lane_refs: [0; SKIN_RANDOM_LANE_REF_COUNT],
+            result_has_long_notes: None,
+            result_ln_mode_index: None,
             select_gauge_index: 2,
             select_gauge_auto_shift_index: 0,
             select_bottom_shiftable_gauge_index: 0,
@@ -1175,6 +1566,7 @@ impl Default for SkinDrawState {
             result_grade_diff_f_fallback_to_e: false,
             judge_counts: DisplayJudgeCounts::default(),
             player_stats: PlayerStatsSnapshot::default(),
+            course_result: CourseResultSkinSnapshot::default(),
             gauge: 0.0,
             gauge_type: 2,
             gauge_auto_shift: false,
@@ -1186,6 +1578,8 @@ impl Default for SkinDrawState {
             bomb_ms: [None; LANE_COUNT],
             keyon_ms: [None; LANE_COUNT],
             keyoff_ms: [None; LANE_COUNT],
+            keybeam_hold_active: [false; LANE_COUNT],
+            keybeam_fade_active: [false; LANE_COUNT],
             hold_ms: [None; LANE_COUNT],
             hcn_active_ms: [None; LANE_COUNT],
             hcn_damage_ms: [None; LANE_COUNT],
@@ -1216,6 +1610,7 @@ impl Default for SkinDrawState {
             lanecover_enabled: true,
             lift_enabled: true,
             hidden_enabled: false,
+            hispeed_auto_adjust: false,
             now_bpm: 0.0,
             min_bpm: 0.0,
             max_bpm: 0.0,
@@ -1223,6 +1618,7 @@ impl Default for SkinDrawState {
             has_bpm_stop: false,
             bga_enabled: true,
             has_stagefile: false,
+            stagefile_image_size: None,
             has_backbmp: false,
             bga_base: None,
             bga_layer: None,
@@ -1236,13 +1632,14 @@ impl Default for SkinDrawState {
             target_ex_score: None,
             judge_timing_offset_ms: 0,
             judge_timing_auto_adjust: false,
-            select_chart_count: 0,
+            select_folder_song_count: None,
             select_screen: false,
             select_scroll_progress: 0.0,
             select_master_volume: 1.0,
             select_key_volume: 1.0,
             select_bgm_volume: 1.0,
             select_has_banner: false,
+            select_has_document: false,
             select_play_level: 0,
             play_level: 0,
             table_song: false,
@@ -1254,6 +1651,7 @@ impl Default for SkinDrawState {
             select_clear_index: 0,
             select_favorite_song: false,
             select_favorite_chart: false,
+            result_favorite_chart: None,
             select_replay_slot_rule_indices: [0; 4],
             select_folder_lamp_counts: [0; 11],
             select_row_kind: SelectRowKind::Song,
@@ -1280,6 +1678,13 @@ impl Default for SkinDrawState {
             select_bp: None,
             select_cb: None,
             fast_slow_counts: None,
+            keylogger_nps: 0,
+            keylogger_judge_counts: [[0; 4]; LANE_COUNT],
+            keylogger_fast_slow_counts: [[0; 3]; LANE_COUNT],
+            keylogger_event_ms: [[None; 16]; LANE_COUNT],
+            keylogger_event_judge: [[0; 16]; LANE_COUNT],
+            keylogger_event_fast_slow: [[0; 16]; LANE_COUNT],
+            keylogger_exclude_cool: false,
             best_max_combo: None,
             target_max_combo: None,
             best_bp: None,
@@ -1289,6 +1694,7 @@ impl Default for SkinDrawState {
             rival_ex_score: None,
             rival_max_combo: None,
             rival_bp: None,
+            rival_judge_counts: None,
             previous_best_ex_score: None,
             previous_best_clear_index: None,
             previous_best_max_combo: None,
@@ -1301,13 +1707,20 @@ impl Default for SkinDrawState {
             result_graph_end_ms: None,
             result_update_score_ms: None,
             result_gauge_graph_type: None,
+            result_panel: None,
             result_replay_slots: [false; 4],
             result_saved_replay_slots: [false; 4],
             failed_ms: None,
             average_timing_ms: None,
+            average_duration_us: None,
             stddev_timing_ms: None,
             autoplay: false,
+            play_screen: false,
+            replay_playback: false,
+            practice_mode: false,
+            score_save_enabled: None,
             skin_loaded: true,
+            resource_load_progress: 1.0,
             course_stage: None,
             hsfix_index: 0,
             main_bpm: 0.0,
@@ -1319,6 +1732,7 @@ impl Default for SkinDrawState {
                 bmz_gameplay::hit_error::HIT_ERROR_RING_LEN],
             hit_error_ring_index: 0,
             dynamic_timer_ms: [None; SKIN_DYNAMIC_TIMER_COUNT],
+            fixed_delay_timer_ms: HashMap::new(),
             in_settings: false,
             settings_editing: false,
             select_chart_key_mode: None,
@@ -1329,22 +1743,101 @@ impl Default for SkinDrawState {
 /// `dynamicTimer` observe 条件のエッジ検出用ランタイム。Renderer が保持する。
 #[derive(Debug, Clone)]
 pub struct DynamicTimerRuntime {
+    runtime_flags: HashMap<i32, bool>,
+    runtime_flags_initialized: bool,
     starts: [Option<i32>; SKIN_DYNAMIC_TIMER_COUNT],
+    logical_input_initialized: bool,
+    logical_input_held: [bool; SKIN_BMZ_INPUT_COUNT],
+    logical_input_starts: [Option<i32>; SKIN_BMZ_INPUT_COUNT],
+    keybeam_keyon_starts: [Option<i32>; LANE_COUNT],
+    keybeam_keyoff_starts: [Option<i32>; LANE_COUNT],
+    keybeam_suppressed: [bool; LANE_COUNT],
+    keybeam_fade_allowed: [bool; LANE_COUNT],
+    key_logger: KeyLoggerRuntime,
+}
+
+#[derive(Debug, Clone, Default)]
+struct KeyLoggerRuntime {
+    last_sequence: Option<u64>,
+    last_now_us: Option<i64>,
+    press_history_us: VecDeque<i64>,
+    judge_counts: [[u32; 4]; LANE_COUNT],
+    fast_slow_counts: [[u32; 3]; LANE_COUNT],
+    event_started_ms: [[Option<i32>; 16]; LANE_COUNT],
+    event_started_us: [[Option<i64>; 16]; LANE_COUNT],
+    event_judge: [[u8; 16]; LANE_COUNT],
+    event_fast_slow: [[u8; 16]; LANE_COUNT],
+    next_event_slot: [usize; LANE_COUNT],
 }
 
 impl Default for DynamicTimerRuntime {
     fn default() -> Self {
-        Self { starts: [None; SKIN_DYNAMIC_TIMER_COUNT] }
+        Self {
+            runtime_flags: HashMap::new(),
+            runtime_flags_initialized: false,
+            starts: [None; SKIN_DYNAMIC_TIMER_COUNT],
+            logical_input_initialized: false,
+            logical_input_held: [false; SKIN_BMZ_INPUT_COUNT],
+            logical_input_starts: [None; SKIN_BMZ_INPUT_COUNT],
+            keybeam_keyon_starts: [None; LANE_COUNT],
+            keybeam_keyoff_starts: [None; LANE_COUNT],
+            keybeam_suppressed: [false; LANE_COUNT],
+            keybeam_fade_allowed: [false; LANE_COUNT],
+            key_logger: KeyLoggerRuntime::default(),
+        }
     }
 }
 
 impl DynamicTimerRuntime {
     pub fn reset(&mut self) {
-        self.starts = [None; SKIN_DYNAMIC_TIMER_COUNT];
+        *self = Self::default();
+    }
+
+    /// スキン install / scene 再入場時に、timer と runtime flag を初期状態へ戻す。
+    pub fn reset_for_document(&mut self, document: Option<&SkinDocument>) {
+        self.reset();
+        if let Some(document) = document {
+            self.initialize_runtime_flags(document);
+        }
+    }
+
+    /// 宣言済み runtime event を dispatch する。対象 event がなければ false。
+    pub fn dispatch_runtime_event(&mut self, document: &SkinDocument, event_id: i32) -> bool {
+        self.ensure_runtime_flags(document);
+        let mut handled = false;
+        for event in document.runtime_events.iter().filter(|event| event.id == event_id) {
+            handled = true;
+            for flag_id in &event.toggle_flags {
+                let flag = self.runtime_flags.entry(*flag_id).or_insert(false);
+                *flag = !*flag;
+            }
+        }
+        handled
     }
 
     /// observe 条件を評価し、`state.dynamic_timer_ms` を更新する。
     pub fn advance(&mut self, document: &SkinDocument, state: &mut SkinDrawState, now_ms: i32) {
+        self.ensure_runtime_flags(document);
+        self.advance_logical_inputs(document, state.logical_input_held, now_ms);
+        state.runtime_flags.clone_from(&self.runtime_flags);
+        state.logical_input_press_ms =
+            self.logical_input_starts.map(|start| start.map(|start| now_ms.saturating_sub(start)));
+        self.advance_keybeam(state, now_ms);
+        self.key_logger.write_state(state, now_ms);
+        state.keylogger_exclude_cool = !document.graph.iter().any(|graph| {
+            graph.id.starts_with("keylogger-graph-judge-") && graph.id.ends_with("-cool")
+        });
+        state.fixed_delay_timer_ms.clear();
+        for def in &document.fixed_delay_timers {
+            let Some(source_elapsed) = skin_timer_elapsed_ms(Some(def.source_timer), state) else {
+                continue;
+            };
+            if source_elapsed >= def.delay_ms {
+                state
+                    .fixed_delay_timer_ms
+                    .insert(def.id, source_elapsed.saturating_sub(def.delay_ms));
+            }
+        }
         for def in &document.dynamic_timers {
             let idx = def.id.saturating_sub(SKIN_DYNAMIC_TIMER_BASE) as usize;
             if idx >= SKIN_DYNAMIC_TIMER_COUNT {
@@ -1359,6 +1852,163 @@ impl DynamicTimerRuntime {
             }
         }
     }
+
+    fn ensure_runtime_flags(&mut self, document: &SkinDocument) {
+        if !self.runtime_flags_initialized {
+            self.initialize_runtime_flags(document);
+        }
+    }
+
+    fn advance_logical_inputs(
+        &mut self,
+        document: &SkinDocument,
+        held: [bool; SKIN_BMZ_INPUT_COUNT],
+        now_ms: i32,
+    ) {
+        if !self.logical_input_initialized {
+            self.logical_input_initialized = true;
+            self.logical_input_held = held;
+            return;
+        }
+        for (index, &is_held) in held.iter().enumerate() {
+            if is_held && !self.logical_input_held[index] {
+                self.logical_input_starts[index] = Some(now_ms);
+                for event in document.runtime_events.iter().filter(|event| {
+                    event.trigger_action.is_some_and(|action| action.index() == index)
+                }) {
+                    for flag_id in &event.toggle_flags {
+                        let flag = self.runtime_flags.entry(*flag_id).or_insert(false);
+                        *flag = !*flag;
+                    }
+                }
+            }
+        }
+        self.logical_input_held = held;
+    }
+
+    fn initialize_runtime_flags(&mut self, document: &SkinDocument) {
+        self.runtime_flags =
+            document.runtime_flags.iter().map(|flag| (flag.id, flag.initial)).collect();
+        self.runtime_flags_initialized = true;
+    }
+
+    pub fn ingest_skin_events(
+        &mut self,
+        events: &[SkinRuntimeEvent],
+        key_mode: KeyMode,
+        now_us: i64,
+    ) {
+        self.key_logger.ingest(events, key_mode, now_us);
+    }
+
+    fn advance_keybeam(&mut self, state: &mut SkinDrawState, now_ms: i32) {
+        for lane in 0..LANE_COUNT {
+            let keyon_start = state.keyon_ms[lane].map(|elapsed| now_ms.saturating_sub(elapsed));
+            let keyoff_start = state.keyoff_ms[lane].map(|elapsed| now_ms.saturating_sub(elapsed));
+
+            if keyon_start.is_some() && keyon_start != self.keybeam_keyon_starts[lane] {
+                self.keybeam_suppressed[lane] = false;
+                self.keybeam_fade_allowed[lane] = false;
+            }
+            if state.hold_ms[lane].is_some() && state.keyon_ms[lane].is_some() {
+                self.keybeam_suppressed[lane] = true;
+            }
+
+            state.keybeam_hold_active[lane] =
+                state.keyon_ms[lane].is_some() && !self.keybeam_suppressed[lane];
+            if keyoff_start.is_some() && keyoff_start != self.keybeam_keyoff_starts[lane] {
+                self.keybeam_fade_allowed[lane] = !self.keybeam_suppressed[lane];
+                self.keybeam_suppressed[lane] = false;
+            }
+            state.keybeam_fade_active[lane] =
+                keyoff_start.is_some() && self.keybeam_fade_allowed[lane];
+            self.keybeam_keyon_starts[lane] = keyon_start;
+            self.keybeam_keyoff_starts[lane] = keyoff_start;
+        }
+    }
+}
+
+impl KeyLoggerRuntime {
+    fn ingest(&mut self, events: &[SkinRuntimeEvent], key_mode: KeyMode, now_us: i64) {
+        if self.last_now_us.is_some_and(|last| now_us < last) {
+            *self = Self::default();
+        }
+        self.last_now_us = Some(now_us);
+        let active_lanes = key_mode.active_lanes();
+        for event in events {
+            if self.last_sequence.is_some_and(|last| event.sequence <= last) {
+                continue;
+            }
+            self.last_sequence = Some(event.sequence);
+            match &event.kind {
+                SkinRuntimeEventKind::Input(input) if input.kind == InputKind::Press => {
+                    let Some(lane) =
+                        active_lanes.iter().position(|candidate| *candidate == input.lane)
+                    else {
+                        continue;
+                    };
+                    self.press_history_us.push_back(input.time.0);
+                    let slot = self.next_event_slot[lane];
+                    self.event_started_ms[lane][slot] =
+                        Some((input.time.0 / 1_000).clamp(i32::MIN as i64, i32::MAX as i64) as i32);
+                    self.event_started_us[lane][slot] = Some(input.time.0);
+                    self.event_judge[lane][slot] = 0;
+                    self.event_fast_slow[lane][slot] = 0;
+                    self.next_event_slot[lane] = (slot + 1) % 16;
+                }
+                SkinRuntimeEventKind::Judgement(judgement) => {
+                    let Some(lane) =
+                        active_lanes.iter().position(|candidate| *candidate == judgement.lane)
+                    else {
+                        continue;
+                    };
+                    let judge = match judgement.judge {
+                        Judge::PGreat => 0,
+                        Judge::Great => 1,
+                        Judge::Good => 2,
+                        Judge::Bad | Judge::Poor | Judge::EmptyPoor => 3,
+                    };
+                    self.judge_counts[lane][judge] =
+                        self.judge_counts[lane][judge].saturating_add(1);
+                    let side = match judgement.judge {
+                        Judge::PGreat => Some(0),
+                        _ => match judgement.side {
+                            TimingSide::Fast => Some(1),
+                            TimingSide::Slow => Some(2),
+                        },
+                    };
+                    if let Some(side) = side {
+                        self.fast_slow_counts[lane][side] =
+                            self.fast_slow_counts[lane][side].saturating_add(1);
+                    }
+                    let slot = (self.next_event_slot[lane] + 15) % 16;
+                    if self.event_started_us[lane][slot] == Some(judgement.time.0) {
+                        self.event_judge[lane][slot] = (judge + 1) as u8;
+                        self.event_fast_slow[lane][slot] = side.map_or(0, |side| (side + 1) as u8);
+                    }
+                }
+                _ => {}
+            }
+        }
+        let keep_from = now_us.saturating_sub(1_000_000);
+        while self.press_history_us.front().is_some_and(|time| *time < keep_from) {
+            self.press_history_us.pop_front();
+        }
+    }
+
+    fn write_state(&self, state: &mut SkinDrawState, now_ms: i32) {
+        state.keylogger_nps = self.press_history_us.len().min(999) as u32;
+        state.keylogger_judge_counts = self.judge_counts;
+        state.keylogger_fast_slow_counts = self.fast_slow_counts;
+        state.keylogger_event_judge = self.event_judge;
+        state.keylogger_event_fast_slow = self.event_fast_slow;
+        for lane in 0..LANE_COUNT {
+            for slot in 0..16 {
+                state.keylogger_event_ms[lane][slot] =
+                    self.event_started_ms[lane][slot].map(|started| now_ms.saturating_sub(started));
+            }
+        }
+    }
 }
 
 static DEFAULT_RESULT_IR_SNAPSHOT: crate::scene::ResultIrSnapshot =
@@ -1367,6 +2017,8 @@ static DEFAULT_RESULT_IR_SNAPSHOT: crate::scene::ResultIrSnapshot =
 #[derive(Debug, Clone, PartialEq)]
 pub struct SkinTextState<'a> {
     pub title: &'a str,
+    /// 現在プロフィール名 (STRING_PLAYER=2)。
+    pub player_name: &'a str,
     /// IR ライバル名 (STRING_RIVAL=1)。未取得なら空。
     pub rival: &'a str,
     pub subtitle: &'a str,
@@ -1414,6 +2066,7 @@ impl<'a> Default for SkinTextState<'a> {
     fn default() -> Self {
         Self {
             title: "",
+            player_name: "",
             subtitle: "",
             artist: "",
             subartist: "",
@@ -1895,6 +2548,7 @@ pub trait SkinDocumentRenderExt {
         snapshot: &SelectSnapshot,
         dynamic_timers: Option<&mut DynamicTimerRuntime>,
         settings_dest_index: &crate::select_settings_dest::SelectSettingsDestIndex,
+        lua_draw_runtime: Option<Arc<dyn SkinLuaDrawRuntime>>,
     ) -> Vec<SkinRenderItem>;
 
     fn select_draw_state<'a>(
@@ -1911,6 +2565,10 @@ pub trait SkinDocumentRenderExt {
         x: f32,
         y: f32,
     ) -> Option<SkinClickHit>;
+
+    fn result_click_hit(&self, state: &SkinDrawState, x: f32, y: f32) -> Option<SkinClickHit>;
+
+    fn result_slider_hit(&self, state: &SkinDrawState, x: f32, y: f32) -> Option<SkinSliderHit>;
 
     fn select_slider_hit(
         &self,
@@ -2090,6 +2748,7 @@ pub trait SkinDocumentRenderExt {
         rect: Rect,
         mode: LongNoteMode,
         state: LongBodyState,
+        draw_state: &SkinDrawState,
         sources: &HashMap<String, SkinDocumentTexture>,
     ) -> Option<SkinRenderItem>;
 
@@ -2107,11 +2766,21 @@ pub trait SkinDocumentRenderExt {
         &self,
         image_id: &str,
         rect: Rect,
+        elapsed_ms: i32,
         sources: &HashMap<String, SkinDocumentTexture>,
     ) -> Option<SkinRenderItem>;
 
     fn note_group_render_items(
         &self,
+        note_y: f32,
+        key_mode: KeyMode,
+        state: &SkinDrawState,
+        sources: &HashMap<String, SkinDocumentTexture>,
+    ) -> Vec<SkinRenderItem>;
+
+    fn note_line_render_items(
+        &self,
+        destinations: &[SkinDestinationDef],
         note_y: f32,
         key_mode: KeyMode,
         state: &SkinDrawState,
@@ -2252,11 +2921,13 @@ pub trait SkinDocumentRenderExt {
 
     fn gaugegraph_render_items(
         &self,
+        destination_index: usize,
         graph: &SkinGaugeGraphDef,
         destination: &SkinDestinationDef,
         frame: ResolvedSkinFrame,
         state: &SkinDrawState,
         points: &[crate::snapshot::ResultGaugeGraphPoint],
+        cache: Option<&mut ResultRenderCache>,
     ) -> Vec<SkinRenderItem>;
 
     fn timing_visualizer_render_items(
@@ -2348,6 +3019,7 @@ pub trait SkinDocumentRenderExt {
         cover: &SkinHiddenCoverDef,
         destination: &SkinDestinationDef,
         frame: ResolvedSkinFrame,
+        force_lift_cover: bool,
         state: &SkinDrawState,
         sources: &HashMap<String, SkinDocumentTexture>,
     ) -> Option<SkinRenderItem>;
@@ -2600,7 +3272,6 @@ impl SkinDocumentRenderExt for SkinDocument {
         frame.r = r;
         frame.g = g;
         frame.b = b;
-        frame.angle = -frame.angle;
         let source = resolve_document_source(sources, &image.src)?;
         let pixel_rect = skin_image_pixel_rect(image, images);
         let uv = skin_image_texture_region_for_state(
@@ -2744,7 +3415,7 @@ impl SkinDocumentRenderExt for SkinDocument {
         }
 
         let value_for_destination = values.get(destination.id.as_str()).copied();
-        let elapsed = skin_timer_elapsed_ms(destination.timer, state).or_else(|| {
+        let elapsed = destination_timer_elapsed_ms(destination, state).or_else(|| {
             value_for_destination
                 .filter(|value| pre_ready_lane_cover_value_destination(destination, value, state))
                 .map(|_| 0)
@@ -2754,7 +3425,12 @@ impl SkinDocumentRenderExt for SkinDocument {
             .hidden_cover
             .iter()
             .any(|cover| cover.id == destination.id && !is_lift_lane_cover_id(&cover.id));
+        let is_lift_cover_destination =
+            self.lift_cover.iter().any(|cover| cover.id == destination.id);
         apply_skin_offset_to_frame(destination, &mut frame, state, is_hidden_cover_destination);
+        if is_lift_cover_destination && !destination_uses_skin_offset(destination, 3) {
+            apply_skin_offset_ids_to_frame(&[3], &mut frame, state, false);
+        }
         if !destination_mouse_rect_contains(destination, frame, state) {
             return None;
         }
@@ -2793,11 +3469,13 @@ impl SkinDocumentRenderExt for SkinDocument {
         }
         if let Some(gauge_graph) = self.gaugegraph.iter().find(|graph| graph.id == destination.id) {
             return Some(self.gaugegraph_render_items(
+                destination_index,
                 gauge_graph,
                 destination,
                 frame,
                 state,
                 runtime_graphs.result_gauge_graph_points,
+                cache,
             ));
         }
         if let Some(judge_graph) = self.judgegraph.iter().find(|graph| graph.id == destination.id) {
@@ -3055,8 +3733,13 @@ impl SkinDocumentRenderExt for SkinDocument {
             return Some(vec![item]);
         }
 
+        if let Some(lift_cover) = self.lift_cover.iter().find(|cover| cover.id == destination.id) {
+            return self
+                .hidden_cover_render_item(lift_cover, destination, frame, true, state, sources)
+                .map(|item| vec![item]);
+        }
         let hidden_cover = self.hidden_cover.iter().find(|cover| cover.id == destination.id)?;
-        self.hidden_cover_render_item(hidden_cover, destination, frame, state, sources)
+        self.hidden_cover_render_item(hidden_cover, destination, frame, false, state, sources)
             .map(|item| vec![item])
     }
 
@@ -3185,6 +3868,7 @@ impl SkinDocumentRenderExt for SkinDocument {
             snapshot,
             None,
             &crate::select_settings_dest::SelectSettingsDestIndex::default(),
+            None,
         )
     }
 
@@ -3194,13 +3878,15 @@ impl SkinDocumentRenderExt for SkinDocument {
         snapshot: &SelectSnapshot,
         dynamic_timers: Option<&mut DynamicTimerRuntime>,
         settings_dest_index: &crate::select_settings_dest::SelectSettingsDestIndex,
+        lua_draw_runtime: Option<Arc<dyn SkinLuaDrawRuntime>>,
     ) -> Vec<SkinRenderItem> {
-        let (state, selected_row) = self.select_draw_state(snapshot, dynamic_timers);
+        let (mut state, selected_row) = self.select_draw_state(snapshot, dynamic_timers);
         let text = SkinTextState {
-            title: selected_row.map(|row| row.title.as_str()).unwrap_or(&snapshot.selected_title),
+            player_name: &snapshot.player_name,
+            title: select_detail_title(snapshot, selected_row),
             subtitle: select_detail_subtitle(snapshot, selected_row),
             artist: select_detail_artist(snapshot, selected_row),
-            genre: "",
+            genre: select_detail_genre(snapshot, selected_row),
             difficulty_name: if snapshot.in_settings {
                 ""
             } else {
@@ -3259,6 +3945,13 @@ impl SkinDocumentRenderExt for SkinDocument {
         let values: HashMap<&str, &SkinValueDef> =
             self.value.iter().map(|value| (value.id.as_str(), value)).collect();
         let enabled_options = self.enabled_options();
+        if let Some(runtime) = lua_draw_runtime {
+            state.lua_runtime = Some(SkinLuaRuntimeContext {
+                runtime,
+                enabled_options: Arc::from(enabled_options.clone()),
+                text_values: Arc::new(lua_main_state_text_values(&state, &text)),
+            });
+        }
         let destinations = self.all_destinations(&enabled_options);
         let has_nearest_f_diff_rank_destination =
             nearest_f_diff_rank_destination_available(&destinations);
@@ -3367,13 +4060,23 @@ impl SkinDocumentRenderExt for SkinDocument {
             (x.clamp(0.0, 1.0) * self.w as f32, (1.0 - y.clamp(0.0, 1.0)) * self.h as f32)
         });
         let duration_green_ms = snapshot.note_display_duration_ms;
+        let elapsed_ms = (snapshot.time.0 / 1_000).clamp(i32::MIN as i64, i32::MAX as i64) as i32;
         let mut state = SkinDrawState {
-            elapsed_ms: (snapshot.time.0 / 1_000).clamp(i32::MIN as i64, i32::MAX as i64) as i32,
+            elapsed_ms,
+            start_input_ms: skin_start_input_elapsed_ms(elapsed_ms, self.input),
+            current_fps: snapshot.current_fps,
+            operating_time_ms: snapshot.operating_time_ms,
+            logical_input_held: snapshot.skin_input.held,
             select_bar_elapsed_ms: (snapshot.selection_time.0 / 1_000)
                 .clamp(i32::MIN as i64, i32::MAX as i64) as i32,
             select_option_panel_elapsed_ms: (snapshot.option_panel_time.0 / 1_000)
                 .clamp(i32::MIN as i64, i32::MAX as i64)
                 as i32,
+            select_option_panel_off_elapsed_ms: snapshot.option_panel_off_times.map(|elapsed| {
+                elapsed.map(|elapsed| {
+                    (elapsed.0 / 1_000).clamp(i32::MIN as i64, i32::MAX as i64) as i32
+                })
+            }),
             select_option_panel: snapshot.option_panel,
             select_arrange_index: select_arrange_index(&snapshot.arrange),
             select_arrange_2p_index: select_arrange_index(&snapshot.arrange_2p),
@@ -3388,11 +4091,15 @@ impl SkinDocumentRenderExt for SkinDocument {
             select_bottom_shiftable_gauge_index: select_bottom_shiftable_gauge_index(
                 &snapshot.bottom_shiftable_gauge,
             ),
-            select_target_index: select_target_index(&snapshot.target),
+            select_target_index: play_target_image_index(&snapshot.target),
             select_bga_index: select_bga_index(&snapshot.bga),
             judge_timing_offset_ms: snapshot.judge_timing_offset_ms,
             judge_timing_auto_adjust: snapshot.judge_timing_auto_adjust,
-            player_stats: snapshot.player_stats,
+            lanecover_enabled: snapshot.lanecover_enabled,
+            lift_enabled: snapshot.lift_enabled,
+            hidden_enabled: snapshot.hidden_enabled,
+            hispeed_auto_adjust: snapshot.hispeed_auto_adjust,
+            player_stats: snapshot.player_stats.clone(),
             select_assist_index: select_assist_index(&snapshot.assist),
             select_mode_index: select_mode_index(&snapshot.select_mode),
             select_sort_index: select_sort_index(&snapshot.select_sort),
@@ -3410,9 +4117,10 @@ impl SkinDocumentRenderExt for SkinDocument {
             select_key_volume: snapshot.key_volume,
             select_bgm_volume: snapshot.bgm_volume,
             select_has_banner: snapshot.banner_image,
+            select_has_document: selected_row.is_some_and(|row| row.has_document),
             has_stagefile: snapshot.stage_background,
             has_backbmp: snapshot.backbmp_image,
-            select_chart_count: snapshot.chart_count,
+            select_folder_song_count: selected_row.and_then(select_row_folder_song_count),
             select_screen: true,
             select_play_level: selected_row.map(select_row_level_number).unwrap_or(0),
             play_level: selected_row.map(select_row_level_number).unwrap_or(0),
@@ -3483,6 +4191,11 @@ impl SkinDocumentRenderExt for SkinDocument {
             rival_ex_score: snapshot.rival.as_ref().map(|rival| i64::from(rival.ex_score)),
             rival_max_combo: snapshot.rival.as_ref().map(|rival| i64::from(rival.max_combo)),
             rival_bp: snapshot.rival.as_ref().map(|rival| i64::from(rival.bp)),
+            rival_judge_counts: snapshot.rival.as_ref().and_then(|rival| {
+                rival.judge_counts.map(|counts| {
+                    [counts.pgreat, counts.great, counts.good, counts.bad, counts.poor]
+                })
+            }),
             ..SkinDrawState::default()
         };
         if let Some(runtime) = dynamic_timers {
@@ -3504,6 +4217,55 @@ impl SkinDocumentRenderExt for SkinDocument {
             .into_iter()
             .rev()
             .find(|hit| rect_contains(hit.rect, x, y))
+    }
+
+    fn result_click_hit(&self, state: &SkinDrawState, x: f32, y: f32) -> Option<SkinClickHit> {
+        let enabled_options = self.enabled_options();
+        let images = self.image_map();
+        let destinations = self.all_destinations(&enabled_options);
+        let has_nearest_f_diff_rank_destination =
+            nearest_f_diff_rank_destination_available(&destinations);
+        destinations
+            .into_iter()
+            .filter(|destination| {
+                destination_ops_match(
+                    destination,
+                    &enabled_options,
+                    state,
+                    has_nearest_f_diff_rank_destination,
+                ) && eval_skin_draw_condition(&destination.draw, state)
+            })
+            .filter_map(|destination| {
+                Some(SkinClickHit {
+                    target: self.click_target_for_destination(destination, &images)?,
+                    rect: self.destination_click_rect(destination, &enabled_options, state)?,
+                })
+            })
+            .rev()
+            .find(|hit| rect_contains(hit.rect, x, y))
+    }
+
+    fn result_slider_hit(&self, state: &SkinDrawState, x: f32, y: f32) -> Option<SkinSliderHit> {
+        let enabled_options = self.enabled_options();
+        let destinations = self.all_destinations(&enabled_options);
+        let has_nearest_f_diff_rank_destination =
+            nearest_f_diff_rank_destination_available(&destinations);
+        destinations
+            .into_iter()
+            .filter(|destination| {
+                destination_ops_match(
+                    destination,
+                    &enabled_options,
+                    state,
+                    has_nearest_f_diff_rank_destination,
+                ) && eval_skin_draw_condition(&destination.draw, state)
+            })
+            .filter_map(|destination| {
+                let slider = self.slider.iter().find(|slider| slider.id == destination.id)?;
+                (slider.slider_type == 8).then_some(())?;
+                self.destination_slider_hit(slider, destination, &enabled_options, state, x, y)
+            })
+            .next_back()
     }
 
     fn select_slider_hit(
@@ -3689,12 +4451,18 @@ impl SkinDocumentRenderExt for SkinDocument {
         images: &HashMap<&str, &SkinImageDef>,
     ) -> Option<SkinClickTarget> {
         if let Some(image) = images.get(destination.id.as_str())
+            && image.clickable.unwrap_or(image.act.is_some())
             && let Some(event_id) = image.act
         {
             return Some(SkinClickTarget::Event { event_id, click: image.click });
         }
         let imageset = self.imageset.iter().find(|set| set.id == destination.id)?;
-        imageset.act.map(|event_id| SkinClickTarget::Event { event_id, click: imageset.click })
+        imageset
+            .clickable
+            .unwrap_or(imageset.act.is_some())
+            .then_some(imageset.act)
+            .flatten()
+            .map(|event_id| SkinClickTarget::Event { event_id, click: imageset.click })
     }
 
     fn destination_click_rect(
@@ -3722,7 +4490,7 @@ impl SkinDocumentRenderExt for SkinDocument {
         x: f32,
         y: f32,
     ) -> Option<SkinSliderHit> {
-        if !slider.changeable || !matches!(slider.slider_type, 1 | 17..=19) {
+        if !slider.changeable || !matches!(slider.slider_type, 1 | 8 | 17..=19) {
             return None;
         }
         let elapsed = skin_timer_elapsed_ms(destination.timer, state)?;
@@ -4224,7 +4992,7 @@ impl SkinDocumentRenderExt for SkinDocument {
     ) -> Option<SkinRenderItem> {
         let note = self.note.as_ref()?;
         let image_id = note.note.get(beatoraja_note_index(lane, key_mode))?;
-        self.note_part_render_item(image_id, rect, sources)
+        self.note_part_render_item(image_id, rect, 0, sources)
     }
 
     /// LN START（ヘッドキャップ）画像を描画する。
@@ -4242,7 +5010,7 @@ impl SkinDocumentRenderExt for SkinDocument {
         let index = beatoraja_note_index(lane, key_mode);
         let hcn = (mode == LongNoteMode::Hcn).then(|| note.hcnstart.get(index)).flatten();
         let image_id = hcn.or_else(|| note.lnstart.get(index)).or_else(|| note.note.get(index))?;
-        self.note_part_render_item(image_id, rect, sources)
+        self.note_part_render_item(image_id, rect, 0, sources)
     }
 
     /// LN END（テールキャップ）画像を描画する。
@@ -4260,7 +5028,7 @@ impl SkinDocumentRenderExt for SkinDocument {
         let index = beatoraja_note_index(lane, key_mode);
         let hcn = (mode == LongNoteMode::Hcn).then(|| note.hcnend.get(index)).flatten();
         let image_id = hcn.or_else(|| note.lnend.get(index)).or_else(|| note.note.get(index))?;
-        self.note_part_render_item(image_id, rect, sources)
+        self.note_part_render_item(image_id, rect, 0, sources)
     }
 
     /// LN/CN 用の胴体画像 id を選択する。
@@ -4355,6 +5123,7 @@ impl SkinDocumentRenderExt for SkinDocument {
         rect: Rect,
         mode: LongNoteMode,
         state: LongBodyState,
+        draw_state: &SkinDrawState,
         sources: &HashMap<String, SkinDocumentTexture>,
     ) -> Option<SkinRenderItem> {
         let note = self.note.as_ref()?;
@@ -4365,7 +5134,11 @@ impl SkinDocumentRenderExt for SkinDocument {
             self.ln_body_image_id(note, index, state.is_processing())
         }
         .or_else(|| note.note.get(index))?;
-        self.note_part_render_item(image_id, rect, sources)
+        let image = self.image.iter().find(|image| image.id == *image_id)?;
+        // LR2 `SRC_LN_BODY` uses the lane HOLD timer for the processing image,
+        // while the inactive copy has no timer and must remain on frame zero.
+        let elapsed_ms = skin_timer_elapsed_ms(image.timer, draw_state).unwrap_or(0);
+        self.note_part_render_item(image_id, rect, elapsed_ms, sources)
     }
 
     /// Mine ノート画像（`note.mine`）を描画する。スキンが `mine` を定義していない、
@@ -4380,7 +5153,7 @@ impl SkinDocumentRenderExt for SkinDocument {
     ) -> Option<SkinRenderItem> {
         let note = self.note.as_ref()?;
         let image_id = note.mine.get(beatoraja_note_index(lane, key_mode))?;
-        self.note_part_render_item(image_id, rect, sources)
+        self.note_part_render_item(image_id, rect, 0, sources)
     }
 
     fn note_height_for_lane(&self, lane: Lane, key_mode: KeyMode) -> Option<f32> {
@@ -4399,6 +5172,7 @@ impl SkinDocumentRenderExt for SkinDocument {
         &self,
         image_id: &str,
         rect: Rect,
+        elapsed_ms: i32,
         sources: &HashMap<String, SkinDocumentTexture>,
     ) -> Option<SkinRenderItem> {
         let image = self.image.iter().find(|image| image.id == image_id)?;
@@ -4406,7 +5180,7 @@ impl SkinDocumentRenderExt for SkinDocument {
         Some(SkinRenderItem::Image {
             texture: source.texture,
             rect,
-            uv: skin_image_texture_region(image, source.source_size, 0),
+            uv: skin_image_texture_region(image, source.source_size, elapsed_ms),
             tint: Color::rgb(1.0, 1.0, 1.0),
             blend: BlendMode::Normal,
             scale: SkinImageScale::Stretch,
@@ -4426,6 +5200,17 @@ impl SkinDocumentRenderExt for SkinDocument {
         let Some(note) = self.note.as_ref() else {
             return Vec::new();
         };
+        self.note_line_render_items(&note.group, note_y, key_mode, state, sources)
+    }
+
+    fn note_line_render_items(
+        &self,
+        destinations: &[SkinDestinationDef],
+        note_y: f32,
+        key_mode: KeyMode,
+        state: &SkinDrawState,
+        sources: &HashMap<String, SkinDocumentTexture>,
+    ) -> Vec<SkinRenderItem> {
         let images = self.image_map();
         let enabled_options = self.enabled_options();
         let Some(area) = self.note_lane_area(Lane::Key1, key_mode, &enabled_options) else {
@@ -4436,7 +5221,7 @@ impl SkinDocumentRenderExt for SkinDocument {
         let judge_bottom_px = canvas_h * (1.0 - note_judge_bottom_y(area, state, canvas_h));
         let timeline_bottom_px = canvas_h * (1.0 - bottom_y);
         let mut items = Vec::new();
-        for destination in &note.group {
+        for destination in destinations {
             if !test_skin_ops(&destination.op, &enabled_options, state)
                 || !eval_skin_draw_condition(&destination.draw, state)
             {
@@ -4799,7 +5584,14 @@ impl SkinDocumentRenderExt for SkinDocument {
                 &mut number_frame,
                 &offset_state,
             );
-            if let Some(value) = self.value.iter().find(|value| value.id == number_destination.id) {
+            let judge_align = self
+                .value
+                .iter()
+                .find(|value| value.id == number_destination.id)
+                .map_or(2, |value| value.judge_align.unwrap_or(2));
+            if let Some(value) = self.value.iter().find(|value| value.id == number_destination.id)
+                && judge_align == 2
+            {
                 Self::apply_beatoraja_judge_number_dst_x(&mut number_frame, value.digit);
             }
             let signed_render =
@@ -4818,7 +5610,7 @@ impl SkinDocumentRenderExt for SkinDocument {
                 elapsed_ms,
                 sources,
                 false,
-                Some(2),
+                Some(judge_align),
                 signed_render,
             ));
         }
@@ -4844,7 +5636,7 @@ impl SkinDocumentRenderExt for SkinDocument {
             display_signed_number_digits(
                 number,
                 max_digits,
-                signed_value_zero_pad(value, padding),
+                signed_value_padding(value, padding),
                 value.divx.max(1) as u32,
             )
         } else {
@@ -4897,7 +5689,7 @@ impl SkinDocumentRenderExt for SkinDocument {
             SignedNumberRender::Signed(row_order) => display_signed_number_digits_with_row_order(
                 number,
                 max_digits,
-                signed_value_zero_pad(value, padding),
+                signed_value_padding(value, padding),
                 divx as u32,
                 row_order,
             ),
@@ -5169,29 +5961,42 @@ impl SkinDocumentRenderExt for SkinDocument {
 
     fn gaugegraph_render_items(
         &self,
+        destination_index: usize,
         graph: &SkinGaugeGraphDef,
         destination: &SkinDestinationDef,
         frame: ResolvedSkinFrame,
         state: &SkinDrawState,
         points: &[crate::snapshot::ResultGaugeGraphPoint],
+        mut cache: Option<&mut ResultRenderCache>,
     ) -> Vec<SkinRenderItem> {
-        let filtered_points;
-        let points = if let Some(gauge_type) = state.result_gauge_graph_type {
-            filtered_points = points
-                .iter()
-                .copied()
-                .filter(|point| point.gauge_type == gauge_type)
-                .collect::<Vec<_>>();
-            if filtered_points.is_empty() { points } else { filtered_points.as_slice() }
+        let cached_points = state
+            .result_gauge_graph_type
+            .and_then(|gauge_type| cache.as_deref_mut()?.cached_gauge_points(gauge_type));
+        let graph_revision = cached_points
+            .as_ref()
+            .map(|(revision, _)| *revision)
+            .or_else(|| cache.as_deref().and_then(ResultRenderCache::gauge_graph_revision));
+        let uncached_filtered_points = if cached_points.is_none() {
+            state.result_gauge_graph_type.map(|gauge_type| {
+                points
+                    .iter()
+                    .copied()
+                    .filter(|point| point.gauge_type == gauge_type)
+                    .collect::<Vec<_>>()
+            })
         } else {
-            points
+            None
         };
+        let points = cached_points
+            .as_ref()
+            .map(|(_, points)| points.as_ref())
+            .or_else(|| uncached_filtered_points.as_deref().filter(|filtered| !filtered.is_empty()))
+            .unwrap_or(points);
         if points.is_empty() {
             return Vec::new();
         }
         let rect = normalize_skin_frame_rect(frame, self.w, self.h);
         let frame_alpha = frame.a as f32 / 255.0;
-        let blend = if destination.blend == 2 { BlendMode::Add } else { BlendMode::Normal };
         let max = points
             .iter()
             .find_map(|point| (point.max > 0.0).then_some(point.max))
@@ -5203,116 +6008,44 @@ impl SkinDocumentRenderExt for SkinDocument {
         let border = points.first().map(|point| point.border).unwrap_or(state.gauge_border);
         let color_index = gaugegraph_color_index(display_gauge_type);
         let colors = gaugegraph_colors(graph, color_index, frame_alpha);
-        let border_y = rect.y + rect.height * (1.0 - (border / max).clamp(0.0, 1.0));
         let line_w = (2.0 / self.w.max(1) as f32).max(0.001);
         let line_h = (2.0 / self.h.max(1) as f32).max(0.001);
         let render_progress = (state.elapsed_ms.max(0) as f32 / 1500.0).clamp(0.0, 1.0);
-        let render_x = rect.x + rect.width * render_progress;
-        let mut items = Vec::with_capacity(points.len().saturating_mul(2).saturating_add(3));
-        items.push(SkinRenderItem::Rect { rect, color: colors.graph_bg, blend });
-        if border_y > rect.y {
-            items.push(SkinRenderItem::Rect {
-                rect: Rect { x: rect.x, y: rect.y, width: rect.width, height: border_y - rect.y },
-                color: colors.border_bg,
-                blend,
-            });
-        }
-        let sample_count = points.len();
-        for (index, pair) in points.windows(2).enumerate() {
-            let from = pair[0];
-            let to = pair[1];
-            let x1 = rect.x + gaugegraph_sample_ratio(index, sample_count) * rect.width;
-            if x1 > render_x {
-                break;
-            }
-            let x2 = (rect.x + gaugegraph_sample_ratio(index + 1, sample_count) * rect.width)
-                .min(render_x);
-            let y1 = gaugegraph_y(rect, from.value, max);
-            let y2 = gaugegraph_y(rect, to.value, max);
-            if (x2 - x1).abs() <= f32::EPSILON {
-                continue;
-            }
-            if from.value < border && to.value < border {
-                push_gaugegraph_segment(
-                    &mut items,
-                    x1,
-                    x2,
-                    y1,
-                    y2,
-                    line_w,
-                    line_h,
-                    colors.graph_line,
-                    blend,
-                );
-            } else if from.value >= border && to.value >= border {
-                push_gaugegraph_segment(
-                    &mut items,
-                    x1,
-                    x2,
-                    y1,
-                    y2,
-                    line_w,
-                    line_h,
-                    colors.border_line,
-                    blend,
-                );
+        let build = || {
+            gaugegraph_rect_batch(
+                points,
+                rect,
+                max,
+                border,
+                colors,
+                line_w,
+                line_h,
+                render_progress,
+                destination.blend == 2,
+            )
+        };
+        let completed = render_progress >= 1.0;
+        let key = graph_revision.map(|graph_revision| ResultGaugeGraphRectBatchCacheKey {
+            destination_index,
+            frame,
+            graph_revision,
+            display_gauge_type,
+            gauge_max_bits: max.to_bits(),
+            gauge_border_bits: border.to_bits(),
+        });
+        let rects = if completed {
+            if let (Some(cache), Some(key)) = (cache, key) {
+                cache.cached_gauge_rect_batch(key, build)
             } else {
-                let split_x = if (to.value - from.value).abs() <= f32::EPSILON {
-                    x1
-                } else {
-                    x1 + (x2 - x1)
-                        * ((border - from.value) / (to.value - from.value)).clamp(0.0, 1.0)
-                };
-                let graph_color =
-                    if from.value < border { colors.graph_line } else { colors.border_line };
-                let border_color =
-                    if from.value < border { colors.border_line } else { colors.graph_line };
-                push_gaugegraph_segment(
-                    &mut items,
-                    x1,
-                    split_x,
-                    y1,
-                    border_y,
-                    line_w,
-                    line_h,
-                    graph_color,
-                    blend,
-                );
-                push_gaugegraph_segment(
-                    &mut items,
-                    split_x,
-                    x2,
-                    border_y,
-                    y2,
-                    line_w,
-                    line_h,
-                    border_color,
-                    blend,
-                );
+                build()
             }
-        }
-        if points.len() == 1 {
-            let y = gaugegraph_y(rect, points[0].value, max);
-            let color =
-                if points[0].value < border { colors.graph_line } else { colors.border_line };
-            items.push(SkinRenderItem::Rect {
-                rect: Rect { x: rect.x, y, width: (render_x - rect.x).max(line_w), height: line_h },
-                color,
-                blend,
-            });
-        } else if let Some(last) = points.last().copied() {
-            let x1 = rect.x
-                + gaugegraph_sample_ratio(sample_count.saturating_sub(1), sample_count)
-                    * rect.width;
-            let x2 = render_x;
-            if x2 > x1 {
-                let y = gaugegraph_y(rect, last.value, max);
-                let color =
-                    if last.value < border { colors.graph_line } else { colors.border_line };
-                push_gaugegraph_segment(&mut items, x1, x2, y, y, line_w, line_h, color, blend);
-            }
-        }
-        items
+        } else {
+            build()
+        };
+        let batch_cache = completed
+            .then(|| key.and_then(|key| result_gauge_graph_rect_batch_cache(key, &rects)))
+            .flatten();
+        rect_batch_render_items(rects, batch_cache)
     }
 
     fn timing_visualizer_render_items(
@@ -5915,11 +6648,13 @@ impl SkinDocumentRenderExt for SkinDocument {
         cover: &SkinHiddenCoverDef,
         destination: &SkinDestinationDef,
         frame: ResolvedSkinFrame,
+        force_lift_cover: bool,
         state: &SkinDrawState,
         sources: &HashMap<String, SkinDocumentTexture>,
     ) -> Option<SkinRenderItem> {
-        let is_lift_cover =
-            is_lift_lane_cover_id(&cover.id) || is_lift_lane_cover_id(&destination.id);
+        let is_lift_cover = force_lift_cover
+            || is_lift_lane_cover_id(&cover.id)
+            || is_lift_lane_cover_id(&destination.id);
         if is_lift_cover {
             if state.offset_lift_px <= 0 {
                 return None;
@@ -5982,6 +6717,7 @@ impl SkinDocumentRenderExt for SkinDocument {
     ) -> Option<SkinRenderItem> {
         let source = sources.get(&graph.src)?;
         let (fill_multiplier, uv_ratio) = graph_fill_dimensions(graph, state);
+        let fill_from_right = frame.w < 0;
         let source_w = source.source_size.width.max(1.0);
         let source_h = source.source_size.height.max(1.0);
         let base_uv = TextureRegion {
@@ -6004,9 +6740,16 @@ impl SkinDocumentRenderExt for SkinDocument {
                 },
             )
         } else {
-            // horizontal: fill from left
+            // horizontal: positive destinations fill from left. beatoraja keeps a
+            // negative destination width and therefore fills leftwards from the
+            // destination x; after rect normalization that is the right edge.
+            let clipped_w = dst.width * fill_multiplier;
             (
-                Rect { width: dst.width * fill_multiplier, ..dst },
+                Rect {
+                    x: if fill_from_right { dst.x + dst.width - clipped_w } else { dst.x },
+                    width: clipped_w,
+                    ..dst
+                },
                 TextureRegion { width: base_uv.width * uv_ratio, ..base_uv },
             )
         };
@@ -6148,9 +6891,16 @@ fn skin_image_index_number(ref_id: i32, state: &SkinDrawState) -> Option<i64> {
     match ref_id {
         11 if state.select_screen => Some(state.select_mode_index as i64),
         12 if state.select_screen => Some(state.select_sort_index as i64),
-        40 => Some(state.select_gauge_index as i64),
+        // beatoraja's `gaugetype_1p` image index is state-dependent: MusicSelector
+        // reads the configured gauge, while Play/Result read the gauge that is
+        // actually active after gauge auto shift has been applied.
+        40 if state.select_screen => Some(state.select_gauge_index as i64),
+        40 => Some(state.gauge_type.max(0) as i64),
         SKIN_REF_PLAY_GAUGE_TYPE => Some(state.gauge_type.max(0) as i64),
-        41 => Some(state.select_target_index as i64),
+        // Target sprites use both the legacy ref=41 and BUTTON_TARGET=77.
+        // They share beatoraja's 11-entry target-list index rather than BMZ's
+        // compact target enumeration.
+        41 | 77 => Some(state.select_target_index as i64),
         42 => Some(arrange_ref_index(state) as i64),
         43 => Some(arrange_2p_ref_index(state) as i64),
         54 => Some(state.select_double_option_index as i64),
@@ -6164,13 +6914,20 @@ fn skin_image_index_number(ref_id: i32, state: &SkinDrawState) -> Option<i64> {
         90 if state.select_screen && select_chart_metadata_available(state) => {
             Some(i64::from(state.select_favorite_chart))
         }
+        90 if state.result_favorite_chart.is_some() => {
+            Some(i64::from(state.result_favorite_chart.unwrap_or(false)))
+        }
         301..=307 => Some(0),
+        308 if state.result_ln_mode_index.is_some() => {
+            Some(state.result_ln_mode_index.unwrap_or_default() as i64)
+        }
         308 => Some(state.select_ln_mode_index as i64),
         330 => Some(i64::from(state.lanecover_enabled)),
         331 => Some(i64::from(state.lift_enabled)),
         332 => Some(i64::from(state.hidden_enabled)),
         340 => Some(state.select_judge_algorithm_index as i64),
         341 => Some(state.select_bottom_shiftable_gauge_index as i64),
+        342 => Some(i64::from(state.hispeed_auto_adjust)),
         344 => Some(extended_arrange_ref_index(state) as i64),
         345 => Some(extended_arrange_2p_ref_index(state) as i64),
         321..=324 => {
@@ -6179,12 +6936,17 @@ fn skin_image_index_number(ref_id: i32, state: &SkinDrawState) -> Option<i64> {
         }
         // extranotedepth / minemode / scrollmode / longnotemode / seventonine / constant 等は
         // profile 連携前のため 0 固定。value ref 350-353/360-361/400 とは衝突しない。
-        350..=353 | 360..=361 | 400 | 342 | 343 => Some(0),
+        350..=353 | 360..=361 | 400 | 343 => Some(0),
         370 if state.select_screen || state.result_failed.is_some() => {
             Some(state.select_clear_index)
         }
         371 if state.result_failed.is_some() => result_mybest_clear_index_display(state),
         371 => state.target_clear_index,
+        // beatoraja's image/index property table is separate from numeric values:
+        // value 390..399 is ranking position, while image 390..399 is clear type.
+        390..=399 => {
+            ir_ranking_entry(&state.ir_ranking, ref_id - 390).and_then(|entry| entry.clear_index)
+        }
         ref_id if random_lane_ref_slot(ref_id).is_some() => {
             skin_random_lane_ref_number(ref_id, state)
         }
@@ -6542,6 +7304,9 @@ fn test_skin_op(op: i32, enabled_options: &[i32], state: &SkinDrawState) -> bool
         40 => !state.bga_enabled,
         41 => state.bga_enabled,
         1901 => skin_hispeed_mode_is_floating(state),
+        SKIN_OPTION_BMZ_INPUT_BASE..=SKIN_OPTION_BMZ_INPUT_LAST => {
+            state.logical_input_held[(op - SKIN_OPTION_BMZ_INPUT_BASE) as usize]
+        }
         1 => matches!(
             state.select_row_kind,
             SelectRowKind::Folder
@@ -6569,14 +7334,22 @@ fn test_skin_op(op: i32, enabled_options: &[i32], state: &SkinDrawState) -> bool
                                 | SelectRowKind::RandomCourse
                         )))
         }
-        // BMZ currently has no IR backend, matching beatoraja's offline state.
-        50 => true,
-        51 => false,
+        // OPTION_OFFLINE / OPTION_ONLINE. beatoraja は設定済み IR 接続の有無を
+        // 返す。結果スキンでは 51 が IR 送信完了/失敗の timer 173/174 を
+        // 描画する前提条件としても使われる。
+        50 => matches!(state.ir_ranking.state, crate::scene::ResultIrState::Offline),
+        51 => !matches!(state.ir_ranking.state, crate::scene::ResultIrState::Offline),
         21 => state.select_option_panel == 1,
         22 => state.select_option_panel == 2,
         23 => state.select_option_panel == 3,
         160..=164 => select_key_mode_option_matches(op, state),
         1160 | 1161 => select_key_mode_option_matches(op, state),
+        SKIN_OPTION_BMZ_KEY_MODE_BASE..=SKIN_OPTION_BMZ_KEY_MODE_LAST => {
+            select_key_mode_option_matches(op, state)
+        }
+        SKIN_OPTION_BMZ_NO_SCRATCH | SKIN_OPTION_BMZ_SINGLE_PLAY | SKIN_OPTION_BMZ_DOUBLE_PLAY => {
+            select_key_mode_option_matches(op, state)
+        }
         196 | 197 | 198 | 1196..=1208 if state.result_failed.is_some() => {
             result_replay_op_matches(op, state)
         }
@@ -6588,8 +7361,19 @@ fn test_skin_op(op: i32, enabled_options: &[i32], state: &SkinDrawState) -> bool
         300..=318 if state.result_failed.is_some() => result_rank_op_matches(op, state),
         300..=307 => select_small_rank_op_matches(op, state),
         320..=327 => best_rank_op_matches(op, state),
+        // OPTION_NO_LN / OPTION_LN. Resultでは、選曲設定ではなく
+        // LN policy / course constraint適用後の実効譜面を使う。
+        172 if state.result_has_long_notes.is_some() => {
+            !state.result_has_long_notes.unwrap_or_default()
+        }
+        173 if state.result_has_long_notes.is_some() => {
+            state.result_has_long_notes.unwrap_or_default()
+        }
         170 => !state.has_bga,
         171 => state.has_bga,
+        // SongDataBooleanProperty returns false for both branches without a selected song.
+        174 => select_song_option_matches(state) && !state.select_has_document,
+        175 => select_song_option_matches(state) && state.select_has_document,
         // OPTION_BPMCHANGE (BPM変化あり) / OPTION_BPMSTOP (STOP命令あり)
         177 => state.min_bpm < state.max_bpm,
         1177 => state.has_bpm_stop,
@@ -6610,6 +7394,17 @@ fn test_skin_op(op: i32, enabled_options: &[i32], state: &SkinDrawState) -> bool
         271 => state.lanecover_enabled,
         272 => state.lift_enabled,
         273 => state.hidden_enabled,
+        // OPTION_1P_0_9 .. OPTION_1P_100. beatoraja evaluates these only on
+        // BMSPlayer and compares the displayed gauge value with its configured maximum.
+        230..=240 => gauge_range_option_matches(op, state),
+        // Result judgement-existence options. EmptyPoor is beatoraja's MISS bucket.
+        2241 if state.result_failed.is_some() => state.judge_counts.pgreat > 0,
+        2242 if state.result_failed.is_some() => state.judge_counts.great > 0,
+        2243 if state.result_failed.is_some() => state.judge_counts.good > 0,
+        2244 if state.result_failed.is_some() => state.judge_counts.bad > 0,
+        2245 if state.result_failed.is_some() => state.judge_counts.poor > 0,
+        2246 if state.result_failed.is_some() => state.judge_counts.empty_poor > 0,
+        2241..=2246 => false,
         // Result/update comparison options. In play skins these are often reused
         // as target-reached draw conditions.
         330 => state.previous_best_ex_score.is_some_and(|best| state.ex_score > best),
@@ -6643,7 +7438,6 @@ fn test_skin_op(op: i32, enabled_options: &[i32], state: &SkinDrawState) -> bool
         624 => state.rival_ex_score.is_none(),
         625 => state.rival_ex_score.is_some(),
         // OPTION_IR_LOADING / LOADED / NOPLAYER / FAILED (601..604)。
-        // BANNED / WAITING / ACCESSING / BUSY (605..608) は未対応で false。
         601 => matches!(state.ir_ranking.state, crate::scene::ResultIrState::Loading),
         602 => matches!(state.ir_ranking.state, crate::scene::ResultIrState::Loaded),
         603 => {
@@ -6651,7 +7445,12 @@ fn test_skin_op(op: i32, enabled_options: &[i32], state: &SkinDrawState) -> bool
                 && state.ir_ranking.total_player == Some(0)
         }
         604 => matches!(state.ir_ranking.state, crate::scene::ResultIrState::Failed),
-        605..=608 => false,
+        // beatoraja MusicSelector: ranking object生成前はWAITING。
+        606 => matches!(state.ir_ranking.state, crate::scene::ResultIrState::Waiting),
+        // BooleanPropertyFactory のIR_BUSYは現行beatorajaでFAILと同条件。
+        608 => matches!(state.ir_ranking.state, crate::scene::ResultIrState::Failed),
+        // BANNED / ACCESSING は現行beatorajaにもproperty実装がない。
+        605 | 607 => false,
         // OPTION_DIFFICULTY0..5. 0 は UNKNOWN/OTHER、1..5 は BMS #DIFFICULTY。
         150 => state.difficulty <= 0 || state.difficulty > 5,
         151..=155 => state.difficulty == i64::from(op - 150),
@@ -6668,6 +7467,13 @@ fn test_skin_op(op: i32, enabled_options: &[i32], state: &SkinDrawState) -> bool
         // OPTION_AUTOPLAYOFF / OPTION_AUTOPLAYON
         32 => !state.autoplay,
         33 => state.autoplay,
+        // PlayerResource.updateScore. Select など対象外 scene では両方 false。
+        60 => state.score_save_enabled == Some(false),
+        61 => state.score_save_enabled == Some(true),
+        // BMSPlayer play mode. beatoraja では 82 は PLAY/PRACTICE、84 は REPLAY。
+        82 => state.play_screen && !state.autoplay && !state.replay_playback,
+        84 => state.play_screen && state.replay_playback,
+        1080 => state.play_screen && state.practice_mode,
         // OPTION_1P/2P/3P_PERFECT and EARLY/LATE judge-detail conditions.
         // beatoraja maps FAST/EARLY to positive recent judge timing, LATE/SLOW to negative.
         // judge_timing_sign is None when FAST/SLOW display is suppressed (Auto mode hides PGREAT,
@@ -6695,6 +7501,15 @@ fn test_skin_op(op: i32, enabled_options: &[i32], state: &SkinDrawState) -> bool
         291..=293 => false,
         value => test_json_option_number(value, enabled_options),
     }
+}
+
+fn gauge_range_option_matches(op: i32, state: &SkinDrawState) -> bool {
+    if !state.play_screen || state.gauge_max <= 0.0 {
+        return false;
+    }
+    let range = (op - 230) as f32;
+    let value = state.gauge / state.gauge_max;
+    value >= range * 0.1 && value < (range + 1.0) * 0.1
 }
 
 fn gradebar_constraint_op_matches(op: i32, state: &SkinDrawState) -> bool {
@@ -7050,17 +7865,17 @@ fn number_padding(value: &SkinValueDef) -> NumberPadding {
         return NumberPadding::Zero;
     }
     let image_cells = value.divx.max(1).saturating_mul(value.divy.max(1));
-    if !ref_id_is_signed(value.ref_id) && image_cells % 10 != 0 {
+    if !value_layout_is_signed(value) && !ref_id_is_signed(value.ref_id) && image_cells % 10 != 0 {
         return NumberPadding::Blank;
     }
     NumberPadding::None
 }
 
-fn signed_value_zero_pad(value: &SkinValueDef, padding: NumberPadding) -> bool {
+fn signed_value_padding(value: &SkinValueDef, padding: NumberPadding) -> NumberPadding {
     if matches!(value.ref_id, 152 | 153 | 172 | 175 | 178) {
-        return false;
+        return NumberPadding::None;
     }
-    padding.is_zero_padding()
+    padding
 }
 
 fn display_number_digits(value: i64, max_digits: usize, padding: NumberPadding) -> Vec<u8> {
@@ -7095,13 +7910,13 @@ fn display_number_digits(value: i64, max_digits: usize, padding: NumberPadding) 
 fn display_signed_number_digits(
     value: i64,
     max_digits: usize,
-    zero_pad: bool,
+    padding: NumberPadding,
     divx: u32,
 ) -> Vec<u8> {
     display_signed_number_digits_with_row_order(
         value,
         max_digits,
-        zero_pad,
+        padding,
         divx,
         SignedNumberRowOrder::PositiveFirst,
     )
@@ -7110,7 +7925,7 @@ fn display_signed_number_digits(
 fn display_signed_number_digits_with_row_order(
     value: i64,
     max_digits: usize,
-    zero_pad: bool,
+    padding: NumberPadding,
     divx: u32,
     row_order: SignedNumberRowOrder,
 ) -> Vec<u8> {
@@ -7126,21 +7941,36 @@ fn display_signed_number_digits_with_row_order(
         SignedNumberRowOrder::NegativeFirst => divx as u8,
     };
     let row_offset = if value < 0 { negative_row } else { positive_row };
-    let inner_width = max_digits;
     let abs = value.unsigned_abs();
-    let abs_text = if zero_pad && inner_width > 0 {
-        format!("{:0width$}", abs, width = inner_width)
-    } else {
-        abs.to_string()
-    };
-    let trimmed: String = if inner_width > 0 && abs_text.len() > inner_width {
-        abs_text[abs_text.len() - inner_width..].to_string()
+    let abs_text = abs.to_string();
+    let numeric_width = max_digits.saturating_sub(1);
+    let trimmed = if matches!(padding, NumberPadding::None) {
+        if abs_text.len() > max_digits {
+            abs_text[abs_text.len() - max_digits..].to_string()
+        } else {
+            abs_text
+        }
+    } else if abs_text.len() > numeric_width {
+        abs_text[abs_text.len() - numeric_width..].to_string()
     } else {
         abs_text
     };
-    let mut digits = Vec::with_capacity(trimmed.len() + 1);
-    // 先頭: 符号セル (sign image index = 11)
-    digits.push(11u8 + row_offset);
+    let sign_visible = !matches!(padding, NumberPadding::None) || trimmed.len() < max_digits;
+    let mut digits = Vec::with_capacity(max_digits);
+    if sign_visible {
+        // beatoraja の `keta` (`digit`) は符号セルを含む総枠数。
+        digits.push(11u8 + row_offset);
+    }
+    if sign_visible && numeric_width > trimmed.len() {
+        let fill = match padding {
+            NumberPadding::Zero => 0,
+            NumberPadding::Blank => 10,
+            NumberPadding::None => u8::MAX,
+        };
+        if fill != u8::MAX {
+            digits.extend(std::iter::repeat_n(fill + row_offset, numeric_width - trimmed.len()));
+        }
+    }
     for byte in trimmed.bytes() {
         if byte.is_ascii_digit() {
             digits.push((byte - b'0') + row_offset);
@@ -7220,6 +8050,19 @@ fn eval_skin_draw_condition(condition: &str, state: &SkinDrawState) -> bool {
     if condition.is_empty() {
         return true;
     }
+    if let Some(callback_id) =
+        condition.strip_prefix(LUA_DRAW_CALLBACK_PREFIX).and_then(|id| id.parse::<usize>().ok())
+    {
+        let Some(runtime) = state.lua_runtime.as_ref() else {
+            return false;
+        };
+        return runtime.runtime.evaluate_draw(
+            callback_id,
+            state,
+            &runtime.enabled_options,
+            &runtime.text_values,
+        );
+    }
 
     condition.split("||").flat_map(|segment| segment.split(" or ")).any(|branch| {
         branch
@@ -7230,6 +8073,90 @@ fn eval_skin_draw_condition(condition: &str, state: &SkinDrawState) -> bool {
 }
 
 fn eval_skin_draw_term(term: &str, state: &SkinDrawState) -> Option<bool> {
+    if let Some(flag_id) = parse_runtime_flag_operand(term) {
+        return Some(*state.runtime_flags.get(&flag_id).unwrap_or(&false));
+    }
+    if let Some(flag_id) = term.strip_prefix("not ").and_then(parse_runtime_flag_operand) {
+        return Some(!state.runtime_flags.get(&flag_id).copied().unwrap_or(false));
+    }
+    if term == "select_score_available()" {
+        return Some(
+            state.select_screen
+                && select_score_metadata_available(state)
+                && state.select_ex_score.is_some(),
+        );
+    }
+    if let Some(panel) = parse_result_panel_predicate(term) {
+        return state.result_panel.map(|current| current == panel);
+    }
+    if let Some((slot, lower, upper)) = parse_ir_score_rate_band_predicate(term) {
+        let score = ir_ranking_entry(&state.ir_ranking, slot - 1)?.ex_score?;
+        let max_score =
+            i64::from(state.select_total_notes.max(state.total_notes)).checked_mul(2)?;
+        if max_score <= 0 {
+            return Some(false);
+        }
+        let score = score.clamp(0, max_score);
+        return Some(score * 9 >= max_score * lower && score * 9 < max_score * upper);
+    }
+    if let Some((slot, lower, upper)) = parse_ir_score_rate_range_predicate(term) {
+        let score = ir_ranking_entry(&state.ir_ranking, slot - 1)?.ex_score?;
+        let max_score =
+            i64::from(state.select_total_notes.max(state.total_notes)).checked_mul(2)?;
+        if max_score <= 0 {
+            return Some(false);
+        }
+        let score = score.clamp(0, max_score);
+        return Some(score * 1000 > max_score * lower && score * 1000 <= max_score * upper);
+    }
+    if let Some(slot) = parse_ir_ranking_user_predicate(term) {
+        let entry = ir_ranking_entry(&state.ir_ranking, slot - 1)?;
+        let user_name = state.ir_ranking.user_name.as_str();
+        return Some(!user_name.is_empty() && entry.player_name.as_str() == user_name);
+    }
+    if let Some((lower, upper)) = parse_score_rate_band_predicate(term) {
+        let score = i64::from(state.select_ex_score.unwrap_or(state.ex_score));
+        let total_notes = i64::from(state.select_total_notes.max(state.total_notes));
+        let max_score = total_notes.checked_mul(2)?;
+        if max_score <= 0 {
+            return Some(false);
+        }
+        let score = score.clamp(0, max_score);
+        return Some(score * 9 >= max_score * lower && score * 9 < max_score * upper);
+    }
+    if let Some((grade, sign)) = parse_nearest_rank_predicate(term) {
+        let diff = nearest_grade_diff(state)?;
+        return Some(diff.grade == grade && nearest_rank_sign_matches(diff.value, sign));
+    }
+    if let Some(sign) = parse_nearest_rank_sign_predicate(term) {
+        return nearest_grade_diff(state).map(|diff| nearest_rank_sign_matches(diff.value, sign));
+    }
+    if let Some((mode, digits)) = parse_gauge_value_digits_predicate(term) {
+        let value = match mode {
+            "percent" => clamped_gauge_value(state) * 100.0 / state.gauge_max.max(1.0),
+            "amount" => clamped_gauge_value(state),
+            _ => return None,
+        };
+        let actual_digits = if value.floor() >= 100.0 {
+            3
+        } else if value.floor() >= 10.0 {
+            2
+        } else {
+            1
+        };
+        return Some(actual_digits == digits);
+    }
+    if let Some((group, part, below_border)) = parse_gauge_lead_glow_predicate(term) {
+        return Some(eval_gauge_lead_glow_predicate(group, part, below_border, state));
+    }
+    if let Some((graph_kind, lane, slot, kind)) = parse_keylogger_draw_predicate(term) {
+        let actual = match graph_kind {
+            "judge" => state.keylogger_event_judge.get(lane)?.get(slot).copied()?,
+            "fastslow" => state.keylogger_event_fast_slow.get(lane)?.get(slot).copied()?,
+            _ => return None,
+        };
+        return Some(actual == kind);
+    }
     if let Some(option_id) = parse_skin_option_operand(term) {
         return Some(test_skin_op(option_id, &[], state));
     }
@@ -7256,6 +8183,171 @@ fn eval_skin_draw_term(term: &str, state: &SkinDrawState) -> Option<bool> {
         });
     }
     None
+}
+
+fn parse_result_panel_predicate(term: &str) -> Option<i32> {
+    let panel = term.strip_prefix("result_panel(")?.strip_suffix(')')?.trim().parse().ok()?;
+    (0..=2).contains(&panel).then_some(panel)
+}
+
+fn parse_score_rate_band_predicate(term: &str) -> Option<(i64, i64)> {
+    let inner = term.strip_prefix("score_rate_band(")?.strip_suffix(')')?;
+    let (lower, upper) = inner.split_once(',')?;
+    let lower = lower.trim().parse::<i64>().ok()?;
+    let upper = upper.trim().parse::<i64>().ok()?;
+    (0 <= lower && lower < upper && upper <= 10).then_some((lower, upper))
+}
+
+fn parse_ir_score_rate_band_predicate(term: &str) -> Option<(i32, i64, i64)> {
+    let inner = term.strip_prefix("ir_score_rate_band(")?.strip_suffix(')')?;
+    let mut args = inner.split(',').map(str::trim);
+    let slot = args.next()?.parse::<i32>().ok()?;
+    let lower = args.next()?.parse::<i64>().ok()?;
+    let upper = args.next()?.parse::<i64>().ok()?;
+    if args.next().is_some()
+        || !(1..=10).contains(&slot)
+        || !(0 <= lower && lower < upper && upper <= 10)
+    {
+        return None;
+    }
+    Some((slot, lower, upper))
+}
+
+fn parse_ir_score_rate_range_predicate(term: &str) -> Option<(i32, i64, i64)> {
+    let inner = term.strip_prefix("ir_score_rate_range(")?.strip_suffix(')')?;
+    let mut args = inner.split(',').map(str::trim);
+    let slot = args.next()?.parse::<i32>().ok()?;
+    let lower = args.next()?.parse::<i64>().ok()?;
+    let upper = args.next()?.parse::<i64>().ok()?;
+    if args.next().is_some()
+        || !(1..=10).contains(&slot)
+        || !(-10 <= lower && lower < upper && upper <= 1000)
+    {
+        return None;
+    }
+    Some((slot, lower, upper))
+}
+
+fn parse_ir_ranking_user_predicate(term: &str) -> Option<i32> {
+    let slot = term.strip_prefix("ir_ranking_user(")?.strip_suffix(')')?.trim().parse().ok()?;
+    (1..=10).contains(&slot).then_some(slot)
+}
+
+fn parse_nearest_rank_predicate(term: &str) -> Option<(&str, &str)> {
+    let inner = term.strip_prefix("nearest_rank(")?.strip_suffix(')')?;
+    let (grade, sign) = inner.split_once(',')?;
+    let grade = grade.trim();
+    let sign = sign.trim();
+    (matches!(grade, "F" | "E" | "D" | "C" | "B" | "A" | "AA" | "AAA" | "MAX")
+        && matches!(sign, "plus" | "minus"))
+    .then_some((grade, sign))
+}
+
+fn parse_nearest_rank_sign_predicate(term: &str) -> Option<&str> {
+    let sign = term.strip_prefix("nearest_rank_sign(")?.strip_suffix(')')?.trim();
+    matches!(sign, "plus" | "minus").then_some(sign)
+}
+
+fn nearest_rank_sign_matches(value: i64, sign: &str) -> bool {
+    match sign {
+        "plus" => value >= 0,
+        "minus" => value < 0,
+        _ => false,
+    }
+}
+
+fn parse_gauge_value_digits_predicate(term: &str) -> Option<(&str, usize)> {
+    let inner = term.strip_prefix("gauge_value_digits(")?.strip_suffix(')')?;
+    let (mode, digits) = inner.split_once(',')?;
+    let mode = mode.trim();
+    let digits = digits.trim().parse::<usize>().ok()?;
+    (matches!(mode, "percent" | "amount") && (1..=3).contains(&digits)).then_some((mode, digits))
+}
+
+fn parse_gauge_lead_glow_predicate(term: &str) -> Option<(&str, i32, bool)> {
+    let inner = term.strip_prefix("gauge_lead_glow(")?.strip_suffix(')')?;
+    let mut args = inner.split(',').map(str::trim);
+    let group = args.next()?;
+    let part = args.next()?.parse::<i32>().ok()?;
+    let below_border = match args.next()? {
+        "above" => false,
+        "below" => true,
+        _ => return None,
+    };
+    if args.next().is_some()
+        || !(1..=24).contains(&part)
+        || !matches!(group, "assist_easy" | "easy" | "groove" | "hard" | "exhard" | "hazard")
+    {
+        return None;
+    }
+    Some((group, part, below_border))
+}
+
+fn eval_gauge_lead_glow_predicate(
+    group: &str,
+    part: i32,
+    below_border: bool,
+    state: &SkinDrawState,
+) -> bool {
+    let actual_group = match state.gauge_type {
+        0 => "assist_easy",
+        1 => "easy",
+        2 => "groove",
+        3 | 6 => "hard",
+        4 | 7 => "exhard",
+        5 | 8 => "hazard",
+        _ => "groove",
+    };
+    if actual_group != group || state.gauge <= 0.0 {
+        return false;
+    }
+    let max = state.gauge_max.max(1.0);
+    let border = match (max > 100.0, state.gauge_type) {
+        (true, 0) => 65.0,
+        (true, 1 | 2) => 85.0,
+        (false, 0) => 60.0,
+        (false, 1 | 2) => 80.0,
+        _ => 0.0,
+    };
+    let lead = ((state.gauge * 24.0 / max).floor() as i32).clamp(1, 24);
+    lead == part && ((part as f32 * max / 24.0) < border) == below_border
+}
+
+fn parse_keylogger_draw_predicate(term: &str) -> Option<(&str, usize, usize, u8)> {
+    let inner = term.strip_prefix("keylogger_")?.strip_suffix(')')?;
+    let (graph_kind, args) = inner.split_once('(')?;
+    let mut args = args.split(',');
+    let lane = args.next()?.trim().parse::<usize>().ok()?.checked_sub(1)?;
+    let slot = args.next()?.trim().parse::<usize>().ok()?.checked_sub(1)?;
+    let kind_name = args.next()?.trim();
+    if args.next().is_some() || lane >= LANE_COUNT || slot >= 16 {
+        return None;
+    }
+    let kind = match (graph_kind, kind_name) {
+        ("judge", "none") | ("fastslow", "none") => 0,
+        ("judge", "cool") | ("fastslow", "cool") => 1,
+        ("judge", "great") | ("fastslow", "fast") => 2,
+        ("judge", "good") | ("fastslow", "slow") => 3,
+        ("judge", "bad") => 4,
+        _ => return None,
+    };
+    Some((graph_kind, lane, slot, kind))
+}
+
+fn destination_timer_elapsed_ms(
+    destination: &SkinDestinationDef,
+    state: &SkinDrawState,
+) -> Option<i32> {
+    if let Some(rest) = destination.timer_expr.strip_prefix("bmz:keylogger_event:") {
+        let mut parts = rest.split(':');
+        let lane = parts.next()?.parse::<usize>().ok()?.checked_sub(1)?;
+        let slot = parts.next()?.parse::<usize>().ok()?.checked_sub(1)?;
+        if parts.next().is_some() {
+            return None;
+        }
+        return state.keylogger_event_ms.get(lane)?.get(slot).copied().flatten();
+    }
+    skin_timer_elapsed_ms(destination.timer, state)
 }
 
 fn eval_skin_draw_operand(operand: &str, state: &SkinDrawState) -> Option<f32> {
@@ -7295,6 +8387,13 @@ fn eval_skin_draw_sum_operand(operand: &str, state: &SkinDrawState) -> Option<f3
 }
 
 fn eval_skin_draw_atom_operand(operand: &str, state: &SkinDrawState) -> Option<f32> {
+    if let Some(flag_id) = parse_runtime_flag_operand(operand) {
+        return Some(if state.runtime_flags.get(&flag_id).copied().unwrap_or(false) {
+            1.0
+        } else {
+            0.0
+        });
+    }
     if let Some(ref_id) = parse_skin_float_number_operand(operand) {
         return skin_state_float_number(ref_id, state);
     }
@@ -7306,6 +8405,14 @@ fn eval_skin_draw_atom_operand(operand: &str, state: &SkinDrawState) -> Option<f
     }
     if let Some(timer_id) = parse_skin_timer_operand(operand) {
         return Some(skin_timer_elapsed_ms(Some(timer_id), state).unwrap_or(i32::MIN) as f32);
+    }
+    if let Some(timer_id) = parse_skin_keybeam_operand(operand, "keybeam_hold") {
+        return keybeam_lane_for_keyon_timer(timer_id)
+            .map(|lane| i32::from(state.keybeam_hold_active[lane]) as f32);
+    }
+    if let Some(timer_id) = parse_skin_keybeam_operand(operand, "keybeam_fade") {
+        return keybeam_lane_for_keyoff_timer(timer_id)
+            .map(|lane| i32::from(state.keybeam_fade_active[lane]) as f32);
     }
     match operand {
         "gauge()" | "gauge" => Some(state.gauge),
@@ -7319,6 +8426,11 @@ fn eval_skin_draw_atom_operand(operand: &str, state: &SkinDrawState) -> Option<f
         "timer_off" | "timer_off_value" => Some(i32::MIN as f32),
         value => value.parse::<f32>().ok(),
     }
+}
+
+fn parse_runtime_flag_operand(operand: &str) -> Option<i32> {
+    let inner = operand.strip_prefix("runtime_flag(")?.strip_suffix(')')?.trim();
+    inner.parse().ok()
 }
 
 fn parse_skin_number_operand(operand: &str) -> Option<i32> {
@@ -7336,6 +8448,31 @@ fn parse_skin_event_index_operand(operand: &str) -> Option<i32> {
     inner.parse::<i32>().ok()
 }
 
+fn parse_skin_keybeam_operand(operand: &str, name: &str) -> Option<i32> {
+    let inner = operand.strip_prefix(name)?.strip_prefix('(')?.strip_suffix(')')?.trim();
+    inner.parse::<i32>().ok()
+}
+
+fn keybeam_lane_for_keyon_timer(timer: i32) -> Option<usize> {
+    match timer {
+        100..=107 => Some((timer - 100) as usize),
+        108..=109 => Some(Lane::Key8.index() + (timer - 108) as usize),
+        110 => Some(Lane::Scratch2.index()),
+        111..=117 => Some(Lane::Key8.index() + (timer - 111) as usize),
+        _ => None,
+    }
+}
+
+fn keybeam_lane_for_keyoff_timer(timer: i32) -> Option<usize> {
+    match timer {
+        120..=127 => Some((timer - 120) as usize),
+        128..=129 => Some(Lane::Key8.index() + (timer - 128) as usize),
+        130 => Some(Lane::Scratch2.index()),
+        131..=137 => Some(Lane::Key8.index() + (timer - 131) as usize),
+        _ => None,
+    }
+}
+
 fn skin_state_event_index(event_id: i32, state: &SkinDrawState) -> i32 {
     match event_id {
         40 => state.select_gauge_index as i32,
@@ -7348,14 +8485,21 @@ fn skin_state_event_index(event_id: i32, state: &SkinDrawState) -> i32 {
         73 => state.select_assist_index as i32,
         75 => i32::from(state.judge_timing_auto_adjust),
         78 => state.select_gauge_auto_shift_index as i32,
+        308 if state.result_ln_mode_index.is_some() => {
+            state.result_ln_mode_index.unwrap_or_default() as i32
+        }
         308 => state.select_ln_mode_index as i32,
         340 => state.select_judge_algorithm_index as i32,
         341 => state.select_bottom_shiftable_gauge_index as i32,
         344 => extended_arrange_ref_index(state) as i32,
         345 => extended_arrange_2p_ref_index(state) as i32,
         1900 => skin_hispeed_mode_index(state),
+        SKIN_REF_BMZ_KEY_MODE => effective_skin_key_mode(state).map_or(0, skin_key_mode_number),
         SKIN_EVENT_HSFIX => state.hsfix_index,
-        _ => skin_state_lane_judge_event_index(event_id, state).unwrap_or(0),
+        _ => skin_random_lane_ref_number(event_id, state)
+            .and_then(|value| i32::try_from(value).ok())
+            .or_else(|| skin_state_lane_judge_event_index(event_id, state))
+            .unwrap_or(0),
     }
 }
 
@@ -7387,10 +8531,58 @@ fn skin_state_lane_judge_event_index(event_id: i32, state: &SkinDrawState) -> Op
 
 /// beatoraja `main_state.float_number(ref)`。BARGRAPH / SLIDER 系の比率 0.0-1.0。
 fn skin_state_float_number(ref_id: i32, state: &SkinDrawState) -> Option<f32> {
-    Some(match ref_id {
-        14 => bmz_lane_cover_for_lift(state.lane_cover, state.lift),
-        _ => graph_value(ref_id, state),
-    })
+    let is_play = !state.select_screen && state.result_failed.is_none();
+    match ref_id {
+        // `MainStateAccessor.float_number()` calls beatoraja's getRateProperty(),
+        // so only SLIDER/BARGRAPH RateType IDs belong to this namespace.
+        1 => Some(if state.select_screen {
+            state.select_scroll_progress.clamp(0.0, 1.0)
+        } else {
+            0.0
+        }),
+        4 | 5 => Some(if is_play && state.lanecover_enabled {
+            bmz_lane_cover_for_lift(state.lane_cover, state.lift)
+        } else {
+            0.0
+        }),
+        6 | 101 => Some(if is_play { state.play_progress.clamp(0.0, 1.0) } else { 0.0 }),
+        // Skin configuration scroll position is not exposed by BMZ yet.
+        7 => Some(0.0),
+        8 => Some(ir_ranking_scroll_progress(state)),
+        17 => Some(state.select_master_volume.clamp(0.0, 1.0)),
+        18 => Some(state.select_key_volume.clamp(0.0, 1.0)),
+        19 => Some(state.select_bgm_volume.clamp(0.0, 1.0)),
+        102 => Some(state.resource_load_progress.clamp(0.0, 1.0)),
+        103 => Some(select_level_rate(state, None)),
+        105..=109 => Some(select_level_rate(state, Some(ref_id - 104))),
+        110..=115 => Some(graph_value(ref_id, state)),
+        140..=145 | 147 => Some(if state.select_screen { graph_value(ref_id, state) } else { 0.0 }),
+        285..=289 => {
+            let notes = state.select_total_notes.max(state.total_notes);
+            let count = state.rival_judge_counts?[usize::try_from(ref_id - 285).ok()?];
+            (notes > 0).then_some(count as f32 / notes as f32)
+        }
+        _ => None,
+    }
+}
+
+fn select_level_rate(state: &SkinDrawState, difficulty: Option<i32>) -> f32 {
+    if !state.select_screen
+        || difficulty.is_some_and(|difficulty| state.difficulty != i64::from(difficulty))
+    {
+        return 0.0;
+    }
+    // This intentionally follows beatoraja's current switch fallthrough: every supported mode
+    // ends with maxLevel=10.
+    (state.select_play_level as f32 / 10.0).max(0.0)
+}
+
+fn ir_ranking_scroll_progress(state: &SkinDrawState) -> f32 {
+    if state.ir_ranking.scroll_max == 0 {
+        0.0
+    } else {
+        (state.ir_ranking.scroll_offset as f32 / state.ir_ranking.scroll_max as f32).clamp(0.0, 1.0)
+    }
 }
 
 fn parse_skin_option_operand(operand: &str) -> Option<i32> {
@@ -7421,7 +8613,52 @@ fn default_chart_gauge_graph_value(state: &SkinDrawState) -> f32 {
     (default_chart_total_count_value(state) * 0.75).max(0.0)
 }
 
+fn course_clear_rate_value(state: &SkinDrawState) -> f32 {
+    let notes = f64::from(state.total_notes);
+    if notes <= 0.0 {
+        return 0.0;
+    }
+    let pgreat = f64::from(state.judge_counts.pgreat);
+    let great = f64::from(state.judge_counts.great);
+    let good = f64::from(state.judge_counts.good);
+    let bad = f64::from(state.judge_counts.bad);
+    let poor_and_miss =
+        f64::from(state.judge_counts.poor.saturating_add(state.judge_counts.empty_poor));
+    let progress = (pgreat + great + good + bad + poor_and_miss).min(notes);
+    if progress <= 0.0 {
+        return 0.0;
+    }
+
+    // WMII course result's "CLEAR RATE": course progress contributes 40%,
+    // while its judgement-quality formula contributes the remaining 60%.
+    let x = 8.0 * (pgreat + great) + 2.0 * good - (68.0 * bad + 100.0 * poor_and_miss);
+    let mut y = 100.0 * x / (6.0 * notes);
+    if y >= 0.0 {
+        y /= 2.0;
+    }
+    let performance = (0.6 * (y + 50.0)).clamp(0.0, 60.0);
+    (40.0 * progress / notes + performance) as f32
+}
+
+fn clamped_gauge_value(state: &SkinDrawState) -> f32 {
+    if state.gauge_max <= 0.0 { 0.0 } else { state.gauge.clamp(0.0, state.gauge_max) }
+}
+
 fn skin_builtin_value_f32(expr: &str, state: &SkinDrawState) -> Option<f32> {
+    if let Some(slot) = expr.trim().strip_prefix("bmz:ir_score_rate:") {
+        let slot = slot.parse::<i32>().ok()?;
+        if !(1..=10).contains(&slot) {
+            return None;
+        }
+        let (score, max_score) = ir_ranking_score_and_max(state, slot)?;
+        return Some(if max_score == 0 { 0.0 } else { score as f32 / max_score as f32 });
+    }
+    if expr.trim() == "bmz:keylogger_nps" {
+        return Some(state.keylogger_nps as f32);
+    }
+    if let Some(value) = keylogger_graph_value(expr.trim(), state) {
+        return Some(value);
+    }
     match expr.trim() {
         SKIN_EXPR_ADJUSTED_COVER => state.adjusted_cover_progress,
         SKIN_EXPR_ADJUSTED_RATE => state.adjusted_rate,
@@ -7429,11 +8666,91 @@ fn skin_builtin_value_f32(expr: &str, state: &SkinDrawState) -> Option<f32> {
         SKIN_EXPR_FS_THRESHOLD => Some(state.fs_threshold_ms as f32),
         SKIN_EXPR_DEFAULT_CHART_TOTAL_COUNT => Some(default_chart_total_count_value(state)),
         SKIN_EXPR_DEFAULT_CHART_GAUGE => Some(default_chart_gauge_graph_value(state)),
+        SKIN_EXPR_COURSE_CLEAR_RATE => Some(course_clear_rate_value(state)),
+        SKIN_EXPR_GAUGE_PERCENT_INTEGER => {
+            Some((clamped_gauge_value(state) * 100.0 / state.gauge_max.max(1.0)).floor())
+        }
+        SKIN_EXPR_GAUGE_PERCENT_FRACTION => {
+            Some((clamped_gauge_value(state) * 10_000.0 / state.gauge_max.max(1.0)).floor() % 100.0)
+        }
+        SKIN_EXPR_GAUGE_AMOUNT_INTEGER => Some(clamped_gauge_value(state).floor()),
+        SKIN_EXPR_GAUGE_AMOUNT_FRACTION => {
+            Some((clamped_gauge_value(state) * 100.0).floor() % 100.0)
+        }
+        _ => None,
+    }
+}
+
+fn keylogger_graph_value(expr: &str, state: &SkinDrawState) -> Option<f32> {
+    let rest = expr.strip_prefix("bmz:keylogger_graph:")?;
+    let mut parts = rest.split(':');
+    let graph_kind = parts.next()?;
+    let lane = parts.next()?.parse::<usize>().ok()?.checked_sub(1)?;
+    let layer = parts.next()?;
+    if parts.next().is_some() || lane >= LANE_COUNT {
+        return None;
+    }
+    match graph_kind {
+        "judge" => {
+            let start = match layer {
+                "cool" => 0,
+                "great" => 1,
+                "good" => 2,
+                "bad" => 3,
+                _ => return None,
+            };
+            let denominator_start = usize::from(state.keylogger_exclude_cool);
+            let max = state
+                .keylogger_judge_counts
+                .iter()
+                .map(|counts| counts[denominator_start..].iter().sum::<u32>())
+                .max()
+                .unwrap_or(0);
+            let count = state.keylogger_judge_counts[lane][start..].iter().sum::<u32>();
+            Some(if max == 0 { 0.0 } else { count as f32 / max as f32 })
+        }
+        "fastslow" => {
+            let start = match layer {
+                "cool" => 0,
+                "fast" => 1,
+                "slow" => 2,
+                _ => return None,
+            };
+            let denominator_start = usize::from(state.keylogger_exclude_cool);
+            let max = state
+                .keylogger_fast_slow_counts
+                .iter()
+                .map(|counts| counts[denominator_start..].iter().sum::<u32>())
+                .max()
+                .unwrap_or(0);
+            let count = state.keylogger_fast_slow_counts[lane][start..].iter().sum::<u32>();
+            Some(if max == 0 { 0.0 } else { count as f32 / max as f32 })
+        }
         _ => None,
     }
 }
 
 fn skin_builtin_value_i64(expr: &str, state: &SkinDrawState) -> Option<i64> {
+    if let Some(slot) = expr.trim().strip_prefix("bmz:ir_score_rate_integer:") {
+        let slot = slot.parse::<i32>().ok()?;
+        return ir_ranking_score_rate_parts(state, slot).map(|parts| parts.0);
+    }
+    if let Some(slot) = expr.trim().strip_prefix("bmz:ir_score_rate_fraction:") {
+        let slot = slot.parse::<i32>().ok()?;
+        return ir_ranking_score_rate_parts(state, slot).map(|parts| parts.1);
+    }
+    if let Some(slot) = expr.trim().strip_prefix("bmz:ir_score_diff:") {
+        let slot = slot.parse::<i32>().ok()?;
+        if !(1..=10).contains(&slot) {
+            return None;
+        }
+        let local_best = skin_state_number(170, state)?.max(skin_state_number(171, state)?);
+        let ranking_score = ir_ranking_entry(&state.ir_ranking, slot - 1)?.ex_score?;
+        return local_best.checked_sub(ranking_score);
+    }
+    if expr.trim() == "bmz:nearest_rank_diff_abs" {
+        return nearest_grade_diff(state).map(|diff| diff.value.abs());
+    }
     let number = skin_builtin_value_f32(expr, state)?;
     Some(match expr.trim() {
         SKIN_EXPR_DEFAULT_CHART_TOTAL_COUNT | SKIN_EXPR_DEFAULT_CHART_GAUGE => {
@@ -7444,6 +8761,9 @@ fn skin_builtin_value_i64(expr: &str, state: &SkinDrawState) -> Option<i64> {
 }
 
 fn skin_value_number(value: &SkinValueDef, state: &SkinDrawState) -> Option<i64> {
+    if value.id == "Number_Todayplayednotes" {
+        return Some(player_stat_u64(daily_completed_notes(&state.player_stats.daily)));
+    }
     if !value.expr.trim().is_empty() {
         return skin_state_number_expr(&value.expr, state);
     }
@@ -7683,7 +9003,7 @@ fn skin_state_float_expr_term(term: &str, state: &SkinDrawState) -> Option<f32> 
 fn select_settings_screen_number_hidden(ref_id: i32) -> bool {
     matches!(
         ref_id,
-        71 | 72 | 74 | 77 | 78 | 90 | 91 | 92 | 1163 | 1164 | 121 | 150 | 170 | 350 | 370
+        45..=49 | 71 | 72 | 74 | 77 | 78 | 90 | 91 | 92 | 1163 | 1164 | 121 | 150 | 170 | 350 | 370
     )
 }
 
@@ -7706,6 +9026,13 @@ fn select_settings_screen_number(ref_id: i32, state: &SkinDrawState) -> Option<i
 
 fn select_chart_metadata_available(state: &SkinDrawState) -> bool {
     !state.select_screen
+        || (state.select_row_kind == SelectRowKind::Song
+            && !state.select_is_folder
+            && state.select_in_library)
+}
+
+fn select_score_metadata_available(state: &SkinDrawState) -> bool {
+    !state.select_screen
         || (matches!(state.select_row_kind, SelectRowKind::Song | SelectRowKind::Course)
             && !state.select_is_folder
             && state.select_in_library)
@@ -7714,7 +9041,9 @@ fn select_chart_metadata_available(state: &SkinDrawState) -> bool {
 fn select_chart_score_number_requires_song(ref_id: i32) -> bool {
     matches!(
         ref_id,
-        71 | 72
+        45..=49
+            | 71
+            | 72
             | 74..=89
             | 100..=116
             | 150..=158
@@ -7724,6 +9053,10 @@ fn select_chart_score_number_requires_song(ref_id: i32) -> bool {
             | 400
             | 410..=427
     )
+}
+
+fn select_chart_detail_number_requires_song(ref_id: i32) -> bool {
+    matches!(ref_id, 350..=368 | 1163 | 1164)
 }
 
 fn player_stat_u64(value: u64) -> i64 {
@@ -7757,6 +9090,82 @@ fn player_total_play_notes(stats: &PlayerStatsSnapshot) -> u64 {
         .saturating_add(player_total_bad(stats))
 }
 
+fn daily_play_notes(stats: &DailyPlayerStatsSnapshot) -> u64 {
+    stats.pgreat.saturating_add(stats.great).saturating_add(stats.good).saturating_add(stats.bad)
+}
+
+fn daily_completed_notes(stats: &DailyPlayerStatsSnapshot) -> u64 {
+    daily_play_notes(stats).saturating_add(stats.poor).saturating_add(stats.empty_poor)
+}
+
+fn daily_ex_score(stats: &DailyPlayerStatsSnapshot) -> u64 {
+    stats.pgreat.saturating_mul(2).saturating_add(stats.great)
+}
+
+fn daily_max_ex_score(stats: &DailyPlayerStatsSnapshot) -> u64 {
+    daily_play_notes(stats).saturating_mul(2)
+}
+
+fn daily_rate_basis_points(stats: &DailyPlayerStatsSnapshot) -> u64 {
+    let max = daily_max_ex_score(stats);
+    daily_ex_score(stats).saturating_mul(10_000).checked_div(max).unwrap_or(0)
+}
+
+fn daily_rank_index(stats: &DailyPlayerStatsSnapshot) -> i64 {
+    let max = daily_max_ex_score(stats);
+    if max == 0 {
+        return 7;
+    }
+    let scaled = daily_ex_score(stats).saturating_mul(9);
+    (2..=8)
+        .rev()
+        .find(|threshold| scaled >= max.saturating_mul(*threshold))
+        .map_or(7, |threshold| 8 - threshold as i64)
+}
+
+fn daily_rank_label(stats: &DailyPlayerStatsSnapshot) -> &'static str {
+    ["AAA", "AA", "A", "B", "C", "D", "E", "F"][daily_rank_index(stats) as usize]
+}
+
+fn rounded_percent(numerator: u64, denominator: u64) -> f64 {
+    if denominator == 0 {
+        return 0.0;
+    }
+    ((numerator as f64 / denominator as f64) * 10_000.0).round() / 100.0
+}
+
+fn m_select_daily_rank(stats: &DailyPlayerStatsSnapshot) -> &'static str {
+    daily_rank_label(stats)
+}
+
+fn m_select_daily_stats_text(id: &str, stats: &DailyPlayerStatsSnapshot) -> Option<String> {
+    let notes = daily_play_notes(stats);
+    let judge = |count: u64| format!("{}  ({}%)", count, rounded_percent(count, notes));
+    Some(match id {
+        "defaultNotesProcessingCounter_exscore" => {
+            stats.pgreat.saturating_mul(2).saturating_add(stats.great).to_string()
+        }
+        "defaultNotesProcessingCounter_pg" => judge(stats.pgreat),
+        "defaultNotesProcessingCounter_gr" => judge(stats.great),
+        "defaultNotesProcessingCounter_gd" => judge(stats.good),
+        "defaultNotesProcessingCounter_bd" => judge(stats.bad),
+        "defaultNotesProcessingCounter_pr" => judge(stats.poor),
+        "defaultNotesProcessingCounter_notes" | "defaultNotesProcessingCounter_stroke" => {
+            notes.to_string()
+        }
+        "defaultNotesProcessingCounter_cp" => {
+            format!("{}/{}", stats.clear_count, stats.play_count)
+        }
+        "defaultNotesProcessingCounter_rank" => m_select_daily_rank(stats).to_string(),
+        "defaultNotesProcessingCounter_rate" => rounded_percent(
+            stats.pgreat.saturating_mul(2).saturating_add(stats.great),
+            notes.saturating_mul(2),
+        )
+        .to_string(),
+        _ => return None,
+    })
+}
+
 fn operating_time_seconds(state: &SkinDrawState) -> i64 {
     i64::from(state.operating_time_ms.max(0)) / 1_000
 }
@@ -7767,6 +9176,15 @@ fn select_folder_lamp_counts_available(state: &SkinDrawState) -> bool {
             state.select_row_kind,
             SelectRowKind::Folder | SelectRowKind::SearchFolder | SelectRowKind::TableFolder
         )
+}
+
+fn select_row_folder_song_count(row: &SelectRowSnapshot) -> Option<u32> {
+    (row.is_folder
+        && matches!(
+            row.kind,
+            SelectRowKind::Folder | SelectRowKind::SearchFolder | SelectRowKind::TableFolder
+        ))
+    .then(|| row.folder_lamp_counts.iter().copied().sum())
 }
 
 fn select_folder_lamp_count(ref_id: i32, counts: &[u32; 11]) -> Option<i64> {
@@ -7796,6 +9214,13 @@ fn skin_state_number(ref_id: i32, state: &SkinDrawState) -> Option<i64> {
 
     if state.select_screen
         && select_chart_score_number_requires_song(ref_id)
+        && !select_score_metadata_available(state)
+    {
+        return None;
+    }
+
+    if state.select_screen
+        && select_chart_detail_number_requires_song(ref_id)
         && !select_chart_metadata_available(state)
     {
         return None;
@@ -7815,19 +9240,17 @@ fn skin_state_number(ref_id: i32, state: &SkinDrawState) -> Option<i64> {
         17 => Some(player_stat_u64(state.player_stats.playtime_seconds / 3600)),
         18 => Some(player_stat_u64((state.player_stats.playtime_seconds / 60) % 60)),
         19 => Some(player_stat_u64(state.player_stats.playtime_seconds % 60)),
+        20 => Some(i64::from(state.current_fps)),
         21..=26 => current_datetime_number(ref_id),
         27 => Some(operating_time_seconds(state) / 3_600),
         28 => Some((operating_time_seconds(state) / 60) % 60),
         29 => Some(operating_time_seconds(state) % 60),
-        42 | 43 if state.result_failed.is_some() => Some(state.result_arrange_index as i64),
-        42 if state.select_screen => Some(state.select_arrange_index as i64),
-        43 if state.select_screen => Some(state.select_arrange_2p_index as i64),
-        344 if state.select_screen || state.result_failed.is_some() => {
-            Some(extended_arrange_ref_index(state) as i64)
-        }
-        345 if state.select_screen || state.result_failed.is_some() => {
-            Some(extended_arrange_2p_ref_index(state) as i64)
-        }
+        161 => Some(i64::from(state.play_timer_ms.unwrap_or(0).max(0) / 60_000)),
+        162 => Some(i64::from((state.play_timer_ms.unwrap_or(0).max(0) / 1_000) % 60)),
+        42 => Some(arrange_ref_index(state) as i64),
+        43 => Some(arrange_2p_ref_index(state) as i64),
+        344 => Some(extended_arrange_ref_index(state) as i64),
+        345 => Some(extended_arrange_2p_ref_index(state) as i64),
         54 if state.select_screen => Some(state.select_double_option_index as i64),
         55 if state.select_screen => Some(state.select_hs_fix_index as i64),
         11 if state.select_screen => Some(state.select_mode_index as i64),
@@ -7835,7 +9258,7 @@ fn skin_state_number(ref_id: i32, state: &SkinDrawState) -> Option<i64> {
             Some(state.judge_timing_offset_ms as i64)
         }
         12 if state.select_screen => Some(state.select_sort_index as i64),
-        300 => Some(state.select_chart_count as i64),
+        300 if state.select_screen => state.select_folder_song_count.map(i64::from),
         30 => Some(player_stat_u64(state.player_stats.play_count)),
         31 => Some(player_stat_u64(state.player_stats.clear_count)),
         32 => Some(player_stat_u64(
@@ -7846,7 +9269,9 @@ fn skin_state_number(ref_id: i32, state: &SkinDrawState) -> Option<i64> {
         35 => Some(player_stat_u64(player_total_good(&state.player_stats))),
         36 => Some(player_stat_u64(player_total_bad(&state.player_stats))),
         37 => Some(player_stat_u64(player_total_poor(&state.player_stats))),
-        96 => Some(if state.play_level != 0 { state.play_level } else { state.select_play_level }),
+        45..=49 | 96 => {
+            Some(if state.play_level != 0 { state.play_level } else { state.select_play_level })
+        }
         370 => Some(state.select_clear_index),
         92 if state.select_screen => {
             if !select_chart_metadata_available(state) {
@@ -7871,10 +9296,8 @@ fn skin_state_number(ref_id: i32, state: &SkinDrawState) -> Option<i64> {
         363 if state.select_screen => Some(decimal_afterdot(state.select_chart_end_density)),
         364 if state.select_screen => Some(state.select_chart_density.floor() as i64),
         365 if state.select_screen => Some(decimal_afterdot(state.select_chart_density)),
-        // beatoraja chart_totalgauge(368): raw BMS #TOTAL from SongInformation.
-        368 if state.select_screen || state.result_failed.is_some() => {
-            Some(state.select_chart_total_gauge.floor() as i64)
-        }
+        // beatoraja chart_totalgauge(368): effective BMS #TOTAL from SongInformation.
+        368 => Some(state.select_chart_total_gauge.floor() as i64),
         75 | 105 | 174 => Some(state.max_combo as i64),
         76 if state.select_screen => state.select_bp.map(|count| count as i64).or(Some(0)),
         76 if state.result_failed.is_some() => Some(current_bp(state) as i64),
@@ -7883,7 +9306,15 @@ fn skin_state_number(ref_id: i32, state: &SkinDrawState) -> Option<i64> {
         77 => Some(state.select_target_index as i64),
         78 if state.select_screen => Some(state.select_clear_count as i64),
         78 => Some(state.select_gauge_auto_shift_index as i64),
+        79 if state.select_screen
+            && (state.select_ex_score.is_some()
+                || state.select_play_count > 0
+                || state.select_clear_count > 0) =>
+        {
+            Some(state.select_play_count.saturating_sub(state.select_clear_count) as i64)
+        }
         341 => Some(state.select_bottom_shiftable_gauge_index as i64),
+        342 => Some(i64::from(state.hispeed_auto_adjust)),
         80 | 110 => Some(state.judge_counts.pgreat as i64),
         81 | 111 => Some(state.judge_counts.great as i64),
         82 | 112 => Some(state.judge_counts.good as i64),
@@ -7903,6 +9334,7 @@ fn skin_state_number(ref_id: i32, state: &SkinDrawState) -> Option<i64> {
         407 => Some(gauge_after_dot(state.gauge) as i64),
         163 => Some((state.timeleft_ms / 60_000) as i64),
         164 => Some(((state.timeleft_ms / 1_000) % 60) as i64),
+        165 => Some((state.resource_load_progress.clamp(0.0, 1.0) * 100.0) as i64),
         1163 => Some(result_or_select_length_ms(state) / 60_000),
         1164 => Some((result_or_select_length_ms(state) / 1_000) % 60),
         310 => Some(state.hispeed.floor() as i64),
@@ -7910,6 +9342,65 @@ fn skin_state_number(ref_id: i32, state: &SkinDrawState) -> Option<i64> {
         1900 => Some(skin_hispeed_mode_index(state) as i64),
         1901 => Some(i64::from(skin_hispeed_mode_is_floating(state))),
         1902 => Some(skin_target_green_number(state)),
+        1930 => Some(player_stat_u64(state.player_stats.daily.play_count)),
+        1931 => Some(player_stat_u64(state.player_stats.daily.clear_count)),
+        1932 => Some(player_stat_u64(state.player_stats.daily.pgreat)),
+        1933 => Some(player_stat_u64(state.player_stats.daily.great)),
+        1934 => Some(player_stat_u64(state.player_stats.daily.good)),
+        1935 => Some(player_stat_u64(state.player_stats.daily.bad)),
+        1936 => Some(player_stat_u64(state.player_stats.daily.poor)),
+        1937 => Some(player_stat_u64(state.player_stats.daily.empty_poor)),
+        1938 => Some(player_stat_u64(daily_play_notes(&state.player_stats.daily))),
+        1939 => Some(player_stat_u64(daily_completed_notes(&state.player_stats.daily))),
+        1940 => Some(player_stat_u64(daily_ex_score(&state.player_stats.daily))),
+        1941 => Some(player_stat_u64(daily_max_ex_score(&state.player_stats.daily))),
+        1942 => Some(player_stat_u64(daily_rate_basis_points(&state.player_stats.daily))),
+        1943 => Some(daily_rank_index(&state.player_stats.daily)),
+        1944 => Some(player_stat_u64(state.player_stats.daily.score_update_count)),
+        1945 => Some(player_stat_u64(state.player_stats.daily.clear_update_count)),
+        1946 => Some(player_stat_u64(state.player_stats.daily.miss_count_update_count)),
+        SKIN_REF_BMZ_COURSE_STAGE_COUNT => Some(i64::from(state.course_result.stage_count)),
+        id if (SKIN_REF_BMZ_COURSE_STAGE_EX_BASE
+            ..SKIN_REF_BMZ_COURSE_STAGE_EX_BASE + SKIN_BMZ_COURSE_STAGE_COUNT as i32)
+            .contains(&id) =>
+        {
+            Some(
+                state.course_result.stages[(ref_id - SKIN_REF_BMZ_COURSE_STAGE_EX_BASE) as usize]
+                    .ex_score as i64,
+            )
+        }
+        id if (SKIN_REF_BMZ_COURSE_STAGE_GAUGE_BASE
+            ..SKIN_REF_BMZ_COURSE_STAGE_GAUGE_BASE + SKIN_BMZ_COURSE_STAGE_COUNT as i32)
+            .contains(&id) =>
+        {
+            Some(
+                state.course_result.stages[(ref_id - SKIN_REF_BMZ_COURSE_STAGE_GAUGE_BASE) as usize]
+                    .gauge
+                    .floor() as i64,
+            )
+        }
+        id if (SKIN_REF_BMZ_COURSE_STAGE_BP_BASE
+            ..SKIN_REF_BMZ_COURSE_STAGE_BP_BASE + SKIN_BMZ_COURSE_STAGE_COUNT as i32)
+            .contains(&id) =>
+        {
+            Some(
+                state.course_result.stages[(ref_id - SKIN_REF_BMZ_COURSE_STAGE_BP_BASE) as usize].bp
+                    as i64,
+            )
+        }
+        id if (SKIN_REF_BMZ_COURSE_STAGE_RATE_BASE
+            ..SKIN_REF_BMZ_COURSE_STAGE_RATE_BASE + SKIN_BMZ_COURSE_STAGE_COUNT as i32)
+            .contains(&id) =>
+        {
+            Some(
+                state.course_result.stages[(ref_id - SKIN_REF_BMZ_COURSE_STAGE_RATE_BASE) as usize]
+                    .rate_basis_points as i64,
+            )
+        }
+        SKIN_REF_BMZ_KEY_MODE => effective_skin_key_mode(state).map(skin_key_mode_number_i64),
+        SKIN_REF_BMZ_ACTIVE_LANE_COUNT => {
+            effective_skin_key_mode(state).map(|mode| mode.lane_count() as i64)
+        }
         312 => {
             if state.select_screen && !duration_refs_available(state) {
                 return None;
@@ -7962,7 +9453,9 @@ fn skin_state_number(ref_id: i32, state: &SkinDrawState) -> Option<i64> {
         527 => state.judge_timing_ms[2].map(|ms| -(ms as i64)),
         // 判定タイミングオフセット設定値 (NUMBER_JUDGETIMING=12)
         12 => Some(state.judge_timing_offset_ms as i64),
-        // Result timing distribution stats.
+        // Result judgement duration / timing distribution stats.
+        372 => state.average_duration_us.map(|value| value / 1_000),
+        373 => state.average_duration_us.map(|value| (value / 10) % 100),
         374 => state.average_timing_ms.map(|value| value as i64),
         375 => state.average_timing_ms.map(timing_afterdot),
         376 => state.stddev_timing_ms.map(|value| value as i64),
@@ -7985,6 +9478,14 @@ fn skin_state_number(ref_id: i32, state: &SkinDrawState) -> Option<i64> {
         271 => state.rival_ex_score,
         275 => state.rival_max_combo,
         276 => state.rival_bp,
+        280..=284 => {
+            state.rival_judge_counts.map(|counts| i64::from(counts[(ref_id - 280) as usize]))
+        }
+        285..=289 => {
+            let notes = state.select_total_notes.max(state.total_notes);
+            let count = state.rival_judge_counts?[(ref_id - 285) as usize];
+            (notes > 0).then_some(i64::from(count) * 100 / i64::from(notes))
+        }
         // ベストスコア / ターゲットスコア (DB から供給、未取得時は None)
         150 | 170 => projected_best_score_at_progress(state).map(|s| s as i64),
         121 | 151 => state.target_ex_score.map(|s| projected_score_at_progress(s, state) as i64),
@@ -8007,10 +9508,15 @@ fn skin_state_number(ref_id: i32, state: &SkinDrawState) -> Option<i64> {
         153 => state.target_ex_score.map(|target| {
             state.ex_score as i64 - projected_score_at_progress(target, state) as i64
         }),
-        // NUMBER_TARGET_MAXCOMBO=173
-        173 => state.target_max_combo.map(|c| c as i64),
-        // NUMBER_DIFF_MAXCOMBO=175 (符号付き、max_combo - target_max_combo)
-        175 => state.target_max_combo.map(|target| state.max_combo as i64 - target as i64),
+        // NUMBER_TARGET_MAXCOMBO=173 is the old/my-best score on Result.
+        173 if state.result_failed.is_some() => {
+            state.previous_best_max_combo.filter(|combo| *combo > 0).map(|combo| combo as i64)
+        }
+        // NUMBER_DIFF_MAXCOMBO=175 (current - old/my-best).
+        175 if state.result_failed.is_some() => state
+            .previous_best_max_combo
+            .filter(|combo| *combo > 0)
+            .map(|previous| state.max_combo as i64 - previous as i64),
         // NUMBER_TARGET_MISSCOUNT=176 (Result では old/mybest min_bp)
         176 => result_mybest_bp(state).map(|c| c as i64),
         // NUMBER_MISSCOUNT2=177 (Result では今回の min_bp)
@@ -8189,6 +9695,24 @@ fn ir_ranking_entry(
     })
 }
 
+fn ir_ranking_score_and_max(state: &SkinDrawState, slot: i32) -> Option<(i64, i64)> {
+    if !(1..=10).contains(&slot) {
+        return None;
+    }
+    let score = ir_ranking_entry(&state.ir_ranking, slot - 1)?.ex_score?;
+    let max_score = i64::from(state.select_total_notes.max(state.total_notes).checked_mul(2)?);
+    Some((score, max_score))
+}
+
+fn ir_ranking_score_rate_parts(state: &SkinDrawState, slot: i32) -> Option<(i64, i64)> {
+    let (score, max_score) = ir_ranking_score_and_max(state, slot)?;
+    if score <= 0 || max_score <= 0 {
+        return Some((0, 0));
+    }
+    let scaled = i128::from(score).checked_mul(10_000)?.checked_div(i128::from(max_score))?;
+    Some((i64::try_from(scaled / 100).ok()?, i64::try_from(scaled % 100).ok()?))
+}
+
 fn ir_total_clear_count(ranking: &crate::scene::ResultIrSnapshot) -> Option<i64> {
     let total = ranking.total_player?;
     let clear_rate = ranking.clear_rate?;
@@ -8310,7 +9834,7 @@ fn nearest_grade_diff(state: &SkinDrawState) -> Option<NearestGradeDiff> {
             return Some(if score * 18 < max * half_step {
                 NearestGradeDiff {
                     grade: plus_grade,
-                    value: div_ceil(score * 9 - max * lower_step, 9),
+                    value: (score - div_ceil(max * lower_step, 9)).max(0),
                 }
             } else {
                 NearestGradeDiff {
@@ -8321,7 +9845,7 @@ fn nearest_grade_diff(state: &SkinDrawState) -> Option<NearestGradeDiff> {
         }
     }
     if score * 18 < max * 17 {
-        Some(NearestGradeDiff { grade: "AAA", value: div_ceil(score * 9 - max * 8, 9) })
+        Some(NearestGradeDiff { grade: "AAA", value: (score - div_ceil(max * 8, 9)).max(0) })
     } else if score < max {
         Some(NearestGradeDiff { grade: "MAX", value: -(max - score) })
     } else {
@@ -8563,7 +10087,7 @@ fn arrange_ref_index(state: &SkinDrawState) -> usize {
 
 fn arrange_2p_ref_index(state: &SkinDrawState) -> usize {
     if state.result_failed.is_some() {
-        state.result_arrange_index
+        state.result_arrange_2p_index
     } else {
         state.select_arrange_2p_index
     }
@@ -8579,25 +10103,26 @@ fn extended_arrange_ref_index(state: &SkinDrawState) -> usize {
 
 fn extended_arrange_2p_ref_index(state: &SkinDrawState) -> usize {
     if state.result_failed.is_some() {
-        state.result_extended_arrange_index
+        state.result_extended_arrange_2p_index
     } else {
         state.select_extended_arrange_2p_index
     }
 }
 
 fn random_lane_ref_slot(ref_id: i32) -> Option<usize> {
-    let slot = ref_id.checked_sub(SKIN_RANDOM_LANE_REF_BASE)? as usize;
-    (slot < SKIN_RANDOM_LANE_REF_COUNT).then_some(slot)
+    match ref_id {
+        450..=466 | 469 => Some((ref_id - SKIN_RANDOM_LANE_REF_BASE) as usize),
+        _ => None,
+    }
 }
 
 fn skin_random_lane_ref_number(ref_id: i32, state: &SkinDrawState) -> Option<i64> {
     let slot = random_lane_ref_slot(ref_id)?;
+    let arrange_index =
+        if slot < 10 { state.result_arrange_index } else { state.result_arrange_2p_index };
     let scratch_ref = matches!(slot, 9 | 19);
-    let displayable_arrange = if scratch_ref {
-        state.result_arrange_index == 8
-    } else {
-        matches!(state.result_arrange_index, 2 | 3 | 8)
-    };
+    let displayable_arrange =
+        if scratch_ref { arrange_index == 8 } else { matches!(arrange_index, 2 | 3 | 8) };
     Some(if state.result_failed.is_some() && displayable_arrange {
         state.result_random_lane_refs[slot] as i64
     } else {
@@ -8913,6 +10438,7 @@ fn skin_slider_progress_by_type(slider_type: i32, state: &SkinDrawState) -> Opti
             (lane_cover > 0.0).then_some(lane_cover)
         }
         6 => Some(state.play_progress.clamp(0.0, 1.0)),
+        8 => Some(ir_ranking_scroll_progress(state)),
         17 => Some(state.select_master_volume.clamp(0.0, 1.0)),
         18 => Some(state.select_key_volume.clamp(0.0, 1.0)),
         19 => Some(state.select_bgm_volume.clamp(0.0, 1.0)),
@@ -8924,8 +10450,12 @@ fn skin_timer_elapsed_ms(timer: Option<i32>, state: &SkinDrawState) -> Option<i3
     match timer {
         None => Some(state.elapsed_ms),
         Some(0) => Some(state.elapsed_ms),
+        Some(1) => state.start_input_ms,
         Some(2) => state.fadeout_ms,
         Some(3) => state.failed_ms,
+        Some(SKIN_TIMER_BMZ_INPUT_BASE..=SKIN_TIMER_BMZ_INPUT_LAST) => {
+            state.logical_input_press_ms[(timer.unwrap() - SKIN_TIMER_BMZ_INPUT_BASE) as usize]
+        }
         Some(150) => state.result_graph_begin_ms,
         Some(151) => state.result_graph_end_ms,
         Some(152) => state.result_update_score_ms,
@@ -8935,10 +10465,13 @@ fn skin_timer_elapsed_ms(timer: Option<i32>, state: &SkinDrawState) -> Option<i3
         Some(174) => state.ir_ranking.connect_fail_ms,
         Some(40) => state.ready_timer_ms,
         Some(41) => state.play_timer_ms,
+        Some(140) => state.rhythm_timer_ms,
         Some(42 | 43) => state.gauge_increase_ms,
         Some(44 | 45) => state.gauge_max_ms,
         Some(11) => Some(state.select_bar_elapsed_ms),
-        Some(21..=23) => Some(state.select_option_panel_elapsed_ms),
+        Some(21..=26) => (state.select_option_panel == (timer.unwrap() - 20) as u8)
+            .then_some(state.select_option_panel_elapsed_ms),
+        Some(31..=36) => state.select_option_panel_off_elapsed_ms[(timer.unwrap() - 31) as usize],
         Some(348..=352) => score_target_timer_elapsed_ms(timer.unwrap(), state),
         Some(46) => state.judge_ms[0],
         Some(47) => state.judge_ms[1],
@@ -8995,8 +10528,14 @@ fn skin_timer_elapsed_ms(timer: Option<i32>, state: &SkinDrawState) -> Option<i3
             let idx = (id - SKIN_DYNAMIC_TIMER_BASE) as usize;
             state.dynamic_timer_ms[idx]
         }
-        _ => None,
+        Some(id) => state.fixed_delay_timer_ms.get(&id).copied(),
     }
+}
+
+/// beatoraja の各 scene が TIMER_STARTINPUT を開始する条件と経過時間。
+/// `now > skin.input` の厳密な不等号も合わせる。
+pub fn skin_start_input_elapsed_ms(elapsed_ms: i32, input_ms: i32) -> Option<i32> {
+    (elapsed_ms > input_ms).then_some(elapsed_ms.saturating_sub(input_ms))
 }
 
 fn skin_text_align(align: i32) -> TextAlign {
@@ -9078,6 +10617,10 @@ struct GaugeGraphColors {
     graph_line: Color,
     border_bg: Color,
     border_line: Color,
+}
+
+fn is_additive_black(color: Color) -> bool {
+    color.r == 0.0 && color.g == 0.0 && color.b == 0.0
 }
 
 fn gaugegraph_color_index(gauge_type: i32) -> usize {
@@ -9177,8 +10720,105 @@ fn gaugegraph_sample_ratio(index: usize, sample_count: usize) -> f32 {
 }
 
 #[allow(clippy::too_many_arguments)]
+fn gaugegraph_rect_batch(
+    points: &[crate::snapshot::ResultGaugeGraphPoint],
+    rect: Rect,
+    max: f32,
+    border: f32,
+    colors: GaugeGraphColors,
+    line_w: f32,
+    line_h: f32,
+    render_progress: f32,
+    additive: bool,
+) -> Arc<[RectCommand]> {
+    let border_y = rect.y + rect.height * (1.0 - (border / max).clamp(0.0, 1.0));
+    let render_x = rect.x + rect.width * render_progress;
+    let mut rects = Vec::with_capacity(points.len().saturating_mul(2).saturating_add(3));
+    // Additive black is a no-op in beatoraja. RectBatch has no blend field,
+    // so emitting it as a normal rectangle would cover an earlier graph.
+    if !additive || !is_additive_black(colors.graph_bg) {
+        rects.push(RectCommand { rect, color: colors.graph_bg });
+    }
+    if border_y > rect.y && (!additive || !is_additive_black(colors.border_bg)) {
+        rects.push(RectCommand {
+            rect: Rect { x: rect.x, y: rect.y, width: rect.width, height: border_y - rect.y },
+            color: colors.border_bg,
+        });
+    }
+    let sample_count = points.len();
+    for (index, pair) in points.windows(2).enumerate() {
+        let from = pair[0];
+        let to = pair[1];
+        let x1 = rect.x + gaugegraph_sample_ratio(index, sample_count) * rect.width;
+        if x1 > render_x {
+            break;
+        }
+        let x2 =
+            (rect.x + gaugegraph_sample_ratio(index + 1, sample_count) * rect.width).min(render_x);
+        let y1 = gaugegraph_y(rect, from.value, max);
+        let y2 = gaugegraph_y(rect, to.value, max);
+        if (x2 - x1).abs() <= f32::EPSILON {
+            continue;
+        }
+        if from.value < border && to.value < border {
+            push_gaugegraph_segment(&mut rects, x1, x2, y1, y2, line_w, line_h, colors.graph_line);
+        } else if from.value >= border && to.value >= border {
+            push_gaugegraph_segment(&mut rects, x1, x2, y1, y2, line_w, line_h, colors.border_line);
+        } else {
+            let split_x = if (to.value - from.value).abs() <= f32::EPSILON {
+                x1
+            } else {
+                x1 + (x2 - x1) * ((border - from.value) / (to.value - from.value)).clamp(0.0, 1.0)
+            };
+            let graph_color =
+                if from.value < border { colors.graph_line } else { colors.border_line };
+            let border_color =
+                if from.value < border { colors.border_line } else { colors.graph_line };
+            push_gaugegraph_segment(
+                &mut rects,
+                x1,
+                split_x,
+                y1,
+                border_y,
+                line_w,
+                line_h,
+                graph_color,
+            );
+            push_gaugegraph_segment(
+                &mut rects,
+                split_x,
+                x2,
+                border_y,
+                y2,
+                line_w,
+                line_h,
+                border_color,
+            );
+        }
+    }
+    if points.len() == 1 {
+        let y = gaugegraph_y(rect, points[0].value, max);
+        let color = if points[0].value < border { colors.graph_line } else { colors.border_line };
+        rects.push(RectCommand {
+            rect: Rect { x: rect.x, y, width: (render_x - rect.x).max(line_w), height: line_h },
+            color,
+        });
+    } else if let Some(last) = points.last().copied() {
+        let x1 = rect.x
+            + gaugegraph_sample_ratio(sample_count.saturating_sub(1), sample_count) * rect.width;
+        let x2 = render_x;
+        if x2 > x1 {
+            let y = gaugegraph_y(rect, last.value, max);
+            let color = if last.value < border { colors.graph_line } else { colors.border_line };
+            push_gaugegraph_segment(&mut rects, x1, x2, y, y, line_w, line_h, color);
+        }
+    }
+    Arc::from(rects)
+}
+
+#[allow(clippy::too_many_arguments)]
 fn push_gaugegraph_segment(
-    items: &mut Vec<SkinRenderItem>,
+    rects: &mut Vec<RectCommand>,
     x1: f32,
     x2: f32,
     y1: f32,
@@ -9186,19 +10826,13 @@ fn push_gaugegraph_segment(
     line_w: f32,
     line_h: f32,
     color: Color,
-    blend: BlendMode,
 ) {
     let width = (x2 - x1).max(line_w);
-    items.push(SkinRenderItem::Rect {
+    rects.push(RectCommand {
         rect: Rect { x: x1, y: y1.min(y2), width: line_w, height: (y2 - y1).abs() + line_h },
         color,
-        blend,
     });
-    items.push(SkinRenderItem::Rect {
-        rect: Rect { x: x1, y: y2, width, height: line_h },
-        color,
-        blend,
-    });
+    rects.push(RectCommand { rect: Rect { x: x1, y: y2, width, height: line_h }, color });
 }
 
 fn skin_timing_distribution_from_points(
@@ -9501,6 +11135,27 @@ fn result_note_graph_rect_batch_cache(
     }
     let mut hasher = DefaultHasher::new();
     "result-note-graph-rect-batch".hash(&mut hasher);
+    key.hash(&mut hasher);
+    Some(RectBatchCache { key: RectBatchCacheKey(hasher.finish()), bounds })
+}
+
+fn result_gauge_graph_rect_batch_cache(
+    key: ResultGaugeGraphRectBatchCacheKey,
+    rects: &[RectCommand],
+) -> Option<RectBatchCache> {
+    let first = rects.first()?.rect;
+    let bounds = rects.iter().skip(1).fold(first, |bounds, command| {
+        let left = bounds.x.min(command.rect.x);
+        let top = bounds.y.min(command.rect.y);
+        let right = (bounds.x + bounds.width).max(command.rect.x + command.rect.width);
+        let bottom = (bounds.y + bounds.height).max(command.rect.y + command.rect.height);
+        Rect { x: left, y: top, width: right - left, height: bottom - top }
+    });
+    if bounds.width <= f32::EPSILON || bounds.height <= f32::EPSILON {
+        return None;
+    }
+    let mut hasher = DefaultHasher::new();
+    "result-gauge-graph-rect-batch".hash(&mut hasher);
     key.hash(&mut hasher);
     Some(RectBatchCache { key: RectBatchCacheKey(hasher.finish()), bounds })
 }
@@ -9812,6 +11467,22 @@ fn skin_state_text_with_draw_state(
     draw_state: Option<&SkinDrawState>,
     state: &SkinTextState<'_>,
 ) -> String {
+    if let Some(draw_state) = draw_state
+        && let Some(value) = m_select_daily_stats_text(&text.id, &draw_state.player_stats.daily)
+    {
+        return value;
+    }
+    if text.value_expr.trim() == "bmz:text_concat:1001:1002" {
+        return format!("{} {}", state.table_text_primary, state.table_level);
+    }
+    if text.value_expr.trim() == SKIN_EXPR_RESULT_TABLE_TITLE {
+        return format!(
+            "{} {} {}",
+            state.table_level,
+            state.table_text_primary,
+            full_label(state.title, state.subtitle)
+        );
+    }
     if !text.constant_text.is_empty() {
         return text.constant_text.clone();
     }
@@ -9891,7 +11562,15 @@ fn skin_state_text_with_draw_state(
         }
         _ => {}
     }
-    match text.ref_id {
+    skin_main_state_text(text.ref_id, draw_state, state)
+}
+
+fn skin_main_state_text(
+    ref_id: i32,
+    draw_state: Option<&SkinDrawState>,
+    state: &SkinTextState<'_>,
+) -> String {
+    match ref_id {
         1 => {
             if state.rival.is_empty() {
                 select_play_target_name(state.target)
@@ -9899,6 +11578,7 @@ fn skin_state_text_with_draw_state(
                 state.rival.to_string()
             }
         }
+        2 => state.player_name.to_string(),
         3 => select_target_name(state.target),
         10 => state.title.to_string(),
         11 => state.subtitle.to_string(),
@@ -9909,10 +11589,20 @@ fn skin_state_text_with_draw_state(
         16 => full_label(state.artist, state.subartist),
         17 => state.table_level.to_string(),
         30 => state.search_word.to_string(),
-        120..=129 => ir_ranking_entry(state.ir_ranking, text.ref_id - 120)
+        120..=129 => ir_ranking_entry(state.ir_ranking, ref_id - 120)
             .map(|entry| entry.player_name.as_str().to_string())
             .unwrap_or_default(),
-        150..=159 => state.course_titles[(text.ref_id - 150) as usize].to_string(),
+        150..=159 => state.course_titles[(ref_id - 150) as usize].to_string(),
+        SKIN_TEXT_BMZ_DAILY_RANK => draw_state
+            .map(|state| daily_rank_label(&state.player_stats.daily).to_string())
+            .unwrap_or_default(),
+        SKIN_TEXT_BMZ_DAILY_RECENT_BASE..=SKIN_TEXT_BMZ_DAILY_RECENT_LAST => draw_state
+            .map(|state| {
+                state.player_stats.daily.recent_titles
+                    [(ref_id - SKIN_TEXT_BMZ_DAILY_RECENT_BASE) as usize]
+                    .clone()
+            })
+            .unwrap_or_default(),
         1900 => draw_state
             .map(|state| {
                 if skin_hispeed_mode_is_floating(state) { "FHS" } else { "NHS" }.to_string()
@@ -9924,18 +11614,80 @@ fn skin_state_text_with_draw_state(
         1001 => state.table_text_primary.to_string(),
         1002 => state.table_level.to_string(),
         1003 => state.table_text_fallback.to_string(),
-        1020 | 1021 => {
+        1010 => format!("bmz-player {}", env!("CARGO_PKG_VERSION")),
+        1020 => {
             if matches!(state.ir_ranking.state, crate::scene::ResultIrState::Offline) {
                 String::new()
             } else {
                 "BMZ IR".to_string()
             }
         }
-        200..=209 => select_target_name_by_offset(state.target, text.ref_id - 210),
-        210..=219 => select_target_name_by_offset(state.target, text.ref_id - 209),
+        1021 => state.ir_ranking.user_name.as_str().to_string(),
+        200..=209 => select_target_name_by_offset(state.target, ref_id - 210),
+        210..=219 => select_target_name_by_offset(state.target, ref_id - 209),
         1000 => state.current_folder.to_string(),
         _ => String::new(),
     }
+}
+
+fn lua_main_state_text_values(
+    draw_state: &SkinDrawState,
+    text_state: &SkinTextState<'_>,
+) -> BTreeMap<i32, String> {
+    let mut refs = vec![
+        1,
+        2,
+        3,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16,
+        17,
+        30,
+        1000,
+        1001,
+        1002,
+        1003,
+        1010,
+        1020,
+        1021,
+        1900,
+        SKIN_TEXT_BMZ_DAILY_RANK,
+    ];
+    refs.extend(120..=129);
+    refs.extend(150..=159);
+    refs.extend(200..=219);
+    refs.extend(SKIN_TEXT_BMZ_DAILY_RECENT_BASE..=SKIN_TEXT_BMZ_DAILY_RECENT_LAST);
+    refs.into_iter()
+        .map(|ref_id| (ref_id, skin_main_state_text(ref_id, Some(draw_state), text_state)))
+        .collect()
+}
+
+pub fn lua_main_state_option(
+    option_id: i32,
+    enabled_options: &[i32],
+    state: &SkinDrawState,
+) -> bool {
+    test_skin_op(option_id, enabled_options, state)
+}
+
+pub fn lua_main_state_number(ref_id: i32, state: &SkinDrawState) -> i64 {
+    skin_state_number(ref_id, state).unwrap_or_default()
+}
+
+pub fn lua_main_state_float(ref_id: i32, state: &SkinDrawState) -> f64 {
+    f64::from(skin_state_float_number(ref_id, state).unwrap_or_default())
+}
+
+pub fn lua_main_state_timer(timer_id: i32, state: &SkinDrawState) -> Option<i32> {
+    skin_timer_elapsed_ms(Some(timer_id), state)
+}
+
+pub fn lua_main_state_event_index(event_id: i32, state: &SkinDrawState) -> i32 {
+    skin_state_event_index(event_id, state)
 }
 
 const SELECT_TARGET_IDS: [&str; 13] = [
@@ -10220,17 +11972,41 @@ fn select_banner_option_matches(want_banner: bool, state: &SkinDrawState) -> boo
     state.select_has_banner == want_banner
 }
 
+fn select_song_option_matches(state: &SkinDrawState) -> bool {
+    state.select_screen
+        && state.select_row_kind == SelectRowKind::Song
+        && !state.in_settings
+        && state.select_in_library
+}
+
 fn select_key_mode_option_matches(op: i32, state: &SkinDrawState) -> bool {
-    if state.result_failed.is_some() || !state.select_screen {
-        return key_mode_option_matches(op, state.key_mode);
+    effective_skin_key_mode(state).is_some_and(|mode| key_mode_option_matches(op, mode))
+}
+
+fn effective_skin_key_mode(state: &SkinDrawState) -> Option<KeyMode> {
+    if !state.select_screen || state.result_failed.is_some() {
+        return Some(state.key_mode);
     }
-    if state.in_settings || state.select_row_kind != SelectRowKind::Song {
-        return false;
+    (!state.in_settings && state.select_row_kind == SelectRowKind::Song && !state.select_is_folder)
+        .then_some(state.select_chart_key_mode)
+        .flatten()
+}
+
+fn skin_key_mode_number(mode: KeyMode) -> i32 {
+    skin_key_mode_number_i64(mode) as i32
+}
+
+fn skin_key_mode_number_i64(mode: KeyMode) -> i64 {
+    match mode {
+        KeyMode::K4 => 4,
+        KeyMode::K5 => 5,
+        KeyMode::K6 => 6,
+        KeyMode::K7 => 7,
+        KeyMode::K8 => 8,
+        KeyMode::K9 => 9,
+        KeyMode::K10 => 10,
+        KeyMode::K14 => 14,
     }
-    let Some(mode) = state.select_chart_key_mode else {
-        return false;
-    };
-    key_mode_option_matches(op, mode)
 }
 
 fn key_mode_option_matches(op: i32, mode: KeyMode) -> bool {
@@ -10241,6 +12017,19 @@ fn key_mode_option_matches(op: i32, mode: KeyMode) -> bool {
         163 => matches!(mode, KeyMode::K10),
         164 => matches!(mode, KeyMode::K9),
         1160 | 1161 => false,
+        SKIN_OPTION_BMZ_KEY_MODE_BASE => mode == KeyMode::K4,
+        op if op == SKIN_OPTION_BMZ_KEY_MODE_BASE + 1 => mode == KeyMode::K5,
+        op if op == SKIN_OPTION_BMZ_KEY_MODE_BASE + 2 => mode == KeyMode::K6,
+        op if op == SKIN_OPTION_BMZ_KEY_MODE_BASE + 3 => mode == KeyMode::K7,
+        op if op == SKIN_OPTION_BMZ_KEY_MODE_BASE + 4 => mode == KeyMode::K8,
+        op if op == SKIN_OPTION_BMZ_KEY_MODE_BASE + 5 => mode == KeyMode::K9,
+        op if op == SKIN_OPTION_BMZ_KEY_MODE_BASE + 6 => mode == KeyMode::K10,
+        op if op == SKIN_OPTION_BMZ_KEY_MODE_BASE + 7 => mode == KeyMode::K14,
+        SKIN_OPTION_BMZ_NO_SCRATCH => {
+            matches!(mode, KeyMode::K4 | KeyMode::K6 | KeyMode::K8 | KeyMode::K9)
+        }
+        SKIN_OPTION_BMZ_SINGLE_PLAY => matches!(mode, KeyMode::K5 | KeyMode::K7),
+        SKIN_OPTION_BMZ_DOUBLE_PLAY => matches!(mode, KeyMode::K10 | KeyMode::K14),
         _ => false,
     }
 }
@@ -10250,11 +12039,53 @@ fn select_detail_artist<'a>(
     selected_row: Option<&'a SelectRowSnapshot>,
 ) -> &'a str {
     if !snapshot.in_settings {
-        return selected_row.map(|row| row.artist.as_str()).unwrap_or_default();
+        return selected_row
+            .filter(|row| row.kind == SelectRowKind::Song)
+            .map(|row| row.artist.as_str())
+            .unwrap_or_default();
     }
     selected_row
         .filter(|row| row.kind == SelectRowKind::Config)
         .map(|row| row.artist.as_str())
+        .unwrap_or_default()
+}
+
+fn select_detail_title<'a>(
+    snapshot: &'a SelectSnapshot,
+    selected_row: Option<&'a SelectRowSnapshot>,
+) -> &'a str {
+    let Some(row) = selected_row else {
+        return if snapshot.in_settings { "" } else { &snapshot.selected_title };
+    };
+    if snapshot.in_settings {
+        return row.title.as_str();
+    }
+    match row.kind {
+        SelectRowKind::Song
+        | SelectRowKind::Folder
+        | SelectRowKind::TableFolder
+        | SelectRowKind::SearchFolder
+        | SelectRowKind::Command
+        | SelectRowKind::Container
+        | SelectRowKind::SettingsFolder => row.title.as_str(),
+        SelectRowKind::Course
+        | SelectRowKind::Executable
+        | SelectRowKind::RandomCourse
+        | SelectRowKind::NoSong
+        | SelectRowKind::Config => "",
+    }
+}
+
+fn select_detail_genre<'a>(
+    snapshot: &SelectSnapshot,
+    selected_row: Option<&'a SelectRowSnapshot>,
+) -> &'a str {
+    if snapshot.in_settings {
+        return selected_row.map(|row| row.genre.as_str()).unwrap_or_default();
+    }
+    selected_row
+        .filter(|row| row.kind == SelectRowKind::Song)
+        .map(|row| row.genre.as_str())
         .unwrap_or_default()
 }
 
@@ -10270,7 +12101,10 @@ fn select_detail_subtitle<'a>(
         }
         return "";
     }
-    selected_row.map(|row| row.subtitle.as_str()).unwrap_or_default()
+    selected_row
+        .filter(|row| row.kind == SelectRowKind::Song)
+        .map(|row| row.subtitle.as_str())
+        .unwrap_or_default()
 }
 
 fn select_row_shows_score_decorations(row: &SelectRowSnapshot) -> bool {
@@ -10689,7 +12523,7 @@ fn rank_index(ex_score: Option<u32>, total_notes: u32) -> Option<usize> {
     Some(rank)
 }
 
-pub(crate) fn select_arrange_index(arrange: &str) -> usize {
+pub fn select_arrange_index(arrange: &str) -> usize {
     match arrange {
         "MIRROR" => 1,
         "RANDOM" | "F-RANDOM" | "MF-RANDOM" => 2,
@@ -10712,7 +12546,7 @@ pub(crate) fn extended_arrange_index(arrange: &str) -> usize {
     }
 }
 
-fn select_double_option_index(double_option: &str) -> usize {
+pub fn select_double_option_index(double_option: &str) -> usize {
     match double_option {
         "FLIP" => 1,
         "BATTLE" => 2,
@@ -10884,8 +12718,21 @@ fn select_bottom_shiftable_gauge_index(mode: &str) -> usize {
     }
 }
 
-fn select_target_index(target: &str) -> usize {
-    select_target_index_for_name(target).unwrap_or(0)
+/// beatoraja の既定 target list と、play skin の target graph (ref 41/77) が
+/// 使う 11 段階の画像 index。選曲画面用の BMZ target 列挙順とは別物。
+pub(crate) fn play_target_image_index(target: &str) -> usize {
+    match target {
+        "RANK_A" | "A" => 1,
+        "RANK_AA-" => 3,
+        "RANK_AA" | "AA" => 4,
+        "RANK_AAA-" => 6,
+        "RANK_AAA" | "AAA" => 7,
+        "RANK_MAX-" => 9,
+        "MAX" => 10,
+        // BMZ 固有の動的 target は専用 sprite を持たないため、先頭へ
+        // fallback する（従来の NONE と同じ扱い）。
+        _ => 0,
+    }
 }
 
 fn select_bga_index(bga: &str) -> usize {
@@ -10941,7 +12788,6 @@ fn select_judge_algorithm_index(algorithm: &str) -> usize {
     match algorithm {
         "Duration" | "DURATION" => 1,
         "Lowest" | "LOWEST" => 2,
-        "Score" | "SCORE" => 3,
         _ => 0,
     }
 }
@@ -11307,13 +13153,25 @@ fn result_judge_pie_segment_color(
 fn skin_image_item_for_frame(
     texture: SkinTextureId,
     rect: Rect,
-    uv: TextureRegion,
+    mut uv: TextureRegion,
     frame: ResolvedSkinFrame,
     center: i32,
     blend: BlendMode,
     source_size: Option<SkinImageSize>,
     linear_filter: bool,
 ) -> SkinRenderItem {
+    // beatoraja forwards signed destination sizes to SpriteBatch. BMZ keeps
+    // rectangles normalized for hit testing and clipping, so preserve the sign
+    // as a reversed UV extent instead. This reproduces `w = -101`/`h < 0`
+    // image mirroring without emitting a negative on-screen rectangle.
+    if frame.w < 0 {
+        uv.x += uv.width;
+        uv.width = -uv.width;
+    }
+    if frame.h < 0 {
+        uv.y += uv.height;
+        uv.height = -uv.height;
+    }
     let tint = Color::rgba(
         frame.r as f32 / 255.0,
         frame.g as f32 / 255.0,
@@ -11341,7 +13199,11 @@ fn skin_image_item_for_frame(
         blend,
         source_size,
         linear_filter,
-        angle_deg: frame.angle as f32,
+        // beatoraja/LibGDX rotates in bottom-origin coordinates, where a
+        // positive angle is counter-clockwise. BMZ renders in top-origin
+        // coordinates, so negate the destination angle to preserve the same
+        // on-screen direction.
+        angle_deg: -frame.angle as f32,
         center: skin_rotation_center(center),
     }
 }
@@ -11670,6 +13532,8 @@ fn slider_value_at(
     x: f32,
     y: f32,
 ) -> Option<f32> {
+    // beatoraja SkinSlider.mousePressed: hit track is based on destination origin +
+    // range along the movement axis (not the thumb center / half size).
     let range = slider.range.unsigned_abs() as f32;
     if range <= f32::EPSILON {
         return None;
@@ -11678,36 +13542,18 @@ fn slider_value_at(
     let frame_y = frame.y as f32;
     let frame_w = frame.w as f32;
     let frame_h = frame.h as f32;
-    let half_w = frame_w * 0.5;
-    let half_h = frame_h * 0.5;
     let value = match slider.angle {
-        0 if frame_x <= x
-            && x <= frame_x + frame_w
-            && frame_y + half_h <= y
-            && y <= frame_y + range + half_h =>
-        {
-            (y - frame_y - half_h) / range
+        0 if frame_x <= x && x <= frame_x + frame_w && frame_y <= y && y <= frame_y + range => {
+            (y - frame_y) / range
         }
-        1 if frame_x + half_w <= x
-            && x <= frame_x + range + half_w
-            && frame_y <= y
-            && y <= frame_y + frame_h =>
-        {
-            (x - frame_x - half_w) / range
+        1 if frame_x <= x && x <= frame_x + range && frame_y <= y && y <= frame_y + frame_h => {
+            (x - frame_x) / range
         }
-        2 if frame_x <= x
-            && x <= frame_x + frame_w
-            && frame_y - range + half_h <= y
-            && y <= frame_y + half_h =>
-        {
-            (frame_y + half_h - y) / range
+        2 if frame_x <= x && x <= frame_x + frame_w && frame_y - range <= y && y <= frame_y => {
+            (frame_y - y) / range
         }
-        3 if frame_x - range + half_w <= x
-            && x <= frame_x + half_w
-            && frame_y <= y
-            && y <= frame_y + frame_h =>
-        {
-            (frame_x + half_w - x) / range
+        3 if frame_x - range <= x && x <= frame_x && frame_y <= y && y <= frame_y + frame_h => {
+            (frame_x - x) / range
         }
         _ => return None,
     };
@@ -11720,48 +13566,7 @@ fn scroll_slider_value_at(
     x: f32,
     y: f32,
 ) -> Option<f32> {
-    let range = slider.range.unsigned_abs() as f32;
-    if range <= f32::EPSILON {
-        return None;
-    }
-    let frame_x = frame.x as f32;
-    let frame_y = frame.y as f32;
-    let frame_w = frame.w as f32;
-    let frame_h = frame.h as f32;
-    let half_w = frame_w * 0.5;
-    let half_h = frame_h * 0.5;
-    let value = match slider.angle {
-        0 if frame_x <= x
-            && x <= frame_x + frame_w
-            && frame_y + half_h <= y
-            && y <= frame_y + range + half_h =>
-        {
-            (y - frame_y - half_h) / range
-        }
-        1 if frame_x + half_w <= x
-            && x <= frame_x + range + half_w
-            && frame_y <= y
-            && y <= frame_y + frame_h =>
-        {
-            (x - frame_x - half_w) / range
-        }
-        2 if frame_x <= x
-            && x <= frame_x + frame_w
-            && frame_y - range + half_h <= y
-            && y <= frame_y + half_h =>
-        {
-            (frame_y + half_h - y) / range
-        }
-        3 if frame_x - range + half_w <= x
-            && x <= frame_x + half_w
-            && frame_y <= y
-            && y <= frame_y + frame_h =>
-        {
-            (frame_x + half_w - x) / range
-        }
-        _ => return None,
-    };
-    Some(value.clamp(0.0, 1.0))
+    slider_value_at(slider, frame, x, y)
 }
 
 fn multiply_bga_tints(destination: Color, bga: SkinBgaFrame) -> Color {
@@ -12198,11 +14003,128 @@ fn destination_render_layer<'a>(
 
 #[cfg(test)]
 mod tests {
+    use bmz_core::ids::NoteId;
+    use bmz_core::input::{InputDeviceKind, InputEvent, InputKind, InputSource};
     use bmz_core::time::TimeUs;
 
     use crate::plan::TextLayer;
 
     use super::*;
+
+    #[test]
+    fn negative_image_destination_size_mirrors_texture_region() {
+        let item = skin_image_item_for_frame(
+            SkinTextureId(1),
+            Rect { x: 0.2, y: 0.3, width: 0.4, height: 0.5 },
+            TextureRegion { x: 0.1, y: 0.2, width: 0.3, height: 0.4 },
+            ResolvedSkinFrame { w: -101, h: -53, ..ResolvedSkinFrame::default() },
+            0,
+            BlendMode::Normal,
+            None,
+            false,
+        );
+
+        let SkinRenderItem::Image { rect, uv, .. } = item else { panic!() };
+        assert!(approx_eq(rect.x, 0.2));
+        assert!(approx_eq(rect.width, 0.4));
+        assert!(approx_eq(uv.x, 0.4));
+        assert!(approx_eq(uv.width, -0.3));
+        assert!(approx_eq(uv.y, 0.6));
+        assert!(approx_eq(uv.height, -0.4));
+    }
+
+    #[test]
+    fn positive_image_destination_size_keeps_texture_region_direction() {
+        let item = skin_image_item_for_frame(
+            SkinTextureId(1),
+            Rect { x: 0.2, y: 0.3, width: 0.4, height: 0.5 },
+            TextureRegion { x: 0.1, y: 0.2, width: 0.3, height: 0.4 },
+            ResolvedSkinFrame { w: 101, h: 53, ..ResolvedSkinFrame::default() },
+            0,
+            BlendMode::Normal,
+            None,
+            false,
+        );
+
+        let SkinRenderItem::Image { uv, .. } = item else { panic!() };
+        assert!(approx_eq(uv.x, 0.1));
+        assert!(approx_eq(uv.width, 0.3));
+        assert!(approx_eq(uv.y, 0.2));
+        assert!(approx_eq(uv.height, 0.4));
+    }
+
+    #[test]
+    fn keylogger_runtime_consumes_sequences_and_builds_nps_and_lane_counts() {
+        let input = SkinRuntimeEvent {
+            sequence: 10,
+            kind: SkinRuntimeEventKind::Input(InputEvent {
+                lane: Lane::Key1,
+                kind: InputKind::Press,
+                time: TimeUs(500_000),
+                source: InputSource::Human,
+                device_kind: InputDeviceKind::Keyboard,
+                scratch_direction: None,
+            }),
+        };
+        let judgement = SkinRuntimeEvent {
+            sequence: 11,
+            kind: SkinRuntimeEventKind::Judgement(bmz_gameplay::judge::model::JudgementEvent {
+                note_id: Some(NoteId(1)),
+                lane: Lane::Key1,
+                judge: Judge::Great,
+                side: TimingSide::Fast,
+                delta: TimeUs(-1_000),
+                time: TimeUs(500_000),
+                affects_score: true,
+            }),
+        };
+        let mut runtime = KeyLoggerRuntime::default();
+        runtime.ingest(&[input.clone(), judgement.clone()], KeyMode::K9, 500_000);
+        runtime.ingest(&[input, judgement], KeyMode::K9, 500_000);
+        let mut state = SkinDrawState::default();
+        runtime.write_state(&mut state, 500);
+
+        assert_eq!(state.keylogger_nps, 1);
+        assert_eq!(state.keylogger_judge_counts[0], [0, 1, 0, 0]);
+        assert_eq!(state.keylogger_fast_slow_counts[0], [0, 1, 0]);
+        assert_eq!(state.keylogger_event_ms[0][0], Some(0));
+        assert!(eval_skin_draw_condition("keylogger_judge(1,1,great)", &state));
+        assert!(eval_skin_draw_condition("keylogger_fastslow(1,1,fast)", &state));
+        assert!(!eval_skin_draw_condition("keylogger_judge(1,1,bad)", &state));
+        let destination: SkinDestinationDef = serde_json::from_str(
+            r#"{"id":"keylogger-note-1","timer_expr":"bmz:keylogger_event:1:1","dst":[]}"#,
+        )
+        .unwrap();
+        assert_eq!(destination_timer_elapsed_ms(&destination, &state), Some(0));
+        assert!(
+            (keylogger_graph_value("bmz:keylogger_graph:judge:1:great", &state).unwrap() - 1.0)
+                .abs()
+                < f32::EPSILON
+        );
+
+        runtime.ingest(&[], KeyMode::K9, 1_500_001);
+        runtime.write_state(&mut state, 1_500);
+        assert_eq!(state.keylogger_nps, 0);
+
+        let next_session_input = SkinRuntimeEvent {
+            sequence: 0,
+            kind: SkinRuntimeEventKind::Input(InputEvent {
+                lane: Lane::Key2,
+                kind: InputKind::Press,
+                time: TimeUs(0),
+                source: InputSource::Human,
+                device_kind: InputDeviceKind::Keyboard,
+                scratch_direction: None,
+            }),
+        };
+        runtime.ingest(&[next_session_input], KeyMode::K9, 0);
+        runtime.write_state(&mut state, 0);
+
+        assert_eq!(state.keylogger_nps, 1);
+        assert_eq!(state.keylogger_judge_counts, [[0; 4]; LANE_COUNT]);
+        assert_eq!(state.keylogger_event_ms[0], [None; 16]);
+        assert_eq!(state.keylogger_event_ms[1][0], Some(0));
+    }
 
     fn judge_region_state(region: usize, ms: i32, image_index: usize) -> JudgeRegionState {
         let mut judge_ms = [None; MAX_JUDGE_REGIONS];
@@ -12703,6 +14625,50 @@ mod tests {
     }
 
     #[test]
+    fn select_document_options_follow_selected_song_text_presence() {
+        let no_document = SkinDrawState {
+            select_screen: true,
+            select_row_kind: SelectRowKind::Song,
+            select_in_library: true,
+            select_has_document: false,
+            ..SkinDrawState::default()
+        };
+        let with_document = SkinDrawState { select_has_document: true, ..no_document.clone() };
+        let folder =
+            SkinDrawState { select_row_kind: SelectRowKind::Folder, ..with_document.clone() };
+
+        assert!(test_skin_op(174, &[], &no_document));
+        assert!(!test_skin_op(175, &[], &no_document));
+        assert!(!test_skin_op(174, &[], &with_document));
+        assert!(test_skin_op(175, &[], &with_document));
+        assert!(!test_skin_op(174, &[], &folder));
+        assert!(!test_skin_op(175, &[], &folder));
+    }
+
+    #[test]
+    fn result_long_note_options_and_index_use_effective_chart_state() {
+        let no_ln = SkinDrawState {
+            result_has_long_notes: Some(false),
+            result_ln_mode_index: Some(0),
+            ..SkinDrawState::default()
+        };
+        assert!(test_skin_op(172, &[], &no_ln));
+        assert!(!test_skin_op(173, &[], &no_ln));
+
+        for (index, expected) in [(0, 0), (1, 1), (2, 2)] {
+            let with_ln = SkinDrawState {
+                result_has_long_notes: Some(true),
+                result_ln_mode_index: Some(index),
+                ..SkinDrawState::default()
+            };
+            assert!(!test_skin_op(172, &[], &with_ln));
+            assert!(test_skin_op(173, &[], &with_ln));
+            assert_eq!(skin_image_index_number(308, &with_ln), Some(expected));
+            assert_eq!(skin_state_event_index(308, &with_ln), expected as i32);
+        }
+    }
+
+    #[test]
     fn difficulty_ops_reflect_chart_difficulty_code() {
         let unknown = SkinDrawState::default();
         let normal = SkinDrawState { difficulty: 2, ..SkinDrawState::default() };
@@ -13050,6 +15016,41 @@ mod tests {
     }
 
     #[test]
+    fn score_save_and_play_mode_ops_are_scene_scoped() {
+        let select = SkinDrawState::default();
+        let normal = SkinDrawState {
+            play_screen: true,
+            score_save_enabled: Some(true),
+            ..SkinDrawState::default()
+        };
+        let replay = SkinDrawState {
+            play_screen: true,
+            replay_playback: true,
+            score_save_enabled: Some(false),
+            ..SkinDrawState::default()
+        };
+        let practice = SkinDrawState {
+            play_screen: true,
+            practice_mode: true,
+            score_save_enabled: Some(false),
+            ..SkinDrawState::default()
+        };
+
+        assert!(!test_skin_op(60, &[], &select));
+        assert!(!test_skin_op(61, &[], &select));
+        assert!(!test_skin_op(82, &[], &select));
+        assert!(test_skin_op(61, &[], &normal));
+        assert!(test_skin_op(82, &[], &normal));
+        assert!(!test_skin_op(84, &[], &normal));
+        assert!(test_skin_op(60, &[], &replay));
+        assert!(!test_skin_op(82, &[], &replay));
+        assert!(test_skin_op(84, &[], &replay));
+        assert!(test_skin_op(60, &[], &practice));
+        assert!(test_skin_op(82, &[], &practice));
+        assert!(test_skin_op(1080, &[], &practice));
+    }
+
+    #[test]
     fn play_asset_and_loading_ops_reflect_skin_state() {
         let unloaded = SkinDrawState { skin_loaded: false, ..SkinDrawState::default() };
         assert!(test_skin_op(80, &[], &unloaded));
@@ -13062,6 +15063,10 @@ mod tests {
         assert!(!test_skin_op(191, &[], &loaded));
         assert!(test_skin_op(194, &[], &loaded));
         assert!(!test_skin_op(195, &[], &loaded));
+
+        let with_stagefile = SkinDrawState { has_stagefile: true, ..SkinDrawState::default() };
+        assert!(!test_skin_op(190, &[], &with_stagefile));
+        assert!(test_skin_op(191, &[], &with_stagefile));
 
         let with_backbmp = SkinDrawState { has_backbmp: true, ..SkinDrawState::default() };
         assert!(!test_skin_op(194, &[], &with_backbmp));
@@ -13092,6 +15097,59 @@ mod tests {
     fn folded_constant_draw_condition_number_zero_is_true() {
         assert!(eval_skin_draw_condition("number(0) >= 0", &SkinDrawState::default()));
         assert!(!eval_skin_draw_condition("number(0) < 0", &SkinDrawState::default()));
+    }
+
+    #[test]
+    fn result_panel_draw_condition_uses_runtime_selection() {
+        let ir = SkinDrawState { result_panel: Some(1), ..Default::default() };
+        let graph = SkinDrawState { result_panel: Some(2), ..Default::default() };
+        assert!(eval_skin_draw_condition("result_panel(1)", &ir));
+        assert!(!eval_skin_draw_condition("result_panel(2)", &ir));
+        assert!(eval_skin_draw_condition("result_panel(0) or result_panel(2)", &graph,));
+    }
+
+    #[test]
+    fn wmii_result_draw_predicates_use_runtime_score_and_nearest_rank() {
+        let near_aa = SkinDrawState { ex_score: 155, total_notes: 100, ..Default::default() };
+        assert!(eval_skin_draw_condition("score_rate_band(6,7)", &near_aa));
+        assert!(!eval_skin_draw_condition("score_rate_band(7,8)", &near_aa));
+        assert!(eval_skin_draw_condition("nearest_rank(AA,minus)", &near_aa));
+        assert!(eval_skin_draw_condition("nearest_rank_sign(minus)", &near_aa));
+        assert!(!eval_skin_draw_condition("nearest_rank(A,plus)", &near_aa));
+
+        let max = SkinDrawState { ex_score: 200, total_notes: 100, ..Default::default() };
+        assert!(eval_skin_draw_condition("score_rate_band(9,10)", &max));
+        assert!(eval_skin_draw_condition("nearest_rank(MAX,plus)", &max));
+    }
+
+    #[test]
+    fn select_score_available_requires_an_actual_score_record() {
+        let folder = SkinDrawState {
+            select_screen: true,
+            select_row_kind: SelectRowKind::Folder,
+            select_is_folder: true,
+            select_in_library: true,
+            select_ex_score: Some(1234),
+            ..SkinDrawState::default()
+        };
+        let zero_score = SkinDrawState {
+            select_screen: true,
+            select_row_kind: SelectRowKind::Song,
+            select_in_library: true,
+            select_ex_score: Some(0),
+            ..SkinDrawState::default()
+        };
+        let out_of_library = SkinDrawState {
+            select_screen: true,
+            select_row_kind: SelectRowKind::Song,
+            select_in_library: false,
+            select_ex_score: Some(1234),
+            ..SkinDrawState::default()
+        };
+
+        assert!(!eval_skin_draw_condition("select_score_available()", &folder));
+        assert!(eval_skin_draw_condition("select_score_available()", &zero_score));
+        assert!(!eval_skin_draw_condition("select_score_available()", &out_of_library));
     }
 
     #[test]
@@ -13199,6 +15257,20 @@ mod tests {
         };
         assert!(test_skin_op(160, &[], &song_7k));
         assert!(!test_skin_op(161, &[], &song_7k));
+        assert!(test_skin_op(SKIN_OPTION_BMZ_KEY_MODE_BASE + 3, &[], &song_7k));
+        assert!(test_skin_op(SKIN_OPTION_BMZ_SINGLE_PLAY, &[], &song_7k));
+        assert!(!test_skin_op(SKIN_OPTION_BMZ_NO_SCRATCH, &[], &song_7k));
+        assert_eq!(skin_state_number(SKIN_REF_BMZ_KEY_MODE, &song_7k), Some(7));
+        assert_eq!(skin_state_number(SKIN_REF_BMZ_ACTIVE_LANE_COUNT, &song_7k), Some(8));
+
+        let folder = SkinDrawState {
+            select_screen: true,
+            select_row_kind: SelectRowKind::Folder,
+            select_chart_key_mode: Some(KeyMode::K7),
+            ..SkinDrawState::default()
+        };
+        assert_eq!(skin_state_number(SKIN_REF_BMZ_KEY_MODE, &folder), None);
+        assert!(!test_skin_op(SKIN_OPTION_BMZ_KEY_MODE_BASE + 3, &[], &folder));
     }
 
     #[test]
@@ -13213,6 +15285,10 @@ mod tests {
 
         let result_14k = SkinDrawState { key_mode: KeyMode::K14, ..result_5k };
         assert!(test_skin_op(162, &[], &result_14k));
+        assert!(test_skin_op(SKIN_OPTION_BMZ_KEY_MODE_LAST, &[], &result_14k));
+        assert!(test_skin_op(SKIN_OPTION_BMZ_DOUBLE_PLAY, &[], &result_14k));
+        assert_eq!(skin_state_event_index(SKIN_REF_BMZ_KEY_MODE, &result_14k), 14);
+        assert_eq!(skin_state_number(SKIN_REF_BMZ_ACTIVE_LANE_COUNT, &result_14k), Some(16));
     }
 
     #[test]
@@ -13221,6 +15297,11 @@ mod tests {
 
         assert!(test_skin_op(162, &[], &play_14k));
         assert!(!test_skin_op(160, &[], &play_14k));
+
+        let play_6k = SkinDrawState { key_mode: KeyMode::K6, ..SkinDrawState::default() };
+        assert!(test_skin_op(SKIN_OPTION_BMZ_KEY_MODE_BASE + 2, &[], &play_6k));
+        assert!(test_skin_op(SKIN_OPTION_BMZ_NO_SCRATCH, &[], &play_6k));
+        assert_eq!(skin_state_number(SKIN_REF_BMZ_KEY_MODE, &play_6k), Some(6));
     }
 
     #[test]
@@ -13407,7 +15488,7 @@ mod tests {
                 select_ex_score: Some(500),
                 ..nearest.clone()
             }),
-            Some("E+56".to_string())
+            Some("E+55".to_string())
         );
         assert_eq!(
             result_grade_diff_label(&SkinDrawState {
@@ -13450,6 +15531,7 @@ mod tests {
                 blend: 0,
                 filter: 0,
                 timer: None,
+                timer_expr: String::new(),
                 loop_time: None,
                 center: 0,
                 offset: 0,
@@ -13474,6 +15556,7 @@ mod tests {
                 timer: None,
                 cycle: 0,
                 align: 0,
+                judge_align: None,
                 digit: 0,
                 padding: 0,
                 zeropadding: 0,
@@ -14717,6 +16800,19 @@ mod tests {
                 ..Default::default()
             }
         ));
+        let ir_wait_draw = "timer(173) == timer_off and timer(174) == timer_off";
+        assert!(eval_skin_draw_condition(ir_wait_draw, &SkinDrawState::default()));
+        assert!(!eval_skin_draw_condition(
+            ir_wait_draw,
+            &SkinDrawState {
+                ir_ranking: crate::scene::ResultIrSnapshot {
+                    connect_begin_ms: Some(500),
+                    connect_success_ms: Some(100),
+                    ..Default::default()
+                },
+                ..Default::default()
+            }
+        ));
     }
 
     #[test]
@@ -14733,6 +16829,46 @@ mod tests {
             "gauge_type() == 4 or gauge_type() == 5",
             &SkinDrawState { gauge_type: 2, ..Default::default() }
         ));
+    }
+
+    #[test]
+    fn peaceful_gauge_value_overlay_selects_exactly_one_integer_width() {
+        for (state, mode, expected_digits) in [
+            (SkinDrawState { gauge: 7.5, gauge_max: 120.0, ..Default::default() }, "percent", 1),
+            (SkinDrawState { gauge: 78.75, gauge_max: 120.0, ..Default::default() }, "percent", 2),
+            (SkinDrawState { gauge: 120.0, gauge_max: 120.0, ..Default::default() }, "percent", 3),
+            (SkinDrawState { gauge: 7.5, gauge_max: 120.0, ..Default::default() }, "amount", 1),
+            (SkinDrawState { gauge: 78.75, gauge_max: 120.0, ..Default::default() }, "amount", 2),
+            (SkinDrawState { gauge: 120.0, gauge_max: 120.0, ..Default::default() }, "amount", 3),
+        ] {
+            let visible = (1..=3)
+                .filter(|digits| {
+                    eval_skin_draw_condition(
+                        &format!("gauge_value_digits({mode},{digits})"),
+                        &state,
+                    )
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(visible, vec![expected_digits]);
+        }
+    }
+
+    #[test]
+    fn peaceful_gauge_lead_glow_uses_group_part_border_and_profile() {
+        let pms =
+            SkinDrawState { gauge: 60.0, gauge_max: 120.0, gauge_type: 2, ..Default::default() };
+        assert!(eval_skin_draw_condition("gauge_lead_glow(groove,12,below)", &pms));
+        assert!(!eval_skin_draw_condition("gauge_lead_glow(groove,12,above)", &pms));
+        assert!(!eval_skin_draw_condition("gauge_lead_glow(easy,12,below)", &pms));
+
+        let sevenkeys =
+            SkinDrawState { gauge: 80.0, gauge_max: 100.0, gauge_type: 2, ..Default::default() };
+        assert!(eval_skin_draw_condition("gauge_lead_glow(groove,19,below)", &sevenkeys));
+        assert!(!eval_skin_draw_condition("gauge_lead_glow(groove,19,above)", &sevenkeys));
+
+        let class =
+            SkinDrawState { gauge: 50.0, gauge_max: 100.0, gauge_type: 6, ..Default::default() };
+        assert!(eval_skin_draw_condition("gauge_lead_glow(hard,12,above)", &class));
     }
 
     #[test]
@@ -14911,6 +17047,55 @@ mod tests {
         assert!(
             matches!(items[0], SkinRenderItem::Image { rect: Rect { x, .. }, .. } if approx_eq(x, 0.0))
         );
+    }
+
+    #[test]
+    fn skin_document_applies_declared_14k_turntable_offsets_with_beatoraja_rotation() {
+        let document: SkinDocument = serde_json::from_str(
+            r#"
+            {
+                "type": 2,
+                "w": 100,
+                "h": 100,
+                "source": [{ "id": "src", "path": "a.png" }],
+                "image": [{ "id": "turntable", "src": "src", "w": 10, "h": 10 }],
+                "destination": [
+                    {
+                        "id": "turntable",
+                        "offset": 1,
+                        "dst": [{ "x": 0, "y": 0, "w": 10, "h": 10 }]
+                    },
+                    {
+                        "id": "turntable",
+                        "offset": 1,
+                        "dst": [{ "x": 20, "y": 0, "w": 10, "h": 10 }]
+                    },
+                    {
+                        "id": "turntable",
+                        "offset": 2,
+                        "dst": [{ "x": 40, "y": 0, "w": 10, "h": 10 }]
+                    }
+                ]
+            }
+            "#,
+        )
+        .unwrap();
+        let mut skin_offsets = SkinOffsetValues::default();
+        skin_offsets.set(1, crate::skin_offset::SkinOffsetValue { r: 30, ..Default::default() });
+        skin_offsets.set(2, crate::skin_offset::SkinOffsetValue { r: 70, ..Default::default() });
+        let state =
+            SkinDrawState { key_mode: KeyMode::K14, skin_offsets, ..SkinDrawState::default() };
+
+        let angles = document
+            .static_image_render_items(&mock_source("src", 10.0, 10.0), &state)
+            .iter()
+            .map(|item| match item {
+                SkinRenderItem::RotatedImage { angle_deg, .. } => *angle_deg as i32,
+                _ => panic!("turntable should be rotated"),
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(angles, vec![-30, -30, -70]);
     }
 
     #[test]
@@ -15181,6 +17366,7 @@ mod tests {
                 Rect { x: 0.0, y: 0.0, width: 0.1, height: 0.1 },
                 LongNoteMode::Ln,
                 LongBodyState::Inactive,
+                &SkinDrawState::default(),
                 &sources,
             )
             .unwrap();
@@ -15234,6 +17420,7 @@ mod tests {
                 rect,
                 LongNoteMode::Ln,
                 LongBodyState::Processing,
+                &SkinDrawState::default(),
                 &sources,
             )
             .unwrap();
@@ -15244,6 +17431,7 @@ mod tests {
                 rect,
                 LongNoteMode::Ln,
                 LongBodyState::Inactive,
+                &SkinDrawState::default(),
                 &sources,
             )
             .unwrap();
@@ -15252,6 +17440,71 @@ mod tests {
         assert!(matches!(
             pressed,
             SkinRenderItem::Image { uv: TextureRegion { x, .. }, .. } if approx_eq(x, 0.5)
+        ));
+        assert!(matches!(
+            unpressed,
+            SkinRenderItem::Image { uv: TextureRegion { x, .. }, .. } if approx_eq(x, 0.2)
+        ));
+    }
+
+    #[test]
+    fn skin_document_animates_csv_ln_body_only_while_processing() {
+        let document: SkinDocument = serde_json::from_str(
+            r#"
+            {
+                "type": 0,
+                "source": [{ "id": 1, "path": "notes.png" }],
+                "image": [
+                    { "id": "active", "src": 1, "x": 0, "y": 0, "w": 20, "h": 10, "divx": 2, "cycle": 100, "timer": 70 },
+                    { "id": "inactive", "src": 1, "x": 20, "y": 0, "w": 10, "h": 10 }
+                ],
+                "note": {
+                    "id": "notes",
+                    "lnbody": ["inactive", "inactive", "inactive", "inactive", "inactive", "inactive", "inactive", "inactive"],
+                    "lnbodyActive": ["active", "active", "active", "active", "active", "active", "active", "active"]
+                }
+            }
+            "#,
+        )
+        .unwrap();
+        let sources = HashMap::from([(
+            "1".to_string(),
+            SkinDocumentTexture {
+                source_id: "1".to_string(),
+                texture: SkinTextureId(42),
+                source_size: SkinImageSize { width: 100.0, height: 10.0 },
+            },
+        )]);
+        let rect = Rect { x: 0.0, y: 0.0, width: 0.1, height: 0.1 };
+        let mut draw_state = SkinDrawState::default();
+        draw_state.hold_ms[Lane::Scratch.index()] = Some(50);
+
+        let pressed = document
+            .note_long_body_render_item(
+                Lane::Scratch,
+                KeyMode::K7,
+                rect,
+                LongNoteMode::Ln,
+                LongBodyState::Processing,
+                &draw_state,
+                &sources,
+            )
+            .unwrap();
+        let unpressed = document
+            .note_long_body_render_item(
+                Lane::Scratch,
+                KeyMode::K7,
+                rect,
+                LongNoteMode::Ln,
+                LongBodyState::Inactive,
+                &draw_state,
+                &sources,
+            )
+            .unwrap();
+
+        assert!(matches!(
+            pressed,
+            SkinRenderItem::Image { uv: TextureRegion { x, .. }, .. } if approx_eq(x, 0.1)
         ));
         assert!(matches!(
             unpressed,
@@ -15303,6 +17556,7 @@ mod tests {
                     rect,
                     LongNoteMode::Hcn,
                     state,
+                    &SkinDrawState::default(),
                     &sources,
                 )
                 .unwrap();
@@ -15394,6 +17648,7 @@ mod tests {
                 ref_id: 0,
                 click: 0,
                 act: None,
+                clickable: None,
             })
             .collect();
         let sources = HashMap::from([(
@@ -15469,6 +17724,7 @@ mod tests {
                 ref_id: 0,
                 click: 0,
                 act: None,
+                clickable: None,
             })
             .collect();
         let sources = HashMap::from([(
@@ -15617,6 +17873,7 @@ mod tests {
                 ref_id: 0,
                 click: 0,
                 act: None,
+                clickable: None,
             })
             .collect();
         let sources = HashMap::from([(
@@ -17147,7 +19404,7 @@ mod tests {
     }
 
     #[test]
-    fn judge_timing_value_digit_counts_numeric_digits_after_sign() {
+    fn judge_timing_value_omits_sign_when_numeric_digits_fill_all_cells() {
         let document: SkinDocument = serde_json::from_str(
             r#"
             {
@@ -17172,10 +19429,9 @@ mod tests {
             })
             .collect();
 
-        assert_eq!(digit_uvs.len(), 3);
-        assert!(approx_eq(digit_uvs[0], 11.0 / 12.0), "first cell should be plus sign");
-        assert!(approx_eq(digit_uvs[1], 1.0 / 12.0), "second cell should be tens digit");
-        assert!(approx_eq(digit_uvs[2], 2.0 / 12.0), "third cell should be ones digit");
+        assert_eq!(digit_uvs.len(), 2);
+        assert!(approx_eq(digit_uvs[0], 1.0 / 12.0), "first cell should be tens digit");
+        assert!(approx_eq(digit_uvs[1], 2.0 / 12.0), "second cell should be ones digit");
     }
 
     #[test]
@@ -17190,6 +19446,19 @@ mod tests {
         let (state, _) = document.select_draw_state(&snapshot, None);
 
         assert_eq!(skin_state_number(12, &state), Some(-12));
+    }
+
+    #[test]
+    fn select_draw_state_uses_application_operating_time() {
+        let document: SkinDocument = serde_json::from_str(r#"{ "type": 5 }"#).unwrap();
+        let snapshot =
+            SelectSnapshot { operating_time_ms: 90_061_234, ..SelectSnapshot::default() };
+
+        let (state, _) = document.select_draw_state(&snapshot, None);
+
+        assert_eq!(skin_state_number(27, &state), Some(25));
+        assert_eq!(skin_state_number(28, &state), Some(1));
+        assert_eq!(skin_state_number(29, &state), Some(1));
     }
 
     #[test]
@@ -17224,6 +19493,7 @@ mod tests {
             arrange_2p: "SPIRAL".to_string(),
             double_option: "BATTLE AS".to_string(),
             hs_fix: "MAIN BPM".to_string(),
+            hispeed_auto_adjust: true,
             ..SelectSnapshot::default()
         };
 
@@ -17233,6 +19503,7 @@ mod tests {
         assert_eq!(skin_state_number(43, &state), Some(5));
         assert_eq!(skin_state_number(54, &state), Some(3));
         assert_eq!(skin_state_number(55, &state), Some(3));
+        assert_eq!(skin_state_number(342, &state), Some(1));
     }
 
     #[test]
@@ -17365,6 +19636,86 @@ mod tests {
         };
 
         let items = context.select_document_items(&snapshot);
+
+        assert!(items.iter().any(|item| matches!(
+            item,
+            SkinRenderItem::Image {
+                texture,
+                source_size: Some(SkinImageSize { width: 400.0, height: 200.0 }),
+                ..
+            } if *texture == SkinTextureId(SELECT_STAGE_TEXTURE.0)
+        )));
+    }
+
+    #[test]
+    fn play_destination_negative_image_id_renders_runtime_stagefile_source() {
+        let document: SkinDocument = serde_json::from_str(
+            r#"
+            {
+                "type": 0,
+                "w": 100,
+                "h": 100,
+                "destination": [
+                    { "id": "-100", "op": [191], "dst": [{ "x": 0, "y": 0, "w": 40, "h": 20 }] }
+                ]
+            }
+            "#,
+        )
+        .unwrap();
+        let context =
+            SkinContext::from_manifest_and_document(default_skin_manifest(), document, []);
+        let state = SkinDrawState {
+            has_stagefile: true,
+            stagefile_image_size: Some(SkinImageSize { width: 400.0, height: 200.0 }),
+            ..SkinDrawState::default()
+        };
+
+        let (behind, front, overlay) = context.static_document_play_items_split_for_state_and_text(
+            &state,
+            &SkinTextState::default(),
+            &[],
+            &[],
+        );
+
+        assert!(behind.iter().chain(&front).chain(&overlay).any(|item| matches!(
+            item,
+            SkinRenderItem::Image {
+                texture,
+                source_size: Some(SkinImageSize { width: 400.0, height: 200.0 }),
+                ..
+            } if *texture == SkinTextureId(SELECT_STAGE_TEXTURE.0)
+        )));
+    }
+
+    #[test]
+    fn result_destination_negative_image_id_renders_runtime_stagefile_source() {
+        let document: SkinDocument = serde_json::from_str(
+            r#"
+            {
+                "type": 7,
+                "w": 100,
+                "h": 100,
+                "destination": [
+                    { "id": "-100", "op": [191], "dst": [{ "x": 0, "y": 0, "w": 40, "h": 20 }] }
+                ]
+            }
+            "#,
+        )
+        .unwrap();
+        let context =
+            SkinContext::from_manifest_and_document(default_skin_manifest(), document, []);
+        let state = SkinDrawState {
+            has_stagefile: true,
+            stagefile_image_size: Some(SkinImageSize { width: 400.0, height: 200.0 }),
+            result_failed: Some(false),
+            ..SkinDrawState::default()
+        };
+
+        let items = context.static_document_items_for_result_state_and_text(
+            &Arc::new(crate::snapshot::ResultGraphSnapshot::default()),
+            &state,
+            &SkinTextState::default(),
+        );
 
         assert!(items.iter().any(|item| matches!(
             item,
@@ -17524,6 +19875,53 @@ mod tests {
     }
 
     #[test]
+    fn result_click_hit_uses_runtime_panel_visibility() {
+        let document: SkinDocument = serde_json::from_str(
+            r#"
+            {
+                "type": 7,
+                "w": 100,
+                "h": 100,
+                "image": [
+                    { "id": "graph", "src": 1, "x": 0, "y": 0, "w": 10, "h": 10, "act": -10002 },
+                    { "id": "ir", "src": 1, "x": 0, "y": 0, "w": 10, "h": 10, "act": -10001 },
+                    { "id": "favorite", "src": 1, "x": 0, "y": 0, "w": 10, "h": 10, "divy": 3, "ref": 90, "act": 90 }
+                ],
+                "destination": [
+                    { "id": "graph", "draw": "result_panel(1)", "dst": [{ "x": 10, "y": 20, "w": 30, "h": 10 }] },
+                    { "id": "ir", "draw": "result_panel(2)", "dst": [{ "x": 50, "y": 20, "w": 30, "h": 10 }] },
+                    { "id": "favorite", "dst": [{ "x": 10, "y": 40, "w": 30, "h": 10 }] }
+                ]
+            }
+            "#,
+        )
+        .unwrap();
+
+        let ir_panel = SkinDrawState { result_panel: Some(1), ..SkinDrawState::default() };
+        let graph_hit = document.result_click_hit(&ir_panel, 0.2, 0.75).unwrap();
+        assert_eq!(
+            graph_hit.target,
+            SkinClickTarget::Event { event_id: SKIN_EVENT_RESULT_PANEL_GRAPH, click: 0 }
+        );
+        assert!(document.result_click_hit(&ir_panel, 0.65, 0.75).is_none());
+
+        let graph_panel = SkinDrawState {
+            result_panel: Some(2),
+            result_favorite_chart: Some(false),
+            ..SkinDrawState::default()
+        };
+        let ir_hit = document.result_click_hit(&graph_panel, 0.65, 0.75).unwrap();
+        assert_eq!(
+            ir_hit.target,
+            SkinClickTarget::Event { event_id: SKIN_EVENT_RESULT_PANEL_IR, click: 0 }
+        );
+        assert!(document.result_click_hit(&graph_panel, 0.2, 0.75).is_none());
+
+        let favorite_hit = document.result_click_hit(&graph_panel, 0.2, 0.55).unwrap();
+        assert_eq!(favorite_hit.target, SkinClickTarget::Event { event_id: 90, click: 0 });
+    }
+
+    #[test]
     fn select_mouse_rect_gates_render_and_click_hits() {
         let document: SkinDocument = serde_json::from_str(
             r#"
@@ -17603,11 +20001,12 @@ mod tests {
         .unwrap();
         let snapshot = SelectSnapshot::default();
 
+        // angle=1 destination x=10 range=50 → value 0.5 at skin x=35 (norm x=0.35)
         let hit = document
             .select_slider_hit(
                 &snapshot,
                 &crate::select_settings_dest::SelectSettingsDestIndex::default(),
-                0.40,
+                0.35,
                 0.775,
             )
             .unwrap();
@@ -17624,6 +20023,42 @@ mod tests {
                 )
                 .is_none()
         );
+    }
+
+    #[test]
+    fn result_ir_slider_hit_and_rate_use_ranking_scroll_position() {
+        let document: SkinDocument = serde_json::from_str(
+            r#"
+            {
+                "type": 7,
+                "w": 100,
+                "h": 100,
+                "slider": [
+                    { "id": "ir-scroll", "src": 1, "x": 0, "y": 0, "w": 10, "h": 5, "angle": 2, "range": 50, "type": 8, "changeable": true }
+                ],
+                "destination": [
+                    { "id": "ir-scroll", "draw": "result_panel(1)", "dst": [{ "x": 10, "y": 70, "w": 10, "h": 5 }] }
+                ]
+            }
+            "#,
+        )
+        .unwrap();
+        let state = SkinDrawState {
+            result_panel: Some(1),
+            ir_ranking: crate::scene::ResultIrSnapshot {
+                scroll_offset: 5,
+                scroll_max: 10,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        assert!(approx_eq(skin_state_float_number(8, &state).unwrap(), 0.5));
+        assert!(approx_eq(skin_slider_progress_by_type(8, &state).unwrap(), 0.5));
+        // angle=2 destination y=70 range=50 → value 0.5 at skin y=45 (norm y=0.55)
+        let hit = document.result_slider_hit(&state, 0.15, 0.55).unwrap();
+        assert_eq!(hit.slider_type, 8);
+        assert!(approx_eq(hit.value, 0.5));
     }
 
     #[test]
@@ -17646,27 +20081,87 @@ mod tests {
         .unwrap();
         let snapshot = SelectSnapshot::default();
 
+        // beatoraja: value=(region.y - mouse_y)/range. Mid = skin y 45 → norm 0.55.
         let hit = document
             .select_slider_hit(
                 &snapshot,
                 &crate::select_settings_dest::SelectSettingsDestIndex::default(),
                 0.15,
-                0.525,
+                0.55,
             )
             .unwrap();
 
         assert_eq!(hit.slider_type, 1);
         assert!(approx_eq(hit.value, 0.5));
+        // Top of track (value 0) is destination y itself → skin y 70 → norm 0.30.
         let top_hit = document
             .select_slider_hit(
                 &snapshot,
                 &crate::select_settings_dest::SelectSettingsDestIndex::default(),
                 0.15,
-                0.275,
+                0.30,
             )
             .unwrap();
         assert_eq!(top_hit.slider_type, 1);
         assert!(approx_eq(top_hit.value, 0.0));
+    }
+
+    #[test]
+    fn select_slider_hit_matches_mz_select_songlist_scroll_collision() {
+        // mz-select default_songlistscroll2 collision:
+        // parts_position=(1888,270), dst x=1864 y=790 w=64 h=64, angle=2 range=500
+        let document: SkinDocument = serde_json::from_str(
+            r#"
+            {
+                "type": 5,
+                "w": 1920,
+                "h": 1080,
+                "slider": [
+                    {
+                        "id": "default_songlistscroll2_collision",
+                        "src": 1,
+                        "x": 80,
+                        "y": 0,
+                        "w": 64,
+                        "h": 64,
+                        "angle": 2,
+                        "range": 500,
+                        "type": 1
+                    }
+                ],
+                "destination": [
+                    {
+                        "id": "default_songlistscroll2_collision",
+                        "dst": [{ "x": 1864, "y": 790, "w": 64, "h": 64 }]
+                    }
+                ]
+            }
+            "#,
+        )
+        .unwrap();
+        let snapshot = SelectSnapshot::default();
+        let settings = crate::select_settings_dest::SelectSettingsDestIndex::default();
+        let x = (1864.0 + 32.0) / 1920.0;
+
+        let top =
+            document.select_slider_hit(&snapshot, &settings, x, 1.0 - 790.0 / 1080.0).unwrap();
+        assert_eq!(top.slider_type, 1);
+        assert!(approx_eq(top.value, 0.0));
+
+        let mid =
+            document.select_slider_hit(&snapshot, &settings, x, 1.0 - 540.0 / 1080.0).unwrap();
+        assert_eq!(mid.slider_type, 1);
+        assert!(approx_eq(mid.value, 0.5));
+
+        let bottom =
+            document.select_slider_hit(&snapshot, &settings, x, 1.0 - 290.0 / 1080.0).unwrap();
+        assert_eq!(bottom.slider_type, 1);
+        assert!(approx_eq(bottom.value, 1.0));
+
+        // Clicks above destination y must miss (beatoraja uses region.y as the upper edge).
+        assert!(
+            document.select_slider_hit(&snapshot, &settings, x, 1.0 - 822.0 / 1080.0).is_none()
+        );
     }
 
     #[test]
@@ -17742,8 +20237,18 @@ mod tests {
         )
         .unwrap();
         let sources = mock_source("1", 100.0, 100.0);
-        let snapshot =
-            SelectSnapshot { time: TimeUs(100_000), chart_count: 1, ..SelectSnapshot::default() };
+        let snapshot = SelectSnapshot {
+            time: TimeUs(100_000),
+            chart_count: 1,
+            rows: vec![SelectRowSnapshot {
+                index: 0,
+                is_folder: true,
+                kind: SelectRowKind::Folder,
+                folder_lamp_counts: [1; 11],
+                ..SelectRowSnapshot::default()
+            }],
+            ..SelectSnapshot::default()
+        };
 
         assert!(document.select_render_items(&sources, &snapshot).is_empty());
 
@@ -17753,6 +20258,7 @@ mod tests {
             &snapshot,
             Some(&mut runtime),
             &crate::select_settings_dest::SelectSettingsDestIndex::default(),
+            None,
         );
 
         assert_eq!(items.len(), 1);
@@ -18591,6 +21097,7 @@ mod tests {
             ref_id: 0,
             click: 0,
             act: None,
+            clickable: None,
         };
 
         let uv =
@@ -18799,6 +21306,51 @@ mod tests {
             &SkinDrawState { offset_lift_px: 0, ..SkinDrawState::default() },
         );
         assert!(items.is_empty());
+    }
+
+    #[test]
+    fn lift_cover_schema_applies_lift_offset_once() {
+        let document: SkinDocument = serde_json::from_str(
+            r#"
+            {
+                "type": 0,
+                "w": 720,
+                "h": 720,
+                "source": [{ "id": 12, "path": "lift.png" }],
+                "liftCover": [
+                    { "id": "lift", "src": 12, "x": 0, "y": 0, "w": 431, "h": 723, "disapearLine": 357 }
+                ],
+                "destination": [
+                    { "id": "lift", "dst": [{ "x": 20, "y": -366, "w": 431, "h": 723 }] }
+                ]
+            }
+            "#,
+        )
+        .unwrap();
+        let sources = HashMap::from([(
+            "12".to_string(),
+            SkinDocumentTexture {
+                source_id: "12".to_string(),
+                texture: SkinTextureId(42),
+                source_size: SkinImageSize { width: 431.0, height: 723.0 },
+            },
+        )]);
+
+        let hidden = document.static_image_render_items(
+            &sources,
+            &SkinDrawState { offset_lift_px: 0, ..SkinDrawState::default() },
+        );
+        assert!(hidden.is_empty());
+
+        let lifted = document.static_image_render_items(
+            &sources,
+            &SkinDrawState { offset_lift_px: 200, ..SkinDrawState::default() },
+        );
+        let SkinRenderItem::Image { rect, uv, .. } = &lifted[0] else {
+            panic!("expected lift cover image");
+        };
+        assert!(approx_eq(rect.height, 200.0 / 720.0));
+        assert!(approx_eq(uv.height, 200.0 / 723.0));
     }
 
     #[test]
@@ -19037,8 +21589,8 @@ mod tests {
         assert_eq!(skin_state_number(184, &state), Some(50));
         assert_eq!(skin_state_number(400, &state), Some(1));
         assert_eq!(skin_state_number(420, &state), Some(2));
-        assert_eq!(skin_state_number(423, &state), Some(60));
-        assert_eq!(skin_state_number(424, &state), Some(64));
+        assert_eq!(skin_state_number(423, &state), Some(80));
+        assert_eq!(skin_state_number(424, &state), Some(85));
         assert_eq!(skin_state_number(425, &state), Some(7));
         assert_eq!(skin_state_number(426, &state), Some(5));
         assert_eq!(skin_state_number(427, &state), Some(9));
@@ -19080,6 +21632,7 @@ mod tests {
                 slow_poor: 11,
                 fast_empty_poor: 12,
                 slow_empty_poor: 13,
+                daily: Default::default(),
             },
             ..SkinDrawState::default()
         };
@@ -19098,6 +21651,114 @@ mod tests {
         assert_eq!(skin_state_number(333, &state), Some(44));
         assert_eq!(skin_state_number(77, &state), Some(42));
         assert_eq!(skin_state_number(78, &state), Some(31));
+    }
+
+    #[test]
+    fn compatible_daily_statistics_use_skin_specific_note_definitions() {
+        let daily = DailyPlayerStatsSnapshot {
+            play_count: 5,
+            clear_count: 4,
+            pgreat: 50,
+            great: 25,
+            good: 10,
+            bad: 5,
+            poor: 3,
+            empty_poor: 2,
+            score_update_count: 3,
+            clear_update_count: 2,
+            miss_count_update_count: 1,
+            recent_titles: std::array::from_fn(|index| format!("Recent {}", index + 1)),
+            ..Default::default()
+        };
+        let state = SkinDrawState {
+            player_stats: PlayerStatsSnapshot { daily, ..PlayerStatsSnapshot::default() },
+            ..SkinDrawState::default()
+        };
+
+        let million_value = SkinValueDef {
+            id: "Number_Todayplayednotes".to_string(),
+            value_expr: "1".to_string(),
+            ..SkinValueDef::default()
+        };
+        assert_eq!(skin_value_number(&million_value, &state), Some(95));
+        assert_eq!(skin_state_number(1930, &state), Some(5));
+        assert_eq!(skin_state_number(1938, &state), Some(90));
+        assert_eq!(skin_state_number(1939, &state), Some(95));
+        assert_eq!(skin_state_number(1940, &state), Some(125));
+        assert_eq!(skin_state_number(1941, &state), Some(180));
+        assert_eq!(skin_state_number(1942, &state), Some(6944));
+        assert_eq!(skin_state_number(1943, &state), Some(2));
+        assert_eq!(skin_state_number(1944, &state), Some(3));
+        assert_eq!(skin_state_number(1945, &state), Some(2));
+        assert_eq!(skin_state_number(1946, &state), Some(1));
+
+        let text = |id: &str| SkinTextDef { id: id.to_string(), ..SkinTextDef::default() };
+        let text_state = SkinTextState::default();
+        assert_eq!(
+            skin_state_text_with_draw_state(
+                &text("defaultNotesProcessingCounter_notes"),
+                Some(&state),
+                &text_state,
+            ),
+            "90"
+        );
+        assert_eq!(
+            skin_state_text_with_draw_state(
+                &text("defaultNotesProcessingCounter_pg"),
+                Some(&state),
+                &text_state,
+            ),
+            "50  (55.56%)"
+        );
+        assert_eq!(
+            skin_state_text_with_draw_state(
+                &text("defaultNotesProcessingCounter_cp"),
+                Some(&state),
+                &text_state,
+            ),
+            "4/5"
+        );
+        assert_eq!(
+            skin_state_text_with_draw_state(
+                &text("defaultNotesProcessingCounter_rank"),
+                Some(&state),
+                &text_state,
+            ),
+            "A"
+        );
+        assert_eq!(
+            skin_state_text_with_draw_state(
+                &text("defaultNotesProcessingCounter_rate"),
+                Some(&state),
+                &text_state,
+            ),
+            "69.44"
+        );
+        let generic_rank = SkinTextDef { ref_id: 1943, ..Default::default() };
+        let generic_recent = SkinTextDef { ref_id: 1950, ..Default::default() };
+        assert_eq!(skin_state_text_with_draw_state(&generic_rank, Some(&state), &text_state), "A");
+        assert_eq!(
+            skin_state_text_with_draw_state(&generic_recent, Some(&state), &text_state),
+            "Recent 1"
+        );
+    }
+
+    #[test]
+    fn course_stage_result_refs_map_fixed_slots() {
+        let mut course_result = CourseResultSkinSnapshot { stage_count: 2, ..Default::default() };
+        course_result.stages[1] = crate::scene::CourseStageResultSkinSnapshot {
+            ex_score: 200,
+            gauge: 42.9,
+            bp: 17,
+            rate_basis_points: 8_333,
+        };
+        let state = SkinDrawState { course_result, ..Default::default() };
+
+        assert_eq!(skin_state_number(SKIN_REF_BMZ_COURSE_STAGE_COUNT, &state), Some(2));
+        assert_eq!(skin_state_number(SKIN_REF_BMZ_COURSE_STAGE_EX_BASE + 1, &state), Some(200));
+        assert_eq!(skin_state_number(SKIN_REF_BMZ_COURSE_STAGE_GAUGE_BASE + 1, &state), Some(42));
+        assert_eq!(skin_state_number(SKIN_REF_BMZ_COURSE_STAGE_BP_BASE + 1, &state), Some(17));
+        assert_eq!(skin_state_number(SKIN_REF_BMZ_COURSE_STAGE_RATE_BASE + 1, &state), Some(8_333));
     }
 
     #[test]
@@ -19214,34 +21875,56 @@ mod tests {
     #[test]
     fn display_signed_number_digits_uses_sign_cell_and_row_offset() {
         // divx=12, divy=2 のレイアウト想定
-        // 正数 +12 (max_digits=5): [sign+(11), blank(10 or 0), blank, 1, 2]
-        // 実装は内側のみ zero_pad、行0
-        let positive = display_signed_number_digits(12, 5, true, 12);
-        assert_eq!(positive.first(), Some(&11)); // sign cell
-        assert_eq!(positive.last(), Some(&2));
+        // beatoraja の digit=5 は符号を含むため、数値部分は4枠。
+        let positive = display_signed_number_digits(12, 5, NumberPadding::Zero, 12);
+        assert_eq!(positive, vec![11, 0, 0, 1, 2]);
         assert!(positive.iter().all(|&d| d < 12), "positive digits should be in row 0");
 
         // 負数 -12 (max_digits=5): row 1 (offset=12)
-        let negative = display_signed_number_digits(-12, 5, true, 12);
-        assert_eq!(negative.first(), Some(&(11 + 12))); // sign cell row 1
-        assert_eq!(negative.last(), Some(&(2 + 12)));
+        let negative = display_signed_number_digits(-12, 5, NumberPadding::Zero, 12);
+        assert_eq!(negative, vec![23, 12, 12, 13, 14]);
         assert!(negative.iter().all(|&d| d >= 12), "negative digits should be in row 1");
 
         // 0 は正側
-        let zero = display_signed_number_digits(0, 5, true, 12);
-        assert_eq!(zero.first(), Some(&11));
+        let zero = display_signed_number_digits(0, 5, NumberPadding::Zero, 12);
+        assert_eq!(zero, vec![11, 0, 0, 0, 0]);
         assert!(zero.iter().all(|&d| d < 12));
 
+        // WMII IR差分: digit=5, zeropadding=4 は符号1枠 + 数値4枠。
+        assert_eq!(
+            display_signed_number_digits(2284, 5, NumberPadding::Zero, 12),
+            vec![11, 2, 2, 8, 4]
+        );
+        assert_eq!(
+            display_signed_number_digits(-9, 5, NumberPadding::Zero, 12),
+            vec![23, 12, 12, 12, 21]
+        );
+
+        // LR2の符号付き数値は省略されたzeropaddingを2として扱い、符号を先頭に固定する。
+        assert_eq!(display_signed_number_digits(9, 3, NumberPadding::Blank, 12), vec![11, 10, 9]);
+        assert_eq!(display_signed_number_digits(-9, 3, NumberPadding::Blank, 12), vec![23, 22, 21]);
+        assert_eq!(display_signed_number_digits(13, 3, NumberPadding::Blank, 12), vec![11, 1, 3]);
+        assert_eq!(
+            display_signed_number_digits(-13, 3, NumberPadding::Blank, 12),
+            vec![23, 13, 15]
+        );
+
+        // ゼロ埋めなしで全枠が数値に埋まる場合、beatoraja同様に符号枠は出ない。
+        assert_eq!(
+            display_signed_number_digits(12_345, 5, NumberPadding::None, 12),
+            vec![1, 2, 3, 4, 5]
+        );
+
         // NUMBER_DIFF_NEXTRANK (154) も同じ符号セル付き mimage レイアウトを使う。
-        assert_eq!(display_signed_number_digits(-34, 4, false, 12), vec![23, 15, 16]);
+        assert_eq!(display_signed_number_digits(-34, 4, NumberPadding::None, 12), vec![23, 15, 16]);
         assert!(ref_id_is_signed(154));
-        assert_eq!(display_signed_number_digits(34, 4, false, 12), vec![11, 3, 4]);
-        assert_eq!(display_signed_number_digits(0, 4, false, 12), vec![11, 0]);
+        assert_eq!(display_signed_number_digits(34, 4, NumberPadding::None, 12), vec![11, 3, 4]);
+        assert_eq!(display_signed_number_digits(0, 4, NumberPadding::None, 12), vec![11, 0]);
         assert_eq!(
             display_signed_number_digits_with_row_order(
                 -34,
                 4,
-                false,
+                NumberPadding::None,
                 12,
                 SignedNumberRowOrder::NegativeFirst
             ),
@@ -19251,7 +21934,7 @@ mod tests {
             display_signed_number_digits_with_row_order(
                 0,
                 4,
-                false,
+                NumberPadding::None,
                 12,
                 SignedNumberRowOrder::NegativeFirst
             ),
@@ -19270,6 +21953,7 @@ mod tests {
             timer: None,
             cycle: 0,
             align: 0,
+            judge_align: None,
             digit: 5,
             padding: 0,
             zeropadding: 1,
@@ -19281,8 +21965,11 @@ mod tests {
         };
         let score_diff_padding = number_padding(&score_diff_value);
         assert!(score_diff_padding.is_zero_padding());
-        assert!(!signed_value_zero_pad(&score_diff_value, score_diff_padding));
-        assert_eq!(display_signed_number_digits(16, 5, false, 12), vec![11, 1, 6]);
+        assert_eq!(
+            signed_value_padding(&score_diff_value, score_diff_padding),
+            NumberPadding::None
+        );
+        assert_eq!(display_signed_number_digits(16, 5, NumberPadding::None, 12), vec![11, 1, 6]);
 
         let select_detail =
             SkinDrawState { select_screen: true, select_option_panel: 3, ..Default::default() };
@@ -19342,13 +22029,15 @@ mod tests {
             select_clear_index: 5,
             result_failed: Some(false),
             result_arrange_index: 9,
+            result_arrange_2p_index: 1,
             average_timing_ms: Some(-12.34),
+            average_duration_us: Some(345_670),
             stddev_timing_ms: Some(56.78),
             ..SkinDrawState::default()
         };
 
         assert_eq!(skin_state_number(42, &state), Some(9));
-        assert_eq!(skin_state_number(43, &state), Some(9));
+        assert_eq!(skin_state_number(43, &state), Some(1));
         // 符号付き差分
         assert_eq!(skin_state_number(170, &state), Some(1800));
         assert_eq!(skin_state_number(121, &state), Some(1900));
@@ -19364,14 +22053,18 @@ mod tests {
         assert_eq!(skin_state_number(152, &state), Some(1888 - 1800));
         assert_eq!(skin_state_number(172, &state), Some(1888 - 1800));
         assert_eq!(skin_state_number(153, &state), Some(1888 - 1900));
-        assert_eq!(skin_state_number(173, &state), Some(1000));
-        assert_eq!(skin_state_number(175, &state), Some(777 - 1000));
+        assert_eq!(skin_state_number(173, &state), Some(700));
+        assert_eq!(skin_state_number(175, &state), Some(777 - 700));
         assert_eq!(skin_state_number(176, &state), Some(10));
         assert_eq!(skin_state_number(177, &state), Some(8));
         // 現在 bp = bad+poor = 8、MYBEST = 更新前の 10 → diff = -2
         assert_eq!(skin_state_number(178, &state), Some(-2));
         assert_eq!(skin_state_number(370, &state), Some(5));
         assert_eq!(skin_state_number(371, &state), Some(4));
+        assert_eq!(skin_state_number(372, &state), Some(345));
+        assert_eq!(skin_state_number(373, &state), Some(67));
+        assert_eq!(skin_state_number(374, &state), Some(-12));
+        assert_eq!(skin_state_number(375, &state), Some(-34));
         assert_eq!(skin_image_index_number(370, &state), Some(5));
         assert_eq!(skin_image_index_number(371, &state), Some(4));
         assert!(test_skin_op(320, &[], &state));
@@ -19495,10 +22188,10 @@ mod tests {
         assert_eq!(skin_state_number(419, &state), Some(2));
         assert_eq!(skin_state_number(421, &state), Some(5));
         assert_eq!(skin_state_number(422, &state), Some(4));
-        // TOTAL_EARLY = fast 合計 (PGREAT 除外) = 180+12+2+3 = 197
-        assert_eq!(skin_state_number(423, &state), Some(197));
-        // TOTAL_LATE = slow 合計 (PGREAT 除外) = 154+10+1+2 = 167
-        assert_eq!(skin_state_number(424, &state), Some(167));
+        // TOTAL_EARLY = fast 合計 (PGREAT 除外) = 180+12+2+3+5 = 202
+        assert_eq!(skin_state_number(423, &state), Some(202));
+        // TOTAL_LATE = slow 合計 (PGREAT 除外) = 154+10+1+2+4 = 171
+        assert_eq!(skin_state_number(424, &state), Some(171));
 
         // Result timing distribution
         assert_eq!(skin_state_number(374, &state), Some(-12));
@@ -19512,6 +22205,117 @@ mod tests {
         assert_eq!(skin_state_number(173, &bare), None);
         assert_eq!(skin_state_number(410, &bare), None);
         assert_eq!(skin_state_number(374, &bare), None);
+    }
+
+    #[test]
+    fn skin_state_maps_level_failcount_and_float_properties() {
+        let select = SkinDrawState {
+            select_screen: true,
+            select_play_level: 12,
+            difficulty: 4,
+            select_ex_score: Some(0),
+            select_play_count: 9,
+            select_clear_count: 4,
+            ..SkinDrawState::default()
+        };
+        for ref_id in 45..=49 {
+            assert_eq!(skin_state_number(ref_id, &select), Some(12));
+        }
+        assert_eq!(skin_state_number(79, &select), Some(5));
+        assert!(approx_eq(skin_state_float_number(103, &select).unwrap(), 1.2));
+        assert_eq!(skin_state_float_number(105, &select), Some(0.0));
+        assert!(approx_eq(skin_state_float_number(108, &select).unwrap(), 1.2));
+        assert_eq!(skin_state_float_number(109, &select), Some(0.0));
+
+        let folder = SkinDrawState {
+            select_row_kind: SelectRowKind::Folder,
+            select_is_folder: true,
+            ..select.clone()
+        };
+        assert_eq!(skin_state_number(45, &folder), None);
+        assert_eq!(skin_state_number(79, &folder), None);
+
+        let state = SkinDrawState {
+            current_fps: 237,
+            play_timer_ms: Some(125_000),
+            ex_score: 80,
+            total_notes: 100,
+            past_notes: 50,
+            judge_counts: DisplayJudgeCounts {
+                pgreat: 20,
+                great: 15,
+                good: 10,
+                bad: 4,
+                poor: 1,
+                ..DisplayJudgeCounts::default()
+            },
+            best_ex_score: Some(120),
+            target_ex_score: Some(150),
+            hispeed: 1.75,
+            gauge: 42.5,
+            skin_loaded: false,
+            resource_load_progress: 0.426,
+            average_duration_us: Some(12_345),
+            average_timing_ms: Some(-1.25),
+            stddev_timing_ms: Some(4.5),
+            select_chart_density: 8.25,
+            select_chart_peak_density: 12.5,
+            select_chart_end_density: 3.75,
+            select_chart_total_gauge: 350.0,
+            ..SkinDrawState::default()
+        };
+        assert!(approx_eq(skin_state_float_number(111, &state).unwrap(), 0.8));
+        assert!(approx_eq(skin_state_float_number(113, &state).unwrap(), 0.6));
+        assert_eq!(skin_state_float_number(101, &state), Some(0.0));
+        assert!(approx_eq(skin_state_float_number(102, &state).unwrap(), 0.426));
+        assert_eq!(skin_state_float_number(103, &state), Some(0.0));
+        assert_eq!(skin_state_float_number(140, &state), Some(0.0));
+        assert_eq!(skin_state_float_number(146, &state), None);
+        assert_eq!(skin_state_float_number(1102, &state), None);
+        assert_eq!(skin_state_float_number(372, &state), None);
+        assert_eq!(skin_state_float_number(9_999, &state), None);
+        assert_eq!(skin_state_number(161, &state), Some(2));
+        assert_eq!(skin_state_number(162, &state), Some(5));
+        assert_eq!(skin_state_number(20, &state), Some(237));
+        assert_eq!(skin_state_number(368, &state), Some(350));
+        assert_eq!(skin_state_number(165, &state), Some(42));
+    }
+
+    #[test]
+    fn skin_ops_map_gauge_ranges_and_result_judge_existence() {
+        let play = SkinDrawState {
+            play_screen: true,
+            gauge: 45.0,
+            gauge_max: 100.0,
+            ..SkinDrawState::default()
+        };
+        assert!(test_skin_op(234, &[], &play));
+        assert!(!test_skin_op(233, &[], &play));
+        assert!(test_skin_op(240, &[], &SkinDrawState { gauge: 100.0, ..play.clone() }));
+        assert!(test_skin_op(
+            234,
+            &[],
+            &SkinDrawState { ready_timer_ms: None, play_timer_ms: None, ..play.clone() }
+        ));
+        assert!(!test_skin_op(234, &[], &SkinDrawState { play_screen: false, ..play.clone() }));
+
+        let result = SkinDrawState {
+            result_failed: Some(false),
+            judge_counts: DisplayJudgeCounts {
+                pgreat: 1,
+                good: 2,
+                poor: 3,
+                ..DisplayJudgeCounts::default()
+            },
+            ..SkinDrawState::default()
+        };
+        assert!(test_skin_op(2241, &[], &result));
+        assert!(!test_skin_op(2242, &[], &result));
+        assert!(test_skin_op(2243, &[], &result));
+        assert!(!test_skin_op(2244, &[], &result));
+        assert!(test_skin_op(2245, &[], &result));
+        assert!(!test_skin_op(2246, &[], &result));
+        assert!(!test_skin_op(2241, &[], &SkinDrawState::default()));
     }
 
     #[test]
@@ -19667,6 +22471,42 @@ mod tests {
     }
 
     #[test]
+    fn logical_input_press_edges_drive_options_timers_and_runtime_events() {
+        let document: SkinDocument = serde_json::from_str(
+            r#"{
+                "type": 0, "w": 1, "h": 1, "destination": [],
+                "runtimeFlag": [{ "id": 1, "initial": false }],
+                "runtimeEvent": [{
+                    "id": -20001,
+                    "toggleFlags": [1],
+                    "triggerAction": "e1_press"
+                }]
+            }"#,
+        )
+        .unwrap();
+        let mut runtime = DynamicTimerRuntime::default();
+        let mut state = SkinDrawState::default();
+
+        // A held input on scene entry is synchronized without inventing a press edge.
+        state.logical_input_held[0] = true;
+        runtime.advance(&document, &mut state, 100);
+        assert_eq!(state.runtime_flags.get(&1), Some(&false));
+        assert_eq!(skin_timer_elapsed_ms(Some(SKIN_TIMER_BMZ_INPUT_BASE), &state), None);
+        assert!(test_skin_op(SKIN_OPTION_BMZ_INPUT_BASE, &[], &state));
+
+        state.logical_input_held[0] = false;
+        runtime.advance(&document, &mut state, 110);
+        state.logical_input_held[0] = true;
+        runtime.advance(&document, &mut state, 120);
+        assert_eq!(state.runtime_flags.get(&1), Some(&true));
+        assert_eq!(skin_timer_elapsed_ms(Some(SKIN_TIMER_BMZ_INPUT_BASE), &state), Some(0));
+
+        runtime.advance(&document, &mut state, 150);
+        assert_eq!(state.runtime_flags.get(&1), Some(&true));
+        assert_eq!(skin_timer_elapsed_ms(Some(SKIN_TIMER_BMZ_INPUT_BASE), &state), Some(30));
+    }
+
+    #[test]
     fn end_of_note_timers_use_elapsed_since_end_of_note() {
         let inactive =
             SkinDrawState { elapsed_ms: 5_000, end_of_note_ms: None, ..SkinDrawState::default() };
@@ -19684,10 +22524,90 @@ mod tests {
     }
 
     #[test]
+    fn fixed_delay_timer_starts_after_source_delay() {
+        let document: SkinDocument = serde_json::from_str(
+            r#"{
+                "type": 0, "w": 1, "h": 1, "destination": [],
+                "fixedDelayTimer": [{ "id": 11900, "sourceTimer": 143, "delayMs": 1000 }]
+            }"#,
+        )
+        .unwrap();
+        let mut runtime = DynamicTimerRuntime::default();
+        let mut state = SkinDrawState { end_of_note_ms: Some(999), ..SkinDrawState::default() };
+
+        runtime.advance(&document, &mut state, 5_000);
+        assert_eq!(skin_timer_elapsed_ms(Some(11900), &state), None);
+
+        state.end_of_note_ms = Some(1_250);
+        runtime.advance(&document, &mut state, 5_251);
+        assert_eq!(skin_timer_elapsed_ms(Some(11900), &state), Some(250));
+
+        state.end_of_note_ms = None;
+        runtime.advance(&document, &mut state, 5_252);
+        assert_eq!(skin_timer_elapsed_ms(Some(11900), &state), None);
+    }
+
+    #[test]
+    fn zero_delay_timer_alias_follows_source_timer() {
+        let document: SkinDocument = serde_json::from_str(
+            r#"{
+                "type": 0, "w": 1, "h": 1, "destination": [],
+                "fixedDelayTimer": [{ "id": 11901, "sourceTimer": 143, "delayMs": 0 }]
+            }"#,
+        )
+        .unwrap();
+        let mut runtime = DynamicTimerRuntime::default();
+        let mut state = SkinDrawState { end_of_note_ms: Some(1_250), ..SkinDrawState::default() };
+
+        runtime.advance(&document, &mut state, 5_000);
+        assert_eq!(skin_timer_elapsed_ms(Some(11901), &state), Some(1_250));
+
+        state.end_of_note_ms = None;
+        runtime.advance(&document, &mut state, 5_001);
+        assert_eq!(skin_timer_elapsed_ms(Some(11901), &state), None);
+    }
+
+    #[test]
     fn timer_zero_uses_scene_elapsed_time() {
         let state = SkinDrawState { elapsed_ms: 1_800, ..SkinDrawState::default() };
 
         assert_eq!(skin_timer_elapsed_ms(Some(0), &state), Some(1_800));
+    }
+
+    #[test]
+    fn start_input_timer_activates_strictly_after_skin_input_delay() {
+        assert_eq!(skin_start_input_elapsed_ms(499, 500), None);
+        assert_eq!(skin_start_input_elapsed_ms(500, 500), None);
+        assert_eq!(skin_start_input_elapsed_ms(501, 500), Some(1));
+
+        let state = SkinDrawState { start_input_ms: Some(275), ..SkinDrawState::default() };
+        assert_eq!(skin_timer_elapsed_ms(Some(1), &state), Some(275));
+    }
+
+    #[test]
+    fn rhythm_timer_uses_bpm_normalized_snapshot_time() {
+        let inactive = SkinDrawState::default();
+        assert_eq!(skin_timer_elapsed_ms(Some(140), &inactive), None);
+
+        let active = SkinDrawState { rhythm_timer_ms: Some(2_750), ..SkinDrawState::default() };
+        assert_eq!(skin_timer_elapsed_ms(Some(140), &active), Some(2_750));
+    }
+
+    #[test]
+    fn select_panel_on_and_off_timers_follow_each_panel_state() {
+        let state = SkinDrawState {
+            select_option_panel: 2,
+            select_option_panel_elapsed_ms: 75,
+            select_option_panel_off_elapsed_ms: [Some(120), None, Some(340), None, None, None],
+            ..SkinDrawState::default()
+        };
+
+        assert_eq!(skin_timer_elapsed_ms(Some(21), &state), None);
+        assert_eq!(skin_timer_elapsed_ms(Some(22), &state), Some(75));
+        assert_eq!(skin_timer_elapsed_ms(Some(23), &state), None);
+        assert_eq!(skin_timer_elapsed_ms(Some(31), &state), Some(120));
+        assert_eq!(skin_timer_elapsed_ms(Some(32), &state), None);
+        assert_eq!(skin_timer_elapsed_ms(Some(33), &state), Some(340));
     }
 
     #[test]
@@ -19722,11 +22642,13 @@ mod tests {
                     crate::scene::ResultIrRankingEntrySnapshot {
                         rank: Some(1),
                         ex_score: Some(2000),
+                        clear_index: Some(8),
                         player_name: crate::scene::ResultIrRankingName::from_display_name("Alice"),
                     },
                     crate::scene::ResultIrRankingEntrySnapshot {
                         rank: Some(2),
                         ex_score: Some(1900),
+                        clear_index: Some(6),
                         player_name: crate::scene::ResultIrRankingName::from_display_name("Bob"),
                     },
                     crate::scene::ResultIrRankingEntrySnapshot::default(),
@@ -19754,6 +22676,8 @@ mod tests {
         assert_eq!(skin_state_number(381, &loaded), Some(1900));
         assert_eq!(skin_state_number(390, &loaded), Some(1));
         assert_eq!(skin_state_number(391, &loaded), Some(2));
+        assert_eq!(skin_image_index_number(390, &loaded), Some(8));
+        assert_eq!(skin_image_index_number(391, &loaded), Some(6));
         assert_eq!(skin_state_number(382, &loaded), None);
         assert!(!test_skin_op(601, &[], &loaded));
         assert!(test_skin_op(602, &[], &loaded));
@@ -19769,6 +22693,17 @@ mod tests {
         };
         assert!(test_skin_op(601, &[], &loading));
         assert!(!test_skin_op(602, &[], &loading));
+        assert!(!test_skin_op(606, &[], &loading));
+
+        let waiting = SkinDrawState {
+            ir_ranking: crate::scene::ResultIrSnapshot {
+                state: crate::scene::ResultIrState::Waiting,
+                ..Default::default()
+            },
+            ..SkinDrawState::default()
+        };
+        assert!(test_skin_op(606, &[], &waiting));
+        assert!(!test_skin_op(601, &[], &waiting));
 
         let failed = SkinDrawState {
             ir_ranking: crate::scene::ResultIrSnapshot {
@@ -19778,6 +22713,7 @@ mod tests {
             ..SkinDrawState::default()
         };
         assert!(test_skin_op(604, &[], &failed));
+        assert!(test_skin_op(608, &[], &failed));
 
         let no_player = SkinDrawState {
             ir_ranking: crate::scene::ResultIrSnapshot {
@@ -19791,21 +22727,110 @@ mod tests {
     }
 
     #[test]
+    fn wmii_ir_score_graph_and_user_highlight_use_ranking_snapshot() {
+        let state = SkinDrawState {
+            total_notes: 100,
+            ir_ranking: crate::scene::ResultIrSnapshot {
+                state: crate::scene::ResultIrState::Loaded,
+                user_name: crate::scene::ResultIrRankingName::from_display_name("Alice"),
+                entries: [
+                    crate::scene::ResultIrRankingEntrySnapshot {
+                        rank: Some(1),
+                        ex_score: Some(155),
+                        clear_index: Some(8),
+                        player_name: crate::scene::ResultIrRankingName::from_display_name("Alice"),
+                    },
+                    crate::scene::ResultIrRankingEntrySnapshot::default(),
+                    crate::scene::ResultIrRankingEntrySnapshot::default(),
+                    crate::scene::ResultIrRankingEntrySnapshot::default(),
+                    crate::scene::ResultIrRankingEntrySnapshot::default(),
+                    crate::scene::ResultIrRankingEntrySnapshot::default(),
+                    crate::scene::ResultIrRankingEntrySnapshot::default(),
+                    crate::scene::ResultIrRankingEntrySnapshot::default(),
+                    crate::scene::ResultIrRankingEntrySnapshot::default(),
+                    crate::scene::ResultIrRankingEntrySnapshot::default(),
+                ],
+                ..Default::default()
+            },
+            ..SkinDrawState::default()
+        };
+
+        assert_eq!(skin_builtin_value_f32("bmz:ir_score_rate:1", &state), Some(0.775));
+        assert_eq!(skin_builtin_value_i64("bmz:ir_score_rate_integer:1", &state), Some(77));
+        assert_eq!(skin_builtin_value_i64("bmz:ir_score_rate_fraction:1", &state), Some(50));
+        assert!(eval_skin_draw_condition("ir_score_rate_band(1,6,7)", &state));
+        assert!(!eval_skin_draw_condition("ir_score_rate_band(1,7,8)", &state));
+        assert!(eval_skin_draw_condition("option(51) and ir_score_rate_range(1,666,777)", &state));
+        assert!(!eval_skin_draw_condition("option(51) and ir_score_rate_range(1,777,888)", &state));
+        assert!(eval_skin_draw_condition("ir_ranking_user(1)", &state));
+        assert!(!eval_skin_draw_condition("ir_ranking_user(2)", &state));
+    }
+
+    #[test]
+    fn wmii_ir_score_diff_uses_best_of_old_and_current_score() {
+        let mut entries =
+            std::array::from_fn(|_| crate::scene::ResultIrRankingEntrySnapshot::default());
+        entries[0] = crate::scene::ResultIrRankingEntrySnapshot {
+            rank: Some(1),
+            ex_score: Some(2293),
+            clear_index: Some(9),
+            player_name: crate::scene::ResultIrRankingName::from_display_name("Alice"),
+        };
+        let mut state = SkinDrawState {
+            ex_score: 2284,
+            total_notes: 1155,
+            past_notes: 1155,
+            previous_best_ex_score: Some(2293),
+            result_failed: Some(false),
+            ir_ranking: crate::scene::ResultIrSnapshot {
+                state: crate::scene::ResultIrState::Loaded,
+                entries,
+                ..Default::default()
+            },
+            ..SkinDrawState::default()
+        };
+
+        assert_eq!(skin_builtin_value_i64("bmz:ir_score_diff:1", &state), Some(0));
+
+        state.previous_best_ex_score = Some(2200);
+        assert_eq!(skin_builtin_value_i64("bmz:ir_score_diff:1", &state), Some(-9));
+
+        state.previous_best_ex_score = Some(2293);
+        state.ir_ranking.entries[0].ex_score = Some(2300);
+        assert_eq!(skin_builtin_value_i64("bmz:ir_score_diff:1", &state), Some(-7));
+    }
+
+    #[test]
     fn rival_skin_properties_map_select_rival_best() {
         let state = SkinDrawState {
             rival_ex_score: Some(1500),
             rival_max_combo: Some(700),
             rival_bp: Some(12),
+            rival_judge_counts: Some([900, 50, 7, 3, 3]),
+            select_total_notes: 1000,
             ..SkinDrawState::default()
         };
         assert_eq!(skin_state_number(271, &state), Some(1500));
         assert_eq!(skin_state_number(275, &state), Some(700));
         assert_eq!(skin_state_number(276, &state), Some(12));
+        assert_eq!(skin_state_number(280, &state), Some(900));
+        assert_eq!(skin_state_number(281, &state), Some(50));
+        assert_eq!(skin_state_number(282, &state), Some(7));
+        assert_eq!(skin_state_number(283, &state), Some(3));
+        assert_eq!(skin_state_number(284, &state), Some(3));
+        assert_eq!(skin_state_number(285, &state), Some(90));
+        assert_eq!(skin_state_number(286, &state), Some(5));
+        assert_eq!(skin_state_number(287, &state), Some(0));
+        assert!((skin_state_float_number(285, &state).unwrap() - 0.9).abs() < f32::EPSILON);
+        assert!((skin_state_float_number(286, &state).unwrap() - 0.05).abs() < f32::EPSILON);
         assert!(!test_skin_op(624, &[], &state));
         assert!(test_skin_op(625, &[], &state));
 
         let no_rival = SkinDrawState::default();
         assert_eq!(skin_state_number(271, &no_rival), None);
+        assert_eq!(skin_state_number(280, &no_rival), None);
+        assert_eq!(skin_state_number(285, &no_rival), None);
+        assert_eq!(skin_state_float_number(285, &no_rival), None);
         assert!(test_skin_op(624, &[], &no_rival));
         assert!(!test_skin_op(625, &[], &no_rival));
     }
@@ -19826,9 +22851,23 @@ mod tests {
     }
 
     #[test]
+    fn ir_online_property_enables_result_submission_destinations() {
+        let state = SkinDrawState {
+            ir_ranking: crate::scene::ResultIrSnapshot {
+                state: crate::scene::ResultIrState::Loading,
+                ..Default::default()
+            },
+            ..SkinDrawState::default()
+        };
+
+        assert!(!test_skin_op(50, &[], &state));
+        assert!(test_skin_op(51, &[], &state));
+    }
+
+    #[test]
     fn skin_state_number_maps_select_refs() {
         let state = SkinDrawState {
-            select_chart_count: 42,
+            select_folder_song_count: Some(42),
             select_screen: true,
             select_play_level: 12,
             select_clear_index: 5,
@@ -19953,6 +22992,9 @@ mod tests {
         assert_eq!(skin_state_number(91, &state), None);
         assert_eq!(skin_state_number(92, &state), None);
         assert_eq!(skin_state_number(160, &state), None);
+        for ref_id in [350, 351, 352, 353, 360, 362, 364, 368, 1163, 1164] {
+            assert_eq!(skin_state_number(ref_id, &state), None, "chart detail ref {ref_id}");
+        }
         assert_eq!(skin_state_number(312, &state), Some(500));
         assert_eq!(skin_state_number(313, &state), Some(300));
         for op in 180..=184 {
@@ -19961,8 +23003,29 @@ mod tests {
     }
 
     #[test]
+    fn select_course_keeps_score_totals_but_hides_per_chart_details() {
+        let state = SkinDrawState {
+            select_screen: true,
+            select_row_kind: SelectRowKind::Course,
+            select_in_library: true,
+            select_total_notes: 10_718,
+            total_notes: 10_718,
+            select_chart_normal_notes: 10_718,
+            select_chart_total_gauge: 224.0,
+            select_length_ms: 180_000,
+            ..SkinDrawState::default()
+        };
+
+        assert_eq!(skin_state_number(74, &state), Some(10_718));
+        for ref_id in [90, 91, 92, 160, 350, 351, 352, 353, 360, 362, 364, 368, 1163, 1164] {
+            assert_eq!(skin_state_number(ref_id, &state), None, "chart detail ref {ref_id}");
+        }
+    }
+
+    #[test]
     fn skin_state_imageset_index_maps_select_options() {
         let state = SkinDrawState {
+            select_screen: true,
             select_arrange_index: 2,
             select_arrange_2p_index: 5,
             select_double_option_index: 3,
@@ -19989,6 +23052,26 @@ mod tests {
     }
 
     #[test]
+    fn result_gauge_type_image_index_uses_applied_gauge() {
+        let state = SkinDrawState {
+            select_screen: false,
+            select_gauge_index: bmz_core::clear::GaugeType::Normal as usize,
+            gauge_type: bmz_core::clear::GaugeType::ExHard as i32,
+            result_failed: Some(false),
+            ..SkinDrawState::default()
+        };
+
+        assert_eq!(
+            skin_state_imageset_index(40, &state),
+            Some(bmz_core::clear::GaugeType::ExHard as usize)
+        );
+        assert_eq!(
+            skin_image_ref_number(40, &state),
+            Some(bmz_core::clear::GaugeType::ExHard as i64)
+        );
+    }
+
+    #[test]
     fn select_arrange_index_maps_beatoraja_random_options() {
         assert_eq!(select_arrange_index("NORMAL"), 0);
         assert_eq!(select_arrange_index("MIRROR"), 1);
@@ -20012,7 +23095,6 @@ mod tests {
         assert_eq!(select_judge_algorithm_index("Combo"), 0);
         assert_eq!(select_judge_algorithm_index("Duration"), 1);
         assert_eq!(select_judge_algorithm_index("Lowest"), 2);
-        assert_eq!(select_judge_algorithm_index("Score"), 3);
         assert_eq!(select_judge_algorithm_index("unknown"), 0);
     }
 
@@ -20109,6 +23191,49 @@ mod tests {
     }
 
     #[test]
+    fn keybeam_runtime_suppresses_ln_press_and_its_release_fade() {
+        let document: SkinDocument =
+            serde_json::from_str(r#"{ "type": 0, "w": 1, "h": 1, "destination": [] }"#).unwrap();
+        let mut runtime = DynamicTimerRuntime::default();
+        let mut state = SkinDrawState::default();
+        let lane = Lane::Key1.index();
+
+        state.keyon_ms[lane] = Some(0);
+        runtime.advance(&document, &mut state, 100);
+        assert!(state.keybeam_hold_active[lane]);
+
+        state.keyon_ms[lane] = Some(10);
+        state.hold_ms[lane] = Some(0);
+        runtime.advance(&document, &mut state, 110);
+        assert!(!state.keybeam_hold_active[lane]);
+
+        state.keyon_ms[lane] = None;
+        state.hold_ms[lane] = None;
+        state.keyoff_ms[lane] = Some(0);
+        runtime.advance(&document, &mut state, 120);
+        assert!(!state.keybeam_fade_active[lane]);
+
+        state.keyoff_ms[lane] = None;
+        state.keyon_ms[lane] = Some(0);
+        runtime.advance(&document, &mut state, 200);
+        state.keyon_ms[lane] = None;
+        state.keyoff_ms[lane] = Some(0);
+        runtime.advance(&document, &mut state, 210);
+        assert!(state.keybeam_fade_active[lane]);
+        assert!(eval_skin_draw_condition("keybeam_fade(121) != 0", &state));
+    }
+
+    #[test]
+    fn keybeam_timer_lane_mapping_matches_skin_timer_mapping() {
+        assert_eq!(keybeam_lane_for_keyon_timer(108), Some(Lane::Key8.index()));
+        assert_eq!(keybeam_lane_for_keyon_timer(109), Some(Lane::Key9.index()));
+        assert_eq!(keybeam_lane_for_keyon_timer(110), Some(Lane::Scratch2.index()));
+        assert_eq!(keybeam_lane_for_keyoff_timer(128), Some(Lane::Key8.index()));
+        assert_eq!(keybeam_lane_for_keyoff_timer(129), Some(Lane::Key9.index()));
+        assert_eq!(keybeam_lane_for_keyoff_timer(130), Some(Lane::Scratch2.index()));
+    }
+
+    #[test]
     fn skin_image_act_uses_event_index_for_button_frame_row() {
         let image = SkinImageDef {
             id: "auto-judge".to_string(),
@@ -20125,6 +23250,7 @@ mod tests {
             ref_id: 0,
             click: 0,
             act: Some(75),
+            clickable: None,
         };
         let source_size = SkinImageSize { width: 68.0, height: 99.0 };
         let off = skin_image_texture_region_for_state(
@@ -20151,15 +23277,53 @@ mod tests {
     fn arrange_ref_uses_result_arrange_on_result_screen() {
         let state = SkinDrawState {
             select_arrange_index: 2,
+            select_arrange_2p_index: 3,
             result_arrange_index: 8,
+            result_arrange_2p_index: 1,
+            result_extended_arrange_index: 11,
+            result_extended_arrange_2p_index: 10,
             result_failed: Some(false),
             ..SkinDrawState::default()
         };
 
         assert_eq!(skin_state_imageset_index(42, &state), Some(8));
-        assert_eq!(skin_state_imageset_index(43, &state), Some(8));
+        assert_eq!(skin_state_imageset_index(43, &state), Some(1));
         assert_eq!(skin_image_ref_number(42, &state), Some(8));
-        assert_eq!(skin_image_ref_number(43, &state), Some(8));
+        assert_eq!(skin_image_ref_number(43, &state), Some(1));
+        assert_eq!(skin_state_number(42, &state), Some(8));
+        assert_eq!(skin_state_number(43, &state), Some(1));
+        assert_eq!(skin_state_event_index(42, &state), 8);
+        assert_eq!(skin_state_event_index(43, &state), 1);
+        assert_eq!(skin_state_imageset_index(344, &state), Some(11));
+        assert_eq!(skin_state_imageset_index(345, &state), Some(10));
+        assert_eq!(skin_state_number(344, &state), Some(11));
+        assert_eq!(skin_state_number(345, &state), Some(10));
+        assert_eq!(skin_state_event_index(344, &state), 11);
+        assert_eq!(skin_state_event_index(345, &state), 10);
+    }
+
+    #[test]
+    fn arrange_refs_use_each_sides_arrange_on_play_screen() {
+        let state = SkinDrawState {
+            select_arrange_index: 2,
+            select_arrange_2p_index: 1,
+            select_extended_arrange_index: 11,
+            select_extended_arrange_2p_index: 10,
+            ..SkinDrawState::default()
+        };
+
+        assert_eq!(skin_state_imageset_index(42, &state), Some(2));
+        assert_eq!(skin_state_imageset_index(43, &state), Some(1));
+        assert_eq!(skin_state_number(42, &state), Some(2));
+        assert_eq!(skin_state_number(43, &state), Some(1));
+        assert_eq!(skin_state_event_index(42, &state), 2);
+        assert_eq!(skin_state_event_index(43, &state), 1);
+        assert_eq!(skin_state_imageset_index(344, &state), Some(11));
+        assert_eq!(skin_state_imageset_index(345, &state), Some(10));
+        assert_eq!(skin_state_number(344, &state), Some(11));
+        assert_eq!(skin_state_number(345, &state), Some(10));
+        assert_eq!(skin_state_event_index(344, &state), 11);
+        assert_eq!(skin_state_event_index(345, &state), 10);
     }
 
     #[test]
@@ -20183,6 +23347,17 @@ mod tests {
         assert_eq!(skin_state_imageset_index(452, &state), Some(1));
         assert_eq!(skin_state_imageset_index(457, &state), Some(0));
         assert_eq!(skin_state_imageset_index(459, &state), Some(0));
+        assert_eq!(skin_state_event_index(450, &state), 7);
+        assert_eq!(skin_state_event_index(451, &state), 3);
+        assert_eq!(skin_state_event_index(452, &state), 1);
+        assert_eq!(skin_state_event_index(457, &state), 0);
+        assert_eq!(skin_state_event_index(459, &state), 0);
+        assert_eq!(skin_state_number(450, &state), Some(7));
+        assert_eq!(skin_state_number(466, &state), Some(0));
+        assert_eq!(skin_state_number(467, &state), None);
+        assert_eq!(skin_state_number(468, &state), None);
+        assert_eq!(skin_state_event_index(467, &state), 0);
+        assert_eq!(skin_state_event_index(468, &state), 0);
     }
 
     #[test]
@@ -20197,6 +23372,28 @@ mod tests {
 
         assert_eq!(skin_state_event_index(42, &state), 4);
         assert_eq!(skin_state_imageset_index(450, &state), Some(0));
+    }
+
+    #[test]
+    fn result_random_lane_refs_use_each_sides_arrange() {
+        let mut refs = [0; SKIN_RANDOM_LANE_REF_COUNT];
+        refs[0] = 7;
+        refs[10] = 3;
+        let p2_random = SkinDrawState {
+            result_arrange_index: 0,
+            result_arrange_2p_index: 2,
+            result_random_lane_refs: refs,
+            result_failed: Some(false),
+            ..SkinDrawState::default()
+        };
+
+        assert_eq!(skin_state_imageset_index(450, &p2_random), Some(0));
+        assert_eq!(skin_state_imageset_index(460, &p2_random), Some(3));
+
+        let p1_random =
+            SkinDrawState { result_arrange_index: 2, result_arrange_2p_index: 0, ..p2_random };
+        assert_eq!(skin_state_imageset_index(450, &p1_random), Some(7));
+        assert_eq!(skin_state_imageset_index(460, &p1_random), Some(0));
     }
 
     #[test]
@@ -20264,24 +23461,37 @@ mod tests {
 
     #[test]
     fn select_target_index_maps_fixed_targets() {
-        assert_eq!(select_target_index("NONE"), 0);
-        assert_eq!(select_target_index("RANK_A"), 1);
-        assert_eq!(select_target_index("RANK_AA-"), 2);
-        assert_eq!(select_target_index("RANK_AA"), 3);
-        assert_eq!(select_target_index("RANK_AAA-"), 4);
-        assert_eq!(select_target_index("RANK_AAA"), 5);
-        assert_eq!(select_target_index("RANK_MAX-"), 6);
-        assert_eq!(select_target_index("MAX"), 7);
-        assert_eq!(select_target_index("RANK_NEXT"), 8);
-        assert_eq!(select_target_index("IR_TOP"), 9);
-        assert_eq!(select_target_index("IR_NEXT"), 10);
-        assert_eq!(select_target_index("RIVAL TOP"), 11);
-        assert_eq!(select_target_index("RIVAL NEXT"), 12);
-        assert_eq!(select_target_index("RIVAL"), 11);
-        assert_eq!(select_target_index("AAA"), 5);
-        assert_eq!(select_target_index("AA"), 3);
-        assert_eq!(select_target_index("A"), 1);
-        assert_eq!(select_target_index("B"), 1);
+        let index = |target| select_target_index_for_name(target).unwrap_or(0);
+        assert_eq!(index("NONE"), 0);
+        assert_eq!(index("RANK_A"), 1);
+        assert_eq!(index("RANK_AA-"), 2);
+        assert_eq!(index("RANK_AA"), 3);
+        assert_eq!(index("RANK_AAA-"), 4);
+        assert_eq!(index("RANK_AAA"), 5);
+        assert_eq!(index("RANK_MAX-"), 6);
+        assert_eq!(index("MAX"), 7);
+        assert_eq!(index("RANK_NEXT"), 8);
+        assert_eq!(index("IR_TOP"), 9);
+        assert_eq!(index("IR_NEXT"), 10);
+        assert_eq!(index("RIVAL TOP"), 11);
+        assert_eq!(index("RIVAL NEXT"), 12);
+        assert_eq!(index("RIVAL"), 11);
+        assert_eq!(index("AAA"), 5);
+        assert_eq!(index("AA"), 3);
+        assert_eq!(index("A"), 1);
+        assert_eq!(index("B"), 1);
+    }
+
+    #[test]
+    fn play_target_image_index_matches_beatoraja_default_target_list() {
+        assert_eq!(play_target_image_index("RANK_A"), 1);
+        assert_eq!(play_target_image_index("RANK_AA-"), 3);
+        assert_eq!(play_target_image_index("RANK_AA"), 4);
+        assert_eq!(play_target_image_index("RANK_AAA-"), 6);
+        assert_eq!(play_target_image_index("RANK_AAA"), 7);
+        assert_eq!(play_target_image_index("RANK_MAX-"), 9);
+        assert_eq!(play_target_image_index("MAX"), 10);
+        assert_eq!(play_target_image_index("IR_TOP"), 0);
     }
 
     #[test]
@@ -20881,6 +24091,68 @@ mod tests {
     }
 
     #[test]
+    fn pms_note_expansion_uses_quarter_note_elapsed_time() {
+        let document: SkinDocument = serde_json::from_str(
+            r#"
+            {
+                "w": 100, "h": 100,
+                "note": {
+                    "id": "notes",
+                    "note": ["n1"],
+                    "expansionrate": [150, 80],
+                    "dst": [{ "time": 0, "x": 10, "y": 20, "w": 30, "h": 60 }]
+                }
+            }
+            "#,
+        )
+        .unwrap();
+        let skin = SkinContext::from_manifest_and_document(default_skin_manifest(), document, []);
+
+        let peak = skin.document_note_expansion_scale(&SkinDrawState {
+            quarter_note_elapsed_ms: Some(9),
+            ..SkinDrawState::default()
+        });
+        let finished = skin.document_note_expansion_scale(&SkinDrawState {
+            quarter_note_elapsed_ms: Some(159),
+            ..SkinDrawState::default()
+        });
+
+        assert!(approx_eq(peak.0, 1.5));
+        assert!(approx_eq(peak.1, 0.8));
+        assert!(approx_eq(finished.0, 1.0));
+        assert!(approx_eq(finished.1, 1.0));
+    }
+
+    #[test]
+    fn pms_missed_note_falls_toward_dst2() {
+        let document: SkinDocument = serde_json::from_str(
+            r#"
+            {
+                "w": 100, "h": 100,
+                "note": {
+                    "id": "notes",
+                    "note": ["n1"],
+                    "size": [10],
+                    "dst2": 90,
+                    "dst": [{ "time": 0, "x": 10, "y": 20, "w": 30, "h": 60 }]
+                }
+            }
+            "#,
+        )
+        .unwrap();
+        let skin = SkinContext::from_manifest_and_document(default_skin_manifest(), document, []);
+        let state = SkinDrawState::default();
+
+        let start =
+            skin.missed_note_rect_for_fall(Lane::Key1, KeyMode::K9, 0.0, 0.1, &state).unwrap();
+        let end =
+            skin.missed_note_rect_for_fall(Lane::Key1, KeyMode::K9, 1.0, 0.1, &state).unwrap();
+
+        assert!(approx_eq(start.y + start.height, 0.8));
+        assert!(approx_eq(end.y + end.height, 0.1));
+    }
+
+    #[test]
     fn note_group_lift_offset_matches_note_lift_once() {
         let document: SkinDocument = serde_json::from_str(
             r#"
@@ -21229,7 +24501,7 @@ mod tests {
         assert!(matches!(
             items[0],
             SkinRenderItem::RotatedImage { angle_deg, center, .. }
-                if approx_eq(angle_deg, 90.0) && approx_eq(center.x, 0.0) && approx_eq(center.y, 1.0)
+                if approx_eq(angle_deg, -90.0) && approx_eq(center.x, 0.0) && approx_eq(center.y, 1.0)
         ));
     }
 
@@ -21395,6 +24667,85 @@ mod tests {
         let SkinRenderItem::Image { rect, .. } = &items[0] else { panic!() };
         // value=1.0 → full width = 640/1280 = 0.5
         assert!(approx_eq(rect.width, 640.0 / 1280.0), "full load bar width: got {}", rect.width);
+    }
+
+    #[test]
+    fn lua_graph_with_negative_width_fills_leftwards_from_destination_x() {
+        let document: SkinDocument = serde_json::from_str(
+            r#"
+            {
+                "w": 1280, "h": 720,
+                "source": [{ "id": "bar-src", "path": "bar.png" }],
+                "graph": [{
+                    "id": "pg_fast", "src": "bar-src", "x": 0, "y": 0, "w": 1, "h": 1, "angle": 0,
+                    "value_expr": "(number(410))/(number(410)+number(411))"
+                }],
+                "destination": [
+                    { "id": "pg_fast", "dst": [{ "time": 0, "x": 640, "y": 0, "w": -640, "h": 8 }] }
+                ]
+            }
+            "#,
+        )
+        .unwrap();
+
+        let sources = mock_source("bar-src", 1.0, 1.0);
+        let state = SkinDrawState {
+            fast_slow_counts: Some(crate::snapshot::FastSlowJudgeCounts {
+                fast_pgreat: 1,
+                slow_pgreat: 3,
+                ..crate::snapshot::FastSlowJudgeCounts::default()
+            }),
+            ..SkinDrawState::default()
+        };
+        assert!(
+            approx_eq(graph_raw_value(&document.graph[0], &state), 0.25),
+            "WMII graph expression must preserve the FAST ratio"
+        );
+        let items = document.static_image_render_items(&sources, &state);
+
+        assert_eq!(items.len(), 1);
+        let SkinRenderItem::Image { rect, uv, .. } = &items[0] else { panic!() };
+        assert!(
+            approx_eq(rect.width, 0.125),
+            "25% of half-canvas width: got rect {rect:?}, uv {uv:?}"
+        );
+        assert!(
+            approx_eq(rect.x, 0.375),
+            "negative width must remain anchored at destination x: got {}",
+            rect.x
+        );
+        assert!(approx_eq(uv.width, 0.25), "source UV should be clipped to 25%: got {}", uv.width);
+    }
+
+    #[test]
+    fn negative_static_image_width_matches_beatoraja_horizontal_mirroring() {
+        let document: SkinDocument = serde_json::from_str(
+            r#"
+            {
+                "w": 1920, "h": 1080,
+                "source": [{ "id": "frame-src", "path": "frame.png" }],
+                "image": [{
+                    "id": "table-level-frame", "src": "frame-src",
+                    "x": 0, "y": 0, "w": 101, "h": 53
+                }],
+                "destination": [{
+                    "id": "table-level-frame",
+                    "dst": [{ "x": 1193, "y": 100, "w": -101, "h": 53 }]
+                }]
+            }
+            "#,
+        )
+        .unwrap();
+
+        let sources = mock_source("frame-src", 101.0, 53.0);
+        let items = document.static_image_render_items(&sources, &SkinDrawState::default());
+
+        assert_eq!(items.len(), 1);
+        let SkinRenderItem::Image { rect, uv, .. } = &items[0] else { panic!() };
+        assert!(approx_eq(rect.x, (1193.0 - 101.0) / 1920.0));
+        assert!(approx_eq(rect.width, 101.0 / 1920.0));
+        assert!(approx_eq(uv.x, 1.0));
+        assert!(approx_eq(uv.width, -1.0));
     }
 
     #[test]
@@ -21823,12 +25174,28 @@ mod tests {
 
         let song = SkinDrawState {
             select_row_kind: SelectRowKind::Song,
+            select_is_folder: false,
             select_in_library: true,
             select_chart_normal_notes: 900,
             ..state
         };
         assert_eq!(skin_state_number(320, &song), None);
+        assert_eq!(skin_state_number(300, &song), None);
         assert_eq!(skin_state_number(350, &song), Some(900));
+    }
+
+    #[test]
+    fn select_folder_song_count_uses_cursor_folder_row() {
+        let row = SelectRowSnapshot {
+            is_folder: true,
+            kind: SelectRowKind::Folder,
+            folder_lamp_counts: [2, 3, 0, 1, 0, 0, 0, 0, 0, 0, 0],
+            ..SelectRowSnapshot::default()
+        };
+        assert_eq!(select_row_folder_song_count(&row), Some(6));
+
+        let song = SelectRowSnapshot { kind: SelectRowKind::Song, ..row };
+        assert_eq!(select_row_folder_song_count(&song), None);
     }
 
     #[test]
@@ -21849,6 +25216,17 @@ mod tests {
         let chart_favorite = SkinDrawState { select_favorite_chart: true, ..state };
         assert_eq!(skin_image_index_number(90, &chart_favorite), Some(1));
         assert_eq!(skin_state_number(90, &chart_favorite), Some(200));
+    }
+
+    #[test]
+    fn skin_image_index_number_result_favorite_ref_has_only_two_states() {
+        let not_favorite =
+            SkinDrawState { result_favorite_chart: Some(false), ..SkinDrawState::default() };
+        assert_eq!(skin_image_index_number(90, &not_favorite), Some(0));
+
+        let favorite =
+            SkinDrawState { result_favorite_chart: Some(true), ..SkinDrawState::default() };
+        assert_eq!(skin_image_index_number(90, &favorite), Some(1));
     }
 
     #[test]
@@ -21925,6 +25303,76 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(skin_value_number(&value, &state), Some(183_000));
+    }
+
+    #[test]
+    fn wmii_nearest_rank_diff_value_uses_absolute_runtime_difference() {
+        let state = SkinDrawState { ex_score: 155, total_notes: 100, ..Default::default() };
+        let value = SkinValueDef {
+            value_expr: "bmz:nearest_rank_diff_abs".to_string(),
+            ..Default::default()
+        };
+        assert_eq!(skin_value_number(&value, &state), Some(1));
+    }
+
+    #[test]
+    fn luxe_flat_nearest_rank_uses_runtime_result_score() {
+        let state = SkinDrawState {
+            ex_score: 2246,
+            total_notes: 1261,
+            result_failed: Some(false),
+            result_grade_diff_display: ResultGradeDiffDisplay::Nearest,
+            ..Default::default()
+        };
+        let value = SkinValueDef {
+            value_expr: "bmz:nearest_rank_diff_abs".to_string(),
+            ..Default::default()
+        };
+
+        assert_eq!(skin_value_number(&value, &state), Some(4));
+        assert_eq!(result_grade_diff_label(&state), Some("AAA+4".to_string()));
+        assert!(eval_skin_draw_condition("nearest_rank(AAA,plus)", &state));
+        assert!(!eval_skin_draw_condition("nearest_rank(MAX,minus)", &state));
+    }
+
+    #[test]
+    fn skin_value_number_evaluates_peaceful_play_gauge_values() {
+        let state = SkinDrawState { gauge: 78.75, gauge_max: 120.0, ..Default::default() };
+        let value =
+            |expr: &str| SkinValueDef { value_expr: expr.to_string(), ..Default::default() };
+
+        assert_eq!(skin_value_number(&value(SKIN_EXPR_GAUGE_PERCENT_INTEGER), &state), Some(65));
+        assert_eq!(skin_value_number(&value(SKIN_EXPR_GAUGE_PERCENT_FRACTION), &state), Some(62));
+        assert_eq!(skin_value_number(&value(SKIN_EXPR_GAUGE_AMOUNT_INTEGER), &state), Some(78));
+        assert_eq!(skin_value_number(&value(SKIN_EXPR_GAUGE_AMOUNT_FRACTION), &state), Some(75));
+    }
+
+    #[test]
+    fn wmii_course_clear_rate_uses_course_progress_and_aggregate_judges() {
+        let completed = SkinDrawState {
+            total_notes: 7_085,
+            judge_counts: DisplayJudgeCounts {
+                pgreat: 6_407,
+                great: 631,
+                good: 24,
+                bad: 9,
+                poor: 14,
+                empty_poor: 32,
+            },
+            ..SkinDrawState::default()
+        };
+        let partial = SkinDrawState {
+            total_notes: 100,
+            judge_counts: DisplayJudgeCounts { pgreat: 50, ..DisplayJudgeCounts::default() },
+            ..SkinDrawState::default()
+        };
+        let value = SkinValueDef {
+            value_expr: SKIN_EXPR_COURSE_CLEAR_RATE.to_string(),
+            ..SkinValueDef::default()
+        };
+
+        assert_eq!(skin_value_number(&value, &completed), Some(100));
+        assert!((course_clear_rate_value(&partial) - 70.0).abs() < 0.001);
     }
 
     #[test]
@@ -22095,6 +25543,201 @@ mod tests {
     }
 
     #[test]
+    fn result_gaugegraph_caches_only_completed_graph_per_type_and_graph_arc() {
+        use crate::snapshot::{ResultGaugeGraphPoint, ResultGraphSnapshot};
+
+        let document: SkinDocument = serde_json::from_str(r#"{"w":1280,"h":720}"#).unwrap();
+        let graph_def: SkinGaugeGraphDef = serde_json::from_str(r#"{"id":"graph"}"#).unwrap();
+        let destination: SkinDestinationDef =
+            serde_json::from_str(r#"{"id":"graph","dst":[]}"#).unwrap();
+        let frame = ResolvedSkinFrame { w: 640, h: 360, a: 255, ..Default::default() };
+        let graph = Arc::new(ResultGraphSnapshot {
+            gauge_points: vec![
+                ResultGaugeGraphPoint {
+                    value: 20.0,
+                    max: 100.0,
+                    border: 80.0,
+                    gauge_type: 2,
+                    ..Default::default()
+                },
+                ResultGaugeGraphPoint {
+                    value: 70.0,
+                    max: 100.0,
+                    border: 80.0,
+                    gauge_type: 3,
+                    ..Default::default()
+                },
+                ResultGaugeGraphPoint {
+                    value: 40.0,
+                    max: 100.0,
+                    border: 80.0,
+                    gauge_type: 2,
+                    ..Default::default()
+                },
+                ResultGaugeGraphPoint {
+                    value: 90.0,
+                    max: 100.0,
+                    border: 80.0,
+                    gauge_type: 3,
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        });
+        let render = |cache: &mut ResultRenderCache, elapsed_ms, gauge_type| {
+            document.gaugegraph_render_items(
+                7,
+                &graph_def,
+                &destination,
+                frame,
+                &SkinDrawState {
+                    elapsed_ms,
+                    result_gauge_graph_type: Some(gauge_type),
+                    ..Default::default()
+                },
+                &graph.gauge_points,
+                Some(cache),
+            )
+        };
+
+        let mut cache = ResultRenderCache::default();
+        cache.prepare_gauge_graph(&graph);
+        let reveal = render(&mut cache, 1499, 2);
+        assert!(matches!(reveal.as_slice(), [SkinRenderItem::RectBatch { cache: None, .. }]));
+
+        let normal = render(&mut cache, 1500, 2);
+        let [SkinRenderItem::RectBatch { rects: normal_rects, cache: Some(normal_key) }] =
+            normal.as_slice()
+        else {
+            panic!("completed gauge graph must use the offscreen batch cache");
+        };
+        let normal_again = render(&mut cache, 2500, 2);
+        let [
+            SkinRenderItem::RectBatch { rects: normal_again_rects, cache: Some(normal_again_key) },
+        ] = normal_again.as_slice()
+        else {
+            panic!("completed gauge graph cache must stay reusable");
+        };
+        assert!(Arc::ptr_eq(normal_rects, normal_again_rects));
+        assert_eq!(normal_key, normal_again_key);
+
+        let hard = render(&mut cache, 2500, 3);
+        let [SkinRenderItem::RectBatch { cache: Some(hard_key), .. }] = hard.as_slice() else {
+            panic!("switched gauge graph must also use its own batch cache");
+        };
+        assert_ne!(normal_key.key, hard_key.key);
+        let normal_after_switch = render(&mut cache, 2500, 2);
+        let [
+            SkinRenderItem::RectBatch {
+                rects: normal_after_switch_rects,
+                cache: Some(normal_after_switch_key),
+            },
+        ] = normal_after_switch.as_slice()
+        else {
+            panic!("switching back must reuse the original gauge batch");
+        };
+        assert!(Arc::ptr_eq(normal_rects, normal_after_switch_rects));
+        assert_eq!(normal_key, normal_after_switch_key);
+
+        let changed_graph = Arc::new(ResultGraphSnapshot {
+            gauge_points: graph
+                .gauge_points
+                .iter()
+                .copied()
+                .map(|mut point| {
+                    point.value += 1.0;
+                    point
+                })
+                .collect(),
+            ..Default::default()
+        });
+        cache.prepare_gauge_graph(&changed_graph);
+        let changed = document.gaugegraph_render_items(
+            7,
+            &graph_def,
+            &destination,
+            frame,
+            &SkinDrawState {
+                elapsed_ms: 1500,
+                result_gauge_graph_type: Some(2),
+                ..Default::default()
+            },
+            &changed_graph.gauge_points,
+            Some(&mut cache),
+        );
+        let [SkinRenderItem::RectBatch { cache: Some(changed_key), .. }] = changed.as_slice()
+        else {
+            panic!("changed graph must produce a completed batch");
+        };
+        assert_ne!(normal_key.key, changed_key.key);
+
+        let mut other_context_cache = ResultRenderCache::default();
+        other_context_cache.prepare_gauge_graph(&graph);
+        let other_context = render(&mut other_context_cache, 1500, 2);
+        let [SkinRenderItem::RectBatch { cache: Some(other_context_key), .. }] =
+            other_context.as_slice()
+        else {
+            panic!("another skin context must produce a completed batch");
+        };
+        assert_ne!(normal_key.key, other_context_key.key);
+    }
+
+    #[test]
+    fn result_gaugegraph_batch_skips_additive_black_backgrounds() {
+        use crate::snapshot::ResultGaugeGraphPoint;
+
+        let document: SkinDocument = serde_json::from_str(r#"{"w":1280,"h":720}"#).unwrap();
+        let graph_def: SkinGaugeGraphDef = serde_json::from_str(
+            r#"{
+                "id":"graph",
+                "borderlineColor":"00FF00",
+                "borderColor":"000000",
+                "grooveFailLineColor":"FF0000",
+                "grooveFailBGColor":"000000"
+            }"#,
+        )
+        .unwrap();
+        let destination: SkinDestinationDef =
+            serde_json::from_str(r#"{"id":"graph","blend":2,"dst":[]}"#).unwrap();
+        let frame = ResolvedSkinFrame { w: 640, h: 360, a: 255, ..Default::default() };
+        let points = [
+            ResultGaugeGraphPoint {
+                value: 20.0,
+                max: 100.0,
+                border: 80.0,
+                gauge_type: 2,
+                ..Default::default()
+            },
+            ResultGaugeGraphPoint {
+                value: 40.0,
+                max: 100.0,
+                border: 80.0,
+                gauge_type: 2,
+                ..Default::default()
+            },
+        ];
+
+        let items = document.gaugegraph_render_items(
+            7,
+            &graph_def,
+            &destination,
+            frame,
+            &SkinDrawState {
+                elapsed_ms: 1500,
+                result_gauge_graph_type: Some(2),
+                ..Default::default()
+            },
+            &points,
+            None,
+        );
+        let [SkinRenderItem::RectBatch { rects, .. }] = items.as_slice() else {
+            panic!("gauge graph must render as a rectangle batch");
+        };
+        assert!(!rects.is_empty());
+        assert!(rects.iter().all(|command| !is_additive_black(command.color)));
+    }
+
+    #[test]
     fn graph_fill_dimensions_scales_lua_chart_graph_by_dst_multiplier() {
         let graph = SkinGraphDef {
             id: "default_chart_peak".to_string(),
@@ -22235,6 +25878,24 @@ mod tests {
     }
 
     #[test]
+    fn select_state_starts_input_timer_after_document_delay() {
+        let document: SkinDocument =
+            serde_json::from_str(r#"{ "w": 1280, "h": 720, "input": 500 }"#).unwrap();
+
+        let (waiting, _) = document.select_draw_state(
+            &SelectSnapshot { time: TimeUs(500_000), ..SelectSnapshot::default() },
+            None,
+        );
+        let (active, _) = document.select_draw_state(
+            &SelectSnapshot { time: TimeUs(725_000), ..SelectSnapshot::default() },
+            None,
+        );
+
+        assert_eq!(waiting.start_input_ms, None);
+        assert_eq!(active.start_input_ms, Some(225));
+    }
+
+    #[test]
     fn graph_value_bestscorerate_now_scales_with_past_notes() {
         // BARGRAPH_BESTSCORERATE_NOW (112): best * past / (total^2 * 2)
         // best=160 (80% of max 200), past=50, total=100
@@ -22273,13 +25934,47 @@ mod tests {
     }
 
     #[test]
+    fn select_render_items_passes_selected_row_genre_to_string_ref_13() {
+        let document: SkinDocument = serde_json::from_str(
+            r#"
+            {
+                "type": 5,
+                "w": 100,
+                "h": 100,
+                "text": [{ "id": "genre", "size": 6, "ref": 13 }],
+                "destination": [{ "id": "genre", "dst": [{ "x": 10, "y": 40, "w": 40, "h": 6 }] }]
+            }
+            "#,
+        )
+        .unwrap();
+        let snapshot = SelectSnapshot {
+            selected_index: 0,
+            rows: vec![SelectRowSnapshot {
+                index: 0,
+                genre: "Techno".to_string(),
+                ..SelectRowSnapshot::default()
+            }],
+            ..SelectSnapshot::default()
+        };
+
+        let items = document.select_render_items(&HashMap::new(), &snapshot);
+
+        assert!(items.iter().any(|item| matches!(
+            item,
+            SkinRenderItem::Text { text, .. } if text == "Techno"
+        )));
+    }
+
+    #[test]
     fn skin_state_text_maps_string_refs() {
         let ir_ranking = crate::scene::ResultIrSnapshot {
             state: crate::scene::ResultIrState::Loaded,
+            user_name: crate::scene::ResultIrRankingName::from_display_name("hyrorre"),
             entries: [
                 crate::scene::ResultIrRankingEntrySnapshot {
                     rank: Some(1),
                     ex_score: Some(2000),
+                    clear_index: Some(8),
                     player_name: crate::scene::ResultIrRankingName::from_display_name("Alice"),
                 },
                 crate::scene::ResultIrRankingEntrySnapshot::default(),
@@ -22295,6 +25990,7 @@ mod tests {
             ..Default::default()
         };
         let state = SkinTextState {
+            player_name: "BMZ Player",
             title: "My Title",
             subtitle: "Sub",
             artist: "Artist Name",
@@ -22336,6 +26032,8 @@ mod tests {
             skin_state_text(&make_text(1), &SkinTextState { rival: "Rival A", ..state.clone() }),
             "Rival A"
         );
+        // STRING_PLAYER (2)
+        assert_eq!(skin_state_text(&make_text(2), &state), "BMZ Player");
         // STRING_TARGET (3)
         assert_eq!(skin_state_text(&make_text(3), &state), "RANK AAA");
         // STRING_TARGETNAME_P1/N1 (209/210)
@@ -22351,7 +26049,7 @@ mod tests {
         assert_eq!(skin_state_text(&make_text(159), &state), "Stage 10");
         // STRING_IR_NAME / STRING_IR_USERNAME
         assert_eq!(skin_state_text(&make_text(1020), &state), "BMZ IR");
-        assert_eq!(skin_state_text(&make_text(1021), &state), "BMZ IR");
+        assert_eq!(skin_state_text(&make_text(1021), &state), "hyrorre");
         // Unknown ref → empty
         assert_eq!(skin_state_text(&make_text(99), &state), "");
 
@@ -22364,6 +26062,75 @@ mod tests {
             ),
             "Song Title"
         );
+    }
+
+    #[test]
+    fn select_course_rows_only_expose_course_stage_title_refs() {
+        let document: SkinDocument = serde_json::from_str(
+            r#"
+            {
+                "type": 5,
+                "w": 100,
+                "h": 100,
+                "text": [
+                    { "id": "title", "size": 6, "ref": 12 },
+                    { "id": "genre", "size": 6, "ref": 13 },
+                    { "id": "artist", "size": 6, "ref": 16 },
+                    { "id": "stage", "size": 6, "ref": 150 }
+                ],
+                "destination": [
+                    { "id": "title", "dst": [{ "x": 10, "y": 70, "w": 40, "h": 6 }] },
+                    { "id": "genre", "dst": [{ "x": 10, "y": 60, "w": 40, "h": 6 }] },
+                    { "id": "artist", "dst": [{ "x": 10, "y": 50, "w": 40, "h": 6 }] },
+                    { "id": "stage", "dst": [{ "x": 10, "y": 40, "w": 40, "h": 6 }] }
+                ]
+            }
+            "#,
+        )
+        .unwrap();
+        let snapshot = SelectSnapshot {
+            selected_index: 0,
+            rows: vec![SelectRowSnapshot {
+                index: 0,
+                title: "Course title".to_string(),
+                genre: "Course genre".to_string(),
+                artist: "Course artist".to_string(),
+                kind: SelectRowKind::Course,
+                course_titles: std::array::from_fn(|index| {
+                    if index == 0 { "Stage title".to_string() } else { String::new() }
+                }),
+                ..SelectRowSnapshot::default()
+            }],
+            ..SelectSnapshot::default()
+        };
+
+        let items = document.select_render_items(&HashMap::new(), &snapshot);
+        let texts = items
+            .iter()
+            .filter_map(|item| match item {
+                SkinRenderItem::Text { text, .. } => Some(text.as_str()),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(texts, vec!["Stage title"]);
+    }
+
+    #[test]
+    fn skin_state_text_formats_result_table_title_expr() {
+        let text = SkinTextDef {
+            value_expr: SKIN_EXPR_RESULT_TABLE_TITLE.to_string(),
+            ..SkinTextDef::default()
+        };
+        let state = SkinTextState {
+            title: "Song",
+            subtitle: "Another",
+            table_text_primary: "Insane",
+            table_level: "★12",
+            ..SkinTextState::default()
+        };
+
+        assert_eq!(skin_state_text(&text, &state), "★12 Insane Song Another");
     }
 
     #[test]
@@ -22785,6 +26552,16 @@ mod tests {
         assert_eq!(skin_state_text(&by_ref(1001), &state), "Insane");
         assert_eq!(skin_state_text(&by_ref(1002), &state), "★12");
         assert_eq!(skin_state_text(&by_ref(1003), &state), "★12Insane");
+        assert_eq!(
+            skin_state_text(&by_ref(1010), &state),
+            format!("bmz-player {}", env!("CARGO_PKG_VERSION"))
+        );
+
+        let concatenated = SkinTextDef {
+            value_expr: "bmz:text_concat:1001:1002".to_string(),
+            ..Default::default()
+        };
+        assert_eq!(skin_state_text(&concatenated, &state), "Insane ★12");
     }
 
     #[test]
@@ -23088,5 +26865,89 @@ mod tests {
         assert_eq!(skin_timer_elapsed_ms(Some(128), &state), Some(128));
         assert_eq!(skin_timer_elapsed_ms(Some(258), &state), Some(258));
         assert_eq!(skin_timer_elapsed_ms(Some(278), &state), Some(278));
+    }
+
+    #[test]
+    fn runtime_event_toggles_flags_and_restarts_observe_timer() {
+        let document: SkinDocument = serde_json::from_str(
+            r#"{
+                "runtimeFlag": [{ "id": -20001, "initial": false }],
+                "runtimeEvent": [{ "id": -20002, "toggleFlags": [-20001] }],
+                "dynamicTimer": [{ "id": 9000, "observe": "runtime_flag(-20001)" }]
+            }"#,
+        )
+        .unwrap();
+        let mut runtime = DynamicTimerRuntime::default();
+        let mut state = SkinDrawState::default();
+
+        runtime.advance(&document, &mut state, 100);
+        assert_eq!(state.dynamic_timer_ms[0], None);
+        assert!(eval_skin_draw_condition("not runtime_flag(-20001)", &state));
+
+        assert!(runtime.dispatch_runtime_event(&document, -20_002));
+        runtime.advance(&document, &mut state, 150);
+        assert_eq!(state.dynamic_timer_ms[0], Some(0));
+        assert!(eval_skin_draw_condition("runtime_flag(-20001)", &state));
+
+        runtime.advance(&document, &mut state, 175);
+        assert_eq!(state.dynamic_timer_ms[0], Some(25));
+        assert!(runtime.dispatch_runtime_event(&document, -20_002));
+        runtime.advance(&document, &mut state, 200);
+        assert_eq!(state.dynamic_timer_ms[0], None);
+
+        runtime.reset_for_document(Some(&document));
+        runtime.advance(&document, &mut state, 250);
+        assert_eq!(state.dynamic_timer_ms[0], None);
+    }
+
+    #[derive(Debug, Default)]
+    struct AlternatingLuaDrawRuntime {
+        calls: std::sync::atomic::AtomicUsize,
+    }
+
+    impl SkinLuaDrawRuntime for AlternatingLuaDrawRuntime {
+        fn evaluate_draw(
+            &self,
+            callback_id: usize,
+            _state: &SkinDrawState,
+            _enabled_options: &[i32],
+            _text_values: &BTreeMap<i32, String>,
+        ) -> bool {
+            assert_eq!(callback_id, 0);
+            (self.calls.fetch_add(1, Ordering::Relaxed) + 1).is_multiple_of(2)
+        }
+    }
+
+    #[test]
+    fn runtime_lua_draw_is_evaluated_for_every_render_without_frame_cache() {
+        let document: SkinDocument = serde_json::from_str(
+            r#"{
+                "w": 100,
+                "h": 100,
+                "source": [{ "id": 1, "path": "panel.png" }],
+                "image": [{ "id": "panel", "src": 1, "w": 10, "h": 10 }],
+                "destination": [{
+                    "id": "panel",
+                    "draw": "bmz:lua_draw_callback:0",
+                    "dst": [{ "x": 0, "y": 0, "w": 10, "h": 10 }]
+                }]
+            }"#,
+        )
+        .unwrap();
+        let runtime = Arc::new(AlternatingLuaDrawRuntime::default());
+        let mut context = SkinContext::from_manifest_and_document(
+            default_skin_manifest(),
+            document,
+            [SkinDocumentTexture {
+                source_id: "1".to_string(),
+                texture: SkinTextureId(41),
+                source_size: SkinImageSize { width: 10.0, height: 10.0 },
+            }],
+        );
+        context.set_lua_draw_runtime(Some(runtime.clone()));
+
+        assert!(context.static_document_items().is_empty());
+        assert_eq!(context.static_document_items().len(), 1);
+        assert_eq!(runtime.calls.load(Ordering::Relaxed), 2);
     }
 }

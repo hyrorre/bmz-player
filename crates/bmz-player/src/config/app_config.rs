@@ -23,6 +23,8 @@ pub struct AppConfig {
     #[serde(default)]
     pub tables: DifficultyTablesConfig,
     #[serde(default)]
+    pub downloads: ChartDownloadsConfig,
+    #[serde(default)]
     pub updates: UpdatesConfig,
     #[serde(default)]
     pub discord: DiscordConfig,
@@ -51,6 +53,9 @@ pub struct ScanConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AudioConfig {
     pub backend: AudioBackend,
+    /// OS の通常共有出力、または Windows 10 以降の IAudioClient3 低遅延共有出力。
+    #[serde(default)]
+    pub output_mode: AudioOutputMode,
     pub output_device: String,
     /// `sample_rate_mode` が `Fixed` のときに要求するサンプルレート(Hz)。
     pub sample_rate: u32,
@@ -59,6 +64,8 @@ pub struct AudioConfig {
     pub sample_rate_mode: AudioSampleRateMode,
     pub buffer_size_mode: AudioBufferSizeMode,
     pub buffer_size: u32,
+    /// 将来の WASAPI 排他モード用に旧設定を保持する。低遅延共有モードとは独立。
+    #[serde(default)]
     pub exclusive_mode: bool,
     pub asio_driver: String,
     /// 出力するステレオチャンネルペア(0 始まり)。0 = 1-2ch, 1 = 3-4ch, 2 = 5-6ch …。
@@ -78,6 +85,14 @@ pub enum AudioBackend {
     Alsa,
     Pulse,
     PipeWire,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "PascalCase")]
+pub enum AudioOutputMode {
+    #[default]
+    Shared,
+    SharedLowLatency,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -101,9 +116,13 @@ pub enum AudioSampleRateMode {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VideoConfig {
     pub mode: WindowMode,
+    /// フルスクリーン時に使用するモニター。空文字列はプライマリモニターを意味する。
+    #[serde(default)]
+    pub monitor_name: String,
     pub width: u32,
     pub height: u32,
     pub vsync_mode: VsyncModeConfig,
+    /// 目標 FPS。0 はフレームペーサーによる待機を行わず、無制限を意味する。
     pub target_fps: u32,
     pub frame_limit_in_background: u32,
     pub renderer: RendererBackend,
@@ -248,9 +267,44 @@ pub enum VsyncModeConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GlobalInputConfig {
     pub backend: InputBackendKind,
+    #[serde(default)]
+    pub gamepad_backend: GamepadBackendKind,
     pub keyboard_enabled: bool,
     pub gamepad_enabled: bool,
     pub midi_enabled: bool,
+    /// 論理スロット `gamepad1` / `gamepad2` に割り当てるbackend非依存のデバイスID。
+    #[serde(default, skip_serializing_if = "gamepad_stable_slots_unassigned")]
+    pub gamepad_slot_device_ids: [Option<String>; 2],
+    /// 旧設定との互換用gilrs `GamepadId`。stable IDへ移行後は保存しない。
+    #[serde(
+        default = "default_gamepad_slot_gilrs_ids",
+        skip_serializing_if = "gamepad_slots_unassigned"
+    )]
+    pub gamepad_slot_gilrs_ids: [Option<u32>; 2],
+    /// プレイ開始時に解決したbmz-gameplayのDeviceId。設定ファイルには保存しない。
+    #[serde(skip)]
+    pub gamepad_slot_runtime_device_ids: [Option<u32>; 2],
+}
+
+fn default_gamepad_slot_gilrs_ids() -> [Option<u32>; 2] {
+    [None, None]
+}
+
+fn gamepad_slots_unassigned(slots: &[Option<u32>; 2]) -> bool {
+    slots.iter().all(|slot| slot.is_none())
+}
+
+fn gamepad_stable_slots_unassigned(slots: &[Option<String>; 2]) -> bool {
+    slots.iter().all(|slot| slot.is_none())
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "PascalCase")]
+pub enum GamepadBackendKind {
+    Auto,
+    #[default]
+    Gilrs,
+    GameInput,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -280,14 +334,23 @@ pub const DEFAULT_DIFFICULTY_TABLE_SOURCE_URLS: &[&str] = &[
     "https://stellabms.xyz/so/table.html",
     "https://stellabms.xyz/sn/table.html",
     "https://mplwtch.github.io/Solomon/",
+    "https://monibms.github.io/Dystopia/dystopia.html",
     "https://mocha-repository.info/table/ln_header.json",
     "https://ladymade-star.github.io/luminous/",
     "http://minddnim.web.fc2.com/sara/3rd_hard/bms_sara_3rd_hard.html",
     "https://egret9.github.io/Scramble/",
+    "https://deltabms.yaruki0.net/table/data/dpdelta_head.json",
+    "https://deltabms.yaruki0.net/table/data/insane_head.json",
+    "https://stellabms.xyz/dpst/table.html",
+    "https://stellabms.xyz/dp/table.html",
+    "https://pmsdifficulty.xxxxxxxx.jp/PMSdifficulty.html",
+    "https://pmsdifficulty.xxxxxxxx.jp/insane_PMSdifficulty.html",
+    "https://pmsdifficulty.xxxxxxxx.jp/_pastoral_insane_table.html",
+    "https://pmsdifficulty.xxxxxxxx.jp/_pastoral_upper.html",
+    "https://hibyethere.github.io/table/",
     "https://classmaterma.github.io/4UE/table.html",
     "https://classmaterma.github.io/UE/table.html",
     "https://classmaterma.github.io/8UE/table.html",
-    "https://hibyethere.github.io/table/",
 ];
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -303,6 +366,18 @@ pub struct DifficultyTableSource {
     pub url: String,
     #[serde(default = "default_true")]
     pub enabled: bool,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ChartDownloadsConfig {
+    #[serde(default)]
+    pub ipfs_enabled: bool,
+    #[serde(default)]
+    pub ipfs_api_url: String,
+    #[serde(default)]
+    pub http_enabled: bool,
+    #[serde(default)]
+    pub http_api_url: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -430,6 +505,7 @@ impl Default for AppConfig {
             },
             audio: AudioConfig {
                 backend: AudioBackend::Auto,
+                output_mode: AudioOutputMode::Shared,
                 output_device: String::new(),
                 sample_rate: 48_000,
                 sample_rate_mode: AudioSampleRateMode::Auto,
@@ -441,6 +517,7 @@ impl Default for AppConfig {
             },
             video: VideoConfig {
                 mode: WindowMode::Windowed,
+                monitor_name: String::new(),
                 width: 1280,
                 height: 720,
                 vsync_mode: VsyncModeConfig::Vsync,
@@ -453,12 +530,17 @@ impl Default for AppConfig {
             select: MusicSelectConfig::default(),
             input: GlobalInputConfig {
                 backend: InputBackendKind::Auto,
+                gamepad_backend: GamepadBackendKind::Gilrs,
                 keyboard_enabled: true,
                 gamepad_enabled: true,
                 midi_enabled: false,
+                gamepad_slot_device_ids: [None, None],
+                gamepad_slot_gilrs_ids: default_gamepad_slot_gilrs_ids(),
+                gamepad_slot_runtime_device_ids: [None, None],
             },
             logging: LoggingConfig { level: LogLevel::Info, file_logging: true },
             tables: DifficultyTablesConfig::default(),
+            downloads: ChartDownloadsConfig::default(),
             updates: UpdatesConfig::default(),
             discord: DiscordConfig::default(),
         }
@@ -485,6 +567,94 @@ mod tests {
         assert!(!config.scan.auto_rescan_on_startup);
         assert_eq!(config.video.vsync_mode, VsyncModeConfig::Vsync);
         assert_eq!(config.video.frame_limit_in_background, 60);
+    }
+
+    #[test]
+    fn app_config_defaults_fullscreen_monitor_to_primary() {
+        let config = AppConfig::default();
+
+        assert!(config.video.monitor_name.is_empty());
+    }
+
+    #[test]
+    fn app_config_loads_missing_fullscreen_monitor_as_primary() {
+        let toml =
+            toml::to_string(&AppConfig::default()).unwrap().replace("monitor_name = \"\"\n", "");
+
+        let config: AppConfig = toml::from_str(&toml).unwrap();
+
+        assert!(config.video.monitor_name.is_empty());
+    }
+
+    #[test]
+    fn app_config_round_trips_unlimited_target_fps() {
+        let mut config = AppConfig::default();
+        config.video.target_fps = 0;
+
+        let toml = toml::to_string(&config).unwrap();
+        let loaded: AppConfig = toml::from_str(&toml).unwrap();
+
+        assert_eq!(loaded.video.target_fps, 0);
+    }
+
+    #[test]
+    fn app_config_defaults_gamepad_backend_to_gilrs() {
+        let config = AppConfig::default();
+
+        assert_eq!(config.input.gamepad_backend, GamepadBackendKind::Gilrs);
+    }
+
+    #[test]
+    fn app_config_defaults_audio_output_to_standard_shared_mode() {
+        let config = AppConfig::default();
+
+        assert_eq!(config.audio.output_mode, AudioOutputMode::Shared);
+    }
+
+    #[test]
+    fn app_config_loads_missing_audio_output_mode_as_standard_shared() {
+        let toml = toml::to_string(&AppConfig::default())
+            .unwrap()
+            .replace("output_mode = \"Shared\"\n", "");
+
+        let config: AppConfig = toml::from_str(&toml).unwrap();
+
+        assert_eq!(config.audio.output_mode, AudioOutputMode::Shared);
+    }
+
+    #[test]
+    fn app_config_round_trips_low_latency_shared_audio_mode() {
+        let mut config = AppConfig::default();
+        config.audio.output_mode = AudioOutputMode::SharedLowLatency;
+
+        let toml = toml::to_string(&config).unwrap();
+        let loaded: AppConfig = toml::from_str(&toml).unwrap();
+
+        assert_eq!(loaded.audio.output_mode, AudioOutputMode::SharedLowLatency);
+    }
+
+    #[test]
+    fn legacy_exclusive_flag_does_not_enable_low_latency_shared_mode() {
+        let toml = toml::to_string(&AppConfig::default())
+            .unwrap()
+            .replace("output_mode = \"Shared\"\n", "")
+            .replace("exclusive_mode = false", "exclusive_mode = true");
+
+        let config: AppConfig = toml::from_str(&toml).unwrap();
+
+        assert!(config.audio.exclusive_mode);
+        assert_eq!(config.audio.output_mode, AudioOutputMode::Shared);
+    }
+
+    #[test]
+    fn app_config_loads_missing_gamepad_backend_as_gilrs() {
+        let toml = toml::to_string(&AppConfig::default())
+            .unwrap()
+            .replace("gamepad_backend = \"Gilrs\"\n", "");
+
+        let config: AppConfig = toml::from_str(&toml).unwrap();
+
+        assert_eq!(config.input.gamepad_backend, GamepadBackendKind::Gilrs);
     }
 
     #[test]
@@ -524,6 +694,31 @@ mod tests {
         assert_eq!(config.tables.sources.len(), DEFAULT_DIFFICULTY_TABLE_SOURCE_URLS.len());
         assert!(config.tables.sources.iter().all(|source| source.enabled));
         assert_eq!(config.tables.sources[0].url, DEFAULT_DIFFICULTY_TABLE_SOURCE_URLS[0]);
+    }
+
+    #[test]
+    fn app_config_defaults_chart_downloads_disabled_without_api_urls() {
+        let config = AppConfig::default();
+
+        assert!(!config.downloads.ipfs_enabled);
+        assert!(config.downloads.ipfs_api_url.is_empty());
+        assert!(!config.downloads.http_enabled);
+        assert!(config.downloads.http_api_url.is_empty());
+    }
+
+    #[test]
+    fn app_config_loads_missing_chart_downloads_section() {
+        let mut serialized = toml::to_string(&AppConfig::default()).unwrap();
+        let start = serialized.find("[downloads]").unwrap();
+        let end = serialized[start + 1..]
+            .find("\n[")
+            .map(|offset| start + 1 + offset)
+            .unwrap_or(serialized.len());
+        serialized.replace_range(start..end, "");
+
+        let config: AppConfig = toml::from_str(&serialized).unwrap();
+
+        assert_eq!(config.downloads, ChartDownloadsConfig::default());
     }
 
     #[test]

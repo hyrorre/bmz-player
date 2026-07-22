@@ -59,8 +59,28 @@ pub fn load_chart_samples(
     chart: &PlayableChart,
     loader: &mut dyn SampleLoader,
 ) -> Vec<LoadedSampleReport> {
+    load_chart_samples_with_progress(engine, chart, loader, |_, _| {})
+}
+
+pub fn load_chart_samples_with_progress(
+    engine: &mut AudioEngine,
+    chart: &PlayableChart,
+    loader: &mut dyn SampleLoader,
+    mut on_progress: impl FnMut(usize, usize),
+) -> Vec<LoadedSampleReport> {
     let volwav = volwav_factor(chart.metadata.volwav_percent);
-    chart.sounds.iter().map(|asset| load_asset(engine, asset, loader, volwav)).collect()
+    let total = chart.sounds.len();
+    on_progress(0, total);
+    chart
+        .sounds
+        .iter()
+        .enumerate()
+        .map(|(index, asset)| {
+            let report = load_asset(engine, asset, loader, volwav);
+            on_progress(index + 1, total);
+            report
+        })
+        .collect()
 }
 
 fn load_asset(
@@ -269,6 +289,23 @@ mod tests {
         assert!(engine.samples.get(SoundId(1)).is_some());
         assert!(engine.samples.get(SoundId(2)).is_none());
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn load_chart_samples_reports_progress_after_each_asset() {
+        let mut engine = AudioEngine::default();
+        let chart = chart_with_sounds(vec![
+            SoundAssetRef { id: SoundId(1), path: PathBuf::from("missing-1.wav") },
+            SoundAssetRef { id: SoundId(2), path: PathBuf::from("missing-2.wav") },
+        ]);
+        let mut loader = TestLoader::default();
+        let mut progress = Vec::new();
+
+        load_chart_samples_with_progress(&mut engine, &chart, &mut loader, |loaded, total| {
+            progress.push((loaded, total));
+        });
+
+        assert_eq!(progress, vec![(0, 2), (1, 2), (2, 2)]);
     }
 
     #[test]

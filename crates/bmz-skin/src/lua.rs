@@ -1,31 +1,71 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
+use std::ffi::CStr;
 use std::fs;
+use std::os::raw::c_int;
 use std::path::Component;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
+use std::{fmt, panic};
 
 use anyhow::{Context, Result, anyhow, bail};
-use mlua::{Function, HookTriggers, Lua, Table, Value, Variadic, VmState};
+use mlua::{Function, HookTriggers, Lua, RegistryKey, Table, Value, Variadic, VmState};
 use serde_json::{Map as JsonMap, Number as JsonNumber, Value as JsonValue};
 
 use bmz_skin_document::{
-    SKIN_DYNAMIC_TIMER_BASE, SKIN_EXPR_ADJUSTED_COVER, SKIN_EXPR_ADJUSTED_RATE,
-    SKIN_EXPR_ADJUSTED_RATE_ADOT, SKIN_EXPR_COURSE_TABLE_TEXT,
-    SKIN_EXPR_FAST_SLOW_BREAKDOWN_HEIGHT, SKIN_EXPR_FS_THRESHOLD, SKIN_REF_PLAY_GAUGE_TYPE,
+    SKIN_DYNAMIC_TIMER_BASE, SKIN_EVENT_RESULT_PANEL_GRAPH, SKIN_EVENT_RESULT_PANEL_IR,
+    SKIN_EVENT_RUNTIME_BASE, SKIN_EXPR_ADJUSTED_COVER, SKIN_EXPR_ADJUSTED_RATE,
+    SKIN_EXPR_ADJUSTED_RATE_ADOT, SKIN_EXPR_COURSE_CLEAR_RATE, SKIN_EXPR_COURSE_TABLE_TEXT,
+    SKIN_EXPR_FAST_SLOW_BREAKDOWN_HEIGHT, SKIN_EXPR_FS_THRESHOLD, SKIN_EXPR_GAUGE_AMOUNT_FRACTION,
+    SKIN_EXPR_GAUGE_AMOUNT_INTEGER, SKIN_EXPR_GAUGE_PERCENT_FRACTION,
+    SKIN_EXPR_GAUGE_PERCENT_INTEGER, SKIN_EXPR_RESULT_TABLE_TITLE, SKIN_REF_PLAY_GAUGE_TYPE,
 };
 
 use crate::{
-    LoadedLuaSkinValue, LuaLoadRuntimeState, SkinLoadDependencies, SkinLoadWarning,
+    LoadedLuaSkinValue, LuaLoadRuntimeState, LuaMainState, SkinLoadDependencies, SkinLoadWarning,
     SkinLoadedFileDependency,
 };
 
 const LUA_INSTRUCTION_LIMIT: i64 = 2_000_000;
+const LUA_INFERENCE_INSTRUCTION_LIMIT: i64 = 16_000_000;
 const LUA_HOOK_INTERVAL: u32 = 1_000;
 const LUA_MAX_TABLE_DEPTH: usize = 64;
 const LUA_MAX_TABLE_ENTRIES: usize = 200_000;
+const LUA_IO_MAX_READ_BYTES: usize = 8 * 1024 * 1024;
+const LUA_MEMORY_LIMIT_BYTES: usize = 256 * 1024 * 1024;
 const TIMER_OFF_VALUE: i32 = i32::MIN;
+pub const LUA_DRAW_CALLBACK_PREFIX: &str = "bmz:lua_draw_callback:";
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct LuaRuntimeFlagProbe {
+    id: i32,
+    table: String,
+    field: String,
+    initial: bool,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+enum LuaRuntimeScalar {
+    Boolean(bool),
+    Integer(i64),
+    Number(f64),
+    String(Vec<u8>),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LuaAudioActionKindProbe {
+    Play,
+    Loop,
+    Stop,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct LuaAudioActionProbe {
+    action: LuaAudioActionKindProbe,
+    path: String,
+    volume: f64,
+}
 
 /// beatoraja fast/slow 判定カウント ref (graph 比率推論用)
 const FAST_SLOW_FAST_REFS: [i32; 6] = [410, 412, 414, 416, 418, 421];
@@ -48,16 +88,174 @@ pub struct ConvertReport {
     pub warnings: Vec<String>,
 }
 
+struct LuaRuntimeCallback {
+    path: String,
+    key: Option<RegistryKey>,
+}
+
+/// A Lua-only sidecar that owns the runtime VM and every callback registry key.
+///
+/// The VM is intentionally not cloneable. Its callbacks are obtained by a second
+/// load after inference has completed, so inference can never mutate runtime
+/// closure state, module state, or the Lua random-number generator.
+pub struct LuaSkinRuntime {
+    lua: Lua,
+    callbacks: Vec<LuaRuntimeCallback>,
+    main_state_key: RegistryKey,
+    instruction_budget: LuaInstructionBudget,
+    skin_path: PathBuf,
+    failed_callbacks: BTreeSet<usize>,
+    failure_log_count: usize,
+}
+
+impl fmt::Debug for LuaSkinRuntime {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("LuaSkinRuntime")
+            .field("skin_path", &self.skin_path)
+            .field("callback_count", &self.callbacks.len())
+            .field("failed_callbacks", &self.failed_callbacks)
+            .finish_non_exhaustive()
+    }
+}
+
+impl LuaSkinRuntime {
+    pub fn callback_count(&self) -> usize {
+        self.callbacks.len()
+    }
+
+    pub fn callback_path(&self, callback_id: usize) -> Option<&str> {
+        self.callbacks.get(callback_id).map(|callback| callback.path.as_str())
+    }
+
+    /// Number of callback failures that produced a diagnostic. Repeated failures
+    /// of the same callback remain log-once and do not increase this value.
+    pub fn failure_log_count(&self) -> usize {
+        self.failure_log_count
+    }
+
+    pub fn evaluate_draw(&mut self, callback_id: usize, state: &dyn LuaMainState) -> bool {
+        self.instruction_budget.begin_runtime_callback();
+        let result = panic::catch_unwind(panic::AssertUnwindSafe(|| {
+            self.evaluate_draw_inner(callback_id, state)
+        }));
+        match result {
+            Ok(Ok(value)) => value,
+            Ok(Err(error)) => {
+                self.log_callback_failure_once(callback_id, &error.to_string());
+                false
+            }
+            Err(_) => {
+                self.log_callback_failure_once(callback_id, "panic while executing Lua callback");
+                false
+            }
+        }
+    }
+
+    fn evaluate_draw_inner(
+        &self,
+        callback_id: usize,
+        state: &dyn LuaMainState,
+    ) -> mlua::Result<bool> {
+        let callback = self.callbacks.get(callback_id).ok_or_else(|| {
+            mlua::Error::runtime(format!("unknown Lua draw callback ID {callback_id}"))
+        })?;
+        let key = callback.key.as_ref().ok_or_else(|| {
+            mlua::Error::runtime(format!(
+                "Lua draw callback was not registered at {}",
+                callback.path
+            ))
+        })?;
+        let function: Function = self.lua.registry_value(key)?;
+        let main_state: Table = self.lua.registry_value(&self.main_state_key)?;
+
+        self.lua.scope(|scope| {
+            const FIELDS: &[&str] = &[
+                "option",
+                "number",
+                "float",
+                "float_number",
+                "text",
+                "timer",
+                "event_index",
+                "gauge_type",
+                "time",
+                "judge",
+            ];
+            let originals = FIELDS
+                .iter()
+                .map(|field| Ok((*field, main_state.get::<Value>(*field)?)))
+                .collect::<mlua::Result<Vec<_>>>()?;
+
+            main_state.set("option", scope.create_function(|_, id: i32| Ok(state.option(id)))?)?;
+            main_state.set("number", scope.create_function(|_, id: i32| Ok(state.number(id)))?)?;
+            let float = scope.create_function(|_, id: i32| Ok(state.float(id)))?;
+            main_state.set("float", float.clone())?;
+            main_state.set("float_number", float)?;
+            main_state.set("text", scope.create_function(|_, id: i32| Ok(state.text(id)))?)?;
+            main_state.set(
+                "timer",
+                scope
+                    .create_function(|_, id: i32| Ok(state.timer(id).unwrap_or(TIMER_OFF_VALUE)))?,
+            )?;
+            main_state.set(
+                "event_index",
+                scope.create_function(|_, id: i32| Ok(state.event_index(id)))?,
+            )?;
+            main_state.set("gauge_type", scope.create_function(|_, ()| Ok(state.gauge_type()))?)?;
+            main_state.set("time", scope.create_function(|_, ()| Ok(state.time_us()))?)?;
+            main_state
+                .set("judge", scope.create_function(|_, index: i32| Ok(state.judge(index)))?)?;
+
+            let result = match function.call::<Value>(()) {
+                Ok(Value::Boolean(value)) => Ok(value),
+                Ok(Value::Nil) => Err(mlua::Error::runtime("Lua draw callback returned nil")),
+                Ok(value) => Err(mlua::Error::runtime(format!(
+                    "Lua draw callback returned {}, expected boolean",
+                    value.type_name()
+                ))),
+                Err(error) => Err(error),
+            };
+
+            // Scoped functions borrow the current frame snapshot. Restore the
+            // persistent load-time stubs before the scope invalidates them.
+            for (field, value) in originals {
+                main_state.set(field, value)?;
+            }
+            result
+        })
+    }
+
+    fn log_callback_failure_once(&mut self, callback_id: usize, error: &str) {
+        if !self.failed_callbacks.insert(callback_id) {
+            return;
+        }
+        self.failure_log_count = self.failure_log_count.saturating_add(1);
+        let path = self.callback_path(callback_id).unwrap_or("<unknown>");
+        tracing::warn!(
+            skin = %self.skin_path.display(),
+            callback_id,
+            field_path = path,
+            classification = "ERROR",
+            error,
+            "Lua draw callback failed; falling back to false"
+        );
+    }
+}
+
 pub fn load_lua_skin_value(
     input: &Path,
     options: &BTreeMap<String, String>,
     files: &BTreeMap<String, String>,
     runtime_state: &LuaLoadRuntimeState,
+    virtual_io_files: &BTreeMap<String, String>,
 ) -> Result<LoadedLuaSkinValue> {
-    let (value, warnings, files, dependencies) =
-        execute_lua_skin(input, options, files, runtime_state)?;
+    let ExecutedLuaSkin { value, warnings, files, dependencies, lua_runtime, runtime_draw_paths } =
+        execute_lua_skin(input, options, files, runtime_state, virtual_io_files)?;
     Ok(LoadedLuaSkinValue {
         value,
+        lua_runtime,
+        runtime_draw_paths,
         warnings: warnings.into_iter().map(|message| SkinLoadWarning { message }).collect(),
         files,
         dependencies,
@@ -69,6 +267,8 @@ pub fn load_lua_skin_header_value(input: &Path) -> Result<LoadedLuaSkinValue> {
     let (value, warnings) = execute_lua_skin_header(input)?;
     Ok(LoadedLuaSkinValue {
         value,
+        lua_runtime: None,
+        runtime_draw_paths: Vec::new(),
         warnings: warnings.into_iter().map(|message| SkinLoadWarning { message }).collect(),
         files: BTreeMap::new(),
         dependencies: SkinLoadDependencies::default(),
@@ -82,8 +282,14 @@ pub fn convert_lua_skin_to_json(
     options: &BTreeMap<String, String>,
     files: &BTreeMap<String, String>,
 ) -> Result<ConvertReport> {
-    let (json, warnings, _, _) =
-        execute_lua_skin(input, options, files, &LuaLoadRuntimeState::default())?;
+    let ExecutedLuaSkin { value: json, warnings, runtime_draw_paths, .. } =
+        execute_lua_skin(input, options, files, &LuaLoadRuntimeState::default(), &BTreeMap::new())?;
+    if !runtime_draw_paths.is_empty() {
+        bail!(
+            "lua-to-json cannot serialize runtime draw callbacks: {}",
+            runtime_draw_paths.join(", ")
+        );
+    }
     if let Some(parent) = output.parent() {
         fs::create_dir_all(parent)
             .with_context(|| format!("failed to create output dir: {}", parent.display()))?;
@@ -108,7 +314,7 @@ fn execute_lua_skin_header(input: &Path) -> Result<(JsonValue, Vec<String>)> {
         .with_context(|| format!("failed to read lua skin: {}", input.display()))?;
 
     let lua = Lua::new();
-    install_instruction_limit(&lua);
+    let instruction_budget = install_instruction_limit(&lua);
     let probe = install_sandbox(
         &lua,
         &root,
@@ -118,6 +324,7 @@ fn execute_lua_skin_header(input: &Path) -> Result<(JsonValue, Vec<String>)> {
         &BTreeMap::new(),
         &BTreeMap::new(),
         &LuaLoadRuntimeState::default(),
+        &BTreeMap::new(),
         None,
     )?;
     let header = lua
@@ -125,10 +332,28 @@ fn execute_lua_skin_header(input: &Path) -> Result<(JsonValue, Vec<String>)> {
         .set_name(input.to_string_lossy().as_ref())
         .eval::<Value>()
         .with_context(|| format!("failed to execute lua skin header: {}", input.display()))?;
-    let header_json =
-        lua_value_to_json(&lua, header, "$", 0, &mut warnings, &probe, &mut table_budget)?;
+    instruction_budget.begin_inference();
+    let header_json = lua_value_to_json(
+        &lua,
+        header,
+        "$",
+        0,
+        &mut warnings,
+        &probe,
+        &instruction_budget,
+        &mut table_budget,
+    )?;
 
     Ok((header_json, warnings))
+}
+
+struct ExecutedLuaSkin {
+    value: JsonValue,
+    warnings: Vec<String>,
+    files: BTreeMap<String, String>,
+    dependencies: SkinLoadDependencies,
+    lua_runtime: Option<LuaSkinRuntime>,
+    runtime_draw_paths: Vec<String>,
 }
 
 fn execute_lua_skin(
@@ -136,7 +361,8 @@ fn execute_lua_skin(
     options: &BTreeMap<String, String>,
     files: &BTreeMap<String, String>,
     runtime_state: &LuaLoadRuntimeState,
-) -> Result<(JsonValue, Vec<String>, BTreeMap<String, String>, SkinLoadDependencies)> {
+    virtual_io_files: &BTreeMap<String, String>,
+) -> Result<ExecutedLuaSkin> {
     let input = canonicalize_skin_path(input)
         .with_context(|| format!("failed to canonicalize input: {}", input.display()))?;
     let parent =
@@ -150,7 +376,11 @@ fn execute_lua_skin(
         .with_context(|| format!("failed to read lua skin: {}", input.display()))?;
 
     let header_lua = Lua::new();
-    install_instruction_limit(&header_lua);
+    let header_instruction_budget = install_instruction_limit(&header_lua);
+    // The header pass intentionally uses neutral main_state values, but it must
+    // see the same read-only virtual filesystem as the document pass. Some
+    // skins read compatibility configuration while their required modules are
+    // initialized, before deciding whether to return a header or a document.
     let header_probe = install_sandbox(
         &header_lua,
         &root,
@@ -160,6 +390,7 @@ fn execute_lua_skin(
         &BTreeMap::new(),
         &BTreeMap::new(),
         &LuaLoadRuntimeState::default(),
+        virtual_io_files,
         None,
     )?;
     let header = header_lua
@@ -167,6 +398,7 @@ fn execute_lua_skin(
         .set_name(input.to_string_lossy().as_ref())
         .eval::<Value>()
         .with_context(|| format!("failed to execute lua skin header: {}", input.display()))?;
+    header_instruction_budget.begin_inference();
     let header_json = lua_value_to_json(
         &header_lua,
         header,
@@ -174,6 +406,7 @@ fn execute_lua_skin(
         0,
         &mut warnings,
         &header_probe,
+        &header_instruction_budget,
         &mut table_budget,
     )?;
     let skin_options = skin_config_options_from_header(&header_json, options, &mut warnings);
@@ -185,41 +418,98 @@ fn execute_lua_skin(
     warnings.retain(|warning| {
         !warning.starts_with("skipping unsupported draw function at ")
             && !warning.starts_with("skipping unsupported value function at ")
+            && !warning.starts_with("skipping unsupported custom timer function ")
             && !warning.starts_with("mixed lua table converted to object at ")
     });
 
-    let lua = Lua::new();
-    install_instruction_limit(&lua);
-    let dependencies = Arc::new(Mutex::new(SkinLoadDependencies::default()));
-    let main_state_probe = install_sandbox(
-        &lua,
-        &root,
-        options,
-        Some(&skin_options),
-        &skin_files,
-        &skin_file_dependency_names_from_header(&header_json),
-        &skin_offsets,
-        runtime_state,
-        Some(dependencies.clone()),
-    )?;
-    let value = lua
-        .load(&source)
-        .set_name(input.to_string_lossy().as_ref())
-        .eval::<Value>()
-        .with_context(|| format!("failed to execute lua skin: {}", input.display()))?;
-    let mut json = lua_value_to_json(
-        &lua,
-        value,
-        "$",
-        0,
-        &mut warnings,
-        &main_state_probe,
-        &mut table_budget,
-    )?;
+    // Lua スキンには、無効な `op` を持つ destination でも Lua の table 構築時に
+    // 座標を評価するものがある。選択中の property ではその座標が初期化されない場合、
+    // 最終的には描画されない destination でも nil 算術でロード全体が失敗してしまう。
+    // その場合だけ各 property の末尾選択肢で再評価する。描画時の有効 op は呼び出し側が
+    // 元の選択値から設定するため、この再試行で無効 destination が表示されることはない。
+    let fallback_skin_options = fallback_skin_config_options(&header_json, &skin_options);
+    let mut use_fallback_options = false;
+    let (mut json, dependencies, main_state_probe, result_panel_default, scene_audio_actions) = loop {
+        let active_skin_options =
+            if use_fallback_options { &fallback_skin_options } else { &skin_options };
+        let lua = Lua::new();
+        let instruction_budget = install_instruction_limit(&lua);
+        let dependencies = Arc::new(Mutex::new(SkinLoadDependencies::default()));
+        let main_state_probe = install_sandbox(
+            &lua,
+            &root,
+            options,
+            Some(active_skin_options),
+            &skin_files,
+            &skin_file_dependency_names_from_header(&header_json),
+            &skin_offsets,
+            runtime_state,
+            virtual_io_files,
+            Some(dependencies.clone()),
+        )?;
+        let value = match lua
+            .load(&source)
+            .set_name(input.to_string_lossy().as_ref())
+            .eval::<Value>()
+        {
+            Ok(value) => value,
+            Err(error)
+                if !use_fallback_options
+                    && fallback_skin_options != skin_options
+                    && lua_nil_arithmetic_error(&error) =>
+            {
+                use_fallback_options = true;
+                warnings.push(
+                    "retried lua skin with fallback property options after nil arithmetic in an inactive destination"
+                        .to_string(),
+                );
+                continue;
+            }
+            Err(error) => {
+                return Err(error)
+                    .with_context(|| format!("failed to execute lua skin: {}", input.display()));
+            }
+        };
+        let scene_audio_actions = {
+            let mut probe =
+                main_state_probe.lock().map_err(|_| anyhow!("main_state probe lock poisoned"))?;
+            let actions = probe.take_audio_actions();
+            probe.capture_audio_actions = false;
+            actions
+        };
+        instruction_budget.begin_inference();
+        let json = lua_value_to_json(
+            &lua,
+            value,
+            "$",
+            0,
+            &mut warnings,
+            &main_state_probe,
+            &instruction_budget,
+            &mut table_budget,
+        )?;
+        let result_panel_default =
+            lua.globals().get::<Value>("Expand_op").ok().and_then(lua_result_panel_value).or_else(
+                || main_state_probe.lock().ok().and_then(|probe| probe.result_panel_default),
+            );
+        break (json, dependencies, main_state_probe, result_panel_default, scene_audio_actions);
+    };
     record_static_skin_config_option_dependencies(&source, &skin_options, &dependencies);
+    if use_fallback_options && let Ok(mut dependencies) = dependencies.lock() {
+        // fallback 側の Lua 分岐で収集した依存関係は元選択の cache key に使えない。
+        dependencies.opaque = true;
+    }
 
+    let skin_audio_root = root.clone();
     if let JsonValue::Object(ref mut root) = json {
-        postprocess_lua_skin_json(root);
+        postprocess_lua_skin_json(root, &mut warnings);
+
+        if let Some(panel) = result_panel_default {
+            root.insert(
+                "resultPanelDefault".to_string(),
+                JsonValue::Number(JsonNumber::from(panel)),
+            );
+        }
 
         let timers = main_state_probe
             .lock()
@@ -235,28 +525,659 @@ fn execute_lua_skin(
             });
             root.insert("dynamicTimer".to_string(), JsonValue::Array(entries.collect()));
         }
+        let fixed_delay_timers = main_state_probe
+            .lock()
+            .ok()
+            .map(|probe| probe.fixed_delay_timers.clone())
+            .unwrap_or_default();
+        if !fixed_delay_timers.is_empty() {
+            let entries = fixed_delay_timers.into_iter().map(|(id, source_timer, delay_ms)| {
+                JsonValue::Object(JsonMap::from_iter([
+                    ("id".to_string(), JsonValue::Number(JsonNumber::from(id))),
+                    ("sourceTimer".to_string(), JsonValue::Number(JsonNumber::from(source_timer))),
+                    ("delayMs".to_string(), JsonValue::Number(JsonNumber::from(delay_ms))),
+                ]))
+            });
+            root.insert("fixedDelayTimer".to_string(), JsonValue::Array(entries.collect()));
+        }
+        let runtime_flags = main_state_probe
+            .lock()
+            .ok()
+            .map(|probe| probe.runtime_flags.clone())
+            .unwrap_or_default();
+        if !runtime_flags.is_empty() {
+            let entries = runtime_flags.into_iter().map(|flag| {
+                JsonValue::Object(JsonMap::from_iter([
+                    ("id".to_string(), JsonValue::Number(JsonNumber::from(flag.id))),
+                    ("initial".to_string(), JsonValue::Bool(flag.initial)),
+                ]))
+            });
+            root.insert("runtimeFlag".to_string(), JsonValue::Array(entries.collect()));
+        }
+        let runtime_events = main_state_probe
+            .lock()
+            .ok()
+            .map(|probe| probe.runtime_events.clone())
+            .unwrap_or_default();
+        if !runtime_events.is_empty() {
+            let entries = runtime_events.into_iter().map(|(id, toggle_flags)| {
+                JsonValue::Object(JsonMap::from_iter([
+                    ("id".to_string(), JsonValue::Number(JsonNumber::from(id))),
+                    (
+                        "toggleFlags".to_string(),
+                        JsonValue::Array(
+                            toggle_flags
+                                .into_iter()
+                                .map(|flag_id| JsonValue::Number(JsonNumber::from(flag_id)))
+                                .collect(),
+                        ),
+                    ),
+                ]))
+            });
+            root.insert("runtimeEvent".to_string(), JsonValue::Array(entries.collect()));
+        }
+        if !scene_audio_actions.is_empty() {
+            root.insert(
+                "sceneAudio".to_string(),
+                JsonValue::Array(
+                    scene_audio_actions.into_iter().map(lua_audio_action_to_json).collect(),
+                ),
+            );
+        }
+        normalize_lua_skin_audio_paths(&skin_audio_root, root, &mut warnings);
     }
 
-    let dependencies =
+    let unsupported_dynamic_timers = main_state_probe
+        .lock()
+        .ok()
+        .map(|probe| probe.unsupported_dynamic_timers.clone())
+        .unwrap_or_default();
+    warnings.extend(unsupported_dynamic_timers.into_iter().map(|id| {
+        format!(
+            "timer_util.timer_observe_boolean callback for generated timer {id} could not be inferred; timer remains inactive"
+        )
+    }));
+    let load_time_constant_dynamic_timers = main_state_probe
+        .lock()
+        .ok()
+        .map(|probe| probe.load_time_constant_dynamic_timers.clone())
+        .unwrap_or_default();
+    warnings.extend(load_time_constant_dynamic_timers.into_iter().map(|id| {
+        format!(
+            "timer_util.timer_observe_boolean callback for generated timer {id} was fixed to its load-time value; runtime Lua state changes are unsupported"
+        )
+    }));
+
+    let runtime_draw_paths = main_state_probe
+        .lock()
+        .map_err(|_| anyhow!("main_state probe lock poisoned"))?
+        .runtime_draw_paths
+        .clone();
+    let active_skin_options =
+        if use_fallback_options { &fallback_skin_options } else { &skin_options };
+    let lua_runtime = if runtime_draw_paths.is_empty() {
+        None
+    } else {
+        match build_lua_skin_runtime(
+            &input,
+            &root,
+            &source,
+            options,
+            active_skin_options,
+            &skin_files,
+            &skin_file_dependency_names_from_header(&header_json),
+            &skin_offsets,
+            runtime_state,
+            virtual_io_files,
+            &runtime_draw_paths,
+        ) {
+            Ok(runtime) => Some(runtime),
+            Err(error) => {
+                warnings.push(format!(
+                    "ERROR: failed to build Lua draw callback runtime for {}: {error:#}; callbacks fall back to false",
+                    input.display()
+                ));
+                None
+            }
+        }
+    };
+    let mut dependencies =
         dependencies.lock().map_err(|_| anyhow!("lua dependency tracker lock poisoned"))?.clone();
-    Ok((json, warnings, skin_named_files, dependencies))
+    // A cached document cannot safely clone its sidecar VM. Keeping runtime
+    // callback documents out of the document cache preserves registry/VM IDs.
+    dependencies.opaque |= !runtime_draw_paths.is_empty();
+    Ok(ExecutedLuaSkin {
+        value: json,
+        warnings,
+        files: skin_named_files,
+        dependencies,
+        lua_runtime,
+        runtime_draw_paths,
+    })
 }
 
-fn postprocess_lua_skin_json(root: &mut JsonMap<String, JsonValue>) {
-    repair_keybeam_destination_draws(root);
+#[allow(clippy::too_many_arguments)]
+fn build_lua_skin_runtime(
+    input: &Path,
+    root: &Path,
+    source: &str,
+    options: &BTreeMap<String, String>,
+    skin_config_options: &BTreeMap<String, i64>,
+    skin_files: &BTreeMap<String, String>,
+    skin_file_dependency_names: &BTreeMap<String, String>,
+    skin_offsets: &BTreeMap<String, LuaSkinOffsetValue>,
+    runtime_state: &LuaLoadRuntimeState,
+    virtual_io_files: &BTreeMap<String, String>,
+    runtime_draw_paths: &[String],
+) -> Result<LuaSkinRuntime> {
+    let lua = Lua::new();
+    let instruction_budget = install_instruction_limit(&lua);
+    // This is a clean runtime VM. Installing the sandbox and evaluating the
+    // skin creates closures, but no draw callback is invoked here.
+    install_sandbox(
+        &lua,
+        root,
+        options,
+        Some(skin_config_options),
+        skin_files,
+        skin_file_dependency_names,
+        skin_offsets,
+        runtime_state,
+        virtual_io_files,
+        None,
+    )?;
+    let value = lua
+        .load(source)
+        .set_name(input.to_string_lossy().as_ref())
+        .eval::<Value>()
+        .with_context(|| format!("failed to execute runtime Lua skin: {}", input.display()))?;
+
+    let mut callbacks = Vec::with_capacity(runtime_draw_paths.len());
+    for (callback_id, path) in runtime_draw_paths.iter().enumerate() {
+        let callback =
+            lua_value_at_field_path(value.clone(), path).ok().and_then(|value| match value {
+                Value::Function(function) => lua.create_registry_value(function).ok(),
+                _ => None,
+            });
+        if callback.is_some() {
+            tracing::debug!(
+                skin = %input.display(),
+                callback_id,
+                field_path = path,
+                classification = "RUNTIME",
+                "registered Lua draw callback"
+            );
+        } else {
+            tracing::warn!(
+                skin = %input.display(),
+                callback_id,
+                field_path = path,
+                classification = "ERROR",
+                "failed to register Lua draw callback; callback falls back to false"
+            );
+        }
+        callbacks.push(LuaRuntimeCallback { path: path.clone(), key: callback });
+    }
+    let main_state: Table = lua.globals().get("bmz_main_state")?;
+    let main_state_key = lua.create_registry_value(main_state)?;
+    Ok(LuaSkinRuntime {
+        lua,
+        callbacks,
+        main_state_key,
+        instruction_budget,
+        skin_path: input.to_path_buf(),
+        failed_callbacks: BTreeSet::new(),
+        failure_log_count: 0,
+    })
 }
 
-fn install_instruction_limit(lua: &Lua) {
-    let remaining = AtomicI64::new(LUA_INSTRUCTION_LIMIT);
+fn lua_value_at_field_path(mut value: Value, path: &str) -> Result<Value> {
+    let bytes = path.as_bytes();
+    if bytes.first() != Some(&b'$') {
+        bail!("invalid Lua callback field path: {path}");
+    }
+    let mut cursor = 1;
+    while cursor < bytes.len() {
+        match bytes[cursor] {
+            b'.' => {
+                cursor += 1;
+                let start = cursor;
+                while cursor < bytes.len() && !matches!(bytes[cursor], b'.' | b'[') {
+                    cursor += 1;
+                }
+                if start == cursor {
+                    bail!("empty Lua callback field in path: {path}");
+                }
+                let key = &path[start..cursor];
+                let Value::Table(table) = value else {
+                    bail!("Lua callback path parent is not a table at {key}: {path}");
+                };
+                value = table.get::<Value>(key)?;
+            }
+            b'[' => {
+                cursor += 1;
+                let start = cursor;
+                while cursor < bytes.len() && bytes[cursor] != b']' {
+                    cursor += 1;
+                }
+                if cursor >= bytes.len() {
+                    bail!("unterminated Lua callback array index: {path}");
+                }
+                let index = path[start..cursor]
+                    .parse::<i64>()
+                    .with_context(|| format!("invalid Lua callback array index: {path}"))?;
+                cursor += 1;
+                let Value::Table(table) = value else {
+                    bail!("Lua callback array parent is not a table at [{index}]: {path}");
+                };
+                value = table.get::<Value>(index)?;
+            }
+            _ => bail!("invalid Lua callback field path: {path}"),
+        }
+    }
+    Ok(value)
+}
+
+fn normalize_lua_skin_audio_paths(
+    skin_root: &Path,
+    root: &mut JsonMap<String, JsonValue>,
+    warnings: &mut Vec<String>,
+) {
+    if let Some(JsonValue::Array(actions)) = root.get_mut("sceneAudio") {
+        normalize_lua_skin_audio_action_array(skin_root, actions, warnings);
+    }
+    if let Some(JsonValue::Array(events)) = root.get_mut("customEvents") {
+        for event in events {
+            let JsonValue::Object(event) = event else { continue };
+            if let Some(JsonValue::Array(actions)) = event.get_mut("audioActions") {
+                normalize_lua_skin_audio_action_array(skin_root, actions, warnings);
+            }
+        }
+    }
+}
+
+fn normalize_lua_skin_audio_action_array(
+    skin_root: &Path,
+    actions: &mut Vec<JsonValue>,
+    warnings: &mut Vec<String>,
+) {
+    actions.retain_mut(|action| {
+        let JsonValue::Object(action) = action else { return false };
+        let Some(JsonValue::String(path)) = action.get_mut("path") else { return false };
+        let requested = path.clone();
+        let requested_path = Path::new(&requested);
+        let candidate = if requested_path.is_absolute() {
+            requested_path.to_path_buf()
+        } else {
+            skin_root.join(requested_path)
+        };
+        let Ok(candidate) = canonicalize_skin_path(&candidate) else {
+            warnings.push(format!("skipping missing skin audio path: {requested}"));
+            return false;
+        };
+        let Ok(relative) = candidate.strip_prefix(skin_root) else {
+            warnings.push(format!("skipping skin audio path outside skin root: {requested}"));
+            return false;
+        };
+        *path = relative.to_string_lossy().replace('\\', "/");
+        true
+    });
+}
+
+fn lua_result_panel_value(value: Value) -> Option<i32> {
+    match value {
+        Value::Integer(value) => i32::try_from(value).ok(),
+        Value::Number(value) if value.is_finite() && value.fract() == 0.0 => Some(value as i32),
+        _ => None,
+    }
+    .filter(|panel| (0..=2).contains(panel))
+}
+
+fn result_panel_from_local_mode(mode: i32) -> Option<i32> {
+    match mode {
+        0 => Some(2),
+        1 => Some(1),
+        _ => None,
+    }
+}
+
+fn record_local_result_panel_default(
+    main_state_probe: &Arc<Mutex<MainStateProbe>>,
+    mode: i32,
+) -> Option<()> {
+    let panel = result_panel_from_local_mode(mode)?;
+    let mut probe = main_state_probe.lock().ok()?;
+    probe.result_panel_default.get_or_insert(panel);
+    Some(())
+}
+
+/// Returns the index and integer value of a closure upvalue named `result_mode`.
+///
+/// Lua 5.4 does not expose arbitrary upvalues through mlua's safe API. This
+/// private C callback only inspects the function passed as argument 1 and never
+/// installs the debug library into the skin sandbox.
+unsafe extern "C-unwind" fn find_result_mode_upvalue(state: *mut mlua::lua_State) -> c_int {
+    // SAFETY: mlua invokes this callback with a live Lua state. Every inspected
+    // stack slot belongs to this call, and `lua_getupvalue` pushes exactly one
+    // value whenever it returns a non-null name.
+    unsafe {
+        if mlua::ffi::lua_type(state, 1) != mlua::ffi::LUA_TFUNCTION {
+            return 0;
+        }
+        for index in 1..=255 {
+            let name = mlua::ffi::lua_getupvalue(state, 1, index);
+            if name.is_null() {
+                break;
+            }
+            let matches = CStr::from_ptr(name).to_bytes() == b"result_mode";
+            if matches && mlua::ffi::lua_isinteger(state, -1) != 0 {
+                let value = mlua::ffi::lua_tointeger(state, -1);
+                mlua::ffi::lua_pop(state, 1);
+                mlua::ffi::lua_pushinteger(state, i64::from(index));
+                mlua::ffi::lua_pushinteger(state, value);
+                return 2;
+            }
+            mlua::ffi::lua_pop(state, 1);
+        }
+        0
+    }
+}
+
+/// Returns the index and boolean value of a closure upvalue named `flag_score`.
+///
+/// mz-select keeps its score-availability guard local to the player-data
+/// module, while Luxe Flat exposes the same guard as a global. Inspecting the
+/// closure lets both original skins produce the same runtime draw predicate.
+unsafe extern "C-unwind" fn find_flag_score_upvalue(state: *mut mlua::lua_State) -> c_int {
+    // SAFETY: see `find_result_mode_upvalue`; this callback only inspects the
+    // function passed in stack slot 1 and balances every pushed upvalue.
+    unsafe {
+        if mlua::ffi::lua_type(state, 1) != mlua::ffi::LUA_TFUNCTION {
+            return 0;
+        }
+        for index in 1..=255 {
+            let name = mlua::ffi::lua_getupvalue(state, 1, index);
+            if name.is_null() {
+                break;
+            }
+            let matches = CStr::from_ptr(name).to_bytes() == b"flag_score";
+            if matches && mlua::ffi::lua_type(state, -1) == mlua::ffi::LUA_TBOOLEAN {
+                let value = mlua::ffi::lua_toboolean(state, -1);
+                mlua::ffi::lua_pop(state, 1);
+                mlua::ffi::lua_pushinteger(state, i64::from(index));
+                mlua::ffi::lua_pushboolean(state, value);
+                return 2;
+            }
+            mlua::ffi::lua_pop(state, 1);
+        }
+        0
+    }
+}
+
+/// Replaces one integer closure upvalue and reports whether the index existed.
+unsafe extern "C-unwind" fn set_integer_upvalue(state: *mut mlua::lua_State) -> c_int {
+    // SAFETY: arguments are validated before touching the stack. `lua_setupvalue`
+    // consumes the pushed value and only mutates the function passed to this call.
+    unsafe {
+        if mlua::ffi::lua_type(state, 1) != mlua::ffi::LUA_TFUNCTION
+            || mlua::ffi::lua_isinteger(state, 2) == 0
+            || mlua::ffi::lua_isinteger(state, 3) == 0
+        {
+            mlua::ffi::lua_pushboolean(state, 0);
+            return 1;
+        }
+        let index = mlua::ffi::lua_tointeger(state, 2);
+        let value = mlua::ffi::lua_tointeger(state, 3);
+        let Ok(index) = c_int::try_from(index) else {
+            mlua::ffi::lua_pushboolean(state, 0);
+            return 1;
+        };
+        mlua::ffi::lua_pushinteger(state, value);
+        let name = mlua::ffi::lua_setupvalue(state, 1, index);
+        mlua::ffi::lua_pushboolean(state, if name.is_null() { 0 } else { 1 });
+        1
+    }
+}
+
+/// Replaces one boolean closure upvalue and reports whether the index existed.
+unsafe extern "C-unwind" fn set_boolean_upvalue(state: *mut mlua::lua_State) -> c_int {
+    // SAFETY: arguments are validated before touching the stack. `lua_setupvalue`
+    // consumes the pushed value and only mutates the supplied function.
+    unsafe {
+        if mlua::ffi::lua_type(state, 1) != mlua::ffi::LUA_TFUNCTION
+            || mlua::ffi::lua_isinteger(state, 2) == 0
+            || mlua::ffi::lua_type(state, 3) != mlua::ffi::LUA_TBOOLEAN
+        {
+            mlua::ffi::lua_pushboolean(state, 0);
+            return 1;
+        }
+        let index = mlua::ffi::lua_tointeger(state, 2);
+        let value = mlua::ffi::lua_toboolean(state, 3);
+        let Ok(index) = c_int::try_from(index) else {
+            mlua::ffi::lua_pushboolean(state, 0);
+            return 1;
+        };
+        mlua::ffi::lua_pushboolean(state, value);
+        let name = mlua::ffi::lua_setupvalue(state, 1, index);
+        mlua::ffi::lua_pushboolean(state, if name.is_null() { 0 } else { 1 });
+        1
+    }
+}
+
+fn lua_result_mode_upvalue(lua: &Lua, function: &Function) -> Option<(i32, i32)> {
+    // SAFETY: both callbacks obey Lua's C function ABI and access only their
+    // call frame. They are retained by mlua for the duration of `call`.
+    let helper = unsafe { lua.create_c_function(find_result_mode_upvalue).ok()? };
+    let (index, value) = helper.call::<(i64, i64)>(function.clone()).ok()?;
+    Some((i32::try_from(index).ok()?, i32::try_from(value).ok()?))
+}
+
+fn set_lua_integer_upvalue(lua: &Lua, function: &Function, index: i32, value: i32) -> bool {
+    // SAFETY: see `lua_result_mode_upvalue`; Rust-side argument conversion also
+    // guarantees the C callback receives a function and two integers.
+    let Ok(helper) = (unsafe { lua.create_c_function(set_integer_upvalue) }) else {
+        return false;
+    };
+    helper.call::<bool>((function.clone(), index, value)).unwrap_or(false)
+}
+
+fn lua_flag_score_upvalue(lua: &Lua, function: &Function) -> Option<(i32, bool)> {
+    // SAFETY: the callback obeys Lua's C function ABI and accesses only its
+    // call frame. It is retained by mlua for the duration of `call`.
+    let helper = unsafe { lua.create_c_function(find_flag_score_upvalue).ok()? };
+    let (index, value) = helper.call::<(i64, bool)>(function.clone()).ok()?;
+    Some((i32::try_from(index).ok()?, value))
+}
+
+fn set_lua_boolean_upvalue(lua: &Lua, function: &Function, index: i32, value: bool) -> bool {
+    // SAFETY: see `lua_flag_score_upvalue`; Rust-side argument conversion
+    // guarantees the callback receives a function, integer, and boolean.
+    let Ok(helper) = (unsafe { lua.create_c_function(set_boolean_upvalue) }) else {
+        return false;
+    };
+    helper.call::<bool>((function.clone(), index, value)).unwrap_or(false)
+}
+
+fn postprocess_lua_skin_json(root: &mut JsonMap<String, JsonValue>, warnings: &mut Vec<String>) {
+    repair_malformed_destination_ops(root, warnings);
+    repair_select_score_rate_punctuation(root);
+    let repaired = repair_keybeam_destination_draws(root);
+    warnings.retain(|warning| {
+        !repaired.iter().any(|index| {
+            warning == &format!("skipping unsupported draw function at $.destination[{index}].draw")
+                || warning
+                    == &format!("skipping unsupported field `timer` at $.destination[{index}]")
+        })
+    });
+}
+
+/// Repairs two malformed `op` table shapes accepted by Lua/beatoraja skins but
+/// rejected by the strict document schema. Keep the predicates narrow so an
+/// unrelated object or intentionally nested array is not silently flattened.
+fn repair_malformed_destination_ops(
+    root: &mut JsonMap<String, JsonValue>,
+    warnings: &mut Vec<String>,
+) {
+    let Some(destinations) = root.get_mut("destination").and_then(JsonValue::as_array_mut) else {
+        return;
+    };
+    const DESTINATION_FIELDS: &[&str] = &[
+        "blend",
+        "filter",
+        "timer",
+        "timer_expr",
+        "loop",
+        "center",
+        "offset",
+        "offsets",
+        "stretch",
+        "draw",
+        "dst",
+        "mouseRect",
+    ];
+    let mut repaired_count = 0;
+
+    for (index, destination) in destinations.iter_mut().enumerate() {
+        let Some(destination) = destination.as_object_mut() else {
+            continue;
+        };
+        let Some(op) = destination.remove("op") else {
+            continue;
+        };
+
+        let repaired = match op {
+            JsonValue::Object(mut mixed) => {
+                let has_destination_marker = mixed.get("dst").is_some_and(JsonValue::is_array);
+                let named_fields_are_known = mixed
+                    .keys()
+                    .filter(|key| key.parse::<usize>().is_err())
+                    .all(|key| DESTINATION_FIELDS.contains(&key.as_str()));
+                let named_fields_do_not_conflict = mixed
+                    .keys()
+                    .filter(|key| key.parse::<usize>().is_err())
+                    .all(|key| !destination.contains_key(key));
+
+                let mut numbered = mixed
+                    .iter()
+                    .filter_map(|(key, value)| {
+                        key.parse::<usize>().ok().map(|position| (position, value.clone()))
+                    })
+                    .collect::<Vec<_>>();
+                numbered.sort_by_key(|(position, _)| *position);
+                let numbered_are_contiguous_i32 = !numbered.is_empty()
+                    && numbered.iter().enumerate().all(|(offset, (position, value))| {
+                        *position == offset + 1
+                            && value.as_i64().and_then(|value| i32::try_from(value).ok()).is_some()
+                    });
+
+                if has_destination_marker
+                    && named_fields_are_known
+                    && named_fields_do_not_conflict
+                    && numbered_are_contiguous_i32
+                {
+                    for key in mixed
+                        .keys()
+                        .filter(|key| key.parse::<usize>().is_err())
+                        .cloned()
+                        .collect::<Vec<_>>()
+                    {
+                        if let Some(value) = mixed.remove(&key) {
+                            destination.insert(key, value);
+                        }
+                    }
+                    destination.insert(
+                        "op".to_string(),
+                        JsonValue::Array(numbered.into_iter().map(|(_, value)| value).collect()),
+                    );
+                    warnings.retain(|warning| {
+                        warning
+                            != &format!(
+                                "mixed lua table converted to object at $.destination[{}].op",
+                                index + 1
+                            )
+                    });
+                    true
+                } else {
+                    destination.insert("op".to_string(), JsonValue::Object(mixed));
+                    false
+                }
+            }
+            JsonValue::Array(mut outer) if outer.len() == 2 => {
+                let head = outer.first().and_then(JsonValue::as_i64);
+                let nested = outer.get(1).and_then(JsonValue::as_array);
+                let nested_is_i32 = nested.is_some_and(|values| {
+                    !values.is_empty()
+                        && values.iter().all(|value| {
+                            value.as_i64().and_then(|value| i32::try_from(value).ok()).is_some()
+                        })
+                });
+                let redundant_prefix = head.is_some()
+                    && nested.and_then(|values| values.first()).and_then(JsonValue::as_i64) == head;
+                if nested_is_i32 && redundant_prefix {
+                    destination.insert("op".to_string(), outer.swap_remove(1));
+                    true
+                } else {
+                    destination.insert("op".to_string(), JsonValue::Array(outer));
+                    false
+                }
+            }
+            op => {
+                destination.insert("op".to_string(), op);
+                false
+            }
+        };
+
+        if repaired {
+            repaired_count += 1;
+        }
+    }
+    if repaired_count > 0 {
+        warnings.push(format!("repaired {repaired_count} malformed destination op tables"));
+    }
+}
+
+#[derive(Clone)]
+struct LuaInstructionBudget {
+    total_remaining: Arc<AtomicI64>,
+    callback_remaining: Arc<AtomicI64>,
+}
+
+impl LuaInstructionBudget {
+    fn begin_inference(&self) {
+        self.total_remaining.store(LUA_INFERENCE_INSTRUCTION_LIMIT, Ordering::Relaxed);
+        self.begin_callback();
+    }
+
+    fn begin_callback(&self) {
+        self.callback_remaining.store(LUA_INSTRUCTION_LIMIT, Ordering::Relaxed);
+    }
+
+    fn begin_runtime_callback(&self) {
+        // Runtime has no inference-wide work to preserve. Reset both counters so
+        // every draw invocation gets an independent, bounded instruction slice.
+        self.total_remaining.store(LUA_INSTRUCTION_LIMIT, Ordering::Relaxed);
+        self.begin_callback();
+    }
+}
+
+fn install_instruction_limit(lua: &Lua) -> LuaInstructionBudget {
+    let budget = LuaInstructionBudget {
+        total_remaining: Arc::new(AtomicI64::new(LUA_INSTRUCTION_LIMIT)),
+        callback_remaining: Arc::new(AtomicI64::new(LUA_INSTRUCTION_LIMIT)),
+    };
+    let total_remaining = budget.total_remaining.clone();
+    let callback_remaining = budget.callback_remaining.clone();
     lua.set_hook(HookTriggers::new().every_nth_instruction(LUA_HOOK_INTERVAL), move |_, _| {
-        if remaining.fetch_sub(i64::from(LUA_HOOK_INTERVAL), Ordering::Relaxed)
-            <= i64::from(LUA_HOOK_INTERVAL)
+        let interval = i64::from(LUA_HOOK_INTERVAL);
+        if total_remaining.fetch_sub(interval, Ordering::Relaxed) <= interval
+            || callback_remaining.fetch_sub(interval, Ordering::Relaxed) <= interval
         {
             Err(mlua::Error::runtime("lua skin instruction limit exceeded"))
         } else {
             Ok(VmState::Continue)
         }
     });
+    budget
 }
 
 #[derive(Debug)]
@@ -427,8 +1348,10 @@ fn install_sandbox(
     skin_file_dependency_names: &BTreeMap<String, String>,
     skin_offsets: &BTreeMap<String, LuaSkinOffsetValue>,
     runtime_state: &LuaLoadRuntimeState,
+    virtual_io_files: &BTreeMap<String, String>,
     load_dependencies: Option<Arc<Mutex<SkinLoadDependencies>>>,
 ) -> Result<Arc<Mutex<MainStateProbe>>> {
+    lua.set_memory_limit(LUA_MEMORY_LIMIT_BYTES).context("failed to set Lua skin memory limit")?;
     let main_state_probe = Arc::new(Mutex::new(MainStateProbe::default()));
     if let Some(load_dependencies) = load_dependencies.clone() {
         let mut probe =
@@ -440,10 +1363,20 @@ fn install_sandbox(
             main_state_probe.lock().map_err(|_| anyhow!("main_state probe lock poisoned"))?;
         probe.number_values = runtime_state.number_values.clone();
     }
+    if !runtime_state.text_values.is_empty() {
+        let mut probe =
+            main_state_probe.lock().map_err(|_| anyhow!("main_state probe lock poisoned"))?;
+        probe.text_values = runtime_state.text_values.clone();
+    }
     if !runtime_state.option_values.is_empty() {
         let mut probe =
             main_state_probe.lock().map_err(|_| anyhow!("main_state probe lock poisoned"))?;
         probe.option_values = runtime_state.option_values.clone();
+    }
+    if !runtime_state.event_index_values.is_empty() {
+        let mut probe =
+            main_state_probe.lock().map_err(|_| anyhow!("main_state probe lock poisoned"))?;
+        probe.event_index_values = runtime_state.event_index_values.clone();
     }
     let globals = lua.globals();
     if let Some(skin_config_options) = skin_config_options {
@@ -481,7 +1414,7 @@ fn install_sandbox(
         globals.set("skin_config", skin_config)?;
     }
     globals.set("os", create_os_stub(lua, main_state_probe.clone())?)?;
-    globals.set("io", create_io_stub(lua, root)?)?;
+    globals.set("io", create_io_stub(lua, root, virtual_io_files, load_dependencies.clone())?)?;
     globals.set("debug", Value::Nil)?;
     if let Ok(package) = globals.get::<Table>("package") {
         package.set("loadlib", Value::Nil)?;
@@ -531,12 +1464,15 @@ fn install_sandbox(
     })?;
     globals.set("loadfile", loadfile)?;
 
+    let main_state = create_main_state_stub(lua, main_state_probe.clone())?;
+    lua.globals().set("bmz_main_state", main_state)?;
+
     let root = sandbox_root;
     let probe_for_require = main_state_probe.clone();
     let dependencies_for_require = load_dependencies.clone();
     let require = lua.create_function(move |lua, module: String| {
         if module == "main_state" {
-            return create_main_state_stub(lua, probe_for_require.clone());
+            return lua.globals().get("bmz_main_state");
         }
         if module == "timer_util" {
             return create_timer_util_module(lua, probe_for_require.clone());
@@ -591,11 +1527,29 @@ struct MainStateProbe {
     float_number_calls: Vec<i32>,
     float_number_values: BTreeMap<i32, f64>,
     text_calls: Vec<i32>,
+    text_values: BTreeMap<i32, String>,
     os_clock_calls: usize,
     os_clock_value: Option<f64>,
     time_value_us: i32,
     next_dynamic_timer_id: i32,
     dynamic_timers: Vec<(i32, String)>,
+    dynamic_timer_ids_by_observe: BTreeMap<String, i32>,
+    fixed_delay_timers: Vec<(i32, i32, i32)>,
+    unsupported_dynamic_timers: Vec<i32>,
+    load_time_constant_dynamic_timers: Vec<i32>,
+    next_runtime_flag_id: i32,
+    runtime_flags: Vec<LuaRuntimeFlagProbe>,
+    next_runtime_event_id: i32,
+    runtime_events: Vec<(i32, Vec<i32>)>,
+    runtime_event_ids_by_flags: BTreeMap<Vec<i32>, i32>,
+    capture_audio_actions: bool,
+    audio_actions: Vec<LuaAudioActionProbe>,
+    keylogger_destination_occurrences: BTreeMap<String, usize>,
+    gauge_lead_glow_occurrences: BTreeMap<String, usize>,
+    gauge_value_destination_occurrences: BTreeMap<String, usize>,
+    gauge_value_overlay_mode: Option<&'static str>,
+    result_panel_default: Option<i32>,
+    runtime_draw_paths: Vec<String>,
     load_dependencies: Option<Arc<Mutex<SkinLoadDependencies>>>,
 }
 
@@ -616,11 +1570,29 @@ impl Default for MainStateProbe {
             float_number_calls: Vec::new(),
             float_number_values: BTreeMap::new(),
             text_calls: Vec::new(),
+            text_values: BTreeMap::new(),
             os_clock_calls: 0,
             os_clock_value: None,
             time_value_us: 1_000_000,
             next_dynamic_timer_id: SKIN_DYNAMIC_TIMER_BASE,
             dynamic_timers: Vec::new(),
+            dynamic_timer_ids_by_observe: BTreeMap::new(),
+            fixed_delay_timers: Vec::new(),
+            unsupported_dynamic_timers: Vec::new(),
+            load_time_constant_dynamic_timers: Vec::new(),
+            next_runtime_flag_id: 0,
+            runtime_flags: Vec::new(),
+            next_runtime_event_id: SKIN_EVENT_RUNTIME_BASE,
+            runtime_events: Vec::new(),
+            runtime_event_ids_by_flags: BTreeMap::new(),
+            capture_audio_actions: true,
+            audio_actions: Vec::new(),
+            keylogger_destination_occurrences: BTreeMap::new(),
+            gauge_lead_glow_occurrences: BTreeMap::new(),
+            gauge_value_destination_occurrences: BTreeMap::new(),
+            gauge_value_overlay_mode: None,
+            result_panel_default: None,
+            runtime_draw_paths: Vec::new(),
             load_dependencies: None,
         }
     }
@@ -639,10 +1611,21 @@ enum MainStateProbeMode {
 }
 
 impl MainStateProbe {
+    fn record_audio_action(&mut self, action: LuaAudioActionKindProbe, path: String, volume: f64) {
+        if self.capture_audio_actions && !path.is_empty() && volume.is_finite() {
+            self.audio_actions.push(LuaAudioActionProbe { action, path, volume });
+        }
+    }
+
+    fn take_audio_actions(&mut self) -> Vec<LuaAudioActionProbe> {
+        std::mem::take(&mut self.audio_actions)
+    }
+
     fn clear_aux_calls(&mut self) {
         self.float_number_calls.clear();
         self.float_number_values.clear();
         self.text_calls.clear();
+        self.text_values.clear();
         self.os_clock_calls = 0;
         self.os_clock_value = None;
         self.event_index_calls.clear();
@@ -725,6 +1708,12 @@ impl MainStateProbe {
     ) {
         self.begin_number_recording_with_values(values);
         self.option_values = options;
+    }
+
+    fn begin_text_recording_with_values(&mut self, values: BTreeMap<i32, String>) {
+        self.begin_number_recording_with_values(BTreeMap::new());
+        self.text_calls.clear();
+        self.text_values = values;
     }
 
     fn begin_number_timer_recording_with_values(
@@ -843,6 +1832,15 @@ impl MainStateProbe {
         self.gauge_type_value = 0;
     }
 
+    fn begin_timer_options_recording_with_values(
+        &mut self,
+        timer_values: BTreeMap<i32, i32>,
+        option_values: BTreeMap<i32, bool>,
+    ) {
+        self.begin_timer_recording_with_values(timer_values);
+        self.option_values = option_values;
+    }
+
     fn begin_gauge_type_call_recording(&mut self, value: i32) {
         self.mode = MainStateProbeMode::RecordNumbers { default_value: 0 };
         self.number_calls.clear();
@@ -879,6 +1877,18 @@ impl MainStateProbe {
     fn begin_event_index_recording_with_value(&mut self, event_id: i32, value: i32) {
         self.begin_event_index_call_recording(0);
         self.event_index_values.insert(event_id, value);
+    }
+
+    fn begin_event_index_options_recording_with_values(
+        &mut self,
+        event_id: i32,
+        event_value: i32,
+        option_values: BTreeMap<i32, bool>,
+        default_option_value: bool,
+    ) {
+        self.begin_event_index_recording_with_value(event_id, event_value);
+        self.option_values.insert(i32::MIN, default_option_value);
+        self.option_values.extend(option_values);
     }
 
     fn begin_os_clock_recording(&mut self, value: f64) {
@@ -923,6 +1933,7 @@ impl MainStateProbe {
         self.gauge_type_calls = 0;
         self.gauge_type_value = 0;
         self.os_clock_value = None;
+        self.text_values.clear();
     }
 
     fn number(&mut self, ref_id: i32) -> i32 {
@@ -985,6 +1996,22 @@ impl MainStateProbe {
         }
     }
 
+    fn record_load_time_event_index_dependency(&self, event_id: i32, value: i32) {
+        if let Some(dependencies) = &self.load_dependencies
+            && let Ok(mut dependencies) = dependencies.lock()
+        {
+            dependencies.event_index_values.insert(event_id, value);
+        }
+    }
+
+    fn record_load_time_text_dependency(&self, ref_id: i32, value: &str) {
+        if let Some(dependencies) = &self.load_dependencies
+            && let Ok(mut dependencies) = dependencies.lock()
+        {
+            dependencies.text_values.insert(ref_id, value.to_string());
+        }
+    }
+
     fn timer(&mut self, timer_id: i32) -> i32 {
         if matches!(self.mode, MainStateProbeMode::RuntimeStub) {
             return i32::MIN;
@@ -1022,23 +2049,33 @@ impl MainStateProbe {
 
     fn text(&mut self, ref_id: i32) -> String {
         if ref_id == 1010 {
-            return "BMZ Player 0.1.0".to_string();
+            return format!("bmz-player {}", env!("CARGO_PKG_VERSION"));
         }
         if matches!(self.mode, MainStateProbeMode::RuntimeStub) {
             if (1001..=1003).contains(&ref_id) {
+                if let Some(value) = self.text_values.get(&ref_id).cloned() {
+                    self.record_load_time_text_dependency(ref_id, &value);
+                    return value;
+                }
                 return format!(
                     "{LUA_TEXT_REF_SENTINEL_PREFIX}{ref_id}{LUA_TEXT_REF_SENTINEL_SUFFIX}"
                 );
             }
-            return String::new();
+            let value = self.text_values.get(&ref_id).cloned().unwrap_or_default();
+            self.record_load_time_text_dependency(ref_id, &value);
+            return value;
         }
         self.text_calls.push(ref_id);
-        format!("Text{ref_id}")
+        self.text_values.get(&ref_id).cloned().unwrap_or_else(|| format!("Text{ref_id}"))
     }
 
     fn event_index(&mut self, event_id: i32) -> i32 {
         match self.mode {
-            MainStateProbeMode::RuntimeStub => 0,
+            MainStateProbeMode::RuntimeStub => {
+                let value = self.event_index_values.get(&event_id).copied().unwrap_or_default();
+                self.record_load_time_event_index_dependency(event_id, value);
+                value
+            }
             MainStateProbeMode::SymbolicNumbers { base_value } => {
                 self.event_index_calls.push(event_id);
                 self.event_index_values.get(&event_id).copied().unwrap_or(base_value + event_id)
@@ -1216,7 +2253,7 @@ fn create_main_state_stub(lua: &Lua, probe: Arc<Mutex<MainStateProbe>>) -> mlua:
                 .volume_number(58))
         })?,
     )?;
-    let probe_for_volume_bg = probe;
+    let probe_for_volume_bg = probe.clone();
     table.set(
         "volume_bg",
         lua.create_function(move |_, ()| {
@@ -1229,12 +2266,57 @@ fn create_main_state_stub(lua: &Lua, probe: Arc<Mutex<MainStateProbe>>) -> mlua:
     table.set("set_volume_sys", lua.create_function(|_, _: Value| Ok(true))?)?;
     table.set("set_volume_key", lua.create_function(|_, _: Value| Ok(true))?)?;
     table.set("set_volume_bg", lua.create_function(|_, _: Value| Ok(true))?)?;
-    table
-        .set("audio_play", lua.create_function(|_, (_path, _volume): (Value, Value)| Ok(true))?)?;
-    table
-        .set("audio_loop", lua.create_function(|_, (_path, _volume): (Value, Value)| Ok(true))?)?;
-    table.set("audio_stop", lua.create_function(|_, _path: Value| Ok(true))?)?;
+    let probe_for_audio_play = probe.clone();
+    table.set(
+        "audio_play",
+        lua.create_function(move |_, (path, volume): (Value, Value)| {
+            if let Some((path, volume)) = lua_audio_path_and_volume(path, volume) {
+                probe_for_audio_play
+                    .lock()
+                    .map_err(|_| mlua::Error::external("main_state probe lock poisoned"))?
+                    .record_audio_action(LuaAudioActionKindProbe::Play, path, volume);
+            }
+            Ok(true)
+        })?,
+    )?;
+    let probe_for_audio_loop = probe.clone();
+    table.set(
+        "audio_loop",
+        lua.create_function(move |_, (path, volume): (Value, Value)| {
+            if let Some((path, volume)) = lua_audio_path_and_volume(path, volume) {
+                probe_for_audio_loop
+                    .lock()
+                    .map_err(|_| mlua::Error::external("main_state probe lock poisoned"))?
+                    .record_audio_action(LuaAudioActionKindProbe::Loop, path, volume);
+            }
+            Ok(true)
+        })?,
+    )?;
+    table.set(
+        "audio_stop",
+        lua.create_function(move |_, path: Value| {
+            if let Value::String(path) = path
+                && let Ok(path) = path.to_str()
+            {
+                probe
+                    .lock()
+                    .map_err(|_| mlua::Error::external("main_state probe lock poisoned"))?
+                    .record_audio_action(LuaAudioActionKindProbe::Stop, path.to_string(), 1.0);
+            }
+            Ok(true)
+        })?,
+    )?;
     Ok(Value::Table(table))
+}
+
+fn lua_audio_path_and_volume(path: Value, volume: Value) -> Option<(String, f64)> {
+    let Value::String(path) = path else { return None };
+    let volume = match volume {
+        Value::Integer(volume) => volume as f64,
+        Value::Number(volume) if volume.is_finite() => volume,
+        _ => return None,
+    };
+    Some((path.to_str().ok()?.to_string(), volume))
 }
 
 fn create_main_state_offset_table(lua: &Lua) -> mlua::Result<Value> {
@@ -1316,20 +2398,44 @@ fn create_os_stub(lua: &Lua, probe: Arc<Mutex<MainStateProbe>>) -> mlua::Result<
     Ok(Value::Table(table))
 }
 
-fn create_io_stub(lua: &Lua, root: &Path) -> mlua::Result<Value> {
+fn create_io_stub(
+    lua: &Lua,
+    root: &Path,
+    virtual_io_files: &BTreeMap<String, String>,
+    load_dependencies: Option<Arc<Mutex<SkinLoadDependencies>>>,
+) -> mlua::Result<Value> {
+    let virtual_io_files =
+        normalize_virtual_io_files(virtual_io_files).map_err(mlua::Error::external)?;
     let table = lua.create_table()?;
     let root_for_open = root.to_path_buf();
+    let virtual_files_for_open = virtual_io_files.clone();
+    let dependencies_for_open = load_dependencies.clone();
     table.set(
         "open",
         lua.create_function(move |lua, (path, mode): (String, Option<String>)| {
             let mode = mode.unwrap_or_else(|| "r".to_string());
-            if mode.starts_with('r') {
-                let Ok(path) = resolve_skin_io_path(&root_for_open, &path) else {
+            if matches!(mode.as_str(), "r" | "rb") {
+                let Ok(requested) = normalize_skin_io_relative_path(&path) else {
                     return Ok(Value::Nil);
                 };
-                let Ok(source) = fs::read_to_string(path) else {
+                let virtual_source = virtual_files_for_open.get(&requested);
+                record_virtual_io_dependency(
+                    &requested,
+                    virtual_source.map(String::as_str),
+                    dependencies_for_open.as_ref(),
+                );
+                if let Some(source) = virtual_source {
+                    return create_read_file_stub(lua, source.clone());
+                }
+                let Ok(path) = resolve_skin_io_path(&root_for_open, &requested) else {
+                    mark_io_dependency_opaque(dependencies_for_open.as_ref());
                     return Ok(Value::Nil);
                 };
+                let Ok(source) = read_skin_io_source(&path) else {
+                    mark_io_dependency_opaque(dependencies_for_open.as_ref());
+                    return Ok(Value::Nil);
+                };
+                record_lua_loaded_file_dependency(&path, dependencies_for_open.as_ref());
                 return create_read_file_stub(lua, source);
             }
             if mode.starts_with('w') || mode.starts_with('a') {
@@ -1339,17 +2445,53 @@ fn create_io_stub(lua: &Lua, root: &Path) -> mlua::Result<Value> {
         })?,
     )?;
     let root_for_lines = root.to_path_buf();
+    let virtual_files_for_lines = virtual_io_files;
+    let dependencies_for_lines = load_dependencies;
     table.set(
         "lines",
         lua.create_function(move |lua, path: String| {
-            let Ok(path) = resolve_skin_io_path(&root_for_lines, &path) else {
-                return create_lines_iterator(lua, Vec::new());
+            let Ok(requested) = normalize_skin_io_relative_path(&path) else {
+                return create_lines_iterator(lua, Arc::new(Mutex::new(ReadFileState::default())));
             };
-            let source = fs::read_to_string(path).unwrap_or_default();
-            create_lines_iterator(lua, source.lines().map(str::to_string).collect())
+            let virtual_source = virtual_files_for_lines.get(&requested);
+            record_virtual_io_dependency(
+                &requested,
+                virtual_source.map(String::as_str),
+                dependencies_for_lines.as_ref(),
+            );
+            let source = if let Some(source) = virtual_source {
+                source.clone()
+            } else {
+                let Ok(path) = resolve_skin_io_path(&root_for_lines, &requested) else {
+                    mark_io_dependency_opaque(dependencies_for_lines.as_ref());
+                    return create_lines_iterator(
+                        lua,
+                        Arc::new(Mutex::new(ReadFileState::default())),
+                    );
+                };
+                let Ok(source) = read_skin_io_source(&path) else {
+                    mark_io_dependency_opaque(dependencies_for_lines.as_ref());
+                    return create_lines_iterator(
+                        lua,
+                        Arc::new(Mutex::new(ReadFileState::default())),
+                    );
+                };
+                record_lua_loaded_file_dependency(&path, dependencies_for_lines.as_ref());
+                source
+            };
+            create_lines_iterator(lua, Arc::new(Mutex::new(ReadFileState::new(source))))
         })?,
     )?;
-    table.set("close", lua.create_function(|_, _file: Value| Ok(true))?)?;
+    table.set(
+        "close",
+        lua.create_function(|_, file: Value| {
+            let Value::Table(file) = file else {
+                return Ok(false);
+            };
+            let close = file.get::<Function>("close")?;
+            close.call::<bool>(file)
+        })?,
+    )?;
     Ok(Value::Table(table))
 }
 
@@ -1359,28 +2501,96 @@ fn lua_os_clock_seconds() -> f64 {
     origin.elapsed().as_secs_f64()
 }
 
+#[derive(Debug, Default)]
+struct ReadFileState {
+    source: String,
+    cursor: usize,
+    closed: bool,
+}
+
+impl ReadFileState {
+    fn new(source: String) -> Self {
+        Self { source, cursor: 0, closed: false }
+    }
+}
+
 fn create_read_file_stub(lua: &Lua, source: String) -> mlua::Result<Value> {
     let file = lua.create_table()?;
-    let lines = source.lines().map(str::to_string).collect::<Vec<_>>();
+    let state = Arc::new(Mutex::new(ReadFileState::new(source)));
+    let state_for_read = state.clone();
+    file.set(
+        "read",
+        lua.create_function(move |lua, (_self, format): (Value, Option<String>)| {
+            let format = format.as_deref().unwrap_or("*l");
+            let mut state = state_for_read
+                .lock()
+                .map_err(|_| mlua::Error::external("io read lock poisoned"))?;
+            if state.closed {
+                return Err(mlua::Error::external("attempt to use a closed file"));
+            }
+            match format {
+                "*a" | "*all" => {
+                    let rest = state.source[state.cursor..].to_string();
+                    state.cursor = state.source.len();
+                    Ok(Value::String(lua.create_string(rest)?))
+                }
+                "*l" => match read_file_line(&mut state) {
+                    Some(line) => Ok(Value::String(lua.create_string(line)?)),
+                    None => Ok(Value::Nil),
+                },
+                _ => Err(mlua::Error::external(format!(
+                    "unsupported read format in Lua skin sandbox: {format}"
+                ))),
+            }
+        })?,
+    )?;
+    let state_for_lines = state.clone();
     file.set(
         "lines",
-        lua.create_function(move |lua, _: Value| create_lines_iterator(lua, lines.clone()))?,
+        lua.create_function(move |lua, _: Value| {
+            create_lines_iterator(lua, state_for_lines.clone())
+        })?,
     )?;
-    file.set("close", lua.create_function(|_, _: Value| Ok(true))?)?;
+    let state_for_close = state;
+    file.set(
+        "close",
+        lua.create_function(move |_, _: Value| {
+            let mut state = state_for_close
+                .lock()
+                .map_err(|_| mlua::Error::external("io close lock poisoned"))?;
+            state.closed = true;
+            Ok(true)
+        })?,
+    )?;
     Ok(Value::Table(file))
 }
 
-fn create_lines_iterator(lua: &Lua, lines: Vec<String>) -> mlua::Result<Function> {
-    let index = Arc::new(Mutex::new(0usize));
+fn create_lines_iterator(lua: &Lua, state: Arc<Mutex<ReadFileState>>) -> mlua::Result<Function> {
     lua.create_function(move |lua, ()| {
-        let mut index =
-            index.lock().map_err(|_| mlua::Error::external("io lines lock poisoned"))?;
-        let Some(line) = lines.get(*index) else {
+        let mut state =
+            state.lock().map_err(|_| mlua::Error::external("io lines lock poisoned"))?;
+        if state.closed {
+            return Err(mlua::Error::external("attempt to use a closed file"));
+        }
+        let Some(line) = read_file_line(&mut state) else {
             return Ok(Value::Nil);
         };
-        *index += 1;
         Ok(Value::String(lua.create_string(line)?))
     })
+}
+
+fn read_file_line(state: &mut ReadFileState) -> Option<String> {
+    if state.cursor >= state.source.len() {
+        return None;
+    }
+    let rest = &state.source[state.cursor..];
+    let end = rest.find('\n').unwrap_or(rest.len());
+    let line = rest[..end].strip_suffix('\r').unwrap_or(&rest[..end]).to_string();
+    state.cursor = state.cursor.saturating_add(end);
+    if state.cursor < state.source.len() && state.source.as_bytes()[state.cursor] == b'\n' {
+        state.cursor += 1;
+    }
+    Some(line)
 }
 
 fn create_write_file_stub(lua: &Lua) -> mlua::Result<Value> {
@@ -1609,7 +2819,11 @@ fn create_luajava_stub(lua: &Lua) -> mlua::Result<Value> {
     let table = lua.create_table()?;
     table.set(
         "bindClass",
-        lua.create_function(|lua, _class_name: String| create_luajava_object_stub(lua))?,
+        lua.create_function(|lua, class_name: String| match class_name.as_str() {
+            "com.badlogic.gdx.Gdx" => create_luajava_gdx_stub(lua),
+            "com.badlogic.gdx.controllers.Controllers" => create_luajava_controllers_stub(lua),
+            _ => create_luajava_object_stub(lua),
+        })?,
     )?;
     table.set(
         "newInstance",
@@ -1622,6 +2836,35 @@ fn create_luajava_stub(lua: &Lua) -> mlua::Result<Value> {
         lua.create_function(|lua, _: Variadic<Value>| create_luajava_object_stub(lua))?,
     )?;
     Ok(Value::Table(table))
+}
+
+fn create_luajava_gdx_stub(lua: &Lua) -> mlua::Result<Value> {
+    let gdx = lua.create_table()?;
+    let input = lua.create_table()?;
+    input
+        .set("isKeyPressed", lua.create_function(|_, (_self, _key): (Value, Value)| Ok(false))?)?;
+    gdx.set("input", input)?;
+    Ok(Value::Table(gdx))
+}
+
+fn create_luajava_controllers_stub(lua: &Lua) -> mlua::Result<Value> {
+    let controllers = lua.create_table()?;
+    controllers.set(
+        "getControllers",
+        lua.create_function(|lua, _self: Value| {
+            let list = lua.create_table()?;
+            // libGDX Array exposes `size` as a numeric field. Returning an
+            // empty list is the neutral load-time value and prevents skins
+            // from treating the generic truthy object stub as live input.
+            list.set("size", 0)?;
+            list.set(
+                "get",
+                lua.create_function(|_, (_self, _index): (Value, Value)| Ok(Value::Nil))?,
+            )?;
+            Ok(Value::Table(list))
+        })?,
+    )?;
+    Ok(Value::Table(controllers))
 }
 
 fn create_luajava_object_stub(lua: &Lua) -> mlua::Result<Value> {
@@ -1682,18 +2925,39 @@ fn create_timer_util_module(lua: &Lua, probe: Arc<Mutex<MainStateProbe>>) -> mlu
     table.set(
         "timer_observe_boolean",
         lua.create_function(move |lua, observed: Function| {
-            let observe = infer_is_gauge_iidx_global_observe(lua, &observed)
-                .or_else(|| infer_boolean_predicate(&observed, &probe_for_observe, None))
-                .or_else(|| infer_constant_boolean(&observed))
-                .unwrap_or_else(|| "number(0) < 0".to_string());
+            let specialized = infer_is_gauge_iidx_global_observe(lua, &observed);
+            let observe = specialized
+                .clone()
+                .or_else(|| infer_runtime_boolean_field_observe(lua, &observed, &probe_for_observe))
+                .or_else(|| infer_boolean_predicate(&observed, &probe_for_observe, None));
+            let unsupported = observe.is_none();
+            let load_time_constant = specialized.is_none()
+                && observe.as_deref().is_some_and(is_constant_boolean_condition);
+            let observe = observe.unwrap_or_else(|| "number(0) < 0".to_string());
             let timer_id = {
                 let mut probe = probe_for_observe
                     .lock()
                     .map_err(|_| mlua::Error::external("main_state probe lock poisoned"))?;
-                let timer_id = probe.next_dynamic_timer_id;
-                probe.next_dynamic_timer_id += 1;
-                probe.dynamic_timers.push((timer_id, observe));
-                timer_id
+                if !unsupported
+                    && let Some(timer_id) =
+                        probe.dynamic_timer_ids_by_observe.get(&observe).copied()
+                {
+                    timer_id
+                } else {
+                    let timer_id = probe.next_dynamic_timer_id;
+                    probe.next_dynamic_timer_id += 1;
+                    probe.dynamic_timers.push((timer_id, observe.clone()));
+                    if !unsupported {
+                        probe.dynamic_timer_ids_by_observe.insert(observe, timer_id);
+                    }
+                    if unsupported {
+                        probe.unsupported_dynamic_timers.push(timer_id);
+                    }
+                    if load_time_constant {
+                        probe.load_time_constant_dynamic_timers.push(timer_id);
+                    }
+                    timer_id
+                }
             };
             let state = Arc::new(Mutex::new(TimerObserveState { timer_value: TIMER_OFF_VALUE }));
             let observed_for_timer = observed.clone();
@@ -1808,15 +3072,49 @@ fn skin_config_options_from_header(
     result
 }
 
+/// 無効な destination が Lua 評価時にも座標を要求するスキン向けの退避値。
+/// property ごとに末尾の選択肢を採用し、通常の選択で初期化されなかった optional
+/// layout を構築できるようにする。呼び出し元は描画用の有効 op を元選択で上書きする。
+fn fallback_skin_config_options(
+    header: &JsonValue,
+    selected_options: &BTreeMap<String, i64>,
+) -> BTreeMap<String, i64> {
+    let mut fallback = selected_options.clone();
+    let Some(properties) = header.get("property").and_then(JsonValue::as_array) else {
+        return fallback;
+    };
+
+    for property in properties {
+        let Some(name) = property.get("name").and_then(JsonValue::as_str) else {
+            continue;
+        };
+        let Some(op) = property
+            .get("item")
+            .and_then(JsonValue::as_array)
+            .and_then(|items| items.last())
+            .and_then(|item| item.get("op"))
+            .and_then(json_integer)
+        else {
+            continue;
+        };
+        fallback.insert(name.to_string(), op);
+    }
+    fallback
+}
+
+fn lua_nil_arithmetic_error(error: &mlua::Error) -> bool {
+    error.to_string().contains("attempt to perform arithmetic on a nil value")
+}
+
 fn option_value_to_op(items: &[JsonValue], value: &str) -> Option<i64> {
     if let Ok(op) = value.parse::<i64>() {
-        return items.iter().find_map(|item| {
-            (item.get("op").and_then(JsonValue::as_i64) == Some(op)).then_some(op)
-        });
+        return items
+            .iter()
+            .find_map(|item| (item.get("op").and_then(json_integer) == Some(op)).then_some(op));
     }
     items.iter().find_map(|item| {
         (item.get("name").and_then(JsonValue::as_str) == Some(value))
-            .then(|| item.get("op").and_then(JsonValue::as_i64))
+            .then(|| item.get("op").and_then(json_integer))
             .flatten()
     })
 }
@@ -1827,14 +3125,25 @@ fn default_property_op(property: &JsonValue, items: &[JsonValue]) -> Option<i64>
     {
         return Some(op);
     }
-    items.first().and_then(|item| item.get("op")).and_then(JsonValue::as_i64)
+    items.first().and_then(|item| item.get("op")).and_then(json_integer)
 }
 
 fn option_name_to_op(items: &[JsonValue], value: &str) -> Option<i64> {
     items.iter().find_map(|item| {
         (item.get("name").and_then(JsonValue::as_str) == Some(value))
-            .then(|| item.get("op").and_then(JsonValue::as_i64))
+            .then(|| item.get("op").and_then(json_integer))
             .flatten()
+    })
+}
+
+fn json_integer(value: &JsonValue) -> Option<i64> {
+    value.as_i64().or_else(|| {
+        let value = value.as_f64()?;
+        (value.is_finite()
+            && value.fract() == 0.0
+            && value >= i64::MIN as f64
+            && value <= i64::MAX as f64)
+            .then_some(value as i64)
     })
 }
 
@@ -2275,15 +3584,7 @@ fn resolve_lua_path(root: &Path, requested: &str, module: bool) -> Result<PathBu
 }
 
 fn resolve_skin_io_path(root: &Path, requested: &str) -> Result<PathBuf> {
-    let relative = requested.replace('\\', "/");
-    let relative_path = Path::new(&relative);
-    if relative_path.is_absolute()
-        || relative_path.components().any(|component| {
-            matches!(component, Component::ParentDir | Component::RootDir | Component::Prefix(_))
-        })
-    {
-        bail!("io path escapes skin root: {requested}");
-    }
+    let relative = normalize_skin_io_relative_path(requested)?;
 
     if let Some(path) = resolve_beatoraja_skin_alias(root, &relative) {
         return Ok(path);
@@ -2295,6 +3596,86 @@ fn resolve_skin_io_path(root: &Path, requested: &str) -> Result<PathBuf> {
         bail!("io path escapes skin root: {}", canonical.display());
     }
     Ok(canonical)
+}
+
+fn normalize_skin_io_relative_path(requested: &str) -> Result<String> {
+    if requested.contains('\0') {
+        bail!("io path contains NUL");
+    }
+    let relative = requested.replace('\\', "/");
+    if relative.starts_with('/') || relative.starts_with("//") {
+        bail!("io path escapes skin root: {requested}");
+    }
+    let mut normalized = Vec::new();
+    for (index, component) in relative.split('/').enumerate() {
+        if component.is_empty() || component == "." {
+            continue;
+        }
+        if component == ".."
+            || (index == 0
+                && component.as_bytes().get(1) == Some(&b':')
+                && component.as_bytes().first().is_some_and(u8::is_ascii_alphabetic))
+        {
+            bail!("io path escapes skin root: {requested}");
+        }
+        normalized.push(component);
+    }
+    if normalized.is_empty() {
+        bail!("io path is empty");
+    }
+    Ok(normalized.join("/"))
+}
+
+fn normalize_virtual_io_files(
+    files: &BTreeMap<String, String>,
+) -> Result<BTreeMap<String, String>> {
+    let mut normalized = BTreeMap::new();
+    for (path, source) in files {
+        let path = normalize_skin_io_relative_path(path)
+            .with_context(|| format!("invalid Lua virtual IO path: {path}"))?;
+        if source.len() > LUA_IO_MAX_READ_BYTES {
+            bail!("Lua virtual IO file exceeds {} byte limit: {path}", LUA_IO_MAX_READ_BYTES);
+        }
+        if normalized.insert(path.clone(), source.clone()).is_some() {
+            bail!("duplicate normalized Lua virtual IO path: {path}");
+        }
+    }
+    Ok(normalized)
+}
+
+fn read_skin_io_source(path: &Path) -> Result<String> {
+    let metadata = fs::metadata(path)?;
+    if metadata.len() > LUA_IO_MAX_READ_BYTES as u64 {
+        bail!("Lua IO file exceeds {} byte limit: {}", LUA_IO_MAX_READ_BYTES, path.display());
+    }
+    let source = fs::read_to_string(path)?;
+    if source.len() > LUA_IO_MAX_READ_BYTES {
+        bail!("Lua IO file exceeds {} byte limit: {}", LUA_IO_MAX_READ_BYTES, path.display());
+    }
+    Ok(source)
+}
+
+fn record_virtual_io_dependency(
+    path: &str,
+    source: Option<&str>,
+    dependencies: Option<&Arc<Mutex<SkinLoadDependencies>>>,
+) {
+    if let Some(dependencies) = dependencies
+        && let Ok(mut dependencies) = dependencies.lock()
+    {
+        dependencies.virtual_io_files.insert(path.to_string(), source.map(str::to_string));
+    }
+}
+
+fn mark_io_dependency_opaque(dependencies: Option<&Arc<Mutex<SkinLoadDependencies>>>) {
+    if let Some(dependencies) = dependencies
+        && let Ok(mut dependencies) = dependencies.lock()
+    {
+        // A missing real file cannot be represented by loaded_files metadata.
+        // Avoid caching a branch that could change merely because the file is
+        // created after this load.
+        dependencies.opaque = true;
+    }
 }
 
 fn resolve_beatoraja_skin_alias(root: &Path, relative: &str) -> Option<PathBuf> {
@@ -2371,6 +3752,7 @@ fn lua_value_to_json(
     depth: usize,
     warnings: &mut Vec<String>,
     main_state_probe: &Arc<Mutex<MainStateProbe>>,
+    instruction_budget: &LuaInstructionBudget,
     table_budget: &mut TableBudget,
 ) -> Result<JsonValue> {
     if depth > LUA_MAX_TABLE_DEPTH {
@@ -2396,6 +3778,7 @@ fn lua_value_to_json(
             depth + 1,
             warnings,
             main_state_probe,
+            instruction_budget,
             table_budget,
         )?,
         Value::Function(_) => {
@@ -2421,6 +3804,50 @@ fn lua_value_to_json(
     })
 }
 
+fn peaceful_gauge_lead_glow_id(id: &str) -> Option<(&str, bool)> {
+    let (group, side) = id.strip_prefix("gauge-lead-glow-")?.rsplit_once('-')?;
+    if !matches!(group, "assist_easy" | "easy" | "groove" | "hard" | "exhard" | "hazard") {
+        return None;
+    }
+    Some((
+        group,
+        match side {
+            "above" => false,
+            "below" => true,
+            _ => return None,
+        },
+    ))
+}
+
+fn is_peaceful_gauge_lead_glow_destination(entries: &[(Value, Value)]) -> bool {
+    let Some(Value::Table(dst)) = entries.iter().find_map(|(key, value)| {
+        matches!(key, Value::String(key) if key.as_bytes() == b"dst").then_some(value)
+    }) else {
+        return false;
+    };
+    let frames =
+        [1, 2, 3].into_iter().map(|index| dst.get::<Table>(index).ok()).collect::<Option<Vec<_>>>();
+    let Some(frames) = frames else { return false };
+    let expected = [(0, 0), (750, 255), (1500, 0)];
+    let rect = frames[0]
+        .get::<f64>("x")
+        .ok()
+        .zip(frames[0].get::<f64>("y").ok())
+        .zip(frames[0].get::<f64>("w").ok())
+        .zip(frames[0].get::<f64>("h").ok());
+    frames.iter().zip(expected).all(|(frame, (time, alpha))| {
+        frame.get::<i32>("time").ok() == Some(time)
+            && frame.get::<i32>("a").ok() == Some(alpha)
+            && frame
+                .get::<f64>("x")
+                .ok()
+                .zip(frame.get::<f64>("y").ok())
+                .zip(frame.get::<f64>("w").ok())
+                .zip(frame.get::<f64>("h").ok())
+                == rect
+    })
+}
+
 fn lua_table_to_json(
     lua: &Lua,
     table: Table,
@@ -2428,6 +3855,7 @@ fn lua_table_to_json(
     depth: usize,
     warnings: &mut Vec<String>,
     main_state_probe: &Arc<Mutex<MainStateProbe>>,
+    instruction_budget: &LuaInstructionBudget,
     table_budget: &mut TableBudget,
 ) -> Result<JsonValue> {
     let mut entries = Vec::new();
@@ -2469,6 +3897,7 @@ fn lua_table_to_json(
                 depth,
                 warnings,
                 main_state_probe,
+                instruction_budget,
                 table_budget,
             )?);
         }
@@ -2479,18 +3908,98 @@ fn lua_table_to_json(
         warnings.push(format!("mixed lua table converted to object at {path}"));
     }
     let object_id = lua_object_id(&entries);
+    let gauge_lead_glow_destination = object_id
+        .as_deref()
+        .filter(|_| path.contains(".destination["))
+        .and_then(|id| peaceful_gauge_lead_glow_id(id))
+        .filter(|_| is_peaceful_gauge_lead_glow_destination(&entries))
+        .and_then(|(group, below_border)| {
+            let mut probe = main_state_probe.lock().ok()?;
+            let occurrence = probe
+                .gauge_lead_glow_occurrences
+                .entry(object_id.as_deref()?.to_string())
+                .or_default();
+            let part = *occurrence + 1;
+            *occurrence += 1;
+            Some((group.to_string(), below_border, part))
+        });
+    let keylogger_destination = object_id.as_deref().and_then(parse_keylogger_destination_id);
+    let keylogger_slot = if path.contains(".destination[") && keylogger_destination.is_some() {
+        object_id.as_deref().and_then(|id| {
+            let mut probe = main_state_probe.lock().ok()?;
+            let occurrence =
+                probe.keylogger_destination_occurrences.entry(id.to_string()).or_default();
+            let slot = *occurrence % 16 + 1;
+            *occurrence += 1;
+            Some(slot)
+        })
+    } else {
+        None
+    };
     let mut object = JsonMap::new();
     for (key, value) in entries {
         let key = lua_key_to_json_key(key, path, warnings)?;
         if matches!(value, Value::Nil) {
             continue;
         }
+        if key == "draw"
+            && let Value::Boolean(value) = &value
+        {
+            object.insert(
+                key.clone(),
+                JsonValue::String(if *value {
+                    "number(0) >= 0".to_string()
+                } else {
+                    "number(0) < 0".to_string()
+                }),
+            );
+            tracing::debug!(field_path = %format!("{path}.{key}"), classification = "STATIC", "classified Lua draw condition");
+            continue;
+        }
         if let Value::Function(function) = &value {
+            // Inference deliberately invokes one callback several times with
+            // different probe values. Give each callback a fresh bounded
+            // slice while retaining the separate total inference cap.
+            instruction_budget.begin_callback();
             if key == "value" {
                 let is_graph = path.contains(".graph[");
+                if matches!(object_id.as_deref(), Some("val-hits-per-sec")) {
+                    object.insert(
+                        "value_expr".to_string(),
+                        JsonValue::String("bmz:keylogger_nps".to_string()),
+                    );
+                    continue;
+                }
+                if is_graph
+                    && let Some(value_expr) =
+                        object_id.as_deref().and_then(keylogger_graph_value_expr_from_id)
+                {
+                    object.insert("value_expr".to_string(), JsonValue::String(value_expr));
+                    continue;
+                }
+                if is_graph
+                    && let Some(value_expr) = object_id
+                        .as_deref()
+                        .and_then(milliondollar_fast_slow_graph_value_expr_from_id)
+                {
+                    // MILLIONDOLLAR keeps these two values in CUSTOMS, which
+                    // is evaluated while the skin is loaded.  Preserve their
+                    // runtime main_state/option dependencies as an expression
+                    // instead of freezing the load-time value.
+                    object.insert("value_expr".to_string(), JsonValue::String(value_expr));
+                    continue;
+                }
                 if !is_graph
                     && path.contains(".imageset[")
                     && let Some(ref_id) = infer_gauge_type_imageset_ref(function, main_state_probe)
+                {
+                    object.insert("ref".to_string(), JsonValue::Number(JsonNumber::from(ref_id)));
+                    continue;
+                }
+                if !is_graph
+                    && path.contains(".text[")
+                    && let Some(ref_id) =
+                        infer_ir_ranking_name_ref(function, object_id.as_deref(), main_state_probe)
                 {
                     object.insert("ref".to_string(), JsonValue::Number(JsonNumber::from(ref_id)));
                     continue;
@@ -2508,6 +4017,13 @@ fn lua_table_to_json(
                 }
                 if !is_graph
                     && path.contains(".text[")
+                    && let Some(value_expr) = infer_text_concat_expr(function, main_state_probe)
+                {
+                    object.insert("value_expr".to_string(), JsonValue::String(value_expr));
+                    continue;
+                }
+                if !is_graph
+                    && path.contains(".text[")
                     && let Some(ref_id) = infer_main_state_text_ref(function, main_state_probe)
                 {
                     object.insert("ref".to_string(), JsonValue::Number(JsonNumber::from(ref_id)));
@@ -2517,6 +4033,36 @@ fn lua_table_to_json(
                     && path.contains(".slider[")
                     && let Some(value_expr) =
                         infer_slider_value_expr(function, object_id.as_deref(), main_state_probe)
+                {
+                    object.insert("value_expr".to_string(), JsonValue::String(value_expr));
+                    continue;
+                }
+                if !is_graph
+                    && let Some(value_expr) = infer_nearest_rank_diff_value_expr(
+                        function,
+                        object_id.as_deref(),
+                        main_state_probe,
+                    )
+                {
+                    object.insert("value_expr".to_string(), JsonValue::String(value_expr));
+                    continue;
+                }
+                if !is_graph
+                    && let Some(value_expr) = infer_ir_ranking_score_diff_value_expr(
+                        function,
+                        object_id.as_deref(),
+                        main_state_probe,
+                    )
+                {
+                    object.insert("value_expr".to_string(), JsonValue::String(value_expr));
+                    continue;
+                }
+                if !is_graph
+                    && let Some(value_expr) = infer_ir_ranking_score_rate_value_expr(
+                        function,
+                        object_id.as_deref(),
+                        main_state_probe,
+                    )
                 {
                     object.insert("value_expr".to_string(), JsonValue::String(value_expr));
                     continue;
@@ -2544,6 +4090,14 @@ fn lua_table_to_json(
                     continue;
                 }
                 if is_graph
+                    && let Some(value_expr) = infer_ir_ranking_score_value_expr(
+                        function,
+                        object_id.as_deref(),
+                        main_state_probe,
+                    )
+                {
+                    object.insert("value_expr".to_string(), JsonValue::String(value_expr));
+                } else if is_graph
                     && let Some(graph_type) =
                         infer_fast_slow_ratio_graph_type(function, main_state_probe)
                 {
@@ -2571,37 +4125,150 @@ fn lua_table_to_json(
                 {
                     object.insert("value_expr".to_string(), JsonValue::String(value_expr));
                 } else if path.contains(".text[")
-                    && let Some(ref_id) = infer_constant_text_ref_at_load(function)
+                    && let Some(ref_id) =
+                        infer_constant_text_ref_at_load(function, main_state_probe)
                 {
                     object.insert("ref".to_string(), JsonValue::Number(JsonNumber::from(ref_id)));
                 } else if path.contains(".text[")
-                    && let Some(text) = infer_constant_text_at_load(function)
+                    && let Some(text) = infer_constant_text_at_load(function, main_state_probe)
                 {
                     object.insert("constantText".to_string(), JsonValue::String(text));
-                } else if let Some(value_expr) = infer_constant_number_at_load(function) {
+                } else if let Some(value_expr) =
+                    infer_constant_number_at_load(function, main_state_probe)
+                {
                     object.insert("value_expr".to_string(), JsonValue::String(value_expr));
+                } else if matches!(object_id.as_deref(), Some("Number_Info_Level_Insane")) {
+                    // MILLIONDOLLAR parses digits from table level text. Non-table
+                    // results legitimately receive an empty string and return nil;
+                    // the matching destination is hidden, so keep an inert value.
+                    object.insert("value_expr".to_string(), JsonValue::String("0".to_string()));
                 } else {
                     warnings.push(format!("skipping unsupported value function at {path}.{key}"));
                 }
                 continue;
             }
-            if key == "act"
-                && let Some(event_id) = infer_constant_integer_at_load(function)
+            if key == "act" {
+                let event_id = infer_constant_integer_at_load(function, main_state_probe)
+                    .or_else(|| infer_runtime_toggle_act(lua, function, main_state_probe))
+                    .or_else(|| infer_result_panel_act_at_load(lua, function, main_state_probe));
+                if let Some(event_id) = event_id {
+                    object.insert(key.clone(), JsonValue::Number(JsonNumber::from(event_id)));
+                    continue;
+                }
+            }
+            if key == "action"
+                && path.contains(".customEvents[")
+                && let Some(actions) =
+                    infer_custom_audio_event_action(lua, function, main_state_probe)
             {
-                object.insert(key.clone(), JsonValue::Number(JsonNumber::from(event_id)));
+                object.insert(
+                    "audioActions".to_string(),
+                    JsonValue::Array(actions.into_iter().map(lua_audio_action_to_json).collect()),
+                );
+                object.insert("once".to_string(), JsonValue::Bool(true));
+                continue;
+            }
+            if key == "condition"
+                && path.contains(".customEvents[")
+                && let Some(timer_id) = infer_timer_on_condition(function, main_state_probe)
+            {
+                object.insert("timer".to_string(), JsonValue::Number(JsonNumber::from(timer_id)));
                 continue;
             }
             if key == "draw" {
+                if let Some(draw) = infer_result_panel_draw_condition(
+                    lua,
+                    function,
+                    object_id.as_deref(),
+                    main_state_probe,
+                ) {
+                    object.insert(key.clone(), JsonValue::String(draw));
+                    tracing::debug!(field_path = %format!("{path}.{key}"), classification = "COMPILED", "classified Lua draw condition");
+                    continue;
+                }
+                if let Some(draw) =
+                    infer_result_score_draw(function, object_id.as_deref(), main_state_probe)
+                {
+                    object.insert(key.clone(), JsonValue::String(draw));
+                    tracing::debug!(field_path = %format!("{path}.{key}"), classification = "COMPILED", "classified Lua draw condition");
+                    continue;
+                }
+                if let Some((group, below_border, part)) = &gauge_lead_glow_destination {
+                    object.insert(
+                        key.clone(),
+                        JsonValue::String(format!(
+                            "gauge_lead_glow({group},{part},{})",
+                            if *below_border { "below" } else { "above" }
+                        )),
+                    );
+                    tracing::debug!(field_path = %format!("{path}.{key}"), classification = "COMPILED", "classified Lua draw condition");
+                    continue;
+                }
+                if let (Some((graph_kind, lane, Some(kind))), Some(slot)) =
+                    (keylogger_destination, keylogger_slot)
+                {
+                    object.insert(
+                        key.clone(),
+                        JsonValue::String(format!("keylogger_{graph_kind}({lane},{slot},{kind})")),
+                    );
+                    tracing::debug!(field_path = %format!("{path}.{key}"), classification = "COMPILED", "classified Lua draw condition");
+                    continue;
+                }
+                if let Some(draw) = infer_gauge_value_digit_draw_condition(
+                    function,
+                    object_id.as_deref(),
+                    main_state_probe,
+                ) {
+                    object.insert(key.clone(), JsonValue::String(draw));
+                    tracing::debug!(field_path = %format!("{path}.{key}"), classification = "COMPILED", "classified Lua draw condition");
+                    continue;
+                }
+                if let Some(draw) =
+                    infer_select_score_available_draw_condition(lua, function, main_state_probe)
+                {
+                    object.insert(key.clone(), JsonValue::String(draw));
+                    tracing::debug!(field_path = %format!("{path}.{key}"), classification = "COMPILED", "classified Lua draw condition");
+                    continue;
+                }
                 if let Some(draw) =
                     infer_boolean_predicate(function, main_state_probe, object_id.as_deref())
                 {
                     object.insert(key.clone(), JsonValue::String(draw));
+                    tracing::debug!(field_path = %format!("{path}.{key}"), classification = "COMPILED", "classified Lua draw condition");
                 } else {
-                    warnings.push(format!("skipping unsupported draw function at {path}.{key}"));
+                    let field_path = format!("{path}.{key}");
+                    let callback_id = register_runtime_draw_path(main_state_probe, &field_path)?;
+                    object.insert(
+                        key.clone(),
+                        JsonValue::String(format!("{LUA_DRAW_CALLBACK_PREFIX}{callback_id}")),
+                    );
+                    tracing::debug!(%field_path, callback_id, classification = "RUNTIME", "classified Lua draw condition");
                 }
                 continue;
             }
             if key == "timer" {
+                if let (Some((_, lane, _)), Some(slot)) = (keylogger_destination, keylogger_slot) {
+                    object.insert(
+                        "timer_expr".to_string(),
+                        JsonValue::String(format!("bmz:keylogger_event:{lane}:{slot}")),
+                    );
+                    continue;
+                }
+                if path.contains(".customTimers[")
+                    && let Some(id) = object_id.as_deref().and_then(|id| id.parse::<i32>().ok())
+                    && let Some((source_timer, delay_ms)) =
+                        infer_fixed_delay_timer(function, main_state_probe).or_else(|| {
+                            infer_custom_timer_alias(function, main_state_probe)
+                                .map(|source_timer| (source_timer, 0))
+                        })
+                {
+                    if let Ok(mut probe) = main_state_probe.lock()
+                        && !probe.fixed_delay_timers.iter().any(|(existing, _, _)| *existing == id)
+                    {
+                        probe.fixed_delay_timers.push((id, source_timer, delay_ms));
+                    }
+                    continue;
+                }
                 let map: Table = lua.globals().get("bmz_timer_fn_map")?;
                 if let Ok(timer_id) = map.get::<i32>(function.clone()) {
                     object.insert(key.clone(), JsonValue::Number(JsonNumber::from(timer_id)));
@@ -2611,10 +4278,17 @@ fn lua_table_to_json(
                     object.insert(key.clone(), JsonValue::Number(JsonNumber::from(timer_id)));
                     continue;
                 }
+                if path.contains(".customTimers[") {
+                    let id = object_id.as_deref().unwrap_or("unknown");
+                    warnings.push(format!(
+                        "skipping unsupported custom timer function id {id} at {path}.{key}"
+                    ));
+                    continue;
+                }
             }
         }
         if is_unsupported_json_field_value(&value) {
-            if should_silently_skip_loader_field(path, &key, &value) {
+            if should_silently_skip_loader_field(&key, &value) {
                 continue;
             }
             warnings.push(format!("skipping unsupported field `{key}` at {path}"));
@@ -2638,11 +4312,290 @@ fn lua_table_to_json(
                 depth,
                 warnings,
                 main_state_probe,
+                instruction_budget,
                 table_budget,
             )?,
         );
     }
+    repair_result_table_title_text(path, &mut object);
+    repair_result_course_title_text(path, &mut object);
     Ok(JsonValue::Object(object))
+}
+
+fn register_runtime_draw_path(
+    main_state_probe: &Arc<Mutex<MainStateProbe>>,
+    field_path: &str,
+) -> Result<usize> {
+    let mut probe =
+        main_state_probe.lock().map_err(|_| anyhow!("main_state probe lock poisoned"))?;
+    let callback_id = probe.runtime_draw_paths.len();
+    probe.runtime_draw_paths.push(field_path.to_string());
+    Ok(callback_id)
+}
+
+fn infer_gauge_value_digit_draw_condition(
+    function: &Function,
+    object_id: Option<&str>,
+    main_state_probe: &Arc<Mutex<MainStateProbe>>,
+) -> Option<String> {
+    let id = object_id?;
+    if matches!(
+        id,
+        "Number_Remaingauge_Max_1"
+            | "Number_Remaingauge_Max_00"
+            | "Number_Remaingauge_Normal"
+            | "Parts_Text_Remaingauge_Dot"
+            | "Number_Remaingauge_Afterdot"
+    ) {
+        let below_max =
+            call_draw_with_numbers(function, main_state_probe, BTreeMap::from([(107, 99)]))?;
+        let at_max =
+            call_draw_with_numbers(function, main_state_probe, BTreeMap::from([(107, 100)]))?;
+        return match (below_max, at_max) {
+            (false, true) => Some("number(107) == 100".to_string()),
+            (true, false) => Some("number(107) < 100".to_string()),
+            _ => None,
+        };
+    }
+    let mut probe = main_state_probe.lock().ok()?;
+    let mode = match id {
+        "val-gauge-percent-integer" | "val-gauge-percent-fraction" | "gauge-value-percent" => {
+            probe.gauge_value_overlay_mode = Some("percent");
+            "percent"
+        }
+        "val-gauge-amount-integer" | "val-gauge-amount-fraction" => {
+            probe.gauge_value_overlay_mode = Some("amount");
+            "amount"
+        }
+        "gauge-value-dot" => probe.gauge_value_overlay_mode?,
+        _ => return None,
+    };
+    let occurrence = probe.gauge_value_destination_occurrences.entry(id.to_string()).or_default();
+    *occurrence += 1;
+    let digits = ((*occurrence - 1) % 3) + 1;
+    Some(format!("gauge_value_digits({mode},{digits})"))
+}
+
+fn infer_select_score_available_draw_condition(
+    lua: &Lua,
+    function: &Function,
+    main_state_probe: &Arc<Mutex<MainStateProbe>>,
+) -> Option<String> {
+    let globals = lua.globals();
+    #[derive(Clone, Copy)]
+    enum ScoreGuard {
+        Global(bool),
+        Upvalue(i32, bool),
+    }
+    let guard = match globals.get::<Value>("flag_score").ok() {
+        Some(Value::Boolean(original)) => ScoreGuard::Global(original),
+        _ => {
+            let (index, original) = lua_flag_score_upvalue(lua, function)?;
+            ScoreGuard::Upvalue(index, original)
+        }
+    };
+    let original = match guard {
+        ScoreGuard::Global(value) | ScoreGuard::Upvalue(_, value) => value,
+    };
+    let set_guard = |value: bool| match guard {
+        ScoreGuard::Global(_) => globals.set("flag_score", value).is_ok(),
+        ScoreGuard::Upvalue(index, _) => set_lua_boolean_upvalue(lua, function, index, value),
+    };
+    let evaluate = |value: bool| -> Option<bool> {
+        set_guard(value).then_some(())?;
+        main_state_probe.lock().ok()?.end_recording();
+        function.call::<bool>(()).ok()
+    };
+    let when_unavailable = evaluate(false);
+    let when_available = evaluate(true);
+    let _ = set_guard(original);
+
+    match (when_unavailable, when_available) {
+        (Some(false), Some(true)) => Some("select_score_available()".to_string()),
+        _ => None,
+    }
+}
+
+fn repair_result_table_title_text(path: &str, object: &mut JsonMap<String, JsonValue>) {
+    if !path.contains(".text[") || object.get("id").and_then(JsonValue::as_str) != Some("title") {
+        return;
+    }
+    let expected = format!(
+        "{LUA_TEXT_REF_SENTINEL_PREFIX}1002{LUA_TEXT_REF_SENTINEL_SUFFIX} \
+         {LUA_TEXT_REF_SENTINEL_PREFIX}1001{LUA_TEXT_REF_SENTINEL_SUFFIX} "
+    );
+    if object.get("constantText").and_then(JsonValue::as_str) != Some(expected.as_str()) {
+        return;
+    }
+    object.remove("constantText");
+    object.insert(
+        "value_expr".to_string(),
+        JsonValue::String(SKIN_EXPR_RESULT_TABLE_TITLE.to_string()),
+    );
+}
+
+/// ModernChic Result builds `bottomCourse` by evaluating
+/// `main_state.text(FULLTITLE)` while the Lua skin is loaded.  The value is
+/// runtime state in beatoraja, so replace the empty load-time stub with the
+/// corresponding text ref rather than permanently baking in an empty string.
+fn repair_result_course_title_text(path: &str, object: &mut JsonMap<String, JsonValue>) {
+    if !path.contains(".text[")
+        || object.get("id").and_then(JsonValue::as_str) != Some("bottomCourse")
+        || object.get("constantText").and_then(JsonValue::as_str) != Some("")
+    {
+        return;
+    }
+    object.remove("constantText");
+    object.insert("ref".to_string(), JsonValue::Number(JsonNumber::from(12)));
+}
+
+/// Some select skins keep the score-rate digits visible for both songs and
+/// courses, but gate the shared decimal-point/percent sprite with SONGBAR only.
+/// Grade bars expose the same score-rate refs, so extend that punctuation
+/// destination to GRADEBAR without changing the third-party skin file.
+fn repair_select_score_rate_punctuation(root: &mut JsonMap<String, JsonValue>) {
+    let has_value = |id: &str, ref_id: i64| {
+        root.get("value").and_then(JsonValue::as_array).is_some_and(|values| {
+            values.iter().any(|value| {
+                value.get("id").and_then(JsonValue::as_str) == Some(id)
+                    && value.get("ref").and_then(JsonValue::as_i64) == Some(ref_id)
+            })
+        })
+    };
+    if !has_value("scorerate_count", 102) || !has_value("scorerate_dot_count", 103) {
+        return;
+    }
+    let Some(destinations) = root.get_mut("destination").and_then(JsonValue::as_array_mut) else {
+        return;
+    };
+    for destination in destinations {
+        let Some(object) = destination.as_object_mut() else {
+            continue;
+        };
+        if object.get("id").and_then(JsonValue::as_str) == Some("score_per")
+            && object.get("op")
+                == Some(&JsonValue::Array(vec![JsonValue::Number(JsonNumber::from(2))]))
+        {
+            object.remove("op");
+            object.insert(
+                "draw".to_string(),
+                JsonValue::String("option(2) or option(3)".to_string()),
+            );
+        }
+    }
+}
+
+#[cfg(test)]
+mod result_course_title_repair_tests {
+    use super::*;
+
+    #[test]
+    fn replaces_empty_load_time_course_title_with_full_title_ref() {
+        let mut object = JsonMap::from_iter([
+            ("id".to_string(), JsonValue::String("bottomCourse".to_string())),
+            ("constantText".to_string(), JsonValue::String(String::new())),
+        ]);
+
+        repair_result_course_title_text("$.text[2]", &mut object);
+
+        assert_eq!(object.get("ref"), Some(&JsonValue::Number(JsonNumber::from(12))));
+        assert!(!object.contains_key("constantText"));
+    }
+
+    #[test]
+    fn preserves_unrelated_empty_constant_text() {
+        let mut object = JsonMap::from_iter([
+            ("id".to_string(), JsonValue::String("other".to_string())),
+            ("constantText".to_string(), JsonValue::String(String::new())),
+        ]);
+
+        repair_result_course_title_text("$.text[2]", &mut object);
+
+        assert_eq!(object.get("constantText"), Some(&JsonValue::String(String::new())));
+        assert!(!object.contains_key("ref"));
+    }
+}
+
+#[cfg(test)]
+mod select_score_rate_punctuation_repair_tests {
+    use super::*;
+
+    #[test]
+    fn extends_song_score_rate_punctuation_to_course_rows() {
+        let mut root = serde_json::from_value::<JsonMap<String, JsonValue>>(serde_json::json!({
+            "value": [
+                { "id": "scorerate_count", "ref": 102 },
+                { "id": "scorerate_dot_count", "ref": 103 }
+            ],
+            "destination": [{ "id": "score_per", "op": [2], "dst": [] }]
+        }))
+        .unwrap();
+
+        repair_select_score_rate_punctuation(&mut root);
+        let object = root["destination"][0].as_object().unwrap();
+
+        assert_eq!(object.get("draw").and_then(JsonValue::as_str), Some("option(2) or option(3)"));
+        assert!(!object.contains_key("op"));
+    }
+
+    #[test]
+    fn preserves_unrelated_song_only_destination() {
+        let mut root = serde_json::from_value::<JsonMap<String, JsonValue>>(serde_json::json!({
+            "value": [{ "id": "other", "ref": 102 }],
+            "destination": [{ "id": "score_per", "op": [2], "dst": [] }]
+        }))
+        .unwrap();
+
+        repair_select_score_rate_punctuation(&mut root);
+        let object = root["destination"][0].as_object().unwrap();
+
+        assert!(!object.contains_key("draw"));
+        assert!(object.contains_key("op"));
+    }
+}
+
+fn keylogger_graph_value_expr_from_id(id: &str) -> Option<String> {
+    let rest = id.strip_prefix("keylogger-graph-")?;
+    let mut parts = rest.split('-');
+    let graph_kind = parts.next()?;
+    let lane = parts.next()?.parse::<usize>().ok()?;
+    let layer = parts.next()?;
+    if parts.next().is_some()
+        || !matches!(graph_kind, "judge" | "fastslow")
+        || lane == 0
+        || !matches!(layer, "cool" | "great" | "good" | "bad" | "fast" | "slow")
+    {
+        return None;
+    }
+    Some(format!("bmz:keylogger_graph:{graph_kind}:{lane}:{layer}"))
+}
+
+fn milliondollar_fast_slow_graph_value_expr_from_id(id: &str) -> Option<String> {
+    let numerator = match id {
+        "Graph_Totalfastslow_Fast" => {
+            "option(928)*number(423)+(1-option(928))*(number(423)+number(410))"
+        }
+        "Graph_Totalfastslow_Slow" => {
+            "option(928)*number(424)+(1-option(928))*(number(424)+number(411))"
+        }
+        _ => return None,
+    };
+    Some(format!(
+        "({numerator})/(number(110)+number(111)+number(112)+number(113)+number(114)+number(420))"
+    ))
+}
+
+fn parse_keylogger_destination_id(id: &str) -> Option<(&'static str, usize, Option<&str>)> {
+    if let Some(rest) = id.strip_prefix("keylogger-note-judge-") {
+        let (lane, kind) = rest.split_once('-')?;
+        return Some(("judge", lane.parse().ok()?, Some(kind)));
+    }
+    if let Some(rest) = id.strip_prefix("keylogger-note-fastslow-") {
+        let (lane, kind) = rest.split_once('-')?;
+        return Some(("fastslow", lane.parse().ok()?, Some(kind)));
+    }
+    let lane = id.strip_prefix("keylogger-note-")?.parse().ok()?;
+    Some(("plain", lane, None))
 }
 
 fn lua_object_id(entries: &[(Value, Value)]) -> Option<String> {
@@ -2914,6 +4867,163 @@ fn call_draw_with_event_index(
     }
 }
 
+fn infer_main_state_event_index_options_draw_condition(
+    function: &Function,
+    main_state_probe: &Arc<Mutex<MainStateProbe>>,
+) -> Option<String> {
+    {
+        main_state_probe.lock().ok()?.begin_event_index_call_recording(0);
+    }
+    let _ = function.call::<Value>(()).ok();
+    let event_calls = {
+        let mut probe = main_state_probe.lock().ok()?;
+        let calls = probe.event_index_calls.clone();
+        probe.end_recording();
+        calls
+    };
+    let event_id = single_number_call(&event_calls)?;
+    let samples = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9];
+
+    let mut option_ids = Vec::new();
+    for event_value in samples {
+        {
+            main_state_probe.lock().ok()?.begin_event_index_options_recording_with_values(
+                event_id,
+                event_value,
+                BTreeMap::new(),
+                false,
+            );
+        }
+        let result = function.call::<Value>(()).ok();
+        let mut probe = main_state_probe.lock().ok()?;
+        let only_event_and_options = probe.number_calls.is_empty()
+            && probe.timer_calls.is_empty()
+            && probe.float_number_calls.is_empty()
+            && probe.gauge_type_calls == 0
+            && probe.event_index_calls.iter().all(|call| *call == event_id);
+        option_ids.extend(probe.option_calls.iter().copied());
+        probe.end_recording();
+        if !only_event_and_options || !matches!(result, Some(Value::Boolean(_))) {
+            return None;
+        }
+    }
+    option_ids.sort_unstable();
+    option_ids.dedup();
+    if option_ids.is_empty() || option_ids.len() > 2 {
+        return None;
+    }
+
+    let assignment_count = 1usize << option_ids.len();
+    let mut branches = Vec::new();
+    let mut observed_patterns = Vec::new();
+    let mut saw_option_dependent_pattern = false;
+    for event_value in samples {
+        let mut truth_table = Vec::with_capacity(assignment_count);
+        for assignment in 0..assignment_count {
+            let option_values = option_ids
+                .iter()
+                .enumerate()
+                .map(|(index, option_id)| (*option_id, assignment & (1 << index) != 0))
+                .collect();
+            truth_table.push(call_draw_with_event_index_options(
+                function,
+                main_state_probe,
+                event_id,
+                event_value,
+                option_values,
+            )?);
+        }
+        saw_option_dependent_pattern |= truth_table.windows(2).any(|values| values[0] != values[1]);
+        let option_cubes = option_truth_table_cubes(&option_ids, &truth_table)?;
+        for cube in option_cubes {
+            let mut terms = vec![format!("event_index({event_id}) == {event_value}")];
+            terms.extend(cube);
+            branches.push(terms.join(" and "));
+        }
+        observed_patterns.push(truth_table);
+    }
+
+    let saw_event_dependent_pattern =
+        observed_patterns.windows(2).any(|values| values[0] != values[1]);
+    if branches.is_empty() || !saw_option_dependent_pattern || !saw_event_dependent_pattern {
+        return None;
+    }
+    Some(branches.join(" or "))
+}
+
+fn call_draw_with_event_index_options(
+    function: &Function,
+    main_state_probe: &Arc<Mutex<MainStateProbe>>,
+    event_id: i32,
+    event_value: i32,
+    option_values: BTreeMap<i32, bool>,
+) -> Option<bool> {
+    {
+        main_state_probe.lock().ok()?.begin_event_index_options_recording_with_values(
+            event_id,
+            event_value,
+            option_values,
+            false,
+        );
+    }
+    let result = function.call::<Value>(()).ok();
+    main_state_probe.lock().ok()?.end_recording();
+    match result? {
+        Value::Boolean(value) => Some(value),
+        _ => None,
+    }
+}
+
+fn option_truth_table_cubes(option_ids: &[i32], truth_table: &[bool]) -> Option<Vec<Vec<String>>> {
+    match (option_ids, truth_table) {
+        ([], [false]) => Some(Vec::new()),
+        ([], [true]) => Some(vec![Vec::new()]),
+        ([_], [false, false]) => Some(Vec::new()),
+        ([_], [true, true]) => Some(vec![Vec::new()]),
+        ([option], [false, true]) => Some(vec![vec![format!("option({option})")]]),
+        ([option], [true, false]) => Some(vec![vec![format!("!option({option})")]]),
+        ([_, _], [false, false, false, false]) => Some(Vec::new()),
+        ([_, _], [true, true, true, true]) => Some(vec![Vec::new()]),
+        ([a, _], [false, true, false, true]) => Some(vec![vec![format!("option({a})")]]),
+        ([a, _], [true, false, true, false]) => Some(vec![vec![format!("!option({a})")]]),
+        ([_, b], [false, false, true, true]) => Some(vec![vec![format!("option({b})")]]),
+        ([_, b], [true, true, false, false]) => Some(vec![vec![format!("!option({b})")]]),
+        ([a, b], [false, false, false, true]) => {
+            Some(vec![vec![format!("option({a})"), format!("option({b})")]])
+        }
+        ([a, b], [false, true, false, false]) => {
+            Some(vec![vec![format!("option({a})"), format!("!option({b})")]])
+        }
+        ([a, b], [false, false, true, false]) => {
+            Some(vec![vec![format!("!option({a})"), format!("option({b})")]])
+        }
+        ([a, b], [true, false, false, false]) => {
+            Some(vec![vec![format!("!option({a})"), format!("!option({b})")]])
+        }
+        ([a, b], [false, true, true, true]) => {
+            Some(vec![vec![format!("option({a})")], vec![format!("option({b})")]])
+        }
+        ([a, b], [true, true, false, true]) => {
+            Some(vec![vec![format!("option({a})")], vec![format!("!option({b})")]])
+        }
+        ([a, b], [true, false, true, true]) => {
+            Some(vec![vec![format!("!option({a})")], vec![format!("option({b})")]])
+        }
+        ([a, b], [true, true, true, false]) => {
+            Some(vec![vec![format!("!option({a})")], vec![format!("!option({b})")]])
+        }
+        ([a, b], [false, true, true, false]) => Some(vec![
+            vec![format!("option({a})"), format!("!option({b})")],
+            vec![format!("!option({a})"), format!("option({b})")],
+        ]),
+        ([a, b], [true, false, false, true]) => Some(vec![
+            vec![format!("!option({a})"), format!("!option({b})")],
+            vec![format!("option({a})"), format!("option({b})")],
+        ]),
+        _ => None,
+    }
+}
+
 fn infer_main_state_option_draw_condition(
     function: &Function,
     main_state_probe: &Arc<Mutex<MainStateProbe>>,
@@ -3056,6 +5166,64 @@ fn infer_main_state_timer_option_draw_condition(
     candidates
         .into_iter()
         .find_map(|(condition, expected)| (observed == expected).then_some(condition))
+}
+
+fn infer_main_state_two_options_timer_draw_condition(
+    function: &Function,
+    main_state_probe: &Arc<Mutex<MainStateProbe>>,
+) -> Option<String> {
+    let mut option_calls = collect_option_calls(function, main_state_probe)?;
+    option_calls.sort_unstable();
+    option_calls.dedup();
+    if option_calls.len() != 2 {
+        return None;
+    }
+    let option_a = option_calls[0];
+    let option_b = option_calls[1];
+
+    // Force both option branches open so a timer hidden behind Lua's short-circuit
+    // evaluation is recorded as well.
+    let timer_id = {
+        let mut probe = main_state_probe.lock().ok()?;
+        probe.begin_timer_options_recording_with_values(
+            BTreeMap::new(),
+            BTreeMap::from([(option_a, false), (option_b, true)]),
+        );
+        drop(probe);
+        let _ = function.call::<Value>(()).ok();
+        let mut probe = main_state_probe.lock().ok()?;
+        let timer_calls = probe.timer_calls.clone();
+        probe.end_recording();
+        single_number_call(&timer_calls)?
+    };
+
+    let samples = [
+        (false, false, i32::MIN),
+        (false, false, 100),
+        (false, true, i32::MIN),
+        (false, true, 100),
+        (true, false, i32::MIN),
+        (true, false, 100),
+        (true, true, i32::MIN),
+        (true, true, 100),
+    ];
+    let observed = samples
+        .iter()
+        .map(|(a, b, timer)| {
+            call_draw_with_timer_options(
+                function,
+                main_state_probe,
+                timer_id,
+                *timer,
+                [(option_a, *a), (option_b, *b)],
+            )
+        })
+        .collect::<Option<Vec<_>>>()?;
+    let expected =
+        samples.iter().map(|(a, b, timer)| *a || (*b && *timer == i32::MIN)).collect::<Vec<_>>();
+    (observed == expected).then(|| {
+        format!("option({option_a}) or option({option_b}) and timer({timer_id}) == timer_off")
+    })
 }
 
 fn infer_end_of_note_shadow_draw_condition(
@@ -3242,6 +5410,41 @@ fn collect_timer_refs(
     Some(timers)
 }
 
+fn infer_all_timers_off_draw_condition(
+    function: &Function,
+    main_state_probe: &Arc<Mutex<MainStateProbe>>,
+) -> Option<String> {
+    let timers = collect_timer_refs(function, main_state_probe)?;
+    if !(2..=4).contains(&timers.len()) {
+        return None;
+    }
+
+    for active_mask in 0..(1_usize << timers.len()) {
+        let values = timers
+            .iter()
+            .enumerate()
+            .map(|(index, timer_id)| {
+                let value =
+                    if active_mask & (1 << index) == 0 { i32::MIN } else { 100 + index as i32 };
+                (*timer_id, value)
+            })
+            .collect::<BTreeMap<_, _>>();
+        let actual =
+            call_draw_with_numbers_and_timers(function, main_state_probe, BTreeMap::new(), values)?;
+        if actual != (active_mask == 0) {
+            return None;
+        }
+    }
+
+    Some(
+        timers
+            .iter()
+            .map(|timer_id| format!("timer({timer_id}) == timer_off"))
+            .collect::<Vec<_>>()
+            .join(" and "),
+    )
+}
+
 fn call_timer_function_with_values(
     function: &Function,
     main_state_probe: &Arc<Mutex<MainStateProbe>>,
@@ -3252,6 +5455,32 @@ fn call_timer_function_with_values(
     }
     let result = function.call::<Value>(()).ok();
     main_state_probe.lock().ok()?.end_recording();
+    match result? {
+        Value::Integer(value) => i32::try_from(value).ok(),
+        Value::Number(value) if value.is_finite() && value.fract() == 0.0 => {
+            i32::try_from(value as i64).ok()
+        }
+        _ => None,
+    }
+}
+
+fn call_timer_function_with_values_at_time(
+    function: &Function,
+    main_state_probe: &Arc<Mutex<MainStateProbe>>,
+    timer_values: BTreeMap<i32, i32>,
+    time_value_us: i32,
+) -> Option<i32> {
+    {
+        let mut probe = main_state_probe.lock().ok()?;
+        probe.begin_timer_recording_with_values(timer_values);
+        probe.time_value_us = time_value_us;
+    }
+    let result = function.call::<Value>(()).ok();
+    {
+        let mut probe = main_state_probe.lock().ok()?;
+        probe.time_value_us = 1_000_000;
+        probe.end_recording();
+    }
     match result? {
         Value::Integer(value) => i32::try_from(value).ok(),
         Value::Number(value) if value.is_finite() && value.fract() == 0.0 => {
@@ -3384,6 +5613,96 @@ fn infer_timer_function_ref(
     None
 }
 
+/// `source timer timestamp + fixed delay` を返し、delay到達前はtimer-offとなる
+/// custom timerだけを限定的にIR化する。
+fn infer_fixed_delay_timer(
+    function: &Function,
+    main_state_probe: &Arc<Mutex<MainStateProbe>>,
+) -> Option<(i32, i32)> {
+    let timers = collect_timer_refs(function, main_state_probe)?;
+    let source_timer = *timers.as_slice().first()?;
+    if timers.len() != 1 {
+        return None;
+    }
+    let source_time_us = 100_000;
+    let returned_start = call_timer_function_with_values_at_time(
+        function,
+        main_state_probe,
+        BTreeMap::from([(source_timer, source_time_us)]),
+        i32::MAX / 2,
+    )?;
+    let delay_us = returned_start.checked_sub(source_time_us)?;
+    if delay_us <= 0 || delay_us % 1_000 != 0 {
+        return None;
+    }
+    let delay_ms = delay_us / 1_000;
+    if delay_ms > 60_000 {
+        return None;
+    }
+    let before = returned_start.checked_sub(1)?;
+    if call_timer_function_with_values_at_time(
+        function,
+        main_state_probe,
+        BTreeMap::from([(source_timer, source_time_us)]),
+        before,
+    ) != Some(TIMER_OFF_VALUE)
+        || call_timer_function_with_values_at_time(
+            function,
+            main_state_probe,
+            BTreeMap::from([(source_timer, source_time_us)]),
+            returned_start,
+        ) != Some(returned_start)
+        || call_timer_function_with_values_at_time(
+            function,
+            main_state_probe,
+            BTreeMap::from([(source_timer, source_time_us)]),
+            returned_start.saturating_add(123_000),
+        ) != Some(returned_start)
+        || call_timer_function_with_values_at_time(
+            function,
+            main_state_probe,
+            BTreeMap::new(),
+            returned_start.saturating_add(123_000),
+        ) != Some(TIMER_OFF_VALUE)
+    {
+        return None;
+    }
+    Some((source_timer, delay_ms))
+}
+
+/// 既存 timer の値をそのまま返す custom timer を別 ID の alias としてIR化する。
+fn infer_custom_timer_alias(
+    function: &Function,
+    main_state_probe: &Arc<Mutex<MainStateProbe>>,
+) -> Option<i32> {
+    let timers = collect_timer_refs(function, main_state_probe)?;
+    let source_timer = *timers.as_slice().first()?;
+    if timers.len() != 1 {
+        return None;
+    }
+
+    for sample in [123_456, 765_432] {
+        if call_timer_function_with_values(
+            function,
+            main_state_probe,
+            BTreeMap::from([(source_timer, sample)]),
+        ) != Some(sample)
+        {
+            return None;
+        }
+    }
+    if call_timer_function_with_values(
+        function,
+        main_state_probe,
+        BTreeMap::from([(source_timer, TIMER_OFF_VALUE)]),
+    ) != Some(TIMER_OFF_VALUE)
+    {
+        return None;
+    }
+
+    Some(source_timer)
+}
+
 fn call_draw_with_timer_option(
     function: &Function,
     main_state_probe: &Arc<Mutex<MainStateProbe>>,
@@ -3398,6 +5717,27 @@ fn call_draw_with_timer_option(
             timer_value,
             option_id,
             option_value,
+        );
+    }
+    let result = function.call::<Value>(()).ok();
+    main_state_probe.lock().ok()?.end_recording();
+    match result? {
+        Value::Boolean(value) => Some(value),
+        _ => None,
+    }
+}
+
+fn call_draw_with_timer_options(
+    function: &Function,
+    main_state_probe: &Arc<Mutex<MainStateProbe>>,
+    timer_id: i32,
+    timer_value: i32,
+    options: [(i32, bool); 2],
+) -> Option<bool> {
+    {
+        main_state_probe.lock().ok()?.begin_timer_options_recording_with_values(
+            BTreeMap::from([(timer_id, timer_value)]),
+            BTreeMap::from(options),
         );
     }
     let result = function.call::<Value>(()).ok();
@@ -3517,12 +5857,257 @@ fn unique_numbers_in_order(values: &[i32]) -> Vec<i32> {
     unique
 }
 
-fn infer_constant_boolean(function: &Function) -> Option<String> {
-    match function.call::<bool>(()).ok() {
-        Some(true) => Some("number(0) >= 0".to_string()),
-        Some(false) => Some("number(0) < 0".to_string()),
+fn is_constant_boolean_condition(condition: &str) -> bool {
+    matches!(condition, "number(0) >= 0" | "number(0) < 0")
+}
+
+/// `CUSTOMS.some_flag` のようなトップレベル bool 参照を宣言的 runtime flag へ写す。
+///
+/// 任意テーブルやネストした値は触らず、各 bool を一つずつ反転して callback の結果が
+/// 反転・復元する単一依存だけを受理する。これにより描画中の Lua 実行を避けつつ、
+/// MILLIONDOLLAR の表示切替 callback を Rust 側の状態へ移せる。
+fn infer_runtime_boolean_field_observe(
+    lua: &Lua,
+    function: &Function,
+    main_state_probe: &Arc<Mutex<MainStateProbe>>,
+) -> Option<String> {
+    let baseline = match function.call::<Value>(()).ok()? {
+        Value::Boolean(value) => value,
+        _ => return None,
+    };
+    let customs = lua.globals().get::<Table>("CUSTOMS").ok()?;
+    let bool_fields = customs
+        .clone()
+        .pairs::<Value, Value>()
+        .filter_map(|entry| {
+            let (key, value) = entry.ok()?;
+            let Value::String(key) = key else {
+                return None;
+            };
+            let Value::Boolean(value) = value else {
+                return None;
+            };
+            Some((key.to_str().ok()?.to_string(), value))
+        })
+        .collect::<Vec<_>>();
+
+    let mut candidates = Vec::new();
+    for (field, initial) in bool_fields {
+        customs.set(field.as_str(), !initial).ok()?;
+        let flipped = function.call::<Value>(()).ok();
+        customs.set(field.as_str(), initial).ok()?;
+        let restored = function.call::<Value>(()).ok();
+        if matches!(flipped, Some(Value::Boolean(value)) if value != baseline)
+            && matches!(restored, Some(Value::Boolean(value)) if value == baseline)
+        {
+            candidates.push((field, initial));
+        }
+    }
+    let [(field, initial)] = candidates.as_slice() else {
+        return None;
+    };
+
+    let flag_id = {
+        let mut probe = main_state_probe.lock().ok()?;
+        if let Some(flag) =
+            probe.runtime_flags.iter().find(|flag| flag.table == "CUSTOMS" && flag.field == *field)
+        {
+            flag.id
+        } else {
+            let id = probe.next_runtime_flag_id;
+            probe.next_runtime_flag_id += 1;
+            probe.runtime_flags.push(LuaRuntimeFlagProbe {
+                id,
+                table: "CUSTOMS".to_string(),
+                field: field.clone(),
+                initial: *initial,
+            });
+            id
+        }
+    };
+    Some(if baseline == *initial {
+        format!("runtime_flag({flag_id})")
+    } else {
+        format!("not runtime_flag({flag_id})")
+    })
+}
+
+fn lua_runtime_scalar(value: Value) -> Option<LuaRuntimeScalar> {
+    match value {
+        Value::Boolean(value) => Some(LuaRuntimeScalar::Boolean(value)),
+        Value::Integer(value) => Some(LuaRuntimeScalar::Integer(value)),
+        Value::Number(value) if value.is_finite() => Some(LuaRuntimeScalar::Number(value)),
+        Value::String(value) => Some(LuaRuntimeScalar::String(value.as_bytes().to_vec())),
         _ => None,
     }
+}
+
+fn lua_audio_action_to_json(action: LuaAudioActionProbe) -> JsonValue {
+    let action_name = match action.action {
+        LuaAudioActionKindProbe::Play => "play",
+        LuaAudioActionKindProbe::Loop => "loop",
+        LuaAudioActionKindProbe::Stop => "stop",
+    };
+    let volume =
+        JsonNumber::from_f64(action.volume.clamp(0.0, 1.0)).unwrap_or_else(|| JsonNumber::from(0));
+    JsonValue::Object(JsonMap::from_iter([
+        ("action".to_string(), JsonValue::String(action_name.to_string())),
+        ("path".to_string(), JsonValue::String(action.path)),
+        ("volume".to_string(), JsonValue::Number(volume)),
+    ]))
+}
+
+/// timer が off のとき false、on のとき true になる単一 timer 条件だけを受理する。
+fn infer_timer_on_condition(
+    function: &Function,
+    main_state_probe: &Arc<Mutex<MainStateProbe>>,
+) -> Option<i32> {
+    let timers = collect_timer_refs(function, main_state_probe)?;
+    let [timer_id] = timers.as_slice() else { return None };
+    let off = call_draw_with_numbers_and_timers(
+        function,
+        main_state_probe,
+        BTreeMap::new(),
+        BTreeMap::from([(*timer_id, TIMER_OFF_VALUE)]),
+    )?;
+    let on = call_draw_with_numbers_and_timers(
+        function,
+        main_state_probe,
+        BTreeMap::new(),
+        BTreeMap::from([(*timer_id, 123_456)]),
+    )?;
+    (!off && on).then_some(*timer_id)
+}
+
+/// `customEvents.action` を一度だけ sandbox 内で呼び、音声命令以外に
+/// `CUSTOMS` の scalar 状態を変えない callback を宣言データへ落とす。
+fn infer_custom_audio_event_action(
+    lua: &Lua,
+    function: &Function,
+    main_state_probe: &Arc<Mutex<MainStateProbe>>,
+) -> Option<Vec<LuaAudioActionProbe>> {
+    let customs = lua.globals().get::<Table>("CUSTOMS").ok();
+    let before = customs.as_ref().and_then(customs_scalar_snapshot);
+    {
+        let mut probe = main_state_probe.lock().ok()?;
+        probe.audio_actions.clear();
+        probe.capture_audio_actions = true;
+    }
+    let result = function.call::<Value>(()).ok();
+    let actions = {
+        let mut probe = main_state_probe.lock().ok()?;
+        probe.capture_audio_actions = false;
+        probe.take_audio_actions()
+    };
+    let after = customs.as_ref().and_then(customs_scalar_snapshot);
+    if !matches!(result, Some(Value::Nil))
+        || actions.is_empty()
+        || before.is_some() && before != after
+    {
+        return None;
+    }
+    Some(actions)
+}
+
+fn customs_scalar_snapshot(customs: &Table) -> Option<BTreeMap<String, LuaRuntimeScalar>> {
+    let mut snapshot = BTreeMap::new();
+    for entry in customs.clone().pairs::<Value, Value>() {
+        let (key, value) = entry.ok()?;
+        let Value::String(key) = key else {
+            continue;
+        };
+        let Some(value) = lua_runtime_scalar(value) else {
+            continue;
+        };
+        snapshot.insert(key.to_str().ok()?.to_string(), value);
+    }
+    Some(snapshot)
+}
+
+fn restore_customs_scalar_snapshot(
+    lua: &Lua,
+    customs: &Table,
+    snapshot: &BTreeMap<String, LuaRuntimeScalar>,
+) -> mlua::Result<()> {
+    for (field, value) in snapshot {
+        match value {
+            LuaRuntimeScalar::Boolean(value) => customs.set(field.as_str(), *value)?,
+            LuaRuntimeScalar::Integer(value) => customs.set(field.as_str(), *value)?,
+            LuaRuntimeScalar::Number(value) => customs.set(field.as_str(), *value)?,
+            LuaRuntimeScalar::String(value) => {
+                customs.set(field.as_str(), lua.create_string(value.as_slice())?)?
+            }
+        }
+    }
+    Ok(())
+}
+
+/// 登録済み `CUSTOMS` bool だけを反転し、二回呼ぶと全 scalar が復元する act を
+/// `runtimeEvent` へ変換する。外部副作用を持つ任意 callback は対象にしない。
+fn infer_runtime_toggle_act(
+    lua: &Lua,
+    function: &Function,
+    main_state_probe: &Arc<Mutex<MainStateProbe>>,
+) -> Option<i64> {
+    let registered = main_state_probe.lock().ok()?.runtime_flags.clone();
+    if registered.is_empty() || registered.iter().any(|flag| flag.table != "CUSTOMS") {
+        return None;
+    }
+    let customs = lua.globals().get::<Table>("CUSTOMS").ok()?;
+    let before = customs_scalar_snapshot(&customs)?;
+    let first_result = function.call::<Value>(()).ok();
+    let after_first = customs_scalar_snapshot(&customs)?;
+
+    let mut changed_flag_ids = Vec::new();
+    let mut safe = matches!(first_result, Some(Value::Nil));
+    for (field, before_value) in &before {
+        let after_value = after_first.get(field);
+        if after_value == Some(before_value) {
+            continue;
+        }
+        let (LuaRuntimeScalar::Boolean(before_bool), Some(LuaRuntimeScalar::Boolean(after_bool))) =
+            (before_value, after_value)
+        else {
+            safe = false;
+            continue;
+        };
+        if *after_bool == *before_bool {
+            safe = false;
+            continue;
+        }
+        let Some(flag) = registered.iter().find(|flag| flag.field == *field) else {
+            safe = false;
+            continue;
+        };
+        changed_flag_ids.push(flag.id);
+    }
+    if before.len() != after_first.len() || changed_flag_ids.is_empty() {
+        safe = false;
+    }
+
+    let second_result = function.call::<Value>(()).ok();
+    let after_second = customs_scalar_snapshot(&customs);
+    let _ = restore_customs_scalar_snapshot(lua, &customs, &before);
+    if !safe || !matches!(second_result, Some(Value::Nil)) || after_second.as_ref() != Some(&before)
+    {
+        return None;
+    }
+
+    changed_flag_ids.sort_unstable();
+    changed_flag_ids.dedup();
+    let event_id = {
+        let mut probe = main_state_probe.lock().ok()?;
+        if let Some(event_id) = probe.runtime_event_ids_by_flags.get(&changed_flag_ids) {
+            *event_id
+        } else {
+            let event_id = probe.next_runtime_event_id;
+            probe.next_runtime_event_id -= 1;
+            probe.runtime_event_ids_by_flags.insert(changed_flag_ids.clone(), event_id);
+            probe.runtime_events.push((event_id, changed_flag_ids));
+            event_id
+        }
+    };
+    Some(i64::from(event_id))
 }
 
 /// Starseeker 等が `return is_gauge_iidx` / `return not is_gauge_iidx` と書くが
@@ -3569,6 +6154,25 @@ fn infer_boolean_predicate(
     main_state_probe: &Arc<Mutex<MainStateProbe>>,
     object_id: Option<&str>,
 ) -> Option<String> {
+    // PeacefulPlay のキービーム関数は closure 内に前フレーム状態を持つ。
+    // 汎用probeを先に走らせるとその状態が変化し、特に最後のLane9が
+    // 定数falseへ畳み込まれるため、対象objectは専用推論を最初に行う。
+    if object_id.is_some_and(|id| id.starts_with("key-beam-"))
+        && let Some(predicate) =
+            infer_keybeam_timer_event_draw_condition(function, main_state_probe)
+    {
+        return Some(predicate);
+    }
+    if let Some(predicate) = infer_all_timers_off_draw_condition(function, main_state_probe) {
+        return Some(predicate);
+    }
+    // Probe short-circuit option/timer predicates before simpler single-option
+    // inference can collapse them to the first branch alone.
+    if let Some(predicate) =
+        infer_main_state_two_options_timer_draw_condition(function, main_state_probe)
+    {
+        return Some(predicate);
+    }
     let refs = collect_number_refs(function, main_state_probe).unwrap_or_default();
     infer_result_average_timing_sign_draw_condition(function, main_state_probe)
         .or_else(|| {
@@ -3582,6 +6186,7 @@ fn infer_boolean_predicate(
             }
         })
         .or_else(|| infer_float_number_and_number_and_draw(function, main_state_probe))
+        .or_else(|| infer_main_state_event_index_options_draw_condition(function, main_state_probe))
         .or_else(|| infer_main_state_option_number_draw_condition(function, main_state_probe))
         .or_else(|| infer_main_state_draw_condition(function, main_state_probe))
         .or_else(|| infer_main_state_event_index_draw_condition(function, main_state_probe))
@@ -3598,19 +6203,36 @@ fn infer_boolean_predicate(
         .or_else(|| infer_or_of_number_lt_zero(function, main_state_probe))
         .or_else(|| infer_two_number_compare_and(function, main_state_probe))
         .or_else(|| infer_number_eq_zero_with_constant_tail(function, main_state_probe))
-        .or_else(|| infer_constant_draw_at_load(function))
+        .or_else(|| infer_constant_draw_at_load(function, main_state_probe))
 }
 
 /// `skin_config.option` のみ等、ロード時に結果が決まる draw function を畳み込む。
-fn infer_constant_draw_at_load(function: &Function) -> Option<String> {
-    match function.call::<bool>(()).ok() {
-        Some(true) => Some("number(0) >= 0".to_string()),
-        Some(false) => Some("number(0) < 0".to_string()),
+fn infer_constant_draw_at_load(
+    function: &Function,
+    main_state_probe: &Arc<Mutex<MainStateProbe>>,
+) -> Option<String> {
+    main_state_probe.lock().ok()?.end_recording();
+    // A single successful call is not evidence of a constant: closures may
+    // count invocations or mutate module/upvalue state. Repeated disagreement
+    // keeps the function on the runtime fallback path.
+    let call = || match function.call::<Value>(()).ok()? {
+        Value::Boolean(value) => Some(value),
         _ => None,
+    };
+    let first = call()?;
+    let second = call()?;
+    let third = call()?;
+    if first != second || second != third {
+        return None;
     }
+    if first { Some("number(0) >= 0".to_string()) } else { Some("number(0) < 0".to_string()) }
 }
 
-fn infer_constant_text_at_load(function: &Function) -> Option<String> {
+fn infer_constant_text_at_load(
+    function: &Function,
+    main_state_probe: &Arc<Mutex<MainStateProbe>>,
+) -> Option<String> {
+    main_state_probe.lock().ok()?.end_recording();
     match function.call::<Value>(()).ok()? {
         Value::String(value) => Some(value.to_string_lossy()),
         Value::Integer(value) => Some(value.to_string()),
@@ -3620,8 +6242,11 @@ fn infer_constant_text_at_load(function: &Function) -> Option<String> {
     }
 }
 
-fn infer_constant_text_ref_at_load(function: &Function) -> Option<i32> {
-    let text = infer_constant_text_at_load(function)?;
+fn infer_constant_text_ref_at_load(
+    function: &Function,
+    main_state_probe: &Arc<Mutex<MainStateProbe>>,
+) -> Option<i32> {
+    let text = infer_constant_text_at_load(function, main_state_probe)?;
     let ref_id = text
         .strip_prefix(LUA_TEXT_REF_SENTINEL_PREFIX)?
         .strip_suffix(LUA_TEXT_REF_SENTINEL_SUFFIX)?
@@ -3630,23 +6255,33 @@ fn infer_constant_text_ref_at_load(function: &Function) -> Option<i32> {
     (1001..=1003).contains(&ref_id).then_some(ref_id)
 }
 
-fn repair_keybeam_destination_draws(root: &mut JsonMap<String, JsonValue>) {
+fn repair_keybeam_destination_draws(root: &mut JsonMap<String, JsonValue>) -> BTreeSet<usize> {
+    let mut repaired = BTreeSet::new();
     let Some(destinations) = root.get_mut("destination").and_then(JsonValue::as_array_mut) else {
-        return;
+        return repaired;
     };
     for index in 0..destinations.len().saturating_sub(1) {
-        let Some(draw) =
-            keybeam_hold_draw_replacement(&destinations[index], &destinations[index + 1])
+        let Some((hold_draw, fade_draw, fade_timer)) =
+            keybeam_draw_replacements(&destinations[index], &destinations[index + 1])
         else {
             continue;
         };
         if let JsonValue::Object(destination) = &mut destinations[index] {
-            destination.insert("draw".to_string(), JsonValue::String(draw));
+            destination.insert("draw".to_string(), JsonValue::String(hold_draw));
         }
+        if let JsonValue::Object(destination) = &mut destinations[index + 1] {
+            destination
+                .insert("timer".to_string(), JsonValue::Number(JsonNumber::from(fade_timer)));
+            destination.insert("draw".to_string(), JsonValue::String(fade_draw));
+        }
+        // Lua table path is 1-based, while the converted JSON array is 0-based.
+        repaired.insert(index + 1);
+        repaired.insert(index + 2);
     }
+    repaired
 }
 
-fn keybeam_hold_draw_replacement(hold: &JsonValue, fade: &JsonValue) -> Option<String> {
+fn keybeam_draw_replacements(hold: &JsonValue, fade: &JsonValue) -> Option<(String, String, i32)> {
     let hold = hold.as_object()?;
     let fade = fade.as_object()?;
     let hold_id = json_string_field(hold, "id")?;
@@ -3656,17 +6291,52 @@ fn keybeam_hold_draw_replacement(hold: &JsonValue, fade: &JsonValue) -> Option<S
     if json_i32_field(hold, "timer").is_some() || json_i32_field(hold, "loop") == Some(-1) {
         return None;
     }
-    if !needs_keybeam_hold_draw_repair(json_string_field(hold, "draw")) {
+    if json_i32_field(fade, "loop") != Some(-1) {
         return None;
     }
-
-    let fade_timer = json_i32_field(fade, "timer")?;
-    if json_i32_field(fade, "loop") != Some(-1) || !is_keybeam_keyoff_timer(fade_timer) {
-        return None;
-    }
+    let inferred_fade_draw = json_string_field(fade, "draw")?;
+    let fade_timer = json_i32_field(fade, "timer")
+        .filter(|timer| is_keybeam_keyoff_timer(*timer))
+        .or_else(|| keybeam_keyoff_timer_from_draw(inferred_fade_draw))?;
+    let fallback_draw;
+    let fade_draw = if inferred_fade_draw.contains("event_index(") {
+        inferred_fade_draw
+    } else {
+        fallback_draw = keybeam_judge_draw_from_id(hold_id, fade_timer)?;
+        &fallback_draw
+    };
     let keyon_timer = keybeam_keyon_timer_for_keyoff_timer(fade_timer)?;
     let hold_timer = keybeam_hold_timer_for_keyon_timer(keyon_timer)?;
-    keybeam_hold_draw_from_fade_draw(json_string_field(fade, "draw")?, keyon_timer, hold_timer)
+    let hold_draw = keybeam_hold_draw_from_fade_draw(fade_draw, keyon_timer, hold_timer)?;
+    let fade_draw = fade_draw
+        .split(" or ")
+        .map(str::trim)
+        .map(|branch| format!("keybeam_fade({fade_timer}) != 0 and {branch}"))
+        .collect::<Vec<_>>()
+        .join(" or ");
+    Some((hold_draw, fade_draw, fade_timer))
+}
+
+fn keybeam_judge_draw_from_id(id: &str, keyoff_timer: i32) -> Option<String> {
+    let event_id = keyoff_timer.checked_add(380)?;
+    let values: &[i32] = if id.ends_with("-pgreat") {
+        &[1]
+    } else if id.ends_with("-great") {
+        &[2, 3]
+    } else if id.ends_with("-good") {
+        &[4, 5]
+    } else if id.ends_with("-other") {
+        &[0, 6, 7, 8, 9]
+    } else {
+        return None;
+    };
+    Some(
+        values
+            .iter()
+            .map(|value| format!("event_index({event_id}) == {value}"))
+            .collect::<Vec<_>>()
+            .join(" or "),
+    )
 }
 
 fn json_string_field<'a>(object: &'a JsonMap<String, JsonValue>, key: &str) -> Option<&'a str> {
@@ -3677,11 +6347,14 @@ fn json_i32_field(object: &JsonMap<String, JsonValue>, key: &str) -> Option<i32>
     i32::try_from(object.get(key)?.as_i64()?).ok()
 }
 
-fn needs_keybeam_hold_draw_repair(draw: Option<&str>) -> bool {
-    match draw.map(str::trim) {
-        None | Some("") | Some("number(0) < 0") => true,
-        Some(draw) => !draw.contains("timer("),
-    }
+fn keybeam_keyoff_timer_from_draw(draw: &str) -> Option<i32> {
+    let event_ids = draw
+        .split("event_index(")
+        .skip(1)
+        .filter_map(|tail| tail.split_once(')')?.0.trim().parse::<i32>().ok())
+        .collect::<BTreeSet<_>>();
+    let event_id = (event_ids.len() == 1).then(|| *event_ids.first().unwrap())?;
+    (500..=517).contains(&event_id).then_some(event_id - 380)
 }
 
 fn keybeam_keyon_timer_for_keyoff_timer(timer_id: i32) -> Option<i32> {
@@ -3694,10 +6367,9 @@ fn keybeam_keyon_timer_for_keyoff_timer(timer_id: i32) -> Option<i32> {
 fn keybeam_hold_draw_from_fade_draw(
     fade_draw: &str,
     keyon_timer: i32,
-    hold_timer: i32,
+    _hold_timer: i32,
 ) -> Option<String> {
-    let prefix =
-        format!("timer({keyon_timer}) != timer_off and timer({hold_timer}) == timer_off and ");
+    let prefix = format!("keybeam_hold({keyon_timer}) != 0 and ");
     let branches = fade_draw
         .split(" or ")
         .map(str::trim)
@@ -3707,7 +6379,11 @@ fn keybeam_hold_draw_from_fade_draw(
     (!branches.is_empty()).then(|| branches.join(" or "))
 }
 
-fn infer_constant_number_at_load(function: &Function) -> Option<String> {
+fn infer_constant_number_at_load(
+    function: &Function,
+    main_state_probe: &Arc<Mutex<MainStateProbe>>,
+) -> Option<String> {
+    main_state_probe.lock().ok()?.end_recording();
     match function.call::<Value>(()).ok()? {
         Value::Integer(value) => Some(value.to_string()),
         Value::Number(value) if value.is_finite() => Some(value.to_string()),
@@ -3715,10 +6391,66 @@ fn infer_constant_number_at_load(function: &Function) -> Option<String> {
     }
 }
 
-fn infer_constant_integer_at_load(function: &Function) -> Option<i64> {
-    match function.call::<Value>(()).ok()? {
+fn infer_constant_integer_at_load(
+    function: &Function,
+    _main_state_probe: &Arc<Mutex<MainStateProbe>>,
+) -> Option<i64> {
+    // `act` is an input callback. Calling it in the skin's live Lua environment
+    // can mutate globals used by later draw conversion (WMII switches Expand_op
+    // from GRAPH to IR this way). Evaluate serializable constant callbacks in an
+    // isolated Lua state so conversion has no observable side effects.
+    let isolated = Lua::new();
+    let dumped = function.dump(true);
+    let isolated_function = isolated.load(&dumped).into_function().ok()?;
+    match isolated_function.call::<Value>(()).ok()? {
         Value::Integer(value) => Some(value),
         Value::Number(value) if value.is_finite() && value.fract() == 0.0 => Some(value as i64),
+        _ => None,
+    }
+}
+
+fn infer_result_panel_act_at_load(
+    lua: &Lua,
+    function: &Function,
+    main_state_probe: &Arc<Mutex<MainStateProbe>>,
+) -> Option<i64> {
+    if let Some(current) =
+        lua.globals().raw_get::<Value>("Expand_op").ok().and_then(lua_result_panel_value)
+    {
+        // WMII の tab callback は `Expand_op = 1/2` だけを行う。元の Lua state を
+        // 実行時まで保持せず、隔離 state で代入先を観測して BMZ 内部 event に変換する。
+        let isolated = Lua::new();
+        isolated.globals().raw_set("Expand_op", current).ok()?;
+        let dumped = function.dump(true);
+        let isolated_function = isolated.load(&dumped).into_function().ok()?;
+        if !matches!(isolated_function.call::<Value>(()).ok()?, Value::Nil) {
+            return None;
+        }
+        let panel = isolated.globals().raw_get::<Value>("Expand_op").ok()?;
+        return result_panel_event(lua_result_panel_value(panel)?);
+    }
+
+    // Luxe Flat keeps the active tab in a local closure upvalue instead of the
+    // global used by WMII. Preserve upvalue names in the dumped callback, seed
+    // its isolated copy, and observe only the resulting `result_mode` value.
+    let (upvalue_index, current_mode) = lua_result_mode_upvalue(lua, function)?;
+    record_local_result_panel_default(main_state_probe, current_mode)?;
+    let isolated = Lua::new();
+    let dumped = function.dump(false);
+    let isolated_function = isolated.load(&dumped).into_function().ok()?;
+    if !set_lua_integer_upvalue(&isolated, &isolated_function, upvalue_index, current_mode)
+        || !matches!(isolated_function.call::<Value>(()).ok()?, Value::Nil)
+    {
+        return None;
+    }
+    let (_, mode) = lua_result_mode_upvalue(&isolated, &isolated_function)?;
+    result_panel_event(result_panel_from_local_mode(mode)?)
+}
+
+fn result_panel_event(panel: i32) -> Option<i64> {
+    match panel {
+        1 => Some(i64::from(SKIN_EVENT_RESULT_PANEL_IR)),
+        2 => Some(i64::from(SKIN_EVENT_RESULT_PANEL_GRAPH)),
         _ => None,
     }
 }
@@ -3842,6 +6574,15 @@ fn call_number_float_with_values(
     main_state_probe: &Arc<Mutex<MainStateProbe>>,
     values: BTreeMap<i32, i32>,
 ) -> Option<f64> {
+    call_number_float_raw_with_values(function, main_state_probe, values)
+        .filter(|value| value.is_finite())
+}
+
+fn call_number_float_raw_with_values(
+    function: &Function,
+    main_state_probe: &Arc<Mutex<MainStateProbe>>,
+    values: BTreeMap<i32, i32>,
+) -> Option<f64> {
     {
         main_state_probe.lock().ok()?.begin_number_recording_with_values(values);
     }
@@ -3849,7 +6590,7 @@ fn call_number_float_with_values(
     main_state_probe.lock().ok()?.end_recording();
     match result? {
         Value::Integer(value) => Some(value as f64),
-        Value::Number(value) if value.is_finite() => Some(value),
+        Value::Number(value) => Some(value),
         _ => None,
     }
 }
@@ -3875,13 +6616,33 @@ fn call_number_float_with_values_and_options(
     }
 }
 
+fn call_draw_with_numbers_and_options(
+    function: &Function,
+    main_state_probe: &Arc<Mutex<MainStateProbe>>,
+    values: BTreeMap<i32, i32>,
+    options: BTreeMap<i32, bool>,
+) -> Option<bool> {
+    main_state_probe.lock().ok()?.begin_number_recording_with_values_and_options(values, options);
+    let result = function.call::<Value>(()).ok();
+    main_state_probe.lock().ok()?.end_recording();
+    match result? {
+        Value::Boolean(value) => Some(value),
+        Value::Nil => Some(false),
+        _ => None,
+    }
+}
+
 fn verify_draw_condition(
     function: &Function,
     main_state_probe: &Arc<Mutex<MainStateProbe>>,
     refs: &[i32],
     expected: impl Fn(&BTreeMap<i32, i32>) -> bool,
 ) -> bool {
-    let samples = [-1, 0, 1, 2, 3, 5];
+    // Keep consecutive values through one past the largest threshold inferred
+    // by `infer_two_number_compare_and`. Without 4/6, an always-false draw can
+    // spuriously match `left > right and right >= 4/5` because the verifier has
+    // no sampled pair that can satisfy those predicates.
+    let samples = [-1, 0, 1, 2, 3, 4, 5, 6];
     for &left in &samples {
         for &right in &samples {
             let mut values = BTreeMap::new();
@@ -4000,6 +6761,14 @@ fn infer_result_average_timing_sign_draw_condition(
         .collect::<Vec<_>>();
     if observed == expected_negative {
         return Some("number(374) < 0 or number(375) < 0".to_string());
+    }
+
+    let expected_non_negative = samples
+        .iter()
+        .map(|(integer, afterdot)| *integer as f64 + *afterdot as f64 * 0.01 >= 0.0)
+        .collect::<Vec<_>>();
+    if observed == expected_non_negative {
+        return Some("number(374) >= 0 and number(375) >= 0".to_string());
     }
 
     let expected_positive = samples
@@ -4162,6 +6931,623 @@ fn infer_main_state_text_ref(
     single_number_call(&text_calls)
 }
 
+fn infer_text_concat_expr(
+    function: &Function,
+    main_state_probe: &Arc<Mutex<MainStateProbe>>,
+) -> Option<String> {
+    main_state_probe.lock().ok()?.begin_number_call_recording(0);
+    let result = function.call::<Value>(()).ok();
+    let text_calls = {
+        let mut probe = main_state_probe.lock().ok()?;
+        let calls = probe.text_calls.clone();
+        probe.end_recording();
+        calls
+    };
+    if text_calls != [1001, 1002] {
+        return None;
+    }
+    let Value::String(text) = result? else {
+        return None;
+    };
+    (text.to_string_lossy() == "Text1001 Text1002").then(|| "bmz:text_concat:1001:1002".to_string())
+}
+
+fn infer_nearest_rank_diff_value_expr(
+    function: &Function,
+    object_id: Option<&str>,
+    main_state_probe: &Arc<Mutex<MainStateProbe>>,
+) -> Option<String> {
+    let refs = collect_number_refs(function, main_state_probe)?;
+    let supported = match object_id {
+        Some("diff_rank") => refs == [71, 74],
+        Some("rank_diff_count") => {
+            refs.contains(&71)
+                && refs.contains(&74)
+                && refs.iter().all(|ref_id| matches!(ref_id, 71 | 74 | 170 | 271))
+        }
+        _ => false,
+    };
+    if !supported {
+        return None;
+    }
+    for total_notes in [9, 10, 37] {
+        for ex_score in 0..=total_notes * 2 {
+            let values = refs
+                .iter()
+                .copied()
+                .map(|ref_id| {
+                    let value = match ref_id {
+                        71 => ex_score,
+                        74 => total_notes,
+                        _ => 0,
+                    };
+                    (ref_id, value)
+                })
+                .collect();
+            let actual = call_number_float_with_values(function, main_state_probe, values)?;
+            let expected = match object_id {
+                Some("rank_diff_count") => {
+                    luxe_flat_nearest_rank_diff(ex_score, total_notes)? as f64
+                }
+                _ => wmii_nearest_rank(ex_score, total_notes)?.2 as f64,
+            };
+            if !approx_float_eq(actual, expected) {
+                return None;
+            }
+        }
+    }
+    Some("bmz:nearest_rank_diff_abs".to_string())
+}
+
+fn luxe_flat_nearest_rank_diff(ex_score: i32, total_notes: i32) -> Option<i32> {
+    let max = total_notes.checked_mul(2)?;
+    if max <= 0 {
+        return None;
+    }
+    let ex_score = ex_score.clamp(0, max);
+    if ex_score >= max {
+        return Some(0);
+    }
+    const BOUNDARIES: [i32; 9] = [0, 2, 3, 4, 5, 6, 7, 8, 9];
+    let current =
+        BOUNDARIES.iter().rposition(|boundary| ex_score * 9 >= *boundary * max).unwrap_or(0);
+    let lower = BOUNDARIES[current];
+    let upper = *BOUNDARIES.get(current + 1)?;
+    let lower_score = (lower * max + 8) / 9;
+    let upper_score = (upper * max + 8) / 9;
+    if ex_score * 18 < (lower + upper) * max {
+        Some((ex_score - lower_score).max(0))
+    } else {
+        Some((upper_score - ex_score).max(0))
+    }
+}
+
+fn infer_result_score_draw(
+    function: &Function,
+    object_id: Option<&str>,
+    main_state_probe: &Arc<Mutex<MainStateProbe>>,
+) -> Option<String> {
+    match object_id? {
+        "scoreGraph" => infer_score_rate_band(function, main_state_probe),
+        id if id.starts_with("ir_scoreGraph") => {
+            infer_ir_score_rate_band(function, id, main_state_probe)
+        }
+        id if modern_chic_ir_ranking_graph(id).is_some() => {
+            infer_modern_chic_ir_score_rate_band(function, id, main_state_probe)
+        }
+        "irYouFrame" => infer_ir_ranking_user_draw(function, main_state_probe),
+        id if id.starts_with("nextRank") => {
+            let grade = id.strip_prefix("nextRank")?;
+            for sign in ["plus", "minus"] {
+                if verify_nearest_rank_draw(function, main_state_probe, Some(grade), sign) {
+                    return Some(format!("nearest_rank({grade},{sign})"));
+                }
+            }
+            None
+        }
+        id if luxe_flat_nearest_rank_destination(id).is_some() => {
+            let (grade, sign) = luxe_flat_nearest_rank_destination(id)?;
+            Some(format!("nearest_rank({grade},{sign})"))
+        }
+        "diff_plus" => verify_nearest_rank_draw(function, main_state_probe, None, "plus")
+            .then(|| "nearest_rank_sign(plus)".to_string()),
+        "diff_minus" => verify_nearest_rank_draw(function, main_state_probe, None, "minus")
+            .then(|| "nearest_rank_sign(minus)".to_string()),
+        "diff_rank" => ["plus", "minus"].into_iter().find_map(|sign| {
+            verify_nearest_rank_draw(function, main_state_probe, None, sign)
+                .then(|| format!("nearest_rank_sign({sign})"))
+        }),
+        _ => None,
+    }
+}
+
+fn luxe_flat_nearest_rank_destination(id: &str) -> Option<(&'static str, &'static str)> {
+    let suffix = id.strip_prefix("rank_diff_")?;
+    let (grade, sign) = suffix.rsplit_once('_')?;
+    let grade = match grade {
+        "f" => "F",
+        "e" => "E",
+        "d" => "D",
+        "c" => "C",
+        "b" => "B",
+        "a" => "A",
+        "aa" => "AA",
+        "aaa" => "AAA",
+        "max" => "MAX",
+        _ => return None,
+    };
+    let sign = match sign {
+        "plus" => "plus",
+        "minus" => "minus",
+        _ => return None,
+    };
+    Some((grade, sign))
+}
+
+fn infer_result_panel_draw_condition(
+    lua: &Lua,
+    function: &Function,
+    object_id: Option<&str>,
+    main_state_probe: &Arc<Mutex<MainStateProbe>>,
+) -> Option<String> {
+    const ALWAYS_TRUE: &str = "number(0) >= 0";
+    const ALWAYS_FALSE: &str = "number(0) < 0";
+
+    let globals = lua.globals();
+    let global_original = globals
+        .raw_get::<Value>("Expand_op")
+        .ok()
+        .filter(|value| lua_result_panel_value(value.clone()).is_some());
+    let local_original = if global_original.is_none() {
+        let (index, mode) = lua_result_mode_upvalue(lua, function)?;
+        record_local_result_panel_default(main_state_probe, mode)?;
+        Some((index, mode))
+    } else {
+        None
+    };
+
+    let mut conditions = Vec::with_capacity(3);
+    for panel in 0..=2 {
+        let state_updated = if global_original.is_some() {
+            globals.raw_set("Expand_op", panel).is_ok()
+        } else if let Some((index, _)) = local_original {
+            // Luxe Flat: result_mode 0=GRAPH, 1=IR. Use 2 for the inactive
+            // BMZ panel state so neither equality branch is selected.
+            let mode = match panel {
+                1 => 1,
+                2 => 0,
+                _ => 2,
+            };
+            set_lua_integer_upvalue(lua, function, index, mode)
+        } else {
+            false
+        };
+        if !state_updated {
+            restore_result_panel_probe_state(
+                lua,
+                function,
+                global_original.as_ref(),
+                local_original,
+            );
+            return None;
+        }
+        let specialized = infer_result_score_draw(function, object_id, main_state_probe);
+        conditions.push(if result_score_draw_object(object_id) {
+            specialized.or_else(|| infer_constant_draw_at_load(function, main_state_probe))
+        } else {
+            specialized.or_else(|| infer_boolean_predicate(function, main_state_probe, object_id))
+        });
+    }
+    restore_result_panel_probe_state(lua, function, global_original.as_ref(), local_original);
+
+    if conditions.windows(2).all(|pair| pair[0] == pair[1]) {
+        return None;
+    }
+
+    let branches = conditions
+        .into_iter()
+        .enumerate()
+        .flat_map(|(panel, condition)| match condition.as_deref() {
+            None | Some(ALWAYS_FALSE) => Vec::new(),
+            Some(ALWAYS_TRUE) => vec![format!("result_panel({panel})")],
+            Some(condition) => condition
+                .split(" or ")
+                .map(|branch| format!("result_panel({panel}) and {branch}"))
+                .collect(),
+        })
+        .collect::<Vec<_>>();
+    (!branches.is_empty()).then(|| branches.join(" or "))
+}
+
+fn restore_result_panel_probe_state(
+    lua: &Lua,
+    function: &Function,
+    global_original: Option<&Value>,
+    local_original: Option<(i32, i32)>,
+) {
+    if let Some(original) = global_original {
+        let _ = lua.globals().raw_set("Expand_op", original.clone());
+    } else if let Some((index, mode)) = local_original {
+        let _ = set_lua_integer_upvalue(lua, function, index, mode);
+    }
+}
+
+fn result_score_draw_object(object_id: Option<&str>) -> bool {
+    object_id.is_some_and(|id| {
+        id == "scoreGraph"
+            || id.starts_with("ir_scoreGraph")
+            || id == "irYouFrame"
+            || id.starts_with("nextRank")
+            || matches!(id, "diff_plus" | "diff_minus" | "diff_rank")
+    })
+}
+
+fn ir_ranking_slot_from_id(id: &str, prefix: &str) -> Option<i32> {
+    let slot = id.strip_prefix(prefix)?.parse::<i32>().ok()?;
+    (1..=10).contains(&slot).then_some(slot)
+}
+
+fn modern_chic_ir_ranking_graph(id: &str) -> Option<(i32, &'static str)> {
+    let suffix = id.strip_prefix("s_rankingGraph")?;
+    let digit_start = suffix.find(|character: char| character.is_ascii_digit())?;
+    let (rank, slot) = suffix.split_at(digit_start);
+    let rank = match rank {
+        "AAA" => "AAA",
+        "AA" => "AA",
+        "A" => "A",
+        "B" => "B",
+        "C" => "C",
+        "D" => "D",
+        "E" => "E",
+        "F" => "F",
+        _ => return None,
+    };
+    let slot = slot.parse::<i32>().ok()?;
+    (1..=10).contains(&slot).then_some((slot, rank))
+}
+
+fn collect_text_refs(
+    function: &Function,
+    main_state_probe: &Arc<Mutex<MainStateProbe>>,
+) -> Option<Vec<i32>> {
+    main_state_probe.lock().ok()?.begin_number_call_recording(0);
+    let _ = function.call::<Value>(()).ok();
+    let mut calls = {
+        let mut probe = main_state_probe.lock().ok()?;
+        let calls = probe.text_calls.clone();
+        probe.end_recording();
+        calls
+    };
+    calls.sort_unstable();
+    calls.dedup();
+    Some(calls)
+}
+
+fn infer_ir_ranking_name_ref(
+    function: &Function,
+    object_id: Option<&str>,
+    main_state_probe: &Arc<Mutex<MainStateProbe>>,
+) -> Option<i32> {
+    let slot = ir_ranking_slot_from_id(object_id?, "ir_username")?;
+    let expected_ref = 119 + slot;
+    let refs = collect_text_refs(function, main_state_probe)?;
+    (refs.contains(&expected_ref)
+        && refs.iter().all(|ref_id| matches!(*ref_id, 1021) || *ref_id == expected_ref))
+    .then_some(expected_ref)
+}
+
+fn infer_ir_ranking_user_draw(
+    function: &Function,
+    main_state_probe: &Arc<Mutex<MainStateProbe>>,
+) -> Option<String> {
+    let refs = collect_text_refs(function, main_state_probe)?;
+    let ranking_ref = refs.iter().copied().find(|ref_id| (120..=129).contains(ref_id))?;
+    if !refs.iter().all(|ref_id| matches!(*ref_id, 1021) || *ref_id == ranking_ref) {
+        return None;
+    }
+    let own = call_draw_with_text_values(
+        function,
+        main_state_probe,
+        BTreeMap::from([(ranking_ref, "same".to_string()), (1021, "same".to_string())]),
+    )?;
+    let other = call_draw_with_text_values(
+        function,
+        main_state_probe,
+        BTreeMap::from([(ranking_ref, "ranking".to_string()), (1021, "player".to_string())]),
+    )?;
+    (own && !other).then(|| format!("ir_ranking_user({})", ranking_ref - 119))
+}
+
+fn call_draw_with_text_values(
+    function: &Function,
+    main_state_probe: &Arc<Mutex<MainStateProbe>>,
+    values: BTreeMap<i32, String>,
+) -> Option<bool> {
+    main_state_probe.lock().ok()?.begin_text_recording_with_values(values);
+    let result = function.call::<Value>(()).ok();
+    main_state_probe.lock().ok()?.end_recording();
+    match result? {
+        Value::Boolean(value) => Some(value),
+        _ => None,
+    }
+}
+
+fn infer_ir_ranking_score_value_expr(
+    function: &Function,
+    object_id: Option<&str>,
+    main_state_probe: &Arc<Mutex<MainStateProbe>>,
+) -> Option<String> {
+    let object_id = object_id?;
+    let modern_chic_slot = modern_chic_ir_ranking_graph(object_id).map(|(slot, _)| slot);
+    let slot = ir_ranking_slot_from_id(object_id, "ir_scoreGraph").or(modern_chic_slot)?;
+    let score_ref = 379 + slot;
+    if collect_number_refs(function, main_state_probe)? != [74, score_ref] {
+        return None;
+    }
+    let mut samples = vec![(100, 0), (100, 123), (100, 200), (2151, 4155)];
+    if modern_chic_slot.is_some() {
+        samples.insert(0, (100, i32::MIN));
+    }
+    for (notes, score) in samples {
+        let actual = call_number_float_with_values(
+            function,
+            main_state_probe,
+            BTreeMap::from([(74, notes), (score_ref, score)]),
+        )?;
+        let expected = if score == i32::MIN { 0.0 } else { score as f64 / (notes * 2) as f64 };
+        if !approx_float_eq(actual, expected) {
+            return None;
+        }
+    }
+    Some(format!("bmz:ir_score_rate:{slot}"))
+}
+
+fn infer_ir_ranking_score_diff_value_expr(
+    function: &Function,
+    object_id: Option<&str>,
+    main_state_probe: &Arc<Mutex<MainStateProbe>>,
+) -> Option<String> {
+    let slot = ir_ranking_slot_from_id(object_id?, "ir_diff_score")?;
+    let ranking_ref = 379 + slot;
+    if collect_number_refs(function, main_state_probe)? != [170, 171, ranking_ref] {
+        return None;
+    }
+    for (old_score, new_score, ranking_score) in
+        [(0, 0, 0), (2293, 2284, 2293), (2200, 2284, 2293), (2300, 2284, 2293)]
+    {
+        let actual = call_number_expr_with_values(
+            function,
+            main_state_probe,
+            BTreeMap::from([(170, old_score), (171, new_score), (ranking_ref, ranking_score)]),
+        )?;
+        let expected = old_score.max(new_score) - ranking_score;
+        if actual != i64::from(expected) {
+            return None;
+        }
+    }
+    Some(format!("bmz:ir_score_diff:{slot}"))
+}
+
+fn infer_ir_ranking_score_rate_value_expr(
+    function: &Function,
+    object_id: Option<&str>,
+    main_state_probe: &Arc<Mutex<MainStateProbe>>,
+) -> Option<String> {
+    let object_id = object_id?;
+    let (slot, part) = if let Some(slot) = object_id.strip_prefix("ir_scorerate_dot") {
+        (slot.parse::<i32>().ok()?, "fraction")
+    } else {
+        let slot = object_id.strip_prefix("ir_scorerate")?;
+        (slot.parse::<i32>().ok()?, "integer")
+    };
+    if !(1..=10).contains(&slot) {
+        return None;
+    }
+    let score_ref = 379 + slot;
+    if collect_number_refs(function, main_state_probe)? != [74, score_ref] {
+        return None;
+    }
+    for (notes, score) in [(0, 0), (100, 0), (100, 123), (100, 200), (2151, 4155)] {
+        let actual = call_number_float_with_values(
+            function,
+            main_state_probe,
+            BTreeMap::from([(74, notes), (score_ref, score)]),
+        )?;
+        let expected = if notes <= 0 || score <= 0 {
+            0.0
+        } else if part == "integer" {
+            (score as f64 / (notes * 2) as f64 * 100.0).floor()
+        } else {
+            (score as f64 / (notes * 2) as f64 * 10_000.0) % 100.0
+        };
+        if !approx_float_eq(actual, expected) {
+            return None;
+        }
+    }
+    Some(format!("bmz:ir_score_rate_{part}:{slot}"))
+}
+
+fn infer_ir_score_rate_band(
+    function: &Function,
+    object_id: &str,
+    main_state_probe: &Arc<Mutex<MainStateProbe>>,
+) -> Option<String> {
+    let slot = ir_ranking_slot_from_id(object_id, "ir_scoreGraph")?;
+    let score_ref = 379 + slot;
+    if collect_number_refs(function, main_state_probe)? != [74, score_ref] {
+        return None;
+    }
+    for lower in 0..=9 {
+        for upper in lower + 1..=10 {
+            let mut matches = true;
+            'samples: for total_notes in [9, 10, 37] {
+                let max = total_notes * 2;
+                for ex_score in 0..=max {
+                    let actual = call_draw_with_numbers(
+                        function,
+                        main_state_probe,
+                        BTreeMap::from([(74, total_notes), (score_ref, ex_score)]),
+                    );
+                    let expected = 9 * ex_score >= lower * max && 9 * ex_score < upper * max;
+                    if actual != Some(expected) {
+                        matches = false;
+                        break 'samples;
+                    }
+                }
+            }
+            if matches {
+                return Some(format!("ir_score_rate_band({slot},{lower},{upper})"));
+            }
+        }
+    }
+    None
+}
+
+fn modern_chic_ir_rate_bounds(rank: &str) -> Option<(i64, i64)> {
+    match rank {
+        "AAA" => Some((888, 1000)),
+        "AA" => Some((777, 888)),
+        "A" => Some((666, 777)),
+        "B" => Some((555, 666)),
+        "C" => Some((444, 555)),
+        "D" => Some((333, 444)),
+        "E" => Some((222, 333)),
+        "F" => Some((-10, 222)),
+        _ => None,
+    }
+}
+
+fn infer_modern_chic_ir_score_rate_band(
+    function: &Function,
+    object_id: &str,
+    main_state_probe: &Arc<Mutex<MainStateProbe>>,
+) -> Option<String> {
+    let (slot, rank) = modern_chic_ir_ranking_graph(object_id)?;
+    let score_ref = 379 + slot;
+    if collect_number_refs(function, main_state_probe)? != [74, score_ref]
+        || collect_option_calls(function, main_state_probe)? != [51]
+    {
+        return None;
+    }
+    let (lower, upper) = modern_chic_ir_rate_bounds(rank)?;
+    for online in [false, true] {
+        for total_notes in [10, 37] {
+            let max_score = total_notes * 2;
+            for ex_score in 0..=max_score {
+                let actual = call_draw_with_numbers_and_options(
+                    function,
+                    main_state_probe,
+                    BTreeMap::from([(74, total_notes), (score_ref, ex_score)]),
+                    BTreeMap::from([(51, online)]),
+                )?;
+                let expected = online
+                    && i64::from(ex_score) * 1000 > lower * i64::from(max_score)
+                    && i64::from(ex_score) * 1000 <= upper * i64::from(max_score);
+                if actual != expected {
+                    return None;
+                }
+            }
+        }
+    }
+    Some(format!("option(51) and ir_score_rate_range({slot},{lower},{upper})"))
+}
+
+fn infer_score_rate_band(
+    function: &Function,
+    main_state_probe: &Arc<Mutex<MainStateProbe>>,
+) -> Option<String> {
+    if collect_number_refs(function, main_state_probe)? != [71, 74] {
+        return None;
+    }
+    for lower in 0..=9 {
+        for upper in lower + 1..=10 {
+            let mut matches = true;
+            'samples: for total_notes in [9, 10, 37] {
+                let max = total_notes * 2;
+                for ex_score in 0..=max {
+                    let actual = call_draw_with_numbers(
+                        function,
+                        main_state_probe,
+                        BTreeMap::from([(71, ex_score), (74, total_notes)]),
+                    );
+                    let expected = 9 * ex_score >= lower * max && 9 * ex_score < upper * max;
+                    if actual != Some(expected) {
+                        matches = false;
+                        break 'samples;
+                    }
+                }
+            }
+            if matches {
+                return Some(format!("score_rate_band({lower},{upper})"));
+            }
+        }
+    }
+    None
+}
+
+fn verify_nearest_rank_draw(
+    function: &Function,
+    main_state_probe: &Arc<Mutex<MainStateProbe>>,
+    grade: Option<&str>,
+    sign: &str,
+) -> bool {
+    if collect_number_refs(function, main_state_probe).as_deref() != Some(&[71, 74]) {
+        return false;
+    }
+    for total_notes in [9, 10, 37] {
+        for ex_score in 0..=total_notes * 2 {
+            let Some((actual_grade, actual_sign, _)) = wmii_nearest_rank(ex_score, total_notes)
+            else {
+                return false;
+            };
+            let expected = grade.is_none_or(|grade| grade == actual_grade) && sign == actual_sign;
+            if call_draw_with_numbers(
+                function,
+                main_state_probe,
+                BTreeMap::from([(71, ex_score), (74, total_notes)]),
+            ) != Some(expected)
+            {
+                return false;
+            }
+        }
+    }
+    true
+}
+
+fn wmii_nearest_rank(ex_score: i32, total_notes: i32) -> Option<(&'static str, &'static str, i32)> {
+    let max = total_notes.checked_mul(2)?;
+    if max <= 0 {
+        return None;
+    }
+    let ex_score = ex_score.clamp(0, max);
+    const RANKS: [(&str, i32); 9] = [
+        ("F", 0),
+        ("E", 2),
+        ("D", 3),
+        ("C", 4),
+        ("B", 5),
+        ("A", 6),
+        ("AA", 7),
+        ("AAA", 8),
+        ("MAX", 9),
+    ];
+    if ex_score >= max {
+        return Some(("MAX", "plus", 0));
+    }
+    let current = RANKS.iter().rposition(|(_, ninths)| ex_score * 9 >= ninths * max).unwrap_or(0);
+    let (grade, lower) = RANKS[current];
+    let (next_grade, upper) = RANKS.get(current + 1).copied().unwrap_or((grade, lower));
+    let lower_score = (lower * max + 8) / 9;
+    let upper_score = (upper * max + 8) / 9;
+    let lower_diff = (ex_score - lower_score).max(0);
+    let upper_diff = (upper_score - ex_score).max(0);
+    if lower_diff <= upper_diff {
+        Some((grade, "plus", lower_diff))
+    } else {
+        Some((next_grade, "minus", upper_diff))
+    }
+}
+
 fn call_draw_with_float_and_number(
     function: &Function,
     main_state_probe: &Arc<Mutex<MainStateProbe>>,
@@ -4270,6 +7656,13 @@ fn infer_bmz_builtin_value_expr(
         Some("threshold-num") | Some("threshold_num") | Some("fs-threshold") => {
             Some(SKIN_EXPR_FS_THRESHOLD.to_string())
         }
+        Some("courseClearRate") | Some("course-clear-rate") | Some("course_clear_rate") => {
+            Some(SKIN_EXPR_COURSE_CLEAR_RATE.to_string())
+        }
+        Some("val-gauge-percent-integer") => Some(SKIN_EXPR_GAUGE_PERCENT_INTEGER.to_string()),
+        Some("val-gauge-percent-fraction") => Some(SKIN_EXPR_GAUGE_PERCENT_FRACTION.to_string()),
+        Some("val-gauge-amount-integer") => Some(SKIN_EXPR_GAUGE_AMOUNT_INTEGER.to_string()),
+        Some("val-gauge-amount-fraction") => Some(SKIN_EXPR_GAUGE_AMOUNT_FRACTION.to_string()),
         _ => {
             let refs = collect_number_refs(function, main_state_probe)?;
             if refs.iter().any(|ref_id| matches!(ref_id, 160 | 90 | 91 | 314 | 14)) {
@@ -4716,7 +8109,11 @@ fn infer_division_of_number_sums(
         return None;
     }
     let zero_values = refs.iter().copied().map(|ref_id| (ref_id, 0)).collect::<BTreeMap<_, _>>();
-    let baseline = call_number_float_with_values(function, main_state_probe, zero_values.clone())?;
+    // Lua の 0/0 は NaN になる。beatoraja の graph 描画では非有限値が実質0幅に
+    // なるため、比率推論でも全ゼロ入力だけは0として扱う。
+    let baseline =
+        call_number_float_raw_with_values(function, main_state_probe, zero_values.clone())?;
+    let baseline = if baseline.is_finite() { baseline } else { 0.0 };
     let mut numerator_refs = Vec::new();
     for ref_id in &refs {
         let mut values = zero_values.clone();
@@ -4759,7 +8156,14 @@ fn infer_division_of_number_sums(
     ];
     for values in test_cases {
         let expected = expected_ratio(&values);
-        let actual = call_number_float_with_values(function, main_state_probe, values)?;
+        let actual = call_number_float_raw_with_values(function, main_state_probe, values)?;
+        let actual = if actual.is_finite() {
+            actual
+        } else if expected.abs() < f64::EPSILON {
+            0.0
+        } else {
+            return None;
+        };
         if !approx_float_eq(actual, expected) {
             return None;
         }
@@ -4783,10 +8187,8 @@ fn is_unsupported_json_field_value(value: &Value) -> bool {
 /// BMZ は `.luaskin` 実行結果だけを使い、関数参照自体は JSON 化しない。
 const SILENTLY_SKIPPED_LOADER_FIELDS: &[&str] = &["process", "main", "processHeader", "act"];
 
-fn should_silently_skip_loader_field(path: &str, key: &str, value: &Value) -> bool {
-    matches!(value, Value::Function(_))
-        && (SILENTLY_SKIPPED_LOADER_FIELDS.contains(&key)
-            || (key == "timer" && path.contains(".customTimers[")))
+fn should_silently_skip_loader_field(key: &str, value: &Value) -> bool {
+    matches!(value, Value::Function(_)) && SILENTLY_SKIPPED_LOADER_FIELDS.contains(&key)
 }
 
 fn lua_key_to_json_key(key: Value, path: &str, warnings: &mut Vec<String>) -> Result<String> {
@@ -4805,6 +8207,677 @@ fn lua_key_to_json_key(key: Value, path: &str, warnings: &mut Vec<String>) -> Re
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn infers_select_score_availability_from_luxe_global_guard() {
+        let lua = Lua::new();
+        let probe = Arc::new(Mutex::new(MainStateProbe::default()));
+        let draw = lua
+            .load("flag_score = false; return function() return flag_score end")
+            .eval::<Function>()
+            .unwrap();
+
+        assert_eq!(
+            infer_select_score_available_draw_condition(&lua, &draw, &probe).as_deref(),
+            Some("select_score_available()")
+        );
+        assert!(!lua.globals().get::<bool>("flag_score").unwrap());
+    }
+
+    #[test]
+    fn infers_select_score_availability_from_mz_select_local_guard() {
+        let lua = Lua::new();
+        let probe = Arc::new(Mutex::new(MainStateProbe::default()));
+        let draw = lua
+            .load("local flag_score = false; return function() return flag_score end")
+            .eval::<Function>()
+            .unwrap();
+
+        assert_eq!(
+            infer_select_score_available_draw_condition(&lua, &draw, &probe).as_deref(),
+            Some("select_score_available()")
+        );
+        assert!(!draw.call::<bool>(()).unwrap());
+    }
+
+    #[test]
+    fn load_constant_fallback_preserves_existing_stub_behavior() {
+        let lua = Lua::new();
+        let probe = Arc::new(Mutex::new(MainStateProbe::default()));
+        lua.globals()
+            .set("main_state", create_main_state_stub(&lua, probe.clone()).unwrap())
+            .unwrap();
+        let draw = lua
+            .load(
+                r#"return function()
+                    local ex = main_state.number(71)
+                    local max = main_state.number(74) * 2
+                    if max == 0 then return false end
+                    local rate = ex / max
+                    return rate >= 2 / 9 and rate < 3 / 9
+                end"#,
+            )
+            .eval::<Function>()
+            .unwrap();
+        let value = lua
+            .load(
+                r#"return function()
+                    local ex = main_state.number(71)
+                    local max = main_state.number(74) * 2
+                    if max == 0 then return 0 end
+                    return math.abs(ex - math.ceil(max * 8 / 9))
+                end"#,
+            )
+            .eval::<Function>()
+            .unwrap();
+        let timer_value =
+            lua.load("return function() return main_state.time() end").eval::<Function>().unwrap();
+        let constant = lua.load("return function() return 42 end").eval::<Function>().unwrap();
+
+        assert!(infer_constant_draw_at_load(&draw, &probe).is_some());
+        assert!(infer_constant_number_at_load(&value, &probe).is_some());
+        assert!(infer_constant_number_at_load(&timer_value, &probe).is_some());
+        assert_eq!(infer_constant_number_at_load(&constant, &probe).as_deref(), Some("42"));
+    }
+
+    #[test]
+    fn infers_wmii_result_score_runtime_expressions() {
+        let lua = Lua::new();
+        let probe = Arc::new(Mutex::new(MainStateProbe::default()));
+        lua.globals()
+            .set("main_state", create_main_state_stub(&lua, probe.clone()).unwrap())
+            .unwrap();
+        let functions = lua
+            .load(
+                r#"
+                local ranks = {
+                    {name="F", value=0/9}, {name="E", value=2/9},
+                    {name="D", value=3/9}, {name="C", value=4/9},
+                    {name="B", value=5/9}, {name="A", value=6/9},
+                    {name="AA", value=7/9}, {name="AAA", value=8/9},
+                    {name="MAX", value=1},
+                }
+                local function info()
+                    local ex = main_state.number(71)
+                    local max = main_state.number(74) * 2
+                    if max == 0 then return nil end
+                    if ex >= max then return {target="MAX", sign="+", diff=0} end
+                    local current = 1
+                    for i = 1, #ranks do
+                        if ex / max >= ranks[i].value then current = i else break end
+                    end
+                    local cur, next = ranks[current], ranks[current + 1]
+                    local lower = math.ceil(cur.value * max)
+                    local upper = math.ceil(next.value * max)
+                    local to_lower = math.max(0, ex - lower)
+                    local to_upper = math.max(0, upper - ex)
+                    if to_lower <= to_upper then
+                        return {target=cur.name, sign="+", diff=to_lower}
+                    end
+                    return {target=next.name, sign="-", diff=to_upper}
+                end
+                return {
+                    band = function()
+                        local ex = main_state.number(71)
+                        local max = main_state.number(74) * 2
+                        if max == 0 then return false end
+                        return ex / max >= 2/9 and ex / max < 3/9
+                    end,
+                    max = function()
+                        local ex = main_state.number(71)
+                        local max = main_state.number(74) * 2
+                        if max == 0 then return false end
+                        return ex / max == 1
+                    end,
+                    diff = function() local i=info(); return i and i.diff or 0 end,
+                    luxe_diff = function()
+                        local ex = main_state.number(71)
+                        local max = main_state.number(74) * 2
+                        local _best = main_state.number(170)
+                        local _rival = main_state.number(271)
+                        if max <= 0 or ex >= max then return 0 end
+                        local boundaries = {0, 2, 3, 4, 5, 6, 7, 8, 9}
+                        local current = 1
+                        for i = 1, #boundaries do
+                            if ex * 9 >= boundaries[i] * max then current = i else break end
+                        end
+                        local lower, upper = boundaries[current], boundaries[current + 1]
+                        local lower_score = math.ceil(lower * max / 9)
+                        local upper_score = math.ceil(upper * max / 9)
+                        if ex * 18 < (lower + upper) * max then
+                            return math.max(0, ex - lower_score)
+                        end
+                        return math.max(0, upper_score - ex)
+                    end,
+                    aaa_minus = function()
+                        local i=info(); return i and i.target == "AAA" and i.sign == "-"
+                    end,
+                    plus = function() local i=info(); return i and i.sign == "+" end,
+                    text = function() return main_state.text(1001).." "..main_state.text(1002) end,
+                }
+                "#,
+            )
+            .eval::<Table>()
+            .unwrap();
+
+        assert_eq!(
+            infer_score_rate_band(&functions.get::<Function>("band").unwrap(), &probe).as_deref(),
+            Some("score_rate_band(2,3)")
+        );
+        assert_eq!(
+            infer_score_rate_band(&functions.get::<Function>("max").unwrap(), &probe).as_deref(),
+            Some("score_rate_band(9,10)")
+        );
+        assert_eq!(
+            infer_nearest_rank_diff_value_expr(
+                &functions.get::<Function>("diff").unwrap(),
+                Some("diff_rank"),
+                &probe,
+            )
+            .as_deref(),
+            Some("bmz:nearest_rank_diff_abs")
+        );
+        assert_eq!(
+            infer_nearest_rank_diff_value_expr(
+                &functions.get::<Function>("luxe_diff").unwrap(),
+                Some("rank_diff_count"),
+                &probe,
+            )
+            .as_deref(),
+            Some("bmz:nearest_rank_diff_abs")
+        );
+        assert_eq!(
+            infer_result_score_draw(
+                &functions.get::<Function>("aaa_minus").unwrap(),
+                Some("nextRankAAA"),
+                &probe,
+            )
+            .as_deref(),
+            Some("nearest_rank(AAA,minus)")
+        );
+        assert_eq!(
+            infer_result_score_draw(
+                &functions.get::<Function>("plus").unwrap(),
+                Some("diff_plus"),
+                &probe,
+            )
+            .as_deref(),
+            Some("nearest_rank_sign(plus)")
+        );
+        assert_eq!(
+            infer_result_score_draw(
+                &functions.get::<Function>("plus").unwrap(),
+                Some("rank_diff_aaa_plus"),
+                &probe,
+            )
+            .as_deref(),
+            Some("nearest_rank(AAA,plus)")
+        );
+        assert_eq!(
+            infer_text_concat_expr(&functions.get::<Function>("text").unwrap(), &probe).as_deref(),
+            Some("bmz:text_concat:1001:1002")
+        );
+    }
+
+    #[test]
+    fn infers_wmii_result_ir_ranking_runtime_expressions() {
+        let lua = Lua::new();
+        let probe = Arc::new(Mutex::new(MainStateProbe::default()));
+        lua.globals()
+            .set("main_state", create_main_state_stub(&lua, probe.clone()).unwrap())
+            .unwrap();
+        lua.globals().set("Expand_op", 1).unwrap();
+        let functions = lua
+            .load(
+                r#"
+                return {
+                    graph = function()
+                        return main_state.number(382) / (main_state.number(74) * 2)
+                    end,
+                    rate_integer = function()
+                        local score = main_state.number(382)
+                        local max = main_state.number(74) * 2
+                        if score > 0 and max > 0 then return math.floor(score / max * 100) end
+                        return 0
+                    end,
+                    rate_fraction = function()
+                        local score = main_state.number(382)
+                        local max = main_state.number(74) * 2
+                        if score > 0 and max > 0 then return (score / max * 10000) % 100 end
+                        return 0
+                    end,
+                    diff = function()
+                        return math.max(main_state.number(170), main_state.number(171))
+                            - main_state.number(382)
+                    end,
+                    band = function()
+                        local rate = main_state.number(382) / (main_state.number(74) * 2)
+                        return rate >= 7/9 and rate < 8/9 and Expand_op == 1
+                    end,
+                    name = function()
+                        local current = main_state.text(122)
+                        local own = main_state.text(1021)
+                        if current == own then return own end
+                        return main_state.text(122)
+                    end,
+                    own = function()
+                        return main_state.text(122) == main_state.text(1021) and Expand_op == 1
+                    end,
+                }
+                "#,
+            )
+            .eval::<Table>()
+            .unwrap();
+
+        assert_eq!(
+            infer_ir_ranking_score_value_expr(
+                &functions.get::<Function>("graph").unwrap(),
+                Some("ir_scoreGraph3"),
+                &probe,
+            )
+            .as_deref(),
+            Some("bmz:ir_score_rate:3")
+        );
+        assert_eq!(
+            infer_ir_ranking_score_rate_value_expr(
+                &functions.get::<Function>("rate_integer").unwrap(),
+                Some("ir_scorerate3"),
+                &probe,
+            )
+            .as_deref(),
+            Some("bmz:ir_score_rate_integer:3")
+        );
+        assert_eq!(
+            infer_ir_ranking_score_rate_value_expr(
+                &functions.get::<Function>("rate_fraction").unwrap(),
+                Some("ir_scorerate_dot3"),
+                &probe,
+            )
+            .as_deref(),
+            Some("bmz:ir_score_rate_fraction:3")
+        );
+        assert_eq!(
+            infer_ir_ranking_score_diff_value_expr(
+                &functions.get::<Function>("diff").unwrap(),
+                Some("ir_diff_score3"),
+                &probe,
+            )
+            .as_deref(),
+            Some("bmz:ir_score_diff:3")
+        );
+        assert_eq!(
+            infer_result_score_draw(
+                &functions.get::<Function>("band").unwrap(),
+                Some("ir_scoreGraph3"),
+                &probe,
+            )
+            .as_deref(),
+            Some("ir_score_rate_band(3,7,8)")
+        );
+        assert_eq!(
+            infer_ir_ranking_name_ref(
+                &functions.get::<Function>("name").unwrap(),
+                Some("ir_username3"),
+                &probe,
+            ),
+            Some(122)
+        );
+        assert_eq!(
+            infer_result_score_draw(
+                &functions.get::<Function>("own").unwrap(),
+                Some("irYouFrame"),
+                &probe,
+            )
+            .as_deref(),
+            Some("ir_ranking_user(3)")
+        );
+    }
+
+    #[test]
+    fn infers_modern_chic_select_graph_runtime_expressions() {
+        let lua = Lua::new();
+        let probe = Arc::new(Mutex::new(MainStateProbe::default()));
+        lua.globals()
+            .set("main_state", create_main_state_stub(&lua, probe.clone()).unwrap())
+            .unwrap();
+        let functions = lua
+            .load(
+                r#"
+                return {
+                    fast = function()
+                        local slow = main_state.number(424)
+                        local fast = main_state.number(423)
+                        return fast / (slow + fast)
+                    end,
+                    slow = function()
+                        local slow = main_state.number(424)
+                        local fast = main_state.number(423)
+                        return slow / (slow + fast)
+                    end,
+                    graph = function()
+                        local score = main_state.number(380)
+                        if score == -2147483648 then return 0 end
+                        return score / (main_state.number(74) * 2)
+                    end,
+                    band = function()
+                        local score = main_state.number(380)
+                        local rate = (score / (main_state.number(74) * 2)) * 100
+                        return main_state.option(51) and rate <= 88.8 and rate > 77.7
+                    end,
+                }
+                "#,
+            )
+            .eval::<Table>()
+            .unwrap();
+
+        assert_eq!(
+            infer_value_float_expr(&functions.get::<Function>("fast").unwrap(), &probe).as_deref(),
+            Some("(number(423))/(number(423)+number(424))")
+        );
+        assert_eq!(
+            infer_value_float_expr(&functions.get::<Function>("slow").unwrap(), &probe).as_deref(),
+            Some("(number(424))/(number(423)+number(424))")
+        );
+        assert_eq!(
+            infer_ir_ranking_score_value_expr(
+                &functions.get::<Function>("graph").unwrap(),
+                Some("s_rankingGraphAA1"),
+                &probe,
+            )
+            .as_deref(),
+            Some("bmz:ir_score_rate:1")
+        );
+        assert_eq!(
+            infer_result_score_draw(
+                &functions.get::<Function>("band").unwrap(),
+                Some("s_rankingGraphAA1"),
+                &probe,
+            )
+            .as_deref(),
+            Some("option(51) and ir_score_rate_range(1,777,888)")
+        );
+        assert_eq!(modern_chic_ir_ranking_graph("s_rankingGraphAAA10"), Some((10, "AAA")));
+    }
+
+    #[test]
+    fn infers_wmii_result_panel_gates_without_mutating_default() {
+        let lua = Lua::new();
+        let probe = Arc::new(Mutex::new(MainStateProbe::default()));
+        lua.globals()
+            .set("main_state", create_main_state_stub(&lua, probe.clone()).unwrap())
+            .unwrap();
+        lua.globals().set("Expand_op", 2).unwrap();
+        let functions = lua
+            .load(
+                r#"
+                return {
+                    ir = function() return Expand_op == 1 end,
+                    not_ir = function() return Expand_op ~= 1 end,
+                    band = function()
+                        local rate = main_state.number(382) / (main_state.number(74) * 2)
+                        return rate >= 7/9 and rate < 8/9 and Expand_op == 1
+                    end,
+                    own = function()
+                        return main_state.text(122) == main_state.text(1021) and Expand_op == 1
+                    end,
+                    timing_negative = function()
+                        return (main_state.number(374) + main_state.number(375) * 0.01) < 0
+                            and Expand_op == 2
+                    end,
+                    timing_non_negative = function()
+                        return (main_state.number(374) + main_state.number(375) * 0.01) >= 0
+                            and Expand_op == 2
+                    end,
+                }
+                "#,
+            )
+            .eval::<Table>()
+            .unwrap();
+
+        assert_eq!(
+            infer_result_panel_draw_condition(
+                &lua,
+                &functions.get::<Function>("ir").unwrap(),
+                None,
+                &probe,
+            )
+            .as_deref(),
+            Some("result_panel(1)")
+        );
+        assert_eq!(
+            infer_result_panel_draw_condition(
+                &lua,
+                &functions.get::<Function>("not_ir").unwrap(),
+                None,
+                &probe,
+            )
+            .as_deref(),
+            Some("result_panel(0) or result_panel(2)")
+        );
+        assert_eq!(
+            infer_result_panel_draw_condition(
+                &lua,
+                &functions.get::<Function>("band").unwrap(),
+                Some("ir_scoreGraph3"),
+                &probe,
+            )
+            .as_deref(),
+            Some("result_panel(1) and ir_score_rate_band(3,7,8)")
+        );
+        assert_eq!(
+            infer_result_panel_draw_condition(
+                &lua,
+                &functions.get::<Function>("own").unwrap(),
+                Some("irYouFrame"),
+                &probe,
+            )
+            .as_deref(),
+            Some("result_panel(1) and ir_ranking_user(3)")
+        );
+        assert_eq!(
+            infer_result_panel_draw_condition(
+                &lua,
+                &functions.get::<Function>("timing_negative").unwrap(),
+                Some("timingAvg"),
+                &probe,
+            )
+            .as_deref(),
+            Some("result_panel(2) and number(374) < 0 or result_panel(2) and number(375) < 0")
+        );
+        assert_eq!(
+            infer_result_panel_draw_condition(
+                &lua,
+                &functions.get::<Function>("timing_non_negative").unwrap(),
+                Some("timingAvg"),
+                &probe,
+            )
+            .as_deref(),
+            Some("result_panel(2) and number(374) >= 0 and number(375) >= 0")
+        );
+        assert_eq!(lua.globals().get::<i32>("Expand_op").unwrap(), 2);
+    }
+
+    #[test]
+    fn infers_luxe_flat_local_result_panel_state_without_mutating_default() {
+        let lua = Lua::new();
+        let probe = Arc::new(Mutex::new(MainStateProbe::default()));
+        lua.globals()
+            .set("main_state", create_main_state_stub(&lua, probe.clone()).unwrap())
+            .unwrap();
+        let functions = lua
+            .load(
+                r#"
+                local result_mode = 0
+                return {
+                    graph_act = function() result_mode = 0 end,
+                    ir_act = function() result_mode = 1 end,
+                    graph = function() return result_mode == 0 end,
+                    ir = function() return result_mode == 1 end,
+                    graph_score = function()
+                        return result_mode == 0 and main_state.number(71) >= 0
+                    end,
+                }
+                "#,
+            )
+            .eval::<Table>()
+            .unwrap();
+
+        assert_eq!(
+            infer_result_panel_act_at_load(
+                &lua,
+                &functions.get::<Function>("graph_act").unwrap(),
+                &probe,
+            ),
+            Some(i64::from(SKIN_EVENT_RESULT_PANEL_GRAPH))
+        );
+        assert_eq!(
+            infer_result_panel_act_at_load(
+                &lua,
+                &functions.get::<Function>("ir_act").unwrap(),
+                &probe,
+            ),
+            Some(i64::from(SKIN_EVENT_RESULT_PANEL_IR))
+        );
+        assert_eq!(
+            infer_result_panel_draw_condition(
+                &lua,
+                &functions.get::<Function>("graph").unwrap(),
+                None,
+                &probe,
+            )
+            .as_deref(),
+            Some("result_panel(2)")
+        );
+        assert_eq!(
+            infer_result_panel_draw_condition(
+                &lua,
+                &functions.get::<Function>("ir").unwrap(),
+                None,
+                &probe,
+            )
+            .as_deref(),
+            Some("result_panel(1)")
+        );
+        assert_eq!(
+            infer_result_panel_draw_condition(
+                &lua,
+                &functions.get::<Function>("graph_score").unwrap(),
+                None,
+                &probe,
+            )
+            .as_deref(),
+            Some("result_panel(2) and number(71) >= 0")
+        );
+        assert_eq!(probe.lock().unwrap().result_panel_default, Some(2));
+        assert_eq!(
+            lua_result_mode_upvalue(&lua, &functions.get::<Function>("graph").unwrap())
+                .map(|(_, mode)| mode),
+            Some(0)
+        );
+    }
+
+    #[test]
+    fn maps_peacefulplay_keylogger_graph_ids_to_builtin_expressions() {
+        assert_eq!(
+            keylogger_graph_value_expr_from_id("keylogger-graph-judge-3-good").as_deref(),
+            Some("bmz:keylogger_graph:judge:3:good")
+        );
+        assert_eq!(
+            keylogger_graph_value_expr_from_id("keylogger-graph-fastslow-9-fast").as_deref(),
+            Some("bmz:keylogger_graph:fastslow:9:fast")
+        );
+        assert!(keylogger_graph_value_expr_from_id("graph-now").is_none());
+    }
+
+    #[test]
+    fn maps_milliondollar_fast_slow_graph_ids_to_runtime_expressions() {
+        assert_eq!(
+            milliondollar_fast_slow_graph_value_expr_from_id("Graph_Totalfastslow_Fast").as_deref(),
+            Some(
+                "(option(928)*number(423)+(1-option(928))*(number(423)+number(410)))/(number(110)+number(111)+number(112)+number(113)+number(114)+number(420))"
+            )
+        );
+        assert_eq!(
+            milliondollar_fast_slow_graph_value_expr_from_id("Graph_Totalfastslow_Slow").as_deref(),
+            Some(
+                "(option(928)*number(424)+(1-option(928))*(number(424)+number(411)))/(number(110)+number(111)+number(112)+number(113)+number(114)+number(420))"
+            )
+        );
+        assert!(milliondollar_fast_slow_graph_value_expr_from_id("graph-now").is_none());
+    }
+
+    /// Third-party skin baseline.  It is intentionally skipped for clean CI
+    /// checkouts that do not contain the locally installed skin.
+    #[test]
+    fn milliondollar_result_fast_slow_graphs_convert_when_available() {
+        let skin_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../data/skins/MILLIONDOLLAR/result.luaskin");
+        if !skin_path.is_file() {
+            return;
+        }
+
+        let loaded = load_lua_skin_value(
+            &skin_path,
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            &LuaLoadRuntimeState::default(),
+            &BTreeMap::new(),
+        )
+        .expect("MILLIONDOLLAR result should convert");
+        let messages: Vec<_> =
+            loaded.warnings.iter().map(|warning| warning.message.as_str()).collect();
+        assert!(
+            !messages.iter().any(|message| {
+                message.contains("Graph_Totalfastslow_Fast")
+                    || message.contains("Graph_Totalfastslow_Slow")
+                    || (message.contains("graph[") && message.contains("unsupported value"))
+            }),
+            "MILLIONDOLLAR fast/slow graph values should convert: {messages:?}"
+        );
+        let document = loaded.value.to_string();
+        assert!(document.contains("Graph_Totalfastslow_Fast"));
+        assert!(document.contains("option(928)*number(423)"));
+        assert!(document.contains("Graph_Totalfastslow_Slow"));
+        assert!(document.contains("option(928)*number(424)"));
+    }
+
+    #[test]
+    fn infers_fixed_delay_timer_function() {
+        let lua = Lua::new();
+        let probe = Arc::new(Mutex::new(MainStateProbe::default()));
+        lua.globals()
+            .set("main_state", create_main_state_stub(&lua, probe.clone()).unwrap())
+            .unwrap();
+        let function = lua
+            .load(
+                r#"return function()
+                    local off = main_state.timer_off_value
+                    local source = main_state.timer(143)
+                    if source == off then return off end
+                    local start = source + 1000000
+                    if main_state.time() < start then return off end
+                    return start
+                end"#,
+            )
+            .eval::<Function>()
+            .unwrap();
+        assert_eq!(infer_fixed_delay_timer(&function, &probe), Some((143, 1000)));
+    }
+
+    #[test]
+    fn infers_custom_timer_alias_function() {
+        let lua = Lua::new();
+        let probe = Arc::new(Mutex::new(MainStateProbe::default()));
+        lua.globals()
+            .set("main_state", create_main_state_stub(&lua, probe.clone()).unwrap())
+            .unwrap();
+        let function = lua
+            .load("return function() return main_state.timer(150) end")
+            .eval::<Function>()
+            .unwrap();
+
+        assert_eq!(infer_custom_timer_alias(&function, &probe), Some(150));
+    }
 
     #[test]
     fn infers_event_index_or_draw_condition() {
@@ -4826,6 +8899,81 @@ mod tests {
         assert_eq!(
             infer_main_state_event_index_draw_condition(&function, &probe),
             Some("event_index(42) == 2 or event_index(42) == 3".to_string())
+        );
+    }
+
+    #[test]
+    fn infers_event_index_and_dp_side_options_draw_condition() {
+        let lua = Lua::new();
+        let probe = Arc::new(Mutex::new(MainStateProbe::default()));
+        let main_state = create_main_state_stub(&lua, probe.clone()).unwrap();
+        lua.globals().set("main_state", main_state).unwrap();
+        let random = lua
+            .load(
+                r#"
+                return function()
+                    local rnd = main_state.event_index(43)
+                    return (rnd == 2 or rnd == 3)
+                        and (main_state.option(162) or main_state.option(163))
+                end
+                "#,
+            )
+            .eval::<Function>()
+            .unwrap();
+        let normal = lua
+            .load(
+                r#"
+                return function()
+                    return main_state.event_index(43) == 0
+                        and (main_state.option(162) or main_state.option(163))
+                end
+                "#,
+            )
+            .eval::<Function>()
+            .unwrap();
+
+        assert_eq!(
+            infer_boolean_predicate(&random, &probe, None),
+            Some(
+                "event_index(43) == 2 and option(162) or event_index(43) == 2 and option(163) or event_index(43) == 3 and option(162) or event_index(43) == 3 and option(163)"
+                    .to_string()
+            )
+        );
+        assert_eq!(
+            infer_boolean_predicate(&normal, &probe, None),
+            Some(
+                "event_index(43) == 0 and option(162) or event_index(43) == 0 and option(163)"
+                    .to_string()
+            )
+        );
+    }
+
+    #[test]
+    fn infers_loading_or_loaded_before_ready_draw_condition() {
+        let lua = Lua::new();
+        let probe = Arc::new(Mutex::new(MainStateProbe::default()));
+        let main_state = create_main_state_stub(&lua, probe.clone()).expect("main_state probe");
+        lua.globals().set("main_state", main_state).unwrap();
+        let function = lua
+            .load(
+                r#"
+                return function()
+                    if main_state.option(80) then
+                        return true
+                    end
+                    if not main_state.option(81) then
+                        return false
+                    end
+                    return main_state.timer(40) == main_state.timer_off_value
+                end
+                "#,
+            )
+            .eval::<Function>()
+            .expect("draw function");
+
+        assert_eq!(
+            infer_main_state_two_options_timer_draw_condition(&function, &probe),
+            Some("option(80) or option(81) and timer(40) == timer_off".to_string())
         );
     }
 
@@ -4964,13 +9112,13 @@ mod tests {
                     (
                         "draw".to_string(),
                         JsonValue::String(
-                            "event_index(503) == 2 or event_index(503) == 3".to_string(),
+                            "timer(103) != timer_off and timer(73) == timer_off and event_index(503) == 2"
+                                .to_string(),
                         ),
                     ),
                 ])),
                 JsonValue::Object(JsonMap::from_iter([
                     ("id".to_string(), JsonValue::String("key-beam-thick-great".to_string())),
-                    ("timer".to_string(), JsonValue::Number(JsonNumber::from(123))),
                     ("loop".to_string(), JsonValue::Number(JsonNumber::from(-1))),
                     (
                         "draw".to_string(),
@@ -4982,7 +9130,11 @@ mod tests {
             ]),
         )]);
 
-        postprocess_lua_skin_json(&mut root);
+        let mut warnings = vec![
+            "skipping unsupported draw function at $.destination[3].draw".to_string(),
+            "skipping unsupported field `timer` at $.destination[4]".to_string(),
+        ];
+        postprocess_lua_skin_json(&mut root, &mut warnings);
 
         let destinations = root.get("destination").and_then(JsonValue::as_array).unwrap();
         let draw = |index: usize| {
@@ -4992,14 +9144,17 @@ mod tests {
                 .and_then(JsonValue::as_str)
                 .unwrap()
         };
-        assert_eq!(
-            draw(0),
-            "timer(102) != timer_off and timer(72) == timer_off and event_index(502) == 1"
-        );
+        assert_eq!(draw(0), "keybeam_hold(102) != 0 and event_index(502) == 1");
         assert_eq!(
             draw(2),
-            "timer(103) != timer_off and timer(73) == timer_off and event_index(503) == 2 or timer(103) != timer_off and timer(73) == timer_off and event_index(503) == 3"
+            "keybeam_hold(103) != 0 and event_index(503) == 2 or keybeam_hold(103) != 0 and event_index(503) == 3"
         );
+        assert_eq!(draw(1), "keybeam_fade(122) != 0 and event_index(502) == 1");
+        assert_eq!(
+            destinations[3].as_object().and_then(|destination| destination.get("timer")),
+            Some(&JsonValue::Number(JsonNumber::from(123)))
+        );
+        assert!(warnings.is_empty());
     }
 
     #[test]
@@ -5143,6 +9298,25 @@ mod tests {
         );
     }
 
+    #[test]
+    fn infers_peaceful_play_gauge_value_builtins() {
+        let lua = Lua::new();
+        let probe = Arc::new(Mutex::new(MainStateProbe::default()));
+        let function = lua.load("return function() return 0 end").eval::<Function>().unwrap();
+
+        for (id, expected) in [
+            ("val-gauge-percent-integer", SKIN_EXPR_GAUGE_PERCENT_INTEGER),
+            ("val-gauge-percent-fraction", SKIN_EXPR_GAUGE_PERCENT_FRACTION),
+            ("val-gauge-amount-integer", SKIN_EXPR_GAUGE_AMOUNT_INTEGER),
+            ("val-gauge-amount-fraction", SKIN_EXPR_GAUGE_AMOUNT_FRACTION),
+        ] {
+            assert_eq!(
+                infer_bmz_builtin_value_expr(&function, Some(id), &probe),
+                Some(expected.to_string())
+            );
+        }
+    }
+
     fn unique_skin_test_dir(tag: &str) -> PathBuf {
         use std::sync::atomic::{AtomicU64, Ordering};
         static COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -5254,6 +9428,41 @@ mod tests {
     }
 
     #[test]
+    fn property_options_accept_integral_lua_numbers() {
+        let property: JsonValue = serde_json::from_str(
+            r#"
+            {
+                "name": "Key Beam Length",
+                "def": "100%",
+                "item": [
+                    { "name": "100%", "op": 11400.0 },
+                    { "name": "90%", "op": 11401.0 }
+                ]
+            }
+            "#,
+        )
+        .unwrap();
+        let header = serde_json::json!({ "property": [property] });
+        let mut warnings = Vec::new();
+
+        let options = skin_config_options_from_header(
+            &header,
+            &BTreeMap::from([("Key Beam Length".to_string(), "90%".to_string())]),
+            &mut warnings,
+        );
+
+        assert_eq!(options.get("Key Beam Length"), Some(&11401));
+        assert!(warnings.is_empty(), "unexpected warnings: {warnings:?}");
+    }
+
+    #[test]
+    fn property_options_reject_fractional_lua_numbers() {
+        let items = vec![serde_json::json!({ "name": "invalid", "op": 11400.5 })];
+
+        assert_eq!(option_value_to_op(&items, "invalid"), None);
+    }
+
+    #[test]
     fn get_path_accepts_beatoraja_filename_selection() {
         let root = unique_skin_test_dir("filename-getpath");
         fs::create_dir_all(root.join("bg")).unwrap();
@@ -5283,5 +9492,79 @@ mod tests {
             seen.insert(name);
         }
         assert_eq!(seen.len(), 2, "Random selection should pick randomly among matches");
+    }
+
+    #[test]
+    fn repairs_strictly_recognized_malformed_destination_ops() {
+        let mut value = serde_json::json!({
+            "type": 7,
+            "destination": [
+                {
+                    "id": "rankBig_AAA",
+                    "op": {
+                        "1": 300,
+                        "2": 920,
+                        "loop": 100,
+                        "filter": 1,
+                        "dst": [{"x": 77, "y": 800, "w": 400, "h": 510}]
+                    }
+                },
+                {
+                    "id": "AAA_BG",
+                    "op": [90, [90, 300]],
+                    "dst": [{"x": 0, "y": 0, "w": 1, "h": 1}]
+                }
+            ]
+        });
+        let mut warnings =
+            vec!["mixed lua table converted to object at $.destination[1].op".to_string()];
+
+        postprocess_lua_skin_json(value.as_object_mut().unwrap(), &mut warnings);
+
+        assert_eq!(value["destination"][0]["op"], serde_json::json!([300, 920]));
+        assert_eq!(value["destination"][0]["loop"], 100);
+        assert_eq!(value["destination"][0]["filter"], 1);
+        assert!(value["destination"][0]["dst"].is_array());
+        assert_eq!(value["destination"][1]["op"], serde_json::json!([90, 300]));
+        assert_eq!(warnings, ["repaired 2 malformed destination op tables"]);
+
+        let document: bmz_skin_document::SkinDocument =
+            serde_json::from_value(value.clone()).expect("repaired destinations should decode");
+        let destinations = document
+            .destination
+            .iter()
+            .filter_map(|entry| match entry {
+                bmz_skin_document::DestinationListEntry::Single(destination) => Some(destination),
+                bmz_skin_document::DestinationListEntry::Conditional { .. } => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(destinations[0].op, [300, 920]);
+        assert_eq!(destinations[1].op, [90, 300]);
+
+        let once = value.clone();
+        let warning_count = warnings.len();
+        postprocess_lua_skin_json(value.as_object_mut().unwrap(), &mut warnings);
+        assert_eq!(value, once);
+        assert_eq!(warnings.len(), warning_count);
+    }
+
+    #[test]
+    fn leaves_ambiguous_destination_ops_unmodified() {
+        let mut value = serde_json::json!({
+            "destination": [
+                {"id": "sparse", "op": {"1": 90, "3": 300, "dst": []}},
+                {"id": "unknown", "op": {"1": 90, "custom": 1, "dst": []}},
+                {"id": "conflict", "loop": 200, "op": {"1": 90, "loop": 100, "dst": []}},
+                {"id": "different-prefix", "op": [90, [300]], "dst": []},
+                {"id": "deep", "op": [90, [90, [300]]], "dst": []}
+            ]
+        });
+        let original = value.clone();
+        let mut warnings = Vec::new();
+
+        postprocess_lua_skin_json(value.as_object_mut().unwrap(), &mut warnings);
+
+        assert_eq!(value, original);
+        assert!(warnings.is_empty());
     }
 }

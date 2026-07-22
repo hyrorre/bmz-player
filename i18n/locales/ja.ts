@@ -1,0 +1,118 @@
+import { additional, withAdditional } from './additional'
+
+export default defineI18nLocale(() =>
+  withAdditional(
+    {
+      meta: {
+        description:
+          'BMZ Player のスコア送信とランキング閲覧に使う Internet Ranking サービスです。',
+      },
+      common: {
+        language: '言語',
+        openMenu: 'メニューを開く',
+        licenses: 'ライセンス',
+        backHome: 'トップへ戻る',
+        loading: '読み込み中...',
+        search: '検索',
+        untitled: '(無題)',
+        none: 'なし',
+        notRecorded: '未記録',
+        revoke: '失効',
+        save: '保存する',
+      },
+      nav: {
+        charts: '譜面',
+        courses: 'コース',
+        players: 'ユーザー',
+        daily: '本日の成果',
+        profile: 'プロフィール',
+        settings: 'アカウント設定',
+        logout: 'ログアウト',
+        login: 'ログイン',
+        register: '登録',
+      },
+      home: {
+        title: 'BMZ IR',
+        description: 'BMZ Player のスコア送信とランキング確認に使うアカウントを管理します。',
+        loggedInAs: '{name} としてログインしています。',
+        editProfile: 'プロフィール編集',
+        chartsRanking: '譜面一覧・ランキング',
+        coursesDan: 'コース・段位',
+        myScores: '自分のスコア',
+      },
+      auth: {
+        email: 'メールアドレス',
+        password: 'パスワード',
+        currentPassword: '現在のパスワード',
+        newPassword: '新しいパスワード',
+        passwordMin: '8文字以上',
+        displayName: '表示名',
+        login: 'ログイン',
+      },
+      validation: {
+        emailRequired: 'メールアドレスを入力してください。',
+        passwordRequired: 'パスワードを入力してください。',
+        currentPasswordRequired: '現在のパスワードを入力してください。',
+        passwordMin: 'パスワードは8文字以上にしてください。',
+        displayNameRequired: '表示名を入力してください。',
+      },
+      login: {
+        description: 'BMZ IR のスコア送信とランキング閲覧に使うアカウントへログインします。',
+        noAccount: 'アカウントをお持ちでない場合は',
+        forgotPassword: 'パスワードを忘れた場合は',
+        reset: '再設定',
+      },
+      register: {
+        title: 'アカウント登録',
+        description: 'BMZ IR にスコアを送信するためのアカウントを作成します。',
+        submit: '登録する',
+        haveAccount: 'アカウントをお持ちの場合は',
+      },
+      logout: {
+        description: '{email} からログアウトします。',
+        currentUser: 'ログイン中のユーザー',
+        notLoggedIn: '現在ログインしていません。',
+      },
+      reset: {
+        title: 'パスワードを忘れた場合',
+        changePassword: 'パスワード変更',
+        loggedInDescription: 'ログイン中のパスワード変更は、現在のパスワード確認が必要です。',
+        goSettings: 'アカウント設定へ移動',
+        description: '登録メールアドレスへ再設定リンクを送信します。',
+        submit: '再設定メールを送信',
+        remembered: 'パスワードを思い出した場合は',
+        unsupported:
+          'メール送信による再設定は現在未対応です。ログイン中のアカウント設定から変更してください。',
+      },
+      licenses: {
+        title: 'Web 依存関係のライセンス',
+        description:
+          'Cloudflare Worker bundle に含まれる Web 依存パッケージの third-party notice です。',
+        openTxt: 'txt を開く',
+        loadFailed: 'web-dependency-licenses.txt を読み込めませんでした{detail}。',
+        packageCount: '{count} パッケージ',
+      },
+      errors: {
+        loginFailed: 'ログインに失敗しました。',
+        registerFailed: 'アカウント登録に失敗しました。',
+        logoutFailed: 'ログアウトに失敗しました。',
+      },
+      apiErrors: {
+        authenticationRequired: 'ログインが必要です。',
+        invalidCredentials: 'メールアドレスまたはパスワードが正しくありません。',
+        invalidCurrentPassword: '現在のパスワードが正しくありません。',
+        accountAlreadyExists: 'このアカウントはすでに存在します。',
+        emailAlreadyRegistered: 'このメールアドレスはすでに登録されています。',
+        profileNotFound: 'プロフィールが見つかりません。',
+        playerNotFound: 'プレイヤーが見つかりません。',
+        chartNotFound: '譜面が見つかりません。',
+        courseNotFound: 'コースが見つかりません。',
+        scoreNotFound: 'スコアが見つかりません。',
+        replayNotAvailable: 'リプレイを利用できません。',
+        sessionNotFound: 'セッションが見つかりません。',
+        deviceKeyNotFound: '署名鍵が見つからないか、すでに失効しています。',
+      },
+    },
+    additional.ja,
+  ),
+)

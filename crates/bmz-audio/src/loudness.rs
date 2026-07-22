@@ -3,7 +3,7 @@ use bmz_chart::volume::{chart_channel_volume_factor, chart_volume_at_time};
 use bmz_core::ids::SoundId;
 use bmz_core::time::TimeUs;
 
-use crate::sample::SampleBank;
+use crate::sample::{DecodedSample, SampleBank};
 
 /// Analysis / DB に保存する `normalization_gain` の基準 loudness。
 /// 既存キャッシュ互換のため変更しない。
@@ -11,12 +11,24 @@ const ANALYSIS_TARGET_LUFS: f32 = -12.0;
 /// プレイ再生に適用する正規化の目標 loudness。
 /// 解析値は変えず、適用時だけこの目標へ再計算する。
 pub const PLAY_TARGET_LUFS: f32 = -6.0;
+/// 選曲プレビューに適用する正規化の目標 loudness。
+/// プレイ再生と同じ目標値を使う。
+pub const PREVIEW_TARGET_LUFS: f32 = PLAY_TARGET_LUFS;
+/// 選曲プレビューの sample peak 上限。true peak ではなく decode 済み PCM の最大値で判定する。
+pub const PREVIEW_PEAK_CEILING_DBFS: f32 = -1.0;
 const MAX_ANALYSIS_DURATION_US: i64 = 10 * 60 * 1_000_000;
 const ANALYSIS_CHUNK_FRAMES: usize = 2048;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ChartLoudnessAnalysis {
     pub loudness_lufs: f32,
+    pub normalization_gain: f32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PreviewLoudnessAnalysis {
+    pub loudness_lufs: f32,
+    pub peak_abs: f32,
     pub normalization_gain: f32,
 }
 
@@ -109,6 +121,40 @@ pub fn analyze_chart_loudness(
     }
     let normalization_gain = normalization_gain_for_loudness(loudness_lufs);
     Some(ChartLoudnessAnalysis { loudness_lufs, normalization_gain })
+}
+
+/// Decode 済みの選曲プレビューを解析し、loudness と sample peak の両方を満たす
+/// 下げ方向のみのゲインを返す。
+pub fn analyze_preview_loudness(sample: &DecodedSample) -> Option<PreviewLoudnessAnalysis> {
+    let frame_count = sample.frame_count();
+    if frame_count == 0 || sample.frames.iter().any(|value| !value.is_finite()) {
+        return None;
+    }
+
+    let peak_abs = sample.frames.iter().fold(0.0f32, |peak, value| peak.max(value.abs()));
+    let mut sum_square = 0.0f64;
+    for frame in 0..frame_count {
+        let (left, right) = sample.sample_stereo(frame);
+        let left = f64::from(left);
+        let right = f64::from(right);
+        sum_square += left * left + right * right;
+    }
+    if sum_square <= f64::MIN_POSITIVE {
+        return None;
+    }
+
+    let mean_square = sum_square / frame_count as f64;
+    let loudness_lufs = (-0.691 + 10.0 * mean_square.log10()) as f32;
+    if !loudness_lufs.is_finite() || !peak_abs.is_finite() || peak_abs <= 0.0 {
+        return None;
+    }
+
+    let loudness_gain = normalization_gain_for_target(loudness_lufs, PREVIEW_TARGET_LUFS);
+    let peak_ceiling = 10.0f32.powf(PREVIEW_PEAK_CEILING_DBFS / 20.0);
+    let peak_gain = (peak_ceiling / peak_abs).clamp(0.0, 1.0);
+    let normalization_gain = loudness_gain.min(peak_gain).clamp(0.0, 1.0);
+
+    Some(PreviewLoudnessAnalysis { loudness_lufs, peak_abs, normalization_gain })
 }
 
 /// Analysis / DB 用: `ANALYSIS_TARGET_LUFS` (-12) 基準の下げのみゲイン。
@@ -234,6 +280,66 @@ mod tests {
         let play_gain = play_normalization_gain_for_loudness(-6.0);
         assert!(analysis_gain < play_gain);
         assert!((play_gain - 1.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn preview_normalization_uses_same_minus_six_target_as_play() {
+        assert_eq!(PREVIEW_TARGET_LUFS, PLAY_TARGET_LUFS);
+
+        let sample = DecodedSample { channels: 2, sample_rate: 48_000, frames: vec![0.5; 200] };
+        let analysis = analyze_preview_loudness(&sample).unwrap();
+        let expected_gain = play_normalization_gain_for_loudness(analysis.loudness_lufs);
+
+        assert!((analysis.normalization_gain - expected_gain).abs() < 0.001);
+    }
+
+    #[test]
+    fn preview_analysis_keeps_audio_below_target_at_unity() {
+        let sample = DecodedSample { channels: 2, sample_rate: 48_000, frames: vec![0.1; 200] };
+
+        let result = analyze_preview_loudness(&sample).unwrap();
+
+        assert!(result.loudness_lufs < PREVIEW_TARGET_LUFS);
+        assert!((result.normalization_gain - 1.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn preview_analysis_attenuates_loud_audio() {
+        let sample = DecodedSample { channels: 2, sample_rate: 48_000, frames: vec![0.5; 200] };
+
+        let result = analyze_preview_loudness(&sample).unwrap();
+        let normalized_loudness = result.loudness_lufs + 20.0 * result.normalization_gain.log10();
+
+        assert!(result.normalization_gain < 1.0);
+        assert!((normalized_loudness - PREVIEW_TARGET_LUFS).abs() < 0.001);
+    }
+
+    #[test]
+    fn preview_analysis_limits_isolated_peak_to_ceiling() {
+        let mut frames = vec![0.01; 200];
+        frames[100] = 1.0;
+        let sample = DecodedSample { channels: 2, sample_rate: 48_000, frames };
+
+        let result = analyze_preview_loudness(&sample).unwrap();
+        let peak_ceiling = 10.0f32.powf(PREVIEW_PEAK_CEILING_DBFS / 20.0);
+
+        assert!(result.loudness_lufs < PREVIEW_TARGET_LUFS);
+        assert!(result.normalization_gain < 1.0);
+        assert!((result.peak_abs * result.normalization_gain - peak_ceiling).abs() < 0.001);
+    }
+
+    #[test]
+    fn preview_analysis_rejects_empty_silent_and_non_finite_audio() {
+        let empty = DecodedSample { channels: 2, sample_rate: 48_000, frames: Vec::new() };
+        let silent = DecodedSample { channels: 2, sample_rate: 48_000, frames: vec![0.0; 200] };
+        let nan = DecodedSample { channels: 2, sample_rate: 48_000, frames: vec![0.1, f32::NAN] };
+        let infinite =
+            DecodedSample { channels: 2, sample_rate: 48_000, frames: vec![0.1, f32::INFINITY] };
+
+        assert_eq!(analyze_preview_loudness(&empty), None);
+        assert_eq!(analyze_preview_loudness(&silent), None);
+        assert_eq!(analyze_preview_loudness(&nan), None);
+        assert_eq!(analyze_preview_loudness(&infinite), None);
     }
 
     #[test]

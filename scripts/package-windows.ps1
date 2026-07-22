@@ -9,6 +9,7 @@ param(
     [switch]$CopySiblingDlls,
     [switch]$Installer,
     [string]$IsccPath = "",
+    [string]$GameInputPackageDir = "",
     [switch]$NoDefaultFeatures,
     [string]$Features = "",
     [switch]$SkipRustLicenseReport,
@@ -269,6 +270,15 @@ function Resolve-InstallerArch {
 function Resolve-VcpkgTriplet {
     param([string]$Target)
 
+    if (-not $Target) {
+        if ($env:VCPKGRS_TRIPLET) {
+            return $env:VCPKGRS_TRIPLET
+        }
+        if ($env:VCPKG_DEFAULT_TRIPLET) {
+            return $env:VCPKG_DEFAULT_TRIPLET
+        }
+    }
+
     if ($Target -match "i686|i586|x86-pc-windows") {
         return "x86-windows"
     }
@@ -341,6 +351,17 @@ if (-not $OutDir) {
 }
 $OutDir = Resolve-FullPath $OutDir
 
+if (-not $GameInputPackageDir -and $env:BMZ_GAMEINPUT_PACKAGE_DIR) {
+    $GameInputPackageDir = $env:BMZ_GAMEINPUT_PACKAGE_DIR
+}
+if ($GameInputPackageDir) {
+    $GameInputPackageDir = Resolve-FullPath $GameInputPackageDir
+    Require-Directory $GameInputPackageDir
+    Require-File (Join-Path $GameInputPackageDir "redist\GameInputRedist.msi")
+    Require-File (Join-Path $GameInputPackageDir "LICENSE.txt")
+    Require-File (Join-Path $GameInputPackageDir "NOTICE.txt")
+}
+
 Require-Command "cargo"
 Require-Command "robocopy"
 
@@ -377,11 +398,13 @@ Sync-InnoAppVersion $issPath $version
 $defaultSkin = Join-Path $repoRoot "data\skins\default\select.json"
 $rmzSkin = Join-Path $repoRoot "data\skins\Rmz-skin\play7main.luaskin"
 $mzSelectSkin = Join-Path $repoRoot "data\skins\mz-select\music_select.luaskin"
+$luxezFlatSkin = Join-Path $repoRoot "data\skins\Luxez-Flat\music_select.luaskin"
 $sampleSong = Join-Path $repoRoot "data\songs\sample-playable\sample-playable.bms"
 $appIcon = Join-Path $repoRoot "assets\app-icon\bmz-player.ico"
 Require-File $defaultSkin
 Require-File $rmzSkin
 Require-File $mzSelectSkin
+Require-File $luxezFlatSkin
 Require-File $sampleSong
 Require-File $appIcon
 
@@ -402,10 +425,24 @@ Copy-RequiredFile $binary (Join-Path $stageDir "bmz-player.exe")
 Copy-DirectoryMirror (Join-Path $repoRoot "data\skins\default") (Join-Path $resourcesDir "skins\default")
 Copy-DirectoryMirror (Join-Path $repoRoot "data\skins\Rmz-skin") (Join-Path $resourcesDir "skins\Rmz-skin")
 Copy-DirectoryMirror (Join-Path $repoRoot "data\skins\mz-select") (Join-Path $resourcesDir "skins\mz-select")
+Copy-DirectoryMirror (Join-Path $repoRoot "data\skins\Luxez-Flat") (Join-Path $resourcesDir "skins\Luxez-Flat")
 Copy-DirectoryMirror (Join-Path $repoRoot "data\songs\sample-playable") (Join-Path $resourcesDir "songs\sample-playable")
 Copy-RequiredFile (Join-Path $repoRoot "LICENSE") (Join-Path $licensesDir "BMZ-GPL-3.0-only.txt")
 Copy-RequiredFile (Join-Path $repoRoot "docs\licenses.md") (Join-Path $licensesDir "license-notes.md")
 Copy-RequiredFile (Join-Path $repoRoot "THIRD-PARTY-NOTICES.txt") (Join-Path $licensesDir "third-party-notices.txt")
+if ($GameInputPackageDir) {
+    $redistDir = Join-Path $resourcesDir "redist"
+    New-Item -ItemType Directory -Force -Path $redistDir | Out-Null
+    Copy-RequiredFile `
+        (Join-Path $GameInputPackageDir "redist\GameInputRedist.msi") `
+        (Join-Path $redistDir "GameInputRedist.msi")
+    Copy-RequiredFile `
+        (Join-Path $GameInputPackageDir "LICENSE.txt") `
+        (Join-Path $licensesDir "GameInput-LICENSE.txt")
+    Copy-RequiredFile `
+        (Join-Path $GameInputPackageDir "NOTICE.txt") `
+        (Join-Path $licensesDir "GameInput-NOTICE.txt")
+}
 if (-not $SkipRustLicenseReport -and $env:BMZ_SKIP_RUST_LICENSE_REPORT -ne "1") {
     Write-Host "==> Generating Rust dependency license report"
     New-RustLicenseReport `

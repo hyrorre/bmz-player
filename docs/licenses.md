@@ -37,7 +37,9 @@ Recommended release policy:
 
 Development installs are not redistributable artifacts by themselves:
 
-- Windows instructions currently use `vcpkg install ffmpeg:x64-windows`.
+- Windows development instructions currently use `vcpkg install ffmpeg:x64-windows`;
+  the release workflow uses the repository's `x64-windows-release` triplet so only
+  Release FFmpeg artifacts are built.
 - macOS instructions currently use `brew install ffmpeg`.
 - Linux instructions currently use distribution packages such as `ffmpeg-free` / `ffmpeg-free-devel`.
 
@@ -74,6 +76,26 @@ artifacts that include ASIO support:
 - If the ASIO SDK license files are copied into the build cache or artifact,
   keep them unmodified and include them alongside the other license texts.
 
+## Microsoft GameInput Redistributable
+
+Windows release installers include the unmodified `GameInputRedist.msi` from
+the pinned `Microsoft.GameInput` NuGet package. Microsoft documents that PC
+titles using GameInput should install this redistributable as part of their
+normal installer:
+
+- https://learn.microsoft.com/gaming/gdk/docs/features/common/input/overviews/input-nuget
+- https://www.nuget.org/packages/Microsoft.GameInput
+
+Release policy:
+
+- Download a pinned NuGet version and verify its package SHA256 before staging.
+- Preserve the package's `LICENSE.txt` and `NOTICE.txt` as
+  `GameInput-LICENSE.txt` and `GameInput-NOTICE.txt`.
+- Distribute `GameInputRedist.msi` unmodified and record its NuGet version in
+  the Windows dependency provenance file.
+- Do not present the GameInput name or Microsoft trademarks as an endorsement
+  of BMZ Player.
+
 ## Bundled Skins
 
 `data/skins/default` is BMZ Player's first-party minimal skin.
@@ -92,6 +114,13 @@ Rmz-skin contains files under `GPLv3` and files under `CC BY-NC-ND 4.0`. Files c
 - `data/skins/mz-select/license/`
 
 mz-select's readme permits use, modification, and redistribution of the skin and included images. Bundled fonts and VOICEVOX audio have separate terms documented under `license/` and `readme.txt`; preserve those notices in release packages.
+
+`data/skins/Luxez-Flat` is a Git submodule pointing to the BMZ bundled fork of Luxez-Flat. Its `readme.txt` permits use, modification, and redistribution subject to the stated restrictions, including restrictions on commercial distribution and unauthorized BMS or image content. Preserve the following notices in release packages:
+
+- `data/skins/Luxez-Flat/readme.txt`
+- `data/skins/Luxez-Flat/font_license/`
+
+Luxez-Flat also includes third-party BGM, sound, image, and font materials. Keep the upstream readme and bundled font license directory together with the skin assets.
 
 Third-party skins copied under `data/skins/` for manual compatibility testing remain gitignored and must not be committed unless they are intentionally added as a documented bundled asset.
 
@@ -174,10 +203,11 @@ Before publishing a binary release:
 2. Generate a third-party Rust dependency license report with `cargo-about --fail`.
 3. Record the FFmpeg version, configure flags, source URL, and binary source/provenance.
 4. Confirm no bundled FFmpeg build uses `--enable-nonfree`.
-5. Include `THIRD-PARTY-NOTICES.txt`, `rust-dependency-licenses.txt`, FFmpeg, ASIO SDK, and bundled-skin notices in the release package.
-6. Confirm bundled skin submodules such as `data/skins/Rmz-skin` and `data/skins/mz-select` point at the intended commits.
+5. Include `THIRD-PARTY-NOTICES.txt`, `rust-dependency-licenses.txt`, GameInput, FFmpeg, ASIO SDK, and bundled-skin notices in the release package.
+6. Confirm bundled skin submodules such as `data/skins/Rmz-skin`, `data/skins/mz-select`, and `data/skins/Luxez-Flat` point at the intended commits.
 7. Confirm Windows release artifacts built with default features are intended to include ASIO support.
 8. Confirm no gitignored third-party skins, songs, databases, profiles, credentials, or `.env` files are included.
+9. Confirm the Windows installer contains the pinned, unmodified GameInput redistributable and matching license notices.
 
 Before deploying BMZ IR web:
 

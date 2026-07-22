@@ -8,10 +8,13 @@ use std::pin::Pin;
 use std::sync::mpsc;
 use std::task::{Context as TaskContext, Poll, RawWaker, RawWakerVTable, Waker};
 use std::thread;
+#[cfg(windows)]
+use std::time::Duration;
 use std::time::Instant;
 
 use ab_glyph::{Font, FontArc, FontVec, Glyph, PxScale, ScaleFont, point};
 use anyhow::{Context, Result, anyhow};
+use image::ImageEncoder;
 
 use crate::assets::{RgbaImageAsset, load_png_rgba};
 use crate::bitmap_font::{BitmapFont, load_bitmap_font};
@@ -45,6 +48,21 @@ pub enum WgpuPresentMode {
     Mailbox,
 }
 
+/// Surfaceへ実際に適用されたpresent設定。要求modeがGPU/OSで利用できない場合、
+/// `effective_mode`はfallback後の値になる。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SurfacePresentationStatus {
+    pub requested_mode: WgpuPresentMode,
+    pub effective_mode: &'static str,
+    pub maximum_frame_latency: u32,
+}
+
+/// 入力から表示までの待ちを最小化するため、通常modeでswapchainに許可する最大の
+/// in-flight frame数。MailboxだけはDX12でこの値×monitor HzにFPSが制限されるため、
+/// 既定値2を維持してFast VSyncがrefresh rateそのものへ落ちるのを避ける。
+const LOW_LATENCY_MAXIMUM_FRAME_LATENCY: u32 = 1;
+const MAILBOX_MAXIMUM_FRAME_LATENCY: u32 = 2;
+
 impl WgpuBackend {
     pub fn to_wgpu(self) -> wgpu::Backends {
         match self {
@@ -55,6 +73,20 @@ impl WgpuBackend {
             Self::Gl => wgpu::Backends::GL,
         }
     }
+}
+
+/// 設定 UI に表示できるレンダリングバックエンドを、現在の OS / feature 構成から返す。
+///
+/// wgpu の `enabled_backend_features` は、対象プラットフォームとビルド時に有効な
+/// backend feature を反映する。`Auto` は常に利用可能な論理選択肢として含める。
+pub fn available_wgpu_backends() -> Vec<WgpuBackend> {
+    [WgpuBackend::Auto, WgpuBackend::Vulkan, WgpuBackend::Metal, WgpuBackend::Dx12, WgpuBackend::Gl]
+        .into_iter()
+        .filter(|backend| {
+            *backend == WgpuBackend::Auto
+                || wgpu::Instance::enabled_backend_features().contains(backend.to_wgpu())
+        })
+        .collect()
 }
 
 fn auto_wgpu_backends() -> wgpu::Backends {
@@ -116,6 +148,7 @@ pub struct Renderer {
     /// サーフェス生成時および `set_present_mode` で参照する希望 present mode。
     present_mode: WgpuPresentMode,
     backend: WgpuBackend,
+    default_font_coverage: bmz_font::FontCoverage,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -359,7 +392,7 @@ struct WgpuRenderer {
     text_atlas: TextAtlasCache,
     text_buffer: Option<wgpu::Buffer>,
     text_buffer_capacity: usize,
-    font: Option<FontArc>,
+    default_fonts: FontFallbackChain,
     egui: EguiPainter,
     pending_screenshot_readbacks: Vec<ScreenshotReadback>,
     screenshot_save_jobs: Vec<ScreenshotSaveJob>,
@@ -495,25 +528,27 @@ fn unpack_screenshot_rgba(
     rgba
 }
 
-fn save_screenshot_png(path: &Path, width: u32, height: u32, rgba: &[u8]) -> Result<()> {
+fn encode_screenshot_png(width: u32, height: u32, rgba: &[u8]) -> Result<Vec<u8>> {
+    let mut png = Vec::new();
+    image::codecs::png::PngEncoder::new(&mut png)
+        .write_image(rgba, width, height, image::ExtendedColorType::Rgba8)
+        .context("failed to encode screenshot as PNG")?;
+    Ok(png)
+}
+
+fn save_screenshot_png(path: &Path, png: &[u8]) -> Result<()> {
     if let Some(parent) = path.parent()
         && !parent.as_os_str().is_empty()
     {
         std::fs::create_dir_all(parent)
             .with_context(|| format!("failed to create {}", parent.display()))?;
     }
-    image::save_buffer_with_format(
-        path,
-        rgba,
-        width,
-        height,
-        image::ColorType::Rgba8,
-        image::ImageFormat::Png,
-    )
-    .with_context(|| format!("failed to save screenshot {}", path.display()))
+    std::fs::write(path, png)
+        .with_context(|| format!("failed to save screenshot {}", path.display()))
 }
 
-fn copy_screenshot_to_clipboard(width: u32, height: u32, rgba: &[u8]) -> Result<()> {
+#[cfg(not(windows))]
+fn copy_screenshot_to_clipboard(width: u32, height: u32, rgba: &[u8], _png: &[u8]) -> Result<()> {
     let mut clipboard = arboard::Clipboard::new().context("failed to open clipboard")?;
     clipboard
         .set_image(arboard::ImageData {
@@ -522,6 +557,89 @@ fn copy_screenshot_to_clipboard(width: u32, height: u32, rgba: &[u8]) -> Result<
             bytes: Cow::Borrowed(rgba),
         })
         .context("failed to copy screenshot to clipboard")
+}
+
+#[cfg(any(windows, test))]
+fn screenshot_dibv5(width: u32, height: u32, rgba: &[u8]) -> Result<Vec<u8>> {
+    const HEADER_SIZE: usize = 124;
+    const BI_BITFIELDS: u32 = 3;
+    const LCS_SRGB: u32 = 0x7352_4742;
+    const LCS_GM_IMAGES: u32 = 4;
+
+    let row_bytes = usize::try_from(width)
+        .ok()
+        .and_then(|width| width.checked_mul(4))
+        .context("screenshot width is too large for DIBV5")?;
+    let expected_len = row_bytes
+        .checked_mul(height as usize)
+        .context("screenshot dimensions are too large for DIBV5")?;
+    if rgba.len() != expected_len {
+        return Err(anyhow!(
+            "invalid screenshot RGBA length for DIBV5: expected {expected_len}, got {}",
+            rgba.len()
+        ));
+    }
+    let image_size = u32::try_from(expected_len).context("screenshot DIBV5 exceeds 4 GiB")?;
+    let width = i32::try_from(width).context("screenshot width exceeds DIBV5 range")?;
+    let height = i32::try_from(height).context("screenshot height exceeds DIBV5 range")?;
+
+    let mut dib = vec![0; HEADER_SIZE];
+    dib[0..4].copy_from_slice(&(HEADER_SIZE as u32).to_le_bytes());
+    dib[4..8].copy_from_slice(&width.to_le_bytes());
+    dib[8..12].copy_from_slice(&height.to_le_bytes());
+    dib[12..14].copy_from_slice(&1_u16.to_le_bytes());
+    dib[14..16].copy_from_slice(&32_u16.to_le_bytes());
+    dib[16..20].copy_from_slice(&BI_BITFIELDS.to_le_bytes());
+    dib[20..24].copy_from_slice(&image_size.to_le_bytes());
+    dib[40..44].copy_from_slice(&0x00ff_0000_u32.to_le_bytes());
+    dib[44..48].copy_from_slice(&0x0000_ff00_u32.to_le_bytes());
+    dib[48..52].copy_from_slice(&0x0000_00ff_u32.to_le_bytes());
+    dib[52..56].copy_from_slice(&0xff00_0000_u32.to_le_bytes());
+    dib[56..60].copy_from_slice(&LCS_SRGB.to_le_bytes());
+    dib[108..112].copy_from_slice(&LCS_GM_IMAGES.to_le_bytes());
+
+    dib.reserve(expected_len);
+    for row in rgba.chunks_exact(row_bytes).rev() {
+        for pixel in row.chunks_exact(4) {
+            dib.extend_from_slice(&[pixel[2], pixel[1], pixel[0], pixel[3]]);
+        }
+    }
+    Ok(dib)
+}
+
+#[cfg(windows)]
+fn copy_screenshot_to_clipboard(width: u32, height: u32, rgba: &[u8], png: &[u8]) -> Result<()> {
+    const CF_DIBV5: u32 = 17;
+    const OPEN_ATTEMPTS: usize = 50;
+    const OPEN_RETRY_DELAY: Duration = Duration::from_millis(10);
+
+    // Prepare every large allocation before taking the process-global Windows clipboard lock.
+    let dib = screenshot_dibv5(width, height, rgba)?;
+    let png_format = clipboard_win::register_format("PNG")
+        .context("failed to register Windows PNG clipboard format")?;
+    let mut attempt = 0;
+    let clipboard = loop {
+        match clipboard_win::Clipboard::new() {
+            Ok(clipboard) => break clipboard,
+            Err(_) if attempt < OPEN_ATTEMPTS => {
+                attempt += 1;
+                thread::sleep(OPEN_RETRY_DELAY);
+            }
+            Err(error) => {
+                return Err(anyhow!(
+                    "failed to open Windows clipboard after {} attempts: {error}",
+                    attempt + 1
+                ));
+            }
+        }
+    };
+    clipboard_win::empty().context("failed to empty Windows clipboard")?;
+    clipboard_win::raw::set_without_clear(png_format.get(), png)
+        .context("failed to set Windows PNG clipboard data")?;
+    clipboard_win::raw::set_without_clear(CF_DIBV5, &dib)
+        .context("failed to set Windows DIBV5 clipboard data")?;
+    drop(clipboard);
+    Ok(())
 }
 
 fn spawn_screenshot_save_job(
@@ -535,10 +653,24 @@ fn spawn_screenshot_save_job(
     let handle = thread::Builder::new()
         .name("bmz-screenshot-save".to_string())
         .spawn(move || {
-            save_screenshot_png(&request.path, width, height, &rgba)?;
+            let started = Instant::now();
+            let png = encode_screenshot_png(width, height, &rgba)?;
+            let png_encode_ms = started.elapsed().as_millis() as u64;
+            let write_started = Instant::now();
+            save_screenshot_png(&request.path, &png)?;
+            let png_write_ms = write_started.elapsed().as_millis() as u64;
+            let clipboard_started = Instant::now();
             let clipboard_result = request
                 .copy_to_clipboard
-                .then(|| copy_screenshot_to_clipboard(width, height, &rgba));
+                .then(|| copy_screenshot_to_clipboard(width, height, &rgba, &png));
+            let clipboard_ms = clipboard_started.elapsed().as_millis() as u64;
+            tracing::debug!(
+                path = %request.path.display(),
+                png_encode_ms,
+                png_write_ms,
+                clipboard_ms,
+                "screenshot save job completed"
+            );
             Ok(ScreenshotSaveOutcome { path: request.path, clipboard_result })
         })
         .with_context(|| {
@@ -555,14 +687,14 @@ fn finish_screenshot_save_job(job: ScreenshotSaveJob) {
                 "screenshot saved and copied to clipboard"
             ),
             Some(Err(error)) => tracing::warn!(
-                %error,
+                error = %format!("{error:#}"),
                 path = %outcome.path.display(),
                 "screenshot saved but clipboard copy failed"
             ),
             None => tracing::info!(path = %outcome.path.display(), "screenshot saved"),
         },
         Ok(Err(error)) => tracing::warn!(
-            %error,
+            error = %format!("{error:#}"),
             path = %job.path.display(),
             "failed to save screenshot"
         ),
@@ -601,8 +733,13 @@ impl Renderer {
             return Ok(());
         }
 
-        let mut gpu =
-            WgpuRenderer::new_with_fallbacks(window, size, self.present_mode, self.backend)?;
+        let mut gpu = WgpuRenderer::new_with_fallbacks(
+            window,
+            size,
+            self.present_mode,
+            self.backend,
+            self.default_font_coverage,
+        )?;
         for texture in self.pending_textures.drain(..) {
             gpu.upsert_rgba_texture(texture.id, texture.width, texture.height, &texture.rgba);
         }
@@ -769,14 +906,33 @@ impl Renderer {
     }
 
     pub fn set_result_skin_context(&mut self, skin_context: SkinContext) {
-        self.result_dynamic_timer_runtime.reset();
         self.result_skin_context = skin_context;
+        self.result_dynamic_timer_runtime.reset_for_document(self.result_skin_context.document());
+    }
+
+    /// リザルトスキンが定義する内部 runtime event を dispatch する。
+    ///
+    /// クリック入力などを app 層が解決した後に呼ぶ。event が未定義なら false。
+    pub fn dispatch_result_skin_runtime_event(&mut self, event_id: i32) -> bool {
+        let Some(document) = self.result_skin_context.document() else {
+            return false;
+        };
+        self.result_dynamic_timer_runtime.dispatch_runtime_event(document, event_id)
+    }
+
+    /// 同じリザルトスキンで新しい scene に入る際、runtime state を初期化する。
+    pub fn reset_result_skin_runtime(&mut self) {
+        self.result_dynamic_timer_runtime.reset_for_document(self.result_skin_context.document());
     }
 
     /// リザルトスキンが宣言する終了フェードアウト時間 (ms)。
     /// ドキュメントスキンが無い場合や未指定の場合は 0 を返す。
     pub fn result_skin_fadeout_ms(&self) -> i32 {
         self.result_skin_context.document().map(|document| document.fadeout).unwrap_or(0).max(0)
+    }
+
+    pub fn result_skin_timer_animation_duration_ms(&self, timer: i32) -> i32 {
+        self.result_skin_context.timer_animation_duration_ms(timer)
     }
 
     /// 選曲スキンの document (設定 UI が property/offset 定義を読むため公開)。
@@ -792,6 +948,34 @@ impl Renderer {
     ) -> Option<SkinClickHit> {
         let (x, y) = self.select_skin_canvas_point(x, y)?;
         self.select_skin_context.select_click_hit(snapshot, x, y)
+    }
+
+    pub fn result_skin_click_hit(
+        &self,
+        snapshot: &crate::scene::ResultSnapshot,
+        x: f32,
+        y: f32,
+    ) -> Option<SkinClickHit> {
+        let (x, y) = self.result_skin_canvas_point(x, y)?;
+        let document = self.result_skin_context.document()?;
+        let mut state = crate::plan::result_skin_draw_state(snapshot, document.ranktime);
+        state.start_input_ms =
+            crate::skin::skin_start_input_elapsed_ms(state.elapsed_ms, document.input);
+        self.result_skin_context.result_click_hit(&state, x, y)
+    }
+
+    pub fn result_skin_slider_hit(
+        &self,
+        snapshot: &crate::scene::ResultSnapshot,
+        x: f32,
+        y: f32,
+    ) -> Option<SkinSliderHit> {
+        let (x, y) = self.result_skin_canvas_point(x, y)?;
+        let document = self.result_skin_context.document()?;
+        let mut state = crate::plan::result_skin_draw_state(snapshot, document.ranktime);
+        state.start_input_ms =
+            crate::skin::skin_start_input_elapsed_ms(state.elapsed_ms, document.input);
+        self.result_skin_context.result_slider_hit(&state, x, y)
     }
 
     pub fn select_skin_slider_hit(
@@ -843,6 +1027,25 @@ impl Renderer {
     }
 
     pub fn render_scene_status(&mut self, scene: AppSceneSnapshot) -> Result<RenderSurfaceStatus> {
+        let entering_scene = self.last_scene.as_ref().is_none_or(|previous| {
+            std::mem::discriminant(previous) != std::mem::discriminant(&scene)
+        });
+        if entering_scene {
+            match &scene {
+                AppSceneSnapshot::Select(_) => self
+                    .select_dynamic_timer_runtime
+                    .reset_for_document(self.select_skin_context.document()),
+                AppSceneSnapshot::Decide(_) => self
+                    .decide_dynamic_timer_runtime
+                    .reset_for_document(self.decide_skin_context.document()),
+                AppSceneSnapshot::Play(_) => self
+                    .play_dynamic_timer_runtime
+                    .reset_for_document(self.play_skin_context.document()),
+                AppSceneSnapshot::Result(_) => self
+                    .result_dynamic_timer_runtime
+                    .reset_for_document(self.result_skin_context.document()),
+            }
+        }
         let plan_start = Instant::now();
         let plan = match &scene {
             AppSceneSnapshot::Select(_) => DrawPlan::from_scene_with_skin(
@@ -899,8 +1102,31 @@ impl Renderer {
         }
     }
 
+    pub fn surface_presentation_status(&self) -> Option<SurfacePresentationStatus> {
+        let gpu = self.gpu.as_ref()?;
+        Some(SurfacePresentationStatus {
+            requested_mode: self.present_mode,
+            effective_mode: wgpu_present_mode_label(gpu.config.present_mode),
+            maximum_frame_latency: gpu.config.desired_maximum_frame_latency,
+        })
+    }
+
     pub fn set_backend(&mut self, backend: WgpuBackend) {
         self.backend = backend;
+    }
+
+    /// 未指定テキストの CJK 字形で最優先する地域 coverage を変更する。
+    ///
+    /// 優先 face に無い文字は、他の全 CJK coverage と一般 sans-serif へ
+    /// 文字単位で fallback する。スキンが明示指定したフォントには影響しない。
+    pub fn set_default_font_coverage(&mut self, coverage: bmz_font::FontCoverage) {
+        if self.default_font_coverage == coverage {
+            return;
+        }
+        self.default_font_coverage = coverage;
+        if let Some(gpu) = &mut self.gpu {
+            gpu.set_default_font_coverage(coverage);
+        }
     }
 
     pub fn render_last_plan(&mut self) -> Result<RenderSurfaceStatus> {
@@ -989,6 +1215,15 @@ impl Renderer {
         viewport.surface_to_canvas_point(x, y)
     }
 
+    fn result_skin_canvas_point(&self, x: f32, y: f32) -> Option<(f32, f32)> {
+        let Some(surface) = self.gpu.as_ref().map(WgpuRenderer::surface_size) else {
+            return Some((x, y));
+        };
+        let viewport =
+            CanvasViewport::from_policy(surface, self.result_skin_canvas_render_policy());
+        viewport.surface_to_canvas_point(x, y)
+    }
+
     fn canvas_policy_for_scene(&self, scene: &AppSceneSnapshot) -> CanvasRenderPolicy {
         match scene {
             AppSceneSnapshot::Select(_) => self.select_skin_canvas_render_policy(),
@@ -1045,6 +1280,7 @@ impl WgpuRenderer {
         size: SurfaceSize,
         present_mode: WgpuPresentMode,
         backend: WgpuBackend,
+        default_font_coverage: bmz_font::FontCoverage,
     ) -> Result<Self>
     where
         T: Into<wgpu::SurfaceTarget<'static>> + Clone,
@@ -1052,7 +1288,7 @@ impl WgpuRenderer {
         let candidates = fallback_wgpu_backends(backend);
         let mut last_error = None;
         for candidate in candidates {
-            match Self::new(window.clone(), size, present_mode, *candidate) {
+            match Self::new(window.clone(), size, present_mode, *candidate, default_font_coverage) {
                 Ok(renderer) => {
                     if backend == WgpuBackend::Auto && *candidate != WgpuBackend::Auto {
                         tracing::info!(backend = ?candidate, "selected auto renderer backend");
@@ -1079,6 +1315,7 @@ impl WgpuRenderer {
         size: SurfaceSize,
         present_mode: WgpuPresentMode,
         backend: WgpuBackend,
+        default_font_coverage: bmz_font::FontCoverage,
     ) -> Result<Self>
     where
         T: Into<wgpu::SurfaceTarget<'static>>,
@@ -1119,13 +1356,13 @@ impl WgpuRenderer {
         // beatoraja (libGDX) は GL_FRAMEBUFFER_SRGB を使わないため値をそのまま表示する。
         // それと合わせるため sRGB サフィックスを除去して non-sRGB サーフェスとして使う。
         config.format = config.format.remove_srgb_suffix();
-        config.present_mode = resolve_wgpu_present_mode(present_mode, &capabilities.present_modes);
-        config.usage |= wgpu::TextureUsages::COPY_SRC;
+        configure_surface_settings(&mut config, present_mode, &capabilities.present_modes);
         surface.configure(&device, &config);
         tracing::info!(
             requested = ?present_mode,
-            configured = ?config.present_mode,
+            effective = ?config.present_mode,
             available = ?capabilities.present_modes,
+            maximum_frame_latency = config.desired_maximum_frame_latency,
             backend = ?backend,
             "configured renderer present mode"
         );
@@ -1185,7 +1422,7 @@ impl WgpuRenderer {
             text_atlas: TextAtlasCache::new(TEXT_ATLAS_WIDTH),
             text_buffer: None,
             text_buffer_capacity: 0,
-            font: load_default_font(),
+            default_fonts: load_default_font_fallbacks(default_font_coverage),
             egui,
             pending_screenshot_readbacks: Vec::new(),
             screenshot_save_jobs: Vec::new(),
@@ -1696,14 +1933,20 @@ impl WgpuRenderer {
     }
 
     fn set_present_mode(&mut self, present_mode: WgpuPresentMode) {
-        self.config.present_mode = resolve_wgpu_present_mode(present_mode, &self.present_modes);
+        configure_surface_settings(&mut self.config, present_mode, &self.present_modes);
         self.configure_surface();
         tracing::info!(
             requested = ?present_mode,
-            configured = ?self.config.present_mode,
+            effective = ?self.config.present_mode,
             available = ?self.present_modes,
+            maximum_frame_latency = self.config.desired_maximum_frame_latency,
             "configured renderer present mode"
         );
+    }
+
+    fn set_default_font_coverage(&mut self, coverage: bmz_font::FontCoverage) {
+        self.default_fonts = load_default_font_fallbacks(coverage);
+        self.reset_text_atlas();
     }
 
     fn build_text_frame(
@@ -1716,12 +1959,12 @@ impl WgpuRenderer {
         if !surface.is_drawable() {
             return TextFrame::default();
         }
-        let Some(default_font) = self.font.clone() else {
+        if self.default_fonts.is_empty() {
             return TextFrame::default();
-        };
-        build_text_frame_with_cache(
+        }
+        build_text_frame_with_fallback_cache(
             plan,
-            &default_font,
+            &self.default_fonts,
             fonts,
             bitmap_fonts,
             surface,
@@ -2445,9 +2688,80 @@ fn build_text_frame(
     frame
 }
 
-fn build_text_frame_with_cache(
+#[derive(Clone)]
+struct FontFallbackFace {
+    cache_id: String,
+    font: FontArc,
+}
+
+#[derive(Clone, Default)]
+struct FontFallbackChain {
+    faces: Vec<FontFallbackFace>,
+}
+
+impl FontFallbackChain {
+    fn is_empty(&self) -> bool {
+        self.faces.is_empty()
+    }
+
+    fn primary(&self) -> Option<&FontFallbackFace> {
+        self.faces.first()
+    }
+
+    fn select(&self, ch: char) -> Option<&FontFallbackFace> {
+        self.faces.iter().find(|face| face.font.glyph_id(ch).0 != 0).or_else(|| self.primary())
+    }
+
+    #[cfg(test)]
+    fn single(font: FontArc) -> Self {
+        Self { faces: vec![FontFallbackFace { cache_id: DEFAULT_TEXT_FONT_ID.to_string(), font }] }
+    }
+}
+
+#[derive(Clone, Copy)]
+enum VectorFontSet<'a> {
+    Single { cache_id: &'a str, font: &'a FontArc },
+    Fallback(&'a FontFallbackChain),
+}
+
+impl<'a> VectorFontSet<'a> {
+    fn primary(self) -> Option<(&'a str, &'a FontArc)> {
+        match self {
+            Self::Single { cache_id, font } => Some((cache_id, font)),
+            Self::Fallback(fonts) => {
+                fonts.primary().map(|face| (face.cache_id.as_str(), &face.font))
+            }
+        }
+    }
+
+    fn select(self, ch: char) -> Option<(&'a str, &'a FontArc)> {
+        match self {
+            Self::Single { cache_id, font } => Some((cache_id, font)),
+            Self::Fallback(fonts) => {
+                fonts.select(ch).map(|face| (face.cache_id.as_str(), &face.font))
+            }
+        }
+    }
+
+    fn layout_cache_id(self, text: &str) -> String {
+        match self {
+            Self::Single { cache_id, .. } => cache_id.to_string(),
+            Self::Fallback(_) => {
+                let mut id = String::from(DEFAULT_TEXT_FONT_ID);
+                for ch in text.chars() {
+                    let selected = self.select(ch).map(|(id, _)| id).unwrap_or("<missing>");
+                    id.push('|');
+                    id.push_str(selected);
+                }
+                id
+            }
+        }
+    }
+}
+
+fn build_text_frame_with_fallback_cache(
     plan: &DrawPlan,
-    default_font: &FontArc,
+    default_fonts: &FontFallbackChain,
     fonts: &HashMap<String, FontArc>,
     bitmap_fonts: &HashMap<String, BitmapFont>,
     surface: SurfaceSize,
@@ -2474,20 +2788,47 @@ fn build_text_frame_with_cache(
                 bitmap_text_caret_rect(origin, text, style, bitmap_font, surface, caret)
             }));
         } else {
-            let font_id = style.font_id.as_deref().unwrap_or(DEFAULT_TEXT_FONT_ID);
-            let font = style
+            let vector_fonts = style
                 .font_id
-                .as_ref()
-                .and_then(|font_id| fonts.get(font_id))
-                .unwrap_or(default_font);
-            builder.push_text(origin, text, style.clone(), font_id, font, surface);
+                .as_deref()
+                .and_then(|font_id| {
+                    fonts.get(font_id).map(|font| VectorFontSet::Single { cache_id: font_id, font })
+                })
+                .unwrap_or(VectorFontSet::Fallback(default_fonts));
+            builder.push_text(origin, text, style.clone(), vector_fonts, surface);
             command_caret_rects.push(caret.and_then(|caret| {
-                vector_text_caret_rect(origin, text, style, font, surface, caret)
+                vector_text_caret_rect_with_fallback(
+                    origin,
+                    text,
+                    style,
+                    vector_fonts,
+                    surface,
+                    caret,
+                )
             }));
         }
         command_quad_counts.push(builder.quads.len() - quads_before);
     }
     builder.finish(command_quad_counts, command_caret_rects)
+}
+
+#[cfg(test)]
+fn build_text_frame_with_cache(
+    plan: &DrawPlan,
+    default_font: &FontArc,
+    fonts: &HashMap<String, FontArc>,
+    bitmap_fonts: &HashMap<String, BitmapFont>,
+    surface: SurfaceSize,
+    atlas: &mut TextAtlasCache,
+) -> TextFrame {
+    build_text_frame_with_fallback_cache(
+        plan,
+        &FontFallbackChain::single(default_font.clone()),
+        fonts,
+        bitmap_fonts,
+        surface,
+        atlas,
+    )
 }
 
 const DEFAULT_TEXT_FONT_ID: &str = "<default>";
@@ -2988,8 +3329,7 @@ impl<'a> CachedTextFrameBuilder<'a> {
         origin: &Point,
         text: &str,
         style: TextStyle,
-        font_id: &str,
-        font: &FontArc,
+        fonts: VectorFontSet<'_>,
         surface: SurfaceSize,
     ) {
         if let Some(shadow) = style.shadow.filter(|shadow| shadow.color.a > 0.0) {
@@ -2999,7 +3339,7 @@ impl<'a> CachedTextFrameBuilder<'a> {
             shadow_style.shadow = None;
             let shadow_origin =
                 Point { x: origin.x + shadow.offset.x, y: origin.y + shadow.offset.y };
-            self.push_text(&shadow_origin, text, shadow_style, font_id, font, surface);
+            self.push_text(&shadow_origin, text, shadow_style, fonts, surface);
         }
         if let Some(outline) = style.outline.filter(|outline| outline.color.a > 0.0) {
             let mut outline_style = style.clone();
@@ -3019,19 +3359,13 @@ impl<'a> CachedTextFrameBuilder<'a> {
                 (outline_x, outline_y),
             ] {
                 let outline_origin = Point { x: origin.x + offset_x, y: origin.y + offset_y };
-                self.push_text(
-                    &outline_origin,
-                    text,
-                    outline_style.clone(),
-                    font_id,
-                    font,
-                    surface,
-                );
+                self.push_text(&outline_origin, text, outline_style.clone(), fonts, surface);
             }
         }
 
+        let layout_font_id = fonts.layout_cache_id(text);
         let layout_key =
-            text_layout_key(TextGlyphKind::Vector, font_id, origin, text, &style, surface);
+            text_layout_key(TextGlyphKind::Vector, &layout_font_id, origin, text, &style, surface);
         if let Some(cached) = layout_key.as_ref().and_then(|key| self.atlas.cached_layout(key)) {
             self.quads.extend(cached);
             return;
@@ -3043,17 +3377,20 @@ impl<'a> CachedTextFrameBuilder<'a> {
         let max_width = style.max_width.max(0.0) * surface.width as f32;
         let mut text = std::borrow::Cow::Borrowed(text);
         let mut scale = PxScale::from(px_size);
-        let mut scaled_font = font.as_scaled(scale);
-        let mut text_width = text_width_px(&text, font, &scaled_font);
+        let Some((_, primary_font)) = fonts.primary() else {
+            return;
+        };
+        let mut scaled_primary = primary_font.as_scaled(scale);
+        let mut text_width = fallback_text_width_px(&text, fonts, scale);
         if style.wrapping && max_width > 0.0 {
-            let lines = wrap_text_to_width(&text, font, &scaled_font, max_width);
-            let line_height = (scaled_font.ascent() - scaled_font.descent()
-                + scaled_font.line_gap())
+            let lines = wrap_fallback_text_to_width(&text, fonts, scale, max_width);
+            let line_height = (scaled_primary.ascent() - scaled_primary.descent()
+                + scaled_primary.line_gap())
             .max(px_size);
             let origin_x = origin.x * surface.width as f32;
-            let first_baseline_y = origin.y * surface.height as f32 + scaled_font.ascent();
+            let first_baseline_y = origin.y * surface.height as f32 + scaled_primary.ascent();
             for (index, line) in lines.iter().enumerate() {
-                let line_width = text_width_px(line, font, &scaled_font);
+                let line_width = fallback_text_width_px(line, fonts, scale);
                 let baseline_y = first_baseline_y + line_height * index as f32;
                 self.push_text_line(
                     origin_x,
@@ -3062,8 +3399,7 @@ impl<'a> CachedTextFrameBuilder<'a> {
                     line_width,
                     scale,
                     style.clone(),
-                    font_id,
-                    font,
+                    fonts,
                     surface,
                 );
             }
@@ -3075,17 +3411,14 @@ impl<'a> CachedTextFrameBuilder<'a> {
                 TextOverflow::Shrink => {
                     px_size = (px_size * max_width / text_width).max(1.0);
                     scale = PxScale::from(px_size);
-                    scaled_font = font.as_scaled(scale);
-                    text_width = text_width_px(&text, font, &scaled_font);
+                    scaled_primary = primary_font.as_scaled(scale);
+                    text_width = fallback_text_width_px(&text, fonts, scale);
                 }
                 TextOverflow::Truncate => {
-                    text = std::borrow::Cow::Owned(truncate_text_to_width(
-                        &text,
-                        font,
-                        &scaled_font,
-                        max_width,
+                    text = std::borrow::Cow::Owned(truncate_fallback_text_to_width(
+                        &text, fonts, scale, max_width,
                     ));
-                    text_width = text_width_px(&text, font, &scaled_font);
+                    text_width = fallback_text_width_px(&text, fonts, scale);
                 }
             }
         }
@@ -3096,11 +3429,10 @@ impl<'a> CachedTextFrameBuilder<'a> {
             } else {
                 0.0
             };
-        let baseline_y = origin.y * surface.height as f32 + shrink_offset_y + scaled_font.ascent();
+        let baseline_y =
+            origin.y * surface.height as f32 + shrink_offset_y + scaled_primary.ascent();
 
-        self.push_text_line(
-            cursor_x, baseline_y, &text, text_width, scale, style, font_id, font, surface,
-        );
+        self.push_text_line(cursor_x, baseline_y, &text, text_width, scale, style, fonts, surface);
 
         if let Some(key) = layout_key {
             self.atlas.insert_layout(key, &self.quads[quads_before..]);
@@ -3115,16 +3447,18 @@ impl<'a> CachedTextFrameBuilder<'a> {
         text_width: f32,
         scale: PxScale,
         style: TextStyle,
-        font_id: &str,
-        font: &FontArc,
+        fonts: VectorFontSet<'_>,
         surface: SurfaceSize,
     ) {
-        let scaled_font = font.as_scaled(scale);
         let max_width = style.max_width.max(0.0) * surface.width as f32;
         let align_offset = text_align_offset_px(style.align, max_width, text_width);
         let mut cursor_x = origin_x + align_offset;
 
         for ch in text.chars() {
+            let Some((font_id, font)) = fonts.select(ch) else {
+                continue;
+            };
+            let scaled_font = font.as_scaled(scale);
             let glyph_id = font.glyph_id(ch);
             let advance = scaled_font.h_advance(glyph_id);
             if let Some(cached) = self.atlas.cached_vector_glyph(font_id, ch, scale, font) {
@@ -3530,8 +3864,20 @@ impl TextAtlasBuilder {
     }
 }
 
+#[cfg(test)]
 fn text_width_px<F: Font>(text: &str, font: &FontArc, scaled_font: &impl ScaleFont<F>) -> f32 {
     text.chars().map(|ch| scaled_font.h_advance(font.glyph_id(ch))).sum()
+}
+
+fn fallback_char_advance(ch: char, fonts: VectorFontSet<'_>, scale: PxScale) -> f32 {
+    let Some((_, font)) = fonts.select(ch) else {
+        return 0.0;
+    };
+    font.as_scaled(scale).h_advance(font.glyph_id(ch))
+}
+
+fn fallback_text_width_px(text: &str, fonts: VectorFontSet<'_>, scale: PxScale) -> f32 {
+    text.chars().map(|ch| fallback_char_advance(ch, fonts, scale)).sum()
 }
 
 fn bitmap_text_width_px(text: &str, font: &BitmapFont, scale: f32) -> f32 {
@@ -3669,6 +4015,7 @@ fn text_align_offset_px(align: TextAlign, max_width: f32, text_width: f32) -> f3
     }
 }
 
+#[cfg(test)]
 fn vector_text_caret_rect(
     origin: &Point,
     text: &str,
@@ -3706,6 +4053,60 @@ fn vector_text_caret_rect(
     let align_offset = text_align_offset_px(style.align, max_width, text_width);
     let cursor = clamp_text_byte_index(&visible, caret.byte_index);
     let prefix_width = text_width_px(&visible[..cursor], font, &scaled_font);
+    let shrink_offset_y =
+        if matches!(style.overflow, TextOverflow::Shrink) && px_size < original_px_size {
+            (original_px_size - px_size) / 2.0
+        } else {
+            0.0
+        };
+    let x = (origin.x * surface.width as f32 + align_offset + prefix_width) / surface.width as f32;
+    let y = (origin.y * surface.height as f32 + shrink_offset_y) / surface.height as f32;
+    Some(RectCommand {
+        rect: Rect {
+            x,
+            y,
+            width: (2.0 / surface.width as f32).max(0.001),
+            height: (px_size / surface.height as f32).max(0.001),
+        },
+        color: caret.color,
+    })
+}
+
+fn vector_text_caret_rect_with_fallback(
+    origin: &Point,
+    text: &str,
+    style: &TextStyle,
+    fonts: VectorFontSet<'_>,
+    surface: SurfaceSize,
+    caret: TextCaret,
+) -> Option<RectCommand> {
+    if style.wrapping || !surface.is_drawable() || fonts.primary().is_none() {
+        return None;
+    }
+    let mut px_size = (style.size * surface.height as f32).max(1.0);
+    let original_px_size = px_size;
+    let max_width = style.max_width.max(0.0) * surface.width as f32;
+    let mut visible = Cow::Borrowed(text);
+    let mut scale = PxScale::from(px_size);
+    let mut text_width = fallback_text_width_px(&visible, fonts, scale);
+    if max_width > 0.0 && text_width > max_width {
+        match style.overflow {
+            TextOverflow::Overflow => {}
+            TextOverflow::Shrink => {
+                px_size = (px_size * max_width / text_width).max(1.0);
+                scale = PxScale::from(px_size);
+                text_width = fallback_text_width_px(&visible, fonts, scale);
+            }
+            TextOverflow::Truncate => {
+                visible =
+                    Cow::Owned(truncate_fallback_text_to_width(&visible, fonts, scale, max_width));
+                text_width = fallback_text_width_px(&visible, fonts, scale);
+            }
+        }
+    }
+    let align_offset = text_align_offset_px(style.align, max_width, text_width);
+    let cursor = clamp_text_byte_index(&visible, caret.byte_index);
+    let prefix_width = fallback_text_width_px(&visible[..cursor], fonts, scale);
     let shrink_offset_y =
         if matches!(style.overflow, TextOverflow::Shrink) && px_size < original_px_size {
             (original_px_size - px_size) / 2.0
@@ -3810,6 +4211,7 @@ fn truncate_bitmap_text_to_width(
     result
 }
 
+#[cfg(test)]
 fn wrap_text_to_width<F: Font>(
     text: &str,
     font: &FontArc,
@@ -3834,6 +4236,31 @@ fn wrap_text_to_width<F: Font>(
     lines
 }
 
+fn wrap_fallback_text_to_width(
+    text: &str,
+    fonts: VectorFontSet<'_>,
+    scale: PxScale,
+    max_width: f32,
+) -> Vec<String> {
+    let mut lines = Vec::new();
+    for source_line in text.split('\n') {
+        let mut line = String::new();
+        let mut width = 0.0;
+        for ch in source_line.chars() {
+            let advance = fallback_char_advance(ch, fonts, scale);
+            if !line.is_empty() && width + advance > max_width {
+                lines.push(std::mem::take(&mut line));
+                width = 0.0;
+            }
+            line.push(ch);
+            width += advance;
+        }
+        lines.push(line);
+    }
+    lines
+}
+
+#[cfg(test)]
 fn truncate_text_to_width<F: Font>(
     text: &str,
     font: &FontArc,
@@ -3844,6 +4271,25 @@ fn truncate_text_to_width<F: Font>(
     let mut result = String::new();
     for ch in text.chars() {
         let advance = scaled_font.h_advance(font.glyph_id(ch));
+        if width + advance > max_width {
+            break;
+        }
+        width += advance;
+        result.push(ch);
+    }
+    result
+}
+
+fn truncate_fallback_text_to_width(
+    text: &str,
+    fonts: VectorFontSet<'_>,
+    scale: PxScale,
+    max_width: f32,
+) -> String {
+    let mut width = 0.0;
+    let mut result = String::new();
+    for ch in text.chars() {
+        let advance = fallback_char_advance(ch, fonts, scale);
         if width + advance > max_width {
             break;
         }
@@ -4477,20 +4923,69 @@ fn resolve_wgpu_present_mode(
     fallback
 }
 
+fn configure_surface_settings(
+    config: &mut wgpu::SurfaceConfiguration,
+    requested_present_mode: WgpuPresentMode,
+    available_present_modes: &[wgpu::PresentMode],
+) {
+    config.present_mode =
+        resolve_wgpu_present_mode(requested_present_mode, available_present_modes);
+    config.desired_maximum_frame_latency = match config.present_mode {
+        wgpu::PresentMode::Mailbox => MAILBOX_MAXIMUM_FRAME_LATENCY,
+        _ => LOW_LATENCY_MAXIMUM_FRAME_LATENCY,
+    };
+    config.usage |= wgpu::TextureUsages::COPY_SRC;
+}
+
+fn wgpu_present_mode_label(mode: wgpu::PresentMode) -> &'static str {
+    match mode {
+        wgpu::PresentMode::AutoVsync => "AutoVsync",
+        wgpu::PresentMode::AutoNoVsync => "AutoNoVsync",
+        wgpu::PresentMode::Fifo => "Fifo",
+        wgpu::PresentMode::FifoRelaxed => "FifoRelaxed",
+        wgpu::PresentMode::Immediate => "Immediate",
+        wgpu::PresentMode::Mailbox => "Mailbox",
+    }
+}
+
+#[cfg(test)]
 fn load_default_font() -> Option<FontArc> {
-    if let Some(resolved) = bmz_font::resolve_system_font(true) {
-        return load_font_from_resolved(&resolved);
+    load_default_font_fallbacks(bmz_font::FontCoverage::Japanese)
+        .primary()
+        .map(|face| face.font.clone())
+}
+
+fn load_default_font_fallbacks(preferred: bmz_font::FontCoverage) -> FontFallbackChain {
+    let mut resolved = bmz_font::resolve_system_font_fallbacks(preferred);
+    if let Some(general) = bmz_font::resolve_system_font(false)
+        && !resolved.iter().any(|(_, font)| font == &general)
+    {
+        resolved.push((preferred, general));
     }
 
-    if let Some(resolved) = bmz_font::resolve_system_font(false) {
+    let mut faces = Vec::new();
+    for (index, (coverage, resolved)) in resolved.iter().enumerate() {
+        if let Some(font) = load_font_from_resolved(resolved) {
+            faces.push(FontFallbackFace {
+                cache_id: format!("{DEFAULT_TEXT_FONT_ID}:{coverage:?}:{index}"),
+                font,
+            });
+        }
+    }
+
+    if faces.is_empty() {
+        tracing::warn!("no default render font found; text draw commands will be skipped");
+    } else if !faces
+        .iter()
+        .any(|face| preferred.glyph_probes().iter().all(|ch| face.font.glyph_id(*ch).0 != 0))
+    {
         tracing::warn!(
-            "no Japanese-capable font found; default skin text will fall back to a Latin-only font"
+            ?preferred,
+            "no font matching preferred CJK coverage; default text will use other fallback faces"
         );
-        return load_font_from_resolved(&resolved);
     }
 
-    tracing::warn!("no default render font found; text draw commands will be skipped");
-    None
+    FontFallbackChain { faces }
 }
 
 fn load_font_from_resolved(resolved: &bmz_font::ResolvedFont) -> Option<FontArc> {
@@ -4510,14 +5005,48 @@ fn load_font_from_resolved(resolved: &bmz_font::ResolvedFont) -> Option<FontArc>
 /// OS フォント DB から CJK 対応 face を font-kit 経由で解決し、
 /// collection index 付きでファイル全体を返す。
 pub fn load_japanese_font_bytes() -> Option<Vec<u8>> {
-    let resolved = bmz_font::resolve_system_font(true)?;
+    load_font_bytes_for_coverage(bmz_font::FontCoverage::Japanese)
+}
+
+/// egui など外部 UI に渡せる OS フォントデータ。
+///
+/// TTC/OTC では `font_index` を `egui::FontData::index` などへ引き継ぐ必要がある。
+#[derive(Debug, Clone)]
+pub struct SystemFontData {
+    pub bytes: Vec<u8>,
+    pub font_index: u32,
+}
+
+/// egui など外部 UI 向けに、指定 coverage を満たす OS フォントの生バイト列を返す。
+pub fn load_font_bytes_for_coverage(coverage: bmz_font::FontCoverage) -> Option<Vec<u8>> {
+    load_system_font_data_for_coverage(coverage).map(|data| data.bytes)
+}
+
+/// 指定 coverage を満たす OS フォントを collection index 付きで返す。
+pub fn load_system_font_data_for_coverage(
+    coverage: bmz_font::FontCoverage,
+) -> Option<SystemFontData> {
+    let resolved = bmz_font::resolve_system_font_for_coverage(coverage)?;
     let bytes = bmz_font::read_resolved_font_bytes(&resolved).ok()?;
-    if bmz_font::font_supports_japanese(&bytes, resolved.font_index) {
-        Some(bytes)
+    if bmz_font::font_supports_coverage(&bytes, resolved.font_index, coverage) {
+        Some(SystemFontData { bytes, font_index: resolved.font_index })
     } else {
-        tracing::warn!("no Japanese-capable font found for egui; text may render as tofu");
+        tracing::warn!(?coverage, "no matching font found for egui; text may render as tofu");
         None
     }
+}
+
+/// 優先 coverage を先頭にして、利用可能な全 CJK fallback font を返す。
+pub fn load_cjk_font_fallback_data(
+    preferred: bmz_font::FontCoverage,
+) -> Vec<(bmz_font::FontCoverage, SystemFontData)> {
+    bmz_font::resolve_system_font_fallbacks(preferred)
+        .into_iter()
+        .filter_map(|(coverage, resolved)| {
+            let bytes = bmz_font::read_resolved_font_bytes(&resolved).ok()?;
+            Some((coverage, SystemFontData { bytes, font_index: resolved.font_index }))
+        })
+        .collect()
 }
 
 fn block_on<T>(future: impl Future<Output = T>) -> T {
@@ -4557,6 +5086,39 @@ mod tests {
 
     fn test_surface_size() -> SurfaceSize {
         SurfaceSize { width: 16, height: 9 }
+    }
+
+    #[test]
+    fn screenshot_png_is_encoded_once_for_file_and_clipboard_use() {
+        let png = encode_screenshot_png(1, 1, &[0x12, 0x34, 0x56, 0x78]).unwrap();
+        assert_eq!(&png[..8], b"\x89PNG\r\n\x1a\n");
+        let decoded = image::load_from_memory_with_format(&png, image::ImageFormat::Png)
+            .unwrap()
+            .into_rgba8();
+        assert_eq!(decoded.into_raw(), [0x12, 0x34, 0x56, 0x78]);
+    }
+
+    #[test]
+    fn screenshot_dibv5_has_bottom_up_bgra_pixels() {
+        let rgba = [
+            1, 2, 3, 4, 5, 6, 7, 8, // top row
+            9, 10, 11, 12, 13, 14, 15, 16, // bottom row
+        ];
+        let dib = screenshot_dibv5(2, 2, &rgba).unwrap();
+
+        assert_eq!(dib.len(), 124 + rgba.len());
+        assert_eq!(u32::from_le_bytes(dib[0..4].try_into().unwrap()), 124);
+        assert_eq!(i32::from_le_bytes(dib[4..8].try_into().unwrap()), 2);
+        assert_eq!(i32::from_le_bytes(dib[8..12].try_into().unwrap()), 2);
+        assert_eq!(u16::from_le_bytes(dib[14..16].try_into().unwrap()), 32);
+        assert_eq!(u32::from_le_bytes(dib[16..20].try_into().unwrap()), 3);
+        assert_eq!(&dib[124..], &[11, 10, 9, 12, 15, 14, 13, 16, 3, 2, 1, 4, 7, 6, 5, 8]);
+    }
+
+    #[test]
+    fn screenshot_dibv5_rejects_mismatched_rgba_length() {
+        let error = screenshot_dibv5(2, 2, &[0; 15]).unwrap_err();
+        assert!(error.to_string().contains("expected 16, got 15"));
     }
 
     #[test]
@@ -4670,6 +5232,38 @@ mod tests {
     }
 
     #[test]
+    fn surface_settings_prioritize_low_latency_and_preserve_capture_usage() {
+        let mut config = wgpu::SurfaceConfiguration {
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            format: wgpu::TextureFormat::Bgra8Unorm,
+            width: 1,
+            height: 1,
+            desired_maximum_frame_latency: 2,
+            present_mode: wgpu::PresentMode::Fifo,
+            alpha_mode: wgpu::CompositeAlphaMode::Opaque,
+            view_formats: vec![],
+        };
+
+        configure_surface_settings(
+            &mut config,
+            WgpuPresentMode::Mailbox,
+            &[wgpu::PresentMode::Fifo],
+        );
+
+        assert_eq!(config.desired_maximum_frame_latency, 1);
+        assert_eq!(config.present_mode, wgpu::PresentMode::Fifo);
+        assert!(config.usage.contains(wgpu::TextureUsages::COPY_SRC));
+
+        configure_surface_settings(
+            &mut config,
+            WgpuPresentMode::Mailbox,
+            &[wgpu::PresentMode::Mailbox, wgpu::PresentMode::Fifo],
+        );
+        assert_eq!(config.present_mode, wgpu::PresentMode::Mailbox);
+        assert_eq!(config.desired_maximum_frame_latency, 2);
+    }
+
+    #[test]
     fn screenshot_unpack_removes_row_padding() {
         let mapped =
             [1, 2, 3, 4, 5, 6, 7, 8, 0, 0, 0, 0, 9, 10, 11, 12, 13, 14, 15, 16, 0, 0, 0, 0];
@@ -4755,6 +5349,36 @@ mod tests {
         ));
 
         assert_eq!(renderer.result_skin_fadeout_ms(), 300);
+    }
+
+    #[test]
+    fn result_skin_timer_animation_duration_reads_document_or_defaults_to_zero() {
+        use crate::skin::{SkinContext, SkinDocument, SkinManifest};
+
+        let mut renderer = Renderer::default();
+        assert_eq!(renderer.result_skin_timer_animation_duration_ms(2), 0);
+
+        let document: SkinDocument = serde_json::from_str(
+            r#"{
+                "type": 7,
+                "w": 100,
+                "h": 100,
+                "destination": [{
+                    "id": "fadeout",
+                    "timer": 2,
+                    "dst": [{ "time": 0 }, { "time": 500 }]
+                }]
+            }"#,
+        )
+        .unwrap();
+        let manifest: SkinManifest = SkinManifest::default();
+        renderer.set_result_skin_context(SkinContext::from_manifest_and_document(
+            manifest,
+            document,
+            [],
+        ));
+
+        assert_eq!(renderer.result_skin_timer_animation_duration_ms(2), 500);
     }
 
     #[test]
@@ -5163,6 +5787,153 @@ mod tests {
         if cjk_available {
             assert!(font_supports_japanese(&font));
         }
+    }
+
+    #[test]
+    fn default_font_fallback_chain_prefers_requested_coverage() {
+        for coverage in bmz_font::ALL_FONT_COVERAGES {
+            if bmz_font::resolve_system_font_for_coverage(coverage).is_none() {
+                continue;
+            }
+            let fonts = load_default_font_fallbacks(coverage);
+            let Some(primary) = fonts.primary() else {
+                panic!("resolved {coverage:?} font should be loadable");
+            };
+            assert!(
+                coverage.glyph_probes().iter().all(|ch| primary.font.glyph_id(*ch).0 != 0),
+                "primary face should match requested {coverage:?} coverage"
+            );
+        }
+    }
+
+    #[test]
+    fn default_font_fallback_uses_selected_face_in_glyph_and_layout_cache_keys() {
+        let fonts = load_default_font_fallbacks(bmz_font::FontCoverage::Japanese);
+        let Some(primary) = fonts.primary() else { return };
+        let fallback_char = bmz_font::ALL_FONT_COVERAGES
+            .iter()
+            .flat_map(|coverage| coverage.glyph_probes())
+            .copied()
+            .find(|ch| {
+                fonts.select(*ch).is_some_and(|selected| {
+                    selected.cache_id != primary.cache_id && selected.font.glyph_id(*ch).0 != 0
+                })
+            });
+        let Some(fallback_char) = fallback_char else {
+            return;
+        };
+        let selected_id = fonts.select(fallback_char).unwrap().cache_id.clone();
+        let surface = SurfaceSize { width: 320, height: 240 };
+        let text = format!("A{fallback_char}");
+        let plan = DrawPlan {
+            clear: Color::rgb(0.0, 0.0, 0.0),
+            commands: vec![DrawCommand::Text {
+                origin: Point { x: 0.1, y: 0.1 },
+                text: text.clone(),
+                caret: None,
+                style: TextStyle {
+                    font_id: None,
+                    size: 0.1,
+                    bitmap_size: None,
+                    color: Color::rgb(1.0, 1.0, 1.0),
+                    layer: crate::plan::TextLayer::Skin,
+                    align: TextAlign::Left,
+                    max_width: 0.0,
+                    overflow: TextOverflow::Overflow,
+                    wrapping: false,
+                    outline: None,
+                    shadow: None,
+                },
+            }],
+        };
+        let mut atlas = TextAtlasCache::new(TEXT_ATLAS_WIDTH);
+
+        let frame = build_text_frame_with_fallback_cache(
+            &plan,
+            &fonts,
+            &HashMap::new(),
+            &HashMap::new(),
+            surface,
+            &mut atlas,
+        );
+
+        assert!(!frame.instances.is_empty());
+        assert!(
+            atlas
+                .glyphs
+                .keys()
+                .any(|key| { key.ch == fallback_char && key.font_id == selected_id })
+        );
+        assert!(
+            !atlas
+                .glyphs
+                .keys()
+                .any(|key| { key.ch == fallback_char && key.font_id != selected_id })
+        );
+        assert!(
+            atlas
+                .layouts
+                .entries
+                .keys()
+                .any(|key| { key.text == text && key.font_id.contains(&selected_id) })
+        );
+    }
+
+    #[test]
+    fn explicit_vector_font_does_not_use_default_fallback_faces() {
+        let default_fonts = load_default_font_fallbacks(bmz_font::FontCoverage::Japanese);
+        let Some(primary) = default_fonts.primary() else { return };
+        let fallback_char = bmz_font::ALL_FONT_COVERAGES
+            .iter()
+            .flat_map(|coverage| coverage.glyph_probes())
+            .copied()
+            .find(|ch| {
+                primary.font.glyph_id(*ch).0 == 0
+                    && default_fonts
+                        .select(*ch)
+                        .is_some_and(|selected| selected.font.glyph_id(*ch).0 != 0)
+            });
+        let Some(fallback_char) = fallback_char else {
+            return;
+        };
+        let custom_id = "skin:custom";
+        let mut custom_fonts = HashMap::new();
+        custom_fonts.insert(custom_id.to_string(), primary.font.clone());
+        let surface = SurfaceSize { width: 320, height: 240 };
+        let plan = DrawPlan {
+            clear: Color::rgb(0.0, 0.0, 0.0),
+            commands: vec![DrawCommand::Text {
+                origin: Point { x: 0.1, y: 0.1 },
+                text: fallback_char.to_string(),
+                caret: None,
+                style: TextStyle {
+                    font_id: Some(custom_id.to_string()),
+                    size: 0.1,
+                    bitmap_size: None,
+                    color: Color::rgb(1.0, 1.0, 1.0),
+                    layer: crate::plan::TextLayer::Skin,
+                    align: TextAlign::Left,
+                    max_width: 0.0,
+                    overflow: TextOverflow::Overflow,
+                    wrapping: false,
+                    outline: None,
+                    shadow: None,
+                },
+            }],
+        };
+        let mut atlas = TextAtlasCache::new(TEXT_ATLAS_WIDTH);
+
+        build_text_frame_with_fallback_cache(
+            &plan,
+            &default_fonts,
+            &custom_fonts,
+            &HashMap::new(),
+            surface,
+            &mut atlas,
+        );
+
+        assert!(atlas.glyphs.keys().all(|key| key.font_id == custom_id));
+        assert!(atlas.layouts.entries.keys().all(|key| key.font_id == custom_id));
     }
 
     #[test]

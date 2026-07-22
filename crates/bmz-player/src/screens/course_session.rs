@@ -45,6 +45,9 @@ pub struct CourseResultSummary {
     pub total_ex_score: u32,
     pub max_ex_score: u32,
     pub total_notes: u32,
+    /// Course-wide BP including unprocessed notes in a failed chart and every
+    /// note in the remaining unplayed charts, matching beatoraja course results.
+    pub bp: u32,
     pub final_clear_type: ClearType,
     pub final_gauge_type: GaugeType,
     pub final_gauge_value: f32,
@@ -84,9 +87,22 @@ impl ActiveCourseSession {
     }
 
     pub fn into_result(self) -> CourseResultSummary {
-        let played_total_notes: u32 =
-            self.entry_results.iter().map(|r| r.finished.result.total_notes).sum();
+        let played_total_notes = self
+            .entry_results
+            .iter()
+            .fold(0u32, |total, r| total.saturating_add(r.finished.result.total_notes));
         let total_notes = self.course_total_notes.max(played_total_notes);
+        let course_failed =
+            self.entry_results.iter().any(|r| r.finished.result.clear_type == ClearType::Failed);
+        let played_bp = self
+            .entry_results
+            .iter()
+            .fold(0u32, |total, r| total.saturating_add(r.finished.result.record_bp()));
+        let bp = if course_failed {
+            played_bp.saturating_add(total_notes.saturating_sub(played_total_notes))
+        } else {
+            played_bp
+        };
         let total_ex_score: u32 =
             self.entry_results.iter().map(|r| r.finished.result.score.ex_score()).sum();
         let max_ex_score: u32 = total_notes.saturating_mul(2);
@@ -106,8 +122,6 @@ impl ActiveCourseSession {
                 }
             });
 
-        let course_failed =
-            self.entry_results.iter().any(|r| r.finished.result.clear_type == ClearType::Failed);
         let last_result = self.entry_results.last().map(|r| &r.finished.result);
         let final_clear_type = if course_failed {
             ClearType::Failed
@@ -119,7 +133,6 @@ impl ActiveCourseSession {
         let total_entries = self.definition.entries.len();
         let played_entries = self.entry_results.len();
 
-        let bp = judge_counts.bad + judge_counts.poor + judge_counts.empty_poor;
         let miss_rate = if total_notes > 0 { bp as f32 / total_notes as f32 * 100.0 } else { 0.0 };
         let score_rate = if max_ex_score > 0 {
             total_ex_score as f32 / max_ex_score as f32 * 100.0
@@ -163,6 +176,7 @@ impl ActiveCourseSession {
             total_ex_score,
             max_ex_score,
             total_notes,
+            bp,
             final_clear_type,
             final_gauge_type,
             final_gauge_value,
@@ -378,6 +392,7 @@ mod tests {
         assert_eq!(result.total_ex_score, 400);
         assert_eq!(result.course_max_combo, 200);
         assert_eq!(result.judge_counts.pgreat, 200);
+        assert_eq!(result.bp, 0);
     }
 
     #[test]
@@ -385,6 +400,7 @@ mod tests {
         // 200 notes, 10 poors = 5% miss rate, score_rate = 190/200 = 95%
         let session = make_session(1, vec![(make_score(190, 10), 200)]);
         let result = session.into_result();
+        assert_eq!(result.bp, 10);
         // gold: miss_rate <= 2.0 → not achieved (10/200 = 5%)
         // silver: miss_rate <= 5.0 → achieved (exactly 5%), score_rate 95% >= 60%
         assert!(!result.trophy_results[0].achieved);
@@ -428,30 +444,25 @@ mod tests {
                 let result = make_play_result_with(score, total_notes, clear_type);
                 let course_combo = result.score.combo;
                 let course_max_combo = result.score.max_combo;
+                let stored = StoredPlayResult {
+                    score_history_id: 0,
+                    played_at: 0,
+                    replay_path: String::new(),
+                    replay_sha256: None,
+                    slot_paths: [None, None, None, None],
+                    device_type: bmz_core::input::InputDeviceKind::Keyboard,
+                };
+                let summary = ResultSummary::from_play_result(
+                    &result,
+                    &stored,
+                    &make_result_chart(total_notes),
+                );
                 CourseEntryResult {
                     chart_id: i as i64 + 1,
                     finished: FinishedPlaySession {
                         result,
-                        stored: StoredPlayResult {
-                            score_history_id: 0,
-                            played_at: 0,
-                            replay_path: String::new(),
-                            replay_sha256: None,
-                            slot_paths: [None, None, None, None],
-                            device_type: bmz_core::input::InputDeviceKind::Keyboard,
-                        },
-                        summary: ResultSummary::from_play_result(
-                            &make_play_result(ScoreState::default(), total_notes),
-                            &StoredPlayResult {
-                                score_history_id: 0,
-                                played_at: 0,
-                                replay_path: String::new(),
-                                replay_sha256: None,
-                                slot_paths: [None, None, None, None],
-                                device_type: bmz_core::input::InputDeviceKind::Keyboard,
-                            },
-                            &make_result_chart(total_notes),
-                        ),
+                        stored,
+                        summary,
                         gauge_carry: Vec::new(),
                         course_combo,
                         course_max_combo,
@@ -529,6 +540,33 @@ mod tests {
         assert_eq!(result.total_ex_score, 300);
         assert_eq!(result.total_notes, 400);
         assert_eq!(result.max_ex_score, 800);
+    }
+
+    #[test]
+    fn failed_course_bp_counts_failed_chart_remainder_and_unplayed_entries() {
+        use bmz_core::clear::ClearType;
+
+        // Four 100-note charts. The first chart has 5 BP, then the player fails
+        // the second after processing 40 notes with 10 BP. Beatoraja records:
+        // 5 + (10 + 60 unprocessed) + 200 unplayed = 275 BP.
+        let mut first_score = make_score(95, 5);
+        first_score.past_notes = 100;
+        let mut failed_score = make_score(30, 10);
+        failed_score.past_notes = 40;
+        let mut session = make_partial_session(
+            4,
+            vec![(first_score, 100, ClearType::Normal), (failed_score, 100, ClearType::Failed)],
+        );
+        session.course_total_notes = 400;
+
+        let result = session.into_result();
+
+        assert_eq!(result.bp, 275);
+        assert_eq!(result.judge_counts.poor, 15);
+        assert_eq!(result.entry_summaries[0].bp, 5);
+        assert_eq!(result.entry_summaries[1].bp, 70);
+        assert_eq!(result.played_entries, 2);
+        assert_eq!(result.total_entries, 4);
     }
 
     #[test]

@@ -7,10 +7,10 @@ use reqwest::{Url, header};
 use crate::select_options::DoubleOptionScoreBucket;
 
 use super::types::{
-    IrAuthTokens, IrCourseRankingResult, IrDeviceKeysResponse, IrMeResponse,
-    IrOwnScoreHistoryCursor, IrOwnScoreHistoryResult, IrRankingResult, IrRankingScope,
-    IrReplayDownloadTarget, IrReplayUploadTarget, IrReplayVerifyResult, IrRivalsResponse,
-    IrScoreSubmission, IrSubmitOptions, IrSubmitResponse,
+    IrAuthTokens, IrCourseRankingResult, IrDeviceKeysResponse, IrLocalBackfillDeleteResponse,
+    IrMeResponse, IrOwnScoreHistoryCursor, IrOwnScoreHistoryResult, IrRankingResult,
+    IrRankingScope, IrReplayDownloadTarget, IrReplayUploadTarget, IrReplayVerifyResult,
+    IrRivalsResponse, IrScoreSubmission, IrSubmitOptions, IrSubmitResponse,
 };
 
 #[derive(Debug, Clone)]
@@ -220,6 +220,24 @@ impl BmzOfficialIrClient {
         decode_response(response, "BMZ IR replay verification").await
     }
 
+    /// 既に受理されたscoreへ device key のattestationを追加する。
+    pub async fn attest_score(
+        &self,
+        score_id: &str,
+        request: &serde_json::Value,
+    ) -> Result<serde_json::Value> {
+        let url = self.base_url.join(&format!("/api/v1/scores/{score_id}/attestations"))?;
+        let response = self
+            .http
+            .post(url)
+            .bearer_auth(self.require_token()?)
+            .json(request)
+            .send()
+            .await
+            .context("failed to submit BMZ IR score attestation")?;
+        decode_response(response, "BMZ IR score attestation").await
+    }
+
     /// 自分の device key を失効させる。
     pub async fn revoke_device_key(&self, key_id: &str) -> Result<()> {
         let url = self.base_url.join(&format!("/api/v1/device-keys/{key_id}"))?;
@@ -379,6 +397,23 @@ impl BmzOfficialIrClient {
             .await
             .context("failed to send BMZ IR score submission")?;
         decode_response(response, "BMZ IR score submission").await
+    }
+
+    /// 古い local_backfill score を削除し、サーバー側の best score 集計も再構築する。
+    pub async fn delete_local_backfill_scores(
+        &self,
+        score_ids: &[String],
+    ) -> Result<IrLocalBackfillDeleteResponse> {
+        let url = self.base_url.join("/api/v1/scores/delete-backfills")?;
+        let response = self
+            .http
+            .post(url)
+            .bearer_auth(self.require_token()?)
+            .json(&serde_json::json!({ "score_ids": score_ids }))
+            .send()
+            .await
+            .context("failed to delete BMZ IR local backfill scores")?;
+        decode_response(response, "BMZ IR local backfill cleanup").await
     }
 
     fn require_token(&self) -> Result<&str> {

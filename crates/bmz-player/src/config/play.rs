@@ -5,11 +5,12 @@ use bmz_gameplay::input::binding::LaneBinding;
 use bmz_gameplay::judge::model::JudgeWindow;
 use bmz_gameplay::session::{PlayAudioMix, PlayOffsets};
 
-use super::play_input::lane_binding_for_key_mode;
+use super::play_input::{lane_binding_for_key_mode, lane_binding_for_key_mode_with_slots};
 use super::profile_config::{
     BottomShiftableGaugeConfig, GaugeAutoShiftConfig, GaugeTypeConfig, LaneConfig, ProfileConfig,
     ProfileInputConfig,
 };
+use crate::input::gamepad::GamepadSlotMap;
 
 pub const DEFAULT_JUDGE_WINDOW: JudgeWindow = JudgeWindow {
     pgreat_us: 20_000,
@@ -157,7 +158,15 @@ pub fn lane_binding_from_profile_input(input: &ProfileInputConfig) -> LaneBindin
 }
 
 pub fn lane_binding_for_chart(input: &ProfileInputConfig, key_mode: KeyMode) -> LaneBinding {
-    lane_binding_for_key_mode(input, key_mode)
+    lane_binding_for_chart_with_slots(input, key_mode, GamepadSlotMap::default())
+}
+
+pub fn lane_binding_for_chart_with_slots(
+    input: &ProfileInputConfig,
+    key_mode: KeyMode,
+    slots: GamepadSlotMap,
+) -> LaneBinding {
+    lane_binding_for_key_mode_with_slots(input, key_mode, slots)
         .unwrap_or_else(|_| LaneBinding { entries: Vec::new() })
 }
 

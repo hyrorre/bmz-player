@@ -26,6 +26,9 @@ const appliedSearch = ref('')
 const page = ref(1)
 const pageSize = 50
 const offset = computed(() => (page.value - 1) * pageSize)
+const localePath = useLocalePath()
+const { t } = useI18n()
+const { translateApiError } = useApiError()
 const { data, pending, error, refresh } = await useFetch<ChartListResult>('/api/v1/charts', {
   query: computed(() => ({
     limit: pageSize,
@@ -47,6 +50,11 @@ function applySearch() {
 watch(page, () => {
   refresh()
 })
+
+const errorDescription = computed(() =>
+  error.value ? translateApiError(error.value, 'errors.chartsLoadFailed') : '',
+)
+useSeoMeta({ title: () => t('charts.title') })
 </script>
 
 <template>
@@ -54,9 +62,9 @@ watch(page, () => {
     <section class="mx-auto w-full max-w-4xl px-5 py-10">
       <div class="mb-8">
         <p class="mb-2 text-sm font-medium text-primary-300">BMZ Internet Ranking</p>
-        <h1 class="text-3xl font-semibold">譜面一覧</h1>
+        <h1 class="text-3xl font-semibold">{{ t('charts.title') }}</h1>
         <p class="mt-2 text-sm text-neutral-300">
-          スコアが登録されている譜面のランキングを確認できます。
+          {{ t('charts.description') }}
         </p>
       </div>
 
@@ -65,22 +73,24 @@ watch(page, () => {
           v-model="search"
           class="flex-1"
           icon="i-lucide-search"
-          placeholder="タイトルで検索"
+          :placeholder="t('charts.searchPlaceholder')"
           @keydown.enter="applySearch"
         />
-        <UButton color="primary" variant="subtle" @click="applySearch">検索</UButton>
+        <UButton color="primary" variant="subtle" @click="applySearch">{{
+          t('common.search')
+        }}</UButton>
       </div>
 
-      <UAlert v-if="error" color="error" :description="error.message" class="mb-6" />
-      <p v-else-if="pending" class="text-sm text-neutral-400">読み込み中...</p>
+      <UAlert v-if="error" color="error" :description="errorDescription" class="mb-6" />
+      <p v-else-if="pending" class="text-sm text-neutral-400">{{ t('common.loading') }}</p>
       <p v-else-if="!data?.charts.length" class="text-sm text-neutral-400">
-        まだ譜面が登録されていません。
+        {{ t('charts.empty') }}
       </p>
 
       <ul v-else class="divide-y divide-neutral-800 rounded-lg border border-neutral-800">
         <li v-for="chart in data.charts" :key="chart.sha256">
           <NuxtLink
-            :to="`/charts/${chart.sha256}`"
+            :to="localePath(`/charts/${chart.sha256}`)"
             class="flex items-center justify-between gap-4 px-4 py-3 hover:bg-neutral-900"
           >
             <div class="min-w-0">
@@ -96,7 +106,7 @@ watch(page, () => {
               <p>
                 {{ chart.mode }}<span v-if="chart.level != null"> ☆{{ chart.level }}</span>
               </p>
-              <p class="text-neutral-500">{{ chart.notes }} notes</p>
+              <p class="text-neutral-500">{{ t('charts.notes', { count: chart.notes }) }}</p>
             </div>
           </NuxtLink>
         </li>

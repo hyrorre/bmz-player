@@ -1,7 +1,17 @@
 import { describe, expect, test } from 'bun:test'
-import { RATE_LIMIT_WINDOW_MS, __test } from './rate_limit'
+import {
+  RATE_LIMIT_WINDOW_MS,
+  SCORE_CLEANUP_RATE_LIMIT,
+  SCORE_SUBMIT_RATE_LIMIT,
+  __test,
+} from './rate_limit'
 
 describe('rate limit helpers', () => {
+  test('keeps the fast single-user score budgets', () => {
+    expect(SCORE_SUBMIT_RATE_LIMIT).toEqual({ user: 6000, ip: 12000 })
+    expect(SCORE_CLEANUP_RATE_LIMIT).toEqual({ user: 6000, ip: 12000 })
+  })
+
   test('increments attempts through one atomic upsert returning the stored count', async () => {
     let insertCalls = 0
     let insertedValues: Record<string, unknown> | undefined

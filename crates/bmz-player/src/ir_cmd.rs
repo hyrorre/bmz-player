@@ -1,26 +1,31 @@
+use std::collections::BTreeSet;
 use std::io::Write as _;
+use std::path::Path;
 
 use anyhow::{Context, Result, bail};
 
 use crate::cli::{IrCommand, RivalAction};
 use crate::config::load::{load_app_config, load_profile_config};
 use crate::config::profile_config::{
-    IrProviderConfig, IrProviderRoleConfig, IrSendPolicyConfig, ProfileConfig,
+    IrConfig, IrProviderConfig, IrProviderRoleConfig, IrSendPolicyConfig, ProfileConfig,
 };
 use crate::config::save::save_profile_config;
-use crate::ir::backfill::{IrLocalUploadOptions, enqueue_local_score_jobs};
+use crate::ir::backfill::{
+    IrLocalUploadOptions, enqueue_local_score_jobs, resolve_local_upload_target,
+};
 use crate::ir::bmz_official::{BmzOfficialIrClient, IrRankingRequest};
 use crate::ir::credentials::{
     IrStoredCredentials, delete_credentials, load_credentials, save_credentials,
 };
 use crate::ir::download::{IrScoreDownloadOptions, download_ir_scores};
 use crate::ir::sync::{
-    IR_SYNC_BATCH_LIMIT, IrSyncThrottle, ensure_fresh_credentials, sync_pending_ir_jobs,
+    IR_CLI_SYNC_BATCH_LIMIT, IR_CLI_SYNC_JOB_SPACING_MS, IrSyncJobFilter, IrSyncReport,
+    IrSyncThrottle, ensure_fresh_credentials, sync_pending_ir_jobs, sync_pending_ir_jobs_filtered,
 };
 use crate::ir::types::IrRankingScope;
 use crate::paths::{ProfilePaths, resolve_app_paths, resolve_profile_paths};
 use crate::storage::library_db::LibraryDatabase;
-use crate::storage::network_db::NetworkDatabase;
+use crate::storage::network_db::{IrJobKind, NetworkDatabase};
 use crate::storage::score_db::ScoreDatabase;
 
 pub async fn run_ir_command(cmd: IrCommand) -> Result<()> {
@@ -40,6 +45,7 @@ pub async fn run_ir_command(cmd: IrCommand) -> Result<()> {
             limit,
             dry_run,
             sync: sync_after_enqueue,
+            all,
             resend,
             include_course_stages,
             include_replay,
@@ -52,13 +58,29 @@ pub async fn run_ir_command(cmd: IrCommand) -> Result<()> {
                 include_course_stages,
                 include_replay,
             };
-            upload_local(&profile_paths, &profile, options, sync_after_enqueue).await
+            upload_local(&profile_paths, &profile, options, sync_after_enqueue, all).await
         }
         IrCommand::DownloadScores { provider, limit, dry_run } => {
             download_scores(
                 &profile_paths,
                 &profile,
                 IrScoreDownloadOptions { provider, limit, dry_run },
+            )
+            .await
+        }
+        IrCommand::AttestSubmitted { provider, sync, all } => {
+            attest_submitted_scores(&profile_paths, &profile, provider.as_deref(), sync, all).await
+        }
+        IrCommand::CleanupImported { provider, apply } => {
+            cleanup_imported_scores(&profile_paths, &profile, provider.as_deref(), apply).await
+        }
+        IrCommand::CleanupDuplicate { history_id, provider, apply } => {
+            cleanup_duplicate_score_history(
+                &profile_paths,
+                &profile,
+                provider.as_deref(),
+                history_id,
+                apply,
             )
             .await
         }
@@ -522,16 +544,13 @@ async fn sync(profile_paths: &ProfilePaths, profile: &ProfileConfig) -> Result<(
     crate::storage::migration::migrate_score_db(&profile_paths.score_db)?;
     crate::storage::migration::migrate_network_db(&profile_paths.network_db)?;
     let mut network_db = NetworkDatabase::open(&profile_paths.network_db)?;
-    let report = sync_pending_ir_jobs(
+    let report = sync_cli_jobs(
         &mut network_db,
         &profile_paths.score_db,
         profile_paths.root_dir.as_path(),
         app_paths.logs_dir.as_path(),
         &profile.ir,
-        now_unix_seconds(),
-        IR_SYNC_BATCH_LIMIT,
-        true,
-        IrSyncThrottle::rate_limited(),
+        IR_CLI_SYNC_BATCH_LIMIT,
     )
     .await?;
     println!("submitted: {}, failed: {}", report.submitted, report.failed);
@@ -541,20 +560,398 @@ async fn sync(profile_paths: &ProfilePaths, profile: &ProfileConfig) -> Result<(
     Ok(())
 }
 
+async fn attest_submitted_scores(
+    profile_paths: &ProfilePaths,
+    profile: &ProfileConfig,
+    provider: Option<&str>,
+    sync_after_enqueue: bool,
+    all: bool,
+) -> Result<()> {
+    let app_paths = resolve_app_paths()?;
+    crate::storage::migration::migrate_score_db(&profile_paths.score_db)?;
+    crate::storage::migration::migrate_network_db(&profile_paths.network_db)?;
+
+    let (provider_key, account_id) = resolve_local_upload_target(&profile.ir, provider)?;
+    let mut network_db = NetworkDatabase::open(&profile_paths.network_db)?;
+    let enqueued = network_db.enqueue_ir_score_attestation_jobs(
+        &provider_key,
+        &account_id,
+        now_unix_seconds(),
+    )?;
+    println!("provider: {provider_key}");
+    println!("account: {account_id}");
+    println!("queued score attestations: {enqueued}");
+
+    let mut remaining = network_db.unfinished_ir_score_job_count_for_kind(
+        &provider_key,
+        &account_id,
+        IrJobKind::Attestation,
+    )?;
+    if !sync_after_enqueue || remaining == 0 {
+        println!("remaining queued score attestations: {remaining}");
+        return Ok(());
+    }
+
+    let mut submitted = 0_u32;
+    loop {
+        let report = sync_cli_jobs_for_kind(
+            &mut network_db,
+            &profile_paths.score_db,
+            profile_paths.root_dir.as_path(),
+            app_paths.logs_dir.as_path(),
+            &profile.ir,
+            &provider_key,
+            &account_id,
+            IrJobKind::Attestation,
+            IR_CLI_SYNC_BATCH_LIMIT,
+        )
+        .await?;
+        submitted = submitted.saturating_add(report.submitted);
+        println!("submitted: {}, failed: {}", report.submitted, report.failed);
+        for message in &report.messages {
+            println!("  {message}");
+        }
+        remaining = network_db.unfinished_ir_score_job_count_for_kind(
+            &provider_key,
+            &account_id,
+            IrJobKind::Attestation,
+        )?;
+        println!("remaining queued score attestations: {remaining}");
+        if report.failed > 0 {
+            bail!(
+                "score attestation stopped after {submitted} submissions because {} jobs failed",
+                report.failed
+            );
+        }
+        if !all || remaining == 0 {
+            return Ok(());
+        }
+        if report.submitted == 0 {
+            bail!(
+                "score attestation is waiting for an existing sending job; rerun after its 5-minute lease expires"
+            );
+        }
+    }
+}
+
+/// 再import済み Beatoraja 行と照合できる、source_kind 導入前の Local 履歴を整理する。
+///
+/// IR 本体を先に削除し、成功後にネットワーク台帳と score.db を更新する。中断時は
+/// リモート削除 API の missing 応答を成功として扱うため、同じコマンドを再実行できる。
+async fn cleanup_imported_scores(
+    profile_paths: &ProfilePaths,
+    profile: &ProfileConfig,
+    requested_provider: Option<&str>,
+    apply: bool,
+) -> Result<()> {
+    const REMOTE_DELETE_BATCH_SIZE: usize = 19;
+    const REMOTE_DELETE_BATCH_SPACING_MS: u64 = 200;
+
+    crate::storage::migration::migrate_score_db(&profile_paths.score_db)?;
+    crate::storage::migration::migrate_network_db(&profile_paths.network_db)?;
+
+    let (provider_key, account_id) = resolve_local_upload_target(&profile.ir, requested_provider)?;
+    let mut score_db = ScoreDatabase::open(&profile_paths.score_db)?;
+    let plan = score_db.legacy_beatoraja_cleanup_plan()?;
+    let mut network_db = NetworkDatabase::open(&profile_paths.network_db)?;
+    let submitted_links =
+        network_db.successful_ir_score_submissions_for_local_scores(&plan.legacy_history_ids)?;
+    let selected_remote_score_ids = submitted_links
+        .iter()
+        .filter(|link| link.provider == provider_key && link.account_id == account_id)
+        .map(|link| link.remote_score_id.clone())
+        .collect::<BTreeSet<_>>();
+    let unselected_targets = submitted_links
+        .iter()
+        .filter(|link| link.provider != provider_key || link.account_id != account_id)
+        .map(|link| format!("{}/{}", link.provider, link.account_id))
+        .collect::<BTreeSet<_>>();
+
+    println!("provider: {provider_key}");
+    println!("account: {account_id}");
+    println!("old Local candidates: {}", plan.legacy_history_ids.len());
+    println!("retained Beatoraja rows: {}", plan.retained_beatoraja_history_ids.len());
+    println!(
+        "submitted IR scores linked to old Local candidates for selected provider: {}",
+        selected_remote_score_ids.len()
+    );
+    if !unselected_targets.is_empty() {
+        println!(
+            "submitted scores for other IR accounts: {} ({})",
+            unselected_targets.len(),
+            unselected_targets.iter().take(3).cloned().collect::<Vec<_>>().join(", ")
+        );
+    }
+    if plan.legacy_history_ids.is_empty() {
+        println!("no old Local candidates match a Beatoraja row");
+        return Ok(());
+    }
+    if !apply {
+        println!("dry-run only; rerun with `bmz ir cleanup-imported --apply` to delete them");
+        return Ok(());
+    }
+    if !unselected_targets.is_empty() {
+        bail!(
+            "cleanup stopped: matching Local rows were submitted to other IR accounts; rerun once per account with --provider before deleting local history"
+        );
+    }
+
+    if !selected_remote_score_ids.is_empty() {
+        let provider = crate::ir::provider_key::provider_config_for_key(&profile.ir, &provider_key)
+            .context("configured cleanup provider is not available; run `bmz ir login` first")?;
+        let credentials = ensure_fresh_credentials(
+            profile_paths.root_dir.as_path(),
+            &provider_key,
+            &provider.base_url,
+            now_unix_seconds(),
+        )
+        .await?;
+        let client = BmzOfficialIrClient::new(&provider.base_url, credentials.access_token)?;
+        let batches = selected_remote_score_ids.iter().cloned().collect::<Vec<_>>();
+        let batch_count = batches.len().div_ceil(REMOTE_DELETE_BATCH_SIZE);
+        let mut retained_remote_score_ids = BTreeSet::new();
+        for (index, score_ids) in batches.chunks(REMOTE_DELETE_BATCH_SIZE).enumerate() {
+            if index > 0 {
+                tokio::time::sleep(std::time::Duration::from_millis(
+                    REMOTE_DELETE_BATCH_SPACING_MS,
+                ))
+                .await;
+            }
+            println!(
+                "[{}/{}] deleting {} IR local backfill scores",
+                index + 1,
+                batch_count,
+                score_ids.len()
+            );
+            let response =
+                client.delete_local_backfill_scores(score_ids).await.with_context(|| {
+                    format!("failed to delete IR local backfill batch {}", index + 1)
+                })?;
+            let requested = score_ids.iter().cloned().collect::<BTreeSet<_>>();
+            let returned = response
+                .deleted_score_ids
+                .iter()
+                .chain(&response.missing_score_ids)
+                .chain(&response.retained_score_ids)
+                .cloned()
+                .collect::<BTreeSet<_>>();
+            if requested != returned {
+                bail!(
+                    "IR local backfill cleanup batch {} returned an unexpected score set; local history was not changed",
+                    index + 1
+                );
+            }
+            retained_remote_score_ids.extend(response.retained_score_ids);
+        }
+        if !retained_remote_score_ids.is_empty() {
+            println!(
+                "retained IR scores not marked local_backfill: {}",
+                retained_remote_score_ids.len()
+            );
+        }
+    }
+
+    let network_report = network_db.purge_ir_records_for_local_scores(
+        &provider_key,
+        &account_id,
+        &plan.legacy_history_ids,
+    )?;
+    let score_report = score_db.purge_legacy_beatoraja_imports(&plan)?;
+    println!("removed old Local history: {}", score_report.removed_legacy_history);
+    println!("retained Beatoraja rows: {}", score_report.retained_beatoraja_history);
+    println!(
+        "removed local IR records: jobs={}, submissions={}",
+        network_report.removed_jobs, network_report.removed_submissions
+    );
+    println!(
+        "run `bmz ir upload-local --all --provider {provider_key}` to submit retained Beatoraja rows with current metadata"
+    );
+    Ok(())
+}
+
+/// 同じ source_kind の完全重複履歴を1件だけ削除する。
+///
+/// 対応する local_backfill IR score は先に server API で削除し、成功後に
+/// network.db と score.db を同じ history id で整理する。
+async fn cleanup_duplicate_score_history(
+    profile_paths: &ProfilePaths,
+    profile: &ProfileConfig,
+    requested_provider: Option<&str>,
+    history_id: i64,
+    apply: bool,
+) -> Result<()> {
+    const REMOTE_DELETE_BATCH_SIZE: usize = 19;
+    const REMOTE_DELETE_BATCH_SPACING_MS: u64 = 200;
+
+    if !apply {
+        bail!("duplicate cleanup requires --apply");
+    }
+
+    crate::storage::migration::migrate_score_db(&profile_paths.score_db)?;
+    crate::storage::migration::migrate_network_db(&profile_paths.network_db)?;
+
+    let mut score_db = ScoreDatabase::open(&profile_paths.score_db)?;
+    let duplicate_ids = score_db.same_source_duplicate_history_ids(history_id)?;
+    if duplicate_ids.len() != 1 {
+        bail!(
+            "score_history {history_id} must have exactly one same-source duplicate, found {}",
+            duplicate_ids.len()
+        );
+    }
+    let retained_history_id = duplicate_ids[0];
+    let (provider_key, account_id) = resolve_local_upload_target(&profile.ir, requested_provider)?;
+    let mut network_db = NetworkDatabase::open(&profile_paths.network_db)?;
+    let submitted_links =
+        network_db.successful_ir_score_submissions_for_local_scores(&[history_id])?;
+    let selected_remote_score_ids = submitted_links
+        .iter()
+        .filter(|link| link.provider == provider_key && link.account_id == account_id)
+        .map(|link| link.remote_score_id.clone())
+        .collect::<BTreeSet<_>>();
+    let unselected_targets = submitted_links
+        .iter()
+        .filter(|link| link.provider != provider_key || link.account_id != account_id)
+        .map(|link| format!("{}/{}", link.provider, link.account_id))
+        .collect::<BTreeSet<_>>();
+
+    if !unselected_targets.is_empty() {
+        bail!(
+            "cleanup stopped: score_history {history_id} was submitted to other IR accounts ({})",
+            unselected_targets.into_iter().collect::<Vec<_>>().join(", ")
+        );
+    }
+
+    println!("provider: {provider_key}");
+    println!("account: {account_id}");
+    println!("removing duplicate score_history: {history_id}");
+    println!("retained duplicate score_history: {retained_history_id}");
+    println!("submitted IR scores for the removed history: {}", selected_remote_score_ids.len());
+
+    if !selected_remote_score_ids.is_empty() {
+        let provider = crate::ir::provider_key::provider_config_for_key(&profile.ir, &provider_key)
+            .context("configured cleanup provider is not available; run `bmz ir login` first")?;
+        let credentials = ensure_fresh_credentials(
+            profile_paths.root_dir.as_path(),
+            &provider_key,
+            &provider.base_url,
+            now_unix_seconds(),
+        )
+        .await?;
+        let client = BmzOfficialIrClient::new(&provider.base_url, credentials.access_token)?;
+        let batches = selected_remote_score_ids.iter().cloned().collect::<Vec<_>>();
+        let batch_count = batches.len().div_ceil(REMOTE_DELETE_BATCH_SIZE);
+        let mut retained_remote_score_ids = BTreeSet::new();
+        for (index, score_ids) in batches.chunks(REMOTE_DELETE_BATCH_SIZE).enumerate() {
+            if index > 0 {
+                tokio::time::sleep(std::time::Duration::from_millis(
+                    REMOTE_DELETE_BATCH_SPACING_MS,
+                ))
+                .await;
+            }
+            println!(
+                "[{}/{}] deleting {} IR local backfill scores",
+                index + 1,
+                batch_count,
+                score_ids.len()
+            );
+            let response =
+                client.delete_local_backfill_scores(score_ids).await.with_context(|| {
+                    format!("failed to delete IR local backfill batch {}", index + 1)
+                })?;
+            let requested = score_ids.iter().cloned().collect::<BTreeSet<_>>();
+            let returned = response
+                .deleted_score_ids
+                .iter()
+                .chain(&response.missing_score_ids)
+                .chain(&response.retained_score_ids)
+                .cloned()
+                .collect::<BTreeSet<_>>();
+            if requested != returned {
+                bail!(
+                    "IR local backfill cleanup batch {} returned an unexpected score set; local history was not changed",
+                    index + 1
+                );
+            }
+            retained_remote_score_ids.extend(response.retained_score_ids);
+        }
+        if !retained_remote_score_ids.is_empty() {
+            println!(
+                "retained IR scores not marked local_backfill: {}",
+                retained_remote_score_ids.len()
+            );
+        }
+    }
+
+    let network_report =
+        network_db.purge_ir_records_for_local_scores(&provider_key, &account_id, &[history_id])?;
+    let removed_history = score_db.purge_score_history_ids_and_rebuild(&[history_id])?;
+    if removed_history != 1 {
+        bail!(
+            "expected to remove score_history {history_id}, removed {removed_history}; network records were not restored"
+        );
+    }
+    println!("removed duplicate score_history: {history_id}");
+    println!(
+        "removed local IR records: jobs={}, submissions={}",
+        network_report.removed_jobs, network_report.removed_submissions
+    );
+    Ok(())
+}
+
 async fn upload_local(
     profile_paths: &ProfilePaths,
     profile: &ProfileConfig,
     options: IrLocalUploadOptions,
     sync_after_enqueue: bool,
+    all: bool,
 ) -> Result<()> {
+    if all {
+        return upload_all_local(profile_paths, profile, options).await;
+    }
+
     let app_paths = resolve_app_paths()?;
     crate::storage::migration::migrate_library_db(&app_paths.library_db)?;
     crate::storage::migration::migrate_score_db(&profile_paths.score_db)?;
     crate::storage::migration::migrate_network_db(&profile_paths.network_db)?;
 
+    let mut network_db = NetworkDatabase::open(&profile_paths.network_db)?;
+    if sync_after_enqueue && !options.dry_run {
+        let (provider_key, account_id) =
+            resolve_local_upload_target(&profile.ir, options.provider.as_deref())?;
+        let queued = network_db.unfinished_ir_score_job_count_for_kind(
+            &provider_key,
+            &account_id,
+            IrJobKind::Score,
+        )?;
+        if queued > 0 {
+            println!("provider: {provider_key}");
+            println!("account: {account_id}");
+            println!("existing queued score jobs: {queued}; syncing before enqueueing more");
+            let sync_report = sync_cli_jobs(
+                &mut network_db,
+                &profile_paths.score_db,
+                profile_paths.root_dir.as_path(),
+                app_paths.logs_dir.as_path(),
+                &profile.ir,
+                IR_CLI_SYNC_BATCH_LIMIT,
+            )
+            .await?;
+            println!("submitted: {}, failed: {}", sync_report.submitted, sync_report.failed);
+            let remaining = network_db.unfinished_ir_score_job_count_for_kind(
+                &provider_key,
+                &account_id,
+                IrJobKind::Score,
+            )?;
+            println!("remaining queued score jobs for {provider_key}/{account_id}: {remaining}");
+            for message in &sync_report.messages {
+                println!("  {message}");
+            }
+            return Ok(());
+        }
+    }
+
     let library_db = LibraryDatabase::open(&app_paths.library_db)?;
     let score_db = ScoreDatabase::open(&profile_paths.score_db)?;
-    let mut network_db = NetworkDatabase::open(&profile_paths.network_db)?;
     let report = enqueue_local_score_jobs(
         profile_paths.root_dir.as_path(),
         &profile.ir,
@@ -592,31 +989,334 @@ async fn upload_local(
         println!("limit reached; rerun `bmz ir upload-local` to enqueue the next batch");
     }
 
-    if options.dry_run || !sync_after_enqueue || report.enqueued == 0 {
+    if options.dry_run || !sync_after_enqueue {
         return Ok(());
     }
 
-    let sync_limit = report.enqueued.min(IR_SYNC_BATCH_LIMIT);
-    let sync_report = sync_pending_ir_jobs(
+    let sync_report = sync_cli_jobs(
         &mut network_db,
         &profile_paths.score_db,
         profile_paths.root_dir.as_path(),
         app_paths.logs_dir.as_path(),
         &profile.ir,
-        now_unix_seconds(),
-        sync_limit,
-        true,
-        IrSyncThrottle::rate_limited(),
+        IR_CLI_SYNC_BATCH_LIMIT,
     )
     .await?;
     println!("submitted: {}, failed: {}", sync_report.submitted, sync_report.failed);
-    if report.enqueued > sync_limit {
-        println!("pending after this sync: {}", report.enqueued - sync_limit);
-    }
+    let remaining = network_db.unfinished_ir_score_job_count_for_kind(
+        &report.provider_key,
+        &report.account_id,
+        IrJobKind::Score,
+    )?;
+    println!(
+        "remaining queued score jobs for {}/{}: {remaining}",
+        report.provider_key, report.account_id
+    );
     for message in &sync_report.messages {
         println!("  {message}");
     }
     Ok(())
+}
+
+async fn upload_all_local(
+    profile_paths: &ProfilePaths,
+    profile: &ProfileConfig,
+    options: IrLocalUploadOptions,
+) -> Result<()> {
+    if options.dry_run {
+        bail!("ir upload-local --all cannot be combined with --dry-run");
+    }
+
+    let app_paths = resolve_app_paths()?;
+    crate::storage::migration::migrate_library_db(&app_paths.library_db)?;
+    crate::storage::migration::migrate_score_db(&profile_paths.score_db)?;
+    crate::storage::migration::migrate_network_db(&profile_paths.network_db)?;
+
+    let (provider_key, account_id) =
+        resolve_local_upload_target(&profile.ir, options.provider.as_deref())?;
+    let library_db = LibraryDatabase::open(&app_paths.library_db)?;
+    let score_db = ScoreDatabase::open(&profile_paths.score_db)?;
+    let mut network_db = NetworkDatabase::open(&profile_paths.network_db)?;
+    let mut batch = 1_u32;
+    let mut total_enqueued = 0_u32;
+    let mut total_submitted = 0_u32;
+
+    loop {
+        println!("full upload batch: {batch}");
+        let queued = network_db.unfinished_ir_score_job_count_for_kind(
+            &provider_key,
+            &account_id,
+            IrJobKind::Score,
+        )?;
+        if queued > 0 {
+            println!("provider: {provider_key}");
+            println!("account: {account_id}");
+            println!("existing queued score jobs: {queued}; syncing before enqueueing more");
+            let sync_report = sync_cli_jobs(
+                &mut network_db,
+                &profile_paths.score_db,
+                profile_paths.root_dir.as_path(),
+                app_paths.logs_dir.as_path(),
+                &profile.ir,
+                IR_CLI_SYNC_BATCH_LIMIT,
+            )
+            .await?;
+            let remaining = network_db.unfinished_ir_score_job_count_for_kind(
+                &provider_key,
+                &account_id,
+                IrJobKind::Score,
+            )?;
+            print_local_upload_sync_report(&sync_report, &provider_key, &account_id, remaining);
+            total_submitted = total_submitted.saturating_add(sync_report.submitted);
+            ensure_full_upload_progress(&sync_report, total_submitted)?;
+            batch = batch.saturating_add(1);
+            continue;
+        }
+
+        let report = enqueue_local_score_jobs(
+            profile_paths.root_dir.as_path(),
+            &profile.ir,
+            &score_db,
+            &library_db,
+            &mut network_db,
+            &options,
+            now_unix_seconds(),
+        )?;
+        println!("provider: {}", report.provider_key);
+        println!("account: {}", report.account_id);
+        println!("scanned: {}", report.scanned);
+        println!("candidates: {}", report.candidates);
+        println!("enqueued: {}", report.enqueued);
+        println!(
+            "skipped: already_submitted={}, already_queued={}, missing_chart={}, course_stage={}, autoplay={}",
+            report.skipped_already_submitted,
+            report.skipped_already_queued,
+            report.skipped_missing_chart,
+            report.skipped_course_stage,
+            report.skipped_autoplay,
+        );
+        if report.missing_replays > 0 {
+            println!(
+                "replay files missing: {} (scores were queued without replay)",
+                report.missing_replays
+            );
+        }
+        total_enqueued = total_enqueued.saturating_add(report.enqueued);
+        if report.enqueued == 0 {
+            println!(
+                "full local upload complete: enqueued={total_enqueued}, submitted={total_submitted}"
+            );
+            return Ok(());
+        }
+        if report.limit_reached {
+            println!("limit reached; continuing because --all is enabled");
+        }
+
+        let sync_report = sync_cli_jobs(
+            &mut network_db,
+            &profile_paths.score_db,
+            profile_paths.root_dir.as_path(),
+            app_paths.logs_dir.as_path(),
+            &profile.ir,
+            IR_CLI_SYNC_BATCH_LIMIT,
+        )
+        .await?;
+        let remaining = network_db.unfinished_ir_score_job_count_for_kind(
+            &provider_key,
+            &account_id,
+            IrJobKind::Score,
+        )?;
+        print_local_upload_sync_report(&sync_report, &provider_key, &account_id, remaining);
+        total_submitted = total_submitted.saturating_add(sync_report.submitted);
+        ensure_full_upload_progress(&sync_report, total_submitted)?;
+
+        if remaining == 0 && !report.limit_reached {
+            println!(
+                "full local upload complete: enqueued={total_enqueued}, submitted={total_submitted}"
+            );
+            return Ok(());
+        }
+        batch = batch.saturating_add(1);
+    }
+}
+
+fn print_local_upload_sync_report(
+    sync_report: &IrSyncReport,
+    provider_key: &str,
+    account_id: &str,
+    remaining: u32,
+) {
+    println!("submitted: {}, failed: {}", sync_report.submitted, sync_report.failed);
+    println!("remaining queued score jobs for {provider_key}/{account_id}: {remaining}");
+    for message in &sync_report.messages {
+        println!("  {message}");
+    }
+}
+
+fn ensure_full_upload_progress(sync_report: &IrSyncReport, total_submitted: u32) -> Result<()> {
+    if sync_report.failed > 0 {
+        bail!(
+            "full local upload stopped after {total_submitted} submissions because {} jobs failed",
+            sync_report.failed
+        );
+    }
+    if sync_report.submitted == 0 {
+        bail!(
+            "full local upload is waiting for an existing sending job; rerun after its 5-minute lease expires"
+        );
+    }
+    Ok(())
+}
+
+async fn sync_cli_jobs(
+    network_db: &mut NetworkDatabase,
+    score_db_path: &Path,
+    profile_root: &Path,
+    logs_dir: &Path,
+    ir_config: &IrConfig,
+    limit: u32,
+) -> Result<IrSyncReport> {
+    sync_cli_jobs_with_filter(
+        network_db,
+        score_db_path,
+        profile_root,
+        logs_dir,
+        ir_config,
+        limit,
+        None,
+    )
+    .await
+}
+
+async fn sync_cli_jobs_for_kind(
+    network_db: &mut NetworkDatabase,
+    score_db_path: &Path,
+    profile_root: &Path,
+    logs_dir: &Path,
+    ir_config: &IrConfig,
+    provider_key: &str,
+    account_id: &str,
+    kind: IrJobKind,
+    limit: u32,
+) -> Result<IrSyncReport> {
+    sync_cli_jobs_with_filter(
+        network_db,
+        score_db_path,
+        profile_root,
+        logs_dir,
+        ir_config,
+        limit,
+        Some((provider_key, account_id, kind)),
+    )
+    .await
+}
+
+async fn sync_cli_jobs_with_filter(
+    network_db: &mut NetworkDatabase,
+    score_db_path: &Path,
+    profile_root: &Path,
+    logs_dir: &Path,
+    ir_config: &IrConfig,
+    limit: u32,
+    filter: Option<(&str, &str, IrJobKind)>,
+) -> Result<IrSyncReport> {
+    let estimated_seconds = u64::from(limit.saturating_sub(1))
+        .saturating_mul(IR_CLI_SYNC_JOB_SPACING_MS)
+        .div_ceil(1_000);
+    println!("syncing up to {limit} queued jobs (about {estimated_seconds}s)");
+
+    let mut total = IrSyncReport::default();
+    for index in 0..limit {
+        let ignore_retry_backoff = total.failed == 0;
+        if index > 0 {
+            let has_next = if ignore_retry_backoff {
+                match filter {
+                    Some((provider_key, account_id, kind)) => !network_db
+                        .pending_ir_score_jobs_for_kind(
+                            provider_key,
+                            account_id,
+                            kind,
+                            now_unix_seconds(),
+                            1,
+                            true,
+                        )?
+                        .is_empty(),
+                    None => !network_db
+                        .pending_ir_score_jobs_ignoring_backoff(now_unix_seconds(), 1)?
+                        .is_empty(),
+                }
+            } else {
+                match filter {
+                    Some((provider_key, account_id, kind)) => !network_db
+                        .pending_ir_score_jobs_for_kind(
+                            provider_key,
+                            account_id,
+                            kind,
+                            now_unix_seconds(),
+                            1,
+                            false,
+                        )?
+                        .is_empty(),
+                    None => !network_db.pending_ir_score_jobs(now_unix_seconds(), 1)?.is_empty(),
+                }
+            };
+            if !has_next {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(IR_CLI_SYNC_JOB_SPACING_MS)).await;
+        }
+        print!("[{}/{}] syncing...", index + 1, limit);
+        std::io::stdout().flush()?;
+        let sync_result = match filter {
+            Some((provider_key, account_id, kind)) => {
+                sync_pending_ir_jobs_filtered(
+                    network_db,
+                    score_db_path,
+                    profile_root,
+                    logs_dir,
+                    ir_config,
+                    IrSyncJobFilter { provider_key, account_id, kind },
+                    now_unix_seconds(),
+                    1,
+                    ignore_retry_backoff,
+                    IrSyncThrottle::none(),
+                )
+                .await
+            }
+            None => {
+                sync_pending_ir_jobs(
+                    network_db,
+                    score_db_path,
+                    profile_root,
+                    logs_dir,
+                    ir_config,
+                    now_unix_seconds(),
+                    1,
+                    ignore_retry_backoff,
+                    IrSyncThrottle::none(),
+                )
+                .await
+            }
+        };
+        let report = match sync_result {
+            Ok(report) => report,
+            Err(error) => {
+                println!(" error");
+                return Err(error);
+            }
+        };
+        let processed = report.submitted.saturating_add(report.failed);
+        if processed == 0 {
+            println!(" no queued jobs");
+            break;
+        }
+        println!(" submitted={}, failed={}", report.submitted, report.failed);
+        total.submitted = total.submitted.saturating_add(report.submitted);
+        total.failed = total.failed.saturating_add(report.failed);
+        total.messages.extend(report.messages);
+        total.included_rankings.extend(report.included_rankings);
+    }
+    Ok(total)
 }
 
 async fn download_scores(
@@ -827,5 +1527,21 @@ mod tests {
         assert!(sync_ir_rivals_into_profile(&mut profile, "bmz-official", &[]) == false);
         assert_eq!(profile.rival.entries.len(), 1);
         assert_eq!(profile.rival.entries[0].id, "local-1");
+    }
+
+    #[test]
+    fn full_upload_stops_without_sync_progress() {
+        assert!(ensure_full_upload_progress(&IrSyncReport::default(), 0).is_err());
+        assert!(
+            ensure_full_upload_progress(&IrSyncReport { submitted: 1, ..Default::default() }, 1,)
+                .is_ok()
+        );
+        assert!(
+            ensure_full_upload_progress(
+                &IrSyncReport { submitted: 1, failed: 1, ..Default::default() },
+                1,
+            )
+            .is_err()
+        );
     }
 }

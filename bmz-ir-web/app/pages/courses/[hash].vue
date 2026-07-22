@@ -77,6 +77,10 @@ interface CourseSelfScoresResult {
 
 const route = useRoute()
 const { user } = useUserSession()
+const localePath = useLocalePath()
+const { t } = useI18n()
+const { formatDateTime } = useLocaleFormat()
+const { translateApiError } = useApiError()
 const courseHash = computed(() => String(route.params.hash ?? ''))
 
 type CourseGaugeFilter = 'ALL' | 'Class' | 'ExClass' | 'ExHardClass' | 'Normal' | 'Hard'
@@ -184,38 +188,58 @@ function chartMeta(chart: CourseDetail['course']['charts'][number]): string {
 }
 
 function formatScoreDate(value: string | null) {
-  return value ? new Date(value).toLocaleString() : '-'
+  return value ? formatDateTime(value) : '-'
 }
+
+const detailErrorDescription = computed(() =>
+  detailError.value ? translateApiError(detailError.value, 'errors.courseLoadFailed') : '',
+)
+const rankingErrorDescription = computed(() =>
+  rankingError.value ? translateApiError(rankingError.value, 'errors.rankingLoadFailed') : '',
+)
+const historyErrorDescription = computed(() =>
+  selfHistoryError.value
+    ? translateApiError(selfHistoryError.value, 'errors.historyLoadFailed')
+    : '',
+)
+useSeoMeta({ title: () => detail.value?.course.title || t('course.title') })
 </script>
 
 <template>
   <main>
     <section class="mx-auto w-full max-w-4xl px-5 py-10">
-      <UAlert v-if="detailError" color="error" :description="detailError.message" class="mb-6" />
+      <UAlert v-if="detailError" color="error" :description="detailErrorDescription" class="mb-6" />
       <template v-else-if="detail">
         <div class="mb-8">
           <p class="mb-2 text-sm font-medium text-primary-300">
-            <NuxtLink to="/courses" class="hover:underline">コース一覧</NuxtLink>
+            <NuxtLink :to="localePath('/courses')" class="hover:underline">{{
+              t('courses.title')
+            }}</NuxtLink>
           </p>
           <h1 class="text-3xl font-semibold">
-            {{ detail.course.title || '(無題)' }}
+            {{ detail.course.title || t('common.untitled') }}
             <UBadge
               :color="detail.course.kind === 'dan' ? 'warning' : 'neutral'"
               size="md"
               variant="subtle"
             >
-              {{ detail.course.kind === 'dan' ? '段位' : 'コース' }}
+              {{ detail.course.kind === 'dan' ? t('courses.dan') : t('courses.course') }}
             </UBadge>
           </h1>
           <p class="mt-2 text-sm text-neutral-400">
-            {{ detail.course.chart_count }} 曲 ・ プレイ {{ detail.stats.play_count }} 回
+            {{
+              t('course.summary', {
+                charts: detail.course.chart_count,
+                plays: detail.stats.play_count,
+              })
+            }}
           </p>
         </div>
 
-        <h2 class="mb-2 text-lg font-medium">構成譜面</h2>
+        <h2 class="mb-2 text-lg font-medium">{{ t('course.charts') }}</h2>
         <ol class="mb-8 list-inside list-decimal space-y-1 text-sm">
           <li v-for="chart in detail.course.charts" :key="chart.sha256">
-            <NuxtLink :to="`/charts/${chart.sha256}`" class="hover:underline">
+            <NuxtLink :to="localePath(`/charts/${chart.sha256}`)" class="hover:underline">
               {{ chartTitle(chart) }}
               <span v-if="chart.subtitle" class="text-neutral-400">{{ chart.subtitle }}</span>
             </NuxtLink>
@@ -236,7 +260,7 @@ function formatScoreDate(value: string | null) {
           class="mb-4 flex flex-col gap-3 rounded-lg border border-neutral-800 p-4 sm:flex-row sm:items-center sm:justify-between"
         >
           <div v-if="selfBestEntry" class="min-w-0">
-            <p class="text-xs text-neutral-500">自己ベスト</p>
+            <p class="text-xs text-neutral-500">{{ t('ranking.personalBest') }}</p>
             <div class="mt-1 flex flex-wrap items-baseline gap-x-4 gap-y-1">
               <p class="text-sm text-neutral-300">#{{ selfBestEntry.rank }}</p>
               <p class="text-xl font-semibold">EX {{ selfBestEntry.score.ex_score }}</p>
@@ -248,7 +272,7 @@ function formatScoreDate(value: string | null) {
               {{ selfBestEntry.score.rule_mode }} / {{ selfBestEntry.score.device_type }}
             </p>
           </div>
-          <p v-else class="text-sm text-neutral-400">この条件の自己ベストはまだありません。</p>
+          <p v-else class="text-sm text-neutral-400">{{ t('ranking.noPersonalBest') }}</p>
           <UButton
             icon="i-lucide-list"
             color="neutral"
@@ -256,26 +280,28 @@ function formatScoreDate(value: string | null) {
             class="shrink-0"
             @click="openHistory"
           >
-            自己スコア履歴
+            {{ t('ranking.selfHistory') }}
           </UButton>
         </div>
 
-        <UAlert v-if="rankingError" color="error" :description="rankingError.message" />
-        <p v-else-if="rankingPending" class="text-sm text-neutral-400">ランキング読み込み中...</p>
+        <UAlert v-if="rankingError" color="error" :description="rankingErrorDescription" />
+        <p v-else-if="rankingPending" class="text-sm text-neutral-400">
+          {{ t('ranking.loading') }}
+        </p>
         <p v-else-if="!ranking?.ranking.entries.length" class="text-sm text-neutral-400">
-          この条件のスコアはまだありません。
+          {{ t('ranking.noScores') }}
         </p>
         <div v-else class="overflow-x-auto rounded-lg border border-neutral-800">
           <table class="w-full text-sm">
             <thead class="bg-neutral-900 text-left text-neutral-300">
               <tr>
                 <th class="px-3 py-2">#</th>
-                <th class="px-3 py-2">プレイヤー</th>
+                <th class="px-3 py-2">{{ t('table.player') }}</th>
                 <th class="px-3 py-2 text-right">EX</th>
-                <th class="px-3 py-2">クリア</th>
+                <th class="px-3 py-2">{{ t('table.clear') }}</th>
                 <th class="px-3 py-2 text-right">COMBO</th>
                 <th class="px-3 py-2 text-right">BP</th>
-                <th class="px-3 py-2">日時</th>
+                <th class="px-3 py-2">{{ t('table.date') }}</th>
               </tr>
             </thead>
             <tbody>
@@ -286,7 +312,7 @@ function formatScoreDate(value: string | null) {
               >
                 <td class="px-3 py-2 text-neutral-300">{{ entry.rank }}</td>
                 <td class="px-3 py-2">
-                  <NuxtLink :to="`/players/${entry.player.id}`" class="hover:underline">
+                  <NuxtLink :to="localePath(`/players/${entry.player.id}`)" class="hover:underline">
                     {{ entry.player.display_name }}
                   </NuxtLink>
                 </td>
@@ -312,28 +338,30 @@ function formatScoreDate(value: string | null) {
           </table>
         </div>
 
-        <UModal v-model:open="historyOpen" title="自己スコア履歴">
+        <UModal v-model:open="historyOpen" :title="t('ranking.selfHistory')">
           <template #body>
             <UAlert
               v-if="selfHistoryError"
               color="error"
-              :description="selfHistoryError.message"
+              :description="historyErrorDescription"
               class="mb-4"
             />
-            <p v-else-if="selfHistoryPending" class="text-sm text-neutral-400">読み込み中...</p>
+            <p v-else-if="selfHistoryPending" class="text-sm text-neutral-400">
+              {{ t('common.loading') }}
+            </p>
             <p v-else-if="!selfHistory?.scores.length" class="text-sm text-neutral-400">
-              この条件の自己スコア履歴はまだありません。
+              {{ t('ranking.noHistory') }}
             </p>
             <div v-else class="overflow-x-auto rounded-lg border border-neutral-800">
               <table class="w-full text-sm">
                 <thead class="bg-neutral-900 text-left text-neutral-300">
                   <tr>
-                    <th class="px-3 py-2">日時</th>
+                    <th class="px-3 py-2">{{ t('table.date') }}</th>
                     <th class="px-3 py-2 text-right">EX</th>
-                    <th class="px-3 py-2">クリア</th>
+                    <th class="px-3 py-2">{{ t('table.clear') }}</th>
                     <th class="px-3 py-2 text-right">COMBO</th>
                     <th class="px-3 py-2 text-right">BP</th>
-                    <th class="px-3 py-2">条件</th>
+                    <th class="px-3 py-2">{{ t('table.conditions') }}</th>
                   </tr>
                 </thead>
                 <tbody>

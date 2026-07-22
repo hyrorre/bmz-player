@@ -9,7 +9,7 @@ use bmz_core::time::TimeUs;
 
 use super::model::{
     ActiveLongNote, JudgeAlgorithm, JudgeOutcome, JudgeWindow, JudgeWindows, JudgementEvent,
-    KeySoundEvent, LaneJudgeState, LongNoteEndRef, MineHitEvent,
+    KeySoundEvent, LaneJudgeState, LongNoteEndRef, MineHitEvent, PendingLongRelease,
 };
 use crate::rule::RuleMode;
 
@@ -99,24 +99,61 @@ impl JudgeEngine {
                 }
 
                 lane_state.next_note_index = idx + 1;
-                if self.bad_attempted_notes.remove(&note.id) {
-                    self.judged_notes.insert(note.id, Judge::Poor);
-                    continue;
-                }
+                let bad_was_already_scored = self.bad_attempted_notes.remove(&note.id);
                 self.judged_notes.insert(note.id, Judge::Poor);
-                outcome.events.push(JudgementEvent {
-                    note_id: Some(note.id),
-                    lane,
-                    judge: Judge::Poor,
-                    side: TimingSide::Slow,
-                    delta: TimeUs(now.0 - note.time.0),
-                    time: now,
-                    affects_score: true,
-                });
+                let miss_delta = TimeUs(now.0 - note.time.0);
+                if !bad_was_already_scored {
+                    outcome.events.push(JudgementEvent {
+                        note_id: Some(note.id),
+                        lane,
+                        judge: Judge::Poor,
+                        side: TimingSide::Slow,
+                        delta: miss_delta,
+                        time: now,
+                        affects_score: true,
+                    });
+                }
+                // beatoraja treats a missed CN/HCN head as two misses: both the
+                // head and its paired tail become POOR immediately. If the head
+                // had already produced a non-vanishing BAD, only the tail adds
+                // another score event (MissCondition.ONE).
+                if let Some(end_note_id) = missed_charge_end_for_start(chart, note.id) {
+                    self.judged_notes.insert(end_note_id, Judge::Poor);
+                    outcome.events.push(JudgementEvent {
+                        note_id: Some(end_note_id),
+                        lane,
+                        judge: Judge::Poor,
+                        side: TimingSide::Slow,
+                        delta: miss_delta,
+                        time: now,
+                        affects_score: true,
+                    });
+                }
             }
             advance_press_cursor(chart, lane, &mut lane_state.next_note_index, &self.judged_notes);
 
             if let Some(active) = lane_state.active_long {
+                let release_margin_us = self.window_set.long_release_margin_us(lane);
+                if let Some(pending) = active.pending_release
+                    && now.0 >= pending.released_at.0 + release_margin_us
+                {
+                    lane_state.active_long = None;
+                    let judged_note_id = active_scored_note_id(active);
+                    self.judged_notes.insert(judged_note_id, pending.judge);
+                    append_outcome(
+                        &mut outcome,
+                        finalize_long_release(
+                            chart,
+                            lane,
+                            active,
+                            pending.judge,
+                            pending.delta,
+                            now,
+                        ),
+                    );
+                    continue;
+                }
+
                 match active.mode {
                     LongNoteMode::Ln => {
                         if now.0 > active.end.end_time.0 {
@@ -135,9 +172,13 @@ impl JudgeEngine {
                         }
                     }
                     LongNoteMode::Cn | LongNoteMode::Hcn => {
-                        let windows = self.window_set.long_end_window(lane);
+                        // beatoraja uses the normal note BAD-late boundary for
+                        // an unreleased CN/HCN tail. The long-end window is only
+                        // used when an actual Release input occurs.
+                        let windows = self.window_set.press_window(lane);
                         if now.0 > active.end.end_time.0 + windows.bad_slow_us {
                             lane_state.active_long = None;
+                            self.judged_notes.insert(active.end.end_note_id, Judge::Poor);
                             outcome.events.push(JudgementEvent {
                                 note_id: Some(active.end.end_note_id),
                                 lane,
@@ -225,7 +266,11 @@ impl JudgeEngine {
             mine_hits.push(hit);
         }
 
-        if self.lanes[input.lane.index()].active_long.is_some() {
+        if let Some(mut active) = self.lanes[input.lane.index()].active_long {
+            if active.pending_release.take().is_some() {
+                self.lanes[input.lane.index()].active_long = Some(active);
+                return JudgeOutcome { mine_hits, consumed_input: true, ..Default::default() };
+            }
             return JudgeOutcome { mine_hits, ..Default::default() };
         }
 
@@ -274,7 +319,11 @@ impl JudgeEngine {
             let lane_state = &mut self.lanes[input.lane.index()];
             lane_state.last_press_time = Some(note.time);
             for multi_bad in &multi_bad_candidates {
-                self.judged_notes.insert(multi_bad.note_id, Judge::Bad);
+                if self.bad_judge_vanish {
+                    self.judged_notes.insert(multi_bad.note_id, Judge::Bad);
+                } else {
+                    self.bad_attempted_notes.insert(multi_bad.note_id);
+                }
             }
             if note_vanishes {
                 self.bad_attempted_notes.remove(&note.id);
@@ -339,13 +388,13 @@ impl JudgeEngine {
 
     fn process_release(&mut self, chart: &PlayableChart, input: InputEvent) -> JudgeOutcome {
         let lane_state = &mut self.lanes[input.lane.index()];
-        let Some(active) = lane_state.active_long else {
+        let Some(mut active) = lane_state.active_long else {
             return JudgeOutcome::default();
         };
+        let release_margin_us = self.window_set.long_release_margin_us(input.lane);
 
         match active.mode {
             LongNoteMode::Ln => {
-                lane_state.active_long = None;
                 let end_delta = TimeUs(input.time.0 - active.end.end_time.0);
                 let (judge, delta) = if end_delta.0 >= 0 {
                     (active.start_judge, active.start_delta)
@@ -355,56 +404,35 @@ impl JudgeEngine {
                         classify_normal_delta(end_delta.0, windows).unwrap_or(Judge::Poor);
                     combine_ln_judgement(active, end_judge, end_delta)
                 };
+                if release_margin_us > 0
+                    && end_delta.0 < 0
+                    && matches!(judge, Judge::Bad | Judge::Poor)
+                {
+                    active.pending_release =
+                        Some(PendingLongRelease { released_at: input.time, judge, delta });
+                    lane_state.active_long = Some(active);
+                    return JudgeOutcome { consumed_input: true, ..Default::default() };
+                }
+                lane_state.active_long = None;
                 self.judged_notes.insert(active.start_note_id, judge);
-                let mut outcome = JudgeOutcome {
-                    events: vec![ln_final_event(input.lane, active, judge, delta, input.time)],
-                    keysounds: vec![KeySoundEvent {
-                        note_id: active.end.end_note_id,
-                        time: input.time,
-                    }],
-                    mine_hits: Vec::new(),
-                    consumed_input: true,
-                    ..Default::default()
-                };
-                push_early_bad_long_start_mute(chart, active, judge, end_delta, &mut outcome);
-                outcome
+                finalize_long_release(chart, input.lane, active, judge, delta, input.time)
             }
             LongNoteMode::Cn | LongNoteMode::Hcn => {
                 let delta = input.time.0 - active.end.end_time.0;
-                let side = side_from_delta(delta);
                 let windows = self.window_set.long_end_window(input.lane);
                 let judge = classify_normal_delta(delta, windows).unwrap_or(Judge::Poor);
+                if release_margin_us > 0 && delta < 0 && matches!(judge, Judge::Bad | Judge::Poor) {
+                    active.pending_release = Some(PendingLongRelease {
+                        released_at: input.time,
+                        judge,
+                        delta: TimeUs(delta),
+                    });
+                    lane_state.active_long = Some(active);
+                    return JudgeOutcome { consumed_input: true, ..Default::default() };
+                }
                 lane_state.active_long = None;
                 self.judged_notes.insert(active.end.end_note_id, judge);
-
-                let mut outcome = JudgeOutcome {
-                    events: vec![JudgementEvent {
-                        note_id: Some(active.end.end_note_id),
-                        lane: input.lane,
-                        judge,
-                        side,
-                        delta: TimeUs(delta),
-                        time: input.time,
-                        affects_score: true,
-                    }],
-                    keysounds: vec![KeySoundEvent {
-                        note_id: active.end.end_note_id,
-                        time: input.time,
-                    }],
-                    mine_hits: Vec::new(),
-                    consumed_input: true,
-                    ..Default::default()
-                };
-                if active.mode == LongNoteMode::Cn {
-                    push_early_bad_long_start_mute(
-                        chart,
-                        active,
-                        judge,
-                        TimeUs(delta),
-                        &mut outcome,
-                    );
-                }
-                outcome
+                finalize_long_release(chart, input.lane, active, judge, TimeUs(delta), input.time)
             }
         }
     }
@@ -422,6 +450,56 @@ fn push_early_bad_long_start_mute(
         && let Some(sound_id) = chart.long_notes.get(active.pair_index).and_then(|pair| pair.sound)
     {
         outcome.keysound_volumes.push((sound_id, 0.0));
+    }
+}
+
+fn finalize_long_release(
+    chart: &PlayableChart,
+    lane: Lane,
+    active: ActiveLongNote,
+    judge: Judge,
+    delta: TimeUs,
+    time: TimeUs,
+) -> JudgeOutcome {
+    let mut outcome = match active.mode {
+        LongNoteMode::Ln => JudgeOutcome {
+            events: vec![ln_final_event(lane, active, judge, delta, time)],
+            keysounds: vec![KeySoundEvent { note_id: active.end.end_note_id, time }],
+            consumed_input: true,
+            ..Default::default()
+        },
+        LongNoteMode::Cn | LongNoteMode::Hcn => JudgeOutcome {
+            events: vec![JudgementEvent {
+                note_id: Some(active.end.end_note_id),
+                lane,
+                judge,
+                side: side_from_delta(delta.0),
+                delta,
+                time,
+                affects_score: true,
+            }],
+            keysounds: vec![KeySoundEvent { note_id: active.end.end_note_id, time }],
+            consumed_input: true,
+            ..Default::default()
+        },
+    };
+    if active.mode != LongNoteMode::Hcn {
+        push_early_bad_long_start_mute(chart, active, judge, delta, &mut outcome);
+    }
+    outcome
+}
+
+fn append_outcome(target: &mut JudgeOutcome, mut source: JudgeOutcome) {
+    target.events.append(&mut source.events);
+    target.keysounds.append(&mut source.keysounds);
+    target.keysound_volumes.append(&mut source.keysound_volumes);
+    target.consumed_input |= source.consumed_input;
+}
+
+fn active_scored_note_id(active: ActiveLongNote) -> NoteId {
+    match active.mode {
+        LongNoteMode::Ln => active.start_note_id,
+        LongNoteMode::Cn | LongNoteMode::Hcn => active.end.end_note_id,
     }
 }
 
@@ -748,7 +826,7 @@ fn in_bad_range(delta_us: i64, windows: JudgeWindow) -> bool {
 }
 
 fn bad_judge_vanish_for_keymode_and_rule_mode(key_mode: KeyMode, rule_mode: RuleMode) -> bool {
-    !(rule_mode == RuleMode::Beatoraja && key_mode == KeyMode::K9)
+    !(matches!(rule_mode, RuleMode::Beatoraja | RuleMode::Dx) && key_mode == KeyMode::K9)
 }
 
 fn side_from_delta(delta_us: i64) -> TimingSide {
@@ -780,6 +858,16 @@ fn make_active_long(
             end_time: pair.end_time,
         },
         started_at,
+        pending_release: None,
+    })
+}
+
+fn missed_charge_end_for_start(chart: &PlayableChart, start_note_id: NoteId) -> Option<NoteId> {
+    chart.long_notes.iter().find_map(|pair| {
+        let mode = pair.mode.unwrap_or(chart.metadata.long_note_mode);
+        (pair.start_note_id == start_note_id
+            && matches!(mode, LongNoteMode::Cn | LongNoteMode::Hcn))
+        .then_some(pair.end_note_id)
     })
 }
 
@@ -1180,6 +1268,27 @@ mod tests {
     }
 
     #[test]
+    fn dx_9key_bad_does_not_consume_and_can_be_rejudged() {
+        let chart = chart_with_tap(TimeUs(1_000_000));
+        let mut engine = JudgeEngine::new_with_window_set_algorithm_and_keymode(
+            crate::judge::window::dx_pop_judge_windows(),
+            RuleMode::Dx,
+            JudgeAlgorithm::Combo,
+            KeyMode::K9,
+        );
+
+        let bad = engine.process_input(&chart, press_at(TimeUs(900_000)));
+        assert_eq!(bad.events[0].judge, Judge::Bad);
+        assert!(engine.bad_attempted_notes.contains(&NoteId(1)));
+        assert_eq!(engine.judged_notes.get(&NoteId(1)), None);
+
+        let pgreat = engine.process_input(&chart, press_at(TimeUs(1_000_000)));
+        assert_eq!(pgreat.events[0].judge, Judge::PGreat);
+        assert!(!engine.bad_attempted_notes.contains(&NoteId(1)));
+        assert_eq!(engine.judged_notes.get(&NoteId(1)), Some(&Judge::PGreat));
+    }
+
+    #[test]
     fn combo_candidate_prefers_later_combo_note_over_slow_bad() {
         let chart = chart_with_two_taps(TimeUs(1_000_000), TimeUs(1_100_000));
         let mut engine = JudgeEngine::new(windows());
@@ -1286,6 +1395,30 @@ mod tests {
     }
 
     #[test]
+    fn dx_9key_multi_bad_does_not_consume_the_bad_note() {
+        let chart = chart_with_two_taps(TimeUs(1_000_000), TimeUs(1_050_000));
+        let mut engine = JudgeEngine::new_with_window_set_algorithm_and_keymode(
+            crate::judge::window::dx_pop_judge_windows(),
+            RuleMode::Dx,
+            JudgeAlgorithm::Combo,
+            KeyMode::K9,
+        );
+
+        let outcome = engine.process_input(&chart, press_at(TimeUs(1_100_000)));
+
+        assert_eq!(outcome.events.len(), 2);
+        assert_eq!(outcome.events[0].note_id, Some(NoteId(1)));
+        assert_eq!(outcome.events[0].judge, Judge::Bad);
+        assert!(engine.bad_attempted_notes.contains(&NoteId(1)));
+        assert_eq!(engine.judged_notes.get(&NoteId(1)), None);
+        assert_eq!(engine.judged_notes.get(&NoteId(2)), Some(&Judge::Great));
+
+        let missed = engine.process_misses(&chart, TimeUs(1_100_001));
+        assert!(missed.events.is_empty());
+        assert_eq!(engine.judged_notes.get(&NoteId(1)), Some(&Judge::Poor));
+    }
+
+    #[test]
     fn beatoraja_mode_does_not_add_lr2oraja_multi_bad() {
         let chart = chart_with_two_taps(TimeUs(1_000_000), TimeUs(1_090_000));
         let mut engine = JudgeEngine::new_with_rule_mode(
@@ -1354,6 +1487,96 @@ mod tests {
 
         assert_eq!(press.events[0].judge, Judge::PGreat);
         assert_eq!(release.events[0].judge, Judge::Great);
+    }
+
+    #[test]
+    fn dx_9key_ln_early_bad_release_can_be_cancelled_during_margin() {
+        let chart = chart_with_long_start(TimeUs(1_000_000), TimeUs(2_000_000));
+        let mut engine = JudgeEngine::new_with_window_set_algorithm_and_keymode(
+            crate::judge::window::dx_pop_judge_windows(),
+            RuleMode::Dx,
+            JudgeAlgorithm::Combo,
+            KeyMode::K9,
+        );
+
+        let press = engine.process_input(&chart, press_at(TimeUs(1_000_000)));
+        assert_eq!(press.events[0].judge, Judge::PGreat);
+
+        let release = engine.process_input(&chart, release_at(TimeUs(1_750_000)));
+        assert!(release.events.is_empty());
+        assert!(
+            engine.lanes[Lane::Key1.index()]
+                .active_long
+                .is_some_and(|active| active.pending_release.is_some())
+        );
+
+        let before_margin = engine.process_misses(&chart, TimeUs(1_900_000));
+        assert!(before_margin.events.is_empty());
+        let repress = engine.process_input(&chart, press_at(TimeUs(1_940_000)));
+        assert!(repress.events.is_empty());
+        assert!(repress.consumed_input);
+
+        let end = engine.process_misses(&chart, TimeUs(2_000_001));
+        assert_eq!(end.events.len(), 1);
+        assert_eq!(end.events[0].note_id, Some(NoteId(1)));
+        assert_eq!(end.events[0].judge, Judge::PGreat);
+    }
+
+    #[test]
+    fn dx_9key_cn_early_bad_release_finalizes_after_margin() {
+        let mut chart = chart_with_long_start(TimeUs(1_000_000), TimeUs(2_000_000));
+        chart.long_notes[0].mode = Some(LongNoteMode::Cn);
+        let mut engine = JudgeEngine::new_with_window_set_algorithm_and_keymode(
+            crate::judge::window::dx_pop_judge_windows(),
+            RuleMode::Dx,
+            JudgeAlgorithm::Combo,
+            KeyMode::K9,
+        );
+
+        engine.process_input(&chart, press_at(TimeUs(1_000_000)));
+        let release = engine.process_input(&chart, release_at(TimeUs(1_750_000)));
+        assert!(release.events.is_empty());
+
+        let finalized = engine.process_misses(&chart, TimeUs(1_950_000));
+        assert_eq!(finalized.events.len(), 1);
+        assert_eq!(finalized.events[0].note_id, Some(NoteId(2)));
+        assert_eq!(finalized.events[0].judge, Judge::Bad);
+        assert_eq!(engine.judged_notes.get(&NoteId(2)), Some(&Judge::Bad));
+    }
+
+    #[test]
+    fn missed_cn_head_marks_both_head_and_tail_poor() {
+        let mut chart = chart_with_long_start(TimeUs(1_000_000), TimeUs(2_000_000));
+        chart.long_notes[0].mode = Some(LongNoteMode::Cn);
+        let mut engine = JudgeEngine::new(windows());
+
+        let missed = engine.process_misses(&chart, TimeUs(1_120_001));
+
+        assert_eq!(missed.events.len(), 2);
+        assert_eq!(missed.events[0].note_id, Some(NoteId(1)));
+        assert_eq!(missed.events[1].note_id, Some(NoteId(2)));
+        assert!(missed.events.iter().all(|event| event.judge == Judge::Poor));
+        assert_eq!(engine.judged_notes.get(&NoteId(1)), Some(&Judge::Poor));
+        assert_eq!(engine.judged_notes.get(&NoteId(2)), Some(&Judge::Poor));
+    }
+
+    #[test]
+    fn held_cn_tail_miss_uses_normal_note_bad_window() {
+        let mut window_set = JudgeWindows::uniform(windows());
+        window_set.long_note_end =
+            JudgeWindow::symmetric(120_000, 160_000, 200_000, 220_000, 0, 0, 16_000);
+        let mut chart = chart_with_long_start(TimeUs(1_000_000), TimeUs(2_000_000));
+        chart.long_notes[0].mode = Some(LongNoteMode::Cn);
+        let mut engine = JudgeEngine::new_with_window_set(window_set, RuleMode::Beatoraja);
+
+        engine.process_input(&chart, press_at(TimeUs(1_000_000)));
+        let inside_note_bad = engine.process_misses(&chart, TimeUs(2_120_000));
+        assert!(inside_note_bad.events.is_empty());
+        let missed = engine.process_misses(&chart, TimeUs(2_120_001));
+        assert_eq!(missed.events.len(), 1);
+        assert_eq!(missed.events[0].note_id, Some(NoteId(2)));
+        assert_eq!(missed.events[0].judge, Judge::Poor);
+        assert_eq!(engine.judged_notes.get(&NoteId(2)), Some(&Judge::Poor));
     }
 
     #[test]

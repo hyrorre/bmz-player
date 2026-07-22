@@ -31,42 +31,61 @@ interface PlayerDetail {
 
 const route = useRoute()
 const playerId = computed(() => String(route.params.id ?? ''))
+const localePath = useLocalePath()
+const { t } = useI18n()
+const { formatDateTime } = useLocaleFormat()
+const { translateApiError } = useApiError()
 const { data, pending, error } = await useFetch<PlayerDetail>(
   () => `/api/v1/players/${playerId.value}`,
 )
+const errorDescription = computed(() =>
+  error.value ? translateApiError(error.value, 'errors.playerLoadFailed') : '',
+)
+useSeoMeta({ title: () => data.value?.player.display_name ?? t('players.player') })
 </script>
 
 <template>
   <main>
     <section class="mx-auto w-full max-w-4xl px-5 py-10">
-      <UAlert v-if="error" color="error" :description="error.message" />
-      <p v-else-if="pending" class="text-sm text-neutral-400">読み込み中...</p>
+      <UAlert v-if="error" color="error" :description="errorDescription" />
+      <p v-else-if="pending" class="text-sm text-neutral-400">{{ t('common.loading') }}</p>
       <template v-else-if="data">
         <div class="mb-8">
           <p class="mb-2 text-sm font-medium text-primary-300">
-            <NuxtLink to="/charts" class="hover:underline">譜面一覧</NuxtLink>
+            <NuxtLink :to="localePath('/charts')" class="hover:underline">{{
+              t('charts.title')
+            }}</NuxtLink>
           </p>
           <h1 class="text-3xl font-semibold">{{ data.player.display_name }}</h1>
           <p v-if="data.player.bio" class="mt-2 whitespace-pre-line text-sm text-neutral-300">
             {{ data.player.bio }}
           </p>
+          <UButton
+            class="mt-4"
+            color="neutral"
+            icon="i-lucide-calendar-days"
+            :to="{ path: localePath('/daily'), query: { player: data.player.id, mode: 'all' } }"
+            variant="subtle"
+          >
+            {{ t('nav.daily') }}
+          </UButton>
         </div>
 
-        <h2 class="mb-3 text-lg font-medium">ベストスコア</h2>
+        <h2 class="mb-3 text-lg font-medium">{{ t('players.bestScores') }}</h2>
         <p v-if="!data.best_scores.length" class="text-sm text-neutral-400">
-          まだスコアがありません。
+          {{ t('players.noScoresYet') }}
         </p>
         <div v-else class="overflow-x-auto rounded-lg border border-neutral-800">
           <table class="w-full text-sm">
             <thead class="bg-neutral-900 text-left text-neutral-300">
               <tr>
-                <th class="px-3 py-2">譜面</th>
+                <th class="px-3 py-2">{{ t('table.chart') }}</th>
                 <th class="px-3 py-2 text-right">EX</th>
-                <th class="px-3 py-2">クリア</th>
+                <th class="px-3 py-2">{{ t('table.clear') }}</th>
                 <th class="px-3 py-2 text-right">COMBO</th>
                 <th class="px-3 py-2 text-right">BP</th>
                 <th class="px-3 py-2">GAUGE / LN</th>
-                <th class="px-3 py-2">日時</th>
+                <th class="px-3 py-2">{{ t('table.date') }}</th>
               </tr>
             </thead>
             <tbody>
@@ -77,14 +96,14 @@ const { data, pending, error } = await useFetch<PlayerDetail>(
               >
                 <td class="max-w-64 px-3 py-2">
                   <NuxtLink
-                    :to="`/charts/${score.chart_sha256}`"
+                    :to="localePath(`/charts/${score.chart_sha256}`)"
                     class="block truncate hover:underline"
                   >
                     {{ score.chart?.title ?? score.chart_sha256.slice(0, 12) }}
                   </NuxtLink>
                 </td>
                 <td class="px-3 py-2 text-right font-medium">
-                  <NuxtLink :to="`/scores/${score.score_id}`" class="hover:underline">
+                  <NuxtLink :to="localePath(`/scores/${score.score_id}`)" class="hover:underline">
                     {{ score.ex_score }}
                   </NuxtLink>
                 </td>
@@ -95,7 +114,7 @@ const { data, pending, error } = await useFetch<PlayerDetail>(
                   {{ score.gauge }} / {{ score.ln_policy }} / {{ score.rule_mode }}
                 </td>
                 <td class="px-3 py-2 text-neutral-400">
-                  {{ new Date(score.played_at ?? score.server_received_at).toLocaleString() }}
+                  {{ formatDateTime(score.played_at ?? score.server_received_at) }}
                 </td>
               </tr>
             </tbody>

@@ -2,23 +2,24 @@ use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::mpsc::{self, Receiver};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result};
-use bmz_audio::engine::AudioEngine;
 use bmz_audio::ffmpeg_loader::FfmpegSampleLoader;
 use bmz_audio::loader::SampleLoader;
+use bmz_audio::loudness::analyze_preview_loudness;
 use bmz_audio::sample::DecodedSample;
-use bmz_chart::model::{BgaAssetId, PlayableChart};
+use bmz_chart::model::{BgaAssetId, BgaAssetRef, PlayableChart};
 use bmz_core::clear::{ClearType, GaugeType};
-use bmz_core::input::InputDeviceKind;
-use bmz_core::lane::{KeyMode, Lane};
+use bmz_core::input::{InputDeviceKind, InputKind, ScratchDirection};
+use bmz_core::lane::{KeyMode, LANE_COUNT, Lane};
 use bmz_core::time::TimeUs;
-use bmz_gameplay::input::backend::{DeviceId, PhysicalControl};
+use bmz_gameplay::input::backend::{DeviceId, DeviceInputEvent, InputBackend, PhysicalControl};
+use bmz_gameplay::input::binding::LaneBinding;
 use bmz_gameplay::input::system::last_input_collection_diagnostics;
 use bmz_gameplay::result::PlayResult;
 use bmz_gameplay::score::{JudgeCounts, ScoreState};
@@ -32,12 +33,14 @@ use bmz_render::renderer::{
     PreparedTexture, RenderFrameTimings, RenderSurfaceStatus, Renderer, SurfaceSize,
 };
 use bmz_render::scene::{
-    AppSceneSnapshot, PlayerStatsSnapshot, ResultSnapshot, SelectChartDistributionSecond,
+    AppSceneSnapshot, CourseResultSkinSnapshot, CourseStageResultSkinSnapshot,
+    DailyPlayerStatsSnapshot, PlayerStatsSnapshot, ResultSnapshot, SelectChartDistributionSecond,
     SelectRowSnapshot, SelectSnapshot,
 };
 use bmz_render::skin::{SkinImageSize, SkinTextureId};
 use bmz_render::snapshot::{
     CourseStageMarker, DisplayJudgeCounts, FastSlowJudgeCounts, OverlaySnapshot, RenderSnapshot,
+    SkinLogicalInputSnapshot,
 };
 use bmz_video::VideoBgaDecoder;
 use winit::application::ApplicationHandler;
@@ -62,7 +65,10 @@ use crate::cli::{
     AUTOPLAY_ON_START_ARG, AppOptions, BOOT_RESULT_SAMPLE_ARG, SMOKE_EXIT_AFTER_FRAMES_ARG,
     SMOKE_EXIT_AFTER_RESULT_FRAMES_ARG, SMOKE_EXIT_ON_RESULT_ARG, SMOKE_SCREENSHOT_ARG,
 };
-use crate::config::app_config::{AppConfig, InputBackendKind, ObsConfig, PathEntry, WindowMode};
+use crate::config::app_config::{
+    AppConfig, GamepadBackendKind, GlobalInputConfig, InputBackendKind, ObsConfig, PathEntry,
+    WindowMode,
+};
 use crate::config::key_config::{
     KeyBindingSlot, KeyBindingTarget, apply_play_binding, clear_play_binding,
     is_scratch_down_control, is_scratch_up_control,
@@ -71,10 +77,11 @@ use crate::config::load::load_profile_config;
 use crate::config::play::{TARGET_GREEN_NUMBER_MAX, TARGET_GREEN_NUMBER_MIN};
 use crate::config::profile_config::{
     AssistOptionConfig, BgaExpandConfig, BgaModeConfig, BottomShiftableGaugeConfig,
-    DoubleOptionConfig, GaugeAutoShiftConfig, GaugeTypeConfig, HispeedModeConfig, HsFixConfig,
-    InputActionConfig, JudgeAlgorithmConfig, LaneConfig, ProfileConfig, ProfileInputConfig,
-    RandomOptionConfig, ScratchDirectionConfig, SelectInputModeConfig, TargetOptionConfig,
-    replay_slot_rule_indices,
+    DoubleOptionConfig, GaugeAutoShiftConfig, GaugeTypeConfig, HispeedDirectionConfig,
+    HispeedModeConfig, HsFixConfig, InputActionConfig, JudgeAlgorithmConfig, LaneConfig,
+    LaneEffectConfig, LaneViewConfig, ProfileConfig, ProfileInputConfig, RandomOptionConfig,
+    ScratchDirectionConfig, SelectInputModeConfig, TargetOptionConfig, default_hispeed_step_fhs,
+    default_hispeed_step_nhs, normalize_hispeed_step, replay_slot_rule_indices,
 };
 use crate::config::save::{save_app_config, save_profile_config};
 use crate::config::settings_registry::SettingsEntryId;
@@ -83,8 +90,13 @@ use crate::generated_preview::{
     fallback_preview_start_ms, generated_preview_cache_key, parse_generated_preview_cache_key,
     render_generated_preview_for_chart,
 };
+use crate::i18n::{FluentArgs, Localizer};
 use crate::input::shared::SharedInputBackend;
-use crate::input::winit::physical_key_to_control;
+use crate::input::winit::{
+    W_KEYBOARD_DEVICE_ID, key_event_to_device_input, physical_key_to_control,
+    physical_key_to_device_input,
+};
+use crate::logging::LogBuffer;
 use crate::practice_ui::PracticePanelContext;
 use crate::screens::course_session::{ActiveCourseSession, CourseEntryResult, CourseResultSummary};
 use crate::screens::key_config_edit::KeyConfigEditSession;
@@ -92,8 +104,8 @@ use crate::screens::play_finish::FinishedPlaySession;
 use crate::screens::play_loop::{
     PlayEndingSkinTimers, advance_running_play_session, refresh_play_ending_snapshot,
 };
+use crate::screens::play_session::AppliedArrange;
 use crate::screens::play_session::build_practice_prepared_from_preloaded;
-use crate::screens::play_session::{AppliedArrange, PreloadedPlaySession};
 use crate::screens::play_snapshot::{
     BgaFrameCatalog, apply_fast_slow_display_filter, bga_texture_id,
     build_render_snapshot_with_target_and_bga_frames_cached, display_bga_frame,
@@ -111,29 +123,31 @@ use crate::screens::practice::{
 use crate::screens::result_model::{ResultFastSlowJudgeCounts, ResultSummary};
 use crate::screens::select_model::{
     COURSE_ROOT_PATH, DifficultyTableText, FAVORITE_CHART_PATH, FAVORITE_ROOT_PATH,
-    FAVORITE_SONG_PATH, MAX_SEARCH_HISTORY, SEARCH_PATH_PREFIX, SelectExecutableKind,
-    SelectFolderSummary, SelectItem, TABLE_ROOT_PATH, TablePath, apply_collection_flags,
-    course_root_item, difficulty_table_text_for_chart_with_active_sources, favorite_root_item,
-    favorite_root_items, favorite_song_representatives_for_folder, load_select_items_for_courses,
-    load_select_items_for_favorite_charts, load_select_items_for_favorite_song,
-    load_select_items_for_favorite_songs, load_select_items_for_search_for_rule_mode_with_filters,
+    FAVORITE_SONG_PATH, MAX_SEARCH_HISTORY, SEARCH_PATH_PREFIX, SelectChartRow,
+    SelectExecutableKind, SelectFolderSummary, SelectItem, TABLE_ROOT_PATH, TablePath,
+    apply_collection_flags, course_root_item, difficulty_table_text_for_chart_with_active_sources,
+    favorite_root_item, favorite_root_items, favorite_song_representatives_for_folder,
+    load_select_items_for_courses, load_select_items_for_favorite_charts,
+    load_select_items_for_favorite_song, load_select_items_for_favorite_songs,
+    load_select_items_for_search_for_rule_mode_with_filters,
     load_select_items_in_folder_for_rule_mode_with_filters,
     load_select_items_in_table_level_for_rule_mode, parse_favorite_song_detail_path,
     parse_same_folder_path, parse_search_query, parse_table_path, random_select_item_from_items,
-    root_folder_items, same_folder_path, search_history_folder_items,
+    root_folder_items, same_folder_path, search_history_folder_items_for_locale,
     select_folder_summary_for_rule_mode, song_scan_path_from_context,
     table_folder_items_for_active_sources, table_level_folder_items, table_source_url_from_context,
 };
 use crate::screens::settings_edit::{SettingsBindings, SettingsEditSession, adjust_settings_draft};
 use crate::screens::settings_model::{
-    in_settings_stack, load_settings_items, settings_breadcrumb, settings_root_item,
+    in_settings_stack, load_settings_items_for_locale, settings_breadcrumb_for_locale,
+    settings_root_item_for_locale,
 };
 use crate::select_options::{ArrangeOption, AssistOption, DoubleOption, HsFixOption, TargetOption};
 use crate::skin_loader::{
     DecodedSkin, PreparedSource, SharedSkinDocumentCache, SharedSkinFontCache,
     SharedSkinGpuTextureCache, SharedSkinSourceAssetCache, SkinDocumentCache, SkinFontCache,
     SkinFontCacheKey, SkinGpuTextureCache, SkinKind, SkinSourceAssetCache, UploadedSkin,
-    decode_beatoraja_skin_with_options,
+    decode_beatoraja_skin_with_options_and_runtime_state,
     decode_beatoraja_skin_with_options_and_runtime_state_and_caches,
     default_play_skin_document_path_from_paths, default_skin_document_path_from_paths,
     enabled_options_from_selections, install_decoded_font, install_decoded_skin,
@@ -141,15 +155,20 @@ use crate::skin_loader::{
     load_default_skin_into_renderer_from_paths, play_skin_selection_for, set_decoded_skin_context,
     upload_decoded_skin_with_texture_cache,
 };
+use crate::song_download::{
+    ChartDownloadRequest, ChartDownloadResult, MissingChartAction, choose_missing_chart_action,
+    download_chart, open_browser_urls,
+};
 use crate::songs_cmd::scan_songs_with_progress;
 use crate::storage::collection_db::FavoriteHints;
+use crate::storage::common::hash_to_hex;
 use crate::storage::difficulty_table_db::DifficultyTableRecord;
-use crate::storage::library_db::{ChartDistributionSecond, LibraryDatabase};
+use crate::storage::library_db::{ChartDistributionSecond, ChartListItem, LibraryDatabase};
 use crate::storage::migration::{migrate_library_db, migrate_network_db, migrate_score_db};
 use crate::storage::play_result::StoredPlayResult;
 use crate::storage::replay::load_replay_for_chart_policy_and_double_option;
 use crate::storage::scan::{ScanProgress, ScanReport};
-use crate::storage::score_db::{PlayerStats, ScoreDatabase};
+use crate::storage::score_db::{DailyPlayerStats, PlayerStats, ScoreDatabase};
 use crate::storage::score_import::{ScoreImportRequest, import_scores};
 use crate::ui::{
     DebugInfo, EguiLayer, EguiRunContext, SceneSkinDefs, SkinCandidate, SkinCandidateOrigin,
@@ -157,10 +176,14 @@ use crate::ui::{
     UpdateDialogAction,
 };
 use crate::update::{DownloadedUpdate, UpdateAssetKind, UpdateCandidate};
+use crate::window_config::select_monitor;
 use bmz_render::skin::{
-    DestinationListEntry, SkinAnimationDef, SkinClickHit, SkinClickTarget, SkinContext,
-    SkinDestinationDef, SkinDocument, SkinDocumentRenderExt, SkinDocumentTexture, SkinDstEntry,
-    SkinManifest, SkinSliderHit,
+    DestinationListEntry, SKIN_EVENT_DAILY_STATISTICS_RESET, SKIN_EVENT_RESULT_PANEL_GRAPH,
+    SKIN_EVENT_RESULT_PANEL_IR, SKIN_OPTION_BMZ_DOUBLE_PLAY, SKIN_OPTION_BMZ_KEY_MODE_BASE,
+    SKIN_OPTION_BMZ_KEY_MODE_COUNT, SKIN_OPTION_BMZ_NO_SCRATCH, SKIN_OPTION_BMZ_SINGLE_PLAY,
+    SKIN_REF_BMZ_ACTIVE_LANE_COUNT, SKIN_REF_BMZ_KEY_MODE, SkinAnimationDef, SkinClickHit,
+    SkinClickTarget, SkinContext, SkinDestinationDef, SkinDocument, SkinDocumentRenderExt,
+    SkinDocumentTexture, SkinDstEntry, SkinManifest, SkinSliderHit,
 };
 const SAMPLE_PLAYABLE_TITLE: &str = "BMZ Sample Playable";
 
@@ -174,6 +197,13 @@ pub async fn run() -> Result<()> {
 }
 
 pub async fn run_with_options(options: AppOptions) -> Result<()> {
+    run_with_options_and_log_buffer(options, LogBuffer::default()).await
+}
+
+pub async fn run_with_options_and_log_buffer(
+    options: AppOptions,
+    log_buffer: LogBuffer,
+) -> Result<()> {
     let mut boot = bootstrap::bootstrap()?;
 
     fetch_startup_difficulty_tables(&mut boot).await;
@@ -181,7 +211,9 @@ pub async fn run_with_options(options: AppOptions) -> Result<()> {
     let event_loop = EventLoop::<AppUserEvent>::with_user_event()
         .build()
         .context("failed to create event loop")?;
-    event_loop.set_control_flow(ControlFlow::Poll);
+    // 描画間隔は `FramePacer` の deadline を `WaitUntil` へ渡して制御する。
+    // event loop thread 自体を sleep させず、フレーム待機中も入力イベントを処理する。
+    event_loop.set_control_flow(ControlFlow::Wait);
     let event_proxy = event_loop.create_proxy();
 
     // Ctrl-C(SIGINT)で event loop を正常終了させ、cpal/ASIO ストリームの Drop を
@@ -199,9 +231,17 @@ pub async fn run_with_options(options: AppOptions) -> Result<()> {
 
     spawn_ir_sync_worker(&boot);
 
-    let mut app = WinitApp::new(boot, options, None, None, shutdown_requested, event_proxy)?;
+    let mut app = Box::new(WinitApp::new(
+        boot,
+        options,
+        None,
+        None,
+        shutdown_requested,
+        event_proxy,
+        log_buffer,
+    )?);
     tracing::info!("starting winit event loop");
-    event_loop.run_app(&mut app).context("winit event loop failed")
+    event_loop.run_app(app.as_mut()).context("winit event loop failed")
 }
 
 /// IR スコアジョブをバックグラウンドで定期送信する。
@@ -272,10 +312,13 @@ async fn fetch_startup_difficulty_tables(boot: &mut bootstrap::BootstrappedApp) 
     use std::time::{SystemTime, UNIX_EPOCH};
     let now = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0);
 
-    let fetched_source_urls: HashSet<String> = match boot.library_db.list_difficulty_tables() {
-        Ok(tables) => tables.into_iter().map(|table| table.source_url).collect(),
+    let fetched_source_urls: HashSet<String> = match boot
+        .library_db
+        .list_difficulty_table_sources_with_current_download_metadata()
+    {
+        Ok(source_urls) => source_urls.into_iter().collect(),
         Err(error) => {
-            tracing::warn!(%error, "failed to list fetched difficulty tables");
+            tracing::warn!(%error, "failed to list difficulty tables with current download metadata");
             HashSet::new()
         }
     };
@@ -362,13 +405,97 @@ impl UpdatePrompt {
     }
 }
 
-/// 手動スクリーンショット後に左上へ短時間表示するトースト。
-struct ScreenshotToast {
+/// 左上へ短時間表示するトースト。
+struct LeftOverlayToast {
     message: String,
     shown_at: Instant,
 }
 
-const SCREENSHOT_TOAST_DURATION: Duration = Duration::from_secs(2);
+const LEFT_OVERLAY_TOAST_DURATION: Duration = Duration::from_secs(2);
+
+/// beatoraja の `Gdx.graphics.getFramesPerSecond()` と同様、1 秒ごとに
+/// 確定したフレーム数を skin の NUMBER_CURRENT_FPS (20) と右上表示へ渡す。
+struct SkinFpsCounter {
+    window_started_at: Instant,
+    frames: u32,
+    current: u32,
+}
+
+impl SkinFpsCounter {
+    fn new(now: Instant) -> Self {
+        Self { window_started_at: now, frames: 0, current: 0 }
+    }
+
+    fn record_frame(&mut self, now: Instant) {
+        self.frames = self.frames.saturating_add(1);
+        if now.duration_since(self.window_started_at) >= Duration::from_secs(1) {
+            self.current = self.frames;
+            self.frames = 0;
+            self.window_started_at = now;
+        }
+    }
+
+    fn current(&self) -> u32 {
+        self.current
+    }
+}
+
+#[derive(Debug, Default)]
+struct FramePacer {
+    next_frame_at: Option<Instant>,
+    fps: Option<u32>,
+}
+
+impl FramePacer {
+    fn delay(&self, now: Instant, fps: u32, skip_wait: bool) -> Duration {
+        if skip_wait || fps == 0 || self.fps != Some(fps) {
+            return Duration::ZERO;
+        }
+        self.next_frame_at
+            .and_then(|deadline| deadline.checked_duration_since(now))
+            .unwrap_or_default()
+    }
+
+    fn record_frame_started(&mut self, now: Instant, fps: u32, rebase: bool) {
+        if fps == 0 {
+            self.next_frame_at = None;
+            self.fps = None;
+            return;
+        }
+
+        let budget = frame_budget(fps);
+        let fps_changed = self.fps != Some(fps);
+        let next_frame_at = if rebase || fps_changed {
+            now + budget
+        } else if let Some(previous_deadline) = self.next_frame_at {
+            let scheduled = previous_deadline + budget;
+            if scheduled > now { scheduled } else { now + budget }
+        } else {
+            now + budget
+        };
+        self.next_frame_at = Some(next_frame_at);
+        self.fps = Some(fps);
+    }
+
+    fn next_deadline(&self, now: Instant, fps: u32, skip_wait: bool) -> Option<Instant> {
+        let delay = self.delay(now, fps, skip_wait);
+        if delay.is_zero() { None } else { now.checked_add(delay) }
+    }
+}
+
+fn frame_budget(fps: u32) -> Duration {
+    debug_assert!(fps > 0);
+    Duration::from_secs_f64(1.0 / f64::from(fps)).max(Duration::from_nanos(1))
+}
+
+fn fps_overlay_text(show_fps: bool, current_fps: u32, text: Localizer) -> String {
+    if !show_fps || current_fps == 0 {
+        return String::new();
+    }
+    let mut args = FluentArgs::new();
+    args.set("fps", i64::from(current_fps));
+    text.format("fps-overlay", &args)
+}
 
 struct WinitApp {
     boot: BootstrappedApp,
@@ -376,8 +503,20 @@ struct WinitApp {
     active_play: Option<StartedInputPlaySession>,
     /// コースプレイ中のセッション。単曲プレイ時は None。
     active_course: Option<ActiveCourseSession>,
+    /// 選曲画面の F10 で開始したフォルダ内 Autoplay。
+    autoplay_folder: Option<AutoplayFolderSession>,
     /// コース全体完了時のリザルト。リザルト画面から抜けるまで保持する。
     finished_course: Option<CourseResultSummary>,
+    /// `finished_course` から Result skin 用に集約した結果。
+    ///
+    /// コースの graph は全ステージ分を連結するため構築コストが高い。コース完了時に
+    /// 一度だけ生成し、リザルト表示中はこの値を参照する。
+    finished_course_skin_summary: Option<ResultSummary>,
+    /// 完了したコースの canonical hash。IR ranking の起動や replay slot 保存で
+    /// course 定義を DB から再走査しないため、identity 解決時に保持する。
+    finished_course_hash: Option<String>,
+    /// IR 無効時も course ranking task の起動判定を毎フレーム繰り返さないための印。
+    finished_course_ir_attempted: bool,
     /// プレイ終了でリザルトへ移った後、曲の余韻を鳴らし切るために保持する音声出力。
     /// ドレインが完了するか、選曲復帰・次プレイ開始で解放される。
     draining_audio: Option<AppAudioOutput>,
@@ -391,6 +530,9 @@ struct WinitApp {
     /// 正常終了させ、cpal/ASIO ストリームの Drop(停止・後処理)を確実に走らせる。
     shutdown_requested: Arc<AtomicBool>,
     finished_play: Option<FinishedPlaySession>,
+    /// Result skin の favorite_chart (image ref 90) に渡す現在譜面の状態。
+    /// BMZ は beatoraja の invisible を持たないため false/true の2状態だけを使う。
+    result_favorite_chart: bool,
     /// リザルト画面の IR 送信・ランキング表示状態。
     /// 通常プレイでは play ending 中に早期起動し、Result 画面まで保持する。
     result_ir: Option<crate::screens::result_ir::ResultIrState>,
@@ -409,6 +551,8 @@ struct WinitApp {
     /// 既に裏で完了している譜面/音源ロードを main で再度同期実行するのを避ける。
     preloaded_play_session: Option<PreloadedInputPlaySession>,
     play_preload_generation: u64,
+    /// 同曲リトライ用に残すキー音 / 静止画 BGA / 動画デコーダ。
+    play_media_cache: Option<PlayMediaCache>,
     play_ending: Option<PlayEndingTransition>,
     last_started_chart_id: Option<i64>,
     /// プレイ開始時点の難易度表テキスト (beatoraja TEXT_TABLE1..3)。
@@ -417,6 +561,7 @@ struct WinitApp {
     play_table_text_fallback: String,
     select_items: Vec<SelectItem>,
     select_distribution_cache: RefCell<HashMap<i64, Vec<ChartDistributionSecond>>>,
+    difficulty_tables: Vec<DifficultyTableRecord>,
     table_breadcrumb_cache: RefCell<HashMap<String, TableBreadcrumb>>,
     select_folder_summary_cache: HashMap<String, SelectFolderSummaryCacheEntry>,
     select_folder_summary_tx: mpsc::Sender<SelectFolderSummaryResult>,
@@ -426,11 +571,13 @@ struct WinitApp {
     /// フォルダから出た時にカーソル位置を復元するために使う。長さは `folder_stack` と一致。
     selected_index_stack: Vec<usize>,
     selected_index: usize,
-    renderer: Renderer,
+    renderer: Box<Renderer>,
     skin_catalog: SkinCatalog,
     skin_defs_cache: BTreeMap<String, SceneSkinDefs>,
     pending_table_fetch: Option<Receiver<Result<()>>>,
     pending_song_scan: Option<Receiver<SongScanEvent>>,
+    pending_chart_download: Option<Receiver<Result<ChartDownloadResult>>>,
+    queued_download_scan: Option<(PathBuf, String)>,
     song_scan_progress: Option<ScanProgress>,
     pending_update_check: Option<Receiver<Result<Option<UpdateCandidate>>>>,
     pending_update_check_reports_up_to_date: bool,
@@ -448,7 +595,9 @@ struct WinitApp {
     select_held: bool,
     select_e_action_holds: HashSet<InputActionConfig>,
     pressed_controls: HashSet<String>,
+    pressed_play_inputs: HashSet<(DeviceId, PhysicalControl)>,
     raw_input_pressed_keys: HashSet<PhysicalKey>,
+    window_input_pressed_keys: HashSet<PhysicalKey>,
     arrange_option: ArrangeOption,
     arrange_option_2p: ArrangeOption,
     target_option: TargetOption,
@@ -461,6 +610,9 @@ struct WinitApp {
     select_mode_filter: SelectModeFilter,
     select_sort: SelectSort,
     select_keys: SelectKeyBindings,
+    /// 現在のプレイ譜面の KEY MODE と device-aware lane binding。
+    /// 選曲用 binding と分離し、10K/14K の同名 gamepad control も側別に解決する。
+    play_option_input: Option<PlayOptionInput>,
     select_bar_scroll_direction: i32,
     select_bar_scroll_duration: Duration,
     select_hold_move: Option<SelectMove>,
@@ -477,8 +629,8 @@ struct WinitApp {
     smoke_exit_after_result_frames: Option<u32>,
     smoke_exit_on_result: bool,
     smoke_screenshot_path: Option<PathBuf>,
-    /// 手動スクリーンショット後に左上へ出す一時メッセージ。
-    screenshot_toast: Option<ScreenshotToast>,
+    /// 左上へ出す一時メッセージ。
+    left_overlay_toast: Option<LeftOverlayToast>,
     rendered_frames: u32,
     rendered_result_frames: u32,
     app_started_at: Instant,
@@ -486,11 +638,15 @@ struct WinitApp {
     select_bar_started_at: Instant,
     play_scene_started_at: Instant,
     play_ready_sound_started_at: Option<Instant>,
+    /// READY 前に E1/E2 が最後に押されていた時刻。
+    /// beatoraja と同様、解放後 1 秒間は PRELOAD を維持する。
+    play_ready_last_control_hold_at: Option<Instant>,
     decide_sound_stopped_for_chart_start: bool,
     result_scene_started_at: Instant,
     option_panel_started_at: Instant,
+    option_panel_off_started_at: [Option<Instant>; 6],
     select_option_panel: u8,
-    gilrs: Option<crate::input::gilrs::GilrsBackend>,
+    gamepad: Option<Box<crate::input::gamepad::GamepadBackend>>,
     default_skin_manifest: Option<SkinManifest>,
     /// decode worker (CPU) → upload worker への送信端。
     skin_decode_tx: mpsc::Sender<PendingSkinResult>,
@@ -498,7 +654,7 @@ struct WinitApp {
     /// move するため Option で保持する。
     skin_decode_rx: Option<Receiver<PendingSkinResult>>,
     /// upload worker → main への送信端 (upload worker を spawn する際に clone)。
-    skin_upload_tx: mpsc::Sender<PendingUploadResult>,
+    skin_upload_tx: mpsc::SyncSender<PendingUploadResult>,
     /// upload worker → main の受信端。GPU アップロード済みスキンを取り込む。
     skin_upload_rx: Receiver<PendingUploadResult>,
     /// upload worker を spawn 済みか (surface 接続時に一度だけ起動)。
@@ -519,7 +675,10 @@ struct WinitApp {
     bga_load_chart_id: Option<i64>,
     bga_load_rx: Option<Receiver<PendingBgaImageResult>>,
     bga_load_status: BgaImageLoadStatus,
+    bga_load_completed_assets: u32,
+    bga_load_total_assets: u32,
     bga_preload_frames: BgaFrameCatalog,
+    bga_preload_assets: Option<Vec<BgaAssetRef>>,
     skin_video_sources: HashMap<SkinKind, Vec<ActiveSkinVideoSource>>,
     pending_select_skin: bool,
     pending_decide_skin: bool,
@@ -541,6 +700,8 @@ struct WinitApp {
     /// `system_audio` が `None` の場合や、サウンドセット未指定の場合も `Some` で
     /// 構築されるが id_map が空なので各 play/stop は no-op になる。
     system_sound: Option<crate::system_sound_manager::SystemSoundManager>,
+    /// 現在インストール済みの Result skin が宣言した BGM / SE ランタイム。
+    result_skin_audio: Option<crate::skin_audio::SkinAudioRuntime>,
     /// 選曲画面でESCを長押し中の開始時刻。離されたり画面を抜けると None になる。
     select_exit_hold_started_at: Option<Instant>,
     /// 選曲 `#STAGEFILE` のロード済みキャッシュキー (`folder|file`)。
@@ -559,6 +720,7 @@ struct WinitApp {
     select_preview_source: Option<String>,
     select_preview_playing: bool,
     select_preview_fade: SelectPreviewFade,
+    select_preview_normalization_gain: f32,
     select_preview: Option<SelectChartPreview>,
     select_meta_image_cache: HashMap<String, SelectMetaImageCacheEntry>,
     select_meta_image_tx: mpsc::Sender<SelectMetaImageResult>,
@@ -569,6 +731,11 @@ struct WinitApp {
     select_preview_load_queue: SelectPreviewLoadQueue,
     /// 生成プレビュー worker が CPU を使っている間だけ diagnostics の原因分類に使う。
     select_generated_preview_loading: bool,
+    /// プレイ開始時にロードした `#STAGEFILE` のキャッシュキー。
+    /// Result でも同じ runtime image 100 を使うため、Result 終了まで保持する。
+    play_stagefile_source: Option<String>,
+    play_stagefile_loaded: bool,
+    play_stagefile_size: Option<SkinImageSize>,
     /// プレイ `#BACKBMP` のロード済みキャッシュキー。
     play_backbmp_source: Option<String>,
     play_backbmp_loaded: bool,
@@ -587,18 +754,22 @@ struct WinitApp {
     /// 本体設定 / スキン設定 / デバッグ表示用の egui レイヤ。
     /// ウィンドウ生成時に初期化される。
     egui: Option<EguiLayer>,
+    /// デバッグ表示へ渡す bounded tracing ログバッファ。
+    log_buffer: LogBuffer,
     /// 現在ウィンドウへ適用済みのウィンドウモード。
     /// config 側との差分検出でライブ反映の要否を判定する。
     applied_window_mode: WindowMode,
     /// ウィンドウがフォーカスを持っているか。フレームレート上限の切替に使う。
     focused: bool,
-    /// 直近フレームの開始時刻。フレームレート制限のスリープ量算出に使う。
-    last_frame_at: Option<Instant>,
+    /// フォーカス復帰直後の gamepad poll を状態再同期だけに使う。
+    discard_gamepad_output_until_resynced: bool,
+    /// 次の描画開始 deadline を管理するフレームペーサー。
+    frame_pacer: FramePacer,
     /// Worker から取り込んだスキンを次の redraw で即表示するため、
     /// 1 フレーム分だけ frame pacing sleep をスキップする。
     skip_next_frame_pace: bool,
-    /// RedrawRequested 間隔から平滑化した wgpu 描画 FPS。
-    wgpu_fps: f32,
+    /// skin の NUMBER_CURRENT_FPS (20) と右上表示へ渡す秒単位の確定 FPS。
+    skin_fps: SkinFpsCounter,
     /// 設定画面で編集中の項目。`None` なら一覧操作モード。
     settings_edit: Option<SettingsEditSession>,
     /// キー設定の待ち受け状態。
@@ -612,6 +783,8 @@ struct WinitApp {
     /// リザルト画面で Key7 が現在押されているか。
     result_key7_held: bool,
     result_gauge_graph_type: i32,
+    /// Lua Result スキンの展開パネル (0=非表示、1=IR、2=グラフ)。
+    result_panel: i32,
     deferred_boot: Option<DeferredBoot>,
     /// 選曲画面で楽曲検索の入力モード中か。
     search_mode: bool,
@@ -919,20 +1092,33 @@ fn fmt_profile_ms(total_us: u128, frames: u128) -> String {
     format!("{:.3}", total_us as f64 / frames as f64 / 1000.0)
 }
 
-type PlaySkinSignature = (KeyMode, String, BTreeMap<String, String>, BTreeMap<String, String>);
+type PlaySkinSignature = (
+    KeyMode,
+    String,
+    BTreeMap<String, String>,
+    BTreeMap<String, String>,
+    bmz_skin::LuaLoadRuntimeState,
+);
 type ResultSkinSignature = (
     ResultSkinSlot,
     String,
     BTreeMap<String, String>,
     BTreeMap<String, String>,
-    bool,
-    BTreeMap<i32, i32>,
+    bmz_skin::LuaLoadRuntimeState,
 );
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ResultSkinSlot {
     Normal,
     Course,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ResultSkinClickAction {
+    SetPanel(i32),
+    ToggleFavoriteChart,
+    SaveReplay(u8),
+    ResetDailyStatistics,
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -987,8 +1173,14 @@ struct SelectMetaImageResult {
 
 enum SelectPreviewCacheEntry {
     Loading,
-    Ready(DecodedSample),
+    Ready(PreparedSelectPreview),
     Missing,
+}
+
+#[derive(Clone)]
+struct PreparedSelectPreview {
+    sample: DecodedSample,
+    normalization_gain: f32,
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
@@ -1007,7 +1199,7 @@ enum SelectPreviewFade {
 struct SelectPreviewResult {
     key: String,
     path: Option<PathBuf>,
-    result: std::result::Result<DecodedSample, String>,
+    result: std::result::Result<PreparedSelectPreview, String>,
 }
 
 /// 選曲プレビューの重いロード処理は一度に1件だけ実行する。
@@ -1067,16 +1259,378 @@ struct DecideTransition {
     fadeout_started_at: Option<Instant>,
     cancel: bool,
     snapshot: RenderSnapshot,
+    title_override: Option<DecideTitleOverride>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct DecideTitleOverride {
+    title: String,
+    subtitle: String,
+}
+
+impl DecideTransition {
+    fn snapshot_for_render(&self) -> RenderSnapshot {
+        let mut snapshot = self.snapshot.clone();
+        if let Some(title_override) = &self.title_override {
+            snapshot.title.clone_from(&title_override.title);
+            snapshot.subtitle.clone_from(&title_override.subtitle);
+        }
+        snapshot
+    }
 }
 
 struct PendingPlayStart {
     chart_id: i64,
     options: PlayStartOptions,
+    lane: PendingPlayLaneState,
+    lane_actions: Vec<PendingPlayLaneAction>,
+    visual_input: PendingPlayVisualInput,
+}
+
+impl PendingPlayStart {
+    fn from_snapshot(
+        chart_id: i64,
+        options: PlayStartOptions,
+        snapshot: &RenderSnapshot,
+        profile: &ProfileConfig,
+        key_mode: KeyMode,
+        gamepad_slots: crate::input::gamepad::GamepadSlotMap,
+    ) -> Self {
+        let binding = crate::config::play::lane_binding_for_chart_with_slots(
+            &profile.input,
+            key_mode,
+            gamepad_slots,
+        );
+        let hs_fix = options.hs_fix;
+        Self {
+            chart_id,
+            options,
+            lane: PendingPlayLaneState::from_snapshot(
+                snapshot,
+                profile.lane.target_green_number,
+                hs_fix,
+                profile.lane.hispeed_auto_adjust,
+            ),
+            lane_actions: Vec::new(),
+            visual_input: PendingPlayVisualInput::new(key_mode, binding, snapshot.autoplay),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct PendingPlayLaneState {
+    hispeed: f32,
+    hispeed_mode: HispeedMode,
+    target_green_number: u32,
+    lane_cover: f32,
+    lift: f32,
+    lane_cover_visible: bool,
+    lane_cover_changing: bool,
+    hsfix_base_bpm: f32,
+    hispeed_auto_adjust: bool,
+}
+
+impl PendingPlayLaneState {
+    fn from_snapshot(
+        snapshot: &RenderSnapshot,
+        target_green_number: u32,
+        hs_fix: HsFixOption,
+        hispeed_auto_adjust: bool,
+    ) -> Self {
+        Self {
+            hispeed: snapshot.hispeed,
+            hispeed_mode: if snapshot.hispeed_mode_index == 0 {
+                HispeedMode::Normal
+            } else {
+                HispeedMode::Floating
+            },
+            target_green_number: target_green_number.max(1),
+            lane_cover: snapshot.lane_cover,
+            lift: snapshot.lift,
+            lane_cover_visible: true,
+            lane_cover_changing: snapshot.lane_cover_changing,
+            hsfix_base_bpm: match hs_fix {
+                HsFixOption::Off | HsFixOption::StartBpm => snapshot.now_bpm,
+                HsFixOption::MaxBpm => snapshot.max_bpm,
+                HsFixOption::MainBpm => snapshot.main_bpm,
+                HsFixOption::MinBpm => snapshot.min_bpm,
+            }
+            .max(1.0),
+            hispeed_auto_adjust,
+        }
+    }
+
+    fn active_lane_cover(self) -> f32 {
+        if self.lane_cover_visible {
+            crate::config::play::clamp_lane_cover_for_lift(self.lane_cover, self.lift)
+        } else {
+            0.0
+        }
+    }
+
+    fn refresh_floating_hispeed(&mut self, now_bpm: f32, speed_locked: bool) {
+        if self.hispeed_mode != HispeedMode::Floating || speed_locked {
+            return;
+        }
+        let visible =
+            crate::config::play::visible_lane_fraction(self.active_lane_cover(), self.lift);
+        self.hispeed = crate::screens::play_snapshot::hispeed_for_green_number_values(
+            self.target_green_number.max(1) as f32,
+            visible,
+            now_bpm.max(1.0) as f64,
+            1.0,
+        )
+        .clamp(0.5, 10.0);
+    }
+
+    fn refresh_cover_hispeed(&mut self, now_bpm: f32, speed_locked: bool) {
+        let target_bpm = if self.hispeed_auto_adjust { now_bpm } else { self.hsfix_base_bpm };
+        self.refresh_floating_hispeed(target_bpm, speed_locked);
+    }
+
+    fn current_green_number(self, now_bpm: f32) -> u32 {
+        let duration = crate::screens::play_snapshot::display_duration_ms_for_bpm_hispeed(
+            now_bpm,
+            self.hispeed,
+            self.active_lane_cover(),
+            self.lift,
+            1.0,
+        );
+        green_number_from_display_duration(duration)
+    }
+
+    fn apply_to_snapshot(self, snapshot: &mut RenderSnapshot) {
+        snapshot.hispeed = self.hispeed;
+        snapshot.hispeed_mode_index = match self.hispeed_mode {
+            HispeedMode::Normal => 0,
+            HispeedMode::Floating => 1,
+        };
+        snapshot.target_green_number = self.target_green_number;
+        snapshot.lift = self.lift;
+        snapshot.lane_cover = self.active_lane_cover();
+        snapshot.lane_cover_changing = self.lane_cover_changing;
+        snapshot.note_display_duration_ms =
+            crate::screens::play_snapshot::display_duration_ms_for_bpm_hispeed(
+                snapshot.now_bpm,
+                self.hispeed,
+                snapshot.lane_cover,
+                self.lift,
+                1.0,
+            )
+            .round()
+            .clamp(0.0, i32::MAX as f32) as i32;
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+enum PendingPlayLaneAction {
+    ToggleHispeedMode,
+    Hispeed(HispeedChange),
+    LaneCoverDelta(f32),
+    GreenNumberDelta(i32),
+    ToggleLaneCoverVisibility,
+}
+
+#[derive(Debug, Clone)]
+struct PlayOptionInput {
+    key_mode: KeyMode,
+    binding: LaneBinding,
+    scratch_binding: LaneBinding,
+    action_bindings: Vec<PlayActionBinding>,
+}
+
+#[derive(Debug, Clone)]
+struct PlayActionBinding {
+    device: Option<DeviceId>,
+    control: PhysicalControl,
+    action: InputActionConfig,
+}
+
+impl PlayOptionInput {
+    fn new(
+        key_mode: KeyMode,
+        binding: LaneBinding,
+        profile_input: &ProfileInputConfig,
+        gamepad_slots: crate::input::gamepad::GamepadSlotMap,
+    ) -> Self {
+        let scratch_binding =
+            crate::config::play_input::lane_binding_for_play_option_scratch_with_slots(
+                profile_input,
+                key_mode,
+                gamepad_slots,
+            )
+            .unwrap_or_else(|_| LaneBinding { entries: Vec::new() });
+        let mut action_bindings: Vec<_> = profile_input
+            .ui
+            .bindings
+            .iter()
+            .filter_map(|entry| {
+                let action = entry.action?;
+                let (device, control) = match entry.device.trim().to_ascii_lowercase().as_str() {
+                    "keyboard" => (
+                        Some(W_KEYBOARD_DEVICE_ID),
+                        PhysicalControl::KeyboardKey(entry.control.clone()),
+                    ),
+                    "hid" => (None, PhysicalControl::HidButton(entry.control.parse::<u32>().ok()?)),
+                    "gamepad" => (None, PhysicalControl::GamepadButton(entry.control.clone())),
+                    device => {
+                        let player = crate::config::play_input::gamepad_player_index(device)?;
+                        (
+                            gamepad_slots.device_id_for_player(player),
+                            PhysicalControl::GamepadButton(entry.control.clone()),
+                        )
+                    }
+                };
+                Some(PlayActionBinding { device, control, action })
+            })
+            .collect();
+        if let Some(legacy_start) = profile_input.start_key.as_ref()
+            && !action_bindings.iter().any(|entry| {
+                entry.device == Some(W_KEYBOARD_DEVICE_ID)
+                    && entry.control == PhysicalControl::KeyboardKey(legacy_start.clone())
+                    && entry.action == InputActionConfig::E1
+            })
+        {
+            action_bindings.push(PlayActionBinding {
+                device: Some(W_KEYBOARD_DEVICE_ID),
+                control: PhysicalControl::KeyboardKey(legacy_start.clone()),
+                action: InputActionConfig::E1,
+            });
+        }
+        if !action_bindings.iter().any(|entry| entry.action == InputActionConfig::E1) {
+            action_bindings.push(PlayActionBinding {
+                device: Some(W_KEYBOARD_DEVICE_ID),
+                control: PhysicalControl::KeyboardKey("Q".to_string()),
+                action: InputActionConfig::E1,
+            });
+        }
+        Self { key_mode, binding, scratch_binding, action_bindings }
+    }
+
+    fn resolve_entry(
+        &self,
+        device: DeviceId,
+        control: &PhysicalControl,
+    ) -> Option<bmz_gameplay::input::binding::BindingResolution> {
+        self.binding
+            .resolve_entry(device, control)
+            .or_else(|| self.scratch_binding.resolve_entry(device, control))
+    }
+
+    fn resolves_lane(&self, device: DeviceId, control: &PhysicalControl) -> bool {
+        self.resolve_entry(device, control).is_some()
+    }
+
+    fn is_action(
+        &self,
+        device: DeviceId,
+        control: &PhysicalControl,
+        action: InputActionConfig,
+    ) -> bool {
+        let has_device_specific_binding = self
+            .action_bindings
+            .iter()
+            .any(|entry| entry.device == Some(device) && entry.control == *control);
+        self.action_bindings.iter().any(|entry| {
+            entry.control == *control
+                && entry.action == action
+                && if has_device_specific_binding {
+                    entry.device == Some(device)
+                } else {
+                    entry.device.is_none()
+                }
+        })
+    }
+}
+
+#[derive(Debug, Clone)]
+struct PendingPlayVisualInput {
+    key_mode: KeyMode,
+    binding: LaneBinding,
+    suppress_human_input: bool,
+    lane_keyon_started_at: [Option<TimeUs>; LANE_COUNT],
+    lane_keyoff_started_at: [Option<TimeUs>; LANE_COUNT],
+    lane_scratch_direction: [Option<ScratchDirection>; LANE_COUNT],
+    lane_scratch_angle_delta_ms: [i64; LANE_COUNT],
+    scratch_angle_last_render_at: Option<TimeUs>,
+}
+
+impl PendingPlayVisualInput {
+    fn new(key_mode: KeyMode, binding: LaneBinding, suppress_human_input: bool) -> Self {
+        Self {
+            key_mode,
+            binding,
+            suppress_human_input,
+            lane_keyon_started_at: [None; LANE_COUNT],
+            lane_keyoff_started_at: [None; LANE_COUNT],
+            lane_scratch_direction: [None; LANE_COUNT],
+            lane_scratch_angle_delta_ms: [0; LANE_COUNT],
+            scratch_angle_last_render_at: None,
+        }
+    }
+
+    fn apply_event(&mut self, event: &DeviceInputEvent, visual_now: TimeUs) {
+        if self.suppress_human_input {
+            return;
+        }
+        let Some(binding) = self.binding.resolve_entry(event.device, &event.control) else {
+            return;
+        };
+        let lane = binding.lane.index();
+        match event.kind {
+            InputKind::Press => {
+                self.lane_keyon_started_at[lane] = Some(visual_now);
+                self.lane_keyoff_started_at[lane] = None;
+                self.lane_scratch_direction[lane] = binding.scratch_direction;
+            }
+            InputKind::Release => {
+                if self.lane_keyon_started_at[lane].is_some() {
+                    self.lane_keyon_started_at[lane] = None;
+                    self.lane_keyoff_started_at[lane] = Some(visual_now);
+                }
+                self.lane_scratch_direction[lane] = None;
+            }
+        }
+    }
+
+    fn advance(&mut self, visual_now: TimeUs) {
+        let Some(last_render_at) = self.scratch_angle_last_render_at.replace(visual_now) else {
+            return;
+        };
+        let delta_ms = ((visual_now.0 - last_render_at.0) / 1_000).max(0);
+        if delta_ms == 0 {
+            return;
+        }
+        for lane in [Lane::Scratch, Lane::Scratch2] {
+            let lane_index = lane.index();
+            if self.lane_keyon_started_at[lane_index].is_none() {
+                continue;
+            }
+            let sign =
+                match self.lane_scratch_direction[lane_index].unwrap_or(ScratchDirection::Down) {
+                    ScratchDirection::Up => 1,
+                    ScratchDirection::Down => -1,
+                };
+            self.lane_scratch_angle_delta_ms[lane_index] =
+                (self.lane_scratch_angle_delta_ms[lane_index] + sign * delta_ms.saturating_mul(2))
+                    .rem_euclid(2_160);
+        }
+    }
+
+    fn apply_to_session(self, session: &mut bmz_gameplay::session::GameSession) {
+        session.lane_keyon_started_at = self.lane_keyon_started_at;
+        session.lane_keyoff_started_at = self.lane_keyoff_started_at;
+        session.lane_scratch_direction = self.lane_scratch_direction;
+        session.lane_scratch_angle_delta_ms = self.lane_scratch_angle_delta_ms;
+        session.scratch_angle_last_render_at = self.scratch_angle_last_render_at;
+    }
 }
 
 struct PendingPlayPreload {
     generation: u64,
     chart_id: i64,
+    input: SharedInputBackend,
+    audio_progress: Arc<AtomicU32>,
     rx: Receiver<PlayPreloadResult>,
 }
 
@@ -1086,9 +1640,18 @@ struct PlayPreloadResult {
     result: std::result::Result<PreloadedInputPlaySession, String>,
 }
 
-struct QuickRetryReuse {
-    preloaded: PreloadedInputPlaySession,
+/// Media kept across same-song retry (beatoraja `BMSResource` style).
+/// Cleared when leaving result back to select, or when starting an unrelated chart.
+struct PlayMediaCache {
+    chart_id: i64,
+    /// Present for SameArrange reuse of the exact chart Arc.
+    chart: Option<std::sync::Arc<PlayableChart>>,
+    normalization_gain: f32,
+    applied_arrange: Option<crate::screens::play_session::AppliedArrange>,
+    score_key: Option<crate::storage::score_db::ScoreKey>,
     bga_frames: BgaFrameCatalog,
+    bga_assets: Vec<BgaAssetRef>,
+    video_bga_decoders: crate::video_bga::VideoBgaDecoderMap,
 }
 
 enum SongScanEvent {
@@ -1121,11 +1684,20 @@ fn failed_play_ending(started_at: Instant) -> PlayEndingTransition {
 }
 
 /// リザルト画面終了フェードアウトの進行状態。
-/// フェードアウト時間が経過したら `action` を実行して画面を切り替える。
+/// 通常はフェードアウト時間が経過したら、スキップ要求時は実アニメーションの
+/// 最終フレームを1フレーム保持してから `action` を実行して画面を切り替える。
 struct ResultExit {
     started_at: Instant,
     action: ResultExitAction,
     skip_requested: bool,
+    skip_final_frame_held: bool,
+}
+
+/// F10 で開始したフォルダ内 Autoplay の進行状態。
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct AutoplayFolderSession {
+    chart_ids: Vec<i64>,
+    next_index: usize,
 }
 
 /// リザルト画面を抜けたあとに実行する遷移。
@@ -1148,12 +1720,20 @@ enum ResultExitAction {
     AdvanceCourse,
     /// コース途中落ちの単曲リザルトを閉じて、コース最終リザルトへ進む。
     FinishCourse,
+    /// フォルダ内 Autoplay の次の譜面を開始する。
+    AdvanceAutoplayFolder,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ResultRetryMode {
     SameArrange,
     DifferentArrange,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RetryPreloadKind {
+    CachedChartWithFreshAudio,
+    ReimportedChartWithFreshAudio,
 }
 
 const SELECT_EXIT_HOLD_DURATION: Duration = Duration::from_millis(1_200);
@@ -1170,8 +1750,6 @@ const SELECT_PREVIEW_FADE_DURATION: Duration = Duration::from_millis(150);
 /// beatoraja MusicSelector waits this long after a song-bar change before preview starts.
 const SELECT_PREVIEW_START_DELAY: Duration = Duration::from_millis(400);
 const SELECT_PREVIEW_CACHE_LIMIT: usize = 8;
-const QUICK_RETRY_REUSE_LOCK_ATTEMPTS: usize = 4;
-const QUICK_RETRY_REUSE_LOCK_RETRY_SLEEP: Duration = Duration::from_micros(250);
 /// レーンカバー / LIFT を上下キーで動かす際のステップ幅。
 const LANE_COVER_STEP: f32 = 0.001;
 const LANE_COVER_REPEAT_STEP: f32 = 0.01;
@@ -1179,6 +1757,20 @@ const LANE_COVER_REPEAT_STEP: f32 = 0.01;
 /// beatoraja の `getAnalogDiffAndReset(i, 200)` の tolerance に相当。
 const SELECT_ANALOG_SCROLL_TOLERANCE_MS: u64 = 200;
 const SKIN_RELOAD_REDRAW_PROFILE_THRESHOLD: Duration = Duration::from_millis(8);
+const RESOURCE_LOAD_PROGRESS_SCALE: u32 = 1_000_000;
+
+/// GPU texture の登録を伴う完了結果は、通常描画を止めないよう少量ずつ処理する。
+/// BGA worker 側も同じ数で backpressure を掛け、先行した `Queue::write_texture` が
+/// GPU queue を埋め続けないようにする。
+const MAX_PENDING_BGA_TEXTURE_UPLOADS: usize = 2;
+const MAX_BGA_TEXTURE_RESULTS_PER_REDRAW: usize = 2;
+const MAX_PENDING_SKIN_UPLOADS: usize = 1;
+const MAX_SKIN_UPLOADS_PER_REDRAW: usize = 1;
+
+fn bounded_gpu_upload_channel<T>(capacity: usize) -> (mpsc::SyncSender<T>, Receiver<T>) {
+    debug_assert!(capacity > 0);
+    mpsc::sync_channel(capacity)
+}
 
 struct PendingSkinResult {
     generation: u64,
@@ -1292,6 +1884,10 @@ impl BgaImageLoadStatus {
 }
 
 enum PendingBgaImageResult {
+    Manifest {
+        generation: u64,
+        assets: Vec<BgaAssetRef>,
+    },
     Loaded(PendingBgaImage),
     PreloadFailed {
         generation: u64,
@@ -1340,7 +1936,7 @@ enum AppViewState {
     Select,
     Decide,
     Play,
-    Result(Box<ResultSummary>),
+    Result,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1354,7 +1950,6 @@ enum AppSceneKind {
 fn course_result_summary_for_skin(course: &CourseResultSummary) -> ResultSummary {
     let last = course.entry_summaries.last();
     let max_combo = course.course_max_combo;
-    let bp = course.entry_summaries.iter().map(|summary| summary.bp).sum();
     let cb = course.entry_summaries.iter().map(|summary| summary.cb).sum();
     let fast_slow_counts =
         course.entry_summaries.iter().fold(ResultFastSlowJudgeCounts::default(), |acc, summary| {
@@ -1376,14 +1971,25 @@ fn course_result_summary_for_skin(course: &CourseResultSummary) -> ResultSummary
     let skin_best_score = course.previous_best_score.as_ref();
     let skin_best_clear_type =
         skin_best_score.and_then(|best| ClearType::from_label(&best.clear_type));
+    // A course target is the sum of the per-stage pacemaker targets.  Keeping
+    // this in the aggregate ResultSummary makes the standard Result value refs
+    // (121/151, 122/123, 157/158 and signed diff 153) work for course skins too.
+    // If even one played stage had no target, there is no meaningful course
+    // target to display.
+    let target_ex_score = course
+        .entry_summaries
+        .iter()
+        .try_fold(0_u32, |total, summary| total.checked_add(summary.target_ex_score?));
 
     ResultSummary {
         clear_type: course.final_clear_type,
+        target_name: String::new(),
         arrange: "NORMAL".to_string(),
+        arrange_2p: "NORMAL".to_string(),
         lane_shuffle_pattern: Vec::new(),
         ex_score: course.total_ex_score,
         max_combo,
-        bp,
+        bp: course.bp,
         cb,
         gauge_value: course.final_gauge_value,
         gauge_type: course.final_gauge_type,
@@ -1408,6 +2014,8 @@ fn course_result_summary_for_skin(course: &CourseResultSummary) -> ResultSummary
         total_gauge: last.map(|summary| summary.total_gauge).unwrap_or(0.0),
         judge_rank: last.and_then(|summary| summary.judge_rank),
         key_mode: last.map(|summary| summary.key_mode).unwrap_or_default(),
+        has_long_notes: last.is_some_and(|summary| summary.has_long_notes),
+        long_note_mode: last.map(|summary| summary.long_note_mode).unwrap_or_default(),
         judge_counts: course.judge_counts.clone(),
         fast_slow_counts,
         replay_path: String::new(),
@@ -1422,7 +2030,7 @@ fn course_result_summary_for_skin(course: &CourseResultSummary) -> ResultSummary
         previous_best_clear_type: skin_best_clear_type,
         previous_best_max_combo: skin_best_score.map(|best| best.max_combo),
         previous_best_bp: skin_best_score.map(|best| best.bp),
-        target_ex_score: None,
+        target_ex_score,
         target_max_combo: None,
         target_bp: None,
         target_clear_type: None,
@@ -1441,7 +2049,42 @@ fn course_result_summary_for_skin(course: &CourseResultSummary) -> ResultSummary
         },
         difficulty_name: String::new(),
         play_level: String::new(),
-        graph: aggregate_course_result_graph(&course.entry_summaries),
+        graph: Arc::new(aggregate_course_result_graph(&course.entry_summaries)),
+    }
+}
+
+fn course_result_skin_snapshot(course: &CourseResultSummary) -> CourseResultSkinSnapshot {
+    let mut stages =
+        [CourseStageResultSkinSnapshot::default(); bmz_render::skin::SKIN_BMZ_COURSE_STAGE_COUNT];
+    for (slot, summary) in stages.iter_mut().zip(&course.entry_summaries) {
+        let max_ex_score = summary.total_notes.saturating_mul(2);
+        *slot = CourseStageResultSkinSnapshot {
+            ex_score: summary.ex_score,
+            gauge: summary.gauge_value,
+            bp: summary.bp,
+            rate_basis_points: summary
+                .ex_score
+                .saturating_mul(10_000)
+                .checked_div(max_ex_score)
+                .unwrap_or(0),
+        };
+    }
+    CourseResultSkinSnapshot {
+        stage_count: course.entry_summaries.len().min(stages.len()) as u32,
+        stages,
+    }
+}
+
+fn mark_course_replay_slot_saved(
+    course: &mut CourseResultSummary,
+    skin_summary: Option<&mut ResultSummary>,
+    slot: usize,
+) {
+    course.saved_replay_slots[slot] = true;
+    course.replay_slots[slot] = true;
+    if let Some(summary) = skin_summary {
+        summary.saved_replay_slots[slot] = true;
+        summary.replay_slots[slot] = true;
     }
 }
 
@@ -1494,6 +2137,36 @@ fn course_total_notes_for_definition(
         total_notes = total_notes.saturating_add(notes);
     }
     Ok(total_notes)
+}
+
+fn hydrate_course_entry_title_hints(
+    library_db: &LibraryDatabase,
+    definition: &mut bmz_core::course::CourseDefinition,
+) -> Result<()> {
+    let chart_ids =
+        definition.entries.iter().filter_map(|entry| entry.chart_id).collect::<Vec<_>>();
+    let titles = library_db
+        .list_charts_by_ids(&chart_ids)?
+        .into_iter()
+        .map(|chart| (chart.chart_id, chart.title))
+        .collect::<HashMap<_, _>>();
+    apply_course_entry_title_hints(definition, &titles);
+    Ok(())
+}
+
+fn apply_course_entry_title_hints(
+    definition: &mut bmz_core::course::CourseDefinition,
+    titles: &HashMap<i64, String>,
+) {
+    for entry in &mut definition.entries {
+        let Some(chart_id) = entry.chart_id else {
+            continue;
+        };
+        let Some(title) = titles.get(&chart_id).filter(|title| !title.trim().is_empty()) else {
+            continue;
+        };
+        entry.title_hint.clone_from(title);
+    }
 }
 
 fn aggregate_course_result_graph(
@@ -1646,7 +2319,9 @@ fn debug_boot_result_summary() -> ResultSummary {
     let duration_ms = 180_000;
     ResultSummary {
         clear_type: ClearType::Failed,
+        target_name: "RANK AAA".to_string(),
         arrange: "RANDOM".to_string(),
+        arrange_2p: "NORMAL".to_string(),
         lane_shuffle_pattern: vec![3, 1, 4, 2, 7, 5, 6],
         ex_score: judge_counts.pgreat * 2 + judge_counts.great,
         max_combo: 239,
@@ -1663,6 +2338,8 @@ fn debug_boot_result_summary() -> ResultSummary {
         total_gauge: 363.0,
         judge_rank: Some(2),
         key_mode: KeyMode::K7,
+        has_long_notes: true,
+        long_note_mode: bmz_chart::model::LongNoteMode::Cn,
         judge_counts,
         fast_slow_counts,
         replay_path: String::new(),
@@ -1690,7 +2367,7 @@ fn debug_boot_result_summary() -> ResultSummary {
         genre: "DEBUG".to_string(),
         difficulty_name: "ANOTHER".to_string(),
         play_level: "12".to_string(),
-        graph: debug_boot_result_graph(duration_ms),
+        graph: Arc::new(debug_boot_result_graph(duration_ms)),
     }
 }
 
@@ -1824,14 +2501,41 @@ fn result_main_bpm(summary: &ResultSummary) -> f32 {
         .unwrap_or(summary.main_bpm)
 }
 
-fn player_stats_snapshot(score_db: &ScoreDatabase) -> PlayerStatsSnapshot {
-    match score_db.player_stats() {
+fn player_stats_snapshot(
+    score_db: &ScoreDatabase,
+    library_db: &LibraryDatabase,
+    day_start_hour: u8,
+) -> PlayerStatsSnapshot {
+    let mut snapshot = match score_db.player_stats() {
         Ok(stats) => player_stats_snapshot_from_stats(&stats),
         Err(error) => {
             tracing::warn!(%error, "failed to load player statistics");
             PlayerStatsSnapshot::default()
         }
+    };
+    match score_db.current_daily_statistics_range(day_start_hour) {
+        Ok((start_at, end_at)) => {
+            match score_db.daily_player_stats_between(start_at, end_at) {
+                Ok(stats) => snapshot.daily = daily_player_stats_snapshot_from_stats(&stats),
+                Err(error) => tracing::warn!(%error, "failed to load daily player statistics"),
+            }
+            match score_db.daily_recent_chart_sha256s_between(start_at, end_at, 10) {
+                Ok(hashes) => {
+                    for (index, hash) in hashes.into_iter().enumerate() {
+                        snapshot.daily.recent_titles[index] = library_db
+                            .list_charts_by_sha256(hash)
+                            .ok()
+                            .and_then(|charts| charts.into_iter().next())
+                            .map(|chart| chart.title)
+                            .unwrap_or_default();
+                    }
+                }
+                Err(error) => tracing::warn!(%error, "failed to load recent daily chart titles"),
+            }
+        }
+        Err(error) => tracing::warn!(%error, "failed to resolve daily statistics range"),
     }
+    snapshot
 }
 
 fn player_stats_snapshot_from_stats(stats: &PlayerStats) -> PlayerStatsSnapshot {
@@ -1852,7 +2556,107 @@ fn player_stats_snapshot_from_stats(stats: &PlayerStats) -> PlayerStatsSnapshot 
         slow_poor: stats.slow_poor,
         fast_empty_poor: stats.fast_empty_poor,
         slow_empty_poor: stats.slow_empty_poor,
+        daily: DailyPlayerStatsSnapshot::default(),
     }
+}
+
+fn daily_player_stats_snapshot_from_stats(stats: &DailyPlayerStats) -> DailyPlayerStatsSnapshot {
+    DailyPlayerStatsSnapshot {
+        play_count: stats.play_count,
+        clear_count: stats.clear_count,
+        pgreat: stats.pgreat,
+        great: stats.great,
+        good: stats.good,
+        bad: stats.bad,
+        poor: stats.poor,
+        empty_poor: stats.empty_poor,
+        score_update_count: stats.score_update_count,
+        clear_update_count: stats.clear_update_count,
+        miss_count_update_count: stats.miss_count_update_count,
+        recent_titles: Default::default(),
+    }
+}
+
+fn initialize_gamepad_backend(
+    kind: GamepadBackendKind,
+    sensitivity: f32,
+    scratch_threshold: u32,
+) -> Option<Box<crate::input::gamepad::GamepadBackend>> {
+    match kind {
+        GamepadBackendKind::Auto => {
+            if let Some(backend) = initialize_gilrs_backend(sensitivity, scratch_threshold) {
+                return Some(backend);
+            }
+            #[cfg(windows)]
+            return initialize_gameinput_backend(sensitivity, scratch_threshold);
+            #[cfg(not(windows))]
+            None
+        }
+        GamepadBackendKind::Gilrs => initialize_gilrs_backend(sensitivity, scratch_threshold),
+        GamepadBackendKind::GameInput => {
+            #[cfg(windows)]
+            {
+                if let Some(backend) = initialize_gameinput_backend(sensitivity, scratch_threshold)
+                {
+                    return Some(backend);
+                }
+            }
+            #[cfg(not(windows))]
+            tracing::warn!("GameInput is only available on Windows, falling back to gilrs");
+            initialize_gilrs_backend(sensitivity, scratch_threshold)
+        }
+    }
+}
+
+#[cfg(windows)]
+fn initialize_gameinput_backend(
+    sensitivity: f32,
+    scratch_threshold: u32,
+) -> Option<Box<crate::input::gamepad::GamepadBackend>> {
+    match crate::input::gameinput::GameInputBackend::new(sensitivity, scratch_threshold) {
+        Ok(backend) => {
+            tracing::info!("GameInput initialized on main thread");
+            Some(Box::new(crate::input::gamepad::GamepadBackend::GameInput(backend)))
+        }
+        Err(error) => {
+            tracing::warn!(%error, "GameInput init failed");
+            None
+        }
+    }
+}
+
+fn initialize_gilrs_backend(
+    sensitivity: f32,
+    scratch_threshold: u32,
+) -> Option<Box<crate::input::gamepad::GamepadBackend>> {
+    match crate::input::gilrs::GilrsBackend::new(sensitivity, scratch_threshold) {
+        Ok(backend) => {
+            tracing::info!("gilrs initialized");
+            Some(Box::new(crate::input::gamepad::GamepadBackend::Gilrs(backend)))
+        }
+        Err(error) => {
+            tracing::warn!(%error, "gilrs init failed");
+            None
+        }
+    }
+}
+
+fn resolve_gamepad_runtime_slots(
+    config: &GlobalInputConfig,
+    backend: Option<&crate::input::gamepad::GamepadBackend>,
+) -> [Option<DeviceId>; 2] {
+    let connected = backend
+        .into_iter()
+        .flat_map(crate::input::gamepad::GamepadBackend::connected_gamepads)
+        .collect::<Vec<_>>();
+    let using_gilrs = backend.is_some_and(crate::input::gamepad::GamepadBackend::is_gilrs);
+    crate::input::gamepad::resolve_gamepad_slot_assignments(
+        config.gamepad_slot_device_ids.each_ref().map(Option::as_deref),
+        config.gamepad_slot_gilrs_ids,
+        using_gilrs,
+        !using_gilrs,
+        &connected,
+    )
 }
 
 impl WinitApp {
@@ -1863,6 +2667,7 @@ impl WinitApp {
         system_audio: Option<crate::audio::SystemAudio>,
         shutdown_requested: Arc<AtomicBool>,
         event_proxy: EventLoopProxy<AppUserEvent>,
+        log_buffer: LogBuffer,
     ) -> Result<Self> {
         let mut boot = boot;
         if let Some(cli_renderer) = options.renderer.clone() {
@@ -1903,10 +2708,15 @@ impl WinitApp {
         let hs_fix_option = hs_fix_option_from_profile(boot.profile_config.play.hs_fix);
         let target_option = target_option_from_profile(boot.profile_config.play.target);
         let select_keys = SelectKeyBindings::from_profile(&boot.profile_config.input);
-        let mut renderer = Renderer::default();
+        let mut renderer = Box::new(Renderer::default());
+        renderer.set_default_font_coverage(boot.profile_config.ui.locale().font_coverage());
         let skin_catalog = scan_skin_catalog(&boot.app_paths);
         let (skin_decode_tx, skin_decode_rx) = mpsc::channel::<PendingSkinResult>();
-        let (skin_upload_tx, skin_upload_rx) = mpsc::channel::<PendingUploadResult>();
+        // GPU upload 済みのスキンを main thread 側で一度に大量に install しないよう、
+        // upload worker との間には小さな backpressure を設ける。これにより skin reload
+        // と通常描画が重なっても GPU queue を先行 upload で埋め尽くさない。
+        let (skin_upload_tx, skin_upload_rx) =
+            bounded_gpu_upload_channel::<PendingUploadResult>(MAX_PENDING_SKIN_UPLOADS);
         let skin_source_asset_cache = Arc::new(Mutex::new(SkinSourceAssetCache::default()));
         let skin_document_cache = Arc::new(Mutex::new(SkinDocumentCache::default()));
         let skin_font_cache = Arc::new(Mutex::new(SkinFontCache::default()));
@@ -1922,7 +2732,7 @@ impl WinitApp {
             pending_decide_skin,
             pending_result_skin,
         ) = load_initial_skin_textures(
-            &mut renderer,
+            renderer.as_mut(),
             &boot.app_paths,
             &skin_decode_tx,
             &skin_source_asset_cache,
@@ -1930,6 +2740,7 @@ impl WinitApp {
             &skin_gpu_texture_cache,
             &skin_font_cache,
             0,
+            &boot.profile_config.display_name,
             &boot.profile_config.skin.select,
             &boot.profile_config.skin.decide,
             &boot.profile_config.skin.result,
@@ -1943,19 +2754,14 @@ impl WinitApp {
         let now = Instant::now();
         let pending_play_skin = false;
 
-        let gilrs = if boot.app_config.input.gamepad_enabled {
+        let gamepad = if boot.app_config.input.gamepad_enabled {
             let sensitivity = boot.profile_config.input.analog_scratch_sensitivity;
             let threshold = boot.profile_config.input.analog_scratch_threshold;
-            match crate::input::gilrs::GilrsBackend::new(sensitivity, threshold) {
-                Ok(g) => {
-                    tracing::info!("gilrs initialized");
-                    Some(g)
-                }
-                Err(e) => {
-                    tracing::warn!(error = %e, "gilrs init failed, gamepad disabled");
-                    None
-                }
-            }
+            initialize_gamepad_backend(
+                boot.app_config.input.gamepad_backend,
+                sensitivity,
+                threshold,
+            )
         } else {
             None
         };
@@ -1973,20 +2779,41 @@ impl WinitApp {
         let select_preview =
             system_audio.as_ref().map(|audio| SelectChartPreview::new(audio.engine()));
         let audio_output_open_attempted = audio_runtime.is_some();
-        let player_stats = player_stats_snapshot(&boot.score_db);
+        let player_stats = player_stats_snapshot(
+            &boot.score_db,
+            &boot.library_db,
+            boot.profile_config.statistics.day_start_hour,
+        );
         let initial_result_skin_signature = result_skin_signature_for_config(
             &boot.profile_config.skin,
             ResultSkinSlot::Normal,
-            false,
-            BTreeMap::new(),
+            lua_runtime_state_for_result(
+                false,
+                None,
+                false,
+                KeyMode::default(),
+                BTreeMap::new(),
+                &boot.profile_config.display_name,
+            ),
         );
+        let difficulty_tables = match boot.library_db.list_difficulty_tables() {
+            Ok(tables) => tables,
+            Err(error) => {
+                tracing::warn!(%error, "failed to list difficulty tables for egui");
+                Vec::new()
+            }
+        };
 
         let mut app = Self {
             boot,
             window: None,
             active_play: None,
             active_course: None,
+            autoplay_folder: None,
             finished_course: None,
+            finished_course_skin_summary: None,
+            finished_course_hash: None,
+            finished_course_ir_attempted: false,
             draining_audio: None,
             audio_runtime,
             audio_output_open_attempted,
@@ -1996,6 +2823,7 @@ impl WinitApp {
             first_frame_startup_completed: false,
             shutdown_requested,
             finished_play: None,
+            result_favorite_chart: false,
             result_ir: None,
             select_ir: crate::screens::select_ir::SelectIrRanking::default(),
             player_stats,
@@ -2006,6 +2834,7 @@ impl WinitApp {
             pending_play_preload: None,
             preloaded_play_session: None,
             play_preload_generation: 0,
+            play_media_cache: None,
             play_ending: None,
             last_started_chart_id: None,
             play_table_text_primary: String::new(),
@@ -2013,6 +2842,7 @@ impl WinitApp {
             play_table_text_fallback: String::new(),
             select_items,
             select_distribution_cache: RefCell::new(HashMap::new()),
+            difficulty_tables,
             table_breadcrumb_cache: RefCell::new(HashMap::new()),
             select_folder_summary_cache: HashMap::new(),
             select_folder_summary_tx,
@@ -2025,6 +2855,8 @@ impl WinitApp {
             skin_defs_cache: BTreeMap::new(),
             pending_table_fetch: None,
             pending_song_scan: None,
+            pending_chart_download: None,
+            queued_download_scan: None,
             song_scan_progress: None,
             pending_update_check: None,
             pending_update_check_reports_up_to_date: false,
@@ -2042,7 +2874,9 @@ impl WinitApp {
             select_held: false,
             select_e_action_holds: HashSet::new(),
             pressed_controls: HashSet::new(),
+            pressed_play_inputs: HashSet::new(),
             raw_input_pressed_keys: HashSet::new(),
+            window_input_pressed_keys: HashSet::new(),
             arrange_option,
             arrange_option_2p,
             target_option,
@@ -2055,6 +2889,7 @@ impl WinitApp {
             select_mode_filter,
             select_sort,
             select_keys,
+            play_option_input: None,
             select_bar_scroll_direction: 0,
             select_bar_scroll_duration: Duration::ZERO,
             select_hold_move: None,
@@ -2070,7 +2905,7 @@ impl WinitApp {
             smoke_exit_after_result_frames: options.smoke_exit_after_result_frames,
             smoke_exit_on_result: options.smoke_exit_on_result,
             smoke_screenshot_path: options.smoke_screenshot_path.as_ref().map(PathBuf::from),
-            screenshot_toast: None,
+            left_overlay_toast: None,
             rendered_frames: 0,
             rendered_result_frames: 0,
             app_started_at: now,
@@ -2078,11 +2913,13 @@ impl WinitApp {
             select_bar_started_at: now,
             play_scene_started_at: now,
             play_ready_sound_started_at: None,
+            play_ready_last_control_hold_at: None,
             decide_sound_stopped_for_chart_start: false,
             result_scene_started_at: now,
             option_panel_started_at: now,
+            option_panel_off_started_at: [None; 6],
             select_option_panel: 0,
-            gilrs,
+            gamepad,
             default_skin_manifest,
             skin_decode_tx,
             skin_decode_rx: Some(skin_decode_rx),
@@ -2099,7 +2936,10 @@ impl WinitApp {
             bga_load_chart_id: None,
             bga_load_rx: None,
             bga_load_status: BgaImageLoadStatus::default(),
+            bga_load_completed_assets: 0,
+            bga_load_total_assets: 0,
             bga_preload_frames: BgaFrameCatalog::new(),
+            bga_preload_assets: None,
             skin_video_sources: initial_skin_video_sources,
             pending_select_skin,
             pending_decide_skin,
@@ -2111,6 +2951,7 @@ impl WinitApp {
             skin_reload_generations: SkinReloadGenerations::default(),
             system_audio,
             system_sound,
+            result_skin_audio: None,
             select_exit_hold_started_at: None,
             select_stage_source: None,
             select_stage_loaded: false,
@@ -2124,6 +2965,7 @@ impl WinitApp {
             select_preview_source: None,
             select_preview_playing: false,
             select_preview_fade: SelectPreviewFade::Silent,
+            select_preview_normalization_gain: 1.0,
             select_preview,
             select_meta_image_cache: HashMap::new(),
             select_meta_image_tx,
@@ -2133,6 +2975,9 @@ impl WinitApp {
             select_preview_rx,
             select_preview_load_queue: SelectPreviewLoadQueue::default(),
             select_generated_preview_loading: false,
+            play_stagefile_source: None,
+            play_stagefile_loaded: false,
+            play_stagefile_size: None,
             play_backbmp_source: None,
             play_backbmp_loaded: false,
             last_play_start_press_at: None,
@@ -2142,17 +2987,20 @@ impl WinitApp {
             play_e3_held: false,
             play_exit_hold_started_at: None,
             egui: None,
+            log_buffer,
             applied_window_mode: initial_window_mode,
             focused: true,
-            last_frame_at: None,
+            discard_gamepad_output_until_resynced: false,
+            frame_pacer: FramePacer::default(),
             skip_next_frame_pace: false,
-            wgpu_fps: 0.0,
+            skin_fps: SkinFpsCounter::new(now),
             settings_edit: None,
             key_config_edit: None,
             result_exit: None,
             result_key5_held: false,
             result_key7_held: false,
             result_gauge_graph_type: GaugeType::Normal as i32,
+            result_panel: 0,
             deferred_boot: deferred_boot_action(boot_chart_id, &options),
             search_mode: false,
             search_query: String::new(),
@@ -2192,7 +3040,11 @@ impl WinitApp {
     }
 
     fn refresh_player_stats_snapshot(&mut self) {
-        self.player_stats = player_stats_snapshot(&self.boot.score_db);
+        self.player_stats = player_stats_snapshot(
+            &self.boot.score_db,
+            &self.boot.library_db,
+            self.boot.profile_config.statistics.day_start_hour,
+        );
     }
 
     fn request_redraw(&self) {
@@ -2230,6 +3082,51 @@ impl WinitApp {
         self.egui.as_ref().is_some_and(|egui| egui.blocks_game_input(practice_overlay))
     }
 
+    fn play_input_backend(&self) -> Option<SharedInputBackend> {
+        play_input_backend_for_context(
+            self.active_play.as_ref().map(|active_play| &active_play.input),
+            self.pending_play_start.is_some(),
+            self.preloaded_play_session.as_ref().map(|preloaded| &preloaded.input),
+            self.pending_play_preload.as_ref().map(|pending| &pending.input),
+        )
+    }
+
+    fn route_play_device_input(&mut self, event: DeviceInputEvent) {
+        let Some(input) = self.play_input_backend() else {
+            return;
+        };
+        input.push_shared_event(event.clone());
+        if self.active_play.is_some() {
+            return;
+        }
+        let visual_now = self.play_elapsed_time();
+        if let Some(pending) = &mut self.pending_play_start {
+            pending.visual_input.apply_event(&event, visual_now);
+        }
+        self.refresh_pending_play_visual_snapshot(visual_now);
+    }
+
+    fn refresh_pending_play_visual_snapshot(&mut self, visual_now: TimeUs) {
+        if self.active_play.is_some() {
+            return;
+        }
+        let Some(pending) = &mut self.pending_play_start else {
+            return;
+        };
+        pending.visual_input.advance(visual_now);
+        let Some(snapshot) = &mut self.last_play_snapshot else {
+            return;
+        };
+        crate::screens::play_snapshot::refresh_pending_play_input_visuals(
+            snapshot,
+            pending.visual_input.key_mode,
+            pending.visual_input.lane_keyon_started_at,
+            pending.visual_input.lane_keyoff_started_at,
+            pending.visual_input.lane_scratch_angle_delta_ms,
+            visual_now,
+        );
+    }
+
     fn route_raw_keyboard_gameplay_input(
         &mut self,
         physical_key: PhysicalKey,
@@ -2238,13 +3135,12 @@ impl WinitApp {
         if !self.raw_input_keyboard_enabled() {
             return;
         }
-        let Some(input) = self.active_play.as_ref().map(|active_play| active_play.input.clone())
-        else {
+        if self.play_input_backend().is_none() {
             if state == ElementState::Released {
                 self.raw_input_pressed_keys.remove(&physical_key);
             }
             return;
-        };
+        }
         let gameplay_blocked = self.raw_input_gameplay_blocked();
         let Some(repeat) = raw_input_key_state_transition(
             &mut self.raw_input_pressed_keys,
@@ -2254,16 +3150,23 @@ impl WinitApp {
         ) else {
             return;
         };
-        crate::input::winit::handle_key_parts(&input, physical_key, state, repeat);
+        if let Some(event) = physical_key_to_device_input(physical_key, state, repeat) {
+            self.route_play_device_input(event);
+        }
     }
 
     fn release_raw_input_pressed_keys(&mut self) {
-        let Some(input) = self.active_play.as_ref().map(|active_play| active_play.input.clone())
-        else {
-            self.raw_input_pressed_keys.clear();
-            return;
-        };
-        release_raw_input_pressed_keys(&input, &mut self.raw_input_pressed_keys);
+        let events = raw_input_release_events(&mut self.raw_input_pressed_keys);
+        for event in events {
+            self.route_play_device_input(event);
+        }
+    }
+
+    fn release_window_input_pressed_keys(&mut self) {
+        let events = raw_input_release_events(&mut self.window_input_pressed_keys);
+        for event in events {
+            self.route_play_device_input(event);
+        }
     }
 
     fn ensure_window(&mut self, event_loop: &ActiveEventLoop) {
@@ -2272,8 +3175,15 @@ impl WinitApp {
         }
 
         let video = &self.boot.app_config.video;
-        let attributes = window_attributes_from_config(video)
-            .with_fullscreen(fullscreen_from_config(&video.mode, event_loop.primary_monitor()));
+        let attributes =
+            window_attributes_from_config(video).with_fullscreen(fullscreen_from_config(
+                &video.mode,
+                select_monitor(
+                    &video.monitor_name,
+                    event_loop.available_monitors(),
+                    event_loop.primary_monitor(),
+                ),
+            ));
         match event_loop.create_window(attributes) {
             Ok(window) => {
                 let window = Arc::new(window);
@@ -2382,12 +3292,8 @@ impl WinitApp {
             return AppViewState::Play;
         }
 
-        if let Some(course) = &self.finished_course {
-            return AppViewState::Result(Box::new(course_result_summary_for_skin(course)));
-        }
-
-        if let Some(finished) = &self.finished_play {
-            return AppViewState::Result(Box::new(finished.summary.clone()));
+        if self.finished_course.is_some() || self.finished_play.is_some() {
+            return AppViewState::Result;
         }
 
         AppViewState::Select
@@ -2406,6 +3312,30 @@ impl WinitApp {
         AppSceneKind::Select
     }
 
+    fn current_result_summary(&self) -> Option<&ResultSummary> {
+        self.finished_course_skin_summary
+            .as_ref()
+            .or_else(|| self.finished_play.as_ref().map(|finished| &finished.summary))
+    }
+
+    fn install_finished_course(
+        &mut self,
+        course: CourseResultSummary,
+        course_hash: Option<String>,
+    ) {
+        self.finished_course_skin_summary = Some(course_result_summary_for_skin(&course));
+        self.finished_course = Some(course);
+        self.finished_course_hash = course_hash;
+        self.finished_course_ir_attempted = false;
+    }
+
+    fn clear_finished_course(&mut self) {
+        self.finished_course = None;
+        self.finished_course_skin_summary = None;
+        self.finished_course_hash = None;
+        self.finished_course_ir_attempted = false;
+    }
+
     fn scene_snapshot(&self) -> AppSceneSnapshot {
         let mut scene = match self.view_state() {
             AppViewState::Select => AppSceneSnapshot::Select(self.select_snapshot()),
@@ -2419,16 +3349,31 @@ impl WinitApp {
             AppViewState::Play => {
                 AppSceneSnapshot::Play(self.last_play_snapshot.clone().unwrap_or_default())
             }
-            AppViewState::Result(summary) => {
+            AppViewState::Result => {
+                // `view_state` only returns Result when one of the result sources exists.
+                // A finished course is always installed together with its skin summary.
+                let summary =
+                    self.current_result_summary().expect("result scene is missing its summary");
                 let raw_clear_type = self
                     .is_course_intermediate_result()
                     .then(|| self.finished_play.as_ref().map(|finished| finished.result.clear_type))
                     .flatten();
                 let result_failed = result_failed_for_skin_ops(summary.clear_type, raw_clear_type);
+                let score_save_enabled = self.current_result_score_save_enabled();
                 AppSceneSnapshot::Result(ResultSnapshot {
+                    player_name: String::new(),
+                    target_name: summary.target_name.clone(),
+                    current_fps: 0,
+                    skin_input: Default::default(),
+                    hispeed_auto_adjust: self.boot.profile_config.lane.hispeed_auto_adjust,
                     clear_type: summary.clear_type,
                     result_failed,
                     arrange: summary.arrange.as_str().to_string(),
+                    arrange_2p: summary.arrange_2p.as_str().to_string(),
+                    double_option: self
+                        .result_double_option_for_slot(self.current_result_skin_slot())
+                        .as_str()
+                        .to_string(),
                     lane_shuffle_pattern: summary.lane_shuffle_pattern.clone(),
                     ex_score: summary.ex_score,
                     ex_score_rate: summary.ex_score_rate(),
@@ -2444,13 +3389,17 @@ impl WinitApp {
                         &self.boot.profile_config,
                     )),
                     initial_bpm: summary.initial_bpm,
-                    min_bpm: result_min_bpm(&summary),
-                    max_bpm: result_max_bpm(&summary),
-                    main_bpm: result_main_bpm(&summary),
+                    min_bpm: result_min_bpm(summary),
+                    max_bpm: result_max_bpm(summary),
+                    main_bpm: result_main_bpm(summary),
                     total_gauge: summary.total_gauge,
                     judge_rank: summary.judge_rank,
                     key_mode: summary.key_mode,
+                    has_long_notes: summary.has_long_notes,
+                    ln_mode_index: result_long_note_mode_index(summary.long_note_mode),
                     result_gauge_graph_type: self.result_gauge_graph_type,
+                    result_panel: self.result_panel,
+                    favorite_chart: self.result_favorite_chart,
                     judge_counts: DisplayJudgeCounts {
                         pgreat: summary.judge_counts.pgreat,
                         great: summary.judge_counts.great,
@@ -2473,6 +3422,7 @@ impl WinitApp {
                         fast_empty_poor: summary.fast_slow_counts.fast_empty_poor,
                         slow_empty_poor: summary.fast_slow_counts.slow_empty_poor,
                     },
+                    score_save_enabled,
                     score_history_id: summary.score_history_id,
                     replay_saved: !summary.replay_path.is_empty(),
                     replay_slots: summary.replay_slots,
@@ -2508,10 +3458,17 @@ impl WinitApp {
                     table_text_primary: self.play_table_text_primary.clone(),
                     table_text_secondary: self.play_table_text_secondary.clone(),
                     table_text_fallback: self.play_table_text_fallback.clone(),
+                    stagefile_background: self.play_stagefile_loaded,
+                    stagefile_image_size: self.play_stagefile_size,
                     course_titles: self
                         .finished_course
                         .as_ref()
                         .map(|course| course.course_titles.clone())
+                        .unwrap_or_default(),
+                    course_result: self
+                        .finished_course
+                        .as_ref()
+                        .map(course_result_skin_snapshot)
                         .unwrap_or_default(),
                     graph: summary.graph.clone(),
                     overlay: OverlaySnapshot::default(),
@@ -2520,11 +3477,19 @@ impl WinitApp {
                         .as_ref()
                         .map(|state| state.skin_snapshot())
                         .unwrap_or_default(),
-                    player_stats: self.player_stats,
+                    player_stats: self.player_stats.clone(),
                 })
             }
         };
+        apply_skin_logical_input_to_scene(
+            &mut scene,
+            skin_logical_input_snapshot_from_pressed_controls(
+                &self.pressed_controls,
+                &self.select_keys,
+            ),
+        );
         self.apply_operating_time_to_scene(&mut scene);
+        self.apply_skin_runtime_info_to_scene(&mut scene);
         let overlay = self.build_overlay_snapshot();
         self.apply_overlay_to_scene(&mut scene, overlay);
         scene
@@ -2535,27 +3500,29 @@ impl WinitApp {
     }
 
     fn apply_operating_time_to_scene(&self, scene: &mut AppSceneSnapshot) {
-        let operating_time_ms = self.operating_time_ms();
-        match scene {
-            AppSceneSnapshot::Decide(snapshot) | AppSceneSnapshot::Play(snapshot) => {
-                snapshot.operating_time_ms = operating_time_ms;
-            }
-            AppSceneSnapshot::Select(_) | AppSceneSnapshot::Result(_) => {}
-        }
+        apply_operating_time_ms_to_scene(scene, self.operating_time_ms());
+    }
+
+    fn apply_skin_runtime_info_to_scene(&self, scene: &mut AppSceneSnapshot) {
+        apply_skin_runtime_info_to_scene(
+            scene,
+            &self.boot.profile_config.display_name,
+            self.skin_fps.current(),
+        );
     }
 
     fn build_overlay_snapshot(&self) -> OverlaySnapshot {
         OverlaySnapshot {
             left_text: self.left_overlay_text(),
             text: self.always_overlay_text(),
-            fps_text: self.wgpu_fps_overlay_text(),
+            fps_text: self.skin_fps_overlay_text(),
         }
     }
 
     fn left_overlay_text(&self) -> String {
         resolve_left_overlay_text(
             self.renderer.has_pending_screenshot(),
-            self.screenshot_toast
+            self.left_overlay_toast
                 .as_ref()
                 .map(|toast| (toast.message.as_str(), toast.shown_at.elapsed())),
             &self.song_scan_overlay_text(),
@@ -2578,16 +3545,17 @@ impl WinitApp {
         }
     }
 
-    fn wgpu_fps_overlay_text(&self) -> String {
-        if !self.boot.profile_config.ui.show_fps || self.wgpu_fps <= 0.0 {
-            return String::new();
-        }
-        format!("FPS {:.0}", self.wgpu_fps)
+    fn skin_fps_overlay_text(&self) -> String {
+        fps_overlay_text(
+            self.boot.profile_config.ui.show_fps,
+            self.skin_fps.current(),
+            Localizer::new(self.boot.profile_config.ui.locale()),
+        )
     }
 
     fn is_autoplay_for_overlay(&self) -> bool {
         match self.view_state() {
-            AppViewState::Result(_) => self.last_play_was_autoplay,
+            AppViewState::Result => self.last_play_was_autoplay,
             AppViewState::Play => self
                 .active_play
                 .as_ref()
@@ -2637,17 +3605,14 @@ impl WinitApp {
             return cached.clone();
         }
 
-        let mut cache = self.table_breadcrumb_cache.borrow_mut();
-        if let Ok(tables) = self.boot.library_db.list_difficulty_tables() {
-            for table in tables {
-                cache.insert(table.source_url.clone(), table_breadcrumb_from_record(&table));
-            }
-        }
-
-        cache
-            .entry(source_url.to_string())
-            .or_insert_with(|| Self::fallback_table_breadcrumb(source_url))
-            .clone()
+        let breadcrumb = self
+            .difficulty_tables
+            .iter()
+            .find(|table| table.source_url == source_url)
+            .map(table_breadcrumb_from_record)
+            .unwrap_or_else(|| Self::fallback_table_breadcrumb(source_url));
+        self.table_breadcrumb_cache.borrow_mut().insert(source_url.to_string(), breadcrumb.clone());
+        breadcrumb
     }
 
     /// 難易度表のパンくず表示名。テーブルが既知なら表名、
@@ -2726,7 +3691,10 @@ impl WinitApp {
     }
 
     fn select_snapshot(&self) -> SelectSnapshot {
+        let locale = self.boot.profile_config.ui.locale();
+        let text = Localizer::new(locale);
         let selected = self.select_items.get(self.selected_index);
+        let selected_course_ir = self.selected_course_ir_target();
         let current_folder = match self.folder_stack.last() {
             None => String::new(),
             Some(path) if path == FAVORITE_ROOT_PATH => "FAVORITE".to_string(),
@@ -2743,7 +3711,7 @@ impl WinitApp {
                     .to_string()
             }
             Some(path) if path.starts_with(TABLE_ROOT_PATH) => match parse_table_path(path) {
-                Some(TablePath::Root) | None => "難易度表".to_string(),
+                Some(TablePath::Root) | None => text.text("select-difficulty-tables"),
                 Some(TablePath::Table { source_url }) => self.table_breadcrumb_name(source_url),
                 Some(TablePath::Level { source_url, level }) => {
                     let table = self.table_breadcrumb(source_url);
@@ -2751,7 +3719,7 @@ impl WinitApp {
                 }
             },
             Some(path) if in_settings_stack(std::slice::from_ref(path)) => {
-                settings_breadcrumb(path)
+                settings_breadcrumb_for_locale(path, locale)
             }
             Some(path) => std::path::Path::new(path)
                 .file_name()
@@ -2766,8 +3734,15 @@ impl WinitApp {
             Some(Self::select_note_display_duration_ms_for_skin(&self.boot.profile_config));
         SelectSnapshot {
             time: self.select_time(),
+            player_name: String::new(),
+            current_fps: 0,
+            operating_time_ms: 0,
+            skin_input: Default::default(),
             selection_time: self.select_bar_time(),
             option_panel_time: self.option_panel_time(),
+            option_panel_off_times: self
+                .option_panel_off_started_at
+                .map(|started_at| started_at.map(elapsed_since)),
             option_panel: self.select_option_panel,
             chart_count: self.select_items.len() as u32,
             selected_index: self.selected_index as u32,
@@ -2777,7 +3752,9 @@ impl WinitApp {
                 Some(SelectItem::Chart(row)) => row.chart.as_ref().map(|chart| chart.chart_id),
                 _ => None,
             },
-            selected_title: selected.map(|i| i.display_name()).unwrap_or_default(),
+            selected_title: selected
+                .map(|item| item.display_name_for_locale(locale))
+                .unwrap_or_default(),
             hispeed: self.boot.profile_config.lane.hispeed,
             note_display_duration_ms,
             rows: select_snapshot_rows(
@@ -2821,6 +3798,16 @@ impl WinitApp {
             judge_timing_offset_ms: (self.boot.profile_config.judge.visual_offset_us / 1_000)
                 .clamp(i32::MIN as i64, i32::MAX as i64) as i32,
             judge_timing_auto_adjust: self.boot.profile_config.judge.visual_offset_auto_adjust,
+            lanecover_enabled: matches!(
+                self.boot.profile_config.play.lane_effect,
+                LaneEffectConfig::Sudden | LaneEffectConfig::HiddenSudden
+            ),
+            lift_enabled: self.boot.profile_config.lane.lift_enabled,
+            hidden_enabled: matches!(
+                self.boot.profile_config.play.lane_effect,
+                LaneEffectConfig::Hidden | LaneEffectConfig::HiddenSudden
+            ),
+            hispeed_auto_adjust: self.boot.profile_config.lane.hispeed_auto_adjust,
             master_volume: crate::config::play::volume_unit_to_f32(
                 self.boot.profile_config.audio_mix.master_volume,
             ),
@@ -2847,16 +3834,22 @@ impl WinitApp {
             search_word_alpha,
             search_caret_byte_index,
             mouse_position: self.cursor_position_normalized(),
-            ir: self
-                .select_ir
-                .snapshot_for(&self.boot.profile_config.ir, self.selected_chart_sha256()),
+            ir: selected_course_ir.as_ref().map_or_else(
+                || {
+                    self.select_ir
+                        .snapshot_for(&self.boot.profile_config.ir, self.selected_chart_sha256())
+                },
+                |target| {
+                    self.select_ir.course_snapshot_for(&self.boot.profile_config.ir, Some(target))
+                },
+            ),
             rival: self
                 .select_ir
                 .rival_for(&self.boot.profile_config.ir, self.selected_chart_sha256()),
             replay_slot_rule_indices: replay_slot_rule_indices(
                 &self.boot.profile_config.replay.slot_rules,
             ),
-            player_stats: self.player_stats,
+            player_stats: self.player_stats.clone(),
         }
     }
 
@@ -2866,6 +3859,19 @@ impl WinitApp {
             SelectItem::Chart(row) => row.score_sha256(),
             _ => None,
         }
+    }
+
+    fn selected_course_ir_target(&self) -> Option<crate::screens::select_ir::SelectCourseIrTarget> {
+        let SelectItem::Course(row) = self.select_items.get(self.selected_index)? else {
+            return None;
+        };
+        Some(crate::screens::select_ir::SelectCourseIrTarget {
+            course_hash: row.course_hash.clone()?,
+            gauge: crate::screens::play_start::course_gauge_for(self.gauge_option)
+                .as_str()
+                .to_string(),
+            ln_policy: self.boot.profile_config.play.ln_mode_policy.as_ir_str().to_string(),
+        })
     }
 
     fn select_note_display_duration_ms_for_skin(profile: &ProfileConfig) -> i32 {
@@ -2939,7 +3945,12 @@ impl WinitApp {
         } else if let Some(message) = &self.search_message {
             (message.clone(), MESSAGE_ALPHA, None)
         } else {
-            ("type / to search song".to_string(), PLACEHOLDER_ALPHA, None)
+            (
+                Localizer::new(self.boot.profile_config.ui.locale())
+                    .text("select-search-placeholder"),
+                PLACEHOLDER_ALPHA,
+                None,
+            )
         }
     }
 
@@ -2987,9 +3998,9 @@ impl WinitApp {
             }
             let is_current = self.select_preview_source.as_deref() == Some(result.key.as_str());
             match result.result {
-                Ok(sample) => {
+                Ok(prepared) => {
                     if is_current {
-                        let loaded = self.play_select_preview_sample(sample.clone(), 0.0);
+                        let loaded = self.play_select_preview_sample(prepared.clone(), 0.0);
                         self.select_preview_playing = loaded;
                         if loaded {
                             self.begin_select_preview_fade_in();
@@ -2997,7 +4008,7 @@ impl WinitApp {
                     }
                     self.insert_select_preview_cache(
                         result.key,
-                        SelectPreviewCacheEntry::Ready(sample),
+                        SelectPreviewCacheEntry::Ready(prepared),
                     );
                 }
                 Err(error) => {
@@ -3066,10 +4077,13 @@ impl WinitApp {
         if cache_key.as_deref() == self.select_preview_source.as_deref() {
             if !self.select_preview_playing
                 && let Some(key) = cache_key.as_deref()
-                && let Some(SelectPreviewCacheEntry::Ready(sample)) =
-                    self.select_preview_cache.get(key)
+                && let Some(prepared) =
+                    self.select_preview_cache.get(key).and_then(|entry| match entry {
+                        SelectPreviewCacheEntry::Ready(prepared) => Some(prepared.clone()),
+                        _ => None,
+                    })
             {
-                self.select_preview_playing = self.play_select_preview_sample(sample.clone(), 0.0);
+                self.select_preview_playing = self.play_select_preview_sample(prepared, 0.0);
                 if self.select_preview_playing {
                     self.begin_select_preview_fade_in();
                 }
@@ -3088,8 +4102,9 @@ impl WinitApp {
                     fading_out = true;
                     false
                 }
-                Some(SelectPreviewCacheEntry::Ready(sample)) => {
-                    let loaded = self.play_select_preview_sample(sample.clone(), 0.0);
+                Some(SelectPreviewCacheEntry::Ready(prepared)) => {
+                    let prepared = prepared.clone();
+                    let loaded = self.play_select_preview_sample(prepared, 0.0);
                     if loaded {
                         self.begin_select_preview_fade_in();
                     }
@@ -3276,18 +4291,30 @@ impl WinitApp {
     }
 
     fn select_preview_volume(&self) -> f32 {
+        self.select_preview_volume_for_gain(self.select_preview_normalization_gain)
+    }
+
+    fn select_preview_volume_for_gain(&self, analyzed_gain: f32) -> f32 {
         let mix = &self.boot.profile_config.audio_mix;
         let volume = crate::config::play::volume_unit_to_f32(mix.master_volume)
-            * crate::config::play::volume_unit_to_f32(mix.preview_volume);
+            * crate::config::play::volume_unit_to_f32(mix.preview_volume)
+            * select_preview_normalization_gain(mix.normalize_chart_volume, analyzed_gain);
         volume.clamp(0.0, 1.0)
     }
 
-    fn play_select_preview_sample(&self, sample: DecodedSample, volume_factor: f32) -> bool {
-        let loaded = self.select_preview.as_ref().is_some_and(|preview| {
-            preview
-                .play_sample(sample, self.select_preview_volume() * volume_factor.clamp(0.0, 1.0))
-        });
+    fn play_select_preview_sample(
+        &mut self,
+        prepared: PreparedSelectPreview,
+        volume_factor: f32,
+    ) -> bool {
+        let volume = self.select_preview_volume_for_gain(prepared.normalization_gain)
+            * volume_factor.clamp(0.0, 1.0);
+        let loaded = self
+            .select_preview
+            .as_ref()
+            .is_some_and(|preview| preview.play_sample(prepared.sample, volume));
         if loaded {
+            self.select_preview_normalization_gain = prepared.normalization_gain;
             self.start_audio_output_stream();
         }
         loaded
@@ -3393,6 +4420,7 @@ impl WinitApp {
                         generated.start_ms,
                         sample_rate,
                     )
+                    .map(prepare_select_preview)
                     .map_err(|error| format!("{error:#}"));
                     let _ = tx.send(SelectPreviewResult { key: result_key, path: None, result });
                 })
@@ -3413,7 +4441,7 @@ impl WinitApp {
             let result = match path.as_ref() {
                 Some(path) => {
                     let mut loader = FfmpegSampleLoader::default();
-                    loader.load(path).map_err(|error| error.to_string())
+                    loader.load(path).map(prepare_select_preview).map_err(|error| error.to_string())
                 }
                 None => Err("chart preview audio file not found".to_string()),
             };
@@ -3483,7 +4511,7 @@ impl WinitApp {
     }
 
     fn decide_snapshot(&self, decide: &DecideTransition) -> RenderSnapshot {
-        let mut snapshot = decide.snapshot.clone();
+        let mut snapshot = decide.snapshot_for_render();
         let elapsed = match decide.fadeout_started_at {
             Some(fadeout_started_at) => {
                 let fadeout_duration = self.decide_fadeout_duration();
@@ -3537,6 +4565,20 @@ impl WinitApp {
         }
     }
 
+    fn update_pressed_play_input(
+        &mut self,
+        device: DeviceId,
+        control: &PhysicalControl,
+        pressed: bool,
+    ) {
+        let input = (device, control.clone());
+        if pressed {
+            self.pressed_play_inputs.insert(input);
+        } else {
+            self.pressed_play_inputs.remove(&input);
+        }
+    }
+
     fn sync_select_holds_from_pressed_controls(&mut self) {
         let (start_held, select_held, e_action_holds) =
             select_hold_state_from_pressed_controls(&self.pressed_controls, &self.select_keys);
@@ -3561,15 +4603,26 @@ impl WinitApp {
     }
 
     fn update_select_option_panel(&mut self) {
-        if in_settings_stack(&self.folder_stack) {
-            self.select_option_panel = 0;
-            return;
-        }
-        let panel = select_option_panel_for_holds(self.start_held, self.select_held);
-        if self.select_option_panel != panel {
-            self.select_option_panel = panel;
-            self.option_panel_started_at = Instant::now();
+        let panel = if in_settings_stack(&self.folder_stack) {
+            0
+        } else {
+            select_option_panel_for_holds(self.start_held, self.select_held)
+        };
+        let previous_panel = self.select_option_panel;
+        let now = Instant::now();
+        if transition_select_option_panel(
+            &mut self.select_option_panel,
+            &mut self.option_panel_started_at,
+            &mut self.option_panel_off_started_at,
+            panel,
+            now,
+        ) {
             self.reset_select_analog_scroll();
+            if let Some(sound_type) =
+                select_option_panel_sound_for_transition(previous_panel, panel)
+            {
+                self.play_system_sound(sound_type);
+            }
         }
     }
 
@@ -3683,7 +4736,7 @@ impl WinitApp {
         let Some(session) = self.key_config_edit.as_ref() else {
             return;
         };
-        if !session.listening || session.target.slot() != KeyBindingSlot::Controller {
+        if !session.listening || !session.target.slot().is_controller() {
             return;
         }
         let target = session.target;
@@ -3732,6 +4785,10 @@ impl WinitApp {
 
     fn sync_select_settings_from_profile_if_needed(&mut self, entry_id: SettingsEntryId) {
         self.sync_select_play_options_from_profile_if_needed(entry_id);
+        if entry_id == SettingsEntryId::SelectInputMode {
+            self.select_keys = SelectKeyBindings::from_profile(&self.boot.profile_config.input);
+            self.sync_select_holds_from_pressed_controls();
+        }
         if SettingsEntryId::VOLUME_ENTRIES.contains(&entry_id) {
             self.sync_realtime_profile_settings();
         }
@@ -3911,6 +4968,42 @@ impl WinitApp {
         }
     }
 
+    fn apply_gamepad_play_option_control(&mut self, device: DeviceId, control: &str) -> bool {
+        let app_config = self.play_session_app_config();
+        let slots = crate::input::gamepad::GamepadSlotMap::from_runtime_or_legacy(
+            app_config.input.gamepad_slot_runtime_device_ids,
+            app_config.input.gamepad_slot_gilrs_ids,
+        );
+        match select_option_lane_for_gamepad(
+            &self.boot.profile_config.input,
+            slots,
+            device,
+            control,
+        ) {
+            Some(Lane::Key1) => {
+                self.arrange_option = self.arrange_option.cycle();
+                tracing::info!(arrange = self.arrange_option.as_str(), "arrange option changed");
+                true
+            }
+            Some(Lane::Key2) => {
+                self.arrange_option = self.arrange_option.cycle_prev();
+                tracing::info!(arrange = self.arrange_option.as_str(), "arrange option changed");
+                true
+            }
+            Some(Lane::Key8) => {
+                self.arrange_option_2p = self.arrange_option_2p.cycle();
+                tracing::info!(arrange_2p = self.arrange_option_2p.as_str(), "2P arrange changed");
+                true
+            }
+            Some(Lane::Key9) => {
+                self.arrange_option_2p = self.arrange_option_2p.cycle_prev();
+                tracing::info!(arrange_2p = self.arrange_option_2p.as_str(), "2P arrange changed");
+                true
+            }
+            _ => self.apply_play_option_control(control),
+        }
+    }
+
     fn set_assist_option(&mut self, assist: AssistOption) {
         self.assist_option = assist;
         self.boot.profile_config.play.auto_play = assist == AssistOption::Autoplay;
@@ -3930,11 +5023,26 @@ impl WinitApp {
         {
             self.cycle_bga_option();
             true
+        } else if let Some(delta) = green_number_delta_control(control, &self.select_keys) {
+            self.adjust_select_green_number(delta)
         } else if let Some(delta_ms) = visual_offset_delta_control(control, &self.select_keys) {
             self.adjust_visual_offset_ms(delta_ms)
         } else {
             false
         }
+    }
+
+    fn adjust_select_green_number(&mut self, delta: i32) -> bool {
+        let current = self.boot.profile_config.lane.target_green_number.max(1);
+        let next = adjusted_green_number(current, delta);
+        if current == next {
+            return false;
+        }
+        self.boot.profile_config.lane.target_green_number = next;
+        self.boot.profile_config.updated_at = now_unix_seconds();
+        self.sync_realtime_profile_settings();
+        tracing::info!(target_green_number = next, "select green number changed");
+        true
     }
 
     fn adjust_visual_offset_ms(&mut self, delta_ms: i32) -> bool {
@@ -3956,8 +5064,16 @@ impl WinitApp {
 
     fn route_keyboard_input(&mut self, event: &winit::event::KeyEvent) {
         let play_control = (!event.repeat).then(|| physical_key_name(event.physical_key)).flatten();
+        let play_physical_control = physical_key_to_control(event.physical_key);
         if let Some(control) = play_control.as_deref() {
             self.update_pressed_control(control, event.state == ElementState::Pressed);
+        }
+        if let Some(control) = play_physical_control.as_ref() {
+            self.update_pressed_play_input(
+                W_KEYBOARD_DEVICE_ID,
+                control,
+                event.state == ElementState::Pressed,
+            );
         }
         let has_play_control_context =
             self.active_play.is_some() || self.pending_play_start.is_some();
@@ -3975,36 +5091,72 @@ impl WinitApp {
         {
             return;
         }
-        if has_play_control_context && let Some(control) = play_control.as_deref() {
-            self.update_play_e1_control_state(control, event.state == ElementState::Pressed);
+        if has_play_control_context && let Some(control) = play_physical_control.as_ref() {
+            self.update_play_e1_control_state(
+                W_KEYBOARD_DEVICE_ID,
+                control,
+                event.state == ElementState::Pressed,
+            );
         }
         if has_play_control_context
-            && let Some(control) = play_control.as_deref()
-            && self.update_play_exit_control_state(control, event.state == ElementState::Pressed)
+            && let Some(control) = play_physical_control.as_ref()
+            && self.update_play_exit_control_state(
+                W_KEYBOARD_DEVICE_ID,
+                control,
+                event.state == ElementState::Pressed,
+            )
         {
             return;
         }
         let window_keyboard_gameplay_enabled = self.window_keyboard_gameplay_enabled();
-        if let Some(active_play) = &mut self.active_play {
-            if event.state == ElementState::Pressed
-                && !event.repeat
-                && active_play.running.session.lane_cover_changing
-                && let Some(control) = physical_key_name(event.physical_key)
-                && let Some(action) = play_option_control_for_holds(
-                    &control,
+        if window_keyboard_gameplay_enabled && !event.repeat {
+            match event.state {
+                ElementState::Pressed if has_play_control_context => {
+                    self.window_input_pressed_keys.insert(event.physical_key);
+                }
+                ElementState::Released => {
+                    self.window_input_pressed_keys.remove(&event.physical_key);
+                }
+                ElementState::Pressed => {}
+            }
+        }
+        if has_play_control_context
+            && window_keyboard_gameplay_enabled
+            && let Some(device_event) = key_event_to_device_input(event)
+        {
+            self.route_play_device_input(device_event);
+        }
+        let play_option_control = if event.state == ElementState::Pressed && !event.repeat {
+            play_physical_control.as_ref().and_then(|control| {
+                play_option_control_for_input(
+                    W_KEYBOARD_DEVICE_ID,
+                    control,
                     self.play_e1_held,
                     self.play_e2_held,
-                    &self.select_keys,
+                    self.play_option_input.as_ref(),
+                    &self.boot.profile_config.input,
                 )
+            })
+        } else {
+            None
+        };
+        if let Some(active_play) = &mut self.active_play {
+            if active_play.running.session.lane_cover_changing
+                && let Some(action) = play_option_control
             {
                 let speed_locked = self.active_course.as_ref().is_some_and(|c| {
                     c.definition.constraints.speed
                         == bmz_core::course::CourseSpeedConstraint::NoSpeed
                 });
+                let hispeed_step = hispeed_step_for_profile(
+                    &self.boot.profile_config,
+                    active_play.running.session.hispeed_mode,
+                );
                 if apply_play_option_control_to_session(
                     &mut active_play.running.session,
                     action,
                     speed_locked,
+                    hispeed_step,
                 ) {
                     tracing::info!(
                         hispeed = active_play.running.session.hispeed,
@@ -4021,6 +5173,7 @@ impl WinitApp {
                     &mut self.last_play_snapshot,
                     &active_play.running.session,
                     active_play.running.applied_arrange.arrange,
+                    active_play.running.applied_arrange.arrange_2p,
                 );
                 // E1+lane keys should still reach gameplay input so notes are judged
                 // and key beams render while changing play options.
@@ -4035,7 +5188,15 @@ impl WinitApp {
                     tracing::debug!("hispeed change ignored: course NoSpeed constraint");
                     return;
                 }
-                apply_hispeed_change_to_session(&mut active_play.running.session, change);
+                let hispeed_step = hispeed_step_for_profile(
+                    &self.boot.profile_config,
+                    active_play.running.session.hispeed_mode,
+                );
+                apply_hispeed_change_to_session(
+                    &mut active_play.running.session,
+                    change,
+                    hispeed_step,
+                );
                 tracing::info!(
                     hispeed = active_play.running.session.hispeed,
                     hispeed_mode = ?active_play.running.session.hispeed_mode,
@@ -4047,6 +5208,7 @@ impl WinitApp {
                     &mut self.last_play_snapshot,
                     &active_play.running.session,
                     active_play.running.applied_arrange.arrange,
+                    active_play.running.applied_arrange.arrange_2p,
                 );
                 return;
             }
@@ -4095,12 +5257,10 @@ impl WinitApp {
                         &mut self.last_play_snapshot,
                         &active_play.running.session,
                         active_play.running.applied_arrange.arrange,
+                        active_play.running.applied_arrange.arrange_2p,
                     );
                 }
                 // Start キーはゲームプレイ入力としても通すのでフォールスルー
-            }
-            if window_keyboard_gameplay_enabled {
-                crate::input::winit::handle_key_event(&active_play.input, event);
             }
             return;
         }
@@ -4134,18 +5294,20 @@ impl WinitApp {
                 self.apply_pending_play_hispeed_change(change);
                 return;
             }
+            if let Some(delta) = lane_cover_step(event.physical_key, event.state, event.repeat) {
+                self.apply_pending_play_lane_action(PendingPlayLaneAction::LaneCoverDelta(delta));
+                return;
+            }
+            if let Some(action) = play_option_control {
+                self.apply_pending_play_option_control(action, false);
+                return;
+            }
             if event.state == ElementState::Pressed
                 && !event.repeat
                 && let Some(control) = play_control.as_deref()
-                && let Some(action) = play_option_control_for_holds(
-                    control,
-                    self.play_e1_held,
-                    self.play_e2_held,
-                    &self.select_keys,
-                )
+                && self.select_keys.is_start(control)
             {
-                self.apply_pending_play_option_control(action, control.starts_with("Axis"));
-                return;
+                self.handle_play_start_double_press();
             }
             return;
         }
@@ -4283,6 +5445,25 @@ impl WinitApp {
         {
             self.reload_from_select_context();
             return;
+        }
+
+        if matches!(self.view_state(), AppViewState::Select)
+            && event.state == ElementState::Pressed
+            && !event.repeat
+        {
+            match event.physical_key {
+                PhysicalKey::Code(KeyCode::F3) => self.handle_select_f3_action(),
+                PhysicalKey::Code(KeyCode::F10) => self.start_autoplay_folder_selected(),
+                PhysicalKey::Code(KeyCode::F11) => self.open_primary_ir_for_selected(),
+                PhysicalKey::Code(KeyCode::Numpad9) => self.open_selected_chart_documents(),
+                _ => {}
+            }
+            if matches!(
+                event.physical_key,
+                PhysicalKey::Code(KeyCode::F3 | KeyCode::F10 | KeyCode::F11 | KeyCode::Numpad9)
+            ) {
+                return;
+            }
         }
 
         if matches!(self.view_state(), AppViewState::Select)
@@ -4446,7 +5627,13 @@ impl WinitApp {
         }
 
         if self.select_option_panel != 0 {
-            if event.state == ElementState::Pressed && !event.repeat {
+            if event.state == ElementState::Pressed
+                && (!event.repeat
+                    || (self.select_option_panel == 3
+                        && physical_key_name(event.physical_key).is_some_and(|control| {
+                            green_number_delta_control(&control, &self.select_keys).is_some()
+                        })))
+            {
                 match self.select_option_panel {
                     1 => {
                         if let Some(slot) = digit_to_replay_slot(event.physical_key) {
@@ -4524,19 +5711,42 @@ impl WinitApp {
     }
 
     fn poll_gamepad_events(&mut self) {
-        let Some(gilrs) = &mut self.gilrs else { return };
-        let output = gilrs.poll();
-        if self.should_log_gamepad_key_config_raw_input() {
+        let should_log_raw_input = self.should_log_gamepad_key_config_raw_input();
+        let Some(gamepad) = &mut self.gamepad else { return };
+        let backend_name = gamepad.name();
+        let output = gamepad.poll();
+        if should_discard_gamepad_output(
+            self.focused,
+            &mut self.discard_gamepad_output_until_resynced,
+        ) {
+            for event in output
+                .buttons
+                .iter()
+                .filter(|event| should_route_gamepad_event_while_discarding(event.pressed))
+            {
+                self.route_gamepad_button_event(event);
+            }
+            self.reset_select_analog_scroll();
+            self.reset_play_analog_scroll();
+            return;
+        }
+        if should_log_raw_input {
             for event in &output.raw_events {
-                log_gilrs_key_config_raw_event(event);
+                log_gamepad_key_config_raw_event(backend_name, event);
             }
         }
+        #[cfg(windows)]
+        if let Some(diagnostics) = gamepad.gameinput_diagnostics()
+            && diagnostics.reading_count > 0
+        {
+            tracing::trace!(
+                reading_count = diagnostics.reading_count,
+                oldest_reading_age_us = diagnostics.oldest_reading_age_us,
+                "GameInput main-thread poll"
+            );
+        }
         for event in &output.buttons {
-            let device_event = crate::input::gilrs::to_device_input_event(event);
-            if let Some(active_play) = &self.active_play {
-                active_play.input.push_shared_event(device_event);
-            }
-            self.route_gamepad_button(&event.name.clone(), event.pressed);
+            self.route_gamepad_button_event(event);
         }
         for tick in &output.axis_ticks {
             // キーコンフィグ待ち受け中は合成 Press を待たず、生 tick から直接捕捉する。
@@ -4550,10 +5760,16 @@ impl WinitApp {
         }
     }
 
+    fn route_gamepad_button_event(&mut self, event: &crate::input::gamepad::GamepadButtonEvent) {
+        let device_event = crate::input::gamepad::to_device_input_event(event);
+        self.route_play_device_input(device_event);
+        self.route_gamepad_button(event.device_id, &event.name, event.pressed);
+    }
+
     fn should_log_gamepad_key_config_raw_input(&self) -> bool {
-        self.key_config_edit.as_ref().is_some_and(|session| {
-            session.listening && session.target.slot() == KeyBindingSlot::Controller
-        })
+        self.key_config_edit
+            .as_ref()
+            .is_some_and(|session| session.listening && session.target.slot().is_controller())
     }
 
     fn route_gamepad_axis_ticks(&mut self, axis: &str, ticks: i32) {
@@ -4575,11 +5791,15 @@ impl WinitApp {
                 return false;
             }
         };
-        if !self
+        let lane_value_changing = self
             .active_play
             .as_ref()
             .is_some_and(|active_play| active_play.running.session.lane_cover_changing)
-        {
+            || self
+                .pending_play_start
+                .as_ref()
+                .is_some_and(|pending| pending.lane.lane_cover_changing);
+        if !lane_value_changing {
             self.reset_play_analog_scroll();
             return false;
         }
@@ -4618,8 +5838,9 @@ impl WinitApp {
                     );
                 }
                 PlayAnalogOptionMode::GreenNumber => {
-                    let delta = green_number_change_step(green_number_change_from_lane(change))
-                        * steps.abs();
+                    let delta =
+                        green_number_change_step(green_number_change_from_analog_steps(steps))
+                            * steps.abs();
                     if apply_green_number_step_to_session(session, delta, speed_locked) {
                         tracing::info!(
                             hispeed = session.hispeed,
@@ -4629,6 +5850,23 @@ impl WinitApp {
                     } else {
                         tracing::debug!("green number change ignored: course NoSpeed constraint");
                     }
+                }
+            }
+        } else {
+            match mode {
+                PlayAnalogOptionMode::LaneCover => {
+                    let delta = lane_cover_change_step(change) * steps.abs() as f32;
+                    self.apply_pending_play_lane_action(PendingPlayLaneAction::LaneCoverDelta(
+                        delta,
+                    ));
+                }
+                PlayAnalogOptionMode::GreenNumber => {
+                    let delta =
+                        green_number_change_step(green_number_change_from_analog_steps(steps))
+                            * steps.abs();
+                    self.apply_pending_play_lane_action(PendingPlayLaneAction::GreenNumberDelta(
+                        delta,
+                    ));
                 }
             }
         }
@@ -4686,6 +5924,10 @@ impl WinitApp {
     /// 蓄積したアナログ tick を analog_ticks_per_scroll ごとに 1 移動へ変換する。
     /// beatoraja MusicSelectInputProcessor の analogScrollBuffer と同じ仕組み。
     fn advance_select_analog_scroll(&mut self) {
+        if !self.focused {
+            self.reset_select_analog_scroll();
+            return;
+        }
         if !matches!(self.view_state(), AppViewState::Select) {
             self.reset_select_analog_scroll();
             return;
@@ -4726,8 +5968,10 @@ impl WinitApp {
         }
     }
 
-    fn route_gamepad_button(&mut self, button: &str, pressed: bool) {
+    fn route_gamepad_button(&mut self, device: DeviceId, button: &str, pressed: bool) {
+        let physical_control = PhysicalControl::GamepadButton(button.to_string());
         self.update_pressed_control(button, pressed);
+        self.update_pressed_play_input(device, &physical_control, pressed);
         let has_play_control_context =
             self.active_play.is_some() || self.pending_play_start.is_some();
         if pressed && self.handle_quick_retry_control(button) {
@@ -4736,24 +5980,31 @@ impl WinitApp {
         if pressed && self.begin_play_fadeout_after_final_notes_control(button) {
             return;
         }
-        if has_play_control_context {
-            self.update_play_e1_control_state(button, pressed);
-        }
-        if has_play_control_context && self.update_play_exit_control_state(button, pressed) {
+        let play_e1_control = has_play_control_context
+            && self.update_play_e1_control_state(device, &physical_control, pressed);
+        if has_play_control_context
+            && self.update_play_exit_control_state(device, &physical_control, pressed)
+        {
             return;
         }
+        let play_option_control = pressed.then(|| {
+            play_option_control_for_input(
+                device,
+                &physical_control,
+                self.play_e1_held,
+                self.play_e2_held,
+                self.play_option_input.as_ref(),
+                &self.boot.profile_config.input,
+            )
+        });
+        let play_option_control = play_option_control.flatten();
         if pressed {
             let speed_locked = self.active_course.as_ref().is_some_and(|c| {
                 c.definition.constraints.speed == bmz_core::course::CourseSpeedConstraint::NoSpeed
             });
             if let Some(active_play) = &mut self.active_play
                 && active_play.running.session.lane_cover_changing
-                && let Some(action) = play_option_control_for_holds(
-                    button,
-                    self.play_e1_held,
-                    self.play_e2_held,
-                    &self.select_keys,
-                )
+                && let Some(action) = play_option_control
             {
                 if button.starts_with("Axis")
                     && matches!(
@@ -4763,10 +6014,15 @@ impl WinitApp {
                 {
                     return;
                 }
+                let hispeed_step = hispeed_step_for_profile(
+                    &self.boot.profile_config,
+                    active_play.running.session.hispeed_mode,
+                );
                 if apply_play_option_control_to_session(
                     &mut active_play.running.session,
                     action,
                     speed_locked,
+                    hispeed_step,
                 ) {
                     tracing::info!(
                         hispeed = active_play.running.session.hispeed,
@@ -4801,7 +6057,7 @@ impl WinitApp {
         // プレイ中: Start / E1 の2回連続押しでレーンカバー表示切替。
         // プレイ入力自体は push_shared_event で処理済み。
         if self.active_play.is_some() {
-            if self.select_keys.is_start(button) {
+            if play_e1_control {
                 self.handle_play_start_double_press();
             }
             return;
@@ -4823,16 +6079,12 @@ impl WinitApp {
         }
 
         if self.pending_play_start.is_some() {
-            if pressed
-                && let Some(action) = play_option_control_for_holds(
-                    button,
-                    self.play_e1_held,
-                    self.play_e2_held,
-                    &self.select_keys,
-                )
-            {
+            if let Some(action) = play_option_control {
                 self.apply_pending_play_option_control(action, button.starts_with("Axis"));
                 return;
+            }
+            if play_e1_control {
+                self.handle_play_start_double_press();
             }
             return;
         }
@@ -4972,7 +6224,7 @@ impl WinitApp {
                 return;
             }
             let option_changed = match self.select_option_panel {
-                1 => self.apply_play_option_control(button),
+                1 => self.apply_gamepad_play_option_control(device, button),
                 3 => self.apply_detail_option_control(button),
                 _ => false,
             };
@@ -5021,24 +6273,42 @@ impl WinitApp {
     }
 
     fn route_mouse_wheel(&mut self, delta: MouseScrollDelta) {
-        if let Some(change) = lane_cover_wheel_change(delta)
-            && let Some(active_play) = &mut self.active_play
-        {
-            let speed_locked = self.active_course.as_ref().is_some_and(|c| {
-                c.definition.constraints.speed == bmz_core::course::CourseSpeedConstraint::NoSpeed
-            });
-            let session = &mut active_play.running.session;
-            apply_lane_cover_step_to_session(session, lane_cover_change_step(change), speed_locked);
-            tracing::info!(
-                lane_cover = session.lane_cover,
-                lift = session.lift,
-                hispeed = session.hispeed,
-                "adjusted lane cover from mouse wheel"
-            );
-            self.update_pre_ready_play_snapshot_options();
-            return;
+        if let Some(change) = lane_cover_wheel_change(delta) {
+            if let Some(active_play) = &mut self.active_play {
+                let speed_locked = self.active_course.as_ref().is_some_and(|c| {
+                    c.definition.constraints.speed
+                        == bmz_core::course::CourseSpeedConstraint::NoSpeed
+                });
+                let session = &mut active_play.running.session;
+                apply_lane_cover_step_to_session(
+                    session,
+                    lane_cover_change_step(change),
+                    speed_locked,
+                );
+                tracing::info!(
+                    lane_cover = session.lane_cover,
+                    lift = session.lift,
+                    hispeed = session.hispeed,
+                    "adjusted lane cover from mouse wheel"
+                );
+                self.update_pre_ready_play_snapshot_options();
+                return;
+            }
+            if self.pending_play_start.is_some() {
+                self.apply_pending_play_lane_action(PendingPlayLaneAction::LaneCoverDelta(
+                    lane_cover_change_step(change),
+                ));
+                return;
+            }
         }
         if !matches!(self.view_state(), AppViewState::Select) {
+            return;
+        }
+        if in_settings_stack(&self.folder_stack) && self.settings_edit.is_some() {
+            let direction = settings_edit_direction_from_mouse_wheel(delta);
+            if direction != 0 {
+                self.adjust_settings_edit(direction);
+            }
             return;
         }
         if let Some(select_move) = select_wheel_move(delta) {
@@ -5047,10 +6317,6 @@ impl WinitApp {
     }
 
     fn route_mouse_input(&mut self, state: ElementState, button: MouseButton) {
-        if !matches!(self.view_state(), AppViewState::Select) {
-            self.select_slider_dragging_type = None;
-            return;
-        }
         if state == ElementState::Released {
             self.select_slider_dragging_type = None;
             return;
@@ -5061,6 +6327,25 @@ impl WinitApp {
         let Some((x, y)) = self.cursor_position_normalized() else {
             return;
         };
+        if matches!(self.view_state(), AppViewState::Result) {
+            self.select_slider_dragging_type = None;
+            if button == MouseButton::Left && self.result_exit.is_none() {
+                let AppSceneSnapshot::Result(snapshot) = self.scene_snapshot() else {
+                    return;
+                };
+                if let Some(hit) = self.renderer.result_skin_slider_hit(&snapshot, x, y) {
+                    self.select_slider_dragging_type = Some(hit.slider_type);
+                    self.apply_result_slider_hit(hit);
+                    return;
+                }
+                self.handle_result_skin_click(x, y);
+            }
+            return;
+        }
+        if !matches!(self.view_state(), AppViewState::Select) {
+            self.select_slider_dragging_type = None;
+            return;
+        }
         if button == MouseButton::Left
             && !in_settings_stack(&self.folder_stack)
             && self.select_search_word_hit(x, y)
@@ -5087,15 +6372,61 @@ impl WinitApp {
         self.handle_select_skin_click(hit, button, x, y);
     }
 
+    fn handle_result_skin_click(&mut self, x: f32, y: f32) {
+        let AppSceneSnapshot::Result(snapshot) = self.scene_snapshot() else {
+            return;
+        };
+        let Some(hit) = self.renderer.result_skin_click_hit(&snapshot, x, y) else {
+            return;
+        };
+        let SkinClickTarget::Event { event_id, .. } = hit.target else {
+            return;
+        };
+        match result_skin_click_action(event_id) {
+            Some(ResultSkinClickAction::SetPanel(panel)) => {
+                self.set_result_panel(panel);
+            }
+            Some(ResultSkinClickAction::ToggleFavoriteChart) => {
+                self.toggle_favorite_chart_result();
+            }
+            Some(ResultSkinClickAction::SaveReplay(slot)) => {
+                if self.finished_course.is_some() {
+                    self.save_finished_course_replay_slot(slot);
+                } else {
+                    self.save_finished_play_replay_slot(slot);
+                }
+            }
+            Some(ResultSkinClickAction::ResetDailyStatistics) => {
+                self.reset_daily_statistics();
+            }
+            None => {
+                let _ = self.renderer.dispatch_result_skin_runtime_event(event_id);
+            }
+        }
+    }
+
     fn route_select_slider_drag(&mut self) {
-        if self.select_slider_dragging_type.is_none()
-            || !matches!(self.view_state(), AppViewState::Select)
-        {
+        if self.select_slider_dragging_type.is_none() {
             return;
         }
         let Some((x, y)) = self.cursor_position_normalized() else {
             return;
         };
+        if matches!(self.view_state(), AppViewState::Result) {
+            if self.result_exit.is_some() {
+                return;
+            }
+            let AppSceneSnapshot::Result(snapshot) = self.scene_snapshot() else {
+                return;
+            };
+            if let Some(hit) = self.renderer.result_skin_slider_hit(&snapshot, x, y) {
+                self.apply_result_slider_hit(hit);
+            }
+            return;
+        }
+        if !matches!(self.view_state(), AppViewState::Select) {
+            return;
+        }
         let snapshot = self.select_snapshot();
         if let Some(hit) = self.renderer.select_skin_slider_hit(&snapshot, x, y) {
             self.apply_select_slider_hit(hit);
@@ -5176,6 +6507,16 @@ impl WinitApp {
         }
     }
 
+    fn apply_result_slider_hit(&mut self, hit: SkinSliderHit) {
+        if hit.slider_type == 8 {
+            if let Some(result_ir) = &mut self.result_ir {
+                result_ir.set_skin_scroll_rate(hit.value);
+            }
+        } else {
+            tracing::debug!(slider_type = hit.slider_type, "unsupported result skin slider");
+        }
+    }
+
     fn apply_select_scroll_slider(&mut self, value: f32) {
         let Some(next) = select_scroll_slider_index(value, self.select_items.len()) else {
             return;
@@ -5202,6 +6543,23 @@ impl WinitApp {
     }
 
     fn handle_select_row_click(&mut self, row_index: u32, button: MouseButton) {
+        if in_settings_stack(&self.folder_stack) && button == MouseButton::Left {
+            if self.settings_edit.is_some() {
+                self.commit_settings_edit();
+                return;
+            }
+            if let Some(entry_id) =
+                self.select_items.get(row_index as usize).and_then(|item| match item {
+                    SelectItem::Config(row) => Some(row.entry_id),
+                    _ => None,
+                })
+            {
+                self.selected_index = row_index as usize;
+                self.restart_select_bar_timer_without_scroll(Instant::now());
+                self.begin_settings_edit(entry_id);
+                return;
+            }
+        }
         match select_row_click_action(
             row_index,
             button,
@@ -5221,6 +6579,7 @@ impl WinitApp {
 
     fn execute_select_skin_event(&mut self, event_id: i32, arg: i32) {
         match event_id {
+            SKIN_EVENT_DAILY_STATISTICS_RESET => self.reset_daily_statistics(),
             // beatoraja EventFactory: play / autoplay / practice.
             15 => {
                 self.set_assist_option(AssistOption::Normal);
@@ -5272,9 +6631,39 @@ impl WinitApp {
                 self.cycle_select_sort(arg);
             }
             321..=324 => self.cycle_replay_slot_rule(event_id, arg),
+            330 => {
+                self.boot.profile_config.play.lane_effect =
+                    toggled_select_sudden(self.boot.profile_config.play.lane_effect);
+                self.play_system_sound(crate::system_sound::SoundType::OptionChange);
+            }
+            331 => {
+                self.boot.profile_config.lane.lift_enabled =
+                    !self.boot.profile_config.lane.lift_enabled;
+                self.play_system_sound(crate::system_sound::SoundType::OptionChange);
+            }
+            332 => {
+                self.boot.profile_config.play.lane_effect =
+                    toggled_select_hidden(self.boot.profile_config.play.lane_effect);
+                self.play_system_sound(crate::system_sound::SoundType::OptionChange);
+            }
+            342 => {
+                self.boot.profile_config.lane.hispeed_auto_adjust =
+                    !self.boot.profile_config.lane.hispeed_auto_adjust;
+                self.play_system_sound(crate::system_sound::SoundType::OptionChange);
+            }
             _ => {
                 tracing::debug!(event_id, arg, "unsupported select skin event");
             }
+        }
+    }
+
+    fn reset_daily_statistics(&mut self) {
+        match self.boot.score_db.reset_daily_statistics(now_unix_seconds()) {
+            Ok(()) => {
+                self.refresh_player_stats_snapshot();
+                self.play_system_sound(crate::system_sound::SoundType::OptionChange);
+            }
+            Err(error) => tracing::warn!(%error, "failed to reset daily statistics"),
         }
     }
 
@@ -5453,6 +6842,10 @@ impl WinitApp {
     }
 
     fn advance_select_hold_move(&mut self) {
+        if !self.focused {
+            self.clear_select_hold();
+            return;
+        }
         if !matches!(self.view_state(), AppViewState::Select) {
             self.clear_select_hold();
             return;
@@ -5522,10 +6915,222 @@ impl WinitApp {
                 self.reload_select_items();
                 self.restart_select_bar_timer_without_scroll(Instant::now());
                 self.play_system_sound(crate::system_sound::SoundType::OptionChange);
+                let text = Localizer::new(self.boot.profile_config.ui.locale());
+                self.show_left_overlay_toast(text.text(if enabled {
+                    "toast-favorite-chart-added"
+                } else {
+                    "toast-favorite-chart-removed"
+                }));
                 tracing::info!(enabled, title = row.display_title(), "favorite chart toggled");
             }
             Err(error) => tracing::error!(%error, "failed to toggle favorite chart"),
         }
+    }
+
+    fn toggle_favorite_chart_result(&mut self) {
+        let Some((sha256, title, artist)) = self.finished_play.as_ref().map(|finished| {
+            (
+                finished.result.chart_sha256,
+                finished.summary.title.clone(),
+                finished.summary.artist.clone(),
+            )
+        }) else {
+            return;
+        };
+        let hints = FavoriteHints::new(title.clone(), artist, "");
+        match self.boot.collection_db.toggle_favorite_chart(sha256, &hints, now_unix_seconds()) {
+            Ok(enabled) => {
+                self.result_favorite_chart = enabled;
+                self.play_system_sound(crate::system_sound::SoundType::OptionChange);
+                let text = Localizer::new(self.boot.profile_config.ui.locale());
+                self.show_left_overlay_toast(text.text(if enabled {
+                    "toast-favorite-chart-added"
+                } else {
+                    "toast-favorite-chart-removed"
+                }));
+                tracing::info!(enabled, %title, "favorite chart toggled from result");
+            }
+            Err(error) => tracing::error!(%error, "failed to toggle favorite chart from result"),
+        }
+    }
+
+    fn handle_select_f3_action(&mut self) {
+        let e1_held = self.select_e_action_holds.contains(&InputActionConfig::E1);
+        let e2_held = self.select_e_action_holds.contains(&InputActionConfig::E2);
+        let ctrl_held = self.pressed_controls.iter().any(|control| {
+            matches!(control.as_str(), "LControl" | "RControl" | "ControlLeft" | "ControlRight")
+        });
+        let shift_held = self.pressed_controls.iter().any(|control| {
+            matches!(control.as_str(), "LShift" | "RShift" | "ShiftLeft" | "ShiftRight")
+        });
+
+        if e1_held {
+            self.copy_selected_hash(false);
+        } else if e2_held || (ctrl_held && shift_held) {
+            self.copy_selected_hash(true);
+        } else if ctrl_held {
+            self.copy_selected_hash(false);
+        } else {
+            self.open_selected_chart_folder();
+        }
+    }
+
+    fn copy_selected_hash(&mut self, sha256: bool) {
+        let text = Localizer::new(self.boot.profile_config.ui.locale());
+        let Some(row) = self.selected_chart_row().cloned() else {
+            return;
+        };
+        let Some(value) = (if sha256 {
+            row.score_sha256().map(|hash| hash_to_hex(&hash))
+        } else {
+            row.chart.as_ref().map(|chart| hash_to_hex(&chart.md5))
+        }) else {
+            self.show_left_overlay_toast(text.text(if sha256 {
+                "toast-chart-hash-unavailable-sha256"
+            } else {
+                "toast-chart-hash-md5-local-only"
+            }));
+            return;
+        };
+        match arboard::Clipboard::new().and_then(|mut clipboard| clipboard.set_text(value.clone()))
+        {
+            Ok(()) => {
+                self.show_left_overlay_toast(text.text(if sha256 {
+                    "toast-chart-hash-copied-sha256"
+                } else {
+                    "toast-chart-hash-copied-md5"
+                }));
+                tracing::info!(sha256, hash = %value, "copied chart hash to clipboard");
+            }
+            Err(error) => {
+                tracing::warn!(%error, sha256, "failed to copy chart hash to clipboard");
+                self.show_left_overlay_toast(text.text("toast-clipboard-copy-failed"));
+            }
+        }
+    }
+
+    fn open_selected_chart_folder(&mut self) {
+        let text = Localizer::new(self.boot.profile_config.ui.locale());
+        let Some(chart) = self.selected_chart_row().and_then(|row| row.chart.clone()) else {
+            return;
+        };
+        let folder = PathBuf::from(&chart.folder_path);
+        if let Err(error) = open_file_browser_path(&folder) {
+            tracing::warn!(path = %folder.display(), %error, "failed to open selected chart folder");
+            self.show_left_overlay_toast(text.text("toast-chart-folder-open-failed"));
+        } else {
+            tracing::info!(path = %folder.display(), "opened selected chart folder");
+        }
+    }
+
+    fn open_selected_chart_documents(&mut self) {
+        let text = Localizer::new(self.boot.profile_config.ui.locale());
+        let Some(chart) = self.selected_chart_row().and_then(|row| row.chart.clone()) else {
+            return;
+        };
+        let folder = PathBuf::from(&chart.folder_path);
+        let mut opened = 0usize;
+        match std::fs::read_dir(&folder) {
+            Ok(entries) => {
+                for entry in entries.flatten() {
+                    let path = entry.path();
+                    let is_text = path
+                        .extension()
+                        .and_then(|extension| extension.to_str())
+                        .is_some_and(|extension| extension.eq_ignore_ascii_case("txt"));
+                    if is_text && open_file_with_default_app(&path).is_ok() {
+                        opened += 1;
+                    }
+                }
+            }
+            Err(error) => {
+                tracing::warn!(path = %folder.display(), %error, "failed to read chart documents");
+            }
+        }
+        if opened == 0 {
+            self.show_left_overlay_toast(text.text("toast-chart-text-not-found"));
+        } else {
+            let mut args = FluentArgs::new();
+            args.set("count", opened as i64);
+            self.show_left_overlay_toast(text.format("toast-chart-text-opened", &args));
+        }
+    }
+
+    fn open_primary_ir_for_selected(&mut self) {
+        let text = Localizer::new(self.boot.profile_config.ui.locale());
+        let Some(row) = self.selected_chart_row() else {
+            return;
+        };
+        let Some(sha256) = row.score_sha256() else {
+            self.show_left_overlay_toast(text.text("toast-ir-chart-hash-missing"));
+            return;
+        };
+        let Some(provider) = primary_ir_provider_for_profile(&self.boot.profile_config) else {
+            self.show_left_overlay_toast(text.text("toast-primary-ir-not-configured"));
+            return;
+        };
+        let url =
+            format!("{}/charts/{}", provider.base_url.trim_end_matches('/'), hash_to_hex(&sha256));
+        match open_external_url(&url) {
+            Ok(()) => {
+                self.show_left_overlay_toast(text.text("toast-primary-ir-opened"));
+                tracing::info!(%url, "opened primary IR chart page");
+            }
+            Err(error) => {
+                tracing::warn!(%error, %url, "failed to open primary IR chart page");
+                self.show_left_overlay_toast(text.text("toast-primary-ir-open-failed"));
+            }
+        }
+    }
+
+    fn start_autoplay_folder_selected(&mut self) {
+        let text = Localizer::new(self.boot.profile_config.ui.locale());
+        let Some((path, kind)) =
+            self.select_items.get(self.selected_index).and_then(|item| match item {
+                SelectItem::Folder { path, kind, .. } => Some((path.clone(), *kind)),
+                _ => None,
+            })
+        else {
+            return;
+        };
+        if kind != bmz_render::scene::SelectRowKind::Folder {
+            self.show_left_overlay_toast(text.text("toast-folder-autoplay-only-normal-folder"));
+            return;
+        }
+        let mut folder_paths = vec![path.clone()];
+        match self.boot.library_db.list_descendant_folder_paths(&path) {
+            Ok(descendants) => folder_paths.extend(descendants),
+            Err(error) => {
+                tracing::warn!(folder = %path, %error, "failed to list autoplay folder descendants");
+            }
+        }
+        let folder_refs: Vec<&str> = folder_paths.iter().map(String::as_str).collect();
+        let charts = match self.boot.library_db.list_charts_in_folders(&folder_refs) {
+            Ok(charts) => charts,
+            Err(error) => {
+                tracing::warn!(folder = %path, %error, "failed to list autoplay folder charts");
+                self.show_left_overlay_toast(text.text("toast-folder-autoplay-charts-load-failed"));
+                return;
+            }
+        };
+        let mut chart_ids = Vec::with_capacity(charts.len());
+        let mut seen = HashSet::new();
+        for chart in charts {
+            if seen.insert(chart.chart_id) {
+                chart_ids.push(chart.chart_id);
+            }
+        }
+        let Some(&first_chart_id) = chart_ids.first() else {
+            self.show_left_overlay_toast(text.text("toast-folder-autoplay-empty"));
+            return;
+        };
+        self.clear_active_course_state();
+        self.autoplay_folder = Some(AutoplayFolderSession { chart_ids, next_index: 1 });
+        let mut options = self.play_start_options();
+        options.autoplay = true;
+        self.begin_decide_for_chart(first_chart_id, options);
+        self.show_left_overlay_toast(text.text("toast-folder-autoplay-started"));
+        tracing::info!(folder = %path, first_chart_id, "started folder autoplay");
     }
 
     fn toggle_favorite_song_selected(&mut self) {
@@ -5558,6 +7163,12 @@ impl WinitApp {
                 self.reload_select_items();
                 self.restart_select_bar_timer_without_scroll(Instant::now());
                 self.play_system_sound(crate::system_sound::SoundType::OptionChange);
+                let text = Localizer::new(self.boot.profile_config.ui.locale());
+                self.show_left_overlay_toast(text.text(if enabled {
+                    "toast-favorite-song-added"
+                } else {
+                    "toast-favorite-song-removed"
+                }));
                 tracing::info!(enabled, title = row.display_title(), "favorite song toggled");
             }
             Err(error) => tracing::error!(%error, "failed to toggle favorite song"),
@@ -5614,10 +7225,7 @@ impl WinitApp {
                         row.chart.as_ref().expect("in_library row has chart").chart_id,
                     );
                 } else {
-                    tracing::info!(
-                        title = row.display_title(),
-                        "skipping play for chart missing from library"
-                    );
+                    self.acquire_missing_chart(&row);
                 }
             }
             Some(SelectItem::Course(row)) => {
@@ -5648,6 +7256,119 @@ impl WinitApp {
             }
             None => {
                 tracing::warn!("no item is available to select");
+            }
+        }
+    }
+
+    fn acquire_missing_chart(&mut self, row: &SelectChartRow) {
+        let text = Localizer::new(self.boot.profile_config.ui.locale());
+        let action =
+            choose_missing_chart_action(&self.boot.app_config.downloads, &row.download_metadata);
+        match action {
+            MissingChartAction::Browser(urls) => match open_browser_urls(&urls) {
+                Ok(count) => {
+                    let mut args = FluentArgs::new();
+                    args.set("count", count as i64);
+                    self.show_left_overlay_toast(text.format("toast-chart-sources-opened", &args));
+                    tracing::info!(title = row.display_title(), count, "opened missing chart URLs");
+                }
+                Err(error) => {
+                    self.show_left_overlay_toast(text.text("toast-chart-sources-open-failed"));
+                    tracing::error!(%error, title = row.display_title(), "failed to open chart URLs");
+                }
+            },
+            MissingChartAction::Unavailable => {
+                self.show_left_overlay_toast(text.text("toast-chart-source-unavailable"));
+                tracing::info!(
+                    title = row.display_title(),
+                    "missing chart has no available acquisition source"
+                );
+            }
+            action @ (MissingChartAction::Ipfs { .. } | MissingChartAction::Http { .. }) => {
+                self.spawn_chart_download(action, row.display_title().to_string());
+            }
+        }
+    }
+
+    fn spawn_chart_download(&mut self, action: MissingChartAction, title: String) {
+        let text = Localizer::new(self.boot.profile_config.ui.locale());
+        if self.pending_chart_download.is_some() {
+            self.show_left_overlay_toast(text.text("toast-chart-download-in-progress"));
+            return;
+        }
+        let source_name = match &action {
+            MissingChartAction::Ipfs { .. } => "IPFS",
+            MissingChartAction::Http { .. } => "HTTP",
+            MissingChartAction::Browser(_) | MissingChartAction::Unavailable => return,
+        };
+        let request = ChartDownloadRequest {
+            action,
+            title: title.clone(),
+            data_dir: self.boot.app_paths.data_dir.clone(),
+        };
+        let (tx, rx) = mpsc::channel();
+        thread::Builder::new()
+            .name("chart-download".to_string())
+            .spawn(move || {
+                let result = (|| -> Result<ChartDownloadResult> {
+                    let runtime =
+                        tokio::runtime::Runtime::new().context("failed to create tokio runtime")?;
+                    runtime.block_on(download_chart(request))
+                })();
+                let _ = tx.send(result);
+            })
+            .expect("failed to spawn chart download thread");
+        self.pending_chart_download = Some(rx);
+        let mut args = FluentArgs::new();
+        args.set("source", source_name);
+        self.show_left_overlay_toast(text.format("toast-chart-download-started", &args));
+        tracing::info!(source = source_name, %title, "started chart download");
+    }
+
+    fn poll_pending_chart_download(&mut self) {
+        let text = Localizer::new(self.boot.profile_config.ui.locale());
+        let Some(rx) = &self.pending_chart_download else {
+            return;
+        };
+        match rx.try_recv() {
+            Ok(Ok(result)) => {
+                self.pending_chart_download = None;
+                let source_name = result.source.display_name();
+                let mut args = FluentArgs::new();
+                args.set("source", source_name);
+                self.show_left_overlay_toast(
+                    text.format("toast-chart-download-complete-registering", &args),
+                );
+                tracing::info!(
+                    source = source_name,
+                    path = %result.chart_dir.display(),
+                    "chart download complete"
+                );
+                let label = format!("{source_name} chart download scan");
+                if self.pending_song_scan.is_some() {
+                    self.queued_download_scan = Some((result.root_dir, label));
+                } else {
+                    self.spawn_song_scan(
+                        vec![PathEntry {
+                            path: result.root_dir.to_string_lossy().into_owned(),
+                            enabled: true,
+                            recursive: true,
+                        }],
+                        true,
+                        label,
+                    );
+                }
+            }
+            Ok(Err(error)) => {
+                self.pending_chart_download = None;
+                self.show_left_overlay_toast(text.text("toast-chart-download-failed"));
+                tracing::error!(error = %format_error_chain(&error), "chart download failed");
+            }
+            Err(mpsc::TryRecvError::Empty) => {}
+            Err(mpsc::TryRecvError::Disconnected) => {
+                self.pending_chart_download = None;
+                self.show_left_overlay_toast(text.text("toast-chart-download-worker-ended"));
+                tracing::warn!("chart download worker disconnected");
             }
         }
     }
@@ -5861,7 +7582,10 @@ impl WinitApp {
             self.search_query.clear();
             self.search_cursor = 0;
             self.reset_search_caret_blink();
-            self.search_message = Some("no song found".to_string());
+            self.search_message = Some(
+                Localizer::new(self.boot.profile_config.ui.locale())
+                    .text("select-search-no-results"),
+            );
             tracing::info!(%query, "song search returned no results");
             return;
         }
@@ -5874,7 +7598,12 @@ impl WinitApp {
         self.search_history.push_back(query.clone());
 
         self.set_search_mode(false);
-        self.search_message = Some(format!("{hit_count} song(s) found"));
+        let mut args = FluentArgs::new();
+        args.set("count", hit_count as i64);
+        self.search_message = Some(
+            Localizer::new(self.boot.profile_config.ui.locale())
+                .format("select-search-results", &args),
+        );
 
         // 検索結果フォルダへ入る。`enter_or_play_selected` と同じ流儀でカーソル
         // 位置を退避してから push する。
@@ -5950,6 +7679,7 @@ impl WinitApp {
     }
 
     fn start_chart(&mut self, chart_id: i64) {
+        self.autoplay_folder = None;
         let options = self.play_start_options();
         self.begin_decide_for_chart(chart_id, options);
     }
@@ -6026,7 +7756,11 @@ impl WinitApp {
                 &practice.property,
             );
         }
+        if !self.commit_active_play_lane_state_to_profile() {
+            self.commit_pending_play_lane_state_to_profile();
+        }
         self.practice_session = None;
+        self.autoplay_folder = None;
         self.practice_chart_zero_time = None;
         self.active_play = None;
         self.pending_play_start = None;
@@ -6035,8 +7769,9 @@ impl WinitApp {
         self.play_ending = None;
         self.finished_play = None;
         self.play_ready_sound_started_at = None;
+        self.play_ready_last_control_hold_at = None;
         self.draining_audio = None;
-        self.clear_play_backbmp_state();
+        self.clear_play_meta_image_state();
         self.last_play_snapshot = None;
         self.reload_select_items();
         let now = Instant::now();
@@ -6112,8 +7847,8 @@ impl WinitApp {
         };
         match self.open_prepared_winit_play_session(prepared_winit) {
             Ok(active_play) => {
-                self.pending_play_start = None;
                 self.install_active_play(chart_id, active_play);
+                self.pending_play_start = None;
                 tracing::info!(chart_id, "practice round started");
             }
             Err(error) => {
@@ -6138,14 +7873,17 @@ impl WinitApp {
         {
             tracing::warn!(%error, "failed to save practice property after round");
         }
+        self.commit_active_play_lane_state_to_profile();
         if let Some(started) = self.active_play.take() {
             let mut audio = started.running.audio;
             audio.mark_draining();
             self.draining_audio = Some(audio);
         }
+        self.clear_play_control_holds();
         self.play_ending = None;
         self.finished_play = None;
         self.play_ready_sound_started_at = None;
+        self.play_ready_last_control_hold_at = None;
         self.practice_chart_zero_time = None;
         if let Some(practice) = &mut self.practice_session {
             practice.phase = PracticePhase::Config;
@@ -6159,11 +7897,44 @@ impl WinitApp {
         };
         self.invalidate_play_preload();
         self.start_play_preload(chart_id, preload_options.clone());
-        self.pending_play_start = Some(PendingPlayStart { chart_id, options: preload_options });
+        let key_mode = self.play_skin_key_mode_for_chart(chart_id, &preload_options);
+        let session_options = play_session_options_from_start(
+            &self.play_session_app_config(),
+            preload_options.clone(),
+        );
+        let mut snapshot = self
+            .last_play_snapshot
+            .clone()
+            .unwrap_or_else(|| self.decide_snapshot_for_chart(chart_id));
+        crate::screens::play_session::apply_placeholder_session_visuals(
+            &mut snapshot,
+            &self.boot.profile_config,
+            key_mode,
+            &session_options,
+        );
+        let mut pending_play_start = PendingPlayStart::from_snapshot(
+            chart_id,
+            preload_options,
+            &snapshot,
+            &self.boot.profile_config,
+            key_mode,
+            session_options.gamepad_slots,
+        );
+        pending_play_start.lane.lane_cover_changing = self.play_lane_value_changing();
+        pending_play_start.lane.apply_to_snapshot(&mut snapshot);
+        self.play_option_input = Some(PlayOptionInput::new(
+            key_mode,
+            pending_play_start.visual_input.binding.clone(),
+            &self.boot.profile_config.input,
+            session_options.gamepad_slots,
+        ));
+        self.last_play_snapshot = Some(snapshot);
+        self.pending_play_start = Some(pending_play_start);
         tracing::info!(chart_id, "practice round finished; back to configuration");
     }
 
     fn start_course(&mut self, course_id: i64) {
+        self.autoplay_folder = None;
         self.start_course_with_arrange(course_id, Vec::new(), false);
     }
 
@@ -6189,7 +7960,11 @@ impl WinitApp {
             tracing::warn!(course_id, "course not found");
             return;
         };
-        let definition = stored.definition;
+        let mut definition = stored.definition;
+        if let Err(error) = hydrate_course_entry_title_hints(&self.boot.library_db, &mut definition)
+        {
+            tracing::warn!(%error, course_id, "failed to hydrate course entry titles");
+        }
         if definition.entries.is_empty()
             || definition.entries.iter().any(|entry| entry.chart_id.is_none())
         {
@@ -6332,7 +8107,11 @@ impl WinitApp {
             }
         };
 
-        let definition = stored.definition;
+        let mut definition = stored.definition;
+        if let Err(error) = hydrate_course_entry_title_hints(&self.boot.library_db, &mut definition)
+        {
+            tracing::warn!(%error, course_id, "failed to hydrate replay course entry titles");
+        }
         let first_chart_id = definition.entries.iter().find_map(|e| e.chart_id);
         let Some(first_chart_id) = first_chart_id else {
             tracing::warn!(course_id, "no resolved chart in course");
@@ -6432,6 +8211,33 @@ impl WinitApp {
         self.start_next_course_chart();
     }
 
+    fn autoplay_folder_has_next(&self) -> bool {
+        self.autoplay_folder
+            .as_ref()
+            .is_some_and(|session| session.next_index < session.chart_ids.len())
+    }
+
+    fn advance_autoplay_folder(&mut self) {
+        let Some(session) = self.autoplay_folder.as_mut() else {
+            self.leave_result();
+            return;
+        };
+        let Some(&chart_id) = session.chart_ids.get(session.next_index) else {
+            self.autoplay_folder = None;
+            self.leave_result();
+            return;
+        };
+        session.next_index += 1;
+        self.finished_play = None;
+        self.result_exit = None;
+        self.result_key5_held = false;
+        self.result_key7_held = false;
+        let mut options = self.play_start_options();
+        options.autoplay = true;
+        self.start_chart_with_options(chart_id, options);
+        tracing::info!(chart_id, "advanced folder autoplay");
+    }
+
     fn finish_course_after_intermediate_result(&mut self) {
         self.finished_play = None;
         self.result_exit = None;
@@ -6489,6 +8295,21 @@ impl WinitApp {
         pressed: bool,
         repeat: bool,
     ) -> bool {
+        if pressed
+            && !repeat
+            && self.result_input_ready()
+            && self.select_result_panel_for_control(control)
+        {
+            return true;
+        }
+        if pressed
+            && !repeat
+            && self.result_input_ready()
+            && self.is_result_panel_toggle_control(control)
+            && self.toggle_result_panel()
+        {
+            return true;
+        }
         let Some(lane) = self.result_lane_for_control(control) else {
             return false;
         };
@@ -6630,7 +8451,7 @@ impl WinitApp {
                     course_id,
                     "course identity unavailable; skipping course score save"
                 );
-                self.finished_course = Some(course_result);
+                self.install_finished_course(course_result, None);
                 if let Some(last) = last_finished {
                     self.result_gauge_graph_type = last.summary.gauge_type as i32;
                     self.finished_play = Some(last);
@@ -6663,9 +8484,6 @@ impl WinitApp {
                     None
                 });
             let final_clear_type = course_result.final_clear_type;
-            let bp = course_result.judge_counts.bad
-                + course_result.judge_counts.poor
-                + course_result.judge_counts.empty_poor;
             let played_at = SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .map(|d| d.as_secs() as i64)
@@ -6698,7 +8516,7 @@ impl WinitApp {
                 gauge_type: course_result.final_gauge_type.as_str().to_string(),
                 gauge_value: course_result.final_gauge_value,
                 max_combo,
-                bp,
+                bp: course_result.bp,
                 course_failed: course_result.course_failed,
                 course_clear: course_result.course_clear,
                 arrange: course_arrange,
@@ -6736,7 +8554,10 @@ impl WinitApp {
                         &insert.gauge_type,
                         played_at,
                         &insert.arrange,
-                        course_result.entry_arranges.first().and_then(|arrange| arrange.seed),
+                        course_result
+                            .entry_arranges
+                            .first()
+                            .and_then(|arrange| arrange.packed_beatoraja_seed_from_sides()),
                     );
 
                     course_result.course_score_id = Some(course_score_id);
@@ -6752,7 +8573,7 @@ impl WinitApp {
                         course_score_id,
                         played_at,
                         course_result.total_ex_score,
-                        bp,
+                        course_result.bp,
                         max_combo,
                         final_clear_type as u8,
                     );
@@ -6803,7 +8624,9 @@ impl WinitApp {
         if course_result.saved_replay_slots.iter().any(|saved| *saved) {
             self.notify_obs_save_recording(crate::obs::ObsRecordingSaveReason::OnReplay);
         }
-        self.finished_course = Some(course_result);
+        let course_hash =
+            course_identity.as_ref().map(|(_, identity)| identity.course_hash.clone());
+        self.install_finished_course(course_result, course_hash);
         // Use the last chart's result for the standard result skin display.
         if let Some(last) = last_finished {
             self.result_gauge_graph_type = last.summary.gauge_type as i32;
@@ -6850,14 +8673,12 @@ impl WinitApp {
         self.course_identity_with_stored(course_id).map(|(_, identity)| identity)
     }
 
-    fn course_result_ir_target(
-        &self,
-        course: &crate::screens::course_session::CourseResultSummary,
-    ) -> Option<(String, String, String)> {
-        let identity = self.ir_course_identity(course.course_id)?;
+    fn course_result_ir_target(&self) -> Option<(String, String, String)> {
+        let course = self.finished_course.as_ref()?;
+        let course_hash = self.finished_course_hash.clone()?;
         let gauge = course.final_gauge_type.as_str().to_string();
         let ln_policy = self.boot.profile_config.play.ln_mode_policy.as_ir_str().to_string();
-        Some((identity.course_hash, gauge, ln_policy))
+        Some((course_hash, gauge, ln_policy))
     }
 
     fn start_result_ir_for_finished_play(&mut self, finished: &FinishedPlaySession) {
@@ -6870,6 +8691,7 @@ impl WinitApp {
             self.boot.profile_paths.network_db.clone(),
             self.boot.app_paths.logs_dir.clone(),
             &self.boot.profile_config.ir,
+            finished.stored.score_history_id,
             crate::storage::common::hash_to_hex(&finished.result.chart_sha256),
             finished.ln_policy,
             finished.double_option,
@@ -7029,7 +8851,7 @@ impl WinitApp {
 
     fn begin_decide_for_chart(&mut self, chart_id: i64, options: PlayStartOptions) {
         let snapshot = self.decide_snapshot_for_chart(chart_id);
-        self.begin_decide_for_chart_with_snapshot(chart_id, options, snapshot);
+        self.begin_decide_for_chart_with_snapshot(chart_id, options, snapshot, None);
     }
 
     fn begin_course_decide_for_chart(
@@ -7038,10 +8860,15 @@ impl WinitApp {
         options: PlayStartOptions,
         course_title: &str,
     ) {
-        let mut snapshot = self.decide_snapshot_for_chart(chart_id);
-        snapshot.title = course_title.to_string();
-        snapshot.subtitle.clear();
-        self.begin_decide_for_chart_with_snapshot(chart_id, options, snapshot);
+        let snapshot = self.decide_snapshot_for_chart(chart_id);
+        let title_override =
+            DecideTitleOverride { title: course_title.to_string(), subtitle: String::new() };
+        self.begin_decide_for_chart_with_snapshot(
+            chart_id,
+            options,
+            snapshot,
+            Some(title_override),
+        );
     }
 
     fn begin_decide_for_chart_with_snapshot(
@@ -7049,6 +8876,7 @@ impl WinitApp {
         chart_id: i64,
         options: PlayStartOptions,
         mut snapshot: RenderSnapshot,
+        title_override: Option<DecideTitleOverride>,
     ) {
         // Pre-import placeholder only: account for course LN overrides and
         // Battle here. The running session replaces this with a count derived
@@ -7083,7 +8911,14 @@ impl WinitApp {
         self.ensure_skin_ready(SkinKind::Decide);
         // Play スキンは裏で decode+upload を進めるが、Decide 入場では待たない。
         // 実際の Play 入場 (`start_chart_with_options`) で `ensure_skin_ready` が保険として残る。
-        self.spawn_play_skin_decode_for(self.play_skin_key_mode_for_chart(chart_id, &options));
+        let play_skin_key_mode = self.play_skin_key_mode_for_chart(chart_id, &options);
+        let play_skin_runtime_state = lua_runtime_state_for_play(
+            &options,
+            self.boot.profile_config.play.auto_play,
+            play_skin_key_mode,
+            &self.boot.profile_config.display_name,
+        );
+        self.spawn_play_skin_decode_for(play_skin_key_mode, play_skin_runtime_state);
         self.start_play_preload(chart_id, options.clone());
         let now = Instant::now();
         self.pending_decide = Some(DecideTransition {
@@ -7093,6 +8928,7 @@ impl WinitApp {
             fadeout_started_at: None,
             cancel: false,
             snapshot,
+            title_override,
         });
     }
 
@@ -7107,13 +8943,16 @@ impl WinitApp {
         let ln_policy_setting = self.boot.profile_config.play.ln_mode_policy;
         let rule_mode = self.boot.profile_config.play.rule_mode;
         let normalize_chart_volume = self.boot.profile_config.audio_mix.normalize_chart_volume;
+        let input = SharedInputBackend::default();
+        let preload_input = input.clone();
+        let audio_progress = Arc::new(AtomicU32::new(0));
+        let worker_audio_progress = Arc::clone(&audio_progress);
         thread::Builder::new()
             .name(format!("play-preload-{chart_id}"))
             .spawn(move || {
                 let result = (|| -> Result<PreloadedInputPlaySession> {
                     let library_db =
                         crate::storage::library_db::LibraryDatabase::open(&library_db_path)?;
-                    let input = crate::input::shared::SharedInputBackend::default();
                     let mut session_options =
                         crate::screens::play_start::play_session_options_from_start(
                             &app_config,
@@ -7121,19 +8960,32 @@ impl WinitApp {
                         );
                     session_options.ln_policy_setting = ln_policy_setting;
                     session_options.rule_mode = rule_mode;
-                    let preloaded = crate::screens::play_session::preload_play_session_for_chart(
-                        &library_db,
+                    let preloaded =
+                        crate::screens::play_session::preload_play_session_for_chart_with_progress(
+                            &library_db,
+                            chart_id,
+                            session_options.clone(),
+                            normalize_chart_volume,
+                            |loaded, total| {
+                                worker_audio_progress.store(
+                                    resource_load_progress_units(loaded, total),
+                                    Ordering::Relaxed,
+                                );
+                            },
+                        )?;
+                    Ok(PreloadedInputPlaySession {
                         chart_id,
-                        session_options.clone(),
-                        normalize_chart_volume,
-                    )?;
-                    Ok(PreloadedInputPlaySession { chart_id, preloaded, input, session_options })
+                        preloaded,
+                        input: preload_input,
+                        session_options,
+                    })
                 })()
                 .map_err(|error| format!("{error:#}"));
                 let _ = tx.send(PlayPreloadResult { generation, chart_id, result });
             })
             .expect("failed to spawn play preload thread");
-        self.pending_play_preload = Some(PendingPlayPreload { generation, chart_id, rx });
+        self.pending_play_preload =
+            Some(PendingPlayPreload { generation, chart_id, input, audio_progress, rx });
         tracing::info!(chart_id, generation, "play preload started");
         self.start_chart_bga_texture_preload(chart_id, bga_options);
     }
@@ -7197,6 +9049,9 @@ impl WinitApp {
     fn play_session_app_config(&self) -> AppConfig {
         let mut app_config = self.boot.app_config.clone();
         app_config.audio.sample_rate = self.play_output_sample_rate();
+        app_config.input.gamepad_slot_runtime_device_ids =
+            resolve_gamepad_runtime_slots(&app_config.input, self.gamepad.as_deref())
+                .map(|id| id.map(|id| id.0));
         app_config
     }
 
@@ -7448,36 +9303,25 @@ impl WinitApp {
 
     fn decide_snapshot_for_chart(&self, chart_id: i64) -> RenderSnapshot {
         let mut snapshot = RenderSnapshot::default();
-        if let Some(SelectItem::Chart(row)) = self.select_items.iter().find(|item| match item {
-            SelectItem::Chart(row) => {
-                row.chart.as_ref().is_some_and(|chart| chart.chart_id == chart_id)
-            }
-            SelectItem::Folder { .. }
-            | SelectItem::Course(_)
-            | SelectItem::Executable(_)
-            | SelectItem::Config(_)
-            | SelectItem::KeyBinding(_)
-            | SelectItem::Back
-            | SelectItem::AdvancedSettings => false,
-        }) && let Some(chart) = &row.chart
-        {
-            snapshot.title = chart.title.clone();
-            snapshot.subtitle = chart.subtitle.clone();
-            snapshot.artist = chart.artist.clone();
-            snapshot.subartist = chart.subartist.clone();
-            snapshot.genre = chart.genre.clone();
-            snapshot.difficulty_name = chart.difficulty_name.clone();
-            snapshot.play_level = chart.play_level.clone();
-            snapshot.judge_rank = chart.judge_rank;
-            snapshot.total_notes =
+        let metadata = chart_snapshot_metadata_for_chart(
+            &self.select_items,
+            chart_id,
+            |chart_id| {
+                self.boot
+                .library_db
+                .list_charts_by_ids(&[chart_id])
+                .map_err(|error| {
+                    tracing::warn!(%error, chart_id, "failed to load chart metadata for play snapshot");
+                    error
+                })
+                .ok()
+                .and_then(|mut charts| charts.pop())
+            },
+        );
+        if let Some((chart, best_ex_score)) = metadata {
+            let total_notes =
                 chart.scored_total_notes_for_setting(self.boot.profile_config.play.ln_mode_policy);
-            snapshot.duration = TimeUs(chart.length_ms.saturating_mul(1_000));
-            snapshot.min_bpm = chart.min_bpm as f32;
-            snapshot.max_bpm = chart.max_bpm as f32;
-            snapshot.now_bpm = chart.initial_bpm as f32;
-            // PACEMAKER の MyBest 表示。projected (ghost 進行値) は進捗 0 なので 0。
-            snapshot.best_ex_score = row.best_score.as_ref().map(|best| best.ex_score);
-            snapshot.projected_best_ex_score = snapshot.best_ex_score.map(|_| 0);
+            apply_chart_metadata_to_snapshot(&mut snapshot, &chart, total_notes, best_ex_score);
         }
         let (primary, secondary, fallback) = self.table_text_context_for_chart(chart_id).as_tuple();
         snapshot.table_text_primary = primary;
@@ -7489,14 +9333,25 @@ impl WinitApp {
     fn start_chart_with_options(&mut self, chart_id: i64, mut options: PlayStartOptions) {
         self.last_play_was_autoplay = options.autoplay;
         self.ensure_skin_ready(SkinKind::Decide);
-        self.spawn_play_skin_decode_for(self.play_skin_key_mode_for_chart(chart_id, &options));
+        let play_skin_key_mode = self.play_skin_key_mode_for_chart(chart_id, &options);
+        let play_skin_runtime_state = lua_runtime_state_for_play(
+            &options,
+            self.boot.profile_config.play.auto_play,
+            play_skin_key_mode,
+            &self.boot.profile_config.display_name,
+        );
+        self.spawn_play_skin_decode_for(play_skin_key_mode, play_skin_runtime_state);
         self.ensure_skin_ready(SkinKind::Play);
         self.invalidate_play_preload();
+        if self.play_media_cache.as_ref().is_some_and(|cache| cache.chart_id != chart_id) {
+            self.play_media_cache = None;
+        }
         self.play_ending = None;
         self.result_exit = None;
         self.result_key5_held = false;
         self.result_key7_held = false;
         self.play_ready_sound_started_at = None;
+        self.play_ready_last_control_hold_at = None;
         self.decide_sound_stopped_for_chart_start = false;
         if options.chart_zero_time == TimeUs(0) {
             options.chart_zero_time = self.play_skin_playstart_offset();
@@ -7554,20 +9409,23 @@ impl WinitApp {
         skin_duration_ms(ready_delay_ms)
     }
 
-    fn play_skin_animation_elapsed_time(&self, play_elapsed_time: TimeUs) -> TimeUs {
-        let ready_delay_us = self.play_skin_ready_delay().as_micros().min(i64::MAX as u128) as i64;
-        clamped_play_skin_animation_elapsed_time(
-            play_elapsed_time,
-            ready_delay_us,
-            self.play_ready_sound_started_at.is_some(),
-            self.play_e1_held,
-            self.play_e2_held,
-        )
-    }
-
-    fn clear_play_backbmp_state(&mut self) {
+    fn clear_play_meta_image_state(&mut self) {
+        self.play_stagefile_source = None;
+        self.play_stagefile_loaded = false;
+        self.play_stagefile_size = None;
         self.play_backbmp_source = None;
         self.play_backbmp_loaded = false;
+    }
+
+    fn sync_play_stagefile_texture(&mut self, folder: &str, relative: &str) {
+        let stagefile_key = format!("{folder}|{relative}");
+        if self.play_stagefile_source.as_deref() == Some(stagefile_key.as_str()) {
+            return;
+        }
+        self.play_stagefile_source = Some(stagefile_key);
+        self.play_stagefile_size =
+            load_chart_meta_texture(&mut self.renderer, SELECT_STAGE_TEXTURE, folder, relative);
+        self.play_stagefile_loaded = self.play_stagefile_size.is_some();
     }
 
     fn enter_play_scene(
@@ -7579,30 +9437,61 @@ impl WinitApp {
         self.play_ending = None;
         self.result_exit = None;
         self.play_ready_sound_started_at = None;
+        self.play_ready_last_control_hold_at = None;
         self.decide_sound_stopped_for_chart_start = false;
         self.active_play = None;
         self.clear_play_control_holds();
-        self.clear_play_backbmp_state();
+        self.clear_play_meta_image_state();
+        if let Some(chart) = self
+            .boot
+            .library_db
+            .list_charts_by_ids(&[chart_id])
+            .ok()
+            .and_then(|mut charts| charts.pop())
+        {
+            self.sync_play_stagefile_texture(&chart.folder_path, &chart.stage_file);
+        }
         self.finished_play = None;
         self.draining_audio = None;
         self.play_scene_started_at = Instant::now();
         snapshot.arrange = options.arrange.as_str().to_string();
+        snapshot.arrange_2p = options.arrange_2p.as_str().to_string();
         snapshot.play_elapsed_time = TimeUs(0);
         snapshot.ready_elapsed_time = None;
         snapshot.time = self.play_skin_playstart_offset();
+        snapshot.stagefile_background = self.play_stagefile_loaded;
+        snapshot.stagefile_image_size = self.play_stagefile_size;
         // preload 完了で install_active_play がフル snapshot に置き換えるまでの間、
         // 初期ゲージや緑数字が空表示にならないようセッション開始時相当の値を埋める。
+        let key_mode = self.play_skin_key_mode_for_chart(chart_id, &options);
+        let session_options =
+            play_session_options_from_start(&self.play_session_app_config(), options.clone());
         crate::screens::play_session::apply_placeholder_session_visuals(
             &mut snapshot,
             &self.boot.profile_config,
-            self.play_skin_key_mode_for_chart(chart_id, &options),
-            &play_session_options_from_start(&self.play_session_app_config(), options.clone()),
+            key_mode,
+            &session_options,
         );
+        let pending_play_start = PendingPlayStart::from_snapshot(
+            chart_id,
+            options,
+            &snapshot,
+            &self.boot.profile_config,
+            key_mode,
+            session_options.gamepad_slots,
+        );
+        pending_play_start.lane.apply_to_snapshot(&mut snapshot);
+        self.play_option_input = Some(PlayOptionInput::new(
+            key_mode,
+            pending_play_start.visual_input.binding.clone(),
+            &self.boot.profile_config.input,
+            session_options.gamepad_slots,
+        ));
         self.capture_play_table_text_for_chart(chart_id);
         self.apply_course_skin_context(&mut snapshot);
         self.apply_play_table_text(&mut snapshot);
         self.last_play_snapshot = Some(snapshot.clone());
-        self.pending_play_start = Some(PendingPlayStart { chart_id, options });
+        self.pending_play_start = Some(pending_play_start);
         self.sync_play_control_holds_from_pressed_controls();
         self.last_started_chart_id = Some(chart_id);
     }
@@ -7624,8 +9513,44 @@ impl WinitApp {
             .autoplay
             .as_ref()
             .is_some_and(|autoplay| autoplay.is_full());
+        if let Some(pending) =
+            self.pending_play_start.as_ref().filter(|pending| pending.chart_id == chart_id)
+        {
+            let speed_locked = self.active_course.as_ref().is_some_and(|course| {
+                course.definition.constraints.speed
+                    == bmz_core::course::CourseSpeedConstraint::NoSpeed
+            });
+            replay_pending_play_lane_actions(
+                &mut active_play.running.session,
+                &pending.lane_actions,
+                &self.boot.profile_config,
+                speed_locked,
+            );
+            // pending 中の入力は表示状態へ反映済み。共有 backend に残った同じイベントを
+            // 再処理すると key-on/off が install 時刻へずれるため、ここで一度だけ破棄し、
+            // placeholder の表示状態を実セッションへ引き継ぐ。
+            handoff_pending_play_visual_input(
+                &mut active_play.running.session,
+                &active_play.input,
+                &pending.visual_input,
+            );
+        }
         active_play.running.session.lane_cover_changing = self.play_lane_value_changing();
-        active_play.running.bga_frames = if self.bga_load_chart_id == Some(chart_id) {
+        let active_bga_assets = &active_play.running.session.chart.bga_assets;
+        let preload_matches_active_chart = self.bga_load_chart_id == Some(chart_id)
+            && self
+                .bga_preload_assets
+                .as_deref()
+                .is_some_and(|preloaded| bga_asset_manifests_match(preloaded, active_bga_assets));
+        if self.bga_load_chart_id == Some(chart_id) && !preload_matches_active_chart {
+            tracing::warn!(
+                chart_id,
+                preloaded_assets = self.bga_preload_assets.as_ref().map_or(0, Vec::len),
+                active_assets = active_bga_assets.len(),
+                "discarding BGA preload because its asset manifest does not match the active chart"
+            );
+        }
+        active_play.running.bga_frames = if preload_matches_active_chart {
             self.bga_preload_frames.clone()
         } else {
             self.start_chart_bga_texture_load_for_chart(
@@ -7633,10 +9558,25 @@ impl WinitApp {
                 &active_play.running.session.chart,
             )
         };
+        if let Some(cache) = self.play_media_cache.as_mut()
+            && cache.chart_id == chart_id
+        {
+            let mut videos = std::mem::take(&mut cache.video_bga_decoders);
+            if !videos.is_empty() {
+                crate::video_bga::prepare_reused_video_decoders(&mut videos);
+                active_play.running.video_bga_decoders = videos;
+                tracing::info!(
+                    chart_id,
+                    decoders = active_play.running.video_bga_decoders.len(),
+                    "installed reused video BGA decoders"
+                );
+            }
+        }
         let chart = &active_play.running.session.chart;
         let folder = chart_asset_folder(chart)
             .map(|path| path.to_string_lossy().into_owned())
             .unwrap_or_default();
+        self.sync_play_stagefile_texture(&folder, &chart.metadata.stage_file);
         let backbmp_key = format!("{}|{}", folder, chart.metadata.backbmp_file);
         if self.play_backbmp_source.as_deref() != Some(backbmp_key.as_str()) {
             self.play_backbmp_source = Some(backbmp_key);
@@ -7645,7 +9585,8 @@ impl WinitApp {
                 PLAY_BACKBMP_TEXTURE,
                 &folder,
                 &chart.metadata.backbmp_file,
-            );
+            )
+            .is_some();
         }
         let render_now = self.play_skin_playstart_offset();
         let mut snapshot = build_render_snapshot_with_target_and_bga_frames_cached(
@@ -7660,10 +9601,13 @@ impl WinitApp {
         );
         self.apply_profile_fast_slow_filter(&mut snapshot);
         snapshot.arrange = active_play.running.applied_arrange.arrange.as_str().to_string();
+        snapshot.arrange_2p = active_play.running.applied_arrange.arrange_2p.as_str().to_string();
         snapshot.target = active_play.running.target.clone();
+        snapshot.stagefile_background = self.play_stagefile_loaded;
+        snapshot.stagefile_image_size = self.play_stagefile_size;
         snapshot.backbmp_background = self.play_backbmp_loaded;
         let play_elapsed_time = self.play_elapsed_time();
-        snapshot.play_elapsed_time = self.play_skin_animation_elapsed_time(play_elapsed_time);
+        snapshot.play_elapsed_time = play_elapsed_time;
         snapshot.ready_elapsed_time = self.play_ready_sound_started_at.map(elapsed_since);
         self.apply_course_skin_context(&mut snapshot);
         self.apply_play_table_text(&mut snapshot);
@@ -7685,6 +9629,9 @@ impl WinitApp {
         self.bga_load_chart_id = Some(chart_id);
         self.bga_load_rx = None;
         self.bga_preload_frames.clear();
+        self.bga_preload_assets = None;
+        self.bga_load_completed_assets = 0;
+        self.bga_load_total_assets = 0;
         let generation = self.bga_load_generation;
         self.bga_load_status = BgaImageLoadStatus::loading(generation, chart_id);
         let Some(uploader) = self.renderer.gpu_uploader() else {
@@ -7698,7 +9645,7 @@ impl WinitApp {
         thread::Builder::new()
             .name(format!("bga-image-load-{chart_id}"))
             .spawn({
-                let (tx, rx) = mpsc::channel();
+                let (tx, rx) = bounded_gpu_upload_channel(MAX_PENDING_BGA_TEXTURE_UPLOADS);
                 self.bga_load_rx = Some(rx);
                 move || {
                     let session_options =
@@ -7727,7 +9674,10 @@ impl WinitApp {
         self.bga_load_chart_id = None;
         self.bga_load_rx = None;
         self.bga_load_status = BgaImageLoadStatus::default();
+        self.bga_load_completed_assets = 0;
+        self.bga_load_total_assets = 0;
         self.bga_preload_frames.clear();
+        self.bga_preload_assets = None;
     }
 
     fn start_chart_bga_texture_load_for_chart(
@@ -7739,6 +9689,8 @@ impl WinitApp {
         self.bga_load_chart_id = Some(chart_id);
         self.bga_load_rx = None;
         self.bga_preload_frames.clear();
+        self.bga_preload_assets = Some(chart.bga_assets.clone());
+        self.bga_load_completed_assets = 0;
         let generation = self.bga_load_generation;
         self.bga_load_status = BgaImageLoadStatus::loading(generation, chart_id);
         let static_asset_count = chart
@@ -7746,6 +9698,7 @@ impl WinitApp {
             .iter()
             .filter(|asset| asset.kind == bmz_chart::model::BgaAssetKind::Static)
             .count();
+        self.bga_load_total_assets = static_asset_count.min(u32::MAX as usize) as u32;
         if static_asset_count == 0 {
             self.bga_load_status = BgaImageLoadStatus::ready(generation, chart_id);
             return BgaFrameCatalog::new();
@@ -7753,12 +9706,13 @@ impl WinitApp {
         let Some(uploader) = self.renderer.gpu_uploader() else {
             tracing::warn!("loading BGA images synchronously because GPU uploader is unavailable");
             let frames = load_chart_bga_textures(&mut self.renderer, chart);
+            self.bga_load_completed_assets = self.bga_load_total_assets;
             self.bga_load_status = BgaImageLoadStatus::ready(generation, chart_id);
             return frames;
         };
 
         let assets = chart.bga_assets.clone();
-        let (tx, rx) = mpsc::channel();
+        let (tx, rx) = bounded_gpu_upload_channel(MAX_PENDING_BGA_TEXTURE_UPLOADS);
         thread::Builder::new()
             .name("bga-image-load".to_string())
             .spawn(move || chart_bga_texture_load_worker(generation, assets, tx, uploader))
@@ -7773,12 +9727,27 @@ impl WinitApp {
             return;
         };
         let mut keep_rx = true;
-        loop {
+        for _ in 0..MAX_BGA_TEXTURE_RESULTS_PER_REDRAW {
             match rx.try_recv() {
+                Ok(PendingBgaImageResult::Manifest { generation, assets }) => {
+                    if generation != self.bga_load_generation {
+                        continue;
+                    }
+                    self.bga_load_total_assets = assets
+                        .iter()
+                        .filter(|asset| asset.kind == bmz_chart::model::BgaAssetKind::Static)
+                        .count()
+                        .min(u32::MAX as usize)
+                        as u32;
+                    self.bga_load_completed_assets = 0;
+                    self.bga_preload_assets = Some(assets);
+                }
                 Ok(PendingBgaImageResult::Loaded(image)) => {
                     if image.generation != self.bga_load_generation {
                         continue;
                     }
+                    self.bga_load_completed_assets =
+                        self.bga_load_completed_assets.saturating_add(1);
                     self.renderer.insert_prepared_texture(image.texture_id, image.prepared);
                     self.bga_preload_frames.insert(
                         image.asset_id,
@@ -7815,6 +9784,8 @@ impl WinitApp {
                     if generation != self.bga_load_generation {
                         continue;
                     }
+                    self.bga_load_completed_assets =
+                        self.bga_load_completed_assets.saturating_add(1);
                     tracing::warn!(
                         asset_id = asset_id.0,
                         file_bytes,
@@ -7836,6 +9807,7 @@ impl WinitApp {
                 }
                 Ok(PendingBgaImageResult::Finished { generation, stats }) => {
                     if generation == self.bga_load_generation {
+                        self.bga_load_completed_assets = self.bga_load_total_assets;
                         if let Some(chart_id) = self.bga_load_chart_id {
                             self.bga_load_status = BgaImageLoadStatus::ready(generation, chart_id);
                         }
@@ -7991,10 +9963,13 @@ impl WinitApp {
     }
 
     fn abort_pending_play_start(&mut self) {
+        if !self.commit_active_play_lane_state_to_profile() {
+            self.commit_pending_play_lane_state_to_profile();
+        }
         self.pending_play_start = None;
         self.active_play = None;
         self.decide_sound_stopped_for_chart_start = true;
-        self.clear_play_backbmp_state();
+        self.clear_play_meta_image_state();
         self.last_play_snapshot = None;
         // An audio-open / audio-start failure bounces the user back to the
         // select screen.  If they were in a course at the time, the course
@@ -8002,6 +9977,8 @@ impl WinitApp {
         // would be treated as the next entry of a stale course (route
         // through advance_course_after_finish with mismatched chart_id).
         self.clear_active_course_state();
+        self.autoplay_folder = None;
+        self.play_media_cache = None;
         let now = Instant::now();
         self.select_scene_started_at = now;
         self.restart_select_bar_timer_without_scroll(now);
@@ -8019,12 +9996,13 @@ impl WinitApp {
             );
         }
         self.active_course = None;
-        self.finished_course = None;
+        self.clear_finished_course();
     }
 
     fn play_start_options(&self) -> PlayStartOptions {
-        let arrange_seed = (self.arrange_option.uses_seed() || self.arrange_option_2p.uses_seed())
-            .then(crate::screens::play_session::generate_arrange_seed);
+        // beatoraja assigns a 24-bit seed even to NORMAL/MIRROR. Generate both
+        // sides here so preload, retry, replay and IR all observe one stable pair.
+        let option_seeds = crate::random_option_seed::RandomOptionSeeds::fresh(true);
         PlayStartOptions {
             autoplay: self.assist_option == AssistOption::Autoplay,
             gauge: Some(self.gauge_option),
@@ -8035,7 +10013,9 @@ impl WinitApp {
             double_option: self.double_option,
             hs_fix: self.hs_fix_option,
             target: self.target_option,
-            arrange_seed,
+            arrange_seed: Some(i64::from(option_seeds.p1.value())),
+            arrange_seed_2p: option_seeds.p2.map(|seed| i64::from(seed.value())),
+            bms_random_seed: Some(crate::random_option_seed::fresh_bms_random_seed()),
             ..Default::default()
         }
     }
@@ -8131,6 +10111,10 @@ impl WinitApp {
             hs_fix: HsFixOption::Off,
             target: self.target_option,
             arrange_seed: replay_file.arrange_seed,
+            arrange_seed_2p: replay_file.arrange_seed_2p,
+            legacy_arrange_seed: replay_file.uses_legacy_seed_scheme(),
+            bms_random_seed: None,
+            bms_random_choices: replay_file.bms_random_choices.clone(),
             arrange_pattern: replay_file.lane_shuffle_pattern.clone(),
             initial_gauge_value: None,
             initial_gauge_values: None,
@@ -8215,6 +10199,10 @@ impl WinitApp {
             hs_fix: HsFixOption::Off,
             target: self.target_option,
             arrange_seed: replay_file.arrange_seed,
+            arrange_seed_2p: replay_file.arrange_seed_2p,
+            legacy_arrange_seed: replay_file.uses_legacy_seed_scheme(),
+            bms_random_seed: None,
+            bms_random_choices: replay_file.bms_random_choices.clone(),
             arrange_pattern: replay_file.lane_shuffle_pattern.clone(),
             initial_gauge_value: None,
             initial_gauge_values: None,
@@ -8315,11 +10303,58 @@ impl WinitApp {
             tracing::warn!("no previous chart is available to retry");
             return;
         };
-        let options = match mode {
+        let mut options = match mode {
             ResultRetryMode::SameArrange => self.result_retry_same_arrange_options(),
             ResultRetryMode::DifferentArrange => self.result_retry_different_arrange_options(),
         };
+        if options.chart_zero_time == TimeUs(0) {
+            options.chart_zero_time = self.play_skin_playstart_offset();
+        }
+
+        if let Some(cache) = self.play_media_cache.take()
+            && cache.chart_id == chart_id
+        {
+            match retry_preload_kind(mode, cache.chart.is_some()) {
+                RetryPreloadKind::CachedChartWithFreshAudio => {
+                    self.start_quick_retry_preload_reloading_audio(
+                        chart_id,
+                        options.clone(),
+                        cache,
+                    );
+                    self.begin_result_retry_play_scene(chart_id, options);
+                    return;
+                }
+                RetryPreloadKind::ReimportedChartWithFreshAudio => {
+                    self.start_play_preload_reusing_bga(chart_id, options.clone(), cache);
+                    self.begin_result_retry_play_scene(chart_id, options);
+                    return;
+                }
+            }
+        }
         self.start_chart_with_options(chart_id, options);
+    }
+
+    fn begin_result_retry_play_scene(&mut self, chart_id: i64, options: PlayStartOptions) {
+        self.ensure_skin_ready(SkinKind::Decide);
+        let play_skin_key_mode = self.play_skin_key_mode_for_chart(chart_id, &options);
+        let play_skin_runtime_state = lua_runtime_state_for_play(
+            &options,
+            self.boot.profile_config.play.auto_play,
+            play_skin_key_mode,
+            &self.boot.profile_config.display_name,
+        );
+        self.spawn_play_skin_decode_for(play_skin_key_mode, play_skin_runtime_state);
+        self.ensure_skin_ready(SkinKind::Play);
+        self.play_ending = None;
+        self.result_exit = None;
+        self.result_key5_held = false;
+        self.result_key7_held = false;
+        self.play_ready_sound_started_at = None;
+        self.play_ready_last_control_hold_at = None;
+        self.decide_sound_stopped_for_chart_start = false;
+        self.draining_audio = None;
+        self.enter_play_scene(chart_id, options, self.decide_snapshot_for_chart(chart_id));
+        self.poll_play_preload();
     }
 
     /// Replay the whole course from its first chart, reproducing each chart's
@@ -8346,7 +10381,7 @@ impl WinitApp {
         tracing::info!(course_id, entries = arrange_overrides.len(), ?mode, "retrying course");
         // Drop the finished-course/result state before re-entering the course;
         // start_course_with_arrange installs a fresh active_course session.
-        self.finished_course = None;
+        self.clear_finished_course();
         self.finished_play = None;
         self.result_exit = None;
         self.result_key5_held = false;
@@ -8360,6 +10395,9 @@ impl WinitApp {
         {
             options.arrange = applied.arrange;
             options.arrange_seed = applied.seed;
+            options.arrange_seed_2p = applied.seed_2p;
+            options.legacy_arrange_seed = applied.legacy_seed;
+            options.bms_random_choices = Some(applied.bms_random_choices.clone());
             options.arrange_pattern = applied.pattern.clone();
         }
         options
@@ -8370,7 +10408,6 @@ impl WinitApp {
         if let Some(applied) = self.finished_play.as_ref().map(|finished| &finished.applied_arrange)
         {
             options.arrange = applied.arrange;
-            options.arrange_seed = None;
             options.arrange_pattern = None;
         }
         options
@@ -8386,10 +10423,12 @@ impl WinitApp {
             match mode {
                 ResultRetryMode::SameArrange => {
                     options.arrange_seed = applied.seed;
+                    options.arrange_seed_2p = applied.seed_2p;
+                    options.legacy_arrange_seed = applied.legacy_seed;
+                    options.bms_random_choices = Some(applied.bms_random_choices.clone());
                     options.arrange_pattern = applied.pattern.clone();
                 }
                 ResultRetryMode::DifferentArrange => {
-                    options.arrange_seed = None;
                     options.arrange_pattern = None;
                 }
             }
@@ -8397,71 +10436,214 @@ impl WinitApp {
         options
     }
 
-    fn quick_retry_reuse_active_assets(
-        &self,
+    fn take_play_media_cache_from_active(
+        &mut self,
         chart_id: i64,
-        options: &PlayStartOptions,
         mode: ResultRetryMode,
-    ) -> Option<QuickRetryReuse> {
-        if mode != ResultRetryMode::SameArrange {
-            return None;
-        }
-        let active = self.active_play.as_ref()?;
-        let mut sample_bank = None;
-        for attempt in 0..QUICK_RETRY_REUSE_LOCK_ATTEMPTS {
-            sample_bank = active.running.audio.engine.clone_sample_bank();
-            if sample_bank.is_some() {
-                break;
-            }
-            if attempt + 1 < QUICK_RETRY_REUSE_LOCK_ATTEMPTS {
-                thread::sleep(QUICK_RETRY_REUSE_LOCK_RETRY_SLEEP);
-            }
-        }
-        let Some((output_sample_rate, samples)) = sample_bank else {
-            tracing::debug!(
-                chart_id,
-                attempts = QUICK_RETRY_REUSE_LOCK_ATTEMPTS,
-                "quick retry asset reuse skipped because audio is busy"
-            );
-            return None;
+    ) -> Option<PlayMediaCache> {
+        let active = self.active_play.as_mut()?;
+        let video_bga_decoders = std::mem::take(&mut active.running.video_bga_decoders);
+        let (chart, applied_arrange, score_key) = match mode {
+            ResultRetryMode::SameArrange => (
+                Some(Arc::clone(&active.running.session.chart)),
+                Some(active.running.applied_arrange.clone()),
+                Some(active.running.score_key),
+            ),
+            ResultRetryMode::DifferentArrange => (None, None, None),
         };
-        let audio = AudioEngine::with_sample_bank(output_sample_rate, samples);
-
-        let mut session_options =
-            play_session_options_from_start(&self.play_session_app_config(), options.clone());
-        session_options.ln_policy_setting = self.boot.profile_config.play.ln_mode_policy;
-        session_options.rule_mode = self.boot.profile_config.play.rule_mode;
-
-        Some(QuickRetryReuse {
-            preloaded: PreloadedInputPlaySession {
-                chart_id,
-                preloaded: PreloadedPlaySession {
-                    chart: Arc::clone(&active.running.session.chart),
-                    audio,
-                    sample_report: active.running.sample_report.clone(),
-                    normalization_gain: active.running.session.audio_mix.normalization_gain,
-                    applied_arrange: active.running.applied_arrange.clone(),
-                    score_key: active.running.score_key,
-                },
-                input: crate::input::shared::SharedInputBackend::default(),
-                session_options,
-            },
+        Some(PlayMediaCache {
+            chart_id,
+            chart,
+            normalization_gain: active.running.session.audio_mix.normalization_gain,
+            applied_arrange,
+            score_key,
             bga_frames: active.running.bga_frames.clone(),
+            bga_assets: active.running.session.chart.bga_assets.clone(),
+            video_bga_decoders,
         })
     }
 
-    fn queue_quick_retry_reuse(&mut self, chart_id: i64, reuse: QuickRetryReuse) {
-        self.play_preload_generation = self.play_preload_generation.wrapping_add(1);
-        let play_generation = self.play_preload_generation;
-        self.pending_play_preload = None;
-        self.preloaded_play_session = Some(reuse.preloaded);
+    fn capture_play_media_cache_from_running(
+        &mut self,
+        chart_id: i64,
+        running: &mut crate::audio::RunningPlaySession,
+    ) {
+        let video_bga_decoders = std::mem::take(&mut running.video_bga_decoders);
+        self.play_media_cache = Some(PlayMediaCache {
+            chart_id,
+            chart: Some(Arc::clone(&running.session.chart)),
+            normalization_gain: running.session.audio_mix.normalization_gain,
+            applied_arrange: Some(running.applied_arrange.clone()),
+            score_key: Some(running.score_key),
+            bga_frames: running.bga_frames.clone(),
+            bga_assets: running.session.chart.bga_assets.clone(),
+            video_bga_decoders,
+        });
+    }
 
-        self.bga_load_generation = self.bga_load_generation.wrapping_add(1);
+    fn reused_bga_load_state(current_generation: u64, chart_id: i64) -> (u64, BgaImageLoadStatus) {
+        let generation = current_generation.wrapping_add(1);
+        (generation, BgaImageLoadStatus::ready(generation, chart_id))
+    }
+
+    fn apply_reused_bga_preload(
+        &mut self,
+        chart_id: i64,
+        bga_frames: BgaFrameCatalog,
+        bga_assets: Vec<BgaAssetRef>,
+    ) {
+        let (bga_generation, bga_load_status) =
+            Self::reused_bga_load_state(self.bga_load_generation, chart_id);
+        self.bga_load_generation = bga_generation;
         self.bga_load_chart_id = Some(chart_id);
         self.bga_load_rx = None;
-        let bga_frames = reuse.bga_frames.len();
-        self.bga_preload_frames = reuse.bga_frames;
-        tracing::info!(chart_id, play_generation, bga_frames, "quick retry assets reused");
+        self.bga_load_status = bga_load_status;
+        let bga_frame_count = bga_frames.len();
+        self.bga_preload_frames = bga_frames;
+        self.bga_load_total_assets = bga_assets
+            .iter()
+            .filter(|asset| asset.kind == bmz_chart::model::BgaAssetKind::Static)
+            .count()
+            .min(u32::MAX as usize) as u32;
+        self.bga_load_completed_assets = self.bga_load_total_assets;
+        self.bga_preload_assets = Some(bga_assets);
+        tracing::info!(
+            chart_id,
+            bga_generation,
+            bga_frames = bga_frame_count,
+            "reused static BGA preload"
+        );
+    }
+
+    fn start_play_preload_reusing_bga(
+        &mut self,
+        chart_id: i64,
+        options: PlayStartOptions,
+        mut cache: PlayMediaCache,
+    ) {
+        cache.chart = None;
+        cache.applied_arrange = None;
+        cache.score_key = None;
+        self.play_preload_generation = self.play_preload_generation.wrapping_add(1);
+        let generation = self.play_preload_generation;
+        self.preloaded_play_session = None;
+        self.apply_reused_bga_preload(chart_id, cache.bga_frames.clone(), cache.bga_assets.clone());
+        self.play_media_cache = Some(cache);
+
+        let (tx, rx) = mpsc::channel();
+        let library_db_path = self.boot.app_paths.library_db.clone();
+        let app_config = self.play_session_app_config();
+        let ln_policy_setting = self.boot.profile_config.play.ln_mode_policy;
+        let rule_mode = self.boot.profile_config.play.rule_mode;
+        let normalize_chart_volume = self.boot.profile_config.audio_mix.normalize_chart_volume;
+        let input = SharedInputBackend::default();
+        let preload_input = input.clone();
+        let audio_progress = Arc::new(AtomicU32::new(0));
+        let worker_audio_progress = Arc::clone(&audio_progress);
+        thread::Builder::new()
+            .name(format!("play-preload-reuse-bga-{chart_id}"))
+            .spawn(move || {
+                let result = (|| -> Result<PreloadedInputPlaySession> {
+                    let library_db =
+                        crate::storage::library_db::LibraryDatabase::open(&library_db_path)?;
+                    let mut session_options =
+                        crate::screens::play_start::play_session_options_from_start(
+                            &app_config,
+                            options,
+                        );
+                    session_options.ln_policy_setting = ln_policy_setting;
+                    session_options.rule_mode = rule_mode;
+                    let preloaded =
+                        crate::screens::play_session::preload_play_session_for_chart_with_progress(
+                            &library_db,
+                            chart_id,
+                            session_options.clone(),
+                            normalize_chart_volume,
+                            |loaded, total| {
+                                worker_audio_progress.store(
+                                    resource_load_progress_units(loaded, total),
+                                    Ordering::Relaxed,
+                                );
+                            },
+                        )?;
+                    Ok(PreloadedInputPlaySession {
+                        chart_id,
+                        preloaded,
+                        input: preload_input,
+                        session_options,
+                    })
+                })()
+                .map_err(|error| format!("{error:#}"));
+                let _ = tx.send(PlayPreloadResult { generation, chart_id, result });
+            })
+            .expect("failed to spawn BGA-reusing play preload thread");
+        self.pending_play_preload =
+            Some(PendingPlayPreload { generation, chart_id, input, audio_progress, rx });
+        tracing::info!(chart_id, generation, "play preload with reused BGA started");
+    }
+
+    /// Keep the expensive BGA resources warm, but rebuild the chart sound bank
+    /// for a quick retry.  Reusing decoded samples made the retry depend on the
+    /// previous engine's `SoundId` layout; rebuilding from the exact cached
+    /// chart restores the keysound/BGM-to-asset correspondence while retaining
+    /// static textures and video decoders.
+    fn start_quick_retry_preload_reloading_audio(
+        &mut self,
+        chart_id: i64,
+        options: PlayStartOptions,
+        cache: PlayMediaCache,
+    ) {
+        let chart = Arc::clone(cache.chart.as_ref().expect("SameArrange cache includes chart"));
+        let applied_arrange =
+            cache.applied_arrange.clone().expect("SameArrange cache includes applied arrange");
+        let score_key = cache.score_key.expect("SameArrange cache includes score key");
+        let normalization_gain = cache.normalization_gain;
+
+        self.play_preload_generation = self.play_preload_generation.wrapping_add(1);
+        let generation = self.play_preload_generation;
+        self.preloaded_play_session = None;
+        self.apply_reused_bga_preload(chart_id, cache.bga_frames.clone(), cache.bga_assets.clone());
+        self.play_media_cache = Some(cache);
+
+        let mut session_options =
+            play_session_options_from_start(&self.play_session_app_config(), options);
+        session_options.ln_policy_setting = self.boot.profile_config.play.ln_mode_policy;
+        session_options.rule_mode = self.boot.profile_config.play.rule_mode;
+        let input = SharedInputBackend::default();
+        let preload_input = input.clone();
+        let audio_progress = Arc::new(AtomicU32::new(0));
+        let worker_audio_progress = Arc::clone(&audio_progress);
+        let sample_rate = session_options.sample_rate;
+        let (tx, rx) = mpsc::channel();
+        thread::Builder::new()
+            .name(format!("quick-retry-audio-preload-{chart_id}"))
+            .spawn(move || {
+                let preloaded = crate::screens::play_session::
+                    preload_play_session_reloading_audio_with_progress(
+                        chart,
+                        sample_rate,
+                        normalization_gain,
+                        applied_arrange,
+                        score_key,
+                        |loaded, total| {
+                            worker_audio_progress.store(
+                                resource_load_progress_units(loaded, total),
+                                Ordering::Relaxed,
+                            );
+                        },
+                    );
+                let result = Ok(PreloadedInputPlaySession {
+                    chart_id,
+                    preloaded,
+                    input: preload_input,
+                    session_options,
+                });
+                let _ = tx.send(PlayPreloadResult { generation, chart_id, result });
+            })
+            .expect("failed to spawn quick retry audio preload thread");
+        self.pending_play_preload =
+            Some(PendingPlayPreload { generation, chart_id, input, audio_progress, rx });
+        tracing::info!(chart_id, generation, "quick retry audio preload started");
     }
 
     fn handle_quick_retry_control(&mut self, control: &str) -> bool {
@@ -8490,7 +10672,10 @@ impl WinitApp {
     }
 
     fn begin_play_fadeout_after_final_notes_control(&mut self, control: &str) -> bool {
-        if !play_fadeout_after_final_notes_control(control, &self.select_keys) {
+        let escape_before_play_ending = control == "Escape" && self.play_ending.is_none();
+        if !play_fadeout_after_final_notes_control(control, &self.select_keys)
+            && !escape_before_play_ending
+        {
             return false;
         }
         if let Some(ending) = &mut self.play_ending {
@@ -8545,16 +10730,19 @@ impl WinitApp {
                     played_at: now_unix_seconds(),
                     applied_arrange: &active_play.running.applied_arrange,
                     target_ex_score: active_play.running.target_ex_score,
+                    target_name: &active_play.running.target,
                     score_key: active_play.running.score_key,
                     practice_mode: active_play.running.practice_mode,
                     finish_mode,
                 },
             ) {
                 Ok(mut finished) => {
-                    finished.summary.graph = active_play
-                        .running
-                        .result_graph
-                        .snapshot_for_session(&active_play.running.session);
+                    finished.summary.graph = Arc::new(
+                        active_play
+                            .running
+                            .result_graph
+                            .snapshot_for_session(&active_play.running.session),
+                    );
                     Some(finished)
                 }
                 Err(error) => {
@@ -8592,22 +10780,37 @@ impl WinitApp {
         if options.chart_zero_time == TimeUs(0) {
             options.chart_zero_time = self.play_skin_playstart_offset();
         }
-        let reuse = self.quick_retry_reuse_active_assets(chart_id, &options, mode);
+        let media = self.take_play_media_cache_from_active(chart_id, mode);
         tracing::info!(chart_id, ?mode, "quick retrying chart");
         self.notify_obs_retry_play();
         self.save_current_play_options(
             self.active_play.as_ref().map(|active| active.running.session.hispeed),
             "quick retry",
         );
+        if let Some(active) = &mut self.active_play
+            && let Err(error) = active.running.pause_audio()
+        {
+            tracing::warn!(%error, "failed to stop previous play audio for quick retry");
+        }
         self.active_play = None;
         self.play_ending = None;
         self.finished_play = None;
         self.draining_audio = None;
         self.clear_play_control_holds();
-        if let Some(reuse) = reuse {
-            self.queue_quick_retry_reuse(chart_id, reuse);
-        } else {
-            self.start_play_preload(chart_id, options.clone());
+        match media {
+            Some(cache)
+                if retry_preload_kind(mode, cache.chart.is_some())
+                    == RetryPreloadKind::CachedChartWithFreshAudio =>
+            {
+                self.start_quick_retry_preload_reloading_audio(chart_id, options.clone(), cache);
+            }
+            Some(cache) => {
+                self.start_play_preload_reusing_bga(chart_id, options.clone(), cache);
+            }
+            None => {
+                self.play_media_cache = None;
+                self.start_play_preload(chart_id, options.clone());
+            }
         }
         self.enter_play_scene(chart_id, options, self.decide_snapshot_for_chart(chart_id));
         self.poll_play_preload();
@@ -8629,6 +10832,21 @@ impl WinitApp {
         pressed: bool,
         repeat: bool,
     ) -> bool {
+        if pressed
+            && !repeat
+            && self.result_input_ready()
+            && self.select_result_panel_for_control(control)
+        {
+            return true;
+        }
+        if pressed
+            && !repeat
+            && self.result_input_ready()
+            && self.is_result_panel_toggle_control(control)
+            && self.toggle_result_panel()
+        {
+            return true;
+        }
         let Some(lane) = self.result_lane_for_control(control) else {
             return false;
         };
@@ -8658,6 +10876,21 @@ impl WinitApp {
         pressed: bool,
         repeat: bool,
     ) -> bool {
+        if pressed
+            && !repeat
+            && self.result_input_ready()
+            && self.select_result_panel_for_control(control)
+        {
+            return true;
+        }
+        if pressed
+            && !repeat
+            && self.result_input_ready()
+            && self.is_result_panel_toggle_control(control)
+            && self.toggle_result_panel()
+        {
+            return true;
+        }
         let Some(lane) = self.result_lane_for_control(control) else {
             return false;
         };
@@ -8718,7 +10951,7 @@ impl WinitApp {
         let Some(course_id) = self.finished_course.as_ref().map(|course| course.course_id) else {
             return false;
         };
-        let Some(identity) = self.ir_course_identity(course_id) else {
+        let Some(course_hash) = self.finished_course_hash.clone() else {
             tracing::warn!(course_id, slot, "course identity unavailable for replay slot save");
             return false;
         };
@@ -8732,8 +10965,6 @@ impl WinitApp {
         if slot > 3 {
             return false;
         }
-        let bp =
-            course.judge_counts.bad + course.judge_counts.poor + course.judge_counts.empty_poor;
         let max_combo = course.course_max_combo;
         let clear_rank = if course.course_clear {
             bmz_core::clear::ClearType::Normal as u8
@@ -8745,26 +10976,29 @@ impl WinitApp {
         let played_at = course.course_played_at.unwrap_or(0);
         let rule_mode = course.rule_mode;
         let record = crate::storage::score_db::CourseReplaySlotRecord {
-            course_hash: identity.course_hash.clone(),
+            course_hash: course_hash.clone(),
             rule_mode,
             slot,
             rule: crate::config::profile_config::ReplaySlotRule::Always.as_str().to_string(),
             course_score_id,
             played_at,
             ex_score: course.total_ex_score,
-            bp,
+            bp: course.bp,
             max_combo,
             clear_rank,
         };
         match self.boot.score_db.upsert_course_replay_slot(&record) {
             Ok(()) => {
-                course.saved_replay_slots[slot as usize] = true;
-                course.replay_slots[slot as usize] = true;
+                mark_course_replay_slot_saved(
+                    course,
+                    self.finished_course_skin_summary.as_mut(),
+                    slot as usize,
+                );
                 self.notify_obs_save_recording(crate::obs::ObsRecordingSaveReason::OnReplay);
                 self.play_system_sound(crate::system_sound::SoundType::OptionChange);
                 tracing::info!(
                     course_id,
-                    course_hash = %identity.course_hash,
+                    course_hash = %course_hash,
                     rule_mode = rule_mode.as_str(),
                     slot,
                     "saved course replay slot"
@@ -8775,7 +11009,7 @@ impl WinitApp {
                 tracing::warn!(
                     %error,
                     course_id,
-                    course_hash = %identity.course_hash,
+                    course_hash = %course_hash,
                     slot,
                     "failed to save course replay slot from result"
                 );
@@ -8795,6 +11029,47 @@ impl WinitApp {
             .resolve(DeviceId(0), control)
     }
 
+    fn is_result_panel_toggle_control(&self, control: &PhysicalControl) -> bool {
+        physical_control_name(control)
+            .is_some_and(|control| control == "Select" || self.select_keys.is_e2_action(control))
+    }
+
+    fn select_result_panel_for_control(&mut self, control: &PhysicalControl) -> bool {
+        result_panel_for_control(control).is_some_and(|panel| self.set_result_panel(panel))
+    }
+
+    fn toggle_result_panel(&mut self) -> bool {
+        let Some(document) = self.renderer.result_skin_document() else {
+            return false;
+        };
+        let Some(requested) = toggled_result_panel(
+            self.result_panel,
+            result_panel_supported(document),
+            self.result_ir.is_some(),
+        ) else {
+            return false;
+        };
+        self.set_result_panel(requested)
+    }
+
+    fn set_result_panel(&mut self, requested: i32) -> bool {
+        let Some(document) = self.renderer.result_skin_document() else {
+            return false;
+        };
+        let Some(panel) = selected_result_panel(
+            self.result_panel,
+            requested,
+            result_panel_supported(document),
+            self.result_ir.is_some(),
+        ) else {
+            return false;
+        };
+        self.result_panel = panel;
+        tracing::info!(panel = self.result_panel, "result panel changed");
+        self.play_system_sound(crate::system_sound::SoundType::OptionChange);
+        true
+    }
+
     fn cycle_result_gauge_graph_type(&mut self) {
         self.result_gauge_graph_type = cycle_result_gauge_graph_type(self.result_gauge_graph_type);
         tracing::info!(
@@ -8805,15 +11080,28 @@ impl WinitApp {
     }
 
     /// リザルト画面の終了アニメーションを開始する。
-    /// スキンが宣言するフェードアウト時間が経過したら `advance_result_exit` が
-    /// 実際の遷移 (選曲へ戻る / リトライ) を実行する。
+    /// 通常はスキンが宣言するフェードアウト時間が経過したら、スキップ要求時は
+    /// timer=2 の実アニメーションが終わって最終フレームを保持したら、
+    /// `advance_result_exit` が実際の遷移 (選曲へ戻る / リトライ) を実行する。
     fn begin_result_exit(&mut self, action: ResultExitAction) {
         if self.result_exit.is_some() || self.finished_play.is_none() {
             return;
         }
         tracing::info!(?action, "result screen exit animation started");
-        self.result_exit =
-            Some(ResultExit { started_at: Instant::now(), action, skip_requested: false });
+        self.result_exit = Some(ResultExit {
+            started_at: Instant::now(),
+            action,
+            skip_requested: false,
+            skip_final_frame_held: false,
+        });
+        let (skin_bgm_volume, skin_se_volume) = self.result_skin_audio_volumes();
+        let dispatched = self
+            .result_skin_audio
+            .as_mut()
+            .is_some_and(|audio| audio.trigger_timer(2, skin_bgm_volume, skin_se_volume));
+        if dispatched {
+            self.start_audio_output_stream();
+        }
         // HeldLanes の遷移判定はフェードアウト終了時に Key5/Key7 の
         // 押下状態を読むため、ここでは held フラグをリセットしない。
         // Result SE は毎フレームの master-gain command ではなく callback 側で
@@ -8857,7 +11145,7 @@ impl WinitApp {
             return false;
         };
         if !exit.skip_requested {
-            tracing::info!("result screen exit animation skipped");
+            tracing::info!("result screen exit animation skip requested");
         }
         exit.skip_requested = true;
         true
@@ -8919,6 +11207,7 @@ impl WinitApp {
             // was being started, drop the course session — the user opted
             // out before the first chart actually began.
             self.clear_active_course_state();
+            self.autoplay_folder = None;
             let now = Instant::now();
             self.select_scene_started_at = now;
             self.restart_select_bar_timer_without_scroll(now);
@@ -9031,6 +11320,7 @@ impl WinitApp {
                         played_at: now_unix_seconds(),
                         applied_arrange: &started.running.applied_arrange,
                         target_ex_score: started.running.target_ex_score,
+                        target_name: &started.running.target,
                         score_key: started.running.score_key,
                         practice_mode: started.running.practice_mode,
                         finish_mode: if self.active_course.is_some() {
@@ -9041,14 +11331,22 @@ impl WinitApp {
                     },
                 ) {
                     Ok(mut finished) => {
-                        finished.summary.graph = started
-                            .running
-                            .result_graph
-                            .snapshot_for_session(&started.running.session);
+                        finished.summary.graph = Arc::new(
+                            started
+                                .running
+                                .result_graph
+                                .snapshot_for_session(&started.running.session),
+                        );
                         finished
                     }
                     Err(error) => {
                         tracing::error!(%error, "failed to finish play session");
+                        if let Some(chart_id) = self.last_started_chart_id {
+                            self.capture_play_media_cache_from_running(
+                                chart_id,
+                                &mut started.running,
+                            );
+                        }
                         let mut audio = started.running.audio;
                         audio.mark_draining();
                         self.draining_audio = Some(audio);
@@ -9059,6 +11357,9 @@ impl WinitApp {
                 }
             }
         };
+        if let Some(chart_id) = self.last_started_chart_id {
+            self.capture_play_media_cache_from_running(chart_id, &mut started.running);
+        }
         let mut audio = started.running.audio;
         audio.mark_draining();
         self.draining_audio = Some(audio);
@@ -9082,7 +11383,8 @@ impl WinitApp {
         self.ensure_result_skin_ready(ResultSkinSlot::Normal);
     }
 
-    /// 終了フェードアウトの経過を監視し、スキンのフェードアウト時間を過ぎたら
+    /// 終了フェードアウトの経過を監視し、通常はスキンのフェードアウト時間を、
+    /// スキップ時は timer=2 の実アニメーション終端と最終フレーム保持を過ぎたら
     /// 保留していた遷移を実行する。毎フレーム描画前に呼ぶ。
     fn advance_result_exit(&mut self) {
         if self.finished_play.is_some()
@@ -9093,6 +11395,8 @@ impl WinitApp {
             // 中間リザルトは scene 時間経過で次の曲へ、それ以外は選曲へ戻る。
             let action = if self.is_course_intermediate_result() {
                 self.course_intermediate_exit_action()
+            } else if self.autoplay_folder_has_next() {
+                ResultExitAction::AdvanceAutoplayFolder
             } else {
                 ResultExitAction::Leave
             };
@@ -9104,19 +11408,39 @@ impl WinitApp {
         // 何らかの理由でリザルトを抜けていたら終了状態を破棄する。
         if self.finished_play.is_none() {
             self.stop_result_exit_system_sounds();
+            if let Some(audio) = &self.result_skin_audio {
+                audio.stop_all();
+            }
             self.result_exit = None;
             return;
         }
         let started_at = exit.started_at;
         let action = exit.action.clone();
         let skip_requested = exit.skip_requested;
+        let skip_final_frame_held = exit.skip_final_frame_held;
         let fadeout = Duration::from_millis(self.renderer.result_skin_fadeout_ms().max(0) as u64);
+        let animation_duration = Duration::from_millis(
+            self.renderer.result_skin_timer_animation_duration_ms(2).max(0) as u64,
+        );
         let elapsed = started_at.elapsed();
         // スキンの終了アニメーション時間に合わせて、プレイ残響(draining_audio)を
         // 1.0 → 0.0 へ絞る。リザルトSEは begin_result_exit で callback 側の
         // fade-out を開始済みなので、ここでは毎フレーム command を投げない。
         self.fade_audio_for_result_exit(elapsed, fadeout);
-        if elapsed < fadeout && !skip_requested {
+        if skip_requested && elapsed >= animation_duration && !skip_final_frame_held {
+            // この呼び出しでは遷移せず、次のフレームで最終状態を1フレーム描画する。
+            if let Some(exit) = self.result_exit.as_mut() {
+                exit.skip_final_frame_held = true;
+            }
+            return;
+        }
+        if !result_exit_transition_ready(
+            elapsed,
+            fadeout,
+            animation_duration,
+            skip_requested,
+            skip_final_frame_held,
+        ) {
             return;
         }
         self.stop_result_exit_system_sounds();
@@ -9142,6 +11466,7 @@ impl WinitApp {
             }
             ResultExitAction::AdvanceCourse => self.advance_to_next_course_chart(),
             ResultExitAction::FinishCourse => self.finish_course_after_intermediate_result(),
+            ResultExitAction::AdvanceAutoplayFolder => self.advance_autoplay_folder(),
         }
     }
 
@@ -9193,7 +11518,10 @@ impl WinitApp {
         let Some(manager) = &self.system_sound else {
             return;
         };
-        let sound_type = crate::system_sound::SoundType::ResultClose;
+        let sound_type = result_exit_sound_for_context(
+            self.active_course.is_some() || self.finished_course.is_some(),
+            manager.has_sound(crate::system_sound::SoundType::CourseClose),
+        );
         manager.play_with_master_gain_and_fade_out(
             sound_type,
             system_sound_volume_from_mix(&self.boot.profile_config.audio_mix, sound_type),
@@ -9204,14 +11532,20 @@ impl WinitApp {
     }
 
     fn leave_result(&mut self) {
+        if let Some(audio) = &self.result_skin_audio {
+            audio.stop_all();
+        }
         self.finished_play = None;
+        self.autoplay_folder = None;
+        self.result_favorite_chart = false;
         self.clear_active_course_state();
         self.result_exit = None;
         self.result_key5_held = false;
         self.result_key7_held = false;
-        self.clear_play_backbmp_state();
+        self.clear_play_meta_image_state();
         // リザルト画面を抜けたら、まだ鳴っていても余韻再生を止める。
         self.draining_audio = None;
+        self.play_media_cache = None;
         self.last_play_snapshot = None;
         self.reload_select_items();
         self.sync_select_holds_from_pressed_controls();
@@ -9266,11 +11600,16 @@ impl WinitApp {
     }
 
     fn result_auto_exit_duration(&self) -> Option<Duration> {
-        result_auto_exit_duration_for_document(
+        let duration = result_auto_exit_duration_for_document(
             self.renderer.result_skin_document(),
             self.is_course_intermediate_result(),
             self.course_intermediate_auto_advance_enabled(),
-        )
+        );
+        if duration.is_none() && self.autoplay_folder_has_next() {
+            Some(FALLBACK_RESULT_SCENE_DURATION)
+        } else {
+            duration
+        }
     }
 
     fn reload_select_items(&mut self) {
@@ -9320,17 +11659,23 @@ impl WinitApp {
                 self.refresh_player_stats_snapshot();
                 self.reload_select_items();
                 if let Some(egui) = self.egui.as_mut() {
+                    let mut args = FluentArgs::new();
+                    args.set("label", label);
+                    args.set("path", request.path.display().to_string());
+                    args.set("summary", summary);
                     egui.set_score_import_status(
-                        format!(
-                            "{label}: {} をインポートしました ({summary})",
-                            request.path.display()
-                        ),
+                        Localizer::new(self.boot.profile_config.ui.locale())
+                            .format("score-import-success", &args),
                         false,
                     );
                 }
             }
             Err(error) => {
-                let message = format!("{label}: インポートに失敗しました: {error}");
+                let mut args = FluentArgs::new();
+                args.set("label", label);
+                args.set("error", error.to_string());
+                let message = Localizer::new(self.boot.profile_config.ui.locale())
+                    .format("score-import-failed", &args);
                 tracing::error!(kind = label, path, error = %format_error_chain(&error), "external score import failed");
                 if let Some(egui) = self.egui.as_mut() {
                     egui.set_score_import_status(message, true);
@@ -9444,6 +11789,16 @@ impl WinitApp {
         }
         if keep_pending {
             self.pending_song_scan = Some(rx);
+        } else if let Some((root, label)) = self.queued_download_scan.take() {
+            self.spawn_song_scan(
+                vec![PathEntry {
+                    path: root.to_string_lossy().into_owned(),
+                    enabled: true,
+                    recursive: true,
+                }],
+                true,
+                label,
+            );
         }
     }
 
@@ -9503,6 +11858,12 @@ impl WinitApp {
             Ok(Ok(())) => {
                 tracing::info!("table fetch complete");
                 self.pending_table_fetch = None;
+                match self.boot.library_db.list_difficulty_tables() {
+                    Ok(tables) => self.difficulty_tables = tables,
+                    Err(error) => {
+                        tracing::warn!(%error, "failed to refresh difficulty table metadata")
+                    }
+                }
                 self.table_breadcrumb_cache.borrow_mut().clear();
                 self.reload_select_items();
             }
@@ -9666,7 +12027,12 @@ impl WinitApp {
                         if let Err(error) = open_external_url(&candidate.html_url) {
                             tracing::warn!(%error, "failed to open release page");
                             self.update_prompt = Some(UpdatePrompt::Error {
-                                message: format!("リリースページを開けませんでした: {error:#}"),
+                                message: {
+                                    let mut args = FluentArgs::new();
+                                    args.set("error", format!("{error:#}"));
+                                    Localizer::new(self.boot.profile_config.ui.locale())
+                                        .format("update-release-open-failed", &args)
+                                },
                                 candidate: Some(candidate),
                             });
                         } else {
@@ -9875,7 +12241,7 @@ impl WinitApp {
     /// 毎フレーム呼ぶ。テクスチャ挿入 + フォント登録 + SkinContext 構築のみで軽量。
     fn drain_pending_skins(&mut self) -> SkinDrainStats {
         let mut stats = SkinDrainStats::default();
-        loop {
+        for _ in 0..MAX_SKIN_UPLOADS_PER_REDRAW {
             match self.skin_upload_rx.try_recv() {
                 Ok(result) => {
                     stats.received_count += 1;
@@ -9909,8 +12275,39 @@ impl WinitApp {
     }
 
     fn ensure_result_skin_ready(&mut self, slot: ResultSkinSlot) {
+        self.refresh_result_favorite_chart();
         self.spawn_result_skin_decode_for(slot);
         self.ensure_skin_ready(SkinKind::Result);
+        self.renderer.reset_result_skin_runtime();
+        let (skin_bgm_volume, skin_se_volume) = self.result_skin_audio_volumes();
+        let started = self.result_skin_audio.as_mut().is_some_and(|audio| {
+            audio.reset();
+            audio.start_scene(skin_bgm_volume, skin_se_volume)
+        });
+        if started {
+            self.start_audio_output_stream();
+        }
+        self.result_panel = self
+            .renderer
+            .result_skin_document()
+            .and_then(|document| document.result_panel_default)
+            .filter(|panel| (0..=2).contains(panel))
+            .unwrap_or(0);
+    }
+
+    fn refresh_result_favorite_chart(&mut self) {
+        let Some(sha256) = self.finished_play.as_ref().map(|finished| finished.result.chart_sha256)
+        else {
+            self.result_favorite_chart = false;
+            return;
+        };
+        self.result_favorite_chart = match self.boot.collection_db.is_favorite_chart(sha256) {
+            Ok(favorite) => favorite,
+            Err(error) => {
+                tracing::warn!(%error, "failed to load favorite chart state for result");
+                false
+            }
+        };
     }
 
     fn current_result_skin_slot(&self) -> ResultSkinSlot {
@@ -9920,15 +12317,16 @@ impl WinitApp {
     fn spawn_result_skin_decode_for(&mut self, slot: ResultSkinSlot) {
         let skin = &self.boot.profile_config.skin;
         let table_song = !self.play_table_text_primary.is_empty();
-        let runtime_numbers = self.result_lua_runtime_number_values(slot);
-        let signature = result_skin_signature_for_config(skin, slot, table_song, runtime_numbers);
+        let ir_name = result_ir_skin_name(&self.boot.profile_config.ir);
+        let runtime_state = self.result_lua_runtime_state(slot, table_song, ir_name);
+        let signature = result_skin_signature_for_config(skin, slot, runtime_state);
         if !self.pending_result_skin && self.last_result_skin_signature.as_ref() == Some(&signature)
         {
             tracing::debug!(?slot, "result skin reuse (signature unchanged)");
             return;
         }
 
-        let (_, trimmed, options, files, table_song, runtime_numbers) = signature.clone();
+        let (_, trimmed, options, files, runtime_state) = signature.clone();
         self.last_result_skin_signature = Some(signature);
         self.pending_result_skin = false;
         let generation = self.skin_reload_generations.bump(SkinKind::Result);
@@ -9978,25 +12376,86 @@ impl WinitApp {
             SkinKind::Result,
             options,
             files,
-            lua_runtime_state_for_result(table_song, runtime_numbers),
+            runtime_state,
         );
         self.pending_result_skin = true;
         tracing::info!(?slot, path = %path_label, generation, "result skin decode queued");
     }
 
-    fn result_lua_runtime_number_values(&self, slot: ResultSkinSlot) -> BTreeMap<i32, i32> {
+    fn result_lua_runtime_state(
+        &self,
+        slot: ResultSkinSlot,
+        table_song: bool,
+        ir_name: Option<&str>,
+    ) -> bmz_skin::LuaLoadRuntimeState {
         let summary = match slot {
+            ResultSkinSlot::Course => self.finished_course_skin_summary.as_ref(),
+            ResultSkinSlot::Normal => self.finished_play.as_ref().map(|finished| &finished.summary),
+        };
+        let key_mode = summary.map(|summary| summary.key_mode).unwrap_or_default();
+        let number_values =
+            summary.map(result_lua_runtime_number_values_for_summary).unwrap_or_default();
+        let mut runtime_state = lua_runtime_state_for_result(
+            table_song,
+            ir_name,
+            self.result_score_save_enabled_for_slot(slot),
+            key_mode,
+            number_values,
+            &self.boot.profile_config.display_name,
+        );
+        if let Some(summary) = summary {
+            apply_result_summary_lua_load_state(
+                &mut runtime_state,
+                summary,
+                &self.play_table_text_primary,
+                &self.play_table_text_secondary,
+                &self.play_table_text_fallback,
+            );
+        }
+        runtime_state.event_index_values.insert(
+            54,
+            i32::try_from(bmz_render::skin::select_double_option_index(
+                self.result_double_option_for_slot(slot).as_str(),
+            ))
+            .unwrap_or_default(),
+        );
+        if let Some(stage) = self.current_course_stage_marker() {
+            apply_course_mode_lua_options(&mut runtime_state, Some(stage));
+        }
+        if let ResultSkinSlot::Course = slot
+            && let Some(course) = &self.finished_course
+        {
+            apply_course_mode_lua_options(&mut runtime_state, None);
+            apply_course_result_lua_load_state(&mut runtime_state, course);
+        }
+        runtime_state
+    }
+
+    fn result_double_option_for_slot(&self, slot: ResultSkinSlot) -> DoubleOption {
+        match slot {
+            ResultSkinSlot::Normal => self
+                .finished_play
+                .as_ref()
+                .map(|finished| finished.applied_arrange.double_option)
+                .unwrap_or(DoubleOption::Off),
+            ResultSkinSlot::Course => DoubleOption::Off,
+        }
+    }
+
+    fn current_result_score_save_enabled(&self) -> bool {
+        self.result_score_save_enabled_for_slot(self.current_result_skin_slot())
+    }
+
+    fn result_score_save_enabled_for_slot(&self, slot: ResultSkinSlot) -> bool {
+        match slot {
             ResultSkinSlot::Course => {
-                self.finished_course.as_ref().map(course_result_summary_for_skin)
+                self.finished_course.as_ref().is_some_and(|course| course.course_score_id.is_some())
             }
-            ResultSkinSlot::Normal => {
-                self.finished_play.as_ref().map(|finished| finished.summary.clone())
-            }
-        };
-        let Some(summary) = summary else {
-            return BTreeMap::new();
-        };
-        result_lua_runtime_number_values_for_summary(&summary)
+            ResultSkinSlot::Normal => self
+                .finished_play
+                .as_ref()
+                .is_some_and(|finished| finished.stored.score_history_id > 0),
+        }
     }
 
     fn set_empty_result_skin_context(&mut self) {
@@ -10081,7 +12540,25 @@ impl WinitApp {
             );
             return false;
         };
-        let UploadedSkin { kind, document, fonts, prepared, decode_stats, upload_stats } = uploaded;
+        let UploadedSkin {
+            kind,
+            document,
+            lua_runtime,
+            fonts,
+            prepared,
+            audio_assets,
+            decode_stats,
+            upload_stats,
+        } = uploaded;
+        if kind == SkinKind::Result {
+            self.result_skin_audio = self.system_audio.as_ref().map(|audio| {
+                crate::skin_audio::SkinAudioRuntime::install(
+                    audio.engine(),
+                    &document,
+                    audio_assets,
+                )
+            });
+        }
         let font_count = fonts.len();
         let font_install_start = Instant::now();
         let mut font_install_count = 0usize;
@@ -10153,6 +12630,7 @@ impl WinitApp {
             kind,
             manifest,
             document,
+            lua_runtime,
             document_textures,
             preserve_play_dynamic_timers,
         );
@@ -10232,6 +12710,7 @@ impl WinitApp {
         self.select_scene_started_at = now;
         self.restart_select_bar_timer_without_scroll(now);
         self.option_panel_started_at = now;
+        self.option_panel_off_started_at = [None; 6];
     }
 
     fn advance_active_play(&mut self) {
@@ -10262,19 +12741,12 @@ impl WinitApp {
         let course_stage = self.current_course_stage_marker();
         let play_elapsed_time = self.play_elapsed_time();
         let ready_elapsed_time = self.play_ready_sound_started_at.map(elapsed_since);
+        let stagefile_background = self.play_stagefile_loaded;
+        let stagefile_image_size = self.play_stagefile_size;
         let backbmp_background = self.play_backbmp_loaded;
         let Some(active_play) = &mut self.active_play else {
             return;
         };
-
-        // 動画BGAテクスチャを更新（前フレームの時刻を使用、1フレーム遅延は許容）
-        let video_update_time =
-            self.last_play_snapshot.as_ref().map(|s| s.time).unwrap_or(bmz_core::time::TimeUs(0));
-        crate::video_bga::update_video_bga_frames(
-            &mut self.renderer,
-            &mut active_play.running,
-            video_update_time,
-        );
 
         let state_before_advance = active_play.running.session.state;
         let advance_outcome = advance_running_play_session(&mut active_play.running);
@@ -10289,9 +12761,18 @@ impl WinitApp {
                 active_play.running.result_graph.record_frame(&frame);
                 let mine_hits = frame.mine_hits.len();
                 let mut snapshot = frame.render_snapshot;
+                // gameplayと同じ絶対時刻で動画を選び、前snapshot参照による
+                // 常時1フレーム分のBGA表示遅延を発生させない。
+                crate::video_bga::update_video_bga_frames(
+                    &mut self.renderer,
+                    &mut active_play.running,
+                    snapshot.time,
+                );
                 self.apply_profile_fast_slow_filter(&mut snapshot);
                 snapshot.play_elapsed_time = play_elapsed_time;
                 snapshot.ready_elapsed_time = ready_elapsed_time;
+                snapshot.stagefile_background = stagefile_background;
+                snapshot.stagefile_image_size = stagefile_image_size;
                 snapshot.backbmp_background = backbmp_background;
                 snapshot.course_stage = course_stage;
                 snapshot.course_titles = course_titles.clone();
@@ -10341,16 +12822,19 @@ impl WinitApp {
                         played_at: now_unix_seconds(),
                         applied_arrange: &active_play.running.applied_arrange,
                         target_ex_score: active_play.running.target_ex_score,
+                        target_name: &active_play.running.target,
                         score_key: active_play.running.score_key,
                         practice_mode: active_play.running.practice_mode,
                         finish_mode,
                     },
                 ) {
                     Ok(mut finished) => {
-                        finished.summary.graph = active_play
-                            .running
-                            .result_graph
-                            .snapshot_for_session(&active_play.running.session);
+                        finished.summary.graph = Arc::new(
+                            active_play
+                                .running
+                                .result_graph
+                                .snapshot_for_session(&active_play.running.session),
+                        );
                         Some(finished)
                     }
                     Err(error) => {
@@ -10363,6 +12847,8 @@ impl WinitApp {
                 let mut snapshot = frame.render_snapshot;
                 snapshot.play_elapsed_time = play_elapsed_time;
                 snapshot.ready_elapsed_time = ready_elapsed_time;
+                snapshot.stagefile_background = stagefile_background;
+                snapshot.stagefile_image_size = stagefile_image_size;
                 snapshot.backbmp_background = backbmp_background;
                 snapshot.course_stage = course_stage;
                 snapshot.course_titles = course_titles.clone();
@@ -10396,22 +12882,29 @@ impl WinitApp {
             Err(error) => {
                 tracing::error!(%error, "failed to advance play session");
                 self.active_play = None;
-                self.clear_play_backbmp_state();
+                self.clear_play_meta_image_state();
                 self.last_play_snapshot = None;
             }
         }
+        self.sync_profile_visual_offset_from_active_play();
     }
 
     fn maybe_start_ready_phase(&mut self) {
         if self.play_ready_sound_started_at.is_some() {
             return;
         }
-        if self.play_elapsed_time().0 < self.play_skin_ready_delay().as_micros() as i64 {
+        self.sync_play_control_holds_from_pressed_controls();
+        let now = Instant::now();
+        if play_ready_blocked_by_control_holds(self.play_e1_held, self.play_e2_held) {
+            self.play_ready_last_control_hold_at = Some(now);
+            self.update_pending_play_snapshot_timers();
             return;
         }
-        self.sync_play_control_holds_from_pressed_controls();
-        if play_ready_blocked_by_control_holds(self.play_e1_held, self.play_e2_held) {
+        if play_ready_blocked_by_recent_control_hold(self.play_ready_last_control_hold_at, now) {
             self.update_pending_play_snapshot_timers();
+            return;
+        }
+        if self.play_elapsed_time().0 < self.play_skin_ready_delay().as_micros() as i64 {
             return;
         }
         let chart_id = self
@@ -10434,9 +12927,14 @@ impl WinitApp {
             .practice_chart_zero_time
             .take()
             .unwrap_or_else(|| self.play_skin_playstart_offset());
+        let play_elapsed_time = self.play_elapsed_time();
         let Some(active_play) = &mut self.active_play else {
             return;
         };
+        bmz_gameplay::session::drain_pre_ready_visual_inputs(
+            &mut active_play.running.session,
+            play_elapsed_time,
+        );
         if let Err(error) = active_play.running.start(chart_zero_time) {
             tracing::error!(%error, "failed to start preloaded play audio");
             self.abort_pending_play_start();
@@ -10446,12 +12944,14 @@ impl WinitApp {
         self.pending_play_start = None;
         self.play_system_sound(crate::system_sound::SoundType::PlayReady);
         if let Some(snapshot) = &mut self.last_play_snapshot {
+            snapshot.play_elapsed_time = play_elapsed_time;
             snapshot.ready_elapsed_time = Some(TimeUs(0));
             snapshot.time = chart_zero_time;
             if let Some(active_play) = &self.active_play {
-                crate::screens::play_snapshot::refresh_play_skin_visuals(
+                crate::screens::play_snapshot::refresh_play_skin_visuals_with_input_elapsed(
                     snapshot,
                     &active_play.running.session,
+                    play_elapsed_time,
                 );
             }
         }
@@ -10473,18 +12973,52 @@ impl WinitApp {
 
     fn update_pending_play_snapshot_timers(&mut self) {
         let play_elapsed_time = self.play_elapsed_time();
-        let skin_elapsed_time = self.play_skin_animation_elapsed_time(play_elapsed_time);
         let ready_elapsed_time = self.play_ready_sound_started_at.map(elapsed_since);
-        let Some(snapshot) = &mut self.last_play_snapshot else {
-            return;
-        };
-        snapshot.play_elapsed_time = skin_elapsed_time;
-        snapshot.ready_elapsed_time = ready_elapsed_time;
+        let resource_load_progress = self.current_play_resource_load_progress();
+        if let Some(snapshot) = &mut self.last_play_snapshot {
+            snapshot.play_elapsed_time = play_elapsed_time;
+            snapshot.ready_elapsed_time = ready_elapsed_time;
+            snapshot.resource_load_progress = resource_load_progress;
+        }
+        self.refresh_pending_play_visual_snapshot(play_elapsed_time);
+    }
+
+    fn current_play_resource_load_progress(&self) -> f32 {
+        let chart_id = self
+            .pending_play_start
+            .as_ref()
+            .map(|start| start.chart_id)
+            .or(self.last_started_chart_id);
+        let audio_progress = self
+            .pending_play_preload
+            .as_ref()
+            .filter(|pending| Some(pending.chart_id) == chart_id)
+            .map(|pending| {
+                pending.audio_progress.load(Ordering::Relaxed) as f32
+                    / RESOURCE_LOAD_PROGRESS_SCALE as f32
+            })
+            .unwrap_or_else(|| {
+                if self.preloaded_play_session.is_some() || self.active_play.is_some() {
+                    1.0
+                } else {
+                    0.0
+                }
+            });
+        let bga_progress = bga_resource_load_progress(
+            self.bga_load_status,
+            self.bga_load_generation,
+            self.bga_load_chart_id,
+            chart_id,
+            self.bga_load_completed_assets,
+            self.bga_load_total_assets,
+        );
+        let bga_enabled =
+            self.last_play_snapshot.as_ref().is_some_and(|snapshot| snapshot.bga_enabled);
+        combined_resource_load_progress(audio_progress, bga_progress, bga_enabled)
     }
 
     fn update_pre_ready_play_state(&mut self) {
         let play_elapsed_time = self.play_elapsed_time();
-        let skin_elapsed_time = self.play_skin_animation_elapsed_time(play_elapsed_time);
         let Some(active_play) = &mut self.active_play else {
             return;
         };
@@ -10495,7 +13029,7 @@ impl WinitApp {
         let Some(snapshot) = &mut self.last_play_snapshot else {
             return;
         };
-        snapshot.play_elapsed_time = skin_elapsed_time;
+        snapshot.play_elapsed_time = play_elapsed_time;
         crate::screens::play_snapshot::refresh_play_skin_visuals_with_input_elapsed(
             snapshot,
             &active_play.running.session,
@@ -10512,101 +13046,62 @@ impl WinitApp {
             &mut self.last_play_snapshot,
             &active_play.running.session,
             active_play.running.applied_arrange.arrange,
+            active_play.running.applied_arrange.arrange_2p,
         );
     }
 
     fn apply_pending_play_hispeed_change(&mut self, change: HispeedChange) {
-        if self.active_course.as_ref().is_some_and(|c| {
-            c.definition.constraints.speed == bmz_core::course::CourseSpeedConstraint::NoSpeed
-        }) {
-            tracing::debug!("pending play hispeed change ignored: course NoSpeed constraint");
-            return;
-        }
-        apply_pending_hispeed_change_to_profile(
-            &mut self.boot.profile_config,
-            self.last_play_snapshot.as_ref(),
-            change,
-        );
-        self.refresh_pending_play_lane_snapshot_from_profile();
-        tracing::info!(
-            hispeed = self.boot.profile_config.lane.hispeed,
-            target_green_number = self.boot.profile_config.lane.target_green_number,
-            "adjusted pending play hispeed"
-        );
+        self.apply_pending_play_lane_action(PendingPlayLaneAction::Hispeed(change));
     }
 
     fn apply_pending_play_option_control(&mut self, action: PlayOptionControl, is_axis: bool) {
-        match action {
-            PlayOptionControl::ToggleHispeedMode => {
-                let next = match self.boot.profile_config.lane.hispeed_mode {
-                    HispeedModeConfig::Normal => {
-                        if let Some(green) = pending_play_green_number_for_profile_hispeed(
-                            &self.boot.profile_config,
-                            self.last_play_snapshot.as_ref(),
-                        ) {
-                            self.boot.profile_config.lane.target_green_number = green;
-                        }
-                        HispeedModeConfig::Floating
-                    }
-                    HispeedModeConfig::Floating => HispeedModeConfig::Normal,
-                };
-                self.boot.profile_config.lane.hispeed_mode = next;
-            }
-            PlayOptionControl::Hispeed(change) => self.apply_pending_play_hispeed_change(change),
+        let pending_action = match action {
+            PlayOptionControl::ToggleHispeedMode => PendingPlayLaneAction::ToggleHispeedMode,
+            PlayOptionControl::Hispeed(change) => PendingPlayLaneAction::Hispeed(change),
             PlayOptionControl::LaneCover(_) if is_axis => return,
             PlayOptionControl::LaneCover(change) => {
-                let delta = lane_cover_change_step(change);
-                let current =
-                    crate::config::play::lane_unit_to_f32(self.boot.profile_config.lane.sudden);
-                self.boot.profile_config.lane.sudden =
-                    crate::config::play::lane_f32_to_unit((current - delta).clamp(0.0, 1.0));
+                PendingPlayLaneAction::LaneCoverDelta(lane_cover_change_step(change))
             }
             PlayOptionControl::GreenNumber(_) if is_axis => return,
             PlayOptionControl::GreenNumber(change) => {
-                if self.active_course.as_ref().is_some_and(|c| {
-                    c.definition.constraints.speed
-                        == bmz_core::course::CourseSpeedConstraint::NoSpeed
-                }) {
-                    tracing::debug!(
-                        "pending play green number change ignored: course NoSpeed constraint"
-                    );
-                    return;
-                }
-                apply_pending_green_number_step_to_profile(
-                    &mut self.boot.profile_config,
-                    self.last_play_snapshot.as_ref(),
-                    green_number_change_step(change),
-                );
-                tracing::info!(
-                    hispeed_mode = ?self.boot.profile_config.lane.hispeed_mode,
-                    target_green_number = self.boot.profile_config.lane.target_green_number,
-                    "adjusted pending play green number"
-                );
+                PendingPlayLaneAction::GreenNumberDelta(green_number_change_step(change))
             }
-        }
-        self.refresh_pending_play_lane_snapshot_from_profile();
+        };
+        self.apply_pending_play_lane_action(pending_action);
     }
 
-    fn refresh_pending_play_lane_snapshot_from_profile(&mut self) {
-        let Some((chart_id, options)) = self
-            .pending_play_start
-            .as_ref()
-            .map(|play_start| (play_start.chart_id, play_start.options.clone()))
-        else {
-            return;
+    fn apply_pending_play_lane_action(&mut self, action: PendingPlayLaneAction) -> bool {
+        let speed_locked = self.active_course.as_ref().is_some_and(|course| {
+            course.definition.constraints.speed == bmz_core::course::CourseSpeedConstraint::NoSpeed
+        });
+        let now_bpm = self.last_play_snapshot.as_ref().map_or(120.0, |snapshot| snapshot.now_bpm);
+        let Some(pending) = &mut self.pending_play_start else {
+            return false;
         };
-        let key_mode = self.play_skin_key_mode_for_chart(chart_id, &options);
-        let session_options =
-            play_session_options_from_start(&self.play_session_app_config(), options);
-        let Some(snapshot) = &mut self.last_play_snapshot else {
-            return;
-        };
-        crate::screens::play_session::apply_placeholder_session_visuals(
-            snapshot,
+        let lane = &mut pending.lane;
+        if !apply_pending_play_lane_action_to_state(
+            lane,
+            action,
             &self.boot.profile_config,
-            key_mode,
-            &session_options,
+            now_bpm,
+            speed_locked,
+        ) {
+            tracing::debug!("pending play lane change ignored: course NoSpeed constraint");
+            return false;
+        }
+        pending.lane_actions.push(action);
+        if let Some(snapshot) = &mut self.last_play_snapshot {
+            lane.apply_to_snapshot(snapshot);
+        }
+        tracing::info!(
+            hispeed = lane.hispeed,
+            hispeed_mode = ?lane.hispeed_mode,
+            target_green_number = lane.target_green_number,
+            lane_cover = lane.active_lane_cover(),
+            lift = lane.lift,
+            "adjusted pending play lane settings"
         );
+        true
     }
 
     fn stop_active_play_like_escape(&mut self, reason: &'static str) -> bool {
@@ -10654,18 +13149,29 @@ impl WinitApp {
         self.play_e1_held = false;
         self.play_e2_held = false;
         self.play_e3_held = false;
+        self.play_ready_last_control_hold_at = None;
         self.play_exit_hold_started_at = None;
+        self.reset_play_analog_scroll();
+        self.refresh_play_lane_value_changing();
     }
 
     fn sync_play_control_holds_from_pressed_controls(&mut self) {
-        let (e1_held, e2_held, e3_held) = play_control_hold_state_from_pressed_controls(
-            &self.pressed_controls,
-            &self.select_keys,
-        );
+        let (e1_held, e2_held, e3_held) = self
+            .play_option_input
+            .as_ref()
+            .map(|input| {
+                play_control_hold_state_from_pressed_inputs(&self.pressed_play_inputs, input)
+            })
+            .unwrap_or((false, false, false));
+        let was_ready_blocked =
+            play_ready_blocked_by_control_holds(self.play_e1_held, self.play_e2_held);
         if self.play_e1_held == e1_held
             && self.play_e2_held == e2_held
             && self.play_e3_held == e3_held
         {
+            if was_ready_blocked {
+                self.play_ready_last_control_hold_at = Some(Instant::now());
+            }
             return;
         }
         if self.play_e1_held != e1_held || self.play_e2_held != e2_held {
@@ -10674,6 +13180,9 @@ impl WinitApp {
         self.play_e1_held = e1_held;
         self.play_e2_held = e2_held;
         self.play_e3_held = e3_held;
+        if was_ready_blocked || play_ready_blocked_by_control_holds(e1_held, e2_held) {
+            self.play_ready_last_control_hold_at = Some(Instant::now());
+        }
         self.refresh_play_lane_value_changing();
         self.update_play_exit_hold_timer();
     }
@@ -10691,23 +13200,42 @@ impl WinitApp {
                 &mut self.last_play_snapshot,
                 &active_play.running.session,
                 active_play.running.applied_arrange.arrange,
+                active_play.running.applied_arrange.arrange_2p,
             );
-        } else if self.pending_play_start.is_some()
-            && self.play_ready_sound_started_at.is_none()
-            && let Some(snapshot) = &mut self.last_play_snapshot
+        } else if self.play_ready_sound_started_at.is_none()
+            && let Some(pending) = &mut self.pending_play_start
         {
-            snapshot.lane_cover_changing = changing;
+            pending.lane.lane_cover_changing = changing;
+            if let Some(snapshot) = &mut self.last_play_snapshot {
+                pending.lane.apply_to_snapshot(snapshot);
+            }
         }
     }
 
-    fn update_play_e1_control_state(&mut self, control: &str, pressed: bool) -> bool {
-        if !self.select_keys.is_start(control) {
+    fn update_play_e1_control_state(
+        &mut self,
+        device: DeviceId,
+        control: &PhysicalControl,
+        pressed: bool,
+    ) -> bool {
+        let is_e1 = self.play_option_input.as_ref().is_some_and(|input| {
+            !input.resolves_lane(device, control)
+                && input.is_action(device, control, InputActionConfig::E1)
+        });
+        if !is_e1 {
             return false;
         }
+        let was_ready_blocked =
+            play_ready_blocked_by_control_holds(self.play_e1_held, self.play_e2_held);
         if self.play_e1_held != pressed {
             self.reset_play_analog_scroll();
         }
         self.play_e1_held = pressed;
+        if was_ready_blocked
+            || play_ready_blocked_by_control_holds(self.play_e1_held, self.play_e2_held)
+        {
+            self.play_ready_last_control_hold_at = Some(Instant::now());
+        }
         self.refresh_play_lane_value_changing();
         self.update_play_exit_hold_timer();
         true
@@ -10716,16 +13244,23 @@ impl WinitApp {
     /// Start / E1 の2回連続押しでレーンカバー (SUDDEN+) 表示を切り替える。
     /// キーボード・ゲームパッド共通。トグルした場合は true。
     fn handle_play_start_double_press(&mut self) -> bool {
-        let Some(active_play) = &mut self.active_play else {
+        if self.active_play.is_none() && self.pending_play_start.is_none() {
             return false;
-        };
+        }
         let now = Instant::now();
         if !register_play_start_double_press(&mut self.last_play_start_press_at, now) {
             return false;
         }
+        if self.active_play.is_none() {
+            return self
+                .apply_pending_play_lane_action(PendingPlayLaneAction::ToggleLaneCoverVisibility);
+        }
         let speed_locked = self.active_course.as_ref().is_some_and(|c| {
             c.definition.constraints.speed == bmz_core::course::CourseSpeedConstraint::NoSpeed
         });
+        let Some(active_play) = &mut self.active_play else {
+            return false;
+        };
         toggle_lane_cover_visibility(&mut active_play.running.session, speed_locked);
         tracing::info!(
             lane_cover_visible = active_play.running.session.lane_cover_visible,
@@ -10736,25 +13271,52 @@ impl WinitApp {
             &mut self.last_play_snapshot,
             &active_play.running.session,
             active_play.running.applied_arrange.arrange,
+            active_play.running.applied_arrange.arrange_2p,
         );
         true
     }
 
-    fn update_play_exit_control_state(&mut self, control: &str, pressed: bool) -> bool {
+    fn update_play_exit_control_state(
+        &mut self,
+        device: DeviceId,
+        control: &PhysicalControl,
+        pressed: bool,
+    ) -> bool {
+        let was_ready_blocked =
+            play_ready_blocked_by_control_holds(self.play_e1_held, self.play_e2_held);
+        let (is_e2, is_e3) = self
+            .play_option_input
+            .as_ref()
+            .map(|input| {
+                if input.resolves_lane(device, control) {
+                    (false, false)
+                } else {
+                    (
+                        input.is_action(device, control, InputActionConfig::E2),
+                        input.is_action(device, control, InputActionConfig::E3),
+                    )
+                }
+            })
+            .unwrap_or((false, false));
         let mut changed = false;
-        if self.select_keys.is_e2_action(control) {
+        if is_e2 {
             if self.play_e2_held != pressed {
                 self.reset_play_analog_scroll();
             }
             self.play_e2_held = pressed;
             changed = true;
         }
-        if self.select_keys.is_e3_action(control) {
+        if is_e3 {
             self.play_e3_held = pressed;
             changed = true;
         }
         if !changed {
             return false;
+        }
+        if was_ready_blocked
+            || play_ready_blocked_by_control_holds(self.play_e1_held, self.play_e2_held)
+        {
+            self.play_ready_last_control_hold_at = Some(Instant::now());
         }
         self.refresh_play_lane_value_changing();
         self.update_play_exit_hold_timer();
@@ -10780,6 +13342,8 @@ impl WinitApp {
         };
         let play_elapsed_time = self.play_elapsed_time();
         let ready_elapsed_time = self.play_ready_sound_started_at.map(elapsed_since);
+        let stagefile_background = self.play_stagefile_loaded;
+        let stagefile_image_size = self.play_stagefile_size;
         let timers = PlayEndingSkinTimers {
             play_elapsed_time,
             ready_elapsed_time,
@@ -10795,13 +13359,15 @@ impl WinitApp {
             };
             snapshot.play_elapsed_time = timers.play_elapsed_time;
             snapshot.ready_elapsed_time = timers.ready_elapsed_time;
+            snapshot.stagefile_background = stagefile_background;
+            snapshot.stagefile_image_size = stagefile_image_size;
             snapshot.failed_elapsed_ms = timers.failed_elapsed_ms;
             snapshot.music_end_elapsed_ms = timers.music_end_elapsed_ms;
             snapshot.fadeout_elapsed_ms = timers.fadeout_elapsed_ms;
             return;
         };
 
-        let video_update_time = compute_frame_times(&active_play.running.session).render_now;
+        let video_update_time = compute_frame_times(&active_play.running.session).audio_now;
         crate::video_bga::update_video_bga_frames(
             &mut self.renderer,
             &mut active_play.running,
@@ -10809,51 +13375,58 @@ impl WinitApp {
         );
 
         let mut snapshot = refresh_play_ending_snapshot(&mut active_play.running, timers);
+        snapshot.stagefile_background = stagefile_background;
+        snapshot.stagefile_image_size = stagefile_image_size;
         self.apply_profile_fast_slow_filter(&mut snapshot);
         self.apply_course_skin_context(&mut snapshot);
         self.apply_play_table_text(&mut snapshot);
         self.last_play_snapshot = Some(snapshot);
     }
 
-    /// `target_fps` (フォアグラウンド) / `frame_limit_in_background`
-    /// (非フォーカス時) に従ってフレーム開始間隔を一定に保つ。
-    ///
-    /// 各 `RedrawRequested` の先頭で呼び、前フレーム開始からの経過が
-    /// フレーム予算に満たなければ残りをスリープする。FPS 値が 0 の場合は
-    /// 無制限としてスリープしない。
-    fn limit_frame_rate(&mut self) {
-        let frame_started = Instant::now();
-        if let Some(last) = self.last_frame_at {
-            let dt = frame_started.duration_since(last).as_secs_f32();
-            if dt > 0.0 {
-                let instant_fps = 1.0 / dt;
-                self.wgpu_fps = if self.wgpu_fps <= 0.0 {
-                    instant_fps
-                } else {
-                    self.wgpu_fps.mul_add(0.9, instant_fps * 0.1)
-                };
-            }
-        }
-        let fps = if self.focused {
+    fn current_frame_limit(&self) -> u32 {
+        if self.focused {
             self.boot.app_config.video.target_fps
         } else {
             self.boot.app_config.video.frame_limit_in_background
-        };
-        if self.skip_next_frame_pace {
-            self.skip_next_frame_pace = false;
-            self.last_frame_at = Some(frame_started);
+        }
+    }
+
+    /// `RedrawRequested` が現在の deadline に到達していればフレームを開始する。
+    ///
+    /// deadline より早い redraw は描画せず `WaitUntil` へ戻す。event loop thread を
+    /// sleep させないため、待機中も keyboard/device event を遅延なく受け取れる。
+    fn begin_scheduled_frame(&mut self, event_loop: &ActiveEventLoop) -> bool {
+        let fps = self.current_frame_limit();
+        let skip_wait = self.skip_next_frame_pace;
+        let now = Instant::now();
+        if let Some(deadline) = self.frame_pacer.next_deadline(now, fps, skip_wait) {
+            event_loop.set_control_flow(ControlFlow::WaitUntil(deadline));
+            return false;
+        }
+
+        self.skip_next_frame_pace = false;
+        self.frame_pacer.record_frame_started(now, fps, skip_wait);
+        self.skin_fps.record_frame(now);
+        true
+    }
+
+    /// 次の frame deadline まで winit に待機させ、到達時に redraw を要求する。
+    /// FPS が 0、設定変更直後、明示的な skip 時は即座に次フレームを要求する。
+    fn schedule_next_frame(&self, event_loop: &ActiveEventLoop) {
+        let now = Instant::now();
+        let fps = self.current_frame_limit();
+        if let Some(deadline) = self.frame_pacer.next_deadline(now, fps, self.skip_next_frame_pace)
+        {
+            event_loop.set_control_flow(ControlFlow::WaitUntil(deadline));
             return;
         }
-        if fps > 0
-            && let Some(last) = self.last_frame_at
-        {
-            let budget = Duration::from_secs_f64(1.0 / f64::from(fps));
-            let elapsed = last.elapsed();
-            if elapsed < budget {
-                thread::sleep(budget - elapsed);
-            }
+
+        if fps == 0 {
+            event_loop.set_control_flow(ControlFlow::Poll);
+        } else {
+            event_loop.set_control_flow(ControlFlow::Wait);
         }
-        self.last_frame_at = Some(frame_started);
+        self.request_redraw();
     }
 
     /// egui の 1 フレームを構築し、renderer へ描画データを渡す。
@@ -10870,7 +13443,15 @@ impl WinitApp {
             AppSceneKind::Result => "Result",
         };
         let size = window.inner_size();
-        let info = DebugInfo { scene, width: size.width, height: size.height };
+        let presentation = self.renderer.surface_presentation_status();
+        let info = DebugInfo {
+            scene,
+            current_fps: self.skin_fps.current(),
+            width: size.width,
+            height: size.height,
+            effective_present_mode: presentation.map(|status| status.effective_mode),
+            maximum_frame_latency: presentation.map(|status| status.maximum_frame_latency),
+        };
         let play4_path = self.boot.profile_config.skin.play4.clone();
         let play5_path = self.boot.profile_config.skin.play5.clone();
         let play6_path = self.boot.profile_config.skin.play6.clone();
@@ -10903,10 +13484,40 @@ impl WinitApp {
             result: SceneSkinDefs::from_document(self.renderer.result_skin_document()),
             course_result: course_result_defs,
         };
-        // Clone the course summary so the egui closure can borrow it while
-        // `self.egui` is uniquely borrowed.  CourseResultSummary is small —
-        // a few strings and Vec<ResultSummary> — so the clone cost is minor.
-        let course_result = self.finished_course.clone();
+        let course_result_active =
+            matches!(scene_kind, AppSceneKind::Result) && self.finished_course.is_some();
+        if matches!(scene_kind, AppSceneKind::Result)
+            && self
+                .result_ir
+                .as_ref()
+                .is_some_and(|state| state.is_course() != course_result_active)
+        {
+            self.result_ir = None;
+        }
+        if course_result_active && self.result_ir.is_none() && !self.finished_course_ir_attempted {
+            // IR が無効、または identity が解決できない場合も、この Result 滞在中の
+            // 起動判定は一度で完了させる。
+            self.finished_course_ir_attempted = true;
+            if let Some((course_hash, gauge, ln_policy)) = self.course_result_ir_target() {
+                self.result_ir = crate::screens::result_ir::spawn_course_result_ir_task(
+                    self.boot.profile_paths.root_dir.clone(),
+                    self.boot.profile_paths.score_db.clone(),
+                    self.boot.profile_paths.network_db.clone(),
+                    self.boot.app_paths.logs_dir.clone(),
+                    &self.boot.profile_config.ir,
+                    self.finished_course
+                        .as_ref()
+                        .and_then(|course| course.course_score_id)
+                        .unwrap_or_default(),
+                    course_hash,
+                    gauge,
+                    ln_policy,
+                );
+            }
+        }
+        // `egui` は run の直前に Option から一時的に取り出すため、コース全ステージの
+        // graph を含む CourseResultSummary をフレームごとに clone せず参照で渡せる。
+        let course_result = self.finished_course.as_ref();
         // Only show the course preview when the user is on the select screen
         // and the cursor is over a course row.
         let course_preview = matches!(scene_kind, AppSceneKind::Select)
@@ -10917,8 +13528,9 @@ impl WinitApp {
                 })
             })
             .flatten();
-        let course_ir_target =
-            self.finished_course.as_ref().and_then(|course| self.course_result_ir_target(course));
+        let selected_course_ir_target = matches!(scene_kind, AppSceneKind::Select)
+            .then(|| self.selected_course_ir_target())
+            .flatten();
         let practice_media_ready = self.practice_media_ready();
         let mut practice_panel_ctx = None;
         if let Some(practice) = &mut self.practice_session
@@ -10935,39 +13547,22 @@ impl WinitApp {
         // 画面まで状態を保持する。コース最終リザルトでは course_hash ベースの
         // course ranking を取得するため、単曲用 state は Result 突入時に差し替える。
         if matches!(scene_kind, AppSceneKind::Result) {
-            let course_result_active = self.finished_course.is_some();
-            if self
-                .result_ir
-                .as_ref()
-                .is_some_and(|state| state.is_course() != course_result_active)
+            if self.result_ir.is_none()
+                && !course_result_active
+                && let Some(finished) = &self.finished_play
             {
-                self.result_ir = None;
-            }
-            if self.result_ir.is_none() {
-                if let Some((course_hash, gauge, ln_policy)) = course_ir_target {
-                    self.result_ir = crate::screens::result_ir::spawn_course_result_ir_task(
-                        self.boot.profile_paths.root_dir.clone(),
-                        self.boot.profile_paths.score_db.clone(),
-                        self.boot.profile_paths.network_db.clone(),
-                        self.boot.app_paths.logs_dir.clone(),
-                        &self.boot.profile_config.ir,
-                        course_hash,
-                        gauge,
-                        ln_policy,
-                    );
-                } else if !course_result_active && let Some(finished) = &self.finished_play {
-                    self.result_ir = crate::screens::result_ir::spawn_result_ir_task(
-                        self.boot.profile_paths.root_dir.clone(),
-                        self.boot.profile_paths.score_db.clone(),
-                        self.boot.profile_paths.network_db.clone(),
-                        self.boot.app_paths.logs_dir.clone(),
-                        &self.boot.profile_config.ir,
-                        crate::storage::common::hash_to_hex(&finished.result.chart_sha256),
-                        finished.ln_policy,
-                        finished.double_option,
-                        finished.rule_mode,
-                    );
-                }
+                self.result_ir = crate::screens::result_ir::spawn_result_ir_task(
+                    self.boot.profile_paths.root_dir.clone(),
+                    self.boot.profile_paths.score_db.clone(),
+                    self.boot.profile_paths.network_db.clone(),
+                    self.boot.app_paths.logs_dir.clone(),
+                    &self.boot.profile_config.ir,
+                    finished.stored.score_history_id,
+                    crate::storage::common::hash_to_hex(&finished.result.chart_sha256),
+                    finished.ln_policy,
+                    finished.double_option,
+                    finished.rule_mode,
+                );
             }
             let loaded_rankings =
                 self.result_ir.as_mut().map(|state| state.poll()).unwrap_or_default();
@@ -11009,22 +13604,28 @@ impl WinitApp {
                 ln_profile,
             );
             let double_option = self.double_option.normalize_for_key_mode(key_mode).score_bucket();
-            let context = select_ir_cache_context(
-                self.boot.profile_config.play.ln_mode_policy,
-                ln_policy,
-                double_option,
-                self.boot.profile_config.play.rule_mode,
-            );
             let ir_config = self.boot.profile_config.ir.clone();
-            self.select_ir.update(
-                &ir_config,
-                &self.boot.profile_paths.root_dir,
-                &context,
-                ln_policy,
-                double_option,
-                self.boot.profile_config.play.rule_mode,
-                selected,
-            );
+            if let Some(course) = selected_course_ir_target {
+                let context =
+                    format!("course:{}:{}:{}", course.course_hash, course.gauge, course.ln_policy);
+                self.select_ir.update_course(&ir_config, &context, Some(course));
+            } else {
+                let context = select_ir_cache_context(
+                    self.boot.profile_config.play.ln_mode_policy,
+                    ln_policy,
+                    double_option,
+                    self.boot.profile_config.play.rule_mode,
+                );
+                self.select_ir.update(
+                    &ir_config,
+                    &self.boot.profile_paths.root_dir,
+                    &context,
+                    ln_policy,
+                    double_option,
+                    self.boot.profile_config.play.rule_mode,
+                    selected,
+                );
+            }
         }
         let result_ir_panel = self.result_ir.as_mut();
         let update_dialog = self.update_prompt.as_ref().map(UpdatePrompt::as_dialog);
@@ -11033,9 +13634,13 @@ impl WinitApp {
             .as_ref()
             .map(crate::obs::ObsController::status)
             .unwrap_or_else(crate::obs::ObsConnectionStatus::disabled);
-        let Some(egui) = self.egui.as_mut() else {
+        let connected_gamepads =
+            self.gamepad.as_ref().map(|gamepad| gamepad.connected_gamepads()).unwrap_or_default();
+        let locale_before_ui = self.boot.profile_config.ui.locale();
+        let Some(mut egui) = self.egui.take() else {
             return;
         };
+        let lane_profile_before_egui = self.boot.profile_config.lane.clone();
         let output = egui.run(
             &window,
             EguiRunContext {
@@ -11044,17 +13649,33 @@ impl WinitApp {
                 profile_config: &mut self.boot.profile_config,
                 skin_meta: &skin_meta,
                 skin_catalog: &self.skin_catalog,
-                course_result: course_result.as_ref(),
+                course_result,
                 course_preview: course_preview.as_ref(),
                 practice: practice_panel_ctx.as_mut(),
                 result_ir: result_ir_panel,
                 profile_root: &self.boot.profile_paths.root_dir,
                 app_paths: &self.boot.app_paths,
+                difficulty_tables: &self.difficulty_tables,
+                log_buffer: &self.log_buffer,
                 update_dialog,
                 obs_connection_status: &obs_connection_status,
+                connected_gamepads: &connected_gamepads,
             },
         );
+        self.egui = Some(egui);
+        let locale_after_ui = self.boot.profile_config.ui.locale();
+        self.renderer.set_default_font_coverage(locale_after_ui.font_coverage());
+        if locale_after_ui != locale_before_ui {
+            // 設定・検索履歴などアプリが生成した行名を新しい locale で作り直す。
+            // 選択復元は表示名ではなく typed/path ID を使う。
+            self.search_message = None;
+            self.reload_select_items();
+        }
         self.renderer.set_egui_frame(output.frame);
+        if profile_lane_settings_changed(&lane_profile_before_egui, &self.boot.profile_config.lane)
+        {
+            self.sync_active_play_lane_settings_from_profile(&lane_profile_before_egui);
+        }
         self.sync_realtime_profile_settings();
         self.sync_discord_presence_config();
         if output.practice_leave {
@@ -11069,18 +13690,27 @@ impl WinitApp {
         // ウィンドウモード変更をライブ反映する (差分があるときのみ適用)。
         let desired_mode = self.boot.app_config.video.mode.clone();
         if desired_mode != self.applied_window_mode {
-            window.set_fullscreen(fullscreen_from_config(&desired_mode, window.current_monitor()));
+            let monitor = select_monitor(
+                &self.boot.app_config.video.monitor_name,
+                window.available_monitors(),
+                window.primary_monitor(),
+            );
+            window.set_fullscreen(fullscreen_from_config(&desired_mode, monitor));
             tracing::info!(mode = ?desired_mode, "window mode updated");
             self.applied_window_mode = desired_mode;
         }
+        let mut apply_obs_config = output.obs_enabled_changed;
         if output.save_app_config {
             match save_app_config(&self.boot.app_paths.config_toml, &self.boot.app_config) {
                 Ok(()) => {
                     tracing::info!("app config saved from egui settings panel");
-                    self.sync_obs_controller();
+                    apply_obs_config = true;
                 }
                 Err(error) => tracing::error!(%error, "failed to save app config"),
             }
+        }
+        if apply_obs_config {
+            self.sync_obs_controller();
         }
         if output.check_for_update {
             self.spawn_update_check("manual update check", true);
@@ -11142,6 +13772,38 @@ impl WinitApp {
         self.apply_select_preview_audio_mix();
     }
 
+    fn sync_active_play_lane_settings_from_profile(&mut self, before: &LaneViewConfig) {
+        let speed_locked = self.active_course.as_ref().is_some_and(|course| {
+            course.definition.constraints.speed == bmz_core::course::CourseSpeedConstraint::NoSpeed
+        });
+        let profile_lane = self.boot.profile_config.lane.clone();
+        let Some(active_play) = &mut self.active_play else {
+            return;
+        };
+        if apply_profile_lane_settings_to_session(
+            &mut active_play.running.session,
+            before,
+            &profile_lane,
+            speed_locked,
+        ) {
+            update_pre_ready_play_snapshot_options_for_session(
+                self.play_ready_sound_started_at,
+                &mut self.last_play_snapshot,
+                &active_play.running.session,
+                active_play.running.applied_arrange.arrange,
+                active_play.running.applied_arrange.arrange_2p,
+            );
+            tracing::info!(
+                hispeed = active_play.running.session.hispeed,
+                hispeed_mode = ?active_play.running.session.hispeed_mode,
+                target_green_number = active_play.running.session.target_green_number,
+                lane_cover = active_play.running.session.lane_cover,
+                lift = active_play.running.session.lift,
+                "applied egui lane settings to active play"
+            );
+        }
+    }
+
     fn sync_active_play_realtime_profile_settings(&mut self) {
         if let Some(active_play) = &mut self.active_play {
             let session = &mut active_play.running.session;
@@ -11168,12 +13830,21 @@ impl WinitApp {
     }
 
     fn sync_profile_visual_offset_from_active_play(&mut self) {
-        if let Some(active_play) = &self.active_play {
-            let session = &active_play.running.session;
-            if session.input_offset_auto_adjust.is_some() {
-                self.boot.profile_config.judge.visual_offset_us = session.offsets.visual_offset_us;
-            }
-        }
+        let Some((visual_offset_us, auto_adjust_active)) =
+            self.active_play.as_ref().map(|active| {
+                (
+                    active.running.session.offsets.visual_offset_us,
+                    active.running.session.input_offset_auto_adjust.is_some(),
+                )
+            })
+        else {
+            return;
+        };
+        sync_active_play_visual_offset_to_profile(
+            &mut self.boot.profile_config,
+            visual_offset_us,
+            auto_adjust_active,
+        );
     }
 
     fn play_skin_defs_for_path(&mut self, path: &str) -> SceneSkinDefs {
@@ -11187,9 +13858,16 @@ impl WinitApp {
     }
 
     fn reset_profile_config_from_disk(&mut self) {
+        let locale_before = self.boot.profile_config.ui.locale();
         match load_profile_config(&self.boot.profile_paths.profile_toml) {
             Ok(profile) => {
                 self.boot.profile_config = profile;
+                let locale_after = self.boot.profile_config.ui.locale();
+                if locale_after != locale_before {
+                    self.renderer.set_default_font_coverage(locale_after.font_coverage());
+                    self.search_message = None;
+                    self.reload_select_items();
+                }
                 self.apply_profile_skin_offsets_to_active_play();
                 self.reload_skins(SkinReloadRequest {
                     select: true,
@@ -11219,13 +13897,14 @@ impl WinitApp {
     }
 
     fn apply_profile_skin_offsets_to_active_play(&mut self) {
-        let Some(active_play) = &mut self.active_play else {
+        let Some(key_mode) = self
+            .active_play
+            .as_ref()
+            .map(|active_play| active_play.running.session.chart.metadata.key_mode)
+        else {
             return;
         };
-        active_play.running.session.skin_offsets = self
-            .boot
-            .profile_config
-            .skin
+        let offsets = play_skin_selection_for(&self.boot.profile_config.skin, key_mode)
             .offsets
             .iter()
             .map(|offset| PlaySkinOffset {
@@ -11238,6 +13917,9 @@ impl WinitApp {
                 a: offset.a,
             })
             .collect();
+        if let Some(active_play) = &mut self.active_play {
+            active_play.running.session.skin_offsets = offsets;
+        }
     }
 
     /// 現在の profile config のスキンパスを renderer へ再適用する。
@@ -11257,6 +13939,7 @@ impl WinitApp {
             &self.skin_font_cache,
             &mut self.skin_reload_generations,
             texture_request,
+            &self.boot.profile_config.display_name,
             &skin.select,
             &skin.decide,
             &skin.result,
@@ -11287,7 +13970,7 @@ impl WinitApp {
         }
         // 旧 generation 分の upload 結果は apply_uploaded_skin の generation
         // チェックで破棄されるため、ここでの明示的なキュー破棄は不要。
-        if let Some((key_mode, old_path, old_options, old_files)) =
+        if let Some((key_mode, old_path, old_options, old_files, runtime_state)) =
             self.last_play_skin_signature.clone()
             && skin_reload_request_includes_key_mode(request, key_mode)
         {
@@ -11307,6 +13990,7 @@ impl WinitApp {
                     selection.path.trim().to_string(),
                     selection.options.clone(),
                     selection.files.clone(),
+                    runtime_state,
                 ));
                 tracing::debug!(
                     ?key_mode,
@@ -11316,7 +14000,7 @@ impl WinitApp {
                 return;
             }
             self.last_play_skin_signature = None;
-            self.spawn_play_skin_decode_for(key_mode);
+            self.spawn_play_skin_decode_for(key_mode, runtime_state);
         }
         let pending_after_reload = self.has_pending_skin_reload();
         tracing::info!(?request, "skin reload queued from egui skin panel");
@@ -11386,11 +14070,20 @@ impl WinitApp {
 
     /// 決定対象チャートの key_mode に対応するプレイスキンを background decode に投入する。
     /// 直前と同じ mode かつ path/options/files が同じなら何もしない。
-    fn spawn_play_skin_decode_for(&mut self, key_mode: KeyMode) {
+    fn spawn_play_skin_decode_for(
+        &mut self,
+        key_mode: KeyMode,
+        runtime_state: bmz_skin::LuaLoadRuntimeState,
+    ) {
         let selection = play_skin_selection_for(&self.boot.profile_config.skin, key_mode);
         let trimmed = selection.path.trim();
-        let signature =
-            (key_mode, trimmed.to_string(), selection.options.clone(), selection.files.clone());
+        let signature = (
+            key_mode,
+            trimmed.to_string(),
+            selection.options.clone(),
+            selection.files.clone(),
+            runtime_state.clone(),
+        );
 
         if !self.pending_play_skin && self.last_play_skin_signature.as_ref() == Some(&signature) {
             tracing::debug!(?key_mode, "play skin reuse (signature unchanged)");
@@ -11443,7 +14136,7 @@ impl WinitApp {
             SkinKind::Play,
             options,
             files,
-            bmz_skin::LuaLoadRuntimeState::default(),
+            runtime_state,
         );
         self.pending_play_skin = true;
         tracing::info!(?key_mode, path = %path_label, generation, "play skin decode queued");
@@ -11585,7 +14278,7 @@ impl WinitApp {
                 .as_ref()
                 .map(|decide| (SkinKind::Decide, elapsed_since(decide.started_at).0)),
             AppViewState::Play => Some((SkinKind::Play, self.play_elapsed_time().0)),
-            AppViewState::Result(_) => {
+            AppViewState::Result => {
                 Some((SkinKind::Result, elapsed_since(self.result_scene_started_at).0))
             }
         }
@@ -11627,7 +14320,7 @@ impl WinitApp {
     fn render_current_scene(&mut self) {
         let select_view = matches!(self.view_state(), AppViewState::Select);
         let play_view = matches!(self.view_state(), AppViewState::Play);
-        let result_view = matches!(self.view_state(), AppViewState::Result(_));
+        let result_view = matches!(self.view_state(), AppViewState::Result);
         let profiling_select = select_view
             && tracing::enabled!(target: "bmz_player::select_profile", tracing::Level::DEBUG);
         let profiling_play = play_view
@@ -11765,16 +14458,20 @@ impl WinitApp {
                 path = %path.display(),
                 "manual screenshot requested with clipboard copy"
             );
-            "スクリーンショットを保存しました（クリップボード）".to_string()
+            Localizer::new(self.boot.profile_config.ui.locale()).text("screenshot-saved-clipboard")
         } else {
             self.renderer.request_screenshot(path.clone());
             tracing::info!(path = %path.display(), "manual screenshot requested");
-            "スクリーンショットを保存しました".to_string()
+            Localizer::new(self.boot.profile_config.ui.locale()).text("screenshot-saved")
         };
         // トーストは次フレーム以降に出す。撮影フレームでは has_pending_screenshot で隠す。
-        self.screenshot_toast =
-            Some(ScreenshotToast { message: toast_message, shown_at: Instant::now() });
+        self.show_left_overlay_toast(toast_message);
         self.notify_obs_save_recording(crate::obs::ObsRecordingSaveReason::OnScreenshot);
+    }
+
+    fn show_left_overlay_toast(&mut self, message: impl Into<String>) {
+        self.left_overlay_toast =
+            Some(LeftOverlayToast { message: message.into(), shown_at: Instant::now() });
         if let Some(window) = &self.window {
             window.request_redraw();
         }
@@ -11831,7 +14528,10 @@ impl WinitApp {
     }
 
     fn active_hispeed(&self) -> Option<f32> {
-        self.active_play.as_ref().map(|active| active.running.session.hispeed)
+        self.active_play
+            .as_ref()
+            .map(|active| active.running.session.hispeed)
+            .or_else(|| self.pending_play_start.as_ref().map(|pending| pending.lane.hispeed))
     }
 
     fn start_scene_timers_before_snapshot(&mut self, select_view: bool, result_view: bool) {
@@ -11847,19 +14547,51 @@ impl WinitApp {
     }
 
     fn active_lane_state(&self) -> Option<ActiveLaneState> {
-        self.active_play.as_ref().map(|active| {
-            let session = &active.running.session;
-            let target_green_number = match session.hispeed_mode {
-                HispeedMode::Normal => current_green_number(session, session.audio_clock.now()),
-                HispeedMode::Floating => session.target_green_number,
-            };
-            ActiveLaneState {
-                lane_cover: session.lane_cover,
-                lift: session.lift,
-                hispeed_mode: session.hispeed_mode,
-                target_green_number,
-            }
-        })
+        self.active_play
+            .as_ref()
+            .map(|active| active_lane_state_for_session(&active.running.session))
+            .or_else(|| {
+                self.pending_play_start.as_ref().map(|pending| ActiveLaneState {
+                    lane_cover: pending.lane.lane_cover,
+                    lift: pending.lane.lift,
+                    hispeed_mode: pending.lane.hispeed_mode,
+                    target_green_number: pending.lane.target_green_number,
+                })
+            })
+    }
+
+    fn commit_pending_play_lane_state_to_profile(&mut self) {
+        let Some(pending) = &self.pending_play_start else {
+            return;
+        };
+        if pending.lane_actions.is_empty() {
+            return;
+        }
+        apply_lane_state_to_profile(
+            &mut self.boot.profile_config,
+            Some(pending.lane.hispeed),
+            Some(ActiveLaneState {
+                lane_cover: pending.lane.lane_cover,
+                lift: pending.lane.lift,
+                hispeed_mode: pending.lane.hispeed_mode,
+                target_green_number: pending.lane.target_green_number,
+            }),
+        );
+        self.boot.profile_config.updated_at = now_unix_seconds();
+    }
+
+    fn commit_active_play_lane_state_to_profile(&mut self) -> bool {
+        let Some(active_play) = &self.active_play else {
+            return false;
+        };
+        let session = &active_play.running.session;
+        apply_lane_state_to_profile(
+            &mut self.boot.profile_config,
+            Some(session.hispeed),
+            Some(active_lane_state_for_session(session)),
+        );
+        self.boot.profile_config.updated_at = now_unix_seconds();
+        true
     }
 
     fn save_current_play_options(&mut self, hispeed: Option<f32>, reason: &'static str) {
@@ -12085,9 +14817,24 @@ impl WinitApp {
         }
     }
 
+    fn result_skin_audio_volumes(&self) -> (f32, f32) {
+        let mix = &self.boot.profile_config.audio_mix;
+        let master = crate::config::play::volume_unit_to_f32(mix.master_volume);
+        let bgm = master * crate::config::play::volume_unit_to_f32(mix.system_bgm_volume);
+        let se = master * crate::config::play::volume_unit_to_f32(mix.system_se_volume);
+        (bgm.clamp(0.0, 1.0), se.clamp(0.0, 1.0))
+    }
+
     fn play_course_result_entry_sound(&self, clear_type: bmz_core::clear::ClearType) {
         use crate::system_sound::SoundType;
-        for sound in [SoundType::ResultClear, SoundType::ResultFail, SoundType::ResultClose] {
+        for sound in [
+            SoundType::ResultClear,
+            SoundType::ResultFail,
+            SoundType::ResultClose,
+            SoundType::CourseClear,
+            SoundType::CourseFail,
+            SoundType::CourseClose,
+        ] {
             self.stop_system_sound(sound);
         }
         let preferred = course_result_entry_sound_for_clear(clear_type);
@@ -12230,6 +14977,24 @@ fn classify_audio_output_issue(
     }
 }
 
+fn prepare_select_preview(sample: DecodedSample) -> PreparedSelectPreview {
+    let normalization_gain = analyze_preview_loudness(&sample)
+        .map(|analysis| {
+            tracing::debug!(
+                loudness_lufs = analysis.loudness_lufs,
+                normalization_gain = analysis.normalization_gain,
+                "analyzed select preview loudness"
+            );
+            analysis.normalization_gain
+        })
+        .unwrap_or(1.0);
+    PreparedSelectPreview { sample, normalization_gain }
+}
+
+fn select_preview_normalization_gain(enabled: bool, analyzed_gain: f32) -> f32 {
+    if enabled && analyzed_gain.is_finite() { analyzed_gain.clamp(0.0, 1.0) } else { 1.0 }
+}
+
 fn should_use_generated_preview(preview_file: &str, explicit_preview_missing: bool) -> bool {
     preview_file.is_empty() || explicit_preview_missing
 }
@@ -12312,6 +15077,19 @@ fn course_result_entry_sound_for_clear(
     }
 }
 
+fn result_exit_sound_for_context(
+    is_course_result: bool,
+    course_close_available: bool,
+) -> crate::system_sound::SoundType {
+    use crate::system_sound::SoundType;
+
+    if is_course_result && course_close_available {
+        SoundType::CourseClose
+    } else {
+        SoundType::ResultClose
+    }
+}
+
 fn should_route_settings_key_event(
     state: ElementState,
     repeat: bool,
@@ -12338,6 +15116,10 @@ fn settings_browse_move_control(
 
 fn settings_edit_direction_from_analog_scroll(mov: i32) -> i32 {
     mov.signum()
+}
+
+fn settings_edit_direction_from_mouse_wheel(delta: MouseScrollDelta) -> i32 {
+    mouse_wheel_y(delta).signum() as i32
 }
 
 fn system_sound_manager_from_boot(
@@ -12453,6 +15235,7 @@ fn load_initial_skin_textures(
     skin_gpu_texture_cache: &SharedSkinGpuTextureCache,
     skin_font_cache: &SharedSkinFontCache,
     generation: u64,
+    player_name: &str,
     select_skin_path: &str,
     decide_skin_path: &str,
     result_skin_path: &str,
@@ -12502,7 +15285,7 @@ fn load_initial_skin_textures(
                 SkinKind::Decide,
                 if decide_trimmed.is_empty() { BTreeMap::new() } else { decide_options.clone() },
                 if decide_trimmed.is_empty() { BTreeMap::new() } else { decide_files.clone() },
-                bmz_skin::LuaLoadRuntimeState::default(),
+                lua_runtime_state_for_player(player_name),
             );
             pending_decide = true;
         }
@@ -12536,7 +15319,14 @@ fn load_initial_skin_textures(
                 SkinKind::Result,
                 if result_trimmed.is_empty() { BTreeMap::new() } else { result_options.clone() },
                 if result_trimmed.is_empty() { BTreeMap::new() } else { result_files.clone() },
-                lua_runtime_state_for_result(false, BTreeMap::new()),
+                lua_runtime_state_for_result(
+                    false,
+                    None,
+                    false,
+                    KeyMode::default(),
+                    BTreeMap::new(),
+                    player_name,
+                ),
             );
             pending_result = true;
         }
@@ -12576,6 +15366,7 @@ fn load_initial_skin_textures(
                     default_manifest.as_ref(),
                     active_select_options,
                     active_select_files,
+                    &lua_runtime_state_for_player(player_name),
                 );
                 if !video_sources.is_empty() {
                     skin_video_sources.insert(SkinKind::Select, video_sources);
@@ -12635,6 +15426,7 @@ fn reload_skin_textures(
     skin_font_cache: &SharedSkinFontCache,
     generations: &mut SkinReloadGenerations,
     request: SkinReloadRequest,
+    player_name: &str,
     select_skin_path: &str,
     decide_skin_path: &str,
     result_skin_path: &str,
@@ -12688,7 +15480,7 @@ fn reload_skin_textures(
                 kind,
                 if trimmed.is_empty() { BTreeMap::new() } else { options.clone() },
                 if trimmed.is_empty() { BTreeMap::new() } else { files.clone() },
-                bmz_skin::LuaLoadRuntimeState::default(),
+                lua_runtime_state_for_player(player_name),
             );
             match kind {
                 SkinKind::Select => pending_select = true,
@@ -12715,6 +15507,7 @@ fn apply_json_skin_sync(
     default_manifest: Option<&SkinManifest>,
     options: &BTreeMap<String, String>,
     files: &BTreeMap<String, String>,
+    runtime_state: &bmz_skin::LuaLoadRuntimeState,
 ) -> Vec<ActiveSkinVideoSource> {
     let Some(manifest) = default_manifest else {
         tracing::warn!(
@@ -12724,7 +15517,13 @@ fn apply_json_skin_sync(
         );
         return Vec::new();
     };
-    let decoded = match decode_beatoraja_skin_with_options(path, kind, options, files) {
+    let decoded = match decode_beatoraja_skin_with_options_and_runtime_state(
+        path,
+        kind,
+        options,
+        files,
+        runtime_state,
+    ) {
         Ok(decoded) => decoded,
         Err(error) => {
             tracing::warn!(
@@ -12801,6 +15600,8 @@ fn play_skin_video_draw_state(
         operating_time_ms: snapshot.operating_time_ms,
         ready_timer_ms: snapshot.ready_elapsed_time.map(time_us_to_skin_ms),
         play_timer_ms: (snapshot.time.0 >= 0).then_some(time_us_to_skin_ms(snapshot.time)),
+        rhythm_timer_ms: snapshot.rhythm_timer_elapsed_ms,
+        quarter_note_elapsed_ms: snapshot.quarter_note_elapsed_ms,
         key_mode: snapshot.key_mode,
         combo: snapshot.combo,
         max_combo: snapshot.max_combo,
@@ -12838,6 +15639,7 @@ fn play_skin_video_draw_state(
         lanecover_enabled: snapshot.lanecover_enabled,
         lift_enabled: snapshot.lift_enabled,
         hidden_enabled: snapshot.hidden_enabled,
+        hispeed_auto_adjust: snapshot.hispeed_auto_adjust,
         hidden_cover: snapshot.hidden_cover,
         play_level: skin_video_play_level_number(&snapshot.play_level),
         table_song: !snapshot.table_text_primary.is_empty(),
@@ -12863,10 +15665,15 @@ fn play_skin_video_draw_state(
         adjusted_rate: snapshot.adjusted_rate,
         adjusted_rate_adot: snapshot.adjusted_rate_adot,
         autoplay: snapshot.autoplay,
+        play_screen: true,
+        replay_playback: snapshot.replay_playback,
+        practice_mode: snapshot.practice_mode,
+        score_save_enabled: Some(snapshot.score_save_enabled),
         course_stage: snapshot.course_stage,
         hit_error_ring: snapshot.hit_error_ring.values,
         hit_error_ring_index: snapshot.hit_error_ring.index,
-        skin_loaded: snapshot.resources_loaded,
+        skin_loaded: snapshot.ready_elapsed_time.is_some(),
+        resource_load_progress: snapshot.resource_load_progress,
         ..bmz_render::skin::SkinDrawState::default()
     }
 }
@@ -13200,7 +16007,7 @@ fn spawn_skin_decode(
 /// decode 側 (`decode_rx`) が全て drop されるとループを抜ける (アプリ終了時)。
 fn skin_upload_worker(
     decode_rx: Receiver<PendingSkinResult>,
-    upload_tx: mpsc::Sender<PendingUploadResult>,
+    upload_tx: mpsc::SyncSender<PendingUploadResult>,
     uploader: bmz_render::renderer::GpuUploader,
     texture_cache: SharedSkinGpuTextureCache,
     event_proxy: EventLoopProxy<AppUserEvent>,
@@ -13437,22 +16244,20 @@ fn load_chart_meta_texture(
     texture_id: TextureId,
     folder_path: &str,
     relative: &str,
-) -> bool {
-    let Some(path) = crate::chart_asset::resolve_chart_asset_path(folder_path, relative) else {
-        return false;
-    };
+) -> Option<SkinImageSize> {
+    let path = crate::chart_asset::resolve_chart_asset_path(folder_path, relative)?;
     match load_static_rgba_image(&path) {
         Ok(image) => {
             if let Err(error) = renderer.upsert_image_asset(texture_id, &image) {
                 tracing::warn!(path = %path.display(), %error, "failed to upload chart meta image");
-                false
+                None
             } else {
-                true
+                Some(SkinImageSize { width: image.width as f32, height: image.height as f32 })
             }
         }
         Err(error) => {
             tracing::debug!(path = %path.display(), %error, "skipping chart meta image");
-            false
+            None
         }
     }
 }
@@ -13569,11 +16374,19 @@ fn chart_bga_texture_preload_worker(
     generation: u64,
     chart_id: i64,
     assets: Result<Vec<bmz_chart::model::BgaAssetRef>>,
-    tx: mpsc::Sender<PendingBgaImageResult>,
+    tx: mpsc::SyncSender<PendingBgaImageResult>,
     uploader: bmz_render::renderer::GpuUploader,
 ) {
     match assets {
-        Ok(assets) => chart_bga_texture_load_worker(generation, assets, tx, uploader),
+        Ok(assets) => {
+            if tx
+                .send(PendingBgaImageResult::Manifest { generation, assets: assets.clone() })
+                .is_err()
+            {
+                return;
+            }
+            chart_bga_texture_load_worker(generation, assets, tx, uploader);
+        }
         Err(error) => {
             let _ = tx.send(PendingBgaImageResult::PreloadFailed {
                 generation,
@@ -13587,7 +16400,7 @@ fn chart_bga_texture_preload_worker(
 fn chart_bga_texture_load_worker(
     generation: u64,
     assets: Vec<bmz_chart::model::BgaAssetRef>,
-    tx: mpsc::Sender<PendingBgaImageResult>,
+    tx: mpsc::SyncSender<PendingBgaImageResult>,
     uploader: bmz_render::renderer::GpuUploader,
 ) {
     use bmz_chart::model::BgaAssetKind;
@@ -13687,6 +16500,86 @@ fn open_external_url(url: &str) -> Result<()> {
     Ok(())
 }
 
+fn open_file_browser_path(path: &Path) -> Result<()> {
+    #[cfg(target_os = "windows")]
+    {
+        let target = if path.is_dir() {
+            path.to_path_buf()
+        } else {
+            path.parent().unwrap_or(path).to_path_buf()
+        };
+        Command::new("explorer")
+            .arg(target)
+            .spawn()
+            .context("failed to open path with explorer")?;
+    }
+    #[cfg(target_os = "macos")]
+    {
+        Command::new("open").arg(path).spawn().context("failed to open path with open")?;
+    }
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        let target = if path.is_dir() {
+            path.to_path_buf()
+        } else {
+            path.parent().unwrap_or(path).to_path_buf()
+        };
+        Command::new("xdg-open")
+            .arg(target)
+            .spawn()
+            .context("failed to open path with xdg-open")?;
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "macos", unix)))]
+    {
+        anyhow::bail!("opening paths is not supported on this platform: {}", path.display());
+    }
+    Ok(())
+}
+
+fn open_file_with_default_app(path: &Path) -> Result<()> {
+    #[cfg(target_os = "windows")]
+    {
+        Command::new("cmd")
+            .args(["/C", "start", ""])
+            .arg(path)
+            .spawn()
+            .context("failed to open file with cmd /C start")?;
+    }
+    #[cfg(target_os = "macos")]
+    {
+        Command::new("open").arg(path).spawn().context("failed to open file with open")?;
+    }
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        Command::new("xdg-open").arg(path).spawn().context("failed to open file with xdg-open")?;
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "macos", unix)))]
+    {
+        anyhow::bail!("opening files is not supported on this platform: {}", path.display());
+    }
+    Ok(())
+}
+
+fn primary_ir_provider_for_profile(
+    profile: &ProfileConfig,
+) -> Option<&crate::config::profile_config::IrProviderConfig> {
+    let key = if profile.ir.primary_provider.trim().is_empty() {
+        profile
+            .ir
+            .providers
+            .iter()
+            .find(|provider| {
+                provider.enabled
+                    && !provider.base_url.trim().is_empty()
+                    && crate::ir::provider_key::configured_provider_key(provider).is_some()
+            })
+            .and_then(crate::ir::provider_key::configured_provider_key)
+    } else {
+        Some(profile.ir.primary_provider.trim())
+    }?;
+    crate::ir::provider_key::provider_config_for_key(&profile.ir, key)
+}
+
 fn launch_update_installer(path: &Path) -> Result<()> {
     #[cfg(target_os = "windows")]
     {
@@ -13709,6 +16602,21 @@ fn launch_update_installer(path: &Path) -> Result<()> {
 enum KeyboardInputBackend {
     Window,
     RawInput,
+}
+
+fn play_input_backend_for_context(
+    active: Option<&SharedInputBackend>,
+    pending_start: bool,
+    preloaded: Option<&SharedInputBackend>,
+    pending_preload: Option<&SharedInputBackend>,
+) -> Option<SharedInputBackend> {
+    if let Some(active) = active {
+        return Some(active.clone());
+    }
+    if !pending_start {
+        return None;
+    }
+    preloaded.or(pending_preload).cloned()
 }
 
 fn keyboard_input_backend_for_config(config: &AppConfig) -> Option<KeyboardInputBackend> {
@@ -13740,13 +16648,24 @@ fn raw_input_key_state_transition(
     }
 }
 
-fn release_raw_input_pressed_keys(
-    input: &SharedInputBackend,
-    pressed_keys: &mut HashSet<PhysicalKey>,
-) {
-    for physical_key in std::mem::take(pressed_keys) {
-        crate::input::winit::handle_key_parts(input, physical_key, ElementState::Released, false);
+fn raw_input_release_events(pressed_keys: &mut HashSet<PhysicalKey>) -> Vec<DeviceInputEvent> {
+    std::mem::take(pressed_keys)
+        .into_iter()
+        .filter_map(|physical_key| {
+            physical_key_to_device_input(physical_key, ElementState::Released, false)
+        })
+        .collect()
+}
+
+fn should_discard_gamepad_output(focused: bool, discard_until_resynced: &mut bool) -> bool {
+    if !focused {
+        return true;
     }
+    std::mem::take(discard_until_resynced)
+}
+
+fn should_route_gamepad_event_while_discarding(pressed: bool) -> bool {
+    !pressed
 }
 
 fn config_renderer_backend(
@@ -13783,6 +16702,10 @@ impl ApplicationHandler<AppUserEvent> for WinitApp {
         if cause == StartCause::Init {
             tracing::info!("winit app init");
             self.ensure_window(event_loop);
+        } else if matches!(cause, StartCause::ResumeTimeReached { .. }) {
+            // `WaitUntil` の deadline 到達時だけ描画を要求する。待機中に届いた
+            // keyboard/device/user event は redraw を発生させず、その場で処理できる。
+            self.request_redraw();
         }
     }
 
@@ -13895,13 +16818,24 @@ impl ApplicationHandler<AppUserEvent> for WinitApp {
             WindowEvent::Focused(focused) => {
                 self.focused = focused;
                 if !focused {
+                    self.discard_gamepad_output_until_resynced = true;
                     self.pressed_controls.clear();
+                    self.pressed_play_inputs.clear();
                     self.release_raw_input_pressed_keys();
+                    self.release_window_input_pressed_keys();
                     self.sync_select_holds_from_pressed_controls();
+                    self.clear_select_hold();
+                    self.reset_select_analog_scroll();
+                    self.reset_play_analog_scroll();
                     self.clear_play_control_holds();
                 }
             }
             WindowEvent::RedrawRequested => {
+                let limit_start = Instant::now();
+                if !self.begin_scheduled_frame(event_loop) {
+                    return;
+                }
+                let limit_us = instant_elapsed_us_u64(limit_start);
                 let redraw_started_at = Instant::now();
                 let scene_before = self.current_scene_kind();
                 let pending_skin_before = self.has_pending_skin_reload();
@@ -13921,9 +16855,6 @@ impl ApplicationHandler<AppUserEvent> for WinitApp {
                 let drain_start = Instant::now();
                 let skin_drain_stats = self.drain_pending_skins();
                 let drain_us = instant_elapsed_us_u64(drain_start);
-                let limit_start = Instant::now();
-                self.limit_frame_rate();
-                let limit_us = instant_elapsed_us_u64(limit_start);
                 let input_start = Instant::now();
                 self.poll_gamepad_events();
                 self.advance_select_hold_move();
@@ -13934,6 +16865,7 @@ impl ApplicationHandler<AppUserEvent> for WinitApp {
                 self.poll_play_preload();
                 self.refresh_play_target_from_source();
                 self.poll_pending_table_fetch();
+                self.poll_pending_chart_download();
                 self.poll_pending_song_scan();
                 self.poll_pending_update_check();
                 self.poll_pending_update_download();
@@ -13973,15 +16905,6 @@ impl ApplicationHandler<AppUserEvent> for WinitApp {
                     runtime.reap_retired_sources();
                 }
                 self.log_audio_diagnostics();
-                // 次フレームの再描画をここで要求して描画ループを自走させる。
-                // about_to_wait から要求すると、Windows のウィンドウ移動/リサイズ中に
-                // 発生するモーダルループ (WM_ENTERSIZEMOVE..WM_EXITSIZEMOVE) では
-                // about_to_wait が呼ばれず、メインループが停止してしまう。
-                // RedrawRequested 内から request_redraw すると実 WM_PAINT が生成され、
-                // モーダルループのメッセージ処理でも拾われるためループが止まらない。
-                if let Some(window) = &self.window {
-                    window.request_redraw();
-                }
                 let post_scene_us = instant_elapsed_us_u64(post_scene_start);
                 let total_us = instant_elapsed_us_u64(redraw_started_at);
                 let pending_skin_after = self.has_pending_skin_reload();
@@ -14084,7 +17007,9 @@ impl ApplicationHandler<AppUserEvent> for WinitApp {
         if self.shutdown_requested.load(Ordering::SeqCst) {
             tracing::info!("Ctrl-C received; exiting cleanly");
             event_loop.exit();
+            return;
         }
+        self.schedule_next_frame(event_loop);
     }
 
     fn exiting(&mut self, _event_loop: &ActiveEventLoop) {
@@ -14181,7 +17106,7 @@ fn resolve_left_overlay_text(
 ) -> String {
     if !hide_toast
         && let Some((message, age)) = toast
-        && age < SCREENSHOT_TOAST_DURATION
+        && age < LEFT_OVERLAY_TOAST_DURATION
         && !message.is_empty()
     {
         return message.to_string();
@@ -14468,7 +17393,7 @@ fn build_select_items_for_stack(
     let active_table_sources = table_source_order(&boot.app_config);
     match stack.last() {
         Some(path) if path.starts_with(crate::screens::settings_model::CONFIG_ROOT_PATH) => {
-            load_settings_items(path)
+            load_settings_items_for_locale(path, boot.profile_config.ui.locale())
         }
         Some(path) if path == COURSE_ROOT_PATH => {
             match load_select_items_for_courses(
@@ -14680,9 +17605,12 @@ fn build_select_items_for_stack(
                     tracing::error!(%error, "failed to load difficulty table folders");
                 }
             }
-            items.push(settings_root_item());
+            items.push(settings_root_item_for_locale(boot.profile_config.ui.locale()));
             if !search_history.is_empty() {
-                items.extend(search_history_folder_items(search_history));
+                items.extend(search_history_folder_items_for_locale(
+                    search_history,
+                    boot.profile_config.ui.locale(),
+                ));
             }
             items
         }
@@ -14758,10 +17686,11 @@ enum SelectItemKey {
     Folder(String),
     ChartId(i64),
     ChartSha256([u8; 32]),
+    ChartFallback { title: String, artist: String, table_level: String, table_full: String },
     Course(i64),
     Executable(String),
-    Config(String),
-    KeyBinding(String),
+    Config(SettingsEntryId),
+    KeyBinding { key_mode: KeyMode, target: KeyBindingTarget },
     Back,
     AdvancedSettings,
 }
@@ -14774,11 +17703,18 @@ fn select_item_key(item: &SelectItem) -> SelectItemKey {
             .as_ref()
             .map(|chart| SelectItemKey::ChartId(chart.chart_id))
             .or_else(|| row.score_sha256().map(SelectItemKey::ChartSha256))
-            .unwrap_or_else(|| SelectItemKey::Config(row.display_title().to_string())),
+            .unwrap_or_else(|| SelectItemKey::ChartFallback {
+                title: row.display_title().to_string(),
+                artist: row.display_artist().to_string(),
+                table_level: row.table_level.clone(),
+                table_full: row.table_text.table_full.clone(),
+            }),
         SelectItem::Course(row) => SelectItemKey::Course(row.course_id),
         SelectItem::Executable(row) => SelectItemKey::Executable(row.title.clone()),
-        SelectItem::Config(row) => SelectItemKey::Config(row.label().to_string()),
-        SelectItem::KeyBinding(row) => SelectItemKey::KeyBinding(row.label()),
+        SelectItem::Config(row) => SelectItemKey::Config(row.entry_id),
+        SelectItem::KeyBinding(row) => {
+            SelectItemKey::KeyBinding { key_mode: row.key_mode, target: row.target }
+        }
         SelectItem::Back => SelectItemKey::Back,
         SelectItem::AdvancedSettings => SelectItemKey::AdvancedSettings,
     }
@@ -15026,6 +17962,36 @@ fn cycle_result_gauge_graph_type(current: i32) -> i32 {
     }
 }
 
+fn toggled_select_sudden(current: LaneEffectConfig) -> LaneEffectConfig {
+    match current {
+        LaneEffectConfig::Off => LaneEffectConfig::Sudden,
+        LaneEffectConfig::Hidden => LaneEffectConfig::HiddenSudden,
+        LaneEffectConfig::Sudden => LaneEffectConfig::Off,
+        LaneEffectConfig::HiddenSudden => LaneEffectConfig::Hidden,
+    }
+}
+
+fn toggled_select_hidden(current: LaneEffectConfig) -> LaneEffectConfig {
+    match current {
+        LaneEffectConfig::Off => LaneEffectConfig::Hidden,
+        LaneEffectConfig::Hidden => LaneEffectConfig::Off,
+        LaneEffectConfig::Sudden => LaneEffectConfig::HiddenSudden,
+        LaneEffectConfig::HiddenSudden => LaneEffectConfig::Sudden,
+    }
+}
+
+fn result_skin_click_action(event_id: i32) -> Option<ResultSkinClickAction> {
+    match event_id {
+        SKIN_EVENT_RESULT_PANEL_IR => Some(ResultSkinClickAction::SetPanel(1)),
+        SKIN_EVENT_RESULT_PANEL_GRAPH => Some(ResultSkinClickAction::SetPanel(2)),
+        SKIN_EVENT_DAILY_STATISTICS_RESET => Some(ResultSkinClickAction::ResetDailyStatistics),
+        90 => Some(ResultSkinClickAction::ToggleFavoriteChart),
+        19 => Some(ResultSkinClickAction::SaveReplay(0)),
+        316..=318 => Some(ResultSkinClickAction::SaveReplay((event_id - 315) as u8)),
+        _ => None,
+    }
+}
+
 /// コース曲間の中間リザルトかどうか。active_course を保持したまま finished_play
 /// だけが立ち、finished_course はまだ無い状態を指す。中間リザルトでは retry を
 /// 無効化し、次の曲へ進むだけにする (beatoraja MusicResult のコース分岐相当)。
@@ -15035,6 +18001,34 @@ fn is_course_intermediate_result(
     finished_play: bool,
 ) -> bool {
     active_course && finished_play && !finished_course
+}
+
+fn toggled_result_panel(current: i32, supported: bool, ir_available: bool) -> Option<i32> {
+    if !ir_available {
+        return None;
+    }
+    let requested = match current {
+        1 => 2,
+        2 => 1,
+        _ => return None,
+    };
+    selected_result_panel(current, requested, supported, ir_available)
+}
+
+fn selected_result_panel(
+    current: i32,
+    requested: i32,
+    supported: bool,
+    ir_available: bool,
+) -> Option<i32> {
+    if !supported || current == requested {
+        return None;
+    }
+    match requested {
+        1 if ir_available => Some(1),
+        2 if matches!(current, 1 | 2) => Some(2),
+        _ => None,
+    }
 }
 
 fn result_failed_for_skin_ops(
@@ -15066,8 +18060,7 @@ fn should_show_course_stage_result(
 fn result_skin_signature_for_config(
     skin: &crate::config::profile_config::SkinConfig,
     slot: ResultSkinSlot,
-    table_song: bool,
-    runtime_numbers: BTreeMap<i32, i32>,
+    runtime_state: bmz_skin::LuaLoadRuntimeState,
 ) -> ResultSkinSignature {
     match slot {
         ResultSkinSlot::Normal => (
@@ -15075,22 +18068,100 @@ fn result_skin_signature_for_config(
             skin.result.trim().to_string(),
             skin.result_options.clone(),
             skin.result_files.clone(),
-            table_song,
-            runtime_numbers,
+            runtime_state,
         ),
         ResultSkinSlot::Course => (
             slot,
             skin.course_result.trim().to_string(),
             skin.course_result_options.clone(),
             skin.course_result_files.clone(),
-            table_song,
-            runtime_numbers,
+            runtime_state,
         ),
     }
 }
 
 fn result_lua_runtime_number_values_for_summary(summary: &ResultSummary) -> BTreeMap<i32, i32> {
     let mut number_values = BTreeMap::new();
+    let value = |value: u32| i32::try_from(value).unwrap_or(i32::MAX);
+    let difference = |current: u32, previous: u32| value(current).saturating_sub(value(previous));
+    number_values.insert(71, value(summary.ex_score));
+    number_values.insert(74, value(summary.total_notes));
+    number_values.insert(101, value(summary.ex_score));
+    number_values.insert(171, value(summary.ex_score));
+    number_values.insert(107, summary.gauge_value.floor().clamp(0.0, i32::MAX as f32) as i32);
+    number_values.insert(110, value(summary.judge_counts.pgreat));
+    number_values.insert(111, value(summary.judge_counts.great));
+    number_values.insert(112, value(summary.judge_counts.good));
+    number_values.insert(113, value(summary.judge_counts.bad));
+    number_values.insert(114, value(summary.judge_counts.poor));
+    let previous_best_ex_score = summary.previous_best_ex_score.unwrap_or(0);
+    number_values.insert(150, value(previous_best_ex_score));
+    number_values.insert(170, value(previous_best_ex_score));
+    number_values.insert(152, difference(summary.ex_score, previous_best_ex_score));
+    number_values.insert(172, difference(summary.ex_score, previous_best_ex_score));
+    if let Some(target_ex_score) = summary.target_ex_score {
+        number_values.insert(121, value(target_ex_score));
+        number_values.insert(151, value(target_ex_score));
+        number_values.insert(153, difference(summary.ex_score, target_ex_score));
+    }
+    number_values.insert(177, value(summary.bp));
+    let counts = summary.fast_slow_counts;
+    number_values.insert(410, value(counts.fast_pgreat));
+    number_values.insert(411, value(counts.slow_pgreat));
+    number_values.insert(412, value(counts.fast_great));
+    number_values.insert(413, value(counts.slow_great));
+    number_values.insert(414, value(counts.fast_good));
+    number_values.insert(415, value(counts.slow_good));
+    number_values.insert(416, value(counts.fast_bad));
+    number_values.insert(417, value(counts.slow_bad));
+    number_values.insert(418, value(counts.fast_poor));
+    number_values.insert(419, value(counts.slow_poor));
+    number_values.insert(420, value(summary.judge_counts.empty_poor));
+    number_values.insert(421, value(counts.fast_empty_poor));
+    number_values.insert(422, value(counts.slow_empty_poor));
+    number_values.insert(
+        423,
+        value(
+            counts
+                .fast_great
+                .saturating_add(counts.fast_good)
+                .saturating_add(counts.fast_bad)
+                .saturating_add(counts.fast_poor)
+                .saturating_add(counts.fast_empty_poor),
+        ),
+    );
+    number_values.insert(
+        424,
+        value(
+            counts
+                .slow_great
+                .saturating_add(counts.slow_good)
+                .saturating_add(counts.slow_bad)
+                .saturating_add(counts.slow_poor)
+                .saturating_add(counts.slow_empty_poor),
+        ),
+    );
+    number_values.insert(425, i32::try_from(summary.cb).unwrap_or(i32::MAX));
+    number_values.insert(
+        426,
+        value(summary.judge_counts.poor.saturating_add(summary.judge_counts.empty_poor)),
+    );
+    number_values.insert(
+        427,
+        value(
+            summary
+                .judge_counts
+                .bad
+                .saturating_add(summary.judge_counts.poor)
+                .saturating_add(summary.judge_counts.empty_poor),
+        ),
+    );
+    number_values.insert(370, summary.clear_type as i32);
+    number_values.insert(371, summary.previous_best_clear_type.unwrap_or(ClearType::NoPlay) as i32);
+    if let Some((average_timing_ms, _)) = summary.graph.timing_distribution.stats() {
+        number_values.insert(374, average_timing_ms as i32);
+        number_values.insert(375, (average_timing_ms * 100.0) as i32 % 100);
+    }
     if let Some(previous_best_bp) = summary.previous_best_bp
         && let (Ok(current), Ok(previous)) =
             (i32::try_from(summary.bp), i32::try_from(previous_best_bp))
@@ -15100,13 +18171,304 @@ fn result_lua_runtime_number_values_for_summary(summary: &ResultSummary) -> BTre
     number_values
 }
 
+fn apply_course_mode_lua_options(
+    runtime_state: &mut bmz_skin::LuaLoadRuntimeState,
+    stage: Option<CourseStageMarker>,
+) {
+    runtime_state.option_values.insert(290, true);
+    for option in [280, 281, 282, 283, 289] {
+        runtime_state.option_values.insert(option, false);
+    }
+    let option = match stage {
+        Some(CourseStageMarker::Stage1) => Some(280),
+        Some(CourseStageMarker::Stage2) => Some(281),
+        Some(CourseStageMarker::Stage3) => Some(282),
+        Some(CourseStageMarker::Stage4) => Some(283),
+        Some(CourseStageMarker::Final) => Some(289),
+        None => None,
+    };
+    if let Some(option) = option {
+        runtime_state.option_values.insert(option, true);
+    }
+}
+
+fn apply_course_result_lua_load_state(
+    runtime_state: &mut bmz_skin::LuaLoadRuntimeState,
+    course: &CourseResultSummary,
+) {
+    for (index, title) in course.course_titles.iter().enumerate() {
+        runtime_state.text_values.insert(150 + index as i32, title.clone());
+    }
+    let course_result = course_result_skin_snapshot(course);
+    runtime_state.number_values.insert(
+        bmz_render::skin::SKIN_REF_BMZ_COURSE_STAGE_COUNT,
+        course_result.stage_count as i32,
+    );
+    for (index, stage) in course_result.stages.iter().enumerate() {
+        let index = index as i32;
+        runtime_state.number_values.insert(
+            bmz_render::skin::SKIN_REF_BMZ_COURSE_STAGE_EX_BASE + index,
+            i32::try_from(stage.ex_score).unwrap_or(i32::MAX),
+        );
+        runtime_state.number_values.insert(
+            bmz_render::skin::SKIN_REF_BMZ_COURSE_STAGE_GAUGE_BASE + index,
+            stage.gauge.floor() as i32,
+        );
+        runtime_state.number_values.insert(
+            bmz_render::skin::SKIN_REF_BMZ_COURSE_STAGE_BP_BASE + index,
+            i32::try_from(stage.bp).unwrap_or(i32::MAX),
+        );
+        runtime_state.number_values.insert(
+            bmz_render::skin::SKIN_REF_BMZ_COURSE_STAGE_RATE_BASE + index,
+            i32::try_from(stage.rate_basis_points).unwrap_or(i32::MAX),
+        );
+    }
+
+    // WMII stores these values from each intermediate MusicResult in
+    // `skin/WMII_FHD/result/courseData.json`, then reads them from CourseResult.
+    // Lua filesystem writes are intentionally disabled in BMZ, so expose the
+    // equivalent attempt data as an app-owned, read-only virtual file.
+    let songs = course
+        .entry_summaries
+        .iter()
+        .enumerate()
+        .map(|(index, summary)| {
+            let max_ex_score = summary.total_notes.saturating_mul(2);
+            let rate = if max_ex_score > 0 {
+                f64::from(summary.ex_score) / f64::from(max_ex_score)
+            } else {
+                0.0
+            };
+            serde_json::json!({
+                "stage": index + 1,
+                "score": summary.ex_score,
+                "gauge": summary.gauge_value.floor(),
+                "miss": summary.bp,
+                "rate": rate,
+            })
+        })
+        .collect::<Vec<_>>();
+    let course_data = serde_json::json!({ "songs": songs }).to_string();
+    runtime_state
+        .virtual_io_files
+        .insert("skin/WMII_FHD/result/courseData.json".to_string(), course_data);
+}
+
+fn apply_result_summary_lua_load_state(
+    runtime_state: &mut bmz_skin::LuaLoadRuntimeState,
+    summary: &ResultSummary,
+    table_primary: &str,
+    table_level: &str,
+    table_full: &str,
+) {
+    let full_title = if summary.subtitle.is_empty() {
+        summary.title.clone()
+    } else {
+        format!("{} {}", summary.title, summary.subtitle)
+    };
+    let full_artist = if summary.subartist.is_empty() {
+        summary.artist.clone()
+    } else {
+        format!("{} {}", summary.artist, summary.subartist)
+    };
+    runtime_state.text_values.extend([
+        (1, summary.target_name.clone()),
+        (3, summary.target_name.clone()),
+        (10, summary.title.clone()),
+        (11, summary.subtitle.clone()),
+        (12, full_title),
+        (13, summary.genre.clone()),
+        (14, summary.artist.clone()),
+        (15, summary.subartist.clone()),
+        (16, full_artist),
+        (1001, table_primary.to_string()),
+        (1002, table_level.to_string()),
+        (1003, table_full.to_string()),
+    ]);
+    for option in 180..=184 {
+        runtime_state.option_values.insert(option, false);
+    }
+    if let Some(option) = result_judge_rank_option_id(summary.judge_rank) {
+        runtime_state.option_values.insert(option, true);
+    }
+    runtime_state.event_index_values.insert(
+        308,
+        i32::try_from(result_long_note_mode_index(summary.long_note_mode)).unwrap_or_default(),
+    );
+    runtime_state.event_index_values.insert(
+        42,
+        i32::try_from(bmz_render::skin::select_arrange_index(&summary.arrange)).unwrap_or_default(),
+    );
+    runtime_state.event_index_values.insert(
+        43,
+        i32::try_from(bmz_render::skin::select_arrange_index(&summary.arrange_2p))
+            .unwrap_or_default(),
+    );
+}
+
+fn result_judge_rank_option_id(judge_rank: Option<i32>) -> Option<i32> {
+    let Some(rank) = judge_rank else {
+        return Some(182);
+    };
+    match rank {
+        0 | 10..=34 => Some(180),
+        1 | 35..=59 => Some(181),
+        2 | 60..=84 => Some(182),
+        3 | 85..=109 => Some(183),
+        4 | 110.. => Some(184),
+        _ => None,
+    }
+}
+
+fn result_long_note_mode_index(mode: bmz_chart::model::LongNoteMode) -> usize {
+    match mode {
+        bmz_chart::model::LongNoteMode::Ln => 0,
+        bmz_chart::model::LongNoteMode::Cn => 1,
+        bmz_chart::model::LongNoteMode::Hcn => 2,
+    }
+}
+
+fn result_ir_skin_name(ir_config: &crate::config::profile_config::IrConfig) -> Option<&str> {
+    let provider = ir_config.providers.iter().find(|provider| {
+        provider.enabled
+            && !provider.base_url.is_empty()
+            && crate::ir::provider_key::configured_provider_key(provider).is_some()
+    })?;
+    let provider_key = crate::ir::provider_key::configured_provider_key(provider)?;
+    Some(if provider_key == "bmz-official" || provider.provider == "bmz-official" {
+        "BMZ IR"
+    } else {
+        provider_key
+    })
+}
+
 fn lua_runtime_state_for_result(
     table_song: bool,
-    number_values: BTreeMap<i32, i32>,
+    ir_name: Option<&str>,
+    score_save_enabled: bool,
+    key_mode: KeyMode,
+    mut number_values: BTreeMap<i32, i32>,
+    player_name: &str,
 ) -> bmz_skin::LuaLoadRuntimeState {
+    let ir_online = ir_name.is_some();
     let mut option_values = BTreeMap::new();
     option_values.insert(1008, table_song);
-    bmz_skin::LuaLoadRuntimeState { number_values, option_values }
+    option_values.insert(50, !ir_online);
+    option_values.insert(51, ir_online);
+    option_values.insert(60, !score_save_enabled);
+    option_values.insert(61, score_save_enabled);
+    for option in 160..=164 {
+        option_values.insert(option, result_key_mode_option_matches(option, key_mode));
+    }
+    extend_bmz_key_mode_lua_state(&mut number_values, &mut option_values, key_mode);
+    bmz_skin::LuaLoadRuntimeState {
+        number_values,
+        text_values: BTreeMap::from([
+            (2, player_name.to_string()),
+            (1020, ir_name.unwrap_or_default().to_string()),
+        ]),
+        option_values,
+        ..Default::default()
+    }
+}
+
+fn lua_runtime_state_for_play(
+    options: &PlayStartOptions,
+    profile_autoplay: bool,
+    key_mode: KeyMode,
+    player_name: &str,
+) -> bmz_skin::LuaLoadRuntimeState {
+    let replay_playback = options.replay_player.is_some();
+    let autoplay = !replay_playback && (profile_autoplay || options.autoplay);
+    let score_save_enabled = !autoplay && !replay_playback && !options.practice_mode;
+    let mut option_values = BTreeMap::from([
+        (32, !autoplay),
+        (33, autoplay),
+        (60, !score_save_enabled),
+        (61, score_save_enabled),
+        (82, !autoplay && !replay_playback),
+        (84, replay_playback),
+        (1080, options.practice_mode),
+    ]);
+    let mut number_values = BTreeMap::new();
+    extend_bmz_key_mode_lua_state(&mut number_values, &mut option_values, key_mode);
+    bmz_skin::LuaLoadRuntimeState {
+        number_values,
+        text_values: BTreeMap::from([(2, player_name.to_string())]),
+        option_values,
+        ..Default::default()
+    }
+}
+
+fn lua_runtime_state_for_player(player_name: &str) -> bmz_skin::LuaLoadRuntimeState {
+    bmz_skin::LuaLoadRuntimeState {
+        text_values: BTreeMap::from([(2, player_name.to_string())]),
+        ..bmz_skin::LuaLoadRuntimeState::default()
+    }
+}
+
+fn result_key_mode_option_matches(option: i32, key_mode: KeyMode) -> bool {
+    match option {
+        160 => matches!(key_mode, KeyMode::K7 | KeyMode::K8),
+        161 => key_mode == KeyMode::K5,
+        162 => key_mode == KeyMode::K14,
+        163 => key_mode == KeyMode::K10,
+        164 => key_mode == KeyMode::K9,
+        _ => false,
+    }
+}
+
+fn extend_bmz_key_mode_lua_state(
+    number_values: &mut BTreeMap<i32, i32>,
+    option_values: &mut BTreeMap<i32, bool>,
+    key_mode: KeyMode,
+) {
+    number_values.insert(SKIN_REF_BMZ_KEY_MODE, bmz_key_mode_number(key_mode));
+    number_values.insert(SKIN_REF_BMZ_ACTIVE_LANE_COUNT, key_mode.lane_count() as i32);
+    for option in SKIN_OPTION_BMZ_KEY_MODE_BASE
+        ..SKIN_OPTION_BMZ_KEY_MODE_BASE + SKIN_OPTION_BMZ_KEY_MODE_COUNT as i32
+    {
+        option_values.insert(option, bmz_key_mode_option_matches(option, key_mode));
+    }
+    for option in
+        [SKIN_OPTION_BMZ_NO_SCRATCH, SKIN_OPTION_BMZ_SINGLE_PLAY, SKIN_OPTION_BMZ_DOUBLE_PLAY]
+    {
+        option_values.insert(option, bmz_key_mode_option_matches(option, key_mode));
+    }
+}
+
+fn bmz_key_mode_number(key_mode: KeyMode) -> i32 {
+    match key_mode {
+        KeyMode::K4 => 4,
+        KeyMode::K5 => 5,
+        KeyMode::K6 => 6,
+        KeyMode::K7 => 7,
+        KeyMode::K8 => 8,
+        KeyMode::K9 => 9,
+        KeyMode::K10 => 10,
+        KeyMode::K14 => 14,
+    }
+}
+
+fn bmz_key_mode_option_matches(option: i32, key_mode: KeyMode) -> bool {
+    match option - SKIN_OPTION_BMZ_KEY_MODE_BASE {
+        0 => key_mode == KeyMode::K4,
+        1 => key_mode == KeyMode::K5,
+        2 => key_mode == KeyMode::K6,
+        3 => key_mode == KeyMode::K7,
+        4 => key_mode == KeyMode::K8,
+        5 => key_mode == KeyMode::K9,
+        6 => key_mode == KeyMode::K10,
+        7 => key_mode == KeyMode::K14,
+        _ if option == SKIN_OPTION_BMZ_NO_SCRATCH => {
+            matches!(key_mode, KeyMode::K4 | KeyMode::K6 | KeyMode::K8 | KeyMode::K9)
+        }
+        _ if option == SKIN_OPTION_BMZ_SINGLE_PLAY => matches!(key_mode, KeyMode::K5 | KeyMode::K7),
+        _ if option == SKIN_OPTION_BMZ_DOUBLE_PLAY => {
+            matches!(key_mode, KeyMode::K10 | KeyMode::K14)
+        }
+        _ => false,
+    }
 }
 
 /// リザルト画面で押すと終了アニメーションを開始するレーン。
@@ -15118,17 +18480,18 @@ fn lane_starts_result_exit(lane: Lane) -> bool {
 }
 
 fn lane_skips_result_exit(lane: Lane) -> bool {
-    matches!(
-        lane,
-        Lane::Key1
-            | Lane::Key3
-            | Lane::Key5
-            | Lane::Key7
-            | Lane::Key8
-            | Lane::Key10
-            | Lane::Key12
-            | Lane::Key14
-    )
+    matches!(lane, Lane::Key1 | Lane::Key3 | Lane::Key8 | Lane::Key10 | Lane::Key12 | Lane::Key14)
+}
+
+fn retry_preload_kind(mode: ResultRetryMode, cached_chart_available: bool) -> RetryPreloadKind {
+    match mode {
+        ResultRetryMode::SameArrange if cached_chart_available => {
+            RetryPreloadKind::CachedChartWithFreshAudio
+        }
+        ResultRetryMode::SameArrange | ResultRetryMode::DifferentArrange => {
+            RetryPreloadKind::ReimportedChartWithFreshAudio
+        }
+    }
 }
 
 /// フェードアウト終了時の Key5/Key7 押下状態から遷移を決める。
@@ -15167,6 +18530,40 @@ fn select_option_panel_for_holds(start_held: bool, select_held: bool) -> u8 {
     }
 }
 
+fn select_option_panel_sound_for_transition(
+    current_panel: u8,
+    next_panel: u8,
+) -> Option<crate::system_sound::SoundType> {
+    use crate::system_sound::SoundType;
+
+    match (current_panel == 0, next_panel == 0) {
+        (true, false) => Some(SoundType::OptionOpen),
+        (false, true) => Some(SoundType::OptionClose),
+        _ => None,
+    }
+}
+
+fn transition_select_option_panel(
+    current_panel: &mut u8,
+    on_started_at: &mut Instant,
+    off_started_at: &mut [Option<Instant>; 6],
+    next_panel: u8,
+    now: Instant,
+) -> bool {
+    if *current_panel == next_panel {
+        return false;
+    }
+    if let Some(index) = current_panel.checked_sub(1).filter(|index| *index < 6) {
+        off_started_at[index as usize] = Some(now);
+    }
+    if let Some(index) = next_panel.checked_sub(1).filter(|index| *index < 6) {
+        off_started_at[index as usize] = None;
+    }
+    *current_panel = next_panel;
+    *on_started_at = now;
+    true
+}
+
 fn select_hold_state_from_pressed_controls(
     pressed_controls: &HashSet<String>,
     bindings: &SelectKeyBindings,
@@ -15182,13 +18579,57 @@ fn select_hold_state_from_pressed_controls(
     (start_held, select_held, e_action_holds)
 }
 
-fn play_control_hold_state_from_pressed_controls(
+fn skin_logical_input_snapshot_from_pressed_controls(
     pressed_controls: &HashSet<String>,
     bindings: &SelectKeyBindings,
+) -> SkinLogicalInputSnapshot {
+    let mut held = [false; bmz_render::skin::SKIN_BMZ_INPUT_COUNT];
+    for control in pressed_controls {
+        held[0] |= bindings.is_start(control);
+        held[1] |= control == "Select" || bindings.is_e2_action(control);
+        match bindings.e_action_for_control(control) {
+            Some(InputActionConfig::E1) => held[0] = true,
+            Some(InputActionConfig::E2) => held[1] = true,
+            Some(InputActionConfig::E3) => held[2] = true,
+            Some(InputActionConfig::E4) => held[3] = true,
+            _ => {}
+        }
+        match control.as_str() {
+            "ArrowLeft" | "DPadLeft" => held[4] = true,
+            "ArrowRight" | "DPadRight" => held[5] = true,
+            "ArrowUp" | "DPadUp" => held[6] = true,
+            "ArrowDown" | "DPadDown" => held[7] = true,
+            _ => {}
+        }
+    }
+    SkinLogicalInputSnapshot { held }
+}
+
+fn apply_skin_logical_input_to_scene(
+    scene: &mut AppSceneSnapshot,
+    skin_input: SkinLogicalInputSnapshot,
+) {
+    match scene {
+        AppSceneSnapshot::Select(snapshot) => snapshot.skin_input = skin_input,
+        AppSceneSnapshot::Decide(snapshot) | AppSceneSnapshot::Play(snapshot) => {
+            snapshot.skin_input = skin_input;
+        }
+        AppSceneSnapshot::Result(snapshot) => snapshot.skin_input = skin_input,
+    }
+}
+
+fn play_control_hold_state_from_pressed_inputs(
+    pressed_inputs: &HashSet<(DeviceId, PhysicalControl)>,
+    input: &PlayOptionInput,
 ) -> (bool, bool, bool) {
-    let e1_held = pressed_controls.iter().any(|control| bindings.is_start(control));
-    let e2_held = pressed_controls.iter().any(|control| bindings.is_e2_action(control));
-    let e3_held = pressed_controls.iter().any(|control| bindings.is_e3_action(control));
+    let action_held = |action| {
+        pressed_inputs.iter().any(|(device, control)| {
+            !input.resolves_lane(*device, control) && input.is_action(*device, control, action)
+        })
+    };
+    let e1_held = action_held(InputActionConfig::E1);
+    let e2_held = action_held(InputActionConfig::E2);
+    let e3_held = action_held(InputActionConfig::E3);
     (e1_held, e2_held, e3_held)
 }
 
@@ -15196,20 +18637,13 @@ fn play_ready_blocked_by_control_holds(e1_held: bool, e2_held: bool) -> bool {
     e1_held || e2_held
 }
 
-fn clamped_play_skin_animation_elapsed_time(
-    play_elapsed_time: TimeUs,
-    ready_delay_us: i64,
-    ready_started: bool,
-    e1_held: bool,
-    e2_held: bool,
-) -> TimeUs {
-    if !ready_started
-        && play_ready_blocked_by_control_holds(e1_held, e2_held)
-        && play_elapsed_time.0 > ready_delay_us
-    {
-        return TimeUs(ready_delay_us);
-    }
-    play_elapsed_time
+fn play_ready_blocked_by_recent_control_hold(
+    last_control_hold_at: Option<Instant>,
+    now: Instant,
+) -> bool {
+    last_control_hold_at.is_some_and(|last_control_hold_at| {
+        now.saturating_duration_since(last_control_hold_at) <= Duration::from_secs(1)
+    })
 }
 
 fn should_begin_play_fadeout_after_final_notes(
@@ -15224,7 +18658,7 @@ fn should_begin_play_fadeout_after_final_notes(
         && !play_ending_active
         && play_state == bmz_gameplay::session::PlayState::Playing
         && final_notes_processed
-        && play_fadeout_after_final_notes_control(control, bindings)
+        && (play_fadeout_after_final_notes_control(control, bindings) || control == "Escape")
 }
 
 fn should_play_retire_sound_for_failed_transition(
@@ -15407,6 +18841,106 @@ struct ActiveLaneState {
     target_green_number: u32,
 }
 
+fn profile_lane_settings_changed(before: &LaneViewConfig, after: &LaneViewConfig) -> bool {
+    before.hispeed != after.hispeed
+        || before.hispeed_mode != after.hispeed_mode
+        || before.sudden != after.sudden
+        || before.lift != after.lift
+        || before.lift_enabled != after.lift_enabled
+        || before.hispeed_auto_adjust != after.hispeed_auto_adjust
+        || before.target_green_number != after.target_green_number
+}
+
+fn apply_profile_lane_settings_to_session(
+    session: &mut bmz_gameplay::session::GameSession,
+    before: &LaneViewConfig,
+    profile: &LaneViewConfig,
+    speed_locked: bool,
+) -> bool {
+    if !profile_lane_settings_changed(before, profile) {
+        return false;
+    }
+
+    let mode_changed = before.hispeed_mode != profile.hispeed_mode;
+    let hispeed_changed = before.hispeed != profile.hispeed;
+    let sudden_changed = before.sudden != profile.sudden;
+    let lift_changed = before.lift != profile.lift;
+    let lift_enabled_changed = before.lift_enabled != profile.lift_enabled;
+    let auto_adjust_changed = before.hispeed_auto_adjust != profile.hispeed_auto_adjust;
+    let target_green_changed = before.target_green_number != profile.target_green_number;
+    let cover_changed = sudden_changed || lift_changed || lift_enabled_changed;
+
+    if cover_changed {
+        session.lift_enabled = profile.lift_enabled;
+        session.lift = if profile.lift_enabled {
+            crate::config::play::lane_unit_to_f32(profile.lift)
+        } else {
+            0.0
+        };
+        session.lane_cover = crate::config::play::clamp_lane_cover_for_lift(
+            crate::config::play::lane_unit_to_f32(profile.sudden),
+            session.lift,
+        );
+    }
+    if auto_adjust_changed {
+        session.hispeed_auto_adjust = profile.hispeed_auto_adjust;
+    }
+
+    let now = session.audio_clock.now();
+    if mode_changed {
+        session.hispeed_mode = match profile.hispeed_mode {
+            HispeedModeConfig::Normal => HispeedMode::Normal,
+            HispeedModeConfig::Floating => HispeedMode::Floating,
+        };
+        if session.hispeed_mode == HispeedMode::Floating
+            && !target_green_changed
+            && !hispeed_changed
+        {
+            session.target_green_number = current_green_number(session, now);
+        }
+    }
+
+    if speed_locked {
+        return true;
+    }
+
+    if target_green_changed {
+        session.target_green_number = profile.target_green_number.max(1);
+    }
+
+    let direct_hispeed_change = hispeed_changed;
+    if direct_hispeed_change {
+        session.hispeed = profile.hispeed.clamp(0.5, 10.0);
+    }
+
+    if session.hispeed_mode == HispeedMode::Floating {
+        if direct_hispeed_change && !target_green_changed {
+            // FHS の直接 HS 変更は、現在の見た目から緑数字ターゲットを更新する。
+            session.target_green_number = current_green_number(session, now);
+        } else if target_green_changed
+            || cover_changed
+            || auto_adjust_changed
+            || (mode_changed && !direct_hispeed_change)
+        {
+            session.hispeed =
+                hispeed_for_green_number(session, active_lane_cover_for_hispeed(session), now);
+        }
+    }
+
+    true
+}
+
+fn active_lane_state_for_session(session: &bmz_gameplay::session::GameSession) -> ActiveLaneState {
+    ActiveLaneState {
+        lane_cover: session.lane_cover,
+        lift: session.lift,
+        hispeed_mode: session.hispeed_mode,
+        // NHS の現在表示は曲終了時に変動するため保存しない。target は NHS→FHS
+        // の明示切替時に session 側で更新された値を引き継ぐ。
+        target_green_number: session.target_green_number,
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 struct CurrentPlayOptions {
     arrange: ArrangeOption,
@@ -15427,15 +18961,7 @@ fn apply_current_play_options_to_profile(
     options: CurrentPlayOptions,
     updated_at: i64,
 ) {
-    if let Some(hispeed) = hispeed {
-        profile.lane.hispeed = clamp_hispeed_for_profile(hispeed);
-    }
-    if let Some(state) = lane_state {
-        profile.lane.sudden = crate::config::play::lane_f32_to_unit(state.lane_cover);
-        profile.lane.lift = crate::config::play::lane_f32_to_unit(state.lift);
-        profile.lane.hispeed_mode = hispeed_mode_to_config(state.hispeed_mode);
-        profile.lane.target_green_number = state.target_green_number.max(1);
-    }
+    apply_lane_state_to_profile(profile, hispeed, lane_state);
     profile.play.random = random_config_from_arrange(options.arrange);
     profile.play.random2 = random_config_from_arrange(options.arrange_2p);
     profile.play.target = target_config_from_option(options.target);
@@ -15449,8 +18975,40 @@ fn apply_current_play_options_to_profile(
     profile.updated_at = updated_at;
 }
 
-fn clamp_hispeed_for_profile(hispeed: f32) -> f32 {
-    (hispeed * 4.0).round().clamp(2.0, 40.0) / 4.0
+fn apply_lane_state_to_profile(
+    profile: &mut ProfileConfig,
+    hispeed: Option<f32>,
+    lane_state: Option<ActiveLaneState>,
+) {
+    let saved_hispeed_mode = lane_state
+        .map(|state| hispeed_mode_to_config(state.hispeed_mode))
+        .unwrap_or(profile.lane.hispeed_mode);
+    if let Some(hispeed) = hispeed {
+        let step = match saved_hispeed_mode {
+            HispeedModeConfig::Normal => profile.lane.hispeed_step_nhs,
+            HispeedModeConfig::Floating => profile.lane.hispeed_step_fhs,
+        };
+        profile.lane.hispeed = clamp_hispeed_for_profile(hispeed, saved_hispeed_mode, step);
+    }
+    if let Some(state) = lane_state {
+        profile.lane.sudden = crate::config::play::lane_f32_to_unit(state.lane_cover);
+        if profile.lane.lift_enabled {
+            profile.lane.lift = crate::config::play::lane_f32_to_unit(state.lift);
+        }
+        profile.lane.hispeed_mode = hispeed_mode_to_config(state.hispeed_mode);
+        profile.lane.target_green_number = state.target_green_number.max(1);
+    }
+}
+
+fn clamp_hispeed_for_profile(hispeed: f32, mode: HispeedModeConfig, step: f32) -> f32 {
+    let clamped = hispeed.clamp(0.5, 10.0);
+    if mode == HispeedModeConfig::Normal
+        && (normalize_hispeed_step(step, default_hispeed_step_nhs()) - 0.25).abs() < f32::EPSILON
+    {
+        (clamped * 4.0).round().clamp(2.0, 40.0) / 4.0
+    } else {
+        clamped
+    }
 }
 
 fn hispeed_mode_to_config(mode: HispeedMode) -> HispeedModeConfig {
@@ -15543,6 +19101,7 @@ fn select_snapshot_rows(
                     title: name.clone(),
                     subtitle: String::new(),
                     artist: String::new(),
+                    genre: String::new(),
                     difficulty_name: String::new(),
                     play_level: String::new(),
                     table_level: String::new(),
@@ -15571,6 +19130,7 @@ fn select_snapshot_rows(
                     replay_slots: [false; 4],
                     favorite_chart: false,
                     favorite_song: false,
+                    has_document: false,
                     has_long_notes: false,
                     has_mines: false,
                     has_random: false,
@@ -15619,6 +19179,11 @@ fn select_snapshot_rows(
                             .map(|chart| chart.subtitle.clone())
                             .unwrap_or_default(),
                         artist: row.display_artist().to_string(),
+                        genre: row
+                            .chart
+                            .as_ref()
+                            .map(|chart| chart.genre.clone())
+                            .unwrap_or_default(),
                         difficulty_name: row
                             .chart
                             .as_ref()
@@ -15675,6 +19240,7 @@ fn select_snapshot_rows(
                         replay_slots: row.replay_slots,
                         favorite_chart: row.favorite_chart,
                         favorite_song: row.favorite_song,
+                        has_document: row.has_document,
                         has_long_notes: row
                             .chart
                             .as_ref()
@@ -15783,6 +19349,7 @@ fn select_snapshot_rows(
                     // Use the trophy names joined as "subtitle" so the artist
                     // slot shows e.g. "silvermedal / goldmedal".
                     artist: row.trophy_names.join(" / "),
+                    genre: String::new(),
                     // Beatoraja-style category tag (DAN / COURSE).
                     difficulty_name: row.category_label.clone(),
                     // Beatoraja GradeBar rows do not expose a play level.
@@ -15807,13 +19374,18 @@ fn select_snapshot_rows(
                     gauge_value: row.best_score.as_ref().map(|best| best.gauge_value),
                     bp: row.best_score.as_ref().map(|best| best.bp),
                     cb: row.best_score.as_ref().map(|best| best.cb),
-                    judge_counts: DisplayJudgeCounts::default(),
-                    fast_slow_counts: None,
+                    judge_counts: row
+                        .best_score
+                        .as_ref()
+                        .map(|best| best.judge_counts)
+                        .unwrap_or_default(),
+                    fast_slow_counts: row.best_score.as_ref().map(|best| best.fast_slow_counts),
                     play_count: row.best_score.as_ref().map(|best| best.play_count).unwrap_or(0),
                     clear_count: row.best_score.as_ref().map(|best| best.clear_count).unwrap_or(0),
                     replay_slots: row.replay_slots,
                     favorite_chart: false,
                     favorite_song: false,
+                    has_document: false,
                     has_long_notes: false,
                     has_mines: false,
                     has_random: false,
@@ -15856,6 +19428,7 @@ fn select_snapshot_rows(
                         title: row.label().to_string(),
                         subtitle: String::new(),
                         artist: value.clone(),
+                        genre: String::new(),
                         difficulty_name: String::new(),
                         play_level: value,
                         table_level: String::new(),
@@ -15881,6 +19454,7 @@ fn select_snapshot_rows(
                         replay_slots: [false; 4],
                         favorite_chart: false,
                         favorite_song: false,
+                        has_document: false,
                         has_long_notes: false,
                         has_mines: false,
                         has_random: false,
@@ -15918,6 +19492,7 @@ fn select_snapshot_rows(
                         title: row.label(),
                         subtitle: String::new(),
                         artist: value.clone(),
+                        genre: String::new(),
                         difficulty_name: String::new(),
                         play_level: value,
                         table_level: String::new(),
@@ -15943,6 +19518,7 @@ fn select_snapshot_rows(
                         replay_slots: [false; 4],
                         favorite_chart: false,
                         favorite_song: false,
+                        has_document: false,
                         has_long_notes: false,
                         has_mines: false,
                         has_random: false,
@@ -15970,9 +19546,10 @@ fn select_snapshot_rows(
                 }
                 SelectItem::Back => SelectRowSnapshot {
                     index: index as u32,
-                    title: "戻る".to_string(),
+                    title: Localizer::new(profile.ui.locale()).text("select-back"),
                     subtitle: String::new(),
                     artist: String::new(),
+                    genre: String::new(),
                     difficulty_name: String::new(),
                     play_level: String::new(),
                     table_level: String::new(),
@@ -15998,6 +19575,7 @@ fn select_snapshot_rows(
                     replay_slots: [false; 4],
                     favorite_chart: false,
                     favorite_song: false,
+                    has_document: false,
                     has_long_notes: false,
                     has_mines: false,
                     has_random: false,
@@ -16024,9 +19602,10 @@ fn select_snapshot_rows(
                 },
                 SelectItem::AdvancedSettings => SelectRowSnapshot {
                     index: index as u32,
-                    title: "詳細設定".to_string(),
+                    title: Localizer::new(profile.ui.locale()).text("select-advanced-settings"),
                     subtitle: String::new(),
                     artist: String::new(),
+                    genre: String::new(),
                     difficulty_name: String::new(),
                     play_level: String::new(),
                     table_level: String::new(),
@@ -16052,6 +19631,7 @@ fn select_snapshot_rows(
                     replay_slots: [false; 4],
                     favorite_chart: false,
                     favorite_song: false,
+                    has_document: false,
                     has_long_notes: false,
                     has_mines: false,
                     has_random: false,
@@ -16154,7 +19734,7 @@ fn select_analog_scroll_duration(mov: i32) -> Duration {
     Duration::from_millis((120 / remaining / remaining) as u64)
 }
 
-fn log_gilrs_key_config_raw_event(event: &crate::input::gilrs::GilrsRawEvent) {
+fn log_gamepad_key_config_raw_event(backend: &str, event: &crate::input::gamepad::RawInputEvent) {
     let mapped_control = event.mapped_control.as_deref().unwrap_or("<unmapped>");
     tracing::info!(
         device_id = event.device_id.0,
@@ -16166,7 +19746,8 @@ fn log_gilrs_key_config_raw_event(event: &crate::input::gilrs::GilrsRawEvent) {
         pressed = ?event.pressed,
         value = ?event.value,
         ticks = ?event.ticks,
-        "gilrs key config input"
+        backend,
+        "gamepad key config input"
     );
 }
 
@@ -16299,6 +19880,7 @@ fn update_pre_ready_play_snapshot_options_for_session(
     last_play_snapshot: &mut Option<RenderSnapshot>,
     session: &bmz_gameplay::session::GameSession,
     arrange: ArrangeOption,
+    arrange_2p: ArrangeOption,
 ) {
     if ready_sound_started_at.is_some() {
         return;
@@ -16312,6 +19894,7 @@ fn update_pre_ready_play_snapshot_options_for_session(
         snapshot.time,
     );
     snapshot.arrange = arrange.as_str().to_string();
+    snapshot.arrange_2p = arrange_2p.as_str().to_string();
 }
 
 fn update_play_exit_hold_started_at(
@@ -16351,6 +19934,47 @@ fn select_click_event_arg(
         3 => Some(if y <= rect.y + rect.height * 0.5 { 1 } else { -1 }),
         _ => None,
     }
+}
+
+fn chart_snapshot_metadata_for_chart(
+    select_items: &[SelectItem],
+    chart_id: i64,
+    fallback: impl FnOnce(i64) -> Option<ChartListItem>,
+) -> Option<(ChartListItem, Option<u32>)> {
+    select_items
+        .iter()
+        .find_map(|item| match item {
+            SelectItem::Chart(row) => row.chart.as_ref().and_then(|chart| {
+                (chart.chart_id == chart_id)
+                    .then(|| (chart.clone(), row.best_score.as_ref().map(|best| best.ex_score)))
+            }),
+            _ => None,
+        })
+        .or_else(|| fallback(chart_id).map(|chart| (chart, None)))
+}
+
+fn apply_chart_metadata_to_snapshot(
+    snapshot: &mut RenderSnapshot,
+    chart: &ChartListItem,
+    total_notes: u32,
+    best_ex_score: Option<u32>,
+) {
+    snapshot.title.clone_from(&chart.title);
+    snapshot.subtitle.clone_from(&chart.subtitle);
+    snapshot.artist.clone_from(&chart.artist);
+    snapshot.subartist.clone_from(&chart.subartist);
+    snapshot.genre.clone_from(&chart.genre);
+    snapshot.difficulty_name.clone_from(&chart.difficulty_name);
+    snapshot.play_level.clone_from(&chart.play_level);
+    snapshot.judge_rank = chart.judge_rank;
+    snapshot.total_notes = total_notes;
+    snapshot.duration = TimeUs(chart.length_ms.saturating_mul(1_000));
+    snapshot.min_bpm = chart.min_bpm as f32;
+    snapshot.max_bpm = chart.max_bpm as f32;
+    snapshot.now_bpm = chart.initial_bpm as f32;
+    // PACEMAKER の MyBest 表示。projected (ghost 進行値) は進捗 0 なので 0。
+    snapshot.best_ex_score = best_ex_score;
+    snapshot.projected_best_ex_score = best_ex_score.map(|_| 0);
 }
 
 fn course_titles_from_entries<'a>(
@@ -16476,66 +20100,84 @@ fn hispeed_action(
     }
 }
 
-fn play_option_control_for_holds(
-    control: &str,
+fn play_option_control_for_input(
+    device: DeviceId,
+    control: &PhysicalControl,
     e1_held: bool,
     e2_held: bool,
-    bindings: &SelectKeyBindings,
+    play_input: Option<&PlayOptionInput>,
+    profile_input: &ProfileInputConfig,
 ) -> Option<PlayOptionControl> {
-    if e1_held && bindings.is_e2_action(control) {
+    let play_input = play_input?;
+    let resolved = play_input.resolve_entry(device, control);
+    if e1_held && resolved.is_none() && play_input.is_action(device, control, InputActionConfig::E2)
+    {
         return Some(PlayOptionControl::ToggleHispeedMode);
     }
-    if e1_held && !e2_held {
-        return e1_play_option_control(control, bindings);
+    if e1_held == e2_held {
+        return None;
     }
-    if e2_held && !e1_held {
-        return e2_play_option_control(control, bindings);
-    }
-    None
-}
 
-fn e1_play_option_control(
-    control: &str,
-    bindings: &SelectKeyBindings,
-) -> Option<PlayOptionControl> {
-    if bindings.is_hispeed_down_key(control) {
-        return Some(PlayOptionControl::Hispeed(HispeedChange::Down));
+    let resolved = resolved?;
+    if let Some(direction) = crate::config::play_input::hispeed_direction_for_lane(
+        profile_input,
+        play_input.key_mode,
+        resolved.lane,
+    ) {
+        return match (e1_held, direction) {
+            (true, HispeedDirectionConfig::Down) => {
+                Some(PlayOptionControl::Hispeed(HispeedChange::Down))
+            }
+            (true, HispeedDirectionConfig::Up) => {
+                Some(PlayOptionControl::Hispeed(HispeedChange::Up))
+            }
+            (false, HispeedDirectionConfig::Down) => {
+                Some(PlayOptionControl::GreenNumber(GreenNumberChange::Down))
+            }
+            (false, HispeedDirectionConfig::Up) => {
+                Some(PlayOptionControl::GreenNumber(GreenNumberChange::Up))
+            }
+        };
     }
-    if bindings.is_hispeed_up_key(control) {
-        return Some(PlayOptionControl::Hispeed(HispeedChange::Up));
-    }
-    if bindings.is_scratch_up(control) {
-        return Some(PlayOptionControl::LaneCover(LaneCoverChange::Up));
-    }
-    if bindings.is_scratch_down(control) {
-        return Some(PlayOptionControl::LaneCover(LaneCoverChange::Down));
-    }
-    None
-}
 
-fn e2_play_option_control(
-    control: &str,
-    bindings: &SelectKeyBindings,
-) -> Option<PlayOptionControl> {
-    if bindings.is_hispeed_down_key(control) {
-        return Some(PlayOptionControl::GreenNumber(GreenNumberChange::Down));
+    let control_name = physical_control_name(control);
+    let scratch_direction = resolved.scratch_direction.or_else(|| {
+        control_name.and_then(|control| {
+            if is_scratch_up_control(control) {
+                Some(ScratchDirection::Up)
+            } else if is_scratch_down_control(control) {
+                Some(ScratchDirection::Down)
+            } else {
+                None
+            }
+        })
+    })?;
+    match (e1_held, scratch_direction) {
+        (true, ScratchDirection::Up) => Some(PlayOptionControl::LaneCover(LaneCoverChange::Up)),
+        (true, ScratchDirection::Down) => Some(PlayOptionControl::LaneCover(LaneCoverChange::Down)),
+        (false, ScratchDirection::Up) => {
+            Some(PlayOptionControl::GreenNumber(GreenNumberChange::Up))
+        }
+        (false, ScratchDirection::Down) => {
+            Some(PlayOptionControl::GreenNumber(GreenNumberChange::Down))
+        }
     }
-    if bindings.is_hispeed_up_key(control) {
-        return Some(PlayOptionControl::GreenNumber(GreenNumberChange::Up));
-    }
-    if bindings.is_scratch_up(control) {
-        return Some(PlayOptionControl::GreenNumber(GreenNumberChange::Up));
-    }
-    if bindings.is_scratch_down(control) {
-        return Some(PlayOptionControl::GreenNumber(GreenNumberChange::Down));
-    }
-    None
 }
 
 fn visual_offset_delta_control(control: &str, bindings: &SelectKeyBindings) -> Option<i32> {
     if bindings.is_ui_key5(control) {
         Some(-1)
     } else if bindings.is_ui_key7(control) {
+        Some(1)
+    } else {
+        None
+    }
+}
+
+fn green_number_delta_control(control: &str, bindings: &SelectKeyBindings) -> Option<i32> {
+    if bindings.is_ui_key4(control) {
+        Some(-1)
+    } else if bindings.is_ui_key6(control) {
         Some(1)
     } else {
         None
@@ -16562,11 +20204,10 @@ fn lane_cover_change_step(change: LaneCoverChange) -> f32 {
     }
 }
 
-fn green_number_change_from_lane(change: LaneCoverChange) -> GreenNumberChange {
-    match change {
-        LaneCoverChange::Up => GreenNumberChange::Up,
-        LaneCoverChange::Down => GreenNumberChange::Down,
-    }
+/// アナログスクラッチによる緑数字操作は、レーンカバー操作とは増減方向が逆。
+/// 正の step (Scratch Down) で緑数字を上げ、負の step (Scratch Up) で下げる。
+fn green_number_change_from_analog_steps(steps: i32) -> GreenNumberChange {
+    if steps > 0 { GreenNumberChange::Up } else { GreenNumberChange::Down }
 }
 
 fn green_number_change_step(change: GreenNumberChange) -> i32 {
@@ -16576,79 +20217,110 @@ fn green_number_change_step(change: GreenNumberChange) -> i32 {
     }
 }
 
-fn adjusted_hispeed(current: f32, change: HispeedChange) -> f32 {
-    let delta = match change {
-        HispeedChange::Down => -0.25,
-        HispeedChange::Up => 0.25,
-    };
-    ((current + delta) * 4.0).round().clamp(2.0, 40.0) / 4.0
-}
-
-fn apply_pending_hispeed_change_to_profile(
-    profile: &mut ProfileConfig,
-    snapshot: Option<&RenderSnapshot>,
-    change: HispeedChange,
-) {
-    profile.lane.hispeed = adjusted_hispeed(profile.lane.hispeed, change);
-    if profile.lane.hispeed_mode == HispeedModeConfig::Floating
-        && let Some(green) = pending_play_green_number_for_profile_hispeed(profile, snapshot)
-    {
-        profile.lane.target_green_number = green;
+fn hispeed_step_for_profile(profile: &ProfileConfig, mode: HispeedMode) -> f32 {
+    match mode {
+        HispeedMode::Normal => {
+            normalize_hispeed_step(profile.lane.hispeed_step_nhs, default_hispeed_step_nhs())
+        }
+        HispeedMode::Floating => {
+            normalize_hispeed_step(profile.lane.hispeed_step_fhs, default_hispeed_step_fhs())
+        }
     }
 }
 
-fn pending_play_green_number_for_profile_hispeed(
-    profile: &ProfileConfig,
-    snapshot: Option<&RenderSnapshot>,
-) -> Option<u32> {
-    let snapshot = snapshot?;
-    let lift = crate::config::play::lane_unit_to_f32(profile.lane.lift);
-    let lane_cover = crate::config::play::clamp_lane_cover_for_lift(
-        crate::config::play::lane_unit_to_f32(profile.lane.sudden),
-        lift,
-    );
-    let duration = crate::screens::play_snapshot::display_duration_ms_for_bpm_hispeed(
-        snapshot.now_bpm,
-        profile.lane.hispeed,
-        lane_cover,
-        lift,
-        1.0,
-    )
-    .round()
-    .clamp(0.0, i32::MAX as f32) as i32;
-    Some(green_number_from_snapshot_duration(duration))
+fn adjusted_hispeed(current: f32, change: HispeedChange, step: f32) -> f32 {
+    let delta = match change {
+        HispeedChange::Down => -step,
+        HispeedChange::Up => step,
+    };
+    (current + delta).clamp(0.5, 10.0)
 }
 
-fn apply_pending_green_number_step_to_profile(
+fn apply_pending_play_lane_action_to_state(
+    lane: &mut PendingPlayLaneState,
+    action: PendingPlayLaneAction,
+    profile: &ProfileConfig,
+    now_bpm: f32,
+    speed_locked: bool,
+) -> bool {
+    match action {
+        PendingPlayLaneAction::ToggleHispeedMode => match lane.hispeed_mode {
+            HispeedMode::Normal => {
+                lane.target_green_number = lane.current_green_number(now_bpm);
+                lane.hispeed_mode = HispeedMode::Floating;
+            }
+            HispeedMode::Floating => {
+                lane.hispeed = lane.hispeed.clamp(0.5, 10.0);
+                lane.hispeed_mode = HispeedMode::Normal;
+            }
+        },
+        PendingPlayLaneAction::Hispeed(change) => {
+            if speed_locked {
+                return false;
+            }
+            let step = hispeed_step_for_profile(profile, lane.hispeed_mode);
+            lane.hispeed = adjusted_hispeed(lane.hispeed, change, step);
+        }
+        PendingPlayLaneAction::LaneCoverDelta(delta) => {
+            if lane.lane_cover_visible {
+                lane.lane_cover = (lane.lane_cover - delta)
+                    .clamp(0.0, crate::config::play::lane_cover_max_for_lift(lane.lift));
+                lane.refresh_cover_hispeed(now_bpm, speed_locked);
+            } else {
+                lane.lift = (lane.lift + delta).clamp(0.0, (1.0 - lane.lane_cover).clamp(0.0, 1.0));
+                if lane.hispeed_auto_adjust {
+                    lane.refresh_floating_hispeed(now_bpm, speed_locked);
+                }
+            }
+        }
+        PendingPlayLaneAction::GreenNumberDelta(delta) => {
+            if speed_locked {
+                return false;
+            }
+            let current = match lane.hispeed_mode {
+                HispeedMode::Normal => lane.current_green_number(now_bpm),
+                HispeedMode::Floating => lane.target_green_number,
+            };
+            lane.target_green_number = adjusted_green_number(current, delta);
+            lane.hispeed_mode = HispeedMode::Floating;
+            lane.refresh_floating_hispeed(now_bpm, speed_locked);
+        }
+        PendingPlayLaneAction::ToggleLaneCoverVisibility => {
+            let was_visible = lane.lane_cover_visible;
+            lane.lane_cover_visible = !lane.lane_cover_visible;
+            if !was_visible && lane.lane_cover_visible {
+                lane.refresh_cover_hispeed(now_bpm, speed_locked);
+            }
+        }
+    }
+    true
+}
+
+fn sync_active_play_visual_offset_to_profile(
     profile: &mut ProfileConfig,
-    snapshot: Option<&RenderSnapshot>,
-    delta: i32,
+    visual_offset_us: i64,
+    auto_adjust_active: bool,
 ) {
-    let current = if profile.lane.hispeed_mode == HispeedModeConfig::Floating {
-        profile.lane.target_green_number.max(TARGET_GREEN_NUMBER_MIN)
-    } else {
-        pending_play_green_number_for_profile_hispeed(profile, snapshot)
-            .unwrap_or(profile.lane.target_green_number)
-            .max(TARGET_GREEN_NUMBER_MIN)
-    };
-    profile.lane.target_green_number = adjusted_green_number(current, delta);
-    profile.lane.hispeed_mode = HispeedModeConfig::Floating;
+    if !auto_adjust_active || profile.judge.visual_offset_us == visual_offset_us {
+        return;
+    }
+    profile.judge.visual_offset_us = visual_offset_us;
+    profile.updated_at = now_unix_seconds();
 }
 
 fn apply_hispeed_change_to_session(
     session: &mut bmz_gameplay::session::GameSession,
     change: HispeedChange,
+    step: f32,
 ) {
-    session.hispeed = adjusted_hispeed(session.hispeed, change);
-    if session.hispeed_mode == HispeedMode::Floating {
-        session.target_green_number = current_green_number(session, session.audio_clock.now());
-    }
+    session.hispeed = adjusted_hispeed(session.hispeed, change, step);
 }
 
 fn apply_play_option_control_to_session(
     session: &mut bmz_gameplay::session::GameSession,
     action: PlayOptionControl,
     speed_locked: bool,
+    hispeed_step: f32,
 ) -> bool {
     match action {
         PlayOptionControl::ToggleHispeedMode => {
@@ -16659,7 +20331,7 @@ fn apply_play_option_control_to_session(
                     session.hispeed_mode = HispeedMode::Floating;
                 }
                 HispeedMode::Floating => {
-                    session.hispeed = clamp_hispeed_for_profile(session.hispeed);
+                    session.hispeed = session.hispeed.clamp(0.5, 10.0);
                     session.hispeed_mode = HispeedMode::Normal;
                 }
             }
@@ -16669,7 +20341,7 @@ fn apply_play_option_control_to_session(
             if speed_locked {
                 return false;
             }
-            apply_hispeed_change_to_session(session, change);
+            apply_hispeed_change_to_session(session, change, hispeed_step);
             true
         }
         PlayOptionControl::LaneCover(change) => {
@@ -16681,6 +20353,55 @@ fn apply_play_option_control_to_session(
             speed_locked,
         ),
     }
+}
+
+fn replay_pending_play_lane_actions(
+    session: &mut bmz_gameplay::session::GameSession,
+    actions: &[PendingPlayLaneAction],
+    profile: &ProfileConfig,
+    speed_locked: bool,
+) {
+    for action in actions {
+        match *action {
+            PendingPlayLaneAction::ToggleHispeedMode => {
+                let step = hispeed_step_for_profile(profile, session.hispeed_mode);
+                apply_play_option_control_to_session(
+                    session,
+                    PlayOptionControl::ToggleHispeedMode,
+                    speed_locked,
+                    step,
+                );
+            }
+            PendingPlayLaneAction::Hispeed(change) => {
+                let step = hispeed_step_for_profile(profile, session.hispeed_mode);
+                apply_play_option_control_to_session(
+                    session,
+                    PlayOptionControl::Hispeed(change),
+                    speed_locked,
+                    step,
+                );
+            }
+            PendingPlayLaneAction::LaneCoverDelta(delta) => {
+                apply_lane_cover_step_to_session(session, delta, speed_locked);
+            }
+            PendingPlayLaneAction::GreenNumberDelta(delta) => {
+                apply_green_number_step_to_session(session, delta, speed_locked);
+            }
+            PendingPlayLaneAction::ToggleLaneCoverVisibility => {
+                toggle_lane_cover_visibility(session, speed_locked);
+            }
+        }
+    }
+}
+
+fn handoff_pending_play_visual_input(
+    session: &mut bmz_gameplay::session::GameSession,
+    input: &SharedInputBackend,
+    visual_input: &PendingPlayVisualInput,
+) {
+    let mut input = input.clone();
+    let _ = input.drain_events();
+    visual_input.clone().apply_to_session(session);
 }
 
 fn apply_green_number_step_to_session(
@@ -16713,12 +20434,24 @@ fn apply_lane_cover_step_to_session(
             .clamp(0.0, crate::config::play::lane_cover_max_for_lift(session.lift));
         if session.hispeed_mode == HispeedMode::Floating && !speed_locked {
             let now = session.audio_clock.now();
-            session.hispeed = hispeed_for_green_number(session, session.lane_cover, now);
+            session.hispeed = if session.hispeed_auto_adjust {
+                hispeed_for_green_number(session, session.lane_cover, now)
+            } else {
+                hispeed_for_green_number_at_bpm(
+                    session,
+                    session.lane_cover,
+                    now,
+                    session.hsfix_base_bpm,
+                )
+            };
         }
     } else {
         session.lift =
             (session.lift + delta).clamp(0.0, (1.0 - session.lane_cover).clamp(0.0, 1.0));
-        if session.hispeed_mode == HispeedMode::Floating && !speed_locked {
+        if session.hispeed_auto_adjust
+            && session.hispeed_mode == HispeedMode::Floating
+            && !speed_locked
+        {
             let now = session.audio_clock.now();
             session.hispeed = hispeed_for_green_number(session, 0.0, now);
         }
@@ -16732,8 +20465,12 @@ fn reset_floating_hispeed_if_enabled(
 ) {
     if session.hispeed_mode == HispeedMode::Floating && !speed_locked {
         let now = session.audio_clock.now();
-        session.hispeed =
-            hispeed_for_green_number(session, active_lane_cover_for_hispeed(session), now);
+        let lane_cover = active_lane_cover_for_hispeed(session);
+        session.hispeed = if session.hispeed_auto_adjust {
+            hispeed_for_green_number(session, lane_cover, now)
+        } else {
+            hispeed_for_green_number_at_bpm(session, lane_cover, now, session.hsfix_base_bpm)
+        };
     }
 }
 
@@ -16776,7 +20513,7 @@ fn current_green_number(session: &bmz_gameplay::session::GameSession, now: TimeU
         active_lane_cover_for_hispeed(session),
         now,
     );
-    green_number_from_duration(total)
+    green_number_from_display_duration(total)
 }
 
 fn adjusted_green_number(current: u32, delta: i32) -> u32 {
@@ -16784,14 +20521,10 @@ fn adjusted_green_number(current: u32, delta: i32) -> u32 {
     next.clamp(TARGET_GREEN_NUMBER_MIN as i64, TARGET_GREEN_NUMBER_MAX as i64) as u32
 }
 
-fn green_number_from_duration(duration_ms: f32) -> u32 {
-    ((duration_ms * 0.6)
-        .round()
-        .clamp(TARGET_GREEN_NUMBER_MIN as f32, TARGET_GREEN_NUMBER_MAX as f32)) as u32
-}
-
-fn green_number_from_snapshot_duration(duration_ms: i32) -> u32 {
-    green_number_from_duration(duration_ms.max(0) as f32)
+fn green_number_from_display_duration(duration_ms: f32) -> u32 {
+    let displayed_duration_ms = duration_ms.round().clamp(0.0, i32::MAX as f32) as i32;
+    bmz_render::skin::duration_to_green_number_ms(displayed_duration_ms)
+        .clamp(TARGET_GREEN_NUMBER_MIN as i32, TARGET_GREEN_NUMBER_MAX as i32) as u32
 }
 
 fn instant_elapsed_us_u64(start: Instant) -> u64 {
@@ -16832,16 +20565,33 @@ fn hispeed_for_green_number(
     lane_cover: f32,
     now: TimeUs,
 ) -> f32 {
+    hispeed_for_green_number_at_bpm(
+        session,
+        lane_cover,
+        now,
+        floating_hispeed_target_bpm(session, now),
+    )
+}
+
+fn hispeed_for_green_number_at_bpm(
+    session: &bmz_gameplay::session::GameSession,
+    lane_cover: f32,
+    now: TimeUs,
+    target_bpm: f64,
+) -> f32 {
     let target_green = session.target_green_number.max(1) as f32;
     let visible_max = crate::config::play::visible_lane_fraction(lane_cover, session.lift);
-    let now_bpm = floating_hispeed_target_bpm(session, now);
     let scroll_multiplier = crate::screens::play_snapshot::current_scroll_multiplier(
         &session.chart,
         &session.timing_map,
         now,
     );
-    let hispeed =
-        hispeed_for_green_number_values(target_green, visible_max, now_bpm, scroll_multiplier);
+    let hispeed = hispeed_for_green_number_values(
+        target_green,
+        visible_max,
+        target_bpm.max(1.0),
+        scroll_multiplier,
+    );
     hispeed.clamp(0.5, 10.0)
 }
 
@@ -16894,6 +20644,17 @@ fn result_exit_skip_key(physical_key: PhysicalKey, state: ElementState, repeat: 
     matches!(physical_key, PhysicalKey::Code(KeyCode::Enter | KeyCode::Escape))
 }
 
+fn result_exit_transition_ready(
+    elapsed: Duration,
+    fadeout: Duration,
+    animation_duration: Duration,
+    skip_requested: bool,
+    skip_final_frame_held: bool,
+) -> bool {
+    let required_duration = if skip_requested { animation_duration } else { fadeout };
+    elapsed >= required_duration && (!skip_requested || skip_final_frame_held)
+}
+
 fn decide_action(
     physical_key: PhysicalKey,
     state: ElementState,
@@ -16926,6 +20687,39 @@ fn elapsed_since_ms(started_at: Instant) -> i32 {
     (started_at.elapsed().as_millis().min(i32::MAX as u128)) as i32
 }
 
+fn apply_operating_time_ms_to_scene(scene: &mut AppSceneSnapshot, operating_time_ms: i32) {
+    match scene {
+        AppSceneSnapshot::Select(snapshot) => {
+            snapshot.operating_time_ms = operating_time_ms;
+        }
+        AppSceneSnapshot::Decide(snapshot) | AppSceneSnapshot::Play(snapshot) => {
+            snapshot.operating_time_ms = operating_time_ms;
+        }
+        AppSceneSnapshot::Result(_) => {}
+    }
+}
+
+fn apply_skin_runtime_info_to_scene(
+    scene: &mut AppSceneSnapshot,
+    player_name: &str,
+    current_fps: u32,
+) {
+    match scene {
+        AppSceneSnapshot::Select(snapshot) => {
+            snapshot.player_name = player_name.to_string();
+            snapshot.current_fps = current_fps;
+        }
+        AppSceneSnapshot::Decide(snapshot) | AppSceneSnapshot::Play(snapshot) => {
+            snapshot.player_name = player_name.to_string();
+            snapshot.current_fps = current_fps;
+        }
+        AppSceneSnapshot::Result(snapshot) => {
+            snapshot.player_name = player_name.to_string();
+            snapshot.current_fps = current_fps;
+        }
+    }
+}
+
 fn preloaded_matches_start(
     preloaded: &PreloadedInputPlaySession,
     chart_id: i64,
@@ -16939,6 +20733,10 @@ fn preloaded_matches_start(
         && preloaded.session_options.double_option == options.double_option
         && preloaded.session_options.hs_fix == options.hs_fix
         && preloaded.session_options.arrange_seed == options.arrange_seed
+        && preloaded.session_options.arrange_seed_2p == options.arrange_seed_2p
+        && preloaded.session_options.legacy_arrange_seed == options.legacy_arrange_seed
+        && preloaded.session_options.bms_random_seed == options.bms_random_seed
+        && preloaded.session_options.bms_random_choices == options.bms_random_choices
         && preloaded.session_options.arrange_pattern == options.arrange_pattern
         && preloaded.session_options.initial_gauge_value == options.initial_gauge_value
         && preloaded.session_options.initial_gauge_values == options.initial_gauge_values
@@ -16960,12 +20758,73 @@ fn bga_images_ready_for_ready_phase(
     status.is_ready_for(generation, chart_id)
 }
 
+fn resource_load_progress_units(loaded: usize, total: usize) -> u32 {
+    if total == 0 {
+        return RESOURCE_LOAD_PROGRESS_SCALE;
+    }
+    let loaded = loaded.min(total) as u64;
+    ((loaded * u64::from(RESOURCE_LOAD_PROGRESS_SCALE)) / total as u64) as u32
+}
+
+fn bga_resource_load_progress(
+    status: BgaImageLoadStatus,
+    generation: u64,
+    load_chart_id: Option<i64>,
+    active_chart_id: Option<i64>,
+    completed: u32,
+    total: u32,
+) -> f32 {
+    if load_chart_id != active_chart_id || active_chart_id.is_none() {
+        return 0.0;
+    }
+    match status {
+        BgaImageLoadStatus::Loading { generation: load_generation, chart_id }
+            if load_generation == generation && Some(chart_id) == active_chart_id =>
+        {
+            if total == 0 {
+                0.0
+            } else {
+                completed.min(total) as f32 / total as f32
+            }
+        }
+        status if status.is_ready_for(generation, active_chart_id.unwrap_or_default()) => 1.0,
+        _ => 0.0,
+    }
+}
+
+fn combined_resource_load_progress(audio: f32, bga: f32, bga_enabled: bool) -> f32 {
+    let audio = audio.clamp(0.0, 1.0);
+    if bga_enabled { (audio + bga.clamp(0.0, 1.0)) / 2.0 } else { audio }
+}
+
+fn bga_asset_manifests_match(preloaded: &[BgaAssetRef], active: &[BgaAssetRef]) -> bool {
+    if preloaded.len() != active.len() {
+        return false;
+    }
+    let mut preloaded = preloaded.iter().collect::<Vec<_>>();
+    let mut active = active.iter().collect::<Vec<_>>();
+    preloaded.sort_by_key(|asset| asset.id);
+    active.sort_by_key(|asset| asset.id);
+    preloaded.iter().zip(active).all(|(preloaded, active)| {
+        preloaded.id == active.id && preloaded.path == active.path && preloaded.kind == active.kind
+    })
+}
+
 fn skin_duration_ms(ms: i32) -> Duration {
     Duration::from_millis(ms.max(0) as u64)
 }
 
 fn result_input_duration_for_document(document: Option<&SkinDocument>) -> Duration {
     document.map(|document| skin_duration_ms(document.input)).unwrap_or_default()
+}
+
+fn result_panel_supported(document: &SkinDocument) -> bool {
+    document.result_panel_default.is_some()
+        && document
+            .destination
+            .iter()
+            .flat_map(destination_entry_values)
+            .any(|destination| destination.draw.contains("result_panel("))
 }
 
 #[cfg(test)]
@@ -17244,6 +21103,14 @@ fn physical_control_name(control: &PhysicalControl) -> Option<&str> {
     }
 }
 
+fn result_panel_for_control(control: &PhysicalControl) -> Option<i32> {
+    match physical_control_name(control)? {
+        "ArrowLeft" => Some(2),
+        "ArrowRight" => Some(1),
+        _ => None,
+    }
+}
+
 fn digit_to_replay_slot(physical_key: PhysicalKey) -> Option<u8> {
     match physical_key {
         PhysicalKey::Code(KeyCode::Digit1) => Some(0),
@@ -17278,6 +21145,16 @@ fn target_cycle_from_control(control: &str, bindings: &SelectKeyBindings) -> Opt
     }
 }
 
+fn select_option_lane_for_gamepad(
+    input: &ProfileInputConfig,
+    slots: crate::input::gamepad::GamepadSlotMap,
+    device: DeviceId,
+    control: &str,
+) -> Option<Lane> {
+    crate::config::play::lane_binding_for_chart_with_slots(input, KeyMode::K14, slots)
+        .resolve(device, &PhysicalControl::GamepadButton(control.to_string()))
+}
+
 struct SelectKeyBindings {
     start: Vec<String>,
     e_action_controls: Vec<(InputActionConfig, String)>,
@@ -17299,8 +21176,6 @@ struct SelectKeyBindings {
     key12_controls: Vec<String>,
     key13_controls: Vec<String>,
     key14_controls: Vec<String>,
-    hispeed_down_controls: Vec<String>,
-    hispeed_up_controls: Vec<String>,
     scratch_up_controls: Vec<String>,
     scratch_down_controls: Vec<String>,
     select_scratch_up_controls: Vec<String>,
@@ -17427,16 +21302,6 @@ impl SelectKeyBindings {
             actions_for(InputActionConfig::SelectSameFolder),
             "Numpad8",
         );
-        let hispeed_down_controls: Vec<String> =
-            [LaneConfig::Key1, LaneConfig::Key3, LaneConfig::Key5, LaneConfig::Key7]
-                .iter()
-                .flat_map(|&l| keys_for(l))
-                .collect();
-        let hispeed_up_controls: Vec<String> =
-            [LaneConfig::Key2, LaneConfig::Key4, LaneConfig::Key6]
-                .iter()
-                .flat_map(|&l| keys_for(l))
-                .collect();
         let mut scratch_up_controls = Vec::new();
         let mut scratch_down_controls = Vec::new();
         let mut select_scratch_up_controls = Vec::new();
@@ -17509,11 +21374,11 @@ impl SelectKeyBindings {
         );
         let bga_str = kb_bga_str.as_deref().unwrap_or("?");
         let option_hint = format!(
-            "F1 MENU  F5 RELOAD   \
+            "F1 MENU  F3 FOLDER/HASH  F5 RELOAD  F10 AUTOPLAY  F11 IR  N9 TEXT   \
              {start_str}:PLAY OPT  BACK:E2 OPT  {start_str}+BACK:DETAIL OPT  \
              {start_str}+K1/K2:1P ARR  {start_str}+2P K1/K2:2P ARR  {start_str}+K3/K4:GAUGE  \
              {start_str}+K5:HS-FIX  {start_str}+K6:DP OPT  {start_str}+K7:AUTOPLAY  \
-             {start_str}+BACK+{key2_str}:GAS  {start_str}+UP/DOWN:TARGET  {start_str}+{bga_str}:BGA  {start_str}+1..4:REPLAY"
+             {start_str}+BACK+{key2_str}:GAS  {start_str}+UP/DOWN:TARGET  {start_str}+{bga_str}:BGA  {start_str}+K4/K6:GREEN  {start_str}+K5/K7:TIMING  {start_str}+1..4:REPLAY"
         );
 
         Self {
@@ -17537,8 +21402,6 @@ impl SelectKeyBindings {
             key12_controls,
             key13_controls,
             key14_controls,
-            hispeed_down_controls,
-            hispeed_up_controls,
             scratch_up_controls,
             scratch_down_controls,
             select_scratch_up_controls,
@@ -17608,8 +21471,8 @@ impl SelectKeyBindings {
             merge_select_controls(key5_controls.clone(), key7_controls.clone()),
         );
         let back = merge_select_controls(actions_for(InputActionConfig::E2), key3_controls.clone());
-        let select_previous_controls = key6_controls.clone();
-        let select_next_controls = key4_controls.clone();
+        let select_previous_controls = key4_controls.clone();
+        let select_next_controls = key6_controls.clone();
         let target_previous_controls = key8_controls.clone();
         let target_next_controls = key9_controls.clone();
         let e_action_controls: Vec<(InputActionConfig, String)> = [
@@ -17674,20 +21537,11 @@ impl SelectKeyBindings {
         )
         .unwrap_or_else(|| "?".to_string());
         let option_hint = format!(
-            "F1 MENU  F5 RELOAD   \
+            "F1 MENU  F3 FOLDER/HASH  F5 RELOAD  F10 AUTOPLAY  F11 IR  N9 TEXT   \
              {start_str}:PLAY OPT  BACK:E2 OPT  {start_str}+BACK:DETAIL OPT  \
              {start_str}+K1/K2:1P ARR  {start_str}+K3:GAUGE  {start_str}+K5:HS-FIX  \
-             {start_str}+K8/K9:TARGET  {start_str}+{bga_str}:BGA  {start_str}+1..4:REPLAY"
+             {start_str}+K8/K9:TARGET  {start_str}+{bga_str}:BGA  {start_str}+K4/K6:GREEN  {start_str}+K5/K7:TIMING  {start_str}+1..4:REPLAY"
         );
-        let hispeed_down_controls = merge_select_controls(
-            key1_controls.clone(),
-            merge_select_controls(key3_controls.clone(), key5_controls.clone()),
-        );
-        let hispeed_up_controls = merge_select_controls(
-            key2_controls.clone(),
-            merge_select_controls(key4_controls.clone(), key6_controls.clone()),
-        );
-
         Self {
             start,
             e_action_controls,
@@ -17709,8 +21563,6 @@ impl SelectKeyBindings {
             key12_controls: Vec::new(),
             key13_controls: Vec::new(),
             key14_controls: Vec::new(),
-            hispeed_down_controls,
-            hispeed_up_controls,
             scratch_up_controls: Vec::new(),
             scratch_down_controls: Vec::new(),
             select_scratch_up_controls: Vec::new(),
@@ -17856,14 +21708,6 @@ impl SelectKeyBindings {
         self.e3_action_controls.iter().any(|k| k == control)
     }
 
-    fn is_hispeed_down_key(&self, control: &str) -> bool {
-        self.hispeed_down_controls.iter().any(|k| k == control)
-    }
-
-    fn is_hispeed_up_key(&self, control: &str) -> bool {
-        self.hispeed_up_controls.iter().any(|k| k == control)
-    }
-
     fn is_scratch_up(&self, control: &str) -> bool {
         self.scratch_up_controls.iter().any(|k| k == control)
     }
@@ -17986,9 +21830,11 @@ fn push_scratch_controls(
             push_scratch_control(down_controls, up_controls, control);
         }
         None => {
-            if is_scratch_up_control(&control) {
+            if is_scratch_up_control(&control) || is_legacy_keyboard_scratch_up_control(&control) {
                 push_scratch_control(up_controls, down_controls, control);
-            } else if is_scratch_down_control(&control) {
+            } else if is_scratch_down_control(&control)
+                || is_legacy_keyboard_scratch_down_control(&control)
+            {
                 push_scratch_control(down_controls, up_controls, control);
             } else {
                 push_unique_control(up_controls, control.clone());
@@ -17996,6 +21842,18 @@ fn push_scratch_controls(
             }
         }
     }
+}
+
+/// scratch direction が保存されていなかった旧 keyboard 設定の既定方向。
+///
+/// 旧 profile は `scratch` フィールドなしで Shift / Control を保存していたため、
+/// 方向を推測できないまま両方の選曲移動へ登録されていた。
+fn is_legacy_keyboard_scratch_up_control(control: &str) -> bool {
+    matches!(control, "LShift" | "RShift")
+}
+
+fn is_legacy_keyboard_scratch_down_control(control: &str) -> bool {
+    matches!(control, "LControl" | "RControl")
 }
 
 fn push_scratch_control(
@@ -18129,10 +21987,253 @@ mod tests {
     use crate::config::profile_config::ProfileConfig;
     use crate::screens::select_model::{SelectChartRow, SelectCourseRow};
     use crate::skin_loader::default_skin_root;
-    use crate::storage::library_db::ChartListItem;
     use crate::storage::score_db::BestScoreSummary;
 
     use super::*;
+
+    #[test]
+    fn winit_app_stack_size_stays_bounded() {
+        let size = std::mem::size_of::<WinitApp>();
+        assert!(size < 64 * 1024, "WinitApp is {size} bytes");
+    }
+
+    #[test]
+    fn gpu_upload_channels_apply_backpressure_at_the_configured_capacity() {
+        let (bga_tx, _bga_rx) = bounded_gpu_upload_channel::<u8>(MAX_PENDING_BGA_TEXTURE_UPLOADS);
+        for value in 0..MAX_PENDING_BGA_TEXTURE_UPLOADS {
+            bga_tx.try_send(value as u8).expect("BGA queue should accept its capacity");
+        }
+        assert!(matches!(bga_tx.try_send(255), Err(mpsc::TrySendError::Full(255))));
+
+        let (skin_tx, _skin_rx) = bounded_gpu_upload_channel::<u8>(MAX_PENDING_SKIN_UPLOADS);
+        for value in 0..MAX_PENDING_SKIN_UPLOADS {
+            skin_tx.try_send(value as u8).expect("skin queue should accept its capacity");
+        }
+        assert!(matches!(skin_tx.try_send(255), Err(mpsc::TrySendError::Full(255))));
+    }
+
+    #[test]
+    fn operating_time_is_applied_to_select_snapshot() {
+        let mut scene = AppSceneSnapshot::Select(SelectSnapshot::default());
+
+        apply_operating_time_ms_to_scene(&mut scene, 90_061_234);
+
+        let AppSceneSnapshot::Select(snapshot) = scene else {
+            panic!("expected select snapshot");
+        };
+        assert_eq!(snapshot.operating_time_ms, 90_061_234);
+    }
+
+    #[test]
+    fn skin_fps_updates_only_after_each_one_second_window() {
+        let started_at = Instant::now();
+        let mut fps = SkinFpsCounter::new(started_at);
+
+        for elapsed_ms in [0, 250, 500, 750] {
+            fps.record_frame(started_at + Duration::from_millis(elapsed_ms));
+            assert_eq!(fps.current(), 0);
+        }
+
+        fps.record_frame(started_at + Duration::from_secs(1));
+        assert_eq!(fps.current(), 5);
+        assert_eq!(
+            fps_overlay_text(true, fps.current(), Localizer::new(crate::i18n::AppLocale::Ja),),
+            "FPS 5"
+        );
+        fps.record_frame(started_at + Duration::from_millis(1_250));
+        assert_eq!(fps.current(), 5);
+        fps.record_frame(started_at + Duration::from_secs(2));
+        assert_eq!(fps.current(), 2);
+    }
+
+    #[test]
+    fn frame_pacer_waits_for_every_light_frame_without_alternating() {
+        let started_at = Instant::now();
+        let budget = frame_budget(120);
+        let work = Duration::from_micros(500);
+        let mut pacer = FramePacer::default();
+
+        assert_eq!(pacer.delay(started_at, 120, false), Duration::ZERO);
+        pacer.record_frame_started(started_at, 120, false);
+
+        let mut previous_frame = started_at;
+        for _ in 0..4 {
+            let redraw_arrived_at = previous_frame + work;
+            let delay = pacer.delay(redraw_arrived_at, 120, false);
+            assert_eq!(delay, budget - work);
+
+            let frame_started = redraw_arrived_at + delay;
+            assert_eq!(frame_started.duration_since(previous_frame), budget);
+            pacer.record_frame_started(frame_started, 120, false);
+            previous_frame = frame_started;
+        }
+    }
+
+    #[test]
+    fn frame_pacer_exposes_the_next_deadline_without_blocking() {
+        let started_at = Instant::now();
+        let budget = frame_budget(120);
+        let work = Duration::from_micros(500);
+        let mut pacer = FramePacer::default();
+        pacer.record_frame_started(started_at, 120, false);
+
+        assert_eq!(pacer.next_deadline(started_at + work, 120, false), Some(started_at + budget));
+        assert_eq!(pacer.next_deadline(started_at + budget, 120, false), None);
+        assert_eq!(pacer.next_deadline(started_at + work, 120, true), None);
+        assert_eq!(pacer.next_deadline(started_at + work, 0, false), None);
+    }
+
+    #[test]
+    fn frame_pacer_rebases_after_a_missed_deadline() {
+        let started_at = Instant::now();
+        let budget = frame_budget(120);
+        let work = Duration::from_micros(500);
+        let mut pacer = FramePacer::default();
+        pacer.record_frame_started(started_at, 120, false);
+
+        let late_frame = started_at + budget + budget;
+        assert_eq!(pacer.delay(late_frame, 120, false), Duration::ZERO);
+        pacer.record_frame_started(late_frame, 120, false);
+
+        let next_redraw = late_frame + work;
+        assert_eq!(pacer.delay(next_redraw, 120, false), budget - work);
+    }
+
+    #[test]
+    fn frame_pacer_rebases_when_fps_changes_or_wait_is_skipped() {
+        let started_at = Instant::now();
+        let work = Duration::from_micros(500);
+        let mut pacer = FramePacer::default();
+        pacer.record_frame_started(started_at, 120, false);
+
+        let fps_changed_at = started_at + work;
+        assert_eq!(pacer.delay(fps_changed_at, 60, false), Duration::ZERO);
+        pacer.record_frame_started(fps_changed_at, 60, false);
+        assert_eq!(pacer.delay(fps_changed_at + work, 60, false), frame_budget(60) - work);
+
+        let skipped_at = fps_changed_at + Duration::from_millis(2);
+        assert_eq!(pacer.delay(skipped_at, 60, true), Duration::ZERO);
+        pacer.record_frame_started(skipped_at, 60, true);
+        assert_eq!(pacer.delay(skipped_at + work, 60, false), frame_budget(60) - work);
+
+        pacer.record_frame_started(skipped_at + work, 0, false);
+        assert_eq!(pacer.delay(skipped_at + work, 0, false), Duration::ZERO);
+        assert_eq!(pacer.delay(skipped_at + work, 120, false), Duration::ZERO);
+    }
+
+    #[test]
+    fn fps_overlay_text_uses_skin_fps_value() {
+        let text = Localizer::new(crate::i18n::AppLocale::Ja);
+        assert_eq!(fps_overlay_text(true, 237, text), "FPS 237");
+        assert_eq!(fps_overlay_text(false, 237, text), "");
+        assert_eq!(fps_overlay_text(true, 0, text), "");
+    }
+
+    #[test]
+    fn player_name_and_fps_are_applied_to_every_scene() {
+        let mut scenes = [
+            AppSceneSnapshot::Select(SelectSnapshot::default()),
+            AppSceneSnapshot::Play(RenderSnapshot::default()),
+            bmz_render::sample::sample_result_scene(),
+        ];
+
+        for scene in &mut scenes {
+            apply_skin_runtime_info_to_scene(scene, "Test Player", 237);
+            match scene {
+                AppSceneSnapshot::Select(snapshot) => {
+                    assert_eq!(snapshot.player_name, "Test Player");
+                    assert_eq!(snapshot.current_fps, 237);
+                }
+                AppSceneSnapshot::Decide(snapshot) | AppSceneSnapshot::Play(snapshot) => {
+                    assert_eq!(snapshot.player_name, "Test Player");
+                    assert_eq!(snapshot.current_fps, 237);
+                }
+                AppSceneSnapshot::Result(snapshot) => {
+                    assert_eq!(snapshot.player_name, "Test Player");
+                    assert_eq!(snapshot.current_fps, 237);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn course_decide_title_override_does_not_replace_play_snapshot_title() {
+        let transition = DecideTransition {
+            chart_id: 1,
+            options: PlayStartOptions::default(),
+            started_at: Instant::now(),
+            fadeout_started_at: None,
+            cancel: false,
+            snapshot: RenderSnapshot {
+                title: "Song Title".to_string(),
+                subtitle: "Song Subtitle".to_string(),
+                ..RenderSnapshot::default()
+            },
+            title_override: Some(DecideTitleOverride {
+                title: "Course Title".to_string(),
+                subtitle: String::new(),
+            }),
+        };
+
+        let decide_snapshot = transition.snapshot_for_render();
+
+        assert_eq!(decide_snapshot.title, "Course Title");
+        assert_eq!(decide_snapshot.subtitle, "");
+        assert_eq!(transition.snapshot.title, "Song Title");
+        assert_eq!(transition.snapshot.subtitle, "Song Subtitle");
+    }
+
+    #[test]
+    fn course_play_snapshot_uses_fallback_metadata_when_chart_row_is_absent() {
+        let mut chart = select_chart_row(7).chart.unwrap();
+        chart.title = "Resolved Song".to_string();
+        chart.subtitle = "Resolved Subtitle".to_string();
+        let items = vec![SelectItem::Course(select_course_row(1, 1))];
+        let (chart, best_ex_score) = chart_snapshot_metadata_for_chart(&items, 7, |chart_id| {
+            assert_eq!(chart_id, 7);
+            Some(chart)
+        })
+        .expect("library chart metadata");
+        let mut snapshot = RenderSnapshot::default();
+
+        apply_chart_metadata_to_snapshot(&mut snapshot, &chart, 123, best_ex_score);
+
+        assert_eq!(snapshot.title, "Resolved Song");
+        assert_eq!(snapshot.subtitle, "Resolved Subtitle");
+        assert_eq!(snapshot.total_notes, 123);
+        assert_eq!(snapshot.best_ex_score, None);
+    }
+
+    #[test]
+    fn chart_snapshot_metadata_preserves_selected_chart_best_score() {
+        let mut row = select_chart_row(7);
+        row.best_score = Some(best_score_with_replay(456, "best.json"));
+        let items = vec![SelectItem::Chart(row)];
+
+        let (chart, best_ex_score) = chart_snapshot_metadata_for_chart(&items, 7, |_| {
+            panic!("selected chart metadata should take priority")
+        })
+        .expect("selected chart metadata");
+
+        assert_eq!(chart.title, "Title 7");
+        assert_eq!(best_ex_score, Some(456));
+    }
+
+    #[test]
+    fn active_play_visual_offset_sync_preserves_auto_adjusted_value() {
+        let mut profile = ProfileConfig::new_default("default", "Default", 1);
+
+        sync_active_play_visual_offset_to_profile(&mut profile, 1_000, true);
+
+        assert_eq!(profile.judge.visual_offset_us, 1_000);
+        assert_eq!(
+            crate::config::play::play_offsets_from_profile(&profile).visual_offset_us,
+            1_000
+        );
+
+        sync_active_play_visual_offset_to_profile(&mut profile, 2_000, false);
+        assert_eq!(profile.judge.visual_offset_us, 1_000);
+    }
 
     fn app_test_chart() -> bmz_chart::model::PlayableChart {
         bmz_chart::model::PlayableChart {
@@ -18167,6 +22268,50 @@ mod tests {
         }
     }
 
+    fn app_test_bga_asset(
+        id: u32,
+        path: &str,
+        kind: bmz_chart::model::BgaAssetKind,
+    ) -> BgaAssetRef {
+        BgaAssetRef { id: BgaAssetId(id), path: path.into(), kind }
+    }
+
+    #[test]
+    fn bga_asset_manifest_matches_id_path_and_kind_regardless_of_order() {
+        use bmz_chart::model::BgaAssetKind::{Static, Video};
+
+        let preloaded = vec![
+            app_test_bga_asset(0, "base.png", Static),
+            app_test_bga_asset(1, "layer.mp4", Video),
+        ];
+        let active = vec![
+            app_test_bga_asset(1, "layer.mp4", Video),
+            app_test_bga_asset(0, "base.png", Static),
+        ];
+
+        assert!(bga_asset_manifests_match(&preloaded, &active));
+    }
+
+    #[test]
+    fn bga_asset_manifest_rejects_changed_id_path_or_kind() {
+        use bmz_chart::model::BgaAssetKind::{Static, Video};
+
+        let preloaded = vec![app_test_bga_asset(0, "base.png", Static)];
+
+        assert!(!bga_asset_manifests_match(
+            &preloaded,
+            &[app_test_bga_asset(1, "base.png", Static)],
+        ));
+        assert!(!bga_asset_manifests_match(
+            &preloaded,
+            &[app_test_bga_asset(0, "poor.png", Static)],
+        ));
+        assert!(!bga_asset_manifests_match(
+            &preloaded,
+            &[app_test_bga_asset(0, "base.png", Video)],
+        ));
+    }
+
     #[test]
     fn bga_images_ready_gate_waits_for_current_terminal_load() {
         assert!(!bga_images_ready_for_ready_phase(
@@ -18193,6 +22338,12 @@ mod tests {
             Some(42),
             true,
         ));
+
+        let (reused_generation, reused_status) = WinitApp::reused_bga_load_state(7, 42);
+        assert_eq!(reused_generation, 8);
+        assert!(
+            bga_images_ready_for_ready_phase(reused_status, reused_generation, Some(42), true,)
+        );
     }
 
     #[test]
@@ -18221,6 +22372,54 @@ mod tests {
             Some(42),
             true,
         ));
+    }
+
+    #[test]
+    fn resource_load_progress_combines_audio_and_enabled_bga_like_beatoraja() {
+        assert_eq!(resource_load_progress_units(0, 4), 0);
+        assert_eq!(resource_load_progress_units(1, 4), 250_000);
+        assert_eq!(resource_load_progress_units(4, 4), RESOURCE_LOAD_PROGRESS_SCALE);
+        assert_eq!(resource_load_progress_units(0, 0), RESOURCE_LOAD_PROGRESS_SCALE);
+
+        assert!((combined_resource_load_progress(0.25, 0.75, true) - 0.5).abs() < f32::EPSILON);
+        assert!((combined_resource_load_progress(0.25, 0.75, false) - 0.25).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn bga_resource_load_progress_tracks_current_manifest() {
+        assert_eq!(
+            bga_resource_load_progress(
+                BgaImageLoadStatus::loading(7, 42),
+                7,
+                Some(42),
+                Some(42),
+                1,
+                4,
+            ),
+            0.25
+        );
+        assert_eq!(
+            bga_resource_load_progress(
+                BgaImageLoadStatus::ready(7, 42),
+                7,
+                Some(42),
+                Some(42),
+                0,
+                0,
+            ),
+            1.0
+        );
+        assert_eq!(
+            bga_resource_load_progress(
+                BgaImageLoadStatus::ready(6, 42),
+                7,
+                Some(42),
+                Some(42),
+                4,
+                4,
+            ),
+            0.0
+        );
     }
 
     #[test]
@@ -18430,6 +22629,136 @@ mod tests {
     }
 
     #[test]
+    fn pending_play_uses_preload_input_before_session_install() {
+        use bmz_core::input::InputKind;
+        use bmz_gameplay::input::backend::InputBackend;
+
+        let preload_input = SharedInputBackend::default();
+        assert!(play_input_backend_for_context(None, false, None, Some(&preload_input)).is_none());
+
+        let selected =
+            play_input_backend_for_context(None, true, None, Some(&preload_input)).unwrap();
+        crate::input::winit::handle_key_parts(
+            &selected,
+            PhysicalKey::Code(KeyCode::KeyZ),
+            ElementState::Pressed,
+            false,
+        );
+
+        let events = preload_input.clone().drain_events();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].kind, InputKind::Press);
+    }
+
+    #[test]
+    fn pending_play_input_updates_keybeam_before_session_install() {
+        let profile = ProfileConfig::new_default("default", "Default", 1);
+        let binding = crate::config::play::lane_binding_for_chart_with_slots(
+            &profile.input,
+            KeyMode::K7,
+            Default::default(),
+        );
+        let mut visual = PendingPlayVisualInput::new(KeyMode::K7, binding, false);
+        let press = physical_key_to_device_input(
+            PhysicalKey::Code(KeyCode::KeyZ),
+            ElementState::Pressed,
+            false,
+        )
+        .unwrap();
+
+        visual.apply_event(&press, TimeUs(100_000));
+        let mut snapshot = RenderSnapshot::default();
+        crate::screens::play_snapshot::refresh_pending_play_input_visuals(
+            &mut snapshot,
+            visual.key_mode,
+            visual.lane_keyon_started_at,
+            visual.lane_keyoff_started_at,
+            visual.lane_scratch_angle_delta_ms,
+            TimeUs(150_000),
+        );
+
+        assert_eq!(snapshot.keyon_ms[Lane::Key1.index()], Some(50));
+        assert_eq!(snapshot.keyoff_ms[Lane::Key1.index()], None);
+
+        let release = physical_key_to_device_input(
+            PhysicalKey::Code(KeyCode::KeyZ),
+            ElementState::Released,
+            false,
+        )
+        .unwrap();
+        visual.apply_event(&release, TimeUs(160_000));
+        crate::screens::play_snapshot::refresh_pending_play_input_visuals(
+            &mut snapshot,
+            visual.key_mode,
+            visual.lane_keyon_started_at,
+            visual.lane_keyoff_started_at,
+            visual.lane_scratch_angle_delta_ms,
+            TimeUs(175_000),
+        );
+        assert_eq!(snapshot.keyon_ms[Lane::Key1.index()], None);
+        assert_eq!(snapshot.keyoff_ms[Lane::Key1.index()], Some(15));
+    }
+
+    #[test]
+    fn pending_play_input_state_hands_off_without_resetting_keybeam_timer() {
+        let profile = ProfileConfig::new_default("default", "Default", 1);
+        let binding = crate::config::play::lane_binding_for_chart_with_slots(
+            &profile.input,
+            KeyMode::K7,
+            Default::default(),
+        );
+        let mut visual = PendingPlayVisualInput::new(KeyMode::K7, binding, false);
+        let press = physical_key_to_device_input(
+            PhysicalKey::Code(KeyCode::KeyZ),
+            ElementState::Pressed,
+            false,
+        )
+        .unwrap();
+        visual.apply_event(&press, TimeUs(100_000));
+        let input = SharedInputBackend::default();
+        input.push_shared_event(press);
+        let mut session = crate::screens::play_session::build_game_session(
+            std::sync::Arc::new(app_test_chart()),
+            &profile,
+            crate::screens::play_session::PlaySessionOptions::default(),
+        );
+
+        handoff_pending_play_visual_input(&mut session, &input, &visual);
+        let mut snapshot =
+            RenderSnapshot { play_elapsed_time: TimeUs(150_000), ..Default::default() };
+        crate::screens::play_snapshot::refresh_play_skin_visuals_with_input_elapsed(
+            &mut snapshot,
+            &session,
+            TimeUs(150_000),
+        );
+
+        assert_eq!(session.lane_keyon_started_at[Lane::Key1.index()], Some(TimeUs(100_000)));
+        assert_eq!(snapshot.keyon_ms[Lane::Key1.index()], Some(50));
+        assert!(input.clone().drain_events().is_empty());
+    }
+
+    #[test]
+    fn pending_play_input_suppresses_human_keybeam_for_full_autoplay() {
+        let profile = ProfileConfig::new_default("default", "Default", 1);
+        let binding = crate::config::play::lane_binding_for_chart_with_slots(
+            &profile.input,
+            KeyMode::K7,
+            Default::default(),
+        );
+        let mut visual = PendingPlayVisualInput::new(KeyMode::K7, binding, true);
+        let press = physical_key_to_device_input(
+            PhysicalKey::Code(KeyCode::KeyZ),
+            ElementState::Pressed,
+            false,
+        )
+        .unwrap();
+
+        visual.apply_event(&press, TimeUs(100_000));
+
+        assert_eq!(visual.lane_keyon_started_at[Lane::Key1.index()], None);
+    }
+
+    #[test]
     fn raw_input_blocking_drops_new_presses_but_keeps_release_for_tracked_keys() {
         let key = PhysicalKey::Code(KeyCode::KeyZ);
         let mut pressed_keys = HashSet::new();
@@ -18453,17 +22782,27 @@ mod tests {
     #[test]
     fn releasing_raw_input_pressed_keys_enqueues_release_events() {
         use bmz_core::input::InputKind;
-        use bmz_gameplay::input::backend::InputBackend;
 
-        let input = SharedInputBackend::default();
         let mut pressed_keys = HashSet::from([PhysicalKey::Code(KeyCode::KeyZ)]);
 
-        release_raw_input_pressed_keys(&input, &mut pressed_keys);
+        let events = raw_input_release_events(&mut pressed_keys);
 
         assert!(pressed_keys.is_empty());
-        let events = input.clone().drain_events();
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].kind, InputKind::Release);
+    }
+
+    #[test]
+    fn gamepad_output_is_discarded_while_unfocused_and_once_after_regain() {
+        let mut discard_until_resynced = true;
+
+        assert!(should_discard_gamepad_output(false, &mut discard_until_resynced));
+        assert!(discard_until_resynced);
+        assert!(should_discard_gamepad_output(true, &mut discard_until_resynced));
+        assert!(!discard_until_resynced);
+        assert!(!should_discard_gamepad_output(true, &mut discard_until_resynced));
+        assert!(!should_route_gamepad_event_while_discarding(true));
+        assert!(should_route_gamepad_event_while_discarding(false));
     }
 
     #[test]
@@ -18494,6 +22833,33 @@ mod tests {
         assert!(!summary.graph.early_late_graph_buckets.is_empty());
         assert!(!summary.graph.timing_points.is_empty());
         assert!(summary.graph.timing_distribution.total() > 0);
+    }
+
+    #[test]
+    fn result_lua_runtime_values_cover_load_time_result_decisions() {
+        let mut summary = debug_boot_result_summary();
+        let graph = Arc::make_mut(&mut summary.graph);
+        graph.timing_distribution = bmz_render::snapshot::ResultTimingDistribution::new(150);
+        graph.timing_distribution.add(-13);
+        graph.timing_distribution.add(-12);
+
+        let values = result_lua_runtime_number_values_for_summary(&summary);
+
+        assert_eq!(values.get(&150), Some(&760));
+        assert_eq!(values.get(&170), Some(&760));
+        assert_eq!(values.get(&171), Some(&(summary.ex_score as i32)));
+        assert_eq!(values.get(&121), Some(&1_056));
+        assert_eq!(values.get(&151), Some(&1_056));
+        assert_eq!(values.get(&152), Some(&((summary.ex_score as i32).saturating_sub(760))));
+        assert_eq!(values.get(&153), Some(&((summary.ex_score as i32).saturating_sub(1_056))));
+        assert_eq!(values.get(&370), Some(&(ClearType::Failed as i32)));
+        assert_eq!(values.get(&371), Some(&(ClearType::Normal as i32)));
+        assert_eq!(values.get(&374), Some(&-12));
+        assert_eq!(values.get(&375), Some(&-50));
+        assert_eq!(values.get(&410), Some(&128));
+        assert_eq!(values.get(&422), Some(&2));
+        assert_eq!(values.get(&423), Some(&46));
+        assert_eq!(values.get(&424), Some(&104));
     }
 
     #[test]
@@ -18645,6 +23011,25 @@ mod tests {
     }
 
     #[test]
+    fn skin_catalog_loads_luxez_flat_select_lua_header_when_available() {
+        let repo_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let skin_root = repo_root.join("data/skins");
+        let path = skin_root.join("Luxez-Flat/music_select.luaskin");
+        if !path.is_file() {
+            return;
+        }
+
+        let (skin_type, candidate) =
+            load_skin_candidate(&skin_root, &path, SkinCandidateOrigin::Bundled)
+                .expect("load Luxez-Flat catalog candidate");
+
+        assert_eq!(skin_type, 5);
+        assert_eq!(candidate.path, "resource:skins/Luxez-Flat/music_select.luaskin");
+        assert_eq!(candidate.origin, SkinCandidateOrigin::Bundled);
+        assert!(!candidate.name.trim().is_empty(), "candidate name should not be empty");
+    }
+
+    #[test]
     fn skin_catalog_maps_play_key_modes_by_exact_skin_type() {
         let mut catalog = SkinCatalog::default();
         push_skin_candidate(
@@ -18751,6 +23136,41 @@ mod tests {
     }
 
     #[test]
+    fn skin_catalog_loads_modern_chic_headers_when_available() {
+        let repo_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let skin_root = repo_root.join("data/skins");
+        let root = skin_root.join("ModernChic");
+        if !root.is_dir() {
+            return;
+        }
+        let cases = [
+            ("musicselect.luaskin", 5),
+            ("decide.luaskin", 6),
+            ("play5_hw.luaskin", 1),
+            ("play7_hw.luaskin", 0),
+            ("play10_hw.luaskin", 3),
+            ("play14_hw.luaskin", 2),
+            ("result.luaskin", 7),
+            ("course.luaskin", 15),
+        ];
+
+        for (file_name, expected_type) in cases {
+            let path = root.join(file_name);
+            let loaded = bmz_skin::load_lua_skin_header_value(&path)
+                .unwrap_or_else(|error| panic!("load {} header: {error:#}", path.display()));
+            let document: SkinDocument = serde_json::from_value(loaded.value)
+                .unwrap_or_else(|error| panic!("decode {} header: {error:#}", path.display()));
+            assert_eq!(document.skin_type, expected_type, "{}", path.display());
+
+            let (skin_type, candidate) =
+                load_skin_candidate(&skin_root, &path, SkinCandidateOrigin::Bundled)
+                    .unwrap_or_else(|| panic!("load {} catalog candidate", path.display()));
+            assert_eq!(skin_type, expected_type, "{}", path.display());
+            assert!(candidate.name.contains("ModernChic"), "candidate name: {}", candidate.name);
+        }
+    }
+
+    #[test]
     fn course_result_summary_for_skin_uses_aggregate_course_values() {
         fn entry_summary(
             ex_score: u32,
@@ -18760,7 +23180,9 @@ mod tests {
         ) -> ResultSummary {
             ResultSummary {
                 clear_type: ClearType::NoPlay,
+                target_name: "RANK AAA".to_string(),
                 arrange: "NORMAL".to_string(),
+                arrange_2p: "NORMAL".to_string(),
                 lane_shuffle_pattern: Vec::new(),
                 ex_score,
                 max_combo,
@@ -18777,6 +23199,8 @@ mod tests {
                 total_gauge: 260.0,
                 judge_rank: Some(2),
                 key_mode: KeyMode::K7,
+                has_long_notes: false,
+                long_note_mode: bmz_chart::model::LongNoteMode::Ln,
                 judge_counts: crate::screens::result_model::ResultJudgeCounts {
                     pgreat: ex_score / 2,
                     ..Default::default()
@@ -18797,7 +23221,7 @@ mod tests {
                 previous_best_clear_type: None,
                 previous_best_max_combo: None,
                 previous_best_bp: None,
-                target_ex_score: None,
+                target_ex_score: Some(ex_score + 40),
                 target_max_combo: None,
                 target_bp: None,
                 target_clear_type: None,
@@ -18810,7 +23234,7 @@ mod tests {
                 genre: String::new(),
                 difficulty_name: String::new(),
                 play_level: String::new(),
-                graph: bmz_render::snapshot::ResultGraphSnapshot {
+                graph: Arc::new(bmz_render::snapshot::ResultGraphSnapshot {
                     gauge_points: vec![bmz_render::snapshot::ResultGaugeGraphPoint {
                         time_ms: duration_ms,
                         value: 80.0,
@@ -18831,11 +23255,11 @@ mod tests {
                         is_stop: false,
                     }],
                     ..Default::default()
-                },
+                }),
             }
         }
 
-        let course = CourseResultSummary {
+        let mut course = CourseResultSummary {
             course_id: 1,
             course_score_id: None,
             course_played_at: None,
@@ -18864,6 +23288,7 @@ mod tests {
             // Failed course results keep the full course notes as the rank/rate
             // denominator even when only a subset of entries produced summaries.
             total_notes: 400,
+            bp: 37,
             final_clear_type: ClearType::Hard,
             final_gauge_type: GaugeType::ExClass,
             final_gauge_value: 42.5,
@@ -18892,6 +23317,8 @@ mod tests {
                 max_combo: 180,
                 bp: 4,
                 cb: 2,
+                judge_counts: Default::default(),
+                fast_slow_counts: Default::default(),
                 course_failed: false,
                 course_clear: true,
                 play_count: 3,
@@ -18910,6 +23337,8 @@ mod tests {
                 max_combo: 150,
                 bp: 12,
                 cb: 8,
+                judge_counts: Default::default(),
+                fast_slow_counts: Default::default(),
                 course_failed: false,
                 course_clear: true,
                 play_count: 2,
@@ -18918,7 +23347,7 @@ mod tests {
             }),
         };
 
-        let summary = course_result_summary_for_skin(&course);
+        let mut summary = course_result_summary_for_skin(&course);
         assert_eq!(summary.title, "Course Title");
         assert_eq!(summary.genre, "DAN");
         assert_eq!(summary.clear_type, ClearType::Hard);
@@ -18926,6 +23355,7 @@ mod tests {
         assert_eq!(summary.gauge_value, 42.5);
         assert_eq!(summary.ex_score, 320);
         assert_eq!(summary.total_notes, 400);
+        assert_eq!(summary.bp, 37);
         assert!((summary.ex_score_rate() - 0.4).abs() < 0.001);
         assert_eq!(summary.max_combo, 170);
         assert_eq!(summary.score_history_id, 22);
@@ -18934,7 +23364,14 @@ mod tests {
         assert_eq!(summary.previous_best_ex_score, Some(300));
         assert_eq!(summary.previous_best_clear_type, Some(ClearType::Normal));
         assert_eq!(summary.previous_best_bp, Some(12));
-        assert_eq!(result_lua_runtime_number_values_for_summary(&summary).get(&178), Some(&-12));
+        assert_eq!(summary.target_ex_score, Some(400));
+        let number_values = result_lua_runtime_number_values_for_summary(&summary);
+        assert_eq!(number_values.get(&74), Some(&400));
+        assert_eq!(number_values.get(&110), Some(&160));
+        assert_eq!(number_values.get(&113), Some(&2));
+        assert_eq!(number_values.get(&426), Some(&0));
+        assert_eq!(number_values.get(&178), Some(&25));
+        assert_eq!(number_values.get(&425).copied(), Some(i32::try_from(summary.cb).unwrap()));
         assert_eq!(summary.replay_slots, [true, false, true, false]);
         assert_eq!(summary.saved_replay_slots, [false, false, true, false]);
         assert_eq!(summary.judge_counts.pgreat, 160);
@@ -18952,6 +23389,203 @@ mod tests {
         assert!((summary.graph.bpm_graph_segments[0].end_ratio - 1.0 / 3.0).abs() < 0.001);
         assert!((summary.graph.bpm_graph_segments[1].start_ratio - 1.0 / 3.0).abs() < 0.001);
         assert_eq!(summary.graph.bpm_graph_segments[1].end_ratio, 1.0);
+
+        summary.judge_rank = Some(3);
+        summary.long_note_mode = bmz_chart::model::LongNoteMode::Hcn;
+        summary.arrange = "RANDOM".to_string();
+        summary.arrange_2p = "MIRROR".to_string();
+        summary.target_name = "RANK AAA".to_string();
+        let mut runtime_state =
+            lua_runtime_state_for_result(false, None, true, KeyMode::K7, number_values, "Player");
+        apply_result_summary_lua_load_state(
+            &mut runtime_state,
+            &summary,
+            "Table",
+            "★12",
+            "Table ★12",
+        );
+        assert_eq!(runtime_state.text_values.get(&1).map(String::as_str), Some("RANK AAA"));
+        assert_eq!(runtime_state.text_values.get(&3).map(String::as_str), Some("RANK AAA"));
+        apply_course_result_lua_load_state(&mut runtime_state, &course);
+        assert_eq!(runtime_state.text_values.get(&10).map(String::as_str), Some("Course Title"));
+        assert_eq!(runtime_state.text_values.get(&12).map(String::as_str), Some("Course Title"));
+        assert_eq!(runtime_state.text_values.get(&1003).map(String::as_str), Some("Table ★12"));
+        assert_eq!(runtime_state.text_values.get(&150).map(String::as_str), Some("Stage 1"));
+        assert_eq!(runtime_state.option_values.get(&180), Some(&false));
+        assert_eq!(runtime_state.option_values.get(&183), Some(&true));
+        assert_eq!(runtime_state.option_values.get(&184), Some(&false));
+        assert_eq!(runtime_state.event_index_values.get(&308), Some(&2));
+        assert_eq!(runtime_state.event_index_values.get(&42), Some(&2));
+        assert_eq!(runtime_state.event_index_values.get(&43), Some(&1));
+        assert_eq!(
+            runtime_state.number_values.get(&bmz_render::skin::SKIN_REF_BMZ_COURSE_STAGE_COUNT),
+            Some(&2)
+        );
+        assert_eq!(
+            runtime_state
+                .number_values
+                .get(&(bmz_render::skin::SKIN_REF_BMZ_COURSE_STAGE_EX_BASE + 1)),
+            Some(&200)
+        );
+        assert_eq!(
+            runtime_state
+                .number_values
+                .get(&(bmz_render::skin::SKIN_REF_BMZ_COURSE_STAGE_GAUGE_BASE + 1)),
+            Some(&80)
+        );
+        let data: serde_json::Value = serde_json::from_str(
+            &runtime_state.virtual_io_files["skin/WMII_FHD/result/courseData.json"],
+        )
+        .unwrap();
+        assert_eq!(data["songs"].as_array().map(Vec::len), Some(2));
+        assert_eq!(data["songs"][1]["score"], serde_json::json!(200));
+
+        mark_course_replay_slot_saved(&mut course, Some(&mut summary), 1);
+        assert_eq!(course.replay_slots, [true, true, true, false]);
+        assert_eq!(course.saved_replay_slots, [false, true, true, false]);
+        assert_eq!(summary.replay_slots, course.replay_slots);
+        assert_eq!(summary.saved_replay_slots, course.saved_replay_slots);
+    }
+
+    #[test]
+    fn course_entry_title_hints_are_hydrated_for_unplayed_stages() {
+        let mut definition = bmz_core::course::CourseDefinition {
+            key: "course".to_string(),
+            title: "Course".to_string(),
+            kind: bmz_core::course::CourseKind::Course,
+            entries: vec![
+                bmz_core::course::CourseEntry {
+                    title_hint: String::new(),
+                    md5: None,
+                    sha256: None,
+                    chart_id: Some(10),
+                },
+                bmz_core::course::CourseEntry {
+                    title_hint: "stale".to_string(),
+                    md5: None,
+                    sha256: None,
+                    chart_id: Some(20),
+                },
+                bmz_core::course::CourseEntry {
+                    title_hint: "Missing".to_string(),
+                    md5: None,
+                    sha256: None,
+                    chart_id: None,
+                },
+            ],
+            constraints: bmz_core::course::CourseConstraints::default(),
+            trophies: Vec::new(),
+            release: true,
+        };
+        apply_course_entry_title_hints(
+            &mut definition,
+            &HashMap::from([(10, "Resolved One".to_string()), (20, "Resolved Two".to_string())]),
+        );
+
+        assert_eq!(definition.entries[0].title_hint, "Resolved One");
+        assert_eq!(definition.entries[1].title_hint, "Resolved Two");
+        assert_eq!(definition.entries[2].title_hint, "Missing");
+    }
+
+    #[test]
+    fn result_lua_runtime_state_exposes_ir_connection_options() {
+        let online = lua_runtime_state_for_result(
+            false,
+            Some("BMZ IR"),
+            true,
+            KeyMode::K7,
+            BTreeMap::new(),
+            "Player",
+        );
+        assert_eq!(online.option_values.get(&50), Some(&false));
+        assert_eq!(online.option_values.get(&51), Some(&true));
+        assert_eq!(online.option_values.get(&60), Some(&false));
+        assert_eq!(online.option_values.get(&61), Some(&true));
+        assert_eq!(online.option_values.get(&160), Some(&true));
+        assert_eq!(online.option_values.get(&161), Some(&false));
+        assert_eq!(online.text_values.get(&1020).map(String::as_str), Some("BMZ IR"));
+
+        let offline = lua_runtime_state_for_result(
+            false,
+            None,
+            false,
+            KeyMode::K5,
+            BTreeMap::new(),
+            "Player",
+        );
+        assert_eq!(offline.option_values.get(&50), Some(&true));
+        assert_eq!(offline.option_values.get(&51), Some(&false));
+        assert_eq!(offline.option_values.get(&60), Some(&true));
+        assert_eq!(offline.option_values.get(&61), Some(&false));
+        assert_eq!(offline.option_values.get(&160), Some(&false));
+        assert_eq!(offline.option_values.get(&161), Some(&true));
+        assert_eq!(offline.text_values.get(&1020).map(String::as_str), Some(""));
+    }
+
+    #[test]
+    fn result_judge_rank_options_match_beatoraja_ranges() {
+        for (rank, expected) in [
+            (Some(0), Some(180)),
+            (Some(34), Some(180)),
+            (Some(1), Some(181)),
+            (Some(59), Some(181)),
+            (Some(2), Some(182)),
+            (Some(84), Some(182)),
+            (Some(3), Some(183)),
+            (Some(109), Some(183)),
+            (Some(4), Some(184)),
+            (Some(110), Some(184)),
+            (None, Some(182)),
+        ] {
+            assert_eq!(result_judge_rank_option_id(rank), expected, "rank {rank:?}");
+        }
+        assert_eq!(result_judge_rank_option_id(Some(9)), None);
+    }
+
+    #[test]
+    fn play_lua_runtime_state_exposes_play_mode_and_score_save_options() {
+        let normal =
+            lua_runtime_state_for_play(&PlayStartOptions::default(), false, KeyMode::K7, "Player");
+        assert_eq!(normal.text_values.get(&2).map(String::as_str), Some("Player"));
+        assert_eq!(normal.option_values.get(&61), Some(&true));
+        assert_eq!(normal.option_values.get(&82), Some(&true));
+        assert_eq!(normal.option_values.get(&84), Some(&false));
+        assert_eq!(normal.number_values.get(&SKIN_REF_BMZ_KEY_MODE), Some(&7));
+        assert_eq!(normal.number_values.get(&SKIN_REF_BMZ_ACTIVE_LANE_COUNT), Some(&8));
+        assert_eq!(normal.option_values.get(&(SKIN_OPTION_BMZ_KEY_MODE_BASE + 3)), Some(&true));
+        assert_eq!(normal.option_values.get(&SKIN_OPTION_BMZ_SINGLE_PLAY), Some(&true));
+
+        let autoplay = lua_runtime_state_for_play(
+            &PlayStartOptions { autoplay: true, ..PlayStartOptions::default() },
+            false,
+            KeyMode::K7,
+            "Player",
+        );
+        assert_eq!(autoplay.option_values.get(&33), Some(&true));
+        assert_eq!(autoplay.option_values.get(&60), Some(&true));
+        assert_eq!(autoplay.option_values.get(&82), Some(&false));
+
+        let replay = lua_runtime_state_for_play(
+            &PlayStartOptions {
+                replay_player: Some(bmz_gameplay::replay::ReplayPlayer::default()),
+                ..PlayStartOptions::default()
+            },
+            false,
+            KeyMode::K7,
+            "Player",
+        );
+        assert_eq!(replay.option_values.get(&33), Some(&false));
+        assert_eq!(replay.option_values.get(&84), Some(&true));
+
+        let practice = lua_runtime_state_for_play(
+            &PlayStartOptions { practice_mode: true, ..PlayStartOptions::default() },
+            false,
+            KeyMode::K7,
+            "Player",
+        );
+        assert_eq!(practice.option_values.get(&60), Some(&true));
+        assert_eq!(practice.option_values.get(&82), Some(&true));
+        assert_eq!(practice.option_values.get(&1080), Some(&true));
     }
 
     #[test]
@@ -18985,6 +23619,33 @@ mod tests {
         SelectKeyBindings::from_profile(&input)
     }
 
+    fn play_option_input_for(input: &ProfileInputConfig, key_mode: KeyMode) -> PlayOptionInput {
+        PlayOptionInput::new(
+            key_mode,
+            crate::config::play::lane_binding_for_chart(input, key_mode),
+            input,
+            crate::input::gamepad::GamepadSlotMap::default(),
+        )
+    }
+
+    fn keyboard_play_option(
+        control: &str,
+        e1_held: bool,
+        e2_held: bool,
+        _keys: &SelectKeyBindings,
+        play_input: &PlayOptionInput,
+        input: &ProfileInputConfig,
+    ) -> Option<PlayOptionControl> {
+        play_option_control_for_input(
+            W_KEYBOARD_DEVICE_ID,
+            &PhysicalControl::KeyboardKey(control.to_string()),
+            e1_held,
+            e2_held,
+            Some(play_input),
+            input,
+        )
+    }
+
     fn select_keys_with_full_2p_bindings() -> SelectKeyBindings {
         let mut input = crate::config::play_input::default_profile_input();
         let key = KeyMode::K14.play_map_key().to_string();
@@ -18993,6 +23654,7 @@ mod tests {
             crate::config::profile_config::PlayModeInputConfig {
                 inherit: None,
                 bindings: crate::config::play_input::default_play_14k_bindings(),
+                ..Default::default()
             },
         );
         let play14 = input.play.get_mut(&key).expect("14K bindings");
@@ -19056,6 +23718,40 @@ mod tests {
                 &keys
             ),
             Some(SelectAction::Move(SelectMove::Previous))
+        );
+    }
+
+    #[test]
+    fn select_option_gamepad_lane_distinguishes_same_buttons_by_device() {
+        let profile = ProfileConfig::new_default("default", "Default", 0);
+        let control = "Button1";
+
+        assert_eq!(
+            select_option_lane_for_gamepad(
+                &profile.input,
+                crate::input::gamepad::GamepadSlotMap::from_slot_ids([Some(0), Some(1)]),
+                DeviceId(16),
+                control,
+            ),
+            Some(Lane::Key1)
+        );
+        assert_eq!(
+            select_option_lane_for_gamepad(
+                &profile.input,
+                crate::input::gamepad::GamepadSlotMap::from_slot_ids([Some(0), Some(1)]),
+                DeviceId(17),
+                control,
+            ),
+            Some(Lane::Key8)
+        );
+        assert_eq!(
+            select_option_lane_for_gamepad(
+                &profile.input,
+                crate::input::gamepad::GamepadSlotMap::from_slot_ids([Some(1), Some(0)]),
+                DeviceId(16),
+                control,
+            ),
+            Some(Lane::Key8)
         );
     }
 
@@ -19541,6 +24237,31 @@ mod tests {
     }
 
     #[test]
+    fn play_skin_video_loaded_state_starts_with_ready_timer() {
+        let preload_state = play_skin_video_draw_state(
+            &RenderSnapshot {
+                resources_loaded: true,
+                ready_elapsed_time: None,
+                ..RenderSnapshot::default()
+            },
+            None,
+            None,
+        );
+        assert!(!preload_state.skin_loaded);
+
+        let ready_state = play_skin_video_draw_state(
+            &RenderSnapshot {
+                resources_loaded: true,
+                ready_elapsed_time: Some(TimeUs(0)),
+                ..RenderSnapshot::default()
+            },
+            None,
+            None,
+        );
+        assert!(ready_state.skin_loaded);
+    }
+
+    #[test]
     fn skin_video_source_gating_respects_conditional_destination_if_ops() {
         use bmz_render::skin::SkinDrawState;
 
@@ -19721,11 +24442,11 @@ mod tests {
 
         assert_eq!(
             select_action(PhysicalKey::Code(KeyCode::KeyF), ElementState::Pressed, false, &keys),
-            Some(SelectAction::Move(SelectMove::Previous))
+            Some(SelectAction::Move(SelectMove::Next))
         );
         assert_eq!(
             select_action(PhysicalKey::Code(KeyCode::KeyD), ElementState::Pressed, false, &keys),
-            Some(SelectAction::Move(SelectMove::Next))
+            Some(SelectAction::Move(SelectMove::Previous))
         );
         assert_eq!(
             select_action(PhysicalKey::Code(KeyCode::KeyC), ElementState::Pressed, false, &keys),
@@ -19905,6 +24626,63 @@ mod tests {
     }
 
     #[test]
+    fn select_option_panel_transition_plays_open_and_close_sounds() {
+        use crate::system_sound::SoundType;
+
+        assert_eq!(select_option_panel_sound_for_transition(0, 1), Some(SoundType::OptionOpen));
+        assert_eq!(select_option_panel_sound_for_transition(3, 0), Some(SoundType::OptionClose));
+        assert_eq!(select_option_panel_sound_for_transition(1, 2), None);
+        assert_eq!(select_option_panel_sound_for_transition(2, 3), None);
+        assert_eq!(select_option_panel_sound_for_transition(0, 0), None);
+    }
+
+    #[test]
+    fn select_option_panel_transition_tracks_independent_off_timers() {
+        let base = Instant::now();
+        let mut current = 1;
+        let mut on_started_at = base;
+        let mut off_started_at = [None; 6];
+
+        assert!(transition_select_option_panel(
+            &mut current,
+            &mut on_started_at,
+            &mut off_started_at,
+            2,
+            base + Duration::from_millis(100),
+        ));
+        assert_eq!(current, 2);
+        assert_eq!(off_started_at[0], Some(base + Duration::from_millis(100)));
+        assert_eq!(off_started_at[1], None);
+
+        assert!(transition_select_option_panel(
+            &mut current,
+            &mut on_started_at,
+            &mut off_started_at,
+            0,
+            base + Duration::from_millis(200),
+        ));
+        assert_eq!(off_started_at[0], Some(base + Duration::from_millis(100)));
+        assert_eq!(off_started_at[1], Some(base + Duration::from_millis(200)));
+
+        assert!(transition_select_option_panel(
+            &mut current,
+            &mut on_started_at,
+            &mut off_started_at,
+            1,
+            base + Duration::from_millis(300),
+        ));
+        assert_eq!(off_started_at[0], None);
+        assert_eq!(off_started_at[1], Some(base + Duration::from_millis(200)));
+        assert!(!transition_select_option_panel(
+            &mut current,
+            &mut on_started_at,
+            &mut off_started_at,
+            1,
+            base + Duration::from_millis(400),
+        ));
+    }
+
+    #[test]
     fn select_hold_state_rebuilds_from_pressed_controls() {
         let keys = default_select_keys();
         let pressed = HashSet::from(["Q".to_string(), "W".to_string()]);
@@ -19928,25 +24706,72 @@ mod tests {
     }
 
     #[test]
-    fn play_control_hold_state_rebuilds_from_pressed_controls() {
+    fn skin_logical_inputs_include_all_e_actions_and_ui_directions() {
         let keys = default_select_keys();
-        let pressed = HashSet::from(["Q".to_string(), "W".to_string(), "E".to_string()]);
+        let pressed = HashSet::from([
+            "Q".to_string(),
+            "W".to_string(),
+            "E".to_string(),
+            "R".to_string(),
+            "ArrowLeft".to_string(),
+            "DPadRight".to_string(),
+            "ArrowUp".to_string(),
+            "DPadDown".to_string(),
+        ]);
 
         assert_eq!(
-            play_control_hold_state_from_pressed_controls(&pressed, &keys),
+            skin_logical_input_snapshot_from_pressed_controls(&pressed, &keys).held,
+            [true; bmz_render::skin::SKIN_BMZ_INPUT_COUNT]
+        );
+    }
+
+    #[test]
+    fn play_control_hold_state_rebuilds_from_pressed_controls() {
+        let input = crate::config::play_input::default_profile_input();
+        let play_input = play_option_input_for(&input, KeyMode::K7);
+        let keyboard = |control: &str| {
+            (W_KEYBOARD_DEVICE_ID, PhysicalControl::KeyboardKey(control.to_string()))
+        };
+        let pressed = HashSet::from([keyboard("Q"), keyboard("W"), keyboard("E")]);
+
+        assert_eq!(
+            play_control_hold_state_from_pressed_inputs(&pressed, &play_input),
             (true, true, true)
         );
 
-        let pressed = HashSet::from(["Q".to_string()]);
+        let pressed = HashSet::from([keyboard("Q")]);
         assert_eq!(
-            play_control_hold_state_from_pressed_controls(&pressed, &keys),
+            play_control_hold_state_from_pressed_inputs(&pressed, &play_input),
             (true, false, false)
         );
 
-        let pressed = HashSet::from(["W".to_string()]);
+        let pressed = HashSet::from([keyboard("W")]);
         assert_eq!(
-            play_control_hold_state_from_pressed_controls(&pressed, &keys),
+            play_control_hold_state_from_pressed_inputs(&pressed, &play_input),
             (false, true, false)
+        );
+    }
+
+    #[test]
+    fn play_control_hold_state_keeps_legacy_and_default_e1_fallbacks() {
+        let mut legacy_input = crate::config::play_input::default_profile_input();
+        legacy_input.ui.bindings.retain(|entry| entry.action != Some(InputActionConfig::E1));
+        legacy_input.start_key = Some("E".to_string());
+        let legacy_play_input = play_option_input_for(&legacy_input, KeyMode::K7);
+        let legacy_pressed =
+            HashSet::from([(W_KEYBOARD_DEVICE_ID, PhysicalControl::KeyboardKey("E".to_string()))]);
+        assert_eq!(
+            play_control_hold_state_from_pressed_inputs(&legacy_pressed, &legacy_play_input),
+            (true, false, true)
+        );
+
+        legacy_input.start_key = None;
+        let fallback_play_input = play_option_input_for(&legacy_input, KeyMode::K7);
+        let fallback_pressed =
+            HashSet::from([(W_KEYBOARD_DEVICE_ID, PhysicalControl::KeyboardKey("Q".to_string()))]);
+        assert_eq!(
+            play_control_hold_state_from_pressed_inputs(&fallback_pressed, &fallback_play_input),
+            (true, false, false)
         );
     }
 
@@ -19959,51 +24784,26 @@ mod tests {
     }
 
     #[test]
-    fn play_skin_animation_elapsed_is_clamped_while_ready_is_blocked() {
-        assert_eq!(
-            clamped_play_skin_animation_elapsed_time(
-                TimeUs(4_000_000),
-                3_500_000,
-                false,
-                true,
-                false
-            ),
-            TimeUs(3_500_000)
-        );
-        assert_eq!(
-            clamped_play_skin_animation_elapsed_time(
-                TimeUs(4_000_000),
-                3_500_000,
-                false,
-                false,
-                true
-            ),
-            TimeUs(3_500_000)
-        );
+    fn play_ready_waits_one_second_after_last_e1_or_e2_hold() {
+        let last_control_hold_at = Instant::now();
+
+        assert!(play_ready_blocked_by_recent_control_hold(
+            Some(last_control_hold_at),
+            last_control_hold_at + Duration::from_millis(999)
+        ));
+        assert!(play_ready_blocked_by_recent_control_hold(
+            Some(last_control_hold_at),
+            last_control_hold_at + Duration::from_secs(1)
+        ));
+        assert!(!play_ready_blocked_by_recent_control_hold(
+            Some(last_control_hold_at),
+            last_control_hold_at + Duration::from_millis(1_001)
+        ));
     }
 
     #[test]
-    fn play_skin_animation_elapsed_advances_without_ready_block() {
-        assert_eq!(
-            clamped_play_skin_animation_elapsed_time(
-                TimeUs(4_000_000),
-                3_500_000,
-                false,
-                false,
-                false
-            ),
-            TimeUs(4_000_000)
-        );
-        assert_eq!(
-            clamped_play_skin_animation_elapsed_time(
-                TimeUs(4_000_000),
-                3_500_000,
-                true,
-                true,
-                false
-            ),
-            TimeUs(4_000_000)
-        );
+    fn play_ready_has_no_release_delay_without_prior_control_hold() {
+        assert!(!play_ready_blocked_by_recent_control_hold(None, Instant::now()));
     }
 
     #[test]
@@ -20012,6 +24812,7 @@ mod tests {
 
         assert!(play_fadeout_after_final_notes_control("Q", &keys));
         assert!(play_fadeout_after_final_notes_control("W", &keys));
+        assert!(!play_fadeout_after_final_notes_control("Escape", &keys));
         assert!(!play_fadeout_after_final_notes_control("Z", &keys));
     }
 
@@ -20027,6 +24828,14 @@ mod tests {
             bmz_gameplay::session::PlayState::Playing,
             true,
         ));
+        assert!(should_begin_play_fadeout_after_final_notes(
+            "Escape",
+            &keys,
+            true,
+            false,
+            bmz_gameplay::session::PlayState::Playing,
+            true,
+        ));
         assert!(!should_begin_play_fadeout_after_final_notes(
             "Q",
             &keys,
@@ -20034,6 +24843,22 @@ mod tests {
             false,
             bmz_gameplay::session::PlayState::Playing,
             true,
+        ));
+        assert!(!should_begin_play_fadeout_after_final_notes(
+            "Escape",
+            &keys,
+            true,
+            true,
+            bmz_gameplay::session::PlayState::Playing,
+            true,
+        ));
+        assert!(!should_begin_play_fadeout_after_final_notes(
+            "Escape",
+            &keys,
+            true,
+            false,
+            bmz_gameplay::session::PlayState::Playing,
+            false,
         ));
         assert!(!should_begin_play_fadeout_after_final_notes(
             "Q",
@@ -20104,6 +24929,20 @@ mod tests {
     }
 
     #[test]
+    fn settings_edit_mouse_wheel_uses_scroll_direction() {
+        assert_eq!(
+            settings_edit_direction_from_mouse_wheel(MouseScrollDelta::LineDelta(0.0, 1.0)),
+            1
+        );
+        assert_eq!(
+            settings_edit_direction_from_mouse_wheel(MouseScrollDelta::PixelDelta(
+                winit::dpi::PhysicalPosition::new(0.0, -12.0)
+            )),
+            -1
+        );
+    }
+
+    #[test]
     fn play_analog_lane_cover_delta_maps_scratch_bindings() {
         let gamepad_keys = SelectKeyBindings::from_profile(
             &ProfileConfig::new_default("default", "Default", 1).input,
@@ -20113,6 +24952,12 @@ mod tests {
         assert_eq!(play_analog_lane_cover_delta("Axis1", -4, &gamepad_keys), Some(4));
         assert_eq!(play_analog_lane_cover_delta("Axis2", -4, &gamepad_keys), None);
         assert_eq!(play_analog_lane_cover_delta("Axis1", 0, &gamepad_keys), None);
+    }
+
+    #[test]
+    fn play_analog_green_number_uses_opposite_direction_from_lane_cover() {
+        assert_eq!(green_number_change_from_analog_steps(1), GreenNumberChange::Up);
+        assert_eq!(green_number_change_from_analog_steps(-1), GreenNumberChange::Down);
     }
 
     #[test]
@@ -20516,24 +25361,60 @@ mod tests {
     }
 
     #[test]
+    fn result_exit_skip_waits_for_animation_and_holds_final_frame_once() {
+        let animation_duration = Duration::from_millis(1_000);
+        let fadeout = Duration::from_millis(3_000);
+
+        assert!(!result_exit_transition_ready(
+            Duration::from_millis(999),
+            fadeout,
+            animation_duration,
+            true,
+            false,
+        ));
+        assert!(!result_exit_transition_ready(
+            animation_duration,
+            fadeout,
+            animation_duration,
+            true,
+            false,
+        ));
+        assert!(result_exit_transition_ready(
+            animation_duration,
+            fadeout,
+            animation_duration,
+            true,
+            true,
+        ));
+    }
+
+    #[test]
+    fn result_exit_without_skip_still_waits_for_skin_fadeout() {
+        let fadeout = Duration::from_millis(3_000);
+        let animation_duration = Duration::from_millis(1_000);
+
+        assert!(!result_exit_transition_ready(
+            animation_duration,
+            fadeout,
+            animation_duration,
+            false,
+            false,
+        ));
+        assert!(result_exit_transition_ready(fadeout, fadeout, animation_duration, false, false,));
+    }
+
+    #[test]
     fn lane_skips_result_exit_matches_1p_and_2p_requested_keys() {
-        for lane in [
-            Lane::Key1,
-            Lane::Key3,
-            Lane::Key5,
-            Lane::Key7,
-            Lane::Key8,
-            Lane::Key10,
-            Lane::Key12,
-            Lane::Key14,
-        ] {
+        for lane in [Lane::Key1, Lane::Key3, Lane::Key8, Lane::Key10, Lane::Key12, Lane::Key14] {
             assert!(lane_skips_result_exit(lane), "{lane:?} should skip");
         }
         for lane in [
             Lane::Scratch,
             Lane::Key2,
             Lane::Key4,
+            Lane::Key5,
             Lane::Key6,
+            Lane::Key7,
             Lane::Key9,
             Lane::Key11,
             Lane::Key13,
@@ -20571,6 +25452,98 @@ mod tests {
             cycle_result_gauge_graph_type(GaugeType::ExHardClass as i32),
             GaugeType::Class as i32
         );
+    }
+
+    #[test]
+    fn result_skin_event_90_toggles_favorite_without_invisible_state() {
+        assert_eq!(result_skin_click_action(90), Some(ResultSkinClickAction::ToggleFavoriteChart));
+        assert_eq!(
+            result_skin_click_action(SKIN_EVENT_DAILY_STATISTICS_RESET),
+            Some(ResultSkinClickAction::ResetDailyStatistics)
+        );
+        assert_eq!(
+            result_skin_click_action(SKIN_EVENT_RESULT_PANEL_IR),
+            Some(ResultSkinClickAction::SetPanel(1))
+        );
+        assert_eq!(result_skin_click_action(91), None);
+    }
+
+    #[test]
+    fn result_skin_replay_events_map_all_four_slots() {
+        assert_eq!(result_skin_click_action(19), Some(ResultSkinClickAction::SaveReplay(0)));
+        assert_eq!(result_skin_click_action(316), Some(ResultSkinClickAction::SaveReplay(1)));
+        assert_eq!(result_skin_click_action(317), Some(ResultSkinClickAction::SaveReplay(2)));
+        assert_eq!(result_skin_click_action(318), Some(ResultSkinClickAction::SaveReplay(3)));
+        assert_eq!(result_skin_click_action(319), None);
+    }
+
+    #[test]
+    fn select_skin_cover_events_toggle_sudden_and_hidden_independently() {
+        assert_eq!(toggled_select_sudden(LaneEffectConfig::Off), LaneEffectConfig::Sudden);
+        assert_eq!(toggled_select_sudden(LaneEffectConfig::Hidden), LaneEffectConfig::HiddenSudden);
+        assert_eq!(toggled_select_sudden(LaneEffectConfig::HiddenSudden), LaneEffectConfig::Hidden);
+
+        assert_eq!(toggled_select_hidden(LaneEffectConfig::Off), LaneEffectConfig::Hidden);
+        assert_eq!(toggled_select_hidden(LaneEffectConfig::Sudden), LaneEffectConfig::HiddenSudden);
+        assert_eq!(toggled_select_hidden(LaneEffectConfig::HiddenSudden), LaneEffectConfig::Sudden);
+    }
+
+    #[test]
+    fn result_panel_toggle_requires_supported_skin_and_ir() {
+        assert_eq!(toggled_result_panel(1, true, true), Some(2));
+        assert_eq!(toggled_result_panel(2, true, true), Some(1));
+        assert_eq!(toggled_result_panel(0, true, true), None);
+        assert_eq!(toggled_result_panel(1, false, true), None);
+        assert_eq!(toggled_result_panel(1, true, false), None);
+    }
+
+    #[test]
+    fn result_panel_arrow_keys_match_luxe_flat_direction() {
+        assert_eq!(
+            result_panel_for_control(&PhysicalControl::KeyboardKey("ArrowLeft".to_string())),
+            Some(2)
+        );
+        assert_eq!(
+            result_panel_for_control(&PhysicalControl::KeyboardKey("ArrowRight".to_string())),
+            Some(1)
+        );
+        assert_eq!(
+            result_panel_for_control(&PhysicalControl::KeyboardKey("ArrowUp".to_string())),
+            None
+        );
+    }
+
+    #[test]
+    fn result_panel_direct_selection_matches_tab_availability() {
+        assert_eq!(selected_result_panel(1, 2, true, true), Some(2));
+        assert_eq!(selected_result_panel(2, 1, true, true), Some(1));
+        assert_eq!(selected_result_panel(2, 1, true, false), None);
+        assert_eq!(selected_result_panel(1, 2, true, false), Some(2));
+        assert_eq!(selected_result_panel(2, 2, true, true), None);
+        assert_eq!(selected_result_panel(1, 2, false, true), None);
+    }
+
+    #[test]
+    fn result_panel_support_requires_default_and_runtime_draw_gate() {
+        let document: SkinDocument = serde_json::from_value(serde_json::json!({
+            "type": 7,
+            "resultPanelDefault": 2,
+            "destination": [{
+                "id": "panel",
+                "draw": "result_panel(2)",
+                "dst": [{"x": 0, "y": 0, "w": 1, "h": 1}]
+            }]
+        }))
+        .unwrap();
+        assert!(result_panel_supported(&document));
+
+        let without_gate: SkinDocument = serde_json::from_value(serde_json::json!({
+            "type": 7,
+            "resultPanelDefault": 2,
+            "destination": []
+        }))
+        .unwrap();
+        assert!(!result_panel_supported(&without_gate));
     }
 
     #[test]
@@ -20626,6 +25599,26 @@ mod tests {
     }
 
     #[test]
+    fn retry_preload_always_builds_fresh_audio_for_the_retried_chart() {
+        assert_eq!(
+            retry_preload_kind(ResultRetryMode::SameArrange, true),
+            RetryPreloadKind::CachedChartWithFreshAudio
+        );
+        assert_eq!(
+            retry_preload_kind(ResultRetryMode::SameArrange, false),
+            RetryPreloadKind::ReimportedChartWithFreshAudio
+        );
+        assert_eq!(
+            retry_preload_kind(ResultRetryMode::DifferentArrange, true),
+            RetryPreloadKind::ReimportedChartWithFreshAudio
+        );
+        assert_eq!(
+            retry_preload_kind(ResultRetryMode::DifferentArrange, false),
+            RetryPreloadKind::ReimportedChartWithFreshAudio
+        );
+    }
+
+    #[test]
     fn result_action_resolves_from_held_lanes() {
         // beatoraja 準拠: Key5 のみ → 別配置 (REPLAY_DIFFERENT)。
         assert_eq!(
@@ -20665,53 +25658,134 @@ mod tests {
     }
 
     #[test]
-    fn adjusted_hispeed_steps_by_quarter_and_clamps_range() {
-        assert_eq!(adjusted_hispeed(2.0, HispeedChange::Up), 2.25);
-        assert_eq!(adjusted_hispeed(2.0, HispeedChange::Down), 1.75);
-        assert_eq!(adjusted_hispeed(10.0, HispeedChange::Up), 10.0);
-        assert_eq!(adjusted_hispeed(0.5, HispeedChange::Down), 0.5);
+    fn adjusted_hispeed_uses_configured_step_and_clamps_range() {
+        assert_eq!(adjusted_hispeed(2.0, HispeedChange::Up, 0.25), 2.25);
+        assert_eq!(adjusted_hispeed(2.0, HispeedChange::Down, 0.25), 1.75);
+        assert_eq!(adjusted_hispeed(2.0, HispeedChange::Up, 0.5), 2.5);
+        assert_eq!(adjusted_hispeed(10.0, HispeedChange::Up, 0.5), 10.0);
+        assert_eq!(adjusted_hispeed(0.5, HispeedChange::Down, 0.5), 0.5);
     }
 
     #[test]
-    fn pending_hispeed_change_updates_profile_before_ready() {
-        let mut profile = ProfileConfig::new_default("default", "Default", 1);
-        profile.lane.hispeed = 2.0;
-        profile.lane.hispeed_mode = HispeedModeConfig::Normal;
-        profile.lane.target_green_number = 300;
-        let snapshot = RenderSnapshot { now_bpm: 120.0, ..Default::default() };
+    fn pending_hispeed_changes_use_displayed_mode_without_mutating_profile() {
+        let profile = ProfileConfig::new_default("default", "Default", 1);
+        let profile_hispeed = profile.lane.hispeed;
+        let mut lane = PendingPlayLaneState {
+            hispeed: 2.0,
+            hispeed_mode: HispeedMode::Floating,
+            target_green_number: 300,
+            lane_cover: 0.0,
+            lift: 0.0,
+            lane_cover_visible: true,
+            lane_cover_changing: false,
+            hsfix_base_bpm: 120.0,
+            hispeed_auto_adjust: false,
+        };
 
-        apply_pending_hispeed_change_to_profile(&mut profile, Some(&snapshot), HispeedChange::Up);
+        assert!(apply_pending_play_lane_action_to_state(
+            &mut lane,
+            PendingPlayLaneAction::Hispeed(HispeedChange::Up),
+            &profile,
+            120.0,
+            false,
+        ));
 
-        assert_eq!(profile.lane.hispeed, 2.25);
-        assert_eq!(profile.lane.target_green_number, 300);
+        assert_eq!(lane.hispeed, 2.5);
+        assert_eq!(lane.target_green_number, 300);
+        assert_eq!(profile.lane.hispeed, profile_hispeed);
     }
 
     #[test]
-    fn pending_floating_hispeed_change_updates_fixed_green_before_ready() {
+    fn pending_green_number_change_switches_displayed_state_to_floating() {
+        let profile = ProfileConfig::new_default("default", "Default", 1);
+        let mut lane = PendingPlayLaneState {
+            hispeed: 2.0,
+            hispeed_mode: HispeedMode::Normal,
+            target_green_number: 300,
+            lane_cover: 0.0,
+            lift: 0.0,
+            lane_cover_visible: true,
+            lane_cover_changing: true,
+            hsfix_base_bpm: 120.0,
+            hispeed_auto_adjust: false,
+        };
+
+        assert!(apply_pending_play_lane_action_to_state(
+            &mut lane,
+            PendingPlayLaneAction::GreenNumberDelta(1),
+            &profile,
+            120.0,
+            false,
+        ));
+
+        assert_eq!(lane.hispeed_mode, HispeedMode::Floating);
+        assert_eq!(lane.target_green_number, 601);
+        let expected =
+            crate::screens::play_snapshot::hispeed_for_green_number_values(601.0, 1.0, 120.0, 1.0);
+        assert!((lane.hispeed - expected).abs() < 0.000_1, "hispeed={}", lane.hispeed);
+    }
+
+    #[test]
+    fn pending_lane_state_matches_no_speed_control_rules() {
+        let profile = ProfileConfig::new_default("default", "Default", 1);
+        let mut lane = PendingPlayLaneState {
+            hispeed: 2.0,
+            hispeed_mode: HispeedMode::Floating,
+            target_green_number: 300,
+            lane_cover: 0.0,
+            lift: 0.0,
+            lane_cover_visible: true,
+            lane_cover_changing: true,
+            hsfix_base_bpm: 120.0,
+            hispeed_auto_adjust: false,
+        };
+
+        assert!(!apply_pending_play_lane_action_to_state(
+            &mut lane,
+            PendingPlayLaneAction::Hispeed(HispeedChange::Up),
+            &profile,
+            120.0,
+            true,
+        ));
+        assert!(apply_pending_play_lane_action_to_state(
+            &mut lane,
+            PendingPlayLaneAction::LaneCoverDelta(-LANE_COVER_STEP),
+            &profile,
+            120.0,
+            true,
+        ));
+        assert_eq!(lane.hispeed, 2.0);
+        assert!((lane.lane_cover - LANE_COVER_STEP).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn pending_lane_actions_replay_once_on_loaded_session() {
         let mut profile = ProfileConfig::new_default("default", "Default", 1);
-        profile.lane.hispeed = 2.0;
         profile.lane.hispeed_mode = HispeedModeConfig::Floating;
         profile.lane.target_green_number = 300;
-        let snapshot = RenderSnapshot { now_bpm: 120.0, ..Default::default() };
+        let mut session = crate::screens::play_session::build_game_session(
+            std::sync::Arc::new(app_test_chart()),
+            &profile,
+            crate::screens::play_session::PlaySessionOptions::default(),
+        );
+        let initial_hispeed = session.hispeed;
+        let hispeed_step = hispeed_step_for_profile(&profile, session.hispeed_mode);
 
-        apply_pending_hispeed_change_to_profile(&mut profile, Some(&snapshot), HispeedChange::Up);
+        replay_pending_play_lane_actions(
+            &mut session,
+            &[PendingPlayLaneAction::Hispeed(HispeedChange::Up)],
+            &profile,
+            false,
+        );
 
-        assert_eq!(profile.lane.hispeed, 2.25);
-        assert_eq!(profile.lane.target_green_number, 533);
-    }
-
-    #[test]
-    fn pending_green_number_change_switches_to_floating_before_ready() {
-        let mut profile = ProfileConfig::new_default("default", "Default", 1);
-        profile.lane.hispeed = 2.0;
-        profile.lane.hispeed_mode = HispeedModeConfig::Normal;
-        profile.lane.target_green_number = 300;
-        let snapshot = RenderSnapshot { now_bpm: 120.0, ..Default::default() };
-
-        apply_pending_green_number_step_to_profile(&mut profile, Some(&snapshot), 1);
-
-        assert_eq!(profile.lane.hispeed_mode, HispeedModeConfig::Floating);
-        assert_eq!(profile.lane.target_green_number, 601);
+        assert_eq!(session.hispeed, initial_hispeed + hispeed_step);
+        replay_pending_play_lane_actions(
+            &mut session,
+            &[PendingPlayLaneAction::LaneCoverDelta(-LANE_COVER_STEP)],
+            &profile,
+            false,
+        );
+        assert!((session.lane_cover - LANE_COVER_STEP).abs() < f32::EPSILON);
     }
 
     #[test]
@@ -20746,6 +25820,7 @@ mod tests {
     fn floating_hispeed_recalculation_uses_current_bpm_after_chart_start() {
         let mut profile = ProfileConfig::new_default("default", "Default", 1);
         profile.lane.hispeed_mode = HispeedModeConfig::Floating;
+        profile.lane.hispeed_auto_adjust = true;
         profile.lane.target_green_number = 300;
         let mut chart = app_test_chart();
         chart.metadata.initial_bpm = 120.0;
@@ -20765,12 +25840,82 @@ mod tests {
         );
         session.audio_clock =
             bmz_audio::clock::AudioClock::with_position(48_000, 0, 0, frame, true);
-        session.lane_cover = 0.25;
 
-        reset_floating_hispeed_if_enabled(&mut session, false);
+        apply_lane_cover_step_to_session(&mut session, -0.25, false);
 
         assert_eq!(session.hsfix_base_bpm, 240.0);
         assert!((session.hispeed - 3.0).abs() < 0.000_1, "hispeed={}", session.hispeed);
+    }
+
+    #[test]
+    fn lane_cover_change_uses_hsfix_base_when_hispeed_auto_adjust_is_off() {
+        let mut profile = ProfileConfig::new_default("default", "Default", 1);
+        profile.lane.hispeed_mode = HispeedModeConfig::Floating;
+        profile.lane.hispeed_auto_adjust = false;
+        profile.lane.target_green_number = 300;
+        let mut chart = app_test_chart();
+        chart.metadata.initial_bpm = 120.0;
+        chart.timing_events.push(bmz_chart::model::TimingEvent {
+            tick: bmz_core::time::ChartTick(48),
+            time: TimeUs(1_000_000),
+            kind: bmz_chart::model::TimingEventKind::BpmChange { bpm: 240.0 },
+        });
+        let frame = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let mut session = crate::screens::play_session::build_game_session(
+            std::sync::Arc::new(chart),
+            &profile,
+            crate::screens::play_session::PlaySessionOptions {
+                hs_fix: HsFixOption::MaxBpm,
+                ..Default::default()
+            },
+        );
+        session.audio_clock =
+            bmz_audio::clock::AudioClock::with_position(48_000, 0, 0, frame, true);
+
+        apply_lane_cover_step_to_session(&mut session, -0.25, false);
+
+        assert!(!session.hispeed_auto_adjust);
+        assert!((session.hispeed - 1.5).abs() < 0.000_1, "hispeed={}", session.hispeed);
+    }
+
+    #[test]
+    fn egui_lane_profile_cover_change_keeps_runtime_nhs_hispeed() {
+        let profile = ProfileConfig::new_default("default", "Default", 1);
+        let before = profile.lane.clone();
+        let mut edited = profile.lane.clone();
+        edited.sudden = 250;
+        let mut session = crate::screens::play_session::build_game_session(
+            std::sync::Arc::new(app_test_chart()),
+            &profile,
+            crate::screens::play_session::PlaySessionOptions::default(),
+        );
+        session.hispeed = 3.5;
+
+        assert!(apply_profile_lane_settings_to_session(&mut session, &before, &edited, false));
+        assert!((session.hispeed - 3.5).abs() < f32::EPSILON);
+        assert!((session.lane_cover - 0.25).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn egui_lane_profile_target_change_recalculates_fhs_hispeed() {
+        let mut profile = ProfileConfig::new_default("default", "Default", 1);
+        profile.lane.hispeed_mode = HispeedModeConfig::Floating;
+        let before = profile.lane.clone();
+        let mut edited = profile.lane.clone();
+        edited.target_green_number = 320;
+        let mut session = crate::screens::play_session::build_game_session(
+            std::sync::Arc::new(app_test_chart()),
+            &profile,
+            crate::screens::play_session::PlaySessionOptions {
+                hs_fix: HsFixOption::StartBpm,
+                ..Default::default()
+            },
+        );
+
+        assert!(apply_profile_lane_settings_to_session(&mut session, &before, &edited, false));
+        assert_eq!(session.hispeed_mode, HispeedMode::Floating);
+        assert_eq!(session.target_green_number, 320);
+        assert!((session.hispeed - 3.75).abs() < 0.000_1, "hispeed={}", session.hispeed);
     }
 
     #[test]
@@ -20909,97 +26054,367 @@ mod tests {
     }
 
     #[test]
-    fn play_option_control_maps_e1_combo_targets() {
-        let keys = default_select_keys();
+    fn floating_hispeed_change_keeps_target_green_during_play() {
+        let mut profile = ProfileConfig::new_default("default", "Default", 1);
+        profile.lane.hispeed_mode = HispeedModeConfig::Floating;
+        profile.lane.target_green_number = 300;
+        let mut session = crate::screens::play_session::build_game_session(
+            std::sync::Arc::new(app_test_chart()),
+            &profile,
+            crate::screens::play_session::PlaySessionOptions {
+                hs_fix: HsFixOption::StartBpm,
+                ..Default::default()
+            },
+        );
+
+        let hispeed = session.hispeed;
+        apply_hispeed_change_to_session(&mut session, HispeedChange::Up, 0.5);
+
+        assert_eq!(session.hispeed, hispeed + 0.5);
+        assert_eq!(session.target_green_number, 300);
+    }
+
+    #[test]
+    fn e1_hispeed_change_keeps_target_green_during_play() {
+        let mut profile = ProfileConfig::new_default("default", "Default", 1);
+        profile.lane.hispeed_mode = HispeedModeConfig::Floating;
+        profile.lane.target_green_number = 300;
+        let mut session = crate::screens::play_session::build_game_session(
+            std::sync::Arc::new(app_test_chart()),
+            &profile,
+            crate::screens::play_session::PlaySessionOptions {
+                hs_fix: HsFixOption::StartBpm,
+                ..Default::default()
+            },
+        );
+
+        assert!(apply_play_option_control_to_session(
+            &mut session,
+            PlayOptionControl::Hispeed(HispeedChange::Up),
+            false,
+            0.5,
+        ));
+
+        assert_eq!(session.target_green_number, 300);
+    }
+
+    #[test]
+    fn active_lane_state_keeps_green_number_captured_when_switching_to_fhs() {
+        let profile = ProfileConfig::new_default("default", "Default", 1);
+        let mut session = crate::screens::play_session::build_game_session(
+            std::sync::Arc::new(app_test_chart()),
+            &profile,
+            crate::screens::play_session::PlaySessionOptions::default(),
+        );
+        let frame = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
+        session.audio_clock =
+            bmz_audio::clock::AudioClock::with_position(48_000, 0, 0, frame, true);
+        let expected_target = current_green_number(&session, session.audio_clock.now());
+        assert_ne!(expected_target, session.target_green_number);
+
+        assert!(apply_play_option_control_to_session(
+            &mut session,
+            PlayOptionControl::ToggleHispeedMode,
+            false,
+            0.25,
+        ));
+        assert_eq!(session.hispeed_mode, HispeedMode::Floating);
+        assert_eq!(session.target_green_number, expected_target);
+
+        // NHSへ戻ってHSを変更しても、終了時の現在緑数字でtargetを上書きしない。
+        session.hispeed = 1.0;
+        assert!(apply_play_option_control_to_session(
+            &mut session,
+            PlayOptionControl::ToggleHispeedMode,
+            false,
+            0.25,
+        ));
+        let state = active_lane_state_for_session(&session);
+
+        assert_eq!(state.hispeed_mode, HispeedMode::Normal);
+        assert_eq!(state.target_green_number, expected_target);
+    }
+
+    #[test]
+    fn play_option_control_maps_seven_key_lane_and_scratch_targets() {
+        let input = crate::config::play_input::default_profile_input();
+        let keys = SelectKeyBindings::from_profile(&input);
+        let play_input = play_option_input_for(&input, KeyMode::K7);
 
         assert_eq!(
-            play_option_control_for_holds("W", true, true, &keys),
+            keyboard_play_option("W", true, true, &keys, &play_input, &input),
             Some(PlayOptionControl::ToggleHispeedMode)
         );
         assert_eq!(
-            play_option_control_for_holds("Z", true, false, &keys),
+            keyboard_play_option("Z", true, false, &keys, &play_input, &input),
             Some(PlayOptionControl::Hispeed(HispeedChange::Down))
         );
         assert_eq!(
-            play_option_control_for_holds("V", true, false, &keys),
+            keyboard_play_option("V", true, false, &keys, &play_input, &input),
             Some(PlayOptionControl::Hispeed(HispeedChange::Down))
         );
         assert_eq!(
-            play_option_control_for_holds("S", true, false, &keys),
+            keyboard_play_option("S", true, false, &keys, &play_input, &input),
             Some(PlayOptionControl::Hispeed(HispeedChange::Up))
         );
         assert_eq!(
-            play_option_control_for_holds("F", true, false, &keys),
+            keyboard_play_option("F", true, false, &keys, &play_input, &input),
             Some(PlayOptionControl::Hispeed(HispeedChange::Up))
         );
         assert_eq!(
-            play_option_control_for_holds("Axis1+", true, false, &keys),
+            keyboard_play_option("LShift", true, false, &keys, &play_input, &input),
             Some(PlayOptionControl::LaneCover(LaneCoverChange::Up))
         );
         assert_eq!(
-            play_option_control_for_holds("Axis1-", true, false, &keys),
+            keyboard_play_option("LControl", true, false, &keys, &play_input, &input),
             Some(PlayOptionControl::LaneCover(LaneCoverChange::Down))
         );
-        assert_eq!(play_option_control_for_holds("Axis2-", true, false, &keys), None);
-        assert_eq!(play_option_control_for_holds("Axis2+", true, false, &keys), None);
     }
 
     #[test]
-    fn play_option_control_maps_e2_combo_targets_to_green_number() {
-        let keys = default_select_keys();
+    fn play_option_control_maps_scratch_for_scratchless_key_modes() {
+        let input = crate::config::play_input::default_profile_input();
+        let keys = SelectKeyBindings::from_profile(&input);
+
+        for key_mode in [KeyMode::K4, KeyMode::K6, KeyMode::K8, KeyMode::K9] {
+            let play_input = play_option_input_for(&input, key_mode);
+            assert_eq!(
+                keyboard_play_option("LShift", true, false, &keys, &play_input, &input),
+                Some(PlayOptionControl::LaneCover(LaneCoverChange::Up)),
+                "{} Scratch Up",
+                key_mode.as_str(),
+            );
+            assert_eq!(
+                keyboard_play_option("LControl", true, false, &keys, &play_input, &input),
+                Some(PlayOptionControl::LaneCover(LaneCoverChange::Down)),
+                "{} Scratch Down",
+                key_mode.as_str(),
+            );
+            assert_eq!(
+                keyboard_play_option("LShift", false, true, &keys, &play_input, &input),
+                Some(PlayOptionControl::GreenNumber(GreenNumberChange::Up)),
+                "{} Scratch Up green number",
+                key_mode.as_str(),
+            );
+            assert_eq!(
+                keyboard_play_option("LControl", false, true, &keys, &play_input, &input),
+                Some(PlayOptionControl::GreenNumber(GreenNumberChange::Down)),
+                "{} Scratch Down green number",
+                key_mode.as_str(),
+            );
+        }
+    }
+
+    #[test]
+    fn play_option_control_maps_e2_to_mode_specific_green_number_direction() {
+        let input = crate::config::play_input::default_profile_input();
+        let keys = SelectKeyBindings::from_profile(&input);
+        let play_input = play_option_input_for(&input, KeyMode::K7);
 
         assert_eq!(
-            play_option_control_for_holds("Z", false, true, &keys),
+            keyboard_play_option("Z", false, true, &keys, &play_input, &input),
             Some(PlayOptionControl::GreenNumber(GreenNumberChange::Down))
         );
         assert_eq!(
-            play_option_control_for_holds("V", false, true, &keys),
+            keyboard_play_option("S", false, true, &keys, &play_input, &input),
+            Some(PlayOptionControl::GreenNumber(GreenNumberChange::Up))
+        );
+        assert_eq!(
+            keyboard_play_option("LShift", false, true, &keys, &play_input, &input),
+            Some(PlayOptionControl::GreenNumber(GreenNumberChange::Up))
+        );
+        assert_eq!(
+            keyboard_play_option("LControl", false, true, &keys, &play_input, &input),
             Some(PlayOptionControl::GreenNumber(GreenNumberChange::Down))
         );
+        assert_eq!(keyboard_play_option("Z", true, true, &keys, &play_input, &input), None);
+    }
+
+    #[test]
+    fn play_option_control_uses_chart_mode_instead_of_select_input_mode() {
+        let input = crate::config::play_input::default_profile_input();
+        assert_eq!(input.select_input_mode, SelectInputModeConfig::Key7Key14);
+        let keys = SelectKeyBindings::from_profile(&input);
+        let play_input = play_option_input_for(&input, KeyMode::K9);
+
         assert_eq!(
-            play_option_control_for_holds("S", false, true, &keys),
-            Some(PlayOptionControl::GreenNumber(GreenNumberChange::Up))
+            keyboard_play_option("B", true, false, &keys, &play_input, &input),
+            Some(PlayOptionControl::Hispeed(HispeedChange::Down))
         );
         assert_eq!(
-            play_option_control_for_holds("F", false, true, &keys),
-            Some(PlayOptionControl::GreenNumber(GreenNumberChange::Up))
+            keyboard_play_option("G", true, false, &keys, &play_input, &input),
+            Some(PlayOptionControl::Hispeed(HispeedChange::Up))
+        );
+    }
+
+    #[test]
+    fn play_option_control_applies_eight_key_default_and_override() {
+        let mut input = crate::config::play_input::default_profile_input();
+        let keys = SelectKeyBindings::from_profile(&input);
+        let play_input = play_option_input_for(&input, KeyMode::K8);
+
+        assert_eq!(
+            keyboard_play_option("Z", true, false, &keys, &play_input, &input),
+            Some(PlayOptionControl::Hispeed(HispeedChange::Up))
+        );
+        assert!(crate::config::play_input::set_eight_key_hispeed_direction(
+            &mut input,
+            LaneConfig::Key1,
+            HispeedDirectionConfig::Down,
+        ));
+        assert_eq!(
+            keyboard_play_option("Z", true, false, &keys, &play_input, &input),
+            Some(PlayOptionControl::Hispeed(HispeedChange::Down))
+        );
+    }
+
+    #[test]
+    fn play_option_control_distinguishes_two_player_gamepads() {
+        let mut input = crate::config::play_input::default_profile_input();
+        input.play.insert(
+            KeyMode::K14.play_map_key().to_string(),
+            crate::config::profile_config::PlayModeInputConfig {
+                inherit: None,
+                bindings: vec![
+                    crate::config::play_input::gamepad_play_binding_for_device(
+                        "gamepad1",
+                        "Button1",
+                        LaneConfig::Key1,
+                    ),
+                    crate::config::play_input::gamepad_play_binding_for_device(
+                        "gamepad2",
+                        "Button1",
+                        LaneConfig::Key9,
+                    ),
+                ],
+                ..Default::default()
+            },
+        );
+        let slots = crate::input::gamepad::GamepadSlotMap::from_device_ids([
+            Some(DeviceId(11)),
+            Some(DeviceId(22)),
+        ]);
+        let play_input = PlayOptionInput::new(
+            KeyMode::K14,
+            crate::config::play::lane_binding_for_chart_with_slots(&input, KeyMode::K14, slots),
+            &input,
+            slots,
+        );
+        let control = PhysicalControl::GamepadButton("Button1".to_string());
+
+        assert_eq!(
+            play_option_control_for_input(
+                DeviceId(11),
+                &control,
+                true,
+                false,
+                Some(&play_input),
+                &input,
+            ),
+            Some(PlayOptionControl::Hispeed(HispeedChange::Down))
         );
         assert_eq!(
-            play_option_control_for_holds("Axis1+", false, true, &keys),
-            Some(PlayOptionControl::GreenNumber(GreenNumberChange::Up))
+            play_option_control_for_input(
+                DeviceId(22),
+                &control,
+                true,
+                false,
+                Some(&play_input),
+                &input,
+            ),
+            Some(PlayOptionControl::Hispeed(HispeedChange::Up))
         );
-        assert_eq!(
-            play_option_control_for_holds("Axis1-", false, true, &keys),
-            Some(PlayOptionControl::GreenNumber(GreenNumberChange::Down))
+    }
+
+    #[test]
+    fn play_option_control_prioritizes_two_player_lane_over_other_devices_e2_button() {
+        let mut input = crate::config::play_input::default_profile_input();
+        input.ui.bindings.retain(|entry| {
+            entry.action != Some(InputActionConfig::E2)
+                || !crate::config::play_input::is_gamepad_device(&entry.device)
+        });
+        input.ui.bindings.push(crate::config::profile_config::BindingConfigEntry {
+            device: "gamepad1".to_string(),
+            control: "Button10".to_string(),
+            lane: None,
+            action: Some(InputActionConfig::E2),
+            scratch: None,
+        });
+        input.play.insert(
+            KeyMode::K14.play_map_key().to_string(),
+            crate::config::profile_config::PlayModeInputConfig {
+                inherit: None,
+                bindings: vec![
+                    crate::config::play_input::gamepad_play_binding_for_device(
+                        "gamepad1",
+                        "Button1",
+                        LaneConfig::Key1,
+                    ),
+                    crate::config::play_input::gamepad_play_binding_for_device(
+                        "gamepad2",
+                        "Button10",
+                        LaneConfig::Key9,
+                    ),
+                ],
+                ..Default::default()
+            },
         );
+        let slots = crate::input::gamepad::GamepadSlotMap::from_device_ids([
+            Some(DeviceId(11)),
+            Some(DeviceId(22)),
+        ]);
+        let play_input = PlayOptionInput::new(
+            KeyMode::K14,
+            crate::config::play::lane_binding_for_chart_with_slots(&input, KeyMode::K14, slots),
+            &input,
+            slots,
+        );
+        let control = PhysicalControl::GamepadButton("Button10".to_string());
+
         assert_eq!(
-            play_option_control_for_holds("W", true, true, &keys),
+            play_option_control_for_input(
+                DeviceId(11),
+                &control,
+                true,
+                true,
+                Some(&play_input),
+                &input,
+            ),
             Some(PlayOptionControl::ToggleHispeedMode)
         );
-        assert_eq!(play_option_control_for_holds("Z", true, true, &keys), None);
-    }
-
-    #[test]
-    fn play_option_control_maps_9k_e2_keys_to_green_number() {
-        let keys = select_keys_9k();
-
         assert_eq!(
-            play_option_control_for_holds("Z", false, true, &keys),
-            Some(PlayOptionControl::GreenNumber(GreenNumberChange::Down))
+            play_option_control_for_input(
+                DeviceId(22),
+                &control,
+                true,
+                false,
+                Some(&play_input),
+                &input,
+            ),
+            Some(PlayOptionControl::Hispeed(HispeedChange::Up))
         );
         assert_eq!(
-            play_option_control_for_holds("C", false, true, &keys),
-            Some(PlayOptionControl::GreenNumber(GreenNumberChange::Down))
-        );
-        assert_eq!(
-            play_option_control_for_holds("S", false, true, &keys),
+            play_option_control_for_input(
+                DeviceId(22),
+                &control,
+                false,
+                true,
+                Some(&play_input),
+                &input,
+            ),
             Some(PlayOptionControl::GreenNumber(GreenNumberChange::Up))
         );
+
+        let p2_lane_pressed = HashSet::from([(DeviceId(22), control.clone())]);
         assert_eq!(
-            play_option_control_for_holds("F", false, true, &keys),
-            Some(PlayOptionControl::GreenNumber(GreenNumberChange::Up))
+            play_control_hold_state_from_pressed_inputs(&p2_lane_pressed, &play_input),
+            (false, false, false)
         );
-        assert_eq!(play_option_control_for_holds("V", false, true, &keys), None);
+        let p1_e2_pressed = HashSet::from([(DeviceId(11), control)]);
+        assert_eq!(
+            play_control_hold_state_from_pressed_inputs(&p1_e2_pressed, &play_input),
+            (false, true, false)
+        );
     }
 
     #[test]
@@ -21011,6 +26426,9 @@ mod tests {
         assert_eq!(visual_offset_delta_control("Period", &keys), Some(-1));
         assert_eq!(visual_offset_delta_control("P2K7", &keys), Some(1));
         assert_eq!(visual_offset_delta_control("Z", &keys), None);
+        assert_eq!(green_number_delta_control("D", &keys), Some(-1));
+        assert_eq!(green_number_delta_control("F", &keys), Some(1));
+        assert_eq!(green_number_delta_control("C", &keys), None);
     }
 
     #[test]
@@ -21022,6 +26440,12 @@ mod tests {
         assert!(
             (hispeed_for_green_number_values(295.0, 0.93, 120.0, 1.0) - 3.783_051).abs() < 0.000_01
         );
+    }
+
+    #[test]
+    fn green_number_change_uses_the_displayed_integer_duration() {
+        assert_eq!(green_number_from_display_duration(500.0), 300);
+        assert_eq!(green_number_from_display_duration(500.6), 301);
     }
 
     #[test]
@@ -21076,7 +26500,13 @@ mod tests {
 
     #[test]
     fn normal_hispeed_rounding_restores_quarter_steps() {
-        assert_eq!(clamp_hispeed_for_profile(3.783_051), 3.75);
+        assert_eq!(clamp_hispeed_for_profile(3.783_051, HispeedModeConfig::Normal, 0.25), 3.75);
+    }
+
+    #[test]
+    fn custom_hispeed_step_preserves_non_quarter_profile_values() {
+        assert_eq!(clamp_hispeed_for_profile(2.3, HispeedModeConfig::Normal, 0.3), 2.3);
+        assert_eq!(clamp_hispeed_for_profile(2.37, HispeedModeConfig::Floating, 0.5), 2.37);
     }
 
     #[test]
@@ -21122,7 +26552,7 @@ mod tests {
             42,
         );
 
-        assert_eq!(profile.lane.hispeed, 3.25);
+        assert_eq!(profile.lane.hispeed, 3.37);
         assert_eq!(profile.lane.sudden, 420);
         assert_eq!(profile.lane.lift, 100);
         assert_eq!(profile.lane.hispeed_mode, HispeedModeConfig::Floating);
@@ -21138,6 +26568,27 @@ mod tests {
         assert!(profile.play.auto_play);
         assert!(matches!(profile.play.assist, AssistOptionConfig::None));
         assert_eq!(profile.updated_at, 42);
+    }
+
+    #[test]
+    fn apply_lane_state_preserves_lift_amount_while_lift_is_disabled() {
+        let mut profile = ProfileConfig::new_default("default", "Default", 1);
+        profile.lane.lift = 240;
+        profile.lane.lift_enabled = false;
+
+        apply_lane_state_to_profile(
+            &mut profile,
+            None,
+            Some(ActiveLaneState {
+                lane_cover: 0.3,
+                lift: 0.0,
+                hispeed_mode: HispeedMode::Normal,
+                target_green_number: 300,
+            }),
+        );
+
+        assert_eq!(profile.lane.lift, 240);
+        assert!(!profile.lane.lift_enabled);
     }
 
     #[test]
@@ -21318,6 +26769,25 @@ mod tests {
     }
 
     #[test]
+    fn select_preview_normalization_gain_follows_chart_normalization_setting() {
+        assert_eq!(select_preview_normalization_gain(true, 0.25), 0.25);
+        assert_eq!(select_preview_normalization_gain(false, 0.25), 1.0);
+        assert_eq!(select_preview_normalization_gain(true, f32::NAN), 1.0);
+        assert_eq!(select_preview_normalization_gain(true, 1.5), 1.0);
+    }
+
+    #[test]
+    fn prepare_select_preview_keeps_sample_with_analyzed_gain() {
+        let sample = DecodedSample { channels: 2, sample_rate: 48_000, frames: vec![1.0; 480] };
+
+        let prepared = prepare_select_preview(sample.clone());
+
+        assert_eq!(prepared.sample.frames, sample.frames);
+        assert!(prepared.normalization_gain > 0.0);
+        assert!(prepared.normalization_gain < 1.0);
+    }
+
+    #[test]
     fn result_exit_audio_gain_uses_shorter_skin_fadeout() {
         let fadeout = Duration::from_millis(600);
 
@@ -21365,6 +26835,15 @@ mod tests {
         assert_eq!(result_entry_sound_for_clear(ClearType::Normal), SoundType::ResultClear);
         assert_eq!(course_result_entry_sound_for_clear(ClearType::Failed), SoundType::CourseFail);
         assert_eq!(course_result_entry_sound_for_clear(ClearType::Normal), SoundType::CourseClear);
+    }
+
+    #[test]
+    fn result_exit_sound_prefers_course_close_for_course_results() {
+        use crate::system_sound::SoundType;
+
+        assert_eq!(result_exit_sound_for_context(false, false), SoundType::ResultClose);
+        assert_eq!(result_exit_sound_for_context(true, true), SoundType::CourseClose);
+        assert_eq!(result_exit_sound_for_context(true, false), SoundType::ResultClose);
     }
 
     #[test]
@@ -21463,8 +26942,8 @@ mod tests {
     }
 
     #[test]
-    fn left_overlay_expires_screenshot_toast() {
-        let toast = Some(("スクリーンショットを保存しました", SCREENSHOT_TOAST_DURATION));
+    fn left_overlay_expires_toast() {
+        let toast = Some(("スクリーンショットを保存しました", LEFT_OVERLAY_TOAST_DURATION));
         assert_eq!(resolve_left_overlay_text(false, toast, ""), "");
     }
 
@@ -21610,6 +27089,19 @@ mod tests {
             max_combo: 345,
             bp: 12,
             cb: 8,
+            judge_counts: DisplayJudgeCounts {
+                pgreat: 500,
+                great: 100,
+                good: 20,
+                bad: 10,
+                poor: 5,
+                empty_poor: 3,
+            },
+            fast_slow_counts: bmz_render::snapshot::FastSlowJudgeCounts {
+                fast_pgreat: 300,
+                slow_pgreat: 200,
+                ..Default::default()
+            },
             course_failed: false,
             course_clear: true,
             play_count: 42,
@@ -21630,6 +27122,9 @@ mod tests {
         assert_eq!(snapshot_rows[0].bp, Some(12));
         assert_eq!(snapshot_rows[0].cb, Some(8));
         assert_eq!(snapshot_rows[0].max_combo, Some(345));
+        assert_eq!(snapshot_rows[0].judge_counts.pgreat, 500);
+        assert_eq!(snapshot_rows[0].judge_counts.empty_poor, 3);
+        assert_eq!(snapshot_rows[0].fast_slow_counts.unwrap().fast_pgreat, 300);
         assert_eq!(snapshot_rows[0].play_count, 42);
         assert_eq!(snapshot_rows[0].clear_count, 31);
         assert_eq!(snapshot_rows[0].replay_slots, [true, false, true, false]);
@@ -21808,7 +27303,7 @@ mod tests {
         );
         assert_eq!(
             cycle_judge_algorithm_with_direction(JudgeAlgorithmConfig::Combo, -1),
-            JudgeAlgorithmConfig::Score
+            JudgeAlgorithmConfig::Lowest
         );
     }
 
@@ -22004,6 +27499,32 @@ mod tests {
         assert_eq!(new_items[1].display_name(), "Played");
     }
 
+    #[test]
+    fn select_item_key_uses_typed_settings_identity() {
+        let config = SelectItem::Config(crate::screens::settings_model::ConfigSelectRow {
+            entry_id: SettingsEntryId::MasterVolume,
+        });
+        assert_eq!(select_item_key(&config), SelectItemKey::Config(SettingsEntryId::MasterVolume));
+
+        let binding = SelectItem::KeyBinding(crate::screens::settings_model::KeyBindingSelectRow {
+            key_mode: KeyMode::K7,
+            target: KeyBindingTarget::Action {
+                action: InputActionConfig::E1,
+                slot: KeyBindingSlot::KeyboardPrimary,
+            },
+        });
+        assert_eq!(
+            select_item_key(&binding),
+            SelectItemKey::KeyBinding {
+                key_mode: KeyMode::K7,
+                target: KeyBindingTarget::Action {
+                    action: InputActionConfig::E1,
+                    slot: KeyBindingSlot::KeyboardPrimary,
+                },
+            }
+        );
+    }
+
     fn select_chart_row(index: usize) -> SelectChartRow {
         SelectChartRow {
             chart: Some(ChartListItem {
@@ -22047,9 +27568,11 @@ mod tests {
                 main_bpm: 128.0,
                 speed_changes: Vec::new(),
             }),
+            has_document: false,
             fallback_title: String::new(),
             fallback_artist: String::new(),
             entry_sha256: None,
+            download_metadata: crate::song_download::ChartDownloadMetadata::default(),
             best_score: None,
             replay_slots: [false; 4],
             favorite_chart: false,
@@ -22072,6 +27595,7 @@ mod tests {
             .collect();
         SelectCourseRow {
             course_id: resolved_count as i64,
+            course_hash: None,
             title: format!("Course {resolved_count}/{entry_count}"),
             kind: bmz_core::course::CourseKind::Dan,
             constraints: bmz_core::course::CourseConstraints::default(),

@@ -7,6 +7,10 @@
 !/data/skins/default/**
 !/data/skins/Rmz-skin/
 !/data/skins/Rmz-skin/**
+!/data/skins/mz-select/
+!/data/skins/mz-select/**
+!/data/skins/Luxez-Flat/
+!/data/skins/Luxez-Flat/**
 !/data/songs/
 /data/songs/*
 !/data/songs/sample-playable/

@@ -16,6 +16,7 @@ use crate::config::play::{
     bottom_shiftable_gauge_from_config, gauge_auto_shift_from_config, gauge_type_from_config,
 };
 use crate::config::profile_config::{GaugeAutoShiftConfig, GaugeTypeConfig, ProfileConfig};
+use crate::input::gamepad::GamepadSlotMap;
 use crate::input::shared::SharedInputBackend;
 use crate::screens::play_session::{
     PlaySessionOptions, PreloadedPlaySession, PreparedPlaySession,
@@ -43,6 +44,10 @@ pub struct PlayStartOptions {
     pub hs_fix: HsFixOption,
     pub target: TargetOption,
     pub arrange_seed: Option<i64>,
+    pub arrange_seed_2p: Option<i64>,
+    pub legacy_arrange_seed: bool,
+    pub bms_random_seed: Option<u64>,
+    pub bms_random_choices: Option<Vec<i32>>,
     pub arrange_pattern: Option<Vec<u8>>,
     /// Override the starting gauge value (used to carry the gauge between
     /// charts in a course).  None means use the gauge's default `init`.
@@ -115,6 +120,10 @@ pub fn play_session_options_from_start(
         hs_fix: start_options.hs_fix,
         target: start_options.target,
         arrange_seed: start_options.arrange_seed,
+        arrange_seed_2p: start_options.arrange_seed_2p,
+        legacy_arrange_seed: start_options.legacy_arrange_seed,
+        bms_random_seed: start_options.bms_random_seed,
+        bms_random_choices: start_options.bms_random_choices,
         arrange_pattern: start_options.arrange_pattern,
         initial_gauge_value: start_options.initial_gauge_value,
         initial_gauge_values: start_options.initial_gauge_values,
@@ -124,6 +133,10 @@ pub fn play_session_options_from_start(
         ln_policy_setting: Default::default(),
         rule_mode: Default::default(),
         gauge_property: start_options.course_gauge_property_override,
+        gamepad_slots: GamepadSlotMap::from_runtime_or_legacy(
+            app_config.input.gamepad_slot_runtime_device_ids,
+            app_config.input.gamepad_slot_gilrs_ids,
+        ),
     }
 }
 
@@ -335,7 +348,6 @@ pub fn apply_course_constraints(options: &mut PlayStartOptions, constraints: &Co
     };
     if !allowed.contains(&options.arrange) {
         options.arrange = ArrangeOption::Normal;
-        options.arrange_seed = None;
         options.arrange_pattern = None;
     }
 }
@@ -343,7 +355,7 @@ pub fn apply_course_constraints(options: &mut PlayStartOptions, constraints: &Co
 /// プレイヤー選択の Gauge から段位ゲージ (CLASS / EXCLASS / EXHARDCLASS) を決める。
 /// beatoraja `GrooveGauge.create`: `type<=2?CLASS:type==3?EXCLASS:EXHARDCLASS` 準拠。
 /// `AutoShift` は beatoraja に存在しないため EXHARDCLASS にマップする。
-fn course_gauge_for(gauge: GaugeTypeConfig) -> GaugeType {
+pub(crate) fn course_gauge_for(gauge: GaugeTypeConfig) -> GaugeType {
     match gauge {
         GaugeTypeConfig::AssistEasy | GaugeTypeConfig::Easy | GaugeTypeConfig::Normal => {
             GaugeType::Class
@@ -374,6 +386,9 @@ pub fn apply_arrange_override(
     options.arrange_2p = arrange.arrange_2p;
     options.double_option = arrange.double_option;
     options.arrange_seed = arrange.seed;
+    options.arrange_seed_2p = arrange.seed_2p;
+    options.legacy_arrange_seed = arrange.legacy_seed;
+    options.bms_random_choices = Some(arrange.bms_random_choices.clone());
     options.arrange_pattern = arrange.pattern.clone();
 }
 
@@ -388,6 +403,9 @@ pub fn apply_queued_replay(
     options.arrange_2p = replay.replay.arrange_2p_option();
     options.double_option = replay.replay.double_option();
     options.arrange_seed = replay.replay.arrange_seed;
+    options.arrange_seed_2p = replay.replay.arrange_seed_2p;
+    options.legacy_arrange_seed = replay.replay.uses_legacy_seed_scheme();
+    options.bms_random_choices = replay.replay.bms_random_choices.clone();
     options.arrange_pattern = replay.replay.lane_shuffle_pattern.clone();
     // Replays of past plays were recorded by a human; never autoplay them.
     options.autoplay = false;
@@ -413,6 +431,9 @@ mod tests {
             arrange_2p: ArrangeOption::Mirror,
             double_option: crate::select_options::DoubleOption::Flip,
             seed: Some(42),
+            seed_2p: Some(24),
+            legacy_seed: false,
+            bms_random_choices: vec![2],
             pattern: Some(vec![3, 1, 2, 0]),
         };
         apply_arrange_override(&mut options, &arrange);

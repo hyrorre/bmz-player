@@ -139,6 +139,8 @@ pub struct IrRulePayload {
 pub struct IrResultPayload {
     pub clear: String,
     pub played_at: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub duration_ms: Option<u64>,
     pub judges: IrJudgePayload,
     pub ex_score: u32,
     pub max_combo: u32,
@@ -191,6 +193,19 @@ pub struct IrSubmitResponse {
     pub previous_best: Option<IrPreviousBest>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub rankings: BTreeMap<IrRankingScope, IrScopedRankingResponse>,
+}
+
+/// `/api/v1/scores/delete-backfills` のレスポンス。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IrLocalBackfillDeleteResponse {
+    #[serde(default)]
+    pub deleted_score_ids: Vec<String>,
+    #[serde(default)]
+    pub missing_score_ids: Vec<String>,
+    /// ローカル重複に対応するが `local_backfill` と明示されていない既存 IR score。
+    /// 通常プレイを誤削除しないため、サーバーは保持したまま返す。
+    #[serde(default)]
+    pub retained_score_ids: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -253,18 +268,26 @@ pub struct IrOwnScoreHistoryEntry {
     pub gauge: String,
     pub ln_policy: String,
     pub double_option: String,
+    #[serde(default)]
+    pub applied_double_option: String,
+    #[serde(default)]
+    pub source_kind: String,
     pub rule_mode: String,
     pub judges: IrJudgePayload,
     pub notes: u32,
     pub pass_notes: u32,
+    #[serde(default)]
+    pub duration_ms: Option<u64>,
     #[serde(default)]
     pub device_type: String,
     #[serde(default)]
     pub arrange_1p: Option<String>,
     #[serde(default)]
     pub arrange_2p: Option<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_optional_i64")]
     pub random_seed: Option<i64>,
+    #[serde(default)]
+    pub seed_scheme: String,
     #[serde(default)]
     pub assist_mask: Option<u32>,
     #[serde(default)]
@@ -273,6 +296,26 @@ pub struct IrOwnScoreHistoryEntry {
     pub verification: String,
     #[serde(default)]
     pub replay_hash: Option<String>,
+}
+
+fn deserialize_optional_i64<'de, D>(deserializer: D) -> Result<Option<i64>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum IntegerValue {
+        Number(i64),
+        String(String),
+    }
+
+    match Option::<IntegerValue>::deserialize(deserializer)? {
+        None => Ok(None),
+        Some(IntegerValue::Number(value)) => Ok(Some(value)),
+        Some(IntegerValue::String(value)) => {
+            value.parse::<i64>().map(Some).map_err(serde::de::Error::custom)
+        }
+    }
 }
 
 /// `/api/v1/auth/login` / `/api/v1/auth/refresh` のレスポンス。
@@ -500,6 +543,8 @@ pub struct IrRankingScore {
     pub min_bp: u32,
     pub min_cb: u32,
     #[serde(default)]
+    pub judges: Option<IrJudgePayload>,
+    #[serde(default)]
     pub device_type: Option<String>,
     #[serde(default)]
     pub played_at: Option<String>,
@@ -544,5 +589,18 @@ mod tests {
             global.data.as_ref().unwrap().ranking.pagination.as_ref().unwrap().total,
             Some(1)
         );
+    }
+
+    #[test]
+    fn local_backfill_delete_response_keeps_untagged_scores() {
+        let response: IrLocalBackfillDeleteResponse = serde_json::from_value(serde_json::json!({
+            "deleted_score_ids": ["backfill-score"],
+            "retained_score_ids": ["verified-play-score"]
+        }))
+        .unwrap();
+
+        assert_eq!(response.deleted_score_ids, ["backfill-score"]);
+        assert_eq!(response.retained_score_ids, ["verified-play-score"]);
+        assert!(response.missing_score_ids.is_empty());
     }
 }

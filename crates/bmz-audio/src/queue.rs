@@ -5,6 +5,8 @@ pub enum RestartPolicy {
     #[default]
     Overlap,
     StopSameSound,
+    /// 同じ sound_id の再生中 voice を指定数までに制限する。
+    LimitSameSound(usize),
 }
 
 #[derive(Debug, Clone, Copy)]

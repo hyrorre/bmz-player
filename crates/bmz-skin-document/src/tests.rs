@@ -53,6 +53,28 @@ fn skin_document_normalizes_numeric_and_string_ids() {
 }
 
 #[test]
+fn skin_document_decodes_lift_cover_with_beatoraja_link_default() {
+    let document: SkinDocument = serde_json::from_str(
+        r#"
+        {
+            "type": 0,
+            "liftCover": [
+                { "id": "lift", "src": 13, "x": 0, "y": 0, "w": 432, "h": 723, "disapearLine": 357 },
+                { "id": "linked-lift", "src": 14, "isDisapearLineLinkLift": true }
+            ]
+        }
+        "#,
+    )
+    .unwrap();
+
+    assert_eq!(document.lift_cover.len(), 2);
+    assert_eq!(document.lift_cover[0].id, "lift");
+    assert_eq!(document.lift_cover[0].src, "13");
+    assert!(!document.lift_cover[0].is_disappear_line_link_lift);
+    assert!(document.lift_cover[1].is_disappear_line_link_lift);
+}
+
+#[test]
 fn skin_document_expands_conditions_and_includes() {
     let root = unique_test_dir("bmz-skin-document-json");
     std::fs::create_dir_all(&root).unwrap();
@@ -102,4 +124,51 @@ fn skin_document_expands_conditions_and_includes() {
         panic!("expected Frame entry");
     };
     assert_eq!(frame.x, Some(1));
+}
+
+#[test]
+fn runtime_flags_and_events_deserialize() {
+    let document: SkinDocument = serde_json::from_str(
+        r#"{
+            "runtimeFlag": [{ "id": -20001, "initial": true }],
+            "runtimeEvent": [{ "id": -20002, "toggleFlags": [-20001, -20003] }]
+        }"#,
+    )
+    .unwrap();
+
+    assert_eq!(document.runtime_flags.len(), 1);
+    assert_eq!(document.runtime_flags[0].id, -20_001);
+    assert!(document.runtime_flags[0].initial);
+    assert_eq!(document.runtime_events[0].id, -20_002);
+    assert_eq!(document.runtime_events[0].toggle_flags, [-20_001, -20_003]);
+}
+
+#[test]
+fn scene_audio_and_custom_event_deserialize() {
+    let document: SkinDocument = serde_json::from_str(
+        r#"{
+            "sceneAudio": [
+                { "action": "loop", "path": "result/bgm.ogg", "volume": 0.75 }
+            ],
+            "customEvents": [
+                {
+                    "id": 1001,
+                    "timer": 2,
+                    "once": true,
+                    "audioActions": [
+                        { "action": "stop", "path": "result/bgm.ogg" },
+                        { "action": "play", "path": "result/close.ogg", "volume": 0.5 }
+                    ]
+                }
+            ]
+        }"#,
+    )
+    .unwrap();
+
+    assert_eq!(document.scene_audio[0].action, SkinAudioActionKind::Loop);
+    assert_eq!(document.scene_audio[0].volume, 0.75);
+    assert_eq!(document.custom_events[0].timer, 2);
+    assert!(document.custom_events[0].once);
+    assert_eq!(document.custom_events[0].audio_actions.len(), 2);
+    assert_eq!(document.custom_events[0].audio_actions[0].volume, 1.0);
 }

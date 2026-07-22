@@ -1,7 +1,7 @@
 use std::path::Path;
 
 use anyhow::Result;
-use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
+use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params, params_from_iter};
 
 use super::common::{configure_connection, hash_to_hex, hex_to_hash};
 use crate::ln_policy::LnScorePolicy;
@@ -21,12 +21,13 @@ pub enum IrScoreJobStatus {
     Failed,
 }
 
-/// IR ジョブの種別。単曲スコア、コーススコア、または付随するリプレイ送信。
+/// IR ジョブの種別。単曲スコア、コーススコア、リプレイ、または既送信scoreへの署名。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum IrJobKind {
     Score,
     Course,
     Replay,
+    Attestation,
 }
 
 impl IrJobKind {
@@ -35,6 +36,7 @@ impl IrJobKind {
             Self::Score => "score",
             Self::Course => "course",
             Self::Replay => "replay",
+            Self::Attestation => "attestation",
         }
     }
 
@@ -42,6 +44,7 @@ impl IrJobKind {
         match value {
             "course" => Self::Course,
             "replay" => Self::Replay,
+            "attestation" => Self::Attestation,
             _ => Self::Score,
         }
     }
@@ -100,6 +103,21 @@ pub struct NewIrScoreSubmission {
     pub submitted_at: i64,
     pub log_path: String,
     pub error: String,
+}
+
+/// ローカル score_history と対応する、受理済み IR score の記録。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IrSubmittedScoreLink {
+    pub provider: String,
+    pub account_id: String,
+    pub local_score_id: i64,
+    pub remote_score_id: String,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct IrLocalScoreCleanupReport {
+    pub removed_jobs: u32,
+    pub removed_submissions: u32,
 }
 
 impl NetworkDatabase {
@@ -163,6 +181,65 @@ impl NetworkDatabase {
         self.pending_ir_score_jobs_with_backoff_policy(now, limit, true)
     }
 
+    /// 指定した今回のプレイに紐付く IR ジョブを返す。
+    ///
+    /// 結果画面は常駐同期と同じ DB を共有するため、送信バッチ全体の集計ではなく
+    /// この attempt の状態を監視して skin の IR 送信タイマーを更新する。
+    pub fn ir_score_jobs_for_local_score(
+        &self,
+        kind: IrJobKind,
+        local_score_id: i64,
+    ) -> Result<Vec<IrScoreJobRecord>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, provider, account_id, local_score_id, chart_sha256, ln_policy,
+                payload_json, status, attempt_count, next_attempt_at, last_error,
+                created_at, updated_at, kind
+             FROM ir_score_jobs
+             WHERE kind = ?1 AND local_score_id = ?2
+             ORDER BY id ASC",
+        )?;
+        stmt.query_map(params![kind.as_str(), local_score_id], ir_score_job_from_row)?
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(Into::into)
+    }
+
+    pub fn pending_ir_score_jobs_for_kind(
+        &self,
+        provider: &str,
+        account_id: &str,
+        kind: IrJobKind,
+        now: i64,
+        limit: u32,
+        ignore_retry_backoff: bool,
+    ) -> Result<Vec<IrScoreJobRecord>> {
+        const SENDING_STALE_AFTER_SECONDS: i64 = 300;
+        let retry_filter = if ignore_retry_backoff {
+            "status IN ('pending', 'failed')"
+        } else {
+            "status IN ('pending', 'failed') AND next_attempt_at <= ?1"
+        };
+        let sql = format!(
+            "SELECT id, provider, account_id, local_score_id, chart_sha256, ln_policy,
+                payload_json, status, attempt_count, next_attempt_at, last_error,
+                created_at, updated_at, kind
+             FROM ir_score_jobs
+             WHERE provider = ?4
+               AND account_id = ?5
+               AND kind = ?6
+               AND (({retry_filter})
+                    OR (status = 'sending' AND updated_at <= ?1 - ?3))
+             ORDER BY next_attempt_at ASC, id ASC
+             LIMIT ?2"
+        );
+        let mut stmt = self.conn.prepare(&sql)?;
+        stmt.query_map(
+            params![now, limit, SENDING_STALE_AFTER_SECONDS, provider, account_id, kind.as_str()],
+            ir_score_job_from_row,
+        )?
+        .collect::<std::result::Result<Vec<_>, _>>()
+        .map_err(Into::into)
+    }
+
     pub fn claim_pending_ir_score_jobs(
         &mut self,
         now: i64,
@@ -203,6 +280,62 @@ impl NetworkDatabase {
         Ok(jobs)
     }
 
+    pub fn claim_pending_ir_score_jobs_for_kind(
+        &mut self,
+        provider: &str,
+        account_id: &str,
+        kind: IrJobKind,
+        now: i64,
+        limit: u32,
+        ignore_retry_backoff: bool,
+    ) -> Result<Vec<IrScoreJobRecord>> {
+        const SENDING_STALE_AFTER_SECONDS: i64 = 300;
+        let retry_filter = if ignore_retry_backoff {
+            "status IN ('pending', 'failed')"
+        } else {
+            "status IN ('pending', 'failed') AND next_attempt_at <= ?1"
+        };
+        let sql = format!(
+            "SELECT id, provider, account_id, local_score_id, chart_sha256, ln_policy,
+                payload_json, status, attempt_count, next_attempt_at, last_error,
+                created_at, updated_at, kind
+             FROM ir_score_jobs
+             WHERE provider = ?4
+               AND account_id = ?5
+               AND kind = ?6
+               AND (({retry_filter})
+                    OR (status = 'sending' AND updated_at <= ?1 - ?3))
+             ORDER BY next_attempt_at ASC, id ASC
+             LIMIT ?2"
+        );
+        let tx = self.conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let jobs = {
+            let mut stmt = tx.prepare(&sql)?;
+            stmt.query_map(
+                params![
+                    now,
+                    limit,
+                    SENDING_STALE_AFTER_SECONDS,
+                    provider,
+                    account_id,
+                    kind.as_str()
+                ],
+                ir_score_job_from_row,
+            )?
+            .collect::<std::result::Result<Vec<_>, _>>()?
+        };
+        for job in &jobs {
+            tx.execute(
+                "UPDATE ir_score_jobs
+                 SET status = 'sending', updated_at = ?2
+                 WHERE id = ?1",
+                params![job.id, now],
+            )?;
+        }
+        tx.commit()?;
+        Ok(jobs)
+    }
+
     pub fn has_ir_score_job(
         &self,
         provider: &str,
@@ -225,6 +358,78 @@ impl NetworkDatabase {
             )
             .optional()?
             .is_some())
+    }
+
+    pub fn unfinished_ir_score_job_count_for_kind(
+        &self,
+        provider: &str,
+        account_id: &str,
+        kind: IrJobKind,
+    ) -> Result<u32> {
+        let count: i64 = self.conn.query_row(
+            "SELECT COUNT(*)
+             FROM ir_score_jobs
+             WHERE provider = ?1
+               AND account_id = ?2
+               AND kind = ?3
+               AND status != 'succeeded'",
+            params![provider, account_id, kind.as_str()],
+            |row| row.get(0),
+        )?;
+        Ok(u32::try_from(count).unwrap_or(u32::MAX))
+    }
+
+    /// 成功済み単曲scoreのremote idから、後付け署名用jobを重複なく投入する。
+    pub fn enqueue_ir_score_attestation_jobs(
+        &mut self,
+        provider: &str,
+        account_id: &str,
+        now: i64,
+    ) -> Result<u32> {
+        let submitted = {
+            let mut statement = self.conn.prepare(
+                "SELECT DISTINCT local_score_id, remote_score_id
+                 FROM ir_score_submissions
+                 WHERE provider = ?1
+                   AND account_id = ?2
+                   AND kind = 'score'
+                   AND status = 'succeeded'
+                   AND remote_score_id != ''
+                 ORDER BY local_score_id ASC",
+            )?;
+            statement
+                .query_map(params![provider, account_id], |row| {
+                    Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+                })?
+                .collect::<std::result::Result<Vec<_>, _>>()?
+        };
+
+        let mut enqueued = 0;
+        for (local_score_id, remote_score_id) in submitted {
+            if self.has_ir_score_job(
+                provider,
+                account_id,
+                IrJobKind::Attestation,
+                local_score_id,
+            )? {
+                continue;
+            }
+            let payload_json = serde_json::to_string(&serde_json::json!({
+                "remote_score_id": remote_score_id,
+            }))?;
+            self.enqueue_ir_score_job(&NewIrScoreJob {
+                provider: provider.to_string(),
+                account_id: account_id.to_string(),
+                kind: IrJobKind::Attestation,
+                local_score_id,
+                chart_sha256: [0; 32],
+                ln_policy: LnScorePolicy::AutoLn,
+                payload_json,
+                now,
+            })?;
+            enqueued += 1;
+        }
+        Ok(enqueued)
     }
 
     fn pending_ir_score_jobs_with_backoff_policy(
@@ -454,6 +659,90 @@ impl NetworkDatabase {
         )?;
         Ok(deleted)
     }
+
+    /// 指定した local score id に紐付く、全 provider の受理済み単曲 score を返す。
+    ///
+    /// cleanup 実行前に、選択した provider 以外へ送信済みの履歴を見落とさないために
+    /// provider / account を絞らない。
+    pub fn successful_ir_score_submissions_for_local_scores(
+        &self,
+        local_score_ids: &[i64],
+    ) -> Result<Vec<IrSubmittedScoreLink>> {
+        const QUERY_CHUNK_SIZE: usize = 500;
+        let mut links = Vec::new();
+        for ids in local_score_ids.chunks(QUERY_CHUNK_SIZE) {
+            let placeholders = sql_placeholders(ids.len());
+            let sql = format!(
+                "SELECT DISTINCT provider, account_id, local_score_id, remote_score_id
+                 FROM ir_score_submissions
+                 WHERE kind = 'score'
+                   AND status = 'succeeded'
+                   AND remote_score_id != ''
+                   AND local_score_id IN ({placeholders})
+                 ORDER BY provider, account_id, local_score_id, remote_score_id"
+            );
+            let mut statement = self.conn.prepare(&sql)?;
+            let rows = statement
+                .query_map(params_from_iter(ids.iter()), |row| {
+                    Ok(IrSubmittedScoreLink {
+                        provider: row.get(0)?,
+                        account_id: row.get(1)?,
+                        local_score_id: row.get(2)?,
+                        remote_score_id: row.get(3)?,
+                    })
+                })?
+                .collect::<std::result::Result<Vec<_>, _>>()?;
+            links.extend(rows);
+        }
+        Ok(links)
+    }
+
+    /// 指定 provider/account の古い local score に紐付く送信台帳とジョブを削除する。
+    ///
+    /// IR 本体の削除に成功した後で呼び出す。score/replay/attestation を含め、消える
+    /// score_history への参照を残さない。
+    pub fn purge_ir_records_for_local_scores(
+        &mut self,
+        provider: &str,
+        account_id: &str,
+        local_score_ids: &[i64],
+    ) -> Result<IrLocalScoreCleanupReport> {
+        const DELETE_CHUNK_SIZE: usize = 500;
+        let tx = self.conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let mut report = IrLocalScoreCleanupReport::default();
+        for ids in local_score_ids.chunks(DELETE_CHUNK_SIZE) {
+            let placeholders = sql_placeholders(ids.len());
+            let parameters = || {
+                std::iter::once(&provider as &dyn rusqlite::ToSql)
+                    .chain(std::iter::once(&account_id as &dyn rusqlite::ToSql))
+                    .chain(ids.iter().map(|id| id as &dyn rusqlite::ToSql))
+            };
+            let submissions_sql = format!(
+                "DELETE FROM ir_score_submissions
+                 WHERE provider = ?1
+                   AND account_id = ?2
+                   AND local_score_id IN ({placeholders})"
+            );
+            report.removed_submissions = report.removed_submissions.saturating_add(
+                tx.execute(&submissions_sql, params_from_iter(parameters()))? as u32,
+            );
+            let jobs_sql = format!(
+                "DELETE FROM ir_score_jobs
+                 WHERE provider = ?1
+                   AND account_id = ?2
+                   AND local_score_id IN ({placeholders})"
+            );
+            report.removed_jobs = report
+                .removed_jobs
+                .saturating_add(tx.execute(&jobs_sql, params_from_iter(parameters()))? as u32);
+        }
+        tx.commit()?;
+        Ok(report)
+    }
+}
+
+fn sql_placeholders(count: usize) -> String {
+    std::iter::repeat_n("?", count).collect::<Vec<_>>().join(", ")
 }
 
 fn ir_score_job_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<IrScoreJobRecord> {
@@ -577,6 +866,107 @@ mod tests {
             })
             .unwrap();
         assert!(payload_json.is_empty());
+    }
+
+    #[test]
+    fn cleanup_removes_selected_provider_records_for_removed_local_scores() {
+        let mut db = open_network_db();
+        let score_job = db
+            .enqueue_ir_score_job(&NewIrScoreJob {
+                provider: "bmz".to_string(),
+                account_id: "account-1".to_string(),
+                kind: IrJobKind::Score,
+                local_score_id: 42,
+                chart_sha256: [1; 32],
+                ln_policy: LnScorePolicy::AutoLn,
+                payload_json: "{}".to_string(),
+                now: 100,
+            })
+            .unwrap();
+        db.enqueue_ir_score_job(&NewIrScoreJob {
+            provider: "bmz".to_string(),
+            account_id: "account-1".to_string(),
+            kind: IrJobKind::Attestation,
+            local_score_id: 42,
+            chart_sha256: [0; 32],
+            ln_policy: LnScorePolicy::AutoLn,
+            payload_json: "{}".to_string(),
+            now: 100,
+        })
+        .unwrap();
+        db.insert_ir_score_submission(&NewIrScoreSubmission {
+            job_id: score_job,
+            provider: "bmz".to_string(),
+            account_id: "account-1".to_string(),
+            kind: IrJobKind::Score,
+            local_score_id: 42,
+            remote_score_id: "remote-42".to_string(),
+            status: "succeeded".to_string(),
+            submitted_at: 101,
+            log_path: String::new(),
+            error: String::new(),
+        })
+        .unwrap();
+        db.enqueue_ir_score_job(&NewIrScoreJob {
+            provider: "other".to_string(),
+            account_id: "account-2".to_string(),
+            kind: IrJobKind::Score,
+            local_score_id: 42,
+            chart_sha256: [2; 32],
+            ln_policy: LnScorePolicy::AutoLn,
+            payload_json: "{}".to_string(),
+            now: 100,
+        })
+        .unwrap();
+
+        assert_eq!(
+            db.successful_ir_score_submissions_for_local_scores(&[42]).unwrap(),
+            vec![IrSubmittedScoreLink {
+                provider: "bmz".to_string(),
+                account_id: "account-1".to_string(),
+                local_score_id: 42,
+                remote_score_id: "remote-42".to_string(),
+            }]
+        );
+        assert_eq!(
+            db.purge_ir_records_for_local_scores("bmz", "account-1", &[42]).unwrap(),
+            IrLocalScoreCleanupReport { removed_jobs: 2, removed_submissions: 1 }
+        );
+        let remaining: Vec<(String, String)> = db
+            .conn()
+            .prepare("SELECT provider, account_id FROM ir_score_jobs ORDER BY id")
+            .unwrap()
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
+            .unwrap();
+        assert_eq!(remaining, vec![("other".to_string(), "account-2".to_string())]);
+    }
+
+    #[test]
+    fn attempt_job_lookup_keeps_kind_and_local_score_isolated() {
+        let mut db = open_network_db();
+        for (kind, local_score_id) in
+            [(IrJobKind::Score, 42), (IrJobKind::Course, 42), (IrJobKind::Score, 43)]
+        {
+            db.enqueue_ir_score_job(&NewIrScoreJob {
+                provider: format!("provider-{local_score_id}-{}", kind.as_str()),
+                account_id: "account".to_string(),
+                kind,
+                local_score_id,
+                chart_sha256: [local_score_id as u8; 32],
+                ln_policy: LnScorePolicy::AutoLn,
+                payload_json: "{}".to_string(),
+                now: 100,
+            })
+            .unwrap();
+        }
+
+        let jobs = db.ir_score_jobs_for_local_score(IrJobKind::Score, 42).unwrap();
+
+        assert_eq!(jobs.len(), 1);
+        assert_eq!(jobs[0].kind, IrJobKind::Score);
+        assert_eq!(jobs[0].local_score_id, 42);
     }
 
     #[test]
@@ -712,12 +1102,131 @@ mod tests {
     }
 
     #[test]
+    fn claiming_ir_jobs_for_kind_keeps_other_jobs_pending() {
+        let mut db = open_network_db();
+        let score = enqueue_test_job(&mut db, 1, 100);
+        let attestation = db
+            .enqueue_ir_score_job(&NewIrScoreJob {
+                provider: "bmz-official".to_string(),
+                account_id: "account-1".to_string(),
+                kind: IrJobKind::Attestation,
+                local_score_id: 2,
+                chart_sha256: [0; 32],
+                ln_policy: LnScorePolicy::AutoLn,
+                payload_json: r#"{"remote_score_id":"remote-2"}"#.to_string(),
+                now: 100,
+            })
+            .unwrap();
+        db.enqueue_ir_score_job(&NewIrScoreJob {
+            provider: "bmz-official".to_string(),
+            account_id: "account-2".to_string(),
+            kind: IrJobKind::Attestation,
+            local_score_id: 3,
+            chart_sha256: [0; 32],
+            ln_policy: LnScorePolicy::AutoLn,
+            payload_json: r#"{"remote_score_id":"remote-3"}"#.to_string(),
+            now: 100,
+        })
+        .unwrap();
+
+        let pending = db
+            .pending_ir_score_jobs_for_kind(
+                "bmz-official",
+                "account-1",
+                IrJobKind::Attestation,
+                100,
+                10,
+                true,
+            )
+            .unwrap();
+        assert_eq!(pending.iter().map(|job| job.id).collect::<Vec<_>>(), vec![attestation]);
+
+        let claimed = db
+            .claim_pending_ir_score_jobs_for_kind(
+                "bmz-official",
+                "account-1",
+                IrJobKind::Attestation,
+                100,
+                10,
+                true,
+            )
+            .unwrap();
+        assert_eq!(claimed.iter().map(|job| job.id).collect::<Vec<_>>(), vec![attestation]);
+
+        let score_status: String = db
+            .conn()
+            .query_row("SELECT status FROM ir_score_jobs WHERE id = ?1", [score], |row| row.get(0))
+            .unwrap();
+        assert_eq!(score_status, "pending");
+    }
+
+    #[test]
     fn existing_ir_job_is_detected_before_backfill_reenqueue() {
         let mut db = open_network_db();
         enqueue_test_job(&mut db, 42, 100);
 
         assert!(db.has_ir_score_job("bmz-official", "account-1", IrJobKind::Score, 42).unwrap());
         assert!(!db.has_ir_score_job("bmz-official", "account-2", IrJobKind::Score, 42).unwrap());
+        assert_eq!(
+            db.unfinished_ir_score_job_count_for_kind(
+                "bmz-official",
+                "account-1",
+                IrJobKind::Score,
+            )
+            .unwrap(),
+            1
+        );
+
+        let job_id = db
+            .conn()
+            .query_row("SELECT id FROM ir_score_jobs WHERE local_score_id = 42", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        db.mark_ir_score_job_status(job_id, IrScoreJobStatus::Succeeded, 200, "").unwrap();
+        assert_eq!(
+            db.unfinished_ir_score_job_count_for_kind(
+                "bmz-official",
+                "account-1",
+                IrJobKind::Score,
+            )
+            .unwrap(),
+            0
+        );
+    }
+
+    #[test]
+    fn submitted_scores_enqueue_one_attestation_job() {
+        let mut db = open_network_db();
+        let score_job_id = enqueue_test_job(&mut db, 42, 100);
+        db.insert_ir_score_submission(&NewIrScoreSubmission {
+            job_id: score_job_id,
+            provider: "bmz-official".to_string(),
+            account_id: "account-1".to_string(),
+            kind: IrJobKind::Score,
+            local_score_id: 42,
+            remote_score_id: "remote-42".to_string(),
+            status: "succeeded".to_string(),
+            submitted_at: 200,
+            log_path: "ir-submissions.jsonl".to_string(),
+            error: String::new(),
+        })
+        .unwrap();
+
+        assert_eq!(
+            db.enqueue_ir_score_attestation_jobs("bmz-official", "account-1", 300).unwrap(),
+            1
+        );
+        assert_eq!(
+            db.enqueue_ir_score_attestation_jobs("bmz-official", "account-1", 301).unwrap(),
+            0
+        );
+
+        let jobs = db.pending_ir_score_jobs(300, 10).unwrap();
+        let job = jobs.iter().find(|job| job.kind == IrJobKind::Attestation).unwrap();
+        let payload: serde_json::Value = serde_json::from_str(&job.payload_json).unwrap();
+        assert_eq!(job.local_score_id, 42);
+        assert_eq!(payload["remote_score_id"], "remote-42");
     }
 
     #[test]

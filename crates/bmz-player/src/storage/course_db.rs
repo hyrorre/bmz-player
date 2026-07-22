@@ -162,6 +162,57 @@ pub(super) fn list_course_entries(
     Ok(entries)
 }
 
+/// Links unresolved course entries to a chart that has just been imported.
+///
+/// This follows the same SHA-256-first, MD5-fallback rule as
+/// `resolve_entry_chart_id`.  Existing links are intentionally preserved.
+pub(super) fn backfill_unresolved_course_entries_for_chart(
+    conn: &Connection,
+    sha256: &str,
+    md5: &str,
+) -> Result<usize> {
+    let sha256_matches = conn
+        .prepare_cached(
+            "UPDATE course_entries
+             SET chart_id = (
+                 SELECT id
+                 FROM charts
+                 WHERE charts.sha256 = ?1
+                 ORDER BY id
+                 LIMIT 1
+             )
+             WHERE chart_id IS NULL
+               AND sha256 = ?1",
+        )?
+        .execute(params![sha256])?;
+
+    let md5_matches = conn
+        .prepare_cached(
+            "UPDATE course_entries
+             SET chart_id = COALESCE(
+                 (
+                     SELECT id
+                     FROM charts
+                     WHERE charts.sha256 = course_entries.sha256
+                     ORDER BY id
+                     LIMIT 1
+                 ),
+                 (
+                     SELECT id
+                     FROM charts
+                     WHERE charts.md5 = ?1
+                     ORDER BY id
+                     LIMIT 1
+                 )
+             )
+             WHERE chart_id IS NULL
+               AND md5 = ?1",
+        )?
+        .execute(params![md5])?;
+
+    Ok(sha256_matches + md5_matches)
+}
+
 fn stored_course_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<StoredCourse> {
     let id = row.get(0)?;
     let source = row.get(1)?;

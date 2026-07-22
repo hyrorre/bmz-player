@@ -4,11 +4,15 @@ export type EffectiveLnMode = 'ln' | 'cn' | 'hcn'
 
 export type IrRankingScope = 'global' | 'self_and_rivals' | 'rivals' | 'self' | 'around_self'
 
-export type IrVerificationStatus = 'unverified' | 'signed' | 'invalid' | 'trusted'
+export type IrVerificationStatus = 'unverified' | 'signed_backfill' | 'verified_play'
 
 export type IrDeviceType = 'keyboard' | 'controller'
 
 export type IrDoubleOption = 'off' | 'battle' | 'battle_auto_scratch'
+
+export type IrAppliedDoubleOption = 'off' | 'flip' | 'battle' | 'battle_auto_scratch'
+
+export type IrScoreSourceKind = 'local' | 'beatoraja' | 'lr2' | 'lr2oraja' | 'lr2oraja_dx'
 
 export type IrRuleMode = 'Beatoraja' | 'Lr2Oraja' | 'Dx'
 
@@ -87,9 +91,15 @@ export interface IrScoreSubmission {
   play_options: {
     device_type: IrDeviceType
     double_option?: IrDoubleOption
+    applied_double_option?: IrAppliedDoubleOption
+    source_kind?: IrScoreSourceKind
     option?: string
     arrange_1p?: string
     arrange_2p?: string
+    /** Current clients use decimal strings; numbers are accepted for legacy payloads. */
+    seed?: string | number
+    /** Current clients use decimal strings; numbers are accepted for legacy payloads. */
+    random_seed?: string | number
   } & Record<string, unknown>
   replay?: {
     hash?: string | null
@@ -107,6 +117,11 @@ export interface IrJudgeCounts {
   bad: number
   poor: number
   empty_poor: number
+}
+
+export interface IrJudges {
+  fast: IrJudgeCounts
+  slow: IrJudgeCounts
 }
 
 export interface IrPreviousBest {
@@ -196,6 +211,8 @@ export interface IrRankingEntry {
     arrange_2p?: string
     played_at: string | null
     verification: IrVerificationStatus
+    /** Highest EX-score attempt's judgement breakdown. Absent on legacy rows. */
+    judges?: IrJudges
     source_score_ids?: {
       ex_score: string
       clear: string
@@ -250,6 +267,8 @@ export interface IrScoreHistoryEntry {
   gauge: string
   ln_policy: LnScorePolicy
   double_option: IrDoubleOption
+  applied_double_option: IrAppliedDoubleOption
+  source_kind: IrScoreSourceKind
   rule_mode: IrRuleMode
   device_type: IrDeviceType
   arrange_1p?: string
@@ -283,6 +302,8 @@ export interface IrOwnScoreHistoryEntry {
   gauge: string
   ln_policy: LnScorePolicy
   double_option: IrDoubleOption
+  applied_double_option: IrAppliedDoubleOption
+  source_kind: IrScoreSourceKind
   rule_mode: IrRuleMode
   judges: {
     fast: {
@@ -304,13 +325,96 @@ export interface IrOwnScoreHistoryEntry {
   }
   notes: number
   pass_notes: number
+  duration_ms: number | null
   device_type: IrDeviceType
   arrange_1p?: string
   arrange_2p?: string
-  random_seed?: number
+  random_seed?: number | string
+  seed_scheme?: string
   assist_mask?: number
   played_at: number | null
   server_received_at: number
   verification: IrVerificationStatus
   replay_hash?: string
+}
+
+export type IrDailyMode = 'all'
+
+export interface IrDailyReport {
+  player: {
+    id: string
+    display_name: string
+  }
+  date: string
+  mode: IrDailyMode
+  timezone: 'Asia/Tokyo'
+  boundary_minutes: number
+  range: {
+    start: string
+    end: string
+  }
+  summary: {
+    play_notes: number
+    clear_count: number
+    play_count: number
+    chart_count: number
+    /** 全プレイの EX score / (全プレイの notes * 2) を百分率で返す。 */
+    accuracy: number | null
+    /** duration_ms があるプレイだけを合計する。 */
+    play_time_ms: number
+    play_time_unknown_count: number
+  }
+  charts: IrDailyChartResult[]
+}
+
+export interface IrDailyChartResult {
+  chart: {
+    sha256: string
+    md5: string | null
+    title: string
+    subtitle: string | null
+    artist: string
+    mode: string
+    level: number | null
+    difficulty: string | null
+    notes: number
+  }
+  /** 難易度表同期データとの突合結果。未同期時は空配列。 */
+  difficulty_labels: IrDailyDifficultyLabel[]
+  rules: IrDailyRuleResult[]
+}
+
+export interface IrDailyDifficultyLabel {
+  table_id: string
+  table_name: string
+  symbol: string
+  level: string
+}
+
+export interface IrDailyRuleResult {
+  rule: {
+    ln_policy: string
+    double_option: IrDoubleOption
+    rule_mode: IrRuleMode
+    scoring: string
+  }
+  plays: number
+  before: IrDailyBestSnapshot
+  after: IrDailyBestSnapshot
+  updated_fields: {
+    clear: boolean
+    ex_score: boolean
+    min_bp: boolean
+  }
+}
+
+export interface IrDailyBestSnapshot {
+  clear: {
+    type: string
+    rank: number
+  } | null
+  ex_score: number | null
+  /** ex_score を記録した同じ score 行の notes。スコア率計算に使う。 */
+  ex_score_notes: number | null
+  min_bp: number | null
 }

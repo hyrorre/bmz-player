@@ -5,7 +5,7 @@ use bmz_gameplay::result::PlayResult;
 use bmz_gameplay::score::scored_note_count;
 
 use crate::ln_policy::{ChartLnProfile, LnScorePolicy};
-use crate::select_options::{ArrangeOption, DoubleOptionScoreBucket};
+use crate::select_options::{ArrangeOption, DoubleOption, DoubleOptionScoreBucket};
 use crate::storage::common::hash_to_hex;
 use crate::storage::score_db::encode_beatoraja_ghost;
 
@@ -18,6 +18,7 @@ use super::types::{
 #[derive(Debug, Clone)]
 pub struct IrSubmissionContext {
     pub played_at: i64,
+    pub duration_ms: Option<u64>,
     pub ln_policy: LnScorePolicy,
     pub effective_ln_mode: LongNoteMode,
     pub gauge_option: String,
@@ -26,8 +27,12 @@ pub struct IrSubmissionContext {
     pub arrange: ArrangeOption,
     pub arrange_2p: ArrangeOption,
     pub double_option: DoubleOptionScoreBucket,
+    pub applied_double_option: DoubleOption,
     pub arrange_seed: Option<i64>,
     pub random_seed: Option<i64>,
+    /// Provider-neutral seed semantics. Providers decide which options/schemes they accept.
+    pub seed_scheme: String,
+    pub bms_random_choices: Vec<i32>,
     pub rule_mode: String,
     /// 保存済みリプレイファイルの SHA256 (hex)。リプレイが無ければ None。
     pub replay_hash: Option<String>,
@@ -54,13 +59,28 @@ pub fn build_score_submission(
         "double_option".to_string(),
         serde_json::Value::String(context.double_option.ir_value().to_string()),
     );
-    if (context.arrange.uses_seed() || context.arrange_2p.uses_seed())
-        && let Some(seed) = context.arrange_seed
-    {
-        play_options.insert("seed".to_string(), serde_json::json!(seed));
+    play_options.insert(
+        "applied_double_option".to_string(),
+        serde_json::Value::String(context.applied_double_option.ir_value().to_string()),
+    );
+    play_options.insert("source_kind".to_string(), serde_json::Value::String("local".to_string()));
+    if let Some(seed) = context.arrange_seed {
+        play_options.insert("seed".to_string(), serde_json::json!(seed.to_string()));
     }
     if let Some(seed) = context.random_seed {
-        play_options.insert("random_seed".to_string(), serde_json::json!(seed));
+        play_options.insert("random_seed".to_string(), serde_json::json!(seed.to_string()));
+    }
+    if !context.seed_scheme.is_empty() {
+        play_options.insert(
+            "seed_scheme".to_string(),
+            serde_json::Value::String(context.seed_scheme.clone()),
+        );
+    }
+    if !context.bms_random_choices.is_empty() {
+        play_options.insert(
+            "bms_random_choices".to_string(),
+            serde_json::json!(context.bms_random_choices),
+        );
     }
     if !context.rule_mode.is_empty() {
         play_options
@@ -89,6 +109,7 @@ pub fn build_score_submission(
         result: IrResultPayload {
             clear: result.clear_type.as_str().to_string(),
             played_at: context.played_at,
+            duration_ms: context.duration_ms,
             judges: IrJudgePayload {
                 fast: IrJudgeSidePayload {
                     pgreat: judges.fast_pgreat,
@@ -110,7 +131,7 @@ pub fn build_score_submission(
             ex_score: result.score.ex_score(),
             max_combo: result.score.max_combo,
             notes: result.total_notes,
-            pass_notes: Some(result.score.past_notes),
+            pass_notes: None,
             min_bp: result.record_bp(),
             min_cb: result.record_cb(),
             ghost,
@@ -263,6 +284,12 @@ mod tests {
     use super::*;
 
     #[test]
+    fn f_random_options_remain_available_to_ir_providers() {
+        assert_eq!(arrange_option_ir(ArrangeOption::FRandom), "f-random");
+        assert_eq!(arrange_option_ir(ArrangeOption::MFRandom), "mf-random");
+    }
+
+    #[test]
     fn build_score_submission_uses_bmz_bp_and_cb() {
         let chart = PlayableChart {
             identity: ChartIdentity { file_md5: [1; 16], file_sha256: [2; 32] },
@@ -312,6 +339,7 @@ mod tests {
             &result,
             IrSubmissionContext {
                 played_at: 100,
+                duration_ms: Some(123_456),
                 ln_policy: LnScorePolicy::ForceLn,
                 effective_ln_mode: LongNoteMode::Ln,
                 gauge_option: "normal".to_string(),
@@ -320,8 +348,11 @@ mod tests {
                 arrange: ArrangeOption::Random,
                 arrange_2p: ArrangeOption::Mirror,
                 double_option: DoubleOptionScoreBucket::Battle,
+                applied_double_option: DoubleOption::Battle,
                 arrange_seed: Some(42),
                 random_seed: Some(42),
+                seed_scheme: "beatoraja_24bit_v1".to_string(),
+                bms_random_choices: vec![2, 1],
                 rule_mode: "Beatoraja".to_string(),
                 replay_hash: Some("ab".repeat(32)),
             },
@@ -329,7 +360,8 @@ mod tests {
 
         assert_eq!(payload.result.min_bp, 6);
         assert_eq!(payload.result.min_cb, 3);
-        assert_eq!(payload.result.pass_notes, Some(0));
+        assert_eq!(payload.result.duration_ms, Some(123_456));
+        assert_eq!(payload.result.pass_notes, None);
         assert_eq!(payload.rule.ln_policy, LnScorePolicy::ForceLn);
         assert_eq!(payload.rule.rule_mode, "Beatoraja");
         assert_eq!(payload.rule.key_mode, "7K");
@@ -350,11 +382,27 @@ mod tests {
             Some(&serde_json::Value::String("mirror".to_string()))
         );
         assert_eq!(
+            payload.play_options.get("applied_double_option"),
+            Some(&serde_json::Value::String("battle".to_string()))
+        );
+        assert_eq!(
+            payload.play_options.get("source_kind"),
+            Some(&serde_json::Value::String("local".to_string()))
+        );
+        assert_eq!(
             payload.play_options.get("double_option"),
             Some(&serde_json::Value::String("battle".to_string()))
         );
-        assert_eq!(payload.play_options.get("seed"), Some(&serde_json::json!(42)));
-        assert_eq!(payload.play_options.get("random_seed"), Some(&serde_json::json!(42)));
+        assert_eq!(payload.play_options.get("seed"), Some(&serde_json::json!("42")));
+        assert_eq!(payload.play_options.get("random_seed"), Some(&serde_json::json!("42")));
+        assert_eq!(
+            payload.play_options.get("seed_scheme"),
+            Some(&serde_json::json!("beatoraja_24bit_v1"))
+        );
+        assert_eq!(
+            payload.play_options.get("bms_random_choices"),
+            Some(&serde_json::json!([2, 1]))
+        );
         let replay = payload.replay.expect("replay payload");
         assert_eq!(replay.hash, "ab".repeat(32));
         assert_eq!(replay.format, "bmz-replay-v1");

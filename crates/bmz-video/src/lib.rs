@@ -1,9 +1,9 @@
 use std::collections::VecDeque;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::{
     Arc, Mutex,
-    atomic::{AtomicBool, AtomicI64, Ordering},
-    mpsc::{Receiver, SyncSender, sync_channel},
+    atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering},
+    mpsc::{Receiver, SyncSender, TrySendError, sync_channel},
 };
 use std::time::Duration;
 
@@ -22,14 +22,26 @@ pub struct DecodedFrame {
 }
 
 pub struct VideoBgaDecoder {
-    receiver: Option<Receiver<DecodedFrame>>,
+    path: PathBuf,
+    follow_playback_time: bool,
+    receiver: Option<Receiver<QueuedDecodedFrame>>,
     clocked_frames: Option<Arc<Mutex<ClockedFrameState>>>,
     pending: VecDeque<DecodedFrame>,
     current: Option<DecodedFrame>,
     finished: bool,
-    playback_target_us: Option<Arc<AtomicI64>>,
+    playback_target_us: Arc<AtomicI64>,
+    decode_generation: Arc<AtomicU64>,
     stop_decode: Arc<AtomicBool>,
+    /// Channel-mode: decode thread seeks to start and begins a new pass.
+    restart_decode: Arc<AtomicBool>,
+    /// Channel-mode: current pass reached EOF without disconnecting the receiver.
+    pass_finished: Arc<AtomicBool>,
     decode_thread: Option<std::thread::JoinHandle<()>>,
+}
+
+struct QueuedDecodedFrame {
+    generation: u64,
+    frame: DecodedFrame,
 }
 
 struct SelectedVideoStream {
@@ -37,6 +49,54 @@ struct SelectedVideoStream {
     time_base_num: i64,
     time_base_den: i64,
     codec_params: ffmpeg_next::codec::Parameters,
+}
+
+#[derive(Debug, Default)]
+struct VideoTimestampNormalizer {
+    origin_raw: Option<i64>,
+    last_us: i64,
+}
+
+impl VideoTimestampNormalizer {
+    fn frame_pts_us(
+        &mut self,
+        decoded: &ffmpeg_next::frame::Video,
+        time_base_num: i64,
+        time_base_den: i64,
+    ) -> i64 {
+        self.timestamp_us(
+            decoded.timestamp().or_else(|| decoded.pts()),
+            time_base_num,
+            time_base_den,
+        )
+    }
+
+    fn timestamp_us(
+        &mut self,
+        timestamp_raw: Option<i64>,
+        time_base_num: i64,
+        time_base_den: i64,
+    ) -> i64 {
+        if time_base_den == 0 {
+            return self.last_us;
+        }
+        let Some(timestamp_raw) = timestamp_raw else {
+            return self.last_us;
+        };
+        let origin_raw = *self.origin_raw.get_or_insert(timestamp_raw);
+        let elapsed_raw = i128::from(timestamp_raw) - i128::from(origin_raw);
+        let elapsed_us =
+            elapsed_raw.saturating_mul(i128::from(time_base_num)).saturating_mul(1_000_000)
+                / i128::from(time_base_den);
+        self.last_us = elapsed_us.clamp(0, i128::from(i64::MAX)) as i64;
+        self.last_us
+    }
+}
+
+#[derive(Default)]
+struct VideoDecodeContext {
+    scaler: Option<ffmpeg_next::software::scaling::context::Context>,
+    timestamp_normalizer: VideoTimestampNormalizer,
 }
 
 #[derive(Default)]
@@ -77,14 +137,19 @@ impl VideoBgaDecoder {
     fn open_inner(path: &Path, follow_playback_time: bool) -> Result<Self> {
         bmz_ffmpeg::ensure_init().map_err(|e| anyhow::anyhow!(e))?;
 
-        let path = path.to_path_buf();
+        let path_buf = path.to_path_buf();
         let stop_decode = Arc::new(AtomicBool::new(false));
+        let restart_decode = Arc::new(AtomicBool::new(false));
+        let pass_finished = Arc::new(AtomicBool::new(false));
+        let playback_target_us = Arc::new(AtomicI64::new(0));
+        let decode_generation = Arc::new(AtomicU64::new(0));
         if follow_playback_time {
-            let playback_target_us = Arc::new(AtomicI64::new(0));
             let clocked_frames = Arc::new(Mutex::new(ClockedFrameState::default()));
             let thread_playback_target_us = Arc::clone(&playback_target_us);
             let thread_stop_decode = Arc::clone(&stop_decode);
+            let thread_restart_decode = Arc::clone(&restart_decode);
             let thread_clocked_frames = Arc::clone(&clocked_frames);
+            let path = path_buf.clone();
 
             let decode_thread = std::thread::Builder::new()
                 .name("bmz-video-decode".to_string())
@@ -94,6 +159,7 @@ impl VideoBgaDecoder {
                         Arc::clone(&thread_clocked_frames),
                         thread_playback_target_us,
                         thread_stop_decode,
+                        thread_restart_decode,
                     );
                     if let Err(e) = result {
                         mark_clocked_frames_finished(&thread_clocked_frames);
@@ -102,48 +168,105 @@ impl VideoBgaDecoder {
                 })?;
 
             return Ok(Self {
+                path: path_buf,
+                follow_playback_time: true,
                 receiver: None,
                 clocked_frames: Some(clocked_frames),
                 pending: VecDeque::new(),
                 current: None,
                 finished: false,
-                playback_target_us: Some(playback_target_us),
+                playback_target_us,
+                decode_generation,
                 stop_decode,
+                restart_decode,
+                pass_finished,
                 decode_thread: Some(decode_thread),
             });
         }
 
         let (sender, receiver) = sync_channel(4);
         let thread_stop_decode = Arc::clone(&stop_decode);
+        let thread_restart_decode = Arc::clone(&restart_decode);
+        let thread_pass_finished = Arc::clone(&pass_finished);
+        let thread_playback_target_us = Arc::clone(&playback_target_us);
+        let thread_decode_generation = Arc::clone(&decode_generation);
+        let path = path_buf.clone();
         let decode_thread =
             std::thread::Builder::new().name("bmz-video-decode".to_string()).spawn(move || {
-                if !thread_stop_decode.load(Ordering::Acquire)
-                    && let Err(e) = decode_video(&path, sender)
-                {
+                if let Err(e) = decode_video_restartable(
+                    &path,
+                    sender,
+                    thread_stop_decode,
+                    thread_restart_decode,
+                    thread_pass_finished,
+                    thread_playback_target_us,
+                    thread_decode_generation,
+                ) {
                     tracing::warn!(path = %path.display(), error = %e, "video decode thread error");
                 }
             })?;
 
         Ok(Self {
+            path: path_buf,
+            follow_playback_time: false,
             receiver: Some(receiver),
             clocked_frames: None,
             pending: VecDeque::new(),
             current: None,
             finished: false,
-            playback_target_us: None,
+            playback_target_us,
+            decode_generation,
             stop_decode,
+            restart_decode,
+            pass_finished,
             decode_thread: Some(decode_thread),
         })
     }
 
-    /// チャンネルをdrainして `video_offset_us` 以下の最新フレームを返す。
-    pub fn poll_frame(&mut self, video_offset_us: i64) -> Option<&DecodedFrame> {
-        let follows_playback_time = self.playback_target_us.is_some();
-        if let Some(target) = &self.playback_target_us {
-            target.store(video_offset_us, Ordering::Release);
+    /// Seek to the start and begin decoding from the first frame again.
+    ///
+    /// Keeps the decode thread and ffmpeg input open (beatoraja `stop`/`play` style).
+    /// Channel mode signals the worker to rewind; clocked mode rewinds via playback target.
+    pub fn restart(&mut self) {
+        if !self.follow_playback_time {
+            // receiver drain と worker の blocked send は並行するため、古い pass の frame が
+            // drain 直後に 1 枚だけ到着し得る。generation を先に進めて poll 側で捨てる。
+            self.decode_generation.fetch_add(1, Ordering::AcqRel);
+        }
+        self.pending.clear();
+        self.current = None;
+        self.finished = false;
+        self.pass_finished.store(false, Ordering::Release);
+        self.playback_target_us.store(0, Ordering::Release);
+
+        if self.follow_playback_time {
+            if let Some(frames) = self.clocked_frames.as_ref()
+                && let Ok(mut state) = frames.lock()
+            {
+                if let Some(previous) = state.frame.take() {
+                    recycle_clocked_rgba(&mut state, previous.rgba);
+                }
+                state.finished = false;
+            }
+            self.restart_decode.store(true, Ordering::Release);
+            return;
         }
 
-        if follows_playback_time {
+        if let Some(receiver) = self.receiver.as_ref() {
+            while receiver.try_recv().is_ok() {}
+        }
+        self.restart_decode.store(true, Ordering::Release);
+    }
+
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
+    /// チャンネルをdrainして `video_offset_us` 以下の最新フレームを返す。
+    pub fn poll_frame(&mut self, video_offset_us: i64) -> Option<&DecodedFrame> {
+        self.playback_target_us.store(video_offset_us, Ordering::Release);
+
+        if self.follow_playback_time {
             return self.poll_clocked_frame();
         }
 
@@ -151,45 +274,45 @@ impl VideoBgaDecoder {
             return self.current.as_ref();
         };
 
-        // チャンネルから利用可能なフレームをすべて受信する。
-        // 受信時点ですでに表示期限を過ぎている frame は pending に積まず、
-        // 最新候補だけへ畳み込む。decoder 出力は presentation order なので、
-        // 新しく受信した due frame は既存 pending の due frame より新しい。
-        let mut latest_received_due = None;
-        loop {
-            match receiver.try_recv() {
-                Ok(frame) if frame.pts_us <= video_offset_us => {
-                    latest_received_due = Some(frame);
-                }
-                Ok(frame) => self.pending.push_back(frame),
-                Err(std::sync::mpsc::TryRecvError::Empty) => break,
-                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-                    self.finished = true;
-                    break;
+        // video_offset_us 以下の pending frame は最新候補だけへ畳み込む。
+        // 通常は future frame を 1 枚だけ pending に置くが、旧状態や test helper が
+        // 複数枚を持っていても presentation order のまま安全に compact する。
+        let mut latest_due = None;
+        while self.pending.front().is_some_and(|frame| frame.pts_us <= video_offset_us) {
+            latest_due = self.pending.pop_front();
+        }
+
+        // future frame がすでに pending にある間は receiver を drain しない。
+        // 最初の future frame を受信した時点でも止め、残りを bounded channel 側に
+        // 留める。ここで全件を pending へ移すと sync_channel(4) の backpressure が
+        // 実質解除され、高解像度動画の RGBA frame を動画末尾まで先読みしてしまう。
+        if self.pending.is_empty() {
+            let decode_generation = self.decode_generation.load(Ordering::Acquire);
+            loop {
+                match receiver.try_recv() {
+                    Ok(queued) if queued.generation != decode_generation => continue,
+                    Ok(QueuedDecodedFrame { frame, .. }) if frame.pts_us <= video_offset_us => {
+                        latest_due = Some(frame);
+                    }
+                    Ok(QueuedDecodedFrame { frame, .. }) => {
+                        self.pending.push_back(frame);
+                        break;
+                    }
+                    Err(std::sync::mpsc::TryRecvError::Empty) => break,
+                    Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                        self.finished = true;
+                        break;
+                    }
                 }
             }
         }
 
-        let latest_due = if latest_received_due.is_some() {
-            while self.pending.front().is_some_and(|frame| frame.pts_us <= video_offset_us) {
-                self.pending.pop_front();
-            }
-            latest_received_due
-        } else {
-            // video_offset_us 以下のフレームのうち最新のものだけを current に設定する。
-            // decoder が先行している時に、古い大きな RGBA buffer を current へ何度も
-            // 入れ替えず、表示されない pending frame はその場で捨てる。
-            while self.pending.get(1).is_some_and(|frame| frame.pts_us <= video_offset_us) {
-                self.pending.pop_front();
-            }
-            if self.pending.front().is_some_and(|frame| frame.pts_us <= video_offset_us) {
-                self.pending.pop_front()
-            } else {
-                None
-            }
-        };
         if let Some(frame) = latest_due {
             self.current = Some(frame);
+        }
+
+        if self.pass_finished.load(Ordering::Acquire) && self.pending.is_empty() {
+            self.finished = true;
         }
 
         self.current.as_ref()
@@ -242,6 +365,7 @@ pub fn decode_first_frame(path: &Path) -> Result<DecodedFrame> {
     let selected = select_video_stream(&ictx)?;
     let mut decoder = open_video_decoder(&selected)?;
     let mut decoded = ffmpeg_next::frame::Video::empty();
+    let mut timestamp_normalizer = VideoTimestampNormalizer::default();
 
     for (stream, packet) in ictx.packets() {
         if stream.index() != selected.index {
@@ -250,11 +374,12 @@ pub fn decode_first_frame(path: &Path) -> Result<DecodedFrame> {
         decoder.send_packet(&packet)?;
         match decoder.receive_frame(&mut decoded) {
             Ok(()) => {
-                return rgba_frame_from_video(
+                let pts_us = timestamp_normalizer.frame_pts_us(
                     &decoded,
                     selected.time_base_num,
                     selected.time_base_den,
                 );
+                return rgba_frame_from_video(&decoded, pts_us);
             }
             Err(ffmpeg_next::Error::Other { errno: ffmpeg_next::error::EAGAIN }) => {}
             Err(ffmpeg_next::Error::Eof) => {
@@ -266,19 +391,273 @@ pub fn decode_first_frame(path: &Path) -> Result<DecodedFrame> {
 
     decoder.send_eof()?;
     match decoder.receive_frame(&mut decoded) {
-        Ok(()) => rgba_frame_from_video(&decoded, selected.time_base_num, selected.time_base_den),
+        Ok(()) => {
+            let pts_us = timestamp_normalizer.frame_pts_us(
+                &decoded,
+                selected.time_base_num,
+                selected.time_base_den,
+            );
+            rgba_frame_from_video(&decoded, pts_us)
+        }
         Err(e) => Err(e.into()),
     }
 }
 
-fn decode_video(path: &Path, sender: SyncSender<DecodedFrame>) -> Result<()> {
-    decode_video_frames(path, |frame| {
-        if sender.send(frame).is_err() {
-            // receiver が drop された
-            return Ok(DecodeFrameControl::Stop);
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ChannelDecodePassEnd {
+    Stop,
+    Restart,
+    Eof,
+}
+
+struct ChannelFrameCatchUp<T> {
+    published_any: bool,
+    last_skipped: Option<T>,
+}
+
+impl<T> Default for ChannelFrameCatchUp<T> {
+    fn default() -> Self {
+        Self { published_any: false, last_skipped: None }
+    }
+}
+
+impl<T> ChannelFrameCatchUp<T> {
+    fn should_skip(&self, pts_us: i64, playback_target_us: i64) -> bool {
+        self.published_any && should_skip_frame_conversion(pts_us, playback_target_us)
+    }
+
+    fn record_skipped(&mut self, frame: T) {
+        self.last_skipped = Some(frame);
+    }
+
+    fn record_published(&mut self) {
+        self.published_any = true;
+        self.last_skipped = None;
+    }
+
+    fn take_last_skipped(&mut self) -> Option<T> {
+        self.last_skipped.take()
+    }
+}
+
+fn decode_video_restartable(
+    path: &Path,
+    sender: SyncSender<QueuedDecodedFrame>,
+    stop_decode: Arc<AtomicBool>,
+    restart_decode: Arc<AtomicBool>,
+    pass_finished: Arc<AtomicBool>,
+    playback_target_us: Arc<AtomicI64>,
+    decode_generation: Arc<AtomicU64>,
+) -> Result<()> {
+    let mut ictx = ffmpeg_next::format::input(path)?;
+    let selected = select_video_stream(&ictx)?;
+    let mut decoder = open_video_decoder(&selected)?;
+    let mut scaler = None;
+    let mut decoded = ffmpeg_next::frame::Video::empty();
+    let mut first_pass = true;
+
+    loop {
+        if stop_decode.load(Ordering::Acquire) {
+            return Ok(());
         }
-        Ok(DecodeFrameControl::Continue)
-    })
+
+        if !first_pass {
+            rewind_video_decoder(&mut ictx, &mut decoder)?;
+        }
+        first_pass = false;
+        restart_decode.store(false, Ordering::Release);
+        pass_finished.store(false, Ordering::Release);
+        let generation = decode_generation.load(Ordering::Acquire);
+
+        let pass_end = decode_video_channel_pass(
+            &mut ictx,
+            &mut decoder,
+            &selected,
+            &mut scaler,
+            &mut decoded,
+            &sender,
+            &stop_decode,
+            &restart_decode,
+            &playback_target_us,
+            generation,
+        )?;
+
+        match pass_end {
+            ChannelDecodePassEnd::Stop => return Ok(()),
+            ChannelDecodePassEnd::Restart => continue,
+            ChannelDecodePassEnd::Eof => {
+                pass_finished.store(true, Ordering::Release);
+                while !stop_decode.load(Ordering::Acquire) {
+                    if restart_decode.swap(false, Ordering::AcqRel) {
+                        break;
+                    }
+                    std::thread::sleep(Duration::from_millis(5));
+                }
+                if stop_decode.load(Ordering::Acquire) {
+                    return Ok(());
+                }
+            }
+        }
+    }
+}
+
+fn decode_video_channel_pass(
+    ictx: &mut ffmpeg_next::format::context::Input,
+    decoder: &mut ffmpeg_next::decoder::Video,
+    selected: &SelectedVideoStream,
+    scaler: &mut Option<ffmpeg_next::software::scaling::context::Context>,
+    decoded: &mut ffmpeg_next::frame::Video,
+    sender: &SyncSender<QueuedDecodedFrame>,
+    stop_decode: &AtomicBool,
+    restart_decode: &AtomicBool,
+    playback_target_us: &AtomicI64,
+    generation: u64,
+) -> Result<ChannelDecodePassEnd> {
+    let mut timestamp_normalizer = VideoTimestampNormalizer::default();
+    let mut catch_up = ChannelFrameCatchUp::default();
+
+    for (stream, packet) in ictx.packets() {
+        if stop_decode.load(Ordering::Acquire) {
+            return Ok(ChannelDecodePassEnd::Stop);
+        }
+        if restart_decode.load(Ordering::Acquire) {
+            return Ok(ChannelDecodePassEnd::Restart);
+        }
+        if stream.index() != selected.index {
+            continue;
+        }
+
+        decoder.send_packet(&packet)?;
+        loop {
+            match decoder.receive_frame(decoded) {
+                Ok(()) => {}
+                Err(ffmpeg_next::Error::Other { errno: ffmpeg_next::error::EAGAIN }) => break,
+                Err(ffmpeg_next::Error::Eof) => {
+                    return publish_last_skipped_channel_frame(
+                        &mut catch_up,
+                        scaler,
+                        sender,
+                        generation,
+                        stop_decode,
+                        restart_decode,
+                    );
+                }
+                Err(e) => return Err(e.into()),
+            }
+
+            if stop_decode.load(Ordering::Acquire) {
+                return Ok(ChannelDecodePassEnd::Stop);
+            }
+            if restart_decode.load(Ordering::Acquire) {
+                return Ok(ChannelDecodePassEnd::Restart);
+            }
+
+            let pts_us = timestamp_normalizer.frame_pts_us(
+                decoded,
+                selected.time_base_num,
+                selected.time_base_den,
+            );
+            if catch_up.should_skip(pts_us, playback_target_us.load(Ordering::Acquire)) {
+                catch_up.record_skipped((decoded.clone(), pts_us));
+                continue;
+            }
+            let frame = rgba_frame_from_video_with_scaler(decoded, pts_us, scaler, None)?;
+            match send_decoded_frame(sender, frame, generation, stop_decode, restart_decode)? {
+                ChannelDecodePassEnd::Stop => return Ok(ChannelDecodePassEnd::Stop),
+                ChannelDecodePassEnd::Restart => return Ok(ChannelDecodePassEnd::Restart),
+                ChannelDecodePassEnd::Eof => catch_up.record_published(),
+            }
+        }
+    }
+
+    decoder.send_eof()?;
+    loop {
+        match decoder.receive_frame(decoded) {
+            Ok(()) => {}
+            Err(ffmpeg_next::Error::Other { errno: ffmpeg_next::error::EAGAIN })
+            | Err(ffmpeg_next::Error::Eof) => break,
+            Err(e) => return Err(e.into()),
+        }
+
+        if stop_decode.load(Ordering::Acquire) {
+            return Ok(ChannelDecodePassEnd::Stop);
+        }
+        if restart_decode.load(Ordering::Acquire) {
+            return Ok(ChannelDecodePassEnd::Restart);
+        }
+
+        let pts_us = timestamp_normalizer.frame_pts_us(
+            decoded,
+            selected.time_base_num,
+            selected.time_base_den,
+        );
+        if catch_up.should_skip(pts_us, playback_target_us.load(Ordering::Acquire)) {
+            catch_up.record_skipped((decoded.clone(), pts_us));
+            continue;
+        }
+        let frame = rgba_frame_from_video_with_scaler(decoded, pts_us, scaler, None)?;
+        match send_decoded_frame(sender, frame, generation, stop_decode, restart_decode)? {
+            ChannelDecodePassEnd::Stop => return Ok(ChannelDecodePassEnd::Stop),
+            ChannelDecodePassEnd::Restart => return Ok(ChannelDecodePassEnd::Restart),
+            ChannelDecodePassEnd::Eof => catch_up.record_published(),
+        }
+    }
+
+    publish_last_skipped_channel_frame(
+        &mut catch_up,
+        scaler,
+        sender,
+        generation,
+        stop_decode,
+        restart_decode,
+    )
+}
+
+fn publish_last_skipped_channel_frame(
+    catch_up: &mut ChannelFrameCatchUp<(ffmpeg_next::frame::Video, i64)>,
+    scaler: &mut Option<ffmpeg_next::software::scaling::context::Context>,
+    sender: &SyncSender<QueuedDecodedFrame>,
+    generation: u64,
+    stop_decode: &AtomicBool,
+    restart_decode: &AtomicBool,
+) -> Result<ChannelDecodePassEnd> {
+    if stop_decode.load(Ordering::Acquire) {
+        return Ok(ChannelDecodePassEnd::Stop);
+    }
+    if restart_decode.load(Ordering::Acquire) {
+        return Ok(ChannelDecodePassEnd::Restart);
+    }
+    let Some((decoded, pts_us)) = catch_up.take_last_skipped() else {
+        return Ok(ChannelDecodePassEnd::Eof);
+    };
+    let frame = rgba_frame_from_video_with_scaler(&decoded, pts_us, scaler, None)?;
+    send_decoded_frame(sender, frame, generation, stop_decode, restart_decode)
+}
+
+fn send_decoded_frame(
+    sender: &SyncSender<QueuedDecodedFrame>,
+    frame: DecodedFrame,
+    generation: u64,
+    stop_decode: &AtomicBool,
+    restart_decode: &AtomicBool,
+) -> Result<ChannelDecodePassEnd> {
+    let mut queued = QueuedDecodedFrame { generation, frame };
+    loop {
+        if stop_decode.load(Ordering::Acquire) {
+            return Ok(ChannelDecodePassEnd::Stop);
+        }
+        if restart_decode.load(Ordering::Acquire) {
+            return Ok(ChannelDecodePassEnd::Restart);
+        }
+        match sender.try_send(queued) {
+            Ok(()) => return Ok(ChannelDecodePassEnd::Eof),
+            Err(TrySendError::Full(returned)) => {
+                queued = returned;
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            Err(TrySendError::Disconnected(_)) => return Ok(ChannelDecodePassEnd::Stop),
+        }
+    }
 }
 
 fn decode_video_following_playback_time(
@@ -286,17 +665,24 @@ fn decode_video_following_playback_time(
     clocked_frames: Arc<Mutex<ClockedFrameState>>,
     playback_target_us: Arc<AtomicI64>,
     stop_decode: Arc<AtomicBool>,
+    restart_decode: Arc<AtomicBool>,
 ) -> Result<()> {
     let mut ictx = ffmpeg_next::format::input(path)?;
     let selected = select_video_stream(&ictx)?;
     let mut decoder = open_video_decoder(&selected)?;
-    let mut scaler: Option<ffmpeg_next::software::scaling::context::Context> = None;
     let mut decoded = ffmpeg_next::frame::Video::empty();
+    let mut decode_context = VideoDecodeContext::default();
     let mut loop_base_us = 0;
     while !stop_decode.load(Ordering::Acquire) {
+        if restart_decode.swap(false, Ordering::AcqRel) {
+            loop_base_us = playback_target_us.load(Ordering::Acquire);
+            decode_context.timestamp_normalizer = VideoTimestampNormalizer::default();
+            rewind_video_decoder(&mut ictx, &mut decoder)?;
+        }
         let mut target_us = playback_target_us.load(Ordering::Acquire);
         if clocked_playback_target_rewound(target_us, loop_base_us) {
             loop_base_us = target_us;
+            decode_context.timestamp_normalizer = VideoTimestampNormalizer::default();
             rewind_video_decoder(&mut ictx, &mut decoder)?;
         }
         let mut decoded_any = false;
@@ -317,7 +703,7 @@ fn decode_video_following_playback_time(
                 &mut decoded,
                 &selected,
                 loop_base_us,
-                &mut scaler,
+                &mut decode_context,
                 &clocked_frames,
                 &playback_target_us,
                 &stop_decode,
@@ -336,7 +722,7 @@ fn decode_video_following_playback_time(
                 &mut decoded,
                 &selected,
                 loop_base_us,
-                &mut scaler,
+                &mut decode_context,
                 &clocked_frames,
                 &playback_target_us,
                 &stop_decode,
@@ -365,79 +751,6 @@ fn decode_video_following_playback_time(
     Ok(())
 }
 
-enum DecodeFrameControl {
-    Continue,
-    Stop,
-}
-
-fn decode_video_frames<F>(path: &Path, mut on_frame: F) -> Result<()>
-where
-    F: FnMut(DecodedFrame) -> Result<DecodeFrameControl>,
-{
-    let mut ictx = ffmpeg_next::format::input(path)?;
-
-    let selected = select_video_stream(&ictx)?;
-    let mut decoder = open_video_decoder(&selected)?;
-
-    // スケーラは最初のフレーム受信後に lazily 作成
-    let mut scaler: Option<ffmpeg_next::software::scaling::context::Context> = None;
-
-    let mut decoded = ffmpeg_next::frame::Video::empty();
-
-    for (stream, packet) in ictx.packets() {
-        if stream.index() != selected.index {
-            continue;
-        }
-
-        decoder.send_packet(&packet)?;
-
-        loop {
-            match decoder.receive_frame(&mut decoded) {
-                Ok(()) => {}
-                Err(ffmpeg_next::Error::Other { errno: ffmpeg_next::error::EAGAIN }) => break,
-                Err(ffmpeg_next::Error::Eof) => return Ok(()),
-                Err(e) => return Err(e.into()),
-            }
-
-            let frame = rgba_frame_from_video_with_scaler(
-                &decoded,
-                selected.time_base_num,
-                selected.time_base_den,
-                &mut scaler,
-                None,
-            )?;
-
-            if matches!(on_frame(frame)?, DecodeFrameControl::Stop) {
-                return Ok(());
-            }
-        }
-    }
-
-    // フラッシュ
-    decoder.send_eof()?;
-    loop {
-        match decoder.receive_frame(&mut decoded) {
-            Ok(()) => {}
-            Err(ffmpeg_next::Error::Other { errno: ffmpeg_next::error::EAGAIN })
-            | Err(ffmpeg_next::Error::Eof) => break,
-            Err(e) => return Err(e.into()),
-        }
-
-        let frame = rgba_frame_from_video_with_scaler(
-            &decoded,
-            selected.time_base_num,
-            selected.time_base_den,
-            &mut scaler,
-            None,
-        )?;
-        if matches!(on_frame(frame)?, DecodeFrameControl::Stop) {
-            return Ok(());
-        }
-    }
-
-    Ok(())
-}
-
 fn publish_clocked_frame(
     clocked_frames: &Mutex<ClockedFrameState>,
     frame: DecodedFrame,
@@ -463,7 +776,7 @@ fn drain_clocked_decoder_frames(
     decoded: &mut ffmpeg_next::frame::Video,
     selected: &SelectedVideoStream,
     loop_base_us: i64,
-    scaler: &mut Option<ffmpeg_next::software::scaling::context::Context>,
+    decode_context: &mut VideoDecodeContext,
     clocked_frames: &Mutex<ClockedFrameState>,
     playback_target_us: &AtomicI64,
     stop_decode: &AtomicBool,
@@ -483,11 +796,12 @@ fn drain_clocked_decoder_frames(
         }
 
         *decoded_any = true;
-        let pts_us = video_frame_pts_us(decoded, selected.time_base_num, selected.time_base_den)
+        let pts_us = decode_context
+            .timestamp_normalizer
+            .frame_pts_us(decoded, selected.time_base_num, selected.time_base_den)
             .saturating_add(loop_base_us);
         *last_pts_us = Some(pts_us);
-        if should_skip_clocked_frame_conversion(pts_us, playback_target_us.load(Ordering::Acquire))
-        {
+        if should_skip_frame_conversion(pts_us, playback_target_us.load(Ordering::Acquire)) {
             continue;
         }
 
@@ -506,14 +820,12 @@ fn drain_clocked_decoder_frames(
             }
         }
 
-        let mut frame = rgba_frame_from_video_with_scaler(
+        let frame = rgba_frame_from_video_with_scaler(
             decoded,
-            selected.time_base_num,
-            selected.time_base_den,
-            scaler,
+            pts_us,
+            &mut decode_context.scaler,
             take_clocked_recycled_rgba(clocked_frames),
         )?;
-        frame.pts_us = pts_us;
         publish_clocked_frame(clocked_frames, frame)?;
     }
     Ok(ClockedDrainStatus::Continue)
@@ -531,7 +843,7 @@ fn recycle_clocked_rgba(state: &mut ClockedFrameState, mut rgba: Vec<u8>) {
     }
 }
 
-fn should_skip_clocked_frame_conversion(frame_pts_us: i64, playback_target_us: i64) -> bool {
+fn should_skip_frame_conversion(frame_pts_us: i64, playback_target_us: i64) -> bool {
     frame_pts_us.saturating_add(CLOCKED_FRAME_CATCH_UP_TOLERANCE_US) < playback_target_us
 }
 
@@ -652,19 +964,14 @@ fn choose_beatoraja_video_stream(
         .unwrap_or(best_index)
 }
 
-fn rgba_frame_from_video(
-    decoded: &ffmpeg_next::frame::Video,
-    time_base_num: i64,
-    time_base_den: i64,
-) -> Result<DecodedFrame> {
+fn rgba_frame_from_video(decoded: &ffmpeg_next::frame::Video, pts_us: i64) -> Result<DecodedFrame> {
     let mut scaler = None;
-    rgba_frame_from_video_with_scaler(decoded, time_base_num, time_base_den, &mut scaler, None)
+    rgba_frame_from_video_with_scaler(decoded, pts_us, &mut scaler, None)
 }
 
 fn rgba_frame_from_video_with_scaler(
     decoded: &ffmpeg_next::frame::Video,
-    time_base_num: i64,
-    time_base_den: i64,
+    pts_us: i64,
     scaler: &mut Option<ffmpeg_next::software::scaling::context::Context>,
     rgba_buffer: Option<Vec<u8>>,
 ) -> Result<DecodedFrame> {
@@ -686,23 +993,12 @@ fn rgba_frame_from_video_with_scaler(
     let mut rgba_frame = ffmpeg_next::frame::Video::empty();
     scaler.as_mut().unwrap().run(decoded, &mut rgba_frame)?;
 
-    let pts_us = video_frame_pts_us(decoded, time_base_num, time_base_den);
-
     let data = rgba_frame.data(0);
     let stride = rgba_frame.stride(0);
     let row_bytes = (w as usize) * 4;
     let rgba = copy_rgba_frame_data_with_buffer(data, stride, row_bytes, h as usize, rgba_buffer);
 
     Ok(DecodedFrame { pts_us, rgba, width: w, height: h })
-}
-
-fn video_frame_pts_us(
-    decoded: &ffmpeg_next::frame::Video,
-    time_base_num: i64,
-    time_base_den: i64,
-) -> i64 {
-    let pts_raw = decoded.pts().unwrap_or(0);
-    if time_base_den != 0 { pts_raw * time_base_num * 1_000_000 / time_base_den } else { 0 }
 }
 
 #[cfg(test)]
@@ -748,16 +1044,25 @@ mod tests {
         DecodedFrame { pts_us, rgba: vec![pts_us as u8], width: 1, height: 1 }
     }
 
+    fn queued_frame(generation: u64, pts_us: i64) -> QueuedDecodedFrame {
+        QueuedDecodedFrame { generation, frame: frame(pts_us) }
+    }
+
     fn decoder_with_pending(pending: impl IntoIterator<Item = i64>) -> VideoBgaDecoder {
         let (_sender, receiver) = sync_channel(1);
         VideoBgaDecoder {
+            path: PathBuf::new(),
+            follow_playback_time: false,
             receiver: Some(receiver),
             clocked_frames: None,
             pending: pending.into_iter().map(frame).collect(),
             current: Some(frame(0)),
             finished: false,
-            playback_target_us: None,
+            playback_target_us: Arc::new(AtomicI64::new(0)),
+            decode_generation: Arc::new(AtomicU64::new(0)),
             stop_decode: Arc::new(AtomicBool::new(false)),
+            restart_decode: Arc::new(AtomicBool::new(false)),
+            pass_finished: Arc::new(AtomicBool::new(false)),
             decode_thread: None,
         }
     }
@@ -784,27 +1089,147 @@ mod tests {
     }
 
     #[test]
+    fn restart_rewinds_channel_decoder_to_first_frame() {
+        let path = repo_root().join("data/songs/bga-compat/movie.webm");
+        let mut decoder = VideoBgaDecoder::open(&path).expect("fixture movie must open");
+
+        let mut first_pts = None;
+        for _ in 0..200 {
+            if let Some(frame) = decoder.poll_frame(1_000_000) {
+                first_pts = Some(frame.pts_us);
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert_eq!(first_pts, Some(0), "decoder should produce the first frame");
+
+        // Consume any buffered later frames so restart has work to do.
+        for _ in 0..50 {
+            let _ = decoder.poll_frame(1_000_000);
+            std::thread::sleep(Duration::from_millis(2));
+        }
+
+        decoder.restart();
+
+        let mut first_after_restart = None;
+        for _ in 0..200 {
+            if let Some(frame) = decoder.poll_frame(0) {
+                first_after_restart = Some(frame.pts_us);
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert_eq!(first_after_restart, Some(0));
+    }
+
+    #[test]
+    fn channel_catch_up_preserves_latest_skipped_frame_for_eof() {
+        let mut catch_up = ChannelFrameCatchUp::default();
+
+        assert!(!catch_up.should_skip(0, 1_000_000));
+        catch_up.record_published();
+        for pts_us in [100_000, 200_000, 300_000] {
+            assert!(catch_up.should_skip(pts_us, 1_000_000));
+            catch_up.record_skipped(pts_us);
+        }
+
+        assert_eq!(catch_up.take_last_skipped(), Some(300_000));
+    }
+
+    #[test]
+    fn channel_send_stops_while_queue_is_full() {
+        let (sender, _receiver) = sync_channel(1);
+        sender.try_send(queued_frame(0, 0)).unwrap();
+        let stop_decode = Arc::new(AtomicBool::new(false));
+        let restart_decode = Arc::new(AtomicBool::new(false));
+        let thread_stop_decode = Arc::clone(&stop_decode);
+        let thread_restart_decode = Arc::clone(&restart_decode);
+        let handle = std::thread::spawn(move || {
+            send_decoded_frame(&sender, frame(1), 0, &thread_stop_decode, &thread_restart_decode)
+                .unwrap()
+        });
+
+        std::thread::sleep(Duration::from_millis(5));
+        stop_decode.store(true, Ordering::Release);
+
+        assert_eq!(handle.join().unwrap(), ChannelDecodePassEnd::Stop);
+    }
+
+    #[test]
+    fn channel_send_restarts_while_queue_is_full() {
+        let (sender, _receiver) = sync_channel(1);
+        sender.try_send(queued_frame(0, 0)).unwrap();
+        let stop_decode = Arc::new(AtomicBool::new(false));
+        let restart_decode = Arc::new(AtomicBool::new(false));
+        let thread_stop_decode = Arc::clone(&stop_decode);
+        let thread_restart_decode = Arc::clone(&restart_decode);
+        let handle = std::thread::spawn(move || {
+            send_decoded_frame(&sender, frame(1), 0, &thread_stop_decode, &thread_restart_decode)
+                .unwrap()
+        });
+
+        std::thread::sleep(Duration::from_millis(5));
+        restart_decode.store(true, Ordering::Release);
+
+        assert_eq!(handle.join().unwrap(), ChannelDecodePassEnd::Restart);
+    }
+
+    #[test]
     fn decode_first_frame_reads_data_song_video_fixture() {
         let frame = decode_first_frame(&repo_root().join("data/songs/bga-compat/movie.webm"))
             .expect("fixture movie must decode");
 
+        assert_eq!(frame.pts_us, 0);
         assert_eq!(frame.width, 2);
         assert_eq!(frame.height, 2);
         assert_eq!(frame.rgba.len(), 2 * 2 * 4);
     }
 
+    #[test]
+    fn video_timestamp_normalizer_starts_nonzero_timestamps_at_zero() {
+        let mut normalizer = VideoTimestampNormalizer::default();
+
+        assert_eq!(normalizer.timestamp_us(Some(48_003), 1, 90_000), 0);
+        assert_eq!(normalizer.timestamp_us(Some(51_006), 1, 90_000), 33_366);
+        assert_eq!(normalizer.timestamp_us(None, 1, 90_000), 33_366);
+        assert_eq!(normalizer.timestamp_us(Some(48_003), 1, 90_000), 0);
+    }
+
+    #[test]
+    fn video_timestamp_normalizer_handles_missing_and_invalid_timestamps() {
+        let mut normalizer = VideoTimestampNormalizer::default();
+
+        assert_eq!(normalizer.timestamp_us(None, 1, 90_000), 0);
+        assert_eq!(normalizer.timestamp_us(Some(10), 1, 0), 0);
+        assert_eq!(normalizer.timestamp_us(Some(10), 1, 90_000), 0);
+        assert_eq!(normalizer.timestamp_us(Some(5), 1, 90_000), 0);
+    }
+
+    #[test]
+    fn video_timestamp_normalizer_saturates_extreme_values() {
+        let mut normalizer = VideoTimestampNormalizer::default();
+
+        assert_eq!(normalizer.timestamp_us(Some(i64::MIN), 1, 1), 0);
+        assert_eq!(normalizer.timestamp_us(Some(i64::MAX), i64::MAX, 1), i64::MAX);
+    }
+
     fn decoder_with_channel(
         pending: impl IntoIterator<Item = i64>,
-    ) -> (SyncSender<DecodedFrame>, VideoBgaDecoder) {
+    ) -> (SyncSender<QueuedDecodedFrame>, VideoBgaDecoder) {
         let (sender, receiver) = sync_channel(4);
         let decoder = VideoBgaDecoder {
+            path: PathBuf::new(),
+            follow_playback_time: false,
             receiver: Some(receiver),
             clocked_frames: None,
             pending: pending.into_iter().map(frame).collect(),
             current: Some(frame(0)),
             finished: false,
-            playback_target_us: None,
+            playback_target_us: Arc::new(AtomicI64::new(0)),
+            decode_generation: Arc::new(AtomicU64::new(0)),
             stop_decode: Arc::new(AtomicBool::new(false)),
+            restart_decode: Arc::new(AtomicBool::new(false)),
+            pass_finished: Arc::new(AtomicBool::new(false)),
             decode_thread: None,
         };
         (sender, decoder)
@@ -834,9 +1259,9 @@ mod tests {
     #[test]
     fn poll_frame_compacts_received_overdue_frames_before_pending_queue() {
         let (sender, mut decoder) = decoder_with_channel([]);
-        sender.send(frame(10)).unwrap();
-        sender.send(frame(20)).unwrap();
-        sender.send(frame(30)).unwrap();
+        sender.send(queued_frame(0, 10)).unwrap();
+        sender.send(queued_frame(0, 20)).unwrap();
+        sender.send(queued_frame(0, 30)).unwrap();
 
         let frame = decoder.poll_frame(25).unwrap();
 
@@ -848,8 +1273,8 @@ mod tests {
     #[test]
     fn poll_frame_prefers_newer_received_due_frame_over_pending_due_frames() {
         let (sender, mut decoder) = decoder_with_channel([10, 20, 30]);
-        sender.send(frame(40)).unwrap();
-        sender.send(frame(50)).unwrap();
+        sender.send(queued_frame(0, 40)).unwrap();
+        sender.send(queued_frame(0, 50)).unwrap();
 
         let frame = decoder.poll_frame(45).unwrap();
 
@@ -859,16 +1284,66 @@ mod tests {
     }
 
     #[test]
+    fn poll_frame_keeps_future_frames_in_bounded_channel() {
+        let (sender, mut decoder) = decoder_with_channel([]);
+        for pts_us in [10, 20, 30, 40] {
+            sender.try_send(queued_frame(0, pts_us)).unwrap();
+        }
+
+        let frame = decoder.poll_frame(0).unwrap();
+
+        assert_eq!(frame.pts_us, 0);
+        assert_eq!(decoder.pending.len(), 1);
+        assert_eq!(decoder.pending.front().unwrap().pts_us, 10);
+        sender.try_send(queued_frame(0, 50)).expect("poll should release exactly one channel slot");
+        assert!(matches!(
+            sender.try_send(queued_frame(0, 60)),
+            Err(std::sync::mpsc::TrySendError::Full(_))
+        ));
+
+        for _ in 0..100 {
+            let frame = decoder.poll_frame(0).unwrap();
+            assert_eq!(frame.pts_us, 0);
+        }
+
+        assert_eq!(decoder.pending.len(), 1);
+        assert!(matches!(
+            sender.try_send(queued_frame(0, 60)),
+            Err(std::sync::mpsc::TrySendError::Full(_))
+        ));
+    }
+
+    #[test]
+    fn poll_frame_drops_frames_from_before_restart() {
+        let (sender, mut decoder) = decoder_with_channel([]);
+        decoder.restart();
+
+        sender.send(queued_frame(0, 100)).unwrap();
+        sender.send(queued_frame(1, 0)).unwrap();
+
+        let pts_us = decoder.poll_frame(0).unwrap().pts_us;
+
+        assert_eq!(decoder.decode_generation.load(Ordering::Acquire), 1);
+        assert_eq!(pts_us, 0);
+        assert!(decoder.pending.is_empty());
+    }
+
+    #[test]
     fn poll_frame_updates_playback_target_for_clocked_decoder() {
         let target = Arc::new(AtomicI64::new(0));
         let mut decoder = VideoBgaDecoder {
+            path: PathBuf::new(),
+            follow_playback_time: true,
             receiver: None,
             clocked_frames: Some(Arc::new(Mutex::new(ClockedFrameState::default()))),
             pending: VecDeque::new(),
             current: None,
             finished: false,
-            playback_target_us: Some(Arc::clone(&target)),
+            playback_target_us: Arc::clone(&target),
+            decode_generation: Arc::new(AtomicU64::new(0)),
             stop_decode: Arc::new(AtomicBool::new(false)),
+            restart_decode: Arc::new(AtomicBool::new(false)),
+            pass_finished: Arc::new(AtomicBool::new(false)),
             decode_thread: None,
         };
 
@@ -882,13 +1357,18 @@ mod tests {
         let frames = Arc::new(Mutex::new(ClockedFrameState::default()));
         let target = Arc::new(AtomicI64::new(0));
         let mut decoder = VideoBgaDecoder {
+            path: PathBuf::new(),
+            follow_playback_time: true,
             receiver: None,
             clocked_frames: Some(Arc::clone(&frames)),
             pending: VecDeque::new(),
             current: None,
             finished: false,
-            playback_target_us: Some(Arc::clone(&target)),
+            playback_target_us: Arc::clone(&target),
+            decode_generation: Arc::new(AtomicU64::new(0)),
             stop_decode: Arc::new(AtomicBool::new(false)),
+            restart_decode: Arc::new(AtomicBool::new(false)),
+            pass_finished: Arc::new(AtomicBool::new(false)),
             decode_thread: None,
         };
         publish_clocked_frame(&frames, frame(50_000)).unwrap();
@@ -925,9 +1405,9 @@ mod tests {
 
     #[test]
     fn clocked_conversion_skip_only_drops_stale_frames() {
-        assert!(should_skip_clocked_frame_conversion(10_000, 20_000));
-        assert!(!should_skip_clocked_frame_conversion(12_000, 20_000));
-        assert!(!should_skip_clocked_frame_conversion(25_000, 20_000));
+        assert!(should_skip_frame_conversion(10_000, 20_000));
+        assert!(!should_skip_frame_conversion(12_000, 20_000));
+        assert!(!should_skip_frame_conversion(25_000, 20_000));
     }
 
     #[test]

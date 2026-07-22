@@ -57,7 +57,7 @@ export const authRateLimits = sqliteTable(
   {
     // enum は Drizzle の型レベル制約のみ (SQLite に CHECK は生成されない)。
     action: text('action', {
-      enum: ['login', 'register', 'score_submit', 'refresh', 'replay_upload'],
+      enum: ['login', 'register', 'score_submit', 'score_cleanup', 'refresh', 'replay_upload'],
     }).notNull(),
     scope: text('scope', { enum: ['email', 'ip', 'user'] }).notNull(),
     scopeHash: text('scope_hash').notNull(),
@@ -79,6 +79,7 @@ export const profiles = sqliteTable('profiles', {
     .references(() => users.id, { onDelete: 'cascade' }),
   displayName: text('display_name').notNull().default(''),
   bio: text('bio').notNull().default(''),
+  dailyBoundaryMinutes: integer('daily_boundary_minutes').notNull().default(0),
   createdAt: integer('created_at', { mode: 'timestamp_ms' })
     .notNull()
     .default(sql`(unixepoch('subsec') * 1000)`),
@@ -132,6 +133,56 @@ export const charts = sqliteTable(
   (table) => [index('idx_charts_md5').on(table.md5), index('idx_charts_title').on(table.title)],
 )
 
+export const difficultyTables = sqliteTable(
+  'difficulty_tables',
+  {
+    id: text('id').primaryKey(),
+    sourceUrl: text('source_url').notNull(),
+    headUrl: text('head_url').notNull().default(''),
+    name: text('name').notNull().default(''),
+    symbol: text('symbol').notNull().default(''),
+    levelOrder: jsonText<string[]>('level_order', '[]'),
+    priority: integer('priority').notNull().default(0),
+    activeGeneration: text('active_generation'),
+    lastFetchedAt: integer('last_fetched_at', { mode: 'timestamp_ms' }),
+    updatedAt: integer('updated_at', { mode: 'timestamp_ms' })
+      .notNull()
+      .default(sql`(unixepoch('subsec') * 1000)`),
+  },
+  (table) => [
+    uniqueIndex('idx_difficulty_tables_source').on(table.sourceUrl),
+    index('idx_difficulty_tables_priority').on(table.priority),
+  ],
+)
+
+export const difficultyTableEntries = sqliteTable(
+  'difficulty_table_entries',
+  {
+    id: integer('id').primaryKey({ autoIncrement: true }),
+    tableId: text('table_id')
+      .notNull()
+      .references(() => difficultyTables.id, { onDelete: 'cascade' }),
+    generation: text('generation').notNull(),
+    level: text('level').notNull(),
+    md5: text('md5').notNull().default(''),
+    sha256: text('sha256').notNull().default(''),
+    title: text('title').notNull().default(''),
+    artist: text('artist').notNull().default(''),
+    comment: text('comment').notNull().default(''),
+  },
+  (table) => [
+    index('idx_difficulty_table_entries_table_generation').on(table.tableId, table.generation),
+    index('idx_difficulty_table_entries_md5').on(table.md5),
+    index('idx_difficulty_table_entries_sha256').on(table.sha256),
+  ],
+)
+
+export const taskLocks = sqliteTable('task_locks', {
+  name: text('name').primaryKey(),
+  owner: text('owner').notNull(),
+  leaseUntil: integer('lease_until', { mode: 'timestamp_ms' }).notNull(),
+})
+
 export const scores = sqliteTable(
   'scores',
   {
@@ -178,12 +229,22 @@ export const scores = sqliteTable(
     doubleOption: text('double_option', { enum: ['off', 'battle', 'battle_auto_scratch'] })
       .notNull()
       .default('off'),
+    appliedDoubleOption: text('applied_double_option', {
+      enum: ['off', 'flip', 'battle', 'battle_auto_scratch'],
+    })
+      .notNull()
+      .default('off'),
+    sourceKind: text('source_kind', {
+      enum: ['local', 'beatoraja', 'lr2', 'lr2oraja', 'lr2oraja_dx'],
+    })
+      .notNull()
+      .default('local'),
     playOptions: jsonText<Record<string, unknown>>('play_options', '{}'),
     replayHash: text('replay_hash'),
     replayFormat: text('replay_format'),
     replayUploadIntent: text('replay_upload_intent'),
     evidence: jsonText<Record<string, unknown>>('evidence', '{}'),
-    verification: text('verification', { enum: ['unverified', 'signed', 'invalid', 'trusted'] })
+    verification: text('verification', { enum: ['unverified', 'signed_backfill', 'verified_play'] })
       .notNull()
       .default('unverified'),
     accepted: integer('accepted', { mode: 'boolean' }).notNull().default(true),
@@ -211,6 +272,8 @@ export const scores = sqliteTable(
       table.scoring,
     ),
     index('idx_scores_received_at').on(table.serverReceivedAt),
+    index('idx_scores_player_played_at').on(table.playerId, table.playedAt),
+    index('idx_scores_player_received_at').on(table.playerId, table.serverReceivedAt),
   ],
 )
 
@@ -261,7 +324,7 @@ export const bestScores = sqliteTable(
     scoring: text('scoring').notNull(),
     playedAt: integer('played_at', { mode: 'timestamp_ms' }),
     serverReceivedAt: integer('server_received_at', { mode: 'timestamp_ms' }).notNull(),
-    verification: text('verification', { enum: ['unverified', 'signed', 'invalid', 'trusted'] })
+    verification: text('verification', { enum: ['unverified', 'signed_backfill', 'verified_play'] })
       .notNull()
       .default('unverified'),
     updatedAt: integer('updated_at', { mode: 'timestamp_ms' })
@@ -418,7 +481,7 @@ export const courseScores = sqliteTable(
       .default(sql`(unixepoch('subsec') * 1000)`),
     deviceType: text('device_type', { enum: ['keyboard', 'controller'] }).notNull(),
     evidence: jsonText<Record<string, unknown>>('evidence', '{}'),
-    verification: text('verification', { enum: ['unverified', 'signed', 'invalid', 'trusted'] })
+    verification: text('verification', { enum: ['unverified', 'signed_backfill', 'verified_play'] })
       .notNull()
       .default('unverified'),
     accepted: integer('accepted', { mode: 'boolean' }).notNull().default(true),
@@ -458,7 +521,7 @@ export const bestCourseScores = sqliteTable(
     scoring: text('scoring').notNull(),
     playedAt: integer('played_at', { mode: 'timestamp_ms' }),
     serverReceivedAt: integer('server_received_at', { mode: 'timestamp_ms' }).notNull(),
-    verification: text('verification', { enum: ['unverified', 'signed', 'invalid', 'trusted'] })
+    verification: text('verification', { enum: ['unverified', 'signed_backfill', 'verified_play'] })
       .notNull()
       .default('unverified'),
   },

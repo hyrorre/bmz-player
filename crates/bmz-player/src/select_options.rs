@@ -290,6 +290,36 @@ impl DoubleOption {
         }
     }
 
+    /// DB/replay metadata that records the option actually applied to the
+    /// chart.  This intentionally differs from [`Self::score_bucket`]: FLIP
+    /// shares the Off score bucket but must remain distinguishable in history.
+    pub const fn to_persistent_str(self) -> &'static str {
+        match self {
+            Self::Off => "Off",
+            Self::Flip => "Flip",
+            Self::Battle => "Battle",
+            Self::BattleAutoScratch => "BattleAutoScratch",
+        }
+    }
+
+    pub fn from_persistent_str(value: &str) -> Self {
+        match value {
+            "Flip" => Self::Flip,
+            "Battle" => Self::Battle,
+            "BattleAutoScratch" | "BattleAssist" => Self::BattleAutoScratch,
+            _ => Self::Off,
+        }
+    }
+
+    pub const fn ir_value(self) -> &'static str {
+        match self {
+            Self::Off => "off",
+            Self::Flip => "flip",
+            Self::Battle => "battle",
+            Self::BattleAutoScratch => "battle_auto_scratch",
+        }
+    }
+
     pub fn normalize_for_key_mode(self, key_mode: KeyMode) -> Self {
         match self {
             Self::Off => Self::Off,
@@ -471,6 +501,15 @@ mod tests {
             DoubleOption::BattleAutoScratch.score_bucket(),
             DoubleOptionScoreBucket::BattleAutoScratch
         );
+    }
+
+    #[test]
+    fn double_option_persistent_value_keeps_flip_distinct_from_off() {
+        assert_eq!(DoubleOption::Flip.to_persistent_str(), "Flip");
+        assert_eq!(DoubleOption::from_persistent_str("Flip"), DoubleOption::Flip);
+        assert_eq!(DoubleOption::from_persistent_str("Off"), DoubleOption::Off);
+        assert_eq!(DoubleOption::Flip.score_bucket(), DoubleOption::Off.score_bucket());
+        assert_eq!(DoubleOption::Flip.ir_value(), "flip");
     }
 
     #[test]

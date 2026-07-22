@@ -1,7 +1,13 @@
+use std::fs::File;
+use std::io::Read;
 use std::path::Path;
 
 use anyhow::{Context, Result, bail};
+use flate2::read::ZlibDecoder;
 use image::ImageReader;
+
+const CIM_HEADER_LEN: usize = 12;
+const MAX_CIM_RGBA_BYTES: u64 = 256 * 1024 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RgbaImageAsset {
@@ -38,6 +44,7 @@ pub fn load_static_rgba_image(path: &Path) -> Result<RgbaImageAsset> {
         .to_ascii_lowercase();
     match extension.as_str() {
         "png" | "bmp" | "jpg" | "jpeg" | "gif" | "tga" => load_image_rgba(path),
+        "cim" => load_cim_rgba(path),
         _ => bail!("unsupported image format: {}", path.display()),
     }
 }
@@ -57,6 +64,97 @@ fn load_image_rgba(path: &Path) -> Result<RgbaImageAsset> {
     let width = rgba.width();
     let height = rgba.height();
     let asset = RgbaImageAsset { width, height, pixels: rgba.into_raw() };
+    asset.validate()?;
+    Ok(asset)
+}
+
+/// libGDX `PixmapIO.writeCIM` 形式を RGBA8 へ展開する。
+///
+/// CIM は zlib stream 内に big-endian の width / height / Gdx2DPixmap format と
+/// Pixmap の生 pixel buffer を順に格納する。beatoraja は画像キャッシュだけでなく
+/// スキン配布物の source としてもこの形式を読み込む。
+fn load_cim_rgba(path: &Path) -> Result<RgbaImageAsset> {
+    let file = File::open(path)
+        .with_context(|| format!("failed to open CIM image: {}", path.display()))?;
+    let mut decoder = ZlibDecoder::new(file);
+    let mut header = [0_u8; CIM_HEADER_LEN];
+    decoder
+        .read_exact(&mut header)
+        .with_context(|| format!("failed to read CIM header: {}", path.display()))?;
+
+    let width = i32::from_be_bytes(header[0..4].try_into().unwrap());
+    let height = i32::from_be_bytes(header[4..8].try_into().unwrap());
+    let format = i32::from_be_bytes(header[8..12].try_into().unwrap());
+    if width <= 0 || height <= 0 {
+        bail!("invalid CIM dimensions {width}x{height}: {}", path.display());
+    }
+
+    let width = width as u32;
+    let height = height as u32;
+    let pixel_count =
+        u64::from(width).checked_mul(u64::from(height)).context("CIM pixel count overflow")?;
+    let rgba_len = pixel_count.checked_mul(4).context("CIM RGBA length overflow")?;
+    if rgba_len > MAX_CIM_RGBA_BYTES {
+        bail!("CIM image is too large after decode ({rgba_len} bytes): {}", path.display());
+    }
+
+    let bytes_per_pixel = match format {
+        1 => 1_u64, // GDX2D_FORMAT_ALPHA
+        2 => 2,     // GDX2D_FORMAT_LUMINANCE_ALPHA
+        3 => 3,     // GDX2D_FORMAT_RGB888
+        4 => 4,     // GDX2D_FORMAT_RGBA8888
+        5 | 6 => 2, // GDX2D_FORMAT_RGB565 / RGBA4444
+        _ => bail!("unsupported CIM pixel format {format}: {}", path.display()),
+    };
+    let source_len = pixel_count
+        .checked_mul(bytes_per_pixel)
+        .and_then(|len| usize::try_from(len).ok())
+        .context("CIM source length overflow")?;
+    let mut source = vec![0_u8; source_len];
+    decoder
+        .read_exact(&mut source)
+        .with_context(|| format!("truncated CIM pixel data: {}", path.display()))?;
+    let mut trailing = [0_u8; 1];
+    if decoder
+        .read(&mut trailing)
+        .with_context(|| format!("failed to finish CIM decode: {}", path.display()))?
+        != 0
+    {
+        bail!("unexpected trailing CIM pixel data: {}", path.display());
+    }
+
+    let pixels = match format {
+        1 => source.into_iter().flat_map(|a| [255, 255, 255, a]).collect(),
+        2 => source
+            .chunks_exact(2)
+            .flat_map(|pixel| [pixel[0], pixel[0], pixel[0], pixel[1]])
+            .collect(),
+        3 => source.chunks_exact(3).flat_map(|pixel| [pixel[0], pixel[1], pixel[2], 255]).collect(),
+        4 => source,
+        5 => source
+            .chunks_exact(2)
+            .flat_map(|pixel| {
+                let value = u16::from_le_bytes([pixel[0], pixel[1]]);
+                let r = (((value >> 11) & 0x1f) * 255 / 31) as u8;
+                let g = (((value >> 5) & 0x3f) * 255 / 63) as u8;
+                let b = ((value & 0x1f) * 255 / 31) as u8;
+                [r, g, b, 255]
+            })
+            .collect(),
+        6 => source
+            .chunks_exact(2)
+            .flat_map(|pixel| {
+                let value = u16::from_le_bytes([pixel[0], pixel[1]]);
+                let r = (((value >> 12) & 0x0f) * 17) as u8;
+                let g = (((value >> 8) & 0x0f) * 17) as u8;
+                let b = (((value >> 4) & 0x0f) * 17) as u8;
+                let a = ((value & 0x0f) * 17) as u8;
+                [r, g, b, a]
+            })
+            .collect(),
+        _ => unreachable!(),
+    };
+    let asset = RgbaImageAsset { width, height, pixels };
     asset.validate()?;
     Ok(asset)
 }
@@ -82,7 +180,11 @@ fn pad_small_bga_like_beatoraja(asset: RgbaImageAsset) -> RgbaImageAsset {
 
 #[cfg(test)]
 mod tests {
+    use std::io::Write;
     use std::path::PathBuf;
+
+    use flate2::Compression;
+    use flate2::write::ZlibEncoder;
 
     use super::*;
 
@@ -138,6 +240,30 @@ mod tests {
             assert_eq!(asset.pixels, vec![12, 34, 56, 255]);
             std::fs::remove_file(path).unwrap();
         }
+    }
+
+    #[test]
+    fn load_static_rgba_image_decodes_libgdx_cim_rgba8888() {
+        let path = temp_image_path("cim");
+        write_test_cim(&path, 2, 1, 4, &[12, 34, 56, 78, 90, 123, 200, 255]);
+
+        let asset = load_static_rgba_image(&path).expect("libGDX CIM must decode");
+
+        assert_eq!(asset.width, 2);
+        assert_eq!(asset.height, 1);
+        assert_eq!(asset.pixels, vec![12, 34, 56, 78, 90, 123, 200, 255]);
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn load_static_rgba_image_rejects_truncated_cim_pixels() {
+        let path = temp_image_path("cim");
+        write_test_cim(&path, 2, 1, 4, &[12, 34, 56, 78]);
+
+        let error = load_static_rgba_image(&path).unwrap_err();
+
+        assert!(error.to_string().contains("truncated CIM pixel data"));
+        std::fs::remove_file(path).unwrap();
     }
 
     #[test]
@@ -219,6 +345,15 @@ mod tests {
         let stamp =
             std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
         std::env::temp_dir().join(format!("bmz-render-test-{stamp}.{extension}"))
+    }
+
+    fn write_test_cim(path: &Path, width: i32, height: i32, format: i32, pixels: &[u8]) {
+        let mut encoder = ZlibEncoder::new(Vec::new(), Compression::default());
+        encoder.write_all(&width.to_be_bytes()).unwrap();
+        encoder.write_all(&height.to_be_bytes()).unwrap();
+        encoder.write_all(&format.to_be_bytes()).unwrap();
+        encoder.write_all(pixels).unwrap();
+        std::fs::write(path, encoder.finish().unwrap()).unwrap();
     }
 
     fn repo_root() -> PathBuf {

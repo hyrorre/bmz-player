@@ -77,20 +77,22 @@ pub fn advance_play_screen_with_bga_frames(
     bga_frames: &BgaFrameCatalog,
 ) -> FrameOutput<RenderSnapshot> {
     let frame = advance_session_frame(session, audio);
-    let render_snapshot = build_render_snapshot_with_target_and_bga_frames(
+    let mut render_snapshot = build_render_snapshot_with_target_and_bga_frames(
         session,
-        frame.times.render_now,
+        frame.times.audio_now,
         &session.recent_judgements,
         best_ex_score,
         best_ghost,
         target_ex_score,
         bga_frames,
     );
+    render_snapshot.skin_events = frame.skin_events.clone();
     FrameOutput {
         render_snapshot,
         judgements: frame.judgements,
         mine_hits: frame.mine_hits,
         keysound_volumes: frame.keysound_volumes,
+        skin_events: frame.skin_events,
         state: frame.state,
     }
 }
@@ -131,7 +133,7 @@ pub fn advance_play_screen_until_result(
         )?;
         let mut result_graph = crate::screens::result_model::ResultGraphCollector::default();
         result_graph.record_frame(&frame);
-        finished.summary.graph = result_graph.snapshot_for_session(session);
+        finished.summary.graph = std::sync::Arc::new(result_graph.snapshot_for_session(session));
         return Ok(PlayAdvanceOutcome::Finished { frame, finished });
     }
 
@@ -190,7 +192,7 @@ fn frame_output_from_session_frame_cached(
 ) -> FrameOutput<RenderSnapshot> {
     let mut render_snapshot = build_render_snapshot_with_target_and_bga_frames_cached(
         session,
-        frame.times.render_now,
+        frame.times.audio_now,
         &session.recent_judgements,
         best_ex_score,
         best_ghost,
@@ -199,11 +201,13 @@ fn frame_output_from_session_frame_cached(
         cache,
     );
     render_snapshot.play_elapsed_time = TimeUs(frame.times.audio_now.0.max(0));
+    render_snapshot.skin_events = frame.skin_events.clone();
     FrameOutput {
         render_snapshot,
         judgements: frame.judgements,
         mine_hits: frame.mine_hits,
         keysound_volumes: frame.keysound_volumes,
+        skin_events: frame.skin_events,
         state: frame.state,
     }
 }
@@ -324,8 +328,13 @@ pub fn advance_running_play_session(
         &running.bga_frames,
         &running.render_snapshot_cache,
     );
-    apply_play_arrange_to_snapshot(&mut output.render_snapshot, running.applied_arrange.arrange);
+    apply_play_arrange_to_snapshot(
+        &mut output.render_snapshot,
+        running.applied_arrange.arrange,
+        running.applied_arrange.arrange_2p,
+    );
     apply_running_play_target_to_snapshot(&mut output.render_snapshot, running);
+    apply_running_play_mode_to_snapshot(&mut output.render_snapshot, running);
     Ok(output)
 }
 
@@ -351,8 +360,13 @@ pub fn advance_running_play_session_until_result(
         &running.bga_frames,
         &running.render_snapshot_cache,
     );
-    apply_play_arrange_to_snapshot(&mut frame.render_snapshot, running.applied_arrange.arrange);
+    apply_play_arrange_to_snapshot(
+        &mut frame.render_snapshot,
+        running.applied_arrange.arrange,
+        running.applied_arrange.arrange_2p,
+    );
     apply_running_play_target_to_snapshot(&mut frame.render_snapshot, running);
+    apply_running_play_mode_to_snapshot(&mut frame.render_snapshot, running);
     running.result_graph.record_frame(&frame);
     if matches!(frame.state, PlayState::Finished | PlayState::Failed) {
         let mut finished = finish_session_result_once(
@@ -367,12 +381,14 @@ pub fn advance_running_play_session_until_result(
                 played_at,
                 applied_arrange: &running.applied_arrange,
                 target_ex_score: running.target_ex_score,
+                target_name: &running.target,
                 score_key: running.score_key,
                 practice_mode: running.practice_mode,
                 finish_mode: FinishResultMode::Normal,
             },
         )?;
-        finished.summary.graph = running.result_graph.snapshot_for_session(&running.session);
+        finished.summary.graph =
+            std::sync::Arc::new(running.result_graph.snapshot_for_session(&running.session));
         running.finished = Some(finished.clone());
         // ここでは音声を止めない。スケジュール済みの BGM/キー音は
         // オーディオ出力スレッド側で曲の最後まで鳴り切る。出力の解放は
@@ -388,6 +404,15 @@ fn apply_running_play_target_to_snapshot(
     running: &RunningPlaySession,
 ) {
     snapshot.target = running.target.clone();
+}
+
+fn apply_running_play_mode_to_snapshot(
+    snapshot: &mut RenderSnapshot,
+    running: &RunningPlaySession,
+) {
+    snapshot.practice_mode = running.practice_mode;
+    snapshot.score_save_enabled =
+        !snapshot.autoplay && !snapshot.replay_playback && !running.practice_mode;
 }
 
 /// `play_ending` 中に skin 側へ渡す壁時計ベースの timer 値。
@@ -420,16 +445,23 @@ pub fn refresh_play_ending_snapshot(
         timers,
         &running.render_snapshot_cache,
     );
-    apply_play_arrange_to_snapshot(&mut snapshot, running.applied_arrange.arrange);
+    apply_play_arrange_to_snapshot(
+        &mut snapshot,
+        running.applied_arrange.arrange,
+        running.applied_arrange.arrange_2p,
+    );
     apply_running_play_target_to_snapshot(&mut snapshot, running);
+    apply_running_play_mode_to_snapshot(&mut snapshot, running);
     snapshot
 }
 
 fn apply_play_arrange_to_snapshot(
     snapshot: &mut RenderSnapshot,
     arrange: crate::select_options::ArrangeOption,
+    arrange_2p: crate::select_options::ArrangeOption,
 ) {
     snapshot.arrange = arrange.as_str().to_string();
+    snapshot.arrange_2p = arrange_2p.as_str().to_string();
 }
 
 pub fn refresh_play_ending_snapshot_with_session(
@@ -463,12 +495,12 @@ pub fn refresh_play_ending_snapshot_with_session_cached(
 ) -> RenderSnapshot {
     let times = compute_frame_times(session);
     apply_auto_key_release(session, times.audio_now);
-    update_recent_judgements(session, &[], times.render_now);
-    update_recent_inputs(session, &[], times.render_now);
+    update_recent_judgements(session, &[], times.audio_now);
+    update_recent_inputs(session, &[], times.audio_now);
 
     let mut snapshot = build_render_snapshot_with_target_and_bga_frames_cached(
         session,
-        times.render_now,
+        times.audio_now,
         &session.recent_judgements,
         best_ex_score,
         best_ghost,
@@ -542,9 +574,10 @@ mod tests {
     fn apply_play_arrange_to_snapshot_sets_skin_label() {
         let mut snapshot = RenderSnapshot::default();
 
-        apply_play_arrange_to_snapshot(&mut snapshot, ArrangeOption::Mirror);
+        apply_play_arrange_to_snapshot(&mut snapshot, ArrangeOption::Mirror, ArrangeOption::Random);
 
         assert_eq!(snapshot.arrange, "MIRROR");
+        assert_eq!(snapshot.arrange_2p, "RANDOM");
     }
 
     #[test]

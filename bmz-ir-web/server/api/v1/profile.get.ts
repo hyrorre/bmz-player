@@ -10,6 +10,7 @@ export default defineEventHandler(async (event) => {
       email: schema.users.email,
       display_name: schema.profiles.displayName,
       bio: schema.profiles.bio,
+      daily_boundary_minutes: schema.profiles.dailyBoundaryMinutes,
     })
     .from(schema.users)
     .leftJoin(schema.profiles, eq(schema.profiles.id, schema.users.id))
@@ -27,6 +28,7 @@ export default defineEventHandler(async (event) => {
       email: profile.email,
       display_name: profile.display_name ?? '',
       bio: profile.bio ?? '',
+      daily_boundary_minutes: profile.daily_boundary_minutes ?? 0,
     },
   }
 })

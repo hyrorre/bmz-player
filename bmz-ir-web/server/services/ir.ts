@@ -1,18 +1,23 @@
 import { createHash, createPublicKey, randomUUID, verify as cryptoVerify } from 'node:crypto'
-import { and, desc, eq, inArray, isNull } from 'drizzle-orm'
+import { and, desc, eq, inArray, isNull, or } from 'drizzle-orm'
 import type { BatchItem } from 'drizzle-orm/batch'
 import { db, schema } from 'hub:db'
 import { isUniqueConstraintError } from '../utils/db_errors'
 import type {
+  IrAppliedDoubleOption,
   IrChartLnProfile,
   IrDeviceType,
   IrDoubleOption,
+  IrJudgeCounts,
+  IrJudges,
   IrRanking,
   IrRankingEntry,
   IrRankingScope,
   IrRuleMode,
   IrScoreSubmission,
+  IrScoreSourceKind,
   IrSubmitResponse,
+  IrVerificationStatus,
   LnScorePolicy,
 } from '../../shared/types/ir'
 
@@ -21,6 +26,10 @@ const EFFECTIVE_LN_MODES = new Set(['ln', 'cn', 'hcn'])
 const DEVICE_TYPES = new Set(['keyboard', 'controller'])
 const RULE_MODES = new Set(['Beatoraja', 'Lr2Oraja', 'Dx'])
 const RANKING_SCOPES = new Set(['global', 'self_and_rivals', 'rivals', 'self', 'around_self'])
+const LOCAL_BACKFILL_SOURCE = 'local_backfill'
+// D1 は 1 query あたり最大100 bind parameter。best score 再集計は score key ごとに
+// 5 bind を使うため、player / accepted 条件を含めても余裕を持てる19件に制限する。
+export const MAX_LOCAL_BACKFILL_DELETE_BATCH_SIZE = 19
 export const CLEAR_RANK: Record<string, number> = {
   no_play: 0,
   NoPlay: 0,
@@ -87,11 +96,42 @@ interface BestScoreRow extends BestScoreCandidate {
   arrange_1p?: string
   arrange_2p?: string
   played_at: string | null
-  verification: 'unverified' | 'signed' | 'invalid' | 'trusted'
+  verification: IrVerificationStatus
+  judges?: IrJudges
+}
+
+export class IrEvidenceValidationError extends Error {}
+export class IrScoreNotFoundError extends Error {}
+export class IrBackfillCleanupError extends Error {}
+
+interface ScoreAttestationPayload {
+  score_id: string
+  purpose: 'score_attestation'
+  evidence: Record<string, unknown>
 }
 
 interface ScoreHistoryRankingRow extends Omit<BestScoreRow, 'score_id'> {
   id: string
+}
+
+interface ScoreSubmissionMetadata {
+  doubleOption: IrDoubleOption
+  appliedDoubleOption: IrAppliedDoubleOption
+  sourceKind: IrScoreSourceKind
+}
+
+interface BestScoreKey {
+  chartSha256: string
+  lnPolicy: LnScorePolicy
+  doubleOption: IrDoubleOption
+  ruleMode: IrRuleMode
+  scoring: 'bms_ex_score_v1'
+}
+
+export interface LocalBackfillDeleteResult {
+  deleted_score_ids: string[]
+  missing_score_ids: string[]
+  retained_score_ids: string[]
 }
 
 export function parseRankingQuery(query: Record<string, unknown>): RankingQuery {
@@ -188,8 +228,78 @@ export function validateScoreSubmission(value: unknown): IrScoreSubmission {
   if (!DEVICE_TYPES.has(String(payload.play_options.device_type))) {
     throw new Error('play_options.device_type is invalid')
   }
-  normalizeDoubleOption(payload.play_options.double_option)
+  validateSeedOptions(payload.play_options)
+  scoreSubmissionMetadata(payload.play_options)
   return payload
+}
+
+export function validateSeedOptions(playOptions: Record<string, unknown>) {
+  for (const key of ['seed', 'random_seed'] as const) {
+    const value = playOptions[key]
+    if (value === undefined || value === null) continue
+    if (typeof value === 'number' && Number.isSafeInteger(value)) continue
+    if (typeof value === 'string' && /^-?\d+$/.test(value)) {
+      const seed = BigInt(value)
+      if (seed >= -(1n << 63n) && seed <= (1n << 63n) - 1n) continue
+    }
+    throw new Error(`play_options.${key} is invalid`)
+  }
+}
+
+export function validateScoreAttestation(value: unknown): ScoreAttestationPayload {
+  if (!isRecord(value)) {
+    throw new IrEvidenceValidationError('score attestation payload must be an object')
+  }
+  if (typeof value.score_id !== 'string' || value.score_id.length === 0) {
+    throw new IrEvidenceValidationError('score_id is required')
+  }
+  if (value.purpose !== 'score_attestation') {
+    throw new IrEvidenceValidationError('score attestation purpose is invalid')
+  }
+  if (!isRecord(value.evidence)) {
+    throw new IrEvidenceValidationError('score attestation evidence is required')
+  }
+  return {
+    score_id: value.score_id,
+    purpose: value.purpose,
+    evidence: value.evidence,
+  }
+}
+
+export async function attestScore(
+  user: IrRequestUser,
+  scoreId: string,
+  payload: ScoreAttestationPayload,
+): Promise<{ score_id: string; verification: IrVerificationStatus }> {
+  if (payload.score_id !== scoreId) {
+    throw new IrEvidenceValidationError('score_id does not match the request path')
+  }
+  const attestationVerification = await resolveVerification(user.id, payload)
+  if (attestationVerification === 'unverified') {
+    throw new IrEvidenceValidationError('score attestation evidence is required')
+  }
+
+  const score = await db.query.scores.findFirst({
+    columns: { evidence: true, playOptions: true },
+    where: and(eq(schema.scores.id, scoreId), eq(schema.scores.playerId, user.id)),
+  })
+  if (!score) {
+    throw new IrScoreNotFoundError('score not found')
+  }
+
+  const verification = verificationStatusForSignedSubmission({ play_options: score.playOptions })
+  const evidence = { ...score.evidence, attestation: payload.evidence }
+  await db.batch([
+    db
+      .update(schema.scores)
+      .set({ evidence, verification })
+      .where(and(eq(schema.scores.id, scoreId), eq(schema.scores.playerId, user.id))),
+    db
+      .update(schema.bestScores)
+      .set({ verification, updatedAt: new Date() })
+      .where(and(eq(schema.bestScores.scoreId, scoreId), eq(schema.bestScores.playerId, user.id))),
+  ])
+  return { score_id: scoreId, verification }
 }
 
 export async function submitScore(
@@ -198,14 +308,23 @@ export async function submitScore(
   rankingScopes: IrRankingScope[],
   rankingLimit: number,
 ): Promise<IrSubmitResponse> {
-  const doubleOption = normalizeDoubleOption(payload.play_options.double_option)
+  // 同一 idempotency key の再送は、当時の evidence 形式がすでに廃止されていても
+  // 保存済み score を成功として返す。初回送信の検証・保存には到達させない。
+  const existing = await findIdempotentScore(user.id, payload.idempotency_key)
+  if (existing) {
+    return idempotentScoreResponse(existing)
+  }
+
+  const { doubleOption, appliedDoubleOption, sourceKind } = scoreSubmissionMetadata(
+    payload.play_options,
+  )
+  const verification = await resolveVerification(user.id, payload)
   await upsertChart(payload, shouldUpdateExistingChart(payload.play_options, doubleOption))
 
   const bp =
     judgeTotal(payload, 'bad') + judgeTotal(payload, 'poor') + judgeTotal(payload, 'empty_poor')
   const cb = judgeTotal(payload, 'bad') + judgeTotal(payload, 'poor')
   const clearRank = CLEAR_RANK[payload.result.clear] ?? 0
-  const verification = await resolveVerification(user.id, payload)
   const deviceType = payload.play_options.device_type
 
   const scoreId = randomUUID()
@@ -243,10 +362,14 @@ export async function submitScore(
     minCb: payload.result.min_cb,
     deviceType,
     doubleOption,
-    playOptions: { ...payload.play_options, double_option: doubleOption } as Record<
-      string,
-      unknown
-    >,
+    appliedDoubleOption,
+    sourceKind,
+    playOptions: {
+      ...payload.play_options,
+      double_option: doubleOption,
+      applied_double_option: appliedDoubleOption,
+      source_kind: sourceKind,
+    } as Record<string, unknown>,
     replayHash: payload.replay?.hash ?? null,
     replayFormat: payload.replay?.format ?? null,
     replayUploadIntent: payload.replay?.upload_intent ?? null,
@@ -268,8 +391,8 @@ export async function submitScore(
     min_cb: payload.result.min_cb,
     server_received_at: serverReceivedAt,
   }
-  let score: { id: string; serverReceivedAt: Date } = { id: scoreId, serverReceivedAt }
-  let best = await prepareBestScoreUpsert(user.id, payload, scoreId, verification, candidate)
+  const score = { id: scoreId, serverReceivedAt }
+  const best = await prepareBestScoreUpsert(user.id, payload, scoreId, verification, candidate)
   try {
     const insertStatement = db.insert(schema.scores).values(scoreInsert)
     if (best.statement) {
@@ -281,26 +404,13 @@ export async function submitScore(
     if (!isUniqueConstraintError(error)) {
       throw error
     }
-    // idempotency 重複。既存 score を採用し、best 更新は従来どおり
-    // 既存 score の受信時刻で再計算して単体実行する。
-    const existing = await db.query.scores.findFirst({
-      columns: { id: true, serverReceivedAt: true },
-      where: and(
-        eq(schema.scores.playerId, user.id),
-        eq(schema.scores.idempotencyKey, payload.idempotency_key),
-      ),
-    })
+    // 初回送信が同時に確定した競合。既存 score を返すだけにして、
+    // 再送 payload で best score を再計算・上書きしない。
+    const existing = await findIdempotentScore(user.id, payload.idempotency_key)
     if (!existing) {
       throw new Error('failed to insert score')
     }
-    score = existing
-    best = await prepareBestScoreUpsert(user.id, payload, existing.id, verification, {
-      ...candidate,
-      server_received_at: existing.serverReceivedAt,
-    })
-    if (best.statement) {
-      await best.statement
-    }
+    return idempotentScoreResponse(existing)
   }
   const { bestUpdated, updatedFields } = best
 
@@ -335,6 +445,230 @@ export async function submitScore(
     server_received_at: score.serverReceivedAt.toISOString(),
     previous_best: previousBest,
     rankings: Object.keys(rankings).length > 0 ? rankings : undefined,
+  }
+}
+
+/**
+ * 古い local_backfill 行を本人だけが削除するための保守API。
+ *
+ * score_history の再importで正しい metadata を持つ行を作り直す用途に限定し、
+ * 通常プレイや別プレイヤーのscoreを削除できないようにする。
+ */
+export async function deleteLocalBackfillScores(
+  user: IrRequestUser,
+  requestedScoreIds: string[],
+): Promise<LocalBackfillDeleteResult> {
+  const scoreIds = [...new Set(requestedScoreIds.map((id) => id.trim()).filter(Boolean))]
+  if (scoreIds.length === 0) {
+    throw new IrBackfillCleanupError('score_ids must not be empty')
+  }
+  if (scoreIds.length > MAX_LOCAL_BACKFILL_DELETE_BATCH_SIZE) {
+    throw new IrBackfillCleanupError(
+      `score_ids must contain at most ${MAX_LOCAL_BACKFILL_DELETE_BATCH_SIZE} entries`,
+    )
+  }
+
+  const rows = await db
+    .select({
+      id: schema.scores.id,
+      chart_sha256: schema.scores.chartSha256,
+      ln_policy: schema.scores.lnPolicy,
+      double_option: schema.scores.doubleOption,
+      rule_mode: schema.scores.ruleMode,
+      scoring: schema.scores.scoring,
+      play_options: schema.scores.playOptions,
+    })
+    .from(schema.scores)
+    .where(and(eq(schema.scores.playerId, user.id), inArray(schema.scores.id, scoreIds)))
+
+  const foundIds = new Set(rows.map((row) => row.id))
+  const { localBackfillRows, retainedScoreIds } = partitionLocalBackfillRows(rows)
+  const deletedScoreIds = localBackfillRows.map((row) => row.id)
+  if (deletedScoreIds.length === 0) {
+    return {
+      deleted_score_ids: [],
+      missing_score_ids: scoreIds.filter((id) => !foundIds.has(id)),
+      retained_score_ids: retainedScoreIds,
+    }
+  }
+  const affectedKeys = uniqueBestScoreKeys(localBackfillRows)
+  const affectedConditions = affectedKeys.map(bestScoreKeyCondition)
+  const affectedWhere = and(eq(schema.bestScores.playerId, user.id), or(...affectedConditions))
+  const remainingWhere = and(
+    eq(schema.scores.playerId, user.id),
+    eq(schema.scores.accepted, true),
+    or(...affectedKeys.map(scoreHistoryKeyCondition)),
+  )
+
+  const deletedScoreIdSet = new Set(deletedScoreIds)
+  const remainingRows = await db
+    .select({
+      id: schema.scores.id,
+      player_id: schema.scores.playerId,
+      chart_sha256: schema.scores.chartSha256,
+      ex_score: schema.scores.exScore,
+      clear_type: schema.scores.clearType,
+      clear_rank: schema.scores.clearRank,
+      max_combo: schema.scores.maxCombo,
+      min_bp: schema.scores.minBp,
+      min_cb: schema.scores.minCb,
+      device_type: schema.scores.deviceType,
+      gauge: schema.scores.gauge,
+      ln_policy: schema.scores.lnPolicy,
+      effective_ln_mode: schema.scores.effectiveLnMode,
+      double_option: schema.scores.doubleOption,
+      rule_mode: schema.scores.ruleMode,
+      scoring: schema.scores.scoring,
+      played_at: schema.scores.playedAt,
+      server_received_at: schema.scores.serverReceivedAt,
+      verification: schema.scores.verification,
+      play_options: schema.scores.playOptions,
+    })
+    .from(schema.scores)
+    .where(remainingWhere)
+
+  const rebuilt = bestRowsFromHistory(
+    remainingRows
+      .filter((row) => !deletedScoreIdSet.has(row.id))
+      .map((row) => ({ ...rowToBestScoreRow({ ...row, score_id: row.id }), id: row.id })),
+  )
+  const updatedAt = new Date()
+  const statements = [
+    // D1 は明示 transaction の BEGIN を受け付けない。batch は原子的に実行されるため、
+    // score を削除すると source score を参照する best_scores は cascade され得る。
+    // affected key 全体を同じ batch で組み直し、残存scoreから正しい代表行を復元する。
+    db.delete(schema.bestScores).where(affectedWhere),
+    db
+      .delete(schema.scores)
+      .where(and(eq(schema.scores.playerId, user.id), inArray(schema.scores.id, deletedScoreIds))),
+    ...rebuilt.map((row) =>
+      db.insert(schema.bestScores).values({
+        id: randomUUID(),
+        playerId: row.player_id,
+        chartSha256: row.chart_sha256,
+        scoreId: row.score_id,
+        bestExScoreId: row.best_ex_score_id,
+        bestClearScoreId: row.best_clear_score_id,
+        bestMaxComboScoreId: row.best_max_combo_score_id,
+        bestMinBpScoreId: row.best_min_bp_score_id,
+        bestMinCbScoreId: row.best_min_cb_score_id,
+        exScore: row.ex_score,
+        clearType: row.clear_type,
+        clearRank: row.clear_rank,
+        maxCombo: row.max_combo,
+        minBp: row.min_bp,
+        minCb: row.min_cb,
+        deviceType: row.device_type,
+        doubleOption: row.double_option,
+        gauge: row.gauge,
+        lnPolicy: row.ln_policy,
+        effectiveLnMode: row.effective_ln_mode,
+        ruleMode: row.rule_mode,
+        scoring: row.scoring,
+        playedAt: row.played_at ? new Date(row.played_at) : null,
+        serverReceivedAt: row.server_received_at,
+        verification: row.verification,
+        updatedAt,
+      }),
+    ),
+  ] as [BatchItem<'sqlite'>, ...BatchItem<'sqlite'>[]]
+  await db.batch(statements)
+
+  return {
+    deleted_score_ids: deletedScoreIds,
+    missing_score_ids: scoreIds.filter((id) => !foundIds.has(id)),
+    retained_score_ids: retainedScoreIds,
+  }
+}
+
+function partitionLocalBackfillRows<
+  TRow extends { id: string; play_options: Record<string, unknown> | null },
+>(rows: TRow[]): { localBackfillRows: TRow[]; retainedScoreIds: string[] } {
+  const localBackfillRows = rows.filter(
+    (row) => row.play_options?.submission_source === LOCAL_BACKFILL_SOURCE,
+  )
+  return {
+    localBackfillRows,
+    // Legacy cleanup candidates can include a locally linked, verified normal play.
+    // Never delete it remotely merely because its local score_history row was reimported.
+    retainedScoreIds: rows
+      .filter((row) => row.play_options?.submission_source !== LOCAL_BACKFILL_SOURCE)
+      .map((row) => row.id),
+  }
+}
+
+function uniqueBestScoreKeys(
+  rows: Array<{
+    chart_sha256: string
+    ln_policy: string
+    double_option: string
+    rule_mode: string
+    scoring: string
+  }>,
+): BestScoreKey[] {
+  const keys = new Map<string, BestScoreKey>()
+  for (const row of rows) {
+    const key: BestScoreKey = {
+      chartSha256: row.chart_sha256,
+      lnPolicy: row.ln_policy as LnScorePolicy,
+      doubleOption: row.double_option as IrDoubleOption,
+      ruleMode: row.rule_mode as IrRuleMode,
+      scoring: row.scoring as 'bms_ex_score_v1',
+    }
+    keys.set(
+      [key.chartSha256, key.lnPolicy, key.doubleOption, key.ruleMode, key.scoring].join('\u0000'),
+      key,
+    )
+  }
+  return [...keys.values()]
+}
+
+function bestScoreKeyCondition(key: BestScoreKey) {
+  return and(
+    eq(schema.bestScores.chartSha256, key.chartSha256),
+    eq(schema.bestScores.lnPolicy, key.lnPolicy),
+    eq(schema.bestScores.doubleOption, key.doubleOption),
+    eq(schema.bestScores.ruleMode, key.ruleMode),
+    eq(schema.bestScores.scoring, key.scoring),
+  )
+}
+
+function scoreHistoryKeyCondition(key: BestScoreKey) {
+  return and(
+    eq(schema.scores.chartSha256, key.chartSha256),
+    eq(schema.scores.lnPolicy, key.lnPolicy),
+    eq(schema.scores.doubleOption, key.doubleOption),
+    eq(schema.scores.ruleMode, key.ruleMode),
+    eq(schema.scores.scoring, key.scoring),
+  )
+}
+
+async function findIdempotentScore(
+  playerId: string,
+  idempotencyKey: string,
+): Promise<{ id: string; serverReceivedAt: Date } | undefined> {
+  return db.query.scores.findFirst({
+    columns: { id: true, serverReceivedAt: true },
+    where: and(
+      eq(schema.scores.playerId, playerId),
+      eq(schema.scores.idempotencyKey, idempotencyKey),
+    ),
+  })
+}
+
+function idempotentScoreResponse(score: { id: string; serverReceivedAt: Date }): IrSubmitResponse {
+  return {
+    accepted: true,
+    score_id: score.id,
+    best_updated: false,
+    updated_fields: {
+      ex_score: false,
+      clear: false,
+      max_combo: false,
+      min_bp: false,
+      min_cb: false,
+    },
+    server_received_at: score.serverReceivedAt.toISOString(),
   }
 }
 
@@ -471,13 +805,15 @@ async function enrichBestRowsWithPlayOptions(rows: BestScoreRow[]): Promise<Best
     .select({
       id: schema.scores.id,
       play_options: schema.scores.playOptions,
+      judges: schema.scores.judges,
     })
     .from(schema.scores)
     .where(inArray(schema.scores.id, scoreIds))
-  const playOptionsByScoreId = new Map(scoreRows.map((row) => [row.id, row.play_options]))
+  const scoreById = new Map(scoreRows.map((row) => [row.id, row]))
   return rows.map((row) => ({
     ...row,
-    ...arrangeOptionsFromPlayOptions(playOptionsByScoreId.get(row.score_id)),
+    ...arrangeOptionsFromPlayOptions(scoreById.get(row.score_id)?.play_options),
+    judges: rankingJudges(scoreById.get(row.best_ex_score_id)?.judges),
   }))
 }
 
@@ -519,6 +855,7 @@ async function fetchRankingBestRowsFromHistory(
       played_at: schema.scores.playedAt,
       server_received_at: schema.scores.serverReceivedAt,
       verification: schema.scores.verification,
+      judges: schema.scores.judges,
       play_options: schema.scores.playOptions,
     })
     .from(schema.scores)
@@ -554,6 +891,7 @@ function rowToBestScoreRow(row: {
   played_at: Date | null
   server_received_at: Date
   verification: BestScoreRow['verification']
+  judges?: Record<string, unknown> | null
   play_options?: Record<string, unknown> | null
 }): BestScoreRow {
   const { play_options: playOptions, ...rowFields } = row
@@ -573,7 +911,35 @@ function rowToBestScoreRow(row: {
     rule_mode: row.rule_mode as IrRuleMode,
     device_type: row.device_type as IrDeviceType,
     played_at: row.played_at?.toISOString() ?? null,
+    judges: rankingJudges(row.judges),
   }
+}
+
+function rankingJudgeCounts(value: unknown): IrJudgeCounts | undefined {
+  if (!isRecord(value)) {
+    return undefined
+  }
+  const keys = ['pgreat', 'great', 'good', 'bad', 'poor', 'empty_poor'] as const
+  if (keys.some((key) => !Number.isInteger(value[key]) || Number(value[key]) < 0)) {
+    return undefined
+  }
+  return {
+    pgreat: Number(value.pgreat),
+    great: Number(value.great),
+    good: Number(value.good),
+    bad: Number(value.bad),
+    poor: Number(value.poor),
+    empty_poor: Number(value.empty_poor),
+  }
+}
+
+function rankingJudges(value: unknown): IrJudges | undefined {
+  if (!isRecord(value)) {
+    return undefined
+  }
+  const fast = rankingJudgeCounts(value.fast)
+  const slow = rankingJudgeCounts(value.slow)
+  return fast && slow ? { fast, slow } : undefined
 }
 
 function bestRowsFromHistory(rows: ScoreHistoryRankingRow[]): BestScoreRow[] {
@@ -821,7 +1187,7 @@ async function prepareBestScoreUpsert(
     return { bestUpdated: false, updatedFields, statement: null }
   }
 
-  const verificationStatus = verification as 'unverified' | 'signed' | 'invalid' | 'trusted'
+  const verificationStatus = verification as IrVerificationStatus
   const playedAt = playedAtDate(payload.result.played_at)
   const values = {
     id: randomUUID(),
@@ -976,6 +1342,7 @@ function rankRows(
         arrange_2p: row.arrange_2p,
         played_at: row.played_at,
         verification: row.verification,
+        judges: row.judges,
         source_score_ids: {
           ex_score: row.best_ex_score_id,
           clear: row.best_clear_score_id,
@@ -1051,21 +1418,26 @@ async function getPlayerNames(playerIds: string[]): Promise<Map<string, string>>
  * tamper evidence の署名を検証する。
  *
  * - evidence なし / 署名なし → unverified
- * - 署名ありで device key 不明・hash 不一致・署名不正 → invalid
- * - 検証成功 → signed
+ * - 署名ありで device key 不明・hash 不一致・署名不正 → reject
+ * - 検証成功 → submission source に応じた verified_play / signed_backfill
  *
  * canonical form は「evidence を除いた payload をキー昇順 compact JSON 化」
  * したもので、BMZ クライアント (serde_json の BTreeMap 出力) と一致させる。
  */
 export async function resolveVerification(
   playerIdOrDb: string | unknown,
-  payloadOrPlayerId: { evidence?: Record<string, unknown> } | string,
-  maybePayload?: { evidence?: Record<string, unknown> },
-): Promise<'unverified' | 'signed' | 'invalid'> {
+  payloadOrPlayerId:
+    | { evidence?: Record<string, unknown>; play_options?: Record<string, unknown> }
+    | string,
+  maybePayload?: { evidence?: Record<string, unknown>; play_options?: Record<string, unknown> },
+): Promise<IrVerificationStatus> {
   const playerId = typeof playerIdOrDb === 'string' ? playerIdOrDb : String(payloadOrPlayerId)
   const payload =
     typeof playerIdOrDb === 'string'
-      ? (payloadOrPlayerId as { evidence?: Record<string, unknown> })
+      ? (payloadOrPlayerId as {
+          evidence?: Record<string, unknown>
+          play_options?: Record<string, unknown>
+        })
       : (maybePayload ?? {})
   const evidence = payload.evidence
   if (!evidence || typeof evidence !== 'object') {
@@ -1082,7 +1454,7 @@ export async function resolveVerification(
     typeof keyId !== 'string' ||
     typeof claimedHash !== 'string'
   ) {
-    return 'invalid'
+    throw new IrEvidenceValidationError('score evidence is invalid')
   }
 
   const key = await db.query.deviceKeys.findFirst({
@@ -1094,12 +1466,12 @@ export async function resolveVerification(
     ),
   })
   if (!key) {
-    return 'invalid'
+    throw new IrEvidenceValidationError('score evidence is invalid')
   }
 
   const hash = createHash('sha256').update(canonicalSubmissionJson(payload)).digest()
   if (hash.toString('hex') !== claimedHash.toLowerCase()) {
-    return 'invalid'
+    throw new IrEvidenceValidationError('score evidence is invalid')
   }
 
   try {
@@ -1110,10 +1482,21 @@ export async function resolveVerification(
     ])
     const publicKey = createPublicKey({ key: der, format: 'der', type: 'spki' })
     const signatureBytes = Buffer.from(signature, 'base64url')
-    return cryptoVerify(null, hash, publicKey, signatureBytes) ? 'signed' : 'invalid'
+    if (!cryptoVerify(null, hash, publicKey, signatureBytes)) {
+      throw new IrEvidenceValidationError('score evidence is invalid')
+    }
+    return verificationStatusForSignedSubmission(payload)
   } catch {
-    return 'invalid'
+    throw new IrEvidenceValidationError('score evidence is invalid')
   }
+}
+
+function verificationStatusForSignedSubmission(payload: {
+  play_options?: Record<string, unknown>
+}): IrVerificationStatus {
+  return payload.play_options?.submission_source === LOCAL_BACKFILL_SOURCE
+    ? 'signed_backfill'
+    : 'verified_play'
 }
 
 function canonicalSubmissionJson(payload: { evidence?: Record<string, unknown> }): string {
@@ -1208,6 +1591,73 @@ function normalizeDoubleOption(value: unknown): IrDoubleOption {
   }
 }
 
+function scoreSubmissionMetadata(
+  playOptions: IrScoreSubmission['play_options'],
+): ScoreSubmissionMetadata {
+  const doubleOption = normalizeDoubleOption(playOptions.double_option)
+  const appliedDoubleOption = normalizeAppliedDoubleOption(
+    playOptions.applied_double_option,
+    doubleOption,
+  )
+  if (normalizeDoubleOption(appliedDoubleOption) !== doubleOption) {
+    throw new Error('applied_double_option does not match double_option')
+  }
+  return {
+    doubleOption,
+    appliedDoubleOption,
+    sourceKind: normalizeScoreSourceKind(playOptions.source_kind),
+  }
+}
+
+function normalizeAppliedDoubleOption(
+  value: unknown,
+  fallback: IrDoubleOption,
+): IrAppliedDoubleOption {
+  const normalized = String(value ?? fallback)
+    .trim()
+    .toLowerCase()
+    .replaceAll('-', '_')
+  switch (normalized) {
+    case '':
+      return fallback
+    case 'off':
+      return 'off'
+    case 'flip':
+      return 'flip'
+    case 'battle':
+      return 'battle'
+    case 'battle_auto_scratch':
+    case 'battle_assist':
+      return 'battle_auto_scratch'
+    default:
+      throw new Error('applied_double_option is invalid')
+  }
+}
+
+function normalizeScoreSourceKind(value: unknown): IrScoreSourceKind {
+  const normalized = String(value ?? 'local')
+    .trim()
+    .toLowerCase()
+    .replaceAll('-', '_')
+  switch (normalized) {
+    case '':
+    case 'local':
+      return 'local'
+    case 'beatoraja':
+      return 'beatoraja'
+    case 'lr2':
+      return 'lr2'
+    case 'lr2oraja':
+    case 'lr2_oraja':
+      return 'lr2oraja'
+    case 'lr2oraja_dx':
+    case 'lr2_oraja_dx':
+      return 'lr2oraja_dx'
+    default:
+      throw new Error('source_kind is invalid')
+  }
+}
+
 function clampInteger(value: unknown, fallback: number, min: number, max: number): number {
   const parsed = Number(value ?? fallback)
   if (!Number.isFinite(parsed)) {
@@ -1277,4 +1727,11 @@ export const __test = {
   shouldUpdateExistingChart,
   dedupeBestRowsByPlayer,
   bestRowsFromHistory,
+  uniqueBestScoreKeys,
+  partitionLocalBackfillRows,
+  verificationStatusForSignedSubmission,
+  idempotentScoreResponse,
+  scoreSubmissionMetadata,
+  validateSeedOptions,
+  rankingJudges,
 }

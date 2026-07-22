@@ -32,13 +32,28 @@ struct IrReplayJobPayload {
     remote_score_id: String,
 }
 
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+struct IrScoreAttestationJobPayload {
+    remote_score_id: String,
+}
+
 pub const IR_SYNC_BATCH_LIMIT: u32 = 20;
 pub const IR_SYNC_JOB_SPACING_MS: u64 = 3_100;
+/// 手動の `ir sync` / local backfill 用。結果画面・常駐同期の待機時間とは分ける。
+pub const IR_CLI_SYNC_BATCH_LIMIT: u32 = 100;
+pub const IR_CLI_SYNC_JOB_SPACING_MS: u64 = 200;
 pub const IR_SYNC_LOOP_INTERVAL_SECS: u64 = 30;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct IrSyncThrottle {
     pub job_spacing_ms: u64,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct IrSyncJobFilter<'a> {
+    pub provider_key: &'a str,
+    pub account_id: &'a str,
+    pub kind: IrJobKind,
 }
 
 impl IrSyncThrottle {
@@ -102,8 +117,73 @@ pub async fn sync_pending_ir_jobs(
     ignore_retry_backoff: bool,
     throttle: IrSyncThrottle,
 ) -> Result<IrSyncReport> {
+    sync_pending_ir_jobs_with_filter(
+        network_db,
+        score_db_path,
+        profile_root,
+        logs_dir,
+        ir_config,
+        now,
+        limit,
+        ignore_retry_backoff,
+        throttle,
+        None,
+    )
+    .await
+}
+
+pub async fn sync_pending_ir_jobs_filtered(
+    network_db: &mut NetworkDatabase,
+    score_db_path: &Path,
+    profile_root: &Path,
+    logs_dir: &Path,
+    ir_config: &IrConfig,
+    filter: IrSyncJobFilter<'_>,
+    now: i64,
+    limit: u32,
+    ignore_retry_backoff: bool,
+    throttle: IrSyncThrottle,
+) -> Result<IrSyncReport> {
+    sync_pending_ir_jobs_with_filter(
+        network_db,
+        score_db_path,
+        profile_root,
+        logs_dir,
+        ir_config,
+        now,
+        limit,
+        ignore_retry_backoff,
+        throttle,
+        Some(filter),
+    )
+    .await
+}
+
+async fn sync_pending_ir_jobs_with_filter(
+    network_db: &mut NetworkDatabase,
+    score_db_path: &Path,
+    profile_root: &Path,
+    logs_dir: &Path,
+    ir_config: &IrConfig,
+    now: i64,
+    limit: u32,
+    ignore_retry_backoff: bool,
+    throttle: IrSyncThrottle,
+    filter: Option<IrSyncJobFilter<'_>>,
+) -> Result<IrSyncReport> {
     let mut report = IrSyncReport::default();
-    let jobs = network_db.claim_pending_ir_score_jobs(now, limit, ignore_retry_backoff)?;
+    let jobs = match filter {
+        Some(IrSyncJobFilter { provider_key, account_id, kind }) => network_db
+            .claim_pending_ir_score_jobs_for_kind(
+                provider_key,
+                account_id,
+                kind,
+                now,
+                limit,
+                ignore_retry_backoff,
+            )?,
+        None => network_db.claim_pending_ir_score_jobs(now, limit, ignore_retry_backoff)?,
+    };
     let job_count = jobs.len();
     let replay_paths = match replay_paths_for_jobs(score_db_path, &jobs) {
         Ok(paths) => paths,
@@ -176,6 +256,58 @@ pub async fn sync_pending_ir_jobs(
                     }
                 }
             }
+            IrJobKind::Attestation => {
+                let attestation_result = submit_score_attestation_job(
+                    profile_root,
+                    provider,
+                    &job.payload_json,
+                    job_now,
+                )
+                .await;
+                match attestation_result {
+                    Ok((remote_score_id, request_json, response_json)) => {
+                        let _ = write_ir_submission_log(
+                            logs_dir,
+                            &job,
+                            "succeeded",
+                            &remote_score_id,
+                            job_now,
+                            &request_json,
+                            &response_json,
+                            "",
+                        );
+                        network_db.mark_ir_score_job_status(
+                            job.id,
+                            IrScoreJobStatus::Succeeded,
+                            job_now,
+                            "",
+                        )?;
+                        report.submitted += 1;
+                    }
+                    Err(error) => {
+                        let message = format!("score attestation failed: {error:#}");
+                        let _ = write_ir_submission_log(
+                            logs_dir,
+                            &job,
+                            "failed",
+                            "",
+                            job_now,
+                            &job.payload_json,
+                            "",
+                            &message,
+                        );
+                        network_db.mark_ir_score_job_failed(
+                            job.id,
+                            job_now,
+                            &message,
+                            retry_after_seconds_from_error(&error),
+                        )?;
+                        report.failed += 1;
+                        report.messages.push(format!("job {}: {message}", job.id));
+                        tracing::warn!(job_id = job.id, provider = job.provider, %message, "IR score attestation failed");
+                    }
+                }
+            }
             IrJobKind::Score | IrJobKind::Course => {
                 let submit_result = match job.kind {
                     IrJobKind::Score => {
@@ -190,7 +322,7 @@ pub async fn sync_pending_ir_jobs(
                         )
                         .await
                     }
-                    IrJobKind::Replay => unreachable!(),
+                    IrJobKind::Replay | IrJobKind::Attestation => unreachable!(),
                 };
                 let Ok((request_json, response_json)) = submit_result else {
                     let error = submit_result.unwrap_err();
@@ -483,19 +615,58 @@ async fn submit_job_payload(
 ) -> Result<(String, String)> {
     let mut payload: IrScoreSubmission =
         serde_json::from_str(payload_json).context("failed to parse stored IR payload")?;
+    normalize_legacy_score_seed_options(&mut payload);
     let provider_key = crate::ir::provider_key::configured_provider_key(provider)
         .context("IR provider key is not set; log in again")?;
     let credentials =
         ensure_fresh_credentials(profile_root, provider_key, &provider.base_url, now).await?;
     let client = BmzOfficialIrClient::new(&provider.base_url, credentials.access_token)?;
-    if !super::backfill::is_local_backfill_submission(&payload) {
-        attach_evidence(profile_root, provider, &client, &mut payload).await;
-    }
+    attach_evidence(profile_root, provider, &client, &mut payload).await;
     let request_json = serde_json::to_string(&payload)?;
     let options =
         IrSubmitOptions { ranking_scopes: vec![IrRankingScope::Global], ranking_limit: 20 };
     let response = client.submit_score(&payload, &options).await?;
     Ok((request_json, serde_json::to_string(&response)?))
+}
+
+async fn submit_score_attestation_job(
+    profile_root: &Path,
+    provider: &IrProviderConfig,
+    payload_json: &str,
+    now: i64,
+) -> Result<(String, String, String)> {
+    const ATTESTATION_PURPOSE: &str = "score_attestation";
+    const ATTESTATION_SCHEMA: &str = "bmz-score-attestation-v1";
+
+    let payload: IrScoreAttestationJobPayload = serde_json::from_str(payload_json)
+        .context("failed to parse stored IR attestation payload")?;
+    if payload.remote_score_id.is_empty() {
+        bail!("stored IR attestation payload has no remote score id");
+    }
+    let provider_key = crate::ir::provider_key::configured_provider_key(provider)
+        .context("IR provider key is not set; log in again")?;
+    let credentials =
+        ensure_fresh_credentials(profile_root, provider_key, &provider.base_url, now).await?;
+    let client = BmzOfficialIrClient::new(&provider.base_url, credentials.access_token)?;
+    let unsigned = serde_json::json!({
+        "score_id": &payload.remote_score_id,
+        "purpose": ATTESTATION_PURPOSE,
+    });
+    let key = super::device_key::ensure_registered_device_key(profile_root, provider_key, &client)
+        .await?;
+    let evidence =
+        super::device_key::build_evidence_for_value(&key, &unsigned, ATTESTATION_SCHEMA)?;
+    let request = serde_json::json!({
+        "score_id": &payload.remote_score_id,
+        "purpose": ATTESTATION_PURPOSE,
+        "evidence": evidence,
+    });
+    let response = client.attest_score(&payload.remote_score_id, &request).await?;
+    Ok((
+        payload.remote_score_id,
+        serde_json::to_string(&request)?,
+        serde_json::to_string(&response)?,
+    ))
 }
 
 /// コーススコアジョブの送信。署名 evidence を付けて
@@ -537,6 +708,7 @@ async fn submit_course_job_payload(
 }
 
 fn normalize_legacy_course_payload(payload: &mut serde_json::Value) {
+    normalize_legacy_seed_options_value(payload);
     let Some(rule) = payload.get_mut("rule").and_then(serde_json::Value::as_object_mut) else {
         return;
     };
@@ -547,6 +719,38 @@ fn normalize_legacy_course_payload(payload: &mut serde_json::Value) {
     };
     if needs_default {
         rule.insert("rule_mode".to_string(), serde_json::json!("Beatoraja"));
+    }
+}
+
+fn normalize_legacy_score_seed_options(payload: &mut IrScoreSubmission) {
+    for key in ["seed", "random_seed"] {
+        let Some(value) = payload.play_options.get_mut(key) else {
+            continue;
+        };
+        normalize_integer_value_to_string(value);
+    }
+}
+
+fn normalize_legacy_seed_options_value(payload: &mut serde_json::Value) {
+    let Some(play_options) =
+        payload.get_mut("play_options").and_then(serde_json::Value::as_object_mut)
+    else {
+        return;
+    };
+    for key in ["seed", "random_seed"] {
+        if let Some(value) = play_options.get_mut(key) {
+            normalize_integer_value_to_string(value);
+        }
+    }
+}
+
+fn normalize_integer_value_to_string(value: &mut serde_json::Value) {
+    let integer = value
+        .as_i64()
+        .map(|value| value.to_string())
+        .or_else(|| value.as_u64().map(|value| value.to_string()));
+    if let Some(integer) = integer {
+        *value = serde_json::Value::String(integer);
     }
 }
 
@@ -583,9 +787,11 @@ mod tests {
     use crate::ln_policy::LnScorePolicy;
 
     #[test]
-    fn ir_sync_rate_limit_defaults_match_backfill_budget() {
+    fn ir_sync_throttles_keep_background_and_cli_budgets_separate() {
         assert_eq!(IR_SYNC_BATCH_LIMIT, 20);
         assert_eq!(IR_SYNC_JOB_SPACING_MS, 3_100);
+        assert_eq!(IR_CLI_SYNC_BATCH_LIMIT, 100);
+        assert_eq!(IR_CLI_SYNC_JOB_SPACING_MS, 200);
         assert_eq!(IR_SYNC_LOOP_INTERVAL_SECS, 30);
         assert_eq!(
             IrSyncThrottle::rate_limited().job_delay(),
@@ -648,6 +854,10 @@ mod tests {
     #[test]
     fn legacy_course_payload_defaults_missing_rule_mode() {
         let mut payload = serde_json::json!({
+            "play_options": {
+                "seed": 1783820891178268800_i64,
+                "random_seed": 42
+            },
             "rule": {
                 "gauge": "Class",
                 "ln_policy": "AutoLn",
@@ -658,6 +868,17 @@ mod tests {
         normalize_legacy_course_payload(&mut payload);
 
         assert_eq!(payload["rule"]["rule_mode"], "Beatoraja");
+        assert_eq!(payload["play_options"]["seed"], "1783820891178268800");
+        assert_eq!(payload["play_options"]["random_seed"], "42");
+    }
+
+    #[test]
+    fn legacy_integer_seed_value_becomes_decimal_string() {
+        let mut seed = serde_json::json!(1783820891178268800_i64);
+
+        normalize_integer_value_to_string(&mut seed);
+
+        assert_eq!(seed, "1783820891178268800");
     }
 
     #[test]

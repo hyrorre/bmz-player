@@ -1,10 +1,15 @@
+use std::sync::Arc;
+
 use bmz_core::clear::ClearType;
 use bmz_core::lane::KeyMode;
 use bmz_core::time::TimeUs;
 
 use crate::chart_graph::BpmGraphSegment;
 use crate::skin::SkinImageSize;
-use crate::snapshot::{DisplayJudgeCounts, FastSlowJudgeCounts, OverlaySnapshot, RenderSnapshot};
+use crate::snapshot::{
+    DisplayJudgeCounts, FastSlowJudgeCounts, OverlaySnapshot, RenderSnapshot,
+    SkinLogicalInputSnapshot,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub enum ResultGradeDiffDisplay {
@@ -22,7 +27,24 @@ pub enum AppSceneSnapshot {
     Result(ResultSnapshot),
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct DailyPlayerStatsSnapshot {
+    pub play_count: u64,
+    pub clear_count: u64,
+    pub pgreat: u64,
+    pub great: u64,
+    pub good: u64,
+    pub bad: u64,
+    pub poor: u64,
+    pub empty_poor: u64,
+    pub score_update_count: u64,
+    pub clear_update_count: u64,
+    pub miss_count_update_count: u64,
+    /// Most recent locally played titles in the current statistics day.
+    pub recent_titles: [String; 10],
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct PlayerStatsSnapshot {
     pub play_count: u64,
     pub clear_count: u64,
@@ -40,13 +62,38 @@ pub struct PlayerStatsSnapshot {
     pub slow_poor: u64,
     pub fast_empty_poor: u64,
     pub slow_empty_poor: u64,
+    pub daily: DailyPlayerStatsSnapshot,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct CourseStageResultSkinSnapshot {
+    pub ex_score: u32,
+    pub gauge: f32,
+    pub bp: u32,
+    pub rate_basis_points: u32,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct CourseResultSkinSnapshot {
+    pub stage_count: u32,
+    pub stages: [CourseStageResultSkinSnapshot; bmz_skin_document::SKIN_BMZ_COURSE_STAGE_COUNT],
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct SelectSnapshot {
     pub time: TimeUs,
+    /// beatoraja STRING_PLAYER (2) に渡す現在プロフィール名。
+    pub player_name: String,
+    /// beatoraja NUMBER_CURRENT_FPS (20)。
+    pub current_fps: u32,
+    /// アプリ起動後の経過時間 ms。
+    /// beatoraja の NUMBER_OPERATING_TIME_HOUR/MINUTE/SECOND (27..29) に使う。
+    pub operating_time_ms: i32,
+    pub skin_input: SkinLogicalInputSnapshot,
     pub selection_time: TimeUs,
     pub option_panel_time: TimeUs,
+    /// TIMER_PANEL1_OFF..6_OFF (31..36) の経過時間。None は対応タイマーOFF。
+    pub option_panel_off_times: [Option<TimeUs>; 6],
     pub option_panel: u8,
     pub chart_count: u32,
     pub selected_index: u32,
@@ -80,6 +127,12 @@ pub struct SelectSnapshot {
     /// Select detail option panelで表示する判定表示オフセット(ms)。
     pub judge_timing_offset_ms: i32,
     pub judge_timing_auto_adjust: bool,
+    /// Select skin image refs/events 330..332 の表示状態。
+    pub lanecover_enabled: bool,
+    pub lift_enabled: bool,
+    pub hidden_enabled: bool,
+    /// beatoraja image/index ref 342。
+    pub hispeed_auto_adjust: bool,
     pub master_volume: f32,
     pub key_volume: f32,
     pub bgm_volume: f32,
@@ -134,14 +187,31 @@ pub struct SelectRivalSnapshot {
     pub ex_score: u32,
     pub max_combo: u32,
     pub bp: u32,
+    /// EXスコア元プレイの PGREAT/GREAT/GOOD/BAD/POOR 内訳。
+    /// legacy IR 応答では取得できないため None。
+    pub judge_counts: Option<SelectRivalJudgeCounts>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SelectRivalJudgeCounts {
+    pub pgreat: u32,
+    pub great: u32,
+    pub good: u32,
+    pub bad: u32,
+    pub poor: u32,
 }
 
 impl Default for SelectSnapshot {
     fn default() -> Self {
         Self {
             time: TimeUs::default(),
+            player_name: String::new(),
+            current_fps: 0,
+            operating_time_ms: 0,
+            skin_input: SkinLogicalInputSnapshot::default(),
             selection_time: TimeUs::default(),
             option_panel_time: TimeUs::default(),
+            option_panel_off_times: [None; 6],
             option_panel: 0,
             chart_count: 0,
             selected_index: 0,
@@ -169,6 +239,10 @@ impl Default for SelectSnapshot {
             grade_diff_display: ResultGradeDiffDisplay::default(),
             judge_timing_offset_ms: 0,
             judge_timing_auto_adjust: false,
+            lanecover_enabled: false,
+            lift_enabled: true,
+            hidden_enabled: false,
+            hispeed_auto_adjust: false,
             master_volume: 0.0,
             key_volume: 0.0,
             bgm_volume: 0.0,
@@ -203,6 +277,7 @@ pub struct SelectRowSnapshot {
     pub title: String,
     pub subtitle: String,
     pub artist: String,
+    pub genre: String,
     pub difficulty_name: String,
     pub play_level: String,
     pub table_level: String,
@@ -229,6 +304,8 @@ pub struct SelectRowSnapshot {
     pub replay_slots: [bool; 4],
     pub favorite_chart: bool,
     pub favorite_song: bool,
+    /// Same-folder `.txt` presence for OPTION_NO_TEXT / OPTION_TEXT (174/175).
+    pub has_document: bool,
     pub has_long_notes: bool,
     pub has_mines: bool,
     pub has_random: bool,
@@ -275,6 +352,7 @@ impl Default for SelectRowSnapshot {
             title: String::new(),
             subtitle: String::new(),
             artist: String::new(),
+            genre: String::new(),
             difficulty_name: String::new(),
             play_level: String::new(),
             table_level: String::new(),
@@ -300,6 +378,7 @@ impl Default for SelectRowSnapshot {
             replay_slots: [false; 4],
             favorite_chart: false,
             favorite_song: false,
+            has_document: false,
             has_long_notes: false,
             has_mines: false,
             has_random: false,
@@ -434,12 +513,18 @@ impl ResultIrRankingName {
 pub struct ResultIrRankingEntrySnapshot {
     pub rank: Option<i64>,
     pub ex_score: Option<i64>,
+    /// image/index property 390..399 で使う beatoraja clear type index。
+    pub clear_index: Option<i64>,
     pub player_name: ResultIrRankingName,
 }
 
 impl ResultIrRankingEntrySnapshot {
-    pub const EMPTY: Self =
-        Self { rank: None, ex_score: None, player_name: ResultIrRankingName::EMPTY };
+    pub const EMPTY: Self = Self {
+        rank: None,
+        ex_score: None,
+        clear_index: None,
+        player_name: ResultIrRankingName::EMPTY,
+    };
 }
 
 /// リザルト画面の IR ランキング表示状態。
@@ -449,6 +534,8 @@ impl ResultIrRankingEntrySnapshot {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ResultIrSnapshot {
     pub state: ResultIrState,
+    /// STRING_IR_USER_NAME=1021。自分のランキング行判定にも使う。
+    pub user_name: ResultIrRankingName,
     /// IR connect/send/access begin timer elapsed ms (TIMER_IR_CONNECT_BEGIN=172).
     pub connect_begin_ms: Option<i32>,
     /// IR connect/send/access success timer elapsed ms (TIMER_IR_CONNECT_SUCCESS=173).
@@ -463,6 +550,9 @@ pub struct ResultIrSnapshot {
     pub clear_rate: Option<i64>,
     /// 更新前の順位 (NUMBER_IR_PREVRANK=182)。未対応なら None。
     pub previous_rank: Option<i64>,
+    /// IRランキングの先頭表示行と最大スクロール位置。rate type 8の算出に使う。
+    pub scroll_offset: usize,
+    pub scroll_max: usize,
     /// 上位ランキング行 (STRING_RANKINGNAME1..10 / NUMBER_RANKING*_EXSCORE/INDEX)。
     pub entries: [ResultIrRankingEntrySnapshot; IR_RANKING_ENTRY_SLOTS],
 }
@@ -470,6 +560,7 @@ pub struct ResultIrSnapshot {
 impl ResultIrSnapshot {
     pub const EMPTY: Self = Self {
         state: ResultIrState::Offline,
+        user_name: ResultIrRankingName::EMPTY,
         connect_begin_ms: None,
         connect_success_ms: None,
         connect_fail_ms: None,
@@ -477,6 +568,8 @@ impl ResultIrSnapshot {
         total_player: None,
         clear_rate: None,
         previous_rank: None,
+        scroll_offset: 0,
+        scroll_max: 0,
         entries: [ResultIrRankingEntrySnapshot::EMPTY; IR_RANKING_ENTRY_SLOTS],
     };
 }
@@ -488,6 +581,8 @@ pub enum ResultIrState {
     Offline,
     /// 送信・ランキング取得中 (OPTION_IR_LOADING=601)。
     Loading,
+    /// 選曲カーソルがランキング取得デバウンス中 (OPTION_IR_WAITING=606)。
+    Waiting,
     /// ランキング取得済み (OPTION_IR_LOADED=602)。
     Loaded,
     /// 取得失敗 (OPTION_IR_FAILED=604)。
@@ -496,6 +591,15 @@ pub enum ResultIrState {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ResultSnapshot {
+    /// beatoraja STRING_PLAYER (2) に渡す現在プロフィール名。
+    pub player_name: String,
+    /// beatoraja STRING_RIVAL/STRING_TARGET (1/3)。
+    pub target_name: String,
+    /// beatoraja NUMBER_CURRENT_FPS (20)。
+    pub current_fps: u32,
+    pub skin_input: SkinLogicalInputSnapshot,
+    /// beatoraja image/index ref 342。
+    pub hispeed_auto_adjust: bool,
     pub clear_type: ClearType,
     /// OPTION_RESULT_CLEAR/FAILED (90/91) に渡す実際の成否。
     ///
@@ -503,6 +607,8 @@ pub struct ResultSnapshot {
     /// 背景や CLEAR/FAILED 演出は実プレイ結果に合わせるため分けて持つ。
     pub result_failed: bool,
     pub arrange: String,
+    pub arrange_2p: String,
+    pub double_option: String,
     pub lane_shuffle_pattern: Vec<u8>,
     pub ex_score: u32,
     pub ex_score_rate: f32,
@@ -523,9 +629,19 @@ pub struct ResultSnapshot {
     pub total_gauge: f32,
     pub judge_rank: Option<i32>,
     pub key_mode: KeyMode,
+    /// 実効譜面にLNが含まれるか (OPTION_NO_LN/LN=172/173)。
+    pub has_long_notes: bool,
+    /// 実効LN種別のimageset index (0=LN, 1=CN, 2=HCN)。
+    pub ln_mode_index: usize,
     pub result_gauge_graph_type: i32,
+    /// Lua Result スキンの展開パネル (0=非表示、1=IR、2=グラフ)。
+    pub result_panel: i32,
+    /// 現在の譜面が favorite chart か。BMZ は invisible を持たないため2状態。
+    pub favorite_chart: bool,
     pub judge_counts: DisplayJudgeCounts,
     pub fast_slow_counts: FastSlowJudgeCounts,
+    /// 今回のリザルトがスコア保存対象か。
+    pub score_save_enabled: bool,
     pub score_history_id: i64,
     pub replay_saved: bool,
     pub replay_slots: [bool; 4],
@@ -560,10 +676,15 @@ pub struct ResultSnapshot {
     pub table_text_primary: String,
     pub table_text_secondary: String,
     pub table_text_fallback: String,
+    /// 直前にプレイした譜面の `#STAGEFILE` テクスチャがロード済みなら true。
+    pub stagefile_background: bool,
+    /// ロード済み `#STAGEFILE` の画像サイズ。
+    pub stagefile_image_size: Option<SkinImageSize>,
     /// beatoraja STRING_COURSE1_TITLE..10_TITLE (150..159) for course results.
     pub course_titles: [String; 10],
+    pub course_result: CourseResultSkinSnapshot,
     /// Result 画面の graph 系 skin object に渡すプレイ中の推移データ。
-    pub graph: crate::snapshot::ResultGraphSnapshot,
+    pub graph: Arc<crate::snapshot::ResultGraphSnapshot>,
     /// 右下に常時表示するオーバーレイ文字列。
     pub overlay: OverlaySnapshot,
     /// IR ランキング表示状態 (NUMBER_IR_* / OPTION_IR_*)。
@@ -586,9 +707,16 @@ mod tests {
     #[test]
     fn result_snapshot_detects_full_combo() {
         let snapshot = ResultSnapshot {
+            player_name: String::new(),
+            target_name: String::new(),
+            current_fps: 0,
+            skin_input: SkinLogicalInputSnapshot::default(),
+            hispeed_auto_adjust: false,
             clear_type: ClearType::Normal,
             result_failed: false,
             arrange: "NORMAL".to_string(),
+            arrange_2p: "NORMAL".to_string(),
+            double_option: "OFF".to_string(),
             lane_shuffle_pattern: Vec::new(),
             ex_score: 20,
             ex_score_rate: 1.0,
@@ -608,9 +736,14 @@ mod tests {
             total_gauge: 0.0,
             judge_rank: None,
             key_mode: KeyMode::default(),
+            has_long_notes: false,
+            ln_mode_index: 0,
             result_gauge_graph_type: 2,
+            result_panel: 0,
+            favorite_chart: false,
             judge_counts: DisplayJudgeCounts::default(),
             fast_slow_counts: FastSlowJudgeCounts::default(),
+            score_save_enabled: true,
             score_history_id: 1,
             replay_saved: true,
             replay_slots: [true, false, false, false],
@@ -639,8 +772,11 @@ mod tests {
             table_text_primary: String::new(),
             table_text_secondary: String::new(),
             table_text_fallback: String::new(),
+            stagefile_background: false,
+            stagefile_image_size: None,
             course_titles: Default::default(),
-            graph: crate::snapshot::ResultGraphSnapshot::default(),
+            course_result: CourseResultSkinSnapshot::default(),
+            graph: Arc::new(crate::snapshot::ResultGraphSnapshot::default()),
             overlay: OverlaySnapshot::default(),
             ir: ResultIrSnapshot::default(),
             player_stats: PlayerStatsSnapshot::default(),
@@ -652,9 +788,16 @@ mod tests {
     #[test]
     fn zero_note_result_is_not_full_combo() {
         let snapshot = ResultSnapshot {
+            player_name: String::new(),
+            target_name: String::new(),
+            current_fps: 0,
+            skin_input: SkinLogicalInputSnapshot::default(),
+            hispeed_auto_adjust: false,
             clear_type: ClearType::Normal,
             result_failed: false,
             arrange: "NORMAL".to_string(),
+            arrange_2p: "NORMAL".to_string(),
+            double_option: "OFF".to_string(),
             lane_shuffle_pattern: Vec::new(),
             ex_score: 0,
             ex_score_rate: 1.0,
@@ -674,9 +817,14 @@ mod tests {
             total_gauge: 0.0,
             judge_rank: None,
             key_mode: KeyMode::default(),
+            has_long_notes: false,
+            ln_mode_index: 0,
             result_gauge_graph_type: 2,
+            result_panel: 0,
+            favorite_chart: false,
             judge_counts: DisplayJudgeCounts::default(),
             fast_slow_counts: FastSlowJudgeCounts::default(),
+            score_save_enabled: true,
             score_history_id: 1,
             replay_saved: true,
             replay_slots: [true, false, false, false],
@@ -705,8 +853,11 @@ mod tests {
             table_text_primary: String::new(),
             table_text_secondary: String::new(),
             table_text_fallback: String::new(),
+            stagefile_background: false,
+            stagefile_image_size: None,
             course_titles: Default::default(),
-            graph: crate::snapshot::ResultGraphSnapshot::default(),
+            course_result: CourseResultSkinSnapshot::default(),
+            graph: Arc::new(crate::snapshot::ResultGraphSnapshot::default()),
             overlay: OverlaySnapshot::default(),
             ir: ResultIrSnapshot::default(),
             player_stats: PlayerStatsSnapshot::default(),

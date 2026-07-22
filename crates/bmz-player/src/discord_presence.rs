@@ -494,7 +494,7 @@ impl Activity {
                 .details
                 .as_deref()
                 .map(truncate_discord_field)
-                .and_then(|value| if value.is_empty() { None } else { Some(value) }),
+                .filter(|value| !value.is_empty()),
             timestamps: Timestamps { start: presence.started_at_unix_seconds },
             assets,
             instance: true,

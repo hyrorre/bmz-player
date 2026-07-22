@@ -270,7 +270,7 @@ fn advance_skin_dynamic_timers(
     state: &mut crate::skin::SkinDrawState,
     now_ms: i32,
 ) {
-    if let Some(document) = skin.document().filter(|document| !document.dynamic_timers.is_empty()) {
+    if let Some(document) = skin.document() {
         runtime.advance(document, state, now_ms);
     }
 }
@@ -845,6 +845,8 @@ fn plan_play(
     // 見逃しPOOR（is_miss）はボムエフェクトを出さない
     let mut bomb_ms: [Option<i32>; LANE_COUNT] = [None; LANE_COUNT];
     let mut lane_judge: [Option<usize>; LANE_COUNT] = [None; LANE_COUNT];
+    let judge_timer_limit =
+        skin.document().map_or(1, |document| document.judgetimer).max(0) as usize;
     for j in &snapshot.recent_judgements {
         if j.is_miss {
             continue;
@@ -852,8 +854,11 @@ fn plan_play(
         let idx = j.lane.index();
         let elapsed =
             ((snapshot.time.0 - j.time.0) / 1_000).clamp(i32::MIN as i64, i32::MAX as i64) as i32;
-        bomb_ms[idx] = Some(elapsed);
-        lane_judge[idx] = judge_image_index(&j.text);
+        let judge_index = judge_image_index(&j.text);
+        lane_judge[idx] = judge_index;
+        if judge_starts_bomb(judge_index, judge_timer_limit) {
+            bomb_ms[idx] = Some(elapsed);
+        }
     }
 
     // keyon/keyoff のタイマー値は session 側で per-lane に追跡された keyon/keyoff
@@ -872,25 +877,34 @@ fn plan_play(
     let ready_timer_ms = snapshot
         .ready_elapsed_time
         .map(|time| (time.0 / 1_000).clamp(i32::MIN as i64, i32::MAX as i64) as i32);
-    let skin_load_delay_ms = skin
-        .document()
-        .map(|document| document.loadstart.max(0).saturating_add(document.loadend.max(0)))
-        .unwrap_or(0);
     let skin_canvas_h = skin.document().map_or(720, |d| d.h) as f32;
     let skin_lane_h = skin_lane_height_px(skin, key_mode, skin_canvas_h);
 
     let mut skin_state = crate::skin::SkinDrawState {
         elapsed_ms: play_elapsed_ms,
+        start_input_ms: crate::skin::skin_start_input_elapsed_ms(
+            play_elapsed_ms,
+            skin.document().map_or(0, |document| document.input),
+        ),
+        current_fps: snapshot.current_fps,
         operating_time_ms: snapshot.operating_time_ms,
         ready_timer_ms,
         play_timer_ms: (snapshot.time.0 >= 0)
             .then_some((snapshot.time.0 / 1_000).clamp(i32::MIN as i64, i32::MAX as i64) as i32),
+        rhythm_timer_ms: snapshot.rhythm_timer_elapsed_ms,
+        quarter_note_elapsed_ms: snapshot.quarter_note_elapsed_ms,
         key_mode,
+        logical_input_held: snapshot.skin_input.held,
         select_arrange_index: crate::skin::select_arrange_index(&snapshot.arrange),
+        select_arrange_2p_index: crate::skin::select_arrange_index(&snapshot.arrange_2p),
+        select_target_index: crate::skin::play_target_image_index(&snapshot.target),
+        select_extended_arrange_index: crate::skin::extended_arrange_index(&snapshot.arrange),
+        select_extended_arrange_2p_index: crate::skin::extended_arrange_index(&snapshot.arrange_2p),
         combo: snapshot.combo,
         max_combo: snapshot.max_combo,
         ex_score: snapshot.ex_score,
         total_notes: snapshot.total_notes,
+        select_chart_total_gauge: snapshot.chart_total_gauge,
         past_notes: snapshot.past_notes,
         judge_counts: snapshot.judge_counts,
         fast_slow_counts: Some(snapshot.fast_slow_counts),
@@ -958,6 +972,8 @@ fn plan_play(
         has_bga: snapshot.has_bga,
         has_bpm_stop: snapshot.has_bpm_stop,
         bga_enabled: snapshot.bga_enabled,
+        has_stagefile: snapshot.stagefile_background,
+        stagefile_image_size: snapshot.stagefile_image_size,
         has_backbmp: snapshot.backbmp_background,
         bga_base: snapshot.bga_base.map(skin_bga_frame_from_display),
         bga_layer: snapshot.bga_layer.map(skin_bga_frame_from_display),
@@ -977,17 +993,23 @@ fn plan_play(
         adjusted_rate: snapshot.adjusted_rate,
         adjusted_rate_adot: snapshot.adjusted_rate_adot,
         autoplay: snapshot.autoplay,
+        play_screen: true,
+        replay_playback: snapshot.replay_playback,
+        practice_mode: snapshot.practice_mode,
+        score_save_enabled: Some(snapshot.score_save_enabled),
         course_stage: snapshot.course_stage,
         hit_error_ring: snapshot.hit_error_ring.values,
         hit_error_ring_index: snapshot.hit_error_ring.index,
-        // op 80/81: 実リソースロード完了かつスキン宣言の最低ロード演出時間の経過。
-        // READY 開始条件 (maybe_start_ready_phase) と揃え、op 80 のロード中表示から
-        // timer 40 のフェードアウト表示へ隙間なく引き継げるようにする。
-        skin_loaded: snapshot.resources_loaded && play_elapsed_ms >= skin_load_delay_ms,
+        // beatoraja の op 80/81 はリソースロード状態ではなく PRELOAD state を表す。
+        // TIMER_READY (40) の開始と同じフレームで 80 -> 81 を切り替える。
+        skin_loaded: snapshot.ready_elapsed_time.is_some(),
+        resource_load_progress: snapshot.resource_load_progress,
         ..crate::skin::SkinDrawState::default()
     };
+    dynamic_timers.ingest_skin_events(&snapshot.skin_events, key_mode, snapshot.time.0);
     advance_skin_dynamic_timers(skin, dynamic_timers, &mut skin_state, play_elapsed_ms);
     let skin_text = SkinTextState {
+        player_name: &snapshot.player_name,
         title: &snapshot.title,
         subtitle: &snapshot.subtitle,
         artist: &snapshot.artist,
@@ -1151,6 +1173,14 @@ fn plan_play(
                 &snapshot.skin_offsets,
             );
         }
+        push_play_aux_lines(
+            &mut commands,
+            skin,
+            &skin_state,
+            snapshot,
+            key_mode,
+            &snapshot.skin_offsets,
+        );
         push_judge_line(skin_manifest, &mut commands, board, snapshot.lift);
 
         // SUDDEN+（レーンカバー）: レーン上部を覆う。ノーツは build_render_snapshot で
@@ -1196,6 +1226,14 @@ fn plan_play(
                 &snapshot.skin_offsets,
             );
         }
+        push_play_aux_lines(
+            &mut commands,
+            skin,
+            &skin_state,
+            snapshot,
+            key_mode,
+            &snapshot.skin_offsets,
+        );
         for body in &snapshot.visible_long_notes {
             if let Some(rect) =
                 skin.note_body_rect(body.lane, key_mode, body.head_y, body.tail_y, &skin_state)
@@ -1205,6 +1243,7 @@ fn plan_play(
                     rect,
                     body.mode,
                     body.body_state,
+                    &skin_state,
                 )
             {
                 let item = skin.apply_play_skin_global_offset_to_item(item, &skin_state);
@@ -1246,9 +1285,27 @@ fn plan_play(
             let lane_index = lane.index();
             let note_height = skin.document_note_height(lane, key_mode).unwrap_or(NOTE_HEIGHT);
             for note in &snapshot.visible_notes[lane_index] {
-                if let Some(rect) =
+                let rect = if note.y < 0.0 {
+                    skin.missed_note_rect_for_fall(
+                        lane,
+                        key_mode,
+                        -note.y,
+                        note_height,
+                        &skin_state,
+                    )
+                } else {
                     skin.note_rect_for_progress(lane, key_mode, note.y, note_height, &skin_state)
-                {
+                };
+                if let Some(mut rect) = rect {
+                    if key_mode == KeyMode::K9 {
+                        let (scale_x, scale_y) = skin.document_note_expansion_scale(&skin_state);
+                        let center_x = rect.x + rect.width / 2.0;
+                        let center_y = rect.y + rect.height / 2.0;
+                        rect.width *= scale_x;
+                        rect.height *= scale_y;
+                        rect.x = center_x - rect.width / 2.0;
+                        rect.y = center_y - rect.height / 2.0;
+                    }
                     let item = match note.kind {
                         NoteVisualKind::LnStart => {
                             skin.document_ln_start_item(lane, key_mode, rect, LongNoteMode::Ln)
@@ -1315,6 +1372,10 @@ fn plan_play(
     DrawPlan { clear: Color::rgb(0.0, 0.0, 0.0), commands }
 }
 
+fn judge_starts_bomb(judge_index: Option<usize>, judge_timer_limit: usize) -> bool {
+    judge_index.is_some_and(|judge| judge <= judge_timer_limit)
+}
+
 fn play_command_capacity(snapshot: &RenderSnapshot, has_document: bool) -> usize {
     let visible_note_count: usize = snapshot.visible_notes.iter().map(Vec::len).sum();
     let visible_mine_count: usize = snapshot.visible_mines.iter().map(Vec::len).sum();
@@ -1356,9 +1417,17 @@ fn plan_decide(
             (snapshot.play_elapsed_time.0 / 1_000).clamp(i32::MIN as i64, i32::MAX as i64) as i32;
         let mut state = crate::skin::SkinDrawState {
             elapsed_ms: play_elapsed_ms,
+            start_input_ms: crate::skin::skin_start_input_elapsed_ms(
+                play_elapsed_ms,
+                skin.document().map_or(0, |document| document.input),
+            ),
+            current_fps: snapshot.current_fps,
             operating_time_ms: snapshot.operating_time_ms,
             ready_timer_ms: Some(play_elapsed_ms),
+            key_mode: snapshot.key_mode,
+            logical_input_held: snapshot.skin_input.held,
             total_notes: snapshot.total_notes,
+            select_chart_total_gauge: snapshot.chart_total_gauge,
             past_notes: snapshot.past_notes,
             ex_score: snapshot.ex_score,
             judge_counts: snapshot.judge_counts,
@@ -1391,10 +1460,12 @@ fn plan_decide(
             fadeout_ms: snapshot.fadeout_elapsed_ms,
             gauge_increase_ms: snapshot.gauge_increase_elapsed_ms,
             gauge_max_ms: snapshot.gauge_max_elapsed_ms,
+            score_save_enabled: Some(snapshot.score_save_enabled),
             ..crate::skin::SkinDrawState::default()
         };
         advance_skin_dynamic_timers(skin, dynamic_timers, &mut state, play_elapsed_ms);
         let text = SkinTextState {
+            player_name: &snapshot.player_name,
             title: &snapshot.title,
             subtitle: &snapshot.subtitle,
             artist: &snapshot.artist,
@@ -1456,6 +1527,8 @@ fn plan_result(
     if let Some(document) = skin.document().filter(|document| matches!(document.skin_type, 7 | 15))
     {
         let mut state = build_result_skin_draw_state(snapshot, document.ranktime);
+        state.start_input_ms =
+            crate::skin::skin_start_input_elapsed_ms(state.elapsed_ms, document.input);
         advance_skin_dynamic_timers(
             skin,
             dynamic_timers,
@@ -1464,6 +1537,9 @@ fn plan_result(
         );
         let grade_diff = crate::skin::result_grade_diff_label(&state).unwrap_or_default();
         let text = SkinTextState {
+            player_name: snapshot.player_name.as_str(),
+            rival: snapshot.target_name.as_str(),
+            target: snapshot.target_name.as_str(),
             title: snapshot.title.as_str(),
             subtitle: snapshot.subtitle.as_str(),
             artist: snapshot.artist.as_str(),
@@ -1581,6 +1657,12 @@ fn build_result_skin_draw_state(
     snapshot: &crate::scene::ResultSnapshot,
     result_ranktime_ms: i32,
 ) -> crate::skin::SkinDrawState {
+    let (gauge, gauge_type, gauge_max, gauge_border) = result_display_gauge(
+        &snapshot.graph.gauge_points,
+        snapshot.result_gauge_graph_type,
+        snapshot.gauge_value,
+        snapshot.gauge_type,
+    );
     let timing_stats = snapshot
         .graph
         .timing_distribution
@@ -1597,14 +1679,25 @@ fn build_result_skin_draw_state(
     };
     crate::skin::SkinDrawState {
         elapsed_ms,
+        current_fps: snapshot.current_fps,
+        logical_input_held: snapshot.skin_input.held,
         select_arrange_index: crate::skin::select_arrange_index(&snapshot.arrange),
+        select_arrange_2p_index: crate::skin::select_arrange_index(&snapshot.arrange_2p),
+        select_double_option_index: crate::skin::select_double_option_index(
+            &snapshot.double_option,
+        ),
         result_arrange_index: crate::skin::select_arrange_index(&snapshot.arrange),
+        result_arrange_2p_index: crate::skin::select_arrange_index(&snapshot.arrange_2p),
         select_extended_arrange_index: crate::skin::extended_arrange_index(&snapshot.arrange),
+        select_extended_arrange_2p_index: crate::skin::extended_arrange_index(&snapshot.arrange_2p),
         result_extended_arrange_index: crate::skin::extended_arrange_index(&snapshot.arrange),
+        result_extended_arrange_2p_index: crate::skin::extended_arrange_index(&snapshot.arrange_2p),
         result_random_lane_refs: crate::skin::result_random_lane_refs(
             &snapshot.lane_shuffle_pattern,
             snapshot.key_mode,
         ),
+        result_has_long_notes: Some(snapshot.has_long_notes),
+        result_ln_mode_index: Some(snapshot.ln_mode_index),
         ex_score: snapshot.ex_score,
         total_notes: snapshot.total_notes,
         past_notes: snapshot.total_notes,
@@ -1617,13 +1710,17 @@ fn build_result_skin_draw_state(
         result_duration_ms: snapshot.duration_ms,
         max_combo: snapshot.max_combo,
         judge_counts: snapshot.judge_counts,
-        player_stats: snapshot.player_stats,
+        player_stats: snapshot.player_stats.clone(),
+        course_result: snapshot.course_result,
         fast_slow_counts: Some(snapshot.fast_slow_counts),
-        gauge: snapshot.gauge_value,
-        gauge_type: snapshot.gauge_type,
+        gauge,
+        gauge_type,
         result_gauge_graph_type: Some(snapshot.result_gauge_graph_type),
-        gauge_max: 100.0,
-        gauge_border: 80.0,
+        result_panel: Some(snapshot.result_panel),
+        result_favorite_chart: Some(snapshot.favorite_chart),
+        hispeed_auto_adjust: snapshot.hispeed_auto_adjust,
+        gauge_max,
+        gauge_border,
         play_progress: 1.0,
         end_of_note: true,
         best_ex_score: snapshot.best_ex_score,
@@ -1647,6 +1744,8 @@ fn build_result_skin_draw_state(
         table_song: !snapshot.table_text_primary.is_empty(),
         difficulty: skin_difficulty_code(&snapshot.difficulty_name),
         judge_rank: snapshot.judge_rank,
+        has_stagefile: snapshot.stagefile_background,
+        stagefile_image_size: snapshot.stagefile_image_size,
         key_mode: snapshot.key_mode,
         now_bpm: snapshot.initial_bpm,
         min_bpm: snapshot.min_bpm,
@@ -1661,12 +1760,31 @@ fn build_result_skin_draw_state(
         result_update_score_ms,
         result_replay_slots: snapshot.replay_slots,
         result_saved_replay_slots: snapshot.saved_replay_slots,
+        score_save_enabled: Some(snapshot.score_save_enabled),
         hit_error_ring: snapshot.graph.hit_error_ring.values,
         hit_error_ring_index: snapshot.graph.hit_error_ring.index,
         average_timing_ms: timing_stats.map(|stats| stats.0),
+        average_duration_us: result_average_duration_us(
+            &snapshot.graph.timing_points,
+            snapshot.total_notes,
+        ),
         stddev_timing_ms: timing_stats.map(|stats| stats.1),
         ..crate::skin::SkinDrawState::default()
     }
+}
+
+fn result_display_gauge(
+    points: &[crate::snapshot::ResultGaugeGraphPoint],
+    selected_type: i32,
+    fallback_value: f32,
+    fallback_type: i32,
+) -> (f32, i32, f32, f32) {
+    points
+        .iter()
+        .rev()
+        .find(|point| point.gauge_type == selected_type)
+        .map(|point| (point.value, point.gauge_type, point.max, point.border))
+        .unwrap_or((fallback_value, fallback_type, 100.0, 80.0))
 }
 
 fn result_timing_stats(points: &[crate::snapshot::ResultTimingPoint]) -> Option<(f32, f32)> {
@@ -1685,6 +1803,26 @@ fn result_timing_stats(points: &[crate::snapshot::ResultTimingPoint]) -> Option<
         .sum::<f32>()
         / count;
     Some((average_ms, variance.sqrt()))
+}
+
+fn result_average_duration_us(
+    points: &[crate::snapshot::ResultTimingPoint],
+    total_notes: u32,
+) -> Option<i64> {
+    if total_notes == 0 {
+        return None;
+    }
+    const UNJUDGED_DURATION_US: u128 = 1_000_000;
+    let judged_notes = points.len().min(total_notes as usize);
+    let judged_duration = points
+        .iter()
+        .take(judged_notes)
+        .map(|point| u128::from(point.delta_us.unsigned_abs()))
+        .sum::<u128>();
+    let unjudged_notes = total_notes as usize - judged_notes;
+    let total_duration = judged_duration
+        .saturating_add((unjudged_notes as u128).saturating_mul(UNJUDGED_DURATION_US));
+    Some((total_duration / u128::from(total_notes)).min(i64::MAX as u128) as i64)
 }
 
 struct ResultFallbackSummary<'a> {
@@ -1829,6 +1967,7 @@ fn ir_ranking_label(ir: &crate::scene::ResultIrSnapshot) -> Option<String> {
     match ir.state {
         ResultIrState::Offline => None,
         ResultIrState::Loading => Some("IR LOADING...".to_string()),
+        ResultIrState::Waiting => Some("IR WAITING...".to_string()),
         ResultIrState::Failed => Some("IR FAILED".to_string()),
         ResultIrState::Loaded => match (ir.rank, ir.total_player) {
             (Some(rank), Some(total)) => Some(format!("IR RANK {rank}/{total}")),
@@ -2150,6 +2289,48 @@ fn push_play_bar_line(
         let items = skin.apply_play_skin_global_offset(items, skin_state);
         append_skin_render_items(commands, &items);
     }
+    apply_bar_line_alpha_offset(&mut commands[start..], skin_offsets);
+}
+
+fn push_play_aux_lines(
+    commands: &mut Vec<DrawCommand>,
+    skin: &SkinContext,
+    skin_state: &crate::skin::SkinDrawState,
+    snapshot: &RenderSnapshot,
+    key_mode: KeyMode,
+    skin_offsets: &SkinOffsetValues,
+) {
+    if !snapshot.practice_mode {
+        return;
+    }
+    for line in &snapshot.time_lines {
+        push_play_aux_line(commands, skin, skin_state, line, skin_offsets, |skin, y| {
+            skin.document_time_line_items(y, key_mode, skin_state)
+        });
+    }
+    for line in &snapshot.bpm_lines {
+        push_play_aux_line(commands, skin, skin_state, line, skin_offsets, |skin, y| {
+            skin.document_bpm_line_items(y, key_mode, skin_state)
+        });
+    }
+    for line in &snapshot.stop_lines {
+        push_play_aux_line(commands, skin, skin_state, line, skin_offsets, |skin, y| {
+            skin.document_stop_line_items(y, key_mode, skin_state)
+        });
+    }
+}
+
+fn push_play_aux_line(
+    commands: &mut Vec<DrawCommand>,
+    skin: &SkinContext,
+    skin_state: &crate::skin::SkinDrawState,
+    line: &crate::snapshot::VisibleBarLine,
+    skin_offsets: &SkinOffsetValues,
+    render: impl FnOnce(&SkinContext, f32) -> Vec<crate::skin::SkinRenderItem>,
+) {
+    let start = commands.len();
+    let items = skin.apply_play_skin_global_offset(render(skin, line.y), skin_state);
+    append_skin_render_items(commands, &items);
     apply_bar_line_alpha_offset(&mut commands[start..], skin_offsets);
 }
 
@@ -2866,6 +3047,15 @@ mod tests {
     }
 
     #[test]
+    fn lr2_judgetimer_limits_bomb_judgements() {
+        assert!(judge_starts_bomb(Some(0), 1));
+        assert!(judge_starts_bomb(Some(1), 1));
+        assert!(!judge_starts_bomb(Some(2), 1));
+        assert!(judge_starts_bomb(Some(3), 3));
+        assert!(!judge_starts_bomb(None, 3));
+    }
+
+    #[test]
     fn play_plan_renders_long_note_body() {
         let mut snapshot = RenderSnapshot::default();
         snapshot.visible_long_notes.push(VisibleLongNote {
@@ -3011,9 +3201,16 @@ mod tests {
             let skin =
                 SkinContext::from_manifest_and_document(manifest, document, [source_texture]);
             let snapshot = ResultSnapshot {
+                player_name: String::new(),
+                target_name: String::new(),
+                current_fps: 0,
+                skin_input: Default::default(),
+                hispeed_auto_adjust: false,
                 clear_type: ClearType::Normal,
                 result_failed: false,
                 arrange: "NORMAL".to_string(),
+                arrange_2p: "NORMAL".to_string(),
+                double_option: "OFF".to_string(),
                 lane_shuffle_pattern: Vec::new(),
                 ex_score: 100,
                 ex_score_rate: 0.5,
@@ -3033,9 +3230,14 @@ mod tests {
                 total_gauge: 0.0,
                 judge_rank: None,
                 key_mode: bmz_core::lane::KeyMode::default(),
+                has_long_notes: false,
+                ln_mode_index: 0,
                 result_gauge_graph_type: bmz_core::clear::GaugeType::Normal as i32,
+                result_panel: 0,
+                favorite_chart: false,
                 judge_counts: DisplayJudgeCounts::default(),
                 fast_slow_counts: FastSlowJudgeCounts::default(),
+                score_save_enabled: false,
                 score_history_id: 0,
                 replay_saved: false,
                 replay_slots: [false; 4],
@@ -3064,8 +3266,11 @@ mod tests {
                 table_text_primary: String::new(),
                 table_text_secondary: String::new(),
                 table_text_fallback: String::new(),
+                stagefile_background: false,
+                stagefile_image_size: None,
                 course_titles: Default::default(),
-                graph: crate::snapshot::ResultGraphSnapshot::default(),
+                course_result: Default::default(),
+                graph: std::sync::Arc::new(crate::snapshot::ResultGraphSnapshot::default()),
                 overlay: crate::snapshot::OverlaySnapshot::default(),
                 ir: crate::scene::ResultIrSnapshot::default(),
                 player_stats: crate::scene::PlayerStatsSnapshot::default(),
@@ -3145,9 +3350,16 @@ mod tests {
             std::iter::empty(),
         );
         let snapshot = ResultSnapshot {
+            player_name: String::new(),
+            target_name: String::new(),
+            current_fps: 0,
+            skin_input: Default::default(),
+            hispeed_auto_adjust: false,
             clear_type: ClearType::Normal,
             result_failed: false,
             arrange: "NORMAL".to_string(),
+            arrange_2p: "NORMAL".to_string(),
+            double_option: "OFF".to_string(),
             lane_shuffle_pattern: Vec::new(),
             ex_score: 100,
             ex_score_rate: 0.5,
@@ -3167,9 +3379,14 @@ mod tests {
             total_gauge: 0.0,
             judge_rank: None,
             key_mode: bmz_core::lane::KeyMode::default(),
+            has_long_notes: false,
+            ln_mode_index: 0,
             result_gauge_graph_type: bmz_core::clear::GaugeType::Normal as i32,
+            result_panel: 0,
+            favorite_chart: false,
             judge_counts: DisplayJudgeCounts::default(),
             fast_slow_counts: FastSlowJudgeCounts::default(),
+            score_save_enabled: false,
             score_history_id: 0,
             replay_saved: false,
             replay_slots: [false; 4],
@@ -3198,12 +3415,15 @@ mod tests {
             table_text_primary: String::new(),
             table_text_secondary: String::new(),
             table_text_fallback: String::new(),
+            stagefile_background: false,
+            stagefile_image_size: None,
             course_titles: Default::default(),
-            graph: ResultGraphSnapshot {
+            course_result: Default::default(),
+            graph: std::sync::Arc::new(ResultGraphSnapshot {
                 judge_graph_density: vec![1, 3, 2],
                 judge_graph_buckets: vec![ResultJudgeGraphBucket { values: [0, 0, 1, 0, 0, 0] }],
                 ..ResultGraphSnapshot::default()
-            },
+            }),
             overlay: crate::snapshot::OverlaySnapshot::default(),
             ir: crate::scene::ResultIrSnapshot::default(),
             player_stats: crate::scene::PlayerStatsSnapshot::default(),
@@ -3248,11 +3468,34 @@ mod tests {
             panic!("sample result scene");
         };
         snapshot.arrange = "S-RANDOM-EX".to_string();
+        snapshot.arrange_2p = "MF-RANDOM".to_string();
+        snapshot.double_option = "FLIP".to_string();
 
         let state = build_result_skin_draw_state(&snapshot, 0);
 
         assert_eq!(state.select_arrange_index, 9);
+        assert_eq!(state.select_arrange_2p_index, 2);
+        assert_eq!(state.select_double_option_index, 1);
         assert_eq!(state.result_arrange_index, 9);
+        assert_eq!(state.result_arrange_2p_index, 2);
+        assert_eq!(state.select_extended_arrange_index, 9);
+        assert_eq!(state.select_extended_arrange_2p_index, 11);
+        assert_eq!(state.result_extended_arrange_index, 9);
+        assert_eq!(state.result_extended_arrange_2p_index, 11);
+    }
+
+    #[test]
+    fn result_skin_state_maps_favorite_chart_as_two_state_index() {
+        let AppSceneSnapshot::Result(mut snapshot) = crate::sample::sample_result_scene() else {
+            panic!("sample result scene");
+        };
+
+        let not_favorite = build_result_skin_draw_state(&snapshot, 0);
+        assert_eq!(not_favorite.result_favorite_chart, Some(false));
+
+        snapshot.favorite_chart = true;
+        let favorite = build_result_skin_draw_state(&snapshot, 0);
+        assert_eq!(favorite.result_favorite_chart, Some(true));
     }
 
     #[test]
@@ -3269,6 +3512,20 @@ mod tests {
 
         assert_eq!(state.result_arrange_index, 2);
         assert_eq!(state.result_random_lane_refs[0], 7);
+    }
+
+    #[test]
+    fn result_skin_state_maps_effective_long_note_state() {
+        let AppSceneSnapshot::Result(mut snapshot) = crate::sample::sample_result_scene() else {
+            panic!("sample result scene");
+        };
+        snapshot.has_long_notes = true;
+        snapshot.ln_mode_index = 2;
+
+        let state = build_result_skin_draw_state(&snapshot, 0);
+
+        assert_eq!(state.result_has_long_notes, Some(true));
+        assert_eq!(state.result_ln_mode_index, Some(2));
     }
 
     #[test]
@@ -3296,7 +3553,7 @@ mod tests {
         let AppSceneSnapshot::Result(mut snapshot) = crate::sample::sample_result_scene() else {
             panic!("sample result scene");
         };
-        snapshot.graph.timing_points = vec![
+        std::sync::Arc::make_mut(&mut snapshot.graph).timing_points = vec![
             crate::snapshot::ResultTimingPoint {
                 time_ms: 0,
                 delta_us: -12_000,
@@ -3312,7 +3569,72 @@ mod tests {
         let state = build_result_skin_draw_state(&snapshot, 0);
 
         assert_eq!(state.average_timing_ms, Some(4.0));
+        assert_eq!(state.average_duration_us, Some(998_032));
         assert_eq!(state.stddev_timing_ms, Some(16.0));
+    }
+
+    #[test]
+    fn result_average_duration_uses_absolute_deltas_and_unjudged_penalty() {
+        let points = [
+            crate::snapshot::ResultTimingPoint {
+                time_ms: 0,
+                delta_us: -10_000,
+                judge: bmz_core::judge::Judge::Great,
+            },
+            crate::snapshot::ResultTimingPoint {
+                time_ms: 1000,
+                delta_us: 20_000,
+                judge: bmz_core::judge::Judge::PGreat,
+            },
+        ];
+
+        assert_eq!(result_average_duration_us(&points, 4), Some(507_500));
+        assert_eq!(result_average_duration_us(&points, 0), None);
+    }
+
+    #[test]
+    fn result_display_gauge_uses_selected_graph_history_tail() {
+        use crate::snapshot::ResultGaugeGraphPoint;
+        use bmz_core::clear::GaugeType;
+
+        let points = [
+            ResultGaugeGraphPoint {
+                time_ms: 0,
+                value: 20.0,
+                max: 100.0,
+                border: 0.0,
+                gauge_type: GaugeType::ExHard as i32,
+            },
+            ResultGaugeGraphPoint {
+                time_ms: 1_000,
+                value: 80.0,
+                max: 100.0,
+                border: 80.0,
+                gauge_type: GaugeType::Normal as i32,
+            },
+            ResultGaugeGraphPoint {
+                time_ms: 1_000,
+                value: 42.0,
+                max: 100.0,
+                border: 0.0,
+                gauge_type: GaugeType::ExHard as i32,
+            },
+        ];
+
+        assert_eq!(
+            result_display_gauge(&points, GaugeType::ExHard as i32, 80.0, GaugeType::Normal as i32,),
+            (42.0, GaugeType::ExHard as i32, 100.0, 0.0)
+        );
+    }
+
+    #[test]
+    fn result_display_gauge_falls_back_when_selected_history_is_missing() {
+        use bmz_core::clear::GaugeType;
+
+        assert_eq!(
+            result_display_gauge(&[], GaugeType::ExHard as i32, 80.0, GaugeType::Normal as i32,),
+            (80.0, GaugeType::Normal as i32, 100.0, 80.0)
+        );
     }
 
     #[test]
@@ -3350,9 +3672,16 @@ mod tests {
             std::iter::empty(),
         );
         let snapshot = ResultSnapshot {
+            player_name: String::new(),
+            target_name: String::new(),
+            current_fps: 0,
+            skin_input: Default::default(),
+            hispeed_auto_adjust: false,
             clear_type: ClearType::Normal,
             result_failed: false,
             arrange: "NORMAL".to_string(),
+            arrange_2p: "NORMAL".to_string(),
+            double_option: "OFF".to_string(),
             lane_shuffle_pattern: Vec::new(),
             ex_score: 100,
             ex_score_rate: 0.5,
@@ -3360,7 +3689,7 @@ mod tests {
             bp: 0,
             cb: 0,
             gauge_value: 80.0,
-            gauge_type: bmz_core::clear::GaugeType::AssistEasy as i32,
+            gauge_type: bmz_core::clear::GaugeType::Normal as i32,
             total_notes: 100,
             grade_diff_display: crate::scene::ResultGradeDiffDisplay::default(),
             duration_ms: 0,
@@ -3372,9 +3701,14 @@ mod tests {
             total_gauge: 0.0,
             judge_rank: None,
             key_mode: bmz_core::lane::KeyMode::default(),
+            has_long_notes: false,
+            ln_mode_index: 0,
             result_gauge_graph_type: bmz_core::clear::GaugeType::AssistEasy as i32,
+            result_panel: 0,
+            favorite_chart: false,
             judge_counts: DisplayJudgeCounts::default(),
             fast_slow_counts: FastSlowJudgeCounts::default(),
+            score_save_enabled: false,
             score_history_id: 0,
             replay_saved: false,
             replay_slots: [false; 4],
@@ -3403,8 +3737,11 @@ mod tests {
             table_text_primary: String::new(),
             table_text_secondary: String::new(),
             table_text_fallback: String::new(),
+            stagefile_background: false,
+            stagefile_image_size: None,
             course_titles: Default::default(),
-            graph: ResultGraphSnapshot {
+            course_result: Default::default(),
+            graph: std::sync::Arc::new(ResultGraphSnapshot {
                 gauge_points: vec![
                     ResultGaugeGraphPoint {
                         time_ms: 0,
@@ -3422,11 +3759,17 @@ mod tests {
                     },
                 ],
                 ..ResultGraphSnapshot::default()
-            },
+            }),
             overlay: crate::snapshot::OverlaySnapshot::default(),
             ir: crate::scene::ResultIrSnapshot::default(),
             player_stats: crate::scene::PlayerStatsSnapshot::default(),
         };
+
+        let draw_state = result_skin_draw_state(&snapshot, 0);
+        assert_eq!(draw_state.gauge, 90.0);
+        assert_eq!(draw_state.gauge_type, bmz_core::clear::GaugeType::AssistEasy as i32);
+        assert_eq!(draw_state.gauge_max, 100.0);
+        assert_eq!(draw_state.gauge_border, 60.0);
 
         let plan = DrawPlan::from_scene_with_skin(
             &AppSceneSnapshot::Result(snapshot),
@@ -3434,19 +3777,19 @@ mod tests {
             &mut crate::skin::DynamicTimerRuntime::default(),
         );
 
-        assert!(plan.commands.iter().any(|command| matches!(
-            command,
-            DrawCommand::Rect { color: Color { r, g, b, .. }, .. }
-                if (*r - 0.0).abs() < 0.01 && (*g - 1.0).abs() < 0.01 && (*b - 0.0).abs() < 0.01
-        )));
-        assert!(plan.commands.iter().any(|command| matches!(
-            command,
-            DrawCommand::Rect { rect, color: Color { r, g, b, .. } }
-                if (*r - 1.0).abs() < 0.01
+        assert!(plan.commands.iter().any(|command| {
+            draw_command_has_rect(command, |_, Color { r, g, b, .. }| {
+                (*r - 0.0).abs() < 0.01 && (*g - 1.0).abs() < 0.01 && (*b - 0.0).abs() < 0.01
+            })
+        }));
+        assert!(plan.commands.iter().any(|command| {
+            draw_command_has_rect(command, |rect, Color { r, g, b, .. }| {
+                (*r - 1.0).abs() < 0.01
                     && *g < 0.01
                     && *b < 0.01
                     && (rect.height - 0.4).abs() < 0.01
-        )));
+            })
+        }));
     }
 
     #[test]
@@ -3480,9 +3823,16 @@ mod tests {
         timing_distribution.add(-12);
         timing_distribution.add(8);
         let snapshot = ResultSnapshot {
+            player_name: String::new(),
+            target_name: String::new(),
+            current_fps: 0,
+            skin_input: Default::default(),
+            hispeed_auto_adjust: false,
             clear_type: ClearType::Normal,
             result_failed: false,
             arrange: "NORMAL".to_string(),
+            arrange_2p: "NORMAL".to_string(),
+            double_option: "OFF".to_string(),
             lane_shuffle_pattern: Vec::new(),
             ex_score: 100,
             ex_score_rate: 0.5,
@@ -3502,9 +3852,14 @@ mod tests {
             total_gauge: 0.0,
             judge_rank: None,
             key_mode: bmz_core::lane::KeyMode::default(),
+            has_long_notes: false,
+            ln_mode_index: 0,
             result_gauge_graph_type: bmz_core::clear::GaugeType::Normal as i32,
+            result_panel: 0,
+            favorite_chart: false,
             judge_counts: DisplayJudgeCounts::default(),
             fast_slow_counts: FastSlowJudgeCounts::default(),
+            score_save_enabled: false,
             score_history_id: 0,
             replay_saved: false,
             replay_slots: [false; 4],
@@ -3533,15 +3888,18 @@ mod tests {
             table_text_primary: String::new(),
             table_text_secondary: String::new(),
             table_text_fallback: String::new(),
+            stagefile_background: false,
+            stagefile_image_size: None,
             course_titles: Default::default(),
-            graph: ResultGraphSnapshot {
+            course_result: Default::default(),
+            graph: std::sync::Arc::new(ResultGraphSnapshot {
                 timing_distribution,
                 timing_points: vec![
                     ResultTimingPoint { time_ms: 0, delta_us: -12_000, judge: Judge::Great },
                     ResultTimingPoint { time_ms: 100, delta_us: 8_000, judge: Judge::PGreat },
                 ],
                 ..ResultGraphSnapshot::default()
-            },
+            }),
             overlay: crate::snapshot::OverlaySnapshot::default(),
             ir: crate::scene::ResultIrSnapshot::default(),
             player_stats: crate::scene::PlayerStatsSnapshot::default(),
@@ -4126,7 +4484,7 @@ mod tests {
     }
 
     #[test]
-    fn play_skin_loaded_after_load_delay_without_ready_timer() {
+    fn play_skin_stays_loading_after_load_delay_until_ready_timer_starts() {
         let document: crate::skin::SkinDocument = serde_json::from_str(
             r#"{
                 "type": 7,
@@ -4137,6 +4495,9 @@ mod tests {
                 "source": [{"id": 1, "path": "panel.png"}],
                 "image": [{"id": "panel", "src": 1, "x": 0, "y": 0, "w": 10, "h": 10}],
                 "destination": [
+                    {"id": "panel", "op": [80], "dst": [
+                        {"time": 0, "x": 80, "y": 0, "w": 10, "h": 10}
+                    ]},
                     {"id": "panel", "op": [81], "dst": [
                         {"time": 0, "x": 20, "y": 0, "w": 10, "h": 10}
                     ]}
@@ -4167,6 +4528,11 @@ mod tests {
         );
 
         assert!(plan.commands.iter().any(|command| matches!(
+            command,
+            DrawCommand::Image { texture, rect, .. }
+                if *texture == TextureId(99) && approx_eq(rect.x, 0.8)
+        )));
+        assert!(!plan.commands.iter().any(|command| matches!(
             command,
             DrawCommand::Image { texture, rect, .. }
                 if *texture == TextureId(99) && approx_eq(rect.x, 0.2)
@@ -4497,6 +4863,74 @@ mod tests {
     }
 
     #[test]
+    fn play_plan_passes_runtime_stagefile_to_skin_document() {
+        let document: SkinDocument = serde_json::from_str(
+            r#"
+            {
+                "type": 0,
+                "w": 100,
+                "h": 100,
+                "destination": [
+                    { "id": "-100", "op": [191], "dst": [{ "x": 0, "y": 0, "w": 40, "h": 20 }] }
+                ]
+            }
+            "#,
+        )
+        .unwrap();
+        let skin = SkinContext::from_manifest_and_document(SkinManifest::default(), document, []);
+        let AppSceneSnapshot::Play(mut snapshot) = crate::sample::sample_play_scene() else {
+            panic!("sample play scene");
+        };
+        snapshot.stagefile_background = true;
+        snapshot.stagefile_image_size = Some(SkinImageSize { width: 400.0, height: 200.0 });
+
+        let plan = DrawPlan::from_scene_with_skin(
+            &AppSceneSnapshot::Play(snapshot),
+            &skin,
+            &mut crate::skin::DynamicTimerRuntime::default(),
+        );
+
+        assert!(plan.commands.iter().any(|command| matches!(
+            command,
+            DrawCommand::Image { texture, .. } if *texture == SELECT_STAGE_TEXTURE
+        )));
+    }
+
+    #[test]
+    fn result_plan_passes_runtime_stagefile_to_skin_document() {
+        let document: SkinDocument = serde_json::from_str(
+            r#"
+            {
+                "type": 7,
+                "w": 100,
+                "h": 100,
+                "destination": [
+                    { "id": "-100", "op": [191], "dst": [{ "x": 0, "y": 0, "w": 40, "h": 20 }] }
+                ]
+            }
+            "#,
+        )
+        .unwrap();
+        let skin = SkinContext::from_manifest_and_document(SkinManifest::default(), document, []);
+        let AppSceneSnapshot::Result(mut snapshot) = crate::sample::sample_result_scene() else {
+            panic!("sample result scene");
+        };
+        snapshot.stagefile_background = true;
+        snapshot.stagefile_image_size = Some(SkinImageSize { width: 400.0, height: 200.0 });
+
+        let plan = DrawPlan::from_scene_with_skin(
+            &AppSceneSnapshot::Result(snapshot),
+            &skin,
+            &mut crate::skin::DynamicTimerRuntime::default(),
+        );
+
+        assert!(plan.commands.iter().any(|command| matches!(
+            command,
+            DrawCommand::Image { texture, .. } if *texture == SELECT_STAGE_TEXTURE
+        )));
+    }
+
+    #[test]
     fn select_plan_renders_all_snapshot_rows() {
         let plan = DrawPlan::from_scene(&AppSceneSnapshot::Select(crate::scene::SelectSnapshot {
             chart_count: 20,
@@ -4679,7 +5113,7 @@ mod tests {
         )));
         assert!(plan.commands.iter().any(|command| matches!(
             command,
-            DrawCommand::Text { text, .. } if text == "F 5  S 10"
+            DrawCommand::Text { text, .. } if text == "F 7  S 11"
         )));
     }
 
@@ -4758,7 +5192,7 @@ mod tests {
     }
 
     #[test]
-    fn play_plan_uses_snapshot_arrange_for_skin_imageset() {
+    fn play_plan_uses_snapshot_2p_arrange_for_skin_imageset() {
         let document: crate::skin::SkinDocument = serde_json::from_str(
             r#"
             {
@@ -4772,7 +5206,7 @@ mod tests {
                     { "id": "random", "src": 1, "x": 20, "y": 0, "w": 10, "h": 10 }
                 ],
                 "imageset": [
-                    { "id": "arrange", "ref": 42, "images": ["normal", "mirror", "random"] }
+                    { "id": "arrange", "ref": 43, "images": ["normal", "mirror", "random"] }
                 ],
                 "destination": [
                     { "id": "arrange", "dst": [{ "time": 0, "x": 10, "y": 20, "w": 20, "h": 10 }] }
@@ -4788,7 +5222,11 @@ mod tests {
             source_size: crate::skin::SkinImageSize { width: 30.0, height: 10.0 },
         };
         let skin = SkinContext::from_manifest_and_document(manifest, document, [source_texture]);
-        let snapshot = RenderSnapshot { arrange: "RANDOM".to_string(), ..Default::default() };
+        let snapshot = RenderSnapshot {
+            arrange: "NORMAL".to_string(),
+            arrange_2p: "RANDOM".to_string(),
+            ..Default::default()
+        };
 
         let plan = DrawPlan::from_scene_with_skin(
             &AppSceneSnapshot::Play(snapshot),
@@ -4804,7 +5242,58 @@ mod tests {
     }
 
     #[test]
-    fn play_plan_uses_snapshot_arrange_for_ref_image() {
+    fn play_plan_uses_beatoraja_target_list_index_for_skin_imageset() {
+        for ref_id in [41, 77] {
+            let document_json =
+                r#"
+            {
+                "type": 0,
+                "w": 100,
+                "h": 100,
+                "source": [{ "id": 1, "path": "target.png" }],
+                "image": [
+                    { "id": "target", "src": 1, "x": 0, "y": 0, "w": 10, "h": 110, "divy": 11, "len": 11, "ref": REF_ID }
+                ],
+                "destination": [
+                    { "id": "target", "dst": [{ "time": 0, "x": 10, "y": 20, "w": 20, "h": 10 }] }
+                ]
+            }
+            "#
+                .replace("REF_ID", &ref_id.to_string());
+            let document: crate::skin::SkinDocument = serde_json::from_str(&document_json).unwrap();
+            let source_texture = crate::skin::SkinDocumentTexture {
+                source_id: "1".to_string(),
+                texture: crate::skin::SkinTextureId(78),
+                source_size: crate::skin::SkinImageSize { width: 10.0, height: 110.0 },
+            };
+            let skin = SkinContext::from_manifest_and_document(
+                SkinManifest::default(),
+                document,
+                [source_texture],
+            );
+            let snapshot = RenderSnapshot { target: "RANK_AAA".to_string(), ..Default::default() };
+
+            let plan = DrawPlan::from_scene_with_skin(
+                &AppSceneSnapshot::Play(snapshot),
+                &skin,
+                &mut crate::skin::DynamicTimerRuntime::default(),
+            );
+
+            // beatoraja の11段階では AAA は 7 番目。BMZ の選択肢に A+/AA+/AAA+
+            // がなくても、その分を詰めずに元の画像行を選ぶ。
+            assert!(
+                plan.commands.iter().any(|command| matches!(
+                    command,
+                    DrawCommand::Image { texture, uv, .. }
+                        if *texture == TextureId(78) && (uv.y - 70.0 / 110.0).abs() < 0.001
+                )),
+                "target ref {ref_id} must select the AAA row"
+            );
+        }
+    }
+
+    #[test]
+    fn play_plan_uses_snapshot_extended_2p_arrange_for_ref_image() {
         let document: crate::skin::SkinDocument = serde_json::from_str(
             r#"
             {
@@ -4813,7 +5302,7 @@ mod tests {
                 "h": 100,
                 "source": [{ "id": 1, "path": "arrange.png" }],
                 "image": [
-                    { "id": "arrange", "src": 1, "x": 0, "y": 0, "w": 10, "h": 30, "divy": 3, "len": 3, "ref": 42 }
+                    { "id": "arrange", "src": 1, "x": 0, "y": 0, "w": 10, "h": 120, "divy": 12, "len": 12, "ref": 345 }
                 ],
                 "destination": [
                     { "id": "arrange", "dst": [{ "time": 0, "x": 10, "y": 20, "w": 20, "h": 10 }] }
@@ -4826,10 +5315,14 @@ mod tests {
         let source_texture = crate::skin::SkinDocumentTexture {
             source_id: "1".to_string(),
             texture: crate::skin::SkinTextureId(77),
-            source_size: crate::skin::SkinImageSize { width: 10.0, height: 30.0 },
+            source_size: crate::skin::SkinImageSize { width: 10.0, height: 120.0 },
         };
         let skin = SkinContext::from_manifest_and_document(manifest, document, [source_texture]);
-        let snapshot = RenderSnapshot { arrange: "RANDOM".to_string(), ..Default::default() };
+        let snapshot = RenderSnapshot {
+            arrange: "NORMAL".to_string(),
+            arrange_2p: "MF-RANDOM".to_string(),
+            ..Default::default()
+        };
 
         let plan = DrawPlan::from_scene_with_skin(
             &AppSceneSnapshot::Play(snapshot),
@@ -4840,7 +5333,7 @@ mod tests {
         assert!(plan.commands.iter().any(|command| matches!(
             command,
             DrawCommand::Image { texture, uv, .. }
-                if *texture == TextureId(77) && (uv.y - 20.0 / 30.0).abs() < 0.001
+                if *texture == TextureId(77) && (uv.y - 110.0 / 120.0).abs() < 0.001
         )));
     }
 
@@ -5208,6 +5701,19 @@ mod tests {
         match command {
             DrawCommand::Rect { color, .. } => predicate(color),
             DrawCommand::RectBatch { rects, .. } => rects.iter().any(|rect| predicate(&rect.color)),
+            _ => false,
+        }
+    }
+
+    fn draw_command_has_rect(
+        command: &DrawCommand,
+        predicate: impl Fn(&Rect, &Color) -> bool,
+    ) -> bool {
+        match command {
+            DrawCommand::Rect { rect, color } => predicate(rect, color),
+            DrawCommand::RectBatch { rects, .. } => {
+                rects.iter().any(|command| predicate(&command.rect, &command.color))
+            }
             _ => false,
         }
     }

@@ -84,6 +84,8 @@ pub struct SkinDocument {
     pub graph: Vec<SkinGraphDef>,
     #[serde(default, rename = "hiddenCover")]
     pub hidden_cover: Vec<SkinHiddenCoverDef>,
+    #[serde(default, rename = "liftCover", deserialize_with = "deserialize_lift_cover_defs")]
+    pub lift_cover: Vec<SkinHiddenCoverDef>,
     #[serde(default, rename = "hiterrorvisualizer")]
     pub hiterror_visualizer: Vec<SkinHitErrorVisualizerDef>,
     #[serde(default)]
@@ -109,6 +111,27 @@ pub struct SkinDocument {
     /// Lua `timer_util.timer_observe_boolean` から変換された動的タイマー定義。
     #[serde(default, rename = "dynamicTimer")]
     pub dynamic_timers: Vec<SkinDynamicTimerDef>,
+    /// Lua `customTimers` のうち、既存タイマー開始時刻へ固定 delay を加える定義。
+    #[serde(default, rename = "fixedDelayTimer")]
+    pub fixed_delay_timers: Vec<SkinFixedDelayTimerDef>,
+    /// Lua skin callback をロード時に変換した、初期値を持つ内部フラグ。
+    #[serde(default, rename = "runtimeFlag")]
+    pub runtime_flags: Vec<SkinRuntimeFlagDef>,
+    /// Lua skin callback をロード時に変換した、内部フラグのトグルイベント。
+    #[serde(default, rename = "runtimeEvent")]
+    pub runtime_events: Vec<SkinRuntimeEventDef>,
+    /// Lua のロード中に呼ばれた `main_state.audio_*` をシーン開始時の命令へ変換したもの。
+    #[serde(default, rename = "sceneAudio")]
+    pub scene_audio: Vec<SkinAudioActionDef>,
+    /// Lua `customEvents` のうち、タイマー開始を条件とする宣言的な音声イベント。
+    #[serde(default, rename = "customEvents")]
+    pub custom_events: Vec<SkinCustomEventDef>,
+    /// Lua Result スキンがロード時に選んだ展開パネル。
+    ///
+    /// WMII の `Expand_op` をロード時宣言へ変換した場合だけ設定され、
+    /// 0=非表示、1=IR、2=グラフとして Result 入力と描画状態を同期する。
+    #[serde(default, rename = "resultPanelDefault")]
+    pub result_panel_default: Option<i32>,
     /// ユーザがスキン設定パネルで選んだオプションから算出した有効 op コード列。
     /// `Some` のときレンダー時の `enabled_options()` はこれを返し、`None` の
     /// ときは従来通り `property.def` (または各 property の先頭 item) を既定として
@@ -285,6 +308,10 @@ pub struct SkinImageDef {
     pub click: i32,
     #[serde(default)]
     pub act: Option<i32>,
+    /// `act` を状態参照に使いつつ、クリックイベントは無効にする画像向け。
+    /// 未指定時は従来どおり `act` の有無をクリック可否として扱う。
+    #[serde(default)]
+    pub clickable: Option<bool>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -299,6 +326,8 @@ pub struct SkinImageSetDef {
     pub click: i32,
     #[serde(default)]
     pub act: Option<i32>,
+    #[serde(default)]
+    pub clickable: Option<bool>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Default)]
@@ -325,6 +354,10 @@ pub struct SkinValueDef {
     pub cycle: i32,
     #[serde(default)]
     pub align: i32,
+    /// LR2 CSV の judge combo だけが持つ alignment 解釈。
+    /// 未指定の JSON/Lua judge は beatoraja と同じく中央寄せにする。
+    #[serde(default, rename = "judgeAlign")]
+    pub judge_align: Option<i32>,
     #[serde(default)]
     pub digit: i32,
     #[serde(default)]
@@ -550,9 +583,15 @@ pub const SKIN_EXPR_ADJUSTED_RATE: &str = "bmz:adjusted_rate";
 pub const SKIN_EXPR_ADJUSTED_RATE_ADOT: &str = "bmz:adjusted_rate_adot";
 pub const SKIN_EXPR_FS_THRESHOLD: &str = "bmz:fs_threshold";
 pub const SKIN_EXPR_COURSE_TABLE_TEXT: &str = "bmz:course_table_text";
+pub const SKIN_EXPR_RESULT_TABLE_TITLE: &str = "bmz:result_table_title";
 pub const SKIN_EXPR_FAST_SLOW_BREAKDOWN_HEIGHT: &str = "bmz:fast_slow_breakdown_height";
 pub const SKIN_EXPR_DEFAULT_CHART_TOTAL_COUNT: &str = "bmz:default_chart_total_count";
 pub const SKIN_EXPR_DEFAULT_CHART_GAUGE: &str = "bmz:default_chart_gauge";
+pub const SKIN_EXPR_COURSE_CLEAR_RATE: &str = "bmz:course_clear_rate";
+pub const SKIN_EXPR_GAUGE_PERCENT_INTEGER: &str = "bmz:gauge_percent_integer";
+pub const SKIN_EXPR_GAUGE_PERCENT_FRACTION: &str = "bmz:gauge_percent_fraction";
+pub const SKIN_EXPR_GAUGE_AMOUNT_INTEGER: &str = "bmz:gauge_amount_integer";
+pub const SKIN_EXPR_GAUGE_AMOUNT_FRACTION: &str = "bmz:gauge_amount_fraction";
 
 /// beatoraja 予約 ID と衝突しない動的タイマー ID 範囲の先頭。
 pub const SKIN_DYNAMIC_TIMER_BASE: i32 = 9000;
@@ -560,6 +599,48 @@ pub const SKIN_DYNAMIC_TIMER_BASE: i32 = 9000;
 pub const SKIN_REF_PLAY_GAUGE_TYPE: i32 = 44;
 /// beatoraja `BUTTON_HSFIX` (`event_index(55)`)。
 pub const SKIN_EVENT_HSFIX: i32 = 55;
+/// BMZ extension: exact key mode number (`4`, `5`, `6`, `7`, `8`, `9`, `10`, `14`).
+pub const SKIN_REF_BMZ_KEY_MODE: i32 = 1903;
+/// BMZ extension: active physical lane count including scratch lanes.
+pub const SKIN_REF_BMZ_ACTIVE_LANE_COUNT: i32 = 1904;
+/// BMZ extension: exact key mode options in K4/K5/K6/K7/K8/K9/K10/K14 order.
+pub const SKIN_OPTION_BMZ_KEY_MODE_BASE: i32 = 1905;
+pub const SKIN_OPTION_BMZ_KEY_MODE_COUNT: usize = 8;
+pub const SKIN_OPTION_BMZ_KEY_MODE_LAST: i32 = 1912;
+/// BMZ extension: scratch layout options.
+pub const SKIN_OPTION_BMZ_NO_SCRATCH: i32 = 1913;
+pub const SKIN_OPTION_BMZ_SINGLE_PLAY: i32 = 1914;
+pub const SKIN_OPTION_BMZ_DOUBLE_PLAY: i32 = 1915;
+/// BMZ extension: E1/E2/E3/E4/UI Left/Right/Up/Down held options.
+pub const SKIN_OPTION_BMZ_INPUT_BASE: i32 = 1920;
+pub const SKIN_OPTION_BMZ_INPUT_LAST: i32 = 1927;
+pub const SKIN_BMZ_INPUT_COUNT: usize = 8;
+/// BMZ extension: matching press-edge timers.
+pub const SKIN_TIMER_BMZ_INPUT_BASE: i32 = 19_000;
+pub const SKIN_TIMER_BMZ_INPUT_LAST: i32 = 19_007;
+/// BMZ extension: generic daily statistics number refs.
+pub const SKIN_REF_BMZ_DAILY_BASE: i32 = 1930;
+pub const SKIN_REF_BMZ_DAILY_LAST: i32 = 1946;
+/// BMZ extension: daily rank label and recent title text refs.
+pub const SKIN_TEXT_BMZ_DAILY_RANK: i32 = 1943;
+pub const SKIN_TEXT_BMZ_DAILY_RECENT_BASE: i32 = 1950;
+pub const SKIN_TEXT_BMZ_DAILY_RECENT_LAST: i32 = 1959;
+/// BMZ extension: course result stage count and ten stage slots.
+pub const SKIN_REF_BMZ_COURSE_STAGE_COUNT: i32 = 19_100;
+pub const SKIN_REF_BMZ_COURSE_STAGE_EX_BASE: i32 = 19_110;
+pub const SKIN_REF_BMZ_COURSE_STAGE_GAUGE_BASE: i32 = 19_120;
+pub const SKIN_REF_BMZ_COURSE_STAGE_BP_BASE: i32 = 19_130;
+pub const SKIN_REF_BMZ_COURSE_STAGE_RATE_BASE: i32 = 19_140;
+pub const SKIN_BMZ_COURSE_STAGE_COUNT: usize = 10;
+/// Lua result skin の定数 `Expand_op` 代入を宣言的クリックイベントへ変換する ID。
+/// beatoraja の正数イベント ID と衝突しない BMZ 内部予約値を使う。
+pub const SKIN_EVENT_RESULT_PANEL_IR: i32 = -10_001;
+pub const SKIN_EVENT_RESULT_PANEL_GRAPH: i32 = -10_002;
+/// Clear the visible daily statistics window without deleting score history.
+pub const SKIN_EVENT_DAILY_STATISTICS_RESET: i32 = -10_100;
+/// Lua callback から変換する runtime event の内部予約 ID 範囲。
+/// beatoraja 正数イベント ID と衝突しないよう負数を使う。
+pub const SKIN_EVENT_RUNTIME_BASE: i32 = -20_000;
 /// beatoraja `NUMBER_RANDOM_1P_1KEY..NUMBER_RANDOM_2P_SCR` (450..469).
 pub const SKIN_RANDOM_LANE_REF_BASE: i32 = 450;
 pub const SKIN_RANDOM_LANE_REF_COUNT: usize = 20;
@@ -574,6 +655,96 @@ pub fn string_array_refs(values: &[String; 10]) -> [&str; 10] {
 pub struct SkinDynamicTimerDef {
     pub id: i32,
     pub observe: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct SkinFixedDelayTimerDef {
+    pub id: i32,
+    #[serde(rename = "sourceTimer")]
+    pub source_timer: i32,
+    #[serde(rename = "delayMs")]
+    pub delay_ms: i32,
+}
+
+/// 描画ランタイムで保持する bool フラグの初期値。
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct SkinRuntimeFlagDef {
+    pub id: i32,
+    #[serde(default)]
+    pub initial: bool,
+}
+
+/// event ID を受けて複数の runtime flag を反転する宣言的イベント。
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct SkinRuntimeEventDef {
+    pub id: i32,
+    #[serde(default, rename = "toggleFlags")]
+    pub toggle_flags: Vec<i32>,
+    /// BMZ extension: logical input press edge that dispatches this runtime event.
+    #[serde(default, rename = "triggerAction")]
+    pub trigger_action: Option<SkinRuntimeTriggerAction>,
+}
+
+/// Runtime event trigger that does not require Lua-side input or file access.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SkinRuntimeTriggerAction {
+    E1Press,
+    E2Press,
+    E3Press,
+    E4Press,
+    UiLeftPress,
+    UiRightPress,
+    UiUpPress,
+    UiDownPress,
+}
+
+impl SkinRuntimeTriggerAction {
+    pub const fn index(self) -> usize {
+        match self {
+            Self::E1Press => 0,
+            Self::E2Press => 1,
+            Self::E3Press => 2,
+            Self::E4Press => 3,
+            Self::UiLeftPress => 4,
+            Self::UiRightPress => 5,
+            Self::UiUpPress => 6,
+            Self::UiDownPress => 7,
+        }
+    }
+}
+
+/// スキン音声に対する宣言的な再生・停止命令。
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct SkinAudioActionDef {
+    pub action: SkinAudioActionKind,
+    pub path: String,
+    #[serde(default = "default_skin_audio_volume")]
+    pub volume: f32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SkinAudioActionKind {
+    Play,
+    Loop,
+    Stop,
+}
+
+/// 条件が単一 timer の ON へ落とせる Lua `customEvents` 定義。
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct SkinCustomEventDef {
+    pub id: i32,
+    #[serde(default)]
+    pub timer: i32,
+    #[serde(default)]
+    pub once: bool,
+    #[serde(default, rename = "audioActions")]
+    pub audio_actions: Vec<SkinAudioActionDef>,
+}
+
+fn default_skin_audio_volume() -> f32 {
+    1.0
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -639,6 +810,22 @@ pub struct SkinHiddenCoverDef {
     pub disappear_line: i32,
     #[serde(default = "default_true", rename = "isDisapearLineLinkLift")]
     pub is_disappear_line_link_lift: bool,
+}
+
+fn deserialize_lift_cover_defs<'de, D>(deserializer: D) -> Result<Vec<SkinHiddenCoverDef>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let mut values = Vec::<JsonValue>::deserialize(deserializer)?;
+    for value in &mut values {
+        if let Some(object) = value.as_object_mut() {
+            object.entry("isDisapearLineLinkLift").or_insert(JsonValue::Bool(false));
+        }
+    }
+    values
+        .into_iter()
+        .map(|value| serde_json::from_value(value).map_err(D::Error::custom))
+        .collect()
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -891,6 +1078,10 @@ pub struct SkinNoteSetDef {
     pub processed: Vec<String>,
     #[serde(default)]
     pub size: Vec<i32>,
+    #[serde(default = "default_note_dst2")]
+    pub dst2: i32,
+    #[serde(default = "default_note_expansion_rate")]
+    pub expansionrate: Vec<i32>,
     #[serde(default)]
     pub dst: Vec<SkinDstEntry>,
     #[serde(default)]
@@ -901,6 +1092,14 @@ pub struct SkinNoteSetDef {
     pub stop: Vec<SkinDestinationDef>,
     #[serde(default)]
     pub time: Vec<SkinDestinationDef>,
+}
+
+fn default_note_dst2() -> i32 {
+    i32::MIN
+}
+
+fn default_note_expansion_rate() -> Vec<i32> {
+    vec![100, 100]
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -954,6 +1153,9 @@ pub struct SkinDestinationDef {
     pub filter: i32,
     #[serde(default)]
     pub timer: Option<i32>,
+    /// BMZ限定のruntime timer式。PeacefulPlay key loggerの反復event timerに使う。
+    #[serde(default)]
+    pub timer_expr: String,
     /// `loop` フィールド。未指定(None)＝ループなし(1回再生して最終フレーム保持)。
     /// `Some(n>=0)`＝終端到達後 n 時刻へループバック。`Some(n<0)`＝終端後に非表示。
     #[serde(default, rename = "loop")]

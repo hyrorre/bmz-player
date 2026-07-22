@@ -92,7 +92,6 @@ pub struct PlaySkinOffset {
 #[derive(Debug, Clone, Copy)]
 pub struct FrameTimes {
     pub audio_now: TimeUs,
-    pub render_now: TimeUs,
     pub audio_schedule_until: TimeUs,
 }
 
@@ -140,6 +139,11 @@ pub struct GameSession {
     /// `audio_now` がこの時刻を超えたら keyon → keyoff へ遷移する。
     pub lane_auto_release_at: [Option<TimeUs>; LANE_COUNT],
     pub recent_judgements: Vec<JudgementEvent>,
+    /// Skin runtime がフレーム間で入力・判定履歴を構築するためのイベント列。
+    /// `advance_session_frame` の終端で drain し、長時間プレイでもセッション側に
+    /// 無制限に蓄積しない。sequence は同一時刻のイベント順も一意にする。
+    pub pending_skin_events: Vec<SkinRuntimeEvent>,
+    pub next_skin_event_sequence: u64,
     /// Result 統計グラフ用の最終ノート判定詳細。
     /// beatoraja の Result は譜面上の Note.state / playTime を走査してグラフ化するため、
     /// BMZ でも score 集計とは別に note_id 単位の判定差分を保持する。
@@ -174,6 +178,8 @@ pub struct GameSession {
     pub lift_enabled: bool,
     /// beatoraja `OPTION_HIDDEN1_ON` (273): HIDDEN 機能が有効か。
     pub hidden_enabled: bool,
+    /// beatoraja `PlayConfig.enableHispeedAutoAdjust`。
+    pub hispeed_auto_adjust: bool,
     /// Start/Select 押下中など、レーンカバー数値表示を出す状態。
     pub lane_cover_changing: bool,
     pub hidden_cover: f32,
@@ -224,6 +230,8 @@ pub struct FrameOutput<TSnapshot> {
     pub mine_hits: Vec<MineHitEvent>,
     /// 当該フレームで適用するキー音音量変更 (HCN 早離し時のミュート/復帰)。
     pub keysound_volumes: Vec<(SoundId, f32)>,
+    /// 当該フレームで発生した、skin runtime 向けの順序付き入力・判定イベント。
+    pub skin_events: Vec<SkinRuntimeEvent>,
     pub state: PlayState,
 }
 
@@ -237,7 +245,21 @@ pub struct SessionFrame {
     /// 当該フレームで適用するキー音音量変更 (HCN 早離し時のミュート/復帰)。
     /// app 層が audio engine の `set_volume_for_sound` に反映する。
     pub keysound_volumes: Vec<(SoundId, f32)>,
+    /// 当該フレームで発生した、skin runtime 向けの順序付き入力・判定イベント。
+    pub skin_events: Vec<SkinRuntimeEvent>,
     pub state: PlayState,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SkinRuntimeEvent {
+    pub sequence: u64,
+    pub kind: SkinRuntimeEventKind,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SkinRuntimeEventKind {
+    Input(InputEvent),
+    Judgement(JudgementEvent),
 }
 
 impl BgmScheduler {
@@ -279,9 +301,8 @@ impl BgmScheduler {
 
 pub fn compute_frame_times(session: &GameSession) -> FrameTimes {
     let audio_now = session.audio_clock.now();
-    let render_now = TimeUs(audio_now.0 + session.offsets.visual_offset_us);
     let audio_schedule_until = TimeUs(audio_now.0 + AUDIO_SCHEDULE_AHEAD_US);
-    FrameTimes { audio_now, render_now, audio_schedule_until }
+    FrameTimes { audio_now, audio_schedule_until }
 }
 
 pub fn apply_judge_outcome(
@@ -308,6 +329,7 @@ pub fn apply_judge_outcome(
                 );
             }
         }
+        push_skin_runtime_event(session, SkinRuntimeEventKind::Judgement(event.clone()));
         events.push(event);
     }
     for hit in outcome.mine_hits {
@@ -320,6 +342,15 @@ pub fn apply_judge_outcome(
     session.pending_keysound_volumes.extend(outcome.keysound_volumes);
     update_failed_state_from_gauge(session);
     events
+}
+
+fn push_skin_runtime_event(session: &mut GameSession, kind: SkinRuntimeEventKind) {
+    let sequence = session.next_skin_event_sequence;
+    session.next_skin_event_sequence = session
+        .next_skin_event_sequence
+        .checked_add(1)
+        .expect("skin runtime event sequence exhausted");
+    session.pending_skin_events.push(SkinRuntimeEvent { sequence, kind });
 }
 
 impl GameSession {
@@ -503,6 +534,17 @@ pub fn apply_auto_key_release(session: &mut GameSession, audio_now: TimeUs) {
             && audio_now.0 >= release_at.0
             && session.judge.lanes[lane_index].active_long.is_none()
         {
+            push_skin_runtime_event(
+                session,
+                SkinRuntimeEventKind::Input(InputEvent {
+                    lane: Lane::ALL[lane_index],
+                    kind: InputKind::Release,
+                    time: release_at,
+                    source: InputSource::Auto,
+                    device_kind: Default::default(),
+                    scratch_direction: session.lane_scratch_direction[lane_index],
+                }),
+            );
             session.lane_keyoff_started_at[lane_index] = Some(release_at);
             session.lane_keyon_started_at[lane_index] = None;
             session.lane_scratch_direction[lane_index] = None;
@@ -568,35 +610,47 @@ pub fn drain_pre_ready_visual_inputs(session: &mut GameSession, visual_now: Time
         .collect();
     update_recent_inputs(session, &visual_inputs, visual_now);
     update_lane_key_states(session, &visual_inputs);
+    update_scratch_angle_phase(session, visual_now);
 }
 
 pub fn is_wall_clock_lane_key_time(started_at: TimeUs, chart_time: TimeUs) -> bool {
     started_at.0 > chart_time.0 + CHART_KEY_FUTURE_SLACK_US
 }
 
-/// chart 0 以降に残った pre-ready wall-clock key 状態を破棄する。
-pub fn clear_stale_wall_clock_lane_key_states(session: &mut GameSession, chart_time: TimeUs) {
-    if chart_time.0 < 0 {
+/// READY 開始時のwall-clockからchart-clockへの切替に合わせて、
+/// pre-ready visual timer の経過時間を保ったまま時刻を移す。
+///
+/// 押下中のkeyonをchart 0で破棄すると、beatorajaと異なりkeybeamが
+/// READY/PLAY境界で消える。最後のpre-ready frame時刻と現在のchart時刻の
+/// 差を対象timerに加え、同じ経過時間でchart-clockへ引き継ぐ。
+pub fn rebase_pre_ready_visual_times(session: &mut GameSession, chart_time: TimeUs) {
+    let Some(wall_clock_now) = session.scratch_angle_last_render_at else {
+        return;
+    };
+    // 通常のchart-clockは単調増加する。現在値が前frameより小さい場合だけ、
+    // READY開始によるclock domain切替と扱う。短い導入でも検出できるよう
+    // key timer判定用の1秒slackはここでは使わない。
+    if wall_clock_now.0 <= chart_time.0 {
         return;
     }
+
+    let clock_delta_us = chart_time.0.saturating_sub(wall_clock_now.0);
     for lane_index in 0..LANE_COUNT {
-        if session.lane_keyon_started_at[lane_index]
-            .is_some_and(|started| is_wall_clock_lane_key_time(started, chart_time))
+        for time in [
+            &mut session.lane_keyon_started_at[lane_index],
+            &mut session.lane_keyoff_started_at[lane_index],
+            &mut session.lane_auto_release_at[lane_index],
+        ]
+        .into_iter()
+        .flatten()
         {
-            session.lane_keyon_started_at[lane_index] = None;
-            session.lane_scratch_direction[lane_index] = None;
-        }
-        if session.lane_keyoff_started_at[lane_index]
-            .is_some_and(|started| is_wall_clock_lane_key_time(started, chart_time))
-        {
-            session.lane_keyoff_started_at[lane_index] = None;
-        }
-        if session.lane_auto_release_at[lane_index]
-            .is_some_and(|release_at| is_wall_clock_lane_key_time(release_at, chart_time))
-        {
-            session.lane_auto_release_at[lane_index] = None;
+            time.0 = time.0.saturating_add(clock_delta_us);
         }
     }
+    for input in &mut session.recent_inputs {
+        input.time.0 = input.time.0.saturating_add(clock_delta_us);
+    }
+    session.scratch_angle_last_render_at = Some(chart_time);
 }
 
 pub fn update_scratch_angle_phase(session: &mut GameSession, render_now: TimeUs) {
@@ -671,6 +725,7 @@ pub fn process_autoplay_inputs(
 }
 
 fn process_session_input(session: &mut GameSession, input: InputEvent) -> Vec<JudgementEvent> {
+    push_skin_runtime_event(session, SkinRuntimeEventKind::Input(input));
     let mut outcome = session.judge.process_input(&session.chart, input);
     if input.kind == InputKind::Press {
         let hcn_passing = hcn_passing_at(session, input.lane, input.time);
@@ -907,19 +962,21 @@ pub fn advance_session_frame(
     session: &mut GameSession,
     audio: &mut dyn AudioScheduler,
 ) -> SessionFrame {
-    if session.state == PlayState::Ready {
+    let times = compute_frame_times(session);
+    sync_input_timestamp_anchor(session, times.audio_now);
+    rebase_pre_ready_visual_times(session, times.audio_now);
+    update_scratch_angle_phase(session, times.audio_now);
+    let mut judgements = Vec::new();
+
+    if session.state == PlayState::Ready && times.audio_now.0 < 0 {
+        drain_pre_ready_visual_inputs(session, times.audio_now);
+    } else if session.state == PlayState::Ready {
         session.state = PlayState::Playing;
     }
 
-    let times = compute_frame_times(session);
-    sync_input_timestamp_anchor(session, times.audio_now);
-    clear_stale_wall_clock_lane_key_states(session, times.render_now);
-    update_scratch_angle_phase(session, times.render_now);
-    let mut judgements = Vec::new();
-
-    if session.state == PlayState::Playing {
-        sync_judge_windows(session, times.audio_now);
-
+    if matches!(session.state, PlayState::Ready | PlayState::Playing) {
+        // BGMはchart 0に間に合うようREADY中もschedule-aheadする。
+        // 判定・keysound・MineはPlayingに入るまで開始しない。
         session.bgm_scheduler.schedule_until(
             &session.chart,
             &session.audio_clock,
@@ -929,6 +986,10 @@ pub fn advance_session_frame(
                 * session.audio_mix.bgm_volume,
             audio,
         );
+    }
+
+    if session.state == PlayState::Playing {
+        sync_judge_windows(session, times.audio_now);
 
         if session.replay_player.is_some() {
             drain_human_inputs(session);
@@ -953,7 +1014,7 @@ pub fn advance_session_frame(
         apply_hcn_gauge(session, times.audio_now);
         update_failed_state_from_gauge(session);
         schedule_keysounds(session, audio);
-        update_recent_judgements(session, &judgements, times.render_now);
+        update_recent_judgements(session, &judgements, times.audio_now);
         update_full_combo_timer(session, &judgements);
 
         if should_finish(session, times.audio_now) {
@@ -964,7 +1025,15 @@ pub fn advance_session_frame(
 
     let mine_hits = std::mem::take(&mut session.pending_mine_hits);
     let keysound_volumes = std::mem::take(&mut session.pending_keysound_volumes);
-    SessionFrame { times, judgements, mine_hits, keysound_volumes, state: session.state }
+    let skin_events = std::mem::take(&mut session.pending_skin_events);
+    SessionFrame {
+        times,
+        judgements,
+        mine_hits,
+        keysound_volumes,
+        skin_events,
+        state: session.state,
+    }
 }
 
 fn update_full_combo_timer(session: &mut GameSession, judgements: &[JudgementEvent]) {
@@ -1039,6 +1108,87 @@ mod tests {
         assert_eq!(audio.scheduled[0].volume, 0.0625);
         assert_eq!(audio.scheduled[0].restart_policy, RestartPolicy::StopSameSound);
         assert_eq!(session.recent_judgements.len(), 1);
+    }
+
+    #[test]
+    fn advance_session_frame_keeps_ready_until_chart_zero() {
+        let mut session = session_with_autoplay(chart_with_keysound());
+        let current_frame = Arc::new(AtomicU64::new(0));
+        session.audio_clock =
+            AudioClock::with_position(48_000, 0, -1_000_000, current_frame.clone(), true);
+        let mut audio = TestAudio::default();
+
+        let ready_frame = advance_session_frame(&mut session, &mut audio);
+
+        assert_eq!(ready_frame.state, PlayState::Ready);
+        assert!(ready_frame.judgements.is_empty());
+        assert!(audio.scheduled.is_empty());
+        assert_eq!(session.score.past_notes, 0);
+
+        current_frame.store(48_000, std::sync::atomic::Ordering::Relaxed);
+        let playing_frame = advance_session_frame(&mut session, &mut audio);
+
+        assert_eq!(playing_frame.state, PlayState::Playing);
+        assert_eq!(playing_frame.judgements.len(), 1);
+        assert_eq!(audio.scheduled.len(), 1);
+    }
+
+    #[test]
+    fn session_frame_drains_ordered_skin_input_and_judgement_events() {
+        let mut session = session_with_autoplay(chart_with_keysound());
+        session.autoplay = None;
+
+        process_session_input(&mut session, human_press(TimeUs(0)));
+        process_session_input(&mut session, human_release(TimeUs(10_000)));
+        session.state = PlayState::Finished;
+
+        let mut audio = TestAudio::default();
+        let frame = advance_session_frame(&mut session, &mut audio);
+
+        assert_eq!(frame.skin_events.len(), 3);
+        assert_eq!(
+            frame.skin_events.iter().map(|event| event.sequence).collect::<Vec<_>>(),
+            [0, 1, 2]
+        );
+        assert!(matches!(
+            frame.skin_events[0].kind,
+            SkinRuntimeEventKind::Input(InputEvent { kind: InputKind::Press, .. })
+        ));
+        assert!(matches!(
+            frame.skin_events[1].kind,
+            SkinRuntimeEventKind::Judgement(JudgementEvent { judge: Judge::PGreat, .. })
+        ));
+        assert!(matches!(
+            frame.skin_events[2].kind,
+            SkinRuntimeEventKind::Input(InputEvent { kind: InputKind::Release, .. })
+        ));
+        assert!(session.pending_skin_events.is_empty());
+
+        let next_frame = advance_session_frame(&mut session, &mut audio);
+        assert!(next_frame.skin_events.is_empty());
+    }
+
+    #[test]
+    fn auto_key_release_emits_skin_release_event() {
+        let mut session = session_with_autoplay(chart_with_keysound());
+        session.lane_keyon_started_at[Lane::Key1.index()] = Some(TimeUs(0));
+        session.lane_auto_release_at[Lane::Key1.index()] = Some(TimeUs(80_000));
+
+        apply_auto_key_release(&mut session, TimeUs(80_000));
+
+        assert!(matches!(
+            session.pending_skin_events.as_slice(),
+            [SkinRuntimeEvent {
+                sequence: 0,
+                kind: SkinRuntimeEventKind::Input(InputEvent {
+                    lane: Lane::Key1,
+                    kind: InputKind::Release,
+                    time: TimeUs(80_000),
+                    source: InputSource::Auto,
+                    ..
+                }),
+            }]
+        ));
     }
 
     #[test]
@@ -1458,6 +1608,18 @@ mod tests {
     }
 
     #[test]
+    fn hcn_passing_waits_until_the_head_is_judged() {
+        let mut session = session_with_autoplay(chart_with_hcn_long_note());
+
+        update_hcn_lane_timers(&mut session, TimeUs(100_000));
+        assert!(session.lane_hcn_timer[Lane::Key1.index()].is_none());
+
+        session.judge.judged_notes.insert(NoteId(1), Judge::Poor);
+        update_hcn_lane_timers(&mut session, TimeUs(100_000));
+        assert!(session.lane_hcn_timer[Lane::Key1.index()].is_some());
+    }
+
+    #[test]
     fn hcn_gauge_recovers_when_pressed_after_missed_start() {
         let mut session = session_with_autoplay(chart_with_hcn_long_note());
         session.gauge.set_initial_value(50.0);
@@ -1838,17 +2000,41 @@ mod tests {
     }
 
     #[test]
-    fn clear_stale_wall_clock_lane_key_states_drops_pre_ready_timestamps() {
+    fn rebase_pre_ready_visual_times_keeps_timer_elapsed_across_clock_reset() {
         let mut session = session_with_autoplay(chart_with_keysound());
-        session.lane_keyon_started_at[Lane::Key1.index()] = Some(TimeUs(3_500_000));
-        session.lane_keyoff_started_at[Lane::Key2.index()] = Some(TimeUs(3_550_000));
-        session.lane_keyon_started_at[Lane::Key3.index()] = Some(TimeUs(-250_000));
+        session.scratch_angle_last_render_at = Some(TimeUs(5_000_000));
+        session.lane_keyon_started_at[Lane::Key1.index()] = Some(TimeUs(2_000_000));
+        session.lane_keyoff_started_at[Lane::Key2.index()] = Some(TimeUs(3_000_000));
+        session.recent_inputs.push(InputEvent {
+            lane: Lane::Key1,
+            kind: InputKind::Press,
+            time: TimeUs(4_900_000),
+            source: InputSource::Human,
+            device_kind: InputDeviceKind::Keyboard,
+            scratch_direction: None,
+        });
 
-        clear_stale_wall_clock_lane_key_states(&mut session, TimeUs(0));
+        rebase_pre_ready_visual_times(&mut session, TimeUs(-1_000_000));
 
+        assert_eq!(session.lane_keyon_started_at[Lane::Key1.index()], Some(TimeUs(-4_000_000)));
+        assert_eq!(session.lane_keyoff_started_at[Lane::Key2.index()], Some(TimeUs(-3_000_000)));
+        assert_eq!(session.recent_inputs[0].time, TimeUs(-1_100_000));
+        assert_eq!(session.scratch_angle_last_render_at, Some(TimeUs(-1_000_000)));
+
+        // READY/PLAYに移行しても押下状態は保たれ、実際のReleaseでのみ解除される。
+        update_lane_key_states(
+            &mut session,
+            &[InputEvent {
+                lane: Lane::Key1,
+                kind: InputKind::Release,
+                time: TimeUs(-500_000),
+                source: InputSource::Human,
+                device_kind: InputDeviceKind::Keyboard,
+                scratch_direction: None,
+            }],
+        );
         assert_eq!(session.lane_keyon_started_at[Lane::Key1.index()], None);
-        assert_eq!(session.lane_keyoff_started_at[Lane::Key2.index()], None);
-        assert_eq!(session.lane_keyon_started_at[Lane::Key3.index()], Some(TimeUs(-250_000)));
+        assert_eq!(session.lane_keyoff_started_at[Lane::Key1.index()], Some(TimeUs(-500_000)));
     }
 
     #[test]
@@ -1945,6 +2131,45 @@ mod tests {
         assert_eq!(session.lane_keyon_started_at[Lane::Key1.index()], Some(TimeUs(2_000_000)));
         assert_eq!(session.recent_inputs.len(), 1);
         assert_eq!(session.score.past_notes, 0);
+    }
+
+    #[test]
+    fn drain_pre_ready_visual_inputs_advances_scratch_phase() {
+        use crate::input::backend::{
+            BufferedInputBackend, DeviceId, DeviceInputEvent, DeviceTimestamp, PhysicalControl,
+        };
+        use crate::input::binding::{BindingEntry, LaneBinding};
+
+        let mut session = session_with_autoplay(chart_with_keysound());
+        session.autoplay = None;
+        let mut backend = BufferedInputBackend::default();
+        backend.push(DeviceInputEvent {
+            device: DeviceId(1),
+            control: PhysicalControl::GamepadButton("scratch-up".to_string()),
+            kind: InputKind::Press,
+            timestamp: DeviceTimestamp::Unknown,
+        });
+        session.input_system = InputSystem {
+            backend: Box::new(backend),
+            translator: Box::new(DefaultInputTranslator {
+                binding: LaneBinding {
+                    entries: vec![BindingEntry {
+                        device: None,
+                        control: PhysicalControl::GamepadButton("scratch-up".to_string()),
+                        lane: Lane::Scratch,
+                        scratch_direction: Some(ScratchDirection::Up),
+                    }],
+                },
+            }),
+        };
+
+        drain_pre_ready_visual_inputs(&mut session, TimeUs(2_000_000));
+        drain_pre_ready_visual_inputs(&mut session, TimeUs(2_500_000));
+
+        assert_eq!(session.lane_scratch_angle_delta_ms[Lane::Scratch.index()], 1_000);
+        assert_eq!(session.scratch_angle_last_render_at, Some(TimeUs(2_500_000)));
+        assert_eq!(session.score.past_notes, 0);
+        assert!(session.replay_recorder.events.is_empty());
     }
 
     #[test]
@@ -2129,6 +2354,8 @@ mod tests {
             scratch_angle_last_render_at: None,
             lane_auto_release_at: Default::default(),
             recent_judgements: Vec::new(),
+            pending_skin_events: Vec::new(),
+            next_skin_event_sequence: 0,
             result_judgements: Default::default(),
             hit_error_ring: HitErrorRing::default(),
             gauge_increase_started_at: None,
@@ -2155,6 +2382,7 @@ mod tests {
             lanecover_enabled: false,
             lift_enabled: true,
             hidden_enabled: false,
+            hispeed_auto_adjust: false,
             hidden_cover: 0.0,
             skin_offsets: Vec::new(),
             bga_enabled: true,

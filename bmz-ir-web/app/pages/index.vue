@@ -6,6 +6,10 @@ type SessionUser = {
 }
 
 const { user } = useUserSession()
+const localePath = useLocalePath()
+const { t } = useI18n()
+
+useSeoMeta({ title: () => t('home.title') })
 </script>
 
 <template>
@@ -16,7 +20,7 @@ const { user } = useUserSession()
           <p class="mb-2 text-sm font-medium text-primary-300">BMZ Internet Ranking</p>
           <h1 class="text-4xl font-semibold tracking-normal">BMZ IR</h1>
           <p class="mt-3 max-w-xl text-sm leading-6 text-neutral-300">
-            BMZ Player のスコア送信とランキング確認に使うアカウントを管理します。
+            {{ t('home.description') }}
           </p>
         </div>
 
@@ -25,49 +29,51 @@ const { user } = useUserSession()
             color="success"
             variant="subtle"
             icon="i-lucide-circle-check"
-            :description="`${user.displayName} としてログインしています。`"
+            :description="t('home.loggedInAs', { name: user.displayName })"
           />
           <div class="flex flex-col gap-3 sm:flex-row">
             <UButton
               color="neutral"
               icon="i-lucide-user-pen"
               size="xl"
-              to="/profile"
+              :to="localePath('/profile')"
               variant="subtle"
             >
-              プロフィール編集
+              {{ t('home.editProfile') }}
             </UButton>
             <UButton
               color="neutral"
               icon="i-lucide-settings"
               size="xl"
-              to="/settings"
+              :to="localePath('/settings')"
               variant="subtle"
             >
-              アカウント設定
+              {{ t('nav.settings') }}
             </UButton>
             <UButton
               color="neutral"
               icon="i-lucide-log-out"
               size="xl"
-              to="/logout"
+              :to="localePath('/logout')"
               variant="subtle"
             >
-              ログアウト
+              {{ t('nav.logout') }}
             </UButton>
           </div>
         </div>
 
         <div v-else class="flex flex-col gap-3 sm:flex-row">
-          <UButton color="primary" icon="i-lucide-log-in" size="xl" to="/login"> ログイン </UButton>
+          <UButton color="primary" icon="i-lucide-log-in" size="xl" :to="localePath('/login')">
+            {{ t('nav.login') }}
+          </UButton>
           <UButton
             color="neutral"
             icon="i-lucide-user-plus"
             size="xl"
-            to="/register"
+            :to="localePath('/register')"
             variant="subtle"
           >
-            登録
+            {{ t('nav.register') }}
           </UButton>
         </div>
 
@@ -76,23 +82,39 @@ const { user } = useUserSession()
             color="neutral"
             icon="i-lucide-list-music"
             size="xl"
-            to="/charts"
+            :to="localePath('/charts')"
             variant="subtle"
           >
-            譜面一覧・ランキング
+            {{ t('home.chartsRanking') }}
           </UButton>
-          <UButton color="neutral" icon="i-lucide-medal" size="xl" to="/courses" variant="subtle">
-            コース・段位
+          <UButton
+            color="neutral"
+            icon="i-lucide-medal"
+            size="xl"
+            :to="localePath('/courses')"
+            variant="subtle"
+          >
+            {{ t('home.coursesDan') }}
           </UButton>
           <UButton
             v-if="user"
             color="neutral"
             icon="i-lucide-trophy"
             size="xl"
-            :to="`/players/${(user as SessionUser).sub ?? (user as SessionUser).id}`"
+            :to="localePath(`/players/${(user as SessionUser).sub ?? (user as SessionUser).id}`)"
             variant="subtle"
           >
-            自分のスコア
+            {{ t('home.myScores') }}
+          </UButton>
+          <UButton
+            v-if="user"
+            color="neutral"
+            icon="i-lucide-calendar-days"
+            size="xl"
+            :to="localePath('/daily')"
+            variant="subtle"
+          >
+            {{ t('nav.daily') }}
           </UButton>
         </div>
       </div>

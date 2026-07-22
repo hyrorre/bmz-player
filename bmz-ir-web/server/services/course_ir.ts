@@ -12,9 +12,10 @@ import {
   requireNonNegativeInteger,
   resolveVerification,
   stableStringify,
+  validateSeedOptions,
   type IrRequestUser,
 } from './ir'
-import type { IrRuleMode } from '../../shared/types/ir'
+import type { IrRuleMode, IrVerificationStatus } from '../../shared/types/ir'
 
 const LN_POLICY_ALIASES = new Map([
   ['AutoLn', 'AutoLn'],
@@ -127,6 +128,37 @@ export function validateCourseScoreSubmission(value: unknown): CourseScoreSubmis
       throw new Error(`result.entries[${index}] must be an object`)
     }
   }
+  if (typeof payload.result.course_clear !== 'boolean') {
+    throw new Error('result.course_clear must be a boolean')
+  }
+  if (typeof payload.result.course_failed !== 'boolean') {
+    throw new Error('result.course_failed must be a boolean')
+  }
+  if (payload.result.played_entries === 0) {
+    throw new Error('result.played_entries must be at least 1')
+  }
+  if (payload.result.entries.length !== payload.result.played_entries) {
+    throw new Error('result.entries length must match result.played_entries')
+  }
+  if (payload.result.played_entries > payload.course.charts.length) {
+    throw new Error('result.played_entries exceeds course.charts length')
+  }
+  if (
+    !payload.result.course_failed &&
+    payload.result.played_entries !== payload.course.charts.length
+  ) {
+    throw new Error('a non-failed course must include every chart')
+  }
+  if (payload.result.course_failed && payload.result.course_clear) {
+    throw new Error('a failed course cannot be course_clear')
+  }
+  if (typeof payload.result.clear !== 'string') {
+    throw new Error('result.clear must be a string')
+  }
+  const expectedClear = courseResultClearType(payload.rule.gauge, payload.result.course_failed)
+  if (payload.result.clear !== expectedClear) {
+    throw new Error(`result.clear must be ${expectedClear} for the final course state`)
+  }
   if (!payload.idempotency_key || typeof payload.idempotency_key !== 'string') {
     throw new Error('idempotency_key is required')
   }
@@ -136,7 +168,32 @@ export function validateCourseScoreSubmission(value: unknown): CourseScoreSubmis
   ) {
     throw new Error('play_options.device_type is invalid')
   }
+  validateSeedOptions(payload.play_options)
   return payload
+}
+
+function courseResultClearType(gauge: string, courseFailed: boolean): string {
+  if (courseFailed) {
+    return 'Failed'
+  }
+  switch (gauge) {
+    case 'AssistEasy':
+      return 'AssistEasy'
+    case 'Easy':
+      return 'Easy'
+    case 'Normal':
+    case 'Class':
+      return 'Normal'
+    case 'Hard':
+    case 'ExClass':
+      return 'Hard'
+    case 'ExHard':
+    case 'Hazard':
+    case 'ExHardClass':
+      return 'ExHard'
+    default:
+      throw new Error('rule.gauge is invalid')
+  }
 }
 
 function normalizeCourseLnPolicy(value: unknown): string {
@@ -220,10 +277,13 @@ export async function submitCourseScore(
   // D1 batch 内で直前に作った course_score_id を best_course_scores から
   // 参照すると FK で失敗するため、course score を先に確定保存してから
   // best を更新する。重複 retry 時もここで best の復旧を試みる。
-  const bestStatement =
-    verification !== 'invalid'
-      ? await prepareBestCourseScoreUpsert(user.id, payload, score, clearRank, verification)
-      : null
+  const bestStatement = await prepareBestCourseScoreUpsert(
+    user.id,
+    payload,
+    score,
+    clearRank,
+    verification,
+  )
   if (bestStatement) {
     await bestStatement
   }
@@ -271,7 +331,7 @@ async function prepareBestCourseScoreUpsert(
   payload: CourseScoreSubmission,
   score: { id: string; serverReceivedAt: Date },
   clearRank: number,
-  verification: string,
+  verification: IrVerificationStatus,
 ) {
   const current = await db.query.bestCourseScores.findFirst({
     columns: { exScore: true, clearRank: true, bp: true, maxCombo: true },
@@ -324,7 +384,7 @@ async function prepareBestCourseScoreUpsert(
     scoring: payload.rule.scoring,
     playedAt: playedAtDate(payload.result.played_at),
     serverReceivedAt: score.serverReceivedAt,
-    verification: verification as 'unverified' | 'signed' | 'invalid' | 'trusted',
+    verification,
   }
   return db
     .insert(schema.bestCourseScores)

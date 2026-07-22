@@ -4,6 +4,7 @@ use bmz_chart::model::LongNoteMode;
 use bmz_core::judge::{Judge, TimingSide};
 use bmz_core::lane::{KeyMode, LANE_COUNT, Lane};
 use bmz_core::time::TimeUs;
+use bmz_gameplay::session::SkinRuntimeEvent;
 
 pub use crate::chart_graph::BpmGraphSegment;
 use crate::skin_offset::SkinOffsetValues;
@@ -45,21 +46,40 @@ pub struct OverlaySnapshot {
     pub fps_text: String,
 }
 
+/// BMZ skin extension logical inputs in E1/E2/E3/E4/UI Left/Right/Up/Down order.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct SkinLogicalInputSnapshot {
+    pub held: [bool; bmz_skin_document::SKIN_BMZ_INPUT_COUNT],
+}
+
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct RenderSnapshot {
+    /// 表示オフセットを含まない譜面時刻。判定演出・BGA・skin timer の基準に使う。
+    /// ノート等のレーン描画位置は app 側で表示オフセットを別途適用して構築する。
     pub time: TimeUs,
+    /// beatoraja STRING_PLAYER (2) に渡す現在プロフィール名。
+    pub player_name: String,
+    /// beatoraja NUMBER_CURRENT_FPS (20)。
+    pub current_fps: u32,
     /// プレイ画面に遷移してからの経過時間。
     /// timer 未指定 destination の通常アニメーション時刻の基準に使う。
     pub play_elapsed_time: TimeUs,
     /// アプリ起動後の経過時間 ms。
     /// beatoraja の NUMBER_OPERATING_TIME_HOUR/MINUTE/SECOND (27..29) に使う。
     pub operating_time_ms: i32,
+    pub skin_input: SkinLogicalInputSnapshot,
     /// READY timer (TIMER_READY=40) elapsed time. None while READY is not active yet.
     pub ready_elapsed_time: Option<TimeUs>,
+    /// 直近の小節線からの60 BPM換算拍時間 (TIMER_RHYTHM=140)。
+    pub rhythm_timer_elapsed_ms: Option<i32>,
+    /// 直近の4分拍からの実時間。PMS ノート拡縮に使い、TIMER_RHYTHM とは分けて扱う。
+    pub quarter_note_elapsed_ms: Option<i32>,
     /// BMS リソース (WAV 等) のバックグラウンドロードが完了しているか。
-    /// op 80 (ロード中) / 81 (ロード完了) の判定に使う。
+    /// READY 遷移可否の判定に使う。op 80/81 は ready_elapsed_time から判定する。
     /// preload 完了前の placeholder snapshot では false。
     pub resources_loaded: bool,
+    /// Audio/BGA resource load progress in the beatoraja RateType 102 range (0.0..=1.0).
+    pub resource_load_progress: f32,
     pub duration: TimeUs,
     pub title: String,
     pub subtitle: String,
@@ -69,14 +89,18 @@ pub struct RenderSnapshot {
     pub difficulty_name: String,
     pub judge_rank: Option<i32>,
     pub play_level: String,
-    /// Play option arrange label for skin ref 42/43.
+    /// 1P play option arrange label for skin ref 42/344.
     pub arrange: String,
+    /// 2P play option arrange label for skin ref 43/345.
+    pub arrange_2p: String,
     /// Play target option id for skin string refs 1 / 3 / 200..=219.
     pub target: String,
     pub combo: u32,
     pub max_combo: u32,
     pub ex_score: u32,
     pub total_notes: u32,
+    /// beatoraja NUMBER_SONGGAUGE_TOTAL / FLOAT_CHART_TOTALGAUGE (368)。
+    pub chart_total_gauge: f32,
     pub past_notes: u32,
     pub judge_counts: DisplayJudgeCounts,
     pub fast_slow_counts: FastSlowJudgeCounts,
@@ -104,6 +128,8 @@ pub struct RenderSnapshot {
     pub lift_enabled: bool,
     /// beatoraja `OPTION_HIDDEN1_ON` (273)。
     pub hidden_enabled: bool,
+    /// beatoraja image/index ref 342。
+    pub hispeed_auto_adjust: bool,
     pub note_display_duration_ms: i32,
     pub hidden_cover: f32,
     pub skin_offsets: SkinOffsetValues,
@@ -143,6 +169,10 @@ pub struct RenderSnapshot {
     pub autoplay: bool,
     /// リプレイ再生中かどうか。プレイ中 FAST/SLOW 表示など、入力由来の表示制御に使う。
     pub replay_playback: bool,
+    /// プラクティス再生中かどうか。beatoraja OPTION_PRACTICE (1080) 用。
+    pub practice_mode: bool,
+    /// このプレイがスコア保存対象か。beatoraja OPTION_SCORE_SAVE_ENABLED (61) 用。
+    pub score_save_enabled: bool,
     /// OPTION_MODE_COURSE (290) とステージ別 op (280..283 / 289) 用。未対応時は None。
     pub course_stage: Option<CourseStageMarker>,
     /// beatoraja STRING_COURSE1_TITLE..10_TITLE (150..159) 用。
@@ -160,6 +190,8 @@ pub struct RenderSnapshot {
     pub visible_long_notes: Vec<VisibleLongNote>,
     pub recent_inputs: Vec<DisplayInput>,
     pub recent_judgements: Vec<DisplayJudgement>,
+    /// このフレームで発生した key logger 等の skin runtime 向けイベント。
+    pub skin_events: Vec<SkinRuntimeEvent>,
     /// HitErrorVisualizer 用の直近判定タイミング (ms)。
     pub hit_error_ring: HitErrorRingSnapshot,
     /// Full combo timer elapsed ms (skin timer 48/49). None while inactive.
@@ -177,6 +209,9 @@ pub struct RenderSnapshot {
     /// Gauge max timer elapsed ms (skin timer 44/45). None while inactive.
     pub gauge_max_elapsed_ms: Option<i32>,
     pub bar_lines: Vec<VisibleBarLine>,
+    pub bpm_lines: Vec<VisibleBarLine>,
+    pub stop_lines: Vec<VisibleBarLine>,
+    pub time_lines: Vec<VisibleBarLine>,
     /// 各レーンのキー押下開始からの経過 ms(押下中のみ Some)。skin timer 100..=107 に渡る。
     pub keyon_ms: [Option<i32>; LANE_COUNT],
     /// 各レーンのキー解放からの経過 ms(離した直後のみ Some)。skin timer 120..=127 に渡る。
@@ -194,6 +229,10 @@ pub struct RenderSnapshot {
     pub hcn_damage_ms: [Option<i32>; LANE_COUNT],
     /// 右下に常時表示するオーバーレイ文字列。
     pub overlay: OverlaySnapshot,
+    /// `#STAGEFILE` テクスチャがロード済みなら true。
+    pub stagefile_background: bool,
+    /// ロード済み `#STAGEFILE` の画像サイズ。
+    pub stagefile_image_size: Option<crate::skin::SkinImageSize>,
     /// `#BACKBMP` テクスチャがロード済みなら true (BGA より下に描画)。
     pub backbmp_background: bool,
     /// BMS `#TEXT` / チャネル #99 で表示する譜面テキスト。
@@ -246,11 +285,11 @@ pub struct FastSlowJudgeCounts {
 
 impl FastSlowJudgeCounts {
     pub fn fast_total(self) -> u32 {
-        self.fast_great + self.fast_good + self.fast_bad + self.fast_poor
+        self.fast_great + self.fast_good + self.fast_bad + self.fast_poor + self.fast_empty_poor
     }
 
     pub fn slow_total(self) -> u32 {
-        self.slow_great + self.slow_good + self.slow_bad + self.slow_poor
+        self.slow_great + self.slow_good + self.slow_bad + self.slow_poor + self.slow_empty_poor
     }
 }
 

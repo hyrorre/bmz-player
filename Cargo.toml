@@ -18,7 +18,7 @@ resolver = "2"
 
 [workspace.package]
 edition = "2024"
-version = "0.1.6"
+version = "0.1.10"
 license = "GPL-3.0-only"
 authors = ["hyrorre"]
 
@@ -35,8 +35,14 @@ ryu = "1.0"
 toml = "0.8"
 base64 = "0.22"
 flate2 = "1"
+tar = "0.4.46"
+sevenz-rust2 = { version = "0.21.3", features = ["util"] }
+webbrowser = "1.2"
 bytemuck = "1"
 futures-util = "0.3"
+fluent-bundle = "0.16"
+fluent-syntax = "0.12"
+unic-langid = "0.9"
 
 rusqlite = { version = "0.31", features = ["bundled"] }
 
@@ -48,6 +54,7 @@ getrandom = "0.2"
 encoding_rs = "0.8"
 
 cpal = "0.18"
+windows = "0.62"
 ctrlc = "3"
 ffmpeg-next = "8"
 wgpu = "29"
@@ -64,6 +71,7 @@ rayon = "1"
 font-kit = "0.14"
 ab_glyph = "0.2.32"
 arboard = "3"
+clipboard-win = { version = "5.4.1", features = ["std"] }
 rfd = "0.15"
 libc = "0.2"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "bmp", "gif", "tga"] }

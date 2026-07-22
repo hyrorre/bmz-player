@@ -125,6 +125,8 @@ pub fn judge_windows_for_rank(base: JudgeWindows, percent: i32) -> JudgeWindows 
         scratch: judge_window_for_rank(base.scratch, percent),
         long_note_end: judge_window_for_rank(base.long_note_end, percent),
         long_scratch_end: judge_window_for_rank(base.long_scratch_end, percent),
+        long_note_release_margin_us: base.long_note_release_margin_us,
+        long_scratch_release_margin_us: base.long_scratch_release_margin_us,
     }
 }
 
@@ -177,12 +179,16 @@ pub fn judge_windows_for_rule_mode_and_keymode(
                 percent,
                 key_mode,
             ),
+            long_note_release_margin_us: base.long_note_release_margin_us,
+            long_scratch_release_margin_us: base.long_scratch_release_margin_us,
         },
         RuleMode::Lr2Oraja => JudgeWindows {
             note: lr2oraja_judge_window_for_rank(base.note, percent),
             scratch: lr2oraja_judge_window_for_rank(base.scratch, percent),
             long_note_end: lr2oraja_judge_window_for_rank(base.long_note_end, percent),
             long_scratch_end: lr2oraja_judge_window_for_rank(base.long_scratch_end, percent),
+            long_note_release_margin_us: base.long_note_release_margin_us,
+            long_scratch_release_margin_us: base.long_scratch_release_margin_us,
         },
         RuleMode::Dx => base,
     }
@@ -211,7 +217,10 @@ pub const fn note_judge_window_for_rule_mode(
     match rule_mode {
         RuleMode::Beatoraja => beatoraja_note_judge_window_for_keymode(key_mode),
         RuleMode::Lr2Oraja => lr2oraja_note_judge_window(),
-        RuleMode::Dx => dx_note_judge_window(),
+        RuleMode::Dx => match key_mode {
+            KeyMode::K9 => dx_pop_note_judge_window(),
+            _ => dx_note_judge_window(),
+        },
     }
 }
 
@@ -222,7 +231,10 @@ pub const fn judge_windows_for_keymode_and_rule_mode(
     match rule_mode {
         RuleMode::Beatoraja => beatoraja_judge_windows_for_keymode(key_mode),
         RuleMode::Lr2Oraja => lr2oraja_judge_windows(),
-        RuleMode::Dx => dx_judge_windows(),
+        RuleMode::Dx => match key_mode {
+            KeyMode::K9 => dx_pop_judge_windows(),
+            _ => dx_judge_windows(),
+        },
     }
 }
 
@@ -366,6 +378,11 @@ pub const fn beatoraja_judge_windows_for_keymode(key_mode: KeyMode) -> JudgeWind
         scratch: beatoraja_scratch_judge_window_for_keymode(key_mode),
         long_note_end: beatoraja_long_note_end_judge_window_for_keymode(key_mode),
         long_scratch_end: beatoraja_long_scratch_end_judge_window_for_keymode(key_mode),
+        long_note_release_margin_us: match key_mode {
+            KeyMode::K9 => 200_000,
+            _ => 0,
+        },
+        long_scratch_release_margin_us: 0,
     }
 }
 
@@ -476,6 +493,8 @@ pub const fn lr2oraja_judge_windows() -> JudgeWindows {
         scratch: lr2oraja_note_judge_window(),
         long_note_end: lr2oraja_long_note_end_judge_window(),
         long_scratch_end: lr2oraja_long_note_end_judge_window(),
+        long_note_release_margin_us: 0,
+        long_scratch_release_margin_us: 0,
     }
 }
 
@@ -512,6 +531,47 @@ pub const fn dx_judge_windows() -> JudgeWindows {
         scratch: dx_note_judge_window(),
         long_note_end: dx_long_note_end_judge_window(),
         long_scratch_end: dx_long_note_end_judge_window(),
+        long_note_release_margin_us: 0,
+        long_scratch_release_margin_us: 0,
+    }
+}
+
+/// LR2oraja Endless Dream `JudgeProperty.POP` used by DX MODE 9KEY.
+pub const fn dx_pop_note_judge_window() -> JudgeWindow {
+    JudgeWindow {
+        pgreat_us: 25_000,
+        great_us: 50_000,
+        good_us: 87_500,
+        bad_fast_us: 100_000,
+        bad_slow_us: 100_000,
+        empty_poor_fast_us: 500_000,
+        empty_poor_slow_us: 112_500,
+        mine_hit_us: 16_000,
+    }
+}
+
+pub const fn dx_pop_long_note_end_judge_window() -> JudgeWindow {
+    JudgeWindow {
+        pgreat_us: 120_000,
+        great_us: 150_000,
+        good_us: 217_000,
+        bad_fast_us: 283_000,
+        bad_slow_us: 283_000,
+        empty_poor_fast_us: 0,
+        empty_poor_slow_us: 0,
+        mine_hit_us: 16_000,
+    }
+}
+
+pub const fn dx_pop_judge_windows() -> JudgeWindows {
+    JudgeWindows {
+        note: dx_pop_note_judge_window(),
+        // 9KEY has no scratch lanes. Keep a harmless note-window fallback.
+        scratch: dx_pop_note_judge_window(),
+        long_note_end: dx_pop_long_note_end_judge_window(),
+        long_scratch_end: dx_pop_long_note_end_judge_window(),
+        long_note_release_margin_us: 200_000,
+        long_scratch_release_margin_us: 0,
     }
 }
 
@@ -937,6 +997,36 @@ mod tests {
         assert_eq!(windows.long_note_end.bad_fast_us, 200_000);
         assert_eq!(windows.long_note_end.empty_poor_fast_us, 0);
         assert_eq!(windows.long_scratch_end, windows.long_note_end);
+        assert_eq!(windows.long_note_release_margin_us, 0);
+    }
+
+    #[test]
+    fn dx_9key_uses_fixed_pop_windows_and_release_margin() {
+        let windows = judge_windows_for_keymode_and_rule_mode(KeyMode::K9, RuleMode::Dx);
+
+        assert_eq!(windows.note.pgreat_us, 25_000);
+        assert_eq!(windows.note.great_us, 50_000);
+        assert_eq!(windows.note.good_us, 87_500);
+        assert_eq!(windows.note.bad_fast_us, 100_000);
+        assert_eq!(windows.note.bad_slow_us, 100_000);
+        assert_eq!(windows.note.empty_poor_fast_us, 500_000);
+        assert_eq!(windows.note.empty_poor_slow_us, 112_500);
+        assert_eq!(windows.long_note_end.pgreat_us, 120_000);
+        assert_eq!(windows.long_note_end.great_us, 150_000);
+        assert_eq!(windows.long_note_end.good_us, 217_000);
+        assert_eq!(windows.long_note_end.bad_fast_us, 283_000);
+        assert_eq!(windows.long_note_release_margin_us, 200_000);
+
+        let scaled =
+            judge_windows_for_rule_mode_and_keymode(windows, 25, RuleMode::Dx, KeyMode::K9);
+        assert_eq!(scaled, windows);
+    }
+
+    #[test]
+    fn beatoraja_9key_uses_pms_release_margin() {
+        let windows = judge_windows_for_keymode_and_rule_mode(KeyMode::K9, RuleMode::Beatoraja);
+        assert_eq!(windows.long_note_release_margin_us, 200_000);
+        assert_eq!(windows.long_scratch_release_margin_us, 0);
     }
 
     #[test]

@@ -207,7 +207,10 @@ fn build_bga_table(
     let mut assets = Vec::new();
     let base_dir = source_path.parent().unwrap_or_else(|| Path::new(""));
 
-    for bmp in &intermediate.resources.bmps {
+    let mut bmps = intermediate.resources.bmps.iter().collect::<Vec<_>>();
+    bmps.sort_by_key(|bmp| bmp.key);
+
+    for bmp in bmps {
         let id = BgaAssetId(assets.len() as u32);
         let unresolved =
             if bmp.path.is_absolute() { bmp.path.clone() } else { base_dir.join(&bmp.path) };

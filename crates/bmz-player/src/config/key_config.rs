@@ -2,8 +2,8 @@ use bmz_core::lane::KeyMode;
 
 use super::play::{lane_from_config, lane_to_config};
 use super::play_input::{
-    default_play_bindings, gamepad_play_binding, is_gamepad_device, play_binding,
-    resolve_play_bindings,
+    default_play_bindings, gamepad_play_binding_for_device, is_gamepad_device, play_binding,
+    resolve_play_bindings, scratch_play_binding,
 };
 use super::profile_config::{
     BindingConfigEntry, InputActionConfig, LaneConfig, PlayModeInputConfig, ProfileConfig,
@@ -27,9 +27,15 @@ pub const KEY_CONFIG_MODES: &[KeyMode] = &[
 pub enum KeyBindingSlot {
     KeyboardPrimary,
     KeyboardSecondary,
+    /// 単一パッド用ワイルドカード (`device = "gamepad"`)。7K 等。
     Controller,
+    /// 1P 側コントローラ (`device = "gamepad1"`)。10K/14K 用。
+    Controller1P,
+    /// 2P 側コントローラ (`device = "gamepad2"`)。10K/14K 用。
+    Controller2P,
 }
 
+/// キー設定 UI のスロット雛形。`Controller` はレーン側に応じて 1P/2P へ解決する。
 pub const KEY_BINDING_SLOTS: &[KeyBindingSlot] = &[
     KeyBindingSlot::KeyboardPrimary,
     KeyBindingSlot::KeyboardSecondary,
@@ -42,6 +48,8 @@ impl KeyBindingSlot {
             Self::KeyboardPrimary => "KEYBOARD",
             Self::KeyboardSecondary => "KEYBOARD SUB",
             Self::Controller => "CONTROLLER",
+            Self::Controller1P => "CONTROLLER 1P",
+            Self::Controller2P => "CONTROLLER 2P",
         }
     }
 
@@ -49,7 +57,13 @@ impl KeyBindingSlot {
         match self {
             Self::KeyboardPrimary | Self::KeyboardSecondary => "keyboard",
             Self::Controller => "gamepad",
+            Self::Controller1P => "gamepad1",
+            Self::Controller2P => "gamepad2",
         }
+    }
+
+    pub fn is_controller(self) -> bool {
+        matches!(self, Self::Controller | Self::Controller1P | Self::Controller2P)
     }
 
     pub fn listen_hint(self) -> &'static str {
@@ -57,9 +71,46 @@ impl KeyBindingSlot {
             Self::KeyboardPrimary | Self::KeyboardSecondary => {
                 "PRESS KEY  Deleteキーで割り当てを解除"
             }
-            Self::Controller => "PRESS BTN",
+            Self::Controller | Self::Controller1P | Self::Controller2P => "PRESS BTN",
         }
     }
+}
+
+/// 10K/14K ではレーン側に応じて `Controller1P` / `Controller2P` を返す。
+pub fn controller_slot_for_lane(key_mode: KeyMode, lane: LaneConfig) -> KeyBindingSlot {
+    match key_mode {
+        KeyMode::K10 | KeyMode::K14 => {
+            if is_player2_lane(lane) {
+                KeyBindingSlot::Controller2P
+            } else {
+                KeyBindingSlot::Controller1P
+            }
+        }
+        _ => KeyBindingSlot::Controller,
+    }
+}
+
+pub fn is_player2_lane(lane: LaneConfig) -> bool {
+    matches!(
+        lane,
+        LaneConfig::Scratch2
+            | LaneConfig::Key8
+            | LaneConfig::Key9
+            | LaneConfig::Key10
+            | LaneConfig::Key11
+            | LaneConfig::Key12
+            | LaneConfig::Key13
+            | LaneConfig::Key14
+    )
+}
+
+/// `KEY_BINDING_SLOTS` の `Controller` 雛形をレーン側の実スロットへ解決する。
+pub fn resolve_binding_slot(
+    slot: KeyBindingSlot,
+    key_mode: KeyMode,
+    lane: LaneConfig,
+) -> KeyBindingSlot {
+    if slot == KeyBindingSlot::Controller { controller_slot_for_lane(key_mode, lane) } else { slot }
 }
 
 /// スクラッチの上下方向（UI / 選曲入力用。`Lane::Scratch` は増やさない）。
@@ -224,8 +275,10 @@ fn format_target_control(bindings: &[BindingConfigEntry], target: KeyBindingTarg
                 .get(1)
                 .cloned()
                 .unwrap_or_else(|| "(none)".to_string()),
-            KeyBindingSlot::Controller => {
-                let controls = gamepad_controls_for_lane(bindings, lane);
+            KeyBindingSlot::Controller
+            | KeyBindingSlot::Controller1P
+            | KeyBindingSlot::Controller2P => {
+                let controls = gamepad_controls_for_lane_device(bindings, lane, slot.device());
                 if controls.is_empty() { "(none)".to_string() } else { controls.join(" / ") }
             }
         },
@@ -235,9 +288,13 @@ fn format_target_control(bindings: &[BindingConfigEntry], target: KeyBindingTarg
                     .get(direction, slot)
                     .unwrap_or_else(|| "(none)".to_string())
             }
-            KeyBindingSlot::Controller => read_scratch_gamepad_slots(bindings, lane)
-                .get(direction)
-                .unwrap_or_else(|| "(none)".to_string()),
+            KeyBindingSlot::Controller
+            | KeyBindingSlot::Controller1P
+            | KeyBindingSlot::Controller2P => {
+                read_scratch_gamepad_slots_for_device(bindings, lane, slot.device())
+                    .get(direction)
+                    .unwrap_or_else(|| "(none)".to_string())
+            }
         },
         KeyBindingTarget::Action { .. } => "(none)".to_string(),
     }
@@ -261,7 +318,9 @@ fn format_action_binding(input: &ProfileInputConfig, target: KeyBindingTarget) -
         KeyBindingSlot::KeyboardSecondary => {
             controls.get(1).cloned().unwrap_or_else(|| "(none)".to_string())
         }
-        KeyBindingSlot::Controller => {
+        KeyBindingSlot::Controller
+        | KeyBindingSlot::Controller1P
+        | KeyBindingSlot::Controller2P => {
             if controls.is_empty() {
                 "(none)".to_string()
             } else {
@@ -286,7 +345,12 @@ impl ScratchKeyboardSlots {
             (ScratchDirection::Down, KeyBindingSlot::KeyboardPrimary) => self.down_primary,
             (ScratchDirection::Up, KeyBindingSlot::KeyboardSecondary) => self.up_secondary,
             (ScratchDirection::Down, KeyBindingSlot::KeyboardSecondary) => self.down_secondary,
-            (_, KeyBindingSlot::Controller) => None,
+            (
+                _,
+                KeyBindingSlot::Controller
+                | KeyBindingSlot::Controller1P
+                | KeyBindingSlot::Controller2P,
+            ) => None,
         }
     }
 
@@ -302,7 +366,12 @@ impl ScratchKeyboardSlots {
             (ScratchDirection::Down, KeyBindingSlot::KeyboardSecondary) => {
                 self.down_secondary = control
             }
-            (_, KeyBindingSlot::Controller) => {}
+            (
+                _,
+                KeyBindingSlot::Controller
+                | KeyBindingSlot::Controller1P
+                | KeyBindingSlot::Controller2P,
+            ) => {}
         }
     }
 }
@@ -333,28 +402,60 @@ fn read_scratch_keyboard_slots(
     bindings: &[BindingConfigEntry],
     lane: LaneConfig,
 ) -> ScratchKeyboardSlots {
-    let keys = keyboard_controls_for_lane(bindings, lane);
     let mut slots = ScratchKeyboardSlots::default();
-    if keys.is_empty() {
-        return slots;
+    let mut up = Vec::new();
+    let mut down = Vec::new();
+    let mut undirected = Vec::new();
+
+    for entry in
+        bindings.iter().filter(|entry| entry.device == "keyboard" && entry.lane == Some(lane))
+    {
+        match entry.scratch {
+            Some(ScratchDirectionConfig::Up) => up.push(entry.control.clone()),
+            Some(ScratchDirectionConfig::Down) => down.push(entry.control.clone()),
+            None => undirected.push(entry.control.clone()),
+        }
     }
-    slots.up_primary = keys.first().cloned();
-    slots.down_primary = keys.get(1).cloned().or_else(|| keys.first().cloned());
-    slots.up_secondary = keys.get(2).cloned();
-    slots.down_secondary = keys.get(3).cloned().or_else(|| keys.get(2).cloned());
+
+    slots.up_primary = up.first().cloned();
+    slots.up_secondary = up.get(1).cloned();
+    slots.down_primary = down.first().cloned();
+    slots.down_secondary = down.get(1).cloned();
+
+    // scratch direction を持たない旧 profile は従来の表示順
+    // (UP, DOWN, UP, DOWN) をフォールバックとして使う。
+    for (index, control) in undirected.into_iter().enumerate() {
+        match index {
+            0 if slots.up_primary.is_none() => slots.up_primary = Some(control),
+            1 if slots.down_primary.is_none() => slots.down_primary = Some(control),
+            2 if slots.up_secondary.is_none() => slots.up_secondary = Some(control),
+            3 if slots.down_secondary.is_none() => slots.down_secondary = Some(control),
+            _ => {}
+        }
+    }
+    if slots.down_primary.is_none() {
+        slots.down_primary = slots.up_primary.clone();
+    }
+    if slots.down_secondary.is_none() {
+        slots.down_secondary = slots.up_secondary.clone();
+    }
     slots
 }
 
-fn read_scratch_gamepad_slots(
+fn read_scratch_gamepad_slots_for_device(
     bindings: &[BindingConfigEntry],
     lane: LaneConfig,
+    device: &str,
 ) -> ScratchGamepadSlots {
     let mut slots = ScratchGamepadSlots::default();
     let mut undirected = Vec::new();
 
     // 明示の direction タグを最優先する。コントロール名 (+/-) からの推測は
     // 旧 entry 向けのフォールバックで、軸極性が逆のデバイスでは当てにならない。
-    for entry in bindings.iter().filter(|e| is_gamepad_device(&e.device) && e.lane == Some(lane)) {
+    for entry in bindings
+        .iter()
+        .filter(|e| device_matches_for_read(&e.device, device) && e.lane == Some(lane))
+    {
         let control = entry.control.clone();
         match entry.scratch {
             Some(ScratchDirectionConfig::Up) => slots.up = Some(control),
@@ -391,10 +492,14 @@ fn keyboard_controls_for_lane(bindings: &[BindingConfigEntry], lane: LaneConfig)
         .collect()
 }
 
-fn gamepad_controls_for_lane(bindings: &[BindingConfigEntry], lane: LaneConfig) -> Vec<String> {
+fn gamepad_controls_for_lane_device(
+    bindings: &[BindingConfigEntry],
+    lane: LaneConfig,
+    device: &str,
+) -> Vec<String> {
     bindings
         .iter()
-        .filter(|entry| is_gamepad_device(&entry.device) && entry.lane == Some(lane))
+        .filter(|entry| device_matches_for_read(&entry.device, device) && entry.lane == Some(lane))
         .map(|entry| entry.control.clone())
         .collect()
 }
@@ -448,6 +553,17 @@ fn remove_action_device_bindings(
 fn device_matches(entry_device: &str, requested_device: &str) -> bool {
     if requested_device == "gamepad" {
         is_gamepad_device(entry_device)
+    } else {
+        entry_device == requested_device
+    }
+}
+
+/// 表示・読取用。番号付きスロットは exact match を優先し、無ければ wildcard をフォールバック。
+fn device_matches_for_read(entry_device: &str, requested_device: &str) -> bool {
+    if requested_device == "gamepad" {
+        is_gamepad_device(entry_device)
+    } else if is_gamepad_device(requested_device) {
+        entry_device == requested_device || entry_device.eq_ignore_ascii_case("gamepad")
     } else {
         entry_device == requested_device
     }
@@ -519,7 +635,9 @@ fn apply_action_binding(
             write_action_keyboard_bindings(input, action, primary.as_deref(), Some(control));
             write_action_gamepad_bindings(input, action, &gamepad);
         }
-        KeyBindingSlot::Controller => {
+        KeyBindingSlot::Controller
+        | KeyBindingSlot::Controller1P
+        | KeyBindingSlot::Controller2P => {
             write_action_keyboard_bindings(input, action, primary.as_deref(), secondary.as_deref());
             write_action_gamepad_bindings(input, action, &[control.to_string()]);
         }
@@ -548,7 +666,9 @@ fn clear_action_binding(
             write_action_keyboard_bindings(input, action, primary.as_deref(), None);
             write_action_gamepad_bindings(input, action, &gamepad);
         }
-        KeyBindingSlot::Controller => {
+        KeyBindingSlot::Controller
+        | KeyBindingSlot::Controller1P
+        | KeyBindingSlot::Controller2P => {
             write_action_keyboard_bindings(input, action, primary.as_deref(), secondary.as_deref());
             write_action_gamepad_bindings(input, action, &[]);
         }
@@ -576,45 +696,58 @@ fn write_scratch_keyboard_bindings(
     slots: &ScratchKeyboardSlots,
 ) {
     remove_lane_device_bindings(bindings, lane, "keyboard");
-    for control in [
-        slots.up_primary.as_deref(),
-        slots.down_primary.as_deref(),
-        slots.up_secondary.as_deref(),
-        slots.down_secondary.as_deref(),
+    for (control, direction) in [
+        (slots.up_primary.as_deref(), ScratchDirectionConfig::Up),
+        (slots.down_primary.as_deref(), ScratchDirectionConfig::Down),
+        (slots.up_secondary.as_deref(), ScratchDirectionConfig::Up),
+        (slots.down_secondary.as_deref(), ScratchDirectionConfig::Down),
     ] {
         if let Some(control) = control.filter(|value| !value.is_empty()) {
-            bindings.push(play_binding(control, lane));
+            bindings.push(scratch_play_binding(control, lane, direction));
         }
     }
 }
 
-fn write_scratch_gamepad_bindings(
+fn write_scratch_gamepad_bindings_for_device(
     bindings: &mut Vec<BindingConfigEntry>,
     lane: LaneConfig,
+    device: &str,
     slots: &ScratchGamepadSlots,
 ) {
-    remove_lane_device_bindings(bindings, lane, "gamepad");
+    remove_lane_device_bindings(bindings, lane, device);
+    if device != "gamepad" {
+        // 番号付きへ書き込むときは wildcard を消して二重マッチを防ぐ。
+        bindings.retain(|entry| {
+            !(entry.device.eq_ignore_ascii_case("gamepad") && entry.lane == Some(lane))
+        });
+    }
     for (control, direction) in [
         (slots.up.as_deref(), ScratchDirectionConfig::Up),
         (slots.down.as_deref(), ScratchDirectionConfig::Down),
     ] {
         if let Some(control) = control.filter(|value| !value.is_empty()) {
-            let mut entry = gamepad_play_binding(control, lane);
+            let mut entry = gamepad_play_binding_for_device(device, control, lane);
             entry.scratch = Some(direction);
             bindings.push(entry);
         }
     }
 }
 
-fn write_lane_gamepad_bindings(
+fn write_lane_gamepad_bindings_for_device(
     bindings: &mut Vec<BindingConfigEntry>,
     lane: LaneConfig,
+    device: &str,
     controls: &[String],
 ) {
-    remove_lane_device_bindings(bindings, lane, "gamepad");
+    remove_lane_device_bindings(bindings, lane, device);
+    if device != "gamepad" {
+        bindings.retain(|entry| {
+            !(entry.device.eq_ignore_ascii_case("gamepad") && entry.lane == Some(lane))
+        });
+    }
     for control in controls {
         if !control.is_empty() {
-            bindings.push(gamepad_play_binding(control, lane));
+            bindings.push(gamepad_play_binding_for_device(device, control, lane));
         }
     }
 }
@@ -663,58 +796,58 @@ pub fn apply_play_binding(
             let controls = keyboard_controls_for_lane(&bindings, lane);
             let primary = controls.first().cloned();
             let secondary = controls.get(1).cloned();
-            let gamepad = gamepad_controls_for_lane(&bindings, lane);
-
-            remove_lane_device_bindings(&mut bindings, lane, "keyboard");
-            remove_lane_device_bindings(&mut bindings, lane, "gamepad");
 
             match slot {
                 KeyBindingSlot::KeyboardPrimary => {
+                    remove_lane_device_bindings(&mut bindings, lane, "keyboard");
                     write_lane_keyboard_bindings(
                         &mut bindings,
                         lane,
                         Some(control),
                         secondary.as_deref(),
                     );
-                    write_lane_gamepad_bindings(&mut bindings, lane, &gamepad);
                 }
                 KeyBindingSlot::KeyboardSecondary => {
+                    remove_lane_device_bindings(&mut bindings, lane, "keyboard");
                     write_lane_keyboard_bindings(
                         &mut bindings,
                         lane,
                         primary.as_deref(),
                         Some(control),
                     );
-                    write_lane_gamepad_bindings(&mut bindings, lane, &gamepad);
                 }
-                KeyBindingSlot::Controller => {
-                    write_lane_keyboard_bindings(
+                KeyBindingSlot::Controller
+                | KeyBindingSlot::Controller1P
+                | KeyBindingSlot::Controller2P => {
+                    write_lane_gamepad_bindings_for_device(
                         &mut bindings,
                         lane,
-                        primary.as_deref(),
-                        secondary.as_deref(),
+                        slot.device(),
+                        &[control.to_string()],
                     );
-                    write_lane_gamepad_bindings(&mut bindings, lane, &[control.to_string()]);
                 }
             }
         }
-        KeyBindingTarget::Scratch { lane, direction, slot } => {
-            let mut keyboard = read_scratch_keyboard_slots(&bindings, lane);
-            let mut gamepad = read_scratch_gamepad_slots(&bindings, lane);
-
-            match slot {
-                KeyBindingSlot::KeyboardPrimary | KeyBindingSlot::KeyboardSecondary => {
-                    keyboard.set(direction, slot, Some(control.to_string()));
-                    write_scratch_keyboard_bindings(&mut bindings, lane, &keyboard);
-                    write_scratch_gamepad_bindings(&mut bindings, lane, &gamepad);
-                }
-                KeyBindingSlot::Controller => {
-                    gamepad.set(direction, Some(control.to_string()));
-                    write_scratch_keyboard_bindings(&mut bindings, lane, &keyboard);
-                    write_scratch_gamepad_bindings(&mut bindings, lane, &gamepad);
-                }
+        KeyBindingTarget::Scratch { lane, direction, slot } => match slot {
+            KeyBindingSlot::KeyboardPrimary | KeyBindingSlot::KeyboardSecondary => {
+                let mut keyboard = read_scratch_keyboard_slots(&bindings, lane);
+                keyboard.set(direction, slot, Some(control.to_string()));
+                write_scratch_keyboard_bindings(&mut bindings, lane, &keyboard);
             }
-        }
+            KeyBindingSlot::Controller
+            | KeyBindingSlot::Controller1P
+            | KeyBindingSlot::Controller2P => {
+                let mut gamepad =
+                    read_scratch_gamepad_slots_for_device(&bindings, lane, slot.device());
+                gamepad.set(direction, Some(control.to_string()));
+                write_scratch_gamepad_bindings_for_device(
+                    &mut bindings,
+                    lane,
+                    slot.device(),
+                    &gamepad,
+                );
+            }
+        },
         KeyBindingTarget::Action { .. } => unreachable!("action binding is handled above"),
     }
 
@@ -744,76 +877,69 @@ pub fn clear_play_binding(
             let controls = keyboard_controls_for_lane(&bindings, lane);
             let primary = controls.first().cloned();
             let secondary = controls.get(1).cloned();
-            let gamepad = gamepad_controls_for_lane(&bindings, lane);
-
-            remove_lane_device_bindings(&mut bindings, lane, "keyboard");
-            remove_lane_device_bindings(&mut bindings, lane, "gamepad");
 
             match slot {
                 KeyBindingSlot::KeyboardPrimary => {
+                    remove_lane_device_bindings(&mut bindings, lane, "keyboard");
                     write_lane_keyboard_bindings(&mut bindings, lane, None, secondary.as_deref());
-                    write_lane_gamepad_bindings(&mut bindings, lane, &gamepad);
                 }
                 KeyBindingSlot::KeyboardSecondary => {
+                    remove_lane_device_bindings(&mut bindings, lane, "keyboard");
                     write_lane_keyboard_bindings(&mut bindings, lane, primary.as_deref(), None);
-                    write_lane_gamepad_bindings(&mut bindings, lane, &gamepad);
                 }
-                KeyBindingSlot::Controller => {
-                    write_lane_keyboard_bindings(
-                        &mut bindings,
-                        lane,
-                        primary.as_deref(),
-                        secondary.as_deref(),
-                    );
-                    write_lane_gamepad_bindings(&mut bindings, lane, &[]);
+                KeyBindingSlot::Controller
+                | KeyBindingSlot::Controller1P
+                | KeyBindingSlot::Controller2P => {
+                    write_lane_gamepad_bindings_for_device(&mut bindings, lane, slot.device(), &[]);
                 }
             }
         }
-        KeyBindingTarget::Scratch { lane, direction, slot } => {
-            let mut keyboard = read_scratch_keyboard_slots(&bindings, lane);
-            let mut gamepad = read_scratch_gamepad_slots(&bindings, lane);
-
-            match slot {
-                KeyBindingSlot::KeyboardPrimary | KeyBindingSlot::KeyboardSecondary => {
-                    keyboard.set(direction, slot, None);
-                    write_scratch_keyboard_bindings(&mut bindings, lane, &keyboard);
-                    write_scratch_gamepad_bindings(&mut bindings, lane, &gamepad);
-                }
-                KeyBindingSlot::Controller => {
-                    gamepad.set(direction, None);
-                    write_scratch_keyboard_bindings(&mut bindings, lane, &keyboard);
-                    write_scratch_gamepad_bindings(&mut bindings, lane, &gamepad);
-                }
+        KeyBindingTarget::Scratch { lane, direction, slot } => match slot {
+            KeyBindingSlot::KeyboardPrimary | KeyBindingSlot::KeyboardSecondary => {
+                let mut keyboard = read_scratch_keyboard_slots(&bindings, lane);
+                keyboard.set(direction, slot, None);
+                write_scratch_keyboard_bindings(&mut bindings, lane, &keyboard);
             }
-        }
+            KeyBindingSlot::Controller
+            | KeyBindingSlot::Controller1P
+            | KeyBindingSlot::Controller2P => {
+                let mut gamepad =
+                    read_scratch_gamepad_slots_for_device(&bindings, lane, slot.device());
+                gamepad.set(direction, None);
+                write_scratch_gamepad_bindings_for_device(
+                    &mut bindings,
+                    lane,
+                    slot.device(),
+                    &gamepad,
+                );
+            }
+        },
         KeyBindingTarget::Action { .. } => unreachable!("action binding is handled above"),
     }
 
     persist_bindings(input, key_mode, bindings)
 }
 
-pub fn snapshot_play_bindings(
+pub fn snapshot_play_mode_config(
     input: &ProfileInputConfig,
     key_mode: KeyMode,
-) -> Vec<BindingConfigEntry> {
-    input
-        .play
-        .get(key_mode.play_map_key())
-        .map(|config| config.bindings.clone())
-        .unwrap_or_default()
+) -> Option<PlayModeInputConfig> {
+    input.play.get(key_mode.play_map_key()).cloned()
 }
 
-pub fn restore_play_bindings(
+pub fn restore_play_mode_config(
     input: &mut ProfileInputConfig,
     key_mode: KeyMode,
-    bindings: Vec<BindingConfigEntry>,
+    config: Option<PlayModeInputConfig>,
 ) {
-    if bindings.is_empty() {
-        input.play.remove(key_mode.play_map_key());
-        return;
+    match config {
+        Some(config) => {
+            input.play.insert(key_mode.play_map_key().to_string(), config);
+        }
+        None => {
+            input.play.remove(key_mode.play_map_key());
+        }
     }
-    let config = ensure_play_mode_config(input, key_mode);
-    config.bindings = bindings;
 }
 
 fn ensure_play_mode_config(
@@ -823,6 +949,7 @@ fn ensure_play_mode_config(
     input.play.entry(key_mode.play_map_key().to_string()).or_insert_with(|| PlayModeInputConfig {
         inherit: None,
         bindings: default_play_bindings(key_mode),
+        ..Default::default()
     })
 }
 
@@ -1154,6 +1281,13 @@ mod tests {
             ),
             "W"
         );
+        let bindings = resolve_play_bindings(&profile.input, KeyMode::K7).unwrap();
+        assert!(bindings.iter().any(|entry| {
+            entry.control == "Q" && entry.scratch == Some(ScratchDirectionConfig::Up)
+        }));
+        assert!(bindings.iter().any(|entry| {
+            entry.control == "W" && entry.scratch == Some(ScratchDirectionConfig::Down)
+        }));
     }
 
     #[test]
@@ -1270,6 +1404,92 @@ mod tests {
                 ),
             ),
             "LControl"
+        );
+    }
+
+    #[test]
+    fn fourteen_k_controller_slots_preserve_numbered_devices() {
+        let mut profile = ProfileConfig::new_default("default", "Default", 0);
+        apply_play_binding(
+            &mut profile.input,
+            KeyMode::K14,
+            key_target(LaneConfig::Key1, KeyBindingSlot::Controller1P),
+            "Button1",
+        )
+        .unwrap();
+        apply_play_binding(
+            &mut profile.input,
+            KeyMode::K14,
+            key_target(LaneConfig::Key8, KeyBindingSlot::Controller2P),
+            "Button1",
+        )
+        .unwrap();
+
+        // Editing keyboard must not collapse gamepad1/2 into wildcard.
+        apply_play_binding(
+            &mut profile.input,
+            KeyMode::K14,
+            key_target(LaneConfig::Key1, KeyBindingSlot::KeyboardPrimary),
+            "Z",
+        )
+        .unwrap();
+
+        let bindings =
+            crate::config::play_input::resolve_play_bindings(&profile.input, KeyMode::K14).unwrap();
+        assert!(bindings.iter().any(|entry| {
+            entry.device == "gamepad1"
+                && entry.control == "Button1"
+                && entry.lane == Some(LaneConfig::Key1)
+        }));
+        assert!(bindings.iter().any(|entry| {
+            entry.device == "gamepad2"
+                && entry.control == "Button1"
+                && entry.lane == Some(LaneConfig::Key8)
+        }));
+        assert!(!bindings.iter().any(|entry| {
+            entry.device == "gamepad"
+                && entry.lane == Some(LaneConfig::Key1)
+                && entry.control == "Button1"
+        }));
+        assert_eq!(
+            format_play_binding(
+                &profile,
+                KeyMode::K14,
+                key_target(LaneConfig::Key1, KeyBindingSlot::Controller1P),
+            ),
+            "Button1"
+        );
+        assert_eq!(
+            format_play_binding(
+                &profile,
+                KeyMode::K14,
+                key_target(LaneConfig::Key8, KeyBindingSlot::Controller2P),
+            ),
+            "Button1"
+        );
+    }
+
+    #[test]
+    fn controller_slot_for_lane_splits_double_play_sides() {
+        assert_eq!(
+            controller_slot_for_lane(KeyMode::K14, LaneConfig::Key1),
+            KeyBindingSlot::Controller1P
+        );
+        assert_eq!(
+            controller_slot_for_lane(KeyMode::K14, LaneConfig::Scratch2),
+            KeyBindingSlot::Controller2P
+        );
+        assert_eq!(
+            controller_slot_for_lane(KeyMode::K10, LaneConfig::Key8),
+            KeyBindingSlot::Controller2P
+        );
+        assert_eq!(
+            controller_slot_for_lane(KeyMode::K7, LaneConfig::Key1),
+            KeyBindingSlot::Controller
+        );
+        assert_eq!(
+            controller_slot_for_lane(KeyMode::K9, LaneConfig::Key8),
+            KeyBindingSlot::Controller
         );
     }
 }

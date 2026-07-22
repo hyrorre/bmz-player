@@ -10,7 +10,9 @@ use serde::{Deserialize, Serialize};
 use crate::ln_policy::LnScorePolicy;
 use crate::select_options::{ArrangeOption, DoubleOption, DoubleOptionScoreBucket};
 
-pub const REPLAY_FILE_VERSION: u32 = 3;
+pub const REPLAY_FILE_VERSION: u32 = 4;
+pub const SEED_SCHEME_BEATORAJA_24BIT_V1: &str = "beatoraja_24bit_v1";
+pub const SEED_SCHEME_LEGACY_SHARED_V3: &str = "legacy_shared_v3";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ReplayFile {
@@ -29,6 +31,12 @@ pub struct ReplayFile {
     pub double_option: String,
     #[serde(default)]
     pub arrange_seed: Option<i64>,
+    #[serde(default)]
+    pub arrange_seed_2p: Option<i64>,
+    #[serde(default)]
+    pub bms_random_choices: Option<Vec<i32>>,
+    #[serde(default)]
+    pub seed_scheme: String,
     #[serde(default)]
     pub lane_shuffle_pattern: Option<Vec<u8>>,
     pub events: Vec<ReplayEvent>,
@@ -88,9 +96,39 @@ impl ReplayFile {
             arrange_2p: arrange_2p.to_persistent_str().to_string(),
             double_option: double_option.as_str().to_string(),
             arrange_seed,
+            arrange_seed_2p: None,
+            bms_random_choices: Some(Vec::new()),
+            seed_scheme: SEED_SCHEME_BEATORAJA_24BIT_V1.to_string(),
             lane_shuffle_pattern,
             events,
         }
+    }
+
+    pub fn with_randomization(
+        mut self,
+        arrange_seed_2p: Option<i64>,
+        bms_random_choices: Vec<i32>,
+    ) -> Self {
+        self.arrange_seed_2p = arrange_seed_2p;
+        self.bms_random_choices = Some(bms_random_choices);
+        self
+    }
+
+    pub fn with_seed_scheme(mut self, seed_scheme: impl Into<String>) -> Self {
+        self.seed_scheme = seed_scheme.into();
+        self
+    }
+
+    pub fn effective_seed_scheme(&self) -> &str {
+        if self.version < 4 || self.seed_scheme.is_empty() {
+            SEED_SCHEME_LEGACY_SHARED_V3
+        } else {
+            &self.seed_scheme
+        }
+    }
+
+    pub fn uses_legacy_seed_scheme(&self) -> bool {
+        self.effective_seed_scheme() == SEED_SCHEME_LEGACY_SHARED_V3
     }
 
     pub fn arrange_option(&self) -> ArrangeOption {
@@ -505,7 +543,9 @@ events = []
             Some(7777),
             Some(pattern.clone()),
             Vec::new(),
-        );
+        )
+        .with_randomization(Some(1234), vec![2, 1])
+        .with_seed_scheme(SEED_SCHEME_LEGACY_SHARED_V3);
 
         save_replay(&path, &replay).unwrap();
         let loaded = load_replay(&path).unwrap();
@@ -513,6 +553,9 @@ events = []
         assert_eq!(loaded.arrange, "Random");
         assert_eq!(loaded.arrange_option(), ArrangeOption::Random);
         assert_eq!(loaded.arrange_seed, Some(7777));
+        assert_eq!(loaded.arrange_seed_2p, Some(1234));
+        assert_eq!(loaded.bms_random_choices, Some(vec![2, 1]));
+        assert_eq!(loaded.effective_seed_scheme(), SEED_SCHEME_LEGACY_SHARED_V3);
         assert_eq!(loaded.lane_shuffle_pattern, Some(pattern));
 
         std::fs::remove_file(path).unwrap();
@@ -534,6 +577,9 @@ events = []
         assert_eq!(loaded.arrange_seed, None);
         assert_eq!(loaded.lane_shuffle_pattern, None);
         assert_eq!(loaded.random_seed, None);
+        assert_eq!(loaded.arrange_seed_2p, None);
+        assert_eq!(loaded.bms_random_choices, None);
+        assert_eq!(loaded.effective_seed_scheme(), SEED_SCHEME_LEGACY_SHARED_V3);
         assert_eq!(loaded.events.len(), 0);
     }
 

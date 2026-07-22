@@ -2,10 +2,15 @@ use anyhow::{Context, Result, bail};
 use bmz_audio::clock::AudioClock;
 use bmz_audio::engine::AudioEngine;
 use bmz_audio::ffmpeg_loader::FfmpegSampleLoader;
-use bmz_audio::loader::{LoadedSampleReport, SampleLoader, load_chart_samples};
+use bmz_audio::loader::{
+    LoadedSampleReport, SampleLoader, load_chart_samples, load_chart_samples_with_progress,
+};
 use bmz_audio::loudness::{analyze_chart_loudness, play_normalization_gain_for_loudness};
-use bmz_chart::import::import_bms_chart;
+use bmz_chart::import::{
+    BmsRandomSource, ImportResult, import_bms_chart, import_bms_chart_with_random_source,
+};
 use bmz_chart::model::{BgaAssetRef, NoteEvent, NoteKind, PlayableChart, TimingEventKind};
+use bmz_chart::start_margin::apply_start_note_margin;
 use bmz_core::clear::GaugeType;
 use bmz_core::ids::NoteId;
 use bmz_core::lane::{KeyMode, LANE_COUNT, Lane};
@@ -32,23 +37,25 @@ use bmz_gameplay::session::{
     BgmScheduler, GameSession, HispeedMode, InputOffsetAutoAdjustState, PlaySkinOffset, PlayState,
 };
 use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::config::play::{
     audio_mix_from_profile, bottom_shiftable_gauge_from_config, gauge_auto_shift_from_config,
-    gauge_type_from_config, lane_binding_for_chart, lane_unit_to_f32, play_offsets_from_profile,
+    gauge_type_from_config, lane_binding_for_chart_with_slots, lane_unit_to_f32,
+    play_offsets_from_profile,
 };
 use crate::config::profile_config::{
-    BgaExpandConfig, BgaModeConfig, HispeedModeConfig, JudgeAlgorithmConfig, LaneEffectConfig,
-    ProfileConfig,
+    BgaExpandConfig, BgaModeConfig, JudgeAlgorithmConfig, LaneEffectConfig, ProfileConfig,
 };
+use crate::input::gamepad::GamepadSlotMap;
 use crate::ln_policy::{
     LnPolicySetting, apply_ln_policy_to_chart, force_ln_mode_for_chart, score_ln_policy_for_chart,
 };
+use crate::random_option_seed::{JavaRandom, RandomOptionSeed, RandomOptionSeeds};
 use crate::screens::practice::{
     PracticeProperty, apply_practice_property, apply_practice_start_gauge,
 };
 use crate::select_options::{ArrangeOption, DoubleOption, HsFixOption, TargetOption};
+use crate::skin_loader::play_skin_selection_for;
 use crate::storage::library_db::ChartNormalizationAnalysis;
 use crate::storage::library_db::LibraryDatabase;
 use crate::storage::score_db::ScoreKey;
@@ -68,7 +75,16 @@ pub struct PlaySessionOptions {
     pub double_option: DoubleOption,
     pub hs_fix: HsFixOption,
     pub target: TargetOption,
+    /// beatoraja-compatible 24-bit RANDOM option seed for the 1P side.
     pub arrange_seed: Option<i64>,
+    /// beatoraja-compatible 24-bit RANDOM option seed for the 2P side.
+    pub arrange_seed_2p: Option<i64>,
+    /// Replay v3 and older used one unrestricted i64 seed with SplitMix64.
+    pub legacy_arrange_seed: bool,
+    /// Independent seed used only while selecting BMS `#RANDOM` branches.
+    pub bms_random_seed: Option<u64>,
+    /// Recorded `#RANDOM` decisions, in source order, for exact replay.
+    pub bms_random_choices: Option<Vec<i32>>,
     pub arrange_pattern: Option<Vec<u8>>,
     /// When set, overrides the gauge's starting value.  Used to carry the
     /// gauge between charts during a course.
@@ -92,6 +108,8 @@ pub struct PlaySessionOptions {
     /// `apply_course_constraints` が `CourseGaugeConstraint::Lr2/Keys5/...` を
     /// 解釈して設定する。`None` の場合はチャートの `KeyMode` から自動推定する。
     pub gauge_property: Option<GaugeProperty>,
+    /// 論理 `gamepad1`/`gamepad2` → 物理 gilrs id の対応。プレイ開始時に固定する。
+    pub gamepad_slots: GamepadSlotMap,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -99,8 +117,40 @@ pub struct AppliedArrange {
     pub arrange: ArrangeOption,
     pub arrange_2p: ArrangeOption,
     pub double_option: DoubleOption,
+    /// 1P option seed. New plays always use the beatoraja 24-bit range.
     pub seed: Option<i64>,
+    /// Independent 2P option seed for DP charts.
+    pub seed_2p: Option<i64>,
+    /// True only when replaying the pre-v4 SplitMix64 seed format.
+    pub legacy_seed: bool,
+    /// BMS `#RANDOM` decisions applied before the arrange modifier.
+    pub bms_random_choices: Vec<i32>,
     pub pattern: Option<Vec<u8>>,
+}
+
+impl AppliedArrange {
+    pub fn packed_beatoraja_seed_from_sides(&self) -> Option<i64> {
+        if self.legacy_seed {
+            return None;
+        }
+        let p1 = RandomOptionSeed::new(u32::try_from(self.seed?).ok()?)?;
+        let seeds = if let Some(seed_2p) = self.seed_2p {
+            let p2 = RandomOptionSeed::new(u32::try_from(seed_2p).ok()?)?;
+            RandomOptionSeeds::double(p1, p2)
+        } else {
+            RandomOptionSeeds::single(p1)
+        };
+        i64::try_from(seeds.pack()).ok()
+    }
+
+    pub fn packed_beatoraja_seed(&self, key_mode: KeyMode) -> Option<i64> {
+        if self.legacy_seed {
+            return None;
+        }
+        let packed = self.packed_beatoraja_seed_from_sides()?;
+        let has_p2 = self.seed_2p.is_some();
+        (has_p2 == matches!(key_mode, KeyMode::K10 | KeyMode::K14)).then_some(packed)
+    }
 }
 
 pub struct PreparedPlaySession {
@@ -139,6 +189,10 @@ impl Default for PlaySessionOptions {
             hs_fix: HsFixOption::Off,
             target: TargetOption::None,
             arrange_seed: None,
+            arrange_seed_2p: None,
+            legacy_arrange_seed: false,
+            bms_random_seed: None,
+            bms_random_choices: None,
             arrange_pattern: None,
             initial_gauge_value: None,
             initial_gauge_values: None,
@@ -148,6 +202,7 @@ impl Default for PlaySessionOptions {
             ln_policy_setting: LnPolicySetting::AutoLn,
             rule_mode: RuleMode::Beatoraja,
             gauge_property: None,
+            gamepad_slots: GamepadSlotMap::default(),
         }
     }
 }
@@ -184,21 +239,23 @@ pub fn apply_placeholder_session_visuals(
     let rule_mode = profile.play.rule_mode;
     let gauge_total = gauge_total_for_chart_and_rule_mode(None, snapshot.total_notes, rule_mode);
     let mut gauge = if gauge_auto_shift != GaugeAutoShiftMode::Off {
-        GaugeState::new_with_auto_shift_property_and_rule_mode(
+        GaugeState::new_with_auto_shift_property_and_rule_mode_and_keymode(
             gauge_type,
             gauge_auto_shift,
             gauge_total,
             snapshot.total_notes,
             gauge_property,
             rule_mode,
+            key_mode,
         )
     } else {
-        GaugeState::new_with_property_and_rule_mode(
+        GaugeState::new_with_property_and_rule_mode_and_keymode(
             gauge_type,
             gauge_total,
             snapshot.total_notes,
             gauge_property,
             rule_mode,
+            key_mode,
         )
     };
     gauge.set_bottom_shiftable_gauge(bottom_shiftable_gauge);
@@ -214,16 +271,18 @@ pub fn apply_placeholder_session_visuals(
     snapshot.gauge_max = current.definition.max;
     snapshot.gauge_border = current.definition.border;
 
-    snapshot.lift = lane_unit_to_f32(profile.lane.lift);
+    snapshot.lift = lift_from_profile(profile);
     snapshot.lane_cover = crate::config::play::clamp_lane_cover_for_lift(
         lane_unit_to_f32(profile.lane.sudden),
         snapshot.lift,
     );
-    let hispeed_mode = hispeed_mode_from_profile(profile.lane.hispeed_mode);
+    let hispeed_mode = hispeed_mode_from_hs_fix(options.hs_fix);
+    snapshot.hispeed_mode_index = hispeed_mode_index(hispeed_mode);
+    let target_green_number = profile.lane.target_green_number.max(1);
     snapshot.hispeed = placeholder_hispeed_for_mode(
         profile,
         hispeed_mode,
-        profile.lane.target_green_number.max(1),
+        target_green_number,
         snapshot.lane_cover,
         snapshot.lift,
         snapshot.now_bpm,
@@ -231,6 +290,7 @@ pub fn apply_placeholder_session_visuals(
     snapshot.lanecover_enabled = lanecover_enabled_from_profile(profile);
     snapshot.lift_enabled = lift_enabled_from_profile(profile);
     snapshot.hidden_enabled = hidden_enabled_from_profile(profile);
+    snapshot.hispeed_auto_adjust = profile.lane.hispeed_auto_adjust;
     snapshot.hidden_cover = hidden_cover_from_profile(profile);
 
     snapshot.key_mode = key_mode;
@@ -244,6 +304,12 @@ pub fn apply_placeholder_session_visuals(
     let replay_playback = options.replay_player.is_some();
     snapshot.autoplay = !replay_playback && (profile.play.auto_play || options.autoplay);
     snapshot.replay_playback = replay_playback;
+    snapshot.practice_mode = options.practice_mode;
+    snapshot.score_save_enabled =
+        !snapshot.autoplay && !snapshot.replay_playback && !snapshot.practice_mode;
+    snapshot.bga_enabled =
+        bga_enabled_from_profile(profile, snapshot.autoplay, snapshot.replay_playback);
+    snapshot.bga_stretch = bga_stretch_from_profile(profile);
     snapshot.target_ex_score = options.target.target_ex_score(snapshot.total_notes);
     snapshot.target = options.target.as_string();
 
@@ -282,7 +348,7 @@ pub fn apply_placeholder_session_visuals(
     // プロファイルのスキンオフセット (位置調整)。スクラッチ回転角は session が
     // 必要なので install 後の refresh に任せる。
     let mut offsets = bmz_render::skin_offset::SkinOffsetValues::default();
-    for offset in skin_offsets_from_profile(profile) {
+    for offset in skin_offsets_from_profile(profile, key_mode) {
         offsets.set(
             offset.id,
             bmz_render::skin_offset::SkinOffsetValue {
@@ -355,7 +421,11 @@ pub fn build_game_session_with_input_backend(
     let input_system = InputSystem {
         backend: input_backend,
         translator: Box::new(DefaultInputTranslator {
-            binding: lane_binding_for_chart(&profile.input, key_mode),
+            binding: lane_binding_for_chart_with_slots(
+                &profile.input,
+                key_mode,
+                options.gamepad_slots,
+            ),
         }),
     };
 
@@ -363,9 +433,9 @@ pub fn build_game_session_with_input_backend(
         chart.metadata.initial_bpm,
         &chart.timing_events,
     );
-    let hispeed_mode = hispeed_mode_from_profile(profile.lane.hispeed_mode);
+    let hispeed_mode = hispeed_mode_from_hs_fix(options.hs_fix);
     let target_green_number = profile.lane.target_green_number.max(1);
-    let lift = lane_unit_to_f32(profile.lane.lift);
+    let lift = lift_from_profile(profile);
     let lane_cover =
         crate::config::play::clamp_lane_cover_for_lift(lane_unit_to_f32(profile.lane.sudden), lift);
     let hsfix_base_bpm = hsfix_base_bpm_for_chart(&chart, &timing_map, options.hs_fix);
@@ -402,23 +472,25 @@ pub fn build_game_session_with_input_backend(
             .gauge_property
             .unwrap_or_else(|| GaugeProperty::from_keymode(chart.metadata.key_mode));
         if gauge_auto_shift != GaugeAutoShiftMode::Off {
-            let mut gauge = GaugeState::new_with_auto_shift_property_and_rule_mode(
+            let mut gauge = GaugeState::new_with_auto_shift_property_and_rule_mode_and_keymode(
                 gauge_type,
                 gauge_auto_shift,
                 gauge_total,
                 scored_total_notes,
                 gauge_property,
                 rule_mode,
+                chart.metadata.key_mode,
             );
             gauge.set_bottom_shiftable_gauge(bottom_shiftable_gauge);
             gauge
         } else {
-            GaugeState::new_with_property_and_rule_mode(
+            GaugeState::new_with_property_and_rule_mode_and_keymode(
                 gauge_type,
                 gauge_total,
                 scored_total_notes,
                 gauge_property,
                 rule_mode,
+                chart.metadata.key_mode,
             )
         }
     };
@@ -472,6 +544,8 @@ pub fn build_game_session_with_input_backend(
         scratch_angle_last_render_at: None,
         lane_auto_release_at: Default::default(),
         recent_judgements: Vec::new(),
+        pending_skin_events: Vec::new(),
+        next_skin_event_sequence: 0,
         result_judgements: Default::default(),
         hit_error_ring: HitErrorRing::default(),
         input_offset_auto_adjust_enabled,
@@ -493,8 +567,9 @@ pub fn build_game_session_with_input_backend(
         lanecover_enabled: lanecover_enabled_from_profile(profile),
         lift_enabled: lift_enabled_from_profile(profile),
         hidden_enabled: hidden_enabled_from_profile(profile),
+        hispeed_auto_adjust: profile.lane.hispeed_auto_adjust,
         hidden_cover: hidden_cover_from_profile(profile),
-        skin_offsets: skin_offsets_from_profile(profile),
+        skin_offsets: skin_offsets_from_profile(profile, key_mode),
         bga_enabled: bga_enabled_from_profile(profile, autoplay_enabled, is_replay),
         poor_bga_duration_us: poor_bga_duration_us_from_profile(profile),
         bga_stretch: bga_stretch_from_profile(profile),
@@ -534,6 +609,8 @@ fn apply_judge_constraint_to_windows(
         scratch: apply_judge_constraint_to_window(windows.scratch, constraint),
         long_note_end: apply_judge_constraint_to_window(windows.long_note_end, constraint),
         long_scratch_end: apply_judge_constraint_to_window(windows.long_scratch_end, constraint),
+        long_note_release_margin_us: windows.long_note_release_margin_us,
+        long_scratch_release_margin_us: windows.long_scratch_release_margin_us,
     }
 }
 
@@ -554,10 +631,20 @@ fn apply_judge_constraint_to_window(
     window
 }
 
-fn hispeed_mode_from_profile(mode: HispeedModeConfig) -> HispeedMode {
+fn hispeed_mode_from_hs_fix(hs_fix: HsFixOption) -> HispeedMode {
+    match hs_fix {
+        HsFixOption::Off => HispeedMode::Normal,
+        HsFixOption::StartBpm
+        | HsFixOption::MaxBpm
+        | HsFixOption::MainBpm
+        | HsFixOption::MinBpm => HispeedMode::Floating,
+    }
+}
+
+fn hispeed_mode_index(mode: HispeedMode) -> i32 {
     match mode {
-        HispeedModeConfig::Normal => HispeedMode::Normal,
-        HispeedModeConfig::Floating => HispeedMode::Floating,
+        HispeedMode::Normal => 0,
+        HispeedMode::Floating => 1,
     }
 }
 
@@ -680,7 +767,6 @@ fn judge_algorithm_from_config(value: JudgeAlgorithmConfig) -> JudgeAlgorithm {
         JudgeAlgorithmConfig::Combo => JudgeAlgorithm::Combo,
         JudgeAlgorithmConfig::Duration => JudgeAlgorithm::Duration,
         JudgeAlgorithmConfig::Lowest => JudgeAlgorithm::Lowest,
-        JudgeAlgorithmConfig::Score => JudgeAlgorithm::Score,
     }
 }
 
@@ -694,15 +780,19 @@ fn hidden_cover_from_profile(profile: &ProfileConfig) -> f32 {
 }
 
 fn lanecover_enabled_from_profile(profile: &ProfileConfig) -> bool {
-    let lift = lane_unit_to_f32(profile.lane.lift);
+    let lift = lift_from_profile(profile);
     let lane_cover =
         crate::config::play::clamp_lane_cover_for_lift(lane_unit_to_f32(profile.lane.sudden), lift);
     matches!(profile.play.lane_effect, LaneEffectConfig::Sudden | LaneEffectConfig::HiddenSudden)
         || lane_cover > 0.0
 }
 
-fn lift_enabled_from_profile(_profile: &ProfileConfig) -> bool {
-    true
+fn lift_from_profile(profile: &ProfileConfig) -> f32 {
+    if profile.lane.lift_enabled { lane_unit_to_f32(profile.lane.lift) } else { 0.0 }
+}
+
+fn lift_enabled_from_profile(profile: &ProfileConfig) -> bool {
+    profile.lane.lift_enabled
 }
 
 fn hidden_enabled_from_profile(profile: &ProfileConfig) -> bool {
@@ -729,9 +819,10 @@ fn bga_enabled_from_profile(profile: &ProfileConfig, autoplay: bool, replay: boo
     }
 }
 
-fn skin_offsets_from_profile(profile: &ProfileConfig) -> Vec<PlaySkinOffset> {
-    profile
-        .skin
+fn skin_offsets_from_profile(profile: &ProfileConfig, key_mode: KeyMode) -> Vec<PlaySkinOffset> {
+    // 各 key mode のアクティブな編集値だけを使う。`skin.history` はスキン切替時に
+    // このスロットへ復元するためのキャッシュであり、実行時に直接参照しない。
+    play_skin_selection_for(&profile.skin, key_mode)
         .offsets
         .iter()
         .copied()
@@ -772,9 +863,12 @@ pub fn load_game_session_for_chart_with_input_backend(
     let Some(path) = library_db.primary_chart_file_path(chart_id)? else {
         bail!("chart file not found for chart id {chart_id}");
     };
-    let import =
-        import_bms_chart(std::path::Path::new(&path), random_seed_for_chart(&options), true)
-            .with_context(|| format!("failed to import chart file: {path}"))?;
+    let import = import_bms_chart_with_random_source(
+        std::path::Path::new(&path),
+        bms_random_source_for_chart(&options),
+        true,
+    )
+    .with_context(|| format!("failed to import chart file: {path}"))?;
     Ok(build_game_session_with_input_backend(
         Arc::new(import.chart),
         profile,
@@ -783,11 +877,15 @@ pub fn load_game_session_for_chart_with_input_backend(
     ))
 }
 
-/// `import_bms_chart` に渡す BMS `#RANDOM` / `#IF` 解決用 seed。
-/// アレンジ seed (リプレイにも保存される) と同じ値を流用することで、
-/// 同じ replay を再生したときに RANDOM が必ず同じ分岐へ落ちることを保証する。
-fn random_seed_for_chart(options: &PlaySessionOptions) -> Option<u64> {
-    options.arrange_seed.map(|s| s as u64)
+fn bms_random_source_for_chart(options: &PlaySessionOptions) -> BmsRandomSource {
+    if let Some(choices) = &options.bms_random_choices {
+        BmsRandomSource::Choices(choices.clone())
+    } else if options.legacy_arrange_seed {
+        // Replay v3 and older derived `#RANDOM` from the shared arrange seed.
+        BmsRandomSource::Seed(options.arrange_seed.map(|seed| seed as u64))
+    } else {
+        BmsRandomSource::Seed(options.bms_random_seed)
+    }
 }
 
 pub fn build_audio_engine_for_chart(
@@ -797,6 +895,17 @@ pub fn build_audio_engine_for_chart(
 ) -> (AudioEngine, Vec<LoadedSampleReport>) {
     let mut audio = AudioEngine::new(sample_rate);
     let sample_report = load_chart_samples(&mut audio, chart, loader);
+    (audio, sample_report)
+}
+
+fn build_audio_engine_for_chart_with_progress(
+    chart: &PlayableChart,
+    sample_rate: u32,
+    loader: &mut dyn SampleLoader,
+    on_progress: impl FnMut(usize, usize),
+) -> (AudioEngine, Vec<LoadedSampleReport>) {
+    let mut audio = AudioEngine::new(sample_rate);
+    let sample_report = load_chart_samples_with_progress(&mut audio, chart, loader, on_progress);
     (audio, sample_report)
 }
 
@@ -837,11 +946,31 @@ pub fn preload_play_session_for_chart(
     options: PlaySessionOptions,
     normalize_chart_volume: bool,
 ) -> Result<PreloadedPlaySession> {
+    preload_play_session_for_chart_with_progress(
+        library_db,
+        chart_id,
+        options,
+        normalize_chart_volume,
+        |_, _| {},
+    )
+}
+
+pub fn preload_play_session_for_chart_with_progress(
+    library_db: &LibraryDatabase,
+    chart_id: i64,
+    options: PlaySessionOptions,
+    normalize_chart_volume: bool,
+    on_progress: impl FnMut(usize, usize),
+) -> Result<PreloadedPlaySession> {
     let imported = load_transformed_chart_for_play(library_db, chart_id, &options)?;
     let chart = Arc::new(imported.chart);
     let mut loader = FfmpegSampleLoader::default();
-    let (audio, sample_report) =
-        build_audio_engine_for_chart(&chart, options.sample_rate, &mut loader);
+    let (audio, sample_report) = build_audio_engine_for_chart_with_progress(
+        &chart,
+        options.sample_rate,
+        &mut loader,
+        on_progress,
+    );
     let normalization_gain = load_or_compute_normalization_gain(
         library_db,
         chart_id,
@@ -858,6 +987,33 @@ pub fn preload_play_session_for_chart(
         applied_arrange: imported.applied_arrange,
         score_key: imported.score_key,
     })
+}
+
+/// Rebuild only the audio side of an already transformed chart.
+///
+/// Same-arrange quick retry can keep the exact chart/BGA resources, but the
+/// sound bank is rebuilt from that chart so every `SoundId` is paired with the
+/// asset declared by the retried session.  This intentionally does not carry
+/// mixer voices, scheduled sounds, or any other playback state across retries.
+pub fn preload_play_session_reloading_audio_with_progress(
+    chart: Arc<PlayableChart>,
+    sample_rate: u32,
+    normalization_gain: f32,
+    applied_arrange: AppliedArrange,
+    score_key: ScoreKey,
+    on_progress: impl FnMut(usize, usize),
+) -> PreloadedPlaySession {
+    let mut loader = FfmpegSampleLoader::default();
+    let (audio, sample_report) =
+        build_audio_engine_for_chart_with_progress(&chart, sample_rate, &mut loader, on_progress);
+    PreloadedPlaySession {
+        chart,
+        audio,
+        sample_report,
+        normalization_gain,
+        applied_arrange,
+        score_key,
+    }
 }
 
 struct TransformedPlayChart {
@@ -879,13 +1035,32 @@ pub fn load_source_chart_for_chart(
         .chart)
 }
 
+fn load_source_chart_import_for_play(
+    library_db: &LibraryDatabase,
+    chart_id: i64,
+    options: &PlaySessionOptions,
+) -> Result<ImportResult> {
+    let Some(path) = library_db.primary_chart_file_path(chart_id)? else {
+        bail!("chart file not found for chart id {chart_id}");
+    };
+    import_bms_chart_with_random_source(
+        std::path::Path::new(&path),
+        bms_random_source_for_chart(options),
+        true,
+    )
+    .with_context(|| format!("failed to import chart file: {path}"))
+}
+
 fn load_transformed_chart_for_play(
     library_db: &LibraryDatabase,
     chart_id: i64,
     options: &PlaySessionOptions,
 ) -> Result<TransformedPlayChart> {
-    let mut chart =
-        load_source_chart_for_chart(library_db, chart_id, random_seed_for_chart(options))?;
+    let import = load_source_chart_import_for_play(library_db, chart_id, options)?;
+    let mut chart = import.chart;
+    // beatoraja BMSModelUtils.setStartNoteTime(model, 1000) 相当。
+    // LN / arrange より前に適用し、practice 切出しもシフト後時刻を使う。
+    apply_start_note_margin(&mut chart);
     let applied_double_option =
         options.double_option.normalize_for_key_mode(chart.metadata.key_mode);
     let score_key = ScoreKey::with_options(
@@ -906,9 +1081,12 @@ fn load_transformed_chart_for_play(
         options.arrange,
         options.arrange_2p,
         options.arrange_seed,
+        options.arrange_seed_2p,
+        options.legacy_arrange_seed,
         options.arrange_pattern.as_deref(),
     );
     applied_arrange.double_option = applied_double_option;
+    applied_arrange.bms_random_choices = import.bms_random_choices;
 
     Ok(TransformedPlayChart { chart, applied_arrange, score_key })
 }
@@ -927,8 +1105,7 @@ pub fn load_chart_bga_assets_for_chart(
     chart_id: i64,
     options: &PlaySessionOptions,
 ) -> Result<Vec<BgaAssetRef>> {
-    Ok(load_source_chart_for_chart(library_db, chart_id, random_seed_for_chart(options))?
-        .bga_assets)
+    Ok(load_source_chart_import_for_play(library_db, chart_id, options)?.chart.bga_assets)
 }
 
 pub fn build_practice_prepared_from_preloaded(
@@ -1027,15 +1204,18 @@ fn load_or_compute_normalization_gain(
 }
 
 pub fn generate_arrange_seed() -> i64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_nanos() as i64).unwrap_or(12345)
+    i64::from(RandomOptionSeeds::fresh(false).p1.value())
 }
 
-fn normal_applied_arrange() -> AppliedArrange {
+fn normal_applied_arrange(seed: i64, legacy_seed: bool) -> AppliedArrange {
     AppliedArrange {
         arrange: ArrangeOption::Normal,
         arrange_2p: ArrangeOption::Normal,
         double_option: DoubleOption::Off,
-        seed: None,
+        seed: Some(seed),
+        seed_2p: None,
+        legacy_seed,
+        bms_random_choices: Vec::new(),
         pattern: None,
     }
 }
@@ -1046,9 +1226,20 @@ pub fn apply_arrange(
     seed: Option<i64>,
     pattern: Option<&[u8]>,
 ) -> AppliedArrange {
+    apply_arrange_internal(chart, arrange, seed, pattern, false)
+}
+
+fn apply_arrange_internal(
+    chart: &mut PlayableChart,
+    arrange: ArrangeOption,
+    seed: Option<i64>,
+    pattern: Option<&[u8]>,
+    legacy_seed: bool,
+) -> AppliedArrange {
     let key_mode = chart.metadata.key_mode;
+    let used_seed = seed.unwrap_or_else(generate_arrange_seed);
     if arrange_requires_scratch(arrange) && !key_mode_has_scratch(key_mode) {
-        return normal_applied_arrange();
+        return normal_applied_arrange(used_seed, legacy_seed);
     }
 
     if let Some(perm) = pattern {
@@ -1058,13 +1249,16 @@ pub fn apply_arrange(
             arrange,
             arrange_2p: ArrangeOption::Normal,
             double_option: DoubleOption::Off,
-            seed,
+            seed: Some(used_seed),
+            seed_2p: None,
+            legacy_seed,
+            bms_random_choices: Vec::new(),
             pattern: Some(perm.to_vec()),
         };
     }
 
     match arrange {
-        ArrangeOption::Normal => normal_applied_arrange(),
+        ArrangeOption::Normal => normal_applied_arrange(used_seed, legacy_seed),
         ArrangeOption::Mirror => {
             let perm = mirror_permutation(key_mode);
             apply_lane_permutation(chart, &perm);
@@ -1072,55 +1266,66 @@ pub fn apply_arrange(
                 arrange: ArrangeOption::Mirror,
                 arrange_2p: ArrangeOption::Normal,
                 double_option: DoubleOption::Off,
-                seed: None,
+                seed: Some(used_seed),
+                seed_2p: None,
+                legacy_seed,
+                bms_random_choices: Vec::new(),
                 pattern: Some(perm.iter().map(|&i| i as u8).collect()),
             }
         }
         ArrangeOption::Random => {
-            let used_seed = seed.unwrap_or_else(generate_arrange_seed);
-            let perm = random_lane_permutation(used_seed, key_mode, false);
+            let perm = random_lane_permutation(used_seed, key_mode, false, legacy_seed);
             apply_lane_permutation(chart, &perm);
             AppliedArrange {
                 arrange: ArrangeOption::Random,
                 arrange_2p: ArrangeOption::Normal,
                 double_option: DoubleOption::Off,
                 seed: Some(used_seed),
+                seed_2p: None,
+                legacy_seed,
+                bms_random_choices: Vec::new(),
                 pattern: Some(perm.iter().map(|&i| i as u8).collect()),
             }
         }
         ArrangeOption::RRandom => {
-            let used_seed = seed.unwrap_or_else(generate_arrange_seed);
-            let perm = rotate_lane_permutation(used_seed, key_mode, false);
+            let perm = rotate_lane_permutation(used_seed, key_mode, false, legacy_seed);
             apply_lane_permutation(chart, &perm);
             AppliedArrange {
                 arrange: ArrangeOption::RRandom,
                 arrange_2p: ArrangeOption::Normal,
                 double_option: DoubleOption::Off,
                 seed: Some(used_seed),
+                seed_2p: None,
+                legacy_seed,
+                bms_random_choices: Vec::new(),
                 pattern: Some(perm.iter().map(|&i| i as u8).collect()),
             }
         }
         ArrangeOption::RandomEx => {
-            let used_seed = seed.unwrap_or_else(generate_arrange_seed);
-            let perm = random_lane_permutation(used_seed, key_mode, true);
+            let perm = random_lane_permutation(used_seed, key_mode, true, legacy_seed);
             apply_lane_permutation(chart, &perm);
             AppliedArrange {
                 arrange: ArrangeOption::RandomEx,
                 arrange_2p: ArrangeOption::Normal,
                 double_option: DoubleOption::Off,
                 seed: Some(used_seed),
+                seed_2p: None,
+                legacy_seed,
+                bms_random_choices: Vec::new(),
                 pattern: Some(perm.iter().map(|&i| i as u8).collect()),
             }
         }
         ArrangeOption::FRandom | ArrangeOption::MFRandom => {
-            let used_seed = seed.unwrap_or_else(generate_arrange_seed);
-            let perm = f_random_lane_permutation(used_seed, key_mode, arrange);
+            let perm = f_random_lane_permutation(used_seed, key_mode, arrange, legacy_seed);
             apply_lane_permutation(chart, &perm);
             AppliedArrange {
                 arrange,
                 arrange_2p: ArrangeOption::Normal,
                 double_option: DoubleOption::Off,
                 seed: Some(used_seed),
+                seed_2p: None,
+                legacy_seed,
+                bms_random_choices: Vec::new(),
                 pattern: Some(perm.iter().map(|&i| i as u8).collect()),
             }
         }
@@ -1129,13 +1334,15 @@ pub fn apply_arrange(
         | ArrangeOption::HRandom
         | ArrangeOption::AllScratch
         | ArrangeOption::SRandomEx => {
-            let used_seed = seed.unwrap_or_else(generate_arrange_seed);
-            apply_note_arrange(chart, arrange, used_seed);
+            apply_note_arrange(chart, arrange, used_seed, legacy_seed);
             AppliedArrange {
                 arrange,
                 arrange_2p: ArrangeOption::Normal,
                 double_option: DoubleOption::Off,
                 seed: Some(used_seed),
+                seed_2p: None,
+                legacy_seed,
+                bms_random_choices: Vec::new(),
                 pattern: None,
             }
         }
@@ -1158,8 +1365,21 @@ pub fn apply_arrange_pair(
     arrange_1p: ArrangeOption,
     arrange_2p: ArrangeOption,
     seed: Option<i64>,
+    seed_2p: Option<i64>,
+    legacy_seed: bool,
     pattern: Option<&[u8]>,
 ) -> AppliedArrange {
+    let used_seed = seed.unwrap_or_else(generate_arrange_seed);
+    let key_mode = chart.metadata.key_mode;
+    if !matches!(key_mode, KeyMode::K10 | KeyMode::K14) {
+        return apply_arrange_internal(chart, arrange_1p, Some(used_seed), pattern, legacy_seed);
+    }
+
+    let used_seed_2p = if legacy_seed {
+        used_seed.wrapping_add(0x9e37_79b9)
+    } else {
+        seed_2p.unwrap_or_else(generate_arrange_seed)
+    };
     if let Some(perm) = pattern {
         let perm_usize: Vec<usize> = perm.iter().map(|&i| i as usize).collect();
         apply_lane_permutation(chart, &perm_usize);
@@ -1167,31 +1387,26 @@ pub fn apply_arrange_pair(
             arrange: arrange_1p,
             arrange_2p,
             double_option: DoubleOption::Off,
-            seed,
+            seed: Some(used_seed),
+            seed_2p: Some(used_seed_2p),
+            legacy_seed,
+            bms_random_choices: Vec::new(),
             pattern: Some(perm.to_vec()),
         };
     }
 
-    let key_mode = chart.metadata.key_mode;
-    if !matches!(key_mode, KeyMode::K10 | KeyMode::K14) {
-        return apply_arrange(chart, arrange_1p, seed, None);
-    }
-
-    let used_seed = (arrange_1p.uses_seed() || arrange_2p.uses_seed())
-        .then(|| seed.unwrap_or_else(generate_arrange_seed));
     let mut combined_perm: Vec<usize> = (0..LANE_COUNT).collect();
     let mut has_perm = false;
 
-    if let Some(perm) = apply_arrange_side(chart, arrange_1p, used_seed, ArrangeSide::P1) {
+    if let Some(perm) =
+        apply_arrange_side(chart, arrange_1p, Some(used_seed), ArrangeSide::P1, legacy_seed)
+    {
         merge_lane_permutation(&mut combined_perm, &perm);
         has_perm = true;
     }
-    if let Some(perm) = apply_arrange_side(
-        chart,
-        arrange_2p,
-        used_seed.map(|seed| seed.wrapping_add(0x9e37_79b9)),
-        ArrangeSide::P2,
-    ) {
+    if let Some(perm) =
+        apply_arrange_side(chart, arrange_2p, Some(used_seed_2p), ArrangeSide::P2, legacy_seed)
+    {
         merge_lane_permutation(&mut combined_perm, &perm);
         has_perm = true;
     }
@@ -1200,7 +1415,10 @@ pub fn apply_arrange_pair(
         arrange: arrange_1p,
         arrange_2p,
         double_option: DoubleOption::Off,
-        seed: used_seed,
+        seed: Some(used_seed),
+        seed_2p: Some(used_seed_2p),
+        legacy_seed,
+        bms_random_choices: Vec::new(),
         pattern: has_perm.then(|| combined_perm.iter().map(|&i| i as u8).collect()),
     }
 }
@@ -1331,6 +1549,7 @@ fn apply_arrange_side(
     arrange: ArrangeOption,
     seed: Option<i64>,
     side: ArrangeSide,
+    legacy_seed: bool,
 ) -> Option<Vec<usize>> {
     if arrange == ArrangeOption::Normal {
         return None;
@@ -1357,16 +1576,16 @@ fn apply_arrange_side(
         }
         ArrangeOption::Random => {
             let mut perm: Vec<usize> = (0..LANE_COUNT).collect();
-            let mut rng = SplitMix64::new(seed.unwrap_or_else(generate_arrange_seed));
+            let mut rng = ArrangeRng::new(seed.unwrap_or_else(generate_arrange_seed), legacy_seed);
             for group in groups {
-                fisher_yates_shuffle(&mut rng, &group, &mut perm);
+                shuffle_lane_group(&mut rng, &group, &mut perm, legacy_seed);
             }
             apply_lane_permutation(chart, &perm);
             Some(perm)
         }
         ArrangeOption::RRandom => {
             let mut perm: Vec<usize> = (0..LANE_COUNT).collect();
-            let mut rng = SplitMix64::new(seed.unwrap_or_else(generate_arrange_seed));
+            let mut rng = ArrangeRng::new(seed.unwrap_or_else(generate_arrange_seed), legacy_seed);
             for group in groups {
                 rotate_lane_group(&mut rng, &group, &mut perm);
             }
@@ -1375,9 +1594,9 @@ fn apply_arrange_side(
         }
         ArrangeOption::RandomEx => {
             let mut perm: Vec<usize> = (0..LANE_COUNT).collect();
-            let mut rng = SplitMix64::new(seed.unwrap_or_else(generate_arrange_seed));
+            let mut rng = ArrangeRng::new(seed.unwrap_or_else(generate_arrange_seed), legacy_seed);
             for group in groups {
-                fisher_yates_shuffle(&mut rng, &group, &mut perm);
+                shuffle_lane_group(&mut rng, &group, &mut perm, legacy_seed);
             }
             apply_lane_permutation(chart, &perm);
             Some(perm)
@@ -1388,6 +1607,7 @@ fn apply_arrange_side(
                 chart.metadata.key_mode,
                 arrange,
                 side,
+                legacy_seed,
             );
             apply_lane_permutation(chart, &perm);
             Some(perm)
@@ -1402,6 +1622,7 @@ fn apply_arrange_side(
                 arrange,
                 seed.unwrap_or_else(generate_arrange_seed),
                 &groups,
+                legacy_seed,
             );
             None
         }
@@ -1424,17 +1645,27 @@ fn mirror_permutation(key_mode: KeyMode) -> Vec<usize> {
     perm
 }
 
-fn random_lane_permutation(seed: i64, key_mode: KeyMode, include_scratch: bool) -> Vec<usize> {
+fn random_lane_permutation(
+    seed: i64,
+    key_mode: KeyMode,
+    include_scratch: bool,
+    legacy_seed: bool,
+) -> Vec<usize> {
     let mut perm: Vec<usize> = (0..LANE_COUNT).collect();
-    let mut rng = SplitMix64::new(seed);
+    let mut rng = ArrangeRng::new(seed, legacy_seed);
     for group in arrange_lane_groups(key_mode, include_scratch) {
-        fisher_yates_shuffle(&mut rng, &group, &mut perm);
+        shuffle_lane_group(&mut rng, &group, &mut perm, legacy_seed);
     }
     perm
 }
 
-fn f_random_lane_permutation(seed: i64, key_mode: KeyMode, arrange: ArrangeOption) -> Vec<usize> {
-    let f_random = shuffle_lane_groups(seed, f_random_lane_groups(key_mode));
+fn f_random_lane_permutation(
+    seed: i64,
+    key_mode: KeyMode,
+    arrange: ArrangeOption,
+    legacy_seed: bool,
+) -> Vec<usize> {
+    let f_random = shuffle_lane_groups(seed, f_random_lane_groups(key_mode), legacy_seed);
     if arrange == ArrangeOption::MFRandom {
         compose_lane_permutations(&f_random, &mirror_permutation(key_mode))
     } else {
@@ -1447,8 +1678,10 @@ fn f_random_lane_permutation_for_side(
     key_mode: KeyMode,
     arrange: ArrangeOption,
     side: ArrangeSide,
+    legacy_seed: bool,
 ) -> Vec<usize> {
-    let f_random = shuffle_lane_groups(seed, f_random_lane_groups_for_side(key_mode, side));
+    let f_random =
+        shuffle_lane_groups(seed, f_random_lane_groups_for_side(key_mode, side), legacy_seed);
     if arrange == ArrangeOption::MFRandom {
         let mirror = mirror_lane_permutation_for_side(key_mode, side);
         compose_lane_permutations(&f_random, &mirror)
@@ -1457,11 +1690,11 @@ fn f_random_lane_permutation_for_side(
     }
 }
 
-fn shuffle_lane_groups(seed: i64, groups: Vec<Vec<usize>>) -> Vec<usize> {
+fn shuffle_lane_groups(seed: i64, groups: Vec<Vec<usize>>, legacy_seed: bool) -> Vec<usize> {
     let mut perm: Vec<usize> = (0..LANE_COUNT).collect();
-    let mut rng = SplitMix64::new(seed);
+    let mut rng = ArrangeRng::new(seed, legacy_seed);
     for group in groups {
-        fisher_yates_shuffle(&mut rng, &group, &mut perm);
+        shuffle_lane_group(&mut rng, &group, &mut perm, legacy_seed);
     }
     perm
 }
@@ -1478,20 +1711,25 @@ fn compose_lane_permutations(first: &[usize], second: &[usize]) -> Vec<usize> {
     second.iter().map(|&source| first[source]).collect()
 }
 
-fn rotate_lane_permutation(seed: i64, key_mode: KeyMode, include_scratch: bool) -> Vec<usize> {
+fn rotate_lane_permutation(
+    seed: i64,
+    key_mode: KeyMode,
+    include_scratch: bool,
+    legacy_seed: bool,
+) -> Vec<usize> {
     let mut perm: Vec<usize> = (0..LANE_COUNT).collect();
-    let mut rng = SplitMix64::new(seed);
+    let mut rng = ArrangeRng::new(seed, legacy_seed);
     for group in arrange_lane_groups(key_mode, include_scratch) {
         rotate_lane_group(&mut rng, &group, &mut perm);
     }
     perm
 }
 
-fn rotate_lane_group(rng: &mut SplitMix64, group: &[usize], perm: &mut [usize]) {
+fn rotate_lane_group(rng: &mut ArrangeRng, group: &[usize], perm: &mut [usize]) {
     if group.len() < 2 {
         return;
     }
-    let inc = rng.next_bool();
+    let inc = rng.next_usize(2) == 1;
     let mut index = rng.next_usize(group.len() - 1);
     if inc {
         index += 1;
@@ -1639,10 +1877,15 @@ fn apply_lane_permutation(chart: &mut PlayableChart, perm: &[usize]) {
     }
 }
 
-fn apply_note_arrange(chart: &mut PlayableChart, arrange: ArrangeOption, seed: i64) {
+fn apply_note_arrange(
+    chart: &mut PlayableChart,
+    arrange: ArrangeOption,
+    seed: i64,
+    legacy_seed: bool,
+) {
     let include_scratch = matches!(arrange, ArrangeOption::AllScratch | ArrangeOption::SRandomEx);
     let groups = arrange_lane_groups(chart.metadata.key_mode, include_scratch);
-    apply_note_arrange_for_groups(chart, arrange, seed, &groups);
+    apply_note_arrange_for_groups(chart, arrange, seed, &groups, legacy_seed);
 }
 
 fn apply_note_arrange_for_groups(
@@ -1650,8 +1893,9 @@ fn apply_note_arrange_for_groups(
     arrange: ArrangeOption,
     seed: i64,
     groups: &[Vec<usize>],
+    legacy_seed: bool,
 ) {
-    let mut engine = NoteArrangeEngine::new(arrange, seed, groups);
+    let mut engine = NoteArrangeEngine::new(arrange, seed, groups, legacy_seed);
     let mut notes: Vec<NoteEvent> = chart.lane_notes.iter_mut().flat_map(std::mem::take).collect();
     notes.sort_by_key(|note| (note.tick, note.time, note.lane as u8, note.id));
 
@@ -1695,15 +1939,15 @@ fn apply_note_arrange_for_groups(
 
 struct NoteArrangeEngine {
     arrange: ArrangeOption,
-    rng: SplitMix64,
+    rng: ArrangeRng,
     groups: Vec<NoteArrangeGroup>,
 }
 
 impl NoteArrangeEngine {
-    fn new(arrange: ArrangeOption, seed: i64, groups: &[Vec<usize>]) -> Self {
+    fn new(arrange: ArrangeOption, seed: i64, groups: &[Vec<usize>], legacy_seed: bool) -> Self {
         Self {
             arrange,
-            rng: SplitMix64::new(seed),
+            rng: ArrangeRng::new(seed, legacy_seed),
             groups: groups.iter().map(|lanes| NoteArrangeGroup::new(lanes)).collect(),
         }
     }
@@ -1768,7 +2012,7 @@ impl NoteArrangeGroup {
         notes: &[NoteEvent],
         time: TimeUs,
         arrange: ArrangeOption,
-        rng: &mut SplitMix64,
+        rng: &mut ArrangeRng,
     ) -> std::collections::HashMap<usize, usize> {
         if self.lanes.is_empty() {
             return std::collections::HashMap::new();
@@ -1813,7 +2057,7 @@ impl NoteArrangeGroup {
         notes: &[NoteEvent],
         time: TimeUs,
         threshold: TimeUs,
-        rng: &mut SplitMix64,
+        rng: &mut ArrangeRng,
         changeable: Vec<usize>,
         assignable: Vec<usize>,
     ) -> std::collections::HashMap<usize, usize> {
@@ -1877,7 +2121,7 @@ impl NoteArrangeGroup {
         map
     }
 
-    fn spiral_map(&mut self, rng: &mut SplitMix64) -> std::collections::HashMap<usize, usize> {
+    fn spiral_map(&mut self, rng: &mut ArrangeRng) -> std::collections::HashMap<usize, usize> {
         if self.lanes.len() < 2 {
             return std::collections::HashMap::new();
         }
@@ -1902,7 +2146,7 @@ impl NoteArrangeGroup {
         &mut self,
         notes: &[NoteEvent],
         time: TimeUs,
-        _rng: &mut SplitMix64,
+        _rng: &mut ArrangeRng,
         changeable: &mut Vec<usize>,
         assignable: &mut Vec<usize>,
         map: &mut std::collections::HashMap<usize, usize>,
@@ -1946,10 +2190,6 @@ impl SplitMix64 {
         value ^ (value >> 31)
     }
 
-    fn next_bool(&mut self) -> bool {
-        self.next_u64() & 1 == 1
-    }
-
     fn next_usize(&mut self, bound: usize) -> usize {
         assert!(bound > 0);
         let bound = bound as u128;
@@ -1963,7 +2203,51 @@ impl SplitMix64 {
     }
 }
 
-fn fisher_yates_shuffle(rng: &mut SplitMix64, lanes: &[usize], perm: &mut [usize]) {
+#[derive(Debug, Clone)]
+enum ArrangeRng {
+    Beatoraja(JavaRandom),
+    Legacy(SplitMix64),
+}
+
+impl ArrangeRng {
+    fn new(seed: i64, legacy_seed: bool) -> Self {
+        if legacy_seed {
+            Self::Legacy(SplitMix64::new(seed))
+        } else {
+            Self::Beatoraja(JavaRandom::new(seed))
+        }
+    }
+
+    fn next_usize(&mut self, bound: usize) -> usize {
+        assert!(bound > 0);
+        match self {
+            Self::Beatoraja(random) => random.next_int_bound(bound as i32) as usize,
+            Self::Legacy(random) => random.next_usize(bound),
+        }
+    }
+}
+
+fn shuffle_lane_group(
+    rng: &mut ArrangeRng,
+    lanes: &[usize],
+    perm: &mut [usize],
+    legacy_seed: bool,
+) {
+    if legacy_seed {
+        fisher_yates_shuffle(rng, lanes, perm);
+        return;
+    }
+
+    // beatoraja LaneRandomShuffleModifier: source lane order is stable and
+    // each destination is selected from, then removed from, the remaining list.
+    let mut remaining = lanes.to_vec();
+    for &lane in lanes {
+        let index = rng.next_usize(remaining.len());
+        perm[lane] = remaining.remove(index);
+    }
+}
+
+fn fisher_yates_shuffle(rng: &mut ArrangeRng, lanes: &[usize], perm: &mut [usize]) {
     if lanes.len() < 2 {
         return;
     }
@@ -1998,6 +2282,7 @@ mod tests {
     use rusqlite::Connection;
 
     use super::*;
+    use crate::config::profile_config::HispeedModeConfig;
     use crate::storage::common::configure_connection;
     use crate::storage::library_db::{ChartImportRecord, LibraryDatabase};
     use crate::storage::migration::{LIBRARY_MIGRATIONS, run_migrations};
@@ -2043,10 +2328,6 @@ mod tests {
         let duration =
             build_game_session(Arc::new(chart()), &profile, PlaySessionOptions::default());
         assert_eq!(duration.judge.algorithm, JudgeAlgorithm::Duration);
-
-        profile.judge.judge_algorithm = JudgeAlgorithmConfig::Score;
-        let score = build_game_session(Arc::new(chart()), &profile, PlaySessionOptions::default());
-        assert_eq!(score.judge.algorithm, JudgeAlgorithm::Score);
     }
 
     #[test]
@@ -2071,14 +2352,115 @@ mod tests {
         profile.lane.target_green_number = 300;
         // Stale value from a different BPM should not leak into READY display.
         profile.lane.hispeed = 4.0;
-        let options = PlaySessionOptions::default();
+        let options =
+            PlaySessionOptions { hs_fix: HsFixOption::StartBpm, ..PlaySessionOptions::default() };
         let mut snapshot =
             bmz_render::snapshot::RenderSnapshot { now_bpm: 240.0, ..Default::default() };
 
         apply_placeholder_session_visuals(&mut snapshot, &profile, KeyMode::K7, &options);
 
         assert!((snapshot.hispeed - 2.0).abs() < f32::EPSILON);
+        assert_eq!(snapshot.hispeed_mode_index, 1);
         assert_eq!(snapshot.note_display_duration_ms, 500);
+    }
+
+    #[test]
+    fn placeholder_session_visuals_use_hsfix_to_select_hispeed_mode() {
+        let mut profile = ProfileConfig::new_default("default", "Default", 1);
+        profile.lane.hispeed_mode = HispeedModeConfig::Floating;
+        profile.lane.hispeed = 4.0;
+        profile.lane.target_green_number = 300;
+        let options = PlaySessionOptions::default();
+        let mut snapshot =
+            bmz_render::snapshot::RenderSnapshot { now_bpm: 240.0, ..Default::default() };
+
+        apply_placeholder_session_visuals(&mut snapshot, &profile, KeyMode::K7, &options);
+
+        assert_eq!(snapshot.hispeed, 4.0);
+        assert_eq!(snapshot.hispeed_mode_index, 0);
+    }
+
+    #[test]
+    fn placeholder_session_visuals_match_session_bga_modes() {
+        for (mode, profile_autoplay, option_autoplay, replay, expected) in [
+            (BgaModeConfig::On, false, false, false, true),
+            (BgaModeConfig::Auto, false, false, false, false),
+            (BgaModeConfig::Auto, false, true, false, true),
+            (BgaModeConfig::Auto, false, false, true, true),
+            (BgaModeConfig::Auto, true, false, false, true),
+            (BgaModeConfig::Off, true, true, false, false),
+        ] {
+            let mut profile = ProfileConfig::new_default("default", "Default", 1);
+            profile.play.bga = mode;
+            profile.play.auto_play = profile_autoplay;
+            let options = PlaySessionOptions {
+                autoplay: option_autoplay,
+                replay_player: replay.then(ReplayPlayer::default),
+                ..PlaySessionOptions::default()
+            };
+            let mut snapshot = bmz_render::snapshot::RenderSnapshot::default();
+
+            apply_placeholder_session_visuals(&mut snapshot, &profile, KeyMode::K7, &options);
+            let session = build_game_session(Arc::new(chart()), &profile, options);
+
+            assert_eq!(snapshot.bga_enabled, expected, "mode={mode:?}");
+            assert_eq!(snapshot.bga_enabled, session.bga_enabled, "mode={mode:?}");
+        }
+    }
+
+    #[test]
+    fn placeholder_session_visuals_expose_score_save_and_play_modes() {
+        let profile = ProfileConfig::new_default("default", "Default", 1);
+        for (options, save, replay, practice) in [
+            (PlaySessionOptions::default(), true, false, false),
+            (
+                PlaySessionOptions { autoplay: true, ..PlaySessionOptions::default() },
+                false,
+                false,
+                false,
+            ),
+            (
+                PlaySessionOptions {
+                    replay_player: Some(ReplayPlayer::default()),
+                    ..PlaySessionOptions::default()
+                },
+                false,
+                true,
+                false,
+            ),
+            (
+                PlaySessionOptions { practice_mode: true, ..PlaySessionOptions::default() },
+                false,
+                false,
+                true,
+            ),
+        ] {
+            let mut snapshot = bmz_render::snapshot::RenderSnapshot::default();
+            apply_placeholder_session_visuals(&mut snapshot, &profile, KeyMode::K7, &options);
+            assert_eq!(snapshot.score_save_enabled, save);
+            assert_eq!(snapshot.replay_playback, replay);
+            assert_eq!(snapshot.practice_mode, practice);
+        }
+    }
+
+    #[test]
+    fn placeholder_session_visuals_match_session_bga_expand() {
+        for (expand, expected) in [
+            (BgaExpandConfig::Full, 0),
+            (BgaExpandConfig::KeepAspect, 1),
+            (BgaExpandConfig::Off, 8),
+        ] {
+            let mut profile = ProfileConfig::new_default("default", "Default", 1);
+            profile.play.bga_expand = expand;
+            let options = PlaySessionOptions::default();
+            let mut snapshot = bmz_render::snapshot::RenderSnapshot::default();
+
+            apply_placeholder_session_visuals(&mut snapshot, &profile, KeyMode::K7, &options);
+            let session = build_game_session(Arc::new(chart()), &profile, options);
+
+            assert_eq!(snapshot.bga_stretch, expected, "expand={expand:?}");
+            assert_eq!(snapshot.bga_stretch, session.bga_stretch, "expand={expand:?}");
+        }
     }
 
     fn class_gauge_values(session: &GameSession) -> [f32; 6] {
@@ -2166,6 +2548,31 @@ mod tests {
     }
 
     #[test]
+    fn build_game_session_applies_dx_9key_pop_rules() {
+        let mut profile = ProfileConfig::new_default("default", "Default", 1);
+        profile.play.rule_mode = RuleMode::Dx;
+        let mut chart = chart();
+        chart.metadata.key_mode = KeyMode::K9;
+
+        let session = build_game_session(Arc::new(chart), &profile, PlaySessionOptions::default());
+
+        assert_eq!(session.base_judge_window.pgreat_us, 25_000);
+        assert_eq!(session.base_judge_window.good_us, 87_500);
+        assert_eq!(session.judge.window_set.long_note_end.good_us, 217_000);
+        assert_eq!(session.judge.window_set.long_note_release_margin_us, 200_000);
+        assert!(session.score.empty_poor_breaks_combo);
+        let normal = session
+            .gauge
+            .gauges
+            .iter()
+            .find(|g| g.definition.gauge_type == GaugeType::Normal)
+            .expect("Normal gauge present");
+        assert_eq!((normal.definition.min, normal.definition.max), (2.0, 120.0));
+        assert_eq!((normal.definition.init, normal.definition.border), (30.0, 85.0));
+        assert_eq!(normal.definition.values[3..], [-2.04, -6.0, -6.0]);
+    }
+
+    #[test]
     fn build_game_session_sets_empty_poor_combo_policy_from_keymode() {
         let profile = ProfileConfig::new_default("default", "Default", 1);
         let mut chart_k5 = chart();
@@ -2221,7 +2628,7 @@ mod tests {
 
     #[test]
     fn random_lane_permutation_k9_preserves_active_lanes() {
-        let perm = random_lane_permutation(42, KeyMode::K9, false);
+        let perm = random_lane_permutation(42, KeyMode::K9, false, false);
         let active: HashSet<_> =
             KeyMode::K9.active_lanes().iter().map(|&lane| lane as usize).collect();
         let mapped: HashSet<_> =
@@ -2235,10 +2642,10 @@ mod tests {
             let active: HashSet<_> =
                 key_mode.active_lanes().iter().map(|&lane| lane.index()).collect();
             for perm in [
-                random_lane_permutation(42, key_mode, false),
-                random_lane_permutation(42, key_mode, true),
-                rotate_lane_permutation(42, key_mode, false),
-                rotate_lane_permutation(42, key_mode, true),
+                random_lane_permutation(42, key_mode, false, false),
+                random_lane_permutation(42, key_mode, true, false),
+                rotate_lane_permutation(42, key_mode, false, false),
+                rotate_lane_permutation(42, key_mode, true, false),
             ] {
                 let mapped: HashSet<_> =
                     key_mode.active_lanes().iter().map(|&lane| perm[lane.index()]).collect();
@@ -2331,8 +2738,8 @@ mod tests {
 
     #[test]
     fn mf_random_applies_mirror_after_f_random() {
-        let f_random = f_random_lane_permutation(42, KeyMode::K7, ArrangeOption::FRandom);
-        let mf_random = f_random_lane_permutation(42, KeyMode::K7, ArrangeOption::MFRandom);
+        let f_random = f_random_lane_permutation(42, KeyMode::K7, ArrangeOption::FRandom, false);
+        let mf_random = f_random_lane_permutation(42, KeyMode::K7, ArrangeOption::MFRandom, false);
         let mirror = mirror_permutation(KeyMode::K7);
 
         assert_eq!(mf_random, compose_lane_permutations(&f_random, &mirror));
@@ -2353,7 +2760,7 @@ mod tests {
                 let applied = apply_arrange(&mut chart, arrange, Some(7), None);
 
                 assert_eq!(applied.arrange, ArrangeOption::Normal);
-                assert_eq!(applied.seed, None);
+                assert_eq!(applied.seed, Some(7));
                 assert_eq!(applied.pattern, None);
                 assert_eq!(lanes_for_notes(&chart), before);
             }
@@ -2376,7 +2783,7 @@ mod tests {
                 apply_arrange(&mut chart, ArrangeOption::RandomEx, Some(7), Some(&pattern));
 
             assert_eq!(applied.arrange, ArrangeOption::Normal);
-            assert_eq!(applied.seed, None);
+            assert_eq!(applied.seed, Some(7));
             assert_eq!(applied.pattern, None);
             assert_eq!(lanes_for_notes(&chart), before);
         }
@@ -2422,6 +2829,18 @@ mod tests {
     }
 
     #[test]
+    fn random_lane_shuffle_matches_beatoraja_java_fixture() {
+        // java.util.Random(42) + LaneRandomShuffleModifier's remove-at-index loop.
+        let lanes = vec![0, 1, 2, 3, 4, 5, 6];
+        let mut perm: Vec<usize> = (0..LANE_COUNT).collect();
+        let mut rng = ArrangeRng::new(42, false);
+
+        shuffle_lane_group(&mut rng, &lanes, &mut perm, false);
+
+        assert_eq!(&perm[..7], &[1, 4, 5, 0, 2, 6, 3]);
+    }
+
+    #[test]
     fn apply_arrange_random_moves_notes_between_lanes() {
         use bmz_chart::model::{NoteEvent, NoteKind};
         use bmz_core::time::ChartTick;
@@ -2450,7 +2869,7 @@ mod tests {
 
     #[test]
     fn rotate_random_uses_non_identity_lane_rotation() {
-        let perm = rotate_lane_permutation(7, KeyMode::K7, false);
+        let perm = rotate_lane_permutation(7, KeyMode::K7, false, false);
         let key_lanes: Vec<usize> = (Lane::Key1.index()..=Lane::Key7.index()).collect();
         let mapped: HashSet<_> = key_lanes.iter().map(|&lane| perm[lane]).collect();
 
@@ -2484,11 +2903,16 @@ mod tests {
             &mut chart,
             ArrangeOption::Normal,
             ArrangeOption::Mirror,
-            None,
+            Some(1),
+            Some(2),
+            false,
             None,
         );
 
         assert_eq!(applied.arrange, ArrangeOption::Normal);
+        assert_eq!(applied.seed, Some(1));
+        assert_eq!(applied.seed_2p, Some(2));
+        assert_eq!(applied.packed_beatoraja_seed(KeyMode::K14), Some(1 + (2 << 24)));
         assert_eq!(chart.lane_notes[Lane::Key1.index()][0].id, NoteId(1));
         assert!(chart.lane_notes[Lane::Key8.index()].is_empty());
         assert!(
@@ -2496,6 +2920,27 @@ mod tests {
                 .iter()
                 .any(|note| note.id == NoteId(2) && note.lane == Lane::Key14)
         );
+    }
+
+    #[test]
+    fn recorded_sp_pattern_does_not_gain_a_second_player_seed() {
+        let mut chart = chart();
+        chart.metadata.key_mode = KeyMode::K7;
+        let pattern: Vec<u8> = (0..LANE_COUNT as u8).collect();
+
+        let applied = apply_arrange_pair(
+            &mut chart,
+            ArrangeOption::Random,
+            ArrangeOption::Normal,
+            Some(1),
+            None,
+            false,
+            Some(&pattern),
+        );
+
+        assert_eq!(applied.seed, Some(1));
+        assert_eq!(applied.seed_2p, None);
+        assert_eq!(applied.packed_beatoraja_seed(KeyMode::K7), Some(1));
     }
 
     #[test]
@@ -2676,6 +3121,14 @@ mod tests {
         assert!(!disabled.lanecover_enabled);
         assert!(disabled.lift_enabled);
 
+        profile.lane.lift = 222;
+        profile.lane.lift_enabled = false;
+        let lift_disabled =
+            build_game_session(Arc::new(chart()), &profile, PlaySessionOptions::default());
+
+        assert_eq!(lift_disabled.lift, 0.0);
+        assert!(!lift_disabled.lift_enabled);
+
         profile.play.lane_effect = LaneEffectConfig::Sudden;
         let sudden_option =
             build_game_session(Arc::new(chart()), &profile, PlaySessionOptions::default());
@@ -2755,9 +3208,9 @@ mod tests {
     }
 
     #[test]
-    fn build_game_session_copies_profile_skin_offsets() {
+    fn build_game_session_copies_selected_play_slot_offsets() {
         let mut profile = ProfileConfig::new_default("default", "Default", 1);
-        profile.skin.offsets.push(crate::config::profile_config::SkinOffsetConfig {
+        profile.skin.play7_offsets.push(crate::config::profile_config::SkinOffsetConfig {
             id: 42,
             x: 1,
             y: 2,
@@ -2766,6 +3219,11 @@ mod tests {
             r: 5,
             a: -6,
         });
+        profile.skin.play14_offsets.push(crate::config::profile_config::SkinOffsetConfig {
+            id: 42,
+            h: 99,
+            ..Default::default()
+        });
 
         let session =
             build_game_session(Arc::new(chart()), &profile, PlaySessionOptions::default());
@@ -2773,6 +3231,54 @@ mod tests {
         assert_eq!(
             session.skin_offsets,
             vec![PlaySkinOffset { id: 42, x: 1, y: 2, w: 3, h: 4, r: 5, a: -6 }]
+        );
+    }
+
+    #[test]
+    fn build_game_session_uses_active_offsets_instead_of_skin_history() {
+        use crate::config::profile_config::{SkinHistoryEntryConfig, SkinOffsetConfig};
+
+        let mut profile = ProfileConfig::new_default("default", "Default", 1);
+        profile.skin.play7 = "data/skins/ECFN/play/play7.luaskin".to_string();
+        profile.skin.play7_offsets = vec![SkinOffsetConfig { id: 30, h: 12, ..Default::default() }];
+        profile.skin.history.insert(
+            profile.skin.play7.clone(),
+            SkinHistoryEntryConfig {
+                offsets: vec![SkinOffsetConfig { id: 30, h: 48, ..Default::default() }],
+                ..Default::default()
+            },
+        );
+
+        let session =
+            build_game_session(Arc::new(chart()), &profile, PlaySessionOptions::default());
+
+        assert_eq!(
+            session.skin_offsets,
+            vec![PlaySkinOffset { id: 30, x: 0, y: 0, w: 0, h: 12, r: 0, a: 0 }]
+        );
+    }
+
+    #[test]
+    fn build_game_session_keeps_active_offsets_with_empty_skin_history() {
+        use crate::config::profile_config::{SkinHistoryEntryConfig, SkinOffsetConfig};
+
+        let mut profile = ProfileConfig::new_default("default", "Default", 1);
+        profile.skin.play7 = "resource:skins/ECFN/play/play7.luaskin".to_string();
+        profile.skin.play7_offsets = vec![
+            SkinOffsetConfig { id: 43, a: 180, ..Default::default() },
+            SkinOffsetConfig { id: 44, a: 110, ..Default::default() },
+        ];
+        profile.skin.history.insert(profile.skin.play7.clone(), SkinHistoryEntryConfig::default());
+
+        let session =
+            build_game_session(Arc::new(chart()), &profile, PlaySessionOptions::default());
+
+        assert_eq!(
+            session.skin_offsets,
+            vec![
+                PlaySkinOffset { id: 43, x: 0, y: 0, w: 0, h: 0, r: 0, a: 180 },
+                PlaySkinOffset { id: 44, x: 0, y: 0, w: 0, h: 0, r: 0, a: 110 },
+            ]
         );
     }
 
@@ -2798,12 +3304,35 @@ mod tests {
         let mut fast_chart = chart();
         fast_chart.metadata.initial_bpm = 240.0;
 
-        let session =
-            build_game_session(Arc::new(fast_chart), &profile, PlaySessionOptions::default());
+        let session = build_game_session(
+            Arc::new(fast_chart),
+            &profile,
+            PlaySessionOptions { hs_fix: HsFixOption::StartBpm, ..PlaySessionOptions::default() },
+        );
 
         assert_eq!(session.hispeed_mode, HispeedMode::Floating);
         assert_eq!(session.target_green_number, 300);
         assert!((session.hispeed - 2.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn build_game_session_uses_hsfix_to_select_hispeed_mode() {
+        let mut profile = ProfileConfig::new_default("default", "Default", 1);
+        profile.lane.hispeed_mode = HispeedModeConfig::Floating;
+        profile.lane.hispeed = 4.0;
+        profile.lane.target_green_number = 300;
+        let normal = build_game_session(Arc::new(chart()), &profile, PlaySessionOptions::default());
+        assert_eq!(normal.hispeed_mode, HispeedMode::Normal);
+        assert_eq!(normal.hispeed, 4.0);
+
+        profile.lane.hispeed_mode = HispeedModeConfig::Normal;
+        let floating = build_game_session(
+            Arc::new(chart()),
+            &profile,
+            PlaySessionOptions { hs_fix: HsFixOption::StartBpm, ..PlaySessionOptions::default() },
+        );
+        assert_eq!(floating.hispeed_mode, HispeedMode::Floating);
+        assert!((floating.hispeed - 4.0).abs() < f32::EPSILON);
     }
 
     #[test]
@@ -2913,6 +3442,51 @@ mod tests {
         .unwrap();
 
         assert_eq!(session.chart.metadata.title, "Linked");
+
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn load_transformed_chart_applies_start_note_margin() {
+        let path = write_temp_bms(
+            "\
+#TITLE Early Note
+#BPM 120
+#00011:01
+#00201:01
+",
+        );
+        let imported = import_bms_chart(&path, None, true).unwrap();
+        let source_first =
+            imported.chart.lane_notes.iter().flatten().map(|note| note.time.0).min().unwrap();
+        assert_eq!(source_first, 0);
+
+        let mut conn = Connection::open_in_memory().unwrap();
+        configure_connection(&conn).unwrap();
+        run_migrations(&mut conn, LIBRARY_MIGRATIONS).unwrap();
+        let mut library_db = LibraryDatabase::from_connection(conn);
+        let chart_id = library_db
+            .upsert_chart_import(&ChartImportRecord {
+                root_id: None,
+                file_path: &path,
+                file_size: 1,
+                modified_at: 1,
+                scanned_at: 1,
+                chart: &imported.chart,
+            })
+            .unwrap();
+
+        let transformed =
+            load_transformed_chart_for_play(&library_db, chart_id, &PlaySessionOptions::default())
+                .unwrap();
+        let play_first =
+            transformed.chart.lane_notes.iter().flatten().map(|note| note.time.0).min().unwrap();
+        assert_eq!(play_first, 1_000_000);
+
+        let source = load_source_chart_for_chart(&library_db, chart_id, None).unwrap();
+        let source_first_again =
+            source.lane_notes.iter().flatten().map(|note| note.time.0).min().unwrap();
+        assert_eq!(source_first_again, 0, "source chart must stay unshifted");
 
         std::fs::remove_file(path).unwrap();
     }
@@ -3033,6 +3607,70 @@ mod tests {
         std::fs::remove_file(wav_path).unwrap();
     }
 
+    #[test]
+    fn retry_audio_reload_preserves_bgm_and_keysound_asset_mapping() {
+        let (path, bgm_path, key_path) = write_temp_bms_with_two_wavs(
+            "\
+#TITLE Retry audio
+#BPM 120
+#WAV01 bgm.wav
+#WAV02 key.wav
+#00001:01
+#00011:02
+",
+        );
+        let imported = import_bms_chart(&path, None, true).unwrap();
+        let chart = Arc::new(imported.chart);
+        let score_key =
+            ScoreKey::new(chart.identity.file_sha256, crate::ln_policy::LnScorePolicy::AutoLn);
+        let mut progress = Vec::new();
+
+        let preloaded = preload_play_session_reloading_audio_with_progress(
+            Arc::clone(&chart),
+            48_000,
+            0.75,
+            normal_applied_arrange(0, false),
+            score_key,
+            |loaded, total| progress.push((loaded, total)),
+        );
+
+        assert!(Arc::ptr_eq(&preloaded.chart, &chart));
+        assert_eq!(preloaded.normalization_gain, 0.75);
+        assert_eq!(preloaded.score_key, score_key);
+        assert!(
+            preloaded
+                .sample_report
+                .iter()
+                .all(|report| matches!(report.status, LoadedSampleStatus::Loaded))
+        );
+        let bgm_id = preloaded
+            .chart
+            .sounds
+            .iter()
+            .find(|asset| asset.path == bgm_path)
+            .map(|asset| asset.id)
+            .expect("BGM asset");
+        let key_id = preloaded
+            .chart
+            .sounds
+            .iter()
+            .find(|asset| asset.path == key_path)
+            .map(|asset| asset.id)
+            .expect("keysound asset");
+        assert_eq!(preloaded.chart.bgm_events.first().map(|event| event.sound), Some(bgm_id));
+        assert_eq!(
+            preloaded.chart.lane_notes.iter().flatten().find_map(|note| note.sound),
+            Some(key_id)
+        );
+        assert!(preloaded.audio.samples.get(bgm_id).unwrap().frames[0] > 0.4);
+        assert!(preloaded.audio.samples.get(key_id).unwrap().frames[0] < -0.4);
+        assert_eq!(progress.last(), Some(&(2, 2)));
+
+        std::fs::remove_file(path).unwrap();
+        std::fs::remove_file(bgm_path).unwrap();
+        std::fs::remove_file(key_path).unwrap();
+    }
+
     fn chart() -> PlayableChart {
         PlayableChart {
             identity: compute_chart_identity(b"session"),
@@ -3120,6 +3758,33 @@ mod tests {
         )
         .unwrap();
         (bms_path, wav_path)
+    }
+
+    fn write_temp_bms_with_two_wavs(
+        text: &str,
+    ) -> (std::path::PathBuf, std::path::PathBuf, std::path::PathBuf) {
+        let stamp =
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+        let dir = std::env::temp_dir();
+        let prefix = format!("bmz-retry-audio-{}-{stamp}", std::process::id());
+        let bms_path = dir.join(format!("{prefix}.bms"));
+        let bgm_path = dir.join(format!("{prefix}-bgm.wav"));
+        let key_path = dir.join(format!("{prefix}-key.wav"));
+        let bms = text
+            .replace("bgm.wav", bgm_path.file_name().unwrap().to_str().unwrap())
+            .replace("key.wav", key_path.file_name().unwrap().to_str().unwrap());
+        std::fs::write(&bms_path, bms).unwrap();
+        std::fs::write(
+            &bgm_path,
+            [wav_header(1, 1, 48_000, 16, 2).as_slice(), &16_384_i16.to_le_bytes()].concat(),
+        )
+        .unwrap();
+        std::fs::write(
+            &key_path,
+            [wav_header(1, 1, 48_000, 16, 2).as_slice(), &(-16_384_i16).to_le_bytes()].concat(),
+        )
+        .unwrap();
+        (bms_path, bgm_path, key_path)
     }
 
     fn wav_header(

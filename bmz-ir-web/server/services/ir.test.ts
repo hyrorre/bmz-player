@@ -1,7 +1,12 @@
 import { describe, expect, test } from 'bun:test'
 import { isUniqueConstraintError } from '../utils/db_errors'
 import { computeCourseHash, validateCourseScoreSubmission } from './course_ir'
-import { __test, stableStringify } from './ir'
+import {
+  MAX_LOCAL_BACKFILL_DELETE_BATCH_SIZE,
+  __test,
+  stableStringify,
+  validateScoreAttestation,
+} from './ir'
 
 describe('stableStringify', () => {
   test('matches JCS number formatting used by Rust IR evidence', () => {
@@ -38,6 +43,25 @@ describe('stableStringify', () => {
 })
 
 describe('ranking best row aggregation', () => {
+  test('keeps cleanup batches inside D1 bind parameter limits', () => {
+    expect(MAX_LOCAL_BACKFILL_DELETE_BATCH_SIZE).toBe(19)
+    expect(2 + MAX_LOCAL_BACKFILL_DELETE_BATCH_SIZE * 5).toBeLessThanOrEqual(100)
+  })
+
+  test('retains normal scores when cleanup candidates are mixed', () => {
+    expect(
+      __test.partitionLocalBackfillRows([
+        { id: 'backfill', play_options: { submission_source: 'local_backfill' } },
+        { id: 'normal', play_options: { device_type: 'keyboard' } },
+      ]),
+    ).toEqual({
+      localBackfillRows: [
+        { id: 'backfill', play_options: { submission_source: 'local_backfill' } },
+      ],
+      retainedScoreIds: ['normal'],
+    })
+  })
+
   test('reads arrange options from new and legacy play options', () => {
     expect(
       __test.arrangeOptionsFromPlayOptions({
@@ -51,6 +75,25 @@ describe('ranking best row aggregation', () => {
       arrange_1p: 'random',
       arrange_2p: undefined,
     })
+  })
+
+  test('keeps complete ranking judge breakdowns and rejects legacy invalid values', () => {
+    expect(
+      __test.rankingJudges({
+        fast: { pgreat: 10, great: 3, good: 2, bad: 1, poor: 4, empty_poor: 5 },
+        slow: { pgreat: 20, great: 6, good: 1, bad: 2, poor: 3, empty_poor: 0 },
+      }),
+    ).toEqual({
+      fast: { pgreat: 10, great: 3, good: 2, bad: 1, poor: 4, empty_poor: 5 },
+      slow: { pgreat: 20, great: 6, good: 1, bad: 2, poor: 3, empty_poor: 0 },
+    })
+    expect(__test.rankingJudges({ fast: {}, slow: {} })).toBeUndefined()
+    expect(
+      __test.rankingJudges({
+        fast: { pgreat: -1, great: 0, good: 0, bad: 0, poor: 0, empty_poor: 0 },
+        slow: { pgreat: 0, great: 0, good: 0, bad: 0, poor: 0, empty_poor: 0 },
+      }),
+    ).toBeUndefined()
   })
 
   test('deduplicates users and keeps independent display bests', () => {
@@ -116,6 +159,49 @@ describe('ranking best row aggregation', () => {
     expect(rebuilt[0]?.clear_type).toBe('FullCombo')
     expect(rebuilt[0]?.best_clear_score_id).toBe('fc-score')
   })
+
+  test('groups cleanup rebuilds by the complete ranking bucket', () => {
+    expect(
+      __test.uniqueBestScoreKeys([
+        {
+          chart_sha256: 'chart-a',
+          ln_policy: 'AutoLn',
+          double_option: 'off',
+          rule_mode: 'Beatoraja',
+          scoring: 'bms_ex_score_v1',
+        },
+        {
+          chart_sha256: 'chart-a',
+          ln_policy: 'AutoLn',
+          double_option: 'off',
+          rule_mode: 'Beatoraja',
+          scoring: 'bms_ex_score_v1',
+        },
+        {
+          chart_sha256: 'chart-a',
+          ln_policy: 'ForceLn',
+          double_option: 'off',
+          rule_mode: 'Beatoraja',
+          scoring: 'bms_ex_score_v1',
+        },
+      ]),
+    ).toEqual([
+      {
+        chartSha256: 'chart-a',
+        lnPolicy: 'AutoLn',
+        doubleOption: 'off',
+        ruleMode: 'Beatoraja',
+        scoring: 'bms_ex_score_v1',
+      },
+      {
+        chartSha256: 'chart-a',
+        lnPolicy: 'ForceLn',
+        doubleOption: 'off',
+        ruleMode: 'Beatoraja',
+        scoring: 'bms_ex_score_v1',
+      },
+    ])
+  })
 })
 
 describe('chart update policy', () => {
@@ -137,6 +223,112 @@ describe('chart update policy', () => {
 
   test('keeps existing chart metadata for double battle submissions', () => {
     expect(__test.shouldUpdateExistingChart({ device_type: 'controller' }, 'battle')).toBe(false)
+  })
+})
+
+describe('verification status', () => {
+  test('classifies signed local history separately from signed gameplay', () => {
+    expect(
+      __test.verificationStatusForSignedSubmission({ play_options: { device_type: 'keyboard' } }),
+    ).toBe('verified_play')
+    expect(
+      __test.verificationStatusForSignedSubmission({
+        play_options: { device_type: 'keyboard', submission_source: 'local_backfill' },
+      }),
+    ).toBe('signed_backfill')
+  })
+})
+
+describe('score submission metadata', () => {
+  test('keeps FLIP separately while retaining its off ranking bucket', () => {
+    expect(
+      __test.scoreSubmissionMetadata({
+        device_type: 'keyboard',
+        double_option: 'off',
+        applied_double_option: 'flip',
+        source_kind: 'beatoraja',
+      }),
+    ).toEqual({
+      doubleOption: 'off',
+      appliedDoubleOption: 'flip',
+      sourceKind: 'beatoraja',
+    })
+  })
+
+  test('uses compatible defaults for older score submissions', () => {
+    expect(
+      __test.scoreSubmissionMetadata({ device_type: 'keyboard', double_option: 'battle' }),
+    ).toEqual({
+      doubleOption: 'battle',
+      appliedDoubleOption: 'battle',
+      sourceKind: 'local',
+    })
+  })
+
+  test('rejects an applied option outside the ranking bucket', () => {
+    expect(() =>
+      __test.scoreSubmissionMetadata({
+        device_type: 'keyboard',
+        double_option: 'battle',
+        applied_double_option: 'flip',
+      }),
+    ).toThrow('does not match')
+  })
+})
+
+describe('score seed validation', () => {
+  test('accepts signed 64-bit decimal strings and legacy safe integers', () => {
+    expect(() =>
+      __test.validateSeedOptions({ seed: '1783820891178268800', random_seed: 42 }),
+    ).not.toThrow()
+  })
+
+  test('rejects unsafe JSON numbers and invalid decimal strings', () => {
+    expect(() => __test.validateSeedOptions({ seed: 1_783_820_891_178_268_800 })).toThrow(
+      'play_options.seed is invalid',
+    )
+    expect(() => __test.validateSeedOptions({ random_seed: '12.5' })).toThrow(
+      'play_options.random_seed is invalid',
+    )
+  })
+})
+
+describe('idempotent score response', () => {
+  test('returns the stored score without reporting a best-score update', () => {
+    expect(
+      __test.idempotentScoreResponse({
+        id: 'existing-score',
+        serverReceivedAt: new Date('2026-07-11T03:00:00.000Z'),
+      }),
+    ).toEqual({
+      accepted: true,
+      score_id: 'existing-score',
+      best_updated: false,
+      updated_fields: {
+        ex_score: false,
+        clear: false,
+        max_combo: false,
+        min_bp: false,
+        min_cb: false,
+      },
+      server_received_at: '2026-07-11T03:00:00.000Z',
+    })
+  })
+})
+
+describe('score attestation validation', () => {
+  test('requires a score id, purpose, and evidence object', () => {
+    expect(() => validateScoreAttestation({})).toThrow('score_id is required')
+    expect(() =>
+      validateScoreAttestation({ score_id: 'score-1', purpose: 'other', evidence: {} }),
+    ).toThrow('purpose is invalid')
+    expect(
+      validateScoreAttestation({
+        score_id: 'score-1',
+        purpose: 'score_attestation',
+        evidence: {},
+      }),
+    ).toMatchObject({ score_id: 'score-1' })
   })
 })
 
@@ -166,6 +358,15 @@ describe('database error classification', () => {
 })
 
 describe('course score validation', () => {
+  test('accepts a decimal string random seed', () => {
+    const payload = baseCourseSubmission()
+    payload.play_options.random_seed = '1783820891178268800'
+
+    expect(validateCourseScoreSubmission(payload).play_options.random_seed).toBe(
+      '1783820891178268800',
+    )
+  })
+
   test('normalizes legacy snake_case ln policy settings', () => {
     const payload = baseCourseSubmission({ lnPolicy: 'auto_hcn' })
 
@@ -193,6 +394,85 @@ describe('course score validation', () => {
     payload.rule.rule_mode = 'Unknown' as never
 
     expect(() => validateCourseScoreSubmission(payload)).toThrow('rule_mode is invalid')
+  })
+
+  test('accepts a completed course without an achieved trophy', () => {
+    const payload = baseCourseSubmission()
+    payload.result.course_clear = false
+
+    expect(validateCourseScoreSubmission(payload).result.clear).toBe('Normal')
+  })
+
+  test('rejects NoPlay for a completed course', () => {
+    const payload = baseCourseSubmission()
+    payload.result.course_clear = false
+    payload.result.clear = 'NoPlay'
+
+    expect(() => validateCourseScoreSubmission(payload)).toThrow(
+      'result.clear must be Normal for the final course state',
+    )
+  })
+
+  test('accepts a failed course with a partial result', () => {
+    const payload = baseCourseSubmission()
+    payload.result.clear = 'Failed'
+    payload.result.course_clear = false
+    payload.result.course_failed = true
+    payload.result.played_entries = 1
+    payload.result.entries = payload.result.entries.slice(0, 1)
+
+    expect(validateCourseScoreSubmission(payload).result.clear).toBe('Failed')
+  })
+
+  test('rejects a clear lamp for a failed course', () => {
+    const payload = baseCourseSubmission()
+    payload.result.course_clear = false
+    payload.result.course_failed = true
+
+    expect(() => validateCourseScoreSubmission(payload)).toThrow(
+      'result.clear must be Failed for the final course state',
+    )
+  })
+
+  test('rejects a partial non-failed course', () => {
+    const payload = baseCourseSubmission()
+    payload.result.played_entries = 1
+    payload.result.entries = payload.result.entries.slice(0, 1)
+
+    expect(() => validateCourseScoreSubmission(payload)).toThrow(
+      'a non-failed course must include every chart',
+    )
+  })
+
+  test('rejects a played entry count that differs from entries', () => {
+    const payload = baseCourseSubmission()
+    payload.result.played_entries = 1
+
+    expect(() => validateCourseScoreSubmission(payload)).toThrow(
+      'result.entries length must match result.played_entries',
+    )
+  })
+
+  test('derives the completed course lamp from the final gauge', () => {
+    const cases = [
+      ['AssistEasy', 'AssistEasy'],
+      ['Easy', 'Easy'],
+      ['Normal', 'Normal'],
+      ['Class', 'Normal'],
+      ['Hard', 'Hard'],
+      ['ExClass', 'Hard'],
+      ['ExHard', 'ExHard'],
+      ['Hazard', 'ExHard'],
+      ['ExHardClass', 'ExHard'],
+    ] as const
+
+    for (const [gauge, clear] of cases) {
+      const payload = baseCourseSubmission()
+      payload.rule.gauge = gauge
+      payload.result.clear = clear
+
+      expect(validateCourseScoreSubmission(payload).result.clear).toBe(clear)
+    }
   })
 })
 

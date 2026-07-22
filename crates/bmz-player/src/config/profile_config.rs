@@ -2,8 +2,9 @@ use std::collections::BTreeMap;
 
 use bmz_gameplay::rule::RuleMode;
 use bmz_render::scene::ResultGradeDiffDisplay;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
+use crate::i18n::AppLocale;
 use crate::ln_policy::LnPolicySetting;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -29,6 +30,15 @@ pub struct ProfileConfig {
     pub skin: SkinConfig,
     #[serde(default)]
     pub select: SelectStateConfig,
+    #[serde(default)]
+    pub statistics: StatisticsConfig,
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
+pub struct StatisticsConfig {
+    /// Local hour at which BMZ starts a new statistics day (0..=23).
+    #[serde(default)]
+    pub day_start_hour: u8,
 }
 
 /// 選曲画面の表示状態。フィルター (5K/7K など) とソートを永続化する。
@@ -341,21 +351,20 @@ pub enum FastSlowDisplayScope {
 #[serde(rename_all = "PascalCase")]
 pub enum JudgeAlgorithmConfig {
     Combo,
+    #[serde(alias = "Score")]
     Duration,
     Lowest,
-    Score,
 }
 
 impl JudgeAlgorithmConfig {
-    /// beatoraja `JudgeAlgorithm.values()` order.
-    pub const ORDER: [Self; 4] = [Self::Combo, Self::Duration, Self::Lowest, Self::Score];
+    /// beatoraja skin / launcher order.
+    pub const ORDER: [Self; 3] = [Self::Combo, Self::Duration, Self::Lowest];
 
     pub const fn beatoraja_name(self) -> &'static str {
         match self {
             Self::Combo => "Combo",
             Self::Duration => "Duration",
             Self::Lowest => "Lowest",
-            Self::Score => "Score",
         }
     }
 }
@@ -365,10 +374,22 @@ pub struct LaneViewConfig {
     pub hispeed: f32,
     #[serde(default = "default_hispeed_mode")]
     pub hispeed_mode: HispeedModeConfig,
+    /// NHS のプレイ中 HS 変更刻み。0.05..=1.0 の範囲で持つ。
+    #[serde(default = "default_hispeed_step_nhs")]
+    pub hispeed_step_nhs: f32,
+    /// FHS のプレイ中 HS 変更刻み。0.05..=1.0 の範囲で持つ。
+    #[serde(default = "default_hispeed_step_fhs")]
+    pub hispeed_step_fhs: f32,
     /// SUDDEN+ レーンカバー量。0..=1000 の整数で持ち、ランタイムでは /1000 して扱う。
     pub sudden: u32,
     /// LIFT 量。0..=1000 の整数で持ち、ランタイムでは /1000 して扱う。
     pub lift: u32,
+    /// beatoraja `PlayConfig.enablelift` 相当。古いprofileは従来挙動を保つため有効扱い。
+    #[serde(default = "default_true")]
+    pub lift_enabled: bool,
+    /// beatoraja `PlayConfig.hispeedautoadjust` 相当。
+    #[serde(default = "default_true")]
+    pub hispeed_auto_adjust: bool,
     /// HIDDEN レーンカバー量。0..=1000 の整数で持ち、ランタイムでは /1000 して扱う。
     pub hidden: u32,
     pub target_green_number: u32,
@@ -385,6 +406,21 @@ fn default_hispeed_mode() -> HispeedModeConfig {
     HispeedModeConfig::Normal
 }
 
+pub const HISPEED_STEP_MIN: f32 = 0.05;
+pub const HISPEED_STEP_MAX: f32 = 1.0;
+
+pub fn default_hispeed_step_nhs() -> f32 {
+    0.25
+}
+
+pub fn default_hispeed_step_fhs() -> f32 {
+    0.50
+}
+
+pub fn normalize_hispeed_step(value: f32, default: f32) -> f32 {
+    if value.is_finite() { value.clamp(HISPEED_STEP_MIN, HISPEED_STEP_MAX) } else { default }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct UiInputConfig {
     #[serde(default = "default_ui_bindings")]
@@ -397,6 +433,12 @@ pub struct PlayModeInputConfig {
     pub inherit: Option<String>,
     #[serde(default)]
     pub bindings: Vec<BindingConfigEntry>,
+    /// 8K の論理キーごとのハイスピード操作方向 override。
+    ///
+    /// 未指定のキーはプレイ側のモード既定方向を使う。8K 以外では保存されない
+    /// 想定だが、profile の前方互換性のため入力設定型では値を保持する。
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub hispeed: BTreeMap<LaneConfig, HispeedDirectionConfig>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -514,7 +556,7 @@ impl SelectInputModeConfig {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 pub enum LaneConfig {
     Scratch,
@@ -534,6 +576,14 @@ pub enum LaneConfig {
     Key12,
     Key13,
     Key14,
+}
+
+/// 鍵盤入力でハイスピードを変更する方向。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub enum HispeedDirectionConfig {
+    Down,
+    Up,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -652,10 +702,53 @@ pub struct ReplayConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UiConfig {
+    #[serde(
+        default = "default_profile_language",
+        deserialize_with = "deserialize_profile_language",
+        serialize_with = "serialize_profile_language"
+    )]
     pub language: String,
     pub theme: String,
     pub show_fps: bool,
     pub confirm_on_exit: bool,
+}
+
+impl UiConfig {
+    /// 保存互換の String から、UI で利用する型付き locale を返す。
+    pub fn locale(&self) -> AppLocale {
+        AppLocale::profile_language(&self.language)
+    }
+
+    /// 言語 ComboBox などで選ばれた locale を canonical code で保持する。
+    pub fn set_locale(&mut self, locale: AppLocale) {
+        self.language = locale.code().to_owned();
+    }
+
+    /// alias や不明値を profile 保存用の canonical code へ正規化する。
+    pub fn normalize_language(&mut self) -> AppLocale {
+        let locale = self.locale();
+        self.set_locale(locale);
+        locale
+    }
+}
+
+fn default_profile_language() -> String {
+    AppLocale::DEFAULT.code().to_owned()
+}
+
+fn deserialize_profile_language<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let language = String::deserialize(deserializer)?;
+    Ok(AppLocale::profile_language(&language).code().to_owned())
+}
+
+fn serialize_profile_language<S>(language: &str, serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: Serializer,
+{
+    serializer.serialize_str(AppLocale::profile_language(language).code())
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -768,8 +861,45 @@ pub struct SkinConfig {
     /// `.json` / `.lr2skin` で終わるパスは beatoraja スキンとして扱う。
     #[serde(default)]
     pub course_result: String,
-    #[serde(default)]
-    pub offsets: Vec<SkinOffsetConfig>,
+    /// 選曲スキンのオフセット設定。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub select_offsets: Vec<SkinOffsetConfig>,
+    /// 決定スキンのオフセット設定。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub decide_offsets: Vec<SkinOffsetConfig>,
+    /// 4K プレイスキンのオフセット設定。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub play4_offsets: Vec<SkinOffsetConfig>,
+    /// 5K プレイスキンのオフセット設定。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub play5_offsets: Vec<SkinOffsetConfig>,
+    /// 6K プレイスキンのオフセット設定。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub play6_offsets: Vec<SkinOffsetConfig>,
+    /// 7K プレイスキンのオフセット設定。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub play7_offsets: Vec<SkinOffsetConfig>,
+    /// 8K プレイスキンのオフセット設定。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub play8_offsets: Vec<SkinOffsetConfig>,
+    /// 9K プレイスキンのオフセット設定。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub play9_offsets: Vec<SkinOffsetConfig>,
+    /// 10K プレイスキンのオフセット設定。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub play10_offsets: Vec<SkinOffsetConfig>,
+    /// 14K プレイスキンのオフセット設定。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub play14_offsets: Vec<SkinOffsetConfig>,
+    /// リザルトスキンのオフセット設定。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub result_offsets: Vec<SkinOffsetConfig>,
+    /// コースリザルトスキンのオフセット設定。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub course_result_offsets: Vec<SkinOffsetConfig>,
+    /// v0.1.9 以前の全スロット共通オフセット。ロード時に各スロットへ移行する。
+    #[serde(rename = "offsets", default, skip_serializing)]
+    pub(crate) legacy_offsets: Vec<SkinOffsetConfig>,
     /// 選曲スキンのカスタマイズオプション選択 (オプション名 -> 選択肢名)。
     #[serde(default)]
     pub select_options: BTreeMap<String, String>,
@@ -842,12 +972,41 @@ pub struct SkinConfig {
     /// コースリザルトスキンのファイル選択。
     #[serde(default)]
     pub course_result_files: BTreeMap<String, String>,
-    /// スキンファイル path ごとのカスタマイズ履歴。
+    /// スキンスロットとファイル path ごとのカスタマイズ履歴。
     ///
     /// beatoraja の `skinHistory` 相当。スキンを切り替えても、各スキンの
     /// option / filepath / offset を前回値へ戻せるように保持する。
     #[serde(default)]
     pub history: BTreeMap<String, SkinHistoryEntryConfig>,
+}
+
+impl SkinConfig {
+    /// 旧形式の共通オフセットを、まだ個別設定がない全スロットへ引き継ぐ。
+    pub fn migrate_legacy_offsets(&mut self) {
+        let legacy_offsets = std::mem::take(&mut self.legacy_offsets);
+        if legacy_offsets.is_empty() {
+            return;
+        }
+
+        for offsets in [
+            &mut self.select_offsets,
+            &mut self.decide_offsets,
+            &mut self.play4_offsets,
+            &mut self.play5_offsets,
+            &mut self.play6_offsets,
+            &mut self.play7_offsets,
+            &mut self.play8_offsets,
+            &mut self.play9_offsets,
+            &mut self.play10_offsets,
+            &mut self.play14_offsets,
+            &mut self.result_offsets,
+            &mut self.course_result_offsets,
+        ] {
+            if offsets.is_empty() {
+                *offsets = legacy_offsets.clone();
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
@@ -1002,8 +1161,12 @@ impl ProfileConfig {
             lane: LaneViewConfig {
                 hispeed: 2.0,
                 hispeed_mode: default_hispeed_mode(),
+                hispeed_step_nhs: default_hispeed_step_nhs(),
+                hispeed_step_fhs: default_hispeed_step_fhs(),
                 sudden: 0,
                 lift: 0,
+                lift_enabled: true,
+                hispeed_auto_adjust: true,
                 hidden: 0,
                 target_green_number: 300,
             },
@@ -1033,6 +1196,7 @@ impl ProfileConfig {
             system_sound: SystemSoundConfig::default(),
             skin: SkinConfig::default(),
             select: SelectStateConfig::default(),
+            statistics: StatisticsConfig::default(),
         }
     }
 }
@@ -1176,6 +1340,22 @@ mod tests {
     use super::*;
 
     #[test]
+    fn legacy_score_judge_algorithm_is_loaded_as_duration() {
+        let judge: JudgeConfig = toml::from_str(
+            r#"
+            input_offset_us = 0
+            visual_offset_us = 0
+            judge_algorithm = "Score"
+            fast_slow_display_threshold_ms = 0
+            fast_slow_display_scope = "Auto"
+            "#,
+        )
+        .unwrap();
+
+        assert_eq!(judge.judge_algorithm, JudgeAlgorithmConfig::Duration);
+    }
+
+    #[test]
     fn play_defaults_uses_default_misslayer_duration_for_old_profiles() {
         let play: PlayDefaultsConfig = toml::from_str(
             r#"
@@ -1197,6 +1377,49 @@ mod tests {
         assert_eq!(play.misslayer_duration_ms, 500);
         assert_eq!(play.play_exit_hold_ms, 1000);
         assert_eq!(play.bottom_shiftable_gauge, BottomShiftableGaugeConfig::AssistEasy);
+    }
+
+    #[test]
+    fn lane_view_uses_mode_specific_hispeed_step_and_auto_adjust_defaults_for_old_profiles() {
+        let lane: LaneViewConfig = toml::from_str(
+            r#"
+            hispeed = 2.0
+            hispeed_mode = "Normal"
+            sudden = 0
+            lift = 0
+            hidden = 0
+            target_green_number = 300
+            "#,
+        )
+        .unwrap();
+
+        assert_eq!(lane.hispeed_step_nhs, 0.25);
+        assert_eq!(lane.hispeed_step_fhs, 0.50);
+        assert!(lane.lift_enabled);
+        assert!(lane.hispeed_auto_adjust);
+
+        let serialized = toml::to_string(&lane).unwrap();
+        assert!(serialized.contains("hispeed_step_nhs = 0.25"));
+        assert!(serialized.contains("hispeed_step_fhs = 0.5"));
+        assert!(serialized.contains("lift_enabled = true"));
+        assert!(serialized.contains("hispeed_auto_adjust = true"));
+    }
+
+    #[test]
+    fn lane_view_preserves_explicit_hispeed_auto_adjust_off() {
+        let lane: LaneViewConfig = toml::from_str(
+            r#"
+            hispeed = 2.0
+            sudden = 0
+            lift = 0
+            hidden = 0
+            target_green_number = 300
+            hispeed_auto_adjust = false
+            "#,
+        )
+        .unwrap();
+
+        assert!(!lane.hispeed_auto_adjust);
     }
 
     #[test]
@@ -1324,10 +1547,39 @@ mod tests {
     }
 
     #[test]
+    fn skin_config_migrates_legacy_offsets_to_each_slot() {
+        let mut skin: SkinConfig = toml::from_str(
+            r#"
+            [[offsets]]
+            id = 30
+            h = 12
+
+            [[play7_offsets]]
+            id = 30
+            h = 7
+            "#,
+        )
+        .unwrap();
+
+        skin.migrate_legacy_offsets();
+
+        assert_eq!(skin.select_offsets[0].h, 12);
+        assert_eq!(skin.play4_offsets[0].h, 12);
+        assert_eq!(skin.play7_offsets[0].h, 7);
+        assert_eq!(skin.course_result_offsets[0].h, 12);
+
+        let serialized = toml::to_string(&skin).unwrap();
+        assert!(!serialized.contains("[[offsets]]"));
+        assert!(serialized.contains("[[select_offsets]]"));
+        assert!(serialized.contains("[[play7_offsets]]"));
+    }
+
+    #[test]
     fn default_profile_stores_select_start_in_bindings() {
         let profile = ProfileConfig::new_default("default", "Default", 1);
 
         assert_eq!(profile.play.ln_mode_policy, LnPolicySetting::AutoLn);
+        assert!(profile.lane.hispeed_auto_adjust);
         assert!(profile.input.start_key.is_none());
         assert!(profile.input.ui.bindings.iter().any(|entry| {
             entry.device == "keyboard"
@@ -1349,6 +1601,56 @@ mod tests {
         assert_eq!(profile.audio_mix.system_se_volume, 50);
         assert!(profile.ir.prefetch_global_ranking_on_score_submit);
         assert!(profile.ir.prefetch_rival_ranking_on_score_submit);
+    }
+
+    #[test]
+    fn ui_language_keeps_string_storage_with_canonical_locale_code() {
+        let ui: UiConfig = toml::from_str(
+            r#"
+            language = "ZH_hant_hk"
+            theme = "default"
+            show_fps = false
+            confirm_on_exit = false
+            "#,
+        )
+        .unwrap();
+
+        assert_eq!(ui.language, "zh-HK");
+        assert_eq!(ui.locale(), AppLocale::ZhHk);
+        assert!(toml::to_string(&ui).unwrap().contains("language = \"zh-HK\""));
+    }
+
+    #[test]
+    fn ui_language_recovers_missing_and_unsupported_values_to_japanese() {
+        let missing: UiConfig = toml::from_str(
+            r#"
+            theme = "default"
+            show_fps = false
+            confirm_on_exit = false
+            "#,
+        )
+        .unwrap();
+        assert_eq!(missing.language, "ja");
+
+        let unsupported: UiConfig = toml::from_str(
+            r#"
+            language = "fr"
+            theme = "default"
+            show_fps = false
+            confirm_on_exit = false
+            "#,
+        )
+        .unwrap();
+        assert_eq!(unsupported.language, "ja");
+    }
+
+    #[test]
+    fn ui_language_setter_uses_profile_compatible_string() {
+        let mut profile = ProfileConfig::new_default("default", "Default", 1);
+        profile.ui.set_locale(AppLocale::Ko);
+
+        assert_eq!(profile.ui.language, "ko");
+        assert_eq!(profile.ui.locale(), AppLocale::Ko);
     }
 
     #[test]
@@ -1533,5 +1835,41 @@ mod tests {
         assert!(toml.contains("action = \"E4\""));
         assert!(toml.contains("control = \"Axis1+\"\nlane = \"Scratch\"\nscratch = \"up\""));
         assert!(toml.contains("control = \"Axis1-\"\nlane = \"Scratch\"\nscratch = \"down\""));
+    }
+
+    #[test]
+    fn play_mode_input_hispeed_directions_roundtrip_through_toml() {
+        let mut hispeed = BTreeMap::new();
+        hispeed.insert(LaneConfig::Key1, HispeedDirectionConfig::Down);
+        hispeed.insert(LaneConfig::Key6, HispeedDirectionConfig::Up);
+        let config = PlayModeInputConfig {
+            inherit: None,
+            bindings: vec![BindingConfigEntry {
+                device: "keyboard".to_string(),
+                control: "Z".to_string(),
+                lane: Some(LaneConfig::Key1),
+                action: None,
+                scratch: None,
+            }],
+            hispeed,
+        };
+
+        let toml = toml::to_string(&config).unwrap();
+        let parsed: PlayModeInputConfig = toml::from_str(&toml).unwrap();
+
+        assert!(toml.contains("[hispeed]"));
+        assert!(toml.contains("Key1 = \"Down\""));
+        assert!(toml.contains("Key6 = \"Up\""));
+        assert_eq!(parsed.bindings.len(), 1);
+        assert_eq!(parsed.hispeed.get(&LaneConfig::Key1), Some(&HispeedDirectionConfig::Down));
+        assert_eq!(parsed.hispeed.get(&LaneConfig::Key6), Some(&HispeedDirectionConfig::Up));
+    }
+
+    #[test]
+    fn play_mode_input_omits_empty_hispeed_directions_and_reads_old_profiles() {
+        let config: PlayModeInputConfig = toml::from_str("inherit = \"7k\"").unwrap();
+
+        assert!(config.hispeed.is_empty());
+        assert!(!toml::to_string(&config).unwrap().contains("hispeed"));
     }
 }

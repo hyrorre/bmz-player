@@ -4,7 +4,7 @@ use bmz_chart::model::{BgaAssetId, BgaAssetKind, BgaEventKind};
 use bmz_core::judge::Judge;
 use bmz_core::time::TimeUs;
 use bmz_render::plan::TextureId;
-use bmz_video::{DecodedFrame, VideoBgaDecoder, decode_first_frame};
+use bmz_video::{DecodedFrame, VideoBgaDecoder};
 
 use crate::audio::RunningPlaySession;
 use crate::screens::play_snapshot::{BgaFrameCatalog, bga_texture_id, display_video_bga_frame};
@@ -15,15 +15,19 @@ pub struct ActiveVideoBgaDecoder {
     pub last_pts: Option<i64>,
 }
 
-/// render_now 時刻でアクティブな動画BGAのテクスチャを更新する。
+/// Sentinel so a reused decoder is treated as needing a fresh event binding (and
+/// `restart`) on the first activation after install / quick retry.
+pub const REUSED_VIDEO_EVENT_START: TimeUs = TimeUs(i64::MIN);
+
+/// 表示オフセットを含まない chart_now 時刻でアクティブな動画BGAのテクスチャを更新する。
 /// bga_frames カタログを更新して幅・高さも最新に保つ。
 pub fn update_video_bga_frames(
     renderer: &mut bmz_render::renderer::Renderer,
     running: &mut RunningPlaySession,
-    render_now: TimeUs,
+    chart_now: TimeUs,
 ) {
     if !running.session.bga_enabled || !running.session.chart.metadata.has_bga {
-        running.video_bga_decoders.clear();
+        // Keep warm decoders across BGA-disabled stretches so quick retry can reuse them.
         return;
     }
 
@@ -35,7 +39,7 @@ pub fn update_video_bga_frames(
     // Base と Layer は BGA イベント時刻をビデオ開始時刻とする
     for kind in [BgaEventKind::Base, BgaEventKind::Layer, BgaEventKind::Layer2] {
         let Some(event) =
-            chart.bga_events.iter().rev().find(|e| e.time <= render_now && e.kind == kind)
+            chart.bga_events.iter().rev().find(|e| e.time <= chart_now && e.kind == kind)
         else {
             continue;
         };
@@ -51,7 +55,7 @@ pub fn update_video_bga_frames(
         }
         active_video_assets.insert(asset_id);
 
-        let video_offset_us = render_now.0 - event.time.0;
+        let video_offset_us = chart_now.0 - event.time.0;
         update_single_video(
             renderer,
             video_bga_decoders,
@@ -69,8 +73,8 @@ pub fn update_video_bga_frames(
     if poor_duration_us > 0 {
         let judgement = session.recent_judgements.iter().rev().find(|j| {
             matches!(j.judge, Judge::Bad | Judge::Poor)
-                && render_now.0 >= j.time.0
-                && render_now.0 < j.time.0 + poor_duration_us
+                && chart_now.0 >= j.time.0
+                && chart_now.0 < j.time.0 + poor_duration_us
         });
 
         if let Some(judgement) = judgement {
@@ -87,7 +91,7 @@ pub fn update_video_bga_frames(
                 && asset.kind == BgaAssetKind::Video
             {
                 active_video_assets.insert(asset_id);
-                let video_offset_us = render_now.0 - judge_time.0;
+                let video_offset_us = chart_now.0 - judge_time.0;
                 update_single_video(
                     renderer,
                     video_bga_decoders,
@@ -102,7 +106,15 @@ pub fn update_video_bga_frames(
         }
     }
 
-    video_bga_decoders.retain(|asset_id, _| active_video_assets.contains(asset_id));
+    // Drop only decoders that are no longer part of this chart's video assets.
+    // Inactive-but-still-chart videos stay warm for reuse / quick retry (beatoraja style).
+    video_bga_decoders.retain(|asset_id, _| {
+        active_video_assets.contains(asset_id)
+            || chart
+                .bga_assets
+                .iter()
+                .any(|asset| asset.id == *asset_id && asset.kind == BgaAssetKind::Video)
+    });
 }
 
 fn update_single_video(
@@ -119,43 +131,60 @@ fn update_single_video(
         return;
     }
 
-    // デコーダが未作成またはイベント開始時刻が変わっていたら新規作成
+    // デコーダが未作成またはイベント開始時刻が変わっていたら reuse/restart または新規作成
     let needs_new = match video_bga_decoders.get(&asset_id) {
         Some(active) => active.event_start_time != event_start_time,
         None => true,
     };
 
     if needs_new {
-        let initial_frame = match decode_first_frame(path) {
-            Ok(frame) => Some(frame),
-            Err(error) => {
-                tracing::debug!(
-                    asset_id = asset_id.0,
-                    path = %path.display(),
-                    %error,
-                    "failed to decode first video BGA frame before async playback"
-                );
-                None
-            }
-        };
-        match VideoBgaDecoder::open(path) {
-            Ok(decoder) => {
-                video_bga_decoders.insert(
-                    asset_id,
-                    ActiveVideoBgaDecoder { event_start_time, decoder, last_pts: None },
-                );
-                tracing::info!(asset_id = asset_id.0, path = %path.display(), "opened video BGA decoder");
-                if let Some(frame) = initial_frame
-                    && upload_video_bga_frame(renderer, bga_frames, asset_id, &frame)
-                    && let Some(active) = video_bga_decoders.get_mut(&asset_id)
-                {
-                    active.last_pts = Some(frame.pts_us);
+        if let Some(active) = video_bga_decoders.get_mut(&asset_id) {
+            // Same path reuse: seek/restart instead of reopen (beatoraja stop→play).
+            if active.decoder.path() == path {
+                active.decoder.restart();
+                active.event_start_time = event_start_time;
+                active.last_pts = None;
+            } else {
+                match VideoBgaDecoder::open(path) {
+                    Ok(decoder) => {
+                        *active =
+                            ActiveVideoBgaDecoder { event_start_time, decoder, last_pts: None };
+                        tracing::info!(
+                            asset_id = asset_id.0,
+                            path = %path.display(),
+                            "opened video BGA decoder"
+                        );
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            asset_id = asset_id.0,
+                            %e,
+                            "failed to open video BGA; skipping"
+                        );
+                        failed_video_bga.insert(asset_id);
+                        video_bga_decoders.remove(&asset_id);
+                        return;
+                    }
                 }
             }
-            Err(e) => {
-                tracing::warn!(asset_id = asset_id.0, %e, "failed to open video BGA; skipping");
-                failed_video_bga.insert(asset_id);
-                return;
+        } else {
+            match VideoBgaDecoder::open(path) {
+                Ok(decoder) => {
+                    video_bga_decoders.insert(
+                        asset_id,
+                        ActiveVideoBgaDecoder { event_start_time, decoder, last_pts: None },
+                    );
+                    tracing::info!(
+                        asset_id = asset_id.0,
+                        path = %path.display(),
+                        "opened video BGA decoder"
+                    );
+                }
+                Err(e) => {
+                    tracing::warn!(asset_id = asset_id.0, %e, "failed to open video BGA; skipping");
+                    failed_video_bga.insert(asset_id);
+                    return;
+                }
             }
         }
     }
@@ -192,6 +221,15 @@ fn upload_video_bga_frame(
             );
             false
         }
+    }
+}
+
+/// Prepare reused video decoders for a new play session (seek to start, clear PTS).
+pub fn prepare_reused_video_decoders(decoders: &mut VideoBgaDecoderMap) {
+    for active in decoders.values_mut() {
+        active.decoder.restart();
+        active.event_start_time = REUSED_VIDEO_EVENT_START;
+        active.last_pts = None;
     }
 }
 

@@ -8,8 +8,9 @@ use bmz_chart::model::{
 };
 use bmz_chart::timing::{TICKS_PER_MEASURE, TimingMap};
 use bmz_core::judge::{Judge, TimingSide};
-use bmz_core::lane::{LANE_COUNT, Lane};
-use bmz_core::time::TimeUs;
+use bmz_core::lane::{KeyMode, LANE_COUNT, Lane};
+use bmz_core::time::{ChartTick, TimeUs};
+use bmz_gameplay::gauge::gauge_total_for_chart;
 use bmz_gameplay::judge::model::JudgementEvent;
 use bmz_gameplay::session::GameSession;
 use bmz_render::chart_graph::{
@@ -39,9 +40,16 @@ pub struct PlayRenderSnapshotCache {
     min_bpm: f32,
     max_bpm: f32,
     has_bpm_stop: bool,
-    scroll_segments: Arc<[(f64, f64)]>,
+    end_of_note_time: TimeUs,
+    scroll_integral: ScrollIntegralCache,
     speed_segments: Arc<[(f64, f64)]>,
     bga_events: BgaEventCache,
+}
+
+#[derive(Debug, Clone)]
+struct ScrollIntegralCache {
+    segments: Arc<[(f64, f64)]>,
+    integral_at_event: Arc<[f64]>,
 }
 
 #[derive(Debug, Clone)]
@@ -61,13 +69,9 @@ impl PlayRenderSnapshotCache {
             .timing_events
             .iter()
             .any(|event| matches!(event.kind, TimingEventKind::Stop { .. }));
-        let scroll_segments = Arc::from(
-            chart
-                .scroll_events
-                .iter()
-                .map(|event| (event.tick.0 as f64, event.factor))
-                .collect::<Vec<_>>()
-                .into_boxed_slice(),
+        let end_of_note_time = end_of_note_time(chart);
+        let scroll_integral = ScrollIntegralCache::from_segments(
+            chart.scroll_events.iter().map(|event| (event.tick.0 as f64, event.factor)),
         );
         let speed_segments = Arc::from(
             chart
@@ -84,10 +88,62 @@ impl PlayRenderSnapshotCache {
             min_bpm,
             max_bpm,
             has_bpm_stop,
-            scroll_segments,
+            end_of_note_time,
+            scroll_integral,
             speed_segments,
             bga_events,
         }
+    }
+}
+
+impl ScrollIntegralCache {
+    fn from_segments(segments: impl IntoIterator<Item = (f64, f64)>) -> Self {
+        let segments = segments.into_iter().collect::<Vec<_>>();
+        debug_assert!(segments.windows(2).all(|pair| pair[0].0 <= pair[1].0));
+
+        let mut integral_at_event = Vec::with_capacity(segments.len());
+        let mut previous_tick = 0.0;
+        let mut previous_factor = 1.0;
+        let mut integral = 0.0;
+        for &(tick, next_factor) in &segments {
+            integral += (tick - previous_tick) * previous_factor;
+            integral_at_event.push(integral);
+            previous_tick = tick;
+            previous_factor = next_factor;
+        }
+
+        Self {
+            segments: Arc::from(segments.into_boxed_slice()),
+            integral_at_event: Arc::from(integral_at_event.into_boxed_slice()),
+        }
+    }
+
+    fn is_empty(&self) -> bool {
+        self.segments.is_empty()
+    }
+
+    fn factor_at(&self, tick: f64) -> f64 {
+        self.segments
+            .partition_point(|(event_tick, _)| *event_tick <= tick)
+            .checked_sub(1)
+            .map_or(1.0, |index| self.segments[index].1)
+    }
+
+    fn primitive(&self, tick: f64) -> f64 {
+        let Some(index) =
+            self.segments.partition_point(|(event_tick, _)| *event_tick <= tick).checked_sub(1)
+        else {
+            return tick;
+        };
+        let (event_tick, factor) = self.segments[index];
+        self.integral_at_event[index] + (tick - event_tick) * factor
+    }
+
+    fn delta(&self, from_tick: f64, to_tick: f64) -> f64 {
+        if (from_tick - to_tick).abs() < f64::EPSILON {
+            return 0.0;
+        }
+        self.primitive(to_tick) - self.primitive(from_tick)
     }
 }
 
@@ -167,6 +223,82 @@ fn optional_skin_timer_elapsed_ms(now: TimeUs, started_at: Option<TimeUs>) -> Op
     started_at.map(|started_at| skin_timer_elapsed_ms(now, started_at))
 }
 
+fn rhythm_timer_elapsed_ms(
+    timing_map: &TimingMap,
+    bar_lines: &[BarLine],
+    now: TimeUs,
+) -> Option<i32> {
+    if now.0 < 0 {
+        return None;
+    }
+    let section_start = bar_lines
+        .partition_point(|bar| bar.time <= now)
+        .checked_sub(1)
+        .map(|index| bar_lines[index].time)
+        .unwrap_or(TimeUs(0));
+    let elapsed_us = bpm_normalized_elapsed_us(timing_map, section_start, now);
+    Some((elapsed_us / 1_000.0).floor().clamp(0.0, i32::MAX as f64) as i32)
+}
+
+fn quarter_note_elapsed_ms(
+    timing_map: &TimingMap,
+    bar_lines: &[BarLine],
+    now: TimeUs,
+) -> Option<i32> {
+    if now.0 < 0 {
+        return None;
+    }
+    let section_index = bar_lines.partition_point(|bar| bar.time <= now).checked_sub(1);
+    let section_tick = section_index.map_or(0, |index| bar_lines[index].tick.0);
+    let next_tick = section_index
+        .and_then(|index| bar_lines.get(index + 1))
+        .map_or_else(|| section_tick.saturating_add(TICKS_PER_MEASURE as u64), |bar| bar.tick.0);
+    let section_length = next_tick.saturating_sub(section_tick).max(1);
+    let cursor_tick = timing_map.time_to_tick_f64(now).max(section_tick as f64);
+    let quarter_width = section_length as f64 / 4.0;
+    let quarter_index = ((cursor_tick - section_tick as f64) / quarter_width).floor().max(0.0);
+    let quarter_tick = section_tick
+        .saturating_add((quarter_index * quarter_width).round().clamp(0.0, u64::MAX as f64) as u64);
+    let quarter_time = timing_map.tick_to_time(ChartTick(quarter_tick));
+    Some(((now.0 - quarter_time.0) / 1_000).clamp(0, i32::MAX as i64) as i32)
+}
+
+/// beatoraja TIMER_RHYTHM と同じく、実時間を区間 BPM / 60 倍して進める。
+/// STOP 中も現在 BPM で進行するため、tick 差ではなく時間区間を積分する。
+fn bpm_normalized_elapsed_us(timing_map: &TimingMap, start: TimeUs, end: TimeUs) -> f64 {
+    let mut cursor = start.0.max(0).min(end.0);
+    let end = end.0.max(cursor);
+    let mut elapsed_us = 0.0;
+    while cursor < end {
+        let segment = timing_map.find_segment_by_time(TimeUs(cursor));
+        let boundary =
+            if segment.start_time.0 > cursor { segment.start_time.0 } else { segment.end_time.0 };
+        let next = end.min(boundary.max(cursor.saturating_add(1)));
+        let bpm = if segment.bpm.is_finite() && segment.bpm > 0.0 { segment.bpm } else { 1.0 };
+        elapsed_us += (next - cursor) as f64 * bpm / 60.0;
+        cursor = next;
+    }
+    elapsed_us
+}
+
+fn pms_missed_note_fall_progress(
+    timing_map: &TimingMap,
+    note_tick: ChartTick,
+    note_time: TimeUs,
+    bad_slow_us: i64,
+    now: TimeUs,
+) -> f32 {
+    let stop_end = timing_map
+        .segments
+        .iter()
+        .filter(|segment| segment.start_tick == note_tick)
+        .map(|segment| segment.start_time.0)
+        .max()
+        .unwrap_or(note_time.0);
+    let fall_start = TimeUs(stop_end.saturating_add(bad_slow_us.max(0)));
+    (bpm_normalized_elapsed_us(timing_map, fall_start, now) / 4_000_000.0) as f32
+}
+
 fn lane_key_timer_ms(
     started_at: Option<TimeUs>,
     chart_time: TimeUs,
@@ -199,7 +331,14 @@ fn lane_keyoff_ms(
 
 /// `play_elapsed_time` 更新後に keybeam / turntable 向け snapshot フィールドを再計算する。
 pub fn refresh_play_skin_visuals(snapshot: &mut RenderSnapshot, session: &GameSession) {
-    refresh_play_skin_visuals_with_input_elapsed(snapshot, session, snapshot.play_elapsed_time);
+    snapshot.skin_offsets =
+        skin_offsets_from_session(session, snapshot.time, snapshot.play_elapsed_time);
+    snapshot.keyon_ms = lane_keyon_ms(session, snapshot.time, snapshot.play_elapsed_time);
+    snapshot.keyoff_ms = lane_keyoff_ms(session, snapshot.time, snapshot.play_elapsed_time);
+    snapshot.gauge_increase_elapsed_ms =
+        optional_skin_timer_elapsed_ms(snapshot.time, session.gauge_increase_started_at);
+    snapshot.gauge_max_elapsed_ms =
+        optional_skin_timer_elapsed_ms(snapshot.time, session.gauge_max_started_at);
 }
 
 /// 通常アニメーション用の `play_elapsed_time` と、押下エフェクト用の実経過時間が
@@ -210,23 +349,66 @@ pub fn refresh_play_skin_visuals_with_input_elapsed(
     input_elapsed: TimeUs,
 ) {
     snapshot.skin_offsets = skin_offsets_from_session(session, snapshot.time, input_elapsed);
-    snapshot.keyon_ms = lane_keyon_ms(session, snapshot.time, input_elapsed);
-    snapshot.keyoff_ms = lane_keyoff_ms(session, snapshot.time, input_elapsed);
+    snapshot.keyon_ms = std::array::from_fn(|lane_index| {
+        session.lane_keyon_started_at[lane_index]
+            .map(|started_at| skin_timer_elapsed_ms(input_elapsed, started_at))
+    });
+    snapshot.keyoff_ms = std::array::from_fn(|lane_index| {
+        session.lane_keyoff_started_at[lane_index]
+            .map(|started_at| skin_timer_elapsed_ms(input_elapsed, started_at))
+    });
     snapshot.gauge_increase_elapsed_ms =
         optional_skin_timer_elapsed_ms(snapshot.time, session.gauge_increase_started_at);
     snapshot.gauge_max_elapsed_ms =
         optional_skin_timer_elapsed_ms(snapshot.time, session.gauge_max_started_at);
 }
 
+pub fn refresh_pending_play_input_visuals(
+    snapshot: &mut RenderSnapshot,
+    key_mode: KeyMode,
+    lane_keyon_started_at: [Option<TimeUs>; LANE_COUNT],
+    lane_keyoff_started_at: [Option<TimeUs>; LANE_COUNT],
+    lane_scratch_angle_delta_ms: [i64; LANE_COUNT],
+    input_elapsed: TimeUs,
+) {
+    snapshot.keyon_ms = std::array::from_fn(|lane_index| {
+        lane_keyon_started_at[lane_index]
+            .map(|started_at| skin_timer_elapsed_ms(input_elapsed, started_at))
+    });
+    snapshot.keyoff_ms = std::array::from_fn(|lane_index| {
+        lane_keyoff_started_at[lane_index]
+            .map(|started_at| skin_timer_elapsed_ms(input_elapsed, started_at))
+    });
+    let active_lanes = key_mode.active_lanes();
+    if active_lanes.contains(&Lane::Scratch) {
+        set_scratch_angle_offset(
+            &mut snapshot.skin_offsets,
+            SCRATCH_ANGLE_OFFSET_1P,
+            input_elapsed,
+            0,
+            lane_scratch_angle_delta_ms[Lane::Scratch.index()],
+        );
+    }
+    if active_lanes.contains(&Lane::Scratch2) {
+        set_scratch_angle_offset(
+            &mut snapshot.skin_offsets,
+            SCRATCH_ANGLE_OFFSET_2P,
+            input_elapsed,
+            1,
+            lane_scratch_angle_delta_ms[Lane::Scratch2.index()],
+        );
+    }
+}
+
 pub fn build_render_snapshot(
     session: &GameSession,
-    render_now: TimeUs,
+    chart_now: TimeUs,
     recent_judgements: &[JudgementEvent],
     best_ex_score: Option<u32>,
 ) -> RenderSnapshot {
     build_render_snapshot_with_bga_frames(
         session,
-        render_now,
+        chart_now,
         recent_judgements,
         best_ex_score,
         &BgaFrameCatalog::new(),
@@ -235,14 +417,14 @@ pub fn build_render_snapshot(
 
 pub fn build_render_snapshot_with_bga_frames(
     session: &GameSession,
-    render_now: TimeUs,
+    chart_now: TimeUs,
     recent_judgements: &[JudgementEvent],
     best_ex_score: Option<u32>,
     bga_frames: &BgaFrameCatalog,
 ) -> RenderSnapshot {
     build_render_snapshot_with_target_and_bga_frames(
         session,
-        render_now,
+        chart_now,
         recent_judgements,
         best_ex_score,
         None,
@@ -253,7 +435,7 @@ pub fn build_render_snapshot_with_bga_frames(
 
 pub fn build_render_snapshot_with_target_and_bga_frames(
     session: &GameSession,
-    render_now: TimeUs,
+    chart_now: TimeUs,
     recent_judgements: &[JudgementEvent],
     best_ex_score: Option<u32>,
     best_ghost: Option<&[u8]>,
@@ -263,7 +445,7 @@ pub fn build_render_snapshot_with_target_and_bga_frames(
     let cache = PlayRenderSnapshotCache::from_chart(&session.chart);
     build_render_snapshot_with_target_and_bga_frames_cached(
         session,
-        render_now,
+        chart_now,
         recent_judgements,
         best_ex_score,
         best_ghost,
@@ -275,7 +457,7 @@ pub fn build_render_snapshot_with_target_and_bga_frames(
 
 pub fn build_render_snapshot_with_target_and_bga_frames_cached(
     session: &GameSession,
-    render_now: TimeUs,
+    chart_now: TimeUs,
     recent_judgements: &[JudgementEvent],
     best_ex_score: Option<u32>,
     best_ghost: Option<&[u8]>,
@@ -285,12 +467,15 @@ pub fn build_render_snapshot_with_target_and_bga_frames_cached(
 ) -> RenderSnapshot {
     let projected_best_ex_score =
         best_ghost.map(|ghost| ghost_ex_score_at_progress(ghost, session.score.past_notes));
-    let play_elapsed_time = if render_now.0 < 0 { TimeUs(0) } else { render_now };
-    let gauge_graph_time_ms = (render_now.0.max(0) / 1_000).clamp(0, i32::MAX as i64) as i32;
-    let now_bpm = session.timing_map.bpm_at_time(render_now) as f32;
-    let cursor_tick = session.timing_map.time_to_tick_f64(scroll_render_time(render_now));
+    let lane_render_now = lane_render_time(session, chart_now);
+    let play_elapsed_time = if chart_now.0 < 0 { TimeUs(0) } else { chart_now };
+    let gauge_graph_time_ms = (chart_now.0.max(0) / 1_000).clamp(0, i32::MAX as i64) as i32;
+    // beatoraja の LaneRenderer と同じく、現在 BPM と緑数字は表示オフセットを
+    // 適用したレーン時刻から求める。判定演出や BGA の時計には適用しない。
+    let now_bpm = session.timing_map.bpm_at_time(lane_render_now) as f32;
+    let cursor_tick = session.timing_map.time_to_tick_f64(scroll_render_time(lane_render_now));
     let scroll_multiplier = current_scroll_multiplier_from_segments(
-        &cache.scroll_segments,
+        &cache.scroll_integral,
         &cache.speed_segments,
         cursor_tick,
     );
@@ -330,12 +515,26 @@ pub fn build_render_snapshot_with_target_and_bga_frames_cached(
         })
         .collect();
     let mut snapshot = RenderSnapshot {
-        time: render_now,
+        time: chart_now,
+        player_name: String::new(),
+        current_fps: 0,
         play_elapsed_time,
         operating_time_ms: 0,
+        skin_input: Default::default(),
         ready_elapsed_time: None,
+        rhythm_timer_elapsed_ms: rhythm_timer_elapsed_ms(
+            &session.timing_map,
+            &session.chart.bar_lines,
+            chart_now,
+        ),
+        quarter_note_elapsed_ms: quarter_note_elapsed_ms(
+            &session.timing_map,
+            &session.chart.bar_lines,
+            chart_now,
+        ),
         // session が構築できている時点で WAV 等のロードは完了している。
         resources_loaded: true,
+        resource_load_progress: 1.0,
         duration: session.chart.end_time,
         title: session.chart.metadata.title.clone(),
         subtitle: session.chart.metadata.subtitle.clone(),
@@ -346,11 +545,16 @@ pub fn build_render_snapshot_with_target_and_bga_frames_cached(
         judge_rank: session.chart.metadata.judge_rank,
         play_level: session.chart.metadata.play_level.clone(),
         arrange: "NORMAL".to_string(),
+        arrange_2p: "NORMAL".to_string(),
         target: String::new(),
         combo: session.display_combo(),
         max_combo: session.display_max_combo(),
         ex_score: session.score.ex_score(),
         total_notes: session.scored_total_notes,
+        chart_total_gauge: gauge_total_for_chart(
+            session.chart.metadata.total,
+            session.scored_total_notes,
+        ) as f32,
         past_notes: session.score.past_notes,
         judge_counts: display_judge_counts(session),
         fast_slow_counts: display_fast_slow_counts(session),
@@ -369,9 +573,10 @@ pub fn build_render_snapshot_with_target_and_bga_frames_cached(
         lanecover_enabled: session.lanecover_enabled,
         lift_enabled: session.lift_enabled,
         hidden_enabled: session.hidden_enabled,
+        hispeed_auto_adjust: session.hispeed_auto_adjust,
         note_display_duration_ms,
         hidden_cover: session.hidden_cover,
-        skin_offsets: skin_offsets_from_session(session, render_now, play_elapsed_time),
+        skin_offsets: skin_offsets_from_session(session, chart_now, play_elapsed_time),
         now_bpm,
         min_bpm: cache.min_bpm,
         max_bpm: cache.max_bpm,
@@ -380,26 +585,26 @@ pub fn build_render_snapshot_with_target_and_bga_frames_cached(
         bga_enabled: session.bga_enabled,
         bga_base: session
             .bga_enabled
-            .then(|| current_bga_frame(cache, render_now, BgaEventKind::Base, bga_frames))
+            .then(|| current_bga_frame(cache, chart_now, BgaEventKind::Base, bga_frames))
             .flatten(),
         bga_layer: session
             .bga_enabled
             .then(|| {
-                current_keybound_bga_frame(session, cache, render_now, bga_frames).or_else(|| {
-                    current_bga_frame(cache, render_now, BgaEventKind::Layer, bga_frames)
+                current_keybound_bga_frame(session, cache, chart_now, bga_frames).or_else(|| {
+                    current_bga_frame(cache, chart_now, BgaEventKind::Layer, bga_frames)
                 })
             })
             .flatten(),
         bga_layer2: session
             .bga_enabled
-            .then(|| current_bga_frame(cache, render_now, BgaEventKind::Layer2, bga_frames))
+            .then(|| current_bga_frame(cache, chart_now, BgaEventKind::Layer2, bga_frames))
             .flatten(),
         bga_poor: session
             .bga_enabled
             .then(|| {
                 current_poor_bga_frame(
                     cache,
-                    render_now,
+                    chart_now,
                     recent_judgements,
                     bga_frames,
                     session.poor_bga_duration_us,
@@ -425,6 +630,9 @@ pub fn build_render_snapshot_with_target_and_bga_frames_cached(
         bpm_graph_segments: Arc::clone(&cache.bpm_graph_segments),
         autoplay: session.autoplay.as_ref().is_some_and(|autoplay| autoplay.is_full()),
         replay_playback: session.replay_player.is_some(),
+        practice_mode: false,
+        score_save_enabled: !session.autoplay.as_ref().is_some_and(|autoplay| autoplay.is_full())
+            && session.replay_player.is_none(),
         course_stage: None,
         course_titles: Default::default(),
         table_text_primary: String::new(),
@@ -442,74 +650,85 @@ pub fn build_render_snapshot_with_target_and_bga_frames_cached(
             .iter()
             .map(|event| display_judgement(event, session.display_combo()))
             .collect(),
+        skin_events: Vec::new(),
         hit_error_ring: bmz_render::snapshot::HitErrorRingSnapshot {
             values: session.hit_error_ring.values,
             index: session.hit_error_ring.index,
         },
         full_combo_elapsed_ms: session.full_combo_started_at.and_then(|started_at| {
-            (render_now.0 >= started_at.0)
-                .then_some(((render_now.0 - started_at.0) / 1_000).clamp(0, i32::MAX as i64) as i32)
+            (chart_now.0 >= started_at.0)
+                .then_some(((chart_now.0 - started_at.0) / 1_000).clamp(0, i32::MAX as i64) as i32)
         }),
-        end_of_note_elapsed_ms: end_of_note_elapsed_ms(
-            render_now,
-            end_of_note_time(&session.chart),
-        ),
+        end_of_note_elapsed_ms: end_of_note_elapsed_ms(chart_now, cache.end_of_note_time),
         fadeout_elapsed_ms: None,
         failed_elapsed_ms: None,
         music_end_elapsed_ms: None,
         gauge_increase_elapsed_ms: optional_skin_timer_elapsed_ms(
-            render_now,
+            chart_now,
             session.gauge_increase_started_at,
         ),
         gauge_max_elapsed_ms: optional_skin_timer_elapsed_ms(
-            render_now,
+            chart_now,
             session.gauge_max_started_at,
         ),
         bar_lines: Vec::new(),
+        bpm_lines: Vec::new(),
+        stop_lines: Vec::new(),
+        time_lines: Vec::new(),
         visible_long_notes: Vec::new(),
-        keyon_ms: lane_keyon_ms(session, render_now, play_elapsed_time),
-        keyoff_ms: lane_keyoff_ms(session, render_now, play_elapsed_time),
+        keyon_ms: lane_keyon_ms(session, chart_now, play_elapsed_time),
+        keyoff_ms: lane_keyoff_ms(session, chart_now, play_elapsed_time),
         show_ln_tail_cap: session.show_ln_tail_cap,
         // beatoraja の TIMER_HCN_ACTIVE / TIMER_HCN_DAMAGE: HCN passing 中のみアクティブ。
         hcn_active_ms: std::array::from_fn(|lane_index| {
             session.lane_hcn_timer[lane_index].filter(|t| t.inclease).map(|t| {
-                ((render_now.0 - t.since.0) / 1_000).clamp(i32::MIN as i64, i32::MAX as i64) as i32
+                ((chart_now.0 - t.since.0) / 1_000).clamp(i32::MIN as i64, i32::MAX as i64) as i32
             })
         }),
         hcn_damage_ms: std::array::from_fn(|lane_index| {
             session.lane_hcn_timer[lane_index].filter(|t| !t.inclease).map(|t| {
-                ((render_now.0 - t.since.0) / 1_000).clamp(i32::MIN as i64, i32::MAX as i64) as i32
+                ((chart_now.0 - t.since.0) / 1_000).clamp(i32::MIN as i64, i32::MAX as i64) as i32
             })
         }),
         // beatoraja の TIMER_HOLD: LN ホールド中 (processing != null) のみアクティブ。
         hold_ms: std::array::from_fn(|lane_index| {
             session.judge.lanes[lane_index].active_long.map(|active| {
-                ((render_now.0 - active.started_at.0) / 1_000)
+                ((chart_now.0 - active.started_at.0) / 1_000)
                     .clamp(i32::MIN as i64, i32::MAX as i64) as i32
             })
         }),
         overlay: OverlaySnapshot::default(),
+        stagefile_background: false,
+        stagefile_image_size: None,
         backbmp_background: false,
-        chart_text: bmz_chart::text::chart_text_at_time(&session.chart.text_events, render_now)
+        chart_text: bmz_chart::text::chart_text_at_time(&session.chart.text_events, chart_now)
             .to_string(),
     };
 
-    // beatoraja の LaneRenderer と同様、playstart 中 (render_now < 0) は
+    // beatoraja の LaneRenderer と同様、playstart 中 (lane_render_now < 0) は
     // レーンスクロールの基準時刻を 0 に固定する。音声の chart_zero_time は
     // マイナスのまま維持し、見た目だけ clamp する。
-    // chart 時刻が 0 未満の間は譜面オブジェクトを出さない (beatoraja の
+    // レーン描画時刻が 0 未満の間は譜面オブジェクトを出さない (beatoraja の
     // TIMER_PLAY 開始前と同じ)。
-    let scroll_time = scroll_render_time(render_now);
-    if render_now.0 >= 0 {
+    let scroll_time = scroll_render_time(lane_render_now);
+    if lane_render_now.0 >= 0 {
         let scroll = ScrollContext::new(session, cache);
         let cursor_tick = scroll.cursor_tick(scroll_time);
         let simple_tick_upper_bound = scroll.simple_tick_upper_bound(cursor_tick);
+        let note_lower_time = (snapshot.key_mode != KeyMode::K9).then_some(lane_render_now);
 
         for lane in Lane::ALL {
-            for note in
-                visible_lane_notes(session.chart.notes_for_lane(lane), simple_tick_upper_bound)
-            {
-                if note.time < render_now {
+            for note in visible_lane_notes(
+                session.chart.notes_for_lane(lane),
+                note_lower_time,
+                simple_tick_upper_bound,
+            ) {
+                let processed_judge = session.judge.judged_notes.get(&note.id).copied();
+                let falling_pms_poor = snapshot.key_mode == KeyMode::K9
+                    && note.kind == NoteKind::Tap
+                    && processed_judge == Some(Judge::Poor)
+                    && note.time < lane_render_now;
+                if note.time < lane_render_now && !falling_pms_poor {
                     continue;
                 }
                 match note.kind {
@@ -528,13 +747,25 @@ pub fn build_render_snapshot_with_target_and_bga_frames_cached(
                     // visible_long_notes 側でロングノート本体と一緒に描画する。
                     NoteKind::LongStart | NoteKind::LongEnd => continue,
                     NoteKind::Tap => {
-                        if let Some(y) = scroll.note_y(note.time, cursor_tick) {
+                        let y = if falling_pms_poor {
+                            Some(-pms_missed_note_fall_progress(
+                                &session.timing_map,
+                                note.tick,
+                                note.time,
+                                session.judge.window_set.note.bad_slow_us.max(0),
+                                lane_render_now,
+                            ))
+                            .filter(|fall| *fall >= -1.0)
+                        } else {
+                            scroll.note_y(note.time, cursor_tick)
+                        };
+                        if let Some(y) = y {
                             snapshot.visible_notes[lane.index()].push(VisibleNote {
                                 lane,
                                 time: note.time,
                                 y,
                                 kind: NoteVisualKind::Tap,
-                                processed_judge: session.judge.judged_notes.get(&note.id).copied(),
+                                processed_judge,
                             });
                         }
                     }
@@ -548,11 +779,37 @@ pub fn build_render_snapshot_with_target_and_bga_frames_cached(
             }
         }
 
+        for event in &session.chart.timing_events {
+            if simple_tick_upper_bound.is_some_and(|upper| event.tick.0 as f64 > upper) {
+                break;
+            }
+            let Some(y) = scroll.note_y(event.time, cursor_tick) else {
+                continue;
+            };
+            let line = VisibleBarLine { time: event.time, y };
+            match event.kind {
+                TimingEventKind::BpmChange { .. } => snapshot.bpm_lines.push(line),
+                TimingEventKind::Stop { .. } => snapshot.stop_lines.push(line),
+            }
+        }
+
+        let end_second = (session.chart.end_time.0.max(0) / 1_000_000).min(21_600);
+        for second in 1..=end_second {
+            let time = TimeUs(second.saturating_mul(1_000_000));
+            let tick = session.timing_map.time_to_tick_f64(scroll_render_time(time));
+            if simple_tick_upper_bound.is_some_and(|upper| tick > upper) {
+                break;
+            }
+            if let Some(y) = scroll.note_y(time, cursor_tick) {
+                snapshot.time_lines.push(VisibleBarLine { time, y });
+            }
+        }
+
         for (pair_index, long) in session.chart.long_notes.iter().enumerate() {
             if let Some(upper_tick) = simple_tick_upper_bound
                 && (long.start_tick.0 as f64) > upper_tick
             {
-                continue;
+                break;
             }
             let head = scroll.note_progress(long.start_time, cursor_tick);
             let tail = scroll.note_progress(long.end_time, cursor_tick);
@@ -573,8 +830,8 @@ pub fn build_render_snapshot_with_target_and_bga_frames_cached(
             let body_state = if is_processing {
                 LongBodyState::Processing
             } else if mode == LongNoteMode::Hcn
-                && render_now.0 >= long.start_time.0
-                && render_now.0 < long.end_time.0
+                && chart_now.0 >= long.start_time.0
+                && chart_now.0 < long.end_time.0
                 && let Some(timer) = session.lane_hcn_timer[lane_index]
             {
                 if timer.inclease { LongBodyState::HcnActive } else { LongBodyState::HcnDamage }
@@ -597,7 +854,7 @@ pub fn build_render_snapshot_with_target_and_bga_frames_cached(
 pub fn update_render_snapshot_play_options(
     snapshot: &mut RenderSnapshot,
     session: &GameSession,
-    render_now: TimeUs,
+    chart_now: TimeUs,
 ) {
     snapshot.hispeed = session.hispeed;
     snapshot.hispeed_mode_index = hispeed_mode_index(session.hispeed_mode);
@@ -612,10 +869,12 @@ pub fn update_render_snapshot_play_options(
     snapshot.lanecover_enabled = session.lanecover_enabled;
     snapshot.lift_enabled = session.lift_enabled;
     snapshot.hidden_enabled = session.hidden_enabled;
+    snapshot.hispeed_auto_adjust = session.hispeed_auto_adjust;
+    let lane_render_now = lane_render_time(session, chart_now);
     snapshot.note_display_duration_ms = note_display_duration_ms(
         session,
-        session.timing_map.bpm_at_time(render_now) as f32,
-        current_scroll_multiplier(&session.chart, &session.timing_map, render_now),
+        session.timing_map.bpm_at_time(lane_render_now) as f32,
+        current_scroll_multiplier(&session.chart, &session.timing_map, lane_render_now),
     );
     snapshot.hidden_cover = session.hidden_cover;
 }
@@ -833,11 +1092,14 @@ fn set_scratch_angle_offset(
 fn scratch_angle_degrees(visual_time: TimeUs, scratch_index: i32, input_delta_ms: i64) -> i32 {
     let elapsed_ms = (visual_time.0.max(0) / 1_000).rem_euclid(SCRATCH_ANGLE_PERIOD_MS);
     let base_ms = if scratch_index % 2 == 0 {
-        elapsed_ms
-    } else {
         (SCRATCH_ANGLE_PERIOD_MS - elapsed_ms).rem_euclid(SCRATCH_ANGLE_PERIOD_MS)
+    } else {
+        elapsed_ms
     };
     let angle_ms = (base_ms + input_delta_ms).rem_euclid(SCRATCH_ANGLE_PERIOD_MS);
+    // Keep the offset in beatoraja's bottom-origin angle convention. The shared
+    // skin renderer converts it to BMZ's top-origin convention together with
+    // destination angles after applying all offsets.
     (angle_ms / SCRATCH_ANGLE_DEGREES_DIVISOR) as i32
 }
 
@@ -867,6 +1129,12 @@ fn end_of_note_elapsed_ms(render_now: TimeUs, end_time: TimeUs) -> Option<i32> {
     Some(((render_now.0 - end_time.0) / 1_000).clamp(0, i32::MAX as i64) as i32)
 }
 
+/// beatoraja の LaneRenderer が `microtime += judgetiming` とする範囲にだけ
+/// 表示オフセットを適用する。判定演出・BGA・skin timer は `chart_now` を使う。
+fn lane_render_time(session: &GameSession, chart_now: TimeUs) -> TimeUs {
+    TimeUs(chart_now.0.saturating_add(session.offsets.visual_offset_us))
+}
+
 /// ノーツ / 小節線 / ロングノートのスクロール計算に使う時刻。
 /// playstart 中は beatoraja と同く 0 扱いにする。
 fn scroll_render_time(render_now: TimeUs) -> TimeUs {
@@ -885,9 +1153,9 @@ struct ScrollContext<'a> {
     lookahead_ticks: f64,
     /// SCROLL イベント (tick 昇順)。`(tick, factor)`。
     /// 区間ごとに factor を掛けて scroll 位置を畳む。空なら factor 1.0 固定。
-    scroll_segments: &'a [(f64, f64)],
-    /// SPEED イベント (tick 昇順)。beatoraja は線形補間だが、まずは SCROLL と同じ
-    /// 階段関数で扱い、note 位置時点での値を倍率として掛ける。
+    scroll_integral: &'a ScrollIntegralCache,
+    /// SPEED イベント (tick 昇順)。隣接イベント間を線形補間し、note 位置時点の値を
+    /// 倍率として掛ける。
     speed_segments: &'a [(f64, f64)],
 }
 
@@ -898,7 +1166,7 @@ impl<'a> ScrollContext<'a> {
             hispeed: session.hispeed,
             visible_lane_fraction: crate::config::play::visible_lane_fraction(0.0, session.lift),
             lookahead_ticks: TICKS_PER_MEASURE as f64,
-            scroll_segments: &cache.scroll_segments,
+            scroll_integral: &cache.scroll_integral,
             speed_segments: &cache.speed_segments,
         }
     }
@@ -908,7 +1176,7 @@ impl<'a> ScrollContext<'a> {
     }
 
     fn simple_tick_upper_bound(&self, cursor_tick: f64) -> Option<f64> {
-        if !self.scroll_segments.is_empty() || !self.speed_segments.is_empty() {
+        if !self.scroll_integral.is_empty() || !self.speed_segments.is_empty() {
             return None;
         }
         let hispeed = self.hispeed.max(0.01) as f64;
@@ -944,17 +1212,21 @@ impl<'a> ScrollContext<'a> {
     /// SPEED 倍率を掛けた「見かけの距離」を返す。factor が負だと delta も負になり、
     /// note_y は `None` に倒れる(= 逆スクロール時は画面外として描画対象外)。
     fn scroll_delta(&self, from_tick: f64, to_tick: f64) -> f64 {
-        accumulate_scroll(self.scroll_segments, from_tick, to_tick)
-            * speed_at(self.speed_segments, to_tick)
+        self.scroll_integral.delta(from_tick, to_tick) * speed_at(self.speed_segments, to_tick)
     }
 }
 
-fn visible_lane_notes(notes: &[NoteEvent], upper_tick: Option<f64>) -> &[NoteEvent] {
-    let Some(upper_tick) = upper_tick else {
-        return notes;
-    };
-    let end = notes.partition_point(|note| (note.tick.0 as f64) <= upper_tick);
-    &notes[..end]
+fn visible_lane_notes(
+    notes: &[NoteEvent],
+    lower_time: Option<TimeUs>,
+    upper_tick: Option<f64>,
+) -> &[NoteEvent] {
+    let start =
+        lower_time.map_or(0, |lower_time| notes.partition_point(|note| note.time < lower_time));
+    let end = upper_tick.map_or(notes.len(), |upper_tick| {
+        notes.partition_point(|note| (note.tick.0 as f64) <= upper_tick)
+    });
+    &notes[start.min(end)..end]
 }
 
 fn visible_bar_lines(bar_lines: &[BarLine], upper_tick: Option<f64>) -> &[BarLine] {
@@ -967,6 +1239,7 @@ fn visible_bar_lines(bar_lines: &[BarLine], upper_tick: Option<f64>) -> &[BarLin
 
 /// `segments` を階段関数として `from..to` の区間積分を返す。factor は次のイベントまで
 /// 一定。`from > to` の場合は対称に負値を返す。
+#[cfg(test)]
 fn accumulate_scroll(segments: &[(f64, f64)], from_tick: f64, to_tick: f64) -> f64 {
     if (from_tick - to_tick).abs() < f64::EPSILON {
         return 0.0;
@@ -1001,34 +1274,27 @@ pub(crate) fn current_scroll_multiplier(
 }
 
 fn current_scroll_multiplier_for_tick(chart: &PlayableChart, cursor_tick: f64) -> f32 {
-    let scroll = chart
-        .scroll_events
-        .iter()
-        .take_while(|event| event.tick.0 as f64 <= cursor_tick)
-        .last()
-        .map_or(1.0, |event| event.factor);
+    let scroll_index =
+        chart.scroll_events.partition_point(|event| event.tick.0 as f64 <= cursor_tick);
+    let scroll = scroll_index.checked_sub(1).map_or(1.0, |index| chart.scroll_events[index].factor);
     let speed = current_speed_factor_for_tick(&chart.speed_events, cursor_tick);
     (scroll * speed) as f32
 }
 
 fn current_scroll_multiplier_from_segments(
-    scroll_segments: &[(f64, f64)],
+    scroll_integral: &ScrollIntegralCache,
     speed_segments: &[(f64, f64)],
     cursor_tick: f64,
 ) -> f32 {
-    (factor_before(scroll_segments, cursor_tick) * speed_at(speed_segments, cursor_tick)) as f32
+    (scroll_integral.factor_at(cursor_tick) * speed_at(speed_segments, cursor_tick)) as f32
 }
 
-/// 指定 tick 直前(同時刻も含む)の factor 値を返す(イベント未定義なら 1.0)。
+#[cfg(test)]
 fn factor_before(segments: &[(f64, f64)], tick: f64) -> f64 {
-    let mut current = 1.0;
-    for &(t, f) in segments {
-        if t > tick {
-            break;
-        }
-        current = f;
-    }
-    current
+    segments
+        .partition_point(|(event_tick, _)| *event_tick <= tick)
+        .checked_sub(1)
+        .map_or(1.0, |index| segments[index].1)
 }
 
 fn current_speed_factor_for_tick(events: &[bmz_chart::model::SpeedEvent], tick: f64) -> f64 {
@@ -1036,17 +1302,15 @@ fn current_speed_factor_for_tick(events: &[bmz_chart::model::SpeedEvent], tick: 
         return 1.0;
     }
 
-    let mut prev: Option<(f64, f64)> = None;
-    let mut next: Option<(f64, f64)> = None;
-    for event in events {
+    let next_index = events.partition_point(|event| event.tick.0 as f64 <= tick);
+    let prev = next_index.checked_sub(1).map(|index| {
+        let event = &events[index];
+        (event.tick.0 as f64, event.factor)
+    });
+    let next = events.get(next_index).map(|event| {
         let event_tick = event.tick.0 as f64;
-        if event_tick <= tick {
-            prev = Some((event_tick, event.factor));
-        } else {
-            next = Some((event_tick, event.factor));
-            break;
-        }
-    }
+        (event_tick, event.factor)
+    });
     interpolate_speed(prev, next, tick)
 }
 
@@ -1057,16 +1321,9 @@ fn speed_at(segments: &[(f64, f64)], tick: f64) -> f64 {
         return 1.0;
     }
     // tick を挟む直前 (prev) / 直後 (next) のイベントを探す。
-    let mut prev: Option<(f64, f64)> = None;
-    let mut next: Option<(f64, f64)> = None;
-    for &(t, f) in segments {
-        if t <= tick {
-            prev = Some((t, f));
-        } else {
-            next = Some((t, f));
-            break;
-        }
-    }
+    let next_index = segments.partition_point(|(event_tick, _)| *event_tick <= tick);
+    let prev = next_index.checked_sub(1).map(|index| segments[index]);
+    let next = segments.get(next_index).copied();
     interpolate_speed(prev, next, tick)
 }
 
@@ -1229,6 +1486,7 @@ fn side_suffix(side: TimingSide) -> &'static str {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
     use std::sync::Arc;
 
     use bmz_chart::hash::compute_chart_identity;
@@ -1236,14 +1494,126 @@ mod tests {
     use bmz_core::ids::NoteId;
     use bmz_core::input::{InputDeviceKind, InputEvent, InputKind, InputSource};
     use bmz_core::judge::{Judge, TimingSide};
-    use bmz_core::lane::Lane;
-    use bmz_core::time::{ChartTick, TimeUs};
+    use bmz_core::lane::{KeyMode, Lane};
+    use bmz_core::time::TimeUs;
     use bmz_gameplay::judge::model::JudgementEvent;
+    use bmz_render::skin::{
+        SkinDocument, SkinDocumentRenderExt, SkinDocumentTexture, SkinDrawState, SkinImageSize,
+        SkinRenderItem, SkinTextureId,
+    };
 
     use crate::config::profile_config::ProfileConfig;
     use crate::screens::play_session::{PlaySessionOptions, build_game_session};
 
     use super::*;
+
+    fn approx_eq(left: f32, right: f32) -> bool {
+        (left - right).abs() < 0.0001
+    }
+
+    #[test]
+    fn rhythm_timer_resets_at_bar_lines_and_integrates_bpm_and_stops() {
+        use bmz_chart::timing::{TickTimingEvent, TickTimingEventKind, build_timing_map};
+
+        let constant = build_timing_map(120.0, Vec::new());
+        let bars = vec![
+            BarLine { measure: 0, tick: ChartTick(0), time: TimeUs(0) },
+            BarLine { measure: 1, tick: ChartTick(3_840), time: TimeUs(2_000_000) },
+        ];
+        assert_eq!(rhythm_timer_elapsed_ms(&constant, &bars, TimeUs(-1)), None);
+        assert_eq!(rhythm_timer_elapsed_ms(&constant, &bars, TimeUs(1_000_000)), Some(2_000));
+        assert_eq!(rhythm_timer_elapsed_ms(&constant, &bars, TimeUs(2_500_000)), Some(1_000));
+
+        let bpm_change = build_timing_map(
+            120.0,
+            vec![TickTimingEvent { tick: ChartTick(960), kind: TickTimingEventKind::SetBpm(60.0) }],
+        );
+        assert_eq!(rhythm_timer_elapsed_ms(&bpm_change, &[], TimeUs(1_500_000)), Some(2_000));
+
+        let with_stop = build_timing_map(
+            120.0,
+            vec![TickTimingEvent {
+                tick: ChartTick(960),
+                kind: TickTimingEventKind::StopRaw { value: 96 },
+            }],
+        );
+        assert_eq!(rhythm_timer_elapsed_ms(&with_stop, &[], TimeUs(1_500_000)), Some(3_000));
+    }
+
+    #[test]
+    fn quarter_note_timer_tracks_real_milliseconds_since_latest_quarter() {
+        use bmz_chart::timing::{TickTimingEvent, TickTimingEventKind, build_timing_map};
+
+        let bars = vec![
+            BarLine { measure: 0, tick: ChartTick(0), time: TimeUs(0) },
+            BarLine { measure: 1, tick: ChartTick(3_840), time: TimeUs(2_000_000) },
+        ];
+        let constant = build_timing_map(120.0, Vec::new());
+        assert_eq!(quarter_note_elapsed_ms(&constant, &bars, TimeUs(-1)), None);
+        assert_eq!(quarter_note_elapsed_ms(&constant, &bars, TimeUs(505_000)), Some(5));
+        assert_eq!(quarter_note_elapsed_ms(&constant, &bars, TimeUs(1_158_000)), Some(158));
+
+        let bpm_change = build_timing_map(
+            120.0,
+            vec![TickTimingEvent { tick: ChartTick(960), kind: TickTimingEventKind::SetBpm(60.0) }],
+        );
+        assert_eq!(quarter_note_elapsed_ms(&bpm_change, &bars, TimeUs(1_505_000)), Some(5));
+    }
+
+    #[test]
+    fn pms_missed_note_fall_waits_for_late_bad_and_uses_no_speed_rate() {
+        use bmz_chart::timing::{TickTimingEvent, TickTimingEventKind, build_timing_map};
+
+        let constant = build_timing_map(120.0, Vec::new());
+        assert!(approx_eq(
+            pms_missed_note_fall_progress(
+                &constant,
+                ChartTick(0),
+                TimeUs(0),
+                200_000,
+                TimeUs(200_000),
+            ),
+            0.0,
+        ));
+        assert!(approx_eq(
+            pms_missed_note_fall_progress(
+                &constant,
+                ChartTick(0),
+                TimeUs(0),
+                200_000,
+                TimeUs(700_000),
+            ),
+            0.25,
+        ));
+
+        let with_stop = build_timing_map(
+            120.0,
+            vec![TickTimingEvent {
+                tick: ChartTick(0),
+                kind: TickTimingEventKind::StopRaw { value: 96 },
+            }],
+        );
+        assert!(approx_eq(
+            pms_missed_note_fall_progress(
+                &with_stop,
+                ChartTick(0),
+                TimeUs(0),
+                200_000,
+                TimeUs(1_200_000),
+            ),
+            0.0,
+        ));
+        assert!(approx_eq(
+            pms_missed_note_fall_progress(
+                &with_stop,
+                ChartTick(0),
+                TimeUs(0),
+                200_000,
+                TimeUs(1_700_000),
+            ),
+            0.25,
+        ));
+    }
 
     #[test]
     fn fast_slow_filter_suppresses_timing_ms_only_for_threshold_scope() {
@@ -1388,6 +1758,26 @@ mod tests {
     }
 
     #[test]
+    fn visual_offset_moves_lane_objects_without_advancing_effect_timers() {
+        let profile = ProfileConfig::new_default("default", "Default", 1);
+        let mut session =
+            build_game_session(Arc::new(chart()), &profile, PlaySessionOptions::default());
+        session.hispeed = 1.0;
+        session.offsets.visual_offset_us = 500_000;
+        session.full_combo_started_at = Some(TimeUs(0));
+        session.lane_keyon_started_at[Lane::Key1.index()] = Some(TimeUs(0));
+
+        let snapshot = build_render_snapshot(&session, TimeUs(0), &[], None);
+
+        assert_eq!(snapshot.time, TimeUs(0));
+        assert_eq!(snapshot.play_elapsed_time, TimeUs(0));
+        assert_eq!(snapshot.full_combo_elapsed_ms, Some(0));
+        assert_eq!(snapshot.keyon_ms[Lane::Key1.index()], Some(0));
+        let y = snapshot.visible_notes[Lane::Key1.index()][0].y;
+        assert!((y - 0.25).abs() < 1e-3, "expected lane y ~0.25, got {y}");
+    }
+
+    #[test]
     fn judged_notes_remain_visible_until_their_scheduled_time() {
         let profile = ProfileConfig::new_default("default", "Default", 1);
         let mut session =
@@ -1417,6 +1807,59 @@ mod tests {
 
         let after_scheduled_time = build_render_snapshot(&session, TimeUs(1_000_001), &[], None);
         assert!(after_scheduled_time.visible_notes[Lane::Key1.index()].is_empty());
+    }
+
+    #[test]
+    fn build_render_snapshot_culls_past_and_far_future_notes() {
+        let mut chart = chart();
+        chart.lane_notes[Lane::Key1.index()] = vec![
+            tap_note(1, Lane::Key1, 960, 500_000),
+            tap_note(2, Lane::Key1, 1_920, 1_000_000),
+            tap_note(3, Lane::Key1, 3_840, 2_000_000),
+            tap_note(4, Lane::Key1, 7_680, 4_000_000),
+        ];
+        chart.total_notes = 4;
+        chart.end_time = TimeUs(4_000_000);
+        let profile = ProfileConfig::new_default("default", "Default", 1);
+        let mut session =
+            build_game_session(Arc::new(chart), &profile, PlaySessionOptions::default());
+        session.hispeed = 1.0;
+
+        let snapshot = build_render_snapshot(&session, TimeUs(1_000_000), &[], None);
+        let notes = &snapshot.visible_notes[Lane::Key1.index()];
+
+        assert_eq!(notes.len(), 2);
+        assert_eq!(notes[0].time, TimeUs(1_000_000));
+        assert_eq!(notes[0].y, 0.0);
+        assert_eq!(notes[1].time, TimeUs(2_000_000));
+        assert_eq!(notes[1].y, 0.5);
+    }
+
+    #[test]
+    fn build_render_snapshot_keeps_k9_poor_note_while_falling() {
+        let mut chart = chart();
+        chart.metadata.key_mode = KeyMode::K9;
+        chart.lane_notes[Lane::Key1.index()] = vec![tap_note(1, Lane::Key1, 0, 0)];
+        let profile = ProfileConfig::new_default("default", "Default", 1);
+        let mut session =
+            build_game_session(Arc::new(chart), &profile, PlaySessionOptions::default());
+        session.hispeed = 1.0;
+        session.judge.judged_notes.insert(NoteId(1), Judge::Poor);
+        let bad_slow_us = session.judge.window_set.note.bad_slow_us.max(0);
+
+        let falling =
+            build_render_snapshot(&session, TimeUs(bad_slow_us.saturating_add(500_000)), &[], None);
+        let notes = &falling.visible_notes[Lane::Key1.index()];
+        assert_eq!(notes.len(), 1);
+        assert!(notes[0].y < 0.0);
+
+        let finished = build_render_snapshot(
+            &session,
+            TimeUs(bad_slow_us.saturating_add(2_500_000)),
+            &[],
+            None,
+        );
+        assert!(finished.visible_notes[Lane::Key1.index()].is_empty());
     }
 
     #[test]
@@ -1457,6 +1900,50 @@ mod tests {
         assert_eq!(before_last_note.end_of_note_elapsed_ms, None);
         assert_eq!(at_last_note.end_of_note_elapsed_ms, Some(0));
         assert_eq!(after_last_note.end_of_note_elapsed_ms, Some(250));
+    }
+
+    #[test]
+    fn cached_end_of_note_time_uses_last_renderable_note() {
+        let profile = ProfileConfig::new_default("default", "Default", 1);
+        let mut chart = chart();
+        chart.lane_notes[Lane::Key2.index()] = vec![NoteEvent {
+            id: NoteId(2),
+            lane: Lane::Key2,
+            kind: NoteKind::Invisible,
+            tick: ChartTick(3_840),
+            time: TimeUs(2_000_000),
+            sound: None,
+            damage: None,
+        }];
+        chart.lane_notes[Lane::Key3.index()] = vec![NoteEvent {
+            id: NoteId(3),
+            lane: Lane::Key3,
+            kind: NoteKind::Mine,
+            tick: ChartTick(5_760),
+            time: TimeUs(3_000_000),
+            sound: None,
+            damage: Some(10),
+        }];
+        chart.end_time = TimeUs(3_000_000);
+        let session = build_game_session(Arc::new(chart), &profile, PlaySessionOptions::default());
+        let cache = PlayRenderSnapshotCache::from_chart(&session.chart);
+        let frames = BgaFrameCatalog::new();
+        let snapshot_at = |time| {
+            build_render_snapshot_with_target_and_bga_frames_cached(
+                &session,
+                time,
+                &[],
+                None,
+                None,
+                None,
+                &frames,
+                &cache,
+            )
+        };
+
+        assert_eq!(snapshot_at(TimeUs(2_999_999)).end_of_note_elapsed_ms, None);
+        assert_eq!(snapshot_at(TimeUs(3_000_000)).end_of_note_elapsed_ms, Some(0));
+        assert_eq!(snapshot_at(TimeUs(3_250_000)).end_of_note_elapsed_ms, Some(250));
     }
 
     #[test]
@@ -1630,6 +2117,28 @@ mod tests {
     }
 
     #[test]
+    fn visual_offset_advances_lane_bpm_without_advancing_snapshot_time() {
+        use bmz_chart::model::{TimingEvent, TimingEventKind};
+        use bmz_chart::timing::TICKS_PER_BEAT;
+
+        let mut c = chart();
+        c.metadata.initial_bpm = 120.0;
+        c.timing_events = vec![TimingEvent {
+            tick: ChartTick(TICKS_PER_BEAT as u64 * 4),
+            time: TimeUs(2_000_000),
+            kind: TimingEventKind::BpmChange { bpm: 240.0 },
+        }];
+        let profile = ProfileConfig::new_default("default", "Default", 1);
+        let mut session = build_game_session(Arc::new(c), &profile, PlaySessionOptions::default());
+        session.offsets.visual_offset_us = 100_000;
+
+        let snapshot = build_render_snapshot(&session, TimeUs(1_950_000), &[], None);
+
+        assert_eq!(snapshot.time, TimeUs(1_950_000));
+        assert_eq!(snapshot.now_bpm, 240.0);
+    }
+
+    #[test]
     fn build_render_snapshot_scroll_freezes_during_stop() {
         use bmz_chart::model::{TimingEvent, TimingEventKind};
         use bmz_chart::timing::TICKS_PER_BEAT;
@@ -1746,6 +2255,46 @@ mod tests {
         assert!((super::speed_at(&segments, 500.0) - 1.0).abs() < 1e-6);
         assert!((super::speed_at(&segments, 1000.0) - 2.0).abs() < 1e-6);
         assert!((super::speed_at(&segments, 2000.0) - 2.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn speed_at_keeps_last_factor_at_duplicate_tick() {
+        let segments = [(0.0, 1.0), (1000.0, 2.0), (1000.0, 3.0), (2000.0, 5.0)];
+
+        assert!((super::speed_at(&segments, 1000.0) - 3.0).abs() < 1e-6);
+        assert!((super::speed_at(&segments, 1500.0) - 4.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn accumulate_scroll_preserves_boundaries_reverse_and_negative_factors() {
+        let segments = [(0.0, 2.0), (100.0, 0.5), (200.0, -1.0)];
+        let integral = ScrollIntegralCache::from_segments(segments);
+
+        assert!((super::accumulate_scroll(&segments, 0.0, 50.0) - 100.0).abs() < 1e-6);
+        assert!((super::accumulate_scroll(&segments, 0.0, 150.0) - 225.0).abs() < 1e-6);
+        assert!((super::accumulate_scroll(&segments, 0.0, 250.0) - 200.0).abs() < 1e-6);
+        assert!((super::accumulate_scroll(&segments, 50.0, 250.0) - 100.0).abs() < 1e-6);
+        assert!((super::accumulate_scroll(&segments, 250.0, 50.0) + 100.0).abs() < 1e-6);
+        assert_eq!(super::accumulate_scroll(&segments, 50.0, 50.0), 0.0);
+        for (from_tick, to_tick) in
+            [(0.0, 50.0), (0.0, 150.0), (0.0, 250.0), (50.0, 250.0), (250.0, 50.0), (50.0, 50.0)]
+        {
+            let expected = super::accumulate_scroll(&segments, from_tick, to_tick);
+            assert!((integral.delta(from_tick, to_tick) - expected).abs() < 1e-6);
+        }
+
+        let duplicate_tick = [(0.0, 2.0), (0.0, 3.0), (100.0, 1.0)];
+        assert!((super::accumulate_scroll(&duplicate_tick, 0.0, 50.0) - 150.0).abs() < 1e-6);
+        let duplicate_integral = ScrollIntegralCache::from_segments(duplicate_tick);
+        assert!((duplicate_integral.delta(0.0, 50.0) - 150.0).abs() < 1e-6);
+
+        let delayed_event = [(100.0, 2.0), (200.0, 0.5)];
+        let delayed_integral = ScrollIntegralCache::from_segments(delayed_event);
+        for (from_tick, to_tick) in [(0.0, 50.0), (0.0, 100.0), (50.0, 150.0), (250.0, 50.0)] {
+            let expected = super::accumulate_scroll(&delayed_event, from_tick, to_tick);
+            assert!((delayed_integral.delta(from_tick, to_tick) - expected).abs() < 1e-6);
+        }
+        assert_eq!(delayed_integral.delta(0.0, f64::EPSILON / 2.0), 0.0);
     }
 
     #[test]
@@ -1990,6 +2539,16 @@ mod tests {
     }
 
     #[test]
+    fn build_render_snapshot_carries_chart_total_gauge() {
+        let profile = ProfileConfig::new_default("default", "Default", 1);
+        let mut source = chart();
+        source.metadata.total = Some(350.0);
+        let session = build_game_session(Arc::new(source), &profile, PlaySessionOptions::default());
+
+        assert_eq!(build_render_snapshot(&session, TimeUs(0), &[], None).chart_total_gauge, 350.0);
+    }
+
+    #[test]
     fn build_render_snapshot_treats_replay_as_autoplay_off_for_skin_ops() {
         let mut profile = ProfileConfig::new_default("default", "Default", 1);
         profile.play.auto_play = true;
@@ -2128,7 +2687,7 @@ mod tests {
 
         assert_eq!(
             snapshot.skin_offsets.get(SCRATCH_ANGLE_OFFSET_1P),
-            Some(SkinOffsetValue { x: 1, y: 2, w: 3, h: 4, r: 280, a: -6 })
+            Some(SkinOffsetValue { x: 1, y: 2, w: 3, h: 4, r: 80, a: -6 })
         );
     }
 
@@ -2144,7 +2703,7 @@ mod tests {
 
         assert_eq!(
             snapshot.skin_offsets.get(SCRATCH_ANGLE_OFFSET_1P),
-            Some(SkinOffsetValue { r: 280, ..SkinOffsetValue::default() })
+            Some(SkinOffsetValue { r: 80, ..SkinOffsetValue::default() })
         );
     }
 
@@ -2160,7 +2719,7 @@ mod tests {
 
         assert_eq!(
             snapshot.skin_offsets.get(SCRATCH_ANGLE_OFFSET_1P),
-            Some(SkinOffsetValue { r: 280, ..SkinOffsetValue::default() })
+            Some(SkinOffsetValue { r: 80, ..SkinOffsetValue::default() })
         );
     }
 
@@ -2177,7 +2736,7 @@ mod tests {
 
         assert_eq!(
             snapshot.skin_offsets.get(SCRATCH_ANGLE_OFFSET_1P),
-            Some(SkinOffsetValue { r: 253, ..SkinOffsetValue::default() })
+            Some(SkinOffsetValue { r: 53, ..SkinOffsetValue::default() })
         );
     }
 
@@ -2194,8 +2753,93 @@ mod tests {
 
         assert_eq!(
             snapshot.skin_offsets.get(SCRATCH_ANGLE_OFFSET_1P),
-            Some(SkinOffsetValue { r: 306, ..SkinOffsetValue::default() })
+            Some(SkinOffsetValue { r: 106, ..SkinOffsetValue::default() })
         );
+    }
+
+    #[test]
+    fn scratch_angle_offsets_match_beatoraja_1p_and_2p_values() {
+        let first_frame = TimeUs(6_000_000);
+        let next_frame = TimeUs(6_006_000);
+
+        assert_eq!(scratch_angle_degrees(first_frame, 0, 0), 80);
+        assert_eq!(scratch_angle_degrees(next_frame, 0, 0), 79);
+        assert_eq!(scratch_angle_degrees(first_frame, 1, 0), 280);
+        assert_eq!(scratch_angle_degrees(next_frame, 1, 0), 281);
+    }
+
+    #[test]
+    fn build_render_snapshot_sets_opposite_14k_turntable_offsets() {
+        let profile = ProfileConfig::new_default("default", "Default", 1);
+        let mut chart = chart();
+        chart.metadata.key_mode = KeyMode::K14;
+        let session = build_game_session(Arc::new(chart), &profile, PlaySessionOptions::default());
+
+        let snapshot = build_render_snapshot(&session, TimeUs(6_000_000), &[], None);
+
+        assert_eq!(snapshot.skin_offsets.get(SCRATCH_ANGLE_OFFSET_1P).unwrap().r, 80);
+        assert_eq!(snapshot.skin_offsets.get(SCRATCH_ANGLE_OFFSET_2P).unwrap().r, 280);
+    }
+
+    #[test]
+    fn scratch_offsets_render_with_beatoraja_rotation_after_skin_conversion() {
+        let profile = ProfileConfig::new_default("default", "Default", 1);
+        let mut chart = chart();
+        chart.metadata.key_mode = KeyMode::K14;
+        let session = build_game_session(Arc::new(chart), &profile, PlaySessionOptions::default());
+        let document: SkinDocument = serde_json::from_str(
+            r#"
+            {
+                "type": 2,
+                "w": 100,
+                "h": 100,
+                "source": [{ "id": "src", "path": "turntable.png" }],
+                "image": [{ "id": "turntable", "src": "src", "w": 10, "h": 10 }],
+                "destination": [
+                    {
+                        "id": "turntable",
+                        "offset": 1,
+                        "dst": [{ "x": 0, "y": 0, "w": 10, "h": 10 }]
+                    },
+                    {
+                        "id": "turntable",
+                        "offset": 2,
+                        "dst": [{ "x": 20, "y": 0, "w": 10, "h": 10 }]
+                    }
+                ]
+            }
+            "#,
+        )
+        .unwrap();
+        let sources = HashMap::from([(
+            "src".to_string(),
+            SkinDocumentTexture {
+                source_id: "src".to_string(),
+                texture: SkinTextureId(42),
+                source_size: SkinImageSize { width: 10.0, height: 10.0 },
+            },
+        )]);
+
+        for (visual_time, expected_angles) in
+            [(TimeUs(6_000_000), [-80, -280]), (TimeUs(6_006_000), [-79, -281])]
+        {
+            let snapshot = build_render_snapshot(&session, visual_time, &[], None);
+            let state = SkinDrawState {
+                key_mode: KeyMode::K14,
+                skin_offsets: snapshot.skin_offsets,
+                ..SkinDrawState::default()
+            };
+            let angles = document
+                .static_image_render_items(&sources, &state)
+                .iter()
+                .map(|item| match item {
+                    SkinRenderItem::RotatedImage { angle_deg, .. } => *angle_deg as i32,
+                    _ => panic!("turntable should be rotated"),
+                })
+                .collect::<Vec<_>>();
+
+            assert_eq!(angles, expected_angles);
+        }
     }
 
     #[test]
@@ -2208,6 +2852,19 @@ mod tests {
         snapshot.play_elapsed_time = TimeUs(1_050_000);
 
         refresh_play_skin_visuals(&mut snapshot, &session);
+
+        assert_eq!(snapshot.keyon_ms[Lane::Key1.index()], Some(50));
+    }
+
+    #[test]
+    fn refresh_play_skin_visuals_with_input_elapsed_tracks_short_pre_ready_keybeam() {
+        let profile = ProfileConfig::new_default("default", "Default", 1);
+        let mut session =
+            build_game_session(Arc::new(chart()), &profile, PlaySessionOptions::default());
+        session.lane_keyon_started_at[Lane::Key1.index()] = Some(TimeUs(100_000));
+        let mut snapshot = build_render_snapshot(&session, TimeUs(-100_000), &[], None);
+
+        refresh_play_skin_visuals_with_input_elapsed(&mut snapshot, &session, TimeUs(150_000));
 
         assert_eq!(snapshot.keyon_ms[Lane::Key1.index()], Some(50));
     }
@@ -2315,6 +2972,8 @@ mod tests {
         let mut session =
             build_game_session(Arc::new(chart), &profile, PlaySessionOptions::default());
         session.poor_bga_duration_us = 250_000;
+        // レーン表示オフセットが BGA イベント選択へ漏れないことも同時に検証する。
+        session.offsets.visual_offset_us = 500_000;
         let bga_frames = BgaFrameCatalog::from([
             (BgaAssetId(0), display_bga_frame(BgaAssetId(0), 256, 256)),
             (BgaAssetId(1), display_bga_frame(BgaAssetId(1), 640, 480)),
@@ -2463,15 +3122,7 @@ mod tests {
     }
 
     fn chart() -> PlayableChart {
-        let note = NoteEvent {
-            id: NoteId(1),
-            lane: Lane::Key1,
-            kind: NoteKind::Tap,
-            tick: ChartTick(0),
-            time: TimeUs(1_000_000),
-            sound: None,
-            damage: None,
-        };
+        let note = tap_note(1, Lane::Key1, 0, 1_000_000);
         let mut lane_notes = std::array::from_fn(|_| Vec::new());
         lane_notes[Lane::Key1.index()].push(note);
 
@@ -2506,6 +3157,18 @@ mod tests {
             bga_assets: Vec::new(),
             total_notes: 1,
             end_time: TimeUs(1_000_000),
+        }
+    }
+
+    fn tap_note(id: u32, lane: Lane, tick: u64, time_us: i64) -> NoteEvent {
+        NoteEvent {
+            id: NoteId(id),
+            lane,
+            kind: NoteKind::Tap,
+            tick: ChartTick(tick),
+            time: TimeUs(time_us),
+            sound: None,
+            damage: None,
         }
     }
 
@@ -2612,5 +3275,46 @@ mod tests {
         // 終端も通過したら非表示
         let passed = build_render_snapshot(&session, TimeUs(2_000_000), &[], None);
         assert!(passed.visible_long_notes.is_empty());
+    }
+
+    #[test]
+    fn cached_snapshot_remains_correct_after_time_rewind() {
+        let profile = ProfileConfig::new_default("default", "Default", 1);
+        let mut session = build_game_session(
+            Arc::new(chart_with_long_note()),
+            &profile,
+            PlaySessionOptions::default(),
+        );
+        session.hispeed = 1.0;
+        let cache = PlayRenderSnapshotCache::from_chart(&session.chart);
+        let frames = BgaFrameCatalog::new();
+
+        let later = build_render_snapshot_with_target_and_bga_frames_cached(
+            &session,
+            TimeUs(1_000_000),
+            &[],
+            None,
+            None,
+            None,
+            &frames,
+            &cache,
+        );
+        let earlier = build_render_snapshot_with_target_and_bga_frames_cached(
+            &session,
+            TimeUs(0),
+            &[],
+            None,
+            None,
+            None,
+            &frames,
+            &cache,
+        );
+
+        assert_eq!(later.visible_long_notes.len(), 1);
+        assert_eq!(later.visible_long_notes[0].head_y, 0.0);
+        assert_eq!(later.visible_long_notes[0].tail_y, 0.25);
+        assert_eq!(earlier.visible_long_notes.len(), 1);
+        assert_eq!(earlier.visible_long_notes[0].head_y, 0.25);
+        assert_eq!(earlier.visible_long_notes[0].tail_y, 0.75);
     }
 }

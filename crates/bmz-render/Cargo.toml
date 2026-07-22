@@ -7,9 +7,9 @@ license.workspace = true
 [dependencies]
 anyhow.workspace = true
 ab_glyph.workspace = true
-arboard.workspace = true
 bytemuck.workspace = true
 image.workspace = true
+flate2.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tracing.workspace = true
@@ -23,3 +23,9 @@ bmz-chart = { path = "../bmz-chart" }
 bmz-skin-document = { path = "../bmz-skin-document" }
 bmz-gameplay = { path = "../bmz-gameplay" }
 bmz-font = { path = "../bmz-font" }
+
+[target.'cfg(windows)'.dependencies]
+clipboard-win.workspace = true
+
+[target.'cfg(not(windows))'.dependencies]
+arboard.workspace = true

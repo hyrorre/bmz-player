@@ -1,5 +1,150 @@
 # CHANGELOG
 
+## v0.1.10
+
+### 改善
+
+- スキン offset の保存と復元を key mode / slot 単位に分離しました。
+  - 12 スロットごとに offset を保存し、旧形式の共通設定と path 単位の履歴は互換移行します。
+  - プレイ開始前、セッション生成、ライブ反映で現在のスキン設定を一貫して使用するようにしました。
+
+- FPS 表示を安定化しました。
+  - 右上のオーバーレイと skin ref 20 に、beatoraja と同じ秒単位の確定 FPS を表示するようにしました。
+  - フレーム間隔の EMA による表示の揺れと、オーバーレイ・スキン間の値の乖離を解消しました。
+
+### 修正
+
+- プレイ開始時に古い skin history の offset / height が復元され、現在の Notes offset と異なる表示になる問題を修正しました。
+- Windows release packaging で FFmpeg の Debug 構成までビルドされ、処理時間が増えていた問題を修正しました。
+
+### テスト・開発環境
+
+- スキン slot 分離、旧設定・履歴移行、offset 優先順位、FPS 表示の回帰テストを追加・更新しました。
+- Windows 配布用に Release 専用 vcpkg triplet と staging を追加し、packaging / licenses ドキュメントを更新しました。
+
+## v0.1.9
+
+### 改善
+
+- スキン互換性とスキン連携を大幅に拡張しました。
+  - WMII RESULT SKIN に対応しました。
+  - ModernChic skin に一部対応しました。
+  - Luxe Flat を同梱スキンとして追加しました。
+  - その他、スキン互換性を高める修正を行いました。
+
+- 音声、動画、リトライ性能を改善しました。
+  - Windows 共有出力での音声遅延を抑えるオプションを追加しました。 (IAudioClient3)
+  - quick retry では chart、キー音、静止画 BGA、動画 decoder を可能な範囲で再利用するようにしました。
+  - 選曲 preview の音量正規化目標をプレイ音声と同じ -6 LUFS に統一しました。
+
+- プレイ操作と譜面互換性を改善しました。
+  - 最終ノーツ後の Play 終了演出を Escape でも開始できるようにしました。
+  - 先頭ノーツが早い譜面の開始位置を遅らせ、余裕を持って第一ノーツを処理できるようにしました。
+  - Judge Algorithm の設定値を Combo / Duration / Lowest に統一し、既存の Score 設定を互換変換するようにしました。
+  - preload 中も HS 操作とキービーム表示を反映し、リトライ時の入力・音声・BGA 状態を安定させました。
+
+- 大きな難易度表を扱うときの選曲画面を高速化しました。
+  - 譜面、スコア、リプレイスロット、解析情報を複数件単位で取得し、重複ハッシュをまとめて検索するようにしました。
+  - 難易度表レベル検索用の複合インデックスを追加しました。
+
+### 修正
+
+- WMII / Luxe Flat / m-select スキンで、Result のパネル、グラフ、ゲージ、CLEAR 分岐、2P RANDOM、LIFT 表示が誤る問題を修正しました。
+- コース途中落ち時に未プレイノーツが BP へ含まれない問題を修正しました。
+- Windows のスクリーンショットをクリップボードへコピーする処理が遅延・失敗する問題を修正しました。
+- 設定画面に実行環境で利用できない音声・映像 backend が表示される問題を修正しました。
+
+### テスト・開発環境
+
+- WMII、Luxe Flat、mz-select、ModernChic の実スキン回帰テストを追加・更新しました。
+- IAudioClient3、同曲リトライ、BGA / 動画 timestamp、コース結果、難易度表の一括検索、Result / Select 操作の回帰テストを追加しました。
+- `README.md`、`docs/controls.md`、`docs/hs.md`、`docs/packaging.md`、`docs/licenses.md` を更新しました。
+
+## v0.1.8
+
+### 改善
+
+- Windowsのゲームパッド入力にGameInput backendを追加しました。 (main-thread polling方式)
+  - ゲームパッドbackendの既定値と自動選択はgilrsを優先し、Windowsでgilrsを初期化できない場合はGameInputへfallbackします。
+  - GameInputのreading時刻を判定へ渡し、1P / 2P割り当てをstable device IDで保存するようにしました。
+  - GameInputの履歴取得をデバイス単位にし、曲終了後や一時切断後も入力と割り当てが復帰するようにしました。
+
+- IR と難易度表の運用機能を拡張しました。
+  - 通常プレイの譜面時間を IR payload へ送信し、日次の成果レポート（clear、EX score、min BP）を確認できるようにしました。
+
+- ハイスピード関連の挙動を微調整しました。
+  - NHS / FHS で異なる変更刻みを設定できるようにしました。
+  - HS-FIX に応じたモードで開始するようにしました。
+    - HS-FIX OFF の場合 NHS で開始されます。
+    - HS-FIX OFF 以外の場合 FHS で開始されます。
+  - 目標緑数字が変更される条件を変更し beatoraja の仕様に近づけました。
+
+- コース、BGA、音声・動画の互換性を改善しました。
+  - 譜面取り込み時に未解決のコース譜面リンクを SHA256 / MD5 で補修し、コース完走 clear を最終ゲージと失敗状態から正しく算出するようにしました。
+  - 選曲 preview の音量正規化機能を追加しました。
+  - カーソル音の過剰な重複再生を抑えました。
+  - READY 前のプレイ intro、タイトル、BGA mode / expand を実セッションと揃え、コース開始時の表示切り替えを滑らかにしました。
+
+### 修正
+
+- GameInput の起動時 stack 使用量、プレイ遷移後の履歴再開、gilrs を既定値とする設定互換性を修正しました。
+- OBS の有効 / 無効切り替えが再起動まで反映されない問題を修正しました。
+- 自動判定調整が機能していない問題を修正しました。
+- 選曲 skin の genre 表示、14K turntable の回転方向、コース開始時の曲タイトル表示を beatoraja 互換へ修正しました。
+- 動画 BGA の開始時刻がズレることがある問題を修正しました。
+
+### テスト・開発環境
+
+- GameInput runtime とライセンスを Windows 配布物へ同梱し、入力設定・controls / packaging / HS 仕様書を更新しました。
+- IR daily report / difficulty table 同期、GameInput、READY / BGA preload、preview 音量、動画 timestamp、コース clear / link の回帰テストを追加・更新しました。
+
+## v0.1.7
+
+### 改善
+
+- 入力遅延と複数コントローラ対応を改善しました。
+  - Windows でプレイ中のキーボード入力を Raw Input 経路へ切り替え、入力を描画前に反映するようにしました。
+  - gamepad のイベント時刻を保持し、10K / 14K で 1P / 2P に別々のコントローラを割り当てられるようにしました。
+  - 接続順に欠番がある場合や旧 wildcard 設定が混在する場合も、物理デバイス固有の割り当てを優先するようにしました。
+
+- 外部アプリ連携を追加しました。
+  - Discord Rich Presence で Select / Decide / Play / Result / Course Result の状態、曲名、アーティストを表示できるようにしました。
+  - OBS WebSocket v5 によるシーン切り替え、録画開始・停止、再接続、状態別 action 設定に対応しました。
+
+- 選曲プレビューと音量バランスを改善しました。
+  - `#PREVIEW` や preview 音声が無い譜面では、ノーツ密度の高い区間からプレビューをオンデマンド生成するようにしました。
+  - 選曲プレビューの音声が乱れる不具合を修正しました。
+  - プレイ音量の正規化基準を調整しました。
+
+- IR と外部スコアの取り込みを拡張しました。
+  - IR 登録前のローカルスコアを throttled sync で一括送信する `bmz ir upload-local` を追加しました。
+  - 送信済みスコアの device key attestation、import 元・option・device type の保持、再取り込み時の重複 cleanup を追加しました。
+  - beatoraja / LR2 スコアの LN policy とノート数を検証し、対応できないレイアウトを安全に skip するようにしました。
+
+- スキン互換性を改善しました。
+  - PeacefulPlay のゲージ値・先端発光、キービーム、NPS / key logger、READY 前表示を再現できるようにしました。
+  - mz-select の Result タイトル、WMII CSV LR2Skin の LN animation、ECFN 14K の Lua layout と turntable 回転を修正しました。
+  - Result skin で今回の IR 送信成功・失敗を表示できるようにしました。
+
+- 選曲画面と設定操作を改善しました。
+  - 設定項目をマウスクリックとホイールで編集できるようにしました。
+  - favorite 登録 / 解除とスクリーンショット保存を左上のトーストで通知するようにしました。
+  - 新規設定に Dystopia、PMS、DP 系を含む難易度表を追加しました。
+
+### 修正
+
+- FHS 使用中の通常のハイスピード変更で target green number が書き換わる問題を修正しました。
+- 2P コントローラ操作が 1P の選曲 option として解釈される問題と、9K の選曲移動方向を修正しました。
+- Discord / OBS が後から起動した場合や再接続した場合に、表示・シーン・録画状態が復帰しない問題を修正しました。
+- JavaScript の安全整数範囲を超える random seed が IR 署名検証時に丸められる問題を修正しました。
+- BMS / BMSON の beatoraja 互換性を向上させました。
+
+### テスト・開発環境
+
+- 入力 backend の queue、timestamp age、drain / translate / drop 件数を診断できるようにしました。
+- Raw Input、gamepad 割り当て、生成プレビュー、OBS / Discord、スコア import / IR cleanup、PeacefulPlay を含む外部スキンの回帰テストを追加しました。
+- `docs/controls.md`、`docs/ir.md`、`docs/ln.md` を更新しました。
+
 ## v0.1.6
 
 ### 改善

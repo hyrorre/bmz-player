@@ -93,6 +93,25 @@ impl AudioEngine {
         self.play_now_with_fade_in(sound_id, volume, loop_playback, 0);
     }
 
+    pub fn play_now_with_voice_limit(
+        &mut self,
+        sound_id: bmz_core::ids::SoundId,
+        volume: f32,
+        loop_playback: bool,
+        max_voices: usize,
+    ) {
+        self.schedule(ScheduledSound {
+            start_frame: 0,
+            sound_id,
+            volume: volume.clamp(0.0, 1.0),
+            pan: 0.0,
+            loop_playback,
+            fade_in_frames: 0,
+            catch_up: false,
+            restart_policy: RestartPolicy::LimitSameSound(max_voices),
+        });
+    }
+
     pub fn play_now_with_fade_in(
         &mut self,
         sound_id: bmz_core::ids::SoundId,

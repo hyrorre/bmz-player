@@ -17,13 +17,17 @@ type DeleteAccountState = {
 
 const { user, fetch: refreshSession, clear } = useUserSession()
 const requestFetch = useRequestFetch()
+const localePath = useLocalePath()
+const { t } = useI18n()
+const { formatDateTime } = useLocaleFormat()
+const { translateApiError } = useApiError()
 
 const emailFields = computed<AuthFormField[]>(() => [
   {
     name: 'currentPassword',
     type: 'password',
-    label: '現在のパスワード',
-    placeholder: '現在のパスワード',
+    label: t('auth.currentPassword'),
+    placeholder: t('auth.currentPassword'),
     autocomplete: 'current-password',
     required: true,
     defaultValue: '',
@@ -31,7 +35,7 @@ const emailFields = computed<AuthFormField[]>(() => [
   {
     name: 'email',
     type: 'email',
-    label: '新しいメールアドレス',
+    label: t('settings.newEmail'),
     placeholder: 'name@example.com',
     autocomplete: 'email',
     required: true,
@@ -39,12 +43,12 @@ const emailFields = computed<AuthFormField[]>(() => [
   },
 ])
 
-const passwordFields: AuthFormField[] = [
+const passwordFields = computed<AuthFormField[]>(() => [
   {
     name: 'currentPassword',
     type: 'password',
-    label: '現在のパスワード',
-    placeholder: '現在のパスワード',
+    label: t('auth.currentPassword'),
+    placeholder: t('auth.currentPassword'),
     autocomplete: 'current-password',
     required: true,
     defaultValue: '',
@@ -52,25 +56,25 @@ const passwordFields: AuthFormField[] = [
   {
     name: 'password',
     type: 'password',
-    label: '新しいパスワード',
-    placeholder: '8文字以上',
+    label: t('auth.newPassword'),
+    placeholder: t('auth.passwordMin'),
     autocomplete: 'new-password',
     required: true,
     defaultValue: '',
   },
-]
+])
 
-const deleteAccountFields: AuthFormField[] = [
+const deleteAccountFields = computed<AuthFormField[]>(() => [
   {
     name: 'currentPassword',
     type: 'password',
-    label: '現在のパスワード',
-    placeholder: '現在のパスワード',
+    label: t('auth.currentPassword'),
+    placeholder: t('auth.currentPassword'),
     autocomplete: 'current-password',
     required: true,
     defaultValue: '',
   },
-]
+])
 
 const emailLoading = ref(false)
 const passwordLoading = ref(false)
@@ -82,18 +86,18 @@ const passwordSuccessMessage = ref('')
 const deleteAccountErrorMessage = ref('')
 
 if (!user.value) {
-  await navigateTo('/login')
+  await navigateTo(localePath('/login'))
 }
 
 function validateEmail(state: Partial<EmailState>) {
   const errors: { name: keyof EmailState; message: string }[] = []
 
   if (!state.currentPassword) {
-    errors.push({ name: 'currentPassword', message: '現在のパスワードを入力してください。' })
+    errors.push({ name: 'currentPassword', message: t('validation.currentPasswordRequired') })
   }
 
   if (!state.email?.trim()) {
-    errors.push({ name: 'email', message: 'メールアドレスを入力してください。' })
+    errors.push({ name: 'email', message: t('validation.emailRequired') })
   }
 
   return errors
@@ -103,11 +107,11 @@ function validatePassword(state: Partial<PasswordState>) {
   const errors: { name: keyof PasswordState; message: string }[] = []
 
   if (!state.currentPassword) {
-    errors.push({ name: 'currentPassword', message: '現在のパスワードを入力してください。' })
+    errors.push({ name: 'currentPassword', message: t('validation.currentPasswordRequired') })
   }
 
   if (!state.password || state.password.length < 8) {
-    errors.push({ name: 'password', message: 'パスワードは8文字以上にしてください。' })
+    errors.push({ name: 'password', message: t('validation.passwordMin') })
   }
 
   return errors
@@ -117,7 +121,7 @@ function validateDeleteAccount(state: Partial<DeleteAccountState>) {
   const errors: { name: keyof DeleteAccountState; message: string }[] = []
 
   if (!state.currentPassword) {
-    errors.push({ name: 'currentPassword', message: '現在のパスワードを入力してください。' })
+    errors.push({ name: 'currentPassword', message: t('validation.currentPasswordRequired') })
   }
 
   return errors
@@ -125,7 +129,7 @@ function validateDeleteAccount(state: Partial<DeleteAccountState>) {
 
 async function updateEmail(event: FormSubmitEvent<EmailState>) {
   if (!user.value) {
-    await navigateTo('/login')
+    await navigateTo(localePath('/login'))
     return
   }
 
@@ -142,10 +146,9 @@ async function updateEmail(event: FormSubmitEvent<EmailState>) {
       },
     })
     await refreshSession()
-    emailSuccessMessage.value = 'メールアドレスを変更しました。'
+    emailSuccessMessage.value = t('settings.emailChanged')
   } catch (error) {
-    emailErrorMessage.value =
-      error instanceof Error ? error.message : 'メールアドレスの変更に失敗しました。'
+    emailErrorMessage.value = translateApiError(error, 'errors.emailChangeFailed')
   } finally {
     emailLoading.value = false
   }
@@ -153,7 +156,7 @@ async function updateEmail(event: FormSubmitEvent<EmailState>) {
 
 async function updatePassword(event: FormSubmitEvent<PasswordState>) {
   if (!user.value) {
-    await navigateTo('/login')
+    await navigateTo(localePath('/login'))
     return
   }
 
@@ -170,10 +173,9 @@ async function updatePassword(event: FormSubmitEvent<PasswordState>) {
       },
     })
     await clear()
-    await navigateTo('/login')
+    await navigateTo(localePath('/login'))
   } catch (error) {
-    passwordErrorMessage.value =
-      error instanceof Error ? error.message : 'パスワードの変更に失敗しました。'
+    passwordErrorMessage.value = translateApiError(error, 'errors.passwordChangeFailed')
   } finally {
     passwordLoading.value = false
   }
@@ -181,7 +183,7 @@ async function updatePassword(event: FormSubmitEvent<PasswordState>) {
 
 async function deleteAccount(event: FormSubmitEvent<DeleteAccountState>) {
   if (!user.value) {
-    await navigateTo('/login')
+    await navigateTo(localePath('/login'))
     return
   }
 
@@ -196,10 +198,9 @@ async function deleteAccount(event: FormSubmitEvent<DeleteAccountState>) {
       },
     })
     await clear()
-    await navigateTo('/')
+    await navigateTo(localePath('/'))
   } catch (error) {
-    deleteAccountErrorMessage.value =
-      error instanceof Error ? error.message : 'アカウントの削除に失敗しました。'
+    deleteAccountErrorMessage.value = translateApiError(error, 'errors.accountDeleteFailed')
   } finally {
     deleteAccountLoading.value = false
   }
@@ -241,8 +242,7 @@ async function loadSessions() {
     const response = await requestFetch<{ sessions: SessionSummary[] }>('/api/v1/sessions')
     sessions.value = response.sessions
   } catch (error) {
-    sessionsError.value =
-      error instanceof Error ? error.message : 'セッションの取得に失敗しました。'
+    sessionsError.value = translateApiError(error, 'errors.sessionsLoadFailed')
   } finally {
     sessionsLoading.value = false
   }
@@ -255,8 +255,7 @@ async function revokeSession(sessionId: string) {
     await requestFetch(`/api/v1/sessions/${sessionId}`, { method: 'DELETE' })
     await loadSessions()
   } catch (error) {
-    sessionsError.value =
-      error instanceof Error ? error.message : 'セッションの失効に失敗しました。'
+    sessionsError.value = translateApiError(error, 'errors.sessionRevokeFailed')
   } finally {
     revokingSessionId.value = ''
   }
@@ -269,7 +268,7 @@ async function loadDeviceKeys() {
     const response = await requestFetch<{ device_keys: DeviceKey[] }>('/api/v1/device-keys')
     deviceKeys.value = response.device_keys
   } catch (error) {
-    deviceKeysError.value = error instanceof Error ? error.message : '署名鍵の取得に失敗しました。'
+    deviceKeysError.value = translateApiError(error, 'errors.deviceKeysLoadFailed')
   } finally {
     deviceKeysLoading.value = false
   }
@@ -282,7 +281,7 @@ async function revokeDeviceKey(keyId: string) {
     await requestFetch(`/api/v1/device-keys/${keyId}`, { method: 'DELETE' })
     await loadDeviceKeys()
   } catch (error) {
-    deviceKeysError.value = error instanceof Error ? error.message : '署名鍵の失効に失敗しました。'
+    deviceKeysError.value = translateApiError(error, 'errors.deviceKeyRevokeFailed')
   } finally {
     revokingKeyId.value = ''
   }
@@ -305,6 +304,8 @@ function sessionTokenLabel(session: SessionSummary) {
   }
   return 'access'
 }
+
+useSeoMeta({ title: () => t('settings.title') })
 </script>
 
 <template>
@@ -313,21 +314,21 @@ function sessionTokenLabel(session: SessionSummary) {
       <div class="space-y-8">
         <div>
           <p class="mb-2 text-sm font-medium text-primary-300">BMZ Internet Ranking</p>
-          <h1 class="text-3xl font-semibold tracking-normal">アカウント設定</h1>
+          <h1 class="text-3xl font-semibold tracking-normal">{{ t('settings.title') }}</h1>
           <p class="mt-3 text-sm leading-6 text-neutral-300">
-            メールアドレスとパスワードを管理します。
+            {{ t('settings.description') }}
           </p>
         </div>
 
         <UCard>
           <UAuthForm
             class="w-full"
-            description="変更には現在のパスワードが必要です。"
+            :description="t('settings.currentPasswordNeeded')"
             :fields="emailFields"
             icon="i-lucide-mail"
             :loading="emailLoading"
-            :submit="{ label: 'メールアドレスを変更', color: 'primary', block: true }"
-            title="メールアドレス変更"
+            :submit="{ label: t('settings.changeEmail'), color: 'primary', block: true }"
+            :title="t('settings.emailChange')"
             :validate="validateEmail"
             @submit="updateEmail"
           >
@@ -351,12 +352,12 @@ function sessionTokenLabel(session: SessionSummary) {
         <UCard>
           <UAuthForm
             class="w-full"
-            description="変更後はすべてのセッションからログアウトします。"
+            :description="t('settings.passwordChangeDescription')"
             :fields="passwordFields"
             icon="i-lucide-key-round"
             :loading="passwordLoading"
-            :submit="{ label: 'パスワードを変更', color: 'primary', block: true }"
-            title="パスワード変更"
+            :submit="{ label: t('settings.changePassword'), color: 'primary', block: true }"
+            :title="t('reset.changePassword')"
             :validate="validatePassword"
             @submit="updatePassword"
           >
@@ -377,12 +378,12 @@ function sessionTokenLabel(session: SessionSummary) {
 
             <template #footer>
               <p class="text-center text-sm text-neutral-300">
-                現在のパスワードがわからない場合は
+                {{ t('settings.forgotCurrentPassword') }}
                 <NuxtLink
                   class="font-medium text-primary-300 hover:text-primary-200"
-                  to="/reset-password"
+                  :to="localePath('/reset-password')"
                 >
-                  再設定
+                  {{ t('login.reset') }}
                 </NuxtLink>
               </p>
             </template>
@@ -392,15 +393,15 @@ function sessionTokenLabel(session: SessionSummary) {
         <UCard>
           <section class="space-y-3">
             <div>
-              <h2 class="text-xl font-semibold">ログイン中のセッション</h2>
+              <h2 class="text-xl font-semibold">{{ t('settings.sessions') }}</h2>
               <p class="mt-1 text-sm leading-6 text-neutral-300">
-                Web と BMZ Player のログイン状態を確認し、不要なセッションを失効できます。
+                {{ t('settings.sessionsDescription') }}
               </p>
             </div>
             <UAlert v-if="sessionsError" color="error" :description="sessionsError" />
-            <p v-if="sessionsLoading" class="text-sm text-neutral-400">読み込み中...</p>
+            <p v-if="sessionsLoading" class="text-sm text-neutral-400">{{ t('common.loading') }}</p>
             <p v-else-if="!sessions.length" class="text-sm text-neutral-400">
-              有効なセッションはありません。
+              {{ t('settings.noSessions') }}
             </p>
             <ul v-else class="divide-y divide-neutral-800 rounded-lg border border-neutral-800">
               <li
@@ -411,12 +412,14 @@ function sessionTokenLabel(session: SessionSummary) {
                 <div class="min-w-0">
                   <p class="text-sm font-medium">{{ sessionLabel(session) }}</p>
                   <p class="text-xs text-neutral-500">
-                    {{ sessionTokenLabel(session) }} ・ 作成
-                    {{ new Date(session.createdAt).toLocaleString() }} ・ 最終利用
+                    {{ sessionTokenLabel(session) }} ・ {{ t('settings.created') }}
+                    {{ formatDateTime(session.createdAt) }} ・ {{ t('settings.lastUsed') }}
                     {{
-                      session.lastUsedAt ? new Date(session.lastUsedAt).toLocaleString() : '未記録'
+                      session.lastUsedAt
+                        ? formatDateTime(session.lastUsedAt)
+                        : t('common.notRecorded')
                     }}
-                    ・ 期限 {{ new Date(session.expiresAt).toLocaleString() }}
+                    ・ {{ t('settings.expires') }} {{ formatDateTime(session.expiresAt) }}
                   </p>
                 </div>
                 <UButton
@@ -426,7 +429,7 @@ function sessionTokenLabel(session: SessionSummary) {
                   :loading="revokingSessionId === session.id"
                   @click="revokeSession(session.id)"
                 >
-                  失効
+                  {{ t('common.revoke') }}
                 </UButton>
               </li>
             </ul>
@@ -436,18 +439,19 @@ function sessionTokenLabel(session: SessionSummary) {
         <UCard>
           <section class="space-y-3">
             <div>
-              <h2 class="text-xl font-semibold">スコア署名鍵 (device key)</h2>
+              <h2 class="text-xl font-semibold">{{ t('settings.deviceKeys') }}</h2>
               <p class="mt-1 text-sm leading-6 text-neutral-300">
-                BMZ Player がスコア送信の改ざん防止署名に使う鍵です。
-                端末を紛失した場合などはここから失効できます。失効後はその端末で
+                {{ t('settings.deviceKeysDescriptionBefore') }}
                 <code class="rounded bg-neutral-900 px-1">bmz ir device-key rotate</code>
-                を実行すると新しい鍵が登録されます。
+                {{ t('settings.deviceKeysDescriptionAfter') }}
               </p>
             </div>
             <UAlert v-if="deviceKeysError" color="error" :description="deviceKeysError" />
-            <p v-if="deviceKeysLoading" class="text-sm text-neutral-400">読み込み中...</p>
+            <p v-if="deviceKeysLoading" class="text-sm text-neutral-400">
+              {{ t('common.loading') }}
+            </p>
             <p v-else-if="!deviceKeys.length" class="text-sm text-neutral-400">
-              登録済みの署名鍵はありません。
+              {{ t('settings.noDeviceKeys') }}
             </p>
             <ul v-else class="divide-y divide-neutral-800 rounded-lg border border-neutral-800">
               <li
@@ -458,9 +462,10 @@ function sessionTokenLabel(session: SessionSummary) {
                 <div class="min-w-0">
                   <p class="font-mono text-sm">{{ keyFingerprint(key.public_key) }}</p>
                   <p class="text-xs text-neutral-500">
-                    {{ key.algorithm }} ・ 登録 {{ new Date(key.created_at).toLocaleString() }}
+                    {{ key.algorithm }} ・ {{ t('settings.registered') }}
+                    {{ formatDateTime(key.created_at) }}
                     <UBadge v-if="key.revoked_at" color="error" size="sm" variant="subtle">
-                      失効済み
+                      {{ t('settings.revoked') }}
                     </UBadge>
                   </p>
                 </div>
@@ -472,7 +477,7 @@ function sessionTokenLabel(session: SessionSummary) {
                   :loading="revokingKeyId === key.id"
                   @click="revokeDeviceKey(key.id)"
                 >
-                  失効
+                  {{ t('common.revoke') }}
                 </UButton>
               </li>
             </ul>
@@ -482,12 +487,12 @@ function sessionTokenLabel(session: SessionSummary) {
         <UCard>
           <UAuthForm
             class="w-full"
-            description="アカウント、スコア、リプレイ、署名鍵、セッションを削除します。"
+            :description="t('settings.deleteDescription')"
             :fields="deleteAccountFields"
             icon="i-lucide-trash-2"
             :loading="deleteAccountLoading"
-            :submit="{ label: 'アカウントを削除', color: 'error', block: true }"
-            title="アカウント削除"
+            :submit="{ label: t('settings.deleteAccount'), color: 'error', block: true }"
+            :title="t('settings.accountDeletion')"
             :validate="validateDeleteAccount"
             @submit="deleteAccount"
           >

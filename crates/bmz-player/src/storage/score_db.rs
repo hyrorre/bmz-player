@@ -1,3 +1,4 @@
+use std::collections::{HashMap, HashSet};
 use std::io::{Read, Write};
 use std::path::Path;
 
@@ -13,7 +14,7 @@ use bmz_render::snapshot::{DisplayJudgeCounts, FastSlowJudgeCounts};
 use flate2::Compression;
 use flate2::read::GzDecoder;
 use flate2::write::GzEncoder;
-use rusqlite::{Connection, OptionalExtension, params};
+use rusqlite::{Connection, OptionalExtension, params, params_from_iter};
 
 use super::common::{configure_connection, hash_to_hex, hex_to_hash};
 pub use super::course_score_db::{
@@ -22,10 +23,49 @@ pub use super::course_score_db::{
 };
 use crate::config::profile_config::ReplaySlotRule;
 use crate::ln_policy::LnScorePolicy;
-use crate::select_options::DoubleOptionScoreBucket;
+use crate::select_options::{DoubleOption, DoubleOptionScoreBucket};
 
 pub struct ScoreDatabase {
     conn: Connection,
+}
+
+/// Each score key occupies four SQLite bind variables. Keep batches below the
+/// historical 999-variable default while leaving room for future predicates.
+const SCORE_KEY_LOOKUP_BATCH_SIZE: usize = 200;
+
+/// Score history provenance.  This is intentionally not part of [`ScoreKey`]:
+/// imported results and locally played results compete for the same best score.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum ScoreSourceKind {
+    #[default]
+    Local,
+    Beatoraja,
+    Lr2,
+    Lr2Oraja,
+    Lr2OrajaDx,
+}
+
+impl ScoreSourceKind {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Local => "Local",
+            Self::Beatoraja => "Beatoraja",
+            Self::Lr2 => "Lr2",
+            Self::Lr2Oraja => "Lr2Oraja",
+            Self::Lr2OrajaDx => "Lr2OrajaDx",
+        }
+    }
+
+    pub fn from_str_opt(value: &str) -> Option<Self> {
+        match value {
+            "Local" => Some(Self::Local),
+            "Beatoraja" => Some(Self::Beatoraja),
+            "Lr2" => Some(Self::Lr2),
+            "Lr2Oraja" => Some(Self::Lr2Oraja),
+            "Lr2OrajaDx" => Some(Self::Lr2OrajaDx),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -55,6 +95,25 @@ pub struct PlayerStats {
     pub fast_empty_poor: u64,
     pub slow_empty_poor: u64,
     pub updated_at: i64,
+}
+
+/// Profile-wide score aggregates for one local-time day.
+///
+/// Unlike [`PlayerStats`], this is derived from `score_history` on demand so
+/// the day boundary does not require another set of persisted counters.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct DailyPlayerStats {
+    pub play_count: u64,
+    pub clear_count: u64,
+    pub pgreat: u64,
+    pub great: u64,
+    pub good: u64,
+    pub bad: u64,
+    pub poor: u64,
+    pub empty_poor: u64,
+    pub score_update_count: u64,
+    pub clear_update_count: u64,
+    pub miss_count_update_count: u64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -97,11 +156,26 @@ impl ScoreKey {
     }
 }
 
+fn score_key_query_params(keys: &[ScoreKey]) -> Vec<String> {
+    let mut params = Vec::with_capacity(keys.len() * 4);
+    for key in keys {
+        params.push(hash_to_hex(&key.chart_sha256));
+        params.push(key.ln_policy.as_str().to_string());
+        params.push(key.double_option.as_str().to_string());
+        params.push(key.rule_mode.as_str().to_string());
+    }
+    params
+}
+
 #[derive(Debug, Clone)]
 pub struct ScoreRecord {
     pub chart_sha256: [u8; 32],
     pub ln_policy: LnScorePolicy,
+    /// Score aggregation key. FLIP deliberately shares the Off bucket.
     pub double_option: DoubleOptionScoreBucket,
+    /// The DP option actually applied to this play, retained independently
+    /// from the aggregation bucket so FLIP history is not lost.
+    pub applied_double_option: DoubleOption,
     pub played_at: i64,
     pub clear_type: ClearType,
     pub gauge_type: Option<GaugeType>,
@@ -111,13 +185,16 @@ pub struct ScoreRecord {
     pub score: ScoreState,
     pub count_unprocessed_notes: bool,
     pub random_seed: Option<i64>,
+    pub seed_scheme: String,
     pub arrange: String,
+    pub arrange_2p: String,
     pub gauge_option: String,
     pub rule_mode: String,
     pub assist_mask: u32,
     pub autoplay: bool,
     pub device_type: InputDeviceKind,
     pub replay_path: String,
+    pub source_kind: ScoreSourceKind,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -148,19 +225,46 @@ pub enum ScoreSourceInsertOutcome {
     Duplicate { history_id: i64 },
 }
 
+/// 外部score DBを再インポートしたときの、既存履歴との照合結果。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ImportedScoreReconciliation {
+    Missing,
+    Unchanged,
+    Corrected,
+}
+
+/// source_kind 導入前に Local として保存された外部 import の整理対象。
+///
+/// 判定は譜面、プレイ日時、EX、判定内訳、BP、コンボ、seed に限定する。
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct LegacyBeatorajaCleanupPlan {
+    pub legacy_history_ids: Vec<i64>,
+    pub retained_beatoraja_history_ids: Vec<i64>,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct LegacyBeatorajaCleanupReport {
+    pub removed_legacy_history: u32,
+    pub retained_beatoraja_history: u32,
+}
+
 #[derive(Debug, Clone)]
 pub struct ScoreRecordMetadata {
     pub ln_policy: LnScorePolicy,
     pub double_option: DoubleOptionScoreBucket,
+    pub applied_double_option: DoubleOption,
     pub played_at: i64,
     pub playtime_seconds: u32,
     pub random_seed: Option<i64>,
+    pub seed_scheme: String,
     pub arrange: String,
+    pub arrange_2p: String,
     pub gauge_option: String,
     pub rule_mode: String,
     pub assist_mask: u32,
     pub device_type: InputDeviceKind,
     pub replay_path: String,
+    pub source_kind: ScoreSourceKind,
 }
 
 impl ScoreRecord {
@@ -168,21 +272,26 @@ impl ScoreRecord {
         let ScoreRecordMetadata {
             ln_policy,
             double_option,
+            applied_double_option,
             played_at,
             playtime_seconds,
             random_seed,
+            seed_scheme,
             arrange,
+            arrange_2p,
             gauge_option,
             rule_mode,
             assist_mask,
             device_type,
             replay_path,
+            source_kind,
         } = metadata;
 
         Self {
             chart_sha256: result.chart_sha256,
             ln_policy,
             double_option,
+            applied_double_option,
             played_at,
             clear_type: result.clear_type,
             gauge_type: Some(result.gauge_type),
@@ -192,13 +301,16 @@ impl ScoreRecord {
             score: result.score.clone(),
             count_unprocessed_notes: result.clear_type == ClearType::Failed,
             random_seed,
+            seed_scheme,
             arrange,
+            arrange_2p,
             gauge_option,
             rule_mode,
             assist_mask,
             autoplay: result.autoplay,
             device_type,
             replay_path,
+            source_kind,
         }
     }
 }
@@ -219,20 +331,47 @@ impl ScoreRecordMetadata {
         Self {
             ln_policy,
             double_option,
+            applied_double_option: DoubleOption::Off,
             played_at,
             playtime_seconds: 0,
             random_seed,
+            seed_scheme: String::new(),
             arrange: arrange.into(),
+            arrange_2p: "Normal".to_string(),
             gauge_option: gauge_option.into(),
             rule_mode: rule_mode.into(),
             assist_mask,
             device_type,
             replay_path: replay_path.into(),
+            source_kind: ScoreSourceKind::Local,
         }
     }
 
     pub fn with_playtime_seconds(mut self, playtime_seconds: u32) -> Self {
         self.playtime_seconds = playtime_seconds;
+        self
+    }
+
+    pub fn with_arrange_2p(mut self, arrange_2p: impl Into<String>) -> Self {
+        self.arrange_2p = arrange_2p.into();
+        self
+    }
+
+    pub fn with_seed_scheme(mut self, seed_scheme: impl Into<String>) -> Self {
+        self.seed_scheme = seed_scheme.into();
+        self
+    }
+
+    pub const fn with_applied_double_option(mut self, double_option: DoubleOption) -> Self {
+        self.applied_double_option = double_option;
+        self
+    }
+
+    pub fn with_source_kind(mut self, source_kind: ScoreSourceKind) -> Self {
+        self.source_kind = source_kind;
+        if source_kind == ScoreSourceKind::Beatoraja && self.seed_scheme.is_empty() {
+            self.seed_scheme = "beatoraja_24bit_v1".to_string();
+        }
         self
     }
 }
@@ -266,6 +405,12 @@ struct ScoreBestRank {
     bp: u32,
     cb: u32,
     max_combo: u32,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct SourceScoreHistoryMatch {
+    history_id: i64,
+    device_type: InputDeviceKind,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -308,6 +453,9 @@ pub struct ScoreHistoryEntry {
     pub id: i64,
     pub chart_sha256: [u8; 32],
     pub ln_policy: LnScorePolicy,
+    /// The DP option actually applied to this play. This is separate from the
+    /// score bucket so a FLIP play is distinguishable from Off.
+    pub applied_double_option: DoubleOption,
     pub played_at: i64,
     pub clear_type: String,
     pub gauge_type: String,
@@ -320,6 +468,7 @@ pub struct ScoreHistoryEntry {
     pub autoplay: bool,
     pub device_type: InputDeviceKind,
     pub replay_path: String,
+    pub source_kind: ScoreSourceKind,
     /// `score.db`'s `course_scores.id` if this chart play happened as part
     /// of a course attempt, otherwise `None`.
     pub course_score_id: Option<i64>,
@@ -368,11 +517,138 @@ impl ScoreDatabase {
         insert_score_history(&tx, record, previous_best.as_ref())?;
         let history_id = tx.last_insert_rowid();
         if mode == ScoreInsertMode::Full {
-            upsert_score_best(&tx, record)?;
+            upsert_score_best(&tx, record, history_id)?;
             update_player_stats(&tx, record)?;
         }
         tx.commit()?;
         Ok(history_id)
+    }
+
+    /// Returns whether an imported score with the same persisted score contents
+    /// and provenance already exists. `played_at` is intentionally excluded:
+    /// LR2 does not retain a per-score timestamp, and re-importing a source
+    /// database must not create duplicates merely because the import time changed.
+    pub fn has_same_score_from_source(&self, record: &ScoreRecord) -> Result<bool> {
+        Ok(source_score_history_match(&self.conn, record)?
+            .is_some_and(|existing| existing.device_type == record.device_type))
+    }
+
+    /// 同一出所の既存履歴が入力デバイスだけ異なる場合に、その自己申告値を補正する。
+    /// 集計のdevice_typeは、その履歴がEXスコアの出所である場合だけ更新する。
+    pub fn reconcile_imported_score_device_type(
+        &mut self,
+        record: &ScoreRecord,
+    ) -> Result<ImportedScoreReconciliation> {
+        if record.source_kind == ScoreSourceKind::Local {
+            return Ok(ImportedScoreReconciliation::Missing);
+        }
+        let Some(existing) = source_score_history_match(&self.conn, record)? else {
+            return Ok(ImportedScoreReconciliation::Missing);
+        };
+        if existing.device_type == record.device_type {
+            return Ok(ImportedScoreReconciliation::Unchanged);
+        }
+
+        let tx = self.conn.transaction()?;
+        tx.execute(
+            "UPDATE score_history
+             SET device_type = ?1
+             WHERE id = ?2 AND device_type = ?3",
+            params![
+                record.device_type.as_str(),
+                existing.history_id,
+                existing.device_type.as_str()
+            ],
+        )?;
+        update_score_best_device_type_from_history(&tx, existing.history_id, record.device_type)?;
+        tx.commit()?;
+        Ok(ImportedScoreReconciliation::Corrected)
+    }
+
+    /// source_kind 導入前に Local として保存された beatoraja import 候補を調べる。
+    ///
+    /// Local の通常プレイと完全に区別する情報は失われているため、呼び出し側で
+    /// dry-run の結果を確認してから [`Self::purge_legacy_beatoraja_imports`] を実行する。
+    pub fn legacy_beatoraja_cleanup_plan(&self) -> Result<LegacyBeatorajaCleanupPlan> {
+        Ok(LegacyBeatorajaCleanupPlan {
+            legacy_history_ids: legacy_beatoraja_matching_history_ids(&self.conn, "legacy")?,
+            retained_beatoraja_history_ids: legacy_beatoraja_matching_history_ids(
+                &self.conn, "imported",
+            )?,
+        })
+    }
+
+    /// 同じ source_kind 内で、譜面・プレイ日時・スコア内訳・seed が完全一致する
+    /// 通常プレイ履歴を返す。course stage は重複整理の対象にしない。
+    pub fn same_source_duplicate_history_ids(&self, history_id: i64) -> Result<Vec<i64>> {
+        let mut statement = self.conn.prepare(
+            "SELECT duplicate.id
+             FROM score_history AS target
+             JOIN score_history AS duplicate
+               ON duplicate.id != target.id
+              AND duplicate.source_kind = target.source_kind
+              AND duplicate.course_score_id IS NULL
+              AND duplicate.chart_sha256 = target.chart_sha256
+              AND duplicate.played_at = target.played_at
+              AND duplicate.ex_score = target.ex_score
+              AND duplicate.bp = target.bp
+              AND duplicate.cb = target.cb
+              AND duplicate.max_combo = target.max_combo
+              AND duplicate.fast_pgreat = target.fast_pgreat
+              AND duplicate.slow_pgreat = target.slow_pgreat
+              AND duplicate.fast_great = target.fast_great
+              AND duplicate.slow_great = target.slow_great
+              AND duplicate.fast_good = target.fast_good
+              AND duplicate.slow_good = target.slow_good
+              AND duplicate.fast_bad = target.fast_bad
+              AND duplicate.slow_bad = target.slow_bad
+              AND duplicate.fast_poor = target.fast_poor
+              AND duplicate.slow_poor = target.slow_poor
+              AND duplicate.fast_empty_poor = target.fast_empty_poor
+              AND duplicate.slow_empty_poor = target.slow_empty_poor
+              AND duplicate.random_seed IS target.random_seed
+             WHERE target.id = ?1
+               AND target.course_score_id IS NULL
+             ORDER BY duplicate.id",
+        )?;
+        statement
+            .query_map(params![history_id], |row| row.get(0))?
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(Into::into)
+    }
+
+    /// 指定した通常プレイ履歴を削除し、残存履歴から集計を再構築する。
+    pub fn purge_score_history_ids_and_rebuild(&mut self, history_ids: &[i64]) -> Result<u32> {
+        if history_ids.is_empty() {
+            return Ok(0);
+        }
+        let tx = self.conn.transaction()?;
+        let removed_history = delete_score_history_ids(&tx, history_ids)?;
+        rebuild_score_aggregates(&tx)?;
+        tx.commit()?;
+        Ok(removed_history)
+    }
+
+    /// 指定した旧 Local 候補を削除し、通常譜面の score_best と player_stats を
+    /// 残存履歴から再集計する。コース stage 履歴は集計から除外したまま維持する。
+    pub fn purge_legacy_beatoraja_imports(
+        &mut self,
+        plan: &LegacyBeatorajaCleanupPlan,
+    ) -> Result<LegacyBeatorajaCleanupReport> {
+        let legacy_history_ids = &plan.legacy_history_ids;
+        if legacy_history_ids.is_empty() {
+            return Ok(LegacyBeatorajaCleanupReport {
+                retained_beatoraja_history: plan.retained_beatoraja_history_ids.len() as u32,
+                ..LegacyBeatorajaCleanupReport::default()
+            });
+        }
+
+        let removed_legacy_history =
+            self.purge_score_history_ids_and_rebuild(legacy_history_ids)?;
+        Ok(LegacyBeatorajaCleanupReport {
+            removed_legacy_history,
+            retained_beatoraja_history: plan.retained_beatoraja_history_ids.len() as u32,
+        })
     }
 
     pub fn score_history_id_for_source(&self, key: &ScoreHistorySourceKey) -> Result<Option<i64>> {
@@ -409,7 +685,7 @@ impl ScoreDatabase {
         )?;
         insert_score_history(&tx, record, previous_best.as_ref())?;
         let history_id = tx.last_insert_rowid();
-        upsert_score_best(&tx, record)?;
+        upsert_score_best(&tx, record, history_id)?;
         update_player_stats(&tx, record)?;
         insert_score_history_source(&tx, history_id, source, false)?;
         tx.commit()?;
@@ -474,6 +750,126 @@ impl ScoreDatabase {
             .map_err(Into::into)
     }
 
+    /// Aggregate locally played score history inside `[start_at, end_at)`.
+    pub fn daily_player_stats_between(
+        &self,
+        start_at: i64,
+        end_at: i64,
+    ) -> Result<DailyPlayerStats> {
+        self.conn
+            .query_row(
+                "SELECT
+                    COUNT(*),
+                    COALESCE(SUM(CASE
+                        WHEN clear_type NOT IN ('NoPlay', 'Failed') THEN 1 ELSE 0
+                    END), 0),
+                    COALESCE(SUM(fast_pgreat + slow_pgreat), 0),
+                    COALESCE(SUM(fast_great + slow_great), 0),
+                    COALESCE(SUM(fast_good + slow_good), 0),
+                    COALESCE(SUM(fast_bad + slow_bad), 0),
+                    COALESCE(SUM(fast_poor + slow_poor), 0),
+                    COALESCE(SUM(fast_empty_poor + slow_empty_poor), 0),
+                    COALESCE(SUM(CASE
+                        WHEN old_ex_score IS NULL OR ex_score > old_ex_score THEN 1 ELSE 0
+                    END), 0),
+                    COALESCE(SUM(CASE WHEN old_clear_type IS NULL OR
+                        CASE clear_type
+                            WHEN 'Failed' THEN 1 WHEN 'AssistEasy' THEN 2
+                            WHEN 'LightAssistEasy' THEN 3 WHEN 'Easy' THEN 4
+                            WHEN 'Normal' THEN 5 WHEN 'Hard' THEN 6
+                            WHEN 'ExHard' THEN 7 WHEN 'FullCombo' THEN 8
+                            WHEN 'Perfect' THEN 9 WHEN 'Max' THEN 10 ELSE 0 END
+                        > CASE old_clear_type
+                            WHEN 'Failed' THEN 1 WHEN 'AssistEasy' THEN 2
+                            WHEN 'LightAssistEasy' THEN 3 WHEN 'Easy' THEN 4
+                            WHEN 'Normal' THEN 5 WHEN 'Hard' THEN 6
+                            WHEN 'ExHard' THEN 7 WHEN 'FullCombo' THEN 8
+                            WHEN 'Perfect' THEN 9 WHEN 'Max' THEN 10 ELSE 0 END
+                        THEN 1 ELSE 0 END), 0),
+                    COALESCE(SUM(CASE
+                        WHEN old_bp IS NULL OR fast_bad + slow_bad + fast_poor + slow_poor < old_bp
+                        THEN 1 ELSE 0 END), 0)
+                 FROM score_history
+                 WHERE source_kind = 'Local'
+                   AND autoplay = 0
+                   AND played_at >= ?1
+                   AND played_at < ?2",
+                params![start_at, end_at],
+                daily_player_stats_from_row,
+            )
+            .map_err(Into::into)
+    }
+
+    /// Aggregate the current calendar day using the host's local timezone.
+    pub fn current_local_day_player_stats(&self) -> Result<DailyPlayerStats> {
+        self.current_local_day_player_stats_with_start_hour(0)
+    }
+
+    pub fn current_local_day_player_stats_with_start_hour(
+        &self,
+        day_start_hour: u8,
+    ) -> Result<DailyPlayerStats> {
+        let (start_at, end_at) = self.current_daily_statistics_range(day_start_hour)?;
+        self.daily_player_stats_between(start_at, end_at)
+    }
+
+    pub fn current_daily_statistics_range(&self, day_start_hour: u8) -> Result<(i64, i64)> {
+        let hour = day_start_hour.min(23);
+        let shift_to_day = format!("-{hour} hours");
+        let shift_from_day = format!("+{hour} hours");
+        let (calendar_start, end_at): (i64, i64) = self.conn.query_row(
+            "SELECT
+                CAST(strftime('%s', date('now', 'localtime', ?1), ?2, 'utc') AS INTEGER),
+                CAST(strftime('%s', date('now', 'localtime', ?1), '+1 day', ?2, 'utc') AS INTEGER)",
+            params![shift_to_day, shift_from_day],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )?;
+        let reset_at: i64 = self.conn.query_row(
+            "SELECT reset_at FROM daily_statistics_state WHERE id = 1",
+            [],
+            |row| row.get(0),
+        )?;
+        Ok((calendar_start.max(reset_at).min(end_at), end_at))
+    }
+
+    pub fn reset_daily_statistics(&self, reset_at: i64) -> Result<()> {
+        self.conn.execute(
+            "UPDATE daily_statistics_state SET reset_at = ?1 WHERE id = 1",
+            params![reset_at],
+        )?;
+        Ok(())
+    }
+
+    pub fn daily_recent_chart_sha256s_between(
+        &self,
+        start_at: i64,
+        end_at: i64,
+        limit: usize,
+    ) -> Result<Vec<[u8; 32]>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT chart_sha256
+             FROM score_history
+             WHERE source_kind = 'Local'
+               AND autoplay = 0
+               AND played_at >= ?1
+               AND played_at < ?2
+             ORDER BY played_at DESC, id DESC",
+        )?;
+        let mut rows = stmt.query(params![start_at, end_at])?;
+        let mut hashes = Vec::with_capacity(limit);
+        let mut previous_hex = None;
+        while hashes.len() < limit {
+            let Some(row) = rows.next()? else { break };
+            let hex: String = row.get(0)?;
+            if previous_hex.as_deref() == Some(hex.as_str()) {
+                continue;
+            }
+            previous_hex = Some(hex.clone());
+            hashes.push(hex_to_hash::<32>(&hex)?);
+        }
+        Ok(hashes)
+    }
+
     pub fn best_ex_score(&self, key: ScoreKey) -> Result<Option<u32>> {
         self.conn
             .query_row(
@@ -518,101 +914,113 @@ impl ScoreDatabase {
     }
 
     pub fn best_scores_for_charts(&self, keys: &[ScoreKey]) -> Result<Vec<BestScoreSummary>> {
-        let mut out = Vec::new();
-        let mut stmt = self.conn.prepare(
-            "SELECT
-                chart_sha256,
-                ln_policy,
-                double_option,
-                rule_mode,
-                clear_type,
-                gauge_type,
-                gauge_value,
-                ex_score,
-                bp,
-                cb,
-                max_combo,
-                fast_pgreat,
-                slow_pgreat,
-                fast_great,
-                slow_great,
-                fast_good,
-                slow_good,
-                fast_bad,
-                slow_bad,
-                fast_poor,
-                slow_poor,
-                fast_empty_poor,
-                slow_empty_poor,
-                play_count,
-                clear_count,
-                device_type,
-                played_at,
-                replay_path
-            FROM score_best
-            WHERE chart_sha256 = ?1 AND ln_policy = ?2 AND double_option = ?3
-              AND rule_mode = ?4",
-        )?;
+        let mut seen = HashSet::with_capacity(keys.len());
+        let unique_keys = keys.iter().copied().filter(|key| seen.insert(*key)).collect::<Vec<_>>();
+        let mut found = HashMap::with_capacity(unique_keys.len());
 
-        for key in keys {
-            if let Some(summary) = stmt
-                .query_row(
-                    params![
-                        hash_to_hex(&key.chart_sha256),
-                        key.ln_policy.as_str(),
-                        key.double_option.as_str(),
-                        key.rule_mode.as_str(),
-                    ],
-                    best_score_summary_from_row,
-                )
-                .optional()?
-            {
-                out.push(summary);
+        for chunk in unique_keys.chunks(SCORE_KEY_LOOKUP_BATCH_SIZE) {
+            let placeholders =
+                std::iter::repeat_n("(?, ?, ?, ?)", chunk.len()).collect::<Vec<_>>().join(", ");
+            let sql = format!(
+                "SELECT
+                    chart_sha256,
+                    ln_policy,
+                    double_option,
+                    rule_mode,
+                    clear_type,
+                    gauge_type,
+                    gauge_value,
+                    ex_score,
+                    bp,
+                    cb,
+                    max_combo,
+                    fast_pgreat,
+                    slow_pgreat,
+                    fast_great,
+                    slow_great,
+                    fast_good,
+                    slow_good,
+                    fast_bad,
+                    slow_bad,
+                    fast_poor,
+                    slow_poor,
+                    fast_empty_poor,
+                    slow_empty_poor,
+                    play_count,
+                    clear_count,
+                    device_type,
+                    played_at,
+                    replay_path
+                FROM score_best
+                WHERE (chart_sha256, ln_policy, double_option, rule_mode)
+                    IN ({placeholders})"
+            );
+            let params = score_key_query_params(chunk);
+            let mut stmt = self.conn.prepare(&sql)?;
+            let rows =
+                stmt.query_map(params_from_iter(params.iter()), best_score_summary_from_row)?;
+            for row in rows {
+                let summary = row?;
+                let key = ScoreKey::with_options(
+                    summary.chart_sha256,
+                    summary.ln_policy,
+                    summary.double_option,
+                    summary.rule_mode,
+                );
+                found.insert(key, summary);
             }
         }
 
-        Ok(out)
+        Ok(keys.iter().filter_map(|key| found.get(key).cloned()).collect())
     }
 
     pub fn replay_slots_for_charts(&self, keys: &[ScoreKey]) -> Result<Vec<ReplaySlotSummary>> {
-        let mut out = Vec::new();
-        let mut stmt = self.conn.prepare(
-            "SELECT slot FROM replay_slots
-                 WHERE chart_sha256 = ?1 AND ln_policy = ?2 AND double_option = ?3
-                   AND rule_mode = ?4",
-        )?;
+        let mut seen = HashSet::with_capacity(keys.len());
+        let unique_keys = keys.iter().copied().filter(|key| seen.insert(*key)).collect::<Vec<_>>();
+        let mut found: HashMap<ScoreKey, [bool; 4]> = HashMap::with_capacity(unique_keys.len());
 
-        for key in keys {
-            let slots: Vec<u8> = stmt
-                .query_map(
-                    params![
-                        hash_to_hex(&key.chart_sha256),
-                        key.ln_policy.as_str(),
-                        key.double_option.as_str(),
-                        key.rule_mode.as_str(),
-                    ],
-                    |row| row.get::<_, u8>(0),
-                )?
-                .collect::<std::result::Result<Vec<_>, _>>()?;
-            if slots.is_empty() {
-                continue;
-            }
-            let mut replay_slots = [false; 4];
-            for slot in slots {
-                if (slot as usize) < replay_slots.len() {
+        for chunk in unique_keys.chunks(SCORE_KEY_LOOKUP_BATCH_SIZE) {
+            let placeholders =
+                std::iter::repeat_n("(?, ?, ?, ?)", chunk.len()).collect::<Vec<_>>().join(", ");
+            let sql = format!(
+                "SELECT chart_sha256, ln_policy, double_option, rule_mode, slot
+                 FROM replay_slots
+                 WHERE (chart_sha256, ln_policy, double_option, rule_mode)
+                    IN ({placeholders})"
+            );
+            let params = score_key_query_params(chunk);
+            let mut stmt = self.conn.prepare(&sql)?;
+            let rows = stmt.query_map(params_from_iter(params.iter()), |row| {
+                let sha256_hex: String = row.get(0)?;
+                let key = ScoreKey::with_options(
+                    hex_to_hash::<32>(&sha256_hex)?,
+                    ln_policy_from_row(row, 1)?,
+                    double_option_from_row(row, 2)?,
+                    rule_mode_from_row(row, 3)?,
+                );
+                Ok((key, row.get::<_, u8>(4)?))
+            })?;
+            for row in rows {
+                let (key, slot) = row?;
+                let replay_slots = found.entry(key).or_default();
+                if (slot as usize) < 4 {
                     replay_slots[slot as usize] = true;
                 }
             }
-            out.push(ReplaySlotSummary {
-                chart_sha256: key.chart_sha256,
-                ln_policy: key.ln_policy,
-                double_option: key.double_option,
-                rule_mode: key.rule_mode,
-                replay_slots,
-            });
         }
 
-        Ok(out)
+        Ok(keys
+            .iter()
+            .filter_map(|key| {
+                found.get(key).copied().map(|replay_slots| ReplaySlotSummary {
+                    chart_sha256: key.chart_sha256,
+                    ln_policy: key.ln_policy,
+                    double_option: key.double_option,
+                    rule_mode: key.rule_mode,
+                    replay_slots,
+                })
+            })
+            .collect())
     }
 
     pub fn replay_slot(&self, key: ScoreKey, slot: u8) -> Result<Option<ReplaySlotRecord>> {
@@ -874,7 +1282,9 @@ impl ScoreDatabase {
                 old_max_combo,
                 old_bp,
                 old_cb,
-                device_type
+                device_type,
+                source_kind,
+                applied_double_option
             FROM score_history
             ORDER BY played_at DESC, id DESC
             LIMIT ?1 OFFSET ?2",
@@ -979,6 +1389,7 @@ fn score_history_entry_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Sco
         id: row.get(0)?,
         chart_sha256,
         ln_policy: ln_policy_from_row(row, 14)?,
+        applied_double_option: applied_double_option_from_row(row, 22)?,
         played_at: row.get(2)?,
         clear_type: row.get(3)?,
         gauge_type: row.get(4)?,
@@ -992,6 +1403,7 @@ fn score_history_entry_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Sco
         replay_path: row.get(12)?,
         course_score_id: row.get(13)?,
         device_type: device_type_from_row(row, 20)?,
+        source_kind: score_source_kind_from_row(row, 21)?,
         previous_best,
     })
 }
@@ -1018,6 +1430,22 @@ fn player_stats_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<PlayerStat
     })
 }
 
+fn daily_player_stats_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<DailyPlayerStats> {
+    Ok(DailyPlayerStats {
+        play_count: row.get(0)?,
+        clear_count: row.get(1)?,
+        pgreat: row.get(2)?,
+        great: row.get(3)?,
+        good: row.get(4)?,
+        bad: row.get(5)?,
+        poor: row.get(6)?,
+        empty_poor: row.get(7)?,
+        score_update_count: row.get(8)?,
+        clear_update_count: row.get(9)?,
+        miss_count_update_count: row.get(10)?,
+    })
+}
+
 fn device_type_from_row(
     row: &rusqlite::Row<'_>,
     index: usize,
@@ -1032,6 +1460,344 @@ fn device_type_from_row(
             format!("invalid input device type: {value}").into(),
         )),
     }
+}
+
+fn score_source_kind_from_row(
+    row: &rusqlite::Row<'_>,
+    index: usize,
+) -> rusqlite::Result<ScoreSourceKind> {
+    let value: String = row.get(index)?;
+    ScoreSourceKind::from_str_opt(&value).ok_or_else(|| {
+        rusqlite::Error::FromSqlConversionFailure(
+            index,
+            rusqlite::types::Type::Text,
+            format!("invalid score source kind: {value}").into(),
+        )
+    })
+}
+
+fn source_score_history_match(
+    conn: &Connection,
+    record: &ScoreRecord,
+) -> Result<Option<SourceScoreHistoryMatch>> {
+    let judges = &record.score.judges;
+    conn.query_row(
+        "SELECT id, device_type
+         FROM score_history
+         WHERE source_kind = ?1
+           AND chart_sha256 = ?2
+           AND ln_policy = ?3
+           AND double_option = ?4
+           AND clear_type = ?5
+           AND gauge_type = ?6
+           AND gauge_value = ?7
+           AND total_notes = ?8
+           AND ex_score = ?9
+           AND bp = ?10
+           AND cb = ?11
+           AND max_combo = ?12
+           AND fast_pgreat = ?13
+           AND slow_pgreat = ?14
+           AND fast_great = ?15
+           AND slow_great = ?16
+           AND fast_good = ?17
+           AND slow_good = ?18
+           AND fast_bad = ?19
+           AND slow_bad = ?20
+           AND fast_poor = ?21
+           AND slow_poor = ?22
+           AND fast_empty_poor = ?23
+           AND slow_empty_poor = ?24
+           AND random_seed IS ?25
+           AND arrange = ?26
+           AND arrange_2p = ?27
+           AND gauge_option = ?28
+           AND rule_mode = ?29
+           AND assist_mask = ?30
+           AND autoplay = ?31
+           AND applied_double_option = ?32
+           AND seed_scheme = ?33
+         ORDER BY id ASC
+         LIMIT 1",
+        params![
+            record.source_kind.as_str(),
+            hash_to_hex(&record.chart_sha256),
+            record.ln_policy.as_str(),
+            record.double_option.as_str(),
+            record.clear_type.as_str(),
+            gauge_type_str(record.gauge_type),
+            record.gauge_value,
+            record.total_notes,
+            record.score.ex_score(),
+            score_record_bp(record),
+            score_record_cb(record),
+            record.score.max_combo,
+            judges.fast_pgreat,
+            judges.slow_pgreat,
+            judges.fast_great,
+            judges.slow_great,
+            judges.fast_good,
+            judges.slow_good,
+            judges.fast_bad,
+            judges.slow_bad,
+            judges.fast_poor,
+            judges.slow_poor,
+            judges.fast_empty_poor,
+            judges.slow_empty_poor,
+            record.random_seed,
+            record.arrange.as_str(),
+            record.arrange_2p.as_str(),
+            record.gauge_option.as_str(),
+            record.rule_mode.as_str(),
+            record.assist_mask,
+            record.autoplay,
+            record.applied_double_option.to_persistent_str(),
+            record.seed_scheme.as_str(),
+        ],
+        |row| {
+            Ok(SourceScoreHistoryMatch {
+                history_id: row.get(0)?,
+                device_type: device_type_from_row(row, 1)?,
+            })
+        },
+    )
+    .optional()
+    .map_err(Into::into)
+}
+
+fn update_score_best_device_type_from_history(
+    conn: &Connection,
+    history_id: i64,
+    device_type: InputDeviceKind,
+) -> Result<()> {
+    conn.execute(
+        "UPDATE score_best
+         SET device_type = ?1
+         WHERE best_score_history_id = ?2",
+        params![device_type.as_str(), history_id],
+    )?;
+    Ok(())
+}
+
+fn legacy_beatoraja_matching_history_ids(
+    conn: &Connection,
+    selected_alias: &str,
+) -> Result<Vec<i64>> {
+    let (selected, counterpart) = match selected_alias {
+        "legacy" => ("legacy", "imported"),
+        "imported" => ("imported", "legacy"),
+        _ => unreachable!("invalid legacy beatoraja cleanup alias"),
+    };
+    let selected_source_kind = if selected == "legacy" { "Local" } else { "Beatoraja" };
+    let counterpart_source_kind = if counterpart == "legacy" { "Local" } else { "Beatoraja" };
+    let sql = format!(
+        "SELECT DISTINCT {selected}.id
+         FROM score_history AS {selected}
+         WHERE {selected}.source_kind = ?1
+           AND {selected}.course_score_id IS NULL
+           AND EXISTS (
+               SELECT 1
+               FROM score_history AS {counterpart}
+               WHERE {counterpart}.source_kind = ?2
+                 AND {counterpart}.course_score_id IS NULL
+                 AND {counterpart}.chart_sha256 = {selected}.chart_sha256
+                 AND {counterpart}.played_at = {selected}.played_at
+                 AND {counterpart}.ex_score = {selected}.ex_score
+                 AND {counterpart}.bp = {selected}.bp
+                 AND {counterpart}.cb = {selected}.cb
+                 AND {counterpart}.max_combo = {selected}.max_combo
+                 AND {counterpart}.fast_pgreat = {selected}.fast_pgreat
+                 AND {counterpart}.slow_pgreat = {selected}.slow_pgreat
+                 AND {counterpart}.fast_great = {selected}.fast_great
+                 AND {counterpart}.slow_great = {selected}.slow_great
+                 AND {counterpart}.fast_good = {selected}.fast_good
+                 AND {counterpart}.slow_good = {selected}.slow_good
+                 AND {counterpart}.fast_bad = {selected}.fast_bad
+                 AND {counterpart}.slow_bad = {selected}.slow_bad
+                 AND {counterpart}.fast_poor = {selected}.fast_poor
+                 AND {counterpart}.slow_poor = {selected}.slow_poor
+                 AND {counterpart}.fast_empty_poor = {selected}.fast_empty_poor
+                 AND {counterpart}.slow_empty_poor = {selected}.slow_empty_poor
+                 AND {counterpart}.random_seed IS {selected}.random_seed
+           )
+         ORDER BY {selected}.id"
+    );
+    let mut statement = conn.prepare(&sql)?;
+    statement
+        .query_map(params![selected_source_kind, counterpart_source_kind], |row| row.get(0))?
+        .collect::<std::result::Result<Vec<_>, _>>()
+        .map_err(Into::into)
+}
+
+fn delete_score_history_ids(conn: &Connection, history_ids: &[i64]) -> Result<u32> {
+    const DELETE_CHUNK_SIZE: usize = 500;
+    let mut deleted = 0_u32;
+    for ids in history_ids.chunks(DELETE_CHUNK_SIZE) {
+        let placeholders = std::iter::repeat_n("?", ids.len()).collect::<Vec<_>>().join(", ");
+        let sql = format!("DELETE FROM score_history WHERE id IN ({placeholders})");
+        deleted = deleted.saturating_add(conn.execute(&sql, params_from_iter(ids.iter()))? as u32);
+    }
+    Ok(deleted)
+}
+
+fn rebuild_score_aggregates(conn: &Connection) -> Result<()> {
+    // score_history は playtime_seconds を保持していないため、過去の通常プレイの
+    // 総プレイ時間は復元できない。候補は外部 import に限定し、既存値を保全する。
+    let preserved_playtime_seconds: u64 = conn
+        .query_row("SELECT playtime_seconds FROM player_stats WHERE id = 1", [], |row| row.get(0))
+        .optional()?
+        .unwrap_or(0);
+    const SCORE_KEY: &str = "h.chart_sha256 = score_best.chart_sha256
+        AND h.ln_policy = score_best.ln_policy
+        AND h.double_option = score_best.double_option
+        AND CASE h.rule_mode
+            WHEN 'Lr2Oraja' THEN 'Lr2Oraja'
+            WHEN 'Dx' THEN 'Dx'
+            ELSE 'Beatoraja'
+        END = score_best.rule_mode
+        AND h.course_score_id IS NULL";
+    const CLEAR_RANK: &str = "CASE h.clear_type
+        WHEN 'NoPlay' THEN 0
+        WHEN 'Failed' THEN 1
+        WHEN 'AssistEasy' THEN 2
+        WHEN 'LightAssistEasy' THEN 3
+        WHEN 'Easy' THEN 4
+        WHEN 'Normal' THEN 5
+        WHEN 'Hard' THEN 6
+        WHEN 'ExHard' THEN 7
+        WHEN 'FullCombo' THEN 8
+        WHEN 'Perfect' THEN 9
+        WHEN 'Max' THEN 10
+        ELSE 0
+    END";
+    let score_source = format!(
+        "SELECT h.id FROM score_history AS h
+         WHERE {SCORE_KEY}
+         ORDER BY h.ex_score DESC, h.bp ASC, h.cb ASC, h.max_combo DESC, h.id ASC
+         LIMIT 1"
+    );
+    let clear_source = format!(
+        "SELECT h.id FROM score_history AS h
+         WHERE {SCORE_KEY}
+         ORDER BY {CLEAR_RANK} DESC, h.id ASC
+         LIMIT 1"
+    );
+    let score_value = |column: &str| {
+        format!(
+            "(SELECT h.{column} FROM score_history AS h
+              WHERE h.id = ({score_source}))"
+        )
+    };
+    let clear_value = |column: &str| {
+        format!(
+            "(SELECT h.{column} FROM score_history AS h
+              WHERE h.id = ({clear_source}))"
+        )
+    };
+    let aggregate = |expression: &str| {
+        format!("(SELECT {expression} FROM score_history AS h WHERE {SCORE_KEY})")
+    };
+
+    conn.execute(
+        &format!(
+            "DELETE FROM score_best
+             WHERE NOT EXISTS (SELECT 1 FROM score_history AS h WHERE {SCORE_KEY})"
+        ),
+        [],
+    )?;
+    conn.execute(
+        &format!(
+            "UPDATE score_best SET
+                clear_type = {clear_type},
+                gauge_type = {gauge_type},
+                gauge_value = {gauge_value},
+                ex_score = {ex_score},
+                bp = {bp},
+                cb = {cb},
+                max_combo = {max_combo},
+                fast_pgreat = {fast_pgreat},
+                slow_pgreat = {slow_pgreat},
+                fast_great = {fast_great},
+                slow_great = {slow_great},
+                fast_good = {fast_good},
+                slow_good = {slow_good},
+                fast_bad = {fast_bad},
+                slow_bad = {slow_bad},
+                fast_poor = {fast_poor},
+                slow_poor = {slow_poor},
+                fast_empty_poor = {fast_empty_poor},
+                slow_empty_poor = {slow_empty_poor},
+                played_at = {played_at},
+                replay_path = {replay_path},
+                device_type = {device_type},
+                ghost = CASE
+                    WHEN best_score_history_id = ({score_source}) THEN ghost
+                    ELSE ''
+                END,
+                best_score_history_id = ({score_source}),
+                play_count = {play_count},
+                clear_count = {clear_count}",
+            clear_type = clear_value("clear_type"),
+            gauge_type = clear_value("gauge_type"),
+            gauge_value = clear_value("gauge_value"),
+            ex_score = score_value("ex_score"),
+            bp = aggregate("MIN(h.bp)"),
+            cb = aggregate("MIN(h.cb)"),
+            max_combo = aggregate("MAX(h.max_combo)"),
+            fast_pgreat = score_value("fast_pgreat"),
+            slow_pgreat = score_value("slow_pgreat"),
+            fast_great = score_value("fast_great"),
+            slow_great = score_value("slow_great"),
+            fast_good = score_value("fast_good"),
+            slow_good = score_value("slow_good"),
+            fast_bad = score_value("fast_bad"),
+            slow_bad = score_value("slow_bad"),
+            fast_poor = score_value("fast_poor"),
+            slow_poor = score_value("slow_poor"),
+            fast_empty_poor = score_value("fast_empty_poor"),
+            slow_empty_poor = score_value("slow_empty_poor"),
+            played_at = score_value("played_at"),
+            replay_path = score_value("replay_path"),
+            device_type = score_value("device_type"),
+            play_count = aggregate("COUNT(*)"),
+            clear_count = aggregate(
+                "SUM(CASE WHEN h.clear_type NOT IN ('NoPlay', 'Failed') THEN 1 ELSE 0 END)"
+            ),
+        ),
+        [],
+    )?;
+    conn.execute("DELETE FROM player_stats", [])?;
+    conn.execute(
+        "INSERT INTO player_stats (
+            id, play_count, clear_count, playtime_seconds, max_combo,
+            fast_pgreat, slow_pgreat, fast_great, slow_great,
+            fast_good, slow_good, fast_bad, slow_bad,
+            fast_poor, slow_poor, fast_empty_poor, slow_empty_poor, updated_at
+         )
+         SELECT
+            1,
+            COUNT(*),
+            COALESCE(SUM(CASE WHEN clear_type NOT IN ('NoPlay', 'Failed') THEN 1 ELSE 0 END), 0),
+            ?1,
+            COALESCE(MAX(max_combo), 0),
+            COALESCE(SUM(fast_pgreat), 0),
+            COALESCE(SUM(slow_pgreat), 0),
+            COALESCE(SUM(fast_great), 0),
+            COALESCE(SUM(slow_great), 0),
+            COALESCE(SUM(fast_good), 0),
+            COALESCE(SUM(slow_good), 0),
+            COALESCE(SUM(fast_bad), 0),
+            COALESCE(SUM(slow_bad), 0),
+            COALESCE(SUM(fast_poor), 0),
+            COALESCE(SUM(slow_poor), 0),
+            COALESCE(SUM(fast_empty_poor), 0),
+            COALESCE(SUM(slow_empty_poor), 0),
+            COALESCE(MAX(played_at), 0)
+         FROM score_history
+         WHERE course_score_id IS NULL",
+        params![preserved_playtime_seconds],
+    )?;
+    Ok(())
 }
 
 fn ln_policy_from_row(row: &rusqlite::Row<'_>, index: usize) -> rusqlite::Result<LnScorePolicy> {
@@ -1051,6 +1817,14 @@ fn double_option_from_row(
 ) -> rusqlite::Result<DoubleOptionScoreBucket> {
     let value: String = row.get(index)?;
     Ok(DoubleOptionScoreBucket::from_str_or_off(&value))
+}
+
+fn applied_double_option_from_row(
+    row: &rusqlite::Row<'_>,
+    index: usize,
+) -> rusqlite::Result<DoubleOption> {
+    let value: String = row.get(index)?;
+    Ok(DoubleOption::from_persistent_str(&value))
 }
 
 fn rule_mode_from_row(row: &rusqlite::Row<'_>, index: usize) -> rusqlite::Result<RuleMode> {
@@ -1129,21 +1903,25 @@ fn insert_score_history(
             slow_empty_poor,
             random_seed,
             arrange,
+            arrange_2p,
             gauge_option,
             rule_mode,
             assist_mask,
             autoplay,
             device_type,
             replay_path,
+            source_kind,
+            applied_double_option,
             old_clear_type,
             old_ex_score,
             old_max_combo,
             old_bp,
-            old_cb
+            old_cb,
+            seed_scheme
         ) VALUES (
             ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13,
             ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30,
-            ?31, ?32, ?33, ?34, ?35, ?36, ?37
+            ?31, ?32, ?33, ?34, ?35, ?36, ?37, ?38, ?39, ?40, ?41
         )",
         params![
             hash_to_hex(&record.chart_sha256),
@@ -1172,17 +1950,21 @@ fn insert_score_history(
             judges.slow_empty_poor,
             record.random_seed,
             record.arrange.as_str(),
+            record.arrange_2p.as_str(),
             record.gauge_option.as_str(),
             record.rule_mode.as_str(),
             record.assist_mask,
             record.autoplay,
             record.device_type.as_str(),
             record.replay_path.as_str(),
+            record.source_kind.as_str(),
+            record.applied_double_option.to_persistent_str(),
             previous_best.map(|best| best.clear_type.as_str()),
             previous_best.map(|best| best.ex_score),
             previous_best.map(|best| best.max_combo),
             previous_best.map(|best| best.bp),
             previous_best.map(|best| best.cb),
+            record.seed_scheme.as_str(),
         ],
     )?;
     Ok(())
@@ -1310,7 +2092,7 @@ fn update_player_stats(conn: &Connection, record: &ScoreRecord) -> Result<()> {
     Ok(())
 }
 
-fn upsert_score_best(conn: &Connection, record: &ScoreRecord) -> Result<()> {
+fn upsert_score_best(conn: &Connection, record: &ScoreRecord, history_id: i64) -> Result<()> {
     let judges = &record.score.judges;
     let ghost = encode_beatoraja_ghost(&record.score.ghost)?;
     let clear_increment = u32::from(is_counted_clear(record.clear_type));
@@ -1346,11 +2128,12 @@ fn upsert_score_best(conn: &Connection, record: &ScoreRecord) -> Result<()> {
             replay_path,
             ghost,
             device_type,
+            best_score_history_id,
             play_count,
             clear_count
         ) VALUES (
             ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13,
-            ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29
+            ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30
         )
         ON CONFLICT(chart_sha256, ln_policy, double_option, rule_mode) DO NOTHING",
         params![
@@ -1381,6 +2164,7 @@ fn upsert_score_best(conn: &Connection, record: &ScoreRecord) -> Result<()> {
             record.replay_path.as_str(),
             ghost,
             record.device_type.as_str(),
+            history_id,
             1_u32,
             clear_increment,
         ],
@@ -1469,9 +2253,10 @@ fn upsert_score_best(conn: &Connection, record: &ScoreRecord) -> Result<()> {
                 played_at = ?18,
                 replay_path = ?19,
                 ghost = ?20,
-                device_type = ?21
-             WHERE chart_sha256 = ?1 AND ln_policy = ?22 AND double_option = ?23
-               AND rule_mode = ?24",
+                device_type = ?21,
+                best_score_history_id = ?22
+             WHERE chart_sha256 = ?1 AND ln_policy = ?23 AND double_option = ?24
+               AND rule_mode = ?25",
             params![
                 hash_to_hex(&record.chart_sha256),
                 record.score.ex_score(),
@@ -1494,6 +2279,7 @@ fn upsert_score_best(conn: &Connection, record: &ScoreRecord) -> Result<()> {
                 record.replay_path.as_str(),
                 ghost,
                 record.device_type.as_str(),
+                history_id,
                 record.ln_policy.as_str(),
                 record.double_option.as_str(),
                 rule_mode.as_str(),
@@ -1649,6 +2435,7 @@ mod tests {
             chart_sha256: [7; 32],
             ln_policy: LnScorePolicy::ForceLn,
             double_option: DoubleOptionScoreBucket::Off,
+            applied_double_option: DoubleOption::Off,
             played_at: 1_700_000_000,
             clear_type,
             gauge_type: Some(GaugeType::Normal),
@@ -1658,13 +2445,16 @@ mod tests {
             score: score_with_ex_score(ex_score),
             count_unprocessed_notes: clear_type == ClearType::Failed,
             random_seed: None,
+            seed_scheme: String::new(),
             arrange: "Normal".to_string(),
+            arrange_2p: "Normal".to_string(),
             gauge_option: String::new(),
             rule_mode: String::new(),
             assist_mask: 0,
             autoplay: false,
             device_type: InputDeviceKind::Keyboard,
             replay_path: String::new(),
+            source_kind: ScoreSourceKind::Local,
         }
     }
 
@@ -1703,10 +2493,28 @@ mod tests {
         record.gauge_type = None;
         record.rule_mode = "Dx".to_string();
         record.arrange = "Random".to_string();
+        record.arrange_2p = "Mirror".to_string();
+        record.applied_double_option = DoubleOption::Flip;
+        record.source_kind = ScoreSourceKind::Beatoraja;
+        record.seed_scheme = "beatoraja_24bit_v1".to_string();
         record.device_type = InputDeviceKind::Controller;
         db.insert_score(&record).unwrap();
 
-        let (clear_type, gauge_type, gauge_option, rule_mode, arrange, device_type, replay_path): (
+        let (
+            clear_type,
+            gauge_type,
+            gauge_option,
+            rule_mode,
+            arrange,
+            arrange_2p,
+            device_type,
+            replay_path,
+            source_kind,
+            applied_double_option,
+        ): (
+            String,
+            String,
+            String,
             String,
             String,
             String,
@@ -1717,10 +2525,21 @@ mod tests {
         ) = db
             .conn()
             .query_row(
-                "SELECT clear_type, gauge_type, gauge_option, rule_mode, arrange, device_type, replay_path FROM score_history",
+                "SELECT clear_type, gauge_type, gauge_option, rule_mode, arrange, arrange_2p, device_type, replay_path, source_kind, applied_double_option FROM score_history",
                 [],
                 |row| {
-                    Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?, row.get(6)?))
+                    Ok((
+                        row.get(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                        row.get(4)?,
+                        row.get(5)?,
+                        row.get(6)?,
+                        row.get(7)?,
+                        row.get(8)?,
+                        row.get(9)?,
+                    ))
                 },
             )
             .unwrap();
@@ -1730,8 +2549,217 @@ mod tests {
         assert_eq!(gauge_option, "");
         assert_eq!(rule_mode, "Dx");
         assert_eq!(arrange, "Random");
+        assert_eq!(arrange_2p, "Mirror");
         assert_eq!(device_type, "controller");
         assert_eq!(replay_path, "");
+        assert_eq!(source_kind, "Beatoraja");
+        assert_eq!(applied_double_option, "Flip");
+        let seed_scheme: String = db
+            .conn()
+            .query_row("SELECT seed_scheme FROM score_history", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(seed_scheme, "beatoraja_24bit_v1");
+        assert_eq!(db.recent_history(1, 0).unwrap()[0].source_kind, ScoreSourceKind::Beatoraja);
+        assert_eq!(db.recent_history(1, 0).unwrap()[0].applied_double_option, DoubleOption::Flip);
+    }
+
+    #[test]
+    fn same_score_from_source_ignores_time_but_keeps_score_context_distinct() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        configure_connection(&conn).unwrap();
+        run_migrations(&mut conn, SCORE_MIGRATIONS).unwrap();
+        let mut db = ScoreDatabase { conn };
+
+        let mut imported = record(20, ClearType::Normal);
+        imported.source_kind = ScoreSourceKind::Beatoraja;
+        imported.random_seed = Some(1234);
+        imported.arrange = "Random".to_string();
+        imported.arrange_2p = "Mirror".to_string();
+        imported.applied_double_option = DoubleOption::Flip;
+        imported.rule_mode = "Beatoraja".to_string();
+        db.insert_score(&imported).unwrap();
+
+        let mut same = imported.clone();
+        same.played_at += 60;
+        assert!(db.has_same_score_from_source(&same).unwrap());
+
+        let mut different_source = same.clone();
+        different_source.source_kind = ScoreSourceKind::Lr2Oraja;
+        assert!(!db.has_same_score_from_source(&different_source).unwrap());
+
+        let mut different_seed = same.clone();
+        different_seed.random_seed = Some(1235);
+        assert!(!db.has_same_score_from_source(&different_seed).unwrap());
+
+        let mut different_arrange_2p = same.clone();
+        different_arrange_2p.arrange_2p = "Random".to_string();
+        assert!(!db.has_same_score_from_source(&different_arrange_2p).unwrap());
+
+        let mut different_applied_double_option = same.clone();
+        different_applied_double_option.applied_double_option = DoubleOption::Off;
+        assert!(!db.has_same_score_from_source(&different_applied_double_option).unwrap());
+
+        let mut different_judges = same;
+        different_judges.score.judges.fast_empty_poor = 1;
+        assert!(!db.has_same_score_from_source(&different_judges).unwrap());
+    }
+
+    #[test]
+    fn imported_score_reconciliation_updates_history_and_its_best_device() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        configure_connection(&conn).unwrap();
+        run_migrations(&mut conn, SCORE_MIGRATIONS).unwrap();
+        let mut db = ScoreDatabase { conn };
+
+        let mut imported = record(20, ClearType::Normal);
+        imported.source_kind = ScoreSourceKind::Beatoraja;
+        let history_id = db.insert_score(&imported).unwrap();
+
+        let mut corrected = imported.clone();
+        corrected.played_at += 60;
+        corrected.device_type = InputDeviceKind::Controller;
+        assert_eq!(
+            db.reconcile_imported_score_device_type(&corrected).unwrap(),
+            ImportedScoreReconciliation::Corrected
+        );
+        assert!(db.has_same_score_from_source(&corrected).unwrap());
+        assert_eq!(
+            db.reconcile_imported_score_device_type(&corrected).unwrap(),
+            ImportedScoreReconciliation::Unchanged
+        );
+
+        let history_device: String = db
+            .conn()
+            .query_row(
+                "SELECT device_type FROM score_history WHERE id = ?1",
+                params![history_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let (best_history_id, best_device): (i64, String) = db
+            .conn()
+            .query_row("SELECT best_score_history_id, device_type FROM score_best", [], |row| {
+                Ok((row.get(0)?, row.get(1)?))
+            })
+            .unwrap();
+        assert_eq!(history_device, "controller");
+        assert_eq!(best_history_id, history_id);
+        assert_eq!(best_device, "controller");
+    }
+
+    #[test]
+    fn imported_score_reconciliation_does_not_change_local_best_device() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        configure_connection(&conn).unwrap();
+        run_migrations(&mut conn, SCORE_MIGRATIONS).unwrap();
+        let mut db = ScoreDatabase { conn };
+
+        let mut imported = record(20, ClearType::Normal);
+        imported.source_kind = ScoreSourceKind::Beatoraja;
+        db.insert_score(&imported).unwrap();
+
+        let local = record(40, ClearType::Normal);
+        let local_history_id = db.insert_score(&local).unwrap();
+
+        let mut corrected = imported.clone();
+        corrected.device_type = InputDeviceKind::Controller;
+        assert_eq!(
+            db.reconcile_imported_score_device_type(&corrected).unwrap(),
+            ImportedScoreReconciliation::Corrected
+        );
+
+        let (best_history_id, best_device): (i64, String) = db
+            .conn()
+            .query_row("SELECT best_score_history_id, device_type FROM score_best", [], |row| {
+                Ok((row.get(0)?, row.get(1)?))
+            })
+            .unwrap();
+        assert_eq!(best_history_id, local_history_id);
+        assert_eq!(best_device, "keyboard");
+    }
+
+    #[test]
+    fn legacy_beatoraja_cleanup_removes_matching_local_history_and_rebuilds_aggregates() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        configure_connection(&conn).unwrap();
+        run_migrations(&mut conn, SCORE_MIGRATIONS).unwrap();
+        let mut db = ScoreDatabase { conn };
+
+        let mut legacy = record(20, ClearType::Normal);
+        legacy.playtime_seconds = 10;
+        legacy.random_seed = Some(1234);
+        let legacy_first_id = db.insert_score(&legacy).unwrap();
+        let legacy_second_id = db.insert_score(&legacy).unwrap();
+
+        let mut imported = legacy.clone();
+        imported.playtime_seconds = 20;
+        imported.arrange = "Random".to_string();
+        imported.source_kind = ScoreSourceKind::Beatoraja;
+        imported.device_type = InputDeviceKind::Controller;
+        let imported_id = db.insert_score(&imported).unwrap();
+
+        let mut ordinary = record(30, ClearType::Hard);
+        ordinary.chart_sha256 = [8; 32];
+        ordinary.playtime_seconds = 30;
+        ordinary.played_at += 1;
+        db.insert_score(&ordinary).unwrap();
+
+        let plan = db.legacy_beatoraja_cleanup_plan().unwrap();
+        assert_eq!(plan.legacy_history_ids, vec![legacy_first_id, legacy_second_id]);
+        assert_eq!(plan.retained_beatoraja_history_ids, vec![imported_id]);
+
+        let report = db.purge_legacy_beatoraja_imports(&plan).unwrap();
+        assert_eq!(report.removed_legacy_history, 2);
+        assert_eq!(report.retained_beatoraja_history, 1);
+        assert!(db.legacy_beatoraja_cleanup_plan().unwrap().legacy_history_ids.is_empty());
+
+        let history_ids: Vec<i64> = db
+            .conn()
+            .prepare("SELECT id FROM score_history ORDER BY id")
+            .unwrap()
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .collect::<std::result::Result<_, _>>()
+            .unwrap();
+        assert_eq!(history_ids, vec![imported_id, imported_id + 1]);
+
+        let imported_best = db.best_scores_for_charts(&[key([7; 32])]).unwrap().pop().unwrap();
+        assert_eq!(imported_best.play_count, 1);
+        assert_eq!(imported_best.device_type, InputDeviceKind::Controller);
+        let best_history_id: i64 = db
+            .conn()
+            .query_row(
+                "SELECT best_score_history_id FROM score_best WHERE chart_sha256 = ?1",
+                params![hash_to_hex(&[7; 32])],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(best_history_id, imported_id);
+
+        let stats = db.player_stats().unwrap();
+        assert_eq!(stats.play_count, 2);
+        assert_eq!(stats.clear_count, 2);
+        assert_eq!(stats.playtime_seconds, 70);
+    }
+
+    #[test]
+    fn same_source_duplicate_history_ids_match_the_cleanup_fingerprint() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        configure_connection(&conn).unwrap();
+        run_migrations(&mut conn, SCORE_MIGRATIONS).unwrap();
+        let mut db = ScoreDatabase { conn };
+
+        let mut first = record(20, ClearType::Normal);
+        first.random_seed = Some(1234);
+        let first_id = db.insert_score(&first).unwrap();
+        let duplicate_id = db.insert_score(&first).unwrap();
+
+        let mut different = first;
+        different.played_at += 1;
+        let different_id = db.insert_score(&different).unwrap();
+
+        assert_eq!(db.same_source_duplicate_history_ids(duplicate_id).unwrap(), vec![first_id]);
+        assert!(db.same_source_duplicate_history_ids(different_id).unwrap().is_empty());
     }
 
     #[test]
@@ -2134,6 +3162,73 @@ mod tests {
     }
 
     #[test]
+    fn daily_player_stats_aggregates_only_local_history_inside_range() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        configure_connection(&conn).unwrap();
+        run_migrations(&mut conn, SCORE_MIGRATIONS).unwrap();
+        let mut db = ScoreDatabase { conn };
+
+        let mut played = record(0, ClearType::Normal);
+        played.played_at = 110;
+        played.score = ScoreState::default();
+        played.score.judges.fast_pgreat = 2;
+        played.score.judges.slow_great = 3;
+        played.score.judges.fast_good = 4;
+        played.score.judges.slow_bad = 5;
+        played.score.judges.fast_poor = 6;
+        played.score.judges.slow_empty_poor = 7;
+        db.insert_score(&played).unwrap();
+
+        let mut failed = record(0, ClearType::Failed);
+        failed.chart_sha256 = [8; 32];
+        failed.played_at = 120;
+        failed.score = ScoreState::default();
+        failed.score.judges.slow_pgreat = 11;
+        db.insert_score(&failed).unwrap();
+
+        let mut outside = record(0, ClearType::Normal);
+        outside.chart_sha256 = [9; 32];
+        outside.played_at = 99;
+        outside.score = ScoreState::default();
+        outside.score.judges.fast_pgreat = 100;
+        db.insert_score(&outside).unwrap();
+
+        let mut imported = record(0, ClearType::Normal);
+        imported.chart_sha256 = [10; 32];
+        imported.played_at = 130;
+        imported.source_kind = ScoreSourceKind::Beatoraja;
+        imported.score = ScoreState::default();
+        imported.score.judges.fast_pgreat = 200;
+        db.insert_score(&imported).unwrap();
+
+        let stats = db.daily_player_stats_between(100, 200).unwrap();
+        assert_eq!(
+            stats,
+            DailyPlayerStats {
+                play_count: 2,
+                clear_count: 1,
+                pgreat: 13,
+                great: 3,
+                good: 4,
+                bad: 5,
+                poor: 6,
+                empty_poor: 7,
+                score_update_count: 2,
+                clear_update_count: 2,
+                miss_count_update_count: 2,
+            }
+        );
+        assert_eq!(
+            db.daily_recent_chart_sha256s_between(100, 200, 10).unwrap(),
+            vec![[8; 32], [7; 32]]
+        );
+        db.reset_daily_statistics(i64::MAX).unwrap();
+        let (reset_start, reset_end) = db.current_daily_statistics_range(0).unwrap();
+        assert_eq!(reset_start, reset_end);
+        assert_eq!(db.current_local_day_player_stats().unwrap(), DailyPlayerStats::default());
+    }
+
+    #[test]
     fn player_stats_migration_backfills_existing_history() {
         let mut conn = Connection::open_in_memory().unwrap();
         configure_connection(&conn).unwrap();
@@ -2236,6 +3331,17 @@ mod tests {
             .query_row("SELECT course_score_id FROM score_history", [], |row| row.get(0))
             .unwrap();
         assert_eq!(course_score_id, None);
+
+        let (source_kind, arrange_2p, applied_double_option): (String, String, String) = conn
+            .query_row(
+                "SELECT source_kind, arrange_2p, applied_double_option FROM score_history",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(source_kind, ScoreSourceKind::Local.as_str());
+        assert_eq!(arrange_2p, "Normal");
+        assert_eq!(applied_double_option, DoubleOption::Off.to_persistent_str());
     }
 
     #[test]
@@ -2440,6 +3546,49 @@ mod tests {
     }
 
     #[test]
+    fn select_score_lookups_batch_more_keys_than_one_sqlite_variable_chunk() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        configure_connection(&conn).unwrap();
+        run_migrations(&mut conn, SCORE_MIGRATIONS).unwrap();
+        let mut db = ScoreDatabase { conn };
+
+        let mut first = record(20, ClearType::Normal);
+        first.chart_sha256 = [1; 32];
+        let mut second = record(10, ClearType::Easy);
+        second.chart_sha256 = [2; 32];
+        db.insert_score(&first).unwrap();
+        db.insert_score(&second).unwrap();
+        db.upsert_replay_slot(&sample_slot(0, 20)).unwrap();
+        db.upsert_replay_slot(&sample_slot(2, 20)).unwrap();
+        let mut second_slot = sample_slot(1, 10);
+        second_slot.chart_sha256 = [2; 32];
+        db.upsert_replay_slot(&second_slot).unwrap();
+
+        let mut keys = (0..SCORE_KEY_LOOKUP_BATCH_SIZE * 2 + 1)
+            .map(|index| {
+                let mut sha = [0; 32];
+                sha[..8].copy_from_slice(&(index as u64 + 100).to_le_bytes());
+                key(sha)
+            })
+            .collect::<Vec<_>>();
+        keys.extend([key([2; 32]), key([1; 32]), key([1; 32])]);
+
+        let scores = db.best_scores_for_charts(&keys).unwrap();
+        let slots = db.replay_slots_for_charts(&keys).unwrap();
+
+        assert_eq!(
+            scores.iter().map(|score| score.chart_sha256).collect::<Vec<_>>(),
+            [[2; 32], [1; 32], [1; 32]]
+        );
+        assert_eq!(slots.len(), 3);
+        assert_eq!(slots[0].chart_sha256, [2; 32]);
+        assert_eq!(slots[0].replay_slots, [false, true, false, false]);
+        assert_eq!(slots[1].chart_sha256, [1; 32]);
+        assert_eq!(slots[1].replay_slots, [true, false, true, false]);
+        assert_eq!(slots[2], slots[1]);
+    }
+
+    #[test]
     fn upsert_replay_slot_overwrites_same_slot() {
         let mut conn = Connection::open_in_memory().unwrap();
         configure_connection(&conn).unwrap();
@@ -2540,7 +3689,9 @@ mod tests {
                 0,
                 InputDeviceKind::Controller,
                 "",
-            ),
+            )
+            .with_arrange_2p("Mirror")
+            .with_source_kind(ScoreSourceKind::Lr2Oraja),
         );
 
         assert_eq!(record.chart_sha256, [9; 32]);
@@ -2551,6 +3702,8 @@ mod tests {
         assert_eq!(record.gauge_type, Some(GaugeType::Hard));
         assert_eq!(record.gauge_value, 76.5);
         assert_eq!(record.device_type, InputDeviceKind::Controller);
+        assert_eq!(record.arrange_2p, "Mirror");
+        assert_eq!(record.source_kind, ScoreSourceKind::Lr2Oraja);
         assert_eq!(record.score.ex_score(), 2);
         assert!(record.autoplay);
         assert_eq!(record.gauge_option, "Hard");

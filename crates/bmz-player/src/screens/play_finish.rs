@@ -141,6 +141,7 @@ pub fn finish_session_result(
     } else {
         let arrange = applied_arrange.arrange;
         let arrange_seed = applied_arrange.seed;
+        let random_seed = applied_arrange.packed_beatoraja_seed(session.chart.metadata.key_mode);
         let arrange_pattern = applied_arrange.pattern.clone();
         store_play_result(
             score_db,
@@ -152,7 +153,8 @@ pub fn finish_session_result(
                 playtime_seconds: chart_playtime_seconds(&session.chart),
                 ln_policy: score_key.ln_policy,
                 double_option: score_key.double_option,
-                random_seed: arrange_seed,
+                applied_double_option: applied_arrange.double_option,
+                random_seed,
                 gauge_option: String::new(),
                 rule_mode: session.rule_mode.as_str().to_string(),
                 assist_mask: 0,
@@ -160,6 +162,13 @@ pub fn finish_session_result(
                 arrange,
                 arrange_2p: applied_arrange.arrange_2p,
                 arrange_seed,
+                arrange_seed_2p: applied_arrange.seed_2p,
+                bms_random_choices: applied_arrange.bms_random_choices.clone(),
+                seed_scheme: if applied_arrange.legacy_seed {
+                    crate::storage::replay::SEED_SCHEME_LEGACY_SHARED_V3.to_string()
+                } else {
+                    crate::storage::replay::SEED_SCHEME_BEATORAJA_24BIT_V1.to_string()
+                },
                 arrange_pattern,
                 mode: finish_mode.store_mode(),
             },
@@ -168,6 +177,7 @@ pub fn finish_session_result(
     let mut summary = ResultSummary::from_play_result(&result, &stored, &session.chart);
     summary.clear_type = summary_clear_type;
     summary.arrange = applied_arrange.arrange.as_str().to_string();
+    summary.arrange_2p = applied_arrange.arrange_2p.as_str().to_string();
     summary.lane_shuffle_pattern = applied_arrange.pattern.clone().unwrap_or_default();
     summary.target_ex_score = target_ex_score;
     summary.saved_replay_slots = stored.slot_paths.each_ref().map(Option::is_some);
@@ -233,6 +243,10 @@ fn chart_playtime_seconds(chart: &bmz_chart::model::PlayableChart) -> u32 {
     (chart.end_time.0.max(0) / 1_000_000).min(i64::from(u32::MAX)) as u32
 }
 
+fn chart_duration_ms(chart: &bmz_chart::model::PlayableChart) -> u64 {
+    (chart.end_time.0.max(0) / 1_000) as u64
+}
+
 fn clear_type_from_name(name: &str) -> Option<ClearType> {
     match name {
         "NoPlay" => Some(ClearType::NoPlay),
@@ -281,6 +295,7 @@ fn enqueue_ir_jobs(
         result,
         IrSubmissionContext {
             played_at,
+            duration_ms: Some(chart_duration_ms(&session.chart)),
             ln_policy: score_key.ln_policy,
             effective_ln_mode: effective_ln_mode_from_score_policy(score_key.ln_policy),
             gauge_option: result.gauge_type.as_str().to_string(),
@@ -289,8 +304,15 @@ fn enqueue_ir_jobs(
             arrange: applied_arrange.arrange,
             arrange_2p: applied_arrange.arrange_2p,
             double_option: score_key.double_option,
-            arrange_seed: applied_arrange.seed,
-            random_seed: applied_arrange.seed,
+            applied_double_option: applied_arrange.double_option,
+            arrange_seed: applied_arrange.packed_beatoraja_seed(session.chart.metadata.key_mode),
+            random_seed: applied_arrange.packed_beatoraja_seed(session.chart.metadata.key_mode),
+            seed_scheme: if applied_arrange.legacy_seed {
+                crate::storage::replay::SEED_SCHEME_LEGACY_SHARED_V3.to_string()
+            } else {
+                crate::storage::replay::SEED_SCHEME_BEATORAJA_24BIT_V1.to_string()
+            },
+            bms_random_choices: applied_arrange.bms_random_choices.clone(),
             rule_mode: session.rule_mode.as_str().to_string(),
             // 保存時に serialize 済みバイト列から計算した hash。プレイ終了
             // 直後のフレームでリプレイファイルを読み直さない。
@@ -385,7 +407,7 @@ pub fn finish_session_result_once(
         return Ok(finished);
     }
 
-    let finished = finish_session_result(
+    let mut finished = finish_session_result(
         score_db,
         network_db,
         request.profile_paths,
@@ -399,6 +421,7 @@ pub fn finish_session_result_once(
         request.practice_mode,
         request.finish_mode,
     )?;
+    finished.summary.target_name = request.target_name.replace('_', " ");
     *cached = Some(finished.clone());
     Ok(finished)
 }
@@ -411,6 +434,7 @@ pub struct FinishSessionResultOnceRequest<'a> {
     pub played_at: i64,
     pub applied_arrange: &'a AppliedArrange,
     pub target_ex_score: Option<u32>,
+    pub target_name: &'a str,
     pub score_key: ScoreKey,
     pub practice_mode: bool,
     pub finish_mode: FinishResultMode,
@@ -588,9 +612,12 @@ mod tests {
         let lane_shuffle_pattern = (0..bmz_core::lane::LANE_COUNT as u8).rev().collect::<Vec<_>>();
         let applied_arrange = AppliedArrange {
             arrange: crate::select_options::ArrangeOption::Random,
-            arrange_2p: crate::select_options::ArrangeOption::Normal,
+            arrange_2p: crate::select_options::ArrangeOption::Mirror,
             double_option: crate::select_options::DoubleOption::Off,
             seed: Some(42),
+            seed_2p: None,
+            legacy_seed: false,
+            bms_random_choices: vec![1, 2],
             pattern: Some(lane_shuffle_pattern.clone()),
         };
 
@@ -613,6 +640,7 @@ mod tests {
         assert_eq!(finished.summary.score_history_id, finished.stored.score_history_id);
         assert_eq!(finished.summary.clear_type, finished.result.clear_type);
         assert_eq!(finished.summary.arrange, "RANDOM");
+        assert_eq!(finished.summary.arrange_2p, "MIRROR");
         assert_eq!(finished.summary.lane_shuffle_pattern, lane_shuffle_pattern);
         assert_eq!(finished.summary.target_ex_score, Some(1600));
         assert_eq!(finished.summary.saved_replay_slots, [true, true, true, false]);
@@ -777,7 +805,8 @@ mod tests {
             }],
             ..IrConfig::default()
         };
-        let session = session();
+        let mut session = session();
+        Arc::get_mut(&mut session.chart).unwrap().end_time = TimeUs(123_456_789);
 
         let finished = finish_session_result(
             &mut score_db,
@@ -796,7 +825,10 @@ mod tests {
         .unwrap();
 
         assert_eq!(finished.summary.ir_queued_jobs, 1);
-        assert_eq!(network_db.pending_ir_score_jobs(1_700_000_108, 10).unwrap().len(), 1);
+        let jobs = network_db.pending_ir_score_jobs(1_700_000_108, 10).unwrap();
+        assert_eq!(jobs.len(), 1);
+        let payload: serde_json::Value = serde_json::from_str(&jobs[0].payload_json).unwrap();
+        assert_eq!(payload["result"]["duration_ms"], 123_456);
 
         std::fs::remove_dir_all(root).unwrap();
     }
@@ -837,6 +869,7 @@ mod tests {
                 played_at: 1_700_000_103,
                 applied_arrange: &AppliedArrange::default(),
                 target_ex_score: None,
+                target_name: "RANK_AAA",
                 score_key: score_key(&session),
                 practice_mode: false,
                 finish_mode: FinishResultMode::Normal,
@@ -855,6 +888,7 @@ mod tests {
                 played_at: 1_700_000_104,
                 applied_arrange: &AppliedArrange::default(),
                 target_ex_score: None,
+                target_name: "RANK_AAA",
                 score_key: score_key(&session),
                 practice_mode: false,
                 finish_mode: FinishResultMode::Normal,
@@ -863,6 +897,7 @@ mod tests {
         .unwrap();
 
         assert_eq!(first.stored.score_history_id, second.stored.score_history_id);
+        assert_eq!(first.summary.target_name, "RANK AAA");
         assert_eq!(score_db.recent_history(10, 0).unwrap().len(), 1);
 
         std::fs::remove_dir_all(root).unwrap();
@@ -1049,6 +1084,8 @@ mod tests {
             scratch_angle_last_render_at: None,
             lane_auto_release_at: Default::default(),
             recent_judgements: Vec::new(),
+            pending_skin_events: Vec::new(),
+            next_skin_event_sequence: 0,
             result_judgements: Default::default(),
             hit_error_ring: bmz_gameplay::hit_error::HitErrorRing::default(),
             gauge_increase_started_at: None,
@@ -1075,6 +1112,7 @@ mod tests {
             lanecover_enabled: false,
             lift_enabled: true,
             hidden_enabled: false,
+            hispeed_auto_adjust: false,
             hidden_cover: 0.0,
             skin_offsets: Vec::new(),
             bga_enabled: true,

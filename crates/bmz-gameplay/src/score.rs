@@ -138,7 +138,8 @@ impl ScoreState {
 pub fn empty_poor_breaks_combo_for_rule_mode(key_mode: KeyMode, rule_mode: RuleMode) -> bool {
     match rule_mode {
         RuleMode::Beatoraja => matches!(key_mode, KeyMode::K5 | KeyMode::K10 | KeyMode::K9),
-        RuleMode::Lr2Oraja | RuleMode::Dx => false,
+        RuleMode::Dx => key_mode == KeyMode::K9,
+        RuleMode::Lr2Oraja => false,
     }
 }
 
@@ -258,5 +259,7 @@ mod tests {
         assert!(!empty_poor_breaks_combo_for_rule_mode(KeyMode::K7, RuleMode::Beatoraja));
         assert!(!empty_poor_breaks_combo_for_rule_mode(KeyMode::K6, RuleMode::Beatoraja));
         assert!(!empty_poor_breaks_combo_for_rule_mode(KeyMode::K5, RuleMode::Lr2Oraja));
+        assert!(empty_poor_breaks_combo_for_rule_mode(KeyMode::K9, RuleMode::Dx));
+        assert!(!empty_poor_breaks_combo_for_rule_mode(KeyMode::K7, RuleMode::Dx));
     }
 }

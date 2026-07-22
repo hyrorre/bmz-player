@@ -168,6 +168,10 @@ pub struct TableEntryListItem {
     pub title: String,
     pub artist: String,
     pub comment: String,
+    pub url: String,
+    pub append_url: String,
+    pub ipfs: String,
+    pub append_ipfs: String,
     pub chart: Option<ChartListItem>,
 }
 
@@ -236,6 +240,11 @@ impl LibraryDatabase {
         };
 
         write_chart_analysis(conn, chart_id, record.chart)?;
+        super::course_db::backfill_unresolved_course_entries_for_chart(
+            conn,
+            &hash_to_hex(&record.chart.identity.file_sha256),
+            &hash_to_hex(&record.chart.identity.file_md5),
+        )?;
 
         Ok((chart_id, chart_file_id))
     }
@@ -700,20 +709,26 @@ impl LibraryDatabase {
         if ids.is_empty() {
             return Ok(HashMap::new());
         }
-        let mut stmt = self.conn.prepare(
-            "SELECT chart_id, normal_notes, long_notes, scratch_notes, long_scratch_notes,
-                density, peak_density, end_density, total_gauge, main_bpm, speed_changes_json
-             FROM chart_analysis
-             WHERE chart_id = ?1",
-        )?;
+
+        let mut unique_ids = ids.to_vec();
+        unique_ids.sort_unstable();
+        unique_ids.dedup();
         let mut out = HashMap::with_capacity(ids.len());
-        for id in ids {
-            if let Some((chart_id, summary)) = stmt
-                .query_row(params![id], |row| {
+        for chunk in unique_ids.chunks(CHART_ANALYSIS_LOOKUP_BATCH_SIZE) {
+            let placeholders = std::iter::repeat_n("?", chunk.len()).collect::<Vec<_>>().join(", ");
+            let sql = format!(
+                "SELECT chart_id, normal_notes, long_notes, scratch_notes, long_scratch_notes,
+                    density, peak_density, end_density, total_gauge, main_bpm, speed_changes_json
+                 FROM chart_analysis
+                 WHERE chart_id IN ({placeholders})"
+            );
+            let mut stmt = self.conn.prepare(&sql)?;
+            let rows = stmt
+                .query_map(rusqlite::params_from_iter(chunk.iter().copied()), |row| {
                     Ok((row.get(0)?, chart_analysis_summary_from_row_with_offset(row, 1)?))
-                })
-                .optional()?
-            {
+                })?;
+            for row in rows {
+                let (chart_id, summary) = row?;
                 out.insert(chart_id, summary);
             }
         }
@@ -887,6 +902,14 @@ impl LibraryDatabase {
         super::difficulty_table_db::list_difficulty_tables(&self.conn)
     }
 
+    pub fn list_difficulty_table_sources_with_current_download_metadata(
+        &self,
+    ) -> Result<Vec<String>> {
+        super::difficulty_table_db::list_difficulty_table_sources_with_current_download_metadata(
+            &self.conn,
+        )
+    }
+
     pub fn list_difficulty_table_entries_by_md5s(
         &self,
         md5s: &[&str],
@@ -908,7 +931,20 @@ impl LibraryDatabase {
         &self,
         source_url: &str,
     ) -> Result<Vec<TableEntryListItem>> {
-        let rows = super::difficulty_table_db::list_table_entries(&self.conn, source_url)?;
+        self.list_table_entries_with_chart_at_level(source_url, None)
+    }
+
+    pub fn list_table_entries_with_chart_at_level(
+        &self,
+        source_url: &str,
+        level: Option<&str>,
+    ) -> Result<Vec<TableEntryListItem>> {
+        let rows = match level {
+            Some(level) => super::difficulty_table_db::list_table_entries_at_level(
+                &self.conn, source_url, level,
+            )?,
+            None => super::difficulty_table_db::list_table_entries(&self.conn, source_url)?,
+        };
         let md5_refs: Vec<&str> =
             rows.iter().filter(|row| row.md5.len() >= 24).map(|row| row.md5.as_str()).collect();
         let sha256_refs: Vec<&str> = rows
@@ -933,6 +969,10 @@ impl LibraryDatabase {
                     title: row.title,
                     artist: row.artist,
                     comment: row.comment,
+                    url: row.url,
+                    append_url: row.append_url,
+                    ipfs: row.ipfs,
+                    append_ipfs: row.append_ipfs,
                     chart,
                 }
             })
@@ -1012,20 +1052,9 @@ impl LibraryDatabase {
     }
 }
 
-const CHART_LIST_ITEM_LOOKUP_SQL: &str = "
-    SELECT id, md5, sha256, title, subtitle, artist,
-           difficulty_name, play_level, mode, total_notes,
-           initial_bpm, COALESCE(min_bpm, initial_bpm),
-           COALESCE(max_bpm, initial_bpm), length_ms, folder_path,
-           stage_file, banner_file, backbmp_file, preview_file,
-           has_long_notes, has_mines, judge_rank,
-           has_undefined_ln, has_defined_ln, has_defined_cn, has_defined_hcn,
-           subartist, genre, COALESCE(bms_total, 0),
-           undefined_ln_pairs, defined_ln_pairs, defined_cn_pairs, defined_hcn_pairs
-    FROM charts
-    WHERE {column} = ?1
-    ORDER BY id DESC
-    LIMIT 1";
+/// Keep batched hash lookups below SQLite's historical 999-variable default.
+const CHART_HASH_LOOKUP_BATCH_SIZE: usize = 500;
+const CHART_ANALYSIS_LOOKUP_BATCH_SIZE: usize = 500;
 
 fn charts_by_hash_column(
     conn: &Connection,
@@ -1037,15 +1066,30 @@ fn charts_by_hash_column(
     if hashes.is_empty() {
         return Ok(map);
     }
-    let sql = CHART_LIST_ITEM_LOOKUP_SQL.replace("{column}", column);
-    let mut stmt = conn.prepare(&sql)?;
-    for hash in hashes {
-        if map.contains_key(*hash) {
-            continue;
-        }
-        let chart = stmt.query_row(params![hash], chart_list_item_from_row).optional()?;
-        if let Some(chart) = chart {
-            map.insert((*hash).to_string(), chart);
+
+    let mut unique_hashes = hashes.to_vec();
+    unique_hashes.sort_unstable();
+    unique_hashes.dedup();
+
+    for chunk in unique_hashes.chunks(CHART_HASH_LOOKUP_BATCH_SIZE) {
+        let placeholders = std::iter::repeat_n("?", chunk.len()).collect::<Vec<_>>().join(", ");
+        let sql = format!(
+            "SELECT {CHART_LIST_ITEM_COLUMNS_C}, latest.lookup_hash
+             FROM charts c
+             JOIN (
+                 SELECT {column} AS lookup_hash, MAX(id) AS chart_id
+                 FROM charts
+                 WHERE {column} IN ({placeholders})
+                 GROUP BY {column}
+             ) latest ON latest.chart_id = c.id"
+        );
+        let mut stmt = conn.prepare(&sql)?;
+        let rows = stmt.query_map(rusqlite::params_from_iter(chunk.iter().copied()), |row| {
+            Ok((row.get::<_, String>(33)?, chart_list_item_from_row(row)?))
+        })?;
+        for row in rows {
+            let (hash, chart) = row?;
+            map.insert(hash, chart);
         }
     }
     Ok(map)
@@ -1947,6 +1991,7 @@ fn warning_details(warning: &ImportWarning) -> (String, String) {
 mod tests {
     use bmz_chart::hash::compute_chart_identity;
     use bmz_chart::model::{ChartMetadata, LongNotePair, LongNoteStyle, NoteEvent, PlayableChart};
+    use bmz_core::course::{CourseConstraints, CourseDefinition, CourseEntry, CourseKind};
     use bmz_core::ids::NoteId;
     use bmz_core::lane::Lane;
     use bmz_core::time::{ChartTick, TimeUs};
@@ -1997,6 +2042,18 @@ mod tests {
             bga_assets: Vec::new(),
             total_notes: 0,
             end_time: TimeUs(10_000_000),
+        }
+    }
+
+    fn course_with_entries(entries: Vec<CourseEntry>) -> CourseDefinition {
+        CourseDefinition {
+            key: "table:test#0".to_string(),
+            title: "Test Course".to_string(),
+            kind: CourseKind::Dan,
+            entries,
+            constraints: CourseConstraints::default(),
+            trophies: Vec::new(),
+            release: true,
         }
     }
 
@@ -2118,6 +2175,110 @@ mod tests {
         let analysis = db.chart_analysis_by_chart_id(chart_id).unwrap().unwrap();
         assert_eq!(analysis.total_gauge, 260.0);
         assert_eq!(analysis.main_bpm, 128.0);
+    }
+
+    #[test]
+    fn upsert_chart_import_backfills_unresolved_course_entries() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        configure_connection(&conn).unwrap();
+        run_migrations(&mut conn, LIBRARY_MIGRATIONS).unwrap();
+        let mut db = LibraryDatabase { conn };
+        let chart = chart("course song");
+        let md5 = hash_to_hex(&chart.identity.file_md5);
+        let sha256 = hash_to_hex(&chart.identity.file_sha256);
+        let course = course_with_entries(vec![
+            CourseEntry {
+                title_hint: "SHA-256 match".to_string(),
+                md5: Some(md5.clone()),
+                sha256: Some(sha256),
+                chart_id: None,
+            },
+            CourseEntry {
+                title_hint: "MD5 fallback".to_string(),
+                md5: Some(md5),
+                sha256: Some("f".repeat(64)),
+                chart_id: None,
+            },
+        ]);
+        let course_id = db.upsert_course("table:test", &course, 0, 1).unwrap();
+        assert!(
+            db.list_course_entries(course_id)
+                .unwrap()
+                .iter()
+                .all(|entry| entry.entry.chart_id.is_none())
+        );
+
+        let chart_id =
+            db.upsert_chart_import(&record_for_chart("/songs/course.bms", &chart)).unwrap();
+
+        let entries = db.list_course_entries(course_id).unwrap();
+        assert_eq!(entries[0].entry.chart_id, Some(chart_id));
+        assert_eq!(entries[1].entry.chart_id, Some(chart_id));
+    }
+
+    #[test]
+    fn successful_reimport_restores_course_link_after_import_failure() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        configure_connection(&conn).unwrap();
+        run_migrations(&mut conn, LIBRARY_MIGRATIONS).unwrap();
+        let mut db = LibraryDatabase { conn };
+        let chart = chart("recovered course song");
+        let path = Path::new("/songs/recovered.bms");
+        let record = record_for_chart("/songs/recovered.bms", &chart);
+        let original_chart_id = db.upsert_chart_import(&record).unwrap();
+        let course = course_with_entries(vec![CourseEntry {
+            title_hint: "Recovered song".to_string(),
+            md5: Some(hash_to_hex(&chart.identity.file_md5)),
+            sha256: Some(hash_to_hex(&chart.identity.file_sha256)),
+            chart_id: None,
+        }]);
+        let course_id = db.upsert_course("table:test", &course, 0, 1).unwrap();
+        assert_eq!(
+            db.list_course_entries(course_id).unwrap()[0].entry.chart_id,
+            Some(original_chart_id)
+        );
+
+        db.upsert_failed_chart_file(None, path, 1, 2, 2, "temporary failure").unwrap();
+        assert_eq!(db.list_course_entries(course_id).unwrap()[0].entry.chart_id, None);
+
+        let recovered_chart_id = db.upsert_chart_import(&record).unwrap();
+        assert_eq!(
+            db.list_course_entries(course_id).unwrap()[0].entry.chart_id,
+            Some(recovered_chart_id)
+        );
+    }
+
+    #[test]
+    fn course_backfill_uses_oldest_duplicate_chart_id() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        configure_connection(&conn).unwrap();
+        run_migrations(&mut conn, LIBRARY_MIGRATIONS).unwrap();
+        let mut db = LibraryDatabase { conn };
+        let chart = chart("duplicate course song");
+        let oldest_chart_id =
+            db.upsert_chart_import(&record_for_chart("/songs/first.bms", &chart)).unwrap();
+        let course = course_with_entries(vec![CourseEntry {
+            title_hint: "Duplicate song".to_string(),
+            md5: Some(hash_to_hex(&chart.identity.file_md5)),
+            sha256: Some(hash_to_hex(&chart.identity.file_sha256)),
+            chart_id: None,
+        }]);
+        let course_id = db.upsert_course("table:test", &course, 0, 1).unwrap();
+        db.conn()
+            .execute(
+                "UPDATE course_entries SET chart_id = NULL WHERE course_id = ?1",
+                params![course_id],
+            )
+            .unwrap();
+
+        let duplicate_chart_id =
+            db.upsert_chart_import(&record_for_chart("/songs/second.bms", &chart)).unwrap();
+
+        assert!(duplicate_chart_id > oldest_chart_id);
+        assert_eq!(
+            db.list_course_entries(course_id).unwrap()[0].entry.chart_id,
+            Some(oldest_chart_id)
+        );
     }
 
     #[test]
@@ -2809,6 +2970,63 @@ mod tests {
         let resolved = db.charts_by_md5s(&[md5.as_str()]).unwrap();
 
         assert_eq!(resolved.get(&md5).map(|chart| chart.chart_id), Some(fresh_id));
+    }
+
+    #[test]
+    fn charts_by_md5s_batches_more_hashes_than_one_sqlite_variable_chunk() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        configure_connection(&conn).unwrap();
+        run_migrations(&mut conn, LIBRARY_MIGRATIONS).unwrap();
+        let mut db = LibraryDatabase::from_connection(conn);
+
+        let first = chart("batch-first");
+        let second = chart("batch-second");
+        let first_id =
+            db.upsert_chart_import(&record_for_chart("/songs/first.bms", &first)).unwrap();
+        let second_id =
+            db.upsert_chart_import(&record_for_chart("/songs/second.bms", &second)).unwrap();
+        let first_md5 = hash_to_hex(&first.identity.file_md5);
+        let second_md5 = hash_to_hex(&second.identity.file_md5);
+
+        let mut hashes = (0..CHART_HASH_LOOKUP_BATCH_SIZE * 2 + 1)
+            .map(|index| format!("{index:032x}"))
+            .collect::<Vec<_>>();
+        hashes.push(first_md5.clone());
+        hashes.push(second_md5.clone());
+        hashes.push(first_md5.clone());
+        let hash_refs = hashes.iter().map(String::as_str).collect::<Vec<_>>();
+
+        let resolved = db.charts_by_md5s(&hash_refs).unwrap();
+
+        assert_eq!(resolved.len(), 2);
+        assert_eq!(resolved.get(&first_md5).map(|chart| chart.chart_id), Some(first_id));
+        assert_eq!(resolved.get(&second_md5).map(|chart| chart.chart_id), Some(second_id));
+    }
+
+    #[test]
+    fn chart_analysis_summaries_batch_more_ids_than_one_sqlite_variable_chunk() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        configure_connection(&conn).unwrap();
+        run_migrations(&mut conn, LIBRARY_MIGRATIONS).unwrap();
+        let mut db = LibraryDatabase::from_connection(conn);
+
+        let first = chart("analysis-batch-first");
+        let second = chart("analysis-batch-second");
+        let first_id =
+            db.upsert_chart_import(&record_for_chart("/songs/first.bms", &first)).unwrap();
+        let second_id =
+            db.upsert_chart_import(&record_for_chart("/songs/second.bms", &second)).unwrap();
+        let mut ids =
+            (10_000..10_000 + CHART_ANALYSIS_LOOKUP_BATCH_SIZE as i64 * 2 + 1).collect::<Vec<_>>();
+        ids.push(first_id);
+        ids.push(second_id);
+        ids.push(first_id);
+
+        let summaries = db.chart_analysis_summaries_by_chart_ids(&ids).unwrap();
+
+        assert_eq!(summaries.len(), 2);
+        assert!(summaries.contains_key(&first_id));
+        assert!(summaries.contains_key(&second_id));
     }
 
     #[test]

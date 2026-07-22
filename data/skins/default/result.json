@@ -49,7 +49,9 @@
     { "id": "result_notes_label", "constantText": "NOTES / DURATION", "size": 13 },
     { "id": "result_notes", "numberRef": 74, "size": 22 },
     { "id": "result_minutes", "numberRef": 1163, "suffix": "m", "size": 22 },
-    { "id": "result_seconds", "numberRef": 1164, "suffix": "s", "size": 22 }
+    { "id": "result_seconds", "numberRef": 1164, "suffix": "s", "size": 22 },
+    { "id": "ir_submit_success", "constantText": "IR SUBMITTED", "size": 16 },
+    { "id": "ir_submit_failed", "constantText": "IR SUBMIT FAILED", "size": 16 }
   ],
   "destination": [
     {
@@ -215,6 +217,16 @@
     {
       "id": "result_seconds",
       "dst": [{ "x": 838, "y": 436, "w": 64, "h": 24, "a": 245, "r": 218, "g": 230, "b": 232 }]
+    },
+    {
+      "id": "ir_submit_success",
+      "timer": 173,
+      "dst": [{ "x": 86, "y": 592, "w": 200, "h": 18, "a": 245, "r": 120, "g": 226, "b": 188 }]
+    },
+    {
+      "id": "ir_submit_failed",
+      "timer": 174,
+      "dst": [{ "x": 86, "y": 592, "w": 240, "h": 18, "a": 245, "r": 238, "g": 120, "b": 120 }]
     }
   ]
 }

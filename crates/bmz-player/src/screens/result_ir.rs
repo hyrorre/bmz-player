@@ -8,7 +8,7 @@
 
 use std::path::PathBuf;
 use std::sync::mpsc::{Receiver, Sender, channel};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use bmz_gameplay::rule::RuleMode;
 
@@ -21,6 +21,7 @@ use crate::ir::sync::{
 use crate::ir::types::{IrCourseRankingResult, IrRankingResult, IrRankingScope};
 use crate::ln_policy::LnScorePolicy;
 use crate::select_options::DoubleOptionScoreBucket;
+use crate::storage::network_db::{IrJobKind, IrScoreJobRecord, IrScoreJobStatus};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ResultRankingTab {
@@ -88,12 +89,14 @@ pub struct ResultIrQuery {
 #[derive(Debug, Clone)]
 pub enum ResultIrTarget {
     Chart {
+        local_score_id: i64,
         chart_sha256_hex: String,
         ln_policy: LnScorePolicy,
         double_option: DoubleOptionScoreBucket,
         rule_mode: RuleMode,
     },
     Course {
+        local_score_id: i64,
         course_hash: String,
         gauge: String,
         ln_policy: String,
@@ -113,6 +116,13 @@ impl ResultIrTarget {
     fn is_course(&self) -> bool {
         matches!(self, Self::Course { .. })
     }
+
+    fn submission_job(&self) -> (IrJobKind, i64) {
+        match self {
+            Self::Chart { local_score_id, .. } => (IrJobKind::Score, *local_score_id),
+            Self::Course { local_score_id, .. } => (IrJobKind::Course, *local_score_id),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -131,6 +141,8 @@ pub struct ResultIrState {
     ir_connect_begin_at: Option<Instant>,
     ir_connect_success_at: Option<Instant>,
     ir_connect_fail_at: Option<Instant>,
+    user_name: bmz_render::scene::ResultIrRankingName,
+    skin_scroll_offset: usize,
     query: ResultIrTaskQuery,
     sender: Sender<ResultIrEvent>,
     receiver: Receiver<ResultIrEvent>,
@@ -232,7 +244,9 @@ impl ResultIrState {
             RankingLoadState::Failed(_) => {
                 ResultIrSnapshot { state: SkinIrState::Failed, ..Default::default() }
             }
-            RankingLoadState::Loaded(ranking) => result_ir_ranking_to_skin_snapshot(ranking),
+            RankingLoadState::Loaded(ranking) => {
+                result_ir_ranking_to_skin_snapshot_at(ranking, self.skin_scroll_offset)
+            }
         };
         self.with_connect_timers(snapshot)
     }
@@ -244,6 +258,7 @@ impl ResultIrState {
         snapshot.connect_begin_ms = self.ir_connect_begin_at.map(elapsed_since_ms);
         snapshot.connect_success_ms = self.ir_connect_success_at.map(elapsed_since_ms);
         snapshot.connect_fail_ms = self.ir_connect_fail_at.map(elapsed_since_ms);
+        snapshot.user_name = self.user_name;
         snapshot
     }
 
@@ -251,6 +266,20 @@ impl ResultIrState {
         match self.active_tab {
             ResultRankingTab::Global => &self.global,
             ResultRankingTab::SelfAndRivals => &self.self_and_rivals,
+        }
+    }
+
+    pub fn set_skin_scroll_rate(&mut self, value: f32) {
+        let max = self.skin_scroll_max();
+        self.skin_scroll_offset = ((value.clamp(0.0, 1.0) * max as f32).round() as usize).min(max);
+    }
+
+    fn skin_scroll_max(&self) -> usize {
+        match &self.global {
+            RankingLoadState::Loaded(ranking) => {
+                ranking.entries.len().saturating_sub(bmz_render::scene::IR_RANKING_ENTRY_SLOTS)
+            }
+            _ => 0,
         }
     }
 
@@ -284,15 +313,26 @@ pub fn ranking_to_ir_snapshot(ranking: &IrRankingResult) -> bmz_render::scene::R
 pub(crate) fn result_ir_ranking_to_skin_snapshot(
     ranking: &ResultIrRanking,
 ) -> bmz_render::scene::ResultIrSnapshot {
+    result_ir_ranking_to_skin_snapshot_at(ranking, 0)
+}
+
+fn result_ir_ranking_to_skin_snapshot_at(
+    ranking: &ResultIrRanking,
+    requested_offset: usize,
+) -> bmz_render::scene::ResultIrSnapshot {
     use bmz_render::scene::{
         IR_RANKING_ENTRY_SLOTS, ResultIrRankingEntrySnapshot, ResultIrRankingName,
         ResultIrSnapshot, ResultIrState as SkinIrState,
     };
+    let scroll_max = ranking.entries.len().saturating_sub(IR_RANKING_ENTRY_SLOTS);
+    let scroll_offset = requested_offset.min(scroll_max);
     let mut entries = [ResultIrRankingEntrySnapshot::default(); IR_RANKING_ENTRY_SLOTS];
-    for (slot, entry) in entries.iter_mut().zip(ranking.entries.iter()) {
+    for (slot, entry) in entries.iter_mut().zip(ranking.entries.iter().skip(scroll_offset)) {
         *slot = ResultIrRankingEntrySnapshot {
             rank: Some(i64::from(entry.rank)),
             ex_score: Some(i64::from(entry.ex_score)),
+            clear_index: bmz_core::clear::ClearType::from_label(&entry.clear)
+                .map(|clear| i64::from(clear as u8)),
             player_name: ResultIrRankingName::from_display_name(&entry.player_name),
         };
     }
@@ -302,6 +342,8 @@ pub(crate) fn result_ir_ranking_to_skin_snapshot(
         total_player: ranking.total.map(i64::from).or(Some(ranking.entries.len() as i64)),
         clear_rate: ranking.clear_rate.map(i64::from),
         previous_rank: None,
+        scroll_offset,
+        scroll_max,
         entries,
         ..Default::default()
     }
@@ -329,7 +371,9 @@ fn chart_ranking_to_result_ir_ranking(ranking: &IrRankingResult) -> ResultIrRank
     }
 }
 
-fn course_ranking_to_result_ir_ranking(ranking: &IrCourseRankingResult) -> ResultIrRanking {
+pub(crate) fn course_ranking_to_result_ir_ranking(
+    ranking: &IrCourseRankingResult,
+) -> ResultIrRanking {
     ResultIrRanking {
         scope: ranking.ranking.scope,
         entries: ranking
@@ -371,6 +415,7 @@ pub fn spawn_result_ir_task(
     network_db_path: PathBuf,
     logs_dir: PathBuf,
     ir_config: &IrConfig,
+    local_score_id: i64,
     chart_sha256_hex: String,
     ln_policy: LnScorePolicy,
     double_option: DoubleOptionScoreBucket,
@@ -382,7 +427,13 @@ pub fn spawn_result_ir_task(
         network_db_path,
         logs_dir,
         ir_config,
-        ResultIrTarget::Chart { chart_sha256_hex, ln_policy, double_option, rule_mode },
+        ResultIrTarget::Chart {
+            local_score_id,
+            chart_sha256_hex,
+            ln_policy,
+            double_option,
+            rule_mode,
+        },
     )
 }
 
@@ -392,6 +443,7 @@ pub fn spawn_course_result_ir_task(
     network_db_path: PathBuf,
     logs_dir: PathBuf,
     ir_config: &IrConfig,
+    local_score_id: i64,
     course_hash: String,
     gauge: String,
     ln_policy: String,
@@ -402,7 +454,7 @@ pub fn spawn_course_result_ir_task(
         network_db_path,
         logs_dir,
         ir_config,
-        ResultIrTarget::Course { course_hash, gauge, ln_policy },
+        ResultIrTarget::Course { local_score_id, course_hash, gauge, ln_policy },
     )
 }
 
@@ -436,6 +488,10 @@ fn spawn_result_ir_task_for_target(
         ir_connect_begin_at: Some(Instant::now()),
         ir_connect_success_at: None,
         ir_connect_fail_at: None,
+        user_name: bmz_render::scene::ResultIrRankingName::from_display_name(
+            &provider.account_display_name,
+        ),
+        skin_scroll_offset: 0,
         query: query.clone(),
         sender: sender.clone(),
         receiver,
@@ -470,22 +526,25 @@ fn spawn_result_ir_task_for_target(
         }
         .await;
         let mut included_global_ranking = None;
-        let event = match outcome {
+        match outcome {
             Ok(report) => {
                 included_global_ranking = included_global_ranking_for_query(&submit_query, &report);
-                ResultIrEvent::Submit {
-                    submitted: report.submitted,
-                    failed: report.failed,
-                    message: report.messages.first().cloned(),
-                }
+                let watch_sender = submit_sender.clone();
+                let watch_target = submit_query.target.clone();
+                let watch_db_path = network_db_path.clone();
+                tokio::spawn(async move {
+                    let event = watch_result_submission(&watch_db_path, &watch_target).await;
+                    let _ = watch_sender.send(event);
+                });
             }
-            Err(error) => ResultIrEvent::Submit {
-                submitted: 0,
-                failed: 0,
-                message: Some(format!("{error:#}")),
-            },
-        };
-        let _ = submit_sender.send(event);
+            Err(error) => {
+                let _ = submit_sender.send(ResultIrEvent::Submit {
+                    submitted: 0,
+                    failed: 0,
+                    message: Some(format!("{error:#}")),
+                });
+            }
+        }
         let included_global_loaded = included_global_ranking.is_some();
         if let Some(ranking) = included_global_ranking {
             let _ = submit_sender.send(ResultIrEvent::Ranking {
@@ -510,6 +569,63 @@ fn spawn_result_ir_task_for_target(
         state.self_and_rivals = RankingLoadState::Loading;
     }
     Some(state)
+}
+
+/// 常駐同期との claim race があっても、今回の attempt の終端状態を待つ。
+async fn watch_result_submission(
+    network_db_path: &std::path::Path,
+    target: &ResultIrTarget,
+) -> ResultIrEvent {
+    const POLL_INTERVAL: Duration = Duration::from_millis(250);
+    const MAX_POLLS: usize = 120;
+    let (kind, local_score_id) = target.submission_job();
+
+    for _ in 0..MAX_POLLS {
+        match crate::storage::network_db::NetworkDatabase::open(network_db_path)
+            .and_then(|db| db.ir_score_jobs_for_local_score(kind, local_score_id))
+        {
+            Ok(jobs) => {
+                if let Some((submitted, failed, message)) = submission_result_from_jobs(&jobs) {
+                    return ResultIrEvent::Submit { submitted, failed, message };
+                }
+            }
+            Err(error) => {
+                return ResultIrEvent::Submit {
+                    submitted: 0,
+                    failed: 0,
+                    message: Some(format!("failed to read IR submission status: {error:#}")),
+                };
+            }
+        }
+        tokio::time::sleep(POLL_INTERVAL).await;
+    }
+
+    ResultIrEvent::Submit {
+        submitted: 0,
+        failed: 0,
+        message: Some("timed out waiting for IR submission".to_string()),
+    }
+}
+
+fn submission_result_from_jobs(jobs: &[IrScoreJobRecord]) -> Option<(u32, u32, Option<String>)> {
+    if jobs.is_empty() {
+        return Some((0, 0, None));
+    }
+    let failed: Vec<_> =
+        jobs.iter().filter(|job| job.status == IrScoreJobStatus::Failed.as_str()).collect();
+    if !failed.is_empty() {
+        return Some((
+            0,
+            failed.len() as u32,
+            failed
+                .iter()
+                .find_map(|job| (!job.last_error.is_empty()).then(|| job.last_error.clone())),
+        ));
+    }
+    if jobs.iter().all(|job| job.status == IrScoreJobStatus::Succeeded.as_str()) {
+        return Some((jobs.len() as u32, 0, None));
+    }
+    None
 }
 
 fn elapsed_since_ms(started_at: Instant) -> i32 {
@@ -561,7 +677,7 @@ async fn fetch_result_ranking(
     scope: IrRankingScope,
 ) -> anyhow::Result<ResultIrRanking> {
     match &query.target {
-        ResultIrTarget::Chart { chart_sha256_hex, ln_policy, double_option, rule_mode } => {
+        ResultIrTarget::Chart { chart_sha256_hex, ln_policy, double_option, rule_mode, .. } => {
             let ranking = fetch_ranking(
                 &ResultIrQuery {
                     profile_root: query.profile_root.clone(),
@@ -577,7 +693,7 @@ async fn fetch_result_ranking(
             .await?;
             Ok(chart_ranking_to_result_ir_ranking(&ranking))
         }
-        ResultIrTarget::Course { course_hash, gauge, ln_policy } => {
+        ResultIrTarget::Course { course_hash, gauge, ln_policy, .. } => {
             if scope != IrRankingScope::Global {
                 anyhow::bail!("course IR ranking supports global scope only");
             }
@@ -649,8 +765,9 @@ mod tests {
     use crate::select_options::DoubleOptionScoreBucket;
 
     use super::{
-        ResultIrTarget, ResultIrTaskQuery, course_ranking_to_result_ir_ranking,
-        included_global_ranking_for_query, ranking_to_ir_snapshot,
+        ResultIrRanking, ResultIrRankingEntry, ResultIrTarget, ResultIrTaskQuery,
+        course_ranking_to_result_ir_ranking, included_global_ranking_for_query,
+        ranking_to_ir_snapshot, result_ir_ranking_to_skin_snapshot_at,
     };
 
     #[test]
@@ -672,6 +789,7 @@ mod tests {
                         max_combo: 28,
                         min_bp: 0,
                         min_cb: 0,
+                        judges: None,
                         device_type: None,
                         played_at: None,
                     },
@@ -693,6 +811,10 @@ mod tests {
         assert_eq!(snapshot.clear_rate, Some(100));
         assert_eq!(snapshot.entries[0].rank, Some(1));
         assert_eq!(snapshot.entries[0].ex_score, Some(46));
+        assert_eq!(
+            snapshot.entries[0].clear_index,
+            Some(i64::from(bmz_core::clear::ClearType::Perfect as u8))
+        );
         assert_eq!(snapshot.entries[0].player_name.as_str(), "hyrorre");
     }
 
@@ -734,12 +856,40 @@ mod tests {
     }
 
     #[test]
+    fn ranking_snapshot_scrolls_the_ten_visible_skin_rows() {
+        let ranking = ResultIrRanking {
+            scope: IrRankingScope::Global,
+            entries: (1..=15)
+                .map(|rank| ResultIrRankingEntry {
+                    rank,
+                    player_name: format!("player-{rank}"),
+                    ex_score: rank * 10,
+                    clear: "Normal".to_string(),
+                    bp: 0,
+                    max_combo: 0,
+                })
+                .collect(),
+            clear_rate: None,
+            self_rank: None,
+            total: Some(15),
+        };
+
+        let snapshot = result_ir_ranking_to_skin_snapshot_at(&ranking, 3);
+
+        assert_eq!(snapshot.scroll_offset, 3);
+        assert_eq!(snapshot.scroll_max, 5);
+        assert_eq!(snapshot.entries[0].rank, Some(4));
+        assert_eq!(snapshot.entries[9].rank, Some(13));
+    }
+
+    #[test]
     fn included_global_ranking_uses_only_current_chart() {
         let query = ResultIrTaskQuery {
             profile_root: PathBuf::new(),
             provider: "bmz-official".to_string(),
             base_url: "https://ir.example.test".to_string(),
             target: ResultIrTarget::Chart {
+                local_score_id: 1,
                 chart_sha256_hex: "current".to_string(),
                 ln_policy: LnScorePolicy::AutoLn,
                 double_option: DoubleOptionScoreBucket::Off,

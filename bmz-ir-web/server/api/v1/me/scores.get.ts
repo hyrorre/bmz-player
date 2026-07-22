@@ -75,10 +75,13 @@ export default defineEventHandler(async (event): Promise<IrOwnScoreHistoryResult
         gauge: schema.scores.gauge,
         ln_policy: schema.scores.lnPolicy,
         double_option: schema.scores.doubleOption,
+        applied_double_option: schema.scores.appliedDoubleOption,
+        source_kind: schema.scores.sourceKind,
         rule_mode: schema.scores.ruleMode,
         judges: schema.scores.judges,
         notes: schema.scores.notes,
         pass_notes: schema.scores.passNotes,
+        duration_ms: schema.scores.durationMs,
         device_type: schema.scores.deviceType,
         played_at: schema.scores.playedAt,
         server_received_at: schema.scores.serverReceivedAt,
@@ -135,15 +138,35 @@ function unixSeconds(value: Date): number {
 }
 
 function scoreOptionMetadata(playOptions: Record<string, unknown> | null | undefined): {
-  random_seed?: number
+  random_seed?: number | string
   assist_mask?: number
+  seed_scheme?: string
 } {
-  const metadata: { random_seed?: number; assist_mask?: number } = {}
-  if (typeof playOptions?.random_seed === 'number' && Number.isFinite(playOptions.random_seed)) {
-    metadata.random_seed = Math.trunc(playOptions.random_seed)
+  const metadata: { random_seed?: number | string; assist_mask?: number; seed_scheme?: string } = {}
+  const randomSeed = playOptions?.random_seed
+  if (typeof randomSeed === 'number' && Number.isSafeInteger(randomSeed)) {
+    metadata.random_seed = randomSeed
+  } else if (typeof randomSeed === 'string' && /^-?\d+$/.test(randomSeed)) {
+    try {
+      const parsed = BigInt(randomSeed)
+      if (parsed >= -(1n << 63n) && parsed <= (1n << 63n) - 1n) {
+        metadata.random_seed = randomSeed
+      }
+    } catch {
+      // Invalid legacy metadata is omitted so one row cannot invalidate the page.
+    }
   }
-  if (typeof playOptions?.assist_mask === 'number' && Number.isFinite(playOptions.assist_mask)) {
-    metadata.assist_mask = Math.trunc(playOptions.assist_mask)
+  const assistMask = playOptions?.assist_mask
+  if (
+    typeof assistMask === 'number' &&
+    Number.isInteger(assistMask) &&
+    assistMask >= 0 &&
+    assistMask <= 0xffff_ffff
+  ) {
+    metadata.assist_mask = assistMask
+  }
+  if (typeof playOptions?.seed_scheme === 'string' && playOptions.seed_scheme.trim()) {
+    metadata.seed_scheme = playOptions.seed_scheme
   }
   return metadata
 }

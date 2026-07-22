@@ -50,6 +50,8 @@ export default defineEventHandler(async (event): Promise<IrScoreHistoryResult> =
         gauge: schema.scores.gauge,
         ln_policy: schema.scores.lnPolicy,
         double_option: schema.scores.doubleOption,
+        applied_double_option: schema.scores.appliedDoubleOption,
+        source_kind: schema.scores.sourceKind,
         rule_mode: schema.scores.ruleMode,
         device_type: schema.scores.deviceType,
         played_at: schema.scores.playedAt,
@@ -81,6 +83,9 @@ export default defineEventHandler(async (event): Promise<IrScoreHistoryResult> =
         ln_policy: score.ln_policy as IrScoreHistoryResult['scores'][number]['ln_policy'],
         double_option:
           score.double_option as IrScoreHistoryResult['scores'][number]['double_option'],
+        applied_double_option:
+          score.applied_double_option as IrScoreHistoryResult['scores'][number]['applied_double_option'],
+        source_kind: score.source_kind as IrScoreHistoryResult['scores'][number]['source_kind'],
         rule_mode: score.rule_mode as IrScoreHistoryResult['scores'][number]['rule_mode'],
         device_type: score.device_type as IrScoreHistoryResult['scores'][number]['device_type'],
         played_at: score.played_at?.toISOString() ?? null,

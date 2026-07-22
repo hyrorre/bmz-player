@@ -49,6 +49,12 @@ pub enum AudioEngineCommand {
         volume: f32,
         loop_playback: bool,
     },
+    PlayNowWithVoiceLimit {
+        sound_id: SoundId,
+        volume: f32,
+        loop_playback: bool,
+        max_voices: usize,
+    },
     PlayNowWithFadeIn {
         sound_id: SoundId,
         volume: f32,
@@ -80,6 +86,9 @@ impl AudioEngineCommand {
             Self::SetSoundVolume { id, volume } => engine.set_sound_volume(id, volume),
             Self::PlayNow { sound_id, volume, loop_playback } => {
                 engine.play_now(sound_id, volume, loop_playback);
+            }
+            Self::PlayNowWithVoiceLimit { sound_id, volume, loop_playback, max_voices } => {
+                engine.play_now_with_voice_limit(sound_id, volume, loop_playback, max_voices);
             }
             Self::PlayNowWithFadeIn { sound_id, volume, loop_playback, fade_in_frames } => {
                 engine.play_now_with_fade_in(sound_id, volume, loop_playback, fade_in_frames);
@@ -326,6 +335,21 @@ impl AudioEngineHandle {
 
     pub fn play_now(&self, sound_id: SoundId, volume: f32, loop_playback: bool) -> bool {
         self.push_command(AudioEngineCommand::PlayNow { sound_id, volume, loop_playback })
+    }
+
+    pub fn play_now_with_voice_limit(
+        &self,
+        sound_id: SoundId,
+        volume: f32,
+        loop_playback: bool,
+        max_voices: usize,
+    ) -> bool {
+        self.push_command(AudioEngineCommand::PlayNowWithVoiceLimit {
+            sound_id,
+            volume,
+            loop_playback,
+            max_voices,
+        })
     }
 
     pub fn play_now_with_fade_in(

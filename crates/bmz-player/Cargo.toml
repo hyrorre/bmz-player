@@ -26,8 +26,13 @@ ryu.workspace = true
 toml.workspace = true
 base64.workspace = true
 flate2.workspace = true
+tar.workspace = true
+sevenz-rust2.workspace = true
+webbrowser.workspace = true
+fluent-bundle.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
+unic-langid.workspace = true
 rusqlite.workspace = true
 ctrlc.workspace = true
 winit.workspace = true
@@ -36,6 +41,7 @@ egui.workspace = true
 egui-winit.workspace = true
 rfd.workspace = true
 image.workspace = true
+arboard.workspace = true
 
 rayon.workspace = true
 futures-util.workspace = true
@@ -55,5 +61,12 @@ bmz-render = { path = "../bmz-render" }
 bmz-skin = { path = "../bmz-skin" }
 bmz-video = { path = "../bmz-video" }
 
+[dev-dependencies]
+fluent-syntax.workspace = true
+
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.61", features = ["Win32_System_Threading"] }
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_System_LibraryLoader",
+    "Win32_System_Threading",
+] }
