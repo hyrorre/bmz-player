@@ -39,6 +39,12 @@ pub fn import_chart_file(
     };
 
     let chart_id = db.upsert_chart_import(&record)?;
+    if let Some(folder) = path.parent() {
+        db.update_folder_document_flags(&[(
+            folder.to_path_buf(),
+            super::scan::folder_has_document(folder),
+        )])?;
+    }
     let chart_file_id =
         db.chart_file_id_by_path(path)?.expect("chart file must exist after import upsert");
     db.replace_import_warnings(chart_file_id, &warnings, scanned_at)?;

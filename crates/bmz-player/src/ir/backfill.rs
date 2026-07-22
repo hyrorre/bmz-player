@@ -772,6 +772,7 @@ mod tests {
             banner_file: String::new(),
             backbmp_file: String::new(),
             preview_file: String::new(),
+            has_document: false,
             has_long_notes: true,
             has_mines: true,
             judge_rank: Some(100),

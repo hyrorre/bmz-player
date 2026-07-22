@@ -27775,6 +27775,7 @@ mod tests {
                 banner_file: String::new(),
                 backbmp_file: String::new(),
                 preview_file: String::new(),
+                has_document: false,
                 has_long_notes: false,
                 has_mines: false,
                 judge_rank: Some(1),

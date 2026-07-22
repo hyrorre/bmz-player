@@ -1,5 +1,4 @@
 use std::collections::{HashMap, HashSet};
-use std::path::Path;
 
 use anyhow::Result;
 use bmz_core::course::{CourseKind, CourseLnConstraint};
@@ -982,7 +981,6 @@ fn load_select_items_in_table_filtered(
         .collect();
     let mut analysis_map = library_db.chart_analysis_summaries_by_chart_ids(&chart_ids)?;
 
-    let mut document_folder_cache = HashMap::new();
     Ok(entries
         .into_iter()
         .map(|entry| {
@@ -994,7 +992,7 @@ fn load_select_items_in_table_filtered(
                 score_key.and_then(|key| replay_slot_map.remove(&key)).unwrap_or([false; 4]);
             let chart_analysis =
                 entry.chart.as_ref().and_then(|chart| analysis_map.remove(&chart.chart_id));
-            let has_document = chart_has_document(entry.chart.as_ref(), &mut document_folder_cache);
+            let has_document = entry.chart.as_ref().is_some_and(|chart| chart.has_document);
             SelectItem::Chart(select_chart_row_from_table_entry(
                 entry,
                 chart_analysis,
@@ -1156,24 +1154,6 @@ fn select_chart_row_from_table_entry(
         table_level,
         table_text,
     }
-}
-
-fn chart_folder_has_document(folder_path: &str) -> bool {
-    std::fs::read_dir(Path::new(folder_path)).is_ok_and(|entries| {
-        entries
-            .filter_map(Result::ok)
-            .any(|entry| entry.path().extension().is_some_and(|extension| extension == "txt"))
-    })
-}
-
-fn chart_has_document(
-    chart: Option<&ChartListItem>,
-    folder_cache: &mut HashMap<String, bool>,
-) -> bool {
-    let Some(chart) = chart else { return false };
-    *folder_cache
-        .entry(chart.folder_path.clone())
-        .or_insert_with(|| chart_folder_has_document(&chart.folder_path))
 }
 
 fn hex_to_hash<const N: usize>(hex: &str) -> Result<[u8; N]> {
@@ -1690,7 +1670,6 @@ fn chart_items_with_enrichment(
     }
 
     let mut items = Vec::with_capacity(all_charts.len());
-    let mut document_folder_cache = HashMap::new();
     for chart in all_charts {
         let score_key = score_key_for_chart(&chart, ln_policy_setting, rule_mode);
         let best_score = score_map.remove(&score_key);
@@ -1703,7 +1682,7 @@ fn chart_items_with_enrichment(
             .unwrap_or_default();
         let table_text =
             md5_text_map.remove(&md5_hex).or_else(|| sha256_text_map.remove(&sha256_hex));
-        let has_document = chart_has_document(Some(&chart), &mut document_folder_cache);
+        let has_document = chart.has_document;
         items.push(SelectItem::Chart(SelectChartRow {
             chart_analysis: analysis_map.remove(&chart.chart_id),
             chart: Some(chart),
@@ -1923,24 +1902,6 @@ mod tests {
 
     use super::*;
 
-    #[test]
-    fn chart_folder_document_detection_matches_beatoraja_txt_rule() {
-        let folder = std::env::temp_dir().join(format!(
-            "bmz-select-document-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
-        ));
-        std::fs::create_dir_all(&folder).unwrap();
-        let uppercase_document = folder.join("readme.TXT");
-        std::fs::write(&uppercase_document, b"not matched by beatoraja").unwrap();
-        assert!(!chart_folder_has_document(folder.to_str().unwrap()));
-        std::fs::remove_file(uppercase_document).unwrap();
-
-        std::fs::write(folder.join("readme.txt"), b"document").unwrap();
-        assert!(chart_folder_has_document(folder.to_str().unwrap()));
-
-        std::fs::remove_dir_all(folder).unwrap();
-    }
     use crate::storage::common::configure_connection;
     use crate::storage::library_db::{ChartImportRecord, LibraryDatabase};
     use crate::storage::migration::{
@@ -2670,6 +2631,7 @@ mod tests {
                 banner_file: String::new(),
                 backbmp_file: String::new(),
                 preview_file: String::new(),
+                has_document: false,
                 has_long_notes: false,
                 has_mines: false,
                 judge_rank: None,

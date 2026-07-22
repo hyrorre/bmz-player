@@ -1,7 +1,7 @@
 use std::path::Path;
 
 use anyhow::Result;
-use rusqlite::Connection;
+use rusqlite::{Connection, params};
 
 use super::common::configure_connection;
 
@@ -13,7 +13,35 @@ pub struct Migration {
 pub fn migrate_library_db(path: &Path) -> Result<()> {
     let mut conn = Connection::open(path)?;
     configure_connection(&conn)?;
-    run_migrations(&mut conn, LIBRARY_MIGRATIONS)
+    run_migrations(&mut conn, LIBRARY_MIGRATIONS)?;
+    backfill_unknown_chart_document_flags(&mut conn)
+}
+
+fn backfill_unknown_chart_document_flags(conn: &mut Connection) -> Result<()> {
+    let mut stmt = conn.prepare(
+        "SELECT DISTINCT folder_path
+         FROM charts
+         WHERE has_document IS NULL",
+    )?;
+    let folders =
+        stmt.query_map([], |row| row.get::<_, String>(0))?.collect::<rusqlite::Result<Vec<_>>>()?;
+    drop(stmt);
+
+    if folders.is_empty() {
+        return Ok(());
+    }
+
+    let tx = conn.transaction()?;
+    {
+        let mut update =
+            tx.prepare_cached("UPDATE charts SET has_document = ?1 WHERE folder_path = ?2")?;
+        for folder in folders {
+            let has_document = super::scan::folder_has_document(Path::new(&folder));
+            update.execute(params![has_document, folder])?;
+        }
+    }
+    tx.commit()?;
+    Ok(())
 }
 
 pub fn migrate_score_db(path: &Path) -> Result<()> {
@@ -588,6 +616,13 @@ pub const LIBRARY_MIGRATIONS: &[Migration] = &[
         // regular startup refreshes are disabled, then mark successful upserts as current.
         statements: &["ALTER TABLE difficulty_tables
              ADD COLUMN download_metadata_version INTEGER NOT NULL DEFAULT 0;"],
+    },
+    Migration {
+        version: 27,
+        // beatoraja records whether a song folder contains a text document while
+        // scanning the library. NULL lets an interrupted upgrade resume its
+        // one-time backfill on the next startup.
+        statements: &["ALTER TABLE charts ADD COLUMN has_document INTEGER;"],
     },
 ];
 
@@ -1771,7 +1806,7 @@ mod tests {
         run_migrations(&mut conn, LIBRARY_MIGRATIONS).unwrap();
 
         let version: i32 = conn.pragma_query_value(None, "user_version", |row| row.get(0)).unwrap();
-        assert_eq!(version, 26);
+        assert_eq!(version, 27);
 
         let mut stmt = conn.prepare("PRAGMA table_info(charts)").unwrap();
         let columns = stmt
@@ -1784,6 +1819,40 @@ mod tests {
         {
             assert!(columns.iter().any(|candidate| candidate == column));
         }
+        assert!(columns.iter().any(|candidate| candidate == "has_document"));
+    }
+
+    #[test]
+    fn library_document_backfill_reads_existing_song_folders_once() {
+        let folder = std::env::temp_dir().join(format!(
+            "bmz-library-document-backfill-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
+        ));
+        std::fs::create_dir_all(&folder).unwrap();
+        std::fs::write(folder.join("README.TXT"), b"document").unwrap();
+
+        let mut conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE charts (
+                folder_path TEXT NOT NULL,
+                has_document INTEGER
+            );",
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO charts (folder_path, has_document) VALUES (?1, NULL)",
+            params![folder.to_string_lossy()],
+        )
+        .unwrap();
+
+        backfill_unknown_chart_document_flags(&mut conn).unwrap();
+
+        let has_document: bool =
+            conn.query_row("SELECT has_document FROM charts", [], |row| row.get(0)).unwrap();
+        assert!(has_document);
+
+        std::fs::remove_dir_all(folder).unwrap();
     }
 
     #[test]
@@ -1880,7 +1949,7 @@ mod tests {
             conn.query_row("SELECT headers_json FROM charts", [], |row| row.get(0)).unwrap();
         let version: i32 = conn.pragma_query_value(None, "user_version", |row| row.get(0)).unwrap();
         assert_eq!(headers_json, "{}");
-        assert_eq!(version, 26);
+        assert_eq!(version, 27);
     }
 
     #[test]
@@ -1928,7 +1997,7 @@ mod tests {
             .unwrap();
         let version: i32 = conn.pragma_query_value(None, "user_version", |row| row.get(0)).unwrap();
         assert_eq!(chart_ids, vec![Some(10), Some(20), None, Some(99)]);
-        assert_eq!(version, 26);
+        assert_eq!(version, 27);
     }
 
     #[test]

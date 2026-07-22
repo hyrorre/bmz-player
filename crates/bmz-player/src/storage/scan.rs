@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::{Path, PathBuf};
 use std::time::{Instant, UNIX_EPOCH};
@@ -83,6 +84,14 @@ pub fn scan_song_roots_with_progress(
         let root_id = db.upsert_root(root_path, root.enabled, root.recursive)?;
         let discovery_start = Instant::now();
         let entries = discover_chart_files(root_path, root.recursive, scan)?;
+        let folder_document_flags: Vec<(PathBuf, bool)> = entries
+            .iter()
+            .filter_map(|entry| {
+                entry.path.parent().map(|folder| (folder.to_path_buf(), entry.has_document))
+            })
+            .collect::<HashMap<_, _>>()
+            .into_iter()
+            .collect();
         let discovery_ms = discovery_start.elapsed().as_millis();
         report.timing.discovery_ms += discovery_ms;
         let files_total = entries.len();
@@ -252,6 +261,10 @@ pub fn scan_song_roots_with_progress(
             });
         }
 
+        // Discovery already enumerated every song directory. Persist the shared
+        // folder flag even when every chart was skipped as unchanged.
+        db.update_folder_document_flags(&folder_document_flags)?;
+
         tracing::info!(
             imported = report.summary.imported,
             skipped = report.summary.skipped,
@@ -295,6 +308,7 @@ pub struct ChartFileEntry {
     pub path: PathBuf,
     pub file_size: u64,
     pub modified_at: i64,
+    pub has_document: bool,
 }
 
 pub fn discover_chart_files(
@@ -315,13 +329,11 @@ fn discover_into(
 ) -> Result<()> {
     let mut dirs = vec![dir.to_path_buf()];
     while let Some(dir) = dirs.pop() {
+        let mut charts_in_dir = Vec::new();
+        let mut has_document = false;
         for entry in std::fs::read_dir(&dir)? {
             let entry = entry?;
             let file_name = entry.file_name();
-
-            if scan.skip_hidden && is_hidden_name(&file_name) {
-                continue;
-            }
 
             let (file_type, meta_opt) = if scan.follow_symlinks {
                 let meta = entry.metadata()?;
@@ -330,6 +342,13 @@ fn discover_into(
             } else {
                 (entry.file_type()?, None)
             };
+
+            if file_type.is_file() && is_document_file_name(&file_name) {
+                has_document = true;
+            }
+            if scan.skip_hidden && is_hidden_name(&file_name) {
+                continue;
+            }
 
             if file_type.is_dir() {
                 if recursive {
@@ -349,12 +368,35 @@ fn discover_into(
                         (m.len(), mtime)
                     })
                     .unwrap_or((0, 0));
-                out.push(ChartFileEntry { path, file_size, modified_at });
+                charts_in_dir.push(ChartFileEntry {
+                    path,
+                    file_size,
+                    modified_at,
+                    has_document: false,
+                });
             }
         }
+        charts_in_dir.iter_mut().for_each(|entry| entry.has_document = has_document);
+        out.extend(charts_in_dir);
     }
 
     Ok(())
+}
+
+fn is_document_file_name(name: &std::ffi::OsStr) -> bool {
+    Path::new(name)
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("txt"))
+}
+
+pub(crate) fn folder_has_document(folder: &Path) -> bool {
+    std::fs::read_dir(folder).is_ok_and(|entries| {
+        entries.filter_map(Result::ok).any(|entry| {
+            entry.file_type().is_ok_and(|file_type| file_type.is_file())
+                && is_document_file_name(&entry.file_name())
+        })
+    })
 }
 
 fn is_chart_file_name(name: &std::ffi::OsStr) -> bool {
@@ -409,6 +451,41 @@ mod tests {
 
         assert_eq!(shallow.len(), 1);
         assert_eq!(deep.len(), 2);
+        assert!(shallow[0].has_document);
+        assert!(deep.iter().any(|entry| entry.has_document));
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn scan_song_roots_refreshes_document_flag_without_reimporting_chart() {
+        let root = make_temp_dir("scan-document");
+        write_file(&root.join("song.bms"), "#TITLE Document\n#BPM 120\n#00011:01\n");
+
+        let mut conn = Connection::open_in_memory().unwrap();
+        configure_connection(&conn).unwrap();
+        run_migrations(&mut conn, LIBRARY_MIGRATIONS).unwrap();
+        let mut db = LibraryDatabase::from_connection(conn);
+        let roots = vec![PathEntry {
+            path: root.to_string_lossy().into_owned(),
+            enabled: true,
+            recursive: true,
+        }];
+
+        scan_song_roots(&mut db, &roots, &scan_config(), 1_700_000_030, false).unwrap();
+        assert!(!db.list_charts(10, 0).unwrap()[0].has_document);
+
+        write_file(&root.join("README.TXT"), "document");
+        let with_document =
+            scan_song_roots(&mut db, &roots, &scan_config(), 1_700_000_031, false).unwrap();
+        assert_eq!(with_document.summary.skipped, 1);
+        assert!(db.list_charts(10, 0).unwrap()[0].has_document);
+
+        std::fs::remove_file(root.join("README.TXT")).unwrap();
+        let without_document =
+            scan_song_roots(&mut db, &roots, &scan_config(), 1_700_000_032, false).unwrap();
+        assert_eq!(without_document.summary.skipped, 1);
+        assert!(!db.list_charts(10, 0).unwrap()[0].has_document);
 
         std::fs::remove_dir_all(root).unwrap();
     }

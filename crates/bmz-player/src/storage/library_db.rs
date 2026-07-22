@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 use bmz_chart::import::error::ImportWarning;
@@ -59,6 +59,7 @@ pub struct ChartListItem {
     pub banner_file: String,
     pub backbmp_file: String,
     pub preview_file: String,
+    pub has_document: bool,
     pub has_long_notes: bool,
     pub has_mines: bool,
     pub judge_rank: Option<i32>,
@@ -415,6 +416,23 @@ impl LibraryDatabase {
             "UPDATE roots SET last_scan_at = ?1 WHERE id = ?2",
             params![scanned_at, root_id],
         )?;
+        Ok(())
+    }
+
+    pub fn update_folder_document_flags(&mut self, folder_flags: &[(PathBuf, bool)]) -> Result<()> {
+        if folder_flags.is_empty() {
+            return Ok(());
+        }
+
+        let tx = self.conn.transaction()?;
+        {
+            let mut stmt =
+                tx.prepare_cached("UPDATE charts SET has_document = ?1 WHERE folder_path = ?2")?;
+            for (folder, has_document) in folder_flags {
+                stmt.execute(params![has_document, to_folder_key(&path_to_string(folder))])?;
+            }
+        }
+        tx.commit()?;
         Ok(())
     }
 
@@ -1045,7 +1063,7 @@ impl LibraryDatabase {
         let mut stmt = self.conn.prepare(&sql)?;
         let rows = stmt.query_map(params![source_url], |row| {
             let chart = chart_list_item_from_row(row)?;
-            let level: String = row.get(33)?;
+            let level: String = row.get(34)?;
             Ok((chart, level))
         })?;
         rows.collect::<std::result::Result<Vec<_>, _>>().map_err(Into::into)
@@ -1085,7 +1103,7 @@ fn charts_by_hash_column(
         );
         let mut stmt = conn.prepare(&sql)?;
         let rows = stmt.query_map(rusqlite::params_from_iter(chunk.iter().copied()), |row| {
-            Ok((row.get::<_, String>(33)?, chart_list_item_from_row(row)?))
+            Ok((row.get::<_, String>(34)?, chart_list_item_from_row(row)?))
         })?;
         for row in rows {
             let (hash, chart) = row?;
@@ -1115,6 +1133,7 @@ const CHART_LIST_ITEM_COLUMNS: &str = "
     banner_file,
     backbmp_file,
     preview_file,
+    COALESCE(has_document, 0),
     has_long_notes,
     has_mines,
     judge_rank,
@@ -1150,6 +1169,7 @@ const CHART_LIST_ITEM_COLUMNS_C: &str = "
     c.banner_file,
     c.backbmp_file,
     c.preview_file,
+    COALESCE(c.has_document, 0),
     c.has_long_notes,
     c.has_mines,
     c.judge_rank,
@@ -1191,23 +1211,24 @@ fn chart_list_item_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ChartLi
         banner_file: row.get(16)?,
         backbmp_file: row.get(17)?,
         preview_file: row.get(18)?,
-        has_long_notes: row.get(19)?,
-        has_mines: row.get(20)?,
-        judge_rank: row.get(21)?,
+        has_document: row.get(19)?,
+        has_long_notes: row.get(20)?,
+        has_mines: row.get(21)?,
+        judge_rank: row.get(22)?,
         ln_profile: ChartLnProfile {
-            has_undefined_ln: row.get(22)?,
-            has_defined_ln: row.get(23)?,
-            has_defined_cn: row.get(24)?,
-            has_defined_hcn: row.get(25)?,
+            has_undefined_ln: row.get(23)?,
+            has_defined_ln: row.get(24)?,
+            has_defined_cn: row.get(25)?,
+            has_defined_hcn: row.get(26)?,
         },
-        subartist: row.get(26)?,
-        genre: row.get(27)?,
-        bms_total: row.get(28)?,
+        subartist: row.get(27)?,
+        genre: row.get(28)?,
+        bms_total: row.get(29)?,
         ln_counts: ChartLnCounts {
-            undefined_ln_pairs: row.get(29)?,
-            defined_ln_pairs: row.get(30)?,
-            defined_cn_pairs: row.get(31)?,
-            defined_hcn_pairs: row.get(32)?,
+            undefined_ln_pairs: row.get(30)?,
+            defined_ln_pairs: row.get(31)?,
+            defined_cn_pairs: row.get(32)?,
+            defined_hcn_pairs: row.get(33)?,
         },
     })
 }
