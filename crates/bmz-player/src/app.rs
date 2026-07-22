@@ -1,5 +1,5 @@
 use std::cell::RefCell;
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
@@ -25,6 +25,7 @@ use bmz_gameplay::input::binding::LaneBinding;
 use bmz_gameplay::input::bounce::{InputBounceConfig, InputBounceFilter};
 use bmz_gameplay::input::system::last_input_collection_diagnostics;
 use bmz_gameplay::result::PlayResult;
+use bmz_gameplay::rule::RuleMode;
 use bmz_gameplay::score::{JudgeCounts, ScoreState};
 use bmz_gameplay::session::compute_frame_times;
 use bmz_gameplay::session::{HispeedMode, PlaySkinOffset};
@@ -101,6 +102,7 @@ use crate::input::winit::{
     W_KEYBOARD_DEVICE_ID, key_event_to_device_input, physical_key_to_control,
     physical_key_to_device_input,
 };
+use crate::ln_policy::LnPolicySetting;
 use crate::logging::LogBuffer;
 use crate::practice_ui::PracticePanelContext;
 use crate::screens::course_session::{ActiveCourseSession, CourseEntryResult, CourseResultSummary};
@@ -169,7 +171,7 @@ use crate::storage::collection_db::FavoriteHints;
 use crate::storage::common::hash_to_hex;
 use crate::storage::difficulty_table_db::DifficultyTableRecord;
 use crate::storage::library_db::{ChartDistributionSecond, ChartListItem, LibraryDatabase};
-use crate::storage::migration::{migrate_library_db, migrate_network_db, migrate_score_db};
+use crate::storage::migration::{migrate_library_db, migrate_network_db};
 use crate::storage::play_result::StoredPlayResult;
 use crate::storage::replay::load_replay_for_chart_policy_and_double_option;
 use crate::storage::scan::{ScanProgress, ScanReport};
@@ -569,8 +571,13 @@ struct WinitApp {
     difficulty_tables: Vec<DifficultyTableRecord>,
     table_breadcrumb_cache: RefCell<HashMap<String, TableBreadcrumb>>,
     select_folder_summary_cache: HashMap<String, SelectFolderSummaryCacheEntry>,
-    select_folder_summary_tx: mpsc::Sender<SelectFolderSummaryResult>,
+    select_folder_summary_request_tx: mpsc::Sender<SelectFolderSummaryWorkerCommand>,
     select_folder_summary_rx: Receiver<SelectFolderSummaryResult>,
+    select_folder_summary_data_generation: u64,
+    select_folder_summary_view_generation: u64,
+    select_folder_summary_view_key: String,
+    select_folder_summary_ln_policy: LnPolicySetting,
+    select_folder_summary_rule_mode: RuleMode,
     folder_stack: Vec<String>,
     /// `folder_stack` の各階層に入る直前の `selected_index`。
     /// フォルダから出た時にカーソル位置を復元するために使う。長さは `folder_stack` と一致。
@@ -1239,14 +1246,149 @@ impl SelectPreviewLoadQueue {
 }
 
 enum SelectFolderSummaryCacheEntry {
-    Loading,
+    Loading { view_generation: u64 },
     Ready(Option<SelectFolderSummary>),
-    Missing,
+    Missing { view_generation: u64 },
+}
+
+enum SelectFolderSummaryWorkerCommand {
+    SetContext { view_generation: u64, data_generation: u64 },
+    Load(SelectFolderSummaryRequest),
+}
+
+struct SelectFolderSummaryRequest {
+    key: String,
+    path: String,
+    kind: bmz_render::scene::SelectRowKind,
+    ln_policy_setting: LnPolicySetting,
+    rule_mode: RuleMode,
+    view_generation: u64,
+    data_generation: u64,
 }
 
 struct SelectFolderSummaryResult {
     key: String,
+    view_generation: u64,
+    data_generation: u64,
     result: std::result::Result<Option<SelectFolderSummary>, String>,
+}
+
+fn spawn_select_folder_summary_worker(
+    library_db_path: PathBuf,
+    score_db_path: PathBuf,
+    request_rx: Receiver<SelectFolderSummaryWorkerCommand>,
+    result_tx: mpsc::Sender<SelectFolderSummaryResult>,
+) -> Result<()> {
+    thread::Builder::new()
+        .name("select-folder-lamp".to_string())
+        .spawn(move || {
+            let mut databases: Option<(LibraryDatabase, ScoreDatabase)> = None;
+            let mut pending = VecDeque::<SelectFolderSummaryRequest>::new();
+            let mut view_generation = 0;
+            let mut data_generation = 0;
+
+            loop {
+                if pending.is_empty() {
+                    let Ok(command) = request_rx.recv() else {
+                        break;
+                    };
+                    apply_select_folder_summary_worker_command(
+                        command,
+                        &mut pending,
+                        &mut view_generation,
+                        &mut data_generation,
+                    );
+                }
+                while let Ok(command) = request_rx.try_recv() {
+                    apply_select_folder_summary_worker_command(
+                        command,
+                        &mut pending,
+                        &mut view_generation,
+                        &mut data_generation,
+                    );
+                }
+
+                let Some(request) = pending.pop_front() else {
+                    continue;
+                };
+                if request.view_generation != view_generation
+                    || request.data_generation != data_generation
+                {
+                    continue;
+                }
+
+                let started_at = Instant::now();
+                let result = (|| -> Result<Option<SelectFolderSummary>> {
+                    if databases.is_none() {
+                        databases = Some((
+                            LibraryDatabase::open(&library_db_path)?,
+                            ScoreDatabase::open(&score_db_path)?,
+                        ));
+                    }
+                    let (library_db, score_db) = databases.as_ref().expect("databases initialized");
+                    select_folder_summary_for_rule_mode(
+                        library_db,
+                        score_db,
+                        &request.path,
+                        request.kind,
+                        request.ln_policy_setting,
+                        request.rule_mode,
+                    )
+                })()
+                .map_err(|error| error.to_string());
+                tracing::debug!(
+                    target: "bmz_player::select_profile",
+                    key = %request.key,
+                    elapsed_us = started_at.elapsed().as_micros(),
+                    "select folder lamp summary loaded"
+                );
+                if result_tx
+                    .send(SelectFolderSummaryResult {
+                        key: request.key,
+                        view_generation: request.view_generation,
+                        data_generation: request.data_generation,
+                        result,
+                    })
+                    .is_err()
+                {
+                    break;
+                }
+            }
+        })
+        .context("failed to spawn select folder lamp worker")?;
+    Ok(())
+}
+
+fn apply_select_folder_summary_worker_command(
+    command: SelectFolderSummaryWorkerCommand,
+    pending: &mut VecDeque<SelectFolderSummaryRequest>,
+    view_generation: &mut u64,
+    data_generation: &mut u64,
+) {
+    match command {
+        SelectFolderSummaryWorkerCommand::SetContext {
+            view_generation: next_view,
+            data_generation: next_data,
+        } => {
+            *view_generation = next_view;
+            *data_generation = next_data;
+            pending.retain(|request| {
+                request.view_generation == next_view && request.data_generation == next_data
+            });
+        }
+        SelectFolderSummaryWorkerCommand::Load(request) => {
+            if request.view_generation == *view_generation
+                && request.data_generation == *data_generation
+                && !pending.iter().any(|queued| {
+                    queued.key == request.key
+                        && queued.view_generation == request.view_generation
+                        && queued.data_generation == request.data_generation
+                })
+            {
+                pending.push_back(request);
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -2730,8 +2872,16 @@ impl WinitApp {
         let skin_gpu_texture_cache = Arc::new(Mutex::new(SkinGpuTextureCache::default()));
         let (select_meta_image_tx, select_meta_image_rx) = mpsc::channel::<SelectMetaImageResult>();
         let (select_preview_tx, select_preview_rx) = mpsc::channel::<SelectPreviewResult>();
-        let (select_folder_summary_tx, select_folder_summary_rx) =
+        let (select_folder_summary_request_tx, select_folder_summary_request_rx) =
+            mpsc::channel::<SelectFolderSummaryWorkerCommand>();
+        let (select_folder_summary_result_tx, select_folder_summary_rx) =
             mpsc::channel::<SelectFolderSummaryResult>();
+        spawn_select_folder_summary_worker(
+            boot.app_paths.library_db.clone(),
+            boot.profile_paths.score_db.clone(),
+            select_folder_summary_request_rx,
+            select_folder_summary_result_tx,
+        )?;
         let (
             default_skin_manifest,
             initial_skin_video_sources,
@@ -2810,6 +2960,8 @@ impl WinitApp {
                 Vec::new()
             }
         };
+        let select_folder_summary_ln_policy = boot.profile_config.play.ln_mode_policy;
+        let select_folder_summary_rule_mode = boot.profile_config.play.rule_mode;
 
         let mut app = Self {
             boot,
@@ -2852,8 +3004,13 @@ impl WinitApp {
             difficulty_tables,
             table_breadcrumb_cache: RefCell::new(HashMap::new()),
             select_folder_summary_cache: HashMap::new(),
-            select_folder_summary_tx,
+            select_folder_summary_request_tx,
             select_folder_summary_rx,
+            select_folder_summary_data_generation: 0,
+            select_folder_summary_view_generation: 0,
+            select_folder_summary_view_key: select_folder_summary_view_key(&folder_stack),
+            select_folder_summary_ln_policy,
+            select_folder_summary_rule_mode,
             selected_index_stack: vec![0; folder_stack.len()],
             folder_stack,
             selected_index: 0,
@@ -11587,6 +11744,10 @@ impl WinitApp {
     }
 
     fn leave_result(&mut self) {
+        let score_changed = self
+            .finished_play
+            .as_ref()
+            .is_some_and(|finished| finished.stored.score_history_id > 0);
         if let Some(audio) = &self.result_skin_audio {
             audio.stop_all();
         }
@@ -11602,6 +11763,9 @@ impl WinitApp {
         self.draining_audio = None;
         self.play_media_cache = None;
         self.last_play_snapshot = None;
+        if score_changed {
+            self.invalidate_select_folder_summaries();
+        }
         self.reload_select_items();
         self.sync_select_holds_from_pressed_controls();
         let now = Instant::now();
@@ -11668,6 +11832,13 @@ impl WinitApp {
     }
 
     fn reload_select_items(&mut self) {
+        let next_view_key = select_folder_summary_view_key(&self.folder_stack);
+        if next_view_key != self.select_folder_summary_view_key {
+            self.select_folder_summary_view_key = next_view_key;
+            self.select_folder_summary_view_generation =
+                self.select_folder_summary_view_generation.wrapping_add(1);
+            self.send_select_folder_summary_worker_context();
+        }
         let previous_selected_key = self.select_items.get(self.selected_index).map(select_item_key);
         let history: Vec<String> = self.search_history.iter().cloned().collect();
         let (items, resolved_mode_filter) = load_items_for_stack(
@@ -11683,11 +11854,26 @@ impl WinitApp {
         self.boot.profile_config.select.mode_filter = resolved_mode_filter.as_str().to_string();
         self.select_items = items;
         self.select_distribution_cache.borrow_mut().clear();
-        self.select_folder_summary_cache.clear();
         self.selected_index = restored_select_index(
             &self.select_items,
             previous_selected_key.as_ref(),
             self.selected_index,
+        );
+    }
+
+    fn invalidate_select_folder_summaries(&mut self) {
+        self.select_folder_summary_data_generation =
+            self.select_folder_summary_data_generation.wrapping_add(1);
+        self.select_folder_summary_cache.clear();
+        self.send_select_folder_summary_worker_context();
+    }
+
+    fn send_select_folder_summary_worker_context(&self) {
+        let _ = self.select_folder_summary_request_tx.send(
+            SelectFolderSummaryWorkerCommand::SetContext {
+                view_generation: self.select_folder_summary_view_generation,
+                data_generation: self.select_folder_summary_data_generation,
+            },
         );
     }
 
@@ -11712,6 +11898,7 @@ impl WinitApp {
                 let summary = report.summary();
                 tracing::info!(kind = label, path, summary, "external scores imported");
                 self.refresh_player_stats_snapshot();
+                self.invalidate_select_folder_summaries();
                 self.reload_select_items();
                 if let Some(egui) = self.egui.as_mut() {
                     let mut args = FluentArgs::new();
@@ -11823,6 +12010,7 @@ impl WinitApp {
                         "song scan complete"
                     );
                     self.song_scan_progress = None;
+                    self.invalidate_select_folder_summaries();
                     self.reload_select_items();
                     keep_pending = false;
                     break;
@@ -11920,6 +12108,7 @@ impl WinitApp {
                     }
                 }
                 self.table_breadcrumb_cache.borrow_mut().clear();
+                self.invalidate_select_folder_summaries();
                 self.reload_select_items();
             }
             Ok(Err(error)) => {
@@ -12153,14 +12342,39 @@ impl WinitApp {
     }
 
     fn refresh_visible_select_folder_summaries(&mut self) {
+        self.sync_select_folder_summary_score_context();
         self.poll_select_folder_summary_loads();
         self.request_visible_select_folder_summaries(25);
+    }
+
+    fn sync_select_folder_summary_score_context(&mut self) {
+        let ln_policy = self.boot.profile_config.play.ln_mode_policy;
+        let rule_mode = self.boot.profile_config.play.rule_mode;
+        if ln_policy == self.select_folder_summary_ln_policy
+            && rule_mode == self.select_folder_summary_rule_mode
+        {
+            return;
+        }
+
+        self.select_folder_summary_ln_policy = ln_policy;
+        self.select_folder_summary_rule_mode = rule_mode;
+        self.select_folder_summary_view_generation =
+            self.select_folder_summary_view_generation.wrapping_add(1);
+        for item in &mut self.select_items {
+            if let SelectItem::Folder { summary, .. } = item {
+                *summary = None;
+            }
+        }
+        self.send_select_folder_summary_worker_context();
     }
 
     fn poll_select_folder_summary_loads(&mut self) {
         loop {
             match self.select_folder_summary_rx.try_recv() {
                 Ok(result) => {
+                    if result.data_generation != self.select_folder_summary_data_generation {
+                        continue;
+                    }
                     let entry = match result.result {
                         Ok(summary) => SelectFolderSummaryCacheEntry::Ready(summary),
                         Err(error) => {
@@ -12169,7 +12383,9 @@ impl WinitApp {
                                 %error,
                                 "select folder lamp summary worker failed"
                             );
-                            SelectFolderSummaryCacheEntry::Missing
+                            SelectFolderSummaryCacheEntry::Missing {
+                                view_generation: result.view_generation,
+                            }
                         }
                     };
                     self.select_folder_summary_cache.insert(result.key, entry);
@@ -12186,7 +12402,12 @@ impl WinitApp {
             if summary.is_some() {
                 continue;
             }
-            let key = select_folder_summary_cache_key(path, *kind);
+            let key = select_folder_summary_cache_key(
+                path,
+                *kind,
+                self.boot.profile_config.play.ln_mode_policy,
+                self.boot.profile_config.play.rule_mode,
+            );
             if let Some(SelectFolderSummaryCacheEntry::Ready(Some(ready))) =
                 self.select_folder_summary_cache.get(&key)
             {
@@ -12201,6 +12422,8 @@ impl WinitApp {
             self.selected_index,
             visible_limit,
         );
+        let ln_policy_setting = self.boot.profile_config.play.ln_mode_policy;
+        let rule_mode = self.boot.profile_config.play.rule_mode;
         let mut requests = Vec::new();
         for index in visible_indices {
             let Some(SelectItem::Folder { path, kind, summary, .. }) = self.select_items.get(index)
@@ -12210,58 +12433,43 @@ impl WinitApp {
             if summary.is_some() {
                 continue;
             }
-            let key = select_folder_summary_cache_key(path, *kind);
+            let key = select_folder_summary_cache_key(path, *kind, ln_policy_setting, rule_mode);
             match self.select_folder_summary_cache.get(&key) {
-                Some(
-                    SelectFolderSummaryCacheEntry::Loading
-                    | SelectFolderSummaryCacheEntry::Ready(_)
-                    | SelectFolderSummaryCacheEntry::Missing,
-                ) => continue,
-                None => {
-                    self.select_folder_summary_cache
-                        .insert(key.clone(), SelectFolderSummaryCacheEntry::Loading);
-                    requests.push((key, path.clone(), *kind));
+                Some(SelectFolderSummaryCacheEntry::Ready(_)) => continue,
+                Some(SelectFolderSummaryCacheEntry::Loading { view_generation })
+                    if *view_generation == self.select_folder_summary_view_generation =>
+                {
+                    continue;
                 }
+                Some(SelectFolderSummaryCacheEntry::Missing { view_generation })
+                    if *view_generation == self.select_folder_summary_view_generation =>
+                {
+                    continue;
+                }
+                Some(_) | None => {}
             }
+            self.select_folder_summary_cache.insert(
+                key.clone(),
+                SelectFolderSummaryCacheEntry::Loading {
+                    view_generation: self.select_folder_summary_view_generation,
+                },
+            );
+            requests.push(SelectFolderSummaryRequest {
+                key,
+                path: path.clone(),
+                kind: *kind,
+                ln_policy_setting,
+                rule_mode,
+                view_generation: self.select_folder_summary_view_generation,
+                data_generation: self.select_folder_summary_data_generation,
+            });
         }
 
-        for (key, path, kind) in requests {
-            self.spawn_select_folder_summary_load(key, path, kind);
+        for request in requests {
+            let _ = self
+                .select_folder_summary_request_tx
+                .send(SelectFolderSummaryWorkerCommand::Load(request));
         }
-    }
-
-    fn spawn_select_folder_summary_load(
-        &self,
-        key: String,
-        path: String,
-        kind: bmz_render::scene::SelectRowKind,
-    ) {
-        let library_db_path = self.boot.app_paths.library_db.clone();
-        let score_db_path = self.boot.profile_paths.score_db.clone();
-        let ln_policy_setting = self.boot.profile_config.play.ln_mode_policy;
-        let rule_mode = self.boot.profile_config.play.rule_mode;
-        let tx = self.select_folder_summary_tx.clone();
-        thread::Builder::new()
-            .name("select-folder-lamp".to_string())
-            .spawn(move || {
-                let result = (|| -> Result<Option<SelectFolderSummary>> {
-                    migrate_library_db(&library_db_path)?;
-                    migrate_score_db(&score_db_path)?;
-                    let library_db = LibraryDatabase::open(&library_db_path)?;
-                    let score_db = ScoreDatabase::open(&score_db_path)?;
-                    select_folder_summary_for_rule_mode(
-                        &library_db,
-                        &score_db,
-                        &path,
-                        kind,
-                        ln_policy_setting,
-                        rule_mode,
-                    )
-                })()
-                .map_err(|error| error.to_string());
-                let _ = tx.send(SelectFolderSummaryResult { key, result });
-            })
-            .expect("failed to spawn select folder lamp worker");
     }
 
     /// upload worker を起動する。surface 接続後に一度だけ呼ぶ。
@@ -17742,8 +17950,17 @@ fn mode_filter_removes_everything(items: &[SelectItem], filter: SelectModeFilter
     })
 }
 
-fn select_folder_summary_cache_key(path: &str, kind: bmz_render::scene::SelectRowKind) -> String {
-    format!("{kind:?}\n{path}")
+fn select_folder_summary_cache_key(
+    path: &str,
+    kind: bmz_render::scene::SelectRowKind,
+    ln_policy_setting: LnPolicySetting,
+    rule_mode: RuleMode,
+) -> String {
+    format!("{kind:?}\n{}\n{}\n{path}", ln_policy_setting.as_ir_str(), rule_mode.as_str())
+}
+
+fn select_folder_summary_view_key(folder_stack: &[String]) -> String {
+    folder_stack.join("\0")
 }
 
 fn apply_select_mode_filter(items: &mut Vec<SelectItem>, filter: SelectModeFilter) {
@@ -22081,6 +22298,89 @@ mod tests {
     fn winit_app_stack_size_stays_bounded() {
         let size = std::mem::size_of::<WinitApp>();
         assert!(size < 64 * 1024, "WinitApp is {size} bytes");
+    }
+
+    #[test]
+    fn folder_summary_cache_key_separates_score_contexts() {
+        let base = select_folder_summary_cache_key(
+            "bmz-table:https://example.com\n1",
+            SelectRowKind::TableFolder,
+            LnPolicySetting::AutoLn,
+            RuleMode::Beatoraja,
+        );
+        let cn = select_folder_summary_cache_key(
+            "bmz-table:https://example.com\n1",
+            SelectRowKind::TableFolder,
+            LnPolicySetting::AutoCn,
+            RuleMode::Beatoraja,
+        );
+        let dx = select_folder_summary_cache_key(
+            "bmz-table:https://example.com\n1",
+            SelectRowKind::TableFolder,
+            LnPolicySetting::AutoLn,
+            RuleMode::Dx,
+        );
+
+        assert_ne!(base, cn);
+        assert_ne!(base, dx);
+    }
+
+    #[test]
+    fn folder_summary_worker_drops_old_views_and_deduplicates_requests() {
+        let request = |key: &str, view_generation, data_generation| SelectFolderSummaryRequest {
+            key: key.to_string(),
+            path: key.to_string(),
+            kind: SelectRowKind::TableFolder,
+            ln_policy_setting: LnPolicySetting::AutoLn,
+            rule_mode: RuleMode::Beatoraja,
+            view_generation,
+            data_generation,
+        };
+        let mut pending = VecDeque::new();
+        let mut view_generation = 0;
+        let mut data_generation = 0;
+
+        apply_select_folder_summary_worker_command(
+            SelectFolderSummaryWorkerCommand::Load(request("sl0", 0, 0)),
+            &mut pending,
+            &mut view_generation,
+            &mut data_generation,
+        );
+        apply_select_folder_summary_worker_command(
+            SelectFolderSummaryWorkerCommand::Load(request("sl0", 0, 0)),
+            &mut pending,
+            &mut view_generation,
+            &mut data_generation,
+        );
+        apply_select_folder_summary_worker_command(
+            SelectFolderSummaryWorkerCommand::Load(request("sl1", 0, 0)),
+            &mut pending,
+            &mut view_generation,
+            &mut data_generation,
+        );
+        assert_eq!(pending.len(), 2);
+
+        apply_select_folder_summary_worker_command(
+            SelectFolderSummaryWorkerCommand::SetContext { view_generation: 1, data_generation: 0 },
+            &mut pending,
+            &mut view_generation,
+            &mut data_generation,
+        );
+        assert!(pending.is_empty());
+
+        apply_select_folder_summary_worker_command(
+            SelectFolderSummaryWorkerCommand::Load(request("sl1", 1, 0)),
+            &mut pending,
+            &mut view_generation,
+            &mut data_generation,
+        );
+        apply_select_folder_summary_worker_command(
+            SelectFolderSummaryWorkerCommand::SetContext { view_generation: 1, data_generation: 1 },
+            &mut pending,
+            &mut view_generation,
+            &mut data_generation,
+        );
+        assert!(pending.is_empty());
     }
 
     #[test]
