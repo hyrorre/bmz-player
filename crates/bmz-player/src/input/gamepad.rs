@@ -218,6 +218,7 @@ struct ScratchState {
     positive_direction: bool,
     control_name: Option<String>,
     counter: u32,
+    counter_elapsed_remainder: Duration,
     tick_counter: u32,
     last_counter_update: Option<Instant>,
 }
@@ -323,8 +324,11 @@ impl ScratchState {
             .unwrap_or_default();
         self.last_counter_update = Some(now);
 
-        let elapsed_ticks =
-            duration_millis_u32(elapsed).saturating_mul(ANALOG_SCRATCH_CALLS_PER_AXIS_POLL);
+        let accumulated_elapsed = self.counter_elapsed_remainder.saturating_add(elapsed);
+        let elapsed_millis = duration_millis_u32(accumulated_elapsed);
+        self.counter_elapsed_remainder =
+            accumulated_elapsed.saturating_sub(Duration::from_millis(u64::from(elapsed_millis)));
+        let elapsed_ticks = elapsed_millis.saturating_mul(ANALOG_SCRATCH_CALLS_PER_AXIS_POLL);
         if elapsed_ticks > 0 {
             self.counter = self.counter.saturating_add(elapsed_ticks);
         }
@@ -333,6 +337,7 @@ impl ScratchState {
             self.release_if_active_at(device_id, current_device_timestamp(), events);
             self.tick_counter = 0;
             self.counter = 0;
+            self.counter_elapsed_remainder = Duration::ZERO;
         }
     }
 
@@ -364,6 +369,7 @@ impl ScratchState {
         }
 
         self.counter = 0;
+        self.counter_elapsed_remainder = Duration::ZERO;
     }
 
     fn release_if_active_at(
@@ -543,6 +549,24 @@ mod tests {
         state.apply_movement(2, "Axis1", device_id, event_timestamp(10), 100, &mut events);
         events.clear();
         state.advance_to(now + Duration::from_millis(101), 100, device_id, &mut events);
+        assert_eq!(button_events(&events), vec![("Axis1+".to_string(), false)]);
+    }
+
+    #[test]
+    fn scratch_release_accumulates_sub_millisecond_poll_intervals() {
+        let mut state = ScratchState::default();
+        let mut events = Vec::new();
+        let device_id = DeviceId(16);
+        let now = Instant::now();
+
+        state.advance_to(now, 100, device_id, &mut events);
+        state.apply_movement(2, "Axis1", device_id, event_timestamp(20), 100, &mut events);
+        events.clear();
+
+        for elapsed_us in (100_u64..=101_000).step_by(100) {
+            state.advance_to(now + Duration::from_micros(elapsed_us), 100, device_id, &mut events);
+        }
+
         assert_eq!(button_events(&events), vec![("Axis1+".to_string(), false)]);
     }
 
