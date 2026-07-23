@@ -6827,6 +6827,7 @@ impl WinitApp {
             button,
             self.selected_index,
             self.select_items.len(),
+            self.settings_edit.is_some(),
         ) {
             Some(SelectRowClickAction::Select(next)) => {
                 self.selected_index = next;
@@ -6834,6 +6835,7 @@ impl WinitApp {
                 self.play_system_sound(crate::system_sound::SoundType::Scratch);
             }
             Some(SelectRowClickAction::EnterOrPlay) => self.enter_or_play_selected(),
+            Some(SelectRowClickAction::CancelSettingsEdit) => self.cancel_settings_edit(),
             Some(SelectRowClickAction::ExitFolder) => self.exit_folder(),
             None => {}
         }
@@ -20176,6 +20178,7 @@ enum SelectMove {
 enum SelectRowClickAction {
     Select(usize),
     EnterOrPlay,
+    CancelSettingsEdit,
     ExitFolder,
 }
 
@@ -20184,6 +20187,7 @@ fn select_row_click_action(
     button: MouseButton,
     selected_index: usize,
     item_len: usize,
+    settings_editing: bool,
 ) -> Option<SelectRowClickAction> {
     match button {
         MouseButton::Left => {
@@ -20196,7 +20200,11 @@ fn select_row_click_action(
                 Some(SelectRowClickAction::Select(next))
             }
         }
-        MouseButton::Right => Some(SelectRowClickAction::ExitFolder),
+        MouseButton::Right => Some(if settings_editing {
+            SelectRowClickAction::CancelSettingsEdit
+        } else {
+            SelectRowClickAction::ExitFolder
+        }),
         _ => None,
     }
 }
@@ -24456,19 +24464,23 @@ mod tests {
     #[test]
     fn select_row_click_enters_only_when_row_is_already_selected() {
         assert_eq!(
-            select_row_click_action(2, MouseButton::Left, 0, 4),
+            select_row_click_action(2, MouseButton::Left, 0, 4, false),
             Some(SelectRowClickAction::Select(2))
         );
         assert_eq!(
-            select_row_click_action(2, MouseButton::Left, 2, 4),
+            select_row_click_action(2, MouseButton::Left, 2, 4, false),
             Some(SelectRowClickAction::EnterOrPlay)
         );
-        assert_eq!(select_row_click_action(4, MouseButton::Left, 2, 4), None);
+        assert_eq!(select_row_click_action(4, MouseButton::Left, 2, 4, false), None);
         assert_eq!(
-            select_row_click_action(2, MouseButton::Right, 2, 4),
+            select_row_click_action(2, MouseButton::Right, 2, 4, false),
             Some(SelectRowClickAction::ExitFolder)
         );
-        assert_eq!(select_row_click_action(2, MouseButton::Middle, 2, 4), None);
+        assert_eq!(
+            select_row_click_action(2, MouseButton::Right, 2, 4, true),
+            Some(SelectRowClickAction::CancelSettingsEdit)
+        );
+        assert_eq!(select_row_click_action(2, MouseButton::Middle, 2, 4, false), None);
     }
 
     #[test]
