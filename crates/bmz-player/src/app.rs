@@ -10219,6 +10219,7 @@ impl WinitApp {
         // beatoraja assigns a 24-bit seed even to NORMAL/MIRROR. Generate both
         // sides here so preload, retry, replay and IR all observe one stable pair.
         let option_seeds = crate::random_option_seed::RandomOptionSeeds::fresh(true);
+        let random_trainer_seed = self.random_trainer.arrange_seed(option_seeds.p1);
         PlayStartOptions {
             autoplay: self.assist_option == AssistOption::Autoplay,
             gauge: Some(self.gauge_option),
@@ -10231,7 +10232,7 @@ impl WinitApp {
             target: self.target_option,
             arrange_seed: Some(i64::from(option_seeds.p1.value())),
             arrange_seed_2p: option_seeds.p2.map(|seed| i64::from(seed.value())),
-            random_trainer_seed: self.random_trainer.arrange_seed(),
+            random_trainer_seed,
             bms_random_seed: Some(crate::random_option_seed::fresh_bms_random_seed()),
             ..Default::default()
         }

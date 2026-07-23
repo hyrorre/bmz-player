@@ -1150,6 +1150,15 @@ fn build_random_trainer_panel(
             }
             ui.label(tr!(text, "random-trainer-description"));
             ui.label(tr!(text, "random-trainer-next-play"));
+            let mut black_white_random = trainer.black_white_random();
+            if ui
+                .checkbox(&mut black_white_random, tr!(text, "random-trainer-black-white"))
+                .changed()
+            {
+                trainer.set_black_white_random(black_white_random);
+            }
+            ui.label(tr!(text, "random-trainer-black-white-help"));
+            ui.label(tr!(text, "random-trainer-partial-help"));
             ui.separator();
             ui.label(format!(
                 "{} {}",
@@ -1159,22 +1168,45 @@ fn build_random_trainer_panel(
 
             let lane_order = *trainer.lane_order();
             let mut swap = None;
+            let mut toggle_partial = None;
             ui.horizontal(|ui| {
                 for (index, lane) in lane_order.into_iter().enumerate() {
                     ui.push_id(("random_trainer_lane", index), |ui| {
+                        let is_blue = lane % 2 == 0;
+                        let is_partial_random = trainer.is_lane_partial_random(lane);
+                        let fill = if is_blue {
+                            egui::Color32::from_rgb(0, 60, 150)
+                        } else {
+                            egui::Color32::from_rgb(235, 238, 244)
+                        };
+                        let text_color = if is_blue {
+                            egui::Color32::WHITE
+                        } else {
+                            egui::Color32::from_gray(35)
+                        };
+                        let label =
+                            if is_partial_random { format!("{lane}\n?") } else { lane.to_string() };
+                        let mut button = egui::Button::new(
+                            egui::RichText::new(label).size(20.0).color(text_color),
+                        )
+                        .fill(fill)
+                        .sense(egui::Sense::click_and_drag());
+                        if is_partial_random {
+                            button = button.stroke(egui::Stroke::new(
+                                3.0,
+                                egui::Color32::from_rgb(220, 80, 150),
+                            ));
+                        }
                         let (_, dropped) =
                             ui.dnd_drop_zone::<RandomTrainerLaneDrag, _>(egui::Frame::NONE, |ui| {
-                                let response = ui.add_sized(
-                                    [42.0, 64.0],
-                                    egui::Button::new(
-                                        egui::RichText::new(lane.to_string()).size(20.0),
-                                    )
-                                    .sense(egui::Sense::click_and_drag()),
-                                );
+                                let response = ui.add_sized([42.0, 64.0], button);
                                 response.dnd_set_drag_payload(RandomTrainerLaneDrag { index });
-                                response
+                                let response = response
                                     .on_hover_cursor(egui::CursorIcon::Grab)
                                     .on_hover_text(tr!(text, "random-trainer-drag"));
+                                if response.secondary_clicked() {
+                                    toggle_partial = Some(lane);
+                                }
                             });
                         if let Some(payload) = dropped {
                             swap = Some((payload.index, index));
@@ -1184,6 +1216,9 @@ fn build_random_trainer_panel(
             });
             if let Some((from, to)) = swap {
                 trainer.swap_positions(from, to);
+            }
+            if let Some(lane) = toggle_partial {
+                trainer.toggle_lane_partial_random(lane);
             }
 
             ui.horizontal_wrapped(|ui| {
