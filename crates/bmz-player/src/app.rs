@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::mpsc::{self, Receiver};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -1784,6 +1784,7 @@ struct PendingPlayPreload {
     chart_id: i64,
     input: SharedInputBackend,
     audio_progress: Arc<AtomicU32>,
+    applied_arrange: Arc<OnceLock<AppliedArrange>>,
     rx: Receiver<PlayPreloadResult>,
 }
 
@@ -9146,6 +9147,8 @@ impl WinitApp {
         let preload_input = input.clone();
         let audio_progress = Arc::new(AtomicU32::new(0));
         let worker_audio_progress = Arc::clone(&audio_progress);
+        let applied_arrange = Arc::new(OnceLock::new());
+        let worker_applied_arrange = Arc::clone(&applied_arrange);
         thread::Builder::new()
             .name(format!("play-preload-{chart_id}"))
             .spawn(move || {
@@ -9160,11 +9163,14 @@ impl WinitApp {
                     session_options.ln_policy_setting = ln_policy_setting;
                     session_options.rule_mode = rule_mode;
                     let preloaded =
-                        crate::screens::play_session::preload_play_session_for_chart_with_progress(
+                        crate::screens::play_session::preload_play_session_for_chart_with_callbacks(
                             &library_db,
                             chart_id,
                             session_options.clone(),
                             normalize_chart_volume,
+                            |arrange| {
+                                let _ = worker_applied_arrange.set(arrange.clone());
+                            },
                             |loaded, total| {
                                 worker_audio_progress.store(
                                     resource_load_progress_units(loaded, total),
@@ -9183,8 +9189,14 @@ impl WinitApp {
                 let _ = tx.send(PlayPreloadResult { generation, chart_id, result });
             })
             .expect("failed to spawn play preload thread");
-        self.pending_play_preload =
-            Some(PendingPlayPreload { generation, chart_id, input, audio_progress, rx });
+        self.pending_play_preload = Some(PendingPlayPreload {
+            generation,
+            chart_id,
+            input,
+            audio_progress,
+            applied_arrange,
+            rx,
+        });
         tracing::info!(chart_id, generation, "play preload started");
         self.start_chart_bga_texture_preload(chart_id, bga_options);
     }
@@ -9699,6 +9711,11 @@ impl WinitApp {
             key_mode,
             &session_options,
         );
+        // 譜面変換はWAVロードより先に完了する。preload workerが先行公開した
+        // 実配置を使い、Play入場直後のロード画面からRANDOM refを表示する。
+        if let Some(applied_arrange) = self.play_preload_applied_arrange(chart_id) {
+            apply_play_arrange_to_snapshot(&mut snapshot, &applied_arrange);
+        }
         let pending_play_start = PendingPlayStart::from_snapshot(
             chart_id,
             options,
@@ -10762,6 +10779,8 @@ impl WinitApp {
         let preload_input = input.clone();
         let audio_progress = Arc::new(AtomicU32::new(0));
         let worker_audio_progress = Arc::clone(&audio_progress);
+        let applied_arrange = Arc::new(OnceLock::new());
+        let worker_applied_arrange = Arc::clone(&applied_arrange);
         thread::Builder::new()
             .name(format!("play-preload-reuse-bga-{chart_id}"))
             .spawn(move || {
@@ -10776,11 +10795,14 @@ impl WinitApp {
                     session_options.ln_policy_setting = ln_policy_setting;
                     session_options.rule_mode = rule_mode;
                     let preloaded =
-                        crate::screens::play_session::preload_play_session_for_chart_with_progress(
+                        crate::screens::play_session::preload_play_session_for_chart_with_callbacks(
                             &library_db,
                             chart_id,
                             session_options.clone(),
                             normalize_chart_volume,
+                            |arrange| {
+                                let _ = worker_applied_arrange.set(arrange.clone());
+                            },
                             |loaded, total| {
                                 worker_audio_progress.store(
                                     resource_load_progress_units(loaded, total),
@@ -10799,8 +10821,14 @@ impl WinitApp {
                 let _ = tx.send(PlayPreloadResult { generation, chart_id, result });
             })
             .expect("failed to spawn BGA-reusing play preload thread");
-        self.pending_play_preload =
-            Some(PendingPlayPreload { generation, chart_id, input, audio_progress, rx });
+        self.pending_play_preload = Some(PendingPlayPreload {
+            generation,
+            chart_id,
+            input,
+            audio_progress,
+            applied_arrange,
+            rx,
+        });
         tracing::info!(chart_id, generation, "play preload with reused BGA started");
     }
 
@@ -10835,6 +10863,8 @@ impl WinitApp {
         let preload_input = input.clone();
         let audio_progress = Arc::new(AtomicU32::new(0));
         let worker_audio_progress = Arc::clone(&audio_progress);
+        let preview_applied_arrange = Arc::new(OnceLock::new());
+        let _ = preview_applied_arrange.set(applied_arrange.clone());
         let sample_rate = session_options.sample_rate;
         let (tx, rx) = mpsc::channel();
         thread::Builder::new()
@@ -10863,8 +10893,14 @@ impl WinitApp {
                 let _ = tx.send(PlayPreloadResult { generation, chart_id, result });
             })
             .expect("failed to spawn quick retry audio preload thread");
-        self.pending_play_preload =
-            Some(PendingPlayPreload { generation, chart_id, input, audio_progress, rx });
+        self.pending_play_preload = Some(PendingPlayPreload {
+            generation,
+            chart_id,
+            input,
+            audio_progress,
+            applied_arrange: preview_applied_arrange,
+            rx,
+        });
         tracing::info!(chart_id, generation, "quick retry audio preload started");
     }
 
@@ -13248,12 +13284,35 @@ impl WinitApp {
         let play_elapsed_time = self.play_elapsed_time();
         let ready_elapsed_time = self.play_ready_sound_started_at.map(elapsed_since);
         let resource_load_progress = self.current_play_resource_load_progress();
+        let chart_id = self
+            .pending_play_start
+            .as_ref()
+            .map(|start| start.chart_id)
+            .or(self.last_started_chart_id);
+        let applied_arrange =
+            chart_id.and_then(|chart_id| self.play_preload_applied_arrange(chart_id));
         if let Some(snapshot) = &mut self.last_play_snapshot {
             snapshot.play_elapsed_time = play_elapsed_time;
             snapshot.ready_elapsed_time = ready_elapsed_time;
             snapshot.resource_load_progress = resource_load_progress;
+            if let Some(applied_arrange) = &applied_arrange {
+                apply_play_arrange_to_snapshot(snapshot, applied_arrange);
+            }
         }
         self.refresh_pending_play_visual_snapshot(play_elapsed_time);
+    }
+
+    fn play_preload_applied_arrange(&self, chart_id: i64) -> Option<AppliedArrange> {
+        self.preloaded_play_session
+            .as_ref()
+            .filter(|preloaded| preloaded.chart_id == chart_id)
+            .map(|preloaded| preloaded.preloaded.applied_arrange.clone())
+            .or_else(|| {
+                self.pending_play_preload
+                    .as_ref()
+                    .filter(|pending| pending.chart_id == chart_id)
+                    .and_then(|pending| pending.applied_arrange.get().cloned())
+            })
     }
 
     fn current_play_resource_load_progress(&self) -> f32 {

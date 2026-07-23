@@ -967,7 +967,29 @@ pub fn preload_play_session_for_chart_with_progress(
     normalize_chart_volume: bool,
     on_progress: impl FnMut(usize, usize),
 ) -> Result<PreloadedPlaySession> {
+    preload_play_session_for_chart_with_callbacks(
+        library_db,
+        chart_id,
+        options,
+        normalize_chart_volume,
+        |_| {},
+        on_progress,
+    )
+}
+
+/// 譜面変換と配置確定が終わった時点で `on_arrange` を呼び、その後にWAVをロードする。
+///
+/// Play画面はこの通知を使って、重い音源ロードの完了を待たずに実配置を表示できる。
+pub fn preload_play_session_for_chart_with_callbacks(
+    library_db: &LibraryDatabase,
+    chart_id: i64,
+    options: PlaySessionOptions,
+    normalize_chart_volume: bool,
+    on_arrange: impl FnOnce(&AppliedArrange),
+    on_progress: impl FnMut(usize, usize),
+) -> Result<PreloadedPlaySession> {
     let imported = load_transformed_chart_for_play(library_db, chart_id, &options)?;
+    on_arrange(&imported.applied_arrange);
     let chart = Arc::new(imported.chart);
     let mut loader = FfmpegSampleLoader::default();
     let (audio, sample_report) = build_audio_engine_for_chart_with_progress(
@@ -2289,6 +2311,7 @@ fn fisher_yates_shuffle(rng: &mut ArrangeRng, lanes: &[usize], perm: &mut [usize
 
 #[cfg(test)]
 mod tests {
+    use std::cell::RefCell;
     use std::collections::HashSet;
     use std::sync::Arc;
 
@@ -3735,6 +3758,62 @@ mod tests {
         assert_eq!(prepared.audio.mixer.output_sample_rate, 48_000);
         assert!(matches!(prepared.sample_report[0].status, LoadedSampleStatus::Loaded));
         assert!(prepared.audio.samples.get(SoundId(0)).is_some());
+
+        std::fs::remove_file(path).unwrap();
+        std::fs::remove_file(wav_path).unwrap();
+    }
+
+    #[test]
+    fn preload_reports_applied_arrange_before_audio_progress() {
+        let (path, wav_path) = write_temp_bms_with_wav(
+            "\
+#TITLE Arrange preview
+#BPM 120
+#WAV01 test.wav
+#00011:01
+",
+        );
+        let imported = import_bms_chart(&path, None, true).unwrap();
+        let mut conn = Connection::open_in_memory().unwrap();
+        configure_connection(&conn).unwrap();
+        run_migrations(&mut conn, LIBRARY_MIGRATIONS).unwrap();
+        let mut library_db = LibraryDatabase::from_connection(conn);
+        let chart_id = library_db
+            .upsert_chart_import(&ChartImportRecord {
+                root_id: None,
+                file_path: &path,
+                file_size: 1,
+                modified_at: 1,
+                scanned_at: 1,
+                chart: &imported.chart,
+            })
+            .unwrap();
+        let reported_arrange = RefCell::new(None);
+
+        let preloaded = preload_play_session_for_chart_with_callbacks(
+            &library_db,
+            chart_id,
+            PlaySessionOptions {
+                arrange: ArrangeOption::Random,
+                arrange_seed: Some(42),
+                ..Default::default()
+            },
+            false,
+            |arrange| {
+                *reported_arrange.borrow_mut() = Some(arrange.clone());
+            },
+            |_, _| {
+                assert!(
+                    reported_arrange.borrow().is_some(),
+                    "arrange must be available before WAV progress"
+                );
+            },
+        )
+        .unwrap();
+
+        let reported_arrange = reported_arrange.into_inner().expect("reported arrange");
+        assert_eq!(reported_arrange.pattern, preloaded.applied_arrange.pattern);
+        assert_eq!(reported_arrange.arrange, ArrangeOption::Random);
 
         std::fs::remove_file(path).unwrap();
         std::fs::remove_file(wav_path).unwrap();
