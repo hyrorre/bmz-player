@@ -4074,6 +4074,7 @@ impl SkinDocumentRenderExt for SkinDocument {
             current_fps: snapshot.current_fps,
             operating_time_ms: snapshot.operating_time_ms,
             logical_input_held: snapshot.skin_input.held,
+            skin_offsets: snapshot.skin_offsets,
             select_bar_elapsed_ms: (snapshot.selection_time.0 / 1_000)
                 .clamp(i32::MIN as i64, i32::MAX as i64) as i32,
             select_option_panel_elapsed_ms: (snapshot.option_panel_time.0 / 1_000)
@@ -19469,6 +19470,45 @@ mod tests {
         let (state, _) = document.select_draw_state(&snapshot, None);
 
         assert_eq!(skin_state_number(12, &state), Some(-12));
+    }
+
+    #[test]
+    fn select_snapshot_custom_offset_adjusts_destination_geometry_and_alpha() {
+        let document: SkinDocument = serde_json::from_str(
+            r#"
+            {
+                "type": 5,
+                "w": 100, "h": 100,
+                "source": [{ "id": "src", "path": "a.png" }],
+                "image": [{ "id": "img", "src": "src", "w": 10, "h": 10 }],
+                "destination": [
+                    { "id": "img", "offset": 42, "dst": [
+                        { "time": 0, "x": 10, "y": 20, "w": 30, "h": 40, "a": 200 }
+                    ]}
+                ]
+            }
+            "#,
+        )
+        .unwrap();
+        let sources = mock_source("src", 10.0, 10.0);
+        let mut skin_offsets = SkinOffsetValues::default();
+        skin_offsets.set(
+            42,
+            crate::skin_offset::SkinOffsetValue { x: 6, y: 8, w: 10, h: 12, r: 0, a: -50 },
+        );
+
+        let items = document.select_render_items(
+            &sources,
+            &SelectSnapshot { skin_offsets, ..SelectSnapshot::default() },
+        );
+
+        assert_eq!(items.len(), 1);
+        let SkinRenderItem::Image { rect, tint, .. } = &items[0] else { panic!() };
+        assert!(approx_eq(rect.x, 0.11));
+        assert!(approx_eq(rect.y, 0.26));
+        assert!(approx_eq(rect.width, 0.4));
+        assert!(approx_eq(rect.height, 0.52));
+        assert!(approx_eq(tint.a, 150.0 / 255.0));
     }
 
     #[test]

@@ -1040,8 +1040,14 @@ pub struct SkinHistoryEntryConfig {
     pub offsets: Vec<SkinOffsetConfig>,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
 pub struct SkinOffsetConfig {
+    /// スキンが宣言した offset 名。
+    ///
+    /// beatoraja は設定値を ID ではなく名前で対応付ける。旧プロファイルには
+    /// このフィールドが無いため、`None` の場合だけ ID を移行用 fallback とする。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
     pub id: i32,
     #[serde(default)]
     pub x: i32,
@@ -1593,6 +1599,31 @@ mod tests {
         assert!(!serialized.contains("[[offsets]]"));
         assert!(serialized.contains("[[select_offsets]]"));
         assert!(serialized.contains("[[play7_offsets]]"));
+    }
+
+    #[test]
+    fn skin_offset_config_round_trips_optional_name_and_reads_legacy_id_only_entries() {
+        let legacy: SkinOffsetConfig = toml::from_str(
+            r#"
+            id = 30
+            h = 12
+            "#,
+        )
+        .unwrap();
+        assert_eq!(legacy.name, None);
+        assert!(!toml::to_string(&legacy).unwrap().contains("name"));
+
+        let named = SkinOffsetConfig {
+            name: Some("Notes offset".to_string()),
+            id: 30,
+            h: -24,
+            ..Default::default()
+        };
+        let serialized = toml::to_string(&named).unwrap();
+        let restored: SkinOffsetConfig = toml::from_str(&serialized).unwrap();
+
+        assert!(serialized.contains("name = \"Notes offset\""));
+        assert_eq!(restored, named);
     }
 
     #[test]

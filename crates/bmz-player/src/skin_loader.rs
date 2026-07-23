@@ -261,6 +261,8 @@ struct SkinDocumentDependencyFingerprint {
     text_values: BTreeMap<i32, String>,
     option_values: BTreeMap<i32, bool>,
     event_index_values: BTreeMap<i32, i32>,
+    offset_values: BTreeMap<String, bmz_skin::LuaSkinOffsetValue>,
+    offset_id_values: BTreeMap<i32, bmz_skin::LuaSkinOffsetValue>,
     file_values: BTreeMap<String, String>,
     loaded_files: BTreeMap<PathBuf, SkinLoadedFileDependency>,
     virtual_io_files: BTreeMap<String, Option<String>>,
@@ -649,6 +651,18 @@ impl LuaMainState for RenderLuaMainState<'_> {
 
     fn time_us(&self) -> i32 {
         self.state.elapsed_ms.saturating_mul(1_000)
+    }
+
+    fn offset(&self, id: i32) -> bmz_skin::LuaSkinOffsetValue {
+        let value = self.state.skin_offsets.get(id).unwrap_or_default();
+        bmz_skin::LuaSkinOffsetValue {
+            x: value.x,
+            y: value.y,
+            w: value.w,
+            h: value.h,
+            r: value.r,
+            a: value.a,
+        }
     }
 }
 
@@ -1699,6 +1713,8 @@ fn lr2_document_dependency_fingerprint(
         text_values: BTreeMap::new(),
         option_values,
         event_index_values: BTreeMap::new(),
+        offset_values: BTreeMap::new(),
+        offset_id_values: BTreeMap::new(),
         file_values,
         loaded_files,
         virtual_io_files: BTreeMap::new(),
@@ -1767,6 +1783,8 @@ fn document_dependency_fingerprint(
         text_values,
         option_values,
         event_index_values,
+        offset_values: runtime_state.offset_values.clone(),
+        offset_id_values: runtime_state.offset_id_values.clone(),
         file_values,
         loaded_files,
         virtual_io_files,
@@ -2716,6 +2734,24 @@ mod tests {
         for file_name in ["select.json", "decide.json", "result.json", "play7.json"] {
             assert!(root.join(file_name).is_file(), "missing bundled default {file_name}");
         }
+    }
+
+    #[test]
+    fn render_lua_main_state_reads_current_frame_skin_offset() {
+        let mut state = SkinDrawState::default();
+        state.skin_offsets.set(
+            45,
+            bmz_render::skin_offset::SkinOffsetValue { x: 1, y: 2, w: 3, h: 4, r: 5, a: -6 },
+        );
+        let text_values = BTreeMap::new();
+        let provider =
+            RenderLuaMainState { state: &state, enabled_options: &[], text_values: &text_values };
+
+        assert_eq!(
+            provider.offset(45),
+            bmz_skin::LuaSkinOffsetValue { x: 1, y: 2, w: 3, h: 4, r: 5, a: -6 }
+        );
+        assert_eq!(provider.offset(46), bmz_skin::LuaSkinOffsetValue::default());
     }
 
     #[test]
@@ -5001,6 +5037,93 @@ mod tests {
         let note = decoded.document.note.as_ref().expect("play8 skin should define notes");
         assert_eq!(note.note.len(), 8);
         assert_eq!(note.dst.len(), 8);
+    }
+
+    #[test]
+    fn antique_play_lua_bakes_configured_keybeam_height_offset_when_available() {
+        let skin_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../data/skins/mz-select/play/antique/system/play7main.luaskin");
+        if !skin_path.is_file() {
+            return;
+        }
+
+        let load = |height| {
+            load_skin_document(
+                &skin_path,
+                SkinKind::Play,
+                &BTreeMap::new(),
+                &BTreeMap::new(),
+                &LuaLoadRuntimeState {
+                    offset_values: BTreeMap::from([(
+                        "キービームの長さ".to_string(),
+                        bmz_skin::LuaSkinOffsetValue { h: height, ..Default::default() },
+                    )]),
+                    offset_id_values: BTreeMap::from([(
+                        53,
+                        bmz_skin::LuaSkinOffsetValue { h: height, ..Default::default() },
+                    )]),
+                    ..Default::default()
+                },
+                None,
+            )
+            .expect("decode Antique play skin")
+            .document
+        };
+        let keybeam_height = |document: &SkinDocument| {
+            document.destination.iter().find_map(|entry| match entry {
+                DestinationListEntry::Single(destination)
+                    if destination.id == "imgset_keybeam1" && destination.timer == Some(101) =>
+                {
+                    destination.dst.first().and_then(|entry| match entry {
+                        bmz_render::skin::SkinDstEntry::Frame(frame) => frame.h,
+                        bmz_render::skin::SkinDstEntry::Conditional { .. } => None,
+                    })
+                }
+                _ => None,
+            })
+        };
+
+        assert_eq!(keybeam_height(&load(0)), Some(564));
+        assert_eq!(keybeam_height(&load(37)), Some(601));
+    }
+
+    #[test]
+    fn simple_play_lua_bakes_configured_note_height_offset_when_available() {
+        let skin_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../data/skins/simple-play/play7.luaskin");
+        if !skin_path.is_file() {
+            return;
+        }
+
+        let load_note_sizes = |height| {
+            load_skin_document(
+                &skin_path,
+                SkinKind::Play,
+                &BTreeMap::new(),
+                &BTreeMap::new(),
+                &LuaLoadRuntimeState {
+                    offset_values: BTreeMap::from([(
+                        "ノーツオフセット Notes Offset".to_string(),
+                        bmz_skin::LuaSkinOffsetValue { h: height, ..Default::default() },
+                    )]),
+                    ..Default::default()
+                },
+                None,
+            )
+            .expect("decode simple-play skin")
+            .document
+            .note
+            .expect("simple-play note definition")
+            .size
+        };
+        let baseline = load_note_sizes(0);
+        let configured = load_note_sizes(7);
+
+        assert_eq!(baseline.len(), configured.len());
+        assert!(
+            baseline.iter().zip(configured).all(|(before, after)| after == before + 7),
+            "simple-play note heights did not receive the configured offset"
+        );
     }
 
     #[test]
@@ -7411,6 +7534,80 @@ return {
         .unwrap();
         assert_eq!(second.cache_status, DocumentCacheStatus::Miss);
         assert_eq!(second.document.source[0].path, "nonzero.png");
+    }
+
+    #[test]
+    fn lua_document_cache_misses_when_runtime_offset_changes() {
+        let root = unique_test_dir("bmz-lua-document-cache-offset");
+        std::fs::create_dir_all(&root).unwrap();
+        let skin_path = root.join("play.luaskin");
+        std::fs::write(
+            &skin_path,
+            r#"
+local skin = {
+    type = 1,
+    offset = {
+        { name = "Panel", id = 42, x = true },
+    },
+}
+if skin_config == nil then
+    return skin
+end
+local panel_x = skin_config.offset["Panel"].x
+skin.source = {
+    { id = "bg", path = panel_x == 0 and "zero.png" or "nonzero.png" },
+}
+return skin
+"#,
+        )
+        .unwrap();
+        let cache = Arc::new(Mutex::new(SkinDocumentCache::default()));
+        let offset = |x| LuaLoadRuntimeState {
+            offset_values: BTreeMap::from([(
+                "Panel".to_string(),
+                bmz_skin::LuaSkinOffsetValue { x, ..Default::default() },
+            )]),
+            offset_id_values: BTreeMap::from([(
+                42,
+                bmz_skin::LuaSkinOffsetValue { x, ..Default::default() },
+            )]),
+            ..Default::default()
+        };
+
+        let first = load_skin_document(
+            &skin_path,
+            SkinKind::Play,
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            &offset(0),
+            Some(cache.clone()),
+        )
+        .unwrap();
+        assert_eq!(first.cache_status, DocumentCacheStatus::Miss);
+        assert_eq!(first.document.source[0].path, "zero.png");
+
+        let same = load_skin_document(
+            &skin_path,
+            SkinKind::Play,
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            &offset(0),
+            Some(cache.clone()),
+        )
+        .unwrap();
+        assert_eq!(same.cache_status, DocumentCacheStatus::Hit);
+
+        let changed = load_skin_document(
+            &skin_path,
+            SkinKind::Play,
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            &offset(12),
+            Some(cache),
+        )
+        .unwrap();
+        assert_eq!(changed.cache_status, DocumentCacheStatus::Miss);
+        assert_eq!(changed.document.source[0].path, "nonzero.png");
     }
 
     #[test]

@@ -6,6 +6,7 @@ use bmz_core::time::TimeUs;
 
 use crate::chart_graph::BpmGraphSegment;
 use crate::skin::SkinImageSize;
+use crate::skin_offset::SkinOffsetValues;
 use crate::snapshot::{
     DisplayJudgeCounts, FastSlowJudgeCounts, OverlaySnapshot, RenderSnapshot,
     SkinLogicalInputSnapshot,
@@ -90,6 +91,8 @@ pub struct SelectSnapshot {
     /// beatoraja の NUMBER_OPERATING_TIME_HOUR/MINUTE/SECOND (27..29) に使う。
     pub operating_time_ms: i32,
     pub skin_input: SkinLogicalInputSnapshot,
+    /// 現在の選曲スキンスロットに設定された destination offset。
+    pub skin_offsets: SkinOffsetValues,
     pub selection_time: TimeUs,
     pub option_panel_time: TimeUs,
     /// TIMER_PANEL1_OFF..6_OFF (31..36) の経過時間。None は対応タイマーOFF。
@@ -214,6 +217,7 @@ impl Default for SelectSnapshot {
             current_fps: 0,
             operating_time_ms: 0,
             skin_input: SkinLogicalInputSnapshot::default(),
+            skin_offsets: SkinOffsetValues::default(),
             selection_time: TimeUs::default(),
             option_panel_time: TimeUs::default(),
             option_panel_off_times: [None; 6],
@@ -604,6 +608,8 @@ pub struct ResultSnapshot {
     /// beatoraja NUMBER_CURRENT_FPS (20)。
     pub current_fps: u32,
     pub skin_input: SkinLogicalInputSnapshot,
+    /// 現在のリザルトスキンスロットに設定された destination offset。
+    pub skin_offsets: SkinOffsetValues,
     /// beatoraja image/index ref 342。
     pub hispeed_auto_adjust: bool,
     pub clear_type: ClearType,
@@ -717,6 +723,7 @@ mod tests {
             target_name: String::new(),
             current_fps: 0,
             skin_input: SkinLogicalInputSnapshot::default(),
+            skin_offsets: SkinOffsetValues::default(),
             hispeed_auto_adjust: false,
             clear_type: ClearType::Normal,
             result_failed: false,
@@ -798,6 +805,7 @@ mod tests {
             target_name: String::new(),
             current_fps: 0,
             skin_input: SkinLogicalInputSnapshot::default(),
+            skin_offsets: SkinOffsetValues::default(),
             hispeed_auto_adjust: false,
             clear_type: ClearType::Normal,
             result_failed: false,

@@ -53,6 +53,8 @@ pub struct SkinLoadDependencies {
     pub text_values: BTreeMap<i32, String>,
     pub option_values: BTreeMap<i32, bool>,
     pub event_index_values: BTreeMap<i32, i32>,
+    pub offset_values: BTreeMap<String, LuaSkinOffsetValue>,
+    pub offset_id_values: BTreeMap<i32, LuaSkinOffsetValue>,
     pub files: BTreeSet<String>,
     pub loaded_files: BTreeMap<PathBuf, SkinLoadedFileDependency>,
     /// Read-only virtual files observed through Lua `io.open` / `io.lines`.
@@ -72,18 +74,58 @@ pub struct SkinLoadedFileDependency {
     pub len: u64,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct LuaSkinOffsetValue {
+    pub x: i32,
+    pub y: i32,
+    pub w: i32,
+    pub h: i32,
+    pub r: i32,
+    pub a: i32,
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct LuaLoadRuntimeState {
     pub number_values: BTreeMap<i32, i32>,
     pub text_values: BTreeMap<i32, String>,
     pub option_values: BTreeMap<i32, bool>,
     pub event_index_values: BTreeMap<i32, i32>,
+    /// Header display name keyed values used by `skin_config.offset`.
+    pub offset_values: BTreeMap<String, LuaSkinOffsetValue>,
+    /// Numeric ID keyed values used by `main_state.offset`.
+    pub offset_id_values: BTreeMap<i32, LuaSkinOffsetValue>,
     /// App-owned, read-only files exposed to Lua `io.open` during skin load.
     ///
     /// This is used for compatibility data whose original implementation is
     /// written by Java/Lua at runtime.  Keeping it in the load state makes the
     /// document cache invalidate when the supplied result data changes.
     pub virtual_io_files: BTreeMap<String, String>,
+}
+
+impl LuaLoadRuntimeState {
+    /// Resolves ordered header definitions against ordered saved values.
+    ///
+    /// beatoraja selects the first saved value with a matching display name,
+    /// while its numeric runtime map overwrites duplicate IDs in header order.
+    /// Missing names receive the all-zero value.
+    pub fn set_offset_definitions(
+        &mut self,
+        definitions: impl IntoIterator<Item = (String, i32)>,
+        saved_values: impl IntoIterator<Item = (String, LuaSkinOffsetValue)>,
+    ) {
+        let mut saved_by_name = BTreeMap::new();
+        for (name, value) in saved_values {
+            saved_by_name.entry(name).or_insert(value);
+        }
+
+        self.offset_values.clear();
+        self.offset_id_values.clear();
+        for (name, id) in definitions {
+            let value = saved_by_name.get(&name).copied().unwrap_or_default();
+            self.offset_values.entry(name).or_insert(value);
+            self.offset_id_values.insert(id, value);
+        }
+    }
 }
 
 /// Runtime callback から参照できる、現在フレームの読み取り専用状態。
@@ -102,6 +144,10 @@ pub trait LuaMainState {
 
     fn judge(&self, index: i32) -> i64 {
         main_state_judge_ref(index).map_or(0, |id| self.number(id))
+    }
+
+    fn offset(&self, _id: i32) -> LuaSkinOffsetValue {
+        LuaSkinOffsetValue::default()
     }
 }
 
@@ -937,6 +983,228 @@ mod tests {
     }
 
     #[test]
+    fn lua_offset_definitions_use_first_saved_name_and_last_runtime_id() {
+        let first = LuaSkinOffsetValue { x: 1, ..Default::default() };
+        let duplicate_saved = LuaSkinOffsetValue { x: 2, ..Default::default() };
+        let later_id = LuaSkinOffsetValue { x: 3, ..Default::default() };
+        let mut runtime_state = LuaLoadRuntimeState::default();
+
+        runtime_state.set_offset_definitions(
+            [
+                ("Same name".to_string(), 7),
+                ("Same name".to_string(), 8),
+                ("Later ID".to_string(), 7),
+                ("Missing".to_string(), 9),
+            ],
+            [
+                ("Same name".to_string(), first),
+                ("Same name".to_string(), duplicate_saved),
+                ("Later ID".to_string(), later_id),
+            ],
+        );
+
+        assert_eq!(runtime_state.offset_values.get("Same name"), Some(&first));
+        assert_eq!(runtime_state.offset_values.get("Later ID"), Some(&later_id));
+        assert_eq!(
+            runtime_state.offset_values.get("Missing"),
+            Some(&LuaSkinOffsetValue::default())
+        );
+        assert_eq!(runtime_state.offset_id_values.get(&7), Some(&later_id));
+        assert_eq!(runtime_state.offset_id_values.get(&8), Some(&first));
+        assert_eq!(runtime_state.offset_id_values.get(&9), Some(&LuaSkinOffsetValue::default()));
+    }
+
+    #[test]
+    fn lua_skin_config_offset_prefers_names_and_keeps_duplicate_ids_distinct() {
+        let root = unique_test_dir("bmz-skin-lua-offset-names");
+        fs::create_dir_all(&root).unwrap();
+        fs::write(
+            root.join("play7.luaskin"),
+            r#"
+            local first = { x = 0, y = 0, w = 0, h = 0, r = 0, a = 0 }
+            local second = first
+            local fallback = first
+            local missing = first
+            if skin_config then
+                first = skin_config.offset["First"]
+                second = skin_config.offset["Second"]
+                fallback = skin_config.offset["ID fallback"]
+                missing = skin_config.offset["Missing"]
+            end
+            return {
+                type = 0,
+                offset = {
+                    { name = "First", id = 7, x = true, r = true },
+                    { name = "Second", id = 7, y = true, a = true },
+                    { name = "ID fallback", id = 8, w = true },
+                    { name = "Missing", id = 9, h = true }
+                },
+                destination = {
+                    { id = -110, dst = {{
+                        x = first.x,
+                        y = second.y,
+                        w = fallback.w,
+                        h = missing.h,
+                        r = first.r,
+                        a = second.a
+                    }} }
+                }
+            }
+            "#,
+        )
+        .unwrap();
+
+        let first = LuaSkinOffsetValue { x: 11, r: 12, ..Default::default() };
+        let second = LuaSkinOffsetValue { y: 21, a: -22, ..Default::default() };
+        let fallback = LuaSkinOffsetValue { w: 31, ..Default::default() };
+        let ignored_id_value = LuaSkinOffsetValue { x: 99, y: 99, w: 99, h: 99, r: 99, a: 99 };
+        let runtime_state = LuaLoadRuntimeState {
+            offset_values: BTreeMap::from([
+                ("First".to_string(), first),
+                ("Second".to_string(), second),
+            ]),
+            offset_id_values: BTreeMap::from([(7, ignored_id_value), (8, fallback)]),
+            ..Default::default()
+        };
+        let loaded = load_lua_skin_value_with_runtime_state(
+            &root.join("play7.luaskin"),
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            &runtime_state,
+        )
+        .unwrap();
+
+        let dst = &loaded.value["destination"][0]["dst"][0];
+        assert_eq!(dst["x"], 11);
+        assert_eq!(dst["y"], 21);
+        assert_eq!(dst["w"], 31);
+        assert_eq!(dst["h"], 0);
+        assert_eq!(dst["r"], 12);
+        assert_eq!(dst["a"], -22);
+        assert_eq!(loaded.dependencies.offset_values.get("First"), Some(&first));
+        assert_eq!(loaded.dependencies.offset_values.get("Second"), Some(&second));
+        assert_eq!(loaded.dependencies.offset_values.get("ID fallback"), Some(&fallback));
+        assert_eq!(
+            loaded.dependencies.offset_values.get("Missing"),
+            Some(&LuaSkinOffsetValue::default())
+        );
+    }
+
+    #[test]
+    fn lua_play_skin_config_appends_beatoraja_common_offsets() {
+        let root = unique_test_dir("bmz-skin-lua-common-offsets");
+        fs::create_dir_all(&root).unwrap();
+        fs::write(
+            root.join("play7.luaskin"),
+            r#"
+            local main_state = require("main_state")
+            local zero = { x = 0, y = 0, w = 0, h = 0, r = 0, a = 0 }
+            local all = zero
+            local notes = zero
+            local judge = zero
+            local detail = zero
+            local custom = zero
+            local runtime_notes = zero
+            local barline_is_absent = false
+            if skin_config then
+                all = skin_config.offset["All offset(%)"]
+                notes = skin_config.offset["Notes offset"]
+                judge = skin_config.offset["Judge offset"]
+                detail = skin_config.offset["Judge Detail offset"]
+                custom = skin_config.offset["Custom notes"]
+                runtime_notes = main_state.offset(30)
+                barline_is_absent = skin_config.offset["Bar Line offset"] == nil
+            end
+            return {
+                type = 0,
+                offset = {
+                    { name = "Custom notes", id = 30, r = true }
+                },
+                destination = {
+                    { id = -110, dst = {{
+                        x = all.x,
+                        y = judge.y,
+                        w = detail.w,
+                        h = notes.h + runtime_notes.h,
+                        r = custom.r,
+                        a = barline_is_absent and judge.a or 0
+                    }} }
+                }
+            }
+            "#,
+        )
+        .unwrap();
+
+        let all = LuaSkinOffsetValue { x: 1, ..Default::default() };
+        let notes = LuaSkinOffsetValue { h: 2, ..Default::default() };
+        let judge = LuaSkinOffsetValue { y: 3, a: -6, ..Default::default() };
+        let detail = LuaSkinOffsetValue { w: 4, ..Default::default() };
+        let custom = LuaSkinOffsetValue { r: 5, ..Default::default() };
+        let ignored_notes_id = LuaSkinOffsetValue { h: 99, r: 99, ..Default::default() };
+        let runtime_state = LuaLoadRuntimeState {
+            offset_values: BTreeMap::from([
+                ("Notes offset".to_string(), notes),
+                ("Judge offset".to_string(), judge),
+                ("Judge Detail offset".to_string(), detail),
+                ("Custom notes".to_string(), custom),
+            ]),
+            offset_id_values: BTreeMap::from([(10, all), (30, ignored_notes_id)]),
+            ..Default::default()
+        };
+        let loaded = load_lua_skin_value_with_runtime_state(
+            &root.join("play7.luaskin"),
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            &runtime_state,
+        )
+        .unwrap();
+
+        let dst = &loaded.value["destination"][0]["dst"][0];
+        assert_eq!(dst["x"], 1);
+        assert_eq!(dst["y"], 3);
+        assert_eq!(dst["w"], 4);
+        assert_eq!(dst["h"], 4);
+        assert_eq!(dst["r"], 5);
+        assert_eq!(dst["a"], -6);
+        assert_eq!(loaded.dependencies.offset_values.get("All offset(%)"), Some(&all));
+        assert_eq!(loaded.dependencies.offset_values.get("Notes offset"), Some(&notes));
+        assert_eq!(loaded.dependencies.offset_values.get("Judge offset"), Some(&judge));
+        assert_eq!(loaded.dependencies.offset_values.get("Judge Detail offset"), Some(&detail));
+        assert!(!loaded.dependencies.offset_values.contains_key("Bar Line offset"));
+    }
+
+    #[test]
+    fn antique_play_skin_bakes_named_note_size_offset_when_available() {
+        let skin_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../data/skins/mz-select/play/antique/system/play7main.luaskin");
+        if !skin_path.is_file() {
+            return;
+        }
+
+        let runtime_state = LuaLoadRuntimeState {
+            offset_values: BTreeMap::from([(
+                "ノーツの大きさ".to_string(),
+                LuaSkinOffsetValue { h: 9, ..Default::default() },
+            )]),
+            ..Default::default()
+        };
+        let loaded = load_lua_skin_with_runtime_state(
+            &skin_path,
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            &runtime_state,
+        )
+        .expect("Antique play skin should decode with a named note-size offset");
+
+        let note = loaded.document.note.as_ref().expect("Antique note definition");
+        assert_eq!(note.size, vec![45; 8]);
+        assert_eq!(
+            loaded.dependencies.offset_values.get("ノーツの大きさ"),
+            runtime_state.offset_values.get("ノーツの大きさ")
+        );
+    }
+
+    #[test]
     fn lua_skin_main_state_offset_exposes_zero_defaults_by_id() {
         let root = unique_test_dir("bmz-skin-lua");
         fs::create_dir_all(&root).unwrap();
@@ -975,6 +1243,62 @@ mod tests {
         assert_eq!(loaded.value["destination"][0]["dst"][0]["h"], 0);
         assert_eq!(loaded.value["destination"][0]["dst"][0]["r"], 0);
         assert_eq!(loaded.value["destination"][0]["dst"][0]["a"], 0);
+    }
+
+    #[test]
+    fn lua_skin_main_state_offset_exposes_load_time_values_by_id() {
+        let root = unique_test_dir("bmz-skin-lua-offset-id");
+        fs::create_dir_all(&root).unwrap();
+        fs::write(
+            root.join("play7.luaskin"),
+            r#"
+            local main_state = require("main_state")
+            local skin = {
+                type = 0,
+                offset = {
+                    { name = "Load-time offset", id = 4, x = true, y = true, w = true,
+                      h = true, r = true, a = true }
+                }
+            }
+            if skin_config then
+                local offset = main_state.offset(4)
+                skin.destination = {
+                    { id = -110, dst = {{
+                        x = offset.x,
+                        y = offset.y,
+                        w = offset.w,
+                        h = offset.h,
+                        r = offset.r,
+                        a = offset.a
+                    }} }
+                }
+            end
+            return skin
+            "#,
+        )
+        .unwrap();
+
+        let offset = LuaSkinOffsetValue { x: 1, y: 2, w: 3, h: 4, r: 5, a: -6 };
+        let runtime_state = LuaLoadRuntimeState {
+            offset_id_values: BTreeMap::from([(4, offset)]),
+            ..Default::default()
+        };
+        let loaded = load_lua_skin_value_with_runtime_state(
+            &root.join("play7.luaskin"),
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            &runtime_state,
+        )
+        .unwrap();
+
+        let dst = &loaded.value["destination"][0]["dst"][0];
+        assert_eq!(dst["x"], 1);
+        assert_eq!(dst["y"], 2);
+        assert_eq!(dst["w"], 3);
+        assert_eq!(dst["h"], 4);
+        assert_eq!(dst["r"], 5);
+        assert_eq!(dst["a"], -6);
+        assert_eq!(loaded.dependencies.offset_id_values.get(&4), Some(&offset));
     }
 
     #[test]
@@ -4000,6 +4324,7 @@ mod tests {
         floats: BTreeMap<i32, f64>,
         texts: BTreeMap<i32, String>,
         timers: BTreeMap<i32, i32>,
+        offsets: BTreeMap<i32, LuaSkinOffsetValue>,
     }
 
     impl LuaMainState for TestLuaMainState {
@@ -4033,6 +4358,10 @@ mod tests {
 
         fn time_us(&self) -> i32 {
             0
+        }
+
+        fn offset(&self, id: i32) -> LuaSkinOffsetValue {
+            self.offsets.get(&id).copied().unwrap_or_default()
         }
     }
 
@@ -4138,6 +4467,36 @@ mod tests {
         state.timers.insert(2, 123);
         assert!(runtime.evaluate_draw(0, &state));
         state.texts.insert(10, "changed".to_string());
+        assert!(!runtime.evaluate_draw(0, &state));
+    }
+
+    #[test]
+    fn lua_runtime_draw_reads_updated_main_state_offset_each_call() {
+        let mut loaded = load_runtime_draw_fixture(
+            "bmz-skin-runtime-current-offset",
+            r#"
+            local draw = function()
+                if main_state.number(999) == 0 then
+                    error("analysis values are intentionally unsupported")
+                end
+                local offset = main_state.offset(45)
+                return offset.x == 1
+                    and offset.y == 2
+                    and offset.w == 3
+                    and offset.h == 4
+                    and offset.r == 5
+                    and offset.a == -6
+            end
+            "#,
+        );
+        assert_eq!(only_destination_draw(&loaded), "bmz:lua_draw_callback:0");
+        let runtime = loaded.lua_runtime.as_mut().expect("runtime fallback");
+        let mut state = TestLuaMainState::default();
+        state.numbers.insert(999, 1);
+        assert!(!runtime.evaluate_draw(0, &state));
+        state.offsets.insert(45, LuaSkinOffsetValue { x: 1, y: 2, w: 3, h: 4, r: 5, a: -6 });
+        assert!(runtime.evaluate_draw(0, &state));
+        state.offsets.get_mut(&45).unwrap().a = 0;
         assert!(!runtime.evaluate_draw(0, &state));
     }
 

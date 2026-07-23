@@ -354,6 +354,8 @@ fn load_header(path: &Path, options: &BTreeMap<String, String>) -> Result<Loaded
         text_values: BTreeMap::new(),
         option_values: processor.option_dependencies,
         event_index_values: BTreeMap::new(),
+        offset_values: BTreeMap::new(),
+        offset_id_values: BTreeMap::new(),
         files: BTreeSet::new(),
         loaded_files: BTreeMap::new(),
         virtual_io_files: BTreeMap::new(),

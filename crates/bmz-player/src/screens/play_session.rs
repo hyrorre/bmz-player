@@ -830,7 +830,6 @@ fn skin_offsets_from_profile(profile: &ProfileConfig, key_mode: KeyMode) -> Vec<
     play_skin_selection_for(&profile.skin, key_mode)
         .offsets
         .iter()
-        .copied()
         .map(|offset| PlaySkinOffset {
             id: offset.id,
             x: offset.x,
@@ -3366,6 +3365,7 @@ mod tests {
     fn build_game_session_copies_selected_play_slot_offsets() {
         let mut profile = ProfileConfig::new_default("default", "Default", 1);
         profile.skin.play7_offsets.push(crate::config::profile_config::SkinOffsetConfig {
+            name: None,
             id: 42,
             x: 1,
             y: 2,
@@ -3375,6 +3375,7 @@ mod tests {
             a: -6,
         });
         profile.skin.play14_offsets.push(crate::config::profile_config::SkinOffsetConfig {
+            name: None,
             id: 42,
             h: 99,
             ..Default::default()

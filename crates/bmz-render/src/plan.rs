@@ -1687,6 +1687,7 @@ fn build_result_skin_draw_state(
         elapsed_ms,
         current_fps: snapshot.current_fps,
         logical_input_held: snapshot.skin_input.held,
+        skin_offsets: snapshot.skin_offsets,
         select_arrange_index: crate::skin::select_arrange_index(&snapshot.arrange),
         select_arrange_2p_index: crate::skin::select_arrange_index(&snapshot.arrange_2p),
         select_double_option_index: crate::skin::select_double_option_index(
@@ -3215,6 +3216,7 @@ mod tests {
                 target_name: String::new(),
                 current_fps: 0,
                 skin_input: Default::default(),
+                skin_offsets: Default::default(),
                 hispeed_auto_adjust: false,
                 clear_type: ClearType::Normal,
                 result_failed: false,
@@ -3324,6 +3326,62 @@ mod tests {
     }
 
     #[test]
+    fn result_snapshot_custom_offset_adjusts_destination_geometry_and_alpha() {
+        let document: SkinDocument = serde_json::from_str(
+            r#"
+            {
+                "type": 7,
+                "w": 100, "h": 100,
+                "source": [{ "id": "src", "path": "a.png" }],
+                "image": [{ "id": "img", "src": "src", "w": 10, "h": 10 }],
+                "destination": [
+                    { "id": "img", "offset": 42, "dst": [
+                        { "time": 0, "x": 10, "y": 20, "w": 30, "h": 40, "a": 200 }
+                    ]}
+                ]
+            }
+            "#,
+        )
+        .unwrap();
+        let skin = SkinContext::from_manifest_and_document(
+            SkinManifest::default(),
+            document,
+            [SkinDocumentTexture {
+                source_id: "src".to_string(),
+                texture: SkinTextureId(99),
+                source_size: SkinImageSize { width: 10.0, height: 10.0 },
+            }],
+        );
+        let AppSceneSnapshot::Result(mut snapshot) = crate::sample::sample_result_scene() else {
+            panic!()
+        };
+        snapshot.skin_offsets.set(
+            42,
+            crate::skin_offset::SkinOffsetValue { x: 6, y: 8, w: 10, h: 12, r: 0, a: -50 },
+        );
+
+        let plan = DrawPlan::from_scene_with_skin(
+            &AppSceneSnapshot::Result(snapshot),
+            &skin,
+            &mut crate::skin::DynamicTimerRuntime::default(),
+        );
+
+        let command = plan
+            .commands
+            .iter()
+            .find(|command| {
+                matches!(command, DrawCommand::Image { texture, .. } if *texture == TextureId(99))
+            })
+            .expect("custom result destination should render");
+        let DrawCommand::Image { rect, tint, .. } = command else { unreachable!() };
+        assert!((rect.x - 0.11).abs() < 0.0001);
+        assert!((rect.y - 0.26).abs() < 0.0001);
+        assert!((rect.width - 0.4).abs() < 0.0001);
+        assert!((rect.height - 0.52).abs() < 0.0001);
+        assert!((tint.a - 150.0 / 255.0).abs() < 0.0001);
+    }
+
+    #[test]
     fn course_result_plan_supplies_course_titles_to_skin_document() {
         let document: SkinDocument = serde_json::from_str(
             r#"{
@@ -3388,6 +3446,7 @@ mod tests {
             target_name: String::new(),
             current_fps: 0,
             skin_input: Default::default(),
+            skin_offsets: Default::default(),
             hispeed_auto_adjust: false,
             clear_type: ClearType::Normal,
             result_failed: false,
@@ -3710,6 +3769,7 @@ mod tests {
             target_name: String::new(),
             current_fps: 0,
             skin_input: Default::default(),
+            skin_offsets: Default::default(),
             hispeed_auto_adjust: false,
             clear_type: ClearType::Normal,
             result_failed: false,
@@ -3861,6 +3921,7 @@ mod tests {
             target_name: String::new(),
             current_fps: 0,
             skin_input: Default::default(),
+            skin_offsets: Default::default(),
             hispeed_auto_adjust: false,
             clear_type: ClearType::Normal,
             result_failed: false,

@@ -23,8 +23,8 @@ use bmz_skin_document::{
 };
 
 use crate::{
-    LoadedLuaSkinValue, LuaLoadRuntimeState, LuaMainState, SkinLoadDependencies, SkinLoadWarning,
-    SkinLoadedFileDependency,
+    LoadedLuaSkinValue, LuaLoadRuntimeState, LuaMainState, LuaSkinOffsetValue,
+    SkinLoadDependencies, SkinLoadWarning, SkinLoadedFileDependency,
 };
 
 const LUA_INSTRUCTION_LIMIT: i64 = 2_000_000;
@@ -181,6 +181,7 @@ impl LuaSkinRuntime {
                 "gauge_type",
                 "time",
                 "judge",
+                "offset",
             ];
             let originals = FIELDS
                 .iter()
@@ -206,6 +207,12 @@ impl LuaSkinRuntime {
             main_state.set("time", scope.create_function(|_, ()| Ok(state.time_us()))?)?;
             main_state
                 .set("judge", scope.create_function(|_, index: i32| Ok(state.judge(index)))?)?;
+            main_state.set(
+                "offset",
+                scope.create_function(|lua, id: i32| {
+                    create_main_state_offset_table(lua, state.offset(id))
+                })?,
+            )?;
 
             let result = match function.call::<Value>(()) {
                 Ok(Value::Boolean(value)) => Ok(value),
@@ -412,7 +419,14 @@ fn execute_lua_skin(
     let skin_options = skin_config_options_from_header(&header_json, options, &mut warnings);
     let skin_files = skin_files_from_header(&root, &header_json, files);
     let skin_named_files = skin_named_files_from_header(&root, &header_json, files);
-    let skin_offsets = skin_config_offsets_from_header(&header_json);
+    let skin_offsets = skin_config_offsets_from_header(&header_json, runtime_state);
+    let mut resolved_runtime_state = runtime_state.clone();
+    resolved_runtime_state.offset_id_values.clear();
+    for (name, id) in skin_offset_definitions_from_header(&header_json) {
+        resolved_runtime_state
+            .offset_id_values
+            .insert(id, lua_skin_offset_value(runtime_state, &name, Some(id)));
+    }
     // ヘッダ pass では skin_config / 全 option が未注入のため draw/value 推論が失敗しうる。
     // 本 pass の警告だけ残す。
     warnings.retain(|warning| {
@@ -443,7 +457,7 @@ fn execute_lua_skin(
             &skin_files,
             &skin_file_dependency_names_from_header(&header_json),
             &skin_offsets,
-            runtime_state,
+            &resolved_runtime_state,
             virtual_io_files,
             Some(dependencies.clone()),
         )?;
@@ -1378,6 +1392,11 @@ fn install_sandbox(
             main_state_probe.lock().map_err(|_| anyhow!("main_state probe lock poisoned"))?;
         probe.event_index_values = runtime_state.event_index_values.clone();
     }
+    if !runtime_state.offset_id_values.is_empty() {
+        let mut probe =
+            main_state_probe.lock().map_err(|_| anyhow!("main_state probe lock poisoned"))?;
+        probe.offset_values = runtime_state.offset_id_values.clone();
+    }
     let globals = lua.globals();
     if let Some(skin_config_options) = skin_config_options {
         let skin_config = lua.create_table()?;
@@ -1394,6 +1413,11 @@ fn install_sandbox(
             offset_value.set("r", value.r)?;
             offset_value.set("a", value.a)?;
             offset.set(name.as_str(), offset_value)?;
+        }
+        if let Some(load_dependencies) = &load_dependencies
+            && let Ok(mut dependencies) = load_dependencies.lock()
+        {
+            dependencies.offset_values.extend(skin_offsets.clone());
         }
         skin_config.set("offset", offset)?;
         let root_for_get_path = root.to_path_buf();
@@ -1522,6 +1546,7 @@ struct MainStateProbe {
     timer_values: BTreeMap<i32, i32>,
     event_index_calls: Vec<i32>,
     event_index_values: BTreeMap<i32, i32>,
+    offset_values: BTreeMap<i32, LuaSkinOffsetValue>,
     gauge_type_calls: usize,
     gauge_type_value: i32,
     float_number_calls: Vec<i32>,
@@ -1565,6 +1590,7 @@ impl Default for MainStateProbe {
             timer_values: BTreeMap::new(),
             event_index_calls: Vec::new(),
             event_index_values: BTreeMap::new(),
+            offset_values: BTreeMap::new(),
             gauge_type_calls: 0,
             gauge_type_value: 0,
             float_number_calls: Vec::new(),
@@ -2012,6 +2038,17 @@ impl MainStateProbe {
         }
     }
 
+    fn offset(&self, offset_id: i32) -> LuaSkinOffsetValue {
+        let value = self.offset_values.get(&offset_id).copied().unwrap_or_default();
+        if matches!(self.mode, MainStateProbeMode::RuntimeStub)
+            && let Some(dependencies) = &self.load_dependencies
+            && let Ok(mut dependencies) = dependencies.lock()
+        {
+            dependencies.offset_id_values.insert(offset_id, value);
+        }
+        value
+    }
+
     fn timer(&mut self, timer_id: i32) -> i32 {
         if matches!(self.mode, MainStateProbeMode::RuntimeStub) {
             return i32::MIN;
@@ -2180,9 +2217,16 @@ fn create_main_state_stub(lua: &Lua, probe: Arc<Mutex<MainStateProbe>>) -> mlua:
                 .text(ref_id))
         })?,
     )?;
+    let probe_for_offset = probe.clone();
     table.set(
         "offset",
-        lua.create_function(move |lua, _offset_id: i32| create_main_state_offset_table(lua))?,
+        lua.create_function(move |lua, offset_id: i32| {
+            let value = probe_for_offset
+                .lock()
+                .map_err(|_| mlua::Error::external("main_state probe lock poisoned"))?
+                .offset(offset_id);
+            create_main_state_offset_table(lua, value)
+        })?,
     )?;
     let probe_for_float_number = probe.clone();
     table.set(
@@ -2319,14 +2363,14 @@ fn lua_audio_path_and_volume(path: Value, volume: Value) -> Option<(String, f64)
     Some((path.to_str().ok()?.to_string(), volume))
 }
 
-fn create_main_state_offset_table(lua: &Lua) -> mlua::Result<Value> {
+fn create_main_state_offset_table(lua: &Lua, offset: LuaSkinOffsetValue) -> mlua::Result<Value> {
     let table = lua.create_table()?;
-    table.set("x", 0)?;
-    table.set("y", 0)?;
-    table.set("w", 0)?;
-    table.set("h", 0)?;
-    table.set("r", 0)?;
-    table.set("a", 0)?;
+    table.set("x", offset.x)?;
+    table.set("y", offset.y)?;
+    table.set("w", offset.w)?;
+    table.set("h", offset.h)?;
+    table.set("r", offset.r)?;
+    table.set("a", offset.a)?;
     Ok(Value::Table(table))
 }
 
@@ -3147,30 +3191,62 @@ fn json_integer(value: &JsonValue) -> Option<i64> {
     })
 }
 
-#[derive(Debug, Clone, Copy, Default)]
-struct LuaSkinOffsetValue {
-    x: i32,
-    y: i32,
-    w: i32,
-    h: i32,
-    r: i32,
-    a: i32,
+fn skin_config_offsets_from_header(
+    header: &JsonValue,
+    runtime_state: &LuaLoadRuntimeState,
+) -> BTreeMap<String, LuaSkinOffsetValue> {
+    let mut result = BTreeMap::new();
+    for (name, id) in skin_offset_definitions_from_header(header) {
+        result.insert(name.clone(), lua_skin_offset_value(runtime_state, &name, Some(id)));
+    }
+    result
 }
 
-fn skin_config_offsets_from_header(header: &JsonValue) -> BTreeMap<String, LuaSkinOffsetValue> {
-    let mut result = BTreeMap::new();
-    let Some(offsets) = header.get("offset").and_then(JsonValue::as_array) else {
-        return result;
-    };
+fn skin_offset_definitions_from_header(header: &JsonValue) -> Vec<(String, i32)> {
+    let mut result = Vec::new();
+    if let Some(offsets) = header.get("offset").and_then(JsonValue::as_array) {
+        for offset in offsets {
+            let Some(name) = offset.get("name").and_then(JsonValue::as_str) else {
+                continue;
+            };
+            let id = offset
+                .get("id")
+                .and_then(json_integer)
+                .and_then(|id| i32::try_from(id).ok())
+                .unwrap_or_default();
+            result.push((name.to_string(), id));
+        }
+    }
 
-    for offset in offsets {
-        let Some(name) = offset.get("name").and_then(JsonValue::as_str) else {
-            continue;
-        };
-        result.insert(name.to_string(), LuaSkinOffsetValue::default());
+    let skin_type = header.get("type").and_then(json_integer).and_then(|id| i32::try_from(id).ok());
+    if matches!(skin_type, Some(0 | 1 | 2 | 3 | 4 | 16 | 17 | 21 | 22 | 23 | 24)) {
+        // JSONSkinLoader appends these after custom definitions before
+        // SkinLuaAccessor exports skin_config. BMZ offset 34 is intentionally
+        // renderer-only and is not part of beatoraja's Lua configuration.
+        for (name, id) in [
+            ("All offset(%)", 10),
+            ("Notes offset", 30),
+            ("Judge offset", 32),
+            ("Judge Detail offset", 33),
+        ] {
+            result.push((name.to_string(), id));
+        }
     }
 
     result
+}
+
+fn lua_skin_offset_value(
+    runtime_state: &LuaLoadRuntimeState,
+    name: &str,
+    id: Option<i32>,
+) -> LuaSkinOffsetValue {
+    runtime_state
+        .offset_values
+        .get(name)
+        .copied()
+        .or_else(|| id.and_then(|id| runtime_state.offset_id_values.get(&id).copied()))
+        .unwrap_or_default()
 }
 
 /// スキン設定パネルで選んだファイル選択を、filepath 定義の `path` グロブごとに

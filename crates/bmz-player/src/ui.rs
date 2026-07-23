@@ -148,7 +148,7 @@ impl SceneSkinDefs {
     /// BMZ のスキン設定 UI でも play skin だけ同じ項目を常時出す。
     pub fn from_play_document(document: Option<&SkinDocument>) -> Self {
         let mut defs = Self::from_document(document);
-        defs.append_missing_beatoraja_play_offsets();
+        defs.append_play_common_offsets();
         defs
     }
 
@@ -156,22 +156,29 @@ impl SceneSkinDefs {
         self.property.is_empty() && self.filepath.is_empty() && self.offset.is_empty()
     }
 
-    fn append_missing_beatoraja_play_offsets(&mut self) {
+    fn append_play_common_offsets(&mut self) {
+        // beatoraja はスキン定義との ID 重複を除外せず、共通 offset を定義列の
+        // 末尾へ追加する。runtime の ID map では後勝ちになる一方、設定値は名前で
+        // 独立して保持される。
         for offset in beatoraja_play_common_offsets() {
-            if let Some(existing) = self.offset.iter_mut().find(|existing| existing.id == offset.id)
-            {
-                if offset.id == SKIN_OFFSET_BAR_LINE {
-                    existing.h = true;
-                    existing.a = true;
-                }
-            } else {
-                self.offset.push(offset);
-            }
+            self.offset.push(offset);
+        }
+
+        // Bar Line offset は BMZ 独自拡張で、beatoraja の共通 offset とは分けて
+        // 従来どおり ID 34 の定義を補完する。
+        let bar_line = bmz_play_bar_line_offset();
+        if let Some(existing) =
+            self.offset.iter_mut().find(|existing| existing.id == SKIN_OFFSET_BAR_LINE)
+        {
+            existing.h = true;
+            existing.a = true;
+        } else {
+            self.offset.push(bar_line);
         }
     }
 }
 
-fn beatoraja_play_common_offsets() -> [SkinOffsetDef; 5] {
+fn beatoraja_play_common_offsets() -> [SkinOffsetDef; 4] {
     [
         SkinOffsetDef {
             category: "beatoraja".to_string(),
@@ -217,18 +224,21 @@ fn beatoraja_play_common_offsets() -> [SkinOffsetDef; 5] {
             r: false,
             a: true,
         },
-        SkinOffsetDef {
-            category: "bmz".to_string(),
-            name: "Bar Line offset".to_string(),
-            id: SKIN_OFFSET_BAR_LINE,
-            x: false,
-            y: false,
-            w: false,
-            h: true,
-            r: false,
-            a: true,
-        },
     ]
+}
+
+fn bmz_play_bar_line_offset() -> SkinOffsetDef {
+    SkinOffsetDef {
+        category: "bmz".to_string(),
+        name: "Bar Line offset".to_string(),
+        id: SKIN_OFFSET_BAR_LINE,
+        x: false,
+        y: false,
+        w: false,
+        h: true,
+        r: false,
+        a: true,
+    }
 }
 
 /// 選曲 / プレイ / リザルト各スキンの設定可能項目。
@@ -5434,90 +5444,114 @@ fn skin_scene_defs_label(slot: SkinSlot, text: Localizer) -> String {
 
 fn skin_reload_request_from_diff(before: &SkinConfig, after: &SkinConfig) -> SkinReloadRequest {
     let mut request = SkinReloadRequest::default();
+    let select_offsets_changed = before.select_offsets != after.select_offsets;
+    let decide_offsets_changed = before.decide_offsets != after.decide_offsets;
+    let play4_offsets_changed = before.play4_offsets != after.play4_offsets;
+    let play5_offsets_changed = before.play5_offsets != after.play5_offsets;
+    let play6_offsets_changed = before.play6_offsets != after.play6_offsets;
+    let play7_offsets_changed = before.play7_offsets != after.play7_offsets;
+    let play8_offsets_changed = before.play8_offsets != after.play8_offsets;
+    let play9_offsets_changed = before.play9_offsets != after.play9_offsets;
+    let play10_offsets_changed = before.play10_offsets != after.play10_offsets;
+    let play14_offsets_changed = before.play14_offsets != after.play14_offsets;
+    let result_offsets_changed = before.result_offsets != after.result_offsets;
+    let course_result_offsets_changed = before.course_result_offsets != after.course_result_offsets;
     if before.select != after.select
         || before.select_options != after.select_options
         || before.select_files != after.select_files
+        || select_offsets_changed
     {
         request.select = true;
     }
     if before.decide != after.decide
         || before.decide_options != after.decide_options
         || before.decide_files != after.decide_files
+        || decide_offsets_changed
     {
         request.decide = true;
     }
     if before.play4 != after.play4
         || before.play4_options != after.play4_options
         || before.play4_files != after.play4_files
+        || play4_offsets_changed
     {
         request.play4 = true;
     }
     if before.play5 != after.play5
         || before.play5_options != after.play5_options
         || before.play5_files != after.play5_files
+        || play5_offsets_changed
     {
         request.play5 = true;
     }
     if before.play6 != after.play6
         || before.play6_options != after.play6_options
         || before.play6_files != after.play6_files
+        || play6_offsets_changed
     {
         request.play6 = true;
     }
     if before.play7 != after.play7
         || before.play7_options != after.play7_options
         || before.play7_files != after.play7_files
+        || play7_offsets_changed
     {
         request.play7 = true;
     }
     if before.play8 != after.play8
         || before.play8_options != after.play8_options
         || before.play8_files != after.play8_files
+        || play8_offsets_changed
     {
         request.play8 = true;
     }
     if before.play9 != after.play9
         || before.play9_options != after.play9_options
         || before.play9_files != after.play9_files
+        || play9_offsets_changed
     {
         request.play9 = true;
     }
     if before.play10 != after.play10
         || before.play10_options != after.play10_options
         || before.play10_files != after.play10_files
+        || play10_offsets_changed
     {
         request.play10 = true;
     }
     if before.play14 != after.play14
         || before.play14_options != after.play14_options
         || before.play14_files != after.play14_files
+        || play14_offsets_changed
     {
         request.play14 = true;
     }
     if before.result != after.result
         || before.result_options != after.result_options
         || before.result_files != after.result_files
+        || result_offsets_changed
     {
         request.result = true;
     }
     if before.course_result != after.course_result
         || before.course_result_options != after.course_result_options
         || before.course_result_files != after.course_result_files
+        || course_result_offsets_changed
     {
         request.course_result = true;
     }
-    request.offsets = before.select_offsets != after.select_offsets
-        || before.decide_offsets != after.decide_offsets
-        || before.play4_offsets != after.play4_offsets
-        || before.play5_offsets != after.play5_offsets
-        || before.play6_offsets != after.play6_offsets
-        || before.play7_offsets != after.play7_offsets
-        || before.play8_offsets != after.play8_offsets
-        || before.play9_offsets != after.play9_offsets
-        || before.play10_offsets != after.play10_offsets
-        || before.play14_offsets != after.play14_offsets
-        || before.result_offsets != after.result_offsets
-        || before.course_result_offsets != after.course_result_offsets;
+    request.offsets = select_offsets_changed
+        || decide_offsets_changed
+        || play4_offsets_changed
+        || play5_offsets_changed
+        || play6_offsets_changed
+        || play7_offsets_changed
+        || play8_offsets_changed
+        || play9_offsets_changed
+        || play10_offsets_changed
+        || play14_offsets_changed
+        || result_offsets_changed
+        || course_result_offsets_changed;
     request
 }
 
@@ -6085,7 +6119,7 @@ fn build_skin_panel(
 ///
 /// - property: ComboBox で選択肢を選び `options` へ書き込む。
 /// - filepath: `path` グロブにマッチするファイルを ComboBox で選び `files` へ書き込む。
-/// - offset: 宣言された要素ごとに x/y/w/h/r/a を編集し `offsets` (id 単位) へ反映。
+/// - offset: 宣言された要素ごとに x/y/w/h/r/a を編集し `offsets` (名前単位) へ反映。
 fn build_scene_skin_defs(
     ui: &mut egui::Ui,
     slot: SkinSlot,
@@ -6096,7 +6130,7 @@ fn build_scene_skin_defs(
     offsets: &mut Vec<SkinOffsetConfig>,
     text: Localizer,
 ) -> bool {
-    let mut changed = false;
+    let mut changed = sync_skin_offsets_with_defs(&defs.offset, offsets);
     egui::CollapsingHeader::new(skin_scene_defs_label(slot, text))
         .id_salt(slot.defs_header_id())
         .show(ui, |ui| {
@@ -6186,27 +6220,42 @@ fn build_scene_skin_defs(
             }
             if !defs.offset.is_empty() {
                 ui.strong(tr!(text, "skin-offset-elements"));
-                for offset_def in &defs.offset {
-                    ui.push_id(offset_def.id, |ui| {
+                for (offset_index, offset_def) in defs.offset.iter().enumerate() {
+                    ui.push_id((offset_index, offset_def.id, offset_def.name.as_str()), |ui| {
                         ui.label(format!(
                             "{} [{}] — id {}",
                             offset_def.name, offset_def.category, offset_def.id
                         ));
-                        let existing = offsets.iter().find(|o| o.id == offset_def.id).copied();
+                        let existing = offsets
+                            .iter()
+                            .find(|offset| {
+                                offset.name.as_deref() == Some(offset_def.name.as_str())
+                                    && offset.id == offset_def.id
+                            })
+                            .or_else(|| {
+                                offsets.iter().find(|offset| {
+                                    offset.name.as_deref() == Some(offset_def.name.as_str())
+                                })
+                            })
+                            .or_else(|| {
+                                offsets.iter().find(|offset| {
+                                    offset.name.is_none() && offset.id == offset_def.id
+                                })
+                            })
+                            .cloned();
                         let mut value = existing.unwrap_or(SkinOffsetConfig {
+                            name: Some(offset_def.name.clone()),
                             id: offset_def.id,
                             ..Default::default()
                         });
-                        let before = value;
+                        value.name = Some(offset_def.name.clone());
+                        value.id = offset_def.id;
+                        let before = value.clone();
                         ui.horizontal(|ui| {
                             changed |= add_offset_drag_values(ui, offset_def, &mut value, text);
                         });
                         if value != before {
-                            match offsets.iter_mut().find(|o| o.id == offset_def.id) {
-                                Some(entry) => *entry = value,
-                                None => offsets.push(value),
-                            }
-                            changed = true;
+                            changed |= update_skin_offset_value(offsets, offset_def, value);
                         }
                     });
                 }
@@ -6218,7 +6267,91 @@ fn build_scene_skin_defs(
     changed
 }
 
-/// 1 シーン分の options / files / 当該 offset id をスキン定義の factory default へ戻す。
+/// 現在のスキン定義に合わせ、offset 設定を名前優先で正規化する。
+///
+/// 旧設定は名前を持たないため ID で移行する。同じ旧 ID を複数の異なる名前が
+/// 使用する場合は値をそれぞれへ複製し、以後は独立して編集できるようにする。
+/// 同名定義が複数 ID にある場合は、beatoraja と同様に最初の同名設定を共有する。
+fn sync_skin_offsets_with_defs(
+    defs: &[SkinOffsetDef],
+    offsets: &mut Vec<SkinOffsetConfig>,
+) -> bool {
+    if defs.is_empty() || offsets.is_empty() {
+        return false;
+    }
+
+    let previous = offsets.clone();
+    let mut synced = Vec::with_capacity(previous.len().max(defs.len()));
+    for offset_def in defs {
+        let source = previous
+            .iter()
+            .find(|offset| offset.name.as_deref() == Some(offset_def.name.as_str()))
+            .or_else(|| {
+                previous.iter().find(|offset| offset.name.is_none() && offset.id == offset_def.id)
+            });
+        if let Some(source) = source {
+            let mut value = source.clone();
+            value.name = Some(offset_def.name.clone());
+            value.id = offset_def.id;
+            synced.push(value);
+        }
+    }
+
+    let declared_names: std::collections::HashSet<&str> =
+        defs.iter().map(|offset| offset.name.as_str()).collect();
+    let declared_ids: std::collections::HashSet<i32> =
+        defs.iter().map(|offset| offset.id).collect();
+    synced.extend(
+        previous
+            .iter()
+            .filter(|offset| match offset.name.as_deref() {
+                Some(name) => !declared_names.contains(name),
+                None => !declared_ids.contains(&offset.id),
+            })
+            .cloned(),
+    );
+
+    if synced == previous {
+        false
+    } else {
+        *offsets = synced;
+        true
+    }
+}
+
+/// 同名 offset の値を全定義へ反映する。ID は各定義のものを維持する。
+fn update_skin_offset_value(
+    offsets: &mut Vec<SkinOffsetConfig>,
+    offset_def: &SkinOffsetDef,
+    value: SkinOffsetConfig,
+) -> bool {
+    let mut found_named = false;
+    for entry in
+        offsets.iter_mut().filter(|offset| offset.name.as_deref() == Some(offset_def.name.as_str()))
+    {
+        let id = entry.id;
+        *entry = value.clone();
+        entry.name = Some(offset_def.name.clone());
+        entry.id = id;
+        found_named = true;
+    }
+    if found_named {
+        return true;
+    }
+
+    if let Some(entry) =
+        offsets.iter_mut().find(|offset| offset.name.is_none() && offset.id == offset_def.id)
+    {
+        *entry = value;
+        entry.name = Some(offset_def.name.clone());
+        entry.id = offset_def.id;
+    } else {
+        offsets.push(value);
+    }
+    true
+}
+
+/// 1 シーン分の options / files / 当該 offset 名をスキン定義の factory default へ戻す。
 fn reset_scene_skin_to_defaults(
     defs: &SceneSkinDefs,
     skin_root: Option<&Path>,
@@ -6229,12 +6362,21 @@ fn reset_scene_skin_to_defaults(
     if defs.is_empty() {
         return false;
     }
+    let previous_options = options.clone();
+    let previous_files = files.clone();
+    let previous_offsets = offsets.clone();
     options.clear();
     files.clear();
+    let scene_offset_names: std::collections::HashSet<&str> =
+        defs.offset.iter().map(|offset| offset.name.as_str()).collect();
     let scene_offset_ids: std::collections::HashSet<i32> =
         defs.offset.iter().map(|offset| offset.id).collect();
-    offsets.retain(|offset| !scene_offset_ids.contains(&offset.id));
-    fill_missing_skin_defaults(defs, skin_root, options, files)
+    offsets.retain(|offset| match offset.name.as_deref() {
+        Some(name) => !scene_offset_names.contains(name),
+        None => !scene_offset_ids.contains(&offset.id),
+    });
+    let _ = fill_missing_skin_defaults(defs, skin_root, options, files);
+    *options != previous_options || *files != previous_files || *offsets != previous_offsets
 }
 
 fn fill_missing_skin_defaults(
@@ -6573,6 +6715,20 @@ mod tests {
         let nanos = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
         let counter = TEST_DIR_COUNTER.fetch_add(1, Ordering::Relaxed);
         std::env::temp_dir().join(format!("{name}-{nanos}-{counter}"))
+    }
+
+    fn test_offset_def(name: &str, id: i32) -> SkinOffsetDef {
+        SkinOffsetDef {
+            category: "test".to_string(),
+            name: name.to_string(),
+            id,
+            x: true,
+            y: true,
+            w: true,
+            h: true,
+            r: true,
+            a: true,
+        }
     }
 
     #[test]
@@ -7100,7 +7256,7 @@ mod tests {
     }
 
     #[test]
-    fn play_skin_defs_do_not_duplicate_existing_common_offset_ids() {
+    fn play_skin_defs_append_beatoraja_common_offsets_after_same_id_custom_defs() {
         let mut defs = SceneSkinDefs::default();
         defs.offset.push(SkinOffsetDef {
             category: "custom".to_string(),
@@ -7114,10 +7270,14 @@ mod tests {
             a: false,
         });
 
-        defs.append_missing_beatoraja_play_offsets();
+        defs.append_play_common_offsets();
 
-        assert_eq!(defs.offset.iter().filter(|offset| offset.id == 10).count(), 1);
-        assert_eq!(defs.offset.len(), 5);
+        assert_eq!(defs.offset.iter().filter(|offset| offset.id == 10).count(), 2);
+        assert_eq!(defs.offset.len(), 6);
+        assert_eq!(
+            defs.offset.iter().rfind(|offset| offset.id == 10).map(|offset| offset.name.as_str()),
+            Some("All offset(%)")
+        );
     }
 
     #[test]
@@ -7135,7 +7295,7 @@ mod tests {
             a: false,
         });
 
-        defs.append_missing_beatoraja_play_offsets();
+        defs.append_play_common_offsets();
 
         let bar_line = defs
             .offset
@@ -7143,6 +7303,78 @@ mod tests {
             .find(|offset| offset.id == SKIN_OFFSET_BAR_LINE)
             .expect("bar line offset def");
         assert!(bar_line.a);
+    }
+
+    #[test]
+    fn skin_offset_sync_prefers_name_and_updates_changed_definition_id() {
+        let defs = vec![test_offset_def("Antique lane", 80)];
+        let mut offsets = vec![
+            SkinOffsetConfig {
+                name: Some("Antique lane".to_string()),
+                id: 70,
+                x: 12,
+                ..Default::default()
+            },
+            SkinOffsetConfig { id: 80, x: 99, ..Default::default() },
+        ];
+
+        assert!(sync_skin_offsets_with_defs(&defs, &mut offsets));
+        assert_eq!(
+            offsets,
+            vec![SkinOffsetConfig {
+                name: Some("Antique lane".to_string()),
+                id: 80,
+                x: 12,
+                ..Default::default()
+            }]
+        );
+    }
+
+    #[test]
+    fn skin_offset_sync_expands_legacy_duplicate_id_into_independent_names() {
+        let defs = vec![test_offset_def("Lane A", 42), test_offset_def("Lane B", 42)];
+        let mut offsets = vec![SkinOffsetConfig { id: 42, y: -8, ..Default::default() }];
+
+        assert!(sync_skin_offsets_with_defs(&defs, &mut offsets));
+        assert_eq!(offsets.len(), 2);
+        assert_eq!(offsets[0].name.as_deref(), Some("Lane A"));
+        assert_eq!(offsets[1].name.as_deref(), Some("Lane B"));
+        assert_eq!(offsets[0].y, -8);
+        assert_eq!(offsets[1].y, -8);
+
+        let mut edited = offsets[0].clone();
+        edited.y = 24;
+        assert!(update_skin_offset_value(&mut offsets, &defs[0], edited));
+        assert_eq!(offsets[0].y, 24);
+        assert_eq!(offsets[1].y, -8);
+    }
+
+    #[test]
+    fn skin_offset_sync_shares_first_named_value_across_duplicate_name_ids() {
+        let defs = vec![test_offset_def("Shared", 51), test_offset_def("Shared", 52)];
+        let mut offsets = vec![
+            SkinOffsetConfig {
+                name: Some("Shared".to_string()),
+                id: 51,
+                a: 120,
+                ..Default::default()
+            },
+            SkinOffsetConfig {
+                name: Some("Shared".to_string()),
+                id: 52,
+                a: 240,
+                ..Default::default()
+            },
+        ];
+
+        assert!(sync_skin_offsets_with_defs(&defs, &mut offsets));
+        assert_eq!(offsets.iter().map(|offset| offset.id).collect::<Vec<_>>(), vec![51, 52]);
+        assert!(offsets.iter().all(|offset| offset.a == 120));
+
+        let mut edited = offsets[1].clone();
+        edited.a = 64;
+        assert!(update_skin_offset_value(&mut offsets, &defs[1], edited));
+        assert!(offsets.iter().all(|offset| offset.a == 64));
     }
 
     #[test]
@@ -7197,10 +7429,42 @@ mod tests {
     }
 
     #[test]
+    fn reset_scene_skin_to_defaults_removes_named_defs_without_same_id_name_collision() {
+        let defs =
+            SceneSkinDefs { offset: vec![test_offset_def("Current", 32)], ..Default::default() };
+        let mut options = BTreeMap::new();
+        let mut files = BTreeMap::new();
+        let mut offsets = vec![
+            SkinOffsetConfig {
+                name: Some("Current".to_string()),
+                id: 32,
+                x: 10,
+                ..Default::default()
+            },
+            SkinOffsetConfig {
+                name: Some("Other".to_string()),
+                id: 32,
+                x: 20,
+                ..Default::default()
+            },
+        ];
+
+        assert!(reset_scene_skin_to_defaults(&defs, None, &mut options, &mut files, &mut offsets));
+        assert_eq!(offsets.len(), 1);
+        assert_eq!(offsets[0].name.as_deref(), Some("Other"));
+        assert_eq!(offsets[0].x, 20);
+    }
+
+    #[test]
     fn skin_slot_history_restores_options_files_and_offsets_by_path() {
         let mut skin = SkinConfig {
             play7: "data/skins/ECFN/play/play7.luaskin".to_string(),
-            play7_offsets: vec![SkinOffsetConfig { id: 32, x: 12, ..Default::default() }],
+            play7_offsets: vec![SkinOffsetConfig {
+                name: Some("Judge offset".to_string()),
+                id: 32,
+                x: 12,
+                ..Default::default()
+            }],
             ..SkinConfig::default()
         };
         skin.play7_options.insert("Judge".to_string(), "On".to_string());
@@ -7210,7 +7474,12 @@ mod tests {
         skin.play7 = "data/skins/Starseeker/play/play7.luaskin".to_string();
         skin.play7_options.insert("Judge".to_string(), "Off".to_string());
         skin.play7_files.insert("Notes".to_string(), "other.png".to_string());
-        skin.play7_offsets = vec![SkinOffsetConfig { id: 32, x: -4, ..Default::default() }];
+        skin.play7_offsets = vec![SkinOffsetConfig {
+            name: Some("Judge offset".to_string()),
+            id: 32,
+            x: -4,
+            ..Default::default()
+        }];
         save_skin_slot_history(&mut skin, SkinSlot::Play7);
 
         skin.play7 = "data/skins/ECFN/play/play7.luaskin".to_string();
@@ -7220,7 +7489,12 @@ mod tests {
         assert_eq!(skin.play7_files.get("Notes").map(String::as_str), Some("default.png"));
         assert_eq!(
             skin.play7_offsets,
-            vec![SkinOffsetConfig { id: 32, x: 12, ..Default::default() }]
+            vec![SkinOffsetConfig {
+                name: Some("Judge offset".to_string()),
+                id: 32,
+                x: 12,
+                ..Default::default()
+            }]
         );
     }
 
@@ -7301,15 +7575,57 @@ mod tests {
     }
 
     #[test]
-    fn skin_reload_diff_marks_offsets_without_texture_reload() {
-        let before = SkinConfig::default();
-        let mut after = before.clone();
-        after.play7_offsets.push(SkinOffsetConfig { id: 32, x: 1, ..Default::default() });
+    fn skin_reload_diff_marks_each_offset_slot_for_redecode() {
+        let cases: &[(&str, fn(&mut SkinConfig), fn(SkinReloadRequest) -> bool)] = &[
+            (
+                "select",
+                |skin| skin.select_offsets.push(Default::default()),
+                |request| request.select,
+            ),
+            (
+                "decide",
+                |skin| skin.decide_offsets.push(Default::default()),
+                |request| request.decide,
+            ),
+            ("play4", |skin| skin.play4_offsets.push(Default::default()), |request| request.play4),
+            ("play5", |skin| skin.play5_offsets.push(Default::default()), |request| request.play5),
+            ("play6", |skin| skin.play6_offsets.push(Default::default()), |request| request.play6),
+            ("play7", |skin| skin.play7_offsets.push(Default::default()), |request| request.play7),
+            ("play8", |skin| skin.play8_offsets.push(Default::default()), |request| request.play8),
+            ("play9", |skin| skin.play9_offsets.push(Default::default()), |request| request.play9),
+            (
+                "play10",
+                |skin| skin.play10_offsets.push(Default::default()),
+                |request| request.play10,
+            ),
+            (
+                "play14",
+                |skin| skin.play14_offsets.push(Default::default()),
+                |request| request.play14,
+            ),
+            (
+                "result",
+                |skin| skin.result_offsets.push(Default::default()),
+                |request| request.result,
+            ),
+            (
+                "course_result",
+                |skin| skin.course_result_offsets.push(Default::default()),
+                |request| request.course_result,
+            ),
+        ];
 
-        let request = skin_reload_request_from_diff(&before, &after);
+        for &(slot, change, slot_requested) in cases {
+            let before = SkinConfig::default();
+            let mut after = before.clone();
+            change(&mut after);
 
-        assert!(request.offsets);
-        assert!(!request.any_reload());
-        assert!(request.any());
+            let request = skin_reload_request_from_diff(&before, &after);
+
+            assert!(request.offsets, "{slot} offset did not mark runtime offset update");
+            assert!(slot_requested(request), "{slot} offset did not mark scene re-decode");
+            assert!(request.any_reload(), "{slot} offset did not request reload");
+            assert!(request.any());
+        }
     }
 }

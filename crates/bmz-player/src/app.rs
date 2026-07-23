@@ -42,6 +42,7 @@ use bmz_render::scene::{
     SelectRowSnapshot, SelectSnapshot,
 };
 use bmz_render::skin::{SkinImageSize, SkinTextureId};
+use bmz_render::skin_offset::{SkinOffsetValue, SkinOffsetValues};
 use bmz_render::snapshot::{
     CourseStageMarker, DisplayJudgeCounts, FastSlowJudgeCounts, OverlaySnapshot, RenderSnapshot,
     SkinLogicalInputSnapshot,
@@ -86,8 +87,9 @@ use crate::config::profile_config::{
     DoubleOptionConfig, GaugeAutoShiftConfig, GaugeTypeConfig, HispeedDirectionConfig,
     HispeedModeConfig, HsFixConfig, InputActionConfig, JudgeAlgorithmConfig, LaneConfig,
     LaneEffectConfig, LaneViewConfig, ProfileConfig, ProfileInputConfig, RandomOptionConfig,
-    ScratchDirectionConfig, SelectInputModeConfig, TargetOptionConfig, default_hispeed_step_fhs,
-    default_hispeed_step_nhs, normalize_hispeed_step, replay_slot_rule_indices,
+    ScratchDirectionConfig, SelectInputModeConfig, SkinOffsetConfig, TargetOptionConfig,
+    default_hispeed_step_fhs, default_hispeed_step_nhs, normalize_hispeed_step,
+    replay_slot_rule_indices,
 };
 use crate::config::save::{save_app_config, save_profile_config};
 use crate::config::settings_registry::SettingsEntryId;
@@ -1124,6 +1126,52 @@ type ResultSkinSignature = (
     BTreeMap<String, String>,
     bmz_skin::LuaLoadRuntimeState,
 );
+
+fn skin_offset_values_from_config(offsets: &[SkinOffsetConfig]) -> SkinOffsetValues {
+    let mut values = SkinOffsetValues::default();
+    for offset in offsets {
+        values.set(
+            offset.id,
+            SkinOffsetValue {
+                x: offset.x,
+                y: offset.y,
+                w: offset.w,
+                h: offset.h,
+                r: offset.r,
+                a: offset.a,
+            },
+        );
+    }
+    values
+}
+
+fn apply_skin_offsets_to_lua_runtime_state(
+    runtime_state: &mut bmz_skin::LuaLoadRuntimeState,
+    offsets: &[SkinOffsetConfig],
+) {
+    for offset in offsets {
+        let value = bmz_skin::LuaSkinOffsetValue {
+            x: offset.x,
+            y: offset.y,
+            w: offset.w,
+            h: offset.h,
+            r: offset.r,
+            a: offset.a,
+        };
+        if let Some(name) = offset.name.as_deref().filter(|name| !name.is_empty()) {
+            runtime_state.offset_values.entry(name.to_string()).or_insert(value);
+        }
+        runtime_state.offset_id_values.insert(offset.id, value);
+    }
+}
+
+fn lua_runtime_state_with_skin_offsets(
+    mut runtime_state: bmz_skin::LuaLoadRuntimeState,
+    offsets: &[SkinOffsetConfig],
+) -> bmz_skin::LuaLoadRuntimeState {
+    apply_skin_offsets_to_lua_runtime_state(&mut runtime_state, offsets);
+    runtime_state
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ResultSkinSlot {
@@ -2912,6 +2960,9 @@ impl WinitApp {
             &boot.profile_config.skin.select_files,
             &boot.profile_config.skin.decide_files,
             &boot.profile_config.skin.result_files,
+            &boot.profile_config.skin.select_offsets,
+            &boot.profile_config.skin.decide_offsets,
+            &boot.profile_config.skin.result_offsets,
         );
         let now = Instant::now();
         let pending_play_skin = false;
@@ -3520,13 +3571,17 @@ impl WinitApp {
     fn scene_snapshot(&self) -> AppSceneSnapshot {
         let mut scene = match self.view_state() {
             AppViewState::Select => AppSceneSnapshot::Select(self.select_snapshot()),
-            AppViewState::Decide => AppSceneSnapshot::Decide(
-                self.pending_decide
+            AppViewState::Decide => {
+                let mut snapshot = self
+                    .pending_decide
                     .as_ref()
                     .map(|decide| self.decide_snapshot(decide))
                     .or_else(|| self.last_play_snapshot.clone())
-                    .unwrap_or_default(),
-            ),
+                    .unwrap_or_default();
+                snapshot.skin_offsets =
+                    skin_offset_values_from_config(&self.boot.profile_config.skin.decide_offsets);
+                AppSceneSnapshot::Decide(snapshot)
+            }
             AppViewState::Play => {
                 AppSceneSnapshot::Play(self.last_play_snapshot.clone().unwrap_or_default())
             }
@@ -3546,6 +3601,14 @@ impl WinitApp {
                     target_name: summary.target_name.clone(),
                     current_fps: 0,
                     skin_input: Default::default(),
+                    skin_offsets: skin_offset_values_from_config(
+                        match self.current_result_skin_slot() {
+                            ResultSkinSlot::Normal => &self.boot.profile_config.skin.result_offsets,
+                            ResultSkinSlot::Course => {
+                                &self.boot.profile_config.skin.course_result_offsets
+                            }
+                        },
+                    ),
                     hispeed_auto_adjust: self.boot.profile_config.lane.hispeed_auto_adjust,
                     clear_type: summary.clear_type,
                     result_failed,
@@ -3919,6 +3982,9 @@ impl WinitApp {
             current_fps: 0,
             operating_time_ms: 0,
             skin_input: Default::default(),
+            skin_offsets: skin_offset_values_from_config(
+                &self.boot.profile_config.skin.select_offsets,
+            ),
             selection_time: self.select_bar_time(),
             option_panel_time: self.option_panel_time(),
             option_panel_off_times: self
@@ -14278,6 +14344,9 @@ impl WinitApp {
             &skin.select_files,
             &skin.decide_files,
             &skin.result_files,
+            &skin.select_offsets,
+            &skin.decide_offsets,
+            &skin.result_offsets,
         );
         if request.select {
             self.pending_select_skin = pending_select;
@@ -14402,9 +14471,12 @@ impl WinitApp {
     fn spawn_play_skin_decode_for(
         &mut self,
         key_mode: KeyMode,
-        runtime_state: bmz_skin::LuaLoadRuntimeState,
+        mut runtime_state: bmz_skin::LuaLoadRuntimeState,
     ) {
         let selection = play_skin_selection_for(&self.boot.profile_config.skin, key_mode);
+        runtime_state.offset_values.clear();
+        runtime_state.offset_id_values.clear();
+        apply_skin_offsets_to_lua_runtime_state(&mut runtime_state, selection.offsets);
         let trimmed = selection.path.trim();
         let signature = (
             key_mode,
@@ -15588,6 +15660,9 @@ fn load_initial_skin_textures(
     select_files: &BTreeMap<String, String>,
     decide_files: &BTreeMap<String, String>,
     result_files: &BTreeMap<String, String>,
+    select_offsets: &[SkinOffsetConfig],
+    decide_offsets: &[SkinOffsetConfig],
+    result_offsets: &[SkinOffsetConfig],
 ) -> (Option<SkinManifest>, HashMap<SkinKind, Vec<ActiveSkinVideoSource>>, bool, bool, bool) {
     // Decide / Result の JSON skin は Select の同期ロードより**前**に decode スレッドを起動して
     // CPU をフル活用する。Select の sync 処理 (PNG GPU upload など) と並列に decode が進む。
@@ -15628,7 +15703,10 @@ fn load_initial_skin_textures(
                 SkinKind::Decide,
                 if decide_trimmed.is_empty() { BTreeMap::new() } else { decide_options.clone() },
                 if decide_trimmed.is_empty() { BTreeMap::new() } else { decide_files.clone() },
-                lua_runtime_state_for_player(player_name),
+                lua_runtime_state_with_skin_offsets(
+                    lua_runtime_state_for_player(player_name),
+                    decide_offsets,
+                ),
             );
             pending_decide = true;
         }
@@ -15662,13 +15740,16 @@ fn load_initial_skin_textures(
                 SkinKind::Result,
                 if result_trimmed.is_empty() { BTreeMap::new() } else { result_options.clone() },
                 if result_trimmed.is_empty() { BTreeMap::new() } else { result_files.clone() },
-                lua_runtime_state_for_result(
-                    false,
-                    None,
-                    false,
-                    KeyMode::default(),
-                    BTreeMap::new(),
-                    player_name,
+                lua_runtime_state_with_skin_offsets(
+                    lua_runtime_state_for_result(
+                        false,
+                        None,
+                        false,
+                        KeyMode::default(),
+                        BTreeMap::new(),
+                        player_name,
+                    ),
+                    result_offsets,
                 ),
             );
             pending_result = true;
@@ -15709,7 +15790,10 @@ fn load_initial_skin_textures(
                     default_manifest.as_ref(),
                     active_select_options,
                     active_select_files,
-                    &lua_runtime_state_for_player(player_name),
+                    &lua_runtime_state_with_skin_offsets(
+                        lua_runtime_state_for_player(player_name),
+                        select_offsets,
+                    ),
                 );
                 if !video_sources.is_empty() {
                     skin_video_sources.insert(SkinKind::Select, video_sources);
@@ -15779,15 +15863,39 @@ fn reload_skin_textures(
     select_files: &BTreeMap<String, String>,
     decide_files: &BTreeMap<String, String>,
     result_files: &BTreeMap<String, String>,
+    select_offsets: &[SkinOffsetConfig],
+    decide_offsets: &[SkinOffsetConfig],
+    result_offsets: &[SkinOffsetConfig],
 ) -> (bool, bool, bool) {
     let mut pending_select = false;
     let mut pending_decide = false;
     let mut pending_result = false;
 
-    for (enabled, path_text, kind, options, files) in [
-        (request.select, select_skin_path, SkinKind::Select, select_options, select_files),
-        (request.decide, decide_skin_path, SkinKind::Decide, decide_options, decide_files),
-        (request.result, result_skin_path, SkinKind::Result, result_options, result_files),
+    for (enabled, path_text, kind, options, files, offsets) in [
+        (
+            request.select,
+            select_skin_path,
+            SkinKind::Select,
+            select_options,
+            select_files,
+            select_offsets,
+        ),
+        (
+            request.decide,
+            decide_skin_path,
+            SkinKind::Decide,
+            decide_options,
+            decide_files,
+            decide_offsets,
+        ),
+        (
+            request.result,
+            result_skin_path,
+            SkinKind::Result,
+            result_options,
+            result_files,
+            result_offsets,
+        ),
     ] {
         if !enabled {
             continue;
@@ -15823,7 +15931,10 @@ fn reload_skin_textures(
                 kind,
                 if trimmed.is_empty() { BTreeMap::new() } else { options.clone() },
                 if trimmed.is_empty() { BTreeMap::new() } else { files.clone() },
-                lua_runtime_state_for_player(player_name),
+                lua_runtime_state_with_skin_offsets(
+                    lua_runtime_state_for_player(player_name),
+                    offsets,
+                ),
             );
             match kind {
                 SkinKind::Select => pending_select = true,
@@ -18429,23 +18540,34 @@ fn should_show_course_stage_result(
 fn result_skin_signature_for_config(
     skin: &crate::config::profile_config::SkinConfig,
     slot: ResultSkinSlot,
-    runtime_state: bmz_skin::LuaLoadRuntimeState,
+    mut runtime_state: bmz_skin::LuaLoadRuntimeState,
 ) -> ResultSkinSignature {
+    runtime_state.offset_values.clear();
+    runtime_state.offset_id_values.clear();
     match slot {
-        ResultSkinSlot::Normal => (
-            slot,
-            skin.result.trim().to_string(),
-            skin.result_options.clone(),
-            skin.result_files.clone(),
-            runtime_state,
-        ),
-        ResultSkinSlot::Course => (
-            slot,
-            skin.course_result.trim().to_string(),
-            skin.course_result_options.clone(),
-            skin.course_result_files.clone(),
-            runtime_state,
-        ),
+        ResultSkinSlot::Normal => {
+            apply_skin_offsets_to_lua_runtime_state(&mut runtime_state, &skin.result_offsets);
+            (
+                slot,
+                skin.result.trim().to_string(),
+                skin.result_options.clone(),
+                skin.result_files.clone(),
+                runtime_state,
+            )
+        }
+        ResultSkinSlot::Course => {
+            apply_skin_offsets_to_lua_runtime_state(
+                &mut runtime_state,
+                &skin.course_result_offsets,
+            );
+            (
+                slot,
+                skin.course_result.trim().to_string(),
+                skin.course_result_options.clone(),
+                skin.course_result_files.clone(),
+                runtime_state,
+            )
+        }
     }
 }
 
@@ -22363,6 +22485,55 @@ mod tests {
     fn winit_app_stack_size_stays_bounded() {
         let size = std::mem::size_of::<WinitApp>();
         assert!(size < 64 * 1024, "WinitApp is {size} bytes");
+    }
+
+    #[test]
+    fn lua_runtime_offsets_keep_names_distinct_and_runtime_ids_last_wins() {
+        let offsets = vec![
+            SkinOffsetConfig {
+                name: Some("First".to_string()),
+                id: 42,
+                x: 10,
+                ..Default::default()
+            },
+            SkinOffsetConfig {
+                name: Some("Second".to_string()),
+                id: 42,
+                x: 20,
+                ..Default::default()
+            },
+        ];
+        let state =
+            lua_runtime_state_with_skin_offsets(bmz_skin::LuaLoadRuntimeState::default(), &offsets);
+
+        assert_eq!(state.offset_values["First"].x, 10);
+        assert_eq!(state.offset_values["Second"].x, 20);
+        assert_eq!(state.offset_id_values[&42].x, 20);
+    }
+
+    #[test]
+    fn result_skin_signature_changes_when_only_offset_changes() {
+        let mut skin = crate::config::profile_config::SkinConfig::default();
+        let before = result_skin_signature_for_config(
+            &skin,
+            ResultSkinSlot::Normal,
+            bmz_skin::LuaLoadRuntimeState::default(),
+        );
+        skin.result_offsets.push(SkinOffsetConfig {
+            name: Some("Mascot".to_string()),
+            id: 90,
+            x: 12,
+            ..Default::default()
+        });
+        let after = result_skin_signature_for_config(
+            &skin,
+            ResultSkinSlot::Normal,
+            bmz_skin::LuaLoadRuntimeState::default(),
+        );
+
+        assert_ne!(before, after);
+        assert_eq!(after.4.offset_values["Mascot"].x, 12);
+        assert_eq!(after.4.offset_id_values[&90].x, 12);
     }
 
     #[test]
