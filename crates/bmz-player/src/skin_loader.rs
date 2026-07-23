@@ -3733,9 +3733,18 @@ mod tests {
         let document = context.document().expect("antique play document");
         assert!(document.enabled_options().contains(&917));
         assert!(!document.enabled_options().contains(&916));
+        assert!(
+            document
+                .all_destinations(&document.enabled_options())
+                .iter()
+                .filter(|destination| destination.id.starts_with("num_random_"))
+                .all(|destination| !destination.draw.starts_with("bmz:lua_draw_callback:")),
+            "RANDOM digit color predicates should compile without per-frame Lua callbacks"
+        );
+        let displayed_values = [2_u8, 3, 4, 5, 6, 7, 1];
         let mut pattern = (0..bmz_core::lane::LANE_COUNT as u8).collect::<Vec<_>>();
-        for (destination, source) in (1..=7).zip((1..=7).rev()) {
-            pattern[destination] = source as u8;
+        for (destination, source) in (1..=7).zip(displayed_values) {
+            pattern[destination] = source;
         }
         let applied_arrange = crate::screens::play_session::AppliedArrange {
             arrange: crate::select_options::ArrangeOption::Random,
@@ -3777,8 +3786,12 @@ mod tests {
         let digits = random_digits(&render(&context, pre_ready.clone()), number_texture);
         assert_eq!(digits.len(), 7, "expected seven pre-READY RANDOM digits");
         for (index, (_, tint)) in digits.into_iter().enumerate() {
-            let expected =
-                if index % 2 == 0 { (1.0, 1.0, 1.0) } else { (64.0 / 255.0, 160.0 / 255.0, 1.0) };
+            let value = displayed_values[index];
+            let expected = if matches!(value, 1 | 3 | 5 | 7) {
+                (1.0, 1.0, 1.0)
+            } else {
+                (64.0 / 255.0, 160.0 / 255.0, 1.0)
+            };
             assert!((tint.r - expected.0).abs() < 0.01);
             assert!((tint.g - expected.1).abs() < 0.01);
             assert!((tint.b - expected.2).abs() < 0.01);

@@ -4772,7 +4772,7 @@ fn infer_main_state_draw_condition(
         calls
     };
     let ref_id = single_number_call(&calls)?;
-    let samples = [-1, 0, 1, 5];
+    let samples = [-8, -1, 0, 1, 2, 3, 4, 5, 6, 7, 8, 99];
     let observed = samples
         .iter()
         .map(|sample| call_draw_with_number(function, main_state_probe, ref_id, *sample))
@@ -4786,9 +4786,25 @@ fn infer_main_state_draw_condition(
         (">= 0", samples.iter().map(|value| *value >= 0).collect::<Vec<_>>()),
         ("<= 0", samples.iter().map(|value| *value <= 0).collect::<Vec<_>>()),
     ];
-    candidates.into_iter().find_map(|(operator, expected)| {
+    if let Some(condition) = candidates.into_iter().find_map(|(operator, expected)| {
         (observed == expected).then(|| format!("number({ref_id}) {operator}"))
-    })
+    }) {
+        return Some(condition);
+    }
+
+    for members in [&[1, 3, 5, 7][..], &[2, 4, 6][..]] {
+        let expected = samples.iter().map(|value| members.contains(value)).collect::<Vec<_>>();
+        if observed == expected {
+            return Some(
+                members
+                    .iter()
+                    .map(|value| format!("number({ref_id}) == {value}"))
+                    .collect::<Vec<_>>()
+                    .join(" or "),
+            );
+        }
+    }
+    None
 }
 
 fn single_number_call(calls: &[i32]) -> Option<i32> {
@@ -8945,6 +8961,48 @@ mod tests {
                 "event_index(43) == 0 and option(162) or event_index(43) == 0 and option(163)"
                     .to_string()
             )
+        );
+    }
+
+    #[test]
+    fn infers_single_number_lane_color_membership_draw_conditions() {
+        let lua = Lua::new();
+        let probe = Arc::new(Mutex::new(MainStateProbe::default()));
+        let main_state = create_main_state_stub(&lua, probe.clone()).unwrap();
+        lua.globals().set("main_state", main_state).unwrap();
+        let white = lua
+            .load(
+                r#"
+                return function()
+                    local value = main_state.number(450)
+                    return value == 1 or value == 3 or value == 5 or value == 7
+                end
+                "#,
+            )
+            .eval::<Function>()
+            .unwrap();
+        let blue = lua
+            .load(
+                r#"
+                return function()
+                    local value = main_state.number(450)
+                    return value == 2 or value == 4 or value == 6
+                end
+                "#,
+            )
+            .eval::<Function>()
+            .unwrap();
+
+        assert_eq!(
+            infer_boolean_predicate(&white, &probe, None),
+            Some(
+                "number(450) == 1 or number(450) == 3 or number(450) == 5 or number(450) == 7"
+                    .to_string()
+            )
+        );
+        assert_eq!(
+            infer_boolean_predicate(&blue, &probe, None),
+            Some("number(450) == 2 or number(450) == 4 or number(450) == 6".to_string())
         );
     }
 
