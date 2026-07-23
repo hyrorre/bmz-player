@@ -514,8 +514,10 @@ pub enum SelectItem {
     Executable(SelectExecutableRow),
     Config(ConfigSelectRow),
     KeyBinding(KeyBindingSelectRow),
-    /// 現在のフォルダから 1 階層戻るアクション行。
-    Back,
+    /// 設定カテゴリから 1 階層戻るアクション行。
+    SettingsBack,
+    /// 設定ルートを閉じるアクション行。
+    SettingsClose,
     /// ゲーム内設定から egui の詳細設定ウィンドウを開くアクション行。
     AdvancedSettings,
 }
@@ -533,7 +535,8 @@ impl SelectItem {
             Self::Executable(row) => row.title.clone(),
             Self::Config(row) => row.label().to_string(),
             Self::KeyBinding(row) => row.label(),
-            Self::Back => Localizer::new(locale).text("select-back"),
+            Self::SettingsBack => Localizer::new(locale).text("select-back"),
+            Self::SettingsClose => Localizer::new(locale).text("select-close"),
             Self::AdvancedSettings => Localizer::new(locale).text("select-advanced-settings"),
         }
     }
@@ -1773,7 +1776,10 @@ pub fn select_folder_summary_for_rule_mode(
         | SelectRowKind::Command
         | SelectRowKind::Container
         | SelectRowKind::NoSong
+        | SelectRowKind::SettingsRoot
         | SelectRowKind::SettingsFolder
+        | SelectRowKind::SettingsBack
+        | SelectRowKind::SettingsClose
         | SelectRowKind::Config => Ok(None),
     }
 }

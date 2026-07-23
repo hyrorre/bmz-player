@@ -5135,7 +5135,7 @@ impl WinitApp {
                     self.enter_or_play_selected();
                     true
                 }
-                Some(SelectItem::Back) => {
+                Some(SelectItem::SettingsBack | SelectItem::SettingsClose) => {
                     self.exit_folder();
                     true
                 }
@@ -7512,7 +7512,7 @@ impl WinitApp {
             Some(SelectItem::KeyBinding(row)) => {
                 self.begin_key_config_edit(row.key_mode, row.target);
             }
-            Some(SelectItem::Back) => {
+            Some(SelectItem::SettingsBack | SelectItem::SettingsClose) => {
                 self.exit_folder();
             }
             Some(SelectItem::AdvancedSettings) => {
@@ -10544,7 +10544,8 @@ impl WinitApp {
             | SelectItem::Executable(_)
             | SelectItem::Config(_)
             | SelectItem::KeyBinding(_)
-            | SelectItem::Back
+            | SelectItem::SettingsBack
+            | SelectItem::SettingsClose
             | SelectItem::AdvancedSettings => None,
         }
     }
@@ -10557,7 +10558,8 @@ impl WinitApp {
             | SelectItem::Executable(_)
             | SelectItem::Config(_)
             | SelectItem::KeyBinding(_)
-            | SelectItem::Back
+            | SelectItem::SettingsBack
+            | SelectItem::SettingsClose
             | SelectItem::AdvancedSettings => None,
         }
     }
@@ -18173,7 +18175,8 @@ enum SelectItemKey {
     Executable(String),
     Config(SettingsEntryId),
     KeyBinding { key_mode: KeyMode, target: KeyBindingTarget },
-    Back,
+    SettingsBack,
+    SettingsClose,
     AdvancedSettings,
 }
 
@@ -18197,7 +18200,8 @@ fn select_item_key(item: &SelectItem) -> SelectItemKey {
         SelectItem::KeyBinding(row) => {
             SelectItemKey::KeyBinding { key_mode: row.key_mode, target: row.target }
         }
-        SelectItem::Back => SelectItemKey::Back,
+        SelectItem::SettingsBack => SelectItemKey::SettingsBack,
+        SelectItem::SettingsClose => SelectItemKey::SettingsClose,
         SelectItem::AdvancedSettings => SelectItemKey::AdvancedSettings,
     }
 }
@@ -20047,62 +20051,73 @@ fn select_snapshot_rows(
                         chart_key_mode: None,
                     }
                 }
-                SelectItem::Back => SelectRowSnapshot {
-                    index: index as u32,
-                    title: Localizer::new(profile.ui.locale()).text("select-back"),
-                    subtitle: String::new(),
-                    artist: String::new(),
-                    genre: String::new(),
-                    difficulty_name: String::new(),
-                    play_level: String::new(),
-                    table_level: String::new(),
-                    table_text_primary: String::new(),
-                    table_text_secondary: String::new(),
-                    table_text_fallback: String::new(),
-                    judge_rank: None,
-                    total_notes: 0,
-                    initial_bpm: 0.0,
-                    min_bpm: 0.0,
-                    max_bpm: 0.0,
-                    length_ms: 0,
-                    clear_type: String::new(),
-                    ex_score: None,
-                    max_combo: None,
-                    gauge_value: None,
-                    bp: None,
-                    cb: None,
-                    judge_counts: DisplayJudgeCounts::default(),
-                    fast_slow_counts: None,
-                    play_count: 0,
-                    clear_count: 0,
-                    replay_slots: [false; 4],
-                    favorite_chart: false,
-                    favorite_song: false,
-                    has_document: false,
-                    has_long_notes: false,
-                    has_mines: false,
-                    has_random: false,
-                    chart_normal_notes: 0,
-                    chart_long_notes: 0,
-                    chart_scratch_notes: 0,
-                    chart_long_scratch_notes: 0,
-                    chart_mine_notes: 0,
-                    chart_density: 0.0,
-                    chart_peak_density: 0.0,
-                    chart_end_density: 0.0,
-                    chart_total_gauge: 0.0,
-                    chart_main_bpm: 0.0,
-                    chart_distribution: Vec::new(),
-                    chart_bpm_graph_segments: Vec::new(),
-                    folder_lamp_counts: [0; 11],
-                    is_folder: true,
-                    kind: bmz_render::scene::SelectRowKind::SearchFolder,
-                    in_library: true,
-                    achieved_trophy_names: Vec::new(),
-                    course_titles: Default::default(),
-                    course_constraints: Default::default(),
-                    chart_key_mode: None,
-                },
+                SelectItem::SettingsBack | SelectItem::SettingsClose => {
+                    let (title_id, kind) = match item {
+                        SelectItem::SettingsBack => {
+                            ("select-back", bmz_render::scene::SelectRowKind::SettingsBack)
+                        }
+                        SelectItem::SettingsClose => {
+                            ("select-close", bmz_render::scene::SelectRowKind::SettingsClose)
+                        }
+                        _ => unreachable!(),
+                    };
+                    SelectRowSnapshot {
+                        index: index as u32,
+                        title: Localizer::new(profile.ui.locale()).text(title_id),
+                        subtitle: String::new(),
+                        artist: String::new(),
+                        genre: String::new(),
+                        difficulty_name: String::new(),
+                        play_level: String::new(),
+                        table_level: String::new(),
+                        table_text_primary: String::new(),
+                        table_text_secondary: String::new(),
+                        table_text_fallback: String::new(),
+                        judge_rank: None,
+                        total_notes: 0,
+                        initial_bpm: 0.0,
+                        min_bpm: 0.0,
+                        max_bpm: 0.0,
+                        length_ms: 0,
+                        clear_type: String::new(),
+                        ex_score: None,
+                        max_combo: None,
+                        gauge_value: None,
+                        bp: None,
+                        cb: None,
+                        judge_counts: DisplayJudgeCounts::default(),
+                        fast_slow_counts: None,
+                        play_count: 0,
+                        clear_count: 0,
+                        replay_slots: [false; 4],
+                        favorite_chart: false,
+                        favorite_song: false,
+                        has_document: false,
+                        has_long_notes: false,
+                        has_mines: false,
+                        has_random: false,
+                        chart_normal_notes: 0,
+                        chart_long_notes: 0,
+                        chart_scratch_notes: 0,
+                        chart_long_scratch_notes: 0,
+                        chart_mine_notes: 0,
+                        chart_density: 0.0,
+                        chart_peak_density: 0.0,
+                        chart_end_density: 0.0,
+                        chart_total_gauge: 0.0,
+                        chart_main_bpm: 0.0,
+                        chart_distribution: Vec::new(),
+                        chart_bpm_graph_segments: Vec::new(),
+                        folder_lamp_counts: [0; 11],
+                        is_folder: true,
+                        kind,
+                        in_library: true,
+                        achieved_trophy_names: Vec::new(),
+                        course_titles: Default::default(),
+                        course_constraints: Default::default(),
+                        chart_key_mode: None,
+                    }
+                }
                 SelectItem::AdvancedSettings => SelectRowSnapshot {
                     index: index as u32,
                     title: Localizer::new(profile.ui.locale()).text("select-advanced-settings"),
@@ -27850,6 +27865,27 @@ mod tests {
         assert_eq!(snapshot_rows[3].table_text_primary, "Test Table");
         assert_eq!(snapshot_rows[3].table_text_secondary, "T5");
         assert_eq!(snapshot_rows[3].table_text_fallback, "T5Test Table");
+    }
+
+    #[test]
+    fn select_snapshot_rows_preserves_settings_action_kinds() {
+        let rows = vec![SelectItem::SettingsBack, SelectItem::SettingsClose];
+        let profile = ProfileConfig::new_default("default", "Default", 0);
+
+        let snapshot_rows = select_snapshot_rows(&rows, 0, 2, &profile, None, &HashMap::new());
+
+        let back = snapshot_rows
+            .iter()
+            .find(|row| row.kind == bmz_render::scene::SelectRowKind::SettingsBack)
+            .unwrap();
+        let close = snapshot_rows
+            .iter()
+            .find(|row| row.kind == bmz_render::scene::SelectRowKind::SettingsClose)
+            .unwrap();
+        assert_eq!(back.title, "戻る");
+        assert_eq!(close.title, "閉じる");
+        assert!(back.is_folder);
+        assert!(close.is_folder);
     }
 
     #[test]

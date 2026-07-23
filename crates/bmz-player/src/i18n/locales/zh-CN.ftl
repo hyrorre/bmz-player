@@ -259,6 +259,7 @@ settings-obs-event-play-ended = 游玩结束
 settings-obs-event-result = 结算
 settings-obs-event-course-result = 课程结果
 select-back = 返回
+select-close = 关闭
 select-advanced-settings = 高级设置
 select-difficulty-tables = 难度表
 select-search-history = 搜索：“{ $query }”

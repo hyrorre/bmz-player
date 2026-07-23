@@ -482,7 +482,10 @@ pub enum SelectRowKind {
     Command,
     Container,
     NoSong,
+    SettingsRoot,
     SettingsFolder,
+    SettingsBack,
+    SettingsClose,
     Config,
 }
 

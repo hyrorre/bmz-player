@@ -259,6 +259,7 @@ settings-obs-event-play-ended = プレイ終了
 settings-obs-event-result = リザルト
 settings-obs-event-course-result = コースリザルト
 select-back = 戻る
+select-close = 閉じる
 select-advanced-settings = 詳細設定
 select-difficulty-tables = 難易度表
 select-search-history = 検索: '{ $query }'

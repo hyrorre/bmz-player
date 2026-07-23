@@ -140,6 +140,37 @@ destination に `act` / `click` を置くと、text や panel も image / images
 }
 ```
 
+### BMZ Select Settings Rows
+
+設定入口、設定カテゴリ、`戻る`、`閉じる` は、通常の検索フォルダや曲フォルダとは
+独立した `SelectRowKind` として skin へ渡す。設定ルートの一覧先頭は `閉じる`、
+設定カテゴリ内の一覧先頭は `戻る` になる。
+
+BMZ 対応 select skin は `songlist` の配列末尾へ次の専用 slot を追加できる。
+index は 0 始まり。`image` は songlist 用 imageset の `images`、
+`text` は `songlist.text` の destination index を表す。
+
+| row | image index | text index | slot がない既存 skin での fallback |
+| --- | ---: | ---: | --- |
+| 設定入口 / 設定カテゴリ | 7 | 11 | 入口は検索フォルダ `6 / 10`、カテゴリは曲フォルダ `1 / 4` |
+| `戻る` | 8 | 12 | 検索フォルダ `6 / 10` |
+| `閉じる` | 9 | 13 | 検索フォルダ `6 / 10` |
+
+専用 slot が配列長の外なら表の fallback を使い、それもなければ先頭 slot を使う。
+このため、既存 skin は変更しなくても従来と同じ画像・文字 destination で表示される。
+
+行種別を destination 条件や imageset の選択に使う場合は次の BMZ ref / option を使う。
+
+| ref / option | kind | meaning |
+| ---: | --- | --- |
+| 1960 | number / event_index | `0=設定以外`, `1=設定入口または設定カテゴリ`, `2=戻る`, `3=閉じる` |
+| 1961 | option | 設定入口または設定カテゴリ |
+| 1962 | option | `戻る` |
+| 1963 | option | `閉じる` |
+
+beatoraja 互換の `OPTION_FOLDERBAR` (`op: 1`) は、設定入口・設定カテゴリ・`戻る`・
+`閉じる`のいずれでも引き続き真になる。
+
 ### BMZ RANDOM Lane Refs
 
 beatoraja result skin互換の `450..469` は、BMZではplay/select skinにも拡張して公開する。

@@ -259,6 +259,7 @@ settings-obs-event-play-ended = Play ended
 settings-obs-event-result = Result
 settings-obs-event-course-result = Course result
 select-back = Back
+select-close = Close
 select-advanced-settings = Advanced Settings
 select-difficulty-tables = Difficulty Tables
 select-search-history = Search: '{ $query }'

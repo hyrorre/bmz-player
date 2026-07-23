@@ -7341,8 +7341,17 @@ fn test_skin_op(op: i32, enabled_options: &[i32], state: &SkinDrawState) -> bool
                 | SelectRowKind::SearchFolder
                 | SelectRowKind::Command
                 | SelectRowKind::Container
+                | SelectRowKind::SettingsRoot
                 | SelectRowKind::SettingsFolder
+                | SelectRowKind::SettingsBack
+                | SelectRowKind::SettingsClose
         ),
+        SKIN_OPTION_BMZ_SETTINGS_FOLDER => matches!(
+            state.select_row_kind,
+            SelectRowKind::SettingsRoot | SelectRowKind::SettingsFolder
+        ),
+        SKIN_OPTION_BMZ_SETTINGS_BACK => state.select_row_kind == SelectRowKind::SettingsBack,
+        SKIN_OPTION_BMZ_SETTINGS_CLOSE => state.select_row_kind == SelectRowKind::SettingsClose,
         2 => select_song_detail_row(state),
         3 => state.select_row_kind == SelectRowKind::Course,
         1030 => state.select_row_kind == SelectRowKind::Executable,
@@ -8522,6 +8531,9 @@ fn skin_state_event_index(event_id: i32, state: &SkinDrawState) -> i32 {
         345 => extended_arrange_2p_ref_index(state) as i32,
         1900 => skin_hispeed_mode_index(state),
         SKIN_REF_BMZ_KEY_MODE => effective_skin_key_mode(state).map_or(0, skin_key_mode_number),
+        SKIN_REF_BMZ_SELECT_SETTINGS_ROW_KIND => {
+            select_settings_row_kind_index(state.select_row_kind)
+        }
         SKIN_EVENT_HSFIX => state.hsfix_index,
         _ => skin_random_lane_ref_number(event_id, state)
             .and_then(|value| i32::try_from(value).ok())
@@ -9369,6 +9381,9 @@ fn skin_state_number(ref_id: i32, state: &SkinDrawState) -> Option<i64> {
         1900 => Some(skin_hispeed_mode_index(state) as i64),
         1901 => Some(i64::from(skin_hispeed_mode_is_floating(state))),
         1902 => Some(skin_target_green_number(state)),
+        SKIN_REF_BMZ_SELECT_SETTINGS_ROW_KIND => {
+            Some(i64::from(select_settings_row_kind_index(state.select_row_kind)))
+        }
         1930 => Some(player_stat_u64(state.player_stats.daily.play_count)),
         1931 => Some(player_stat_u64(state.player_stats.daily.clear_count)),
         1932 => Some(player_stat_u64(state.player_stats.daily.pgreat)),
@@ -11892,6 +11907,15 @@ fn score_target_timer_elapsed_ms(timer_id: i32, state: &SkinDrawState) -> Option
     (threshold > 0 && state.ex_score >= threshold).then_some(state.elapsed_ms)
 }
 
+fn select_settings_row_kind_index(kind: SelectRowKind) -> i32 {
+    match kind {
+        SelectRowKind::SettingsRoot | SelectRowKind::SettingsFolder => 1,
+        SelectRowKind::SettingsBack => 2,
+        SelectRowKind::SettingsClose => 3,
+        _ => 0,
+    }
+}
+
 fn select_row_bar_image_index(row: &SelectRowSnapshot) -> usize {
     match row.kind {
         SelectRowKind::Song if !row.in_library => 4,
@@ -11903,7 +11927,9 @@ fn select_row_bar_image_index(row: &SelectRowSnapshot) -> usize {
         SelectRowKind::SearchFolder => 6,
         SelectRowKind::Course => 3,
         SelectRowKind::Command | SelectRowKind::Container => 5,
-        SelectRowKind::SettingsFolder => 1,
+        SelectRowKind::SettingsRoot | SelectRowKind::SettingsFolder => 7,
+        SelectRowKind::SettingsBack => 8,
+        SelectRowKind::SettingsClose => 9,
         SelectRowKind::Config => 0,
     }
 }
@@ -11911,6 +11937,10 @@ fn select_row_bar_image_index(row: &SelectRowSnapshot) -> usize {
 fn select_row_bar_image_fallback_index(row: &SelectRowSnapshot) -> Option<usize> {
     match row.kind {
         SelectRowKind::SearchFolder => Some(1),
+        SelectRowKind::SettingsRoot
+        | SelectRowKind::SettingsBack
+        | SelectRowKind::SettingsClose => Some(6),
+        SelectRowKind::SettingsFolder => Some(1),
         _ => None,
     }
 }
@@ -11926,7 +11956,9 @@ fn select_row_bar_text_index(row: &SelectRowSnapshot) -> usize {
         SelectRowKind::SearchFolder => 10,
         SelectRowKind::Course => 7,
         SelectRowKind::Command | SelectRowKind::Container => 9,
-        SelectRowKind::SettingsFolder => 4,
+        SelectRowKind::SettingsRoot | SelectRowKind::SettingsFolder => 11,
+        SelectRowKind::SettingsBack => 12,
+        SelectRowKind::SettingsClose => 13,
         SelectRowKind::Config => 2,
     }
 }
@@ -11934,6 +11966,10 @@ fn select_row_bar_text_index(row: &SelectRowSnapshot) -> usize {
 fn select_row_bar_text_fallback_index(row: &SelectRowSnapshot) -> Option<usize> {
     match row.kind {
         SelectRowKind::SearchFolder => Some(4),
+        SelectRowKind::SettingsRoot
+        | SelectRowKind::SettingsBack
+        | SelectRowKind::SettingsClose => Some(10),
+        SelectRowKind::SettingsFolder => Some(4),
         _ => None,
     }
 }
@@ -12157,7 +12193,10 @@ fn select_detail_title<'a>(
         | SelectRowKind::SearchFolder
         | SelectRowKind::Command
         | SelectRowKind::Container
-        | SelectRowKind::SettingsFolder => row.title.as_str(),
+        | SelectRowKind::SettingsRoot
+        | SelectRowKind::SettingsFolder
+        | SelectRowKind::SettingsBack
+        | SelectRowKind::SettingsClose => row.title.as_str(),
         SelectRowKind::Course
         | SelectRowKind::Executable
         | SelectRowKind::RandomCourse
@@ -14811,7 +14850,10 @@ mod tests {
             (SelectRowKind::Command, true, 5, 9),
             (SelectRowKind::Container, true, 5, 9),
             (SelectRowKind::NoSong, false, 4, 8),
-            (SelectRowKind::SettingsFolder, true, 1, 4),
+            (SelectRowKind::SettingsRoot, true, 7, 11),
+            (SelectRowKind::SettingsFolder, true, 7, 11),
+            (SelectRowKind::SettingsBack, true, 8, 12),
+            (SelectRowKind::SettingsClose, true, 9, 13),
             (SelectRowKind::Config, true, 0, 2),
         ];
 
@@ -14826,7 +14868,10 @@ mod tests {
                         | SelectRowKind::SearchFolder
                         | SelectRowKind::Command
                         | SelectRowKind::Container
+                        | SelectRowKind::SettingsRoot
                         | SelectRowKind::SettingsFolder
+                        | SelectRowKind::SettingsBack
+                        | SelectRowKind::SettingsClose
                 ),
                 ..SelectRowSnapshot::default()
             };
@@ -14836,14 +14881,29 @@ mod tests {
     }
 
     #[test]
-    fn select_search_folders_use_search_bar_slots_and_settings_folders_use_folder_slots() {
+    fn select_settings_rows_use_dedicated_slots_with_legacy_fallbacks() {
         let search = SelectRowSnapshot {
             kind: SelectRowKind::SearchFolder,
             is_folder: true,
             ..SelectRowSnapshot::default()
         };
-        let settings = SelectRowSnapshot {
+        let settings_root = SelectRowSnapshot {
+            kind: SelectRowKind::SettingsRoot,
+            is_folder: true,
+            ..SelectRowSnapshot::default()
+        };
+        let settings_folder = SelectRowSnapshot {
             kind: SelectRowKind::SettingsFolder,
+            is_folder: true,
+            ..SelectRowSnapshot::default()
+        };
+        let settings_back = SelectRowSnapshot {
+            kind: SelectRowKind::SettingsBack,
+            is_folder: true,
+            ..SelectRowSnapshot::default()
+        };
+        let settings_close = SelectRowSnapshot {
+            kind: SelectRowKind::SettingsClose,
             is_folder: true,
             ..SelectRowSnapshot::default()
         };
@@ -14852,10 +14912,17 @@ mod tests {
         assert_eq!(select_row_bar_text_index(&search), 10);
         assert_eq!(select_row_bar_image_fallback_index(&search), Some(1));
         assert_eq!(select_row_bar_text_fallback_index(&search), Some(4));
-        assert_eq!(select_row_bar_image_index(&settings), 1);
-        assert_eq!(select_row_bar_text_index(&settings), 4);
-        assert_eq!(select_row_bar_image_fallback_index(&settings), None);
-        assert_eq!(select_row_bar_text_fallback_index(&settings), None);
+        for (row, image, text, fallback_image, fallback_text) in [
+            (&settings_root, 7, 11, 6, 10),
+            (&settings_folder, 7, 11, 1, 4),
+            (&settings_back, 8, 12, 6, 10),
+            (&settings_close, 9, 13, 6, 10),
+        ] {
+            assert_eq!(select_row_bar_image_index(row), image);
+            assert_eq!(select_row_bar_text_index(row), text);
+            assert_eq!(select_row_bar_image_fallback_index(row), Some(fallback_image));
+            assert_eq!(select_row_bar_text_fallback_index(row), Some(fallback_text));
+        }
     }
 
     #[test]
@@ -14882,6 +14949,21 @@ mod tests {
         };
         let settings_folder = SkinDrawState {
             select_row_kind: SelectRowKind::SettingsFolder,
+            select_is_folder: true,
+            ..SkinDrawState::default()
+        };
+        let settings_root = SkinDrawState {
+            select_row_kind: SelectRowKind::SettingsRoot,
+            select_is_folder: true,
+            ..SkinDrawState::default()
+        };
+        let settings_back = SkinDrawState {
+            select_row_kind: SelectRowKind::SettingsBack,
+            select_is_folder: true,
+            ..SkinDrawState::default()
+        };
+        let settings_close = SkinDrawState {
+            select_row_kind: SelectRowKind::SettingsClose,
             select_is_folder: true,
             ..SkinDrawState::default()
         };
@@ -14924,7 +15006,15 @@ mod tests {
         assert!(test_skin_op(1, &[], &folder));
         assert!(test_skin_op(1, &[], &table_folder));
         assert!(test_skin_op(1, &[], &search_folder));
+        assert!(test_skin_op(1, &[], &settings_root));
         assert!(test_skin_op(1, &[], &settings_folder));
+        assert!(test_skin_op(1, &[], &settings_back));
+        assert!(test_skin_op(1, &[], &settings_close));
+        assert!(test_skin_op(SKIN_OPTION_BMZ_SETTINGS_FOLDER, &[], &settings_root));
+        assert!(test_skin_op(SKIN_OPTION_BMZ_SETTINGS_FOLDER, &[], &settings_folder));
+        assert!(!test_skin_op(SKIN_OPTION_BMZ_SETTINGS_FOLDER, &[], &settings_back));
+        assert!(test_skin_op(SKIN_OPTION_BMZ_SETTINGS_BACK, &[], &settings_back));
+        assert!(test_skin_op(SKIN_OPTION_BMZ_SETTINGS_CLOSE, &[], &settings_close));
         assert!(test_skin_op(1, &[], &command));
         assert!(test_skin_op(1, &[], &container));
         assert!(!test_skin_op(2, &[], &folder));
@@ -14934,6 +15024,33 @@ mod tests {
         assert!(!test_skin_op(1030, &[], &random_course));
         assert!(test_skin_op(1031, &[], &random_course));
         assert!(!test_skin_op(1031, &[], &course));
+    }
+
+    #[test]
+    fn select_settings_row_ref_distinguishes_folder_back_and_close() {
+        let cases = [
+            (SelectRowKind::Song, 0),
+            (SelectRowKind::SettingsRoot, 1),
+            (SelectRowKind::SettingsFolder, 1),
+            (SelectRowKind::SettingsBack, 2),
+            (SelectRowKind::SettingsClose, 3),
+        ];
+
+        for (kind, expected) in cases {
+            let state = SkinDrawState {
+                select_screen: true,
+                select_row_kind: kind,
+                ..SkinDrawState::default()
+            };
+            assert_eq!(
+                skin_state_event_index(SKIN_REF_BMZ_SELECT_SETTINGS_ROW_KIND, &state),
+                expected
+            );
+            assert_eq!(
+                skin_state_number(SKIN_REF_BMZ_SELECT_SETTINGS_ROW_KIND, &state),
+                Some(i64::from(expected))
+            );
+        }
     }
 
     #[test]

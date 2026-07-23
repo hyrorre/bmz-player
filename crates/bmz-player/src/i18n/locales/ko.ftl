@@ -259,6 +259,7 @@ settings-obs-event-play-ended = 플레이 종료
 settings-obs-event-result = 결과
 settings-obs-event-course-result = 코스 결과
 select-back = 뒤로
+select-close = 닫기
 select-advanced-settings = 고급 설정
 select-difficulty-tables = 난이도표
 select-search-history = 검색: '{ $query }'

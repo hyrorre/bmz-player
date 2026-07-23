@@ -644,6 +644,12 @@ pub const SKIN_REF_BMZ_DAILY_LAST: i32 = 1946;
 pub const SKIN_TEXT_BMZ_DAILY_RANK: i32 = 1943;
 pub const SKIN_TEXT_BMZ_DAILY_RECENT_BASE: i32 = 1950;
 pub const SKIN_TEXT_BMZ_DAILY_RECENT_LAST: i32 = 1959;
+/// BMZ extension: select settings row kind (`0=other`, `1=folder`, `2=back`, `3=close`).
+pub const SKIN_REF_BMZ_SELECT_SETTINGS_ROW_KIND: i32 = 1960;
+/// BMZ extension: select settings folder/back/close row options.
+pub const SKIN_OPTION_BMZ_SETTINGS_FOLDER: i32 = 1961;
+pub const SKIN_OPTION_BMZ_SETTINGS_BACK: i32 = 1962;
+pub const SKIN_OPTION_BMZ_SETTINGS_CLOSE: i32 = 1963;
 /// BMZ extension: course result stage count and ten stage slots.
 pub const SKIN_REF_BMZ_COURSE_STAGE_COUNT: i32 = 19_100;
 pub const SKIN_REF_BMZ_COURSE_STAGE_EX_BASE: i32 = 19_110;
