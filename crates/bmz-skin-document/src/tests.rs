@@ -53,6 +53,43 @@ fn skin_document_normalizes_numeric_and_string_ids() {
 }
 
 #[test]
+fn panel_and_destination_action_deserialize() {
+    let document: SkinDocument = serde_json::from_str(
+        r##"
+        {
+            "panel": [{
+                "id": "option-panel",
+                "color": "#10203080",
+                "borderColor": "A0B0C0",
+                "borderWidth": 2.5
+            }],
+            "destination": [{
+                "id": "option-panel",
+                "act": 42,
+                "click": 2,
+                "clickable": true,
+                "mouseRect": { "x": 1, "y": 2, "w": 3, "h": 4 },
+                "dst": [{ "x": 10, "y": 20, "w": 30, "h": 40 }]
+            }]
+        }
+        "##,
+    )
+    .unwrap();
+
+    assert_eq!(document.panel[0].id, "option-panel");
+    assert_eq!(document.panel[0].color, "#10203080");
+    assert_eq!(document.panel[0].border_color, "A0B0C0");
+    assert_eq!(document.panel[0].border_width, 2.5);
+    let DestinationListEntry::Single(destination) = &document.destination[0] else {
+        panic!("expected Single destination");
+    };
+    assert_eq!(destination.act, Some(42));
+    assert_eq!(destination.click, 2);
+    assert_eq!(destination.clickable, Some(true));
+    assert_eq!(destination.mouse_rect.unwrap(), SkinRectDef { x: 1, y: 2, w: 3, h: 4 });
+}
+
+#[test]
 fn skin_document_decodes_lift_cover_with_beatoraja_link_default() {
     let document: SkinDocument = serde_json::from_str(
         r#"

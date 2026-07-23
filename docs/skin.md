@@ -82,6 +82,64 @@ extended index は beatoraja 互換値 `0=NORMAL`, `1=MIRROR`, `2=RANDOM`, `3=R-
 `4=S-RANDOM`, `5=SPIRAL`, `6=H-RANDOM`, `7=ALL-SCR`, `8=RANDOM-EX`,
 `9=S-RANDOM-EX` に加えて、`10=F-RANDOM`, `11=MF-RANDOM` を返す。
 
+### BMZ Dynamic Select Option Panels
+
+選曲オプションの現在値は、状態ごとの画像セルを用意せず `text.id` から直接描画できる。
+ラベルは select snapshot の文字列を使うため、ARRANGE などへ項目を追加しても
+skin 側のスプライト行追加は不要。
+
+| text id | value |
+| --- | --- |
+| `bmz_select_arrange` / `bmz_select_arrange_2p` | 1P / 2P ARRANGE |
+| `bmz_select_target` | target |
+| `bmz_select_gauge` | gauge |
+| `bmz_select_gauge_auto_shift` | gauge auto shift |
+| `bmz_select_bottom_shiftable_gauge` | bottom shiftable gauge |
+| `bmz_select_double_option` | DP option |
+| `bmz_select_hs_fix` | hi-speed fix |
+| `bmz_select_assist` | assist |
+| `bmz_select_mode` | mode |
+| `bmz_select_sort` | sort |
+| `bmz_select_ln_mode` | LN mode |
+| `bmz_select_bga` | BGA |
+| `bmz_select_judge_timing_auto_adjust` | judge timing auto adjust (`ON` / `OFF`) |
+
+BMZ 拡張の `panel` は画像を使わない単色矩形で、`color`, `borderColor` は
+`RRGGBB` / `RRGGBBAA`、`borderWidth` は skin canvas pixel で指定する。
+destination に `act` / `click` を置くと、text や panel も image / imageset と同じ
+イベント対象になる。`clickable: false` は destination 自身と同名 image / imageset の
+クリックを明示的に無効化する。
+
+```json
+{
+  "panel": [{
+    "id": "arrange-bg",
+    "color": "101820C0",
+    "borderColor": "80C0FFFF",
+    "borderWidth": 1
+  }],
+  "text": [{
+    "id": "bmz_select_arrange",
+    "font": "option-font",
+    "size": 18,
+    "align": 1,
+    "overflow": 1
+  }],
+  "destination": [
+    {
+      "id": "arrange-bg",
+      "dst": [{ "x": 10, "y": 10, "w": 166, "h": 19 }]
+    },
+    {
+      "id": "bmz_select_arrange",
+      "act": 42,
+      "click": 2,
+      "dst": [{ "x": 10, "y": 10, "w": 166, "h": 19 }]
+    }
+  ]
+}
+```
+
 ### BMZ RANDOM Lane Refs
 
 beatoraja result skin互換の `450..469` は、BMZではplay/select skinにも拡張して公開する。

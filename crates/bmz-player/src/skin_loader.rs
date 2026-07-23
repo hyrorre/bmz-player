@@ -3805,6 +3805,11 @@ mod tests {
         );
         assert!(context.document().is_some_and(|document| document.skin_type == 5));
         let snapshot = bmz_render::scene::SelectSnapshot {
+            arrange: "F-RANDOM".to_string(),
+            arrange_2p: "MF-RANDOM".to_string(),
+            gauge: "EX-HARD".to_string(),
+            double_option: "BATTLE".to_string(),
+            hs_fix: "CONSTANT".to_string(),
             rows: vec![bmz_render::scene::SelectRowSnapshot {
                 title: "Song".to_string(),
                 ..Default::default()
@@ -3820,6 +3825,18 @@ mod tests {
                 .any(|item| matches!(item, bmz_render::skin::SkinRenderItem::Text { text, .. } if text == "Song")),
             "m_select select skin should render the song title text"
         );
+        for label in ["F-RANDOM", "MF-RANDOM", "EX-HARD", "BATTLE", "CONSTANT"] {
+            assert!(
+                items.iter().any(
+                    |item| matches!(item, bmz_render::skin::SkinRenderItem::Text { text, .. } if text == label)
+                ),
+                "m_select should render the dynamic option label {label}"
+            );
+        }
+        let hit = context
+            .select_click_hit(&snapshot, 545.0 / 1920.0, 0.98)
+            .expect("m_select arrange label should remain clickable");
+        assert_eq!(hit.target, bmz_render::skin::SkinClickTarget::Event { event_id: 42, click: 2 });
     }
 
     #[test]
@@ -3984,6 +4001,23 @@ mod tests {
                 decoded.document.value.iter().any(|value| value.ref_id == ref_id),
                 "Luxe Flat should retain operating-time ref {ref_id}"
             );
+        }
+        for (id, act) in [
+            ("bmz_select_arrange", 42),
+            ("bmz_select_gauge", 40),
+            ("bmz_select_double_option", 54),
+            ("bmz_select_hs_fix", 55),
+            ("bmz_select_arrange_2p", 43),
+        ] {
+            assert!(
+                decoded.document.text.iter().any(|text| text.id == id),
+                "Luxe Flat should decode dynamic {id} text"
+            );
+            assert!(decoded.document.destination.iter().any(|entry| matches!(
+                entry,
+                DestinationListEntry::Single(destination)
+                    if destination.id == id && destination.act == Some(act)
+            )));
         }
     }
 

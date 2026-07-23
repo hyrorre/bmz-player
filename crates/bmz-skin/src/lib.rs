@@ -3571,26 +3571,34 @@ mod tests {
                 "m-select should retain operating-time ref {ref_id}"
             );
         }
-        for (id, label, draw) in [
-            ("default_stateplayoption_f_random", "F-RANDOM", "event_index(344) == 10"),
-            ("default_stateplayoption_mf_random", "MF-RANDOM", "event_index(344) == 11"),
-            ("default_stateplayoption_f_random2", "F-RANDOM", "event_index(345) == 10"),
-            ("default_stateplayoption_mf_random2", "MF-RANDOM", "event_index(345) == 11"),
+        for (id, act) in [
+            ("bmz_select_arrange", 42),
+            ("bmz_select_gauge", 40),
+            ("bmz_select_double_option", 54),
+            ("bmz_select_hs_fix", 55),
+            ("bmz_select_arrange_2p", 43),
         ] {
             assert!(
-                loaded
-                    .document
-                    .text
-                    .iter()
-                    .any(|text| text.id == id && text.constant_text == label),
-                "m-select should decode {id} text"
+                loaded.document.text.iter().any(|text| text.id == id
+                    && text.constant_text.is_empty()
+                    && text.overflow == 1),
+                "m-select should decode dynamic {id} text"
             );
             assert!(loaded.document.destination.iter().any(|entry| matches!(
                 entry,
                 bmz_skin_document::DestinationListEntry::Single(destination)
-                    if destination.id == id && destination.draw == draw
+                    if destination.id == id
+                        && destination.act == Some(act)
+                        && destination.click == 2
             )));
         }
+        assert!(
+            loaded
+                .document
+                .imageset
+                .iter()
+                .all(|imageset| { !imageset.id.starts_with("default_stateplayoption_option_") })
+        );
     }
 
     #[test]

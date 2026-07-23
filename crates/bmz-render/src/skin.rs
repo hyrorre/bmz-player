@@ -3441,6 +3441,9 @@ impl SkinDocumentRenderExt for SkinDocument {
         if !destination_mouse_rect_contains(destination, frame, state) {
             return None;
         }
+        if let Some(panel) = self.panel.iter().find(|panel| panel.id == destination.id) {
+            return Some(skin_panel_render_items(panel, destination, frame, self.w, self.h));
+        }
         if let Some(visualizer) =
             self.hiterror_visualizer.iter().find(|visualizer| visualizer.id == destination.id)
         {
@@ -3779,6 +3782,10 @@ impl SkinDocumentRenderExt for SkinDocument {
         frame.x += offset.0;
         frame.y += offset.1;
         apply_skin_offset_to_frame(destination, &mut frame, state, false);
+
+        if let Some(panel) = self.panel.iter().find(|panel| panel.id == destination.id) {
+            return Some(skin_panel_render_items(panel, destination, frame, self.w, self.h));
+        }
 
         if let Some(image) = skin_image_for_destination_id(destination.id.as_str(), images) {
             if self.should_skip_lift_lane_cover_render(destination, image)
@@ -4463,15 +4470,22 @@ impl SkinDocumentRenderExt for SkinDocument {
         destination: &SkinDestinationDef,
         images: &HashMap<&str, &SkinImageDef>,
     ) -> Option<SkinClickTarget> {
+        if destination.clickable == Some(false) {
+            return None;
+        }
+        if let Some(event_id) = destination.act {
+            return Some(SkinClickTarget::Event { event_id, click: destination.click });
+        }
         if let Some(image) = images.get(destination.id.as_str())
-            && image.clickable.unwrap_or(image.act.is_some())
+            && destination.clickable.or(image.clickable).unwrap_or(image.act.is_some())
             && let Some(event_id) = image.act
         {
             return Some(SkinClickTarget::Event { event_id, click: image.click });
         }
         let imageset = self.imageset.iter().find(|set| set.id == destination.id)?;
-        imageset
+        destination
             .clickable
+            .or(imageset.clickable)
             .unwrap_or(imageset.act.is_some())
             .then_some(imageset.act)
             .flatten()
@@ -10615,6 +10629,82 @@ fn skin_hex_color(value: &str) -> Option<Color> {
     Some(Color::rgba(r, g, b, a))
 }
 
+fn skin_panel_render_items(
+    panel: &SkinPanelDef,
+    destination: &SkinDestinationDef,
+    frame: ResolvedSkinFrame,
+    canvas_width: u32,
+    canvas_height: u32,
+) -> Vec<SkinRenderItem> {
+    let rect = normalize_skin_frame_rect(frame, canvas_width, canvas_height);
+    if rect.width <= 0.0 || rect.height <= 0.0 {
+        return Vec::new();
+    }
+
+    let blend = if destination.blend == 2 { BlendMode::Add } else { BlendMode::Normal };
+    let tint = |value: &str| {
+        let color = skin_hex_color(value)?;
+        Some(Color::rgba(
+            color.r * frame.r.clamp(0, 255) as f32 / 255.0,
+            color.g * frame.g.clamp(0, 255) as f32 / 255.0,
+            color.b * frame.b.clamp(0, 255) as f32 / 255.0,
+            color.a * frame.a.clamp(0, 255) as f32 / 255.0,
+        ))
+    };
+
+    let mut items = Vec::with_capacity(5);
+    if let Some(color) = tint(&panel.color)
+        && color.a > 0.0
+    {
+        items.push(SkinRenderItem::Rect { rect, color, blend });
+    }
+
+    let Some(border_color) = tint(&panel.border_color).filter(|color| color.a > 0.0) else {
+        return items;
+    };
+    if panel.border_width <= 0.0 {
+        return items;
+    }
+    let border_x = (panel.border_width / canvas_width.max(1) as f32).min(rect.width * 0.5);
+    let border_y = (panel.border_width / canvas_height.max(1) as f32).min(rect.height * 0.5);
+    if border_x <= 0.0 || border_y <= 0.0 {
+        return items;
+    }
+    items.extend([
+        SkinRenderItem::Rect {
+            rect: Rect { height: border_y, ..rect },
+            color: border_color,
+            blend,
+        },
+        SkinRenderItem::Rect {
+            rect: Rect { y: rect.y + rect.height - border_y, height: border_y, ..rect },
+            color: border_color,
+            blend,
+        },
+        SkinRenderItem::Rect {
+            rect: Rect {
+                y: rect.y + border_y,
+                width: border_x,
+                height: (rect.height - border_y * 2.0).max(0.0),
+                ..rect
+            },
+            color: border_color,
+            blend,
+        },
+        SkinRenderItem::Rect {
+            rect: Rect {
+                x: rect.x + rect.width - border_x,
+                y: rect.y + border_y,
+                width: border_x,
+                height: (rect.height - border_y * 2.0).max(0.0),
+            },
+            color: border_color,
+            blend,
+        },
+    ]);
+    items
+}
+
 #[derive(Debug, Clone, Copy)]
 struct GaugeGraphColors {
     graph_bg: Color,
@@ -15563,6 +15653,9 @@ mod tests {
                 stretch: default_stretch(),
                 op: vec![op],
                 draw: String::new(),
+                act: None,
+                click: 0,
+                clickable: None,
                 dst: Vec::new(),
                 mouse_rect: None,
             }
@@ -19919,6 +20012,115 @@ mod tests {
                 approx_eq(*r, 1.0) && approx_eq(*g, 0.53) && approx_eq(*b, 0.0)
             })
         }));
+    }
+
+    #[test]
+    fn panel_renders_fill_and_canvas_pixel_border() {
+        let document: SkinDocument = serde_json::from_str(
+            r##"
+            {
+                "w": 100,
+                "h": 100,
+                "panel": [{
+                    "id": "option-panel",
+                    "color": "#102030",
+                    "borderColor": "#A0B0C0",
+                    "borderWidth": 2
+                }],
+                "destination": [{
+                    "id": "option-panel",
+                    "dst": [{ "x": 10, "y": 20, "w": 30, "h": 40 }]
+                }]
+            }
+            "##,
+        )
+        .unwrap();
+
+        let items = document.static_image_render_items(&HashMap::new(), &SkinDrawState::default());
+
+        assert_eq!(items.len(), 5);
+        let SkinRenderItem::Rect { rect, color, blend } = items[0] else {
+            panic!("expected panel fill");
+        };
+        assert_eq!(rect, Rect { x: 0.1, y: 0.4, width: 0.3, height: 0.4 });
+        assert!(approx_eq(color.r, 16.0 / 255.0));
+        assert!(approx_eq(color.g, 32.0 / 255.0));
+        assert!(approx_eq(color.b, 48.0 / 255.0));
+        assert_eq!(blend, BlendMode::Normal);
+        assert!(matches!(
+            items[1],
+            SkinRenderItem::Rect {
+                rect: Rect { x, y, width, height },
+                ..
+            } if approx_eq(x, 0.1)
+                && approx_eq(y, 0.4)
+                && approx_eq(width, 0.3)
+                && approx_eq(height, 0.02)
+        ));
+    }
+
+    #[test]
+    fn select_click_hit_resolves_destination_act_for_dynamic_text() {
+        let document: SkinDocument = serde_json::from_str(
+            r#"
+            {
+                "type": 5,
+                "w": 100,
+                "h": 100,
+                "text": [
+                    { "id": "bmz_select_arrange", "font": "default", "size": 18 },
+                    { "id": "disabled", "font": "default", "size": 18, "constantText": "OFF" }
+                ],
+                "destination": [
+                    {
+                        "id": "bmz_select_arrange",
+                        "act": 42,
+                        "click": 2,
+                        "dst": [{ "x": 10, "y": 20, "w": 30, "h": 10 }]
+                    },
+                    {
+                        "id": "disabled",
+                        "act": 43,
+                        "clickable": false,
+                        "dst": [{ "x": 50, "y": 20, "w": 30, "h": 10 }]
+                    }
+                ]
+            }
+            "#,
+        )
+        .unwrap();
+        let snapshot =
+            SelectSnapshot { arrange: "MF-RANDOM".to_string(), ..SelectSnapshot::default() };
+
+        assert!(document.select_render_items(&HashMap::new(), &snapshot).iter().any(
+            |item| matches!(
+                item,
+                SkinRenderItem::Text { text, .. } if text == "MF-RANDOM"
+            )
+        ));
+        let hit = document
+            .select_click_hit(
+                &HashMap::new(),
+                &snapshot,
+                &crate::select_settings_dest::SelectSettingsDestIndex::default(),
+                0.2,
+                0.75,
+            )
+            .unwrap();
+
+        assert_eq!(hit.target, SkinClickTarget::Event { event_id: 42, click: 2 });
+        assert_eq!(hit.rect, Rect { x: 0.1, y: 0.7, width: 0.3, height: 0.1 });
+        assert!(
+            document
+                .select_click_hit(
+                    &HashMap::new(),
+                    &snapshot,
+                    &crate::select_settings_dest::SelectSettingsDestIndex::default(),
+                    0.6,
+                    0.75,
+                )
+                .is_none()
+        );
     }
 
     #[test]

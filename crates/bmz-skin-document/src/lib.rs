@@ -78,6 +78,9 @@ pub struct SkinDocument {
     pub value: Vec<SkinValueDef>,
     #[serde(default)]
     pub text: Vec<SkinTextDef>,
+    /// BMZ extension: texture-free solid-color panels.
+    #[serde(default)]
+    pub panel: Vec<SkinPanelDef>,
     #[serde(default)]
     pub slider: Vec<SkinSliderDef>,
     #[serde(default)]
@@ -432,6 +435,22 @@ pub struct SkinTextDef {
     /// Lua `value = function()` から変換したコース表テキスト式。空なら `ref` を使う。
     #[serde(default)]
     pub value_expr: String,
+}
+
+/// BMZ extension for building skin panels without raster assets.
+#[derive(Debug, Clone, PartialEq, Default, Deserialize)]
+pub struct SkinPanelDef {
+    #[serde(default, deserialize_with = "deserialize_skin_id")]
+    pub id: String,
+    /// Fill color in RRGGBB or RRGGBBAA form.
+    #[serde(default)]
+    pub color: String,
+    /// Optional border color in RRGGBB or RRGGBBAA form.
+    #[serde(default, rename = "borderColor")]
+    pub border_color: String,
+    /// Border width in skin-canvas pixels.
+    #[serde(default, rename = "borderWidth")]
+    pub border_width: f32,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -1173,6 +1192,15 @@ pub struct SkinDestinationDef {
     pub op: Vec<i32>,
     #[serde(default)]
     pub draw: String,
+    /// BMZ extension: make any destination, including text and panel, an event target.
+    #[serde(default)]
+    pub act: Option<i32>,
+    #[serde(default)]
+    pub click: i32,
+    /// Explicitly disable or enable the destination click target.
+    /// When omitted, destination `act` or the legacy image/imageset attributes apply.
+    #[serde(default)]
+    pub clickable: Option<bool>,
     #[serde(default)]
     pub dst: Vec<SkinDstEntry>,
     #[serde(rename = "mouseRect")]
