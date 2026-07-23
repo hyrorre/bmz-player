@@ -72,11 +72,13 @@ fn decode_audio(
         .best(media::Type::Audio)
         .ok_or_else(|| "no audio stream found".to_string())?;
     let stream_index = stream.index();
+    let codec_id = stream.parameters().id();
 
     let context = codec::context::Context::from_parameters(stream.parameters())
         .map_err(|e| format!("failed to build codec context: {e}"))?;
     let mut decoder =
         context.decoder().audio().map_err(|e| format!("failed to open audio decoder: {e}"))?;
+    let decoder_channels = decoder.channels();
 
     let mut frames: Vec<f32> = Vec::new();
     let mut out_channels: u16 = 0;
@@ -108,6 +110,20 @@ fn decode_audio(
         if stream.index() != stream_index {
             continue;
         }
+
+        let mut packet = packet;
+        let discarded_bytes = trim_incomplete_pcm_packet(&mut packet, codec_id, decoder_channels);
+        if discarded_bytes != 0 {
+            tracing::debug!(
+                path = %path.display(),
+                discarded_bytes,
+                "discarded incomplete PCM sample bytes"
+            );
+        }
+        if packet.size() == 0 {
+            continue;
+        }
+
         decoder.send_packet(&packet).map_err(|e| format!("send_packet failed: {e}"))?;
         receive_frames(&mut decoder, &mut out_channels, &mut out_rate, &mut frames)?;
         packets_since_yield = packets_since_yield.saturating_add(1);
@@ -125,6 +141,28 @@ fn decode_audio(
     }
 
     Ok(DecodedSample { channels: out_channels, sample_rate: out_rate, frames })
+}
+
+/// PCM packet の末尾にあるフレーム未満のデータを破棄する。
+///
+/// beatoraja も PCM のデータ長をサンプルフレーム境界へ切り捨ててから再生する。
+/// WAV の `data` chunk が奇数バイトになる古い BMS 音源では、16-bit mono の場合に
+/// 末尾 1 byte が残り、ffmpeg の PCM decoder が `Invalid PCM packet` を返すため、
+/// `pcm_s16le` に限定して decoder へ渡す前に補正する。
+fn trim_incomplete_pcm_packet(
+    packet: &mut ffmpeg_next::Packet,
+    codec_id: codec::Id,
+    channels: u16,
+) -> usize {
+    let bytes_per_frame = match codec_id {
+        codec::Id::PCM_S16LE => channels.max(1) as usize * 2,
+        _ => return 0,
+    };
+    let discarded_bytes = packet.size() % bytes_per_frame;
+    if discarded_bytes != 0 {
+        packet.shrink(packet.size() - discarded_bytes);
+    }
+    discarded_bytes
 }
 
 /// デコード済みオーディオフレームを f32 インターリーブに変換して `frames` に追記する。
@@ -256,11 +294,17 @@ mod tests {
 
     /// PCM16 mono WAV をメモリ上に組み立てる。
     fn write_pcm16_wav(samples: &[i16]) -> std::path::PathBuf {
-        let sample_rate = 44_100_u32;
         let data: Vec<u8> = samples.iter().flat_map(|s| s.to_le_bytes()).collect();
+        write_pcm16_wav_data(&data)
+    }
+
+    /// 指定バイト列を PCM16 mono WAV の data chunk として書き出す。
+    fn write_pcm16_wav_data(data: &[u8]) -> std::path::PathBuf {
+        let sample_rate = 44_100_u32;
+        let padding = data.len() % 2;
         let mut bytes = Vec::new();
         bytes.extend_from_slice(b"RIFF");
-        bytes.extend_from_slice(&(36 + data.len() as u32).to_le_bytes());
+        bytes.extend_from_slice(&(36 + data.len() as u32 + padding as u32).to_le_bytes());
         bytes.extend_from_slice(b"WAVEfmt ");
         bytes.extend_from_slice(&16_u32.to_le_bytes());
         bytes.extend_from_slice(&1_u16.to_le_bytes()); // PCM
@@ -272,6 +316,9 @@ mod tests {
         bytes.extend_from_slice(b"data");
         bytes.extend_from_slice(&(data.len() as u32).to_le_bytes());
         bytes.extend_from_slice(&data);
+        if padding != 0 {
+            bytes.push(0);
+        }
 
         let path = std::env::temp_dir().join(format!(
             "bmz-ffmpeg-loader-{}-{}.wav",
@@ -315,6 +362,21 @@ mod tests {
         assert!((sample.frames[0]).abs() < 1e-4);
         assert!((sample.frames[1] - 0.5).abs() < 1e-3);
         assert!((sample.frames[2] + 0.5).abs() < 1e-3);
+
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn ffmpeg_loader_discards_incomplete_pcm16_sample_byte() {
+        let path = write_pcm16_wav_data(&[0, 0, 0xff, 0x7f, 0x12]);
+        let mut loader = FfmpegSampleLoader::default();
+
+        let sample = loader.load(&path).unwrap();
+
+        assert_eq!(sample.channels, 1);
+        assert_eq!(sample.frames.len(), 2);
+        assert!((sample.frames[0]).abs() < 1e-4);
+        assert!((sample.frames[1] - 1.0).abs() < 1e-3);
 
         std::fs::remove_file(path).unwrap();
     }
