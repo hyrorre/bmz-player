@@ -41,6 +41,7 @@ use crate::logging::{LogBuffer, LogEntry, LogLevel as TracingLogLevel};
 use crate::paths::{AppPaths, resolve_app_paths};
 use crate::practice_ui::{PracticePanelContext, build_practice_panel};
 use crate::profile_cmd;
+use crate::random_trainer::RandomTrainerState;
 use crate::screens::course_session::CourseResultSummary;
 use crate::screens::select_model::SelectCourseRow;
 use crate::skin_loader::RANDOM_FILE_SELECTION;
@@ -299,6 +300,7 @@ pub struct EguiRunContext<'a, 'practice> {
     pub log_buffer: &'a LogBuffer,
     pub app_config: &'a mut AppConfig,
     pub profile_config: &'a mut ProfileConfig,
+    pub random_trainer: &'a mut RandomTrainerState,
     pub skin_meta: &'a SkinConfigMeta,
     pub skin_catalog: &'a SkinCatalog,
     pub course_result: Option<&'a CourseResultSummary>,
@@ -377,6 +379,8 @@ pub struct EguiLayer {
     visible: bool,
     /// デバッグ表示パネルの開閉状態。
     show_debug: bool,
+    /// 7K RANDOM 固定配置パネルの開閉状態。
+    show_random_trainer: bool,
     /// デバッグ表示内のログ最低表示レベル。
     debug_log_filter: DebugLogFilter,
     /// デバッグ表示内のログを末尾へ追従するか。
@@ -724,6 +728,7 @@ impl EguiLayer {
             font_coverage,
             visible: false,
             show_debug: false,
+            show_random_trainer: false,
             debug_log_filter: DebugLogFilter::default(),
             debug_log_autoscroll: true,
             show_fps,
@@ -799,6 +804,7 @@ impl EguiLayer {
             log_buffer,
             app_config,
             profile_config,
+            random_trainer,
             skin_meta,
             skin_catalog,
             course_result,
@@ -821,6 +827,7 @@ impl EguiLayer {
         let raw_input = self.state.take_egui_input(window);
         let ctx = self.ctx.clone();
         let show_debug = &mut self.show_debug;
+        let show_random_trainer = &mut self.show_random_trainer;
         let show_settings = &mut self.show_settings;
         let show_profile_settings = &mut self.show_profile_settings;
         let show_skin = &mut self.show_skin;
@@ -878,11 +885,14 @@ impl EguiLayer {
                 build_menu(
                     ctx,
                     visible_flag,
-                    show_debug,
-                    show_settings,
-                    show_profile_settings,
-                    show_skin,
-                    show_license_notice,
+                    MenuPanelVisibility {
+                        debug: show_debug,
+                        random_trainer: show_random_trainer,
+                        settings: show_settings,
+                        profile_settings: show_profile_settings,
+                        skin: show_skin,
+                        license_notice: show_license_notice,
+                    },
                     app_paths,
                     directory_open_status,
                     text,
@@ -903,6 +913,7 @@ impl EguiLayer {
                     &mut self.debug_log_autoscroll,
                     text,
                 );
+                build_random_trainer_panel(ctx, show_random_trainer, random_trainer, text);
                 let settings_actions = build_settings_panel(
                     ctx,
                     window,
@@ -1040,14 +1051,19 @@ const fn cjk_font_name(coverage: bmz_render::FontCoverage) -> &'static str {
 }
 
 /// 各サブパネルの開閉を切り替えるメインメニューハブ。
+struct MenuPanelVisibility<'a> {
+    debug: &'a mut bool,
+    random_trainer: &'a mut bool,
+    settings: &'a mut bool,
+    profile_settings: &'a mut bool,
+    skin: &'a mut bool,
+    license_notice: &'a mut bool,
+}
+
 fn build_menu(
     ctx: &egui::Context,
     visible: &mut bool,
-    show_debug: &mut bool,
-    show_settings: &mut bool,
-    show_profile_settings: &mut bool,
-    show_skin: &mut bool,
-    show_license_notice: &mut bool,
+    panels: MenuPanelVisibility<'_>,
     app_paths: &AppPaths,
     directory_open_status: &mut Option<DirectoryOpenStatus>,
     text: Localizer,
@@ -1060,11 +1076,12 @@ fn build_menu(
         .show(ctx, |ui| {
             ui.label(tr!(text, "menu-toggle-help"));
             ui.separator();
-            ui.checkbox(show_debug, tr!(text, "menu-debug"));
-            ui.checkbox(show_settings, tr!(text, "menu-app-settings"));
-            ui.checkbox(show_profile_settings, tr!(text, "menu-profile-settings"));
-            ui.checkbox(show_skin, tr!(text, "menu-skin-settings"));
-            ui.checkbox(show_license_notice, tr!(text, "menu-licenses"));
+            ui.checkbox(panels.debug, tr!(text, "menu-debug"));
+            ui.checkbox(panels.random_trainer, tr!(text, "menu-random-trainer"));
+            ui.checkbox(panels.settings, tr!(text, "menu-app-settings"));
+            ui.checkbox(panels.profile_settings, tr!(text, "menu-profile-settings"));
+            ui.checkbox(panels.skin, tr!(text, "menu-skin-settings"));
+            ui.checkbox(panels.license_notice, tr!(text, "menu-licenses"));
             ui.separator();
             ui.label(tr!(text, "menu-open-directory"));
             ui.horizontal_wrapped(|ui| {
@@ -1102,6 +1119,87 @@ fn build_menu(
                     }
                 }
             }
+        });
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct RandomTrainerLaneDrag {
+    index: usize,
+}
+
+fn build_random_trainer_panel(
+    ctx: &egui::Context,
+    visible: &mut bool,
+    trainer: &mut RandomTrainerState,
+    text: Localizer,
+) {
+    if !*visible {
+        return;
+    }
+
+    egui::Window::new(tr!(text, "random-trainer-title"))
+        .id(egui::Id::new("bmz_random_trainer"))
+        .open(visible)
+        .resizable(false)
+        .constrain_to(ctx.content_rect().shrink(PANEL_VIEWPORT_MARGIN))
+        .default_pos(egui::pos2(360.0, 32.0))
+        .show(ctx, |ui| {
+            let mut enabled = trainer.is_enabled();
+            if ui.checkbox(&mut enabled, tr!(text, "random-trainer-enabled")).changed() {
+                trainer.set_enabled(enabled);
+            }
+            ui.label(tr!(text, "random-trainer-description"));
+            ui.label(tr!(text, "random-trainer-next-play"));
+            ui.separator();
+            ui.label(format!(
+                "{} {}",
+                tr!(text, "random-trainer-order"),
+                trainer.lane_order_string()
+            ));
+
+            let lane_order = *trainer.lane_order();
+            let mut swap = None;
+            ui.horizontal(|ui| {
+                for (index, lane) in lane_order.into_iter().enumerate() {
+                    ui.push_id(("random_trainer_lane", index), |ui| {
+                        let (_, dropped) =
+                            ui.dnd_drop_zone::<RandomTrainerLaneDrag, _>(egui::Frame::NONE, |ui| {
+                                let response = ui.add_sized(
+                                    [42.0, 64.0],
+                                    egui::Button::new(
+                                        egui::RichText::new(lane.to_string()).size(20.0),
+                                    )
+                                    .sense(egui::Sense::click_and_drag()),
+                                );
+                                response.dnd_set_drag_payload(RandomTrainerLaneDrag { index });
+                                response
+                                    .on_hover_cursor(egui::CursorIcon::Grab)
+                                    .on_hover_text(tr!(text, "random-trainer-drag"));
+                            });
+                        if let Some(payload) = dropped {
+                            swap = Some((payload.index, index));
+                        }
+                    });
+                }
+            });
+            if let Some((from, to)) = swap {
+                trainer.swap_positions(from, to);
+            }
+
+            ui.horizontal_wrapped(|ui| {
+                if ui.button(tr!(text, "random-trainer-reset")).clicked() {
+                    trainer.reset();
+                }
+                if ui.button(tr!(text, "random-trainer-mirror")).clicked() {
+                    trainer.mirror();
+                }
+                if ui.button(tr!(text, "random-trainer-shift-left")).clicked() {
+                    trainer.shift_left();
+                }
+                if ui.button(tr!(text, "random-trainer-shift-right")).clicked() {
+                    trainer.shift_right();
+                }
+            });
         });
 }
 

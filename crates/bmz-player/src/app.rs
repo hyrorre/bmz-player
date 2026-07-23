@@ -105,6 +105,7 @@ use crate::input::winit::{
 use crate::ln_policy::LnPolicySetting;
 use crate::logging::LogBuffer;
 use crate::practice_ui::PracticePanelContext;
+use crate::random_trainer::RandomTrainerState;
 use crate::screens::course_session::{ActiveCourseSession, CourseEntryResult, CourseResultSummary};
 use crate::screens::key_config_edit::KeyConfigEditSession;
 use crate::screens::play_finish::FinishedPlaySession;
@@ -614,6 +615,8 @@ struct WinitApp {
     raw_input_bounce_filter: InputBounceFilter,
     arrange_option: ArrangeOption,
     arrange_option_2p: ArrangeOption,
+    /// Endless Dream 互換の7K RANDOM固定配置。profileへは保存しない。
+    random_trainer: RandomTrainerState,
     target_option: TargetOption,
     gauge_option: GaugeTypeConfig,
     gauge_auto_shift_option: GaugeAutoShiftConfig,
@@ -3045,6 +3048,7 @@ impl WinitApp {
             raw_input_bounce_filter: InputBounceFilter::default(),
             arrange_option,
             arrange_option_2p,
+            random_trainer: RandomTrainerState::default(),
             target_option,
             gauge_option,
             gauge_auto_shift_option,
@@ -10227,6 +10231,7 @@ impl WinitApp {
             target: self.target_option,
             arrange_seed: Some(i64::from(option_seeds.p1.value())),
             arrange_seed_2p: option_seeds.p2.map(|seed| i64::from(seed.value())),
+            random_trainer_seed: self.random_trainer.arrange_seed(),
             bms_random_seed: Some(crate::random_option_seed::fresh_bms_random_seed()),
             ..Default::default()
         }
@@ -10324,6 +10329,7 @@ impl WinitApp {
             target: self.target_option,
             arrange_seed: replay_file.arrange_seed,
             arrange_seed_2p: replay_file.arrange_seed_2p,
+            random_trainer_seed: None,
             legacy_arrange_seed: replay_file.uses_legacy_seed_scheme(),
             bms_random_seed: None,
             bms_random_choices: replay_file.bms_random_choices.clone(),
@@ -10412,6 +10418,7 @@ impl WinitApp {
             target: self.target_option,
             arrange_seed: replay_file.arrange_seed,
             arrange_seed_2p: replay_file.arrange_seed_2p,
+            random_trainer_seed: None,
             legacy_arrange_seed: replay_file.uses_legacy_seed_scheme(),
             bms_random_seed: None,
             bms_random_choices: replay_file.bms_random_choices.clone(),
@@ -13910,6 +13917,7 @@ impl WinitApp {
                 info: &info,
                 app_config: &mut self.boot.app_config,
                 profile_config: &mut self.boot.profile_config,
+                random_trainer: &mut self.random_trainer,
                 skin_meta: &skin_meta,
                 skin_catalog: &self.skin_catalog,
                 course_result,
@@ -21037,6 +21045,7 @@ fn preloaded_matches_start(
         && preloaded.session_options.hs_fix == options.hs_fix
         && preloaded.session_options.arrange_seed == options.arrange_seed
         && preloaded.session_options.arrange_seed_2p == options.arrange_seed_2p
+        && preloaded.session_options.random_trainer_seed == options.random_trainer_seed
         && preloaded.session_options.legacy_arrange_seed == options.legacy_arrange_seed
         && preloaded.session_options.bms_random_seed == options.bms_random_seed
         && preloaded.session_options.bms_random_choices == options.bms_random_choices

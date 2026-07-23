@@ -43,6 +43,7 @@ common-unspecified = （未指定）
 menu-title = BMZ メニュー
 menu-toggle-help = F1 でこのメニューを開閉します。
 menu-debug = デバッグ表示
+menu-random-trainer = Random Trainer
 menu-app-settings = 本体設定
 menu-profile-settings = プロファイル設定
 menu-skin-settings = スキン設定
@@ -52,6 +53,17 @@ menu-directory-open-failed = { $label } を開けません: { $error }
 menu-directory-opened = { $label } を開きました
 menu-directory-missing = ディレクトリが存在しません: { $path }
 licenses-title = ライセンス表記
+
+random-trainer-title = Random Trainer
+random-trainer-enabled = Trainerを有効化
+random-trainer-description = 7K・1Pの通常RANDOMを指定レーン順に固定します。スクラッチは動かしません。
+random-trainer-next-play = 変更は次の新規プレイまたは別配置リトライから反映されます。
+random-trainer-order = レーン順:
+random-trainer-drag = ドラッグ＆ドロップでレーンを並べ替えます。
+random-trainer-reset = 正規
+random-trainer-mirror = 鏡
+random-trainer-shift-left = 左シフト
+random-trainer-shift-right = 右シフト
 
 result-ir-title = IR ランキング
 result-ir-submitting = スコア送信中...

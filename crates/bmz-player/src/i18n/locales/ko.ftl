@@ -43,6 +43,7 @@ common-unspecified = (지정 안 함)
 menu-title = BMZ 메뉴
 menu-toggle-help = F1 키로 이 메뉴를 열거나 닫습니다.
 menu-debug = 디버그 정보
+menu-random-trainer = Random Trainer
 menu-app-settings = 애플리케이션 설정
 menu-profile-settings = 프로필 설정
 menu-skin-settings = 스킨 설정
@@ -52,6 +53,17 @@ menu-directory-open-failed = { $label }을(를) 열 수 없습니다: { $error }
 menu-directory-opened = { $label }을(를) 열었습니다
 menu-directory-missing = 디렉터리가 없습니다: { $path }
 licenses-title = 라이선스 고지
+
+random-trainer-title = Random Trainer
+random-trainer-enabled = Trainer 활성화
+random-trainer-description = 7K 1P 일반 RANDOM의 레인 순서를 고정합니다. 스크래치는 이동하지 않습니다.
+random-trainer-next-play = 변경 사항은 다음 신규 플레이 또는 다른 배치 재시도부터 적용됩니다.
+random-trainer-order = 레인 순서:
+random-trainer-drag = 드래그 앤 드롭으로 레인을 재정렬합니다.
+random-trainer-reset = 정규
+random-trainer-mirror = 미러
+random-trainer-shift-left = 왼쪽 시프트
+random-trainer-shift-right = 오른쪽 시프트
 
 result-ir-title = IR 랭킹
 result-ir-submitting = 점수 전송 중...

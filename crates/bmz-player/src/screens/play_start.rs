@@ -45,6 +45,9 @@ pub struct PlayStartOptions {
     pub target: TargetOption,
     pub arrange_seed: Option<i64>,
     pub arrange_seed_2p: Option<i64>,
+    /// Fresh play 用 Random Trainer seed。7K の通常 RANDOM かつ記録済み pattern が
+    /// 無い場合だけ `PlaySessionOptions` 側で 1P seed より優先する。
+    pub random_trainer_seed: Option<i64>,
     pub legacy_arrange_seed: bool,
     pub bms_random_seed: Option<u64>,
     pub bms_random_choices: Option<Vec<i32>>,
@@ -121,6 +124,7 @@ pub fn play_session_options_from_start(
         target: start_options.target,
         arrange_seed: start_options.arrange_seed,
         arrange_seed_2p: start_options.arrange_seed_2p,
+        random_trainer_seed: start_options.random_trainer_seed,
         legacy_arrange_seed: start_options.legacy_arrange_seed,
         bms_random_seed: start_options.bms_random_seed,
         bms_random_choices: start_options.bms_random_choices,
@@ -454,11 +458,16 @@ mod tests {
 
         let options = play_session_options_from_start(
             &app_config,
-            PlayStartOptions { autoplay: true, ..Default::default() },
+            PlayStartOptions {
+                autoplay: true,
+                random_trainer_seed: Some(322),
+                ..Default::default()
+            },
         );
 
         assert!(options.autoplay);
         assert_eq!(options.sample_rate, 96_000);
+        assert_eq!(options.random_trainer_seed, Some(322));
         assert!(options.replay_player.is_none());
     }
 

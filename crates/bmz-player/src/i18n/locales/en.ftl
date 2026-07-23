@@ -43,6 +43,7 @@ common-unspecified = (Unspecified)
 menu-title = BMZ Menu
 menu-toggle-help = Press F1 to show or hide this menu.
 menu-debug = Debug information
+menu-random-trainer = Random Trainer
 menu-app-settings = Application settings
 menu-profile-settings = Profile settings
 menu-skin-settings = Skin settings
@@ -52,6 +53,17 @@ menu-directory-open-failed = Could not open { $label }: { $error }
 menu-directory-opened = Opened { $label }
 menu-directory-missing = Directory does not exist: { $path }
 licenses-title = License Notices
+
+random-trainer-title = Random Trainer
+random-trainer-enabled = Trainer enabled
+random-trainer-description = Fixes the lane order for 7K 1P RANDOM. Scratch is not moved.
+random-trainer-next-play = Changes apply to the next new or different-arrange play.
+random-trainer-order = Lane order:
+random-trainer-drag = Drag and drop to reorder lanes.
+random-trainer-reset = Reset
+random-trainer-mirror = Mirror
+random-trainer-shift-left = Shift left
+random-trainer-shift-right = Shift right
 
 result-ir-title = IR Rankings
 result-ir-submitting = Submitting score...

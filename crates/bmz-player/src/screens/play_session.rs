@@ -80,6 +80,8 @@ pub struct PlaySessionOptions {
     pub arrange_seed: Option<i64>,
     /// beatoraja-compatible 24-bit RANDOM option seed for the 2P side.
     pub arrange_seed_2p: Option<i64>,
+    /// Fresh play 用 Random Trainer seed。7K の通常 RANDOM だけで 1P seed より優先する。
+    pub random_trainer_seed: Option<i64>,
     /// Replay v3 and older used one unrestricted i64 seed with SplitMix64.
     pub legacy_arrange_seed: bool,
     /// Independent seed used only while selecting BMS `#RANDOM` branches.
@@ -191,6 +193,7 @@ impl Default for PlaySessionOptions {
             target: TargetOption::None,
             arrange_seed: None,
             arrange_seed_2p: None,
+            random_trainer_seed: None,
             legacy_arrange_seed: false,
             bms_random_seed: None,
             bms_random_choices: None,
@@ -1078,11 +1081,18 @@ fn load_transformed_chart_for_play(
         force_ln_mode_for_chart(ln_mode, &mut chart);
     }
     apply_double_option(&mut chart, applied_double_option);
+    let arrange_seed = effective_arrange_seed(
+        chart.metadata.key_mode,
+        options.arrange,
+        options.arrange_seed,
+        options.random_trainer_seed,
+        options.arrange_pattern.as_deref(),
+    );
     let mut applied_arrange = apply_arrange_pair(
         &mut chart,
         options.arrange,
         options.arrange_2p,
-        options.arrange_seed,
+        arrange_seed,
         options.arrange_seed_2p,
         options.legacy_arrange_seed,
         options.arrange_pattern.as_deref(),
@@ -1091,6 +1101,20 @@ fn load_transformed_chart_for_play(
     applied_arrange.bms_random_choices = import.bms_random_choices;
 
     Ok(TransformedPlayChart { chart, applied_arrange, score_key })
+}
+
+fn effective_arrange_seed(
+    key_mode: KeyMode,
+    arrange: ArrangeOption,
+    arrange_seed: Option<i64>,
+    random_trainer_seed: Option<i64>,
+    recorded_pattern: Option<&[u8]>,
+) -> Option<i64> {
+    if key_mode == KeyMode::K7 && arrange == ArrangeOption::Random && recorded_pattern.is_none() {
+        random_trainer_seed.or(arrange_seed)
+    } else {
+        arrange_seed
+    }
 }
 
 pub fn scored_note_count_for_chart(
@@ -2877,6 +2901,75 @@ mod tests {
         shuffle_lane_group(&mut rng, &lanes, &mut perm, false);
 
         assert_eq!(&perm[..7], &[1, 4, 5, 0, 2, 6, 3]);
+    }
+
+    #[test]
+    fn random_trainer_seed_only_overrides_fresh_7k_random() {
+        let trainer_seed = Some(322);
+        let normal_seed = Some(42);
+        let recorded_pattern = [0, 7, 6, 5, 4, 3, 2, 1];
+
+        assert_eq!(
+            effective_arrange_seed(
+                KeyMode::K7,
+                ArrangeOption::Random,
+                normal_seed,
+                trainer_seed,
+                None,
+            ),
+            trainer_seed
+        );
+        assert_eq!(
+            effective_arrange_seed(
+                KeyMode::K5,
+                ArrangeOption::Random,
+                normal_seed,
+                trainer_seed,
+                None,
+            ),
+            normal_seed
+        );
+        assert_eq!(
+            effective_arrange_seed(
+                KeyMode::K7,
+                ArrangeOption::Mirror,
+                normal_seed,
+                trainer_seed,
+                None,
+            ),
+            normal_seed
+        );
+        assert_eq!(
+            effective_arrange_seed(
+                KeyMode::K7,
+                ArrangeOption::Random,
+                normal_seed,
+                trainer_seed,
+                Some(&recorded_pattern),
+            ),
+            normal_seed,
+            "a replay or same-arrange retry pattern must take priority"
+        );
+    }
+
+    #[test]
+    fn random_trainer_compatible_seed_applies_requested_7k_order() {
+        let mut chart = chart();
+        chart.metadata.key_mode = KeyMode::K7;
+        let seed = crate::random_trainer::seed_for_lane_order([2, 1, 4, 3, 6, 5, 7])
+            .expect("known lane order must resolve");
+
+        let applied =
+            apply_arrange(&mut chart, ArrangeOption::Random, Some(i64::from(seed.value())), None);
+        let pattern = applied.pattern.expect("RANDOM must record its lane permutation");
+
+        assert_eq!(applied.seed, Some(322));
+        assert_eq!(&pattern[..8], &[0, 2, 1, 4, 3, 6, 5, 7]);
+        assert_eq!(pattern[Lane::Scratch.index()], Lane::Scratch.index() as u8);
+        assert_eq!(
+            &pattern[Lane::Key8.index()..],
+            &(Lane::Key8.index() as u8..LANE_COUNT as u8).collect::<Vec<_>>()
+        );
     }
 
     #[test]

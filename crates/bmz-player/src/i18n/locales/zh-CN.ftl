@@ -43,6 +43,7 @@ common-unspecified = （未指定）
 menu-title = BMZ 菜单
 menu-toggle-help = 按 F1 打开或关闭此菜单。
 menu-debug = 调试信息
+menu-random-trainer = Random Trainer
 menu-app-settings = 程序设置
 menu-profile-settings = 配置文件设置
 menu-skin-settings = 皮肤设置
@@ -52,6 +53,17 @@ menu-directory-open-failed = 无法打开 { $label }：{ $error }
 menu-directory-opened = 已打开 { $label }
 menu-directory-missing = 目录不存在：{ $path }
 licenses-title = 许可证声明
+
+random-trainer-title = Random Trainer
+random-trainer-enabled = 启用Trainer
+random-trainer-description = 固定7K 1P普通RANDOM的轨道顺序。转盘不会移动。
+random-trainer-next-play = 更改将在下一次新游戏或不同排列重试时生效。
+random-trainer-order = 轨道顺序：
+random-trainer-drag = 拖放以重新排列轨道。
+random-trainer-reset = 正谱
+random-trainer-mirror = 镜像
+random-trainer-shift-left = 左移
+random-trainer-shift-right = 右移
 
 result-ir-title = IR 排名
 result-ir-submitting = 正在提交成绩...
