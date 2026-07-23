@@ -2814,6 +2814,52 @@ mod tests {
     }
 
     #[test]
+    fn bundled_default_play_and_result_display_extended_arrange_labels() {
+        let app_paths = test_app_paths();
+        for (path, kind, ids) in [
+            (
+                default_play_skin_document_path_from_paths(&app_paths, KeyMode::K7),
+                SkinKind::Play,
+                [
+                    ("play_arrange_1p_f", "1P F-RANDOM", "event_index(344) == 10"),
+                    ("play_arrange_1p_mf", "1P MF-RANDOM", "event_index(344) == 11"),
+                    ("play_arrange_2p_f", "2P F-RANDOM", "event_index(345) == 10"),
+                    ("play_arrange_2p_mf", "2P MF-RANDOM", "event_index(345) == 11"),
+                ],
+            ),
+            (
+                default_skin_document_path_from_paths(&app_paths, SkinKind::Result),
+                SkinKind::Result,
+                [
+                    ("result_arrange_1p_f", "1P F-RANDOM", "event_index(344) == 10"),
+                    ("result_arrange_1p_mf", "1P MF-RANDOM", "event_index(344) == 11"),
+                    ("result_arrange_2p_f", "2P F-RANDOM", "event_index(345) == 10"),
+                    ("result_arrange_2p_mf", "2P MF-RANDOM", "event_index(345) == 11"),
+                ],
+            ),
+        ] {
+            let decoded = decode_beatoraja_skin(&path, kind)
+                .unwrap_or_else(|error| panic!("failed to decode {}: {error:#}", path.display()));
+            for (id, label, draw) in ids {
+                assert!(
+                    decoded
+                        .document
+                        .text
+                        .iter()
+                        .any(|text| text.id == id && text.constant_text == label),
+                    "{} should decode {id} text",
+                    path.display()
+                );
+                assert!(decoded.document.destination.iter().any(|entry| matches!(
+                    entry,
+                    DestinationListEntry::Single(destination)
+                        if destination.id == id && destination.draw == draw
+                )));
+            }
+        }
+    }
+
+    #[test]
     fn lua_compat_virtual_io_contains_only_sanitized_beatoraja_config() {
         let files = lua_compat_virtual_io_files();
         assert_eq!(files.len(), 2);
@@ -3192,6 +3238,64 @@ mod tests {
                 if destination.id == "rank_diff_aaa_plus"
                     && destination.draw.contains("nearest_rank(AAA,plus)")
         )));
+    }
+
+    #[test]
+    fn luxe_flat_result_displays_extended_arrange_labels_and_lane_pattern() {
+        let skin_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../data/skins/Luxez-Flat/result/result.luaskin");
+        if !skin_path.is_file() {
+            return;
+        }
+        let runtime_state = LuaLoadRuntimeState {
+            event_index_values: BTreeMap::from([(42, 2), (43, 2), (344, 10), (345, 11)]),
+            option_values: BTreeMap::from([(163, true)]),
+            ..LuaLoadRuntimeState::default()
+        };
+        let loaded = load_skin_document_uncached(
+            &skin_path,
+            SkinKind::Result,
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            &runtime_state,
+        )
+        .expect("Luxe Flat result should decode extended arrange labels");
+
+        assert_eq!(
+            loaded
+                .document
+                .text
+                .iter()
+                .find(|text| text.id == "lane_option")
+                .map(|text| text.constant_text.as_str()),
+            Some("F-RANDOM / MF-RANDOM")
+        );
+        assert!(loaded.document.destination.iter().any(|entry| matches!(
+            entry,
+            DestinationListEntry::Single(destination)
+                if destination.id == "1key"
+                    && destination.draw.contains("event_index(450) == 1")
+        )));
+
+        let course_skin_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../data/skins/Luxez-Flat/result/courseresult.luaskin");
+        let course_loaded = load_skin_document_uncached(
+            &course_skin_path,
+            SkinKind::Result,
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            &runtime_state,
+        )
+        .expect("Luxe Flat course result should decode extended arrange labels");
+        assert_eq!(
+            course_loaded
+                .document
+                .text
+                .iter()
+                .find(|text| text.id == "lane_option")
+                .map(|text| text.constant_text.as_str()),
+            Some("F-RANDOM / MF-RANDOM")
+        );
     }
 
     #[test]
@@ -4045,6 +4149,26 @@ mod tests {
             .find(|text| text.id == "timing")
             .expect("mz-select timing text");
         assert_eq!(timing.constant_text, "平均12.5ms遅い");
+        for (id, label, draw) in [
+            ("arrange_f_random", "F-RANDOM", "event_index(344) == 10"),
+            ("arrange_mf_random", "MF-RANDOM", "event_index(344) == 11"),
+            ("arrange_f_random_2p", "2P F-RANDOM", "event_index(345) == 10"),
+            ("arrange_mf_random_2p", "2P MF-RANDOM", "event_index(345) == 11"),
+        ] {
+            assert!(
+                decoded
+                    .document
+                    .text
+                    .iter()
+                    .any(|text| text.id == id && text.constant_text == label),
+                "mz-select result should decode {id} text"
+            );
+            assert!(decoded.document.destination.iter().any(|entry| matches!(
+                entry,
+                DestinationListEntry::Single(destination)
+                    if destination.id == id && destination.draw == draw
+            )));
+        }
         let clear_state = decoded
             .document
             .image

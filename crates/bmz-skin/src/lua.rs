@@ -4888,6 +4888,8 @@ fn single_number_call(calls: &[i32]) -> Option<i32> {
     calls.iter().all(|call| *call == first).then_some(first)
 }
 
+const ARRANGE_EVENT_INDEX_SAMPLES: [i32; 12] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11];
+
 fn call_draw_with_number(
     function: &Function,
     main_state_probe: &Arc<Mutex<MainStateProbe>>,
@@ -4920,7 +4922,7 @@ fn infer_main_state_event_index_draw_condition(
         calls
     };
     let event_id = single_number_call(&calls)?;
-    let samples = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9];
+    let samples = ARRANGE_EVENT_INDEX_SAMPLES;
     let observed = samples
         .iter()
         .map(|sample| call_draw_with_event_index(function, main_state_probe, event_id, *sample))
@@ -4974,7 +4976,7 @@ fn infer_main_state_event_index_options_draw_condition(
         calls
     };
     let event_id = single_number_call(&event_calls)?;
-    let samples = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9];
+    let samples = ARRANGE_EVENT_INDEX_SAMPLES;
 
     let mut option_ids = Vec::new();
     for event_value in samples {
@@ -8995,6 +8997,30 @@ mod tests {
     }
 
     #[test]
+    fn infers_extended_arrange_event_index_draw_condition() {
+        let lua = Lua::new();
+        let probe = Arc::new(Mutex::new(MainStateProbe::default()));
+        let main_state = create_main_state_stub(&lua, probe.clone()).unwrap();
+        lua.globals().set("main_state", main_state).unwrap();
+        let function = lua
+            .load(
+                r#"
+                return function()
+                    return main_state.event_index(344) == 10
+                        or main_state.event_index(344) == 11
+                end
+                "#,
+            )
+            .eval::<Function>()
+            .unwrap();
+
+        assert_eq!(
+            infer_main_state_event_index_draw_condition(&function, &probe),
+            Some("event_index(344) == 10 or event_index(344) == 11".to_string())
+        );
+    }
+
+    #[test]
     fn infers_event_index_and_dp_side_options_draw_condition() {
         let lua = Lua::new();
         let probe = Arc::new(Mutex::new(MainStateProbe::default()));
@@ -9023,6 +9049,17 @@ mod tests {
             )
             .eval::<Function>()
             .unwrap();
+        let extended = lua
+            .load(
+                r#"
+                return function()
+                    return main_state.event_index(345) == 11
+                        and (main_state.option(162) or main_state.option(163))
+                end
+                "#,
+            )
+            .eval::<Function>()
+            .unwrap();
 
         assert_eq!(
             infer_boolean_predicate(&random, &probe, None),
@@ -9035,6 +9072,13 @@ mod tests {
             infer_boolean_predicate(&normal, &probe, None),
             Some(
                 "event_index(43) == 0 and option(162) or event_index(43) == 0 and option(163)"
+                    .to_string()
+            )
+        );
+        assert_eq!(
+            infer_boolean_predicate(&extended, &probe, None),
+            Some(
+                "event_index(345) == 11 and option(162) or event_index(345) == 11 and option(163)"
                     .to_string()
             )
         );

@@ -3571,6 +3571,26 @@ mod tests {
                 "m-select should retain operating-time ref {ref_id}"
             );
         }
+        for (id, label, draw) in [
+            ("default_stateplayoption_f_random", "F-RANDOM", "event_index(344) == 10"),
+            ("default_stateplayoption_mf_random", "MF-RANDOM", "event_index(344) == 11"),
+            ("default_stateplayoption_f_random2", "F-RANDOM", "event_index(345) == 10"),
+            ("default_stateplayoption_mf_random2", "MF-RANDOM", "event_index(345) == 11"),
+        ] {
+            assert!(
+                loaded
+                    .document
+                    .text
+                    .iter()
+                    .any(|text| text.id == id && text.constant_text == label),
+                "m-select should decode {id} text"
+            );
+            assert!(loaded.document.destination.iter().any(|entry| matches!(
+                entry,
+                bmz_skin_document::DestinationListEntry::Single(destination)
+                    if destination.id == id && destination.draw == draw
+            )));
+        }
     }
 
     #[test]
@@ -3959,6 +3979,42 @@ mod tests {
             fast_slow_draws.contains(&("slow", "option(1243) && number(525) != 0")),
             "Rmz play6 SLOW draw should remain runtime-gated: {fast_slow_draws:?}"
         );
+        for (id, label, draw) in [
+            ("lane-op-fran-tx", "F-RANDOM", "event_index(344) == 10"),
+            ("lane-op-mfran-tx", "MF-RANDOM", "event_index(344) == 11"),
+        ] {
+            assert!(
+                loaded
+                    .document
+                    .text
+                    .iter()
+                    .any(|text| text.id == id && text.constant_text == label),
+                "Rmz play6 should decode {id} text"
+            );
+            let draws = loaded
+                .document
+                .destination
+                .iter()
+                .filter_map(|entry| match entry {
+                    bmz_skin_document::DestinationListEntry::Single(destination)
+                        if destination.id == id =>
+                    {
+                        Some(destination.draw.as_str())
+                    }
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            assert!(draws.contains(&draw), "Rmz play6 {id} should use {draw}, got {draws:?}");
+        }
+        let random_draw = (0..10)
+            .map(|value| format!("event_index(344) == {value}"))
+            .collect::<Vec<_>>()
+            .join(" or ");
+        assert!(loaded.document.destination.iter().any(|entry| matches!(
+            entry,
+            bmz_skin_document::DestinationListEntry::Single(destination)
+                if destination.id == "lane-op-tx" && destination.draw == random_draw
+        )));
         let eon_shadow_draw = "timer(143) == timer_off and number(106)-number(110)-number(111)-number(112)-number(113)-number(114) == 0";
         let eon_destinations = loaded
             .document

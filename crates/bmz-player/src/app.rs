@@ -18797,6 +18797,16 @@ fn apply_result_summary_lua_load_state(
         i32::try_from(bmz_render::skin::select_arrange_index(&summary.arrange_2p))
             .unwrap_or_default(),
     );
+    runtime_state.event_index_values.insert(
+        344,
+        i32::try_from(bmz_render::skin::extended_arrange_index(&summary.arrange))
+            .unwrap_or_default(),
+    );
+    runtime_state.event_index_values.insert(
+        345,
+        i32::try_from(bmz_render::skin::extended_arrange_index(&summary.arrange_2p))
+            .unwrap_or_default(),
+    );
 }
 
 fn result_judge_rank_option_id(judge_rank: Option<i32>) -> Option<i32> {
@@ -24123,6 +24133,22 @@ mod tests {
         assert_eq!(runtime_state.event_index_values.get(&308), Some(&2));
         assert_eq!(runtime_state.event_index_values.get(&42), Some(&2));
         assert_eq!(runtime_state.event_index_values.get(&43), Some(&1));
+        assert_eq!(runtime_state.event_index_values.get(&344), Some(&2));
+        assert_eq!(runtime_state.event_index_values.get(&345), Some(&1));
+        summary.arrange = "F-RANDOM".to_string();
+        summary.arrange_2p = "MF-RANDOM".to_string();
+        let mut extended_runtime_state = bmz_skin::LuaLoadRuntimeState::default();
+        apply_result_summary_lua_load_state(
+            &mut extended_runtime_state,
+            &summary,
+            "Table",
+            "★12",
+            "Table ★12",
+        );
+        assert_eq!(extended_runtime_state.event_index_values.get(&42), Some(&2));
+        assert_eq!(extended_runtime_state.event_index_values.get(&43), Some(&2));
+        assert_eq!(extended_runtime_state.event_index_values.get(&344), Some(&10));
+        assert_eq!(extended_runtime_state.event_index_values.get(&345), Some(&11));
         assert_eq!(
             runtime_state.number_values.get(&bmz_render::skin::SKIN_REF_BMZ_COURSE_STAGE_COUNT),
             Some(&2)

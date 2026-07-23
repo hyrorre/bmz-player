@@ -27,6 +27,10 @@
     { "id": "result_bp", "numberRef": 76, "size": 28 },
     { "id": "result_gauge_label", "constantText": "GAUGE", "size": 13 },
     { "id": "result_gauge", "numberRef": 107, "suffix": "%", "size": 28 },
+    { "id": "result_arrange_1p_f", "constantText": "1P F-RANDOM", "size": 16 },
+    { "id": "result_arrange_1p_mf", "constantText": "1P MF-RANDOM", "size": 16 },
+    { "id": "result_arrange_2p_f", "constantText": "2P F-RANDOM", "size": 16 },
+    { "id": "result_arrange_2p_mf", "constantText": "2P MF-RANDOM", "size": 16 },
     { "id": "result_compare_label", "constantText": "BEST / TARGET / DIFF", "size": 13 },
     { "id": "result_best", "numberRef": 150, "size": 22 },
     { "id": "result_target", "numberRef": 121, "size": 22 },
@@ -217,6 +221,26 @@
     {
       "id": "result_seconds",
       "dst": [{ "x": 838, "y": 436, "w": 64, "h": 24, "a": 245, "r": 218, "g": 230, "b": 232 }]
+    },
+    {
+      "id": "result_arrange_1p_f",
+      "draw": "event_index(344) == 10",
+      "dst": [{ "x": 654, "y": 486, "w": 200, "h": 18, "a": 245, "r": 120, "g": 226, "b": 188 }]
+    },
+    {
+      "id": "result_arrange_1p_mf",
+      "draw": "event_index(344) == 11",
+      "dst": [{ "x": 654, "y": 486, "w": 200, "h": 18, "a": 245, "r": 120, "g": 226, "b": 188 }]
+    },
+    {
+      "id": "result_arrange_2p_f",
+      "draw": "event_index(345) == 10",
+      "dst": [{ "x": 880, "y": 486, "w": 200, "h": 18, "a": 245, "r": 126, "g": 194, "b": 246 }]
+    },
+    {
+      "id": "result_arrange_2p_mf",
+      "draw": "event_index(345) == 11",
+      "dst": [{ "x": 880, "y": 486, "w": 200, "h": 18, "a": 245, "r": 126, "g": 194, "b": 246 }]
     },
     {
       "id": "ir_submit_success",

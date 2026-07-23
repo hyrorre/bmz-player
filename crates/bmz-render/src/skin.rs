@@ -12538,7 +12538,7 @@ pub fn select_arrange_index(arrange: &str) -> usize {
     }
 }
 
-pub(crate) fn extended_arrange_index(arrange: &str) -> usize {
+pub fn extended_arrange_index(arrange: &str) -> usize {
     match arrange {
         "F-RANDOM" => 10,
         "MF-RANDOM" => 11,
