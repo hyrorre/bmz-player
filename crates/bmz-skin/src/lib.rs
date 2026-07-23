@@ -3571,12 +3571,12 @@ mod tests {
                 "m-select should retain operating-time ref {ref_id}"
             );
         }
-        for (id, act) in [
-            ("bmz_select_arrange", 42),
-            ("bmz_select_gauge", 40),
-            ("bmz_select_double_option", 54),
-            ("bmz_select_hs_fix", 55),
-            ("bmz_select_arrange_2p", 43),
+        for (id, act, center_x) in [
+            ("bmz_select_arrange", 42, 545),
+            ("bmz_select_gauge", 40, 711),
+            ("bmz_select_double_option", 54, 877),
+            ("bmz_select_hs_fix", 55, 1043),
+            ("bmz_select_arrange_2p", 43, 1209),
         ] {
             assert!(
                 loaded.document.text.iter().any(|text| text.id == id
@@ -3590,6 +3590,11 @@ mod tests {
                     if destination.id == id
                         && destination.act == Some(act)
                         && destination.click == 2
+                        && matches!(
+                            destination.dst.first(),
+                            Some(bmz_skin_document::SkinDstEntry::Frame(frame))
+                                if frame.x == Some(center_x)
+                        )
             )));
         }
         assert!(

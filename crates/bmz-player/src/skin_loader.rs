@@ -4002,12 +4002,12 @@ mod tests {
                 "Luxe Flat should retain operating-time ref {ref_id}"
             );
         }
-        for (id, act) in [
-            ("bmz_select_arrange", 42),
-            ("bmz_select_gauge", 40),
-            ("bmz_select_double_option", 54),
-            ("bmz_select_hs_fix", 55),
-            ("bmz_select_arrange_2p", 43),
+        for (id, act, center_x) in [
+            ("bmz_select_arrange", 42, 138),
+            ("bmz_select_gauge", 40, 302),
+            ("bmz_select_double_option", 54, 446),
+            ("bmz_select_hs_fix", 55, 613),
+            ("bmz_select_arrange_2p", 43, 790),
         ] {
             assert!(
                 decoded.document.text.iter().any(|text| text.id == id),
@@ -4016,7 +4016,13 @@ mod tests {
             assert!(decoded.document.destination.iter().any(|entry| matches!(
                 entry,
                 DestinationListEntry::Single(destination)
-                    if destination.id == id && destination.act == Some(act)
+                    if destination.id == id
+                        && destination.act == Some(act)
+                        && matches!(
+                            destination.dst.first(),
+                            Some(bmz_render::skin::SkinDstEntry::Frame(frame))
+                                if frame.x == Some(center_x)
+                        )
             )));
         }
     }
