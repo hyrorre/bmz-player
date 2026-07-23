@@ -3683,6 +3683,86 @@ mod tests {
     }
 
     #[test]
+    fn antique_play_skin_shows_random_lane_pattern_before_ready_when_available() {
+        let skin_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../data/skins/mz-select/play/antique/system/play7main.luaskin");
+        if !skin_path.is_file() {
+            return;
+        }
+
+        let decoded = decode_beatoraja_skin(&skin_path, SkinKind::Play).unwrap();
+        let number_texture = decoded
+            .sources
+            .iter()
+            .find(|source| source.source_id == "src_number_lane")
+            .expect("antique number lane source")
+            .texture;
+        let sources = decoded
+            .sources
+            .iter()
+            .map(|source| {
+                (
+                    source.source_id.clone(),
+                    SkinDocumentTexture {
+                        source_id: source.source_id.clone(),
+                        texture: source.texture,
+                        source_size: SkinImageSize {
+                            width: source.size.width,
+                            height: source.size.height,
+                        },
+                    },
+                )
+            })
+            .collect::<std::collections::HashMap<_, _>>();
+        let mut random_lane_refs = [0; bmz_render::skin::SKIN_RANDOM_LANE_REF_COUNT];
+        random_lane_refs[..7].copy_from_slice(&[7, 6, 5, 4, 3, 2, 1]);
+        let pre_ready = SkinDrawState {
+            key_mode: KeyMode::K7,
+            random_lane_refs,
+            skin_loaded: false,
+            ..SkinDrawState::default()
+        };
+
+        let render = |state: &SkinDrawState| {
+            decoded.document.static_render_items(&sources, state, &SkinTextState::default())
+        };
+        let random_digits = |items: &[SkinRenderItem]| {
+            let mut digits = items
+                .iter()
+                .filter_map(|item| match item {
+                    SkinRenderItem::Image { texture, rect, tint, .. }
+                        if *texture == number_texture && (0.69..0.72).contains(&rect.y) =>
+                    {
+                        Some((rect.x, *tint))
+                    }
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            digits.sort_by(|left, right| left.0.total_cmp(&right.0));
+            digits
+        };
+
+        let pre_ready_items = render(&pre_ready);
+        let digits = random_digits(&pre_ready_items);
+        assert_eq!(digits.len(), 7, "expected seven pre-READY RANDOM digits");
+        for (index, (_, tint)) in digits.into_iter().enumerate() {
+            let expected =
+                if index % 2 == 0 { (1.0, 1.0, 1.0) } else { (64.0 / 255.0, 160.0 / 255.0, 1.0) };
+            assert!((tint.r - expected.0).abs() < 0.01);
+            assert!((tint.g - expected.1).abs() < 0.01);
+            assert!((tint.b - expected.2).abs() < 0.01);
+        }
+
+        let ready_items = render(&SkinDrawState { skin_loaded: true, ..pre_ready.clone() });
+        assert!(random_digits(&ready_items).is_empty());
+        let no_pattern_items = render(&SkinDrawState {
+            random_lane_refs: [0; bmz_render::skin::SKIN_RANDOM_LANE_REF_COUNT],
+            ..pre_ready
+        });
+        assert!(random_digits(&no_pattern_items).is_empty());
+    }
+
+    #[test]
     fn luxe_flat_lua_select_skin_keeps_operating_time_refs_when_available() {
         let skin_path = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../data/skins/Luxez-Flat/music_select.luaskin");
