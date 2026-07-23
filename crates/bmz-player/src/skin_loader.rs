@@ -3718,15 +3718,21 @@ mod tests {
                 number_texture,
             )
         };
-        let (context, number_texture) = load_context(&BTreeMap::new());
-        let document = context.document().expect("antique play document");
-        assert!(document.enabled_options().contains(&917));
+        let (default_context, default_number_texture) = load_context(&BTreeMap::new());
+        let default_document = default_context.document().expect("antique play document");
+        assert!(default_document.enabled_options().contains(&916));
+        assert!(!default_document.enabled_options().contains(&917));
         assert!(
-            document
+            default_document
                 .property
                 .iter()
-                .any(|property| { property.name == "RANDOM配置表示" && property.def == "ON" })
+                .any(|property| { property.name == "RANDOM配置表示" && property.def == "OFF" })
         );
+        let options = BTreeMap::from([("RANDOM配置表示".to_string(), "ON".to_string())]);
+        let (context, number_texture) = load_context(&options);
+        let document = context.document().expect("antique play document");
+        assert!(document.enabled_options().contains(&917));
+        assert!(!document.enabled_options().contains(&916));
         let mut pattern = (0..bmz_core::lane::LANE_COUNT as u8).collect::<Vec<_>>();
         for (destination, source) in (1..=7).zip((1..=7).rev()) {
             pattern[destination] = source as u8;
@@ -3805,14 +3811,9 @@ mod tests {
         );
         assert!(random_digits(&render(&context, no_pattern), number_texture).is_empty());
 
-        let options = BTreeMap::from([("RANDOM配置表示".to_string(), "OFF".to_string())]);
-        let (off_context, off_number_texture) = load_context(&options);
-        let off_document = off_context.document().expect("antique play document");
-        assert!(off_document.enabled_options().contains(&916));
-        assert!(!off_document.enabled_options().contains(&917));
         assert!(
-            random_digits(&render(&off_context, pre_ready), off_number_texture).is_empty(),
-            "RANDOM display option OFF should hide all lane digits"
+            random_digits(&render(&default_context, pre_ready), default_number_texture).is_empty(),
+            "RANDOM display should default to OFF"
         );
     }
 
