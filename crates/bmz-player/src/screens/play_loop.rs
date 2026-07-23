@@ -443,7 +443,10 @@ pub fn refresh_play_ending_snapshot(
     snapshot
 }
 
-fn apply_play_arrange_to_snapshot(snapshot: &mut RenderSnapshot, applied: &AppliedArrange) {
+pub(crate) fn apply_play_arrange_to_snapshot(
+    snapshot: &mut RenderSnapshot,
+    applied: &AppliedArrange,
+) {
     snapshot.arrange = applied.arrange.as_str().to_string();
     snapshot.arrange_2p = applied.arrange_2p.as_str().to_string();
     snapshot.lane_shuffle_pattern = applied.pattern.clone().unwrap_or_default();

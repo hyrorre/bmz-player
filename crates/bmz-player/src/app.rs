@@ -110,7 +110,8 @@ use crate::screens::course_session::{ActiveCourseSession, CourseEntryResult, Cou
 use crate::screens::key_config_edit::KeyConfigEditSession;
 use crate::screens::play_finish::FinishedPlaySession;
 use crate::screens::play_loop::{
-    PlayEndingSkinTimers, advance_running_play_session, refresh_play_ending_snapshot,
+    PlayEndingSkinTimers, advance_running_play_session, apply_play_arrange_to_snapshot,
+    refresh_play_ending_snapshot,
 };
 use crate::screens::play_session::AppliedArrange;
 use crate::screens::play_session::build_practice_prepared_from_preloaded;
@@ -5360,8 +5361,7 @@ impl WinitApp {
                     self.play_ready_sound_started_at,
                     &mut self.last_play_snapshot,
                     &active_play.running.session,
-                    active_play.running.applied_arrange.arrange,
-                    active_play.running.applied_arrange.arrange_2p,
+                    &active_play.running.applied_arrange,
                 );
                 // E1+lane keys should still reach gameplay input so notes are judged
                 // and key beams render while changing play options.
@@ -5395,8 +5395,7 @@ impl WinitApp {
                     self.play_ready_sound_started_at,
                     &mut self.last_play_snapshot,
                     &active_play.running.session,
-                    active_play.running.applied_arrange.arrange,
-                    active_play.running.applied_arrange.arrange_2p,
+                    &active_play.running.applied_arrange,
                 );
                 return;
             }
@@ -5444,8 +5443,7 @@ impl WinitApp {
                         self.play_ready_sound_started_at,
                         &mut self.last_play_snapshot,
                         &active_play.running.session,
-                        active_play.running.applied_arrange.arrange,
-                        active_play.running.applied_arrange.arrange_2p,
+                        &active_play.running.applied_arrange,
                     );
                 }
                 // Start キーはゲームプレイ入力としても通すのでフォールスルー
@@ -9819,8 +9817,9 @@ impl WinitApp {
             &active_play.running.render_snapshot_cache,
         );
         self.apply_profile_fast_slow_filter(&mut snapshot);
-        snapshot.arrange = active_play.running.applied_arrange.arrange.as_str().to_string();
-        snapshot.arrange_2p = active_play.running.applied_arrange.arrange_2p.as_str().to_string();
+        // READY前から実際の配置をスキンへ渡す。arrange名だけでは
+        // RANDOM lane ref (450..469) を解決できないため、確定patternも必要。
+        apply_play_arrange_to_snapshot(&mut snapshot, &active_play.running.applied_arrange);
         snapshot.target = active_play.running.target.clone();
         snapshot.stagefile_background = self.play_stagefile_loaded;
         snapshot.stagefile_image_size = self.play_stagefile_size;
@@ -13319,8 +13318,7 @@ impl WinitApp {
             self.play_ready_sound_started_at,
             &mut self.last_play_snapshot,
             &active_play.running.session,
-            active_play.running.applied_arrange.arrange,
-            active_play.running.applied_arrange.arrange_2p,
+            &active_play.running.applied_arrange,
         );
     }
 
@@ -13473,8 +13471,7 @@ impl WinitApp {
                 self.play_ready_sound_started_at,
                 &mut self.last_play_snapshot,
                 &active_play.running.session,
-                active_play.running.applied_arrange.arrange,
-                active_play.running.applied_arrange.arrange_2p,
+                &active_play.running.applied_arrange,
             );
         } else if self.play_ready_sound_started_at.is_none()
             && let Some(pending) = &mut self.pending_play_start
@@ -13544,8 +13541,7 @@ impl WinitApp {
             self.play_ready_sound_started_at,
             &mut self.last_play_snapshot,
             &active_play.running.session,
-            active_play.running.applied_arrange.arrange,
-            active_play.running.applied_arrange.arrange_2p,
+            &active_play.running.applied_arrange,
         );
         true
     }
@@ -14065,8 +14061,7 @@ impl WinitApp {
                 self.play_ready_sound_started_at,
                 &mut self.last_play_snapshot,
                 &active_play.running.session,
-                active_play.running.applied_arrange.arrange,
-                active_play.running.applied_arrange.arrange_2p,
+                &active_play.running.applied_arrange,
             );
             tracing::info!(
                 hispeed = active_play.running.session.hispeed,
@@ -20194,8 +20189,7 @@ fn update_pre_ready_play_snapshot_options_for_session(
     ready_sound_started_at: Option<Instant>,
     last_play_snapshot: &mut Option<RenderSnapshot>,
     session: &bmz_gameplay::session::GameSession,
-    arrange: ArrangeOption,
-    arrange_2p: ArrangeOption,
+    applied_arrange: &AppliedArrange,
 ) {
     if ready_sound_started_at.is_some() {
         return;
@@ -20208,8 +20202,7 @@ fn update_pre_ready_play_snapshot_options_for_session(
         session,
         snapshot.time,
     );
-    snapshot.arrange = arrange.as_str().to_string();
-    snapshot.arrange_2p = arrange_2p.as_str().to_string();
+    apply_play_arrange_to_snapshot(snapshot, applied_arrange);
 }
 
 fn update_play_exit_hold_started_at(

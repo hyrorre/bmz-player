@@ -3697,41 +3697,47 @@ mod tests {
             .find(|source| source.source_id == "src_number_lane")
             .expect("antique number lane source")
             .texture;
-        let sources = decoded
-            .sources
-            .iter()
-            .map(|source| {
-                (
-                    source.source_id.clone(),
-                    SkinDocumentTexture {
-                        source_id: source.source_id.clone(),
-                        texture: source.texture,
-                        source_size: SkinImageSize {
-                            width: source.size.width,
-                            height: source.size.height,
-                        },
-                    },
-                )
-            })
-            .collect::<std::collections::HashMap<_, _>>();
-        let mut random_lane_refs = [0; bmz_render::skin::SKIN_RANDOM_LANE_REF_COUNT];
-        random_lane_refs[..7].copy_from_slice(&[7, 6, 5, 4, 3, 2, 1]);
-        let pre_ready = SkinDrawState {
+        let document_textures = decoded.sources.iter().map(|source| SkinDocumentTexture {
+            source_id: source.source_id.clone(),
+            texture: source.texture,
+            source_size: SkinImageSize { width: source.size.width, height: source.size.height },
+        });
+        let context = SkinContext::from_manifest_and_document(
+            SkinManifest::default(),
+            decoded.document,
+            document_textures,
+        );
+        let mut pattern = (0..bmz_core::lane::LANE_COUNT as u8).collect::<Vec<_>>();
+        for (destination, source) in (1..=7).zip((1..=7).rev()) {
+            pattern[destination] = source as u8;
+        }
+        let applied_arrange = crate::screens::play_session::AppliedArrange {
+            arrange: crate::select_options::ArrangeOption::Random,
+            pattern: Some(pattern.clone()),
+            ..crate::screens::play_session::AppliedArrange::default()
+        };
+        let mut pre_ready = bmz_render::snapshot::RenderSnapshot {
             key_mode: KeyMode::K7,
-            random_lane_refs,
-            skin_loaded: false,
-            ..SkinDrawState::default()
+            ready_elapsed_time: None,
+            ..Default::default()
         };
+        crate::screens::play_loop::apply_play_arrange_to_snapshot(&mut pre_ready, &applied_arrange);
+        assert_eq!(pre_ready.lane_shuffle_pattern, pattern);
 
-        let render = |state: &SkinDrawState| {
-            decoded.document.static_render_items(&sources, state, &SkinTextState::default())
+        let render = |snapshot| {
+            bmz_render::plan::DrawPlan::from_scene_with_skin(
+                &bmz_render::scene::AppSceneSnapshot::Play(snapshot),
+                &context,
+                &mut bmz_render::skin::DynamicTimerRuntime::default(),
+            )
         };
-        let random_digits = |items: &[SkinRenderItem]| {
-            let mut digits = items
+        let random_digits = |plan: &bmz_render::plan::DrawPlan| {
+            let mut digits = plan
+                .commands
                 .iter()
-                .filter_map(|item| match item {
-                    SkinRenderItem::Image { texture, rect, tint, .. }
-                        if *texture == number_texture && (0.69..0.72).contains(&rect.y) =>
+                .filter_map(|command| match command {
+                    bmz_render::plan::DrawCommand::Image { texture, rect, tint, .. }
+                        if texture.0 == number_texture.0 && (0.69..0.72).contains(&rect.y) =>
                     {
                         Some((rect.x, *tint))
                     }
@@ -3742,8 +3748,7 @@ mod tests {
             digits
         };
 
-        let pre_ready_items = render(&pre_ready);
-        let digits = random_digits(&pre_ready_items);
+        let digits = random_digits(&render(pre_ready.clone()));
         assert_eq!(digits.len(), 7, "expected seven pre-READY RANDOM digits");
         for (index, (_, tint)) in digits.into_iter().enumerate() {
             let expected =
@@ -3753,13 +3758,19 @@ mod tests {
             assert!((tint.b - expected.2).abs() < 0.01);
         }
 
-        let ready_items = render(&SkinDrawState { skin_loaded: true, ..pre_ready.clone() });
-        assert!(random_digits(&ready_items).is_empty());
-        let no_pattern_items = render(&SkinDrawState {
-            random_lane_refs: [0; bmz_render::skin::SKIN_RANDOM_LANE_REF_COUNT],
-            ..pre_ready
-        });
-        assert!(random_digits(&no_pattern_items).is_empty());
+        let mut ready = pre_ready.clone();
+        ready.ready_elapsed_time = Some(TimeUs(0));
+        assert!(random_digits(&render(ready)).is_empty());
+
+        let mut no_pattern = pre_ready;
+        crate::screens::play_loop::apply_play_arrange_to_snapshot(
+            &mut no_pattern,
+            &crate::screens::play_session::AppliedArrange {
+                arrange: crate::select_options::ArrangeOption::Random,
+                ..crate::screens::play_session::AppliedArrange::default()
+            },
+        );
+        assert!(random_digits(&render(no_pattern)).is_empty());
     }
 
     #[test]
