@@ -546,6 +546,7 @@ pub fn build_render_snapshot_with_target_and_bga_frames_cached(
         play_level: session.chart.metadata.play_level.clone(),
         arrange: "NORMAL".to_string(),
         arrange_2p: "NORMAL".to_string(),
+        lane_shuffle_pattern: Vec::new(),
         target: String::new(),
         combo: session.display_combo(),
         max_combo: session.display_max_combo(),

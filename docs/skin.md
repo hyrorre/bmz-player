@@ -82,6 +82,26 @@ extended index は beatoraja 互換値 `0=NORMAL`, `1=MIRROR`, `2=RANDOM`, `3=R-
 `4=S-RANDOM`, `5=SPIRAL`, `6=H-RANDOM`, `7=ALL-SCR`, `8=RANDOM-EX`,
 `9=S-RANDOM-EX` に加えて、`10=F-RANDOM`, `11=MF-RANDOM` を返す。
 
+### BMZ RANDOM Lane Refs
+
+beatoraja result skin互換の `450..469` は、BMZではplay/select skinにも拡張して公開する。
+配列は `pattern[表示先レーン] = 元レーン` で保持し、skinへは各sideのレーン番号を
+1始まりで返す。
+
+| ref | meaning |
+| ---: | --- |
+| 450..458 | 1P key 1..9 の元レーン番号 |
+| 459 | 1P Scratch の元レーン番号 |
+| 460..466 | 2P key 1..7 の元レーン番号 |
+| 469 | 2P Scratch の元レーン番号 |
+
+`467` / `468` はbeatorajaに対応する定義がないため未使用。resultでは従来どおり
+RANDOM / R-RANDOM / RANDOM-EX（ScratchはRANDOM-EXのみ）の固定配置を返す。
+playでは現在プレイ中の同じ固定配置を返す。selectでは「このまま開始した場合に
+適用する予定の配置」を返し、通常の未抽選RANDOMや予定配置がない場合は全て `0`。
+リプレイや将来のライバル配置コピーなど、選曲中に配置が確定している機能が
+select snapshotへ予定配置を設定する。
+
 ### BMZ Hispeed Mode Refs
 
 `1900` 台は BMZ play runtime extension として扱う。beatoraja 互換 ref と衝突させないため、

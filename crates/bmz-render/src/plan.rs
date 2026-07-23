@@ -900,6 +900,12 @@ fn plan_play(
         select_target_index: crate::skin::play_target_image_index(&snapshot.target),
         select_extended_arrange_index: crate::skin::extended_arrange_index(&snapshot.arrange),
         select_extended_arrange_2p_index: crate::skin::extended_arrange_index(&snapshot.arrange_2p),
+        random_lane_refs: crate::skin::fixed_random_lane_refs(
+            &snapshot.lane_shuffle_pattern,
+            snapshot.key_mode,
+            &snapshot.arrange,
+            &snapshot.arrange_2p,
+        ),
         combo: snapshot.combo,
         max_combo: snapshot.max_combo,
         ex_score: snapshot.ex_score,
@@ -1692,9 +1698,11 @@ fn build_result_skin_draw_state(
         select_extended_arrange_2p_index: crate::skin::extended_arrange_index(&snapshot.arrange_2p),
         result_extended_arrange_index: crate::skin::extended_arrange_index(&snapshot.arrange),
         result_extended_arrange_2p_index: crate::skin::extended_arrange_index(&snapshot.arrange_2p),
-        result_random_lane_refs: crate::skin::result_random_lane_refs(
+        random_lane_refs: crate::skin::fixed_random_lane_refs(
             &snapshot.lane_shuffle_pattern,
             snapshot.key_mode,
+            &snapshot.arrange,
+            &snapshot.arrange_2p,
         ),
         result_has_long_notes: Some(snapshot.has_long_notes),
         result_ln_mode_index: Some(snapshot.ln_mode_index),
@@ -3537,7 +3545,7 @@ mod tests {
         let state = build_result_skin_draw_state(&snapshot, 0);
 
         assert_eq!(state.result_arrange_index, 2);
-        assert_eq!(state.result_random_lane_refs[0], 7);
+        assert_eq!(state.random_lane_refs[0], 7);
     }
 
     #[test]

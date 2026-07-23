@@ -111,6 +111,11 @@ pub struct SelectSnapshot {
     pub rows: Vec<SelectRowSnapshot>,
     pub arrange: String,
     pub arrange_2p: String,
+    /// BMZ extension: このままプレイを開始した場合に適用する予定の固定レーン配置。
+    ///
+    /// 通常の RANDOM は選曲中には未抽選なので空。リプレイや将来のライバル配置コピーなど、
+    /// 選曲中に配置が確定している場合だけ `pattern[表示先レーン] = 元レーン` を格納する。
+    pub lane_shuffle_pattern: Vec<u8>,
     pub target: String,
     pub gauge: String,
     pub gauge_auto_shift: String,
@@ -224,6 +229,7 @@ impl Default for SelectSnapshot {
             rows: Vec::new(),
             arrange: String::new(),
             arrange_2p: String::new(),
+            lane_shuffle_pattern: Vec::new(),
             target: String::new(),
             gauge: String::new(),
             gauge_auto_shift: String::new(),

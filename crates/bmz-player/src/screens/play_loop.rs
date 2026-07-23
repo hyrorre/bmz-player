@@ -328,11 +328,7 @@ pub fn advance_running_play_session(
         &running.bga_frames,
         &running.render_snapshot_cache,
     );
-    apply_play_arrange_to_snapshot(
-        &mut output.render_snapshot,
-        running.applied_arrange.arrange,
-        running.applied_arrange.arrange_2p,
-    );
+    apply_play_arrange_to_snapshot(&mut output.render_snapshot, &running.applied_arrange);
     apply_running_play_target_to_snapshot(&mut output.render_snapshot, running);
     apply_running_play_mode_to_snapshot(&mut output.render_snapshot, running);
     Ok(output)
@@ -360,11 +356,7 @@ pub fn advance_running_play_session_until_result(
         &running.bga_frames,
         &running.render_snapshot_cache,
     );
-    apply_play_arrange_to_snapshot(
-        &mut frame.render_snapshot,
-        running.applied_arrange.arrange,
-        running.applied_arrange.arrange_2p,
-    );
+    apply_play_arrange_to_snapshot(&mut frame.render_snapshot, &running.applied_arrange);
     apply_running_play_target_to_snapshot(&mut frame.render_snapshot, running);
     apply_running_play_mode_to_snapshot(&mut frame.render_snapshot, running);
     running.result_graph.record_frame(&frame);
@@ -445,23 +437,16 @@ pub fn refresh_play_ending_snapshot(
         timers,
         &running.render_snapshot_cache,
     );
-    apply_play_arrange_to_snapshot(
-        &mut snapshot,
-        running.applied_arrange.arrange,
-        running.applied_arrange.arrange_2p,
-    );
+    apply_play_arrange_to_snapshot(&mut snapshot, &running.applied_arrange);
     apply_running_play_target_to_snapshot(&mut snapshot, running);
     apply_running_play_mode_to_snapshot(&mut snapshot, running);
     snapshot
 }
 
-fn apply_play_arrange_to_snapshot(
-    snapshot: &mut RenderSnapshot,
-    arrange: crate::select_options::ArrangeOption,
-    arrange_2p: crate::select_options::ArrangeOption,
-) {
-    snapshot.arrange = arrange.as_str().to_string();
-    snapshot.arrange_2p = arrange_2p.as_str().to_string();
+fn apply_play_arrange_to_snapshot(snapshot: &mut RenderSnapshot, applied: &AppliedArrange) {
+    snapshot.arrange = applied.arrange.as_str().to_string();
+    snapshot.arrange_2p = applied.arrange_2p.as_str().to_string();
+    snapshot.lane_shuffle_pattern = applied.pattern.clone().unwrap_or_default();
 }
 
 pub fn refresh_play_ending_snapshot_with_session(
@@ -571,13 +556,21 @@ mod tests {
     }
 
     #[test]
-    fn apply_play_arrange_to_snapshot_sets_skin_label() {
+    fn apply_play_arrange_to_snapshot_sets_skin_values() {
         let mut snapshot = RenderSnapshot::default();
+        let pattern = vec![3, 1, 4, 2, 7, 5, 6];
+        let applied = AppliedArrange {
+            arrange: ArrangeOption::Mirror,
+            arrange_2p: ArrangeOption::Random,
+            pattern: Some(pattern.clone()),
+            ..AppliedArrange::default()
+        };
 
-        apply_play_arrange_to_snapshot(&mut snapshot, ArrangeOption::Mirror, ArrangeOption::Random);
+        apply_play_arrange_to_snapshot(&mut snapshot, &applied);
 
         assert_eq!(snapshot.arrange, "MIRROR");
         assert_eq!(snapshot.arrange_2p, "RANDOM");
+        assert_eq!(snapshot.lane_shuffle_pattern, pattern);
     }
 
     #[test]

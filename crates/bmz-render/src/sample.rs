@@ -56,6 +56,7 @@ pub fn sample_select_scene() -> AppSceneSnapshot {
         rows,
         arrange: "NORMAL".to_string(),
         arrange_2p: "NORMAL".to_string(),
+        lane_shuffle_pattern: Vec::new(),
         target: "NONE".to_string(),
         gauge: "NORMAL".to_string(),
         gauge_auto_shift: "OFF".to_string(),

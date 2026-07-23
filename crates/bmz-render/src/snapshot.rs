@@ -93,6 +93,9 @@ pub struct RenderSnapshot {
     pub arrange: String,
     /// 2P play option arrange label for skin ref 43/345.
     pub arrange_2p: String,
+    /// プレイ中に実際に適用されている固定レーン配置。
+    /// `pattern[表示先レーン] = 元レーン`。動的ノート配置では空。
+    pub lane_shuffle_pattern: Vec<u8>,
     /// Play target option id for skin string refs 1 / 3 / 200..=219.
     pub target: String,
     pub combo: u32,

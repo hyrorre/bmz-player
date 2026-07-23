@@ -642,6 +642,7 @@ pub const SKIN_EVENT_DAILY_STATISTICS_RESET: i32 = -10_100;
 /// beatoraja 正数イベント ID と衝突しないよう負数を使う。
 pub const SKIN_EVENT_RUNTIME_BASE: i32 = -20_000;
 /// beatoraja `NUMBER_RANDOM_1P_1KEY..NUMBER_RANDOM_2P_SCR` (450..469).
+/// BMZではResult互換に加え、Play/Selectの確定済み固定配置にも使用する。
 pub const SKIN_RANDOM_LANE_REF_BASE: i32 = 450;
 pub const SKIN_RANDOM_LANE_REF_COUNT: usize = 20;
 /// `SkinDrawState::dynamic_timer_ms` のスロット数。

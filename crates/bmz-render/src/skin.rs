@@ -1164,7 +1164,11 @@ pub struct SkinDrawState {
     pub result_arrange_2p_index: usize,
     pub result_extended_arrange_index: usize,
     pub result_extended_arrange_2p_index: usize,
-    pub result_random_lane_refs: [u8; SKIN_RANDOM_LANE_REF_COUNT],
+    /// beatoraja RANDOM lane refs 450..469.
+    ///
+    /// Resultでは互換値、Play/SelectではBMZ拡張として、現在または開始予定の
+    /// 固定レーン配置を画面共通で公開する。
+    pub random_lane_refs: [u8; SKIN_RANDOM_LANE_REF_COUNT],
     /// Resultで実効譜面にLNが含まれるか。NoneはResult以外。
     pub result_has_long_notes: Option<bool>,
     /// Resultの実効LN種別imageset index (0=LN, 1=CN, 2=HCN)。
@@ -1542,7 +1546,7 @@ impl Default for SkinDrawState {
             result_arrange_2p_index: 0,
             result_extended_arrange_index: 0,
             result_extended_arrange_2p_index: 0,
-            result_random_lane_refs: [0; SKIN_RANDOM_LANE_REF_COUNT],
+            random_lane_refs: [0; SKIN_RANDOM_LANE_REF_COUNT],
             result_has_long_notes: None,
             result_ln_mode_index: None,
             select_gauge_index: 2,
@@ -4188,6 +4192,11 @@ impl SkinDocumentRenderExt for SkinDocument {
             in_settings: snapshot.in_settings,
             settings_editing: snapshot.settings_editing,
             select_chart_key_mode: selected_row.and_then(|row| row.chart_key_mode),
+            random_lane_refs: selected_row
+                .and_then(|row| row.chart_key_mode)
+                .map_or([0; SKIN_RANDOM_LANE_REF_COUNT], |key_mode| {
+                    random_lane_refs(&snapshot.lane_shuffle_pattern, key_mode)
+                }),
             mouse_x: mouse_position.map(|position| position.0),
             mouse_y: mouse_position.map(|position| position.1),
             ir_ranking: snapshot.ir.clone(),
@@ -10121,16 +10130,7 @@ fn random_lane_ref_slot(ref_id: i32) -> Option<usize> {
 
 fn skin_random_lane_ref_number(ref_id: i32, state: &SkinDrawState) -> Option<i64> {
     let slot = random_lane_ref_slot(ref_id)?;
-    let arrange_index =
-        if slot < 10 { state.result_arrange_index } else { state.result_arrange_2p_index };
-    let scratch_ref = matches!(slot, 9 | 19);
-    let displayable_arrange =
-        if scratch_ref { arrange_index == 8 } else { matches!(arrange_index, 2 | 3 | 8) };
-    Some(if state.result_failed.is_some() && displayable_arrange {
-        state.result_random_lane_refs[slot] as i64
-    } else {
-        0
-    })
+    Some(state.random_lane_refs[slot] as i64)
 }
 
 fn resolve_skin_image_pixel_rect(
@@ -12564,7 +12564,7 @@ fn select_hs_fix_index(hs_fix: &str) -> usize {
     }
 }
 
-pub(crate) fn result_random_lane_refs(
+pub(crate) fn random_lane_refs(
     pattern: &[u8],
     key_mode: KeyMode,
 ) -> [u8; SKIN_RANDOM_LANE_REF_COUNT] {
@@ -12596,6 +12596,30 @@ pub(crate) fn result_random_lane_refs(
         refs[19] = random_lane_display_value(pattern, Lane::Scratch2, key_mode, true);
     }
 
+    refs
+}
+
+pub(crate) fn fixed_random_lane_refs(
+    pattern: &[u8],
+    key_mode: KeyMode,
+    arrange: &str,
+    arrange_2p: &str,
+) -> [u8; SKIN_RANDOM_LANE_REF_COUNT] {
+    let mut refs = random_lane_refs(pattern, key_mode);
+    let arrange_index = select_arrange_index(arrange);
+    let arrange_2p_index = select_arrange_index(arrange_2p);
+    for (slot, value) in refs.iter_mut().enumerate() {
+        let side_arrange_index = if slot < 10 { arrange_index } else { arrange_2p_index };
+        let scratch_ref = matches!(slot, 9 | 19);
+        let displayable_arrange = if scratch_ref {
+            side_arrange_index == 8
+        } else {
+            matches!(side_arrange_index, 2 | 3 | 8)
+        };
+        if !displayable_arrange {
+            *value = 0;
+        }
+    }
     refs
 }
 
@@ -19506,6 +19530,29 @@ mod tests {
     }
 
     #[test]
+    fn select_draw_state_exposes_planned_random_lane_pattern() {
+        let document: SkinDocument = serde_json::from_str(r#"{ "type": 5 }"#).unwrap();
+        let mut pattern = (0..LANE_COUNT as u8).collect::<Vec<_>>();
+        pattern[Lane::Key1.index()] = Lane::Key7.index() as u8;
+        let snapshot = SelectSnapshot {
+            arrange: "NORMAL".to_string(),
+            lane_shuffle_pattern: pattern,
+            rows: vec![SelectRowSnapshot {
+                index: 0,
+                kind: SelectRowKind::Song,
+                chart_key_mode: Some(KeyMode::K7),
+                ..SelectRowSnapshot::default()
+            }],
+            ..SelectSnapshot::default()
+        };
+
+        let (state, _) = document.select_draw_state(&snapshot, None);
+
+        assert_eq!(skin_state_number(42, &state), Some(0));
+        assert_eq!(skin_state_number(450, &state), Some(7));
+    }
+
+    #[test]
     fn select_songlist_judgegraph_honors_delay_backtexoff_and_type() {
         let document: SkinDocument = serde_json::from_str(
             r#"
@@ -23326,16 +23373,16 @@ mod tests {
     }
 
     #[test]
-    fn result_random_lane_refs_map_beatoraja_pattern_numbers() {
+    fn random_lane_refs_map_beatoraja_pattern_numbers() {
         let mut pattern = (0..LANE_COUNT as u8).collect::<Vec<_>>();
         pattern[Lane::Key1.index()] = Lane::Key7.index() as u8;
         pattern[Lane::Key2.index()] = Lane::Key3.index() as u8;
         pattern[Lane::Key3.index()] = Lane::Key1.index() as u8;
 
-        let refs = result_random_lane_refs(&pattern, KeyMode::K7);
+        let refs = fixed_random_lane_refs(&pattern, KeyMode::K7, "RANDOM", "NORMAL");
         let state = SkinDrawState {
             result_arrange_index: 2,
-            result_random_lane_refs: refs,
+            random_lane_refs: refs,
             result_failed: Some(false),
             ..SkinDrawState::default()
         };
@@ -23360,11 +23407,16 @@ mod tests {
     }
 
     #[test]
-    fn result_random_lane_refs_hide_for_non_fixed_random() {
-        let refs = result_random_lane_refs(&(0..LANE_COUNT as u8).collect::<Vec<_>>(), KeyMode::K7);
+    fn random_lane_refs_hide_for_non_fixed_random() {
+        let refs = fixed_random_lane_refs(
+            &(0..LANE_COUNT as u8).collect::<Vec<_>>(),
+            KeyMode::K7,
+            "S-RANDOM",
+            "NORMAL",
+        );
         let state = SkinDrawState {
             result_arrange_index: 4,
-            result_random_lane_refs: refs,
+            random_lane_refs: refs,
             result_failed: Some(false),
             ..SkinDrawState::default()
         };
@@ -23374,14 +23426,15 @@ mod tests {
     }
 
     #[test]
-    fn result_random_lane_refs_use_each_sides_arrange() {
-        let mut refs = [0; SKIN_RANDOM_LANE_REF_COUNT];
-        refs[0] = 7;
-        refs[10] = 3;
+    fn random_lane_refs_use_each_sides_arrange() {
+        let mut pattern = (0..LANE_COUNT as u8).collect::<Vec<_>>();
+        pattern[Lane::Key1.index()] = Lane::Key7.index() as u8;
+        pattern[Lane::Key8.index()] = Lane::Key10.index() as u8;
+        let refs = fixed_random_lane_refs(&pattern, KeyMode::K14, "NORMAL", "RANDOM");
         let p2_random = SkinDrawState {
             result_arrange_index: 0,
             result_arrange_2p_index: 2,
-            result_random_lane_refs: refs,
+            random_lane_refs: refs,
             result_failed: Some(false),
             ..SkinDrawState::default()
         };
@@ -23389,10 +23442,25 @@ mod tests {
         assert_eq!(skin_state_imageset_index(450, &p2_random), Some(0));
         assert_eq!(skin_state_imageset_index(460, &p2_random), Some(3));
 
-        let p1_random =
-            SkinDrawState { result_arrange_index: 2, result_arrange_2p_index: 0, ..p2_random };
+        let p1_random = SkinDrawState {
+            result_arrange_index: 2,
+            result_arrange_2p_index: 0,
+            random_lane_refs: fixed_random_lane_refs(&pattern, KeyMode::K14, "RANDOM", "NORMAL"),
+            ..p2_random
+        };
         assert_eq!(skin_state_imageset_index(450, &p1_random), Some(7));
         assert_eq!(skin_state_imageset_index(460, &p1_random), Some(0));
+    }
+
+    #[test]
+    fn random_lane_refs_are_available_outside_result_screen() {
+        let mut refs = [0; SKIN_RANDOM_LANE_REF_COUNT];
+        refs[0] = 7;
+        let state = SkinDrawState { random_lane_refs: refs, ..SkinDrawState::default() };
+
+        assert_eq!(skin_state_imageset_index(450, &state), Some(7));
+        assert_eq!(skin_state_event_index(450, &state), 7);
+        assert_eq!(skin_state_number(450, &state), Some(7));
     }
 
     #[test]

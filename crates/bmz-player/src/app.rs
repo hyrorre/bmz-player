@@ -3946,6 +3946,9 @@ impl WinitApp {
             ),
             arrange: self.arrange_option.as_str().to_string(),
             arrange_2p: self.arrange_option_2p.as_str().to_string(),
+            // 通常のRANDOMはプレイ開始時に抽選する。将来、選曲中に確定した
+            // リプレイ／ライバル配置をここへ渡す。
+            lane_shuffle_pattern: Vec::new(),
             target: self.target_option.as_string(),
             gauge: gauge_option_as_str(self.gauge_option).to_string(),
             gauge_auto_shift: gauge_auto_shift_as_str(self.gauge_auto_shift_option).to_string(),
