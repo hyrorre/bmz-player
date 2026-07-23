@@ -3690,22 +3690,42 @@ mod tests {
             return;
         }
 
-        let decoded = decode_beatoraja_skin(&skin_path, SkinKind::Play).unwrap();
-        let number_texture = decoded
-            .sources
-            .iter()
-            .find(|source| source.source_id == "src_number_lane")
-            .expect("antique number lane source")
-            .texture;
-        let document_textures = decoded.sources.iter().map(|source| SkinDocumentTexture {
-            source_id: source.source_id.clone(),
-            texture: source.texture,
-            source_size: SkinImageSize { width: source.size.width, height: source.size.height },
-        });
-        let context = SkinContext::from_manifest_and_document(
-            SkinManifest::default(),
-            decoded.document,
-            document_textures,
+        let load_context = |options: &BTreeMap<String, String>| {
+            let decoded = decode_beatoraja_skin_with_options(
+                &skin_path,
+                SkinKind::Play,
+                options,
+                &BTreeMap::new(),
+            )
+            .unwrap();
+            let number_texture = decoded
+                .sources
+                .iter()
+                .find(|source| source.source_id == "src_number_lane")
+                .expect("antique number lane source")
+                .texture;
+            let document_textures = decoded.sources.iter().map(|source| SkinDocumentTexture {
+                source_id: source.source_id.clone(),
+                texture: source.texture,
+                source_size: SkinImageSize { width: source.size.width, height: source.size.height },
+            });
+            (
+                SkinContext::from_manifest_and_document(
+                    SkinManifest::default(),
+                    decoded.document,
+                    document_textures,
+                ),
+                number_texture,
+            )
+        };
+        let (context, number_texture) = load_context(&BTreeMap::new());
+        let document = context.document().expect("antique play document");
+        assert!(document.enabled_options().contains(&917));
+        assert!(
+            document
+                .property
+                .iter()
+                .any(|property| { property.name == "RANDOM配置表示" && property.def == "ON" })
         );
         let mut pattern = (0..bmz_core::lane::LANE_COUNT as u8).collect::<Vec<_>>();
         for (destination, source) in (1..=7).zip((1..=7).rev()) {
@@ -3724,14 +3744,14 @@ mod tests {
         crate::screens::play_loop::apply_play_arrange_to_snapshot(&mut pre_ready, &applied_arrange);
         assert_eq!(pre_ready.lane_shuffle_pattern, pattern);
 
-        let render = |snapshot| {
+        let render = |context: &SkinContext, snapshot| {
             bmz_render::plan::DrawPlan::from_scene_with_skin(
                 &bmz_render::scene::AppSceneSnapshot::Play(snapshot),
-                &context,
+                context,
                 &mut bmz_render::skin::DynamicTimerRuntime::default(),
             )
         };
-        let random_digits = |plan: &bmz_render::plan::DrawPlan| {
+        let random_digits = |plan: &bmz_render::plan::DrawPlan, number_texture: SkinTextureId| {
             let mut digits = plan
                 .commands
                 .iter()
@@ -3748,7 +3768,7 @@ mod tests {
             digits
         };
 
-        let digits = random_digits(&render(pre_ready.clone()));
+        let digits = random_digits(&render(&context, pre_ready.clone()), number_texture);
         assert_eq!(digits.len(), 7, "expected seven pre-READY RANDOM digits");
         for (index, (_, tint)) in digits.into_iter().enumerate() {
             let expected =
@@ -3760,9 +3780,22 @@ mod tests {
 
         let mut ready = pre_ready.clone();
         ready.ready_elapsed_time = Some(TimeUs(0));
-        assert!(random_digits(&render(ready)).is_empty());
+        let ready_digits = random_digits(&render(&context, ready.clone()), number_texture);
+        assert_eq!(ready_digits.len(), 7, "READY should start at full opacity");
+        assert!(ready_digits.iter().all(|(_, tint)| (tint.a - 1.0).abs() < 0.01));
 
-        let mut no_pattern = pre_ready;
+        ready.ready_elapsed_time = Some(TimeUs(250_000));
+        let fading_digits = random_digits(&render(&context, ready.clone()), number_texture);
+        assert_eq!(fading_digits.len(), 7, "RANDOM digits should fade for 500 ms");
+        assert!(fading_digits.iter().all(|(_, tint)| (tint.a - 0.5).abs() < 0.02));
+
+        ready.ready_elapsed_time = Some(TimeUs(501_000));
+        assert!(
+            random_digits(&render(&context, ready), number_texture).is_empty(),
+            "RANDOM digits should disappear after the BACKBMP 500 ms fade"
+        );
+
+        let mut no_pattern = pre_ready.clone();
         crate::screens::play_loop::apply_play_arrange_to_snapshot(
             &mut no_pattern,
             &crate::screens::play_session::AppliedArrange {
@@ -3770,7 +3803,17 @@ mod tests {
                 ..crate::screens::play_session::AppliedArrange::default()
             },
         );
-        assert!(random_digits(&render(no_pattern)).is_empty());
+        assert!(random_digits(&render(&context, no_pattern), number_texture).is_empty());
+
+        let options = BTreeMap::from([("RANDOM配置表示".to_string(), "OFF".to_string())]);
+        let (off_context, off_number_texture) = load_context(&options);
+        let off_document = off_context.document().expect("antique play document");
+        assert!(off_document.enabled_options().contains(&916));
+        assert!(!off_document.enabled_options().contains(&917));
+        assert!(
+            random_digits(&render(&off_context, pre_ready), off_number_texture).is_empty(),
+            "RANDOM display option OFF should hide all lane digits"
+        );
     }
 
     #[test]
