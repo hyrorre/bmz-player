@@ -146,7 +146,6 @@ impl EguiLayer {
     pub fn run(&mut self, window: &Window, context: EguiRunContext<'_, '_>) -> EguiOutput {
         let EguiRunContext {
             info,
-            log_buffer,
             app_config,
             profile_config,
             random_trainer,
@@ -249,15 +248,7 @@ impl EguiLayer {
                     license_notice_text,
                     text,
                 );
-                build_debug_panel(
-                    ctx,
-                    show_debug,
-                    info,
-                    log_buffer,
-                    &mut self.debug_log_filter,
-                    &mut self.debug_log_autoscroll,
-                    text,
-                );
+                build_debug_panel(ctx, show_debug, info, text);
                 build_random_trainer_panel(ctx, show_random_trainer, random_trainer, text);
                 let settings_actions = build_settings_panel(
                     ctx,

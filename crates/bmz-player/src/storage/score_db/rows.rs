@@ -160,6 +160,12 @@ pub(super) fn daily_player_stats_from_row(
     })
 }
 
+pub(super) fn note_count_aggregate_from_row(
+    row: &rusqlite::Row<'_>,
+) -> rusqlite::Result<NoteCountAggregate> {
+    Ok(NoteCountAggregate { label: row.get(0)?, play_count: row.get(1)?, total_notes: row.get(2)? })
+}
+
 pub(super) fn device_type_from_row(
     row: &rusqlite::Row<'_>,
     index: usize,

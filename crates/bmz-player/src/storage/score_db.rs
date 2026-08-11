@@ -132,6 +132,13 @@ pub struct DailyPlayerStats {
     pub miss_count_update_count: u64,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NoteCountAggregate {
+    pub label: String,
+    pub play_count: u64,
+    pub total_notes: u64,
+}
+
 /// Local play timestamps where a chart improved its lamp or EX score.
 ///
 /// The map returned by [`ScoreDatabase::chart_update_times_since`] is keyed by
@@ -501,6 +508,13 @@ pub struct ScoreHistoryEntry {
     /// of a course attempt, otherwise `None`.
     pub course_score_id: Option<i64>,
     pub previous_best: Option<PreviousBestSnapshot>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ScoreHistoryDayEntry {
+    pub local_day: String,
+    pub local_minute: String,
+    pub entry: ScoreHistoryEntry,
 }
 
 #[cfg(test)]

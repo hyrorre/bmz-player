@@ -17,7 +17,10 @@ impl WinitApp {
                 tracing::info!("audio output opened after window initialization");
             }
             Err(error) => {
-                tracing::warn!(%error, "failed to open shared audio output; running without audio");
+                tracing::warn!(
+                    error = ?error,
+                    "failed to open shared audio output; running without audio"
+                );
             }
         }
     }

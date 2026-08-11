@@ -115,12 +115,12 @@ impl WinitApp {
         // Select IR is consumed by the select skin snapshot. Keep its debounce,
         // request, and completion handling moving while the hidden menu uses an idle frame.
         self.update_egui_select_ir(scene_kind);
+        self.publish_play_overlay_snapshot_for_current_frame();
         if self.run_idle_egui_frame_if_available(&window, scene_kind, scene) {
             return;
         }
         let info = self.egui_debug_info(&window, scene);
         let skin_meta = self.egui_skin_meta();
-
         // コース graph は egui を Option から取り出した後、clone せず参照で渡す。
         let course_result = self.result.finished_course.as_ref();
         let course_preview = self.egui_course_preview(scene_kind);
@@ -163,7 +163,6 @@ impl WinitApp {
                 profile_root: &self.boot.profile_paths.root_dir,
                 app_paths: &self.boot.app_paths,
                 difficulty_tables: &self.select.difficulty_tables,
-                log_buffer: &self.ui.log_buffer,
                 update_dialog,
                 obs_connection_status: &obs_connection_status,
                 connected_gamepads: &connected_gamepads,
@@ -171,6 +170,32 @@ impl WinitApp {
         );
         self.ui.egui = Some(egui);
         self.apply_egui_output(&window, output, profile_before);
+    }
+
+    fn publish_play_overlay_snapshot_for_current_frame(&mut self) {
+        let config = &self.boot.profile_config.play_overlay;
+        if !config.websocket_enabled {
+            self.integrations.play_overlay_state.reset_publish_throttle();
+            return;
+        }
+        if !self
+            .integrations
+            .play_overlay_state
+            .should_publish(config.websocket_update_rate, Instant::now())
+        {
+            return;
+        }
+        let scene_snapshot = self.scene_snapshot();
+        let pressed_play_inputs =
+            self.input.pressed_play_inputs.iter().cloned().collect::<Vec<_>>();
+        let payload = self.integrations.play_overlay_state.build_payload(
+            config,
+            &self.boot.profile_config.input,
+            &scene_snapshot,
+            &pressed_play_inputs,
+            self.select.player_stats.daily.play_count,
+        );
+        self.integrations.play_overlay_controller.publish(&payload);
     }
 
     fn run_idle_egui_frame_if_available(
@@ -501,6 +526,7 @@ impl WinitApp {
         }
         self.sync_realtime_profile_settings();
         self.sync_discord_presence_config();
+        self.sync_play_overlay_controller();
     }
 
     fn apply_egui_video_config(&mut self, window: &Window) {

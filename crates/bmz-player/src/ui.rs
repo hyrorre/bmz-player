@@ -31,14 +31,15 @@ use crate::config::profile_config::{
     DoubleOptionConfig, FastSlowDisplayScope, GaugeAutoShiftConfig, GaugeTypeConfig,
     HISPEED_STEP_MAX, HISPEED_STEP_MIN, HispeedModeConfig, HsFixConfig, IrConfig,
     IrCredentialStoreConfig, IrProviderConfig, IrProviderRoleConfig, IrSendPolicyConfig,
-    JudgeAlgorithmConfig, LaneEffectConfig, ProfileConfig, RELEASE_BOUNCE_MS_MAX,
-    RandomOptionConfig, ReplaySlotRule, SkinConfig, SkinHistoryEntryConfig, SkinOffsetConfig,
-    TargetOptionConfig, default_hispeed_step_fhs, default_hispeed_step_nhs, normalize_hispeed_step,
-    normalized_ir_base_url,
+    JudgeAlgorithmConfig, LaneEffectConfig, PlayOverlayControllerModeConfig,
+    PlayOverlayReleaseDisplayModeConfig, PlayOverlayUpdateRateConfig, ProfileConfig,
+    RELEASE_BOUNCE_MS_MAX, RandomOptionConfig, ReplaySlotRule, SkinConfig, SkinHistoryEntryConfig,
+    SkinOffsetConfig, TargetOptionConfig, default_hispeed_step_fhs, default_hispeed_step_nhs,
+    normalize_hispeed_step, normalized_ir_base_url,
 };
 use crate::i18n::{AppLocale, FluentArgs, Localizer};
 use crate::ln_policy::LnPolicySetting;
-use crate::logging::{LogBuffer, LogEntry, LogLevel as TracingLogLevel};
+use crate::logging::{LogEntry, LogLevel as TracingLogLevel};
 use crate::paths::{AppPaths, resolve_app_paths};
 use crate::practice_ui::{PracticePanelContext, build_practice_panel};
 use crate::profile_cmd;

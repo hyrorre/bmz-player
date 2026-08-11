@@ -26,6 +26,8 @@ pub struct ProfileConfig {
     pub select: SelectStateConfig,
     #[serde(default)]
     pub statistics: StatisticsConfig,
+    #[serde(default)]
+    pub play_overlay: PlayOverlayConfig,
 }
 
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
@@ -33,6 +35,101 @@ pub struct StatisticsConfig {
     /// Local hour at which BMZ starts a new statistics day (0..=23).
     #[serde(default)]
     pub day_start_hour: u8,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PlayOverlayConfig {
+    #[serde(default)]
+    pub websocket_enabled: bool,
+    #[serde(default = "default_play_overlay_websocket_port")]
+    pub websocket_port: u16,
+    #[serde(default)]
+    pub websocket_update_rate: PlayOverlayUpdateRateConfig,
+    #[serde(default = "default_play_overlay_release_ignore_threshold_ms")]
+    pub release_ignore_threshold_ms: u32,
+    #[serde(default = "default_play_overlay_release_window_ms")]
+    pub release_window_ms: u32,
+    #[serde(default = "default_play_overlay_release_ok_threshold_ms")]
+    pub release_ok_threshold_ms: u32,
+    #[serde(default = "default_play_overlay_release_ng_threshold_ms")]
+    pub release_ng_threshold_ms: u32,
+    #[serde(default)]
+    pub release_display_mode: PlayOverlayReleaseDisplayModeConfig,
+    #[serde(default)]
+    pub controller_mode: PlayOverlayControllerModeConfig,
+}
+
+impl Default for PlayOverlayConfig {
+    fn default() -> Self {
+        Self {
+            websocket_enabled: false,
+            websocket_port: default_play_overlay_websocket_port(),
+            websocket_update_rate: PlayOverlayUpdateRateConfig::default(),
+            release_ignore_threshold_ms: default_play_overlay_release_ignore_threshold_ms(),
+            release_window_ms: default_play_overlay_release_window_ms(),
+            release_ok_threshold_ms: default_play_overlay_release_ok_threshold_ms(),
+            release_ng_threshold_ms: default_play_overlay_release_ng_threshold_ms(),
+            release_display_mode: PlayOverlayReleaseDisplayModeConfig::default(),
+            controller_mode: PlayOverlayControllerModeConfig::default(),
+        }
+    }
+}
+
+pub fn default_play_overlay_websocket_port() -> u16 {
+    29470
+}
+
+pub fn default_play_overlay_release_ignore_threshold_ms() -> u32 {
+    250
+}
+
+pub fn default_play_overlay_release_window_ms() -> u32 {
+    2_000
+}
+
+pub fn default_play_overlay_release_ok_threshold_ms() -> u32 {
+    60
+}
+
+pub fn default_play_overlay_release_ng_threshold_ms() -> u32 {
+    80
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub enum PlayOverlayUpdateRateConfig {
+    #[default]
+    Fps60,
+    Fps120,
+    Fps240,
+}
+
+impl PlayOverlayUpdateRateConfig {
+    pub fn fps(self) -> u32 {
+        match self {
+            Self::Fps60 => 60,
+            Self::Fps120 => 120,
+            Self::Fps240 => 240,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub enum PlayOverlayReleaseDisplayModeConfig {
+    #[default]
+    ReleaseOnly,
+    ReleaseAndNotes,
+    NotesOnly,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub enum PlayOverlayControllerModeConfig {
+    #[default]
+    Key7P1,
+    Key7P2,
+    Key14,
 }
 
 /// 選曲画面の表示状態。フィルター (5K/7K など) とソートを永続化する。

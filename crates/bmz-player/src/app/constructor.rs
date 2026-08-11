@@ -101,6 +101,10 @@ impl WinitApp {
         let initial_window_mode = boot.app_config.video.mode.clone();
         let applied_obs_config = boot.app_config.obs.clone();
         let obs_controller = crate::obs::ObsController::spawn(applied_obs_config.clone());
+        let applied_play_overlay_config =
+            crate::play_overlay::PlayOverlayServerConfig::from(&boot.profile_config.play_overlay);
+        let mut play_overlay_controller = crate::play_overlay::PlayOverlayController::default();
+        play_overlay_controller.apply_config(applied_play_overlay_config);
 
         // システム SE / BGM の候補を起動時に一度だけスキャンし、facade を構築する。
         // - `profile.[system_sound].bgm_dir` / `se_dir` が指定されていれば再帰スキャンして
@@ -293,6 +297,9 @@ impl WinitApp {
             integrations: IntegrationRuntimeState {
                 obs_controller,
                 applied_obs_config,
+                play_overlay_controller,
+                play_overlay_state: crate::play_overlay::PlayOverlayState::default(),
+                applied_play_overlay_config,
                 exit_configs_saved: false,
                 last_scene_kind: None,
                 discord_presence: None,

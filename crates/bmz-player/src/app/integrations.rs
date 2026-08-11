@@ -112,6 +112,17 @@ impl WinitApp {
         );
     }
 
+    pub(super) fn sync_play_overlay_controller(&mut self) {
+        let desired = crate::play_overlay::PlayOverlayServerConfig::from(
+            &self.boot.profile_config.play_overlay,
+        );
+        if self.integrations.applied_play_overlay_config == desired {
+            return;
+        }
+        self.integrations.applied_play_overlay_config = desired;
+        self.integrations.play_overlay_controller.apply_config(desired);
+    }
+
     pub(super) fn notify_obs_scene(&mut self, scene_kind: AppSceneKind) {
         let key = self.obs_event_key_for_scene(scene_kind);
         if self.integrations.last_obs_event_key == Some(key) {

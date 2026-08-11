@@ -527,6 +527,7 @@ impl ProfileConfig {
             skin: SkinConfig::default(),
             select: SelectStateConfig::default(),
             statistics: StatisticsConfig::default(),
+            play_overlay: PlayOverlayConfig::default(),
         }
     }
 }

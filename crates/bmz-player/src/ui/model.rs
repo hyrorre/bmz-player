@@ -242,7 +242,6 @@ pub struct DebugInfo {
 /// `EguiLayer::run` の 1 フレーム入力。
 pub struct EguiRunContext<'a, 'practice> {
     pub info: &'a DebugInfo,
-    pub log_buffer: &'a LogBuffer,
     pub app_config: &'a mut AppConfig,
     pub profile_config: &'a mut ProfileConfig,
     pub random_trainer: &'a mut RandomTrainerState,
@@ -329,8 +328,10 @@ pub struct EguiLayer {
     /// 7K RANDOM 固定配置パネルの開閉状態。
     pub(super) show_random_trainer: bool,
     /// デバッグ表示内のログ最低表示レベル。
+    #[allow(dead_code)]
     pub(super) debug_log_filter: DebugLogFilter,
     /// デバッグ表示内のログを末尾へ追従するか。
+    #[allow(dead_code)]
     pub(super) debug_log_autoscroll: bool,
     /// 右上 FPS オーバーレイの表示状態。
     pub(super) show_fps: bool,

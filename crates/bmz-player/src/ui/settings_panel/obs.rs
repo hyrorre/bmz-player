@@ -162,6 +162,237 @@ pub(in crate::ui) fn build_obs_settings_section(
     enabled_changed
 }
 
+pub(in crate::ui) fn build_play_overlay_settings_section(
+    ui: &mut egui::Ui,
+    profile: &mut ProfileConfig,
+    text: Localizer,
+) -> bool {
+    let config = &mut profile.play_overlay;
+    let mut changed = false;
+    egui::CollapsingHeader::new(tr!(text, "settings-play-overlay-title"))
+        .id_salt("settings_play_overlay")
+        .show(ui, |ui| {
+            changed |= ui
+                .checkbox(
+                    &mut config.websocket_enabled,
+                    tr!(text, "settings-play-overlay-websocket-enabled"),
+                )
+                .changed();
+            ui.horizontal(|ui| {
+                ui.label(tr!(text, "settings-play-overlay-websocket-url"));
+                ui.monospace(format!("ws://127.0.0.1:{}", config.websocket_port));
+            });
+            ui.horizontal(|ui| {
+                ui.label(tr!(text, "settings-play-overlay-port"));
+                changed |= ui
+                    .add(egui::DragValue::new(&mut config.websocket_port).range(1..=65535))
+                    .changed();
+                ui.label(tr!(text, "settings-play-overlay-update-rate"));
+                egui::ComboBox::from_id_salt("settings_play_overlay_update_rate")
+                    .selected_text(play_overlay_update_rate_label(
+                        config.websocket_update_rate,
+                        text,
+                    ))
+                    .show_ui(ui, |ui| {
+                        changed |= ui
+                            .selectable_value(
+                                &mut config.websocket_update_rate,
+                                PlayOverlayUpdateRateConfig::Fps60,
+                                play_overlay_update_rate_label(
+                                    PlayOverlayUpdateRateConfig::Fps60,
+                                    text,
+                                ),
+                            )
+                            .changed();
+                        changed |= ui
+                            .selectable_value(
+                                &mut config.websocket_update_rate,
+                                PlayOverlayUpdateRateConfig::Fps120,
+                                play_overlay_update_rate_label(
+                                    PlayOverlayUpdateRateConfig::Fps120,
+                                    text,
+                                ),
+                            )
+                            .changed();
+                        changed |= ui
+                            .selectable_value(
+                                &mut config.websocket_update_rate,
+                                PlayOverlayUpdateRateConfig::Fps240,
+                                play_overlay_update_rate_label(
+                                    PlayOverlayUpdateRateConfig::Fps240,
+                                    text,
+                                ),
+                            )
+                            .changed();
+                    });
+            });
+            ui.horizontal(|ui| {
+                ui.label(tr!(text, "settings-play-overlay-release-window"));
+                changed |= ui
+                    .add(
+                        egui::DragValue::new(&mut config.release_window_ms)
+                            .range(100..=60000)
+                            .suffix(" ms"),
+                    )
+                    .changed();
+                ui.label(tr!(text, "settings-play-overlay-ln-threshold"));
+                changed |= ui
+                    .add(
+                        egui::DragValue::new(&mut config.release_ignore_threshold_ms)
+                            .range(0..=5000)
+                            .suffix(" ms"),
+                    )
+                    .changed();
+            });
+            ui.horizontal(|ui| {
+                ui.label(tr!(text, "settings-play-overlay-release-ok"));
+                let ok_changed = ui
+                    .add(
+                        egui::DragValue::new(&mut config.release_ok_threshold_ms)
+                            .range(0..=5000)
+                            .suffix(" ms"),
+                    )
+                    .changed();
+                ui.label(tr!(text, "settings-play-overlay-release-ng"));
+                let ng_changed = ui
+                    .add(
+                        egui::DragValue::new(&mut config.release_ng_threshold_ms)
+                            .range(0..=5000)
+                            .suffix(" ms"),
+                    )
+                    .changed();
+                if ok_changed && config.release_ok_threshold_ms > config.release_ng_threshold_ms {
+                    config.release_ok_threshold_ms = config.release_ng_threshold_ms;
+                }
+                if ng_changed && config.release_ng_threshold_ms < config.release_ok_threshold_ms {
+                    config.release_ng_threshold_ms = config.release_ok_threshold_ms;
+                }
+                changed |= ok_changed || ng_changed;
+            });
+            ui.horizontal(|ui| {
+                ui.label(tr!(text, "settings-play-overlay-controller-mode"));
+                egui::ComboBox::from_id_salt("settings_play_overlay_controller_mode")
+                    .selected_text(play_overlay_controller_mode_label(config.controller_mode, text))
+                    .show_ui(ui, |ui| {
+                        changed |= ui
+                            .selectable_value(
+                                &mut config.controller_mode,
+                                PlayOverlayControllerModeConfig::Key7P1,
+                                play_overlay_controller_mode_label(
+                                    PlayOverlayControllerModeConfig::Key7P1,
+                                    text,
+                                ),
+                            )
+                            .changed();
+                        changed |= ui
+                            .selectable_value(
+                                &mut config.controller_mode,
+                                PlayOverlayControllerModeConfig::Key7P2,
+                                play_overlay_controller_mode_label(
+                                    PlayOverlayControllerModeConfig::Key7P2,
+                                    text,
+                                ),
+                            )
+                            .changed();
+                        changed |= ui
+                            .selectable_value(
+                                &mut config.controller_mode,
+                                PlayOverlayControllerModeConfig::Key14,
+                                play_overlay_controller_mode_label(
+                                    PlayOverlayControllerModeConfig::Key14,
+                                    text,
+                                ),
+                            )
+                            .changed();
+                    });
+            });
+            ui.horizontal(|ui| {
+                ui.label(tr!(text, "settings-play-overlay-display-mode"));
+                egui::ComboBox::from_id_salt("settings_play_overlay_release_display_mode")
+                    .selected_text(play_overlay_release_display_mode_label(
+                        config.release_display_mode,
+                        text,
+                    ))
+                    .show_ui(ui, |ui| {
+                        changed |= ui
+                            .selectable_value(
+                                &mut config.release_display_mode,
+                                PlayOverlayReleaseDisplayModeConfig::ReleaseOnly,
+                                play_overlay_release_display_mode_label(
+                                    PlayOverlayReleaseDisplayModeConfig::ReleaseOnly,
+                                    text,
+                                ),
+                            )
+                            .changed();
+                        changed |= ui
+                            .selectable_value(
+                                &mut config.release_display_mode,
+                                PlayOverlayReleaseDisplayModeConfig::ReleaseAndNotes,
+                                play_overlay_release_display_mode_label(
+                                    PlayOverlayReleaseDisplayModeConfig::ReleaseAndNotes,
+                                    text,
+                                ),
+                            )
+                            .changed();
+                        changed |= ui
+                            .selectable_value(
+                                &mut config.release_display_mode,
+                                PlayOverlayReleaseDisplayModeConfig::NotesOnly,
+                                play_overlay_release_display_mode_label(
+                                    PlayOverlayReleaseDisplayModeConfig::NotesOnly,
+                                    text,
+                                ),
+                            )
+                            .changed();
+                    });
+            });
+            ui.small(tr!(text, "settings-play-overlay-html-preview-help"));
+        });
+    changed
+}
+
+fn play_overlay_update_rate_label(rate: PlayOverlayUpdateRateConfig, text: Localizer) -> String {
+    match rate {
+        PlayOverlayUpdateRateConfig::Fps60 => tr!(text, "settings-play-overlay-update-rate-60"),
+        PlayOverlayUpdateRateConfig::Fps120 => tr!(text, "settings-play-overlay-update-rate-120"),
+        PlayOverlayUpdateRateConfig::Fps240 => tr!(text, "settings-play-overlay-update-rate-240"),
+    }
+}
+
+fn play_overlay_controller_mode_label(
+    mode: PlayOverlayControllerModeConfig,
+    text: Localizer,
+) -> String {
+    match mode {
+        PlayOverlayControllerModeConfig::Key7P1 => {
+            tr!(text, "settings-play-overlay-controller-7k-p1")
+        }
+        PlayOverlayControllerModeConfig::Key7P2 => {
+            tr!(text, "settings-play-overlay-controller-7k-p2")
+        }
+        PlayOverlayControllerModeConfig::Key14 => {
+            tr!(text, "settings-play-overlay-controller-14k")
+        }
+    }
+}
+
+fn play_overlay_release_display_mode_label(
+    mode: PlayOverlayReleaseDisplayModeConfig,
+    text: Localizer,
+) -> String {
+    match mode {
+        PlayOverlayReleaseDisplayModeConfig::ReleaseOnly => {
+            tr!(text, "settings-play-overlay-display-release-only")
+        }
+        PlayOverlayReleaseDisplayModeConfig::ReleaseAndNotes => {
+            tr!(text, "settings-play-overlay-display-release-and-notes")
+        }
+        PlayOverlayReleaseDisplayModeConfig::NotesOnly => {
+            tr!(text, "settings-play-overlay-display-notes-only")
+        }
+    }
+}
+
 pub(in crate::ui) fn obs_connection_status_label(
     kind: crate::obs::ObsConnectionStatusKind,
     text: Localizer,

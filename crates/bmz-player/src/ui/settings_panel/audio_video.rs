@@ -367,4 +367,5 @@ pub(super) fn build_audio_video_settings_sections(
         state.obs_connection_status,
         text,
     );
+    *save_profile |= build_play_overlay_settings_section(ui, profile, text);
 }

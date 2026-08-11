@@ -219,5 +219,5 @@ use integration::build_integration_settings_sections;
 pub(super) use labels::*;
 use library::build_library_settings_sections;
 pub(super) use main::build_settings_panel;
-pub(super) use obs::build_obs_settings_section;
+pub(super) use obs::{build_obs_settings_section, build_play_overlay_settings_section};
 pub(super) use score_import::build_score_import_section;

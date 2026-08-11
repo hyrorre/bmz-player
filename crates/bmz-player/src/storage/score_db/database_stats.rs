@@ -1,6 +1,52 @@
 use super::*;
 
 impl ScoreDatabase {
+    pub fn note_count_today(&self) -> Result<NoteCountAggregate> {
+        self.conn
+            .query_row(
+                "SELECT
+                    strftime('%Y-%m-%d', 'now', 'localtime'),
+                    COUNT(*),
+                    COALESCE(SUM(total_notes), 0)
+                 FROM score_history
+                 WHERE source_kind = 'Local'
+                   AND autoplay = 0
+                   AND date(played_at, 'unixepoch', 'localtime') = date('now', 'localtime')",
+                [],
+                note_count_aggregate_from_row,
+            )
+            .map_err(Into::into)
+    }
+
+    pub fn monthly_note_counts(&self, limit: u32) -> Result<Vec<NoteCountAggregate>> {
+        self.note_counts_grouped_by("%Y-%m", limit)
+    }
+
+    pub fn yearly_note_counts(&self, limit: u32) -> Result<Vec<NoteCountAggregate>> {
+        self.note_counts_grouped_by("%Y", limit)
+    }
+
+    fn note_counts_grouped_by(
+        &self,
+        format: &'static str,
+        limit: u32,
+    ) -> Result<Vec<NoteCountAggregate>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT
+                strftime(?1, played_at, 'unixepoch', 'localtime') AS period,
+                COUNT(*),
+                COALESCE(SUM(total_notes), 0)
+             FROM score_history
+             WHERE source_kind = 'Local'
+               AND autoplay = 0
+             GROUP BY period
+             ORDER BY period DESC
+             LIMIT ?2",
+        )?;
+        let rows = stmt.query_map(params![format, limit], note_count_aggregate_from_row)?;
+        rows.collect::<std::result::Result<Vec<_>, _>>().map_err(Into::into)
+    }
+
     /// Returns local-calendar day ranges, newest first.
     ///
     /// Unlike `current_daily_statistics_range`, these ranges intentionally do

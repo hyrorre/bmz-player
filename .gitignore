@@ -1,6 +1,8 @@
 /.DS_Store
 /target/
 /data/*
+!/data/html/
+!/data/html/**
 !/data/skins/
 /data/skins/*
 !/data/skins/default/

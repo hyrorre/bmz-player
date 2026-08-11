@@ -231,6 +231,9 @@ pub(super) struct AppJobs {
 pub(super) struct IntegrationRuntimeState {
     pub(super) obs_controller: Option<crate::obs::ObsController>,
     pub(super) applied_obs_config: ObsConfig,
+    pub(super) play_overlay_controller: crate::play_overlay::PlayOverlayController,
+    pub(super) play_overlay_state: crate::play_overlay::PlayOverlayState,
+    pub(super) applied_play_overlay_config: crate::play_overlay::PlayOverlayServerConfig,
     pub(super) exit_configs_saved: bool,
     pub(super) last_scene_kind: Option<AppSceneKind>,
     pub(super) discord_presence: Option<DiscordPresenceHandle>,
@@ -294,6 +297,7 @@ pub(super) struct UiRuntimeState {
     /// ウィンドウ生成時に初期化される。
     pub(super) egui: Option<EguiLayer>,
     /// デバッグ表示へ渡す bounded tracing ログバッファ。
+    #[allow(dead_code)]
     pub(super) log_buffer: LogBuffer,
     /// 現在ウィンドウへ適用済みのウィンドウモード。
     /// config 側との差分検出でライブ反映の要否を判定する。

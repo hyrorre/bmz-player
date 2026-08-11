@@ -1,5 +1,6 @@
 use super::*;
 
+#[allow(dead_code)]
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(super) enum DebugLogFilter {
     All,
@@ -11,6 +12,7 @@ pub(super) enum DebugLogFilter {
     Trace,
 }
 
+#[allow(dead_code)]
 impl DebugLogFilter {
     const ALL: [Self; 6] =
         [Self::All, Self::Error, Self::Warn, Self::Info, Self::Debug, Self::Trace];
@@ -42,6 +44,7 @@ impl DebugLogFilter {
     }
 }
 
+#[allow(dead_code)]
 pub(super) fn log_level_color(level: TracingLogLevel) -> egui::Color32 {
     match level {
         TracingLogLevel::Trace => egui::Color32::GRAY,
@@ -52,22 +55,21 @@ pub(super) fn log_level_color(level: TracingLogLevel) -> egui::Color32 {
     }
 }
 
+#[allow(dead_code)]
 pub(super) fn localized_log_message(entry: &LogEntry, text: Localizer) -> String {
     if entry.message.is_empty() { tr!(text, "debug-log-no-message") } else { entry.message.clone() }
 }
 
+#[allow(dead_code)]
 pub(super) fn format_log_entry(entry: &LogEntry, text: Localizer) -> String {
     format!("[{}] {} {}", entry.level.as_str(), entry.target, localized_log_message(entry, text))
 }
 
-/// FPS / フレーム時間 / シーン / 解像度 / tracing ログを表示するデバッグパネル。
+/// FPS / フレーム時間 / シーン / 解像度を表示する軽量デバッグパネル。
 pub(super) fn build_debug_panel(
     ctx: &egui::Context,
     open: &mut bool,
     info: &DebugInfo,
-    log_buffer: &LogBuffer,
-    debug_log_filter: &mut DebugLogFilter,
-    debug_log_autoscroll: &mut bool,
     text: Localizer,
 ) {
     localized_sized_panel_window(
@@ -108,72 +110,6 @@ pub(super) fn build_debug_panel(
                 ));
                 ui.end_row();
             });
-
-            ui.separator();
-            ui.horizontal(|ui| {
-                ui.label(tr!(text, "debug-log"));
-                egui::ComboBox::from_id_salt("debug_log_filter")
-                    .selected_text(debug_log_filter.label(text))
-                    .show_ui(ui, |ui| {
-                        for filter in DebugLogFilter::ALL {
-                            ui.selectable_value(debug_log_filter, filter, filter.label(text));
-                        }
-                    });
-                ui.checkbox(debug_log_autoscroll, tr!(text, "debug-log-autoscroll"));
-            });
-
-            let entries = log_buffer.snapshot();
-            let visible_entries = entries
-                .iter()
-                .filter(|entry| debug_log_filter.allows(entry.level))
-                .collect::<Vec<_>>();
-            let mut copy_requested = false;
-            let mut clear_requested = false;
-            ui.horizontal(|ui| {
-                ui.small(tr!(
-                    text,
-                    "debug-log-count",
-                    "visible" => visible_entries.len(),
-                    "total" => entries.len()
-                ));
-                if ui.button(tr!(text, "common-copy")).clicked() {
-                    copy_requested = true;
-                }
-                if ui.button(tr!(text, "debug-log-clear")).clicked() {
-                    clear_requested = true;
-                }
-            });
-
-            egui::ScrollArea::vertical()
-                .id_salt("debug_log_scroll")
-                .max_height(300.0)
-                .auto_shrink([false, false])
-                .stick_to_bottom(*debug_log_autoscroll)
-                .show(ui, |ui| {
-                    if visible_entries.is_empty() {
-                        ui.weak(tr!(text, "debug-log-empty"));
-                    }
-                    for entry in visible_entries {
-                        ui.horizontal_wrapped(|ui| {
-                            ui.colored_label(log_level_color(entry.level), entry.level.as_str());
-                            ui.weak(format!("{}:", entry.target));
-                            ui.label(localized_log_message(entry, text));
-                        });
-                    }
-                });
-
-            if copy_requested {
-                let text = entries
-                    .iter()
-                    .filter(|entry| debug_log_filter.allows(entry.level))
-                    .map(|entry| format_log_entry(entry, text))
-                    .collect::<Vec<_>>()
-                    .join("\n");
-                ui.ctx().copy_text(text);
-            }
-            if clear_requested {
-                log_buffer.clear();
-            }
         });
     });
 }
