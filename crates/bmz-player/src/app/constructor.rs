@@ -289,6 +289,7 @@ impl WinitApp {
                 finished_course_skin_summary: None,
                 finished_course_hash: None,
                 finished_course_rian_hash_v1: None,
+                finished_course_bms_ir_key: None,
                 finished_course_ir_attempted: false,
                 finished_play: None,
                 result_favorite_chart: false,

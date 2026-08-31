@@ -86,6 +86,7 @@ pub(super) fn spawn_course_fetch(
                 return crate::ir::bms_ir::BmsIrClient::new(&base_url)?
                     .fetch_course_ranking(
                         &target.course_hash,
+                        target.bms_ir_course_key.as_deref().unwrap_or(""),
                         &IrCourseRankingRequest {
                             gauge: target.gauge.clone(),
                             ln_policy: target.ln_policy.clone(),

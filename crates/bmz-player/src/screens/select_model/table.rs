@@ -339,6 +339,9 @@ pub(super) fn build_select_course_row(
         course_id: stored.id,
         course_hash: identity.as_ref().map(|identity| identity.course_hash.clone()),
         rian_course_hash_v1: identity.as_ref().map(|identity| identity.rian_course_hash_v1.clone()),
+        bms_ir_course_key: identity
+            .as_ref()
+            .and_then(|identity| identity.bms_ir_course_key.clone()),
         ln_policy,
         title: stored.definition.title,
         kind: stored.definition.kind,

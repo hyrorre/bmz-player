@@ -254,6 +254,10 @@ fn course_row_looks_up_best_score_with_normalized_ln_policy() {
     let stored = library_db.list_courses().unwrap().pop().unwrap();
     let identity =
         crate::ir::course_payload::course_identity_from_stored(&library_db, &stored).unwrap();
+    assert_eq!(
+        identity.bms_ir_course_key,
+        Some(format!("00000000002000000000000000005190{}", hash_to_hex(&no_ln.identity.file_md5)))
+    );
     score_db
         .insert_course_score(&crate::storage::score_db::CourseScoreInsert {
             course_hash: identity.course_hash,
@@ -296,6 +300,71 @@ fn course_row_looks_up_best_score_with_normalized_ln_policy() {
     assert_eq!(row.ln_policy, LnScorePolicy::ForceLn);
     assert_eq!(row.common_key_mode, Some(KeyMode::K7));
     assert_eq!(row.best_score.as_ref().map(|score| score.ex_score), Some(100));
+}
+
+#[test]
+fn course_identity_preserves_bms_ir_table_course_key() {
+    let (mut library_db, _score_db) = open_in_memory_dbs();
+    let chart = chart("bms ir course key");
+    library_db
+        .upsert_chart_import(&record_for_chart("/songs/bms-ir-course-key.bms", &chart))
+        .unwrap();
+    let course_key = format!("{}{}", "f".repeat(32), hash_to_hex(&chart.identity.file_md5));
+    let definition = bmz_core::course::CourseDefinition {
+        key: course_key.clone(),
+        title: "BMS-IR Course".to_string(),
+        kind: bmz_core::course::CourseKind::Dan,
+        entries: vec![bmz_core::course::CourseEntry {
+            title_hint: chart.metadata.title.clone(),
+            md5: Some(hash_to_hex(&chart.identity.file_md5)),
+            sha256: Some(hash_to_hex(&chart.identity.file_sha256)),
+            chart_id: None,
+        }],
+        constraints: bmz_core::course::CourseConstraints::default(),
+        trophies: Vec::new(),
+        release: true,
+    };
+    library_db
+        .upsert_course(
+            &format!("{}scope:table", crate::ir::table::BMS_IR_TABLE_SOURCE_PREFIX),
+            &definition,
+            0,
+            1,
+        )
+        .unwrap();
+
+    let stored = library_db.list_courses().unwrap().pop().unwrap();
+    let identity =
+        crate::ir::course_payload::course_identity_from_stored(&library_db, &stored).unwrap();
+
+    assert_eq!(identity.bms_ir_course_key, Some(course_key));
+}
+
+#[test]
+fn sha_only_course_keeps_canonical_identity_without_bms_ir_key() {
+    let (mut library_db, _score_db) = open_in_memory_dbs();
+    let definition = bmz_core::course::CourseDefinition {
+        key: "sha-only".to_string(),
+        title: "SHA-only Course".to_string(),
+        kind: bmz_core::course::CourseKind::Course,
+        entries: vec![bmz_core::course::CourseEntry {
+            title_hint: "Unresolved SHA chart".to_string(),
+            md5: None,
+            sha256: Some("ab".repeat(32)),
+            chart_id: None,
+        }],
+        constraints: bmz_core::course::CourseConstraints::default(),
+        trophies: Vec::new(),
+        release: true,
+    };
+    library_db.upsert_course("manual:test", &definition, 0, 1).unwrap();
+
+    let stored = library_db.list_courses().unwrap().pop().unwrap();
+    let identity =
+        crate::ir::course_payload::course_identity_from_stored(&library_db, &stored).unwrap();
+
+    assert_eq!(identity.definition.charts, vec!["ab".repeat(32)]);
+    assert_eq!(identity.bms_ir_course_key, None);
 }
 
 fn difficulty_table_for_md5(

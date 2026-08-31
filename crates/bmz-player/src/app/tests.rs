@@ -177,6 +177,7 @@ fn select_course_row(resolved_count: usize, entry_count: usize) -> SelectCourseR
         course_id: resolved_count as i64,
         course_hash: None,
         rian_course_hash_v1: None,
+        bms_ir_course_key: None,
         ln_policy: crate::ln_policy::LnScorePolicy::ForceLn,
         title: format!("Course {resolved_count}/{entry_count}"),
         kind: bmz_core::course::CourseKind::Dan,

@@ -474,6 +474,7 @@ impl WinitApp {
         Some(crate::screens::select_ir::SelectCourseIrTarget {
             course_hash: row.course_hash.clone()?,
             rian_course_hash_v1: row.rian_course_hash_v1.clone()?,
+            bms_ir_course_key: row.bms_ir_course_key.clone(),
             gauge: crate::screens::play_start::course_gauge_for(self.select.gauge_option)
                 .as_str()
                 .to_string(),
