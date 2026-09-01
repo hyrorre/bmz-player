@@ -144,6 +144,7 @@ pub fn rian_ln_mode_for_chart(
 pub struct SelectCourseIrTarget {
     pub course_hash: String,
     pub rian_course_hash_v1: String,
+    pub bms_ir_course_key: Option<String>,
     pub gauge: String,
     pub ln_policy: String,
     pub rule_mode: RuleMode,
@@ -481,6 +482,7 @@ mod tests {
         let target = SelectCourseIrTarget {
             course_hash: "ab".repeat(32),
             rian_course_hash_v1: "cd".repeat(32),
+            bms_ir_course_key: Some("ef".repeat(48)),
             gauge: "Class".to_string(),
             ln_policy: "auto".to_string(),
             rule_mode: RuleMode::Beatoraja,

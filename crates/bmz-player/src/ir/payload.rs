@@ -39,6 +39,8 @@ pub struct IrSubmissionContext {
     pub bms_random_choices: Vec<i32>,
     pub bms_switch_choices: Vec<u64>,
     pub rule_mode: String,
+    /// コース/Dan進行中の単曲結果。IRごとの互換lamp制約に使う。
+    pub course_stage: bool,
     /// 保存済みリプレイファイルの SHA256 (hex)。リプレイが無ければ None。
     pub replay_hash: Option<String>,
 }
@@ -98,6 +100,9 @@ pub fn build_score_submission(
     if !context.rule_mode.is_empty() {
         play_options
             .insert("rule_mode".to_string(), serde_json::Value::String(context.rule_mode.clone()));
+    }
+    if context.course_stage {
+        play_options.insert("course_stage".to_string(), serde_json::Value::Bool(true));
     }
     let ghost =
         encode_beatoraja_ghost(&result.score.ghost).ok().filter(|encoded| !encoded.is_empty());
@@ -381,6 +386,7 @@ mod tests {
                 bms_random_choices: vec![2, 1],
                 bms_switch_choices: vec![2_000_000_000_000],
                 rule_mode: "Beatoraja".to_string(),
+                course_stage: false,
                 replay_hash: Some("ab".repeat(32)),
             },
         );

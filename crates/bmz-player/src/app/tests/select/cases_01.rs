@@ -440,6 +440,7 @@ fn primary_ir_page_url_uses_provider_specific_course_hash() {
     let identity = PrimaryIrPageIdentity::Course {
         canonical_hash: Some("canonical".to_string()),
         rian_hash_v1: Some("rian".to_string()),
+        bms_ir_course_key: Some("ab".repeat(32)),
     };
     let mut generic = crate::config::profile_config::IrProviderConfig::custom();
     generic.base_url = "https://ir.example.test/".to_string();
@@ -452,6 +453,12 @@ fn primary_ir_page_url_uses_provider_specific_course_hash() {
     rian.base_url = "https://rian.example.test".to_string();
     let url = primary_ir_page_url(&rian, &identity).unwrap();
     assert!(url.contains("rian"));
+    assert!(!url.contains("canonical"));
+
+    let mut bms_ir = crate::config::profile_config::IrProviderConfig::bms_ir();
+    bms_ir.base_url = crate::ir::bms_ir::BMS_IR_DEFAULT_BASE_URL.to_string();
+    let url = primary_ir_page_url(&bms_ir, &identity).unwrap();
+    assert!(url.contains(&"ab".repeat(32)));
     assert!(!url.contains("canonical"));
 }
 

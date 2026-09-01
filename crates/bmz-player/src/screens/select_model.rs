@@ -234,6 +234,8 @@ pub struct SelectCourseRow {
     pub course_hash: Option<String>,
     /// rianIR/beatoraja connector互換のremote course hash。
     pub rian_course_hash_v1: Option<String>,
+    /// BMS-IR/LR2互換の長いcourse key。
+    pub bms_ir_course_key: Option<String>,
     /// Course-wide score policy normalized from every resolved chart profile.
     pub ln_policy: LnScorePolicy,
     pub title: String,

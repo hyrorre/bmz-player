@@ -148,6 +148,7 @@ impl WinitApp {
             PrimaryIrPageIdentity::Course {
                 canonical_hash: self.result.finished_course_hash.clone(),
                 rian_hash_v1: self.result.finished_course_rian_hash_v1.clone(),
+                bms_ir_course_key: self.result.finished_course_bms_ir_key.clone(),
             }
         } else {
             let Some(finished) = &self.result.finished_play else {

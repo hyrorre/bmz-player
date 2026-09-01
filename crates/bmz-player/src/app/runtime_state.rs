@@ -182,6 +182,8 @@ pub(super) struct ResultRuntimeState {
     pub(super) finished_course_hash: Option<String>,
     /// 完了したcourseのrianIR/beatoraja connector互換hash。
     pub(super) finished_course_rian_hash_v1: Option<String>,
+    /// 完了したcourseのBMS-IR/LR2互換course key。
+    pub(super) finished_course_bms_ir_key: Option<String>,
     /// IR 無効時も course ranking task の起動判定を毎フレーム繰り返さないための印。
     pub(super) finished_course_ir_attempted: bool,
     pub(super) finished_play: Option<FinishedPlaySession>,
@@ -216,6 +218,7 @@ pub(super) struct PreparedCourseFinish {
     pub(super) course_result: CourseResultSummary,
     pub(super) course_hash: Option<String>,
     pub(super) rian_course_hash_v1: Option<String>,
+    pub(super) bms_ir_course_key: Option<String>,
     pub(super) last_finished: Option<FinishedPlaySession>,
 }
 

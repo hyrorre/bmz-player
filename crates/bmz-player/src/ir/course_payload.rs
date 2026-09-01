@@ -31,6 +31,8 @@ pub struct IrCourseIdentity {
     /// rianIR/beatoraja connector互換:
     /// SHA256(UTF-8(decoded title + ordered chart SHA256 hex strings))。
     pub rian_course_hash_v1: String,
+    /// BMS-IR/LR2互換の長いcourse key。BMZ内部identityには使わない。
+    pub bms_ir_course_key: Option<String>,
     pub constraints_json: String,
     pub chart_sha256s_json: String,
     pub chart_sha256s: Vec<[u8; 32]>,
@@ -47,7 +49,10 @@ pub struct IrCourseSubmissionContext {
     pub arrange: String,
     pub random_seed: Option<i64>,
     pub idempotency_key: String,
+    pub bms_ir_course_key: Option<String>,
 }
+
+const BMS_IR_DAN_COURSE_KEY_PREFIX: &str = "00000000002000000000000000005190";
 
 pub fn compute_course_hash(definition: &IrCourseDefinition) -> String {
     let canonical = super::device_key::canonical_json_value(&json!({
@@ -71,12 +76,22 @@ pub fn compute_rian_course_hash_v1(title: &str, charts: &[String]) -> String {
     hash_to_hex(&digest.finalize())
 }
 
+fn bms_ir_course_key(md5s: &[String]) -> String {
+    format!("{BMS_IR_DAN_COURSE_KEY_PREFIX}{}", md5s.concat())
+}
+
+fn valid_bms_ir_table_course_key(value: &str, chart_count: usize) -> bool {
+    let value = value.trim();
+    value.len() == 32 * (chart_count + 1) && value.bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
 pub fn course_identity_from_stored(
     library_db: &crate::storage::library_db::LibraryDatabase,
     stored: &crate::storage::library_db::StoredCourse,
 ) -> Option<IrCourseIdentity> {
     let mut charts = Vec::with_capacity(stored.definition.entries.len());
     let mut chart_sha256s = Vec::with_capacity(stored.definition.entries.len());
+    let mut chart_md5s = Vec::with_capacity(stored.definition.entries.len());
     for entry in &stored.definition.entries {
         let sha = entry.sha256.clone().or_else(|| {
             let md5 = entry.md5.as_ref()?;
@@ -85,8 +100,21 @@ pub fn course_identity_from_stored(
             Some(hash_to_hex(&sha))
         })?;
         let parsed = hex_to_hash::<32>(&sha).ok()?;
+        let md5 = entry
+            .md5
+            .as_deref()
+            .and_then(|value| hex_to_hash::<16>(value).ok())
+            .map(|value| hash_to_hex(&value))
+            .or_else(|| {
+                library_db
+                    .list_charts_by_sha256(parsed)
+                    .ok()?
+                    .first()
+                    .map(|chart| hash_to_hex(&chart.md5))
+            });
         charts.push(sha);
         chart_sha256s.push(parsed);
+        chart_md5s.push(md5);
     }
     let definition = IrCourseDefinition {
         charts,
@@ -99,6 +127,14 @@ pub fn course_identity_from_stored(
     };
     let course_hash = compute_course_hash(&definition);
     let rian_course_hash_v1 = compute_rian_course_hash_v1(&definition.title, &definition.charts);
+    let bms_ir_course_key =
+        if stored.source.starts_with(crate::ir::table::BMS_IR_TABLE_SOURCE_PREFIX)
+            && valid_bms_ir_table_course_key(&stored.definition.key, chart_md5s.len())
+        {
+            Some(stored.definition.key.trim().to_ascii_lowercase())
+        } else {
+            chart_md5s.into_iter().collect::<Option<Vec<_>>>().map(|md5s| bms_ir_course_key(&md5s))
+        };
     let constraints_json = super::device_key::canonical_json_value(&definition.constraints).ok()?;
     let chart_sha256s_json =
         super::device_key::canonical_json_value(&json!(definition.charts)).ok()?;
@@ -106,6 +142,7 @@ pub fn course_identity_from_stored(
         definition,
         course_hash,
         rian_course_hash_v1,
+        bms_ir_course_key,
         constraints_json,
         chart_sha256s_json,
         chart_sha256s,
@@ -174,7 +211,7 @@ pub fn build_course_submission(
         .collect();
     play_options["entry_randomizations"] = json!(entry_randomizations);
 
-    json!({
+    let mut payload = json!({
         "client": {
             "name": "BMZ",
             "version": env!("CARGO_PKG_VERSION"),
@@ -219,7 +256,11 @@ pub fn build_course_submission(
         },
         "play_options": play_options,
         "idempotency_key": context.idempotency_key,
-    })
+    });
+    if let Some(course_key) = &context.bms_ir_course_key {
+        payload["course"]["course_key"] = json!(course_key);
+    }
+    payload
 }
 
 const fn course_ln_mode_id(mode: Option<bmz_chart::model::LongNoteMode>) -> u8 {
@@ -417,10 +458,12 @@ mod tests {
                 arrange: "NORMAL".to_string(),
                 random_seed: None,
                 idempotency_key: "course-test".to_string(),
+                bms_ir_course_key: Some("ab".repeat(32)),
             },
         );
 
         assert_eq!(payload["rule"]["ln_policy"], "ForceHcn");
+        assert_eq!(payload["course"]["course_key"], "ab".repeat(32));
         assert_eq!(payload["rule"]["effective_ln_mode"], 3);
         assert_eq!(payload["rule"]["rule_mode"], "Dx");
         assert_eq!(payload["result"]["max_combo"], json!(123));
@@ -479,6 +522,7 @@ mod tests {
                 arrange: "NORMAL".to_string(),
                 random_seed: None,
                 idempotency_key: "course-final-clear".to_string(),
+                bms_ir_course_key: Some("ab".repeat(32)),
             },
         );
 
@@ -543,6 +587,7 @@ mod tests {
                 arrange: "NORMAL".to_string(),
                 random_seed: None,
                 idempotency_key: "course-separated-clear".to_string(),
+                bms_ir_course_key: Some("ab".repeat(32)),
             },
         );
 
@@ -604,6 +649,7 @@ mod tests {
                 arrange: "NORMAL".to_string(),
                 random_seed: None,
                 idempotency_key: "course-failed".to_string(),
+                bms_ir_course_key: Some("ab".repeat(32)),
             },
         );
 

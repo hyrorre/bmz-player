@@ -392,11 +392,11 @@ fn finish_session_result_course_stage_enqueues_ir_with_rounded_clear_type() {
         slot_rules: crate::config::profile_config::default_slot_rules(),
     };
     let ir_config = IrConfig {
-        primary_provider: "bmz-official".to_string(),
+        primary_provider: "bms-ir".to_string(),
         providers: vec![IrProviderConfig {
-            provider: "bmz-official".to_string(),
-            provider_key: "bmz-official".to_string(),
-            base_url: String::new(),
+            provider: "bms-ir".to_string(),
+            provider_key: "bms-ir".to_string(),
+            base_url: crate::ir::bms_ir::BMS_IR_DEFAULT_BASE_URL.to_string(),
             enabled: true,
             account_display_name: "Player".to_string(),
             account_id: "account-1".to_string(),
@@ -407,7 +407,9 @@ fn finish_session_result_course_stage_enqueues_ir_with_rounded_clear_type() {
         }],
         ..IrConfig::default()
     };
-    let session = session();
+    let mut session = session();
+    Arc::get_mut(&mut session.chart).unwrap().metadata.source_format =
+        bmz_chart::model::ChartSourceFormat::Bms;
 
     let finished = finish_session_result(
         &mut score_db,
@@ -435,6 +437,7 @@ fn finish_session_result_course_stage_enqueues_ir_with_rounded_clear_type() {
     assert_eq!(jobs.len(), 1);
     let payload: serde_json::Value = serde_json::from_str(&jobs[0].payload_json).unwrap();
     assert_eq!(payload["result"]["clear"], "NoPlay");
+    assert_eq!(payload["play_options"]["course_stage"], true);
 
     std::fs::remove_dir_all(root).unwrap();
 }

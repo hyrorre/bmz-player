@@ -344,8 +344,14 @@ impl WinitApp {
         }
         // 無効設定や未解決 identity でも、この Result 滞在中の判定は一度にする。
         self.result.finished_course_ir_attempted = true;
-        let Some((course_hash, rian_course_hash_v1, gauge, ln_policy, rule_mode)) =
-            self.course_result_ir_target()
+        let Some((
+            course_hash,
+            rian_course_hash_v1,
+            bms_ir_course_key,
+            gauge,
+            ln_policy,
+            rule_mode,
+        )) = self.course_result_ir_target()
         else {
             return;
         };
@@ -365,6 +371,7 @@ impl WinitApp {
             crate::screens::result_ir::ResultIrCourseHashes {
                 local: course_hash,
                 rian_v1: rian_course_hash_v1,
+                bms_ir: bms_ir_course_key,
             },
             gauge,
             ln_policy,

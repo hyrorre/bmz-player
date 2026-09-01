@@ -157,7 +157,9 @@ SHA-256 fallback でラベルを付与する。
   実効LN/CN/HCN、Off/Flip/Battle/Battle ASの4/5/6/7/8/9/10/14/24/48Kを送信対象にする。
   BattleとBattle ASは別bucket、G-BATTLEは通常bucketを使う。DX、full autoplay、
   replay再生、Practice、実効assist、replay file送受信、local backfillは対象外である。
-  コース中の単曲スコアも現行どおり送信対象外とし、終端course/Dan scoreだけを送る。
+  コース中の単曲スコアは `course_stage=true` を付け、保存時と同じ
+  NoPlay/FullCombo/Perfect/Maxへの丸めを行ったlampだけを送る。数値score・judgeは
+  単曲結果を維持する。終端course/Dan scoreも従来どおり別jobとして送る。
   4/6/8Kもクライアント固有枠ではなくBMS-IRの正規キーモードとして送る。
   ローカル統合確認用のビルドだけは、`BMZ_BMS_IR_BASE_URL` を `cargo build` 時に
   指定すると固定 endpoint を差し替えられる。通常ビルドでは production URL 固定で、
@@ -2067,6 +2069,10 @@ course_hash = SHA256(canonical_json({
 ```
 
 - タイトルや出典 URL は identity に含めない (表示 metadata)。
+- BMS-IR向けにはcanonical `course_hash`を置換せず、LR2互換の長い
+  `course_key`を別フィールドで併送する。BMS-IRから取得した表はserver提供keyを
+  そのまま保持し、それ以外は標準Dan headerと譜面順MD5から生成する。rianIR用hashも
+  従来どおり独立して扱う。
 - score identity (best / ranking の分離キー) は
   `course_hash + gauge + ln_policy + rule_mode + scoring`。
   - `gauge`: 段位 (class 系 constraint) では constraint で固定されるが、

@@ -574,7 +574,6 @@ fn enqueue_ir_jobs(
                         source_ln_profile,
                         score_key.ln_policy,
                         applied_arrange.double_option,
-                        finish_mode == FinishResultMode::CourseStage,
                     ))
         })
         .collect();
@@ -611,6 +610,7 @@ fn enqueue_ir_jobs(
             bms_random_choices: applied_arrange.bms_random_choices.clone(),
             bms_switch_choices: applied_arrange.bms_switch_choices.clone(),
             rule_mode: snapshot.rule_mode.as_str().to_string(),
+            course_stage: finish_mode == FinishResultMode::CourseStage,
             // 保存時に serialize 済みバイト列から計算した hash。プレイ終了
             // 直後のフレームでリプレイファイルを読み直さない。
             replay_hash: stored.replay_sha256.clone(),

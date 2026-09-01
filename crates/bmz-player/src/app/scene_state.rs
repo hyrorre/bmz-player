@@ -57,11 +57,13 @@ impl WinitApp {
         course: CourseResultSummary,
         course_hash: Option<String>,
         rian_course_hash_v1: Option<String>,
+        bms_ir_course_key: Option<String>,
     ) {
         self.result.finished_course_skin_summary = Some(course_result_summary_for_skin(&course));
         self.result.finished_course = Some(course);
         self.result.finished_course_hash = course_hash;
         self.result.finished_course_rian_hash_v1 = rian_course_hash_v1;
+        self.result.finished_course_bms_ir_key = bms_ir_course_key;
         self.result.finished_course_ir_attempted = false;
     }
 
@@ -71,6 +73,7 @@ impl WinitApp {
         self.result.finished_course_skin_summary = None;
         self.result.finished_course_hash = None;
         self.result.finished_course_rian_hash_v1 = None;
+        self.result.finished_course_bms_ir_key = None;
         self.result.finished_course_ir_attempted = false;
     }
 

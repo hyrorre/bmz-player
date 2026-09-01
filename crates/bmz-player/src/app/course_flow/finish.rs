@@ -405,6 +405,9 @@ impl WinitApp {
             rian_course_hash_v1: course_identity
                 .as_ref()
                 .map(|(_, identity)| identity.rian_course_hash_v1.clone()),
+            bms_ir_course_key: course_identity
+                .as_ref()
+                .and_then(|(_, identity)| identity.bms_ir_course_key.clone()),
             last_finished,
         }
     }
@@ -417,6 +420,7 @@ impl WinitApp {
             prepared.course_result,
             prepared.course_hash,
             prepared.rian_course_hash_v1,
+            prepared.bms_ir_course_key,
         );
         if let Some(last) = prepared.last_finished {
             self.result.result_gauge_graph_type = last.summary.gauge_type as i32;

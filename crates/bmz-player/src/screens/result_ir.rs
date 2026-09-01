@@ -108,6 +108,7 @@ pub enum ResultIrTarget {
         local_score_id: i64,
         course_hash: String,
         rian_course_hash_v1: String,
+        bms_ir_course_key: Option<String>,
         gauge: String,
         ln_policy: String,
         rule_mode: RuleMode,
@@ -118,6 +119,7 @@ pub enum ResultIrTarget {
 pub struct ResultIrCourseHashes {
     pub local: String,
     pub rian_v1: String,
+    pub bms_ir: Option<String>,
 }
 
 impl ResultIrTarget {
