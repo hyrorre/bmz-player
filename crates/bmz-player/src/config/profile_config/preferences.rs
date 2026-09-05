@@ -216,6 +216,19 @@ pub struct AudioMixConfig {
     pub master_volume: u32,
     /// キーボリューム。0..=100 の整数で持ち、ランタイムでは /100 して扱う。
     pub key_volume: u32,
+    /// キー音自動再生モード。true なら押鍵時のキー音を鳴らさず、譜面の生タイミング
+    /// (入力オフセット・表示オフセットの影響を受けない) でキー音を自動再生する。
+    /// 音量は key_volume を使う。音ズレが気になる環境での練習向け。
+    #[serde(default)]
+    pub auto_keysound: bool,
+    /// `auto_keysound` 有効時、空押し (判定候補が無かった押下) の代替キー音も
+    /// 鳴らすかどうか。既定は false (自動再生モードでは入力非依存を優先)。
+    #[serde(default)]
+    pub auto_keysound_fallback: bool,
+    /// `auto_keysound` 有効時、地雷命中時の譜面指定キー音も鳴らすかどうか。
+    /// 既定は true (無効化すると地雷を踏んでもダメージのみで無音になる)。
+    #[serde(default = "default_auto_keysound_mine")]
+    pub auto_keysound_mine: bool,
     /// BGM ボリューム。0..=100 の整数で持ち、ランタイムでは /100 して扱う。
     pub bgm_volume: u32,
     /// 選曲プレビューのボリューム。0..=100 の整数で持ち、ランタイムでは /100 して扱う。
@@ -226,6 +239,10 @@ pub struct AudioMixConfig {
     /// システム SE のボリューム。0..=100 の整数。
     #[serde(default = "default_system_se_volume")]
     pub system_se_volume: u32,
+}
+
+pub fn default_auto_keysound_mine() -> bool {
+    true
 }
 
 pub fn default_normalize_system_bgm_volume() -> bool {

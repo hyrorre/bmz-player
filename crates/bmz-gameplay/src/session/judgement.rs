@@ -103,7 +103,11 @@ pub fn apply_judge_outcome(
         // keysound scheduler へ渡し、未指定時の既定SE判定はフレーム終端へ運ぶ。
         session.gauge.apply_mine(hit.damage);
         if hit.sound.is_some() {
-            session.pending_keysounds.push(KeySoundEvent { note_id: hit.note_id, time: hit.time });
+            session.pending_keysounds.push(KeySoundEvent {
+                note_id: hit.note_id,
+                time: hit.time,
+                trigger: KeySoundTrigger::Mine,
+            });
         }
         session.pending_mine_hits.push(hit);
     }

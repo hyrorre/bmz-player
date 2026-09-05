@@ -59,6 +59,22 @@ pub fn advance_session_frame(
                 * session.audio_mix.bgm_volume,
             audio,
         );
+
+        // キー音自動再生モード: ノーツの押下有無に関わらず、譜面の生タイミングで
+        // キー音を鳴らす。入力オフセット・表示オフセットは適用しない。
+        // 押鍵時のキー音は `schedule_keysounds` 側で抑制する。
+        if session.audio_mix.auto_keysound {
+            session.auto_keysound_scheduler.schedule_until(
+                &session.chart,
+                &session.display_only_lane_mask,
+                &session.audio_clock,
+                times.audio_schedule_until,
+                session.audio_mix.master_volume
+                    * session.audio_mix.effective_normalization_gain()
+                    * session.audio_mix.key_volume,
+                audio,
+            );
+        }
     }
 
     if session.state == PlayState::Playing {

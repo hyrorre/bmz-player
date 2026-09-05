@@ -252,12 +252,15 @@ impl WinitApp {
     }
 
     /// 譜面側にキー音がない Mine を踏んだフレームで既定の地雷 SE を鳴らす。
-    /// 複数同時ヒットでも1回にまとめる (`hits == 0` のときは no-op)。
-    pub(super) fn play_landmine_se(&self, hits: usize) {
-        if hits == 0 {
-            return;
+    /// 複数同時ヒットでも1回にまとめる。
+    pub(super) fn play_landmine_se(
+        &self,
+        mine_hits: &[bmz_gameplay::judge::model::MineHitEvent],
+        audio_mix: bmz_gameplay::session::PlayAudioMix,
+    ) {
+        if landmine_se_should_play(mine_hits, audio_mix) {
+            self.play_system_sound(crate::system_sound::SoundType::Landmine);
         }
-        self.play_system_sound(crate::system_sound::SoundType::Landmine);
     }
 
     pub(super) fn play_guide_se_for_judgements(
@@ -288,4 +291,15 @@ impl WinitApp {
             manager.stop_with_fade_out(sound_type, fade_out_frames);
         }
     }
+}
+
+/// 既定地雷 SE (`play_landmine_se`) を鳴らすべきか判定する。
+pub(in crate::app) fn landmine_se_should_play(
+    mine_hits: &[bmz_gameplay::judge::model::MineHitEvent],
+    audio_mix: bmz_gameplay::session::PlayAudioMix,
+) -> bool {
+    if audio_mix.auto_keysound && !audio_mix.auto_keysound_mine {
+        return false;
+    }
+    mine_hits.iter().any(|hit| hit.sound.is_none())
 }

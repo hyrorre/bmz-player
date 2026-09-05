@@ -49,6 +49,15 @@ pub struct PlayAudioMix {
     pub normalize_chart_volume: bool,
     pub key_volume: f32,
     pub bgm_volume: f32,
+    /// キー音自動再生モード。ON なら押鍵時のキー音を鳴らさず、譜面の生タイミング
+    /// (入力オフセット・表示オフセットの影響を受けない `NoteEvent.time`) で
+    /// キー音を自動再生する。音量は `key_volume` を使う。
+    pub auto_keysound: bool,
+    /// `auto_keysound` 有効時、空押し (判定候補が無かった押下) の代替キー音も
+    /// 鳴らすかどうか。
+    pub auto_keysound_fallback: bool,
+    /// `auto_keysound` 有効時、地雷命中時の譜面指定キー音も鳴らすかどうか。
+    pub auto_keysound_mine: bool,
 }
 
 impl PlayAudioMix {
@@ -81,6 +90,13 @@ pub struct FrameTimes {
 #[derive(Debug, Clone, Default)]
 pub struct BgmScheduler {
     pub next_index: usize,
+}
+
+/// キー音自動再生用のレーン別カーソル。押下有無に関わらず、譜面の生タイミング
+/// (入力オフセット・表示オフセットの影響を受けない `NoteEvent.time`) でキー音を鳴らす。
+#[derive(Debug, Clone, Default)]
+pub struct AutoKeysoundScheduler {
+    pub next_note_index: [usize; LANE_COUNT],
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord)]
@@ -222,6 +238,7 @@ pub struct GameSession {
     pub full_combo_started_at: Option<TimeUs>,
     pub opponent_full_combo_started_at: Option<TimeUs>,
     pub bgm_scheduler: BgmScheduler,
+    pub auto_keysound_scheduler: AutoKeysoundScheduler,
     pub offsets: PlayOffsets,
     pub input_offset_auto_adjust_enabled: bool,
     pub input_offset_auto_adjust: Option<InputOffsetAutoAdjustState>,
@@ -468,6 +485,53 @@ impl BgmScheduler {
 
     pub fn is_done(&self, chart: &PlayableChart) -> bool {
         self.next_index >= chart.bgm_events.len()
+    }
+}
+
+impl AutoKeysoundScheduler {
+    pub fn schedule_until(
+        &mut self,
+        chart: &PlayableChart,
+        display_only_lane_mask: &[bool; LANE_COUNT],
+        clock: &AudioClock,
+        until: TimeUs,
+        volume: f32,
+        audio: &mut dyn AudioScheduler,
+    ) {
+        for lane in Lane::ALL {
+            let lane_index = lane.index();
+            if display_only_lane_mask[lane_index] {
+                continue;
+            }
+            let notes = chart.notes_for_lane(lane);
+            while let Some(note) = notes.get(self.next_note_index[lane_index]) {
+                if note.time > until {
+                    break;
+                }
+                self.next_note_index[lane_index] += 1;
+
+                if !matches!(note.kind, NoteKind::Tap | NoteKind::LongStart | NoteKind::LongEnd) {
+                    continue;
+                }
+
+                let chart_volume = bmz_chart::volume::chart_channel_volume_factor(
+                    bmz_chart::volume::chart_volume_at_time(&chart.key_volume_events, note.time),
+                );
+                for sound_id in note.sounds() {
+                    audio.schedule(ScheduledSound {
+                        start_frame: clock.time_to_output_frame(note.time),
+                        sample_offset_frames: 0,
+                        sound_id,
+                        volume: (volume * chart_volume).clamp(0.0, 1.0),
+                        pan: 0.0,
+                        loop_playback: false,
+                        fade_in_frames: 0,
+                        catch_up: true,
+                        restart_policy: RestartPolicy::StopSameSound,
+                    });
+                }
+            }
+        }
     }
 }
 

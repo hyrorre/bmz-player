@@ -53,6 +53,24 @@ pub(in crate::ui::profile_panel) fn build_profile_volume_section(
                 &mut profile.audio_mix.key_volume,
                 &tr!(text, "profile-volume-keysound"),
             );
+            ui.checkbox(
+                &mut profile.audio_mix.auto_keysound,
+                tr!(text, "profile-volume-keysound-auto"),
+            );
+            ui.add_enabled(
+                profile.audio_mix.auto_keysound,
+                egui::Checkbox::new(
+                    &mut profile.audio_mix.auto_keysound_fallback,
+                    tr!(text, "profile-volume-keysound-auto-fallback"),
+                ),
+            );
+            ui.add_enabled(
+                profile.audio_mix.auto_keysound,
+                egui::Checkbox::new(
+                    &mut profile.audio_mix.auto_keysound_mine,
+                    tr!(text, "profile-volume-keysound-auto-mine"),
+                ),
+            );
             volume_slider(ui, &mut profile.audio_mix.bgm_volume, "BGM");
             volume_slider(
                 ui,

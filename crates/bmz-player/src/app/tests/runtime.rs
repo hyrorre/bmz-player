@@ -446,6 +446,47 @@ fn failed_transition_retire_sound_only_starts_on_new_failure() {
 }
 
 #[test]
+fn landmine_se_should_play_respects_auto_keysound_mine_flag() {
+    use crate::app::integrations::landmine_se_should_play;
+    use bmz_core::ids::{NoteId, SoundId};
+    use bmz_core::lane::Lane;
+    use bmz_core::time::TimeUs;
+    use bmz_gameplay::judge::model::MineHitEvent;
+    use bmz_gameplay::session::PlayAudioMix;
+
+    fn audio_mix(auto_keysound: bool, auto_keysound_mine: bool) -> PlayAudioMix {
+        PlayAudioMix {
+            master_volume: 1.0,
+            chart_normalization_gain: 1.0,
+            normalize_chart_volume: true,
+            key_volume: 1.0,
+            bgm_volume: 1.0,
+            auto_keysound,
+            auto_keysound_fallback: false,
+            auto_keysound_mine,
+        }
+    }
+
+    let no_chart_sound = MineHitEvent {
+        note_id: NoteId(1),
+        lane: Lane::Key1,
+        damage: 10.0,
+        sound: None,
+        time: TimeUs(0),
+    };
+    let with_chart_sound = MineHitEvent { sound: Some(SoundId(1)), ..no_chart_sound };
+
+    // auto_keysound OFF: 既定 SE は常に鳴る (従来どおり)。
+    assert!(landmine_se_should_play(&[no_chart_sound], audio_mix(false, false)));
+    // auto_keysound ON かつ auto_keysound_mine ON: 鳴る。
+    assert!(landmine_se_should_play(&[no_chart_sound], audio_mix(true, true)));
+    // auto_keysound ON かつ auto_keysound_mine OFF: 既定 SE も抑制する。
+    assert!(!landmine_se_should_play(&[no_chart_sound], audio_mix(true, false)));
+    // 譜面指定音があるヒットは既定 SE の対象外 (通常の keysound 経路で鳴る)。
+    assert!(!landmine_se_should_play(&[with_chart_sound], audio_mix(true, true)));
+}
+
+#[test]
 fn target_cycle_maps_start_arrow_and_scratch_controls() {
     let keys = default_select_keys();
     let gamepad_keys =

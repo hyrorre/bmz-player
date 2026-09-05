@@ -71,8 +71,8 @@ impl WinitApp {
                 active_play.running.result_graph.record_frame(&frame);
                 let guide_se_enabled = active_play.running.session.guide_se_enabled;
                 let guide_judgements = frame.judgements.clone();
-                let fallback_mine_hits =
-                    frame.mine_hits.iter().filter(|hit| hit.sound.is_none()).count();
+                let mine_hits = frame.mine_hits.clone();
+                let audio_mix = active_play.running.session.audio_mix;
                 let mut snapshot = frame.render_snapshot;
                 // gameplayと同じ絶対時刻で動画を選び、前snapshot参照による
                 // 常時1フレーム分のBGA表示遅延を発生させない。
@@ -99,7 +99,7 @@ impl WinitApp {
                 }
                 self.play.last_play_snapshot = Some(snapshot);
                 self.play_guide_se_for_judgements(guide_se_enabled, &guide_judgements);
-                self.play_landmine_se(fallback_mine_hits);
+                self.play_landmine_se(&mine_hits, audio_mix);
                 if result_settled {
                     self.finalize_settled_play_result_once(result_settled_at);
                 }
@@ -119,8 +119,8 @@ impl WinitApp {
                     .is_some_and(|practice| practice.phase == PracticePhase::Playing)
                 {
                     let failed = frame.state == bmz_gameplay::session::PlayState::Failed;
-                    let fallback_mine_hits =
-                        frame.mine_hits.iter().filter(|hit| hit.sound.is_none()).count();
+                    let mine_hits = frame.mine_hits.clone();
+                    let audio_mix = active_play.running.session.audio_mix;
                     let mut snapshot = frame.render_snapshot;
                     snapshot.play_elapsed_time = play_elapsed_time;
                     snapshot.ready_elapsed_time = ready_elapsed_time;
@@ -144,7 +144,7 @@ impl WinitApp {
                     if should_play_retire_sound {
                         self.play_system_sound(crate::system_sound::SoundType::PlayStop);
                     }
-                    self.play_landmine_se(fallback_mine_hits);
+                    self.play_landmine_se(&mine_hits, audio_mix);
                     self.commit_active_play_lane_state_to_profile();
                     self.clear_play_control_holds();
                     self.notify_obs_play_ended();
@@ -208,8 +208,8 @@ impl WinitApp {
                     }
                 };
                 let hispeed = Some(active_play.running.session.hispeed);
-                let fallback_mine_hits =
-                    frame.mine_hits.iter().filter(|hit| hit.sound.is_none()).count();
+                let mine_hits = frame.mine_hits.clone();
+                let audio_mix = active_play.running.session.audio_mix;
                 let mut snapshot = frame.render_snapshot;
                 snapshot.play_elapsed_time = play_elapsed_time;
                 snapshot.ready_elapsed_time = ready_elapsed_time;
@@ -231,7 +231,7 @@ impl WinitApp {
                 if should_play_retire_sound {
                     self.play_system_sound(crate::system_sound::SoundType::PlayStop);
                 }
-                self.play_landmine_se(fallback_mine_hits);
+                self.play_landmine_se(&mine_hits, audio_mix);
                 // active_play がまだ残っている内に hispeed/lane_cover/lift を profile に保存する。
                 self.save_current_play_options(hispeed, "play finished");
                 if let Some(finished) = &early_finished {

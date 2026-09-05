@@ -8,6 +8,9 @@ fn audio_mix_toggle_preserves_chart_normalization_gain() {
         normalize_chart_volume: true,
         key_volume: 1.0,
         bgm_volume: 1.0,
+        auto_keysound: false,
+        auto_keysound_fallback: false,
+        auto_keysound_mine: true,
     };
 
     assert_eq!(mix.effective_normalization_gain(), 0.25);
@@ -464,6 +467,37 @@ fn unjudged_press_after_empty_poor_window_prefers_previous_invisible_keysound() 
 }
 
 #[test]
+fn auto_keysound_fallback_flag_off_suppresses_empty_press_sound() {
+    let mut session = session_with_autoplay(chart_with_invisible_keysound());
+    session.autoplay = None;
+    session.audio_mix.auto_keysound = true;
+    // auto_keysound_fallback は既定 false。
+    let mut audio = TestAudio::default();
+
+    let judgements = process_session_input(&mut session, human_press(TimeUs(800_000)));
+    schedule_keysounds(&mut session, &mut audio);
+
+    assert!(judgements.is_empty());
+    assert!(audio.scheduled.is_empty());
+}
+
+#[test]
+fn auto_keysound_fallback_flag_on_plays_empty_press_sound() {
+    let mut session = session_with_autoplay(chart_with_invisible_keysound());
+    session.autoplay = None;
+    session.audio_mix.auto_keysound = true;
+    session.audio_mix.auto_keysound_fallback = true;
+    let mut audio = TestAudio::default();
+
+    let judgements = process_session_input(&mut session, human_press(TimeUs(800_000)));
+    schedule_keysounds(&mut session, &mut audio);
+
+    assert!(judgements.is_empty());
+    assert_eq!(audio.scheduled.len(), 1);
+    assert_eq!(audio.scheduled[0].sound_id, SoundId(8));
+}
+
+#[test]
 fn mine_hit_schedules_its_chart_keysound() {
     let mut chart = chart_with_mine(TimeUs(1_000_000), 12.5);
     chart.lane_notes[Lane::Key1.index()][0].sound = Some(SoundId(7));
@@ -479,6 +513,42 @@ fn mine_hit_schedules_its_chart_keysound() {
     assert_eq!(session.pending_mine_hits[0].sound, Some(SoundId(7)));
     assert_eq!(audio.scheduled.len(), 1);
     assert_eq!(audio.scheduled[0].sound_id, SoundId(7));
+}
+
+#[test]
+fn auto_keysound_preserves_custom_mine_sound_on_hit() {
+    let mut chart = chart_with_mine(TimeUs(1_000_000), 12.5);
+    chart.lane_notes[Lane::Key1.index()][0].sound = Some(SoundId(7));
+    let mut session = session_with_autoplay(chart);
+    session.autoplay = None;
+    session.audio_mix.auto_keysound = true;
+    let mut audio = TestAudio::default();
+
+    process_session_input(&mut session, human_press(TimeUs(1_000_000)));
+    schedule_keysounds(&mut session, &mut audio);
+
+    // 自動キー音モードでも、auto_keysound_mine が既定 true なら
+    // 地雷命中時の譜面指定音を鳴らす。
+    assert_eq!(audio.scheduled.len(), 1);
+    assert_eq!(audio.scheduled[0].sound_id, SoundId(7));
+}
+
+#[test]
+fn auto_keysound_mine_flag_off_suppresses_mine_sound() {
+    let mut chart = chart_with_mine(TimeUs(1_000_000), 12.5);
+    chart.lane_notes[Lane::Key1.index()][0].sound = Some(SoundId(7));
+    let mut session = session_with_autoplay(chart);
+    session.autoplay = None;
+    session.audio_mix.auto_keysound = true;
+    session.audio_mix.auto_keysound_mine = false;
+    let mut audio = TestAudio::default();
+
+    process_session_input(&mut session, human_press(TimeUs(1_000_000)));
+    schedule_keysounds(&mut session, &mut audio);
+
+    // ダメージは変わらず入るが、音は鳴らさない。
+    assert_eq!(session.pending_mine_hits.len(), 1);
+    assert!(audio.scheduled.is_empty());
 }
 
 #[test]

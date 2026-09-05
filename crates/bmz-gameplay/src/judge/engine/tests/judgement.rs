@@ -29,7 +29,11 @@ fn slow_empty_poor_does_not_consume_note() {
     assert_eq!(outcome.events[0].note_id, None);
     assert_eq!(
         outcome.keysounds,
-        vec![KeySoundEvent { note_id: NoteId(1), time: TimeUs(1_150_000) }]
+        vec![KeySoundEvent {
+            note_id: NoteId(1),
+            time: TimeUs(1_150_000),
+            trigger: KeySoundTrigger::NoteJudged,
+        }]
     );
     assert_eq!(engine.lanes[Lane::Key1.index()].next_note_index, 0);
 }
@@ -48,7 +52,11 @@ fn fast_empty_poor_does_not_consume_note() {
     assert_eq!(outcome.events[0].note_id, None);
     assert_eq!(
         outcome.keysounds,
-        vec![KeySoundEvent { note_id: NoteId(1), time: TimeUs(700_000) }]
+        vec![KeySoundEvent {
+            note_id: NoteId(1),
+            time: TimeUs(700_000),
+            trigger: KeySoundTrigger::NoteJudged,
+        }]
     );
     assert_eq!(engine.lanes[Lane::Key1.index()].next_note_index, 0);
 }
@@ -85,7 +93,11 @@ fn double_press_after_normal_judge_is_slow_empty_poor() {
     assert_eq!(second.events[0].note_id, None);
     assert_eq!(
         second.keysounds,
-        vec![KeySoundEvent { note_id: NoteId(1), time: TimeUs(1_005_000) }]
+        vec![KeySoundEvent {
+            note_id: NoteId(1),
+            time: TimeUs(1_005_000),
+            trigger: KeySoundTrigger::NoteJudged,
+        }]
     );
     assert_eq!(engine.lanes[Lane::Key1.index()].next_note_index, 1);
 }
@@ -291,7 +303,11 @@ fn lr2oraja_multi_bad_adds_preceding_bad_before_selected_note() {
     assert_eq!(outcome.events[1].delta, TimeUs(60_000));
     assert_eq!(
         outcome.keysounds,
-        vec![KeySoundEvent { note_id: NoteId(2), time: TimeUs(1_150_000) }]
+        vec![KeySoundEvent {
+            note_id: NoteId(2),
+            time: TimeUs(1_150_000),
+            trigger: KeySoundTrigger::NoteJudged,
+        }]
     );
     assert_eq!(engine.lanes[Lane::Key1.index()].next_note_index, 2);
 }
@@ -373,7 +389,11 @@ fn lr2oraja_multi_bad_keeps_following_bad_when_selected_note_is_bad() {
     assert_eq!(outcome.events[1].delta, TimeUs(130_000));
     assert_eq!(
         outcome.keysounds,
-        vec![KeySoundEvent { note_id: NoteId(1), time: TimeUs(1_130_000) }]
+        vec![KeySoundEvent {
+            note_id: NoteId(1),
+            time: TimeUs(1_130_000),
+            trigger: KeySoundTrigger::NoteJudged,
+        }]
     );
     assert_eq!(engine.lanes[Lane::Key1.index()].next_note_index, 2);
 }

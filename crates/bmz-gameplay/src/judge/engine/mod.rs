@@ -9,8 +9,8 @@ use bmz_core::time::TimeUs;
 
 use super::model::{
     ActiveLongNote, JudgeAlgorithm, JudgeOutcome, JudgeWindow, JudgeWindows, JudgementEvent,
-    KeySoundEvent, LaneJudgeState, LongNoteEndRef, MineHitEvent, PendingLongRelease,
-    ScratchPressSuppression,
+    KeySoundEvent, KeySoundTrigger, LaneJudgeState, LongNoteEndRef, MineHitEvent,
+    PendingLongRelease, ScratchPressSuppression,
 };
 use crate::rule::RuleMode;
 
@@ -225,9 +225,11 @@ impl JudgeEngine {
                                 active.start_delta,
                                 now,
                             ));
-                            outcome
-                                .keysounds
-                                .push(KeySoundEvent { note_id: active.end.end_note_id, time: now });
+                            outcome.keysounds.push(KeySoundEvent {
+                                note_id: active.end.end_note_id,
+                                time: now,
+                                trigger: KeySoundTrigger::NoteJudged,
+                            });
                         }
                     }
                     LongNoteMode::Cn | LongNoteMode::Hcn => {
@@ -467,7 +469,11 @@ impl JudgeEngine {
 
             return JudgeOutcome {
                 events,
-                keysounds: vec![KeySoundEvent { note_id, time: input.time }],
+                keysounds: vec![KeySoundEvent {
+                    note_id,
+                    time: input.time,
+                    trigger: KeySoundTrigger::NoteJudged,
+                }],
                 mine_hits,
                 consumed_input: true,
                 ..Default::default()

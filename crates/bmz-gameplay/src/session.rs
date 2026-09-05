@@ -19,7 +19,8 @@ use crate::input::system::InputSystem;
 use crate::input::translator::{InputTimestampAnchor, InputTimingContext};
 use crate::judge::engine::JudgeEngine;
 use crate::judge::model::{
-    JudgeOutcome, JudgeWindow, JudgeWindows, JudgementEvent, KeySoundEvent, MineHitEvent,
+    JudgeOutcome, JudgeWindow, JudgeWindows, JudgementEvent, KeySoundEvent, KeySoundTrigger,
+    MineHitEvent,
 };
 use crate::judge::window::{
     judge_percent_at_time_for_keymode, judge_windows_for_rule_mode_and_keymode,

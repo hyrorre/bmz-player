@@ -232,6 +232,200 @@ fn bgm_scheduler_viewer_seek_carries_only_live_latest_bgm_voices() {
 }
 
 #[test]
+fn auto_keysound_plays_note_sounds_without_input() {
+    let mut session = session_with_autoplay(chart_with_keysound());
+    session.autoplay = None;
+    session.audio_mix.master_volume = 0.5;
+    session.audio_mix.key_volume = 0.25;
+    session.audio_mix.chart_normalization_gain = 0.5;
+    session.audio_mix.normalize_chart_volume = true;
+    session.audio_mix.auto_keysound = true;
+    let mut audio = TestAudio::default();
+
+    advance_session_frame(&mut session, &mut audio);
+
+    // 押鍵ゼロでも譜面の生タイミングでキー音が鳴る。音量は key_volume を使う。
+    assert_eq!(audio.scheduled.len(), 1);
+    assert_eq!(audio.scheduled[0].sound_id, SoundId(7));
+    assert_eq!(audio.scheduled[0].start_frame, 0);
+    assert_eq!(audio.scheduled[0].volume, 0.0625);
+    assert_eq!(audio.scheduled[0].restart_policy, RestartPolicy::StopSameSound);
+}
+
+#[test]
+fn auto_keysound_suppresses_hit_keysounds() {
+    let mut session = session_with_autoplay(chart_with_keysound());
+    session.audio_mix.auto_keysound = true;
+    let mut audio = TestAudio::default();
+
+    let frame = advance_session_frame(&mut session, &mut audio);
+
+    // オートプレイでノーツは判定されるが、キー音は自動再生の 1 回だけ
+    // (押鍵経路は抑制されるので二重再生しない)。
+    assert_eq!(frame.judgements.len(), 1);
+    assert_eq!(audio.scheduled.len(), 1);
+    assert_eq!(audio.scheduled[0].sound_id, SoundId(7));
+}
+
+#[test]
+fn auto_keysound_skips_display_only_lanes() {
+    let mut chart = chart_with_keysound();
+    chart.lane_notes[Lane::Key2.index()].push(NoteEvent {
+        id: NoteId(2),
+        lane: Lane::Key2,
+        kind: NoteKind::Tap,
+        tick: ChartTick(0),
+        time: TimeUs(0),
+        sound: Some(SoundId(9)),
+        layered_sounds: Vec::new(),
+        damage: None,
+    });
+    let mut session = session_with_autoplay(chart);
+    session.autoplay = None;
+    session.display_only_lane_mask[Lane::Key2.index()] = true;
+    session.audio_mix.auto_keysound = true;
+    let mut audio = TestAudio::default();
+
+    advance_session_frame(&mut session, &mut audio);
+
+    // 主プレイヤーレーン (Key1) は鳴り、display-only レーン (Key2) は鳴らない。
+    assert_eq!(audio.scheduled.len(), 1);
+    assert_eq!(audio.scheduled[0].sound_id, SoundId(7));
+}
+
+#[test]
+fn auto_keysound_does_not_schedule_invisible_notes() {
+    let mut chart = chart_with_keysound();
+    chart.lane_notes[Lane::Key1.index()].push(NoteEvent {
+        id: NoteId(2),
+        lane: Lane::Key1,
+        kind: NoteKind::Invisible,
+        tick: ChartTick(0),
+        time: TimeUs(50_000),
+        sound: Some(SoundId(8)),
+        layered_sounds: Vec::new(),
+        damage: None,
+    });
+    let mut session = session_with_autoplay(chart);
+    session.autoplay = None;
+    session.audio_mix.auto_keysound = true;
+    let mut audio = TestAudio::default();
+
+    advance_session_frame(&mut session, &mut audio);
+
+    // Invisible は押鍵時の fallback キー音候補であり、譜面タイミングでの自動再生対象外。
+    assert_eq!(audio.scheduled.len(), 1);
+    assert_eq!(audio.scheduled[0].sound_id, SoundId(7));
+}
+
+#[test]
+fn practice_auto_keysound_does_not_catch_up_notes_before_section() {
+    let mut chart = chart_with_keysound();
+    chart.lane_notes[Lane::Key1.index()].push(NoteEvent {
+        id: NoteId(2),
+        lane: Lane::Key1,
+        kind: NoteKind::Tap,
+        tick: ChartTick(0),
+        time: TimeUs(50_000),
+        sound: Some(SoundId(8)),
+        layered_sounds: Vec::new(),
+        damage: None,
+    });
+    // 区間 [40ms, 100ms) を練習: time 0 のノーツは Invisible へ退避される。
+    bmz_chart::practice::apply_practice_section(&mut chart, TimeUs(40_000), TimeUs(100_000));
+    let mut session = session_with_autoplay(chart);
+    session.autoplay = None;
+    session.audio_mix.auto_keysound = true;
+    let mut audio = TestAudio::default();
+
+    advance_session_frame(&mut session, &mut audio);
+
+    // 区間前 (time 0) のキー音は catch-up されず、区間内 (time 50ms) のみ鳴る。
+    assert_eq!(audio.scheduled.len(), 1);
+    assert_eq!(audio.scheduled[0].sound_id, SoundId(8));
+}
+
+#[test]
+fn auto_keysound_schedules_layered_note_sounds() {
+    let mut chart = chart_with_keysound();
+    chart.lane_notes[Lane::Key1.index()][0].layered_sounds = vec![SoundId(8)];
+    let mut session = session_with_autoplay(chart);
+    session.autoplay = None;
+    session.audio_mix.auto_keysound = true;
+    let mut audio = TestAudio::default();
+
+    advance_session_frame(&mut session, &mut audio);
+
+    let mut sounds: Vec<_> = audio.scheduled.iter().map(|s| s.sound_id).collect();
+    sounds.sort_by_key(|s| s.0);
+    assert_eq!(sounds, vec![SoundId(7), SoundId(8)]);
+}
+
+#[test]
+fn auto_keysound_schedules_long_start_and_long_end() {
+    let mut chart = ln_chart_with_start_sound_and_end_sound(Some(SoundId(8)));
+    // LongEnd を先読み窓 (100ms) 内へ寄せる。
+    chart.lane_notes[Lane::Key1.index()][1].time = TimeUs(50_000);
+    chart.long_notes[0].end_time = TimeUs(50_000);
+    let mut session = session_with_autoplay(chart);
+    session.autoplay = None;
+    session.audio_mix.auto_keysound = true;
+    let mut audio = TestAudio::default();
+
+    advance_session_frame(&mut session, &mut audio);
+
+    let mut sounds: Vec<_> = audio.scheduled.iter().map(|s| s.sound_id).collect();
+    sounds.sort_by_key(|s| s.0);
+    // LongStart (SoundId 7) と LongEnd (SoundId 8) がそれぞれ 1 回ずつ。
+    assert_eq!(sounds, vec![SoundId(7), SoundId(8)]);
+}
+
+#[test]
+fn auto_keysound_applies_key_volume_events() {
+    let mut chart = chart_with_keysound();
+    chart.key_volume_events.push(bmz_chart::model::ChartVolumeEvent {
+        tick: ChartTick(0),
+        time: TimeUs(0),
+        value: 128,
+    });
+    let mut session = session_with_autoplay(chart);
+    session.autoplay = None;
+    session.audio_mix.auto_keysound = true;
+    session.audio_mix.master_volume = 1.0;
+    session.audio_mix.key_volume = 1.0;
+    let mut audio = TestAudio::default();
+
+    advance_session_frame(&mut session, &mut audio);
+
+    // 譜面のチャンネル音量 (#xxx07 相当) が自動再生にも反映される。
+    let expected = 128.0 / 255.0;
+    assert_eq!(audio.scheduled.len(), 1);
+    assert!((audio.scheduled[0].volume - expected).abs() < 0.001);
+}
+
+#[test]
+fn auto_keysound_restart_resets_lane_cursors() {
+    let mut session = session_with_autoplay(chart_with_keysound());
+    session.autoplay = None;
+    session.audio_mix.auto_keysound = true;
+    let mut audio = TestAudio::default();
+
+    advance_session_frame(&mut session, &mut audio);
+    assert_eq!(audio.scheduled.len(), 1);
+    assert!(session.auto_keysound_scheduler.next_note_index[Lane::Key1.index()] > 0);
+
+    // リトライ等でセッションを作り直すのと同じく、スケジューラも Default に戻す。
+    // カーソルが 0 に戻り、同じノーツを先頭から再スケジュールできることを確認する。
+    session.auto_keysound_scheduler = AutoKeysoundScheduler::default();
+    let mut audio_after_restart = TestAudio::default();
+
+    advance_session_frame(&mut session, &mut audio_after_restart);
+
+    assert_eq!(audio_after_restart.scheduled.len(), 1);
+    assert_eq!(audio_after_restart.scheduled[0].sound_id, SoundId(7));
+}
+
+#[test]
 fn advance_session_frame_applies_chart_volume_channels() {
     let mut chart = chart_with_keysound();
     chart.key_volume_events.push(bmz_chart::model::ChartVolumeEvent {

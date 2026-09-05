@@ -383,7 +383,11 @@ pub(super) fn process_session_input(
             && !hcn_passing
             && let Some(note_id) = fallback_keysound_note_id(session, input.lane, input.time)
         {
-            outcome.keysounds.push(KeySoundEvent { note_id, time: input.time });
+            outcome.keysounds.push(KeySoundEvent {
+                note_id,
+                time: input.time,
+                trigger: KeySoundTrigger::Fallback,
+            });
         }
     }
     apply_judge_outcome(session, outcome)

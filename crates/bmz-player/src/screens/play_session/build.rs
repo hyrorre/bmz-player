@@ -566,6 +566,7 @@ pub fn build_game_session_with_input_backend(
         full_combo_started_at: None,
         opponent_full_combo_started_at: None,
         bgm_scheduler: BgmScheduler::default(),
+        auto_keysound_scheduler: AutoKeysoundScheduler::default(),
         offsets: play_offsets_from_profile_for_mode(profile, play_config_key_mode),
         audio_mix: audio_mix_from_profile(profile),
         hispeed,

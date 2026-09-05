@@ -203,10 +203,19 @@ pub struct JudgeOutcome {
     pub consumed_input: bool,
 }
 
+/// キー音イベントの発生要因。自動キー音モードでどれを抑制/許可するかの判定に使う。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KeySoundTrigger {
+    NoteJudged,
+    Fallback,
+    Mine,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct KeySoundEvent {
     pub note_id: NoteId,
     pub time: TimeUs,
+    pub trigger: KeySoundTrigger,
 }
 
 #[derive(Debug, Clone, Copy)]

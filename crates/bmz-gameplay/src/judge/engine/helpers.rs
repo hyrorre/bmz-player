@@ -30,7 +30,11 @@ pub(super) fn finalize_long_release(
     let mut outcome = match active.mode {
         LongNoteMode::Ln => JudgeOutcome {
             events: vec![ln_final_event(lane, active, judge, delta, time)],
-            keysounds: vec![KeySoundEvent { note_id: active.end.end_note_id, time }],
+            keysounds: vec![KeySoundEvent {
+                note_id: active.end.end_note_id,
+                time,
+                trigger: KeySoundTrigger::NoteJudged,
+            }],
             consumed_input: true,
             ..Default::default()
         },
@@ -44,7 +48,11 @@ pub(super) fn finalize_long_release(
                 time,
                 affects_score: true,
             }],
-            keysounds: vec![KeySoundEvent { note_id: active.end.end_note_id, time }],
+            keysounds: vec![KeySoundEvent {
+                note_id: active.end.end_note_id,
+                time,
+                trigger: KeySoundTrigger::NoteJudged,
+            }],
             consumed_input: true,
             ..Default::default()
         },
@@ -492,7 +500,11 @@ pub(super) fn empty_poor(
             time,
             affects_score: true,
         }],
-        keysounds: vec![KeySoundEvent { note_id: keysound_note_id, time }],
+        keysounds: vec![KeySoundEvent {
+            note_id: keysound_note_id,
+            time,
+            trigger: KeySoundTrigger::NoteJudged,
+        }],
         mine_hits: Vec::new(),
         consumed_input: false,
         ..Default::default()
