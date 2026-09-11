@@ -405,6 +405,73 @@ fn restoring_key_mode_defaults_keeps_other_modes_and_slots() {
 }
 
 #[test]
+fn restoring_inherited_key_mode_defaults_restores_visible_lanes_and_roundtrips() {
+    for key_mode in [KeyMode::K4, KeyMode::K5, KeyMode::K6, KeyMode::K10] {
+        let mut profile = ProfileConfig::new_default("default", "Default", 0);
+        let primary_targets = key_mode_binding_targets(key_mode, KeyBindingSlot::KeyboardPrimary);
+        let secondary_targets =
+            key_mode_binding_targets(key_mode, KeyBindingSlot::KeyboardSecondary);
+
+        for (index, target) in primary_targets.iter().copied().enumerate() {
+            apply_play_binding(&mut profile.input, key_mode, target, &format!("Primary{index}"))
+                .unwrap();
+        }
+        for (index, target) in secondary_targets.iter().copied().enumerate() {
+            apply_play_binding(&mut profile.input, key_mode, target, &format!("Secondary{index}"))
+                .unwrap();
+        }
+
+        restore_key_mode_defaults(&mut profile.input, key_mode, KeyBindingSlot::KeyboardPrimary)
+            .unwrap();
+
+        let expected = ProfileConfig::new_default("expected", "Expected", 0);
+        for target in primary_targets {
+            assert_eq!(
+                format_play_binding(&profile, key_mode, target),
+                format_play_binding(&expected, key_mode, target),
+                "{} primary {:?}",
+                key_mode.as_str(),
+                target,
+            );
+        }
+        for target in secondary_targets {
+            assert!(
+                format_play_binding(&profile, key_mode, target).starts_with("Secondary"),
+                "{} secondary {:?} was changed",
+                key_mode.as_str(),
+                target,
+            );
+        }
+
+        let serialized = toml::to_string(&profile).unwrap();
+        let restored: ProfileConfig = toml::from_str(&serialized).unwrap();
+        for target in key_mode_binding_targets(key_mode, KeyBindingSlot::KeyboardPrimary) {
+            assert_eq!(
+                format_play_binding(&restored, key_mode, target),
+                format_play_binding(&expected, key_mode, target),
+                "{} restored primary {:?}",
+                key_mode.as_str(),
+                target,
+            );
+        }
+    }
+}
+
+#[test]
+fn restoring_key_mode_secondary_defaults_does_not_copy_legacy_primary_defaults() {
+    let mut profile = ProfileConfig::new_default("default", "Default", 0);
+    let primary = key_target(LaneConfig::Key1, KeyBindingSlot::KeyboardPrimary);
+    let secondary = key_target(LaneConfig::Key1, KeyBindingSlot::KeyboardSecondary);
+    apply_play_binding(&mut profile.input, KeyMode::K5, secondary, "Q").unwrap();
+
+    restore_key_mode_defaults(&mut profile.input, KeyMode::K5, KeyBindingSlot::KeyboardSecondary)
+        .unwrap();
+
+    assert_eq!(format_play_binding(&profile, KeyMode::K5, primary), "Z");
+    assert_eq!(format_play_binding(&profile, KeyMode::K5, secondary), "(none)");
+}
+
+#[test]
 fn apply_play_binding_sets_controller_without_touching_keyboard() {
     let mut profile = ProfileConfig::new_default("default", "Default", 0);
     apply_play_binding(

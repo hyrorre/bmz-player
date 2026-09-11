@@ -187,7 +187,8 @@ pub fn restore_key_mode_defaults(
     key_mode: KeyMode,
     slot: KeyBindingSlot,
 ) -> Result<(), crate::config::play_input::InheritError> {
-    let defaults = crate::config::play_input::default_play_bindings(key_mode);
+    let default_input = crate::config::play_input::default_profile_input();
+    let defaults = resolve_play_bindings(&default_input, key_mode)?;
     for target in key_mode_binding_targets(key_mode, slot) {
         let default_control = default_control_for_target(&defaults, target);
         match default_control {
@@ -217,15 +218,16 @@ fn default_control_for_target(
                 && entry.action.is_none()
                 && device_matches(&entry.device, slot.device())
                 && (slot.is_controller()
-                    || entry.keyboard_slot.is_none()
-                    || entry.keyboard_slot
-                        == Some(match slot {
-                            KeyBindingSlot::KeyboardPrimary => KeyboardBindingSlotConfig::Primary,
-                            KeyBindingSlot::KeyboardSecondary => {
-                                KeyboardBindingSlotConfig::Secondary
-                            }
-                            _ => unreachable!(),
-                        })))
+                    || match slot {
+                        KeyBindingSlot::KeyboardPrimary => {
+                            entry.keyboard_slot.is_none()
+                                || entry.keyboard_slot == Some(KeyboardBindingSlotConfig::Primary)
+                        }
+                        KeyBindingSlot::KeyboardSecondary => {
+                            entry.keyboard_slot == Some(KeyboardBindingSlotConfig::Secondary)
+                        }
+                        _ => unreachable!(),
+                    }))
             .then(|| entry.control.clone())
         }),
         KeyBindingTarget::Scratch { lane, direction, slot } => defaults.iter().find_map(|entry| {
@@ -238,15 +240,16 @@ fn default_control_for_target(
                     })
                 && device_matches(&entry.device, slot.device())
                 && (slot.is_controller()
-                    || entry.keyboard_slot.is_none()
-                    || entry.keyboard_slot
-                        == Some(match slot {
-                            KeyBindingSlot::KeyboardPrimary => KeyboardBindingSlotConfig::Primary,
-                            KeyBindingSlot::KeyboardSecondary => {
-                                KeyboardBindingSlotConfig::Secondary
-                            }
-                            _ => unreachable!(),
-                        })))
+                    || match slot {
+                        KeyBindingSlot::KeyboardPrimary => {
+                            entry.keyboard_slot.is_none()
+                                || entry.keyboard_slot == Some(KeyboardBindingSlotConfig::Primary)
+                        }
+                        KeyBindingSlot::KeyboardSecondary => {
+                            entry.keyboard_slot == Some(KeyboardBindingSlotConfig::Secondary)
+                        }
+                        _ => unreachable!(),
+                    }))
             .then(|| entry.control.clone())
         }),
         KeyBindingTarget::Action { .. } => None,
