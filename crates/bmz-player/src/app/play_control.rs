@@ -119,7 +119,7 @@ pub(super) fn keyboard_lane_action(
         InputActionConfig::PlayVisualOffsetUp => Some(PlayLaneAction::VisualOffsetDelta(1)),
         InputActionConfig::PlayVisualOffsetDown => Some(PlayLaneAction::VisualOffsetDelta(-1)),
         InputActionConfig::PlayVisualOffsetAutoAdjust => {
-            Some(PlayLaneAction::ToggleVisualOffsetAutoAdjust)
+            (!event.repeat).then_some(PlayLaneAction::ToggleVisualOffsetAutoAdjust)
         }
         _ => None,
     }
@@ -281,6 +281,53 @@ mod tests {
         assert_eq!(
             keyboard_lane_action(&keyboard(KeyCode::Numpad0, false), &input),
             Some(PlayLaneAction::ToggleVisualOffsetAutoAdjust)
+        );
+    }
+
+    #[test]
+    fn visual_offset_auto_adjust_toggles_only_on_press_edges() {
+        let input = crate::config::play_input::default_profile_input();
+        for code in [KeyCode::Digit0, KeyCode::Numpad0] {
+            assert_eq!(
+                keyboard_lane_action(&keyboard(code, false), &input),
+                Some(PlayLaneAction::ToggleVisualOffsetAutoAdjust)
+            );
+            assert_eq!(keyboard_lane_action(&keyboard(code, true), &input), None);
+            let mut release = keyboard(code, false);
+            release.pressed = false;
+            assert_eq!(keyboard_lane_action(&release, &input), None);
+        }
+
+        use crate::config::key_config::{KeyBindingSlot, KeyBindingTarget, apply_play_binding};
+        use bmz_core::lane::KeyMode;
+        let mut remapped = input.clone();
+        apply_play_binding(
+            &mut remapped,
+            KeyMode::K7,
+            KeyBindingTarget::Action {
+                action: InputActionConfig::PlayVisualOffsetAutoAdjust,
+                slot: KeyBindingSlot::KeyboardPrimary,
+            },
+            "H",
+        )
+        .unwrap();
+        crate::config::play_input::normalize_profile_input(&mut remapped);
+        assert_eq!(
+            keyboard_lane_action(&keyboard(KeyCode::KeyH, false), &remapped),
+            Some(PlayLaneAction::ToggleVisualOffsetAutoAdjust)
+        );
+        assert_eq!(keyboard_lane_action(&keyboard(KeyCode::KeyH, true), &remapped), None);
+        let mut release = keyboard(KeyCode::KeyH, false);
+        release.pressed = false;
+        assert_eq!(keyboard_lane_action(&release, &remapped), None);
+
+        assert_eq!(
+            keyboard_lane_action(&keyboard(KeyCode::Digit3, true), &remapped),
+            Some(PlayLaneAction::VisualOffsetDelta(1))
+        );
+        assert_eq!(
+            keyboard_lane_action(&keyboard(KeyCode::Numpad9, true), &remapped),
+            Some(PlayLaneAction::VisualOffsetDelta(-1))
         );
     }
 
