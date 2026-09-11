@@ -38,9 +38,10 @@ pub(super) fn push_document_playfield(
         layout.lane_width,
         layout.active_lanes,
     );
-    push_document_long_notes(commands, snapshot, skin, skin_state);
+    let notes_alpha_offset = skin.document_notes_offset_alpha(skin_state);
+    push_document_long_notes(commands, snapshot, skin, skin_state, notes_alpha_offset);
     for &lane in layout.active_lanes {
-        push_document_lane(commands, snapshot, skin, skin_state, lane);
+        push_document_lane(commands, snapshot, skin, skin_state, lane, notes_alpha_offset);
     }
 }
 
@@ -49,6 +50,7 @@ fn push_document_long_notes(
     snapshot: &RenderSnapshot,
     skin: &SkinContext,
     skin_state: &crate::skin::SkinDrawState,
+    notes_alpha_offset: i32,
 ) {
     for body in &snapshot.visible_long_notes {
         let start = commands.len();
@@ -93,6 +95,7 @@ fn push_document_long_notes(
         {
             append_document_item(commands, skin, skin_state, item);
         }
+        apply_draw_command_alpha_offset(&mut commands[start..], notes_alpha_offset);
         apply_draw_command_alpha(&mut commands[start..], body.alpha);
     }
 }
@@ -103,6 +106,7 @@ fn push_document_lane(
     skin: &SkinContext,
     skin_state: &crate::skin::SkinDrawState,
     lane: Lane,
+    notes_alpha_offset: i32,
 ) {
     let lane_index = lane.index();
     let note_height = skin.document_note_height(lane, snapshot.key_mode).unwrap_or(NOTE_HEIGHT);
@@ -136,6 +140,7 @@ fn push_document_lane(
         } else if snapshot.mark_processed_note && note.processed_judge.is_some() {
             push_processed_note_fallback(commands, rect);
         }
+        apply_draw_command_alpha_offset(&mut commands[start..], notes_alpha_offset);
         apply_draw_command_alpha(&mut commands[start..], note.alpha);
     }
 
@@ -166,6 +171,7 @@ fn push_document_lane(
                 },
             );
         }
+        apply_draw_command_alpha_offset(&mut commands[start..], notes_alpha_offset);
         apply_draw_command_alpha(&mut commands[start..], mine.alpha);
     }
 }

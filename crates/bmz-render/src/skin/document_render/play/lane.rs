@@ -153,6 +153,7 @@ macro_rules! skin_document_render_play_lane_methods {
                     total.y = total.y.saturating_add(offset.y);
                     total.w = total.w.saturating_add(offset.w);
                     total.h = total.h.saturating_add(offset.h);
+                    total.a = total.a.saturating_add(offset.a);
                     total
                 })
         }

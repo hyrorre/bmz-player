@@ -78,6 +78,10 @@ impl SkinContext {
         document.note_mine_render_item(lane, key_mode, rect, &self.document_sources)
     }
 
+    pub fn document_notes_offset_alpha(&self, state: &SkinDrawState) -> i32 {
+        self.document.as_ref().map_or(0, |document| document.notes_destination_offset(state).a)
+    }
+
     pub fn document_note_height(&self, lane: Lane, key_mode: KeyMode) -> Option<f32> {
         let document = self.document.as_ref()?;
         document.note_height_for_lane(lane, key_mode)

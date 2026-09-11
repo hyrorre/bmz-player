@@ -264,10 +264,14 @@ pub(super) fn apply_bar_line_alpha_offset(
     skin_offsets: &SkinOffsetValues,
 ) {
     let offset = skin_offsets.get(SKIN_OFFSET_BAR_LINE).unwrap_or_default();
-    if offset.a == 0 {
+    apply_draw_command_alpha_offset(commands, offset.a);
+}
+
+pub(super) fn apply_draw_command_alpha_offset(commands: &mut [DrawCommand], alpha_offset: i32) {
+    if alpha_offset == 0 {
         return;
     }
-    let alpha_delta = offset.a as f32 / 255.0;
+    let alpha_delta = alpha_offset as f32 / 255.0;
     for command in commands {
         match command {
             DrawCommand::Image { tint, .. } | DrawCommand::RotatedImage { tint, .. } => {

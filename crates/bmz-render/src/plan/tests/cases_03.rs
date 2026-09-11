@@ -123,6 +123,189 @@ fn play_skin_document_places_hit_timing_note_bottom_on_judge_line() {
 }
 
 #[test]
+fn play_skin_document_applies_notes_alpha_offset_before_note_fade() {
+    let document: crate::skin::SkinDocument = serde_json::from_str(
+        r#"
+            {
+                "type": 0,
+                "w": 100,
+                "h": 100,
+                "source": [
+                    {"id": 1, "path": "note.png"},
+                    {"id": 2, "path": "panel.png"}
+                ],
+                "image": [
+                    {"id": "note", "src": 1, "x": 0, "y": 0, "w": 1, "h": 1},
+                    {"id": "panel", "src": 2, "x": 0, "y": 0, "w": 1, "h": 1}
+                ],
+                "note": {
+                    "note": ["note"],
+                    "dst": [{"x": 10, "y": 20, "w": 5, "h": 60}]
+                },
+                "destination": [
+                    {"id": "notes", "offset": 30},
+                    {"id": "panel", "dst": [{"x": 0, "y": 0, "w": 1, "h": 1}]}
+                ]
+            }
+            "#,
+    )
+    .unwrap();
+    let skin = SkinContext::from_manifest_and_document(
+        SkinManifest::default(),
+        document,
+        [
+            crate::skin::SkinDocumentTexture {
+                source_id: "1".to_string(),
+                texture: SkinTextureId(78),
+                source_size: crate::skin::SkinImageSize { width: 1.0, height: 1.0 },
+            },
+            crate::skin::SkinDocumentTexture {
+                source_id: "2".to_string(),
+                texture: SkinTextureId(79),
+                source_size: crate::skin::SkinImageSize { width: 1.0, height: 1.0 },
+            },
+        ],
+    );
+
+    let mut snapshot = RenderSnapshot::default();
+    snapshot
+        .skin_offsets
+        .set(30, crate::skin_offset::SkinOffsetValue { a: 128, ..Default::default() });
+    snapshot.visible_notes[Lane::Key1.index()].push(VisibleNote {
+        lane: Lane::Key1,
+        time: TimeUs(1_000),
+        y: 0.5,
+        alpha: 0.5,
+        kind: NoteVisualKind::Tap,
+        processed_judge: None,
+    });
+
+    let plan = DrawPlan::from_scene_with_skin(
+        &AppSceneSnapshot::Play(snapshot.clone()),
+        &skin,
+        &mut crate::skin::DynamicTimerRuntime::default(),
+    );
+    let note_alpha = plan.commands.iter().find_map(|command| match command {
+        DrawCommand::Image { texture, tint, .. } if *texture == TextureId(78) => Some(tint.a),
+        _ => None,
+    });
+    assert_eq!(note_alpha, Some(0.5));
+    assert!(plan.commands.iter().any(|command| matches!(
+        command,
+        DrawCommand::Image { texture, tint, .. }
+            if *texture == TextureId(79) && approx_eq(tint.a, 1.0)
+    )));
+
+    snapshot
+        .skin_offsets
+        .set(30, crate::skin_offset::SkinOffsetValue { a: -128, ..Default::default() });
+    let negative_plan = DrawPlan::from_scene_with_skin(
+        &AppSceneSnapshot::Play(snapshot),
+        &skin,
+        &mut crate::skin::DynamicTimerRuntime::default(),
+    );
+    let negative_alpha = negative_plan.commands.iter().find_map(|command| match command {
+        DrawCommand::Image { texture, tint, .. } if *texture == TextureId(78) => Some(tint.a),
+        _ => None,
+    });
+    assert_eq!(negative_alpha, Some((1.0 - 128.0 / 255.0) * 0.5));
+}
+
+#[test]
+fn play_skin_document_applies_notes_alpha_to_long_mine_and_processed_fallbacks() {
+    let document: crate::skin::SkinDocument = serde_json::from_str(
+        r#"
+            {
+                "type": 0,
+                "w": 100,
+                "h": 100,
+                "source": [{"id": 1, "path": "note.png"}],
+                "image": [{"id": "note", "src": 1, "x": 0, "y": 0, "w": 1, "h": 1}],
+                "note": {
+                    "note": ["note"],
+                    "dst": [{"x": 10, "y": 20, "w": 5, "h": 60}]
+                },
+                "destination": [{"id": "notes", "offset": 30}]
+            }
+            "#,
+    )
+    .unwrap();
+    let skin = SkinContext::from_manifest_and_document(
+        SkinManifest::default(),
+        document,
+        [crate::skin::SkinDocumentTexture {
+            source_id: "1".to_string(),
+            texture: SkinTextureId(78),
+            source_size: crate::skin::SkinImageSize { width: 1.0, height: 1.0 },
+        }],
+    );
+    let mut snapshot = RenderSnapshot {
+        mark_processed_note: true,
+        show_ln_tail_cap: true,
+        ..RenderSnapshot::default()
+    };
+    snapshot
+        .skin_offsets
+        .set(30, crate::skin_offset::SkinOffsetValue { a: -128, ..Default::default() });
+    snapshot.visible_long_notes.push(VisibleLongNote {
+        lane: Lane::Key1,
+        mode: LongNoteMode::Ln,
+        head_y: 0.2,
+        tail_y: 0.7,
+        alpha: 0.25,
+        body_state: LongBodyState::Inactive,
+    });
+    snapshot.visible_mines[Lane::Key1.index()].push(VisibleMine {
+        lane: Lane::Key1,
+        time: TimeUs(1_000),
+        y: 0.5,
+        alpha: 0.4,
+        damage: 8.0,
+    });
+    snapshot.visible_notes[Lane::Key1.index()].push(VisibleNote {
+        lane: Lane::Key1,
+        time: TimeUs(1_000),
+        y: 0.5,
+        alpha: 0.6,
+        kind: NoteVisualKind::Tap,
+        processed_judge: Some(Judge::PGreat),
+    });
+
+    let plan = DrawPlan::from_scene_with_skin(
+        &AppSceneSnapshot::Play(snapshot),
+        &skin,
+        &mut crate::skin::DynamicTimerRuntime::default(),
+    );
+    let long_note_images = plan
+        .commands
+        .iter()
+        .filter(|command| {
+            matches!(
+                command,
+                DrawCommand::Image { texture, tint, .. }
+                    if *texture == TextureId(78)
+                        && approx_eq(tint.a, (127.0 / 255.0) * 0.25)
+            )
+        })
+        .count();
+    assert_eq!(long_note_images, 3);
+    assert!(plan.commands.iter().any(|command| matches!(
+        command,
+        DrawCommand::Image { texture, tint, .. }
+            if *texture == DEFAULT_MINE_NOTE_TEXTURE
+                && approx_eq(tint.a, (127.0 / 255.0) * 0.4)
+    )));
+    let processed_fallback_borders = plan.commands.iter().filter(|command| {
+        matches!(
+            command,
+            DrawCommand::Rect { color, .. }
+                if approx_eq(color.a, (127.0 / 255.0) * 0.6)
+        )
+    });
+    assert_eq!(processed_fallback_borders.count(), 4);
+}
+
+#[test]
 fn play_skin_all_offset_transforms_fallback_mine_sprite() {
     let document: crate::skin::SkinDocument = serde_json::from_str(
         r#"{
