@@ -1,5 +1,7 @@
 use super::*;
-use crate::app::select_flow_mode_config::select_item_play_mode;
+use crate::app::select_flow_mode_config::{
+    play_config_key_mode_for_runtime, select_item_play_mode,
+};
 
 #[test]
 fn take_analog_scroll_steps_keeps_remainder() {
@@ -158,6 +160,42 @@ fn select_play_mode_requires_a_common_resolved_course_mode() {
 
     let mixed = SelectItem::Course(select_course_row(2, 2));
     assert_eq!(select_item_play_mode(Some(&mixed), SelectModeFilter::K7), None);
+}
+
+#[test]
+fn visual_offset_runtime_mode_prefers_active_then_pending_play_mode() {
+    assert_eq!(
+        play_config_key_mode_for_runtime(Some(KeyMode::K9), Some(KeyMode::K7)),
+        Some(KeyMode::K9)
+    );
+    assert_eq!(play_config_key_mode_for_runtime(None, Some(KeyMode::K10)), Some(KeyMode::K10));
+    assert_eq!(play_config_key_mode_for_runtime(None, None), None);
+}
+
+#[test]
+fn visual_offset_runtime_mode_updates_only_actual_mode_and_roundtrips() {
+    let mut profile = ProfileConfig::new_default("default", "Default", 0);
+    profile.activate_play_mode(KeyMode::K7);
+    profile.judge.visual_offset_us = 1_000;
+    profile.sync_active_play_mode();
+    profile.activate_play_mode(KeyMode::K9);
+    profile.judge.visual_offset_us = 2_000;
+    profile.sync_active_play_mode();
+
+    let runtime_mode =
+        play_config_key_mode_for_runtime(Some(KeyMode::K9), Some(KeyMode::K7)).unwrap();
+    profile.activate_play_mode(runtime_mode);
+    assert!(crate::config::settings_registry::adjust_settings_value(
+        &mut profile,
+        crate::config::settings_registry::SettingsEntryId::VisualOffsetMs,
+        1,
+    ));
+    profile.sync_active_play_mode();
+
+    let mut restored: ProfileConfig = toml::from_str(&toml::to_string(&profile).unwrap()).unwrap();
+    restored.normalize_play_mode_configs();
+    assert_eq!(restored.play_mode_config(KeyMode::K7).visual_offset_us, 1_000);
+    assert_eq!(restored.play_mode_config(KeyMode::K9).visual_offset_us, 3_000);
 }
 
 #[test]

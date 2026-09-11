@@ -980,7 +980,16 @@ impl WinitApp {
     }
 
     pub(super) fn adjust_visual_offset_ms(&mut self, delta_ms: i32) -> bool {
-        if !self.begin_selected_play_mode_edit() {
+        let runtime_mode = crate::app::select_flow_mode_config::play_config_key_mode_for_runtime(
+            self.play
+                .active_play
+                .as_ref()
+                .map(|active| active.running.session.play_config_key_mode),
+            self.play.pending_play_start.as_ref().map(|pending| pending.play_config_key_mode),
+        );
+        if let Some(key_mode) = runtime_mode {
+            self.boot.profile_config.activate_play_mode(key_mode);
+        } else if !self.begin_selected_play_mode_edit() {
             return false;
         }
         let changed = crate::config::settings_registry::adjust_settings_value(

@@ -16,6 +16,13 @@ pub(in crate::app) fn select_item_play_mode(
     }
 }
 
+pub(in crate::app) fn play_config_key_mode_for_runtime(
+    active_play: Option<KeyMode>,
+    pending_play: Option<KeyMode>,
+) -> Option<KeyMode> {
+    active_play.or(pending_play)
+}
+
 impl WinitApp {
     pub(super) fn selected_play_mode(&self) -> Option<KeyMode> {
         select_item_play_mode(
