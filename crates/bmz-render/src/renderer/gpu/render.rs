@@ -77,34 +77,43 @@ impl WgpuRenderer {
 
         let submit_start = Instant::now();
         let surface_start = Instant::now();
-        let output = match self.surface.get_current_texture() {
-            wgpu::CurrentSurfaceTexture::Success(output)
-            | wgpu::CurrentSurfaceTexture::Suboptimal(output) => output,
-            wgpu::CurrentSurfaceTexture::Lost | wgpu::CurrentSurfaceTexture::Outdated => {
-                self.configure_surface()?;
-                timings.surface_us = surface_start.elapsed().as_micros();
-                timings.submit_us = submit_start.elapsed().as_micros();
-                timings.draw_us = draw_start.elapsed().as_micros();
-                self.geometry_scratch = geometry;
-                return Ok((RenderSurfaceStatus::Reconfigured, timings));
-            }
-            wgpu::CurrentSurfaceTexture::Timeout => {
-                timings.surface_us = surface_start.elapsed().as_micros();
-                timings.submit_us = submit_start.elapsed().as_micros();
-                timings.draw_us = draw_start.elapsed().as_micros();
-                self.geometry_scratch = geometry;
-                return Ok((RenderSurfaceStatus::TimedOut, timings));
-            }
-            wgpu::CurrentSurfaceTexture::Occluded | wgpu::CurrentSurfaceTexture::Validation => {
-                timings.surface_us = surface_start.elapsed().as_micros();
-                timings.submit_us = submit_start.elapsed().as_micros();
-                timings.draw_us = draw_start.elapsed().as_micros();
-                self.geometry_scratch = geometry;
-                return Ok((RenderSurfaceStatus::TimedOut, timings));
-            }
+        let output = if let Some(surface) = &self.surface {
+            Some(match surface.get_current_texture() {
+                wgpu::CurrentSurfaceTexture::Success(output)
+                | wgpu::CurrentSurfaceTexture::Suboptimal(output) => output,
+                wgpu::CurrentSurfaceTexture::Lost | wgpu::CurrentSurfaceTexture::Outdated => {
+                    self.configure_surface()?;
+                    timings.surface_us = surface_start.elapsed().as_micros();
+                    timings.submit_us = submit_start.elapsed().as_micros();
+                    timings.draw_us = draw_start.elapsed().as_micros();
+                    self.geometry_scratch = geometry;
+                    return Ok((RenderSurfaceStatus::Reconfigured, timings));
+                }
+                wgpu::CurrentSurfaceTexture::Timeout => {
+                    timings.surface_us = surface_start.elapsed().as_micros();
+                    timings.submit_us = submit_start.elapsed().as_micros();
+                    timings.draw_us = draw_start.elapsed().as_micros();
+                    self.geometry_scratch = geometry;
+                    return Ok((RenderSurfaceStatus::TimedOut, timings));
+                }
+                wgpu::CurrentSurfaceTexture::Occluded | wgpu::CurrentSurfaceTexture::Validation => {
+                    timings.surface_us = surface_start.elapsed().as_micros();
+                    timings.submit_us = submit_start.elapsed().as_micros();
+                    timings.draw_us = draw_start.elapsed().as_micros();
+                    self.geometry_scratch = geometry;
+                    return Ok((RenderSurfaceStatus::TimedOut, timings));
+                }
+            })
+        } else {
+            None
         };
         timings.surface_us = surface_start.elapsed().as_micros();
-        let view = output.texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let texture = output
+            .as_ref()
+            .map(|o| o.texture.clone())
+            .or_else(|| self.export_target.clone())
+            .expect("render target exists");
+        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
         // image ステップごとの bind group を、レンダーパスが encoder を借りる前に作る。
         // steps 内の image ステップと同じ順序で並ぶ。
         let bind_start = Instant::now();
@@ -226,7 +235,7 @@ impl WgpuRenderer {
                 self.config.height,
                 self.config.format,
             );
-            capture.copy_from_surface(&mut encoder, &output.texture);
+            capture.copy_from_surface(&mut encoder, &texture);
             (request.clone(), capture)
         });
         let command_buffer = encoder.finish();
@@ -243,7 +252,9 @@ impl WgpuRenderer {
         self.image_bind_group_scratch = image_bind_groups;
         self.geometry_scratch = geometry;
         let present_start = Instant::now();
-        output.present();
+        if let Some(output) = output {
+            output.present();
+        }
         timings.present_us = present_start.elapsed().as_micros();
         timings.submit_us = submit_start.elapsed().as_micros();
         timings.draw_us = draw_start.elapsed().as_micros();

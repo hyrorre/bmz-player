@@ -45,7 +45,8 @@ pub(super) struct WgpuRenderer {
     pub(super) screenshot_save_jobs: Vec<ScreenshotSaveJob>,
     // Drop the surface after GPU resources so Linux native contexts are
     // released before the window/display teardown.
-    pub(super) surface: wgpu::Surface<'static>,
+    pub(super) surface: Option<wgpu::Surface<'static>>,
+    pub(super) export_target: Option<wgpu::Texture>,
 }
 
 pub(super) struct InternalSceneTarget {

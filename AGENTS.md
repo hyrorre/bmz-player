@@ -205,6 +205,8 @@ cargo run -p bmz-player -- songs list
 
 その他:
 
+- `export video <PATH> -o <OUTPUT.mp4>` — Playスキン入場から退場までをオフライン生成。`--resolution` / `--fps` / `--replay-slot` / `--seed` / `--ffmpeg` / `--overwrite`、global `--profile`対応。詳細は `docs/video-export.md`。音声デバイス・ウィンドウ不要、GPUと外部FFmpeg（libx264/AAC）が必要。スコア保存・IR送信なし。
+
 - `--smoke-exit-after-frames <N>` / `--smoke-exit-after-frames=<N>`
 - `--smoke-exit-after-play-frames <N>` / `--smoke-exit-after-play-frames=<N>` — Play scene の描画フレームだけを数える性能計測用
 - `--smoke-exit-on-result`

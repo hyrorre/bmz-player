@@ -21,6 +21,28 @@ pub struct DecodedFrame {
     pub height: u32,
 }
 
+/// Container/stream duration used as an exact loop period during offline export.
+pub fn video_duration_us(path: &Path) -> Result<i64> {
+    bmz_ffmpeg::ensure_init().map_err(|e| anyhow::anyhow!(e))?;
+    let input = ffmpeg_next::format::input(path)?;
+    let selected = select_video_stream(&input)?;
+    let stream =
+        input.stream(selected.index).ok_or_else(|| anyhow::anyhow!("video stream missing"))?;
+    let duration = if stream.duration() > 0 && selected.time_base_den > 0 {
+        (i128::from(stream.duration()) * i128::from(selected.time_base_num) * 1_000_000
+            / i128::from(selected.time_base_den))
+        .min(i128::from(i64::MAX)) as i64
+    } else {
+        input.duration()
+    };
+    anyhow::ensure!(
+        duration > 0,
+        "video duration unavailable for offline loop: {}",
+        path.display()
+    );
+    Ok(duration)
+}
+
 pub struct VideoBgaDecoder {
     path: PathBuf,
     follow_playback_time: bool,
@@ -274,6 +296,35 @@ impl VideoBgaDecoder {
 
     pub fn path(&self) -> &Path {
         &self.path
+    }
+
+    /// Offline selection waits for the first future PTS or EOF, so decode speed
+    /// cannot affect the selected picture. Use `open`, not the live clock mode.
+    pub fn frame_at_blocking(&mut self, video_offset_us: i64) -> Result<Option<&DecodedFrame>> {
+        anyhow::ensure!(!self.follow_playback_time, "offline selection requires channel mode");
+        while self.pending.front().is_some_and(|f| f.pts_us <= video_offset_us) {
+            self.current = self.pending.pop_front();
+        }
+        while self.pending.is_empty() && !self.finished {
+            let receiver = self.receiver.as_ref().expect("channel decoder");
+            match receiver.recv_timeout(Duration::from_millis(20)) {
+                Ok(queued)
+                    if queued.generation != self.decode_generation.load(Ordering::Acquire) => {}
+                Ok(queued) if queued.frame.pts_us <= video_offset_us => {
+                    self.current = Some(queued.frame)
+                }
+                Ok(queued) => self.pending.push_back(queued.frame),
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                    if self.pass_finished.load(Ordering::Acquire) {
+                        self.finished = true;
+                    }
+                }
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                    anyhow::bail!("video decoder failed: {}", self.path.display());
+                }
+            }
+        }
+        Ok(self.current.as_ref())
     }
 
     /// チャンネルをdrainして `video_offset_us` 以下の最新フレームを返す。

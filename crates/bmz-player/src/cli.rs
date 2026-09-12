@@ -31,7 +31,9 @@ pub const PRACTICE_START_MS_ARG: &str = "--practice-start-ms";
 pub const PRACTICE_END_MS_ARG: &str = "--practice-end-ms";
 pub const LUA_SKIN_RUNTIME_ARG: &str = "--lua-skin-runtime";
 
+mod export;
 mod help;
+pub use export::{FrameRate, VideoExportOptions};
 mod ir;
 mod model;
 mod options;

@@ -1,4 +1,42 @@
 impl Renderer {
+    /// Create a GPU target without a window or presentation clock.
+    pub fn attach_offscreen(&mut self, size: SurfaceSize) -> Result<()> {
+        let mut gpu = WgpuRenderer::new::<wgpu::SurfaceTarget<'static>>(
+            None,
+            size,
+            self.present_mode,
+            self.frame_latency_mode,
+            self.backend,
+            self.default_font_coverage,
+            self.default_font_search_paths.clone(),
+        )?;
+        for texture in self.pending_textures.drain(..) {
+            gpu.upsert_rgba_texture(texture.id, texture.width, texture.height, &texture.rgba)?;
+        }
+        self.gpu = Some(gpu);
+        Ok(())
+    }
+
+    /// Wait for the complete rendered frame; never substitute or drop frames.
+    pub fn read_offscreen_rgba(&self) -> Result<Vec<u8>> {
+        let gpu = self.gpu.as_ref().context("GPU is not attached")?;
+        let target = gpu.export_target.as_ref().context("not an offscreen renderer")?;
+        let capture = ScreenshotCapture::new(
+            &gpu.device,
+            gpu.config.width,
+            gpu.config.height,
+            gpu.config.format,
+        );
+        let mut encoder =
+            gpu.device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+        capture.copy_from_surface(&mut encoder, target);
+        gpu.queue.submit([encoder.finish()]);
+        let rx = capture.start_readback();
+        gpu.device.poll(wgpu::PollType::wait_indefinitely())?;
+        rx.recv().context("frame readback disconnected")??;
+        Ok(capture.mapped_rgba())
+    }
+
     pub fn attach_surface<T>(&mut self, window: T, size: SurfaceSize) -> Result<()>
     where
         T: Into<wgpu::SurfaceTarget<'static>> + Clone,

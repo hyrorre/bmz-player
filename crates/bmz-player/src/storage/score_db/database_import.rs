@@ -1,6 +1,11 @@
 use super::*;
 
 impl ScoreDatabase {
+    pub fn open_read_only(path: &Path) -> Result<Self> {
+        Ok(Self {
+            conn: Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?,
+        })
+    }
     pub fn open(path: &Path) -> Result<Self> {
         let conn = Connection::open(path)?;
         configure_connection(&conn)?;

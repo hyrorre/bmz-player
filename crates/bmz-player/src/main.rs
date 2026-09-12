@@ -150,6 +150,9 @@ async fn main() -> ExitCode {
     }
 
     let result = match command {
+        Command::Export(options) => {
+            bmz_player::video_export::run(options, &app_paths, profile_id.as_deref())
+        }
         Command::Run(options) => {
             bmz_player::app::run_with_options_log_buffer_paths_and_profile(
                 options,

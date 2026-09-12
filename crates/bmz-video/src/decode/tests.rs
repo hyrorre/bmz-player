@@ -223,6 +223,31 @@ fn decoder_with_channel(
 }
 
 #[test]
+fn offline_selection_waits_for_a_future_frame_instead_of_reusing_stale_data() {
+    let (sender, mut decoder) = decoder_with_channel([]);
+    let producer = std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(25));
+        sender.send(queued_frame(0, 10)).unwrap();
+        sender.send(queued_frame(0, 20)).unwrap();
+        sender.send(queued_frame(0, 30)).unwrap();
+    });
+    assert_eq!(decoder.frame_at_blocking(25).unwrap().unwrap().pts_us, 20);
+    producer.join().unwrap();
+    assert!(
+        decoder.frame_at_blocking(35).is_err(),
+        "disconnect is a failure, not a successful EOF"
+    );
+}
+
+#[test]
+fn offline_selection_holds_last_frame_at_verified_eof() {
+    let (_sender, mut decoder) = decoder_with_channel([10, 20]);
+    decoder.pass_finished.store(true, Ordering::Release);
+    assert_eq!(decoder.frame_at_blocking(100).unwrap().unwrap().pts_us, 20);
+    assert_eq!(decoder.frame_at_blocking(200).unwrap().unwrap().pts_us, 20);
+}
+
+#[test]
 fn poll_frame_skips_overdue_intermediate_frames() {
     let mut decoder = decoder_with_pending([10, 20, 30]);
 

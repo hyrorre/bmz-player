@@ -749,3 +749,83 @@ use runtime_helpers::*;
 #[cfg(test)]
 #[path = "app/tests.rs"]
 mod tests;
+/// Shared profile option mapping for a noninteractive export session.
+pub(crate) fn offline_play_options(
+    profile: &crate::config::profile_config::ProfileConfig,
+) -> crate::screens::play_session::PlaySessionOptions {
+    let selected = select_play_options_from_profile(&profile.play);
+    crate::screens::play_session::PlaySessionOptions {
+        session_mode: SessionMode::Autoplay,
+        autoplay: true,
+        score_save_disabled: true,
+        sample_rate: 48_000,
+        playback_rate_percent: 100,
+        gauge_override: Some(crate::config::play::gauge_type_from_config(selected.gauge)),
+        gauge_auto_shift: crate::config::play::gauge_auto_shift_from_config(
+            selected.gauge,
+            selected.gauge_auto_shift,
+        ),
+        bottom_shiftable_gauge: crate::config::play::bottom_shiftable_gauge_from_config(
+            selected.bottom_shiftable_gauge,
+        ),
+        arrange: selected.arrange,
+        arrange_2p: selected.arrange_2p,
+        double_option: selected.double_option,
+        hs_fix: selected.hs_fix,
+        target: selected.target,
+        key_mode_conversion: profile.play.key_mode_conversion,
+        seven_to_nine_pattern: profile.play.seven_to_nine_pattern,
+        seven_to_nine_type: profile.play.seven_to_nine_type,
+        seven_to_nine_rule_mode: profile.play.seven_to_nine_rule_mode,
+        assist: profile.play.assist,
+        ln_policy_setting: profile.play.ln_mode_policy,
+        rule_mode: profile.play.rule_mode,
+        ..Default::default()
+    }
+}
+
+pub(crate) fn offline_skin_load_state(
+    play: &crate::screens::play_session::PreparedPlaySession,
+    profile: &crate::config::profile_config::ProfileConfig,
+    best: Option<u32>,
+) -> bmz_skin::LuaLoadRuntimeState {
+    let replay = play.session.replay_player.clone();
+    let mode = if replay.is_some() { SessionMode::Normal } else { SessionMode::Autoplay };
+    let options = PlayStartOptions {
+        session_mode: mode,
+        autoplay: replay.is_none(),
+        replay_player: replay,
+        score_save_disabled: true,
+        target: play.target_option,
+        ..Default::default()
+    };
+    let runtime = lua_runtime_state_for_play(
+        &options,
+        false,
+        play.session.chart.metadata.key_mode,
+        best,
+        &profile.display_name,
+        play.skin_attempt,
+    );
+    let selection = crate::skin_loader::play_skin_selection_for_session(
+        &profile.skin,
+        play.session.chart.metadata.key_mode,
+        mode,
+    );
+    lua_runtime_state_with_skin_offsets(runtime, selection.offsets)
+}
+
+pub(crate) fn offline_skin_video_gating(
+    document: &SkinDocument,
+    source: &str,
+) -> (bool, Vec<Vec<i32>>) {
+    let gating = skin_video_source_gating(document, source);
+    (gating.active, gating.op_sets)
+}
+
+pub(crate) fn offline_skin_video_state(
+    snapshot: &RenderSnapshot,
+    document: &SkinDocument,
+) -> bmz_render::skin::SkinDrawState {
+    play_skin_video_draw_state(snapshot, Some(document.h), None, document.input)
+}

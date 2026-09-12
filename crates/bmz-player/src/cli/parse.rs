@@ -14,6 +14,7 @@ where
     let args: Vec<String> = args.into_iter().map(|s| s.as_ref().to_string()).collect();
     let (args, profile_id, mut warnings) = extract_global_profile(args)?;
     let command = match args.first().map(|s| s.as_str()) {
+        Some("export") => super::export::parse(&args[1..]).map(Command::Export),
         Some("table") => {
             let rest = &args[1..];
             match rest.first().map(|s| s.as_str()) {
@@ -183,7 +184,8 @@ fn command_uses_profile(command: &Command) -> bool {
         Command::Table(_)
         | Command::Songs(_)
         | Command::Course(CourseCommand::Import { .. } | CourseCommand::List)
-        | Command::Profile(_) => false,
+        | Command::Profile(_)
+        | Command::Export(_) => false,
     }
 }
 

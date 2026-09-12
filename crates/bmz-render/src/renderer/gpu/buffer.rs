@@ -136,7 +136,11 @@ impl WgpuRenderer {
     }
 
     pub(in crate::renderer) fn configure_surface(&self) -> Result<()> {
-        configure_surface_checked(&self.surface, &self.device, &self.config, &self.adapter_info)
+        if let Some(surface) = &self.surface {
+            configure_surface_checked(surface, &self.device, &self.config, &self.adapter_info)
+        } else {
+            Ok(())
+        }
     }
 
     pub(in crate::renderer) fn configure_presentation(

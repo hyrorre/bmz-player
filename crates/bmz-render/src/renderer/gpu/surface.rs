@@ -6,6 +6,11 @@ impl WgpuRenderer {
             return Ok(());
         }
 
+        anyhow::ensure!(
+            self.export_target.is_none() || self.surface_size() == size,
+            "offscreen target dimensions are fixed; attach a new target to resize"
+        );
+
         self.config.width = size.width;
         self.config.height = size.height;
         self.clear_internal_scene_target();

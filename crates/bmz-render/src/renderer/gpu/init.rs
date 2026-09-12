@@ -22,7 +22,7 @@ impl WgpuRenderer {
                 "initializing renderer backend candidate"
             );
             match Self::new(
-                window.clone(),
+                Some(window.clone()),
                 size,
                 present_mode,
                 frame_latency_mode,
@@ -51,8 +51,8 @@ impl WgpuRenderer {
         Err(last_error.unwrap_or_else(|| anyhow!("no renderer backend candidates available")))
     }
 
-    fn new<T>(
-        window: T,
+    pub(in crate::renderer) fn new<T>(
+        window: Option<T>,
         size: SurfaceSize,
         present_mode: WgpuPresentMode,
         frame_latency_mode: WgpuFrameLatencyMode,
@@ -66,11 +66,14 @@ impl WgpuRenderer {
         let mut descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
         descriptor.backends = backend.to_wgpu();
         let instance = wgpu::Instance::new(descriptor);
-        let surface = instance.create_surface(window).context("failed to create wgpu surface")?;
+        let surface = window
+            .map(|window| instance.create_surface(window))
+            .transpose()
+            .context("failed to create wgpu surface")?;
         let adapter = block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
             power_preference: wgpu::PowerPreference::HighPerformance,
             force_fallback_adapter: false,
-            compatible_surface: Some(&surface),
+            compatible_surface: surface.as_ref(),
         }))
         .context("no compatible GPU adapter found")?;
         let adapter_info = adapter.get_info();
@@ -101,26 +104,62 @@ impl WgpuRenderer {
             trace: wgpu::Trace::Off,
         }))
         .context("failed to request wgpu device")?;
-        let capabilities = surface.get_capabilities(&adapter);
-        let mut config = surface
-            .get_default_config(&adapter, size.width, size.height)
-            .ok_or_else(|| anyhow!("surface is not supported by the selected adapter"))?;
+        let present_modes = surface
+            .as_ref()
+            .map(|s| s.get_capabilities(&adapter).present_modes)
+            .unwrap_or_else(|| vec![wgpu::PresentMode::Fifo]);
+        let mut config = if let Some(surface) = &surface {
+            surface
+                .get_default_config(&adapter, size.width, size.height)
+                .ok_or_else(|| anyhow!("surface is not supported by the selected adapter"))?
+        } else {
+            wgpu::SurfaceConfiguration {
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+                format: wgpu::TextureFormat::Rgba8Unorm,
+                width: size.width,
+                height: size.height,
+                present_mode: wgpu::PresentMode::Fifo,
+                desired_maximum_frame_latency: 1,
+                alpha_mode: wgpu::CompositeAlphaMode::Opaque,
+                view_formats: vec![],
+            }
+        };
         // sRGB フレームバッファだと PNG の sRGB 値が二重 gamma エンコードされて白っぽくなる。
         // beatoraja (libGDX) は GL_FRAMEBUFFER_SRGB を使わないため値をそのまま表示する。
         // それと合わせるため sRGB サフィックスを除去して non-sRGB サーフェスとして使う。
         config.format = config.format.remove_srgb_suffix();
-        configure_surface_settings(
-            &mut config,
-            present_mode,
-            frame_latency_mode,
-            &capabilities.present_modes,
+        configure_surface_settings(&mut config, present_mode, frame_latency_mode, &present_modes);
+        if let Some(surface) = &surface {
+            configure_surface_checked(surface, &device, &config, &adapter_info)
+                .context("initial surface configuration failed")?;
+        }
+        anyhow::ensure!(
+            size.width > 0
+                && size.height > 0
+                && size.width <= adapter_limits.max_texture_dimension_2d
+                && size.height <= adapter_limits.max_texture_dimension_2d,
+            "unsupported export dimensions"
         );
-        configure_surface_checked(&surface, &device, &config, &adapter_info)
-            .context("initial surface configuration failed")?;
+        let export_target = surface.is_none().then(|| {
+            device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("bmz offline output"),
+                size: wgpu::Extent3d {
+                    width: size.width,
+                    height: size.height,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: config.format,
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+                view_formats: &[],
+            })
+        });
         tracing::info!(
             requested = ?present_mode,
             effective = ?config.present_mode,
-            available = ?capabilities.present_modes,
+            available = ?present_modes,
             desired_maximum_frame_latency = config.desired_maximum_frame_latency,
             candidate_backend = ?backend,
             surface_width = config.width,
@@ -178,7 +217,7 @@ impl WgpuRenderer {
             queue,
             adapter_info,
             config,
-            present_modes: capabilities.present_modes,
+            present_modes,
             rect_pipeline,
             rect_buffer: None,
             rect_buffer_capacity: 0,
@@ -222,6 +261,7 @@ impl WgpuRenderer {
             pending_screenshot_readbacks: Vec::new(),
             screenshot_save_jobs: Vec::new(),
             surface,
+            export_target,
         })
     }
 }
