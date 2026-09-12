@@ -299,6 +299,44 @@ fn lr2_fast_slow_number_bridge_maps_latest_non_pgreat_side() {
 }
 
 #[test]
+fn lr2_battle_gauge_bridges_use_each_active_gauge_without_changing_standard_refs() {
+    let mut state = SkinDrawState {
+        gauge_type: 3,
+        opponent_gauge_type: Some(1),
+        gauge: 72.9,
+        opponent_gauge: Some(38.7),
+        select_gauge_index: 2,
+        select_target_index: 4,
+        ..Default::default()
+    };
+    assert_eq!(skin_image_ref_number(SKIN_REF_BMZ_LR2_GAUGE_TYPE_1P, &state), Some(1));
+    assert_eq!(skin_image_ref_number(SKIN_REF_BMZ_LR2_GAUGE_TYPE_2P, &state), Some(3));
+    assert_eq!(skin_state_number(107, &state), Some(72));
+    assert_eq!(skin_state_number(SKIN_REF_BMZ_LR2_GAUGE_2P, &state), Some(38));
+    assert_eq!(skin_image_ref_number(40, &state), Some(3));
+    assert_eq!(skin_image_ref_number(41, &state), Some(4));
+    for (gauge, row) in [(0, 3), (1, 3), (2, 0), (3, 1), (4, 1), (5, 2), (6, 1), (7, 1), (8, 1)] {
+        state.gauge_type = gauge;
+        assert_eq!(skin_image_ref_number(SKIN_REF_BMZ_LR2_GAUGE_TYPE_1P, &state), Some(row));
+    }
+    state.opponent_gauge = Some(0.0);
+    assert_eq!(skin_state_number(SKIN_REF_BMZ_LR2_GAUGE_2P, &state), Some(0));
+    state.opponent_gauge = None;
+    assert_eq!(skin_state_number(SKIN_REF_BMZ_LR2_GAUGE_2P, &state), None);
+}
+
+#[test]
+fn lr2_hispeed_bridge_scales_both_sides_without_changing_decimal_refs() {
+    for (hispeed, expected) in [(0.01, 1), (2.5, 250), (9.99, 999), (10.0, 1000), (20.0, 2000)] {
+        let state = SkinDrawState { hispeed, ..Default::default() };
+        assert_eq!(skin_state_number(SKIN_REF_BMZ_LR2_HISPEED, &state), Some(expected));
+    }
+    let state = SkinDrawState { hispeed: 2.5, ..Default::default() };
+    assert_eq!(skin_state_number(310, &state), Some(2));
+    assert_eq!(skin_state_number(311, &state), Some(50));
+}
+
+#[test]
 fn display_number_digits_uses_absolute_value_like_beatoraja_skin_number() {
     assert_eq!(display_number_digits(-34, 2, NumberPadding::Zero), vec![3, 4]);
     assert_eq!(display_number_digits(-34, 4, NumberPadding::Blank), vec![10, 10, 3, 4]);

@@ -277,10 +277,23 @@ fn imageset_ref_lane(ref_id: i32) -> Option<Lane> {
     }
 }
 
+fn lr2_gauge_image_index(gauge_type: i32) -> i64 {
+    // LR2: NORMAL, HARD, HAZARD, EASY, P-ATTACK, G-ATTACK.
+    // Types without a legacy sprite use the closest gauge family.
+    match gauge_type {
+        0 | 1 => 3,
+        3 | 4 | 6..=8 => 1,
+        5 => 2,
+        _ => 0,
+    }
+}
+
 /// beatoraja `getImageIndexProperty` (IndexType) 相当。image / imageset の ref 専用で、
 /// value の `skin_state_number` (ValueType) とは ID が重なっても別解決する。
 fn skin_image_index_number(ref_id: i32, state: &SkinDrawState) -> Option<i64> {
     match ref_id {
+        SKIN_REF_BMZ_LR2_GAUGE_TYPE_1P => Some(lr2_gauge_image_index(state.gauge_type)),
+        SKIN_REF_BMZ_LR2_GAUGE_TYPE_2P => state.opponent_gauge_type.map(lr2_gauge_image_index),
         11 if state.select_screen => Some(state.select_mode_index as i64),
         12 if state.select_screen => Some(state.select_sort_index as i64),
         221 if state.select_screen => Some(state.select_difficulty_filter_index as i64),

@@ -56,6 +56,13 @@ impl<'a> CsvBuilder<'a> {
         });
         if line.command == "SRC_BUTTON" {
             image["act"] = json!(values[11]);
+            if matches!(self.header.skin_type, 0 | 1 | 2 | 3 | 4 | 12 | 13) {
+                match values[11] {
+                    40 => image["ref"] = json!(SKIN_REF_BMZ_LR2_GAUGE_TYPE_1P),
+                    41 => image["ref"] = json!(SKIN_REF_BMZ_LR2_GAUGE_TYPE_2P),
+                    _ => {}
+                }
+            }
             image["clickable"] = json!(values[12] == 1);
             image["click"] = json!(if values[14] > 0 {
                 0
@@ -133,6 +140,9 @@ impl<'a> CsvBuilder<'a> {
         };
         let ref_id = if matches!(self.header.skin_type, 0 | 1 | 2 | 3 | 4 | 12 | 13) {
             match values[11] {
+                10 | 11 => SKIN_REF_BMZ_LR2_HISPEED,
+                121 if matches!(self.header.skin_type, 12 | 13) => 271,
+                127 => SKIN_REF_BMZ_LR2_GAUGE_2P,
                 // Modified LR2 / OpenLR2 FAST/SLOW extension. Keep these aliases
                 // conversion-local because beatoraja assigns other meanings to 210/212/214.
                 210 => SKIN_REF_BMZ_LR2_FAST_SLOW_1P,

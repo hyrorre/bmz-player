@@ -176,6 +176,11 @@ pub const SKIN_OPTION_BMZ_LN_POLICY_SETTING_FORCE: i32 = 19_168;
 /// Values are `0=blank`, `1=FAST`, `2=SLOW`. LR2 play skin decode rewrites
 /// the legacy ref to this ID so beatoraja's standard `ref=210` meaning remains intact.
 pub const SKIN_REF_BMZ_LR2_FAST_SLOW_1P: i32 = 19_170;
+/// LR2 play conversion bridges; kept separate from beatoraja image/value IDs.
+pub const SKIN_REF_BMZ_LR2_HISPEED: i32 = 19_171;
+pub const SKIN_REF_BMZ_LR2_GAUGE_TYPE_1P: i32 = 19_172;
+pub const SKIN_REF_BMZ_LR2_GAUGE_TYPE_2P: i32 = 19_173;
+pub const SKIN_REF_BMZ_LR2_GAUGE_2P: i32 = 19_174;
 /// BMZ extension: source chart key mode before BATTLE / 7K-to-6K conversion.
 pub const SKIN_REF_BMZ_SOURCE_KEY_MODE: i32 = 19_180;
 /// BMZ extension: exact source key mode options in K4/K5/K6/K7/K8/K9/K10/K14 order.

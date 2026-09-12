@@ -3,6 +3,19 @@
 BMZ は beatoraja JSON / Lua skin の互換を基本にする。既存 beatoraja skin type は
 そのまま扱い、BMZ 独自の key mode だけ拡張 skin type を予約する。
 
+## LR2 Play 表示参照
+
+LR2 play skin の `SRC_BUTTON 40/41` は、1P/2P の実際に有効なゲージ種類を
+LR2 の画像順（NORMAL / HARD / HAZARD / EASY / P-ATTACK / G-ATTACK）へ変換する。
+ASSIST EASY は EASY、EX HARD と段位ゲージは HARD の画像へフォールバックする。
+表示用 ref とクリック用 act は分離し、HS-FIX (`55`) は従来の参照を維持する。
+
+`SRC_NUMBER 10/11` は共通の現在HSを100倍して整数化する（例: `2.50 → 250`）。
+桁数はスキンの指定を維持するため、3桁欄ではHS 10以上の上位桁は表示できない。
+`127` は2Pゲージ残量の整数部。BATTLE skin type `12/13` の `121` は2P実EX SCOREを
+参照し、ターゲットスコアの有無に依存しない。通常playの `121` とJSON/Luaの参照は
+従来どおり。2P不在の数値は非表示とし、2Pの残量・スコアが0の場合は0を表示する。
+
 ## Lua Runtime Compatibility Mode
 
 通常の `auto` モードはLua functionをロード時に宣言的なref/式へ変換し、推論できない

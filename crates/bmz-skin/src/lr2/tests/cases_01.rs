@@ -306,6 +306,63 @@ fn lr2_button_keeps_state_reference_separate_from_clickability() {
 }
 
 #[test]
+fn lr2_play_bridges_keep_battle_values_and_gauge_display_separate() {
+    let files = BTreeMap::new();
+    let path = unique_test_dir("bmz-lr2-battle-values").join("play.lr2skin");
+    for skin_type in [0, 5, 12, 13] {
+        let mut builder = CsvBuilder::new(&path, Header { skin_type, ..Header::default() }, &files);
+        builder.add_source("parts.png");
+        for ref_id in [10, 11, 121, 127] {
+            builder
+                .execute(
+                    &parse_csv_line(&format!("#SRC_NUMBER,0,0,0,0,100,20,10,1,0,0,{ref_id},0,3"))
+                        .unwrap(),
+                )
+                .unwrap();
+        }
+        let expected = if skin_type == 5 {
+            [10, 11, 121, 127]
+        } else {
+            [
+                SKIN_REF_BMZ_LR2_HISPEED,
+                SKIN_REF_BMZ_LR2_HISPEED,
+                if skin_type >= 12 { 271 } else { 121 },
+                SKIN_REF_BMZ_LR2_GAUGE_2P,
+            ]
+        };
+        for (value, expected) in builder.values.iter().zip(expected) {
+            assert_eq!(value["ref"], json!(expected));
+        }
+        for event_id in [40, 41, 55] {
+            builder
+                .execute(
+                    &parse_csv_line(&format!(
+                        "#SRC_BUTTON,0,0,0,0,128,84,1,6,0,0,{event_id},0,0,0"
+                    ))
+                    .unwrap(),
+                )
+                .unwrap();
+        }
+        for (image, event_id) in builder.images.iter().zip([40, 41, 55]) {
+            assert_eq!(image["act"], json!(event_id));
+            assert_eq!(image["clickable"], json!(false));
+            if skin_type != 5 && event_id != 55 {
+                assert_eq!(
+                    image["ref"],
+                    json!(if event_id == 40 {
+                        SKIN_REF_BMZ_LR2_GAUGE_TYPE_1P
+                    } else {
+                        SKIN_REF_BMZ_LR2_GAUGE_TYPE_2P
+                    })
+                );
+            } else {
+                assert!(image.get("ref").is_none());
+            }
+        }
+    }
+}
+
+#[test]
 fn lr2_imageset_combines_registered_source_sets() {
     let files = BTreeMap::new();
     let skin_path = unique_test_dir("bmz-lr2-imageset").join("play.lr2skin");

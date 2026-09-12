@@ -148,6 +148,8 @@ pub(in crate::skin) fn skin_state_number(ref_id: i32, state: &SkinDrawState) -> 
         116 | 156 => Some(score_rate_parts(state.ex_score, state.total_notes).1 as i64),
         104 => Some(state.combo as i64),
         107 => Some(state.gauge.floor() as i64),
+        SKIN_REF_BMZ_LR2_GAUGE_2P => state.opponent_gauge.map(|gauge| gauge.floor() as i64),
+        SKIN_REF_BMZ_LR2_HISPEED => Some((state.hispeed * 100.0) as i64),
         407 => Some(gauge_after_dot(state.gauge) as i64),
         163 => Some((state.timeleft_ms / 60_000) as i64),
         164 => Some(((state.timeleft_ms / 1_000) % 60) as i64),

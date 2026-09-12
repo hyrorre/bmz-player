@@ -1,6 +1,35 @@
 use super::*;
 
 #[test]
+fn lr2_battle_state_projects_live_opponent_without_a_target_score() {
+    let skin = SkinContext::from_manifest_and_document(
+        SkinManifest::default(),
+        serde_json::from_str("{}").unwrap(),
+        [],
+    );
+    let snapshot = RenderSnapshot {
+        ex_score: 456,
+        gauge: 72.0,
+        gauge_type: 3,
+        target_ex_score: None,
+        autoplay: true,
+        opponent: Some(crate::snapshot::OpponentRenderSnapshot {
+            ex_score: 789,
+            gauge: 38.0,
+            gauge_type: 1,
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+    let state = crate::plan::play::build_play_skin_state(&snapshot, &skin, 100_000);
+    assert_eq!(state.ex_score, 456);
+    assert_eq!(state.rival_ex_score, Some(789));
+    assert_eq!(state.target_ex_score, None);
+    assert_eq!(state.opponent_gauge, Some(38.0));
+    assert_eq!(state.opponent_gauge_type, Some(1));
+}
+
+#[test]
 fn play_plan_keeps_bmz_split_scratch_judge_timer_after_recent_window_expires() {
     let document: crate::skin::SkinDocument = serde_json::from_str(
         r#"{

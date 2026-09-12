@@ -1,6 +1,92 @@
 use super::*;
 
 #[test]
+fn wmii_lr2_battle_renders_live_gauges_hispeed_and_opponent_score_when_available() {
+    use bmz_render::skin::{
+        SKIN_REF_BMZ_LR2_GAUGE_2P, SKIN_REF_BMZ_LR2_GAUGE_TYPE_1P, SKIN_REF_BMZ_LR2_GAUGE_TYPE_2P,
+        SKIN_REF_BMZ_LR2_HISPEED,
+    };
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../data/skins/WMII_FHD_LR2/play/FHDPLAY_AC_Battle.lr2skin");
+    if !path.is_file() {
+        return;
+    }
+    let decoded = decode_beatoraja_skin(&path, SkinKind::Play).unwrap();
+    let sources = decoded
+        .sources
+        .iter()
+        .map(|source| {
+            (
+                source.source_id.clone(),
+                SkinDocumentTexture {
+                    source_id: source.source_id.clone(),
+                    texture: source.texture,
+                    source_size: SkinImageSize {
+                        width: source.size.width,
+                        height: source.size.height,
+                    },
+                },
+            )
+        })
+        .collect::<std::collections::HashMap<_, _>>();
+    let state = bmz_render::skin::SkinDrawState {
+        elapsed_ms: 100_000,
+        play_timer_ms: Some(100_000),
+        ready_timer_ms: Some(100_000),
+        play_screen: true,
+        autoplay: true,
+        hispeed: 2.5,
+        gauge_type: 3,
+        opponent_gauge_type: Some(1),
+        opponent_gauge: Some(38.0),
+        rival_ex_score: Some(789),
+        target_ex_score: None,
+        ..Default::default()
+    };
+    for (ref_id, expected_digits, expected_objects) in [
+        (SKIN_REF_BMZ_LR2_HISPEED, 3, 2),
+        (SKIN_REF_BMZ_LR2_GAUGE_2P, 2, 1),
+        (271, 4, 1), // EX SCORE uses an eleven-cell font with blank padding.
+    ] {
+        let values = decoded
+            .document
+            .value
+            .iter()
+            .filter(|value| value.ref_id == ref_id)
+            .collect::<Vec<_>>();
+        assert_eq!(values.len(), expected_objects);
+        for value in values {
+            let mut document = decoded.document.clone();
+            document.destination.retain(|entry| matches!(entry,
+                bmz_render::skin::DestinationListEntry::Single(destination) if destination.id == value.id));
+            assert_eq!(
+                document.static_render_items(&sources, &state, &Default::default()).len(),
+                expected_digits,
+                "missing LR2 number {ref_id}"
+            );
+        }
+    }
+    for (ref_id, row) in
+        [(SKIN_REF_BMZ_LR2_GAUGE_TYPE_1P, 1.0), (SKIN_REF_BMZ_LR2_GAUGE_TYPE_2P, 3.0)]
+    {
+        let image = decoded.document.image.iter().find(|image| image.ref_id == ref_id).unwrap();
+        let mut document = decoded.document.clone();
+        document.destination.retain(|entry| matches!(entry,
+            bmz_render::skin::DestinationListEntry::Single(destination) if destination.id == image.id));
+        let items = document.static_render_items(&sources, &state, &Default::default());
+        assert_eq!(items.len(), 1);
+        let bmz_render::skin::SkinRenderItem::Image { uv, .. } = &items[0] else {
+            panic!("expected gauge image");
+        };
+        let height = sources[&image.src].source_size.height;
+        assert!(
+            (uv.y - (image.y as f32 + row * image.h as f32 / image.divy as f32) / height).abs()
+                < 0.0001
+        );
+    }
+}
+
+#[test]
 fn wmii_fhd_lr2skin_decodes_play_document_when_available() {
     let skin_path = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../data/skins/WMII_FHD/play/FHDPLAY_AC.lr2skin");
