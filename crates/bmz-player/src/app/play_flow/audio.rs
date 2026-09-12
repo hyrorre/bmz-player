@@ -326,10 +326,15 @@ impl WinitApp {
     }
 
     pub(super) fn reopen_audio_output(&mut self) -> bool {
-        if self.play.active_play.is_some() || self.play.pending_play_start.is_some() {
-            tracing::warn!("ignoring audio apply while a play session is active");
+        if matches!(self.current_scene_kind(), AppSceneKind::Decide | AppSceneKind::Play)
+            || self.play.active_play.is_some()
+            || self.play.pending_play_start.is_some()
+        {
+            self.audio.pending_audio_apply = true;
+            tracing::info!("audio apply deferred until Select");
             return false;
         }
+        self.audio.pending_audio_apply = false;
 
         let previous_config =
             self.audio.audio_runtime.as_ref().map(|runtime| runtime.config().clone());

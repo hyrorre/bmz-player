@@ -332,7 +332,7 @@ fn select_snapshot_rows_formats_app_config_values_and_audio_apply_action() {
     assert_eq!(apply.title, "適用 (音声出力を開き直す)");
     assert_eq!(
         apply.subtitle,
-        "「適用」で現在の設定を保存し音声出力を再構築します（再生中は不可）。"
+        "「適用」で設定を保存し音声出力を再構築します。演奏中は選曲画面に戻ったときに適用します。"
     );
 }
 

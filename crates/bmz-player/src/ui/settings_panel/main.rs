@@ -22,6 +22,11 @@ pub(in crate::ui) fn build_settings_panel(
     let mut replay_import_request = None;
     let mut cancel_replay_import = false;
     let mut apply_audio = false;
+    let unrestricted = editable;
+    let editable = editable || SettingsNavigation::load(ui.ctx()).page.editable_during_play();
+    // Disabled widgets can still normalize values while building their contents.
+    let mut readonly_config = (!editable).then(|| config.clone());
+    let config = readonly_config.as_mut().unwrap_or(config);
     if !editable {
         ui.label(tr!(text, "settings-disabled-during-play"));
         ui.separator();
@@ -47,6 +52,7 @@ pub(in crate::ui) fn build_settings_panel(
             ui,
             AudioVideoSectionContext {
                 window,
+                unrestricted,
                 config,
                 profile,
                 show_fps,

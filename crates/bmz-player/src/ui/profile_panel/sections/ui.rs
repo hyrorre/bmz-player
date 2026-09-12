@@ -6,15 +6,11 @@ pub(in crate::ui::profile_panel) fn build_profile_ui_section(
 ) {
     let profile = &mut *section.profile;
     let show_fps = &mut *section.show_fps;
-    let unrestricted = section.unrestricted;
     let mut text = section.text;
     SettingsSection::new(SettingsPage::General, tr!(text, "profile-ui-title"))
         .scope(tr!(text, "settings-scope-profile"))
         .id_salt("profile_ui")
         .show(ui, |ui| {
-            if !unrestricted {
-                ui.disable();
-            }
             let current_locale = profile.ui.locale();
             let mut selected_locale = current_locale;
             let label = tr!(text, "profile-ui-language");

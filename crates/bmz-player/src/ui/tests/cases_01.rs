@@ -224,6 +224,9 @@ fn restricted_profile_settings_keep_only_realtime_categories() {
     edited.play.rule_mode = RuleMode::Dx;
     edited.select.difficulty_table_level_display = DifficultyTableLevelDisplay::Chart;
     edited.audio_mix.master_volume = 23;
+    edited.ui.show_fps = !baseline.ui.show_fps;
+    edited.ui.set_locale(AppLocale::En);
+    edited.system_sound.bgm_dir = "custom-bgm".to_string();
     edited.judge.input_offset_us = 4_000;
     edited.lane.hispeed = 3.25;
     edited.input.gamepad1.analog_scratch_threshold = 321;
@@ -240,6 +243,9 @@ fn restricted_profile_settings_keep_only_realtime_categories() {
         baseline.select.difficulty_table_level_display
     );
     assert_eq!(edited.audio_mix.master_volume, 23);
+    assert_eq!(edited.ui.show_fps, !baseline.ui.show_fps);
+    assert_eq!(edited.ui.locale(), AppLocale::En);
+    assert_eq!(edited.system_sound.bgm_dir, "custom-bgm");
     assert_eq!(edited.judge.input_offset_us, 4_000);
     assert_eq!(edited.lane.hispeed, 3.25);
     assert_eq!(edited.input.gamepad1.analog_scratch_threshold, 321);

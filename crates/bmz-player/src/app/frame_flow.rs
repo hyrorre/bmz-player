@@ -168,6 +168,14 @@ impl WinitApp {
         };
         let scene_kind = self.current_scene_kind();
         if scene_kind == AppSceneKind::Select {
+            if self.play.active_play.is_none() && self.play.pending_play_start.is_none() {
+                if std::mem::take(&mut self.audio.pending_audio_apply) {
+                    self.reopen_audio_output();
+                }
+                if std::mem::take(&mut self.jobs.pending_locale_refresh) {
+                    self.reload_select_items();
+                }
+            }
             self.sync_selected_play_mode();
         }
         let scene = egui_scene_name(scene_kind);
@@ -685,7 +693,11 @@ impl WinitApp {
         if locale_changed
             || before.random_select != self.boot.profile_config.select.random_select_flags()
         {
-            self.reload_select_items();
+            if self.current_scene_kind() == AppSceneKind::Select {
+                self.reload_select_items();
+            } else {
+                self.jobs.pending_locale_refresh = true;
+            }
         }
         self.sync_changed_select_play_options_from_profile(&before.play);
         self.sync_changed_select_score_context(SelectScoreContext::from_play(&before.play));

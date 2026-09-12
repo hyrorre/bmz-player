@@ -21,6 +21,10 @@ pub(super) enum SettingsPage {
 }
 
 impl SettingsPage {
+    pub(super) fn editable_during_play(self) -> bool {
+        matches!(self, Self::General | Self::Audio | Self::Video | Self::Integration)
+    }
+
     const ALL: [Self; 15] = [
         Self::General,
         Self::Profile,

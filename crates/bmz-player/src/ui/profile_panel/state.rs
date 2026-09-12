@@ -26,6 +26,8 @@ pub(in crate::ui) fn restore_restricted_profile_settings(
     mut readonly: ProfileConfig,
 ) {
     readonly.audio_mix = profile.audio_mix.clone();
+    readonly.ui = profile.ui.clone();
+    readonly.system_sound = profile.system_sound.clone();
     readonly.judge = profile.judge.clone();
     readonly.lane = profile.lane.clone();
     readonly.input = profile.input.clone();

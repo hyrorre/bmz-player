@@ -232,6 +232,7 @@ pub(super) struct ResultIrScrollRuntime {
 }
 
 pub(super) struct AppJobs {
+    pub(super) pending_locale_refresh: bool,
     /// 通常表・rianIR表の取得channel、queue、progress、世代状態。
     pub(super) table_fetch: TableFetchRuntime,
     pub(super) pending_song_scan: Option<PendingSongScan>,
@@ -259,6 +260,8 @@ pub(super) struct AppJobs {
 }
 
 pub(super) struct IntegrationRuntimeState {
+    /// 演奏中に編集されたOBS設定は、録画の保存判定を守るため次回起動へ保留する。
+    pub(super) obs_config_deferred: bool,
     pub(super) obs_controller: Option<crate::obs::ObsController>,
     pub(super) applied_obs_config: ObsConfig,
     pub(super) exit_configs_saved: bool,
@@ -302,6 +305,7 @@ pub(super) struct SkinRuntimeState {
 }
 
 pub(super) struct AppAudioRuntimeState {
+    pub(super) pending_audio_apply: bool,
     /// プレイ終了でリザルトへ移った後、曲の余韻を鳴らし切るために保持する音声出力。
     /// ドレインが完了するか、選曲復帰・次プレイ開始で解放される。
     pub(super) draining_audio: Option<AppAudioOutput>,

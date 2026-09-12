@@ -1,6 +1,7 @@
 use super::*;
 
 pub(super) struct AudioVideoSectionContext<'a, 'state> {
+    pub(super) unrestricted: bool,
     pub(super) window: &'a Window,
     pub(super) config: &'a mut AppConfig,
     pub(super) profile: &'a mut ProfileConfig,
@@ -17,6 +18,7 @@ pub(super) fn build_audio_video_settings_sections(
     context: AudioVideoSectionContext<'_, '_>,
 ) {
     let AudioVideoSectionContext {
+        unrestricted,
         window,
         config,
         profile,
@@ -136,7 +138,13 @@ pub(super) fn build_audio_video_settings_sections(
             }
 
             ui.horizontal(|ui| {
-                if ui.button(tr!(text, "settings-audio-refresh-devices")).clicked() {
+                if ui
+                    .add_enabled(
+                        unrestricted || config.audio.backend != AudioBackend::Asio,
+                        egui::Button::new(tr!(text, "settings-audio-refresh-devices")),
+                    )
+                    .clicked()
+                {
                     state.audio_device_picker.names =
                         crate::audio::list_output_devices(&config.audio.backend);
                     state.audio_device_picker.backend = Some(config.audio.backend.clone());
@@ -208,6 +216,9 @@ pub(super) fn build_audio_video_settings_sections(
                 *apply_audio = true;
             }
             ui.label(tr!(text, "settings-audio-apply-help"));
+            if !unrestricted {
+                ui.label(tr!(text, "settings-audio-deferred-help"));
+            }
         });
 
     SettingsSection::new(SettingsPage::Video, tr!(text, "settings-video-title"))

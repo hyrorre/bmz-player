@@ -14,6 +14,7 @@ pub(in crate::ui) fn build_obs_settings_section(
         .subpage(1)
         .id_salt("settings_obs")
         .show(ui, |ui| {
+            ui.label(tr!(text, "settings-obs-deferred-help"));
             enabled_changed =
                 ui.checkbox(&mut config.obs.enabled, tr!(text, "settings-obs-enabled")).changed();
             let (status_label, status_color) =

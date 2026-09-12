@@ -364,6 +364,7 @@ impl WinitApp {
                 result_ir_scroll: ResultIrScrollRuntime::default(),
             },
             jobs: AppJobs {
+                pending_locale_refresh: false,
                 table_fetch,
                 pending_song_scan: None,
                 pending_replay_import: None,
@@ -383,6 +384,7 @@ impl WinitApp {
                 maintenance_select_tx,
             },
             integrations: IntegrationRuntimeState {
+                obs_config_deferred: false,
                 obs_controller,
                 applied_obs_config,
                 exit_configs_saved: false,
@@ -417,6 +419,7 @@ impl WinitApp {
                 last_result_skin_signature: initial_result_skin_signature,
             },
             audio: AppAudioRuntimeState {
+                pending_audio_apply: false,
                 draining_audio: None,
                 audio_runtime,
                 audio_output_open_attempted,

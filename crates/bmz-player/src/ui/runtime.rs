@@ -280,7 +280,6 @@ impl EguiLayer {
         let mut course_editor_action = None;
         let mut select_course_builder_action = None;
         let settings_editable = !scene_restricts_settings(info.scene);
-        let mut readonly_app_config = (!settings_editable).then(|| app_config.clone());
         let visible_flag = &mut self.visible;
         let ir_login = &mut self.ir_login;
         let directory_open_status = &mut self.directory_open_status;
@@ -366,11 +365,7 @@ impl EguiLayer {
                     let settings_actions = build_settings_panel(
                         ui,
                         window,
-                        if settings_editable {
-                            app_config
-                        } else {
-                            readonly_app_config.as_mut().expect("read-only config must exist")
-                        },
+                        app_config,
                         profile_config,
                         show_fps,
                         settings_editable,

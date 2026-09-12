@@ -269,15 +269,11 @@ pub(in crate::ui::profile_panel) fn build_profile_system_sound_section(
     section: &mut ProfileSectionContext<'_>,
 ) {
     let profile = &mut *section.profile;
-    let unrestricted = section.unrestricted;
     let text = section.text;
     SettingsSection::new(SettingsPage::Audio, tr!(text, "profile-system-sound-title"))
         .scope(tr!(text, "settings-scope-profile"))
         .id_salt("profile_system_sound")
         .show(ui, |ui| {
-            if !unrestricted {
-                ui.disable();
-            }
             system_sound_path_row(
                 ui,
                 text,

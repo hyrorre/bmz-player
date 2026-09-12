@@ -101,6 +101,14 @@ impl WinitApp {
         if self.integrations.applied_obs_config == self.boot.app_config.obs {
             return;
         }
+        // A stopped recording can still await the user's save decision in Result.
+        // Keep the existing controller (including its retention state and queued stops).
+        self.integrations.obs_config_deferred |= self.current_scene_kind() != AppSceneKind::Select
+            || self.play.active_play.is_some()
+            || self.play.pending_play_start.is_some();
+        if self.integrations.obs_config_deferred {
+            return;
+        }
         self.integrations.applied_obs_config = self.boot.app_config.obs.clone();
         self.integrations.obs_controller =
             crate::obs::ObsController::spawn(self.integrations.applied_obs_config.clone());
