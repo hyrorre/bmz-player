@@ -532,6 +532,17 @@ impl ApplicationHandler<AppUserEvent> for WinitApp {
 
 impl WinitApp {
     fn open_dropped_chart(&mut self, path: PathBuf) {
+        if self.viewer_mode {
+            let battle = self.select.session_mode == SessionMode::AutoplayBattle;
+            if let Err(error) = self.play_viewer_chart(&path, 0, battle) {
+                tracing::warn!(path = %path.display(), %error, "failed to open dropped viewer chart");
+                self.show_left_overlay_toast(format!(
+                    "Could not open {}: {error:#}",
+                    path.display()
+                ));
+            }
+            return;
+        }
         if !matches!(self.view_state(), AppViewState::Select) {
             self.show_left_overlay_toast("BMS files can only be dropped on the select screen");
             return;
