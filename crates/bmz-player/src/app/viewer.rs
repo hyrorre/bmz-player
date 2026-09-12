@@ -272,6 +272,7 @@ impl WinitApp {
         self.commit_active_play_lane_state_to_profile();
         let (
             chart,
+            play_config_key_mode,
             input,
             sample_rate,
             normalization_gain,
@@ -282,6 +283,7 @@ impl WinitApp {
             let active = self.play.active_play.as_ref().context("viewer play is not active")?;
             (
                 Arc::clone(&active.running.session.chart),
+                active.running.session.play_config_key_mode,
                 SharedInputBackend::default(),
                 active.running.audio.engine.output_sample_rate(),
                 active.running.session.audio_mix.chart_normalization_gain,
@@ -299,11 +301,12 @@ impl WinitApp {
         session_options.assist_runtime = assist_runtime;
         session_options.ln_policy_setting = self.boot.profile_config.play.ln_mode_policy;
         session_options.rule_mode = self.boot.profile_config.play.rule_mode;
-        let mut session = crate::screens::play_session::build_game_session_with_input_backend(
+        let mut session = build_viewer_seek_session(
             chart,
+            play_config_key_mode,
             &self.boot.profile_config,
             session_options,
-            Box::new(input.clone()),
+            input.clone(),
         );
         session.audio_mix.chart_normalization_gain = normalization_gain;
 
@@ -500,6 +503,24 @@ fn instant_for_elapsed(elapsed: TimeUs) -> Instant {
     Instant::now().checked_sub(Duration::from_micros(micros)).unwrap_or_else(Instant::now)
 }
 
+fn build_viewer_seek_session(
+    chart: Arc<PlayableChart>,
+    play_config_key_mode: KeyMode,
+    profile: &ProfileConfig,
+    mut options: crate::screens::play_session::PlaySessionOptions,
+    input: SharedInputBackend,
+) -> bmz_gameplay::session::GameSession {
+    // The reused chart already contains the Battle presentation's duplicated 2P lanes.
+    // Preserve the source mode so those lanes remain separate from the player's score.
+    options.play_config_key_mode = Some(play_config_key_mode);
+    crate::screens::play_session::build_game_session_with_input_backend(
+        chart,
+        profile,
+        options,
+        Box::new(input),
+    )
+}
+
 fn viewer_pause_feedback(chart_time: TimeUs) -> String {
     format!("Paused at {:.3} s", chart_time.0 as f64 / 1_000_000.0)
 }
@@ -601,6 +622,78 @@ mod tests {
             .collect();
         chart.end_time = TimeUs(12_000_000);
         chart
+    }
+
+    #[test]
+    fn viewer_battle_seek_keeps_prefix_and_boundary_scores_separate() {
+        use bmz_chart::model::{NoteEvent, NoteKind};
+        use bmz_core::ids::NoteId;
+        use bmz_gameplay::session::{advance_session_frame, prepare_viewer_seek};
+
+        for (source_mode, expanded_mode) in
+            [(KeyMode::K5, KeyMode::K10), (KeyMode::K7, KeyMode::K14)]
+        {
+            let mut chart = crate::app::tests::app_test_chart();
+            chart.metadata.key_mode = expanded_mode;
+            for (index, lane) in [Lane::Key1, Lane::Key8].into_iter().enumerate() {
+                for (note_index, time) in [1_000_000, 2_000_000].into_iter().enumerate() {
+                    chart.lane_notes[lane.index()].push(NoteEvent {
+                        id: NoteId((index * 2 + note_index + 1) as u32),
+                        lane,
+                        kind: NoteKind::Tap,
+                        tick: ChartTick((note_index as u64 + 1) * 192),
+                        time: TimeUs(time),
+                        sound: None,
+                        layered_sounds: Vec::new(),
+                        damage: None,
+                    });
+                }
+            }
+            chart.total_notes = 4;
+            chart.end_time = TimeUs(3_000_000);
+            let profile = ProfileConfig::new_default("test", "Test", 1);
+            let options = play_session_options_from_start(
+                &AppConfig::default(),
+                PlayStartOptions {
+                    session_mode: SessionMode::AutoplayBattle,
+                    autoplay: true,
+                    ..Default::default()
+                },
+            );
+            let mut session = build_viewer_seek_session(
+                Arc::new(chart),
+                source_mode,
+                &profile,
+                options,
+                SharedInputBackend::default(),
+            );
+            assert_eq!(session.primary_key_mode, source_mode);
+            assert_eq!(session.scored_total_notes, 2);
+            assert!(session.display_only_lane_mask[Lane::Key8.index()]);
+
+            prepare_viewer_seek(&mut session, TimeUs(2_000_000));
+            assert_eq!((session.score.past_notes, session.score.ex_score()), (1, 2));
+            let opponent = session.opponent_score.as_ref().unwrap();
+            assert_eq!((opponent.past_notes, opponent.ex_score()), (1, 2));
+
+            session.audio_clock = bmz_audio::clock::AudioClock::with_position(
+                48_000,
+                0,
+                2_000_000,
+                Arc::new(std::sync::atomic::AtomicU64::new(0)),
+                true,
+            );
+            let mut audio = bmz_audio::engine::AudioEngine::new(48_000);
+            advance_session_frame(&mut session, &mut audio);
+            assert_eq!(
+                (session.score.past_notes, session.score.combo, session.score.ex_score()),
+                (2, 2, 4)
+            );
+            let opponent = session.opponent_score.as_ref().unwrap();
+            assert_eq!((opponent.past_notes, opponent.combo, opponent.ex_score()), (2, 2, 4));
+            advance_session_frame(&mut session, &mut audio);
+            assert_eq!(session.score.ex_score(), 4);
+        }
     }
 
     #[test]
