@@ -496,8 +496,11 @@ fn cpal_output_config(config: &AudioConfig) -> Result<CpalOutputConfig> {
     let output_device_name = cpal_output_device_name(config);
     let sample_rate = cpal_sample_rate(config);
     let buffer_size = cpal_buffer_size(config);
-    let low_latency_shared = config.output_mode == AudioOutputMode::SharedLowLatency;
-    let exclusive = config.output_mode == AudioOutputMode::Exclusive;
+    // 出力モードは WASAPI 専用。バックエンドを切り替えても保存値は保持し、
+    // ASIO などには渡さない。Windows の Auto は既定の WASAPI を使う。
+    let uses_wasapi = matches!(host, Some(CpalHostId::Wasapi)) || (cfg!(windows) && host.is_none());
+    let low_latency_shared = uses_wasapi && config.output_mode == AudioOutputMode::SharedLowLatency;
+    let exclusive = uses_wasapi && config.output_mode == AudioOutputMode::Exclusive;
     // ペア番号(0=1-2ch, 1=3-4ch …)をインターリーブ先頭チャンネル位置へ変換する。
     let channel_offset = config.output_channel_pair.saturating_mul(2);
 
@@ -696,7 +699,7 @@ mod tests {
 
         let output = cpal_output_config(&config).unwrap();
 
-        assert!(output.low_latency_shared);
+        assert_eq!(output.low_latency_shared, cfg!(windows));
         assert!(!output.exclusive);
     }
 
@@ -708,6 +711,33 @@ mod tests {
         let output = cpal_output_config(&config).unwrap();
 
         assert!(!output.low_latency_shared);
-        assert!(output.exclusive);
+        assert_eq!(output.exclusive, cfg!(windows));
+    }
+
+    #[cfg(all(windows, feature = "asio"))]
+    #[test]
+    fn switching_from_wasapi_to_asio_ignores_and_preserves_wasapi_output_mode() {
+        let mut config = AppConfig::default().audio;
+        config.asio_driver = "ASIO4ALL v2".to_string();
+        for mode in [AudioOutputMode::SharedLowLatency, AudioOutputMode::Exclusive] {
+            config.backend = AudioBackend::Wasapi;
+            config.output_mode = mode.clone();
+            let wasapi = cpal_output_config(&config).unwrap();
+            assert_eq!(wasapi.low_latency_shared, mode == AudioOutputMode::SharedLowLatency);
+            assert_eq!(wasapi.exclusive, mode == AudioOutputMode::Exclusive);
+
+            config.backend = AudioBackend::Asio;
+            let asio = cpal_output_config(&config).unwrap();
+            assert_eq!(asio.host, Some(CpalHostId::Asio));
+            assert_eq!(asio.output_device_name.as_deref(), Some("ASIO4ALL v2"));
+            assert!(!asio.low_latency_shared);
+            assert!(!asio.exclusive);
+            assert_eq!(config.output_mode, mode);
+
+            config.backend = AudioBackend::Wasapi;
+            let restored = cpal_output_config(&config).unwrap();
+            assert_eq!(restored.low_latency_shared, wasapi.low_latency_shared);
+            assert_eq!(restored.exclusive, wasapi.exclusive);
+        }
     }
 }

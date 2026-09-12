@@ -349,7 +349,7 @@ impl WinitApp {
                 true
             }
             Err(error) => {
-                tracing::error!(%error, "failed to reopen audio output with current settings");
+                tracing::error!(error = %format!("{error:#}"), "failed to reopen audio output with current settings");
                 let Some(previous_config) = previous_config else {
                     tracing::error!("no previous audio settings are available for recovery");
                     return false;
@@ -371,7 +371,7 @@ impl WinitApp {
                     }
                     Err(restore_error) => {
                         tracing::error!(
-                            %restore_error,
+                            restore_error = %format!("{restore_error:#}"),
                             "failed to restore previous audio output; audio disabled until restart"
                         );
                     }
