@@ -411,7 +411,11 @@ impl WinitApp {
         }
         if let Some(snapshot) = &mut self.play.last_play_snapshot {
             snapshot.play_elapsed_time = play_elapsed_time;
-            snapshot.ready_elapsed_time = (!seamless_play_entry).then_some(TimeUs(0));
+            snapshot.ready_elapsed_time = play_ready_skin_elapsed_time(
+                self.play.play_entry_presentation,
+                Some(TimeUs(0)),
+                self.play.viewer_ready_timer_offset,
+            );
             snapshot.seamless_play_entry = seamless_play_entry;
             snapshot.time = chart_zero_time;
             if let Some(active_play) = &self.play.active_play {

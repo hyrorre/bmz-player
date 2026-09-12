@@ -22,6 +22,27 @@ fn viewer_seek_skips_only_the_ready_presentation() {
 }
 
 #[test]
+fn viewer_ready_timer_survives_repeated_seeks_without_restarting_intro() {
+    let normal = PlayEntryPresentation::Normal;
+    let viewer = PlayEntryPresentation::ViewerSeek;
+    assert_eq!(play_ready_skin_elapsed_time(normal, None, TimeUs(0)), None);
+    assert_eq!(play_ready_skin_elapsed_time(viewer, None, TimeUs(0)), None);
+    assert_eq!(
+        play_ready_skin_elapsed_time(normal, Some(TimeUs(250_000)), TimeUs(100_000_000)),
+        Some(TimeUs(250_000))
+    );
+    let first = play_ready_skin_elapsed_time(viewer, Some(TimeUs(0)), TimeUs(500_000));
+    assert_eq!(first, Some(TimeUs(100_000_000)));
+    let later = play_ready_skin_elapsed_time(viewer, Some(TimeUs(2_000_000)), TimeUs(500_000));
+    assert_eq!(later, Some(TimeUs(102_000_000)));
+    assert_eq!(play_ready_skin_elapsed_time(viewer, Some(TimeUs(0)), later.unwrap()), later);
+    assert_eq!(
+        play_ready_skin_elapsed_time(viewer, Some(TimeUs(1_000_000)), TimeUs(150_000_000)),
+        Some(TimeUs(151_000_000))
+    );
+}
+
+#[test]
 fn decide_launch_promotes_only_staged_practice_config() {
     assert!(DecideLaunch::Play.into_practice_session().is_none());
 

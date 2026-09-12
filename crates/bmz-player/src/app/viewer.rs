@@ -327,6 +327,8 @@ impl WinitApp {
             let feedback = viewer_seek_feedback(&active.running.session.chart, target);
             (carryover_count, feedback)
         };
+        self.play.viewer_ready_timer_offset =
+            self.play_ready_animation_elapsed_time().unwrap_or(TimeUs(0));
         self.play.play_entry_presentation = PlayEntryPresentation::ViewerSeek;
         self.play.play_ready_sound_started_at = Some(Instant::now());
         self.play.play_ending = None;

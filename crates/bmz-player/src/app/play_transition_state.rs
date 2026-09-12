@@ -30,6 +30,21 @@ pub(super) const fn play_entry_elapsed_time(
     if presentation.is_seamless() { continued_elapsed } else { TimeUs(0) }
 }
 
+pub(super) fn play_ready_skin_elapsed_time(
+    presentation: PlayEntryPresentation,
+    elapsed: Option<TimeUs>,
+    viewer_offset: TimeUs,
+) -> Option<TimeUs> {
+    elapsed.map(|elapsed| {
+        if presentation.is_seamless() {
+            // 常設パーツも READY を参照するため、無効化せず導入演出を通過させる。
+            TimeUs(viewer_offset.0.max(100_000_000).saturating_add(elapsed.0))
+        } else {
+            elapsed
+        }
+    })
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum ResultSkinClickAction {
     SetPanel(i32),

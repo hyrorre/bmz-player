@@ -150,11 +150,11 @@ impl WinitApp {
     }
 
     pub(super) fn play_ready_animation_elapsed_time(&self) -> Option<TimeUs> {
-        if self.play.play_entry_presentation.shows_ready_presentation() {
-            self.play.play_ready_sound_started_at.map(elapsed_since)
-        } else {
-            None
-        }
+        play_ready_skin_elapsed_time(
+            self.play.play_entry_presentation,
+            self.play.play_ready_sound_started_at.map(elapsed_since),
+            self.play.viewer_ready_timer_offset,
+        )
     }
 
     pub(super) fn clear_play_meta_image_state(&mut self) {
@@ -269,6 +269,7 @@ impl WinitApp {
         self.result.finished_play = None;
         self.audio.draining_audio = None;
         self.play.play_entry_presentation = presentation;
+        self.play.viewer_ready_timer_offset = TimeUs(0);
         if !presentation.is_seamless() {
             self.play.play_scene_started_at = Instant::now();
         }
