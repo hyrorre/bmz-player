@@ -17,7 +17,7 @@ impl WinitApp {
             self.commit_active_play_lane_state_to_profile();
             let pause_result = {
                 let active = self.play.active_play.as_mut().expect("checked above");
-                let chart_time = active.running.session.audio_clock.now();
+                let chart_time = active.running.audio.clock().now();
                 active.running.pause_viewer_playback(chart_time)
             };
             if let Err(error) = pause_result {
@@ -251,7 +251,7 @@ impl WinitApp {
 
         tracing::info!(reason, "started viewer fadeout before app exit");
         if let Some(active) = &mut self.play.active_play {
-            let chart_time = active.running.session.audio_clock.now();
+            let chart_time = active.running.audio.clock().now();
             if let Err(error) = active.running.pause_viewer_playback(chart_time) {
                 tracing::warn!(%error, "failed to pause viewer audio during exit");
             }
@@ -287,7 +287,7 @@ impl WinitApp {
                 active.running.session.audio_mix.chart_normalization_gain,
                 active.running.session.assist,
                 active.running.playback_rate_percent,
-                active.running.session.audio_clock.now(),
+                active.running.audio.clock().now(),
             )
         };
         let target = viewer_seek_target(&chart, current_time, seek);
@@ -343,7 +343,7 @@ impl WinitApp {
         let active = self.play.active_play.as_ref().context("viewer play is not active")?;
         let measure = viewer_measure_at_time(
             &active.running.session.chart,
-            active.running.session.audio_clock.now(),
+            active.running.audio.clock().now(),
         );
         let seed = if reroll {
             crate::random_option_seed::fresh_bms_random_seed()
@@ -374,7 +374,7 @@ impl WinitApp {
             let chart_time = {
                 let active = self.play.active_play.as_mut().context("viewer play is not active")?;
                 active.running.resume_viewer_playback()?;
-                active.running.session.audio_clock.now()
+                active.running.audio.clock().now()
             };
             self.viewer_paused = false;
             self.viewer_paused_play_elapsed = None;
@@ -384,7 +384,7 @@ impl WinitApp {
             let frozen_play_elapsed = self.play_elapsed_time();
             let chart_time = {
                 let active = self.play.active_play.as_mut().context("viewer play is not active")?;
-                let chart_time = active.running.session.audio_clock.now();
+                let chart_time = active.running.audio.clock().now();
                 active.running.pause_viewer_playback(chart_time)?;
                 chart_time
             };
@@ -404,7 +404,7 @@ impl WinitApp {
             return;
         };
         let chart_time =
-            self.play.active_play.as_ref().map(|active| active.running.session.audio_clock.now());
+            self.play.active_play.as_ref().map(|active| active.running.audio.clock().now());
         if let Some(snapshot) = &mut self.play.last_play_snapshot {
             snapshot.play_elapsed_time = play_elapsed;
             if let Some(chart_time) = chart_time {

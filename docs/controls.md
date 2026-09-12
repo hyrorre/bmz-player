@@ -386,7 +386,7 @@ Viewer modeでは通常プレイのカーソルキー操作を使わず、編集
 | Ctrl+Up / Ctrl+Down | ±5秒後の位置を含む小節の先頭へシーク |
 | マウスホイール | Up / Downと同じ。Shift / Ctrl修飾も使用可能 |
 | Home | 0小節目へシーク |
-| Space | 一時停止 / 再開 |
+| Space | 一時停止 / 停止位置から再開 |
 | F5 | 現在小節から譜面ファイルを再読込（RANDOM配置を維持） |
 | Shift+F5 | 現在小節から譜面ファイルを再読込し、RANDOM配置を再抽選 |
 | Escape | 黒フェードアウト後にBMZ Playerを終了 |

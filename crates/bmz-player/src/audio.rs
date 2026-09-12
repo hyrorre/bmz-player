@@ -309,7 +309,9 @@ impl RunningPlaySession {
     }
 
     pub fn resume_viewer_playback(&mut self) -> Result<()> {
-        let chart_time = self.session.audio_clock.now();
+        // The render observation may still contain the running clock while Viewer is
+        // paused and no longer polls the worker. Resume from the source's frozen clock.
+        let chart_time = self.audio.clock().now();
         self.audio.resume_playback(chart_time)?;
         self.sync_gameplay_clock();
         Ok(())
