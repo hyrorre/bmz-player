@@ -425,8 +425,7 @@ mod tests {
     #[test]
     fn hidden_sections_do_not_run_and_subpage_selection_survives_navigation() {
         let ctx = egui::Context::default();
-        let mut navigation = SettingsNavigation::default();
-        navigation.page = SettingsPage::KeyConfig;
+        let navigation = SettingsNavigation { page: SettingsPage::KeyConfig, ..Default::default() };
         navigation.store(&ctx);
         assert!(navigation.accepts_key_capture());
         SettingsNavigation::select(&ctx, SettingsPage::Audio);

@@ -314,16 +314,17 @@ fn binding_priority(context: BindingContext) -> u8 {
 }
 
 fn contexts_conflict(left: BindingContext, right: BindingContext) -> bool {
-    match (left, right) {
-        (BindingContext::Common, _) | (_, BindingContext::Common) => true,
-        (BindingContext::KeyMode, BindingContext::Play)
-        | (BindingContext::Play, BindingContext::KeyMode)
-        | (BindingContext::KeyMode, BindingContext::KeyMode) => true,
-        (BindingContext::Select, BindingContext::Select)
-        | (BindingContext::Play, BindingContext::Play)
-        | (BindingContext::Result, BindingContext::Result) => true,
-        _ => false,
-    }
+    matches!(
+        (left, right),
+        (BindingContext::Common, _)
+            | (_, BindingContext::Common)
+            | (BindingContext::KeyMode, BindingContext::Play)
+            | (BindingContext::Play, BindingContext::KeyMode)
+            | (BindingContext::KeyMode, BindingContext::KeyMode)
+            | (BindingContext::Select, BindingContext::Select)
+            | (BindingContext::Play, BindingContext::Play)
+            | (BindingContext::Result, BindingContext::Result)
+    )
 }
 
 fn devices_conflict(left: &str, right: &str) -> bool {
@@ -493,9 +494,7 @@ pub fn key_binding_conflict_description(
     conflicts
         .sort_unstable_by(|left, right| right.1.cmp(&left.1).then_with(|| left.0.cmp(right.0)));
     conflicts.dedup();
-    let Some((winner, winner_priority)) = conflicts.first() else {
-        return None;
-    };
+    let (winner, winner_priority) = conflicts.first()?;
     let target_priority = binding_priority(target_context);
     if *winner_priority > target_priority {
         Some(format!("{winner} が優先 (同じキー: {target_display})"))
