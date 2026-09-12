@@ -71,8 +71,14 @@ pub(super) fn digit_to_replay_slot(physical_key: PhysicalKey) -> Option<u8> {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum PrimaryIrPageIdentity {
-    Chart { sha256: String },
-    Course { canonical_hash: Option<String>, rian_hash_v1: Option<String> },
+    Chart {
+        sha256: String,
+    },
+    Course {
+        canonical_hash: Option<String>,
+        rian_hash_v1: Option<String>,
+        bms_ir_course_key: Option<String>,
+    },
 }
 
 pub(super) fn primary_ir_page_url(
@@ -89,8 +95,10 @@ pub(super) fn primary_ir_page_url(
                 Ok(format!("{}/charts/{sha256}", provider.base_url.trim_end_matches('/')))
             }
         }
-        PrimaryIrPageIdentity::Course { canonical_hash, rian_hash_v1 } => {
-            let hash = if crate::ir::rian_ir::is_rian_ir_config(provider) {
+        PrimaryIrPageIdentity::Course { canonical_hash, rian_hash_v1, bms_ir_course_key } => {
+            let hash = if crate::ir::bms_ir::is_bms_ir_config(provider) {
+                bms_ir_course_key.as_deref()
+            } else if crate::ir::rian_ir::is_rian_ir_config(provider) {
                 rian_hash_v1.as_deref()
             } else {
                 canonical_hash.as_deref()

@@ -124,10 +124,8 @@ pub fn score_submission_supported(
     _source_ln_profile: ChartLnProfile,
     _ln_policy: LnScorePolicy,
     double_option: DoubleOption,
-    is_course_stage: bool,
 ) -> bool {
-    !is_course_stage
-        && matches!(rule_mode, RuleMode::Beatoraja | RuleMode::Lr2Oraja)
+    matches!(rule_mode, RuleMode::Beatoraja | RuleMode::Lr2Oraja)
         && matches!(
             source_format,
             ChartSourceFormat::Bms | ChartSourceFormat::Bmson | ChartSourceFormat::Pms
@@ -157,10 +155,17 @@ pub fn ensure_score_payload_supported(payload: &IrScoreSubmission) -> Result<()>
     if !is_supported_key_mode(&payload.chart.mode) {
         bail!("BMS-IR key mode is not supported");
     }
-    if !matches!(
-        payload.result.clear.as_str(),
-        "Failed" | "Easy" | "Normal" | "Hard" | "ExHard" | "FullCombo" | "Perfect" | "Max"
-    ) {
+    let course_stage =
+        payload.play_options.get("course_stage").and_then(Value::as_bool).unwrap_or(false);
+    let clear_supported = if course_stage {
+        matches!(payload.result.clear.as_str(), "NoPlay" | "FullCombo" | "Perfect" | "Max")
+    } else {
+        matches!(
+            payload.result.clear.as_str(),
+            "Failed" | "Easy" | "Normal" | "Hard" | "ExHard" | "FullCombo" | "Perfect" | "Max"
+        )
+    };
+    if !clear_supported {
         bail!("BMS-IR clear type is not supported");
     }
     let double_option = payload
@@ -317,6 +322,7 @@ impl BmsIrClient {
     pub async fn fetch_course_ranking(
         &self,
         course_hash: &str,
+        course_key: &str,
         request: &IrCourseRankingRequest,
         rule_mode: RuleMode,
         player_id: &str,
@@ -324,6 +330,7 @@ impl BmsIrClient {
     ) -> Result<IrCourseRankingResult> {
         let body = serde_json::json!({
             "course_hash": course_hash,
+            "course_key": course_key,
             "gauge": request.gauge,
             "ln_policy": request.ln_policy,
             "rule_mode": rule_mode.as_str(),
@@ -879,7 +886,6 @@ mod tests {
             profile,
             LnScorePolicy::AutoLn,
             DoubleOption::Off,
-            false,
         ));
         assert!(score_submission_supported(
             RuleMode::Lr2Oraja,
@@ -887,7 +893,6 @@ mod tests {
             profile,
             LnScorePolicy::AutoLn,
             DoubleOption::Off,
-            false,
         ));
         assert!(score_submission_supported(
             RuleMode::Beatoraja,
@@ -895,7 +900,6 @@ mod tests {
             profile,
             LnScorePolicy::ForceCn,
             DoubleOption::Off,
-            false,
         ));
         assert!(score_submission_supported(
             RuleMode::Beatoraja,
@@ -903,16 +907,18 @@ mod tests {
             profile,
             LnScorePolicy::AutoLn,
             DoubleOption::Battle,
-            false,
         ));
-        assert!(!score_submission_supported(
-            RuleMode::Beatoraja,
-            ChartSourceFormat::Bms,
-            profile,
-            LnScorePolicy::AutoLn,
-            DoubleOption::Off,
-            true,
-        ));
+    }
+
+    #[test]
+    fn course_stage_payload_accepts_only_rounded_clear_types() {
+        let mut payload = sample_score_payload();
+        payload.play_options.insert("course_stage".to_string(), serde_json::json!(true));
+        payload.result.clear = "NoPlay".to_string();
+        assert!(ensure_score_payload_supported(&payload).is_ok());
+
+        payload.result.clear = "Normal".to_string();
+        assert!(ensure_score_payload_supported(&payload).is_err());
     }
 
     #[test]
@@ -1079,6 +1085,7 @@ mod tests {
             client
                 .fetch_course_ranking(
                     course_hash,
+                    "efefefefefefefefefefefefefefefefcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
                     &course_request,
                     RuleMode::Beatoraja,
                     "123",
@@ -1090,8 +1097,13 @@ mod tests {
                 .course_hash,
             course_hash
         );
+        let course_ranking_request = requests.recv().unwrap();
         assert!(
-            requests.recv().unwrap().starts_with("POST /api/bmz-player/v1/course-ranking HTTP/1.1")
+            course_ranking_request.starts_with("POST /api/bmz-player/v1/course-ranking HTTP/1.1")
+        );
+        assert_eq!(
+            request_json(&course_ranking_request)["course_key"],
+            "efefefefefefefefefefefefefefefefcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd"
         );
 
         assert!(client.get_rivals("123", "token").await.unwrap().rivals.is_empty());

@@ -31,6 +31,8 @@ pub struct IrCourseIdentity {
     /// rianIR/beatoraja connector互換:
     /// SHA256(UTF-8(decoded title + ordered chart SHA256 hex strings))。
     pub rian_course_hash_v1: String,
+    /// BMS-IR/LR2互換の長いcourse key。BMZ内部identityには使わない。
+    pub bms_ir_course_key: Option<String>,
     pub constraints_json: String,
     pub chart_sha256s_json: String,
     pub chart_sha256s: Vec<[u8; 32]>,
@@ -47,6 +49,7 @@ pub struct IrCourseSubmissionContext {
     pub arrange: String,
     pub random_seed: Option<i64>,
     pub idempotency_key: String,
+    pub bms_ir_course_key: Option<String>,
 }
 
 pub fn compute_course_hash(definition: &IrCourseDefinition) -> String {
@@ -69,6 +72,11 @@ pub fn compute_rian_course_hash_v1(title: &str, charts: &[String]) -> String {
         digest.update(chart.as_bytes());
     }
     hash_to_hex(&digest.finalize())
+}
+
+fn valid_bms_ir_table_course_key(value: &str, chart_count: usize) -> bool {
+    let value = value.trim();
+    value.len() == 32 * (chart_count + 1) && value.bytes().all(|byte| byte.is_ascii_hexdigit())
 }
 
 pub fn course_identity_from_stored(
@@ -99,6 +107,16 @@ pub fn course_identity_from_stored(
     };
     let course_hash = compute_course_hash(&definition);
     let rian_course_hash_v1 = compute_rian_course_hash_v1(&definition.title, &definition.charts);
+    let bms_ir_course_key =
+        if stored.source.starts_with(crate::ir::table::BMS_IR_TABLE_SOURCE_PREFIX)
+            && valid_bms_ir_table_course_key(&stored.definition.key, chart_sha256s.len())
+        {
+            Some(stored.definition.key.trim().to_ascii_lowercase())
+        } else {
+            // A locally created course has no assigned LR2 course key. The
+            // header includes legacy metadata, not an encoding of constraints.
+            None
+        };
     let constraints_json = super::device_key::canonical_json_value(&definition.constraints).ok()?;
     let chart_sha256s_json =
         super::device_key::canonical_json_value(&json!(definition.charts)).ok()?;
@@ -106,6 +124,7 @@ pub fn course_identity_from_stored(
         definition,
         course_hash,
         rian_course_hash_v1,
+        bms_ir_course_key,
         constraints_json,
         chart_sha256s_json,
         chart_sha256s,
@@ -174,7 +193,7 @@ pub fn build_course_submission(
         .collect();
     play_options["entry_randomizations"] = json!(entry_randomizations);
 
-    json!({
+    let mut payload = json!({
         "client": {
             "name": "BMZ",
             "version": env!("CARGO_PKG_VERSION"),
@@ -219,7 +238,11 @@ pub fn build_course_submission(
         },
         "play_options": play_options,
         "idempotency_key": context.idempotency_key,
-    })
+    });
+    if let Some(course_key) = &context.bms_ir_course_key {
+        payload["course"]["course_key"] = json!(course_key);
+    }
+    payload
 }
 
 const fn course_ln_mode_id(mode: Option<bmz_chart::model::LongNoteMode>) -> u8 {
@@ -417,10 +440,12 @@ mod tests {
                 arrange: "NORMAL".to_string(),
                 random_seed: None,
                 idempotency_key: "course-test".to_string(),
+                bms_ir_course_key: Some("ab".repeat(32)),
             },
         );
 
         assert_eq!(payload["rule"]["ln_policy"], "ForceHcn");
+        assert_eq!(payload["course"]["course_key"], "ab".repeat(32));
         assert_eq!(payload["rule"]["effective_ln_mode"], 3);
         assert_eq!(payload["rule"]["rule_mode"], "Dx");
         assert_eq!(payload["result"]["max_combo"], json!(123));
@@ -479,6 +504,7 @@ mod tests {
                 arrange: "NORMAL".to_string(),
                 random_seed: None,
                 idempotency_key: "course-final-clear".to_string(),
+                bms_ir_course_key: Some("ab".repeat(32)),
             },
         );
 
@@ -543,6 +569,7 @@ mod tests {
                 arrange: "NORMAL".to_string(),
                 random_seed: None,
                 idempotency_key: "course-separated-clear".to_string(),
+                bms_ir_course_key: Some("ab".repeat(32)),
             },
         );
 
@@ -604,6 +631,7 @@ mod tests {
                 arrange: "NORMAL".to_string(),
                 random_seed: None,
                 idempotency_key: "course-failed".to_string(),
+                bms_ir_course_key: Some("ab".repeat(32)),
             },
         );
 

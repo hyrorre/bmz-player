@@ -57,6 +57,7 @@ pub fn spawn_course_result_ir_task(
             local_score_id,
             course_hash: hashes.local,
             rian_course_hash_v1: hashes.rian_v1,
+            bms_ir_course_key: hashes.bms_ir,
             gauge,
             ln_policy,
             rule_mode,
@@ -563,6 +564,7 @@ pub(super) async fn fetch_result_ranking(
         ResultIrTarget::Course {
             course_hash,
             rian_course_hash_v1,
+            bms_ir_course_key,
             gauge,
             ln_policy,
             rule_mode,
@@ -592,6 +594,7 @@ pub(super) async fn fetch_result_ranking(
                 return crate::ir::bms_ir::BmsIrClient::new(&query.base_url)?
                     .fetch_course_ranking(
                         course_hash,
+                        bms_ir_course_key.as_deref().unwrap_or(""),
                         &IrCourseRankingRequest {
                             gauge: gauge.clone(),
                             ln_policy: ln_policy.clone(),

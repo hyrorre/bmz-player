@@ -37,13 +37,22 @@ impl WinitApp {
 
     pub(super) fn course_result_ir_target(
         &self,
-    ) -> Option<(String, String, String, String, bmz_gameplay::rule::RuleMode)> {
+    ) -> Option<(String, String, Option<String>, String, String, bmz_gameplay::rule::RuleMode)>
+    {
         let course = self.result.finished_course.as_ref()?;
         let course_hash = self.result.finished_course_hash.clone()?;
         let rian_course_hash_v1 = self.result.finished_course_rian_hash_v1.clone()?;
+        let bms_ir_course_key = self.result.finished_course_bms_ir_key.clone();
         let gauge = course.final_gauge_type.as_str().to_string();
         let ln_policy = course.ln_policy.as_str().to_string();
-        Some((course_hash, rian_course_hash_v1, gauge, ln_policy, course.rule_mode))
+        Some((
+            course_hash,
+            rian_course_hash_v1,
+            bms_ir_course_key,
+            gauge,
+            ln_policy,
+            course.rule_mode,
+        ))
     }
 
     pub(super) fn start_result_ir_for_finished_play(&mut self, finished: &FinishedPlaySession) {
@@ -137,6 +146,7 @@ impl WinitApp {
                 arrange: arrange.to_string(),
                 random_seed,
                 idempotency_key: format!("bmz-course-{}-{course_score_id}", identity.course_hash),
+                bms_ir_course_key: identity.bms_ir_course_key.clone(),
             },
         );
         let Ok(payload_json) = serde_json::to_string(&payload) else {
