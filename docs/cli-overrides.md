@@ -57,3 +57,21 @@ P1配置はP2にコピーしません。`-B`のG-BATTLEと`--double-option battl
 コースの必須制約は引き続き適用されます。
 リプレイでは表示設定だけ変更可能です。配置・seed・ゲージ・GAS・アシストの明示指定はエラーにします。
 動画出力には画面設定を指定できません。解像度とFPSは従来の`--resolution`・`--fps`を使います。
+
+## Windows release版のコンソール出力
+
+GUI subsystemを維持し、Explorerやショートカットから起動したときにコンソールを作りません。
+ターミナルから起動し、標準出力先が不足している場合だけ`AttachConsole(ATTACH_PARENT_PROCESS)`を試します。
+継承済みのファイル・パイプ・NULへのリダイレクトは保持します。親にコンソールがなければ接続しません。ログ初期化後のファイル出力は従来どおりです。
+ヘルプと引数解析より前に初期化するため、FFmpeg不足やオプション指定のエラーも表示できます。
+
+GUIアプリの終了待ちはシェル側の挙動に従います。cmdで明示的に待つ場合は`start "" /b /wait bmz-player.exe ...`を使用できます。
+
+検証用スクリプトは非表示のコンソールホストを使い、親への接続、片側だけのファイル出力、パイプ、PowerShell、cmd、コンソールなし起動を確認します。
+
+```powershell
+cargo build -p bmz-player --release
+python scripts/test-windows-cli-console.py target/release/bmz-player.exe
+```
+
+参考: [AttachConsole](https://learn.microsoft.com/en-us/windows/console/attachconsole)、[GetStdHandle](https://learn.microsoft.com/en-us/windows/console/getstdhandle)。

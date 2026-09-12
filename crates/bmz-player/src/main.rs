@@ -11,6 +11,7 @@ use bmz_player::logging::{
 
 #[tokio::main]
 async fn main() -> ExitCode {
+    bmz_player::stdio::initialize_parent_console();
     let args: Vec<String> = std::env::args().skip(1).collect();
     if bmz_player::cli::args_request_help(&args) {
         bmz_player::stdio::stdout_line(format_args!("{}", bmz_player::cli::app_help_text()));
