@@ -519,7 +519,7 @@ fn chart_normalization_analysis_roundtrips_and_rescan_clears_it() {
     assert_eq!(stored.sample_peak, 0.75);
 
     db.conn().execute(
-        "UPDATE chart_analysis SET loudness_analysis_version = 2, sample_peak = 6405.997 WHERE chart_id = ?1",
+        "UPDATE chart_analysis SET loudness_analysis_version = 3, sample_peak = 6405.997 WHERE chart_id = ?1",
         params![chart_id],
     ).unwrap();
     assert!(db.chart_normalization_analysis_by_chart_id(chart_id).unwrap().is_none());

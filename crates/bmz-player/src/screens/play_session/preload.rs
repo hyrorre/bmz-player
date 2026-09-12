@@ -302,6 +302,11 @@ pub fn preload_play_session_for_chart_with_callbacks(
         &prepared_chart.chart,
         &audio,
         normalization_output_gain,
+        (options.session_mode.is_battle() || options.battle_opponent.is_some())
+            && matches!(
+                (imported.source_key_mode, prepared_chart.chart.metadata.key_mode),
+                (KeyMode::K5, KeyMode::K10) | (KeyMode::K7, KeyMode::K14)
+            ),
     )?;
     tracing::info!(
         chart_id,
@@ -810,6 +815,7 @@ pub(super) fn load_or_compute_chart_normalization_gain(
     chart: &PlayableChart,
     audio: &AudioEngine,
     normalization_output_gain: f32,
+    battle_presentation: bool,
 ) -> Result<f32> {
     if let Some(analysis) = library_db.chart_normalization_analysis_by_chart_id(chart_id)? {
         return Ok(play_normalization_gain_for_analysis_with_output_gain(
@@ -822,6 +828,22 @@ pub(super) fn load_or_compute_chart_normalization_gain(
         ));
     }
 
+    // Playback mutes display-only opponent lanes. Analyze the same audible
+    // chart, while preserving genuine DP/BATTLE option notes and all BGM.
+    let mut audible_chart;
+    let chart = if battle_presentation {
+        audible_chart = chart.clone();
+        let excluded = second_player_lane_mask();
+        for (index, notes) in audible_chart.lane_notes.iter_mut().enumerate() {
+            if excluded[index] {
+                notes.clear();
+            }
+        }
+        audible_chart.long_notes.retain(|pair| !excluded[pair.lane.index()]);
+        &audible_chart
+    } else {
+        chart
+    };
     let Some(analysis) = analyze_chart_loudness(chart, &audio.samples, audio.output_sample_rate())
     else {
         tracing::warn!(chart_id, "failed to analyze chart loudness; using unity gain");

@@ -1189,14 +1189,94 @@ fn cached_chart_normalization_uses_profile_output_gain() {
     let audio = AudioEngine::new(48_000);
 
     let full_scale =
-        load_or_compute_chart_normalization_gain(&library_db, chart_id, &chart, &audio, 1.0)
+        load_or_compute_chart_normalization_gain(&library_db, chart_id, &chart, &audio, 1.0, false)
             .unwrap();
-    let profile_scale =
-        load_or_compute_chart_normalization_gain(&library_db, chart_id, &chart, &audio, 0.25)
-            .unwrap();
+    let profile_scale = load_or_compute_chart_normalization_gain(
+        &library_db,
+        chart_id,
+        &chart,
+        &audio,
+        0.25,
+        false,
+    )
+    .unwrap();
     let peak_ceiling = 10.0f32.powf(-1.0 / 20.0);
 
     assert!((4.0 * full_scale - peak_ceiling).abs() < 0.001);
     assert!((4.0 * profile_scale * 0.25 - peak_ceiling).abs() < 0.001);
     assert!(profile_scale > full_scale);
+}
+
+#[test]
+fn battle_chart_normalization_matches_autoplay_and_shared_cache() {
+    let (path, wav_path) = write_temp_bms_with_wav(
+        "#TITLE Battle normalization\n#BPM 120\n#PLAYER 1\n#WAV01 test.wav\n#00001:01\n#00011:01\n#00151:0101\n",
+    );
+    let pcm = (0..48_000)
+        .flat_map(|i| {
+            let sample =
+                ((i as f32 * std::f32::consts::TAU * 440.0 / 48_000.0).sin() * 24_000.0) as i16;
+            sample.to_le_bytes()
+        })
+        .collect::<Vec<_>>();
+    std::fs::write(&wav_path, [wav_header(1, 1, 48_000, 16, pcm.len() as u32), pcm].concat())
+        .unwrap();
+    let imported = import_bms_chart(&path, None, true).unwrap();
+    assert!(!imported.chart.long_notes.is_empty());
+    let mut conn = Connection::open_in_memory().unwrap();
+    configure_connection(&conn).unwrap();
+    run_migrations(&mut conn, LIBRARY_MIGRATIONS).unwrap();
+    let mut db = LibraryDatabase::from_connection(conn);
+    let mut baseline = None;
+    for mode in [SessionMode::AutoplayBattle, SessionMode::GBattle, SessionMode::Autoplay] {
+        // Reimport clears the cache so each mode exercises fresh analysis.
+        let id = db
+            .upsert_chart_import(&ChartImportRecord {
+                root_id: None,
+                file_path: &path,
+                file_size: 1,
+                modified_at: 1,
+                scanned_at: 1,
+                chart: &imported.chart,
+            })
+            .unwrap();
+        let loaded = preload_play_session_for_chart_with_callbacks(
+            &db,
+            id,
+            PlaySessionOptions { session_mode: mode, ..Default::default() },
+            1.0,
+            |_| {},
+            |_, _| {},
+        )
+        .unwrap();
+        let analysis = db.chart_normalization_analysis_by_chart_id(id).unwrap().unwrap();
+        let values = [
+            analysis.loudness_lufs,
+            analysis.short_term_lufs,
+            analysis.sample_peak,
+            loaded.chart_normalization_gain,
+        ];
+        assert!(loaded.chart_normalization_gain < 1.0);
+        if let Some(expected) = baseline {
+            assert_eq!(values, expected);
+        } else {
+            baseline = Some(values);
+        }
+        if mode.is_battle() {
+            let raw = analyze_chart_loudness(&loaded.chart, &loaded.audio.samples, 48_000).unwrap();
+            assert!(raw.peak_abs > analysis.sample_peak);
+        }
+        let cached = preload_play_session_for_chart_with_callbacks(
+            &db,
+            id,
+            PlaySessionOptions { session_mode: SessionMode::Autoplay, ..Default::default() },
+            1.0,
+            |_| {},
+            |_, _| {},
+        )
+        .unwrap();
+        assert_eq!(cached.chart_normalization_gain, loaded.chart_normalization_gain);
+    }
+    std::fs::remove_file(path).unwrap();
+    std::fs::remove_file(wav_path).unwrap();
 }
