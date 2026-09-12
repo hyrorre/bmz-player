@@ -291,6 +291,7 @@ impl WinitApp {
             }
             return;
         }
+        self.discard_cli_play_on_select();
         self.reload_select_items();
         self.reload_skin_for_scene_entry(SkinKind::Select);
         self.restart_select_scene_timers();
@@ -320,7 +321,9 @@ impl WinitApp {
         // sides here so preload, retry, replay and IR all observe one stable pair.
         let option_seeds = crate::random_option_seed::RandomOptionSeeds::fresh(true);
         let random_trainer_seed = self.select.random_trainer.arrange_seed(option_seeds.p1);
+        let seed = self.boot.profile_config.cli_seed();
         PlayStartOptions {
+            score_save_disabled: self.boot.profile_config.cli_auto_scratch(),
             session_mode: self.select.session_mode,
             autoplay: self.select.session_mode.primary_autoplay(),
             assist: self.boot.profile_config.play.assist,
@@ -333,10 +336,16 @@ impl WinitApp {
             hs_fix: self.select.hs_fix_option,
             target: self.select.target_option,
             rival_name: self.select.select_ir.active_rival_display_name().map(str::to_string),
-            arrange_seed: Some(i64::from(option_seeds.p1.value())),
-            arrange_seed_2p: option_seeds.p2.map(|seed| i64::from(seed.value())),
+            arrange_seed: Some(
+                seed.map_or(i64::from(option_seeds.p1.value()), |s| (s & 0xff_ffff) as i64),
+            ),
+            arrange_seed_2p: seed
+                .map(|s| ((s >> 24) & 0xff_ffff) as i64)
+                .or_else(|| option_seeds.p2.map(|seed| i64::from(seed.value()))),
             random_trainer_seed,
-            bms_random_seed: Some(crate::random_option_seed::fresh_bms_random_seed()),
+            bms_random_seed: Some(
+                seed.unwrap_or_else(crate::random_option_seed::fresh_bms_random_seed),
+            ),
             key_mode_conversion: self.boot.profile_config.play.key_mode_conversion,
             seven_to_nine_pattern: self.boot.profile_config.play.seven_to_nine_pattern,
             seven_to_nine_type: self.boot.profile_config.play.seven_to_nine_type,

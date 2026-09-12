@@ -7,9 +7,9 @@ use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 
 #[cfg(windows)]
-const WINDOWS_PIPE_NAME: &str = r"\\.\pipe\bmz-player-viewer-v2";
+const WINDOWS_PIPE_NAME: &str = r"\\.\pipe\bmz-player-viewer-v3";
 #[cfg(not(windows))]
-const LOOPBACK_ADDRESS: &str = "127.0.0.1:39077";
+const LOOPBACK_ADDRESS: &str = "127.0.0.1:39078";
 const MAX_COMMAND_BYTES: usize = 1024 * 1024;
 const COMMAND_ACK: u8 = 0x06;
 
@@ -21,6 +21,10 @@ pub enum ViewerCommand {
         measure: u32,
         #[serde(default)]
         battle: bool,
+        #[serde(default)]
+        play_overrides: crate::cli::PlayOverrides,
+        #[serde(default)]
+        window_overrides: crate::cli::WindowOverrides,
     },
     /// `-P --skip-result` で常駐viewerをone-shot起動へ入れ替えるための内部命令。
     Quit,
@@ -33,7 +37,23 @@ pub fn request_stop() -> Result<bool> {
 
 /// 実行中のビューワーへ譜面再生要求を送る。未起動なら `false`。
 pub fn request_play(path: &Path, measure: u32, battle: bool) -> Result<bool> {
-    request_command(&ViewerCommand::Play { path: path.to_path_buf(), measure, battle })
+    request_play_with_overrides(path, measure, battle, Default::default(), Default::default())
+}
+
+pub fn request_play_with_overrides(
+    path: &Path,
+    measure: u32,
+    battle: bool,
+    play_overrides: crate::cli::PlayOverrides,
+    window_overrides: crate::cli::WindowOverrides,
+) -> Result<bool> {
+    request_command(&ViewerCommand::Play {
+        path: path.to_path_buf(),
+        measure,
+        battle,
+        play_overrides,
+        window_overrides,
+    })
 }
 
 /// 実行中のビューワーへプロセス終了要求を送る。one-shot起動への入れ替え専用。
@@ -73,7 +93,12 @@ fn read_command(stream: &mut impl Read) -> Result<ViewerCommand> {
     }
     let mut payload = vec![0_u8; payload_len];
     stream.read_exact(&mut payload)?;
-    serde_json::from_slice(&payload).context("failed to decode viewer command")
+    let command: ViewerCommand =
+        serde_json::from_slice(&payload).context("failed to decode viewer command")?;
+    if let ViewerCommand::Play { play_overrides, .. } = &command {
+        play_overrides.validate()?;
+    }
+    Ok(command)
 }
 
 fn acknowledge_command(stream: &mut impl Write) -> Result<()> {
@@ -279,6 +304,8 @@ mod tests {
         assert_eq!(
             command,
             ViewerCommand::Play {
+                play_overrides: Default::default(),
+                window_overrides: Default::default(),
                 path: PathBuf::from(r"C:\譜面\_temp.bms"),
                 measure: 12,
                 battle: false,
@@ -295,7 +322,13 @@ mod tests {
         assert!(request_play(&path, 12, true).unwrap());
         assert_eq!(
             rx.recv_timeout(Duration::from_secs(2)).unwrap(),
-            ViewerCommand::Play { path, measure: 12, battle: true }
+            ViewerCommand::Play {
+                path,
+                measure: 12,
+                battle: true,
+                play_overrides: Default::default(),
+                window_overrides: Default::default()
+            }
         );
 
         assert!(request_stop().unwrap());
@@ -305,7 +338,13 @@ mod tests {
         assert!(request_play(&replacement, 3, false).unwrap());
         assert_eq!(
             rx.recv_timeout(Duration::from_secs(2)).unwrap(),
-            ViewerCommand::Play { path: replacement, measure: 3, battle: false }
+            ViewerCommand::Play {
+                path: replacement,
+                measure: 3,
+                battle: false,
+                play_overrides: Default::default(),
+                window_overrides: Default::default()
+            }
         );
 
         assert!(request_quit().unwrap());

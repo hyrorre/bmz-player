@@ -39,6 +39,8 @@ impl FrameRate {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct VideoExportOptions {
+    pub play_overrides: super::PlayOverrides,
+    pub print_effective_options: bool,
     pub chart: PathBuf,
     pub output: PathBuf,
     pub width: u32,
@@ -53,6 +55,8 @@ pub struct VideoExportOptions {
 pub(super) fn parse(args: &[String]) -> Result<VideoExportOptions> {
     ensure!(args.first().is_some_and(|s| s == "video"), "Use: export video PATH -o OUTPUT.mp4");
     let mut options = VideoExportOptions {
+        play_overrides: Default::default(),
+        print_effective_options: false,
         chart: PathBuf::new(),
         output: PathBuf::new(),
         width: 1920,

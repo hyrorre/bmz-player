@@ -49,6 +49,8 @@ pub use model::{
 pub use options::AppOptions;
 pub use parse::{parse_cli_command, parse_command};
 
+mod overrides;
 #[cfg(test)]
 #[path = "cli/tests.rs"]
 mod tests;
+pub use overrides::{PlayOverrides, WindowOverrides, print_effective};

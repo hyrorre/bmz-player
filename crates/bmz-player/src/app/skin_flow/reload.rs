@@ -91,6 +91,9 @@ impl WinitApp {
     /// 決定的なLua documentと画像は共有cacheで再利用される一方、ロード時乱数や
     /// wildcardのRandom指定はこのdecode要求を単位として再抽選される。
     pub(super) fn reload_skin_for_scene_entry(&mut self, kind: SkinKind) {
+        if matches!(kind, SkinKind::Select) {
+            self.discard_cli_play_on_select();
+        }
         let request = match kind {
             SkinKind::Select => SkinReloadRequest { select: true, ..Default::default() },
             SkinKind::Decide => SkinReloadRequest { decide: true, ..Default::default() },

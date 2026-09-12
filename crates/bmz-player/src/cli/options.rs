@@ -1,5 +1,8 @@
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct AppOptions {
+    pub play_overrides: super::PlayOverrides,
+    pub window_overrides: super::WindowOverrides,
+    pub print_effective_options: bool,
     pub boot_play_sample: bool,
     /// Debug: start directly on a synthetic result screen.
     pub boot_result_sample: bool,

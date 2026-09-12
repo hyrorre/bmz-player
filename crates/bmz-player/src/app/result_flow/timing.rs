@@ -21,6 +21,7 @@ impl WinitApp {
         self.audio.draining_audio = None;
         self.play.play_media_cache = None;
         self.play.last_play_snapshot = None;
+        self.discard_cli_play_on_select();
         self.reload_select_items();
         self.sync_select_holds_from_pressed_controls();
         self.reload_skin_for_scene_entry(SkinKind::Select);

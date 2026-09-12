@@ -8,6 +8,8 @@ pub const DEFAULT_DISCORD_APPLICATION_ID: &str = "1524506927315419448";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppConfig {
+    #[serde(skip)]
+    pub cli_window_baseline: Option<Box<(crate::cli::WindowOverrides, VideoConfig)>>,
     pub version: u32,
     pub active_profile: String,
     pub songs: SongPathsConfig,
@@ -604,6 +606,7 @@ pub enum LogLevel {
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
+            cli_window_baseline: None,
             version: 1,
             active_profile: "default".to_string(),
             songs: SongPathsConfig { roots: Vec::new() },

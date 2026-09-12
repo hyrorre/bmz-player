@@ -147,6 +147,7 @@ pub fn apply_placeholder_session_visuals(
         && !snapshot.replay_playback
         && !snapshot.practice_mode
         && !options.score_save_disabled
+        && !profile.cli_auto_scratch()
         && options.assist_runtime.score_update_enabled();
     snapshot.bga_enabled =
         bga_enabled_from_profile(profile, snapshot.autoplay, snapshot.replay_playback);
@@ -298,13 +299,14 @@ pub fn build_game_session_with_input_backend(
             .into_iter()
             .filter(|lane| display_only_lane_mask[lane.index()])
             .collect::<Vec<_>>();
-        if options.double_option == DoubleOption::BattleAutoScratch
+        if (options.double_option == DoubleOption::BattleAutoScratch || profile.cli_auto_scratch())
             && !lanes.contains(&Lane::Scratch)
         {
             lanes.push(Lane::Scratch);
         }
         Some(AutoplayController::for_lanes(&lanes))
-    } else if options.double_option == DoubleOption::BattleAutoScratch {
+    } else if options.double_option == DoubleOption::BattleAutoScratch || profile.cli_auto_scratch()
+    {
         Some(AutoplayController::for_lanes(&[Lane::Scratch, Lane::Scratch2]))
     } else {
         None

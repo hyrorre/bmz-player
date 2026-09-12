@@ -13,7 +13,14 @@ where
 {
     let args: Vec<String> = args.into_iter().map(|s| s.as_ref().to_string()).collect();
     let (args, profile_id, mut warnings) = extract_global_profile(args)?;
-    let command = match args.first().map(|s| s.as_str()) {
+    let (args, mut play, window, print) = super::overrides::extract(args)?;
+    let mut command = match args.first().map(|s| s.as_str()) {
+        Some("monitors") => {
+            if args.len() != 2 || args[1] != "list" {
+                bail!("Use: monitors list");
+            }
+            Ok(Command::Monitors)
+        }
         Some("export") => super::export::parse(&args[1..]).map(Command::Export),
         Some("table") => {
             let rest = &args[1..];
@@ -134,6 +141,47 @@ where
             Ok(Command::Run(options))
         }
     }?;
+    match &mut command {
+        Command::Run(options) => {
+            if options.viewer_stop && (!window.is_empty() || !play.is_empty() || print) {
+                bail!("viewer stop does not accept playback or window overrides");
+            }
+            let target = options.boot_play_path.is_some()
+                || options.boot_play_sample
+                || options.boot_course_id.is_some()
+                || options.boot_course_replay_id.is_some();
+            if !target && !play.is_empty() {
+                warnings.push("no chart target: ignoring play overrides".into());
+                play = Default::default();
+            }
+            if (options.boot_replay_slot.is_some()
+                || options.boot_replay_file.is_some()
+                || options.boot_course_replay_id.is_some())
+                && play.affects_replay()
+            {
+                bail!("replay does not accept arrangement, seed, gauge, GAS or assist overrides");
+            }
+            options.boot_bms_random_seed = play.seed;
+            options.play_overrides = play;
+            options.window_overrides = window;
+            options.print_effective_options = print;
+        }
+        Command::Export(options) => {
+            if !window.is_empty() {
+                bail!("video export does not accept window options");
+            }
+            if options.replay_slot.is_some() && play.affects_replay() {
+                bail!("replay does not accept arrangement, seed, gauge, GAS or assist overrides");
+            }
+            options.seed = play.seed.or(options.seed);
+            options.play_overrides = play;
+            options.print_effective_options = print;
+        }
+        _ if !play.is_empty() || !window.is_empty() || print => {
+            bail!("play/window overrides require a playback or export command")
+        }
+        _ => {}
+    }
     if profile_id.is_some() && !command_uses_profile(&command) {
         warnings.push(format!(
             "{VIEWER_PROFILE_ARG} does not affect this command; ignoring the profile override"
@@ -178,14 +226,15 @@ fn extract_global_profile(args: Vec<String>) -> Result<(Vec<String>, Option<Stri
 fn command_uses_profile(command: &Command) -> bool {
     match command {
         Command::Run(options) => !options.viewer_stop,
+        Command::Export(_) => true,
         Command::Course(CourseCommand::History { .. } | CourseCommand::Attempt { .. })
         | Command::Replay(_)
         | Command::Ir(_) => true,
-        Command::Table(_)
+        Command::Monitors
+        | Command::Table(_)
         | Command::Songs(_)
         | Command::Course(CourseCommand::Import { .. } | CourseCommand::List)
-        | Command::Profile(_)
-        | Command::Export(_) => false,
+        | Command::Profile(_) => false,
     }
 }
 

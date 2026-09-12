@@ -532,6 +532,7 @@ impl ProfileConfig {
             },
             play_mode: BTreeMap::new(),
             active_play_mode: KeyMode::K7,
+            cli_play: None,
             input: crate::config::play_input::default_profile_input(),
             rival: RivalConfig {
                 active_rival: String::new(),

@@ -137,7 +137,8 @@ impl WinitApp {
             }
         };
         let metadata_elapsed = metadata_started_at.elapsed();
-        let score_save_disabled = library_snapshot.has_score_disabling_key_mode_conversion;
+        let score_save_disabled = library_snapshot.has_score_disabling_key_mode_conversion
+            || self.boot.profile_config.cli_auto_scratch();
         if score_save_disabled {
             for options in &mut entry_start_options {
                 options.score_save_disabled = true;

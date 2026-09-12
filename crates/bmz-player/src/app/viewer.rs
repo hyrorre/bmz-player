@@ -58,7 +58,11 @@ impl WinitApp {
 
         // RANDOM分岐と実プレイで同じ譜面を使うため、importとPlayStartOptionsへ同じseedを渡す。
         // importが失敗した場合は現在の再生を維持し、成功してから差し替える。
-        let bms_random_seed = crate::random_option_seed::fresh_bms_random_seed();
+        let bms_random_seed = self
+            .boot
+            .profile_config
+            .cli_seed()
+            .unwrap_or_else(crate::random_option_seed::fresh_bms_random_seed);
         self.load_viewer_chart(&path, measure, bms_random_seed, battle, None, None)
     }
 

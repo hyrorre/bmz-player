@@ -255,6 +255,17 @@ impl WinitApp {
         }
 
         let video = &self.boot.app_config.video;
+        if self.boot.app_config.cli_window_baseline.as_ref().is_some_and(|s| s.0.monitor.is_some())
+            && !video.monitor_name.is_empty()
+            && !event_loop
+                .available_monitors()
+                .any(|m| crate::window_config::monitor_config_name(&m) == video.monitor_name)
+        {
+            self.startup_error =
+                Some(format!("monitor not found: {}; use monitors list", video.monitor_name));
+            event_loop.exit();
+            return;
+        }
         let requested_window_mode = video.mode.clone();
         let monitor = select_monitor(
             &video.monitor_name,
@@ -263,7 +274,13 @@ impl WinitApp {
         );
         let fullscreen = fullscreen_from_config(video, monitor.clone());
         let mut effective_mode = effective_window_mode(&fullscreen);
-        let attributes = window_attributes_from_config(video).with_fullscreen(fullscreen);
+        let mut attributes = window_attributes_from_config(video).with_fullscreen(fullscreen);
+        if self.boot.app_config.cli_window_baseline.as_ref().is_some_and(|s| s.0.monitor.is_some())
+            && matches!(video.mode, WindowMode::Windowed)
+            && let Some(monitor) = &monitor
+        {
+            attributes = attributes.with_position(monitor.position());
+        }
         match event_loop.create_window(attributes) {
             Ok(window) => {
                 let window = Arc::new(window);
@@ -532,7 +549,7 @@ impl WinitApp {
     ) -> bool {
         self.select.autoplay_folder = None;
         let mut options = self.play_start_options();
-        options.score_save_disabled = score_save_disabled;
+        options.score_save_disabled |= score_save_disabled;
         if bms_random_seed.is_some() {
             options.bms_random_seed = bms_random_seed;
         }

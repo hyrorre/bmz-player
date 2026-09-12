@@ -228,6 +228,7 @@ impl WinitApp {
             .then_some(("startup update check", false));
 
         let mut app = Self {
+            startup_error: None,
             boot,
             window: None,
             first_frame_startup_completed: false,

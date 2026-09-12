@@ -30,6 +30,31 @@ async fn main() -> ExitCode {
     }
     let command = invocation.command;
     let profile_id = invocation.profile_id;
+    if matches!(command, Command::Monitors) {
+        return match bmz_player::window_config::list_monitors() {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(error) => {
+                bmz_player::stdio::stderr_line(format_args!("Error: {error:#}"));
+                ExitCode::FAILURE
+            }
+        };
+    }
+    let print = match &command {
+        Command::Run(o) => o.print_effective_options,
+        Command::Export(o) => o.print_effective_options,
+        _ => false,
+    };
+    if print {
+        return match bmz_player::paths::resolve_app_paths().and_then(|paths| {
+            bmz_player::cli::print_effective(&command, &paths, profile_id.as_deref())
+        }) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(error) => {
+                bmz_player::stdio::stderr_line(format_args!("Error: {error:#}"));
+                ExitCode::FAILURE
+            }
+        };
+    }
     if let Command::Run(options) = &command {
         if options.viewer_stop {
             return match bmz_player::viewer_ipc::request_stop() {
@@ -95,10 +120,12 @@ async fn main() -> ExitCode {
                     }
                 }
             } else {
-                match bmz_player::viewer_ipc::request_play(
+                match bmz_player::viewer_ipc::request_play_with_overrides(
                     &path,
                     options.start_measure.unwrap_or(0),
                     options.battle_on_start,
+                    options.play_overrides.clone(),
+                    options.window_overrides.clone(),
                 ) {
                     Ok(true) => return ExitCode::SUCCESS,
                     Ok(false) => {}
@@ -150,6 +177,7 @@ async fn main() -> ExitCode {
     }
 
     let result = match command {
+        Command::Monitors => unreachable!("handled before bootstrap"),
         Command::Export(options) => {
             bmz_player::video_export::run(options, &app_paths, profile_id.as_deref())
         }

@@ -13,12 +13,25 @@ pub fn save_app_config(path: &Path, config: &AppConfig) -> Result<()> {
 
 fn serialize_app_config(config: &AppConfig) -> Result<String> {
     let mut config = config.clone();
+    if let Some(state) = config.cli_window_baseline.take() {
+        if state.0.mode.is_some() {
+            config.video.mode = state.1.mode;
+        }
+        if state.0.size.is_some() {
+            config.video.width = state.1.width;
+            config.video.height = state.1.height;
+        }
+        if state.0.monitor.is_some() {
+            config.video.monitor_name = state.1.monitor_name;
+        }
+    }
     normalize_song_root_paths(&mut config.songs.roots);
     Ok(toml::to_string_pretty(&config)?)
 }
 
 pub fn save_profile_config(path: &Path, profile: &ProfileConfig) -> Result<()> {
     let mut profile = profile.clone();
+    profile.clear_cli_play();
     profile.migrate_legacy_key_mode_conversion();
     profile.sync_active_play_mode();
     profile.normalize_play_mode_configs();

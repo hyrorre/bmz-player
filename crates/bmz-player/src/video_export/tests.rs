@@ -40,6 +40,8 @@ impl Fixture {
         wav.extend(16000_i16.to_le_bytes());
         fs::write(root.join("click.wav"), wav).unwrap();
         let options = VideoExportOptions {
+            play_overrides: Default::default(),
+            print_effective_options: false,
             chart: root.join("chart.bms"),
             output: root.join("out.mp4"),
             width: 320,
@@ -271,7 +273,22 @@ fn saved_replay_reproduces_judgements_without_modifying_score_database() {
 #[test]
 #[ignore = "requires a working GPU and BMZ_TEST_FFMPEG with libx264/AAC"]
 fn generates_complete_mp4_and_metadata_without_persistence() {
-    let fixture = Fixture::new();
+    let mut fixture = Fixture::new();
+    let crate::cli::Command::Run(overrides) = crate::cli::parse_command([
+        "chart.bms",
+        "--arrange",
+        "mirror",
+        "--gauge",
+        "hard",
+        "--gas",
+        "off",
+        "--hispeed",
+        "3",
+    ])
+    .unwrap() else {
+        panic!()
+    };
+    fixture.options.play_overrides = overrides.play_overrides;
     // Exercise actual asynchronous BGA decoding, including one movie bound to
     // two layers with different start times.
     let bga = encoder::command(&fixture.options.ffmpeg)

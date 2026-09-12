@@ -435,7 +435,10 @@ pub async fn run_with_options_log_buffer_paths_and_profile(
             .as_deref()
             .map(Path::new)
             .context("viewer play requires a chart path")?;
-        let bms_random_seed = crate::random_option_seed::fresh_bms_random_seed();
+        let bms_random_seed = options
+            .play_overrides
+            .seed
+            .unwrap_or_else(crate::random_option_seed::fresh_bms_random_seed);
         let viewer = bootstrap::bootstrap_viewer_with_paths(
             app_paths,
             path,
@@ -457,6 +460,11 @@ pub async fn run_with_options_log_buffer_paths_and_profile(
         (bootstrap::bootstrap_with_paths_profile(app_paths, profile_id)?, None)
     };
     prepare_boot_chart_options(&mut boot, &mut options)?;
+    boot.app_config.set_cli_window(options.window_overrides.clone())?;
+    if options.boot_play_path.as_ref().is_some_and(|p| !Path::new(p).is_file()) {
+        options.play_overrides = Default::default();
+    }
+    boot.profile_config.set_cli_play(options.play_overrides.clone());
     tracing::info!(
         startup_elapsed_ms = startup_started_at.elapsed().as_millis(),
         "application bootstrap complete"
@@ -519,9 +527,14 @@ pub async fn run_with_options_log_buffer_paths_and_profile(
     )?);
     tracing::info!("starting winit event loop");
     let result = event_loop.run_app(app.as_mut()).context("winit event loop failed");
+    let startup_error = app.startup_error.take();
     drop(app);
     drop(viewer_cleanup);
-    result
+    result?;
+    if let Some(error) = startup_error {
+        bail!("{error}");
+    }
+    Ok(())
 }
 
 fn prepare_boot_chart_options(
@@ -681,6 +694,7 @@ fn spawn_ir_sync_worker(
 }
 
 struct WinitApp {
+    startup_error: Option<String>,
     boot: BootstrappedApp,
     window: Option<Arc<Window>>,
     first_frame_startup_completed: bool,

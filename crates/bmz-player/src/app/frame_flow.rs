@@ -44,6 +44,11 @@ fn practice_panel_context(
 }
 
 impl WinitApp {
+    pub(super) fn discard_cli_play_on_select(&mut self) {
+        if !self.viewer_mode && self.boot.profile_config.clear_cli_play().is_some() {
+            self.sync_select_play_options_from_profile();
+        }
+    }
     pub(super) fn restart_select_scene_timers(&mut self) {
         let now = Instant::now();
         self.select.select_scene_timer_armed = false;

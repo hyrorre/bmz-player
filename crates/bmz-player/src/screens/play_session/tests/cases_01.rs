@@ -1,6 +1,40 @@
 use super::*;
 
 #[test]
+fn cli_overrides_reach_game_session_and_auto_scratch() {
+    let crate::cli::Command::Run(options) = crate::cli::parse_command([
+        "chart.bms",
+        "--gauge",
+        "hard",
+        "--gas",
+        "off",
+        "--hispeed",
+        "3",
+        "--auto-scratch",
+        "on",
+        "--bga",
+        "off",
+    ])
+    .unwrap() else {
+        panic!()
+    };
+    let mut profile = ProfileConfig::new_default("default", "Default", 1);
+    profile.set_cli_play(options.play_overrides);
+    let session = build_game_session(Arc::new(chart()), &profile, PlaySessionOptions::default());
+    assert_eq!(session.gauge.selected, GaugeType::Hard);
+    assert_eq!(session.hispeed, 3.0);
+    assert!(!session.bga_enabled);
+    assert!(session.autoplay.is_some());
+    let autoplay = session.autoplay.as_ref().unwrap();
+    assert!(autoplay.is_lane_enabled(Lane::Scratch));
+    assert!(autoplay.is_lane_enabled(Lane::Scratch2));
+    assert!(!autoplay.is_lane_enabled(Lane::Key1));
+    profile.clear_cli_play();
+    let session = build_game_session(Arc::new(chart()), &profile, PlaySessionOptions::default());
+    assert!(session.autoplay.is_none());
+}
+
+#[test]
 fn build_game_session_uses_profile_play_settings() {
     let mut profile = ProfileConfig::new_default("default", "Default", 1);
     profile.play.auto_play = true;

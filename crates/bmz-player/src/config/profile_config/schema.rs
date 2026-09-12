@@ -3,6 +3,8 @@ use super::*;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProfileConfig {
+    #[serde(skip)]
+    pub cli_play: Option<Box<(crate::cli::PlayOverrides, crate::cli::PlayOverrides)>>,
     pub version: u32,
     pub id: String,
     pub display_name: String,

@@ -1,5 +1,34 @@
 use winit::monitor::MonitorHandle;
 
+pub fn list_monitors() -> anyhow::Result<()> {
+    struct Listing;
+    impl winit::application::ApplicationHandler for Listing {
+        fn resumed(&mut self, event_loop: &winit::event_loop::ActiveEventLoop) {
+            let primary = event_loop.primary_monitor();
+            for monitor in event_loop.available_monitors() {
+                let size = monitor.size();
+                crate::stdio::stdout_line(format_args!(
+                    "{}\t{}x{}{}",
+                    monitor_config_name(&monitor),
+                    size.width,
+                    size.height,
+                    if Some(&monitor) == primary.as_ref() { "\tprimary" } else { "" }
+                ));
+            }
+            event_loop.exit();
+        }
+        fn window_event(
+            &mut self,
+            _: &winit::event_loop::ActiveEventLoop,
+            _: winit::window::WindowId,
+            _: winit::event::WindowEvent,
+        ) {
+        }
+    }
+    winit::event_loop::EventLoop::new()?.run_app(&mut Listing)?;
+    Ok(())
+}
+
 /// 設定ファイルに保存するモニター識別子を作る。
 ///
 /// モニター名だけでは同名ディスプレイを区別できないため、仮想デスクトップ上の

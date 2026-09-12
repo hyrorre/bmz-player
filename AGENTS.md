@@ -205,6 +205,8 @@ cargo run -p bmz-player -- songs list
 
 その他:
 
+- 共通の起動時設定上書きは `docs/cli-overrides.md` を参照。画面設定はプロセス内、プレイ設定は起動譜面からSelectへ戻るまで適用し、設定ファイルには保存しません。Viewer IPC v3は再生要求ごとにプレイ上書きを置き換えます。
+
 - `export video <PATH> -o <OUTPUT.mp4>` — Playスキン入場から退場までをオフライン生成。`--resolution` / `--fps` / `--replay-slot` / `--seed` / `--ffmpeg` / `--overwrite`、global `--profile`対応。詳細は `docs/video-export.md`。音声デバイス・ウィンドウ不要、GPUと外部FFmpeg（libx264/AAC）が必要。スコア保存・IR送信なし。
 
 - `--smoke-exit-after-frames <N>` / `--smoke-exit-after-frames=<N>`

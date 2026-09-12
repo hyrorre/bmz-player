@@ -464,7 +464,53 @@ impl ApplicationHandler<AppUserEvent> for WinitApp {
                     self.stop_viewer_playback();
                     self.request_redraw();
                 }
-                crate::viewer_ipc::ViewerCommand::Play { path, measure, battle } => {
+                crate::viewer_ipc::ViewerCommand::Play {
+                    path,
+                    measure,
+                    battle,
+                    play_overrides,
+                    window_overrides,
+                } => {
+                    if let Some(id) = &window_overrides.monitor
+                        && id != "primary"
+                        && self.window.as_ref().is_some_and(|w| {
+                            !w.available_monitors()
+                                .any(|m| crate::window_config::monitor_config_name(&m) == *id)
+                        })
+                    {
+                        tracing::error!(monitor = %id, "viewer monitor not found; use monitors list");
+                        return;
+                    }
+                    if let Err(error) =
+                        self.boot.app_config.set_cli_window(window_overrides.clone())
+                    {
+                        tracing::error!(%error, "invalid viewer window options");
+                        return;
+                    }
+                    // Each external request replaces the preceding chart's CLI settings.
+                    self.boot.profile_config.set_cli_play(play_overrides);
+                    self.sync_select_play_options_from_profile();
+                    if !window_overrides.is_empty()
+                        && let Some(window) = self.window.clone()
+                    {
+                        let video = &self.boot.app_config.video;
+                        let monitor = select_monitor(
+                            &video.monitor_name,
+                            window.available_monitors(),
+                            window.primary_monitor(),
+                        );
+                        window.set_fullscreen(fullscreen_from_config(video, monitor.clone()));
+                        if matches!(video.mode, WindowMode::Windowed) {
+                            if window_overrides.monitor.is_some()
+                                && let Some(monitor) = monitor
+                            {
+                                window.set_outer_position(monitor.position());
+                            }
+                            let _ = window
+                                .request_inner_size(PhysicalSize::new(video.width, video.height));
+                        }
+                        self.ui.applied_window_mode = video.mode.clone();
+                    }
                     if let Err(error) = self.play_viewer_chart(&path, measure, battle) {
                         tracing::error!(path = %path.display(), measure, battle, %error, "external viewer play request failed");
                     }

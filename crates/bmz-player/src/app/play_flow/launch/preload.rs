@@ -19,6 +19,15 @@ impl WinitApp {
 
     pub(super) fn apply_rival_play_overrides(&self, chart_id: i64, options: &mut PlayStartOptions) {
         options.rival_name = self.select.select_ir.active_rival_display_name().map(str::to_string);
+        if self.boot.profile_config.cli_play.as_ref().is_some_and(|state| {
+            state.0.seed.is_some()
+                || ["arrange", "arrange-2p", "double-option"]
+                    .iter()
+                    .any(|key| state.0.values.contains_key(*key))
+        }) {
+            // An explicit CLI chart layout takes priority over profile rival replication.
+            return;
+        }
         if options.session_mode.is_practice()
             || options.replay_player.is_some()
             || self.play.active_course.is_some()

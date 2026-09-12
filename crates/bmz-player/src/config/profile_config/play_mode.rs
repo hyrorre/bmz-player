@@ -16,6 +16,11 @@ impl ProfileConfig {
     /// from the legacy-compatible editable mirror so unsaved UI changes are
     /// immediately visible to play/session construction.
     pub fn play_mode_config(&self, key_mode: KeyMode) -> PlayModeConfig {
+        if key_mode != self.active_play_mode && self.cli_play.is_some() {
+            let mut effective = self.clone();
+            effective.activate_play_mode(key_mode);
+            return effective.editable_play_mode_config();
+        }
         if key_mode == self.active_play_mode {
             return self.editable_play_mode_config();
         }
@@ -30,6 +35,7 @@ impl ProfileConfig {
         if key_mode == self.active_play_mode {
             return;
         }
+        let cli = self.clear_cli_play();
         self.sync_active_play_mode();
         let next = self
             .play_mode
@@ -38,19 +44,27 @@ impl ProfileConfig {
             .unwrap_or_else(|| self.editable_play_mode_config());
         self.apply_editable_play_mode_config(&next);
         self.active_play_mode = key_mode;
+        if let Some(cli) = cli {
+            self.set_cli_play(cli);
+        }
     }
 
     /// Copies the editable legacy-compatible fields into the persistent map.
     pub fn sync_active_play_mode(&mut self) {
+        let cli = self.clear_cli_play();
         self.play_mode.insert(
             self.active_play_mode.play_map_key().to_string(),
             self.editable_play_mode_config(),
         );
+        if let Some(cli) = cli {
+            self.set_cli_play(cli);
+        }
     }
 
     /// Migrates old profiles by copying their single set of values to every
     /// supported key mode, then restores the K7 editable mirror.
     pub fn normalize_play_mode_configs(&mut self) {
+        let cli = self.clear_cli_play();
         self.lane.normal_hispeed_level =
             crate::config::play::normalize_normal_hispeed_level(self.lane.normal_hispeed_level);
         self.lane.constant_fade_ms = self.lane.constant_fade_ms.clamp(
@@ -69,6 +83,9 @@ impl ProfileConfig {
         self.active_play_mode = KeyMode::K7;
         let mode7 = self.play_mode.get(KeyMode::K7.play_map_key()).cloned().unwrap_or(legacy);
         self.apply_editable_play_mode_config(&mode7);
+        if let Some(cli) = cli {
+            self.set_cli_play(cli);
+        }
     }
 
     fn editable_play_mode_config(&self) -> PlayModeConfig {

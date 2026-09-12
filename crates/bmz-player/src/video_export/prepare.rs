@@ -44,6 +44,7 @@ pub fn prepare(
     let imported =
         crate::storage::import::import_chart_file(&mut library, &chart_path, None, Some(seed), 0)?;
     profile.activate_play_mode(imported.chart.metadata.key_mode);
+    profile.set_cli_play(options.play_overrides.clone());
     let mut play_options = crate::app::offline_play_options(&profile);
     play_options.bms_random_seed = Some(seed);
     play_options.arrange_seed = Some((seed & 0xff_ffff) as i64);

@@ -17,6 +17,8 @@ bmz-player export video "chart.bms" -o "out.mp4" --fps 60000/1001 --seed 42
 
 ## オプション
 
+配置・ゲージ・GAS・HSなどは[共通CLIオプション](cli-overrides.md)でも指定できます。
+
 | オプション | 既定値・意味 |
 |---|---|
 | `-o` / `--output` | 必須。出力先 `.mp4` |
