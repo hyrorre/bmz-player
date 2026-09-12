@@ -1,6 +1,39 @@
 use super::*;
 
 #[test]
+fn wmii_lr2_battle_bga_inherits_profile_stretch_when_available() {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../data/skins/WMII_FHD_LR2/play/FHDPLAY_AC_Battle.lr2skin");
+    if !path.is_file() {
+        return;
+    }
+    let loaded = load_skin_document_uncached(
+        &path,
+        SkinKind::Play,
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+        &LuaLoadRuntimeState::default(),
+    )
+    .unwrap();
+    let bga = loaded.document.bga.as_ref().expect("BATTLE skin has a BGA");
+    let destinations = loaded
+        .document
+        .destination
+        .iter()
+        .filter_map(|entry| match entry {
+            bmz_render::skin::DestinationListEntry::Single(destination)
+                if destination.id == bga.id =>
+            {
+                Some(destination)
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert!(!destinations.is_empty());
+    assert!(destinations.iter().all(|destination| destination.stretch == -1));
+}
+
+#[test]
 fn wmii_lr2_battle_renders_live_gauges_hispeed_and_opponent_score_when_available() {
     use bmz_render::skin::{
         SKIN_REF_BMZ_LR2_GAUGE_2P, SKIN_REF_BMZ_LR2_GAUGE_TYPE_1P, SKIN_REF_BMZ_LR2_GAUGE_TYPE_2P,

@@ -501,6 +501,19 @@ fn bga_destination_uses_profile_stretch_when_destination_omits_stretch() {
 }
 
 #[test]
+fn lr2_unspecified_stretch_keeps_ordinary_image_geometry() {
+    let rect = Rect { x: 0.1, y: 0.2, width: 0.3, height: 0.4 };
+    let uv = TextureRegion { x: 0.0, y: 0.0, width: 1.0, height: 1.0 };
+    let source = SkinImageSize { width: 256.0, height: 128.0 };
+    for stretch in [-1, 0] {
+        let (actual_rect, actual_uv) =
+            stretch_skin_image_geometry(stretch, rect, uv, source, 100, 100);
+        assert_eq!(actual_rect, rect);
+        assert_eq!(actual_uv, uv);
+    }
+}
+
+#[test]
 fn bga_destination_stretch_overrides_profile_stretch() {
     let document: SkinDocument = serde_json::from_str(
         r#"

@@ -406,6 +406,31 @@ fn lr2_play_headers_and_stretch_are_preserved() {
 }
 
 #[test]
+fn lr2_bga_stretch_distinguishes_unspecified_from_explicit_full() {
+    let path = Path::new("skin/play/test.lr2skin");
+    let files = BTreeMap::new();
+    for (directive, expected) in [(None, -1), (Some(0), 0), (Some(1), 1), (Some(8), 8)] {
+        let mut builder = CsvBuilder::new(path, Header::default(), &files);
+        if let Some(stretch) = directive {
+            builder.execute(&parse_csv_line(&format!("#STRETCH,{stretch}")).unwrap()).unwrap();
+        }
+        for line in [
+            "#IMAGE,parts/frame.png",
+            "#SRC_IMAGE,0,0,0,0,10,10,1,1,0,0",
+            "#DST_IMAGE,0,0,0,0,100,100,0,255,255,255,255,0,0,0,0,0,0,0,0,0",
+            "#SRC_BGA,0",
+            "#DST_BGA,0,0,0,0,100,100,0,255,255,255,255,0,0,0,0,0,0,0,0,0",
+        ] {
+            builder.execute(&parse_csv_line(line).unwrap()).unwrap();
+        }
+        assert_eq!(builder.destinations.len(), 2);
+        for destination in &builder.destinations {
+            assert_eq!(destination["stretch"], json!(expected));
+        }
+    }
+}
+
+#[test]
 fn lr2_bargraph_preserves_negative_fill_direction() {
     let files = BTreeMap::new();
     let skin_path = unique_test_dir("bmz-lr2-negative-graph").join("play.lr2skin");

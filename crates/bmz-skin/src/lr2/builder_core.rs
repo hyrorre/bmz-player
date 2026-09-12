@@ -42,7 +42,8 @@ impl<'a> CsvBuilder<'a> {
             current: None,
             conditional_ops: Vec::new(),
             runtime_option_aliases: HashMap::new(),
-            stretch: 0,
+            // Unspecified BGA stretch inherits the profile, as in beatoraja.
+            stretch: -1,
             lr2_gauge_id: None,
             lr2_gauge_add_x: 0,
             lr2_gauge_add_y: 0,
