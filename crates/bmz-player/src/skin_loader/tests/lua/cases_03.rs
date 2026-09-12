@@ -304,7 +304,19 @@ fn milliondollar_result_rank_diff_uses_load_time_result_scores_when_available() 
     assert_eq!(best_rank.y, 0, "3021/3100 must select the AAA row");
     assert_eq!(next_rank.x, 951, "positive rank difference must select the plus label");
     assert_eq!(next_rank.y, 18, "AAA+ must select the plus row");
-    assert_eq!(next_rank_diff.value_expr, "121");
+    let callback_id = next_rank_diff
+        .value_expr
+        .strip_prefix("bmz:lua_value_callback:")
+        .expect("next-rank difference should retain a Lua callback")
+        .parse::<usize>()
+        .expect("valid Lua callback ID");
+    let mut lua_runtime = decoded.lua_runtime.expect("MILLIONDOLLAR value callback runtime");
+    let state = SkinDrawState::default();
+    let text_values = BTreeMap::new();
+    let provider =
+        RenderLuaMainState { state: &state, enabled_options: &[], text_values: &text_values };
+    lua_runtime.begin_frame();
+    assert_eq!(lua_runtime.evaluate_number(callback_id, &provider), Some(121.0));
 }
 
 #[test]

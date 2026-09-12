@@ -184,23 +184,13 @@ fn wmii_course_result_uses_native_stage_titles_and_result_data() {
     )
     .expect("unmodified WMII course result should decode with native stage data");
 
-    for (id, expected) in [("stage_gauge4", "88"), ("stage_score4", "3456"), ("stage_miss4", "13")]
-    {
-        let value = loaded
-            .document
-            .value
-            .iter()
-            .find(|value| value.id == id)
-            .unwrap_or_else(|| panic!("missing {id}"));
-        assert_eq!(value.value_expr, expected, "unexpected {id} expression");
-    }
-    let graph = loaded
+    let graph_expr = loaded
         .document
         .graph
         .iter()
         .find(|graph| graph.id == "stage_scoreGraph4")
+        .map(|graph| graph.value_expr.clone())
         .expect("missing stage 4 score-rate graph");
-    assert_eq!(graph.value_expr, "0.75");
     assert!(loaded.document.destination.iter().any(|entry| matches!(
         entry,
         DestinationListEntry::Single(destination) if destination.id == "courseTitle4"
@@ -223,6 +213,36 @@ fn wmii_course_result_uses_native_stage_titles_and_result_data() {
             .map(Some)
             .as_ref()
     );
+
+    let mut lua_runtime = loaded.lua_runtime.expect("WMII stage values should use Lua callbacks");
+    let state = SkinDrawState::default();
+    let text_values = BTreeMap::new();
+    let provider =
+        RenderLuaMainState { state: &state, enabled_options: &[], text_values: &text_values };
+    for (id, expected) in [("stage_gauge4", 88.0), ("stage_score4", 3456.0), ("stage_miss4", 13.0)]
+    {
+        let value = loaded
+            .document
+            .value
+            .iter()
+            .find(|value| value.id == id)
+            .unwrap_or_else(|| panic!("missing {id}"));
+        let callback_id = value
+            .value_expr
+            .strip_prefix("bmz:lua_value_callback:")
+            .unwrap_or_else(|| panic!("{id} should retain a Lua callback: {}", value.value_expr))
+            .parse::<usize>()
+            .expect("valid Lua callback ID");
+        lua_runtime.begin_frame();
+        assert_eq!(lua_runtime.evaluate_number(callback_id, &provider), Some(expected), "{id}");
+    }
+    let graph_callback_id = graph_expr
+        .strip_prefix("bmz:lua_value_callback:")
+        .expect("stage score-rate graph should retain a Lua callback")
+        .parse::<usize>()
+        .expect("valid Lua callback ID");
+    lua_runtime.begin_frame();
+    assert_eq!(lua_runtime.evaluate_number(graph_callback_id, &provider), Some(0.75));
 }
 
 #[test]
