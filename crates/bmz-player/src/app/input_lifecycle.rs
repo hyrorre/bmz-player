@@ -1,5 +1,9 @@
 use super::*;
 
+#[cfg(windows)]
+#[path = "input_lifecycle/windows_modal_redraw.rs"]
+mod windows_modal_redraw;
+
 impl WinitApp {
     pub(super) fn sync_input_capture_target(&self) {
         let route = if self.raw_input_gameplay_blocked() {
@@ -263,6 +267,10 @@ impl WinitApp {
         match event_loop.create_window(attributes) {
             Ok(window) => {
                 let window = Arc::new(window);
+                #[cfg(windows)]
+                if let Err(error) = windows_modal_redraw::install(&window) {
+                    tracing::warn!(%error, "failed to enable redraw during window move/resize");
+                }
                 window.set_visible(true);
                 let mut size = surface_size_for_window(&window);
                 // サーフェス生成前に present mode とバックエンド設定を反映させておく。
