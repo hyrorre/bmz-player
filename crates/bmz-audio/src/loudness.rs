@@ -90,7 +90,7 @@ impl LoudnessAccumulator {
 
     fn push_interleaved_stereo(&mut self, frames: &[f32]) {
         debug_assert_eq!(frames.len() % 2, 0);
-        for frame in frames.chunks_exact(2) {
+        for frame in frames.as_chunks::<2>().0 {
             self.push_stereo(frame[0], frame[1]);
         }
     }

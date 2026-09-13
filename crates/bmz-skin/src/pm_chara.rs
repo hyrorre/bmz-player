@@ -248,7 +248,7 @@ fn parse_pair(pair: &str, radix: u32) -> Option<usize> {
 }
 
 fn pairs(value: &str) -> impl Iterator<Item = &str> {
-    value.as_bytes().chunks_exact(2).filter_map(|chunk| std::str::from_utf8(chunk).ok())
+    value.as_bytes().as_chunks::<2>().0.iter().filter_map(|chunk| std::str::from_utf8(chunk).ok())
 }
 
 struct RuntimeBuilder<'a> {

@@ -75,7 +75,7 @@ impl SampleRegion {
             0 => 0,
             1 => {
                 let source = &self.source.frames[absolute_start..absolute_start + mixed_frames];
-                for (output, sample) in output.chunks_exact_mut(2).zip(source) {
+                for (output, sample) in output.as_chunks_mut::<2>().0.iter_mut().zip(source) {
                     let sample = safe_pcm(*sample) * gain;
                     output[0] += sample;
                     output[1] += sample;
@@ -85,7 +85,9 @@ impl SampleRegion {
             2 => {
                 let source_start = absolute_start * 2;
                 let source = &self.source.frames[source_start..source_start + mixed_frames * 2];
-                for (output, source) in output.chunks_exact_mut(2).zip(source.chunks_exact(2)) {
+                for (output, source) in
+                    output.as_chunks_mut::<2>().0.iter_mut().zip(source.as_chunks::<2>().0)
+                {
                     output[0] += safe_pcm(source[0]) * gain;
                     output[1] += safe_pcm(source[1]) * gain;
                 }
@@ -93,7 +95,9 @@ impl SampleRegion {
             }
             channels => {
                 let channels = channels as usize;
-                for (frame, output) in output.chunks_exact_mut(2).take(mixed_frames).enumerate() {
+                for (frame, output) in
+                    output.as_chunks_mut::<2>().0.iter_mut().take(mixed_frames).enumerate()
+                {
                     let source = (absolute_start + frame) * channels;
                     output[0] += safe_pcm(self.source.frames[source]) * gain;
                     output[1] += safe_pcm(self.source.frames[source + 1]) * gain;
