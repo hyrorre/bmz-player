@@ -22,7 +22,7 @@ FROM ubuntu:22.04 AS verify
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
        python3 strace xvfb xauth mesa-vulkan-drivers libvulkan1 \
-       libx11-6 libxcursor1 libxi6 libxrandr2 libxkbcommon0 \
+       libx11-6 libxcursor1 libxi6 libxrandr2 libxkbcommon0 libxkbcommon-x11-0 \
        libasound2 libasound2-plugins libpulse0 pulseaudio \
        libfontconfig1 libudev1 ca-certificates \
     && useradd --create-home --uid 1000 player

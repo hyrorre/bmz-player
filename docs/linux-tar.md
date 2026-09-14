@@ -25,7 +25,7 @@ packages with:
 
 ```sh
 sudo apt-get install libvulkan1 libgl1 libegl1 libx11-6 libxcursor1 libxi6 \
-  libxrandr2 libxkbcommon0 libwayland-client0 libwayland-cursor0 libwayland-egl1 \
+  libxrandr2 libxkbcommon0 libxkbcommon-x11-0 libwayland-client0 libwayland-cursor0 libwayland-egl1 \
   libasound2 libasound2-plugins libpulse0 libfontconfig1 libudev1 ca-certificates
 ```
 
@@ -71,7 +71,15 @@ of disk space, network access for dependencies, and time for Rust compilation.
 
 Output is `dist/linux-tar/bmz-player-<version>-linux-x86_64.tar.gz` and
 `SHA256SUMS.txt`. The archive includes `sources/`, so it is deliberately larger
-than a binary-only archive. Run the **Optional Linux tar.gz** workflow manually
+than a binary-only archive. A failed runtime check leaves the completed archive
+for diagnosis; consider it validated only when the command exits successfully.
+To validate an existing archive without compiling again:
+
+```sh
+scripts/package-linux-tar.sh --verify dist/linux-tar/bmz-player-<version>-linux-x86_64.tar.gz
+```
+
+Run the **Optional Linux tar.gz** workflow manually
 to download the same verified archive as an Actions artifact. GitHub requires
 the workflow to exist on the repository's default branch before manual dispatch;
 then the run dialog can select another branch. See the
