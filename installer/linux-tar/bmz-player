@@ -1,0 +1,13 @@
+#!/bin/sh
+set -eu
+
+# Resolve the launcher (including symlinks), without changing the caller's cwd.
+launcher=$(readlink -f -- "$0")
+package_dir=${launcher%/*}
+export BMZ_RESOURCE_DIR="${BMZ_RESOURCE_DIR:-$package_dir/resources}"
+if [ -z "${BMZ_DATA_DIR:-}" ]; then
+    export BMZ_DATA_DIR="${XDG_DATA_HOME:-${HOME:?HOME or BMZ_DATA_DIR is required}/.local/share}/bmz-player"
+    export BMZ_CACHE_DIR="${BMZ_CACHE_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}/bmz-player}"
+    export BMZ_LOGS_DIR="${BMZ_LOGS_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/bmz-player/logs}"
+fi
+exec "$package_dir/bin/bmz-player" "$@"

@@ -47,6 +47,13 @@ Development installs are not redistributable artifacts by themselves:
 
 Before publishing an installer, archive, app bundle, or container image, check the concrete FFmpeg binaries included in that artifact.
 
+The optional [Linux tar.gz build](linux-tar.md) builds FFmpeg from a verified
+upstream source archive and includes that archive and its configure command.
+Other bundled Ubuntu shared libraries include their package copyright notices,
+exact binary/source versions and matching APT source archives. The application
+source and vendored Cargo dependencies also accompany the binary. Keep these
+sources and notices together when redistributing the archive.
+
 ## ASIO SDK
 
 BMZ Player enables ASIO support on Windows through `cpal/asio`, which depends on

@@ -473,6 +473,14 @@ FFmpeg は `ffmpeg-next` 経由で音声/動画 decode に使う。Flatpak artif
 `docs/licenses.md` の release checklist に従う。`--enable-nonfree` を含む FFmpeg build は
 配布物に含めない。
 
+## Optional Linux tar.gz
+
+An opt-in Ubuntu 22.04 / glibc 2.35+ x86_64 archive can be built and validated
+with `scripts/package-linux-tar.sh` or the separate manual **Optional Linux
+tar.gz** workflow. See [Linux tar.gz](linux-tar.md) for host requirements, paths,
+source/notice contents and extracted-package validation. This does not change
+the official release artifacts or the existing Flatpak path.
+
 ## GitHub Actions release build
 
 `.github/workflows/release-apps.yml` は GitHub Release が `published` になったときに
