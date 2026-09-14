@@ -148,3 +148,26 @@ docker build --pull --no-cache --target build -t bmz-linux-tar-build installer/l
 ```
 
 Use the equivalent Podman command when building with Podman.
+
+## Local validation record (2026-09-15)
+
+The archive built from `308ca195` was verified with the final `--verify` checker
+using rootless Podman, Ubuntu 22.04/glibc 2.35, Rust 1.98.1 and GCC 11.4.0.
+Later changes only adjust the verification fixtures and documentation; the Rust
+sources, launcher and packaged libraries/resources are unchanged.
+
+- `cargo fmt --check`, `cargo check --locked`, `cargo clippy --locked`: passed.
+- `cargo test --locked`: 1,941 passed, 0 failed, 3 existing ignored tests.
+- Extracted archive: all 25 bundled libraries and their relocations resolved;
+  the missing-library negative control, read-only sample play, resource opens,
+  relative CLI arguments, BMZ/XDG overrides and user DB/profile writes passed.
+- All 3,483 packaged skin/font/sample files matched their committed Git blobs,
+  including executable modes. Notices, corresponding sources for 18 Ubuntu
+  packages, FFmpeg source and vendored application source were present.
+- The archive is 2,172,396,883 bytes (about 2.02 GiB), including sources;
+  `sha256sum --check SHA256SUMS.txt` passed.
+
+GitHub-hosted Actions/Docker execution has not been run; local validation used
+the same entry point with Podman. Real GPU drivers, Wayland, audible output,
+latency and physical controllers remain unverified. The ignored Rust tests are
+two manual skin profiling helpers and a GPU/external-FFmpeg video export test.

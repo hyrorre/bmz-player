@@ -42,16 +42,7 @@ os.chdir(cwd)
 run(str(launcher), "--help")
 assert not (home / ".local/share/bmz-player").exists()
 sample = package / "resources/songs/sample-playable"
-shutil.copytree(sample, cwd / "relative songs")
-run(str(launcher), "songs", "add", "./relative songs")
-run(str(launcher), "songs", "load", "./relative songs")
 data = home / ".local/share/bmz-player"
-assert (data / "config.toml").is_file()
-assert (home / ".cache/bmz-player").is_dir()
-assert (home / ".local/state/bmz-player/logs").is_dir()
-assert not list((cwd / "data").iterdir())
-with sqlite3.connect(data / "library.db") as db:
-    assert db.execute("SELECT COUNT(*) FROM charts").fetchone()[0] > 0
 
 # Real startup decodes the packaged skin/font/sample on software Vulkan and a
 # null PulseAudio sink. This tests packaging, not hardware performance or sound.
@@ -59,6 +50,7 @@ run("pulseaudio", "--start", "--exit-idle-time=-1")
 run("pactl", "load-module", "module-null-sink")
 trace = home / "resource-access.trace"
 run("timeout", "120", "xvfb-run", "-a", "strace", "-f", "-e", "trace=openat",
+    "-e", "status=successful",
     "-o", str(trace), str(launcher), "--boot-play-sample", "--autoplay-on-start",
     "--renderer", "vulkan", "--smoke-exit-after-play-frames", "3")
 opened = [line for line in trace.read_text().splitlines() if re.search(r"= [0-9]+$", line)]
@@ -66,6 +58,20 @@ for resource in ("skins/default/play7.json", "NotoSansCJK-Regular.ttc", "sample-
     assert any(str(package / "resources") in line and resource in line for line in opened), resource
 assert (data / "profiles/default/profile.toml").is_file()
 assert (data / "profiles/default/score.db").is_file()
+assert (data / "config.toml").is_file()
+assert (home / ".cache/bmz-player").is_dir()
+assert (home / ".local/state/bmz-player/logs").is_dir()
+assert not list((cwd / "data").iterdir())
+
+# Use a different chart hash so library deduplication cannot redirect packaged
+# sample playback to the caller's copy (or hide a failed relative-path scan).
+shutil.copytree(sample, cwd / "relative songs")
+with (cwd / "relative songs/sample-playable.bms").open("a") as chart:
+    chart.write("\n#TITLE Relative path smoke\n")
+run(str(launcher), "songs", "add", "./relative songs")
+run(str(launcher), "songs", "load", "./relative songs")
+with sqlite3.connect(data / "library.db") as db:
+    assert db.execute("SELECT COUNT(*) FROM charts").fetchone()[0] == 2
 
 effective = run(str(launcher), "./relative songs/sample-playable.bms", "--print-effective-options",
                 capture_output=True).stdout
@@ -86,7 +92,7 @@ run(str(launcher), "songs", "add", "./relative songs", env=overrides)
 assert (cwd / "custom data/config.toml").is_file()
 assert (cwd / "custom cache").is_dir()
 assert (cwd / "custom logs").is_dir()
-shutil.copytree(data / "profiles", cwd / "custom data/profiles")
+shutil.copytree(data / "profiles", cwd / "custom data/profiles", dirs_exist_ok=True)
 effective = run(str(launcher), "--boot-play-sample", "--print-effective-options",
                 env=overrides, capture_output=True).stdout
 assert "alternate resources" in effective, effective
