@@ -166,8 +166,13 @@ sources, launcher and packaged libraries/resources are unchanged.
   packages, FFmpeg source and vendored application source were present.
 - The archive is 2,172,396,883 bytes (about 2.02 GiB), including sources;
   `sha256sum --check SHA256SUMS.txt` passed.
+- The user extracted this archive on a CachyOS desktop and launched
+  `--boot-play-sample` with a separate `BMZ_DATA_DIR`, confirming the displayed
+  game, audible output and keyboard input. This is an additional manual check;
+  it does not extend the supported baseline to CachyOS.
 
 GitHub-hosted Actions/Docker execution has not been run; local validation used
-the same entry point with Podman. Real GPU drivers, Wayland, audible output,
-latency and physical controllers remain unverified. The ignored Rust tests are
+the same entry point with Podman. An Ubuntu 22.04 physical desktop, specific GPU
+drivers, Wayland, latency and physical game controllers remain unverified.
+The ignored Rust tests are
 two manual skin profiling helpers and a GPU/external-FFmpeg video export test.
