@@ -380,8 +380,9 @@ jobs:
       - name: Package macOS app
         run: |
           if [[ "${{ needs.metadata.outputs.should_upload }}" == "true" ]]; then
-            [[ "${BMZ_MACOS_NOTARIZATION_READY:-0}" == "1" && -n "${BMZ_SPARKLE_PUBLIC_KEY}" ]] || {
-              echo "Automatic updates require Developer ID, notarization and BMZ_SPARKLE_PUBLIC_KEY" >&2
+            # Sparkle's EdDSA signing is independent of optional Developer ID signing/notarization.
+            [[ -n "${BMZ_SPARKLE_PUBLIC_KEY}" ]] || {
+              echo "BMZ_SPARKLE_PUBLIC_KEY must be configured before publishing automatic updates" >&2
               exit 1
             }
           fi

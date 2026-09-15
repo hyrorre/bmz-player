@@ -199,7 +199,8 @@ The macOS automatic updater bundles Sparkle 2.9.6 (MIT license).
 `scripts/prepare-sparkle.sh` pins the official archive and SHA256. Preserve its
 `LICENSE` in `Contents/Resources/licenses/Sparkle-LICENSE.txt` and in the combined
 third-party notices. The Sparkle framework and its helper/XPC bundles are signed
-with the application's Developer ID before notarization.
+with the application's signing identity (ad-hoc by default, or Developer ID when configured).
+Developer ID builds may additionally be notarized; Sparkle update archives are EdDSA-signed in either case.
 
 Before publishing a binary release:
 

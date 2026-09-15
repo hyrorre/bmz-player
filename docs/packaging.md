@@ -294,8 +294,10 @@ scripts/package-macos-app.sh --sign "Developer ID Application: ..."
 Developer ID 署名時は hardened runtime と secure timestamp を付ける。GitHub
 Actions などで作った `.app.zip` はダウンロード時に quarantine が付くため、ad-hoc
 署名だけの `.app` は Gatekeeper により「壊れている」と表示されることがある。
-通常のダブルクリック起動で配布する release artifact は Developer ID 署名後に
-notarization と stapling を行う。
+Apple Developer Program未加入の場合も、このad-hoc署名とSparkleの更新署名で公開できる。
+初回起動などで利用者による許可操作が必要になる場合があるため、
+[Appleの案内](https://support.apple.com/ja-jp/102445)を参照する。
+Developer ID署名・notarization・staplingは、証明書と認証情報を設定した場合に利用する。
 また、macOS の code signing は resource file path も sealed resource として記録する。
 `mz-select/customize/advanced` には説明用の 0 byte 日本語名ファイルが含まれるが、
 zip / artifact 展開時の Unicode 正規化差分で resource seal が壊れることがあるため、
@@ -538,9 +540,11 @@ release artifact は ASIO 対応を含む。`cpal/asio` が使う `asio-sys` bui
 ASIO SDK をビルド時に取得し、bindings 生成用に runner の LLVM `libclang` path を
 `LIBCLANG_PATH` で明示する。
 
-macOS job は arm64 / x64 の app zip を別々に作る。公開時にはDeveloper ID署名と
-notarizationを必須とする。次のsecretsに加え、[自動更新](auto-update.md) に記載した
-Windows / Sparkle の更新署名キーを設定する。
+macOS job は arm64 / x64 の app zip を別々に作る。Apple Developer Program未加入でも
+ad-hoc署名で公開できる。[自動更新](auto-update.md) に記載したWindows / Sparkleの
+更新署名キーは公開時に必須とする。
+
+Developer ID署名・公証を利用する場合だけ、次の任意secretsを設定する。
 
 - `BMZ_MACOS_CODESIGN_IDENTITY`
 - `BMZ_MACOS_CERTIFICATE_P12_BASE64`
@@ -550,9 +554,10 @@ Windows / Sparkle の更新署名キーを設定する。
 - `BMZ_MACOS_NOTARY_PASSWORD`
 - `BMZ_MACOS_NOTARY_TEAM_ID`
 
-secrets が揃っている場合、macOS job は Developer ID 署名、notarization、stapling、
-`spctl` 検証を行ってから `.app.zip` を作る。未設定でのad-hoc署名は
-`upload_to_release=false` のdry runのみ許可する。
+署名用secretsが揃っている場合はDeveloper ID署名を使い、公証用secretsも揃っている場合は
+notarization、stapling、`spctl` 検証を行ってから `.app.zip` を作る。
+未設定ならad-hoc署名で作成し、`upload_to_release=true` でも公開できる。
+どちらの場合も最終ZIPにはSparkleのEdDSA署名を付け、埋込み公開鍵との照合に成功してから公開する。
 
 macOS の arm64 runner は `macos-15`、x64 runner は `macos-15-intel` を使う。
 workflow matrix から arm64 には `MACOSX_DEPLOYMENT_TARGET=11.0`、x64 には

@@ -76,19 +76,31 @@ helper が準備完了してから本体を正常終了し、すべての packag
 
 ### macOS
 
+Apple Developer Program未加入でも公開できる。アプリ本体・同梱framework/helperは
+アドホック署名し、更新ZIPにはSparkleのEdDSA署名を付ける。両者は別の署名で、
+Developer ID署名・公証を使わない場合も更新ZIPの署名検証は必須とする。
+
 - Repository variable `BMZ_SPARKLE_PUBLIC_KEY`: Sparkle `generate_keys` が表示する公開鍵。
-- Repository secret `BMZ_SPARKLE_PRIVATE_KEY`: Sparkle `generate_keys -x` が出力する秘密鍵。
-- 既存の `BMZ_MACOS_CODESIGN_*`、証明書、Keychain、`BMZ_MACOS_NOTARY_*` secrets も必要。
-- 公開ビルドは Developer ID 署名・公証・stapling・署名キーの設定を必須にする。
+- Repository secret `BMZ_SPARKLE_PRIVATE_KEY`: Sparkle `generate_keys -x <ファイル>` が書き出す秘密鍵ファイルの内容。
+- 公開には上記の公開鍵・秘密鍵が必要。鍵は一度生成して継続使用し、安全にバックアップする。
+- Appleの証明書・Keychain・`BMZ_MACOS_NOTARY_*` secretsは任意。未設定ならアドホック署名で公開し、公証・staplingを省略する。
+- Developer ID署名用secretsが揃っていればその証明書を使い、公証用secretsも揃っていれば公証・staplingを行う。設定済みの署名・公証処理が失敗した場合は公開を中止する。
 - ローカルで組み込む場合は `bash scripts/prepare-sparkle.sh /tmp/bmz-sparkle` を実行し、
-  `BMZ_SPARKLE_DIR=/tmp/bmz-sparkle` と `BMZ_SPARKLE_PUBLIC_KEY` を指定して package script を実行する。
+  `BMZ_SPARKLE_DIR=/tmp/bmz-sparkle` と `BMZ_SPARKLE_PUBLIC_KEY` を指定し、package scriptに `--bundle-dylibs --ad-hoc-sign` を渡す。
 - 配布用 `.app` に Sparkle.framework をコピーし、入れ子の helper / XPC / framework から順に署名する。
-- 更新ZIPは公証・stapling後に最終生成し、SparkleのEdDSA署名を付ける。展開前の署名検証を有効にする。
+- 更新ZIPはコード署名後（公証する場合はstapling後）に最終生成し、SparkleのEdDSA署名を付ける。展開前の署名検証を有効にする。
 - Feedは `update-feed` prerelease の `appcast-{stable|prerelease}-{x64|arm64}.xml`。
 - Sparkle の自動スケジューラー・自動ダウンロード・システム情報送信は無効。BMZが確認時刻を管理する。
 - Read-only mount、App Translocation、権限不足などの失敗はSparkleのエラーとReleaseページへの導線で扱う。
 - 再起動時の保存先は `~/Library/Caches/net.hyrorre.bmz-player/update-restart.json` に一時保存する。
   同じインストール先で引数なしに起動した時だけ消費し、10分で失効する。
+
+未加入での最小設定はSparkleの公開鍵variable・秘密鍵secretのみ（Windows用更新署名キーは別途必要）。
+Appleの署名・公証secretsは未設定のまま、通常のRelease公開または `upload_to_release=true` で配布する。
+アドホック署名はAppleによる開発元確認・公証を提供しないため、ダウンロードしたアプリの
+初回起動などでGatekeeperの警告や利用者による許可操作が必要になる場合がある。
+ZIPを展開して `.app` をApplications等の書き込み可能な場所に配置し、
+[Appleの案内](https://support.apple.com/ja-jp/102445)に従って起動する。
 
 API / 配布仕様: [Sparkle](https://sparkle-project.org/documentation/)、
 [SPUUserDriver](https://sparkle-project.org/documentation/api-reference/Protocols/SPUUserDriver.html)。
@@ -116,7 +128,8 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo fmt --check
 ```
 
-公開前には、署名済み旧版→新版でWindows実配布物とmacOS両CPUの更新・再起動・最低対応OSを確認する。
+公開前には、更新署名付きの旧版→新版でWindows実配布物とmacOS両CPUの更新・再起動・最低対応OSを確認する。
+macOSはアドホック署名・未公証の実配布物をダウンロードして、初回起動とSparkle更新後の再起動を確認する。
 通常データとは別のテスト用データを使い、通信中断、容量不足、別プロセス、読み取り専用配置も確認する。
 
 macOSでは固定SDKを用意してネイティブブリッジのコンパイルとJSON境界も確認する:
