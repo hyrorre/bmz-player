@@ -171,8 +171,14 @@ sources, launcher and packaged libraries/resources are unchanged.
   game, audible output and keyboard input. This is an additional manual check;
   it does not extend the supported baseline to CachyOS.
 
-GitHub-hosted Actions/Docker execution has not been run; local validation used
-the same entry point with Podman. An Ubuntu 22.04 physical desktop, specific GPU
-drivers, Wayland, latency and physical game controllers remain unverified.
-The ignored Rust tests are
-two manual skin profiling helpers and a GPU/external-FFmpeg video export test.
+GitHub-hosted Actions validation also passed on the Ubuntu 22.04 runner using
+Docker: [manual run 34915419246](https://github.com/khanwul/bmz-player/actions/runs/34915419246)
+built commit `dbdabb85`, passed the required Cargo checks (1,941 tests passed,
+3 ignored), and verified the extracted archive before successfully uploading
+`optional-linux-x86_64-tar` (2,172,285,632 bytes including the artifact ZIP wrapper).
+The run took approximately 22 minutes. Subsequent documentation changes do not
+change the tested packaging implementation.
+
+An Ubuntu 22.04 physical desktop, specific GPU drivers, Wayland, latency and
+physical game controllers remain unverified. The ignored Rust tests are two
+manual skin profiling helpers and a GPU/external-FFmpeg video export test.
