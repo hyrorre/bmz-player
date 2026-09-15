@@ -166,10 +166,6 @@ sources, launcher and packaged libraries/resources are unchanged.
   packages, FFmpeg source and vendored application source were present.
 - The archive is 2,172,396,883 bytes (about 2.02 GiB), including sources;
   `sha256sum --check SHA256SUMS.txt` passed.
-- The user extracted this archive on a CachyOS desktop and launched
-  `--boot-play-sample` with a separate `BMZ_DATA_DIR`, confirming the displayed
-  game, audible output and keyboard input. This is an additional manual check;
-  it does not extend the supported baseline to CachyOS.
 
 GitHub-hosted Actions validation also passed on the Ubuntu 22.04 runner using
 Docker: [manual run 34915419246](https://github.com/khanwul/bmz-player/actions/runs/34915419246)
