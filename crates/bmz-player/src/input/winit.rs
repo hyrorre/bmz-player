@@ -9,6 +9,24 @@ use super::shared::SharedInputBackend;
 
 pub const W_KEYBOARD_DEVICE_ID: DeviceId = DeviceId(0);
 
+pub fn released_shift_keys() -> Vec<PhysicalKey> {
+    #[cfg(windows)]
+    {
+        use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
+            GetAsyncKeyState, VK_LSHIFT, VK_RSHIFT,
+        };
+        [(KeyCode::ShiftLeft, VK_LSHIFT), (KeyCode::ShiftRight, VK_RSHIFT)]
+            .into_iter()
+            .filter_map(|(key, vk)| {
+                // SAFETY: GetAsyncKeyState takes a virtual-key code and no pointers.
+                (unsafe { GetAsyncKeyState(i32::from(vk)) } >= 0).then_some(PhysicalKey::Code(key))
+            })
+            .collect()
+    }
+    #[cfg(not(windows))]
+    Vec::new()
+}
+
 pub fn handle_key_parts(
     input: &SharedInputBackend,
     physical_key: PhysicalKey,

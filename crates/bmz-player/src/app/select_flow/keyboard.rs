@@ -2,13 +2,14 @@ use super::*;
 
 impl WinitApp {
     pub(super) fn route_keyboard_input(&mut self, event: &winit::event::KeyEvent) {
+        let mut event = event.clone();
+        event.repeat = self.input.keyboard_repeat(event.physical_key, event.repeat);
+        let event = &event;
         let control_event = ControlInputEvent::keyboard(event);
         self.input.track_control(&control_event);
-        if !event.repeat {
-            // holdは物理状態を正とし、単発操作とゲーム入力だけをチャタリング抑制する。
-            self.sync_select_holds_from_pressed_controls();
-            self.sync_play_control_holds_from_pressed_controls();
-        }
+        // Repeat suppression only applies to actions, never physical holds.
+        self.sync_select_holds_from_pressed_controls();
+        self.sync_play_control_holds_from_pressed_controls();
         if self.viewer_waiting {
             if self.route_waiting_viewer_keyboard(event) {
                 return;

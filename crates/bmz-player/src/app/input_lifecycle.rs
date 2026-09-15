@@ -20,7 +20,8 @@ impl WinitApp {
                         entries: Vec::new(),
                     }),
                 focused: self.ui.focused,
-                keyboard_enabled: self.boot.app_config.input.keyboard_enabled,
+                keyboard_enabled: self.keyboard_input_backend()
+                    == Some(KeyboardInputBackend::RawInput),
             })
         };
         if let Some(capture) = &self.gamepad {
@@ -55,10 +56,39 @@ impl WinitApp {
 
     pub(super) fn window_keyboard_gameplay_enabled(&self) -> bool {
         self.keyboard_input_backend() == Some(KeyboardInputBackend::Window)
-            && !self
-                .gamepad
-                .as_ref()
-                .is_some_and(crate::input::capture::InputCapture::native_keyboard_enabled)
+    }
+
+    /// WM_KEYUP can omit the first released Shift when both were held.
+    /// Repair app holds for either backend, and accepted winit lane inputs.
+    pub(super) fn reconcile_keyboard_modifier_releases(&mut self) {
+        if !self.ui.focused {
+            return;
+        }
+        let released: Vec<_> = crate::input::winit::released_shift_keys()
+            .into_iter()
+            .filter(|key| {
+                crate::input::winit::physical_key_to_control(*key).is_some_and(|control| {
+                    self.input
+                        .pressed_play_inputs
+                        .contains(&(crate::input::winit::W_KEYBOARD_DEVICE_ID, control))
+                })
+            })
+            .collect();
+        if released.is_empty() {
+            return;
+        }
+        let releases = self.input.reconcile_keyboard_releases(&released);
+        for event in releases.raw_keyboard.into_iter().chain(releases.window_keyboard) {
+            self.route_play_device_input(event);
+        }
+        for key in released {
+            if let Some(control) = physical_key_name(key) {
+                self.clear_select_hold_control(&control);
+            }
+        }
+        self.sync_select_holds_from_pressed_controls();
+        self.sync_play_control_holds_from_pressed_controls();
+        self.sync_viewer_wait_exit_holds();
     }
 
     pub(super) fn configure_device_events(&self, event_loop: &ActiveEventLoop) {

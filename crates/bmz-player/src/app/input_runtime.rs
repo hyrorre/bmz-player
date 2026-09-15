@@ -31,12 +31,10 @@ impl ControlInputEvent {
         repeat: bool,
     ) -> Self {
         let physical = physical_key_to_control(physical_key);
-        let name = (!repeat)
-            .then(|| match physical.as_ref()? {
-                PhysicalControl::KeyboardKey(name) => Some(name.clone()),
-                _ => None,
-            })
-            .flatten();
+        let name = match physical.as_ref() {
+            Some(PhysicalControl::KeyboardKey(name)) => Some(name.clone()),
+            _ => None,
+        };
         Self {
             device: W_KEYBOARD_DEVICE_ID,
             name,
@@ -79,6 +77,43 @@ pub(super) struct InputReleaseBatch {
 }
 
 impl AppInputRuntime {
+    /// Windows may mark the other Shift's first Press as a repeat because
+    /// both keys share VK_SHIFT. Only an already held physical key can repeat.
+    pub(super) fn keyboard_repeat(&self, key: PhysicalKey, repeat: bool) -> bool {
+        repeat
+            && physical_key_to_control(key).is_some_and(|control| {
+                self.pressed_play_inputs.contains(&(W_KEYBOARD_DEVICE_ID, control))
+            })
+    }
+
+    pub(super) fn reconcile_keyboard_releases(
+        &mut self,
+        released_keys: &[PhysicalKey],
+    ) -> InputReleaseBatch {
+        let mut releases =
+            InputReleaseBatch { raw_keyboard: Vec::new(), window_keyboard: Vec::new() };
+        for &key in released_keys {
+            self.track_control(&ControlInputEvent::keyboard_parts(
+                key,
+                ElementState::Released,
+                false,
+            ));
+            if self.raw_input_pressed_keys.remove(&key)
+                && let Some(event) =
+                    physical_key_to_device_input(key, ElementState::Released, false)
+            {
+                releases.raw_keyboard.push(event);
+            }
+            if self.window_input_pressed_keys.remove(&key)
+                && let Some(event) =
+                    physical_key_to_device_input(key, ElementState::Released, false)
+            {
+                releases.window_keyboard.push(event);
+            }
+        }
+        releases
+    }
+
     pub(super) fn track_control(&mut self, event: &ControlInputEvent) {
         if let Some(name) = event.name.as_deref() {
             if event.pressed {
@@ -275,6 +310,63 @@ mod tests {
             event.pressed,
         ));
         runtime.accept_app_event(config, crate::input::gamepad::to_device_input_event(event))
+    }
+
+    #[test]
+    fn both_shifts_survive_repeat_marked_press_and_other_key_input() {
+        for (first, second) in
+            [(KeyCode::ShiftLeft, KeyCode::ShiftRight), (KeyCode::ShiftRight, KeyCode::ShiftLeft)]
+        {
+            let mut runtime = AppInputRuntime::default();
+            let first = PhysicalKey::Code(first);
+            let second = PhysicalKey::Code(second);
+            runtime.track_control(&ControlInputEvent::keyboard_parts(
+                first,
+                ElementState::Pressed,
+                false,
+            ));
+            assert!(!runtime.keyboard_repeat(second, true));
+            runtime.track_control(&ControlInputEvent::keyboard_parts(
+                second,
+                ElementState::Pressed,
+                true,
+            ));
+            runtime.track_control(&ControlInputEvent::keyboard_parts(
+                PhysicalKey::Code(KeyCode::KeyD),
+                ElementState::Pressed,
+                false,
+            ));
+            assert!(runtime.pressed_controls.contains("LShift"));
+            assert!(runtime.pressed_controls.contains("RShift"));
+            assert!(runtime.keyboard_repeat(first, true));
+            assert!(runtime.keyboard_repeat(second, true));
+        }
+    }
+
+    #[test]
+    fn missing_shift_release_is_repaired_once_without_releasing_other_inputs() {
+        for key in [KeyCode::ShiftLeft, KeyCode::ShiftRight] {
+            let mut runtime = AppInputRuntime::default();
+            let key = PhysicalKey::Code(key);
+            let other = PhysicalKey::Code(KeyCode::KeyZ);
+            for held in [key, other] {
+                runtime.track_control(&ControlInputEvent::keyboard_parts(
+                    held,
+                    ElementState::Pressed,
+                    false,
+                ));
+                runtime.track_window_keyboard(held, ElementState::Pressed, false, true, true);
+            }
+            runtime.track_control(&ControlInputEvent::gamepad(DeviceId(2), "Button9", true));
+            let release = runtime.reconcile_keyboard_releases(&[key]);
+            assert_eq!(release.window_keyboard.len(), 1);
+            assert_eq!(release.window_keyboard[0].kind, InputKind::Release);
+            assert!(runtime.reconcile_keyboard_releases(&[key]).window_keyboard.is_empty());
+            assert!(runtime.pressed_controls.contains("Z"));
+            assert!(runtime.pressed_controls.contains("Button9"));
+            assert_eq!(runtime.pressed_play_inputs.len(), 2);
+            assert_eq!(runtime.release_keyboard_inputs().window_keyboard.len(), 1);
+        }
     }
 
     #[test]

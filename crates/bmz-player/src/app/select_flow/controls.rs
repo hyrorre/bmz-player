@@ -135,8 +135,9 @@ impl WinitApp {
             &self.select.select_keys,
         );
         self.input.select_e_action_holds = e_action_holds;
-        self.set_start_held(start_held);
-        self.set_select_held(select_held);
+        self.input.start_held = start_held;
+        self.input.select_held = select_held;
+        self.update_select_option_panel();
     }
 
     pub(super) fn update_select_e_action_hold(&mut self, control: &str, held: bool) {

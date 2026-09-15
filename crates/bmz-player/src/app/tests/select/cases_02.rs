@@ -219,6 +219,41 @@ fn select_option_panel_transition_tracks_independent_off_timers() {
 }
 
 #[test]
+fn shift_detail_panel_survives_other_keys_and_closes_after_reconciliation() {
+    let mut profile = ProfileConfig::new_default("default", "Default", 1);
+    for entry in &mut profile.input.ui.bindings {
+        if entry.device == "keyboard" {
+            match entry.action {
+                Some(InputActionConfig::E1) => entry.control = "LShift".into(),
+                Some(InputActionConfig::E2) => entry.control = "RShift".into(),
+                _ => {}
+            }
+        }
+    }
+    let keys = SelectKeyBindings::from_profile(&profile.input);
+    let mut runtime = AppInputRuntime::default();
+    for (key, repeat) in
+        [(KeyCode::ShiftLeft, false), (KeyCode::ShiftRight, true), (KeyCode::KeyD, false)]
+    {
+        runtime.track_control(&ControlInputEvent::keyboard_parts(
+            PhysicalKey::Code(key),
+            ElementState::Pressed,
+            repeat,
+        ));
+    }
+    let panel = |runtime: &AppInputRuntime| {
+        let (start, select, _) =
+            select_hold_state_from_pressed_controls(&runtime.pressed_controls, &keys);
+        select_option_panel_for_holds(start, select)
+    };
+    assert_eq!(panel(&runtime), 3);
+    runtime.reconcile_keyboard_releases(&[PhysicalKey::Code(KeyCode::ShiftLeft)]);
+    assert_eq!(panel(&runtime), 2);
+    runtime.reconcile_keyboard_releases(&[PhysicalKey::Code(KeyCode::ShiftRight)]);
+    assert_eq!(panel(&runtime), 0);
+}
+
+#[test]
 fn select_hold_state_rebuilds_from_pressed_controls() {
     let keys = default_select_keys();
     let pressed = HashSet::from(["Q".to_string(), "W".to_string()]);
