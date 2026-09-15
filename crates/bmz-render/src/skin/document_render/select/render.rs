@@ -53,7 +53,9 @@ macro_rules! skin_document_render_select_render_methods {
                 } else {
                     selected_row.map(|row| row.difficulty_name.as_str()).unwrap_or_default()
                 },
-                play_level: selected_row.map(|row| row.play_level.as_str()).unwrap_or_default(),
+                play_level: selected_row
+                    .map(|row| row.level_display_override.as_deref().unwrap_or(&row.play_level))
+                    .unwrap_or_default(),
                 target: if snapshot.in_settings { "" } else { &snapshot.target },
                 select_arrange: &snapshot.arrange,
                 select_arrange_2p: &snapshot.arrange_2p,

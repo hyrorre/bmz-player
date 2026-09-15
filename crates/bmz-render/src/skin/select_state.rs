@@ -64,6 +64,9 @@ pub(super) fn full_label(primary: &str, secondary: &str) -> String {
 }
 
 pub(super) fn select_row_level_number(row: &SelectRowSnapshot) -> i64 {
+    if let Some(level) = &row.level_display_override {
+        return level.trim().parse().unwrap_or(0);
+    }
     row.play_level.chars().filter(|ch| ch.is_ascii_digit()).collect::<String>().parse().unwrap_or(0)
 }
 

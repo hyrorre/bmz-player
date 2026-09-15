@@ -853,3 +853,68 @@ fn select_level_uses_chart_level_independently_of_table_memberships() {
         assert_eq!(select_row_level_number(&row), expected);
     }
 }
+
+#[test]
+fn table_level_override_applies_to_songlist_numbers_without_leaking_to_other_values() {
+    let mut document: SkinDocument = serde_json::from_str(
+        r#"{
+        "type":5,"w":100,"h":100,
+        "value":[{"id":"level","src":"digits","w":100,"h":10,"divx":10,"digit":1,"ref":160}],
+        "songlist":{
+            "id":"list","center":0,
+            "liston":[{"id":"bar","dst":[{"x":0,"y":50,"w":100,"h":10}]}],
+            "listoff":[{}, {"id":"bar","dst":[{"x":0,"y":30,"w":100,"h":10}]}],
+            "level":[{"id":"level","dst":[{"x":0,"y":0,"w":10,"h":10}]}]
+        },
+        "destination":[{"id":"list"},{"id":"level","dst":[{"x":80,"y":0,"w":10,"h":10}]}]
+    }"#,
+    )
+    .unwrap();
+    let sources = mock_source("digits", 100.0, 10.0);
+    let mut snapshot = SelectSnapshot {
+        rows: vec![
+            SelectRowSnapshot {
+                play_level: "5".into(),
+                initial_bpm: 6.0,
+                level_display_override: Some("2".into()),
+                in_library: true,
+                ..Default::default()
+            },
+            SelectRowSnapshot {
+                index: 1,
+                play_level: "9".into(),
+                initial_bpm: 8.0,
+                level_display_override: Some("7".into()),
+                in_library: true,
+                ..Default::default()
+            },
+        ],
+        ..Default::default()
+    };
+    let digits = |snapshot: &SelectSnapshot, document: &SkinDocument| {
+        document
+            .select_render_items(&sources, snapshot)
+            .into_iter()
+            .filter_map(|item| {
+                if let SkinRenderItem::Image { uv, .. } = item {
+                    Some((uv.x * 10.0).round() as i32)
+                } else {
+                    None
+                }
+            })
+            .collect::<Vec<_>>()
+    };
+    // Declared level objects use each row's override even with an explicit BPM ref.
+    // The same numeric object outside songlist.level still shows selected BPM.
+    assert_eq!(digits(&snapshot, &document), [2, 7, 6]);
+    snapshot.rows[0].level_display_override = Some("???".into());
+    assert_eq!(digits(&snapshot, &document), [7, 6]);
+    snapshot.rows[0].level_display_override = None;
+    snapshot.rows[1].level_display_override = None;
+    assert_eq!(digits(&snapshot, &document), [6, 8, 6]);
+    // Standard level refs follow the chosen display level outside the bar too.
+    document.value[0].ref_id = 96;
+    snapshot.rows[0].level_display_override = Some("2".into());
+    snapshot.rows[1].level_display_override = Some("7".into());
+    assert_eq!(digits(&snapshot, &document), [2, 7, 2]);
+}

@@ -261,6 +261,8 @@ pub struct SkinDrawState {
     pub select_has_document: bool,
     /// 選択中曲のレベル表記から取り出した数値。
     pub select_play_level: i64,
+    /// Only set while resolving numeric objects declared in songlist.level.
+    pub select_songlist_level_override: Option<i64>,
     /// 現在の曲のレベル表記から取り出した数値 (NUMBER_PLAYLEVEL=96)。
     pub play_level: i64,
     /// beatoraja OPTION_TABLE_SONG (1008).
@@ -596,6 +598,7 @@ impl Default for SkinDrawState {
             select_has_banner: false,
             select_has_document: false,
             select_play_level: 0,
+            select_songlist_level_override: None,
             play_level: 0,
             table_song: false,
             difficulty: 0,

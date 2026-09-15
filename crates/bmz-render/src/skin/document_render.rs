@@ -299,7 +299,7 @@ pub trait SkinDocumentRenderExt {
         row_origin: (i32, i32),
         images: &HashMap<&str, &SkinImageDef>,
         enabled_options: &[i32],
-        state: &SkinDrawState,
+        state: &mut SkinDrawState,
         sources: &HashMap<String, SkinDocumentTexture>,
     ) -> Vec<SkinRenderItem>;
 

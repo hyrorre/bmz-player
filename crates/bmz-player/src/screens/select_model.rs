@@ -118,6 +118,8 @@ pub fn normalized_course_ln_policy_for_definition(
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct DifficultyTableText {
     pub table_name: String,
+    /// Symbol-free level from the selected table entry, not merged memberships.
+    pub level: String,
     pub table_level: String,
     pub table_full: String,
 }
@@ -126,7 +128,7 @@ impl DifficultyTableText {
     pub fn from_parts(table_name: String, table_symbol: &str, level: &str) -> Self {
         let table_level = table_level_label(table_symbol, level);
         let table_full = format!("{table_level}{table_name}");
-        Self { table_name, table_level, table_full }
+        Self { table_name, level: level.to_string(), table_level, table_full }
     }
 
     pub fn from_entry(entry: &DifficultyTableEntryRecord) -> Self {

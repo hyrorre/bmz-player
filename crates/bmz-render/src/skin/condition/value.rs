@@ -194,6 +194,9 @@ pub(in crate::skin) fn skin_value_number_for_destination(
     value: &SkinValueDef,
     state: &SkinDrawState,
 ) -> Option<i64> {
+    if let Some(level) = state.select_songlist_level_override {
+        return Some(level);
+    }
     if value.ref_id == 0 && value.expr.trim().is_empty() && value.value_expr.trim().is_empty() {
         return Some(if state.play_level != 0 {
             state.play_level

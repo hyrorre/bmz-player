@@ -275,6 +275,9 @@ pub struct SelectRowSnapshot {
     pub genre: String,
     pub difficulty_name: String,
     pub play_level: String,
+    /// BMZ's level display setting inside a difficulty-table level folder.
+    /// None preserves the skin's normal behavior; the value has no table symbol.
+    pub level_display_override: Option<String>,
     pub table_level: String,
     pub table_text_primary: String,
     pub table_text_secondary: String,
@@ -366,6 +369,7 @@ impl Default for SelectRowSnapshot {
             genre: String::new(),
             difficulty_name: String::new(),
             play_level: String::new(),
+            level_display_override: None,
             table_level: String::new(),
             table_text_primary: String::new(),
             table_text_secondary: String::new(),

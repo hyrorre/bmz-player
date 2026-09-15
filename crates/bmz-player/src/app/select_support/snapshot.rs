@@ -250,6 +250,16 @@ fn select_chart_snapshot(
         })
         .map(|score| i64::from(score.clear_type).clamp(0, ClearType::Max as i64) as usize)
         .unwrap_or(0);
+    let level_display_override = context.in_difficulty_table_level.then(|| {
+        if context.profile.select.difficulty_table_level_display
+            == crate::config::profile_config::DifficultyTableLevelDisplay::Chart
+            && let Some(chart) = chart.filter(|chart| !chart.play_level.trim().is_empty())
+        {
+            chart.play_level.clone()
+        } else {
+            row.table_text.level.clone()
+        }
+    });
     let table_level = if context.in_difficulty_table_level
         && context.profile.select.difficulty_table_level_display
             == crate::config::profile_config::DifficultyTableLevelDisplay::Chart
@@ -268,6 +278,7 @@ fn select_chart_snapshot(
         genre: chart.map(|chart| chart.genre.clone()).unwrap_or_default(),
         difficulty_name: chart.map(|chart| chart.difficulty_name.clone()).unwrap_or_default(),
         play_level: chart.map(|chart| chart.play_level.clone()).unwrap_or_default(),
+        level_display_override,
         table_level,
         table_text_primary: row.table_text.table_name.clone(),
         table_text_secondary: row.table_text.table_level.clone(),

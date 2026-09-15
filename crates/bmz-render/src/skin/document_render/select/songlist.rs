@@ -98,7 +98,7 @@ macro_rules! skin_document_render_select_songlist_methods {
                             row_origin,
                             images,
                             enabled_options,
-                            &row_state,
+                            &mut row_state,
                             sources,
                         ));
                     }

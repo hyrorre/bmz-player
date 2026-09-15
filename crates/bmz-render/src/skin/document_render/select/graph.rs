@@ -99,11 +99,21 @@ macro_rules! skin_document_render_select_graph_methods {
             row_origin: (i32, i32),
             images: &HashMap<&str, &SkinImageDef>,
             enabled_options: &[i32],
-            state: &SkinDrawState,
+            state: &mut SkinDrawState,
             sources: &HashMap<String, SkinDocumentTexture>,
         ) -> Vec<SkinRenderItem> {
+            let level_override = if let Some(level) = &row.level_display_override {
+                // A numeric sprite cannot represent labels such as "???" or "地力A".
+                // Keep those labels in table text instead of inventing a number.
+                let Ok(level) = level.trim().parse::<i64>() else { return Vec::new() };
+                Some(level)
+            } else {
+                None
+            };
+            let previous =
+                std::mem::replace(&mut state.select_songlist_level_override, level_override);
             let level_index = select_row_difficulty_code(row).clamp(0, i64::MAX) as usize;
-            self.select_songlist_child_items_by_index(
+            let items = self.select_songlist_child_items_by_index(
                 entries,
                 level_index,
                 row_origin,
@@ -111,7 +121,9 @@ macro_rules! skin_document_render_select_graph_methods {
                 enabled_options,
                 state,
                 sources,
-            )
+            );
+            state.select_songlist_level_override = previous;
+            items
         }
 
         fn select_songlist_child_items_by_index(

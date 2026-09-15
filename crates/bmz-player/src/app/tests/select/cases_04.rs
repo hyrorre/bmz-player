@@ -347,6 +347,7 @@ fn difficulty_table_level_display_can_use_chart_original_level() {
     let mut profile = ProfileConfig::new_default("default", "Default", 0);
     let table_level = select_snapshot_rows_in_difficulty_table_level(&rows, 0, 1, &profile);
     assert_eq!(table_level[0].play_level, "9");
+    assert_eq!(table_level[0].level_display_override.as_deref(), Some("12"));
     assert_eq!(table_level[0].table_level, "★12");
     assert_eq!(table_level[0].table_text_secondary, "★12");
 
@@ -354,11 +355,13 @@ fn difficulty_table_level_display_can_use_chart_original_level() {
         crate::config::profile_config::DifficultyTableLevelDisplay::Chart;
     let chart_level = select_snapshot_rows_in_difficulty_table_level(&rows, 0, 1, &profile);
     assert_eq!(chart_level[0].play_level, "9");
+    assert_eq!(chart_level[0].level_display_override.as_deref(), Some("9"));
     assert!(chart_level[0].table_level.is_empty());
     assert_eq!(chart_level[0].table_text_secondary, "★12");
 
     let outside_table = select_snapshot_rows(&rows, 0, 1, &profile, None, &HashMap::new());
     assert_eq!(outside_table[0].table_level, "★12");
+    assert_eq!(outside_table[0].level_display_override, None);
 
     let mut missing = rows[0].clone();
     if let SelectItem::Chart(row) = &mut missing {
@@ -366,6 +369,25 @@ fn difficulty_table_level_display_can_use_chart_original_level() {
     }
     let missing = select_snapshot_rows_in_difficulty_table_level(&[missing], 0, 1, &profile);
     assert_eq!(missing[0].table_level, "★12");
+    assert_eq!(missing[0].level_display_override.as_deref(), Some("12"));
+}
+
+#[test]
+fn table_level_override_preserves_raw_labels_without_parsing_symbols_or_memberships() {
+    let profile = ProfileConfig::new_default("default", "Default", 0);
+    for level in ["0", "-1", "12", "???", "地力A", "12.5"] {
+        let mut row = select_chart_row(12);
+        row.table_level = "★2/★4".into();
+        row.table_text = DifficultyTableText::from_parts("Table".into(), "BMS2", level);
+        let snapshot = select_snapshot_rows_in_difficulty_table_level(
+            &[SelectItem::Chart(row)],
+            0,
+            1,
+            &profile,
+        );
+        assert_eq!(snapshot[0].level_display_override.as_deref(), Some(level));
+        assert_eq!(snapshot[0].table_text_secondary, format!("BMS2{level}"));
+    }
 }
 
 #[test]

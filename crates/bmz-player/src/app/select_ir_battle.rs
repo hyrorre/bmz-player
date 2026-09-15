@@ -589,6 +589,7 @@ pub(in crate::app) fn select_ir_battle_snapshot_rows(
         .into_iter()
         .map(|index| {
             let mut row = source_row.cloned().unwrap_or_default();
+            row.level_display_override = None;
             row.index = index as u32;
             match &choices[index] {
                 SelectBattleChoice::Ranking(entry) => {
@@ -769,6 +770,7 @@ mod tests {
             genre: "SOURCE GENRE".to_string(),
             difficulty_name: "ANOTHER".to_string(),
             play_level: "12".to_string(),
+            level_display_override: Some("22".into()),
             total_notes: 2253,
             initial_bpm: 155.0,
             min_bpm: 130.0,
@@ -810,6 +812,7 @@ mod tests {
         assert_eq!(rows[0].bp, Some(7));
         assert_eq!(rows[0].difficulty_name, "ANOTHER");
         assert_eq!(rows[0].play_level, "#2");
+        assert_eq!(rows[0].level_display_override, None);
         assert_eq!(rows[0].table_level, "#2");
         assert_eq!(rows[0].table_text_secondary, "#2");
         assert!(rows[0].show_level);
