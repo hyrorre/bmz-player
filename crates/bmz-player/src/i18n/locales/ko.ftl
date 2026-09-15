@@ -582,7 +582,6 @@ profile-ir-add-provider = 사용자 지정 제공자 추가
 profile-ui-title = UI
 profile-ui-language = 언어
 profile-ui-scale = UI 배율
-profile-ui-scale-reset = 100%로 초기화
 profile-ui-theme-unimplemented = 테마 (미구현)
 profile-ui-confirm-exit-unimplemented = 종료 확인 (미구현)
 profile-manager-title = 프로필 관리

@@ -582,7 +582,6 @@ profile-ir-add-provider = カスタム provider を追加
 profile-ui-title = UI
 profile-ui-language = 言語
 profile-ui-scale = UI倍率
-profile-ui-scale-reset = 100%に戻す
 profile-ui-theme-unimplemented = テーマ (未実装)
 profile-ui-confirm-exit-unimplemented = 終了確認 (未実装)
 profile-manager-title = プロファイル管理

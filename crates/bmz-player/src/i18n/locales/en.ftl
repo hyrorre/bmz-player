@@ -585,7 +585,6 @@ profile-ir-add-provider = Add custom provider
 profile-ui-title = UI
 profile-ui-language = Language
 profile-ui-scale = UI scale
-profile-ui-scale-reset = Reset to 100%
 profile-ui-theme-unimplemented = Theme (not implemented)
 profile-ui-confirm-exit-unimplemented = Exit confirmation (not implemented)
 profile-manager-title = Profile Management

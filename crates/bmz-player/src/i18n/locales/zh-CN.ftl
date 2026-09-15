@@ -582,7 +582,6 @@ profile-ir-add-provider = 添加自定义服务商
 profile-ui-title = UI
 profile-ui-language = 语言
 profile-ui-scale = UI 缩放
-profile-ui-scale-reset = 重置为 100%
 profile-ui-theme-unimplemented = 主题（尚未实现）
 profile-ui-confirm-exit-unimplemented = 退出确认（尚未实现）
 profile-manager-title = 配置文件管理
