@@ -686,6 +686,7 @@ toast-primary-ir-open-failed = Could not open the primary IR page
 toast-ir-battle-unavailable = Select a playable chart first
 toast-ir-battle-loading = Downloading and verifying the selected IR replay
 toast-ir-battle-failed = Could not start G-BATTLE: { $error }
+toast-play-load-failed = Could not load the chart: { $error }
 toast-folder-autoplay-only-normal-folder = Folder Autoplay is only available in regular song folders
 toast-folder-autoplay-charts-load-failed = Could not load charts in this folder
 toast-folder-autoplay-empty = This folder contains no charts

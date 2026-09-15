@@ -683,6 +683,7 @@ toast-primary-ir-open-failed = 无法打开主要 IR 页面
 toast-ir-battle-unavailable = Select a playable chart first
 toast-ir-battle-loading = Downloading and verifying the selected IR replay
 toast-ir-battle-failed = Could not start G-BATTLE: { $error }
+toast-play-load-failed = 无法加载谱面：{ $error }
 toast-folder-autoplay-only-normal-folder = 只能在普通曲目文件夹中使用文件夹 Autoplay
 toast-folder-autoplay-charts-load-failed = 无法获取文件夹内的谱面
 toast-folder-autoplay-empty = 文件夹内没有谱面

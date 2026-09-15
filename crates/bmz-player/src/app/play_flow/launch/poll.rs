@@ -1,5 +1,13 @@
 use super::*;
 
+fn failed_preload_targets_launch(
+    chart_id: i64,
+    decide_chart: Option<i64>,
+    play_chart: Option<i64>,
+) -> bool {
+    decide_chart == Some(chart_id) || play_chart == Some(chart_id)
+}
+
 impl WinitApp {
     pub(super) fn poll_play_preload(&mut self) {
         if self.play.play_ending.as_ref().is_some_and(|ending| {
@@ -45,7 +53,7 @@ impl WinitApp {
                             Err(error) => {
                                 // preload 全体の失敗は譜面パース不能など再生不能なケースのみ
                                 // (個別音源の欠落は load_chart_samples が warning で続行する)。
-                                // Play 画面へ入場済みなら選曲へ戻す。中間リザルト中の
+                                // Decide中・Play入場済みなら選曲へ戻す。中間リザルト中の
                                 // course 次曲先読みは失敗を保持し、退出時に安全に中断する。
                                 tracing::error!(
                                     chart_id = result.chart_id,
@@ -62,8 +70,11 @@ impl WinitApp {
                                 {
                                     launch.preload_error = Some(error.clone());
                                 }
-                                if self.play.pending_play_start.is_some() {
-                                    self.abort_pending_play_start();
+                                if self.abort_failed_play_preload(
+                                    result.chart_id,
+                                    result.generation,
+                                    &error,
+                                ) {
                                     return;
                                 }
                             }
@@ -88,8 +99,11 @@ impl WinitApp {
                     {
                         launch.preload_error = Some("play preload worker disconnected".to_string());
                     }
-                    if self.play.pending_play_start.is_some() {
-                        self.abort_pending_play_start();
+                    if self.abort_failed_play_preload(
+                        pending_chart_id,
+                        pending_generation,
+                        "play preload worker disconnected",
+                    ) {
                         return;
                     }
                 }
@@ -250,6 +264,26 @@ impl WinitApp {
         );
     }
 
+    fn abort_failed_play_preload(&mut self, chart_id: i64, generation: u64, error: &str) -> bool {
+        if generation != self.play.play_preload_generation
+            || !failed_preload_targets_launch(
+                chart_id,
+                self.play.pending_decide.as_ref().map(|decide| decide.chart_id),
+                self.play.pending_play_start.as_ref().map(|start| start.chart_id),
+            )
+        {
+            return false;
+        }
+        self.abort_pending_play_start();
+        let text = Localizer::new(self.boot.profile_config.ui.locale());
+        let mut args = FluentArgs::new();
+        // The overlay has no automatic wrapping. Put error-chain contexts on
+        // separate lines so the path and OS error remain readable.
+        args.set("error", error.replace(": ", ":\n"));
+        self.show_left_overlay_toast(text.format("toast-play-load-failed", &args));
+        true
+    }
+
     pub(super) fn abort_pending_play_start(&mut self) {
         if !self.commit_active_play_lane_state_to_profile() {
             self.commit_pending_play_lane_state_to_profile();
@@ -260,6 +294,9 @@ impl WinitApp {
             tracing::warn!(%error, "failed to pause audio while aborting play start");
         }
         self.invalidate_play_preload();
+        // A preload can fail before Play is entered. Cancel the Decide timer
+        // too, otherwise it will enter Play later with no worker left to finish.
+        self.play.pending_decide = None;
         self.play.pending_play_start = None;
         self.play.active_play = None;
         self.play.play_ending = None;
@@ -459,5 +496,34 @@ impl WinitApp {
                 active.running.rival_name.clone().unwrap_or_else(|| resolved.name.clone());
             active.running.resolved_target = Some(resolved);
         }
+    }
+}
+
+#[cfg(test)]
+mod preload_failure_tests {
+    use super::*;
+
+    #[test]
+    fn missing_chart_during_decide_aborts_before_play_exists() {
+        let decide = DecideTransition {
+            chart_id: 37544,
+            options: PlayStartOptions::default(),
+            launch: DecideLaunch::Play,
+            started_at: Instant::now(),
+            fadeout_started_at: None,
+            cancel: false,
+            snapshot: RenderSnapshot::default(),
+            title_override: None,
+        };
+        assert!(failed_preload_targets_launch(37544, Some(decide.chart_id), None));
+        assert!(!failed_preload_targets_launch(37508, Some(decide.chart_id), None));
+    }
+
+    #[test]
+    fn play_entry_and_course_lookahead_have_distinct_failure_handling() {
+        assert!(failed_preload_targets_launch(37508, None, Some(37508)));
+        // No launch during intermediate Result: keep the course's error buffered.
+        assert!(!failed_preload_targets_launch(37508, None, None));
+        assert!(!failed_preload_targets_launch(37508, None, Some(37544)));
     }
 }

@@ -683,6 +683,7 @@ toast-primary-ir-open-failed = プライマリ IR ページを開けませんで
 toast-ir-battle-unavailable = 曲行を選択中に使用できます
 toast-ir-battle-loading = 選択したIRリプレイを取得・検証しています
 toast-ir-battle-failed = G-BATTLEを開始できません: { $error }
+toast-play-load-failed = 譜面を読み込めません: { $error }
 toast-folder-autoplay-only-normal-folder = 通常の曲フォルダでのみ Autoplay できます
 toast-folder-autoplay-charts-load-failed = フォルダ内の譜面を取得できませんでした
 toast-folder-autoplay-empty = フォルダ内に譜面がありません

@@ -683,6 +683,7 @@ toast-primary-ir-open-failed = 기본 IR 페이지를 열 수 없습니다
 toast-ir-battle-unavailable = Select a playable chart first
 toast-ir-battle-loading = Downloading and verifying the selected IR replay
 toast-ir-battle-failed = Could not start G-BATTLE: { $error }
+toast-play-load-failed = 채보를 불러올 수 없습니다: { $error }
 toast-folder-autoplay-only-normal-folder = 일반 곡 폴더에서만 폴더 Autoplay를 사용할 수 있습니다
 toast-folder-autoplay-charts-load-failed = 폴더 안의 채보를 불러올 수 없습니다
 toast-folder-autoplay-empty = 폴더 안에 채보가 없습니다
