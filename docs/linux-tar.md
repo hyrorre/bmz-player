@@ -76,6 +76,10 @@ Output in `dist/linux-tar/` consists of:
   Cargo vendor, FFmpeg archive and exact Ubuntu source packages.
 - `SHA256SUMS.txt`: SHA256 of both compressed files.
 
+After all checks succeed, `validation.md` is written beside the runtime archive
+with its build commit, sizes, checksums and validation summary. This local report
+is separate from the three uploaded distribution files.
+
 Each archive must be strictly below 2,147,483,648 bytes, the
 [GitHub Releases per-file limit](https://docs.github.com/en/repositories/releasing-projects-on-github/about-releases).
 The build uses gzip level 9 and fails if either file reaches the limit. It never
@@ -181,6 +185,56 @@ docker build --pull --no-cache --target build -t bmz-linux-tar-build installer/l
 ```
 
 Use the equivalent Podman command when building with Podman.
+
+## Split-archive validation (2026-09-15)
+
+[Manual run 34933066815](https://github.com/khanwul/bmz-player/actions/runs/34933066815)
+passed on Ubuntu 22.04 with Docker and Rust 1.98.1 in 49 minutes 24 seconds.
+Both archives were built from version `0.4.0`, commit
+`f37ea95e85cb24422cb3d4e7156fa649e717e91c`. Subsequent documentation-only commits
+record these results; that SHA identifies the actual packaged source.
+
+| Archive | Bytes | SHA256 |
+| --- | ---: | --- |
+| `bmz-player-v0.4.0-linux-x64.tar.gz` | 963,634,642 | `66da6c30bd06c2a928a4c85e68d35e908922df6a80d48747b43764bc30f3a76e` |
+| `bmz-player-v0.4.0-linux-x64-sources.tar.gz` | 1,207,718,740 | `a67cdf12f10d0c3d4cdbc2384b4a825837223b95fc0886934ea636231f5fbe1c` |
+
+Both files are below 2 GiB. No compression-format change was needed. The
+[verified Actions artifact](https://github.com/khanwul/bmz-player/actions/runs/34933066815/artifacts/10383234579)
+contains exactly these two archives and `SHA256SUMS.txt`. Its aggregate ZIP size
+is not the per-archive size checked above.
+
+- `cargo fmt --check`, `cargo check --locked`, `cargo clippy --locked` passed.
+- `cargo test --locked`: 1,941 passed, 0 failed, 3 existing ignored tests.
+- All 10 packaging regression tests passed, including mismatched commits,
+  missing vendor/source files, changed source/skin/binary content, `.dsc`
+  version/checksum errors, directory symlink inventory and the size limit.
+- Both extracted file inventories and the committed source snapshot matched.
+  Cargo version/lockfile, FFmpeg source/configuration and Ubuntu versions matched.
+- Runtime-only, read-only container verification passed: ELF relocation and
+  dependency checks, missing-FFmpeg negative control, CLI, relative paths,
+  BMZ/XDG settings, SQLite writes, resource access and sample playback.
+- All 18 Ubuntu source packages passed checksum/version checks and `.dsc`
+  extraction. Empty-cache offline Cargo dependency resolution passed.
+- A separate container mounted only the extracted source archive and rebuilt
+  FFmpeg and BMZ release successfully with networking disabled.
+
+The downloaded artifact also passed the two-archive `--verify` interface locally
+with Podman on 2026-09-15. With all three artifact files extracted into
+`dist/linux-tar/ci-34933066815/`, the successful command was:
+
+```bash
+CONTAINER_ENGINE=podman bash scripts/package-linux-tar.sh --verify \
+  dist/linux-tar/ci-34933066815/bmz-player-v0.4.0-linux-x64.tar.gz \
+  dist/linux-tar/ci-34933066815/bmz-player-v0.4.0-linux-x64-sources.tar.gz
+```
+
+This independently repeated the archive checks, runtime-only smoke tests,
+Ubuntu source extraction and empty-cache offline FFmpeg/BMZ release rebuild.
+The command exited successfully and wrote `validation.md` beside the archives.
+
+Physical GPU/Wayland/audio latency/controller checks, rebuilding all Ubuntu
+libraries, and byte-identical binary reproducibility remain outside this result.
 
 ## Historical single-archive validation (2026-09-15)
 
