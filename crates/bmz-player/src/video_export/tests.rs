@@ -363,7 +363,9 @@ fn generates_complete_mp4_and_metadata_without_persistence() {
     assert!(decoded_audio.status.success());
     let pcm = decoded_audio
         .stdout
-        .chunks_exact(8)
+        .as_chunks::<8>()
+        .0
+        .iter()
         .map(|sample| f32::from_le_bytes(sample[..4].try_into().unwrap()))
         .collect::<Vec<_>>();
     let prepared = prepare::prepare(&fixture.options, &fixture.paths, Some("default")).unwrap();
