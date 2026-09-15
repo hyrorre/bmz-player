@@ -9,19 +9,23 @@ permissions:
 jobs:
   package:
     runs-on: ubuntu-22.04
-    timeout-minutes: 90
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@v7
         with:
           submodules: recursive
           persist-credentials: false
-      - name: Build and verify extracted archive
+      - name: Packaging regression checks
+        run: python3 -m unittest discover -s installer/linux-tar -p 'test_*.py' -v
+      - name: Build and verify runtime and sources
+        id: package
         run: scripts/package-linux-tar.sh
       - uses: actions/upload-artifact@v7
         with:
-          name: optional-linux-x86_64-tar
+          name: optional-linux-x64-tar
           path: |
-            dist/linux-tar/*.tar.gz
-            dist/linux-tar/SHA256SUMS.txt
+            ${{ steps.package.outputs.runtime }}
+            ${{ steps.package.outputs.sources }}
+            ${{ steps.package.outputs.checksums }}
           if-no-files-found: error
           compression-level: 0

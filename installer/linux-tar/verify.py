@@ -18,6 +18,13 @@ package = Path("/opt/BMZ Player")
 launcher = package / "bmz-player"
 assert not os.access(package, os.W_OK), "Package must be mounted read-only"
 assert os.getuid() != 0, "Verify as an unprivileged user"
+assert not (package / "sources").exists()
+assert not Path("/source").exists() and not Path("/archives/sources").exists()
+for required in ("build-manifest.json", "README.md", "resources/licenses/BMZ-GPL-3.0-only.txt",
+                 "resources/licenses/third-party-notices.txt", "resources/licenses/rust-dependency-licenses.txt",
+                 "resources/licenses/ffmpeg-build.txt", "resources/licenses/NotoSansCJK-OFL-1.1.txt"):
+    assert (package / required).is_file(), required
+assert {p.name for p in package.iterdir()} == {"bmz-player", "bin", "lib", "resources", "README.md", "build-manifest.json"}
 glibc = re.compile(r"^lib(c|m|pthread|dl|rt|resolv|util)\.so\.[0-9]+$")
 for binary in [package / "bin/bmz-player", *sorted((package / "lib").iterdir())]:
     result = run("ldd", "-r", str(binary), capture_output=True).stdout

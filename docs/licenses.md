@@ -48,11 +48,16 @@ Development installs are not redistributable artifacts by themselves:
 Before publishing an installer, archive, app bundle, or container image, check the concrete FFmpeg binaries included in that artifact.
 
 The optional [Linux tar.gz build](linux-tar.md) builds FFmpeg from a verified
-upstream source archive and includes that archive and its configure command.
+upstream source archive and includes that archive in the matching
+`bmz-player-vX-linux-x64-sources.tar.gz`. Its configure command and license notices
+also remain in the runtime archive. Both archives carry identical build manifests.
 Other bundled Ubuntu shared libraries include their package copyright notices,
 exact binary/source versions and matching APT source archives. The application
 source and vendored Cargo dependencies also accompany the binary. Keep these
-sources and notices together when redistributing the archive.
+sources and notices available together when redistributing: supply both matching
+archives and `SHA256SUMS.txt` from the same build. Source contents, exact versions,
+checksums and an offline FFmpeg/BMZ rebuild are checked before artifact upload;
+the Ubuntu libraries' full rebuild is a separate, unperformed check.
 
 ## ASIO SDK
 

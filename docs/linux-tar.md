@@ -7,7 +7,7 @@ The existing Flatpak and release workflows are unchanged.
 
 ## Run
 
-Extract `bmz-player-<version>-linux-x86_64.tar.gz`, then run its `./bmz-player`
+Extract `bmz-player-v<version>-linux-x64.tar.gz`, then run its `./bmz-player`
 launcher. Use the launcher rather than `bin/bmz-player` directly. The directory
 may be read-only; keep its `bin`, `lib`, and `resources` directories together.
 No Flatpak installation, root installation, or system FFmpeg is needed.
@@ -69,18 +69,31 @@ No host runtime data is copied. All Git-managed fonts, skins and sample songs
 are included unchanged. Docker/Podman caches the build image; allow several GB
 of disk space, network access for dependencies, and time for Rust compilation.
 
-Output is `dist/linux-tar/bmz-player-<version>-linux-x86_64.tar.gz` and
-`SHA256SUMS.txt`. The archive includes `sources/`, so it is deliberately larger
-than a binary-only archive. A failed runtime check leaves the completed archive
-for diagnosis; consider it validated only when the command exits successfully.
-To validate an existing archive without compiling again:
+Output in `dist/linux-tar/` consists of:
+
+- `bmz-player-v<version>-linux-x64.tar.gz`: executable, libraries, resources and notices.
+- `bmz-player-v<version>-linux-x64-sources.tar.gz`: corresponding source workspace,
+  Cargo vendor, FFmpeg archive and exact Ubuntu source packages.
+- `SHA256SUMS.txt`: SHA256 of both compressed files.
+
+Each archive must be strictly below 2,147,483,648 bytes, the
+[GitHub Releases per-file limit](https://docs.github.com/en/repositories/releasing-projects-on-github/about-releases).
+The build uses gzip level 9 and fails if either file reaches the limit. It never
+removes required sources or notices to meet this limit. A failed check leaves
+archives for diagnosis; consider them validated only when the command succeeds.
+To revalidate a pair (with `SHA256SUMS.txt` beside the runtime archive):
 
 ```sh
-scripts/package-linux-tar.sh --verify dist/linux-tar/bmz-player-<version>-linux-x86_64.tar.gz
+scripts/package-linux-tar.sh --verify \
+  dist/linux-tar/bmz-player-v<version>-linux-x64.tar.gz \
+  dist/linux-tar/bmz-player-v<version>-linux-x64-sources.tar.gz
 ```
 
 Run the **Optional Linux tar.gz** workflow manually
-to download the same verified archive as an Actions artifact. GitHub requires
+to download both verified archives and checksums as one Actions artifact. It
+uploads only the current run's explicit output paths after all checks succeed,
+and records sizes, SHA256, full commit and verification results in the job summary.
+GitHub requires
 the workflow to exist on the repository's default branch before manual dispatch;
 then the run dialog can select another branch. See the
 [GitHub instructions](https://docs.github.com/en/actions/how-tos/manage-workflow-runs/manually-run-a-workflow).
@@ -95,7 +108,7 @@ tests; test debug symbols are omitted to limit temporary disk/memory usage.
 The application uses its existing PulseAudio feature.
 No native CPU tuning is enabled.
 
-Validation extracts the actual tar.gz and mounts it read-only in a separate
+Validation extracts the actual runtime tar.gz and mounts only it read-only in a separate
 Ubuntu 22.04 container as an unprivileged user. This image has no build-stage
 filesystem, compiler or FFmpeg. It verifies every packaged ELF's dependency
 resolution: non-glibc dependencies must resolve inside the archive even if a
@@ -105,7 +118,25 @@ directory. It then
 exercises help, relative song scanning, SQLite writes, default and overridden
 data/cache/log/resource paths, a symlinked launcher, and sample play under Xvfb,
 software Vulkan and a null PulseAudio sink. Successful file opens confirm access
-to the packaged skin, CJK font, chart and audio sample.
+to the packaged skin, CJK font, chart and audio sample. Neither the source archive
+nor the original build tree is accessible inside this runtime container.
+
+Both archives carry the same `build-manifest.json` (schema 1). It records the
+version, commit, submodule commits, target/features/command, lockfile hash,
+compiler versions, Ubuntu release, build image ID, FFmpeg URL/hash/configuration,
+and Ubuntu binary/source package versions. File inventories cover hashes, sizes,
+executable modes and symlink targets. The committed snapshot is inventoried before
+building; source and skin files are compared against it after staging and extraction.
+The manifest is excluded from its own inventory. Compressed file hashes live only
+in the external checksum file.
+
+The source archive is extracted to a separate path. Its inventory and identity
+must match the runtime, Cargo workspace version/lockfile, FFmpeg source/configuration,
+and exact Ubuntu source versions. Every `.dsc` reference is checked for size and
+SHA256 and extracted with `dpkg-source`. A separate tool-only container mounts only
+the source archive, uses an empty Cargo cache, resolves vendor dependencies offline,
+then rebuilds FFmpeg and BMZ release with networking disabled. This does not rebuild
+all Ubuntu libraries or establish byte-for-byte binary reproducibility.
 
 This smoke check does not establish real GPU compatibility, Wayland behavior,
 audible output, timing/latency, or physical controller access. Check those on a
@@ -121,24 +152,26 @@ still apply; see `resources/licenses/license-notes.md` in the archive
 (`docs/licenses.md` in the source tree).
 
 FFmpeg is dynamically linked, retains its library names, and ships with the exact
-verified upstream archive in `sources/`. Its recorded configure command and
+verified upstream archive in the matching source archive's `ffmpeg/`. Its recorded configure command and
 `installer/linux-tar/build-ffmpeg.sh` describe rebuilding it. This follows the
 [FFmpeg distribution checklist](https://ffmpeg.org/legal.html).
 
 Other bundled ELF libraries are taken from Ubuntu packages. Each has its binary
 and source versions recorded in `resources/licenses/ubuntu/packages.txt`, its
 original copyright notice, and matching `.dsc`/upstream/Debian source archives
-downloaded by APT into `sources/<source-package>/`. Missing source or notices
+downloaded by APT into the source archive's `ubuntu/<source-package>/`. Missing source or notices
 fail packaging. Use `dpkg-source -x` on the `.dsc` to unpack the patched source.
 ELF RUNPATHs are adjusted by the included packaging script; library code is not
 patched. These files accompany the binary, rather than relying on a future source offer.
 The host's glibc/loader and GPU drivers are not bundled.
 
-`sources/bmz-player.tar.gz` includes the exact application source, bundled
-submodules, build scripts, lockfile and vendored Cargo dependencies. Extract it
-and build with its `.cargo/config.toml` to use that vendor directory. The Ubuntu
-build dependencies and FFmpeg prefix are described in `installer/linux-tar/`.
-Preserve `sources/` and all notices when redistributing the artifact. Security
+The source archive contains the application workspace directly, including the
+actual bundled submodule files, scripts, lockfile and Cargo vendor. Its
+`.cargo/config.toml` uses relative `vendor`, preserving existing configuration.
+Read `BUILDING.md` in that archive (repository copy:
+[`installer/linux-tar/SOURCE-README.md`](../installer/linux-tar/SOURCE-README.md))
+for development packages, offline rebuild commands, and Ubuntu source extraction.
+Preserve both matching archives and all notices when redistributing. Security
 updates to bundled dependencies require rebuilding and revalidating the archive.
 To refresh Ubuntu packages and the stable Rust toolchain instead of reusing
 cached image layers, first run:
@@ -149,7 +182,10 @@ docker build --pull --no-cache --target build -t bmz-linux-tar-build installer/l
 
 Use the equivalent Podman command when building with Podman.
 
-## Local validation record (2026-09-15)
+## Historical single-archive validation (2026-09-15)
+
+The following results precede the runtime/source split and do not validate the
+new pair. New sizes and workflow evidence must come from the split implementation.
 
 The archive built from `308ca195` was verified with the final `--verify` checker
 using rootless Podman, Ubuntu 22.04/glibc 2.35, Rust 1.98.1 and GCC 11.4.0.

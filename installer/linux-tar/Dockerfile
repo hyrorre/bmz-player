@@ -1,13 +1,21 @@
-FROM ubuntu:22.04 AS build
+FROM ubuntu:22.04 AS tools
 ENV DEBIAN_FRONTEND=noninteractive
 RUN sed -i 's/^# deb-src /deb-src /' /etc/apt/sources.list \
     && apt-get update && apt-get install -y --no-install-recommends \
        build-essential ca-certificates curl git pkg-config clang libclang-dev \
-       nasm xz-utils python3 libasound2-dev libpulse-dev libudev-dev \
+       nasm xz-utils python3 dpkg-dev libasound2-dev libpulse-dev libudev-dev \
        libfontconfig1-dev libdbus-1-dev libxkbcommon-dev zlib1g-dev libbz2-dev
 RUN curl --fail --location --retry 3 https://sh.rustup.rs -o /tmp/rustup.sh \
     && sh /tmp/rustup.sh -y --profile minimal --default-toolchain stable
 ENV PATH="/root/.cargo/bin:${PATH}"
+WORKDIR /work
+
+# No FFmpeg, Cargo cache, or original checkout in the offline rebuild image.
+FROM tools AS source-verify
+COPY verify-sources.py manifest.py /opt/
+CMD ["python3", "/opt/verify-sources.py", "/archives/sources", "--rebuild"]
+
+FROM tools AS build
 RUN rustup component add rustfmt clippy \
     && cargo install --locked --features cli cargo-about
 COPY build-ffmpeg.sh /opt/build-ffmpeg.sh

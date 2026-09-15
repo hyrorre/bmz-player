@@ -1,6 +1,7 @@
 """Bundle the ELF dependency closure, with Ubuntu notices and exact source packages."""
 
 import os
+import json
 from pathlib import Path
 import re
 import shutil
@@ -13,6 +14,7 @@ def output(*args):
 
 
 package = Path(sys.argv[1])
+source_root = Path(sys.argv[2])
 # glibc and its loader must come from the host as a unit. GPU/display drivers
 # loaded at runtime also belong to the host; no Mesa/NVIDIA implementation ships.
 glibc = re.compile(r"^(ld-linux-x86-64\.so\.2|lib(c|m|pthread|dl|rt|resolv|util)\.so\.[0-9]+)$")
@@ -24,6 +26,7 @@ notices = package / "resources/licenses/ubuntu"
 notices.mkdir()
 shutil.copytree("/usr/share/common-licenses", notices / "common-licenses")
 provenance = []
+packages = []
 for line in listing.splitlines():
     match = re.match(r"\s*(\S+) => (/\S+)", line)
     if not match:
@@ -54,13 +57,16 @@ for line in listing.splitlines():
     copyright_path = Path("/usr/share/doc") / owner.split(":")[0] / "copyright"
     shutil.copy2(copyright_path, notices / (owner.replace(":", "_") + ".txt"))
     provenance.append(f"{name}\t{owner}={binary_version}\t{source}={version}")
+    packages.append(dict(library=name, binary_package=owner, binary_version=binary_version,
+                         source_package=source, source_version=version))
 
 for source, version in sorted(sources):
-    directory = package / "sources" / source
-    directory.mkdir()
+    directory = source_root / "ubuntu" / source
+    directory.mkdir(parents=True)
     subprocess.run(
         ["apt-get", "source", "--download-only", f"{source}={version}"],
         cwd=directory, check=True,
     )
 (notices / "packages.txt").write_text("\n".join(provenance) + "\n")
+(notices / "packages.json").write_text(json.dumps(packages, indent=2) + "\n")
 subprocess.run(["patchelf", "--set-rpath", "$ORIGIN/../lib", str(package / "bin/bmz-player")], check=True)
