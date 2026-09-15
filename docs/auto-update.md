@@ -109,6 +109,7 @@ API / 配布仕様: [Sparkle](https://sparkle-project.org/documentation/)、
 cargo test -p bmz-updater
 cargo test -p bmz-player update
 node --test scripts/generate-update-metadata.test.mjs
+node --test scripts/verify-sparkle-signature.test.mjs
 python scripts/test_sparkle_appcast.py
 cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
@@ -117,3 +118,16 @@ cargo fmt --check
 
 公開前には、署名済み旧版→新版でWindows実配布物とmacOS両CPUの更新・再起動・最低対応OSを確認する。
 通常データとは別のテスト用データを使い、通信中断、容量不足、別プロセス、読み取り専用配置も確認する。
+
+macOSでは固定SDKを用意してネイティブブリッジのコンパイルとJSON境界も確認する:
+
+```bash
+BMZ_SPARKLE_DIR=/tmp/bmz-sparkle cargo check -p bmz-player
+clang -fobjc-arc -fblocks -F/tmp/bmz-sparkle -framework AppKit -framework Sparkle \
+  -Wl,-rpath,/tmp/bmz-sparkle scripts/test-sparkle-bridge.m -o /tmp/bmz-test-sparkle-bridge
+/tmp/bmz-test-sparkle-bridge
+```
+
+公開時は秘密鍵のバイト長を仮定せず、Sparkleで生成したアーカイブ署名を
+`verify-sparkle-signature.mjs` で埋込み公開鍵に照合する。32バイトseed形式と旧形式は
+Sparkleの署名ツールが読み込む。

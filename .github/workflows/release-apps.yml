@@ -89,6 +89,7 @@ jobs:
       - name: Test update metadata generators
         run: |
           node --test scripts/generate-update-metadata.test.mjs
+          node --test scripts/verify-sparkle-signature.test.mjs
           python3 scripts/test_sparkle_appcast.py
 
   build-windows:
@@ -387,6 +388,9 @@ jobs:
           if [[ -n "${BMZ_SPARKLE_PUBLIC_KEY}" ]]; then
             export BMZ_SPARKLE_DIR="${RUNNER_TEMP}/bmz-sparkle"
             bash scripts/prepare-sparkle.sh "${BMZ_SPARKLE_DIR}"
+            clang -fobjc-arc -fblocks -F"${BMZ_SPARKLE_DIR}" -framework AppKit -framework Sparkle \
+              -Wl,-rpath,"${BMZ_SPARKLE_DIR}" scripts/test-sparkle-bridge.m -o "${RUNNER_TEMP}/bmz-test-sparkle-bridge"
+            "${RUNNER_TEMP}/bmz-test-sparkle-bridge"
             echo "BMZ_SPARKLE_DIR=${BMZ_SPARKLE_DIR}" >> "${GITHUB_ENV}"
           fi
           sign_args=(--ad-hoc-sign)
@@ -443,19 +447,12 @@ jobs:
         run: |
           set -euo pipefail
           test -n "${BMZ_SPARKLE_PRIVATE_KEY}"
-          python3 - <<'PY'
-          import base64, os
-          try:
-              key = base64.b64decode(os.environ['BMZ_SPARKLE_PRIVATE_KEY'].strip(), validate=True)
-              public = base64.b64decode(os.environ['BMZ_SPARKLE_PUBLIC_KEY'], validate=True)
-              assert len(key) in (64, 96) and len(public) == 32 and key[-32:] == public
-          except Exception:
-              raise SystemExit('Sparkle private key does not match embedded public key')
-          PY
           archive="dist/release/bmz-player-v${BMZ_VERSION}-macos-${BMZ_MACOS_ARCH}.app.zip"
           # Sparkle's tool reads its exported EdDSA private key from stdin.
           printf '%s' "${BMZ_SPARKLE_PRIVATE_KEY}" | "${BMZ_SPARKLE_DIR}/bin/sign_update" --ed-key-file - -p "${archive}" \
             > "dist/release/sparkle-${BMZ_MACOS_ARCH}.signature"
+          # Verify the archive with the embedded public key, independent of private-key format.
+          node scripts/verify-sparkle-signature.mjs "${archive}" "dist/release/sparkle-${BMZ_MACOS_ARCH}.signature"
 
       - name: Upload macOS release files
         uses: actions/upload-artifact@v7

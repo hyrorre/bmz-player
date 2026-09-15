@@ -35,10 +35,10 @@ static NSString *lastEvent;
 - (void)showUserInitiatedUpdateCheckWithCancellation:(void (^)(void))cancellation { self.cancellation = cancellation; }
 - (void)showUpdateFoundWithAppcastItem:(SUAppcastItem *)item state:(SPUUserUpdateState *)state reply:(void (^)(SPUUserUpdateChoice))reply {
     self.cancellation = nil;
-    if (self.paused) { reply(state.stage == SPUUpdateStateInstalling ? SPUUserUpdateChoiceSkip : SPUUserUpdateChoiceDismiss); return; }
+    if (self.paused) { reply(state.stage == SPUUserUpdateStageInstalling ? SPUUserUpdateChoiceSkip : SPUUserUpdateChoiceDismiss); return; }
     self.choice = reply;
-    self.ready = state.stage == SPUUpdateStateInstalling;
-    [self emit:@{@"event":@"available", @"version":item.displayVersionString, @"installable":@(!item.informationOnlyUpdate)}];
+    self.ready = state.stage == SPUUserUpdateStageInstalling;
+    [self emit:@{@"event":@"available", @"version":item.displayVersionString, @"installable":item.informationOnlyUpdate ? @NO : @YES}];
     if (self.ready) [self emit:@{@"event":@"ready"}];
 }
 - (void)showUpdateReleaseNotesWithDownloadData:(SPUDownloadData *)downloadData {}
@@ -144,6 +144,8 @@ void bmz_sparkle_finish(void) {
     }
     // winit and all BMZ state have been dropped; Sparkle may now terminate/relaunch Cocoa.
     [NSApp setDelegate:driver];
-    void (^handler)(void) = driver.installHandler; driver.installHandler = nil; handler();
+    void (^handler)(void) = driver.installHandler; driver.installHandler = nil;
+    // terminate: must run after Cocoa's event loop resumes; winit has stopped it.
+    dispatch_async(dispatch_get_main_queue(), handler);
     [NSApp run];
 }
