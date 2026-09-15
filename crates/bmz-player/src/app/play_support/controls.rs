@@ -248,7 +248,7 @@ pub(in crate::app) fn should_begin_play_fadeout_after_final_notes(
         && !play_ending_active
         && play_state == bmz_gameplay::session::PlayState::Playing
         && final_notes_processed
-        && (play_fadeout_after_final_notes_control(control, bindings) || control == "Escape")
+        && play_fadeout_after_final_notes_control(control, bindings)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -281,7 +281,7 @@ pub(in crate::app) fn play_fadeout_after_final_notes_control(
     control: &str,
     bindings: &SelectKeyBindings,
 ) -> bool {
-    bindings.is_start(control) || bindings.is_e2_action(control)
+    bindings.is_start(control) || bindings.is_e2_action(control) || control == "Escape"
 }
 
 pub(in crate::app) fn is_select_start_key(

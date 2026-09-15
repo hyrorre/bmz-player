@@ -439,10 +439,7 @@ impl WinitApp {
     }
 
     pub(super) fn begin_play_fadeout_after_final_notes_control(&mut self, control: &str) -> bool {
-        let escape_before_play_ending = control == "Escape" && self.play.play_ending.is_none();
-        if !play_fadeout_after_final_notes_control(control, &self.select.select_keys)
-            && !escape_before_play_ending
-        {
+        if !play_fadeout_after_final_notes_control(control, &self.select.select_keys) {
             return false;
         }
         if let Some(ending) = &mut self.play.play_ending {

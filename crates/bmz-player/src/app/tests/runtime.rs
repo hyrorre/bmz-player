@@ -340,12 +340,12 @@ fn settings_browse_keeps_cursor_navigation_direction() {
 }
 
 #[test]
-fn final_notes_fadeout_accepts_e1_and_e2_controls() {
+fn final_notes_fadeout_accepts_e1_e2_and_escape_controls() {
     let keys = default_select_keys();
 
     assert!(play_fadeout_after_final_notes_control("Q", &keys));
     assert!(play_fadeout_after_final_notes_control("W", &keys));
-    assert!(!play_fadeout_after_final_notes_control("Escape", &keys));
+    assert!(play_fadeout_after_final_notes_control("Escape", &keys));
     assert!(!play_fadeout_after_final_notes_control("Z", &keys));
 }
 

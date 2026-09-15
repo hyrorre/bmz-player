@@ -380,7 +380,7 @@ E1/E2単押しでは開始・退出しません。E1/E2 hold中は従来どお�
 | E2 hold + 鍵盤 | Floatingが利用可能な設定では、E1と同じKEY MODEごとのHS方向に従い緑数字を下げる / 上げる |
 | E2 hold + Scratch Up/Down | Floatingが利用可能な設定では緑数字を下げる / 上げる |
 | E1 double press | SUDDEN+が有効な場合だけSUDDEN+表示を切替 |
-| Escape | プレイを中断して選曲へ戻る。最終ノーツ処理後、終了演出開始前は E1 と同じく終了演出を開始 |
+| Escape | プレイを中断して選曲へ戻る。最終ノーツ処理後は終了待ち時間（finishmargin）中も含め、E1 と同じく退出演出を即座に開始。開始済みの退出演出はスキップしない |
 | 3 / Numpad3 | 描画判定調整を +1ms |
 | 9 / Numpad9 | 描画判定調整を -1ms |
 | 0 / Numpad0 | 自動判定調整を切替 |
