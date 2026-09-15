@@ -128,6 +128,37 @@ fn select_action_maps_start_and_vertical_movement() {
 }
 
 #[test]
+fn select_keyboard_prefers_custom_7k_bindings_over_default_14k_keys() {
+    use crate::config::profile_config::{LaneConfig, PlayModeInputConfig};
+
+    let mut profile = ProfileConfig::new_default("default", "Default", 0);
+    let mut bindings = crate::config::play_input::default_play_7k_bindings();
+    for binding in &mut bindings {
+        if binding.device == "keyboard" {
+            match binding.lane {
+                Some(LaneConfig::Key4) => binding.control = "N".into(),
+                Some(LaneConfig::Key7) => binding.control = "L".into(),
+                _ => {}
+            }
+        }
+    }
+    profile.input.play.insert("7k".into(), PlayModeInputConfig { bindings, ..Default::default() });
+    let keys = SelectKeyBindings::from_profile(&profile.input);
+    // N/L are also default 14K Key8/Key11. Preserve the selected 7K meaning.
+    assert!(keys.is_key4("N"));
+    assert!(!keys.is_key8("N"));
+    assert_eq!(keys.ui_lane_for_control("N"), Some(Lane::Key4));
+    assert!(keys.is_key7("L"));
+    assert!(!keys.is_ui_key4("L"));
+    assert_eq!(keys.ui_lane_for_control("L"), Some(Lane::Key7));
+    // Nonconflicting DP keys and the existing BMZ option mapping remain available.
+    assert!(keys.is_key9("K"));
+    assert!(keys.option_hint().contains("K3/K4:GAUGE"));
+    assert!(keys.option_hint().contains("K6:DP OPT"));
+    assert!(keys.option_hint().contains("K7:AUTOPLAY"));
+}
+
+#[test]
 fn select_option_gamepad_lane_distinguishes_same_buttons_by_device() {
     let profile = ProfileConfig::new_default("default", "Default", 0);
     let control = "Button1";

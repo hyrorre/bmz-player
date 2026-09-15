@@ -129,6 +129,10 @@ impl SelectKeyBindings {
                 .filter(|e| {
                     e.lane == Some(lane)
                         && !common_control_matches(&common_controls, &e.device, &e.control)
+                        // Select uses the 7K keyboard first; a customized SP key
+                        // must not also activate an unrelated default DP key.
+                        && !(e.device == "keyboard"
+                            && play_kb.iter().any(|primary| primary.control == e.control))
                 })
                 .map(|e| e.control.clone())
                 .collect()

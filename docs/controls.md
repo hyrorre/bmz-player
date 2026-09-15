@@ -190,6 +190,7 @@ GUIDE SE、追加ノート／地雷／SCROLL／LNモディファイア、CONSTAN
 
 `SELECT INPUT` は設定フォルダの `INPUT` から `7K/14K` または `9K` を選べます。
 デフォルトは `7K/14K` です。
+`7K/14K` のキーボード操作では、7Kと14Kの2P側に同じキーを割り当てた場合、7K側を優先します。
 設定フォルダ内では検索モードには入りません。
 E1 / E2 / E1+E2 を hold している間は、選曲オプションパネルを表示します。
 `selectIrScopeBinding = "active"` と `selectIrScopeToggle = "e3_press"` を宣言した
