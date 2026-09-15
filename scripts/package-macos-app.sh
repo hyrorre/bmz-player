@@ -342,9 +342,13 @@ sign_bundle() {
   if [[ -d "${app_dir}/Contents/Frameworks" ]]; then
     while IFS= read -r -d '' file_path; do
       if file "${file_path}" | grep -q 'Mach-O'; then
-        codesign "${codesign_args[@]}" "${file_path}"
+        codesign "${codesign_args[@]}" --preserve-metadata=entitlements "${file_path}"
       fi
     done < <(find "${app_dir}/Contents/Frameworks" -type f -print0)
+    # Sparkle contains signed XPC services and an installer app. Seal nested bundles inside out.
+    while IFS= read -r -d '' nested_bundle; do
+      codesign "${codesign_args[@]}" --preserve-metadata=entitlements "${nested_bundle}"
+    done < <(find "${app_dir}/Contents/Frameworks" -depth -type d \( -name '*.xpc' -o -name '*.app' -o -name '*.framework' \) -print0)
   fi
 
   codesign "${codesign_args[@]}" "${app_dir}"
@@ -526,6 +530,22 @@ main() {
       "${target_triple}"
   fi
   copy_file "${root}/assets/app-icon/bmz-player.icns" "${resources_dir}/bmz-player.icns"
+  if [[ -n "${BMZ_SPARKLE_DIR:-}" ]]; then
+    [[ -d "${BMZ_SPARKLE_DIR}/Sparkle.framework" ]] || die "Sparkle.framework missing"
+    mkdir -p "${frameworks_dir}"
+    ditto "${BMZ_SPARKLE_DIR}/Sparkle.framework" "${frameworks_dir}/Sparkle.framework"
+    copy_file "${BMZ_SPARKLE_DIR}/LICENSE" "${resources_dir}/licenses/Sparkle-LICENSE.txt"
+    cat "${BMZ_SPARKLE_DIR}/LICENSE" >> "${resources_dir}/licenses/third-party-notices.txt"
+    # Each BMZ artifact has one architecture; also validate that architecture's OS floor.
+    local sparkle_arch=x86_64
+    if [[ "${target_triple}" == "aarch64-apple-darwin" || ( -z "${target_triple}" && "$(uname -m)" == "arm64" ) ]]; then sparkle_arch=arm64; fi
+    while IFS= read -r -d '' sparkle_binary; do
+      if file "${sparkle_binary}" | grep -q 'Mach-O universal'; then
+        lipo "${sparkle_binary}" -thin "${sparkle_arch}" -output "${sparkle_binary}.thin"
+        mv "${sparkle_binary}.thin" "${sparkle_binary}"
+      fi
+    done < <(find "${frameworks_dir}/Sparkle.framework" -type f -print0)
+  fi
   prune_macos_resource_markers "${resources_dir}"
 
   write_info_plist \
@@ -537,6 +557,21 @@ main() {
     "${version}" \
     "${minimum_system_version}"
   printf 'APPL????' > "${contents_dir}/PkgInfo"
+  if [[ -n "${BMZ_SPARKLE_DIR:-}" ]]; then
+    [[ "${BMZ_SPARKLE_PUBLIC_KEY:-}" =~ ^[A-Za-z0-9+/]{43}=$ ]] || die "BMZ_SPARKLE_PUBLIC_KEY is required"
+    local feed_arch=x64
+    [[ "${sparkle_arch}" == arm64 ]] && feed_arch=arm64
+    local bundle_version
+    bundle_version="$(python3 "${root}/scripts/generate-sparkle-appcast.py" --version "${version}" --bundle-version-only)"
+    plutil -replace CFBundleVersion -string "${bundle_version}" "${contents_dir}/Info.plist"
+    plutil -insert SUPublicEDKey -string "${BMZ_SPARKLE_PUBLIC_KEY}" "${contents_dir}/Info.plist"
+    plutil -insert SUFeedURL -string "https://github.com/hyrorre/bmz-player/releases/download/update-feed/appcast-stable-${feed_arch}.xml" "${contents_dir}/Info.plist"
+    plutil -insert BMZPrereleaseFeedURL -string "https://github.com/hyrorre/bmz-player/releases/download/update-feed/appcast-prerelease-${feed_arch}.xml" "${contents_dir}/Info.plist"
+    plutil -insert SUEnableAutomaticChecks -bool false "${contents_dir}/Info.plist"
+    plutil -insert SUAutomaticallyUpdate -bool false "${contents_dir}/Info.plist"
+    plutil -insert SUEnableSystemProfiling -bool false "${contents_dir}/Info.plist"
+    plutil -insert SUVerifyUpdateBeforeExtraction -bool true "${contents_dir}/Info.plist"
+  fi
   plutil -lint "${contents_dir}/Info.plist" >/dev/null
 
   if [[ "${bundle_dylibs}" == "1" ]]; then

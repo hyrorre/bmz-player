@@ -195,6 +195,12 @@ The deployed BMZ IR site exposes the raw report at
 
 ## Release Checklist
 
+The macOS automatic updater bundles Sparkle 2.9.6 (MIT license).
+`scripts/prepare-sparkle.sh` pins the official archive and SHA256. Preserve its
+`LICENSE` in `Contents/Resources/licenses/Sparkle-LICENSE.txt` and in the combined
+third-party notices. The Sparkle framework and its helper/XPC bundles are signed
+with the application's Developer ID before notarization.
+
 Before publishing a binary release:
 
 1. Confirm `Cargo.toml` still declares the intended BMZ Player license.

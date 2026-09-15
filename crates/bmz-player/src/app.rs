@@ -305,6 +305,7 @@ mod skin_video;
 mod skin_workers;
 mod table_fetch_runtime;
 mod update_prompt;
+mod update_runtime;
 
 use app_support::*;
 use course_metrics_state::*;
@@ -530,6 +531,7 @@ pub async fn run_with_options_log_buffer_paths_and_profile(
     let startup_error = app.startup_error.take();
     drop(app);
     drop(viewer_cleanup);
+    crate::update::sparkle::finish_shutdown();
     result?;
     if let Some(error) = startup_error {
         bail!("{error}");

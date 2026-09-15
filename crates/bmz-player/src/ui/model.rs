@@ -353,7 +353,9 @@ pub(super) struct CourseEditorUiState {
 #[derive(Debug, Clone, Copy)]
 pub enum UpdateDialog<'a> {
     Available(&'a UpdateCandidate),
-    Downloading(&'a UpdateCandidate),
+    Downloading(&'a UpdateCandidate, &'a crate::update::DownloadProgress),
+    Ready(&'a UpdateCandidate),
+    Preparing(&'a UpdateCandidate),
     Error { message: &'a str, candidate: Option<&'a UpdateCandidate> },
     UpToDate,
 }
@@ -361,6 +363,8 @@ pub enum UpdateDialog<'a> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UpdateDialogAction {
     Update,
+    Install,
+    Cancel,
     NotNow,
     SkipRelease,
     OpenReleasePage,

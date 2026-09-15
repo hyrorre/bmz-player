@@ -249,6 +249,9 @@ pub(super) struct AppJobs {
     /// 自動・手動update checkをSelectまで保留する。手動要求を優先して結果を表示する。
     pub(super) queued_update_check: Option<(&'static str, bool)>,
     pub(super) pending_update_download: Option<Receiver<Result<DownloadedUpdate>>>,
+    pub(super) update_progress: Option<Arc<crate::update::DownloadProgress>>,
+    pub(super) downloaded_update: Option<DownloadedUpdate>,
+    pub(super) pending_update_handoff: Option<Receiver<Result<bmz_updater::process::Handoff>>>,
     pub(super) update_prompt: Option<UpdatePrompt>,
     pub(super) update_dismissed_session_version: Option<String>,
     /// 起動時に1回だけ実行するrianIRライバル一覧同期。

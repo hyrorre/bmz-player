@@ -891,6 +891,13 @@ impl WinitApp {
             return;
         }
         let channel = self.boot.app_config.updates.channel;
+        if crate::update::sparkle::available() {
+            if let Err(error) = crate::update::sparkle::check(channel, report_up_to_date) {
+                self.jobs.update_prompt =
+                    Some(UpdatePrompt::Error { message: format!("{error:#}"), candidate: None });
+            }
+            return;
+        }
         let (tx, rx) = mpsc::channel();
         let mut maintenance_allowed = self.jobs.maintenance_select_tx.subscribe();
         thread::Builder::new()
@@ -991,14 +998,24 @@ impl WinitApp {
         }
         let cache_dir = self.boot.app_paths.cache_dir.clone();
         let (tx, rx) = mpsc::channel();
-        self.jobs.update_prompt = Some(UpdatePrompt::Downloading(candidate.clone()));
+        let progress = Arc::new(crate::update::DownloadProgress::default());
+        self.jobs.update_progress = Some(Arc::clone(&progress));
+        self.jobs.update_prompt =
+            Some(UpdatePrompt::Downloading(candidate.clone(), Arc::clone(&progress)));
         thread::Builder::new()
             .name("update-download".to_string())
             .spawn(move || {
                 let result = (|| -> Result<DownloadedUpdate> {
                     let rt =
                         tokio::runtime::Runtime::new().context("failed to create tokio runtime")?;
-                    rt.block_on(crate::update::download_update(candidate, &cache_dir))
+                    rt.block_on(async {
+                        tokio::select! {
+                            result = crate::update::download_update(candidate, &cache_dir, Arc::clone(&progress)) => result,
+                            _ = async {
+                                while !progress.cancel.load(Ordering::Relaxed) { tokio::time::sleep(Duration::from_millis(100)).await; }
+                            } => Err(anyhow::anyhow!("update download canceled")),
+                        }
+                    })
                 })();
                 let _ = tx.send(result);
             })
@@ -1016,28 +1033,38 @@ impl WinitApp {
             Ok(Ok(downloaded)) => {
                 tracing::info!(path = %downloaded.path.display(), "update downloaded");
                 self.jobs.pending_update_download = None;
-                if let Err(error) = self.apply_downloaded_update(downloaded) {
-                    tracing::warn!(%error, "failed to apply downloaded update");
-                    self.jobs.update_prompt = Some(UpdatePrompt::Error {
-                        message: format!("{error:#}"),
-                        candidate: None,
-                    });
-                    self.request_redraw();
-                }
+                self.jobs.update_progress = None;
+                self.jobs.update_prompt = Some(UpdatePrompt::Ready(downloaded.candidate.clone()));
+                self.jobs.downloaded_update = Some(downloaded);
+                self.request_redraw();
             }
             Ok(Err(error)) => {
                 tracing::warn!(%error, "update download failed");
                 let candidate =
                     self.jobs.update_prompt.as_ref().and_then(|prompt| prompt.candidate().cloned());
                 self.jobs.pending_update_download = None;
+                let progress = self.jobs.update_progress.take();
                 self.jobs.update_prompt =
-                    Some(UpdatePrompt::Error { message: format!("{error:#}"), candidate });
+                    if progress.as_ref().is_some_and(|p| p.cancel.load(Ordering::Relaxed)) {
+                        candidate.map(UpdatePrompt::Available)
+                    } else {
+                        Some(UpdatePrompt::Error { message: format!("{error:#}"), candidate })
+                    };
                 self.request_redraw();
             }
             Err(mpsc::TryRecvError::Empty) => {}
             Err(mpsc::TryRecvError::Disconnected) => {
                 tracing::warn!("update download worker disconnected");
                 self.jobs.pending_update_download = None;
+                self.jobs.update_progress = None;
+                self.jobs.update_prompt = Some(UpdatePrompt::Error {
+                    message: "Update worker stopped".into(),
+                    candidate: self
+                        .jobs
+                        .update_prompt
+                        .as_ref()
+                        .and_then(|p| p.candidate().cloned()),
+                });
             }
         }
     }
@@ -1049,7 +1076,37 @@ impl WinitApp {
     }
 
     pub(super) fn handle_update_dialog_action(&mut self, action: UpdateDialogAction) {
+        if !self.select_maintenance_allowed() {
+            return;
+        }
         match action {
+            UpdateDialogAction::Cancel => {
+                if let Some(progress) = &self.jobs.update_progress {
+                    progress.cancel.store(true, Ordering::Relaxed);
+                }
+                crate::update::sparkle::cancel();
+                self.jobs.downloaded_update = None;
+                self.jobs.update_prompt = None;
+            }
+            UpdateDialogAction::Install => {
+                if crate::update::sparkle::available() {
+                    if let Err(error) =
+                        crate::update::sparkle::install(&self.update_restart_context())
+                    {
+                        self.jobs.update_prompt = Some(UpdatePrompt::Error {
+                            message: format!("{error:#}"),
+                            candidate: None,
+                        });
+                    }
+                } else if let Some(downloaded) = self.jobs.downloaded_update.take()
+                    && let Err(error) = self.apply_downloaded_update(downloaded)
+                {
+                    self.jobs.update_prompt = Some(UpdatePrompt::Error {
+                        message: format!("{error:#}"),
+                        candidate: None,
+                    });
+                }
+            }
             UpdateDialogAction::Update => {
                 let Some(candidate) =
                     self.jobs.update_prompt.as_ref().and_then(UpdatePrompt::candidate).cloned()
@@ -1057,8 +1114,11 @@ impl WinitApp {
                     return;
                 };
                 match candidate.asset.as_ref().map(|asset| asset.kind) {
-                    Some(UpdateAssetKind::WindowsInstaller) => {
+                    Some(UpdateAssetKind::WindowsInstaller | UpdateAssetKind::WindowsPortable) => {
                         self.spawn_update_download(candidate)
+                    }
+                    Some(UpdateAssetKind::MacosAppZip) if crate::update::sparkle::available() => {
+                        crate::update::sparkle::download();
                     }
                     _ => {
                         if let Err(error) = open_external_url(&candidate.html_url) {
@@ -1081,6 +1141,7 @@ impl WinitApp {
                 }
             }
             UpdateDialogAction::NotNow => {
+                crate::update::sparkle::cancel();
                 if let Some(version) =
                     self.jobs.update_prompt.as_ref().and_then(UpdatePrompt::candidate_version)
                 {
@@ -1089,6 +1150,7 @@ impl WinitApp {
                 self.jobs.update_prompt = None;
             }
             UpdateDialogAction::SkipRelease => {
+                crate::update::sparkle::cancel();
                 let Some(version) = self
                     .jobs
                     .update_prompt
@@ -1123,6 +1185,23 @@ impl WinitApp {
 
     pub(super) fn apply_downloaded_update(&mut self, downloaded: DownloadedUpdate) -> Result<()> {
         match downloaded.candidate.asset.as_ref().map(|asset| asset.kind) {
+            Some(UpdateAssetKind::WindowsPortable) => {
+                let (root, _) =
+                    crate::update::installed_package().context("missing package metadata")?;
+                let work = downloaded.work.context("missing staged update")?;
+                let request = bmz_updater::process::Request {
+                    root,
+                    work,
+                    restart: self.update_restart_context(),
+                };
+                let (tx, rx) = mpsc::channel();
+                self.jobs.update_prompt = Some(UpdatePrompt::Preparing(downloaded.candidate));
+                thread::Builder::new().name("update-handoff".into()).spawn(move || {
+                    let _ = tx.send(bmz_updater::process::start(&request));
+                })?;
+                self.jobs.pending_update_handoff = Some(rx);
+                Ok(())
+            }
             Some(UpdateAssetKind::WindowsInstaller) => {
                 launch_update_installer(&downloaded.path)?;
                 self.jobs.update_prompt = None;

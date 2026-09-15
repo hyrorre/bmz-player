@@ -12,6 +12,7 @@ members = [
     "crates/bmz-video",
     "crates/bmz-ffmpeg",
     "crates/bmz-font",
+    "crates/bmz-updater",
 ]
 default-members = ["crates/bmz-player"]
 resolver = "2"

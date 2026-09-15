@@ -560,6 +560,10 @@ impl ApplicationHandler<AppUserEvent> for WinitApp {
     }
 
     fn exiting(&mut self, _event_loop: &ActiveEventLoop) {
+        crate::update::sparkle::pause();
+        if let Some(progress) = &self.jobs.update_progress {
+            progress.cancel.store(true, Ordering::Relaxed);
+        }
         if let Some(handle) = self.integrations.discord_presence.take() {
             handle.shutdown();
         }

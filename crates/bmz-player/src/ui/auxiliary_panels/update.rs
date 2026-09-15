@@ -57,7 +57,7 @@ pub(super) fn build_update_dialog(
                     action = Some(UpdateDialogAction::OpenReleasePage);
                 }
             }
-            UpdateDialog::Downloading(candidate) => {
+            UpdateDialog::Downloading(candidate, progress) => {
                 ui.heading(tr!(
                     text,
                     "update-downloading",
@@ -65,17 +65,50 @@ pub(super) fn build_update_dialog(
                 ));
                 ui.horizontal(|ui| {
                     ui.spinner();
-                    ui.label(tr!(text, "update-fetching-asset"));
+                    ui.label(if progress.extracting.load(std::sync::atomic::Ordering::Relaxed) {
+                        tr!(text, "update-extracting")
+                    } else {
+                        tr!(text, "update-fetching-asset")
+                    });
                 });
+                let received = progress.received.load(std::sync::atomic::Ordering::Relaxed);
+                let total = progress.total.load(std::sync::atomic::Ordering::Relaxed);
+                if total > 0 {
+                    ui.add(
+                        egui::ProgressBar::new((received as f64 / total as f64).min(1.0) as f32)
+                            .show_percentage(),
+                    );
+                }
+                if ui.button(tr!(text, "common-cancel")).clicked() {
+                    action = Some(UpdateDialogAction::Cancel);
+                }
                 if let Some(asset) = candidate.asset.as_ref() {
                     ui.label(tr!(text, "update-asset", "asset" => asset.name.as_str()));
                 }
+            }
+            UpdateDialog::Ready(candidate) => {
+                ui.heading(tr!(text, "update-available", "version" => candidate.version.as_str()));
+                ui.label(tr!(text, "update-ready"));
+                if ui.button(tr!(text, "update-install-restart")).clicked() {
+                    action = Some(UpdateDialogAction::Install);
+                }
+                if ui.button(tr!(text, "common-cancel")).clicked() {
+                    action = Some(UpdateDialogAction::Cancel);
+                }
+            }
+            UpdateDialog::Preparing(candidate) => {
+                ui.label(tr!(text, "update-available", "version" => candidate.version.as_str()));
+                ui.spinner();
+                ui.label(tr!(text, "update-preparing"));
             }
             UpdateDialog::Error { message, candidate } => {
                 ui.heading(tr!(text, "update-check-failed"));
                 ui.colored_label(egui::Color32::LIGHT_RED, message);
                 ui.separator();
                 ui.horizontal(|ui| {
+                    if candidate.is_some() && ui.button(tr!(text, "update-retry")).clicked() {
+                        action = Some(UpdateDialogAction::Update);
+                    }
                     if ui.button(tr!(text, "common-close")).clicked() {
                         action = Some(UpdateDialogAction::NotNow);
                     }
@@ -122,6 +155,10 @@ pub(super) fn release_body_excerpt(body: &str) -> Option<String> {
 pub(super) fn update_asset_kind_label(kind: UpdateAssetKind, text: Localizer) -> String {
     match kind {
         UpdateAssetKind::WindowsInstaller => tr!(text, "update-kind-windows-installer"),
+        UpdateAssetKind::WindowsPortable => tr!(text, "update-kind-windows-portable"),
+        UpdateAssetKind::MacosAppZip if crate::update::sparkle::available() => {
+            tr!(text, "update-kind-macos-automatic")
+        }
         UpdateAssetKind::MacosAppZip => tr!(text, "update-kind-macos-manual"),
         UpdateAssetKind::Other => tr!(text, "update-kind-manual"),
     }

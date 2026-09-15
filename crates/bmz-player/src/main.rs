@@ -12,7 +12,11 @@ use bmz_player::logging::{
 #[tokio::main]
 async fn main() -> ExitCode {
     bmz_player::stdio::initialize_parent_console();
-    let args: Vec<String> = std::env::args().skip(1).collect();
+    let mut args: Vec<String> = std::env::args().skip(1).collect();
+    let restart = args.is_empty().then(bmz_player::update::sparkle::take_restart).flatten();
+    if let Some(context) = &restart {
+        args.extend(["--profile".to_owned(), context.profile.clone()]);
+    }
     if bmz_player::cli::args_request_help(&args) {
         bmz_player::stdio::stdout_line(format_args!("{}", bmz_player::cli::app_help_text()));
         return ExitCode::SUCCESS;
@@ -31,6 +35,13 @@ async fn main() -> ExitCode {
     }
     let command = invocation.command;
     let profile_id = invocation.profile_id;
+    let _update_guard = match bmz_player::update::startup_guard() {
+        Ok(guard) => guard,
+        Err(error) => {
+            bmz_player::stdio::stderr_line(format_args!("Error: {error:#}"));
+            return ExitCode::FAILURE;
+        }
+    };
     if matches!(command, Command::Monitors) {
         return match bmz_player::window_config::list_monitors() {
             Ok(()) => ExitCode::SUCCESS,
@@ -140,7 +151,17 @@ async fn main() -> ExitCode {
             }
         }
     }
-    let app_paths = match bmz_player::paths::resolve_app_paths() {
+    let app_paths = match restart
+        .map(|context| {
+            Ok(bmz_player::paths::AppPaths::from_dirs(
+                context.resource_dir,
+                context.data_dir,
+                context.cache_dir,
+                context.logs_dir,
+            ))
+        })
+        .unwrap_or_else(bmz_player::paths::resolve_app_paths)
+    {
         Ok(paths) => paths,
         Err(error) => {
             bmz_player::stdio::stderr_line(format_args!("Error: {error:#}"));

@@ -351,6 +351,7 @@ if (-not $OutDir) {
 $OutDir = Resolve-FullPath $OutDir
 
 Require-Command "cargo"
+Require-Command "node"
 Require-Command "robocopy"
 
 $profileDir = $Profile.ToLowerInvariant()
@@ -371,6 +372,10 @@ if ($Features) {
 if (-not $SkipBuild) {
     Write-Host "==> Building bmz-player ($profileDir)"
     Invoke-Native "cargo" $cargoArgs
+    $updaterArgs = @("build", "-p", "bmz-updater")
+    if ($Profile -eq "Release") { $updaterArgs += "--release" }
+    if ($Target) { $updaterArgs += @("--target", $Target) }
+    Invoke-Native "cargo" $updaterArgs
 }
 
 $targetBase = Join-Path $repoRoot "target"
@@ -415,6 +420,7 @@ New-Item -ItemType Directory -Force -Path (Join-Path $resourcesDir "fonts\noto-c
 New-Item -ItemType Directory -Force -Path $licensesDir | Out-Null
 
 Copy-RequiredFile $binary (Join-Path $stageDir "bmz-player.exe")
+Copy-RequiredFile (Join-Path (Split-Path -Parent $binary) "bmz-updater.exe") (Join-Path $stageDir "bmz-updater.exe")
 Copy-DirectoryMirror (Join-Path $repoRoot "data\skins\default") (Join-Path $resourcesDir "skins\default")
 Copy-DirectoryMirror (Join-Path $repoRoot "data\skins\Rmz-skin") (Join-Path $resourcesDir "skins\Rmz-skin")
 Copy-DirectoryMirror (Join-Path $repoRoot "data\skins\mz-select") (Join-Path $resourcesDir "skins\mz-select")
@@ -462,6 +468,10 @@ foreach ($dir in $dllDirs) {
     }
 }
 
+$arch = Resolve-InstallerArch $Target
+$updateMetadataScript = Join-Path $repoRoot "scripts\generate-update-metadata.mjs"
+Invoke-Native "node" @($updateMetadataScript, "package", $stageDir, "portable", "windows-$arch", $version)
+
 if ($Smoke) {
     Write-Host "==> Running packaged smoke test"
     $oldDataDir = $env:BMZ_DATA_DIR
@@ -471,6 +481,8 @@ if ($Smoke) {
         Invoke-Native (Join-Path $stageDir "bmz-player.exe") @("--boot-play-sample", "--smoke-exit-after-frames", "3")
     } finally {
         $env:BMZ_DATA_DIR = $oldDataDir
+        $smokeLock = Join-Path $stageDir ".bmz-instance.lock"
+        if (Test-Path -LiteralPath $smokeLock) { Remove-Item -LiteralPath $smokeLock -Force }
     }
 }
 
@@ -482,6 +494,7 @@ if ($Installer) {
     $arch = Resolve-InstallerArch $Target
 
     Write-Host "==> Building Inno Setup installer"
+    Invoke-Native "node" @($updateMetadataScript, "package", $stageDir, "installer", "windows-$arch", $version)
     Invoke-Native $iscc @(
         "/DAppVersion=$version",
         "/DSourceDir=$stageDir",
@@ -490,6 +503,8 @@ if ($Installer) {
         "/DAppArch=$arch",
         $issPath
     )
+    # Keep staging ready for the portable ZIP after building the installer.
+    Invoke-Native "node" @($updateMetadataScript, "package", $stageDir, "portable", "windows-$arch", $version)
 }
 
 Write-Host "==> Done"

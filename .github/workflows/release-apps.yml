@@ -30,6 +30,7 @@ concurrency:
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
+  BMZ_UPDATE_PUBLIC_KEY: ${{ vars.BMZ_UPDATE_PUBLIC_KEY }}
 
 jobs:
   metadata:
@@ -84,6 +85,11 @@ jobs:
             echo "version=${version}"
             echo "should_upload=${should_upload}"
           } >> "${GITHUB_OUTPUT}"
+
+      - name: Test update metadata generators
+        run: |
+          node --test scripts/generate-update-metadata.test.mjs
+          python3 scripts/test_sparkle_appcast.py
 
   build-windows:
     name: Build Windows x64
@@ -175,9 +181,16 @@ jobs:
       - name: Package Windows app
         shell: pwsh
         run: |
+          if ("${{ needs.metadata.outputs.should_upload }}" -eq "true" -and -not $env:BMZ_UPDATE_PUBLIC_KEY) {
+            throw "BMZ_UPDATE_PUBLIC_KEY must be configured before publishing automatic updates"
+          }
           .\scripts\package-windows.ps1 `
             -Installer `
             -DllDir (Join-Path $env:VCPKG_ROOT "installed\$env:VCPKG_DEFAULT_TRIPLET\bin")
+
+      - name: Test portable update recovery
+        shell: pwsh
+        run: cargo test -p bmz-updater
 
       - name: Verify packaged executable
         shell: pwsh
@@ -243,6 +256,7 @@ jobs:
       BMZ_MACOS_NOTARY_APPLE_ID: ${{ secrets.BMZ_MACOS_NOTARY_APPLE_ID }}
       BMZ_MACOS_NOTARY_PASSWORD: ${{ secrets.BMZ_MACOS_NOTARY_PASSWORD }}
       BMZ_MACOS_NOTARY_TEAM_ID: ${{ secrets.BMZ_MACOS_NOTARY_TEAM_ID }}
+      BMZ_SPARKLE_PUBLIC_KEY: ${{ vars.BMZ_SPARKLE_PUBLIC_KEY }}
     steps:
       - name: Checkout release ref
         uses: actions/checkout@v7
@@ -364,6 +378,17 @@ jobs:
 
       - name: Package macOS app
         run: |
+          if [[ "${{ needs.metadata.outputs.should_upload }}" == "true" ]]; then
+            [[ "${BMZ_MACOS_NOTARIZATION_READY:-0}" == "1" && -n "${BMZ_SPARKLE_PUBLIC_KEY}" ]] || {
+              echo "Automatic updates require Developer ID, notarization and BMZ_SPARKLE_PUBLIC_KEY" >&2
+              exit 1
+            }
+          fi
+          if [[ -n "${BMZ_SPARKLE_PUBLIC_KEY}" ]]; then
+            export BMZ_SPARKLE_DIR="${RUNNER_TEMP}/bmz-sparkle"
+            bash scripts/prepare-sparkle.sh "${BMZ_SPARKLE_DIR}"
+            echo "BMZ_SPARKLE_DIR=${BMZ_SPARKLE_DIR}" >> "${GITHUB_ENV}"
+          fi
           sign_args=(--ad-hoc-sign)
           if [[ "${BMZ_MACOS_SIGNING_READY}" == "1" ]]; then
             sign_args=(--sign "${BMZ_MACOS_CODESIGN_IDENTITY}")
@@ -410,6 +435,27 @@ jobs:
             "dist/macos/BMZ Player.app" \
             "dist/release/bmz-player-v${BMZ_VERSION}-macos-${BMZ_MACOS_ARCH}.app.zip"
           ls -la dist/release
+
+      - name: Sign macOS update archive
+        if: needs.metadata.outputs.should_upload == 'true'
+        env:
+          BMZ_SPARKLE_PRIVATE_KEY: ${{ secrets.BMZ_SPARKLE_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          test -n "${BMZ_SPARKLE_PRIVATE_KEY}"
+          python3 - <<'PY'
+          import base64, os
+          try:
+              key = base64.b64decode(os.environ['BMZ_SPARKLE_PRIVATE_KEY'].strip(), validate=True)
+              public = base64.b64decode(os.environ['BMZ_SPARKLE_PUBLIC_KEY'], validate=True)
+              assert len(key) in (64, 96) and len(public) == 32 and key[-32:] == public
+          except Exception:
+              raise SystemExit('Sparkle private key does not match embedded public key')
+          PY
+          archive="dist/release/bmz-player-v${BMZ_VERSION}-macos-${BMZ_MACOS_ARCH}.app.zip"
+          # Sparkle's tool reads its exported EdDSA private key from stdin.
+          printf '%s' "${BMZ_SPARKLE_PRIVATE_KEY}" | "${BMZ_SPARKLE_DIR}/bin/sign_update" --ed-key-file - -p "${archive}" \
+            > "dist/release/sparkle-${BMZ_MACOS_ARCH}.signature"
 
       - name: Upload macOS release files
         uses: actions/upload-artifact@v7
@@ -601,6 +647,9 @@ jobs:
     if: needs.metadata.outputs.should_upload == 'true'
     permissions:
       contents: write
+    concurrency:
+      group: bmz-update-feed-publish
+      cancel-in-progress: false
     steps:
       - name: Checkout release ref
         uses: actions/checkout@v7
@@ -641,8 +690,14 @@ jobs:
         run: |
           set -euo pipefail
           cd dist/release
-          sha256sum * > SHA256SUMS.txt
+          find . -maxdepth 1 -type f ! -name '*.signature' ! -name SHA256SUMS.txt -printf '%f\0' | sort -z | xargs -0 sha256sum > SHA256SUMS.txt
           cat SHA256SUMS.txt
+
+      - name: Generate signed update metadata
+        env:
+          BMZ_UPDATE_PRIVATE_KEY: ${{ secrets.BMZ_UPDATE_PRIVATE_KEY }}
+          BMZ_VERSION: ${{ needs.metadata.outputs.version }}
+        run: node scripts/generate-update-metadata.mjs release dist/release "${BMZ_VERSION}"
 
       - name: Upload files to GitHub Release
         env:
@@ -652,8 +707,45 @@ jobs:
           CLOBBER_ASSETS: ${{ inputs.clobber_assets }}
         run: |
           set -euo pipefail
-          args=(release upload "${RELEASE_TAG}" dist/release/*)
+          files=()
+          for asset in dist/release/*; do
+            case "${asset}" in */updates.json|*.signature) continue ;; esac
+            files+=("${asset}")
+          done
+          args=(release upload "${RELEASE_TAG}" "${files[@]}")
           if [[ "${CLOBBER_ASSETS:-false}" == "true" ]]; then
             args+=(--clobber)
           fi
           gh "${args[@]}"
+
+      - name: Publish completed update metadata and Sparkle feeds
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ needs.metadata.outputs.tag }}
+          BMZ_VERSION: ${{ needs.metadata.outputs.version }}
+        run: |
+          set -euo pipefail
+          # New release metadata is a final commit marker, after every archive is available.
+          gh release upload "${RELEASE_TAG}" dist/release/updates.json --clobber
+          if ! gh release view update-feed >/dev/null 2>&1; then
+            gh release create update-feed --title "BMZ update feeds" --notes "Static appcast files used by BMZ Player." --prerelease --latest=false
+          fi
+          prerelease="$(gh release view "${RELEASE_TAG}" --json isPrerelease --jq .isPrerelease)"
+          mkdir -p dist/feeds
+          for arch in x64 arm64; do
+            signature="$(cat "dist/release/sparkle-${arch}.signature")"
+            archive="dist/release/bmz-player-v${BMZ_VERSION}-macos-${arch}.app.zip"
+            size="$(stat -c %s "${archive}")"
+            for channel in stable prerelease; do
+              if [[ "${channel}" == stable && "${prerelease}" == true ]]; then continue; fi
+              feed="appcast-${channel}-${arch}.xml"
+              existing="$(gh release view update-feed --json assets --jq '.assets[].name')"
+              if printf '%s\n' "${existing}" | grep -Fxq "${feed}"; then
+                gh release download update-feed --pattern "${feed}" --dir dist/feeds --clobber
+              fi
+              python3 scripts/generate-sparkle-appcast.py --version "${BMZ_VERSION}" --arch "${arch}" \
+                --signature "${signature}" --size "${size}" --previous "dist/feeds/${feed}" --output "dist/feeds/${feed}"
+              gh release upload update-feed "dist/feeds/${feed}" --clobber
+            done
+          done

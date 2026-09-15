@@ -81,6 +81,10 @@ beatoraja の参照ソースは `.local/beatoraja/`、beatoraja 対応スキン�
   - `src/ui.rs` が egui の状態管理、イベント処理、本体設定 / スキン設定 / デバッグ表示の構築を担当します。
   - difficulty table と songs 管理の CLI は `src/cli.rs`, `src/table_cmd.rs`, `src/songs_cmd.rs` を確認します。
 
+- `crates/bmz-updater`
+  - Windows portableのパッケージ検証・署名検証・更新helper・復旧処理です。音声/GPUには依存しません。
+  - 更新仕様と署名キー・配布手順は `docs/auto-update.md`。macOS側は `bmz-player/native/sparkle.m` からSparkleへ接続します。
+
 - `data/skins/default`
   - デフォルトスキン画像と beatoraja JSON 形式の `select.json` / `decide.json` / `play*.json` / `result.json`。
   - `note-blue.png`, `note-red.png` は key2/4/6 と scratch 系テクスチャに使います。

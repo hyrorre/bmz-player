@@ -51,6 +51,8 @@ staging layout:
 ```text
 BMZ Player/
   bmz-player.exe
+  bmz-updater.exe
+  bmz-package.json
   resources/
     bmz-player.ico
     skins/
@@ -492,15 +494,15 @@ bmz-player-v<version>-linux-x64-flatpak-provenance.txt
 SHA256SUMS.txt
 ```
 
-GitHub Release に添付するのは、ユーザーが選ぶ配布物と `SHA256SUMS.txt` のみ。
+GitHub Release には配布物、`SHA256SUMS.txt`、client manifest、署名付き `updates.json` を添付する。
 `*-provenance.txt` / `*-ffmpeg-build.txt` は Actions artifact 側に残し、
 Release asset には登録しない。
 
 ## App update checks
 
-BMZ Player は GitHub Releases を更新確認先として使う。Stable channel は
-GitHub API の `releases/latest` を参照するため、draft / prerelease は対象外。
-Prerelease channel は releases 一覧から最新の非 draft release を対象にする。
+Windows は GitHub Releases を更新確認先として使い、SemVerで最新版を比較する。
+Stable は draft / prerelease を除外し、Prerelease は非 draft release を対象にする。
+macOS の更新対応bundleはSparkleのチャンネル・CPU別フィードを使う。
 
 アプリ側の設定は `data/config.toml` の `[updates]` に保存する。
 
@@ -515,19 +517,16 @@ skipped_version = ""
 起動時チェックは release build の既定では有効、debug build の既定では無効。設定画面の
 「アップデート」から手動確認できる。
 
-更新が見つかった場合は Select 画面または設定画面で dialog を出し、ユーザーが
+更新が見つかった場合は Select 画面で dialog を出し、ユーザーが
 `アップデート` / `今回はアップデートしない` / `このリリースをスキップ` を選ぶ。
 `今回はアップデートしない` はその起動中だけ抑止し、`このリリースをスキップ` は
 `skipped_version` に保存して次の別 version まで通知しない。
 
-自動適用 v1 は Windows installer artifact のみを対象にする。対象 asset は
-`bmz-player-v<version>-windows-x64-setup.exe` を優先し、download 後に GitHub asset
-`digest` または `SHA256SUMS.txt` の SHA256 と照合する。検証後に installer を起動し、
-BMZ Player は通常の終了処理へ進む。
-
-macOS `.app.zip` と Windows portable zip は、現時点では release page を開く手動更新に
-留める。macOS の自動置換は Developer ID 署名 / notarization / helper の方針が固まってから
-追加する。
+Windows は `bmz-package.json` の形式に従ってinstaller/portableを選択する。
+portableは署名付き更新情報とファイル一覧を検証し、専用helperで置換・復旧する。
+macOS はSparkleで署名済み `.app.zip` を適用する。いずれも検証後にユーザーが
+「更新して再起動」を選ぶ。旧版・開発ビルドなど形式不明の環境は手動更新を案内する。
+署名キー、helper自身の更新、橋渡し版、復旧手順は [自動更新](auto-update.md) を参照。
 
 release tag は `v0.1.0` のように `v` prefix 付きでもよいが、数値部分は
 `Cargo.toml` の workspace version と一致する必要がある。手動実行では `tag` input
@@ -539,10 +538,9 @@ release artifact は ASIO 対応を含む。`cpal/asio` が使う `asio-sys` bui
 ASIO SDK をビルド時に取得し、bindings 生成用に runner の LLVM `libclang` path を
 `LIBCLANG_PATH` で明示する。
 
-macOS job は arm64 / x64 の app zip を別々に作る。現状は `--ad-hoc-sign` のため、
-Developer ID 署名と notarization 用の protected GitHub secrets が無い場合、Actions
-artifact は quarantine 付き環境で通常起動できないことがある。署名済み release を
-公開する場合は次の secrets を設定する。
+macOS job は arm64 / x64 の app zip を別々に作る。公開時にはDeveloper ID署名と
+notarizationを必須とする。次のsecretsに加え、[自動更新](auto-update.md) に記載した
+Windows / Sparkle の更新署名キーを設定する。
 
 - `BMZ_MACOS_CODESIGN_IDENTITY`
 - `BMZ_MACOS_CERTIFICATE_P12_BASE64`
@@ -553,8 +551,8 @@ artifact は quarantine 付き環境で通常起動できないことがある�
 - `BMZ_MACOS_NOTARY_TEAM_ID`
 
 secrets が揃っている場合、macOS job は Developer ID 署名、notarization、stapling、
-`spctl` 検証を行ってから `.app.zip` を作る。無い場合は従来通り ad-hoc 署名で
-artifact を作る。
+`spctl` 検証を行ってから `.app.zip` を作る。未設定でのad-hoc署名は
+`upload_to_release=false` のdry runのみ許可する。
 
 macOS の arm64 runner は `macos-15`、x64 runner は `macos-15-intel` を使う。
 workflow matrix から arm64 には `MACOSX_DEPLOYMENT_TARGET=11.0`、x64 には

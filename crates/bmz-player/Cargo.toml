@@ -67,6 +67,11 @@ bmz-gameplay = { path = "../bmz-gameplay" }
 bmz-render = { path = "../bmz-render" }
 bmz-skin = { path = "../bmz-skin" }
 bmz-video = { path = "../bmz-video" }
+bmz-updater = { path = "../bmz-updater" }
+semver = "1"
+
+[build-dependencies]
+cc = "1"
 
 [dev-dependencies]
 fluent-syntax.workspace = true

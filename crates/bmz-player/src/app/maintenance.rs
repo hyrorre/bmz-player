@@ -25,6 +25,13 @@ impl WinitApp {
 
     /// network worker群へSelect実行許可を同期する。
     pub(super) fn sync_select_maintenance_gate(&self) {
+        if !self.select_maintenance_allowed() {
+            if let Some(progress) = &self.jobs.update_progress {
+                progress.paused.store(true, Ordering::Relaxed);
+                progress.cancel.store(true, Ordering::Relaxed);
+            }
+            crate::update::sparkle::pause();
+        }
         self.jobs.maintenance_select_tx.send_if_modified(|allowed| {
             let next = self.select_maintenance_allowed();
             if *allowed == next {
@@ -56,6 +63,8 @@ impl WinitApp {
         self.poll_pending_replay_import();
         self.poll_pending_update_check();
         self.poll_pending_update_download();
+        self.poll_update_handoff();
+        self.poll_sparkle_update();
         self.poll_pending_rival_sync();
         self.poll_pending_course_link_repair();
 

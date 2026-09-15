@@ -207,6 +207,7 @@ impl WinitApp {
         let practice_media_ready = self.practice_media_ready();
         let practice_input_enabled = self.play.play_ending.is_none();
         let practice_default_position = self.renderer.play_skin_practice_position();
+        let update_allowed = self.select_maintenance_allowed();
         let mut practice_panel_ctx = practice_panel_context(
             self.play.practice_session.as_mut(),
             practice_media_ready,
@@ -214,7 +215,12 @@ impl WinitApp {
             practice_default_position,
         );
         let result_ir_panel = self.result.result_ir.as_mut();
-        let update_dialog = self.jobs.update_prompt.as_ref().map(UpdatePrompt::as_dialog);
+        let update_dialog = self
+            .jobs
+            .update_prompt
+            .as_ref()
+            .filter(|_| update_allowed)
+            .map(UpdatePrompt::as_dialog);
         let obs_connection_status = self
             .integrations
             .obs_controller
