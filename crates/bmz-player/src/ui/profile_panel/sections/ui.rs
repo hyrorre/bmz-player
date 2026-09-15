@@ -28,6 +28,16 @@ pub(in crate::ui::profile_panel) fn build_profile_ui_section(
                 text = Localizer::new(selected_locale);
                 section.save_clicked = true;
             }
+            ui.horizontal(|ui| {
+                ui.add(
+                    egui::Slider::new(&mut profile.ui.scale_percent, 100..=200)
+                        .suffix("%")
+                        .text(tr!(text, "profile-ui-scale")),
+                );
+                if ui.button(tr!(text, "profile-ui-scale-reset")).clicked() {
+                    profile.ui.scale_percent = 100;
+                }
+            });
             if ui.checkbox(show_fps, tr!(text, "settings-show-fps")).changed() {
                 profile.ui.show_fps = *show_fps;
             }

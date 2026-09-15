@@ -163,11 +163,18 @@ pub struct UiConfig {
     )]
     pub language: String,
     pub theme: String,
+    /// OS の表示倍率に追加する egui UI 倍率 (%)。
+    #[serde(default = "default_ui_scale_percent")]
+    pub scale_percent: u32,
     pub show_fps: bool,
     pub confirm_on_exit: bool,
 }
 
 impl UiConfig {
+    pub fn zoom_factor(&self) -> f32 {
+        self.scale_percent.clamp(100, 200) as f32 / 100.0
+    }
+
     /// 保存互換の String から、UI で利用する型付き locale を返す。
     pub fn locale(&self) -> AppLocale {
         AppLocale::profile_language(&self.language)
@@ -188,6 +195,10 @@ impl UiConfig {
 
 fn default_profile_language() -> String {
     AppLocale::system_default().code().to_owned()
+}
+
+fn default_ui_scale_percent() -> u32 {
+    100
 }
 
 fn deserialize_profile_language<'de, D>(deserializer: D) -> Result<String, D::Error>

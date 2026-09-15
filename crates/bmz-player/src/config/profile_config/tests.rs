@@ -1,6 +1,27 @@
 use super::*;
 
 #[test]
+fn ui_scale_preserves_old_profiles_and_roundtrips() {
+    let mut profile = ProfileConfig::new_default("default", "Player", 0);
+    assert_eq!(profile.ui.scale_percent, 100);
+    let mut value = toml::Value::try_from(&profile).unwrap();
+    value.get_mut("ui").unwrap().as_table_mut().unwrap().remove("scale_percent");
+    let decoded: ProfileConfig = value.try_into().unwrap();
+    assert_eq!(decoded.ui.zoom_factor(), 1.0);
+
+    profile.ui.scale_percent = 125;
+    let encoded = toml::to_string(&profile).unwrap();
+    let decoded: ProfileConfig = toml::from_str(&encoded).unwrap();
+    assert_eq!(decoded.ui.scale_percent, 125);
+    assert_eq!(decoded.ui.zoom_factor(), 1.25);
+
+    profile.ui.scale_percent = 0;
+    assert_eq!(profile.ui.zoom_factor(), 1.0);
+    profile.ui.scale_percent = u32::MAX;
+    assert_eq!(profile.ui.zoom_factor(), 2.0);
+}
+
+#[test]
 fn chart_replication_mode_uses_beatoraja_names_and_defaults_to_rival_chart() {
     #[derive(Serialize, Deserialize)]
     struct ModeWrapper {

@@ -548,6 +548,7 @@ impl ProfileConfig {
             ui: UiConfig {
                 language: AppLocale::system_default().code().to_owned(),
                 theme: "default".to_string(),
+                scale_percent: 100,
                 show_fps: false,
                 confirm_on_exit: false,
             },

@@ -13,6 +13,8 @@ impl EguiLayer {
     /// `show_fps` は右上 FPS オーバーレイの初期表示状態。
     pub fn new(window: &Window, show_fps: bool, font_search_paths: Vec<PathBuf>) -> Self {
         let ctx = egui::Context::default();
+        // 倍率はプロファイル設定で管理し、egui 標準ショートカットとの競合を避ける。
+        ctx.options_mut(|options| options.zoom_with_keyboard = false);
         let font_coverage = bmz_render::FontCoverage::Japanese;
         install_cjk_fonts(&ctx, font_coverage, &font_search_paths);
         let state = egui_winit::State::new(
@@ -250,6 +252,7 @@ impl EguiLayer {
             self.font_coverage = font_coverage;
         }
         let text = Localizer::new(profile_config.ui.locale());
+        self.ctx.set_zoom_factor(profile_config.ui.zoom_factor());
         let raw_input = self.state.take_egui_input(window);
         let ctx = self.ctx.clone();
         SettingsFeedback::profile_changed(&ctx, &profile_config.id);
