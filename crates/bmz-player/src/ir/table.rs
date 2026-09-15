@@ -66,6 +66,10 @@ impl RianTableIdentity {
         &self.source_prefix
     }
 
+    pub fn display_name(&self) -> &'static str {
+        if crate::ir::bms_ir::is_bms_ir_provider(&self.provider_key) { "BMS-IR" } else { "rianIR" }
+    }
+
     pub fn owns_source(&self, source_url: &str) -> bool {
         source_url.starts_with(&self.source_prefix)
     }

@@ -535,6 +535,12 @@ impl WinitApp {
         let Some(rx) = self.jobs.table_fetch.pending_rian.take() else {
             return;
         };
+        let provider_name = self
+            .jobs
+            .table_fetch
+            .rian_identity
+            .as_ref()
+            .map_or("IR", RianTableIdentity::display_name);
         let result = match rx.try_recv() {
             Ok(result) => result,
             Err(mpsc::TryRecvError::Empty) => {
@@ -543,7 +549,7 @@ impl WinitApp {
             }
             Err(mpsc::TryRecvError::Disconnected) => {
                 tracing::warn!("rianIR table fetch worker disconnected");
-                self.show_left_overlay_toast("rianIR TABLE: worker disconnected");
+                self.show_left_overlay_toast(format!("{provider_name} TABLE: worker disconnected"));
                 return;
             }
         };
@@ -555,6 +561,7 @@ impl WinitApp {
             return;
         }
 
+        let provider_name = result.identity.display_name();
         match result.result {
             RianTableFetchOutcome::Completed(Ok(tables)) => {
                 match crate::ir::table::store_account_tables(
@@ -570,19 +577,23 @@ impl WinitApp {
                         );
                         self.refresh_difficulty_tables_and_select();
                         self.show_left_overlay_toast(format!(
-                            "rianIR TABLE: {table_count} tables, {entry_count} entries"
+                            "{provider_name} TABLE: {table_count} tables, {entry_count} entries"
                         ));
                     }
                     Err(error) => {
                         tracing::error!(%error, "failed to store rianIR tables");
-                        self.show_left_overlay_toast("rianIR TABLE: cache update failed");
+                        self.show_left_overlay_toast(format!(
+                            "{provider_name} TABLE: cache update failed"
+                        ));
                     }
                 }
             }
             RianTableFetchOutcome::Completed(Err(error)) => {
                 // stale-while-revalidate: 既存キャッシュは消さず、そのまま選曲に残す。
                 tracing::warn!(%error, "failed to fetch rianIR tables; keeping cached tables");
-                self.show_left_overlay_toast("rianIR TABLE: fetch failed (using cache)");
+                self.show_left_overlay_toast(format!(
+                    "{provider_name} TABLE: fetch failed (using cache)"
+                ));
             }
             RianTableFetchOutcome::Paused => {
                 self.jobs.table_fetch.rian_last_started_at = None;
