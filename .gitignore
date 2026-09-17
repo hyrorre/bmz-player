@@ -43,6 +43,7 @@ logs
 *.log
 
 # Misc
+__pycache__/
 .DS_Store
 .fleet
 .idea
