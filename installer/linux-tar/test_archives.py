@@ -8,7 +8,7 @@ import tarfile
 import tempfile
 import unittest
 
-from archives import LIMIT, checksums, extract
+from archives import LIMIT, checksums, extract, verify_checksums
 from manifest import check_pair, inventory, sha256
 
 spec = importlib.util.spec_from_file_location("verify_sources", Path(__file__).with_name("verify-sources.py"))
@@ -113,6 +113,14 @@ class ArchiveTests(unittest.TestCase):
             stream.truncate(LIMIT)
         with self.assertRaisesRegex(ValueError, "below 2 GiB"):
             checksums([archive])
+
+    def test_release_checksums_include_other_platforms(self):
+        pair = "aaa  runtime.tar.gz\nbbb  sources.tar.gz\n"
+        verify_checksums(pair, "ccc  windows.zip\n" + pair + "ddd  client-manifest.json\n")
+        for invalid in ("aaa  runtime.tar.gz\n", pair.replace("bbb", "bad"),
+                        pair + "bbb  sources.tar.gz\n"):
+            with self.subTest(invalid=invalid), self.assertRaises(ValueError):
+                verify_checksums(pair, invalid)
 
     def test_extract_rejects_traversal(self):
         archive = self.root / "unsafe.tar.gz"

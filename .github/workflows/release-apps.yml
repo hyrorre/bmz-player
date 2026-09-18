@@ -39,6 +39,7 @@ jobs:
     outputs:
       tag: ${{ steps.meta.outputs.tag }}
       version: ${{ steps.meta.outputs.version }}
+      commit: ${{ steps.meta.outputs.commit }}
       should_upload: ${{ steps.meta.outputs.should_upload }}
     steps:
       - name: Checkout release ref
@@ -83,6 +84,7 @@ jobs:
           {
             echo "tag=${tag}"
             echo "version=${version}"
+            echo "commit=$(git rev-parse HEAD)"
             echo "should_upload=${should_upload}"
           } >> "${GITHUB_OUTPUT}"
 
@@ -91,6 +93,7 @@ jobs:
           node --test scripts/generate-update-metadata.test.mjs
           node --test scripts/verify-sparkle-signature.test.mjs
           python3 scripts/test_sparkle_appcast.py
+          node --test scripts/combine-client-hash-manifests.test.mjs
 
   build-windows:
     name: Build Windows x64
@@ -107,7 +110,7 @@ jobs:
       - name: Checkout release ref
         uses: actions/checkout@v7
         with:
-          ref: ${{ needs.metadata.outputs.tag }}
+          ref: ${{ needs.metadata.outputs.commit }}
           fetch-depth: 0
           submodules: recursive
 
@@ -212,7 +215,7 @@ jobs:
             --output "dist\release\bmz-player-v$env:BMZ_VERSION-windows-x64-client-manifest.json" `
             --version $env:BMZ_VERSION `
             --target windows-x64 `
-            --git-commit $env:GITHUB_SHA
+            --git-commit '${{ needs.metadata.outputs.commit }}'
 
           $portable = "dist\release\bmz-player-v$env:BMZ_VERSION-windows-x64-portable.zip"
           Compress-Archive -Path "dist\windows\BMZ Player" -DestinationPath $portable -Force
@@ -266,7 +269,7 @@ jobs:
       - name: Checkout release ref
         uses: actions/checkout@v7
         with:
-          ref: ${{ needs.metadata.outputs.tag }}
+          ref: ${{ needs.metadata.outputs.commit }}
           fetch-depth: 0
           submodules: recursive
 
@@ -439,7 +442,7 @@ jobs:
             --output "dist/release/bmz-player-v${BMZ_VERSION}-macos-${BMZ_MACOS_ARCH}-client-manifest.json" \
             --version "${BMZ_VERSION}" \
             --target "macos-${BMZ_MACOS_ARCH}" \
-            --git-commit "${GITHUB_SHA}"
+            --git-commit "${{ needs.metadata.outputs.commit }}"
           ditto -c -k --keepParent \
             "dist/macos/BMZ Player.app" \
             "dist/release/bmz-player-v${BMZ_VERSION}-macos-${BMZ_MACOS_ARCH}.app.zip"
@@ -492,7 +495,7 @@ jobs:
       - name: Checkout release ref
         uses: actions/checkout@v7
         with:
-          ref: ${{ needs.metadata.outputs.tag }}
+          ref: ${{ needs.metadata.outputs.commit }}
           fetch-depth: 0
           submodules: recursive
 
@@ -615,7 +618,7 @@ jobs:
             --output "dist/release/bmz-player-v${BMZ_VERSION}-linux-x64-flatpak-client-manifest.json" \
             --version "${BMZ_VERSION}" \
             --target linux-x64-flatpak \
-            --git-commit "${GITHUB_SHA}"
+            --git-commit "${{ needs.metadata.outputs.commit }}"
 
           cp "${src}" "${dst}"
 
@@ -638,6 +641,44 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
+  build-linux-tar:
+    name: Build Linux tar x64
+    runs-on: ubuntu-22.04
+    needs: metadata
+    timeout-minutes: 120
+    env:
+      BMZ_VERSION: ${{ needs.metadata.outputs.version }}
+      BMZ_RELEASE_COMMIT: ${{ needs.metadata.outputs.commit }}
+    steps:
+      - name: Checkout release commit
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.metadata.outputs.commit }}
+          submodules: recursive
+          persist-credentials: false
+      - name: Packaging regression checks
+        run: python3 -m unittest discover -s installer/linux-tar -p 'test_*.py' -v
+      - name: Reject development client hash override
+        run: |
+          if [[ "${BMZ_RIANIR_DEV_CLIENT_HASH+x}" == x ]]; then
+            echo "BMZ_RIANIR_DEV_CLIENT_HASH must not be set for official releases" >&2
+            exit 1
+          fi
+      - name: Build and verify runtime and corresponding sources
+        id: package
+        run: scripts/package-linux-tar.sh
+      - name: Upload Linux tar release files
+        uses: actions/upload-artifact@v7
+        with:
+          name: release-linux-tar-x64
+          path: |
+            ${{ steps.package.outputs.runtime }}
+            ${{ steps.package.outputs.sources }}
+            ${{ steps.package.outputs.client_manifest }}
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
+
   attach-release-assets:
     name: Attach release assets
     runs-on: ubuntu-latest
@@ -646,7 +687,7 @@ jobs:
       - build-windows
       - build-macos
       - build-flatpak
-    if: needs.metadata.outputs.should_upload == 'true'
+      - build-linux-tar
     permissions:
       contents: write
     concurrency:
@@ -656,7 +697,7 @@ jobs:
       - name: Checkout release ref
         uses: actions/checkout@v7
         with:
-          ref: ${{ needs.metadata.outputs.tag }}
+          ref: ${{ needs.metadata.outputs.commit }}
           fetch-depth: 1
 
       - name: Download release files
@@ -682,7 +723,7 @@ jobs:
           node scripts/combine-client-hash-manifests.mjs \
             --input-dir dist/release \
             --output "${output}" \
-            --expected-targets windows-x64,macos-arm64,macos-x64,linux-x64-flatpak
+            --expected-targets windows-x64,macos-arm64,macos-x64,linux-x64-flatpak,linux-x64-tar
           find dist/release -maxdepth 1 -type f \
             -name "*-client-manifest.json" ! -path "${output}" \
             -print -delete
@@ -695,13 +736,25 @@ jobs:
           find . -maxdepth 1 -type f ! -name '*.signature' ! -name SHA256SUMS.txt -printf '%f\0' | sort -z | xargs -0 sha256sum > SHA256SUMS.txt
           cat SHA256SUMS.txt
 
+      - name: Upload verified release files for dry run
+        if: needs.metadata.outputs.should_upload != 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: verified-release-files
+          path: dist/release/*
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
+
       - name: Generate signed update metadata
+        if: needs.metadata.outputs.should_upload == 'true'
         env:
           BMZ_UPDATE_PRIVATE_KEY: ${{ secrets.BMZ_UPDATE_PRIVATE_KEY }}
           BMZ_VERSION: ${{ needs.metadata.outputs.version }}
         run: node scripts/generate-update-metadata.mjs release dist/release "${BMZ_VERSION}"
 
       - name: Upload files to GitHub Release
+        if: needs.metadata.outputs.should_upload == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
@@ -721,6 +774,7 @@ jobs:
           gh "${args[@]}"
 
       - name: Publish completed update metadata and Sparkle feeds
+        if: needs.metadata.outputs.should_upload == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}

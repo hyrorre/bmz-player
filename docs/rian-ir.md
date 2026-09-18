@@ -385,7 +385,7 @@ release buildはbeatorajaのJAR hashと同じ考え方で、実行ファイル�
 SHA-256（小文字64桁hex）を `client_hash` として送る。archive、installer、app bundle
 全体のhashではない。
 
-Windows/macOS/Flatpakの各release buildは最終実行ファイルから内部用manifestを生成する。
+Windows/macOS/Flatpak/Linux tarの各release buildは最終実行ファイルから内部用manifestを生成する。
 最終release jobは全targetのmanifestを検証・集約し、GitHub ReleaseにはrianIR importer
 互換manifestを `client-manifest-bmz-player-vX.Y.Z.json` として1ファイルだけ含める。
 
@@ -419,6 +419,12 @@ Windows/macOS/Flatpakの各release buildは最終実行ファイルから内部�
       "arch": "x86_64",
       "package_kind": "flatpak",
       "client_hash": "<64 hex>"
+    },
+    {
+      "platform": "linux",
+      "arch": "x86_64",
+      "package_kind": "tar",
+      "client_hash": "<64 hex>"
     }
   ]
 }
@@ -428,6 +434,11 @@ Windows/macOS/Flatpakの各release buildは最終実行ファイルから内部�
 targetをrianIRのplatform、arch、package_kindへ変換する。rianIR管理者はmanifestの
 version、commit、各buildを確認してから `builds[].client_hash`を `allowed_clients`
 へ登録する。失効時は同テーブルから削除する。
+
+Linux tarは `linux-x64-tar` を `platform=linux, arch=x86_64, package_kind=tar` に変換する。
+ハッシュは `patchelf` 後のアーカイブ内 `bin/bmz-player` の検証済み値を使う。
+初回公開前にrianIR管理者と `package_kind=tar` の受入を確認し、当該hashを登録する。
+Releaseへのmanifest添付だけではallowlist登録は行われない。
 
 ローカル開発でdebug/release profileを繰り返しbuildするときは、コンパイル時の
 `BMZ_RIANIR_DEV_CLIENT_HASH`に個人用の小文字64桁hexを設定できる。設定値は

@@ -477,13 +477,13 @@ FFmpeg は `ffmpeg-next` 経由で音声/動画 decode に使う。Flatpak artif
 `docs/licenses.md` の release checklist に従う。`--enable-nonfree` を含む FFmpeg build は
 配布物に含めない。
 
-## Optional Linux tar.gz
+## Linux tar.gz
 
-An opt-in Ubuntu 22.04 / glibc 2.35+ x86_64 archive can be built and validated
-with `scripts/package-linux-tar.sh` or the separate manual **Optional Linux
-tar.gz** workflow. See [Linux tar.gz](linux-tar.md) for host requirements, paths,
-source/notice contents and extracted-package validation. This does not change
-the official release artifacts or the existing Flatpak path.
+正式ReleaseではUbuntu 22.04 / glibc 2.35+ x86_64用の実行用・対応ソースを別々に配布する。
+`scripts/package-linux-tar.sh` と手動 **Optional Linux tar.gz** workflowも利用できる。
+通常利用者は実行用だけを展開し、直下の `./bmz-player` を起動する。
+ホスト要件、保存先、手動更新、対応ソースの再ビルドは [Linux tar.gz](linux-tar.md) を参照。
+Flatpakの配布も継続する。
 
 ## GitHub Actions release build
 
@@ -501,10 +501,17 @@ bmz-player-v<version>-macos-x64.app.zip
 bmz-player-v<version>-macos-<arch>-ffmpeg-build.txt
 bmz-player-v<version>-linux-x64.flatpak
 bmz-player-v<version>-linux-x64-flatpak-provenance.txt
+bmz-player-v<version>-linux-x64.tar.gz
+bmz-player-v<version>-linux-x64-sources.tar.gz
 SHA256SUMS.txt
 ```
 
 GitHub Release には配布物、`SHA256SUMS.txt`、client manifest、署名付き `updates.json` を添付する。
+Linux tarジョブは実行用単独の起動と対応ソースからのオフライン再ビルドを検証する。
+全ジョブはmetadataで解決した同じcommitをcheckoutし、manifestにもそのcommitを記録する。
+手動実行でもworkflow起動元の `GITHUB_SHA` を配布物のcommitとして使わない。
+Linux tarを含む全ビルド成功後に集約する。dry runでは集約済みmanifestとチェックサムを
+`verified-release-files` artifactとして保存し、Release・更新フィードへは公開しない。
 `*-provenance.txt` / `*-ffmpeg-build.txt` は Actions artifact 側に残し、
 Release asset には登録しない。
 

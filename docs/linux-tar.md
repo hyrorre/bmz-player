@@ -1,9 +1,9 @@
-# Optional Linux tar.gz
+# Linux tar.gz distribution
 
-This is an opt-in build and validation path for Linux x86_64, with Ubuntu 22.04
-(glibc 2.35) as the minimum runtime baseline. It does not designate tar.gz as an
-official distribution format. Other distributions are not guaranteed to work.
-The existing Flatpak and release workflows are unchanged.
+GitHub Releases provide runtime and corresponding-source archives for Linux
+x86_64, with Ubuntu 22.04 (glibc 2.35) as the minimum runtime baseline.
+Other distributions are not guaranteed to work. Flatpak remains available.
+Regular users only need the runtime archive; the sources archive is for rebuilding.
 
 ## Run
 
@@ -53,6 +53,22 @@ the package defaults. XDG values should be absolute paths.
 
 ## Build and validate
 
+### Manual updates and Flatpak migration
+
+Close BMZ and extract the new runtime archive into a new directory, then launch
+its top-level `./bmz-player`. Default user data lives outside the package and is
+reused. Preserve any explicit `BMZ_*` overrides, especially `BMZ_DATA_DIR`.
+Keep additional skins in the user data directory. Linux tar updates are manual;
+the Windows updater and macOS Sparkle feeds do not apply to this package.
+
+Flatpak uses sandbox paths under `~/.var/app/net.hyrorre.BMZPlayer/`, so switching
+formats does not automatically migrate profiles or scores. Close both versions,
+back up their data, and copy the Flatpak data directory's contents to the tar
+version's data directory only after checking for existing files. Host chart paths
+and access permissions may differ from the Flatpak environment.
+
+### Local packaging
+
 On a Linux x86_64 host with Docker, Git and initialized bundled-skin submodules:
 
 ```sh
@@ -101,7 +117,24 @@ GitHub requires
 the workflow to exist on the repository's default branch before manual dispatch;
 then the run dialog can select another branch. See the
 [GitHub instructions](https://docs.github.com/en/actions/how-tos/manage-workflow-runs/manually-run-a-workflow).
-It has no release upload, IR manifest, signing or updater integration.
+This manual workflow does not publish a Release. After verification the package
+script also writes a `*-linux-x64-tar-client-manifest.json` sidecar for release
+integration; the manual artifact still contains only the two archives and checksums.
+
+### Official release workflow
+
+`release-apps.yml` builds the same pair from the resolved release-tag commit.
+It checks the archive version/commit against release metadata and combines the
+Linux tar client hash with the Windows, macOS and Flatpak builds. The hash is
+from the verified packaged executable after `patchelf`, not the launcher or tarball.
+Both archives and the combined client manifest enter the final `SHA256SUMS.txt`.
+Download corresponding sources from the same Release as the runtime; GitHub's
+automatic source snapshot does not include vendored dependencies or Ubuntu/FFmpeg sources.
+
+With `upload_to_release=false`, the workflow validates and uploads the combined
+files as `verified-release-files` in Actions without publishing Release assets
+or update feeds. Before public distribution, verify real GPU/audio/input behavior
+and arrange rianIR allowlist registration as described in `docs/rian-ir.md`.
 
 The build stage uses Ubuntu 22.04, records its actual compiler versions, builds
 the pinned FFmpeg source without GPL/nonfree or autodetected external codecs,

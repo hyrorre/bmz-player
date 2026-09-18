@@ -26,7 +26,7 @@ function writeManifest(directory, target, overrides = {}) {
 
 test('combines target manifests into the rianIR importer schema', () => {
   const directory = mkdtempSync(resolve(tmpdir(), 'bmz-client-manifest-'))
-  for (const target of ['windows-x64', 'macos-arm64', 'linux-x64-flatpak', 'macos-x64']) {
+  for (const target of ['windows-x64', 'macos-arm64', 'linux-x64-flatpak', 'macos-x64', 'linux-x64-tar']) {
     writeManifest(directory, target)
   }
   const output = resolve(directory, 'client-manifest-bmz-player-v0.1.11.json')
@@ -38,7 +38,7 @@ test('combines target manifests into the rianIR importer schema', () => {
     '--output',
     output,
     '--expected-targets',
-    'windows-x64,macos-arm64,macos-x64,linux-x64-flatpak',
+    'windows-x64,macos-arm64,macos-x64,linux-x64-flatpak,linux-x64-tar',
   ])
 
   const combined = JSON.parse(readFileSync(output, 'utf8'))
@@ -59,6 +59,7 @@ test('combines target manifests into the rianIR importer schema', () => {
       { platform: 'macos', arch: 'aarch64', package_kind: 'app' },
       { platform: 'macos', arch: 'x86_64', package_kind: 'app' },
       { platform: 'linux', arch: 'x86_64', package_kind: 'flatpak' },
+      { platform: 'linux', arch: 'x86_64', package_kind: 'tar' },
     ],
   )
 })
@@ -75,4 +76,22 @@ test('rejects manifests from different commits', () => {
       { stdio: 'pipe' },
     ),
   )
+})
+
+test('rejects a missing Linux tar build', () => {
+  const directory = mkdtempSync(resolve(tmpdir(), 'bmz-client-manifest-'))
+  writeManifest(directory, 'linux-x64-flatpak')
+  assert.throws(() => execFileSync(process.execPath, [
+    script, '--input-dir', directory, '--output', resolve(directory, 'combined.json'),
+    '--expected-targets', 'linux-x64-flatpak,linux-x64-tar',
+  ], { stdio: 'pipe' }), /targets do not match/)
+})
+
+test('rejects duplicate Linux tar manifests', () => {
+  const directory = mkdtempSync(resolve(tmpdir(), 'bmz-client-manifest-'))
+  writeManifest(directory, 'linux-x64-tar')
+  writeManifest(directory, 'duplicate', { target: 'linux-x64-tar' })
+  assert.throws(() => execFileSync(process.execPath, [
+    script, '--input-dir', directory, '--output', resolve(directory, 'combined.json'),
+  ], { stdio: 'pipe' }), /duplicate target/)
 })

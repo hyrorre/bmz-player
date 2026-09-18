@@ -47,7 +47,7 @@ Development installs are not redistributable artifacts by themselves:
 
 Before publishing an installer, archive, app bundle, or container image, check the concrete FFmpeg binaries included in that artifact.
 
-The optional [Linux tar.gz build](linux-tar.md) builds FFmpeg from a verified
+The [Linux tar.gz build](linux-tar.md) builds FFmpeg from a verified
 upstream source archive and includes that archive in the matching
 `bmz-player-vX-linux-x64-sources.tar.gz`. Its configure command and license notices
 also remain in the runtime archive. Both archives carry identical build manifests.
