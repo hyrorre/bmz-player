@@ -55,6 +55,7 @@ struct PendingSkinKinds {
 /// Rendererへのinstallとscene固有のskin選択は `WinitApp` に残し、この型は
 /// pipelineのライフサイクルとstale結果判定に必要な状態だけを所有する。
 pub(super) struct SkinPipelineRuntime {
+    load_errors: Mutex<HashMap<std::path::PathBuf, String>>,
     pub(super) decode_tx: mpsc::Sender<PendingSkinResult>,
     pub(super) decode_rx: Option<Receiver<PendingSkinResult>>,
     pub(super) upload_tx: mpsc::SyncSender<PendingUploadResult>,
@@ -74,6 +75,7 @@ impl SkinPipelineRuntime {
         let (decode_tx, decode_rx) = mpsc::channel();
         let (upload_tx, upload_rx) = mpsc::sync_channel(MAX_PENDING_SKIN_UPLOADS);
         Self {
+            load_errors: Mutex::new(HashMap::new()),
             decode_tx,
             decode_rx: Some(decode_rx),
             upload_tx,
@@ -96,6 +98,20 @@ impl SkinPipelineRuntime {
             SkinKind::Play => self.pending.play,
             SkinKind::Result => self.pending.result,
         }
+    }
+
+    pub(super) fn record_load_result(&self, path: &std::path::Path, error: Option<String>) {
+        if let Ok(mut errors) = self.load_errors.lock() {
+            if let Some(error) = error {
+                errors.insert(path.to_path_buf(), error);
+            } else {
+                errors.remove(path);
+            }
+        }
+    }
+
+    pub(super) fn load_error(&self, path: &std::path::Path) -> Option<String> {
+        self.load_errors.lock().ok()?.get(path).cloned()
     }
 
     pub(super) fn set_pending(&mut self, kind: SkinKind, pending: bool) {
@@ -123,6 +139,17 @@ impl SkinPipelineRuntime {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn skin_failure_is_retained_until_that_path_loads_successfully() {
+        let runtime = SkinPipelineRuntime::new();
+        let path = std::path::Path::new("custom/play7.json");
+        runtime.record_load_result(path, Some("decode failed".into()));
+        runtime.record_load_result(std::path::Path::new("default/play7.json"), None);
+        assert_eq!(runtime.load_error(path).as_deref(), Some("decode failed"));
+        runtime.record_load_result(path, None);
+        assert_eq!(runtime.load_error(path), None);
+    }
 
     #[test]
     fn pending_kinds_and_generations_are_isolated() {

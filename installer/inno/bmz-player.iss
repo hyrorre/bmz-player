@@ -1,7 +1,11 @@
+#ifndef AppName
 #define AppName "BMZ Player"
+#endif
 #define AppExeName "bmz-player.exe"
 #define AppPublisher "hyrorre"
+#ifndef AppId
 #define AppId "D519C28F-4D6B-4E80-B38A-83DFBD0E7C15"
+#endif
 
 #ifndef AppVersion
 #define AppVersion "0.4.1"
@@ -49,8 +53,8 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 [Files]
 Source: "{#SourceDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
-[InstallDelete]
-Type: filesandordirs; Name: "{app}\resources"
+; Merge packaged files into an existing installation. Never recursively delete
+; resources: it may also contain user skins, fonts and other unknown files.
 
 [Icons]
 Name: "{group}\{#AppName}"; Filename: "{app}\{#AppExeName}"; WorkingDir: "{app}"; IconFilename: "{app}\resources\bmz-player.ico"

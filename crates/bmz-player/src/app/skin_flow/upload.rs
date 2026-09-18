@@ -350,6 +350,9 @@ impl WinitApp {
             return false;
         }
         self.skin.skin_pipeline.set_pending(kind, false);
+        self.skin
+            .skin_pipeline
+            .record_load_result(&path, uploaded.as_ref().err().map(|error| format!("{error:#}")));
         let uploaded = match uploaded {
             Ok(uploaded) => uploaded,
             Err(error) => {
@@ -366,6 +369,9 @@ impl WinitApp {
             }
         };
         let Some(manifest) = self.skin.default_skin_manifest.clone() else {
+            self.skin
+                .skin_pipeline
+                .record_load_result(&path, Some("default skin manifest is unavailable".into()));
             tracing::warn!(
                 path = %path.display(),
                 kind = ?kind,

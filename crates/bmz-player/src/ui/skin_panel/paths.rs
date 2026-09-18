@@ -13,6 +13,10 @@ pub(in crate::ui) struct SkinUiPathCache {
 }
 
 impl SkinUiPathCache {
+    pub(in crate::ui) fn clear(&mut self) {
+        self.entries.clear();
+    }
+
     pub(in crate::ui) fn get_or_resolve(
         &mut self,
         slot: SkinSlot,

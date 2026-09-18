@@ -44,7 +44,15 @@ Features
 - WMII ([https://wispworks-web.vercel.app/](https://wispworks-web.vercel.app/))
 - PeacefulPlay ([https://ralba-gear.hateblo.jp/entry/PeacefulPlay](https://ralba-gear.hateblo.jp/entry/PeacefulPlay))
 
-data_dir の skins フォルダに配置してください。
+F1 → 設定 → スキン →「追加スキンのフォルダーを開く」から配置先を開き、スキンをフォルダーごと配置してください。
+「スキン一覧を更新」を押し、画面ごとに使用するスキンを選択します。表示される配置先が、現在使用中の `data_dir/skins` です。
+
+Open F1 → Settings → Skin → **Open additional skins folder**, copy the complete skin folder there,
+then **Refresh skin list** and select it for each scene.
+
+`resource_dir/skins` はアプリ側のリソースです。配布物と同じパスのファイルは更新で上書きされるため、
+追加スキン・編集用コピーは上記の配置先へ置いてください。Windows Setup は未知のファイルを残しますが、
+macOS はアプリ全体を更新します。移動・バックアップからの復元手順は [スキン配置案内](docs/skins-README.txt) を参照してください。
 
 ## Clone
 

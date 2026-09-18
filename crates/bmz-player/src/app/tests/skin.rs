@@ -1,6 +1,37 @@
 use super::*;
 
 #[test]
+fn skin_catalog_refresh_finds_restored_skin_and_reports_invalid_headers() {
+    let root = std::env::temp_dir().join(format!(
+        "bmz-skin-refresh-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
+    ));
+    let paths = crate::paths::AppPaths::from_dirs(
+        root.join("resources"),
+        root.join("data"),
+        root.join("cache"),
+        root.join("logs"),
+    );
+    paths.ensure_dirs().unwrap();
+    let path = paths.data_dir.join("skins/restored.json");
+    assert!(read_skin_header_document(&path, &paths.skin_library_roots()).is_err());
+    assert!(scan_skin_catalog(&paths).select.is_empty());
+    std::fs::write(&path, "{broken json").unwrap();
+    assert!(read_skin_header_document(&path, &paths.skin_library_roots()).is_err());
+    std::fs::write(&path, r#"{"type":5,"name":"Restored"}"#).unwrap();
+    assert!(read_skin_header_document(&path, &paths.skin_library_roots()).is_ok());
+    let catalog = scan_skin_catalog(&paths);
+    assert_eq!(catalog.select.len(), 1);
+    assert_eq!(catalog.select[0].path, "data:skins/restored.json");
+    assert_eq!(catalog.select[0].origin, SkinCandidateOrigin::User);
+    let lua = paths.data_dir.join("skins/restored.lua");
+    std::fs::write(&lua, "return {type=5, name='Lua'}").unwrap();
+    assert!(read_skin_header_document(&lua, &paths.skin_library_roots()).is_ok());
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn lua_runtime_offsets_keep_names_distinct_and_runtime_ids_last_wins() {
     let offsets = vec![
         SkinOffsetConfig { name: Some("First".to_string()), id: 42, x: 10, ..Default::default() },

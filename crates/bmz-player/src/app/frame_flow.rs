@@ -323,6 +323,11 @@ impl WinitApp {
     }
 
     fn egui_skin_meta(&mut self) -> SkinConfigMeta {
+        if self.ui.egui.as_ref().is_some_and(|egui| egui.take_skin_catalog_refresh()) {
+            self.skin.skin_catalog = scan_skin_catalog(&self.boot.app_paths);
+            self.skin.skin_defs_cache.clear();
+            self.skin.skin_header_checks.clear();
+        }
         let skin = &self.boot.profile_config.skin;
         let requested =
             self.ui.egui.as_ref().and_then(|egui| egui.skin_settings_path(skin)).map(str::to_owned);
@@ -358,7 +363,35 @@ impl WinitApp {
                 SceneSkinDefs::default()
             }
         });
+        let load_error = requested.filter(|path| !path.trim().is_empty()).and_then(|path| {
+            let check = self.skin.skin_header_checks.entry(path.clone()).or_insert_with(|| {
+                self.boot
+                    .app_paths
+                    .resolve_path_ref(&path)
+                    .and_then(|resolved| {
+                        read_skin_header_document(
+                            &resolved,
+                            &self.boot.app_paths.skin_library_roots(),
+                        )
+                    })
+                    .map(|_| ())
+                    .map_err(|error| format!("{error:#}"))
+            });
+            let runtime_error = self
+                .boot
+                .app_paths
+                .resolve_path_ref(&path)
+                .ok()
+                .and_then(|resolved| self.skin.skin_pipeline.load_error(&resolved));
+            runtime_error.or_else(|| check.as_ref().err().cloned()).map(|error| (path, error))
+        });
         SkinConfigMeta {
+            load_error,
+            loading: self
+                .ui
+                .egui
+                .as_ref()
+                .is_some_and(|egui| self.skin.skin_pipeline.is_pending(egui.skin_settings_kind())),
             select: SceneSkinDefs::from_document(self.renderer.select_skin_document()),
             decide: SceneSkinDefs::from_document(self.renderer.decide_skin_document()),
             play4,

@@ -14,6 +14,13 @@
 
 ## Windows portable
 
+Windows Setup は配布ファイルのみを上書きし、`resources` を一括削除しない。
+配布物に含まれない追加スキン・フォント等は、同梱スキン内の追加ファイルも含めて残す。
+旧版にだけ含まれるファイルも Setup では残す。アンインストールでも未知ファイルとユーザーデータは削除しない。
+配布物と同じパスの編集済みファイルは Setup の上書き対象なので、編集用コピーは `data_dir/skins` へ置く。
+この仕様は修正版 Setup から適用され、旧 Setup によって既に消えたファイルを復元するものではない。
+
+
 `bmz-package.json` は配布形式・target・version・updater protocol・配布物のファイル一覧と SHA256 を持つ。
 `data` の有無やカレントディレクトリから配布形式を推測しない。メタデータのない旧版・開発ビルドは自動適用しない。
 installer 作成中だけ `kind=installer` とし、ZIP 用 staging は `kind=portable` に戻す。
@@ -126,9 +133,13 @@ python scripts/test_sparkle_appcast.py
 cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
 cargo fmt --check
+pwsh -NoProfile -File scripts/test-windows-installer.ps1
 ```
 
 公開前には、更新署名付きの旧版→新版でWindows実配布物とmacOS両CPUの更新・再起動・最低対応OSを確認する。
+Setup の回帰検証は Inno Setup の `iscc.exe` を必要とする。独自 AppId と `.local/installer-test-*` の
+隔離配置を使い、新規・更新・再インストール・アンインストールで未知ファイルを保持することを検証する。
+テスト用の HKCU アンインストール登録とショートカットはアンインストール時に除去し、検証ログは残す。
 macOSはアドホック署名・未公証の実配布物をダウンロードして、初回起動とSparkle更新後の再起動を確認する。
 通常データとは別のテスト用データを使い、通信中断、容量不足、別プロセス、読み取り専用配置も確認する。
 

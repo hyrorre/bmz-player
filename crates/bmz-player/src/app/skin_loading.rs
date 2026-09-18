@@ -158,6 +158,7 @@ pub(super) fn load_initial_skin_textures(
             Ok(path) if is_decodable_skin_path(&path) => {
                 let video_sources = apply_json_skin_sync(
                     renderer,
+                    pipeline,
                     app_paths,
                     &path,
                     SkinKind::Select,
@@ -317,6 +318,7 @@ pub(super) fn reload_skin_textures(
 
 pub(super) fn apply_json_skin_sync(
     renderer: &mut Renderer,
+    pipeline: &SkinPipelineRuntime,
     app_paths: &crate::paths::AppPaths,
     path: &Path,
     kind: SkinKind,
@@ -326,6 +328,7 @@ pub(super) fn apply_json_skin_sync(
     runtime_state: &bmz_skin::LuaLoadRuntimeState,
 ) -> Vec<ActiveSkinVideoSource> {
     let Some(manifest) = default_manifest else {
+        pipeline.record_load_result(path, Some("default skin manifest is unavailable".into()));
         tracing::warn!(
             path = %path.display(),
             kind = ?kind,
@@ -349,6 +352,7 @@ pub(super) fn apply_json_skin_sync(
     }) {
         Ok(decoded) => decoded,
         Err(error) => {
+            pipeline.record_load_result(path, Some(format!("{error:#}")));
             tracing::warn!(
                 path = %path.display(),
                 kind = ?kind,
@@ -360,6 +364,7 @@ pub(super) fn apply_json_skin_sync(
     };
     let video_sources = skin_video_sources_from_decoded(&decoded);
     if let Err(error) = install_decoded_skin(renderer, decoded, manifest.clone()) {
+        pipeline.record_load_result(path, Some(format!("{error:#}")));
         tracing::warn!(
             path = %path.display(),
             kind = ?kind,
@@ -368,5 +373,6 @@ pub(super) fn apply_json_skin_sync(
         );
         return Vec::new();
     }
+    pipeline.record_load_result(path, None);
     video_sources
 }

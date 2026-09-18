@@ -193,6 +193,10 @@ jobs:
         shell: pwsh
         run: cargo test -p bmz-updater
 
+      - name: Test installer file preservation
+        shell: pwsh
+        run: .\scripts\test-windows-installer.ps1
+
       - name: Verify packaged executable
         shell: pwsh
         run: |

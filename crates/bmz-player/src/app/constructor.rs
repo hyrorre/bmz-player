@@ -416,6 +416,7 @@ impl WinitApp {
                 lua_runtime_mode: options.lua_skin_runtime_mode,
                 skin_catalog,
                 skin_defs_cache: BTreeMap::new(),
+                skin_header_checks: BTreeMap::new(),
                 default_skin_manifest,
                 skin_pipeline,
                 skin_video_sources: initial_skin_video_sources,

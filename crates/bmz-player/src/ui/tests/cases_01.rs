@@ -282,7 +282,7 @@ fn skin_candidate_display_hides_bundled_origin_label_when_requested() {
 
     assert_eq!(
         skin_candidate_display(&candidate, true, Localizer::new(crate::i18n::AppLocale::Ja),),
-        "[同梱] Default (resource:skins/default/select.json)"
+        "[アプリ側] Default (resource:skins/default/select.json)"
     );
     assert_eq!(
         skin_candidate_display(&candidate, false, Localizer::new(crate::i18n::AppLocale::Ja),),

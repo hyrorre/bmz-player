@@ -515,6 +515,7 @@ main() {
   copy_dir "${root}/data/skins/Rmz-skin" "${resources_dir}/skins/Rmz-skin"
   copy_dir "${root}/data/skins/mz-select" "${resources_dir}/skins/mz-select"
   copy_dir "${root}/data/skins/Luxez-Flat" "${resources_dir}/skins/Luxez-Flat"
+  cp "${root}/docs/skins-README.txt" "${resources_dir}/skins/README.txt"
   copy_dir "${root}/data/songs/sample-playable" "${resources_dir}/songs/sample-playable"
   copy_file "${root}/data/fonts/noto-cjk/NotoSansCJK-Regular.ttc" "${resources_dir}/fonts/noto-cjk/NotoSansCJK-Regular.ttc"
   copy_file "${root}/LICENSE" "${resources_dir}/licenses/BMZ-GPL-3.0-only.txt"

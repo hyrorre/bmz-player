@@ -425,6 +425,7 @@ Copy-DirectoryMirror (Join-Path $repoRoot "data\skins\default") (Join-Path $reso
 Copy-DirectoryMirror (Join-Path $repoRoot "data\skins\Rmz-skin") (Join-Path $resourcesDir "skins\Rmz-skin")
 Copy-DirectoryMirror (Join-Path $repoRoot "data\skins\mz-select") (Join-Path $resourcesDir "skins\mz-select")
 Copy-DirectoryMirror (Join-Path $repoRoot "data\skins\Luxez-Flat") (Join-Path $resourcesDir "skins\Luxez-Flat")
+Copy-RequiredFile (Join-Path $repoRoot "docs\skins-README.txt") (Join-Path $resourcesDir "skins\README.txt")
 Copy-DirectoryMirror (Join-Path $repoRoot "data\songs\sample-playable") (Join-Path $resourcesDir "songs\sample-playable")
 Copy-RequiredFile $notoCjkFont (Join-Path $resourcesDir "fonts\noto-cjk\NotoSansCJK-Regular.ttc")
 Copy-RequiredFile (Join-Path $repoRoot "LICENSE") (Join-Path $licensesDir "BMZ-GPL-3.0-only.txt")

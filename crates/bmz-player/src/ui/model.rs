@@ -178,6 +178,8 @@ pub(super) fn bmz_play_bar_line_offset() -> SkinOffsetDef {
 /// 選曲 / プレイ / リザルト各スキンの設定可能項目。
 #[derive(Default)]
 pub struct SkinConfigMeta {
+    pub load_error: Option<(String, String)>,
+    pub loading: bool,
     pub select: SceneSkinDefs,
     pub decide: SceneSkinDefs,
     pub play4: SceneSkinDefs,

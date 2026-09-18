@@ -26,6 +26,22 @@ impl SkinEditorState {
 }
 
 impl EguiLayer {
+    pub(crate) fn skin_settings_kind(&self) -> crate::skin_loader::SkinKind {
+        use crate::skin_loader::SkinKind;
+        match SkinEditorState::load(&self.ctx).slot {
+            SkinSlot::Select => SkinKind::Select,
+            SkinSlot::Decide => SkinKind::Decide,
+            SkinSlot::Result | SkinSlot::CourseResult => SkinKind::Result,
+            _ => SkinKind::Play,
+        }
+    }
+
+    pub(crate) fn take_skin_catalog_refresh(&self) -> bool {
+        self.ctx
+            .data_mut(|data| data.remove_temp::<bool>(egui::Id::new("skin_catalog_refresh")))
+            .unwrap_or(false)
+    }
+
     pub(crate) fn skin_settings_path<'a>(&self, skin: &'a SkinConfig) -> Option<&'a str> {
         if !self.visible
             || !self.show_settings
@@ -70,6 +86,41 @@ pub(in crate::ui) fn build_skin_panel(
         return SkinPanelActions { save: false, reset: false, reload };
     }
     let mut editor = SkinEditorState::load(ui.ctx());
+    let user_root = app_paths.data_dir.join("skins");
+    let user_root = std::path::absolute(&user_root).unwrap_or(user_root);
+    ui.label(tr!(text, "skin-install-help"));
+    ui.label(user_root.display().to_string());
+    ui.horizontal_wrapped(|ui| {
+        if ui.button(tr!(text, "skin-open-user-folder")).clicked() {
+            let error = std::fs::create_dir_all(&user_root)
+                .map_err(|error| error.to_string())
+                .and_then(|()| open_directory(&user_root, text))
+                .err();
+            ui.ctx().data_mut(|data| {
+                data.insert_temp(egui::Id::new("skin_folder_error"), error);
+            });
+        }
+        if ui.button(tr!(text, "skin-refresh-list")).clicked() {
+            ui.ctx().data_mut(|data| {
+                data.insert_temp(egui::Id::new("skin_catalog_refresh"), true);
+            });
+            path_cache.clear();
+        }
+        if ui.button(tr!(text, "skin-retry")).clicked() {
+            request_skin_reload(&mut reload, editor.slot, false);
+            ui.ctx().data_mut(|data| {
+                data.insert_temp(egui::Id::new("skin_catalog_refresh"), true);
+            });
+            path_cache.clear();
+        }
+    });
+    if let Some(error) = ui.ctx().data_mut(|data| {
+        data.get_temp::<Option<String>>(egui::Id::new("skin_folder_error")).flatten()
+    }) {
+        ui.colored_label(ui.visuals().error_fg_color, error);
+    }
+    ui.small(tr!(text, "skin-resource-help"));
+    ui.separator();
     let previous_slot = editor.slot;
     let groups: &[(&str, &[SkinSlot])] = &[
         (
@@ -147,6 +198,40 @@ pub(in crate::ui) fn build_skin_panel(
         editor.store(ui.ctx());
         ui.label(tr!(text, "skin-loading-settings"));
         ui.ctx().request_repaint();
+        return SkinPanelActions { save: false, reset: false, reload };
+    }
+    let selected_path = skin_slot_path(skin, editor.slot);
+    if !selected_path.trim().is_empty() {
+        match app_paths.resolve_path_ref(selected_path) {
+            Ok(path) => {
+                if app_paths.skin_library_roots().len() > 1 {
+                    if path.starts_with(&app_paths.data_dir) {
+                        ui.label(tr!(text, "skin-origin-user"));
+                    } else if path.starts_with(&app_paths.resource_dir) {
+                        ui.label(tr!(text, "skin-origin-bundled"));
+                    } else {
+                        ui.label(tr!(text, "skin-origin-external"));
+                    }
+                }
+                let path = std::path::absolute(&path).unwrap_or(path);
+                ui.label(path.display().to_string());
+            }
+            Err(error) => {
+                ui.colored_label(ui.visuals().error_fg_color, error.to_string());
+            }
+        }
+    }
+    if skin_meta.loading {
+        ui.label(tr!(text, "skin-loading-settings"));
+        editor.store(ui.ctx());
+        return SkinPanelActions { save: false, reset: false, reload };
+    }
+    if let Some((path, error)) = &skin_meta.load_error
+        && path == selected_path
+    {
+        ui.colored_label(ui.visuals().error_fg_color, tr!(text, "skin-load-error"));
+        ui.label(error);
+        editor.store(ui.ctx());
         return SkinPanelActions { save: false, reset: false, reload };
     }
     ui.add(
@@ -403,6 +488,47 @@ use super::*;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn failed_skin_keeps_selected_path_and_all_customization() {
+        let ctx = egui::Context::default();
+        SettingsNavigation::select(&ctx, SettingsPage::Skin);
+        let mut skin =
+            SkinConfig { select: "data:skins/missing/select.json".into(), ..Default::default() };
+        skin.select_options.insert("Custom".into(), "Saved".into());
+        skin.select_files.insert("Font".into(), "custom.ttf".into());
+        skin.select_offsets
+            .push(SkinOffsetConfig { name: Some("Saved offset".into()), ..Default::default() });
+        save_skin_slot_history(&mut skin, SkinSlot::Select);
+        let before = skin.clone();
+        // An installed fallback's definitions must not normalize the failed skin's options.
+        let mut meta = SkinConfigMeta {
+            load_error: Some((skin.select.clone(), "missing file".into())),
+            select: SceneSkinDefs::from_play_document(None),
+            ..Default::default()
+        };
+        let paths =
+            AppPaths::from_dirs("resources".into(), "data".into(), "cache".into(), "logs".into());
+        for loading in [true, false] {
+            meta.loading = loading;
+            let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
+                let actions = build_skin_panel(
+                    ui,
+                    &mut skin,
+                    &meta,
+                    &SkinCatalog::default(),
+                    &paths,
+                    &mut SkinUiPathCache::default(),
+                    Localizer::new(AppLocale::En),
+                );
+                assert!(!actions.reload.any());
+            });
+            assert_eq!(
+                serde_json::to_value(&skin).unwrap(),
+                serde_json::to_value(&before).unwrap()
+            );
+        }
+    }
 
     #[test]
     fn editing_one_skin_does_not_initialize_other_slots() {

@@ -83,16 +83,21 @@ pub(super) fn load_skin_header_document_with_library_roots(
     path: &Path,
     library_roots: &[PathBuf],
 ) -> Option<SkinDocument> {
+    read_skin_header_document(path, library_roots).ok()
+}
+
+pub(super) fn read_skin_header_document(
+    path: &Path,
+    library_roots: &[PathBuf],
+) -> Result<SkinDocument> {
     if path
         .extension()
         .and_then(|ext| ext.to_str())
-        .is_some_and(|ext| ext.eq_ignore_ascii_case("luaskin"))
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("luaskin") || ext.eq_ignore_ascii_case("lua"))
     {
-        let path_context =
-            bmz_skin::SkinPathContext::new(path, library_roots.iter().cloned()).ok()?;
-        bmz_skin::load_lua_skin_header_value_with_path_context(&path_context)
-            .ok()
-            .and_then(|loaded| serde_json::from_value::<SkinDocument>(loaded.value).ok())
+        let path_context = bmz_skin::SkinPathContext::new(path, library_roots.iter().cloned())?;
+        let loaded = bmz_skin::load_lua_skin_header_value_with_path_context(&path_context)?;
+        Ok(serde_json::from_value::<SkinDocument>(loaded.value)?)
     } else if path
         .extension()
         .and_then(|ext| ext.to_str())
@@ -104,10 +109,10 @@ pub(super) fn load_skin_header_document_with_library_roots(
             &BTreeMap::new(),
             &BTreeMap::new(),
         )
-        .ok()
         .map(|loaded| loaded.document)
     } else {
-        SkinDocument::load_typed_beatoraja_json(path).ok().flatten()
+        SkinDocument::load_typed_beatoraja_json(path)?
+            .ok_or_else(|| anyhow::anyhow!("unsupported skin document: {}", path.display()))
     }
 }
 
