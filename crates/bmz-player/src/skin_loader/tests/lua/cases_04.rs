@@ -97,6 +97,72 @@ fn select_lua_skins_decode_with_explicit_library_root_when_available() {
             !decoded.document.destination.is_empty(),
             "{label} should not decode into an empty select skin"
         );
+        if relative.starts_with("mz-select/") || relative.starts_with("Luxez-Flat/") {
+            let text = decoded
+                .document
+                .text
+                .iter()
+                .find(|text| text.id == "bmz_select_mode")
+                .expect("bundled filter must display the actual BMZ mode name");
+            assert!(
+                decoded.fonts.iter().any(|font| font.stored_id == text.font && font.data.is_some())
+            );
+            assert!(
+                !decoded
+                    .document
+                    .image
+                    .iter()
+                    .any(|image| image.id == "default_modechange_modeset")
+            );
+            assert!(
+                !decoded
+                    .document
+                    .imageset
+                    .iter()
+                    .any(|image| image.id == "default_modechange_modeset")
+            );
+            let expected = if relative.starts_with("mz-select/") {
+                (1305.0, 990.0, 150.0, 50.0)
+            } else {
+                (977.0, 1034.0, 135.0, 35.0)
+            };
+            let textures = decoded.sources.iter().map(|source| SkinDocumentTexture {
+                source_id: source.source_id.clone(),
+                texture: source.texture,
+                source_size: SkinImageSize { width: source.size.width, height: source.size.height },
+            });
+            let context = SkinContext::from_manifest_and_document(
+                bmz_render::skin::default_skin_manifest(),
+                decoded.document,
+                textures,
+            );
+            for mode in ["ALL", "7K", "14K", "9K", "5K", "10K", "4K", "6K", "8K"] {
+                for fraction in [0.1, 0.9] {
+                    let x = (expected.0 + expected.2 * fraction) / 1920.0;
+                    let y = 1.0 - (expected.1 + expected.3 / 2.0) / 1080.0;
+                    let snapshot = SelectSnapshot {
+                        select_mode: mode.to_string(),
+                        mouse_position: Some((x, y)),
+                        ..SelectSnapshot::default()
+                    };
+                    assert!(
+                        context.select_document_items(&snapshot).iter().any(
+                            |item| matches!(item, SkinRenderItem::Text { text, .. } if text == mode)
+                        ),
+                        "{label} must render {mode}"
+                    );
+                    let hit = context
+                        .select_click_hit(&snapshot, x, y)
+                        .expect("filter must remain clickable across its full width");
+                    assert_eq!(
+                        hit.target,
+                        bmz_render::skin::SkinClickTarget::Event { event_id: 11, click: 2 }
+                    );
+                    assert!((hit.rect.x - expected.0 / 1920.0).abs() < 0.0001);
+                    assert!((hit.rect.width - expected.2 / 1920.0).abs() < 0.0001);
+                }
+            }
+        }
     }
 }
 

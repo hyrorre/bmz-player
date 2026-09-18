@@ -229,6 +229,10 @@ fn skin_state_text_formats_select_option_fields() {
     assert_eq!(skin_state_text(&make_text("bmz_select_hs_fix"), &state), "MAIN BPM");
     assert_eq!(skin_state_text(&make_text("bmz_select_assist"), &state), "AUTOPLAY");
     assert_eq!(skin_state_text(&make_text("bmz_select_mode"), &state), "7K");
+    for mode in ["ALL", "4K", "6K", "8K", "14K"] {
+        let mode_state = SkinTextState { select_mode: mode, ..SkinTextState::default() };
+        assert_eq!(skin_state_text(&make_text("bmz_select_mode"), &mode_state), mode);
+    }
     assert_eq!(skin_state_text(&make_text("bmz_select_sort"), &state), "LEVEL");
     assert_eq!(skin_state_text(&make_text("bmz_select_ln_mode"), &state), "AUTO(LN)");
     assert_eq!(skin_state_text(&make_text("bmz_select_chart_replication"), &state), "RIVALOPTION");

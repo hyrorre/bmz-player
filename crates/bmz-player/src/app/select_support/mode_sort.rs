@@ -13,11 +13,23 @@ pub(in crate::app) enum SelectModeFilter {
     K9,
     K5,
     K10,
+    K4,
+    K6,
+    K8,
 }
 
 impl SelectModeFilter {
-    pub(in crate::app) const ORDER: [Self; 6] =
-        [Self::All, Self::K7, Self::K14, Self::K9, Self::K5, Self::K10];
+    pub(in crate::app) const ORDER: [Self; 9] = [
+        Self::All,
+        Self::K7,
+        Self::K14,
+        Self::K9,
+        Self::K5,
+        Self::K10,
+        Self::K4,
+        Self::K6,
+        Self::K8,
+    ];
 
     pub(in crate::app) fn next(self) -> Self {
         cycle_enum(Self::ORDER, self, 1)
@@ -35,6 +47,9 @@ impl SelectModeFilter {
             Self::K9 => "9K",
             Self::K5 => "5K",
             Self::K10 => "10K",
+            Self::K4 => "4K",
+            Self::K6 => "6K",
+            Self::K8 => "8K",
         }
     }
 
@@ -46,6 +61,9 @@ impl SelectModeFilter {
             Self::K9 => Some(KeyMode::K9),
             Self::K5 => Some(KeyMode::K5),
             Self::K10 => Some(KeyMode::K10),
+            Self::K4 => Some(KeyMode::K4),
+            Self::K6 => Some(KeyMode::K6),
+            Self::K8 => Some(KeyMode::K8),
         }
     }
 

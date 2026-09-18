@@ -33,7 +33,7 @@ fn select_move_scroll_direction_matches_row_movement() {
 #[test]
 fn select_skin_event_state_cycles_supported_mode_filters() {
     assert_eq!(SelectModeFilter::All.next(), SelectModeFilter::K7);
-    assert_eq!(SelectModeFilter::All.previous(), SelectModeFilter::K10);
+    assert_eq!(SelectModeFilter::All.previous(), SelectModeFilter::K8);
     assert_eq!(SelectDifficultyFilter::All.next(), SelectDifficultyFilter::Beginner);
     assert_eq!(SelectDifficultyFilter::All.previous(), SelectDifficultyFilter::Insane);
     assert_eq!(SelectSort::Title.next(), SelectSort::Artist);
@@ -193,6 +193,43 @@ fn select_mode_filter_roundtrips_through_str() {
     assert_eq!(SelectModeFilter::from_str_or_default("24K"), SelectModeFilter::All);
     assert_eq!(SelectModeFilter::from_str_or_default("24K_DOUBLE"), SelectModeFilter::All);
     assert_eq!(SelectModeFilter::from_str_or_default("unknown"), SelectModeFilter::All);
+}
+
+#[test]
+fn select_extended_mode_filters_cycle_filter_and_restore() {
+    let order = ["ALL", "7K", "14K", "9K", "5K", "10K", "4K", "6K", "8K"];
+    for (index, name) in order.iter().enumerate() {
+        let filter = SelectModeFilter::from_str_or_default(name);
+        assert_eq!(filter.next().as_str(), order[(index + 1) % order.len()]);
+        assert_eq!(filter.previous().as_str(), order[(index + order.len() - 1) % order.len()]);
+    }
+    for (name, expected_mode) in [("4K", KeyMode::K4), ("6K", KeyMode::K6), ("8K", KeyMode::K8)] {
+        let config = crate::config::profile_config::SelectStateConfig {
+            mode_filter: name.to_string(),
+            ..Default::default()
+        };
+        let restored: crate::config::profile_config::SelectStateConfig =
+            toml::from_str(&toml::to_string(&config).unwrap()).unwrap();
+        let filter = SelectModeFilter::from_str_or_default(&restored.mode_filter);
+        assert_eq!(filter.key_mode(), Some(expected_mode));
+        let mut items = vec![
+            chart_row_with_mode(1, "4K"),
+            chart_row_with_mode(2, "6K"),
+            chart_row_with_mode(3, "8K"),
+            chart_row_with_mode(4, "7K"),
+        ];
+        assert_eq!(resolve_non_empty_mode_filter(&items, filter), filter);
+        apply_select_mode_filter(&mut items, filter);
+        assert_eq!(items.len(), 1);
+        assert!(
+            matches!(&items[0], SelectItem::Chart(row) if row.chart.as_ref().unwrap().mode == name)
+        );
+        assert_eq!(resolve_non_empty_mode_filter(&items, SelectModeFilter::K10), filter);
+    }
+    assert_eq!(
+        resolve_non_empty_mode_filter(&[chart_row_with_mode(1, "7K")], SelectModeFilter::K4),
+        SelectModeFilter::All
+    );
 }
 
 #[test]
