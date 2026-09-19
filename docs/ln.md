@@ -9,7 +9,7 @@ HLNは「LNの終了時総合評価＋HCNの保持ゲージ」として実装し
 ## Terms
 
 - undefined LN: BMS 側に `#LNMODE` などの明示的な LN 種別宣言が無い long note。現在の BMS で主流の形。
-- defined LN/CN/HCN/HLN: 譜面側が明示した `LN`, `CN`, `HCN`, `HLN` の long note。HLNの取込はBMSの `#LNMODE 4` / `#HLNOBJ` に対応する。
+- defined LN/CN/HCN/HLN: 譜面側が明示した `LN`, `CN`, `HCN`, `HLN` の long note。HLNの取込はBMSの `#LNMODE 4` / `#HLNOBJ`、BMSONの `info.ln_type: 4` / `t: 4` に対応する。
 - profile policy: ユーザーが `profile.toml` に設定する希望。
 - score policy: score DB の保存キーに使う、実プレイ結果の区別単位。
 - effective LN mode: 実際に降らせる LN 種別。`LN`, `CN`, `HCN`, `HLN` のいずれか。

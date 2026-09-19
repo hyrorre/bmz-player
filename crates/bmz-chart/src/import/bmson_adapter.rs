@@ -15,7 +15,7 @@ use bms_rs::bmson::{Bmson, parse_bmson};
 use bmz_core::lane::{ChartKeyLayout, KeyMode, Lane, PmsKeyLayout};
 
 use crate::hash::compute_chart_identity;
-use crate::model::{JudgeRankKind, JudgeRankSpec};
+use crate::model::{JudgeRankKind, JudgeRankSpec, LongNoteMode};
 
 use super::bms_rs_adapter::build_intermediate_from_bms;
 use super::bmson_timing::{
@@ -38,7 +38,7 @@ pub fn import_bmson_to_intermediate(
         message: "BMSON file is not valid UTF-8".into(),
     })?;
 
-    let (parse_text, ln_type) = prepare_bmson_text(text)
+    let PreparedBmson { text: parse_text, ln_type, hln_notes } = prepare_bmson_text(text)
         .map_err(|message| ImportError::Parse { path: source_path.to_path_buf(), message })?;
 
     let output = parse_bmson(&parse_text);
@@ -72,6 +72,7 @@ pub fn import_bmson_to_intermediate(
             &bmson,
             &boundaries,
             layout,
+            &hln_notes,
             &mut timing_warnings,
         ),
         BmsonLaneLayout::Pms5 | BmsonLaneLayout::Pms9 => {
@@ -80,6 +81,7 @@ pub fn import_bmson_to_intermediate(
                 &bmson,
                 &boundaries,
                 layout,
+                &hln_notes,
                 &mut timing_warnings,
             )
         }
@@ -88,7 +90,11 @@ pub fn import_bmson_to_intermediate(
         push_bmson_to_bms_warning(warning, warnings);
     }
 
-    converted.bms.repr.ln_mode = ln_type.unwrap_or_default();
+    converted.bms.repr.ln_mode = match ln_type {
+        Some(LongNoteMode::Cn) => LnMode::Cn,
+        Some(LongNoteMode::Hcn) => LnMode::Hcn,
+        _ => LnMode::Ln,
+    };
     converted.bms.music_info.sub_artist = Some(join_subartists(&bmson.info.subartists));
     converted.bms.sprite.back_bmp =
         resolve_backbmp_path(bmson.info.back_image.as_deref(), bmson.info.title_image.as_deref());
@@ -121,7 +127,7 @@ pub fn import_bmson_to_intermediate(
     apply_bmson_layered_sounds(&mut intermediate, &rebuild_info.layered_sounds, layout);
     apply_bmson_bga_events(&mut intermediate, &rebuild_info.bga_events);
     if let Some(ln_type) = ln_type {
-        intermediate.metadata.long_note_mode = map_ln_mode(ln_type);
+        intermediate.metadata.long_note_mode = ln_type;
         intermediate.metadata.long_note_mode_defined = true;
     }
     apply_bmson_long_note_extensions(&mut intermediate, &rebuild_info.long_notes, layout);
@@ -237,17 +243,23 @@ fn push_bmson_to_bms_warning(warning: BmsonToBmsWarning, warnings: &mut Vec<Impo
 
 /// beatoraja 拡張の `ln_type` / `t` は整数だが、bms-rs の serde は variant 名を期待する。
 /// パース前に整数値を取り出し、note `t` は variant 名へ正規化する。
-fn prepare_bmson_text(text: &str) -> Result<(String, Option<LnMode>), String> {
+struct PreparedBmson {
+    text: String,
+    ln_type: Option<LongNoteMode>,
+    hln_notes: std::collections::HashSet<(usize, usize)>,
+}
+
+fn prepare_bmson_text(text: &str) -> Result<PreparedBmson, String> {
     let mut value: serde_json::Value =
         serde_json::from_str(text).map_err(|err| format!("invalid BMSON JSON: {err}"))?;
     let ln_type = value.pointer("/info/ln_type").and_then(parse_ln_type_json);
     if let Some(info) = value.get_mut("info").and_then(serde_json::Value::as_object_mut) {
         info.remove("ln_type");
     }
-    normalize_note_ln_type_fields(&mut value);
+    let hln_notes = normalize_note_ln_type_fields(&mut value);
     let sanitized = serde_json::to_string(&value)
         .map_err(|err| format!("failed to serialize BMSON JSON: {err}"))?;
-    Ok((sanitized, ln_type))
+    Ok(PreparedBmson { text: sanitized, ln_type, hln_notes })
 }
 
 fn join_subartists(subartists: &[std::borrow::Cow<'_, str>]) -> String {
@@ -275,32 +287,38 @@ fn resolve_backbmp_path(back_image: Option<&str>, title_image: Option<&str>) -> 
         .map(PathBuf::from)
 }
 
-fn parse_ln_type_json(value: &serde_json::Value) -> Option<LnMode> {
+fn parse_ln_type_json(value: &serde_json::Value) -> Option<LongNoteMode> {
     match value {
-        serde_json::Value::Number(number) => number
-            .as_u64()
-            .and_then(|raw| u8::try_from(raw).ok())
-            .and_then(|raw| LnMode::try_from(raw).ok()),
+        serde_json::Value::Number(number) => {
+            number.as_u64().and_then(|raw| u8::try_from(raw).ok()).and_then(|raw| match raw {
+                4 => Some(LongNoteMode::Hln),
+                _ => LnMode::try_from(raw).ok().map(map_ln_mode),
+            })
+        }
         serde_json::Value::String(text) => match text.to_ascii_lowercase().as_str() {
-            "ln" | "1" => Some(LnMode::Ln),
-            "cn" | "2" => Some(LnMode::Cn),
-            "hcn" | "hell" | "3" => Some(LnMode::Hcn),
+            "ln" | "1" => Some(LongNoteMode::Ln),
+            "cn" | "2" => Some(LongNoteMode::Cn),
+            "hcn" | "hell" | "3" => Some(LongNoteMode::Hcn),
+            "hln" | "4" => Some(LongNoteMode::Hln),
             _ => None,
         },
         _ => None,
     }
 }
 
-fn normalize_note_ln_type_fields(value: &mut serde_json::Value) {
+fn normalize_note_ln_type_fields(
+    value: &mut serde_json::Value,
+) -> std::collections::HashSet<(usize, usize)> {
+    let mut hln_notes = std::collections::HashSet::new();
     let Some(channels) = value.get_mut("sound_channels").and_then(serde_json::Value::as_array_mut)
     else {
-        return;
+        return hln_notes;
     };
-    for channel in channels {
+    for (channel_index, channel) in channels.iter_mut().enumerate() {
         let Some(notes) = channel.get_mut("notes").and_then(serde_json::Value::as_array_mut) else {
             continue;
         };
-        for note in notes {
+        for (note_index, note) in notes.iter_mut().enumerate() {
             let Some(map) = note.as_object_mut() else {
                 continue;
             };
@@ -309,9 +327,13 @@ fn normalize_note_ln_type_fields(value: &mut serde_json::Value) {
             };
             if let Some(mode) = parse_ln_type_json(&value) {
                 let name = match mode {
-                    LnMode::Ln => "Ln",
-                    LnMode::Cn => "Cn",
-                    LnMode::Hcn => "Hcn",
+                    LongNoteMode::Ln => "Ln",
+                    LongNoteMode::Cn => "Cn",
+                    LongNoteMode::Hcn => "Hcn",
+                    LongNoteMode::Hln => {
+                        hln_notes.insert((channel_index, note_index));
+                        "Ln"
+                    }
                 };
                 map.insert("t".into(), serde_json::Value::String(name.into()));
             } else {
@@ -319,6 +341,7 @@ fn normalize_note_ln_type_fields(value: &mut serde_json::Value) {
             }
         }
     }
+    hln_notes
 }
 
 fn map_ln_mode(mode: LnMode) -> crate::model::LongNoteMode {
@@ -352,7 +375,11 @@ fn apply_bmson_long_note_extensions(
         }) && let super::intermediate::IntermediateObjectKind::LongChannelNote { mode, .. } =
             &mut object.kind
         {
-            *mode = extension.mode.map(map_ln_mode);
+            *mode = if extension.hln {
+                Some(LongNoteMode::Hln)
+            } else {
+                extension.mode.map(map_ln_mode)
+            };
         }
 
         if extension.explicit_end_sound
@@ -634,23 +661,15 @@ mod tests {
     #[test]
     fn prepare_bmson_text_normalizes_integer_ln_types_for_bms_rs() {
         let json = r#"{"version":"1.0.0","info":{"title":"t","artist":"a","genre":"g","level":1,"init_bpm":120,"ln_type":3,"resolution":240},"sound_channels":[]}"#;
-        let (sanitized, ln_type) = prepare_bmson_text(json).unwrap();
-        assert_eq!(ln_type, Some(LnMode::Hcn));
+        let PreparedBmson { text: sanitized, ln_type, .. } = prepare_bmson_text(json).unwrap();
+        assert_eq!(ln_type, Some(LongNoteMode::Hcn));
         assert!(parse_bmson(&sanitized).bmson.is_some());
-        assert_eq!(
-            LongNoteMode::Hcn,
-            match ln_type.unwrap() {
-                LnMode::Ln => LongNoteMode::Ln,
-                LnMode::Cn => LongNoteMode::Cn,
-                LnMode::Hcn => LongNoteMode::Hcn,
-            }
-        );
     }
 
     #[test]
     fn prepare_bmson_text_preserves_integer_note_type() {
         let json = r#"{"version":"1.0.0","info":{"title":"t","artist":"a","genre":"g","level":1,"init_bpm":120,"resolution":240},"sound_channels":[{"name":"key.wav","notes":[{"x":1,"y":0,"l":240,"c":false,"t":2}]}]}"#;
-        let (sanitized, _) = prepare_bmson_text(json).unwrap();
+        let PreparedBmson { text: sanitized, .. } = prepare_bmson_text(json).unwrap();
         let bmson = parse_bmson(&sanitized).bmson.unwrap();
         assert_eq!(bmson.sound_channels[0].notes[0].t, Some(LnMode::Cn));
     }

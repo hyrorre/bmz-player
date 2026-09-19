@@ -3,6 +3,94 @@ use bmz_chart::model::LongNoteMode;
 use bmz_core::lane::Lane;
 
 #[test]
+fn hlnobj_overrides_lnobj_regardless_of_header_order_and_preserves_end_sound() {
+    for headers in ["#LNOBJ ZZ\n#HLNOBJ ZZ", "#HLNOBJ ZZ\n#LNOBJ ZZ"] {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("compatible.bms");
+        std::fs::write(&path, format!("#TITLE HLN\n#BPM 120\n#WAV01 head.wav\n#WAV02 tail.wav\n{headers}\n#00011:01ZZ\n#00011:0002\n")).unwrap();
+        let chart = import_chart(&path, None, false).unwrap().chart;
+        assert_eq!(chart.long_notes.len(), 1);
+        let pair = &chart.long_notes[0];
+        assert_eq!(pair.mode, Some(LongNoteMode::Hln));
+        let tail = chart.note_by_id(pair.end_note_id).unwrap();
+        let id = tail.sound.unwrap();
+        assert!(
+            chart.sounds.iter().find(|sound| sound.id == id).unwrap().path.ends_with("tail.wav")
+        );
+    }
+}
+
+#[test]
+fn bmson_hln_inherits_type_four_and_respects_per_note_types() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("types.bmson");
+    let json = serde_json::json!({
+        "version": "1.0.0",
+        "info": {"title":"HLN", "artist":"a", "genre":"g", "level":1, "init_bpm":120, "resolution":240, "mode_hint":"beat-7k", "ln_type":4},
+        "sound_channels": [{"name":"head.wav", "notes":[
+            {"x":1,"y":0,"l":240,"c":false},
+            {"x":2,"y":0,"l":240,"c":false,"t":1},
+            {"x":3,"y":0,"l":240,"c":false,"t":2},
+            {"x":4,"y":0,"l":240,"c":false,"t":3},
+            {"x":5,"y":0,"l":240,"c":false,"t":4}
+        ]}]
+    });
+    std::fs::write(&path, json.to_string()).unwrap();
+    let chart = import_chart(&path, None, false).unwrap().chart;
+    assert_eq!(chart.metadata.long_note_mode, LongNoteMode::Hln);
+    for (lane, mode) in [
+        (Lane::Key1, LongNoteMode::Hln),
+        (Lane::Key2, LongNoteMode::Ln),
+        (Lane::Key3, LongNoteMode::Cn),
+        (Lane::Key4, LongNoteMode::Hcn),
+        (Lane::Key5, LongNoteMode::Hln),
+    ] {
+        assert_eq!(
+            chart.long_notes.iter().find(|pair| pair.lane == lane).unwrap().mode,
+            Some(mode)
+        );
+    }
+}
+
+#[test]
+fn bmson_type_four_uses_the_same_up_end_sound_rule_as_ln() {
+    for up in [false, true] {
+        for mode in [1, 4] {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("end.bmson");
+            let json = serde_json::json!({
+                "version":"1.0.0",
+                "info":{"title":"HLN","artist":"a","genre":"g","level":1,"init_bpm":120,"resolution":240,"mode_hint":"beat-7k"},
+                "sound_channels":[
+                    {"name":"head.wav","notes":[{"x":1,"y":0,"l":240,"c":false,"t":mode}]},
+                    {"name":"tail.wav","notes":[{"x":1,"y":240,"l":0,"c":false,"up":up}]}
+                ]
+            });
+            std::fs::write(&path, json.to_string()).unwrap();
+            let chart = import_chart(&path, None, false).unwrap().chart;
+            let pair = &chart.long_notes[0];
+            assert_eq!(
+                pair.mode,
+                Some(if mode == 4 { LongNoteMode::Hln } else { LongNoteMode::Ln })
+            );
+            let tail = chart.note_by_id(pair.end_note_id).unwrap();
+            assert_eq!(tail.sound.is_some(), up);
+            if let Some(id) = tail.sound {
+                assert!(
+                    chart
+                        .sounds
+                        .iter()
+                        .find(|sound| sound.id == id)
+                        .unwrap()
+                        .path
+                        .ends_with("tail.wav")
+                );
+            }
+        }
+    }
+}
+
+#[test]
 fn hln_header_pairs_and_keysound_ids_are_preserved_and_isolated() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("hln.bmc");
