@@ -1,5 +1,11 @@
 use super::*;
 
+/// Window-system clipboard supplied by the application when a display connection
+/// and input focus are required (for example, native Wayland).
+pub trait ScreenshotClipboard: fmt::Debug + Send + Sync {
+    fn copy_image(&self, width: u32, height: u32, rgba: &[u8], png: &[u8]) -> Result<()>;
+}
+
 pub(super) struct ScreenshotCapture {
     pub(super) buffer: wgpu::Buffer,
     pub(super) width: u32,
@@ -12,6 +18,7 @@ pub(super) struct ScreenshotCapture {
 pub(super) struct ScreenshotRequest {
     pub(super) path: PathBuf,
     pub(super) copy_to_clipboard: bool,
+    pub(super) clipboard: Option<std::sync::Arc<dyn ScreenshotClipboard>>,
 }
 
 pub(super) struct ScreenshotReadback {
@@ -268,9 +275,10 @@ pub(super) fn spawn_screenshot_save_job(
             save_screenshot_png(&request.path, &png)?;
             let png_write_ms = write_started.elapsed().as_millis() as u64;
             let clipboard_started = Instant::now();
-            let clipboard_result = request
-                .copy_to_clipboard
-                .then(|| copy_screenshot_to_clipboard(width, height, &rgba, &png));
+            let clipboard_result = request.copy_to_clipboard.then(|| match request.clipboard {
+                Some(clipboard) => clipboard.copy_image(width, height, &rgba, &png),
+                None => copy_screenshot_to_clipboard(width, height, &rgba, &png),
+            });
             let clipboard_ms = clipboard_started.elapsed().as_millis() as u64;
             tracing::debug!(
                 path = %request.path.display(),

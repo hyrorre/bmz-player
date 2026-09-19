@@ -52,6 +52,7 @@ use font::{block_on, load_default_font_fallbacks};
 use geometry::*;
 pub use pipeline::GpuUploader;
 use pipeline::*;
+pub use screenshot::ScreenshotClipboard;
 use screenshot::*;
 use text::*;
 use text_cached_builder::*;

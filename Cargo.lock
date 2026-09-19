@@ -681,6 +681,7 @@ dependencies = [
  "serde_json",
  "sevenz-rust2",
  "sha2 0.10.9",
+ "smithay-client-toolkit 0.20.0",
  "sys-locale",
  "tar",
  "tokio",

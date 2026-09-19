@@ -226,8 +226,7 @@ impl WinitApp {
             }));
             return;
         };
-        match arboard::Clipboard::new().and_then(|mut clipboard| clipboard.set_text(value.clone()))
-        {
+        match self.copy_clipboard_text(value.clone()) {
             Ok(()) => {
                 self.show_left_overlay_toast(text.text(if sha256 {
                     "toast-chart-hash-copied-sha256"
@@ -241,6 +240,15 @@ impl WinitApp {
                 self.show_left_overlay_toast(text.text("toast-clipboard-copy-failed"));
             }
         }
+    }
+
+    fn copy_clipboard_text(&self, value: String) -> Result<()> {
+        #[cfg(target_os = "linux")]
+        if let Some(clipboard) = &self.ui.wayland_clipboard {
+            return clipboard.copy_text(value);
+        }
+        arboard::Clipboard::new()?.set_text(value)?;
+        Ok(())
     }
 
     pub(super) fn open_selected_chart_folder(&mut self) {

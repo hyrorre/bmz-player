@@ -76,6 +76,9 @@ cc = "1"
 [dev-dependencies]
 fluent-syntax.workspace = true
 
+[target.'cfg(target_os = "linux")'.dependencies]
+smithay-client-toolkit = { version = "0.20", default-features = false, features = ["calloop"] }
+
 [target.'cfg(windows)'.dependencies]
 everything-ipc.workspace = true
 windows-sys = { version = "0.61", features = [

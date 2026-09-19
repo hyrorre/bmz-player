@@ -61,4 +61,6 @@ pub mod update;
 pub mod video_bga;
 pub mod video_export;
 pub mod viewer_ipc;
+#[cfg(target_os = "linux")]
+mod wayland_clipboard;
 pub mod window_config;

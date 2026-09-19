@@ -435,6 +435,17 @@ impl WinitApp {
                     self.apply_gamepad_analog_config();
                 }
                 window.request_redraw();
+                #[cfg(target_os = "linux")]
+                {
+                    self.ui.wayland_clipboard =
+                        match crate::wayland_clipboard::WaylandClipboard::new(window.clone()) {
+                            Ok(clipboard) => clipboard,
+                            Err(error) => {
+                                tracing::warn!(%error, "failed to initialize native Wayland clipboard");
+                                None
+                            }
+                        };
+                }
                 self.ui.egui = Some(EguiLayer::new(
                     &window,
                     self.boot.profile_config.ui.show_fps,
