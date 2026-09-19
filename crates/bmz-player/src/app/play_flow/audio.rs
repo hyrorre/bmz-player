@@ -25,7 +25,7 @@ impl WinitApp {
                 );
             }
             Err(error) => {
-                tracing::warn!(%error, "failed to open audio output; running without audio");
+                tracing::warn!(error = %format!("{error:#}"), "failed to open audio output; running without audio");
             }
         }
     }
