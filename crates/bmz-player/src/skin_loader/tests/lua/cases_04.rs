@@ -167,6 +167,66 @@ fn select_lua_skins_decode_with_explicit_library_root_when_available() {
 }
 
 #[test]
+fn bundled_select_ln_force_badge_tracks_setting_without_changing_clicks() {
+    let skin_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../data/skins");
+    for (relative, x, y, width, height) in [
+        ("mz-select/music_select.luaskin", 1665.0, 990.0, 150.0, 50.0),
+        ("Luxez-Flat/music_select.luaskin", 1151.0, 1004.0, 115.0, 35.0),
+    ] {
+        let path = skin_root.join(relative);
+        if !path.is_file() {
+            continue;
+        }
+        let decoded = decode_beatoraja_skin(&path, SkinKind::Select).unwrap();
+        let text =
+            decoded.document.text.iter().find(|text| text.id == "bmz_ln_force_badge").unwrap();
+        assert!(
+            decoded.fonts.iter().any(|font| font.stored_id == text.font && font.data.is_some())
+        );
+        let textures = decoded.sources.iter().map(|source| SkinDocumentTexture {
+            source_id: source.source_id.clone(),
+            texture: source.texture,
+            source_size: SkinImageSize { width: source.size.width, height: source.size.height },
+        });
+        let context = SkinContext::from_manifest_and_document(
+            bmz_render::skin::default_skin_manifest(),
+            decoded.document,
+            textures,
+        );
+        for (index, mode) in
+            ["AUTO(LN)", "AUTO(CN)", "AUTO(HCN)", "FORCE(LN)", "FORCE(CN)", "FORCE(HCN)"]
+                .into_iter()
+                .enumerate()
+        {
+            let snapshot = SelectSnapshot {
+                ln_policy_setting_index: index,
+                select_ln_mode: mode.to_string(),
+                ..SelectSnapshot::default()
+            };
+            let items = context.select_document_items(&snapshot);
+            let badges = items
+                .iter()
+                .filter(|item| matches!(item, SkinRenderItem::Text { text, .. } if text == "FORCE"))
+                .count();
+            assert_eq!(badges, usize::from(index >= 3), "{relative}: {mode}");
+            for fraction in [0.1, 0.9] {
+                let hit = context
+                    .select_click_hit(
+                        &snapshot,
+                        (x + width * fraction) / 1920.0,
+                        1.0 - (y + height / 2.0) / 1080.0,
+                    )
+                    .unwrap();
+                assert_eq!(
+                    hit.target,
+                    bmz_render::skin::SkinClickTarget::Event { event_id: 308, click: 2 }
+                );
+            }
+        }
+    }
+}
+
+#[test]
 fn wmii_fhd_lua_visual_offset_preserves_json_digit_and_blank_padding_when_available() {
     let skin_path = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../data/skins/WMII_FHD/play/play7wide.luaskin");
