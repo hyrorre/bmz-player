@@ -42,7 +42,7 @@ BMS フォルダスキャン時に、各譜面の long note 構成を `library.d
 - `has_defined_hcn`
 - `has_defined_hln`
 
-HLN本数は `defined_hln_pairs` に保存する。library migration 34、chart import version 9で追加し、CN/HCNのOBJ・終端音対応でimport versionを10へ更新した。既存譜面は再スキャンで再解析する。
+HLN本数は `defined_hln_pairs` に保存する。library migration 34、chart import version 9で追加し、CN/HCNのOBJ・終端音対応で10、OBJの固定優先順位対応で11へ更新した。既存譜面は再スキャンで再解析する。
 
 BMZ 内部では `ChartLnProfile` として扱う。
 

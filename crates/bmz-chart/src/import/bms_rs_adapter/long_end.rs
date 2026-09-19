@@ -97,8 +97,8 @@ pub(super) fn restore_marker_overlays<T: KeyLayoutMapper>(
         let marker = chart
             .typed_lnobj
             .iter()
-            .rev()
-            .find(|(key, _)| keys.contains(key))
+            .filter(|(key, _)| keys.contains(key))
+            .max_by_key(|(_, mode)| crate::import::long_note::marker_priority(*mode))
             .map(|(key, _)| *key)
             .or_else(|| chart.lnobj_wav_key.filter(|key| keys.contains(key)));
         let Some(marker) = marker else { continue };

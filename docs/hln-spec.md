@@ -6,9 +6,9 @@
 ### 対応範囲
 
 - BMS/BMCの `#LNMODE 4` と `#HLNOBJ xx` を取り込む。RANDOM解決後の有効なヘッダを読み、元ファイルのhashを保持する。BMCもライブラリのスキャン対象とする。
-- 現行のbms-rsにHLN型がないため、HLNヘッダと種別付きOBJをBMZのadapterで補完する。`#LNMODE` は最後の有効な1〜4、`#HLNOBJ` は最後の有効な定義を採用する。各OBJを併用でき、種別付きOBJはLNOBJより優先、種別付きOBJ同士は最後の有効定義を優先する。marker自身は無音。重ね置きの複数音と競合は[BMZのOBJ・終端音仕様](long-note-end-sounds.md)に従い、Kaleidの厳密な互換性は要求しない。
+- 現行のbms-rsにHLN型がないため、HLNヘッダと種別付きOBJをBMZのadapterで補完する。`#LNMODE` は最後の有効な1〜4、同じOBJコマンドの再定義は最後の有効なIDを採用する。各OBJを併用でき、同じID・位置での競合は記述順によらず `HLNOBJ > HCNOBJ > CNOBJ > LNOBJ` の固定順で優先する。marker自身は無音。重ね置きの複数音と競合は[BMZのOBJ・終端音仕様](long-note-end-sounds.md)に従い、Kaleidの厳密な互換性は要求しない。
 - JSON/LuaのBMZ側fieldは `hlnstart`, `hlnend`, `hlnbody`, `hlnbodyActive`, `hlnbodyReactive`, `hlnbodyMiss`。LR2 CSVでは `SRC_HLN_START/END/BODY` と `BODY_INACTIVE/ACTIVE/REACTIVE/DAMAGE` を扱う。既存HCN/LN素材へのフォールバックを持つ。
-- library DB migration 34、chart import version 10、Replay v8を使用する。HLNを含む元譜面のスコア・コースは、既存IRへ送信しない。
+- library DB migration 34、chart import version 11、Replay v8を使用する。HLNを含む元譜面のスコア・コースは、既存IRへ送信しない。
 - BMSONは `info.ln_type: 4` とノートごとの `t: 4` をHLNとして取り込む。個別の `t` は譜面全体の `ln_type` より優先する。終端音は既存BMSON/LNと同じく終点位置の `up: true` を使用し、通常ノーツを暗黙に終端音へ変えない。
 - ユーザー確認によりtype 4と上記JSON/Lua field名を確定した。LNOBJとHLNOBJに同じIDがある場合は記述順に関係なくHLNOBJを優先し、HLNOBJ未対応プレイヤー向けにLNOBJも併記できる。
 - 以下のReplay seek / Practiceの記述は、それらの独立した開始・復元機能を追加するときにも維持する契約。今回追加した復元処理は既存Viewerの途中開始経路に接続している。

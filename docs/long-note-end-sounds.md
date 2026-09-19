@@ -7,10 +7,30 @@
 - `#LNOBJ` / `#CNOBJ` / `#HCNOBJ` / `#HLNOBJ` を同一譜面で併用できる。各コマンドは1個のIDを持ち、引数の先頭トークンを読む。複数IDを列挙する構文はない。
 - 同じコマンドを再定義した場合、最後の有効な定義を採用する。無効なIDは警告して無視し、それまでの有効定義を消さない。`00` は配置なしを表し、種別付きOBJのIDとしては受け付けない。
 - 種別付きOBJの明示種別は `LNOBJ` と `LNMODE` より優先する。`LNOBJ` 自体は種別を固定せず、従来どおり `LNMODE` またはprofileの未定義LN設定に従う。
-- 同じIDを複数の種別付きOBJに指定した場合、最後に有効定義されたコマンドの種別を使う。例えば `HCNOBJ ZZ` → `CNOBJ ZZ` ならCN。その後 `LNOBJ ZZ` を書いてもCNのまま。
-- 同じ位置に異なるIDのマーカーを重ねた場合も、種別付きOBJを優先し、競合する種別付きOBJのうち最後に定義されたものを採用する。ノーツ配置行の前後は優先順位に使わない。
+- 同じIDを複数のOBJに指定した場合、`HLNOBJ > HCNOBJ > CNOBJ > LNOBJ` の固定順で優先する。ヘッダの記述順には依存しない。例えば `HCNOBJ ZZ` → `CNOBJ ZZ` でもHCNになる。
+- 同じ位置に異なるIDのマーカーを重ねた場合も、上記の固定優先順位を使う。ノーツ配置行の前後は優先順位に使わない。
+- 異なるIDを別々の位置で使う場合は各OBJを併用できる。高優先のOBJを定義しても、他のOBJを譜面全体で無効にはしない。
+- 未対応プレイヤー向けに、例えば `HLNOBJ ZZ` と `LNOBJ ZZ` を併記できる。BMZでは常にHLNとなり、HLNOBJを無視するプレイヤーにはLNOBJマーカーとして渡せる。そのプレイヤーでの種別は、当該プレイヤーのLNMODE対応と設定に従う。
 - 再定義によって使われなくなったIDは、他の有効なOBJ定義が参照していなければ通常のWAV IDに戻る。
 - RANDOM/IFの解決後の有効なヘッダと配置だけを扱い、`#BASE 62` ではIDの大文字・小文字を区別する。
+
+## Auto設定・LNMODE・OBJの組み合わせ
+
+表は各OBJマーカーで作られたノートの種別を示す。優先順位は **種別付きOBJ → LNMODE → Auto設定**。`LNOBJ` 自体はLNへの固定指定ではない。
+
+| 譜面のLNMODE | プレイ設定 | LNOBJ | CNOBJ | HCNOBJ | HLNOBJ |
+| --- | --- | --- | --- | --- | --- |
+| 未指定 | Auto LN | LN | CN | HCN | HLN |
+| 未指定 | Auto CN | CN | CN | HCN | HLN |
+| 未指定 | Auto HCN | HCN | CN | HCN | HLN |
+| `1`（LN） | Auto系すべて | LN | CN | HCN | HLN |
+| `2`（CN） | Auto系すべて | CN | CN | HCN | HLN |
+| `3`（HCN） | Auto系すべて | HCN | CN | HCN | HLN |
+| `4`（HLN） | Auto系すべて | HLN | CN | HCN | HLN |
+
+同じIDまたは位置で複数のOBJが競合する場合は、前節の固定優先順位で採用するOBJを決めてから表を適用する。同じコマンド内の再定義だけは、最後の有効なIDを採用する。
+
+コース側に種別指定がある場合は、LNMODE未指定のLNOBJに使うAuto設定の代わりにコース指定を使う。Force系設定では、表にかかわらず全ノートを指定種別へ変換する。
 
 ## 始点との結び付け
 
@@ -73,4 +93,4 @@ HLNは[HLN仕様](hln-spec.md)どおり、早離し時ではなく譜面終点�
 - `bmz-chart/tests/long_end.rs`: 配置行順、複数音、定義競合、RANDOM/Base62、専用LNチャネル、音声分離のテスト。
 - `bmz-gameplay/src/session/tests/long_end.rs`: 発音・無音条件、Autoplay、自動キー音のテスト。
 
-chart import versionを10へ更新した。既存ライブラリは再スキャンでCN/HCN構成とノーツ数を更新する。ライブラリDBの新規カラムとprofile設定の追加はない。
+chart import versionは終端音対応で10、OBJの固定優先順位対応で11へ更新した。既存ライブラリは再スキャンでCN/HCN/HLN構成とノーツ数を更新する。ライブラリDBの新規カラムとprofile設定の追加はない。

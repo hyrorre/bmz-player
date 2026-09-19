@@ -43,13 +43,13 @@ fn charge_end_layers_are_order_independent_and_deduplicate_wav_ids() {
 }
 
 #[test]
-fn typed_markers_override_lnmode_and_lnobj_and_last_typed_definition_wins() {
+fn typed_markers_override_lnmode_and_lnobj_with_fixed_priority() {
     for (headers, expected) in [
         ("#LNMODE 3\n#CNOBJ ZZ\n#LNOBJ ZZ", LongNoteMode::Cn),
         ("#LNMODE 1\n#HCNOBJ ZZ\n#LNOBJ ZZ", LongNoteMode::Hcn),
-        ("#HCNOBJ ZZ\n#CNOBJ ZZ", LongNoteMode::Cn),
+        ("#HCNOBJ ZZ\n#CNOBJ ZZ", LongNoteMode::Hcn),
         ("#CNOBJ ZZ\n#HCNOBJ ZZ", LongNoteMode::Hcn),
-        ("#HLNOBJ ZZ\n#CNOBJ ZZ", LongNoteMode::Cn),
+        ("#HLNOBJ ZZ\n#CNOBJ ZZ", LongNoteMode::Hln),
         ("#CNOBJ ZZ\n#HLNOBJ ZZ", LongNoteMode::Hln),
     ] {
         let chart = import(&format!("{headers}\n#00011:01ZZ\n#00011:0002"));
@@ -59,12 +59,49 @@ fn typed_markers_override_lnmode_and_lnobj_and_last_typed_definition_wins() {
 }
 
 #[test]
-fn collocated_distinct_markers_choose_last_defined_type_and_never_become_sound() {
+fn collocated_distinct_markers_choose_highest_priority_and_never_become_sound() {
     for rows in ["#00011:00ZZ\n#00011:00YY", "#00011:00YY\n#00011:00ZZ"] {
         let chart = import(&format!("#CNOBJ ZZ\n#HCNOBJ YY\n#00011:01\n{rows}\n#00011:0002"));
         assert_eq!(chart.long_notes.len(), 1);
         assert_eq!(chart.long_notes[0].mode, Some(LongNoteMode::Hcn));
         assert_eq!(tail_paths(&chart), ["tail2.wav"]);
+    }
+}
+
+#[test]
+fn marker_priority_is_independent_of_header_and_placement_order() {
+    let commands = ["LNOBJ", "CNOBJ", "HCNOBJ", "HLNOBJ"];
+    let modes = [LongNoteMode::Ln, LongNoteMode::Cn, LongNoteMode::Hcn, LongNoteMode::Hln];
+    for low in 0..commands.len() {
+        for high in low + 1..commands.len() {
+            for reverse_headers in [false, true] {
+                for same_id in [false, true] {
+                    for reverse_rows in [false, true] {
+                        let low_id = if same_id { "ZZ" } else { "YY" };
+                        let mut headers = [
+                            format!("#{} {low_id}", commands[low]),
+                            format!("#{} ZZ", commands[high]),
+                        ];
+                        let mut rows = [format!("#00011:00{low_id}"), "#00011:00ZZ".into()];
+                        if reverse_headers {
+                            headers.reverse();
+                        }
+                        if reverse_rows {
+                            rows.reverse();
+                        }
+                        let body = format!(
+                            "#LNMODE 1\n{}\n#00011:01\n{}\n#00011:0002",
+                            headers.join("\n"),
+                            rows.join("\n")
+                        );
+                        let chart = import(&body);
+                        assert_eq!(chart.long_notes.len(), 1, "{body}");
+                        assert_eq!(chart.long_notes[0].mode, Some(modes[high]), "{body}");
+                        assert_eq!(tail_paths(&chart), ["tail2.wav"], "{body}");
+                    }
+                }
+            }
+        }
     }
 }
 

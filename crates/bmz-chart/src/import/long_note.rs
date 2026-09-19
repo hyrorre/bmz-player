@@ -6,6 +6,16 @@ use crate::model::{LongNoteMode, LongNoteStyle};
 use super::error::ImportWarning;
 use super::intermediate::{LaneObject, LaneObjectSource, LongNotePairDraft, ResolvedLaneEvent};
 
+/// OBJの競合は宣言順によらず HLN > HCN > CN > LN とする。
+pub(crate) fn marker_priority(mode: LongNoteMode) -> u8 {
+    match mode {
+        LongNoteMode::Ln => 0,
+        LongNoteMode::Cn => 1,
+        LongNoteMode::Hcn => 2,
+        LongNoteMode::Hln => 3,
+    }
+}
+
 pub fn normalize_lane_objects(
     lane: Lane,
     objects: &[LaneObject],
@@ -193,8 +203,8 @@ fn resolve_marker_lane(
     for object in visible {
         let mode = typed_markers
             .iter()
-            .rev()
-            .find(|(key, _)| object.wav_key == Some(*key))
+            .filter(|(key, _)| object.wav_key == Some(*key))
+            .max_by_key(|(_, mode)| marker_priority(*mode))
             .map(|(_, mode)| *mode);
         // 種別付きOBJでは専用LNチャネルを優先する。既存LNOBJのペア処理は維持。
         if mode.is_some()
