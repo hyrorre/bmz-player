@@ -63,7 +63,8 @@ use super::intermediate::{
 use crate::model::{JudgeRankKind, JudgeRankSpec, LongNoteMode};
 
 mod compat;
-mod hln;
+mod long_end;
+mod long_note_headers;
 mod metadata;
 mod objects;
 mod random;
@@ -216,7 +217,7 @@ fn import_with_layout<T: KeyLayoutMapper>(
         bms_switch_choices,
         warnings,
     );
-    let (hln_parse_text, hln_mode, hlnobj_text) = hln::preprocess(&text);
+    let (hln_parse_text, hln_mode) = long_note_headers::preprocess(&text);
     let metadata_text = strip_empty_metadata_commands(&hln_parse_text);
     let lnobj_parse_text = strip_lnobj_commands(&metadata_text);
     let bga_messages = extract_bga_message_lines(&lnobj_parse_text);
@@ -255,16 +256,14 @@ fn import_with_layout<T: KeyLayoutMapper>(
     )?;
     intermediate.lnobj_wav_key =
         extract_lnobj_wav_key(&text, bms_uses_base62_obj_ids(&bms), warnings);
-    let mut hln_warnings = Vec::new();
-    intermediate.hlnobj_wav_key =
-        extract_lnobj_wav_key(&hlnobj_text, bms_uses_base62_obj_ids(&bms), &mut hln_warnings);
-    warnings.extend(hln_warnings.into_iter().map(|warning| match warning {
-        ImportWarning::ParserDiagnostic { message, .. } => ImportWarning::ParserDiagnostic {
-            code: "InvalidHlnobj".to_string(),
-            message: message.replace("#LNOBJ", "#HLNOBJ"),
-        },
-        warning => warning,
-    }));
+    intermediate.typed_lnobj =
+        long_end::typed_markers(&text, bms_uses_base62_obj_ids(&bms), warnings);
+    long_end::restore_marker_overlays::<T>(
+        &text,
+        layout,
+        bms_uses_base62_obj_ids(&bms),
+        &mut intermediate,
+    );
     if hln_mode {
         intermediate.metadata.long_note_mode = LongNoteMode::Hln;
         intermediate.metadata.long_note_mode_defined = true;
@@ -329,7 +328,8 @@ fn build_intermediate_from_bms_with_extra_bga_objects<T: KeyLayoutMapper>(
         objects,
         layered_note_sounds: Vec::new(),
         lnobj_wav_key: None, // bms-rs 側で吸収済み
-        hlnobj_wav_key: None,
+        typed_lnobj: Vec::new(),
+        long_end_sounds: Vec::new(),
     };
 
     intermediate.metadata.has_bga = intermediate

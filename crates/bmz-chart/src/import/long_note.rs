@@ -1,4 +1,5 @@
 use bmz_core::lane::Lane;
+use bmz_core::time::ChartTick;
 
 use crate::model::{LongNoteMode, LongNoteStyle};
 
@@ -21,9 +22,27 @@ pub fn normalize_lane_objects_with_hln(
     hlnobj_wav_key: Option<u16>,
     warnings: &mut Vec<ImportWarning>,
 ) -> Vec<ResolvedLaneEvent> {
+    let typed = hlnobj_wav_key.map(|id| (id, LongNoteMode::Hln)).into_iter().collect::<Vec<_>>();
+    normalize_lane_objects_with_markers(lane, objects, lnobj_wav_key, &typed, warnings)
+}
+
+pub fn normalize_lane_objects_with_markers(
+    lane: Lane,
+    objects: &[LaneObject],
+    lnobj_wav_key: Option<u16>,
+    typed_markers: &[(u16, LongNoteMode)],
+    warnings: &mut Vec<ImportWarning>,
+) -> Vec<ResolvedLaneEvent> {
     let mut out = Vec::new();
 
     out.extend(resolve_long_channel_lane(lane, objects, warnings));
+    let channel_ranges: Vec<_> = out
+        .iter()
+        .filter_map(|event| match event {
+            ResolvedLaneEvent::Long { pair } => Some((pair.start_tick, pair.end_tick)),
+            _ => None,
+        })
+        .collect();
 
     let visible: Vec<_> = objects
         .iter()
@@ -31,8 +50,15 @@ pub fn normalize_lane_objects_with_hln(
         .cloned()
         .collect();
 
-    if lnobj_wav_key.is_some() || hlnobj_wav_key.is_some() {
-        out.extend(resolve_marker_lane(lane, &visible, lnobj_wav_key, hlnobj_wav_key, warnings));
+    if lnobj_wav_key.is_some() || !typed_markers.is_empty() {
+        out.extend(resolve_marker_lane(
+            lane,
+            &visible,
+            lnobj_wav_key,
+            typed_markers,
+            &channel_ranges,
+            warnings,
+        ));
     } else {
         out.extend(visible.into_iter().map(|object| ResolvedLaneEvent::Tap {
             lane,
@@ -150,22 +176,46 @@ pub fn resolve_lnobj_lane(
     lnobj_wav_key: u16,
     warnings: &mut Vec<ImportWarning>,
 ) -> Vec<ResolvedLaneEvent> {
-    resolve_marker_lane(lane, visible, Some(lnobj_wav_key), None, warnings)
+    resolve_marker_lane(lane, visible, Some(lnobj_wav_key), &[], &[], warnings)
 }
 
 fn resolve_marker_lane(
     lane: Lane,
     visible: &[LaneObject],
     lnobj_wav_key: Option<u16>,
-    hlnobj_wav_key: Option<u16>,
+    typed_markers: &[(u16, LongNoteMode)],
+    channel_ranges: &[(ChartTick, ChartTick)],
     warnings: &mut Vec<ImportWarning>,
 ) -> Vec<ResolvedLaneEvent> {
     let mut out = Vec::new();
     let mut pending_start: Option<&LaneObject> = None;
 
     for object in visible {
-        let is_hln = hlnobj_wav_key.is_some() && object.wav_key == hlnobj_wav_key;
-        if is_hln || (lnobj_wav_key.is_some() && object.wav_key == lnobj_wav_key) {
+        let mode = typed_markers
+            .iter()
+            .rev()
+            .find(|(key, _)| object.wav_key == Some(*key))
+            .map(|(_, mode)| *mode);
+        // 種別付きOBJでは専用LNチャネルを優先する。既存LNOBJのペア処理は維持。
+        if mode.is_some()
+            && pending_start.is_some_and(|start| {
+                channel_ranges.iter().any(|(from, to)| *from <= object.tick && start.tick <= *to)
+            })
+        {
+            let previous = pending_start.take().unwrap();
+            out.push(ResolvedLaneEvent::Tap {
+                lane,
+                tick: previous.tick,
+                time: previous.time,
+                wav_key: previous.wav_key,
+            });
+        }
+        if mode.is_some()
+            && channel_ranges.iter().any(|(from, to)| *from <= object.tick && object.tick <= *to)
+        {
+            continue;
+        }
+        if mode.is_some() || (lnobj_wav_key.is_some() && object.wav_key == lnobj_wav_key) {
             if let Some(start) = pending_start.take() {
                 out.push(ResolvedLaneEvent::Long {
                     pair: LongNotePairDraft {
@@ -177,7 +227,7 @@ fn resolve_marker_lane(
                         end_time: object.time,
                         end_wav_key: None,
                         wav_key: start.wav_key,
-                        mode: is_hln.then_some(LongNoteMode::Hln),
+                        mode,
                     },
                 });
             } else {

@@ -346,3 +346,5 @@ mod cases_03;
 mod cases_04;
 #[path = "tests/hln.rs"]
 mod hln_tests;
+#[path = "tests/long_end.rs"]
+mod long_end_tests;

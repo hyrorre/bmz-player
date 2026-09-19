@@ -30,11 +30,11 @@ pub fn normalize_chart(
 
     let mut next_note_id = 0_u32;
     for lane in Lane::ALL {
-        let resolved = normalize_lane_objects_with_hln(
+        let resolved = normalize_lane_objects_with_markers(
             lane,
             &lane_buckets[lane.index()],
             intermediate.lnobj_wav_key,
-            intermediate.hlnobj_wav_key,
+            &intermediate.typed_lnobj,
             warnings,
         );
         emit_resolved_lane_events(
@@ -52,6 +52,15 @@ pub fn normalize_chart(
         &sound_table,
         &mut draft,
         warnings,
+        false,
+    )?;
+    apply_layered_note_sounds(
+        &intermediate.long_end_sounds,
+        &intermediate.measures,
+        &sound_table,
+        &mut draft,
+        warnings,
+        true,
     )?;
 
     draft.bgm_events = build_bgm_events(&tick_objects, &timing_map, &sound_table, warnings);

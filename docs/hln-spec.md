@@ -6,10 +6,10 @@
 ### 対応範囲
 
 - BMS/BMCの `#LNMODE 4` と `#HLNOBJ xx` を取り込む。RANDOM解決後の有効なヘッダを読み、元ファイルのhashを保持する。BMCもライブラリのスキャン対象とする。
-- 現行のbms-rsにHLN型がないため、HLNヘッダだけをBMZのadapterで補完する。`#LNMODE` は最後の有効な1〜4、`#HLNOBJ` は最後の有効な定義を採用する。LNOBJとHLNOBJを併用でき、同じmarker IDならHLNOBJを優先する。marker自身は無音の終点となる。これはKaleidの曖昧な入力に対する互換性を保証するものではない。
+- 現行のbms-rsにHLN型がないため、HLNヘッダと種別付きOBJをBMZのadapterで補完する。`#LNMODE` は最後の有効な1〜4、`#HLNOBJ` は最後の有効な定義を採用する。各OBJを併用でき、種別付きOBJはLNOBJより優先、種別付きOBJ同士は最後の有効定義を優先する。marker自身は無音。重ね置きの複数音と競合は[BMZのOBJ・終端音仕様](long-note-end-sounds.md)に従い、Kaleidの厳密な互換性は要求しない。
 - JSON/LuaのBMZ側fieldは `hlnstart`, `hlnend`, `hlnbody`, `hlnbodyActive`, `hlnbodyReactive`, `hlnbodyMiss`。LR2 CSVでは `SRC_HLN_START/END/BODY` と `BODY_INACTIVE/ACTIVE/REACTIVE/DAMAGE` を扱う。既存HCN/LN素材へのフォールバックを持つ。
-- library DB migration 34、chart import version 9、Replay v8を使用する。HLNを含む元譜面のスコア・コースは、既存IRへ送信しない。
-- **確認待ち:** HLNOBJの重複・終点音の優先順位、BMSONのHLN構文、Kaleid JSON/Luaの正式なfield名。BMSONのtype 4はまだ取り込まない。
+- library DB migration 34、chart import version 10、Replay v8を使用する。HLNを含む元譜面のスコア・コースは、既存IRへ送信しない。
+- **確認待ち:** BMSONのHLN構文、Kaleid JSON/Luaの正式なfield名。BMSONのtype 4はまだ取り込まない。
 - 以下のReplay seek / Practiceの記述は、それらの独立した開始・復元機能を追加するときにも維持する契約。今回追加した復元処理は既存Viewerの途中開始経路に接続している。
 
 ## 1. 定義と不変条件
@@ -146,7 +146,7 @@ while c < -H:
 正規化後のpairに明示的な終端音がある場合は、**譜面の終点時刻に1回だけ自動再生**する。始点の成否、終点での押下状態、早離し・押し直しに依存しない。
 Release時に前倒しして鳴らさず、終端音のためのJudgeイベントも作らない。終端音がない場合は何も鳴らさない。
 総合評価の確定時刻と終端音の再生時刻は分離する。LNの採点処理を共用しても、そのRelease時の終端音イベントをHLNで重ねて発行しない。
-複数終端音は保持された音をそれぞれ1回再生する。HLNOBJのmarker自身が終端音か、重ね置きのどの音を保持するかはKaleid管理人へ確認するが、保持された音の再生規則はこの仕様で確定する。
+複数終端音は保持された音をそれぞれ1回再生する。HLNOBJのmarker自身は無音とし、同位置の通常WAVをすべて保持する。同じWAV IDの重複は1回にまとめる。
 
 キー音自動再生設定では、始点音・終端音を譜面時刻に各1回再生し、押下によるミュート/復帰を行わない。通常キー音経路と自動終端音経路が二重発音しないようにする。
 FAILED/終了後は既存の音声終了処理に従い、未到達の終端音だけを後から再生しない。
@@ -197,7 +197,7 @@ HLN素材 → HCN素材 → LN素材の順に部品ごとにフォールバッ�
 | 設定・保存 | `bmz-player/src/ln_policy.rs`、storage、replay | HLN構成・ForceHln・採点数・対応版、course/battle/Viewer |
 
 HLNの判定・ゲージ部分は管理人への回答待ちにせず実装した。
-HLNOBJの曖昧なケース・BMSON構文・外部skinのfield名は、Kaleid管理人への確認後に取込部分の互換性を追加確認する。
+BMSON構文・外部skinのfield名は、Kaleid管理人への確認後に取込部分の互換性を追加確認する。OBJの重複・終端音の優先順位はBMZ側で確定し、回答待ちにしない。
 既存HCNの終点成功による回復継続、終点BADを条件にした音量制御を、そのままHLNへ流用しない。HLNは独立した終点採点を持たず、総合評価が確定した後もBODYが続くため、採点状態とは独立した保持状態を参照する。
 
 ## 10. 受入テスト

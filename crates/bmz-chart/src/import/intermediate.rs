@@ -16,7 +16,9 @@ pub struct IntermediateChart {
     pub objects: Vec<IntermediateObject>,
     pub layered_note_sounds: Vec<IntermediateLayeredSound>,
     pub lnobj_wav_key: Option<u16>,
-    pub hlnobj_wav_key: Option<u16>,
+    /// CNOBJ / HCNOBJ / HLNOBJ。種別ごとの最後の有効定義を記述順に保持する。
+    pub typed_lnobj: Vec<(u16, LongNoteMode)>,
+    pub long_end_sounds: Vec<IntermediateLayeredSound>,
 }
 
 #[derive(Debug, Clone, Copy)]

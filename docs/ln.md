@@ -4,6 +4,7 @@ BMZ は beatoraja 完全互換ではなく、譜面が宣言した LNMODE とユ
 ユーザーは profile の設定で、譜面の LN 宣言を尊重するか、特定の LN 種別へ強制するかを選べる。
 
 HLNは「LNの終了時総合評価＋HCNの保持ゲージ」として実装している。判定・ゲージ・音声・対応構文の詳細は [BMZ HLN仕様](hln-spec.md) を参照。
+`CNOBJ` / `HCNOBJ` / `HLNOBJ` の優先順位と重ね置き終端音は、[OBJ・終端音仕様](long-note-end-sounds.md) を参照。行順・複数音・競合はBMZの規則で解決する。
 
 ## Terms
 
@@ -41,7 +42,7 @@ BMS フォルダスキャン時に、各譜面の long note 構成を `library.d
 - `has_defined_hcn`
 - `has_defined_hln`
 
-HLN本数は `defined_hln_pairs` に保存する。library migration 34、chart import version 9で追加した。既存譜面は再スキャンで再解析する。
+HLN本数は `defined_hln_pairs` に保存する。library migration 34、chart import version 9で追加し、CN/HCNのOBJ・終端音対応でimport versionを10へ更新した。既存譜面は再スキャンで再解析する。
 
 BMZ 内部では `ChartLnProfile` として扱う。
 

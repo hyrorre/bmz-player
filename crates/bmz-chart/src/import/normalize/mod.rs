@@ -24,7 +24,7 @@ use super::intermediate::{
     IntermediateObject, IntermediateObjectKind, LaneObject, LaneObjectSource, MeasureInfo,
     ResolvedLaneEvent,
 };
-use super::long_note::normalize_lane_objects_with_hln;
+use super::long_note::normalize_lane_objects_with_markers;
 
 #[derive(Debug, Clone)]
 struct SoundTable {

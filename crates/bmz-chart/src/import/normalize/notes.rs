@@ -257,6 +257,7 @@ pub(super) fn apply_layered_note_sounds(
     sound_table: &SoundTable,
     draft: &mut PlayableChartDraft,
     warnings: &mut Vec<ImportWarning>,
+    end_only: bool,
 ) -> Result<(), ImportError> {
     for layer in layers {
         let tick =
@@ -264,12 +265,47 @@ pub(super) fn apply_layered_note_sounds(
         let Some(sound_id) = resolve_sound_id(Some(layer.wav_key), sound_table, warnings) else {
             continue;
         };
-        let Some(note) = draft.lane_notes[layer.lane.index()].iter_mut().find(|note| {
-            note.tick == tick && matches!(note.kind, NoteKind::Tap | NoteKind::LongStart)
+        let Some(note_index) = draft.lane_notes[layer.lane.index()].iter().position(|note| {
+            note.tick == tick
+                && if end_only {
+                    note.kind == NoteKind::LongEnd
+                } else {
+                    matches!(note.kind, NoteKind::Tap | NoteKind::LongStart)
+                }
         }) else {
             continue;
         };
-        if note.sound != Some(sound_id) && !note.layered_sounds.contains(&sound_id) {
+        if draft.lane_notes[layer.lane.index()][note_index].sounds().any(|id| id == sound_id) {
+            continue;
+        }
+        let sound_id = if end_only {
+            // HCNの始点ミュートやCNの早離しミュートで、同じWAVの終端音を巻き込まない。
+            let mut asset = draft
+                .sounds
+                .iter()
+                .find(|asset| asset.id == sound_id)
+                .expect("resolved sound asset")
+                .clone();
+            asset.id = SoundId(
+                draft
+                    .sounds
+                    .iter()
+                    .map(|asset| asset.id.0)
+                    .max()
+                    .unwrap_or(0)
+                    .checked_add(1)
+                    .expect("long end sound id space exhausted"),
+            );
+            let id = asset.id;
+            draft.sounds.push(asset);
+            id
+        } else {
+            sound_id
+        };
+        let note = &mut draft.lane_notes[layer.lane.index()][note_index];
+        if end_only && note.sound.is_none() {
+            note.sound = Some(sound_id);
+        } else if note.sound != Some(sound_id) && !note.layered_sounds.contains(&sound_id) {
             note.layered_sounds.push(sound_id);
         }
     }
