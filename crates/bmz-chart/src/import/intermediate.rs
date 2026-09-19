@@ -32,6 +32,7 @@ pub struct IntermediateLayeredSound {
 
 #[derive(Debug, Clone, Default)]
 pub struct IntermediateMetadata {
+    pub conditional: Option<std::sync::Arc<crate::conditional::ConditionalProgram>>,
     pub title: String,
     pub subtitle: String,
     pub artist: String,

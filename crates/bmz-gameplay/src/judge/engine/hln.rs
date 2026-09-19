@@ -26,6 +26,25 @@ struct HlnBody {
 }
 
 impl HlnState {
+    pub(super) fn rebind(&mut self, old: &PlayableChart, new: &PlayableChart) {
+        let previous = std::mem::take(&mut self.bodies);
+        self.initialized = false;
+        self.ensure(new);
+        for body in &mut self.bodies {
+            let id = new.long_notes[body.pair_index].start_note_id;
+            if let Some(saved) = previous.iter().find(|p| {
+                old.long_notes[p.pair_index].start_note_id == id
+                    && (p.activated.is_some() || p.ended)
+            }) {
+                let index = body.pair_index;
+                *body = saved.clone();
+                body.pair_index = index;
+                if let Some(active) = &mut body.active {
+                    active.pair_index = index;
+                }
+            }
+        }
+    }
     pub(super) fn is_exhausted(&self) -> bool {
         self.bodies.iter().all(|body| body.ended)
     }

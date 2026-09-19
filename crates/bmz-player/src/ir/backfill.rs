@@ -131,7 +131,15 @@ pub fn enqueue_local_score_jobs(
             continue;
         };
         // 各 IR が HLN の譜面・判定区分を受け付けるまでは送信しない。
-        if chart.ln_profile.has_defined_hln || row.ln_policy == LnScorePolicy::ForceHln {
+        let conditional: bool = library_db.conn().query_row(
+            "SELECT has_conditional FROM charts WHERE id = ?1",
+            [chart.chart_id],
+            |row| row.get(0),
+        )?;
+        if conditional
+            || chart.ln_profile.has_defined_hln
+            || row.ln_policy == LnScorePolicy::ForceHln
+        {
             continue;
         }
         let analysis = library_db.chart_analysis_by_chart_id(chart.chart_id)?;

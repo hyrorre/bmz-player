@@ -112,6 +112,7 @@ use assets::*;
 use events::*;
 use finalize::*;
 use notes::*;
+pub(crate) use notes::{collect_timing_events, object_to_tick};
 pub use pipeline::normalize_chart;
 
 #[cfg(test)]

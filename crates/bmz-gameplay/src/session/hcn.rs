@@ -202,7 +202,9 @@ pub fn apply_hcn_gauge(session: &mut GameSession, audio_now: TimeUs) {
 
     let delta_us = audio_now.0 - previous.0;
     for idx in 0..LANE_COUNT {
-        if hln_passing(&session.chart, idx, audio_now) {
+        let hold_time =
+            if session.chart.metadata.conditional.is_some() { previous } else { audio_now };
+        if hln_passing(&session.chart, idx, hold_time) {
             continue;
         }
         let Some(mut timer) = session.lane_hcn_timer[idx] else {

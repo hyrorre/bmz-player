@@ -126,10 +126,7 @@ impl WinitApp {
                 return false;
             }
         };
-        let player = bmz_gameplay::replay::ReplayPlayer {
-            events: replay_file.events.clone(),
-            next_index: 0,
-        };
+        let player = replay_file.player();
         let options = PlayStartOptions {
             session_mode: SessionMode::Normal,
             autoplay: false,
@@ -250,10 +247,7 @@ impl WinitApp {
                 return false;
             }
         };
-        let player = bmz_gameplay::replay::ReplayPlayer {
-            events: replay_file.events.clone(),
-            next_index: 0,
-        };
+        let player = replay_file.player();
         let options = PlayStartOptions {
             session_mode: SessionMode::Normal,
             autoplay: false,

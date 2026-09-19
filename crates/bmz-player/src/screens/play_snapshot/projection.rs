@@ -103,6 +103,11 @@ impl PlayfieldProjection {
     }
 
     pub(crate) fn update(&mut self, session: &GameSession, time: TimeUs) {
+        if !Arc::ptr_eq(&self.chart, &session.chart) {
+            self.chart = session.chart.clone();
+            self.timing_map = Arc::new(session.timing_map.clone());
+            self.cache = self.cache.for_updated_chart(&session.chart);
+        }
         self.hln_bodies.clear();
         self.hln_bodies.extend(session.judge.hln_body_visuals());
         self.judged_notes.clear();

@@ -401,7 +401,8 @@ fn library_migration_merges_windows_separator_variant_paths() {
     db.conn()
         .execute_batch(
             "ALTER TABLE charts ADD COLUMN has_defined_hln INTEGER NOT NULL DEFAULT 0;
-        ALTER TABLE charts ADD COLUMN defined_hln_pairs INTEGER NOT NULL DEFAULT 0;",
+        ALTER TABLE charts ADD COLUMN defined_hln_pairs INTEGER NOT NULL DEFAULT 0;
+        ALTER TABLE charts ADD COLUMN has_conditional INTEGER NOT NULL DEFAULT 0;",
         )
         .unwrap();
 
@@ -467,14 +468,15 @@ fn library_migration_merges_windows_separator_variant_paths() {
     db.conn()
         .execute_batch(
             "ALTER TABLE charts DROP COLUMN has_defined_hln;
-        ALTER TABLE charts DROP COLUMN defined_hln_pairs;",
+        ALTER TABLE charts DROP COLUMN defined_hln_pairs;
+        ALTER TABLE charts DROP COLUMN has_conditional;",
         )
         .unwrap();
     run_migrations(db.conn_mut(), &LIBRARY_MIGRATIONS[migration_index..]).unwrap();
 
     let version: i32 =
         db.conn().pragma_query_value(None, "user_version", |row| row.get(0)).unwrap();
-    assert_eq!(version, 34);
+    assert_eq!(version, 35);
     assert_eq!(db.list_course_entries(course_id).unwrap()[0].entry.chart_id, Some(refreshed_id));
     assert_ne!(copy_id, refreshed_id, "a real copy at another path must remain separate");
 
@@ -531,7 +533,8 @@ fn library_migration_removes_windows_extended_path_prefixes() {
     db.conn()
         .execute_batch(
             "ALTER TABLE charts ADD COLUMN has_defined_hln INTEGER NOT NULL DEFAULT 0;
-        ALTER TABLE charts ADD COLUMN defined_hln_pairs INTEGER NOT NULL DEFAULT 0;",
+        ALTER TABLE charts ADD COLUMN defined_hln_pairs INTEGER NOT NULL DEFAULT 0;
+        ALTER TABLE charts ADD COLUMN has_conditional INTEGER NOT NULL DEFAULT 0;",
         )
         .unwrap();
 
@@ -600,14 +603,15 @@ fn library_migration_removes_windows_extended_path_prefixes() {
     db.conn()
         .execute_batch(
             "ALTER TABLE charts DROP COLUMN has_defined_hln;
-        ALTER TABLE charts DROP COLUMN defined_hln_pairs;",
+        ALTER TABLE charts DROP COLUMN defined_hln_pairs;
+        ALTER TABLE charts DROP COLUMN has_conditional;",
         )
         .unwrap();
     run_migrations(db.conn_mut(), &LIBRARY_MIGRATIONS[migration_index..]).unwrap();
 
     let version: i32 =
         db.conn().pragma_query_value(None, "user_version", |row| row.get(0)).unwrap();
-    assert_eq!(version, 34);
+    assert_eq!(version, 35);
     let counts: (i64, i64, i64) = db
         .conn()
         .query_row(

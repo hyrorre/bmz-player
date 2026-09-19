@@ -42,6 +42,7 @@ const SCRATCH_ANGLE_PERIOD_MS: i64 = 2_160;
 const CHART_KEY_FUTURE_SLACK_US: i64 = 1_000_000;
 
 mod audio;
+pub mod conditional;
 mod frame;
 mod hcn;
 mod input;

@@ -90,6 +90,7 @@ pub struct FrameTimes {
 #[derive(Debug, Clone, Default)]
 pub struct BgmScheduler {
     pub next_index: usize,
+    pub(super) skip: std::collections::HashSet<usize>,
 }
 
 /// キー音自動再生用のレーン別カーソル。押下有無に関わらず、譜面の生タイミング
@@ -97,6 +98,7 @@ pub struct BgmScheduler {
 #[derive(Debug, Clone, Default)]
 pub struct AutoKeysoundScheduler {
     pub next_note_index: [usize; LANE_COUNT],
+    pub(super) skip: std::collections::HashSet<(NoteId, SoundId)>,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord)]
@@ -147,6 +149,7 @@ impl AssistRuntime {
 }
 
 pub struct GameSession {
+    pub conditional: super::conditional::ConditionalRuntime,
     /// SessionMode is owned by the app crate; keep its stable skin/API index so
     /// Result can preserve the mode even when a battle target is attached.
     pub session_mode_index: u8,
@@ -392,7 +395,10 @@ impl BgmScheduler {
     /// Starts scheduling at `start_time` without recreating BGM events that
     /// have already passed. Events exactly on the boundary remain playable.
     pub fn starting_at(chart: &PlayableChart, start_time: TimeUs) -> Self {
-        Self { next_index: chart.bgm_events.partition_point(|event| event.time < start_time) }
+        Self {
+            next_index: chart.bgm_events.partition_point(|event| event.time < start_time),
+            ..Self::default()
+        }
     }
 
     /// Starts scheduling at `start_time` and recreates only BGM voices that
@@ -466,6 +472,11 @@ impl BgmScheduler {
                 break;
             }
 
+            if self.skip.remove(&self.next_index) {
+                self.next_index += 1;
+                continue;
+            }
+
             let chart_volume = bmz_chart::volume::chart_channel_volume_factor(
                 bmz_chart::volume::chart_volume_at_time(&chart.bgm_volume_events, event.time),
             );
@@ -530,6 +541,9 @@ impl AutoKeysoundScheduler {
                     bmz_chart::volume::chart_volume_at_time(&chart.key_volume_events, note.time),
                 );
                 for sound_id in note.sounds() {
+                    if self.skip.remove(&(note.id, sound_id)) {
+                        continue;
+                    }
                     audio.schedule(ScheduledSound {
                         start_frame: clock.time_to_output_frame(note.time),
                         sample_offset_frames: 0,

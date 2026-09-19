@@ -47,6 +47,29 @@ pub struct JudgeEngine {
 }
 
 impl JudgeEngine {
+    pub fn rebind_chart(&mut self, old: &PlayableChart, new: &PlayableChart) {
+        for lane in Lane::ALL {
+            let state = &mut self.lanes[lane.index()];
+            state.next_note_index = 0;
+            state.next_mine_index = 0;
+            if let Some(active) = &mut state.active_long
+                && let Some(index) =
+                    new.long_notes.iter().position(|p| p.start_note_id == active.start_note_id)
+            {
+                active.pair_index = index;
+            }
+        }
+        self.hln.rebind(old, new);
+    }
+
+    pub fn is_note_started(&self, id: NoteId) -> bool {
+        self.judged_notes.contains_key(&id)
+            || self.bad_attempted_notes.contains(&id)
+            || self
+                .lanes
+                .iter()
+                .any(|lane| lane.active_long.as_ref().is_some_and(|p| p.start_note_id == id))
+    }
     pub fn new(windows: JudgeWindow) -> Self {
         Self::new_with_rule_mode(windows, RuleMode::Beatoraja)
     }

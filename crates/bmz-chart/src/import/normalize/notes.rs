@@ -1,6 +1,6 @@
 use super::*;
 
-pub(super) fn object_to_tick(
+pub(crate) fn object_to_tick(
     object: &IntermediateObject,
     measures: &[MeasureInfo],
 ) -> Result<ChartTick, ImportError> {
@@ -28,7 +28,7 @@ fn position_to_tick(
     Ok(ChartTick(measure.start_tick.0.saturating_add(local_tick)))
 }
 
-pub(super) fn collect_timing_events(
+pub(crate) fn collect_timing_events(
     intermediate: &IntermediateChart,
     warnings: &mut Vec<ImportWarning>,
 ) -> Result<Vec<TickTimingEvent>, ImportError> {

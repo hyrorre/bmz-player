@@ -160,7 +160,9 @@ impl WinitApp {
             score_key,
         ) = match mode {
             ResultRetryMode::SameArrange => (
-                Some(Arc::clone(&active.running.session.chart)),
+                // Dynamic branches must start from DEFAULT on every attempt.
+                Some(Arc::clone(&active.running.session.chart))
+                    .filter(|chart| chart.metadata.conditional.is_none()),
                 active
                     .running
                     .session
@@ -202,7 +204,8 @@ impl WinitApp {
         let video_bga_decoders = std::mem::take(&mut running.video_bga_decoders);
         self.play.play_media_cache = Some(PlayMediaCache {
             chart_id,
-            chart: Some(Arc::clone(&running.session.chart)),
+            chart: Some(Arc::clone(&running.session.chart))
+                .filter(|chart| chart.metadata.conditional.is_none()),
             opponent_chart: running
                 .session
                 .battle_opponent

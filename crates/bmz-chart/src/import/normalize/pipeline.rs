@@ -123,6 +123,10 @@ fn isolate_hln_sounds(chart: &mut PlayableChart) {
 
 pub(super) fn normalize_metadata(input: &IntermediateMetadata) -> ChartMetadata {
     ChartMetadata {
+        conditional: input.conditional.clone(),
+        conditional_bgm_keys: Vec::new(),
+        conditional_evaluation_times: Vec::new(),
+        conditional_revision: 0,
         source_format: crate::model::ChartSourceFormat::Unknown,
         title: input.title.clone(),
         subtitle: input.subtitle.clone(),

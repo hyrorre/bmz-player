@@ -217,7 +217,32 @@ fn import_with_layout<T: KeyLayoutMapper>(
         bms_switch_choices,
         warnings,
     );
-    let (hln_parse_text, hln_mode) = long_note_headers::preprocess(&text);
+    crate::conditional::compile(&text, source_path, |text| {
+        parse_resolved_with_layout::<T>(
+            source_path,
+            layout,
+            text,
+            &raw_text,
+            has_bms_random,
+            identity.clone(),
+            random_source,
+            warnings,
+        )
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn parse_resolved_with_layout<T: KeyLayoutMapper>(
+    source_path: &Path,
+    layout: ChartKeyLayout,
+    text: &str,
+    raw_text: &str,
+    has_bms_random: bool,
+    identity: bmz_core::chart::ChartIdentity,
+    random_source: &BmsRandomSource,
+    warnings: &mut Vec<ImportWarning>,
+) -> Result<IntermediateChart, ImportError> {
+    let (hln_parse_text, hln_mode) = long_note_headers::preprocess(text);
     let metadata_text = strip_empty_metadata_commands(&hln_parse_text);
     let lnobj_parse_text = strip_lnobj_commands(&metadata_text);
     let bga_messages = extract_bga_message_lines(&lnobj_parse_text);
@@ -255,11 +280,11 @@ fn import_with_layout<T: KeyLayoutMapper>(
         warnings,
     )?;
     intermediate.lnobj_wav_key =
-        extract_lnobj_wav_key(&text, bms_uses_base62_obj_ids(&bms), warnings);
+        extract_lnobj_wav_key(text, bms_uses_base62_obj_ids(&bms), warnings);
     intermediate.typed_lnobj =
-        long_end::typed_markers(&text, bms_uses_base62_obj_ids(&bms), warnings);
+        long_end::typed_markers(text, bms_uses_base62_obj_ids(&bms), warnings);
     long_end::restore_marker_overlays::<T>(
-        &text,
+        text,
         layout,
         bms_uses_base62_obj_ids(&bms),
         &mut intermediate,
@@ -268,7 +293,7 @@ fn import_with_layout<T: KeyLayoutMapper>(
         intermediate.metadata.long_note_mode = LongNoteMode::Hln;
         intermediate.metadata.long_note_mode_defined = true;
     }
-    let bms_headers = extract_bms_headers_from_text(&raw_text);
+    let bms_headers = extract_bms_headers_from_text(raw_text);
     intermediate.metadata.has_bms_random = has_bms_random;
     intermediate.metadata.bms_headers = bms_headers.clone();
     apply_raw_judge_rank_headers(&mut intermediate, &bms_headers);

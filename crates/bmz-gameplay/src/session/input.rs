@@ -372,6 +372,18 @@ pub(super) fn process_hln_inputs(session: &mut GameSession, now: TimeUs) -> Vec<
         timestamp_anchor: session.input_timestamp_anchor,
     };
     let mut human = session.input_system.collect_game_inputs(&ctx);
+    if session.chart.metadata.conditional.is_some() {
+        human.append(&mut session.conditional.pending_inputs);
+        let (ready, future): (Vec<_>, Vec<_>) =
+            human.into_iter().partition(|input| input.time <= now);
+        human = ready;
+        session.conditional.pending_inputs = future;
+        if let Some(cutoff) = session.conditional.decisions.iter().map(|d| d.time).max() {
+            for input in &mut human {
+                input.time = input.time.max(cutoff);
+            }
+        }
+    }
     if session.replay_player.is_some() && session.replay_lane_mask.is_none() {
         update_recent_inputs(session, &human, now);
         human.clear();
@@ -416,9 +428,25 @@ pub(super) fn process_hln_inputs(session: &mut GameSession, now: TimeUs) -> Vec<
         if input.source == InputSource::Replay {
             input = project_replay_input(session, input);
         }
+        if session.chart.metadata.conditional.is_some() {
+            let before = TimeUs(input.time.0.saturating_sub(1));
+            events.extend(super::conditional::advance_time(session, before));
+            if session.state == PlayState::Failed {
+                break;
+            }
+            super::frame::sync_judge_windows(session, input.time);
+        }
         update_recent_inputs(session, &[input], now);
         update_lane_key_states(session, &[input]);
         let judged = process_session_input(session, input);
+        if session.chart.metadata.conditional.is_some() {
+            apply_hcn_gauge(session, input.time);
+            update_hcn_lane_timers(session, input.time);
+            if session.lane_hcn_timer.iter().any(Option::is_some) {
+                session.last_hcn_gauge_at = Some(input.time);
+            }
+            session.conditional.processed_time = Some(input.time);
+        }
         if human {
             apply_input_offset_auto_adjust(session, &judged);
         }

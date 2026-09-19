@@ -145,6 +145,7 @@ fn session_with_autoplay(chart: PlayableChart) -> GameSession {
     let timing_map =
         TimingMap::from_chart_timing_events(chart.metadata.initial_bpm, &chart.timing_events);
     GameSession {
+        conditional: Default::default(),
         session_mode_index: 0,
         chart: Arc::clone(&chart),
         play_config_key_mode: chart.metadata.key_mode,
@@ -254,6 +255,9 @@ fn session_with_autoplay(chart: PlayableChart) -> GameSession {
         last_hcn_gauge_at: None,
     }
 }
+
+#[path = "tests/conditional.rs"]
+mod conditional;
 
 fn chart_with_keysound() -> PlayableChart {
     let note = NoteEvent {

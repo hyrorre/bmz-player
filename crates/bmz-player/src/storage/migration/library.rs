@@ -928,4 +928,8 @@ pub const LIBRARY_MIGRATIONS: &[Migration] = &[
             "ALTER TABLE charts ADD COLUMN defined_hln_pairs INTEGER NOT NULL DEFAULT 0;",
         ],
     },
+    Migration {
+        version: 35,
+        statements: &["ALTER TABLE charts ADD COLUMN has_conditional INTEGER NOT NULL DEFAULT 0;"],
+    },
 ];

@@ -43,6 +43,7 @@ pub struct StorePlayResultRequest {
     pub rule_mode: String,
     pub assist_mask: u32,
     pub replay_events: Vec<ReplayEvent>,
+    pub branch_decisions: Option<Vec<bmz_core::replay::BranchDecision>>,
     pub arrange: ArrangeOption,
     pub arrange_2p: ArrangeOption,
     pub arrange_seed: Option<i64>,
@@ -141,6 +142,7 @@ pub fn store_play_result(
             arrange_pattern.clone(),
             replay_events.clone(),
         )
+        .with_branch_decisions(request.branch_decisions.clone())
         .with_randomization(arrange_seed_2p, bms_random_choices.clone(), bms_switch_choices.clone())
         .with_seed_scheme(request.seed_scheme.clone())
         .with_s_random_schemes(request.s_random_scheme, request.s_random_scheme_2p)
@@ -220,6 +222,7 @@ pub fn store_play_result(
                 arrange_pattern.clone(),
                 replay_events.clone(),
             )
+            .with_branch_decisions(request.branch_decisions.clone())
             .with_randomization(
                 arrange_seed_2p,
                 bms_random_choices.clone(),

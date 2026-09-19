@@ -82,8 +82,7 @@ pub fn prepare(
         play_options.session_mode = crate::select_options::SessionMode::Normal;
         play_options.autoplay = false;
         play_options.assist = Default::default();
-        play_options.replay_player =
-            Some(bmz_gameplay::replay::ReplayPlayer { events: file.events.clone(), next_index: 0 });
+        play_options.replay_player = Some(file.player());
         play_options.gauge_override = file.recorded_gauge_type().or(play_options.gauge_override);
         play_options.arrange = file.arrange_option();
         play_options.arrange_2p = file.arrange_2p_option();

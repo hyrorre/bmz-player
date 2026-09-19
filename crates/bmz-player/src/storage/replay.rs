@@ -12,7 +12,7 @@ use crate::ln_policy::LnScorePolicy;
 use crate::screens::play_session::SRandomScheme;
 use crate::select_options::{ArrangeOption, DoubleOption, DoubleOptionScoreBucket};
 
-pub const REPLAY_FILE_VERSION: u32 = 8;
+pub const REPLAY_FILE_VERSION: u32 = 9;
 pub const SEED_SCHEME_BEATORAJA_24BIT_V1: &str = "beatoraja_24bit_v1";
 pub const SEED_SCHEME_LEGACY_SHARED_V3: &str = "legacy_shared_v3";
 pub const S_RANDOM_SCHEME_LEGACY_40MS_V1: &str = SRandomScheme::LEGACY_40MS_V1;
@@ -20,6 +20,8 @@ pub const S_RANDOM_SCHEME_LM_120HZ_V1: &str = SRandomScheme::LM_120HZ_V1;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ReplayFile {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub branch_decisions: Option<Vec<bmz_core::replay::BranchDecision>>,
     pub version: u32,
     pub chart_sha256: String,
     #[serde(default)]
@@ -72,6 +74,21 @@ fn default_double_option() -> String {
 }
 
 impl ReplayFile {
+    pub fn player(&self) -> ReplayPlayer {
+        ReplayPlayer {
+            events: self.events.clone(),
+            branch_decisions: self.branch_decisions.clone(),
+            next_index: 0,
+        }
+    }
+
+    pub fn with_branch_decisions(
+        mut self,
+        decisions: Option<Vec<bmz_core::replay::BranchDecision>>,
+    ) -> Self {
+        self.branch_decisions = decisions;
+        self
+    }
     pub fn new(
         chart_sha256: [u8; 32],
         played_at: i64,
@@ -112,6 +129,7 @@ impl ReplayFile {
         // ordered stream, so preserve equal-time order while normalizing it.
         events.sort_by_key(|event| event.time);
         Self {
+            branch_decisions: None,
             version: REPLAY_FILE_VERSION,
             chart_sha256: hex_encode(&chart_sha256),
             ln_policy: ln_policy.as_str().to_string(),
@@ -311,6 +329,17 @@ pub fn load_replay(path: &Path) -> Result<ReplayFile> {
 /// Parse a replay received from local storage or a trusted IR transport.
 pub fn parse_replay(text: &str) -> Result<ReplayFile> {
     let replay: ReplayFile = toml::from_str(text)?;
+    if let Some(decisions) = &replay.branch_decisions {
+        if replay.version < 9 {
+            bail!("conditional replay requires format version 9 or later");
+        }
+        let mut seen = std::collections::HashSet::new();
+        if decisions.iter().any(|d| !seen.insert(d.block) || d.time.0 < 0)
+            || decisions.windows(2).any(|w| w[0].time > w[1].time)
+        {
+            bail!("invalid conditional replay decisions");
+        }
+    }
     if replay.ln_policy == "ForceHln" && replay.version < 8 {
         bail!("HLN replay requires format version 8 or later");
     }
@@ -321,12 +350,12 @@ pub fn parse_replay(text: &str) -> Result<ReplayFile> {
 
 pub fn load_replay_player(path: &Path) -> Result<ReplayPlayer> {
     let replay = load_replay(path)?;
-    Ok(ReplayPlayer { events: replay.events, next_index: 0 })
+    Ok(replay.player())
 }
 
 pub fn load_replay_player_for_chart(path: &Path, chart_sha256: [u8; 32]) -> Result<ReplayPlayer> {
     let replay = load_replay_for_chart(path, chart_sha256)?;
-    Ok(ReplayPlayer { events: replay.events, next_index: 0 })
+    Ok(replay.player())
 }
 
 pub fn load_replay_for_chart(path: &Path, chart_sha256: [u8; 32]) -> Result<ReplayFile> {
@@ -495,6 +524,18 @@ mod tests {
     use super::*;
 
     #[test]
+    fn conditional_replay_roundtrip_and_duplicate_rejection() {
+        let decision = bmz_core::replay::BranchDecision { block: 2, branch: 1, time: TimeUs(123) };
+        let replay =
+            ReplayFile::new([1; 32], 1, None, ArrangeOption::Normal, None, None, Vec::new())
+                .with_branch_decisions(Some(vec![decision]));
+        let parsed = parse_replay(&toml::to_string(&replay).unwrap()).unwrap();
+        assert_eq!(parsed.player().branch_decisions, Some(vec![decision]));
+        let duplicate = replay.with_branch_decisions(Some(vec![decision, decision]));
+        assert!(parse_replay(&toml::to_string(&duplicate).unwrap()).is_err());
+    }
+
+    #[test]
     fn replay_constructor_stably_orders_input_events() {
         let event = |lane, time| ReplayEvent {
             lane,
@@ -538,9 +579,9 @@ mod tests {
         );
         let text = toml::to_string(&replay).unwrap();
         let parsed = parse_replay(&text).unwrap();
-        assert_eq!(parsed.version, 8);
+        assert_eq!(parsed.version, REPLAY_FILE_VERSION);
         assert_eq!(parsed.ln_policy, "ForceHln");
-        let legacy = text.replace("version = 8", "version = 7");
+        let legacy = text.replace(&format!("version = {REPLAY_FILE_VERSION}"), "version = 7");
         assert!(parse_replay(&legacy).is_err());
     }
 

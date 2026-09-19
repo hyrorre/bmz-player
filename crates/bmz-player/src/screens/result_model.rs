@@ -323,6 +323,9 @@ impl ResultGraphCollector {
         failed_gauge: Option<&bmz_gameplay::gauge::GaugeState>,
     ) -> ResultGraphSnapshot {
         let mut graph = self.graph.clone();
+        if chart.metadata.conditional.is_some() {
+            graph.bpm_graph_segments = bmz_render::chart_graph::build_bpm_graph_segments(chart);
+        }
         if let Some(gauge) = failed_gauge {
             fill_failed_gauge_tail(
                 &mut graph,

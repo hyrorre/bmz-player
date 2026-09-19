@@ -48,40 +48,33 @@ pub fn advance_session_frame(
         session.state = PlayState::Playing;
     }
 
-    if matches!(session.state, PlayState::Ready | PlayState::Playing) {
-        // BGM・自動キー音はchart 0に間に合うようREADY中もschedule-aheadする。
-        // 判定・入力起因のkeysound・MineはPlayingに入るまで開始しない。
-        session.bgm_scheduler.schedule_until(
-            &session.chart,
-            &session.audio_clock,
-            times.audio_schedule_until,
-            session.audio_mix.master_volume
-                * session.audio_mix.effective_normalization_gain()
-                * session.audio_mix.bgm_volume,
-            audio,
-        );
-
-        // キー音自動再生モード: ノーツの押下有無に関わらず、譜面の生タイミングで
-        // キー音を鳴らす。入力オフセット・表示オフセットは適用しない。
-        // 押鍵時のキー音は `schedule_keysounds` 側で抑制する。
-        if session.audio_mix.auto_keysound {
-            session.auto_keysound_scheduler.schedule_until(
-                &session.chart,
-                &session.display_only_lane_mask,
-                &session.audio_clock,
-                times.audio_schedule_until,
-                session.audio_mix.master_volume
-                    * session.audio_mix.effective_normalization_gain()
-                    * session.audio_mix.key_volume,
-                audio,
-            );
-        }
+    if matches!(session.state, PlayState::Ready | PlayState::Playing)
+        && (session.state == PlayState::Ready || session.chart.metadata.conditional.is_none())
+    {
+        schedule_chart_audio(session, times.audio_schedule_until, audio);
     }
 
     if session.state == PlayState::Playing {
         sync_judge_windows(session, times.audio_now);
 
-        if session.chart.long_notes.iter().any(|pair| {
+        if session.chart.metadata.conditional.is_some() {
+            while let Some(at) =
+                super::conditional::next_evaluation(session).filter(|at| *at <= times.audio_now)
+            {
+                judgements.extend(super::conditional::advance_before_boundary(
+                    session,
+                    TimeUs(at.0.saturating_sub(1)),
+                ));
+                if session.state != PlayState::Playing {
+                    break;
+                }
+                super::conditional::evaluate(session, at);
+            }
+            if session.state == PlayState::Playing {
+                judgements
+                    .extend(super::conditional::advance_before_boundary(session, times.audio_now));
+            }
+        } else if session.chart.long_notes.iter().any(|pair| {
             pair.mode.unwrap_or(session.chart.metadata.long_note_mode) == LongNoteMode::Hln
         }) {
             judgements.extend(super::input::process_hln_inputs(session, times.audio_now));
@@ -116,6 +109,9 @@ pub fn advance_session_frame(
             apply_hcn_gauge(session, times.audio_now);
         }
         update_failed_state_from_gauge(session);
+        if session.chart.metadata.conditional.is_some() {
+            schedule_chart_audio(session, times.audio_schedule_until, audio);
+        }
         schedule_keysounds(session, audio);
         update_recent_judgements(session, &judgements, times.audio_now);
         update_full_combo_timer(session, &judgements);
@@ -126,6 +122,9 @@ pub fn advance_session_frame(
         }
     }
     update_gauge_max_timer(session, times.audio_now);
+    if matches!(session.state, PlayState::Failed | PlayState::Finished) {
+        super::conditional::finalize_defaults(session, times.audio_now);
+    }
 
     let mine_hits = std::mem::take(&mut session.pending_mine_hits);
     let keysound_volumes = std::mem::take(&mut session.pending_keysound_volumes);
@@ -540,6 +539,7 @@ fn second_player_lane(lane: Lane) -> Lane {
 pub(super) fn update_full_combo_timer(session: &mut GameSession, judgements: &[JudgementEvent]) {
     update_opponent_full_combo_timer(session, judgements);
     if session.full_combo_started_at.is_some()
+        || super::conditional::next_evaluation(session).is_some()
         || session.chart.long_notes.iter().any(|pair| {
             pair.mode.unwrap_or(session.chart.metadata.long_note_mode) == LongNoteMode::Hln
                 && pair.end_time > session.audio_clock.now()
@@ -582,7 +582,8 @@ fn update_opponent_full_combo_timer(session: &mut GameSession, judgements: &[Jud
 }
 
 pub fn should_finish(session: &GameSession, audio_now: TimeUs) -> bool {
-    session.judge.is_exhausted(&session.chart)
+    super::conditional::next_evaluation(session).is_none()
+        && session.judge.is_exhausted(&session.chart)
         && session.bgm_scheduler.is_done(&session.chart)
         && audio_now.0 > session.chart.end_time.0.saturating_add(SESSION_END_MARGIN_US)
 }
@@ -592,6 +593,38 @@ pub fn should_finish(session: &GameSession, audio_now: TimeUs) -> bool {
 pub fn result_is_settled(session: &GameSession, audio_now: TimeUs) -> bool {
     let result_settle_at =
         session.chart.end_time.0.saturating_add(session.judge.window_set.result_settle_margin_us());
-    session.judge.is_exhausted(&session.chart) && audio_now.0 > result_settle_at
+    super::conditional::next_evaluation(session).is_none()
+        && session.judge.is_exhausted(&session.chart)
+        && audio_now.0 > result_settle_at
 }
 use super::*;
+
+fn schedule_chart_audio(session: &mut GameSession, until: TimeUs, audio: &mut dyn AudioScheduler) {
+    // BGM・自動キー音はchart 0に間に合うようREADY中もschedule-aheadする。
+    // 判定・入力起因のkeysound・MineはPlayingに入るまで開始しない。
+    session.bgm_scheduler.schedule_until(
+        &session.chart,
+        &session.audio_clock,
+        until,
+        session.audio_mix.master_volume
+            * session.audio_mix.effective_normalization_gain()
+            * session.audio_mix.bgm_volume,
+        audio,
+    );
+
+    // キー音自動再生モード: ノーツの押下有無に関わらず、譜面の生タイミングで
+    // キー音を鳴らす。入力オフセット・表示オフセットは適用しない。
+    // 押鍵時のキー音は `schedule_keysounds` 側で抑制する。
+    if session.audio_mix.auto_keysound {
+        session.auto_keysound_scheduler.schedule_until(
+            &session.chart,
+            &session.display_only_lane_mask,
+            &session.audio_clock,
+            until,
+            session.audio_mix.master_volume
+                * session.audio_mix.effective_normalization_gain()
+                * session.audio_mix.key_volume,
+            audio,
+        );
+    }
+}

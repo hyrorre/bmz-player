@@ -230,11 +230,11 @@ pub(super) fn insert_chart(conn: &Connection, record: &ChartImportRecord<'_>) ->
             has_undefined_ln, has_defined_ln, has_defined_cn, has_defined_hcn,
             undefined_ln_pairs, defined_ln_pairs, defined_cn_pairs, defined_hcn_pairs,
             has_bms_random, source_url, append_url, headers_json, import_version,
-            has_defined_hln, defined_hln_pairs
+            has_defined_hln, defined_hln_pairs, has_conditional
         ) VALUES (
             ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14,
             ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27,
-            ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35, ?36, ?37, ?38, ?39, ?40, ?41, ?42
+            ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35, ?36, ?37, ?38, ?39, ?40, ?41, ?42, ?43
         )",
     )?
     .execute(params![
@@ -283,6 +283,7 @@ pub(super) fn insert_chart(conn: &Connection, record: &ChartImportRecord<'_>) ->
         CHART_IMPORT_VERSION,
         stats.ln_profile.has_defined_hln,
         stats.ln_counts.defined_hln_pairs,
+        chart.metadata.has_conditional(),
     ])?;
     Ok(conn.last_insert_rowid())
 }
@@ -314,7 +315,7 @@ pub(super) fn update_chart(
             undefined_ln_pairs = ?32, defined_ln_pairs = ?33,
             defined_cn_pairs = ?34, defined_hcn_pairs = ?35, has_bms_random = ?36,
             source_url = ?37, append_url = ?38, headers_json = ?39,
-            import_version = ?40, has_defined_hln = ?42, defined_hln_pairs = ?43
+            import_version = ?40, has_defined_hln = ?42, defined_hln_pairs = ?43, has_conditional = ?44
          WHERE id = ?41",
     )?
     .execute(params![
@@ -364,6 +365,7 @@ pub(super) fn update_chart(
         chart_id,
         stats.ln_profile.has_defined_hln,
         stats.ln_counts.defined_hln_pairs,
+        chart.metadata.has_conditional(),
     ])?;
     Ok(())
 }

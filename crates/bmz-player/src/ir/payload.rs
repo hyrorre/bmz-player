@@ -62,6 +62,9 @@ pub fn build_score_submission(
         played_ln_mode(context.source_ln_profile, context.ln_policy).unwrap_or(LongNoteMode::Ln);
     let judges = &result.score.judges;
     let mut play_options = std::collections::BTreeMap::new();
+    if chart.metadata.has_conditional() {
+        play_options.insert("conditional".into(), serde_json::Value::Bool(true));
+    }
     let arrange_1p = arrange_option_ir(context.arrange).to_string();
     let arrange_2p = arrange_option_ir(context.arrange_2p).to_string();
     play_options.insert(
