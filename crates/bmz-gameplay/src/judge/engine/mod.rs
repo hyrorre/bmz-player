@@ -43,6 +43,7 @@ pub struct JudgeEngine {
     scratch_lane_mask: [bool; LANE_COUNT],
     bad_attempted_notes: HashSet<NoteId>,
     bad_judge_vanish: bool,
+    hln: hln::HlnState,
 }
 
 impl JudgeEngine {
@@ -90,6 +91,7 @@ impl JudgeEngine {
             scratch_lane_mask,
             bad_attempted_notes: HashSet::new(),
             bad_judge_vanish: bad_judge_vanish_for_keymode_and_rule_mode(key_mode, rule_mode),
+            hln: Default::default(),
         }
     }
 
@@ -110,6 +112,7 @@ impl JudgeEngine {
     pub fn skip_before(&mut self, chart: &PlayableChart, start_time: TimeUs) {
         self.judged_notes.clear();
         self.bad_attempted_notes.clear();
+        self.hln = Default::default();
         for lane in Lane::ALL {
             let next = chart.notes_for_lane(lane).partition_point(|note| note.time < start_time);
             self.lanes[lane.index()] = LaneJudgeState {
@@ -130,17 +133,31 @@ impl JudgeEngine {
             self.judged_notes.insert(pair.start_note_id, Judge::PGreat);
             self.lanes[pair.lane.index()].active_long = Some(active);
         }
+        self.restore_hln_seek(chart, start_time);
     }
 
     pub fn process_input(&mut self, chart: &PlayableChart, input: InputEvent) -> JudgeOutcome {
-        match input.kind {
+        let mut outcome = self.advance_hln(chart, input.time);
+        // HLN の保持中にも他ノートを捕捉できる。保留取消の Press だけは既存の
+        // active-long 経路で消費し、Mine も通常どおり判定する。
+        if input.kind == InputKind::Press
+            && self.lanes[input.lane.index()].active_long.is_some_and(|active| {
+                active.mode == LongNoteMode::Hln && active.pending_release.is_none()
+            })
+        {
+            self.lanes[input.lane.index()].active_long = None;
+        }
+        let mut input_outcome = match input.kind {
             InputKind::Press => self.process_press(chart, input),
             InputKind::Release => self.process_release(chart, input),
-        }
+        };
+        self.update_hln_input(chart, input, &mut input_outcome);
+        append_outcome(&mut outcome, input_outcome);
+        outcome
     }
 
     pub fn process_misses(&mut self, chart: &PlayableChart, now: TimeUs) -> JudgeOutcome {
-        let mut outcome = JudgeOutcome::default();
+        let mut outcome = self.advance_hln(chart, now);
 
         for lane in Lane::ALL {
             let lane_state = &mut self.lanes[lane.index()];
@@ -214,7 +231,7 @@ impl JudgeEngine {
                 }
 
                 match active.mode {
-                    LongNoteMode::Ln => {
+                    LongNoteMode::Ln | LongNoteMode::Hln => {
                         if now.0 > active.end.end_time.0 {
                             lane_state.active_long = None;
                             self.judged_notes.insert(active.start_note_id, active.start_judge);
@@ -301,17 +318,18 @@ impl JudgeEngine {
     }
 
     pub fn is_exhausted(&self, chart: &PlayableChart) -> bool {
-        Lane::ALL.iter().copied().all(|lane| {
-            let state = &self.lanes[lane.index()];
-            state.active_long.is_none()
-                && next_unjudged_press_reference_note(
-                    chart,
-                    lane,
-                    state.next_note_index,
-                    &self.judged_notes,
-                )
-                .is_none()
-        })
+        self.hln.is_exhausted()
+            && Lane::ALL.iter().copied().all(|lane| {
+                let state = &self.lanes[lane.index()];
+                state.active_long.is_none()
+                    && next_unjudged_press_reference_note(
+                        chart,
+                        lane,
+                        state.next_note_index,
+                        &self.judged_notes,
+                    )
+                    .is_none()
+            })
     }
 
     fn process_press(&mut self, chart: &PlayableChart, input: InputEvent) -> JudgeOutcome {
@@ -398,7 +416,9 @@ impl JudgeEngine {
                 debug_assert!(false, "candidate note {note_id:?} must exist in chart");
                 return JudgeOutcome { mine_hits, ..Default::default() };
             };
-            let note_vanishes = candidate.judge != Judge::Bad || self.bad_judge_vanish;
+            let note_vanishes = candidate.judge != Judge::Bad
+                || self.bad_judge_vanish
+                || hln::is_hln_head(chart, note.id);
             let multi_bad_candidates = if matches!(rule_mode, RuleMode::Lr2Oraja | RuleMode::Dx) {
                 lr2oraja_multi_bad_candidates(
                     chart,
@@ -416,7 +436,7 @@ impl JudgeEngine {
             let lane_state = &mut self.lanes[input.lane.index()];
             lane_state.last_press_time = Some(note.time);
             for multi_bad in &multi_bad_candidates {
-                if self.bad_judge_vanish {
+                if self.bad_judge_vanish || hln::is_hln_head(chart, multi_bad.note_id) {
                     self.judged_notes.insert(multi_bad.note_id, Judge::Bad);
                 } else {
                     self.bad_attempted_notes.insert(multi_bad.note_id);
@@ -454,7 +474,7 @@ impl JudgeEngine {
                 side: side_from_delta(multi_bad.delta.0),
                 delta: multi_bad.delta,
                 time: input.time,
-                affects_score: true,
+                affects_score: !hln::is_hln_head(chart, multi_bad.note_id),
             }));
             events.push(JudgementEvent {
                 note_id: Some(note_id),
@@ -495,6 +515,9 @@ impl JudgeEngine {
         let Some(mut active) = lane_state.active_long else {
             return JudgeOutcome::default();
         };
+        if active.mode == LongNoteMode::Hln {
+            return JudgeOutcome::default(); // pair ごとの LN 合成を update_hln_input で行う。
+        }
         if matches!(input.lane, Lane::Scratch | Lane::Scratch2)
             && input.scratch_direction.is_some()
             && active.scratch_direction.is_some()
@@ -541,7 +564,7 @@ impl JudgeEngine {
             long_release_margin_us(self.window_set, self.scratch_lane_mask[input.lane.index()]);
 
         match active.mode {
-            LongNoteMode::Ln => {
+            LongNoteMode::Ln | LongNoteMode::Hln => {
                 let end_delta = TimeUs(input.time.0 - active.end.end_time.0);
                 let (judge, delta) = if end_delta.0 >= 0 {
                     (active.start_judge, active.start_delta)
@@ -590,6 +613,7 @@ impl JudgeEngine {
 }
 
 mod helpers;
+mod hln;
 
 use helpers::*;
 

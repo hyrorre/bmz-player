@@ -8,8 +8,9 @@ pub fn is_rian_ir_config(provider: &IrProviderConfig) -> bool {
     is_rian_ir_provider(&provider.provider) || is_rian_ir_provider(&provider.provider_key)
 }
 
-pub fn score_submission_supported(_ln_policy: LnScorePolicy, double_option: DoubleOption) -> bool {
-    !matches!(double_option, DoubleOption::Battle | DoubleOption::BattleAutoScratch)
+pub fn score_submission_supported(ln_policy: LnScorePolicy, double_option: DoubleOption) -> bool {
+    ln_policy != LnScorePolicy::ForceHln
+        && !matches!(double_option, DoubleOption::Battle | DoubleOption::BattleAutoScratch)
 }
 
 /// Mirrors rianIR's non-random clear-score duration guard before queueing a retry job.
@@ -58,6 +59,10 @@ pub fn body_for_rule_name(rule_mode: &str) -> Result<&'static str> {
 }
 
 pub(super) fn ensure_score_payload_supported(payload: &IrScoreSubmission) -> Result<()> {
+    if payload.chart.ln_profile.has_defined_hln || payload.rule.ln_policy == LnScorePolicy::ForceHln
+    {
+        bail!("rianIR does not accept HLN charts or scores");
+    }
     let double =
         payload.play_options.get("applied_double_option").and_then(Value::as_str).unwrap_or("off");
     if matches!(double, "battle" | "battle_auto_scratch" | "battle_assist") {
@@ -275,6 +280,7 @@ fn chart_ln_profile(profile: IrChartLnProfile) -> ChartLnProfile {
         has_defined_ln: profile.has_defined_ln,
         has_defined_cn: profile.has_defined_cn,
         has_defined_hcn: profile.has_defined_hcn,
+        has_defined_hln: profile.has_defined_hln,
     }
 }
 
@@ -284,6 +290,7 @@ fn ln_mode_id(mode: Option<LongNoteMode>) -> u8 {
         Some(LongNoteMode::Ln) => 1,
         Some(LongNoteMode::Cn) => 2,
         Some(LongNoteMode::Hcn) => 3,
+        Some(LongNoteMode::Hln) => 4,
     }
 }
 

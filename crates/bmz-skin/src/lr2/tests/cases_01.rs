@@ -551,6 +551,37 @@ fn lr2_text_defaults_to_shrink_overflow() {
 }
 
 #[test]
+fn lr2_hln_commands_keep_all_six_parts_separate() {
+    let files = BTreeMap::new();
+    let skin_path = unique_test_dir("bmz-lr2-hln").join("play.lr2skin");
+    let mut builder = CsvBuilder::new(&skin_path, Header::default(), &files);
+    builder.execute(&parse_csv_line("#IMAGE,notes.png").unwrap()).unwrap();
+    for command in [
+        "SRC_HLN_START",
+        "SRC_HLN_END",
+        "SRC_HLN_BODY_INACTIVE",
+        "SRC_HLN_BODY_ACTIVE",
+        "SRC_HLN_BODY_REACTIVE",
+        "SRC_HLN_BODY_DAMAGE",
+    ] {
+        builder
+            .execute(&parse_csv_line(&format!("#{command},0,0,0,0,10,20,1,1,0,0")).unwrap())
+            .unwrap();
+    }
+    let parts = [
+        &builder.note.hlnstart,
+        &builder.note.hlnend,
+        &builder.note.hlnbody,
+        &builder.note.hlnactive,
+        &builder.note.hlnreactive,
+        &builder.note.hlndamage,
+    ];
+    let ids: std::collections::HashSet<_> = parts.iter().map(|part| part[7].as_str()).collect();
+    assert_eq!(ids.len(), 6);
+    assert!(builder.note.hcnstart.is_empty());
+}
+
+#[test]
 fn lr2_ln_body_keeps_animation_only_while_held() {
     let files = BTreeMap::new();
 

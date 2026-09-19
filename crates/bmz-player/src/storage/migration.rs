@@ -196,7 +196,7 @@ mod tests {
         run_migrations(&mut conn, LIBRARY_MIGRATIONS).unwrap();
 
         let version: i32 = conn.pragma_query_value(None, "user_version", |row| row.get(0)).unwrap();
-        assert_eq!(version, 33);
+        assert_eq!(version, 34);
 
         let mut stmt = conn.prepare("PRAGMA table_info(charts)").unwrap();
         let columns = stmt
@@ -204,9 +204,14 @@ mod tests {
             .unwrap()
             .collect::<rusqlite::Result<Vec<_>>>()
             .unwrap();
-        for column in
-            ["undefined_ln_pairs", "defined_ln_pairs", "defined_cn_pairs", "defined_hcn_pairs"]
-        {
+        for column in [
+            "undefined_ln_pairs",
+            "defined_ln_pairs",
+            "defined_cn_pairs",
+            "defined_hcn_pairs",
+            "defined_hln_pairs",
+            "has_defined_hln",
+        ] {
             assert!(columns.iter().any(|candidate| candidate == column));
         }
         assert!(columns.iter().any(|candidate| candidate == "has_document"));
@@ -460,7 +465,7 @@ mod tests {
             conn.query_row("SELECT headers_json FROM charts", [], |row| row.get(0)).unwrap();
         let version: i32 = conn.pragma_query_value(None, "user_version", |row| row.get(0)).unwrap();
         assert_eq!(headers_json, "{}");
-        assert_eq!(version, 33);
+        assert_eq!(version, 34);
     }
 
     #[test]
@@ -527,7 +532,7 @@ mod tests {
             .unwrap();
         let version: i32 = conn.pragma_query_value(None, "user_version", |row| row.get(0)).unwrap();
         assert_eq!(chart_ids, vec![Some(10), Some(20), None, Some(99)]);
-        assert_eq!(version, 33);
+        assert_eq!(version, 34);
     }
 
     #[test]

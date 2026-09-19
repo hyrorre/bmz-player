@@ -57,9 +57,9 @@ impl ChartAnalysis {
                         add_bpm_note_count(&mut bpm_note_counts, bpm_at(chart, note.time.0), 1);
                     }
                     NoteKind::LongEnd
-                        if long_end_modes
-                            .get(&note.id)
-                            .is_some_and(|mode| *mode != LongNoteMode::Ln) =>
+                        if long_end_modes.get(&note.id).is_some_and(|mode| {
+                            matches!(mode, LongNoteMode::Cn | LongNoteMode::Hcn)
+                        }) =>
                     {
                         add_long_head(slot, lane);
                         lane_slot.long_notes = lane_slot.long_notes.saturating_add(1);

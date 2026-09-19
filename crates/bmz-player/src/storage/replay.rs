@@ -12,7 +12,7 @@ use crate::ln_policy::LnScorePolicy;
 use crate::screens::play_session::SRandomScheme;
 use crate::select_options::{ArrangeOption, DoubleOption, DoubleOptionScoreBucket};
 
-pub const REPLAY_FILE_VERSION: u32 = 7;
+pub const REPLAY_FILE_VERSION: u32 = 8;
 pub const SEED_SCHEME_BEATORAJA_24BIT_V1: &str = "beatoraja_24bit_v1";
 pub const SEED_SCHEME_LEGACY_SHARED_V3: &str = "legacy_shared_v3";
 pub const S_RANDOM_SCHEME_LEGACY_40MS_V1: &str = SRandomScheme::LEGACY_40MS_V1;
@@ -311,6 +311,9 @@ pub fn load_replay(path: &Path) -> Result<ReplayFile> {
 /// Parse a replay received from local storage or a trusted IR transport.
 pub fn parse_replay(text: &str) -> Result<ReplayFile> {
     let replay: ReplayFile = toml::from_str(text)?;
+    if replay.ln_policy == "ForceHln" && replay.version < 8 {
+        bail!("HLN replay requires format version 8 or later");
+    }
     replay.effective_s_random_scheme()?;
     replay.effective_s_random_scheme_2p()?;
     Ok(replay)
@@ -517,6 +520,28 @@ mod tests {
         );
         assert_eq!(replay.events[0].lane, Lane::Key2);
         assert_eq!(replay.events[1].lane, Lane::Key3);
+    }
+
+    #[test]
+    fn hln_replay_v8_policy_round_trip_and_legacy_rejection() {
+        let replay = ReplayFile::new_with_policy(
+            [4; 32],
+            LnScorePolicy::ForceHln,
+            DoubleOptionScoreBucket::Off,
+            1,
+            None,
+            ArrangeOption::Normal,
+            ArrangeOption::Normal,
+            None,
+            None,
+            vec![],
+        );
+        let text = toml::to_string(&replay).unwrap();
+        let parsed = parse_replay(&text).unwrap();
+        assert_eq!(parsed.version, 8);
+        assert_eq!(parsed.ln_policy, "ForceHln");
+        let legacy = text.replace("version = 8", "version = 7");
+        assert!(parse_replay(&legacy).is_err());
     }
 
     #[test]

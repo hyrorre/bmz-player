@@ -98,6 +98,9 @@ impl WinitApp {
             arrange,
             random_seed,
         } = request;
+        if course_result.course_ln_mode == Some(bmz_chart::model::LongNoteMode::Hln) {
+            return;
+        }
         let enabled: Vec<_> = self
             .boot
             .profile_config
@@ -128,6 +131,16 @@ impl WinitApp {
             tracing::info!(course_id, "course has unresolved charts; skipping IR submission");
             return;
         };
+        for hash in &identity.chart_sha256s {
+            match self.boot.library_db.list_charts_by_sha256(*hash) {
+                Ok(charts) if charts.iter().any(|chart| chart.ln_profile.has_defined_hln) => return,
+                Err(error) => {
+                    tracing::warn!(%error, "cannot check course HLN compatibility; skipping IR");
+                    return;
+                }
+                _ => {}
+            }
+        }
         if !stored.definition.release {
             tracing::info!(course_id, "course IR submission is disabled");
             return;

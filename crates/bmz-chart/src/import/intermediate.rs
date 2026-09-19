@@ -16,6 +16,7 @@ pub struct IntermediateChart {
     pub objects: Vec<IntermediateObject>,
     pub layered_note_sounds: Vec<IntermediateLayeredSound>,
     pub lnobj_wav_key: Option<u16>,
+    pub hlnobj_wav_key: Option<u16>,
 }
 
 #[derive(Debug, Clone, Copy)]

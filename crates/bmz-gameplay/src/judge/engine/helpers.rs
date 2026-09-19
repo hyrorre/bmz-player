@@ -28,6 +28,11 @@ pub(super) fn finalize_long_release(
     time: TimeUs,
 ) -> JudgeOutcome {
     let mut outcome = match active.mode {
+        LongNoteMode::Hln => JudgeOutcome {
+            events: vec![ln_final_event(lane, active, judge, delta, time)],
+            consumed_input: true,
+            ..Default::default()
+        },
         LongNoteMode::Ln => JudgeOutcome {
             events: vec![ln_final_event(lane, active, judge, delta, time)],
             keysounds: vec![KeySoundEvent {
@@ -57,13 +62,16 @@ pub(super) fn finalize_long_release(
             ..Default::default()
         },
     };
-    if active.mode != LongNoteMode::Hcn {
+    if matches!(active.mode, LongNoteMode::Ln | LongNoteMode::Cn) {
         push_early_bad_long_start_mute(chart, active, judge, delta, &mut outcome);
     }
     outcome
 }
 
 pub(super) fn append_outcome(target: &mut JudgeOutcome, mut source: JudgeOutcome) {
+    target.hold_ticks.append(&mut source.hold_ticks);
+    target.hold_sounds.append(&mut source.hold_sounds);
+    target.mine_hits.append(&mut source.mine_hits);
     target.events.append(&mut source.events);
     target.keysounds.append(&mut source.keysounds);
     target.keysound_volumes.append(&mut source.keysound_volumes);
@@ -72,7 +80,7 @@ pub(super) fn append_outcome(target: &mut JudgeOutcome, mut source: JudgeOutcome
 
 pub(super) fn active_scored_note_id(active: ActiveLongNote) -> NoteId {
     match active.mode {
-        LongNoteMode::Ln => active.start_note_id,
+        LongNoteMode::Ln | LongNoteMode::Hln => active.start_note_id,
         LongNoteMode::Cn | LongNoteMode::Hcn => active.end.end_note_id,
     }
 }
@@ -137,6 +145,7 @@ pub(super) fn select_press_candidate(
         if !already_judged
             && let Some(judge) = classify_normal_delta(delta, windows).filter(|judge| {
                 !suppresses_long_start_late_bad(rule_mode, windows, note, delta, *judge)
+                    || hln::is_hln_head(chart, note.id)
             })
         {
             if bad_attempted && judge == Judge::Bad {
@@ -461,7 +470,12 @@ pub(super) fn active_long_scores_on_start(chart: &PlayableChart, start_note_id: 
         .long_notes
         .iter()
         .find(|pair| pair.start_note_id == start_note_id)
-        .map(|pair| pair.mode.unwrap_or(chart.metadata.long_note_mode) != LongNoteMode::Ln)
+        .map(|pair| {
+            matches!(
+                pair.mode.unwrap_or(chart.metadata.long_note_mode),
+                LongNoteMode::Cn | LongNoteMode::Hcn
+            )
+        })
         .unwrap_or(true)
 }
 

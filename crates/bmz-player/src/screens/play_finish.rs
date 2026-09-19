@@ -636,7 +636,7 @@ fn enqueue_ir_jobs(
         summary,
         previous_best,
     } = request;
-    if stored.score_history_id <= 0 {
+    if stored.score_history_id <= 0 || source_ln_profile.has_defined_hln {
         return;
     }
     let enabled: Vec<_> = ir_config

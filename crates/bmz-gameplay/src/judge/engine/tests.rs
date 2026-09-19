@@ -196,6 +196,8 @@ fn chart_with_mine(time: TimeUs, damage: f64) -> PlayableChart {
     }
 }
 
+#[path = "tests/hln.rs"]
+mod hln_tests;
 #[path = "tests/judgement.rs"]
 mod judgement;
 #[path = "tests/mine.rs"]

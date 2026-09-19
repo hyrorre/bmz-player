@@ -193,6 +193,17 @@ pub(super) fn emit_resolved_lane_events(
                 });
             }
             ResolvedLaneEvent::Long { pair } => {
+                let mode = pair.mode.or_else(|| {
+                    draft.metadata.long_note_mode_defined.then_some(draft.metadata.long_note_mode)
+                });
+                if mode == Some(crate::model::LongNoteMode::Hln) && pair.start_time >= pair.end_time
+                {
+                    warnings.push(ImportWarning::ParserDiagnostic {
+                        code: "InvalidHlnLength".to_string(),
+                        message: format!("HLN on {lane:?} has no positive duration; ignored"),
+                    });
+                    continue;
+                }
                 let start_note_id = alloc_note_id(next_note_id);
                 let end_note_id = alloc_note_id(next_note_id);
                 let sound = resolve_sound_id(pair.wav_key, sound_table, warnings);

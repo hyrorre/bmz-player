@@ -530,7 +530,7 @@ fn is_ignored_long_end(chart: &PlayableChart, note_id: NoteId) -> bool {
         .find(|pair| pair.end_note_id == note_id)
         .and_then(|pair| pair.mode)
         .unwrap_or(chart.metadata.long_note_mode);
-    mode == LongNoteMode::Ln
+    matches!(mode, LongNoteMode::Ln | LongNoteMode::Hln)
 }
 
 fn clamp_note_second(note: &NoteEvent, seconds: usize) -> usize {

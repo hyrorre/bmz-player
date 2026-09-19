@@ -364,6 +364,72 @@ pub fn process_autoplay_inputs(
     judgements
 }
 
+/// HLN の時間積分を進める前に、人間・Replay・Autoplay の入力を一本の時系列へまとめる。
+pub(super) fn process_hln_inputs(session: &mut GameSession, now: TimeUs) -> Vec<JudgementEvent> {
+    let ctx = InputTimingContext {
+        audio_clock: &session.audio_clock,
+        offsets: session.offsets,
+        timestamp_anchor: session.input_timestamp_anchor,
+    };
+    let mut human = session.input_system.collect_game_inputs(&ctx);
+    if session.replay_player.is_some() && session.replay_lane_mask.is_none() {
+        update_recent_inputs(session, &human, now);
+        human.clear();
+    }
+    human.retain(|input| {
+        !session.autoplay.as_ref().is_some_and(|auto| auto.is_lane_enabled(input.lane))
+            && !session.replay_lane_mask.as_ref().is_some_and(|mask| mask[input.lane.index()])
+    });
+    for input in &human {
+        if session.display_only_lane_mask[input.lane.index()] {
+            continue;
+        }
+        let source_lane = session
+            .replay_lane_projection
+            .as_ref()
+            .map_or(Some(input.lane), |projection| projection.record_to_source[input.lane.index()]);
+        if let Some(lane) = source_lane {
+            session.replay_recorder.record(InputEvent { lane, ..*input });
+        }
+    }
+    let mut inputs: Vec<_> = human.into_iter().map(|input| (input, true)).collect();
+    if let Some(player) = &mut session.replay_player {
+        let replay = player.poll_until(now);
+        inputs.extend(
+            replay
+                .into_iter()
+                .filter(|input| {
+                    session.replay_lane_mask.as_ref().is_none_or(|mask| mask[input.lane.index()])
+                })
+                .map(|input| (input, false)),
+        );
+    }
+    if let Some(auto) = &mut session.autoplay {
+        inputs.extend(auto.poll_until(&session.chart, now).into_iter().map(|input| (input, false)));
+    }
+    inputs.sort_by_key(|(input, _)| input.time);
+    let mut events = Vec::new();
+    for (mut input, human) in inputs {
+        if session.state == PlayState::Failed {
+            break;
+        }
+        if input.source == InputSource::Replay {
+            input = project_replay_input(session, input);
+        }
+        update_recent_inputs(session, &[input], now);
+        update_lane_key_states(session, &[input]);
+        let judged = process_session_input(session, input);
+        if human {
+            apply_input_offset_auto_adjust(session, &judged);
+        }
+        events.extend(judged);
+    }
+    if session.autoplay.is_some() {
+        apply_auto_key_release(session, now);
+    }
+    events
+}
+
 pub(super) fn process_session_input(
     session: &mut GameSession,
     input: InputEvent,
@@ -371,16 +437,24 @@ pub(super) fn process_session_input(
     push_skin_runtime_event(session, SkinRuntimeEventKind::Input(input));
     let mut outcome = session.judge.process_input(&session.chart, input);
     if input.kind == InputKind::Press {
-        let hcn_passing = hcn_passing_at(session, input.lane, input.time);
+        let hcn_passing = hold_note_passing_at(session, input.lane, input.time, LongNoteMode::Hcn);
+        let hln_passing = hold_note_passing_at(session, input.lane, input.time, LongNoteMode::Hln);
         if hcn_passing && outcome.events.iter().all(|event| event.judge == Judge::EmptyPoor) {
             outcome.events.clear();
-            outcome.keysounds.clear();
+            // HLN の時間更新が同時に出した別ノーツの終端音は残す。
+            outcome.keysounds.retain(|sound| {
+                session
+                    .chart
+                    .note_by_id(sound.note_id)
+                    .is_some_and(|note| note.lane != input.lane || note.kind == NoteKind::LongEnd)
+            });
             outcome.consumed_input = false;
         }
         if outcome.events.is_empty()
             && outcome.keysounds.is_empty()
             && !outcome.consumed_input
             && !hcn_passing
+            && !hln_passing
             && let Some(note_id) = fallback_keysound_note_id(session, input.lane, input.time)
         {
             outcome.keysounds.push(KeySoundEvent {
@@ -393,10 +467,15 @@ pub(super) fn process_session_input(
     apply_judge_outcome(session, outcome)
 }
 
-fn hcn_passing_at(session: &GameSession, lane: Lane, time: TimeUs) -> bool {
+fn hold_note_passing_at(
+    session: &GameSession,
+    lane: Lane,
+    time: TimeUs,
+    mode: LongNoteMode,
+) -> bool {
     session.chart.long_notes.iter().any(|pair| {
         pair.lane == lane
-            && pair.mode.unwrap_or(session.chart.metadata.long_note_mode) == LongNoteMode::Hcn
+            && pair.mode.unwrap_or(session.chart.metadata.long_note_mode) == mode
             && time.0 >= pair.start_time.0
             && time.0 < pair.end_time.0
     })

@@ -147,7 +147,7 @@ fn everything_query(root: &Path) -> Result<String> {
     if !root.ends_with('\\') {
         root.push('\\');
     }
-    Ok(format!(r#"file: "{root}" ext:bms;bme;bml;pms;bmson;txt"#))
+    Ok(format!(r#"file: "{root}" ext:bms;bme;bml;bmc;pms;bmson;txt"#))
 }
 
 fn path_relative_to_root(path: &Path, root: &Path) -> Option<PathBuf> {
@@ -193,7 +193,7 @@ mod tests {
     fn query_quotes_root_and_adds_trailing_separator() {
         assert_eq!(
             everything_query(Path::new(r"G:\BMS")).unwrap(),
-            r#"file: "G:\BMS\" ext:bms;bme;bml;pms;bmson;txt"#
+            r#"file: "G:\BMS\" ext:bms;bme;bml;bmc;pms;bmson;txt"#
         );
     }
 

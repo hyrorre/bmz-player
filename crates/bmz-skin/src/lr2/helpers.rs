@@ -378,6 +378,12 @@ pub(super) fn note_vec_mut(note: &mut NoteState, slot: NoteSlot) -> &mut Vec<Str
         NoteSlot::HcnActive => &mut note.hcnactive,
         NoteSlot::HcnDamage => &mut note.hcndamage,
         NoteSlot::HcnReactive => &mut note.hcnreactive,
+        NoteSlot::HlnStart => &mut note.hlnstart,
+        NoteSlot::HlnEnd => &mut note.hlnend,
+        NoteSlot::HlnBody => &mut note.hlnbody,
+        NoteSlot::HlnActive => &mut note.hlnactive,
+        NoteSlot::HlnReactive => &mut note.hlnreactive,
+        NoteSlot::HlnDamage => &mut note.hlndamage,
         NoteSlot::Mine => &mut note.mine,
     }
 }

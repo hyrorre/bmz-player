@@ -2,6 +2,139 @@ pub fn apply_judge_outcome(
     session: &mut GameSession,
     mut outcome: JudgeOutcome,
 ) -> Vec<JudgementEvent> {
+    let has_hln = session.chart.long_notes.iter().any(|pair| {
+        pair.mode.unwrap_or(session.chart.metadata.long_note_mode) == LongNoteMode::Hln
+    });
+    if has_hln && session.state == PlayState::Failed {
+        return Vec::new();
+    }
+    // HLN の BODY と通常判定は時刻順に適用する。上限クリップや HARD 落ちを
+    // フレーム分割に依存させず、BODY 自体はスコア/コンボへ流さない。
+    let mut timed_events = Vec::new();
+    if has_hln || !outcome.hold_ticks.is_empty() {
+        enum Effect {
+            Judge(JudgementEvent),
+            Hold(crate::judge::model::HoldGaugeEvent),
+            Mine(crate::judge::model::MineHitEvent),
+        }
+        let mut effects = Vec::new();
+        effects.extend(
+            std::mem::take(&mut outcome.events)
+                .into_iter()
+                .map(|e| (e.time, e.lane.index(), Effect::Judge(e))),
+        );
+        effects.extend(
+            std::mem::take(&mut outcome.hold_ticks)
+                .into_iter()
+                .map(|e| (e.time, e.lane.index(), Effect::Hold(e))),
+        );
+        effects.extend(
+            std::mem::take(&mut outcome.mine_hits)
+                .into_iter()
+                .map(|e| (e.time, e.lane.index(), Effect::Mine(e))),
+        );
+        effects
+            .sort_by_key(|(time, lane, effect)| (*time, !matches!(effect, Effect::Hold(_)), *lane));
+        let mut failed_at = None;
+        for (time, _, effect) in effects {
+            if session.state == PlayState::Failed {
+                break;
+            }
+            match effect {
+                Effect::Judge(event) => timed_events.extend(apply_untimed_judge_outcome(
+                    session,
+                    JudgeOutcome { events: vec![event], ..Default::default() },
+                )),
+                Effect::Mine(hit) => {
+                    apply_untimed_judge_outcome(
+                        session,
+                        JudgeOutcome { mine_hits: vec![hit], ..Default::default() },
+                    );
+                }
+                Effect::Hold(event) => {
+                    let display_only = session.display_only_lane_mask[event.lane.index()];
+                    if display_only && session.battle_opponent.is_some() {
+                        continue;
+                    }
+                    let gauge = if display_only {
+                        session.opponent_gauge.as_mut()
+                    } else {
+                        Some(&mut session.gauge)
+                    };
+                    if let Some(gauge) = gauge {
+                        let previous = gauge.current().value;
+                        if event.increase {
+                            gauge.apply_hcn_hold();
+                        } else {
+                            gauge.apply_hcn_drain();
+                        }
+                        let current = gauge.current();
+                        update_gauge_increase_timer_state(
+                            if display_only {
+                                &mut session.opponent_gauge_increase_started_at
+                            } else {
+                                &mut session.gauge_increase_started_at
+                            },
+                            previous,
+                            current.value,
+                            current.definition.max,
+                            event.time,
+                        );
+                    }
+                    update_failed_state_from_gauge(session);
+                }
+            }
+            if session.state == PlayState::Failed {
+                failed_at = Some(time);
+            }
+        }
+        if let Some(time) = failed_at {
+            outcome.hold_sounds.retain(|gate| gate.time <= time);
+            outcome.keysounds.retain(|sound| sound.time <= time);
+            outcome.keysound_volumes.clear();
+        }
+    }
+    timed_events.extend(apply_untimed_judge_outcome(session, outcome));
+    timed_events
+}
+
+fn apply_untimed_judge_outcome(
+    session: &mut GameSession,
+    mut outcome: JudgeOutcome,
+) -> Vec<JudgementEvent> {
+    if !session.audio_mix.auto_keysound {
+        for gate in outcome.hold_sounds {
+            let Some(note) = session.chart.note_by_id(gate.note_id) else {
+                continue;
+            };
+            if session.display_only_lane_mask[note.lane.index()] {
+                continue;
+            }
+            let volume = if gate.audible {
+                let chart_volume = bmz_chart::volume::chart_channel_volume_factor(
+                    bmz_chart::volume::chart_volume_at_time(
+                        &session.chart.key_volume_events,
+                        gate.time,
+                    ),
+                );
+                (session.audio_mix.master_volume
+                    * session.audio_mix.effective_normalization_gain()
+                    * session.audio_mix.key_volume
+                    * chart_volume)
+                    .clamp(0.0, 1.0)
+            } else {
+                0.0
+            };
+            session.pending_keysound_volumes.extend(note.sounds().map(|id| (id, volume)));
+            if let Some(start_at) = gate.start_at {
+                outcome.keysounds.push(KeySoundEvent {
+                    note_id: gate.note_id,
+                    time: start_at,
+                    trigger: KeySoundTrigger::NoteJudged,
+                });
+            }
+        }
+    }
     if session.battle_opponent.is_some() {
         // An independent battle opponent is the sole authority for 2P score
         // and judgement presentation. The primary JudgeEngine still advances
@@ -65,7 +198,7 @@ pub fn apply_judge_outcome(
             .note_by_id(keysound.note_id)
             .is_none_or(|note| !session.display_only_lane_mask[note.lane.index()])
     });
-    let mut events = Vec::with_capacity(outcome.events.len());
+    let mut events = Vec::new();
     for (event, display_only_combo) in outcome.events.into_iter().zip(display_only_combos) {
         if event.affects_score {
             session.score.apply(&event);

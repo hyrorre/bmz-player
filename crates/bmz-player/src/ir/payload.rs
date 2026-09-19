@@ -207,6 +207,7 @@ fn build_ir_chart_payload_with_ln_profile(
             has_defined_ln: ln_profile.has_defined_ln,
             has_defined_cn: ln_profile.has_defined_cn,
             has_defined_hcn: ln_profile.has_defined_hcn,
+            has_defined_hln: ln_profile.has_defined_hln,
         },
         title: chart.metadata.title.clone(),
         subtitle: chart.metadata.subtitle.clone(),
@@ -274,6 +275,7 @@ fn effective_ln_mode_payload(mode: LongNoteMode) -> IrEffectiveLnMode {
         LongNoteMode::Ln => IrEffectiveLnMode::Ln,
         LongNoteMode::Cn => IrEffectiveLnMode::Cn,
         LongNoteMode::Hcn => IrEffectiveLnMode::Hcn,
+        LongNoteMode::Hln => IrEffectiveLnMode::Hln,
     }
 }
 

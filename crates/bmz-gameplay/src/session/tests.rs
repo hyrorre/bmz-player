@@ -344,3 +344,5 @@ mod cases_02;
 mod cases_03;
 #[path = "tests/cases_04.rs"]
 mod cases_04;
+#[path = "tests/hln.rs"]
+mod hln_tests;

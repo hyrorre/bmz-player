@@ -440,6 +440,7 @@ pub(super) fn result_long_note_mode_index(mode: bmz_chart::model::LongNoteMode) 
         bmz_chart::model::LongNoteMode::Ln => 0,
         bmz_chart::model::LongNoteMode::Cn => 1,
         bmz_chart::model::LongNoteMode::Hcn => 2,
+        bmz_chart::model::LongNoteMode::Hln => 3,
     }
 }
 

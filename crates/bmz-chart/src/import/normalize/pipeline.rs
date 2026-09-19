@@ -1,4 +1,5 @@
 use super::*;
+use crate::model::LongNoteMode;
 
 pub fn normalize_chart(
     source_path: &Path,
@@ -29,10 +30,11 @@ pub fn normalize_chart(
 
     let mut next_note_id = 0_u32;
     for lane in Lane::ALL {
-        let resolved = normalize_lane_objects(
+        let resolved = normalize_lane_objects_with_hln(
             lane,
             &lane_buckets[lane.index()],
             intermediate.lnobj_wav_key,
+            intermediate.hlnobj_wav_key,
             warnings,
         );
         emit_resolved_lane_events(
@@ -78,7 +80,36 @@ pub fn normalize_chart(
 
     compress_import_ticks(&mut draft);
 
-    Ok(finalize_playable_chart(draft))
+    let mut chart = finalize_playable_chart(draft);
+    isolate_hln_sounds(&mut chart);
+    Ok(chart)
+}
+
+/// HLN の音量ゲートを、同じ WAV を使う他のノートや BGM から分離する。
+fn isolate_hln_sounds(chart: &mut PlayableChart) {
+    let mut next_id = chart.sounds.iter().map(|asset| asset.id.0).max().unwrap_or(0);
+    for pair in &mut chart.long_notes {
+        if pair.mode.unwrap_or(chart.metadata.long_note_mode) != LongNoteMode::Hln {
+            continue;
+        }
+        let Some(note) = chart.lane_notes[pair.lane.index()]
+            .iter_mut()
+            .find(|note| note.id == pair.start_note_id)
+        else {
+            continue;
+        };
+        for sound in note.sound.iter_mut().chain(note.layered_sounds.iter_mut()) {
+            let Some(mut asset) = chart.sounds.iter().find(|asset| asset.id == *sound).cloned()
+            else {
+                continue;
+            };
+            next_id = next_id.checked_add(1).expect("HLN sound id space exhausted");
+            asset.id = SoundId(next_id);
+            *sound = asset.id;
+            chart.sounds.push(asset);
+        }
+        pair.sound = note.sound;
+    }
 }
 
 pub(super) fn normalize_metadata(input: &IntermediateMetadata) -> ChartMetadata {

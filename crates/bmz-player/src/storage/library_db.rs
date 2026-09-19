@@ -35,7 +35,7 @@ pub(crate) fn library_path_key(path: &Path) -> String {
     path_helpers::path_key(path)
 }
 
-pub const CHART_IMPORT_VERSION: i64 = 8;
+pub const CHART_IMPORT_VERSION: i64 = 9;
 // v4 excludes muted battle presentation lanes from chart analysis.
 pub const CHART_LOUDNESS_ANALYSIS_VERSION: i64 = 4;
 const MAX_ANALYSIS_DISTRIBUTION_SECONDS: usize = 10 * 60;

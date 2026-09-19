@@ -1,15 +1,17 @@
-# LN / CN / HCN policy
+# LN / CN / HCN / HLN policy
 
 BMZ は beatoraja 完全互換ではなく、譜面が宣言した LNMODE とユーザーの希望する LNMODE を分けて扱う。
 ユーザーは profile の設定で、譜面の LN 宣言を尊重するか、特定の LN 種別へ強制するかを選べる。
 
+HLNは「LNの終了時総合評価＋HCNの保持ゲージ」として実装している。判定・ゲージ・音声・対応構文の詳細は [BMZ HLN仕様](hln-spec.md) を参照。
+
 ## Terms
 
 - undefined LN: BMS 側に `#LNMODE` などの明示的な LN 種別宣言が無い long note。現在の BMS で主流の形。
-- defined LN/CN/HCN: BMS / BMSON 側が明示した `LN`, `CN`, `HCN` の long note。
+- defined LN/CN/HCN/HLN: 譜面側が明示した `LN`, `CN`, `HCN`, `HLN` の long note。HLNの取込はBMSの `#LNMODE 4` / `#HLNOBJ` に対応する。
 - profile policy: ユーザーが `profile.toml` に設定する希望。
 - score policy: score DB の保存キーに使う、実プレイ結果の区別単位。
-- effective LN mode: 実際に降らせる LN 種別。`LN`, `CN`, `HCN` のいずれか。
+- effective LN mode: 実際に降らせる LN 種別。`LN`, `CN`, `HCN`, `HLN` のいずれか。
 
 ## Profile Setting
 
@@ -37,11 +39,14 @@ BMS フォルダスキャン時に、各譜面の long note 構成を `library.d
 - `has_defined_ln`
 - `has_defined_cn`
 - `has_defined_hcn`
+- `has_defined_hln`
+
+HLN本数は `defined_hln_pairs` に保存する。library migration 34、chart import version 9で追加した。既存譜面は再スキャンで再解析する。
 
 BMZ 内部では `ChartLnProfile` として扱う。
 
 `#LNMODE` が明示されていない BMS の long note は undefined LN とする。
-`#LNMODE` が明示されている BMS の long note は、そのモードの defined LN/CN/HCN とする。
+`#LNMODE` が明示されている BMS の long note は、そのモードの defined LN/CN/HCN/HLN とする。
 
 ## Score Policy
 
@@ -55,6 +60,7 @@ score DB には `LnScorePolicy` を保存する。
 - `ForceLn`
 - `ForceCn`
 - `ForceHcn`
+- `ForceHln`（全long noteが明示HLNの譜面用の正規化キー。profileの選択肢は増やさない）
 
 score policy は profile policy と chart LN profile から決める。
 
@@ -65,7 +71,8 @@ score policy は profile policy と chart LN profile から決める。
 | defined LN のみ | `ForceLn` | `ForceLn` | `ForceLn` | `ForceLn` | `ForceCn` | `ForceHcn` |
 | defined CN のみ | `ForceCn` | `ForceCn` | `ForceCn` | `ForceLn` | `ForceCn` | `ForceHcn` |
 | defined HCN のみ | `ForceHcn` | `ForceHcn` | `ForceHcn` | `ForceLn` | `ForceCn` | `ForceHcn` |
-| defined LN/CN/HCN 混在 | `AutoLn` | `AutoLn` | `AutoLn` | `ForceLn` | `ForceCn` | `ForceHcn` |
+| defined HLN のみ | `ForceHln` | `ForceHln` | `ForceHln` | `ForceLn` | `ForceCn` | `ForceHcn` |
+| defined LN/CN/HCN/HLN 混在 | `AutoLn` | `AutoLn` | `AutoLn` | `ForceLn` | `ForceCn` | `ForceHcn` |
 | undefined + defined 混在 | `AutoLn` | `AutoCn` | `AutoHcn` | `ForceLn` | `ForceCn` | `ForceHcn` |
 
 補足:
@@ -83,6 +90,7 @@ score policy から undefined LN の fallback 種別を決める。
 - `AutoLn` / `ForceLn` -> `LN`
 - `AutoCn` / `ForceCn` -> `CN`
 - `AutoHcn` / `ForceHcn` -> `HCN`
+- `ForceHln` -> `HLN`
 
 defined 種別が混在する譜面では score policy は `AutoLn` になる。
 実プレイでは note ごとの defined 種別を尊重し、undefined 部分だけ fallback 種別で解釈する。
@@ -96,6 +104,7 @@ profile policy を適用した後の effective LN mode を指す。
 
 - LN は始点押下時の判定を保持し、終点まで維持できた時点で 1 ノーツ分として確定する。
   始点と終点を別々のスコア対象にはしない。
+- HLNはLNと同じ総合評価を始点IDへ1回確定する。BODYの押下・非押下時間をpairごとに積分し、HCNと同じGREAT/BAD×0.5のゲージ変化だけを適用する。早離し確定後もBODYは終点まで継続する。
 - CN / HCN は始点と終点を別々のスコア対象として扱う。始点は押下時、終点は離した時に
   それぞれ判定する。
 - CN / HCN の始点を見逃した場合、beatoraja と同じく始点と対応する終点の両方を

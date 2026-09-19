@@ -121,6 +121,8 @@ pub enum LongNoteMode {
     Cn,
     /// CN + 押下中のゲージ増加 / 早離しペナルティ (IIDX HCN 相当)。
     Hcn,
+    /// LN の終了時総合評価と HCN の保持ゲージを組み合わせる。
+    Hln,
 }
 
 impl Default for ChartMetadata {

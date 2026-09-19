@@ -2,10 +2,13 @@
 //! No judgement engine, input queue, replay recorder or audio commands live here.
 use super::*;
 use bmz_core::ids::NoteId;
+use bmz_gameplay::judge::model::HlnBodyVisualState;
 use bmz_gameplay::judge::model::{JudgeWindows, LaneJudgeState};
 use bmz_gameplay::session::HcnLaneTimer;
+use std::borrow::Cow;
 
 pub(super) struct PlayfieldJudgeView<'a> {
+    pub hln_bodies: Cow<'a, [HlnBodyVisualState]>,
     pub lanes: &'a [LaneJudgeState; LANE_COUNT],
     pub judged_notes: &'a HashMap<NoteId, Judge>,
     pub window_set: JudgeWindows,
@@ -30,6 +33,7 @@ impl<'a> From<&'a GameSession> for PlayfieldView<'a> {
             chart: &session.chart,
             timing_map: &session.timing_map,
             judge: PlayfieldJudgeView {
+                hln_bodies: Cow::Owned(session.judge.hln_body_visuals().collect()),
                 lanes: &session.judge.lanes,
                 judged_notes: &session.judge.judged_notes,
                 window_set: session.judge.window_set,
@@ -52,6 +56,7 @@ pub(crate) struct PlayfieldProjection {
     timing_map: Arc<TimingMap>,
     cache: PlayRenderSnapshotCache,
     judged_notes: HashMap<NoteId, Judge>,
+    hln_bodies: Vec<HlnBodyVisualState>,
     lanes: [LaneJudgeState; LANE_COUNT],
     window_set: JudgeWindows,
     lane_hcn_timer: [Option<HcnLaneTimer>; LANE_COUNT],
@@ -77,6 +82,7 @@ impl PlayfieldProjection {
                 timing_map: timing_map.clone(),
                 cache: cache.clone(),
                 judged_notes: HashMap::with_capacity(capacity),
+                hln_bodies: Vec::new(),
                 lanes: session.judge.lanes,
                 window_set: session.judge.window_set,
                 lane_hcn_timer: session.lane_hcn_timer,
@@ -97,6 +103,8 @@ impl PlayfieldProjection {
     }
 
     pub(crate) fn update(&mut self, session: &GameSession, time: TimeUs) {
+        self.hln_bodies.clear();
+        self.hln_bodies.extend(session.judge.hln_body_visuals());
         self.judged_notes.clear();
         self.judged_notes
             .extend(session.judge.judged_notes.iter().map(|(&id, &judge)| (id, judge)));
@@ -133,6 +141,7 @@ impl PlayfieldProjection {
             chart: &self.chart,
             timing_map: &self.timing_map,
             judge: PlayfieldJudgeView {
+                hln_bodies: Cow::Borrowed(&self.hln_bodies),
                 lanes: &self.lanes,
                 judged_notes: &self.judged_notes,
                 window_set: self.window_set,
