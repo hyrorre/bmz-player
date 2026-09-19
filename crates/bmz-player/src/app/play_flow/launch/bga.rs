@@ -30,10 +30,11 @@ impl WinitApp {
 
         let assets = chart.bga_assets.clone();
         let (tx, rx) = bounded_gpu_upload_channel(MAX_PENDING_BGA_TEXTURE_UPLOADS);
-        thread::Builder::new()
+        let worker = thread::Builder::new()
             .name("bga-image-load".to_string())
             .spawn(move || chart_bga_texture_load_worker(generation, assets, tx, uploader))
             .expect("failed to spawn BGA image load thread");
+        self.play.bga_preload.track_worker(worker);
         self.play.bga_preload.rx = Some(rx);
         tracing::info!(chart_id, generation, "BGA image preload started");
         BgaFrameCatalog::new()

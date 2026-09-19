@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::sync::mpsc::{self, Receiver};
 use std::sync::{Arc, Mutex};
+use std::thread::JoinHandle;
 
 use crate::skin_loader::{
     SharedSkinDocumentCache, SharedSkinFontCache, SharedSkinGpuTextureCache,
@@ -60,7 +61,8 @@ pub(super) struct SkinPipelineRuntime {
     pub(super) decode_rx: Option<Receiver<PendingSkinResult>>,
     pub(super) upload_tx: mpsc::SyncSender<PendingUploadResult>,
     pub(super) upload_rx: Receiver<PendingUploadResult>,
-    pub(super) upload_worker_started: bool,
+    pub(super) upload_worker: Option<JoinHandle<()>>,
+    decode_workers: Mutex<Vec<JoinHandle<()>>>,
     pub(super) source_asset_cache: SharedSkinSourceAssetCache,
     pub(super) document_cache: SharedSkinDocumentCache,
     pub(super) font_cache: SharedSkinFontCache,
@@ -80,7 +82,8 @@ impl SkinPipelineRuntime {
             decode_rx: Some(decode_rx),
             upload_tx,
             upload_rx,
-            upload_worker_started: false,
+            upload_worker: None,
+            decode_workers: Mutex::new(Vec::new()),
             source_asset_cache: Arc::new(Mutex::new(SkinSourceAssetCache::default())),
             document_cache: Arc::new(Mutex::new(SkinDocumentCache::default())),
             font_cache: Arc::new(Mutex::new(SkinFontCache::default())),
@@ -89,6 +92,42 @@ impl SkinPipelineRuntime {
             pending: PendingSkinKinds::default(),
             generations: SkinReloadGenerations::default(),
         }
+    }
+
+    pub(super) fn track_decode_worker(&self, worker: JoinHandle<()>) {
+        let mut workers = self.decode_workers.lock().unwrap_or_else(|error| error.into_inner());
+        let mut index = 0;
+        while index < workers.len() {
+            if workers[index].is_finished() {
+                if workers.swap_remove(index).join().is_err() {
+                    tracing::warn!("skin decode worker panicked");
+                }
+            } else {
+                index += 1;
+            }
+        }
+        workers.push(worker);
+    }
+
+    /// GPU/cache を持つ worker が native driver の終了処理まで生き残らないようにする。
+    pub(super) fn shutdown_workers(&mut self) {
+        // worker を join する前に、main が受信しなくなった bounded upload queue を
+        // 切断して send 待ちの uploader を解放する。
+        drop(std::mem::replace(&mut self.upload_rx, mpsc::sync_channel(1).1));
+        drop(std::mem::replace(&mut self.decode_tx, mpsc::channel().0));
+        let workers = self.decode_workers.get_mut().unwrap_or_else(|error| error.into_inner());
+        for worker in workers.drain(..) {
+            if worker.join().is_err() {
+                tracing::warn!("skin decode worker panicked during shutdown");
+            }
+        }
+        if let Some(worker) = self.upload_worker.take()
+            && worker.join().is_err()
+        {
+            tracing::warn!("skin upload worker panicked during shutdown");
+        }
+        // upload 未開始の場合も、decode 結果が持つ GPU cache 参照を解放する。
+        self.decode_rx = None;
     }
 
     pub(super) fn is_pending(&self, kind: SkinKind) -> bool {
@@ -136,9 +175,82 @@ impl SkinPipelineRuntime {
     }
 }
 
+impl Drop for SkinPipelineRuntime {
+    fn drop(&mut self) {
+        self.shutdown_workers();
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::thread;
+    use std::time::{Duration, Instant};
+
+    fn failed_upload() -> PendingUploadResult {
+        let now = Instant::now();
+        PendingUploadResult {
+            generation: 0,
+            path: "test.json".into(),
+            kind: SkinKind::Select,
+            queued_at: now,
+            decode_started_at: now,
+            decode_finished_at: now,
+            upload_started_at: now,
+            upload_finished_at: now,
+            uploaded: Err(anyhow::anyhow!("test upload")),
+        }
+    }
+
+    #[test]
+    fn shutdown_unblocks_full_upload_queue_and_joins_decode_workers() {
+        let mut runtime = SkinPipelineRuntime::new();
+        let tx = runtime.upload_tx.clone();
+        let (filled_tx, filled_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        runtime.upload_worker = Some(thread::spawn(move || {
+            assert!(tx.send(failed_upload()).is_ok());
+            filled_tx.send(()).unwrap();
+            assert!(tx.send(failed_upload()).is_err());
+            release_tx.send(()).unwrap();
+        }));
+        let decode_tx = runtime.decode_tx.clone();
+        let finished = Arc::new(AtomicBool::new(false));
+        let worker_finished = Arc::clone(&finished);
+        runtime.track_decode_worker(thread::spawn(move || {
+            release_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+            drop(decode_tx);
+            worker_finished.store(true, Ordering::SeqCst);
+        }));
+        filled_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+
+        runtime.shutdown_workers();
+
+        assert!(finished.load(Ordering::SeqCst));
+        assert!(runtime.upload_worker.is_none());
+        assert!(runtime.decode_workers.lock().unwrap().is_empty());
+        runtime.shutdown_workers();
+    }
+
+    #[test]
+    fn drop_disconnects_and_joins_idle_upload_worker() {
+        let mut runtime = SkinPipelineRuntime::new();
+        let rx = runtime.decode_rx.take().unwrap();
+        let finished = Arc::new(AtomicBool::new(false));
+        let worker_finished = Arc::clone(&finished);
+        runtime.upload_worker = Some(thread::spawn(move || {
+            assert!(matches!(
+                rx.recv_timeout(Duration::from_secs(5)),
+                Err(mpsc::RecvTimeoutError::Disconnected)
+            ));
+            worker_finished.store(true, Ordering::SeqCst);
+        }));
+
+        drop(runtime);
+
+        assert!(finished.load(Ordering::SeqCst));
+    }
 
     #[test]
     fn skin_failure_is_retained_until_that_path_loads_successfully() {
