@@ -26,16 +26,6 @@ impl SkinEditorState {
 }
 
 impl EguiLayer {
-    pub(crate) fn skin_settings_kind(&self) -> crate::skin_loader::SkinKind {
-        use crate::skin_loader::SkinKind;
-        match SkinEditorState::load(&self.ctx).slot {
-            SkinSlot::Select => SkinKind::Select,
-            SkinSlot::Decide => SkinKind::Decide,
-            SkinSlot::Result | SkinSlot::CourseResult => SkinKind::Result,
-            _ => SkinKind::Play,
-        }
-    }
-
     pub(crate) fn take_skin_catalog_refresh(&self) -> bool {
         self.ctx
             .data_mut(|data| data.remove_temp::<bool>(egui::Id::new("skin_catalog_refresh")))
@@ -220,11 +210,6 @@ pub(in crate::ui) fn build_skin_panel(
                 ui.colored_label(ui.visuals().error_fg_color, error.to_string());
             }
         }
-    }
-    if skin_meta.loading {
-        ui.label(tr!(text, "skin-loading-settings"));
-        editor.store(ui.ctx());
-        return SkinPanelActions { save: false, reset: false, reload };
     }
     if let Some((path, error)) = &skin_meta.load_error
         && path == selected_path
@@ -490,6 +475,59 @@ mod tests {
     use super::*;
 
     #[test]
+    fn skin_option_edits_keep_settings_visible_across_frames() {
+        let ctx = egui::Context::default();
+        SettingsNavigation::select(&ctx, SettingsPage::Skin);
+        SkinEditorState { search: "Layout".into(), ..Default::default() }.store(&ctx);
+        let paths =
+            AppPaths::from_dirs("resources".into(), "data".into(), "cache".into(), "logs".into());
+        let mut skin = SkinConfig::default();
+        let meta = SkinConfigMeta {
+            select: SceneSkinDefs {
+                property: vec![SkinPropertyDef {
+                    name: "Layout".into(),
+                    def: "On".into(),
+                    category: String::new(),
+                    item: vec![
+                        bmz_render::skin::SkinPropertyItemDef { name: "On".into(), op: 1 },
+                        bmz_render::skin::SkinPropertyItemDef { name: "Off".into(), op: 2 },
+                    ],
+                }],
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        for selected in ["On", "Off", "On"] {
+            skin.select_options.insert("Layout".into(), selected.into());
+            let output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(1200.0, 1600.0),
+                    )),
+                    ..Default::default()
+                },
+                |ui| {
+                    let actions = build_skin_panel(
+                        ui,
+                        &mut skin,
+                        &meta,
+                        &SkinCatalog::default(),
+                        &paths,
+                        &mut SkinUiPathCache::default(),
+                        Localizer::new(AppLocale::En),
+                    );
+                    assert!(!actions.reload.any());
+                },
+            );
+            assert!(output.shapes.iter().any(|shape| matches!(&shape.shape,
+                egui::Shape::Text(text) if text.galley.job.text == "Layout")));
+            assert_eq!(skin.select_options["Layout"], selected);
+            assert_eq!(SkinEditorState::load(&ctx).search, "Layout");
+        }
+    }
+
+    #[test]
     fn failed_skin_keeps_selected_path_and_all_customization() {
         let ctx = egui::Context::default();
         SettingsNavigation::select(&ctx, SettingsPage::Skin);
@@ -502,15 +540,14 @@ mod tests {
         save_skin_slot_history(&mut skin, SkinSlot::Select);
         let before = skin.clone();
         // An installed fallback's definitions must not normalize the failed skin's options.
-        let mut meta = SkinConfigMeta {
+        let meta = SkinConfigMeta {
             load_error: Some((skin.select.clone(), "missing file".into())),
             select: SceneSkinDefs::from_play_document(None),
             ..Default::default()
         };
         let paths =
             AppPaths::from_dirs("resources".into(), "data".into(), "cache".into(), "logs".into());
-        for loading in [true, false] {
-            meta.loading = loading;
+        for _ in 0..2 {
             let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
                 let actions = build_skin_panel(
                     ui,

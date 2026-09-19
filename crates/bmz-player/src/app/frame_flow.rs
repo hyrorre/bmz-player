@@ -332,19 +332,25 @@ impl WinitApp {
         let requested =
             self.ui.egui.as_ref().and_then(|egui| egui.skin_settings_path(skin)).map(str::to_owned);
         let paths = [
-            skin.play4.clone(),
-            skin.play5.clone(),
-            skin.play6.clone(),
-            skin.play7.clone(),
-            skin.play8.clone(),
-            skin.play9.clone(),
-            skin.play10.clone(),
-            skin.play14.clone(),
-            skin.battle5.clone(),
-            skin.battle7.clone(),
-            skin.course_result.clone(),
+            (skin.select.clone(), false),
+            (skin.decide.clone(), false),
+            (skin.result.clone(), false),
+            (skin.play4.clone(), true),
+            (skin.play5.clone(), true),
+            (skin.play6.clone(), true),
+            (skin.play7.clone(), true),
+            (skin.play8.clone(), true),
+            (skin.play9.clone(), true),
+            (skin.play10.clone(), true),
+            (skin.play14.clone(), true),
+            (skin.battle5.clone(), true),
+            (skin.battle7.clone(), true),
+            (skin.course_result.clone(), true),
         ];
         let [
+            select,
+            decide,
+            result,
             play4,
             play5,
             play6,
@@ -356,9 +362,11 @@ impl WinitApp {
             battle5,
             battle7,
             course_result,
-        ] = paths.map(|path| {
+        ] = paths.map(|(path, play)| {
             if requested.as_deref() == Some(path.as_str()) {
-                self.play_skin_defs_for_path(&path)
+                // Settings definitions belong to the selected path, independently of
+                // the renderer's currently installed skin and background reloads.
+                self.skin_defs_for_path(&path, play)
             } else {
                 SceneSkinDefs::default()
             }
@@ -387,13 +395,8 @@ impl WinitApp {
         });
         SkinConfigMeta {
             load_error,
-            loading: self
-                .ui
-                .egui
-                .as_ref()
-                .is_some_and(|egui| self.skin.skin_pipeline.is_pending(egui.skin_settings_kind())),
-            select: SceneSkinDefs::from_document(self.renderer.select_skin_document()),
-            decide: SceneSkinDefs::from_document(self.renderer.decide_skin_document()),
+            select,
+            decide,
             play4,
             play5,
             play6,
@@ -404,7 +407,7 @@ impl WinitApp {
             play14,
             battle5,
             battle7,
-            result: SceneSkinDefs::from_document(self.renderer.result_skin_document()),
+            result,
             course_result,
         }
     }

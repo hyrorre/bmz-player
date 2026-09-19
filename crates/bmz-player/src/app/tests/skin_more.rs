@@ -248,6 +248,32 @@ fn play_lua_runtime_state_exposes_play_mode_and_score_save_options() {
 }
 
 #[test]
+fn settings_headers_load_without_renderer_and_keep_play_offsets_scoped() {
+    let unique = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+    let root =
+        std::env::temp_dir().join(format!("bmz-settings-header-{}-{unique}", std::process::id()));
+    std::fs::create_dir_all(&root).unwrap();
+    let path = root.join("select.json");
+    std::fs::write(&path, r#"{"type":5,"property":[{"name":"Layout","def":"On","item":[{"name":"On","op":1},{"name":"Off","op":2}]}]}"#).unwrap();
+    let paths =
+        crate::paths::AppPaths::from_dirs(root.clone(), root.clone(), root.clone(), root.clone());
+    // No renderer installation is required. Play and common slots can share a
+    // path without sharing the play-only offset definitions.
+    let common = skin_defs_from_path(&paths, &path.to_string_lossy(), false);
+    let play = skin_defs_from_path(&paths, &path.to_string_lossy(), true);
+    assert_eq!(common.property[0].name, "Layout");
+    assert_eq!(common.property[0].item.len(), 2);
+    assert!(common.offset.is_empty());
+    assert!(play.offset.iter().any(|offset| offset.id == 10));
+    assert_eq!(
+        skin_defs_from_path(&paths, &path.to_string_lossy(), false).property[0].name,
+        "Layout"
+    );
+    std::fs::remove_file(&path).unwrap();
+    std::fs::remove_dir(&root).unwrap();
+}
+
+#[test]
 fn play_skin_defs_load_from_configured_path_without_renderer_install() {
     let repo = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let path = repo.join("data/skins/ECFN/play/play7.luaskin");
@@ -261,7 +287,7 @@ fn play_skin_defs_load_from_configured_path_without_renderer_install() {
         repo.join("data/cache"),
         repo.join("data/logs"),
     );
-    let defs = play_skin_defs_from_path(&app_paths, &path.to_string_lossy());
+    let defs = skin_defs_from_path(&app_paths, &path.to_string_lossy(), true);
 
     assert!(!defs.property.is_empty());
     assert!(!defs.filepath.is_empty());

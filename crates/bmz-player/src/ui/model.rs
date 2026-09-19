@@ -179,7 +179,6 @@ pub(super) fn bmz_play_bar_line_offset() -> SkinOffsetDef {
 #[derive(Default)]
 pub struct SkinConfigMeta {
     pub load_error: Option<(String, String)>,
-    pub loading: bool,
     pub select: SceneSkinDefs,
     pub decide: SceneSkinDefs,
     pub play4: SceneSkinDefs,

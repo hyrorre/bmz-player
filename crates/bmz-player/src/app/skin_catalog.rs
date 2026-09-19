@@ -53,18 +53,23 @@ pub(super) fn scan_skin_catalog_dir(
     }
 }
 
-pub(super) fn play_skin_defs_from_path(
+pub(super) fn skin_defs_from_path(
     app_paths: &crate::paths::AppPaths,
     path: &str,
+    play: bool,
 ) -> SceneSkinDefs {
     let trimmed = path.trim();
-    if trimmed.is_empty() {
-        return SceneSkinDefs::from_play_document(None);
+    let document = (!trimmed.is_empty())
+        .then(|| app_paths.resolve_path_ref(trimmed).ok())
+        .flatten()
+        .and_then(|path| {
+            load_skin_header_document_with_library_roots(&path, &app_paths.skin_library_roots())
+        });
+    if play {
+        SceneSkinDefs::from_play_document(document.as_ref())
+    } else {
+        SceneSkinDefs::from_document(document.as_ref())
     }
-    let document = app_paths.resolve_path_ref(trimmed).ok().and_then(|path| {
-        load_skin_header_document_with_library_roots(&path, &app_paths.skin_library_roots())
-    });
-    SceneSkinDefs::from_play_document(document.as_ref())
 }
 
 pub(super) fn is_skin_candidate_file(path: &Path) -> bool {

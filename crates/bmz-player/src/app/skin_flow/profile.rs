@@ -115,12 +115,12 @@ impl WinitApp {
         self.boot.profile_config.sync_active_play_mode();
     }
 
-    pub(super) fn play_skin_defs_for_path(&mut self, path: &str) -> SceneSkinDefs {
-        let key = path.trim().to_string();
+    pub(super) fn skin_defs_for_path(&mut self, path: &str, play: bool) -> SceneSkinDefs {
+        let key = (path.trim().to_string(), play);
         if let Some(defs) = self.skin.skin_defs_cache.get(&key) {
             return defs.clone();
         }
-        let defs = play_skin_defs_from_path(&self.boot.app_paths, &key);
+        let defs = skin_defs_from_path(&self.boot.app_paths, &key.0, play);
         self.skin.skin_defs_cache.insert(key, defs.clone());
         defs
     }
