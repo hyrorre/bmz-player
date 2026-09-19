@@ -4,7 +4,7 @@ import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
-import { packageManifest, signManifest, validateVersion } from './generate-update-metadata.mjs'
+import { packageManifest, releaseManifest, signManifest, validateVersion } from './generate-update-metadata.mjs'
 
 test('package excludes user state and records helper with its own hash', async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'bmz-package-test-'))
@@ -39,4 +39,19 @@ test('signed metadata binds raw bytes and checks the embedded public key', () =>
   )
   assert.throws(() => signManifest({}, privatePem, 'wrong'), /does not match/)
   assert.throws(() => validateVersion('../../payload'), /version/)
+})
+
+test('Linux release archives do not enter Windows automatic update metadata', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'bmz-release-test-'))
+  try {
+    for (const suffix of ['windows-x64-portable.zip', 'windows-x64-setup.exe',
+      'linux-x64.tar.gz', 'linux-x64-sources.tar.gz']) {
+      await writeFile(path.join(root, `bmz-player-v0.5.0-${suffix}`), suffix)
+    }
+    const manifest = await releaseManifest(root, '0.5.0')
+    assert.equal(manifest.packages.length, 2)
+    assert(manifest.packages.every((entry) => entry.target === 'windows-x64'))
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
 })

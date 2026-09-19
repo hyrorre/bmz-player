@@ -1,5 +1,6 @@
 use std::path::PathBuf;
 use std::sync::mpsc::{Receiver, SyncSender};
+use std::thread::JoinHandle;
 use std::time::Instant;
 
 use bmz_chart::model::{BgaAssetId, BgaAssetKind, BgaAssetRef};
@@ -110,6 +111,7 @@ pub(super) struct BgaPreloadRuntime {
     pub(super) total_assets: u32,
     pub(super) frames: BgaFrameCatalog,
     pub(super) assets: Option<Vec<BgaAssetRef>>,
+    workers: Vec<JoinHandle<()>>,
 }
 
 impl Default for BgaPreloadRuntime {
@@ -123,11 +125,36 @@ impl Default for BgaPreloadRuntime {
             total_assets: 0,
             frames: BgaFrameCatalog::new(),
             assets: None,
+            workers: Vec::new(),
         }
     }
 }
 
 impl BgaPreloadRuntime {
+    pub(super) fn track_worker(&mut self, worker: JoinHandle<()>) {
+        let mut index = 0;
+        while index < self.workers.len() {
+            if self.workers[index].is_finished() {
+                if self.workers.swap_remove(index).join().is_err() {
+                    tracing::warn!("BGA image load worker panicked");
+                }
+            } else {
+                index += 1;
+            }
+        }
+        self.workers.push(worker);
+    }
+
+    pub(super) fn shutdown_workers(&mut self) {
+        // 現在の bounded send を解除してから、切替前の世代も含めて GPU 解放を待つ。
+        self.rx = None;
+        for worker in self.workers.drain(..) {
+            if worker.join().is_err() {
+                tracing::warn!("BGA image load worker panicked during shutdown");
+            }
+        }
+    }
+
     pub(super) fn begin_unresolved(&mut self, chart_id: i64) -> u64 {
         self.begin(chart_id, None)
     }
@@ -365,9 +392,55 @@ pub(super) fn load_worker(
     let _ = tx.send(PendingBgaImageResult::Finished { generation, stats });
 }
 
+impl Drop for BgaPreloadRuntime {
+    fn drop(&mut self) {
+        self.shutdown_workers();
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn shutdown_disconnects_uploads_and_joins_previous_generations() {
+        use std::sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+            mpsc,
+        };
+        use std::thread;
+        use std::time::Duration;
+
+        let mut runtime = BgaPreloadRuntime::default();
+        let finished = Arc::new(AtomicUsize::new(0));
+        let (release_tx, release_rx) = mpsc::channel();
+        let previous_finished = Arc::clone(&finished);
+        runtime.track_worker(thread::spawn(move || {
+            release_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+            previous_finished.fetch_add(1, Ordering::SeqCst);
+        }));
+        runtime.invalidate();
+        runtime.begin_chart(2, Vec::new());
+        let (tx, rx) = mpsc::sync_channel(0);
+        runtime.rx = Some(rx);
+        let current_finished = Arc::clone(&finished);
+        runtime.track_worker(thread::spawn(move || {
+            assert!(
+                tx.send(PendingBgaImageResult::Finished {
+                    generation: 2,
+                    stats: BgaImageLoadStats::default(),
+                })
+                .is_err()
+            );
+            release_tx.send(()).unwrap();
+            current_finished.fetch_add(1, Ordering::SeqCst);
+        }));
+
+        drop(runtime);
+
+        assert_eq!(finished.load(Ordering::SeqCst), 2);
+    }
 
     fn asset(id: u32, path: &str, kind: BgaAssetKind) -> BgaAssetRef {
         BgaAssetRef { id: BgaAssetId(id), path: path.into(), kind }

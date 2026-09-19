@@ -35,6 +35,19 @@ Features
 > [!CAUTION]
 > Don't use this application to play non-permitted copyrighted contents.
 
+## Linux downloads
+
+Download `bmz-player-v<version>-linux-x64.tar.gz` from
+[GitHub Releases](https://github.com/hyrorre/bmz-player/releases), extract it, and
+run `./bmz-player` from the extracted directory. Keep `bin`, `lib`, and `resources`
+together. No build or source archive is needed to play.
+
+The baseline is Ubuntu 22.04 / glibc 2.35+ on x86_64 with host graphics and audio
+support. Flatpak remains available. The separate `linux-x64-sources.tar.gz`
+contains corresponding application and dependency sources for rebuilding.
+See [Linux tar distribution](docs/linux-tar.md) for prerequisites, storage paths,
+manual updates and source verification.
+
 ## Recommended Skins
 
 - m-select (bundled)

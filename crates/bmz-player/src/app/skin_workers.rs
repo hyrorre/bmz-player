@@ -61,7 +61,7 @@ pub(super) fn spawn_skin_decode(pipeline: &SkinPipelineRuntime, request: SkinDec
     let font_cache = pipeline.font_cache.clone();
     let send_path = path.clone();
     let queued_at = Instant::now();
-    thread::Builder::new()
+    let worker = thread::Builder::new()
         .name(format!("skin-decode-{:?}", kind))
         .spawn(move || {
             let decode_started_at = Instant::now();
@@ -90,10 +90,11 @@ pub(super) fn spawn_skin_decode(pipeline: &SkinPipelineRuntime, request: SkinDec
             });
         })
         .expect("failed to spawn skin decode thread");
+    pipeline.track_decode_worker(worker);
 }
 
 /// upload worker のループ。decode 結果を受け取り、GPU アップロードして main へ返す。
-/// decode 側 (`decode_rx`) が全て drop されるとループを抜ける (アプリ終了時)。
+/// decode 側の sender が全て drop されるとループを抜ける (アプリ終了時)。
 pub(super) fn skin_upload_worker(
     decode_rx: Receiver<PendingSkinResult>,
     upload_tx: mpsc::SyncSender<PendingUploadResult>,

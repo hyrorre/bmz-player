@@ -6,7 +6,7 @@ impl WinitApp {
     /// move し、worker は decode 結果を受けて GPU アップロードし `skin_upload_tx` で
     /// main へ返す。
     pub(super) fn start_skin_upload_worker(&mut self) {
-        if self.skin.skin_pipeline.upload_worker_started {
+        if self.skin.skin_pipeline.upload_worker.is_some() {
             return;
         }
         let Some(decode_rx) = self.skin.skin_pipeline.decode_rx.take() else {
@@ -20,20 +20,20 @@ impl WinitApp {
         let upload_tx = self.skin.skin_pipeline.upload_tx.clone();
         let texture_cache = self.skin.skin_pipeline.gpu_texture_cache.clone();
         let event_proxy = self.event_proxy.clone();
-        thread::Builder::new()
+        let worker = thread::Builder::new()
             .name("skin-upload".to_string())
             .spawn(move || {
                 skin_upload_worker(decode_rx, upload_tx, uploader, texture_cache, event_proxy)
             })
             .expect("failed to spawn skin upload thread");
-        self.skin.skin_pipeline.upload_worker_started = true;
+        self.skin.skin_pipeline.upload_worker = Some(worker);
     }
 
     /// 起動直後の Select が表示されている間は、非表示の Decide / Result skin が
     /// GPU queue と main-thread install を奪わないよう upload worker を保留する。
     /// Select skin の input 時刻を過ぎた後、または別 scene が必要になった時点で開始する。
     pub(super) fn start_deferred_skin_uploads_if_ready(&mut self) {
-        if self.skin.skin_pipeline.upload_worker_started {
+        if self.skin.skin_pipeline.upload_worker.is_some() {
             return;
         }
         let select_startup_active = matches!(self.view_state(), AppViewState::Select);

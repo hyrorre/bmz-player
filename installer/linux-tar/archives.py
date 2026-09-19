@@ -22,6 +22,20 @@ def checksums(archives):
     return "".join(rows)
 
 
+def verify_checksums(expected, published):
+    # Official releases share this file with Windows/macOS/Flatpak assets.
+    entries = {}
+    for line in published.splitlines():
+        digest, separator, name = line.partition("  ")
+        if not separator or name in entries:
+            raise ValueError("Invalid or duplicate SHA256SUMS.txt entry")
+        entries[name] = digest
+    for line in expected.splitlines():
+        digest, _, name = line.partition("  ")
+        if entries.get(name) != digest:
+            raise ValueError(f"SHA256SUMS.txt does not match {name}")
+
+
 def extract(archive, destination):
     destination.mkdir()
     with tarfile.open(archive, "r:gz") as tar:
@@ -54,8 +68,8 @@ def main():
     path = args.runtime.parent / "SHA256SUMS.txt"
     if args.write_checksums:
         path.write_text(sums)
-    elif path.read_text() != sums:
-        raise ValueError("SHA256SUMS.txt does not match the supplied archive pair")
+    else:
+        verify_checksums(sums, path.read_text())
     if args.extract_to:
         runtime = extract(args.runtime, args.extract_to / "runtime")
         sources = extract(args.sources, args.extract_to / "sources")

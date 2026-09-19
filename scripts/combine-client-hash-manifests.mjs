@@ -40,6 +40,7 @@ const buildIdentityByTarget = new Map([
   ['macos-arm64', { platform: 'macos', arch: 'aarch64', package_kind: 'app' }],
   ['macos-x64', { platform: 'macos', arch: 'x86_64', package_kind: 'app' }],
   ['linux-x64-flatpak', { platform: 'linux', arch: 'x86_64', package_kind: 'flatpak' }],
+  ['linux-x64-tar', { platform: 'linux', arch: 'x86_64', package_kind: 'tar' }],
 ])
 const targets = new Set()
 let common

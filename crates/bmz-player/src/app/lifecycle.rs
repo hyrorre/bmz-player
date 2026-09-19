@@ -571,6 +571,8 @@ impl ApplicationHandler<AppUserEvent> for WinitApp {
         self.save_configs_for_exit(self.active_hispeed(), "game exit");
         self.wait_for_pending_play_result_on_exit();
         self.release_audio_for_process_exit();
+        self.skin.skin_pipeline.shutdown_workers();
+        self.play.bga_preload.shutdown_workers();
         // Linux の winit/wgpu backend では Window より後に Surface を drop すると
         // native 側で落ちることがあるため、Window を保持したまま GPU 資源を解放する。
         self.ui.egui = None;
