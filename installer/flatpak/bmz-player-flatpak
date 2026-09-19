@@ -3,4 +3,26 @@ set -eu
 
 export BMZ_RESOURCE_DIR=/app/share/bmz-player
 
+# pulseaudio-rs 0.3.1 ignores XDG_CONFIG_HOME and sends an empty AUTH cookie
+# when it cannot find one. PulseAudio/PipeWire require a 256-byte cookie even
+# when the local socket authenticates by peer credentials. Keep the cookie in
+# Flatpak's private config directory, as libpulse does, and pass its path.
+if [ -z "${PULSE_COOKIE:-}" ]; then
+    pulse_dir="${XDG_CONFIG_HOME:-"$HOME/.config"}/pulse"
+    export PULSE_COOKIE="$pulse_dir/cookie"
+    if [ ! -e "$PULSE_COOKIE" ]; then
+        if ! (
+            umask 077
+            mkdir -p "$pulse_dir" || exit 1
+            temporary_cookie=$(mktemp "$pulse_dir/.bmz-cookie.XXXXXX") || exit 1
+            trap 'rm -f "$temporary_cookie"' EXIT HUP INT TERM
+            head -c 256 /dev/urandom > "$temporary_cookie" || exit 1
+            # Publish the complete cookie without replacing another launch's file.
+            ln "$temporary_cookie" "$PULSE_COOKIE" 2>/dev/null || test -e "$PULSE_COOKIE"
+        ); then
+            echo 'BMZ: could not initialize the PulseAudio cookie' >&2
+        fi
+    fi
+fi
+
 exec /app/bin/bmz-player "$@"

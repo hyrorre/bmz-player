@@ -576,6 +576,10 @@ impl ApplicationHandler<AppUserEvent> for WinitApp {
         // Linux の winit/wgpu backend では Window より後に Surface を drop すると
         // native 側で落ちることがあるため、Window を保持したまま GPU 資源を解放する。
         self.ui.egui = None;
+        #[cfg(target_os = "linux")]
+        {
+            self.ui.wayland_clipboard = None;
+        }
         if let Ok(mut cache) = self.skin.skin_pipeline.gpu_texture_cache.lock() {
             cache.clear();
         }

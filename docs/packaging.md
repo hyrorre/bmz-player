@@ -461,6 +461,10 @@ Flatpak layout:
 ```
 
 `bmz-player-flatpak` wrapper が `BMZ_RESOURCE_DIR=/app/share/bmz-player` を設定する。
+PulseAudio 接続用の `PULSE_COOKIE` が未指定なら、sandbox 内の
+`$XDG_CONFIG_HOME/pulse/cookie` を指定し、初回起動時には 256 バイトの cookie を作成する。
+これは `pulseaudio-rs 0.3.1` が XDG 設定先を参照せず、cookie が見つからない場合に
+不正な長さの認証要求を送って ALSA へフォールバックする問題への対処。
 `config.toml`, `library.db`, `profiles`, `score.db`, `replay` などのユーザー状態は
 Flatpak sandbox の XDG path に作られる。通常は host 側の
 `~/.var/app/net.hyrorre.BMZPlayer/` 配下になる。

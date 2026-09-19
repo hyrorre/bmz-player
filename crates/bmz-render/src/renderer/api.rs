@@ -601,13 +601,28 @@ impl Renderer {
     }
 
     pub fn request_screenshot(&mut self, path: impl Into<PathBuf>) {
-        self.pending_screenshot =
-            Some(ScreenshotRequest { path: path.into(), copy_to_clipboard: false });
+        self.pending_screenshot = Some(ScreenshotRequest {
+            path: path.into(),
+            copy_to_clipboard: false,
+            clipboard: None,
+        });
     }
 
     pub fn request_screenshot_with_clipboard(&mut self, path: impl Into<PathBuf>) {
         self.pending_screenshot =
-            Some(ScreenshotRequest { path: path.into(), copy_to_clipboard: true });
+            Some(ScreenshotRequest { path: path.into(), copy_to_clipboard: true, clipboard: None });
+    }
+
+    pub fn request_screenshot_with_clipboard_handler(
+        &mut self,
+        path: impl Into<PathBuf>,
+        clipboard: std::sync::Arc<dyn ScreenshotClipboard>,
+    ) {
+        self.pending_screenshot = Some(ScreenshotRequest {
+            path: path.into(),
+            copy_to_clipboard: true,
+            clipboard: Some(clipboard),
+        });
     }
 
     /// 次の描画フレームでスクリーンショットを撮る予定があるか。

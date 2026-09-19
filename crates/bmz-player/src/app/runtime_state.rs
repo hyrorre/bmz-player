@@ -340,6 +340,8 @@ pub(super) struct UiRuntimeState {
     /// 本体設定 / スキン設定 / デバッグ表示用の egui レイヤ。
     /// ウィンドウ生成時に初期化される。
     pub(super) egui: Option<EguiLayer>,
+    #[cfg(target_os = "linux")]
+    pub(super) wayland_clipboard: Option<Arc<crate::wayland_clipboard::WaylandClipboard>>,
     /// デバッグ表示へ渡す bounded tracing ログバッファ。
     pub(super) log_buffer: LogBuffer,
     /// 現在ウィンドウへ適用済みのウィンドウモード。

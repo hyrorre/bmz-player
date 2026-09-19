@@ -1,6 +1,42 @@
 use super::*;
 
 #[test]
+fn screenshot_uses_application_clipboard_and_keeps_png_when_copy_fails() {
+    #[derive(Debug)]
+    struct ApplicationClipboard;
+    impl ScreenshotClipboard for ApplicationClipboard {
+        fn copy_image(&self, width: u32, height: u32, rgba: &[u8], png: &[u8]) -> Result<()> {
+            assert_eq!((width, height), (1, 1));
+            let decoded = image::load_from_memory(png)?.into_rgba8();
+            assert_eq!(decoded.into_raw(), rgba);
+            Err(anyhow!("clipboard unavailable for test"))
+        }
+    }
+    let unique =
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+    let path =
+        std::env::temp_dir().join(format!("bmz-screenshot-{}-{unique}.png", std::process::id()));
+    let request = ScreenshotRequest {
+        path: path.clone(),
+        copy_to_clipboard: true,
+        clipboard: Some(std::sync::Arc::new(ApplicationClipboard)),
+    };
+    let result = spawn_screenshot_save_job(request, 1, 1, vec![1, 2, 3, 255])
+        .unwrap()
+        .handle
+        .join()
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        result.clipboard_result.unwrap().unwrap_err().to_string(),
+        "clipboard unavailable for test"
+    );
+    let png = std::fs::read(&path).unwrap();
+    std::fs::remove_file(path).unwrap();
+    assert_eq!(image::load_from_memory(&png).unwrap().into_rgba8().into_raw(), [1, 2, 3, 255]);
+}
+
+#[test]
 fn screenshot_png_is_encoded_once_for_file_and_clipboard_use() {
     let png = encode_screenshot_png(1, 1, &[0x12, 0x34, 0x56, 0x78]).unwrap();
     assert_eq!(&png[..8], b"\x89PNG\r\n\x1a\n");

@@ -842,6 +842,11 @@ impl WinitApp {
         );
         let toast_message = if self.boot.app_config.screenshot.copy_to_clipboard {
             self.renderer.request_screenshot_with_clipboard(path.clone());
+            #[cfg(target_os = "linux")]
+            if let Some(clipboard) = &self.ui.wayland_clipboard {
+                self.renderer
+                    .request_screenshot_with_clipboard_handler(path.clone(), clipboard.clone());
+            }
             tracing::info!(
                 path = %path.display(),
                 "manual screenshot requested with clipboard copy"
