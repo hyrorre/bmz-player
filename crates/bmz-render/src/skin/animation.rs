@@ -469,7 +469,7 @@ pub(super) fn resolve_destination_frame(
         loop_point => resolve_loop_elapsed(loop_point, elapsed_ms, cycle),
     };
     let acc = destination_interpolation_acc_from_frames(&animations);
-    let fixed_color = destination_frames_have_fixed_color(&animations, state);
+    let fixed_color = destination_frames_have_fixed_color(&animations);
     let mut frame = ResolvedSkinFrame::default();
     let mut previous = None;
     for animation in &animations {
@@ -594,32 +594,29 @@ pub(super) fn interpolate_skin_frame(
     }
 }
 
-pub(super) fn destination_frames_have_fixed_color(
-    animations: &[SkinAnimationDef],
-    state: &SkinDrawState,
-) -> bool {
-    let mut frame = ResolvedSkinFrame::default();
-    let mut color = None;
+pub(super) fn destination_frames_have_fixed_color(animations: &[SkinAnimationDef]) -> bool {
+    let defaults = ResolvedSkinFrame::default();
+    let mut current = (defaults.r, defaults.g, defaults.b, defaults.a);
+    let mut previous = None;
     for animation in animations {
-        apply_skin_animation(&mut frame, animation, state);
-        let current = (frame.r, frame.g, frame.b, frame.a);
-        if color.is_some_and(|color| color != current) {
+        current = (
+            animation.r.unwrap_or(current.0),
+            animation.g.unwrap_or(current.1),
+            animation.b.unwrap_or(current.2),
+            animation.a.unwrap_or(current.3),
+        );
+        if previous.is_some_and(|color| color != current) {
             return false;
         }
-        color = Some(current);
+        previous = Some(current);
     }
     true
 }
 
 pub(super) fn destination_interpolation_acc_from_frames(animations: &[SkinAnimationDef]) -> i32 {
-    let mut frame = ResolvedSkinFrame::default();
-    for animation in animations {
-        apply_skin_animation(&mut frame, animation, &SkinDrawState::default());
-        if frame.acc != 0 {
-            return frame.acc;
-        }
-    }
-    0
+    // Only acc is relevant here; resolving geometry constructed a full default
+    // draw state per keyframe and also evaluated unrelated height expressions.
+    animations.iter().filter_map(|animation| animation.acc).find(|&acc| acc != 0).unwrap_or(0)
 }
 
 pub(super) fn eased_skin_frame_rate(t: f32, acc: i32) -> f32 {

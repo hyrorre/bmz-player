@@ -345,9 +345,9 @@ impl SkinContext {
             state,
         );
         let state = self.state_with_lua_runtime(state, text);
-        if self.lua_draw_runtime.is_none()
-            && let Ok(mut cache) = self.result_render_cache.lock()
-        {
+        // The cache only retains document structure and static destinations.
+        // draw/value callbacks still run in destination order on every frame.
+        if let Ok(mut cache) = self.result_render_cache.lock() {
             return document.static_render_items_split_with_graphs(
                 &runtime_sources,
                 &state,
