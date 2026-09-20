@@ -16,7 +16,10 @@ pub(super) fn is_lift_lane_cover_id(id: &str) -> bool {
     id.eq_ignore_ascii_case("liftcover")
         || id.eq_ignore_ascii_case("lift-cover")
         || id.eq_ignore_ascii_case("lift_cover")
-        || id.to_ascii_lowercase().contains("liftcover")
+        || id
+            .as_bytes()
+            .windows(b"liftcover".len())
+            .any(|part| part.eq_ignore_ascii_case(b"liftcover"))
 }
 
 /// beatoraja `SkinHidden` 準拠: `disappear_line` より下 (y が小さい側) を切り、上側だけ残す。

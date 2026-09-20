@@ -564,3 +564,22 @@ fn stretch_applied_to_judge_destination() {
             && approx_eq(height, 0.2)
     ));
 }
+
+#[test]
+fn lift_cover_id_matching_preserves_ascii_aliases_and_substrings() {
+    for (id, expected) in [
+        ("liftcover", true),
+        ("LiFt-CoVeR", true),
+        ("LIFT_COVER", true),
+        ("lr2-LIFTcover-1", true),
+        ("前LiFtCoVeR後", true),
+        ("", false),
+        ("liftcove", false),
+        ("prefixed-lift-cover", false),
+        ("lift_cover-suffix", false),
+        ("LİFTCOVER", false),
+        ("judge_line", false),
+    ] {
+        assert_eq!(is_lift_lane_cover_id(id), expected, "{id}");
+    }
+}

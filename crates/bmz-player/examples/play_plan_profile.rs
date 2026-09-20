@@ -1,6 +1,8 @@
 //! CPU-only Play draw-plan probe. No window, GPU, audio, config writes, or score DB.
 //! Usage: cargo run --release -p bmz-player --example play_plan_profile -- SKIN [PROFILE_TOML]
 //! Reports synthetic 7K workloads; these timings are not application FPS.
+//! BMZ_PLAN_PROFILE_FRAMES and BMZ_PLAN_PROFILE_NOTES_PER_LANE can select a
+//! longer, single-workload run for an external sampling profiler.
 
 use std::collections::BTreeMap;
 use std::hint::black_box;
@@ -19,6 +21,12 @@ use bmz_render::snapshot::{NoteVisualKind, VisibleNote};
 
 fn main() -> Result<()> {
     ensure!(!cfg!(debug_assertions), "run this probe with --release");
+    tracing_subscriber::fmt()
+        .with_max_level(tracing::Level::WARN)
+        .with_writer(std::io::stderr)
+        .without_time()
+        .with_ansi(false)
+        .init();
     let mut args = std::env::args_os().skip(1);
     let path = PathBuf::from(args.next().context("usage: play_plan_profile SKIN [PROFILE_TOML]")?)
         .canonicalize()?;
@@ -30,6 +38,21 @@ fn main() -> Result<()> {
         .transpose()?;
     ensure!(args.next().is_none(), "unexpected extra argument");
     let dump_plans = std::env::var_os("BMZ_PLAN_DUMP").is_some();
+    let measured_frames = std::env::var("BMZ_PLAN_PROFILE_FRAMES")
+        .ok()
+        .map(|value| value.parse::<usize>())
+        .transpose()?
+        .unwrap_or(3000);
+    ensure!((1..=1_000_000).contains(&measured_frames), "frame count must be 1..=1000000");
+    let workloads = std::env::var("BMZ_PLAN_PROFILE_NOTES_PER_LANE")
+        .ok()
+        .map(|value| value.parse::<usize>())
+        .transpose()?
+        .map_or_else(|| vec![1, 8, 32], |value| vec![value]);
+    ensure!(
+        workloads.iter().all(|&value| (1..=1024).contains(&value)),
+        "notes per lane must be 1..=1024"
+    );
     let empty = BTreeMap::new();
     let options = profile.as_ref().map_or(&empty, |profile| &profile.skin.play7_options);
     let files = profile.as_ref().map_or(&empty, |profile| &profile.skin.play7_files);
@@ -51,18 +74,28 @@ fn main() -> Result<()> {
         installed_fonts: None,
         library_roots: &[library_root],
     })?;
+    let destinations = decoded.document.all_destinations(&decoded.document.enabled_options());
     println!(
         "{}",
         serde_json::json!({
             "skin": path,
             "images": decoded.document.image.len(),
-            "destinations": decoded.document.all_destinations(&decoded.document.enabled_options()).len(),
+            "destinations": destinations.len(),
+            "values": decoded.document.value.len(),
+            "texts": decoded.document.text.len(),
+            "imagesets": decoded.document.imageset.len(),
+            "offset_destinations": destinations.iter().filter(|d| d.offset != 0 || !d.offsets.is_empty()).count(),
+            "conditional_destinations": destinations.iter().filter(|d| !d.op.is_empty() || !d.draw.trim().is_empty()).count(),
+            "timer_destinations": destinations.iter().filter(|d| d.timer.is_some()).count(),
+            "sources": decoded.sources.len(),
+            "video_sources": decoded.sources.iter().filter(|s| s.is_video).map(|s| &s.path).collect::<Vec<_>>(),
+            "fonts": decoded.fonts.len(),
             "lua_runtime": decoded.lua_runtime.is_some(),
             "runtime_callbacks": decoded.lua_runtime.as_ref().map(|runtime| {
                 (0..runtime.callback_count()).filter_map(|id| runtime.callback_path(id)).collect::<Vec<_>>()
             }),
             "warmup_frames": 300,
-            "measured_frames": 3000,
+            "measured_frames": measured_frames,
         })
     );
     let textures = decoded
@@ -89,7 +122,7 @@ fn main() -> Result<()> {
     drop(decoded.fonts);
     drop(decoded.audio_assets);
 
-    for notes_per_lane in [1, 8, 32] {
+    for notes_per_lane in workloads {
         // Re-enter Play so each workload starts with a fresh dynamic-timer state.
         renderer.render_scene_status(AppSceneSnapshot::Select(Default::default()))?;
         let AppSceneSnapshot::Play(mut snapshot) = bmz_render::sample::sample_play_scene() else {
@@ -116,9 +149,9 @@ fn main() -> Result<()> {
                 });
             }
         }
-        let mut samples = Vec::with_capacity(3000);
+        let mut samples = Vec::with_capacity(measured_frames);
         let mut commands = 0;
-        for frame in 0..3300 {
+        for frame in 0..(300 + measured_frames) as i64 {
             snapshot.time = TimeUs(10_000_000 + frame * 1000);
             snapshot.play_elapsed_time = snapshot.time;
             snapshot.operating_time_ms = (snapshot.time.0 / 1000) as i32;
