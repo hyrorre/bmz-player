@@ -95,3 +95,73 @@ fn prepared_layout_preserves_missing_geometry_and_disabled_missed_notes() {
         }
     }
 }
+#[test]
+fn prepared_tap_sprites_preserve_lane_mapping_missing_assets_and_duplicate_ids() {
+    let mut images: Vec<_> = (0..16)
+        .map(|i| {
+            serde_json::json!({
+                "id": format!("tap{i}"), "src": "atlas", "x": i * 8, "y": 4,
+                "w": 16, "h": 8, "divx": 2, "cycle": 100
+            })
+        })
+        .collect();
+    // Notes use the first duplicate image definition, unlike the general image map.
+    images.push(serde_json::json!({"id": "tap0", "src": "missing", "w": 10, "h": 10}));
+    let document: SkinDocument = serde_json::from_value(serde_json::json!({
+        "image": images,
+        "note": {
+            "id": "notes",
+            "note": (0..16).map(|i| format!("tap{i}")).collect::<Vec<_>>(),
+            "processed": ["tap0", "missing"]
+        }
+    }))
+    .unwrap();
+    let mut rendered = 0;
+    for size in [None, Some((128.0, 64.0)), Some((256.0, 128.0))] {
+        let sources = size.map(|(width, height)| SkinDocumentTexture {
+            source_id: "atlas".into(),
+            texture: SkinTextureId(123),
+            source_size: SkinImageSize { width, height },
+        });
+        let skin = SkinContext::from_manifest_and_document(
+            default_skin_manifest(),
+            document.clone(),
+            sources,
+        );
+        for key_mode in [
+            KeyMode::K4,
+            KeyMode::K5,
+            KeyMode::K6,
+            KeyMode::K7,
+            KeyMode::K8,
+            KeyMode::K9,
+            KeyMode::K10,
+            KeyMode::K14,
+        ] {
+            let state = SkinDrawState::default();
+            let prepared = skin.prepare_note_layout(key_mode, &state);
+            for &lane in key_mode.active_lanes() {
+                for processed in [false, true] {
+                    for x in [0.1, 0.7] {
+                        let rect = Rect { x, y: 0.3, width: 0.1, height: 0.02 };
+                        let expected = if processed {
+                            skin.document_processed_note_item(lane, key_mode, rect)
+                        } else {
+                            skin.document_note_item(lane, key_mode, rect)
+                        };
+                        let actual = prepared.tap_item(lane, rect, processed);
+                        assert_eq!(actual, expected, "{key_mode:?} {lane:?} processed={processed}");
+                        if let Some(SkinRenderItem::Image { texture, rect: actual_rect, .. }) =
+                            actual
+                        {
+                            assert_eq!(texture, SkinTextureId(123));
+                            assert_eq!(actual_rect, rect);
+                            rendered += 1;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    assert!(rendered > 0);
+}

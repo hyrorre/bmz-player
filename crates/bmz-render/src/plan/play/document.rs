@@ -112,13 +112,11 @@ fn push_document_lane(
             NoteVisualKind::LnEnd => {
                 skin.document_ln_end_item(lane, snapshot.key_mode, rect, LongNoteMode::Ln)
             }
-            NoteVisualKind::Tap => {
-                if snapshot.mark_processed_note && note.processed_judge.is_some() {
-                    skin.document_processed_note_item(lane, snapshot.key_mode, rect)
-                } else {
-                    skin.document_note_item(lane, snapshot.key_mode, rect)
-                }
-            }
+            NoteVisualKind::Tap => notes.tap_item(
+                lane,
+                rect,
+                snapshot.mark_processed_note && note.processed_judge.is_some(),
+            ),
         };
         if let Some(item) = item {
             append_document_item(commands, skin, skin_state, item);

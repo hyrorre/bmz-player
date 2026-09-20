@@ -401,6 +401,13 @@ pub trait SkinDocumentRenderExt {
 
     fn note_height_for_lane(&self, lane: Lane, key_mode: KeyMode) -> Option<f32>;
 
+    fn note_part_sprite(
+        &self,
+        image_id: &str,
+        elapsed_ms: i32,
+        sources: &HashMap<String, SkinDocumentTexture>,
+    ) -> Option<NoteSprite>;
+
     fn note_part_render_item(
         &self,
         image_id: &str,

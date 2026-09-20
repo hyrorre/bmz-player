@@ -207,18 +207,22 @@ macro_rules! skin_document_render_play_note_methods {
             elapsed_ms: i32,
             sources: &HashMap<String, SkinDocumentTexture>,
         ) -> Option<SkinRenderItem> {
+            self.note_part_sprite(image_id, elapsed_ms, sources)
+                .map(|sprite| sprite.render_item(rect))
+        }
+
+        fn note_part_sprite(
+            &self,
+            image_id: &str,
+            elapsed_ms: i32,
+            sources: &HashMap<String, SkinDocumentTexture>,
+        ) -> Option<NoteSprite> {
             let image = self.image.iter().find(|image| image.id == image_id)?;
             let source = resolve_document_source(sources, &image.src)?;
-            Some(SkinRenderItem::Image {
+            Some(NoteSprite {
                 texture: source.texture,
-                rect,
                 uv: skin_image_texture_region(image, source.source_size, elapsed_ms),
-                tint: Color::rgb(1.0, 1.0, 1.0),
-                blend: BlendMode::Normal,
-                scale: SkinImageScale::Stretch,
-                border: None,
-                source_size: Some(source.source_size),
-                linear_filter: false,
+                source_size: source.source_size,
             })
         }
     };

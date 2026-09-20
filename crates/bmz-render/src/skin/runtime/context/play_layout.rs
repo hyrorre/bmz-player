@@ -1,8 +1,13 @@
 use super::*;
+use std::cell::OnceCell;
 
-/// Geometry shared by all notes in one draw plan. Rebuilt each frame so option,
-/// LIFT and user-offset changes take effect without invalidating a persistent cache.
+/// Geometry and lazily resolved tap sprites shared within one draw plan. Rebuilt
+/// each frame so skin/source, option, LIFT and user-offset changes take effect.
 pub(crate) struct PreparedNoteLayout<'a> {
+    skin: &'a SkinContext,
+    key_mode: KeyMode,
+    tap_sprites: [OnceCell<Option<NoteSprite>>; LANE_COUNT],
+    processed_sprites: [OnceCell<Option<NoteSprite>>; LANE_COUNT],
     areas: [Option<Rect>; LANE_COUNT],
     heights: [Option<f32>; LANE_COUNT],
     offset: SkinOffsetValue,
@@ -14,11 +19,15 @@ pub(crate) struct PreparedNoteLayout<'a> {
 
 impl SkinContext {
     pub(crate) fn prepare_note_layout<'a>(
-        &self,
+        &'a self,
         key_mode: KeyMode,
         state: &'a SkinDrawState,
     ) -> PreparedNoteLayout<'a> {
         let mut layout = PreparedNoteLayout {
+            skin: self,
+            key_mode,
+            tap_sprites: std::array::from_fn(|_| OnceCell::new()),
+            processed_sprites: std::array::from_fn(|_| OnceCell::new()),
             areas: [None; LANE_COUNT],
             heights: [None; LANE_COUNT],
             offset: SkinOffsetValue::default(),
@@ -43,6 +52,23 @@ impl SkinContext {
 }
 
 impl PreparedNoteLayout<'_> {
+    pub(crate) fn tap_item(
+        &self,
+        lane: Lane,
+        rect: Rect,
+        processed: bool,
+    ) -> Option<SkinRenderItem> {
+        let slots = if processed { &self.processed_sprites } else { &self.tap_sprites };
+        let sprite = slots[lane.index()].get_or_init(|| {
+            let document = self.skin.document.as_ref()?;
+            let note = document.note.as_ref()?;
+            let ids = if processed { &note.processed } else { &note.note };
+            let id = ids.get(beatoraja_note_index(lane, self.key_mode))?;
+            document.note_part_sprite(id, 0, &self.skin.document_sources)
+        });
+        sprite.map(|sprite| sprite.render_item(rect))
+    }
+
     pub(crate) fn alpha_offset(&self) -> i32 {
         self.offset.a
     }
