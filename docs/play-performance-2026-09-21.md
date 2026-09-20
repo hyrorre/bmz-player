@@ -231,3 +231,40 @@ PlayではLua runtimeがある場合も既存の構造・静的画像キャッ�
 
 VSyncOff／2944×1656の実画面（高密度譜面、各720フレーム）ではplan時間がRmz 0.4917ms、ECFN 0.2180ms。
 FPSは両方120.0。ECFNは動画アップロード1枚あたり0.8250ms、video全体は描画フレームあたり0.4175msだった。
+
+## 3. 動画テクスチャ転送用バッファの再利用
+
+同じサイズのRGBA更新に、最大3スロット・各8MiBまで（合計最大24MiB）のMAP_WRITE/COPY_SRCバッファを再利用する。
+GPU完了後に非同期で再マップし、空きがない場合や対象サイズ外（64KiB未満／8MiB超）は既存の`Queue::write_texture`へフォールバックする。
+スロットの空きを待たず、PTS・動画のフレーム数・解像度・RGBA形式は変更しない。
+同一textureへの連続更新でフォールバックするときは先行コピーを先にsubmitし、最後の更新が上書きされない順序を保つ。
+
+最初の試作はコピー用command bufferを別にsubmitした。ECFNの交互3回比較で転送は0.8290→0.3657ms/枚、
+surface/present待ちを除く時間は1.0597→0.9485ms/描画フレームとなったが、queue時間は0.0742→0.1180ms、
+各試行の最大batch P99の中央値は8.877→9.153msへ増えた。この版はコミットせず、コピーを描画と同じcommand bufferへ統合して再計測した。
+
+GPU検証では257×129（行paddingあり）・640×360・1×1へのサイズ変更、描画前の5連続更新（スロット枯渇）、
+再マップ後の再利用、画素ごとに異なる模様の更新を描画し、読み戻した全RGBAが期待値と一致した。
+再実行: `cargo test -p bmz-render reusable_texture_uploads_preserve_pixels_order_and_resize -- --ignored`（GPUが必要）。
+
+統合後の版を第2段階と交互に3回比較した。条件はECFN／高密度譜面／VSyncOff／Metal Immediate／2944×1656。
+各試行は同じ集計範囲の720描画フレーム・360動画アップロードで、いずれも120.0 FPSだった。
+
+| 指標（3試行の中央値） | 第2段階 | 第3段階 | 変化 |
+|---|---:|---:|---:|
+| 動画アップロード1枚 | 0.7870ms | 0.3507ms | 55.4%短縮 |
+| video全体／描画フレーム | 0.3977ms | 0.1805ms | 54.6%短縮 |
+| surface/present待ちを除く処理時間 | 0.9172ms | 0.8204ms | 10.6%短縮 |
+| queue処理時間 | 0.0660ms | 0.0813ms | 0.0153ms増加 |
+| 最大batch P99の中央値（redraw全体） | 8.724ms | 8.857ms | 0.133ms増加 |
+
+平均のCPU側処理時間短縮を採用理由とする。**FPS・遅いフレームの改善を確認した変更ではない**。
+各試行の最大batch P99は変更前8.664／8.724／8.739ms、変更後8.857／8.783／9.205msだった。
+これはsurface待ちを含む120フレーム集計のP99の最大値であり、全フレームをまとめたP99やGPU実行時間ではない。
+GPUコピー時間・Windows/Linuxでの効果は未計測。APIはwgpuの共通機能のみを使う。
+
+最終検証: `cargo test -p bmz-render --offline` は615件成功（GPUテスト1件は通常実行ではignoreし、明示実行で成功）。
+`cargo check --offline`、`cargo clippy -p bmz-render -p bmz-player --all-targets --offline`、`cargo fmt --check`、`git diff --check`も成功。
+
+Rmzでも最終版をVSyncOff／高密度譜面で確認し、120.0 FPS、plan 0.4977ms、surface/present待ちを除く時間1.4110ms。
+動画転送がないRmzでは第2段階（1.4114ms）とほぼ同じだった。外部スキン・ユーザーの設定／DBは変更していない。

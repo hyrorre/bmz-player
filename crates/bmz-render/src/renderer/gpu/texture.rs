@@ -18,6 +18,15 @@ impl WgpuRenderer {
             && texture.width == width
             && texture.height == height
         {
+            if self.texture_uploads.write(&self.device, &texture.texture, width, height, rgba) {
+                return Ok(());
+            }
+            // Preserve write order when the same texture is updated more than
+            // once before rendering and the bounded pool runs out of slots.
+            if let Some(commands) = self.texture_uploads.finish(&self.device) {
+                self.queue.submit([commands]);
+                self.texture_uploads.submitted();
+            }
             write_rgba_texture(&self.queue, &texture.texture, width, height, rgba);
             return Ok(());
         }

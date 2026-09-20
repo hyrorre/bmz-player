@@ -138,6 +138,7 @@ impl WgpuRenderer {
         let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("bmz-render clear encoder"),
         });
+        self.texture_uploads.encode(&mut encoder);
         let draw_resources = PlanGeometryDrawResources {
             rect_pipeline: &self.rect_pipeline,
             rect_buffer: self.rect_buffer.as_ref(),
@@ -242,6 +243,7 @@ impl WgpuRenderer {
         timings.encode_us = encode_start.elapsed().as_micros();
         let queue_start = Instant::now();
         self.queue.submit(egui_staging.into_iter().chain(std::iter::once(command_buffer)));
+        self.texture_uploads.submitted();
         timings.queue_us = queue_start.elapsed().as_micros();
         if let Some((request, capture)) = screenshot {
             self.enqueue_screenshot_readback(request, capture);

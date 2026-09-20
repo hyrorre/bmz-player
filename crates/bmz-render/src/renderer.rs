@@ -35,6 +35,8 @@ mod gpu;
 mod pipeline;
 mod screenshot;
 mod text;
+mod texture_upload;
+use texture_upload::TextureUploads;
 #[path = "renderer/text/cached_builder.rs"]
 mod text_cached_builder;
 #[path = "renderer/text/layout.rs"]

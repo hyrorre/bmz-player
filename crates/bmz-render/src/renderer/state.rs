@@ -20,6 +20,7 @@ pub(super) struct WgpuRenderer {
     pub(super) upscale_rect: Option<Rect>,
     pub(super) internal_scene_target: Option<InternalSceneTarget>,
     pub(super) image_textures: HashMap<TextureId, PreparedTexture>,
+    pub(super) texture_uploads: TextureUploads,
     pub(super) image_bind_group_cache: HashMap<(TextureId, bool), wgpu::BindGroup>,
     pub(super) image_bind_group_scratch: Vec<wgpu::BindGroup>,
     pub(super) geometry_scratch: PlanGeometry,

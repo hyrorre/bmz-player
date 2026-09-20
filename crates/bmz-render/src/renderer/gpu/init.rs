@@ -234,6 +234,7 @@ impl WgpuRenderer {
             upscale_rect: None,
             internal_scene_target: None,
             image_textures,
+            texture_uploads: TextureUploads::default(),
             image_bind_group_cache: HashMap::new(),
             image_bind_group_scratch: Vec::new(),
             geometry_scratch: PlanGeometry::default(),
