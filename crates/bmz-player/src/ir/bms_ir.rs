@@ -594,7 +594,11 @@ fn retry_delay_for_error(error: &anyhow::Error, attempt: usize) -> Option<std::t
     status.is_server_error().then(|| fallback_retry_delay(attempt))
 }
 
-pub fn chart_page_url(base_url: &str, sha256: &str) -> Result<String> {
+pub fn chart_page_url(base_url: &str, md5: &str) -> Result<String> {
+    public_search_url(base_url, "/new/song", "songmd5", md5)
+}
+
+pub fn chart_search_page_url(base_url: &str, sha256: &str) -> Result<String> {
     public_search_url(base_url, "/new/songs", "keyword", sha256)
 }
 

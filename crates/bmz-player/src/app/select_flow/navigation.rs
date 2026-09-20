@@ -302,12 +302,16 @@ impl WinitApp {
     pub(super) fn open_primary_ir_for_selected(&mut self) {
         let identity = match self.select.select_items.get(self.select.selected_index) {
             Some(SelectItem::Chart(row)) => {
-                let Some(sha256) = row.score_sha256() else {
+                let md5 = row.score_md5().map(|md5| hash_to_hex(&md5));
+                let sha256 = row.score_sha256().map(|sha256| hash_to_hex(&sha256));
+                let bms_ir_primary = primary_ir_provider_for_profile(&self.boot.profile_config)
+                    .is_some_and(crate::ir::bms_ir::is_bms_ir_config);
+                if (bms_ir_primary && md5.is_none()) || (!bms_ir_primary && sha256.is_none()) {
                     let text = Localizer::new(self.boot.profile_config.ui.locale());
                     self.show_left_overlay_toast(text.text("toast-ir-chart-hash-missing"));
                     return;
-                };
-                PrimaryIrPageIdentity::Chart { sha256: hash_to_hex(&sha256) }
+                }
+                PrimaryIrPageIdentity::Chart { md5, sha256 }
             }
             Some(SelectItem::Course(row)) => PrimaryIrPageIdentity::Course {
                 canonical_hash: row.course_hash.clone(),

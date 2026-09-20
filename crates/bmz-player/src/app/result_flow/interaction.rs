@@ -154,7 +154,10 @@ impl WinitApp {
             let Some(finished) = &self.result.finished_play else {
                 return true;
             };
-            PrimaryIrPageIdentity::Chart { sha256: hash_to_hex(&finished.result.chart_sha256) }
+            PrimaryIrPageIdentity::Chart {
+                md5: None,
+                sha256: Some(hash_to_hex(&finished.result.chart_sha256)),
+            }
         };
         self.open_primary_ir_page(identity);
         true
