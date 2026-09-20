@@ -255,3 +255,106 @@ renderの全体実行は616 passed / 1 failed / 1 ignored。
 VSyncOff実画面のWMIIはplan 0.4528→0.4043ms、取得・present待ち除外は
 1.4797→1.3369ms。各720フレームの1組であり、実画面の確定的改善率とは扱わない。
 FPSは両方120.0。区間p99の最大値は9.130→9.020ms。
+
+## 実装3：画像・数値のID検索表を構造キャッシュへ保持
+
+毎フレーム作り直していたimage/valueのHashMapを、documentのID→index表として
+既存のplanning cacheへ保存する。描画評価は現在のdocumentとsourceを参照し、
+値・timer・op・draw・Lua callbackは引き続き毎フレーム評価する。
+キャッシュを使わない経路は従来同様に参照表を作る。
+
+画像・数値の重複IDは従来の検索表と同じ後勝ちにし、数値spriteの先勝ちも維持する。
+重複IDを含むcached/uncached描画一致、値の変更、sourceサイズ・texture変更を追加検証。
+レンダラー全618テストは逐次実行で成功（既存GPUテスト1件はignored）。
+実装2で失敗したCIMテストもこの全体実行で成功した。
+
+今回は検索表の生成と再利用を対象とし、destinationの種類別dispatchやkeyframeの
+全面的な事前評価、数値spriteの検索経路の変更は含めていない。
+
+実装2との交互A/B各3回の中央値（µs）。
+
+| スキン | 8 tap：前→後 | 256 tap：前→後 | 256 tap短縮 |
+|---|---:|---:|---:|
+| WMII AC | 65.689 → 61.025 | 71.641 → 67.612 | 5.6% |
+| antique | 47.834 → 45.222 | 54.327 → 51.609 | 5.0% |
+| REMI hachimi | 39.176 → 35.361 | 45.104 → 41.349 | 8.3% |
+| Rmz | 89.019 → 85.906 | 94.937 → 91.127 | 4.0% |
+| ECFN | 42.407 → 39.144 | 48.311 → 44.632 | 7.6% |
+| GenericTheme | 37.264 → 34.635 | 43.051 → 40.479 | 6.0% |
+| default | 19.503 → 19.110 | 25.174 → 24.669 | 2.0% |
+
+各スキン9組、合計63組のDrawPlanが実装2と完全一致。
+生データは `.local/performance/2026-09-21/other-optimizations/indices/`。
+
+VSyncOff実画面のWMIIは、各720フレームでplan 0.3502→0.3518ms、
+取得・present待ち除外1.2690→1.2607ms、区間p99最大9.093→9.126ms。
+両方120.0 FPSで、実画面では明確な改善を確認できなかった。
+この変更も、連続実行の計画作成時間短縮と毎フレームの検索表生成削減を根拠に採用する。
+
+## 3変更を合わせた計測
+
+作業開始時の `8e1ae3ae` と実装3まで適用したバイナリを改めて交互に各3回測定した。
+別々に測った短縮率を加算せず、同じ条件で直接比較した中央値（µs）。
+
+| スキン | 8 tap：前→後 | 256 tap：前→後 | 256 tap短縮 |
+|---|---:|---:|---:|
+| WMII AC | 71.795 → 62.579 | 98.752 → 68.288 | 30.8% |
+| antique | 50.130 → 45.519 | 65.024 → 52.063 | 19.9% |
+| Rmz | 91.580 → 86.593 | 100.792 → 92.172 | 8.6% |
+| ECFN | 45.550 → 39.639 | 64.351 → 44.752 | 30.5% |
+
+この4スキンについても36組のDrawPlanが作業開始時と完全一致した。
+生データは `.local/performance/2026-09-21/other-optimizations/total/`。
+数値はCPUでの描画計画作成の短縮で、実アプリのFPS改善率ではない。
+
+実画面は同じMetal / VSyncOff / 2944×1656 / Native条件で、作業開始時と直接比較した。
+Rmzは既定オプション、ECFNはユーザーの既存選択オプションを維持しているため、
+上の既定オプションでのprobeとは構成が異なる。各720フレーム、単位ms。
+
+| スキン | 描画計画：前→後 | 取得・present待ち除外：前→後 | 区間p99最大：前→後 | FPS：前→後 |
+|---|---:|---:|---:|---:|
+| Rmz | 0.4447 → 0.4415 | 1.2320 → 1.2920 | 9.064 → 8.921 | 120.0 → 120.0 |
+| ECFN | 0.1877 → 0.1988 | 0.7027 → 0.8177 | 8.618 → 9.000 | 120.0 → 120.0 |
+
+この1組では実画面のCPU時間短縮を確認できず、取得・present待ち除外の時間は増加した。
+実行順を変更後→変更前にした追試は以下。表の数値は比較しやすいよう前→後で表記。
+
+| スキン | 描画計画：前→後 | 取得・present待ち除外：前→後 | 区間p99最大：前→後 | FPS：前→後 |
+|---|---:|---:|---:|---:|
+| Rmz | 0.4948 → 0.4830 | 1.4023 → 1.3834 | 9.001 → 8.949 | 120.0 → 120.0 |
+| ECFN | 0.2850 → 0.1803 | 1.1185 → 0.7357 | 9.282 → 8.851 | 120.0 → 120.0 |
+
+CPU実時間の増加は逆順の組では再現しなかった。未変更のencode/queue等も変動しており、
+同じECFN変更前バイナリでも待ち除外時間は0.7027～1.1185msと幅がある。
+変動原因は特定していないため、実画面での改善・悪化の確定的な割合は出さない。
+全8実行でrequested/effectiveともにImmediateを確認し、FPS増加は確認できなかった。
+採用理由は連続CPU計測での一貫した描画計画作成の短縮であり、
+このMac上の実画面FPS・CPUフレーム実時間の改善とは区別する。
+
+実画面の生ログ・実行条件・集計は
+`.local/performance/2026-09-21/other-optimizations/surface/` に保存。
+
+## 全体検証の結果
+
+- `cargo fmt --check`、`cargo check --offline`、`cargo clippy --offline` は成功。
+- `bmz-render`：618 passed / 1 ignored。追加した重複ID・動的値のテストも再実行で成功。
+- `bmz-player`：1959 passed / 1 failed / 3 ignored。
+  最初のsandbox内実行ではローカルsocketの待受制限による14件の失敗もあったが、
+  権限付き再実行で全14件が成功した。
+- `bmz-skin`：211 passed / 3 failed。
+- `bmz-skin-document`：10 passed、`bmz-skin-convert`：2 passed、`bmz-font`：9 passed。
+
+残る4件は、現在配置されているスキンと読み込みテストの期待値が一致しないもの。
+
+1. playerの `select_lua_skins_decode_with_explicit_library_root_when_available`：
+   同梱選曲スキンに `bmz_select_mode` が無い。mz-select / Luxez-Flatのsubmoduleはcleanで、
+   作業開始時と同じcommitを参照している。描画前のdecode結果に対するassertionで失敗。
+2. skinの `wmii_fhd_play_lua_features_when_available` と
+   `wmii_fhd_play_stage_draws_follow_scene_modes_when_available`：
+   WMIIのextrastage / practiceのdraw条件が期待値と異なる。
+3. skinの `wmii_beatoraja_branch_next_rank_updates_when_available`：
+   WMIIの期待する次ランク関連valueが見つからない。
+
+skin crateはrenderへ依存しておらず、今回の変更はこれらのdecode処理・テスト・
+スキンファイルを変更していない。変更前checkoutでの同一テスト再実行はしていないため、
+変更前の実測結果とは扱わない。全テスト成功とはせず、この不一致を残した状態で記録する。

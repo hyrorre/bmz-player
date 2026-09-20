@@ -3,7 +3,7 @@ macro_rules! skin_document_render_core_clip_methods {
     fn result_judge_pie_destination_item(
         &self,
         destination: &SkinDestinationDef,
-        images: &HashMap<&str, &SkinImageDef>,
+        images: &SkinImageLookup<'_>,
         enabled_options: &[i32],
         state: &SkinDrawState,
         sources: &HashMap<String, SkinDocumentTexture>,
@@ -57,7 +57,7 @@ macro_rules! skin_document_render_core_clip_methods {
     fn destination_looks_like_pre_notes_judge_line(
         &self,
         destination: &SkinDestinationDef,
-        images: &HashMap<&str, &SkinImageDef>,
+        images: &SkinImageLookup<'_>,
         enabled_options: &[i32],
         state: &SkinDrawState,
         next_destination: Option<&SkinDestinationDef>,

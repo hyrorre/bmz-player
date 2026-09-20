@@ -612,8 +612,8 @@ impl<'a> SkinRuntimeGraphs<'a> {
 }
 
 pub(in crate::skin) struct DestinationResolveContext<'a, 'text> {
-    pub(in crate::skin) images: &'a HashMap<&'a str, &'a SkinImageDef>,
-    pub(in crate::skin) values: &'a HashMap<&'a str, &'a SkinValueDef>,
+    pub(in crate::skin) images: &'a SkinImageLookup<'a>,
+    pub(in crate::skin) values: &'a SkinValueLookup<'a>,
     pub(in crate::skin) enabled_options: &'a [i32],
     pub(in crate::skin) state: &'a SkinDrawState,
     pub(in crate::skin) text_state: &'a SkinTextState<'text>,

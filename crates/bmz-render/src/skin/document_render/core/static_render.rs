@@ -1,14 +1,12 @@
-use std::collections::HashMap;
-
 use crate::skin::{
-    SkinDestinationDef, SkinDocument, SkinDocumentRenderExt, SkinDstEntry, SkinImageDef,
+    SkinDestinationDef, SkinDocument, SkinDocumentRenderExt, SkinDstEntry, SkinImageLookup,
     skin_image_for_destination_id,
 };
 
 pub(in crate::skin::document_render) fn static_image_destination_cacheable(
     document: &SkinDocument,
     destination: &SkinDestinationDef,
-    images: &HashMap<&str, &SkinImageDef>,
+    images: &SkinImageLookup<'_>,
 ) -> bool {
     if !destination.op.is_empty()
         || !destination.draw.trim().is_empty()
@@ -124,10 +122,19 @@ macro_rules! skin_document_render_core_static_methods {
             runtime_graphs: SkinRuntimeGraphs<'_>,
             mut cache: Option<&mut ResultRenderCache>,
         ) -> (Vec<SkinRenderItem>, Vec<SkinRenderItem>, Vec<SkinRenderItem>) {
-            let images = self.image_map();
-            let values: HashMap<&str, &SkinValueDef> =
-                self.value.iter().map(|value| (value.id.as_str(), value)).collect();
             let planning = cache.as_deref_mut().map(|cache| cache.cached_planning(self));
+            let images = planning.as_ref().map_or_else(
+                || self.image_map().into(),
+                |p| SkinObjectLookup::Indexed { items: &self.image, indices: &p.objects.images },
+            );
+            let values = planning.as_ref().map_or_else(
+                || {
+                    SkinObjectLookup::Direct(
+                        self.value.iter().map(|v| (v.id.as_str(), v)).collect(),
+                    )
+                },
+                |p| SkinObjectLookup::Indexed { items: &self.value, indices: &p.objects.values },
+            );
             let enabled_options_storage =
                 if planning.is_none() { self.enabled_options() } else { Vec::new() };
             let enabled_options: &[i32] =

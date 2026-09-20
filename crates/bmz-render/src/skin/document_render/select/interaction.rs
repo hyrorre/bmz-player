@@ -16,7 +16,7 @@ macro_rules! skin_document_render_select_interaction_methods {
 
         fn result_click_hit(&self, state: &SkinDrawState, x: f32, y: f32) -> Option<SkinClickHit> {
             let enabled_options = self.enabled_options();
-            let images = self.image_map();
+            let images: SkinImageLookup<'_> = self.image_map().into();
             let destinations = self.all_destinations(&enabled_options);
             destinations
                 .into_iter()
@@ -94,7 +94,7 @@ macro_rules! skin_document_render_select_interaction_methods {
         ) -> Vec<SkinClickHit> {
             let (state, selected_row) = self.select_draw_state(snapshot, None);
             let enabled_options = self.enabled_options();
-            let images = self.image_map();
+            let images: SkinImageLookup<'_> = self.image_map().into();
             let mut hits = Vec::new();
             for destination in self.all_destinations(&enabled_options) {
                 if destination.id
@@ -263,7 +263,7 @@ macro_rules! skin_document_render_select_interaction_methods {
         fn click_target_for_destination(
             &self,
             destination: &SkinDestinationDef,
-            images: &HashMap<&str, &SkinImageDef>,
+            images: &SkinImageLookup<'_>,
         ) -> Option<SkinClickTarget> {
             if destination.clickable == Some(false) {
                 return None;

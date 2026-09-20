@@ -330,7 +330,13 @@ fn cached_document_planning(
             }
         }
     }
-    let planning = DocumentPlanningCache { enabled_options, destinations: Arc::from(destinations) };
+    let objects = Arc::new(DocumentObjectIndices {
+        // Collect preserves the existing image/value maps' last-definition wins.
+        images: document.image.iter().enumerate().map(|(i, image)| (image.id.clone(), i)).collect(),
+        values: document.value.iter().enumerate().map(|(i, value)| (value.id.clone(), i)).collect(),
+    });
+    let planning =
+        DocumentPlanningCache { enabled_options, destinations: Arc::from(destinations), objects };
     *cached = Some(planning.clone());
     planning
 }
@@ -346,6 +352,38 @@ pub(in crate::skin) struct ResultGaugeGraphCache {
 pub(in crate::skin) struct DocumentPlanningCache {
     pub(in crate::skin) enabled_options: Arc<[i32]>,
     pub(in crate::skin) destinations: Arc<[ResultDestinationRef]>,
+    pub(in crate::skin) objects: Arc<DocumentObjectIndices>,
+}
+
+#[derive(Debug)]
+pub(in crate::skin) struct DocumentObjectIndices {
+    pub(in crate::skin) images: HashMap<String, usize>,
+    pub(in crate::skin) values: HashMap<String, usize>,
+}
+
+pub(in crate::skin) type SkinImageLookup<'a> = SkinObjectLookup<'a, SkinImageDef>;
+pub(in crate::skin) type SkinValueLookup<'a> = SkinObjectLookup<'a, SkinValueDef>;
+
+/// A view into the current document, backed by stable indices when a planning
+/// cache exists. Sources and frame-dependent values are still resolved live.
+pub(in crate::skin) enum SkinObjectLookup<'a, T> {
+    Direct(HashMap<&'a str, &'a T>),
+    Indexed { items: &'a [T], indices: &'a HashMap<String, usize> },
+}
+
+impl<'a, T> SkinObjectLookup<'a, T> {
+    pub(in crate::skin) fn get(&self, id: &str) -> Option<&'a T> {
+        match self {
+            Self::Direct(items) => items.get(id).copied(),
+            Self::Indexed { items, indices } => indices.get(id).and_then(|&i| items.get(i)),
+        }
+    }
+}
+
+impl<'a, T> From<HashMap<&'a str, &'a T>> for SkinObjectLookup<'a, T> {
+    fn from(items: HashMap<&'a str, &'a T>) -> Self {
+        Self::Direct(items)
+    }
 }
 
 #[derive(Debug, Clone, Copy)]

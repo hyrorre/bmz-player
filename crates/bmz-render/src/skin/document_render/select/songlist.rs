@@ -4,7 +4,7 @@ macro_rules! skin_document_render_select_songlist_methods {
             &self,
             sources: &HashMap<String, SkinDocumentTexture>,
             snapshot: &SelectSnapshot,
-            images: &HashMap<&str, &SkinImageDef>,
+            images: &SkinImageLookup<'_>,
             enabled_options: &[i32],
             state: &SkinDrawState,
         ) -> Vec<SkinRenderItem> {
@@ -210,7 +210,7 @@ macro_rules! skin_document_render_select_songlist_methods {
             entries: &[DestinationListEntry],
             row: &SelectRowSnapshot,
             row_origin: (i32, i32),
-            images: &HashMap<&str, &SkinImageDef>,
+            images: &SkinImageLookup<'_>,
             enabled_options: &[i32],
             state: &SkinDrawState,
             sources: &HashMap<String, SkinDocumentTexture>,

@@ -42,7 +42,7 @@ macro_rules! skin_document_render_core_resolve_methods {
                 );
             }
 
-            let value_for_destination = values.get(destination.id.as_str()).copied();
+            let value_for_destination = values.get(destination.id.as_str());
             let elapsed = destination_timer_elapsed_ms(destination, state).or_else(|| {
                 value_for_destination
                     .filter(|value| {
@@ -234,7 +234,7 @@ macro_rules! skin_document_render_core_resolve_methods {
             &self,
             destination: &SkinDestinationDef,
             mut frame: ResolvedSkinFrame,
-            images: &HashMap<&str, &SkinImageDef>,
+            images: &SkinImageLookup<'_>,
             state: &SkinDrawState,
             sources: &HashMap<String, SkinDocumentTexture>,
         ) -> Option<Option<Vec<SkinRenderItem>>> {
@@ -369,7 +369,7 @@ macro_rules! skin_document_render_core_resolve_methods {
             &self,
             destination: &SkinDestinationDef,
             frame: ResolvedSkinFrame,
-            images: &HashMap<&str, &SkinImageDef>,
+            images: &SkinImageLookup<'_>,
             state: &SkinDrawState,
             sources: &HashMap<String, SkinDocumentTexture>,
         ) -> Option<Option<Vec<SkinRenderItem>>> {
@@ -415,7 +415,7 @@ macro_rules! skin_document_render_core_resolve_methods {
             &self,
             destination: &SkinDestinationDef,
             offset: (i32, i32),
-            images: &HashMap<&str, &SkinImageDef>,
+            images: &SkinImageLookup<'_>,
             enabled_options: &[i32],
             state: &SkinDrawState,
             text_state: &SkinTextState<'_>,

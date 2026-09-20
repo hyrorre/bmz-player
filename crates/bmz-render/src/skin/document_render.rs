@@ -61,7 +61,7 @@ pub trait SkinDocumentRenderExt {
     fn result_judge_pie_destination_item(
         &self,
         destination: &SkinDestinationDef,
-        images: &HashMap<&str, &SkinImageDef>,
+        images: &SkinImageLookup<'_>,
         enabled_options: &[i32],
         state: &SkinDrawState,
         sources: &HashMap<String, SkinDocumentTexture>,
@@ -70,7 +70,7 @@ pub trait SkinDocumentRenderExt {
     fn destination_looks_like_pre_notes_judge_line(
         &self,
         destination: &SkinDestinationDef,
-        images: &HashMap<&str, &SkinImageDef>,
+        images: &SkinImageLookup<'_>,
         enabled_options: &[i32],
         state: &SkinDrawState,
         next_destination: Option<&SkinDestinationDef>,
@@ -109,7 +109,7 @@ pub trait SkinDocumentRenderExt {
         &self,
         destination: &SkinDestinationDef,
         frame: ResolvedSkinFrame,
-        images: &HashMap<&str, &SkinImageDef>,
+        images: &SkinImageLookup<'_>,
         state: &SkinDrawState,
         sources: &HashMap<String, SkinDocumentTexture>,
     ) -> Option<Option<Vec<SkinRenderItem>>>;
@@ -127,7 +127,7 @@ pub trait SkinDocumentRenderExt {
         &self,
         destination: &SkinDestinationDef,
         frame: ResolvedSkinFrame,
-        images: &HashMap<&str, &SkinImageDef>,
+        images: &SkinImageLookup<'_>,
         state: &SkinDrawState,
         sources: &HashMap<String, SkinDocumentTexture>,
     ) -> Option<Option<Vec<SkinRenderItem>>>;
@@ -136,7 +136,7 @@ pub trait SkinDocumentRenderExt {
         &self,
         destination: &SkinDestinationDef,
         offset: (i32, i32),
-        images: &HashMap<&str, &SkinImageDef>,
+        images: &SkinImageLookup<'_>,
         enabled_options: &[i32],
         state: &SkinDrawState,
         text_state: &SkinTextState<'_>,
@@ -230,7 +230,7 @@ pub trait SkinDocumentRenderExt {
     fn click_target_for_destination(
         &self,
         destination: &SkinDestinationDef,
-        images: &HashMap<&str, &SkinImageDef>,
+        images: &SkinImageLookup<'_>,
     ) -> Option<SkinClickTarget>;
 
     fn destination_click_rect(
@@ -254,7 +254,7 @@ pub trait SkinDocumentRenderExt {
         &self,
         sources: &HashMap<String, SkinDocumentTexture>,
         snapshot: &SelectSnapshot,
-        images: &HashMap<&str, &SkinImageDef>,
+        images: &SkinImageLookup<'_>,
         enabled_options: &[i32],
         state: &SkinDrawState,
     ) -> Vec<SkinRenderItem>;
@@ -275,7 +275,7 @@ pub trait SkinDocumentRenderExt {
         entries: &[DestinationListEntry],
         row: &SelectRowSnapshot,
         row_origin: (i32, i32),
-        images: &HashMap<&str, &SkinImageDef>,
+        images: &SkinImageLookup<'_>,
         enabled_options: &[i32],
         state: &SkinDrawState,
         sources: &HashMap<String, SkinDocumentTexture>,
@@ -297,7 +297,7 @@ pub trait SkinDocumentRenderExt {
         entries: &[DestinationListEntry],
         row: &SelectRowSnapshot,
         row_origin: (i32, i32),
-        images: &HashMap<&str, &SkinImageDef>,
+        images: &SkinImageLookup<'_>,
         enabled_options: &[i32],
         state: &mut SkinDrawState,
         sources: &HashMap<String, SkinDocumentTexture>,
@@ -308,7 +308,7 @@ pub trait SkinDocumentRenderExt {
         entries: &[DestinationListEntry],
         index: usize,
         row_origin: (i32, i32),
-        images: &HashMap<&str, &SkinImageDef>,
+        images: &SkinImageLookup<'_>,
         enabled_options: &[i32],
         state: &SkinDrawState,
         sources: &HashMap<String, SkinDocumentTexture>,
@@ -318,7 +318,7 @@ pub trait SkinDocumentRenderExt {
         &self,
         row: &SelectRowSnapshot,
         row_origin: (i32, i32),
-        images: &HashMap<&str, &SkinImageDef>,
+        images: &SkinImageLookup<'_>,
         enabled_options: &[i32],
         state: &SkinDrawState,
         sources: &HashMap<String, SkinDocumentTexture>,

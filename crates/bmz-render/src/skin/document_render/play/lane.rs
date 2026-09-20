@@ -21,7 +21,7 @@ macro_rules! skin_document_render_play_lane_methods {
             state: &SkinDrawState,
             sources: &HashMap<String, SkinDocumentTexture>,
         ) -> Vec<SkinRenderItem> {
-            let images = self.image_map();
+            let images: SkinImageLookup<'_> = self.image_map().into();
             let enabled_options = self.enabled_options();
             let Some(area) = self.note_lane_area(Lane::Key1, key_mode, &enabled_options) else {
                 return Vec::new();

@@ -112,3 +112,71 @@ fn animation_metadata_matches_inherited_frame_evaluation() {
         );
     }
 }
+
+#[test]
+fn cached_object_indices_preserve_duplicate_ids_and_live_sources_and_values() {
+    let document: SkinDocument = serde_json::from_value(serde_json::json!({
+        "w": 100, "h": 100,
+        "image": [
+            {"id": "duplicate", "src": "first", "w": 10, "h": 10},
+            {"id": "duplicate", "src": "last", "w": 20, "h": 10}
+        ],
+        "value": [
+            {"id": "number", "src": "first", "w": 100, "h": 10, "divx": 10, "digit": 3, "ref": 107},
+            {"id": "number", "src": "last", "w": 100, "h": 10, "divx": 10, "digit": 3, "ref": 110}
+        ],
+        "destination": [
+            {"id": "duplicate", "offset": 30, "dst": [{"x": 0, "y": 0, "w": 10, "h": 10}]},
+            {"id": "number", "dst": [{"x": 0, "y": 20, "w": 5, "h": 10}]}
+        ]
+    }))
+    .unwrap();
+    let mut cache = ResultRenderCache::default();
+    let mut previous = None;
+    for (texture_id, width, score) in
+        [(1, 100.0, 10), (1, 100.0, 123), (3, 200.0, 123), (5, 80.0, 4)]
+    {
+        let sources = HashMap::from([
+            (
+                "first".into(),
+                SkinDocumentTexture {
+                    source_id: "first".into(),
+                    texture: SkinTextureId(texture_id),
+                    source_size: SkinImageSize { width, height: 20.0 },
+                },
+            ),
+            (
+                "last".into(),
+                SkinDocumentTexture {
+                    source_id: "last".into(),
+                    texture: SkinTextureId(texture_id + 1),
+                    source_size: SkinImageSize { width, height: 20.0 },
+                },
+            ),
+        ]);
+        let mut state = SkinDrawState { gauge: 90.0, ..Default::default() };
+        state.judge_counts.pgreat = score;
+        let text = SkinTextState::default();
+        let actual = document.static_render_items_split_with_graphs(
+            &sources,
+            &state,
+            &text,
+            SkinRuntimeGraphs::from_document(&document),
+            Some(&mut cache),
+        );
+        let expected = document.static_render_items_split(&sources, &state, &text);
+        assert_eq!(actual, expected);
+        assert!(
+            matches!(actual.0.first(), Some(SkinRenderItem::Image { texture, .. }) if *texture == SkinTextureId(texture_id + 1)),
+            "image maps keep the last duplicate"
+        );
+        assert!(
+            matches!(actual.0.get(1), Some(SkinRenderItem::Image { texture, .. }) if *texture == SkinTextureId(texture_id)),
+            "number sprites keep the first duplicate while value resolution uses the last"
+        );
+        if let Some(previous) = &previous {
+            assert_ne!(&actual, previous);
+        }
+        previous = Some(actual);
+    }
+}

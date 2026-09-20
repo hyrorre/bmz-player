@@ -106,10 +106,19 @@ macro_rules! skin_document_render_select_render_methods {
                 ..SkinTextState::default()
             };
 
-            let images = self.image_map();
-            let values: HashMap<&str, &SkinValueDef> =
-                self.value.iter().map(|value| (value.id.as_str(), value)).collect();
             let planning = cache.as_deref_mut().map(|cache| cache.cached_planning(self));
+            let images = planning.as_ref().map_or_else(
+                || self.image_map().into(),
+                |p| SkinObjectLookup::Indexed { items: &self.image, indices: &p.objects.images },
+            );
+            let values = planning.as_ref().map_or_else(
+                || {
+                    SkinObjectLookup::Direct(
+                        self.value.iter().map(|v| (v.id.as_str(), v)).collect(),
+                    )
+                },
+                |p| SkinObjectLookup::Indexed { items: &self.value, indices: &p.objects.values },
+            );
             let enabled_options_storage =
                 planning.is_none().then(|| self.enabled_options()).unwrap_or_default();
             let enabled_options: &[i32] =
