@@ -1,5 +1,5 @@
 use super::*;
-use crate::skin::{SkinImageScale, TextureRegion};
+use crate::skin::{PreparedNoteLayout, SkinImageScale, TextureRegion};
 
 pub(super) fn push_document_playfield(
     commands: &mut Vec<DrawCommand>,
@@ -38,10 +38,10 @@ pub(super) fn push_document_playfield(
         layout.lane_width,
         layout.active_lanes,
     );
-    let notes_alpha_offset = skin.document_notes_offset_alpha(skin_state);
-    push_document_long_notes(commands, snapshot, skin, skin_state, notes_alpha_offset);
+    let notes = skin.prepare_note_layout(snapshot.key_mode, skin_state);
+    push_document_long_notes(commands, snapshot, skin, skin_state, &notes);
     for &lane in layout.active_lanes {
-        push_document_lane(commands, snapshot, skin, skin_state, lane, notes_alpha_offset);
+        push_document_lane(commands, snapshot, skin, skin_state, lane, &notes);
     }
 }
 
@@ -50,12 +50,11 @@ fn push_document_long_notes(
     snapshot: &RenderSnapshot,
     skin: &SkinContext,
     skin_state: &crate::skin::SkinDrawState,
-    notes_alpha_offset: i32,
+    notes: &PreparedNoteLayout<'_>,
 ) {
     for body in &snapshot.visible_long_notes {
         let start = commands.len();
-        if let Some(rect) =
-            skin.note_body_rect(body.lane, snapshot.key_mode, body.head_y, body.tail_y, skin_state)
+        if let Some(rect) = notes.body_rect(body.lane, body.head_y, body.tail_y)
             && let Some(item) = skin.document_long_body_item(
                 body.lane,
                 snapshot.key_mode,
@@ -68,34 +67,22 @@ fn push_document_long_notes(
             append_document_item(commands, skin, skin_state, item);
         }
 
-        let note_height =
-            skin.document_note_height(body.lane, snapshot.key_mode).unwrap_or(NOTE_HEIGHT);
-        if let Some(rect) = skin.note_rect_for_progress(
-            body.lane,
-            snapshot.key_mode,
-            body.head_y,
-            note_height,
-            skin_state,
-        ) && let Some(item) =
-            skin.document_ln_start_item(body.lane, snapshot.key_mode, rect, body.mode)
+        let note_height = notes.note_height(body.lane).unwrap_or(NOTE_HEIGHT);
+        if let Some(rect) = notes.note_rect(body.lane, body.head_y, note_height)
+            && let Some(item) =
+                skin.document_ln_start_item(body.lane, snapshot.key_mode, rect, body.mode)
         {
             append_document_item(commands, skin, skin_state, item);
         }
         if (body.mode != LongNoteMode::Ln || snapshot.show_ln_tail_cap)
             && body.tail_y < 1.0
-            && let Some(rect) = skin.note_rect_for_progress(
-                body.lane,
-                snapshot.key_mode,
-                body.tail_y,
-                note_height,
-                skin_state,
-            )
+            && let Some(rect) = notes.note_rect(body.lane, body.tail_y, note_height)
             && let Some(item) =
                 skin.document_ln_end_item(body.lane, snapshot.key_mode, rect, body.mode)
         {
             append_document_item(commands, skin, skin_state, item);
         }
-        apply_draw_command_alpha_offset(&mut commands[start..], notes_alpha_offset);
+        apply_draw_command_alpha_offset(&mut commands[start..], notes.alpha_offset());
         apply_draw_command_alpha(&mut commands[start..], body.alpha);
     }
 }
@@ -106,15 +93,13 @@ fn push_document_lane(
     skin: &SkinContext,
     skin_state: &crate::skin::SkinDrawState,
     lane: Lane,
-    notes_alpha_offset: i32,
+    notes: &PreparedNoteLayout<'_>,
 ) {
     let lane_index = lane.index();
-    let note_height = skin.document_note_height(lane, snapshot.key_mode).unwrap_or(NOTE_HEIGHT);
+    let note_height = notes.note_height(lane).unwrap_or(NOTE_HEIGHT);
     for note in &snapshot.visible_notes[lane_index] {
         let start = commands.len();
-        let Some(mut rect) =
-            document_note_rect(snapshot, skin, skin_state, lane, note.y, note_height)
-        else {
+        let Some(mut rect) = document_note_rect(notes, lane, note.y, note_height) else {
             continue;
         };
         if snapshot.key_mode == KeyMode::K9 {
@@ -140,15 +125,13 @@ fn push_document_lane(
         } else if snapshot.mark_processed_note && note.processed_judge.is_some() {
             push_processed_note_fallback(commands, rect);
         }
-        apply_draw_command_alpha_offset(&mut commands[start..], notes_alpha_offset);
+        apply_draw_command_alpha_offset(&mut commands[start..], notes.alpha_offset());
         apply_draw_command_alpha(&mut commands[start..], note.alpha);
     }
 
     for mine in &snapshot.visible_mines[lane_index] {
         let start = commands.len();
-        let Some(rect) =
-            skin.note_rect_for_progress(lane, snapshot.key_mode, mine.y, note_height, skin_state)
-        else {
+        let Some(rect) = notes.note_rect(lane, mine.y, note_height) else {
             continue;
         };
         if let Some(item) = skin.document_mine_item(lane, snapshot.key_mode, rect) {
@@ -171,23 +154,21 @@ fn push_document_lane(
                 },
             );
         }
-        apply_draw_command_alpha_offset(&mut commands[start..], notes_alpha_offset);
+        apply_draw_command_alpha_offset(&mut commands[start..], notes.alpha_offset());
         apply_draw_command_alpha(&mut commands[start..], mine.alpha);
     }
 }
 
 fn document_note_rect(
-    snapshot: &RenderSnapshot,
-    skin: &SkinContext,
-    skin_state: &crate::skin::SkinDrawState,
+    notes: &PreparedNoteLayout<'_>,
     lane: Lane,
     progress: f32,
     note_height: f32,
 ) -> Option<Rect> {
     if progress < 0.0 {
-        skin.missed_note_rect_for_fall(lane, snapshot.key_mode, -progress, note_height, skin_state)
+        notes.missed_rect(lane, -progress, note_height)
     } else {
-        skin.note_rect_for_progress(lane, snapshot.key_mode, progress, note_height, skin_state)
+        notes.note_rect(lane, progress, note_height)
     }
 }
 

@@ -104,19 +104,19 @@ macro_rules! skin_document_render_play_lane_methods {
             let canvas_h = self.h as f32;
 
             // 全エントリを展開してフラット化。Conditional は条件が合うものだけ展開する。
-            let mut flat: Vec<SkinAnimationDef> = Vec::new();
-            for entry in &note.dst {
-                match entry {
-                    SkinDstEntry::Frame(f) => flat.push(*f),
-                    SkinDstEntry::Conditional { if_ops, frames } => {
-                        if test_skin_dst_if(if_ops, enabled_options) {
-                            flat.extend_from_slice(frames);
-                        }
+            let frame = note
+                .dst
+                .iter()
+                .flat_map(|entry| match entry {
+                    SkinDstEntry::Frame(frame) => std::slice::from_ref(frame),
+                    SkinDstEntry::Conditional { if_ops, frames }
+                        if test_skin_dst_if(if_ops, enabled_options) =>
+                    {
+                        frames.as_slice()
                     }
-                }
-            }
-
-            let frame = flat.get(lane_idx)?;
+                    SkinDstEntry::Conditional { .. } => &[],
+                })
+                .nth(lane_idx)?;
             if let (Some(x), Some(y), Some(w), Some(h)) = (frame.x, frame.y, frame.w, frame.h) {
                 Some(normalize_skin_frame_rect(
                     ResolvedSkinFrame { x, y, w, h, ..ResolvedSkinFrame::default() },

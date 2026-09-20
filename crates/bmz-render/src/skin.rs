@@ -63,6 +63,7 @@ pub use condition::test_skin_ops;
 use condition::*;
 pub use document_render::SkinDocumentRenderExt;
 use pm_chara::*;
+pub(crate) use runtime::PreparedNoteLayout;
 use runtime::*;
 pub use runtime::{
     DynamicTimerRuntime, JudgeRegionState, MAX_JUDGE_REGIONS, SkinClickHit, SkinClickTarget,

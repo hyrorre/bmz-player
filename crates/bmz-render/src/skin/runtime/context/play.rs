@@ -1,5 +1,9 @@
 use super::*;
 
+#[path = "play_layout.rs"]
+mod layout;
+pub(crate) use layout::PreparedNoteLayout;
+
 impl SkinContext {
     pub fn document_note_item(
         &self,

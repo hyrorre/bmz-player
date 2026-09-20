@@ -14,3 +14,5 @@ mod cases_05;
 mod cases_06;
 #[path = "play/cases_07.rs"]
 mod cases_07;
+#[path = "play/prepared_layout.rs"]
+mod prepared_layout;
