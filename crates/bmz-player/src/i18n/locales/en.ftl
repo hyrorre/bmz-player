@@ -704,6 +704,7 @@ toast-chart-download-in-progress = Another chart is being acquired
 toast-chart-download-started = Acquiring chart from { $source }
 toast-chart-download-complete-registering = { $source } acquisition complete. Registering the chart
 toast-chart-download-failed = Failed to acquire the chart. See the log for details
+toast-chart-download-root-save-failed = Could not save the download folder setting. Add it again after restarting. See the log for details
 toast-chart-download-worker-ended = The chart acquisition process ended unexpectedly
 toast-course-download-started = Acquiring missing course charts ({ $count })
 toast-course-download-complete-registering = Acquisition finished ({ $completed } succeeded, { $failed } failed). Registering charts

@@ -702,6 +702,7 @@ toast-chart-download-in-progress = 正在取得其他譜面
 toast-chart-download-started = 正在從 { $source } 取得譜面
 toast-chart-download-complete-registering = 已從 { $source } 取得完成，正在登錄譜面
 toast-chart-download-failed = 取得譜面失敗。詳情請查看日誌
+toast-chart-download-root-save-failed = 無法儲存下載資料夾設定。重新啟動後需要重新新增。詳情請查看日誌
 toast-chart-download-worker-ended = 譜面取得程序意外結束
 toast-course-download-started = 正在取得課程中尚未持有的譜面（{ $count } 個）
 toast-course-download-complete-registering = 譜面取得完成（成功 { $completed } / 失敗 { $failed }），正在登錄

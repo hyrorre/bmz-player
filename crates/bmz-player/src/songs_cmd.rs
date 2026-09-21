@@ -55,6 +55,31 @@ pub fn remove_song_root_entry(roots: &mut Vec<PathEntry>, index: usize) {
     }
 }
 
+/// 明示的な自動DLの保存先を、再帰スキャン可能な有効ルートにする。
+/// 有効な再帰ルートの配下なら追加せず、保存先自身の既存設定は再利用する。
+pub(crate) fn ensure_download_song_root(roots: &mut Vec<PathEntry>, path: &str) -> bool {
+    let path = normalize_library_path(path).trim_end_matches('/').to_string();
+    if roots.iter().any(|root| {
+        let root_path = normalize_library_path(&root.path).trim_end_matches('/').to_string();
+        root.enabled
+            && root.recursive
+            && (path == root_path || path.starts_with(&format!("{root_path}/")))
+    }) {
+        return false;
+    }
+    if let Some(root) = roots
+        .iter_mut()
+        .find(|root| normalize_library_path(&root.path).trim_end_matches('/') == path)
+    {
+        root.path = path;
+        root.enabled = true;
+        root.recursive = true;
+    } else {
+        roots.push(PathEntry { path, enabled: true, recursive: true });
+    }
+    true
+}
+
 /// `songs load` / `songs reload` のスキャン対象を解決する。
 pub fn resolve_song_scan_target(
     target: Option<&str>,
@@ -253,6 +278,36 @@ mod tests {
             PathEntry { path: "/archive/beatmania".to_string(), enabled: true, recursive: true },
             PathEntry { path: "/other/songs".to_string(), enabled: false, recursive: true },
         ]
+    }
+
+    #[test]
+    fn download_song_root_reuses_normalized_disabled_entry() {
+        let mut roots = vec![PathEntry {
+            path: r"\\?\C:\data\songs\ipfs\".to_string(),
+            enabled: false,
+            recursive: false,
+        }];
+        assert!(ensure_download_song_root(&mut roots, "C:/data/songs/ipfs"));
+        assert_eq!(roots.len(), 1);
+        assert_eq!(roots[0].path, "C:/data/songs/ipfs");
+        assert!(roots[0].enabled && roots[0].recursive);
+        assert!(!ensure_download_song_root(&mut roots, "C:/data/songs/ipfs"));
+    }
+
+    #[test]
+    fn download_song_root_only_reuses_enabled_recursive_ancestors() {
+        for (parent, enabled, recursive, changes) in [
+            ("/data/songs/", true, true, false),
+            ("/data/songs", false, true, true),
+            ("/data/songs", true, false, true),
+            ("/data/song", true, true, true),
+        ] {
+            let mut roots = vec![PathEntry { path: parent.into(), enabled, recursive }];
+            assert_eq!(ensure_download_song_root(&mut roots, "/data/songs/http"), changes);
+            assert_eq!(roots.len(), if changes { 2 } else { 1 });
+            assert_eq!(roots[0].enabled, enabled);
+            assert_eq!(roots[0].recursive, recursive);
+        }
     }
 
     #[test]

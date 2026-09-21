@@ -701,6 +701,7 @@ toast-chart-download-in-progress = 別の譜面を取得中です
 toast-chart-download-started = { $source } から譜面を取得しています
 toast-chart-download-complete-registering = { $source } 取得完了。譜面を登録しています
 toast-chart-download-failed = 譜面の取得に失敗しました。詳細はログを確認してください
+toast-chart-download-root-save-failed = DL保存先の曲フォルダ設定を保存できませんでした。再起動後は再登録が必要です。詳細はログを確認してください
 toast-chart-download-worker-ended = 譜面取得処理が予期せず終了しました
 toast-course-download-started = コースの未所持譜面を取得しています（{ $count } 件）
 toast-course-download-complete-registering = 譜面取得完了（成功 { $completed } / 失敗 { $failed }）。登録しています

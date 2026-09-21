@@ -828,6 +828,22 @@ impl WinitApp {
                         text.format("toast-course-download-complete-registering", &args),
                     );
                 }
+                let mut config_changed = false;
+                for root in &roots {
+                    config_changed |= crate::songs_cmd::ensure_download_song_root(
+                        &mut self.boot.app_config.songs.roots,
+                        &root.to_string_lossy(),
+                    );
+                }
+                if config_changed
+                    && let Err(error) =
+                        save_app_config(&self.boot.app_paths.config_toml, &self.boot.app_config)
+                {
+                    tracing::error!(%error, "failed to save downloaded song roots");
+                    self.show_left_overlay_toast(
+                        text.text("toast-chart-download-root-save-failed"),
+                    );
+                }
                 let scan_roots = roots
                     .into_iter()
                     .map(|root| PathEntry {
