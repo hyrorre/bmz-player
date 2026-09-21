@@ -138,6 +138,8 @@ fn select_lua_skins_decode_with_explicit_library_root_when_available() {
             } else {
                 (977.0, 1034.0, 135.0, 35.0)
             };
+            let expected_mode_font_size =
+                if relative.starts_with("mz-select/") { 26.0 } else { 25.0 };
             let textures = decoded.sources.iter().map(|source| SkinDocumentTexture {
                 source_id: source.source_id.clone(),
                 texture: source.texture,
@@ -158,11 +160,16 @@ fn select_lua_skins_decode_with_explicit_library_root_when_available() {
                         ..SelectSnapshot::default()
                     };
                     let items = context.select_document_items(&snapshot);
+                    let mode_style = items.iter().find_map(|item| match item {
+                        SkinRenderItem::Text { text, style, .. } if text == mode => Some(style),
+                        _ => None,
+                    });
+                    assert!(mode_style.is_some(), "{label} must render {mode}");
+                    let mode_style = mode_style.expect("mode text style must be available");
                     assert!(
-                        items.iter().any(
-                            |item| matches!(item, SkinRenderItem::Text { text, .. } if text == mode)
-                        ),
-                        "{label} must render {mode}"
+                        (mode_style.size - expected_mode_font_size / 1080.0).abs() < 0.0001,
+                        "{label} must use the matched mode font size for {mode}: got {}",
+                        mode_style.size * 1080.0
                     );
                     let mode_rect = |item: &&SkinRenderItem| {
                         matches!(
