@@ -56,14 +56,21 @@ pub(in crate::lua) fn infer_main_state_text_ref(
     {
         main_state_probe.lock().ok()?.begin_number_call_recording(0);
     }
-    let _ = function.call::<Value>(()).ok();
-    let text_calls = {
+    let result = function.call::<Value>(()).ok();
+    let (text_calls, other_state) = {
         let mut probe = main_state_probe.lock().ok()?;
         let calls = probe.text_calls.clone();
+        let other_state = !probe.number_calls.is_empty()
+            || !probe.option_calls.is_empty()
+            || !probe.timer_calls.is_empty();
         probe.end_recording();
-        calls
+        (calls, other_state)
     };
-    single_number_call(&text_calls)
+    let id = single_number_call(&text_calls)?;
+    let Value::String(text) = result? else {
+        return None;
+    };
+    (!other_state && text.to_string_lossy() == format!("Text{id}")).then_some(id)
 }
 
 pub(in crate::lua) fn infer_text_concat_expr(

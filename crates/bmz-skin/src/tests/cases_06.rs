@@ -653,6 +653,44 @@ fn lua_scene_state_syncs_existing_module_practice_boolean() {
 }
 
 #[test]
+fn captured_main_state_accessors_follow_each_runtime_state() {
+    for mode in [LuaSkinRuntimeMode::Auto, LuaSkinRuntimeMode::Compat] {
+        let mut loaded = load_runtime_value_fixture(
+            "bmz-captured-state",
+            mode,
+            r#"
+            local number = main_state.number
+            local text = main_state.text
+            local calls = 0
+            local number_value = function()
+                calls = calls + 1
+                if number(74) < 0 then error("invalid row") end
+                return number(74) + calls
+            end
+            local text_value = function() return text(10) .. ":" .. number(74) end
+        "#,
+        );
+        let number_id =
+            loaded.document.value[0].value_expr.rsplit(':').next().unwrap().parse().unwrap();
+        let text_id =
+            loaded.document.text[0].value_expr.rsplit(':').next().unwrap().parse().unwrap();
+        let runtime = loaded.lua_runtime.as_mut().unwrap();
+        for (notes, expected) in
+            [(100, Some(101.0)), (200, Some(202.0)), (-1, None), (300, Some(304.0))]
+        {
+            let state = TestLuaMainState {
+                numbers: BTreeMap::from([(74, notes)]),
+                texts: BTreeMap::from([(10, "row".into())]),
+                ..Default::default()
+            };
+            assert_eq!(runtime.evaluate_number(number_id, &state), expected);
+            assert_eq!(runtime.evaluate_text(text_id, &state), Some(format!("row:{notes}")));
+        }
+        assert_eq!(runtime.failure_log_count(), 1);
+    }
+}
+
+#[test]
 fn dynamic_text_and_ratio_draw_do_not_freeze_at_load() {
     for mode in [LuaSkinRuntimeMode::Auto, LuaSkinRuntimeMode::Compat] {
         let mut loaded = load_runtime_value_fixture(

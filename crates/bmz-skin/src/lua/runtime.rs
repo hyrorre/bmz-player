@@ -75,7 +75,6 @@ pub(super) struct LuaRuntimeCallback {
 pub struct LuaSkinRuntime {
     pub(super) lua: Lua,
     pub(super) callbacks: Vec<LuaRuntimeCallback>,
-    pub(super) main_state_key: RegistryKey,
     pub(super) instruction_budget: LuaInstructionBudget,
     pub(super) skin_path: PathBuf,
     pub(super) failed_callbacks: BTreeSet<usize>,
@@ -229,63 +228,28 @@ impl LuaSkinRuntime {
             mlua::Error::runtime(format!("Lua callback was not registered at {}", callback.path))
         })?;
         let function: Function = self.lua.registry_value(key)?;
-        let main_state: Table = self.lua.registry_value(&self.main_state_key)?;
-
         self.lua.scope(|scope| {
-            const FIELDS: &[&str] = &[
-                "option",
-                "number",
-                "exscore",
-                "float",
-                "float_number",
-                "text",
-                "timer",
-                "event_index",
-                "gauge_type",
-                "time",
-                "judge",
-                "offset",
-            ];
-            let originals = FIELDS
-                .iter()
-                .map(|field| Ok((*field, main_state.get::<Value>(*field)?)))
-                .collect::<mlua::Result<Vec<_>>>()?;
-
-            main_state.set("option", scope.create_function(|_, id: i32| Ok(state.option(id)))?)?;
-            main_state.set("number", scope.create_function(|_, id: i32| Ok(state.number(id)))?)?;
-            main_state.set("exscore", scope.create_function(|_, ()| Ok(state.exscore()))?)?;
-            let float = scope.create_function(|_, id: i32| Ok(state.float(id)))?;
-            main_state.set("float", float.clone())?;
-            main_state.set("float_number", float)?;
-            main_state.set("text", scope.create_function(|_, id: i32| Ok(state.text(id)))?)?;
-            main_state.set(
-                "timer",
-                scope
-                    .create_function(|_, id: i32| Ok(state.timer(id).unwrap_or(TIMER_OFF_VALUE)))?,
-            )?;
-            main_state.set(
-                "event_index",
-                scope.create_function(|_, id: i32| Ok(state.event_index(id)))?,
-            )?;
-            main_state.set("gauge_type", scope.create_function(|_, ()| Ok(state.gauge_type()))?)?;
-            main_state.set("time", scope.create_function(|_, ()| Ok(state.time_us()))?)?;
-            main_state
-                .set("judge", scope.create_function(|_, index: i32| Ok(state.judge(index)))?)?;
-            main_state.set(
-                "offset",
-                scope.create_function(|lua, id: i32| {
-                    create_main_state_offset_table(lua, state.offset(id))
-                })?,
-            )?;
-
-            let result = function.call::<Value>(()).and_then(LuaRuntimeEvaluatedValue::from_lua);
-
-            // Scoped functions borrow the current frame snapshot. Restore the
-            // persistent load-time stubs before the scope invalidates them.
-            for (field, value) in originals {
-                main_state.set(field, value)?;
-            }
-            result
+            let dispatch = scope.create_function(|lua, (operation, argument): (u8, Value)| {
+                let id = || <i32 as mlua::FromLua>::from_lua(argument.clone(), lua);
+                Ok(match operation {
+                    0 => Value::Boolean(state.option(id()?)),
+                    1 => Value::Integer(state.number(id()?)),
+                    2 => Value::Integer(state.exscore()),
+                    3 | 4 => Value::Number(state.float(id()?)),
+                    5 => Value::String(lua.create_string(state.text(id()?))?),
+                    6 => Value::Integer(i64::from(state.timer(id()?).unwrap_or(TIMER_OFF_VALUE))),
+                    7 => Value::Integer(i64::from(state.event_index(id()?))),
+                    8 => Value::Integer(i64::from(state.gauge_type())),
+                    9 => Value::Integer(i64::from(state.time_us())),
+                    10 => Value::Integer(state.judge(id()?)),
+                    11 => create_main_state_offset_table(lua, state.offset(id()?))?,
+                    _ => return Err(mlua::Error::runtime("unknown main_state operation")),
+                })
+            })?;
+            self.lua.set_named_registry_value(RUNTIME_STATE_DISPATCH, dispatch)?;
+            // Clear even on unwind, before scope invalidates the borrowed accessor.
+            let _guard = RuntimeDispatchGuard(&self.lua);
+            function.call::<Value>(()).and_then(LuaRuntimeEvaluatedValue::from_lua)
         })
     }
 
@@ -304,6 +268,54 @@ impl LuaSkinRuntime {
             "Lua callback failed; using safe fallback value"
         );
     }
+}
+
+const RUNTIME_STATE_DISPATCH: &str = "bmz.runtime.main_state_dispatch";
+
+struct RuntimeDispatchGuard<'a>(&'a Lua);
+
+impl Drop for RuntimeDispatchGuard<'_> {
+    fn drop(&mut self) {
+        let _ = self.0.unset_named_registry_value(RUNTIME_STATE_DISPATCH);
+    }
+}
+
+/// Install stable accessors before the clean VM executes the skin so even
+/// `local number = main_state.number` follows the current callback's state.
+pub(super) fn install_runtime_main_state_dispatch(lua: &Lua) -> mlua::Result<()> {
+    let main_state: Table = lua.globals().get("bmz_main_state")?;
+    for (operation, field) in [
+        "option",
+        "number",
+        "exscore",
+        "float",
+        "float_number",
+        "text",
+        "timer",
+        "event_index",
+        "gauge_type",
+        "time",
+        "judge",
+        "offset",
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let original: Function =
+            main_state.get(if field == "float" { "float_number" } else { field })?;
+        main_state.set(
+            field,
+            lua.create_function(move |lua, argument: Value| {
+                match lua.named_registry_value::<Value>(RUNTIME_STATE_DISPATCH)? {
+                    Value::Function(dispatch) => {
+                        dispatch.call::<Value>((operation as u8, argument))
+                    }
+                    _ => original.call::<Value>(argument),
+                }
+            })?,
+        )?;
+    }
+    Ok(())
 }
 
 enum LuaRuntimeEvaluatedValue {

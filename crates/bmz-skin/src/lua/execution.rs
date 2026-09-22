@@ -358,6 +358,7 @@ pub(super) fn build_lua_skin_runtime(request: LuaSkinRuntimeRequest<'_>) -> Resu
         virtual_io_files,
         None,
     )?;
+    install_runtime_main_state_dispatch(&lua)?;
     let value = lua
         .load(source)
         .set_name(input.to_string_lossy().as_ref())
@@ -394,12 +395,9 @@ pub(super) fn build_lua_skin_runtime(request: LuaSkinRuntimeRequest<'_>) -> Resu
         }
         callbacks.push(LuaRuntimeCallback { path: path.clone(), kind: spec.kind, key: callback });
     }
-    let main_state: Table = lua.globals().get("bmz_main_state")?;
-    let main_state_key = lua.create_registry_value(main_state)?;
     Ok(LuaSkinRuntime {
         lua,
         callbacks,
-        main_state_key,
         instruction_budget,
         skin_path: input.to_path_buf(),
         failed_callbacks: BTreeSet::new(),
