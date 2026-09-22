@@ -787,7 +787,15 @@ fn bitmap_page_changes_invalidate_cached_and_installed_fonts() {
         fs::write(&font_path, definition).unwrap();
         image::RgbaImage::from_pixel(1, 1, image::Rgba([255, 0, 0, 255])).save(&page_path).unwrap();
         let cache = Arc::new(Mutex::new(SkinFontCache::default()));
-        let (_, _, old_key) = decode_font_with_cache(&font_path, Some(&cache)).unwrap();
+        let (first, _, old_key) = decode_font_with_cache(&font_path, Some(&cache)).unwrap();
+        let (second, status, _) = decode_font_with_cache(&font_path, Some(&cache)).unwrap();
+        assert_eq!(status, FontCacheStatus::Hit);
+        let (DecodedFontData::Bitmap(first), DecodedFontData::Bitmap(second)) = (first, second)
+        else {
+            panic!("bitmap font payloads")
+        };
+        assert!(Arc::ptr_eq(&first.pages, &second.pages));
+        assert!(Arc::ptr_eq(&first.glyphs, &second.glyphs));
         let old_key = old_key.unwrap();
         image::RgbaImage::from_pixel(2, 1, image::Rgba([0, 255, 0, 255])).save(&page_path).unwrap();
         fs::File::options()

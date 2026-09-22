@@ -42,8 +42,8 @@ fn test_bitmap_font() -> BitmapFont {
         ascent: 7.0,
         scale_width: 1,
         scale_height: 1,
-        pages,
-        glyphs,
+        pages: pages.into(),
+        glyphs: glyphs.into(),
     }
 }
 

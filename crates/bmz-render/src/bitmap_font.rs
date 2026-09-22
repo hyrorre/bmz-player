@@ -1,10 +1,11 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use anyhow::{Context, Result, anyhow, bail};
 use encoding_rs::SHIFT_JIS;
 
-use crate::assets::{RgbaImageAsset, load_png_rgba};
+use crate::assets::{RgbaImageAsset, load_static_rgba_image};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct BitmapFont {
@@ -14,8 +15,10 @@ pub struct BitmapFont {
     pub ascent: f32,
     pub scale_width: u32,
     pub scale_height: u32,
-    pub pages: HashMap<i32, BitmapFontPage>,
-    pub glyphs: HashMap<char, BitmapFontGlyph>,
+    // Fonts are shared by the decoded cache and renderer. Large CIM page sets
+    // must not duplicate their pixels when a cached font is installed again.
+    pub pages: Arc<HashMap<i32, BitmapFontPage>>,
+    pub glyphs: Arc<HashMap<char, BitmapFontGlyph>>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -177,14 +180,23 @@ fn parse_lr2_bitmap_font(text: &str, base_dir: &Path) -> Result<BitmapFont> {
     let mut scale_width = 0;
     let mut scale_height = 0;
     for (id, path) in page_paths {
-        let image = load_png_rgba(&path)
+        let image = load_static_rgba_image(&path)
             .with_context(|| format!("failed to load bitmap font page: {}", path.display()))?;
         scale_width = scale_width.max(image.width);
         scale_height = scale_height.max(image.height);
         pages.insert(id, BitmapFontPage { id, path, image });
     }
 
-    Ok(BitmapFont { size, line_height, base, ascent, scale_width, scale_height, pages, glyphs })
+    Ok(BitmapFont {
+        size,
+        line_height,
+        base,
+        ascent,
+        scale_width,
+        scale_height,
+        pages: pages.into(),
+        glyphs: glyphs.into(),
+    })
 }
 
 fn parse_lr2_font_i32(value: Option<&str>) -> Option<i32> {
@@ -265,12 +277,21 @@ fn parse_bitmap_font(text: &str, base_dir: &Path) -> Result<BitmapFont> {
 
     let mut pages = HashMap::new();
     for (id, path) in page_paths {
-        let image = load_png_rgba(&path)
+        let image = load_static_rgba_image(&path)
             .with_context(|| format!("failed to load bitmap font page: {}", path.display()))?;
         pages.insert(id, BitmapFontPage { id, path, image });
     }
 
-    Ok(BitmapFont { size, line_height, base, ascent, scale_width, scale_height, pages, glyphs })
+    Ok(BitmapFont {
+        size,
+        line_height,
+        base,
+        ascent,
+        scale_width,
+        scale_height,
+        pages: pages.into(),
+        glyphs: glyphs.into(),
+    })
 }
 
 fn resolve_case_insensitive_path(path: &Path) -> PathBuf {
@@ -399,6 +420,50 @@ char id=65 x=0 y=0 width=1 height=1 xoffset=1 yoffset=2 xadvance=9 page=0 chnl=0
         assert_eq!(font.ascent, 14.0);
         assert_eq!(font.pages[&0].image.width, 2);
         assert_eq!(font.glyphs[&'A'].xadvance, 9);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn bitmap_font_loads_cim_pages_and_shares_decoded_data() {
+        use std::io::Write;
+
+        let root = temp_dir();
+        std::fs::create_dir_all(&root).unwrap();
+        let colors = [[12, 34, 56, 78], [90, 123, 200, 255]];
+        for (id, color) in colors.iter().enumerate() {
+            let file = std::fs::File::create(root.join(format!("page{id}.cim"))).unwrap();
+            let mut encoder = flate2::write::ZlibEncoder::new(file, flate2::Compression::default());
+            for value in [1_i32, 1, 4] {
+                encoder.write_all(&value.to_be_bytes()).unwrap();
+            }
+            encoder.write_all(color).unwrap();
+            encoder.finish().unwrap();
+        }
+        let path = root.join("font.fnt");
+        std::fs::write(
+            &path,
+            r#"info face="test" size=16 padding=0,0,0,0
+common lineHeight=20 base=15 scaleW=1 scaleH=1 pages=2 packed=0
+page id=0 file="page0.cim"
+page id=1 file="page1.cim"
+char id=65 x=0 y=0 width=1 height=1 xoffset=1 yoffset=2 xadvance=9 page=0 chnl=0
+char id=66 x=0 y=0 width=1 height=1 xoffset=3 yoffset=4 xadvance=11 page=1 chnl=0
+"#,
+        )
+        .unwrap();
+        let font = load_bitmap_font(&path).unwrap();
+        assert_eq!(font.pages[&0].image.pixels, colors[0]);
+        assert_eq!(font.pages[&1].image.pixels, colors[1]);
+        assert_eq!(font.glyphs[&'B'].page, 1);
+        assert_eq!(font.glyphs[&'B'].xadvance, 11);
+        assert_eq!((font.size, font.base, font.ascent), (16, 15, 14.0));
+        assert_eq!(
+            bitmap_font_page_paths(&path).unwrap(),
+            vec![root.join("page0.cim"), root.join("page1.cim")]
+        );
+        let cached = font.clone();
+        assert!(Arc::ptr_eq(&font.pages, &cached.pages));
+        assert!(Arc::ptr_eq(&font.glyphs, &cached.glyphs));
         std::fs::remove_dir_all(root).unwrap();
     }
 
