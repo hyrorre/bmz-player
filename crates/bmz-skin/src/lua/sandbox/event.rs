@@ -247,7 +247,7 @@ pub(super) fn create_timer_util_module(
             let observe = specialized
                 .clone()
                 .or_else(|| infer_runtime_boolean_field_observe(lua, &observed, &probe_for_observe))
-                .or_else(|| infer_boolean_predicate(&observed, &probe_for_observe, None));
+                .or_else(|| infer_boolean_predicate(lua, &observed, &probe_for_observe, None));
             let unsupported = observe.is_none();
             let load_time_constant = specialized.is_none()
                 && observe.as_deref().is_some_and(is_constant_boolean_condition);

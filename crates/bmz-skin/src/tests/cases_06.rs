@@ -594,7 +594,7 @@ fn lua_scene_state_syncs_existing_module_practice_boolean() {
         let option_values = BTreeMap::from([(33, autoplay), (290, course), (1080, practice)]);
         let compiled_state =
             LuaLoadRuntimeState { option_values: option_values.clone(), ..Default::default() };
-        let compiled = load_lua_skin_with_runtime_state(
+        let mut compiled = load_lua_skin_with_runtime_state(
             &path,
             &BTreeMap::new(),
             &BTreeMap::new(),
@@ -607,12 +607,17 @@ fn lua_scene_state_syncs_existing_module_practice_boolean() {
             .iter()
             .filter_map(|entry| match entry {
                 bmz_skin_document::DestinationListEntry::Single(destination) => {
-                    Some(destination.draw.as_str())
+                    Some(destination.draw.clone())
                 }
                 bmz_skin_document::DestinationListEntry::Conditional { .. } => None,
             })
             .collect::<Vec<_>>();
-        assert_eq!(compiled_draws, expected_draws, "compiled draws for {name}");
+        let state = TestLuaMainState { options: option_values.clone(), ..Default::default() };
+        for ((draw, expected), visible) in
+            compiled_draws.iter().zip(expected_draws).zip(expected_visibility)
+        {
+            assert_compiled_or_runtime_draw(&mut compiled, draw, expected, visible, &state);
+        }
         assert_eq!(
             compiled.dependencies.option_values.get(&1080),
             Some(&practice),
@@ -644,6 +649,81 @@ fn lua_scene_state_syncs_existing_module_practice_boolean() {
             runtime.evaluate_draw(2, &state),
         ];
         assert_eq!(actual, expected_visibility, "stage visibility for {name}");
+    }
+}
+
+#[test]
+fn dynamic_text_and_ratio_draw_do_not_freeze_at_load() {
+    for mode in [LuaSkinRuntimeMode::Auto, LuaSkinRuntimeMode::Compat] {
+        let mut loaded = load_runtime_value_fixture(
+            "bmz-dynamic-song-text",
+            mode,
+            r#"
+            local number_value = 0
+            local text_value = function()
+                return string.format("TIME %d:%02d TOTAL %.0f GAUGE %.1f", main_state.number(1163), main_state.number(1164), main_state.number(368), main_state.number(368) / main_state.number(74))
+            end
+        "#,
+        );
+        let text = &loaded.document.text[0];
+        assert!(text.constant_text.is_empty());
+        let id = text.value_expr.rsplit(':').next().unwrap().parse().unwrap();
+        for (notes, total, minutes, seconds, expected) in [
+            (1000, 300, 2, 30, "TIME 2:30 TOTAL 300 GAUGE 0.3"),
+            (500, 400, 1, 5, "TIME 1:05 TOTAL 400 GAUGE 0.8"),
+        ] {
+            let state = TestLuaMainState {
+                numbers: BTreeMap::from([
+                    (74, notes),
+                    (368, total),
+                    (1163, minutes),
+                    (1164, seconds),
+                ]),
+                ..Default::default()
+            };
+            assert_eq!(
+                loaded.lua_runtime.as_mut().unwrap().evaluate_text(id, &state).as_deref(),
+                Some(expected)
+            );
+        }
+    }
+    let mut loaded = load_runtime_draw_fixture(
+        "bmz-dynamic-total-draw",
+        r#"
+        local draw = function()
+            local notes = main_state.number(74)
+            return main_state.number(368) / (7.605 * notes / (0.01 * notes + 6.5)) < 0.8
+        end
+    "#,
+    );
+    let id = only_destination_draw(&loaded)
+        .strip_prefix("bmz:lua_draw_callback:")
+        .unwrap()
+        .parse()
+        .unwrap();
+    for (total, visible) in [(300, true), (500, false), (200, true)] {
+        let state = TestLuaMainState {
+            numbers: BTreeMap::from([(74, 1000), (368, total)]),
+            ..Default::default()
+        };
+        assert_eq!(loaded.lua_runtime.as_mut().unwrap().evaluate_draw(id, &state), visible);
+    }
+    let mut loaded = load_runtime_draw_fixture(
+        "bmz-delayed-mutable-draw",
+        r#"
+        local calls = 0
+        local draw = function() calls = calls + 1; return calls > 1000 end
+    "#,
+    );
+    let id = only_destination_draw(&loaded)
+        .strip_prefix("bmz:lua_draw_callback:")
+        .unwrap()
+        .parse()
+        .unwrap();
+    let runtime = loaded.lua_runtime.as_mut().unwrap();
+    for i in 1..=1001 {
+        runtime.begin_frame();
+        assert_eq!(runtime.evaluate_draw(id, &TestLuaMainState::default()), i > 1000);
     }
 }
 

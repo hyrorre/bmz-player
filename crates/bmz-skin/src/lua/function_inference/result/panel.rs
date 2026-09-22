@@ -49,9 +49,11 @@ pub(in crate::lua) fn infer_result_panel_draw_condition(
         }
         let specialized = infer_result_score_draw(function, object_id, main_state_probe);
         conditions.push(if result_score_draw_object(object_id) {
-            specialized.or_else(|| infer_constant_draw_at_load(function, main_state_probe))
+            specialized.or_else(|| infer_config_or_panel_constant_draw(lua, function, true))
         } else {
-            specialized.or_else(|| infer_boolean_predicate(function, main_state_probe, object_id))
+            specialized
+                .or_else(|| infer_boolean_predicate(lua, function, main_state_probe, object_id))
+                .or_else(|| infer_config_or_panel_constant_draw(lua, function, true))
         });
     }
     restore_result_panel_probe_state(lua, function, global_original.as_ref(), local_original);

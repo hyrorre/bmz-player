@@ -144,6 +144,23 @@ fn only_destination_draw(loaded: &LoadedSkinDocument) -> &str {
     &destination.draw
 }
 
+fn assert_compiled_or_runtime_draw(
+    loaded: &mut LoadedSkinDocument,
+    draw: &str,
+    expected: &str,
+    visible: bool,
+    state: &TestLuaMainState,
+) {
+    if let Some(id) = draw.strip_prefix("bmz:lua_draw_callback:") {
+        assert_eq!(
+            loaded.lua_runtime.as_mut().unwrap().evaluate_draw(id.parse().unwrap(), state),
+            visible
+        );
+    } else {
+        assert_eq!(draw, expected);
+    }
+}
+
 #[path = "tests/cases_01.rs"]
 mod cases_01;
 #[path = "tests/cases_02.rs"]

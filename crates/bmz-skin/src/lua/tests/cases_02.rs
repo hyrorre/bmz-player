@@ -42,21 +42,21 @@ fn infers_event_index_and_dp_side_options_draw_condition() {
         .unwrap();
 
     assert_eq!(
-            infer_boolean_predicate(&random, &probe, None),
+            infer_boolean_predicate(&lua, &random, &probe, None),
             Some(
                 "event_index(43) == 2 and option(162) or event_index(43) == 2 and option(163) or event_index(43) == 3 and option(162) or event_index(43) == 3 and option(163)"
                     .to_string()
             )
         );
     assert_eq!(
-        infer_boolean_predicate(&normal, &probe, None),
+        infer_boolean_predicate(&lua, &normal, &probe, None),
         Some(
             "event_index(43) == 0 and option(162) or event_index(43) == 0 and option(163)"
                 .to_string()
         )
     );
     assert_eq!(
-        infer_boolean_predicate(&extended, &probe, None),
+        infer_boolean_predicate(&lua, &extended, &probe, None),
         Some(
             "event_index(345) == 11 and option(162) or event_index(345) == 11 and option(163)"
                 .to_string()
@@ -94,14 +94,14 @@ fn infers_single_number_lane_color_membership_draw_conditions() {
         .unwrap();
 
     assert_eq!(
-        infer_boolean_predicate(&white, &probe, None),
+        infer_boolean_predicate(&lua, &white, &probe, None),
         Some(
             "number(450) == 1 or number(450) == 3 or number(450) == 5 or number(450) == 7"
                 .to_string()
         )
     );
     assert_eq!(
-        infer_boolean_predicate(&blue, &probe, None),
+        infer_boolean_predicate(&lua, &blue, &probe, None),
         Some("number(450) == 2 or number(450) == 4 or number(450) == 6".to_string())
     );
 }
@@ -156,7 +156,7 @@ fn infers_option_and_multiple_positive_numbers_draw_condition() {
         .unwrap();
 
     assert_eq!(
-        infer_boolean_predicate(&function, &probe, None),
+        infer_boolean_predicate(&lua, &function, &probe, None),
         Some(
             "option(2) and number(74) > 0 or option(2) and number(92) > 0 or option(2) and number(368) > 0"
                 .to_string()
@@ -233,7 +233,7 @@ fn infers_keybeam_hold_draw_condition() {
             .unwrap();
 
     assert_eq!(
-            infer_boolean_predicate(&function, &probe, None),
+            infer_boolean_predicate(&lua, &function, &probe, None),
             Some(
                 "timer(101) != timer_off and timer(71) == timer_off and event_index(501) == 2 or timer(101) != timer_off and timer(71) == timer_off and event_index(501) == 3"
                     .to_string()
@@ -271,7 +271,7 @@ fn infers_end_of_note_shadow_draw_condition() {
         .unwrap();
 
     assert_eq!(
-            infer_boolean_predicate(&function, &probe, None),
+            infer_boolean_predicate(&lua, &function, &probe, None),
             Some(
                 "timer(143) == timer_off and number(106)-number(110)-number(111)-number(112)-number(113)-number(114) == 0"
                     .to_string()
@@ -434,7 +434,10 @@ fn infers_main_state_judge_as_beatoraja_number_ref() {
         .unwrap();
 
     assert_eq!(infer_main_state_number_ref(&value, &probe), Some(111));
-    assert_eq!(infer_boolean_predicate(&draw, &probe, None), Some("number(112) > 0".to_string()));
+    assert_eq!(
+        infer_boolean_predicate(&lua, &draw, &probe, None),
+        Some("number(112) > 0".to_string())
+    );
 }
 
 #[test]

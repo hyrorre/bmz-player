@@ -224,7 +224,7 @@ fn infer_value_field(
         insert_number(object, "ref", ref_id);
         true
     } else if path.contains(".text[")
-        && let Some(text) = infer_constant_text_at_load(function, main_state_probe)
+        && let Some(text) = infer_constant_text_at_load(lua, function, main_state_probe)
     {
         insert_expr(object, "constantText", text);
         true
@@ -360,7 +360,7 @@ fn infer_draw_field(
             .or_else(|| {
                 infer_select_score_available_draw_condition(lua, function, main_state_probe)
             })
-            .or_else(|| infer_boolean_predicate(function, main_state_probe, object_id))
+            .or_else(|| infer_boolean_predicate(lua, function, main_state_probe, object_id))
     };
 
     let field_path = format!("{path}.draw");

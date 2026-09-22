@@ -152,6 +152,13 @@ impl LuaSkinRuntime {
         match result {
             Ok(Ok(LuaRuntimeEvaluatedValue::Integer(value))) => Some(value as f64),
             Ok(Ok(LuaRuntimeEvaluatedValue::Number(value))) if value.is_finite() => Some(value),
+            Ok(Ok(LuaRuntimeEvaluatedValue::Number(value))) => {
+                self.log_callback_failure_once(
+                    callback_id,
+                    &format!("Lua value callback returned non-finite number ({value})"),
+                );
+                None
+            }
             Ok(Ok(value)) => {
                 self.log_callback_failure_once(
                     callback_id,

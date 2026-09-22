@@ -483,8 +483,16 @@ fn lua_skin_does_not_execute_mutating_act_during_conversion() {
             .unwrap();
 
     assert!(loaded.value["image"][0].get("act").is_none());
-    assert_eq!(loaded.value["destination"][0]["draw"], "number(0) >= 0");
-    assert_eq!(loaded.value["destination"][1]["draw"], "number(0) < 0");
+    let mut loaded = load_lua_skin(
+        &root.join("result.luaskin"),
+        SkinKind::Result,
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+    )
+    .unwrap();
+    let runtime = loaded.lua_runtime.as_mut().unwrap();
+    assert!(runtime.evaluate_draw(0, &TestLuaMainState::default()));
+    assert!(!runtime.evaluate_draw(1, &TestLuaMainState::default()));
 }
 
 #[test]
@@ -620,6 +628,6 @@ fn lua_skin_warns_when_timer_observe_callback_needs_runtime_lua() {
     );
     assert!(loaded.warnings.iter().any(|warning| {
             warning.message
-                == "timer_util.timer_observe_boolean callback for generated timer 9000 was fixed to its load-time value; runtime Lua state changes are unsupported"
+                == "timer_util.timer_observe_boolean callback for generated timer 9000 could not be inferred; timer remains inactive"
         }));
 }

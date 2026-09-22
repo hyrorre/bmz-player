@@ -294,6 +294,7 @@ pub(in crate::lua) fn infer_is_gauge_iidx_global_observe(
 }
 
 pub(in crate::lua) fn infer_boolean_predicate(
+    lua: &Lua,
     function: &Function,
     main_state_probe: &Arc<Mutex<MainStateProbe>>,
     object_id: Option<&str>,
@@ -347,35 +348,34 @@ pub(in crate::lua) fn infer_boolean_predicate(
         .or_else(|| infer_or_of_number_lt_zero(function, main_state_probe))
         .or_else(|| infer_two_number_compare_and(function, main_state_probe))
         .or_else(|| infer_number_eq_zero_with_constant_tail(function, main_state_probe))
-        .or_else(|| infer_constant_draw_at_load(function, main_state_probe))
+        .or_else(|| infer_constant_draw_at_load(lua, function, main_state_probe))
 }
 
-/// `skin_config.option` のみ等、ロード時に結果が決まる draw function を畳み込む。
+/// Fold only callbacks that cannot read globals or captured mutable state.
 pub(in crate::lua) fn infer_constant_draw_at_load(
+    lua: &Lua,
     function: &Function,
     main_state_probe: &Arc<Mutex<MainStateProbe>>,
 ) -> Option<String> {
-    main_state_probe.lock().ok()?.end_recording();
-    // A single successful call is not evidence of a constant: closures may
-    // count invocations or mutate module/upvalue state. Repeated disagreement
-    // keeps the function on the runtime fallback path.
-    let call = || match function.call::<Value>(()).ok()? {
-        Value::Boolean(value) => Some(value),
-        _ => None,
-    };
-    let first = call()?;
-    let second = call()?;
-    let third = call()?;
-    if first != second || second != third {
-        return None;
+    if !is_closed_lua_function(lua, function) {
+        return infer_config_or_panel_constant_draw(lua, function, false);
     }
+    main_state_probe.lock().ok()?.end_recording();
+    let first = match function.call::<Value>(()).ok()? {
+        Value::Boolean(value) => value,
+        _ => return None,
+    };
     if first { Some("number(0) >= 0".to_string()) } else { Some("number(0) < 0".to_string()) }
 }
 
 pub(in crate::lua) fn infer_constant_text_at_load(
+    lua: &Lua,
     function: &Function,
     main_state_probe: &Arc<Mutex<MainStateProbe>>,
 ) -> Option<String> {
+    if !is_closed_lua_function(lua, function) {
+        return None;
+    }
     main_state_probe.lock().ok()?.end_recording();
     match function.call::<Value>(()).ok()? {
         Value::String(value) => Some(value.to_string_lossy()),
@@ -390,7 +390,13 @@ pub(in crate::lua) fn infer_constant_text_ref_at_load(
     function: &Function,
     main_state_probe: &Arc<Mutex<MainStateProbe>>,
 ) -> Option<i32> {
-    let text = infer_constant_text_at_load(function, main_state_probe)?;
+    // This recognizer is deliberately separate from constant folding: a whole
+    // sentinel represents a dynamic text ref, never a constant string.
+    main_state_probe.lock().ok()?.end_recording();
+    let Value::String(text) = function.call::<Value>(()).ok()? else {
+        return None;
+    };
+    let text = text.to_string_lossy();
     let ref_id = text
         .strip_prefix(LUA_TEXT_REF_SENTINEL_PREFIX)?
         .strip_suffix(LUA_TEXT_REF_SENTINEL_SUFFIX)?

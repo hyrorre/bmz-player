@@ -606,7 +606,7 @@ fn wmii_fhd_play_lua_features_when_available() {
         if !path.is_file() {
             continue;
         }
-        let loaded = load_lua_skin_with_runtime_state(
+        let mut loaded = load_lua_skin_with_runtime_state(
             &path,
             &BTreeMap::new(),
             &BTreeMap::new(),
@@ -619,13 +619,22 @@ fn wmii_fhd_play_lua_features_when_available() {
         });
         let stages = destinations
             .filter(|destination| matches!(destination.id.as_str(), "extrastage" | "practice"))
-            .map(|destination| (destination.id.as_str(), destination.draw.as_str()))
+            .map(|destination| (destination.id.clone(), destination.draw.clone()))
             .collect::<Vec<_>>();
-        assert_eq!(
-            stages,
-            vec![("extrastage", "!option(290)"), ("practice", "number(0) < 0"),],
-            "stage predicates for {name}"
-        );
+        assert_eq!(stages.len(), 2);
+        for ((id, draw), (expected_id, expected, visible)) in stages
+            .iter()
+            .zip([("extrastage", "!option(290)", true), ("practice", "number(0) < 0", false)])
+        {
+            assert_eq!(id, expected_id);
+            assert_compiled_or_runtime_draw(
+                &mut loaded,
+                draw,
+                expected,
+                visible,
+                &TestLuaMainState::default(),
+            );
+        }
         assert_eq!(loaded.dependencies.option_values.get(&1080), Some(&false));
         let next_rank_draws = loaded
             .document
@@ -732,7 +741,7 @@ fn wmii_fhd_play_stage_draws_follow_scene_modes_when_available() {
                 ]),
                 ..LuaLoadRuntimeState::default()
             };
-            let loaded = load_lua_skin_with_runtime_state(
+            let mut loaded = load_lua_skin_with_runtime_state(
                 &path,
                 &BTreeMap::new(),
                 &BTreeMap::new(),
@@ -750,20 +759,23 @@ fn wmii_fhd_play_stage_draws_follow_scene_modes_when_available() {
                             "demoplay" | "extrastage" | "practice"
                         ) =>
                     {
-                        Some((destination.id.as_str(), destination.draw.as_str()))
+                        Some((destination.id.clone(), destination.draw.clone()))
                     }
                     _ => None,
                 })
                 .collect::<Vec<_>>();
-            assert_eq!(
-                stages,
-                vec![
-                    ("demoplay", expected[0]),
-                    ("extrastage", expected[1]),
-                    ("practice", expected[2]),
-                ],
-                "stage predicates for {name} in {mode}"
-            );
+            assert_eq!(stages.len(), 3);
+            let state = TestLuaMainState {
+                options: runtime_state.option_values.clone(),
+                ..Default::default()
+            };
+            for (((id, draw), expected_id), expected) in
+                stages.iter().zip(["demoplay", "extrastage", "practice"]).zip(expected)
+            {
+                assert_eq!(id, expected_id);
+                let visible = expected == "!option(290)" && !course;
+                assert_compiled_or_runtime_draw(&mut loaded, draw, expected, visible, &state);
+            }
             assert_eq!(
                 loaded.dependencies.option_values.get(&1080),
                 Some(&practice),

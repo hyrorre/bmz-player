@@ -77,7 +77,7 @@ fn load_constant_number_fallback_rejects_runtime_state() {
         lua.load("return function() return main_state.time() end").eval::<Function>().unwrap();
     let constant = lua.load("return function() return 42 end").eval::<Function>().unwrap();
 
-    assert!(infer_constant_draw_at_load(&draw, &probe).is_some());
+    assert!(infer_constant_draw_at_load(&lua, &draw, &probe).is_none());
     assert!(infer_constant_number_at_load(&lua, &value, &probe).is_none());
     assert!(infer_constant_number_at_load(&lua, &timer_value, &probe).is_none());
     assert_eq!(infer_constant_number_at_load(&lua, &constant, &probe).as_deref(), Some("42"));
