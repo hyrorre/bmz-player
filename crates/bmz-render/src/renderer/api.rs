@@ -418,6 +418,13 @@ impl Renderer {
     }
 
     pub fn render_scene_status(&mut self, scene: AppSceneSnapshot) -> Result<RenderSurfaceStatus> {
+        self.prepare_scene(scene);
+        self.render_last_plan()
+    }
+
+    /// Evaluate the scene exactly once before uploading assets needed by the
+    /// resulting plan. Call `render_last_plan` to submit the prepared frame.
+    pub fn prepare_scene(&mut self, scene: AppSceneSnapshot) {
         let entering_scene = self.last_scene.as_ref().is_none_or(|previous| {
             std::mem::discriminant(previous) != std::mem::discriminant(&scene)
         });
@@ -466,13 +473,8 @@ impl Renderer {
         self.last_scene = Some(scene);
         self.last_plan = Some(plan);
 
-        let status = self.render_last_plan()?;
-        self.last_frame_timings = Some(RenderFrameTimings {
-            plan_us,
-            commands,
-            ..self.last_frame_timings.unwrap_or_default()
-        });
-        Ok(status)
+        self.last_frame_timings =
+            Some(RenderFrameTimings { plan_us, commands, ..RenderFrameTimings::default() });
     }
 
     /// 次の描画フレームで重ねる egui の描画データを差し込む。

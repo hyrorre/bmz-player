@@ -27,13 +27,15 @@ impl WinitApp {
         let snapshot_start = Instant::now();
         let scene = self.scene_snapshot();
         let snapshot_us = snapshot_start.elapsed().as_micros();
+        let scene_kind = scene_kind(&scene);
+        let plan_start = Instant::now();
+        self.renderer.prepare_scene(scene);
+        let plan_us = plan_start.elapsed().as_micros();
         let video_start = Instant::now();
         let video_profile = self.update_current_skin_video_sources(
-            &scene,
             profiling_select || profiling_decide || profiling_play || profiling_result,
         );
         let video_us = video_start.elapsed().as_micros();
-        let scene_kind = scene_kind(&scene);
         self.update_window_title_for_scene(scene_kind);
         if let (Some(path), Some(exit_after_frames)) =
             (&self.smoke.smoke_screenshot_path, self.smoke.smoke_exit_after_frames)
@@ -42,8 +44,8 @@ impl WinitApp {
             self.renderer.request_screenshot(path.clone());
         }
         let render_start = Instant::now();
-        let render_status = self.renderer.render_scene_status(scene);
-        let render_us = render_start.elapsed().as_micros();
+        let render_status = self.renderer.render_last_plan();
+        let render_us = plan_us + render_start.elapsed().as_micros();
         let frame_timings = self.renderer.last_frame_timings();
         let surface_status = render_status.as_ref().ok().copied();
         self.frame.record_surface_status(Instant::now(), surface_status);

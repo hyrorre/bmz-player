@@ -3,34 +3,55 @@ use super::*;
 impl WinitApp {
     pub(super) fn update_current_skin_video_sources(
         &mut self,
-        scene: &AppSceneSnapshot,
         profiling: bool,
     ) -> SkinVideoFrameProfile {
         let mut profile = SkinVideoFrameProfile::default();
         let Some((kind, elapsed_us)) = self.current_skin_video_context() else {
             return profile;
         };
-        let needs_runtime_state = self
-            .skin
-            .skin_video_sources
-            .get(&kind)
-            .is_some_and(|sources| skin_video_sources_need_runtime_state(sources));
+        let needs_runtime_state = self.renderer.last_plan().is_none()
+            && self
+                .skin
+                .skin_video_sources
+                .get(&kind)
+                .is_some_and(|sources| skin_video_sources_need_runtime_state(sources));
         // 実行時 op 条件 (例: リザルトのランク別 BG) で実際に表示されるソースだけを
         // デコードする。実行時 op を持つソースが無い場合は state 構築自体を避ける。
-        let runtime_state = needs_runtime_state
-            .then(|| self.current_skin_video_draw_state_for_scene(kind, scene))
-            .flatten();
+        let runtime_state = if needs_runtime_state {
+            self.renderer
+                .last_scene()
+                .and_then(|scene| self.current_skin_video_draw_state_for_scene(kind, scene))
+        } else {
+            None
+        };
+        let planned_visibility = self.renderer.last_plan().and_then(|plan| {
+            self.skin.skin_video_sources.get(&kind).map(|sources| {
+                sources
+                    .iter()
+                    .map(|source| skin_video_texture_visible_in_plan(plan, source.texture))
+                    .collect::<Vec<_>>()
+            })
+        });
         let Some(sources) = self.skin.skin_video_sources.get_mut(&kind) else {
             return profile;
         };
-        for source in sources {
-            if source.failed || !source.active {
+        for (index, source) in sources.iter_mut().enumerate() {
+            if source.failed {
                 continue;
             }
-            profile.active_sources += 1;
-            if let Some(state) = runtime_state.as_ref()
-                && !skin_video_source_runtime_visible(source, state)
-            {
+            // Use the already evaluated plan as the authority, including
+            // songlist/imageset indirection and dynamic Lua draw/timer gates.
+            // Re-evaluating draw here would mutate stateful closures twice.
+            let visible = planned_visibility.as_ref().map_or_else(
+                || {
+                    source.active
+                        && runtime_state
+                            .as_ref()
+                            .is_none_or(|state| skin_video_source_runtime_visible(source, state))
+                },
+                |visible| visible[index],
+            );
+            if !visible {
                 // 現在のシーン状態では非表示。デコード中なら止めて開放する。
                 if source.decoder.is_some() {
                     source.decoder = None;
@@ -38,6 +59,7 @@ impl WinitApp {
                 }
                 continue;
             }
+            profile.active_sources += 1;
             profile.visible_sources += 1;
             if source.decoder.is_none() {
                 match VideoBgaDecoder::open_following_playback_time(&source.path) {

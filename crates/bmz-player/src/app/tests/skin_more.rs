@@ -295,6 +295,50 @@ fn play_skin_defs_load_from_configured_path_without_renderer_install() {
 }
 
 #[test]
+fn skin_video_visibility_uses_prepared_plan_without_repeating_lua() {
+    use bmz_render::skin::{SkinContext, SkinDocumentTexture, SkinLuaDrawRuntime};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    #[derive(Debug, Default)]
+    struct ToggleDraw(AtomicUsize);
+    impl SkinLuaDrawRuntime for ToggleDraw {
+        fn evaluate_draw(
+            &self,
+            _: usize,
+            _: &bmz_render::skin::SkinDrawState,
+            _: &[i32],
+            _: &BTreeMap<i32, String>,
+        ) -> bool {
+            self.0.fetch_add(1, Ordering::SeqCst) % 2 == 0
+        }
+    }
+    let document: SkinDocument = serde_json::from_str(r#"{
+        "type":5, "w":100, "h":100,
+        "image":[{"id":"unused","src":"unused","w":10,"h":10}, {"id":"frame","src":"movie","w":10,"h":10}],
+        "imageset":[{"id":"set","images":["frame"]}],
+        "destination":[{"id":"set","draw":"bmz:lua_draw_callback:0","dst":[{"x":0,"y":0,"w":10,"h":10}]}]
+    }"#).unwrap();
+    let sources = [("movie", 800), ("unused", 801)].map(|(id, texture)| SkinDocumentTexture {
+        source_id: id.into(),
+        texture: SkinTextureId(texture),
+        source_size: SkinImageSize { width: 100.0, height: 100.0 },
+    });
+    let mut context =
+        SkinContext::from_manifest_and_document(default_skin_manifest(), document, sources);
+    let draw = Arc::new(ToggleDraw::default());
+    context.set_lua_draw_runtime(Some(draw.clone()));
+    let mut renderer = Renderer::default();
+    renderer.set_select_skin_context(context);
+    for (frame, expected) in [true, false, true].into_iter().enumerate() {
+        renderer.prepare_scene(AppSceneSnapshot::Select(Default::default()));
+        let plan = renderer.last_plan().unwrap();
+        assert_eq!(skin_video_texture_visible_in_plan(plan, SkinTextureId(800)), expected);
+        assert!(!skin_video_texture_visible_in_plan(plan, SkinTextureId(801)));
+        renderer.render_last_plan().unwrap();
+        assert_eq!(draw.0.load(Ordering::SeqCst), frame + 1);
+    }
+}
+
+#[test]
 fn skin_video_source_respects_static_property_ops() {
     let mut document: SkinDocument = serde_json::from_str(
             r#"
