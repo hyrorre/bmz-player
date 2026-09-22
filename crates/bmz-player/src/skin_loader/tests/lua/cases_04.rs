@@ -121,11 +121,25 @@ fn select_lua_skins_decode_with_explicit_library_root_when_available() {
                     .iter()
                     .any(|image| image.id == "default_modechange_modeset")
             );
+            let frame_texture = decoded
+                .sources
+                .iter()
+                .find(|source| source.source_id == "src-default_modechange_frame")
+                .map(|source| source.texture)
+                .expect("bundled filter must decode a frame image source");
+            let mode_parts_texture = decoded
+                .sources
+                .iter()
+                .find(|source| source.source_id == "src-default_modechange_parts")
+                .map(|source| source.texture)
+                .expect("bundled filter must decode its hover image source");
             let expected = if relative.starts_with("mz-select/") {
                 (1305.0, 990.0, 150.0, 50.0)
             } else {
                 (977.0, 1034.0, 135.0, 35.0)
             };
+            let expected_mode_font_size =
+                if relative.starts_with("mz-select/") { 26.0 } else { 25.0 };
             let textures = decoded.sources.iter().map(|source| SkinDocumentTexture {
                 source_id: source.source_id.clone(),
                 texture: source.texture,
@@ -145,11 +159,59 @@ fn select_lua_skins_decode_with_explicit_library_root_when_available() {
                         mouse_position: Some((x, y)),
                         ..SelectSnapshot::default()
                     };
+                    let items = context.select_document_items(&snapshot);
+                    let mode_style = items.iter().find_map(|item| match item {
+                        SkinRenderItem::Text { text, style, .. } if text == mode => Some(style),
+                        _ => None,
+                    });
+                    assert!(mode_style.is_some(), "{label} must render {mode}");
+                    let mode_style = mode_style.expect("mode text style must be available");
                     assert!(
-                        context.select_document_items(&snapshot).iter().any(
-                            |item| matches!(item, SkinRenderItem::Text { text, .. } if text == mode)
-                        ),
-                        "{label} must render {mode}"
+                        (mode_style.size - expected_mode_font_size / 1080.0).abs() < 0.0001,
+                        "{label} must use the matched mode font size for {mode}: got {}",
+                        mode_style.size * 1080.0
+                    );
+                    let mode_rect = |item: &&SkinRenderItem| {
+                        matches!(
+                            item,
+                            SkinRenderItem::Image { texture, rect, .. }
+                                if *texture == frame_texture
+                                    && (rect.x - expected.0 / 1920.0).abs() < 0.0001
+                                    && (rect.width - expected.2 / 1920.0).abs() < 0.0001
+                        )
+                    };
+                    assert_eq!(
+                        items.iter().filter(mode_rect).count(),
+                        1,
+                        "{label} must render the filter frame"
+                    );
+                    let outside = context.select_document_items(&SelectSnapshot {
+                        select_mode: mode.to_string(),
+                        mouse_position: Some((0.0, 0.0)),
+                        ..SelectSnapshot::default()
+                    });
+                    assert_eq!(
+                        outside.iter().filter(mode_rect).count(),
+                        1,
+                        "{label} must keep the filter frame outside hover"
+                    );
+                    let hover_image_count = |render_items: &[SkinRenderItem]| {
+                        render_items
+                            .iter()
+                            .filter(|item| {
+                                matches!(
+                                    item,
+                                    SkinRenderItem::Image { texture, rect, .. }
+                                        if *texture == mode_parts_texture
+                                            && (rect.x - expected.0 / 1920.0).abs() < 0.0001
+                                            && (rect.width - expected.2 / 1920.0).abs() < 0.0001
+                                )
+                            })
+                            .count()
+                    };
+                    assert!(
+                        hover_image_count(&items) > hover_image_count(&outside),
+                        "{label} must add the filter hover image while hovered"
                     );
                     let hit = context
                         .select_click_hit(&snapshot, x, y)

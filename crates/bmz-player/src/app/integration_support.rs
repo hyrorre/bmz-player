@@ -72,7 +72,8 @@ pub(super) fn digit_to_replay_slot(physical_key: PhysicalKey) -> Option<u8> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum PrimaryIrPageIdentity {
     Chart {
-        sha256: String,
+        md5: Option<String>,
+        sha256: Option<String>,
     },
     Course {
         canonical_hash: Option<String>,
@@ -86,12 +87,28 @@ pub(super) fn primary_ir_page_url(
     identity: &PrimaryIrPageIdentity,
 ) -> Result<String> {
     match identity {
-        PrimaryIrPageIdentity::Chart { sha256 } => {
+        PrimaryIrPageIdentity::Chart { md5, sha256 } => {
             if crate::ir::bms_ir::is_bms_ir_config(provider) {
-                crate::ir::bms_ir::chart_page_url(&provider.base_url, sha256)
+                if let Some(md5) = md5.as_deref().filter(|value| !value.trim().is_empty()) {
+                    crate::ir::bms_ir::chart_page_url(&provider.base_url, md5)
+                } else {
+                    let Some(sha256) = sha256.as_deref().filter(|value| !value.trim().is_empty())
+                    else {
+                        anyhow::bail!("chart hash is unavailable for the primary IR provider");
+                    };
+                    crate::ir::bms_ir::chart_search_page_url(&provider.base_url, sha256)
+                }
             } else if crate::ir::rian_ir::is_rian_ir_config(provider) {
+                let Some(sha256) = sha256.as_deref().filter(|value| !value.trim().is_empty())
+                else {
+                    anyhow::bail!("chart SHA-256 is unavailable for the primary IR provider");
+                };
                 crate::ir::rian_ir::chart_page_url(&provider.base_url, sha256)
             } else {
+                let Some(sha256) = sha256.as_deref().filter(|value| !value.trim().is_empty())
+                else {
+                    anyhow::bail!("chart SHA-256 is unavailable for the primary IR provider");
+                };
                 Ok(format!("{}/charts/{sha256}", provider.base_url.trim_end_matches('/')))
             }
         }

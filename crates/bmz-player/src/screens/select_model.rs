@@ -227,6 +227,13 @@ impl SelectChartRow {
     pub fn score_sha256(&self) -> Option<[u8; 32]> {
         self.chart.as_ref().map(|chart| chart.sha256).or(self.entry_sha256)
     }
+
+    pub fn score_md5(&self) -> Option<[u8; 16]> {
+        self.chart.as_ref().map(|chart| chart.md5).or_else(|| {
+            let md5 = self.download_metadata.md5.trim();
+            (!md5.is_empty()).then(|| crate::storage::common::hex_to_hash::<16>(md5).ok()).flatten()
+        })
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]

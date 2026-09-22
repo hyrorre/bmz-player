@@ -302,12 +302,16 @@ impl WinitApp {
     pub(super) fn open_primary_ir_for_selected(&mut self) {
         let identity = match self.select.select_items.get(self.select.selected_index) {
             Some(SelectItem::Chart(row)) => {
-                let Some(sha256) = row.score_sha256() else {
+                let md5 = row.score_md5().map(|md5| hash_to_hex(&md5));
+                let sha256 = row.score_sha256().map(|sha256| hash_to_hex(&sha256));
+                let bms_ir_primary = primary_ir_provider_for_profile(&self.boot.profile_config)
+                    .is_some_and(crate::ir::bms_ir::is_bms_ir_config);
+                if (bms_ir_primary && md5.is_none()) || (!bms_ir_primary && sha256.is_none()) {
                     let text = Localizer::new(self.boot.profile_config.ui.locale());
                     self.show_left_overlay_toast(text.text("toast-ir-chart-hash-missing"));
                     return;
-                };
-                PrimaryIrPageIdentity::Chart { sha256: hash_to_hex(&sha256) }
+                }
+                PrimaryIrPageIdentity::Chart { md5, sha256 }
             }
             Some(SelectItem::Course(row)) => PrimaryIrPageIdentity::Course {
                 canonical_hash: row.course_hash.clone(),
@@ -822,6 +826,22 @@ impl WinitApp {
                     args.set("failed", failed_count as i64);
                     self.show_left_overlay_toast(
                         text.format("toast-course-download-complete-registering", &args),
+                    );
+                }
+                let mut config_changed = false;
+                for root in &roots {
+                    config_changed |= crate::songs_cmd::ensure_download_song_root(
+                        &mut self.boot.app_config.songs.roots,
+                        &root.to_string_lossy(),
+                    );
+                }
+                if config_changed
+                    && let Err(error) =
+                        save_app_config(&self.boot.app_paths.config_toml, &self.boot.app_config)
+                {
+                    tracing::error!(%error, "failed to save downloaded song roots");
+                    self.show_left_overlay_toast(
+                        text.text("toast-chart-download-root-save-failed"),
                     );
                 }
                 let scan_roots = roots

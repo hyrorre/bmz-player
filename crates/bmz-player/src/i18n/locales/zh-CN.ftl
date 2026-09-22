@@ -701,6 +701,7 @@ toast-chart-download-in-progress = 正在获取其他谱面
 toast-chart-download-started = 正在从 { $source } 获取谱面
 toast-chart-download-complete-registering = 已从 { $source } 获取完成，正在注册谱面
 toast-chart-download-failed = 获取谱面失败。详情请查看日志
+toast-chart-download-root-save-failed = 无法保存下载文件夹设置。重启后需要重新添加。详情请查看日志
 toast-chart-download-worker-ended = 谱面获取进程意外结束
 toast-course-download-started = 正在获取课程中未持有的谱面（{ $count } 个）
 toast-course-download-complete-registering = 谱面获取完成（成功 { $completed } / 失败 { $failed }），正在注册

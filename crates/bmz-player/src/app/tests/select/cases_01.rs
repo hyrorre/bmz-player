@@ -495,6 +495,23 @@ fn primary_ir_page_url_uses_provider_specific_course_hash() {
 }
 
 #[test]
+fn primary_ir_page_url_uses_bms_ir_song_md5_route() {
+    let identity =
+        PrimaryIrPageIdentity::Chart { md5: Some("cd".repeat(16)), sha256: Some("ab".repeat(32)) };
+    let mut bms_ir = crate::config::profile_config::IrProviderConfig::bms_ir();
+    bms_ir.base_url = crate::ir::bms_ir::BMS_IR_DEFAULT_BASE_URL.to_string();
+
+    assert_eq!(
+        primary_ir_page_url(&bms_ir, &identity).unwrap(),
+        format!(
+            "{}/new/song?songmd5={}",
+            crate::ir::bms_ir::BMS_IR_DEFAULT_BASE_URL,
+            "cd".repeat(16)
+        ),
+    );
+}
+
+#[test]
 fn deprecated_select_enter_and_option_bga_bindings_are_ignored() {
     let mut input = crate::config::play_input::default_profile_input();
     for action in [InputActionConfig::SelectEnter, InputActionConfig::SelectOptionBga] {

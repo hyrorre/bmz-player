@@ -19,6 +19,63 @@ use crate::storage::migration::{
 use crate::storage::score_db::{ScoreDatabase, ScoreRecord};
 
 #[test]
+fn downloaded_song_roots_restore_same_folder_and_search_after_config_reload() {
+    use crate::config::app_config::AppConfig;
+    use crate::songs_cmd::ensure_download_song_root;
+
+    let (mut library_db, score_db) = open_in_memory_dbs();
+    let mut config = AppConfig::default();
+    for source in ["ipfs", "http"] {
+        let root = format!("/data/songs/{source}");
+        let folder = format!("{root}/downloaded");
+        let imported = chart(&format!("Downloaded {source}"));
+        library_db
+            .upsert_chart_import(&record_for_chart(&format!("{folder}/chart.bms"), &imported))
+            .unwrap();
+        let load_folder = |roots: &[String]| {
+            load_select_items_in_folder_for_rule_mode_with_filters(
+                &library_db,
+                &score_db,
+                &folder,
+                LnPolicySetting::AutoLn,
+                RuleMode::Beatoraja,
+                &[],
+                Some(roots),
+                None,
+            )
+            .unwrap()
+        };
+        assert!(load_folder(&[]).is_empty());
+        assert!(ensure_download_song_root(&mut config.songs.roots, &root));
+        // 再起動時と同様に設定を読み直しても表示対象に残る。
+        let reloaded: AppConfig = toml::from_str(&toml::to_string(&config).unwrap()).unwrap();
+        let roots: Vec<_> = reloaded
+            .songs
+            .roots
+            .iter()
+            .filter(|root| root.enabled)
+            .map(|root| root.path.clone())
+            .collect();
+        let items = load_folder(&roots);
+        assert_eq!(items.len(), 1);
+        assert!(matches!(&items[0], SelectItem::Chart(row)
+            if row.display_title() == format!("Downloaded {source}")));
+        let search = load_select_items_for_search_for_rule_mode_with_filters(
+            &library_db,
+            &score_db,
+            &format!("Downloaded {source}"),
+            LnPolicySetting::AutoLn,
+            RuleMode::Beatoraja,
+            &[],
+            Some(&roots),
+            None,
+        )
+        .unwrap();
+        assert_eq!(search.len(), 1);
+    }
+}
+
+#[test]
 fn search_keeps_active_duplicate_before_deduplication() {
     let (mut library_db, score_db) = open_in_memory_dbs();
     let duplicate = chart("Formula");
