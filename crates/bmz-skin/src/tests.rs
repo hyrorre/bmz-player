@@ -36,6 +36,8 @@ struct TestLuaMainState {
     texts: BTreeMap<i32, String>,
     timers: BTreeMap<i32, i32>,
     offsets: BTreeMap<i32, LuaSkinOffsetValue>,
+    session_counts: (i64, i64),
+    score_date: i64,
 }
 
 impl LuaMainState for TestLuaMainState {
@@ -69,6 +71,16 @@ impl LuaMainState for TestLuaMainState {
 
     fn time_us(&self) -> i32 {
         0
+    }
+
+    fn total_play_counts_in_session(&self) -> i64 {
+        self.session_counts.0
+    }
+    fn total_play_notes_in_session(&self) -> i64 {
+        self.session_counts.1
+    }
+    fn score_date_sec_time(&self) -> i64 {
+        self.score_date
     }
 
     fn offset(&self, id: i32) -> LuaSkinOffsetValue {

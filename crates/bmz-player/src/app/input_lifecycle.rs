@@ -29,11 +29,15 @@ impl WinitApp {
         }
     }
     pub(super) fn refresh_player_stats_snapshot(&mut self) {
+        let session_play_count = self.select.player_stats.session_play_count;
+        let session_play_notes = self.select.player_stats.session_play_notes;
         self.select.player_stats = player_stats_snapshot(
             &self.boot.score_db,
             &self.boot.library_db,
             self.boot.profile_config.statistics.day_start_hour,
         );
+        self.select.player_stats.session_play_count = session_play_count;
+        self.select.player_stats.session_play_notes = session_play_notes;
     }
 
     pub(super) fn request_redraw(&self) {

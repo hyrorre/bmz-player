@@ -860,6 +860,18 @@ MILLIONDOLLAR / m-select の既存オブジェクトID特例と仮想ファイ�
 stage title は beatoraja 互換 text `150..159` を使う。WMII RESULT 用
 `skin/WMII_FHD/result/courseData.json` の read-only 仮想ファイルも互換性のため併存する。
 
+## LITONE9 の Lua 拡張API
+
+選曲の `main_state.total_play_counts_in_session()` / `total_play_notes_in_session()` は、
+今回のBMZ起動中にローカル保存したプレイ回数と処理済みノーツ数を返す。
+コースは各ステージを集計し、Autoplay・Replay・Practice・保存無効のプレイは除外する。
+日別・累計統計とは独立し、アプリ終了でリセットする。
+
+`main_state.score_date_sec_time()` は選択中の譜面またはコースのベストスコアが持つ
+`played_at`（Unix秒）を返し、未プレイ・フォルダでは0を返す。
+IR順位の日時や最新履歴とは区別する。これら3 APIはfunction callback内で使用し、
+フレームのsnapshotを参照する。初回Luaロード中はまだsnapshotがないため0となる。
+
 ## Profile Slots
 
 profile の `[skin]` は key mode ごとに play skin path と設定を持つ。

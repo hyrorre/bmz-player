@@ -467,6 +467,15 @@ impl WinitApp {
                 &self.boot.profile_config.replay.slot_rules,
             ),
             player_stats: self.select.player_stats.clone(),
+            selected_score_date_sec: match selected {
+                Some(SelectItem::Chart(row)) => {
+                    row.best_score.as_ref().map_or(0, |score| score.played_at)
+                }
+                Some(SelectItem::Course(row)) => {
+                    row.best_score.as_ref().map_or(0, |score| score.played_at)
+                }
+                _ => 0,
+            },
         }
     }
 

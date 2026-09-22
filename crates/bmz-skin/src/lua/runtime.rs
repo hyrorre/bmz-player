@@ -243,6 +243,9 @@ impl LuaSkinRuntime {
                     9 => Value::Integer(i64::from(state.time_us())),
                     10 => Value::Integer(state.judge(id()?)),
                     11 => create_main_state_offset_table(lua, state.offset(id()?))?,
+                    12 => Value::Integer(state.total_play_counts_in_session()),
+                    13 => Value::Integer(state.total_play_notes_in_session()),
+                    14 => Value::Integer(state.score_date_sec_time()),
                     _ => return Err(mlua::Error::runtime("unknown main_state operation")),
                 })
             })?;
@@ -297,6 +300,9 @@ pub(super) fn install_runtime_main_state_dispatch(lua: &Lua) -> mlua::Result<()>
         "time",
         "judge",
         "offset",
+        "total_play_counts_in_session",
+        "total_play_notes_in_session",
+        "score_date_sec_time",
     ]
     .into_iter()
     .enumerate()

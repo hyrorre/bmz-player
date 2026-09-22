@@ -95,6 +95,18 @@ impl LuaMainState for RenderLuaMainState<'_> {
         self.state.elapsed_ms.saturating_mul(1_000)
     }
 
+    fn total_play_counts_in_session(&self) -> i64 {
+        self.state.player_stats.session_play_count.min(i64::MAX as u64) as i64
+    }
+
+    fn total_play_notes_in_session(&self) -> i64 {
+        self.state.player_stats.session_play_notes.min(i64::MAX as u64) as i64
+    }
+
+    fn score_date_sec_time(&self) -> i64 {
+        self.state.score_date_sec
+    }
+
     fn offset(&self, id: i32) -> bmz_skin::LuaSkinOffsetValue {
         let value = self.state.skin_offsets.get(id).unwrap_or_default();
         bmz_skin::LuaSkinOffsetValue {

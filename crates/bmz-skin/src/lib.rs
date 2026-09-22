@@ -170,6 +170,17 @@ pub trait LuaMainState {
     fn gauge_type(&self) -> i32;
     fn time_us(&self) -> i32;
 
+    fn total_play_counts_in_session(&self) -> i64 {
+        0
+    }
+    fn total_play_notes_in_session(&self) -> i64 {
+        0
+    }
+    /// Unix seconds of the selected score, or zero if unavailable.
+    fn score_date_sec_time(&self) -> i64 {
+        0
+    }
+
     fn judge(&self, index: i32) -> i64 {
         main_state_judge_ref(index).map_or(0, |id| self.number(id))
     }

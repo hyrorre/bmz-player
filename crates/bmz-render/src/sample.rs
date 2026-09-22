@@ -52,6 +52,7 @@ pub fn sample_select_scene() -> AppSceneSnapshot {
         bar_scroll_direction: 0,
         bar_scroll_progress: 0.0,
         selected_chart_id: Some(1),
+        selected_score_date_sec: 0,
         selected_replay_slot: Some(0),
         selected_title: "Sample BMS".to_string(),
         hispeed: 2.0,

@@ -295,6 +295,31 @@ fn play_skin_defs_load_from_configured_path_without_renderer_install() {
 }
 
 #[test]
+fn skin_session_statistics_count_only_local_saved_plays() {
+    let mut stats = PlayerStatsSnapshot { play_count: 100, ..Default::default() };
+    let mut result = bmz_gameplay::result::PlayResult {
+        chart_sha256: [0; 32],
+        clear_type: bmz_core::clear::ClearType::Failed,
+        gauge_type: bmz_core::clear::GaugeType::Normal,
+        gauge_value: 0.0,
+        total_notes: 1000,
+        score: bmz_gameplay::score::ScoreState { past_notes: 150, ..Default::default() },
+        autoplay: false,
+    };
+    record_skin_session_play(&mut stats, &result, true, false);
+    record_skin_session_play(&mut stats, &result, false, false); // practice / unsaved
+    record_skin_session_play(&mut stats, &result, true, true); // replay
+    result.autoplay = true;
+    record_skin_session_play(&mut stats, &result, true, false);
+    assert_eq!((stats.session_play_count, stats.session_play_notes), (1, 150));
+    assert_eq!(stats.play_count, 100);
+    result.autoplay = false;
+    result.score.past_notes = 1000;
+    record_skin_session_play(&mut stats, &result, true, false);
+    assert_eq!((stats.session_play_count, stats.session_play_notes), (2, 1150));
+}
+
+#[test]
 fn skin_video_visibility_uses_prepared_plan_without_repeating_lua() {
     use bmz_render::skin::{SkinContext, SkinDocumentTexture, SkinLuaDrawRuntime};
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -308,7 +333,7 @@ fn skin_video_visibility_uses_prepared_plan_without_repeating_lua() {
             _: &[i32],
             _: &BTreeMap<i32, String>,
         ) -> bool {
-            self.0.fetch_add(1, Ordering::SeqCst) % 2 == 0
+            self.0.fetch_add(1, Ordering::SeqCst).is_multiple_of(2)
         }
     }
     let document: SkinDocument = serde_json::from_str(r#"{

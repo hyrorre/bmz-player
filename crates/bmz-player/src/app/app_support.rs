@@ -280,6 +280,8 @@ pub(super) fn player_stats_snapshot(
 
 pub(super) fn player_stats_snapshot_from_stats(stats: &PlayerStats) -> PlayerStatsSnapshot {
     PlayerStatsSnapshot {
+        session_play_count: 0,
+        session_play_notes: 0,
         play_count: stats.play_count,
         clear_count: stats.clear_count,
         playtime_seconds: stats.playtime_seconds,
@@ -316,6 +318,19 @@ pub(super) fn daily_player_stats_snapshot_from_stats(
         clear_update_count: stats.clear_update_count,
         miss_count_update_count: stats.miss_count_update_count,
         recent_titles: Default::default(),
+    }
+}
+
+pub(super) fn record_skin_session_play(
+    stats: &mut PlayerStatsSnapshot,
+    result: &bmz_gameplay::result::PlayResult,
+    saved: bool,
+    replay: bool,
+) {
+    if saved && !replay && !result.autoplay {
+        stats.session_play_count = stats.session_play_count.saturating_add(1);
+        stats.session_play_notes =
+            stats.session_play_notes.saturating_add(u64::from(result.score.past_notes));
     }
 }
 

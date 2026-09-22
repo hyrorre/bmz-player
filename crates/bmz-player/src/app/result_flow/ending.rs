@@ -169,6 +169,12 @@ impl WinitApp {
             FinishedPlayAction::ShowResult => {}
         }
         self.select.score_refresh.mark_score_data_changed(finished.score_data_changed);
+        record_skin_session_play(
+            &mut self.select.player_stats,
+            &finished.result,
+            finished.score_data_changed,
+            finished.replay_playback,
+        );
         if let Some(chart_id) = self.play.last_started_chart_id {
             self.capture_play_media_cache_from_running(chart_id, &mut started.running);
         }

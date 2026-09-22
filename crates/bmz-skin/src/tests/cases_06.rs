@@ -653,6 +653,56 @@ fn lua_scene_state_syncs_existing_module_practice_boolean() {
 }
 
 #[test]
+fn session_and_score_date_apis_track_runtime_state() {
+    for mode in [LuaSkinRuntimeMode::Auto, LuaSkinRuntimeMode::Compat] {
+        let mut loaded = load_runtime_value_fixture(
+            "bmz-session-state",
+            mode,
+            r#"
+            local number_value = function() return main_state.total_play_counts_in_session() * 1000000 + main_state.total_play_notes_in_session() end
+            local text_value = function() return os.date("%Y-%m-%d", main_state.score_date_sec_time()) end
+        "#,
+        );
+        let number_id =
+            loaded.document.value[0].value_expr.rsplit(':').next().unwrap().parse().unwrap();
+        let text_id =
+            loaded.document.text[0].value_expr.rsplit(':').next().unwrap().parse().unwrap();
+        let runtime = loaded.lua_runtime.as_mut().unwrap();
+        for (counts, date, expected) in
+            [((0, 0), 0, "1970-01-01"), ((3, 2345), 2208988800, "2040-01-01")]
+        {
+            let state =
+                TestLuaMainState { session_counts: counts, score_date: date, ..Default::default() };
+            assert_eq!(
+                runtime.evaluate_number(number_id, &state),
+                Some((counts.0 * 1000000 + counts.1) as f64)
+            );
+            assert_eq!(runtime.evaluate_text(text_id, &state).as_deref(), Some(expected));
+        }
+        assert_eq!(runtime.failure_log_count(), 0);
+    }
+    let mut loaded = load_runtime_draw_fixture(
+        "bmz-score-date-draw",
+        r#"
+        local draw = function() return main_state.option(5) and main_state.score_date_sec_time() ~= 0 end
+    "#,
+    );
+    let id = only_destination_draw(&loaded)
+        .strip_prefix("bmz:lua_draw_callback:")
+        .unwrap()
+        .parse()
+        .unwrap();
+    for (date, expected) in [(0, false), (1700000000, true), (0, false)] {
+        let state = TestLuaMainState {
+            options: BTreeMap::from([(5, true)]),
+            score_date: date,
+            ..Default::default()
+        };
+        assert_eq!(loaded.lua_runtime.as_mut().unwrap().evaluate_draw(id, &state), expected);
+    }
+}
+
+#[test]
 fn captured_main_state_accessors_follow_each_runtime_state() {
     for mode in [LuaSkinRuntimeMode::Auto, LuaSkinRuntimeMode::Compat] {
         let mut loaded = load_runtime_value_fixture(

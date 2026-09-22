@@ -3,6 +3,7 @@ use super::*;
 #[derive(Debug, Clone)]
 pub(super) struct MainStateProbe {
     pub(super) mode: MainStateProbeMode,
+    pub(super) inferring: bool,
     pub(super) number_calls: Vec<i32>,
     pub(super) number_values: BTreeMap<i32, i32>,
     pub(super) option_calls: Vec<i32>,
@@ -48,6 +49,7 @@ impl Default for MainStateProbe {
     fn default() -> Self {
         Self {
             mode: MainStateProbeMode::default(),
+            inferring: false,
             number_calls: Vec::new(),
             number_values: BTreeMap::new(),
             option_calls: Vec::new(),

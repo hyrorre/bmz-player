@@ -1,6 +1,26 @@
 use super::*;
 
 #[test]
+fn render_lua_main_state_reads_session_totals_and_selected_score_date() {
+    let state = SkinDrawState {
+        player_stats: bmz_render::scene::PlayerStatsSnapshot {
+            session_play_count: 2,
+            session_play_notes: 1234,
+            play_count: 999,
+            ..Default::default()
+        },
+        score_date_sec: 2_208_988_800,
+        ..Default::default()
+    };
+    let text_values = BTreeMap::new();
+    let provider =
+        RenderLuaMainState { state: &state, enabled_options: &[], text_values: &text_values };
+    assert_eq!(provider.total_play_counts_in_session(), 2);
+    assert_eq!(provider.total_play_notes_in_session(), 1234);
+    assert_eq!(provider.score_date_sec_time(), 2_208_988_800);
+}
+
+#[test]
 fn render_lua_main_state_reads_current_frame_skin_offset() {
     let mut state = SkinDrawState::default();
     state

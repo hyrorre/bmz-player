@@ -145,6 +145,7 @@ pub struct SelectSnapshot {
     /// beatoraja IndexType autosave_replay1..4 (321..324) image row indices.
     pub replay_slot_rule_indices: [i64; 4],
     pub player_stats: PlayerStatsSnapshot,
+    pub selected_score_date_sec: i64,
 }
 
 /// 選曲カーソル譜面に対する IR ライバル (最上位 1 名) のベストスコア。
@@ -260,6 +261,7 @@ impl Default for SelectSnapshot {
             rival_name: String::new(),
             replay_slot_rule_indices: [0; 4],
             player_stats: PlayerStatsSnapshot::default(),
+            selected_score_date_sec: 0,
         }
     }
 }

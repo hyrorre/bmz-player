@@ -244,6 +244,8 @@ fn skin_state_number_maps_player_statistics_refs() {
         select_play_count: 42,
         select_clear_count: 31,
         player_stats: PlayerStatsSnapshot {
+            session_play_count: 0,
+            session_play_notes: 0,
             play_count: 10,
             clear_count: 7,
             playtime_seconds: 3_661,

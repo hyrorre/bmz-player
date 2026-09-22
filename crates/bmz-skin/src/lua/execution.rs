@@ -140,6 +140,7 @@ pub(super) fn execute_lua_skin(
             main_state_probe.lock().map_err(|_| anyhow!("main_state probe lock poisoned"))?;
         let actions = probe.take_audio_actions();
         probe.capture_audio_actions = false;
+        probe.inferring = true;
         actions
     };
     instruction_budget.begin_inference();

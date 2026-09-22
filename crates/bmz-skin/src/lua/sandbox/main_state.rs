@@ -20,6 +20,27 @@ pub(super) fn create_main_state_stub(
 ) -> mlua::Result<Value> {
     let table = lua.create_table()?;
     table.set("timer_off_value", i32::MIN)?;
+    for field in
+        ["total_play_counts_in_session", "total_play_notes_in_session", "score_date_sec_time"]
+    {
+        let probe = probe.clone();
+        table.set(
+            field,
+            lua.create_function(move |_, ()| {
+                let probe = probe
+                    .lock()
+                    .map_err(|_| mlua::Error::runtime("main_state probe lock poisoned"))?;
+                if probe.inferring {
+                    return Err(mlua::Error::runtime(
+                        "session/score state requires runtime evaluation",
+                    ));
+                }
+                // No scene snapshot exists during initial Lua execution.
+                mark_load_dependency_opaque(probe.load_dependencies.as_ref());
+                Ok(0_i64)
+            })?,
+        )?;
+    }
     let probe_for_number = probe.clone();
     table.set(
         "number",

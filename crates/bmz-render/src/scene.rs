@@ -41,6 +41,9 @@ pub struct DailyPlayerStatsSnapshot {
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct PlayerStatsSnapshot {
+    /// Current process only: locally saved plays, excluding replay/autoplay.
+    pub session_play_count: u64,
+    pub session_play_notes: u64,
     pub play_count: u64,
     pub clear_count: u64,
     pub playtime_seconds: u64,
