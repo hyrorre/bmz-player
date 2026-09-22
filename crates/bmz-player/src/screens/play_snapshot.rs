@@ -55,7 +55,7 @@ pub use build::{
 };
 pub use cache::PlayRenderSnapshotCache;
 pub use display::apply_fast_slow_display_filter;
-pub(crate) use scroll::current_scroll_multiplier;
+pub(crate) use scroll::{current_scroll_multiplier, scroll_multiplier_at_tick};
 pub use visuals::{
     refresh_pending_play_input_visuals, refresh_play_skin_visuals,
     refresh_play_skin_visuals_with_input_elapsed, skin_visual_time,

@@ -767,23 +767,9 @@ pub(super) fn hsfix_base_bpm_for_chart(
 ) -> f64 {
     match hs_fix {
         HsFixOption::Off | HsFixOption::StartBpm => chart.metadata.initial_bpm,
-        HsFixOption::MinBpm => chart
-            .timing_events
-            .iter()
-            .filter_map(|event| match event.kind {
-                TimingEventKind::BpmChange { bpm } => Some(bpm),
-                TimingEventKind::Stop { .. } => None,
-            })
-            .fold(chart.metadata.initial_bpm, f64::min),
-        HsFixOption::MaxBpm => chart
-            .timing_events
-            .iter()
-            .filter_map(|event| match event.kind {
-                TimingEventKind::BpmChange { bpm } => Some(bpm),
-                TimingEventKind::Stop { .. } => None,
-            })
-            .fold(chart.metadata.initial_bpm, f64::max),
-        HsFixOption::MainBpm => main_bpm_for_chart(chart, timing_map),
+        HsFixOption::MinBpm => min_scroll_adjusted_bpm_for_chart(chart, timing_map),
+        HsFixOption::MaxBpm => max_scroll_adjusted_bpm_for_chart(chart, timing_map),
+        HsFixOption::MainBpm => main_scroll_adjusted_bpm_for_chart(chart, timing_map),
     }
 }
 
@@ -825,6 +811,102 @@ pub(super) fn main_bpm_for_chart(
         .max_by_key(|(_, count)| *count)
         .map(|(bpm, _)| bpm)
         .unwrap_or(chart.metadata.initial_bpm)
+}
+
+fn scroll_adjusted_bpm_counts(
+    chart: &PlayableChart,
+    timing_map: &bmz_chart::timing::TimingMap,
+) -> Vec<(f64, u32)> {
+    let mut counted = std::collections::HashSet::new();
+    let mut counts: Vec<(f64, u32)> = Vec::new();
+    for note in chart.lane_notes.iter().flatten() {
+        if matches!(note.kind, NoteKind::Invisible | NoteKind::Mine) {
+            continue;
+        }
+        counted.insert(note.id);
+        count_scroll_adjusted_bpm_at_time(&mut counts, chart, timing_map, note.time);
+    }
+    for long in &chart.long_notes {
+        if !counted.insert(long.start_note_id) {
+            continue;
+        }
+        count_scroll_adjusted_bpm_at_time(&mut counts, chart, timing_map, long.start_time);
+    }
+    counts
+}
+
+fn count_scroll_adjusted_bpm_at_time(
+    counts: &mut Vec<(f64, u32)>,
+    chart: &PlayableChart,
+    timing_map: &bmz_chart::timing::TimingMap,
+    time: TimeUs,
+) {
+    let bpm = timing_map.bpm_at_time(time);
+    let tick = timing_map.time_to_tick_f64(time);
+    let scroll_multiplier =
+        crate::screens::play_snapshot::scroll_multiplier_at_tick(chart, tick).abs();
+    let effective_bpm = bpm * scroll_multiplier;
+    if !effective_bpm.is_finite() || effective_bpm <= 0.0 {
+        return;
+    }
+    if let Some((_, count)) =
+        counts.iter_mut().find(|(value, _)| value.to_bits() == effective_bpm.to_bits())
+    {
+        *count = count.saturating_add(1);
+    } else {
+        counts.push((effective_bpm, 1));
+    }
+}
+
+fn min_scroll_adjusted_bpm_for_chart(
+    chart: &PlayableChart,
+    timing_map: &bmz_chart::timing::TimingMap,
+) -> f64 {
+    scroll_adjusted_bpm_counts(chart, timing_map)
+        .into_iter()
+        .map(|(bpm, _)| bpm)
+        .reduce(f64::min)
+        .unwrap_or_else(|| {
+            chart
+                .timing_events
+                .iter()
+                .filter_map(|event| match event.kind {
+                    TimingEventKind::BpmChange { bpm } => Some(bpm),
+                    TimingEventKind::Stop { .. } => None,
+                })
+                .fold(chart.metadata.initial_bpm, f64::min)
+        })
+}
+
+fn max_scroll_adjusted_bpm_for_chart(
+    chart: &PlayableChart,
+    timing_map: &bmz_chart::timing::TimingMap,
+) -> f64 {
+    scroll_adjusted_bpm_counts(chart, timing_map)
+        .into_iter()
+        .map(|(bpm, _)| bpm)
+        .reduce(f64::max)
+        .unwrap_or_else(|| {
+            chart
+                .timing_events
+                .iter()
+                .filter_map(|event| match event.kind {
+                    TimingEventKind::BpmChange { bpm } => Some(bpm),
+                    TimingEventKind::Stop { .. } => None,
+                })
+                .fold(chart.metadata.initial_bpm, f64::max)
+        })
+}
+
+fn main_scroll_adjusted_bpm_for_chart(
+    chart: &PlayableChart,
+    timing_map: &bmz_chart::timing::TimingMap,
+) -> f64 {
+    scroll_adjusted_bpm_counts(chart, timing_map)
+        .into_iter()
+        .max_by_key(|(_, count)| *count)
+        .map(|(bpm, _)| bpm)
+        .unwrap_or_else(|| main_bpm_for_chart(chart, timing_map))
 }
 
 pub(super) fn placeholder_hispeed_for_mode(
