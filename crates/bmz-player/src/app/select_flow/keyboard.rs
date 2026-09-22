@@ -2,6 +2,9 @@ use super::*;
 
 impl WinitApp {
     pub(super) fn route_keyboard_input(&mut self, event: &winit::event::KeyEvent) {
+        if self.jobs.profile_change.is_some() {
+            return;
+        }
         let mut event = event.clone();
         event.repeat = self.input.keyboard_repeat(event.physical_key, event.repeat);
         let event = &event;

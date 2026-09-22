@@ -16,11 +16,12 @@ impl WinitApp {
     /// 初回描画前とCLI直接起動待ちは見かけ上Selectでも直後にDecide/Playへ遷移するため、
     /// maintenanceを開始しない。コースの中間Resultを含むResultも次のSelectまで保留する。
     pub(super) fn select_maintenance_allowed(&self) -> bool {
-        select_maintenance_allowed(
-            self.first_frame_startup_completed,
-            self.deferred_boot.is_some(),
-            self.view_state(),
-        )
+        self.jobs.profile_change.is_none()
+            && select_maintenance_allowed(
+                self.first_frame_startup_completed,
+                self.deferred_boot.is_some(),
+                self.view_state(),
+            )
     }
 
     /// network worker群へSelect実行許可を同期する。
@@ -45,6 +46,7 @@ impl WinitApp {
 
     /// Select中だけmaintenance workerの完了をDB/UIへ反映し、queued jobを開始する。
     pub(super) fn poll_select_maintenance(&mut self) {
+        self.poll_profile_change();
         self.sync_select_maintenance_gate();
         if !self.select_maintenance_allowed() {
             return;

@@ -13,6 +13,9 @@ impl WinitApp {
         );
         let backend_name = gamepad.name();
         let output = gamepad.poll();
+        if self.jobs.profile_change.is_some() {
+            return;
+        }
         if self.input.should_discard_gamepad_output(self.ui.focused) {
             for event in output
                 .buttons
@@ -73,6 +76,9 @@ impl WinitApp {
         &mut self,
         event: &crate::input::gamepad::GamepadButtonEvent,
     ) {
+        if self.jobs.profile_change.is_some() {
+            return;
+        }
         let control_event = ControlInputEvent::gamepad(event.device_id, &event.name, event.pressed);
         self.input.track_control(&control_event);
         // holdは物理状態を正とする。2回押しなどの単発操作はこの後のフィルターを通す。

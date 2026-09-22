@@ -244,6 +244,7 @@ mod play_loop_flow;
 mod play_preload_state;
 mod play_support;
 mod play_transition_state;
+mod profile_switch;
 #[path = "app/result_flow/ending.rs"]
 mod result_flow_ending;
 #[path = "app/result_flow/interaction.rs"]
@@ -391,6 +392,7 @@ const SAMPLE_PLAYABLE_TITLE: &str = "BMZ Sample Playable";
 
 #[derive(Debug, Clone)]
 enum AppUserEvent {
+    ProfileChangeReady,
     SkinUpload { sent_at: Instant },
     SystemSoundReady { generation: u64 },
     CourseLinkRepair,
@@ -509,10 +511,7 @@ pub async fn run_with_options_log_buffer_paths_and_profile(
         }
     }
 
-    let (maintenance_select_tx, maintenance_select_rx) = tokio::sync::watch::channel(false);
-    if !options.viewer_play {
-        spawn_ir_sync_worker(&boot, maintenance_select_rx);
-    }
+    let (maintenance_select_tx, _) = tokio::sync::watch::channel(false);
 
     let mut app = Box::new(WinitApp::new(
         boot,
@@ -526,6 +525,7 @@ pub async fn run_with_options_log_buffer_paths_and_profile(
         maintenance_select_tx,
         raw_input_bridge,
     )?);
+    app.restart_profile_ir_sync();
     tracing::info!("starting winit event loop");
     let result = event_loop.run_app(app.as_mut()).context("winit event loop failed");
     let startup_error = app.startup_error.take();
@@ -586,30 +586,56 @@ fn prepare_boot_chart_options(
 ///
 /// メインスレッドの DB connection とは別 connection を開く (DB は WAL)。
 /// IR が未設定なら何もしない。
+struct IrSyncWorker {
+    stop: tokio::sync::watch::Sender<bool>,
+    task: tokio::task::JoinHandle<()>,
+}
+
+impl IrSyncWorker {
+    fn stop(&self) {
+        self.stop.send_replace(true);
+    }
+}
+
+impl Drop for IrSyncWorker {
+    fn drop(&mut self) {
+        // 送信中の1件は旧profileへ結果を保存して終了する。途中abortしない。
+        self.stop();
+    }
+}
+
 fn spawn_ir_sync_worker(
     boot: &bootstrap::BootstrappedApp,
     mut select_rx: tokio::sync::watch::Receiver<bool>,
-) {
+) -> Option<IrSyncWorker> {
     let ir_config = boot.profile_config.ir.clone();
     if !ir_config.providers.iter().any(|provider| provider.enabled && !provider.base_url.is_empty())
     {
-        return;
+        return None;
     }
     let profile_root = boot.profile_paths.root_dir.clone();
     let logs_dir = boot.app_paths.logs_dir.clone();
     let score_db_path = boot.profile_paths.score_db.clone();
     let network_db_path = boot.profile_paths.network_db.clone();
-    tokio::spawn(async move {
+    let (stop, mut stop_rx) = tokio::sync::watch::channel(false);
+    let task = tokio::spawn(async move {
         let interval = std::time::Duration::from_secs(crate::ir::sync::IR_SYNC_LOOP_INTERVAL_SECS);
         let mut next_run_at = tokio::time::Instant::now();
         loop {
+            if *stop_rx.borrow() {
+                return;
+            }
             while !*select_rx.borrow() {
-                if select_rx.changed().await.is_err() {
-                    return;
+                tokio::select! {
+                    _ = stop_rx.changed() => return,
+                    changed = select_rx.changed() => {
+                        if changed.is_err() { return; }
+                    }
                 }
             }
             if tokio::time::Instant::now() < next_run_at {
                 tokio::select! {
+                    _ = stop_rx.changed() => return,
                     _ = tokio::time::sleep_until(next_run_at) => {}
                     changed = select_rx.changed() => {
                         if changed.is_err() {
@@ -636,7 +662,7 @@ fn spawn_ir_sync_worker(
                     let mut submitted = 0_u32;
                     let mut failed = 0_u32;
                     for index in 0..crate::ir::sync::IR_SYNC_BATCH_LIMIT {
-                        if !*select_rx.borrow() {
+                        if *stop_rx.borrow() || !*select_rx.borrow() {
                             break;
                         }
                         let job_now = std::time::SystemTime::now()
@@ -670,6 +696,7 @@ fn spawn_ir_sync_worker(
                         }
                         if index + 1 < crate::ir::sync::IR_SYNC_BATCH_LIMIT {
                             tokio::select! {
+                                _ = stop_rx.changed() => return,
                                 _ = tokio::time::sleep(std::time::Duration::from_millis(
                                     crate::ir::sync::IR_SYNC_JOB_SPACING_MS,
                                 )) => {}
@@ -693,6 +720,7 @@ fn spawn_ir_sync_worker(
             next_run_at = tokio::time::Instant::now() + interval;
         }
     });
+    Some(IrSyncWorker { stop, task })
 }
 
 struct WinitApp {

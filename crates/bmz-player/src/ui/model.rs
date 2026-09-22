@@ -270,6 +270,7 @@ pub struct EguiRunContext<'a, 'practice> {
 
 /// `EguiLayer::run` の 1 フレーム出力。
 pub struct EguiOutput {
+    pub profile_action: Option<ProfileManagerAction>,
     /// renderer へ渡す描画データ。
     pub frame: EguiFrame,
     /// OBS WebSocket の有効/無効変更を実行中のコントローラへ即時反映する要求。
@@ -301,6 +302,13 @@ pub struct EguiOutput {
     pub practice_leave: bool,
     pub course_editor_action: Option<CourseEditorAction>,
     pub select_course_builder_action: Option<SelectCourseBuilderAction>,
+}
+
+#[derive(Debug, Clone)]
+pub enum ProfileManagerAction {
+    Switch(String),
+    Create { id: String, display_name: Option<String>, activate: bool },
+    Copy { source_id: String, id: String, display_name: Option<String>, activate: bool },
 }
 
 pub struct SelectCourseBuilderData<'a> {

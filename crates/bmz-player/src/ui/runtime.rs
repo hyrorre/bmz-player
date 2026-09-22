@@ -173,7 +173,7 @@ impl EguiLayer {
     }
 
     pub fn blocks_game_input(&self, practice_overlay: bool) -> bool {
-        self.visible || practice_overlay || self.update_dialog_active
+        self.visible || practice_overlay || self.update_dialog_active || self.profile_manager.busy
     }
 
     /// 設定 metadata や profile 差分検出を含む完全な egui frame が必要かを返す。
@@ -187,7 +187,8 @@ impl EguiLayer {
         select_course_builder: bool,
         has_update_dialog: bool,
     ) -> bool {
-        SettingsFeedback::has_pending(&self.ctx)
+        self.profile_manager.busy
+            || SettingsFeedback::has_pending(&self.ctx)
             || egui_frame_needs_full_state(
                 self.visible,
                 practice_overlay,
@@ -267,6 +268,8 @@ impl EguiLayer {
         let mut save_profile_config = self.ir_login.poll(profile_config, text);
         self.ir_device_key.poll(text);
         let mut key_config_action = None;
+        let mut profile_action = None;
+        let profile_change_busy = self.profile_manager.busy;
         let mut reset_skin_config = false;
         let mut skin_reload_request = SkinReloadRequest::default();
         let mut trigger_song_rescan = false;
@@ -290,6 +293,20 @@ impl EguiLayer {
             update_dialog.is_some() && (info.scene == "Select" || *show_settings);
         self.update_dialog_active = update_dialog_allowed;
         let full_output = ctx.run_ui(raw_input, |ui| {
+            if profile_change_busy {
+                egui::Window::new(tr!(text, "profile-manager-title"))
+                    .collapsible(false)
+                    .resizable(false)
+                    .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
+                    .show(ui.ctx(), |ui| {
+                        ui.horizontal(|ui| {
+                            ui.spinner();
+                            ui.label(tr!(text, "profile-manager-switching"));
+                        });
+                    });
+                ui.ctx().request_repaint_after(std::time::Duration::from_millis(50));
+                return;
+            }
             if update_dialog_allowed && let Some(dialog) = update_dialog {
                 update_dialog_action = build_update_dialog(ui.ctx(), dialog, text);
             }
@@ -350,6 +367,7 @@ impl EguiLayer {
                     let profile_settings_actions = build_profile_settings_panel(
                         ui,
                         ProfileSettingsPanelContext {
+                            app_paths,
                             profile: profile_config,
                             app_config,
                             show_fps,
@@ -365,6 +383,7 @@ impl EguiLayer {
                     save_profile_config |= profile_settings_actions.save;
                     save_app_config |= profile_settings_actions.save_app_config;
                     key_config_action = profile_settings_actions.key_config_action;
+                    profile_action = profile_settings_actions.profile_action;
                     let settings_actions = build_settings_panel(
                         ui,
                         window,
@@ -448,6 +467,7 @@ impl EguiLayer {
         self.state.handle_platform_output(window, full_output.platform_output);
         let primitives = self.ctx.tessellate(full_output.shapes, full_output.pixels_per_point);
         EguiOutput {
+            profile_action,
             frame: EguiFrame {
                 primitives,
                 textures_delta: full_output.textures_delta,

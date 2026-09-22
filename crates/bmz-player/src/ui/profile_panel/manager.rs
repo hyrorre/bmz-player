@@ -1,27 +1,21 @@
 pub(in crate::ui) fn build_profile_manager_section(
     ui: &mut egui::Ui,
-    app_config: &mut AppConfig,
+    app_paths: &AppPaths,
     profile: &ProfileConfig,
     state: &mut ProfileManagerUiState,
     editable: bool,
     text: Localizer,
-) -> bool {
-    let mut save_app_config = false;
+) -> Option<ProfileManagerAction> {
+    let mut action = None;
     SettingsSection::new(SettingsPage::Profile, tr!(text, "profile-manager-title"))
         .scope(tr!(text, "settings-scope-app"))
         .id_salt("profile_manager")
         .show(ui, |ui| {
-            if !editable {
+            if !editable || !state.available || state.busy {
+                ui.label(tr!(text, "profile-manager-unavailable"));
                 ui.disable();
             }
-            let app_paths = match resolve_app_paths() {
-                Ok(paths) => paths,
-                Err(error) => {
-                    ui.colored_label(egui::Color32::RED, format!("{error:#}"));
-                    return;
-                }
-            };
-            let profiles = match profile_cmd::profile_summaries(&app_paths) {
+            let profiles = match profile_cmd::profile_summaries(app_paths) {
                 Ok(profiles) => profiles,
                 Err(error) => {
                     ui.colored_label(egui::Color32::RED, format!("{error:#}"));
@@ -32,32 +26,33 @@ pub(in crate::ui) fn build_profile_manager_section(
             if state.copy_source_id.is_empty() {
                 state.copy_source_id = profile.id.clone();
             }
+            if state.selected_id.is_empty() {
+                state.selected_id = profile.id.clone();
+            }
 
             ui.horizontal(|ui| {
                 ui.label(tr!(text, "profile-manager-current"));
                 ui.monospace(&profile.id);
             });
             ui.horizontal(|ui| {
-                ui.label(tr!(text, "profile-manager-next-startup"));
-                egui::ComboBox::from_id_salt("profile_active_next")
-                    .selected_text(profile_selection_label(&profiles, &app_config.active_profile))
+                ui.label(tr!(text, "profile-manager-target"));
+                egui::ComboBox::from_id_salt("profile_switch_target")
+                    .selected_text(profile_selection_label(&profiles, &state.selected_id))
                     .show_ui(ui, |ui| {
-                        let active_profile = app_config.active_profile.clone();
                         for summary in &profiles {
-                            let selected = summary.id == active_profile;
                             let label = profile_selection_label(&profiles, &summary.id);
-                            if ui.selectable_label(selected, label).clicked() && !selected {
-                                app_config.active_profile = summary.id.clone();
-                                state.message = tr!(
-                                    text,
-                                    "profile-manager-next-startup-changed",
-                                    "id" => summary.id.clone(),
-                                );
-                                state.error.clear();
-                                save_app_config = true;
-                            }
+                            ui.selectable_value(&mut state.selected_id, summary.id.clone(), label);
                         }
                     });
+                if ui
+                    .add_enabled(
+                        state.selected_id != profile.id,
+                        egui::Button::new(tr!(text, "profile-manager-switch")),
+                    )
+                    .clicked()
+                {
+                    action = Some(ProfileManagerAction::Switch(state.selected_id.clone()));
+                }
             });
 
             ui.separator();
@@ -70,27 +65,16 @@ pub(in crate::ui) fn build_profile_manager_section(
                 ui.label(tr!(text, "profile-display-name"));
                 ui.text_edit_singleline(&mut state.create_display_name);
             });
-            ui.checkbox(&mut state.create_activate, tr!(text, "profile-manager-activate-next"));
+            ui.checkbox(&mut state.create_activate, tr!(text, "profile-manager-activate"));
             if ui.button(tr!(text, "profile-manager-create")).clicked() {
                 let id = state.create_id.trim().to_string();
                 let display_name =
                     trimmed_non_empty(&state.create_display_name).map(str::to_string);
-                match profile_cmd::create_profile(&app_paths, &id, display_name.as_deref(), false) {
-                    Ok(()) => {
-                        if state.create_activate {
-                            app_config.active_profile = id.clone();
-                            save_app_config = true;
-                        }
-                        state.message = tr!(text, "profile-manager-created", "id" => id.clone());
-                        state.error.clear();
-                        state.create_id.clear();
-                        state.create_display_name.clear();
-                    }
-                    Err(error) => {
-                        state.error = format!("{error:#}");
-                        state.message.clear();
-                    }
-                }
+                action = Some(ProfileManagerAction::Create {
+                    id,
+                    display_name,
+                    activate: state.create_activate,
+                });
             }
 
             ui.separator();
@@ -117,38 +101,17 @@ pub(in crate::ui) fn build_profile_manager_section(
                 ui.label(tr!(text, "profile-display-name"));
                 ui.text_edit_singleline(&mut state.copy_display_name);
             });
-            ui.checkbox(&mut state.copy_activate, tr!(text, "profile-manager-activate-next"));
+            ui.checkbox(&mut state.copy_activate, tr!(text, "profile-manager-activate"));
             if ui.button(tr!(text, "profile-manager-copy")).clicked() {
                 let source_id = state.copy_source_id.trim().to_string();
                 let target_id = state.copy_target_id.trim().to_string();
                 let display_name = trimmed_non_empty(&state.copy_display_name).map(str::to_string);
-                match profile_cmd::copy_profile(
-                    &app_paths,
-                    &source_id,
-                    &target_id,
-                    display_name.as_deref(),
-                    false,
-                ) {
-                    Ok(()) => {
-                        if state.copy_activate {
-                            app_config.active_profile = target_id.clone();
-                            save_app_config = true;
-                        }
-                        state.message = tr!(
-                            text,
-                            "profile-manager-copied",
-                            "source_id" => source_id,
-                            "target_id" => target_id.clone(),
-                        );
-                        state.error.clear();
-                        state.copy_target_id.clear();
-                        state.copy_display_name.clear();
-                    }
-                    Err(error) => {
-                        state.error = format!("{error:#}");
-                        state.message.clear();
-                    }
-                }
+                action = Some(ProfileManagerAction::Copy {
+                    source_id,
+                    id: target_id,
+                    display_name,
+                    activate: state.copy_activate,
+                });
             }
 
             if !state.message.is_empty() {
@@ -158,6 +121,86 @@ pub(in crate::ui) fn build_profile_manager_section(
                 ui.colored_label(egui::Color32::RED, state.error.as_str());
             }
         });
-    save_app_config
+    action
 }
 use super::*;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn profile_manager_requests_switch_only_when_available_and_does_not_activate_itself() {
+        let data = crate::bootstrap::profile_tests::ProfileTestDir::new();
+        let boot = data.boot();
+        profile_cmd::create_profile(&data.paths, "other", None, false).unwrap();
+        for (available, busy, editable) in
+            [(true, false, true), (false, false, true), (true, true, true), (true, false, false)]
+        {
+            let ctx = egui::Context::default();
+            SettingsNavigation::select(&ctx, SettingsPage::Profile);
+            let text = Localizer::new(AppLocale::En);
+            let mut state = ProfileManagerUiState {
+                selected_id: "other".into(),
+                available,
+                busy,
+                ..Default::default()
+            };
+            let mut actions = Vec::new();
+            let mut frame = |events| {
+                ctx.run_ui(egui::RawInput { events, ..Default::default() }, |ui| {
+                    if let Some(action) = build_profile_manager_section(
+                        ui,
+                        &data.paths,
+                        &boot.profile_config,
+                        &mut state,
+                        editable,
+                        text,
+                    ) {
+                        actions.push(action);
+                    }
+                })
+            };
+            frame(vec![]);
+            let output = frame(vec![]);
+            let pos = output
+                .shapes
+                .iter()
+                .find_map(|shape| {
+                    if let egui::Shape::Text(label) = &shape.shape
+                        && label.galley.job.text == text.text("profile-manager-switch")
+                    {
+                        Some(label.galley.rect.translate(label.pos.to_vec2()).center())
+                    } else {
+                        None
+                    }
+                })
+                .expect("switch button is visible");
+            for pressed in [true, false] {
+                frame(vec![
+                    egui::Event::PointerMoved(pos),
+                    egui::Event::PointerButton {
+                        pos,
+                        button: egui::PointerButton::Primary,
+                        pressed,
+                        modifiers: egui::Modifiers::NONE,
+                    },
+                ]);
+            }
+            if available && !busy && editable {
+                assert!(
+                    matches!(actions.as_slice(), [ProfileManagerAction::Switch(id)] if id == "other")
+                );
+            } else {
+                assert!(actions.is_empty());
+            }
+            assert_eq!(boot.profile_config.id, "default");
+            assert_eq!(
+                crate::config::load::load_app_config(&data.paths.config_toml)
+                    .unwrap()
+                    .active_profile,
+                "default"
+            );
+        }
+    }
+}

@@ -168,6 +168,10 @@ impl WinitApp {
     /// egui の 1 フレームを構築し、renderer へ描画データを渡す。
     /// `render_current_scene` の前に呼ぶこと。
     pub(super) fn run_egui_frame(&mut self) {
+        let profile_change_available = self.profile_change_allowed();
+        if let Some(egui) = self.ui.egui.as_mut() {
+            egui.set_profile_change_available(profile_change_available);
+        }
         let Some(window) = self.window.clone() else {
             return;
         };
@@ -576,7 +580,7 @@ impl WinitApp {
     }
 
     fn update_egui_select_ir(&mut self, scene_kind: AppSceneKind) {
-        if scene_kind != AppSceneKind::Select {
+        if scene_kind != AppSceneKind::Select || self.jobs.profile_change.is_some() {
             return;
         }
         let rival_target = crate::screens::select_ir::SelectRivalFetchTarget::from_profile(
@@ -734,6 +738,9 @@ impl WinitApp {
             if output.skin_reload_request.any_reload() {
                 self.reload_skins(output.skin_reload_request);
             }
+        }
+        if let Some(action) = output.profile_action {
+            self.request_profile_change(action);
         }
     }
 

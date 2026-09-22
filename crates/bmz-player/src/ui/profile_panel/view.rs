@@ -5,6 +5,7 @@ pub(in crate::ui) fn build_profile_settings_panel(
     context: ProfileSettingsPanelContext<'_>,
 ) -> ProfileSettingsPanelActions {
     let ProfileSettingsPanelContext {
+        app_paths,
         profile,
         app_config,
         show_fps,
@@ -46,9 +47,9 @@ pub(in crate::ui) fn build_profile_settings_panel(
         ui.separator();
     }
     build_profile_basic_section(ui, &mut section);
-    section.save_app_config |= build_profile_manager_section(
+    let profile_action = build_profile_manager_section(
         ui,
-        section.app_config,
+        app_paths,
         section.profile,
         section.profile_manager,
         section.unrestricted,
@@ -74,6 +75,7 @@ pub(in crate::ui) fn build_profile_settings_panel(
         section.save_app_config = false;
     }
     ProfileSettingsPanelActions {
+        profile_action,
         save: section.save_clicked,
         save_app_config: section.save_app_config,
         key_config_action: section.key_config_action,
@@ -97,11 +99,13 @@ mod tests {
         let mut ir_device_key = IrDeviceKeyUiState::default();
         let mut profile_manager = ProfileManagerUiState::default();
         let mut key_config = EguiKeyConfigUiState::default();
+        let data = crate::bootstrap::profile_tests::ProfileTestDir::new();
         let mut frame = |events| {
             ctx.run_ui(egui::RawInput { events, ..Default::default() }, |ui| {
                 build_profile_settings_panel(
                     ui,
                     ProfileSettingsPanelContext {
+                        app_paths: &data.paths,
                         profile: &mut profile,
                         app_config: &mut app_config,
                         show_fps: &mut show_fps,

@@ -2,6 +2,9 @@ use super::*;
 
 impl WinitApp {
     pub(super) fn route_mouse_wheel(&mut self, delta: MouseScrollDelta) {
+        if self.jobs.profile_change.is_some() {
+            return;
+        }
         if self.route_viewer_mouse_wheel(delta) {
             return;
         }
@@ -43,6 +46,9 @@ impl WinitApp {
     }
 
     pub(super) fn route_mouse_input(&mut self, state: ElementState, button: MouseButton) {
+        if self.jobs.profile_change.is_some() {
+            return;
+        }
         if self.viewer_waiting {
             self.select.select_slider_dragging_type = None;
             return;

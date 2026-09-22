@@ -235,6 +235,8 @@ pub(super) struct ResultIrScrollRuntime {
 }
 
 pub(super) struct AppJobs {
+    pub(super) profile_change: Option<profile_switch::PendingProfileChange>,
+    pub(super) ir_sync: Option<IrSyncWorker>,
     pub(super) pending_locale_refresh: bool,
     /// 通常表・rianIR表の取得channel、queue、progress、世代状態。
     pub(super) table_fetch: TableFetchRuntime,

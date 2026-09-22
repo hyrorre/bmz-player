@@ -366,6 +366,8 @@ impl WinitApp {
                 result_ir_scroll: ResultIrScrollRuntime::default(),
             },
             jobs: AppJobs {
+                profile_change: None,
+                ir_sync: None,
                 pending_locale_refresh: false,
                 table_fetch,
                 pending_song_scan: None,

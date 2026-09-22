@@ -1010,6 +1010,9 @@ impl WinitApp {
     }
 
     pub(super) fn apply_select_action(&mut self, action: SelectAction, hold_control: Option<&str>) {
+        if self.jobs.profile_change.is_some() {
+            return;
+        }
         if self.select.ir_battle.active {
             match action {
                 SelectAction::EnterOrPlay => self.start_selected_battle(),

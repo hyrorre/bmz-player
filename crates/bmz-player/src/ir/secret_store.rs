@@ -10,24 +10,61 @@
 //! 元ファイルを削除する。OS ストアが使えない環境ではファイルへフォールバック
 //! する (警告ログつき)。
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::OnceLock;
+use std::sync::{OnceLock, RwLock};
 
 use anyhow::{Context, Result};
 
 use crate::config::profile_config::IrCredentialStoreConfig;
 
-/// プロセス全体の保存先設定。起動時に profile config から一度だけ設定する。
-/// 未設定なら `File`。credentials / device key の既存 API (profile_root +
-/// provider のみ受け取る) を維持するためのプロセスグローバル。
-static STORE_MODE: OnceLock<IrCredentialStoreConfig> = OnceLock::new();
+/// profile rootごとの保存先。切り替え前の通信も自身のrootに対応する方式を使う。
+/// 「現在のprofile」のグローバル値を参照すると、遅れて完了した通信が別profileの
+/// 方式でtokenを保存してしまうため、credentials/device keyと同じrootで解決する。
+static STORE_MODES: OnceLock<RwLock<HashMap<PathBuf, IrCredentialStoreConfig>>> = OnceLock::new();
 
-pub fn set_store_mode(mode: IrCredentialStoreConfig) {
-    let _ = STORE_MODE.set(mode);
+fn store_key(profile_root: &Path) -> PathBuf {
+    std::fs::canonicalize(profile_root).unwrap_or_else(|_| profile_root.to_path_buf())
 }
 
-pub fn store_mode() -> IrCredentialStoreConfig {
-    STORE_MODE.get().copied().unwrap_or_default()
+pub fn set_store_mode(profile_root: &Path, mode: IrCredentialStoreConfig) {
+    STORE_MODES
+        .get_or_init(Default::default)
+        .write()
+        .unwrap_or_else(|e| e.into_inner())
+        .insert(store_key(profile_root), mode);
+}
+
+pub fn store_mode(profile_root: &Path) -> IrCredentialStoreConfig {
+    STORE_MODES
+        .get_or_init(Default::default)
+        .read()
+        .unwrap_or_else(|e| e.into_inner())
+        .get(&store_key(profile_root))
+        .copied()
+        .unwrap_or_default()
+}
+
+#[cfg(test)]
+mod profile_tests {
+    use super::*;
+
+    #[test]
+    fn credential_storage_is_scoped_to_profile_even_after_switching() {
+        let data = crate::bootstrap::profile_tests::ProfileTestDir::new();
+        let a = data.paths.profiles_dir.join("a");
+        let b = data.paths.profiles_dir.join("b");
+        std::fs::create_dir_all(&a).unwrap();
+        std::fs::create_dir_all(&b).unwrap();
+        set_store_mode(&a, IrCredentialStoreConfig::File);
+        set_store_mode(&b, IrCredentialStoreConfig::Os);
+        assert_eq!(store_mode(&a), IrCredentialStoreConfig::File);
+        assert_eq!(store_mode(&b), IrCredentialStoreConfig::Os);
+        assert_eq!(store_mode(&a.join("../b")), IrCredentialStoreConfig::Os);
+        set_store_mode(&b, IrCredentialStoreConfig::File);
+        assert_eq!(store_mode(&a), IrCredentialStoreConfig::File);
+        assert_eq!(store_mode(&b), IrCredentialStoreConfig::File);
+    }
 }
 
 /// keyring の service 名。`kind` は "ir" (token) / "ir-device-key"。

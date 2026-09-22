@@ -42,7 +42,7 @@ fn device_key_slot<'a>(
         provider,
         profile_root,
         device_key_path(profile_root, provider),
-        crate::ir::secret_store::store_mode(),
+        crate::ir::secret_store::store_mode(profile_root),
     )
 }
 

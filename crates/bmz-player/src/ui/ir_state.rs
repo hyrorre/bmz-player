@@ -20,6 +20,9 @@ pub(super) struct IrLoginForm {
 
 #[derive(Default)]
 pub(super) struct ProfileManagerUiState {
+    pub(super) selected_id: String,
+    pub(super) available: bool,
+    pub(super) busy: bool,
     pub(super) create_id: String,
     pub(super) create_display_name: String,
     pub(super) create_activate: bool,

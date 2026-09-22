@@ -36,6 +36,41 @@ pub struct BootstrappedApp {
     pub startup_scan: Option<ScanReport>,
 }
 
+/// 切り替え先を現在のprofileに触れずに準備する。library DBや曲スキャンは共有する。
+pub(crate) struct PreparedProfile {
+    pub config: ProfileConfig,
+    pub paths: ProfilePaths,
+    pub collection_db: CollectionDatabase,
+    pub score_db: ScoreDatabase,
+    pub network_db: NetworkDatabase,
+}
+
+#[cfg(test)]
+pub(crate) mod profile_tests;
+
+impl PreparedProfile {
+    pub(crate) fn load(app_paths: &AppPaths, id: &str) -> Result<Self> {
+        let paths = resolve_profile_paths(app_paths, id)?;
+        let config = load_profile_config(&paths.profile_toml)
+            .with_context(|| format!("failed to load profile {id}"))?;
+        if config.id != id {
+            bail!("profile id mismatch: expected {id}, found {}", config.id);
+        }
+        Self::open(config, paths)
+    }
+
+    fn open(config: ProfileConfig, paths: ProfilePaths) -> Result<Self> {
+        paths.ensure_dirs()?;
+        crate::storage::migration::migrate_collection_db(&paths.collection_db)?;
+        crate::storage::migration::migrate_score_db(&paths.score_db)?;
+        crate::storage::migration::migrate_network_db(&paths.network_db)?;
+        let collection_db = CollectionDatabase::open(&paths.collection_db)?;
+        let score_db = ScoreDatabase::open(&paths.score_db)?;
+        let network_db = NetworkDatabase::open(&paths.network_db)?;
+        Ok(Self { config, paths, collection_db, score_db, network_db })
+    }
+}
+
 pub struct ViewerBootstrap {
     pub app: BootstrappedApp,
     pub chart_path: PathBuf,
@@ -61,6 +96,24 @@ impl Drop for ViewerLibraryCleanup {
 }
 
 impl BootstrappedApp {
+    /// 永続化に失敗した場合は実行中のprofile/DBを一切入れ替えない。
+    pub(crate) fn activate_prepared_profile(&mut self, profile: PreparedProfile) -> Result<()> {
+        let mut app_config = self.app_config.clone();
+        app_config.active_profile = profile.config.id.clone();
+        save_app_config(&self.app_paths.config_toml, &app_config)?;
+        crate::ir::secret_store::set_store_mode(
+            &profile.paths.root_dir,
+            profile.config.ir.credential_store,
+        );
+        self.app_config = app_config;
+        self.profile_config = profile.config;
+        self.profile_paths = profile.paths;
+        self.collection_db = profile.collection_db;
+        self.score_db = profile.score_db;
+        self.network_db = profile.network_db;
+        Ok(())
+    }
+
     pub fn start_play_for_chart(
         &self,
         chart_id: i64,
@@ -193,25 +246,20 @@ fn bootstrap_with_paths_mode(
         config_ms = config_started_at.elapsed().as_millis(),
         "startup configuration loaded"
     );
-    // IR 秘密情報の保存先 (File / OS credential store) をプロセス全体へ反映する。
-    crate::ir::secret_store::set_store_mode(profile_config.ir.credential_store);
+    // IR 秘密情報の保存先 (File / OS credential store) をprofile rootに紐付ける。
+    crate::ir::secret_store::set_store_mode(
+        &profile_paths.root_dir,
+        profile_config.ir.credential_store,
+    );
 
     let migration_started_at = Instant::now();
     crate::storage::migration::migrate_library_db(&app_paths.library_db)?;
     let library_migration_ms = migration_started_at.elapsed().as_millis();
-    let collection_started_at = Instant::now();
-    crate::storage::migration::migrate_collection_db(&profile_paths.collection_db)?;
-    let collection_migration_ms = collection_started_at.elapsed().as_millis();
-    let score_started_at = Instant::now();
-    crate::storage::migration::migrate_score_db(&profile_paths.score_db)?;
-    let score_migration_ms = score_started_at.elapsed().as_millis();
-    let network_started_at = Instant::now();
-    crate::storage::migration::migrate_network_db(&profile_paths.network_db)?;
+    let profile_started_at = Instant::now();
+    let profile = PreparedProfile::open(profile_config, profile_paths)?;
     tracing::info!(
         library_migration_ms,
-        collection_migration_ms,
-        score_migration_ms,
-        network_migration_ms = network_started_at.elapsed().as_millis(),
+        profile_migration_ms = profile_started_at.elapsed().as_millis(),
         "startup database migrations complete"
     );
 
@@ -239,19 +287,15 @@ fn bootstrap_with_paths_mode(
         scan_ms = scan_started_at.elapsed().as_millis(),
         "startup song scan complete"
     );
-    let collection_db = CollectionDatabase::open(&profile_paths.collection_db)?;
-    let score_db = ScoreDatabase::open(&profile_paths.score_db)?;
-    let network_db = NetworkDatabase::open(&profile_paths.network_db)?;
-
     let boot = BootstrappedApp {
         app_config,
-        profile_config,
+        profile_config: profile.config,
         app_paths,
-        profile_paths,
+        profile_paths: profile.paths,
         library_db,
-        collection_db,
-        score_db,
-        network_db,
+        collection_db: profile.collection_db,
+        score_db: profile.score_db,
+        network_db: profile.network_db,
         startup_scan,
     };
     tracing::info!(

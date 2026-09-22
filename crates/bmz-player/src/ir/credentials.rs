@@ -42,7 +42,7 @@ fn credentials_slot<'a>(profile_root: &'a Path, provider: &'a str) -> SecretSlot
         provider,
         profile_root,
         credentials_path(profile_root, provider),
-        crate::ir::secret_store::store_mode(),
+        crate::ir::secret_store::store_mode(profile_root),
     )
 }
 

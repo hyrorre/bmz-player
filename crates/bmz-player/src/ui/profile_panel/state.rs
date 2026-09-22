@@ -1,10 +1,12 @@
 pub(in crate::ui) struct ProfileSettingsPanelActions {
+    pub(in crate::ui) profile_action: Option<ProfileManagerAction>,
     pub(in crate::ui) save: bool,
     pub(in crate::ui) save_app_config: bool,
     pub(in crate::ui) key_config_action: Option<EguiKeyConfigAction>,
 }
 
 pub(in crate::ui) struct ProfileSettingsPanelContext<'a> {
+    pub(in crate::ui) app_paths: &'a AppPaths,
     pub(in crate::ui) profile: &'a mut ProfileConfig,
     pub(in crate::ui) app_config: &'a mut AppConfig,
     pub(in crate::ui) show_fps: &'a mut bool,

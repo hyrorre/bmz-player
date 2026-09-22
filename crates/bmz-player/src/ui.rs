@@ -41,7 +41,7 @@ use crate::config::settings_registry::SettingsEntryId;
 use crate::i18n::{AppLocale, FluentArgs, Localizer};
 use crate::ln_policy::LnPolicySetting;
 use crate::logging::{LogBuffer, LogEntry, LogLevel as TracingLogLevel};
-use crate::paths::{AppPaths, resolve_app_paths};
+use crate::paths::AppPaths;
 use crate::practice_ui::{PracticePanelContext, build_practice_panel};
 use crate::profile_cmd;
 use crate::random_trainer::RandomTrainerState;
@@ -109,6 +109,7 @@ use skin_panel::*;
 mod ir_state;
 mod menu;
 mod model;
+mod profile_runtime;
 mod runtime;
 
 use ir_state::*;
@@ -116,10 +117,10 @@ use menu::*;
 use model::*;
 pub use model::{
     CourseEditorAction, CourseEditorChart, CourseEditorData, DebugInfo, EguiKeyConfigAction,
-    EguiKeyConfigInput, EguiKeyConfigSection, EguiLayer, EguiOutput, EguiRunContext, SceneSkinDefs,
-    SelectCourseBuilderAction, SelectCourseBuilderData, SkinCandidate, SkinCandidateOrigin,
-    SkinCatalog, SkinConfigMeta, SkinReloadRequest, SongScanRequest, UpdateDialog,
-    UpdateDialogAction,
+    EguiKeyConfigInput, EguiKeyConfigSection, EguiLayer, EguiOutput, EguiRunContext,
+    ProfileManagerAction, SceneSkinDefs, SelectCourseBuilderAction, SelectCourseBuilderData,
+    SkinCandidate, SkinCandidateOrigin, SkinCatalog, SkinConfigMeta, SkinReloadRequest,
+    SongScanRequest, UpdateDialog, UpdateDialogAction,
 };
 use runtime::AudioDevicePickerState;
 #[cfg(test)]

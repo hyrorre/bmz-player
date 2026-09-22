@@ -110,7 +110,11 @@ impl ApplicationHandler<AppUserEvent> for WinitApp {
                 self.save_configs_for_exit(self.active_hispeed(), "game exit");
                 event_loop.exit();
             }
-            WindowEvent::DroppedFile(path) => self.open_dropped_chart(path),
+            WindowEvent::DroppedFile(path) => {
+                if self.jobs.profile_change.is_none() {
+                    self.open_dropped_chart(path);
+                }
+            }
             WindowEvent::KeyboardInput { event, .. } => {
                 // F1 で egui メニューを開閉する。
                 if event.physical_key == PhysicalKey::Code(KeyCode::F1)
@@ -189,7 +193,11 @@ impl ApplicationHandler<AppUserEvent> for WinitApp {
                 self.route_mouse_input(state, button);
             }
             WindowEvent::Ime(ime) => {
-                if play_owns_keyboard_input || practice_overlay || egui_consumed {
+                if self.jobs.profile_change.is_some()
+                    || play_owns_keyboard_input
+                    || practice_overlay
+                    || egui_consumed
+                {
                     return;
                 }
                 self.route_ime_event(&ime);
@@ -424,6 +432,10 @@ impl ApplicationHandler<AppUserEvent> for WinitApp {
 
     fn user_event(&mut self, event_loop: &ActiveEventLoop, event: AppUserEvent) {
         match event {
+            AppUserEvent::ProfileChangeReady => {
+                self.poll_select_maintenance();
+                self.request_redraw();
+            }
             AppUserEvent::SkinUpload { sent_at } => {
                 let event_received_at = Instant::now();
                 let pending_before = self.has_pending_skin_reload();
