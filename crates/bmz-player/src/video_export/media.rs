@@ -16,6 +16,8 @@ pub struct Media {
     backbmp: bool,
     skin_videos: Vec<SkinVideo>,
     document: bmz_render::skin::SkinDocument,
+    presentation: crate::play_presentation::PresentationPlayback,
+    ready_us: i64,
 }
 
 struct SkinVideo {
@@ -30,6 +32,19 @@ struct SkinVideo {
 }
 
 impl Media {
+    pub fn presentation_timing(
+        &mut self,
+        timing: simulation::SceneTiming,
+    ) -> simulation::SceneTiming {
+        let timing = timing.with_presentation(
+            self.presentation.images.loading_us(),
+            self.presentation.images.ready_us(),
+        );
+        self.ready_us = timing.ready_us;
+        self.presentation.set_offline_origins(timing.ready_us);
+        timing
+    }
+
     pub fn load(
         chart: &PlayableChart,
         chart_path: &Path,
@@ -52,7 +67,19 @@ impl Media {
             output_texture_base: max_texture.checked_add(16).context("texture ID overflow")?,
             stagefile_size: None,
             backbmp: false,
+            presentation: crate::play_presentation::PresentationPlayback::new(
+                crate::play_presentation::PresentationImages::load(
+                    chart_path.parent().context("chart has no parent folder")?,
+                    &chart.metadata.loading_file,
+                    &chart.metadata.ready_file,
+                ),
+            ),
+            ready_us: 0,
         };
+        // Resolve GPU failures before calculating the offline start deadline.
+        media.presentation.draw(renderer, 0, false);
+        media.presentation.draw(renderer, 0, true);
+        media.presentation.reset();
         let folder = chart_path.parent().context("chart has no parent folder")?.to_string_lossy();
         for (id, relative) in [
             (bmz_render::plan::SELECT_STAGE_TEXTURE, &chart.metadata.stage_file),
@@ -125,6 +152,8 @@ impl Media {
         snapshot.stagefile_background = self.stagefile_size.is_some();
         snapshot.stagefile_image_size = self.stagefile_size;
         snapshot.backbmp_background = self.backbmp;
+        snapshot.stagefile_override =
+            self.presentation.draw(renderer, scene_us, scene_us >= self.ready_us);
         let state = crate::app::offline_skin_video_state(snapshot, &self.document);
         let enabled = self.document.enabled_options();
         for source in &mut self.skin_videos {

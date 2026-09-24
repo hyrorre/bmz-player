@@ -40,6 +40,7 @@ pub mod ln_policy;
 pub mod logging;
 pub mod obs;
 pub mod paths;
+pub(crate) mod play_presentation;
 pub mod practice_ui;
 pub mod profile_cmd;
 pub mod random_option_seed;

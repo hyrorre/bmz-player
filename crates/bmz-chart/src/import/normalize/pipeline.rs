@@ -140,6 +140,8 @@ pub(super) fn normalize_metadata(input: &IntermediateMetadata) -> ChartMetadata 
         initial_bpm: input.initial_bpm,
         total: input.total,
         stage_file: input.stage_file.clone(),
+        loading_file: input.loading_file.clone(),
+        ready_file: input.ready_file.clone(),
         banner_file: input.banner_file.clone(),
         backbmp_file: input.backbmp_file.clone(),
         preview_file: input.preview_file.clone(),

@@ -216,6 +216,7 @@ pub struct SkinDrawState {
     pub has_stagefile: bool,
     /// runtime image 100 (`#STAGEFILE`) のロード済み画像サイズ。
     pub stagefile_image_size: Option<SkinImageSize>,
+    pub stagefile_override: Option<SkinBgaFrame>,
     /// `#BACKBMP` 相当の背景画像がロード済みか (OPTION_NO_BACKBMP=194 / OPTION_BACKBMP=195)。
     pub has_backbmp: bool,
     /// 現在表示するBGA本体画像。
@@ -576,6 +577,7 @@ impl Default for SkinDrawState {
             bga_enabled: true,
             has_stagefile: false,
             stagefile_image_size: None,
+            stagefile_override: None,
             has_backbmp: false,
             bga_base: None,
             bga_layer: None,

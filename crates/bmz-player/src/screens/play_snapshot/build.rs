@@ -298,6 +298,7 @@ pub(crate) fn build_render_state_with_target_and_bga_frames_cached(
     );
     let opponent = independent_opponent.or(legacy_opponent);
     RenderSnapshot {
+        stagefile_override: None,
         time: chart_now,
         player_name: String::new(),
         current_fps: 0,

@@ -57,6 +57,13 @@ impl Fixture {
         Self { root, paths, options }
     }
     fn simulation(&self) -> simulation::Simulation {
+        self.simulation_with_presentation(0, 0)
+    }
+    fn simulation_with_presentation(
+        &self,
+        loading_us: i64,
+        ready_us: i64,
+    ) -> simulation::Simulation {
         let prepared = prepare::prepare(&self.options, &self.paths, Some("default")).unwrap();
         let engine =
             bmz_audio::command::AudioEngineHandle::new(bmz_audio::engine::AudioEngine::new(48000));
@@ -69,9 +76,11 @@ impl Fixture {
             simulation::SceneTiming {
                 ready_us: 200_000,
                 chart_zero_us: 400_000,
+                countdown_us: 200_000,
                 finishmargin_us: 100_000,
                 close_us: 200_000,
-            },
+            }
+            .with_presentation(loading_us, ready_us),
             300,
             0,
             engine,
@@ -235,6 +244,30 @@ fn scene_timing_includes_entry_and_exit_animation() {
     let end = simulation.exit_us.expect("must finish");
     let fading = simulation.snapshot(end - 100000, &Default::default());
     assert_eq!(fading.fadeout_elapsed_ms, Some(200));
+}
+
+#[test]
+fn presentation_timing_keeps_chart_frozen_until_normal_countdown() {
+    let fixture = Fixture::new();
+    // Loading: 0..0.3s; READY GIF: 0.3..0.8s; countdown: 0.6..0.8s.
+    let mut simulation = fixture.simulation_with_presentation(300_000, 500_000);
+    for (scene_us, chart_us, ready_us) in [
+        (0, -200_000, None),
+        (300_000, -200_000, Some(0)),
+        (599_000, -200_000, Some(299_000)),
+        (700_000, -100_000, Some(400_000)),
+        (800_000, 0, Some(500_000)),
+    ] {
+        simulation.advance_to(scene_us as u64 * 48_000 / 1_000_000, |_| Ok(())).unwrap();
+        let snapshot = simulation.snapshot(scene_us, &Default::default());
+        assert_eq!(snapshot.time, TimeUs(chart_us));
+        assert_eq!(snapshot.ready_elapsed_time, ready_us.map(TimeUs));
+        assert_eq!(simulation.prepared.play.session.score.ex_score(), 0);
+    }
+    simulation.advance_to(48_000 * 12, |_| Ok(())).unwrap();
+    let expected =
+        bmz_gameplay::score::scored_note_count(&simulation.prepared.play.session.chart) * 2;
+    assert_eq!(simulation.prepared.play.session.score.ex_score(), expected);
 }
 
 #[test]

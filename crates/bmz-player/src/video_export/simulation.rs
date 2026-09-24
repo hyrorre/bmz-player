@@ -15,6 +15,7 @@ use std::collections::HashMap;
 pub struct SceneTiming {
     pub ready_us: i64,
     pub chart_zero_us: i64,
+    pub countdown_us: i64,
     pub finishmargin_us: i64,
     pub close_us: i64,
 }
@@ -24,9 +25,21 @@ impl SceneTiming {
         Self {
             ready_us,
             chart_zero_us: ready_us + i64::from(d.playstart.max(0)) * 1000,
+            countdown_us: i64::from(d.playstart.max(0)) * 1000,
             finishmargin_us: i64::from(d.finishmargin.max(0)) * 1000,
             close_us: i64::from(d.close.max(0)) * 1000,
         }
+    }
+
+    pub fn with_presentation(mut self, loading_us: i64, ready_gif_us: i64) -> Self {
+        self.ready_us = self.ready_us.max(loading_us);
+        self.chart_zero_us = self.ready_us
+            + crate::play_presentation::ready_wait_us(self.countdown_us, ready_gif_us);
+        self
+    }
+
+    fn chart_time(&self, scene_us: i64) -> i64 {
+        (scene_us - self.chart_zero_us).max(-self.countdown_us)
     }
 }
 
@@ -147,6 +160,10 @@ impl Simulation {
             self.skin_audio.trigger_timer(40, self.system_bgm_volume(), self.system_volume());
         }
         let session = &mut self.prepared.play.session;
+        // Like live play, keep the prepared chart frozen while the GIF extends READY.
+        if scene_us < self.timing.chart_zero_us - self.timing.countdown_us {
+            return Ok(());
+        }
         session.audio_clock.current_frame.store(self.cursor, Ordering::Relaxed);
         if matches!(session.state, PlayState::Finished | PlayState::Failed) {
             let now = session.audio_clock.now();
@@ -253,8 +270,7 @@ impl Simulation {
     ) -> bmz_render::snapshot::RenderSnapshot {
         let play = &self.prepared.play;
         let session = &play.session;
-        let chart_us = (scene_us - self.timing.chart_zero_us)
-            .max(-self.timing.chart_zero_us + self.timing.ready_us);
+        let chart_us = self.timing.chart_time(scene_us);
         let target = play.target_option.target_ex_score_with_best(
             bmz_gameplay::score::scored_note_count(&session.chart),
             self.prepared.best,

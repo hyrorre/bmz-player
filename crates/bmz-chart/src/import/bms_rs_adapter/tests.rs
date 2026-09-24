@@ -158,6 +158,26 @@ fn import_bms_text(text: &str) -> IntermediateChart {
     import_bms_to_intermediate(&path, None, &mut warnings).unwrap()
 }
 
+#[test]
+fn presentation_headers_use_selected_random_branch() {
+    let chart = import_bms_text(
+        "#BPM 120\n#LOADINGFILE fallback.png\n#SETRANDOM 1\n#IF 1\n#loadingfile images/ロード image.gif\n#READYFILE ready.gif\n#ENDIF\n#IF 2\n#LOADINGFILE wrong.gif\n#READYFILE wrong.gif\n#ENDIF\n#ENDRANDOM\n",
+    );
+    assert_eq!(chart.metadata.loading_file, "images/ロード image.gif");
+    assert_eq!(chart.metadata.ready_file, "ready.gif");
+    assert_eq!(chart.metadata.bms_headers.get("READYFILE").map(String::as_str), Some("wrong.gif"));
+}
+
+#[test]
+fn presentation_headers_are_independent_and_default_empty() {
+    let plain = import_bms_text("#BPM 120\n#STAGEFILE stage.gif\n");
+    assert!(plain.metadata.loading_file.is_empty());
+    assert!(plain.metadata.ready_file.is_empty());
+    let loading = import_bms_text("#BPM 120\n#LOADINGFILE first.gif\n#LOADINGFILE second.png\n");
+    assert_eq!(loading.metadata.loading_file, "second.png");
+    assert!(loading.metadata.ready_file.is_empty());
+}
+
 fn import_bms_text_with_warnings(text: &str) -> (IntermediateChart, Vec<ImportWarning>) {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("test.bms");

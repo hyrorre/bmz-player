@@ -57,6 +57,9 @@ pub struct ChartMetadata {
     /// Effective BMS-scale TOTAL after BMSON percentage normalization.
     pub total: Option<f64>,
     pub stage_file: String,
+    /// Kaleid presentation images, resolved after static RANDOM selection.
+    pub loading_file: String,
+    pub ready_file: String,
     pub banner_file: String,
     pub backbmp_file: String,
     pub preview_file: String,
@@ -149,6 +152,8 @@ impl Default for ChartMetadata {
             initial_bpm: 0.0,
             total: None,
             stage_file: String::new(),
+            loading_file: String::new(),
+            ready_file: String::new(),
             banner_file: String::new(),
             backbmp_file: String::new(),
             preview_file: String::new(),

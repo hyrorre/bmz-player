@@ -158,6 +158,7 @@ impl WinitApp {
     }
 
     pub(super) fn clear_play_meta_image_state(&mut self) {
+        self.play.presentation = Default::default();
         self.clear_play_stagefile_state();
         self.clear_play_backbmp_state();
     }
@@ -269,6 +270,9 @@ impl WinitApp {
         self.result.finished_play = None;
         self.audio.draining_audio = None;
         self.play.play_entry_presentation = presentation;
+        if !presentation.is_seamless() {
+            self.play.presentation.enter();
+        }
         self.play.viewer_ready_timer_offset = TimeUs(0);
         if !presentation.is_seamless() {
             self.play.play_scene_started_at = Instant::now();
@@ -448,6 +452,7 @@ impl WinitApp {
             }
         }
         let chart = &active_play.running.session.chart;
+        self.request_play_presentation(chart_id, chart);
         let folder = chart_asset_folder(chart)
             .map(|path| path.to_string_lossy().into_owned())
             .unwrap_or_default();

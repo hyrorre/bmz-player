@@ -132,6 +132,7 @@ pub(super) struct PlayRuntimeState {
     pub(super) play_entry_presentation: PlayEntryPresentation,
     pub(super) play_scene_started_at: Instant,
     pub(super) play_ready_sound_started_at: Option<Instant>,
+    pub(super) presentation: super::presentation::PresentationRuntime,
     /// Viewer の timer 40 用経過時間。READY 音や開始待ちには適用しない。
     pub(super) viewer_ready_timer_offset: TimeUs,
     /// READY 前に E1/E2 が最後に押されていた時刻。

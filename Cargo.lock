@@ -715,6 +715,7 @@ dependencies = [
  "egui-wgpu",
  "encoding_rs",
  "flate2",
+ "gif",
  "image",
  "libc",
  "serde",

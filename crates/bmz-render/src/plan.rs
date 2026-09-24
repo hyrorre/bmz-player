@@ -43,6 +43,8 @@ pub const SELECT_STAGE_TEXTURE: TextureId = TextureId(20);
 pub const PLAY_BACKBMP_TEXTURE: TextureId = TextureId(21);
 /// 選曲画面の `#BANNER` 画像。
 pub const SELECT_BANNER_TEXTURE: TextureId = TextureId(22);
+/// Play-only LOADINGFILE / READYFILE frame. Runtime skin image ID stays 100.
+pub const PLAY_PRESENTATION_TEXTURE: TextureId = TextureId(23);
 /// 譜面 BGA (静止画/動画) 用テクスチャ ID の起点。
 /// beatoraja スキンは scene ごとに 10000 刻み (play=10000, select=20000, …) を使うため、
 /// 20000 帯に置くと select スキン PNG をプレイ中に上書きし、リザルト復帰後も背景が壊れたままになる。

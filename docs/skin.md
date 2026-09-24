@@ -1,5 +1,9 @@
 # BMZ Skin Notes
 
+Play の STAGEFILE スロット（runtime source `100`）は Kaleid の `LOADINGFILE` /
+`READYFILE` にも使います。スキンの要素追加は不要です。GIF の待機・ループ規則は
+[LOADINGFILE / READYFILE 実装仕様](loading-ready-files-plan.md) を参照してください。
+
 BMZ は beatoraja JSON / Lua skin の互換を基本にする。既存 beatoraja skin type は
 そのまま扱い、BMZ 独自の key mode だけ拡張 skin type を予約する。
 

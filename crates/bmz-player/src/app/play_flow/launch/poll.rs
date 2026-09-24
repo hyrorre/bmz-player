@@ -200,6 +200,8 @@ impl WinitApp {
         let Some(prepared) = self.play_preload_prepared_chart(chart_id) else {
             return;
         };
+        self.request_play_presentation(chart_id, &prepared.chart);
+        self.poll_play_presentation();
 
         // BMP/BGA は WAV worker と同じ変換済み chart の manifest から開始する。
         // assets=None は begin_unresolved 後、まだ worker を起動していない状態を表す。

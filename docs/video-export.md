@@ -36,6 +36,9 @@ bmz-player export video "chart.bms" -o "out.mp4" --fps 60000/1001 --seed 42
 
 - 入場を0秒とし、メディアは生成前に読み込み済みとします。実機のロード待ち時間は動画へ含めません。
 - READYは `max(loadstart,0) + max(loadend,0)` ミリ秒後に始まり、さらに `max(playstart,0)` ミリ秒後が譜面時刻0です。
+- `LOADINGFILE` の GIF がある場合はロード演出時間と初回1周時間の長い方を待って READY に入ります。
+  READY は `playstart` と `READYFILE` の GIF 初回1周時間の長い方を待ちます。
+  初回1周後は GIF のループ指定に従います。詳細は [演出画像の仕様](loading-ready-files-plan.md) を参照してください。
 - 通常のセッション終了条件を使用し、終了後は `finishmargin` とフルコンボ演出の残り時間の長い方を待ちます。
 - フェードアウトは `fadeout` とtimer 2のアニメーション長の長い方です。両方0なら通常プレイと同じ500msです。FAILEDはtimer 3と`close`で退場します。
 - 映像はフレーム番号から有理数で時刻を計算します。音声・判定は48kHzのサンプル時計で進み、映像FPSや処理待ちに依存しません。

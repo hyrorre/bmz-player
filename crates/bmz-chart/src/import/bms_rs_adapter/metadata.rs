@@ -14,6 +14,8 @@ pub(super) fn build_metadata(bms: &Bms) -> IntermediateMetadata {
 
     IntermediateMetadata {
         conditional: None,
+        loading_file: String::new(),
+        ready_file: String::new(),
         title: bms.music_info.title.clone().unwrap_or_default(),
         subtitle: bms.music_info.subtitle.clone().unwrap_or_default(),
         artist: bms.music_info.artist.clone().unwrap_or_default(),

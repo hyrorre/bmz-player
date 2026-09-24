@@ -294,6 +294,11 @@ fn parse_resolved_with_layout<T: KeyLayoutMapper>(
         intermediate.metadata.long_note_mode_defined = true;
     }
     let bms_headers = extract_bms_headers_from_text(raw_text);
+    let resolved_headers = extract_bms_headers_from_text(text);
+    intermediate.metadata.loading_file =
+        resolved_headers.get("LOADINGFILE").cloned().unwrap_or_default();
+    intermediate.metadata.ready_file =
+        resolved_headers.get("READYFILE").cloned().unwrap_or_default();
     intermediate.metadata.has_bms_random = has_bms_random;
     intermediate.metadata.bms_headers = bms_headers.clone();
     apply_raw_judge_rank_headers(&mut intermediate, &bms_headers);

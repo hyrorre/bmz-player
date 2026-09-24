@@ -6,6 +6,8 @@ use anyhow::{Context, Result, bail};
 use flate2::read::ZlibDecoder;
 use image::ImageReader;
 
+pub mod presentation;
+
 const CIM_HEADER_LEN: usize = 12;
 const MAX_CIM_RGBA_BYTES: u64 = 256 * 1024 * 1024;
 

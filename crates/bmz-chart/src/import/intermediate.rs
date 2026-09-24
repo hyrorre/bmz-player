@@ -47,6 +47,8 @@ pub struct IntermediateMetadata {
     /// BMSON `info.total` is a percentage of beatoraja's default BMS TOTAL.
     pub total_is_bmson_percent: bool,
     pub stage_file: String,
+    pub loading_file: String,
+    pub ready_file: String,
     pub banner_file: String,
     pub backbmp_file: String,
     pub preview_file: String,

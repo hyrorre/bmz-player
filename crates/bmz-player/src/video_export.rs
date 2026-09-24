@@ -86,7 +86,8 @@ pub fn run(options: VideoExportOptions, paths: &AppPaths, profile_id: Option<&st
         &decoded.document,
         std::mem::take(&mut decoded.audio_assets),
     );
-    let timing = simulation::SceneTiming::from_document(&decoded.document);
+    let timing =
+        media.presentation_timing(simulation::SceneTiming::from_document(&decoded.document));
     crate::skin_loader::install_decoded_skin(&mut renderer, decoded, manifest)?;
     let fadeout_ms = renderer
         .play_skin_document()

@@ -410,6 +410,7 @@ impl WinitApp {
             tracing::debug!("practice start ignored: media not ready");
             return;
         }
+        self.play.presentation.enter();
         let (chart_id, property, chart_sha256) = {
             let Some(practice) = &mut self.play.practice_session else {
                 return;

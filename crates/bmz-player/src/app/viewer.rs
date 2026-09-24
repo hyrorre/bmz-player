@@ -374,7 +374,7 @@ impl WinitApp {
     }
 
     fn toggle_viewer_pause(&mut self) -> Result<()> {
-        if self.play.play_ready_sound_started_at.is_none() {
+        if !self.play.active_play.as_ref().is_some_and(|play| play.running.gameplay.is_running()) {
             return Ok(());
         }
         if self.viewer_paused {
