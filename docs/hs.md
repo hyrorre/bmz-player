@@ -116,6 +116,9 @@ HS-FIX の選択肢とBPM基準は次のとおり。
 集計せず、ロングノーツは始点を一度だけ数えます。SCROLL/SPEEDが0の位置は候補から
 除外し、候補がない場合は従来のBPM基準へフォールバックします。この計算はプレイ準備時に
 行い、library.dbの選曲分析値や選曲画面のBPM表示には適用しません。
+SPEEDは隣接イベント間を線形補間します。MIN/MAX/MAINの基準からHSを逆算するときは、
+既に倍率を含むため現在位置のSCROLL/SPEEDを重ねて掛けません。OFF/START BPMは
+従来どおり基準BPMと現在位置の倍率を使います。
 
 `FLOATING` はHS-FIXにかかわらずFloatingで開始する。Floating無効の `NORMAL` と
 `CLASSIC` は常に基準方式で開始する。切替可能な2設定は、HS-FIXが `OFF` なら

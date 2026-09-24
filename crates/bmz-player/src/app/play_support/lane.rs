@@ -346,12 +346,7 @@ pub(in crate::app) fn apply_lane_cover_step_to_session(
                 session.hispeed = if session.hispeed_auto_adjust {
                     hispeed_for_green_number(session, session.lane_cover, now)
                 } else {
-                    hispeed_for_green_number_at_bpm(
-                        session,
-                        session.lane_cover,
-                        now,
-                        session.hsfix_base_bpm,
-                    )
+                    hispeed_for_green_number_at_hsfix_bpm(session, session.lane_cover, now)
                 };
             }
         }
@@ -380,7 +375,7 @@ pub(in crate::app) fn reset_floating_hispeed_if_enabled(
         session.hispeed = if session.hispeed_auto_adjust {
             hispeed_for_green_number(session, lane_cover, now)
         } else {
-            hispeed_for_green_number_at_bpm(session, lane_cover, now, session.hsfix_base_bpm)
+            hispeed_for_green_number_at_hsfix_bpm(session, lane_cover, now)
         };
     }
 }

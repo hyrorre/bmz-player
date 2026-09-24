@@ -90,11 +90,7 @@ fn note_display_duration_ms_for_hispeed_and_lane(
         floating_hispeed_target_bpm(session, now),
         session.audio_clock.playback_rate_percent(),
     );
-    let scroll_multiplier = crate::screens::play_snapshot::current_scroll_multiplier(
-        &session.chart,
-        &session.timing_map,
-        now,
-    );
+    let scroll_multiplier = floating_hispeed_scroll_multiplier(session, now);
     crate::screens::play_snapshot::display_duration_ms_for_bpm_hispeed(
         now_bpm as f32,
         hispeed,
@@ -123,11 +119,7 @@ pub(in crate::app) fn hispeed_for_normal_level(
 }
 
 fn positive_scroll_multiplier(session: &bmz_gameplay::session::GameSession, now: TimeUs) -> f32 {
-    let current = crate::screens::play_snapshot::current_scroll_multiplier(
-        &session.chart,
-        &session.timing_map,
-        now,
-    );
+    let current = floating_hispeed_scroll_multiplier(session, now);
     if current.is_finite() && current > 0.0 {
         return current;
     }
@@ -147,24 +139,32 @@ pub(in crate::app) fn hispeed_for_green_number(
     hispeed_for_green_number_at_bpm(
         session,
         lane_cover,
-        now,
         floating_hispeed_target_bpm(session, now),
+        floating_hispeed_scroll_multiplier(session, now),
     )
 }
 
-pub(in crate::app) fn hispeed_for_green_number_at_bpm(
+pub(in crate::app) fn hispeed_for_green_number_at_hsfix_bpm(
     session: &bmz_gameplay::session::GameSession,
     lane_cover: f32,
     now: TimeUs,
+) -> f32 {
+    hispeed_for_green_number_at_bpm(
+        session,
+        lane_cover,
+        session.hsfix_base_bpm,
+        hsfix_scroll_multiplier(session, now),
+    )
+}
+
+fn hispeed_for_green_number_at_bpm(
+    session: &bmz_gameplay::session::GameSession,
+    lane_cover: f32,
     target_bpm: f64,
+    scroll_multiplier: f32,
 ) -> f32 {
     let target_green = session.target_green_number.max(1) as f32;
     let visible_max = crate::config::play::visible_lane_fraction(lane_cover, session.lift);
-    let scroll_multiplier = crate::screens::play_snapshot::current_scroll_multiplier(
-        &session.chart,
-        &session.timing_map,
-        now,
-    );
     let target_bpm = crate::screens::play_snapshot::effective_bpm_for_playback_rate(
         target_bpm,
         session.audio_clock.playback_rate_percent(),
@@ -204,6 +204,34 @@ pub(in crate::app) fn floating_hispeed_target_bpm(
         session.timing_map.bpm_at_time(now)
     } else {
         session.hsfix_base_bpm
+    }
+}
+
+fn floating_hispeed_scroll_multiplier(
+    session: &bmz_gameplay::session::GameSession,
+    now: TimeUs,
+) -> f32 {
+    if session.audio_clock.running && now.0 >= 0 {
+        crate::screens::play_snapshot::current_scroll_multiplier(
+            &session.chart,
+            &session.timing_map,
+            now,
+        )
+    } else {
+        hsfix_scroll_multiplier(session, now)
+    }
+}
+
+fn hsfix_scroll_multiplier(session: &bmz_gameplay::session::GameSession, now: TimeUs) -> f32 {
+    // MAX/MAIN/MIN BPMはSCROLL/SPEEDを含む実効BPMなので二重に掛けない。
+    if matches!(session.hsfix_index, 2..=4) {
+        1.0
+    } else {
+        crate::screens::play_snapshot::current_scroll_multiplier(
+            &session.chart,
+            &session.timing_map,
+            now,
+        )
     }
 }
 

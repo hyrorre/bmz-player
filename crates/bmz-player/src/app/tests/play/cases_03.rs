@@ -1,6 +1,61 @@
 use super::*;
 
 #[test]
+fn hsfix_scroll_is_applied_once_during_recalculation_and_mode_switching() {
+    use bmz_chart::model::{NoteEvent, NoteKind, ScrollEvent};
+    use bmz_core::ids::NoteId;
+    use bmz_core::time::ChartTick;
+
+    let mut chart = app_test_chart();
+    chart.scroll_events = vec![
+        ScrollEvent { tick: ChartTick(0), time: TimeUs(0), factor: 2.0 },
+        ScrollEvent { tick: ChartTick(960), time: TimeUs(500_000), factor: 4.0 },
+    ];
+    chart.lane_notes[Lane::Key1.index()].push(NoteEvent {
+        id: NoteId(1),
+        lane: Lane::Key1,
+        kind: NoteKind::Tap,
+        tick: ChartTick(960),
+        time: TimeUs(500_000),
+        sound: None,
+        layered_sounds: Vec::new(),
+        damage: None,
+    });
+    let mut profile = ProfileConfig::new_default("default", "Default", 1);
+    profile.lane.floating_policy = FloatingPolicyConfig::Locked;
+    profile.lane.target_green_number = 300;
+    profile.play.lane_effect = LaneEffectConfig::Sudden;
+    for hs_fix in [HsFixOption::MinBpm, HsFixOption::MaxBpm, HsFixOption::MainBpm] {
+        let mut session = crate::screens::play_session::build_game_session(
+            std::sync::Arc::new(chart.clone()),
+            &profile,
+            crate::screens::play_session::PlaySessionOptions { hs_fix, ..Default::default() },
+        );
+        assert_eq!(session.hsfix_base_bpm, 480.0);
+        session.hispeed_auto_adjust = true;
+        reset_floating_hispeed_if_enabled(&mut session, false);
+        assert!((session.hispeed - 1.0).abs() < 0.0001);
+        assert_eq!(current_green_number(&session, TimeUs(0)), 300);
+        assert_eq!(current_full_lane_green_number(&session, TimeUs(0)), 300);
+        assert!((hispeed_for_normal_level(&session, 18, TimeUs(0)) - 1.0).abs() < 0.0001);
+
+        let frame = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
+        session.audio_clock =
+            bmz_audio::clock::AudioClock::with_position(48_000, 0, 0, frame, true);
+        session.lane_cover = 0.25;
+        // 開始後の自動調整は現在位置の120 BPM × SCROLL 2を使う。
+        reset_floating_hispeed_if_enabled(&mut session, false);
+        assert!((session.hispeed - 1.5).abs() < 0.0001);
+        // 自動調整OFFでは曲開始後もHS-FIXの実効480 BPMを使う。
+        session.hispeed_auto_adjust = false;
+        reset_floating_hispeed_if_enabled(&mut session, false);
+        assert!((session.hispeed - 0.75).abs() < 0.0001);
+        apply_lane_cover_step_to_session(&mut session, &mut PlayLaneTarget::Sudden, -0.25, false);
+        assert!((session.hispeed - 0.5).abs() < 0.0001);
+    }
+}
+
+#[test]
 fn floating_hispeed_recalculation_uses_hsfix_base_before_chart_start() {
     let mut profile = ProfileConfig::new_default("default", "Default", 1);
     profile.lane.floating_policy = FloatingPolicyConfig::Locked;
