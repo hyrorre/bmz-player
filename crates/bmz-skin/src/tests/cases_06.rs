@@ -1,6 +1,88 @@
 use super::*;
 
 #[test]
+fn lua_runtime_shared_scope_preserves_nested_state_and_callback_order() {
+    let mut loaded = load_runtime_value_fixture(
+        "bmz-skin-shared-scope",
+        LuaSkinRuntimeMode::Compat,
+        r#"
+        local n = 0
+        local number = main_state.number
+        local number_value = function() n = n + 1; return number(999) + n end
+        local text_value = function() return main_state.text(10) .. ':' .. n end
+        "#,
+    );
+    let number = loaded.document.value[0].value_expr.rsplit(':').next().unwrap().parse().unwrap();
+    let text = loaded.document.text[0].value_expr.rsplit(':').next().unwrap().parse().unwrap();
+    let runtime = loaded.lua_runtime.as_mut().unwrap();
+    let scope = runtime.state_scope();
+    let mut outer = TestLuaMainState::default();
+    outer.numbers.insert(999, 10);
+    outer.texts.insert(10, "outer".into());
+    let mut inner = TestLuaMainState::default();
+    inner.numbers.insert(999, 20);
+    inner.texts.insert(10, "inner".into());
+    scope
+        .with_state(&outer, || {
+            assert_eq!(runtime.evaluate_number_in_scope(number), Some(11.0));
+            assert_eq!(runtime.evaluate_number(number, &inner), Some(22.0));
+            assert_eq!(runtime.evaluate_text_in_scope(text).as_deref(), Some("outer:2"));
+            scope
+                .with_state(&inner, || {
+                    assert_eq!(runtime.evaluate_number_in_scope(number), Some(23.0));
+                })
+                .unwrap();
+            assert_eq!(runtime.evaluate_number_in_scope(number), Some(14.0));
+        })
+        .unwrap();
+    // No borrowed provider survives the scope, including after a panic.
+    assert_eq!(runtime.evaluate_number_in_scope(number), None);
+    let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        scope.with_state(&inner, || panic!("test scope unwind")).unwrap();
+    }));
+    assert!(panic.is_err());
+    assert_eq!(runtime.evaluate_number_in_scope(number), None);
+    assert_eq!(runtime.evaluate_number(number, &outer), Some(15.0));
+}
+
+#[test]
+fn lua_runtime_shared_scope_keeps_frame_and_call_instruction_limits() {
+    let mut loaded = load_runtime_draw_fixture(
+        "bmz-skin-shared-scope-budget",
+        "local count = 0; local draw = function() count = count + 1; local n = 0; for i = 1, 10000 do n = n + i end; return count % 2 == 1 end",
+    );
+    let runtime = loaded.lua_runtime.as_mut().unwrap();
+    let scope = runtime.state_scope();
+    scope
+        .with_state(&TestLuaMainState::default(), || {
+            runtime.begin_frame();
+            for _ in 0..1000 {
+                runtime.evaluate_draw_in_scope(0);
+                if runtime.failure_log_count() > 0 {
+                    break;
+                }
+            }
+            assert_eq!(runtime.failure_log_count(), 1);
+            assert!(!runtime.evaluate_draw_in_scope(0));
+            runtime.begin_frame();
+            assert_ne!(runtime.evaluate_draw_in_scope(0), runtime.evaluate_draw_in_scope(0));
+        })
+        .unwrap();
+    let mut infinite = load_runtime_draw_fixture(
+        "bmz-skin-shared-scope-infinite",
+        "local draw = function() while true do end end",
+    );
+    let runtime = infinite.lua_runtime.as_mut().unwrap();
+    runtime
+        .state_scope()
+        .with_state(&TestLuaMainState::default(), || {
+            assert!(!runtime.evaluate_draw_in_scope(0));
+        })
+        .unwrap();
+    assert_eq!(runtime.failure_log_count(), 1);
+}
+
+#[test]
 fn rmz_skin_play6_decodes_when_available() {
     let skin_path =
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../../data/skins/Rmz-skin/play6main.luaskin");

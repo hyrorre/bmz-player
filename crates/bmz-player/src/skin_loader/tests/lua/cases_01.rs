@@ -1,6 +1,70 @@
 use super::*;
 
 #[test]
+fn render_lua_shared_scope_uses_changed_rows_options_and_text_then_restores_outer_state() {
+    let root = unique_test_dir("bmz-shared-render-state");
+    std::fs::create_dir_all(&root).unwrap();
+    let path = root.join("skin.luaskin");
+    std::fs::write(
+        &path,
+        r#"
+        local main_state = require('main_state')
+        local n = 0
+        return { type = 7, value = {{ id = 'v', value = function()
+            n = n + 1
+            return main_state.number(71) + n
+        end }}, text = {{ id = 't', value = function()
+            return main_state.text(10) .. ':' .. tostring(main_state.option(920))
+        end }} }
+    "#,
+    )
+    .unwrap();
+    let loaded = bmz_skin::load_lua_skin_with_runtime_state(
+        &path,
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+        &bmz_skin::LuaLoadRuntimeState {
+            runtime_mode: bmz_skin::LuaSkinRuntimeMode::Compat,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let number = loaded.document.value[0].value_expr.rsplit(':').next().unwrap().parse().unwrap();
+    let text = loaded.document.text[0].value_expr.rsplit(':').next().unwrap().parse().unwrap();
+    let adapter = LuaSkinDrawRuntimeAdapter::new(loaded.lua_runtime.unwrap());
+    let state = SkinDrawState { ex_score: 10, ..Default::default() };
+    let options = [920];
+    let texts = BTreeMap::from([(10, "outer".into())]);
+    adapter.with_state(&state, &options, &texts, &mut || {
+        assert_eq!(adapter.evaluate_number(number, &state, &options, &texts), Some(11.0));
+        let mut row = state.clone();
+        row.ex_score = 20;
+        assert_eq!(adapter.evaluate_number(number, &row, &options, &texts), Some(22.0));
+        row.ex_score = 30;
+        adapter.with_state(&row, &options, &texts, &mut || {
+            assert_eq!(adapter.evaluate_number(number, &row, &options, &texts), Some(33.0));
+        });
+        let other_texts = BTreeMap::from([(10, "inner".into())]);
+        assert_eq!(
+            adapter.evaluate_text(text, &state, &[], &other_texts).as_deref(),
+            Some("inner:false")
+        );
+        assert_eq!(
+            adapter.evaluate_text(text, &state, &options, &texts).as_deref(),
+            Some("outer:true")
+        );
+        assert_eq!(adapter.evaluate_number(number, &state, &options, &texts), Some(14.0));
+    });
+    assert_eq!(adapter.evaluate_number(number, &state, &options, &texts), Some(15.0));
+    let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        adapter.with_state(&state, &options, &texts, &mut || panic!("scope unwind"));
+    }));
+    assert!(panic.is_err());
+    assert_eq!(adapter.evaluate_number(number, &state, &options, &texts), Some(16.0));
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn render_lua_main_state_reads_session_totals_and_selected_score_date() {
     let state = SkinDrawState {
         player_stats: bmz_render::scene::PlayerStatsSnapshot {

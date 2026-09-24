@@ -5,6 +5,18 @@ use super::*;
 pub trait SkinLuaDrawRuntime: std::fmt::Debug + Send + Sync {
     fn begin_frame(&self) {}
 
+    /// Run once, synchronously, with a read-only state shared by the enclosed
+    /// callbacks. Callbacks using another state must still use that state.
+    fn with_state(
+        &self,
+        _state: &SkinDrawState,
+        _enabled_options: &[i32],
+        _text_values: &BTreeMap<i32, String>,
+        run: &mut dyn FnMut(),
+    ) {
+        run();
+    }
+
     fn evaluate_draw(
         &self,
         callback_id: usize,
@@ -32,6 +44,21 @@ pub trait SkinLuaDrawRuntime: std::fmt::Debug + Send + Sync {
     ) -> Option<String> {
         None
     }
+}
+
+pub(in crate::skin) fn with_lua_render_state<R>(
+    state: &SkinDrawState,
+    run: impl FnOnce() -> R,
+) -> R {
+    let Some(context) = &state.lua_runtime else {
+        return run();
+    };
+    let mut run = Some(run);
+    let mut result = None;
+    context.runtime.with_state(state, &context.enabled_options, &context.text_values, &mut || {
+        result = Some(run.take().expect("Lua state scope must run once")());
+    });
+    result.expect("Lua state scope must run synchronously")
 }
 
 #[derive(Clone)]

@@ -116,6 +116,19 @@ impl LuaSkinRuntime {
     }
 
     pub fn evaluate_draw(&mut self, callback_id: usize, state: &dyn LuaMainState) -> bool {
+        self.evaluate_draw_inner(callback_id, Some(state))
+    }
+
+    /// Evaluate in a live `LuaRuntimeStateScope`, preserving per-call budgets.
+    pub fn evaluate_draw_in_scope(&mut self, callback_id: usize) -> bool {
+        self.evaluate_draw_inner(callback_id, None)
+    }
+
+    fn evaluate_draw_inner(
+        &mut self,
+        callback_id: usize,
+        state: Option<&dyn LuaMainState>,
+    ) -> bool {
         self.begin_runtime_callback();
         let result = panic::catch_unwind(panic::AssertUnwindSafe(|| {
             self.evaluate_callback_inner(callback_id, LuaRuntimeCallbackKind::Draw, state)
@@ -145,6 +158,18 @@ impl LuaSkinRuntime {
     }
 
     pub fn evaluate_number(&mut self, callback_id: usize, state: &dyn LuaMainState) -> Option<f64> {
+        self.evaluate_number_inner(callback_id, Some(state))
+    }
+
+    pub fn evaluate_number_in_scope(&mut self, callback_id: usize) -> Option<f64> {
+        self.evaluate_number_inner(callback_id, None)
+    }
+
+    fn evaluate_number_inner(
+        &mut self,
+        callback_id: usize,
+        state: Option<&dyn LuaMainState>,
+    ) -> Option<f64> {
         self.begin_runtime_callback();
         let result = panic::catch_unwind(panic::AssertUnwindSafe(|| {
             self.evaluate_callback_inner(callback_id, LuaRuntimeCallbackKind::Value, state)
@@ -182,6 +207,18 @@ impl LuaSkinRuntime {
         callback_id: usize,
         state: &dyn LuaMainState,
     ) -> Option<String> {
+        self.evaluate_text_inner(callback_id, Some(state))
+    }
+
+    pub fn evaluate_text_in_scope(&mut self, callback_id: usize) -> Option<String> {
+        self.evaluate_text_inner(callback_id, None)
+    }
+
+    fn evaluate_text_inner(
+        &mut self,
+        callback_id: usize,
+        state: Option<&dyn LuaMainState>,
+    ) -> Option<String> {
         self.begin_runtime_callback();
         let result = panic::catch_unwind(panic::AssertUnwindSafe(|| {
             self.evaluate_callback_inner(callback_id, LuaRuntimeCallbackKind::Value, state)
@@ -214,7 +251,7 @@ impl LuaSkinRuntime {
         &self,
         callback_id: usize,
         expected_kind: LuaRuntimeCallbackKind,
-        state: &dyn LuaMainState,
+        state: Option<&dyn LuaMainState>,
     ) -> mlua::Result<LuaRuntimeEvaluatedValue> {
         let callback = self.callbacks.get(callback_id).ok_or_else(|| {
             mlua::Error::runtime(format!("unknown Lua callback ID {callback_id}"))
@@ -229,6 +266,52 @@ impl LuaSkinRuntime {
             mlua::Error::runtime(format!("Lua callback was not registered at {}", callback.path))
         })?;
         let function: Function = self.lua.registry_value(key)?;
+        if let Some(state) = state {
+            return self.state_scope().with_state(state, || {
+                function.call::<Value>(()).and_then(LuaRuntimeEvaluatedValue::from_lua)
+            })?;
+        }
+        // An unbound call must fail safely, never read the load-time provider.
+        let _: Function = self.main_state_dispatch.raw_get(1)?;
+        function.call::<Value>(()).and_then(LuaRuntimeEvaluatedValue::from_lua)
+    }
+
+    /// Independent handle so the runtime can remain behind an adapter while a
+    /// borrowed provider is installed for a synchronous group of callbacks.
+    pub fn state_scope(&self) -> LuaRuntimeStateScope {
+        LuaRuntimeStateScope { lua: self.lua.clone(), dispatch: self.main_state_dispatch.clone() }
+    }
+
+    fn log_callback_failure_once(&mut self, callback_id: usize, error: &str) {
+        if !self.failed_callbacks.insert(callback_id) {
+            return;
+        }
+        self.failure_log_count = self.failure_log_count.saturating_add(1);
+        let path = self.callback_path(callback_id).unwrap_or("<unknown>");
+        tracing::warn!(
+            skin = %self.skin_path.display(),
+            callback_id,
+            field_path = path,
+            classification = "ERROR",
+            error,
+            "Lua callback failed; using safe fallback value"
+        );
+    }
+}
+
+pub struct LuaRuntimeStateScope {
+    lua: Lua,
+    dispatch: Table,
+}
+
+impl LuaRuntimeStateScope {
+    /// The provider cannot escape this call. Nested providers restore the outer
+    /// dispatcher on success, error, or panic before mlua ends the borrowed scope.
+    pub fn with_state<R>(
+        &self,
+        state: &dyn LuaMainState,
+        run: impl FnOnce() -> R,
+    ) -> mlua::Result<R> {
         self.lua.scope(|scope| {
             let dispatch = scope.create_function(|lua, (operation, argument): (u8, Value)| {
                 let id = || <i32 as mlua::FromLua>::from_lua(argument.clone(), lua);
@@ -250,35 +333,22 @@ impl LuaSkinRuntime {
                     _ => return Err(mlua::Error::runtime("unknown main_state operation")),
                 })
             })?;
-            self.main_state_dispatch.raw_set(1, dispatch)?;
-            // Clear even on unwind, before scope invalidates the borrowed accessor.
-            let _guard = RuntimeDispatchGuard(&self.main_state_dispatch);
-            function.call::<Value>(()).and_then(LuaRuntimeEvaluatedValue::from_lua)
+            let previous = self.dispatch.raw_get(1)?;
+            self.dispatch.raw_set(1, dispatch)?;
+            let _guard = RuntimeDispatchGuard { slot: &self.dispatch, previous };
+            Ok(run())
         })
-    }
-
-    fn log_callback_failure_once(&mut self, callback_id: usize, error: &str) {
-        if !self.failed_callbacks.insert(callback_id) {
-            return;
-        }
-        self.failure_log_count = self.failure_log_count.saturating_add(1);
-        let path = self.callback_path(callback_id).unwrap_or("<unknown>");
-        tracing::warn!(
-            skin = %self.skin_path.display(),
-            callback_id,
-            field_path = path,
-            classification = "ERROR",
-            error,
-            "Lua callback failed; using safe fallback value"
-        );
     }
 }
 
-struct RuntimeDispatchGuard<'a>(&'a Table);
+struct RuntimeDispatchGuard<'a> {
+    slot: &'a Table,
+    previous: Value,
+}
 
 impl Drop for RuntimeDispatchGuard<'_> {
     fn drop(&mut self) {
-        let _ = self.0.raw_set(1, Value::Nil);
+        let _ = self.slot.raw_set(1, self.previous.clone());
     }
 }
 

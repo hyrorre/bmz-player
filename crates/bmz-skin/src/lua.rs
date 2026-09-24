@@ -88,7 +88,7 @@ pub use loading::{
 use paths::*;
 use postprocess::*;
 use runtime::*;
-pub use runtime::{ConvertReport, LuaSkinRuntime};
+pub use runtime::{ConvertReport, LuaRuntimeStateScope, LuaSkinRuntime};
 
 #[cfg(test)]
 #[path = "lua/tests.rs"]

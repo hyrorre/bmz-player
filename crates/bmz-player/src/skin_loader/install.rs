@@ -48,11 +48,60 @@ pub(super) struct LuaSkinDrawRuntimeAdapter {
     // executes. Renderer evaluation is single-threaded; a concurrent/reentrant
     // attempt observes None and safely falls back to false.
     pub(super) runtime: Mutex<Option<LuaSkinRuntime>>,
+    bound_state: Mutex<Option<RenderLuaStateKey>>,
 }
 
 impl LuaSkinDrawRuntimeAdapter {
     pub(super) fn new(runtime: LuaSkinRuntime) -> Self {
-        Self { runtime: Mutex::new(Some(runtime)) }
+        Self { runtime: Mutex::new(Some(runtime)), bound_state: Mutex::new(None) }
+    }
+
+    fn state_is_bound(
+        &self,
+        state: &SkinDrawState,
+        options: &[i32],
+        text: &BTreeMap<i32, String>,
+    ) -> bool {
+        self.bound_state
+            .lock()
+            .is_ok_and(|key| *key == Some(RenderLuaStateKey::new(state, options, text)))
+    }
+}
+
+/// Addresses are only compared, never dereferenced. The with_state borrow keeps
+/// these objects alive and immutable until the guard removes the key. In
+/// particular, a cloned/mutated Select row cannot reuse the outer provider.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct RenderLuaStateKey {
+    state: usize,
+    options: usize,
+    options_len: usize,
+    text: usize,
+    thread: std::thread::ThreadId,
+}
+
+impl RenderLuaStateKey {
+    fn new(state: &SkinDrawState, options: &[i32], text: &BTreeMap<i32, String>) -> Self {
+        Self {
+            state: std::ptr::from_ref(state) as usize,
+            options: options.as_ptr() as usize,
+            options_len: options.len(),
+            text: std::ptr::from_ref(text) as usize,
+            thread: std::thread::current().id(),
+        }
+    }
+}
+
+struct RenderLuaStateGuard<'a> {
+    slot: &'a Mutex<Option<RenderLuaStateKey>>,
+    previous: Option<RenderLuaStateKey>,
+}
+
+impl Drop for RenderLuaStateGuard<'_> {
+    fn drop(&mut self) {
+        if let Ok(mut slot) = self.slot.lock() {
+            *slot = self.previous;
+        }
     }
 }
 
@@ -121,6 +170,47 @@ impl LuaMainState for RenderLuaMainState<'_> {
 }
 
 impl SkinLuaDrawRuntime for LuaSkinDrawRuntimeAdapter {
+    fn with_state(
+        &self,
+        state: &SkinDrawState,
+        enabled_options: &[i32],
+        text_values: &BTreeMap<i32, String>,
+        run: &mut dyn FnMut(),
+    ) {
+        let scope = self
+            .runtime
+            .lock()
+            .ok()
+            .and_then(|slot| slot.as_ref().map(LuaSkinRuntime::state_scope));
+        let Some(scope) = scope else {
+            run();
+            return;
+        };
+        let key = RenderLuaStateKey::new(state, enabled_options, text_values);
+        let guard = self.bound_state.lock().ok().and_then(|mut slot| {
+            // Do not interleave scope guards from different threads.
+            if slot.is_some_and(|bound| bound.thread != key.thread) {
+                return None;
+            }
+            Some(RenderLuaStateGuard { slot: &self.bound_state, previous: slot.replace(key) })
+        });
+        let Some(guard) = guard else {
+            run();
+            return;
+        };
+        let provider = RenderLuaMainState { state, enabled_options, text_values };
+        let mut called = false;
+        let _ = scope.with_state(&provider, || {
+            called = true;
+            run();
+        });
+        drop(guard);
+        // If scope setup fails, preserve the ordinary per-callback fallback.
+        if !called {
+            run();
+        }
+    }
+
     fn begin_frame(&self) {
         if let Ok(mut slot) = self.runtime.lock()
             && let Some(runtime) = slot.as_mut()
@@ -140,7 +230,11 @@ impl SkinLuaDrawRuntime for LuaSkinDrawRuntimeAdapter {
             return false;
         };
         let provider = RenderLuaMainState { state, enabled_options, text_values };
-        let result = runtime.evaluate_draw(callback_id, &provider);
+        let result = if self.state_is_bound(state, enabled_options, text_values) {
+            runtime.evaluate_draw_in_scope(callback_id)
+        } else {
+            runtime.evaluate_draw(callback_id, &provider)
+        };
         if let Ok(mut slot) = self.runtime.lock() {
             *slot = Some(runtime);
         }
@@ -156,7 +250,11 @@ impl SkinLuaDrawRuntime for LuaSkinDrawRuntimeAdapter {
     ) -> Option<f64> {
         let mut runtime = self.runtime.lock().ok().and_then(|mut slot| slot.take())?;
         let provider = RenderLuaMainState { state, enabled_options, text_values };
-        let result = runtime.evaluate_number(callback_id, &provider);
+        let result = if self.state_is_bound(state, enabled_options, text_values) {
+            runtime.evaluate_number_in_scope(callback_id)
+        } else {
+            runtime.evaluate_number(callback_id, &provider)
+        };
         if let Ok(mut slot) = self.runtime.lock() {
             *slot = Some(runtime);
         }
@@ -172,7 +270,11 @@ impl SkinLuaDrawRuntime for LuaSkinDrawRuntimeAdapter {
     ) -> Option<String> {
         let mut runtime = self.runtime.lock().ok().and_then(|mut slot| slot.take())?;
         let provider = RenderLuaMainState { state, enabled_options, text_values };
-        let result = runtime.evaluate_text(callback_id, &provider);
+        let result = if self.state_is_bound(state, enabled_options, text_values) {
+            runtime.evaluate_text_in_scope(callback_id)
+        } else {
+            runtime.evaluate_text(callback_id, &provider)
+        };
         if let Ok(mut slot) = self.runtime.lock() {
             *slot = Some(runtime);
         }

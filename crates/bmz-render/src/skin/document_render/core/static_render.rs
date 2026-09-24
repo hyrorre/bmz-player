@@ -130,116 +130,106 @@ macro_rules! skin_document_render_core_static_methods {
             runtime_graphs: SkinRuntimeGraphs<'_>,
             mut cache: Option<&mut ResultRenderCache>,
         ) -> (Vec<SkinRenderItem>, Vec<SkinRenderItem>, Vec<SkinRenderItem>) {
-            let planning = cache.as_deref_mut().map(|cache| cache.cached_planning(self));
-            let images = planning.as_ref().map_or_else(
-                || self.image_map().into(),
-                |p| SkinObjectLookup::Indexed { items: &self.image, indices: &p.objects.images },
-            );
-            let values = planning.as_ref().map_or_else(
-                || {
-                    SkinObjectLookup::Direct(
-                        self.value.iter().map(|v| (v.id.as_str(), v)).collect(),
-                    )
-                },
-                |p| SkinObjectLookup::Indexed { items: &self.value, indices: &p.objects.values },
-            );
-            let enabled_options_storage =
-                if planning.is_none() { self.enabled_options() } else { Vec::new() };
-            let enabled_options: &[i32] =
-                planning.as_ref().map_or(enabled_options_storage.as_slice(), |planning| {
-                    planning.enabled_options.as_ref()
-                });
-            let mut behind = Vec::new();
-            let mut front = Vec::new();
-            let mut failed_overlay = Vec::new();
-            let mut after_notes_marker = false;
-            let destinations = if planning.is_none() {
-                self.all_destinations(enabled_options)
-            } else {
-                Vec::new()
-            };
-            let destination_count = planning
-                .as_ref()
-                .map_or(destinations.len(), |planning| planning.destinations.len());
-            if state.result_failed.is_some()
-                && let Some(cache) = cache.as_deref_mut()
-            {
-                // All segments share counts and the judge_graph image source.
-                // Validate once per frame, not once for every half-degree slice.
-                let source = skin_image_for_destination_id("judge_graph", &images)
-                    .and_then(|image| resolve_document_source(sources, &image.src));
-                cache.prepare_judge_pie(state.judge_counts, source);
-            }
-            for index in 0..destination_count {
-                let Some(destination) = planning
+            with_lua_render_state(state, || {
+                let planning = cache.as_deref_mut().map(|cache| cache.cached_planning(self));
+                let images = planning.as_ref().map_or_else(
+                    || self.image_map().into(),
+                    |p| SkinObjectLookup::Indexed {
+                        items: &self.image,
+                        indices: &p.objects.images,
+                    },
+                );
+                let values = planning.as_ref().map_or_else(
+                    || {
+                        SkinObjectLookup::Direct(
+                            self.value.iter().map(|v| (v.id.as_str(), v)).collect(),
+                        )
+                    },
+                    |p| SkinObjectLookup::Indexed {
+                        items: &self.value,
+                        indices: &p.objects.values,
+                    },
+                );
+                let enabled_options_storage =
+                    if planning.is_none() { self.enabled_options() } else { Vec::new() };
+                let enabled_options: &[i32] =
+                    planning.as_ref().map_or(enabled_options_storage.as_slice(), |planning| {
+                        planning.enabled_options.as_ref()
+                    });
+                let mut behind = Vec::new();
+                let mut front = Vec::new();
+                let mut failed_overlay = Vec::new();
+                let mut after_notes_marker = false;
+                let destinations = if planning.is_none() {
+                    self.all_destinations(enabled_options)
+                } else {
+                    Vec::new()
+                };
+                let destination_count = planning
                     .as_ref()
-                    .and_then(|planning| planning.destinations.get(index).copied())
-                    .and_then(|destination| destination.resolve(self))
-                    .or_else(|| destinations.get(index).copied())
-                else {
-                    continue;
-                };
-                // `{"id":"notes"}` はノーツ描画位置マーカー。以降の destination はノーツ前面に積む。
-                if destination.id == "notes" {
-                    after_notes_marker = true;
-                    continue;
-                }
-                if !destination.op.is_empty()
-                    && !destination_ops_match(destination, enabled_options, state)
-                {
-                    continue;
-                }
-                if !destination.draw.trim().is_empty()
-                    && !eval_skin_draw_condition(&destination.draw, state)
-                {
-                    continue;
-                }
-                let build_pie = || {
-                    self.result_judge_pie_destination_item(
-                        destination,
-                        &images,
-                        enabled_options,
-                        state,
-                        sources,
-                    )
-                };
-                let pie_item = if destination.id == "judge_graph"
-                    && state.result_failed.is_some()
-                    && state.elapsed_ms >= 0
+                    .map_or(destinations.len(), |planning| planning.destinations.len());
+                if state.result_failed.is_some()
                     && let Some(cache) = cache.as_deref_mut()
                 {
-                    if let Some(item) = cache.judge_pie_item(index) {
-                        item.clone()
-                    } else {
-                        let item = build_pie();
-                        if core::fixed_image_destination_cacheable(self, destination, &images)
-                            && !self.hidden_cover.iter().any(|cover| cover.id == destination.id)
-                        {
-                            cache.cache_judge_pie_item(index, item.clone());
-                        }
-                        item
-                    }
-                } else {
-                    build_pie()
-                };
-                if let Some(item) = pie_item {
-                    let target = destination_render_layer(
-                        destination.timer,
-                        after_notes_marker,
-                        &mut behind,
-                        &mut front,
-                        &mut failed_overlay,
-                    );
-                    target.push(item);
-                    continue;
+                    // All segments share counts and the judge_graph image source.
+                    // Validate once per frame, not once for every half-degree slice.
+                    let source = skin_image_for_destination_id("judge_graph", &images)
+                        .and_then(|image| resolve_document_source(sources, &image.src));
+                    cache.prepare_judge_pie(state.judge_counts, source);
                 }
-                if self.destination_uses_skin_gauge_bar_render(destination) {
-                    if let Some(items) = self.resolve_gauge_destination_items(
-                        destination,
-                        enabled_options,
-                        state,
-                        sources,
-                    ) {
+                for index in 0..destination_count {
+                    let Some(destination) = planning
+                        .as_ref()
+                        .and_then(|planning| planning.destinations.get(index).copied())
+                        .and_then(|destination| destination.resolve(self))
+                        .or_else(|| destinations.get(index).copied())
+                    else {
+                        continue;
+                    };
+                    // `{"id":"notes"}` はノーツ描画位置マーカー。以降の destination はノーツ前面に積む。
+                    if destination.id == "notes" {
+                        after_notes_marker = true;
+                        continue;
+                    }
+                    if !destination.op.is_empty()
+                        && !destination_ops_match(destination, enabled_options, state)
+                    {
+                        continue;
+                    }
+                    if !destination.draw.trim().is_empty()
+                        && !eval_skin_draw_condition(&destination.draw, state)
+                    {
+                        continue;
+                    }
+                    let build_pie = || {
+                        self.result_judge_pie_destination_item(
+                            destination,
+                            &images,
+                            enabled_options,
+                            state,
+                            sources,
+                        )
+                    };
+                    let pie_item = if destination.id == "judge_graph"
+                        && state.result_failed.is_some()
+                        && state.elapsed_ms >= 0
+                        && let Some(cache) = cache.as_deref_mut()
+                    {
+                        if let Some(item) = cache.judge_pie_item(index) {
+                            item.clone()
+                        } else {
+                            let item = build_pie();
+                            if core::fixed_image_destination_cacheable(self, destination, &images)
+                                && !self.hidden_cover.iter().any(|cover| cover.id == destination.id)
+                            {
+                                cache.cache_judge_pie_item(index, item.clone());
+                            }
+                            item
+                        }
+                    } else {
+                        build_pie()
+                    };
+                    if let Some(item) = pie_item {
                         let target = destination_render_layer(
                             destination.timer,
                             after_notes_marker,
@@ -247,78 +237,98 @@ macro_rules! skin_document_render_core_static_methods {
                             &mut front,
                             &mut failed_overlay,
                         );
-                        target.extend(items);
+                        target.push(item);
+                        continue;
                     }
-                    continue;
-                }
-                let cached_items =
-                    if core::static_image_destination_cacheable(self, destination, &images) {
-                        cache.as_deref_mut().map(|cache| {
-                            cache.cached_static_image_items(index, || {
-                                Arc::from(
-                                    self.resolve_destination_items(
-                                        index,
-                                        destination,
-                                        DestinationResolveContext {
-                                            images: &images,
-                                            values: &values,
-                                            enabled_options,
-                                            state,
-                                            text_state,
-                                            sources,
-                                            runtime_graphs,
-                                            cache: None,
-                                        },
+                    if self.destination_uses_skin_gauge_bar_render(destination) {
+                        if let Some(items) = self.resolve_gauge_destination_items(
+                            destination,
+                            enabled_options,
+                            state,
+                            sources,
+                        ) {
+                            let target = destination_render_layer(
+                                destination.timer,
+                                after_notes_marker,
+                                &mut behind,
+                                &mut front,
+                                &mut failed_overlay,
+                            );
+                            target.extend(items);
+                        }
+                        continue;
+                    }
+                    let cached_items =
+                        if core::static_image_destination_cacheable(self, destination, &images) {
+                            cache.as_deref_mut().map(|cache| {
+                                cache.cached_static_image_items(index, || {
+                                    Arc::from(
+                                        self.resolve_destination_items(
+                                            index,
+                                            destination,
+                                            DestinationResolveContext {
+                                                images: &images,
+                                                values: &values,
+                                                enabled_options,
+                                                state,
+                                                text_state,
+                                                sources,
+                                                runtime_graphs,
+                                                cache: None,
+                                            },
+                                        )
+                                        .unwrap_or_default(),
                                     )
-                                    .unwrap_or_default(),
-                                )
+                                })
                             })
-                        })
+                        } else {
+                            None
+                        };
+                    let owned_items = if cached_items.is_none() {
+                        self.resolve_destination_items(
+                            index,
+                            destination,
+                            DestinationResolveContext {
+                                images: &images,
+                                values: &values,
+                                enabled_options,
+                                state,
+                                text_state,
+                                sources,
+                                runtime_graphs,
+                                cache: cache.as_deref_mut(),
+                            },
+                        )
                     } else {
                         None
                     };
-                let owned_items = if cached_items.is_none() {
-                    self.resolve_destination_items(
-                        index,
-                        destination,
-                        DestinationResolveContext {
-                            images: &images,
-                            values: &values,
-                            enabled_options,
-                            state,
-                            text_state,
-                            sources,
-                            runtime_graphs,
-                            cache: cache.as_deref_mut(),
-                        },
-                    )
-                } else {
-                    None
-                };
-                if let Some(items) = cached_items.as_deref().or(owned_items.as_deref()) {
-                    let after_notes_marker = after_notes_marker
-                        || self.destination_looks_like_pre_notes_judge_line(
-                            destination,
-                            &images,
-                            enabled_options,
-                            state,
-                            planning
-                                .as_ref()
-                                .and_then(|planning| planning.destinations.get(index + 1).copied())
-                                .and_then(|destination| destination.resolve(self))
-                                .or_else(|| destinations.get(index + 1).copied()),
+                    if let Some(items) = cached_items.as_deref().or(owned_items.as_deref()) {
+                        let after_notes_marker = after_notes_marker
+                            || self.destination_looks_like_pre_notes_judge_line(
+                                destination,
+                                &images,
+                                enabled_options,
+                                state,
+                                planning
+                                    .as_ref()
+                                    .and_then(|planning| {
+                                        planning.destinations.get(index + 1).copied()
+                                    })
+                                    .and_then(|destination| destination.resolve(self))
+                                    .or_else(|| destinations.get(index + 1).copied()),
+                            );
+                        let target = destination_render_layer(
+                            destination.timer,
+                            after_notes_marker,
+                            &mut behind,
+                            &mut front,
+                            &mut failed_overlay,
                         );
-                    let target = destination_render_layer(
-                        destination.timer,
-                        after_notes_marker,
-                        &mut behind,
-                        &mut front,
-                        &mut failed_overlay,
-                    );
-                    target.extend(items.iter().cloned());
+                        target.extend(items.iter().cloned());
+                    }
                 }
-            }
-            (behind, front, failed_overlay)
+                (behind, front, failed_overlay)
+            })
         }
     };
 }
