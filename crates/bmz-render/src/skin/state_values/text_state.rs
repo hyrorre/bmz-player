@@ -384,13 +384,15 @@ pub fn lua_main_state_number(ref_id: i32, state: &SkinDrawState) -> i64 {
         .unwrap_or_default()
 }
 
-/// beatorajaは未プレイResultの前回BPとBP差分をInteger.MIN_VALUEでLuaへ返し、
-/// SkinNumber側だけを非表示にする。通常のnumber描画はNoneのまま維持する。
+/// beatorajaの欠損値をLuaにもそのまま渡し、数値画像だけを非表示にする。
+/// IRランキングのEXSCORE/順位と、未プレイResultの前回BP/BP差分が対象。
+/// 通常のnumber描画はNoneのまま維持し、実在する0は隠さない。
 pub(in crate::skin) fn lua_missing_number_sentinel(
     ref_id: i32,
     state: &SkinDrawState,
 ) -> Option<i64> {
-    (state.result_failed.is_some() && matches!(ref_id, 176 | 178)).then_some(i64::from(i32::MIN))
+    (matches!(ref_id, 380..=399) || (state.result_failed.is_some() && matches!(ref_id, 176 | 178)))
+        .then_some(i64::from(i32::MIN))
 }
 
 pub fn lua_main_state_float(ref_id: i32, state: &SkinDrawState) -> f64 {

@@ -10,3 +10,5 @@ mod cases_02;
 mod cases_03;
 #[path = "lua/cases_04.rs"]
 mod cases_04;
+#[path = "lua/ir_missing_scores.rs"]
+mod ir_missing_scores;

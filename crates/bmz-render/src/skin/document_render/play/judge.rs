@@ -254,6 +254,12 @@ macro_rules! skin_document_render_play_judge_methods {
             align_override: Option<i32>,
             signed_render: SignedNumberRender,
         ) -> Vec<SkinRenderItem> {
+            // SkinNumber.prepare in beatoraja reserves both int extrema for
+            // hidden values. Keep the sentinel visible to Lua conditions/text,
+            // but never turn it into digit images (including signed numbers).
+            if number == i64::from(i32::MIN) || number == i64::from(i32::MAX) {
+                return Vec::new();
+            }
             let Some(value) = self.value.iter().find(|value| value.id == value_id) else {
                 return Vec::new();
             };
