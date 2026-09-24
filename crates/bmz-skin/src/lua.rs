@@ -9,7 +9,7 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use std::{fmt, panic};
 
 use anyhow::{Context, Result, anyhow, bail};
-use mlua::{Function, HookTriggers, Lua, RegistryKey, Table, Value, Variadic, VmState};
+use mlua::{Function, HookTriggers, Lua, Table, Value, Variadic, VmState};
 use serde_json::{Map as JsonMap, Number as JsonNumber, Value as JsonValue};
 
 use bmz_skin_document::{

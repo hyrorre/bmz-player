@@ -64,10 +64,10 @@ pub struct ConvertReport {
 pub(super) struct LuaRuntimeCallback {
     pub(super) path: String,
     pub(super) kind: LuaRuntimeCallbackKind,
-    pub(super) key: Option<RegistryKey>,
+    pub(super) function: Option<Function>,
 }
 
-/// A Lua-only sidecar that owns the runtime VM and every callback registry key.
+/// A Lua-only sidecar that owns the runtime VM and every callback function.
 ///
 /// The VM is intentionally not cloneable. Its callbacks are obtained by a second
 /// load after inference has completed, so inference can never mutate runtime
@@ -262,10 +262,9 @@ impl LuaSkinRuntime {
                 callback.path, callback.kind
             )));
         }
-        let key = callback.key.as_ref().ok_or_else(|| {
+        let function = callback.function.as_ref().ok_or_else(|| {
             mlua::Error::runtime(format!("Lua callback was not registered at {}", callback.path))
         })?;
-        let function: Function = self.lua.registry_value(key)?;
         if let Some(state) = state {
             return self.state_scope().with_state(state, || {
                 function.call::<Value>(()).and_then(LuaRuntimeEvaluatedValue::from_lua)

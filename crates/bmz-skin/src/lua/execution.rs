@@ -372,7 +372,9 @@ pub(super) fn build_lua_skin_runtime(request: LuaSkinRuntimeRequest<'_>) -> Resu
         let path = &spec.path;
         let callback =
             lua_value_at_field_path(value.clone(), path).ok().and_then(|value| match value {
-                Value::Function(function) => lua.create_registry_value(function).ok(),
+                // Keep the rooted handle instead of looking it up and creating
+                // a temporary Function handle again on every callback call.
+                Value::Function(function) => Some(function),
                 _ => None,
             });
         if callback.is_some() {
@@ -394,7 +396,11 @@ pub(super) fn build_lua_skin_runtime(request: LuaSkinRuntimeRequest<'_>) -> Resu
                 "failed to register Lua callback; callback uses its safe fallback value"
             );
         }
-        callbacks.push(LuaRuntimeCallback { path: path.clone(), kind: spec.kind, key: callback });
+        callbacks.push(LuaRuntimeCallback {
+            path: path.clone(),
+            kind: spec.kind,
+            function: callback,
+        });
     }
     Ok(LuaSkinRuntime {
         lua,
