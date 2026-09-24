@@ -331,3 +331,17 @@ Luxez-Flat単曲・コース、MILLIONDOLLAR単曲は全348フレームの描画
 | コースリザルト ECFN・4曲 | 107.4 | 61.3 | 42.9% |
 
 これはCPU描画計画作成時間の短縮で、FPSの上昇率ではない。
+
+### 最終検証と実画面の再計測状況
+
+全変更後の検証結果:
+
+- `cargo fmt --check`、`cargo check --offline`、`cargo clippy --offline`、exampleのclippyは成功。
+- アプリ側1975成功・3 ignored、bmz-render 625成功・1 ignored、bmz-font 9成功、
+  bmz-skin-document 10成功、bmz-skin-convert 2成功。
+- bmz-skinは214成功・既存WMII関連3件失敗で、調査時と同じ結果。
+
+実画面のA/B再計測はMacの画面ロックによりsurfaceを取得できず、最初のpresentも成功していなかった。
+この試行で出た数千FPSは描画を完了しないループ頻度なので全て除外した。
+ログは `scene-optimization/invalid-locked/` に分け、集計にもpresent成功とGPU encode/queue実行の確認を追加した。
+この時点では変更後の実FPSとスクリーンショットは未確認。前半の約120 FPSは最適化前の調査値。
