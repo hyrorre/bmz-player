@@ -522,6 +522,11 @@ pub fn build_game_session_with_input_backend(
     }
 
     GameSession {
+        conditional: bmz_gameplay::session::conditional::ConditionalRuntime::with_replay(
+            replay_player
+                .as_ref()
+                .map(|player| player.branch_decisions.clone().unwrap_or_default()),
+        ),
         gauge,
         opponent_gauge,
         judge,

@@ -351,6 +351,17 @@ mod tests {
         let error = ensure_score_payload_allowed(&bms_ir, &payload).unwrap_err();
         assert_eq!(error.to_string(), "BMS-IR local score backfill is disabled");
         assert!(ensure_score_payload_allowed(&bmz, &payload).is_ok());
+
+        let mut payload = payload;
+        payload.play_options.clear();
+        payload.play_options.insert("conditional".into(), serde_json::Value::Bool(true));
+        for provider in [rian, bms_ir, bmz] {
+            let error = ensure_score_payload_allowed(&provider, &payload).unwrap_err();
+            assert_eq!(
+                error.to_string(),
+                "dynamic conditional charts are not supported by IR providers yet"
+            );
+        }
     }
 
     #[test]

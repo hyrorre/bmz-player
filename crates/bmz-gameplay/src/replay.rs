@@ -21,11 +21,15 @@ impl ReplayRecorder {
 
 #[derive(Debug, Clone, Default)]
 pub struct ReplayPlayer {
+    pub branch_decisions: Option<Vec<bmz_core::replay::BranchDecision>>,
     pub events: Vec<ReplayEvent>,
     pub next_index: usize,
 }
 
 impl ReplayPlayer {
+    pub fn new(events: Vec<ReplayEvent>) -> Self {
+        Self { events, ..Self::default() }
+    }
     pub fn poll_until(&mut self, now: TimeUs) -> Vec<InputEvent> {
         let mut out = Vec::new();
         while let Some(event) = self.events.get(self.next_index).copied() {
@@ -72,7 +76,7 @@ mod tests {
 
         assert_eq!(recorder.events[0].scratch_direction, Some(ScratchDirection::Up));
 
-        let mut player = ReplayPlayer { events: recorder.events, next_index: 0 };
+        let mut player = ReplayPlayer::new(recorder.events);
         let replayed = player.poll_until(TimeUs(123_456));
         assert_eq!(replayed.len(), 1);
         assert_eq!(replayed[0].source, InputSource::Replay);
@@ -82,6 +86,7 @@ mod tests {
     #[test]
     fn player_skip_before_keeps_boundary_event() {
         let mut player = ReplayPlayer {
+            branch_decisions: None,
             events: vec![
                 ReplayEvent {
                     lane: bmz_core::lane::Lane::Key1,

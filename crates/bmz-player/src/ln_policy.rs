@@ -22,6 +22,7 @@ pub enum LnScorePolicy {
     ForceLn,
     ForceCn,
     ForceHcn,
+    ForceHln,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -30,6 +31,7 @@ pub struct ChartLnProfile {
     pub has_defined_ln: bool,
     pub has_defined_cn: bool,
     pub has_defined_hcn: bool,
+    pub has_defined_hln: bool,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -38,6 +40,7 @@ pub struct ChartLnCounts {
     pub defined_ln_pairs: u32,
     pub defined_cn_pairs: u32,
     pub defined_hcn_pairs: u32,
+    pub defined_hln_pairs: u32,
 }
 
 impl ChartLnCounts {
@@ -48,6 +51,7 @@ impl ChartLnCounts {
                 Some(LongNoteMode::Ln) => &mut counts.defined_ln_pairs,
                 Some(LongNoteMode::Cn) => &mut counts.defined_cn_pairs,
                 Some(LongNoteMode::Hcn) => &mut counts.defined_hcn_pairs,
+                Some(LongNoteMode::Hln) => &mut counts.defined_hln_pairs,
                 None => &mut counts.undefined_ln_pairs,
             };
             *count = count.saturating_add(1);
@@ -61,6 +65,7 @@ impl ChartLnCounts {
             has_defined_ln: self.defined_ln_pairs > 0,
             has_defined_cn: self.defined_cn_pairs > 0,
             has_defined_hcn: self.defined_hcn_pairs > 0,
+            has_defined_hln: self.defined_hln_pairs > 0,
         }
     }
 
@@ -69,6 +74,7 @@ impl ChartLnCounts {
             .saturating_add(self.defined_ln_pairs)
             .saturating_add(self.defined_cn_pairs)
             .saturating_add(self.defined_hcn_pairs)
+            .saturating_add(self.defined_hln_pairs)
     }
 
     /// Score-target note count for a resolved score policy.
@@ -77,7 +83,7 @@ impl ChartLnCounts {
     /// LN ends replace their LongStart target and therefore add nothing here.
     pub const fn scored_total_notes(self, base_total_notes: u32, policy: LnScorePolicy) -> u32 {
         let extra_ends = match policy {
-            LnScorePolicy::ForceLn => 0,
+            LnScorePolicy::ForceLn | LnScorePolicy::ForceHln => 0,
             LnScorePolicy::ForceCn | LnScorePolicy::ForceHcn => self.total_pairs(),
             LnScorePolicy::AutoLn => self.defined_cn_pairs.saturating_add(self.defined_hcn_pairs),
             LnScorePolicy::AutoCn | LnScorePolicy::AutoHcn => self
@@ -114,7 +120,7 @@ impl ChartLnProfile {
     }
 
     pub fn has_any_defined_ln(self) -> bool {
-        self.has_defined_ln || self.has_defined_cn || self.has_defined_hcn
+        self.has_defined_ln || self.has_defined_cn || self.has_defined_hcn || self.has_defined_hln
     }
 
     /// Combine chart LN declarations for course-wide score-key normalization.
@@ -124,10 +130,15 @@ impl ChartLnProfile {
             has_defined_ln: self.has_defined_ln || other.has_defined_ln,
             has_defined_cn: self.has_defined_cn || other.has_defined_cn,
             has_defined_hcn: self.has_defined_hcn || other.has_defined_hcn,
+            has_defined_hln: self.has_defined_hln || other.has_defined_hln,
         }
     }
 
     fn single_defined_mode(self) -> Option<LongNoteMode> {
+        if self.has_defined_hln {
+            return (!self.has_defined_ln && !self.has_defined_cn && !self.has_defined_hcn)
+                .then_some(LongNoteMode::Hln);
+        }
         match (self.has_defined_ln, self.has_defined_cn, self.has_defined_hcn) {
             (true, false, false) => Some(LongNoteMode::Ln),
             (false, true, false) => Some(LongNoteMode::Cn),
@@ -138,7 +149,9 @@ impl ChartLnProfile {
 }
 
 pub const fn source_ln_mode(profile: ChartLnProfile) -> Option<LongNoteMode> {
-    if profile.has_defined_hcn {
+    if profile.has_defined_hln {
+        Some(LongNoteMode::Hln)
+    } else if profile.has_defined_hcn {
         Some(LongNoteMode::Hcn)
     } else if profile.has_defined_cn {
         Some(LongNoteMode::Cn)
@@ -154,6 +167,7 @@ pub const fn max_long_note_mode(
     right: Option<LongNoteMode>,
 ) -> Option<LongNoteMode> {
     match (left, right) {
+        (Some(LongNoteMode::Hln), _) | (_, Some(LongNoteMode::Hln)) => Some(LongNoteMode::Hln),
         (Some(LongNoteMode::Hcn), _) | (_, Some(LongNoteMode::Hcn)) => Some(LongNoteMode::Hcn),
         (Some(LongNoteMode::Cn), _) | (_, Some(LongNoteMode::Cn)) => Some(LongNoteMode::Cn),
         (Some(LongNoteMode::Ln), _) | (_, Some(LongNoteMode::Ln)) => Some(LongNoteMode::Ln),
@@ -172,8 +186,11 @@ pub fn played_ln_mode(profile: ChartLnProfile, policy: LnScorePolicy) -> Option<
         LnScorePolicy::ForceLn => Some(LongNoteMode::Ln),
         LnScorePolicy::ForceCn => Some(LongNoteMode::Cn),
         LnScorePolicy::ForceHcn => Some(LongNoteMode::Hcn),
+        LnScorePolicy::ForceHln => Some(LongNoteMode::Hln),
         LnScorePolicy::AutoLn | LnScorePolicy::AutoCn | LnScorePolicy::AutoHcn => {
-            let defined = if profile.has_defined_hcn {
+            let defined = if profile.has_defined_hln {
+                Some(LongNoteMode::Hln)
+            } else if profile.has_defined_hcn {
                 Some(LongNoteMode::Hcn)
             } else if profile.has_defined_cn {
                 Some(LongNoteMode::Cn)
@@ -187,7 +204,10 @@ pub fn played_ln_mode(profile: ChartLnProfile, policy: LnScorePolicy) -> Option<
                     LnScorePolicy::AutoLn => LongNoteMode::Ln,
                     LnScorePolicy::AutoCn => LongNoteMode::Cn,
                     LnScorePolicy::AutoHcn => LongNoteMode::Hcn,
-                    LnScorePolicy::ForceLn | LnScorePolicy::ForceCn | LnScorePolicy::ForceHcn => {
+                    LnScorePolicy::ForceLn
+                    | LnScorePolicy::ForceCn
+                    | LnScorePolicy::ForceHcn
+                    | LnScorePolicy::ForceHln => {
                         unreachable!()
                     }
                 })
@@ -217,7 +237,7 @@ impl LnPolicySetting {
 
     pub const fn auto(mode: LongNoteMode) -> Self {
         match mode {
-            LongNoteMode::Ln => Self::AutoLn,
+            LongNoteMode::Ln | LongNoteMode::Hln => Self::AutoLn,
             LongNoteMode::Cn => Self::AutoCn,
             LongNoteMode::Hcn => Self::AutoHcn,
         }
@@ -285,6 +305,7 @@ impl LnScorePolicy {
             Self::ForceLn => "ForceLn",
             Self::ForceCn => "ForceCn",
             Self::ForceHcn => "ForceHcn",
+            Self::ForceHln => "ForceHln",
         }
     }
 
@@ -296,6 +317,7 @@ impl LnScorePolicy {
             "ForceLn" => Some(Self::ForceLn),
             "ForceCn" => Some(Self::ForceCn),
             "ForceHcn" => Some(Self::ForceHcn),
+            "ForceHln" => Some(Self::ForceHln),
             _ => None,
         }
     }
@@ -305,12 +327,13 @@ impl LnScorePolicy {
             LongNoteMode::Ln => Self::ForceLn,
             LongNoteMode::Cn => Self::ForceCn,
             LongNoteMode::Hcn => Self::ForceHcn,
+            LongNoteMode::Hln => Self::ForceHln,
         }
     }
 
     pub const fn auto(mode: LongNoteMode) -> Self {
         match mode {
-            LongNoteMode::Ln => Self::AutoLn,
+            LongNoteMode::Ln | LongNoteMode::Hln => Self::AutoLn,
             LongNoteMode::Cn => Self::AutoCn,
             LongNoteMode::Hcn => Self::AutoHcn,
         }
@@ -327,6 +350,8 @@ impl LnScorePolicy {
             Self::ForceLn => LnPolicySetting::ForceLn,
             Self::ForceCn => LnPolicySetting::ForceCn,
             Self::ForceHcn => LnPolicySetting::ForceHcn,
+            // ForceHln は全ペアが明示 HLN の譜面用の正規化キー。
+            Self::ForceHln => LnPolicySetting::AutoLn,
         }
     }
 }
@@ -401,9 +426,16 @@ pub fn apply_score_ln_policy_to_chart(policy: LnScorePolicy, chart: &mut Playabl
         LnScorePolicy::AutoLn | LnScorePolicy::ForceLn => LongNoteMode::Ln,
         LnScorePolicy::AutoCn | LnScorePolicy::ForceCn => LongNoteMode::Cn,
         LnScorePolicy::AutoHcn | LnScorePolicy::ForceHcn => LongNoteMode::Hcn,
+        LnScorePolicy::ForceHln => LongNoteMode::Hln,
     };
     chart.metadata.long_note_mode = fallback_mode;
-    if matches!(policy, LnScorePolicy::ForceLn | LnScorePolicy::ForceCn | LnScorePolicy::ForceHcn) {
+    if matches!(
+        policy,
+        LnScorePolicy::ForceLn
+            | LnScorePolicy::ForceCn
+            | LnScorePolicy::ForceHcn
+            | LnScorePolicy::ForceHln
+    ) {
         for pair in &mut chart.long_notes {
             pair.mode = Some(fallback_mode);
         }
@@ -415,6 +447,7 @@ pub fn effective_ln_mode(setting: LnPolicySetting, profile: ChartLnProfile) -> L
         LnScorePolicy::AutoLn | LnScorePolicy::ForceLn => LongNoteMode::Ln,
         LnScorePolicy::AutoCn | LnScorePolicy::ForceCn => LongNoteMode::Cn,
         LnScorePolicy::AutoHcn | LnScorePolicy::ForceHcn => LongNoteMode::Hcn,
+        LnScorePolicy::ForceHln => LongNoteMode::Hln,
     }
 }
 
@@ -450,6 +483,7 @@ mod tests {
         has_defined_ln: false,
         has_defined_cn: false,
         has_defined_hcn: false,
+        has_defined_hln: false,
     };
     const UNDEFINED_ONLY: ChartLnProfile = ChartLnProfile { has_undefined_ln: true, ..NONE };
     const DEFINED_LN_ONLY: ChartLnProfile = ChartLnProfile { has_defined_ln: true, ..NONE };
@@ -459,6 +493,25 @@ mod tests {
         ChartLnProfile { has_defined_ln: true, has_defined_cn: true, ..NONE };
     const UNDEFINED_AND_DEFINED: ChartLnProfile =
         ChartLnProfile { has_undefined_ln: true, has_defined_cn: true, ..NONE };
+
+    #[test]
+    fn hln_auto_preserves_explicit_mode_and_force_converts_it() {
+        for setting in [LnPolicySetting::AutoLn, LnPolicySetting::AutoCn, LnPolicySetting::AutoHcn]
+        {
+            let mut chart = chart_with_long_modes(&[Some(LongNoteMode::Hln)]);
+            assert_eq!(score_ln_policy_for_chart(setting, &chart), LnScorePolicy::ForceHln);
+            assert_eq!(expected_scored_note_count(&chart, setting), 1);
+            apply_ln_policy_to_chart(setting, &mut chart);
+            assert_eq!(chart.long_notes[0].mode, Some(LongNoteMode::Hln));
+        }
+        let mut chart =
+            chart_with_long_modes(&[None, Some(LongNoteMode::Hln), Some(LongNoteMode::Cn)]);
+        assert_eq!(expected_scored_note_count(&chart, LnPolicySetting::AutoCn), 5);
+        assert_eq!(expected_scored_note_count(&chart, LnPolicySetting::ForceLn), 3);
+        apply_ln_policy_to_chart(LnPolicySetting::ForceHcn, &mut chart);
+        assert!(chart.long_notes.iter().all(|pair| pair.mode == Some(LongNoteMode::Hcn)));
+        assert_eq!(LnScorePolicy::from_str_opt("ForceHln"), Some(LnScorePolicy::ForceHln));
+    }
 
     #[test]
     fn policy_setting_ir_strings_use_score_policy_casing() {
@@ -752,6 +805,7 @@ mod tests {
                 defined_ln_pairs: 1,
                 defined_cn_pairs: 1,
                 defined_hcn_pairs: 1,
+                defined_hln_pairs: 0,
             }
         );
         assert_eq!(counts.canonical_total_notes(chart.total_notes), 6);

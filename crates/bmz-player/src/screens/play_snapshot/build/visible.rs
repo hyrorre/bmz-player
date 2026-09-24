@@ -315,6 +315,18 @@ fn long_body_state(
     mode: LongNoteMode,
 ) -> LongBodyState {
     let lane_index = long.lane.index();
+    if mode == LongNoteMode::Hln {
+        return match session.judge.hln_bodies.iter().find(|body| {
+            body.pair_index == pair_index
+                && body.activated <= chart_now
+                && chart_now < long.end_time
+        }) {
+            Some(body) if !body.held => LongBodyState::HcnDamage,
+            Some(body) if body.reactive => LongBodyState::HcnActive,
+            Some(_) => LongBodyState::Processing,
+            None => LongBodyState::Inactive,
+        };
+    }
     if session.judge.lanes[lane_index]
         .active_long
         .is_some_and(|active| active.pair_index == pair_index)

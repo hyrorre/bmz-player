@@ -1,6 +1,7 @@
 pub mod bga;
 pub mod bga_asset;
 pub mod bga_keybound;
+pub mod conditional;
 pub mod hash;
 pub mod import;
 pub mod model;

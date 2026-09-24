@@ -1,6 +1,22 @@
 use super::*;
 
 #[test]
+fn hln_skin_refs_expose_effective_mode_and_canonical_score_policy() {
+    let state = SkinDrawState {
+        ln_score_policy_index: Some(6),
+        result_ln_mode_index: Some(3),
+        ..SkinDrawState::default()
+    };
+    assert_eq!(skin_state_number(308, &state), Some(3));
+    assert_eq!(skin_state_number(SKIN_REF_BMZ_LN_SCORE_POLICY, &state), Some(6));
+    assert_eq!(
+        skin_main_state_text(SKIN_REF_BMZ_LN_SCORE_POLICY, Some(&state), &SkinTextState::default()),
+        "FORCE(HLN)"
+    );
+    assert!(test_skin_op(SKIN_OPTION_BMZ_LN_SCORE_POLICY_FORCE, &[], &state));
+}
+
+#[test]
 fn skin_context_updates_user_selected_options() {
     let document: SkinDocument = serde_json::from_str(
         r#"
@@ -63,6 +79,52 @@ fn skin_context_updates_user_selected_options() {
         original_one.as_slice(),
         [SkinRenderItem::Image { rect, .. }] if approx_eq(rect.x, 0.1)
     ));
+}
+
+#[test]
+fn hln_parts_fall_back_independently_to_hcn_then_ln() {
+    let mut document: SkinDocument = serde_json::from_value(serde_json::json!({
+        "type": 0,
+        "image": [
+            {"id":"ln","src":1,"x":10,"y":0,"w":10,"h":1},
+            {"id":"hcn","src":1,"x":20,"y":0,"w":10,"h":1},
+            {"id":"hln","src":1,"x":30,"y":0,"w":10,"h":1}
+        ],
+        "note": {"id":"notes", "note":["ln"], "lnbodyActive":["ln"],
+            "hcnbodyActive":["hcn"], "hlnbodyMiss":["hln"]}
+    }))
+    .unwrap();
+    let sources = HashMap::from([(
+        "1".into(),
+        SkinDocumentTexture {
+            source_id: "1".into(),
+            texture: SkinTextureId(42),
+            source_size: SkinImageSize { width: 100.0, height: 50.0 },
+        },
+    )]);
+    let render_x = |doc: &SkinDocument, state| {
+        let item = doc
+            .note_long_body_render_item(
+                Lane::Key1,
+                KeyMode::K7,
+                Rect { x: 0.0, y: 0.0, width: 0.1, height: 0.1 },
+                LongNoteMode::Hln,
+                state,
+                &SkinDrawState::default(),
+                &sources,
+            )
+            .unwrap();
+        match item {
+            SkinRenderItem::Image { uv, .. } => uv.x,
+            _ => panic!("image expected"),
+        }
+    };
+    assert!(approx_eq(render_x(&document, LongBodyState::HcnDamage), 0.3));
+    assert!(approx_eq(render_x(&document, LongBodyState::Processing), 0.2));
+    document.note.as_mut().unwrap().hcnbody_active.clear();
+    assert!(approx_eq(render_x(&document, LongBodyState::Processing), 0.1));
+    document.note.as_mut().unwrap().hlnbody_active = vec![String::new()];
+    assert!(approx_eq(render_x(&document, LongBodyState::Processing), 0.1));
 }
 
 #[test]

@@ -38,6 +38,10 @@ pub struct PlayableChart {
 
 #[derive(Debug, Clone)]
 pub struct ChartMetadata {
+    pub conditional: Option<std::sync::Arc<crate::conditional::ConditionalProgram>>,
+    pub conditional_bgm_keys: Vec<crate::conditional::BgmKey>,
+    pub conditional_evaluation_times: Vec<TimeUs>,
+    pub conditional_revision: usize,
     /// File syntax used to import the chart. Runtime transforms preserve this provenance.
     pub source_format: ChartSourceFormat,
     pub title: String,
@@ -121,11 +125,17 @@ pub enum LongNoteMode {
     Cn,
     /// CN + 押下中のゲージ増加 / 早離しペナルティ (IIDX HCN 相当)。
     Hcn,
+    /// LN の終了時総合評価と HCN の保持ゲージを組み合わせる。
+    Hln,
 }
 
 impl Default for ChartMetadata {
     fn default() -> Self {
         Self {
+            conditional: None,
+            conditional_bgm_keys: Vec::new(),
+            conditional_evaluation_times: Vec::new(),
+            conditional_revision: 0,
             source_format: ChartSourceFormat::Unknown,
             title: String::new(),
             subtitle: String::new(),
@@ -152,6 +162,13 @@ impl Default for ChartMetadata {
             long_note_mode: LongNoteMode::default(),
             long_note_mode_defined: false,
         }
+    }
+}
+
+impl ChartMetadata {
+    /// File-level feature, including blocks excluded by the static RANDOM selection.
+    pub fn has_conditional(&self) -> bool {
+        self.conditional.is_some() || self.bms_headers.contains_key("CONDITIONAL")
     }
 }
 

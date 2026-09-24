@@ -256,7 +256,7 @@ impl LibraryDatabase {
         let mut stmt = self.conn.prepare(&sql)?;
         let rows = stmt.query_map(params![source_url], |row| {
             let chart = chart_list_item_from_row(row)?;
-            let level: String = row.get(36)?;
+            let level: String = row.get("level")?;
             Ok((chart, level))
         })?;
         rows.collect::<std::result::Result<Vec<_>, _>>().map_err(Into::into)

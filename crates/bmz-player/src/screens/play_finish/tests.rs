@@ -1022,6 +1022,7 @@ fn session() -> GameSession {
         &chart.timing_events,
     );
     GameSession {
+        conditional: Default::default(),
         session_mode_index: 0,
         chart: Arc::clone(&chart),
         play_config_key_mode: chart.metadata.key_mode,

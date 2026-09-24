@@ -145,6 +145,7 @@ fn session_with_autoplay(chart: PlayableChart) -> GameSession {
     let timing_map =
         TimingMap::from_chart_timing_events(chart.metadata.initial_bpm, &chart.timing_events);
     GameSession {
+        conditional: Default::default(),
         session_mode_index: 0,
         chart: Arc::clone(&chart),
         play_config_key_mode: chart.metadata.key_mode,
@@ -255,6 +256,9 @@ fn session_with_autoplay(chart: PlayableChart) -> GameSession {
     }
 }
 
+#[path = "tests/conditional.rs"]
+mod conditional;
+
 fn chart_with_keysound() -> PlayableChart {
     let note = NoteEvent {
         id: NoteId(1),
@@ -344,3 +348,7 @@ mod cases_02;
 mod cases_03;
 #[path = "tests/cases_04.rs"]
 mod cases_04;
+#[path = "tests/hln.rs"]
+mod hln_tests;
+#[path = "tests/long_end.rs"]
+mod long_end_tests;

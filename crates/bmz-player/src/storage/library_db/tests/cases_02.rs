@@ -397,6 +397,14 @@ fn library_migration_merges_windows_separator_variant_paths() {
     configure_connection(&conn).unwrap();
     run_migrations(&mut conn, &LIBRARY_MIGRATIONS[..migration_index]).unwrap();
     let mut db = LibraryDatabase::from_connection(conn);
+    // 現行 importer で fixture を作り、migration の直前に旧 schema へ戻す。
+    db.conn()
+        .execute_batch(
+            "ALTER TABLE charts ADD COLUMN has_defined_hln INTEGER NOT NULL DEFAULT 0;
+        ALTER TABLE charts ADD COLUMN defined_hln_pairs INTEGER NOT NULL DEFAULT 0;
+        ALTER TABLE charts ADD COLUMN has_conditional INTEGER NOT NULL DEFAULT 0;",
+        )
+        .unwrap();
 
     db.conn()
         .execute_batch(
@@ -457,11 +465,18 @@ fn library_migration_merges_windows_separator_variant_paths() {
     let course_id = db.upsert_course("table:test", &course, 0, 1).unwrap();
     assert_eq!(db.list_course_entries(course_id).unwrap()[0].entry.chart_id, Some(old_id));
 
+    db.conn()
+        .execute_batch(
+            "ALTER TABLE charts DROP COLUMN has_defined_hln;
+        ALTER TABLE charts DROP COLUMN defined_hln_pairs;
+        ALTER TABLE charts DROP COLUMN has_conditional;",
+        )
+        .unwrap();
     run_migrations(db.conn_mut(), &LIBRARY_MIGRATIONS[migration_index..]).unwrap();
 
     let version: i32 =
         db.conn().pragma_query_value(None, "user_version", |row| row.get(0)).unwrap();
-    assert_eq!(version, 33);
+    assert_eq!(version, 35);
     assert_eq!(db.list_course_entries(course_id).unwrap()[0].entry.chart_id, Some(refreshed_id));
     assert_ne!(copy_id, refreshed_id, "a real copy at another path must remain separate");
 
@@ -515,6 +530,13 @@ fn library_migration_removes_windows_extended_path_prefixes() {
     configure_connection(&conn).unwrap();
     run_migrations(&mut conn, &LIBRARY_MIGRATIONS[..migration_index]).unwrap();
     let mut db = LibraryDatabase::from_connection(conn);
+    db.conn()
+        .execute_batch(
+            "ALTER TABLE charts ADD COLUMN has_defined_hln INTEGER NOT NULL DEFAULT 0;
+        ALTER TABLE charts ADD COLUMN defined_hln_pairs INTEGER NOT NULL DEFAULT 0;
+        ALTER TABLE charts ADD COLUMN has_conditional INTEGER NOT NULL DEFAULT 0;",
+        )
+        .unwrap();
 
     db.conn()
         .execute_batch(
@@ -578,11 +600,18 @@ fn library_migration_removes_windows_extended_path_prefixes() {
         .execute("UPDATE charts SET folder_path = '//?/D:/sample' WHERE id = ?1", [only_id])
         .unwrap();
 
+    db.conn()
+        .execute_batch(
+            "ALTER TABLE charts DROP COLUMN has_defined_hln;
+        ALTER TABLE charts DROP COLUMN defined_hln_pairs;
+        ALTER TABLE charts DROP COLUMN has_conditional;",
+        )
+        .unwrap();
     run_migrations(db.conn_mut(), &LIBRARY_MIGRATIONS[migration_index..]).unwrap();
 
     let version: i32 =
         db.conn().pragma_query_value(None, "user_version", |row| row.get(0)).unwrap();
-    assert_eq!(version, 33);
+    assert_eq!(version, 35);
     let counts: (i64, i64, i64) = db
         .conn()
         .query_row(

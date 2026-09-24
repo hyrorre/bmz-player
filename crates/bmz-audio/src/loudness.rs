@@ -820,6 +820,7 @@ mod tests {
                 key_mode: bmz_core::lane::KeyMode::K7,
                 long_note_mode: bmz_chart::model::LongNoteMode::Ln,
                 long_note_mode_defined: false,
+                ..ChartMetadata::default()
             },
             lane_notes: std::array::from_fn(|_| Vec::new()),
             long_notes: Vec::new(),

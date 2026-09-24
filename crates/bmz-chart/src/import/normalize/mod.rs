@@ -24,7 +24,7 @@ use super::intermediate::{
     IntermediateObject, IntermediateObjectKind, LaneObject, LaneObjectSource, MeasureInfo,
     ResolvedLaneEvent,
 };
-use super::long_note::normalize_lane_objects;
+use super::long_note::normalize_lane_objects_with_markers;
 
 #[derive(Debug, Clone)]
 struct SoundTable {
@@ -112,6 +112,7 @@ use assets::*;
 use events::*;
 use finalize::*;
 use notes::*;
+pub(crate) use notes::{collect_timing_events, object_to_tick};
 pub use pipeline::normalize_chart;
 
 #[cfg(test)]

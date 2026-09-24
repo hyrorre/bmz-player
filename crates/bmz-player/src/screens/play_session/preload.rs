@@ -2,6 +2,95 @@ use super::*;
 use std::collections::HashSet;
 use std::time::Instant;
 
+#[cfg(test)]
+mod conditional_tests {
+    use super::*;
+
+    #[test]
+    fn conditional_import_storage_transform_and_result_use_selected_notes() {
+        let path = std::env::temp_dir().join(format!(
+            "bmz-conditional-{}-{}.bmc",
+            std::process::id(),
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
+        ));
+        std::fs::write(&path,"#BPM 120\n#WAV01 a.wav\n#00019:01\n#CONDITIONAL 1\n#WHEN AUTO==1\n#00311:0101\n#DEFAULT\n#00311:01\n#ENDCONDITIONAL\n").unwrap();
+        let import = bmz_chart::import::import_chart(&path, Some(1), false).unwrap();
+        let mut conn = rusqlite::Connection::open_in_memory().unwrap();
+        crate::storage::migration::run_migrations(
+            &mut conn,
+            crate::storage::migration::LIBRARY_MIGRATIONS,
+        )
+        .unwrap();
+        let mut db = LibraryDatabase::from_connection(conn);
+        let chart_id = db
+            .upsert_chart_import(&crate::storage::library_db::ChartImportRecord {
+                root_id: None,
+                file_path: &path,
+                file_size: 1,
+                modified_at: 1,
+                scanned_at: 1,
+                chart: &import.chart,
+            })
+            .unwrap();
+        let (count, conditional): (u32, bool) = db
+            .conn()
+            .query_row(
+                "SELECT total_notes,has_conditional FROM charts WHERE id=?1",
+                [chart_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!((count, conditional), (2, true));
+        let options = PlaySessionOptions {
+            autoplay: true,
+            arrange: ArrangeOption::Mirror,
+            ..Default::default()
+        };
+        let transformed = load_transformed_chart_for_play(&db, chart_id, &options).unwrap();
+        let old_cache =
+            crate::screens::play_snapshot::PlayRenderSnapshotCache::from_chart(&transformed.chart);
+        let profile = ProfileConfig::new_default("default", "Default", 1);
+        let mut session = build_game_session(Arc::new(transformed.chart), &profile, options);
+        session.audio_clock.running = true;
+        session.audio_clock.current_frame.store(9 * 48_000, std::sync::atomic::Ordering::Relaxed);
+        bmz_gameplay::session::advance_session_frame(
+            &mut session,
+            &mut bmz_audio::queue::ScheduledSoundQueue::new(),
+        );
+        assert_eq!(session.conditional.decisions[0].time, TimeUs(3_000_000));
+        assert_eq!(session.chart.lane_notes[Lane::Key7.index()].len(), 2);
+        assert_eq!(session.scored_total_notes, 3);
+        assert_eq!(session.score.ex_score(), 6);
+        let result = crate::screens::play_finish::play_result_from_session(&session);
+        assert_eq!(result.total_notes, 3);
+        assert_eq!(result.score.ex_score_rate(result.total_notes), 1.0);
+        let cached =
+            crate::screens::play_snapshot::build_render_snapshot_with_target_and_bga_frames_cached(
+                &session,
+                TimeUs(7_500_000),
+                &[],
+                None,
+                None,
+                None,
+                &Default::default(),
+                &old_cache,
+            );
+        let rebuilt =
+            crate::screens::play_snapshot::build_render_snapshot_with_target_and_bga_frames(
+                &session,
+                TimeUs(7_500_000),
+                &[],
+                None,
+                None,
+                None,
+                &Default::default(),
+            );
+        assert_eq!(cached.duration, rebuilt.duration);
+        assert_eq!(cached.end_of_note_elapsed_ms, rebuilt.end_of_note_elapsed_ms);
+        std::fs::remove_file(path).unwrap();
+    }
+}
+
 /// 音源 preload の入力規模。source は宣言パス単位、region は `SoundId` 単位で数える。
 ///
 /// source candidate の拡張子フォールバックや decode cache の実装には依存しないため、
@@ -434,11 +523,68 @@ pub(super) fn load_transformed_chart_for_play(
     options: &PlaySessionOptions,
 ) -> Result<TransformedPlayChart> {
     let import = load_source_chart_import_for_play(library_db, chart_id, options)?;
+    if let Some(program) = &import.chart.metadata.conditional {
+        if options.session_mode.is_practice()
+            || options.session_mode.is_battle()
+            || options.battle_opponent.is_some()
+            || matches!(
+                options.double_option,
+                DoubleOption::Battle | DoubleOption::BattleAutoScratch
+            )
+        {
+            bail!(
+                "動的条件分岐の譜面は現在、通常プレイ・AUTOPLAY・リプレイに対応しています。PRACTICE / BATTLE は未対応です。"
+            );
+        }
+        if let Some(decisions) =
+            options.replay_player.as_ref().and_then(|p| p.branch_decisions.as_ref())
+        {
+            for decision in decisions {
+                if program
+                    .blocks
+                    .get(decision.block)
+                    .is_none_or(|b| decision.branch > b.conditions.len())
+                {
+                    bail!("リプレイの分岐記録が譜面と一致しません");
+                }
+            }
+        }
+    }
+    let mut result = transform_chart_for_play(import, options, true);
+    if let Some(program) = result.chart.metadata.conditional.take() {
+        let mut program = (*program).clone();
+        let mut branch_options = options.clone();
+        branch_options.arrange_seed = result.applied_arrange.seed;
+        branch_options.arrange_seed_2p = result.applied_arrange.seed_2p;
+        program.transform = Some(Arc::new(move |chart| {
+            let import = bmz_chart::import::ImportResult {
+                chart: chart.clone(),
+                warnings: Vec::new(),
+                bms_random_choices: Vec::new(),
+                bms_switch_choices: Vec::new(),
+            };
+            *chart = transform_chart_for_play(import, &branch_options, false).chart;
+        }));
+        result.chart.metadata.conditional = Some(Arc::new(program));
+    }
+    Ok(result)
+}
+
+fn transform_chart_for_play(
+    import: bmz_chart::import::ImportResult,
+    options: &PlaySessionOptions,
+    add_margin: bool,
+) -> TransformedPlayChart {
     let mut chart = import.chart;
     let source_ln_profile = ChartLnProfile::from_chart(&chart);
     // beatoraja BMSModelUtils.setStartNoteTime(model, 1000) 相当。
     // LN / arrange より前に適用し、practice 切出しもシフト後時刻を使う。
-    apply_start_note_margin(&mut chart);
+    if add_margin {
+        apply_start_note_margin(&mut chart);
+    }
+    let conditional_audio = (chart.metadata.conditional.is_some()
+        || chart.metadata.conditional_revision != 0)
+        .then(|| bmz_chart::conditional::ConditionalAudioKeys::capture(&chart));
     let source_key_mode = chart.metadata.key_mode;
     let battle_presentation = (options.session_mode.is_battle()
         || options.battle_opponent.is_some())
@@ -559,8 +705,11 @@ pub(super) fn load_transformed_chart_for_play(
     applied_arrange.seven_to_nine_type = options.seven_to_nine_type;
     applied_arrange.seven_to_nine_rule_mode = options.seven_to_nine_rule_mode;
     let conversion_persistence_disabled = applied_arrange.score_persistence_disabled();
+    if let Some(keys) = conditional_audio {
+        keys.apply(&mut chart);
+    }
 
-    Ok(TransformedPlayChart {
+    TransformedPlayChart {
         chart,
         source_ln_profile,
         applied_arrange,
@@ -568,7 +717,7 @@ pub(super) fn load_transformed_chart_for_play(
         assist_runtime,
         score_save_disabled: options.score_save_disabled || conversion_persistence_disabled,
         source_key_mode,
-    })
+    }
 }
 
 pub(super) fn effective_arrange_seed(

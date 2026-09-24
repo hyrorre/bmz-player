@@ -1,6 +1,36 @@
 use super::*;
 
 #[test]
+fn hln_library_metadata_round_trips_insert_and_update() {
+    let mut conn = Connection::open_in_memory().unwrap();
+    configure_connection(&conn).unwrap();
+    run_migrations(&mut conn, LIBRARY_MIGRATIONS).unwrap();
+    let mut db = LibraryDatabase { conn };
+    let mut chart = chart("HLN");
+    chart.metadata.long_note_mode = LongNoteMode::Hln;
+    chart.metadata.long_note_mode_defined = true;
+    chart.long_notes.push(LongNotePair {
+        lane: Lane::Key1,
+        style: LongNoteStyle::ChannelPair,
+        mode: Some(LongNoteMode::Hln),
+        start_note_id: NoteId(1),
+        end_note_id: NoteId(2),
+        start_tick: ChartTick(0),
+        end_tick: ChartTick(192),
+        start_time: TimeUs(0),
+        end_time: TimeUs(1_000_000),
+        sound: None,
+    });
+    for _ in 0..2 {
+        let id = db.upsert_chart_import(&record_for_chart("/songs/hln.bmc", &chart)).unwrap();
+        let stored = db.list_charts_by_ids(&[id]).unwrap().pop().unwrap();
+        assert!(stored.ln_profile.has_defined_hln);
+        assert_eq!(stored.ln_counts.defined_hln_pairs, 1);
+        assert_eq!(stored.ln_counts.defined_hcn_pairs, 0);
+    }
+}
+
+#[test]
 fn chart_speed_changes_emits_resume_after_stop() {
     use bmz_chart::model::TimingEventKind;
     let mut c = chart("stop_test");
@@ -377,6 +407,7 @@ fn upsert_chart_import_persists_ln_profile_and_pair_counts() {
             defined_ln_pairs: 1,
             defined_cn_pairs: 1,
             defined_hcn_pairs: 1,
+            defined_hln_pairs: 0,
         }
     );
     assert_eq!(row.scored_total_notes(LnScorePolicy::ForceCn), 4);

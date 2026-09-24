@@ -182,7 +182,7 @@ fn seven_to_nine_7k_rule_uses_7k_judgement_and_projects_7k_replay() {
             key_mode_conversion: KeyModeConversionConfig::SevenToNine,
             seven_to_nine_pattern: SevenToNinePattern::Sc9Key1To7,
             seven_to_nine_rule_mode: SevenToNineRuleMode::Keys7,
-            replay_player: Some(ReplayPlayer { events: vec![replay], next_index: 0 }),
+            replay_player: Some(ReplayPlayer::new(vec![replay])),
             ..PlaySessionOptions::default()
         },
     );

@@ -130,6 +130,18 @@ pub fn enqueue_local_score_jobs(
             report.skipped_missing_chart += 1;
             continue;
         };
+        // 各 IR が HLN の譜面・判定区分を受け付けるまでは送信しない。
+        let conditional: bool = library_db.conn().query_row(
+            "SELECT has_conditional FROM charts WHERE id = ?1",
+            [chart.chart_id],
+            |row| row.get(0),
+        )?;
+        if conditional
+            || chart.ln_profile.has_defined_hln
+            || row.ln_policy == LnScorePolicy::ForceHln
+        {
+            continue;
+        }
         let analysis = library_db.chart_analysis_by_chart_id(chart.chart_id)?;
         let replay_hash = if options.include_replay {
             replay_hash(profile_root, row.replay_path.as_deref())?
@@ -612,6 +624,7 @@ fn chart_payload_from_library(
             has_defined_ln: chart.ln_profile.has_defined_ln,
             has_defined_cn: chart.ln_profile.has_defined_cn,
             has_defined_hcn: chart.ln_profile.has_defined_hcn,
+            has_defined_hln: chart.ln_profile.has_defined_hln,
         },
         title: chart.title.clone(),
         subtitle: chart.subtitle.clone(),
@@ -641,7 +654,7 @@ fn chart_payload_from_library(
 fn long_note_counts_for_policy(chart: &ChartListItem, policy: LnScorePolicy) -> (u32, u32, u32) {
     let total = chart.ln_counts.total_pairs();
     match policy {
-        LnScorePolicy::ForceLn => (total, 0, 0),
+        LnScorePolicy::ForceLn | LnScorePolicy::ForceHln => (total, 0, 0),
         LnScorePolicy::ForceCn => (total, total, 0),
         LnScorePolicy::ForceHcn => (total, 0, total),
         LnScorePolicy::AutoLn | LnScorePolicy::AutoCn | LnScorePolicy::AutoHcn => {
@@ -658,6 +671,7 @@ fn effective_ln_mode_payload(
         LongNoteMode::Ln => IrEffectiveLnMode::Ln,
         LongNoteMode::Cn => IrEffectiveLnMode::Cn,
         LongNoteMode::Hcn => IrEffectiveLnMode::Hcn,
+        LongNoteMode::Hln => IrEffectiveLnMode::Hln,
     }
 }
 

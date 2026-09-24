@@ -237,6 +237,9 @@ pub struct FinishSessionSnapshot {
     result: PlayResult,
     primary_key_mode: KeyMode,
     replay_events: Vec<ReplayEvent>,
+    branch_decisions: Option<Vec<bmz_core::replay::BranchDecision>>,
+    conditional_error: Option<String>,
+    reference_total: Option<u32>,
     replay_playback: bool,
     replay_lane_mask: bool,
     rule_mode: bmz_gameplay::rule::RuleMode,
@@ -332,6 +335,14 @@ impl FinishSessionSnapshot {
             result: play_result_from_session(session),
             primary_key_mode: session.primary_key_mode,
             replay_events: session.replay_recorder.events.clone(),
+            branch_decisions: session
+                .chart
+                .metadata
+                .conditional
+                .as_ref()
+                .map(|_| session.conditional.decisions.clone()),
+            conditional_error: session.conditional.error.clone(),
+            reference_total: session.conditional.reference_total,
             replay_playback: session.replay_player.is_some() && session.replay_lane_mask.is_none(),
             replay_lane_mask: session.replay_lane_mask.is_some(),
             rule_mode: session.rule_mode,
@@ -436,6 +447,9 @@ fn finish_session_snapshot_result(
         practice_mode,
         finish_mode,
     } = request;
+    if let Some(error) = &snapshot.conditional_error {
+        anyhow::bail!("動的分岐を適用できなかったため、このプレイの結果は保存しません: {error}");
+    }
     let result = snapshot.result.clone();
     let summary_clear_type = finish_mode.summary_clear_type(result.clear_type);
     let replay_playback = snapshot.replay_playback;
@@ -480,6 +494,7 @@ fn finish_session_snapshot_result(
                     rule_mode: snapshot.rule_mode.as_str().to_string(),
                     assist_mask: snapshot.assist.configured_mask,
                     replay_events: snapshot.replay_events.clone(),
+                    branch_decisions: snapshot.branch_decisions.clone(),
                     arrange,
                     arrange_2p: applied_arrange.arrange_2p,
                     arrange_seed,
@@ -501,6 +516,12 @@ fn finish_session_snapshot_result(
             )?
         };
     let mut summary = ResultSummary::from_play_result(&result, &stored, &snapshot.chart);
+    if let Some(reference_total) = snapshot.reference_total {
+        summary.total_gauge = bmz_gameplay::gauge::gauge_total_for_chart(
+            snapshot.chart.metadata.total,
+            reference_total,
+        ) as f32;
+    }
     summary.skin_attempt = snapshot.skin_attempt;
     summary.key_mode = snapshot.primary_key_mode;
     summary.clear_type = summary_clear_type;
@@ -636,7 +657,10 @@ fn enqueue_ir_jobs(
         summary,
         previous_best,
     } = request;
-    if stored.score_history_id <= 0 {
+    if stored.score_history_id <= 0
+        || source_ln_profile.has_defined_hln
+        || snapshot.chart.metadata.has_conditional()
+    {
         return;
     }
     let enabled: Vec<_> = ir_config

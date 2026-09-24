@@ -247,7 +247,7 @@ pub struct PlayDefaultsConfig {
     /// E1+E2 長押し強制終了までの時間(ms)。beatoraja 既定 1000ms。
     #[serde(default = "default_play_exit_hold_ms")]
     pub play_exit_hold_ms: u32,
-    /// LN モードでも終端 (tail) キャップを描画するか。
+    /// LN / HLN モードでも終端 (tail) キャップを描画するか。
     /// beatoraja は LN モードで tail キャップを描画しないため既定 OFF。
     #[serde(default)]
     pub show_ln_tail_cap: bool,

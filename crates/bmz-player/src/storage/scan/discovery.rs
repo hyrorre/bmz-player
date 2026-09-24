@@ -261,7 +261,7 @@ pub(super) fn is_chart_file_name(name: &std::ffi::OsStr) -> bool {
         .map(|extension| {
             matches!(
                 extension.to_ascii_lowercase().as_str(),
-                "bms" | "bme" | "bml" | "pms" | "bmson"
+                "bms" | "bme" | "bml" | "bmc" | "pms" | "bmson"
             )
         })
         .unwrap_or(false)

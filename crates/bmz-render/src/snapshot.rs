@@ -21,6 +21,7 @@ pub const SKIN_SOURCE_LN_UNDEFINED_BIT: u8 = 1 << 0;
 pub const SKIN_SOURCE_LN_DEFINED_LN_BIT: u8 = 1 << 1;
 pub const SKIN_SOURCE_LN_DEFINED_CN_BIT: u8 = 1 << 2;
 pub const SKIN_SOURCE_LN_DEFINED_HCN_BIT: u8 = 1 << 3;
+pub const SKIN_SOURCE_LN_DEFINED_HLN_BIT: u8 = 1 << 4;
 
 /// Selectでは開始予定、Decide/Play/Resultでは試行開始時に固定されたskin公開状態。
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]

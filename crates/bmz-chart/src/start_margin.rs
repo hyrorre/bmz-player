@@ -29,11 +29,23 @@ pub fn apply_start_note_margin_ms(chart: &mut PlayableChart, margin_ms: i64) -> 
     }
 
     let margin_us = margin_target_us - first_note_us;
+    apply_fixed_start_margin(chart, TimeUs(margin_us));
+    if let Some(program) = &mut chart.metadata.conditional {
+        std::sync::Arc::make_mut(program).margin = TimeUs(margin_us);
+    }
+    TimeUs(margin_us)
+}
+
+/// 分岐再構築でもDEFAULTと同じ先頭余白を使用する。
+pub fn apply_fixed_start_margin(chart: &mut PlayableChart, margin: TimeUs) {
+    if margin.0 <= 0 {
+        return;
+    }
+    let margin_us = margin.0;
     let margin_ticks = us_to_ticks(margin_us, chart.metadata.initial_bpm);
     shift_chart(chart, margin_ticks, margin_us);
     ensure_leading_bar_line(chart);
     chart.end_time = TimeUs(chart.end_time.0.saturating_add(margin_us));
-    TimeUs(margin_us)
 }
 
 fn first_trigger_note_time_us(chart: &PlayableChart) -> Option<i64> {
@@ -51,6 +63,9 @@ fn is_trigger_kind(kind: NoteKind) -> bool {
 }
 
 fn shift_chart(chart: &mut PlayableChart, margin_ticks: u64, margin_us: i64) {
+    for at in &mut chart.metadata.conditional_evaluation_times {
+        at.0 = at.0.saturating_add(margin_us);
+    }
     for lane_notes in &mut chart.lane_notes {
         for note in lane_notes.iter_mut() {
             note.tick = ChartTick(note.tick.0.saturating_add(margin_ticks));

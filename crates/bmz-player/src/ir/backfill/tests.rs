@@ -106,6 +106,7 @@ fn test_chart() -> ChartListItem {
             has_defined_ln: false,
             has_defined_cn: true,
             has_defined_hcn: false,
+            has_defined_hln: false,
         },
         ln_counts: crate::ln_policy::ChartLnCounts { defined_cn_pairs: 50, ..Default::default() },
     }

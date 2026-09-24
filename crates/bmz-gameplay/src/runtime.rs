@@ -29,6 +29,9 @@ impl GameplayRuntime {
             }
         };
         consider(0);
+        if let Some(time) = crate::session::conditional::next_evaluation(session) {
+            consider(time.0);
+        }
         for lane in bmz_core::lane::Lane::ALL {
             let state = &session.judge.lanes[lane.index()];
             if let Some(note) = session.chart.notes_for_lane(lane).get(state.next_note_index) {

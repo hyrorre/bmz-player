@@ -75,6 +75,7 @@ fn independent_battle_opponent_replay_advances_without_taking_primary_lanes() {
         score: ScoreState::default(),
         gauge: GaugeState::new(bmz_core::clear::GaugeType::Normal, 160.0, 1),
         replay_player: Some(ReplayPlayer {
+            branch_decisions: None,
             events: vec![bmz_core::replay::ReplayEvent {
                 lane: Lane::Key1,
                 kind: InputKind::Press,
@@ -204,6 +205,7 @@ fn independent_battle_opponent_applies_hcn_hold_and_release_ticks() {
             gauge: session.gauge.clone(),
             autoplay: (!release).then(AutoplayController::default),
             replay_player: release.then(|| ReplayPlayer {
+                branch_decisions: None,
                 events: [(InputKind::Press, 0), (InputKind::Release, 100_000)]
                     .into_iter()
                     .map(|(kind, time)| bmz_core::replay::ReplayEvent {

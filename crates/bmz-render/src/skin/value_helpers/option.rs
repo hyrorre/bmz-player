@@ -291,6 +291,7 @@ pub fn select_ln_mode_index(mode: &str) -> usize {
     match mode {
         "CN" | "AUTO(CN)" | "FORCE(CN)" => 1,
         "HCN" | "AUTO(HCN)" | "FORCE(HCN)" => 2,
+        "HLN" | "FORCE(HLN)" => 3,
         _ => 0,
     }
 }

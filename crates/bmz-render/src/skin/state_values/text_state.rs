@@ -319,6 +319,7 @@ fn ln_policy_label(index: usize) -> &'static str {
         3 => "FORCE(LN)",
         4 => "FORCE(CN)",
         5 => "FORCE(HCN)",
+        6 => "FORCE(HLN)",
         _ => "",
     }
 }

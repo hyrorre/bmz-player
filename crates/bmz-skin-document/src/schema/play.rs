@@ -38,6 +38,19 @@ pub struct SkinNoteSetDef {
     pub hcndamage: Vec<String>,
     #[serde(default, deserialize_with = "deserialize_skin_id_vec")]
     pub hcnreactive: Vec<String>,
+    /// BMZ HLN extension. Undefined parts fall back to the matching HCN/LN part.
+    #[serde(default, deserialize_with = "deserialize_skin_id_vec")]
+    pub hlnstart: Vec<String>,
+    #[serde(default, deserialize_with = "deserialize_skin_id_vec")]
+    pub hlnend: Vec<String>,
+    #[serde(default, deserialize_with = "deserialize_skin_id_vec")]
+    pub hlnbody: Vec<String>,
+    #[serde(default, rename = "hlnbodyActive", deserialize_with = "deserialize_skin_id_vec")]
+    pub hlnbody_active: Vec<String>,
+    #[serde(default, rename = "hlnbodyReactive", deserialize_with = "deserialize_skin_id_vec")]
+    pub hlnbody_reactive: Vec<String>,
+    #[serde(default, rename = "hlnbodyMiss", deserialize_with = "deserialize_skin_id_vec")]
+    pub hlnbody_miss: Vec<String>,
     #[serde(default, deserialize_with = "deserialize_skin_id_vec")]
     pub mine: Vec<String>,
     #[serde(default, deserialize_with = "deserialize_skin_id_vec")]

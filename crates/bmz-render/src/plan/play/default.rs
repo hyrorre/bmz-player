@@ -154,7 +154,9 @@ fn push_long_notes(
             lane,
             note_rect(layout, snapshot.lift, x, body.head_y),
         );
-        if (body.mode != LongNoteMode::Ln || snapshot.show_ln_tail_cap) && body.tail_y < 1.0 {
+        if (!matches!(body.mode, LongNoteMode::Ln | LongNoteMode::Hln) || snapshot.show_ln_tail_cap)
+            && body.tail_y < 1.0
+        {
             push_ln_end_skin(
                 manifest,
                 commands,

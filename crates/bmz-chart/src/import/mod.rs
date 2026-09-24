@@ -92,6 +92,10 @@ pub fn import_chart_with_random_source(
     let mut chart =
         normalize::normalize_chart(path, intermediate, &mut warnings, check_resource_existence)?;
     chart.metadata.source_format = file_format.source_format();
+    if let Some(program) = chart.metadata.conditional.clone() {
+        program.stabilize_default(&mut chart)?;
+        chart.sounds = program.all_sounds()?;
+    }
     Ok(ImportResult { chart, warnings, bms_random_choices, bms_switch_choices })
 }
 

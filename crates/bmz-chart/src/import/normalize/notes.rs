@@ -1,6 +1,6 @@
 use super::*;
 
-pub(super) fn object_to_tick(
+pub(crate) fn object_to_tick(
     object: &IntermediateObject,
     measures: &[MeasureInfo],
 ) -> Result<ChartTick, ImportError> {
@@ -28,7 +28,7 @@ fn position_to_tick(
     Ok(ChartTick(measure.start_tick.0.saturating_add(local_tick)))
 }
 
-pub(super) fn collect_timing_events(
+pub(crate) fn collect_timing_events(
     intermediate: &IntermediateChart,
     warnings: &mut Vec<ImportWarning>,
 ) -> Result<Vec<TickTimingEvent>, ImportError> {
@@ -193,6 +193,17 @@ pub(super) fn emit_resolved_lane_events(
                 });
             }
             ResolvedLaneEvent::Long { pair } => {
+                let mode = pair.mode.or_else(|| {
+                    draft.metadata.long_note_mode_defined.then_some(draft.metadata.long_note_mode)
+                });
+                if mode == Some(crate::model::LongNoteMode::Hln) && pair.start_time >= pair.end_time
+                {
+                    warnings.push(ImportWarning::ParserDiagnostic {
+                        code: "InvalidHlnLength".to_string(),
+                        message: format!("HLN on {lane:?} has no positive duration; ignored"),
+                    });
+                    continue;
+                }
                 let start_note_id = alloc_note_id(next_note_id);
                 let end_note_id = alloc_note_id(next_note_id);
                 let sound = resolve_sound_id(pair.wav_key, sound_table, warnings);
@@ -246,6 +257,7 @@ pub(super) fn apply_layered_note_sounds(
     sound_table: &SoundTable,
     draft: &mut PlayableChartDraft,
     warnings: &mut Vec<ImportWarning>,
+    end_only: bool,
 ) -> Result<(), ImportError> {
     for layer in layers {
         let tick =
@@ -253,12 +265,47 @@ pub(super) fn apply_layered_note_sounds(
         let Some(sound_id) = resolve_sound_id(Some(layer.wav_key), sound_table, warnings) else {
             continue;
         };
-        let Some(note) = draft.lane_notes[layer.lane.index()].iter_mut().find(|note| {
-            note.tick == tick && matches!(note.kind, NoteKind::Tap | NoteKind::LongStart)
+        let Some(note_index) = draft.lane_notes[layer.lane.index()].iter().position(|note| {
+            note.tick == tick
+                && if end_only {
+                    note.kind == NoteKind::LongEnd
+                } else {
+                    matches!(note.kind, NoteKind::Tap | NoteKind::LongStart)
+                }
         }) else {
             continue;
         };
-        if note.sound != Some(sound_id) && !note.layered_sounds.contains(&sound_id) {
+        if draft.lane_notes[layer.lane.index()][note_index].sounds().any(|id| id == sound_id) {
+            continue;
+        }
+        let sound_id = if end_only {
+            // HCNの始点ミュートやCNの早離しミュートで、同じWAVの終端音を巻き込まない。
+            let mut asset = draft
+                .sounds
+                .iter()
+                .find(|asset| asset.id == sound_id)
+                .expect("resolved sound asset")
+                .clone();
+            asset.id = SoundId(
+                draft
+                    .sounds
+                    .iter()
+                    .map(|asset| asset.id.0)
+                    .max()
+                    .unwrap_or(0)
+                    .checked_add(1)
+                    .expect("long end sound id space exhausted"),
+            );
+            let id = asset.id;
+            draft.sounds.push(asset);
+            id
+        } else {
+            sound_id
+        };
+        let note = &mut draft.lane_notes[layer.lane.index()][note_index];
+        if end_only && note.sound.is_none() {
+            note.sound = Some(sound_id);
+        } else if note.sound != Some(sound_id) && !note.layered_sounds.contains(&sound_id) {
             note.layered_sounds.push(sound_id);
         }
     }

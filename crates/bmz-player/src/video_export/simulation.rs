@@ -157,7 +157,12 @@ impl Simulation {
         // The live scratch accumulator consumes whole milliseconds. Preserve its
         // fractional interval when the offline owner ticks at audio-sample rate.
         let scratch_anchor = session.scratch_angle_last_render_at;
+        let previous_chart = session.chart.clone();
         let frame = advance_session_frame(session, &mut self.queue);
+        if !std::sync::Arc::ptr_eq(&previous_chart, &session.chart) {
+            self.prepared.play.render_snapshot_cache =
+                self.prepared.play.render_snapshot_cache.for_updated_chart(&session.chart);
+        }
         if let Some(anchor) = scratch_anchor
             && session.audio_clock.now().0 - anchor.0 < 1000
         {

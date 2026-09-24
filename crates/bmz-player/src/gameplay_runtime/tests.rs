@@ -314,8 +314,7 @@ fn run_mode_with_render_stall(stall_ms: u64, mode: u8) -> (String, u64) {
                 scratch_direction: event.scratch_direction,
             })
             .collect();
-        session.replay_player =
-            Some(bmz_gameplay::replay::ReplayPlayer { events: replay, next_index: 0 });
+        session.replay_player = Some(bmz_gameplay::replay::ReplayPlayer::new(replay));
     }
     let probe = Arc::new(RuntimeProbe::default());
     let audio = AudioEngineHandle::new(AudioEngine::new(1_000_000));

@@ -225,6 +225,9 @@ pub(super) fn ensure_score_payload_allowed(
     provider: &IrProviderConfig,
     payload: &IrScoreSubmission,
 ) -> Result<()> {
+    if payload.play_options.get("conditional").and_then(serde_json::Value::as_bool) == Some(true) {
+        bail!("dynamic conditional charts are not supported by IR providers yet");
+    }
     if crate::ir::bms_ir::is_bms_ir_config(provider) {
         return crate::ir::bms_ir::ensure_score_payload_supported(payload);
     }

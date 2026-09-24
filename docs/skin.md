@@ -269,6 +269,7 @@ LN方針のindexとlabelは、設定値と正規化済みScoreKeyで共通の次
 | 3 | `FORCE(LN)` | 19164 | 19154 |
 | 4 | `FORCE(CN)` | 19165 | 19155 |
 | 5 | `FORCE(HCN)` | 19166 | 19156 |
+| 6 | `FORCE(HLN)` | 設定なし | 専用optionなし（`number(19150) == 6`） |
 
 `ref=19160`はSelectで現在のprofileに設定された`LnPolicySetting`を返す。譜面内容による
 AUTO解決前の値で、19167はAUTO系、19168はFORCE系のときtrueになる。Select以外では
@@ -283,7 +284,7 @@ number / imageset refは未取得、textは空文字、exact / AUTO / FORCE opti
 必ず`option(19159)`または`op: [19159]`を併用する。
 
 既存のbeatoraja互換`ref=308`は、設定やScoreKeyではなく、変換後の実効譜面を描画する
-`0=LN`, `1=CN`, `2=HCN`の3値を引き続き返す。AUTO/FORCEの区別には19160または19150を使う。
+`0=LN`, `1=CN`, `2=HCN`とBMZ拡張の`3=HLN`を返す。AUTO/FORCEの区別には19160または19150を使う。
 
 LNの有無はbeatoraja互換option `172=OPTION_NO_LN` / `173=OPTION_LN`で判定する。
 Selectでは選択中のライブラリ譜面、Decide / PlayではLN policy適用後の開始譜面、Resultでは
@@ -591,7 +592,7 @@ select snapshotへ予定配置を設定する。
 | 19180 | number / event_index / imageset ref | 変換前key mode (`4`, `5`, `6`, `7`, `8`, `9`, `10`, `14`) |
 | 19181..19188 | option | 変換前key mode。順に4K / 5K / 6K / 7K / 8K / 9K / 10K / 14K |
 | 19189 | option | 7K→6K変換をこの試行へ適用した |
-| 19190 | number / event_index / imageset ref | 変換前LN profile bitmask (`0..15`) |
+| 19190 | number / event_index / imageset ref | 変換前LN profile bitmask (`0..31`、bit 4は定義済みHLN) |
 | 19191 | option | 未定義LNを含む (`bit 0`) |
 | 19192 | option | 定義済みLNを含む (`bit 1`) |
 | 19193 | option | 定義済みCNを含む (`bit 2`) |
@@ -604,6 +605,20 @@ LNがない譜面も取得済みなら`19190=0`かつ`19196=true`になるため
 Selectでは曲行だけ取得でき、フォルダ・設定・未解決コース行では値なし。Decide / Play /
 Resultでは同じ試行値を維持する。実効key modeは`1903`、実効LN種別はbeatoraja互換
 `308`、実効LN有無はoption `172/173`を使う。
+
+### HLN Note Parts
+
+JSON/Luaの`note`には、レーンごとの配列`hlnstart`, `hlnend`, `hlnbody`,
+`hlnbodyActive`, `hlnbodyReactive`, `hlnbodyMiss`を指定できる。
+BODYは順にINACTIVE、ACTIVE、REACTIVE、DAMAGEに対応し、押下状態と再保持履歴から選ぶ。
+未指定の部品はHCN、LNの順にフォールバックする。
+
+LR2 CSVは`SRC_HLN_START`, `SRC_HLN_END`, `SRC_HLN_BODY`、
+`SRC_HLN_BODY_INACTIVE/ACTIVE/REACTIVE/DAMAGE`に対応する。
+`SRC_HLN_BODY`は既存LN/HCNと同じく保持用・未保持用の素材を作る。
+専用素材がない既存スキンでもHCN/LN素材で描画できる。
+判定表示はLN方式の総合評価が確定したときに1回だけ発生する。
+詳細は[HLN仕様](hln-spec.md)を参照。
 
 ### Beatoraja Attempt Property Compatibility
 

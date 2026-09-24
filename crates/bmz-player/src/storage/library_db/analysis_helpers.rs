@@ -291,6 +291,7 @@ impl ChartStats {
                     LongNoteMode::Ln => "Ln",
                     LongNoteMode::Cn => "Cn",
                     LongNoteMode::Hcn => "Hcn",
+                    LongNoteMode::Hln => "Hln",
                 }
             } else {
                 "LongNote"

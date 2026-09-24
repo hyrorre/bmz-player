@@ -33,7 +33,7 @@ pub(super) fn charts_by_hash_column(
         );
         let mut stmt = conn.prepare(&sql)?;
         let rows = stmt.query_map(rusqlite::params_from_iter(chunk.iter().copied()), |row| {
-            Ok((row.get::<_, String>(36)?, chart_list_item_from_row(row)?))
+            Ok((row.get::<_, String>("lookup_hash")?, chart_list_item_from_row(row)?))
         })?;
         for row in rows {
             let (hash, chart) = row?;
@@ -79,7 +79,9 @@ pub(super) const CHART_LIST_ITEM_COLUMNS: &str = "
     defined_cn_pairs,
     defined_hcn_pairs,
     has_bga,
-    has_bms_random";
+    has_bms_random,
+    has_defined_hln,
+    defined_hln_pairs";
 
 pub(super) const CHART_LIST_ITEM_COLUMNS_C: &str = "
     c.id,
@@ -117,7 +119,9 @@ pub(super) const CHART_LIST_ITEM_COLUMNS_C: &str = "
     c.defined_cn_pairs,
     c.defined_hcn_pairs,
     c.has_bga,
-    c.has_bms_random";
+    c.has_bms_random,
+    c.has_defined_hln,
+    c.defined_hln_pairs";
 
 pub(super) fn chart_list_item_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ChartListItem> {
     let md5_hex: String = row.get(1)?;
@@ -154,6 +158,7 @@ pub(super) fn chart_list_item_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Res
             has_defined_ln: row.get(24)?,
             has_defined_cn: row.get(25)?,
             has_defined_hcn: row.get(26)?,
+            has_defined_hln: row.get(36)?,
         },
         subartist: row.get(27)?,
         genre: row.get(28)?,
@@ -163,6 +168,7 @@ pub(super) fn chart_list_item_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Res
             defined_ln_pairs: row.get(31)?,
             defined_cn_pairs: row.get(32)?,
             defined_hcn_pairs: row.get(33)?,
+            defined_hln_pairs: row.get(37)?,
         },
         has_bga: row.get(34)?,
         has_bms_random: row.get(35)?,
@@ -223,11 +229,12 @@ pub(super) fn insert_chart(conn: &Connection, record: &ChartImportRecord<'_>) ->
             banner_file, backbmp_file, judge_rank, gauge_total, bms_total,
             has_undefined_ln, has_defined_ln, has_defined_cn, has_defined_hcn,
             undefined_ln_pairs, defined_ln_pairs, defined_cn_pairs, defined_hcn_pairs,
-            has_bms_random, source_url, append_url, headers_json, import_version
+            has_bms_random, source_url, append_url, headers_json, import_version,
+            has_defined_hln, defined_hln_pairs, has_conditional
         ) VALUES (
             ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14,
             ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27,
-            ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35, ?36, ?37, ?38, ?39, ?40
+            ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35, ?36, ?37, ?38, ?39, ?40, ?41, ?42, ?43
         )",
     )?
     .execute(params![
@@ -274,6 +281,9 @@ pub(super) fn insert_chart(conn: &Connection, record: &ChartImportRecord<'_>) ->
         chart.metadata.append_url.as_str(),
         chart_headers_json(),
         CHART_IMPORT_VERSION,
+        stats.ln_profile.has_defined_hln,
+        stats.ln_counts.defined_hln_pairs,
+        chart.metadata.has_conditional(),
     ])?;
     Ok(conn.last_insert_rowid())
 }
@@ -305,7 +315,7 @@ pub(super) fn update_chart(
             undefined_ln_pairs = ?32, defined_ln_pairs = ?33,
             defined_cn_pairs = ?34, defined_hcn_pairs = ?35, has_bms_random = ?36,
             source_url = ?37, append_url = ?38, headers_json = ?39,
-            import_version = ?40
+            import_version = ?40, has_defined_hln = ?42, defined_hln_pairs = ?43, has_conditional = ?44
          WHERE id = ?41",
     )?
     .execute(params![
@@ -353,6 +363,9 @@ pub(super) fn update_chart(
         chart_headers_json(),
         CHART_IMPORT_VERSION,
         chart_id,
+        stats.ln_profile.has_defined_hln,
+        stats.ln_counts.defined_hln_pairs,
+        chart.metadata.has_conditional(),
     ])?;
     Ok(())
 }

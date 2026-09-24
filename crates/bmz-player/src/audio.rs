@@ -268,6 +268,9 @@ impl RunningPlaySession {
         chart_zero_time: TimeUs,
         remain_paused: bool,
     ) -> Result<usize> {
+        if self.session.chart.metadata.conditional.is_some() {
+            anyhow::bail!("動的条件分岐の譜面の途中再生は未対応です。先頭から再生してください。");
+        }
         self.gameplay.edit(move |session| {
             bmz_gameplay::session::prepare_viewer_seek(session, chart_zero_time)
         });

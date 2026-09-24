@@ -48,6 +48,7 @@ pub(crate) struct BmsonLongNoteExtension {
     pub start: BmsonObjectPosition,
     pub end: BmsonObjectPosition,
     pub mode: Option<LnMode>,
+    pub hln: bool,
     pub end_wav_key: Option<u16>,
     pub explicit_end_sound: bool,
 }
@@ -223,6 +224,7 @@ pub(crate) fn rebuild_bms_timing_from_bmson<T: KeyLayoutMapper>(
     bmson: &Bmson<'_>,
     boundaries: &MeasureBoundaries,
     lane_layout: BmsonLaneLayout,
+    hln_notes: &std::collections::HashSet<(usize, usize)>,
     warnings: &mut Vec<BmsonToBmsWarning>,
 ) -> BmsonRebuildInfo {
     let wav_by_path: HashMap<PathBuf, ObjId> =
@@ -311,7 +313,7 @@ pub(crate) fn rebuild_bms_timing_from_bmson<T: KeyLayoutMapper>(
     for (channel_index, (sound_channel, wav_ids)) in
         bmson.sound_channels.iter().zip(sound_channel_wav_ids).enumerate()
     {
-        for note in &sound_channel.notes {
+        for (note_index, note) in sound_channel.notes.iter().enumerate() {
             if note.up == Some(true) {
                 continue;
             }
@@ -354,6 +356,7 @@ pub(crate) fn rebuild_bms_timing_from_bmson<T: KeyLayoutMapper>(
                     start: bmson_object_position(time),
                     end: bmson_object_position(end_time),
                     mode: note.t,
+                    hln: hln_notes.contains(&(channel_index, note_index)),
                     end_wav_key: explicit_end_wav.map(ObjId::as_u16),
                     explicit_end_sound: explicit_end_wav.is_some(),
                 });

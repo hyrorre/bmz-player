@@ -20,6 +20,7 @@ pub enum IrEffectiveLnMode {
     Ln,
     Cn,
     Hcn,
+    Hln,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -107,6 +108,8 @@ pub struct IrChartLnProfile {
     pub has_defined_ln: bool,
     pub has_defined_cn: bool,
     pub has_defined_hcn: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub has_defined_hln: bool,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, Default)]

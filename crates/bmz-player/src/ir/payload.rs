@@ -62,6 +62,9 @@ pub fn build_score_submission(
         played_ln_mode(context.source_ln_profile, context.ln_policy).unwrap_or(LongNoteMode::Ln);
     let judges = &result.score.judges;
     let mut play_options = std::collections::BTreeMap::new();
+    if chart.metadata.has_conditional() {
+        play_options.insert("conditional".into(), serde_json::Value::Bool(true));
+    }
     let arrange_1p = arrange_option_ir(context.arrange).to_string();
     let arrange_2p = arrange_option_ir(context.arrange_2p).to_string();
     play_options.insert(
@@ -207,6 +210,7 @@ fn build_ir_chart_payload_with_ln_profile(
             has_defined_ln: ln_profile.has_defined_ln,
             has_defined_cn: ln_profile.has_defined_cn,
             has_defined_hcn: ln_profile.has_defined_hcn,
+            has_defined_hln: ln_profile.has_defined_hln,
         },
         title: chart.metadata.title.clone(),
         subtitle: chart.metadata.subtitle.clone(),
@@ -274,6 +278,7 @@ fn effective_ln_mode_payload(mode: LongNoteMode) -> IrEffectiveLnMode {
         LongNoteMode::Ln => IrEffectiveLnMode::Ln,
         LongNoteMode::Cn => IrEffectiveLnMode::Cn,
         LongNoteMode::Hcn => IrEffectiveLnMode::Hcn,
+        LongNoteMode::Hln => IrEffectiveLnMode::Hln,
     }
 }
 

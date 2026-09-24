@@ -251,6 +251,7 @@ const fn course_ln_mode_id(mode: Option<bmz_chart::model::LongNoteMode>) -> u8 {
         Some(bmz_chart::model::LongNoteMode::Ln) => 1,
         Some(bmz_chart::model::LongNoteMode::Cn) => 2,
         Some(bmz_chart::model::LongNoteMode::Hcn) => 3,
+        Some(bmz_chart::model::LongNoteMode::Hln) => 4,
     }
 }
 

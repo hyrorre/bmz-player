@@ -259,7 +259,7 @@ pub fn play_session_options_from_start(
         let arrangement = target.playback.arrangement();
         let (replay_player, bms_random_choices, bms_switch_choices) = match &target.playback {
             BattleTargetPlayback::Replay(replay) => (
-                Some(ReplayPlayer { events: replay.events.clone(), next_index: 0 }),
+                Some(replay.player()),
                 replay.bms_random_choices.clone(),
                 replay.bms_switch_choices.clone(),
             ),
@@ -415,6 +415,16 @@ pub fn start_running_play_session_for_chart_with_audio_runtime_and_input_backend
     let mut running = open_prepared_play_audio(runtime, prepared, score_key);
     // 表示値とFIRST_PLAY判定にはscore保存可否にかかわらず既存履歴が必要。
     running.best_ex_score = score_db.best_ex_score(score_key).unwrap_or(None);
+    let lamp = score_db
+        .best_scores_for_charts(&[score_key])
+        .ok()
+        .and_then(|scores| {
+            scores
+                .first()
+                .map(|score| bmz_core::clear::ClearType::rank_from_label(&score.clear_type))
+        })
+        .unwrap_or(0);
+    running.gameplay.configure_prepared(|session| session.conditional.best_lamp = lamp);
     if !running.score_save_disabled {
         running.best_ghost =
             score_db.best_ghost(score_key, running.session.scored_total_notes).unwrap_or(None);
@@ -481,6 +491,16 @@ pub fn open_prepared_winit_play_session(
     let mut running = open_prepared_play_audio(runtime, prepared.prepared, score_key);
     // 表示値とFIRST_PLAY判定にはscore保存可否にかかわらず既存履歴が必要。
     running.best_ex_score = score_db.best_ex_score(score_key).unwrap_or(None);
+    let lamp = score_db
+        .best_scores_for_charts(&[score_key])
+        .ok()
+        .and_then(|scores| {
+            scores
+                .first()
+                .map(|score| bmz_core::clear::ClearType::rank_from_label(&score.clear_type))
+        })
+        .unwrap_or(0);
+    running.gameplay.configure_prepared(|session| session.conditional.best_lamp = lamp);
     if !running.score_save_disabled {
         running.best_ghost =
             score_db.best_ghost(score_key, running.session.scored_total_notes).unwrap_or(None);
@@ -642,8 +662,7 @@ pub fn apply_queued_replay(
     options: &mut PlayStartOptions,
     replay: &crate::storage::replay::QueuedCourseReplay,
 ) -> Result<()> {
-    let player =
-        bmz_gameplay::replay::ReplayPlayer { events: replay.replay.events.clone(), next_index: 0 };
+    let player = replay.replay.player();
     options.replay_player = Some(player);
     options.arrange = replay.replay.arrange_option();
     options.arrange_2p = replay.replay.arrange_2p_option();

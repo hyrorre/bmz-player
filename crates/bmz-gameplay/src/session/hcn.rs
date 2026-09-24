@@ -26,6 +26,9 @@ pub fn update_hcn_lane_timers(session: &mut GameSession, audio_now: TimeUs) {
     let mut next_muted: [Option<bool>; LANE_COUNT] = [None; LANE_COUNT];
     for pair in &session.chart.long_notes {
         let idx = pair.lane.index();
+        if next[idx].is_some() {
+            continue;
+        }
         let Some(timer) = hcn_timer_for_pair(
             &session.chart,
             &session.judge,
@@ -91,6 +94,12 @@ fn hcn_timer_for_pair(
     previous: Option<HcnLaneTimer>,
     now: TimeUs,
 ) -> Option<HcnLaneTimer> {
+    if pair.mode.unwrap_or(chart.metadata.long_note_mode) == LongNoteMode::Hln {
+        let index =
+            chart.long_notes.iter().position(|other| other.start_note_id == pair.start_note_id)?;
+        let (held, _, since, counter) = judge.hln_body_state(index, now)?;
+        return Some(HcnLaneTimer { inclease: held, since, passing_count_us: counter });
+    }
     if pair.mode.unwrap_or(chart.metadata.long_note_mode) != LongNoteMode::Hcn
         || now < pair.start_time
         || now >= pair.end_time
@@ -127,6 +136,9 @@ pub(super) fn update_battle_opponent_hcn(opponent: &mut BattleOpponentSession, n
     let mut next = [None; LANE_COUNT];
     for pair in &opponent.chart.long_notes {
         let idx = pair.lane.index();
+        if next[idx].is_some() {
+            continue;
+        }
         if let Some(timer) = hcn_timer_for_pair(
             &opponent.chart,
             &opponent.judge,
@@ -145,7 +157,13 @@ pub(super) fn update_battle_opponent_hcn(opponent: &mut BattleOpponentSession, n
     }
     let previous = opponent.last_hcn_gauge_at.replace(now).unwrap_or(now);
     let delta = now.0.saturating_sub(previous.0).max(0);
-    for timer in opponent.lane_hcn_timer.iter_mut().flatten() {
+    for (idx, timer) in opponent.lane_hcn_timer.iter_mut().enumerate() {
+        if hln_passing(&opponent.chart, idx, now) {
+            continue;
+        }
+        let Some(timer) = timer else {
+            continue;
+        };
         let ticks = advance_hcn_counter(timer, delta);
         for _ in 0..ticks {
             let previous_gauge = opponent.gauge.current().value;
@@ -184,6 +202,11 @@ pub fn apply_hcn_gauge(session: &mut GameSession, audio_now: TimeUs) {
 
     let delta_us = audio_now.0 - previous.0;
     for idx in 0..LANE_COUNT {
+        let hold_time =
+            if session.chart.metadata.conditional.is_some() { previous } else { audio_now };
+        if hln_passing(&session.chart, idx, hold_time) {
+            continue;
+        }
         let Some(mut timer) = session.lane_hcn_timer[idx] else {
             continue;
         };
@@ -222,5 +245,13 @@ pub fn apply_hcn_gauge(session: &mut GameSession, audio_now: TimeUs) {
         }
         session.lane_hcn_timer[idx] = Some(timer);
     }
+}
+fn hln_passing(chart: &PlayableChart, lane: usize, now: TimeUs) -> bool {
+    chart.long_notes.iter().any(|pair| {
+        pair.lane.index() == lane
+            && pair.mode.unwrap_or(chart.metadata.long_note_mode) == LongNoteMode::Hln
+            && pair.start_time <= now
+            && now < pair.end_time
+    })
 }
 use super::*;

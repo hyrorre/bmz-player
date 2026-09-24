@@ -74,7 +74,7 @@ fn push_document_long_notes(
         {
             append_document_item(commands, skin, skin_state, item);
         }
-        if (body.mode != LongNoteMode::Ln || snapshot.show_ln_tail_cap)
+        if (!matches!(body.mode, LongNoteMode::Ln | LongNoteMode::Hln) || snapshot.show_ln_tail_cap)
             && body.tail_y < 1.0
             && let Some(rect) = notes.note_rect(body.lane, body.tail_y, note_height)
             && let Some(item) =

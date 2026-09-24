@@ -2,6 +2,7 @@ use super::*;
 
 #[derive(Debug, Clone)]
 pub struct PlayRenderSnapshotCache {
+    pub(super) conditional_revision: usize,
     pub(super) judge_graph_density: Arc<[u8]>,
     pub(super) bpm_graph_segments: Arc<[bmz_render::chart_graph::BpmGraphSegment]>,
     pub(super) min_bpm: f32,
@@ -32,6 +33,11 @@ pub(super) struct BgaEventCache {
 }
 
 impl PlayRenderSnapshotCache {
+    pub fn for_updated_chart(&self, chart: &PlayableChart) -> Self {
+        let mut cache = Self::from_chart(chart);
+        cache.judge_graph_density = self.judge_graph_density.clone();
+        cache
+    }
     pub fn from_chart(chart: &PlayableChart) -> Self {
         let judge_graph_density = Arc::from(build_judge_graph_density(chart).into_boxed_slice());
         let bpm_graph_segments = Arc::from(build_bpm_graph_segments(chart).into_boxed_slice());
@@ -67,6 +73,7 @@ impl PlayRenderSnapshotCache {
         );
         let bga_events = BgaEventCache::from_chart(chart);
         Self {
+            conditional_revision: chart.metadata.conditional_revision,
             judge_graph_density,
             bpm_graph_segments,
             min_bpm,

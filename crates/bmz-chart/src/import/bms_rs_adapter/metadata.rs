@@ -13,6 +13,7 @@ pub(super) fn build_metadata(bms: &Bms) -> IntermediateMetadata {
         judge_rank.map(|value| JudgeRankSpec { value, kind: JudgeRankKind::BmsRank });
 
     IntermediateMetadata {
+        conditional: None,
         title: bms.music_info.title.clone().unwrap_or_default(),
         subtitle: bms.music_info.subtitle.clone().unwrap_or_default(),
         artist: bms.music_info.artist.clone().unwrap_or_default(),

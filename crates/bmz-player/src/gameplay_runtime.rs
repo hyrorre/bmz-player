@@ -94,8 +94,10 @@ pub struct GameplayClient {
 
 impl GameplayClient {
     pub fn new(session: GameSession) -> Self {
-        let final_notes_processed =
-            Arc::new(AtomicBool::new(session.judge.is_exhausted(&session.chart)));
+        let final_notes_processed = Arc::new(AtomicBool::new(
+            session.judge.is_exhausted(&session.chart)
+                && bmz_gameplay::session::conditional::next_evaluation(&session).is_none(),
+        ));
         Self {
             session: PlaySessionObservation::from_session(&session),
             final_notes_processed,
@@ -119,8 +121,11 @@ impl GameplayClient {
             self.local.as_mut().expect("prepared session cannot be edited after runtime start");
         let result = edit(&mut runtime.session);
         self.session = PlaySessionObservation::from_session(&runtime.session);
-        self.final_notes_processed
-            .store(runtime.session.judge.is_exhausted(&runtime.session.chart), Ordering::Release);
+        self.final_notes_processed.store(
+            runtime.session.judge.is_exhausted(&runtime.session.chart)
+                && bmz_gameplay::session::conditional::next_evaluation(&runtime.session).is_none(),
+            Ordering::Release,
+        );
         result
     }
 
@@ -129,7 +134,9 @@ impl GameplayClient {
             edit(&mut runtime.session);
             self.session = PlaySessionObservation::from_session(&runtime.session);
             self.final_notes_processed.store(
-                runtime.session.judge.is_exhausted(&runtime.session.chart),
+                runtime.session.judge.is_exhausted(&runtime.session.chart)
+                    && bmz_gameplay::session::conditional::next_evaluation(&runtime.session)
+                        .is_none(),
                 Ordering::Release,
             );
             return true;
@@ -364,9 +371,16 @@ fn run(
         if stop.load(Ordering::Acquire) {
             break;
         }
+        let previous_chart = runtime.session.chart.clone();
         let mut frame = runtime.advance(&audio);
-        final_notes_processed
-            .store(runtime.session.judge.is_exhausted(&runtime.session.chart), Ordering::Release);
+        if !Arc::ptr_eq(&previous_chart, &runtime.session.chart) {
+            config.cache = config.cache.for_updated_chart(&runtime.session.chart);
+        }
+        final_notes_processed.store(
+            runtime.session.judge.is_exhausted(&runtime.session.chart)
+                && bmz_gameplay::session::conditional::next_evaluation(&runtime.session).is_none(),
+            Ordering::Release,
+        );
         if let Some(effects) = &config.effects {
             if runtime.session.guide_se_enabled {
                 for event in &frame.judgements {

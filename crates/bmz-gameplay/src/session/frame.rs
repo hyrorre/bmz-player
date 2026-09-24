@@ -48,40 +48,37 @@ pub fn advance_session_frame(
         session.state = PlayState::Playing;
     }
 
-    if matches!(session.state, PlayState::Ready | PlayState::Playing) {
-        // BGM・自動キー音はchart 0に間に合うようREADY中もschedule-aheadする。
-        // 判定・入力起因のkeysound・MineはPlayingに入るまで開始しない。
-        session.bgm_scheduler.schedule_until(
-            &session.chart,
-            &session.audio_clock,
-            times.audio_schedule_until,
-            session.audio_mix.master_volume
-                * session.audio_mix.effective_normalization_gain()
-                * session.audio_mix.bgm_volume,
-            audio,
-        );
-
-        // キー音自動再生モード: ノーツの押下有無に関わらず、譜面の生タイミングで
-        // キー音を鳴らす。入力オフセット・表示オフセットは適用しない。
-        // 押鍵時のキー音は `schedule_keysounds` 側で抑制する。
-        if session.audio_mix.auto_keysound {
-            session.auto_keysound_scheduler.schedule_until(
-                &session.chart,
-                &session.display_only_lane_mask,
-                &session.audio_clock,
-                times.audio_schedule_until,
-                session.audio_mix.master_volume
-                    * session.audio_mix.effective_normalization_gain()
-                    * session.audio_mix.key_volume,
-                audio,
-            );
-        }
+    if matches!(session.state, PlayState::Ready | PlayState::Playing)
+        && (session.state == PlayState::Ready || session.chart.metadata.conditional.is_none())
+    {
+        schedule_chart_audio(session, times.audio_schedule_until, audio);
     }
 
     if session.state == PlayState::Playing {
         sync_judge_windows(session, times.audio_now);
 
-        if session.replay_player.is_some() && session.replay_lane_mask.is_none() {
+        if session.chart.metadata.conditional.is_some() {
+            while let Some(at) =
+                super::conditional::next_evaluation(session).filter(|at| *at <= times.audio_now)
+            {
+                judgements.extend(super::conditional::advance_before_boundary(
+                    session,
+                    TimeUs(at.0.saturating_sub(1)),
+                ));
+                if session.state != PlayState::Playing {
+                    break;
+                }
+                super::conditional::evaluate(session, at);
+            }
+            if session.state == PlayState::Playing {
+                judgements
+                    .extend(super::conditional::advance_before_boundary(session, times.audio_now));
+            }
+        } else if session.chart.long_notes.iter().any(|pair| {
+            pair.mode.unwrap_or(session.chart.metadata.long_note_mode) == LongNoteMode::Hln
+        }) {
+            judgements.extend(super::input::process_hln_inputs(session, times.audio_now));
+        } else if session.replay_player.is_some() && session.replay_lane_mask.is_none() {
             drain_human_inputs(session);
             judgements.extend(process_replay_inputs(session, times.audio_now));
         } else {
@@ -101,21 +98,33 @@ pub fn advance_session_frame(
                 apply_auto_key_release(session, times.audio_now);
             }
         }
-        judgements.extend(process_mine_passes(session, times.audio_now));
-        judgements.extend(process_misses(session, times.audio_now));
+        if session.state == PlayState::Playing {
+            judgements.extend(process_mine_passes(session, times.audio_now));
+        }
+        if session.state == PlayState::Playing {
+            judgements.extend(process_misses(session, times.audio_now));
+        }
         update_hcn_lane_timers(session, times.audio_now);
-        apply_hcn_gauge(session, times.audio_now);
+        if session.state == PlayState::Playing {
+            apply_hcn_gauge(session, times.audio_now);
+        }
         update_failed_state_from_gauge(session);
+        if session.chart.metadata.conditional.is_some() {
+            schedule_chart_audio(session, times.audio_schedule_until, audio);
+        }
         schedule_keysounds(session, audio);
         update_recent_judgements(session, &judgements, times.audio_now);
         update_full_combo_timer(session, &judgements);
         advance_battle_opponent(session, times.audio_now);
 
-        if should_finish(session, times.audio_now) {
+        if session.state == PlayState::Playing && should_finish(session, times.audio_now) {
             session.state = PlayState::Finished;
         }
     }
     update_gauge_max_timer(session, times.audio_now);
+    if matches!(session.state, PlayState::Failed | PlayState::Finished) {
+        super::conditional::finalize_defaults(session, times.audio_now);
+    }
 
     let mine_hits = std::mem::take(&mut session.pending_mine_hits);
     let keysound_volumes = std::mem::take(&mut session.pending_keysound_volumes);
@@ -267,7 +276,10 @@ fn viewer_pgreat_prefix_events(
                     .map(|_| note.id),
                 NoteKind::LongEnd => {
                     chart.long_notes.iter().find(|pair| pair.end_note_id == note.id).map(|pair| {
-                        if pair.mode.unwrap_or(chart.metadata.long_note_mode) == LongNoteMode::Ln {
+                        if matches!(
+                            pair.mode.unwrap_or(chart.metadata.long_note_mode),
+                            LongNoteMode::Ln | LongNoteMode::Hln
+                        ) {
                             pair.start_note_id
                         } else {
                             pair.end_note_id
@@ -319,13 +331,14 @@ fn advance_battle_opponent(session: &mut GameSession, now: TimeUs) {
         .judge
         .set_window_set(scale_judge_windows_for_playback_rate(windows, playback_rate_percent));
 
-    let inputs = if let Some(replay) = &mut opponent.replay_player {
+    let mut inputs = if let Some(replay) = &mut opponent.replay_player {
         replay.poll_until(now)
     } else if let Some(autoplay) = &mut opponent.autoplay {
         autoplay.poll_until(&opponent.chart, now)
     } else {
         Vec::new()
     };
+    inputs.sort_by_key(|input| input.time);
     let mut display_judgements = Vec::new();
     for input in inputs {
         match input.kind {
@@ -381,10 +394,73 @@ fn advance_battle_opponent(session: &mut GameSession, now: TimeUs) {
 
 fn apply_battle_opponent_outcome(
     opponent: &mut BattleOpponentSession,
-    outcome: JudgeOutcome,
+    mut outcome: JudgeOutcome,
 ) -> Vec<DisplayJudgementEvent> {
+    let has_hln = opponent.chart.long_notes.iter().any(|pair| {
+        pair.mode.unwrap_or(opponent.chart.metadata.long_note_mode) == LongNoteMode::Hln
+    });
+    if has_hln {
+        enum Effect {
+            Judge(JudgementEvent),
+            Hold(crate::judge::model::HoldGaugeEvent),
+            Mine(crate::judge::model::MineHitEvent),
+        }
+        let mut effects = Vec::new();
+        effects
+            .extend(outcome.events.into_iter().map(|e| (e.time, e.lane.index(), Effect::Judge(e))));
+        effects.extend(
+            outcome.hold_ticks.into_iter().map(|e| (e.time, e.lane.index(), Effect::Hold(e))),
+        );
+        effects.extend(
+            outcome.mine_hits.into_iter().map(|e| (e.time, e.lane.index(), Effect::Mine(e))),
+        );
+        effects
+            .sort_by_key(|(time, lane, effect)| (*time, !matches!(effect, Effect::Hold(_)), *lane));
+        let mut judgements = Vec::new();
+        for (time, _, effect) in effects {
+            if opponent.gauge.current_closes_play_on_zero() {
+                break;
+            }
+            let previous = opponent.gauge.current().value;
+            match effect {
+                Effect::Judge(event) => {
+                    if event.affects_score {
+                        opponent.score.apply(&event);
+                        opponent.gauge.apply_judge(event.judge, 1.0);
+                    }
+                    judgements.push(DisplayJudgementEvent {
+                        judgement: event,
+                        combo: opponent.score.combo,
+                    });
+                }
+                Effect::Hold(event) if event.increase => opponent.gauge.apply_hcn_hold(),
+                Effect::Hold(_) => opponent.gauge.apply_hcn_drain(),
+                Effect::Mine(event) => opponent.gauge.apply_mine(event.damage),
+            }
+            let current = opponent.gauge.current();
+            update_gauge_increase_timer_state(
+                &mut opponent.gauge_increase_started_at,
+                previous,
+                current.value,
+                current.definition.max,
+                time,
+            );
+        }
+        return judgements;
+    }
     let mut display_judgements = Vec::with_capacity(outcome.events.len());
+    outcome.events.sort_by_key(|event| event.time);
+    outcome.hold_ticks.sort_by_key(|event| event.time);
+    let mut holds = outcome.hold_ticks.into_iter().peekable();
     for event in outcome.events {
+        while holds.peek().is_some_and(|hold| hold.time <= event.time) {
+            let hold = holds.next().unwrap();
+            if hold.increase {
+                opponent.gauge.apply_hcn_hold();
+            } else {
+                opponent.gauge.apply_hcn_drain();
+            }
+        }
         if event.affects_score {
             opponent.score.apply(&event);
             let previous_gauge = opponent.gauge.current().value;
@@ -400,6 +476,13 @@ fn apply_battle_opponent_outcome(
         }
         display_judgements
             .push(DisplayJudgementEvent { judgement: event, combo: opponent.score.combo });
+    }
+    for hold in holds {
+        if hold.increase {
+            opponent.gauge.apply_hcn_hold();
+        } else {
+            opponent.gauge.apply_hcn_drain();
+        }
     }
     for mine in outcome.mine_hits {
         opponent.gauge.apply_mine(mine.damage);
@@ -421,6 +504,10 @@ fn update_battle_opponent_skin_timers(
         now,
     );
     if opponent.full_combo_started_at.is_some()
+        || opponent.chart.long_notes.iter().any(|pair| {
+            pair.mode.unwrap_or(opponent.chart.metadata.long_note_mode) == LongNoteMode::Hln
+                && pair.end_time > now
+        })
         || opponent.scored_total_notes == 0
         || opponent.score.past_notes < opponent.scored_total_notes
         || opponent.score.combo < opponent.scored_total_notes
@@ -452,6 +539,11 @@ fn second_player_lane(lane: Lane) -> Lane {
 pub(super) fn update_full_combo_timer(session: &mut GameSession, judgements: &[JudgementEvent]) {
     update_opponent_full_combo_timer(session, judgements);
     if session.full_combo_started_at.is_some()
+        || super::conditional::next_evaluation(session).is_some()
+        || session.chart.long_notes.iter().any(|pair| {
+            pair.mode.unwrap_or(session.chart.metadata.long_note_mode) == LongNoteMode::Hln
+                && pair.end_time > session.audio_clock.now()
+        })
         || session.scored_total_notes == 0
         || session.score.past_notes < session.scored_total_notes
         || session.score.combo < session.scored_total_notes
@@ -471,6 +563,10 @@ fn update_opponent_full_combo_timer(session: &mut GameSession, judgements: &[Jud
         return;
     };
     if session.opponent_full_combo_started_at.is_some()
+        || session.chart.long_notes.iter().any(|pair| {
+            pair.mode.unwrap_or(session.chart.metadata.long_note_mode) == LongNoteMode::Hln
+                && pair.end_time > session.audio_clock.now()
+        })
         || session.scored_total_notes == 0
         || score.past_notes < session.scored_total_notes
         || score.combo < session.scored_total_notes
@@ -486,7 +582,8 @@ fn update_opponent_full_combo_timer(session: &mut GameSession, judgements: &[Jud
 }
 
 pub fn should_finish(session: &GameSession, audio_now: TimeUs) -> bool {
-    session.judge.is_exhausted(&session.chart)
+    super::conditional::next_evaluation(session).is_none()
+        && session.judge.is_exhausted(&session.chart)
         && session.bgm_scheduler.is_done(&session.chart)
         && audio_now.0 > session.chart.end_time.0.saturating_add(SESSION_END_MARGIN_US)
 }
@@ -496,6 +593,38 @@ pub fn should_finish(session: &GameSession, audio_now: TimeUs) -> bool {
 pub fn result_is_settled(session: &GameSession, audio_now: TimeUs) -> bool {
     let result_settle_at =
         session.chart.end_time.0.saturating_add(session.judge.window_set.result_settle_margin_us());
-    session.judge.is_exhausted(&session.chart) && audio_now.0 > result_settle_at
+    super::conditional::next_evaluation(session).is_none()
+        && session.judge.is_exhausted(&session.chart)
+        && audio_now.0 > result_settle_at
 }
 use super::*;
+
+fn schedule_chart_audio(session: &mut GameSession, until: TimeUs, audio: &mut dyn AudioScheduler) {
+    // BGM・自動キー音はchart 0に間に合うようREADY中もschedule-aheadする。
+    // 判定・入力起因のkeysound・MineはPlayingに入るまで開始しない。
+    session.bgm_scheduler.schedule_until(
+        &session.chart,
+        &session.audio_clock,
+        until,
+        session.audio_mix.master_volume
+            * session.audio_mix.effective_normalization_gain()
+            * session.audio_mix.bgm_volume,
+        audio,
+    );
+
+    // キー音自動再生モード: ノーツの押下有無に関わらず、譜面の生タイミングで
+    // キー音を鳴らす。入力オフセット・表示オフセットは適用しない。
+    // 押鍵時のキー音は `schedule_keysounds` 側で抑制する。
+    if session.audio_mix.auto_keysound {
+        session.auto_keysound_scheduler.schedule_until(
+            &session.chart,
+            &session.display_only_lane_mask,
+            &session.audio_clock,
+            until,
+            session.audio_mix.master_volume
+                * session.audio_mix.effective_normalization_gain()
+                * session.audio_mix.key_volume,
+            audio,
+        );
+    }
+}
