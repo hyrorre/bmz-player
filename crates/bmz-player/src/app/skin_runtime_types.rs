@@ -9,8 +9,8 @@ pub(super) struct ActiveSkinVideoSource {
     /// スキン config の option による静的な有効判定。
     pub(super) active: bool,
     /// このソースを参照する各 destination の op 条件。実行時 state に対して
-    /// 評価し、現在のシーン状態 (例: リザルトのランク) で実際に表示されるソース
-    /// だけをデコードするために使う。空なら参照されておらず常時可視扱い。
+    /// 評価し、未表示ソースの遅延起動とフレーム転送の可否を決める。
+    /// 空なら参照されておらず常時可視扱い。
     pub(super) gating_op_sets: Vec<Vec<i32>>,
     /// `gating_op_sets` 評価に必要な document の有効 option 一覧。
     pub(super) enabled_options: Vec<i32>,

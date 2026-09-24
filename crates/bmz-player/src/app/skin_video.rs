@@ -1,5 +1,92 @@
 use super::*;
 
+pub(super) fn update_skin_video_source(
+    source: &mut ActiveSkinVideoSource,
+    kind: SkinKind,
+    elapsed_us: i64,
+    visible: bool,
+    profiling: bool,
+    profile: &mut SkinVideoFrameProfile,
+    mut upload: impl FnMut(&bmz_video::DecodedFrame) -> Result<()>,
+) {
+    if source.failed || (!visible && source.decoder.is_none()) {
+        return;
+    }
+    profile.active_sources += 1;
+    profile.visible_sources += u32::from(visible);
+    if source.decoder.is_none() {
+        match VideoBgaDecoder::open_following_playback_time(&source.path) {
+            Ok(decoder) => {
+                // 非同期 skin load 後の初表示でも offset ≈ 0 から再生を始める。
+                source.loop_start_us = elapsed_us;
+                source.last_pts = None;
+                tracing::info!(
+                    kind = ?kind,
+                    texture_id = source.texture.0,
+                    path = %source.path.display(),
+                    "opened skin video source decoder"
+                );
+                source.decoder = Some(decoder);
+                profile.opened += 1;
+            }
+            Err(error) => {
+                tracing::warn!(
+                    kind = ?kind,
+                    texture_id = source.texture.0,
+                    path = %source.path.display(),
+                    %error,
+                    "failed to open skin video source"
+                );
+                source.failed = true;
+                return;
+            }
+        }
+    }
+
+    let Some(decoder) = source.decoder.as_mut() else {
+        return;
+    };
+    // alpha/draw/timer による一時非表示は再生のリセットではない。
+    // 開始済みの decoder と時刻は維持し、非表示中は GPU 転送だけを省く。
+    // poll も止めると再表示時に非表示期間をまとめて decode することになる。
+    let video_offset_us = elapsed_us.saturating_sub(source.loop_start_us);
+    let poll_start = profiling.then(Instant::now);
+    let frame = decoder.poll_frame(video_offset_us);
+    if let Some(start) = poll_start {
+        profile.poll_us += start.elapsed().as_micros();
+    }
+    if visible
+        && let Some(frame) = frame
+        && source.last_pts != Some(frame.pts_us)
+    {
+        let pts = frame.pts_us;
+        let upload_start = profiling.then(Instant::now);
+        match upload(frame) {
+            Ok(()) => {
+                source.last_pts = Some(pts);
+                profile.uploaded_frames += 1;
+            }
+            Err(error) => {
+                tracing::warn!(
+                    kind = ?kind,
+                    texture_id = source.texture.0,
+                    path = %source.path.display(),
+                    %error,
+                    "failed to upload skin video source frame"
+                );
+            }
+        }
+        if let Some(start) = upload_start {
+            profile.upload_us += start.elapsed().as_micros();
+        }
+    }
+    if source.decoder.as_ref().is_some_and(VideoBgaDecoder::is_finished) {
+        source.decoder = None;
+        source.last_pts = None;
+        source.loop_start_us = elapsed_us;
+    }
+}
+
 pub(super) fn skin_video_texture_visible_in_plan(
     plan: &bmz_render::plan::DrawPlan,
     texture: SkinTextureId,

@@ -499,6 +499,103 @@ fn skin_video_sources_need_runtime_state_only_for_active_gated_sources() {
 }
 
 #[test]
+fn skin_video_hidden_frames_keep_playback_time_without_uploading_or_reopening() {
+    // A small, self-contained 2-second video; no external skin or ffmpeg CLI required.
+    let unique = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+    let path =
+        std::env::temp_dir().join(format!("bmz-skin-video-{}-{unique}.y4m", std::process::id()));
+    let mut video = b"YUV4MPEG2 W2 H2 F10:1 Ip A1:1 C420jpeg\n".to_vec();
+    for luma in 16..36 {
+        video.extend_from_slice(b"FRAME\n");
+        video.extend_from_slice(&[luma, luma, luma, luma, 128, 128]);
+    }
+    std::fs::write(&path, video).unwrap();
+    let mut source = ActiveSkinVideoSource {
+        texture: SkinTextureId(800),
+        path: path.clone(),
+        decoder: None,
+        last_pts: None,
+        loop_start_us: 0,
+        active: true,
+        gating_op_sets: Vec::new(),
+        enabled_options: Vec::new(),
+        result_ranktime_ms: 0,
+        failed: false,
+    };
+    let start_us = 5_000_000;
+    let mut profile = SkinVideoFrameProfile::default();
+    update_skin_video_source(
+        &mut source,
+        SkinKind::Select,
+        start_us - 1_000_000,
+        false,
+        false,
+        &mut profile,
+        |_| panic!("never-visible video must not upload"),
+    );
+    assert!(source.decoder.is_none());
+    assert_eq!(profile.opened, 0);
+    assert!(!source.failed);
+
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while source.last_pts.is_none() {
+        update_skin_video_source(
+            &mut source,
+            SkinKind::Select,
+            start_us,
+            true,
+            false,
+            &mut profile,
+            |_| Ok(()),
+        );
+        assert!(Instant::now() < deadline, "first video frame timed out");
+        thread::sleep(Duration::from_millis(2));
+    }
+    assert_eq!(source.last_pts, Some(0));
+    let first_upload_count = profile.uploaded_frames;
+    for offset_us in [100_000, 300_000, 500_000] {
+        let mut hidden_profile = SkinVideoFrameProfile::default();
+        update_skin_video_source(
+            &mut source,
+            SkinKind::Select,
+            start_us + offset_us,
+            false,
+            false,
+            &mut hidden_profile,
+            |_| panic!("hidden video must not upload"),
+        );
+        assert!(source.decoder.is_some());
+        assert_eq!(source.loop_start_us, start_us);
+        assert_eq!(source.last_pts, Some(0));
+        assert_eq!(hidden_profile.active_sources, 1);
+        assert_eq!(hidden_profile.visible_sources, 0);
+        assert_eq!(hidden_profile.opened, 0);
+        assert_eq!(hidden_profile.uploaded_frames, 0);
+    }
+
+    // Resume at the current scene time, retaining the original playback origin.
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while source.last_pts.is_none_or(|pts| pts < 700_000) {
+        update_skin_video_source(
+            &mut source,
+            SkinKind::Select,
+            start_us + 700_000,
+            true,
+            false,
+            &mut profile,
+            |_| Ok(()),
+        );
+        assert!(Instant::now() < deadline, "resumed video frame timed out");
+        thread::sleep(Duration::from_millis(2));
+    }
+    assert_eq!(source.loop_start_us, start_us);
+    assert_eq!(profile.opened, 1);
+    assert!(profile.uploaded_frames > first_upload_count);
+    drop(source);
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
 fn play_skin_video_source_runtime_visibility_follows_bga_ops() {
     // ECFN の generic BGA 相当。beatoraja では BGA ON かつ曲BGAなしの時だけ
     // destination が有効になり、動画フレーム取得も走る。
