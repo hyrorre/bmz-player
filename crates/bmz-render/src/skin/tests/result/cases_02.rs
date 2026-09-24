@@ -170,9 +170,9 @@ fn ir_skin_properties_map_loaded_ranking() {
     assert_eq!(skin_state_number(200, &loaded), Some(42));
     assert_eq!(skin_state_number(181, &loaded), Some(85));
     assert_eq!(skin_state_number(182, &loaded), Some(7));
-    assert_eq!(skin_state_number(226, &loaded), Some(36));
+    assert_eq!(skin_state_number(226, &loaded), None);
     assert_eq!(skin_state_number(227, &loaded), Some(85));
-    assert_eq!(skin_state_number(241, &loaded), Some(0));
+    assert_eq!(skin_state_number(241, &loaded), None);
     assert_eq!(skin_state_number(380, &loaded), Some(2000));
     assert_eq!(skin_state_number(381, &loaded), Some(1900));
     assert_eq!(skin_state_number(390, &loaded), Some(1));

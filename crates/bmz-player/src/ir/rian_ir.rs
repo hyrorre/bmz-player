@@ -654,6 +654,8 @@ mod tests {
         assert_eq!(ranking.ranking.entries.last().unwrap().rank, 100);
         assert_eq!(ranking.ranking.self_summary.as_ref().unwrap().rank, 100);
         assert_eq!(ranking.ranking.pagination.unwrap().limit, 100);
+        assert_eq!(ranking.ranking.pagination.unwrap().total, Some(101));
+        assert!(ranking.ranking.pagination.unwrap().has_more);
     }
 
     #[test]

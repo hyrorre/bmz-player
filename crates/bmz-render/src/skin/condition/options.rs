@@ -191,6 +191,29 @@ pub(in crate::skin) fn test_skin_op(
         // 描画する前提条件としても使われる。
         50 => !state.ir_ranking.online,
         51 => state.ir_ranking.online,
+        // SelectedBarClearDrawCondition: these lamps describe the selected score,
+        // not the gauge selected for the next play.
+        100..=105 | 1100..=1104 => {
+            let clear_index = match op {
+                100 => 0,
+                101 => 1,
+                1100 => 2,
+                1101 => 3,
+                102 => 4,
+                103 => 5,
+                104 => 6,
+                1102 => 7,
+                105 => 8,
+                1103 => 9,
+                1104 => 10,
+                _ => unreachable!(),
+            };
+            state.select_screen
+                && !state.in_settings
+                && state.select_clear_index == clear_index
+                && (op != 100
+                    || matches!(state.select_row_kind, SelectRowKind::Song | SelectRowKind::Course))
+        }
         21 => state.select_option_panel == 1,
         22 => state.select_option_panel == 2,
         23 => state.select_option_panel == 3,

@@ -639,3 +639,27 @@ fn compact_distribution_round_trips_and_accepts_legacy_json() {
     let legacy_json = serde_json::to_string(&distribution).unwrap();
     assert_eq!(decode_distribution(&legacy_json), distribution);
 }
+
+#[test]
+fn end_density_uses_the_recovery_border_in_time_order_and_survives_storage_trimming() {
+    for late_lane in [Lane::Key1, Lane::Key2] {
+        let mut chart = chart("end density");
+        chart.metadata.total = Some(500.0);
+        chart.total_notes = 28;
+        let early_lane = if late_lane == Lane::Key1 { Lane::Key2 } else { Lane::Key1 };
+        for id in 0..20 {
+            chart.lane_notes[early_lane.index()].push(note(id, early_lane, NoteKind::Tap, 0));
+        }
+        for id in 20..28 {
+            let time = if id < 24 { 8_000_000 } else { 14_000_000 };
+            chart.lane_notes[late_lane.index()].push(note(id, late_lane, NoteKind::Tap, time));
+        }
+        let analysis = ChartAnalysis::from_chart(&chart);
+        assert_eq!(analysis.end_density, 0.8);
+        let stored = decode_distribution(&encode_distribution_compact(&analysis.distribution));
+        assert_eq!(ChartAnalysis::ending_density(&stored, Some(500.0), 28), 0.8);
+    }
+    assert_eq!(ChartAnalysis::ending_density(&[], None, 0), 0.0);
+    let short = [ChartDistributionSecond { key_taps: 2, ..Default::default() }];
+    assert_eq!(ChartAnalysis::ending_density(&short, None, 2), 2.0);
+}

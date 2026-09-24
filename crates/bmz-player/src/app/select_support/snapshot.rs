@@ -1,6 +1,25 @@
 use super::*;
 use crate::screens::select_model::{SelectCourseRow, SelectFolderSummary};
 
+#[derive(Default)]
+pub(in crate::app) struct CachedSelectChartDistribution {
+    pub notes: Vec<ChartDistributionSecond>,
+    pub end_density: Option<f64>,
+}
+
+impl CachedSelectChartDistribution {
+    pub(in crate::app) fn new(notes: Vec<ChartDistributionSecond>, chart: &ChartListItem) -> Self {
+        let end_density = (!notes.is_empty()).then(|| {
+            crate::storage::library_db::ChartAnalysis::ending_density(
+                &notes,
+                (chart.bms_total > 0.0).then_some(chart.bms_total),
+                chart.ln_counts.canonical_total_notes(chart.total_notes),
+            )
+        });
+        Self { notes, end_density }
+    }
+}
+
 pub(in crate::app) fn select_chart_distribution(
     distribution: &[ChartDistributionSecond],
 ) -> Vec<SelectChartDistributionSecond> {
@@ -64,7 +83,7 @@ struct SelectSnapshotRowContext<'a> {
     app_config: &'a AppConfig,
     in_difficulty_table_level: bool,
     key_config_edit: Option<&'a KeyConfigEditSession>,
-    chart_distributions: &'a HashMap<i64, Vec<ChartDistributionSecond>>,
+    chart_distributions: &'a HashMap<i64, CachedSelectChartDistribution>,
     select_ir: Option<&'a crate::screens::select_ir::SelectIrRanking>,
 }
 
@@ -75,7 +94,7 @@ pub(in crate::app) fn select_snapshot_rows(
     visible_limit: usize,
     profile: &ProfileConfig,
     key_config_edit: Option<&KeyConfigEditSession>,
-    chart_distributions: &HashMap<i64, Vec<ChartDistributionSecond>>,
+    chart_distributions: &HashMap<i64, CachedSelectChartDistribution>,
 ) -> Vec<SelectRowSnapshot> {
     let app_config = AppConfig::default();
     select_snapshot_rows_with_rival(
@@ -120,7 +139,7 @@ pub(in crate::app) fn select_snapshot_rows_with_rival(
     app_config: &AppConfig,
     in_difficulty_table_level: bool,
     key_config_edit: Option<&KeyConfigEditSession>,
-    chart_distributions: &HashMap<i64, Vec<ChartDistributionSecond>>,
+    chart_distributions: &HashMap<i64, CachedSelectChartDistribution>,
     select_ir: Option<&crate::screens::select_ir::SelectIrRanking>,
 ) -> Vec<SelectRowSnapshot> {
     let context = SelectSnapshotRowContext {
@@ -311,17 +330,24 @@ fn select_chart_snapshot(
         source_ln_profile_bits: chart
             .map(|chart| crate::skin_extension::source_ln_profile_bits(chart.ln_profile)),
         chart_normal_notes: analysis
-            .map(|analysis| analysis.normal_notes)
+            .map(|analysis| analysis.normal_notes.saturating_sub(analysis.scratch_notes))
             .unwrap_or_else(|| chart.map(|chart| chart.total_notes).unwrap_or(0)),
-        chart_long_notes: analysis.map(|analysis| analysis.long_notes).unwrap_or(0),
+        chart_long_notes: analysis
+            .map(|analysis| analysis.long_notes.saturating_sub(analysis.long_scratch_notes))
+            .unwrap_or(0),
         chart_scratch_notes: analysis.map(|analysis| analysis.scratch_notes).unwrap_or(0),
         chart_long_scratch_notes: analysis.map(|analysis| analysis.long_scratch_notes).unwrap_or(0),
         chart_mine_notes: distribution
-            .map(|distribution| distribution.iter().map(|second| u32::from(second.mines)).sum())
+            .map(|distribution| {
+                distribution.notes.iter().map(|second| u32::from(second.mines)).sum()
+            })
             .unwrap_or(0),
         chart_density: analysis.map(|analysis| analysis.density as f32).unwrap_or(0.0),
         chart_peak_density: analysis.map(|analysis| analysis.peak_density as f32).unwrap_or(0.0),
-        chart_end_density: analysis.map(|analysis| analysis.end_density as f32).unwrap_or(0.0),
+        chart_end_density: distribution
+            .and_then(|cached| cached.end_density)
+            .or_else(|| analysis.map(|analysis| analysis.end_density))
+            .unwrap_or(0.0) as f32,
         chart_total_gauge: chart
             .map(|chart| {
                 bmz_gameplay::gauge::gauge_total_for_chart(
@@ -334,7 +360,7 @@ fn select_chart_snapshot(
             .map(|analysis| analysis.main_bpm as f32)
             .unwrap_or_else(|| chart.map(|chart| chart.initial_bpm as f32).unwrap_or(0.0)),
         chart_distribution: distribution
-            .map(|distribution| select_chart_distribution(distribution))
+            .map(|distribution| select_chart_distribution(&distribution.notes))
             .unwrap_or_default(),
         chart_bpm_graph_segments: analysis
             .map(|analysis| {

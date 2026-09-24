@@ -36,6 +36,7 @@ pub(super) fn result_ir_ranking_to_skin_snapshot_at(
         rank: ranking.self_rank.map(i64::from),
         total_player: ranking.total.map(i64::from).or(Some(ranking.entries.len() as i64)),
         clear_rate: ranking.clear_rate.map(i64::from),
+        clear_counts: ranking.clear_counts,
         previous_rank: ranking.previous_rank.map(i64::from),
         scroll_offset,
         scroll_max,
@@ -68,6 +69,7 @@ pub(super) fn chart_ranking_to_result_ir_ranking_with_previous(
             })
             .collect(),
         clear_rate: ranking.ranking.clear_rate,
+        clear_counts: complete_ranking_clear_counts(ranking),
         self_rank: ranking.ranking.self_summary.as_ref().map(|own| own.rank),
         previous_rank,
         total: ranking.ranking.pagination.and_then(|pagination| pagination.total),
@@ -93,10 +95,28 @@ pub(crate) fn course_ranking_to_result_ir_ranking(
             })
             .collect(),
         clear_rate: None,
+        clear_counts: None,
         self_rank: None,
         previous_rank: None,
         total: Some(ranking.ranking.entries.len() as u32),
     }
+}
+
+fn complete_ranking_clear_counts(ranking: &IrRankingResult) -> Option<[u32; 11]> {
+    let ranking = &ranking.ranking;
+    let pagination = ranking.pagination?;
+    if pagination.offset != 0
+        || pagination.has_more
+        || usize::try_from(pagination.total?).ok()? != ranking.entries.len()
+    {
+        return None;
+    }
+    let mut counts = [0_u32; 11];
+    for entry in &ranking.entries {
+        let clear = bmz_core::clear::ClearType::from_label(&entry.score.clear)?;
+        counts[clear as usize] += 1;
+    }
+    Some(counts)
 }
 
 pub(super) fn scope_for_tab(tab: ResultRankingTab) -> IrRankingScope {

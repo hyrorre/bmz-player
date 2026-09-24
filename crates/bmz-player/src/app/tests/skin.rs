@@ -1,6 +1,68 @@
 use super::*;
 
 #[test]
+fn frontend_lua_load_exposes_ir_connection_before_building_objects() {
+    let path = std::env::temp_dir().join(format!("bmz-frontend-ir-{}.lua", std::process::id()));
+    std::fs::write(
+        &path,
+        r#"
+        local state = require("main_state")
+        local skin = { type = 5, imageset = {} }
+        if state.option(51) then
+            skin.imageset[1] = { id = "ir_lamp", ref = 390, images = {"lamp"} }
+        end
+        if state.option(50) then
+            skin.imageset[1] = { id = "offline_lamp", ref = 390, images = {"lamp"} }
+        end
+        return skin
+    "#,
+    )
+    .unwrap();
+    for (ir_name, expected) in [(Some("Test IR"), "ir_lamp"), (None, "offline_lamp")] {
+        let state = lua_runtime_state_for_frontend("Player", ir_name);
+        assert_eq!(state.text_values[&2], "Player");
+        assert_eq!(state.text_values[&1020], ir_name.unwrap_or_default());
+        let loaded = bmz_skin::load_lua_skin_with_runtime_state(
+            &path,
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            &state,
+        )
+        .unwrap();
+        assert_eq!(loaded.document.imageset.len(), 1);
+        assert_eq!(loaded.document.imageset[0].id, expected);
+    }
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn litone_select_builds_online_ranker_lamps_when_available() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../data/skins");
+    let path = root.join("LITONE9/Select/select.luaskin");
+    if !path.is_file() {
+        return;
+    }
+    let context = bmz_skin::SkinPathContext::new(&path, [root]).unwrap();
+    let loaded = bmz_skin::load_lua_skin_with_path_context(
+        &context,
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+        &lua_runtime_state_for_frontend("Player", Some("Test IR")),
+        &BTreeMap::new(),
+    )
+    .unwrap();
+    for index in 1..=10 {
+        let lamp = loaded
+            .document
+            .imageset
+            .iter()
+            .find(|set| set.id == format!("ir_cleartype{index}"))
+            .expect("online LITONE ranker lamps must survive load-time Lua branches");
+        assert_eq!(lamp.ref_id, 389 + index);
+    }
+}
+
+#[test]
 fn skin_catalog_refresh_finds_restored_skin_and_reports_invalid_headers() {
     let root = std::env::temp_dir().join(format!(
         "bmz-skin-refresh-{}-{}",

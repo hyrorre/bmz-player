@@ -13,6 +13,7 @@ impl WinitApp {
             &mut self.skin.skin_pipeline,
             texture_request,
             &self.boot.profile_config.display_name,
+            result_ir_skin_name(&self.boot.profile_config.ir),
             &skin,
             self.skin.lua_runtime_mode,
         );
@@ -107,6 +108,7 @@ impl WinitApp {
             &mut self.skin.skin_pipeline,
             request,
             &self.boot.profile_config.display_name,
+            result_ir_skin_name(&self.boot.profile_config.ir),
             &skin,
             self.skin.lua_runtime_mode,
         );

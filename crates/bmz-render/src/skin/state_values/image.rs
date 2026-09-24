@@ -185,7 +185,11 @@ pub(super) fn decimal_afterdot(value: f32) -> i64 {
 }
 
 pub(super) fn select_chart_normal_notes(state: &SkinDrawState) -> u32 {
-    if state.select_chart_normal_notes > 0 {
+    if state.select_chart_normal_notes > 0
+        || state.select_chart_long_notes > 0
+        || state.select_chart_scratch_notes > 0
+        || state.select_chart_long_scratch_notes > 0
+    {
         state.select_chart_normal_notes
     } else {
         state.select_total_notes

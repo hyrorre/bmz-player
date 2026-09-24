@@ -6,6 +6,7 @@ pub(super) fn convert_score_ranking(
     limit: u32,
     self_player_id: Option<&str>,
 ) -> IrRankingResult {
+    let total = resources.len() as u32;
     let mut entries: Vec<_> = resources
         .into_iter()
         .take(limit as usize)
@@ -19,7 +20,7 @@ pub(super) fn convert_score_ranking(
             .find(|entry| entry.player.id == player_id)
             .map(|entry| IrRankingSelfRef { rank: entry.rank, score_id: None })
     });
-    let total = entries.len() as u32;
+    let has_more = entries.len() < total as usize;
     IrRankingResult {
         chart: IrRankingChartRef { sha256: chart_sha256.to_string() },
         ranking: IrRankingBody {
@@ -31,7 +32,7 @@ pub(super) fn convert_score_ranking(
                 limit,
                 offset: 0,
                 total: Some(total),
-                has_more: false,
+                has_more,
             }),
         },
     }

@@ -284,6 +284,7 @@ mod tests {
                 max_combo: 300,
             }],
             clear_rate: Some(80),
+            clear_counts: None,
             self_rank: Some(rank),
             previous_rank: None,
             total: Some(total),
@@ -335,6 +336,37 @@ mod tests {
                 }),
             },
         }
+    }
+
+    #[test]
+    fn complete_ir_population_survives_visible_row_truncation() {
+        let mut ranking = raw_global_ranking([1; 32], 1, 2000, 12);
+        let entry = ranking.ranking.entries[0].clone();
+        ranking.ranking.entries = (1..=12)
+            .map(|rank| {
+                let mut entry = entry.clone();
+                entry.rank = rank;
+                entry.player.id = format!("player-{rank}");
+                entry.score.clear = if rank <= 2 { "FullCombo" } else { "Hard" }.to_string();
+                entry
+            })
+            .collect();
+        let snapshot = ranking_to_ir_snapshot(&ranking);
+        assert_eq!(snapshot.entries.len(), 10);
+        assert_eq!(snapshot.clear_counts, Some([0, 0, 0, 0, 0, 0, 10, 0, 2, 0, 0]));
+        ranking.ranking.entries[0].score.clear = "Unknown".to_string();
+        assert_eq!(ranking_to_ir_snapshot(&ranking).clear_counts, None);
+        ranking.ranking.entries[0].score.clear = "FullCombo".to_string();
+        ranking.ranking.pagination.as_mut().unwrap().has_more = true;
+        assert_eq!(ranking_to_ir_snapshot(&ranking).clear_counts, None);
+        ranking.ranking.pagination.as_mut().unwrap().has_more = false;
+        ranking.ranking.pagination.as_mut().unwrap().offset = 1;
+        assert_eq!(ranking_to_ir_snapshot(&ranking).clear_counts, None);
+        ranking.ranking.pagination.as_mut().unwrap().offset = 0;
+        ranking.ranking.pagination.as_mut().unwrap().total = Some(200);
+        assert_eq!(ranking_to_ir_snapshot(&ranking).clear_counts, None);
+        ranking.ranking.pagination = None;
+        assert_eq!(ranking_to_ir_snapshot(&ranking).clear_counts, None);
     }
 
     fn raw_self_and_rivals_ranking(

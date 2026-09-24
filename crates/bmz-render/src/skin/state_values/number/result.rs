@@ -33,12 +33,59 @@ pub(in crate::skin) fn ir_ranking_score_rate_parts(
     Some((i64::try_from(scaled / 100).ok()?, i64::try_from(scaled % 100).ok()?))
 }
 
-pub(in crate::skin) fn ir_total_clear_count(
+pub(in crate::skin) fn ir_clear_stat_number(
     ranking: &crate::scene::ResultIrSnapshot,
+    ref_id: i32,
 ) -> Option<i64> {
-    let total = ranking.total_player?;
-    let clear_rate = ranking.clear_rate?;
-    Some((total * clear_rate + 50) / 100)
+    if ranking.state != crate::scene::ResultIrState::Loaded {
+        return None;
+    }
+    // Legacy providers can supply an integer rate without the population.
+    // Never reconstruct exact counts or a fractional digit from that rounded rate.
+    if ref_id == 227 && ranking.clear_counts.is_none() {
+        return ranking.clear_rate;
+    }
+    let counts = ranking.clear_counts?;
+    let (count, part) = match ref_id {
+        202..=219 | 222..=225 => {
+            let index = match ref_id & !1 {
+                202 => 0,
+                210 => 1,
+                204 => 2,
+                206 => 3,
+                212 => 4,
+                214 => 5,
+                216 => 6,
+                208 => 7,
+                218 => 8,
+                222 => 9,
+                224 => 10,
+                _ => return None,
+            };
+            (i64::from(counts[index]), ref_id % 2)
+        }
+        226 | 227 | 241 => (
+            counts[2..].iter().map(|&count| i64::from(count)).sum(),
+            if ref_id == 241 { 2 } else { ref_id - 226 },
+        ),
+        228 | 229 | 242 => (
+            counts[8..].iter().map(|&count| i64::from(count)).sum(),
+            if ref_id == 242 { 2 } else { ref_id - 228 },
+        ),
+        230..=240 => {
+            let index = [0, 2, 3, 7, 1, 4, 5, 6, 8, 9, 10][(ref_id - 230) as usize];
+            (i64::from(counts[index]), 2)
+        }
+        _ => return None,
+    };
+    if part == 0 {
+        return Some(count);
+    }
+    let total: i64 = counts.iter().map(|&count| i64::from(count)).sum();
+    if total == 0 {
+        return None;
+    }
+    Some(if part == 1 { count * 100 / total } else { count * 1_000 / total % 10 })
 }
 
 pub(in crate::skin) fn result_grade_diff_number(state: &SkinDrawState) -> Option<i64> {

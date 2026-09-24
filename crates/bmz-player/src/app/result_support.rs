@@ -624,9 +624,16 @@ pub(super) fn apply_skin_attempt_lua_load_state(
     }
 }
 
-pub(super) fn lua_runtime_state_for_player(player_name: &str) -> bmz_skin::LuaLoadRuntimeState {
+pub(super) fn lua_runtime_state_for_frontend(
+    player_name: &str,
+    ir_name: Option<&str>,
+) -> bmz_skin::LuaLoadRuntimeState {
     bmz_skin::LuaLoadRuntimeState {
-        text_values: BTreeMap::from([(2, player_name.to_string())]),
+        text_values: BTreeMap::from([
+            (2, player_name.to_string()),
+            (1020, ir_name.unwrap_or_default().to_string()),
+        ]),
+        option_values: BTreeMap::from([(50, ir_name.is_none()), (51, ir_name.is_some())]),
         ..bmz_skin::LuaLoadRuntimeState::default()
     }
 }

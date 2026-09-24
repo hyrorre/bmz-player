@@ -37,7 +37,7 @@ impl WinitApp {
                 }
                 let distributions = self.select.select_distribution_cache.borrow();
                 let distribution = distributions.get(&chart.chart_id)?;
-                let start_ms = fallback_preview_start_ms(distribution, chart.length_ms)?;
+                let start_ms = fallback_preview_start_ms(&distribution.notes, chart.length_ms)?;
                 Some(generated_preview_cache_key(chart.chart_id, start_ms))
             }
             _ => None,

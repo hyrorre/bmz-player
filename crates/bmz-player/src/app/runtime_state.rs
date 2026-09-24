@@ -31,7 +31,7 @@ pub(super) struct SelectRuntimeState {
     pub(super) course_builder: Option<SelectCourseBuilderState>,
     pub(super) select_items: Vec<SelectItem>,
     pub(super) replay_slot_cache: RefCell<Option<(crate::storage::score_db::ScoreKey, [bool; 4])>>,
-    pub(super) select_distribution_cache: RefCell<HashMap<i64, Vec<ChartDistributionSecond>>>,
+    pub(super) select_distribution_cache: RefCell<HashMap<i64, CachedSelectChartDistribution>>,
     pub(super) difficulty_tables: Vec<DifficultyTableRecord>,
     pub(super) table_breadcrumb_cache: RefCell<HashMap<String, TableBreadcrumb>>,
     pub(super) select_folder_summaries: SelectFolderSummaryRuntime,

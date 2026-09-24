@@ -14,6 +14,7 @@ pub(super) fn load_initial_skin_textures(
     pipeline: &SkinPipelineRuntime,
     generation: u64,
     player_name: &str,
+    ir_name: Option<&str>,
     skin: &SkinConfig,
     load_frontend_skins: bool,
     lua_runtime_mode: bmz_skin::LuaSkinRuntimeMode,
@@ -63,7 +64,7 @@ pub(super) fn load_initial_skin_textures(
                     },
                     lua_runtime_state_with_mode(
                         lua_runtime_state_with_skin_offsets(
-                            lua_runtime_state_for_player(player_name),
+                            lua_runtime_state_for_frontend(player_name, ir_name),
                             &skin.decide_offsets,
                         ),
                         lua_runtime_mode,
@@ -111,7 +112,7 @@ pub(super) fn load_initial_skin_textures(
                         lua_runtime_state_with_skin_offsets(
                             lua_runtime_state_for_result(
                                 false,
-                                None,
+                                ir_name,
                                 false,
                                 false,
                                 KeyMode::default(),
@@ -167,7 +168,7 @@ pub(super) fn load_initial_skin_textures(
                     active_select_files,
                     &lua_runtime_state_with_mode(
                         lua_runtime_state_with_skin_offsets(
-                            lua_runtime_state_for_player(player_name),
+                            lua_runtime_state_for_frontend(player_name, ir_name),
                             &skin.select_offsets,
                         ),
                         lua_runtime_mode,
@@ -225,6 +226,7 @@ pub(super) fn reload_skin_textures(
     pipeline: &mut SkinPipelineRuntime,
     request: SkinReloadRequest,
     player_name: &str,
+    ir_name: Option<&str>,
     skin: &SkinConfig,
     lua_runtime_mode: bmz_skin::LuaSkinRuntimeMode,
 ) -> (bool, bool, bool) {
@@ -290,7 +292,7 @@ pub(super) fn reload_skin_textures(
                     if trimmed.is_empty() { BTreeMap::new() } else { files.clone() },
                     lua_runtime_state_with_mode(
                         lua_runtime_state_with_skin_offsets(
-                            lua_runtime_state_for_player(player_name),
+                            lua_runtime_state_for_frontend(player_name, ir_name),
                             offsets,
                         ),
                         lua_runtime_mode,

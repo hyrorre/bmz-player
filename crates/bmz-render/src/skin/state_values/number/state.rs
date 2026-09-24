@@ -350,14 +350,12 @@ pub(in crate::skin) fn skin_state_number(ref_id: i32, state: &SkinDrawState) -> 
         180 | 200 => state.ir_ranking.total_player,
         181 => state.ir_ranking.clear_rate,
         182 => state.ir_ranking.previous_rank,
-        226 => ir_total_clear_count(&state.ir_ranking),
-        227 => state.ir_ranking.clear_rate,
-        241 => state.ir_ranking.clear_rate.map(|_| 0),
+        202..=242 => ir_clear_stat_number(&state.ir_ranking, ref_id),
         380..=389 => {
             ir_ranking_entry(&state.ir_ranking, ref_id - 380).and_then(|entry| entry.ex_score)
         }
         390..=399 => ir_ranking_entry(&state.ir_ranking, ref_id - 390).and_then(|entry| entry.rank),
-        201..=242 => None,
+        201 => None,
         // NUMBER_RIVAL_SCORE / MAXCOMBO / MISSCOUNT (IR ライバルベスト)。
         271 => state.rival_ex_score,
         275 => state.rival_max_combo,

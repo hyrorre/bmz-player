@@ -113,6 +113,7 @@ impl WinitApp {
             &skin_pipeline,
             0,
             &boot.profile_config.display_name,
+            result_ir_skin_name(&boot.profile_config.ir),
             &boot.profile_config.skin,
             !viewer_mode,
             options.lua_skin_runtime_mode,

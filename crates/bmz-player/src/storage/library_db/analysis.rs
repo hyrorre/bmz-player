@@ -25,9 +25,6 @@ impl ChartAnalysis {
             .map(|pair| (pair.end_note_id, pair.mode.unwrap_or(chart.metadata.long_note_mode)))
             .collect::<std::collections::HashMap<_, _>>();
         let mut bpm_note_counts: Vec<(f64, u32)> = Vec::new();
-        let mut total_countdown = canonical_total_notes as i64
-            - gauge_border_note_count(chart.metadata.total, canonical_total_notes);
-        let mut border_sec = 0usize;
 
         for notes in &chart.lane_notes {
             for note in notes {
@@ -46,14 +43,12 @@ impl ChartAnalysis {
                             slot.key_taps = slot.key_taps.saturating_add(1);
                             lane_slot.normal_notes = lane_slot.normal_notes.saturating_add(1);
                         }
-                        total_countdown -= 1;
                         add_bpm_note_count(&mut bpm_note_counts, bpm_at(chart, note.time.0), 1);
                     }
                     NoteKind::LongStart => {
                         add_long_head(slot, lane);
                         add_long_body(slot, lane, -1);
                         lane_slot.long_notes = lane_slot.long_notes.saturating_add(1);
-                        total_countdown -= 1;
                         add_bpm_note_count(&mut bpm_note_counts, bpm_at(chart, note.time.0), 1);
                     }
                     NoteKind::LongEnd
@@ -63,7 +58,6 @@ impl ChartAnalysis {
                     {
                         add_long_head(slot, lane);
                         lane_slot.long_notes = lane_slot.long_notes.saturating_add(1);
-                        total_countdown -= 1;
                         add_bpm_note_count(&mut bpm_note_counts, bpm_at(chart, note.time.0), 1);
                     }
                     NoteKind::LongEnd => {}
@@ -72,9 +66,6 @@ impl ChartAnalysis {
                         slot.mines = slot.mines.saturating_add(1);
                         lane_slot.mines = lane_slot.mines.saturating_add(1);
                     }
-                }
-                if total_countdown == 0 {
-                    border_sec = sec;
                 }
             }
         }
@@ -96,16 +87,8 @@ impl ChartAnalysis {
             f64::from(density_sum) / f64::from(density_count)
         };
 
-        let end_window = 5usize.min(distribution.len().saturating_sub(border_sec + 1));
-        let mut end_density: f64 = 0.0;
-        if end_window > 0 {
-            for start in border_sec..distribution.len().saturating_sub(end_window) {
-                let notes = (0..end_window)
-                    .map(|offset| distribution[start + offset].playable_notes())
-                    .sum::<u32>();
-                end_density = end_density.max(f64::from(notes) / end_window as f64);
-            }
-        }
+        let end_density =
+            Self::ending_density(&distribution, chart.metadata.total, canonical_total_notes);
 
         let main_bpm: f64 = bpm_note_counts
             .into_iter()
@@ -148,5 +131,47 @@ impl ChartAnalysis {
             speed_changes: chart_speed_changes(chart),
             lane_notes,
         }
+    }
+
+    /// beatoraja's final five-second density after the TOTAL recovery border.
+    /// Uses chronological bins so the result is independent of lane iteration.
+    /// Accepts stored, trailing-empty-trimmed distributions as well as fresh ones.
+    pub fn ending_density(
+        distribution: &[ChartDistributionSecond],
+        total: Option<f64>,
+        total_notes: u32,
+    ) -> f64 {
+        let length =
+            distribution.iter().rposition(|second| !second.is_empty()).map_or(0, |index| index + 1);
+        let distribution = &distribution[..length];
+        let border = gauge_border_note_count(total, total_notes);
+        let mut counted = 0_i64;
+        let border_sec = if border > 0 {
+            distribution
+                .iter()
+                .position(|second| {
+                    // Held LN bodies affect density, but do not advance the note border.
+                    counted += i64::from(second.scratch_long_heads)
+                        + i64::from(second.scratch_taps)
+                        + i64::from(second.key_long_heads)
+                        + i64::from(second.key_taps)
+                        + i64::from(second.mines);
+                    counted >= border
+                })
+                .unwrap_or(0)
+        } else {
+            0
+        };
+        let window = 5.min(length.saturating_sub(border_sec));
+        if window == 0 {
+            return 0.0;
+        }
+        distribution[border_sec..]
+            .windows(window)
+            .map(|seconds| {
+                seconds.iter().map(|second| u64::from(second.playable_notes())).sum::<u64>() as f64
+                    / window as f64
+            })
+            .fold(0.0, f64::max)
     }
 }

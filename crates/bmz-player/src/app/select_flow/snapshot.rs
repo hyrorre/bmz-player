@@ -554,17 +554,18 @@ impl WinitApp {
     }
 
     pub(super) fn ensure_visible_select_chart_distributions(&self, visible_limit: usize) {
-        let chart_ids: Vec<i64> = select_visible_item_indices(
+        let visible_charts: Vec<&ChartListItem> = select_visible_item_indices(
             self.select.select_items.len(),
             self.select.selected_index,
             visible_limit,
         )
         .into_iter()
         .filter_map(|index| match self.select.select_items.get(index) {
-            Some(SelectItem::Chart(row)) => row.chart.as_ref().map(|chart| chart.chart_id),
+            Some(SelectItem::Chart(row)) => row.chart.as_ref(),
             _ => None,
         })
         .collect();
+        let chart_ids: Vec<_> = visible_charts.iter().map(|chart| chart.chart_id).collect();
         if chart_ids.is_empty() {
             return;
         }
@@ -578,7 +579,13 @@ impl WinitApp {
                 Ok(distributions) => {
                     let mut cache = self.select.select_distribution_cache.borrow_mut();
                     for (chart_id, distribution) in distributions {
-                        cache.insert(chart_id, distribution);
+                        let chart = visible_charts.iter().find(|chart| chart.chart_id == chart_id);
+                        if let Some(chart) = chart {
+                            cache.insert(
+                                chart_id,
+                                CachedSelectChartDistribution::new(distribution, chart),
+                            );
+                        }
                     }
                     for chart_id in missing_ids {
                         cache.entry(chart_id).or_default();

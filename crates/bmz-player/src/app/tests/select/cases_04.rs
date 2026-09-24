@@ -200,11 +200,14 @@ fn select_snapshot_rows_centers_selection_and_copies_score_summary() {
     let mut chart_distributions = HashMap::new();
     chart_distributions.insert(
         5,
-        vec![crate::storage::library_db::ChartDistributionSecond {
-            key_taps: 2,
-            key_long_heads: 1,
-            ..Default::default()
-        }],
+        CachedSelectChartDistribution {
+            notes: vec![crate::storage::library_db::ChartDistributionSecond {
+                key_taps: 2,
+                key_long_heads: 1,
+                ..Default::default()
+            }],
+            end_density: Some(21.6),
+        },
     );
     let snapshot_rows = select_snapshot_rows(&rows, 5, 7, &profile, None, &chart_distributions);
 
@@ -221,9 +224,12 @@ fn select_snapshot_rows_centers_selection_and_copies_score_summary() {
     assert_eq!(snapshot_rows[3].play_count, 42);
     assert_eq!(snapshot_rows[3].clear_count, 31);
     assert_eq!(snapshot_rows[3].replay_slots, [true, false, false, false]);
-    assert_eq!(snapshot_rows[3].chart_normal_notes, 45);
-    assert_eq!(snapshot_rows[3].chart_long_notes, 6);
+    assert_eq!(snapshot_rows[3].chart_normal_notes, 42);
+    assert_eq!(snapshot_rows[3].chart_scratch_notes, 3);
+    assert_eq!(snapshot_rows[3].chart_long_notes, 5);
+    assert_eq!(snapshot_rows[3].chart_long_scratch_notes, 1);
     assert_eq!(snapshot_rows[3].chart_peak_density, 12.5);
+    assert_eq!(snapshot_rows[3].chart_end_density, 21.6);
     assert_eq!(snapshot_rows[3].chart_distribution.len(), 1);
     assert_eq!(snapshot_rows[3].chart_distribution[0].key_taps, 2);
     assert_eq!(snapshot_rows[3].chart_bpm_graph_segments.len(), 2);

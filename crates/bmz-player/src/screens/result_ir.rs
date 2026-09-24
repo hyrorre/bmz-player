@@ -62,6 +62,7 @@ pub struct ResultIrRanking {
     pub scope: IrRankingScope,
     pub entries: Vec<ResultIrRankingEntry>,
     pub clear_rate: Option<u32>,
+    pub clear_counts: Option<[u32; 11]>,
     pub self_rank: Option<u32>,
     pub previous_rank: Option<u32>,
     pub total: Option<u32>,
@@ -622,6 +623,7 @@ mod tests {
                 })
                 .collect(),
             clear_rate: None,
+            clear_counts: None,
             self_rank: None,
             previous_rank: Some(18),
             total: Some(15),
@@ -651,6 +653,7 @@ mod tests {
                 })
                 .collect(),
             clear_rate: None,
+            clear_counts: None,
             self_rank: None,
             previous_rank: None,
             total: Some(count),

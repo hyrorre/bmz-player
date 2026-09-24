@@ -76,6 +76,9 @@ pub struct ResultIrSnapshot {
     pub total_player: Option<i64>,
     /// 全プレイヤー中のクリア率 % (NUMBER_IR_CLEARRATE=181)。
     pub clear_rate: Option<i64>,
+    /// Exact population by beatoraja clear index (0..=10), when the complete
+    /// ranking is available. A page of top scores must not be treated as a population.
+    pub clear_counts: Option<[u32; 11]>,
     /// 更新前の順位 (NUMBER_IR_PREVRANK=182)。未対応なら None。
     pub previous_rank: Option<i64>,
     /// BMZ Result IR scope (`0=Ranking`, `1=Rival`) currently supplied to the skin.
@@ -103,6 +106,7 @@ impl ResultIrSnapshot {
         rank: None,
         total_player: None,
         clear_rate: None,
+        clear_counts: None,
         previous_rank: None,
         scope: ResultIrScope::Global,
         global_scope_supported: false,
