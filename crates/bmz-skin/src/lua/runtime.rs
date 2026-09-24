@@ -74,6 +74,7 @@ pub(super) struct LuaRuntimeCallback {
 /// closure state, module state, or the Lua random-number generator.
 pub struct LuaSkinRuntime {
     pub(super) lua: Lua,
+    pub(super) main_state_dispatch: Table,
     pub(super) callbacks: Vec<LuaRuntimeCallback>,
     pub(super) instruction_budget: LuaInstructionBudget,
     pub(super) skin_path: PathBuf,
@@ -249,9 +250,9 @@ impl LuaSkinRuntime {
                     _ => return Err(mlua::Error::runtime("unknown main_state operation")),
                 })
             })?;
-            self.lua.set_named_registry_value(RUNTIME_STATE_DISPATCH, dispatch)?;
+            self.main_state_dispatch.raw_set(1, dispatch)?;
             // Clear even on unwind, before scope invalidates the borrowed accessor.
-            let _guard = RuntimeDispatchGuard(&self.lua);
+            let _guard = RuntimeDispatchGuard(&self.main_state_dispatch);
             function.call::<Value>(()).and_then(LuaRuntimeEvaluatedValue::from_lua)
         })
     }
@@ -273,20 +274,22 @@ impl LuaSkinRuntime {
     }
 }
 
-const RUNTIME_STATE_DISPATCH: &str = "bmz.runtime.main_state_dispatch";
-
-struct RuntimeDispatchGuard<'a>(&'a Lua);
+struct RuntimeDispatchGuard<'a>(&'a Table);
 
 impl Drop for RuntimeDispatchGuard<'_> {
     fn drop(&mut self) {
-        let _ = self.0.unset_named_registry_value(RUNTIME_STATE_DISPATCH);
+        let _ = self.0.raw_set(1, Value::Nil);
     }
 }
 
 /// Install stable accessors before the clean VM executes the skin so even
 /// `local number = main_state.number` follows the current callback's state.
-pub(super) fn install_runtime_main_state_dispatch(lua: &Lua) -> mlua::Result<()> {
+pub(super) fn install_runtime_main_state_dispatch(lua: &Lua) -> mlua::Result<Table> {
     let main_state: Table = lua.globals().get("bmz_main_state")?;
+    // Private numeric slot avoids resolving a named registry key for every
+    // main_state access. The borrowed dispatcher is cleared before its Lua
+    // scope expires; access outside a callback uses the load-time provider.
+    let dispatch_slot = lua.create_table_with_capacity(1, 0)?;
     for (operation, field) in [
         "option",
         "number",
@@ -309,10 +312,11 @@ pub(super) fn install_runtime_main_state_dispatch(lua: &Lua) -> mlua::Result<()>
     {
         let original: Function =
             main_state.get(if field == "float" { "float_number" } else { field })?;
+        let dispatch_slot = dispatch_slot.clone();
         main_state.set(
             field,
-            lua.create_function(move |lua, argument: Value| {
-                match lua.named_registry_value::<Value>(RUNTIME_STATE_DISPATCH)? {
+            lua.create_function(move |_, argument: Value| {
+                match dispatch_slot.raw_get::<Value>(1)? {
                     Value::Function(dispatch) => {
                         dispatch.call::<Value>((operation as u8, argument))
                     }
@@ -321,7 +325,7 @@ pub(super) fn install_runtime_main_state_dispatch(lua: &Lua) -> mlua::Result<()>
             })?,
         )?;
     }
-    Ok(())
+    Ok(dispatch_slot)
 }
 
 enum LuaRuntimeEvaluatedValue {

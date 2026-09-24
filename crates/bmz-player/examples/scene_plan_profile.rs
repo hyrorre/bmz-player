@@ -3,6 +3,7 @@
 //! BMZ_SCENE_PROFILE_FRAMES sets measured frames (default 2000).
 //! BMZ_SCENE_PROFILE_STAGES sets course length (default 4, max 10).
 //! BMZ_SCENE_PROFILE_VERIFY hashes every rendered primitive outside the timer.
+//! BMZ_SCENE_PROFILE_DUMP writes representative plans for mismatch diagnosis.
 //! These synthetic workloads do not measure application FPS or snapshot building.
 
 use std::{
@@ -66,6 +67,10 @@ fn main() -> Result<()> {
         .transpose()?;
     let frames = env_count("BMZ_SCENE_PROFILE_FRAMES", 2000, 1_000_000)?;
     let mut plan_hash = std::env::var_os("BMZ_SCENE_PROFILE_VERIFY").map(|_| DefaultHasher::new());
+    let dump_dir = std::env::var_os("BMZ_SCENE_PROFILE_DUMP").map(PathBuf::from);
+    if let Some(dir) = &dump_dir {
+        std::fs::create_dir_all(dir)?;
+    }
     let stages = if mode == "course" { env_count("BMZ_SCENE_PROFILE_STAGES", 4, 10)? } else { 1 };
     let empty = BTreeMap::new();
     let (options, files) = profile.as_ref().map_or((&empty, &empty), |p| match mode {
@@ -190,6 +195,17 @@ fn main() -> Result<()> {
             commands += plan.commands.len();
         }
         black_box(plan);
+        if let Some(dir) = &dump_dir
+            && (matches!(frame, 0 | 299 | 300) || frame == frames + 299)
+        {
+            let mut plan = plan.clone();
+            for command in &mut plan.commands {
+                if let DrawCommand::RectBatch { cache, .. } = command {
+                    *cache = None;
+                }
+            }
+            std::fs::write(dir.join(format!("{frame}.txt")), format!("{plan:#?}"))?;
+        }
         if let Some(hash) = &mut plan_hash {
             format!("{:?}", plan.clear).hash(hash);
             for command in &plan.commands {
