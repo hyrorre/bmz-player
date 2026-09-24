@@ -11,11 +11,10 @@ pub(super) fn plan_select(
             &mut commands,
             &skin.select_document_items_with_dynamic_timers(snapshot, Some(dynamic_timers)),
         );
-        if !commands.is_empty() {
-            push_exit_hold_indicator(&mut commands, snapshot.exit_hold_progress);
-            push_scene_overlays(&mut commands, &snapshot.overlay);
-            return DrawPlan { clear: Color::rgb(0.0, 0.0, 0.0), commands };
-        }
+        // timer/op条件で空になるフレームもスキンの演出として扱う。
+        push_exit_hold_indicator(&mut commands, snapshot.exit_hold_progress);
+        push_scene_overlays(&mut commands, &snapshot.overlay);
+        return DrawPlan { clear: Color::rgb(0.0, 0.0, 0.0), commands };
     }
 
     let chart_count = snapshot.chart_count;

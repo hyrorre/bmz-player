@@ -9,12 +9,101 @@ pub(super) struct PreparedProfileSwitch {
 
 enum ProfileChangeStage {
     Preparing(Receiver<Result<Option<PreparedProfileSwitch>>>),
-    WaitingForIr(Box<PreparedProfileSwitch>),
+    WaitingForSkin {
+        prepared: Box<PreparedProfileSwitch>,
+        generation: u64,
+        uploaded: Option<Box<PendingUploadResult>>,
+    },
+    WaitingForIr {
+        prepared: Box<PreparedProfileSwitch>,
+        select_skin: Box<PendingUploadResult>,
+    },
 }
 
 pub(super) struct PendingProfileChange {
     action: ProfileManagerAction,
     stage: ProfileChangeStage,
+}
+
+impl PendingProfileChange {
+    /// 切替先の結果はまだrendererへ適用しない。旧profileの描画とLua状態を保つ。
+    pub(super) fn stage_uploaded_skin(
+        &mut self,
+        result: PendingUploadResult,
+    ) -> Option<PendingUploadResult> {
+        if let ProfileChangeStage::WaitingForSkin { generation, uploaded, .. } = &mut self.stage
+            && result.kind == SkinKind::Select
+            && result.generation == *generation
+            && uploaded.is_none()
+        {
+            *uploaded = Some(Box::new(result));
+            None
+        } else {
+            Some(result)
+        }
+    }
+}
+
+fn queue_profile_select_skin(
+    paths: &AppPaths,
+    profile: &ProfileConfig,
+    pipeline: &mut SkinPipelineRuntime,
+    runtime_mode: bmz_skin::LuaSkinRuntimeMode,
+) -> Result<u64> {
+    let skin = &profile.skin;
+    let trimmed = skin.select.trim();
+    let path = if trimmed.is_empty() {
+        default_skin_document_path_from_paths(paths, SkinKind::Select)
+    } else {
+        paths.resolve_path_ref(trimmed)?
+    };
+    if !is_decodable_skin_path(&path) {
+        bail!("unsupported select skin: {}", path.display());
+    }
+    let generation = pipeline.bump_generation(SkinKind::Select);
+    spawn_skin_decode(
+        pipeline,
+        SkinDecodeRequest::new(
+            generation,
+            path,
+            SkinKind::Select,
+            if trimmed.is_empty() { BTreeMap::new() } else { skin.select_options.clone() },
+            if trimmed.is_empty() { BTreeMap::new() } else { skin.select_files.clone() },
+            lua_runtime_state_with_mode(
+                lua_runtime_state_with_skin_offsets(
+                    lua_runtime_state_for_frontend(
+                        &profile.display_name,
+                        result_ir_skin_name(&profile.ir),
+                    ),
+                    &skin.select_offsets,
+                ),
+                runtime_mode,
+            ),
+        )
+        .with_library_roots(paths.skin_library_roots()),
+    );
+    pipeline.set_pending(SkinKind::Select, true);
+    Ok(generation)
+}
+
+fn validate_profile_select_skin(
+    result: &PendingUploadResult,
+    generation: u64,
+    manifest: Option<&SkinManifest>,
+) -> Result<()> {
+    if result.kind != SkinKind::Select || result.generation != generation {
+        bail!("profile select skin was superseded");
+    }
+    let uploaded = result.uploaded.as_ref().map_err(|error| {
+        anyhow::anyhow!("failed to prepare select skin {}: {error:#}", result.path.display())
+    })?;
+    if uploaded.kind != SkinKind::Select || uploaded.document.skin_type != 5 {
+        bail!("not a select skin: {}", result.path.display());
+    }
+    if manifest.is_none() {
+        bail!("default skin manifest is unavailable");
+    }
+    Ok(())
 }
 
 fn prepare_profile_action(
@@ -126,11 +215,20 @@ impl WinitApp {
         if let ProfileChangeStage::Preparing(rx) = &pending.stage {
             match rx.try_recv() {
                 Ok(Ok(Some(prepared))) => {
-                    // 送信済みジョブのDB更新まで待ち、同じprofileへ戻った際の二重送信を防ぐ。
-                    if let Some(worker) = &self.jobs.ir_sync {
-                        worker.stop();
+                    let generation = self.queue_profile_select_skin(&prepared.profile.config);
+                    match generation {
+                        Ok(generation) => {
+                            pending.stage = ProfileChangeStage::WaitingForSkin {
+                                prepared: Box::new(prepared),
+                                generation,
+                                uploaded: None,
+                            };
+                        }
+                        Err(error) => {
+                            self.finish_profile_change(&pending.action, Err(error));
+                            return;
+                        }
                     }
-                    pending.stage = ProfileChangeStage::WaitingForIr(Box::new(prepared));
                 }
                 Ok(Ok(None)) => {
                     self.finish_profile_change(&pending.action, Ok(()));
@@ -150,16 +248,61 @@ impl WinitApp {
                 Err(mpsc::TryRecvError::Empty) => {}
             }
         }
-        if matches!(pending.stage, ProfileChangeStage::WaitingForIr(_))
+        if matches!(pending.stage, ProfileChangeStage::WaitingForSkin { uploaded: Some(_), .. }) {
+            let ProfileChangeStage::WaitingForSkin {
+                prepared, uploaded: Some(select_skin), ..
+            } = pending.stage
+            else {
+                unreachable!()
+            };
+            self.skin.skin_pipeline.set_pending(SkinKind::Select, false);
+            let result = validate_profile_select_skin(
+                &select_skin,
+                self.skin.skin_pipeline.generation(SkinKind::Select),
+                self.skin.default_skin_manifest.as_ref(),
+            );
+            self.skin.skin_pipeline.record_load_result(
+                &select_skin.path,
+                result.as_ref().err().map(|error| format!("{error:#}")),
+            );
+            if let Err(error) = result {
+                self.finish_profile_change(&pending.action, Err(error));
+                return;
+            }
+            // スキン準備失敗時は旧IR workerも維持する。成功後、送信済みジョブのDB更新を待つ。
+            if let Some(worker) = &self.jobs.ir_sync {
+                worker.stop();
+            }
+            pending.stage = ProfileChangeStage::WaitingForIr { prepared, select_skin };
+        }
+        if matches!(pending.stage, ProfileChangeStage::WaitingForIr { .. })
             && self.jobs.ir_sync.as_ref().is_none_or(|worker| worker.task.is_finished())
         {
-            let ProfileChangeStage::WaitingForIr(prepared) = pending.stage else { unreachable!() };
-            let result = self.install_profile(*prepared);
+            let ProfileChangeStage::WaitingForIr { prepared, select_skin } = pending.stage else {
+                unreachable!()
+            };
+            let result = self.install_profile(*prepared, *select_skin);
             self.restart_profile_ir_sync();
             self.finish_profile_change(&pending.action, result);
         } else {
             self.jobs.profile_change = Some(pending);
         }
+    }
+
+    fn queue_profile_select_skin(&mut self, profile: &ProfileConfig) -> Result<u64> {
+        if self.skin.default_skin_manifest.is_none() {
+            bail!("default skin manifest is unavailable");
+        }
+        self.start_skin_upload_worker();
+        if self.skin.skin_pipeline.upload_worker.is_none() {
+            bail!("skin upload worker is unavailable");
+        }
+        queue_profile_select_skin(
+            &self.boot.app_paths,
+            profile,
+            &mut self.skin.skin_pipeline,
+            self.skin.lua_runtime_mode,
+        )
     }
 
     fn finish_profile_change(&mut self, action: &ProfileManagerAction, result: Result<()>) {
@@ -192,7 +335,16 @@ impl WinitApp {
         self.select.ir_battle.hold_short_action = None;
     }
 
-    fn install_profile(&mut self, prepared: PreparedProfileSwitch) -> Result<()> {
+    fn install_profile(
+        &mut self,
+        prepared: PreparedProfileSwitch,
+        select_skin: PendingUploadResult,
+    ) -> Result<()> {
+        validate_profile_select_skin(
+            &select_skin,
+            self.skin.skin_pipeline.generation(SkinKind::Select),
+            self.skin.default_skin_manifest.as_ref(),
+        )?;
         self.boot.activate_prepared_profile(prepared.profile)?;
         // ここから先は失敗しないruntimeの入れ替え。非同期結果はreceiverごと破棄する。
         self.clear_profile_input();
@@ -246,7 +398,8 @@ impl WinitApp {
         self.jobs.table_fetch.rian_refresh_queued = true;
         self.jobs.table_fetch.rian_refresh_manual = false;
         self.reconcile_rian_table_identity();
-        for kind in [SkinKind::Select, SkinKind::Decide, SkinKind::Play, SkinKind::Result] {
+        // Selectは準備済みの世代をそのまま適用する。他sceneの旧profileの結果は破棄する。
+        for kind in [SkinKind::Decide, SkinKind::Play, SkinKind::Result] {
             self.skin.skin_pipeline.bump_generation(kind);
             self.skin.skin_pipeline.set_pending(kind, false);
         }
@@ -261,14 +414,15 @@ impl WinitApp {
             .clone()
             .map(SkinContext::from_manifest)
             .unwrap_or_default();
-        self.renderer.set_select_skin_context(context.clone());
         self.renderer.set_decide_skin_context(context.clone());
         self.renderer.set_play_skin_context(context.clone(), false);
         self.renderer.set_result_skin_context(context);
         self.renderer
             .set_default_font_coverage(self.boot.profile_config.ui.locale().font_coverage());
+        // 検証・永続化後、次の描画より前にSelectを直接置き換える。
+        let applied = self.apply_uploaded_skin(select_skin);
+        debug_assert!(applied, "validated profile select skin must install");
         self.reload_skins(SkinReloadRequest {
-            select: true,
             decide: true,
             result: true,
             course_result: true,
@@ -292,6 +446,9 @@ impl WinitApp {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod skin_tests;
 
 #[cfg(test)]
 mod tests {

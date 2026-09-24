@@ -323,6 +323,14 @@ impl WinitApp {
     /// stale generation は破棄。GPU アップロードは worker で完了済みなので、
     /// ここではハンドル挿入・フォント登録・SkinContext 構築のみ (軽量)。
     pub(super) fn apply_uploaded_skin(&mut self, pending: PendingUploadResult) -> bool {
+        let pending = if let Some(change) = self.jobs.profile_change.as_mut() {
+            let Some(pending) = change.stage_uploaded_skin(pending) else {
+                return false;
+            };
+            pending
+        } else {
+            pending
+        };
         let PendingUploadResult {
             generation,
             path,

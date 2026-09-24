@@ -1176,3 +1176,65 @@ fn custom_select_skin_does_not_force_stagefile_fullscreen_fallback() {
                 && approx_eq(rect.height, 1.0)
     )));
 }
+
+#[test]
+fn custom_select_skin_keeps_empty_intro_frames_without_fallback() {
+    let document: SkinDocument = serde_json::from_str(
+        r#"{
+        "type":5,"w":100,"h":100,"input":1000,
+        "text":[{"id":"title","constantText":"CUSTOM","size":12}],
+        "destination":[{"id":"title","timer":1,"dst":[{"x":0,"y":0,"w":100,"h":12}]}]
+    }"#,
+    )
+    .unwrap();
+    let skin = SkinContext::from_manifest_and_document(SkinManifest::default(), document, []);
+    let mut timers = crate::skin::DynamicTimerRuntime::default();
+    for time in [0, 500_000, 999_000, 1_000_000, 1_100_000] {
+        let snapshot = crate::scene::SelectSnapshot {
+            time: TimeUs(time),
+            stage_background: true,
+            banner_image: true,
+            ..Default::default()
+        };
+        let plan =
+            DrawPlan::from_scene_with_skin(&AppSceneSnapshot::Select(snapshot), &skin, &mut timers);
+        assert_eq!(plan.clear, Color::rgb(0.0, 0.0, 0.0));
+        if time <= 1_000_000 {
+            assert!(
+                plan.commands.is_empty(),
+                "intro rendered fallback at {time}: {:?}",
+                plan.commands
+            );
+        } else {
+            assert!(plan.commands.iter().any(|command| matches!(command,
+                DrawCommand::Text { text, .. } if text == "CUSTOM")));
+            assert!(!plan.commands.iter().any(|command| matches!(command,
+                DrawCommand::Text { text, .. } if text == "SELECT")));
+        }
+    }
+}
+
+#[test]
+fn empty_select_skin_keeps_overlays_and_exit_indicator() {
+    let document: SkinDocument = serde_json::from_str(r#"{"type":5}"#).unwrap();
+    let skin = SkinContext::from_manifest_and_document(SkinManifest::default(), document, []);
+    let snapshot = crate::scene::SelectSnapshot {
+        exit_hold_progress: 0.5,
+        overlay: crate::snapshot::OverlaySnapshot {
+            fps_text: "FPS 60".into(),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let plan = DrawPlan::from_scene_with_skin(
+        &AppSceneSnapshot::Select(snapshot),
+        &skin,
+        &mut Default::default(),
+    );
+    assert!(plan.commands.iter().any(|command| matches!(command,
+        DrawCommand::Text { text, .. } if text == "FPS 60")));
+    assert!(plan.commands.iter().any(|command| matches!(command,
+        DrawCommand::Text { text, .. } if text == &"\u{2588}".repeat(8))));
+    assert!(!plan.commands.iter().any(|command| matches!(command,
+        DrawCommand::Text { text, .. } if text == "SELECT")));
+}
