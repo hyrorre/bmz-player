@@ -101,7 +101,7 @@ Starseekerは生成3.7µs、本体37.6µsであり、同じ施策の効果はス
 renderer側の `SkinLuaDrawRuntime` とplayer側のadapterまで変更が必要になる。
 Selectの行ごとに異なるstate、callbackの呼出順・回数、永続upvalue、エラー時のslot解放、
 frame全体とcall単位の命令数上限を維持する。結果のキャッシュや推論への強制変換は行わない。
-ライフタイムを延長するunsafeポインタを使う案は採らない。今回は設計・計測までで未実装。
+ライフタイムを延長するunsafeポインタを使う案は採らない。この調査後の実装結果は後述する。
 
 **2. 複数キーフレームの構造と固定メタデータをキャッシュする。**
 
@@ -139,7 +139,7 @@ Select全体の画素一致は主張しない。mz-selectの未対応custom time
 cleanし、通常のworkspaceから本体・exampleを再buildした。
 exampleの再実行で区間計測出力が残っていないことも確認した。
 
-## 検証
+## 動画修正までの検証
 
 - `cargo test --offline -p bmz-player -p bmz-video -- --test-threads=1`:
   player 1991 passed / 3 ignored、video 32 passed。失敗なし。
@@ -151,3 +151,88 @@ exampleの再実行で区間計測出力が残っていないことも確認し�
 - release buildとWindows DX12 / VSyncOffの実アプリ起動が成功。採用した再計測ログにERRORなし。
 - 前段のレビューではrender 625 passed / 1 ignored、skin 216 passed、
   texture uploadのGPUテスト1件も成功している。今回これらの本体コードは変更していない。
+
+## 追加最適化の実装と再計測
+
+動画修正を含む `8bfc68ea` を追加最適化の基準にした。以下はv0.4.1との比較ではない。
+
+- Lua: 同じ描画state・option・textを参照する範囲で `Lua::scope` とdispatch関数を共有する。
+  Play/Result系の静的destination評価とSelectの描画評価を対象にした。
+  Selectの別行などstateが異なるcallbackは、その状態を渡す従来の評価経路へ戻す。
+  callbackの結果を保存せず、順序・回数・upvalue・frame/call命令数上限を維持する。
+  借用はmluaのscope内だけに限定し、入れ子・エラー・panic時も元のdispatcherへ復帰する。
+  adapter内のアドレスは状態の同一性比較だけに使い、逆参照やライフタイム延長はしない。
+- アニメーション: 複数frameを毎回Vecへコピーする処理を、元のsliceを借用するiteratorへ変更。
+  cycle・acc・固定色判定を1回の走査で求める。永続cacheは追加せず、条件付きframeのoption変更と
+  補間・高さ式をその場で評価する。terminal/until-endの一時配列確保も除いた。
+- ID検索の置換は今回の対象から外した。重複IDの意味を変えずに得られる効果の確認が先になる。
+
+### CPU描画plan
+
+300 warmup＋3000 frames、旧→新・新→旧を交互に各3回。
+各回の平均時間の中央値（µs）。Playは可視tap 256個、Select/mz-selectはscroll、
+ECFN CourseResultは4曲。他の条件は前のCPU probeと同じ。
+
+| 条件 | 追加最適化前 | 追加最適化後 | 時間の変化 |
+|---|---:|---:|---:|
+| Play / Rmz | 99.78 | 92.53 | -7.3% |
+| Play / ECFN | 63.27 | 61.41 | -2.9% |
+| Play / WMII_FHD | 164.78 | 142.27 | -13.7% |
+| Play / LITONE9 | 184.55 | 145.97 | -20.9% |
+| Select / ECFN | 117.17 | 116.56 | -0.5% |
+| Select / mz-select scroll | 277.62 | 213.09 | -23.2% |
+| Result / Starseeker | 182.10 | 180.01 | -1.1% |
+| Result / Luxez-Flat | 347.16 | 163.01 | -53.0% |
+| CourseResult / ECFN | 58.05 | 57.38 | -1.2% |
+
+callbackが多いLuxez-Flat、mz-selectなどで効果が大きい。
+ECFN Select / CourseResult、Starseekerの小差は実行間の変動を含むため、明確な改善とは扱わない。
+これは2つの変更を合わせた比較であり、個別の寄与や表示FPSへの同率の改善は主張しない。
+
+### Windows実画面のFPS
+
+前述のDX12 / VSyncOff条件で各30,000フレーム、旧→新・新→旧の計2回ずつ実行。
+同じ3～11秒の完全な120フレーム区間から集計し、以下は2回の平均。
+Selectは曲・難易度表を登録していない独立DBの静止画面で、CPU probeのscrollとは負荷が異なる。
+
+| 条件 | 最適化前 FPS | 最適化後 FPS | 変化 | plan ms: 前→後 |
+|---|---:|---:|---:|---:|
+| Result / Luxez-Flat | 1,126 | 1,244 | +10.5% | 0.343 → 0.282 |
+| Select / mz-select 静止 | 1,262 | 1,345 | +6.6% | 0.263 → 0.216 |
+| Play / LITONE9 | 1,210 | 1,303 | +7.7% | 0.221 → 0.190 |
+
+実行ごとのFPSはLuxez-Flatが前1,053 / 1,199、後1,235 / 1,253、
+mz-selectが前1,288 / 1,235、後1,350 / 1,340、
+LITONE9が前1,154 / 1,266、後1,171 / 1,435。
+特にLITONE9には大きな変動がある。120フレーム区間p99の最大値も前2.774 / 2.979ms、
+後4.553 / 2.477msであり、p99遅延の改善や安定した7.7%の向上までは確認できていない。
+全12実行でImmediate、FPS上限0、正常終了、ERRORなしを確認した。
+
+### 描画内容の確認
+
+ECFN Select、Starseeker / Luxez-Flat Result、ECFN CourseResultは348フレームのprimitive hashが一致。
+Rmz / ECFN / WMII_FHD Playは可視tap 8・64・256個とframe 300・1500・3299の組合せで、
+各9 planが一致した。mz-selectの代表4 planとLITONE9 Playの9 planには実時計の数字UVの差があり、
+対応するスキンの時分秒表示を確認した。これらの画面全体のhash一致・画素一致は主張しない。
+
+生ログと再現用スクリプト:
+
+- `bin/pre-extra/` / `bin/extra/`: 比較したrelease成果物。
+- `cpu-extra/` / `cpu-extra-results.json`: CPU probeの3回分。
+- `verify_extra.py` / `verify-extra-results.json` / `verify-extra/`: plan比較と時計差の記録。
+- `surface/extra{0,1}-{pre-extra,extra}-*/` / `surface-extra-summary.log`: 実画面の2回分。
+
+### 追加実装の検証
+
+- `cargo test --offline -p bmz-render -p bmz-skin -- --test-threads=1`:
+  render 626 passed / 1 ignored、skin 218 passed。
+- `cargo test --offline -p bmz-player -- --test-threads=1`:
+  player 1992 passed / 3 ignored。合計2836 passed / 4 ignored、失敗なし。
+- 新しい回帰テストでscope入れ子、別行・option・text切替、callback順序・upvalue、
+  panic後の復帰、未bind時のfallback、frame/call命令数制限、frame条件とmetadata継承を確認。
+- `cargo check --offline --workspace`、`cargo fmt --all -- --check`、`git diff --check`: 成功。
+- `cargo clippy --offline --workspace --all-targets -- -D warnings` は従来と同じ
+  `ir/secret_store.rs:49` の `items_after_test_module` 1件で失敗。
+  `-A clippy::items_after_test_module` だけを追加すると成功。既存ファイルは変更していない。
+- 本体・CPU probeのrelease build、全12回のWindows実アプリ起動と正常終了を確認。
+  macOS / Linuxの実行確認は今回行っていない。
