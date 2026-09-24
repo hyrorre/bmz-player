@@ -45,28 +45,6 @@ pub fn store_mode(profile_root: &Path) -> IrCredentialStoreConfig {
         .unwrap_or_default()
 }
 
-#[cfg(test)]
-mod profile_tests {
-    use super::*;
-
-    #[test]
-    fn credential_storage_is_scoped_to_profile_even_after_switching() {
-        let data = crate::bootstrap::profile_tests::ProfileTestDir::new();
-        let a = data.paths.profiles_dir.join("a");
-        let b = data.paths.profiles_dir.join("b");
-        std::fs::create_dir_all(&a).unwrap();
-        std::fs::create_dir_all(&b).unwrap();
-        set_store_mode(&a, IrCredentialStoreConfig::File);
-        set_store_mode(&b, IrCredentialStoreConfig::Os);
-        assert_eq!(store_mode(&a), IrCredentialStoreConfig::File);
-        assert_eq!(store_mode(&b), IrCredentialStoreConfig::Os);
-        assert_eq!(store_mode(&a.join("../b")), IrCredentialStoreConfig::Os);
-        set_store_mode(&b, IrCredentialStoreConfig::File);
-        assert_eq!(store_mode(&a), IrCredentialStoreConfig::File);
-        assert_eq!(store_mode(&b), IrCredentialStoreConfig::File);
-    }
-}
-
 /// keyring の service 名。`kind` は "ir" (token) / "ir-device-key"。
 fn keyring_service(kind: &str, provider: &str) -> String {
     format!("bmz.{kind}.{provider}")
@@ -206,5 +184,27 @@ impl<'a> SecretSlot<'a> {
         keyring_entry(self.kind, self.provider, self.profile_root)?
             .set_password(secret)
             .context("failed to write secret to OS credential store")
+    }
+}
+
+#[cfg(test)]
+mod profile_tests {
+    use super::*;
+
+    #[test]
+    fn credential_storage_is_scoped_to_profile_even_after_switching() {
+        let data = crate::bootstrap::profile_tests::ProfileTestDir::new();
+        let a = data.paths.profiles_dir.join("a");
+        let b = data.paths.profiles_dir.join("b");
+        std::fs::create_dir_all(&a).unwrap();
+        std::fs::create_dir_all(&b).unwrap();
+        set_store_mode(&a, IrCredentialStoreConfig::File);
+        set_store_mode(&b, IrCredentialStoreConfig::Os);
+        assert_eq!(store_mode(&a), IrCredentialStoreConfig::File);
+        assert_eq!(store_mode(&b), IrCredentialStoreConfig::Os);
+        assert_eq!(store_mode(&a.join("../b")), IrCredentialStoreConfig::Os);
+        set_store_mode(&b, IrCredentialStoreConfig::File);
+        assert_eq!(store_mode(&a), IrCredentialStoreConfig::File);
+        assert_eq!(store_mode(&b), IrCredentialStoreConfig::File);
     }
 }
