@@ -15,6 +15,7 @@ macro_rules! skin_document_render_core_resolve_methods {
                 sources,
                 runtime_graphs,
                 cache,
+                number_cache,
             } = context;
             if let Some(judge_def) = self.judge.iter().find(|judge| judge.id == destination.id) {
                 // SkinJudge 自身に destination が設定されている場合は、beatoraja の
@@ -174,6 +175,20 @@ macro_rules! skin_document_render_core_resolve_methods {
             if let Some(value) = value_for_destination {
                 let number = skin_value_number_for_destination(value, state)?;
                 let signed_render = signed_number_render_for_value(value, state);
+                // Evaluate the value callback before consulting the cache: a
+                // stable return value does not imply a side-effect-free closure.
+                if let Some(cache) = cache.map(|cache| &mut cache.numbers).or(number_cache) {
+                    return Some(cache.render(
+                        self,
+                        destination_index,
+                        &value.id,
+                        number,
+                        frame,
+                        elapsed,
+                        sources,
+                        signed_render,
+                    ));
+                }
                 return Some(self.value_number_render_items(
                     &value.id,
                     number,

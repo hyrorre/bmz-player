@@ -289,6 +289,7 @@ macro_rules! skin_document_render_select_render_methods {
                                         sources,
                                         runtime_graphs: SkinRuntimeGraphs::from_document(self),
                                         cache: None,
+                                        number_cache: None,
                                     },
                                 )
                                 .unwrap_or_default(),
@@ -309,6 +310,7 @@ macro_rules! skin_document_render_select_render_methods {
                             sources,
                             runtime_graphs: SkinRuntimeGraphs::from_document(self),
                             cache: None,
+                            number_cache: cache.as_deref_mut().map(|cache| &mut cache.numbers),
                         },
                     ) {
                         items.extend(resolved);

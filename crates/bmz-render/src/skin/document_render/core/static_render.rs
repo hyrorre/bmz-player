@@ -275,6 +275,7 @@ macro_rules! skin_document_render_core_static_methods {
                                                 sources,
                                                 runtime_graphs,
                                                 cache: None,
+                                                number_cache: None,
                                             },
                                         )
                                         .unwrap_or_default(),
@@ -297,6 +298,7 @@ macro_rules! skin_document_render_core_static_methods {
                                 sources,
                                 runtime_graphs,
                                 cache: cache.as_deref_mut(),
+                                number_cache: None,
                             },
                         )
                     } else {

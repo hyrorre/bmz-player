@@ -193,6 +193,7 @@ static NEXT_RESULT_GAUGE_GRAPH_REVISION: AtomicU64 = AtomicU64::new(1);
 pub(in crate::skin) struct SelectRenderCache {
     planning: Option<DocumentPlanningCache>,
     static_image_items: HashMap<usize, Arc<[SkinRenderItem]>>,
+    pub(in crate::skin) numbers: NumberRenderCache,
 }
 
 impl SelectRenderCache {
@@ -216,6 +217,7 @@ impl SelectRenderCache {
 pub(in crate::skin) struct ResultRenderCache {
     planning: Option<DocumentPlanningCache>,
     static_image_items: HashMap<usize, Arc<[SkinRenderItem]>>,
+    pub(in crate::skin) numbers: NumberRenderCache,
     rect_batches: HashMap<ResultRectBatchCacheKey, Arc<[RectCommand]>>,
     gauge_graph: Option<ResultGaugeGraphCache>,
     gauge_rect_batches: HashMap<ResultGaugeGraphRectBatchCacheKey, Arc<[RectCommand]>>,

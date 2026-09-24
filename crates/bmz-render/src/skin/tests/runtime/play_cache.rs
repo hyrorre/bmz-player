@@ -63,7 +63,7 @@ fn play_cache_preserves_stateful_callback_order_and_dynamic_items() {
     skin.set_lua_draw_runtime(Some(runtime.clone()));
     let sources = sources.into_iter().map(|source| (source.source_id.clone(), source)).collect();
     let reference_runtime = Arc::new(OrderedRuntime::default());
-    for elapsed in [0, 1, 50, 51, 100, 101] {
+    for elapsed in [0, 0, 1, 1, 50, 50, 51, 100, 101] {
         let mut state = SkinDrawState { elapsed_ms: elapsed, ..Default::default() };
         state.skin_offsets.set(30, SkinOffsetValue { x: elapsed, ..Default::default() });
         let text = SkinTextState::default();
@@ -120,7 +120,7 @@ fn select_cache_preserves_callback_order_and_changing_values() {
     let reference = Arc::new(OrderedRuntime::default());
     context.set_lua_draw_runtime(Some(runtime.clone()));
     let sources = HashMap::from([("src".into(), source)]);
-    for elapsed in [0, 1, 50, 51, 100, 101] {
+    for elapsed in [0, 0, 1, 1, 50, 50, 51, 100, 101] {
         let snapshot = SelectSnapshot { time: TimeUs(elapsed * 1000), ..Default::default() };
         let actual = context.select_document_items(&snapshot);
         let expected = document.select_render_items_with_dynamic_timers(
