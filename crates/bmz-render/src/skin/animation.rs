@@ -50,18 +50,58 @@ pub(super) fn flatten_dst_entries(
     dst: &[SkinDstEntry],
     enabled_options: &[i32],
 ) -> Vec<SkinAnimationDef> {
-    let mut result = Vec::new();
-    for entry in dst {
-        match entry {
-            SkinDstEntry::Frame(anim) => result.push(*anim),
-            SkinDstEntry::Conditional { if_ops, frames } => {
-                if test_skin_dst_if(if_ops, enabled_options) {
-                    result.extend(frames.iter().copied());
-                }
-            }
+    destination_animation_frames(dst, enabled_options).copied().collect()
+}
+
+/// Borrow the document's frame slices instead of allocating/copying a Vec for
+/// each animated destination. Conditions remain live when options change.
+pub(super) fn destination_animation_frames<'a>(
+    dst: &'a [SkinDstEntry],
+    enabled_options: &'a [i32],
+) -> impl Iterator<Item = &'a SkinAnimationDef> + Clone {
+    dst.iter().flat_map(move |entry| match entry {
+        SkinDstEntry::Frame(frame) => std::slice::from_ref(frame),
+        SkinDstEntry::Conditional { if_ops, frames }
+            if test_skin_dst_if(if_ops, enabled_options) =>
+        {
+            frames.as_slice()
         }
+        SkinDstEntry::Conditional { .. } => &[],
+    })
+}
+
+struct DestinationAnimationMetadata {
+    cycle: Option<i32>,
+    acc: i32,
+    fixed_color: bool,
+}
+
+impl DestinationAnimationMetadata {
+    fn from_frames<'a>(frames: impl Iterator<Item = &'a SkinAnimationDef>) -> Self {
+        let mut result = Self { cycle: None, acc: 0, fixed_color: true };
+        let defaults = ResolvedSkinFrame::default();
+        let mut color = (defaults.r, defaults.g, defaults.b, defaults.a);
+        let mut previous = None;
+        for frame in frames {
+            if let Some(time) = frame.time {
+                result.cycle = Some(result.cycle.map_or(time, |cycle| cycle.max(time)));
+            }
+            if result.acc == 0 {
+                result.acc = frame.acc.unwrap_or(0);
+            }
+            color = (
+                frame.r.unwrap_or(color.0),
+                frame.g.unwrap_or(color.1),
+                frame.b.unwrap_or(color.2),
+                frame.a.unwrap_or(color.3),
+            );
+            if previous.is_some_and(|old| old != color) {
+                result.fixed_color = false;
+            }
+            previous = Some(color);
+        }
+        result
     }
-    result
 }
 
 pub(super) fn apply_skin_offset_to_frame(
@@ -472,9 +512,10 @@ pub(super) fn resolve_destination_frame(
     if let [SkinDstEntry::Frame(animation)] = destination.dst.as_slice() {
         return resolve_single_destination_frame(destination, *animation, elapsed_ms, state);
     }
-    let animations = flatten_dst_entries(&destination.dst, enabled_options);
+    let animations = destination_animation_frames(&destination.dst, enabled_options);
+    let metadata = DestinationAnimationMetadata::from_frames(animations.clone());
     // `cycle` はアニメーション終端（最後のキーフレーム時刻）。
-    let cycle = animations.iter().filter_map(|a| a.time).max().unwrap_or(0);
+    let cycle = metadata.cycle.unwrap_or(0);
     let loop_point = destination.loop_time.unwrap_or(0);
     let elapsed_ms = match loop_point {
         // loop:負値 → ループせず、終端を過ぎたら描画しない（READY やボム等の単発演出）。
@@ -487,11 +528,10 @@ pub(super) fn resolve_destination_frame(
         // loop未指定または0以上 → 終端到達後 loop_point 時刻へループバック。
         loop_point => resolve_loop_elapsed(loop_point, elapsed_ms, cycle),
     };
-    let acc = destination_interpolation_acc_from_frames(&animations);
-    let fixed_color = destination_frames_have_fixed_color(&animations);
+    let has_frames = animations.clone().next().is_some();
     let mut frame = ResolvedSkinFrame::default();
     let mut previous = None;
-    for animation in &animations {
+    for animation in animations {
         apply_skin_animation(&mut frame, animation, state);
         if frame.time <= elapsed_ms {
             previous = Some(frame);
@@ -500,12 +540,13 @@ pub(super) fn resolve_destination_frame(
         // previous=None は最初のキーフレーム時刻より前 → destination はまだ表示開始
         // していない。beatoraja 同様、開始時刻前のオブジェクトは描画しない。
         return previous.map(|previous| {
-            let mut interpolated = interpolate_skin_frame(previous, frame, elapsed_ms, acc);
-            interpolated.apply_offset_alpha = fixed_color || elapsed_ms == previous.time;
+            let mut interpolated =
+                interpolate_skin_frame(previous, frame, elapsed_ms, metadata.acc);
+            interpolated.apply_offset_alpha = metadata.fixed_color || elapsed_ms == previous.time;
             interpolated
         });
     }
-    previous.or_else(|| animations.first().map(|_| frame))
+    previous.or_else(|| has_frames.then_some(frame))
 }
 
 pub(super) fn resolve_single_destination_frame(
@@ -540,11 +581,11 @@ pub(super) fn resolve_destination_terminal_frame(
     enabled_options: &[i32],
     state: &SkinDrawState,
 ) -> Option<ResolvedSkinFrame> {
-    let animations = flatten_dst_entries(&destination.dst, enabled_options);
+    let animations = destination_animation_frames(&destination.dst, enabled_options);
     let mut frame = ResolvedSkinFrame::default();
     let mut resolved = false;
     for animation in animations {
-        apply_skin_animation(&mut frame, &animation, state);
+        apply_skin_animation(&mut frame, animation, state);
         resolved = true;
     }
     resolved.then_some(frame)
@@ -559,8 +600,9 @@ pub(super) fn resolve_destination_frame_until_end(
     if matches!(destination.loop_time, Some(loop_point) if loop_point > 0) {
         return resolve_destination_frame(destination, elapsed_ms, enabled_options, state);
     }
-    let animations = flatten_dst_entries(&destination.dst, enabled_options);
-    let last_time = animations.iter().filter_map(|a| a.time).max()?;
+    let last_time = destination_animation_frames(&destination.dst, enabled_options)
+        .filter_map(|a| a.time)
+        .max()?;
     if elapsed_ms > last_time {
         return None;
     }
@@ -613,6 +655,7 @@ pub(super) fn interpolate_skin_frame(
     }
 }
 
+#[cfg(test)]
 pub(super) fn destination_frames_have_fixed_color(animations: &[SkinAnimationDef]) -> bool {
     let defaults = ResolvedSkinFrame::default();
     let mut current = (defaults.r, defaults.g, defaults.b, defaults.a);
@@ -632,6 +675,7 @@ pub(super) fn destination_frames_have_fixed_color(animations: &[SkinAnimationDef
     true
 }
 
+#[cfg(test)]
 pub(super) fn destination_interpolation_acc_from_frames(animations: &[SkinAnimationDef]) -> i32 {
     // Only acc is relevant here; resolving geometry constructed a full default
     // draw state per keyframe and also evaluated unrelated height expressions.
@@ -707,4 +751,46 @@ pub(super) fn destination_uses_lift_offset_only(destination: &SkinDestinationDef
     destination_uses_skin_offset(destination, 3)
         && !destination_uses_skin_offset(destination, 4)
         && !destination_uses_skin_offset(destination, 5)
+}
+
+#[cfg(test)]
+mod borrowed_animation_tests {
+    use super::*;
+
+    #[test]
+    fn borrowed_frames_follow_option_changes_and_metadata_inheritance() {
+        for seed in 0..128 {
+            let frames: Vec<SkinAnimationDef> = (0..4)
+                .map(|i| SkinAnimationDef {
+                    time: (seed & (1 << i) != 0).then_some(i * 100 - 50),
+                    acc: (seed & (1 << (i + 1)) != 0).then_some(i - 1),
+                    r: (seed & (1 << (i + 2)) != 0).then_some(40),
+                    a: (seed & (1 << (i + 3)) != 0).then_some(128),
+                    ..serde_json::from_str("{}").unwrap()
+                })
+                .collect();
+            let entries = [
+                SkinDstEntry::Frame(frames[0]),
+                SkinDstEntry::Conditional { if_ops: vec![920], frames: vec![frames[1], frames[2]] },
+                SkinDstEntry::Conditional { if_ops: vec![-920], frames: vec![frames[3]] },
+            ];
+            for enabled in [vec![], vec![920], vec![]] {
+                let expected = if enabled.is_empty() {
+                    vec![frames[0], frames[3]]
+                } else {
+                    frames[..3].to_vec()
+                };
+                let actual = destination_animation_frames(&entries, &enabled);
+                assert_eq!(actual.clone().copied().collect::<Vec<_>>(), expected);
+                let metadata = DestinationAnimationMetadata::from_frames(actual);
+                assert_eq!(metadata.cycle, expected.iter().filter_map(|f| f.time).max());
+                assert_eq!(metadata.acc, destination_interpolation_acc_from_frames(&expected));
+                assert_eq!(metadata.fixed_color, destination_frames_have_fixed_color(&expected));
+            }
+        }
+        let metadata = DestinationAnimationMetadata::from_frames(std::iter::empty());
+        assert_eq!(metadata.cycle, None);
+        assert_eq!(metadata.acc, 0);
+        assert!(metadata.fixed_color);
+    }
 }
