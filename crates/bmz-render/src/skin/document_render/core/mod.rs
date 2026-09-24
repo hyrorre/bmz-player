@@ -5,5 +5,6 @@ mod static_render;
 pub(super) use clip::skin_document_render_core_clip_methods;
 pub(super) use resolve::skin_document_render_core_resolve_methods;
 pub(super) use static_render::{
-    skin_document_render_core_static_methods, static_image_destination_cacheable,
+    fixed_image_destination_cacheable, skin_document_render_core_static_methods,
+    static_image_destination_cacheable,
 };

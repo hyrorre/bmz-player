@@ -81,6 +81,60 @@ fn play_cache_preserves_stateful_callback_order_and_dynamic_items() {
         assert_eq!(runtime.0.lock().unwrap().as_slice(), &[0, 1, 2]);
         runtime.0.lock().unwrap().clear();
         reference_runtime.0.lock().unwrap().clear();
+
+        let actual =
+            skin.static_document_items_for_result_state_and_text(&Arc::default(), &state, &text);
+        let expected = document.static_render_items(&sources, &reference_state, &text);
+        assert_eq!(actual, expected);
+        assert_eq!(runtime.0.lock().unwrap().as_slice(), &[0, 1, 2]);
+        assert_eq!(*runtime.0.lock().unwrap(), *reference_runtime.0.lock().unwrap());
+        runtime.0.lock().unwrap().clear();
+        reference_runtime.0.lock().unwrap().clear();
+    }
+}
+
+#[test]
+fn select_cache_preserves_callback_order_and_changing_values() {
+    let document: SkinDocument = serde_json::from_str(r#"{
+        "type":5,"w":100,"h":100,
+        "image":[{"id":"fixed","src":"src","w":10,"h":10}],
+        "value":[{"id":"number","src":"src","w":100,"h":10,"divx":10,"digit":2,"value_expr":"bmz:lua_value_callback:2"}],
+        "destination":[
+            {"id":"fixed","dst":[{"w":10,"h":10}]},
+            {"id":"fixed","draw":"bmz:lua_draw_callback:0","dst":[{"x":10,"w":10,"h":10}]},
+            {"id":"fixed","draw":"bmz:lua_draw_callback:1","dst":[{"x":20,"w":10,"h":10}]},
+            {"id":"number","dst":[{"y":20,"w":5,"h":10}]}
+        ]
+    }"#).unwrap();
+    let source = SkinDocumentTexture {
+        source_id: "src".into(),
+        texture: SkinTextureId(1),
+        source_size: SkinImageSize { width: 100.0, height: 10.0 },
+    };
+    let mut context = SkinContext::from_manifest_and_document(
+        default_skin_manifest(),
+        document.clone(),
+        [source.clone()],
+    );
+    let runtime = Arc::new(OrderedRuntime::default());
+    let reference = Arc::new(OrderedRuntime::default());
+    context.set_lua_draw_runtime(Some(runtime.clone()));
+    let sources = HashMap::from([("src".into(), source)]);
+    for elapsed in [0, 1, 50, 51, 100, 101] {
+        let snapshot = SelectSnapshot { time: TimeUs(elapsed * 1000), ..Default::default() };
+        let actual = context.select_document_items(&snapshot);
+        let expected = document.select_render_items_with_dynamic_timers(
+            &sources,
+            &snapshot,
+            None,
+            &crate::select_settings_dest::SelectSettingsDestIndex::default(),
+            Some(reference.clone()),
+        );
+        assert_eq!(actual, expected);
+        assert_eq!(runtime.0.lock().unwrap().as_slice(), &[0, 1, 2]);
+        assert_eq!(*runtime.0.lock().unwrap(), *reference.0.lock().unwrap());
+        runtime.0.lock().unwrap().clear();
+        reference.0.lock().unwrap().clear();
     }
 }
 
@@ -111,6 +165,65 @@ fn animation_metadata_matches_inherited_frame_evaluation() {
             colors.windows(2).all(|pair| pair[0] == pair[1])
         );
     }
+}
+
+#[test]
+fn result_cache_with_lua_reuses_graph_and_invalidates_new_results() {
+    use crate::snapshot::{ResultGaugeGraphPoint, ResultGraphSnapshot};
+    let document: SkinDocument = serde_json::from_str(
+        r#"{
+        "w":100,"h":100,"gaugegraph":[{"id":"graph"}],
+        "destination":[{"id":"graph","dst":[{"w":100,"h":100}]}]
+    }"#,
+    )
+    .unwrap();
+    let mut context =
+        SkinContext::from_manifest_and_document(default_skin_manifest(), document, []);
+    context.set_lua_draw_runtime(Some(Arc::new(OrderedRuntime::default())));
+    let graph = Arc::new(ResultGraphSnapshot {
+        gauge_points: [20.0, 40.0, 90.0]
+            .into_iter()
+            .map(|value| ResultGaugeGraphPoint {
+                value,
+                max: 100.0,
+                border: 80.0,
+                gauge_type: 2,
+                ..Default::default()
+            })
+            .collect(),
+        ..Default::default()
+    });
+    let state = SkinDrawState {
+        elapsed_ms: 2500,
+        result_failed: Some(false),
+        result_gauge_graph_type: Some(2),
+        ..Default::default()
+    };
+    let render = |graph| {
+        context.static_document_items_for_result_state_and_text(
+            graph,
+            &state,
+            &SkinTextState::default(),
+        )
+    };
+    let first = render(&graph);
+    let again = render(&graph);
+    let [SkinRenderItem::RectBatch { rects: first_rects, cache: Some(_) }] = first.as_slice()
+    else {
+        panic!("cached graph")
+    };
+    let [SkinRenderItem::RectBatch { rects: again_rects, cache: Some(_) }] = again.as_slice()
+    else {
+        panic!("cached graph")
+    };
+    assert!(Arc::ptr_eq(first_rects, again_rects));
+    let mut next = graph.as_ref().clone();
+    next.gauge_points[1].value = 70.0;
+    let changed = render(&Arc::new(next));
+    let [SkinRenderItem::RectBatch { rects: changed_rects, .. }] = changed.as_slice() else {
+        panic!("changed graph")
+    };
+    assert_ne!(first_rects, changed_rects);
 }
 
 #[test]

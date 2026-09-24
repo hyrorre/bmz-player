@@ -474,6 +474,64 @@ fn result_judge_pie_segments_use_runtime_judge_counts() {
     );
     let angles = segments.iter().map(|(_, angle)| *angle).collect::<Vec<_>>();
     assert_eq!(angles, vec![-91, -100, -120, -150, -290]);
+
+    let mut cache = ResultRenderCache::default();
+    let text = SkinTextState::default();
+    for (pgreat, great, texture, width) in
+        [(70, 20, 1, 800.0), (0, 90, 1, 800.0), (70, 20, 2, 1600.0)]
+    {
+        let mut state = state.clone();
+        state.judge_counts.pgreat = pgreat;
+        state.judge_counts.great = great;
+        let mut sources = sources.clone();
+        let source = sources.get_mut("src").unwrap();
+        source.texture = SkinTextureId(texture);
+        source.source_size.width = width;
+        for elapsed in [0, 100, 1000] {
+            state.elapsed_ms = elapsed;
+            let actual = document.static_render_items_with_graphs_cached(
+                &sources,
+                &state,
+                &text,
+                SkinRuntimeGraphs::from_document(&document),
+                Some(&mut cache),
+            );
+            assert_eq!(actual, document.static_image_render_items(&sources, &state));
+        }
+    }
+}
+
+#[test]
+fn result_judge_pie_cache_keeps_animated_and_offset_segments_live() {
+    let document: SkinDocument = serde_json::from_str(r#"{
+        "w":200,"h":200,
+        "image":[{"id":"judge_graph","src":"src","w":140,"h":8}],
+        "destination":[
+            {"id":"judge_graph","offset":30,"dst":[{"w":140,"h":8,"angle":120}]},
+            {"id":"judge_graph","timer":150,"dst":[{"w":140,"h":8,"angle":150}]},
+            {"id":"judge_graph","dst":[{"time":0,"w":140,"h":8,"angle":290,"a":0},{"time":100,"a":255}]}
+        ]
+    }"#).unwrap();
+    let sources = mock_source("src", 800.0, 800.0);
+    let mut cache = ResultRenderCache::default();
+    for elapsed in [0, 25, 50, 100] {
+        let mut state =
+            SkinDrawState { elapsed_ms: elapsed, result_failed: Some(false), ..Default::default() };
+        state.judge_counts.pgreat = 80;
+        state.judge_counts.great = 20;
+        state.result_graph_begin_ms = (elapsed > 25).then_some(elapsed - 25);
+        state
+            .skin_offsets
+            .set(30, SkinOffsetValue { x: elapsed, a: -elapsed, ..Default::default() });
+        let actual = document.static_render_items_with_graphs_cached(
+            &sources,
+            &state,
+            &SkinTextState::default(),
+            SkinRuntimeGraphs::from_document(&document),
+            Some(&mut cache),
+        );
+        assert_eq!(actual, document.static_image_render_items(&sources, &state));
+    }
 }
 
 #[test]

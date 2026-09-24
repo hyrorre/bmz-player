@@ -8,6 +8,15 @@ pub(in crate::skin::document_render) fn static_image_destination_cacheable(
     destination: &SkinDestinationDef,
     images: &SkinImageLookup<'_>,
 ) -> bool {
+    destination.id != "judge_graph"
+        && fixed_image_destination_cacheable(document, destination, images)
+}
+
+pub(in crate::skin::document_render) fn fixed_image_destination_cacheable(
+    document: &SkinDocument,
+    destination: &SkinDestinationDef,
+    images: &SkinImageLookup<'_>,
+) -> bool {
     if !destination.op.is_empty()
         || !destination.draw.trim().is_empty()
         || destination.timer.is_some()
@@ -16,7 +25,6 @@ pub(in crate::skin::document_render) fn static_image_destination_cacheable(
         || destination.offset != 0
         || !destination.offsets.is_empty()
         || destination.mouse_rect.is_some()
-        || destination.id == "judge_graph"
     {
         return false;
     }
@@ -153,6 +161,15 @@ macro_rules! skin_document_render_core_static_methods {
             let destination_count = planning
                 .as_ref()
                 .map_or(destinations.len(), |planning| planning.destinations.len());
+            if state.result_failed.is_some()
+                && let Some(cache) = cache.as_deref_mut()
+            {
+                // All segments share counts and the judge_graph image source.
+                // Validate once per frame, not once for every half-degree slice.
+                let source = skin_image_for_destination_id("judge_graph", &images)
+                    .and_then(|image| resolve_document_source(sources, &image.src));
+                cache.prepare_judge_pie(state.judge_counts, source);
+            }
             for index in 0..destination_count {
                 let Some(destination) = planning
                     .as_ref()
@@ -177,13 +194,35 @@ macro_rules! skin_document_render_core_static_methods {
                 {
                     continue;
                 }
-                if let Some(item) = self.result_judge_pie_destination_item(
-                    destination,
-                    &images,
-                    enabled_options,
-                    state,
-                    sources,
-                ) {
+                let build_pie = || {
+                    self.result_judge_pie_destination_item(
+                        destination,
+                        &images,
+                        enabled_options,
+                        state,
+                        sources,
+                    )
+                };
+                let pie_item = if destination.id == "judge_graph"
+                    && state.result_failed.is_some()
+                    && state.elapsed_ms >= 0
+                    && let Some(cache) = cache.as_deref_mut()
+                {
+                    if let Some(item) = cache.judge_pie_item(index) {
+                        item.clone()
+                    } else {
+                        let item = build_pie();
+                        if core::fixed_image_destination_cacheable(self, destination, &images)
+                            && !self.hidden_cover.iter().any(|cover| cover.id == destination.id)
+                        {
+                            cache.cache_judge_pie_item(index, item.clone());
+                        }
+                        item
+                    }
+                } else {
+                    build_pie()
+                };
+                if let Some(item) = pie_item {
                     let target = destination_render_layer(
                         destination.timer,
                         after_notes_marker,

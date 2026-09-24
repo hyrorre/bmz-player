@@ -165,9 +165,7 @@ impl SkinContext {
             state,
         );
         let state = self.state_with_lua_runtime(state, text);
-        if self.lua_draw_runtime.is_none()
-            && let Ok(mut cache) = self.result_render_cache.lock()
-        {
+        if let Some(mut cache) = RenderCacheLease::take(&self.result_render_cache) {
             return document.static_render_items_with_graphs_cached(
                 &runtime_sources,
                 &state,
@@ -194,11 +192,7 @@ impl SkinContext {
             state,
         );
         let state = self.state_with_lua_runtime(state, text);
-        // A runtime callback may execute arbitrary bounded Lua. Do not hold the
-        // result cache lock across that call.
-        if self.lua_draw_runtime.is_none()
-            && let Ok(mut cache) = self.result_render_cache.lock()
-        {
+        if let Some(mut cache) = RenderCacheLease::take(&self.result_render_cache) {
             cache.prepare_gauge_graph(graph);
             return document.static_render_items_with_graphs_cached(
                 &runtime_sources,
@@ -233,17 +227,13 @@ impl SkinContext {
             &self.runtime_document_sources,
             snapshot,
         );
-        // Runtime Lua callbacks may execute arbitrary bounded code. Keep the
-        // render cache lock out of that path.
-        if self.lua_draw_runtime.is_none()
-            && let Ok(mut cache) = self.select_render_cache.lock()
-        {
+        if let Some(mut cache) = RenderCacheLease::take(&self.select_render_cache) {
             return document.select_render_items_with_dynamic_timers_cached(
                 &runtime_sources,
                 snapshot,
                 dynamic_timers,
                 &self.select_settings_dest_index,
-                None,
+                self.lua_draw_runtime.clone(),
                 Some(&mut cache),
             );
         }
@@ -315,9 +305,7 @@ impl SkinContext {
             state,
         );
         let state = self.state_with_lua_runtime(state, text);
-        if self.lua_draw_runtime.is_none()
-            && let Ok(mut cache) = self.result_render_cache.lock()
-        {
+        if let Some(mut cache) = RenderCacheLease::take(&self.result_render_cache) {
             return document.static_render_items_split_with_graphs(
                 &runtime_sources,
                 &state,
@@ -347,7 +335,7 @@ impl SkinContext {
         let state = self.state_with_lua_runtime(state, text);
         // The cache only retains document structure and static destinations.
         // draw/value callbacks still run in destination order on every frame.
-        if let Ok(mut cache) = self.result_render_cache.lock() {
+        if let Some(mut cache) = RenderCacheLease::take(&self.result_render_cache) {
             return document.static_render_items_split_with_graphs(
                 &runtime_sources,
                 &state,
@@ -371,5 +359,64 @@ impl SkinContext {
             ),
             None,
         )
+    }
+}
+
+/// Own the cache while evaluating a frame so Lua never runs under its mutex.
+/// A concurrent/reentrant frame can use the empty replacement cache. Restoring
+/// either cache only affects reuse, not the live state or callback ordering.
+struct RenderCacheLease<'a, T: Default> {
+    slot: &'a Mutex<T>,
+    value: T,
+}
+
+impl<'a, T: Default> RenderCacheLease<'a, T> {
+    fn take(slot: &'a Mutex<T>) -> Option<Self> {
+        let value = std::mem::take(&mut *slot.lock().ok()?);
+        Some(Self { slot, value })
+    }
+}
+
+impl<T: Default> std::ops::Deref for RenderCacheLease<'_, T> {
+    type Target = T;
+    fn deref(&self) -> &T {
+        &self.value
+    }
+}
+
+impl<T: Default> std::ops::DerefMut for RenderCacheLease<'_, T> {
+    fn deref_mut(&mut self) -> &mut T {
+        &mut self.value
+    }
+}
+
+impl<T: Default> Drop for RenderCacheLease<'_, T> {
+    fn drop(&mut self) {
+        if let Ok(mut slot) = self.slot.lock() {
+            *slot = std::mem::take(&mut self.value);
+        }
+    }
+}
+
+#[cfg(test)]
+mod cache_lease_tests {
+    use super::*;
+
+    #[test]
+    fn render_cache_is_unlocked_during_reentry_and_restored_on_unwind() {
+        let slot = Mutex::new(vec![1]);
+        let result = std::panic::catch_unwind(|| {
+            let mut outer = RenderCacheLease::take(&slot).unwrap();
+            assert!(slot.try_lock().is_ok());
+            {
+                let mut nested = RenderCacheLease::take(&slot).unwrap();
+                assert!(nested.is_empty());
+                nested.push(2);
+            }
+            outer.push(3);
+            panic!("callback failed");
+        });
+        assert!(result.is_err());
+        assert_eq!(*slot.lock().unwrap(), [1, 3]);
     }
 }

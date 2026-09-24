@@ -192,9 +192,38 @@ pub(in crate::skin) struct ResultRenderCache {
     rect_batches: HashMap<ResultRectBatchCacheKey, Arc<[RectCommand]>>,
     gauge_graph: Option<ResultGaugeGraphCache>,
     gauge_rect_batches: HashMap<ResultGaugeGraphRectBatchCacheKey, Arc<[RectCommand]>>,
+    judge_pie_key: Option<(DisplayJudgeCounts, Option<SkinDocumentTexture>)>,
+    judge_pie_items: HashMap<usize, Option<SkinRenderItem>>,
 }
 
 impl ResultRenderCache {
+    pub(in crate::skin) fn prepare_judge_pie(
+        &mut self,
+        counts: DisplayJudgeCounts,
+        source: Option<&SkinDocumentTexture>,
+    ) {
+        if let Some((cached_counts, cached_source)) = &self.judge_pie_key
+            && *cached_counts == counts
+            && cached_source.as_ref() == source
+        {
+            return;
+        }
+        self.judge_pie_key = Some((counts, source.cloned()));
+        self.judge_pie_items.clear();
+    }
+
+    pub(in crate::skin) fn judge_pie_item(&self, index: usize) -> Option<&Option<SkinRenderItem>> {
+        self.judge_pie_items.get(&index)
+    }
+
+    pub(in crate::skin) fn cache_judge_pie_item(
+        &mut self,
+        index: usize,
+        item: Option<SkinRenderItem>,
+    ) {
+        self.judge_pie_items.insert(index, item);
+    }
+
     pub(in crate::skin) fn cached_planning(
         &mut self,
         document: &SkinDocument,
