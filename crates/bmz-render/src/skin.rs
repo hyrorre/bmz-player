@@ -354,6 +354,9 @@ fn skin_image_index_number(ref_id: i32, state: &SkinDrawState) -> Option<i64> {
         342 => Some(i64::from(state.hispeed_auto_adjust)),
         344 => Some(extended_arrange_ref_index(state) as i64),
         345 => Some(extended_arrange_2p_ref_index(state) as i64),
+        SKIN_REF_BMZ_BEST_SCORE_ARRANGE_1P..=SKIN_REF_BMZ_BEST_SCORE_DOUBLE_OPTION => {
+            Some(best_score_option_index(ref_id, state))
+        }
         SKIN_REF_BMZ_SCORE_GRADE_CURRENT => {
             score_grade_facts(state).map(|facts| facts.current_index as i64)
         }

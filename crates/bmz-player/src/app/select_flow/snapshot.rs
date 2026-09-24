@@ -145,6 +145,12 @@ impl WinitApp {
             DoubleOption::Off
         };
         let skin_attempt = bmz_render::snapshot::SkinAttemptState {
+            best_score_options: match selected {
+                Some(SelectItem::Chart(row)) if !self.select.ir_battle.active => {
+                    row.best_score.as_ref().and_then(|best| best.play_options)
+                }
+                _ => None,
+            },
             source_key_mode,
             effective_key_mode: source_key_mode.map(|mode| {
                 crate::skin_extension::select_effective_key_mode(

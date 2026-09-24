@@ -175,6 +175,10 @@ pub(super) fn skin_main_state_text(
         SKIN_REF_BMZ_RESULT_IR_SCOPE => {
             draw_state.map(|state| state.ir_ranking.scope.label().to_string()).unwrap_or_default()
         }
+        SKIN_REF_BMZ_BEST_SCORE_ARRANGE_1P..=SKIN_REF_BMZ_BEST_SCORE_DOUBLE_OPTION => draw_state
+            .and_then(|state| state.skin_attempt.best_score_options)
+            .map(|options| options.label(ref_id).to_string())
+            .unwrap_or_default(),
         SKIN_REF_BMZ_SCORE_GRADE_CURRENT => draw_state
             .and_then(score_grade_facts)
             .map(|facts| facts.current_label().to_string())
@@ -293,6 +297,7 @@ pub(super) fn lua_main_state_text_values(
         SKIN_REF_BMZ_LN_SCORE_POLICY,
     ];
     refs.extend(120..=129);
+    refs.extend(SKIN_REF_BMZ_BEST_SCORE_ARRANGE_1P..=SKIN_REF_BMZ_BEST_SCORE_DOUBLE_OPTION);
     refs.extend(150..=159);
     refs.extend(190..=196);
     refs.extend(200..=219);

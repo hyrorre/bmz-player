@@ -61,6 +61,7 @@ fn should_send_ir_score_follows_policy() {
     assert!(should_send_ir_score(IrSendPolicyConfig::UpdateScore, &result, None));
 
     let best = BestScoreSummary {
+        play_options: None,
         chart_sha256: [0; 32],
         ln_policy: crate::ln_policy::LnScorePolicy::ForceLn,
         double_option: crate::select_options::DoubleOptionScoreBucket::Off,
@@ -308,6 +309,42 @@ fn finish_session_result_returns_summary() {
     assert_eq!(finished.summary.target_ex_score, Some(1600));
     assert_eq!(finished.summary.saved_replay_slots, [true, true, true, false]);
     assert_eq!(finished.summary.replay_slots, [true, true, true, false]);
+
+    // First play creates a best, but Result still refers to the absent pre-save best.
+    assert_eq!(finished.summary.skin_attempt.best_score_options, None);
+    let old_options =
+        score_db.best_scores_for_charts(&[score_key(&session)]).unwrap()[0].play_options;
+    assert_eq!(old_options.unwrap().arrange_1p, 2);
+    let mut improved_session = session;
+    improved_session.score.judges.fast_pgreat += 1;
+    let next_arrange = AppliedArrange {
+        arrange: crate::select_options::ArrangeOption::Mirror,
+        ..AppliedArrange::default()
+    };
+    let improved = finish_session_result(
+        &mut score_db,
+        &mut network_db,
+        FinishSessionResultRequest {
+            profile_paths: &paths,
+            replay_config: &replay_config,
+            ir_config: &crate::config::profile_config::IrConfig::default(),
+            session: &improved_session,
+            source_ln_profile: ChartLnProfile::from_chart(&improved_session.chart),
+            chart_length_ms: None,
+            play_duration_ms: None,
+            played_at: 1_700_000_103,
+            applied_arrange: &next_arrange,
+            target_ex_score: None,
+            score_key: score_key(&improved_session),
+            practice_mode: false,
+            finish_mode: FinishResultMode::Normal,
+        },
+    )
+    .unwrap();
+    assert_eq!(improved.summary.skin_attempt.best_score_options, old_options);
+    let saved = score_db.best_scores_for_charts(&[score_key(&improved_session)]).unwrap().remove(0);
+    assert_eq!(saved.play_options.unwrap().arrange_1p, 1);
+    assert!(saved.ex_score > improved.summary.previous_best_ex_score.unwrap());
 
     std::fs::remove_dir_all(root).unwrap();
 }

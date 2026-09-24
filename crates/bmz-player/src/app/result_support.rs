@@ -549,6 +549,24 @@ pub(super) fn apply_skin_attempt_lua_load_state(
         SKIN_SOURCE_LN_DEFINED_CN_BIT, SKIN_SOURCE_LN_DEFINED_HCN_BIT,
         SKIN_SOURCE_LN_DEFINED_LN_BIT, SKIN_SOURCE_LN_UNDEFINED_BIT,
     };
+    runtime_state
+        .option_values
+        .insert(SKIN_OPTION_BMZ_BEST_SCORE_OPTIONS_AVAILABLE, attempt.best_score_options.is_some());
+    for ref_id in SKIN_REF_BMZ_BEST_SCORE_ARRANGE_1P..=SKIN_REF_BMZ_BEST_SCORE_DOUBLE_OPTION {
+        let index = attempt
+            .best_score_options
+            .and_then(|options| options.index(ref_id))
+            .map_or(-1, |index| index as i32);
+        runtime_state.number_values.insert(ref_id, index);
+        runtime_state.event_index_values.insert(ref_id, index);
+        runtime_state.text_values.insert(
+            ref_id,
+            attempt
+                .best_score_options
+                .map(|options| options.label(ref_id).to_string())
+                .unwrap_or_default(),
+        );
+    }
 
     if let Some(mode) = attempt.effective_key_mode {
         extend_bmz_key_mode_lua_state(

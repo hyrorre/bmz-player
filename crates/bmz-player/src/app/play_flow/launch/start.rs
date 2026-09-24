@@ -244,7 +244,12 @@ impl WinitApp {
         }
         // active sessionのinstall前からref 150とFIRST_PLAYを正しいScoreKeyで
         // 評価できるよう、選曲行の集約値を今回のプレイ条件の値で置き換える。
-        let previous_best_ex_score = self.play_skin_previous_best_ex_score(chart_id, &options);
+        let previous_best = self
+            .play_skin_score_key_for_chart_id(chart_id, &options)
+            .and_then(|key| self.boot.score_db.best_scores_for_charts(&[key]).ok())
+            .and_then(|mut rows| rows.pop());
+        let previous_best_ex_score = previous_best.as_ref().map(|best| best.ex_score);
+        snapshot.skin_attempt.best_score_options = previous_best.and_then(|best| best.play_options);
         snapshot.best_ex_score = previous_best_ex_score;
         snapshot.projected_best_ex_score = previous_best_ex_score.map(|_| 0);
         // Decide / retry / direct boot のどの経路でも、Play 入場後の常時表示が

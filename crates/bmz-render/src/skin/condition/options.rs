@@ -48,6 +48,9 @@ pub(in crate::skin) fn test_skin_op(
     }
     match op {
         40 => !state.bga_enabled,
+        SKIN_OPTION_BMZ_BEST_SCORE_OPTIONS_AVAILABLE => {
+            state.skin_attempt.best_score_options.is_some()
+        }
         41 => state.bga_enabled,
         1901 => skin_hispeed_mode_is_floating(state),
         SKIN_OPTION_BMZ_RESULT_IR_SCOPE_GLOBAL => {

@@ -100,6 +100,8 @@ fn sample_slot(slot: u8, ex_score: u32) -> ReplaySlotRecord {
     }
 }
 
+#[path = "tests/best_score_options.rs"]
+mod best_score_options;
 #[path = "tests/cases_01.rs"]
 mod cases_01;
 #[path = "tests/cases_02.rs"]

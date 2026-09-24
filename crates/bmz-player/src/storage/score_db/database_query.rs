@@ -54,36 +54,40 @@ impl ScoreDatabase {
                 std::iter::repeat_n("(?, ?, ?, ?)", chunk.len()).collect::<Vec<_>>().join(", ");
             let sql = format!(
                 "SELECT
-                    chart_sha256,
-                    ln_policy,
-                    double_option,
-                    rule_mode,
-                    clear_type,
-                    gauge_type,
-                    gauge_value,
-                    ex_score,
-                    bp,
-                    cb,
-                    max_combo,
-                    fast_pgreat,
-                    slow_pgreat,
-                    fast_great,
-                    slow_great,
-                    fast_good,
-                    slow_good,
-                    fast_bad,
-                    slow_bad,
-                    fast_poor,
-                    slow_poor,
-                    fast_empty_poor,
-                    slow_empty_poor,
-                    play_count,
-                    clear_count,
-                    device_type,
-                    played_at,
-                    replay_path
-                FROM score_best
-                WHERE (chart_sha256, ln_policy, double_option, rule_mode)
+                    b.chart_sha256,
+                    b.ln_policy,
+                    b.double_option,
+                    b.rule_mode,
+                    b.clear_type,
+                    b.gauge_type,
+                    b.gauge_value,
+                    b.ex_score,
+                    b.bp,
+                    b.cb,
+                    b.max_combo,
+                    b.fast_pgreat,
+                    b.slow_pgreat,
+                    b.fast_great,
+                    b.slow_great,
+                    b.fast_good,
+                    b.slow_good,
+                    b.fast_bad,
+                    b.slow_bad,
+                    b.fast_poor,
+                    b.slow_poor,
+                    b.fast_empty_poor,
+                    b.slow_empty_poor,
+                    b.play_count,
+                    b.clear_count,
+                    b.device_type,
+                    b.played_at,
+                    b.replay_path,
+                    h.arrange,
+                    h.arrange_2p,
+                    h.applied_double_option
+                FROM score_best b
+                LEFT JOIN score_history h ON h.id = b.best_score_history_id
+                WHERE (b.chart_sha256, b.ln_policy, b.double_option, b.rule_mode)
                     IN ({placeholders})"
             );
             let params = score_key_query_params(chunk);

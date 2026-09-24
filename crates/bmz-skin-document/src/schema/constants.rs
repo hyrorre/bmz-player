@@ -198,6 +198,13 @@ pub const SKIN_OPTION_BMZ_SOURCE_LN_DEFINED_CN: i32 = 19_193;
 pub const SKIN_OPTION_BMZ_SOURCE_LN_DEFINED_HCN: i32 = 19_194;
 pub const SKIN_OPTION_BMZ_SOURCE_LN_MIXED: i32 = 19_195;
 pub const SKIN_OPTION_BMZ_SOURCE_LN_PROFILE_AVAILABLE: i32 = 19_196;
+/// BMZ extension: the referenced EX-score best has recorded play options.
+pub const SKIN_OPTION_BMZ_BEST_SCORE_OPTIONS_AVAILABLE: i32 = 19_200;
+/// Best-score arrangement indices, including F-RANDOM / MF-RANDOM (10 / 11).
+pub const SKIN_REF_BMZ_BEST_SCORE_ARRANGE_1P: i32 = 19_201;
+pub const SKIN_REF_BMZ_BEST_SCORE_ARRANGE_2P: i32 = 19_202;
+/// Actual DP option (OFF / FLIP / BATTLE / BATTLE AS), not the score bucket.
+pub const SKIN_REF_BMZ_BEST_SCORE_DOUBLE_OPTION: i32 = 19_203;
 /// Lua result skin の定数 `Expand_op` 代入を宣言的クリックイベントへ変換する ID。
 /// beatoraja の正数イベント ID と衝突しない BMZ 内部予約値を使う。
 pub const SKIN_EVENT_RESULT_PANEL_IR: i32 = -10_001;

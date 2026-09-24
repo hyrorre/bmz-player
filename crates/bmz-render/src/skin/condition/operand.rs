@@ -133,6 +133,9 @@ pub(in crate::skin) fn keybeam_lane_for_keyoff_timer(timer: i32) -> Option<usize
 
 pub(in crate::skin) fn skin_state_event_index(event_id: i32, state: &SkinDrawState) -> i32 {
     match event_id {
+        SKIN_REF_BMZ_BEST_SCORE_ARRANGE_1P..=SKIN_REF_BMZ_BEST_SCORE_DOUBLE_OPTION => {
+            best_score_option_index(event_id, state) as i32
+        }
         40 => state.select_gauge_index as i32,
         41 => state.select_target_index as i32,
         42 => arrange_ref_index(state) as i32,

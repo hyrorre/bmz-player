@@ -149,6 +149,7 @@ pub(super) fn play_skin_video_draw_state(
     let offset_hidden_cover_px =
         (snapshot.hidden_cover.clamp(0.0, 1.0) * visible_lane_height).round() as i32;
     bmz_render::skin::SkinDrawState {
+        skin_attempt: snapshot.skin_attempt,
         elapsed_ms: play_elapsed_ms,
         start_input_ms: if snapshot.seamless_play_entry {
             bmz_render::skin::skin_start_input_elapsed_ms(play_elapsed_ms, skin_input_ms)

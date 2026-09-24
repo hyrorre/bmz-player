@@ -420,6 +420,13 @@ impl WinitApp {
         );
         let gauge = options.gauge.unwrap_or(self.boot.profile_config.play.gauge);
         bmz_render::snapshot::SkinAttemptState {
+            best_score_options: self
+                .boot
+                .score_db
+                .best_scores_for_charts(&[self.play_skin_score_key_for_chart(&chart, options)])
+                .ok()
+                .and_then(|scores| scores.into_iter().next())
+                .and_then(|best| best.play_options),
             source_key_mode: Some(source_key_mode),
             effective_key_mode: Some(crate::skin_extension::effective_key_mode(
                 source_key_mode,

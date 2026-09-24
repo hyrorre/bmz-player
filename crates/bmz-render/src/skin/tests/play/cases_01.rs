@@ -251,6 +251,7 @@ fn play_attempt_refs_use_frozen_source_and_effective_state() {
         min_bpm: 150.0,
         max_bpm: 150.0,
         skin_attempt: SkinAttemptState {
+            best_score_options: None,
             source_key_mode: Some(KeyMode::K7),
             effective_key_mode: Some(KeyMode::K6),
             seven_to_six: true,

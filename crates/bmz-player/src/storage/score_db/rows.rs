@@ -8,8 +8,28 @@ pub(super) fn best_score_summary_from_row(
     let ln_policy = ln_policy_from_row(row, 1)?;
     let double_option = double_option_from_row(row, 2)?;
     let rule_mode = rule_mode_from_row(row, 3)?;
+    let arrange: Option<String> = row.get(28)?;
+    let arrange_2p: Option<String> = row.get(29)?;
+    let applied_double_option: Option<String> = row.get(30)?;
+    let play_options = arrange.zip(arrange_2p).zip(applied_double_option).map(
+        |((arrange, arrange_2p), double_option)| {
+            use crate::select_options::ArrangeOption;
+            bmz_render::snapshot::SkinBestScoreOptions {
+                arrange_1p: bmz_render::skin::extended_arrange_index(
+                    ArrangeOption::from_persistent_str(&arrange).as_str(),
+                ),
+                arrange_2p: bmz_render::skin::extended_arrange_index(
+                    ArrangeOption::from_persistent_str(&arrange_2p).as_str(),
+                ),
+                double_option: bmz_render::skin::select_double_option_index(
+                    DoubleOption::from_persistent_str(&double_option).as_str(),
+                ),
+            }
+        },
+    );
 
     Ok(BestScoreSummary {
+        play_options,
         chart_sha256,
         ln_policy,
         double_option,

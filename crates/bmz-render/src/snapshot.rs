@@ -22,9 +22,56 @@ pub const SKIN_SOURCE_LN_DEFINED_LN_BIT: u8 = 1 << 1;
 pub const SKIN_SOURCE_LN_DEFINED_CN_BIT: u8 = 1 << 2;
 pub const SKIN_SOURCE_LN_DEFINED_HCN_BIT: u8 = 1 << 3;
 
-/// Selectでは開始予定、Decide/Play/Resultでは試行開始時に固定されたskin公開状態。
+/// Options from the history row supplying the saved EX-score best.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SkinBestScoreOptions {
+    pub arrange_1p: usize,
+    pub arrange_2p: usize,
+    pub double_option: usize,
+}
+
+impl SkinBestScoreOptions {
+    pub fn index(self, ref_id: i32) -> Option<usize> {
+        use bmz_skin_document::*;
+        match ref_id {
+            SKIN_REF_BMZ_BEST_SCORE_ARRANGE_1P => Some(self.arrange_1p),
+            SKIN_REF_BMZ_BEST_SCORE_ARRANGE_2P => Some(self.arrange_2p),
+            SKIN_REF_BMZ_BEST_SCORE_DOUBLE_OPTION => Some(self.double_option),
+            _ => None,
+        }
+    }
+
+    pub fn label(self, ref_id: i32) -> &'static str {
+        use bmz_skin_document::*;
+        const ARRANGE: [&str; 12] = [
+            "NORMAL",
+            "MIRROR",
+            "RANDOM",
+            "R-RANDOM",
+            "S-RANDOM",
+            "SPIRAL",
+            "H-RANDOM",
+            "ALL-SCR",
+            "RANDOM-EX",
+            "S-RANDOM-EX",
+            "F-RANDOM",
+            "MF-RANDOM",
+        ];
+        let labels: &[&str] = match ref_id {
+            SKIN_REF_BMZ_BEST_SCORE_ARRANGE_1P | SKIN_REF_BMZ_BEST_SCORE_ARRANGE_2P => &ARRANGE,
+            SKIN_REF_BMZ_BEST_SCORE_DOUBLE_OPTION => &["OFF", "FLIP", "BATTLE", "BATTLE AS"],
+            _ => return "",
+        };
+        self.index(ref_id).and_then(|index| labels.get(index).copied()).unwrap_or_default()
+    }
+}
+
+/// Selectでは開始予定、Decide/Play/Resultでは試行に紐づくskin公開状態。
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct SkinAttemptState {
+    /// Select: selected saved best; Decide/Play: entry best; Result: pre-save best.
+    /// None means no linked history, independently of score provenance.
+    pub best_score_options: Option<SkinBestScoreOptions>,
     /// BATTLE / キーモード変換前の譜面キーモード。
     pub source_key_mode: Option<KeyMode>,
     /// skinが描画する変換後のキーモード。Selectでは開始予定値。
@@ -53,6 +100,8 @@ pub struct SkinAttemptState {
 impl SkinAttemptState {
     /// 譜面preloadで確定した値を反映し、まだ取得できないprofile由来値は保持する。
     pub fn merge_known(&mut self, newer: Self) {
+        // Keep our score baseline: chart preload / same-arrange retry caches can
+        // carry an absent or older best, unrelated to this attempt's entry best.
         self.source_key_mode = newer.source_key_mode.or(self.source_key_mode);
         self.effective_key_mode = newer.effective_key_mode.or(self.effective_key_mode);
         self.seven_to_six = newer.seven_to_six;

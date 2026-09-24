@@ -542,6 +542,46 @@ image index `7` は既存 skin が no-song bar に使用するため、BMZ 専�
 beatoraja 互換の `OPTION_FOLDERBAR` (`op: 1`) は、設定入口・設定カテゴリ・`戻る`・
 `閉じる`のいずれでも引き続き真になる。
 
+### BMZ Best Score Option Refs
+
+自己ベストEX SCOREを記録した履歴の配置を公開する。現在の設定用ref
+`42/43/54/344/345`とは別に、次のIDを使用する。
+
+| ref / option | kind | meaning |
+| ---: | --- | --- |
+| 19200 | option | 参照するベストに配置履歴がある |
+| 19201 | number / event_index / image・imageset ref / text | ベストの1P配置 |
+| 19202 | 同上 | ベストの2P配置 |
+| 19203 | 同上 | ベストの適用済みDP OPTION |
+
+配置indexは `0=NORMAL`, `1=MIRROR`, `2=RANDOM`, `3=R-RANDOM`, `4=S-RANDOM`,
+`5=SPIRAL`, `6=H-RANDOM`, `7=ALL-SCR`, `8=RANDOM-EX`, `9=S-RANDOM-EX`,
+`10=F-RANDOM`, `11=MF-RANDOM`。DP OPTIONは `0=OFF`, `1=FLIP`, `2=BATTLE`,
+`3=BATTLE AS`。textはこれらの表示名を返す。1P/2Pの区別を保持し、SPで2P表示が
+不要な場合はスキン側のキーモード条件で隠す。
+
+Selectは選択曲の保存済みベスト、Decide/Playは開始時のベスト、Resultは今回の
+保存・更新前のベストを参照する。Resultで更新しても表示対象は変わらず、Selectへ
+戻ると更新後の値になる。初プレイのResult、非譜面行、コース総合結果、履歴未取得時は
+`19200=false`、number/event_indexは`-1`、textは空文字。image/imagesetは未取得時に
+先頭画像へフォールバックするため、destinationには`op={19200}`を指定する。
+
+参照元は現在のprofile・ScoreKey（譜面hash、正規化LN policy、DP集約区分、判定ルール）
+の`best_score_history_id`。同点の更新は既存のベスト更新規則に従い、ランプのみの更新では
+配置を変更しない。DPのOFF/FLIPは同じスコア区分だが、表示は履歴の実際のDP OPTIONを返す。
+beatoraja等から取り込んだオプションも、保存値をそのままベスト時の配置として扱う。
+由来の確認済みフラグやtrophy集計は使用しない。
+
+```lua
+-- 自己ベストをRANDOMで記録した場合に表示する。
+draw = function()
+    return main_state.option(19200) and main_state.number(19201) == 2
+end
+```
+
+配置値は画面のsnapshotから取得する。Luaでは選曲変更へ追随するよう、ロード時の
+ローカル変数へ固定せず、上記のようにcallback内から参照する。
+
 ### BMZ RANDOM Lane Refs
 
 beatoraja result skin互換の `450..469` は、BMZではplay/select skinにも拡張して公開する。

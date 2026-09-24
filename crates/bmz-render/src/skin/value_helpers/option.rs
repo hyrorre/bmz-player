@@ -1,5 +1,13 @@
 use super::*;
 
+pub(super) fn best_score_option_index(ref_id: i32, state: &SkinDrawState) -> i64 {
+    state
+        .skin_attempt
+        .best_score_options
+        .and_then(|options| options.index(ref_id))
+        .map_or(-1, |index| index as i64)
+}
+
 pub fn select_arrange_index(arrange: &str) -> usize {
     match arrange {
         "MIRROR" => 1,

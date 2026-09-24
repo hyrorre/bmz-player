@@ -38,6 +38,9 @@ pub(in crate::skin) fn skin_state_number(ref_id: i32, state: &SkinDrawState) -> 
         }
     }
     match ref_id {
+        SKIN_REF_BMZ_BEST_SCORE_ARRANGE_1P..=SKIN_REF_BMZ_BEST_SCORE_DOUBLE_OPTION => {
+            Some(best_score_option_index(ref_id, state))
+        }
         // Lua draw 畳み込みのプレースホルダ (`number(0) >= 0` 等)
         0 => Some(0),
         17 => Some(player_stat_u64(state.player_stats.playtime_seconds / 3600)),

@@ -50,7 +50,11 @@ pub(super) fn course_result_summary_for_skin(course: &CourseResultSummary) -> Re
 
     ResultSummary {
         clear_type: course.final_clear_type,
-        skin_attempt: last.map_or_else(Default::default, |summary| summary.skin_attempt),
+        skin_attempt: bmz_render::snapshot::SkinAttemptState {
+            // Per-chart best options do not describe an aggregate course best.
+            best_score_options: None,
+            ..last.map_or_else(Default::default, |summary| summary.skin_attempt)
+        },
         target_name: last.map(|summary| summary.target_name.clone()).unwrap_or_default(),
         target: last.map(|summary| summary.target).unwrap_or_default(),
         arrange: "NORMAL".to_string(),

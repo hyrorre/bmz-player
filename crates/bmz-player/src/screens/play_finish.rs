@@ -293,6 +293,7 @@ impl FinishSessionSnapshot {
         Self {
             chart,
             skin_attempt: bmz_render::snapshot::SkinAttemptState {
+                best_score_options: None,
                 source_key_mode: Some(source_key_mode),
                 effective_key_mode: Some(session.primary_key_mode),
                 seven_to_six: applied_arrange.seven_to_six(),
@@ -502,6 +503,9 @@ fn finish_session_snapshot_result(
         };
     let mut summary = ResultSummary::from_play_result(&result, &stored, &snapshot.chart);
     summary.skin_attempt = snapshot.skin_attempt;
+    // Result refers to the same pre-save record as its MYBEST score display.
+    summary.skin_attempt.best_score_options =
+        previous_best.as_ref().and_then(|best| best.play_options);
     summary.key_mode = snapshot.primary_key_mode;
     summary.clear_type = summary_clear_type;
     summary.arrange = applied_arrange.arrange.as_str().to_string();

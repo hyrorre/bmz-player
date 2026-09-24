@@ -406,6 +406,7 @@ impl ScoreRecordMetadata {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct BestScoreSummary {
+    pub play_options: Option<bmz_render::snapshot::SkinBestScoreOptions>,
     pub chart_sha256: [u8; 32],
     pub ln_policy: LnScorePolicy,
     pub double_option: DoubleOptionScoreBucket,

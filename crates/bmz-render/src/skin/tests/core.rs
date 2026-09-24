@@ -1,5 +1,7 @@
 use super::*;
 
+#[path = "core/best_score_options.rs"]
+mod best_score_options;
 #[path = "core/cases_01.rs"]
 mod cases_01;
 #[path = "core/cases_02.rs"]

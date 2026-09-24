@@ -131,6 +131,11 @@ fn play_lua_runtime_state_exposes_play_mode_and_score_save_options() {
     let source_ln_bits = bmz_render::snapshot::SKIN_SOURCE_LN_UNDEFINED_BIT
         | bmz_render::snapshot::SKIN_SOURCE_LN_DEFINED_HCN_BIT;
     let attempt = bmz_render::snapshot::SkinAttemptState {
+        best_score_options: Some(bmz_render::snapshot::SkinBestScoreOptions {
+            arrange_1p: 2,
+            arrange_2p: 11,
+            double_option: 1,
+        }),
         source_key_mode: Some(KeyMode::K7),
         effective_key_mode: Some(KeyMode::K6),
         seven_to_six: true,
@@ -168,6 +173,12 @@ fn play_lua_runtime_state_exposes_play_mode_and_score_save_options() {
         Some(&true)
     );
     assert_eq!(extended.event_index_values.get(&360), Some(&5));
+    assert_eq!(extended.option_values.get(&19200), Some(&true));
+    assert_eq!(extended.number_values.get(&19201), Some(&2));
+    assert_eq!(extended.event_index_values.get(&19202), Some(&11));
+    assert_eq!(extended.text_values.get(&19203).map(String::as_str), Some("FLIP"));
+    assert_eq!(normal.option_values.get(&19200), Some(&false));
+    assert_eq!(normal.number_values.get(&19201), Some(&-1));
     assert_eq!(extended.event_index_values.get(&361), Some(&2));
     assert_eq!(extended.option_values.get(&170), Some(&true));
     assert_eq!(extended.option_values.get(&179), Some(&true));
@@ -751,6 +762,19 @@ fn play_skin_video_loaded_state_starts_with_ready_timer() {
     assert!(seamless_state.skin_loaded);
     assert_eq!(seamless_state.ready_timer_ms, None);
     assert_eq!(seamless_state.start_input_ms, Some(1_500));
+}
+
+#[test]
+fn play_skin_video_best_score_options_match_render_snapshot() {
+    let mut snapshot = RenderSnapshot::default();
+    snapshot.skin_attempt.best_score_options = Some(bmz_render::snapshot::SkinBestScoreOptions {
+        arrange_1p: 2,
+        arrange_2p: 1,
+        double_option: 1,
+    });
+    let state = play_skin_video_draw_state(&snapshot, None, None, 0);
+    assert!(bmz_render::skin::lua_main_state_option(19200, &[], &state));
+    assert_eq!(bmz_render::skin::lua_main_state_number(19203, &state), 1);
 }
 
 #[test]
