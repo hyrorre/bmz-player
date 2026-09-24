@@ -2,10 +2,29 @@ use super::*;
 
 pub(super) fn destination_entry_at<'a>(
     entries: &'a [DestinationListEntry],
-    index: usize,
+    mut index: usize,
     enabled_options: &[i32],
 ) -> Option<&'a SkinDestinationDef> {
-    destination_entries(entries, enabled_options).into_iter().nth(index)
+    for entry in entries {
+        match entry {
+            DestinationListEntry::Single(destination) => {
+                if index == 0 {
+                    return Some(destination);
+                }
+                index -= 1;
+            }
+            DestinationListEntry::Conditional { if_ops, destinations }
+                if test_skin_dst_if(if_ops, enabled_options) =>
+            {
+                if index < destinations.len() {
+                    return destinations.get(index);
+                }
+                index -= destinations.len();
+            }
+            DestinationListEntry::Conditional { .. } => {}
+        }
+    }
+    None
 }
 
 pub(super) fn destination_entries<'a>(

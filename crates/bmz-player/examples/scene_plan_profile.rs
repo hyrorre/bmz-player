@@ -2,9 +2,17 @@
 //! Usage: scene_plan_profile select|result|course SKIN idle|scroll|panel [PROFILE]
 //! BMZ_SCENE_PROFILE_FRAMES sets measured frames (default 2000).
 //! BMZ_SCENE_PROFILE_STAGES sets course length (default 4, max 10).
+//! BMZ_SCENE_PROFILE_VERIFY hashes every rendered primitive outside the timer.
 //! These synthetic workloads do not measure application FPS or snapshot building.
 
-use std::{collections::BTreeMap, hint::black_box, path::PathBuf, sync::Arc, time::Instant};
+use std::{
+    collections::{BTreeMap, hash_map::DefaultHasher},
+    hash::{Hash, Hasher},
+    hint::black_box,
+    path::PathBuf,
+    sync::Arc,
+    time::Instant,
+};
 
 use anyhow::{Context, Result, ensure};
 use bmz_core::{judge::Judge, time::TimeUs};
@@ -16,6 +24,7 @@ use bmz_player::{
     },
 };
 use bmz_render::{
+    plan::DrawCommand,
     renderer::Renderer,
     scene::{AppSceneSnapshot, CourseStageResultSkinSnapshot},
     skin::{SkinDocumentTexture, default_skin_manifest},
@@ -56,6 +65,7 @@ fn main() -> Result<()> {
         .map(|p| -> Result<_> { Ok(toml::from_str(&std::fs::read_to_string(p)?)?) })
         .transpose()?;
     let frames = env_count("BMZ_SCENE_PROFILE_FRAMES", 2000, 1_000_000)?;
+    let mut plan_hash = std::env::var_os("BMZ_SCENE_PROFILE_VERIFY").map(|_| DefaultHasher::new());
     let stages = if mode == "course" { env_count("BMZ_SCENE_PROFILE_STAGES", 4, 10)? } else { 1 };
     let empty = BTreeMap::new();
     let (options, files) = profile.as_ref().map_or((&empty, &empty), |p| match mode {
@@ -180,6 +190,21 @@ fn main() -> Result<()> {
             commands += plan.commands.len();
         }
         black_box(plan);
+        if let Some(hash) = &mut plan_hash {
+            format!("{:?}", plan.clear).hash(hash);
+            for command in &plan.commands {
+                // Cache identities and batch boundaries may change without
+                // changing the ordered primitives sent to the renderer.
+                if let DrawCommand::RectBatch { rects, .. } = command {
+                    for rect in rects.iter() {
+                        format!("{:?}", DrawCommand::Rect { rect: rect.rect, color: rect.color })
+                            .hash(hash);
+                    }
+                } else {
+                    format!("{command:?}").hash(hash);
+                }
+            }
+        }
     }
     samples.sort_unstable();
     println!(
@@ -191,6 +216,7 @@ fn main() -> Result<()> {
             "p95_us": samples[(frames * 95).div_ceil(100) - 1] as f64 / 1000.0,
             "p99_us": samples[(frames * 99).div_ceil(100) - 1] as f64 / 1000.0,
             "mean_commands": commands as f64 / frames as f64,
+            "plan_hash": plan_hash.map(|hash| format!("{:016x}", hash.finish())),
         })
     );
     Ok(())

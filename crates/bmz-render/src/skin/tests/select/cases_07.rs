@@ -1,6 +1,35 @@
 use super::*;
 
 #[test]
+fn songlist_entry_index_preserves_conditional_order_and_bounds() {
+    let entries: Vec<DestinationListEntry> = serde_json::from_str(
+        r#"[
+            {"id":"first"},
+            {"if":[10],"values":[{"id":"enabled-a"},{"id":"enabled-b"}]},
+            {"if":[20],"values":[{"id":"disabled"}]},
+            {"if":[10],"values":[]},
+            {"id":"last"}
+        ]"#,
+    )
+    .unwrap();
+    for (index, expected) in ["first", "enabled-a", "enabled-b", "last"].iter().enumerate() {
+        assert_eq!(destination_entry_at(&entries, index, &[10]).unwrap().id, *expected);
+    }
+    assert_eq!(destination_entry_at(&entries, 1, &[]).unwrap().id, "last");
+    assert!(destination_entry_at(&entries, 4, &[10]).is_none());
+    assert!(destination_entry_at(&entries, usize::MAX, &[10]).is_none());
+    assert!(destination_entry_at(&[], 0, &[]).is_none());
+}
+
+#[test]
+fn songlist_sprite_default_timer_remains_zero() {
+    let state = SkinDrawState::default();
+    for timer in std::iter::once(None).chain((-1..=20_000).map(Some)) {
+        assert_eq!(skin_timer_elapsed_ms(timer, &state).unwrap_or(0), 0, "{timer:?}");
+    }
+}
+
+#[test]
 fn skin_context_updates_user_selected_options() {
     let document: SkinDocument = serde_json::from_str(
         r#"

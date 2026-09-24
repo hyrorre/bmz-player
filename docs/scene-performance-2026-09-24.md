@@ -232,3 +232,32 @@ BMZ_SCENE_PROFILE_STAGES=10 target/release/examples/scene_plan_profile course da
   今回はexampleと本文書のみの追加で、これらのテストや実装は変更していない。
 - exampleの1フレーム実行、および0フレーム・11曲・不正scene・resultへのscroll指定の拒否を確認。
 - 採用した実画面11条件は全て正常終了し、effective present modeがImmediateであることを確認。
+
+## 後続の実装とA/B計測
+
+以下は調査後の変更。バイナリを変更段階ごとに保存し、同じ条件で交互に起動した。
+CPU計測は300フレームのウォームアップ＋3000フレーム、原則5回ずつの中央値。
+生ログは `.local/performance/2026-09-24/scene-optimization/` に保存する。
+描画一致の確認は性能計測と別実行とし、描画順・色・UV・座標・文字を含む命令をhash化する。
+RectBatchのキャッシュIDとbatch境界だけを除外し、内部の矩形は順序通りに比較する。
+
+### 1. 選曲バーと条件付きリスト
+
+バー画像の既存のtimer評価はdefault stateから0を得るだけだったため、大きなstate生成を除いた。
+`destination_entry_at` は全要素をVecに展開せず、条件を評価しながら対象indexまで進む。
+画像の線形検索はこの変更には含めていない。
+
+| スキン・静止状態 | 変更前（µs） | 変更後（µs） | 短縮 |
+|---|---:|---:|---:|
+| default | 80.5 | 73.6 | 8.6% |
+| ECFN | 320.9 | 307.2 | 4.3% |
+| mz-select | 420.3 | 405.8 | 3.5% |
+| Starseeker | 317.6 | 304.9 | 4.0% |
+| ADFX_02 | 322.5 | 308.5 | 4.4% |
+
+default / ECFN / mz-selectでは静止時の全348フレームの描画hashが一致。
+条件付きリストの順序・空グループ・範囲外と、default timerの値を含むsonglist関連10テストが成功した。
+Luxez-Flatは起動ごとにcallback登録数412/440、出力244/250 commandsが変わるため、
+この段階の性能差は採否の根拠にしない。
+Starseeker選曲も同じ変更前バイナリの再実行同士でhashが異なったため、完全一致を確認できたとは扱わない。
+これらの揺れは今回の変更前から存在する。
