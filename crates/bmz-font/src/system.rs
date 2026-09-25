@@ -1,3 +1,4 @@
+use std::cell::OnceCell;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, OnceLock};
 
@@ -44,8 +45,7 @@ pub const ALL_FONT_COVERAGES: [FontCoverage; 5] = [
 
 /// 日本語表示を優先する OS フォントファミリ名。
 ///
-/// 将来 `data/fonts/` 同梱フォントを `FsSource` + `Multi` で先に見る場合は、
-/// この列の前段に bundled source を差し込む。
+/// 同梱sourceで候補を一巡してから、OS sourceで同じ候補を探索する。
 const JAPANESE_FONT_FAMILIES: &[&str] = &[
     "Hiragino Sans",
     "Hiragino Kaku Gothic ProN",
@@ -159,8 +159,7 @@ pub fn resolve_font_for_coverage(
     coverage: FontCoverage,
     font_roots: &[PathBuf],
 ) -> Option<ResolvedFont> {
-    let source = font_source_with_roots(font_roots);
-    resolve_font_for_coverage_from_source(&source, coverage)
+    FontSources::new(font_roots).resolve(coverage)
 }
 
 fn resolve_font_for_coverage_from_source<S>(
@@ -211,13 +210,10 @@ pub fn resolve_font_fallbacks(
         .collect();
     let mut cache = CACHE.get_or_init(Mutex::default).lock().unwrap_or_else(|e| e.into_inner());
     let fonts = cache.resolve(&roots, || {
-        let source = font_source_with_roots(&roots);
+        let sources = FontSources::new(&roots);
         ALL_FONT_COVERAGES
             .into_iter()
-            .filter_map(|coverage| {
-                resolve_font_for_coverage_from_source(&source, coverage)
-                    .map(|font| (coverage, font))
-            })
+            .filter_map(|coverage| sources.resolve(coverage).map(|font| (coverage, font)))
             .collect()
     });
     order_font_fallbacks(preferred, fonts)
@@ -259,14 +255,31 @@ fn order_font_fallbacks(
         })
 }
 
-fn font_source_with_roots(font_roots: &[PathBuf]) -> MultiSource {
-    let mut sources: Vec<Box<dyn Source>> = font_roots
-        .iter()
-        .filter(|root| root.is_dir())
-        .map(|root| Box::new(FsSource::in_path(root)) as Box<dyn Source>)
-        .collect();
-    sources.push(Box::new(SystemSource::new()));
-    MultiSource::from_sources(sources)
+struct FontSources {
+    bundled: MultiSource,
+    system: OnceCell<SystemSource>,
+}
+
+impl FontSources {
+    fn new(font_roots: &[PathBuf]) -> Self {
+        let sources = font_roots
+            .iter()
+            .filter(|root| root.is_dir())
+            .map(|root| Box::new(FsSource::in_path(root)) as Box<dyn Source>)
+            .collect();
+        Self { bundled: MultiSource::from_sources(sources), system: OnceCell::new() }
+    }
+
+    fn resolve(&self, coverage: FontCoverage) -> Option<ResolvedFont> {
+        // MultiSourceにOSも含めると、同梱Notoより前のOS固有familyを探索してしまう。
+        // 同梱sourceでcoverageを満たせない場合だけOS sourceを初期化・探索する。
+        resolve_font_for_coverage_from_source(&self.bundled, coverage).or_else(|| {
+            resolve_font_for_coverage_from_source(
+                self.system.get_or_init(SystemSource::new),
+                coverage,
+            )
+        })
+    }
 }
 
 /// 解決済みフォントの生バイト列を読み込む。
@@ -470,15 +483,30 @@ mod tests {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../data/fonts/noto-cjk");
         assert!(root.is_dir(), "bundled font directory should exist: {}", root.display());
 
-        let roots = vec![root];
+        let roots = vec![root.clone()];
+        let sources = FontSources::new(&roots);
+        let mut faces = Vec::new();
         for coverage in ALL_FONT_COVERAGES {
-            let resolved = resolve_font_for_coverage(coverage, &roots)
+            let resolved = sources
+                .resolve(coverage)
                 .unwrap_or_else(|| panic!("bundled font should resolve {coverage:?}"));
+            assert!(resolved.path.as_ref().is_some_and(|path| path.starts_with(&root)));
+            assert!(!faces.contains(&resolved), "regional CJK faces must remain distinct");
             assert!(
                 resolved_font_supports_coverage(&resolved, coverage),
                 "bundled font should support {coverage:?}"
             );
+            faces.push(resolved);
         }
+        assert!(sources.system.get().is_none(), "bundled CJK must not query the OS source");
+    }
+
+    #[test]
+    fn missing_bundled_fonts_fall_back_to_system_source() {
+        let sources = FontSources::new(&[]);
+        let resolved = sources.resolve(FontCoverage::Japanese);
+        assert!(sources.system.get().is_some());
+        assert_eq!(resolved, resolve_system_font_for_coverage(FontCoverage::Japanese));
     }
 
     /// `FsSource` 経由の fixture で path/index 抽出を検証する。

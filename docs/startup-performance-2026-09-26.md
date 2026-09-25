@@ -206,3 +206,25 @@ renderer側の最初の探索は約2.1秒のままで、次の改善対象にな
 20件、`cargo clippy -p bmz-font --all-targets --locked -- -D warnings` 成功。
 生ログと集計は `optimization/{installed,ecfn}-baseline-step1.json` と
 `runs/opt-{installed,ecfn}-baseline-step1-*/` に保存した。
+
+## 改善2: 同梱フォントをOS探索より優先
+
+同梱source内で候補familyをすべて探してから、見つからないcoverageだけOSを探索する。
+これにより同梱Notoが利用できる場合、CJK探索用のOS source自体も初期化しない。
+汎用SansSerifの追加fallbackは従来どおりOSから取得する。
+日本語・韓国語の既定fallbackはmacOS固有フォントからNotoへ変わるので字形・メトリクスは変わる。
+スキンが明示したフォントは従来どおり使用する。
+
+| 選曲スキン | 改善1中央値（再測定） | 改善2中央値 | この段階の短縮 | 各3回の値（前 → 後、ms） |
+|---|---:|---:|---:|---|
+| mz-select | 2,739ms | 695ms | 74.6% | 2782/2739/2731 → 690/701/695 |
+| ECFN | 3,158ms | 1,071ms | 66.1% | 3103/3193/3158 → 1320/1021/1071 |
+
+全試行は正常終了。mz-selectの1試行ではrendererのfont loadは56ms、eguiは8ms。
+第1段階の前からの短縮率はmz-selectで約85%。
+ECFNには数百msの試行差があり、小さい差の評価には追加測定が必要。
+
+検証: `bmz-font` 12件（同梱の地域別5face・代表グリフ・OS未探索・同梱なしのfallbackを含む）、
+renderer fallback 20件、bmz-fontのclippy成功。
+描画確認用試行は計測表から除外した。
+集計は `optimization/{installed,ecfn}-step1-step2.json`。
