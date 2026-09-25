@@ -3,7 +3,7 @@
 #include <stdbool.h>
 
 // All entry points and delegate callbacks run on winit's Cocoa main thread.
-@interface BMZUpdater : NSObject <SPUUserDriver, SPUUpdaterDelegate, NSApplicationDelegate>
+@interface BMZUpdater : NSObject <SPUUserDriver, SPUUpdaterDelegate>
 @property(nonatomic, strong) SPUUpdater *updater;
 @property(nonatomic, strong) NSMutableArray<NSDictionary *> *events;
 @property(copy) void (^choice)(SPUUserUpdateChoice);
@@ -21,6 +21,7 @@
 
 static BMZUpdater *driver;
 static NSString *lastEvent;
+static BOOL testInstallHandlerInvoked;
 
 @implementation BMZUpdater
 - (void)emit:(NSDictionary *)event { [self.events addObject:event]; }
@@ -48,6 +49,7 @@ static NSString *lastEvent;
     acknowledgement();
 }
 - (void)showUpdaterError:(NSError *)error acknowledgement:(void (^)(void))acknowledgement {
+    self.approved = NO; self.installHandler = nil;
     if (!self.paused && (self.report || self.choice || self.received)) [self emit:@{@"event":@"error", @"message":error.localizedDescription}];
     acknowledgement();
 }
@@ -68,11 +70,15 @@ static NSString *lastEvent;
 - (BOOL)updater:(SPUUpdater *)updater shouldDownloadReleaseNotesForUpdate:(SUAppcastItem *)item { return NO; }
 - (NSString *)feedURLStringForUpdater:(SPUUpdater *)updater { return self.selectedFeed; }
 - (BOOL)updater:(SPUUpdater *)updater shouldPostponeRelaunchForUpdate:(SUAppcastItem *)item untilInvokingBlock:(void (^)(void))handler {
+    if (!self.approved || self.installHandler) return NO;
     self.installHandler = handler;
     [self emit:@{@"event":@"shutdown"}];
     return YES;
 }
-- (NSApplicationTerminateReply)applicationShouldTerminate:(NSApplication *)sender { return NSTerminateNow; }
+- (void)updater:(SPUUpdater *)updater didAbortWithError:(NSError *)error {
+    self.approved = NO; self.installHandler = nil;
+    if (!self.paused) [self emit:@{@"event":@"error", @"message":error.localizedDescription}];
+}
 @end
 
 bool bmz_sparkle_available(void) {
@@ -132,20 +138,24 @@ const char *bmz_sparkle_poll(void) {
     return lastEvent.UTF8String;
 }
 
-void bmz_sparkle_finish(void) {
-    if (!driver.approved || !driver.installHandler) {
-        bmz_sparkle_action(0);
-        // Let cancellation reach Sparkle's installer before the host process exits.
-        NSDate *deadline = [NSDate dateWithTimeIntervalSinceNow:10];
-        while (driver.updater.sessionInProgress && deadline.timeIntervalSinceNow > 0) {
-            [[NSRunLoop currentRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.05]];
-        }
-        return;
-    }
-    // winit and all BMZ state have been dropped; Sparkle may now terminate/relaunch Cocoa.
-    [NSApp setDelegate:driver];
+bool bmz_sparkle_resume_install(void) {
+    NSCAssert([NSThread isMainThread], @"Sparkle requires the main thread");
+    if (!driver.approved || !driver.installHandler) return false;
     void (^handler)(void) = driver.installHandler; driver.installHandler = nil;
-    // terminate: must run after Cocoa's event loop resumes; winit has stopped it.
-    dispatch_async(dispatch_get_main_queue(), handler);
-    [NSApp run];
+    handler();
+    return true;
 }
+
+// Regression harness entry points. They exercise the same stored-handler path while a real
+// winit EventLoop owns NSApplication and its delegate; no updater session or network is needed.
+void bmz_sparkle_test_stage_install_handler(void) {
+    if (!driver) { driver = [BMZUpdater new]; driver.events = [NSMutableArray new]; }
+    driver.approved = YES;
+    testInstallHandlerInvoked = NO;
+    driver.installHandler = ^{
+        testInstallHandlerInvoked = YES;
+    };
+    [driver emit:@{@"event":@"shutdown"}];
+}
+
+bool bmz_sparkle_test_install_handler_invoked(void) { return testInstallHandlerInvoked; }

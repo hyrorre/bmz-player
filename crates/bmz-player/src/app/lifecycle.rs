@@ -572,7 +572,24 @@ impl ApplicationHandler<AppUserEvent> for WinitApp {
     }
 
     fn exiting(&mut self, _event_loop: &ActiveEventLoop) {
-        crate::update::sparkle::pause();
+        self.prepare_for_process_exit(true, "winit event loop exit");
+    }
+}
+
+impl WinitApp {
+    /// Rust の drop cascade に依存せず、プロセス終了前に必要な永続化と停止を完了する。
+    ///
+    /// Sparkle の延期 handler を呼ぶ前にも通常の `exiting` からも通るため、再入可能にする。
+    pub(super) fn prepare_for_process_exit(&mut self, pause_update: bool, reason: &'static str) {
+        if self.integrations.exit_prepared {
+            tracing::debug!(reason, "exit preparation already completed");
+            return;
+        }
+        self.integrations.exit_prepared = true;
+        tracing::info!(reason, "exit preparation started");
+        if pause_update {
+            crate::update::sparkle::pause();
+        }
         if let Some(progress) = &self.jobs.update_progress {
             progress.cancel.store(true, Ordering::Relaxed);
         }
@@ -596,6 +613,7 @@ impl ApplicationHandler<AppUserEvent> for WinitApp {
             cache.clear();
         }
         self.renderer.detach_surface();
+        tracing::info!(reason, "exit preparation completed");
     }
 }
 

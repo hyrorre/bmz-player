@@ -101,6 +101,11 @@ Developer ID署名・公証を使わない場合も更新ZIPの署名検証は�
 - Read-only mount、App Translocation、権限不足などの失敗はSparkleのエラーとReleaseページへの導線で扱う。
 - 再起動時の保存先は `~/Library/Caches/net.hyrorre.bmz-player/update-restart.json` に一時保存する。
   同じインストール先で引数なしに起動した時だけ消費し、10分で失効する。
+- 「更新して再起動」の承認後もwinitのイベントループと`NSApplication.delegate`を維持する。
+  Sparkleが再起動延期handlerを渡した場合は、winitループ内で設定・未完了スコアを保存し、
+  音声・入力・スキン・BGA等のワーカーと描画資源を停止してからhandlerを一度だけ呼ぶ。
+  Sparkleが契約上このdelegate callbackを呼ばず直接終了する場合も、winitの通常終了処理が
+  同じ冪等な終了準備を実行する。EventLoop終了後にCocoa run loopを再開しない。
 
 未加入での最小設定はSparkleの公開鍵variable・秘密鍵secretのみ（Windows用更新署名キーは別途必要）。
 Appleの署名・公証secretsは未設定のまま、通常のRelease公開または `upload_to_release=true` で配布する。
@@ -150,7 +155,14 @@ BMZ_SPARKLE_DIR=/tmp/bmz-sparkle cargo check -p bmz-player
 clang -fobjc-arc -fblocks -F/tmp/bmz-sparkle -framework AppKit -framework Sparkle \
   -Wl,-rpath,/tmp/bmz-sparkle scripts/test-sparkle-bridge.m -o /tmp/bmz-test-sparkle-bridge
 /tmp/bmz-test-sparkle-bridge
+BMZ_SPARKLE_DIR=/tmp/bmz-sparkle DYLD_FRAMEWORK_PATH=/tmp/bmz-sparkle cargo run -p bmz-player \
+  --example sparkle_winit_handoff
 ```
+
+後者は実際のwinit `EventLoop`とnative bridgeを同時に初期化し、Sparkleへの引き継ぎ待ちに
+user eventが届いても処理できること、継続handlerが一度だけ実行されることを確認する。
+リリース前の実機確認では、修正を含む更新元テストビルドから、より新しい更新先テストビルドへ
+更新し、入力中の再起動、設定・スコア・profile保存先の継承、キャンセルとエラー経路も確認する。
 
 公開時は秘密鍵のバイト長を仮定せず、Sparkleで生成したアーカイブ署名を
 `verify-sparkle-signature.mjs` で埋込み公開鍵に照合する。32バイトseed形式と旧形式は

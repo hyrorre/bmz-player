@@ -24,7 +24,9 @@ mod native {
         fn bmz_sparkle_check(prerelease: bool, report: bool);
         fn bmz_sparkle_action(action: i32);
         fn bmz_sparkle_poll() -> *const c_char;
-        fn bmz_sparkle_finish();
+        fn bmz_sparkle_resume_install() -> bool;
+        fn bmz_sparkle_test_stage_install_handler();
+        fn bmz_sparkle_test_install_handler_invoked() -> bool;
     }
     pub(super) fn available() -> bool {
         unsafe { bmz_sparkle_available() }
@@ -46,10 +48,14 @@ mod native {
         }
         serde_json::from_slice(unsafe { CStr::from_ptr(ptr) }.to_bytes()).ok()
     }
-    pub(super) fn finish() {
-        unsafe {
-            bmz_sparkle_finish();
-        }
+    pub(super) fn resume_install() -> bool {
+        unsafe { bmz_sparkle_resume_install() }
+    }
+    pub(super) fn stage_test_install_handler() {
+        unsafe { bmz_sparkle_test_stage_install_handler() }
+    }
+    pub(super) fn test_install_handler_invoked() -> bool {
+        unsafe { bmz_sparkle_test_install_handler_invoked() }
     }
 }
 
@@ -106,10 +112,32 @@ pub fn install(context: &RestartContext) -> Result<()> {
     }
     Ok(())
 }
-pub fn finish_shutdown() {
+pub fn resume_install() -> bool {
     #[cfg(bmz_sparkle)]
     {
-        native::finish();
+        native::resume_install()
+    }
+    #[cfg(not(bmz_sparkle))]
+    {
+        false
+    }
+}
+
+#[doc(hidden)]
+pub fn stage_test_install_handler() {
+    #[cfg(bmz_sparkle)]
+    native::stage_test_install_handler();
+}
+
+#[doc(hidden)]
+pub fn test_install_handler_invoked() -> bool {
+    #[cfg(bmz_sparkle)]
+    {
+        native::test_install_handler_invoked()
+    }
+    #[cfg(not(bmz_sparkle))]
+    {
+        false
     }
 }
 pub fn poll() -> Option<Event> {

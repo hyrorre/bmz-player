@@ -396,6 +396,7 @@ impl WinitApp {
                 obs_controller,
                 applied_obs_config,
                 exit_configs_saved: false,
+                exit_prepared: false,
                 last_scene_kind: None,
                 discord_presence: None,
                 discord_presence_config: None,

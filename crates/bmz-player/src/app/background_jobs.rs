@@ -1101,13 +1101,22 @@ impl WinitApp {
             }
             UpdateDialogAction::Install => {
                 if crate::update::sparkle::available() {
-                    if let Err(error) =
-                        crate::update::sparkle::install(&self.update_restart_context())
-                    {
-                        self.jobs.update_prompt = Some(UpdatePrompt::Error {
-                            message: format!("{error:#}"),
-                            candidate: None,
-                        });
+                    let candidate =
+                        self.jobs.update_prompt.as_ref().and_then(UpdatePrompt::candidate).cloned();
+                    match crate::update::sparkle::install(&self.update_restart_context()) {
+                        Ok(()) => {
+                            tracing::info!("approved Sparkle update and relaunch");
+                            if let Some(candidate) = candidate {
+                                self.jobs.update_prompt = Some(UpdatePrompt::Preparing(candidate));
+                            }
+                        }
+                        Err(error) => {
+                            tracing::error!(%error, "failed to approve Sparkle update and relaunch");
+                            self.jobs.update_prompt = Some(UpdatePrompt::Error {
+                                message: format!("{error:#}"),
+                                candidate: None,
+                            });
+                        }
                     }
                 } else if let Some(downloaded) = self.jobs.downloaded_update.take()
                     && let Err(error) = self.apply_downloaded_update(downloaded)

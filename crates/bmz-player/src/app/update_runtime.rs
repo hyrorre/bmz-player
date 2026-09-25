@@ -83,6 +83,7 @@ impl WinitApp {
                     }
                 }
                 Event::Error(message) => {
+                    tracing::error!(%message, "Sparkle update failed");
                     self.jobs.update_progress = None;
                     let candidate =
                         self.jobs.update_prompt.as_ref().and_then(|p| p.candidate().cloned());
@@ -92,10 +93,17 @@ impl WinitApp {
                     self.jobs.update_prompt = Some(UpdatePrompt::UpToDate);
                 }
                 Event::Shutdown => {
+                    tracing::info!("Sparkle requested update relaunch handoff");
                     self.jobs.update_prompt = None;
-                    self.shutdown_requested.store(true, Ordering::SeqCst);
+                    self.prepare_for_process_exit(false, "Sparkle update relaunch");
+                    if crate::update::sparkle::resume_install() {
+                        tracing::info!("instructed Sparkle to continue update relaunch");
+                    } else {
+                        tracing::warn!("Sparkle update relaunch handler was no longer available");
+                    }
                 }
                 Event::Canceled => {
+                    tracing::info!("Sparkle update canceled");
                     self.jobs.update_progress = None;
                     self.jobs.update_prompt = None;
                 }

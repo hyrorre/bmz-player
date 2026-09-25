@@ -273,6 +273,8 @@ pub(super) struct IntegrationRuntimeState {
     pub(super) obs_controller: Option<crate::obs::ObsController>,
     pub(super) applied_obs_config: ObsConfig,
     pub(super) exit_configs_saved: bool,
+    /// Sparkle の再起動継続前と通常の `exiting` から共有する終了準備の冪等ガード。
+    pub(super) exit_prepared: bool,
     pub(super) last_scene_kind: Option<AppSceneKind>,
     pub(super) discord_presence: Option<DiscordPresenceHandle>,
     pub(super) discord_presence_config: Option<DiscordPresenceConfig>,

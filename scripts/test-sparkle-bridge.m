@@ -41,6 +41,18 @@ int main(void) {
             canceled = choice == SPUUserUpdateChoiceSkip;
         }];
         assert(canceled);
+
+        // The relaunch continuation is consumed exactly once. It must not replace the
+        // NSApplication delegate or start a second Cocoa run loop.
+        [NSApplication sharedApplication];
+        NSObject *delegate = [NSObject new];
+        [NSApp setDelegate:(id)delegate];
+        bmz_sparkle_test_stage_install_handler();
+        assert([NSApp delegate] == (id)delegate);
+        assert(bmz_sparkle_resume_install());
+        assert(!bmz_sparkle_resume_install());
+        assert(bmz_sparkle_test_install_handler_invoked());
+        assert([NSApp delegate] == (id)delegate);
         puts("Sparkle bridge contract tests passed");
     }
     return 0;
