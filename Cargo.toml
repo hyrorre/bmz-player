@@ -19,7 +19,7 @@ resolver = "2"
 
 [workspace.package]
 edition = "2024"
-version = "0.4.1"
+version = "0.4.2"
 license = "GPL-3.0-only"
 authors = ["hyrorre"]
 
