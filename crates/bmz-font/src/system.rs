@@ -1,5 +1,5 @@
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, OnceLock};
 
 use ab_glyph::{Font, FontVec};
 use font_kit::family_name::FamilyName;
@@ -198,12 +198,59 @@ pub fn resolve_font_fallbacks(
     preferred: FontCoverage,
     font_roots: &[PathBuf],
 ) -> Vec<(FontCoverage, ResolvedFont)> {
-    let source = font_source_with_roots(font_roots);
+    // OS source 自体は共有しない（Linux等では Send/Sync ではない）。
+    // renderer/egui間で、パス・face index・Arcのbytesだけを共有する。
+    static CACHE: OnceLock<Mutex<FallbackCache>> = OnceLock::new();
+    let roots: Vec<_> = font_roots
+        .iter()
+        .map(|root| {
+            root.canonicalize().unwrap_or_else(|_| {
+                std::env::current_dir().map(|cwd| cwd.join(root)).unwrap_or_else(|_| root.clone())
+            })
+        })
+        .collect();
+    let mut cache = CACHE.get_or_init(Mutex::default).lock().unwrap_or_else(|e| e.into_inner());
+    let fonts = cache.resolve(&roots, || {
+        let source = font_source_with_roots(&roots);
+        ALL_FONT_COVERAGES
+            .into_iter()
+            .filter_map(|coverage| {
+                resolve_font_for_coverage_from_source(&source, coverage)
+                    .map(|font| (coverage, font))
+            })
+            .collect()
+    });
+    order_font_fallbacks(preferred, fonts)
+}
+
+/// 最後に使ったresource rootsの解決結果だけを保持する。
+/// OSフォントの追加・変更は次回のプロセス起動で反映する。
+/// preferredの変更は再探索せず並び替え、異なるrootsへの切替時は再探索する。
+#[derive(Default)]
+struct FallbackCache {
+    entry: Option<(Vec<PathBuf>, Vec<(FontCoverage, ResolvedFont)>)>,
+}
+
+impl FallbackCache {
+    fn resolve(
+        &mut self,
+        roots: &[PathBuf],
+        load: impl FnOnce() -> Vec<(FontCoverage, ResolvedFont)>,
+    ) -> &[(FontCoverage, ResolvedFont)] {
+        if self.entry.as_ref().is_none_or(|(cached_roots, _)| cached_roots != roots) {
+            self.entry = Some((roots.to_vec(), load()));
+        }
+        &self.entry.as_ref().unwrap().1
+    }
+}
+
+fn order_font_fallbacks(
+    preferred: FontCoverage,
+    fonts: &[(FontCoverage, ResolvedFont)],
+) -> Vec<(FontCoverage, ResolvedFont)> {
     std::iter::once(preferred)
         .chain(ALL_FONT_COVERAGES.into_iter().filter(|coverage| *coverage != preferred))
-        .filter_map(|coverage| {
-            resolve_font_for_coverage_from_source(&source, coverage).map(|font| (coverage, font))
-        })
+        .filter_map(|coverage| fonts.iter().find(|(candidate, _)| *candidate == coverage).cloned())
         .fold(Vec::new(), |mut fonts, candidate| {
             if !fonts.iter().any(|(_, font)| font == &candidate.1) {
                 fonts.push(candidate);
@@ -297,6 +344,54 @@ mod tests {
     use font_kit::sources::fs::FsSource;
 
     use super::*;
+
+    #[test]
+    fn cached_fallbacks_reorder_and_deduplicate_without_resolving_again() {
+        let shared = ResolvedFont { path: Some("shared.ttc".into()), memory: None, font_index: 0 };
+        let korean = ResolvedFont { path: Some("korean.ttf".into()), memory: None, font_index: 0 };
+        let mut cache = FallbackCache::default();
+        let fonts = cache.resolve(&[], || {
+            vec![
+                (FontCoverage::Japanese, shared.clone()),
+                (FontCoverage::Korean, korean.clone()),
+                (FontCoverage::SimplifiedChinese, shared.clone()),
+            ]
+        });
+        assert_eq!(
+            order_font_fallbacks(FontCoverage::Japanese, fonts),
+            vec![(FontCoverage::Japanese, shared.clone()), (FontCoverage::Korean, korean.clone())]
+        );
+        let fonts = cache.resolve(&[], || panic!("same roots must reuse the resolved fonts"));
+        assert_eq!(
+            order_font_fallbacks(FontCoverage::SimplifiedChinese, fonts),
+            vec![(FontCoverage::SimplifiedChinese, shared), (FontCoverage::Korean, korean)]
+        );
+    }
+
+    #[test]
+    fn switching_font_roots_replaces_cached_faces() {
+        let mut cache = FallbackCache::default();
+        let memory: Arc<[u8]> = Arc::from([1, 2, 3].as_slice());
+        let roots = vec![PathBuf::from("first")];
+        let fonts = cache.resolve(&roots, || {
+            vec![(
+                FontCoverage::Japanese,
+                ResolvedFont { path: None, memory: Some(memory.clone()), font_index: 2 },
+            )]
+        });
+        let copied = order_font_fallbacks(FontCoverage::Japanese, fonts);
+        assert!(Arc::ptr_eq(copied[0].1.memory.as_ref().unwrap(), &memory));
+        assert_eq!(copied[0].1.font_index, 2);
+        drop(copied);
+        assert!(cache.resolve(&[PathBuf::from("second")], Vec::new).is_empty());
+        assert_eq!(Arc::strong_count(&memory), 1, "old cached memory must be released");
+        let mut reloaded = false;
+        cache.resolve(&roots, || {
+            reloaded = true;
+            Vec::new()
+        });
+        assert!(reloaded);
+    }
 
     #[test]
     fn font_supports_japanese_rejects_empty_bytes() {

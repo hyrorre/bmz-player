@@ -124,7 +124,7 @@ ECFNを標準select.jsonに変えると初期スキン準備は8msまで減っ�
 
 ## 改善する場合の優先順位
 
-今回の変更は計測ログと診断exampleのみで、高速化は実装していない。
+最初の調査では計測ログと診断exampleのみを追加した。以下の改善結果を後段に追記する。
 
 1. **解決済みのフォントをrendererとeguiで共有する。**
    `font_roots` とcoverageをキーにし、再探索を避ける。
@@ -179,3 +179,30 @@ releaseビルド、実画面起動、計測ログ、旧版・現行版の選曲�
 - `git diff --check`: 成功。
 
 リンクを伴うコマンドには上記の `LIBRARY_PATH` を指定した。
+
+## 改善1: フォント解決結果の共有
+
+`c15b23cd` + 計測ログ（`faff8cd6`）を新しい比較基準とし、同じreleaseビルド条件で比較。
+この節以降はアプリ内起動タイマーからsuccessful first presentまでを測るため、
+公式版比較の「プロセス生成〜3フレーム完了」とは指標が異なる。
+変更前後を交互に各4回起動し、各バイナリの最初の1回を除いた3回の中央値を採用した。
+設定・DBは試行ごとのコピーを使用し、コンパイルやテストは計測と同時実行しない。
+
+`bmz-font` が最後に使用した正規化済みfont rootsの解決結果をプロセス内に保持する。
+rendererとeguiは同じパス・face index・`Arc`のbytesを再利用する。
+coverageの優先順と重複除去を維持し、locale変更は再探索せず並び替える。
+異なるrootsではキャッシュを置換し、OSフォントの変更は次回起動で反映する。
+OSのsourceオブジェクトは共有しない。
+
+| 選曲スキン | 変更前中央値 | 変更後中央値 | 短縮 | 各3回の値（前 → 後、ms） |
+|---|---:|---:|---:|---|
+| mz-select | 4,789ms | 2,713ms | 43.3% | 4813/4789/4789 → 2727/2713/2702 |
+| ECFN | 5,189ms | 3,172ms | 38.9% | 4889/5189/5439 → 3141/3195/3172 |
+
+mz-selectのegui font loadは2,051〜2,076msから6〜7msになった。
+renderer側の最初の探索は約2.1秒のままで、次の改善対象になる。
+
+検証: `cargo test -p bmz-font --locked` 11件、`cargo test -p bmz-render fallback --locked`
+20件、`cargo clippy -p bmz-font --all-targets --locked -- -D warnings` 成功。
+生ログと集計は `optimization/{installed,ecfn}-baseline-step1.json` と
+`runs/opt-{installed,ecfn}-baseline-step1-*/` に保存した。
