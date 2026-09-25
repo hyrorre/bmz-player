@@ -21,18 +21,27 @@ Windows Setup は配布ファイルのみを上書きし、`resources` を一括
 この仕様は修正版 Setup から適用され、旧 Setup によって既に消えたファイルを復元するものではない。
 
 
-`bmz-package.json` は配布形式・target・version・updater protocol・配布物のファイル一覧と SHA256 を持つ。
+`updater/bmz-package.json` は配布形式・target・version・updater protocol・配布物のファイル一覧と SHA256 を持つ。
 `data` の有無やカレントディレクトリから配布形式を推測しない。メタデータのない旧版・開発ビルドは自動適用しない。
 installer 作成中だけ `kind=installer` とし、ZIP 用 staging は `kind=portable` に戻す。
+旧配置の直下 `bmz-package.json` も読み込める。新配置のメタデータが存在する場合は優先し、
+壊れていても旧配置や別の保存先へフォールバックしない。
+portable のデータは環境変数の上書きを最優先とし、未指定時は必ず exe 横の `data` を使う。
+保存先の詳細は [Windows の保存先と優先順位](packaging.md#windows-の保存先と優先順位) を参照。
 
-更新アーカイブには `BMZ Player/` が一つあり、exe、DLL、`resources/`、メタデータだけを収録する。
+更新アーカイブには `BMZ Player/` が一つあり、本体exe、DLL、`resources/`、
+`updater/bmz-updater.exe`、`updater/bmz-package.json`、空の `updater/instance.lock` だけを収録する。
 manifest にないファイル・リンク・Windows の特殊名・展開先外のパスを拒否する。
 ダウンロードは署名済みのサイズ・SHA256を照合し、展開ファイルも個別に照合する。
 
-更新先の `.bmz-update/job-*/stage` に展開し、同一ボリューム内の rename で適用する。
-`bmz-updater.exe` は `job-*/helper.exe` にコピーして実行するため、配布フォルダの updater 自身も更新できる。
+更新先の `updater/job-*/stage` に展開し、同一ボリューム内の rename で適用する。
+`updater/bmz-updater.exe` は `job-*/helper.exe` にコピーして実行するため、updater 自身も更新できる。
 helper が準備完了してから本体を正常終了し、すべての packaged BMZ プロセスの共有ロック解放を待つ。
 60 秒以内に終了しない別プロセスがあれば更新を中止し、強制終了はしない。
+新規配置では共有ロックを `updater/instance.lock`、更新排他ロックを `updater/update.lock` に置く。
+旧配置からの移行時は旧ロックとも協調する。開いたロックファイルの削除による排他の分断を
+防ぐため、既存の `.bmz-instance.lock` / `.bmz-updater.lock` は保持する。
+旧 `.bmz-update/job-*` のバックアップも自動削除・移動しない。
 
 設定、DB、スコア、リプレイ、追加曲、ユーザースキン、未知のファイルは更新対象にしない。
 旧版で管理していた廃止 DLL も退避して除去する。新しい配布ファイルと未知の既存ファイルが衝突した場合は更新を拒否する。
@@ -42,30 +51,45 @@ helper が準備完了してから本体を正常終了し、すべての packag
 
 ### 中断・復旧
 
-複数ファイルの置換は一括の原子的操作ではない。`.bmz-update/active.json` の記録と退避ファイルから復旧する。
+複数ファイルの置換は一括の原子的操作ではない。`updater/active.json` の記録と退避ファイルから復旧する。
+旧 `.bmz-update/active.json` も検出・復旧できる。両方に未完了記録がある場合は処理を拒否する。
 通常の適用失敗は自動で旧版へ戻す。途中でプロセス終了・電源断が起きた場合、次回起動は未完了状態を検出して停止する。
 すべての BMZ プロセスを閉じてから実行する:
 
 ```powershell
-& 'C:\Games\BMZ Player\bmz-updater.exe' --recover 'C:\Games\BMZ Player'
+& 'C:\Games\BMZ Player\updater\bmz-updater.exe' --recover 'C:\Games\BMZ Player'
 ```
 
 本体や updater の置換途中で通常の exe が存在しない場合は、該当 job のコピーを使う:
 
 ```powershell
-& 'C:\Games\BMZ Player\.bmz-update\job-...\helper.exe' --recover 'C:\Games\BMZ Player'
+& 'C:\Games\BMZ Player\updater\job-...\helper.exe' --recover 'C:\Games\BMZ Player'
 ```
 
 これは適用途中の復旧用。新版起動後に DB migration が済んだ状態での旧版への自動ダウングレードは行わない。
+旧配置に残っている場合は直下の `bmz-updater.exe`、旧更新作業なら `.bmz-update/job-*/helper.exe` を使う。
 
 ### updater の互換性
 
-現在の protocol は 1。署名済み更新情報の `min_updater_protocol` を満たさない場合は、
+現在の protocol は 2。署名済み更新情報の `min_updater_protocol` を満たさない場合は、
 `bridge_tag` が指す旧形式の橋渡し版へ先に更新する。次回起動後、新updaterが最新版を取得する。
 橋渡しは現在版より新しく、目的版より古く、選択チャンネル内にあることを検証する。最大8段で打ち切る。
 橋渡し版のReleaseと `updates.json` を削除しないこと。
 `bmz-package.json` の `min_updater_protocol` も「このパッケージを読んで適用するのに必要なprotocol」を指す。
 新helper自身がprotocol 2でも、橋渡し版のパッケージ形式とこの値は1を維持する。
+
+新配置の公開は次の順序で行う（このコード変更だけではReleaseを公開しない）:
+
+1. Repository variable `BMZ_WINDOWS_UPDATER_LAYOUT=legacy` を設定し、新旧配置対応の本体と
+   updater を旧配置で含む橋渡し版を公開する。package / release の minimum protocol は 1。
+2. 橋渡し版を公開後、`BMZ_WINDOWS_UPDATER_LAYOUT=grouped`（既定値）に戻し、
+   `BMZ_UPDATE_BRIDGE_TAG` にその公開済みタグを設定する。
+3. それより新しい版を公開する。minimum protocol は 2。protocol 1 の利用者は橋渡し版を
+   経由してから新配置へ進む。移行時は旧helper・旧メタデータを退避して除去し、新メタデータを最後に確定する。
+
+新配置で橋渡しタグが未設定の場合、公開workflowと更新情報生成は失敗させる。
+`BMZ_MIN_UPDATER_PROTOCOL` を下げても、新配置を protocol 1 として公開することはできない。
+ローカルのパッケージ作成・公開しないdry runには橋渡しタグは不要。
 
 ## 更新の署名と公開設定
 
@@ -139,12 +163,17 @@ cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
 cargo fmt --check
 pwsh -NoProfile -File scripts/test-windows-installer.ps1
+cargo build -p bmz-player -p bmz-updater
+pwsh -NoProfile -File scripts/test-windows-package-paths.ps1
 ```
 
 公開前には、更新署名付きの旧版→新版でWindows実配布物とmacOS両CPUの更新・再起動・最低対応OSを確認する。
 Setup の回帰検証は Inno Setup の `iscc.exe` を必要とする。独自 AppId と `.local/installer-test-*` の
 隔離配置を使い、新規・更新・再インストール・アンインストールで未知ファイルを保持することを検証する。
 テスト用の HKCU アンインストール登録とショートカットはアンインストール時に除去し、検証ログは残す。
+保存先テストは実exeを `.local/package-path-test-*` に配置し、AppData・環境変数・作業フォルダも
+隔離して新旧配置、初回起動、installer、上書き、書込失敗、メタデータのバージョン不一致を検証する。
+配布済みstagingで検証する場合は `-BinaryDirectory "dist/windows/BMZ Player"` を指定する。
 macOSはアドホック署名・未公証の実配布物をダウンロードして、初回起動とSparkle更新後の再起動を確認する。
 通常データとは別のテスト用データを使い、通信中断、容量不足、別プロセス、読み取り専用配置も確認する。
 

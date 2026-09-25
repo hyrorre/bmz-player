@@ -47,6 +47,9 @@ function Run-Installer([string]$Executable, [string]$Label) {
 }
 
 Write-Fixture $source "bmz-player.exe" "fixture only - never execute"
+Write-Fixture $source "updater\bmz-updater.exe" "updater fixture only"
+Write-Fixture $source "updater\bmz-package.json" "metadata fixture only"
+Write-Fixture $source "updater\instance.lock" ""
 Write-Fixture $source "resources\skins\default\play7.json" "old packaged skin"
 Write-Fixture $source "resources\obsolete.txt" "old package only"
 # Capture only the returned path; compiler output goes to the host.
@@ -62,6 +65,8 @@ $preserved = @{
     "data\config.toml" = "user configuration"
     "data\profiles\default\score.db" = "score fixture"
     "unknown.txt" = "unknown root file"
+    "updater\job-old\backup\0" = "recovery backup"
+    "updater\update.lock" = ""
 }
 foreach ($entry in $preserved.GetEnumerator()) { Write-Fixture $target $entry.Key $entry.Value }
 Write-Fixture $target "resources\skins\default\play7.json" "edited packaged file"

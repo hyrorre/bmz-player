@@ -31,6 +31,8 @@ env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
   BMZ_UPDATE_PUBLIC_KEY: ${{ vars.BMZ_UPDATE_PUBLIC_KEY }}
+  BMZ_WINDOWS_UPDATER_LAYOUT: ${{ vars.BMZ_WINDOWS_UPDATER_LAYOUT || 'grouped' }}
+  BMZ_UPDATE_BRIDGE_TAG: ${{ vars.BMZ_UPDATE_BRIDGE_TAG }}
 
 jobs:
   metadata:
@@ -188,8 +190,12 @@ jobs:
           if ("${{ needs.metadata.outputs.should_upload }}" -eq "true" -and -not $env:BMZ_UPDATE_PUBLIC_KEY) {
             throw "BMZ_UPDATE_PUBLIC_KEY must be configured before publishing automatic updates"
           }
+          if ("${{ needs.metadata.outputs.should_upload }}" -eq "true" -and $env:BMZ_WINDOWS_UPDATER_LAYOUT -eq "grouped" -and -not $env:BMZ_UPDATE_BRIDGE_TAG) {
+            throw "Publish a legacy-layout protocol-2 bridge first, then set BMZ_UPDATE_BRIDGE_TAG"
+          }
           .\scripts\package-windows.ps1 `
             -Installer `
+            -UpdaterLayout $env:BMZ_WINDOWS_UPDATER_LAYOUT `
             -DllDir (Join-Path $env:VCPKG_ROOT "installed\$env:VCPKG_DEFAULT_TRIPLET\bin")
 
       - name: Test portable update recovery
@@ -199,6 +205,10 @@ jobs:
       - name: Test installer file preservation
         shell: pwsh
         run: .\scripts\test-windows-installer.ps1
+
+      - name: Test packaged data isolation
+        shell: pwsh
+        run: .\scripts\test-windows-package-paths.ps1 -BinaryDirectory "dist\windows\BMZ Player"
 
       - name: Verify packaged executable
         shell: pwsh

@@ -109,17 +109,17 @@ pub fn installed_package() -> Option<(PathBuf, PackageManifest)> {
     .then_some((root, manifest))
 }
 
-pub fn startup_guard() -> Result<Option<File>> {
+pub fn startup_guard() -> Result<Option<Vec<File>>> {
     #[cfg(windows)]
     {
         let exe = std::env::current_exe()?;
         let root = exe.parent().context("missing executable directory")?;
         ensure!(
-            !bmz_updater::transaction::active_path(root).exists(),
-            "前回の更新が中断されました。bmz-updater --recover \"{}\" を実行してください。",
+            bmz_updater::transaction::pending_update(root)?.is_none(),
+            "前回の更新が中断されました。updater/bmz-updater.exe（旧配置では直下のbmz-updater.exe） --recover \"{}\" を実行してください。",
             root.display()
         );
-        if installed_package().is_some_and(|(_, p)| p.kind == PackageKind::Portable) {
+        if PackageManifest::read_optional(root)?.is_some_and(|p| p.kind == PackageKind::Portable) {
             return Ok(Some(bmz_updater::process::instance_guard(root)?));
         }
     }

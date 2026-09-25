@@ -12,6 +12,8 @@ param(
     [switch]$NoDefaultFeatures,
     [string]$Features = "",
     [switch]$SkipRustLicenseReport,
+    [ValidateSet("grouped", "legacy")]
+    [string]$UpdaterLayout = "grouped",
     [switch]$Smoke
 )
 
@@ -420,7 +422,8 @@ New-Item -ItemType Directory -Force -Path (Join-Path $resourcesDir "fonts\noto-c
 New-Item -ItemType Directory -Force -Path $licensesDir | Out-Null
 
 Copy-RequiredFile $binary (Join-Path $stageDir "bmz-player.exe")
-Copy-RequiredFile (Join-Path (Split-Path -Parent $binary) "bmz-updater.exe") (Join-Path $stageDir "bmz-updater.exe")
+$updaterRelative = if ($UpdaterLayout -eq "legacy") { "bmz-updater.exe" } else { "updater\bmz-updater.exe" }
+Copy-RequiredFile (Join-Path (Split-Path -Parent $binary) "bmz-updater.exe") (Join-Path $stageDir $updaterRelative)
 Copy-DirectoryMirror (Join-Path $repoRoot "data\skins\default") (Join-Path $resourcesDir "skins\default")
 Copy-DirectoryMirror (Join-Path $repoRoot "data\skins\Rmz-skin") (Join-Path $resourcesDir "skins\Rmz-skin")
 Copy-DirectoryMirror (Join-Path $repoRoot "data\skins\mz-select") (Join-Path $resourcesDir "skins\mz-select")
@@ -471,19 +474,27 @@ foreach ($dir in $dllDirs) {
 
 $arch = Resolve-InstallerArch $Target
 $updateMetadataScript = Join-Path $repoRoot "scripts\generate-update-metadata.mjs"
-Invoke-Native "node" @($updateMetadataScript, "package", $stageDir, "portable", "windows-$arch", $version)
+Invoke-Native "node" @($updateMetadataScript, "package", $stageDir, "portable", "windows-$arch", $version, $UpdaterLayout)
 
 if ($Smoke) {
     Write-Host "==> Running packaged smoke test"
-    $oldDataDir = $env:BMZ_DATA_DIR
     $smokeRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("bmz-player-windows-smoke-" + [Guid]::NewGuid().ToString("N"))
+    $savedOverrides = @{}
+    $overrideNames = @("BMZ_DATA_DIR", "BMZ_CACHE_DIR", "BMZ_LOGS_DIR", "BMZ_RESOURCE_DIR")
     try {
-        $env:BMZ_DATA_DIR = Join-Path $smokeRoot "data"
-        Invoke-Native (Join-Path $stageDir "bmz-player.exe") @("--boot-play-sample", "--smoke-exit-after-frames", "3")
+        foreach ($name in $overrideNames) {
+            $savedOverrides[$name] = [Environment]::GetEnvironmentVariable($name, "Process")
+            [Environment]::SetEnvironmentVariable($name, $null, "Process")
+        }
+        Copy-Item -LiteralPath $stageDir -Destination $smokeRoot -Recurse
+        Invoke-Native (Join-Path $smokeRoot "bmz-player.exe") @("--boot-play-sample", "--smoke-exit-after-frames", "3")
+        Require-Directory (Join-Path $smokeRoot "data\profiles")
+        if (Test-Path -LiteralPath (Join-Path $stageDir "data")) { throw "Smoke test contaminated package staging" }
     } finally {
-        $env:BMZ_DATA_DIR = $oldDataDir
-        $smokeLock = Join-Path $stageDir ".bmz-instance.lock"
-        if (Test-Path -LiteralPath $smokeLock) { Remove-Item -LiteralPath $smokeLock -Force }
+        foreach ($name in $overrideNames) {
+            [Environment]::SetEnvironmentVariable($name, $savedOverrides[$name], "Process")
+        }
+        Write-Host "Smoke test data retained at $smokeRoot"
     }
 }
 
@@ -495,7 +506,7 @@ if ($Installer) {
     $arch = Resolve-InstallerArch $Target
 
     Write-Host "==> Building Inno Setup installer"
-    Invoke-Native "node" @($updateMetadataScript, "package", $stageDir, "installer", "windows-$arch", $version)
+    Invoke-Native "node" @($updateMetadataScript, "package", $stageDir, "installer", "windows-$arch", $version, $UpdaterLayout)
     Invoke-Native $iscc @(
         "/DAppVersion=$version",
         "/DSourceDir=$stageDir",
@@ -505,7 +516,7 @@ if ($Installer) {
         $issPath
     )
     # Keep staging ready for the portable ZIP after building the installer.
-    Invoke-Native "node" @($updateMetadataScript, "package", $stageDir, "portable", "windows-$arch", $version)
+    Invoke-Native "node" @($updateMetadataScript, "package", $stageDir, "portable", "windows-$arch", $version, $UpdaterLayout)
 }
 
 Write-Host "==> Done"

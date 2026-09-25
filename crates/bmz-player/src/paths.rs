@@ -2,6 +2,7 @@ use std::env;
 use std::path::{Component, Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
+use bmz_updater::manifest::PackageKind;
 
 pub const RESOURCE_PATH_PREFIX: &str = "resource:";
 pub const DATA_PATH_PREFIX: &str = "data:";
@@ -53,27 +54,77 @@ pub struct ProfilePaths {
 pub fn resolve_app_paths() -> Result<AppPaths> {
     let current_dir = env::current_dir().context("failed to resolve current directory")?;
     let exe_path = env::current_exe().ok();
-    let exe_dir = exe_path.as_ref().and_then(|path| path.parent()).map(Path::to_path_buf);
     let development_data_dir = development_workspace_data_dir(exe_path.as_deref());
+    #[cfg(windows)]
+    let package_kind = bmz_updater::manifest::PackageManifest::read_optional(
+        exe_path.as_deref().and_then(Path::parent).context("missing executable directory")?,
+    )?
+    .map(|manifest| manifest.kind);
+    #[cfg(not(windows))]
+    let package_kind = None;
 
-    let resource_dir = env_path("BMZ_RESOURCE_DIR").unwrap_or_else(|| {
-        default_resource_dir(
-            &current_dir,
-            exe_path.as_deref(),
-            exe_dir.as_deref(),
-            development_data_dir.as_deref(),
-        )
+    resolve_app_paths_from(
+        &current_dir,
+        exe_path.as_deref(),
+        development_data_dir.as_deref(),
+        package_kind,
+        PathOverrides {
+            resource: env_path("BMZ_RESOURCE_DIR"),
+            data: env_path("BMZ_DATA_DIR"),
+            cache: env_path("BMZ_CACHE_DIR"),
+            logs: env_path("BMZ_LOGS_DIR"),
+        },
+    )
+}
+
+#[derive(Default)]
+struct PathOverrides {
+    resource: Option<PathBuf>,
+    data: Option<PathBuf>,
+    cache: Option<PathBuf>,
+    logs: Option<PathBuf>,
+}
+
+fn resolve_app_paths_from(
+    current_dir: &Path,
+    exe_path: Option<&Path>,
+    development_data_dir: Option<&Path>,
+    package_kind: Option<PackageKind>,
+    overrides: PathOverrides,
+) -> Result<AppPaths> {
+    let exe_dir = exe_path.and_then(Path::parent);
+    let packaged_root =
+        package_kind.map(|_| exe_dir.context("missing package directory")).transpose()?;
+
+    let resource_dir = overrides.resource.unwrap_or_else(|| {
+        if let Some(root) = packaged_root {
+            return root.join("resources");
+        }
+        default_resource_dir(current_dir, exe_path, exe_dir, development_data_dir)
     });
-    let ResolvedDataDir { path: data_dir, keep_auxiliary_dirs_with_data } =
-        match env_path("BMZ_DATA_DIR") {
-            Some(path) => ResolvedDataDir { path, keep_auxiliary_dirs_with_data: true },
-            None => {
-                default_data_dir(&current_dir, exe_dir.as_deref(), development_data_dir.as_deref())
+    let ResolvedDataDir { path: data_dir, keep_auxiliary_dirs_with_data } = match overrides.data {
+        Some(path) => ResolvedDataDir { path, keep_auxiliary_dirs_with_data: true },
+        None => {
+            if let Some(root) = packaged_root {
+                let adjacent = root.join("data");
+                if package_kind == Some(PackageKind::Portable) || adjacent.try_exists()? {
+                    ResolvedDataDir { path: adjacent, keep_auxiliary_dirs_with_data: true }
+                } else {
+                    ResolvedDataDir {
+                        path: platform_data_dir().context("user data directory unavailable")?,
+                        keep_auxiliary_dirs_with_data: false,
+                    }
+                }
+            } else {
+                default_data_dir(current_dir, exe_dir, development_data_dir)
             }
-        };
-    let cache_dir = env_path("BMZ_CACHE_DIR")
+        }
+    };
+    let cache_dir = overrides
+        .cache
         .unwrap_or_else(|| default_cache_dir(&data_dir, keep_auxiliary_dirs_with_data));
-    let logs_dir = env_path("BMZ_LOGS_DIR")
+    let logs_dir = overrides
+        .logs
         .unwrap_or_else(|| default_logs_dir(&data_dir, keep_auxiliary_dirs_with_data));
 
     Ok(AppPaths::from_dirs(resource_dir, data_dir, cache_dir, logs_dir))
@@ -505,6 +556,124 @@ mod tests {
         let stamp =
             std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
         env::temp_dir().join(format!("bmz-player-paths-{label}-{}-{stamp}", std::process::id()))
+    }
+
+    #[test]
+    fn portable_first_launch_uses_adjacent_data_even_from_another_data_directory() {
+        let root = temporary_path_root("portable-first");
+        let cwd = root.join("other-installation");
+        std::fs::create_dir_all(cwd.join("data")).unwrap();
+        let exe = root.join("portable/bmz-player.exe");
+        let paths = resolve_app_paths_from(
+            &cwd,
+            Some(&exe),
+            Some(&cwd.join("data")),
+            Some(PackageKind::Portable),
+            PathOverrides::default(),
+        )
+        .unwrap();
+        assert_eq!(paths.data_dir, root.join("portable/data"));
+        assert_eq!(paths.cache_dir, paths.data_dir.join("cache"));
+        assert_eq!(paths.logs_dir, paths.data_dir.join("logs"));
+        assert_eq!(paths.resource_dir, root.join("portable/resources"));
+        assert_eq!(paths.config_toml, paths.data_dir.join("config.toml"));
+        assert_eq!(paths.library_db, paths.data_dir.join("library.db"));
+        let profile = resolve_profile_paths(&paths, "default").unwrap();
+        assert_eq!(profile.score_db, paths.data_dir.join("profiles/default/score.db"));
+        assert!(!paths.data_dir.exists()); // Resolving/help must not create user state.
+        paths.ensure_required_dirs().unwrap();
+        assert!(paths.data_dir.join("skins").is_dir());
+        assert!(!cwd.join("data/profiles").exists());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn explicit_overrides_win_for_every_distribution_and_data_override_groups_auxiliary_paths() {
+        let root = temporary_path_root("overrides");
+        let exe = root.join("app/bmz-player.exe");
+        for kind in [None, Some(PackageKind::Portable), Some(PackageKind::Installer)] {
+            let paths = resolve_app_paths_from(
+                &root,
+                Some(&exe),
+                None,
+                kind,
+                PathOverrides { data: Some(root.join("custom-data")), ..Default::default() },
+            )
+            .unwrap();
+            assert_eq!(paths.data_dir, root.join("custom-data"));
+            assert_eq!(paths.cache_dir, root.join("custom-data/cache"));
+            assert_eq!(paths.logs_dir, root.join("custom-data/logs"));
+            let paths = resolve_app_paths_from(
+                &root,
+                Some(&exe),
+                None,
+                kind,
+                PathOverrides {
+                    data: Some(root.join("custom-data")),
+                    resource: Some(root.join("custom-resources")),
+                    cache: Some(root.join("custom-cache")),
+                    logs: Some(root.join("custom-logs")),
+                },
+            )
+            .unwrap();
+            assert_eq!(paths.data_dir, root.join("custom-data"));
+            assert_eq!(paths.resource_dir, root.join("custom-resources"));
+            assert_eq!(paths.cache_dir, root.join("custom-cache"));
+            assert_eq!(paths.logs_dir, root.join("custom-logs"));
+        }
+        assert!(!root.exists());
+    }
+
+    #[test]
+    fn installer_ignores_working_directory_but_preserves_existing_adjacent_data() {
+        let root = temporary_path_root("installer");
+        std::fs::create_dir_all(root.join("data")).unwrap();
+        let exe = root.join("installed/bmz-player.exe");
+        let paths = resolve_app_paths_from(
+            &root,
+            Some(&exe),
+            None,
+            Some(PackageKind::Installer),
+            PathOverrides::default(),
+        )
+        .unwrap();
+        assert_eq!(paths.data_dir, platform_data_dir().unwrap());
+        assert_eq!(paths.cache_dir, default_cache_dir(&paths.data_dir, false));
+        assert_eq!(paths.logs_dir, default_logs_dir(&paths.data_dir, false));
+        assert_eq!(paths.resource_dir, root.join("installed/resources"));
+        std::fs::create_dir_all(root.join("installed/data")).unwrap();
+        let paths = resolve_app_paths_from(
+            &root,
+            Some(&exe),
+            None,
+            Some(PackageKind::Installer),
+            PathOverrides::default(),
+        )
+        .unwrap();
+        assert_eq!(paths.data_dir, root.join("installed/data"));
+        assert_eq!(paths.cache_dir, paths.data_dir.join("cache"));
+        assert_eq!(paths.logs_dir, paths.data_dir.join("logs"));
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn portable_data_creation_failure_never_redirects_to_working_directory() {
+        let root = temporary_path_root("portable-blocked");
+        std::fs::create_dir_all(root.join("portable")).unwrap();
+        std::fs::write(root.join("portable/data"), b"not a directory").unwrap();
+        let exe = root.join("portable/bmz-player.exe");
+        let paths = resolve_app_paths_from(
+            &root,
+            Some(&exe),
+            None,
+            Some(PackageKind::Portable),
+            PathOverrides::default(),
+        )
+        .unwrap();
+        assert!(paths.ensure_required_dirs().is_err());
+        assert_eq!(paths.data_dir, root.join("portable/data"));
+        assert!(!root.join("data").exists());
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     fn create_development_workspace(root: &Path) -> PathBuf {

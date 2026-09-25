@@ -1,6 +1,6 @@
 import { createHash, createPrivateKey, createPublicKey, sign, verify } from 'node:crypto'
 import { createReadStream } from 'node:fs'
-import { lstat, readdir, writeFile } from 'node:fs/promises'
+import { lstat, mkdir, readdir, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
 
@@ -16,7 +16,26 @@ export function validateVersion(version) {
   return version
 }
 
-export async function packageManifest(root, kind, target, version) {
+function packageLayout(layout) {
+  if (layout === 'legacy')
+    return {
+      manifest: 'bmz-package.json',
+      helper: 'bmz-updater.exe',
+      lock: '.bmz-instance.lock',
+      protocol: 1,
+    }
+  if (layout === 'grouped')
+    return {
+      manifest: 'updater/bmz-package.json',
+      helper: 'updater/bmz-updater.exe',
+      lock: 'updater/instance.lock',
+      protocol: 2,
+    }
+  throw new Error('Invalid updater layout')
+}
+
+export async function packageManifest(root, kind, target, version, layout = 'grouped') {
+  const paths = packageLayout(layout)
   validateVersion(version)
   if (
     !['portable', 'installer'].includes(kind) ||
@@ -27,8 +46,8 @@ export async function packageManifest(root, kind, target, version) {
   async function walk(relative = '') {
     for (const name of (await readdir(path.join(root, relative))).sort()) {
       const file = relative ? `${relative}/${name}` : name
-      if (file === 'bmz-package.json') continue
-      if (file === '.bmz-instance.lock') {
+      if (file === paths.manifest) continue
+      if (file === paths.lock) {
         const lock = await lstat(path.join(root, file))
         if (!lock.isFile() || lock.isSymbolicLink() || lock.size !== 0)
           throw new Error('Invalid instance lock')
@@ -37,7 +56,8 @@ export async function packageManifest(root, kind, target, version) {
       if (
         file !== 'resources' &&
         !file.startsWith('resources/') &&
-        !['bmz-player.exe', 'bmz-updater.exe'].includes(file) &&
+        !(layout === 'grouped' && file === 'updater') &&
+        !['bmz-player.exe', paths.helper].includes(file) &&
         !/^[^/]+\.dll$/i.test(file)
       )
         throw new Error(`Refusing to package user/unmanaged file: ${file}`)
@@ -51,9 +71,9 @@ export async function packageManifest(root, kind, target, version) {
     }
   }
   await walk()
-  for (const required of ['bmz-player.exe', 'bmz-updater.exe'])
+  for (const required of ['bmz-player.exe', paths.helper])
     if (!files.some((file) => file.path === required)) throw new Error(`Missing ${required}`)
-  return { schema: 1, kind, target, version, min_updater_protocol: 1, files }
+  return { schema: 1, kind, target, version, min_updater_protocol: paths.protocol, files }
 }
 
 export function signManifest(manifest, privateKey, expectedPublicKey) {
@@ -70,10 +90,18 @@ export function signManifest(manifest, privateKey, expectedPublicKey) {
   return { payload: payload.toString('base64'), signature: signature.toString('base64') }
 }
 
-export async function releaseManifest(directory, version, minProtocol = 1, bridge = null) {
+export async function releaseManifest(
+  directory,
+  version,
+  minProtocol = 2,
+  bridge = null,
+  layout = 'grouped',
+) {
   validateVersion(version)
   if (!Number.isSafeInteger(minProtocol) || minProtocol < 1)
     throw new Error('Invalid updater protocol')
+  if (minProtocol < packageLayout(layout).protocol)
+    throw new Error('Updater protocol is too old for the package layout')
   if (bridge !== null) validateVersion(bridge.replace(/^v/, ''))
   if (minProtocol > 1 && !bridge)
     throw new Error('A bridge release is required for a new updater protocol')
@@ -99,20 +127,24 @@ export async function releaseManifest(directory, version, minProtocol = 1, bridg
 
 async function main() {
   const [mode, ...args] = process.argv.slice(2)
-  if (mode === 'package' && args.length === 4) {
-    const [root, kind, target, version] = args
-    await writeFile(path.join(root, '.bmz-instance.lock'), '', { flag: 'a' })
+  if (mode === 'package' && [4, 5].includes(args.length)) {
+    const [root, kind, target, version, layout = 'grouped'] = args
+    const paths = packageLayout(layout)
+    await mkdir(path.dirname(path.join(root, paths.lock)), { recursive: true })
+    await writeFile(path.join(root, paths.lock), '', { flag: 'a' })
     await writeFile(
-      path.join(root, 'bmz-package.json'),
-      JSON.stringify(await packageManifest(root, kind, target, version), null, 2) + '\n',
+      path.join(root, paths.manifest),
+      JSON.stringify(await packageManifest(root, kind, target, version, layout), null, 2) + '\n',
     )
   } else if (mode === 'release' && args.length === 2) {
     const [directory, version] = args
+    const layout = process.env.BMZ_WINDOWS_UPDATER_LAYOUT || 'grouped'
     const manifest = await releaseManifest(
       directory,
       version,
-      Number(process.env.BMZ_MIN_UPDATER_PROTOCOL || 1),
+      Number(process.env.BMZ_MIN_UPDATER_PROTOCOL || packageLayout(layout).protocol),
       process.env.BMZ_UPDATE_BRIDGE_TAG || null,
+      layout,
     )
     const key = process.env.BMZ_UPDATE_PRIVATE_KEY
     if (!key || !process.env.BMZ_UPDATE_PUBLIC_KEY)
@@ -121,7 +153,10 @@ async function main() {
       path.join(directory, 'updates.json'),
       JSON.stringify(signManifest(manifest, key, process.env.BMZ_UPDATE_PUBLIC_KEY)) + '\n',
     )
-  } else throw new Error('Usage: package ROOT KIND TARGET VERSION | release DIRECTORY VERSION')
+  } else
+    throw new Error(
+      'Usage: package ROOT KIND TARGET VERSION [grouped|legacy] | release DIRECTORY VERSION',
+    )
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href)

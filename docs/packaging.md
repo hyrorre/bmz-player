@@ -51,8 +51,10 @@ staging layout:
 ```text
 BMZ Player/
   bmz-player.exe
-  bmz-updater.exe
-  bmz-package.json
+  updater/
+    bmz-updater.exe
+    bmz-package.json
+    instance.lock
   resources/
     bmz-player.ico
     skins/
@@ -71,7 +73,50 @@ BMZ Player/
 
 `bmz-player.exe` の隣の `resources` が runtime の `resource_dir` になる。
 `config.toml`, `library.db`, `profiles`, `score.db`, `replay` などのユーザー状態は
-installer に含めず、既存の Windows path 解決で `data_dir` 側へ作成する。
+installer / ZIP に含めず、起動時に `data_dir` 側へ作成する。
+
+### Windows の保存先と優先順位
+
+空でない `BMZ_DATA_DIR` / `BMZ_CACHE_DIR` / `BMZ_LOGS_DIR` / `BMZ_RESOURCE_DIR` は、
+配布形式にかかわらず、それぞれの保存先を最優先で上書きする。相対指定は起動時の
+作業フォルダを基準とするため、固定したい場合は絶対パスを指定する。
+
+| 実行形態 | `BMZ_DATA_DIR` 未指定時の `data_dir` |
+| --- | --- |
+| portable | exe 横の `data`。未作成でも必ずこの場所を選び、起動時に作成する |
+| installer | exe 横に `data` が既にあれば使用し、なければ `%APPDATA%\BMZ Player` |
+| Cargo 開発実行 | exe 横に `data` が既にあれば使用し、なければワークスペースの `data` |
+
+portable / installer は exe 横の `updater/bmz-package.json`（旧配置は `bmz-package.json`）
+の `kind` で識別する。exe のバージョン差で保存先を切り替えない。新配置を優先し、
+存在するメタデータが壊れていれば起動をエラーにする。メタデータのない旧配布は従来の
+探索順を維持する。開発実行は実際のワークスペースの Cargo 出力であることを確認する。
+
+正式な Windows パッケージは作業フォルダの `data` を探索しない。
+portable の `data` 作成失敗時はエラーとし、AppData へ切り替えない。
+既存の AppData の設定・DBを自動移動・コピー・削除しないため、exe 横の `data` が
+空なら新規データとして起動する。利用者が明示した曲ルートやスクリーンショットの
+絶対パスは書き換えない。
+
+`BMZ_DATA_DIR` 指定時、exe 横の `data` 使用時、開発実行時は、キャッシュとログの
+既定値も選択した `data_dir/cache` と `data_dir/logs` にまとめる。
+installer が AppData を使用する場合のみ `%LOCALAPPDATA%\BMZ Player\cache` と
+`%LOCALAPPDATA%\BMZ Player\logs` を既定値にする。それぞれの環境変数で個別に上書き可能。
+`resource_dir` は配布版では exe 横の `resources`、開発時は exe 横の `resources` が
+あればそれを使用し、なければワークスペースの `data` を使用する。
+macOS / Linux の配布パス解決は変更しない。
+
+### Windows updater の配置
+
+通常は `-UpdaterLayout grouped`（既定値）で、updater 本体・メタデータ・ロック・
+更新作業を `updater/` へまとめる。`data` の上書き先が別ドライブでも、更新作業領域は
+exe と同じボリュームに置く。`updater/update.lock`、`active.json`、`job-*` は実行時の
+状態であり、配布物には含めない。`-Smoke` はパッケージの一時コピーで起動し、
+検証用データを staging へ生成しない。
+
+旧 updater から自動更新可能な橋渡し版を作る場合のみ `-UpdaterLayout legacy` を指定する。
+この場合は旧配置・package protocol 1 のまま、新旧配置対応の protocol 2 バイナリを同梱する。
+公開順序と `BMZ_UPDATE_BRIDGE_TAG` の設定は [自動更新](auto-update.md) を参照。
 
 Inno Setup installer まで作る:
 
@@ -543,7 +588,7 @@ skipped_version = ""
 `今回はアップデートしない` はその起動中だけ抑止し、`このリリースをスキップ` は
 `skipped_version` に保存して次の別 version まで通知しない。
 
-Windows は `bmz-package.json` の形式に従ってinstaller/portableを選択する。
+Windows は `updater/bmz-package.json`（旧配置は直下）の形式に従ってinstaller/portableを選択する。
 portableは署名付き更新情報とファイル一覧を検証し、専用helperで置換・復旧する。
 macOS はSparkleで署名済み `.app.zip` を適用する。いずれも検証後にユーザーが
 「更新して再起動」を選ぶ。旧版・開発ビルドなど形式不明の環境は手動更新を案内する。

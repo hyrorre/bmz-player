@@ -151,8 +151,10 @@ pub fn managed_path(value: &str) -> Result<PathBuf> {
     let lower = value.to_ascii_lowercase();
     ensure!(
         value == super::MANIFEST
+            || value == super::LEGACY_MANIFEST
             || value == "bmz-player.exe"
-            || value == "bmz-updater.exe"
+            || value == super::HELPER
+            || value == super::LEGACY_HELPER
             || (lower.ends_with(".dll") && !value.contains('/'))
             || value.starts_with("resources/"),
         "package must not manage user files: {value}"
@@ -192,12 +194,36 @@ pub fn reject_link(path: &Path) -> Result<()> {
 }
 
 impl PackageManifest {
+    /// Prefer the grouped layout, but never hide a corrupt manifest behind a legacy fallback.
+    pub fn read_optional(root: &Path) -> Result<Option<Self>> {
+        for relative in [super::MANIFEST, super::LEGACY_MANIFEST] {
+            let path = checked_path(root, relative)?;
+            if !path.try_exists()? {
+                continue;
+            }
+            ensure!(path.metadata()?.len() <= 16 * 1024 * 1024, "package manifest too large");
+            let manifest: Self = serde_json::from_reader(File::open(path)?)?;
+            manifest.validate()?;
+            ensure!(manifest.manifest_path() == relative, "package layout mismatch");
+            return Ok(Some(manifest));
+        }
+        Ok(None)
+    }
+
     pub fn read(root: &Path) -> Result<Self> {
-        let path = checked_path(root, super::MANIFEST)?;
-        ensure!(path.metadata()?.len() <= 16 * 1024 * 1024, "package manifest too large");
-        let manifest: Self = serde_json::from_reader(File::open(path)?)?;
-        manifest.validate()?;
-        Ok(manifest)
+        Self::read_optional(root)?.context("package manifest missing")
+    }
+
+    pub fn helper_path(&self) -> &'static str {
+        if self.files.iter().any(|entry| entry.path == super::HELPER) {
+            super::HELPER
+        } else {
+            super::LEGACY_HELPER
+        }
+    }
+
+    pub fn manifest_path(&self) -> &'static str {
+        if self.helper_path() == super::HELPER { super::MANIFEST } else { super::LEGACY_MANIFEST }
     }
     pub fn validate(&self) -> Result<()> {
         ensure!(
@@ -215,14 +241,24 @@ impl PackageManifest {
         for entry in &self.files {
             managed_path(&entry.path)?;
             ensure!(
-                entry.path != super::MANIFEST && seen.insert(entry.path.to_lowercase()),
+                entry.path != super::MANIFEST
+                    && entry.path != super::LEGACY_MANIFEST
+                    && seen.insert(entry.path.to_lowercase()),
                 "duplicate/reserved package file"
             );
             ensure!(valid_hash(&entry.sha256), "invalid file hash");
             total = total.checked_add(entry.size).context("package size overflow")?;
         }
         ensure!(total <= 16 * 1024 * 1024 * 1024, "package expands beyond limit");
-        for required in ["bmz-player.exe", "bmz-updater.exe"] {
+        ensure!(
+            !(seen.contains(super::HELPER) && seen.contains(super::LEGACY_HELPER)),
+            "package contains both updater layouts"
+        );
+        ensure!(
+            self.helper_path() != super::HELPER || self.min_updater_protocol >= 2,
+            "grouped updater layout requires protocol 2"
+        );
+        for required in ["bmz-player.exe", self.helper_path()] {
             ensure!(self.files.iter().any(|f| f.path == required), "missing {required}");
         }
         Ok(())
@@ -248,9 +284,62 @@ impl PackageManifest {
 }
 
 #[cfg(test)]
+pub(crate) fn write_test_package(root: &Path, version: &str, files: &[(&str, &[u8])]) {
+    let entries = files
+        .iter()
+        .map(|(name, bytes)| {
+            let path = root.join(name);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(&path, bytes).unwrap();
+            PackageFile {
+                path: (*name).into(),
+                size: bytes.len() as u64,
+                sha256: hash_file(&path).unwrap(),
+            }
+        })
+        .collect();
+    let manifest = PackageManifest {
+        schema: 1,
+        kind: PackageKind::Portable,
+        target: "windows-x64".into(),
+        version: version.into(),
+        min_updater_protocol: if files.iter().any(|(name, _)| *name == crate::HELPER) {
+            2
+        } else {
+            1
+        },
+        files: entries,
+    };
+    crate::transaction::atomic_json(&root.join(manifest.manifest_path()), &manifest).unwrap();
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use ed25519_dalek::{Signer, SigningKey};
+
+    #[test]
+    fn reads_both_layouts_and_never_falls_back_from_corrupt_grouped_metadata() {
+        let root = tempfile::tempdir().unwrap();
+        assert!(PackageManifest::read_optional(root.path()).unwrap().is_none());
+        write_test_package(
+            root.path(),
+            "0.4.0",
+            &[("bmz-player.exe", b"app"), (crate::LEGACY_HELPER, b"helper")],
+        );
+        assert_eq!(
+            PackageManifest::read(root.path()).unwrap().manifest_path(),
+            crate::LEGACY_MANIFEST
+        );
+        write_test_package(
+            root.path(),
+            "0.5.0",
+            &[("bmz-player.exe", b"app"), (crate::HELPER, b"helper")],
+        );
+        assert_eq!(PackageManifest::read(root.path()).unwrap().version, "0.5.0");
+        std::fs::write(root.path().join(crate::MANIFEST), b"invalid").unwrap();
+        assert!(PackageManifest::read_optional(root.path()).is_err());
+    }
 
     #[test]
     fn rejects_windows_aliases_traversal_user_data_and_reserved_names() {
@@ -267,12 +356,16 @@ mod tests {
             "resources/a ",
             "resources\\a",
             "data/score.db",
+            "updater/active.json",
+            "updater/job-123/backup/0",
+            "updater/instance.lock",
             "resources//a",
         ] {
             assert!(managed_path(path).is_err(), "{path}");
         }
         assert!(managed_path("resources/日本語 skin.png").is_ok());
         assert!(managed_path("bmz-updater.exe").is_ok());
+        assert!(managed_path(crate::HELPER).is_ok());
     }
 
     #[test]

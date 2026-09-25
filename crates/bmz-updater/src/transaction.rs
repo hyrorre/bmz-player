@@ -31,6 +31,19 @@ pub fn active_path(root: &Path) -> PathBuf {
     root.join(crate::WORK_DIR).join("active.json")
 }
 
+/// Recovery must also find protocol-1 journals when the executable/manifest is missing.
+pub fn pending_update(root: &Path) -> Result<Option<PathBuf>> {
+    let mut pending = None;
+    for directory in [crate::WORK_DIR, crate::LEGACY_WORK_DIR] {
+        let path = checked_path(root, &format!("{directory}/active.json"))?;
+        if path.try_exists()? {
+            ensure!(pending.is_none(), "multiple unfinished updates; recovery is ambiguous");
+            pending = Some(path);
+        }
+    }
+    Ok(pending)
+}
+
 pub fn new_work_dir(root: &Path) -> Result<PathBuf> {
     let base = checked_path(root, crate::WORK_DIR)?;
     fs::create_dir_all(&base)?;
@@ -90,6 +103,12 @@ pub fn preflight(root: &Path, work: &Path) -> Result<()> {
     reject_link(work)?;
     let old = PackageManifest::read(root)?;
     let new = PackageManifest::read(&work.join("stage"))?;
+    if old.manifest_path() != new.manifest_path() {
+        ensure!(
+            !checked_path(root, new.manifest_path())?.try_exists()?,
+            "new package manifest conflicts with an existing file"
+        );
+    }
     ensure!(
         old.kind == PackageKind::Portable && new.kind == PackageKind::Portable,
         "portable update required"
@@ -133,7 +152,7 @@ fn apply_with_checkpoint(
     work: &Path,
     mut checkpoint: impl FnMut(usize) -> Result<()>,
 ) -> Result<()> {
-    ensure!(!active_path(root).exists(), "unfinished update; recover it first");
+    ensure!(pending_update(root)?.is_none(), "unfinished update; recover it first");
     preflight(root, work)?;
     let old = PackageManifest::read(root)?;
     let new = PackageManifest::read(&work.join("stage"))?;
@@ -142,12 +161,13 @@ fn apply_with_checkpoint(
     let mut paths: BTreeSet<String> =
         old.files.iter().chain(&new.files).map(|f| f.path.clone()).collect();
     // The package manifest is the last file committed, and is rolled back like the executable.
-    paths.remove(crate::MANIFEST);
+    paths.insert(old.manifest_path().to_owned());
+    paths.remove(new.manifest_path());
     let mut operations = Vec::new();
-    for path in paths.into_iter().chain(Some(crate::MANIFEST.to_owned())) {
+    for path in paths.into_iter().chain(Some(new.manifest_path().to_owned())) {
         let target = checked_path(root, &path)?;
         operations.push(Operation {
-            install: path == crate::MANIFEST || new.files.iter().any(|f| f.path == path),
+            install: path == new.manifest_path() || new.files.iter().any(|f| f.path == path),
             existed: target.exists(),
             path,
         });
@@ -183,25 +203,24 @@ fn apply_with_checkpoint(
         )?;
         return Err(error.context("update failed; previous version restored"));
     }
-    finish(root, work, &journal)?;
+    finish(&active_path(root), work, &journal)?;
     Ok(())
 }
 
-fn finish(root: &Path, work: &Path, journal: &Journal) -> Result<()> {
+fn finish(active: &Path, work: &Path, journal: &Journal) -> Result<()> {
     // Retain backups, including user modifications to bundled resources. Never erase them implicitly.
     atomic_json(&work.join("result.json"), journal)?;
-    fs::remove_file(active_path(root))?;
+    fs::remove_file(active)?;
     Ok(())
 }
 
 /// Idempotent rollback of an interrupted transaction. Caller holds the exclusive instance lock.
 pub fn recover(root: &Path) -> Result<()> {
-    let path = checked_path(root, ".bmz-update/active.json")?;
-    if !path.exists() {
+    let Some(path) = pending_update(root)? else {
         return Ok(());
-    }
+    };
     ensure!(path.metadata()?.len() <= 32 * 1024 * 1024, "invalid journal size");
-    let journal: Journal = serde_json::from_reader(File::open(path)?)?;
+    let journal: Journal = serde_json::from_reader(File::open(&path)?)?;
     ensure!(
         journal.schema == 1 && journal.operations.len() <= 200_001,
         "unsupported update journal"
@@ -211,7 +230,8 @@ pub fn recover(root: &Path) -> Result<()> {
         journal.directory.starts_with("job-") && !journal.directory.contains('/'),
         "invalid journal directory"
     );
-    let work = checked_path(root, &format!("{}/{}", crate::WORK_DIR, journal.directory))?;
+    let work =
+        checked_path(path.parent().context("missing journal directory")?, &journal.directory)?;
     if !journal.complete {
         for (i, op) in journal.operations.iter().enumerate().rev() {
             managed_path(&op.path)?;
@@ -232,49 +252,26 @@ pub fn recover(root: &Path) -> Result<()> {
             }
         }
     }
-    finish(root, &work, &journal)
+    finish(&path, &work, &journal)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::manifest::{PackageFile, hash_file};
-
-    fn package(root: &Path, version: &str, files: &[(&str, &[u8])]) {
-        fs::create_dir_all(root).unwrap();
-        let mut entries = Vec::new();
-        for (name, bytes) in files {
-            let path = root.join(name);
-            fs::create_dir_all(path.parent().unwrap()).unwrap();
-            fs::write(&path, bytes).unwrap();
-            entries.push(PackageFile {
-                path: (*name).into(),
-                size: bytes.len() as u64,
-                sha256: hash_file(&path).unwrap(),
-            });
-        }
-        atomic_json(
-            &root.join(crate::MANIFEST),
-            &PackageManifest {
-                schema: 1,
-                kind: PackageKind::Portable,
-                target: "windows-x64".into(),
-                version: version.into(),
-                min_updater_protocol: 1,
-                files: entries,
-            },
-        )
-        .unwrap();
-    }
+    use crate::manifest::write_test_package as package;
 
     fn fixture() -> (tempfile::TempDir, PathBuf) {
+        fixture_with_layout(false, false)
+    }
+
+    fn fixture_with_layout(old_grouped: bool, new_grouped: bool) -> (tempfile::TempDir, PathBuf) {
         let temp = tempfile::tempdir().unwrap();
         package(
             temp.path(),
             "0.4.0",
             &[
                 ("bmz-player.exe", b"old app"),
-                ("bmz-updater.exe", b"old updater"),
+                (if old_grouped { crate::HELPER } else { crate::LEGACY_HELPER }, b"old updater"),
                 ("old.dll", b"old library"),
                 ("resources/skin.txt", b"stock"),
             ],
@@ -289,7 +286,7 @@ mod tests {
             "0.5.0",
             &[
                 ("bmz-player.exe", b"new app"),
-                ("bmz-updater.exe", b"new updater"),
+                (if new_grouped { crate::HELPER } else { crate::LEGACY_HELPER }, b"new updater"),
                 ("new.dll", b"new library"),
                 ("resources/skin.txt", b"new stock"),
             ],
@@ -310,6 +307,77 @@ mod tests {
     fn assert_user_data(root: &Path) {
         assert_eq!(fs::read(root.join("data/score.db")).unwrap(), b"scores");
         assert_eq!(fs::read(root.join("resources/user.txt")).unwrap(), b"extra");
+    }
+
+    #[test]
+    fn migrates_legacy_layout_and_updates_grouped_layout_without_touching_user_data() {
+        for old_grouped in [false, true] {
+            let (root, work) = fixture_with_layout(old_grouped, true);
+            apply(root.path(), &work).unwrap();
+            assert_eq!(fs::read(root.path().join(crate::HELPER)).unwrap(), b"new updater");
+            assert!(!root.path().join(crate::LEGACY_HELPER).exists());
+            assert!(!root.path().join(crate::LEGACY_MANIFEST).exists());
+            let package = PackageManifest::read(root.path()).unwrap();
+            assert_eq!(package.version, "0.5.0");
+            assert_eq!(package.manifest_path(), crate::MANIFEST);
+            assert_user_data(root.path());
+            assert!(pending_update(root.path()).unwrap().is_none());
+        }
+    }
+
+    #[test]
+    fn layout_migration_recovers_at_every_move_boundary_and_on_io_failure() {
+        for step in 0..16 {
+            for interrupted in [false, true] {
+                let (root, work) = fixture_with_layout(false, true);
+                let outcome = std::panic::catch_unwind(|| {
+                    apply_with_checkpoint(root.path(), &work, |current| {
+                        if current == step {
+                            assert!(!interrupted, "simulated termination");
+                            anyhow::bail!("simulated IO failure");
+                        }
+                        Ok(())
+                    })
+                });
+                if interrupted {
+                    assert!(outcome.is_err());
+                } else {
+                    assert!(outcome.unwrap().is_err());
+                }
+                recover(root.path()).unwrap();
+                assert_original(root.path());
+                assert!(!root.path().join(crate::MANIFEST).exists());
+                assert!(!root.path().join(crate::HELPER).exists());
+            }
+        }
+    }
+
+    #[test]
+    fn recovers_protocol_one_journals_without_package_metadata() {
+        let root = tempfile::tempdir().unwrap();
+        let legacy = root.path().join(crate::LEGACY_WORK_DIR);
+        let work = legacy.join("job-old");
+        fs::create_dir_all(work.join("backup")).unwrap();
+        fs::write(work.join("backup/0"), b"old manifest").unwrap();
+        atomic_json(
+            &legacy.join("active.json"),
+            &Journal {
+                schema: 1,
+                directory: "job-old".into(),
+                complete: false,
+                operations: vec![Operation {
+                    path: crate::LEGACY_MANIFEST.into(),
+                    existed: true,
+                    install: true,
+                }],
+            },
+        )
+        .unwrap();
+        assert!(pending_update(root.path()).unwrap().is_some());
+        recover(root.path()).unwrap();
+        assert_eq!(fs::read(root.path().join(crate::LEGACY_MANIFEST)).unwrap(), b"old manifest");
+        assert!(pending_update(root.path()).unwrap().is_none());
+        assert!(work.join("result.json").is_file());
     }
 
     #[test]

@@ -16,14 +16,21 @@ pub fn extract(
     ensure!(!stage.exists(), "staging directory already exists");
     let mut archive = zip::ZipArchive::new(File::open(zip_path)?)?;
     ensure!(archive.len() <= 150_000, "too many archive entries");
+    let manifest_path =
+        if archive.file_names().any(|name| name == "BMZ Player/updater/bmz-package.json") {
+            crate::MANIFEST
+        } else {
+            crate::LEGACY_MANIFEST
+        };
     let manifest: PackageManifest = {
-        let mut file = archive.by_name("BMZ Player/bmz-package.json")?;
+        let mut file = archive.by_name(&format!("BMZ Player/{manifest_path}"))?;
         ensure!(file.size() <= 16 * 1024 * 1024, "package manifest too large");
         let mut bytes = Vec::new();
         file.read_to_end(&mut bytes)?;
         serde_json::from_slice(&bytes)?
     };
     manifest.validate()?;
+    ensure!(manifest.manifest_path() == manifest_path, "package layout mismatch");
     ensure!(manifest.kind == crate::manifest::PackageKind::Portable, "not a portable package");
     let required = manifest.files.iter().map(|entry| entry.size).sum::<u64>() + 64 * 1024 * 1024;
     ensure!(
@@ -52,14 +59,19 @@ pub fn extract(
             );
         }
         ensure!(!file.encrypted(), "encrypted package not supported");
-        if relative == ".bmz-instance.lock" {
+        let instance_lock = if manifest_path == crate::MANIFEST {
+            crate::INSTANCE_LOCK
+        } else {
+            crate::LEGACY_INSTANCE_LOCK
+        };
+        if relative == instance_lock {
             ensure!(file.size() == 0 && !file.is_dir(), "invalid instance lock");
             continue; // Never replace a live installation's lock file.
         }
         if file.is_dir() {
             continue;
         }
-        let expected = if relative == crate::MANIFEST {
+        let expected = if relative == manifest_path {
             file.size()
         } else {
             manifest
@@ -99,7 +111,7 @@ mod tests {
     use sha2::{Digest, Sha256};
     use zip::write::SimpleFileOptions;
 
-    fn make_zip(path: &Path, extra: Option<(&str, bool)>) {
+    fn make_zip(path: &Path, grouped: bool, extra: Option<(&str, bool)>) {
         let mut zip = zip::ZipWriter::new(File::create(path).unwrap());
         let bytes = b"executable";
         let manifest = PackageManifest {
@@ -107,8 +119,8 @@ mod tests {
             kind: PackageKind::Portable,
             target: "windows-x64".into(),
             version: "0.5.0".into(),
-            min_updater_protocol: 1,
-            files: ["bmz-player.exe", "bmz-updater.exe"]
+            min_updater_protocol: if grouped { 2 } else { 1 },
+            files: ["bmz-player.exe", if grouped { crate::HELPER } else { crate::LEGACY_HELPER }]
                 .into_iter()
                 .map(|name| PackageFile {
                     path: name.into(),
@@ -117,9 +129,9 @@ mod tests {
                 })
                 .collect(),
         };
-        for name in ["bmz-player.exe", "bmz-updater.exe", "bmz-package.json"] {
+        for name in ["bmz-player.exe", manifest.helper_path(), manifest.manifest_path()] {
             zip.start_file(format!("BMZ Player/{name}"), SimpleFileOptions::default()).unwrap();
-            if name == "bmz-package.json" {
+            if name == manifest.manifest_path() {
                 zip.write_all(&serde_json::to_vec(&manifest).unwrap()).unwrap();
             } else {
                 zip.write_all(bytes).unwrap();
@@ -138,18 +150,22 @@ mod tests {
 
     #[test]
     fn authentic_layout_extracts_helper_and_rejects_traversal_links_unknown_files() {
-        for extra in [
-            None,
-            Some(("BMZ Player/../outside", false)),
-            Some(("BMZ Player/data/score.db", false)),
-            Some(("BMZ Player/resources/link", true)),
-        ] {
-            let temp = tempfile::tempdir().unwrap();
-            let zip = temp.path().join("package.zip");
-            make_zip(&zip, extra);
-            let result = extract(&zip, &temp.path().join("stage"), || Ok(()));
-            assert_eq!(result.is_ok(), extra.is_none(), "{extra:?}");
-            assert!(!temp.path().join("outside").exists());
+        for grouped in [false, true] {
+            for extra in [
+                None,
+                Some(("BMZ Player/../outside", false)),
+                Some(("BMZ Player/data/score.db", false)),
+                Some(("BMZ Player/resources/link", true)),
+                Some(("BMZ Player/updater/active.json", false)),
+                Some(("BMZ Player/updater/job-old/backup/0", false)),
+            ] {
+                let temp = tempfile::tempdir().unwrap();
+                let zip = temp.path().join("package.zip");
+                make_zip(&zip, grouped, extra);
+                let result = extract(&zip, &temp.path().join("stage"), || Ok(()));
+                assert_eq!(result.is_ok(), extra.is_none(), "{extra:?}");
+                assert!(!temp.path().join("outside").exists());
+            }
         }
     }
 
@@ -157,7 +173,7 @@ mod tests {
     fn cancel_does_not_create_installation_files() {
         let temp = tempfile::tempdir().unwrap();
         let zip = temp.path().join("package.zip");
-        make_zip(&zip, None);
+        make_zip(&zip, true, None);
         assert!(extract(&zip, &temp.path().join("stage"), || anyhow::bail!("canceled")).is_err());
         assert!(!temp.path().join("bmz-player.exe").exists());
     }

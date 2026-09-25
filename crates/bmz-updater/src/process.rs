@@ -1,4 +1,7 @@
-use crate::{manifest::checked_path, transaction};
+use crate::{
+    manifest::{PackageManifest, checked_path},
+    transaction,
+};
 
 static COMMITTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 pub fn committed() -> bool {
@@ -34,21 +37,53 @@ pub struct Request {
 
 fn lock_file(root: &Path, name: &str) -> Result<File> {
     let path = checked_path(root, name)?;
+    fs::create_dir_all(path.parent().context("missing lock directory")?)?;
     Ok(File::options().read(true).write(true).create(true).truncate(false).open(path)?)
 }
 
 /// All packaged BMZ processes hold this until shutdown (including Viewer/CLI).
-pub fn instance_guard(root: &Path) -> Result<File> {
-    let path = checked_path(root, ".bmz-instance.lock")?;
-    // Shipped empty with the package, so a read-only portable install can still run.
-    let file =
-        if path.exists() { File::open(path)? } else { lock_file(root, ".bmz-instance.lock")? };
-    file.try_lock_shared().context("BMZ is being updated")?;
+pub fn instance_guard(root: &Path) -> Result<Vec<File>> {
+    let legacy = PackageManifest::read(root)?.manifest_path() == crate::LEGACY_MANIFEST;
+    let mut guards = Vec::new();
+    for name in [crate::INSTANCE_LOCK, crate::LEGACY_INSTANCE_LOCK] {
+        let path = checked_path(root, name)?;
+        let exists = path.try_exists()?;
+        if (legacy && name == crate::INSTANCE_LOCK
+            || !legacy && name == crate::LEGACY_INSTANCE_LOCK)
+            && !exists
+        {
+            continue;
+        }
+        // Packages ship an empty instance lock, permitting read-only launches with data overrides.
+        let file = if exists { File::open(path)? } else { lock_file(root, name)? };
+        file.try_lock_shared().context("BMZ is being updated")?;
+        guards.push(file);
+    }
     ensure!(
-        !transaction::active_path(root).exists(),
+        transaction::pending_update(root)?.is_none(),
         "interrupted update: run bmz-updater --recover INSTALL_DIR before starting BMZ"
     );
-    Ok(file)
+    Ok(guards)
+}
+
+// Hold both generations during migration. Never delete legacy locks: replacing a lock file
+// can split the lock identity while another process still has the original file open.
+fn update_guards(root: &Path) -> Result<(Vec<File>, Vec<File>)> {
+    let legacy = checked_path(root, crate::LEGACY_MANIFEST)?.try_exists()?
+        || checked_path(root, crate::LEGACY_INSTANCE_LOCK)?.try_exists()?
+        || checked_path(root, &format!("{}/active.json", crate::LEGACY_WORK_DIR))?.try_exists()?;
+    let mut updates = vec![lock_file(root, crate::UPDATE_LOCK)?];
+    if legacy || checked_path(root, crate::LEGACY_UPDATE_LOCK)?.try_exists()? {
+        updates.push(lock_file(root, crate::LEGACY_UPDATE_LOCK)?);
+    }
+    for lock in &updates {
+        lock.try_lock().context("another updater is running")?;
+    }
+    let mut instances = vec![lock_file(root, crate::INSTANCE_LOCK)?];
+    if legacy {
+        instances.push(lock_file(root, crate::LEGACY_INSTANCE_LOCK)?);
+    }
+    Ok((updates, instances))
 }
 
 pub struct Handoff {
@@ -78,7 +113,8 @@ impl Drop for Handoff {
 pub fn start(request: &Request) -> Result<Handoff> {
     transaction::preflight(&request.root, &request.work)?;
     let exe = checked_path(&request.work, "helper.exe")?;
-    fs::copy(checked_path(&request.root, "bmz-updater.exe")?, &exe)?;
+    let package = PackageManifest::read(&request.root)?;
+    fs::copy(checked_path(&request.root, package.helper_path())?, &exe)?;
     let request_path = request.work.join("request.json");
     transaction::atomic_json(&request_path, request)?;
     let mut command = Command::new(exe);
@@ -120,10 +156,8 @@ pub fn run_request(path: &Path) -> Result<()> {
     let request: Request = serde_json::from_reader(File::open(path)?)?;
     let root = request.root.canonicalize()?;
     let work = request.work.canonicalize()?;
-    let _update_lock = lock_file(&root, ".bmz-updater.lock")?;
-    _update_lock.try_lock().context("another updater is running")?;
+    let (_update_locks, instances) = update_guards(&root)?;
     transaction::preflight(&root, &work)?;
-    let instance = lock_file(&root, ".bmz-instance.lock")?;
     println!("READY");
     std::io::stdout().flush()?;
     let mut answer = String::new();
@@ -131,22 +165,24 @@ pub fn run_request(path: &Path) -> Result<()> {
     ensure!(answer.trim() == "APPLY", "update was canceled before shutdown");
     COMMITTED.store(true, std::sync::atomic::Ordering::Relaxed);
     let started = Instant::now();
-    while instance.try_lock().is_err() {
-        ensure!(
-            started.elapsed() < Duration::from_secs(60),
-            "another BMZ process is still running; close it and retry"
-        );
-        std::thread::sleep(Duration::from_millis(100));
+    for instance in &instances {
+        while instance.try_lock().is_err() {
+            ensure!(
+                started.elapsed() < Duration::from_secs(60),
+                "another BMZ process is still running; close it and retry"
+            );
+            std::thread::sleep(Duration::from_millis(100));
+        }
     }
     let result = transaction::apply(&root, &work);
-    drop(instance);
+    drop(instances);
     let log = match &result {
         Ok(()) => "Update completed.\n".to_owned(),
         Err(e) => format!("{e:#}\n"),
     };
     fs::write(work.join("update.log"), log)?;
     // Only launch if the installation is coherent; never run after failed rollback.
-    if !transaction::active_path(&root).exists() {
+    if transaction::pending_update(&root)?.is_none() {
         restart(&root, &request.restart)?;
     }
     result
@@ -174,10 +210,10 @@ fn restart(root: &Path, context: &RestartContext) -> Result<()> {
 
 pub fn recover(root: &Path) -> Result<()> {
     let root = root.canonicalize()?;
-    let _update = lock_file(&root, ".bmz-updater.lock")?;
-    _update.try_lock().context("another updater is running")?;
-    let _instance = lock_file(&root, ".bmz-instance.lock")?;
-    _instance.try_lock().context("close all BMZ processes before recovery")?;
+    let (_updates, instances) = update_guards(&root)?;
+    for instance in &instances {
+        instance.try_lock().context("close all BMZ processes before recovery")?;
+    }
     transaction::recover(&root)
 }
 
@@ -213,14 +249,39 @@ mod tests {
     #[test]
     fn all_running_instances_block_exclusive_update_lock() {
         let temp = tempfile::tempdir().unwrap();
+        crate::manifest::write_test_package(
+            temp.path(),
+            "0.5.0",
+            &[("bmz-player.exe", b"app"), (crate::HELPER, b"helper")],
+        );
         let first = instance_guard(temp.path()).unwrap();
         let second = instance_guard(temp.path()).unwrap();
-        let updater = lock_file(temp.path(), ".bmz-instance.lock").unwrap();
+        let updater = lock_file(temp.path(), crate::INSTANCE_LOCK).unwrap();
         assert!(updater.try_lock().is_err());
         drop(first);
         assert!(updater.try_lock().is_err());
         drop(second);
         updater.try_lock().unwrap();
         assert!(instance_guard(temp.path()).is_err());
+    }
+
+    #[test]
+    fn bridge_updates_wait_for_legacy_instances_and_guard_both_lock_generations() {
+        let temp = tempfile::tempdir().unwrap();
+        crate::manifest::write_test_package(
+            temp.path(),
+            "0.4.0",
+            &[("bmz-player.exe", b"app"), (crate::LEGACY_HELPER, b"helper")],
+        );
+        let running = instance_guard(temp.path()).unwrap();
+        let (_updates, locks) = update_guards(temp.path()).unwrap();
+        assert_eq!(locks.len(), 2);
+        assert!(locks[1].try_lock().is_err());
+        drop(running);
+        for lock in &locks {
+            lock.try_lock().unwrap();
+        }
+        assert!(instance_guard(temp.path()).is_err());
+        assert!(update_guards(temp.path()).is_err());
     }
 }
