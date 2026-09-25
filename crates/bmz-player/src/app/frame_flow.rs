@@ -679,6 +679,9 @@ impl WinitApp {
             match result {
                 Ok(()) => {
                     tracing::info!("app config saved from egui settings panel");
+                    if let Err(error) = self.publish_song_scope() {
+                        tracing::error!(%error, "failed to update library song scope");
+                    }
                 }
                 Err(error) => tracing::error!(%error, "failed to save app config"),
             }

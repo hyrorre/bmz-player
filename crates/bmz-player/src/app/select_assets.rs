@@ -147,6 +147,12 @@ pub(super) struct SelectAssetRuntime {
 }
 
 impl SelectAssetRuntime {
+    pub(super) fn invalidate_library(&mut self) {
+        self.stop_preview();
+        // Drop old worker receivers too, so stale results cannot refill the caches.
+        *self = Self::new(self.preview.take(), self.library_db_path.clone());
+    }
+
     pub(super) fn new(preview: Option<SelectChartPreview>, library_db_path: PathBuf) -> Self {
         let (meta_image_tx, meta_image_rx) = mpsc::channel();
         let (preview_tx, preview_rx) = mpsc::channel();

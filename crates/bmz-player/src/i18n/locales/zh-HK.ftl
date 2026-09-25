@@ -795,3 +795,4 @@ update-extracting = 正在驗證並解壓縮更新。
 update-retry = 重試
 update-kind-windows-portable = 在目前的可攜版資料夾中更新。
 update-kind-macos-automatic = 更新整個應用程式並重新啟動。
+toast-library-scan-failed = 曲庫掃描失敗：{ $error }

@@ -794,3 +794,4 @@ update-extracting = 更新ファイルを検証・展開しています。
 update-retry = 再試行
 update-kind-windows-portable = 現在のportableフォルダ内で更新します。
 update-kind-macos-automatic = アプリ全体を更新して再起動します。
+toast-library-scan-failed = ライブラリ再スキャンに失敗しました: { $error }

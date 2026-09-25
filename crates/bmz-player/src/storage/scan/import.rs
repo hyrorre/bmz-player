@@ -291,7 +291,8 @@ pub fn scan_song_roots_with_progress(
         );
 
         if root.discovery_complete {
-            db.prune_missing_chart_files(root_path, root.recursive)?;
+            report.summary.removed_files +=
+                db.prune_missing_chart_files(root_path, root.recursive)?;
             db.update_root_scanned_at(root.root_id, scanned_at)?;
         } else {
             tracing::warn!(

@@ -84,8 +84,8 @@ impl WinitApp {
         if self.jobs.pending_song_scan.is_some() {
             return;
         }
-        if let Some((roots, force, label)) = self.jobs.queued_song_scans.pop_front() {
-            self.spawn_song_scan(roots, force, label);
+        if let Some((roots, force, label, scope)) = self.jobs.queued_song_scans.pop_front() {
+            self.spawn_song_scan_with_scope(roots, force, label, scope);
         }
     }
 

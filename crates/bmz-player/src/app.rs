@@ -175,7 +175,7 @@ use crate::storage::replay_import::{
     ImportBeatorajaReplaysRequest, ReplayImportProgress, ReplayImportReport,
     import_beatoraja_replays_with_progress, write_replay_import_details,
 };
-use crate::storage::scan::{ScanProgress, ScanReport};
+use crate::storage::scan::{ScanProgress, ScanReport, SongScanScope};
 use crate::storage::score_db::{DailyPlayerStats, PlayerStats, ScoreDatabase, ScoreKey};
 use crate::storage::score_import::{ScoreImportRequest, import_scores};
 use crate::table_cmd::{TableFetchOutcome, TableFetchReport};

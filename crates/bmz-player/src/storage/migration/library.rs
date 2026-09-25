@@ -921,4 +921,13 @@ pub const LIBRARY_MIGRATIONS: &[Migration] = &[
             completed_at INTEGER NOT NULL
         );"],
     },
+    Migration {
+        version: 34,
+        // roots contains ad-hoc scan targets too; keep the authoritative configured
+        // scope separately. No row means a legacy/unconfigured database, not empty roots.
+        statements: &["CREATE TABLE library_song_scope (
+            id INTEGER PRIMARY KEY CHECK(id = 1),
+            roots_json TEXT NOT NULL
+        );"],
+    },
 ];

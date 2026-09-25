@@ -14,6 +14,7 @@ pub(super) struct PendingSystemSoundLoad {
 pub(super) struct PendingSongScan {
     pub(super) finished: Receiver<Result<ScanReport>>,
     pub(super) progress: Arc<AtomicU64>,
+    pub(super) library_roots: Option<Vec<PathEntry>>,
 }
 
 pub(super) struct PendingReplayImport {

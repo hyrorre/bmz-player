@@ -797,3 +797,4 @@ update-extracting = Verifying and extracting the update.
 update-retry = Retry
 update-kind-windows-portable = Updates this portable folder in place.
 update-kind-macos-automatic = Updates the app bundle and restarts BMZ Player.
+toast-library-scan-failed = Library scan failed: { $error }

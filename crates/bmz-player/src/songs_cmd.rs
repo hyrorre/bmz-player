@@ -3,7 +3,7 @@ use std::path::Path;
 use anyhow::{Context, Result, bail};
 
 use crate::cli::SongsCommand;
-use crate::config::app_config::PathEntry;
+use crate::config::app_config::{AppConfig, PathEntry};
 use crate::config::load::load_app_config;
 use crate::config::save::save_app_config;
 use crate::paths::{AppPaths, normalize_library_path, resolve_app_paths};
@@ -118,6 +118,18 @@ pub fn resolve_song_scan_target(
     }
 }
 
+/// Authoritative scope, including disabled roots and the bundled sample.
+pub(crate) fn configured_library_roots(config: &AppConfig, paths: &AppPaths) -> Vec<PathEntry> {
+    let mut roots = config.songs.roots.clone();
+    let sample = paths.resource_dir.join("songs/sample-playable");
+    let sample = sample.canonicalize().unwrap_or(sample);
+    let path = normalize_library_path(&sample.to_string_lossy());
+    if !roots.iter().any(|root| normalize_library_path(&root.path) == path) {
+        roots.push(PathEntry { path, enabled: true, recursive: true });
+    }
+    roots
+}
+
 pub fn scan_songs(
     db: &mut LibraryDatabase,
     roots: &[PathEntry],
@@ -199,16 +211,19 @@ fn load_songs(
 ) -> Result<()> {
     app_paths.ensure_dirs()?;
 
-    let app_config = if app_paths.config_toml.exists() {
-        load_app_config(&app_paths.config_toml)?
-    } else {
-        Default::default()
-    };
+    // Missing/unreadable configuration is not an explicit empty library.
+    let app_config = load_app_config(&app_paths.config_toml)?;
 
-    let roots = resolve_song_scan_target(target, &app_config.songs.roots)?;
+    let library_roots = configured_library_roots(&app_config, app_paths);
+    let roots = if target.is_none() {
+        library_roots.clone()
+    } else {
+        resolve_song_scan_target(target, &app_config.songs.roots)?
+    };
 
     migrate_library_db(&app_paths.library_db)?;
     let mut library_db = LibraryDatabase::open(&app_paths.library_db)?;
+    library_db.set_configured_song_roots(&library_roots)?;
 
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -223,10 +238,15 @@ fn load_songs(
     let verb = if force { "Reloading" } else { "Scanning" };
     let discovery = if scan_config.use_everything { "everything" } else { "native" };
     println!("{verb} {} root(s) with {discovery} discovery...", roots.len());
-    let report = scan_songs(&mut library_db, &roots, &scan_config, now, force)
+    let mut report = scan_songs(&mut library_db, &roots, &scan_config, now, force)
         .with_context(|| format!("failed to scan song roots (force={force})"))?;
+    if target.is_none() {
+        report.summary.removed_files +=
+            library_db.reconcile_configured_song_roots(&library_roots)?;
+    }
 
     let s = &report.summary;
+    println!("Removed {} obsolete file registration(s)", s.removed_files);
     println!(
         "Done: {} imported, {} skipped, {} failed ({} warnings), {} filesystem path(s) skipped \
          across {} file(s) in {} root(s) ({} unreadable)",

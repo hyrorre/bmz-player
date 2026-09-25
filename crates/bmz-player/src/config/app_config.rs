@@ -40,7 +40,7 @@ pub struct SongPathsConfig {
     pub roots: Vec<PathEntry>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PathEntry {
     pub path: String,
     pub enabled: bool,

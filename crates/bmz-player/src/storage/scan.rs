@@ -27,6 +27,13 @@ pub struct ScanSummary {
     pub failed: u32,
     pub skipped: u32,
     pub warnings: u32,
+    pub removed_files: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SongScanScope {
+    Paths,
+    Library,
 }
 
 #[derive(Debug, Clone)]

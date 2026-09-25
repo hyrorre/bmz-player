@@ -55,11 +55,12 @@ impl WinitApp {
     }
 
     pub(super) fn load_songs_and_reload(&mut self) {
-        let scan_roots = self.song_load_roots_from_stack();
-
-        if !scan_roots.is_empty() {
-            self.spawn_song_scan(scan_roots, false, "song-scan".to_string());
-        }
+        self.spawn_song_scan_with_scope(
+            Vec::new(),
+            true,
+            "library rescan".to_string(),
+            SongScanScope::Library,
+        );
     }
 
     pub(super) fn import_external_scores(&mut self, request: ScoreImportRequest) {
@@ -246,14 +247,21 @@ impl WinitApp {
         }
     }
 
-    pub(super) fn song_load_roots_from_stack(&self) -> Vec<PathEntry> {
-        if let Some(folder) = self.select.folder_stack.last()
-            && !folder.starts_with(TABLE_ROOT_PATH)
-            && !folder.starts_with(VIRTUAL_FOLDER_PATH_PREFIX)
-        {
-            return vec![PathEntry { path: folder.clone(), enabled: true, recursive: true }];
-        }
-        self.boot.app_config.songs.roots.iter().filter(|p| p.enabled).cloned().collect()
+    pub(super) fn publish_song_scope(&self) -> Result<()> {
+        self.boot.library_db.set_configured_song_roots(&crate::songs_cmd::configured_library_roots(
+            &self.boot.app_config,
+            &self.boot.app_paths,
+        ))
+    }
+
+    fn song_scan_error(&mut self, error: &anyhow::Error) {
+        tracing::error!(error = %format_error_chain(error), "song scan failed");
+        let mut args = FluentArgs::new();
+        args.set("error", format!("{error:#}"));
+        self.show_left_overlay_toast(
+            Localizer::new(self.boot.profile_config.ui.locale())
+                .format("toast-library-scan-failed", &args),
+        );
     }
 
     pub(super) fn reload_from_select_context(&mut self) {
@@ -279,8 +287,18 @@ impl WinitApp {
     }
 
     pub(super) fn spawn_song_scan(&mut self, roots: Vec<PathEntry>, force: bool, label: String) {
+        self.spawn_song_scan_with_scope(roots, force, label, SongScanScope::Paths);
+    }
+
+    pub(super) fn spawn_song_scan_with_scope(
+        &mut self,
+        mut roots: Vec<PathEntry>,
+        force: bool,
+        label: String,
+        scope: SongScanScope,
+    ) {
         if !self.select_maintenance_allowed() || self.jobs.pending_song_scan.is_some() {
-            self.jobs.queued_song_scans.push_back((roots, force, label.clone()));
+            self.jobs.queued_song_scans.push_back((roots, force, label.clone(), scope));
             tracing::debug!(
                 %label,
                 queued = self.jobs.queued_song_scans.len(),
@@ -288,6 +306,23 @@ impl WinitApp {
             );
             return;
         }
+        let library_roots = if scope == SongScanScope::Library {
+            // A full sync is authoritative only after the settings were saved.
+            if let Err(error) =
+                save_app_config(&self.boot.app_paths.config_toml, &self.boot.app_config)
+                    .and_then(|()| self.publish_song_scope())
+            {
+                self.song_scan_error(&error);
+                return;
+            }
+            roots = crate::songs_cmd::configured_library_roots(
+                &self.boot.app_config,
+                &self.boot.app_paths,
+            );
+            Some(roots.clone())
+        } else {
+            None
+        };
         let library_db_path = self.boot.app_paths.library_db.clone();
         let scan_config = self.boot.app_config.scan.clone();
         let (tx, rx) = mpsc::channel();
@@ -314,7 +349,8 @@ impl WinitApp {
                 let _ = tx.send(result);
             })
             .expect("failed to spawn song scan thread");
-        self.jobs.pending_song_scan = Some(PendingSongScan { finished: rx, progress });
+        self.jobs.pending_song_scan =
+            Some(PendingSongScan { finished: rx, progress, library_roots });
         tracing::info!(%label, force, "started song scan");
     }
 
@@ -326,7 +362,34 @@ impl WinitApp {
             Some(unpack_scan_progress(pending.progress.load(Ordering::Relaxed)));
         let mut keep_pending = true;
         match pending.finished.try_recv() {
-            Ok(Ok(report)) => {
+            Ok(Ok(mut report)) => {
+                if let Some(roots) = &pending.library_roots {
+                    let current = crate::songs_cmd::configured_library_roots(
+                        &self.boot.app_config,
+                        &self.boot.app_paths,
+                    );
+                    let cleanup = (|| -> Result<usize> {
+                        let saved =
+                            crate::config::load::load_app_config(&self.boot.app_paths.config_toml)?;
+                        let saved = crate::songs_cmd::configured_library_roots(
+                            &saved,
+                            &self.boot.app_paths,
+                        );
+                        anyhow::ensure!(
+                            *roots == current && *roots == saved,
+                            "song roots changed during scan; rescan again to remove obsolete registrations"
+                        );
+                        self.boot.library_db.reconcile_configured_song_roots(roots)
+                    })();
+                    match cleanup {
+                        Ok(removed) => report.summary.removed_files += removed,
+                        Err(error) => self.song_scan_error(&error),
+                    }
+                }
+                tracing::info!(
+                    removed_files = report.summary.removed_files,
+                    "obsolete song registrations removed"
+                );
                 if report.discovery_issues.is_empty() {
                     tracing::info!(
                         imported = report.summary.imported,
@@ -365,12 +428,13 @@ impl WinitApp {
                     );
                 }
                 self.jobs.song_scan_progress = None;
+                self.select.select_assets.invalidate_library();
                 self.invalidate_select_folder_summaries();
                 self.reload_select_items();
                 keep_pending = false;
             }
             Ok(Err(error)) => {
-                tracing::error!(%error, "song scan failed");
+                self.song_scan_error(&error);
                 self.jobs.song_scan_progress = None;
                 keep_pending = false;
             }

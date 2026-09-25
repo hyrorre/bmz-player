@@ -26,6 +26,9 @@ mod database_query;
 mod database_write;
 mod path_helpers;
 mod query_helpers;
+mod scope;
+
+pub(crate) use scope::song_root_contains_file;
 
 use analysis_helpers::*;
 use path_helpers::*;

@@ -217,6 +217,7 @@ fn bootstrap_with_paths_mode(
     app_paths.ensure_required_dirs()?;
 
     let config_started_at = Instant::now();
+    let had_saved_config = app_paths.config_toml.is_file();
     let mut app_config = load_or_create_app_config(&app_paths)?;
     if let Some(sample_root) = bundled_sample_song_root(&app_paths) {
         let sample_root_str = normalize_library_path(&sample_root.to_string_lossy());
@@ -264,6 +265,8 @@ fn bootstrap_with_paths_mode(
     );
 
     let mut library_db = LibraryDatabase::open(&app_paths.library_db)?;
+    let library_roots = crate::songs_cmd::configured_library_roots(&app_config, &app_paths);
+    library_db.set_configured_song_roots(&library_roots)?;
     let bundled_sample_root = bundled_sample_song_root(&app_paths);
     let scan_started_at = Instant::now();
     let scan_roots = if startup_scan_enabled {
@@ -271,7 +274,7 @@ fn bootstrap_with_paths_mode(
     } else {
         Vec::new()
     };
-    let startup_scan = if scan_roots.is_empty() {
+    let mut startup_scan = if scan_roots.is_empty() {
         None
     } else {
         Some(scan_song_roots(
@@ -282,6 +285,10 @@ fn bootstrap_with_paths_mode(
             false,
         )?)
     };
+    if startup_scan_enabled && app_config.scan.auto_rescan_on_startup && had_saved_config {
+        let removed = library_db.reconcile_configured_song_roots(&library_roots)?;
+        startup_scan.get_or_insert_with(Default::default).summary.removed_files += removed;
+    }
     tracing::info!(
         scan_root_count = scan_roots.len(),
         scan_ms = scan_started_at.elapsed().as_millis(),

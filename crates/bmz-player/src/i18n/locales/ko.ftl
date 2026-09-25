@@ -794,3 +794,4 @@ update-extracting = 업데이트를 검증하고 압축을 푸는 중입니다.
 update-retry = 다시 시도
 update-kind-windows-portable = 현재 portable 폴더를 업데이트합니다.
 update-kind-macos-automatic = 앱 전체를 업데이트하고 다시 시작합니다.
+toast-library-scan-failed = 라이브러리 스캔 실패: { $error }
