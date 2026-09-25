@@ -11,6 +11,7 @@ pub(super) fn load_default_font_fallbacks(
     preferred: bmz_font::FontCoverage,
     font_roots: &[PathBuf],
 ) -> FontFallbackChain {
+    let started_at = std::time::Instant::now();
     let mut resolved = bmz_font::resolve_font_fallbacks(preferred, font_roots);
     if let Some(general) = bmz_font::resolve_system_font(false)
         && !resolved.iter().any(|(_, font)| font == &general)
@@ -40,6 +41,12 @@ pub(super) fn load_default_font_fallbacks(
         );
     }
 
+    tracing::info!(
+        ?preferred,
+        font_count = faces.len(),
+        font_load_ms = started_at.elapsed().as_millis(),
+        "default render font fallbacks loaded"
+    );
     FontFallbackChain { faces }
 }
 

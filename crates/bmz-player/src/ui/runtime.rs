@@ -562,8 +562,16 @@ pub(super) fn install_cjk_fonts(
     preferred: bmz_render::FontCoverage,
     font_search_paths: &[PathBuf],
 ) {
+    let started_at = std::time::Instant::now();
     let fallbacks = bmz_render::renderer::load_cjk_font_fallback_data(preferred, font_search_paths);
+    let font_count = fallbacks.len();
     ctx.set_fonts(cjk_font_definitions(fallbacks));
+    tracing::info!(
+        ?preferred,
+        font_count,
+        font_load_ms = started_at.elapsed().as_millis(),
+        "egui font fallbacks loaded"
+    );
 }
 
 pub(super) fn cjk_font_definitions(

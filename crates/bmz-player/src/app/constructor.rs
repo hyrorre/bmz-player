@@ -13,6 +13,7 @@ impl WinitApp {
         maintenance_select_tx: tokio::sync::watch::Sender<bool>,
         raw_input_bridge: Option<crate::input::rawinput::RawInputBridge>,
     ) -> Result<Self> {
+        let constructor_started_at = Instant::now();
         let mut boot = boot;
         let viewer_mode = options.viewer_play;
         if let Some(cli_renderer) = options.renderer.clone() {
@@ -98,8 +99,12 @@ impl WinitApp {
         renderer.set_default_font_coverage(boot.profile_config.ui.locale().font_coverage());
         renderer
             .set_internal_resolution_mode(config_internal_resolution_mode(&boot.app_config.video));
+        let before_catalog_ms = constructor_started_at.elapsed().as_millis();
+        let catalog_started_at = Instant::now();
         let skin_catalog =
             if viewer_mode { SkinCatalog::default() } else { scan_skin_catalog(&boot.app_paths) };
+        let catalog_ms = catalog_started_at.elapsed().as_millis();
+        let skins_started_at = Instant::now();
         let mut skin_pipeline = SkinPipelineRuntime::new();
         let (
             default_skin_manifest,
@@ -121,6 +126,7 @@ impl WinitApp {
         skin_pipeline.set_pending(SkinKind::Select, pending_select_skin);
         skin_pipeline.set_pending(SkinKind::Decide, pending_decide_skin);
         skin_pipeline.set_pending(SkinKind::Result, pending_result_skin);
+        let skins_ms = skins_started_at.elapsed().as_millis();
         let now = Instant::now();
 
         let mut gamepad = if boot.app_config.input.gamepad_enabled {
@@ -473,6 +479,14 @@ impl WinitApp {
             app.start_system_sound_load();
         }
         app.sync_discord_presence_config();
+        tracing::info!(
+            before_catalog_ms,
+            catalog_ms,
+            skins_ms,
+            after_skins_ms = now.elapsed().as_millis(),
+            constructor_total_ms = constructor_started_at.elapsed().as_millis(),
+            "startup constructor timings"
+        );
         Ok(app)
     }
 }

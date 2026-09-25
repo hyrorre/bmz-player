@@ -339,6 +339,7 @@ pub(super) fn apply_json_skin_sync(
         return Vec::new();
     };
     let library_roots = app_paths.skin_library_roots();
+    let decode_started_at = Instant::now();
     let decoded = match decode_beatoraja_skin_request(BeatorajaSkinDecodeRequest {
         skin_path: path,
         kind,
@@ -364,7 +365,18 @@ pub(super) fn apply_json_skin_sync(
             return Vec::new();
         }
     };
+    tracing::info!(
+        ?kind,
+        path = %path.display(),
+        decode_ms = decode_started_at.elapsed().as_millis(),
+        document_us = decoded.stats.document_us,
+        font_decode_us = decoded.stats.font_decode_us,
+        source_decode_us = decoded.stats.source_decode_us,
+        source_count = decoded.stats.decoded_source_count,
+        "startup synchronous skin decode complete"
+    );
     let video_sources = skin_video_sources_from_decoded(&decoded);
+    let install_started_at = Instant::now();
     if let Err(error) = install_decoded_skin(renderer, decoded, manifest.clone()) {
         pipeline.record_load_result(path, Some(format!("{error:#}")));
         tracing::warn!(
@@ -375,6 +387,11 @@ pub(super) fn apply_json_skin_sync(
         );
         return Vec::new();
     }
+    tracing::info!(
+        ?kind,
+        install_ms = install_started_at.elapsed().as_millis(),
+        "startup synchronous skin install complete"
+    );
     pipeline.record_load_result(path, None);
     video_sources
 }

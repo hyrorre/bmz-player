@@ -44,7 +44,15 @@ pub(super) fn scan_skin_catalog_dir(
         if !is_skin_candidate_file(&path) {
             continue;
         }
-        match load_skin_candidate_with_library_roots(root, &path, library_roots, origin) {
+        let started_at = Instant::now();
+        let candidate = load_skin_candidate_with_library_roots(root, &path, library_roots, origin);
+        tracing::debug!(
+            target: "bmz_player::startup_profile",
+            path = %path.display(),
+            header_us = started_at.elapsed().as_micros(),
+            "startup skin catalog candidate"
+        );
+        match candidate {
             Some((skin_type, candidate)) => push_skin_candidate(catalog, skin_type, candidate),
             None => {
                 tracing::debug!(path = %path.display(), "skipping skin candidate without readable header")
