@@ -133,6 +133,7 @@ settings-key-binding-description = 操作またはレーンに使用する入力
 common-add = 追加
 common-auto = 自動
 common-auto-select = 自動選択
+common-cancel = キャンセル
 common-choose-file = ファイルを選択…
 common-choose-folder = フォルダを選択…
 common-clear = 解除

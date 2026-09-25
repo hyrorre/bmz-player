@@ -134,6 +134,7 @@ settings-entry-description-video-renderer = 選擇使用的 GPU 繪圖後端。�
 common-add = 新增
 common-auto = 自動
 common-auto-select = 自動選擇
+common-cancel = 取消
 common-choose-file = 選擇檔案…
 common-choose-folder = 選擇資料夾…
 common-clear = 清除

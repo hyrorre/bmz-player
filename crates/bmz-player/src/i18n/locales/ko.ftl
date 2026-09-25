@@ -133,6 +133,7 @@ settings-entry-description-video-renderer = 사용할 GPU 렌더링 백엔드를
 common-add = 추가
 common-auto = 자동
 common-auto-select = 자동 선택
+common-cancel = 취소
 common-choose-file = 파일 선택…
 common-choose-folder = 폴더 선택…
 common-clear = 해제

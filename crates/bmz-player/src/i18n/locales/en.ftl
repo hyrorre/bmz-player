@@ -133,6 +133,7 @@ settings-key-binding-description = Assigns the input used for an action or lane.
 common-add = Add
 common-auto = Auto
 common-auto-select = Auto select
+common-cancel = Cancel
 common-choose-file = Choose file…
 common-choose-folder = Choose folder…
 common-clear = Clear

@@ -379,6 +379,20 @@ mod tests {
         }
     }
 
+    #[test]
+    fn common_cancel_resolves_in_every_catalog() {
+        for (locale, expected) in [
+            (AppLocale::Ja, "キャンセル"),
+            (AppLocale::En, "Cancel"),
+            (AppLocale::Ko, "취소"),
+            (AppLocale::ZhCn, "取消"),
+            (AppLocale::ZhTw, "取消"),
+            (AppLocale::ZhHk, "取消"),
+        ] {
+            assert_eq!(Localizer::new(locale).text("common-cancel"), expected, "{}", locale.code());
+        }
+    }
+
     fn catalog_signature(locale: AppLocale, source: &str) -> BTreeMap<String, BTreeSet<String>> {
         parser::parse(source)
             .unwrap_or_else(|(_, errors)| panic!("invalid {} catalog: {errors:?}", locale.code()));
