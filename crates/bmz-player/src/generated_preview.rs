@@ -7,7 +7,6 @@ use bmz_audio::ffmpeg_loader::FfmpegSampleLoader;
 use bmz_audio::loader::{LoadedSampleStatus, SampleLoader, load_chart_samples};
 use bmz_audio::queue::{RestartPolicy, ScheduledSound};
 use bmz_audio::sample::DecodedSample;
-use bmz_chart::import::import_bms_chart;
 use bmz_chart::model::{NoteKind, PlayableChart};
 use bmz_chart::sound_asset::sound_asset_candidates;
 use bmz_chart::volume::{chart_channel_volume_factor, chart_volume_at_time};
@@ -110,12 +109,8 @@ pub fn render_generated_preview_for_chart(
 ) -> Result<DecodedSample> {
     let db = LibraryDatabase::open(library_db_path)
         .with_context(|| format!("open library db {}", library_db_path.display()))?;
-    let chart_path = db
-        .primary_chart_file_path(chart_id)?
-        .with_context(|| format!("chart {chart_id} has no primary chart file"))?;
-    let chart_path = Path::new(&chart_path);
-    let import = import_bms_chart(chart_path, None, true)
-        .with_context(|| format!("import chart for generated preview {}", chart_path.display()))?;
+    let (_, import) =
+        db.load_chart_source(chart_id, bmz_chart::import::BmsRandomSource::Seed(None))?;
     let mut loader = FfmpegSampleLoader::with_packet_yield_interval(
         GENERATED_PREVIEW_DECODE_YIELD_INTERVAL_PACKETS,
     );

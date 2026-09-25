@@ -1,4 +1,4 @@
-use anyhow::{Context, Result, bail};
+use anyhow::{Result, bail};
 use bmz_audio::clock::AudioClock;
 use bmz_audio::engine::AudioEngine;
 use bmz_audio::ffmpeg_loader::FfmpegSampleLoader;
@@ -8,9 +8,9 @@ use bmz_audio::loader::{
 use bmz_audio::loudness::{
     LoudnessAnalysis, analyze_chart_loudness, play_normalization_gain_for_analysis_with_output_gain,
 };
-use bmz_chart::import::{
-    BmsRandomSource, ImportResult, import_bms_chart, import_bms_chart_with_random_source,
-};
+#[cfg(test)]
+use bmz_chart::import::import_bms_chart;
+use bmz_chart::import::{BmsRandomSource, ImportResult};
 use bmz_chart::model::{
     LongNoteMode, LongNotePair, NoteEvent, NoteKind, PlayableChart, SoundEvent, TimingEventKind,
 };

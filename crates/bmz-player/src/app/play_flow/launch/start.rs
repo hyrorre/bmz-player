@@ -75,6 +75,9 @@ impl WinitApp {
         chart_id: i64,
         mut options: PlayStartOptions,
     ) {
+        let Some(chart_id) = self.resolve_play_chart_id(chart_id) else {
+            return;
+        };
         self.normalize_key_mode_conversion_options(chart_id, &mut options);
         self.resolve_play_target_from_cache(chart_id, &mut options);
         self.ensure_skin_ready(SkinKind::Decide);

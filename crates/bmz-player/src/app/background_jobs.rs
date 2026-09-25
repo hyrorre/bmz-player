@@ -25,6 +25,26 @@ impl WinitApp {
         self.select.select_mode_filter = resolved_mode_filter;
         self.boot.profile_config.select.mode_filter = resolved_mode_filter.as_str().to_string();
         self.select.select_items = items;
+        // Resolve once on refresh so preview/images and playback share the same copy.
+        for item in &mut self.select.select_items {
+            if let SelectItem::Chart(row) = item
+                && let Some(chart) = &row.chart
+            {
+                match self.boot.library_db.available_chart_source(chart.chart_id) {
+                    Ok(Some(source)) if source.chart.chart_id != chart.chart_id => {
+                        row.has_document = source.chart.has_document;
+                        row.chart_analysis = self
+                            .boot
+                            .library_db
+                            .chart_analysis_summaries_by_chart_ids(&[source.chart.chart_id])
+                            .ok()
+                            .and_then(|mut rows| rows.remove(&source.chart.chart_id));
+                        row.chart = Some(source.chart);
+                    }
+                    _ => {}
+                }
+            }
+        }
         if self.select.folder_stack.last().and_then(|path| parse_search_query(path)).is_some() {
             let count = self
                 .select

@@ -105,7 +105,8 @@ impl WinitApp {
             tracing::warn!(sha = %replay_file.chart_sha256, "replay file has invalid chart sha256");
             return false;
         };
-        let Some(chart_id) = self.boot.library_db.chart_id_by_sha256(sha).ok().flatten() else {
+        let Some(chart_id) = self.boot.library_db.available_chart_id_by_sha256(sha).ok().flatten()
+        else {
             tracing::warn!(
                 sha = %replay_file.chart_sha256,
                 "replay chart is not in the library; load the song first"

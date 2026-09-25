@@ -795,3 +795,4 @@ update-retry = 重试
 update-kind-windows-portable = 在当前便携版文件夹中更新。
 update-kind-macos-automatic = 更新整个应用并重启。
 toast-library-scan-failed = 曲库扫描失败：{ $error }
+toast-chart-unavailable = 谱面不可用：{ $error }

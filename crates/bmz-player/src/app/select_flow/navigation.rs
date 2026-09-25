@@ -835,14 +835,21 @@ impl WinitApp {
                         &root.to_string_lossy(),
                     );
                 }
-                if config_changed
-                    && let Err(error) =
-                        save_app_config(&self.boot.app_paths.config_toml, &self.boot.app_config)
-                {
+                let save_roots = if config_changed {
+                    save_app_config(&self.boot.app_paths.config_toml, &self.boot.app_config)
+                } else {
+                    Ok(())
+                };
+                if let Err(error) = save_roots {
                     tracing::error!(%error, "failed to save downloaded song roots");
                     self.show_left_overlay_toast(
                         text.text("toast-chart-download-root-save-failed"),
                     );
+                }
+                // A save failure must not hide a successfully downloaded chart in
+                // this session. Startup restores the scope from persisted settings.
+                if let Err(error) = self.publish_song_scope() {
+                    tracing::error!(%error, "failed to publish downloaded song roots");
                 }
                 let scan_roots = roots
                     .into_iter()

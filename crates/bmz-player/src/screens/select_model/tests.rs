@@ -170,6 +170,37 @@ fn open_in_memory_dbs() -> (LibraryDatabase, ScoreDatabase) {
     (LibraryDatabase::from_connection(library_conn), ScoreDatabase::from_connection(score_conn))
 }
 
+/// Table ownership now requires readable files, even for synthetic metadata fixtures.
+struct ReadableChartFiles(std::path::PathBuf);
+impl Drop for ReadableChartFiles {
+    fn drop(&mut self) {
+        std::fs::remove_dir_all(&self.0).unwrap();
+    }
+}
+fn make_chart_files_readable(db: &LibraryDatabase) -> ReadableChartFiles {
+    let stamp =
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+    let dir = std::env::temp_dir().join(format!("bmz-table-files-{}-{stamp}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut stmt = db.conn().prepare("SELECT id FROM chart_files").unwrap();
+    let ids = stmt
+        .query_map([], |r| r.get::<_, i64>(0))
+        .unwrap()
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .unwrap();
+    for id in ids {
+        let path = dir.join(format!("{id}.bms"));
+        std::fs::write(&path, "#TITLE Fixture\n").unwrap();
+        db.conn()
+            .execute(
+                "UPDATE chart_files SET path = ?1 WHERE id = ?2",
+                rusqlite::params![path.to_string_lossy(), id],
+            )
+            .unwrap();
+    }
+    ReadableChartFiles(dir)
+}
+
 fn open_in_memory_collection_db() -> CollectionDatabase {
     let mut collection_conn = Connection::open_in_memory().unwrap();
     configure_connection(&collection_conn).unwrap();

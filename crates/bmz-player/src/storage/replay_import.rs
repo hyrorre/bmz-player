@@ -319,7 +319,11 @@ fn import_one(
         ));
     }
     let chart_sha256 = replay.chart_sha256()?;
-    let charts = library_db.list_charts_by_sha256(chart_sha256)?;
+    let charts: Vec<_> = library_db
+        .preferred_chart_metadata(chart_sha256)?
+        .into_iter()
+        .map(|source| source.chart)
+        .collect();
     let Some(chart) = charts.first() else {
         return Ok(ImportOneOutcome::MissingChart(format!(
             "chart {} is not registered in the BMZ library",
@@ -466,7 +470,11 @@ fn import_course_replay(
     let mut charts = Vec::with_capacity(stages.len());
     for (position, stage) in stages.iter().enumerate() {
         let sha256 = stage.chart_sha256()?;
-        let rows = library_db.list_charts_by_sha256(sha256)?;
+        let rows: Vec<_> = library_db
+            .preferred_chart_metadata(sha256)?
+            .into_iter()
+            .map(|source| source.chart)
+            .collect();
         let Some(chart) = rows.first() else {
             return Ok(ImportOneOutcome::MissingChart(format!(
                 "course stage {} chart {} is not registered in the BMZ library",

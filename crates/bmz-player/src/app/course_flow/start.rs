@@ -307,9 +307,9 @@ impl WinitApp {
             entries.iter().map(|r| (r.position, r.chart_sha256, r.replay_path.clone())).collect();
         let replay_root = self.boot.profile_paths.root_dir.clone();
         let lookup = |chart_sha256: [u8; 32]| -> anyhow::Result<Option<i64>> {
-            self.boot.library_db.chart_id_by_sha256(chart_sha256)
+            self.boot.library_db.available_chart_id_by_sha256(chart_sha256)
         };
-        let queued = match crate::storage::replay::load_course_replays(
+        let mut queued = match crate::storage::replay::load_course_replays(
             &entry_tuples,
             &replay_root,
             lookup,
@@ -328,10 +328,16 @@ impl WinitApp {
 
         let mut definition = stored.definition;
         let replay_layout_matches = queued.len() <= definition.entries.len()
-            && queued.iter().enumerate().all(|(index, replay)| {
-                replay.position == index as i64
-                    && definition.entries.get(index).and_then(|entry| entry.chart_id)
-                        == Some(replay.chart_id)
+            && queued.iter_mut().enumerate().all(|(index, replay)| {
+                let expected_id = definition.entries.get(index).and_then(|entry| entry.chart_id);
+                let expected_hash = expected_id.and_then(|id| {
+                    self.boot.library_db.chart_sha256_by_chart_id(id).ok().flatten()
+                });
+                let matches = expected_hash == Some(replay.chart_sha256);
+                if matches && let Some(id) = expected_id {
+                    replay.chart_id = id;
+                }
+                replay.position == index as i64 && matches
             });
         if !replay_layout_matches {
             tracing::warn!(

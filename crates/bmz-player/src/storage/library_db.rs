@@ -27,8 +27,12 @@ mod database_write;
 mod path_helpers;
 mod query_helpers;
 mod scope;
+mod sources;
 
+pub(crate) use scope::configured_song_roots;
 pub(crate) use scope::song_root_contains_file;
+pub use sources::ChartSource;
+pub(crate) use sources::available_chart_id_for_hash;
 
 use analysis_helpers::*;
 use path_helpers::*;

@@ -795,3 +795,4 @@ update-retry = 다시 시도
 update-kind-windows-portable = 현재 portable 폴더를 업데이트합니다.
 update-kind-macos-automatic = 앱 전체를 업데이트하고 다시 시작합니다.
 toast-library-scan-failed = 라이브러리 스캔 실패: { $error }
+toast-chart-unavailable = 차트를 사용할 수 없습니다: { $error }

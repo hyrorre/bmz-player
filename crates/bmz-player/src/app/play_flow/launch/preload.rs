@@ -2,7 +2,26 @@ use super::*;
 use crate::config::profile_config::SevenToNineRuleMode;
 
 impl WinitApp {
+    pub(super) fn resolve_play_chart_id(&mut self, chart_id: i64) -> Option<i64> {
+        match self.boot.library_db.verified_chart_source(chart_id) {
+            Ok(source) => Some(source.chart.chart_id),
+            Err(error) => {
+                tracing::warn!(chart_id, error = %format_error_chain(&error), "chart is unavailable");
+                let mut args = FluentArgs::new();
+                args.set("error", format!("{error:#}"));
+                self.show_left_overlay_toast(
+                    Localizer::new(self.boot.profile_config.ui.locale())
+                        .format("toast-chart-unavailable", &args),
+                );
+                None
+            }
+        }
+    }
+
     pub(super) fn begin_decide_for_chart(&mut self, chart_id: i64, mut options: PlayStartOptions) {
+        let Some(chart_id) = self.resolve_play_chart_id(chart_id) else {
+            return;
+        };
         self.normalize_key_mode_conversion_options(chart_id, &mut options);
         self.resolve_play_target_from_cache(chart_id, &mut options);
         self.apply_rival_play_overrides(chart_id, &mut options);

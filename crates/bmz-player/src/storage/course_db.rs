@@ -293,6 +293,35 @@ fn stored_course_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<StoredCou
 }
 
 fn resolve_entry_chart_id(conn: &Connection, entry: &CourseEntry) -> Result<Option<i64>> {
+    // Configured libraries use the same active/readable-copy resolver as playback.
+    // Legacy metadata-only databases retain their historical linking behavior.
+    if super::library_db::configured_song_roots(conn)?.is_some() {
+        let sha = if let Some(sha) = &entry.sha256 {
+            Some(sha.clone())
+        } else if let Some(id) = entry.chart_id {
+            conn.query_row("SELECT sha256 FROM charts WHERE id = ?1", [id], |row| row.get(0))
+                .optional()?
+        } else {
+            None
+        };
+        if let Some(sha) = sha {
+            return super::library_db::available_chart_id_for_hash(
+                conn,
+                "sha256",
+                &sha,
+                entry.chart_id,
+            );
+        }
+        if let Some(md5) = &entry.md5 {
+            return super::library_db::available_chart_id_for_hash(
+                conn,
+                "md5",
+                md5,
+                entry.chart_id,
+            );
+        }
+        return Ok(None);
+    }
     if let Some(chart_id) = entry.chart_id
         && chart_id_has_existing_file(conn, chart_id)?
     {

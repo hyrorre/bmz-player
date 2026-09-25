@@ -164,6 +164,9 @@ impl WinitApp {
     }
 
     pub(super) fn start_chart(&mut self, chart_id: i64) {
+        let Some(chart_id) = self.resolve_play_chart_id(chart_id) else {
+            return;
+        };
         self.select.autoplay_folder = None;
         let mut options = self.play_start_options();
         if options.session_mode.is_practice() {
@@ -250,6 +253,9 @@ impl WinitApp {
         cli: PracticeCliOverrides,
         battle_target: Option<crate::screens::play_start::BattleTarget>,
     ) {
+        let Some(chart_id) = self.resolve_play_chart_id(chart_id) else {
+            return;
+        };
         let defaults = match self.load_practice_defaults_for_chart(chart_id, &cli) {
             Ok(defaults) => defaults,
             Err(error) => {
@@ -304,11 +310,10 @@ impl WinitApp {
         chart_id: i64,
         cli: &PracticeCliOverrides,
     ) -> Result<PracticeChartDefaults> {
-        let Some(path) = self.boot.library_db.primary_chart_file_path(chart_id)? else {
-            anyhow::bail!("chart file not found for chart id {chart_id}");
-        };
-        let import = bmz_chart::import::import_bms_chart(Path::new(&path), None, true)
-            .with_context(|| format!("import chart for practice defaults: {path}"))?;
+        let (_, import) = self
+            .boot
+            .library_db
+            .load_chart_source(chart_id, bmz_chart::import::BmsRandomSource::Seed(None))?;
         let property = load_practice_property(
             &self.boot.profile_paths,
             &import.chart.identity.file_sha256,

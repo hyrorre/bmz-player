@@ -435,7 +435,7 @@ fn primary_chart_for_score(
     library_db: &LibraryDatabase,
     sha256: [u8; 32],
 ) -> Result<Option<ChartListItem>> {
-    Ok(library_db.list_charts_by_sha256(sha256)?.into_iter().next())
+    Ok(library_db.preferred_chart_metadata(sha256)?.into_iter().next().map(|source| source.chart))
 }
 
 fn replay_hash(profile_root: &Path, replay_path: Option<&str>) -> Result<Option<String>> {

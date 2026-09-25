@@ -42,6 +42,7 @@ fn load_select_items_in_table_returns_charts_sorted_by_level_order() {
     };
     library_db.upsert_difficulty_table(&table).unwrap();
 
+    let _files = make_chart_files_readable(&library_db);
     let items = load_select_items_in_table(
         &library_db,
         &score_db,
@@ -357,6 +358,7 @@ fn load_select_items_in_table_level_filters_by_level() {
     };
     library_db.upsert_difficulty_table(&table).unwrap();
 
+    let _files = make_chart_files_readable(&library_db);
     let items = load_select_items_in_table_level(
         &library_db,
         &score_db,
@@ -446,6 +448,7 @@ fn load_select_items_in_table_level_prefers_library_title_when_registered() {
     };
     library_db.upsert_difficulty_table(&table).unwrap();
 
+    let _files = make_chart_files_readable(&library_db);
     let items = load_select_items_in_table_level(
         &library_db,
         &score_db,
@@ -501,6 +504,7 @@ fn load_select_items_in_table_level_dedupes_matched_chart_and_stale_hash_row() {
     };
     library_db.upsert_difficulty_table(&table).unwrap();
 
+    let _files = make_chart_files_readable(&library_db);
     let items = load_select_items_in_table_level(
         &library_db,
         &score_db,
@@ -556,6 +560,7 @@ fn load_select_items_in_table_level_dedupes_md5_and_sha256_rows_for_same_chart()
     };
     library_db.upsert_difficulty_table(&table).unwrap();
 
+    let _files = make_chart_files_readable(&library_db);
     let items = load_select_items_in_table_level(
         &library_db,
         &score_db,
@@ -611,6 +616,7 @@ fn load_select_items_in_table_level_dedupes_duplicate_library_chart_ids() {
     };
     library_db.upsert_difficulty_table(&table).unwrap();
 
+    let _files = make_chart_files_readable(&library_db);
     let items = load_select_items_in_table_level(
         &library_db,
         &score_db,

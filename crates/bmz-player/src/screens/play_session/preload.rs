@@ -41,15 +41,8 @@ pub fn load_game_session_for_chart_with_input_backend(
     options: PlaySessionOptions,
     input_backend: Box<dyn InputBackend>,
 ) -> Result<GameSession> {
-    let Some(path) = library_db.primary_chart_file_path(chart_id)? else {
-        bail!("chart file not found for chart id {chart_id}");
-    };
-    let import = import_bms_chart_with_random_source(
-        std::path::Path::new(&path),
-        bms_random_source_for_chart(&options),
-        true,
-    )
-    .with_context(|| format!("failed to import chart file: {path}"))?;
+    let (_, import) =
+        library_db.load_chart_source(chart_id, bms_random_source_for_chart(&options))?;
     Ok(build_game_session_with_input_backend(
         Arc::new(import.chart),
         profile,
@@ -404,12 +397,7 @@ pub fn load_source_chart_for_chart(
     chart_id: i64,
     random_seed: Option<u64>,
 ) -> Result<PlayableChart> {
-    let Some(path) = library_db.primary_chart_file_path(chart_id)? else {
-        bail!("chart file not found for chart id {chart_id}");
-    };
-    Ok(import_bms_chart(std::path::Path::new(&path), random_seed, true)
-        .with_context(|| format!("failed to import chart file: {path}"))?
-        .chart)
+    Ok(library_db.load_chart_source(chart_id, BmsRandomSource::Seed(random_seed))?.1.chart)
 }
 
 pub(super) fn load_source_chart_import_for_play(
@@ -417,15 +405,16 @@ pub(super) fn load_source_chart_import_for_play(
     chart_id: i64,
     options: &PlaySessionOptions,
 ) -> Result<ImportResult> {
-    let Some(path) = library_db.primary_chart_file_path(chart_id)? else {
-        bail!("chart file not found for chart id {chart_id}");
-    };
-    import_bms_chart_with_random_source(
-        std::path::Path::new(&path),
-        bms_random_source_for_chart(options),
-        true,
-    )
-    .with_context(|| format!("failed to import chart file: {path}"))
+    let (source, import) =
+        library_db.load_chart_source(chart_id, bms_random_source_for_chart(options))?;
+    // The app resolves the copy before preparing skins and starting the worker.
+    // If it disappears during preload, abort rather than mix another folder's assets.
+    anyhow::ensure!(
+        source.chart.chart_id == chart_id,
+        "chart source changed during preload; retry to use {}",
+        source.path.display()
+    );
+    Ok(import)
 }
 
 pub(super) fn load_transformed_chart_for_play(

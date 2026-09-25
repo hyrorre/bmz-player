@@ -17,7 +17,8 @@ impl LibraryDatabase {
         configured_song_roots(&self.conn)
     }
 
-    /// Publish only successfully persisted app settings, without deleting any charts.
+    /// Publish the session's lookup scope without deleting charts. Full cleanup
+    /// separately requires saved settings and an unchanged scan snapshot.
     pub fn set_configured_song_roots(&self, roots: &[PathEntry]) -> Result<()> {
         self.conn.execute(
             "INSERT INTO library_song_scope (id, roots_json) VALUES (1, ?1)
@@ -48,7 +49,12 @@ impl LibraryDatabase {
     }
 }
 
-pub(super) fn configured_song_roots(conn: &Connection) -> Result<Option<Vec<PathEntry>>> {
+pub(crate) fn configured_song_roots(conn: &Connection) -> Result<Option<Vec<PathEntry>>> {
+    // Course repair also runs during migrations preceding the scope table.
+    let has_scope: bool = conn.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'library_song_scope')", [], |row| row.get(0))?;
+    if !has_scope {
+        return Ok(None);
+    }
     let json: Option<String> = conn
         .query_row("SELECT roots_json FROM library_song_scope WHERE id = 1", [], |row| row.get(0))
         .optional()?;
