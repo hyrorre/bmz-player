@@ -186,11 +186,18 @@ beatoraja 系の `mode` は key mode ではなく LNMODE である。
 - beatoraja 系は `score.notes`、純 LR2 は `score.totalnotes` を外部 DB のノーツ数として使う
 - 期待値 = `Tap + LongStart`（library / chart `total_notes`）+ effective CN/HCN の long pair 数
 - library `total_notes` 自体は ln_policy 非考慮のため、生値だけでは比較しない
+- 現行の解析バージョンで保存した `ChartLnCounts` と `scored_total_notes()` を使い、件数確認のためにBMSを再読込しない。譜面ファイルが移動・消失していても検証できる
+- 同一ハッシュの古い解析情報より新しい情報を優先する。最新の情報が無い場合は再スキャンが必要な理由を表示する
 - 不一致かつ policy が `ForceLn` 以外なら `ForceLn` で期待値を再計算して再比較（ビルド差フォールバック）
 - それでも不一致ならその行は `failed` としてスキップする
 - あわせて `EX score <= 外部ノーツ数 * 2`、`max combo <= 外部ノーツ数` を検証する
 
 判定合計はノーツ数チェックに使わない。beatoraja 系は途中 FAILED で未処理ノーツが判定に含まれず、非消滅判定では同じノーツに複数判定が付く場合がある。純 LR2 の `poor` には Empty Poor も含まれるため、いずれも判定合計とノーツ数の一致は保証されない。
+
+結果には未所持、重複、ノーツ数不一致、読み込み失敗、譜面情報の更新が必要、不正なスコア、未対応を分けて件数と代表理由を表示する。
+ノーツ数不一致では元件数・選ばれたLN policyの期待値・各FORCE設定の期待値を表示する。
+未定義LN譜面で `mode=0` にCN相当の `notes` が保存されていても、CNとして取り込む補正はしない。
+再スキャンはlibraryの解析情報を更新する操作で、読み取り専用で開く外部score DBの `mode` / `notes` は修正しない。
 
 純 LR2 は CN/HCN が無いため常に `ForceLn` とし、`score.totalnotes` と期待ノーツ数を照合する。
 

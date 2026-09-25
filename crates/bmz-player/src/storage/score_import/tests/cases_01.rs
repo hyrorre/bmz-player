@@ -368,10 +368,8 @@ fn lr2oraja_import_uses_beatoraja_schema_and_rule_mode() {
 
 #[test]
 fn beatoraja_import_mode_cn_on_undefined_ln_sets_force_cn() {
-    clear_test_import_charts();
     let (mut library_db, mut score_db, sha256, _) =
         open_test_databases_with_chart(undefined_ln_chart(2, 2));
-    set_test_import_chart(sha256, undefined_ln_chart(2, 2));
     let source = Connection::open_in_memory().unwrap();
     // ForceCn expected = 2 base + 2 CN ends = 4
     create_beatoraja_source_with_score(
@@ -401,16 +399,13 @@ fn beatoraja_import_mode_cn_on_undefined_ln_sets_force_cn() {
         .query_row("SELECT ln_policy FROM score_history", [], |row| row.get(0))
         .unwrap();
     assert_eq!(ln_policy, "ForceCn");
-    clear_test_import_charts();
     let _ = &mut library_db;
 }
 
 #[test]
 fn beatoraja_import_falls_back_to_force_ln_when_only_ln_expected_matches() {
-    clear_test_import_charts();
     let (library_db, mut score_db, sha256, _) =
         open_test_databases_with_chart(undefined_ln_chart(2, 2));
-    set_test_import_chart(sha256, undefined_ln_chart(2, 2));
     let source = Connection::open_in_memory().unwrap();
     // mode=1 -> ForceCn expects 4, but source notes=2 match ForceLn only.
     create_beatoraja_source_with_score(
@@ -440,15 +435,12 @@ fn beatoraja_import_falls_back_to_force_ln_when_only_ln_expected_matches() {
         .query_row("SELECT ln_policy FROM score_history", [], |row| row.get(0))
         .unwrap();
     assert_eq!(ln_policy, "ForceLn");
-    clear_test_import_charts();
 }
 
 #[test]
 fn beatoraja_import_fails_when_source_note_count_mismatches_all_policies() {
-    clear_test_import_charts();
     let (library_db, mut score_db, sha256, _) =
         open_test_databases_with_chart(undefined_ln_chart(2, 2));
-    set_test_import_chart(sha256, undefined_ln_chart(2, 2));
     let source = Connection::open_in_memory().unwrap();
     create_beatoraja_source_with_score(
         &source,
@@ -473,15 +465,12 @@ fn beatoraja_import_fails_when_source_note_count_mismatches_all_policies() {
     .unwrap();
     assert_eq!(report.failed, 1);
     assert_eq!(report.imported, 0);
-    clear_test_import_charts();
 }
 
 #[test]
 fn beatoraja_import_accepts_failed_row_with_fewer_judgements() {
-    clear_test_import_charts();
     let (library_db, mut score_db, sha256, _) =
         open_test_databases_with_chart(undefined_ln_chart(2, 2));
-    set_test_import_chart(sha256, undefined_ln_chart(2, 2));
     let source = Connection::open_in_memory().unwrap();
     create_beatoraja_source_with_score(
         &source,
@@ -511,7 +500,6 @@ fn beatoraja_import_accepts_failed_row_with_fewer_judgements() {
         .query_row("SELECT clear_type FROM score_history", [], |row| row.get(0))
         .unwrap();
     assert_eq!(clear_type, "Failed");
-    clear_test_import_charts();
 }
 
 #[test]

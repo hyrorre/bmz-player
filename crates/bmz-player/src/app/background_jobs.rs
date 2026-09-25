@@ -102,11 +102,14 @@ impl WinitApp {
                     let mut args = FluentArgs::new();
                     args.set("label", label);
                     args.set("path", request.path.display().to_string());
-                    args.set("summary", summary);
+                    args.set(
+                        "summary",
+                        report.summary_for_locale(self.boot.profile_config.ui.locale()),
+                    );
                     egui.set_score_import_status(
                         Localizer::new(self.boot.profile_config.ui.locale())
                             .format("score-import-success", &args),
-                        false,
+                        report.failed > 0,
                     );
                 }
             }

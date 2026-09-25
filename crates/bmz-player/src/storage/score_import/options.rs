@@ -168,7 +168,7 @@ pub(super) fn resolve_import_ln_policy(
     chart_sha256: [u8; 32],
     initial_policy: LnScorePolicy,
     source_notes: u32,
-    chart_cache: &mut HashMap<[u8; 32], Arc<PlayableChart>>,
+    chart_cache: &mut HashMap<[u8; 32], ChartSource>,
 ) -> Result<Option<ResolvedImportLnPolicy>> {
     let expected =
         expected_notes_for_policy(library_db, chart_sha256, initial_policy, chart_cache)?;
@@ -199,70 +199,51 @@ pub(super) fn expected_notes_for_policy(
     library_db: &LibraryDatabase,
     chart_sha256: [u8; 32],
     policy: LnScorePolicy,
-    chart_cache: &mut HashMap<[u8; 32], Arc<PlayableChart>>,
+    chart_cache: &mut HashMap<[u8; 32], ChartSource>,
 ) -> Result<u32> {
-    let charts = library_db.list_charts_by_sha256(chart_sha256)?;
-    let Some(item) = charts.first() else {
-        bail!("chart missing from library while resolving import note count");
-    };
-    // No long notes: every policy collapses to ForceLn / base total_notes.
-    if !item.ln_profile.has_any_ln() {
-        return Ok(item.total_notes);
-    }
-    // ForceLn never scores long ends separately, so base total_notes is enough.
-    if policy == LnScorePolicy::ForceLn {
-        return Ok(item.total_notes);
-    }
-    let chart = load_import_chart(library_db, chart_sha256, item.chart_id, chart_cache)?;
-    Ok(expected_scored_note_count_for_policy(&chart, policy))
+    let chart = import_chart_metadata(library_db, chart_sha256, chart_cache)?;
+    Ok(chart.scored_total_notes(policy))
 }
 
-pub(super) fn load_import_chart(
+pub(super) fn import_chart_metadata(
     library_db: &LibraryDatabase,
     chart_sha256: [u8; 32],
-    chart_id: i64,
-    chart_cache: &mut HashMap<[u8; 32], Arc<PlayableChart>>,
-) -> Result<Arc<PlayableChart>> {
-    if let Some(chart) = chart_cache.get(&chart_sha256) {
-        return Ok(Arc::clone(chart));
-    }
-    #[cfg(test)]
-    if let Some(chart) = take_test_import_chart(chart_sha256) {
-        let chart = Arc::new(chart);
-        chart_cache.insert(chart_sha256, Arc::clone(&chart));
-        return Ok(chart);
-    }
-    let Some(path) = library_db.primary_chart_file_path(chart_id)? else {
-        bail!("chart file path missing for chart id {chart_id}");
+    chart_cache: &mut HashMap<[u8; 32], ChartSource>,
+) -> Result<ChartListItem> {
+    let source = match chart_cache.entry(chart_sha256) {
+        std::collections::hash_map::Entry::Occupied(entry) => entry.into_mut(),
+        std::collections::hash_map::Entry::Vacant(entry) => {
+            let source = library_db
+                .preferred_chart_metadata(chart_sha256)?
+                .into_iter()
+                .next()
+                .context("chart metadata missing from library")?;
+            entry.insert(source)
+        }
     };
-    let imported = import_bms_chart(Path::new(&path), None, false)
-        .with_context(|| format!("failed to import chart for score note-count check: {path}"))?;
-    let chart = Arc::new(imported.chart);
-    chart_cache.insert(chart_sha256, Arc::clone(&chart));
-    Ok(chart)
+    anyhow::ensure!(
+        source.import_version == CHART_IMPORT_VERSION,
+        "outdated chart metadata (version {}, expected {}); rescan the library before importing scores",
+        source.import_version,
+        CHART_IMPORT_VERSION
+    );
+    Ok(source.chart.clone())
 }
 
-#[cfg(test)]
-thread_local! {
-    static TEST_IMPORT_CHARTS: std::cell::RefCell<HashMap<[u8; 32], PlayableChart>> =
-        std::cell::RefCell::new(HashMap::new());
-}
-
-#[cfg(test)]
-pub(super) fn set_test_import_chart(sha256: [u8; 32], chart: PlayableChart) {
-    TEST_IMPORT_CHARTS.with(|maps| {
-        maps.borrow_mut().insert(sha256, chart);
-    });
-}
-
-#[cfg(test)]
-pub(super) fn take_test_import_chart(sha256: [u8; 32]) -> Option<PlayableChart> {
-    TEST_IMPORT_CHARTS.with(|maps| maps.borrow().get(&sha256).cloned())
-}
-
-#[cfg(test)]
-pub(super) fn clear_test_import_charts() {
-    TEST_IMPORT_CHARTS.with(|maps| maps.borrow_mut().clear());
+pub(super) fn note_count_mismatch_details(
+    chart: &ChartListItem,
+    policy: LnScorePolicy,
+    source: u32,
+) -> String {
+    format!(
+        "{}: source={source}, expected {}={} (ForceLn={}, ForceCn={}, ForceHcn={})",
+        super::super::common::hash_to_hex(&chart.sha256),
+        policy.as_str(),
+        chart.scored_total_notes(policy),
+        chart.scored_total_notes(LnScorePolicy::ForceLn),
+        chart.scored_total_notes(LnScorePolicy::ForceCn),
+        chart.scored_total_notes(LnScorePolicy::ForceHcn)
+    )
 }
 
 pub(super) fn imported_score_record(

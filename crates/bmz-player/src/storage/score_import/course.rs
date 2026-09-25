@@ -19,11 +19,14 @@ pub(super) fn import_lr2_course(
 ) -> Result<()> {
     let Some(stages) = lr2_course_stage_md5s(&row.md5) else {
         report.skipped += 1;
+        report
+            .issue(ScoreImportIssueKind::Unsupported, "LR2 course key is not a stage MD5 sequence");
         tracing::debug!(len = row.md5.len(), "LR2 course key not splittable into stage md5s");
         return Ok(());
     };
     let Some(targets) = course_index.get(&stages) else {
         report.skipped += 1;
+        report.issue(ScoreImportIssueKind::MissingChart, "no matching LR2 course definition");
         tracing::debug!(stages = stages.len(), "LR2 course has no matching bmz course");
         return Ok(());
     };

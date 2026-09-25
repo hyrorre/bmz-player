@@ -1,10 +1,7 @@
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::path::PathBuf;
 
 use anyhow::{Context, Result, bail};
-use bmz_chart::import::import_bms_chart;
-use bmz_chart::model::PlayableChart;
 use bmz_core::clear::{ClearType, GaugeType};
 use bmz_core::course::{
     CourseClassConstraint, CourseGaugeConstraint, CourseJudgeConstraint, CourseSpeedConstraint,
@@ -15,14 +12,12 @@ use bmz_gameplay::score::{JudgeCounts, ScoreState};
 use rusqlite::{Connection, OpenFlags, Row};
 
 use super::common::hex_to_hash;
-use super::library_db::LibraryDatabase;
+use super::library_db::{CHART_IMPORT_VERSION, ChartListItem, ChartSource, LibraryDatabase};
 use super::score_db::{
     CourseScoreInsert, ImportedScoreReconciliation, ScoreDatabase, ScoreRecord, ScoreSourceKind,
     decode_beatoraja_ghost,
 };
-use crate::ln_policy::{
-    LnPolicySetting, LnScorePolicy, expected_scored_note_count_for_policy, score_ln_policy,
-};
+use crate::ln_policy::{LnPolicySetting, LnScorePolicy, score_ln_policy};
 use crate::select_options::{ArrangeOption, DoubleOption};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -90,14 +85,102 @@ pub struct ScoreImportReport {
     pub corrected: u32,
     pub skipped: u32,
     pub failed: u32,
+    pub issues: Vec<ScoreImportIssue>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScoreImportIssueKind {
+    MissingChart,
+    Duplicate,
+    NoteCountMismatch,
+    ReadFailure,
+    Metadata,
+    InvalidScore,
+    Unsupported,
+}
+
+impl ScoreImportIssueKind {
+    fn message_key(self) -> &'static str {
+        match self {
+            Self::MissingChart => "score-import-reason-missing",
+            Self::Duplicate => "score-import-reason-duplicate",
+            Self::NoteCountMismatch => "score-import-reason-notes",
+            Self::ReadFailure => "score-import-reason-read",
+            Self::Metadata => "score-import-reason-metadata",
+            Self::InvalidScore => "score-import-reason-invalid",
+            Self::Unsupported => "score-import-reason-unsupported",
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::MissingChart => "missing chart",
+            Self::Duplicate => "duplicate",
+            Self::NoteCountMismatch => "note-count mismatch",
+            Self::ReadFailure => "read failure",
+            Self::Metadata => "library metadata",
+            Self::InvalidScore => "invalid score",
+            Self::Unsupported => "unsupported",
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct ScoreImportIssue {
+    pub kind: ScoreImportIssueKind,
+    pub count: u32,
+    pub example: String,
 }
 
 impl ScoreImportReport {
+    pub fn summary_for_locale(&self, locale: crate::i18n::AppLocale) -> String {
+        use crate::i18n::{FluentArgs, Localizer};
+        let text = Localizer::new(locale);
+        let mut args = FluentArgs::new();
+        for (name, count) in [
+            ("scanned", self.scanned),
+            ("matched", self.matched),
+            ("imported", self.imported),
+            ("corrected", self.corrected),
+            ("skipped", self.skipped),
+            ("failed", self.failed),
+        ] {
+            args.set(name, i64::from(count));
+        }
+        let mut summary = text.format("score-import-summary", &args);
+        for issue in &self.issues {
+            summary.push_str(&format!(
+                "\n{} {}: {}",
+                text.text(issue.kind.message_key()),
+                issue.count,
+                issue.example
+            ));
+        }
+        summary
+    }
+
+    fn issue(&mut self, kind: ScoreImportIssueKind, example: impl Into<String>) {
+        if let Some(issue) = self.issues.iter_mut().find(|issue| issue.kind == kind) {
+            issue.count += 1;
+        } else {
+            self.issues.push(ScoreImportIssue { kind, count: 1, example: example.into() });
+        }
+    }
+
     pub fn summary(&self) -> String {
-        format!(
+        let mut summary = format!(
             "scanned {}, matched {}, imported {}, corrected {}, skipped {}, failed {}",
             self.scanned, self.matched, self.imported, self.corrected, self.skipped, self.failed
-        )
+        );
+        for issue in &self.issues {
+            summary.push_str(&format!(
+                "\n{} {}: {}",
+                issue.kind.label(),
+                issue.count,
+                issue.example
+            ));
+        }
+        summary
     }
 }
 
@@ -170,7 +253,7 @@ fn import_lr2_scores_with_device_type(
     // borrow of `library_db` is released before we start inserting course scores.
     let course_index = build_lr2_course_index(library_db)?;
     let mut report = ScoreImportReport::default();
-    let mut chart_cache: HashMap<[u8; 32], Arc<PlayableChart>> = HashMap::new();
+    let mut chart_cache: HashMap<[u8; 32], ChartSource> = HashMap::new();
     let mut stmt = source.prepare(
         "SELECT hash, clear, perfect, great, good, bad, poor,
                 totalnotes, maxcombo, minbp, playcount, clearcount, ghost, rseed, op_best
@@ -183,6 +266,7 @@ fn import_lr2_scores_with_device_type(
             Ok(row) => row,
             Err(error) => {
                 report.failed += 1;
+                report.issue(ScoreImportIssueKind::ReadFailure, format!("{error:#}"));
                 tracing::warn!(%error, "failed to read LR2 score row");
                 continue;
             }
@@ -196,6 +280,10 @@ fn import_lr2_scores_with_device_type(
             Ok(options) => options,
             Err(error) => {
                 report.skipped += 1;
+                report.issue(
+                    ScoreImportIssueKind::Unsupported,
+                    format!("{}: op_best={} {error:?}", row.md5, row.op_best),
+                );
                 tracing::warn!(
                     hash = %row.md5,
                     op_best = row.op_best,
@@ -224,12 +312,14 @@ fn import_lr2_scores_with_device_type(
             Ok(md5) => md5,
             Err(error) => {
                 report.failed += 1;
+                report.issue(ScoreImportIssueKind::InvalidScore, format!("{}: {error:#}", row.md5));
                 tracing::warn!(md5 = %row.md5, %error, "invalid LR2 score md5");
                 continue;
             }
         };
         let Some(chart_sha256) = library_db.chart_sha256_by_md5(md5)? else {
             report.skipped += 1;
+            report.issue(ScoreImportIssueKind::MissingChart, row.md5.clone());
             continue;
         };
         report.matched += 1;
@@ -237,6 +327,13 @@ fn import_lr2_scores_with_device_type(
         let ex_score = lr2_ex_score(&row);
         if !score_summary_is_sane(row.total_notes, row.max_combo, ex_score) {
             report.failed += 1;
+            report.issue(
+                ScoreImportIssueKind::InvalidScore,
+                format!(
+                    "{}: notes={}, combo={}, EX={ex_score}",
+                    row.md5, row.total_notes, row.max_combo
+                ),
+            );
             tracing::warn!(
                 md5 = %row.md5,
                 source_notes = row.total_notes,
@@ -256,8 +353,15 @@ fn import_lr2_scores_with_device_type(
             Ok(Some(resolved)) => resolved,
             Ok(None) => {
                 report.failed += 1;
+                let detail = note_count_mismatch_details(
+                    &chart_cache[&chart_sha256].chart,
+                    LnScorePolicy::ForceLn,
+                    row.total_notes,
+                );
+                report.issue(ScoreImportIssueKind::NoteCountMismatch, detail.clone());
                 tracing::warn!(
                     md5 = %row.md5,
+                    detail,
                     source_notes = row.total_notes,
                     "LR2 score source note count does not match expected note count"
                 );
@@ -265,7 +369,8 @@ fn import_lr2_scores_with_device_type(
             }
             Err(error) => {
                 report.failed += 1;
-                tracing::warn!(md5 = %row.md5, %error, "failed to resolve LR2 import chart");
+                report.issue(ScoreImportIssueKind::Metadata, format!("{}: {error:#}", row.md5));
+                tracing::warn!(md5 = %row.md5, error = %format!("{error:#}"), "failed to resolve LR2 import chart");
                 continue;
             }
         };
@@ -294,6 +399,7 @@ fn import_lr2_scores_with_device_type(
             ImportedScoreReconciliation::Missing => {}
             ImportedScoreReconciliation::Unchanged => {
                 report.skipped += 1;
+                report.issue(ScoreImportIssueKind::Duplicate, row.md5.clone());
                 continue;
             }
             ImportedScoreReconciliation::Corrected => {
@@ -342,7 +448,7 @@ fn import_beatoraja_scores_with_device_type(
     };
 
     let mut report = ScoreImportReport::default();
-    let mut chart_cache: HashMap<[u8; 32], Arc<PlayableChart>> = HashMap::new();
+    let mut chart_cache: HashMap<[u8; 32], ChartSource> = HashMap::new();
     let sql = format!(
         "SELECT sha256, mode, clear, epg, lpg, egr, lgr, egd, lgd, ebd, lbd,
                 epr, lpr, ems, lms, notes, combo, minbp, ghost, seed, date, option
@@ -356,6 +462,7 @@ fn import_beatoraja_scores_with_device_type(
             Ok(row) => row,
             Err(error) => {
                 report.failed += 1;
+                report.issue(ScoreImportIssueKind::ReadFailure, format!("{error:#}"));
                 tracing::warn!(%error, "failed to read beatoraja score row");
                 continue;
             }
@@ -370,6 +477,7 @@ fn import_beatoraja_scores_with_device_type(
         // Treat them as skipped rather than failed, and keep the log quiet.
         if is_course_hash(&row.sha256, 64) {
             report.skipped += 1;
+            report.issue(ScoreImportIssueKind::Unsupported, "beatoraja course score");
             tracing::debug!(len = row.sha256.len(), "skipped beatoraja course score");
             continue;
         }
@@ -377,26 +485,42 @@ fn import_beatoraja_scores_with_device_type(
             Ok(sha256) => sha256,
             Err(error) => {
                 report.failed += 1;
+                report.issue(
+                    ScoreImportIssueKind::InvalidScore,
+                    format!("{}: {error:#}", row.sha256),
+                );
                 tracing::warn!(sha256 = %row.sha256, %error, "invalid beatoraja score sha256");
                 continue;
             }
         };
         if library_db.chart_id_by_sha256(chart_sha256)?.is_none() {
             report.skipped += 1;
+            report.issue(ScoreImportIssueKind::MissingChart, row.sha256.clone());
             continue;
         }
         report.matched += 1;
 
         let setting = beatoraja_mode_to_ln_setting(row.mode);
-        let charts = library_db.list_charts_by_sha256(chart_sha256)?;
-        let Some(chart_item) = charts.first() else {
-            report.skipped += 1;
-            continue;
+        let chart_item = match import_chart_metadata(library_db, chart_sha256, &mut chart_cache) {
+            Ok(chart) => chart,
+            Err(error) => {
+                report.failed += 1;
+                report.issue(ScoreImportIssueKind::Metadata, format!("{}: {error:#}", row.sha256));
+                tracing::warn!(sha256 = %row.sha256, error = %format!("{error:#}"), "failed to resolve beatoraja import metadata");
+                continue;
+            }
         };
         let ln_policy = score_ln_policy(setting, chart_item.ln_profile);
         let ex_score = beatoraja_ex_score(&row);
         if !score_summary_is_sane(row.total_notes, row.max_combo, ex_score) {
             report.failed += 1;
+            report.issue(
+                ScoreImportIssueKind::InvalidScore,
+                format!(
+                    "{}: notes={}, combo={}, EX={ex_score}",
+                    row.sha256, row.total_notes, row.max_combo
+                ),
+            );
             tracing::warn!(
                 sha256 = %row.sha256,
                 source_notes = row.total_notes,
@@ -416,8 +540,15 @@ fn import_beatoraja_scores_with_device_type(
             Ok(Some(resolved)) => resolved,
             Ok(None) => {
                 report.failed += 1;
+                let detail = format!(
+                    "mode={} {}",
+                    row.mode,
+                    note_count_mismatch_details(&chart_item, ln_policy, row.total_notes)
+                );
+                report.issue(ScoreImportIssueKind::NoteCountMismatch, detail.clone());
                 tracing::warn!(
                     sha256 = %row.sha256,
+                    detail,
                     mode = row.mode,
                     source_notes = row.total_notes,
                     policy = ln_policy.as_str(),
@@ -427,9 +558,10 @@ fn import_beatoraja_scores_with_device_type(
             }
             Err(error) => {
                 report.failed += 1;
+                report.issue(ScoreImportIssueKind::Metadata, format!("{}: {error:#}", row.sha256));
                 tracing::warn!(
                     sha256 = %row.sha256,
-                    %error,
+                    error = %format!("{error:#}"),
                     "failed to resolve beatoraja import chart"
                 );
                 continue;
@@ -461,6 +593,7 @@ fn import_beatoraja_scores_with_device_type(
             ImportedScoreReconciliation::Missing => {}
             ImportedScoreReconciliation::Unchanged => {
                 report.skipped += 1;
+                report.issue(ScoreImportIssueKind::Duplicate, row.sha256.clone());
                 continue;
             }
             ImportedScoreReconciliation::Corrected => {
