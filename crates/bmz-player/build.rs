@@ -1,8 +1,16 @@
 fn main() {
     println!("cargo:rustc-check-cfg=cfg(bmz_sparkle)");
+    println!("cargo:rerun-if-changed=../../assets/app-icon/bmz-player.ico");
     for key in ["BMZ_SPARKLE_DIR", "BMZ_UPDATE_PUBLIC_KEY"] {
         println!("cargo:rerun-if-env-changed={key}");
     }
+
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
+        let mut resources = winres::WindowsResource::new();
+        resources.set_icon("../../assets/app-icon/bmz-player.ico");
+        resources.compile().expect("failed to embed the Windows executable icon");
+    }
+
     println!("cargo:rerun-if-changed=native/sparkle.m");
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("macos") {
         return;

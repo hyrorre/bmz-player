@@ -26,7 +26,8 @@ assets/app-icon/
 
 `bmz-player-window.png` は winit の実行時ウィンドウ icon として `bmz-player`
 binary に埋め込む。Windows build では `bmz-player-window-windows.png` を
-埋め込む。`bmz-player.ico` は Windows installer / shortcut 用、
+埋め込み、`bmz-player.ico` を実行ファイルのリソース icon として登録する。
+同じ `.ico` を Windows installer / shortcut にも使い、
 `bmz-player.icns` は macOS `.app` bundle 用。
 
 ## Windows installer (Inno Setup)
