@@ -5,10 +5,15 @@ use crate::screens::select_model::{SelectCourseRow, SelectFolderSummary};
 pub(in crate::app) struct CachedSelectChartDistribution {
     pub notes: Vec<ChartDistributionSecond>,
     pub end_density: Option<f64>,
+    pub bpm_graph_segments: Vec<bmz_render::chart_graph::BpmGraphSegment>,
 }
 
 impl CachedSelectChartDistribution {
-    pub(in crate::app) fn new(notes: Vec<ChartDistributionSecond>, chart: &ChartListItem) -> Self {
+    pub(in crate::app) fn new(
+        graph: crate::storage::library_db::ChartGraphData,
+        chart: &ChartListItem,
+    ) -> Self {
+        let notes = graph.distribution;
         let end_density = (!notes.is_empty()).then(|| {
             crate::storage::library_db::ChartAnalysis::ending_density(
                 &notes,
@@ -16,7 +21,8 @@ impl CachedSelectChartDistribution {
                 chart.ln_counts.canonical_total_notes(chart.total_notes),
             )
         });
-        Self { notes, end_density }
+        let bpm_graph_segments = select_bpm_graph_segments(&graph.speed_changes, chart.length_ms);
+        Self { notes, end_density, bpm_graph_segments }
     }
 }
 
@@ -362,13 +368,8 @@ fn select_chart_snapshot(
         chart_distribution: distribution
             .map(|distribution| select_chart_distribution(&distribution.notes))
             .unwrap_or_default(),
-        chart_bpm_graph_segments: analysis
-            .map(|analysis| {
-                select_bpm_graph_segments(
-                    &analysis.speed_changes,
-                    chart.map(|chart| chart.length_ms).unwrap_or(0),
-                )
-            })
+        chart_bpm_graph_segments: distribution
+            .map(|cached| cached.bpm_graph_segments.clone())
             .unwrap_or_default(),
         in_library: row.in_library(),
         chart_key_mode: chart.and_then(|chart| KeyMode::from_str_opt(&chart.mode)),

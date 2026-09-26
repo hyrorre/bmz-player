@@ -131,13 +131,7 @@ pub(super) fn chart_analysis_summary_from_row_with_offset(
         density: row.get(offset + 4)?,
         peak_density: row.get(offset + 5)?,
         end_density: row.get(offset + 6)?,
-        total_gauge: row.get(offset + 7)?,
-        main_bpm: row.get(offset + 8)?,
-        speed_changes: row
-            .get::<_, Option<String>>(offset + 9)?
-            .as_deref()
-            .and_then(|json| serde_json::from_str(json).ok())
-            .unwrap_or_default(),
+        main_bpm: row.get(offset + 7)?,
     })
 }
 

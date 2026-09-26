@@ -175,13 +175,13 @@ fn select_distributions_load_in_background_and_reuse_cached_results() {
         std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
     ));
     let conn = rusqlite::Connection::open(&path).unwrap();
-    conn.execute_batch("CREATE TABLE chart_analysis(chart_id INTEGER PRIMARY KEY, distribution_json TEXT NOT NULL)").unwrap();
+    conn.execute_batch("CREATE TABLE chart_analysis(chart_id INTEGER PRIMARY KEY, distribution_json TEXT NOT NULL, speed_changes_json TEXT)").unwrap();
     let notes = vec![crate::storage::library_db::ChartDistributionSecond {
         key_taps: 12,
         ..Default::default()
     }];
     conn.execute(
-        "INSERT INTO chart_analysis VALUES (1, ?1)",
+        "INSERT INTO chart_analysis VALUES (1, ?1, '[{\"speed\":120.0,\"time_ms\":0}]')",
         [serde_json::to_string(&notes).unwrap()],
     )
     .unwrap();
@@ -200,6 +200,8 @@ fn select_distributions_load_in_background_and_reuse_cached_results() {
     }
     assert_eq!(cache[&1].notes[0].key_taps, 12);
     assert!(cache[&1].end_density.is_some());
+    assert_eq!(cache[&1].bpm_graph_segments.len(), 1);
+    assert!(cache[&2].bpm_graph_segments.is_empty());
     assert!(cache[&2].notes.is_empty());
     std::fs::remove_file(&path).unwrap();
     runtime.refresh(&path, &[], &mut cache);
@@ -213,15 +215,6 @@ fn select_snapshot_rows_centers_selection_and_copies_score_summary() {
         .map(|index| {
             let mut row = select_chart_row(index);
             if index == 5 {
-                if let Some(analysis) = &mut row.chart_analysis {
-                    analysis.speed_changes = vec![
-                        crate::storage::library_db::ChartSpeedChange { speed: 100.0, time_ms: 0 },
-                        crate::storage::library_db::ChartSpeedChange {
-                            speed: 200.0,
-                            time_ms: 45_000,
-                        },
-                    ];
-                }
                 let mut best_score = best_score_with_replay(1234, "replay/test.toml");
                 best_score.bp = 12;
                 best_score.cb = 8;
@@ -247,6 +240,13 @@ fn select_snapshot_rows_centers_selection_and_copies_score_summary() {
                 ..Default::default()
             }],
             end_density: Some(21.6),
+            bpm_graph_segments: select_bpm_graph_segments(
+                &[
+                    crate::storage::library_db::ChartSpeedChange { speed: 100.0, time_ms: 0 },
+                    crate::storage::library_db::ChartSpeedChange { speed: 200.0, time_ms: 45_000 },
+                ],
+                90_000,
+            ),
         },
     );
     let snapshot_rows = select_snapshot_rows(&rows, 5, 7, &profile, None, &chart_distributions);

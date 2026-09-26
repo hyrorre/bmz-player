@@ -513,7 +513,7 @@ impl LibraryDatabase {
             let placeholders = std::iter::repeat_n("?", chunk.len()).collect::<Vec<_>>().join(", ");
             let sql = format!(
                 "SELECT chart_id, normal_notes, long_notes, scratch_notes, long_scratch_notes,
-                    density, peak_density, end_density, total_gauge, main_bpm, speed_changes_json
+                    density, peak_density, end_density, main_bpm
                  FROM chart_analysis
                  WHERE chart_id IN ({placeholders})"
             );
@@ -530,26 +530,29 @@ impl LibraryDatabase {
         Ok(out)
     }
 
-    pub fn chart_distributions_by_chart_ids(
-        &self,
-        ids: &[i64],
-    ) -> Result<HashMap<i64, Vec<ChartDistributionSecond>>> {
+    pub fn chart_graphs_by_chart_ids(&self, ids: &[i64]) -> Result<HashMap<i64, ChartGraphData>> {
         if ids.is_empty() {
             return Ok(HashMap::new());
         }
         let mut stmt = self.conn.prepare(
-            "SELECT chart_id, distribution_json
+            "SELECT chart_id, distribution_json, speed_changes_json
              FROM chart_analysis
              WHERE chart_id = ?1",
         )?;
         let mut out = HashMap::with_capacity(ids.len());
         for id in ids {
-            if let Some((chart_id, distribution_json)) = stmt
-                .query_row(params![id], |row| Ok((row.get(0)?, row.get::<_, String>(1)?)))
+            if let Some((chart_id, distribution_json, speed_changes_json)) = stmt
+                .query_row(params![id], |row| {
+                    Ok((row.get(0)?, row.get::<_, String>(1)?, row.get::<_, Option<String>>(2)?))
+                })
                 .optional()?
             {
                 let distribution = decode_distribution(&distribution_json);
-                out.insert(chart_id, distribution);
+                let speed_changes = speed_changes_json
+                    .as_deref()
+                    .and_then(|json| serde_json::from_str(json).ok())
+                    .unwrap_or_default();
+                out.insert(chart_id, ChartGraphData { distribution, speed_changes });
             }
         }
         Ok(out)

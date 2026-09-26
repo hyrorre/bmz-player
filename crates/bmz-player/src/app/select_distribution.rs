@@ -70,7 +70,7 @@ impl SelectDistributionRuntime {
             let result = (|| -> anyhow::Result<DistributionCache> {
                 let db = LibraryDatabase::open_read_only(&path)?;
                 let ids: Vec<_> = missing.iter().map(|chart| chart.chart_id).collect();
-                let mut distributions = db.chart_distributions_by_chart_ids(&ids)?;
+                let mut distributions = db.chart_graphs_by_chart_ids(&ids)?;
                 Ok(missing
                     .iter()
                     .map(|chart| {

@@ -132,8 +132,12 @@ pub struct ChartAnalysisSummary {
     pub density: f64,
     pub peak_density: f64,
     pub end_density: f64,
-    pub total_gauge: f64,
     pub main_bpm: f64,
+}
+
+#[derive(Default)]
+pub struct ChartGraphData {
+    pub distribution: Vec<ChartDistributionSecond>,
     pub speed_changes: Vec<ChartSpeedChange>,
 }
 
