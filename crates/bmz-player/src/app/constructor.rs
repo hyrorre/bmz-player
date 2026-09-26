@@ -100,10 +100,23 @@ impl WinitApp {
         renderer
             .set_internal_resolution_mode(config_internal_resolution_mode(&boot.app_config.video));
         let before_catalog_ms = constructor_started_at.elapsed().as_millis();
-        let catalog_started_at = Instant::now();
-        let skin_catalog =
-            if viewer_mode { SkinCatalog::default() } else { scan_skin_catalog(&boot.app_paths) };
-        let catalog_ms = catalog_started_at.elapsed().as_millis();
+        // 一覧のheader走査は選曲スキンのdecodeと独立しているため並行する。
+        // constructor内でjoinし、最初の設定画面から完成した一覧を提供する。
+        let catalog_worker = if viewer_mode {
+            None
+        } else {
+            let app_paths = boot.app_paths.clone();
+            Some(
+                std::thread::Builder::new()
+                    .name("skin-catalog".into())
+                    .spawn(move || {
+                        let started_at = Instant::now();
+                        let catalog = scan_skin_catalog(&app_paths);
+                        (catalog, started_at.elapsed().as_millis())
+                    })
+                    .context("failed to spawn skin catalog worker")?,
+            )
+        };
         let skins_started_at = Instant::now();
         let mut skin_pipeline = SkinPipelineRuntime::new();
         let (
@@ -127,6 +140,14 @@ impl WinitApp {
         skin_pipeline.set_pending(SkinKind::Decide, pending_decide_skin);
         skin_pipeline.set_pending(SkinKind::Result, pending_result_skin);
         let skins_ms = skins_started_at.elapsed().as_millis();
+        let catalog_wait_started_at = Instant::now();
+        let (skin_catalog, catalog_ms) = match catalog_worker {
+            Some(worker) => {
+                worker.join().map_err(|_| anyhow::anyhow!("skin catalog worker panicked"))?
+            }
+            None => (SkinCatalog::default(), 0),
+        };
+        let catalog_wait_ms = catalog_wait_started_at.elapsed().as_millis();
         let now = Instant::now();
 
         let mut gamepad = if boot.app_config.input.gamepad_enabled {
@@ -482,6 +503,7 @@ impl WinitApp {
         tracing::info!(
             before_catalog_ms,
             catalog_ms,
+            catalog_wait_ms,
             skins_ms,
             after_skins_ms = now.elapsed().as_millis(),
             constructor_total_ms = constructor_started_at.elapsed().as_millis(),

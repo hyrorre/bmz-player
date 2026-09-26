@@ -122,7 +122,7 @@ ECFNを標準select.jsonに変えると初期スキン準備は8msまで減っ�
 初回presentまでは4,788msかかった。フォントfallbackの待ち時間は残る。
 したがって今回の優先調査対象はDB migrationや曲scan、GPU shader compilationではなくフォント解決である。
 
-## 改善する場合の優先順位
+## 調査時に決めた改善順序
 
 最初の調査では計測ログと診断exampleのみを追加した。以下の改善結果を後段に追記する。
 
@@ -228,3 +228,65 @@ ECFNには数百msの試行差があり、小さい差の評価には追加測�
 renderer fallback 20件、bmz-fontのclippy成功。
 描画確認用試行は計測表から除外した。
 集計は `optimization/{installed,ecfn}-step1-step2.json`。
+
+## 改善3: カタログ走査と選曲スキン準備を並行化
+
+独立したheader走査を1本のworkerで実行し、選曲スキン準備後にjoinする。
+最初の設定UIには完成したカタログを渡し、Viewerでは従来どおり走査しない。
+`catalog_ms` はworker内の所要時間、新しい `catalog_wait_ms` はjoinの待機時間。
+`catalog_ms` と `skins_ms` は重なっているため、合計してconstructor時間と比較しない。
+
+この段階は各バイナリ1回の慣らし後、交互に5回ずつ測定した。
+
+| 選曲スキン | 改善2中央値（再測定） | 改善3中央値 | この段階の短縮 | 各5回の値（前 → 後、ms） |
+|---|---:|---:|---:|---|
+| mz-select | 697ms | 640ms | 8.2% | 698/697/688/699/675 → 642/640/654/636/636 |
+| ECFN | 1,104ms | 985ms | 10.8% | 1104/1115/1097/1117/1104 → 980/1443/991/968/985 |
+
+10回すべてで `catalog_wait_ms=0`、正常終了・スキンロード成功。
+ECFNの1,443msの試行はスキンdecode側が遅く、除外せず中央値に含めた。
+比較前後で走査した候補のパス集合は一致（インストール版51件、開発環境113件）。
+catalog関連テスト9件も成功。集計は `optimization/{installed,ecfn}-step2-step3.json`。
+
+bitmap fontも再確認した。今回のECFNは14個の異なるfont pathを読み込み、
+選曲内で同一fontを何度もdecodeしているわけではない。decodeは既にRayonで並行化済みで、
+プロセス内のキャッシュ共有だけで初回の約0.5秒を省く根拠はないため、この部分の変更は見送った。
+
+## 最終比較
+
+最後に変更前baselineと改善3を直接交互に起動して再比較した。
+各バイナリ1回の慣らし後3回の中央値（アプリ内起動タイマー〜初回present）。
+
+| 選曲スキン | 変更前 | 最終版 | 短縮 | 各3回の値（前 → 後、ms） |
+|---|---:|---:|---:|---|
+| mz-select | 4,831ms | 636ms | 86.8% | 4803/4989/4831 → 636/646/631 |
+| ECFN | 5,235ms | 984ms | 81.2% | 5201/5300/5235 → 984/975/1206 |
+
+集計は `optimization/{installed,ecfn}-baseline-step3.json`。
+第1・2段階はmz-select、第3段階はECFNで120フレームの描画確認も実施した。
+上記はmacOSの反復起動であり、再起動直後のcold startやWindows/Linuxの短縮率を示すものではない。
+
+### 最終検証の実行条件
+
+- `cargo check --workspace --locked`、`cargo clippy --workspace --all-targets --locked`、
+  `cargo fmt --check`、`git diff --check`: 成功。
+- sandbox内の `cargo test --workspace --locked` はlocalhost待受を使う14件が
+  `PermissionDenied` で失敗したため、socket制限のない環境で再実行した。
+- その再実行では未変更の `bmz-chart` の
+  `imports_forward_declared_lnobj_as_long_note` と `returns_bms_random_choices_without_setrandom_values`
+  が一度失敗した。初回の並行実行では成功しており、
+  `cargo test -p bmz-chart --locked -- --test-threads=1` では156件成功・2件ignored。
+  このcrateはbmz-fontに依存せず、今回の差分もない。不安定なテストの修正は含めていない。
+- 残りはsocket制限のない環境で
+  `cargo test --workspace --exclude bmz-chart --locked --no-fail-fast` を実行。
+  chartの直列実行と合わせて **3,436件成功・3件失敗・7件ignored**。
+  失敗は `bmz-skin` の外部wmiiスキン向け既存テスト3件で、
+  `cargo test -p bmz-skin wmii --locked -- --test-threads=1` でも同じ失敗が再現した。
+  `bmz-skin` / `bmz-skin-document` / `bmz-core` / manifest / lockfileはbaselineから変更していない。
+  このため全体テストを成功とは扱わず、今回の修正範囲から分離して記録する。
+  - `wmii_fhd_play_lua_features_when_available`: MAX stage predicateの期待値差。
+  - `wmii_fhd_play_stage_draws_follow_scene_modes_when_available`: draw条件の期待値差。
+  - `wmii_beatoraja_branch_next_rank_updates_when_available`: next rank valueの期待値差。
+
+検証ログは `/tmp/bmz-startup-final-{tests,remaining-tests,check,clippy}.log`、
+`/tmp/bmz-startup-chart-serial.log`、`/tmp/bmz-startup-wmii-tests.log`。
