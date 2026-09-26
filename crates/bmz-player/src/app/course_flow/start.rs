@@ -98,6 +98,10 @@ impl WinitApp {
             );
             return;
         }
+        if let Err(error) = resolve_course_chart_sources(&self.boot.library_db, &mut definition) {
+            tracing::warn!(%error, course_id, "failed to resolve course chart sources");
+            return;
+        }
         let first_chart_id = definition.entries.first().and_then(|e| e.chart_id);
         let Some(first_chart_id) = first_chart_id else {
             tracing::warn!(course_id, "no resolved chart in course");
@@ -327,6 +331,10 @@ impl WinitApp {
         };
 
         let mut definition = stored.definition;
+        if let Err(error) = resolve_course_chart_sources(&self.boot.library_db, &mut definition) {
+            tracing::warn!(%error, course_id, "failed to resolve replay course chart sources");
+            return;
+        }
         let replay_layout_matches = queued.len() <= definition.entries.len()
             && queued.iter_mut().enumerate().all(|(index, replay)| {
                 let expected_id = definition.entries.get(index).and_then(|entry| entry.chart_id);

@@ -1,7 +1,9 @@
 use super::*;
 use crate::bootstrap::profile_tests::ProfileTestDir;
 
-fn registered_charts(data: &ProfileTestDir) -> (bootstrap::BootstrappedApp, PathBuf, PathBuf) {
+pub(super) fn registered_charts(
+    data: &ProfileTestDir,
+) -> (bootstrap::BootstrappedApp, PathBuf, PathBuf) {
     let mut boot = data.boot();
     let root = data.paths.data_dir.join("songs");
     let path = root.join("original/song.bms");

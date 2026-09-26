@@ -45,6 +45,32 @@ fn finish_course_play_metrics(
     CoursePlayMetrics { total_notes, ln_mode, ln_policy }
 }
 
+/// Resolve every course copy before any skin, replay or preload uses its folder.
+/// Availability checks during library refresh do not verify the file contents.
+pub(super) fn resolve_course_chart_sources(
+    library_db: &LibraryDatabase,
+    definition: &mut bmz_core::course::CourseDefinition,
+) -> Result<()> {
+    let chart_ids = definition
+        .entries
+        .iter()
+        .enumerate()
+        .map(|(index, entry)| {
+            let id = entry
+                .chart_id
+                .with_context(|| format!("course entry {} is not resolved", index + 1))?;
+            library_db
+                .verified_chart_source(id)
+                .map(|source| source.chart.chart_id)
+                .with_context(|| format!("course entry {} is unavailable", index + 1))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    for (entry, id) in definition.entries.iter_mut().zip(chart_ids) {
+        entry.chart_id = Some(id);
+    }
+    Ok(())
+}
+
 /// DBへ保存済みの譜面メタデータだけを一括取得し、decide入場前に使う軽量な
 /// コース集計値と先頭譜面メタデータを返す。
 ///
