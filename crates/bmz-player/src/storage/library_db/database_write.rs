@@ -37,6 +37,12 @@ impl LibraryDatabase {
         Ok(Self { conn })
     }
 
+    pub fn open_read_only(path: &Path) -> Result<Self> {
+        let conn = Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+        conn.busy_timeout(std::time::Duration::from_millis(100))?;
+        Ok(Self { conn })
+    }
+
     #[cfg(test)]
     pub(crate) fn from_connection(conn: Connection) -> Self {
         Self { conn }

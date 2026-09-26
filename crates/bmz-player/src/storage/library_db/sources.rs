@@ -67,6 +67,61 @@ pub(crate) fn available_chart_id_for_hash(
 }
 
 impl LibraryDatabase {
+    /// Resolve a list in batches, sharing root lookup and file checks for duplicates.
+    pub fn available_chart_sources(
+        &self,
+        charts: &[&ChartListItem],
+    ) -> Result<HashMap<i64, ChartSource>> {
+        if charts.is_empty() {
+            return Ok(HashMap::new());
+        }
+        let roots = self.configured_song_roots()?;
+        let mut hashes: Vec<_> = charts.iter().map(|chart| hash_to_hex(&chart.sha256)).collect();
+        hashes.sort_unstable();
+        hashes.dedup();
+        let mut candidates: HashMap<[u8; 32], Vec<ChartSource>> = HashMap::new();
+        for chunk in hashes.chunks(CHART_HASH_LOOKUP_BATCH_SIZE) {
+            let placeholders = std::iter::repeat_n("?", chunk.len()).collect::<Vec<_>>().join(",");
+            let mut stmt = self.conn.prepare(&format!(
+                "SELECT {CHART_LIST_ITEM_COLUMNS_C}, f.path, f.root_id, c.import_version
+                 FROM charts c
+                 JOIN chart_file_links l ON l.chart_id = c.id
+                 JOIN chart_files f ON f.id = l.chart_file_id
+                 WHERE c.sha256 IN ({placeholders})
+                 ORDER BY c.import_version DESC, c.id DESC, f.path COLLATE NOCASE"
+            ))?;
+            let rows = stmt.query_map(rusqlite::params_from_iter(chunk), |row| {
+                Ok(ChartSource {
+                    chart: chart_list_item_from_row(row)?,
+                    path: PathBuf::from(row.get::<_, String>(36)?),
+                    root_id: row.get(37)?,
+                    import_version: row.get(38)?,
+                })
+            })?;
+            for row in rows {
+                let source = row?;
+                if source.active(roots.as_deref()) {
+                    candidates.entry(source.chart.sha256).or_default().push(source);
+                }
+            }
+        }
+        let mut readable = HashMap::new();
+        let mut resolved = HashMap::new();
+        for chart in charts {
+            if let Some(sources) = candidates.get(&chart.sha256) {
+                // Preserve each requested copy's assets, even for identical hashes.
+                let preferred = sources.iter().filter(|s| s.chart.chart_id == chart.chart_id);
+                let fallback = sources.iter().filter(|s| s.chart.chart_id != chart.chart_id);
+                if let Some(source) = preferred.chain(fallback).find(|source| {
+                    *readable.entry(source.path.clone()).or_insert_with(|| source.readable())
+                }) {
+                    resolved.insert(chart.chart_id, source.clone());
+                }
+            }
+        }
+        Ok(resolved)
+    }
+
     /// Metadata consumers (score/replay import and IR) do not require chart files.
     /// Prefer the newest parser version and active copies, excluding stale copies
     /// from duplicate-consistency checks when a better metadata tier is available.
@@ -179,22 +234,13 @@ impl LibraryDatabase {
         level: Option<&str>,
     ) -> Result<Vec<TableEntryListItem>> {
         let rows = self.list_table_entries_with_chart_at_level(source_url, level)?;
-        let mut cache: HashMap<[u8; 32], Option<ChartListItem>> = HashMap::new();
+        let charts: Vec<_> = rows.iter().filter_map(|entry| entry.chart.as_ref()).collect();
+        let sources = self.available_chart_sources(&charts)?;
         rows.into_iter()
             .map(|mut entry| {
-                let available = if let Some(chart) = entry.chart.take() {
-                    if let Some(cached) = cache.get(&chart.sha256) {
-                        cached.clone()
-                    } else {
-                        let resolved =
-                            self.available_chart_source(chart.chart_id)?.map(|source| source.chart);
-                        cache.insert(chart.sha256, resolved.clone());
-                        resolved
-                    }
-                } else {
-                    None
-                };
-                entry.chart = available;
+                entry.chart = entry.chart.and_then(|chart| {
+                    sources.get(&chart.chart_id).map(|source| source.chart.clone())
+                });
                 Ok(entry)
             })
             .collect()

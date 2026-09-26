@@ -119,6 +119,73 @@ fn source_fallback_keeps_identity_assets_and_metadata_together() {
 }
 
 #[test]
+#[ignore = "set BMZ_SELECT_BENCH_LIBRARY to a real library DB; read-only timing probe"]
+fn benchmark_table_source_resolution() {
+    let path = std::env::var_os("BMZ_SELECT_BENCH_LIBRARY").expect("library DB path");
+    let db = LibraryDatabase::open_read_only(Path::new(&path)).unwrap();
+    let table = db
+        .list_difficulty_tables()
+        .unwrap()
+        .into_iter()
+        .find(|table| table.symbol == "sl")
+        .expect("Satellite table");
+    for iteration in 0..5 {
+        let started = std::time::Instant::now();
+        let mut previous =
+            db.list_table_entries_with_chart_at_level(&table.source_url, Some("0")).unwrap();
+        for entry in &mut previous {
+            if let Some(chart) = entry.chart.take() {
+                entry.chart =
+                    db.available_chart_source(chart.chart_id).unwrap().map(|source| source.chart);
+            }
+        }
+        for entry in &previous {
+            if let Some(chart) = &entry.chart {
+                db.available_chart_source(chart.chart_id).unwrap();
+            }
+        }
+        let previous_time = started.elapsed();
+        let started = std::time::Instant::now();
+        let batched = db.available_table_entries_at_level(&table.source_url, Some("0")).unwrap();
+        let batched_time = started.elapsed();
+        assert_eq!(
+            previous
+                .iter()
+                .map(|entry| entry.chart.as_ref().map(|c| c.chart_id))
+                .collect::<Vec<_>>(),
+            batched
+                .iter()
+                .map(|entry| entry.chart.as_ref().map(|c| c.chart_id))
+                .collect::<Vec<_>>()
+        );
+        eprintln!(
+            "sl0 iteration={iteration} entries={} previous_ms={:.3} batched_ms={:.3}",
+            batched.len(),
+            previous_time.as_secs_f64() * 1000.0,
+            batched_time.as_secs_f64() * 1000.0
+        );
+    }
+}
+
+#[test]
+fn batched_sources_preserve_preferred_copies_and_refresh_missing_files() {
+    let mut f = Fixture::new();
+    f.roots[2].enabled = false;
+    f.db.set_configured_song_roots(&f.roots).unwrap();
+    let old = f.db.available_chart_source(f.id("old")).unwrap().unwrap().chart;
+    let active = f.db.available_chart_source(f.id("active")).unwrap().unwrap().chart;
+    let rows = [&old, &active, &old];
+    let resolved = f.db.available_chart_sources(&rows).unwrap();
+    assert_eq!(resolved[&old.chart_id].chart.chart_id, old.chart_id);
+    assert_eq!(resolved[&active.chart_id].chart.chart_id, active.chart_id);
+    std::fs::remove_file(f.dir.join("old/song.bms")).unwrap();
+    let resolved = f.db.available_chart_sources(&rows).unwrap();
+    assert_eq!(resolved[&old.chart_id].chart.chart_id, active.chart_id);
+    std::fs::remove_file(f.dir.join("active/song.bms")).unwrap();
+    assert!(f.db.available_chart_sources(&rows).unwrap().is_empty());
+}
+
+#[test]
 fn changed_hash_is_never_played_and_valid_selected_copy_is_preserved() {
     let f = Fixture::new();
     f.db.set_configured_song_roots(&f.roots).unwrap();
