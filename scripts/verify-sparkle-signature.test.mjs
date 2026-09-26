@@ -16,8 +16,8 @@ test('verifies archive bytes against the embedded public key', () => {
     () => verifySparkleSignature(Buffer.from('tampered'), signature, publicBase64),
     /does not match/,
   )
-  const other = generateKeyPairSync('ed25519').publicKey
-    .export({ type: 'spki', format: 'der' })
+  const other = generateKeyPairSync('ed25519')
+    .publicKey.export({ type: 'spki', format: 'der' })
     .subarray(-32)
     .toString('base64')
   assert.throws(() => verifySparkleSignature(archive, signature, other), /does not match/)

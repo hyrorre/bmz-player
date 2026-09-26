@@ -26,7 +26,13 @@ function writeManifest(directory, target, overrides = {}) {
 
 test('combines target manifests into the rianIR importer schema', () => {
   const directory = mkdtempSync(resolve(tmpdir(), 'bmz-client-manifest-'))
-  for (const target of ['windows-x64', 'macos-arm64', 'linux-x64-flatpak', 'macos-x64', 'linux-x64-tar']) {
+  for (const target of [
+    'windows-x64',
+    'macos-arm64',
+    'linux-x64-flatpak',
+    'macos-x64',
+    'linux-x64-tar',
+  ]) {
     writeManifest(directory, target)
   }
   const output = resolve(directory, 'client-manifest-bmz-player-v0.1.11.json')
@@ -81,17 +87,36 @@ test('rejects manifests from different commits', () => {
 test('rejects a missing Linux tar build', () => {
   const directory = mkdtempSync(resolve(tmpdir(), 'bmz-client-manifest-'))
   writeManifest(directory, 'linux-x64-flatpak')
-  assert.throws(() => execFileSync(process.execPath, [
-    script, '--input-dir', directory, '--output', resolve(directory, 'combined.json'),
-    '--expected-targets', 'linux-x64-flatpak,linux-x64-tar',
-  ], { stdio: 'pipe' }), /targets do not match/)
+  assert.throws(
+    () =>
+      execFileSync(
+        process.execPath,
+        [
+          script,
+          '--input-dir',
+          directory,
+          '--output',
+          resolve(directory, 'combined.json'),
+          '--expected-targets',
+          'linux-x64-flatpak,linux-x64-tar',
+        ],
+        { stdio: 'pipe' },
+      ),
+    /targets do not match/,
+  )
 })
 
 test('rejects duplicate Linux tar manifests', () => {
   const directory = mkdtempSync(resolve(tmpdir(), 'bmz-client-manifest-'))
   writeManifest(directory, 'linux-x64-tar')
   writeManifest(directory, 'duplicate', { target: 'linux-x64-tar' })
-  assert.throws(() => execFileSync(process.execPath, [
-    script, '--input-dir', directory, '--output', resolve(directory, 'combined.json'),
-  ], { stdio: 'pipe' }), /duplicate target/)
+  assert.throws(
+    () =>
+      execFileSync(
+        process.execPath,
+        [script, '--input-dir', directory, '--output', resolve(directory, 'combined.json')],
+        { stdio: 'pipe' },
+      ),
+    /duplicate target/,
+  )
 })
