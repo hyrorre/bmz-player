@@ -72,6 +72,23 @@ impl LibraryDatabase {
         &self,
         charts: &[&ChartListItem],
     ) -> Result<HashMap<i64, ChartSource>> {
+        self.chart_sources_for_list(charts, true)
+    }
+
+    /// Use the last successful scan's file registrations, without touching song disks.
+    /// Missing registrations are pruned by complete scans; playback still verifies files.
+    pub fn registered_chart_sources(
+        &self,
+        charts: &[&ChartListItem],
+    ) -> Result<HashMap<i64, ChartSource>> {
+        self.chart_sources_for_list(charts, false)
+    }
+
+    fn chart_sources_for_list(
+        &self,
+        charts: &[&ChartListItem],
+        verify_files: bool,
+    ) -> Result<HashMap<i64, ChartSource>> {
         if charts.is_empty() {
             return Ok(HashMap::new());
         }
@@ -113,7 +130,8 @@ impl LibraryDatabase {
                 let preferred = sources.iter().filter(|s| s.chart.chart_id == chart.chart_id);
                 let fallback = sources.iter().filter(|s| s.chart.chart_id != chart.chart_id);
                 if let Some(source) = preferred.chain(fallback).find(|source| {
-                    *readable.entry(source.path.clone()).or_insert_with(|| source.readable())
+                    !verify_files
+                        || *readable.entry(source.path.clone()).or_insert_with(|| source.readable())
                 }) {
                     resolved.insert(chart.chart_id, source.clone());
                 }
@@ -233,9 +251,26 @@ impl LibraryDatabase {
         source_url: &str,
         level: Option<&str>,
     ) -> Result<Vec<TableEntryListItem>> {
+        self.table_entries_with_sources(source_url, level, true)
+    }
+
+    pub fn registered_table_entries_at_level(
+        &self,
+        source_url: &str,
+        level: Option<&str>,
+    ) -> Result<Vec<TableEntryListItem>> {
+        self.table_entries_with_sources(source_url, level, false)
+    }
+
+    fn table_entries_with_sources(
+        &self,
+        source_url: &str,
+        level: Option<&str>,
+        verify_files: bool,
+    ) -> Result<Vec<TableEntryListItem>> {
         let rows = self.list_table_entries_with_chart_at_level(source_url, level)?;
         let charts: Vec<_> = rows.iter().filter_map(|entry| entry.chart.as_ref()).collect();
-        let sources = self.available_chart_sources(&charts)?;
+        let sources = self.chart_sources_for_list(&charts, verify_files)?;
         rows.into_iter()
             .map(|mut entry| {
                 entry.chart = entry.chart.and_then(|chart| {

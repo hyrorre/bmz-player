@@ -148,6 +148,11 @@ fn benchmark_table_source_resolution() {
         let started = std::time::Instant::now();
         let batched = db.available_table_entries_at_level(&table.source_url, Some("0")).unwrap();
         let batched_time = started.elapsed();
+        let started = std::time::Instant::now();
+        let registered =
+            db.registered_table_entries_at_level(&table.source_url, Some("0")).unwrap();
+        let registered_time = started.elapsed();
+        assert_eq!(registered.len(), batched.len());
         assert_eq!(
             previous
                 .iter()
@@ -159,12 +164,39 @@ fn benchmark_table_source_resolution() {
                 .collect::<Vec<_>>()
         );
         eprintln!(
-            "sl0 iteration={iteration} entries={} previous_ms={:.3} batched_ms={:.3}",
+            "sl0 iteration={iteration} entries={} previous_ms={:.3} batched_ms={:.3} registered_ms={:.3}",
             batched.len(),
             previous_time.as_secs_f64() * 1000.0,
-            batched_time.as_secs_f64() * 1000.0
+            batched_time.as_secs_f64() * 1000.0,
+            registered_time.as_secs_f64() * 1000.0
         );
     }
+}
+
+#[test]
+fn registered_sources_use_scan_state_but_playback_rechecks_files() {
+    let mut f = Fixture::new();
+    f.roots[2].enabled = false;
+    f.db.set_configured_song_roots(&f.roots).unwrap();
+    let old = f.db.available_chart_source(f.id("old")).unwrap().unwrap().chart;
+    let active_id = f.id("active");
+    std::fs::remove_file(f.dir.join("old/song.bms")).unwrap();
+    // Browsing uses the persisted scan snapshot, even after an external deletion.
+    assert_eq!(
+        f.db.registered_chart_sources(&[&old]).unwrap()[&old.chart_id].chart.chart_id,
+        old.chart_id
+    );
+    assert_eq!(f.db.verified_chart_source(old.chart_id).unwrap().chart.chart_id, active_id);
+    let mut scan = AppConfig::default().scan;
+    scan.use_everything = false;
+    scan_song_roots(&mut f.db, &f.roots, &scan, 2, false).unwrap();
+    assert_eq!(
+        f.db.registered_chart_sources(&[&old]).unwrap()[&old.chart_id].chart.chart_id,
+        active_id
+    );
+    f.roots[1].enabled = false;
+    f.db.set_configured_song_roots(&f.roots).unwrap();
+    assert!(f.db.registered_chart_sources(&[&old]).unwrap().is_empty());
 }
 
 #[test]

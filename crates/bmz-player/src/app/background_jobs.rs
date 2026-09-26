@@ -41,7 +41,7 @@ impl WinitApp {
             })
             .collect();
         let sources =
-            self.boot.library_db.available_chart_sources(&charts).unwrap_or_else(|error| {
+            self.boot.library_db.registered_chart_sources(&charts).unwrap_or_else(|error| {
                 tracing::warn!(%error, "failed to resolve select chart sources");
                 HashMap::new()
             });

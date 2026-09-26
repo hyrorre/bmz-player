@@ -515,7 +515,7 @@ pub(super) fn load_select_items_in_table_filtered(
         .map(|t| (t.name, t.symbol, t.level_order))
         .unwrap_or_default();
 
-    let mut entries = library_db.available_table_entries_at_level(source_url, level_filter)?;
+    let mut entries = library_db.registered_table_entries_at_level(source_url, level_filter)?;
     entries = dedupe_table_entries(entries);
 
     // Sort by the table's level_order, then alphabetically by display title.
