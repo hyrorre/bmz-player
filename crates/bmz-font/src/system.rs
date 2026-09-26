@@ -7,8 +7,9 @@ use font_kit::family_name::FamilyName;
 use font_kit::handle::Handle;
 use font_kit::properties::{Properties, Style, Weight};
 use font_kit::source::{Source, SystemSource};
-use font_kit::sources::fs::FsSource;
-use font_kit::sources::multi::MultiSource;
+
+mod bundled;
+use bundled::BundledFonts;
 
 /// font-kit が解決した OS フォントの実ファイル位置またはメモリ上のバイト列。
 ///
@@ -256,24 +257,19 @@ fn order_font_fallbacks(
 }
 
 struct FontSources {
-    bundled: MultiSource,
+    bundled: BundledFonts,
     system: OnceCell<SystemSource>,
 }
 
 impl FontSources {
     fn new(font_roots: &[PathBuf]) -> Self {
-        let sources = font_roots
-            .iter()
-            .filter(|root| root.is_dir())
-            .map(|root| Box::new(FsSource::in_path(root)) as Box<dyn Source>)
-            .collect();
-        Self { bundled: MultiSource::from_sources(sources), system: OnceCell::new() }
+        Self { bundled: BundledFonts::new(font_roots), system: OnceCell::new() }
     }
 
     fn resolve(&self, coverage: FontCoverage) -> Option<ResolvedFont> {
         // MultiSourceにOSも含めると、同梱Notoより前のOS固有familyを探索してしまう。
         // 同梱sourceでcoverageを満たせない場合だけOS sourceを初期化・探索する。
-        resolve_font_for_coverage_from_source(&self.bundled, coverage).or_else(|| {
+        self.bundled.resolve(coverage).or_else(|| {
             resolve_font_for_coverage_from_source(
                 self.system.get_or_init(SystemSource::new),
                 coverage,
@@ -486,12 +482,27 @@ mod tests {
         let roots = vec![root.clone()];
         let sources = FontSources::new(&roots);
         let mut faces = Vec::new();
-        for coverage in ALL_FONT_COVERAGES {
+        for (coverage, expected_family) in ALL_FONT_COVERAGES.into_iter().zip([
+            "Noto Sans CJK JP",
+            "Noto Sans CJK KR",
+            "Noto Sans CJK SC",
+            "Noto Sans CJK TC",
+            "Noto Sans CJK HK",
+        ]) {
             let resolved = sources
                 .resolve(coverage)
                 .unwrap_or_else(|| panic!("bundled font should resolve {coverage:?}"));
             assert!(resolved.path.as_ref().is_some_and(|path| path.starts_with(&root)));
             assert!(!faces.contains(&resolved), "regional CJK faces must remain distinct");
+            let bytes = read_resolved_font_bytes(&resolved).unwrap();
+            let face = ttf_parser::Face::parse(&bytes, resolved.font_index).unwrap();
+            assert!(
+                face.names().into_iter().any(|name| {
+                    name.name_id == ttf_parser::name_id::FAMILY
+                        && name.to_string().as_deref() == Some(expected_family)
+                }),
+                "{coverage:?} must select the actual regional TTC face"
+            );
             assert!(
                 resolved_font_supports_coverage(&resolved, coverage),
                 "bundled font should support {coverage:?}"

@@ -8,3 +8,5 @@ authors.workspace = true
 [dependencies]
 ab_glyph.workspace = true
 font-kit.workspace = true
+ttf-parser = "0.25"
+walkdir = "2"

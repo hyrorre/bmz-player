@@ -626,6 +626,8 @@ version = "0.4.2"
 dependencies = [
  "ab_glyph",
  "font-kit",
+ "ttf-parser",
+ "walkdir",
 ]
 
 [[package]]
