@@ -13,7 +13,10 @@ impl Fixture {
     fn new() -> Self {
         let stamp =
             std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
-        let dir = std::env::temp_dir().join(format!("bmz-source-{}-{stamp}", std::process::id()));
+        let dir = std::env::temp_dir()
+            .canonicalize()
+            .unwrap()
+            .join(format!("bmz-source-{}-{stamp}", std::process::id()));
         let mut roots = Vec::new();
         for name in ["old", "active", "disabled"] {
             let folder = dir.join(name);
@@ -45,6 +48,67 @@ impl Drop for Fixture {
     fn drop(&mut self) {
         std::fs::remove_dir_all(&self.dir).unwrap();
     }
+}
+
+#[test]
+fn partial_scans_do_not_reenable_disabled_roots_or_restore_removed_configured_roots() {
+    let mut f = Fixture::new();
+    f.roots[2].enabled = false;
+    f.db.set_configured_song_roots(&f.roots[1..]).unwrap();
+    let old = f.id("old");
+    let active = f.id("active");
+    let disabled = f.id("disabled");
+    let charts = f.db.list_charts_by_ids(&[old, active, disabled]).unwrap();
+    assert_eq!(
+        f.db.registered_chart_sources(&[&charts[0]]).unwrap()[&charts[0].chart_id].chart.chart_id,
+        active
+    );
+
+    // Explicitly scanning a parent enables its unconfigured children, but the
+    // disabled subtree is still excluded by the saved configuration.
+    let parent =
+        PathEntry { path: f.dir.to_string_lossy().into_owned(), enabled: true, recursive: true };
+    let scan = crate::config::app_config::ScanConfig {
+        use_everything: false,
+        ..AppConfig::default().scan
+    };
+    scan_song_roots(&mut f.db, std::slice::from_ref(&parent), &scan, 2, false).unwrap();
+    f.db.register_partial_song_roots(std::slice::from_ref(&parent)).unwrap();
+    let sources = f.db.registered_chart_sources(&charts.iter().collect::<Vec<_>>()).unwrap();
+    assert_eq!(sources[&old].chart.chart_id, old);
+    assert_eq!(sources[&active].chart.chart_id, active);
+    assert_ne!(sources[&disabled].chart.chart_id, disabled);
+
+    // After promoting the partial target to a setting, removing the setting
+    // must not revive the old temporary scope.
+    f.db.set_configured_song_roots(&[parent]).unwrap();
+    f.db.set_configured_song_roots(&[]).unwrap();
+    assert!(f.db.registered_chart_sources(&charts.iter().collect::<Vec<_>>()).unwrap().is_empty());
+    assert!(f.db.verified_chart_source(old).is_err());
+}
+
+#[cfg(unix)]
+#[test]
+fn partial_scan_alias_refreshes_its_target_and_survives_offline_scope_publication() {
+    let f = Fixture::new();
+    f.db.set_configured_song_roots(&[]).unwrap();
+    let alias = f.dir.join("alias");
+    std::os::unix::fs::symlink(f.dir.join("old"), &alias).unwrap();
+    let target =
+        PathEntry { path: alias.to_string_lossy().into_owned(), enabled: true, recursive: true };
+    f.db.register_partial_song_roots(std::slice::from_ref(&target)).unwrap();
+    assert_eq!(f.db.verified_chart_source(f.id("old")).unwrap().chart.chart_id, f.id("old"));
+
+    std::fs::remove_file(&alias).unwrap();
+    std::os::unix::fs::symlink(f.dir.join("active"), &alias).unwrap();
+    f.db.register_partial_song_roots(std::slice::from_ref(&target)).unwrap();
+    std::fs::remove_file(&alias).unwrap();
+    f.db.set_configured_song_roots(&[]).unwrap();
+    assert_eq!(f.db.verified_chart_source(f.id("old")).unwrap().chart.chart_id, f.id("active"));
+    let mut configured = f.roots[1].clone();
+    configured.enabled = false;
+    f.db.set_configured_song_roots(&[configured]).unwrap();
+    assert!(f.db.verified_chart_source(f.id("old")).is_err());
 }
 
 #[test]

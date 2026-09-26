@@ -243,6 +243,8 @@ fn load_songs(
     if target.is_none() {
         report.summary.removed_files +=
             library_db.reconcile_configured_song_roots(&library_roots)?;
+    } else {
+        library_db.register_partial_song_roots(&roots)?;
     }
 
     let s = &report.summary;
@@ -291,6 +293,43 @@ fn load_songs(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn explicit_partial_scan_remains_usable_across_reopen_until_full_sync() {
+        let data = crate::bootstrap::profile_tests::ProfileTestDir::new();
+        drop(data.boot());
+        let partial = data.paths.cache_dir.join("partial-songs");
+        std::fs::create_dir_all(&partial).unwrap();
+        let path = partial.join("song.bms");
+        std::fs::write(&path, "#TITLE Partial scan\n#BPM 120\n#00011:01\n").unwrap();
+        let config_before = std::fs::read(&data.paths.config_toml).unwrap();
+
+        load_songs(&data.paths, partial.to_str(), false, Some(false)).unwrap();
+        let db = LibraryDatabase::open(&data.paths.library_db).unwrap();
+        let id = db.chart_id_by_chart_file_path(&path).unwrap().unwrap();
+        let chart = db.verified_chart_source(id).unwrap().chart;
+        assert!(db.registered_chart_sources(&[&chart]).unwrap().contains_key(&id));
+        assert_eq!(db.available_chart_id_by_sha256(chart.sha256).unwrap(), Some(id));
+        drop(db);
+
+        // Startup republishes the saved configuration on a new connection.
+        let db = LibraryDatabase::open(&data.paths.library_db).unwrap();
+        let app_config = load_app_config(&data.paths.config_toml).unwrap();
+        let configured = configured_library_roots(&app_config, &data.paths);
+        db.set_configured_song_roots(&configured).unwrap();
+        assert_eq!(db.configured_song_roots().unwrap(), Some(configured));
+        assert!(db.verified_chart_source(id).is_ok());
+        drop(db);
+        // Unchanged files must remain usable on a second partial scan too.
+        load_songs(&data.paths, partial.to_str(), false, Some(false)).unwrap();
+        assert_eq!(std::fs::read(&data.paths.config_toml).unwrap(), config_before);
+
+        load_songs(&data.paths, None, false, Some(false)).unwrap();
+        let db = LibraryDatabase::open(&data.paths.library_db).unwrap();
+        assert_eq!(db.chart_id_by_chart_file_path(&path).unwrap(), None);
+        assert!(db.available_chart_id_by_sha256(chart.sha256).unwrap().is_none());
+        assert!(path.is_file(), "full sync only removes registrations");
+    }
 
     fn sample_roots() -> Vec<PathEntry> {
         vec![

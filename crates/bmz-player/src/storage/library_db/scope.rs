@@ -7,6 +7,9 @@ struct SongRootPath {
     entry: PathEntry,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     canonical_path: Option<String>,
+    /// Explicit scan targets stay usable until a successful full reconciliation.
+    #[serde(default)]
+    partial_scan: bool,
 }
 
 /// Persisted lookup scope. Reading it never accesses song disks.
@@ -33,7 +36,7 @@ impl SongRootScope {
                     .flatten()
                     .find(|previous| normalize_library_path(&previous.entry.path) == key)
                     .and_then(|previous| previous.canonical_path.clone());
-                SongRootPath { entry: entry.clone(), canonical_path }
+                SongRootPath { entry: entry.clone(), canonical_path, partial_scan: false }
             })
             .collect()
     }
@@ -43,17 +46,55 @@ impl SongRootScope {
     }
 
     pub(crate) fn contains_file(&self, path: &str) -> bool {
-        self.roots.as_ref().is_some_and(|roots| roots.iter().any(|root| root.contains_file(path)))
+        self.roots.as_ref().is_some_and(|roots| {
+            roots.iter().any(|root| !root.partial_scan && root.contains_file(path))
+        })
     }
 
     pub(crate) fn contains_file_in_enabled_root(&self, path: &str) -> bool {
         self.roots.as_ref().is_some_and(|roots| {
-            roots.iter().any(|root| root.entry.enabled && root.contains_file(path))
+            roots
+                .iter()
+                .any(|root| !root.partial_scan && root.entry.enabled && root.contains_file(path))
+        })
+    }
+
+    pub(crate) fn contains_file_in_partial_scan(&self, path: &str) -> bool {
+        self.roots.as_ref().is_some_and(|roots| {
+            roots.iter().any(|root| root.partial_scan && root.contains_file(path))
         })
     }
 }
 
 impl SongRootPath {
+    fn refresh_canonical_path(&mut self) {
+        if let Ok(path) = Path::new(&self.entry.path).canonicalize() {
+            self.canonical_path = Some(normalize_library_path(&path.to_string_lossy()));
+        }
+    }
+
+    fn covers_root(&self, other: &Self) -> bool {
+        if !self.entry.recursive && other.entry.recursive {
+            return false;
+        }
+        let paths = |root: &Self| {
+            [Some(root.entry.path.as_str()), root.canonical_path.as_deref()]
+                .into_iter()
+                .flatten()
+                .map(|path| {
+                    let path = normalize_library_path(path).trim_end_matches('/').to_string();
+                    #[cfg(windows)]
+                    let path = path.to_lowercase();
+                    path
+                })
+                .collect::<Vec<_>>()
+        };
+        let own_paths = paths(self);
+        paths(other).iter().any(|path| {
+            own_paths.contains(path) || (self.entry.recursive && self.contains_file(path))
+        })
+    }
+
     fn contains_file(&self, path: &str) -> bool {
         song_root_contains_file(&self.entry, path)
             || self.canonical_path.as_deref().is_some_and(|canonical_path| {
@@ -87,26 +128,74 @@ impl LibraryDatabase {
     pub fn set_configured_song_roots(&self, roots: &[PathEntry]) -> Result<()> {
         // Resolve aliases only when publishing configuration, retaining the last
         // successful resolution while a configured root is offline.
-        let previous = SongRootScope::load(&self.conn)?;
+        let tx = rusqlite::Transaction::new_unchecked(
+            &self.conn,
+            rusqlite::TransactionBehavior::Immediate,
+        )?;
+        let previous = SongRootScope::load(&tx)?;
         let mut resolved = previous.retained_roots(roots);
         for root in &mut resolved {
-            if let Ok(path) = Path::new(&root.entry.path).canonicalize() {
-                root.canonical_path = Some(normalize_library_path(&path.to_string_lossy()));
-            }
+            root.refresh_canonical_path();
         }
-        self.conn.execute(
-            "INSERT INTO library_song_scope (id, roots_json) VALUES (1, ?1)
-             ON CONFLICT(id) DO UPDATE SET roots_json = excluded.roots_json",
-            [serde_json::to_string(&resolved)?],
+        // Publishing settings (including at startup) must not erase partial scans.
+        // Once a target becomes configured, it follows that setting from now on.
+        let partial: Vec<_> = previous
+            .roots
+            .into_iter()
+            .flatten()
+            .filter(|root| {
+                root.partial_scan && !resolved.iter().any(|configured| configured.covers_root(root))
+            })
+            .collect();
+        resolved.extend(partial);
+        store_scope_roots(&tx, &resolved)?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    pub(crate) fn register_partial_song_roots(&self, roots: &[PathEntry]) -> Result<()> {
+        let tx = rusqlite::Transaction::new_unchecked(
+            &self.conn,
+            rusqlite::TransactionBehavior::Immediate,
         )?;
+        let previous = SongRootScope::load(&tx)?;
+        let mut targets = previous.retained_roots(roots);
+        let Some(mut stored) = previous.roots else {
+            // Legacy databases already allow all registrations.
+            return Ok(());
+        };
+        for target in &mut targets {
+            if !target.entry.enabled {
+                continue;
+            }
+            target.refresh_canonical_path();
+            for root in &mut stored {
+                if root.partial_scan
+                    && normalize_library_path(&root.entry.path)
+                        == normalize_library_path(&target.entry.path)
+                {
+                    root.canonical_path = target.canonical_path.clone();
+                }
+            }
+            if stored.iter().any(|root| root.covers_root(target)) {
+                continue;
+            }
+            target.partial_scan = true;
+            stored.retain(|root| !root.partial_scan || !target.covers_root(root));
+            stored.push(target.clone());
+        }
+        store_scope_roots(&tx, &stored)?;
+        tx.commit()?;
         Ok(())
     }
 
     /// Disabled/offline roots and rootless CLI/Viewer imports retain their records.
     pub fn reconcile_configured_song_roots(&mut self, roots: &[PathEntry]) -> Result<usize> {
-        let previous = SongRootScope::load(&self.conn)?;
-        let scope = SongRootScope { roots: Some(previous.retained_roots(roots)) };
         let tx = self.conn.transaction()?;
+        let previous = SongRootScope::load(&tx)?;
+        let configured = previous.retained_roots(roots);
+        store_scope_roots(&tx, &configured)?;
+        let scope = SongRootScope { roots: Some(configured) };
         let candidates = {
             let mut stmt =
                 tx.prepare("SELECT id, path FROM chart_files WHERE root_id IS NOT NULL")?;
@@ -126,9 +215,18 @@ impl LibraryDatabase {
 }
 
 pub(crate) fn configured_song_roots(conn: &Connection) -> Result<Option<Vec<PathEntry>>> {
-    Ok(SongRootScope::load(conn)?
-        .roots
-        .map(|roots| roots.into_iter().map(|root| root.entry).collect()))
+    Ok(SongRootScope::load(conn)?.roots.map(|roots| {
+        roots.into_iter().filter(|root| !root.partial_scan).map(|root| root.entry).collect()
+    }))
+}
+
+fn store_scope_roots(conn: &Connection, roots: &[SongRootPath]) -> Result<()> {
+    conn.execute(
+        "INSERT INTO library_song_scope (id, roots_json) VALUES (1, ?1)
+         ON CONFLICT(id) DO UPDATE SET roots_json = excluded.roots_json",
+        [serde_json::to_string(roots)?],
+    )?;
+    Ok(())
 }
 
 fn configured_scope_json(conn: &Connection) -> Result<Option<String>> {
@@ -285,14 +383,25 @@ mod tests {
         // Partial scan cannot remove the other configured or old roots.
         scan_song_roots(&mut db, &retained, &config, 2, false).unwrap();
         assert_eq!(db.list_charts(20, 0).unwrap().len(), 5);
+        db.register_partial_song_roots(&roots[..1]).unwrap();
+        let partial_file = library_path_key(&dir.join("old/song.bms"));
+        assert!(
+            SongRootScope::load(&db.conn).unwrap().contains_file_in_partial_scan(&partial_file)
+        );
         db.conn.execute_batch("CREATE TRIGGER fail_cleanup BEFORE DELETE ON charts BEGIN SELECT RAISE(ABORT, 'test failure'); END;").unwrap();
         assert!(db.reconcile_configured_song_roots(&retained).is_err());
         assert_eq!(db.list_charts(20, 0).unwrap().len(), 5);
+        assert!(
+            SongRootScope::load(&db.conn).unwrap().contains_file_in_partial_scan(&partial_file)
+        );
         let files: i64 =
             db.conn.query_row("SELECT COUNT(*) FROM chart_files", [], |r| r.get(0)).unwrap();
         assert_eq!(files, 5);
         db.conn.execute_batch("DROP TRIGGER fail_cleanup;").unwrap();
         assert_eq!(db.reconcile_configured_song_roots(&retained).unwrap(), 1);
+        assert!(
+            !SongRootScope::load(&db.conn).unwrap().contains_file_in_partial_scan(&partial_file)
+        );
         assert!(dir.join("old/song.bms").is_file());
         assert_eq!(db.list_charts(20, 0).unwrap().len(), 4);
         // Explicit empty configuration removes scan-owned registrations, not direct imports.

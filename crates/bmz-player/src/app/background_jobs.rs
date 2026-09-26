@@ -394,7 +394,7 @@ impl WinitApp {
                 let result = (|| -> Result<ScanReport> {
                     migrate_library_db(&library_db_path)?;
                     let mut library_db = LibraryDatabase::open(&library_db_path)?;
-                    scan_songs_with_progress(
+                    let report = scan_songs_with_progress(
                         &mut library_db,
                         &roots,
                         &scan_config,
@@ -403,7 +403,11 @@ impl WinitApp {
                         |progress| {
                             worker_progress.store(pack_scan_progress(progress), Ordering::Relaxed);
                         },
-                    )
+                    )?;
+                    if scope == SongScanScope::Paths {
+                        library_db.register_partial_song_roots(&roots)?;
+                    }
+                    Ok(report)
                 })();
                 let _ = tx.send(result);
             })

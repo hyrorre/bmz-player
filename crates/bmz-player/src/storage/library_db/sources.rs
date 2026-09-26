@@ -21,7 +21,8 @@ impl ChartSource {
         }
         let path = self.path.to_string_lossy();
         roots.contains_file_in_enabled_root(&path)
-            || (self.root_id.is_none() && !roots.contains_file(&path))
+            || (!roots.contains_file(&path)
+                && (self.root_id.is_none() || roots.contains_file_in_partial_scan(&path)))
     }
 
     fn readable(&self) -> bool {
