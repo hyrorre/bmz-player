@@ -13,6 +13,7 @@
 @property BOOL approved;
 @property BOOL report;
 @property BOOL paused;
+@property BOOL errorReported;
 @property uint64_t received;
 @property uint64_t total;
 @property BOOL extracting;
@@ -49,9 +50,21 @@ static BOOL testInstallHandlerInvoked;
     acknowledgement();
 }
 - (void)showUpdaterError:(NSError *)error acknowledgement:(void (^)(void))acknowledgement {
+    [self reportUpdateError:error];
     self.approved = NO; self.installHandler = nil;
-    if (!self.paused && (self.report || self.choice || self.received)) [self emit:@{@"event":@"error", @"message":error.localizedDescription}];
     acknowledgement();
+}
+- (void)reportUpdateError:(NSError *)error {
+    // Sparkle also completes a successful no-update check through didAbortWithError.
+    // The user-driver callback already reports that result as "current" when requested.
+    if ([error.domain isEqualToString:SUSparkleErrorDomain] && error.code == SUNoUpdateError) return;
+    if (self.paused || self.errorReported || !(self.report || self.choice || self.received || self.approved)) return;
+    self.errorReported = YES;
+    if ([error.domain isEqualToString:SUSparkleErrorDomain] && error.code == SUInstallationCanceledError) {
+        [self emit:@{@"event":@"canceled"}];
+    } else {
+        [self emit:@{@"event":@"error", @"message":error.localizedDescription}];
+    }
 }
 - (void)showDownloadInitiatedWithCancellation:(void (^)(void))cancellation {
     self.cancellation = cancellation; self.received = 0; self.total = 0; self.extracting = NO; [self progress];
@@ -76,8 +89,8 @@ static BOOL testInstallHandlerInvoked;
     return YES;
 }
 - (void)updater:(SPUUpdater *)updater didAbortWithError:(NSError *)error {
+    [self reportUpdateError:error];
     self.approved = NO; self.installHandler = nil;
-    if (!self.paused) [self emit:@{@"event":@"error", @"message":error.localizedDescription}];
 }
 @end
 
@@ -99,7 +112,7 @@ void bmz_sparkle_check(bool prerelease, bool report) {
         if (![driver.updater startUpdater:&error]) { [driver emit:@{@"event":@"error", @"message":error.localizedDescription}]; return; }
     }
     if (driver.updater.sessionInProgress) return;
-    driver.report = report; driver.paused = NO; driver.approved = NO;
+    driver.report = report; driver.paused = NO; driver.approved = NO; driver.errorReported = NO;
     driver.selectedFeed = [[NSBundle mainBundle] objectForInfoDictionaryKey:key];
     // BMZ owns scheduling and suppression, even for automatic startup checks.
     [driver.updater checkForUpdates];
@@ -122,7 +135,7 @@ void bmz_sparkle_action(int action) {
         if (hadWork) [driver emit:@{@"event":@"canceled"}];
         return;
     }
-    if (!driver.choice) { if (action == 1) { driver.paused = NO; driver.report = YES; [driver.updater checkForUpdates]; } return; }
+    if (!driver.choice) { if (action == 1) { driver.paused = NO; driver.report = YES; driver.errorReported = NO; [driver.updater checkForUpdates]; } return; }
     if ((action == 1 && driver.ready) || (action == 2 && !driver.ready)) return;
     driver.approved = action == 2;
     driver.report = YES;
