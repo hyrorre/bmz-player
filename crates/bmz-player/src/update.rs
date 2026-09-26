@@ -245,6 +245,32 @@ pub async fn download_update(
     cache_dir: &Path,
     progress: Arc<DownloadProgress>,
 ) -> Result<DownloadedUpdate> {
+    download_update_with_client(candidate, cache_dir, progress, &client()?).await
+}
+
+/// Own only directories created by this attempt. Dropping a canceled future must
+/// clean them up too; code after an `.await` is not guaranteed to run.
+#[derive(Default)]
+struct DownloadCleanup {
+    directories: Vec<PathBuf>,
+}
+
+impl Drop for DownloadCleanup {
+    fn drop(&mut self) {
+        for path in self.directories.iter().rev() {
+            if let Err(error) = std::fs::remove_dir_all(path) {
+                tracing::warn!(%error, path = %path.display(), "failed to clean incomplete update");
+            }
+        }
+    }
+}
+
+async fn download_update_with_client(
+    candidate: UpdateCandidate,
+    cache_dir: &Path,
+    progress: Arc<DownloadProgress>,
+    client: &reqwest::Client,
+) -> Result<DownloadedUpdate> {
     let asset = candidate.asset.as_ref().context("この環境向けの更新ファイルがありません")?;
     let expected = asset.sha256.as_deref().context("更新ファイルの SHA256 が見つかりません")?;
     ensure!(bmz_updater::manifest::valid_hash(expected), "invalid update hash");
@@ -254,11 +280,11 @@ pub async fn download_update(
     let version = bmz_updater::manifest::version(&candidate.version)?.to_string();
     let mut nonce = [0u8; 16];
     getrandom::getrandom(&mut nonce).map_err(|error| anyhow::anyhow!("update nonce: {error}"))?;
-    let dir = cache_dir
-        .join("updates")
-        .join(version)
-        .join(format!("{:032x}", u128::from_ne_bytes(nonce)));
-    std::fs::create_dir_all(&dir)?;
+    let version_dir = cache_dir.join("updates").join(version);
+    std::fs::create_dir_all(&version_dir)?;
+    let dir = version_dir.join(format!("{:032x}", u128::from_ne_bytes(nonce)));
+    std::fs::create_dir(&dir)?;
+    let mut cleanup = DownloadCleanup { directories: vec![dir.clone()] };
     ensure!(
         bmz_updater::process::available_space(&dir)? >= asset.size + 64 * 1024 * 1024,
         "insufficient disk space"
@@ -266,9 +292,9 @@ pub async fn download_update(
     let path = bmz_updater::manifest::checked_path(&dir, &asset.name)?;
     let partial = path.with_extension("download");
     bmz_updater::manifest::reject_link(&partial)?;
-    let result = async {
+    async {
         let mut output = File::create(&partial)?;
-        let mut response = client()?.get(&asset.download_url).send().await?.error_for_status()?;
+        let mut response = client.get(&asset.download_url).send().await?.error_for_status()?;
         let mut hasher = Sha256::new();
         let mut received = 0u64;
         progress.total.store(asset.size, Ordering::Relaxed);
@@ -293,11 +319,7 @@ pub async fn download_update(
         std::fs::rename(&partial, &path)?;
         Ok::<_, anyhow::Error>(())
     }
-    .await;
-    if result.is_err() {
-        let _ = std::fs::remove_file(&partial);
-    }
-    result?;
+    .await?;
     progress.checkpoint()?;
     let work = if asset.kind == UpdateAssetKind::WindowsPortable {
         progress.extracting.store(true, Ordering::Relaxed);
@@ -305,6 +327,7 @@ pub async fn download_update(
             installed_package().context("portable installation metadata missing")?;
         ensure!(installed.kind == PackageKind::Portable, "not a portable installation");
         let work = bmz_updater::transaction::new_work_dir(&root)?;
+        cleanup.directories.push(work.clone());
         let new =
             bmz_updater::archive::extract(&path, &work.join("stage"), || progress.checkpoint())?;
         ensure!(
@@ -316,6 +339,9 @@ pub async fn download_update(
     } else {
         None
     };
+    // Ownership transfers to the completed update, which still needs the files
+    // for installation. Existing update backups are never owned by this guard.
+    cleanup.directories.clear();
     Ok(DownloadedUpdate { candidate, path, work })
 }
 
@@ -412,6 +438,10 @@ pub fn target_arch() -> &'static str {
         "unknown"
     }
 }
+
+#[cfg(test)]
+#[path = "update/download_tests.rs"]
+mod download_tests;
 
 #[cfg(test)]
 mod tests {
