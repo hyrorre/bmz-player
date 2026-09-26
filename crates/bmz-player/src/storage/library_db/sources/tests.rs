@@ -1,5 +1,5 @@
 use super::*;
-use crate::config::app_config::AppConfig;
+use crate::config::app_config::{AppConfig, PathEntry};
 use crate::storage::migration::{LIBRARY_MIGRATIONS, run_migrations};
 use crate::storage::scan::scan_song_roots;
 use bmz_core::course::{CourseConstraints, CourseDefinition, CourseEntry, CourseKind};

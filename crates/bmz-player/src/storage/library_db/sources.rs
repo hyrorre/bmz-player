@@ -1,5 +1,4 @@
 use super::*;
-use crate::config::app_config::PathEntry;
 
 #[cfg(test)]
 mod tests;
@@ -16,13 +15,13 @@ pub struct ChartSource {
 }
 
 impl ChartSource {
-    fn active(&self, roots: Option<&[PathEntry]>) -> bool {
-        roots.is_none_or(|roots| {
-            let path = self.path.to_string_lossy();
-            roots.iter().any(|root| root.enabled && song_root_contains_file(root, &path))
-                || (self.root_id.is_none()
-                    && !roots.iter().any(|root| song_root_contains_file(root, &path)))
-        })
+    fn active(&self, roots: &scope::SongRootScope) -> bool {
+        if roots.is_unrestricted() {
+            return true;
+        }
+        let path = self.path.to_string_lossy();
+        roots.contains_file_in_enabled_root(&path)
+            || (self.root_id.is_none() && !roots.contains_file(&path))
     }
 
     fn readable(&self) -> bool {
@@ -57,12 +56,12 @@ pub(crate) fn available_chart_id_for_hash(
     hash: &str,
     preferred: Option<i64>,
 ) -> Result<Option<i64>> {
-    let roots = scope::configured_song_roots(conn)?;
+    let roots = scope::SongRootScope::load(conn)?;
     let mut sources = sources_for_hash(conn, column, hash)?;
     sources.sort_by_key(|source| source.chart.chart_id != preferred.unwrap_or(-1));
     Ok(sources
         .into_iter()
-        .find(|source| source.active(roots.as_deref()) && source.readable())
+        .find(|source| source.active(&roots) && source.readable())
         .map(|source| source.chart.chart_id))
 }
 
@@ -92,7 +91,7 @@ impl LibraryDatabase {
         if charts.is_empty() {
             return Ok(HashMap::new());
         }
-        let roots = self.configured_song_roots()?;
+        let roots = scope::SongRootScope::load(&self.conn)?;
         let mut hashes: Vec<_> = charts.iter().map(|chart| hash_to_hex(&chart.sha256)).collect();
         hashes.sort_unstable();
         hashes.dedup();
@@ -117,7 +116,7 @@ impl LibraryDatabase {
             })?;
             for row in rows {
                 let source = row?;
-                if source.active(roots.as_deref()) {
+                if source.active(&roots) {
                     candidates.entry(source.chart.sha256).or_default().push(source);
                 }
             }
@@ -144,9 +143,9 @@ impl LibraryDatabase {
     /// Prefer the newest parser version and active copies, excluding stale copies
     /// from duplicate-consistency checks when a better metadata tier is available.
     pub fn preferred_chart_metadata(&self, sha256: [u8; 32]) -> Result<Vec<ChartSource>> {
-        let roots = self.configured_song_roots()?;
+        let roots = scope::SongRootScope::load(&self.conn)?;
         let mut sources = sources_for_hash(&self.conn, "sha256", &hash_to_hex(&sha256))?;
-        let rank = |source: &ChartSource| (source.import_version, source.active(roots.as_deref()));
+        let rank = |source: &ChartSource| (source.import_version, source.active(&roots));
         if let Some(best) = sources.iter().map(&rank).max() {
             sources.retain(|source| rank(source) == best);
         }
@@ -203,10 +202,10 @@ impl LibraryDatabase {
         let Some(sha) = self.chart_sha256_by_chart_id(chart_id)? else {
             return Ok(Vec::new());
         };
-        let roots = self.configured_song_roots()?;
+        let roots = scope::SongRootScope::load(&self.conn)?;
         let mut sources = sources_for_hash(&self.conn, "sha256", &hash_to_hex(&sha))?;
         sources.retain(|source| {
-            source.active(roots.as_deref())
+            source.active(&roots)
                 || (explicit_import
                     && source.chart.chart_id == chart_id
                     && source.root_id.is_none())
