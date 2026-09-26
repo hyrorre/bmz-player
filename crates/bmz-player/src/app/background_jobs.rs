@@ -15,6 +15,7 @@ impl WinitApp {
         let history: Vec<String> = self.select.search.history().iter().cloned().collect();
         let (items, resolved_mode_filter) = load_items_for_stack(
             &self.boot,
+            &mut self.select.collection_cache,
             &self.select.folder_stack,
             &history,
             self.select.select_mode_filter,

@@ -24,6 +24,7 @@ pub(in crate::app) fn table_source_order(
 /// 永続化 / 表示状態を更新できる。
 pub(in crate::app) fn load_items_for_stack(
     boot: &crate::bootstrap::BootstrappedApp,
+    collection_cache: &mut crate::screens::select_model::SelectCollectionCache,
     stack: &[String],
     search_history: &[String],
     mode_filter: SelectModeFilter,
@@ -34,7 +35,7 @@ pub(in crate::app) fn load_items_for_stack(
     let ordered_course_contents = stack.last().and_then(|path| parse_course_contents_path(path));
     if ordered_course_contents.is_some() {
         if let Err(error) =
-            apply_collection_flags(&boot.library_db, &boot.collection_db, &mut items)
+            collection_cache.apply(&boot.library_db, &boot.collection_db, &mut items)
         {
             tracing::error!(%error, "failed to apply collection flags to course contents");
         }
@@ -44,7 +45,7 @@ pub(in crate::app) fn load_items_for_stack(
     apply_select_mode_filter(&mut items, resolved);
     apply_select_difficulty_filter(&mut items, difficulty_filter);
     apply_select_sort(&mut items, sort);
-    if let Err(error) = apply_collection_flags(&boot.library_db, &boot.collection_db, &mut items) {
+    if let Err(error) = collection_cache.apply(&boot.library_db, &boot.collection_db, &mut items) {
         tracing::error!(%error, "failed to apply collection flags to select items");
     }
     let random_items = random_select_items_from_items(&items, &boot.profile_config.select);

@@ -125,7 +125,7 @@ use crate::screens::select_model::{
     COURSE_ROOT_PATH, DifficultyTableText, FAVORITE_CHART_PATH, FAVORITE_ROOT_PATH,
     FAVORITE_SONG_PATH, RANDOM_MIX_COURSE_SOURCE, SEARCH_PATH_PREFIX, SelectChartRow,
     SelectExecutableKind, SelectItem, TABLE_ROOT_PATH, TablePath, VIRTUAL_FOLDER_PATH_PREFIX,
-    apply_collection_flags, chart_is_in_active_song_roots, course_contents_path, course_root_item,
+    chart_is_in_active_song_roots, course_contents_path, course_root_item,
     difficulty_table_text_for_chart_with_active_sources, favorite_root_item, favorite_root_items,
     favorite_song_representatives_for_folder, load_select_items_for_course_contents,
     load_select_items_for_courses, load_select_items_for_favorite_charts,

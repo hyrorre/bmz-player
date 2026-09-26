@@ -366,6 +366,7 @@ impl WinitApp {
         self.select.selected_index_stack.clear();
         self.select.selected_index = 0;
         self.select.select_items.clear();
+        self.select.collection_cache.invalidate();
         self.select.selected_replay_slot = None;
         *self.select.replay_slot_cache.borrow_mut() = None;
         self.select.score_refresh = Default::default();

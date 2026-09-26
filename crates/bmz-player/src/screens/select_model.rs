@@ -33,7 +33,7 @@ use table::*;
 
 pub use enrichment::{select_folder_summary, select_folder_summary_for_rule_mode};
 pub use favorites::{
-    apply_collection_flags, favorite_song_representatives_for_folder,
+    SelectCollectionCache, apply_collection_flags, favorite_song_representatives_for_folder,
     load_select_items_for_favorite_charts, load_select_items_for_favorite_song,
     load_select_items_for_favorite_songs,
 };

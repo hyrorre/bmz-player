@@ -41,11 +41,13 @@ impl WinitApp {
             &boot.profile_config.select.difficulty_filter,
         );
         let select_sort = SelectSort::from_str_or_default(&boot.profile_config.select.sort);
+        let mut collection_cache = crate::screens::select_model::SelectCollectionCache::default();
         let (select_items, select_mode_filter) = if viewer_mode {
             (Vec::new(), initial_mode_filter)
         } else {
             load_items_for_stack(
                 &boot,
+                &mut collection_cache,
                 &folder_stack,
                 &[],
                 initial_mode_filter,
@@ -285,6 +287,7 @@ impl WinitApp {
                 select_items,
                 replay_slot_cache: RefCell::new(None),
                 select_distribution_cache: RefCell::new(HashMap::new()),
+                collection_cache,
                 select_distributions: RefCell::new(Default::default()),
                 difficulty_tables,
                 table_breadcrumb_cache: RefCell::new(HashMap::new()),

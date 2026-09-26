@@ -484,6 +484,100 @@ fn root_folder_items_returns_folder_per_root() {
 }
 
 #[test]
+fn collection_cache_tracks_local_changes_library_updates_and_profile_reset() {
+    let (mut library_db, score_db) = open_in_memory_dbs();
+    let mut collection_db = open_in_memory_collection_db();
+    let shared = chart("Cached favorite");
+    library_db.upsert_chart_import(&record_for_chart("/pack-a/song/shared.bms", &shared)).unwrap();
+    let mut items = load_select_items_in_folder(
+        &library_db,
+        &score_db,
+        "/pack-a/song",
+        LnPolicySetting::AutoLn,
+    )
+    .unwrap();
+    let mut cache = SelectCollectionCache::default();
+    cache.apply(&library_db, &collection_db, &mut items).unwrap();
+    let flags = |items: &[SelectItem]| match &items[0] {
+        SelectItem::Chart(row) => (row.favorite_chart, row.favorite_song),
+        _ => panic!("expected chart"),
+    };
+    assert_eq!(flags(&items), (false, false));
+    let hints =
+        crate::storage::collection_db::FavoriteHints::new("Cached favorite", "", "/pack-a/song");
+    collection_db.toggle_favorite_chart(shared.identity.file_sha256, &hints, 1).unwrap();
+    collection_db.upsert_favorite_song(shared.identity.file_sha256, &hints, 1).unwrap();
+    cache.apply(&library_db, &collection_db, &mut items).unwrap();
+    assert_eq!(flags(&items), (true, true));
+    // New duplicate folders must join the cached song favorite after a scan/import.
+    library_db.upsert_chart_import(&record_for_chart("/pack-b/song/shared.bms", &shared)).unwrap();
+    let mut duplicate = load_select_items_in_folder(
+        &library_db,
+        &score_db,
+        "/pack-b/song",
+        LnPolicySetting::AutoLn,
+    )
+    .unwrap();
+    cache.apply(&library_db, &collection_db, &mut duplicate).unwrap();
+    assert_eq!(flags(&duplicate), (true, true));
+    collection_db.toggle_favorite_chart(shared.identity.file_sha256, &hints, 2).unwrap();
+    cache.apply(&library_db, &collection_db, &mut items).unwrap();
+    assert_eq!(flags(&items), (false, true));
+    cache.invalidate();
+    cache.apply(&library_db, &open_in_memory_collection_db(), &mut items).unwrap();
+    assert_eq!(flags(&items), (false, false));
+}
+
+#[test]
+fn collection_cache_observes_other_connection_commits() {
+    let (library_db, _) = open_in_memory_dbs();
+    let stamp =
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+    let dir =
+        std::env::temp_dir().join(format!("bmz-collection-cache-{}-{stamp}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("collection.db");
+    let mut connection = Connection::open(&path).unwrap();
+    run_migrations(&mut connection, COLLECTION_MIGRATIONS).unwrap();
+    drop(connection);
+    let collection = CollectionDatabase::open(&path).unwrap();
+    let mut writer = CollectionDatabase::open(&path).unwrap();
+    let mut cache = SelectCollectionCache::default();
+    let mut row = missing_favorite_chart_item_for_test();
+    cache.apply(&library_db, &collection, std::slice::from_mut(&mut row)).unwrap();
+    writer
+        .toggle_favorite_chart(
+            [7; 32],
+            &crate::storage::collection_db::FavoriteHints::new("Favorite", "", ""),
+            1,
+        )
+        .unwrap();
+    cache.apply(&library_db, &collection, std::slice::from_mut(&mut row)).unwrap();
+    assert!(matches!(&row, SelectItem::Chart(row) if row.favorite_chart));
+    drop(writer);
+    drop(collection);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+fn missing_favorite_chart_item_for_test() -> SelectItem {
+    SelectItem::Chart(SelectChartRow {
+        chart: None,
+        chart_analysis: None,
+        has_document: false,
+        fallback_title: "Favorite".into(),
+        fallback_artist: String::new(),
+        entry_sha256: Some([7; 32]),
+        download_metadata: Default::default(),
+        best_score: None,
+        replay_slots: [false; 4],
+        favorite_chart: false,
+        favorite_song: false,
+        table_level: String::new(),
+        table_text: Default::default(),
+    })
+}
+
+#[test]
 fn favorite_song_resolves_all_duplicate_sha256_folders() {
     let (mut library_db, score_db) = open_in_memory_dbs();
     let mut collection_db = open_in_memory_collection_db();

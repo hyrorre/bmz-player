@@ -122,19 +122,61 @@ pub fn apply_collection_flags(
     collection_db: &CollectionDatabase,
     items: &mut [SelectItem],
 ) -> Result<()> {
-    let favorite_charts = collection_db.favorite_chart_set()?;
-    let favorite_song_folders = favorite_song_folder_set(library_db, collection_db)?;
-    for item in items {
-        let SelectItem::Chart(row) = item else { continue };
-        if let Some(sha256) = row.score_sha256() {
-            row.favorite_chart = favorite_charts.contains(&sha256);
-        }
-        row.favorite_song = row
-            .chart
-            .as_ref()
-            .is_some_and(|chart| favorite_song_folders.contains(&chart.folder_path));
+    SelectCollectionCache::default().apply(library_db, collection_db, items)
+}
+
+#[derive(Default)]
+pub struct SelectCollectionCache {
+    cached: Option<CachedCollectionFlags>,
+}
+
+struct CachedCollectionFlags {
+    revisions: [(i64, i64); 2],
+    charts: HashSet<[u8; 32]>,
+    folders: HashSet<String>,
+}
+
+impl SelectCollectionCache {
+    /// Connections must remain the same; profile installation explicitly invalidates this cache.
+    pub fn invalidate(&mut self) {
+        self.cached = None;
     }
-    Ok(())
+
+    pub fn apply(
+        &mut self,
+        library_db: &LibraryDatabase,
+        collection_db: &CollectionDatabase,
+        items: &mut [SelectItem],
+    ) -> Result<()> {
+        if !items.iter().any(|item| matches!(item, SelectItem::Chart(_))) {
+            return Ok(());
+        }
+        // total_changes sees our writes; data_version sees commits on scan/other connections.
+        let revision = |conn: &rusqlite::Connection| -> rusqlite::Result<(i64, i64)> {
+            conn.query_row(
+                "SELECT total_changes(), data_version FROM pragma_data_version",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+        };
+        let revisions = [revision(library_db.conn())?, revision(collection_db.conn())?];
+        if self.cached.as_ref().is_none_or(|cached| cached.revisions != revisions) {
+            self.cached = Some(CachedCollectionFlags {
+                revisions,
+                charts: collection_db.favorite_chart_set()?,
+                folders: favorite_song_folder_set(library_db, collection_db)?,
+            });
+        }
+        let cached = self.cached.as_ref().expect("collection flags loaded");
+        for item in items {
+            let SelectItem::Chart(row) = item else { continue };
+            row.favorite_chart =
+                row.score_sha256().is_some_and(|sha256| cached.charts.contains(&sha256));
+            row.favorite_song =
+                row.chart.as_ref().is_some_and(|chart| cached.folders.contains(&chart.folder_path));
+        }
+        Ok(())
+    }
 }
 
 pub(super) fn missing_favorite_chart_item(
