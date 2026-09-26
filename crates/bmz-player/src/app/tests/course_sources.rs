@@ -98,7 +98,12 @@ fn course_sources_require_unavailable_stages_only_when_they_will_be_played() {
         .unwrap()
         .map(|hash| hash_to_hex(&hash));
     std::fs::write(&path, "#TITLE Changed\n#BPM 180\n#00012:01\n").unwrap();
-    std::fs::remove_file(missing_path).unwrap();
+    let course_id = boot.library_db.upsert_course("test", &definition, 0, 1).unwrap();
+    std::fs::write(&missing_path, "#TITLE Changed later stage\n#BPM 180\n#00012:01\n").unwrap();
+    // Match the real replay launch: link repair retains readable copies, then
+    // source verification detects their changed hashes only for played stages.
+    boot.library_db.repair_course_entry_chart_links_for_course(course_id).unwrap();
+    let mut definition = boot.library_db.course_by_id(course_id).unwrap().unwrap().definition;
     let before = definition.clone();
     assert!(resolve_course_chart_sources(&boot.library_db, &mut definition, None).is_err());
     assert_eq!(definition, before);

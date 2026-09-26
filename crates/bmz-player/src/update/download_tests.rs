@@ -11,8 +11,14 @@ async fn server(
     let url = format!("http://{}/update.exe", listener.local_addr().unwrap());
     let handle = tokio::spawn(async move {
         let (mut socket, _) = listener.accept().await.unwrap();
-        let mut request = [0; 4096];
-        socket.read(&mut request).await.unwrap();
+        let mut request = Vec::new();
+        while !request.ends_with(b"\r\n\r\n") {
+            let mut buffer = [0; 1024];
+            let received = socket.read(&mut buffer).await.unwrap();
+            assert!(received > 0, "request ended before its headers");
+            request.extend_from_slice(&buffer[..received]);
+            assert!(request.len() <= 16 * 1024, "request headers too large");
+        }
         socket
             .write_all(
                 format!("HTTP/1.1 200 OK\r\nContent-Length: {size}\r\nConnection: close\r\n\r\n")
