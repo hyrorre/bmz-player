@@ -106,6 +106,7 @@ use settings_navigation::*;
 use settings_panel::*;
 use skin_panel::*;
 
+mod fonts;
 mod ir_state;
 mod menu;
 mod model;
@@ -124,7 +125,7 @@ pub use model::{
 };
 use runtime::AudioDevicePickerState;
 #[cfg(test)]
-use runtime::{cjk_font_definitions, egui_frame_needs_full_state};
+use runtime::egui_frame_needs_full_state;
 
 #[cfg(test)]
 #[path = "ui/tests.rs"]

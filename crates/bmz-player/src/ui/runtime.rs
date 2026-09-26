@@ -565,48 +565,13 @@ pub(super) fn install_cjk_fonts(
     let started_at = std::time::Instant::now();
     let fallbacks = bmz_render::renderer::load_cjk_font_fallback_data(preferred, font_search_paths);
     let font_count = fallbacks.len();
-    ctx.set_fonts(cjk_font_definitions(fallbacks));
+    ctx.set_fonts(super::fonts::cjk_font_definitions(fallbacks));
     tracing::info!(
         ?preferred,
         font_count,
         font_load_ms = started_at.elapsed().as_millis(),
         "egui font fallbacks loaded"
     );
-}
-
-pub(super) fn cjk_font_definitions(
-    fallbacks: Vec<(bmz_render::FontCoverage, bmz_render::renderer::SystemFontData)>,
-) -> egui::FontDefinitions {
-    let mut fonts = egui::FontDefinitions::default();
-    for (coverage, data) in fallbacks {
-        let name = cjk_font_name(coverage).to_owned();
-        let mut font_data = egui::FontData::from_owned(data.bytes).tweak(egui::FontTweak {
-            scale: 1.0,
-            y_offset_factor: 0.26,
-            y_offset: 0.0,
-            ..Default::default()
-        });
-        font_data.index = data.font_index;
-        fonts.font_data.insert(name.clone(), std::sync::Arc::new(font_data));
-        // Latin は egui 既定フォントの先頭順を維持し、欠落グリフだけ CJK face へ
-        // preferred 順で fallback させる。
-        for family in [egui::FontFamily::Proportional, egui::FontFamily::Monospace] {
-            if let Some(chain) = fonts.families.get_mut(&family) {
-                chain.push(name.clone());
-            }
-        }
-    }
-    fonts
-}
-
-pub(super) const fn cjk_font_name(coverage: bmz_render::FontCoverage) -> &'static str {
-    match coverage {
-        bmz_render::FontCoverage::Japanese => "bmz_cjk_japanese",
-        bmz_render::FontCoverage::Korean => "bmz_cjk_korean",
-        bmz_render::FontCoverage::SimplifiedChinese => "bmz_cjk_simplified_chinese",
-        bmz_render::FontCoverage::TraditionalChinese => "bmz_cjk_traditional_chinese",
-        bmz_render::FontCoverage::HongKong => "bmz_cjk_hong_kong",
-    }
 }
 
 #[cfg(test)]

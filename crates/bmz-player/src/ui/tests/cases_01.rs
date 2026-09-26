@@ -116,30 +116,6 @@ fn optional_timestamp_formats_datetime_to_minute_precision() {
 }
 
 #[test]
-fn cjk_font_definitions_keep_latin_first_and_preserve_face_indices() {
-    use bmz_render::FontCoverage;
-    use bmz_render::renderer::SystemFontData;
-
-    let defaults = egui::FontDefinitions::default();
-    let fonts = cjk_font_definitions(vec![
-        (FontCoverage::Korean, SystemFontData { bytes: vec![1], font_index: 3 }),
-        (FontCoverage::Japanese, SystemFontData { bytes: vec![2], font_index: 7 }),
-    ]);
-
-    for family in [egui::FontFamily::Proportional, egui::FontFamily::Monospace] {
-        let default_chain = defaults.families.get(&family).expect("default family");
-        let chain = fonts.families.get(&family).expect("CJK family");
-        assert_eq!(&chain[..default_chain.len()], default_chain);
-        assert_eq!(
-            &chain[default_chain.len()..],
-            &["bmz_cjk_korean".to_string(), "bmz_cjk_japanese".to_string()]
-        );
-    }
-    assert_eq!(fonts.font_data["bmz_cjk_korean"].index, 3);
-    assert_eq!(fonts.font_data["bmz_cjk_japanese"].index, 7);
-}
-
-#[test]
 fn decide_and_play_restrict_settings_panels() {
     assert!(!scene_restricts_settings("Select"));
     assert!(scene_restricts_settings("Decide"));
