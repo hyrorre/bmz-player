@@ -35,13 +35,15 @@ fn clocked_loop_falls_back_to_observed_interval_or_nominal_frame_rate() {
 
 #[test]
 fn clocked_decoder_holds_final_picture_until_the_next_full_loop() {
-    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../data/songs/bga-compat/movie.webm");
-    let duration = video_duration_us(&path).unwrap();
-    let mut reference = VideoBgaDecoder::open(&path).unwrap();
+    let fixture = ThreeFrameMovie::new();
+    let path = &fixture.0;
+    let duration = video_duration_us(path).unwrap();
+    let mut reference = VideoBgaDecoder::open(path).unwrap();
     let first = reference.frame_at_blocking(0).unwrap().unwrap().clone();
     let last = reference.frame_at_blocking(duration).unwrap().unwrap().clone();
+    assert_ne!(first.rgba, last.rgba, "the fixture must detect an early restart");
     assert!(duration - last.pts_us > CLOCKED_FRAME_PUBLISH_LEAD_US);
-    let mut decoder = VideoBgaDecoder::open_following_playback_time(&path).unwrap();
+    let mut decoder = VideoBgaDecoder::open_following_playback_time(path).unwrap();
     for pass in 0..3 {
         let base = pass * duration;
         let target = base + last.pts_us;
@@ -53,6 +55,33 @@ fn clocked_decoder_holds_final_picture_until_the_next_full_loop() {
         let next = base + duration;
         wait_for_frame(&mut decoder, next, next);
         assert_eq!(decoder.poll_frame(next).unwrap().rgba, first.rgba);
+    }
+    decoder.restart();
+    wait_for_frame(&mut decoder, 0, 0);
+    assert_eq!(decoder.poll_frame(0).unwrap().rgba, first.rgba);
+}
+
+struct ThreeFrameMovie(PathBuf);
+
+impl ThreeFrameMovie {
+    fn new() -> Self {
+        let stamp =
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+        let path =
+            std::env::temp_dir().join(format!("bmz-video-loop-{}-{stamp}.y4m", std::process::id()));
+        let mut bytes = b"YUV4MPEG2 W2 H2 F10:1 Ip A1:1 C420jpeg\n".to_vec();
+        for luma in [32, 128, 224] {
+            bytes.extend_from_slice(b"FRAME\n");
+            bytes.extend_from_slice(&[luma, luma, luma, luma, 128, 128]);
+        }
+        std::fs::write(&path, bytes).unwrap();
+        Self(path)
+    }
+}
+
+impl Drop for ThreeFrameMovie {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
     }
 }
 

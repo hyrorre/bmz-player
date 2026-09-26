@@ -43,18 +43,24 @@ pub(crate) fn decode_video_following_playback_time(
     let mut decoded = ffmpeg_next::frame::Video::empty();
     let mut decode_context = VideoDecodeContext::default();
     let mut loop_base_us = 0;
+    let mut highest_target_us = playback_target_us.load(Ordering::Acquire);
     while !stop_decode.load(Ordering::Acquire) {
         if restart_decode.swap(false, Ordering::AcqRel) {
             loop_base_us = playback_target_us.load(Ordering::Acquire);
+            highest_target_us = loop_base_us;
             decode_context.timestamp_normalizer = VideoTimestampNormalizer::default();
             rewind_video_decoder(&mut ictx, &mut decoder)?;
         }
         let mut target_us = playback_target_us.load(Ordering::Acquire);
-        if clocked_playback_target_rewound(target_us, loop_base_us) {
+        // The next loop's base can still be in the future while its final frame
+        // is displayed. Only observed playback time can indicate a rewind.
+        if clocked_playback_target_rewound(target_us, highest_target_us) {
             loop_base_us = target_us;
+            highest_target_us = target_us;
             decode_context.timestamp_normalizer = VideoTimestampNormalizer::default();
             rewind_video_decoder(&mut ictx, &mut decoder)?;
         }
+        highest_target_us = highest_target_us.max(target_us);
         let mut loop_timing = ClockedLoopTiming::default();
         let mut drain_status = ClockedDrainStatus::Continue;
 
@@ -101,6 +107,8 @@ pub(crate) fn decode_video_following_playback_time(
         if drain_status == ClockedDrainStatus::Restart {
             target_us = playback_target_us.load(Ordering::Acquire);
             loop_base_us = target_us;
+            highest_target_us = target_us;
+            decode_context.timestamp_normalizer = VideoTimestampNormalizer::default();
             rewind_video_decoder(&mut ictx, &mut decoder)?;
             continue;
         }
@@ -111,6 +119,7 @@ pub(crate) fn decode_video_following_playback_time(
             break;
         }
         target_us = playback_target_us.load(Ordering::Acquire);
+        highest_target_us = highest_target_us.max(target_us);
         loop_base_us = loop_timing
             .end_us(loop_base_us, selected.duration_us, selected.frame_interval_us)
             .max(target_us);
