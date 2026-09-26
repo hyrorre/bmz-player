@@ -1,5 +1,35 @@
 use super::*;
 
+#[derive(Default)]
+pub(crate) struct ClockedLoopTiming {
+    last_pts_us: Option<i64>,
+    last_interval_us: Option<i64>,
+    last_duration_us: Option<i64>,
+}
+
+impl ClockedLoopTiming {
+    fn record_frame(&mut self, pts_us: i64, duration_us: i64) {
+        if let Some(previous) = self.last_pts_us {
+            let interval = pts_us.saturating_sub(previous);
+            if interval > 0 {
+                self.last_interval_us = Some(interval);
+            }
+        }
+        self.last_pts_us = Some(pts_us);
+        self.last_duration_us = (duration_us > 0).then_some(duration_us);
+    }
+
+    fn end_us(&self, base_us: i64, stream_duration_us: Option<i64>, frame_interval_us: i64) -> i64 {
+        let duration =
+            self.last_duration_us.or(self.last_interval_us).unwrap_or(frame_interval_us).max(1);
+        let frame_end = self.last_pts_us.unwrap_or(base_us).saturating_add(duration);
+        // Stream duration also preserves sub-microsecond rounding at the final
+        // frame. Do not use container duration, which may include longer audio.
+        stream_duration_us
+            .map_or(frame_end, |duration| frame_end.max(base_us.saturating_add(duration)))
+    }
+}
+
 pub(crate) fn decode_video_following_playback_time(
     path: &Path,
     clocked_frames: Arc<Mutex<ClockedFrameState>>,
@@ -25,8 +55,7 @@ pub(crate) fn decode_video_following_playback_time(
             decode_context.timestamp_normalizer = VideoTimestampNormalizer::default();
             rewind_video_decoder(&mut ictx, &mut decoder)?;
         }
-        let mut decoded_any = false;
-        let mut last_pts_us = None;
+        let mut loop_timing = ClockedLoopTiming::default();
         let mut drain_status = ClockedDrainStatus::Continue;
 
         for (stream, packet) in ictx.packets() {
@@ -47,8 +76,7 @@ pub(crate) fn decode_video_following_playback_time(
                 &clocked_frames,
                 &playback_target_us,
                 &stop_decode,
-                &mut decoded_any,
-                &mut last_pts_us,
+                &mut loop_timing,
             )?;
             if drain_status != ClockedDrainStatus::Continue {
                 break;
@@ -66,8 +94,7 @@ pub(crate) fn decode_video_following_playback_time(
                 &clocked_frames,
                 &playback_target_us,
                 &stop_decode,
-                &mut decoded_any,
-                &mut last_pts_us,
+                &mut loop_timing,
             )?;
         }
 
@@ -77,14 +104,16 @@ pub(crate) fn decode_video_following_playback_time(
             rewind_video_decoder(&mut ictx, &mut decoder)?;
             continue;
         }
-        if !decoded_any {
+        if loop_timing.last_pts_us.is_none() {
             break;
         }
         if drain_status == ClockedDrainStatus::Stop {
             break;
         }
         target_us = playback_target_us.load(Ordering::Acquire);
-        loop_base_us = last_pts_us.unwrap_or(loop_base_us).saturating_add(1).max(target_us);
+        loop_base_us = loop_timing
+            .end_us(loop_base_us, selected.duration_us, selected.frame_interval_us)
+            .max(target_us);
         rewind_video_decoder(&mut ictx, &mut decoder)?;
     }
     mark_clocked_frames_finished(&clocked_frames);
@@ -120,8 +149,7 @@ pub(crate) fn drain_clocked_decoder_frames(
     clocked_frames: &Mutex<ClockedFrameState>,
     playback_target_us: &AtomicI64,
     stop_decode: &AtomicBool,
-    decoded_any: &mut bool,
-    last_pts_us: &mut Option<i64>,
+    loop_timing: &mut ClockedLoopTiming,
 ) -> Result<ClockedDrainStatus> {
     loop {
         match decoder.receive_frame(decoded) {
@@ -135,12 +163,18 @@ pub(crate) fn drain_clocked_decoder_frames(
             return Ok(ClockedDrainStatus::Stop);
         }
 
-        *decoded_any = true;
         let pts_us = decode_context
             .timestamp_normalizer
             .frame_pts_us(decoded, selected.time_base_num, selected.time_base_den)
             .saturating_add(loop_base_us);
-        *last_pts_us = Some(pts_us);
+        loop_timing.record_frame(
+            pts_us,
+            timestamp_raw_to_us(
+                decoded.packet().duration,
+                selected.time_base_num,
+                selected.time_base_den,
+            ),
+        );
         if should_skip_frame_conversion(pts_us, playback_target_us.load(Ordering::Acquire)) {
             continue;
         }
@@ -219,3 +253,7 @@ pub(crate) fn wait_until_playback_reaches_frame(
         std::thread::sleep(Duration::from_micros(sleep_us as u64));
     }
 }
+
+#[cfg(test)]
+#[path = "clocked_tests.rs"]
+mod tests;

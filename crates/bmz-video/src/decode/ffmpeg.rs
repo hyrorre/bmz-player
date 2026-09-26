@@ -30,12 +30,25 @@ pub(crate) fn select_video_stream(
     let tb = stream.time_base();
     let start_time_raw =
         (stream.start_time() != ffmpeg_next::ffi::AV_NOPTS_VALUE).then_some(stream.start_time());
+    let duration_us = (stream.duration() > 0)
+        .then(|| {
+            timestamp_raw_to_us(stream.duration(), tb.numerator().into(), tb.denominator().into())
+        })
+        .filter(|duration| *duration > 0);
+    let rate = [stream.avg_frame_rate(), stream.rate()]
+        .into_iter()
+        .find(|rate| rate.numerator() > 0 && rate.denominator() > 0);
+    let frame_interval_us = rate.map_or(33_333, |rate| {
+        (1_000_000 * i64::from(rate.denominator()) / i64::from(rate.numerator())).max(1)
+    });
     tracing::debug!(stream_index, best_index, "selected video stream for BGA decode");
     Ok(SelectedVideoStream {
         index: stream_index,
         time_base_num: tb.numerator() as i64,
         time_base_den: tb.denominator() as i64,
         start_time_raw,
+        duration_us,
+        frame_interval_us,
         codec_params,
     })
 }

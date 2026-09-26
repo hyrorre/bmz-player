@@ -71,6 +71,8 @@ struct SelectedVideoStream {
     time_base_num: i64,
     time_base_den: i64,
     start_time_raw: Option<i64>,
+    duration_us: Option<i64>,
+    frame_interval_us: i64,
     codec_params: ffmpeg_next::codec::Parameters,
 }
 
