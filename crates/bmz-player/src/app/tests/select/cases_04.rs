@@ -168,6 +168,46 @@ fn audio_diagnostic_marks_generated_preview_callback_pressure() {
 }
 
 #[test]
+fn select_distributions_load_in_background_and_reuse_cached_results() {
+    let path = std::env::temp_dir().join(format!(
+        "bmz-distribution-{}-{}.db",
+        std::process::id(),
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
+    ));
+    let conn = rusqlite::Connection::open(&path).unwrap();
+    conn.execute_batch("CREATE TABLE chart_analysis(chart_id INTEGER PRIMARY KEY, distribution_json TEXT NOT NULL)").unwrap();
+    let notes = vec![crate::storage::library_db::ChartDistributionSecond {
+        key_taps: 12,
+        ..Default::default()
+    }];
+    conn.execute(
+        "INSERT INTO chart_analysis VALUES (1, ?1)",
+        [serde_json::to_string(&notes).unwrap()],
+    )
+    .unwrap();
+    drop(conn);
+    let chart = select_chart_row(1).chart.unwrap();
+    let missing = select_chart_row(2).chart.unwrap();
+    let mut runtime = crate::app::select_distribution::SelectDistributionRuntime::default();
+    let mut cache = HashMap::new();
+    runtime.refresh(&path, &[&chart, &missing], &mut cache);
+    assert!(cache.is_empty(), "first request must not wait for the worker");
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while cache.len() < 2 {
+        assert!(Instant::now() < deadline, "distribution worker did not complete");
+        std::thread::sleep(Duration::from_millis(1));
+        runtime.refresh(&path, &[&chart, &missing], &mut cache);
+    }
+    assert_eq!(cache[&1].notes[0].key_taps, 12);
+    assert!(cache[&1].end_density.is_some());
+    assert!(cache[&2].notes.is_empty());
+    std::fs::remove_file(&path).unwrap();
+    runtime.refresh(&path, &[], &mut cache);
+    runtime.refresh(&path, &[&chart, &missing], &mut cache);
+    assert_eq!(cache[&1].notes[0].key_taps, 12);
+}
+
+#[test]
 fn select_snapshot_rows_centers_selection_and_copies_score_summary() {
     let rows: Vec<SelectItem> = (0..10)
         .map(|index| {

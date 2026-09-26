@@ -370,6 +370,7 @@ impl WinitApp {
         *self.select.replay_slot_cache.borrow_mut() = None;
         self.select.score_refresh = Default::default();
         self.select.select_folder_summaries = prepared.folder_summaries;
+        self.invalidate_select_distributions();
         self.select.select_option_panel = 0;
         self.select.select_mode_filter =
             SelectModeFilter::from_str_or_default(&self.boot.profile_config.select.mode_filter);

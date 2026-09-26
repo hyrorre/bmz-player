@@ -560,7 +560,7 @@ impl WinitApp {
     }
 
     pub(super) fn ensure_visible_select_chart_distributions(&self, visible_limit: usize) {
-        let visible_charts: Vec<&ChartListItem> = select_visible_item_indices(
+        let mut visible_charts: Vec<&ChartListItem> = select_visible_item_indices(
             self.select.select_items.len(),
             self.select.selected_index,
             visible_limit,
@@ -571,41 +571,16 @@ impl WinitApp {
             _ => None,
         })
         .collect();
-        let chart_ids: Vec<_> = visible_charts.iter().map(|chart| chart.chart_id).collect();
-        if chart_ids.is_empty() {
-            return;
-        }
-
-        let missing_ids: Vec<i64> = {
-            let cache = self.select.select_distribution_cache.borrow();
-            chart_ids.iter().copied().filter(|chart_id| !cache.contains_key(chart_id)).collect()
-        };
-        if !missing_ids.is_empty() {
-            match self.boot.library_db.chart_distributions_by_chart_ids(&missing_ids) {
-                Ok(distributions) => {
-                    let mut cache = self.select.select_distribution_cache.borrow_mut();
-                    for (chart_id, distribution) in distributions {
-                        let chart = visible_charts.iter().find(|chart| chart.chart_id == chart_id);
-                        if let Some(chart) = chart {
-                            cache.insert(
-                                chart_id,
-                                CachedSelectChartDistribution::new(distribution, chart),
-                            );
-                        }
-                    }
-                    for chart_id in missing_ids {
-                        cache.entry(chart_id).or_default();
-                    }
-                }
-                Err(error) => {
-                    tracing::warn!(%error, "failed to load visible chart distributions");
-                }
-            }
-        }
-        self.select
-            .select_distribution_cache
-            .borrow_mut()
-            .retain(|chart_id, _| chart_ids.contains(chart_id));
+        let selected_id = self
+            .selected_chart_row()
+            .and_then(|row| row.chart.as_ref())
+            .map(|chart| chart.chart_id);
+        visible_charts.sort_by_key(|chart| Some(chart.chart_id) != selected_id);
+        self.select.select_distributions.borrow_mut().refresh(
+            &self.boot.app_paths.library_db,
+            &visible_charts,
+            &mut self.select.select_distribution_cache.borrow_mut(),
+        );
     }
 
     /// Returns the string to render in the skin's `STRING_SEARCHWORD` (ref=30)

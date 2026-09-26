@@ -263,6 +263,7 @@ mod scene_input;
 mod select_assets;
 #[path = "app/select_course_builder.rs"]
 mod select_course_builder;
+mod select_distribution;
 #[path = "app/select_flow/controls.rs"]
 mod select_flow_controls;
 #[path = "app/select_flow/gamepad.rs"]

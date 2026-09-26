@@ -285,6 +285,7 @@ impl WinitApp {
                 select_items,
                 replay_slot_cache: RefCell::new(None),
                 select_distribution_cache: RefCell::new(HashMap::new()),
+                select_distributions: RefCell::new(Default::default()),
                 difficulty_tables,
                 table_breadcrumb_cache: RefCell::new(HashMap::new()),
                 select_folder_summaries,
