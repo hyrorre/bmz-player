@@ -98,7 +98,9 @@ impl WinitApp {
             );
             return;
         }
-        if let Err(error) = resolve_course_chart_sources(&self.boot.library_db, &mut definition) {
+        if let Err(error) =
+            resolve_course_chart_sources(&self.boot.library_db, &mut definition, None)
+        {
             tracing::warn!(%error, course_id, "failed to resolve course chart sources");
             return;
         }
@@ -331,7 +333,9 @@ impl WinitApp {
         };
 
         let mut definition = stored.definition;
-        if let Err(error) = resolve_course_chart_sources(&self.boot.library_db, &mut definition) {
+        if let Err(error) =
+            resolve_course_chart_sources(&self.boot.library_db, &mut definition, Some(queued.len()))
+        {
             tracing::warn!(%error, course_id, "failed to resolve replay course chart sources");
             return;
         }

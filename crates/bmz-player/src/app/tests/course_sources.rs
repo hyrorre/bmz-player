@@ -48,7 +48,7 @@ fn course_sources_resolve_changed_copies_before_metadata_and_preload() {
         .is_err()
     );
 
-    resolve_course_chart_sources(&boot.library_db, &mut definition).unwrap();
+    resolve_course_chart_sources(&boot.library_db, &mut definition, None).unwrap();
     assert!(definition.entries.iter().all(|entry| entry.chart_id == Some(copy_id)));
     let snapshot = course_play_metrics_from_library_metadata(
         &boot.library_db,
@@ -73,9 +73,10 @@ fn course_sources_resolve_changed_copies_before_metadata_and_preload() {
 }
 
 #[test]
-fn course_sources_reject_unavailable_stages_without_partially_replacing_ids() {
+fn course_sources_require_unavailable_stages_only_when_they_will_be_played() {
     let data = ProfileTestDir::new();
-    let (mut boot, path, _) = super::boot_chart::registered_charts(&data);
+    let (mut boot, path, copy) = super::boot_chart::registered_charts(&data);
+    let copy_id = boot.library_db.chart_id_by_chart_file_path(&copy).unwrap().unwrap();
     let original_id = boot.library_db.chart_id_by_chart_file_path(&path).unwrap().unwrap();
     let sha256 = boot.library_db.chart_sha256_by_chart_id(original_id).unwrap().unwrap();
     let missing_path = path.with_file_name("missing.bms");
@@ -99,6 +100,29 @@ fn course_sources_reject_unavailable_stages_without_partially_replacing_ids() {
     std::fs::write(&path, "#TITLE Changed\n#BPM 180\n#00012:01\n").unwrap();
     std::fs::remove_file(missing_path).unwrap();
     let before = definition.clone();
-    assert!(resolve_course_chart_sources(&boot.library_db, &mut definition).is_err());
+    assert!(resolve_course_chart_sources(&boot.library_db, &mut definition, None).is_err());
     assert_eq!(definition, before);
+
+    // A replay that failed at stage 1 never loads stage 2, but still needs its
+    // metadata for the course-wide score denominator and title list.
+    resolve_course_chart_sources(&boot.library_db, &mut definition, Some(1)).unwrap();
+    assert_eq!(definition.entries[0].chart_id, Some(copy_id));
+    assert_eq!(definition.entries[1], before.entries[1]);
+    let snapshot = course_play_metrics_from_library_metadata(
+        &boot.library_db,
+        &definition,
+        boot.profile_config.play.ln_mode_policy,
+        &[PlayStartOptions::default(), PlayStartOptions::default()],
+    )
+    .unwrap();
+    assert_eq!(snapshot.first_chart.chart_id, copy_id);
+    assert!(snapshot.titles.contains_key(&missing_id));
+    assert!(
+        crate::screens::play_session::scored_chart_metrics_for_chart(
+            &boot.library_db,
+            copy_id,
+            &Default::default(),
+        )
+        .is_ok()
+    );
 }

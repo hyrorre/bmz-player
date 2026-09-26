@@ -45,15 +45,18 @@ fn finish_course_play_metrics(
     CoursePlayMetrics { total_notes, ln_mode, ln_policy }
 }
 
-/// Resolve every course copy before any skin, replay or preload uses its folder.
+/// Resolve every played course copy before any skin, replay or preload uses its folder.
 /// Availability checks during library refresh do not verify the file contents.
+/// Partial replays retain metadata for unplayed stages without requiring their files.
 pub(super) fn resolve_course_chart_sources(
     library_db: &LibraryDatabase,
     definition: &mut bmz_core::course::CourseDefinition,
+    replay_stage_limit: Option<usize>,
 ) -> Result<()> {
     let chart_ids = definition
         .entries
         .iter()
+        .take(replay_stage_limit.unwrap_or(definition.entries.len()))
         .enumerate()
         .map(|(index, entry)| {
             let id = entry
