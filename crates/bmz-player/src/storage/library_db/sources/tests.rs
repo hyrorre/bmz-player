@@ -48,6 +48,58 @@ impl Drop for Fixture {
 }
 
 #[test]
+fn course_metadata_links_survive_unavailable_sources_and_restore_cleared_links() {
+    let mut f = Fixture::new();
+    let id = f.id("active");
+    let chart = f.db.list_charts_by_ids(&[id]).unwrap().pop().unwrap();
+    for root in &mut f.roots {
+        root.enabled = false;
+    }
+    f.db.set_configured_song_roots(&f.roots).unwrap();
+    std::fs::remove_file(f.dir.join("active/song.bms")).unwrap();
+    let mut entries = vec![
+        CourseEntry {
+            md5: None,
+            sha256: Some(hash_to_hex(&chart.sha256)),
+            title_hint: String::new(),
+            chart_id: Some(id),
+        },
+        CourseEntry {
+            md5: Some(hash_to_hex(&chart.md5)),
+            sha256: None,
+            title_hint: String::new(),
+            chart_id: None,
+        },
+    ];
+    entries.push(CourseEntry { sha256: Some("ab".repeat(32)), ..entries[0].clone() });
+    let definition = CourseDefinition {
+        key: "unavailable".into(),
+        title: "Unavailable".into(),
+        kind: CourseKind::Course,
+        entries,
+        constraints: Default::default(),
+        trophies: Vec::new(),
+        release: true,
+    };
+    let course = f.db.upsert_course("test", &definition, 0, 1).unwrap();
+    let entries = f.db.list_course_entries(course).unwrap();
+    assert_eq!(entries[0].entry.chart_id, Some(id));
+    assert!(entries[1].entry.chart_id.is_some());
+    assert_eq!(entries[2].entry.chart_id, None, "never reuse a mismatched metadata link");
+    assert!(f.db.available_chart_source(id).unwrap().is_none());
+    assert!(f.db.verified_chart_source(id).is_err());
+
+    f.db.conn
+        .execute("UPDATE course_entries SET chart_id = NULL WHERE course_id = ?1", [course])
+        .unwrap();
+    assert_eq!(f.db.repair_course_entry_chart_links_for_course(course).unwrap(), 2);
+    for entry in f.db.list_course_entries(course).unwrap().iter().take(2) {
+        let linked = entry.entry.chart_id.unwrap();
+        assert_eq!(f.db.chart_sha256_by_chart_id(linked).unwrap(), Some(chart.sha256));
+    }
+}
+
+#[test]
 fn source_fallback_keeps_identity_assets_and_metadata_together() {
     let mut f = Fixture::new();
     let old = f.id("old");

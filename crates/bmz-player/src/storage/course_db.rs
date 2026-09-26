@@ -293,7 +293,8 @@ fn stored_course_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<StoredCou
 }
 
 fn resolve_entry_chart_id(conn: &Connection, entry: &CourseEntry) -> Result<Option<i64>> {
-    // Configured libraries use the same active/readable-copy resolver as playback.
+    // Prefer the same active/readable copy as playback, but retain metadata links
+    // for partial replays whose unplayed stages no longer have usable files.
     // Legacy metadata-only databases retain their historical linking behavior.
     if super::library_db::configured_song_roots(conn)?.is_some() {
         let sha = if let Some(sha) = &entry.sha256 {
@@ -305,20 +306,10 @@ fn resolve_entry_chart_id(conn: &Connection, entry: &CourseEntry) -> Result<Opti
             None
         };
         if let Some(sha) = sha {
-            return super::library_db::available_chart_id_for_hash(
-                conn,
-                "sha256",
-                &sha,
-                entry.chart_id,
-            );
+            return resolve_configured_entry_chart_id(conn, "sha256", &sha, entry.chart_id);
         }
         if let Some(md5) = &entry.md5 {
-            return super::library_db::available_chart_id_for_hash(
-                conn,
-                "md5",
-                md5,
-                entry.chart_id,
-            );
+            return resolve_configured_entry_chart_id(conn, "md5", md5, entry.chart_id);
         }
         return Ok(None);
     }
@@ -346,6 +337,32 @@ fn resolve_entry_chart_id(conn: &Connection, entry: &CourseEntry) -> Result<Opti
         }
     }
     Ok(entry.chart_id)
+}
+
+fn resolve_configured_entry_chart_id(
+    conn: &Connection,
+    column: &str,
+    hash: &str,
+    preferred: Option<i64>,
+) -> Result<Option<i64>> {
+    if let Some(id) = super::library_db::available_chart_id_for_hash(conn, column, hash, preferred)?
+    {
+        return Ok(Some(id));
+    }
+    // A link describes chart identity, not permission to play its file. Launch
+    // separately verifies every played stage. This also restores links cleared
+    // by older repairs, without substituting metadata from a different hash.
+    debug_assert!(matches!(column, "sha256" | "md5"));
+    Ok(conn
+        .query_row(
+            &format!(
+                "SELECT id FROM charts WHERE {column} = ?1
+                 ORDER BY (id = ?2) DESC, import_version DESC, id DESC LIMIT 1"
+            ),
+            params![hash, preferred],
+            |row| row.get(0),
+        )
+        .optional()?)
 }
 
 #[derive(Debug)]

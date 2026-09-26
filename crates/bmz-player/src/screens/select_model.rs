@@ -255,7 +255,7 @@ pub struct SelectCourseRow {
     pub common_key_mode: Option<KeyMode>,
     /// Total number of entries in the course.
     pub entry_count: usize,
-    /// Number of entries whose `chart_id` is resolved in the local library.
+    /// Number of entries with an active file registration in the local library.
     pub resolved_count: usize,
     /// Total notes across all resolved entries.
     pub total_notes: u32,
@@ -300,7 +300,7 @@ pub struct CourseEntryPreview {
     pub play_level: String,
     pub difficulty_name: String,
     pub total_notes: u32,
-    /// True when this entry is resolved to a chart in the local library.
+    /// True when this entry has an active file registration in the local library.
     pub resolved: bool,
 }
 

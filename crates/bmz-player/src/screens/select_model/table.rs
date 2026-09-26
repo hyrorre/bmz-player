@@ -95,8 +95,9 @@ pub fn load_select_items_for_course_contents(
     let chart_ids: Vec<i64> =
         stored.definition.entries.iter().filter_map(|entry| entry.chart_id).collect();
     let charts = library_db.list_charts_by_ids(&chart_ids)?;
+    let sources = library_db.registered_chart_sources(&charts.iter().collect::<Vec<_>>())?;
     let chart_by_id: HashMap<i64, ChartListItem> =
-        charts.into_iter().map(|chart| (chart.chart_id, chart)).collect();
+        sources.into_iter().map(|(id, source)| (id, source.chart)).collect();
     let ordered_charts: Vec<ChartListItem> = stored
         .definition
         .entries
@@ -206,12 +207,25 @@ pub(super) fn build_select_course_row(
     stored: crate::storage::library_db::StoredCourse,
 ) -> SelectItem {
     let entry_count = stored.definition.entries.len();
-    let resolved_count = stored.definition.entries.iter().filter(|e| e.chart_id.is_some()).count();
-
     let chart_ids: Vec<i64> = stored.definition.entries.iter().filter_map(|e| e.chart_id).collect();
     let charts = library_db.list_charts_by_ids(&chart_ids).unwrap_or_default();
     let chart_by_id: std::collections::HashMap<i64, &ChartListItem> =
         charts.iter().map(|c| (c.chart_id, c)).collect();
+    // Metadata remains useful for scores and partial replays even when a stage
+    // is disabled. Normal play and missing-song UI still use active sources.
+    let sources =
+        library_db.registered_chart_sources(&charts.iter().collect::<Vec<_>>()).unwrap_or_default();
+    let resolved_count = stored
+        .definition
+        .entries
+        .iter()
+        .filter(|entry| entry.chart_id.is_some_and(|id| sources.contains_key(&id)))
+        .count();
+    let metadata_complete = stored
+        .definition
+        .entries
+        .iter()
+        .all(|entry| entry.chart_id.is_some_and(|id| chart_by_id.contains_key(&id)));
     let ln_policy = normalized_course_ln_policy_for_charts(
         ln_policy_setting,
         stored.definition.constraints.ln,
@@ -252,7 +266,7 @@ pub(super) fn build_select_course_row(
                     ln_policy_setting,
                     stored.definition.constraints.ln,
                 ),
-                resolved: true,
+                resolved: sources.contains_key(&chart.chart_id),
             },
             None => CourseEntryPreview {
                 title: entry.title_hint.clone(),
@@ -282,7 +296,7 @@ pub(super) fn build_select_course_row(
         stored.definition.trophies.iter().map(|t| t.name.clone()).collect();
 
     let identity = crate::ir::course_payload::course_identity_from_stored(library_db, &stored);
-    let score_identity = identity.as_ref().filter(|_| resolved_count == entry_count);
+    let score_identity = identity.as_ref().filter(|_| metadata_complete);
     let best_score = score_identity.and_then(|identity| {
         score_db.best_course_score(&identity.course_hash, ln_policy, rule_mode).unwrap_or_else(
             |error| {

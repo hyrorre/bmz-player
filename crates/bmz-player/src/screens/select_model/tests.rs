@@ -382,6 +382,41 @@ fn course_row_looks_up_best_score_with_normalized_ln_policy() {
     assert_eq!(row.ln_policy, LnScorePolicy::ForceLn);
     assert_eq!(row.common_key_mode, Some(KeyMode::K7));
     assert_eq!(row.best_score.as_ref().map(|score| score.ex_score), Some(100));
+
+    library_db
+        .set_configured_song_roots(&[crate::config::app_config::PathEntry {
+            path: "/songs".into(),
+            enabled: false,
+            recursive: true,
+        }])
+        .unwrap();
+    library_db.repair_course_entry_chart_links_for_course(row.course_id).unwrap();
+    let items = load_select_items_for_courses(
+        &library_db,
+        &score_db,
+        LnPolicySetting::ForceHcn,
+        RuleMode::Beatoraja,
+    )
+    .unwrap();
+    let SelectItem::Course(disabled) = &items[0] else {
+        panic!("expected course row");
+    };
+    assert!(!disabled.exists_all_songs());
+    assert!(!disabled.entry_previews[0].resolved);
+    assert_eq!(disabled.best_score.as_ref().map(|score| score.ex_score), Some(100));
+    let contents = load_select_items_for_course_contents(
+        &library_db,
+        &score_db,
+        row.course_id,
+        LnPolicySetting::ForceHcn,
+        RuleMode::Beatoraja,
+    )
+    .unwrap();
+    assert_eq!(contents.len(), 1);
+    let SelectItem::Chart(stage) = &contents[0] else {
+        panic!("expected stage row");
+    };
+    assert!(!stage.in_library());
 }
 
 #[test]

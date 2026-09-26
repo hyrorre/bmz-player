@@ -74,6 +74,15 @@ fn course_sources_resolve_changed_copies_before_metadata_and_preload() {
 
 #[test]
 fn course_sources_require_unavailable_stages_only_when_they_will_be_played() {
+    check_unavailable_unplayed_stage(false);
+}
+
+#[test]
+fn partial_course_replay_retains_metadata_when_unplayed_file_is_missing() {
+    check_unavailable_unplayed_stage(true);
+}
+
+fn check_unavailable_unplayed_stage(remove_file: bool) {
     let data = ProfileTestDir::new();
     let (mut boot, path, copy) = super::boot_chart::registered_charts(&data);
     let copy_id = boot.library_db.chart_id_by_chart_file_path(&copy).unwrap().unwrap();
@@ -99,9 +108,13 @@ fn course_sources_require_unavailable_stages_only_when_they_will_be_played() {
         .map(|hash| hash_to_hex(&hash));
     std::fs::write(&path, "#TITLE Changed\n#BPM 180\n#00012:01\n").unwrap();
     let course_id = boot.library_db.upsert_course("test", &definition, 0, 1).unwrap();
-    std::fs::write(&missing_path, "#TITLE Changed later stage\n#BPM 180\n#00012:01\n").unwrap();
-    // Match the real replay launch: link repair retains readable copies, then
-    // source verification detects their changed hashes only for played stages.
+    if remove_file {
+        std::fs::remove_file(&missing_path).unwrap();
+    } else {
+        std::fs::write(&missing_path, "#TITLE Changed later stage\n#BPM 180\n#00012:01\n").unwrap();
+    }
+    // Match the real replay launch: link repair must retain metadata even when
+    // an unplayed stage is missing, then only played stages verify their files.
     boot.library_db.repair_course_entry_chart_links_for_course(course_id).unwrap();
     let mut definition = boot.library_db.course_by_id(course_id).unwrap().unwrap().definition;
     let before = definition.clone();
@@ -122,6 +135,7 @@ fn course_sources_require_unavailable_stages_only_when_they_will_be_played() {
     .unwrap();
     assert_eq!(snapshot.first_chart.chart_id, copy_id);
     assert!(snapshot.titles.contains_key(&missing_id));
+    assert_eq!(snapshot.metrics.total_notes, 2, "include the unplayed stage in the denominator");
     assert!(
         crate::screens::play_session::scored_chart_metrics_for_chart(
             &boot.library_db,
