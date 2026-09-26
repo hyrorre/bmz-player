@@ -308,3 +308,5 @@ mod cases_04;
 mod cases_05;
 #[path = "tests/cases_06.rs"]
 mod cases_06;
+#[path = "tests/hsfix.rs"]
+mod hsfix;

@@ -734,8 +734,13 @@ pub(super) fn initial_hispeed_for_mode(
         hsfix_base_bpm_for_chart(chart, timing_map, hs_fix),
         playback_rate_percent,
     );
-    let scroll_multiplier =
-        crate::screens::play_snapshot::current_scroll_multiplier(chart, timing_map, TimeUs(0));
+    // MIN/MAX/MAINの基準にはノーツ位置のSCROLL/SPEEDを織り込み済み。
+    let scroll_multiplier = match hs_fix {
+        HsFixOption::MinBpm | HsFixOption::MaxBpm | HsFixOption::MainBpm => 1.0,
+        HsFixOption::Off | HsFixOption::StartBpm => {
+            crate::screens::play_snapshot::current_scroll_multiplier(chart, timing_map, TimeUs(0))
+        }
+    };
     match hispeed_mode {
         HispeedMode::Classic => clamp_hispeed(mode_config.hispeed),
         HispeedMode::Normal => {
@@ -767,23 +772,9 @@ pub(super) fn hsfix_base_bpm_for_chart(
 ) -> f64 {
     match hs_fix {
         HsFixOption::Off | HsFixOption::StartBpm => chart.metadata.initial_bpm,
-        HsFixOption::MinBpm => chart
-            .timing_events
-            .iter()
-            .filter_map(|event| match event.kind {
-                TimingEventKind::BpmChange { bpm } => Some(bpm),
-                TimingEventKind::Stop { .. } => None,
-            })
-            .fold(chart.metadata.initial_bpm, f64::min),
-        HsFixOption::MaxBpm => chart
-            .timing_events
-            .iter()
-            .filter_map(|event| match event.kind {
-                TimingEventKind::BpmChange { bpm } => Some(bpm),
-                TimingEventKind::Stop { .. } => None,
-            })
-            .fold(chart.metadata.initial_bpm, f64::max),
-        HsFixOption::MainBpm => main_bpm_for_chart(chart, timing_map),
+        HsFixOption::MinBpm => min_scroll_adjusted_bpm_for_chart(chart),
+        HsFixOption::MaxBpm => max_scroll_adjusted_bpm_for_chart(chart),
+        HsFixOption::MainBpm => main_scroll_adjusted_bpm_for_chart(chart, timing_map),
     }
 }
 
@@ -825,6 +816,102 @@ pub(super) fn main_bpm_for_chart(
         .max_by_key(|(_, count)| *count)
         .map(|(bpm, _)| bpm)
         .unwrap_or(chart.metadata.initial_bpm)
+}
+
+fn scroll_adjusted_bpm_counts(chart: &PlayableChart) -> Vec<(f64, u32)> {
+    // TimingMapは1未満のBPMを丸めるため、HS-FIXでは譜面の元のBPMを使う。
+    let mut bpm_changes: Vec<_> = chart
+        .timing_events
+        .iter()
+        .filter_map(|event| match event.kind {
+            TimingEventKind::BpmChange { bpm } => Some((event.time, bpm)),
+            TimingEventKind::Stop { .. } => None,
+        })
+        .collect();
+    bpm_changes.sort_by_key(|(time, _)| *time);
+    let mut counted = std::collections::HashSet::new();
+    let mut counts: Vec<(f64, u32)> = Vec::new();
+    let mut indices = std::collections::HashMap::new();
+    let mut count_at = |time, tick| {
+        let bpm_index = bpm_changes.partition_point(|(event_time, _)| *event_time <= time);
+        let bpm = bpm_index
+            .checked_sub(1)
+            .map_or(chart.metadata.initial_bpm, |index| bpm_changes[index].1);
+        let scroll_multiplier =
+            crate::screens::play_snapshot::scroll_multiplier_at_tick(chart, tick).abs();
+        let effective_bpm = bpm * scroll_multiplier;
+        if !effective_bpm.is_finite() || effective_bpm <= 0.0 {
+            return;
+        }
+        // SPEED補間ではノーツごとに異なるBPMが生じるため、全候補の線形探索を避ける。
+        // Vecの挿入順は維持し、MAIN BPMの同数時の選択を安定させる。
+        let index = *indices.entry(effective_bpm.to_bits()).or_insert_with(|| {
+            counts.push((effective_bpm, 0));
+            counts.len() - 1
+        });
+        counts[index].1 = counts[index].1.saturating_add(1);
+    };
+    for note in chart.lane_notes.iter().flatten() {
+        if !matches!(note.kind, NoteKind::Tap | NoteKind::LongStart) {
+            continue;
+        }
+        if counted.insert(note.id) {
+            // timeから逆算すると丸め誤差で同じtickのSCROLL変更直前になり得る。
+            count_at(note.time, note.tick.0 as f64);
+        }
+    }
+    for long in &chart.long_notes {
+        if !counted.insert(long.start_note_id) {
+            continue;
+        }
+        count_at(long.start_time, long.start_tick.0 as f64);
+    }
+    counts
+}
+
+fn min_scroll_adjusted_bpm_for_chart(chart: &PlayableChart) -> f64 {
+    scroll_adjusted_bpm_counts(chart)
+        .into_iter()
+        .map(|(bpm, _)| bpm)
+        .reduce(f64::min)
+        .unwrap_or_else(|| {
+            chart
+                .timing_events
+                .iter()
+                .filter_map(|event| match event.kind {
+                    TimingEventKind::BpmChange { bpm } => Some(bpm),
+                    TimingEventKind::Stop { .. } => None,
+                })
+                .fold(chart.metadata.initial_bpm, f64::min)
+        })
+}
+
+fn max_scroll_adjusted_bpm_for_chart(chart: &PlayableChart) -> f64 {
+    scroll_adjusted_bpm_counts(chart)
+        .into_iter()
+        .map(|(bpm, _)| bpm)
+        .reduce(f64::max)
+        .unwrap_or_else(|| {
+            chart
+                .timing_events
+                .iter()
+                .filter_map(|event| match event.kind {
+                    TimingEventKind::BpmChange { bpm } => Some(bpm),
+                    TimingEventKind::Stop { .. } => None,
+                })
+                .fold(chart.metadata.initial_bpm, f64::max)
+        })
+}
+
+fn main_scroll_adjusted_bpm_for_chart(
+    chart: &PlayableChart,
+    timing_map: &bmz_chart::timing::TimingMap,
+) -> f64 {
+    scroll_adjusted_bpm_counts(chart)
+        .into_iter()
+        .max_by_key(|(_, count)| *count)
+        .map(|(bpm, _)| bpm)
+        .unwrap_or_else(|| main_bpm_for_chart(chart, timing_map))
 }
 
 pub(super) fn placeholder_hispeed_for_mode(

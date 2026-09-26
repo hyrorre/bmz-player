@@ -210,11 +210,15 @@ pub(crate) fn current_scroll_multiplier(
 }
 
 pub(super) fn current_scroll_multiplier_for_tick(chart: &PlayableChart, cursor_tick: f64) -> f32 {
+    scroll_multiplier_at_tick(chart, cursor_tick) as f32
+}
+
+pub(crate) fn scroll_multiplier_at_tick(chart: &PlayableChart, cursor_tick: f64) -> f64 {
     let scroll_index =
         chart.scroll_events.partition_point(|event| event.tick.0 as f64 <= cursor_tick);
     let scroll = scroll_index.checked_sub(1).map_or(1.0, |index| chart.scroll_events[index].factor);
     let speed = current_speed_factor_for_tick(&chart.speed_events, cursor_tick);
-    (scroll * speed) as f32
+    scroll * speed
 }
 
 pub(super) fn current_scroll_multiplier_from_segments(
