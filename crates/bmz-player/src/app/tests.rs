@@ -222,6 +222,8 @@ fn best_score_with_replay(ex_score: u32, replay_path: &str) -> BestScoreSummary 
     }
 }
 
+#[path = "tests/boot_chart.rs"]
+mod boot_chart;
 #[path = "tests/course.rs"]
 mod course;
 #[path = "tests/play.rs"]

@@ -193,7 +193,7 @@ cargo run -p bmz-player -- songs list
 
 起動時プレイ:
 
-- `[PATH]` — 譜面 PATH を通常プレイで起動（未登録ならその1ファイルをライブラリへ取り込む。ファイル不存在なら通常起動）
+- `[PATH]` — 譜面 PATH を通常プレイで起動（既存登録もその1ファイルの現在内容へ同期する。曲rootが無効でも明示PATHは再生可能。ファイル不存在なら通常起動）
 - `-P` / `--viewer-play` — 外部BMSエディタ向けビューワーとして起動（オートプレイ、Decide/Result省略、スコア非保存）
 - `-B` / `--battle` — 5K/7KをG-BATTLEで起動し、`-a` / `-P`との併用時はAUTOPLAY BATTLEとして`battle5` / `battle7` skinを使用
 - `--profile <ID>` / `--profile=<ID>` — CLI全体のglobal option。`active_profile`を変更せず、指定profileを今回の起動、course履歴、replay import、IR commandへ使用

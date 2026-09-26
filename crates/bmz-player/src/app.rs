@@ -555,19 +555,17 @@ fn prepare_boot_chart_options(
         bail!("unsupported chart extension: {}", canonical.display());
     }
     options.boot_play_path = Some(canonical.to_string_lossy().into_owned());
-    let chart_id = match boot.library_db.chart_id_by_chart_file_path(&canonical)? {
-        Some(chart_id) => chart_id,
-        None => {
-            crate::storage::import::import_chart_file(
-                &mut boot.library_db,
-                &canonical,
-                None,
-                None,
-                now_unix_seconds(),
-            )?
-            .chart_id
-        }
-    };
+    // An explicit PATH means the current file, even when a previous scan indexed
+    // different contents or the containing song root has since been disabled.
+    // Import as a standalone source, just like a previously unregistered PATH.
+    let chart_id = crate::storage::import::import_chart_file(
+        &mut boot.library_db,
+        &canonical,
+        None,
+        None,
+        now_unix_seconds(),
+    )?
+    .chart_id;
     if options.boot_start_time_us.is_none()
         && let Some(measure) = options.start_measure
     {
