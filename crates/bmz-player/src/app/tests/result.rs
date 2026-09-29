@@ -1,4 +1,19 @@
 use super::*;
+
+#[test]
+fn result_load_numbers_follow_ir_ranking_updates() {
+    let mut runtime = bmz_skin::LuaLoadRuntimeState::default();
+    apply_result_ir_lua_load_numbers(&mut runtime, Default::default());
+    assert_eq!(runtime.number_values[&380], i32::MIN);
+    let mut ir = bmz_render::scene::ResultIrSnapshot::default();
+    ir.entries[0].ex_score = Some(2849);
+    ir.entries[0].rank = Some(1);
+    apply_result_ir_lua_load_numbers(&mut runtime, ir);
+    assert_eq!(runtime.number_values[&380], 2849);
+    assert_eq!(runtime.number_values[&390], 1);
+    apply_result_ir_lua_load_numbers(&mut runtime, Default::default());
+    assert_eq!(runtime.number_values[&380], i32::MIN);
+}
 use crate::app::result_flow_ending::{
     FinishedPlayAction, finished_play_action, play_ending_completion,
 };

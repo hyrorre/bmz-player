@@ -114,6 +114,7 @@ impl WinitApp {
     }
 
     pub(super) fn ensure_result_skin_ready_for_entry(&mut self, slot: ResultSkinSlot) {
+        self.skin.skin_pipeline.result_refresh_generation = None;
         self.skin.last_result_skin_signature = None;
         self.ensure_result_skin_ready(slot);
     }
@@ -149,9 +150,7 @@ impl WinitApp {
         let ir_name = result_ir_skin_name(&self.boot.profile_config.ir);
         let runtime_state = self.result_lua_runtime_state(slot, table_song, ir_name);
         let signature = result_skin_signature_for_config(skin, slot, runtime_state);
-        if !self.skin.skin_pipeline.is_pending(SkinKind::Result)
-            && self.skin.last_result_skin_signature.as_ref() == Some(&signature)
-        {
+        if self.skin.last_result_skin_signature.as_ref() == Some(&signature) {
             tracing::debug!(?slot, "result skin reuse (signature unchanged)");
             return;
         }
@@ -262,7 +261,56 @@ impl WinitApp {
             apply_course_result_lua_load_state(&mut runtime_state, course);
         }
         runtime_state.runtime_mode = self.skin.lua_runtime_mode;
+        let binding = self
+            .renderer
+            .result_skin_document()
+            .map(|document| document.result_ir_scope_binding)
+            .unwrap_or_default();
+        let ir = self
+            .result
+            .result_ir
+            .as_ref()
+            .map(|state| state.skin_snapshot_for_binding(binding))
+            .unwrap_or_default();
+        apply_result_ir_lua_load_numbers(&mut runtime_state, ir);
         runtime_state
+    }
+
+    pub(super) fn refresh_result_skin_load_numbers(&mut self) {
+        let Some((slot, path, _, _, previous)) = self.skin.last_result_skin_signature.clone()
+        else {
+            return;
+        };
+        let Ok(resolved) = self.boot.app_paths.resolve_path_ref(&path) else { return };
+        if !resolved
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .is_some_and(|ext| matches!(ext, "lua" | "luaskin"))
+        {
+            return;
+        }
+        let current = self.result_lua_runtime_state(
+            slot,
+            !self.play.play_table_text_primary.is_empty(),
+            result_ir_skin_name(&self.boot.profile_config.ir),
+        );
+        if previous == current {
+            return;
+        }
+        let changed = self
+            .skin
+            .skin_pipeline
+            .document_cache
+            .lock()
+            .map(|cache| cache.load_numbers_changed(&resolved, &previous, &current))
+            .unwrap_or(true);
+        if changed {
+            self.spawn_result_skin_decode_for(slot);
+            self.skin.skin_pipeline.result_refresh_generation =
+                Some(self.skin.skin_pipeline.generation(SkinKind::Result));
+        } else if let Some(signature) = self.skin.last_result_skin_signature.as_mut() {
+            signature.4 = current;
+        }
     }
 
     pub(super) fn result_double_option_for_slot(&self, slot: ResultSkinSlot) -> DoubleOption {
@@ -397,7 +445,9 @@ impl WinitApp {
             decode_stats,
             upload_stats,
         } = uploaded;
-        if kind == SkinKind::Result {
+        let result_refresh = kind == SkinKind::Result
+            && self.skin.skin_pipeline.result_refresh_generation == Some(generation);
+        if kind == SkinKind::Result && !result_refresh {
             self.result.result_skin_audio = self.audio.system_audio.as_ref().map(|audio| {
                 crate::skin_audio::SkinAudioRuntime::install(
                     audio.engine(),
@@ -478,8 +528,8 @@ impl WinitApp {
         } else {
             self.skin.skin_video_sources.insert(kind, video_sources);
         }
-        let preserve_play_dynamic_timers =
-            kind == SkinKind::Play && self.play.active_play.is_some();
+        let preserve_dynamic_timers =
+            (kind == SkinKind::Play && self.play.active_play.is_some()) || result_refresh;
         let installed_sources = document_textures.len();
         set_decoded_skin_context(
             &mut self.renderer,
@@ -488,7 +538,7 @@ impl WinitApp {
             document,
             lua_runtime,
             document_textures,
-            preserve_play_dynamic_timers,
+            preserve_dynamic_timers,
         );
         self.skin.pending_skin_render_probe =
             Some(PendingSkinRenderProbe { kind, generation, applied_at: Instant::now() });

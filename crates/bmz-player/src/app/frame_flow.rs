@@ -434,6 +434,9 @@ impl WinitApp {
 
         if scene_kind == AppSceneKind::Result || self.play.play_ending.is_some() {
             self.poll_result_ir_into_select_cache();
+            if scene_kind == AppSceneKind::Result {
+                self.refresh_result_skin_load_numbers();
+            }
         } else {
             self.result.result_ir = None;
         }

@@ -1,6 +1,49 @@
 use super::*;
 
 #[test]
+fn result_load_number_dependencies_refresh_graph_source() {
+    let root = unique_test_dir("result-ranking-source");
+    std::fs::create_dir_all(&root).unwrap();
+    let path = root.join("result.lua");
+    std::fs::write(
+        &path,
+        r#"
+        local state = require("main_state")
+        local y = 918
+        if state.number(380) * 50 / state.number(74) >= 88.88 then y = 750 end
+        return {type = 7, graph = {{id = "arbitrary", y = y}}}
+    "#,
+    )
+    .unwrap();
+    let cache = Arc::new(Mutex::new(SkinDocumentCache::default()));
+    let initial = LuaLoadRuntimeState {
+        number_values: BTreeMap::from([(74, 1484), (380, i32::MIN)]),
+        ..Default::default()
+    };
+    let load = |state: &LuaLoadRuntimeState| {
+        load_skin_document(
+            &path,
+            SkinKind::Result,
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            state,
+            Some(cache.clone()),
+        )
+        .unwrap()
+    };
+    assert_eq!(load(&initial).document.graph[0].y, 918);
+    let mut current = initial.clone();
+    current.number_values.insert(380, 2849);
+    let cached_path = cache.lock().unwrap().entries[0].key.path.clone();
+    assert!(cache.lock().unwrap().load_numbers_changed(&cached_path, &initial, &current));
+    assert_eq!(load(&current).document.graph[0].y, 750);
+    let mut unrelated = current.clone();
+    unrelated.number_values.insert(381, 2832);
+    assert!(!cache.lock().unwrap().load_numbers_changed(&cached_path, &current, &unrelated));
+    assert_eq!(load(&initial).document.graph[0].y, 918);
+}
+
+#[test]
 fn lua_document_cache_key_includes_explicit_library_roots() {
     let base = unique_test_dir("bmz-lua-document-cache-library-roots");
     let library_root = base.join("skins");

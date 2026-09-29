@@ -764,3 +764,14 @@ pub(super) fn result_action_for_held_lanes(
         (false, false) => None,
     }
 }
+pub(super) fn apply_result_ir_lua_load_numbers(
+    runtime: &mut bmz_skin::LuaLoadRuntimeState,
+    ir: bmz_render::scene::ResultIrSnapshot,
+) {
+    let state = bmz_render::skin::SkinDrawState { ir_ranking: ir, ..Default::default() };
+    for id in [179, 180, 181, 182, 200].into_iter().chain(380..400) {
+        let value = bmz_render::skin::lua_main_state_number(id, &state)
+            .clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32;
+        runtime.number_values.insert(id, value);
+    }
+}

@@ -562,7 +562,7 @@ pub fn set_decoded_skin_context(
     document: SkinDocument,
     lua_runtime: Option<LuaSkinRuntime>,
     document_textures: Vec<SkinDocumentTexture>,
-    preserve_play_dynamic_timers: bool,
+    preserve_dynamic_timers: bool,
 ) {
     let mut context =
         SkinContext::from_manifest_and_document(default_manifest, document, document_textures);
@@ -571,10 +571,13 @@ pub fn set_decoded_skin_context(
     }));
     match kind {
         SkinKind::Play => {
-            renderer.set_play_skin_context(context, preserve_play_dynamic_timers);
+            renderer.set_play_skin_context(context, preserve_dynamic_timers);
         }
         SkinKind::Select => renderer.set_select_skin_context(context),
         SkinKind::Decide => renderer.set_decide_skin_context(context),
+        SkinKind::Result if preserve_dynamic_timers => {
+            renderer.refresh_result_skin_context(context);
+        }
         SkinKind::Result => renderer.set_result_skin_context(context),
     }
 }

@@ -252,6 +252,11 @@ impl Renderer {
         self.result_dynamic_timer_runtime.reset_for_document(self.result_skin_context.document());
     }
 
+    /// Refresh load-time values without restarting Result timers or event state.
+    pub fn refresh_result_skin_context(&mut self, skin_context: SkinContext) {
+        self.result_skin_context = skin_context;
+    }
+
     /// リザルトスキンが定義する内部 runtime event を dispatch する。
     ///
     /// クリック入力などを app 層が解決した後に呼ぶ。event が未定義なら false。
