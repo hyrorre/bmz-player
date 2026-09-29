@@ -204,6 +204,7 @@ pub fn default_play_skin_document_path_from_paths(
 /// バックグラウンドスレッドでデコード可能な 1 スキンぶんの中間データ。
 /// Renderer に触らず Send-safe な値だけを保持する。
 pub struct DecodedSkin {
+    pub load_dependencies: SkinLoadDependencies,
     pub kind: SkinKind,
     pub document: SkinDocument,
     pub lua_runtime: Option<LuaSkinRuntime>,

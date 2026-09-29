@@ -66,6 +66,8 @@ pub(super) struct SkinPipelineRuntime {
     pub(super) source_asset_cache: SharedSkinSourceAssetCache,
     pub(super) document_cache: SharedSkinDocumentCache,
     pub(super) result_refresh_generation: Option<u64>,
+    pub(super) result_load_dependencies: Option<bmz_skin::SkinLoadDependencies>,
+    pub(super) result_source_selections: BTreeMap<String, String>,
     pub(super) font_cache: SharedSkinFontCache,
     pub(super) installed_font_cache: HashMap<String, SkinFontCacheKey>,
     pub(super) gpu_texture_cache: SharedSkinGpuTextureCache,
@@ -88,6 +90,8 @@ impl SkinPipelineRuntime {
             source_asset_cache: Arc::new(Mutex::new(SkinSourceAssetCache::default())),
             document_cache: Arc::new(Mutex::new(SkinDocumentCache::default())),
             result_refresh_generation: None,
+            result_load_dependencies: None,
+            result_source_selections: BTreeMap::new(),
             font_cache: Arc::new(Mutex::new(SkinFontCache::default())),
             installed_font_cache: HashMap::new(),
             gpu_texture_cache: Arc::new(Mutex::new(SkinGpuTextureCache::default())),
@@ -286,3 +290,4 @@ mod tests {
         assert!(!runtime.has_pending());
     }
 }
+use std::collections::BTreeMap;

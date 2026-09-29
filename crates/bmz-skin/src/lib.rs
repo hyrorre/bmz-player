@@ -77,6 +77,16 @@ pub struct SkinLoadDependencies {
     pub opaque: bool,
 }
 
+impl SkinLoadDependencies {
+    /// Random/opaque loads still record the numeric values read during construction.
+    /// Callback reads are deliberately not part of these dependencies.
+    pub fn numbers_changed(&self, values: &BTreeMap<i32, i32>) -> bool {
+        self.number_values
+            .iter()
+            .any(|(id, value)| values.get(id).copied().unwrap_or_default() != *value)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SkinLoadedFileDependency {
     pub modified: Option<SystemTime>,

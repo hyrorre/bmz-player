@@ -179,6 +179,7 @@ pub(in crate::skin_loader) fn load_skin_video_first_frame_rgba(
 }
 
 pub(in crate::skin_loader) struct LoadedSkinDocumentForDecode {
+    pub(in crate::skin_loader) dependencies: SkinLoadDependencies,
     pub(in crate::skin_loader) document: SkinDocument,
     pub(in crate::skin_loader) lua_runtime: Option<LuaSkinRuntime>,
     pub(in crate::skin_loader) files: BTreeMap<String, String>,
@@ -236,6 +237,11 @@ pub(in crate::skin_loader) fn load_skin_document_with_path_context(
             document.user_selected_options =
                 Some(enabled_options_from_selections(&document, options));
             return Ok(LoadedSkinDocumentForDecode {
+                dependencies: cache
+                    .entries
+                    .last()
+                    .map(|entry| entry.dependencies.clone())
+                    .unwrap_or_default(),
                 document,
                 lua_runtime: None,
                 files: resolved_files,
@@ -260,10 +266,11 @@ pub(in crate::skin_loader) fn load_skin_document_with_path_context(
                 fingerprint,
                 loaded.document.clone(),
                 loaded.files.clone(),
-                loaded.dependencies,
+                loaded.dependencies.clone(),
             );
         }
         return Ok(LoadedSkinDocumentForDecode {
+            dependencies: loaded.dependencies,
             document: loaded.document,
             lua_runtime: loaded.lua_runtime,
             files: loaded.files,
@@ -284,6 +291,11 @@ pub(in crate::skin_loader) fn load_skin_document_with_path_context(
             document.user_selected_options =
                 Some(enabled_options_from_selections(&document, options));
             return Ok(LoadedSkinDocumentForDecode {
+                dependencies: cache
+                    .entries
+                    .last()
+                    .map(|entry| entry.dependencies.clone())
+                    .unwrap_or_default(),
                 document,
                 lua_runtime: None,
                 files: resolved_files,
@@ -313,10 +325,11 @@ pub(in crate::skin_loader) fn load_skin_document_with_path_context(
                 fingerprint,
                 loaded.document.clone(),
                 loaded.files.clone(),
-                loaded.dependencies,
+                loaded.dependencies.clone(),
             );
         }
         return Ok(LoadedSkinDocumentForDecode {
+            dependencies: loaded.dependencies,
             document: loaded.document,
             lua_runtime: loaded.lua_runtime,
             files: loaded.files,
@@ -339,6 +352,7 @@ pub(in crate::skin_loader) fn load_skin_document_with_path_context(
     )?;
     loaded.cache_status = cache_status;
     Ok(LoadedSkinDocumentForDecode {
+        dependencies: loaded.dependencies,
         document: loaded.document,
         lua_runtime: loaded.lua_runtime,
         files: loaded.files,

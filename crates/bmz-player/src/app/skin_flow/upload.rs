@@ -115,6 +115,8 @@ impl WinitApp {
 
     pub(super) fn ensure_result_skin_ready_for_entry(&mut self, slot: ResultSkinSlot) {
         self.skin.skin_pipeline.result_refresh_generation = None;
+        self.skin.skin_pipeline.result_load_dependencies = None;
+        self.skin.skin_pipeline.result_source_selections.clear();
         self.skin.last_result_skin_signature = None;
         self.ensure_result_skin_ready(slot);
     }
@@ -145,6 +147,10 @@ impl WinitApp {
     }
 
     pub(super) fn spawn_result_skin_decode_for(&mut self, slot: ResultSkinSlot) {
+        self.spawn_result_skin_decode(slot, false);
+    }
+
+    fn spawn_result_skin_decode(&mut self, slot: ResultSkinSlot, refresh: bool) {
         let skin = &self.boot.profile_config.skin;
         let table_song = !self.play.play_table_text_primary.is_empty();
         let ir_name = result_ir_skin_name(&self.boot.profile_config.ir);
@@ -193,7 +199,7 @@ impl WinitApp {
             return;
         }
 
-        let request = SkinDecodeRequest::new(
+        let mut request = SkinDecodeRequest::new(
             generation,
             path,
             SkinKind::Result,
@@ -203,6 +209,9 @@ impl WinitApp {
         )
         .with_library_roots(self.boot.app_paths.skin_library_roots())
         .reuse_installed_fonts(&self.skin.skin_pipeline);
+        if refresh {
+            request.pinned_sources = self.skin.skin_pipeline.result_source_selections.clone();
+        }
         spawn_skin_decode(&self.skin.skin_pipeline, request);
         self.skin.skin_pipeline.set_pending(SkinKind::Result, true);
         tracing::info!(?slot, path = %path_label, generation, "result skin decode queued");
@@ -297,15 +306,12 @@ impl WinitApp {
         if previous == current {
             return;
         }
-        let changed = self
-            .skin
-            .skin_pipeline
-            .document_cache
-            .lock()
-            .map(|cache| cache.load_numbers_changed(&resolved, &previous, &current))
-            .unwrap_or(true);
+        let Some(dependencies) = self.skin.skin_pipeline.result_load_dependencies.as_ref() else {
+            return;
+        };
+        let changed = dependencies.numbers_changed(&current.number_values);
         if changed {
-            self.spawn_result_skin_decode_for(slot);
+            self.spawn_result_skin_decode(slot, true);
             self.skin.skin_pipeline.result_refresh_generation =
                 Some(self.skin.skin_pipeline.generation(SkinKind::Result));
         } else if let Some(signature) = self.skin.last_result_skin_signature.as_mut() {
@@ -436,6 +442,7 @@ impl WinitApp {
             return false;
         };
         let UploadedSkin {
+            load_dependencies,
             kind,
             document,
             lua_runtime,
@@ -445,8 +452,21 @@ impl WinitApp {
             decode_stats,
             upload_stats,
         } = uploaded;
+        if kind == SkinKind::Result {
+            self.skin.skin_pipeline.result_load_dependencies = Some(load_dependencies);
+        }
         let result_refresh = kind == SkinKind::Result
             && self.skin.skin_pipeline.result_refresh_generation == Some(generation);
+        if kind == SkinKind::Result && !result_refresh {
+            self.skin.skin_pipeline.result_source_selections = document
+                .source
+                .iter()
+                .filter_map(|source| {
+                    let prepared = prepared.iter().find(|item| item.source_id == source.id)?;
+                    Some((source.path.clone(), prepared.path.to_string_lossy().into_owned()))
+                })
+                .collect();
+        }
         if kind == SkinKind::Result && !result_refresh {
             self.result.result_skin_audio = self.audio.system_audio.as_ref().map(|audio| {
                 crate::skin_audio::SkinAudioRuntime::install(
@@ -487,6 +507,11 @@ impl WinitApp {
         // アップロード済みテクスチャを差し込み、SkinDocumentTexture を組む。
         let mut document_textures = Vec::with_capacity(prepared.len());
         let mut video_sources = Vec::new();
+        let mut previous_videos = if result_refresh {
+            self.skin.skin_video_sources.remove(&kind).unwrap_or_default()
+        } else {
+            Vec::new()
+        };
         for source in prepared {
             let PreparedSource {
                 source_id,
@@ -498,7 +523,15 @@ impl WinitApp {
                 cache_key,
                 texture_lease: _texture_lease,
             } = source;
-            if let Some(prepared) = prepared {
+            let reused_video = if is_video {
+                ActiveSkinVideoSource::take_matching(&mut previous_videos, &path)
+            } else {
+                None
+            };
+            let texture = reused_video.as_ref().map(|old| old.texture).unwrap_or(texture);
+            if reused_video.is_none()
+                && let Some(prepared) = prepared
+            {
                 self.renderer.insert_prepared_texture(TextureId(texture.0), prepared);
                 if let Some(cache_key) = cache_key
                     && let Ok(mut cache) = self.skin.skin_pipeline.gpu_texture_cache.lock()
@@ -508,6 +541,19 @@ impl WinitApp {
             }
             if is_video {
                 let gating = skin_video_source_gating(&document, &source_id);
+                if let Some(mut old) = reused_video {
+                    old.active = gating.active;
+                    old.gating_op_sets = gating.op_sets;
+                    old.enabled_options = document.enabled_options();
+                    old.result_ranktime_ms = document.ranktime;
+                    video_sources.push(old);
+                    document_textures.push(SkinDocumentTexture {
+                        source_id,
+                        texture,
+                        source_size: size,
+                    });
+                    continue;
+                }
                 video_sources.push(ActiveSkinVideoSource {
                     texture,
                     path,

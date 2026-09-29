@@ -1,6 +1,7 @@
 use super::*;
 
 pub(super) struct SkinDecodeRequest {
+    pub(super) pinned_sources: BTreeMap<String, String>,
     generation: u64,
     path: PathBuf,
     kind: SkinKind,
@@ -21,6 +22,7 @@ impl SkinDecodeRequest {
         runtime_state: bmz_skin::LuaLoadRuntimeState,
     ) -> Self {
         Self {
+            pinned_sources: BTreeMap::new(),
             generation,
             path,
             kind,
@@ -45,6 +47,7 @@ impl SkinDecodeRequest {
 
 pub(super) fn spawn_skin_decode(pipeline: &SkinPipelineRuntime, request: SkinDecodeRequest) {
     let SkinDecodeRequest {
+        pinned_sources,
         generation,
         path,
         kind,
@@ -66,6 +69,7 @@ pub(super) fn spawn_skin_decode(pipeline: &SkinPipelineRuntime, request: SkinDec
         .spawn(move || {
             let decode_started_at = Instant::now();
             let result = decode_beatoraja_skin_request(BeatorajaSkinDecodeRequest {
+                pinned_sources: Some(&pinned_sources),
                 skin_path: &path,
                 kind,
                 options: &options,

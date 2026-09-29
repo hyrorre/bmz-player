@@ -19,6 +19,12 @@ pub(super) struct ActiveSkinVideoSource {
     pub(super) failed: bool,
 }
 
+impl ActiveSkinVideoSource {
+    pub(super) fn take_matching(sources: &mut Vec<Self>, path: &std::path::Path) -> Option<Self> {
+        sources.iter().position(|source| source.path == path).map(|index| sources.remove(index))
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 pub(super) struct PendingSkinRenderProbe {
     pub(super) kind: SkinKind,

@@ -20,6 +20,7 @@ fn select_upload(generation: u64, name: &str) -> PendingUploadResult {
         upload_started_at: now,
         upload_finished_at: now,
         uploaded: Ok(UploadedSkin {
+            load_dependencies: Default::default(),
             kind: SkinKind::Select,
             document,
             lua_runtime: None,

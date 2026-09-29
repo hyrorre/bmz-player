@@ -36,6 +36,7 @@ fn lua_skin_decode_expands_selected_pm_chara_directory() {
     fs::copy(source_png, character_dir.join("character.png")).unwrap();
 
     let decoded = decode_beatoraja_skin_request(BeatorajaSkinDecodeRequest {
+        pinned_sources: None,
         skin_path: &entry,
         kind: SkinKind::Play,
         options: &BTreeMap::new(),
@@ -93,6 +94,7 @@ fn json_skin_decode_expands_pm_chara_directory_default() {
     fs::copy(source_png, character_dir.join("character.png")).unwrap();
 
     let decoded = decode_beatoraja_skin_request(BeatorajaSkinDecodeRequest {
+        pinned_sources: None,
         skin_path: &entry,
         kind: SkinKind::Play,
         options: &BTreeMap::new(),
@@ -121,6 +123,7 @@ fn real_simple_play_loads_bga_gauge_mascots_and_pm_chara_when_available() {
     let files =
         BTreeMap::from([("ぽみゅキャラ Pmchara".to_string(), "PMchara_sample".to_string())]);
     let decoded = decode_beatoraja_skin_request(BeatorajaSkinDecodeRequest {
+        pinned_sources: None,
         skin_path: &entry,
         kind: SkinKind::Play,
         options: &BTreeMap::new(),

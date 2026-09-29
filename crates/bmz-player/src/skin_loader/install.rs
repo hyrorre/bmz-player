@@ -32,6 +32,7 @@ pub struct PreparedSource {
 /// decode + GPU アップロードまで終わった 1 スキンぶん。upload worker → main で渡す。
 /// `PreparedTexture` (= wgpu::Texture/View) は `Send` なのでスレッド間で受け渡せる。
 pub struct UploadedSkin {
+    pub load_dependencies: SkinLoadDependencies,
     pub kind: SkinKind,
     pub document: SkinDocument,
     pub lua_runtime: Option<LuaSkinRuntime>,
@@ -313,6 +314,7 @@ pub fn upload_decoded_skin_with_texture_cache(
 ) -> UploadedSkin {
     let upload_start = Instant::now();
     let DecodedSkin {
+        load_dependencies,
         kind,
         document,
         lua_runtime,
@@ -429,6 +431,7 @@ pub fn upload_decoded_skin_with_texture_cache(
         .collect();
     upload_stats.upload_us = elapsed_us(upload_start);
     UploadedSkin {
+        load_dependencies,
         kind,
         document,
         lua_runtime,
@@ -449,8 +452,16 @@ pub fn install_decoded_skin(
     decoded: DecodedSkin,
     default_manifest: SkinManifest,
 ) -> Result<()> {
-    let DecodedSkin { kind, document, lua_runtime, fonts, sources, audio_assets: _, stats: _ } =
-        decoded;
+    let DecodedSkin {
+        kind,
+        document,
+        lua_runtime,
+        fonts,
+        sources,
+        audio_assets: _,
+        stats: _,
+        load_dependencies: _,
+    } = decoded;
 
     for font in fonts {
         install_decoded_font(renderer, font);

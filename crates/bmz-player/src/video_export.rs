@@ -60,6 +60,7 @@ pub fn run(options: VideoExportOptions, paths: &AppPaths, profile_id: Option<&st
         crate::app::offline_skin_load_state(&prepared.play, &prepared.profile, prepared.best);
     let mut decoded = crate::skin_loader::decode_beatoraja_skin_request(
         crate::skin_loader::BeatorajaSkinDecodeRequest {
+            pinned_sources: None,
             skin_path: &skin_path,
             kind: crate::skin_loader::SkinKind::Play,
             options: selection.options,

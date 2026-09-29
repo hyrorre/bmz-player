@@ -1,6 +1,118 @@
 use super::*;
 
 #[test]
+fn result_refresh_pins_resolved_wildcard_source() {
+    let root = unique_test_dir("result-pinned-background");
+    std::fs::create_dir_all(root.join("bg")).unwrap();
+    for name in ["one.png", "two.png"] {
+        image::RgbaImage::from_pixel(1, 1, image::Rgba([255, 0, 0, 255]))
+            .save(root.join("bg").join(name))
+            .unwrap();
+    }
+    let entry = root.join("result.lua");
+    std::fs::write(
+        &entry,
+        r#"
+        return {type = 7, source = {{id = "bg", path = "bg/*"}},
+            image = {{id = "background", src = "bg", w = 1, h = 1}},
+            destination = {{id = "background", dst = {{w = 1920, h = 1080}}}}}
+    "#,
+    )
+    .unwrap();
+    let pinned =
+        BTreeMap::from([("bg/*".into(), root.join("bg/two.png").to_string_lossy().into_owned())]);
+    for _ in 0..3 {
+        let decoded = decode_beatoraja_skin_request(BeatorajaSkinDecodeRequest {
+            pinned_sources: Some(&pinned),
+            skin_path: &entry,
+            kind: SkinKind::Result,
+            options: &BTreeMap::new(),
+            files: &BTreeMap::new(),
+            runtime_state: &LuaLoadRuntimeState::default(),
+            document_cache: None,
+            source_cache: None,
+            texture_cache: None,
+            font_cache: None,
+            installed_fonts: None,
+            library_roots: &[],
+        })
+        .unwrap();
+        assert_eq!(
+            std::fs::canonicalize(&decoded.sources[0].path).unwrap(),
+            std::fs::canonicalize(root.join("bg/two.png")).unwrap()
+        );
+    }
+}
+
+#[test]
+fn opaque_result_retains_load_dependencies_without_callback_reads() {
+    let root = unique_test_dir("opaque-result-dependencies");
+    std::fs::create_dir_all(&root).unwrap();
+    let path = root.join("result.lua");
+    for load_read in [false, true] {
+        std::fs::write(
+            &path,
+            format!(
+                r#"
+            local state = require("main_state")
+            local unused_random = math.random()
+            local fixed = {}
+            return {{type = 7, graph = {{{{
+                id = "bar", y = fixed,
+                value = function() return state.number(380) / 3000 end
+            }}}}}}
+        "#,
+                if load_read { "state.number(380)" } else { "0" }
+            ),
+        )
+        .unwrap();
+        let initial = LuaLoadRuntimeState {
+            number_values: BTreeMap::from([(380, 100)]),
+            ..Default::default()
+        };
+        let loaded = load_skin_document(
+            &path,
+            SkinKind::Result,
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            &initial,
+            Some(Arc::new(Mutex::new(SkinDocumentCache::default()))),
+        )
+        .unwrap();
+        assert!(loaded.dependencies.opaque);
+        let changed = BTreeMap::from([(380, 200)]);
+        assert_eq!(loaded.dependencies.numbers_changed(&changed), load_read);
+    }
+}
+
+#[test]
+fn wmii_result_ranking_scroll_does_not_change_load_dependencies_when_available() {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../data/skins/WMII_FHD/result/result.luaskin");
+    if !path.is_file() {
+        return;
+    }
+    let mut state = LuaLoadRuntimeState::default();
+    state.number_values.insert(74, 1500);
+    for id in 380..400 {
+        state.number_values.insert(id, 100);
+    }
+    let loaded = load_skin_document(
+        &path,
+        SkinKind::Result,
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+        &state,
+        None,
+    )
+    .unwrap();
+    for id in 380..400 {
+        state.number_values.insert(id, 200);
+    }
+    assert!(!loaded.dependencies.numbers_changed(&state.number_values));
+}
+
+#[test]
 fn result_load_number_dependencies_refresh_graph_source() {
     let root = unique_test_dir("result-ranking-source");
     std::fs::create_dir_all(&root).unwrap();
@@ -34,12 +146,11 @@ fn result_load_number_dependencies_refresh_graph_source() {
     assert_eq!(load(&initial).document.graph[0].y, 918);
     let mut current = initial.clone();
     current.number_values.insert(380, 2849);
-    let cached_path = cache.lock().unwrap().entries[0].key.path.clone();
-    assert!(cache.lock().unwrap().load_numbers_changed(&cached_path, &initial, &current));
+    assert!(load(&initial).dependencies.numbers_changed(&current.number_values));
     assert_eq!(load(&current).document.graph[0].y, 750);
     let mut unrelated = current.clone();
     unrelated.number_values.insert(381, 2832);
-    assert!(!cache.lock().unwrap().load_numbers_changed(&cached_path, &current, &unrelated));
+    assert!(!load(&current).dependencies.numbers_changed(&unrelated.number_values));
     assert_eq!(load(&initial).document.graph[0].y, 918);
 }
 

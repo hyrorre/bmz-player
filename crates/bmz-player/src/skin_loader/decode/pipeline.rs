@@ -91,6 +91,7 @@ pub fn decode_beatoraja_skin_with_options_and_runtime_state_and_caches(
     installed_fonts: Option<HashMap<String, SkinFontCacheKey>>,
 ) -> Result<DecodedSkin> {
     decode_beatoraja_skin_request(BeatorajaSkinDecodeRequest {
+        pinned_sources: None,
         skin_path,
         kind,
         options,
@@ -110,6 +111,7 @@ pub fn decode_beatoraja_skin_with_options_and_runtime_state_and_caches(
 /// 公開互換APIは従来の引数列を維持し、内部ではこの型を介してcacheや
 /// runtime stateの追加・変更を局所化する。
 pub struct BeatorajaSkinDecodeRequest<'a> {
+    pub pinned_sources: Option<&'a BTreeMap<String, String>>,
     pub skin_path: &'a Path,
     pub kind: SkinKind,
     pub options: &'a BTreeMap<String, String>,
@@ -127,6 +129,7 @@ pub fn decode_beatoraja_skin_request(
     request: BeatorajaSkinDecodeRequest<'_>,
 ) -> Result<DecodedSkin> {
     let BeatorajaSkinDecodeRequest {
+        pinned_sources,
         skin_path,
         kind,
         options,
@@ -146,6 +149,7 @@ pub fn decode_beatoraja_skin_request(
     };
     let document_start = Instant::now();
     let LoadedSkinDocumentForDecode {
+        dependencies: load_dependencies,
         mut document,
         lua_runtime,
         files: resolved_files,
@@ -160,6 +164,13 @@ pub fn decode_beatoraja_skin_request(
         path_context.as_ref(),
     )?;
     let document_us = elapsed_us(document_start);
+    if let Some(pinned) = pinned_sources {
+        for source in &mut document.source {
+            if let Some(path) = pinned.get(&source.path) {
+                source.path.clone_from(path);
+            }
+        }
+    }
     // フォント ID は scene 横断的に Renderer のグローバルマップに登録されるので、
     // play / select / result で同じ "0" 等が衝突する。namespace を付与して隔離する。
     // text 定義の font 参照側も同じ namespace を付ける。
@@ -294,6 +305,7 @@ pub fn decode_beatoraja_skin_request(
         .collect();
 
     Ok(DecodedSkin {
+        load_dependencies,
         kind,
         document,
         lua_runtime,

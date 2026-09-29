@@ -31,6 +31,7 @@ fn lua_cross_package_source_decodes_with_explicit_library_root() {
     let files = BTreeMap::new();
     let runtime_state = LuaLoadRuntimeState::default();
     let decoded = decode_beatoraja_skin_request(BeatorajaSkinDecodeRequest {
+        pinned_sources: None,
         skin_path: &entry,
         kind: SkinKind::Play,
         options: &options,
@@ -79,6 +80,7 @@ fn select_lua_skins_decode_with_explicit_library_root_when_available() {
             continue;
         }
         let decoded = decode_beatoraja_skin_request(BeatorajaSkinDecodeRequest {
+            pinned_sources: None,
             skin_path: &skin_path,
             kind: SkinKind::Select,
             options: &options,

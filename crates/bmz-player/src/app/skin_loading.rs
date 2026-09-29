@@ -341,6 +341,7 @@ pub(super) fn apply_json_skin_sync(
     let library_roots = app_paths.skin_library_roots();
     let decode_started_at = Instant::now();
     let decoded = match decode_beatoraja_skin_request(BeatorajaSkinDecodeRequest {
+        pinned_sources: None,
         skin_path: path,
         kind,
         options,

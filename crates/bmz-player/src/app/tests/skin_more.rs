@@ -1008,3 +1008,29 @@ fn play_skin_key_mode_uses_battle_double_mode() {
         KeyMode::K10
     );
 }
+#[test]
+fn matching_result_video_keeps_playback_state() {
+    let mut sources = vec![ActiveSkinVideoSource {
+        texture: SkinTextureId(800),
+        path: PathBuf::from("background.mp4"),
+        decoder: None,
+        last_pts: Some(12345),
+        loop_start_us: 67890,
+        active: true,
+        gating_op_sets: Vec::new(),
+        enabled_options: Vec::new(),
+        result_ranktime_ms: 0,
+        failed: false,
+    }];
+    assert!(
+        ActiveSkinVideoSource::take_matching(&mut sources, std::path::Path::new("other.mp4"))
+            .is_none()
+    );
+    let reused =
+        ActiveSkinVideoSource::take_matching(&mut sources, std::path::Path::new("background.mp4"))
+            .unwrap();
+    assert_eq!(reused.texture, SkinTextureId(800));
+    assert_eq!(reused.last_pts, Some(12345));
+    assert_eq!(reused.loop_start_us, 67890);
+    assert!(sources.is_empty());
+}

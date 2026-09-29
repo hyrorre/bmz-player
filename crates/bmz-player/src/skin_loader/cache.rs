@@ -42,26 +42,6 @@ pub(super) struct SkinDocumentCacheEntry {
 }
 
 impl SkinDocumentCache {
-    /// Compare only values read while constructing a Lua document, not callbacks.
-    pub fn load_numbers_changed(
-        &self,
-        path: &Path,
-        previous: &LuaLoadRuntimeState,
-        current: &LuaLoadRuntimeState,
-    ) -> bool {
-        let path = fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
-        let Some(entry) = self.entries.iter().rev().find(|entry| entry.key.path == path) else {
-            return previous.number_values != current.number_values;
-        };
-        if entry.dependencies.opaque {
-            return previous.number_values != current.number_values;
-        }
-        entry.dependencies.number_values.keys().any(|id| {
-            previous.number_values.get(id).copied().unwrap_or_default()
-                != current.number_values.get(id).copied().unwrap_or_default()
-        })
-    }
-
     pub(super) fn get_lr2(
         &mut self,
         key: &SkinDocumentCacheKey,
