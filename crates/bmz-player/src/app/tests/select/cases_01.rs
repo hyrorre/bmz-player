@@ -14,6 +14,18 @@ fn operating_time_is_applied_to_select_snapshot() {
 }
 
 #[test]
+fn operating_time_is_applied_to_result_snapshot() {
+    let mut scene = bmz_render::sample::sample_result_scene();
+
+    apply_operating_time_ms_to_scene(&mut scene, 90_061_234);
+
+    let AppSceneSnapshot::Result(snapshot) = scene else {
+        panic!("expected result snapshot");
+    };
+    assert_eq!(snapshot.operating_time_ms, 90_061_234);
+}
+
+#[test]
 fn chart_snapshot_metadata_preserves_selected_chart_best_score() {
     let mut row = select_chart_row(7);
     row.best_score = Some(best_score_with_replay(456, "best.json"));

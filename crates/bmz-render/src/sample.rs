@@ -208,6 +208,7 @@ pub fn sample_play_scene() -> AppSceneSnapshot {
 
 pub fn sample_result_scene() -> AppSceneSnapshot {
     AppSceneSnapshot::Result(ResultSnapshot {
+        operating_time_ms: 12_345,
         player_name: "Sample Player".to_string(),
         target_name: "RANK AAA".to_string(),
         target: "RANK_AAA".to_string(),

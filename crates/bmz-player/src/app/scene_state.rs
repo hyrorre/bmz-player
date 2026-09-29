@@ -134,6 +134,7 @@ impl WinitApp {
                     .map(|document| document.result_ir_scope_binding)
                     .unwrap_or_default();
                 AppSceneSnapshot::Result(ResultSnapshot {
+                    operating_time_ms: 0,
                     player_name: String::new(),
                     target_name: summary.target_name.clone(),
                     target: summary.target.as_string(),

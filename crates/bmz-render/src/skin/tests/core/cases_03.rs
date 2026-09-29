@@ -52,6 +52,25 @@ fn skin_state_number_maps_operating_time_refs() {
 }
 
 #[test]
+fn result_operating_time_refs_follow_application_time() {
+    let crate::scene::AppSceneSnapshot::Result(mut snapshot) = crate::sample::sample_result_scene()
+    else {
+        panic!("expected result snapshot");
+    };
+    // Result entry resets scene time, but uptime must continue across scenes.
+    snapshot.elapsed_time = bmz_core::time::TimeUs(0);
+    for (operating_time_ms, expected) in
+        [(3_599_999, [0, 59, 59]), (3_600_000, [1, 0, 0]), (90_061_234, [25, 1, 1])]
+    {
+        snapshot.operating_time_ms = operating_time_ms;
+        let state = crate::plan::result_skin_draw_state(&snapshot, 0);
+        for (id, value) in [27, 28, 29].into_iter().zip(expected) {
+            assert_eq!(skin_state_number(id, &state), Some(value));
+        }
+    }
+}
+
+#[test]
 fn skin_state_number_maps_beatoraja_point_score() {
     let state = SkinDrawState {
         key_mode: KeyMode::K7,

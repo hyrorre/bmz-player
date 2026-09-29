@@ -64,7 +64,9 @@ pub(in crate::app) fn apply_operating_time_ms_to_scene(
         AppSceneSnapshot::Decide(snapshot) | AppSceneSnapshot::Play(snapshot) => {
             snapshot.operating_time_ms = operating_time_ms;
         }
-        AppSceneSnapshot::Result(_) => {}
+        AppSceneSnapshot::Result(snapshot) => {
+            snapshot.operating_time_ms = operating_time_ms;
+        }
     }
 }
 

@@ -188,6 +188,7 @@ pub(super) fn build_result_skin_draw_state(
     };
     crate::skin::SkinDrawState {
         elapsed_ms,
+        operating_time_ms: snapshot.operating_time_ms,
         current_fps: snapshot.current_fps,
         logical_input_held: snapshot.skin_input.held,
         skin_offsets: snapshot.skin_offsets,
