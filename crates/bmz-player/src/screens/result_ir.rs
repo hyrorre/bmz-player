@@ -266,7 +266,21 @@ impl ResultIrState {
                                 loaded_chart_rankings.push(loaded);
                             }
                             if let Some(slot) = self.scope_slot(scope) {
+                                let initialize_position =
+                                    !matches!(slot, RankingLoadState::Loaded(_));
+                                let offset = initial_skin_scroll_offset(&ranking);
                                 *slot = RankingLoadState::Loaded(ranking);
+                                if initialize_position {
+                                    match scope {
+                                        IrRankingScope::Global => {
+                                            self.global_skin_scroll_offset = offset;
+                                        }
+                                        IrRankingScope::SelfAndRivals => {
+                                            self.self_and_rivals_skin_scroll_offset = offset;
+                                        }
+                                        _ => {}
+                                    }
+                                }
                             }
                         }
                         Err(error) => {
@@ -767,12 +781,31 @@ mod tests {
             .send(ResultIrEvent::Ranking {
                 provider: "bmz-official".to_string(),
                 scope: IrRankingScope::Global,
-                result: Ok(ranking(IrRankingScope::Global, 301, 1)),
+                result: Ok(ResultIrRanking {
+                    self_rank: Some(100),
+                    ..ranking(IrRankingScope::Global, 1, 100)
+                }),
             })
             .unwrap();
         let loaded = state.poll();
         assert_eq!(loaded.len(), 1);
         assert!(matches!(state.global, RankingLoadState::Loaded(_)));
+        assert_eq!(state.skin_snapshot().entries[0].rank, Some(91));
+        assert_eq!(state.skin_snapshot().entries[9].rank, Some(100));
+
+        state.scroll_skin_rows(-1);
+        event_sender
+            .send(ResultIrEvent::Ranking {
+                provider: "bmz-official".to_string(),
+                scope: IrRankingScope::Global,
+                result: Ok(ResultIrRanking {
+                    self_rank: Some(50),
+                    ..ranking(IrRankingScope::Global, 1, 100)
+                }),
+            })
+            .unwrap();
+        state.poll();
+        assert_eq!(state.skin_snapshot().scroll_offset, 89);
     }
 
     #[test]
