@@ -179,6 +179,58 @@ impl SkinPipelineRuntime {
     pub(super) fn bump_generation(&mut self, kind: SkinKind) -> u64 {
         self.generations.bump(kind)
     }
+
+    pub(super) fn begin_result_load(&mut self, refresh: bool) -> u64 {
+        self.set_pending(SkinKind::Result, false);
+        let generation = self.bump_generation(SkinKind::Result);
+        self.result_refresh_generation = refresh.then_some(generation);
+        generation
+    }
+
+    /// Installed dependencies and the last requested/observed values are separate:
+    /// a pending decode has not replaced `result_load_dependencies` yet.
+    pub(super) fn result_load_numbers_need_refresh(
+        &mut self,
+        previous: &mut bmz_skin::LuaLoadRuntimeState,
+        current: bmz_skin::LuaLoadRuntimeState,
+    ) -> bool {
+        let pending = self.is_pending(SkinKind::Result);
+        let pending_refresh =
+            pending && self.result_refresh_generation == Some(self.generation(SkinKind::Result));
+        // A full load may change the path/options/files. Its dependencies are
+        // not installed yet, so keep it and recheck IR after it completes.
+        if pending && !pending_refresh {
+            return false;
+        }
+        if *previous == current {
+            return false;
+        }
+        let Some(dependencies) = self.result_load_dependencies.as_ref() else {
+            return false;
+        };
+        if dependencies.numbers_changed(&current.number_values) {
+            return true;
+        }
+        if pending_refresh {
+            // A -> B -> A: the installed A is already correct. Invalidate B
+            // before recording A as observed, or B can overwrite A later and
+            // the previous == current fast path will hide that stale install.
+            self.bump_generation(SkinKind::Result);
+            self.set_pending(SkinKind::Result, false);
+            self.result_refresh_generation = None;
+        }
+        *previous = current;
+        false
+    }
+
+    /// Stale uploads must not clear the pending flag of a newer request.
+    pub(super) fn finish_upload(&mut self, kind: SkinKind, generation: u64) -> bool {
+        if generation != self.generation(kind) {
+            return false;
+        }
+        self.set_pending(kind, false);
+        true
+    }
 }
 
 impl Drop for SkinPipelineRuntime {
@@ -186,6 +238,9 @@ impl Drop for SkinPipelineRuntime {
         self.shutdown_workers();
     }
 }
+
+#[cfg(test)]
+mod result_refresh_tests;
 
 #[cfg(test)]
 mod tests {

@@ -163,8 +163,7 @@ impl WinitApp {
 
         let (_, trimmed, options, files, runtime_state) = signature.clone();
         self.skin.last_result_skin_signature = Some(signature);
-        self.skin.skin_pipeline.set_pending(SkinKind::Result, false);
-        let generation = self.skin.skin_pipeline.bump_generation(SkinKind::Result);
+        let generation = self.skin.skin_pipeline.begin_result_load(refresh);
 
         let (path, path_label, options, files) = if trimmed.is_empty() {
             (
@@ -286,8 +285,7 @@ impl WinitApp {
     }
 
     pub(super) fn refresh_result_skin_load_numbers(&mut self) {
-        let Some((slot, path, _, _, previous)) = self.skin.last_result_skin_signature.clone()
-        else {
+        let Some((slot, path, ..)) = self.skin.last_result_skin_signature.clone() else {
             return;
         };
         let Ok(resolved) = self.boot.app_paths.resolve_path_ref(&path) else { return };
@@ -303,19 +301,11 @@ impl WinitApp {
             !self.play.play_table_text_primary.is_empty(),
             result_ir_skin_name(&self.boot.profile_config.ir),
         );
-        if previous == current {
-            return;
-        }
-        let Some(dependencies) = self.skin.skin_pipeline.result_load_dependencies.as_ref() else {
+        let Some(signature) = self.skin.last_result_skin_signature.as_mut() else {
             return;
         };
-        let changed = dependencies.numbers_changed(&current.number_values);
-        if changed {
+        if self.skin.skin_pipeline.result_load_numbers_need_refresh(&mut signature.4, current) {
             self.spawn_result_skin_decode(slot, true);
-            self.skin.skin_pipeline.result_refresh_generation =
-                Some(self.skin.skin_pipeline.generation(SkinKind::Result));
-        } else if let Some(signature) = self.skin.last_result_skin_signature.as_mut() {
-            signature.4 = current;
         }
     }
 
@@ -398,7 +388,7 @@ impl WinitApp {
         } = pending;
         let apply_started_at = Instant::now();
         let current_generation = self.skin.skin_pipeline.generation(kind);
-        if generation != current_generation {
+        if !self.skin.skin_pipeline.finish_upload(kind, generation) {
             tracing::debug!(
                 path = %path.display(),
                 kind = ?kind,
@@ -411,7 +401,6 @@ impl WinitApp {
             );
             return false;
         }
-        self.skin.skin_pipeline.set_pending(kind, false);
         self.skin
             .skin_pipeline
             .record_load_result(&path, uploaded.as_ref().err().map(|error| format!("{error:#}")));
