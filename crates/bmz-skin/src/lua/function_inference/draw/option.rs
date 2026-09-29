@@ -128,10 +128,31 @@ pub(in crate::lua) fn call_draw_with_option(
     value: bool,
 ) -> Option<bool> {
     {
-        main_state_probe.lock().ok()?.begin_option_recording_with_value(option_id, value);
+        let mut probe = main_state_probe.lock().ok()?;
+        probe.begin_option_recording_with_value(option_id, value);
+        probe.text_calls.clear();
+        probe.float_number_calls.clear();
+        probe.os_clock_calls = 0;
     }
     let result = function.call::<Value>(()).ok();
-    main_state_probe.lock().ok()?.end_recording();
+    let option_only = {
+        let mut probe = main_state_probe.lock().ok()?;
+        let option_only = probe.option_calls.iter().all(|id| *id == option_id)
+            && probe.number_calls.is_empty()
+            && probe.timer_calls.is_empty()
+            && probe.event_index_calls.is_empty()
+            && probe.text_calls.is_empty()
+            && probe.float_number_calls.is_empty()
+            && probe.gauge_type_calls == 0
+            && probe.os_clock_calls == 0;
+        probe.end_recording();
+        option_only
+    };
+    // Both short-circuit branches must depend exclusively on this option.
+    // Otherwise a successful probe at number=0 can erase a numeric threshold.
+    if !option_only {
+        return None;
+    }
     match result? {
         Value::Boolean(value) => Some(value),
         _ => None,

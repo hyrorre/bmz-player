@@ -1320,3 +1320,86 @@ fn table_text_callbacks_preserve_content_in_auto_and_compat() {
         }
     }
 }
+#[test]
+fn option_draw_preserves_numeric_thresholds() {
+    for threshold in [10, 20] {
+        for operator in ["<", ">="] {
+            let mut loaded = load_runtime_draw_fixture(
+                "option-numeric-threshold",
+                &format!(
+                    "local draw = function() return main_state.option(153) and main_state.number(96) {operator} {threshold} end"
+                ),
+            );
+            let draw = only_destination_draw(&loaded).to_string();
+            let id = draw
+                .strip_prefix("bmz:lua_draw_callback:")
+                .expect("mixed condition must remain dynamic")
+                .parse()
+                .unwrap();
+            for level in [0, 9, 10, 12, 19, 20, 21] {
+                for enabled in [false, true] {
+                    let state = TestLuaMainState {
+                        numbers: BTreeMap::from([(96, level)]),
+                        options: BTreeMap::from([(153, enabled)]),
+                        ..Default::default()
+                    };
+                    let expected = enabled
+                        && if operator == "<" { level < threshold } else { level >= threshold };
+                    assert_eq!(
+                        loaded.lua_runtime.as_mut().unwrap().evaluate_draw(id, &state),
+                        expected
+                    );
+                }
+            }
+        }
+    }
+}
+#[test]
+fn local_result_level_layout_has_one_visible_destination_when_available() {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../data/skins/LITONE9/Result/result.luaskin");
+    if !path.is_file() {
+        return;
+    }
+    for mode in [LuaSkinRuntimeMode::Auto, LuaSkinRuntimeMode::Compat] {
+        let mut loaded = load_lua_skin_with_runtime_state(
+            &path,
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            &LuaLoadRuntimeState { runtime_mode: mode, ..Default::default() },
+        )
+        .unwrap();
+        let callbacks: Vec<_> = loaded
+            .document
+            .destination
+            .iter()
+            .filter_map(|entry| {
+                let bmz_skin_document::DestinationListEntry::Single(dst) = entry else {
+                    return None;
+                };
+                if dst.id != "hyper_num" {
+                    return None;
+                }
+                Some(
+                    dst.draw
+                        .strip_prefix("bmz:lua_draw_callback:")
+                        .unwrap()
+                        .parse::<usize>()
+                        .unwrap(),
+                )
+            })
+            .collect();
+        assert_eq!(callbacks.len(), 2);
+        for level in [9, 10, 12, 19, 20] {
+            let state = TestLuaMainState {
+                numbers: BTreeMap::from([(96, level)]),
+                options: BTreeMap::from([(153, true)]),
+                ..Default::default()
+            };
+            let runtime = loaded.lua_runtime.as_mut().unwrap();
+            let visible: Vec<_> =
+                callbacks.iter().map(|id| runtime.evaluate_draw(*id, &state)).collect();
+            assert_eq!(visible, [level < 10, level >= 10]);
+        }
+    }
+}
