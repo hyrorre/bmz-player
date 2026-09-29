@@ -13,10 +13,7 @@ fn random_select_index_can_reach_every_candidate_for_common_even_counts() {
         assert_eq!(reached.len(), len);
     }
 
-    assert_eq!(
-        crate::app::select_flow_navigation::uniform_random_index(0, 0),
-        None
-    );
+    assert_eq!(crate::app::select_flow_navigation::uniform_random_index(0, 0), None);
 }
 
 #[test]
