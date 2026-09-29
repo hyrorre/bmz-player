@@ -2,7 +2,7 @@ use super::*;
 
 #[derive(Debug)]
 pub(super) struct TimerObserveState {
-    pub(super) timer_value: i32,
+    pub(super) timer_value: i64,
 }
 
 pub(super) fn lua_load_now_micros() -> i32 {

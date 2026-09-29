@@ -18,6 +18,7 @@ pub(super) enum LuaRuntimeScalar {
 pub(super) enum LuaRuntimeCallbackKind {
     Draw,
     Value,
+    Timer(i32),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -81,6 +82,15 @@ pub struct LuaSkinRuntime {
     pub(super) failed_callbacks: BTreeSet<usize>,
     pub(super) failure_log_count: usize,
     pub(super) pending_frame_start: bool,
+    pub(super) pending_timer_frame_start: bool,
+    pub(super) custom_timers: Arc<Mutex<LuaCustomTimers>>,
+    pub(super) custom_timer_callbacks: Vec<(i32, usize)>,
+}
+
+#[derive(Debug, Default)]
+pub(super) struct LuaCustomTimers {
+    pub(super) values: BTreeMap<i32, Option<i64>>,
+    pub(super) active: BTreeSet<i32>,
 }
 
 impl fmt::Debug for LuaSkinRuntime {
@@ -99,6 +109,53 @@ impl LuaSkinRuntime {
     /// Every callback until the next call shares the same aggregate budget.
     pub fn begin_frame(&mut self) {
         self.pending_frame_start = true;
+        self.pending_timer_frame_start = true;
+    }
+
+    /// Update active timers once per frame, including timers with no visible destination.
+    /// Values are scene-relative start times in microseconds; None means OFF.
+    pub fn advance_custom_timers(
+        &mut self,
+        state: &dyn LuaMainState,
+    ) -> BTreeMap<i32, Option<i64>> {
+        if std::mem::take(&mut self.pending_timer_frame_start) {
+            for index in 0..self.custom_timer_callbacks.len() {
+                let (id, callback_id) = self.custom_timer_callbacks[index];
+                self.begin_runtime_callback();
+                let result = panic::catch_unwind(panic::AssertUnwindSafe(|| {
+                    self.evaluate_callback_inner(
+                        callback_id,
+                        LuaRuntimeCallbackKind::Timer(id),
+                        Some(state),
+                    )
+                }));
+                let value = match result {
+                    Ok(Ok(LuaRuntimeEvaluatedValue::Nil)) => Some(0),
+                    Ok(Ok(LuaRuntimeEvaluatedValue::Integer(value))) => Some(value),
+                    Ok(Ok(LuaRuntimeEvaluatedValue::Number(value)))
+                        if value.is_finite()
+                            && value >= i64::MIN as f64
+                            && value < -(i64::MIN as f64) =>
+                    {
+                        Some(value as i64)
+                    }
+                    other => {
+                        let error = match other {
+                            Ok(Err(error)) => error.to_string(),
+                            Err(_) => "panic while executing Lua timer".to_string(),
+                            _ => "Lua timer must return a finite timestamp or nil".to_string(),
+                        };
+                        self.log_callback_failure_once(callback_id, &error);
+                        None
+                    }
+                }
+                .filter(|value| *value != i64::from(TIMER_OFF_VALUE) && *value != i64::MIN);
+                if let Ok(mut timers) = self.custom_timers.lock() {
+                    timers.values.insert(id, value);
+                }
+            }
+        }
+        self.custom_timers.lock().map(|timers| timers.values.clone()).unwrap_or_default()
     }
 
     pub fn callback_count(&self) -> usize {
@@ -278,7 +335,11 @@ impl LuaSkinRuntime {
     /// Independent handle so the runtime can remain behind an adapter while a
     /// borrowed provider is installed for a synchronous group of callbacks.
     pub fn state_scope(&self) -> LuaRuntimeStateScope {
-        LuaRuntimeStateScope { lua: self.lua.clone(), dispatch: self.main_state_dispatch.clone() }
+        LuaRuntimeStateScope {
+            lua: self.lua.clone(),
+            dispatch: self.main_state_dispatch.clone(),
+            custom_timers: self.custom_timers.clone(),
+        }
     }
 
     fn log_callback_failure_once(&mut self, callback_id: usize, error: &str) {
@@ -301,6 +362,7 @@ impl LuaSkinRuntime {
 pub struct LuaRuntimeStateScope {
     lua: Lua,
     dispatch: Table,
+    custom_timers: Arc<Mutex<LuaCustomTimers>>,
 }
 
 impl LuaRuntimeStateScope {
@@ -312,26 +374,62 @@ impl LuaRuntimeStateScope {
         run: impl FnOnce() -> R,
     ) -> mlua::Result<R> {
         self.lua.scope(|scope| {
-            let dispatch = scope.create_function(|lua, (operation, argument): (u8, Value)| {
-                let id = || <i32 as mlua::FromLua>::from_lua(argument.clone(), lua);
-                Ok(match operation {
-                    0 => Value::Boolean(state.option(id()?)),
-                    1 => Value::Integer(state.number(id()?)),
-                    2 => Value::Integer(state.exscore()),
-                    3 | 4 => Value::Number(state.float(id()?)),
-                    5 => Value::String(lua.create_string(state.text(id()?))?),
-                    6 => Value::Integer(i64::from(state.timer(id()?).unwrap_or(TIMER_OFF_VALUE))),
-                    7 => Value::Integer(i64::from(state.event_index(id()?))),
-                    8 => Value::Integer(i64::from(state.gauge_type())),
-                    9 => Value::Integer(i64::from(state.time_us())),
-                    10 => Value::Integer(state.judge(id()?)),
-                    11 => create_main_state_offset_table(lua, state.offset(id()?))?,
-                    12 => Value::Integer(state.total_play_counts_in_session()),
-                    13 => Value::Integer(state.total_play_notes_in_session()),
-                    14 => Value::Integer(state.score_date_sec_time()),
-                    _ => return Err(mlua::Error::runtime("unknown main_state operation")),
-                })
-            })?;
+            let dispatch = scope.create_function(
+                |lua, (operation, argument, timer_value): (u8, Value, Option<i64>)| {
+                    let id = || <i32 as mlua::FromLua>::from_lua(argument.clone(), lua);
+                    Ok(match operation {
+                        0 => Value::Boolean(state.option(id()?)),
+                        1 => Value::Integer(state.number(id()?)),
+                        2 => Value::Integer(state.exscore()),
+                        3 | 4 => Value::Number(state.float(id()?)),
+                        5 => Value::String(lua.create_string(state.text(id()?))?),
+                        6 => {
+                            let id = id()?;
+                            let custom = self
+                                .custom_timers
+                                .lock()
+                                .map_err(|_| mlua::Error::runtime("custom timer lock poisoned"))?
+                                .values
+                                .get(&id)
+                                .copied();
+                            Value::Integer(
+                                custom
+                                    .unwrap_or_else(|| state.timer_start_us(id))
+                                    .unwrap_or(i64::from(TIMER_OFF_VALUE)),
+                            )
+                        }
+                        7 => Value::Integer(i64::from(state.event_index(id()?))),
+                        8 => Value::Integer(i64::from(state.gauge_type())),
+                        9 => Value::Integer(state.time_us_i64()),
+                        10 => Value::Integer(state.judge(id()?)),
+                        11 => create_main_state_offset_table(lua, state.offset(id()?))?,
+                        12 => Value::Integer(state.total_play_counts_in_session()),
+                        13 => Value::Integer(state.total_play_notes_in_session()),
+                        14 => Value::Integer(state.score_date_sec_time()),
+                        15 => {
+                            let id = id()?;
+                            if !(10_000..=19_999).contains(&id) {
+                                return Err(mlua::Error::runtime(
+                                    "only custom timers are writable",
+                                ));
+                            }
+                            let value = timer_value.filter(|value| {
+                                *value != i64::from(TIMER_OFF_VALUE) && *value != i64::MIN
+                            });
+                            let mut timers = self
+                                .custom_timers
+                                .lock()
+                                .map_err(|_| mlua::Error::runtime("custom timer lock poisoned"))?;
+                            // beatoraja ignores writes to active (function-backed) timers.
+                            if !timers.active.contains(&id) {
+                                timers.values.insert(id, value);
+                            }
+                            Value::Boolean(true)
+                        }
+                        _ => return Err(mlua::Error::runtime("unknown main_state operation")),
+                    })
+                },
+            )?;
             let previous = self.dispatch.raw_get(1)?;
             self.dispatch.raw_set(1, dispatch)?;
             let _guard = RuntimeDispatchGuard { slot: &self.dispatch, previous };
@@ -394,6 +492,16 @@ pub(super) fn install_runtime_main_state_dispatch(lua: &Lua) -> mlua::Result<Tab
             })?,
         )?;
     }
+    let timer_dispatch = dispatch_slot.clone();
+    main_state.set(
+        "set_timer",
+        lua.create_function(move |_, (id, value): (i32, i64)| {
+            match timer_dispatch.raw_get::<Value>(1)? {
+                Value::Function(dispatch) => dispatch.call::<Value>((15_u8, id, value)),
+                _ => Ok(Value::Boolean(true)),
+            }
+        })?,
+    )?;
     Ok(dispatch_slot)
 }
 

@@ -460,7 +460,7 @@ database:
 
 未対応/今後の候補:
 
-- Lua runtime callback未対応field (`timer`, `act` / event, float writerなど)
+- Lua runtime callback未対応field (destinationの任意 `timer` function、`act` / event、float writerなど。`customTimers[].timer` は実行時評価対応済み)
 - Lua function warning の object id / source context 付き診断
 - destination `center`, `offset`, `offsets`, `filter`
 - destination `stretch` for non-static image objects

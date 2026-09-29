@@ -452,10 +452,8 @@ fn peaceful_play_integral_property_ops_are_selectable_when_available() {
         assert!(matches!(pair[1].timer, Some(120..=129)));
         assert!(pair[1].draw.starts_with("keybeam_fade("), "fade: {:?}", pair[1]);
     }
-    assert_eq!(loaded.warnings.len(), 8, "warnings: {:?}", loaded.warnings);
-    assert!(loaded.warnings.iter().all(|warning| {
-        warning.message.starts_with("skipping unsupported custom timer function id 1190")
-    }));
+    assert!(loaded.warnings.is_empty(), "warnings: {:?}", loaded.warnings);
+    assert!(loaded.lua_runtime.is_some());
     let gauge_lead_glow = loaded
         .document
         .destination
@@ -520,10 +518,8 @@ fn peaceful_play_gauge_overlay_keeps_one_destination_per_integer_width() {
         ]);
         let loaded = load_lua_skin(&skin_path, SkinKind::Play, &properties, &BTreeMap::new())
             .expect("PeacefulPlay gauge overlay should decode");
-        assert_eq!(loaded.warnings.len(), 8, "{display} overlay warnings: {:?}", loaded.warnings);
-        assert!(loaded.warnings.iter().all(|warning| {
-            warning.message.starts_with("skipping unsupported custom timer function id 1190")
-        }));
+        assert!(loaded.warnings.is_empty(), "{display} overlay warnings: {:?}", loaded.warnings);
+        assert!(loaded.lua_runtime.is_some());
         let predicates = loaded
             .document
             .destination
@@ -1124,7 +1120,7 @@ fn lua_runtime_draw_reads_updated_main_state_each_call() {
                     and main_state.number(71) == 5
                     and main_state.float(72) > 1.5
                     and main_state.text(10) == "updated"
-                    and main_state.timer(2) == 123
+                    and main_state.timer(2) == 877000
             end
             "#,
     );
@@ -1138,6 +1134,7 @@ fn lua_runtime_draw_reads_updated_main_state_each_call() {
     state.floats.insert(72, 2.0);
     state.texts.insert(10, "updated".to_string());
     state.timers.insert(2, 123);
+    state.now_us = 1_000_000;
     assert!(runtime.evaluate_draw(0, &state));
     state.texts.insert(10, "changed".to_string());
     assert!(!runtime.evaluate_draw(0, &state));

@@ -391,7 +391,13 @@ fn infer_timer_field(
     }
 
     let custom_timer = path.contains(".customTimers[");
+    let compat = main_state_probe
+        .lock()
+        .map_err(|_| anyhow!("main_state probe lock poisoned"))?
+        .runtime_mode
+        == LuaSkinRuntimeMode::Compat;
     if custom_timer
+        && !compat
         && let Some(id) = metadata.object_id.as_deref().and_then(|id| id.parse::<i32>().ok())
         && let Some((source_timer, delay_ms)) = infer_fixed_delay_timer(function, main_state_probe)
             .or_else(|| {
@@ -407,6 +413,25 @@ fn infer_timer_field(
         return Ok(true);
     }
 
+    if custom_timer {
+        if let Some(id) = metadata
+            .object_id
+            .as_deref()
+            .and_then(|id| id.parse::<i32>().ok())
+            .filter(|id| (10_000..=19_999).contains(id))
+        {
+            register_runtime_callback(
+                main_state_probe,
+                &format!("{path}.timer"),
+                LuaRuntimeCallbackKind::Timer(id),
+            )?;
+            return Ok(true);
+        }
+        let id = metadata.object_id.as_deref().unwrap_or("unknown");
+        warnings
+            .push(format!("skipping unsupported custom timer function id {id} at {path}.timer"));
+        return Ok(true);
+    }
     let map: Table = lua.globals().get("bmz_timer_fn_map")?;
     if let Ok(timer_id) = map.get::<i32>(function.clone()) {
         insert_number(object, "timer", timer_id);
@@ -414,12 +439,6 @@ fn infer_timer_field(
     }
     if let Some(timer_id) = infer_timer_function_ref(function, main_state_probe) {
         insert_number(object, "timer", timer_id);
-        return Ok(true);
-    }
-    if custom_timer {
-        let id = metadata.object_id.as_deref().unwrap_or("unknown");
-        warnings
-            .push(format!("skipping unsupported custom timer function id {id} at {path}.timer"));
         return Ok(true);
     }
     Ok(false)

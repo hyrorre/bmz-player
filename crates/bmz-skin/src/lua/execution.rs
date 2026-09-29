@@ -347,7 +347,7 @@ pub(super) fn build_lua_skin_runtime(request: LuaSkinRuntimeRequest<'_>) -> Resu
     let instruction_budget = install_instruction_limit(&lua);
     // This is a clean runtime VM. Installing the sandbox and evaluating the
     // skin creates closures, but no draw callback is invoked here.
-    install_sandbox(
+    let runtime_probe = install_sandbox(
         &lua,
         path_context,
         options,
@@ -359,6 +359,8 @@ pub(super) fn build_lua_skin_runtime(request: LuaSkinRuntimeRequest<'_>) -> Resu
         virtual_io_files,
         None,
     )?;
+    runtime_probe.lock().map_err(|_| anyhow!("main_state probe lock poisoned"))?.clean_runtime =
+        true;
     let main_state_dispatch = install_runtime_main_state_dispatch(&lua)?;
     let value = lua
         .load(source)
@@ -402,6 +404,42 @@ pub(super) fn build_lua_skin_runtime(request: LuaSkinRuntimeRequest<'_>) -> Resu
             function: callback,
         });
     }
+    // Keep declared order. When a runtime VM is needed, evaluate aliases in this
+    // same VM too, so a preceding timer write is visible in the current frame.
+    let mut timers = LuaCustomTimers::default();
+    let mut custom_timer_callbacks = Vec::new();
+    if let Value::Table(root) = &value
+        && let Ok(definitions) = root.get::<Table>("customTimers")
+    {
+        for (index, definition) in definitions.sequence_values::<Table>().enumerate() {
+            let definition = definition?;
+            let Ok(id) = definition.get::<i32>("id") else { continue };
+            if !(10_000..=19_999).contains(&id) {
+                continue;
+            }
+            timers.values.insert(id, None);
+            // The last definition for an id wins, including passive definitions.
+            timers.active.remove(&id);
+            custom_timer_callbacks.retain(|(existing, _)| *existing != id);
+            if let Ok(function) = definition.get::<Function>("timer") {
+                timers.active.insert(id);
+                let path = format!("$.customTimers[{}].timer", index + 1);
+                let callback_id = callbacks
+                    .iter()
+                    .position(|callback| callback.path == path)
+                    .unwrap_or_else(|| {
+                        let callback_id = callbacks.len();
+                        callbacks.push(LuaRuntimeCallback {
+                            path,
+                            kind: LuaRuntimeCallbackKind::Timer(id),
+                            function: Some(function),
+                        });
+                        callback_id
+                    });
+                custom_timer_callbacks.push((id, callback_id));
+            }
+        }
+    }
     Ok(LuaSkinRuntime {
         lua,
         main_state_dispatch,
@@ -411,6 +449,9 @@ pub(super) fn build_lua_skin_runtime(request: LuaSkinRuntimeRequest<'_>) -> Resu
         failed_callbacks: BTreeSet::new(),
         failure_log_count: 0,
         pending_frame_start: true,
+        pending_timer_frame_start: true,
+        custom_timers: Arc::new(Mutex::new(timers)),
+        custom_timer_callbacks,
     })
 }
 

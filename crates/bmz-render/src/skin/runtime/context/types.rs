@@ -5,6 +5,15 @@ use super::*;
 pub trait SkinLuaDrawRuntime: std::fmt::Debug + Send + Sync {
     fn begin_frame(&self) {}
 
+    fn advance_custom_timers(
+        &self,
+        _state: &SkinDrawState,
+        _enabled_options: &[i32],
+        _text_values: &BTreeMap<i32, String>,
+    ) -> BTreeMap<i32, Option<i64>> {
+        BTreeMap::new()
+    }
+
     /// Run once, synchronously, with a read-only state shared by the enclosed
     /// callbacks. Callbacks using another state must still use that state.
     fn with_state(

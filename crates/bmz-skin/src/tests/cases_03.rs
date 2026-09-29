@@ -590,10 +590,8 @@ fn lua_skin_infers_fixed_delay_custom_timer() {
     assert!(loaded.value["customTimers"][0].get("timer").is_none());
     assert!(loaded.value["customTimers"][1].get("timer").is_none());
     assert!(loaded.value["customTimers"][2].get("timer").is_none());
-    assert!(loaded.warnings.iter().any(|warning| {
-        warning.message
-            == "skipping unsupported custom timer function id 11902 at $.customTimers[3].timer"
-    }));
+    assert!(loaded.warnings.is_empty(), "{:?}", loaded.warnings);
+    assert!(loaded.lua_runtime.is_some());
 }
 
 #[test]

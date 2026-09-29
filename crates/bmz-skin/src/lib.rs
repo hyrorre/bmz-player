@@ -182,6 +182,18 @@ pub trait LuaMainState {
     fn gauge_type(&self) -> i32;
     fn time_us(&self) -> i32;
 
+    /// Scene clock in microseconds without the legacy i32 clock limit.
+    fn time_us_i64(&self) -> i64 {
+        i64::from(self.time_us())
+    }
+
+    /// `timer` supplies elapsed milliseconds; Lua timers expose their start time.
+    fn timer_start_us(&self, id: i32) -> Option<i64> {
+        self.timer(id).map(|elapsed| {
+            self.time_us_i64().saturating_sub(i64::from(elapsed).saturating_mul(1_000))
+        })
+    }
+
     fn total_play_counts_in_session(&self) -> i64 {
         0
     }

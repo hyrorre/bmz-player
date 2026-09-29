@@ -1,6 +1,12 @@
 use super::*;
 
 pub(super) fn skin_timer_elapsed_ms(timer: Option<i32>, state: &SkinDrawState) -> Option<i32> {
+    if let Some(start) = timer.and_then(|id| state.lua_custom_timer_us.get(&id)) {
+        return start.map(|start| {
+            (i64::from(state.elapsed_ms).saturating_mul(1_000).saturating_sub(start) / 1_000)
+                .clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32
+        });
+    }
     match timer {
         None => Some(state.elapsed_ms),
         Some(0) => Some(state.elapsed_ms),

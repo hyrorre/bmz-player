@@ -38,6 +38,7 @@ struct TestLuaMainState {
     offsets: BTreeMap<i32, LuaSkinOffsetValue>,
     session_counts: (i64, i64),
     score_date: i64,
+    now_us: i64,
 }
 
 impl LuaMainState for TestLuaMainState {
@@ -70,7 +71,11 @@ impl LuaMainState for TestLuaMainState {
     }
 
     fn time_us(&self) -> i32 {
-        0
+        self.now_us.clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32
+    }
+
+    fn time_us_i64(&self) -> i64 {
+        self.now_us
     }
 
     fn total_play_counts_in_session(&self) -> i64 {
@@ -187,3 +192,5 @@ mod cases_05;
 mod cases_06;
 #[path = "tests/cases_07.rs"]
 mod cases_07;
+#[path = "tests/custom_timers.rs"]
+mod custom_timers;

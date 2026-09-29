@@ -39,6 +39,20 @@ Selectのnumber `350/351` は鍵盤の通常ノーツ/LN数で、スクラッチ
 
 - destination `draw`
 - `value[]`, `text[]`, `graph[]`, `slider[]` の `value`
+- `customTimers[].timer`（ID `10000..19999`）
+
+custom timer は描画前に宣言順で1フレーム1回更新する。`auto` では固定遅延・別名の
+推論を維持し、推論できないtimerを永続VMへ残す。VMを使うスキンでは推論済みの
+custom timerも同じVMで更新し、先行するtimerの変更を同じフレームで参照できる。
+`main_state.set_timer(id, start_us)` は受動custom timerをON/OFFにする。組み込みtimerの
+書き換えは拒否し、functionを持つ能動timerへの書き込みは無視する。
+Luaの `main_state.timer(id)` はシーン基準の開始時刻（マイクロ秒）、`main_state.time()` は
+現在時刻（マイクロ秒）を返す。描画側では経過ミリ秒へ変換する。OFF判定には
+`main_state.timer_off_value` を使う。timer callbackのnilはbeatorajaと同じく開始時刻0、
+例外・非有限値・命令数上限超過はOFFとして扱い、失敗の診断はcallbackごとに1回出す。
+`timer_util.timer_function` / `timer_observe_boolean` / `new_passive_timer` をcustom timer内で
+使う場合も実行時の時計と状態を参照する。destinationへ直接指定した任意timer functionや
+`customEvents` の汎用runtime実行はこの対応には含まれない。
 
 Luaファイル全体をフレームごとに再ロードするのではなく、ロード時に作成したclosureと
 module stateを保持する。callbackからは現在フレームの `main_state` を参照できる。

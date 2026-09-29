@@ -4,6 +4,7 @@ use super::*;
 pub(super) struct MainStateProbe {
     pub(super) mode: MainStateProbeMode,
     pub(super) inferring: bool,
+    pub(super) clean_runtime: bool,
     pub(super) number_calls: Vec<i32>,
     pub(super) number_values: BTreeMap<i32, i32>,
     pub(super) option_calls: Vec<i32>,
@@ -50,6 +51,7 @@ impl Default for MainStateProbe {
         Self {
             mode: MainStateProbeMode::default(),
             inferring: false,
+            clean_runtime: false,
             number_calls: Vec::new(),
             number_values: BTreeMap::new(),
             option_calls: Vec::new(),

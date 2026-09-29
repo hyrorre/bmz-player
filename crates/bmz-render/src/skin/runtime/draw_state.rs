@@ -437,6 +437,8 @@ pub struct SkinDrawState {
     pub dynamic_timer_ms: [Option<i32>; SKIN_DYNAMIC_TIMER_COUNT],
     /// Lua custom timerのうち固定delayとしてIR化できたタイマーの経過ms。
     pub fixed_delay_timer_ms: HashMap<i32, i32>,
+    /// Lua-owned timer start times in scene microseconds; None explicitly means OFF.
+    pub lua_custom_timer_us: BTreeMap<i32, Option<i64>>,
     /// 選曲画面の設定フォルダ内。曲メタデータ用の op / text / number を抑制する。
     pub in_settings: bool,
     /// 設定項目の編集モード中 (`in_settings` と併用)。
@@ -698,6 +700,7 @@ impl Default for SkinDrawState {
             hit_error_ring_index: 0,
             dynamic_timer_ms: [None; SKIN_DYNAMIC_TIMER_COUNT],
             fixed_delay_timer_ms: HashMap::new(),
+            lua_custom_timer_us: BTreeMap::new(),
             in_settings: false,
             settings_editing: false,
             select_chart_key_mode: None,

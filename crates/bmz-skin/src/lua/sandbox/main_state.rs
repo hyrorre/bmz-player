@@ -20,6 +20,12 @@ pub(super) fn create_main_state_stub(
 ) -> mlua::Result<Value> {
     let table = lua.create_table()?;
     table.set("timer_off_value", i32::MIN)?;
+    table.set(
+        "set_timer",
+        lua.create_function(|_, _: (i32, i64)| {
+            Err::<bool, _>(mlua::Error::runtime("timer writes require runtime evaluation"))
+        })?,
+    )?;
     for field in
         ["total_play_counts_in_session", "total_play_notes_in_session", "score_date_sec_time"]
     {

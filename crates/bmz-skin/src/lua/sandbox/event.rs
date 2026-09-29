@@ -208,9 +208,9 @@ pub(super) fn create_timer_util_module(
 
     table.set(
         "now_timer",
-        lua.create_function(|_, timer_value: i32| {
-            Ok(if timer_value != TIMER_OFF_VALUE {
-                lua_load_now_micros().saturating_sub(timer_value.max(0))
+        lua.create_function(|lua, timer_value: i64| {
+            Ok(if timer_value != i64::from(TIMER_OFF_VALUE) && timer_value != i64::MIN {
+                lua_timer_now_us(lua)?.saturating_sub(timer_value)
             } else {
                 0
             })
@@ -218,23 +218,23 @@ pub(super) fn create_timer_util_module(
     )?;
     table.set(
         "is_timer_on",
-        lua.create_function(|_, timer_value: i32| Ok(timer_value != TIMER_OFF_VALUE))?,
+        lua.create_function(|_, timer_value: i64| {
+            Ok(timer_value != i64::from(TIMER_OFF_VALUE) && timer_value != i64::MIN)
+        })?,
     )?;
     table.set(
         "is_timer_off",
-        lua.create_function(|_, timer_value: i32| Ok(timer_value == TIMER_OFF_VALUE))?,
+        lua.create_function(|_, timer_value: i64| {
+            Ok(timer_value == i64::from(TIMER_OFF_VALUE) || timer_value == i64::MIN)
+        })?,
     )?;
 
-    let probe_for_timer_function = probe.clone();
     table.set(
         "timer_function",
         lua.create_function(move |lua, timer_id: i32| {
-            let probe = probe_for_timer_function.clone();
-            lua.create_function(move |_, _: Value| {
-                Ok(probe
-                    .lock()
-                    .map_err(|_| mlua::Error::external("main_state probe lock poisoned"))?
-                    .timer(timer_id))
+            lua.create_function(move |lua, _: Value| {
+                let main_state: Table = lua.globals().get("bmz_main_state")?;
+                main_state.get::<Function>("timer")?.call::<i64>(timer_id)
             })
         })?,
     )?;
@@ -243,6 +243,13 @@ pub(super) fn create_timer_util_module(
     table.set(
         "timer_observe_boolean",
         lua.create_function(move |lua, observed: Function| {
+            if probe_for_observe
+                .lock()
+                .map_err(|_| mlua::Error::runtime("main_state probe lock poisoned"))?
+                .clean_runtime
+            {
+                return create_observed_timer(lua, observed);
+            }
             let specialized = infer_is_gauge_iidx_global_observe(lua, &observed);
             let observe = specialized
                 .clone()
@@ -277,20 +284,7 @@ pub(super) fn create_timer_util_module(
                     timer_id
                 }
             };
-            let state = Arc::new(Mutex::new(TimerObserveState { timer_value: TIMER_OFF_VALUE }));
-            let observed_for_timer = observed.clone();
-            let inner = lua.create_function(move |_, ()| {
-                let on = observed_for_timer.call::<bool>(())?;
-                let mut state = state
-                    .lock()
-                    .map_err(|_| mlua::Error::external("timer observe lock poisoned"))?;
-                if on && state.timer_value == TIMER_OFF_VALUE {
-                    state.timer_value = lua_load_now_ms();
-                } else if !on && state.timer_value != TIMER_OFF_VALUE {
-                    state.timer_value = TIMER_OFF_VALUE;
-                }
-                Ok(state.timer_value)
-            })?;
+            let inner = create_observed_timer(lua, observed)?;
             let map: Table = lua.globals().get("bmz_timer_fn_map")?;
             map.set(inner.clone(), timer_id)?;
             Ok(inner)
@@ -300,7 +294,8 @@ pub(super) fn create_timer_util_module(
     table.set(
         "new_passive_timer",
         lua.create_function(|lua, ()| {
-            let state = Arc::new(Mutex::new(TimerObserveState { timer_value: TIMER_OFF_VALUE }));
+            let state =
+                Arc::new(Mutex::new(TimerObserveState { timer_value: i64::from(TIMER_OFF_VALUE) }));
             let passive = lua.create_table()?;
             let state_for_timer = state.clone();
             passive.set(
@@ -315,12 +310,13 @@ pub(super) fn create_timer_util_module(
             let state_for_turn_on = state.clone();
             passive.set(
                 "turn_on",
-                lua.create_function(move |_, ()| {
+                lua.create_function(move |lua, ()| {
+                    let now = lua_timer_now_us(lua)?;
                     let mut state = state_for_turn_on
                         .lock()
                         .map_err(|_| mlua::Error::external("passive timer lock poisoned"))?;
-                    if state.timer_value == TIMER_OFF_VALUE {
-                        state.timer_value = lua_load_now_micros();
+                    if state.timer_value == i64::from(TIMER_OFF_VALUE) {
+                        state.timer_value = now;
                     }
                     Ok(())
                 })?,
@@ -328,11 +324,12 @@ pub(super) fn create_timer_util_module(
             let state_for_turn_on_reset = state.clone();
             passive.set(
                 "turn_on_reset",
-                lua.create_function(move |_, ()| {
+                lua.create_function(move |lua, ()| {
+                    let now = lua_timer_now_us(lua)?;
                     state_for_turn_on_reset
                         .lock()
                         .map_err(|_| mlua::Error::external("passive timer lock poisoned"))?
-                        .timer_value = lua_load_now_micros();
+                        .timer_value = now;
                     Ok(())
                 })?,
             )?;
@@ -342,7 +339,7 @@ pub(super) fn create_timer_util_module(
                     state
                         .lock()
                         .map_err(|_| mlua::Error::external("passive timer lock poisoned"))?
-                        .timer_value = TIMER_OFF_VALUE;
+                        .timer_value = i64::from(TIMER_OFF_VALUE);
                     Ok(())
                 })?,
             )?;
@@ -351,4 +348,25 @@ pub(super) fn create_timer_util_module(
     )?;
 
     Ok(Value::Table(table))
+}
+
+fn lua_timer_now_us(lua: &Lua) -> mlua::Result<i64> {
+    let main_state: Table = lua.globals().get("bmz_main_state")?;
+    main_state.get::<Function>("time")?.call(())
+}
+
+fn create_observed_timer(lua: &Lua, observed: Function) -> mlua::Result<Function> {
+    let state = Arc::new(Mutex::new(TimerObserveState { timer_value: i64::from(TIMER_OFF_VALUE) }));
+    lua.create_function(move |lua, ()| {
+        let on = observed.call::<bool>(())?;
+        let now = lua_timer_now_us(lua)?;
+        let mut state =
+            state.lock().map_err(|_| mlua::Error::runtime("timer observe lock poisoned"))?;
+        if on && state.timer_value == i64::from(TIMER_OFF_VALUE) {
+            state.timer_value = now;
+        } else if !on {
+            state.timer_value = i64::from(TIMER_OFF_VALUE);
+        }
+        Ok(state.timer_value)
+    })
 }

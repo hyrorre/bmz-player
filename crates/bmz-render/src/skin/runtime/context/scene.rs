@@ -95,10 +95,13 @@ impl SkinContext {
             .as_ref()
             .map(|document| Arc::from(document.enabled_options()))
             .unwrap_or_else(|| Arc::from([]));
+        let text_values = Arc::new(lua_main_state_text_values(&state, text));
+        state.lua_custom_timer_us =
+            runtime.advance_custom_timers(&state, &enabled_options, &text_values);
         state.lua_runtime = Some(SkinLuaRuntimeContext {
             runtime: Arc::clone(runtime),
             enabled_options,
-            text_values: Arc::new(lua_main_state_text_values(&state, text)),
+            text_values,
         });
         state
     }

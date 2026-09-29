@@ -145,6 +145,16 @@ impl LuaMainState for RenderLuaMainState<'_> {
         self.state.elapsed_ms.saturating_mul(1_000)
     }
 
+    fn time_us_i64(&self) -> i64 {
+        i64::from(self.state.elapsed_ms) * 1_000
+    }
+
+    fn timer_start_us(&self, id: i32) -> Option<i64> {
+        self.state.lua_custom_timer_us.get(&id).copied().unwrap_or_else(|| {
+            self.timer(id).map(|elapsed| self.time_us_i64() - i64::from(elapsed) * 1_000)
+        })
+    }
+
     fn total_play_counts_in_session(&self) -> i64 {
         self.state.player_stats.session_play_count.min(i64::MAX as u64) as i64
     }
@@ -171,6 +181,23 @@ impl LuaMainState for RenderLuaMainState<'_> {
 }
 
 impl SkinLuaDrawRuntime for LuaSkinDrawRuntimeAdapter {
+    fn advance_custom_timers(
+        &self,
+        state: &SkinDrawState,
+        enabled_options: &[i32],
+        text_values: &BTreeMap<i32, String>,
+    ) -> BTreeMap<i32, Option<i64>> {
+        let Some(mut runtime) = self.runtime.lock().ok().and_then(|mut slot| slot.take()) else {
+            return BTreeMap::new();
+        };
+        let provider = RenderLuaMainState { state, enabled_options, text_values };
+        let result = runtime.advance_custom_timers(&provider);
+        if let Ok(mut slot) = self.runtime.lock() {
+            *slot = Some(runtime);
+        }
+        result
+    }
+
     fn with_state(
         &self,
         state: &SkinDrawState,
