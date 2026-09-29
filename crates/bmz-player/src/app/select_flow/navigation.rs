@@ -1,5 +1,40 @@
 use super::*;
 
+pub(super) fn uniform_random_index(value: u64, len: usize) -> Option<usize> {
+    if len == 0 {
+        return None;
+    }
+    let range = u64::MAX as u128 + 1;
+    let bound = len as u128;
+    let limit = range - range % bound;
+    ((value as u128) < limit).then_some((value as u128 % bound) as usize)
+}
+
+fn random_select_index(len: usize) -> Option<usize> {
+    if len == 0 {
+        return None;
+    }
+    loop {
+        let mut bytes = [0_u8; 8];
+        let value = match getrandom::getrandom(&mut bytes) {
+            Ok(()) => u64::from_le_bytes(bytes),
+            Err(error) => {
+                use std::hash::BuildHasher;
+
+                tracing::warn!(%error, "failed to obtain OS randomness for random select");
+                std::collections::hash_map::RandomState::new().hash_one(len)
+            }
+        };
+        if let Some(index) = uniform_random_index(value, len) {
+            return Some(index);
+        }
+    }
+}
+
+pub(super) fn choose_random_chart_id(chart_ids: &[i64]) -> Option<i64> {
+    random_select_index(chart_ids.len()).and_then(|index| chart_ids.get(index).copied())
+}
+
 pub(in crate::app) fn select_explorer_path(item: &SelectItem) -> Option<PathBuf> {
     match item {
         SelectItem::Chart(row) => row.chart.as_ref().map(|chart| PathBuf::from(&chart.folder_path)),
@@ -498,15 +533,9 @@ impl WinitApp {
     }
 
     pub(super) fn start_random_select(&mut self, chart_ids: &[i64]) {
-        if chart_ids.is_empty() {
-            return;
+        if let Some(chart_id) = choose_random_chart_id(chart_ids) {
+            self.start_chart(chart_id);
         }
-        let nanos = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|duration| duration.as_nanos())
-            .unwrap_or(0);
-        let index = (nanos % chart_ids.len() as u128) as usize;
-        self.start_chart(chart_ids[index]);
     }
 
     pub(super) fn enter_or_play_selected(&mut self) {
