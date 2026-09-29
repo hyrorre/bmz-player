@@ -315,17 +315,13 @@ pub(super) fn choose_wildcard_candidate(candidates: Vec<PathBuf>) -> Option<Path
     candidates.into_iter().nth(index)
 }
 
-/// `0..len` の範囲でロードごとに変わる擬似乱数インデックスを返す。
-///
-/// `RandomState` はプロセス内でランダムなキーを持ち、`new()` ごとに異なる状態に
-/// なるため、同じ値をハッシュしても呼び出しごとに違う結果になる。追加の乱数
-/// クレートを増やさずに beatoraja 相当の「毎ロードでランダム」を満たす。
+/// ロードごとにOS乱数で抽選する。取得失敗時は警告して先頭候補を使う。
 pub(super) fn random_wildcard_index(len: usize) -> usize {
-    use std::hash::BuildHasher;
-
     debug_assert!(len > 0);
-    let hash = std::collections::hash_map::RandomState::new().hash_one(len as u64);
-    (hash % len as u64) as usize
+    bmz_skin::random_file_index(len).unwrap_or_else(|error| {
+        tracing::warn!(%error, "failed to select random skin file; using first candidate");
+        0
+    })
 }
 
 pub(super) fn required_skin_source_ids(document: &SkinDocument) -> HashSet<&str> {

@@ -217,15 +217,13 @@ pub(super) fn skin_file_dependency_names_from_header(
 /// ランダムに選ぶ。
 pub(super) const RANDOM_FILE_SELECTION: &str = "Random";
 
-/// `0..len` の範囲でロードごとに変わる擬似乱数インデックスを返す。
-/// `RandomState` のプロセス内ランダムキーを使い、追加クレートなしで beatoraja
-/// 相当の「毎ロードでランダム」を満たす。
+/// ロードごとにOS乱数で抽選する。取得失敗時は警告して先頭候補を使う。
 pub(super) fn random_skin_file_index(len: usize) -> usize {
-    use std::hash::BuildHasher;
-
     debug_assert!(len > 0);
-    let hash = std::collections::hash_map::RandomState::new().hash_one(len as u64);
-    (hash % len as u64) as usize
+    crate::random_file_index(len).unwrap_or_else(|error| {
+        tracing::warn!(%error, "failed to select random skin file; using first candidate");
+        0
+    })
 }
 
 pub(super) fn default_skin_file_from_filepath(

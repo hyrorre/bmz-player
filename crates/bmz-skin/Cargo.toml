@@ -9,6 +9,7 @@ authors.workspace = true
 anyhow.workspace = true
 bmz-skin-document = { path = "../bmz-skin-document" }
 encoding_rs.workspace = true
+getrandom.workspace = true
 libc.workspace = true
 mlua.workspace = true
 serde_json.workspace = true

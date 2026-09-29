@@ -11,9 +11,11 @@ mod lr2;
 mod lua;
 mod path_context;
 mod pm_chara;
+mod random_file;
 
 pub use path_context::SkinPathContext;
 pub use pm_chara::{LoadedPmChara, load_pm_chara};
+pub use random_file::random_file_index;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SkinKind {
