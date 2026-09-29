@@ -18,37 +18,6 @@ pub(in crate::lua) fn infer_gauge_type_imageset_ref(
     (gauge_calls > 0 && number_calls.is_empty()).then_some(SKIN_REF_PLAY_GAUGE_TYPE)
 }
 
-pub(in crate::lua) fn infer_course_table_text_expr(
-    function: &Function,
-    object_id: Option<&str>,
-    main_state_probe: &Arc<Mutex<MainStateProbe>>,
-) -> Option<String> {
-    if object_id == Some("table") {
-        return Some(SKIN_EXPR_COURSE_TABLE_TEXT.to_string());
-    }
-
-    let option_calls = collect_option_calls(function, main_state_probe)?;
-    if !option_calls.contains(&290) {
-        return None;
-    }
-
-    {
-        main_state_probe.lock().ok()?.begin_number_call_recording(0);
-    }
-    let _ = function.call::<Value>(()).ok();
-    let text_calls = {
-        let mut probe = main_state_probe.lock().ok()?;
-        let calls = probe.text_calls.clone();
-        probe.end_recording();
-        calls
-    };
-    if text_calls.iter().any(|ref_id| (1001..=1003).contains(ref_id)) {
-        Some(SKIN_EXPR_COURSE_TABLE_TEXT.to_string())
-    } else {
-        None
-    }
-}
-
 pub(in crate::lua) fn infer_main_state_text_ref(
     function: &Function,
     main_state_probe: &Arc<Mutex<MainStateProbe>>,

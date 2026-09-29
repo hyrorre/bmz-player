@@ -169,12 +169,6 @@ fn infer_value_field(
             insert_number(object, "ref", ref_id);
             return true;
         }
-        if let Some(value_expr) =
-            infer_course_table_text_expr(function, object_id, main_state_probe)
-        {
-            insert_expr(object, "value_expr", value_expr);
-            return true;
-        }
         if let Some(value_expr) = infer_text_concat_expr(function, main_state_probe) {
             insert_expr(object, "value_expr", value_expr);
             return true;

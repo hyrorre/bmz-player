@@ -1,6 +1,50 @@
 use super::*;
 
 #[test]
+fn integer_graphs_normalize_integer_properties() {
+    let mut graph: SkinGraphDef =
+        serde_json::from_str(r#"{"id":"bar","type":74,"isRefNum":1,"min":0,"max":1200}"#).unwrap();
+    for (min, max, value, expected) in [
+        (0, 1200, 100, 100.0 / 1200.0),
+        (0, 1200, 71, 71.0 / 1200.0),
+        (0, 100, 200, 1.0),
+        (20, 100, 10, 0.0),
+        (100, 0, 25, 0.75),
+        (100, 0, 200, 0.0),
+        (0, 0, 0, 0.0),
+        (i32::MIN, i32::MAX, 0, 0.5),
+    ] {
+        graph.min = min;
+        graph.max = max;
+        let state = SkinDrawState { total_notes: value, ..Default::default() };
+        let (fill, uv) = graph_fill_dimensions(&graph, &state);
+        assert!((fill - expected).abs() < 0.00001, "{min}..{max}: {fill}");
+        assert_eq!(fill, uv);
+    }
+}
+
+#[test]
+fn integer_fast_slow_graphs_use_judgement_counts() {
+    let state = SkinDrawState {
+        fast_slow_counts: Some(crate::snapshot::FastSlowJudgeCounts {
+            fast_great: 100,
+            slow_great: 71,
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+    for (reference, count) in [(423, 100.0), (424, 71.0)] {
+        let graph: SkinGraphDef = serde_json::from_value(serde_json::json!({
+            "id": "bar", "type": reference, "isRefNum": 1, "min": 0, "max": 1200
+        }))
+        .unwrap();
+        let (fill, uv) = graph_fill_dimensions(&graph, &state);
+        assert!((fill - count / 1200.0).abs() < 0.00001);
+        assert_eq!(fill, uv);
+    }
+}
+
+#[test]
 fn static_render_items_resolve_gauge_in_destination_order() {
     let document: SkinDocument = serde_json::from_str(
         r#"

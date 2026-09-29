@@ -92,6 +92,8 @@ pub(super) fn graph_raw_value(graph: &SkinGraphDef, state: &SkinDrawState) -> f3
             return value;
         }
         skin_state_float_expr(&graph.value_expr, state).unwrap_or(0.0)
+    } else if graph.is_ref_num {
+        skin_state_number(graph.graph_type, state).unwrap_or(0) as f32
     } else {
         graph_value(graph.graph_type, state)
     }
@@ -99,14 +101,21 @@ pub(super) fn graph_raw_value(graph: &SkinGraphDef, state: &SkinDrawState) -> f3
 
 /// Returns (fill multiplier on dst extent, UV clip ratio 0.0-1.0).
 pub(super) fn graph_fill_dimensions(graph: &SkinGraphDef, state: &SkinDrawState) -> (f32, f32) {
-    let raw = graph_raw_value(graph, state).max(0.0);
+    let raw = graph_raw_value(graph, state);
     if !graph.value_expr.trim().is_empty() {
         // beatoraja Lua graph: rendered size = dst.w * value (value is pixel multiplier).
         let max = graph.max.max(1) as f32;
+        let raw = raw.max(0.0);
         return (raw, (raw / max).clamp(0.0, 1.0));
     }
-    if graph.is_ref_num && graph.max > graph.min {
-        let ratio = ((raw - graph.min as f32) / (graph.max - graph.min) as f32).clamp(0.0, 1.0);
+    if graph.is_ref_num {
+        let range = graph.max as f64 - graph.min as f64;
+        let ratio = if range == 0.0 {
+            // A degenerate range has no drawable extent at the boundary.
+            if raw < graph.max as f32 { 1.0 } else { 0.0 }
+        } else {
+            ((f64::from(raw) - graph.min as f64) / range).clamp(0.0, 1.0) as f32
+        };
         return (ratio, ratio);
     }
     let ratio = raw.clamp(0.0, 1.0);

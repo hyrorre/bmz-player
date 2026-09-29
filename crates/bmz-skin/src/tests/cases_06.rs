@@ -1269,3 +1269,54 @@ fn lua_to_json_rejects_runtime_draw_callbacks() {
     assert!(error.to_string().contains("$.destination[1].draw"));
     assert!(!output.exists());
 }
+#[test]
+fn table_text_callbacks_preserve_content_in_auto_and_compat() {
+    for mode in [LuaSkinRuntimeMode::Auto, LuaSkinRuntimeMode::Compat] {
+        let root = unique_test_dir("table-text-callback");
+        fs::create_dir_all(&root).unwrap();
+        let path = root.join("skin.lua");
+        fs::write(
+            &path,
+            r##"
+            local main_state = require("main_state")
+            return {type = 7, text = {
+                {id = "table", value = function()
+                    return main_state.text(1001)..main_state.text(1002)
+                end},
+                {id = "arbitrary", value = function()
+                    if main_state.option(290) then return "custom course" end
+                    local name = main_state.text(1001)
+                    if name == "" then return "# No-Table" end
+                    return name .. " > " .. main_state.text(1002)
+                end}
+            }}
+        "##,
+        )
+        .unwrap();
+        let mut loaded = load_lua_skin_with_runtime_state(
+            &path,
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            &LuaLoadRuntimeState { runtime_mode: mode, ..Default::default() },
+        )
+        .unwrap();
+        for (name, level, course, expected) in [
+            ("", "", false, ["", "# No-Table"]),
+            ("Table", "★1", false, ["Table★1", "Table > ★1"]),
+            ("", "", true, ["", "custom course"]),
+        ] {
+            let state = TestLuaMainState {
+                texts: BTreeMap::from([(1001, name.into()), (1002, level.into())]),
+                options: BTreeMap::from([(290, course)]),
+                ..Default::default()
+            };
+            for (text, expected) in loaded.document.text.iter().zip(expected) {
+                let id = text.value_expr.rsplit(':').next().unwrap().parse().unwrap();
+                assert_eq!(
+                    loaded.lua_runtime.as_mut().unwrap().evaluate_text(id, &state).as_deref(),
+                    Some(expected)
+                );
+            }
+        }
+    }
+}
