@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 use bmz_core::course::CourseDefinition;
 use serde::Deserialize;
 
@@ -159,14 +159,14 @@ pub(crate) async fn fetch_difficulty_table_with_client(
     let head_url = if source_url.ends_with(".json") {
         source_url.to_string()
     } else {
-        let html = client.get(source_url).send().await?.text().await?;
-        let rel = find_bmstable_meta(&html)
-            .ok_or_else(|| anyhow::anyhow!("no <meta name=\"bmstable\"> at {source_url}"))?;
+        let response = fetch_table_response(client, source_url, "HTML").await?;
+        let rel = find_bmstable_meta(&response.body)
+            .with_context(|| format!("no <meta name=\"bmstable\">: {}", response.diagnostic()))?;
         resolve_url(source_url, &rel)
     };
 
-    let header_body = client.get(&head_url).send().await?.text().await?;
-    let header: HeaderJson = serde_json::from_str(strip_bom(&header_body))?;
+    let response = fetch_table_response(client, &head_url, "header").await?;
+    let header: HeaderJson = response.parse_json()?;
     let symbol = table_level_symbol(&header);
 
     let data_urls: Vec<String> =
@@ -180,8 +180,8 @@ pub(crate) async fn fetch_difficulty_table_with_client(
     let mut level_order = header.level_order;
 
     for (data_index, data_url) in data_urls.iter().enumerate() {
-        let data_body = client.get(data_url).send().await?.text().await?;
-        let data: Vec<DataEntry> = serde_json::from_str(strip_bom(&data_body))?;
+        let response = fetch_table_response(client, data_url, "data").await?;
+        let data: Vec<DataEntry> = response.parse_json()?;
         let data_rule = header.data_rule.get(data_index);
 
         for entry in data {
@@ -230,6 +230,71 @@ pub(crate) async fn fetch_difficulty_table_with_client(
         courses,
         fetched_at,
     })
+}
+
+struct TableResponse {
+    stage: &'static str,
+    requested_url: String,
+    final_url: String,
+    status: reqwest::StatusCode,
+    content_type: String,
+    body: String,
+}
+
+impl TableResponse {
+    fn diagnostic(&self) -> String {
+        let mut chars = self.body.chars();
+        let mut preview: String = chars.by_ref().take(256).collect();
+        if chars.next().is_some() {
+            preview.push('…');
+        }
+        format!(
+            "stage={} url={} final_url={} status={} content_type={:?} body_prefix={preview:?}",
+            self.stage, self.requested_url, self.final_url, self.status, self.content_type,
+        )
+    }
+
+    fn parse_json<T: serde::de::DeserializeOwned>(&self) -> Result<T> {
+        serde_json::from_str(strip_bom(&self.body))
+            .with_context(|| format!("invalid difficulty table JSON: {}", self.diagnostic()))
+    }
+}
+
+async fn fetch_table_response(
+    client: &reqwest::Client,
+    url: &str,
+    stage: &'static str,
+) -> Result<TableResponse> {
+    let response = client
+        .get(url)
+        .send()
+        .await
+        .with_context(|| format!("difficulty table request failed: stage={stage} url={url}"))?;
+    let status = response.status();
+    let final_url = response.url().to_string();
+    let content_type = response
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or("<missing>")
+        .to_string();
+    let body = response.text().await.with_context(|| {
+        format!(
+            "difficulty table response read failed: stage={stage} url={url} final_url={final_url} status={status} content_type={content_type:?}"
+        )
+    })?;
+    let response = TableResponse {
+        stage,
+        requested_url: url.to_string(),
+        final_url,
+        status,
+        content_type,
+        body,
+    };
+    if !status.is_success() {
+        bail!("difficulty table HTTP error: {}", response.diagnostic());
+    }
+    Ok(response)
 }
 
 fn table_level_symbol(header: &HeaderJson) -> String {
@@ -378,6 +443,32 @@ fn resolve_url(base: &str, path: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn invalid_json_reports_response_details_and_bounded_unicode_preview() {
+        let response = TableResponse {
+            stage: "data",
+            requested_url: "https://example.com/data".into(),
+            final_url: "https://example.com/redirected".into(),
+            status: reqwest::StatusCode::OK,
+            content_type: "text/html".into(),
+            body: format!("<html>\n{}SECRET_TAIL", "あ".repeat(300)),
+        };
+        let error = format!("{:#}", response.parse_json::<Vec<DataEntry>>().err().unwrap());
+        for detail in [
+            "stage=data",
+            "url=https://example.com/data",
+            "final_url=https://example.com/redirected",
+            "status=200 OK",
+            "content_type=\"text/html\"",
+            "expected value at line 1 column 1",
+            "…",
+        ] {
+            assert!(error.contains(detail), "missing {detail}: {error}");
+        }
+        assert!(!error.contains("SECRET_TAIL"));
+        assert!(!error.contains('\n'));
+    }
 
     #[test]
     fn find_bmstable_meta_extracts_content() {
