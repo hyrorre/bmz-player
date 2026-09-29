@@ -123,6 +123,7 @@ fn main() -> Result<()> {
         .context("missing parent")?
         .to_path_buf();
     let decoded = decode_beatoraja_skin_request(BeatorajaSkinDecodeRequest {
+        pinned_sources: None,
         skin_path: &path,
         kind,
         options,

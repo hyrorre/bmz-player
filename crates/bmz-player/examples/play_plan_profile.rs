@@ -62,6 +62,7 @@ fn main() -> Result<()> {
         .unwrap_or_else(|| path.parent().expect("skin has a parent"))
         .to_path_buf();
     let decoded = decode_beatoraja_skin_request(BeatorajaSkinDecodeRequest {
+        pinned_sources: None,
         skin_path: &path,
         kind: SkinKind::Play,
         options,
