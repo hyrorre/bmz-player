@@ -42,6 +42,7 @@ pub mod obs;
 pub mod paths;
 pub mod practice_ui;
 pub mod profile_cmd;
+mod random_index;
 pub mod random_option_seed;
 pub mod random_trainer;
 pub mod replay_cmd;

@@ -269,12 +269,7 @@ fn pick_random(paths: &[PathBuf]) -> Option<PathBuf> {
     if paths.is_empty() {
         return None;
     }
-    // `rand` 依存を増やしたくないので、Unix エポックナノ秒からの剰余で擬似ランダム選択。
-    let nanos = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or(0);
-    let index = (nanos as usize) % paths.len();
+    let index = crate::random_index::random_index(paths.len())?;
     Some(paths[index].clone())
 }
 
