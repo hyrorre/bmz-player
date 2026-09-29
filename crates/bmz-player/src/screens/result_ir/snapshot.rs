@@ -6,53 +6,6 @@ pub(super) fn initial_skin_scroll_offset(ranking: &ResultIrRanking) -> usize {
     offset.min(ranking.entries.len().saturating_sub(bmz_render::scene::IR_RANKING_ENTRY_SLOTS))
 }
 
-#[cfg(test)]
-mod initial_position_tests {
-    use super::*;
-
-    #[test]
-    fn initial_position_follows_beatoraja_without_empty_trailing_rows() {
-        for (count, rank, expected) in [
-            (100, None, 0),
-            (100, Some(1), 0),
-            (100, Some(10), 0),
-            (100, Some(11), 6),
-            (100, Some(50), 45),
-            (100, Some(95), 90),
-            (100, Some(100), 90),
-            (100, Some(150), 90),
-            (10, Some(10), 0),
-            (5, Some(5), 0),
-            (0, None, 0),
-        ] {
-            let ranking = ResultIrRanking {
-                scope: IrRankingScope::Global,
-                entries: (1..=count)
-                    .map(|rank| ResultIrRankingEntry {
-                        rank,
-                        player_name: format!("player-{rank}"),
-                        ex_score: 0,
-                        clear: "Normal".to_string(),
-                        bp: 0,
-                        max_combo: 0,
-                    })
-                    .collect(),
-                clear_rate: None,
-                clear_counts: None,
-                self_rank: rank,
-                previous_rank: None,
-                total: Some(count),
-            };
-            let offset = initial_skin_scroll_offset(&ranking);
-            assert_eq!(offset, expected, "count={count}, rank={rank:?}");
-            let snapshot = result_ir_ranking_to_skin_snapshot_at(&ranking, offset);
-            if count >= 10 {
-                assert!(snapshot.entries.iter().all(|entry| entry.rank.is_some()));
-            }
-        }
-    }
-}
-
 /// 取得済みグローバルランキングをスキン用 snapshot に変換する。
 pub fn ranking_to_ir_snapshot(ranking: &IrRankingResult) -> bmz_render::scene::ResultIrSnapshot {
     result_ir_ranking_to_skin_snapshot(&chart_ranking_to_result_ir_ranking(ranking))
@@ -176,5 +129,52 @@ pub(super) fn scope_for_tab(tab: ResultRankingTab) -> IrRankingScope {
     match tab {
         ResultRankingTab::Global => IrRankingScope::Global,
         ResultRankingTab::SelfAndRivals => IrRankingScope::SelfAndRivals,
+    }
+}
+
+#[cfg(test)]
+mod initial_position_tests {
+    use super::*;
+
+    #[test]
+    fn initial_position_follows_beatoraja_without_empty_trailing_rows() {
+        for (count, rank, expected) in [
+            (100, None, 0),
+            (100, Some(1), 0),
+            (100, Some(10), 0),
+            (100, Some(11), 6),
+            (100, Some(50), 45),
+            (100, Some(95), 90),
+            (100, Some(100), 90),
+            (100, Some(150), 90),
+            (10, Some(10), 0),
+            (5, Some(5), 0),
+            (0, None, 0),
+        ] {
+            let ranking = ResultIrRanking {
+                scope: IrRankingScope::Global,
+                entries: (1..=count)
+                    .map(|rank| ResultIrRankingEntry {
+                        rank,
+                        player_name: format!("player-{rank}"),
+                        ex_score: 0,
+                        clear: "Normal".to_string(),
+                        bp: 0,
+                        max_combo: 0,
+                    })
+                    .collect(),
+                clear_rate: None,
+                clear_counts: None,
+                self_rank: rank,
+                previous_rank: None,
+                total: Some(count),
+            };
+            let offset = initial_skin_scroll_offset(&ranking);
+            assert_eq!(offset, expected, "count={count}, rank={rank:?}");
+            let snapshot = result_ir_ranking_to_skin_snapshot_at(&ranking, offset);
+            if count >= 10 {
+                assert!(snapshot.entries.iter().all(|entry| entry.rank.is_some()));
+            }
+        }
     }
 }

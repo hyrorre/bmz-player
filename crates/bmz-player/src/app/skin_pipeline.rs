@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::mpsc::{self, Receiver};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
@@ -345,4 +345,3 @@ mod tests {
         assert!(!runtime.has_pending());
     }
 }
-use std::collections::BTreeMap;
