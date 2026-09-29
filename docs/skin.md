@@ -3,6 +3,9 @@
 BMZ は beatoraja JSON / Lua skin の互換を基本にする。既存 beatoraja skin type は
 そのまま扱い、BMZ 独自の key mode だけ拡張 skin type を予約する。
 
+JSON / Lua / LR2 skinの対応範囲と残課題は [skin-compatibility.md](skin-compatibility.md) を参照。
+この文書ではIDや各機能の動作契約を管理する。
+
 ## LR2 Play 表示参照
 
 LR2 play skin の `SRC_BUTTON 40/41` は、1P/2P の実際に有効なゲージ種類を

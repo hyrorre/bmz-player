@@ -2573,13 +2573,29 @@ GET /api/v1/charts/{sha256}/ranking?scope=global&limit=100&rule_mode=Beatoraja
 GET /api/v1/charts/{sha256}/ranking?scope=self_and_rivals&limit=100&rule_mode=Beatoraja
 ```
 
-## note
+## 開発環境と実装の入口
 
-`bun dev` 等でエラーが起きる場合は `export TMPDIR=/tmp` を実行してみる。
+Node.js / Bunを用意し、リポジトリrootから操作します。
+コマンドの定義は [package.json](../package.json)、ディレクトリ対応とruntime設定は
+[nuxt.config.ts](../nuxt.config.ts) を確認します。
 
-### Setup Local Environment
+### アプリ構成
 
-Install NodeJS / bun
+| 場所 | 責務 |
+|---|---|
+| [bmz-ir-web/app](../bmz-ir-web/app/) | Nuxt UI。pages、components、layouts、composables等 |
+| [bmz-ir-web/server](../bmz-ir-web/server/) | Nitro API、middleware、services、repositories等 |
+| [bmz-ir-web/shared](../bmz-ir-web/shared/) | app/server共通の型・schema・定数・純粋関数。secretやDB queryは置かない |
+| [bmz-ir-web/public](../bmz-ir-web/public/) | root URLから配信する静的ファイル |
+| [Rust IR client](../crates/bmz-player/src/ir/) | client、credentials、device_key、sync、secret_store |
+| [Rust IR CLI](../crates/bmz-player/src/ir_cmd.rs) | login / logout / status / ranking / sync / rivals / device-key / replay |
+
+Result / Selectの連携は `crates/bmz-player/src/screens/result_ir.rs` / `select_ir.rs`、
+skin IDの解決は `crates/bmz-render/src/skin/` を確認します。
+秘密情報の保存先はprofileの `[ir] credential_store = "File" | "Os"` で選びます。
+実装済みAPIとローカルでの操作例は、この文書冒頭の「実装状況」を参照してください。
+
+### ローカルの準備
 
 ```bash
 # Install dependencies
@@ -2594,3 +2610,33 @@ bun run build
 # Generate Cloudflare Worker bindings/types
 bun run cf:types
 ```
+
+`bun run build` はNuxt buildとWeb依存ライセンス生成を実行します。
+Worker設定が必要な `cf:types` はbuild後に実行します。
+開発サーバーは `bun run dev` です。現行scriptは `TMPDIR=/tmp nuxt dev` を使うため、
+実行環境のshellと一時ディレクトリがこの指定に対応していることを確認します。
+
+### DB / blob
+
+- schemaの正は [bmz-ir-web/server/db/schema.ts](../bmz-ir-web/server/db/schema.ts) です。
+  NuxtHub DB + Drizzle ORMを使います。
+- migrationは [server/db/migrations/sqlite](../server/db/migrations/sqlite/) に集約します。
+  schema変更時の生成は `bun run db:generate`、ローカル適用は `bun run db:migrate` です。
+- Cloudflare向け設定はbuildが生成する `.output/server/wrangler.json` を使います。
+  D1 bindingは `DB`、R2 bindingは `BLOB` です。配布先の定義は [wrangler.jsonc](../wrangler.jsonc) を確認します。
+- replay blobは `hub:blob` 経由で保存し、ローカルは `.data/blob` を使います。
+  配布先のbinding・環境変数は設定と [.env.example](../.env.example) を確認します。
+- `.env`、認証token、production dataはコミットしません。
+  production / remoteへの破壊的書き込みは、対象と内容への明示的な承認後に実行します。
+
+### 検証
+
+変更対象のファイルに対してPrettierを確認し、型検査と関連テストを実行します。
+
+```bash
+bunx vue-tsc --noEmit
+bun run test:ir
+```
+
+翻訳変更では `bun run test:i18n` も使います。Webのみの変更にRust全テストは原則不要です。
+共通の作業・コミット規約は [AGENTS.md](../AGENTS.md) を参照します。
