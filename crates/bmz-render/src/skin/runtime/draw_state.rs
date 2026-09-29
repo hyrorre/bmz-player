@@ -3,6 +3,8 @@ use super::*;
 #[derive(Debug, Clone, PartialEq)]
 pub struct SkinDrawState {
     pub elapsed_ms: i32,
+    /// RANDOM gauge values latched by the scene runtime for each gauge id.
+    pub gauge_random_indices: HashMap<String, i32>,
     /// Lua skin のruntime draw callbackにだけ渡すsidecar context。
     /// JSON skinと通常のcompiled条件では常にNone。
     #[doc(hidden)]
@@ -448,6 +450,7 @@ impl Default for SkinDrawState {
         Self {
             elapsed_ms: 0,
             lua_runtime: None,
+            gauge_random_indices: HashMap::new(),
             runtime_flags: HashMap::new(),
             logical_input_held: [false; SKIN_BMZ_INPUT_COUNT],
             logical_input_press_ms: [None; SKIN_BMZ_INPUT_COUNT],

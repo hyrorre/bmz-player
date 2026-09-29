@@ -20,6 +20,7 @@ pub struct DynamicTimerRuntime {
     keybeam_fade_allowed: [bool; LANE_COUNT],
     key_logger: KeyLoggerRuntime,
     judge_lane: JudgeLaneRuntime,
+    gauge_animation: GaugeAnimationRuntime,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -113,6 +114,7 @@ impl Default for DynamicTimerRuntime {
             keybeam_fade_allowed: [false; LANE_COUNT],
             key_logger: KeyLoggerRuntime::default(),
             judge_lane: JudgeLaneRuntime::default(),
+            gauge_animation: GaugeAnimationRuntime::default(),
         }
     }
 }
@@ -164,6 +166,7 @@ impl DynamicTimerRuntime {
 
     /// observe 条件を評価し、`state.dynamic_timer_ms` を更新する。
     pub fn advance(&mut self, document: &SkinDocument, state: &mut SkinDrawState, now_ms: i32) {
+        self.gauge_animation.advance(document, state);
         self.ensure_runtime_flags(document);
         self.advance_logical_inputs(document, state.logical_input_held, now_ms);
         state.runtime_flags.clone_from(&self.runtime_flags);

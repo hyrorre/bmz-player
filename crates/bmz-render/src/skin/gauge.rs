@@ -35,8 +35,7 @@ pub(super) fn skin_gauge_animation_index(gauge_def: &SkinGaugeDef, state: &SkinD
     let range = gauge_def.range.max(0);
     match gauge_def.gauge_type {
         SKIN_GAUGE_ANIM_RANDOM => {
-            let tick = skin_gauge_animation_tick(state, cycle);
-            skin_gauge_random_animation_index(tick, range)
+            state.gauge_random_indices.get(&gauge_def.id).copied().unwrap_or(0).clamp(0, range)
         }
         SKIN_GAUGE_ANIM_FLICKERING => {
             let time = state.play_timer_ms.unwrap_or(state.elapsed_ms);
@@ -57,18 +56,6 @@ pub(super) fn skin_gauge_animation_index(gauge_def: &SkinGaugeDef, state: &SkinD
 pub(super) fn skin_gauge_animation_tick(state: &SkinDrawState, cycle: i32) -> i32 {
     let time = state.play_timer_ms.unwrap_or(state.elapsed_ms);
     time.div_euclid(cycle.max(1))
-}
-
-pub(super) fn skin_gauge_random_animation_index(tick: i32, range: i32) -> i32 {
-    let span = range + 1;
-    if span <= 1 {
-        return 0;
-    }
-    let mut value = tick as u32;
-    value ^= value.wrapping_shl(13);
-    value ^= value.wrapping_shr(17);
-    value ^= value.wrapping_shl(5);
-    (value % span as u32) as i32
 }
 
 /// Maps one of beatoraja's 36 logical gauge slots to the source node supplied

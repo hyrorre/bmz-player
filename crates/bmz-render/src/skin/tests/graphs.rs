@@ -415,7 +415,7 @@ fn skin_gauge_defaults_to_random_when_type_omitted() {
 }
 
 #[test]
-fn skin_gauge_random_animation_changes_by_cycle() {
+fn skin_gauge_random_animation_uses_latched_runtime_value() {
     let gauge = SkinGaugeDef {
         id: "g".to_string(),
         nodes: Vec::new(),
@@ -426,14 +426,35 @@ fn skin_gauge_random_animation_changes_by_cycle() {
         starttime: 0,
         endtime: 500,
     };
-    let first =
-        skin_gauge_animation_index(&gauge, &SkinDrawState { elapsed_ms: 33, ..Default::default() });
-    let second =
-        skin_gauge_animation_index(&gauge, &SkinDrawState { elapsed_ms: 66, ..Default::default() });
+    let mut state = SkinDrawState::default();
+    state.gauge_random_indices.insert("g".into(), 3);
+    assert_eq!(skin_gauge_animation_index(&gauge, &state), 3);
+    state.elapsed_ms = 100;
+    assert_eq!(skin_gauge_animation_index(&gauge, &state), 3);
+    state.gauge_random_indices.insert("g".into(), 1);
+    assert_eq!(skin_gauge_animation_index(&gauge, &state), 1);
+}
 
-    assert_ne!(first, second, "type=0 RANDOM should not stay fixed at frame 0");
-    assert!((0..=3).contains(&first));
-    assert!((0..=3).contains(&second));
+#[test]
+fn skin_gauge_random_runtime_populates_draw_state_and_resets_with_scene() {
+    let document: SkinDocument =
+        serde_json::from_str(r#"{"gauge":{"id":"g","nodes":[],"type":0,"range":3,"cycle":33}}"#)
+            .unwrap();
+    let mut runtime = DynamicTimerRuntime::default();
+    let mut state = SkinDrawState::default();
+    runtime.advance(&document, &mut state, 0);
+    let initial = state.gauge_random_indices["g"];
+    assert!((0..=3).contains(&initial));
+    assert_eq!(skin_gauge_animation_index(document.gauge.as_ref().unwrap(), &state), initial);
+    state.gauge_random_indices.clear();
+    state.elapsed_ms = 20;
+    runtime.advance(&document, &mut state, 20);
+    assert_eq!(state.gauge_random_indices["g"], initial);
+
+    runtime.reset_for_document(None);
+    let empty: SkinDocument = serde_json::from_str("{}").unwrap();
+    runtime.advance(&empty, &mut state, 20);
+    assert!(state.gauge_random_indices.is_empty());
 }
 
 #[test]
