@@ -121,6 +121,7 @@ pub(super) fn build_integration_settings_sections(
                     1 => "settings-input-macos-active",
                     2 => "settings-input-macos-permission",
                     3 => "settings-input-macos-failed",
+                    4 => "settings-input-macos-exclusive",
                     _ => "settings-input-macos-inactive",
                 };
                 ui.label(text.text(key));

@@ -94,6 +94,12 @@ where
     let mut previous_callback = None;
     let mut previous_stream_callback: Option<::cpal::StreamInstant> = None;
     let mut warmup_until = Instant::now() + Duration::from_secs(2);
+    #[cfg(target_os = "macos")]
+    let mut suspend = bmz_core::suspend::SuspendMonitor::default();
+    #[cfg(target_os = "macos")]
+    if timing_enabled {
+        suspend.poll();
+    }
     let error_diagnostics = Arc::clone(&diagnostics);
     device
         .build_output_stream(
@@ -108,12 +114,18 @@ where
                 }
 
                 let frames = data.len() / channels;
+                #[cfg(target_os = "macos")]
+                let resumed = timing_enabled && suspend.poll();
+                #[cfg(not(target_os = "macos"))]
+                let resumed = false;
                 if timing_enabled
-                    && (previous_callback.is_some_and(|previous| {
-                        callback_start.duration_since(previous) > Duration::from_secs(1)
-                    }) || previous_stream_callback.is_some_and(|previous| {
-                        info.timestamp().callback.checked_duration_since(previous).is_none()
-                    }))
+                    && (resumed
+                        || previous_callback.is_some_and(|previous| {
+                            callback_start.duration_since(previous) > Duration::from_secs(1)
+                        })
+                        || previous_stream_callback.is_some_and(|previous| {
+                            info.timestamp().callback.checked_duration_since(previous).is_none()
+                        }))
                 {
                     diagnostics.timing.reset();
                     warmup_until = callback_start + Duration::from_secs(2);

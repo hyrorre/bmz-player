@@ -165,5 +165,11 @@ mod tests {
         assert_eq!(key(137), Some(KeyCode::IntlYen));
         assert_eq!(key(135), Some(KeyCode::IntlRo));
         assert_eq!(key(0), None);
+        assert_eq!(
+            super::super::winit::physical_key_to_control(physical_key(145).unwrap()),
+            Some(bmz_gameplay::input::backend::PhysicalControl::KeyboardKey(
+                "Native:MacOS:102".into()
+            ))
+        );
     }
 }

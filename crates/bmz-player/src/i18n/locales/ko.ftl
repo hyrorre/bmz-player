@@ -812,3 +812,4 @@ settings-input-macos-request = 입력 모니터링 권한 요청
 settings-input-macos-retry = 허용 후 winit을 선택한 다음 macOS IOHID를 다시 선택하세요. 필요한 경우 앱을 다시 시작하세요.
 settings-audio-stream-actual = 실행 중 (CPAL 설정 / 지원 범위, 실제 프레임은 진단 로그): { $value }
 latency-test-no-save = 지연 정지 시험: 점수 / IR 저장 비활성
+settings-input-macos-exclusive = winit 대체: 키보드가 독점 사용 중입니다 (IOKit 0xe00002c5)

@@ -266,6 +266,7 @@ pub struct EguiRunContext<'a, 'practice> {
     pub obs_connection_status: &'a crate::obs::ObsConnectionStatus,
     /// 現在の backend が認識しているゲームパッド一覧。未初期化時は空。
     pub connected_gamepads: &'a [crate::input::gamepad::ConnectedGamepad],
+    pub audio_stream_info: Option<&'a bmz_audio::backend::cpal::CpalStreamInfo>,
 }
 
 /// `EguiLayer::run` の 1 フレーム出力。

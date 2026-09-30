@@ -812,3 +812,4 @@ settings-input-macos-request = 请求输入监控权限
 settings-input-macos-retry = 授权后先选择 winit，再选择 macOS IOHID 重试。必要时重新启动应用。
 settings-audio-stream-actual = 运行中（CPAL 设置／支持范围；实际帧数见诊断日志）：{ $value }
 latency-test-no-save = 延迟停顿测试：禁用成绩／IR 保存
+settings-input-macos-exclusive = 回退到 winit：键盘被独占使用（IOKit 0xe00002c5）

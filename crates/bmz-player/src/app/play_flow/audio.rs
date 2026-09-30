@@ -74,6 +74,9 @@ impl WinitApp {
             }
             if let Some(input) = self.play_input_backend() {
                 let summary = serde_json::json!({"schema": 1, "kind": "input_queue",
+                    "requested_keyboard":format!("{:?}",self.boot.app_config.input.backend),
+                    "keyboard_enabled":self.boot.app_config.input.keyboard_enabled,
+                    "native_keyboard_active":self.gamepad.as_ref().is_some_and(crate::input::capture::InputCapture::native_keyboard_enabled),
                     "enqueue_to_drain_ns": input.delivery_summary(), "drops": input.overflow_count()});
                 tracing::info!("BMZ_LATENCY_JSON {summary}");
             }

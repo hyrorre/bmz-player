@@ -10,7 +10,7 @@ use std::{
     ffi::c_void,
     sync::{
         Arc, Mutex,
-        atomic::{AtomicBool, AtomicU8, Ordering},
+        atomic::{AtomicBool, AtomicI32, AtomicU8, Ordering},
     },
     thread::JoinHandle,
 };
@@ -23,6 +23,7 @@ unsafe extern "C" {
     fn bmz_keyboard_open(
         context: *mut c_void,
         callback: extern "C" fn(*mut c_void, usize, u32, u64, i32),
+        error: *mut i32,
     ) -> *mut c_void;
     fn bmz_keyboard_wait();
     fn bmz_keyboard_close(manager: *mut c_void);
@@ -31,6 +32,7 @@ unsafe extern "C" {
 // Status is process-wide because BMZ owns one keyboard capture instance.
 // 0=off, 1=running (not proof of device delivery), 2=permission, 3=initialization/error.
 static STATUS: AtomicU8 = AtomicU8::new(0);
+static LAST_ERROR: AtomicI32 = AtomicI32::new(0);
 pub fn status() -> u8 {
     STATUS.load(Ordering::Acquire)
 }
@@ -49,6 +51,7 @@ pub struct MacKeyboard {
 
 impl MacKeyboard {
     pub fn start() -> Option<Self> {
+        LAST_ERROR.store(0, Ordering::Release);
         if unsafe { bmz_keyboard_access() } != 0 {
             STATUS.store(2, Ordering::Release);
             tracing::warn!("IOHID permission unavailable; using winit");
@@ -60,15 +63,22 @@ impl MacKeyboard {
         let (worker_route, worker_stop) = (route.clone(), stop.clone());
         let worker = std::thread::Builder::new().name("bmz-iohid-keyboard".into()).spawn(move || {
             let (ticks, numer, denom) = ticks();
+            if ticks == 0 || numer == 0 || denom == 0 { let _ = tx.send(false); return; }
             let mut context = Box::new(Context {
                 route: worker_route, generation: 0, active: None, holds: Holds::default(),
                 clock: MachClock::new(ticks, monotonic_timestamp_ns(), numer, denom),
                 failed: false, diagnostics: bmz_core::latency::diagnostics_enabled(),
-                age: Default::default(), invalid: 0, unsupported: 0,
+                age: Default::default(), invalid: 0, unsupported: 0, suspend: Default::default(),
             });
             // Box address remains stable until close completes; callbacks only
             // borrow it synchronously on this owning run-loop thread.
-            let manager = unsafe { bmz_keyboard_open((&mut *context as *mut Context).cast(), event) };
+            context.suspend.poll();
+            let mut error = 0;
+            let manager = unsafe { bmz_keyboard_open((&mut *context as *mut Context).cast(), event, &mut error) };
+            if manager.is_null() {
+                LAST_ERROR.store(error,Ordering::Release);
+                tracing::warn!(os_error = error, "IOHIDManagerOpen failed");
+            }
             if !manager.is_null() { STATUS.store(1, Ordering::Release); }
             let _ = tx.send(!manager.is_null());
             if manager.is_null() { return; }
@@ -83,7 +93,7 @@ impl MacKeyboard {
             unsafe { bmz_keyboard_close(manager); }
             if context.diagnostics {
                 let summary = serde_json::json!({"schema":1,"kind":"iohid", "os_to_receive_ns":context.age.summary(),
-                    "invalid_timestamps":context.invalid,"unsupported_usages":context.unsupported});
+                    "epoch":context.clock.epoch,"invalid_timestamps":context.invalid,"unsupported_usages":context.unsupported});
                 tracing::info!("BMZ_LATENCY_JSON {summary}");
             }
             if context.failed && status() == 1 {
@@ -95,7 +105,10 @@ impl MacKeyboard {
         }).ok()?;
         if !rx.recv().unwrap_or(false) {
             let _ = worker.join();
-            STATUS.store(3, Ordering::Release);
+            STATUS.store(
+                if LAST_ERROR.load(Ordering::Acquire) as u32 == 0xe00002c5 { 4 } else { 3 },
+                Ordering::Release,
+            );
             tracing::warn!("IOHID initialization failed; using winit");
             return None;
         }
@@ -153,6 +166,7 @@ struct Context {
     active: Option<InputRoute>,
     holds: Holds,
     clock: MachClock,
+    suspend: bmz_core::suspend::SuspendMonitor,
     failed: bool,
     diagnostics: bool,
     age: bmz_core::latency::LatencyHistogram,
@@ -174,6 +188,9 @@ impl Context {
         let next = next.filter(|r| {
             r.focused && r.keyboard_enabled && unsafe { bmz_keyboard_foreground() } != 0
         });
+        self.sync_route_snapshot(next, generation);
+    }
+    fn sync_route_snapshot(&mut self, next: Option<InputRoute>, generation: u64) {
         let same = match (&self.active, &next) {
             (Some(a), Some(b)) => a.input.same_source(&b.input),
             (None, None) => true,
@@ -201,7 +218,15 @@ impl Context {
             });
         }
     }
-    fn receive(&mut self, device: usize, usage: u32, timestamp: u64, state: i32) {
+    fn receive(
+        &mut self,
+        device: usize,
+        usage: u32,
+        timestamp: u64,
+        state: i32,
+        now_ticks: u64,
+        received: u128,
+    ) {
         self.sync_route();
         // Serialize the final route check and enqueue with route replacement.
         // A stale callback cannot enqueue into a new play after set_route returns.
@@ -226,15 +251,21 @@ impl Context {
         if macos_keys::key(usage).is_none() {
             // A keyboard outside the supported physical mapping fails the route
             // closed, rather than silently losing a bound key or mixing sources.
-            if usage > 3 {
+            if usage != 0 {
                 self.unsupported += 1;
                 self.failed = true;
             }
             return;
         }
-        let (now_ticks, _, _) = ticks();
-        let received = monotonic_timestamp_ns();
-        let timestamp = match self.clock.convert(timestamp, now_ticks, received) {
+        let epoch = self.clock.epoch;
+        if self.suspend.poll() {
+            self.clock.rebase(now_ticks, received);
+        }
+        let converted = self.clock.convert(timestamp, now_ticks, received);
+        if epoch != self.clock.epoch {
+            self.age = Default::default();
+        }
+        let timestamp = match converted {
             Some(timestamp) => {
                 if self.diagnostics {
                     self.age.record((received - timestamp).min(u64::MAX as u128) as u64);
@@ -252,11 +283,13 @@ impl Context {
     }
 }
 extern "C" fn event(context: *mut c_void, device: usize, usage: u32, timestamp: u64, state: i32) {
+    let (now_ticks, _, _) = ticks();
+    let received = monotonic_timestamp_ns();
     // Never unwind over the C ABI. The callback context is alive on this thread
     // until IOHID callbacks are unregistered and the manager is closed.
     let context = unsafe { &mut *context.cast::<Context>() };
     if std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        context.receive(device, usage, timestamp, state)
+        context.receive(device, usage, timestamp, state, now_ticks, received)
     }))
     .is_err()
     {
@@ -267,6 +300,40 @@ extern "C" fn event(context: *mut c_void, device: usize, usage: u32, timestamp: 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bmz_gameplay::input::backend::InputBackend;
+    #[test]
+    fn focus_loss_releases_old_route_and_retry_does_not_receive_old_holds() {
+        let mut old = super::super::shared::SharedInputBackend::default();
+        let mut new = super::super::shared::SharedInputBackend::default();
+        let route = |input| InputRoute {
+            input,
+            focused: true,
+            keyboard_enabled: true,
+            binding: bmz_gameplay::input::binding::LaneBinding { entries: vec![] },
+        };
+        let mut context = Context {
+            route: Arc::new(Mutex::new(RouteState::default())),
+            generation: 0,
+            active: Some(route(old.clone())),
+            holds: Holds::default(),
+            clock: MachClock::new(1, 0, 1, 1),
+            suspend: Default::default(),
+            failed: false,
+            diagnostics: false,
+            age: Default::default(),
+            invalid: 0,
+            unsupported: 0,
+        };
+        context.holds.update(1, 4, true);
+        context.holds.update(2, 4, true);
+        context.sync_route_snapshot(None, 1);
+        let events = old.drain_events();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].kind, bmz_core::input::InputKind::Release);
+        context.sync_route_snapshot(Some(route(new.clone())), 2);
+        assert!(new.drain_events().is_empty());
+        assert!(context.holds.update(1, 4, true));
+    }
     #[test]
     fn route_generation_remembers_suppression_even_between_callbacks() {
         let input = super::super::shared::SharedInputBackend::default();

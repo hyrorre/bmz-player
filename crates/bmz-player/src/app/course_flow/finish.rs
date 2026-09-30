@@ -23,7 +23,10 @@ fn course_result_persistence_enabled(
     any_replay_playback: bool,
     score_save_disabled: bool,
 ) -> bool {
-    !any_autoplay && !any_replay_playback && !score_save_disabled
+    !any_autoplay
+        && !any_replay_playback
+        && !score_save_disabled
+        && !crate::cli::latency_stall_test_enabled()
 }
 
 impl WinitApp {

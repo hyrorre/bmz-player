@@ -14,6 +14,7 @@ impl WinitApp {
         raw_input_bridge: Option<crate::input::rawinput::RawInputBridge>,
     ) -> Result<Self> {
         let constructor_started_at = Instant::now();
+        crate::cli::configure_latency_stall_test(options.latency_stall_test);
         let mut boot = boot;
         let viewer_mode = options.viewer_play;
         if let Some(cli_renderer) = options.renderer.clone() {

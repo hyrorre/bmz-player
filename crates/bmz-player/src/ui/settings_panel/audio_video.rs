@@ -33,6 +33,9 @@ pub(super) fn build_audio_video_settings_sections(
         .scope(tr!(text, "settings-scope-app"))
         .id_salt("settings_audio")
         .show(ui, |ui| {
+            if let Some(info) = state.audio_stream_info {
+                ui.label(tr!(text, "settings-audio-stream-actual", "value" => format!("{} / {} / {} Hz / {} / {}",info.actual_host,info.actual_device,info.actual_rate,info.cpal_buffer,info.supported_frames)));
+            }
             let available_audio_backends = crate::audio::available_audio_backends();
             if !available_audio_backends.contains(&config.audio.backend) {
                 config.audio.backend = AudioBackend::Auto;

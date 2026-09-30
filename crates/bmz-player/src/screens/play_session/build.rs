@@ -147,6 +147,7 @@ pub fn apply_placeholder_session_visuals(
         && !snapshot.replay_playback
         && !snapshot.practice_mode
         && !options.score_save_disabled
+        && !crate::cli::latency_stall_test_enabled()
         && !profile.cli_auto_scratch()
         && options.assist_runtime.score_update_enabled();
     snapshot.bga_enabled =

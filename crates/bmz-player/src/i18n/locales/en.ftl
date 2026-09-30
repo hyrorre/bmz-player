@@ -815,3 +815,4 @@ settings-input-macos-request = Request Input Monitoring permission
 settings-input-macos-retry = After granting access, select winit and then macOS IOHID to retry. Restart the app if required.
 settings-audio-stream-actual = Running (CPAL setting / supported range; actual frames in diagnostics): { $value }
 latency-test-no-save = Latency stall test: score / IR saving disabled
+settings-input-macos-exclusive = Fallback to winit: keyboard is exclusively owned (IOKit 0xe00002c5)

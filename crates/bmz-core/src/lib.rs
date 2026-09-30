@@ -7,4 +7,6 @@ pub mod judge;
 pub mod lane;
 pub mod latency;
 pub mod replay;
+#[cfg(target_os = "macos")]
+pub mod suspend;
 pub mod time;

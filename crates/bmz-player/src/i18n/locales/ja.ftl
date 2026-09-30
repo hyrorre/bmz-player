@@ -812,3 +812,4 @@ settings-input-macos-request = 入力監視の許可を要求
 settings-input-macos-retry = 許可後はwinitを選び、macOS IOHIDを選び直して再試行してください。必要に応じてアプリを再起動してください。
 settings-audio-stream-actual = 動作中（CPAL設定／対応範囲。実フレーム数は診断ログ）: { $value }
 latency-test-no-save = 遅延停滞試験：スコア・IR保存無効
+settings-input-macos-exclusive = winitへフォールバック：キーボードが排他使用されています（IOKit 0xe00002c5）

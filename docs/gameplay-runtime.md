@@ -125,3 +125,8 @@ stall harness は実際の専用 worker と 240fps 相当 consumer を使い、c
 旧 advance との score / gauge / LN state / replay / result 一致、autoplay / replay の一致、
 callback 到着遅延が render stall によって増えないこと、snapshot 時計の非逆行を検証する。
 物理デバイス、driver、DWM、実 GPU の遅延はこの harness の測定対象ではない。
+## macOS入力・音声診断への案内
+
+macOSの独立IOHID入力、時計変換、診断の測定境界と100ms停滞試験は
+[macOS遅延検証](macos-latency.md) を参照。winit経路のOSイベント時刻は測定不可として扱い、
+入力キューの観測時刻と判定用タイムスタンプを分離する。

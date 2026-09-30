@@ -27,8 +27,28 @@ void bmz_keyboard_request_access(void) {
 int bmz_keyboard_foreground(void) {
     ProcessSerialNumber process;
     pid_t pid = 0;
-    return GetFrontProcess(&process) == noErr &&
-           GetProcessPID(&process, &pid) == noErr && pid == getpid();
+    if (GetFrontProcess(&process) != noErr ||
+        GetProcessPID(&process, &pid) != noErr || pid != getpid()) return 0;
+    // WindowServer metadata (no image capture or Accessibility). Reject a
+    // minimized/hidden application even if it remains the front process while
+    // winit is stalled. No AppKit calls are made from this thread.
+    CFArrayRef windows = CGWindowListCopyWindowInfo(
+        kCGWindowListOptionOnScreenOnly | kCGWindowListExcludeDesktopElements,
+        kCGNullWindowID);
+    if (!windows) return 0;
+    int visible = 0;
+    for (CFIndex i = 0; i < CFArrayGetCount(windows); ++i) {
+        CFDictionaryRef window = CFArrayGetValueAtIndex(windows, i);
+        CFNumberRef owner = CFDictionaryGetValue(window, kCGWindowOwnerPID);
+        CFNumberRef layer = CFDictionaryGetValue(window, kCGWindowLayer);
+        int ownerPID = 0, windowLayer = -1;
+        if (owner && layer && CFNumberGetValue(owner, kCFNumberIntType, &ownerPID) &&
+            CFNumberGetValue(layer, kCFNumberIntType, &windowLayer) && ownerPID == pid && windowLayer == 0) {
+            visible = 1; break;
+        }
+    }
+    CFRelease(windows);
+    return visible;
 }
 uint64_t bmz_keyboard_ticks(uint32_t *numer, uint32_t *denom) {
     mach_timebase_info_data_t info;
@@ -59,9 +79,11 @@ static void removed(void *ctx, IOReturn result, void *sender, IOHIDDeviceRef dev
     BMZKeyboard *keyboard = ctx;
     keyboard->callback(keyboard->context, (uintptr_t)device, 0, 0, -1);
 }
-void *bmz_keyboard_open(void *ctx, BMZKeyboardEvent callback) {
+void *bmz_keyboard_open(void *ctx, BMZKeyboardEvent callback, int32_t *error) {
+    *error = kIOReturnNotPermitted;
     // Check without prompting BEFORE opening protected devices.
     if (bmz_keyboard_access() != 0) return NULL;
+    *error = kIOReturnNoMemory;
     BMZKeyboard *keyboard = calloc(1, sizeof(*keyboard));
     if (!keyboard) return NULL;
     keyboard->manager = IOHIDManagerCreate(kCFAllocatorDefault, 0);
@@ -80,7 +102,8 @@ void *bmz_keyboard_open(void *ctx, BMZKeyboardEvent callback) {
     IOHIDManagerRegisterInputValueCallback(keyboard->manager, value, keyboard);
     IOHIDManagerRegisterDeviceRemovalCallback(keyboard->manager, removed, keyboard);
     IOHIDManagerScheduleWithRunLoop(keyboard->manager, CFRunLoopGetCurrent(), kCFRunLoopDefaultMode);
-    if (IOHIDManagerOpen(keyboard->manager, 0) != kIOReturnSuccess) {
+    *error = IOHIDManagerOpen(keyboard->manager, 0);
+    if (*error != kIOReturnSuccess) {
         IOHIDManagerUnscheduleFromRunLoop(keyboard->manager, CFRunLoopGetCurrent(), kCFRunLoopDefaultMode);
         IOHIDManagerClose(keyboard->manager, 0);
         CFRelease(keyboard->manager); free(keyboard); return NULL;

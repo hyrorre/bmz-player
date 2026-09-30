@@ -6,11 +6,19 @@ pub(super) struct MachClock {
     denom: u32,
     anchor_ticks: u64,
     anchor_ns: u128,
+    oldest_valid_tick: Option<u64>,
+    pub(super) epoch: u64,
 }
 
 impl MachClock {
+    pub(super) fn rebase(&mut self, ticks: u64, ns: u128) {
+        self.anchor_ticks = ticks;
+        self.anchor_ns = ns;
+        self.oldest_valid_tick = Some(ticks);
+        self.epoch = self.epoch.wrapping_add(1);
+    }
     pub(super) fn new(ticks: u64, ns: u128, numer: u32, denom: u32) -> Self {
-        Self { numer, denom, anchor_ticks: ticks, anchor_ns: ns }
+        Self { numer, denom, anchor_ticks: ticks, anchor_ns: ns, oldest_valid_tick: None, epoch: 0 }
     }
 
     fn duration(&self, ticks: u64) -> Option<u128> {
@@ -34,11 +42,13 @@ impl MachClock {
     pub(super) fn convert(&mut self, event: u64, now_ticks: u64, now_ns: u128) -> Option<u128> {
         let expected = self.at(now_ticks)?;
         if expected.abs_diff(now_ns) > 20_000_000 {
-            self.anchor_ticks = now_ticks;
-            self.anchor_ns = now_ns;
+            self.rebase(now_ticks, now_ns);
             return None;
         }
-        if event == 0 || event > now_ticks {
+        if event == 0
+            || event > now_ticks
+            || self.oldest_valid_tick.is_some_and(|oldest| event < oldest)
+        {
             return None;
         }
         self.at(event).filter(|time| *time <= now_ns)
@@ -65,6 +75,8 @@ mod tests {
         assert_eq!(clock.convert(u64::MAX, u64::MAX, ns), Some(ns));
         let mut clock = MachClock::new(1, 0, 1, 1);
         assert_eq!(clock.convert(2, 3, 5_000_000_000), None);
+        assert_eq!(clock.epoch, 1);
+        assert_eq!(clock.convert(2, 4, 5_000_000_001), None);
         assert_eq!(clock.convert(4, 4, 5_000_000_001), Some(5_000_000_001));
     }
 }

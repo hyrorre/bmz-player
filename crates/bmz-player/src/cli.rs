@@ -30,6 +30,15 @@ pub const PRACTICE_ARG: &str = "--practice";
 pub const PRACTICE_START_MS_ARG: &str = "--practice-start-ms";
 pub const PRACTICE_END_MS_ARG: &str = "--practice-end-ms";
 pub const LUA_SKIN_RUNTIME_ARG: &str = "--lua-skin-runtime";
+pub const LATENCY_STALL_TEST_ARG: &str = "--latency-stall-test";
+static LATENCY_STALL_TEST: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+pub(crate) fn latency_stall_test_enabled() -> bool {
+    LATENCY_STALL_TEST.load(std::sync::atomic::Ordering::Relaxed)
+}
+pub(crate) fn configure_latency_stall_test(enabled: bool) {
+    LATENCY_STALL_TEST.store(enabled, std::sync::atomic::Ordering::Relaxed);
+}
 
 mod export;
 mod help;

@@ -147,7 +147,13 @@ impl InputCapture {
                 }
                 #[cfg(windows)]
                 super::native_capture::wait_for_input();
-                #[cfg(not(windows))]
+                #[cfg(target_os = "macos")]
+                thread::park_timeout(if backend.is_some() {
+                    Duration::from_millis(1)
+                } else {
+                    Duration::from_millis(250)
+                });
+                #[cfg(not(any(windows, target_os = "macos")))]
                 thread::park_timeout(Duration::from_millis(1));
             }
         })?;
