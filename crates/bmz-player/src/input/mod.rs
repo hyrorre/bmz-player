@@ -3,6 +3,12 @@ pub mod capture;
 pub mod gameinput;
 pub mod gamepad;
 pub mod gilrs;
+#[cfg(target_os = "macos")]
+pub mod macos;
+#[cfg(any(target_os = "macos", test))]
+mod macos_clock;
+#[cfg(any(target_os = "macos", test))]
+mod macos_keys;
 #[cfg(windows)]
 mod native_capture;
 pub mod rawinput;

@@ -15,6 +15,14 @@ fn main() {
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("macos") {
         return;
     }
+    println!("cargo:rerun-if-changed=native/keyboard.c");
+    cc::Build::new()
+        .file("native/keyboard.c")
+        .flag("-Wno-deprecated-declarations")
+        .compile("bmz_keyboard");
+    for framework in ["IOKit", "CoreFoundation", "Carbon"] {
+        println!("cargo:rustc-link-lib=framework={framework}");
+    }
     let Some(directory) = std::env::var_os("BMZ_SPARKLE_DIR") else {
         return;
     };
