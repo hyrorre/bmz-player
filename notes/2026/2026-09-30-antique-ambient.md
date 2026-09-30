@@ -99,3 +99,36 @@ Ambientパネル透明度の対象から外した。レーン背景は不透明�
 - スキン側commit: `mz-select:6d41438`（`codex/antique-ambient`）。
 
 実プレイ操作・実動画再生・FPS比較・macOS/LinuxでのGPU確認は未実施。
+
+## 2026-09-30 追記: 前面と背景のBGA明るさを分離
+
+元の「BGAの明るさ」は、BGAの設定矩形へ重ねる黒矩形の最終alphaを変える方式だった。
+そのためAmbientが広がる範囲へ適用できず、前面の明るさを変えるとletterboxの背景まで暗くなっていた。
+
+- ID54を「前面BGAの明るさ(-255 ~ 0)」へ改名し、ID65「背景/Ambient BGAの明るさ(-255 ~ 0)」を追加。
+  どちらも既定0、-255で黒。前面はfit-insideの映像だけ、背景は旧cover-fit背景とFull／Spread全体に適用する。
+  BGAサイズが背景の場合は、Ambient OFFの鮮明なBGAを含めて背景側を使う。
+- destinationのRGBを調整し、alphaを維持する。前面を暗くしても背景は透けない。
+  旧黒矩形は開始500msのフェードのみ残し、最終alphaを0にする。
+- 最初のGPU回帰テストで、本体がBGA destinationのRGBを無視しalphaだけ適用していた問題を再現。
+  `.local/beatoraja/src/bms/player/beatoraja/play/bga/BGAProcessor.java` の `drawBGA` が
+  `sprite.setColor(dst.getColor())` を使うことを確認し、Base / Layer / Layer2 / POORへRGBAを適用するよう修正。
+  Ambientも合成前に同じ色を使う。汎用画像・動画は既存のimage tint経路を使う。
+- 同梱antiqueを選択したprofileのslot・スキン履歴について、旧名称の値を前面側へ移行する。
+  新しい前面設定を優先し、同じ旧名称を持つ他スキンの設定には適用しない。
+
+検証ログ・GPU画像は `.local/performance/antique-ambient/brightness/` に保存（Git管理外）。
+
+- `cargo test -p bmz-player -p bmz-render --locked bga_ -- --include-ignored --nocapture`: 39件成功。
+  antique素材あり。GPUテストはOFF / Full / Spread / blur 0 / 背景サイズの7条件を、
+  通常・前面を黒・背景を黒の3設定で描画する（計21画像）。前面範囲の外側の画素が変わらないこと、
+  背景の調整が前面へ影響しないこと、背景サイズでは前面の設定が無効なことを確認した。
+  Spreadの前面を黒／背景を黒の画像は目視でも確認済み。
+- Lua設定18通りで通常BGA・汎用BGA/BGIのRGB、alpha維持、入力範囲のclampを確認。
+- 設定移行の新名称優先・履歴・再読み込みと、Base / Layer / Layer2 / POORのRGBA乗算を回帰テストで確認。
+- `cargo fmt --check`、workspace all-targets check / Clippy（`-D warnings`）は成功。
+- `cargo test --workspace --locked --no-fail-fast`: 全対象成功。
+- `cargo build -p bmz-player --release --locked`: 成功。`target/release/bmz-player.exe` を更新。
+- スキン側commit: `mz-select:4a4002b`（`codex/antique-ambient`）。
+
+実プレイ操作・実動画ファイルの再生は未実施。

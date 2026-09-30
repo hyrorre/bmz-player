@@ -1,5 +1,196 @@
 use super::*;
 
+fn antique_bga_brightness_state(front: i32, background: i32) -> LuaLoadRuntimeState {
+    LuaLoadRuntimeState {
+        offset_id_values: BTreeMap::from([
+            (54, bmz_skin::LuaSkinOffsetValue { a: front, ..Default::default() }),
+            (65, bmz_skin::LuaSkinOffsetValue { a: background, ..Default::default() }),
+        ]),
+        ..Default::default()
+    }
+}
+
+#[test]
+fn antique_bga_brightness_is_separate_for_foreground_background_and_fallback_when_available() {
+    use bmz_render::skin::SkinDstEntry;
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../data/skins/mz-select/play/antique/system/play7main.luaskin");
+    if !path.is_file() {
+        return;
+    }
+    for size in ["x2(512x512)", "背景(1920x1080)"] {
+        for (ambient, mode) in [("OFF", "全体"), ("ON", "全体"), ("ON", "Spread")] {
+            for (front, background) in [(0, 0), (-128, -64), (-500, 100)] {
+                let document = load_skin_document(
+                    &path,
+                    SkinKind::Play,
+                    &BTreeMap::from([
+                        ("BGAサイズ".into(), size.into()),
+                        ("Ambient".into(), ambient.into()),
+                        ("Ambient表示方式".into(), mode.into()),
+                    ]),
+                    &BTreeMap::new(),
+                    &antique_bga_brightness_state(front, background),
+                    None,
+                )
+                .unwrap()
+                .document;
+                for d in document.all_destinations(&document.enabled_options()) {
+                    if matches!(d.id.as_str(), "bga" | "img_bga_bgi") {
+                        let brightness = if d.ambient || size.starts_with("背景") || d.stretch == 3
+                        {
+                            background
+                        } else {
+                            front
+                        };
+                        let SkinDstEntry::Frame(frame) = &d.dst[0] else { panic!("BGA frame") };
+                        assert_eq!(
+                            [frame.r, frame.g, frame.b],
+                            [Some((255 + brightness).clamp(0, 255)); 3]
+                        );
+                        assert_eq!(
+                            frame.a.unwrap_or(255),
+                            if d.ambient {
+                                210
+                            } else if d.stretch == 3 {
+                                64
+                            } else {
+                                255
+                            }
+                        );
+                    }
+                    if d.id == "-110" && d.loop_time == Some(500) && d.timer.is_none() {
+                        assert!(
+                            matches!(d.dst.last(), Some(SkinDstEntry::Frame(frame)) if frame.a == Some(0)),
+                            "old dim overlay must finish transparent"
+                        );
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
+#[ignore = "requires a GPU and antique assets; verifies independent brightness in rendered pixels"]
+fn antique_bga_brightness_gpu_changes_only_its_own_visible_region() {
+    use bmz_render::plan::TextureId;
+    use bmz_render::renderer::SurfaceSize;
+    use bmz_render::snapshot::{DisplayBgaFrame, RenderSnapshot};
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../data/skins/mz-select/play/antique/system/play7main.luaskin");
+    assert!(path.is_file(), "initialize the mz-select submodule");
+    let mut renderer = Renderer::default();
+    renderer.attach_offscreen(SurfaceSize { width: 1920, height: 1080 }).unwrap();
+    renderer
+        .upsert_rgba_texture_ref(
+            TextureId(700_001),
+            640,
+            360,
+            &[240, 160, 80, 255].repeat(640 * 360),
+        )
+        .unwrap();
+    for (name, ambient, mode, size, blur) in [
+        ("off", "OFF", "全体", "x2(512x512)", "50%"),
+        ("full", "ON", "全体", "x2(512x512)", "50%"),
+        ("spread", "ON", "Spread", "x2(512x512)", "50%"),
+        ("spread-zero", "ON", "Spread", "x2(512x512)", "0%"),
+        ("background-off", "OFF", "全体", "背景(1920x1080)", "50%"),
+        ("background-full", "ON", "全体", "背景(1920x1080)", "50%"),
+        ("background-spread", "ON", "Spread", "背景(1920x1080)", "50%"),
+    ] {
+        let mut frames = Vec::new();
+        for (setting, front, background) in
+            [("normal", 0, 0), ("front-dark", -255, 0), ("background-dark", 0, -255)]
+        {
+            let decoded = decode_beatoraja_skin_request(BeatorajaSkinDecodeRequest {
+                pinned_sources: None,
+                skin_path: &path,
+                kind: SkinKind::Play,
+                options: &BTreeMap::from([
+                    ("Ambient".into(), ambient.into()),
+                    ("Ambient表示方式".into(), mode.into()),
+                    ("BGAサイズ".into(), size.into()),
+                    ("Ambientぼかし度 (%)".into(), blur.into()),
+                ]),
+                files: &BTreeMap::new(),
+                runtime_state: &antique_bga_brightness_state(front, background),
+                library_roots: &[Path::new(env!("CARGO_MANIFEST_DIR")).join("../../data/skins")],
+                document_cache: None,
+                source_cache: None,
+                texture_cache: None,
+                font_cache: None,
+                installed_fonts: None,
+            })
+            .unwrap();
+            install_decoded_skin(&mut renderer, decoded, SkinManifest::default()).unwrap();
+            renderer.prepare_scene(AppSceneSnapshot::Play(RenderSnapshot {
+                time: TimeUs(10_000_000),
+                play_elapsed_time: TimeUs(15_000_000),
+                ready_elapsed_time: Some(TimeUs(12_000_000)),
+                resources_loaded: true,
+                key_mode: KeyMode::K7,
+                has_bga: true,
+                bga_enabled: true,
+                bga_base: Some(DisplayBgaFrame::opaque(700_001, 640.0, 360.0)),
+                ..Default::default()
+            }));
+            renderer.render_last_plan().unwrap();
+            let pixels = renderer.read_offscreen_rgba().unwrap();
+            if let Some(directory) = std::env::var_os("BMZ_AMBIENT_PREVIEW_DIR") {
+                let directory = PathBuf::from(directory);
+                std::fs::create_dir_all(&directory).unwrap();
+                image::save_buffer(
+                    directory.join(format!("brightness-{name}-{setting}.png")),
+                    &pixels,
+                    1920,
+                    1080,
+                    image::ColorType::Rgba8,
+                )
+                .unwrap();
+            }
+            frames.push(pixels);
+        }
+        let pixel = |frame: usize, x: usize, y: usize| {
+            &frames[frame][(y * 1920 + x) * 4..(y * 1920 + x) * 4 + 3]
+        };
+        assert!(pixel(0, 1380, 540)[0] > 30, "visible BGA: {name}");
+        if size.starts_with("背景") {
+            assert_eq!(
+                frames[0], frames[1],
+                "foreground setting is inactive for background size: {name}"
+            );
+            assert_eq!(pixel(2, 1380, 540), &[0, 0, 0], "background dims the whole BGA: {name}");
+        } else {
+            assert_eq!(pixel(1, 1380, 540), &[0, 0, 0], "foreground stays opaque: {name}");
+            assert_eq!(
+                pixel(0, 1380, 540),
+                pixel(2, 1380, 540),
+                "background must not dim foreground: {name}"
+            );
+            // Actual fit-inside image is x=1124..1636, y=396..684; outside includes letterbox and Ambient.
+            for y in 0..1080 {
+                for x in 0..1920 {
+                    if !(1123..1637).contains(&x) || !(395..685).contains(&y) {
+                        assert_eq!(
+                            pixel(0, x, y),
+                            pixel(1, x, y),
+                            "front brightness leaked at {x},{y}: {name}"
+                        );
+                    }
+                }
+            }
+            let background_y = if blur == "0%" { 375 } else { 360 };
+            assert!(pixel(0, 1380, background_y)[0] > 2, "visible background: {name}");
+            assert_eq!(
+                pixel(2, 1380, background_y),
+                &[0, 0, 0],
+                "background is adjustable outside front: {name}"
+            );
+        }
+    }
+}
+
 #[test]
 fn antique_ambient_defaults_off_and_changes_only_panel_opacity_when_available() {
     let path = Path::new(env!("CARGO_MANIFEST_DIR"))

@@ -45,6 +45,7 @@ fn parse_profile_config(text: &str) -> Result<ProfileConfig> {
     config.normalize_play_mode_configs();
     config.skin.migrate_legacy_offsets();
     config.skin.migrate_legacy_ambient_option();
+    config.skin.migrate_antique_bga_brightness();
     config.ir.normalize_builtin_providers();
     normalize_profile_input(&mut config.input);
     validate_play_inherit_config(&config.input).map_err(|error| anyhow::anyhow!("{error}"))?;
@@ -55,6 +56,46 @@ fn parse_profile_config(text: &str) -> Result<ProfileConfig> {
 mod tests {
     use super::*;
     use crate::config::app_config::PathEntry;
+
+    #[test]
+    fn parse_profile_config_migrates_only_antique_bga_brightness_and_preserves_new_choice() {
+        use crate::config::profile_config::{SkinHistoryEntryConfig, SkinOffsetConfig};
+        let antique = "data/skins/mz-select/play/antique/system/play7main.luaskin";
+        let old = SkinOffsetConfig {
+            id: 54,
+            name: Some("BGAの明るさ(-255 ~ 0)".into()),
+            a: -128,
+            ..Default::default()
+        };
+        let new = SkinOffsetConfig {
+            name: Some("前面BGAの明るさ(-255 ~ 0)".into()),
+            a: -64,
+            ..old.clone()
+        };
+        let mut profile = ProfileConfig::new_default("default", "Default", 1);
+        profile.skin.play7 = antique.replace('/', "\\");
+        profile.skin.play7_offsets = vec![old.clone()];
+        profile.skin.play5 = antique.into();
+        profile.skin.play5_offsets = vec![old.clone(), new.clone()];
+        profile.skin.play9 = "other/play.luaskin".into();
+        profile.skin.play9_offsets = vec![old.clone()];
+        let history_key = format!("play7::{antique}");
+        profile.skin.history.insert(
+            history_key.clone(),
+            SkinHistoryEntryConfig { offsets: vec![old.clone()], ..Default::default() },
+        );
+        let loaded = parse_profile_config(&toml::to_string(&profile).unwrap()).unwrap();
+        assert_eq!(loaded.skin.play7_offsets[0].name, new.name);
+        assert_eq!(loaded.skin.play7_offsets[0].a, -128);
+        assert_eq!(loaded.skin.play5_offsets, vec![new]);
+        assert_eq!(loaded.skin.play9_offsets, vec![old]);
+        assert_eq!(loaded.skin.history[&history_key].offsets, loaded.skin.play7_offsets);
+        let reloaded = parse_profile_config(&toml::to_string(&loaded).unwrap()).unwrap();
+        assert_eq!(
+            toml::to_string(&loaded.skin).unwrap(),
+            toml::to_string(&reloaded.skin).unwrap()
+        );
+    }
 
     #[test]
     fn parse_profile_config_migrates_antique_ambient_and_history_without_overwriting_new_choice() {

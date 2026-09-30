@@ -42,6 +42,7 @@ JSON / LuaのimageまたはBGAのdestinationに `ambient: true` を指定する�
 - 配置・透明度・timer・optionは通常のdestinationと同じ。BGA無効時はBGA由来のAmbientも非表示。
 - BGAのBase / Layer / Layer2（静止画の黒透過を含む）を合成してからぼかす。
   POOR表示中はPOORへ切り替える。通常のBGA destinationは引き続き鮮明に描画する。
+  destinationのRGBAは各BGAフレームのtintと乗算し、Ambient合成前にも適用する。
 - 通常のimageでも利用でき、汎用画像・動画をBGAなしの曲の背景に使える。
 - 画面全体を読み戻す背景ぼかしではない。文字・ノーツ・その他のdestinationは処理対象外。
 - 中間画像は既定のぼかしで長辺128px。弱いぼかしでは縮小による劣化を抑えるため最大1024pxまで増やす。
@@ -63,6 +64,20 @@ Ambient ONでは従来の暗いcover-fit BGA背景を描かず、鮮明なfit-in
 「BGAサイズ＝背景(1920x1080)」では鮮明なBGAも描かず、選択したFull／SpreadのAmbientだけを表示する。
 Ambient OFFでは従来のBGA描画を維持する。
 曲BGAと汎用BGA/BGIの選択条件は既存の設定に従う。
+
+antiqueのBGA明るさは次の2つのoffsetで独立して調整する。範囲は-255～0、既定0。
+
+| offset名 | ID | 対象 |
+| --- | --- | --- |
+| 前面BGAの明るさ(-255 ~ 0) | 54 | 余白を除くfit-insideの前面BGA／汎用BGA・BGI |
+| 背景/Ambient BGAの明るさ(-255 ~ 0) | 65 | 従来の暗いcover-fit背景とFull／Spread Ambient |
+
+BGAサイズが「背景(1920x1080)」の場合は、Ambient OFFの鮮明なBGAも背景側の設定を使う。
+明るさは各destinationのRGBを `255 + 設定値` にすることで適用し、alphaを維持する。
+前面を暗くしても背景が透けず、前面映像の外側や別のパネルを黒い矩形で覆わない。
+既存の黒矩形は開始500msのフェードだけに使い、最終alphaは0にする。
+同梱antiqueの旧「BGAの明るさ(-255 ~ 0)」保存値とスキン履歴は前面側へ移行し、
+背景側は既定0から開始する。新しい前面設定が保存済みならそちらを優先する。
 
 ## LR2 Play 表示参照
 

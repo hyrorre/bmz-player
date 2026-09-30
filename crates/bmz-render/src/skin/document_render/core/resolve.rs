@@ -331,7 +331,12 @@ macro_rules! skin_document_render_core_resolve_methods {
 
             let rect = normalize_skin_frame_rect(frame, self.w, self.h);
             let blend = skin_blend_mode(destination.blend);
-            let destination_tint = Color::rgba(1.0, 1.0, 1.0, frame.a as f32 / 255.0);
+            let destination_tint = Color::rgba(
+                frame.r as f32 / 255.0,
+                frame.g as f32 / 255.0,
+                frame.b as f32 / 255.0,
+                frame.a as f32 / 255.0,
+            );
             let stretch =
                 if destination.stretch < 0 { state.bga_stretch } else { destination.stretch };
             let linear_filter = destination.filter != 0;

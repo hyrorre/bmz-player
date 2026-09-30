@@ -1,6 +1,55 @@
 use super::*;
 
 #[test]
+fn bga_destination_rgb_multiplies_base_layers_and_poor_before_ambient_blur() {
+    for ambient in [false, true] {
+        let document: SkinDocument = serde_json::from_value(serde_json::json!({
+            "type":0,"w":100,"h":100,"bga":{"id":"bga"},
+            "destination":[{"id":"bga","ambient":ambient,"dst":[
+                {"x":0,"y":0,"w":100,"h":100,"r":128,"g":64,"b":32,"a":200}]}]
+        }))
+        .unwrap();
+        let source = SkinBgaFrame {
+            tint_r: 0.5,
+            tint_g: 0.25,
+            tint_b: 0.75,
+            tint_a: 0.5,
+            ..SkinBgaFrame::opaque(SkinTextureId(10), SkinImageSize { width: 100.0, height: 100.0 })
+        };
+        for poor in [false, true] {
+            let items = document.static_render_items(
+                &HashMap::new(),
+                &SkinDrawState {
+                    has_bga: true,
+                    bga_base: Some(source),
+                    bga_layer: Some(source),
+                    bga_layer2: Some(source),
+                    bga_poor: poor.then_some(source),
+                    ..Default::default()
+                },
+                &SkinTextState::default(),
+            );
+            let layers = if ambient {
+                let SkinRenderItem::Ambient { layers, .. } = &items[0] else {
+                    panic!("ambient group")
+                };
+                layers
+            } else {
+                &items
+            };
+            assert_eq!(layers.len(), if poor { 1 } else { 3 });
+            for layer in layers {
+                let SkinRenderItem::Image { tint, .. } = layer else { panic!("BGA image") };
+                assert!(approx_eq(tint.r, 128.0 / 255.0 * 0.5));
+                assert!(approx_eq(tint.g, 64.0 / 255.0 * 0.25));
+                assert!(approx_eq(tint.b, 32.0 / 255.0 * 0.75));
+                assert!(approx_eq(tint.a, 200.0 / 255.0 * 0.5));
+            }
+        }
+    }
+}
+
+#[test]
 fn ambient_bga_groups_layers_and_follows_poor_and_disabled_state() {
     let document: SkinDocument = serde_json::from_str(
         r#"{

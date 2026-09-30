@@ -192,6 +192,49 @@ pub struct SkinConfig {
 }
 
 impl SkinConfig {
+    /// Rename only the bundled antique offset; other skins may use the same old label.
+    pub fn migrate_antique_bga_brightness(&mut self) {
+        fn migrate(path: &str, offsets: &mut Vec<SkinOffsetConfig>) {
+            if !path.replace('\\', "/").ends_with("mz-select/play/antique/system/play7main.luaskin")
+            {
+                return;
+            }
+            const OLD: &str = "BGAの明るさ(-255 ~ 0)";
+            const NEW: &str = "前面BGAの明るさ(-255 ~ 0)";
+            let has_new = offsets.iter().any(|offset| offset.name.as_deref() == Some(NEW));
+            offsets.retain_mut(|offset| {
+                if offset.name.as_deref() == Some(OLD) {
+                    if has_new {
+                        return false;
+                    }
+                    offset.name = Some(NEW.to_string());
+                }
+                true
+            });
+        }
+        for (path, offsets) in [
+            (&self.select, &mut self.select_offsets),
+            (&self.decide, &mut self.decide_offsets),
+            (&self.play4, &mut self.play4_offsets),
+            (&self.play5, &mut self.play5_offsets),
+            (&self.play6, &mut self.play6_offsets),
+            (&self.play7, &mut self.play7_offsets),
+            (&self.play8, &mut self.play8_offsets),
+            (&self.play9, &mut self.play9_offsets),
+            (&self.play10, &mut self.play10_offsets),
+            (&self.play14, &mut self.play14_offsets),
+            (&self.battle5, &mut self.battle5_offsets),
+            (&self.battle7, &mut self.battle7_offsets),
+            (&self.result, &mut self.result_offsets),
+            (&self.course_result, &mut self.course_result_offsets),
+        ] {
+            migrate(path, offsets);
+        }
+        for (key, entry) in &mut self.history {
+            migrate(key, &mut entry.offsets);
+        }
+    }
+
     /// Preserve the first antique Ambient option when its UI label is shortened.
     pub fn migrate_legacy_ambient_option(&mut self) {
         fn migrate(options: &mut BTreeMap<String, String>) {
