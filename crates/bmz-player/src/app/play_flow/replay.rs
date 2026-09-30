@@ -130,6 +130,7 @@ impl WinitApp {
         let player = bmz_gameplay::replay::ReplayPlayer {
             events: replay_file.events.clone(),
             next_index: 0,
+            next_scoring_time: None,
         };
         let options = PlayStartOptions {
             session_mode: SessionMode::Normal,
@@ -254,6 +255,7 @@ impl WinitApp {
         let player = bmz_gameplay::replay::ReplayPlayer {
             events: replay_file.events.clone(),
             next_index: 0,
+            next_scoring_time: None,
         };
         let options = PlayStartOptions {
             session_mode: SessionMode::Normal,

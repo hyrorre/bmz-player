@@ -83,6 +83,7 @@ fn independent_battle_opponent_replay_advances_without_taking_primary_lanes() {
                 scratch_direction: None,
             }],
             next_index: 0,
+            next_scoring_time: None,
         }),
         autoplay: None,
         display_uses_primary_arrangement: false,
@@ -215,6 +216,7 @@ fn independent_battle_opponent_applies_hcn_hold_and_release_ticks() {
                     })
                     .collect(),
                 next_index: 0,
+                next_scoring_time: None,
             }),
             display_uses_primary_arrangement: false,
             publish_display_judgements: false,

@@ -12,10 +12,13 @@ pub fn sync_judge_windows(session: &mut GameSession, now: TimeUs) {
         session.rule_mode,
         session.primary_key_mode,
     );
-    session.judge.set_window_set(scale_judge_windows_for_playback_rate(
-        windows,
-        session.audio_clock.playback_rate_percent(),
-    ));
+    // Replay timestamps already use chart time; viewing speed must not change scoring.
+    let windows = if session.replay_player.is_some() {
+        windows
+    } else {
+        scale_judge_windows_for_playback_rate(windows, session.audio_clock.playback_rate_percent())
+    };
+    session.judge.set_window_set(windows);
 }
 
 use super::judgement::{
@@ -83,7 +86,20 @@ pub fn advance_session_frame(
 
         if session.replay_player.is_some() && session.replay_lane_mask.is_none() {
             drain_human_inputs(session);
-            judgements.extend(process_replay_inputs(session, times.audio_now));
+            let scoring_times =
+                session.replay_player.as_mut().unwrap().scoring_times_until(times.audio_now);
+            for now in scoring_times {
+                sync_judge_windows(session, now);
+                judgements.extend(process_replay_inputs(session, now));
+                judgements.extend(process_mine_passes(session, now));
+                judgements.extend(process_misses(session, now));
+                update_hcn_lane_timers(session, now);
+                apply_hcn_gauge(session, now);
+                update_failed_state_from_gauge(session);
+                if session.state != PlayState::Playing {
+                    break;
+                }
+            }
         } else {
             if session.autoplay.as_ref().is_some_and(AutoplayController::is_full) {
                 // フルオート中は人間のキー入力を判定にも視覚エフェクトにも渡さない。
@@ -101,11 +117,13 @@ pub fn advance_session_frame(
                 apply_auto_key_release(session, times.audio_now);
             }
         }
-        judgements.extend(process_mine_passes(session, times.audio_now));
-        judgements.extend(process_misses(session, times.audio_now));
-        update_hcn_lane_timers(session, times.audio_now);
-        apply_hcn_gauge(session, times.audio_now);
-        update_failed_state_from_gauge(session);
+        if session.replay_player.is_none() || session.replay_lane_mask.is_some() {
+            judgements.extend(process_mine_passes(session, times.audio_now));
+            judgements.extend(process_misses(session, times.audio_now));
+            update_hcn_lane_timers(session, times.audio_now);
+            apply_hcn_gauge(session, times.audio_now);
+            update_failed_state_from_gauge(session);
+        }
         schedule_keysounds(session, audio);
         update_recent_judgements(session, &judgements, times.audio_now);
         update_full_combo_timer(session, &judgements);
@@ -295,6 +313,21 @@ fn viewer_pgreat_prefix_events(
 }
 
 fn advance_battle_opponent(session: &mut GameSession, now: TimeUs) {
+    if session.battle_opponent.is_none() {
+        return;
+    }
+    let scoring_times = session
+        .battle_opponent
+        .as_mut()
+        .and_then(|opponent| opponent.replay_player.as_mut())
+        .map(|replay| replay.scoring_times_until(now))
+        .unwrap_or_else(|| vec![now]);
+    for time in scoring_times {
+        advance_battle_opponent_at(session, time);
+    }
+}
+
+fn advance_battle_opponent_at(session: &mut GameSession, now: TimeUs) {
     let playback_rate_percent = session.audio_clock.playback_rate_percent();
     let Some(opponent) = &mut session.battle_opponent else {
         return;
@@ -315,9 +348,12 @@ fn advance_battle_opponent(session: &mut GameSession, now: TimeUs) {
         opponent.rule_mode,
         opponent.key_mode,
     );
-    opponent
-        .judge
-        .set_window_set(scale_judge_windows_for_playback_rate(windows, playback_rate_percent));
+    let windows = if opponent.replay_player.is_some() {
+        windows
+    } else {
+        scale_judge_windows_for_playback_rate(windows, playback_rate_percent)
+    };
+    opponent.judge.set_window_set(windows);
 
     let inputs = if let Some(replay) = &mut opponent.replay_player {
         replay.poll_until(now)

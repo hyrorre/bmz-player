@@ -318,12 +318,12 @@ pub fn parse_replay(text: &str) -> Result<ReplayFile> {
 
 pub fn load_replay_player(path: &Path) -> Result<ReplayPlayer> {
     let replay = load_replay(path)?;
-    Ok(ReplayPlayer { events: replay.events, next_index: 0 })
+    Ok(ReplayPlayer { events: replay.events, next_index: 0, next_scoring_time: None })
 }
 
 pub fn load_replay_player_for_chart(path: &Path, chart_sha256: [u8; 32]) -> Result<ReplayPlayer> {
     let replay = load_replay_for_chart(path, chart_sha256)?;
-    Ok(ReplayPlayer { events: replay.events, next_index: 0 })
+    Ok(ReplayPlayer { events: replay.events, next_index: 0, next_scoring_time: None })
 }
 
 pub fn load_replay_for_chart(path: &Path, chart_sha256: [u8; 32]) -> Result<ReplayFile> {

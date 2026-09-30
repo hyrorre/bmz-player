@@ -259,7 +259,11 @@ pub fn play_session_options_from_start(
         let arrangement = target.playback.arrangement();
         let (replay_player, bms_random_choices, bms_switch_choices) = match &target.playback {
             BattleTargetPlayback::Replay(replay) => (
-                Some(ReplayPlayer { events: replay.events.clone(), next_index: 0 }),
+                Some(ReplayPlayer {
+                    events: replay.events.clone(),
+                    next_index: 0,
+                    next_scoring_time: None,
+                }),
                 replay.bms_random_choices.clone(),
                 replay.bms_switch_choices.clone(),
             ),
@@ -646,8 +650,11 @@ pub fn apply_queued_replay(
     options: &mut PlayStartOptions,
     replay: &crate::storage::replay::QueuedCourseReplay,
 ) -> Result<()> {
-    let player =
-        bmz_gameplay::replay::ReplayPlayer { events: replay.replay.events.clone(), next_index: 0 };
+    let player = bmz_gameplay::replay::ReplayPlayer {
+        events: replay.replay.events.clone(),
+        next_index: 0,
+        next_scoring_time: None,
+    };
     options.replay_player = Some(player);
     options.arrange = replay.replay.arrange_option();
     options.arrange_2p = replay.replay.arrange_2p_option();
