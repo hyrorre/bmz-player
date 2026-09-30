@@ -316,6 +316,51 @@ pub(super) fn open_external_url(url: &str) -> Result<()> {
     Ok(())
 }
 
+/// Reveal a file without opening it in its associated application.
+pub(super) fn reveal_file_in_browser(path: &Path) -> Result<()> {
+    let path = std::path::absolute(path).context("failed to resolve file browser path")?;
+    #[cfg(target_os = "windows")]
+    {
+        Command::new("explorer")
+            .arg("/select,")
+            .arg(windows_file_browser_argument(&path))
+            .spawn()
+            .context("failed to reveal file with explorer")?;
+    }
+    #[cfg(target_os = "macos")]
+    {
+        Command::new("open")
+            .arg("-R")
+            .arg(&path)
+            .spawn()
+            .context("failed to reveal file with Finder")?;
+    }
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        let uri = reqwest::Url::from_file_path(&path)
+            .map_err(|()| anyhow::anyhow!("invalid file browser path: {}", path.display()))?;
+        std::thread::Builder::new().name("reveal-chart".into()).spawn(move || {
+            // dbus-send bounds the reply wait; unavailable services/tools fall back to a folder.
+            let revealed = Command::new("dbus-send")
+                .args(["--session", "--type=method_call", "--print-reply", "--reply-timeout=2000",
+                    "--dest=org.freedesktop.FileManager1", "/org/freedesktop/FileManager1",
+                    "org.freedesktop.FileManager1.ShowItems"])
+                // A comma separates dbus-send array entries, even inside a file URI.
+                .arg(format!("array:string:{}", uri.as_str().replace(',', "%2C")))
+                .arg("string:")
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status().is_ok_and(|status| status.success());
+            if !revealed && let Err(error) = open_file_browser_path(&path) {
+                tracing::warn!(path = %path.display(), %error, "failed to open chart folder fallback");
+            }
+        }).context("failed to start file browser worker")?;
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "macos", unix)))]
+    open_file_browser_path(&path)?;
+    Ok(())
+}
+
 pub(super) fn open_file_browser_path(path: &Path) -> Result<()> {
     #[cfg(target_os = "windows")]
     {
@@ -356,11 +401,19 @@ pub(super) fn open_file_browser_path(path: &Path) -> Result<()> {
 fn windows_file_browser_argument(path: &Path) -> std::ffi::OsString {
     use std::os::windows::ffi::{OsStrExt, OsStringExt};
 
-    let native = path
+    let mut native = path
         .as_os_str()
         .encode_wide()
         .map(|unit| if unit == u16::from(b'/') { u16::from(b'\\') } else { unit })
         .collect::<Vec<_>>();
+    // Explorer uses shell paths rather than Rust's canonical \\?\ paths.
+    let extended_unc: Vec<_> = r"\\?\UNC\".encode_utf16().collect();
+    let extended: Vec<_> = r"\\?\".encode_utf16().collect();
+    if native.starts_with(&extended_unc) {
+        native.splice(..extended_unc.len(), [u16::from(b'\\'), u16::from(b'\\')]);
+    } else if native.starts_with(&extended) {
+        native.drain(..extended.len());
+    }
     std::ffi::OsString::from_wide(&native)
 }
 
@@ -432,6 +485,14 @@ mod tests {
 
     #[test]
     fn windows_file_browser_argument_uses_native_separators() {
+        assert_eq!(
+            windows_file_browser_argument(Path::new(r"\\?\C:\BMS\曲, #1\song.bms")),
+            std::ffi::OsString::from(r"C:\BMS\曲, #1\song.bms")
+        );
+        assert_eq!(
+            windows_file_browser_argument(Path::new(r"\\?\UNC\server\share\song.bms")),
+            std::ffi::OsString::from(r"\\server\share\song.bms")
+        );
         assert_eq!(
             windows_file_browser_argument(Path::new("G:/BMS/曲フォルダ/song")),
             std::ffi::OsString::from(r"G:\BMS\曲フォルダ\song")

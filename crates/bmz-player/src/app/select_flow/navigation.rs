@@ -15,6 +15,13 @@ pub(in crate::app) fn select_explorer_path(item: &SelectItem) -> Option<PathBuf>
     }
 }
 
+pub(in crate::app) fn select_explorer_file_path(
+    db: &LibraryDatabase,
+    chart: &crate::storage::library_db::ChartListItem,
+) -> Result<Option<PathBuf>> {
+    Ok(db.available_chart_sources(&[chart])?.remove(&chart.chart_id).map(|source| source.path))
+}
+
 impl WinitApp {
     pub(super) fn move_selection(&mut self, select_move: SelectMove) {
         self.move_selection_with_duration(select_move, self.select_scroll_duration_low());
@@ -263,7 +270,21 @@ impl WinitApp {
         else {
             return;
         };
-        if let Err(error) = open_file_browser_path(&path) {
+        let target =
+            self.selected_chart_row().and_then(|row| row.chart.as_ref()).and_then(|chart| {
+                match select_explorer_file_path(&self.boot.library_db, chart) {
+                    Ok(path) => path,
+                    Err(error) => {
+                        tracing::warn!(%error, "failed to resolve chart file for file browser");
+                        None
+                    }
+                }
+            });
+        let result = match target {
+            Some(target) => reveal_file_in_browser(&target),
+            None => open_file_browser_path(&path),
+        };
+        if let Err(error) = result {
             tracing::warn!(path = %path.display(), %error, "failed to open selected chart folder");
             self.show_left_overlay_toast(text.text("toast-chart-folder-open-failed"));
         } else {

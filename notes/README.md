@@ -34,6 +34,7 @@
 | 日付 | 記録 |
 |---|---|
 | 2026-09-30 | [antique Ambient背景の実装・検証](2026/2026-09-30-antique-ambient.md) |
+| 2026-09-30 | [F3で譜面ファイルを選択表示](2026/2026-09-30-select-reveal-chart.md) |
 | 2026-09-26 | [起動時間の調査と最適化](2026/2026-09-26-startup-performance.md) |
 | 2026-09-25 | [LITONE9の表示同等性修正と描画最適化](2026/2026-09-25-litone-optimization.md) |
 | 2026-09-25 | [WindowsでのFPS最適化レビューと追加調査](2026/2026-09-25-windows-performance.md) |

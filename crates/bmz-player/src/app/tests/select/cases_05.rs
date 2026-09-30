@@ -421,6 +421,20 @@ fn select_skin_key_config_does_not_duplicate_current_key_config_folder() {
 }
 
 #[test]
+fn select_explorer_file_resolves_registered_copy_and_missing_files() {
+    use crate::app::select_flow_navigation::select_explorer_file_path;
+    let data = crate::bootstrap::profile_tests::ProfileTestDir::new();
+    let (boot, path, copy) = crate::app::tests::boot_chart::registered_charts(&data);
+    let id = boot.library_db.chart_id_by_chart_file_path(&path).unwrap().unwrap();
+    let chart = boot.library_db.list_charts_by_ids(&[id]).unwrap().remove(0);
+    assert_eq!(select_explorer_file_path(&boot.library_db, &chart).unwrap(), Some(path.clone()));
+    std::fs::remove_file(&path).unwrap();
+    assert_eq!(select_explorer_file_path(&boot.library_db, &chart).unwrap(), Some(copy.clone()));
+    std::fs::remove_file(&copy).unwrap();
+    assert_eq!(select_explorer_file_path(&boot.library_db, &chart).unwrap(), None);
+}
+
+#[test]
 fn select_skin_explorer_target_accepts_chart_and_real_folder_only() {
     let mut row = select_chart_row(1);
     row.chart.as_mut().unwrap().folder_path = "songs/genre/song".to_string();
