@@ -73,6 +73,7 @@ fn wildcard_source_with_context_falls_back_to_default_file_stem() {
     let root = unique_test_dir("bmz-skin-wildcard-default-stem");
     fs::create_dir_all(root.join("system")).unwrap();
     fs::create_dir_all(root.join("customize")).unwrap();
+    let root = fs::canonicalize(root).unwrap();
     let entry = root.join("system/main.luaskin");
     fs::write(&entry, []).unwrap();
     fs::write(root.join("customize/default.png"), []).unwrap();

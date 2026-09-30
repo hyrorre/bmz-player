@@ -1,4 +1,5 @@
 use std::io::Write;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use bmz_core::lane::Lane;
@@ -10,10 +11,13 @@ use crate::model::{
 
 use super::*;
 
+static TEMP_FILE_COUNTER: AtomicU64 = AtomicU64::new(0);
+
 fn write_temp_file_with_ext(text: &str, ext: &str) -> std::path::PathBuf {
     let stamp = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
-    let path =
-        std::env::temp_dir().join(format!("bmz-chart-import-{}-{stamp}.{ext}", std::process::id()));
+    let counter = TEMP_FILE_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let path = std::env::temp_dir()
+        .join(format!("bmz-chart-import-{}-{stamp}-{counter}.{ext}", std::process::id()));
     let mut file = std::fs::File::create(&path).unwrap();
     file.write_all(text.as_bytes()).unwrap();
     file.sync_all().unwrap();
@@ -22,8 +26,9 @@ fn write_temp_file_with_ext(text: &str, ext: &str) -> std::path::PathBuf {
 
 fn write_temp_bms(text: &str) -> std::path::PathBuf {
     let stamp = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
-    let path =
-        std::env::temp_dir().join(format!("bmz-chart-import-{}-{stamp}.bms", std::process::id()));
+    let counter = TEMP_FILE_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let path = std::env::temp_dir()
+        .join(format!("bmz-chart-import-{}-{stamp}-{counter}.bms", std::process::id()));
     let mut file = std::fs::File::create(&path).unwrap();
     file.write_all(text.as_bytes()).unwrap();
     file.sync_all().unwrap();

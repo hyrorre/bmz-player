@@ -4,6 +4,7 @@ use super::*;
 fn result_refresh_pins_resolved_wildcard_source() {
     let root = unique_test_dir("result-pinned-background");
     std::fs::create_dir_all(root.join("bg")).unwrap();
+    let root = std::fs::canonicalize(root).unwrap();
     for name in ["one.png", "two.png"] {
         image::RgbaImage::from_pixel(1, 1, image::Rgba([255, 0, 0, 255]))
             .save(root.join("bg").join(name))
